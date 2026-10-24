@@ -104,6 +104,7 @@ pub fn is_route(p: &str) -> bool {
         || super::resources::ROUTES.contains(&p)
         || super::data_files::ROUTES.contains(&p)
         || super::rehost::ROUTES.contains(&p)
+        || super::domains::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -119,6 +120,8 @@ pub fn is_post_route(p: &str) -> bool {
         || super::data_files::POST_ROUTES.contains(&p)
         // 0.46.4 (update continuity S2): run one App now, its settings.
         || super::rehost::POST_ROUTES.contains(&p)
+        // 0.46.4: extra hostnames for an App (domains.rs).
+        || super::domains::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -416,6 +419,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/data/put" => super::data_put::route(&who, body),
         // 0.46.4: read it back, list it, tidy it (data_files.rs).
         p if super::data_files::ROUTES.contains(&p) => super::data_files::handle(p, &who, body, params),
+        // 0.46.4: any subdomain of its workspace on the App (domains.rs).
+        p if super::domains::ROUTES.contains(&p) => super::domains::handle(p, &who, body, params),
         p if super::labels::ROUTES.contains(&p) => super::labels::handle(p, &who, body),
         "/cli/app/validate" => validate(&who, body),
         "/cli/app/install" => install(&who, body),

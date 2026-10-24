@@ -83,7 +83,7 @@ pub fn with_taken_labels(mut origins: Vec<String>, labels: &[String]) -> Vec<Str
     origins
 }
 
-fn box_subdomain() -> String {
+pub(crate) fn box_subdomain() -> String {
     k2_core::tunnel::config::load()
         .ok()
         .map(|c| c.subdomain.trim().to_ascii_lowercase())

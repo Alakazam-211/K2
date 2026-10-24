@@ -39,6 +39,24 @@ pub struct AppConfig {
     /// keeps running, unrouted; `k2 app label return` moves a label back.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<TakenLabel>,
+    /// Extra nested hostnames of its own workspace this App serves
+    /// (`k2 app domain add`, 0.46.4): routed to the App by its id (K2
+    /// points each at the App's front port), in its public origins.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subdomains: Vec<AttachedSubdomain>,
+}
+
+/// A nested label (`<label>.<box>.k2.dev`) attached to an App.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachedSubdomain {
+    pub label: String,
+    pub added_at: i64,
+    pub added_by: String,
+    /// Where the hostname pointed before (`127.0.0.1:<port>`): removing it
+    /// from the App points it back there when that still answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_target: Option<String>,
 }
 
 /// A label an App serves for one of its workspace's legacy services.
@@ -64,6 +82,7 @@ impl Default for AppConfig {
             db: Db::default(),
             app_port: None,
             labels: Vec::new(),
+            subdomains: Vec::new(),
         }
     }
 }

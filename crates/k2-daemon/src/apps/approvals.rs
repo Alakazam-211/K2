@@ -517,6 +517,9 @@ pub(crate) const MANAGE_HELD: &[&str] = &[
     "/cli/app/data/mv",
     "/cli/app/label/take",
     "/cli/app/label/return",
+    // 0.46.4: extra subdomains onto an App.
+    "/cli/app/domain/add",
+    "/cli/app/domain/rm",
 ];
 
 thread_local! {

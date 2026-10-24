@@ -844,6 +844,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/data/mv",
         "/cli/app/label/take",
         "/cli/app/label/return",
+        // 0.46.4: extra subdomains of its own workspace on its App.
+        "/cli/app/domains",
+        "/cli/app/domain/add",
+        "/cli/app/domain/rm",
         "/cli/app/config",
         "/cli/app/deploy",
         "/cli/app/deployment",

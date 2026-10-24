@@ -340,3 +340,115 @@ async fn k2appignore_keeps_state_out_and_build_reports_the_seed_size() {
     assert!(r.body.contains(".k2appignore"), "{}", r.body);
     k2_daemon::apps::alerts::set_sink(None);
 }
+
+/// #6: `k2 app domain add|rm` — which labels an App may take, who may, and
+/// what the list shows. (The control-plane write itself needs a K2 Connect
+/// tunnel; every refusal before it runs here.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
+    let env = setup(&[]);
+    let seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let nsi = seed_ws(&env, "nsi");
+    let other = seed_ws(&env, "other");
+    app_row(&nsi, "agentnsi");
+    app_row(&other, "otherapp");
+    service(&nsi, "agents", "node server.js", &nsi.path, 47_201);
+    service(&other, "theirs", "node server.js", &other.path, 47_202);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::SubdomainWorkspace::claim(&conn, "theirextra", &other.id).unwrap();
+        k2_core::db::schema::SubdomainWorkspace::claim(&conn, "nsiextra", &nsi.id).unwrap();
+    }
+    let mine = passport(&nsi);
+    allow_manage(&nsi, true);
+    let add = |who: String, label: &'static str| {
+        let port = d.port;
+        async move { post(port, "/cli/app/domain/add", &who, json!({"app": "agentnsi", "label": label})).await }
+    };
+
+    // The --cmd service's own label: that's label take.
+    let r = add(mine.clone(), "agents").await;
+    assert_eq!((r.status, r.code()), (409, "use_label_take".to_string()), "{}", r.body);
+    assert!(r.json()["error"]["hint"].as_str().unwrap().contains("k2 app label take agentnsi agents"), "{}", r.body);
+    // Another workspace's service label or attributed subdomain: refused, naming its agent.
+    for label in ["theirs", "theirextra"] {
+        let r = add(mine.clone(), label).await;
+        assert_eq!((r.status, r.code()), (403, "label_owned_by_other_workspace".to_string()), "{label}: {}", r.body);
+    }
+    // Another App's own label; a reserved door.
+    let r = add(mine.clone(), "otherapp").await;
+    assert_eq!((r.status, r.code()), (409, "label_serves_another_app".to_string()), "{}", r.body);
+    let r = add(mine.clone(), "meet").await;
+    assert_eq!((r.status, r.code()), (400, "reserved_label".to_string()), "{}", r.body);
+    // A bad label; the App's own label is already its own.
+    let r = add(mine.clone(), "no_underscores").await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    let r = add(mine.clone(), "agentnsi").await;
+    assert_eq!((r.status, r.json()["already"].clone()), (200, json!(true)), "{}", r.body);
+    // Its own extra subdomain (or a free one) gets as far as the App's
+    // health: this one never started.
+    for label in ["nsiextra", "freshlabel"] {
+        let r = add(mine.clone(), label).await;
+        assert_eq!((r.status, r.code()), (409, "app_not_healthy".to_string()), "{label}: {}", r.body);
+    }
+    // A full host name names the same label.
+    let r = post(d.port, "/cli/app/domain/add", &mine, json!({"app": "agentnsi", "label": format!("theirs.box.{}", k2_core::tunnel::config::SUBDOMAIN_HOST)})).await;
+    assert_eq!(r.code(), "label_owned_by_other_workspace", "{}", r.body);
+    // Another workspace's agent never sees this App.
+    allow_manage(&other, true);
+    let r = post(d.port, "/cli/app/domain/add", &passport(&other), json!({"app": "agentnsi", "label": "x1"})).await;
+    assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
+    // Without "Build and run Apps" the change is held for the owner.
+    allow_manage(&nsi, false);
+    let r = add(mine.clone(), "nsiextra").await;
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
+    allow_manage(&nsi, true);
+
+    // rm of something never attached; of a taken label (that's label return).
+    let r = post(d.port, "/cli/app/domain/rm", &mine, json!({"app": "agentnsi", "label": "nsiextra"})).await;
+    assert_eq!((r.status, r.code()), (404, "domain_not_attached".to_string()), "{}", r.body);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut cfg = k2_core::app_grace::config::load(&conn, "agentnsi").unwrap();
+        cfg.labels.push(k2_core::app_grace::config::TakenLabel {
+            label: "agents".into(),
+            service_id: "svc-agents".into(),
+            legacy_port: 47_201,
+            taken_at: 1,
+            taken_by: "agent:nsi".into(),
+        });
+        cfg.subdomains.push(k2_core::app_grace::config::AttachedSubdomain {
+            label: "nsiextra".into(),
+            added_at: 2,
+            added_by: "agent:nsi".into(),
+            previous_target: Some("127.0.0.1:47201".into()),
+        });
+        conn.execute("UPDATE apps SET config_json = ?2 WHERE app_id = ?1", rusqlite::params!["agentnsi", serde_json::to_string(&cfg).unwrap()]).unwrap();
+    }
+    let r = post(d.port, "/cli/app/domain/rm", &mine, json!({"app": "agentnsi", "label": "agents"})).await;
+    assert_eq!(r.code(), "domain_not_attached");
+    assert!(r.body.contains("k2 app label return agentnsi agents"), "{}", r.body);
+    // The list: its own label, the taken one, the attached one.
+    let r = get(d.port, "/cli/app/domains", &mine, "app=agentnsi").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    assert_eq!(v["own"]["label"], "agentnsi");
+    assert_eq!(v["taken"][0]["label"], "agents");
+    assert_eq!((v["attached"][0]["label"].clone(), v["attached"][0]["previousTarget"].clone()), (json!("nsiextra"), json!("127.0.0.1:47201")));
+    // Attached hostnames join the App's public origins (with its labels).
+    let mut want = vec!["agents".to_string(), "nsiextra".to_string()];
+    want.sort();
+    let mut got = k2_daemon::apps::labels::taken("agentnsi");
+    got.sort();
+    assert_eq!(got, want);
+    // POST-only.
+    for p in ["/cli/app/domain/add", "/cli/app/domain/rm"] {
+        let r = get(d.port, p, OWNER, "app=agentnsi&label=x").await;
+        assert_eq!(r.status, 405, "{p}: {}", r.body);
+    }
+    drop(seen);
+    k2_daemon::apps::alerts::set_sink(None);
+}

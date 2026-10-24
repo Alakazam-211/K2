@@ -23,6 +23,8 @@ pub mod disk_watch;
 pub mod trends;
 /// `k2 app label take|return`: a legacy service's label to its App.
 pub mod labels;
+/// `k2 app domain add|rm`: any subdomain of the App's workspace (0.46.4).
+pub mod domains;
 /// Legacy `--cmd` services, labelled (0.46.3).
 pub mod legacy;
 /// Admission-lite: the box's App memory pool (`check_memory`, §4.3).

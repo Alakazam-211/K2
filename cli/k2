@@ -9757,6 +9757,11 @@ is one-way. Done = the URL serves the App AND the old service is stopped
      The URL serves the App now. label take does NOT stop the old service:
      it keeps running on its own port with no public label (k2 publish
      list shows it local), so moving back is instant.
+     Other subdomains you pointed at the old service's port (k2 publish
+     subdomain create … --target localhost:<port>) move with
+       k2 app domain add <app-id> <subdomain>
+     (routed to the App by its id; in K2_APP_ORIGINS from its next start;
+     k2 app domain rm points it back).
   7. Stop the old service once you're sure (the move is done after this):
        k2 publish stop <old-name>
   MOVE BACK (any time): start the old service (k2 publish start <old-name>)
@@ -10304,6 +10309,13 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        healthy). The old service keeps running,
                                        unrouted.
   k2 app label return <app-id> <label> Move it back (the old service must answer).
+  k2 app domain add|rm <app-id> <sub>  Any other subdomain of your workspace
+                                       (one you pointed at the service's port)
+                                       serves the App too (k2 app domain --help).
+  k2 app move-plan <service> [--app <app-id>] [--request] [--json]
+                                       Every step of the move, what's done, and
+                                       (--request) one owner approval for all
+                                       the owner's steps.
 
   k2 app warnings [<app>] [--json]     What breaks at the 0.46.4 cut-over: env
                                        names the code reads that only the daemon
@@ -11124,6 +11136,84 @@ else:
     print("%s now serves App %s (front port %s)" % (v.get("label"), v.get("app"), v.get("frontPort")))
     if v.get("note"):
         print(v["note"])'
+}
+
+# k2 app domain add|rm <app-id> <subdomain> [--json], k2 app domains <app-id>
+# (0.46.4): any nested label of the App's workspace serves the App, routed
+# by its id (its front port), and joins K2_APP_ORIGINS at the next start.
+cmd_app_domain() {
+    local verb="${1:-}"
+    shift || true
+    case "$verb" in
+        add|rm) ;;
+        list) cmd_app_domains "$@"; return ;;
+        -h|--help|"")
+            cat <<'EOF'
+k2 app domain — more hostnames for an App (0.46.4)
+
+  k2 app domain add <app-id> <subdomain>   <subdomain>.<box>.k2.dev serves the App
+  k2 app domain rm <app-id> <subdomain>    back to what it served before (or removed)
+  k2 app domains <app-id>                  its own label, taken labels, attached ones
+
+  Any nested label your workspace holds, or one nobody holds yet (a label
+  you pointed at a port with k2 publish subdomain create, say). K2 points
+  it at the App's front port, so deploys and rollbacks never touch it. The
+  App must be live. It is in K2_APP_ORIGINS from the App's next start
+  (k2 app restart <app-id>). Your --cmd service's own label is
+  k2 app label take; another workspace's label is refused.
+EOF
+            [ -n "$verb" ] && return 0 || exit 2 ;;
+        *) echo "usage: k2 app domain add|rm <app-id> <subdomain> [--json]" >&2; exit 2 ;;
+    esac
+    local app="" label="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) cmd_app_domain --help; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; else label="$1"; fi; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$label" ]; } && { echo "usage: k2 app domain $verb <app-id> <subdomain>" >&2; exit 2; }
+    _app_rt_post "/cli/app/domain/$verb" "$(_compute_json K2_CJ_app="$app" K2_CJ_label="$label")"
+    _app_grace_done "$json_out"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("already"):
+    print("%s already serves %s%s" % (v.get("app"), v.get("label"), (" (" + v["note"] + ")") if v.get("note") else ""))
+elif v.get("now"):
+    print("%s no longer serves %s (now: %s)" % (v.get("app"), v.get("label"), v.get("now")))
+else:
+    print("%s now serves App %s (front port %s)" % (v.get("label"), v.get("app"), v.get("frontPort")))
+    if v.get("note"):
+        print(v["note"])'
+}
+
+cmd_app_domains() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) cmd_app_domain --help; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app domains <app-id> [--json]" >&2; exit 2; }
+    _compute_call GET /cli/app/domains "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+def host(r):
+    return r.get("host") or (r.get("label") + ".<box>.k2.dev")
+print("%s  (its own label)" % host(v["own"]))
+for t in v.get("taken") or []:
+    print("%s  (taken from --cmd service %s; k2 app label return to undo)" % (host(t), t.get("from")))
+for a in v.get("attached") or []:
+    print("%s  (attached by %s%s)" % (host(a), a.get("addedBy"), ("; was " + a["previousTarget"]) if a.get("previousTarget") else ""))'
 }
 
 cmd_app_warnings() {
@@ -12311,6 +12401,8 @@ cmd_app() {
         data) shift; cmd_app_data "$@" ;;
         resources) shift; cmd_app_resources "$@" ;;
         label) shift; cmd_app_label "$@" ;;
+        domain) shift; cmd_app_domain "$@" ;;
+        domains) shift; cmd_app_domains "$@" ;;
         warnings) shift; cmd_app_warnings "$@" ;;
         clean-mode) shift; cmd_app_clean_mode "$@" ;;
         key) shift; cmd_app_key "$@" ;;

@@ -57,17 +57,17 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8]) -> R<J> {
     }
 }
 
-fn accepts(port: u16) -> bool {
+pub(super) fn accepts(port: u16) -> bool {
     port != 0 && std::net::TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_millis(800)).is_ok()
 }
 
-fn load_cfg(app_id: &str) -> R<appcfg::AppConfig> {
+pub(super) fn load_cfg(app_id: &str) -> R<appcfg::AppConfig> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     appcfg::load(&conn, app_id).map_err(db_err)
 }
 
-fn save_cfg(app_id: &str, cfg: &appcfg::AppConfig) -> R<()> {
+pub(super) fn save_cfg(app_id: &str, cfg: &appcfg::AppConfig) -> R<()> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     conn.execute(
@@ -78,7 +78,7 @@ fn save_cfg(app_id: &str, cfg: &appcfg::AppConfig) -> R<()> {
     Ok(())
 }
 
-fn audit(app_id: &str, event: &str, by: &str, payload: J) {
+pub(super) fn audit(app_id: &str, event: &str, by: &str, payload: J) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     if let Err(e) = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, app_id, event, by, None, &payload) {
@@ -88,7 +88,7 @@ fn audit(app_id: &str, event: &str, by: &str, payload: J) {
 
 /// Point `label` at `port` (one control-plane write; the label's owner is
 /// checked first by `attach_hostname`).
-fn point(project_id: &str, label: &str, port: u16) -> Result<(), String> {
+pub(super) fn point(project_id: &str, label: &str, port: u16) -> Result<(), String> {
     let cfg = k2_core::tunnel::config::load().map_err(|e| format!("the tunnel config: {e}"))?;
     if cfg.token.trim().is_empty() {
         return Err("this server has no K2 Connect tunnel token".into());
@@ -97,7 +97,7 @@ fn point(project_id: &str, label: &str, port: u16) -> Result<(), String> {
 }
 
 /// The App answers: running, a live instance, its front port accepting.
-fn healthy(app: &AppRow) -> Result<u16, String> {
+pub(super) fn healthy(app: &AppRow) -> Result<u16, String> {
     if app.state != deploy::store::STATE_RUNNING {
         return Err(format!("{} is {}", app.app_id, app.state));
     }
@@ -113,7 +113,7 @@ fn healthy(app: &AppRow) -> Result<u16, String> {
 
 /// Another workspace holds `label`: refused naming the agent that holds it
 /// and its `k2 msg` address (N6), never its folder or id.
-fn foreign_refusal(label: &str, holder: &str) -> Refusal {
+pub(super) fn foreign_refusal(label: &str, holder: &str) -> Refusal {
     let m = super::coordination::maintainer_of(holder);
     let ask = match (&m.address, m.kind) {
         (Some(a), "agent") => format!(" Ask it: k2 msg {a} \"…\""),
@@ -254,6 +254,11 @@ fn give_back(who: &Who, app: &AppRow, label: &str) -> R<J> {
 /// the uninstall.
 pub(crate) fn give_back_all(app: &AppRow) {
     let Ok(cfg) = load_cfg(&app.app_id) else { return };
+    // 0.46.4: hostnames attached with `k2 app domain add` go back to what
+    // they served before, or are removed.
+    for d in &cfg.subdomains {
+        super::domains::release(&app.owner_workspace, d);
+    }
     for t in cfg.labels {
         let row = {
             let db = k2_core::db::shared();
@@ -290,7 +295,10 @@ pub fn moved_to(service_id: &str) -> Option<String> {
         .map(|a| a.app_id)
 }
 
-/// The labels an App took (its public origins add them).
+/// The labels an App took, and the nested hostnames attached to it
+/// (`k2 app domain add`): its public origins add them.
 pub fn taken(app_id: &str) -> Vec<String> {
-    load_cfg(app_id).map(|c| c.labels.into_iter().map(|l| l.label).collect()).unwrap_or_default()
+    load_cfg(app_id)
+        .map(|c| c.labels.into_iter().map(|l| l.label).chain(c.subdomains.into_iter().map(|d| d.label)).collect())
+        .unwrap_or_default()
 }

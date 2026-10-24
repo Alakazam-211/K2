@@ -298,6 +298,9 @@ fn status_json(st: &VaultStatus) -> Value {
                 .collect::<Vec<_>>()),
         );
         o.insert("agentsCanRead".into(), json!(agents_can_read(&st.key_home)));
+        if let Some(line) = newer_rows_line(&st.counts) {
+            o.insert("newerRows".into(), json!(line));
+        }
         o.insert(
             "legacyCopies".into(),
             json!("older copies of secrets K2 kept before 0.45.2 may remain in snapshots and backups made before the move"),
@@ -310,6 +313,27 @@ fn status_json(st: &VaultStatus) -> Value {
         }
     }
     v
+}
+
+/// R2 (PRD vault-gaps): "N secrets need a newer K2", or None when there are
+/// none. Rows a newer K2 wrote are skipped here, not fatal.
+pub fn newer_rows_line(c: &k2_vault::vault::Counts) -> Option<String> {
+    let plural = |n: u64, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let parts: Vec<String> = [
+        (c.newer_secrets > 0).then(|| plural(c.newer_secrets, "secret", "secrets")),
+        (c.newer_grants > 0).then(|| plural(c.newer_grants, "share", "shares")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let need = if c.newer_secrets + c.newer_grants == 1 { "needs" } else { "need" };
+    Some(format!(
+        "{} {need} a newer K2: a newer version wrote them, so this one skips them (not listed, not delivered). Update K2 to use them.",
+        parts.join(" and ")
+    ))
 }
 
 /// Who sets up the recovery key, and where (VS2). People only.
@@ -527,6 +551,9 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
     }
     if st.tamper != "ok" {
         findings.push(json!({ "level": "error", "code": "vault_tamper", "message": st.tamper }));
+    }
+    if let Some(line) = newer_rows_line(&st.counts) {
+        findings.push(json!({ "level": "warning", "code": "needs_newer_k2", "message": line }));
     }
     if st.rollback {
         findings.push(json!({ "level": "error", "code": "vault_rollback", "message": "vault.db looks older than expected; the owner must confirm in Settings → Vault" }));

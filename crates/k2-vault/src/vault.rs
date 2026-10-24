@@ -97,6 +97,10 @@ pub struct Counts {
     pub grants: u64,
     pub pending_requests: u64,
     pub rotate_due: u64,
+    /// R2: secrets written by a newer K2 that this build skips.
+    pub newer_secrets: u64,
+    /// R2: grants written by a newer K2 that this build skips.
+    pub newer_grants: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -203,9 +207,30 @@ fn sid_bytes(id: &str) -> [u8; 16] {
 struct SecretRow {
     meta: SecretMeta,
     external_ref: String,
+    /// The `inject` column as stored (R1: it may carry fields this build
+    /// doesn't know).
+    inject_raw: String,
+}
+
+fn inject_text(m: &SecretMeta) -> String {
+    m.inject.as_ref().map(|i| serde_json::to_string(i).expect("inject")).unwrap_or_default()
 }
 
 fn secret_mac_input(m: &SecretMeta, external_ref: &str) -> Vec<u8> {
+    secret_mac_input_with(m, external_ref, &inject_text(m))
+}
+
+/// R1: a row's MAC is over the inject text this build would write; a newer
+/// K2's row may hold an inject with an extra optional field this build
+/// drops when it parses, so the stored text is also accepted. Both forms
+/// need the row key, so this accepts nothing an attacker could forge.
+fn row_mac_ok(key: &Key32, row: &SecretRow, mac: &[u8]) -> bool {
+    let ours = inject_text(&row.meta);
+    hmac_verify(key, &secret_mac_input_with(&row.meta, &row.external_ref, &ours), mac)
+        || (row.inject_raw != ours && hmac_verify(key, &secret_mac_input_with(&row.meta, &row.external_ref, &row.inject_raw), mac))
+}
+
+fn secret_mac_input_with(m: &SecretMeta, external_ref: &str, inject: &str) -> Vec<u8> {
     let mut e = Enc::new("secret");
     e.str(&m.id)
         .u8(m.namespace.code())
@@ -216,7 +241,7 @@ fn secret_mac_input(m: &SecretMeta, external_ref: &str) -> Vec<u8> {
         .str(&m.provider)
         .str(external_ref)
         .str(&serde_json::to_string(&m.hosts).expect("hosts"))
-        .str(&m.inject.as_ref().map(|i| serde_json::to_string(i).expect("inject")).unwrap_or_default())
+        .str(inject)
         .u8(m.default_delivery.code())
         .u8(m.delivery_ceiling.code())
         .str(&m.origin)
@@ -592,10 +617,11 @@ impl LocalVault {
                 for row in rows.flatten() {
                     match row {
                         Ok((sr, mac)) => {
-                            if !hmac_verify(&keys.row, &secret_mac_input(&sr.meta, &sr.external_ref), &mac) {
+                            if !row_mac_ok(&keys.row, &sr, &mac) {
                                 problems.push(format!("secret {} failed its integrity check", sr.meta.id));
                             }
                         }
+                        Err(e) if e.is_needs_newer() => {}
                         Err(e) => problems.push(e.hint),
                     }
                 }
@@ -747,7 +773,7 @@ impl LocalVault {
                 .optional()?,
         };
         let (row, mac) = r.ok_or_else(|| VaultError::not_found("no such secret"))??;
-        if !hmac_verify(&keys.row, &secret_mac_input(&row.meta, &row.external_ref), &mac) {
+        if !row_mac_ok(&keys.row, &row, &mac) {
             self.tamper.lock().push(format!("secret {} failed its integrity check", row.meta.id));
             return Err(VaultError::tamper("this secret's record failed its integrity check"));
         }
@@ -759,7 +785,7 @@ impl LocalVault {
         let rows = st.query_map(params![secret_id], |r| Ok(read_grant_raw(r)))?;
         let mut out = vec![];
         for row in rows {
-            let (g, mac) = row??;
+            let Some((g, mac)) = tolerate(row)? else { continue };
             if !hmac_verify(&keys.row, &grant_mac_input(&g), &mac) {
                 self.tamper.lock().push(format!("grant {} failed its integrity check", g.id));
                 continue;
@@ -1383,7 +1409,7 @@ impl LocalVault {
         let rows = st.query_map(params![consumer.kind.as_str(), consumer.id], |r| Ok(read_grant_raw(r)))?;
         let mut out = vec![];
         for r in rows {
-            let (g, mac) = r??;
+            let Some((g, mac)) = tolerate(r)? else { continue };
             if !hmac_verify(&keys.row, &grant_mac_input(&g), &mac) {
                 continue;
             }
@@ -1603,7 +1629,7 @@ impl LocalVault {
             let it = st.query_map([], |r| Ok(read_secret_raw(r)))?;
             let mut v = vec![];
             for r in it {
-                v.push(r??);
+                v.extend(tolerate(r)?);
             }
             v
         };
@@ -1611,7 +1637,7 @@ impl LocalVault {
         let t = now();
         let mut out = vec![];
         for (row, mac) in rows {
-            if !hmac_verify(&keys.row, &secret_mac_input(&row.meta, &row.external_ref), &mac) {
+            if !row_mac_ok(&keys.row, &row, &mac) {
                 continue;
             }
             let m = &row.meta;
@@ -1675,7 +1701,7 @@ impl LocalVault {
             let it = st.query_map([], |r| Ok(read_secret_raw(r)))?;
             let mut v = vec![];
             for r in it {
-                v.push(r??);
+                v.extend(tolerate(r)?);
             }
             v
         };
@@ -1683,7 +1709,7 @@ impl LocalVault {
         let t = now();
         let mut out = vec![];
         for (row, mac) in rows {
-            if !hmac_verify(&keys.row, &secret_mac_input(&row.meta, &row.external_ref), &mac) {
+            if !row_mac_ok(&keys.row, &row, &mac) {
                 continue;
             }
             let m = &row.meta;
@@ -1716,8 +1742,8 @@ impl LocalVault {
         let it = st.query_map([], |r| Ok(read_secret_raw(r)))?;
         let mut out = vec![];
         for r in it {
-            let (row, mac) = r??;
-            if !hmac_verify(&keys.row, &secret_mac_input(&row.meta, &row.external_ref), &mac) {
+            let Some((row, mac)) = tolerate(r)? else { continue };
+            if !row_mac_ok(&keys.row, &row, &mac) {
                 continue;
             }
             let m = row.meta;
@@ -2025,7 +2051,7 @@ impl LocalVault {
             v
         };
         for (row, mac) in rows {
-            if !hmac_verify(&keys.row, &secret_mac_input(&row.meta, &row.external_ref), &mac) {
+            if !row_mac_ok(&keys.row, &row, &mac) {
                 return Err(VaultError::tamper(format!("secret {} failed its integrity check; rekey stopped", row.meta.id)));
             }
             let m = &row.meta;
@@ -2160,7 +2186,7 @@ impl LocalVault {
             if let Ok(it) = st.query_map([], |r| Ok(read_secret_raw(r))) {
                 for r in it.flatten().flatten() {
                     let (row, mac) = r;
-                    if !hmac_verify(&keys.row, &secret_mac_input(&row.meta, &row.external_ref), &mac) {
+                    if !row_mac_ok(&keys.row, &row, &mac) {
                         continue;
                     }
                     if let Ok(v) = self.decrypt_version(&conn, &keys, &row.meta, row.meta.latest_version) {
@@ -2284,7 +2310,7 @@ impl LocalVault {
         let it = st.query_map([], |r| Ok(read_request_raw(r)))?;
         let mut out = vec![];
         for r in it {
-            let (req, mac) = r??;
+            let Some((req, mac)) = tolerate(r)? else { continue };
             if !hmac_verify(&keys.row, &request_mac_input(&req), &mac) {
                 continue;
             }
@@ -2562,6 +2588,8 @@ impl LocalVault {
             grants: count("SELECT COUNT(*) FROM grants"),
             pending_requests: count("SELECT COUNT(*) FROM secret_request WHERE status = 'pending'"),
             rotate_due: 0,
+            newer_secrets: count_newer(&conn, "SELECT * FROM secret", read_secret_raw),
+            newer_grants: count_newer(&conn, "SELECT * FROM grants", read_grant_raw),
         };
         drop(conn);
         let due = self
@@ -2743,6 +2771,46 @@ fn base64_decode(s: &str) -> Result<Vec<u8>> {
 
 // ── row (de)serialisation ───────────────────────────────────────────
 
+/// R2 (PRD vault-gaps): an enum value this build doesn't know means the row
+/// was written by a newer K2, not that it was tampered with.
+fn newer<T>(r: Result<T>) -> Result<T> {
+    r.map_err(|e| VaultError::needs_newer(format!("a vault row was written by a newer K2 ({}); update K2 to use it", e.hint)))
+}
+
+/// A secret's `inject` JSON. Not JSON at all is tamper; a JSON object this
+/// build can't read (a newer `dst`, say) is a newer K2's row (R2). Unknown
+/// fields are ignored by serde (R1), so a newer optional field never lands
+/// here.
+fn parse_inject_row(s: &str) -> Result<Inject> {
+    match serde_json::from_str::<Inject>(s) {
+        Ok(i) => Ok(i),
+        Err(_) => match serde_json::from_str::<serde_json::Value>(s) {
+            Ok(serde_json::Value::Object(_)) => Err(VaultError::needs_newer(
+                "a vault row was written by a newer K2 (its request inject isn't known here); update K2 to use it",
+            )),
+            _ => Err(VaultError::tamper("bad inject json")),
+        },
+    }
+}
+
+/// R2: how many rows of one table a newer K2 wrote (this build skips them).
+fn count_newer<T>(conn: &Connection, sql: &str, read: fn(&Row<'_>) -> Result<T>) -> u64 {
+    let Ok(mut st) = conn.prepare(sql) else { return 0 };
+    let Ok(it) = st.query_map([], |r| Ok(read(r).err().is_some_and(|e| e.is_needs_newer()))) else { return 0 };
+    it.flatten().filter(|x| *x).count() as u64
+}
+
+/// R2: one row from a multi-row scan. `Ok(None)` = written by a newer K2,
+/// skip it (counted by [`LocalVault::newer_rows`]); anything else
+/// propagates as before (tamper stays fatal).
+fn tolerate<T>(r: rusqlite::Result<Result<T>>) -> Result<Option<T>> {
+    match r? {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if e.is_needs_newer() => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 fn read_secret_raw(r: &Row<'_>) -> Result<(SecretRow, Vec<u8>)> {
     let get = |n: &str| -> Result<String> { r.get::<_, String>(n).map_err(VaultError::from) };
     let hosts: Vec<String> = serde_json::from_str(&get("allowed_hosts")?).map_err(|_| VaultError::tamper("bad hosts json"))?;
@@ -2750,24 +2818,24 @@ fn read_secret_raw(r: &Row<'_>) -> Result<(SecretRow, Vec<u8>)> {
     let inject: Option<Inject> = if inject_s.is_empty() {
         None
     } else {
-        Some(serde_json::from_str(&inject_s).map_err(|_| VaultError::tamper("bad inject json"))?)
+        Some(parse_inject_row(&inject_s)?)
     };
     let meta = SecretMeta {
         id: get("id")?,
-        namespace: Namespace::parse(&get("namespace")?)?,
-        scope: Scope { kind: ScopeKind::parse(&get("scope_kind")?)?, id: get("scope_id")? },
+        namespace: newer(Namespace::parse(&get("namespace")?))?,
+        scope: Scope { kind: newer(ScopeKind::parse(&get("scope_kind")?))?, id: get("scope_id")? },
         name: get("name")?,
-        kind: Kind::parse(&get("kind")?)?,
+        kind: newer(Kind::parse(&get("kind")?))?,
         provider: get("provider")?,
         hosts,
         inject,
-        default_delivery: Delivery::parse(&get("default_delivery")?)?,
-        delivery_ceiling: Delivery::parse(&get("delivery_ceiling")?)?,
+        default_delivery: newer(Delivery::parse(&get("default_delivery")?))?,
+        delivery_ceiling: newer(Delivery::parse(&get("delivery_ceiling")?))?,
         origin: get("origin")?,
         created_by: get("created_by")?,
         human_given: r.get::<_, i64>("human_given")? != 0,
         latest_version: r.get::<_, i64>("latest_version")? as u32,
-        status: SecretStatus::parse(&get("status")?)?,
+        status: newer(SecretStatus::parse(&get("status")?))?,
         rotate_every_days: r.get::<_, Option<i64>>("rotate_every_days")?.map(|d| d as u32),
         description: get("description")?,
         expires_at: r.get("expires_at")?,
@@ -2775,7 +2843,7 @@ fn read_secret_raw(r: &Row<'_>) -> Result<(SecretRow, Vec<u8>)> {
         updated_at: get("updated_at")?,
     };
     let mac: Vec<u8> = r.get("row_mac")?;
-    Ok((SecretRow { meta, external_ref: get("external_ref")? }, mac))
+    Ok((SecretRow { meta, external_ref: get("external_ref")?, inject_raw: inject_s }, mac))
 }
 
 fn read_grant_raw(r: &Row<'_>) -> Result<(Grant, Vec<u8>)> {
@@ -2785,10 +2853,10 @@ fn read_grant_raw(r: &Row<'_>) -> Result<(Grant, Vec<u8>)> {
         secret_id: r.get("secret_id")?,
         version_selector: r.get("version_selector")?,
         consumer: Consumer {
-            kind: ConsumerKind::parse(&r.get::<_, String>("consumer_kind")?)?,
+            kind: newer(ConsumerKind::parse(&r.get::<_, String>("consumer_kind")?))?,
             id: r.get("consumer_id")?,
         },
-        delivery: Delivery::parse(&r.get::<_, String>("delivery")?)?,
+        delivery: newer(Delivery::parse(&r.get::<_, String>("delivery")?))?,
         env_name: r.get("env_name")?,
         file_name: r.get("file_name")?,
         hosts_narrowed: match hosts {
@@ -2811,10 +2879,10 @@ fn read_request_raw(r: &Row<'_>) -> Result<(SecretRequest, Vec<u8>)> {
         workspace_id: r.get("workspace_id")?,
         requested_by: r.get("requested_by")?,
         name: r.get("name")?,
-        kind: Kind::parse(&r.get::<_, String>("kind")?)?,
+        kind: newer(Kind::parse(&r.get::<_, String>("kind")?))?,
         proposed_scope: r.get("proposed_scope")?,
         proposed_hosts: serde_json::from_str(&hosts).map_err(|_| VaultError::tamper("bad hosts json"))?,
-        proposed_delivery: Delivery::parse(&r.get::<_, String>("proposed_delivery")?)?,
+        proposed_delivery: newer(Delivery::parse(&r.get::<_, String>("proposed_delivery")?))?,
         prompt: r.get("prompt")?,
         ttl_secs: r.get("ttl_secs")?,
         status: r.get("status")?,

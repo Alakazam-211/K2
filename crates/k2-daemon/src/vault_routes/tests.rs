@@ -935,3 +935,51 @@ fn a_grant_with_an_env_or_file_name_delivers_that_way() {
     let g = grant(json!({ "name": "GITHUB_CLI", "to": "session:sess-9" }));
     assert_eq!(g["delivery"], "fetch", "{g}");
 }
+
+#[test]
+fn rows_from_a_newer_k2_are_skipped_and_reported_in_status_and_doctor() {
+    let dir = TestDir::new("routes-r2");
+    let ks: Arc<dyn KeyStore> = Arc::new(FakeKeyStore::new());
+    let open = || Arc::new(LocalVault::open(dir.path().join("vault"), ks.clone(), OpenOptions { kdf: KdfCost::Floor }).expect("open"));
+    let t = T { _dir: TestDir::new("routes-r2-a"), v: open() };
+    set_server(&t, "OLD_KEY", "k2test-old-value-123456");
+    set_server(&t, "NEW_KEY", "k2test-new-value-123456");
+    drop(t);
+    let c = rusqlite::Connection::open(dir.path().join("vault/vault.db")).expect("db");
+    c.execute("UPDATE secret SET default_delivery = 'agent' WHERE name = 'NEW_KEY'", []).expect("edit");
+    drop(c);
+    let t = T { _dir: TestDir::new("routes-r2-b"), v: open() };
+
+    let (s, v) = call(&t, LIST, &owner(), Value::Null);
+    assert_eq!(s, 200, "list must not fail on a newer row: {v}");
+    let names: Vec<&str> = v["secrets"].as_array().expect("secrets").iter().map(|m| m["name"].as_str().expect("name")).collect();
+    assert_eq!(names, vec!["OLD_KEY"], "{v}");
+
+    let (s, v) = call(&t, STATUS, &owner(), Value::Null);
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["counts"]["newerSecrets"], 1, "{v}");
+    assert_eq!(v["tamper"], "ok", "{v}");
+    let line = v["newerRows"].as_str().expect("newerRows");
+    assert!(line.starts_with("1 secret needs a newer K2"), "{v}");
+
+    let (s, v) = call(&t, DOCTOR, &owner(), Value::Null);
+    assert_eq!(s, 200, "{v}");
+    let f = v["findings"].as_array().expect("findings").iter().find(|f| f["code"] == "needs_newer_k2").expect("needs_newer_k2 finding");
+    assert_eq!(f["level"], "warning", "{v}");
+
+    let mut p = HashMap::new();
+    p.insert("name".to_string(), "NEW_KEY".to_string());
+    let (s, v) = call_p(&t, SHOW, &owner(), Value::Null, p);
+    assert_eq!(s, 409, "{v}");
+    assert_eq!(code(&v), "vault_needs_newer_k2", "{v}");
+}
+
+#[test]
+fn the_newer_rows_line_counts_secrets_and_shares() {
+    let mut c = k2_vault::vault::Counts::default();
+    assert!(newer_rows_line(&c).is_none());
+    c.newer_secrets = 2;
+    c.newer_grants = 1;
+    let l = newer_rows_line(&c).expect("line");
+    assert!(l.starts_with("2 secrets and 1 share need a newer K2"), "{l}");
+}

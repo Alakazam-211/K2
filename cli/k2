@@ -20747,6 +20747,8 @@ c = v.get("counts") or {}
 print("secrets:        %s yours, %s K2 system, %s shares, %s pending cards" % (c.get("user"), c.get("system"), c.get("grants"), c.get("pendingRequests")))
 if v.get("tamper") != "ok":
     print("PROBLEM:        %s" % v.get("tamper"))
+if v.get("newerRows"):
+    print("NEEDS UPDATE:   %s" % v.get("newerRows"))
 if v.get("rollback"):
     print("PROBLEM:        vault.db looks older than expected; the owner confirms in Settings → Vault")
 print()

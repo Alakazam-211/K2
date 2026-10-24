@@ -12,6 +12,9 @@ pub struct VaultError {
 
 pub type Result<T> = std::result::Result<T, VaultError>;
 
+/// Code of [`VaultError::needs_newer`].
+pub const NEEDS_NEWER: &str = "vault_needs_newer_k2";
+
 impl VaultError {
     pub fn new(code: &'static str, status: u16, hint: impl Into<String>) -> Self {
         Self { code, status, hint: hint.into() }
@@ -40,6 +43,18 @@ impl VaultError {
     /// A row or header failed its integrity check. Fails closed.
     pub fn tamper(hint: impl Into<String>) -> Self {
         Self::new("vault_tamper", 500, hint)
+    }
+
+    /// A row written by a newer K2: it names a kind, delivery, consumer or
+    /// inject destination this build doesn't know (PRD vault-gaps R2).
+    /// Readers that scan many rows skip and count it; a direct lookup
+    /// answers with this. Not tamper: the row is intact, just newer.
+    pub fn needs_newer(hint: impl Into<String>) -> Self {
+        Self::new(NEEDS_NEWER, 409, hint)
+    }
+
+    pub fn is_needs_newer(&self) -> bool {
+        self.code == NEEDS_NEWER
     }
 
     /// A tricked-agent rule (§11.2): ask the owner instead.

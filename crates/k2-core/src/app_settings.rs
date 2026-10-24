@@ -47,6 +47,13 @@ pub struct TerminalSettings {
     pub scrollback: u32,
     #[serde(default = "default_true")]
     pub natural_text_editing: bool,
+    /// k2-ptyd (PRD prd-k2-ptyd-v1 P67): `terminal.ptyd` = `off` | `on` |
+    /// `auto` — host agent terminals in k2-ptyd so they survive daemon
+    /// restarts and updates. `K2_PTYD` in the daemon's env wins. Empty =
+    /// off (0.46.4: opt-in; `auto` is still off). Never written while
+    /// unset, so an untouched settings.json stays byte-identical.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ptyd: String,
 }
 
 impl Default for TerminalSettings {
@@ -137,6 +144,7 @@ fn default_terminal() -> TerminalSettings {
         cursor_style: "bar".to_string(),
         scrollback: 5000,
         natural_text_editing: true,
+        ptyd: String::new(),
     }
 }
 

@@ -55,8 +55,23 @@ impl Switch {
         }
     }
 
+    /// P67: `K2_PTYD` in the daemon's env wins (any value: `1|on|true` on,
+    /// anything else off); otherwise the app setting `terminal.ptyd`
+    /// (`on` → on; empty, `off` or `auto` → off in 0.46.4).
     pub fn resolve() -> Switch {
-        Switch::from_env_value(std::env::var("K2_PTYD").ok().as_deref())
+        match std::env::var("K2_PTYD") {
+            Ok(v) => Switch::from_env_value(Some(&v)),
+            Err(_) => Switch::from_setting(&crate::app_settings::load().terminal.ptyd),
+        }
+    }
+
+    /// The `terminal.ptyd` app setting: only an explicit `on` is on.
+    pub fn from_setting(v: &str) -> Switch {
+        if v.trim().eq_ignore_ascii_case("on") {
+            Switch::On
+        } else {
+            Switch::Off
+        }
     }
 }
 
@@ -201,6 +216,15 @@ mod tests {
         assert_eq!(Switch::from_env_value(Some("auto")), Switch::Off, "auto is a 0.46.4 value, off in 0.46.2");
         assert_eq!(Switch::from_env_value(Some("1")), Switch::On);
         assert_eq!(Switch::from_env_value(Some(" ON ")), Switch::On);
+    }
+
+    #[test]
+    fn setting_is_on_only_when_explicitly_on() {
+        assert_eq!(Switch::from_setting(""), Switch::Off, "unset = off (the default)");
+        assert_eq!(Switch::from_setting("off"), Switch::Off);
+        assert_eq!(Switch::from_setting("auto"), Switch::Off, "auto stays off until 0.46.5");
+        assert_eq!(Switch::from_setting("on"), Switch::On);
+        assert_eq!(Switch::from_setting(" On "), Switch::On);
     }
 
     #[test]

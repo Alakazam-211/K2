@@ -1054,7 +1054,9 @@ impl DaemonPtySession {
             use crate::terminal::ptyd::{select_backend, Backend, Switch};
             let choice = select_backend(
                 cfg.survive,
-                Switch::resolve(),
+                // Non-survive spawns never read the switch (it may read
+                // settings.json); select_backend ignores it for them.
+                if cfg.survive { Switch::resolve() } else { Switch::Off },
                 matches!(cfg.sandbox, SandboxSpec::Passthrough),
                 crate::terminal::ptyd::current_killmode,
                 || {

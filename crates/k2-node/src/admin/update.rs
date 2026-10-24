@@ -153,6 +153,7 @@ fn mark_ok(e: &Executor, to: &str, since: i64) -> bool {
 /// macOS: the staged build must carry K2's Developer ID signature.
 fn verify_codesign(staged: &Path) -> Result<(), AdminRefusal> {
     let req = format!("=anchor apple generic and certificate leaf[subject.OU] = \"{APPLE_TEAM_ID}\"");
+    let _g = super::fdpass::spawn_guard();
     let out = std::process::Command::new("/usr/bin/codesign")
         .args(["--verify", "--strict", "-R"])
         .arg(&req)
@@ -354,7 +355,7 @@ pub fn apply(e: &Executor, c: &Checked, sig: &str, bytes: &[u8]) -> Result<Value
     st.ok(e, "decide", format!("{} running={}", d.0.as_str(), d.1));
     let staged = Staged { to: built.version.to_string(), key: built.key_id.to_string(), cmd_id: cmd_id.clone(), sha, steps: st };
     // A shared node lets running jobs finish first (V55); `.new` waits.
-    run_decided(e, d, "node.update", &cmd_id, move |ex| swap_and_restart(ex, staged))
+    run_decided(e, d, DrainOpts::default(), "node.update", &cmd_id, move |ex| swap_and_restart(ex, staged))
 }
 
 /// A verified build waiting in `<bin>.new`.
@@ -386,6 +387,19 @@ fn swap_and_restart(e: &Executor, mut s: Staged) -> Result<Value, AdminRefusal> 
         let _ = std::fs::remove_file(&new);
         return Err(s.steps.failed(e, "swap", AdminRefusal::new(code::BAD_BUILD, "the staged build changed since it was verified")));
     }
+    // Record first (B-L2): `swapping` is on disk before the rename, so an
+    // executor that dies between the two never leaves a build that hasn't
+    // passed the gate in place unrecorded; `resume_pending` finishes it.
+    let from = crate::PRODUCT_VERSION.to_string();
+    rec.phase = "swapping".into();
+    rec.from = from.clone();
+    rec.to = s.to.clone();
+    rec.at = e.now();
+    rec.deadline = 0;
+    rec.cmd_id = Some(s.cmd_id.clone());
+    rec.reason = None;
+    rec.steps = std::mem::take(&mut s.steps.lines);
+    save(e, &rec)?;
     // Swap.
     let prev = sib(&bin, ".prev");
     let swap = (|| -> std::io::Result<()> {
@@ -398,34 +412,39 @@ fn swap_and_restart(e: &Executor, mut s: Staged) -> Result<Value, AdminRefusal> 
     })();
     if let Err(x) = swap {
         let _ = std::fs::remove_file(&new);
-        return Err(s.steps.failed(e, "swap", fail(format!("swap: {x}"))));
+        rec.phase = "failed".into();
+        rec.reason = Some(format!("swap: {x}"));
+        rec_step(e, &mut rec, "swap", false, x.to_string());
+        return Err(fail(format!("swap: {x}")));
     }
     fsync_dir(&bin);
     let now = e.now();
-    let from = crate::PRODUCT_VERSION.to_string();
     rec.phase = "swapped".into();
-    rec.from = from.clone();
-    rec.to = s.to.clone();
     rec.at = now;
     rec.deadline = now + HEALTH_GATE_SECS;
-    rec.cmd_id = Some(s.cmd_id.clone());
-    rec.reason = None;
-    rec.steps = std::mem::take(&mut s.steps.lines);
     rec_step(e, &mut rec, "swap", true, format!(".prev = {from}"));
-    // Record first: a crash from here on must resume the gate.
+    // A crash from here on resumes the gate.
     save(e, &rec)?;
+    restart_into_gate(e, &mut rec)?;
+    Ok(json!({"phase": "swapped", "from": from, "to": rec.to, "key": s.key, "health_gate_secs": HEALTH_GATE_SECS}))
+}
+
+/// After the swap (recorded `swapped`): restart the node with the mark and
+/// start the health gate; a failed restart rolls back.
+fn restart_into_gate(e: &Executor, rec: &mut UpdateRecord) -> Result<(), AdminRefusal> {
     let _ = std::fs::remove_file(healthy_path(&e.paths.home));
-    let pid = mark_restart(e, "node.update", &s.cmd_id);
-    rec_step(e, &mut rec, "mark", true, mark_detail(pid));
+    let cmd = rec.cmd_id.clone().unwrap_or_else(|| "-".into());
+    let named = mark_restart(e, "node.update", &cmd);
+    rec_step(e, rec, "mark", true, mark_detail(named));
     if let Err(x) = e.platform.restart_node() {
-        rec_step(e, &mut rec, "restart", false, x.clone());
+        rec_step(e, rec, "restart", false, x.clone());
         let r = rollback_inner(e, &format!("restart failed: {x}"), true);
         return Err(fail(format!("restart after swap failed ({x}); rolled back: {}", r.map(|_| "yes".to_string()).unwrap_or_else(|z| z.message))));
     }
-    rec_step(e, &mut rec, "restart", true, "");
-    rec_step(e, &mut rec, "health_wait", true, format!("up to {HEALTH_GATE_SECS} s"));
+    rec_step(e, rec, "restart", true, "");
+    rec_step(e, rec, "health_wait", true, format!("up to {HEALTH_GATE_SECS} s"));
     start_gate(e);
-    Ok(json!({"phase": "swapped", "from": from, "to": rec.to, "key": s.key, "health_gate_secs": HEALTH_GATE_SECS}))
+    Ok(())
 }
 
 // ── the drain on shared nodes (V55) ──────────────────────────────────
@@ -440,18 +459,20 @@ pub fn shared_node(e: &Executor) -> bool {
     super::servers::read_file(&e.paths.config_dir).ok().flatten().is_some_and(|f| f.shared(e.now()))
 }
 
-/// Running jobs, every server's: behind the Linux job wall, root counts
-/// the live job units itself (review A L7: never the node's word);
-/// otherwise (macOS, no wall: jobs are the node's children) the node's
-/// status file.
+/// Running jobs, every server's: the larger of what root counts itself
+/// (live job units, Linux with `jobs.toml`; review A L7: a node can't
+/// hide a unit) and what the node's status file says. The node's word can
+/// only make a drain wait longer (it is capped), never shorter; and a node
+/// that isn't walled yet (`jobs.toml` just written, or a fallback to no
+/// wall) runs its jobs as its own children, which no unit count sees
+/// (security review A-H1 / B-M1).
 pub fn running_jobs(e: &Executor) -> usize {
+    let mut units = 0;
     if cfg!(target_os = "linux") && matches!(super::jobs::read_jobs_file(&e.paths.config_dir), Ok(Some(_))) {
-        let pattern = format!("{}*", super::jobs::UNIT_PREFIX);
-        if let Ok(list) = super::jobs::systemctl(&["list-units", "--plain", "--no-legend", "--state=active,activating,deactivating", &pattern]) {
-            return list.lines().filter(|l| l.trim_start().starts_with(super::jobs::UNIT_PREFIX)).count();
-        }
+        units = e.platform.running_job_units().unwrap_or(0);
     }
-    crate::status::read(&e.paths.layout().status()).map(|s| s.running.len()).unwrap_or(0)
+    let reported = crate::status::read(&e.paths.layout().status()).map(|s| s.running.len()).unwrap_or(0);
+    units.max(reported)
 }
 
 /// How a node restart goes (§5.5). U4 adds `Adopt` (keep running jobs and
@@ -493,10 +514,17 @@ pub fn decide(e: &Executor, now: bool, always_drain: bool) -> (Decision, usize) 
     }
 }
 
+/// The mark's format: 2 = names the node by pid and start time (C3, B-M4).
+/// A mark without `v` comes from a 0.46.3 executor.
+pub const MARK_V: u32 = 2;
+
 /// The update mark v2 (C3). The executor writes it before every node
-/// restart it makes, naming the node's main pid read just before.
+/// restart it makes, naming the node's main process (pid + start time)
+/// read just before.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateMark {
+    #[serde(default)]
+    pub v: u32,
     pub what: String,
     pub at: i64,
     /// The stopped node may leave its jobs running for the next node to
@@ -505,11 +533,16 @@ pub struct UpdateMark {
     pub keep: bool,
     #[serde(default)]
     pub cmd_id: Option<String>,
-    /// The node process this restart stops (`None` from a 0.46.3 executor,
-    /// or when the service manager didn't say).
+    /// The node process this restart stops (`None` when the service manager
+    /// didn't say: then the mark names nobody).
     #[serde(default)]
     pub node_pid: Option<u32>,
-    /// The gate this mark belonged to ended: it keeps nothing any more.
+    /// That process's start time ([`crate::util::process_start_time`]), so a
+    /// reused pid is never the same process (B-M4).
+    #[serde(default)]
+    pub node_start: Option<u64>,
+    /// The restart this mark belonged to is over (healthy gate, rollback,
+    /// failed restart): it keeps nothing any more.
     #[serde(default)]
     pub ended: bool,
 }
@@ -519,17 +552,31 @@ impl UpdateMark {
         now >= self.at && now - self.at < UPDATE_MARK_SECS
     }
 
-    /// Was the process `pid` stopped by this K2-made restart? A mark
-    /// without a pid (older executor) goes by time alone, as before.
-    pub fn names(&self, pid: u32, now: i64) -> bool {
-        self.fresh(now) && self.node_pid.is_none_or(|p| p == pid)
+    /// Was the process (`pid`, started at `start`) stopped by this K2-made
+    /// restart? A v2 mark names exactly one process (no pid = nobody,
+    /// A-L3); a 0.46.3 mark goes by time alone, as it did there.
+    pub fn names(&self, pid: u32, start: Option<u64>, now: i64) -> bool {
+        if !self.fresh(now) {
+            return false;
+        }
+        if self.v < MARK_V {
+            return true;
+        }
+        self.node_pid == Some(pid) && self.node_start.is_none_or(|s| Some(s) == start)
     }
 
-    /// U3's detach test (§5.4): only the process the executor restarted,
-    /// only while the mark is fresh and its gate is open, and only with
-    /// `keep`. An owner's `systemctl stop` later has another pid (Q2).
-    pub fn keeps_jobs_of(&self, pid: u32, now: i64) -> bool {
-        self.keep && !self.ended && self.fresh(now) && self.node_pid == Some(pid)
+    /// U3's detach test (§5.4): only the process the executor restarted
+    /// (pid and start time both known and equal), only while the mark is
+    /// fresh and its restart not over, and only with `keep`. An owner's
+    /// `systemctl stop` later is another process (Q2).
+    pub fn keeps_jobs_of(&self, pid: u32, start: Option<u64>, now: i64) -> bool {
+        self.v >= MARK_V
+            && self.keep
+            && !self.ended
+            && self.fresh(now)
+            && self.node_pid == Some(pid)
+            && self.node_start.is_some()
+            && self.node_start == start
     }
 }
 
@@ -539,8 +586,34 @@ pub fn update_mark_path(config_dir: &Path) -> PathBuf {
     config_dir.join(UPDATE_MARK_FILE)
 }
 
+/// Who must own the mark: root for the installed node (`/etc/k2-node` is
+/// group-writable for `k2nodectl`, so its members, the human and their
+/// agents, could rename their own file in; A-M1 / B-M3). A dev or test
+/// node with its own config dir runs everything as one user.
+pub fn mark_owner(config_dir: &Path) -> u32 {
+    if config_dir == Path::new(crate::paths::DEFAULT_CONFIG_DIR) {
+        0
+    } else {
+        unsafe { libc::geteuid() }
+    }
+}
+
+/// Read the mark only when [`mark_owner`] wrote it: no symlink, a regular
+/// file with one link, owned by that uid, writable by nobody else.
 pub fn read_update_mark(config_dir: &Path) -> Option<UpdateMark> {
-    std::fs::read(update_mark_path(config_dir)).ok().and_then(|b| serde_json::from_slice::<UpdateMark>(&b).ok())
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let p = update_mark_path(config_dir);
+    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&p).ok()?;
+    let m = f.metadata().ok()?;
+    let owner = mark_owner(config_dir);
+    if !m.file_type().is_file() || m.nlink() != 1 || m.uid() != owner || m.mode() & 0o022 != 0 {
+        crate::nlog!("ignoring {}: not root's own file (uid {}, mode {:o}, links {})", p.display(), m.uid(), m.mode() & 0o7777, m.nlink());
+        return None;
+    }
+    let mut b = Vec::new();
+    f.read_to_end(&mut b).ok()?;
+    serde_json::from_slice::<UpdateMark>(&b).ok()
 }
 
 fn write_update_mark(e: &Executor, m: &UpdateMark) {
@@ -551,20 +624,29 @@ fn write_update_mark(e: &Executor, m: &UpdateMark) {
     }
 }
 
-/// Write the mark for a restart about to happen; returns the node pid it names.
-fn mark_restart(e: &Executor, what: &str, cmd_id: &str) -> Option<u32> {
+/// Write the mark for a restart about to happen; returns the process it names.
+fn mark_restart(e: &Executor, what: &str, cmd_id: &str) -> (Option<u32>, Option<u64>) {
     let node_pid = e.platform.node_pid();
-    write_update_mark(e, &UpdateMark { what: what.to_string(), at: e.now(), keep: false, cmd_id: Some(cmd_id.to_string()), node_pid, ended: false });
-    node_pid
+    let node_start = node_pid.and_then(crate::util::process_start_time);
+    if node_pid.is_none() {
+        crate::nlog!("admin: the node's main pid is unknown; the restart mark names no process");
+    }
+    write_update_mark(
+        e,
+        &UpdateMark { v: MARK_V, what: what.to_string(), at: e.now(), keep: false, cmd_id: Some(cmd_id.to_string()), node_pid, node_start, ended: false },
+    );
+    (node_pid, node_start)
 }
 
-fn mark_detail(pid: Option<u32>) -> String {
-    format!("node_pid={} keep=false", pid.map(|p| p.to_string()).unwrap_or_else(|| "unknown".into()))
+fn mark_detail((pid, start): (Option<u32>, Option<u64>)) -> String {
+    let s = |v: Option<String>| v.unwrap_or_else(|| "unknown".into());
+    format!("node_pid={} node_start={} keep=false", s(pid.map(|p| p.to_string())), s(start.map(|p| p.to_string())))
 }
 
-/// At a healthy gate's end the mark keeps nothing (`ended`). It isn't
-/// deleted: the restarted node's tenants reconcile after the attach and
-/// still read it for the `node_update` reason until it goes stale.
+/// A restart is over (a healthy gate, a rollback's restart, a failed
+/// restart): the mark keeps nothing (`ended`). It isn't deleted: the
+/// restarted node's tenants reconcile after the attach and still read it
+/// for the `node_update` reason until it goes stale.
 fn retire_update_mark(e: &Executor) {
     if let Some(mut m) = read_update_mark(&e.paths.config_dir) {
         m.keep = false;
@@ -574,20 +656,23 @@ fn retire_update_mark(e: &Executor) {
 }
 
 /// Restart the node service the K2 way: the mark first (every K2-made
-/// restart, solo nodes too, C3), then `restart`. Returns the pid it named.
+/// restart, solo nodes too, C3), then `restart`. A failed restart retires
+/// the mark at once: the process it names is still running (B-M4).
 pub fn restart_marked(e: &Executor, what: &str, cmd_id: &str, restart: impl FnOnce(&Executor) -> Result<(), String>) -> Result<Option<u32>, String> {
-    let pid = mark_restart(e, what, cmd_id);
-    crate::nlog!("admin: restart k2-node what={what} cmd={cmd_id} {}", mark_detail(pid));
-    restart(e)?;
-    Ok(pid)
+    let named = mark_restart(e, what, cmd_id);
+    crate::nlog!("admin: restart k2-node what={what} cmd={cmd_id} {}", mark_detail(named));
+    if let Err(x) = restart(e) {
+        retire_update_mark(e);
+        return Err(x);
+    }
+    Ok(named.0)
 }
 
-/// Node side: was this process stopped for a restart the executor made in
-/// the last few minutes (the restart's own pid, or any pid for a mark
-/// from an older executor)? Decides `node_update` vs `node_shutdown` for
-/// the jobs it stops.
-pub fn update_mark_for(config_dir: &Path, pid: u32, now: i64) -> Option<UpdateMark> {
-    read_update_mark(config_dir).filter(|m| m.names(pid, now))
+/// Node side: was this process (`pid`, started at `start`) stopped for a
+/// restart the executor made in the last few minutes? Decides
+/// `node_update` vs `node_shutdown` for the jobs it stops.
+pub fn update_mark_for(config_dir: &Path, pid: u32, start: Option<u64>, now: i64) -> Option<UpdateMark> {
+    read_update_mark(config_dir).filter(|m| m.names(pid, start, now))
 }
 
 /// Node side at start: did the executor restart a node in the last few
@@ -595,6 +680,67 @@ pub fn update_mark_for(config_dir: &Path, pid: u32, now: i64) -> Option<UpdateMa
 /// node that was stopped, never this one.
 pub fn recent_update_mark(config_dir: &Path, now: i64) -> bool {
     read_update_mark(config_dir).is_some_and(|m| m.fresh(now))
+}
+
+/// How a drain behaves at its limit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DrainOpts {
+    /// Jobs still running when `drain_max` passes: give up (put control
+    /// back, never act) instead of acting anyway. `wall.enable` never
+    /// kills a job (A-H1 / B-M1); updates and owner restarts still go ahead.
+    pub give_up_at_limit: bool,
+}
+
+/// `<state>/drain.json`: a drain waiting to act, so an executor that exits
+/// (re-exec after an update) or crashes mid-drain never leaves the owner's
+/// control at `draining` (B-M2): the next executor puts it back.
+pub const DRAIN_FILE: &str = "drain.json";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DrainRecord {
+    pub what: String,
+    pub cmd_id: String,
+    /// The `by` the drain wrote on control.toml (only that is undone).
+    pub by: String,
+    pub prior_control: k2_node_proto::frames::Control,
+    pub prior_by: Option<String>,
+    pub prior_at: Option<i64>,
+    pub at: i64,
+}
+
+fn drain_path(e: &Executor) -> PathBuf {
+    e.paths.state_dir.join(DRAIN_FILE)
+}
+
+/// Put the owner's control back as it was before a drain, unless someone
+/// changed it since (it no longer says `draining` by this drain).
+fn restore_control(e: &Executor, d: &DrainRecord) {
+    let control_path = e.paths.layout().control();
+    if let Ok(c) = crate::config::read_control(&control_path) {
+        if c.control == k2_node_proto::frames::Control::Draining && c.by.as_deref() == Some(d.by.as_str()) {
+            let back_by = d.prior_by.clone().unwrap_or_else(|| "k2-node".into());
+            if let Err(x) = crate::config::write_control(&control_path, d.prior_control, &back_by, d.prior_at.unwrap_or_else(|| e.now())) {
+                crate::nlog!("admin: can't restore control after the drain: {x}");
+            }
+        }
+    }
+}
+
+/// On executor start: a drain the last executor didn't finish (it exited
+/// to re-exec, or crashed) never acts now; control goes back to the owner's.
+pub fn recover_drain(e: &Executor) {
+    let p = drain_path(e);
+    let Some(d) = std::fs::read(&p).ok().and_then(|b| serde_json::from_slice::<DrainRecord>(&b).ok()) else {
+        let _ = std::fs::remove_file(&p);
+        return;
+    };
+    restore_control(e, &d);
+    let _ = std::fs::remove_file(&p);
+    crate::nlog!("admin: drain for {} (cmd {}) ended with the last executor; control is back to {:?}", d.what, d.cmd_id, d.prior_control);
+    let _ = e.audit().append(
+        AuditEntry { event: "drain".into(), cmd_id: Some(d.cmd_id.clone()), code: Some("drain_abandoned".into()), detail: json!({"what": d.what, "phase": "abandoned"}), ..Default::default() },
+        e.now(),
+    );
 }
 
 /// Run `act` (which restarts the node) now on a solo node, with `now`, or
@@ -606,19 +752,11 @@ pub fn drain_then<F>(e: &Executor, now: bool, what: &str, cmd_id: &str, act: F) 
 where
     F: FnOnce(&Executor) -> Result<Value, AdminRefusal> + Send + 'static,
 {
-    run_decided(e, decide(e, now, false), what, cmd_id, act)
-}
-
-/// [`drain_then`] that waits for running jobs on any node, solo too.
-pub fn drain_always_then<F>(e: &Executor, what: &str, cmd_id: &str, act: F) -> Result<Value, AdminRefusal>
-where
-    F: FnOnce(&Executor) -> Result<Value, AdminRefusal> + Send + 'static,
-{
-    run_decided(e, decide(e, false, true), what, cmd_id, act)
+    run_decided(e, decide(e, now, false), DrainOpts::default(), what, cmd_id, act)
 }
 
 /// Act on a [`decide`] result.
-pub fn run_decided<F>(e: &Executor, (d, running): (Decision, usize), what: &str, cmd_id: &str, act: F) -> Result<Value, AdminRefusal>
+pub fn run_decided<F>(e: &Executor, (d, running): (Decision, usize), opts: DrainOpts, what: &str, cmd_id: &str, act: F) -> Result<Value, AdminRefusal>
 where
     F: FnOnce(&Executor) -> Result<Value, AdminRefusal> + Send + 'static,
 {
@@ -641,8 +779,23 @@ where
             return Err(fail(x));
         }
     };
-    let by = format!("k2-node {what} (draining)");
-    if let Err(x) = crate::config::write_control(&control_path, k2_node_proto::frames::Control::Draining, &by, e.now()) {
+    let rec = DrainRecord {
+        what: what.to_string(),
+        cmd_id: cmd_id.to_string(),
+        by: format!("k2-node {what} (draining)"),
+        prior_control: prior.control,
+        prior_by: prior.by.clone(),
+        prior_at: prior.at,
+        at: e.now(),
+    };
+    // Recorded before control changes: a crash after it is undone at start.
+    let saved = serde_json::to_vec(&rec).map_err(|x| x.to_string()).and_then(|b| crate::util::atomic_write(&drain_path(e), &b, 0o600));
+    if let Err(x) = saved {
+        e.draining.store(false, Ordering::SeqCst);
+        return Err(fail(format!("drain record: {x}")));
+    }
+    if let Err(x) = crate::config::write_control(&control_path, k2_node_proto::frames::Control::Draining, &rec.by, e.now()) {
+        let _ = std::fs::remove_file(drain_path(e));
         e.draining.store(false, Ordering::SeqCst);
         return Err(fail(x));
     }
@@ -651,8 +804,7 @@ where
         e.now(),
     );
     let ex = e.bg_handle();
-    let resp = json!({"phase": "draining", "what": what, "running": running, "max_secs": e.drain_max.as_secs()});
-    let (what, cmd_id) = (what.to_string(), cmd_id.to_string());
+    let resp = json!({"phase": "draining", "what": what, "running": running, "max_secs": e.drain_max.as_secs(), "gives_up_at_limit": opts.give_up_at_limit});
     std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + ex.drain_max;
         while running_jobs(&ex) > 0 && std::time::Instant::now() < deadline {
@@ -665,26 +817,22 @@ where
                 // A later update or rollback (`now`) came first: this
                 // drained action is stale and never runs.
                 Err(AdminRefusal::new(code::BUSY, "superseded by a later update or rollback"))
+            } else if opts.give_up_at_limit && left > 0 {
+                crate::nlog!("admin: {} gave up: {left} job(s) still running at the drain limit; nothing restarted", rec.what);
+                Err(AdminRefusal::new(DRAIN_GAVE_UP, format!("{left} job(s) still running after {} s; nothing was restarted", ex.drain_max.as_secs())))
             } else {
                 act(&ex)
             };
-            // Put the owner's switch back, unless someone changed it since.
-            if let Ok(c) = crate::config::read_control(&control_path) {
-                if c.control == k2_node_proto::frames::Control::Draining && c.by.as_deref() == Some(by.as_str()) {
-                    let back_by = prior.by.clone().unwrap_or_else(|| "k2-node".into());
-                    if let Err(x) = crate::config::write_control(&control_path, prior.control, &back_by, prior.at.unwrap_or_else(|| ex.now())) {
-                        crate::nlog!("admin: can't restore control after the drain: {x}");
-                    }
-                }
-            }
+            restore_control(&ex, &rec);
+            let _ = std::fs::remove_file(drain_path(&ex));
             r
         };
         let _ = ex.audit().append(
             AuditEntry {
                 event: "drain".into(),
-                cmd_id: Some(cmd_id),
+                cmd_id: Some(rec.cmd_id.clone()),
                 code: r.as_ref().err().map(|x| x.code.clone()),
-                detail: json!({"what": what, "phase": "done", "left_running": left}),
+                detail: json!({"what": rec.what, "phase": "done", "left_running": left}),
                 ..Default::default()
             },
             ex.now(),
@@ -693,6 +841,9 @@ where
     });
     Ok(resp)
 }
+
+/// The audit code of a drain that gave up at its limit.
+pub const DRAIN_GAVE_UP: &str = "drain_gave_up";
 
 /// Run the health gate in the background (holding the busy lock so no
 /// other root action interleaves). Healthy → record; else roll back.
@@ -736,15 +887,60 @@ pub fn gate(e: &Executor) {
     }
 }
 
-/// On executor start: a gate interrupted by an executor crash resumes.
+/// On executor start: a gate interrupted by an executor crash resumes; a
+/// swap interrupted between its record and the rename is finished (the
+/// new build is in: restart into the gate) or dropped (it isn't: nothing
+/// changed). B-L2.
 pub fn resume_pending(e: &Executor) {
-    if load(e).phase == "swapped" {
-        start_gate(e);
+    let mut rec = load(e);
+    match rec.phase.as_str() {
+        "swapped" => start_gate(e),
+        "swapping" => {
+            let bin = e.paths.binary.clone();
+            if installed_version(&bin).as_deref() == Some(rec.to.as_str()) {
+                let now = e.now();
+                rec.phase = "swapped".into();
+                rec.at = now;
+                rec.deadline = now + HEALTH_GATE_SECS;
+                rec_step(e, &mut rec, "swap", true, "found in place after an executor restart");
+                if save(e, &rec).is_ok() {
+                    if let Err(x) = restart_into_gate(e, &mut rec) {
+                        crate::nlog!("admin: resuming the update to {}: {}", rec.to, x.message);
+                    }
+                }
+            } else {
+                let _ = std::fs::remove_file(sib(&bin, ".new"));
+                rec.phase = "failed".into();
+                rec.reason = Some("the executor stopped before the swap; nothing changed".into());
+                rec_step(e, &mut rec, "swap", false, "interrupted before the swap; nothing changed");
+            }
+        }
+        _ => {}
     }
 }
 
-/// `node.rollback` (operate): to the local `.prev` only.
+/// The oldest build a manual rollback may put back: the first with the
+/// updater fix (0.46.4). Anything older can't take a remote update again,
+/// so going back there needs a person at the machine (A-M2 / B-L4).
+pub const ROLLBACK_FLOOR: &str = ADOPT_MIN;
+
+/// `node.rollback` (operate): to the local `.prev` only, and never below
+/// [`ROLLBACK_FLOOR`] or to a build without a marker.
 pub fn rollback(e: &Executor, why: &str) -> Result<Value, AdminRefusal> {
+    let prev = sib(&e.paths.binary, ".prev");
+    if is_regular(&prev) {
+        let floor = Semver::parse(ROLLBACK_FLOOR).ok_or_else(|| fail("rollback floor unreadable"))?;
+        match installed_version(&prev).as_deref().and_then(Semver::parse) {
+            Some(v) if v >= floor => {}
+            Some(v) => {
+                return Err(AdminRefusal::new(
+                    code::DOWNGRADE,
+                    format!("the previous build here is {v}, older than {ROLLBACK_FLOOR} (the updater fix): going back to it needs an install at the machine (sudo k2-node setup)"),
+                ))
+            }
+            None => return Err(AdminRefusal::new(code::DOWNGRADE, "the previous build here has no version marker: install at the machine instead")),
+        }
+    }
     let r = rollback_inner(e, why, false)?;
     if e.exit_after_update {
         e.reexec.store(true, Ordering::SeqCst);
@@ -753,7 +949,8 @@ pub fn rollback(e: &Executor, why: &str) -> Result<Value, AdminRefusal> {
 }
 
 /// `gate_steps`: a rollback that ends this update's gate (its steps go on);
-/// otherwise (a manual rollback) the steps start fresh.
+/// otherwise (a manual rollback) the steps start fresh. A gate rollback
+/// always puts back the build that ran before the update, floor or not.
 fn rollback_inner(e: &Executor, why: &str, gate_steps: bool) -> Result<Value, AdminRefusal> {
     let bin = e.paths.binary.clone();
     let (prev, bad) = (sib(&bin, ".prev"), sib(&bin, ".bad"));
@@ -782,11 +979,13 @@ fn rollback_inner(e: &Executor, why: &str, gate_steps: bool) -> Result<Value, Ad
     rec.reason = Some(why.to_string());
     save(e, &rec)?;
     rec_step(e, &mut rec, "rollback", true, format!("why={why}"));
+    // Atomic (B-L1): `<bin>` is replaced in one rename, so there is always
+    // a k2-node at that path; `.bad` is a hard link of the build going out.
     let swap = (|| -> std::io::Result<()> {
         if std::fs::symlink_metadata(&bad).is_ok() {
             std::fs::remove_file(&bad)?;
         }
-        std::fs::rename(&bin, &bad)?;
+        std::fs::hard_link(&bin, &bad)?;
         std::fs::rename(&prev, &bin)?;
         Ok(())
     })();
@@ -795,12 +994,12 @@ fn rollback_inner(e: &Executor, why: &str, gate_steps: bool) -> Result<Value, Ad
         return Err(fail(format!("rollback swap: {x}")));
     }
     fsync_dir(&bin);
-    // The mark names the bad build's pid; it isn't retired here (no gate
-    // follows a rollback, and the pid it names is gone after the restart).
-    let pid = mark_restart(e, "node.rollback", rec.cmd_id.as_deref().unwrap_or("-"));
-    rec_step(e, &mut rec, "mark", true, mark_detail(pid));
+    let named = mark_restart(e, "node.rollback", rec.cmd_id.as_deref().unwrap_or("-"));
+    rec_step(e, &mut rec, "mark", true, mark_detail(named));
     let restarted = e.platform.restart_node();
     rec_step(e, &mut rec, "restart", restarted.is_ok(), restarted.as_ref().err().cloned().unwrap_or_default());
+    // The restart is over either way: the mark keeps nothing now (B-M4).
+    retire_update_mark(e);
     let _ = e.audit().append(
         AuditEntry { event: "update".into(), code: restarted.as_ref().err().map(|_| code::FAILED.to_string()), detail: json!({"phase": "rolled_back", "from": current, "to": back_to, "why": why}), cmd_id: rec.cmd_id.clone(), ..Default::default() },
         e.now(),
@@ -867,7 +1066,7 @@ mod drain_tests {
         assert_eq!(res.state, "done", "{res:?}");
         assert_eq!(calls(&solo), vec!["restart-unit k2-node".to_string()]);
         let m = read_update_mark(&solo.exec.paths.config_dir).expect("a solo restart is marked too (C3)");
-        assert_eq!((m.what.as_str(), m.node_pid, m.keep, m.ended), ("unit.restart", Some(crate::admin::tests::NODE_PID), false, false));
+        assert_eq!((m.what.as_str(), m.node_pid, m.keep, m.ended), ("unit.restart", Some(crate::admin::tests::node_pid()), false, false));
         assert_eq!(m.cmd_id.as_deref(), Some(res.cmd_id.as_str()));
 
         // Shared with a running job: drains, then restarts.
@@ -900,10 +1099,11 @@ mod drain_tests {
         assert_eq!(control(&n), Control::Active);
     }
 
-    /// C3/T5: the mark names the node pid it stops. Only that process is
-    /// "stopped by K2"; a later stop of the next node (an owner's
-    /// `systemctl stop`, another pid) is not. Only a `keep` mark of an open
-    /// gate lets the named process leave its jobs (U3), and only while fresh.
+    /// C3/T5, B-M4: the mark names one process, by pid and start time. Only
+    /// that process is "stopped by K2"; a later stop of the next node (an
+    /// owner's `systemctl stop`, another pid, or the same pid reused) is
+    /// not. Only a `keep` mark of an open restart lets the named process
+    /// leave its jobs (U3), and only while fresh.
     #[test]
     fn the_update_mark_names_one_process() {
         let r = Rig::new("full");
@@ -911,68 +1111,189 @@ mod drain_tests {
         assert_eq!(res.state, "done", "{res:?}");
         let cfg = &r.exec.paths.config_dir;
         let now = r.exec.now();
-        let pid = crate::admin::tests::NODE_PID;
-        assert!(update_mark_for(cfg, pid, now).is_some(), "the restarted node is named");
-        assert!(update_mark_for(cfg, pid + 1, now).is_none(), "the next node (another pid) is not");
-        assert!(update_mark_for(cfg, pid, now + UPDATE_MARK_SECS).is_none(), "a stale mark names nobody");
+        let pid = crate::admin::tests::node_pid();
+        let start = crate::util::process_start_time(pid);
+        assert!(start.is_some(), "this platform reads a process's start time");
+        let m = read_update_mark(cfg).expect("the mark");
+        assert_eq!((m.v, m.node_pid, m.node_start), (MARK_V, Some(pid), start));
+        assert!(update_mark_for(cfg, pid, start, now).is_some(), "the restarted node is named");
+        assert!(update_mark_for(cfg, pid + 1, start, now).is_none(), "the next node (another pid) is not");
+        assert!(update_mark_for(cfg, pid, start.map(|s| s + 1), now).is_none(), "a reused pid (another start time) is not");
+        assert!(update_mark_for(cfg, pid, start, now + UPDATE_MARK_SECS).is_none(), "a stale mark names nobody");
         assert!(recent_update_mark(cfg, now + 5), "the next node's start-time reconcile still reads the reason");
-        let m = read_update_mark(cfg).unwrap();
-        assert!(!m.keeps_jobs_of(pid, now), "U1 never keeps jobs (keep=false until U4)");
+        assert!(!m.keeps_jobs_of(pid, start, now), "U1 never keeps jobs (keep=false until U4)");
         let keep = UpdateMark { keep: true, ..m.clone() };
-        assert!(keep.keeps_jobs_of(pid, now));
-        assert!(!keep.keeps_jobs_of(pid + 1, now), "an owner stop of another process stops its jobs (Q2)");
-        assert!(!keep.keeps_jobs_of(pid, now + UPDATE_MARK_SECS));
-        assert!(!UpdateMark { ended: true, ..keep.clone() }.keeps_jobs_of(pid, now), "an ended gate keeps nothing");
-        assert!(!UpdateMark { node_pid: None, ..keep }.keeps_jobs_of(pid, now), "a mark with no pid never keeps jobs");
-        // A 0.46.3 executor's mark (no pid): by time, as before.
+        assert!(keep.keeps_jobs_of(pid, start, now));
+        assert!(!keep.keeps_jobs_of(pid + 1, start, now), "an owner stop of another process stops its jobs (Q2)");
+        assert!(!keep.keeps_jobs_of(pid, start.map(|s| s + 1), now), "a reused pid keeps nothing");
+        assert!(!keep.keeps_jobs_of(pid, start, now + UPDATE_MARK_SECS));
+        assert!(!UpdateMark { ended: true, ..keep.clone() }.keeps_jobs_of(pid, start, now), "an ended restart keeps nothing");
+        assert!(!UpdateMark { node_start: None, ..keep.clone() }.keeps_jobs_of(pid, start, now), "no start time, no keep");
+        let nobody = UpdateMark { node_pid: None, ..keep };
+        assert!(!nobody.keeps_jobs_of(pid, start, now) && !nobody.names(pid, start, now), "a v2 mark with no pid names nobody (A-L3)");
+        // A 0.46.3 executor's mark (no `v`, no pid): by time, as before.
         let legacy: UpdateMark = serde_json::from_str(&format!(r#"{{"what":"node.update","at":{now}}}"#)).unwrap();
-        assert!(legacy.names(pid + 7, now) && !legacy.keep && legacy.node_pid.is_none());
+        assert!(legacy.names(pid + 7, None, now) && !legacy.keeps_jobs_of(pid + 7, None, now));
     }
 
-    /// `wall.enable` restarts wait for running jobs on a solo node too.
+    /// A-M1 / B-M3: a mark root didn't write (here: not the expected
+    /// owner's mode, a symlink, a second link) is ignored.
     #[test]
-    fn drain_always_waits_on_a_solo_node() {
+    fn a_forged_mark_is_ignored() {
+        use std::os::unix::fs::PermissionsExt;
         let r = Rig::new("full");
+        r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        let cfg = r.exec.paths.config_dir.clone();
+        let p = update_mark_path(&cfg);
+        assert!(read_update_mark(&cfg).is_some());
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(read_update_mark(&cfg).is_none(), "group/other-writable: ignored");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let link = cfg.join("copy.json");
+        std::fs::hard_link(&p, &link).unwrap();
+        assert!(read_update_mark(&cfg).is_none(), "a second hard link: ignored");
+        std::fs::remove_file(&link).unwrap();
+        let real = cfg.join("real.json");
+        std::fs::rename(&p, &real).unwrap();
+        std::os::unix::fs::symlink(&real, &p).unwrap();
+        assert!(read_update_mark(&cfg).is_none(), "a symlink: ignored");
+        assert_eq!(mark_owner(std::path::Path::new(crate::paths::DEFAULT_CONFIG_DIR)), 0, "the installed node trusts root's marks only");
+    }
+
+    /// B-M4: a restart that fails leaves no live mark naming the running node.
+    #[test]
+    fn a_failed_restart_retires_its_mark() {
+        let r = Rig::new("full");
+        let err = restart_marked(&r.exec, "unit.restart", "c1", |_| Err("systemctl said no".into())).unwrap_err();
+        assert_eq!(err, "systemctl said no");
+        let m = read_update_mark(&r.exec.paths.config_dir).unwrap();
+        assert!(m.ended && !m.keep, "{m:?}");
+    }
+
+    /// A-H1 / B-M1 (Linux): `wall.enable` on a node whose jobs still run
+    /// unwalled counts them (jobs.toml written or not) and drains; it
+    /// restarts once they end; a repeat call changes nothing and never
+    /// restarts again.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wall_enable_drains_unwalled_jobs_and_restarts_once() {
+        let r = Rig::new("policy");
         running(&r, &["j1"]);
-        assert_eq!(decide(&r.exec, false, false).0, Decision::Restart, "solo restarts at once for updates");
-        assert_eq!(decide(&r.exec, false, true), (Decision::Drain, 1));
-        assert_eq!(decide(&r.exec, true, true), (Decision::Now, 1));
-        let res = drain_always_then(&r.exec, "wall.enable", "c1", |e| {
-            restart_marked(e, "wall.enable", "c1", |e| e.platform.restart_unit("k2-node")).map_err(fail)?;
-            Ok(json!({"restarted": "k2-node"}))
-        })
-        .unwrap();
-        assert_eq!(res["phase"], "draining", "{res}");
+        let res = r.run(&r.sign(&r.cmd("wall.enable", json!({"restart": true}))));
+        assert_eq!(res.state, "done", "{res:?}");
+        assert_eq!(*r.plat.walls.lock().unwrap(), vec![crate::admin::jobs::DEFAULT_JOB_USER.to_string()]);
+        assert!(matches!(crate::admin::jobs::read_jobs_file(&r.exec.paths.config_dir), Ok(Some(_))), "jobs.toml written");
+        assert_eq!(res.result["changed"], true);
+        assert_eq!(res.result["restart"]["phase"], "draining", "{:?}", res.result);
+        assert_eq!(res.result["restart"]["gives_up_at_limit"], true);
+        // With jobs.toml in place the count still sees the unwalled job.
+        assert!(running_jobs(&r.exec) >= 1);
         std::thread::sleep(Duration::from_millis(150));
         assert!(calls(&r).is_empty(), "a running job is never stopped to turn the wall on");
         running(&r, &[]);
         wait("the restart", || calls(&r) == vec!["restart-unit k2-node".to_string()]);
         wait("control back", || control(&r) == Control::Active);
         assert_eq!(read_update_mark(&r.exec.paths.config_dir).unwrap().what, "wall.enable");
-        // Nothing running: at once.
+        // Again: the files are in place, nothing changes, no restart.
+        let again = r.run(&r.sign(&r.cmd("wall.enable", json!({"restart": true}))));
+        assert_eq!(again.state, "done", "{again:?}");
+        assert_eq!(again.result["changed"], false);
+        assert!(again.result.get("restart").is_none(), "{:?}", again.result);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(calls(&r), vec!["restart-unit k2-node".to_string()], "one restart, ever");
+    }
+
+    /// B-M1: a drain that may give up (wall.enable) never acts past its
+    /// limit while a job still runs; control goes back; the audit says so.
+    #[test]
+    fn a_drain_that_gives_up_never_restarts() {
+        let mut r = Rig::new("full");
+        r.exec.drain_max = Duration::from_millis(300);
+        running(&r, &["stuck"]);
+        let d = decide(&r.exec, false, true);
+        assert_eq!(d, (Decision::Drain, 1));
+        let res = run_decided(&r.exec, d, DrainOpts { give_up_at_limit: true }, "wall.enable", "c1", |e| {
+            restart_marked(e, "wall.enable", "c1", |e| e.platform.restart_unit("k2-node")).map_err(fail)?;
+            Ok(json!({"restarted": "k2-node"}))
+        })
+        .unwrap();
+        assert_eq!(res["phase"], "draining");
+        wait("the drain to end", || !r.exec.draining.load(Ordering::SeqCst));
+        assert!(calls(&r).is_empty(), "nothing restarted at the limit");
+        assert_eq!(control(&r), Control::Active, "control back");
+        assert!(!r.exec.paths.state_dir.join(DRAIN_FILE).exists(), "the drain record is gone");
+        let audit = r.exec.audit().verify().unwrap();
+        assert!(audit.iter().any(|l| l.event == "drain" && l.code.as_deref() == Some(DRAIN_GAVE_UP)), "{audit:?}");
+        // Nothing running: no drain at all.
         let n = Rig::new("full");
         assert_eq!(decide(&n.exec, false, true), (Decision::Restart, 0));
+        assert_eq!(decide(&n.exec, false, false).0, Decision::Restart, "solo updates restart at once");
+    }
+
+    /// B-M2: an executor that exits (re-exec) or dies mid-drain never
+    /// leaves the owner's control at `draining`: the next one puts it back.
+    #[test]
+    fn a_drain_left_by_an_exiting_executor_is_undone_at_start() {
+        let r = Rig::new("full");
+        share_node(&r, 2);
+        running(&r, &["j1", "t1-0123456789abcdef"]);
+        crate::config::write_control(&r.exec.paths.layout().control(), Control::Paused, "rosson", r.exec.now()).unwrap();
+        let res = r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        assert_eq!(res.result["phase"], "draining", "{res:?}");
+        assert_eq!(control(&r), Control::Draining);
+        assert!(r.exec.paths.state_dir.join(DRAIN_FILE).exists(), "the drain is recorded");
+        // The old executor's drain thread never acts (as if it died with it).
+        r.exec.drain_gen.fetch_add(1, Ordering::SeqCst);
+        // The next executor over the same files.
+        let next = Executor::new(r.exec.paths.clone(), r.plat.clone());
+        recover_drain(&next);
+        let c = crate::config::read_control(&r.exec.paths.layout().control()).unwrap();
+        assert_eq!((c.control, c.by.as_deref()), (Control::Paused, Some("rosson")), "the owner's pause is back");
+        assert!(!r.exec.paths.state_dir.join(DRAIN_FILE).exists());
+        assert!(next.audit().verify().unwrap().iter().any(|l| l.code.as_deref() == Some("drain_abandoned")));
+        // A second start finds nothing to do.
+        recover_drain(&next);
+        assert!(calls(&r).is_empty());
     }
 
     /// Q5: `wall.enable` is operate at `policy` (no owner signature); `off`
-    /// refuses it; `restart` must be a boolean.
+    /// refuses it; `restart` must be a boolean. The owner's own choice
+    /// stands (A-L2 / B-L8): after `--no-job-wall`, or with a custom job
+    /// user, it needs the owner's approval, and the approval clears the opt-out.
     #[test]
-    fn wall_enable_is_operate_at_policy() {
+    fn wall_enable_is_operate_at_policy_unless_the_owner_chose() {
         let r = Rig::new("policy");
         let res = r.run(&r.sign(&r.cmd("wall.enable", json!({"restart": "yes"}))));
         assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "{res:?}");
         let res = r.run(&r.sign(&r.cmd("wall.enable", json!({"user": "root"}))));
         assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "{res:?}");
         let res = r.run(&r.sign(&r.cmd("wall.enable", json!({}))));
-        for refused in [code::APPROVAL_REQUIRED, code::REMOTE_ADMIN_OFF, code::VERB_NOT_ALLOWED] {
-            assert_ne!(res.code.as_deref(), Some(refused), "{res:?}");
-        }
         if cfg!(target_os = "macos") {
             assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "macOS has Seatbelt, nothing to enable: {res:?}");
+        } else {
+            assert_eq!(res.state, "done", "{res:?}");
+            assert_eq!(res.result["restart_needed"], "k2-node", "no restart asked: {:?}", res.result);
         }
         let off = Rig::new("off");
         let res = off.run(&off.sign(&off.cmd("wall.enable", json!({}))));
         assert_eq!(res.code.as_deref(), Some(code::REMOTE_ADMIN_OFF), "{res:?}");
+
+        // The owner's --no-job-wall: an operator can't undo it.
+        let o = Rig::new("policy");
+        std::fs::write(o.exec.paths.state_dir.join(crate::admin::jobs::WALL_OPT_OUT_FILE), b"").unwrap();
+        let res = o.run(&o.sign(&o.cmd("wall.enable", json!({}))));
+        assert_eq!(res.code.as_deref(), Some(code::APPROVAL_REQUIRED), "{res:?}");
+        let res = o.run(&o.approve(o.cmd("wall.enable", json!({}))));
+        if cfg!(target_os = "linux") {
+            assert_eq!(res.state, "done", "{res:?}");
+            assert!(!o.exec.paths.state_dir.join(crate::admin::jobs::WALL_OPT_OUT_FILE).exists(), "the owner's approval clears the opt-out");
+        }
+        // A custom job user the owner set: the same.
+        let u = Rig::new("policy");
+        let f = crate::admin::jobs::JobsFile { job_user: "buildbot".into(), tenants: Default::default() };
+        crate::admin::jobs::write_jobs(&u.exec.paths.config_dir, &f).unwrap();
+        let res = u.run(&u.sign(&u.cmd("wall.enable", json!({}))));
+        assert_eq!(res.code.as_deref(), Some(code::APPROVAL_REQUIRED), "{res:?}");
     }
 
     /// Review A L7: a later `now` supersedes a drain still waiting; the

@@ -20,10 +20,15 @@ pub struct RecPlatform {
     pub preflights: Mutex<Vec<String>>,
     /// Make the preflight fail (a build the node user can't exec).
     pub fail_preflight: Mutex<bool>,
+    /// `enable_job_wall` calls (the job user each named).
+    pub walls: Mutex<Vec<String>>,
 }
 
-/// The node pid [`RecPlatform`] reports.
-pub const NODE_PID: u32 = 4242;
+/// The node pid [`RecPlatform`] reports: this test process, so the mark
+/// also carries a real start time.
+pub fn node_pid() -> u32 {
+    std::process::id()
+}
 
 impl Platform for RecPlatform {
     fn now(&self) -> i64 {
@@ -47,9 +52,26 @@ impl Platform for RecPlatform {
         Ok(())
     }
     fn node_pid(&self) -> Option<u32> {
-        Some(NODE_PID)
+        Some(node_pid())
     }
     /// Fake builds aren't executable: answer what the staged build's marker says.
+    /// No real units: the machine running the tests may be a node itself.
+    fn running_job_units(&self) -> Option<usize> {
+        Some(0)
+    }
+    /// Writes jobs.toml only (no useradd/setfacl without root).
+    fn enable_job_wall(
+        &self,
+        paths: &ExecPaths,
+        _node_user: &str,
+        job_user: &str,
+    ) -> Result<super::jobs::WallSetup, admin::AdminRefusal> {
+        let before = super::jobs::read_jobs_file(&paths.config_dir).ok().flatten();
+        let f = super::jobs::JobsFile { job_user: job_user.into(), tenants: before.as_ref().map(|b| b.tenants.clone()).unwrap_or_default() };
+        super::jobs::write_jobs(&paths.config_dir, &f).map_err(|e| admin::AdminRefusal::new(code::FAILED, e))?;
+        self.walls.lock().unwrap().push(job_user.to_string());
+        Ok(super::jobs::WallSetup { created_user: false, jobs_changed: before.as_ref() != Some(&f), home_acl: "test".into(), jobs_msg: "written".into() })
+    }
     fn preflight(&self, staged: &std::path::Path, _node_user: &str) -> Result<String, String> {
         self.preflights.lock().unwrap().push(staged.display().to_string());
         if *self.fail_preflight.lock().unwrap() {
@@ -103,6 +125,7 @@ impl Rig {
             fail_restart: Mutex::new(false),
             preflights: Mutex::new(vec![]),
             fail_preflight: Mutex::new(false),
+            walls: Mutex::new(vec![]),
         });
         let exec = Executor::new(paths, plat.clone());
         Self { exec, plat, ctl, owner, node_fp: node_key.fingerprint(), dir }
@@ -402,7 +425,8 @@ fn build_sig(bytes: &[u8], version: &str) -> String {
 fn update_rig() -> (Rig, Vec<u8>) {
     let mut r = Rig::new("policy");
     r.exec.test_keys = true;
-    let old = fake_build("0.0.1");
+    // At the rollback floor (0.46.4): a manual rollback may go back to it.
+    let old = fake_build(super::update::ROLLBACK_FLOOR);
     std::fs::create_dir_all(r.exec.paths.binary.parent().unwrap()).unwrap();
     std::fs::write(&r.exec.paths.binary, &old).unwrap();
     (r, old)
@@ -456,7 +480,7 @@ fn good_update_swaps_restarts_and_passes_the_health_gate() {
     }
     assert_eq!(r.plat.preflights.lock().unwrap().len(), 1, "the staged build ran once as the node user before the swap");
     let mark = super::update::read_update_mark(&r.exec.paths.config_dir).expect("an update restart is marked");
-    assert_eq!((mark.what.as_str(), mark.node_pid, mark.keep), ("node.update", Some(NODE_PID), false));
+    assert_eq!((mark.what.as_str(), mark.node_pid, mark.keep), ("node.update", Some(node_pid()), false));
     write_mark(&r, "99.0.0", NOW + 1);
     let rec = wait_phase(&r, "healthy");
     assert_eq!((rec.from.as_str(), rec.to.as_str()), (crate::PRODUCT_VERSION, "99.0.0"));
@@ -607,6 +631,67 @@ fn a_healthy_gate_asks_serve_to_reexec_instead_of_exiting() {
     let rec2 = super::update::load(&r.exec);
     assert_eq!(rec2.steps.last().map(|s| s.step.as_str()), Some("reexec"), "{:?} / {:?}", rec.steps, rec2.steps);
     // This test process is still here: no process::exit.
+}
+
+/// A-M2 / B-L4: a manual rollback never goes below 0.46.4 (the updater
+/// fix) or to a build with no marker; the gate's own rollback still
+/// restores whatever ran before. B-L1: `<bin>` is replaced in one rename
+/// and the build going out stays as `.bad`.
+#[test]
+fn manual_rollback_has_a_floor_and_swaps_atomically() {
+    let (r, _) = update_rig();
+    let bin = r.exec.paths.binary.clone();
+    let prev = std::path::PathBuf::from(format!("{}.prev", bin.display()));
+    let cur = fake_build("0.46.6");
+    std::fs::write(&bin, &cur).unwrap();
+    std::fs::write(&prev, fake_build("0.46.3")).unwrap();
+    let res = r.run(&r.sign(&r.cmd("node.rollback", json!({}))));
+    assert_eq!(code_of(&res), code::DOWNGRADE, "{res:?}");
+    assert!(res.message.as_deref().unwrap_or("").contains("0.46.4"), "{res:?}");
+    std::fs::write(&prev, b"no marker here").unwrap();
+    assert_eq!(code_of(&r.run(&r.sign(&r.cmd("node.rollback", json!({}))))), code::DOWNGRADE);
+    assert_eq!(std::fs::read(&bin).unwrap(), cur, "nothing moved");
+    assert!(r.plat.calls.lock().unwrap().is_empty(), "nothing restarted");
+    // At the floor: goes, atomically.
+    let back = fake_build("0.46.4");
+    std::fs::write(&prev, &back).unwrap();
+    let res = r.run(&r.sign(&r.cmd("node.rollback", json!({}))));
+    assert_eq!(res.state, "done", "{res:?}");
+    assert_eq!(std::fs::read(&bin).unwrap(), back);
+    assert_eq!(std::fs::read(format!("{}.bad", bin.display())).unwrap(), cur);
+    assert!(!prev.exists());
+    let m = super::update::read_update_mark(&r.exec.paths.config_dir).unwrap();
+    assert!(m.ended, "the rollback's restart is over: its mark keeps nothing (B-M4)");
+}
+
+/// B-L2: the record says `swapping` before the rename; an executor that
+/// died in between finishes the swap (the new build is in: restart into
+/// the gate) or drops it (it isn't: nothing changed).
+#[test]
+fn an_interrupted_swap_is_finished_or_dropped_at_start() {
+    let (r, old) = update_rig();
+    let bin = r.exec.paths.binary.clone();
+    let new = fake_build("99.0.0");
+    let rec = super::update::UpdateRecord { phase: "swapping".into(), from: "0.46.4".into(), to: "99.0.0".into(), at: NOW, cmd_id: Some("c9".into()), ..Default::default() };
+    let save = |rec: &super::update::UpdateRecord| std::fs::write(r.exec.paths.update_state(), serde_json::to_vec(rec).unwrap()).unwrap();
+    // Not swapped yet: dropped, .new removed, nothing restarted.
+    std::fs::write(format!("{}.new", bin.display()), &new).unwrap();
+    save(&rec);
+    super::update::resume_pending(&r.exec);
+    let got = super::update::load(&r.exec);
+    assert_eq!(got.phase, "failed", "{got:?}");
+    assert!(!std::path::Path::new(&format!("{}.new", bin.display())).exists());
+    assert_eq!(std::fs::read(&bin).unwrap(), old);
+    assert!(r.plat.calls.lock().unwrap().is_empty());
+    // Swapped already: the gate runs.
+    std::fs::write(&bin, &new).unwrap();
+    save(&rec);
+    super::update::resume_pending(&r.exec);
+    let got = super::update::load(&r.exec);
+    assert_eq!(got.phase, "swapped", "{got:?}");
+    assert_eq!(*r.plat.calls.lock().unwrap(), vec!["restart-node".to_string()], "the node restarts into the gate");
+    write_mark(&r, "99.0.0", NOW + 1);
+    wait_phase(&r, "healthy");
 }
 
 #[test]

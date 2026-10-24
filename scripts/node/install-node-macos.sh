@@ -92,6 +92,7 @@ while [ $# -gt 0 ]; do
         --reenroll) REENROLL=1; shift ;;
         --tools) TOOLS="${2:-}"; shift 2 ;;
         --remote-admin) REMOTE_ADMIN="${2:-}"; shift 2 ;;
+        --no-job-wall) echo "note: --no-job-wall is Linux-only; a Mac walls jobs with Seatbelt, always" >&2; shift ;;
         --allow-packages) echo "note: --allow-packages is Linux-only; on a Mac the owner installs packages with brew" >&2; shift 2 ;;
         -h|--help) usage ;;
         *) die "unknown argument: $1 (see --help)" ;;
@@ -176,6 +177,8 @@ install -d -m 0750 -o "$NODE_USER" -g k2nodectl "$HOME_DIR"
 install -d -m 0755 -o "$NODE_USER" -g "$NODE_USER" "$HOME_DIR/log"
 install -d -m 0755 -o root -g wheel "$BIN_DIR"
 install_binary "$BINARY" "$BIN_DIR/k2-node"
+# A hand install starts the update history over (A-M2 / B-L4).
+rm -f "$BIN_DIR/k2-node.prev" "$BIN_DIR/k2-node.bad" "$BIN_DIR/k2-node.new" "$ADMIN_STATE/update.json"
 xattr -d com.apple.quarantine "$BIN_DIR/k2-node" 2>/dev/null || true
 BIN="$BIN_DIR/k2-node"
 install -d -m 2775 -o root -g k2nodectl "$CONFIG_DIR"
@@ -274,27 +277,30 @@ CURRENT_ADMIN=""
 if [ -f "$CONFIG_DIR/admin.toml" ]; then
     CURRENT_ADMIN="$(sed -n 's/^remote_admin *= *"\(.*\)"/\1/p' "$CONFIG_DIR/admin.toml" | head -n 1)"
 fi
-if [ -z "$REMOTE_ADMIN" ]; then
-    case "$CURRENT_ADMIN" in
-        policy|full) ;; # the owner's earlier choice stands
-        *)
-            # New, or `off` today: ask, with `policy` preselected (Q4).
-            if [ -t 0 ]; then
-                echo "== remote admin for this Mac"
-                echo "   policy = K2 keeps this node updated and healthy: signed k2-node updates and"
-                echo "            rollbacks, limits (widening needs your approval), pause, the job wall"
-                echo "   off    = K2 can only narrow limits and read health; you update k2-node by hand"
-                echo "   full   = also root actions, each approved by you (Touch ID / password) on your K2"
-                printf "   Remote admin level? [policy/off/full] (policy) "
-                read -r answer
-                case "$answer" in off|full) REMOTE_ADMIN="$answer" ;; *) REMOTE_ADMIN="policy" ;; esac
-            elif [ -z "$CURRENT_ADMIN" ]; then
-                # Not a terminal, no flag, a first install: policy (Rosson
-                # 2026-10-24). --remote-admin off opts out.
-                REMOTE_ADMIN="policy"
-            fi
-            ;;
-    esac
+if [ -z "$REMOTE_ADMIN" ] && [ -z "$CURRENT_ADMIN" ]; then
+    # A first install: ask, `policy` preselected (Q4). A rerun keeps the
+    # owner's earlier choice, `off` included (never a silent raise); pass
+    # --remote-admin to change it.
+    if [ -t 0 ]; then
+        echo "== remote admin for this Mac"
+        echo "   policy = K2 keeps this node updated and healthy: signed k2-node updates and"
+        echo "            rollbacks, limits (widening needs your approval), pause, the job wall"
+        echo "   off    = K2 can only narrow limits and read health; you update k2-node by hand"
+        echo "   full   = also root actions, each approved by you (Touch ID / password) on your K2"
+        while [ -z "$REMOTE_ADMIN" ]; do
+            printf "   Remote admin level? [policy/off/full] (policy) "
+            read -r answer || answer=""
+            case "$answer" in
+                "") REMOTE_ADMIN="policy" ;;
+                policy|off|full) REMOTE_ADMIN="$answer" ;;
+                *) echo "   type policy, off or full (or press Enter for policy)" ;;
+            esac
+        done
+    else
+        # Not a terminal, no flag, a first install: policy (Rosson
+        # 2026-10-24). --remote-admin off opts out.
+        REMOTE_ADMIN="policy"
+    fi
 fi
 install -d -m 0700 -o root -g wheel "$ADMIN_STATE"
 level_args=()

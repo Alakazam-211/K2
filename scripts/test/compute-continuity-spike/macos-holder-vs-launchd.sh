@@ -27,7 +27,7 @@
 set -euo pipefail
 cd /
 
-REPORT="/var/tmp/k2-spike-macos-holder.txt"
+REPORT=""
 KEEP=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -38,6 +38,15 @@ while [ $# -gt 0 ]; do
 done
 [ "$(uname -s)" = "Darwin" ] || { echo "macOS only" >&2; exit 2; }
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo): it makes a hidden user and a LaunchDaemon" >&2; exit 2; }
+# The report: a fresh root-owned dir by default (never a fixed path in a
+# world-writable /var/tmp, where a planted symlink would aim root's write;
+# security review B-L7); a named --report must not exist yet.
+if [ -z "$REPORT" ]; then
+    REPORT="$(mktemp -d /var/tmp/k2-spike-macos-holder.XXXXXX)/report.txt"
+elif [ -e "$REPORT" ] || [ -L "$REPORT" ]; then
+    echo "--report $REPORT exists; name a new file" >&2; exit 2
+fi
+set -o noclobber
 [ "${K2_SPIKE_OK:-}" = "1" ] || { echo "refusing: set K2_SPIKE_OK=1 (an idle test Mac only)" >&2; exit 2; }
 
 REC="_k2spike"
@@ -82,7 +91,7 @@ chmod 0700 "$HOME_DIR/state"
 
 # The job's Seatbelt profile, like kn/wall.rs: default allow, the node's
 # state denied, plus the C7 signal rule under test.
-cat > "$HOME_DIR/job.sb" <<EOF
+cat >| "$HOME_DIR/job.sb" <<EOF
 (version 1)
 (allow default)
 (deny file-read* file-write* (subpath "$HOME_DIR/state"))
@@ -93,7 +102,7 @@ EOF
 # anything else, writes its facts into state/hold/, runs the job in its own
 # process group with stdout/stderr = the inherited spool fds, waits, writes
 # exit.json. Perl, so it has a real fork/setsid with no runtime threads.
-cat > "$HOME_DIR/holder.pl" <<'EOF'
+cat >| "$HOME_DIR/holder.pl" <<'EOF'
 use strict; use warnings; use POSIX qw(setsid setpgid _exit);
 my ($hold, $profile, @job) = @ARGV;
 my $p = fork(); die "fork: $!" unless defined $p; _exit(0) if $p;   # the node's child exits at once
@@ -115,7 +124,7 @@ EOF
 # The stand-in node: opens the spool (state/spool is the node's, denied to
 # the job), hands the fds to the holder, leaves a control child in its own
 # process group, then idles as the daemon's main process.
-cat > "$HOME_DIR/node.sh" <<EOF
+cat >| "$HOME_DIR/node.sh" <<EOF
 #!/bin/bash
 cd "$HOME_DIR/jobs/j1"
 if [ ! -f "$HOME_DIR/state/hold/hold.json" ]; then
@@ -131,7 +140,7 @@ EOF
 chmod 0755 "$HOME_DIR/node.sh"
 chown "$REC:$REC" "$HOME_DIR/node.sh" "$HOME_DIR/holder.pl" "$HOME_DIR/job.sb"
 
-cat > "$PLIST" <<EOF
+cat >| "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>

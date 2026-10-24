@@ -1229,23 +1229,44 @@ impl Executor {
 
     /// `wall.enable` (Linux; operate at `policy` since 0.46.4, owner-approved
     /// before): what `sudo k2-node setup` does for the wall, for a node
-    /// installed without it: the `k2job` system user (no login, no home,
-    /// its own group), a traverse-only ACL on the node home, and
-    /// `jobs.toml`. k2-node picks it up when it restarts: with
-    /// `"restart": true` the executor restarts it here once running jobs
-    /// end (any node, solo too: turning the wall on never kills a job; up
-    /// to the drain limit), unless the node already reports the wall.
-    pub fn wall_enable(&self, args: &Value, cmd_id: &str) -> Result<Value, AdminRefusal> {
+    /// installed without it: the job user (no login, no home, its own
+    /// group), a traverse-only ACL on the node home, and `jobs.toml`.
+    /// k2-node picks it up when it restarts. With `"restart": true` the
+    /// executor restarts it here, but only when this call changed the wall
+    /// files, only once every running job ended (any node, solo too), and
+    /// never past the drain limit: at the limit it gives up and says so.
+    /// Turning the wall on never kills a job (A-H1 / B-M1).
+    ///
+    /// The owner's own choice stands (A-L2 / B-L8): after `setup
+    /// --no-job-wall`, or with a job user other than `k2job`, the executor
+    /// classes this verb privileged ([`wall_needs_owner`]); `approved` is
+    /// then true and clears the opt-out.
+    pub fn wall_enable(&self, args: &Value, cmd_id: &str, approved: bool) -> Result<Value, AdminRefusal> {
         super::exec::only_keys(args, &["restart"])?;
         let restart = match args.get("restart") {
             None => false,
             Some(Value::Bool(b)) => *b,
             Some(_) => return Err(refuse(code::BAD_ARGS, "restart is true or false")),
         };
-        if !cfg!(target_os = "linux") {
+        if self.platform.os() != "linux" {
             return Err(refuse(code::BAD_ARGS, "macOS walls jobs with Seatbelt on its own; nothing to enable"));
         }
-        let mut out = self.wall_enable_files()?;
+        // Count the running jobs before anything touches the wall files: a
+        // node that isn't walled yet runs them as its own children.
+        let decision = super::update::decide(self, false, true);
+        let job_user = read_jobs_file(&self.paths.config_dir).ok().flatten().map(|f| f.job_user).unwrap_or_else(|| DEFAULT_JOB_USER.to_string());
+        let setup = self.platform.enable_job_wall(&self.paths, &self.node_user(), &job_user)?;
+        if approved {
+            let _ = std::fs::remove_file(self.paths.state_dir.join(WALL_OPT_OUT_FILE));
+        }
+        let mut out = json!({
+            "job_user": job_user,
+            "created": setup.created_user,
+            "changed": setup.changed(),
+            "home_acl": setup.home_acl,
+            "jobs": setup.jobs_msg,
+            "restart_needed": "k2-node",
+        });
         // The node's own word (its status file) only decides whether a
         // restart is still needed, never whether the wall exists.
         let walled_now = crate::status::read(&self.paths.layout().status()).is_ok_and(|s| s.wall == "job_user");
@@ -1257,38 +1278,79 @@ impl Executor {
         if !restart {
             return Ok(out);
         }
+        if !setup.changed() {
+            // A repeat call never restarts the node again (B-M1).
+            out["note"] = "the wall's files were already in place, so this call doesn't restart k2-node; it takes effect at the next update or an owner-approved restart".into();
+            return Ok(out);
+        }
         let cmd_id = cmd_id.to_string();
-        let r = super::update::drain_always_then(self, "wall.enable", &cmd_id.clone(), move |e| {
+        let r = super::update::run_decided(self, decision, super::update::DrainOpts { give_up_at_limit: true }, "wall.enable", &cmd_id.clone(), move |e| {
             super::update::restart_marked(e, "wall.enable", &cmd_id, |e| e.platform.restart_unit("k2-node")).map_err(|x| refuse(code::FAILED, x))?;
             Ok(json!({"restarted": "k2-node"}))
         })?;
-        out["restart_needed"] = Value::Null;
+        if r.get("phase").and_then(Value::as_str) != Some("draining") {
+            out["restart_needed"] = Value::Null;
+        }
         out["restart"] = r;
         Ok(out)
     }
+}
 
-    /// The root half of `wall.enable`: the job user, the home ACL, jobs.toml.
-    fn wall_enable_files(&self) -> Result<Value, AdminRefusal> {
-        let fail = |e: String| refuse(code::FAILED, e);
-        let user = DEFAULT_JOB_USER;
-        let mut created = false;
-        if super::server::user_ids(user).is_none() {
-            let nologin = ["/usr/sbin/nologin", "/sbin/nologin", "/usr/bin/nologin"].into_iter().find(|p| Path::new(p).exists()).unwrap_or("/bin/false");
-            let useradd = find_program("useradd").ok_or_else(|| fail("useradd not found".into()))?;
-            super::exec::run_fixed(
-                &useradd.display().to_string(),
-                &["--system", "--user-group", "--home-dir", "/nonexistent", "--no-create-home", "--shell", nologin, "--comment", "K2 compute jobs", user],
-            )
-            .map_err(fail)?;
-            created = true;
-        }
-        let setfacl = find_program("setfacl").ok_or_else(|| refuse(code::NOT_CONFIGURED, "setfacl is missing: install the acl package, then try again"))?;
-        let home = self.paths.home.display().to_string();
-        super::exec::run_fixed(&setfacl.display().to_string(), &["-m", &format!("u:{user}:x"), &home]).map_err(fail)?;
-        let msg = write_jobs_file(&self.paths.config_dir, user, &self.node_user()).map_err(fail)?;
-        Ok(json!({"job_user": user, "created": created, "home_acl": format!("u:{user}:x {home}"), "jobs": msg, "restart_needed": "k2-node"}))
+/// `<state>/job-wall-off`: the machine owner ran `setup --no-job-wall`.
+/// Root-only (the admin state dir), so neither the owner's group nor its
+/// agents can clear it; only an owner-approved `wall.enable` or a setup
+/// without the flag does.
+pub const WALL_OPT_OUT_FILE: &str = "job-wall-off";
+
+/// `wall.enable` needs the owner's approval when the owner opted out of
+/// the wall at the machine, or set a job user other than `k2job`.
+pub fn wall_needs_owner(paths: &super::exec::ExecPaths) -> bool {
+    paths.state_dir.join(WALL_OPT_OUT_FILE).exists()
+        || read_jobs_file(&paths.config_dir).ok().flatten().is_some_and(|f| f.job_user != DEFAULT_JOB_USER)
+}
+
+/// What setting the wall up did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WallSetup {
+    pub created_user: bool,
+    /// `jobs.toml` was written with different content (or created).
+    pub jobs_changed: bool,
+    pub home_acl: String,
+    pub jobs_msg: String,
+}
+
+impl WallSetup {
+    /// Did this call change anything the node reads at start?
+    pub fn changed(&self) -> bool {
+        self.created_user || self.jobs_changed
     }
+}
 
+/// The root half of `wall.enable` on a real machine: the job user, the
+/// home ACL, jobs.toml.
+pub fn system_enable_job_wall(paths: &super::exec::ExecPaths, node_user: &str, user: &str) -> Result<WallSetup, AdminRefusal> {
+    let fail = |e: String| refuse(code::FAILED, e);
+    let mut created = false;
+    if super::server::user_ids(user).is_none() {
+        let nologin = ["/usr/sbin/nologin", "/sbin/nologin", "/usr/bin/nologin"].into_iter().find(|p| Path::new(p).exists()).unwrap_or("/bin/false");
+        let useradd = find_program("useradd").ok_or_else(|| fail("useradd not found".into()))?;
+        super::exec::run_fixed(
+            &useradd.display().to_string(),
+            &["--system", "--user-group", "--home-dir", "/nonexistent", "--no-create-home", "--shell", nologin, "--comment", "K2 compute jobs", user],
+        )
+        .map_err(fail)?;
+        created = true;
+    }
+    let setfacl = find_program("setfacl").ok_or_else(|| refuse(code::NOT_CONFIGURED, "setfacl is missing: install the acl package, then try again"))?;
+    let home = paths.home.display().to_string();
+    super::exec::run_fixed(&setfacl.display().to_string(), &["-m", &format!("u:{user}:x"), &home]).map_err(fail)?;
+    let before = read_jobs_file(&paths.config_dir).ok().flatten();
+    let msg = write_jobs_file(&paths.config_dir, user, node_user).map_err(fail)?;
+    let after = read_jobs_file(&paths.config_dir).ok().flatten();
+    Ok(WallSetup { created_user: created, jobs_changed: before != after, home_acl: format!("u:{user}:x {home}"), jobs_msg: msg })
+}
+
+impl Executor {
     /// `homes.private` (owner-approved): chmod people's homes to owner-only.
     pub fn homes_private(&self, args: &Value) -> Result<Value, AdminRefusal> {
         super::exec::only_keys(args, &["homes"])?;

@@ -29,6 +29,9 @@ pub fn activated_listener() -> Option<UnixListener> {
     for i in 1..cnt {
         unsafe { libc::close(*fds.add(i)) };
     }
+    // No child inherits root's listener (A-L1 / B-L3).
+    // SAFETY: fcntl on the fd launchd handed us.
+    unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
     unsafe { libc::free(fds as *mut libc::c_void) };
     use std::os::fd::FromRawFd;
     // SAFETY: launchd handed us ownership of this listening fd.

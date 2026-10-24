@@ -1538,13 +1538,26 @@ fn wall(who: &Who, body: &[u8]) -> R<Value> {
             409,
             format!("{} refused wall.enable: {}", node.name, r.message.as_deref().or(r.code.as_deref()).unwrap_or("?")),
         )),
-        Some(r) => Ok(json!({"ok": true, "node": node.name, "cmdId": cmd_id, "result": r.result, "note": if restart {
-            "the wall is set up; k2-node restarts to use it once its running jobs end"
-        } else {
-            "the wall is set up; it takes effect when k2-node restarts"
-        }})),
+        Some(r) => {
+            let note = wall_note(&r.result, restart);
+            Ok(json!({"ok": true, "node": node.name, "cmdId": cmd_id, "result": r.result, "note": note}))
+        }
         None => Ok(json!({"ok": true, "node": node.name, "cmdId": cmd_id, "note": "sent; the node hasn't answered yet (k2 compute node health)"})),
     }
+}
+
+/// What a `wall.enable` answer means, in one line.
+fn wall_note(result: &Value, restart: bool) -> String {
+    if let Some(n) = result.get("note").and_then(Value::as_str) {
+        return n.to_string();
+    }
+    if result.pointer("/restart/restarted").is_some() {
+        return "the wall is set up; k2-node restarted to use it (no job was running)".into();
+    }
+    if restart {
+        return "the wall is set up; k2-node restarts to use it once its running jobs end (if any still run after 30 min it gives up and restarts nothing)".into();
+    }
+    "the wall is set up; it takes effect when k2-node restarts".into()
 }
 
 fn phase_str(p: wire::UpdatePhase) -> String {

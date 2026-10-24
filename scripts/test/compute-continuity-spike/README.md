@@ -19,7 +19,9 @@ K2_SPIKE_OK=1 sudo -E bash scripts/test/compute-continuity-spike/macos-holder-vs
 bash scripts/test/compute-continuity-spike/spool-punch.sh --dir /var/tmp
 ```
 
-Reports: `/var/tmp/k2-spike-linux-job.txt`, `/var/tmp/k2-spike-macos-holder.txt`,
+Reports: the root scripts write into a fresh `mktemp -d` folder
+(`/var/tmp/k2-spike-linux-job.XXXXXX/report.txt`, `/var/tmp/k2-spike-macos-holder.XXXXXX/report.txt`;
+the path is printed), or to a new file named with `--report`; `spool-punch.sh` writes
 `k2-spike-spool-punch.txt` next to the `--dir` temp folder. Each report ends with how
 to read it. A row that says "dies" or "unsupported" is a result, not a script failure;
 exit 1 means the spike itself broke.

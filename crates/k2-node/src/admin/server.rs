@@ -175,6 +175,10 @@ fn systemd_listener() -> Option<UnixListener> {
         return None;
     }
     use std::os::fd::FromRawFd;
+    // systemd hands fd 3 over without FD_CLOEXEC: set it, so no child
+    // (the preflight runs as the node user) inherits root's listener (A-L1 / B-L3).
+    // SAFETY: fcntl on the fd systemd passed to this pid.
+    unsafe { libc::fcntl(3, libc::F_SETFD, libc::FD_CLOEXEC) };
     // SAFETY: systemd passed fd 3 to this pid (checked above) and nothing
     // else owns it.
     Some(unsafe { UnixListener::from_raw_fd(3) })

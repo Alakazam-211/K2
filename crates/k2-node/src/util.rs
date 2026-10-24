@@ -226,6 +226,37 @@ pub fn base_path(home: &Path) -> String {
     ))
 }
 
+/// When process `pid` started, in the kernel's own units (Linux: clock
+/// ticks since boot from `/proc/<pid>/stat`; macOS: microseconds since the
+/// epoch from `proc_pidinfo`). Only ever compared with itself: a pid and
+/// its start time name one process, even after the pid is reused.
+pub fn process_start_time(pid: u32) -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // Field 2 (comm) may hold spaces and parentheses: split after the last ')'.
+        let rest = &s[s.rfind(')')? + 1..];
+        // `rest` starts at field 3; starttime is field 22.
+        return rest.split_whitespace().nth(19)?.parse().ok();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // SAFETY: a zeroed out-struct of the size we pass.
+        let n = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, &mut info as *mut _ as *mut libc::c_void, size) };
+        if n != size {
+            return None;
+        }
+        return Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec);
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 /// A random-ish jitter in `0..max_ms` from the system CSPRNG.
 pub fn jitter_ms(max_ms: u64) -> u64 {
     if max_ms == 0 {

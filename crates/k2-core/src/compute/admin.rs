@@ -748,7 +748,7 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
         "wall.enable" => format!(
             "turn on the job wall on {node} (as root): create the k2job user, let it into the node home, run jobs as k2job; {}",
             if a.get("restart").and_then(Value::as_bool) == Some(true) {
-                "k2-node restarts to use it once its running jobs end"
+                "k2-node restarts to use it once its running jobs end (never kills a job: after 30 min it gives up)"
             } else {
                 "takes effect when k2-node restarts"
             }

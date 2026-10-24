@@ -3163,9 +3163,13 @@ fn local_enable(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         name: s(&v, "name").map(str::to_string),
         private_home: b(&v, "privateHome"),
         allow_prompt: b(&v, "elevate") == Some(true),
-        // "Let K2 keep this node updated and healthy": on unless asked off.
-        remote_admin: crate::compute_local::remote_admin_arg(v.get("remoteAdmin"), Some(crate::compute_local::DEFAULT_REMOTE_ADMIN))
-            .map_err(|(code, status, hint)| no(code, status, hint))?,
+        // "Let K2 keep this node updated and healthy": what the request
+        // names; unnamed = policy on a first install, the owner's earlier
+        // choice on a reinstall (`setup_remote_admin`).
+        remote_admin: match v.get("remoteAdmin") {
+            None | Some(serde_json::Value::Null) => None,
+            x => Some(crate::compute_local::remote_admin_arg(x, None).map_err(|(code, status, hint)| no(code, status, hint))?),
+        },
     };
     crate::compute_local::enable(&req, &who.label()).map_err(|(code, status, hint)| no(code, status, hint))
 }

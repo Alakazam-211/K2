@@ -826,6 +826,16 @@ function ThisComputerPart({
   // actions only when asked. Sent with the enable, in the same root step.
   const [keepUpdated, setKeepUpdated] = useState(true)
   const [allowRoot, setAllowRoot] = useState(false)
+  // A machine that already has a remote-admin choice (a reinstall) starts
+  // from it, so the enable never raises an earlier `off` by itself
+  // (security reviews A-L4 / B-L6). Once the owner flips a switch, theirs.
+  const earlier = status?.remoteAdmin ?? null
+  const touched = useRef(false)
+  useEffect(() => {
+    if (touched.current || !earlier) return
+    setKeepUpdated(earlier !== 'off')
+    setAllowRoot(earlier === 'full')
+  }, [earlier])
   // On = enrolled (or enrolling). An installed but unenrolled node service
   // (the one-click path installs first) still needs the sheet.
   const isOn = !!status && (status.node ? status.node.state !== 'unenrolled' : status.installed)
@@ -867,12 +877,16 @@ function ThisComputerPart({
               keepUpdated={keepUpdated}
               allowRoot={allowRoot}
               onKeepUpdated={(on) => {
+                touched.current = true
                 setKeepUpdated(on)
                 // Off clears the root opt-in: turning policy back on never
                 // brings `full` back by itself.
                 if (!on) setAllowRoot(false)
               }}
-              onAllowRoot={setAllowRoot}
+              onAllowRoot={(on) => {
+                touched.current = true
+                setAllowRoot(on)
+              }}
             />
             {sheetOpen ? (
               <EnableSheet
@@ -1330,9 +1344,14 @@ function LocalNodePanel({
     !!node?.controller && !!controllerLabel && controllerHost(node.controller) === controllerHost(controllerLabel)
 
   const stop = async (): Promise<void> => {
+    const running = node?.running ?? []
     const ok = await useConfirmDialogStore.getState().confirm({
       title: 'Stop being a compute node?',
-      message: 'This computer stops taking jobs and the node service, the k2node user and its files are removed.',
+      message:
+        running.length > 0
+          ? `These ${running.length} job(s) running here stop now: ${running.join(', ')}. ` +
+            'This computer stops taking jobs and the node service, the k2node user and its files are removed.'
+          : 'No jobs are running here. This computer stops taking jobs and the node service, the k2node user and its files are removed.',
       confirmLabel: 'Stop',
       destructive: true,
     })

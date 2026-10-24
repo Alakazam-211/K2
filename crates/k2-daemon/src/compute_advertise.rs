@@ -138,8 +138,9 @@ fn apply(offer: &advertise::Offer) -> advertise::Ack {
                 name: Some(name),
                 private_home: None,
                 allow_prompt: false,
-                // Same default as Settings: K2 keeps the node updated.
-                remote_admin: crate::compute_local::DEFAULT_REMOTE_ADMIN.to_string(),
+                // An offer only reaches an installed node (it has a node
+                // key), so setup never runs here; nothing to set (B-I5).
+                remote_admin: None,
             };
             match crate::compute_local::enable(&req, "connect-offer") {
                 Ok(v) if v["step"] == "needs_root" => {

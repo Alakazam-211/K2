@@ -24,7 +24,8 @@
 //! Remote admin (prd-compute-update-continuity-v1 Q4, Rosson 2026-10-24):
 //! the same setup run sets the node's remote-admin level, `policy` unless
 //! the request says otherwise ("Let K2 keep this node updated and healthy"
-//! in Settings), so there is no second password prompt. `full` is an
+//! in Settings), so there is no second password prompt. A reinstall over
+//! an earlier choice sets none unless the request names one. `full` is an
 //! explicit opt-in. Changing it later (`local/remote-admin`) goes through
 //! the same root path: `k2-node admin level <off|policy|full>`.
 
@@ -332,14 +333,16 @@ pub fn remote_admin_arg(v: Option<&serde_json::Value>, default: Option<&str>) ->
 }
 
 /// The installer argv (`k2-node setup …`).
-pub fn setup_args(human: &str, private_home: Option<bool>, enroll: Option<(&str, &str, &str)>, remote_admin: &str) -> Vec<String> {
+pub fn setup_args(human: &str, private_home: Option<bool>, enroll: Option<(&str, &str, &str)>, remote_admin: Option<&str>) -> Vec<String> {
     let mut a = vec!["--human".to_string(), human.to_string()];
     match private_home {
         Some(true) => a.push("--private-home".into()),
         Some(false) => a.push("--no-private-home".into()),
         None => {}
     }
-    a.extend(["--remote-admin".to_string(), remote_admin.to_string()]);
+    if let Some(l) = remote_admin {
+        a.extend(["--remote-admin".to_string(), l.to_string()]);
+    }
     if let Some((controller, code, name)) = enroll {
         a.extend(["--controller".into(), controller.into(), "--enroll".into(), code.into(), "--name".into(), name.into()]);
     }
@@ -463,8 +466,26 @@ pub struct EnableReq {
     pub private_home: Option<bool>,
     /// Settings may pop the macOS admin prompt; the CLI never does.
     pub allow_prompt: bool,
-    /// `off` | `policy` | `full`, set by the same setup run.
-    pub remote_admin: String,
+    /// `off` | `policy` | `full`, set by the same setup run. `None`: the
+    /// request didn't name one, so [`setup_remote_admin`] decides.
+    pub remote_admin: Option<String>,
+}
+
+/// The level a setup run sets: the one the request named; else `policy`
+/// on a machine with no remote-admin choice yet; else nothing, so the
+/// owner's earlier choice (an explicit `off` included) stands on a
+/// reinstall (security reviews A-L4 / B-L6).
+pub fn setup_remote_admin(named: Option<&str>, admin_toml_exists: bool) -> Option<String> {
+    match named {
+        Some(l) => Some(l.to_string()),
+        None if admin_toml_exists => None,
+        None => Some(DEFAULT_REMOTE_ADMIN.to_string()),
+    }
+}
+
+/// Is there a remote-admin choice on this machine already?
+fn admin_toml_exists() -> bool {
+    local::config_dir().join("admin.toml").is_file()
 }
 
 impl Default for EnableReq {
@@ -476,7 +497,7 @@ impl Default for EnableReq {
             name: None,
             private_home: None,
             allow_prompt: false,
-            remote_admin: DEFAULT_REMOTE_ADMIN.to_string(),
+            remote_admin: None,
         }
     }
 }
@@ -507,7 +528,7 @@ fn node_sas() -> Option<String> {
 /// `POST /cli/compute/local/enable`.
 pub fn enable(req: &EnableReq, by: &str) -> Result<serde_json::Value, Refused> {
     let bad = |m: &str| -> Refused { ("bad_request", 400, m.to_string()) };
-    if !REMOTE_ADMIN_LEVELS.contains(&req.remote_admin.as_str()) {
+    if req.remote_admin.as_deref().is_some_and(|l| !REMOTE_ADMIN_LEVELS.contains(&l)) {
         return Err(bad("remoteAdmin is off, policy or full"));
     }
     if req.enroll.is_some() && req.ticket.is_some() {
@@ -560,7 +581,8 @@ pub fn enable(req: &EnableReq, by: &str) -> Result<serde_json::Value, Refused> {
             (Some(c), Some(e), Some(n)) => Some((c.as_str(), e.as_str(), n.as_str())),
             _ => None,
         };
-        let args = setup_args(&human, req.private_home, code_enroll, &req.remote_admin);
+        let level = setup_remote_admin(req.remote_admin.as_deref(), admin_toml_exists());
+        let args = setup_args(&human, req.private_home, code_enroll, level.as_deref());
         let el = elevation(&found.path, "setup", &args, req.allow_prompt);
         if el == Elevation::Command {
             return Ok(serde_json::json!({
@@ -577,7 +599,7 @@ pub fn enable(req: &EnableReq, by: &str) -> Result<serde_json::Value, Refused> {
         log_debug!("[compute] k2-node setup via {}: {}", el.as_str(), out.lines().last().unwrap_or(""));
         installed_now = true;
         enrolled_by_setup = code_enroll.is_some();
-        audit(by, "local_install", serde_json::json!({"via": el.as_str(), "binary": found.source, "remoteAdmin": req.remote_admin}));
+        audit(by, "local_install", serde_json::json!({"via": el.as_str(), "binary": found.source, "remoteAdmin": level}));
     }
     if enrolled_by_setup {
         let sas = wait_for(Duration::from_secs(10), node_sas);
@@ -632,8 +654,11 @@ pub fn enable(req: &EnableReq, by: &str) -> Result<serde_json::Value, Refused> {
 /// `POST /cli/compute/local/remote-admin {level}`: the toggles under
 /// "Make this computer a compute node", later. Root runs
 /// `k2-node admin level <level>` the same way setup ran (passwordless
-/// sudo, the macOS prompt from Settings, or one command to copy). Raising
-/// is only possible at the machine, and this is the machine.
+/// sudo, the macOS prompt from Settings, or one command to copy). Only the
+/// owner reaches it: this machine's own K2, or the owner signed in over
+/// K2 Connect from anywhere (then a Mac shows its admin prompt on its own
+/// screen). Agents, App passes and Admin logins never do; an agent's
+/// controller can only lower the level (A-L5 / B-L5).
 pub fn set_remote_admin(level: &str, by: &str, allow_prompt: bool) -> Result<serde_json::Value, Refused> {
     if !REMOTE_ADMIN_LEVELS.contains(&level) {
         return Err(("bad_request", 400, "level is off, policy or full".into()));
@@ -706,9 +731,10 @@ mod tests {
 
     #[test]
     fn setup_args_carry_the_choice_and_the_code() {
-        assert_eq!(setup_args("rosson", Some(true), None, "policy"), vec!["--human", "rosson", "--private-home", "--remote-admin", "policy"]);
-        assert_eq!(setup_args("rosson", Some(false), None, "off"), vec!["--human", "rosson", "--no-private-home", "--remote-admin", "off"]);
-        let a = setup_args("r", None, Some(("https://rosson.k2.dev", "ABCDE-FGHJK.0123456789abcdef", "mini-1")), "full");
+        assert_eq!(setup_args("rosson", Some(true), None, Some("policy")), vec!["--human", "rosson", "--private-home", "--remote-admin", "policy"]);
+        assert_eq!(setup_args("rosson", Some(false), None, Some("off")), vec!["--human", "rosson", "--no-private-home", "--remote-admin", "off"]);
+        assert_eq!(setup_args("rosson", None, None, None), vec!["--human", "rosson"], "no level: the installer keeps the owner's");
+        let a = setup_args("r", None, Some(("https://rosson.k2.dev", "ABCDE-FGHJK.0123456789abcdef", "mini-1")), Some("full"));
         assert_eq!(
             a,
             vec!["--human", "r", "--remote-admin", "full", "--controller", "https://rosson.k2.dev", "--enroll", "ABCDE-FGHJK.0123456789abcdef", "--name", "mini-1"]
@@ -731,7 +757,12 @@ mod tests {
         }
         assert_eq!(remote_admin_arg(None, None).unwrap_err().0, "bad_request", "the later change names a level");
         assert_eq!(set_remote_admin("root", "test", false).unwrap_err().1, 400);
-        let r = EnableReq { remote_admin: "sudo".into(), ..Default::default() };
+        // A-L4 / B-L6: a reinstall over an earlier choice passes none.
+        assert_eq!(setup_remote_admin(None, false).as_deref(), Some("policy"), "a first install: policy");
+        assert_eq!(setup_remote_admin(None, true), None, "an earlier choice (off included) stands");
+        assert_eq!(setup_remote_admin(Some("off"), false).as_deref(), Some("off"));
+        assert_eq!(setup_remote_admin(Some("full"), true).as_deref(), Some("full"), "a named level is the owner's word");
+        let r = EnableReq { remote_admin: Some("sudo".into()), ..Default::default() };
         assert_eq!(enable(&r, "test").unwrap_err().0, "bad_request", "checked first, before any install step");
     }
 

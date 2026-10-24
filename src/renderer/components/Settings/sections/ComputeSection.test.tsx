@@ -553,6 +553,38 @@ describe('this computer', () => {
     expect(full.getAttribute('aria-checked')).toBe('false')
   })
 
+  it('a reinstall over an earlier off starts from off and sends off (never a silent raise)', async () => {
+    m.fetchLocalStatus.mockResolvedValue({ ...LOCAL_OFF, remoteAdmin: 'off' })
+    m.enableLocalNode.mockResolvedValue({ ok: true, step: 'waiting' })
+    render(<ComputeSection />)
+    const part = await screen.findByTestId('compute-this-computer')
+    const policy = await within(part).findByRole('switch', { name: 'Let K2 keep this node updated and healthy (remote admin: policy)' })
+    await waitFor(() => expect(policy.getAttribute('aria-checked')).toBe('false'))
+    const sheet = await openSheet()
+    fillCodeForm(sheet)
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Make this computer a node' }))
+    await waitFor(() => expect(m.enableLocalNode).toHaveBeenCalledTimes(1))
+    expect(m.enableLocalNode.mock.calls[0][0].remoteAdmin).toBe('off')
+  })
+
+  it('stopping lists the jobs running here before it asks (Q2)', async () => {
+    m.fetchLocalStatus.mockResolvedValue({
+      ...LOCAL_OFF,
+      installed: true,
+      node: { state: 'online', name: 'mac-1', controller: 'https://other.k2.dev', control: 'active', running: ['job-a', 'job-b'] },
+      remoteAdmin: 'policy',
+    })
+    const confirm = vi.fn(async () => false)
+    useConfirmDialogStore.setState({ confirm } as never)
+    render(<ComputeSection />)
+    const panel = await screen.findByTestId('compute-local-node')
+    fireEvent.click(within(panel).getByRole('button', { name: 'Stop being a compute node' }))
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+    const arg = (confirm.mock.calls[0] as unknown as [{ message: string }])[0]
+    expect(arg.message).toContain('job-a, job-b')
+    expect(m.disableLocalNode).not.toHaveBeenCalled()
+  })
+
   it("on state, remote admin off: \"K2 can't update this node\" with the command; the switch asks the daemon", async () => {
     m.fetchLocalStatus.mockResolvedValue({
       ...LOCAL_OFF,

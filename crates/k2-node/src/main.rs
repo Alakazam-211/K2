@@ -62,7 +62,8 @@ More than one K2 server (0.46.3; the machine owner, at this machine):
   k2-node version
 
 Remote admin (prd-k2-node-admin-v1; root, at this machine):
-  sudo k2-node admin level off|policy|full      raise or lower remote admin (raising only here)
+  sudo k2-node admin level off|policy|full      raise or lower remote admin (raising: here, or the owner's
+                                                 own K2 on this machine, also over K2 Connect; never an agent)
   sudo k2-node admin pin                         pin the enrolled controller's key for the executor
   sudo k2-node admin init [--level L] [--auto-update follow|off]   (installer)
   sudo k2-node admin audit [--tail N] [--json]   check + print the root audit chain
@@ -96,6 +97,8 @@ const SWITCHES: &[&str] = &[
     "--help",
     "--private-home",
     "--no-private-home",
+    "--no-job-wall",
+    "--no-package-installs",
     "--reenroll",
     "--nextest",
     "--fix",
@@ -228,7 +231,8 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
     // `node_update`, infra without a strike (V55). An owner's stop, or any
     // stop of a later process, is a shutdown (Q2). U3: the detach decision
     // (`UpdateMark::keeps_jobs_of`) goes here, per job.
-    let mark = k2_node::admin::update::update_mark_for(&node.layout().config, std::process::id(), k2_node::util::now());
+    let me = std::process::id();
+    let mark = k2_node::admin::update::update_mark_for(&node.layout().config, me, k2_node::util::process_start_time(me), k2_node::util::now());
     if let Some(m) = &mark {
         k2_node::nlog!("stopped by k2-node-admin ({}, cmd {})", m.what, m.cmd_id.as_deref().unwrap_or("-"));
     }
@@ -1030,6 +1034,17 @@ async fn main() -> ExitCode {
 mod tests {
     use super::*;
     use k2_node::ledger::Clock;
+
+    /// A-L6: setup's switches parse anywhere on the line, last included.
+    #[test]
+    fn setup_switches_parse_last() {
+        let argv: Vec<String> = ["setup", "--remote-admin", "policy", "--no-job-wall"].iter().map(|s| s.to_string()).collect();
+        let a = parse(&argv).expect("parses");
+        assert!(a.has("--no-job-wall"));
+        assert_eq!(a.get("remote-admin"), Some("policy"));
+        let argv: Vec<String> = ["setup", "--no-package-installs"].iter().map(|s| s.to_string()).collect();
+        assert!(parse(&argv).expect("parses").has("--no-package-installs"));
+    }
 
     /// The fake clock is a test node's alone: without the explicit switch
     /// (every real node) the variable changes nothing; the switch needs

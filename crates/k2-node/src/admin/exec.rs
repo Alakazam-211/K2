@@ -78,6 +78,16 @@ pub trait Platform: Send + Sync {
     /// Run a staged build's `version` as the node user before the swap (a
     /// build the node user can't exec never goes in). Returns its output.
     fn preflight(&self, staged: &Path, node_user: &str) -> Result<String, String>;
+    /// Live K2 job units (`k2job-*`, Linux), counted by root.
+    fn running_job_units(&self) -> Option<usize> {
+        let pattern = format!("{}*", super::jobs::UNIT_PREFIX);
+        let list = super::jobs::systemctl(&["list-units", "--plain", "--no-legend", "--state=active,activating,deactivating", &pattern]).ok()?;
+        Some(list.lines().filter(|l| l.trim_start().starts_with(super::jobs::UNIT_PREFIX)).count())
+    }
+    /// `wall.enable`'s root half: the job user, the home ACL, jobs.toml.
+    fn enable_job_wall(&self, paths: &ExecPaths, node_user: &str, job_user: &str) -> Result<super::jobs::WallSetup, AdminRefusal> {
+        super::jobs::system_enable_job_wall(paths, node_user, job_user)
+    }
 }
 
 /// How long a staged build's `version` may take in the preflight.
@@ -102,7 +112,20 @@ pub fn preflight_exec(staged: &Path, as_user: Option<(u32, u32)>, limit: std::ti
     if let Some((uid, gid)) = as_user {
         c.gid(gid).uid(uid);
     }
-    let mut child = c.spawn().map_err(|e| format!("exec {}: {e}", staged.display()))?;
+    // Nothing of root's crosses into the node user's process: every fd
+    // above 2 (the admin listener, a job's pipes in flight) is close-on-exec
+    // in the child (A-L1 / B-L3). std's own exec-error pipe already is.
+    // SAFETY: only async-signal-safe calls (fcntl, syscall, getrlimit).
+    unsafe {
+        c.pre_exec(|| {
+            cloexec_from(3);
+            Ok(())
+        });
+    }
+    let mut child = {
+        let _g = super::fdpass::spawn_guard();
+        c.spawn().map_err(|e| format!("exec {}: {e}", staged.display()))?
+    };
     let t0 = std::time::Instant::now();
     let st = loop {
         match child.try_wait() {
@@ -127,7 +150,30 @@ pub fn preflight_exec(staged: &Path, as_user: Option<(u32, u32)>, limit: std::ti
     if !st.success() {
         return Err(format!("{} version: {st}: {}", staged.display(), err.trim()));
     }
-    Ok(out.trim().to_string())
+    // Its first line only, printable, at most 200 chars: it goes into logs,
+    // update.json and the controller (B-I1).
+    let line: String = out.lines().next().unwrap_or("").chars().filter(|c| !c.is_control()).take(200).collect();
+    Ok(line.trim().to_string())
+}
+
+/// Mark every fd from `lowfd` up close-on-exec (in a forked child, before
+/// exec). Linux: `close_range(…, CLOSE_RANGE_CLOEXEC)` (5.11+), else a loop.
+pub fn cloexec_from(lowfd: i32) {
+    #[cfg(target_os = "linux")]
+    {
+        const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
+        // SAFETY: a plain syscall on our own fd table.
+        if unsafe { libc::syscall(libc::SYS_close_range, lowfd as libc::c_uint, libc::c_uint::MAX, CLOSE_RANGE_CLOEXEC) } == 0 {
+            return;
+        }
+    }
+    let mut rl = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: valid out-pointer.
+    let max = if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) } == 0 { rl.rlim_cur.min(65_536) as i32 } else { 4096 };
+    for fd in lowfd..max {
+        // SAFETY: fcntl on a possibly-closed fd just fails with EBADF.
+        unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
 }
 
 /// The node user's (uid, gid) when this process can switch to it (root),
@@ -141,6 +187,7 @@ pub fn preflight_user(node_user: &str) -> Result<Option<(u32, u32)>, String> {
 
 /// A program's stdout (absolute path, clean env), or `None` on failure.
 fn output_fixed(program: &str, args: &[&str]) -> Option<String> {
+    let _g = super::fdpass::spawn_guard();
     let out = std::process::Command::new(program)
         .args(args)
         .env_clear()
@@ -166,6 +213,7 @@ pub fn parse_launchctl_pid(s: &str) -> Option<u32> {
 pub struct SystemPlatform;
 
 pub(crate) fn run_fixed(program: &str, args: &[&str]) -> Result<(), String> {
+    let _g = super::fdpass::spawn_guard();
     let out = std::process::Command::new(program)
         .args(args)
         .env_clear()
@@ -463,6 +511,8 @@ impl Executor {
         let spec = admin::verb(verb).ok_or_else(|| AdminRefusal::new(code::VERB_NOT_ALLOWED, "unknown verb"))?;
         match verb {
             "policy.set" => super::policy::classify_set(&self.paths.layout(), args),
+            // The owner's own wall choice stands (A-L2 / B-L8).
+            "wall.enable" if super::jobs::wall_needs_owner(&self.paths) => Ok(Class::Privileged),
             k2_node_proto::share::VERB_LIMITS => super::servers::classify_limits(&self.paths.config_dir, args, self.now()),
             _ => Ok(spec.base),
         }
@@ -629,7 +679,7 @@ impl Executor {
                 Ok(json!({"restarted": unit}))
             }
             "homes.private" => self.homes_private(args),
-            "wall.enable" => self.wall_enable(args, &c.opened.cmd.cmd_id),
+            "wall.enable" => self.wall_enable(args, &c.opened.cmd.cmd_id, c.class == Class::Privileged && c.approval_key.is_some()),
             "policy.set" => super::policy::apply_set(&self.paths.layout(), args),
             "policy.narrow" => super::policy::apply_narrow(&self.paths.config_dir, args),
             "node.update" => {
@@ -654,7 +704,7 @@ impl Executor {
         let to = Level::parse(&str_arg(args, "level")?).ok_or_else(|| AdminRefusal::new(code::BAD_ARGS, "level must be off|policy|full"))?;
         let cfg = self.config()?;
         if to >= cfg.level {
-            return Err(AdminRefusal::new(code::HUMAN_REQUIRED, "the level can only be lowered remotely; raise it at the machine (sudo k2-node admin level …)"));
+            return Err(AdminRefusal::new(code::HUMAN_REQUIRED, "the level can only be lowered remotely; the machine's owner raises it there (sudo k2-node admin level …, or Settings → Compute in that machine's K2, also over K2 Connect)"));
         }
         let mut f: AdminFile = cfg.file.clone();
         f.remote_admin = to.as_str().into();

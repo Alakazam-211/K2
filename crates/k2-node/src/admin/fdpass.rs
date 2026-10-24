@@ -8,6 +8,17 @@ use std::os::unix::net::UnixStream;
 /// At most this many fds in one message.
 pub const MAX_FDS: usize = 4;
 
+/// Held (shared) around every child spawn in the executor; held (alone)
+/// while macOS receives fds and marks them close-on-exec. macOS has no
+/// `MSG_CMSG_CLOEXEC`, so without it a child forked in between would
+/// inherit a job's pipe (A-L1 / B-L3). Linux gets the flag atomically.
+static SPAWN: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+/// Take before spawning a child from the executor.
+pub fn spawn_guard() -> std::sync::RwLockReadGuard<'static, ()> {
+    SPAWN.read().unwrap_or_else(|p| p.into_inner())
+}
+
 /// Send one byte carrying `fds`.
 pub fn send_fds(s: &UnixStream, fds: &[RawFd]) -> std::io::Result<()> {
     if fds.is_empty() || fds.len() > MAX_FDS {
@@ -53,9 +64,23 @@ pub fn recv_fds(s: &UnixStream) -> std::io::Result<Vec<OwnedFd>> {
     msg.msg_control = cbuf.as_mut_ptr() as *mut libc::c_void;
     msg.msg_controllen = space as _;
     #[cfg(target_os = "linux")]
-    let flags = libc::MSG_CMSG_CLOEXEC;
+    let (flags, _spawns_wait) = (libc::MSG_CMSG_CLOEXEC, ());
     #[cfg(not(target_os = "linux"))]
-    let flags = 0;
+    let (flags, _spawns_wait) = {
+        // Wait for the message outside the lock, then receive it and mark
+        // its fds close-on-exec while no child can be forked.
+        let mut pfd = libc::pollfd { fd: s.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        let wait_ms = s.read_timeout().ok().flatten().map(|d| d.as_millis().min(i32::MAX as u128) as i32).unwrap_or(-1);
+        // SAFETY: one valid pollfd.
+        let r = unsafe { libc::poll(&mut pfd, 1, wait_ms) };
+        if r == 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "no fd message"));
+        }
+        if r < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        (libc::MSG_DONTWAIT, SPAWN.write().unwrap_or_else(|p| p.into_inner()))
+    };
     // SAFETY: valid socket and message buffers.
     let n = unsafe { libc::recvmsg(s.as_raw_fd(), &mut msg, flags) };
     if n < 0 {

@@ -25,7 +25,7 @@
 set -euo pipefail
 cd /
 
-REPORT="/var/tmp/k2-spike-linux-job.txt"
+REPORT=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --report) REPORT="${2:-}"; shift 2 ;;
@@ -34,6 +34,15 @@ while [ $# -gt 0 ]; do
 done
 [ "$(uname -s)" = "Linux" ] || { echo "Linux only" >&2; exit 2; }
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo): it starts system units" >&2; exit 2; }
+# The report: a fresh root-owned dir by default (never a fixed path in a
+# world-writable /var/tmp, where a planted symlink would aim root's write;
+# security review B-L7); a named --report must not exist yet.
+if [ -z "$REPORT" ]; then
+    REPORT="$(mktemp -d /var/tmp/k2-spike-linux-job.XXXXXX)/report.txt"
+elif [ -e "$REPORT" ] || [ -L "$REPORT" ]; then
+    echo "--report $REPORT exists; name a new file" >&2; exit 2
+fi
+set -o noclobber
 [ "${K2_SPIKE_OK:-}" = "1" ] || { echo "refusing: set K2_SPIKE_OK=1 (a disposable or test box only)" >&2; exit 2; }
 command -v systemd-run >/dev/null || { echo "no systemd-run" >&2; exit 2; }
 SDV="$(systemctl --version | awk 'NR==1{print $2}')"
@@ -65,7 +74,7 @@ wait_active() { for _ in $(seq 1 50); do active "$1" && return 0; sleep 0.2; don
 # The stand-in executor: it starts ONE job the k2-node-admin way (stdout =
 # a regular spool file opened by the "node", passed in as fd 3 → stdout of
 # systemd-run --pipe), then idles like the executor does between requests.
-cat > "$W/executor.sh" <<'EOF'
+cat >| "$W/executor.sh" <<'EOF'
 #!/bin/bash
 # $1 = job unit name, $2 = spool path
 exec 3>>"$2"
@@ -79,7 +88,7 @@ chmod 0755 "$W/executor.sh"
 
 mk_executor() { # <mode: process|control-group> <n>
     local mode="$1" n="$2"
-    cat > "$UNITS_DIR/k2spike-admin-$n.service" <<EOF
+    cat >| "$UNITS_DIR/k2spike-admin-$n.service" <<EOF
 [Unit]
 Description=K2 spike: stand-in for k2-node-admin.service (KillMode=$mode)
 [Service]
@@ -95,7 +104,7 @@ EOF
 case_run() { # <n> <mode> <how: stop|exit|kill9-exec|kill9-helper> <title>
     local n="$1" mode="$2" how="$3" title="$4"
     mk_executor "$mode" "$n"
-    : > "$W/spool-$n.out"
+    : >| "$W/spool-$n.out"
     systemctl start "k2spike-admin-$n.service"
     wait_active "k2spike-job-$n.service" || { row "$title" "job never started" "spike failed"; return 1; }
     sleep 3

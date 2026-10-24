@@ -178,6 +178,11 @@ if [ "$(readlink -f "$BINARY")" != "$LIBEXEC/k2-node" ]; then
     mv -f "$LIBEXEC/k2-node.new" "$LIBEXEC/k2-node"
 fi
 BIN="$LIBEXEC/k2-node"
+# A hand install starts the update history over: no stale `.prev` a
+# remote rollback could go back to, no refused versions, no gate in
+# flight from before (security reviews A-M2 / B-L4).
+rm -f "$LIBEXEC/k2-node.prev" "$LIBEXEC/k2-node.bad" "$LIBEXEC/k2-node.new" "$ADMIN_STATE/update.json"
+install -d -m 0700 -o root -g root "$ADMIN_STATE"
 install -d -m 2775 -o root -g k2nodectl "$CONFIG_DIR"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -206,6 +211,9 @@ install_acl() {
 }
 if [ "$NO_JOB_WALL" = "1" ]; then
     rm -f "$CONFIG_DIR/jobs.toml"
+    # The owner's choice, where only root writes: an agent's wall.enable
+    # then needs the owner's approval (A-L2 / B-L8).
+    : > "$ADMIN_STATE/job-wall-off"
     WALL_STATUS="OFF (--no-job-wall): jobs run as $NODE_USER and can read its key; turn it on later: sudo k2-node setup, or k2 compute node wall <node> from your K2"
 else
     if ! command -v setfacl >/dev/null; then
@@ -215,6 +223,7 @@ else
     command -v setfacl >/dev/null || die "the job wall needs setfacl (the acl package), and it couldn't be installed here. Install it and rerun, or pass --no-job-wall (jobs then run as $NODE_USER and can read its key)"
     setfacl -m "u:$JOB_USER:x" "$HOME_DIR" || die "setfacl on $HOME_DIR failed (does this filesystem support ACLs?). Fix it and rerun, or pass --no-job-wall"
     "$BIN" admin job-user "$JOB_USER" --config-dir "$CONFIG_DIR" >/dev/null
+    rm -f "$ADMIN_STATE/job-wall-off"
     chown root:root "$CONFIG_DIR/jobs.toml"
     chmod 0644 "$CONFIG_DIR/jobs.toml"
     WALL_STATUS="on: jobs run as $JOB_USER in a sandboxed systemd unit (no node key or state, no /home or /root; network = none works)"
@@ -286,32 +295,36 @@ fi
 #            approval), pause, the job wall
 #   off    = they can only narrow limits (and read health)
 #   full   = also owner-approved root actions, each one approved by you
-# Raising the level is only possible here, at the machine.
+# Raising it needs the machine's owner: here, or the owner's own K2 on
+# this machine (Settings → Compute, also over K2 Connect); never an agent.
 CURRENT_ADMIN=""
 if [ -f "$CONFIG_DIR/admin.toml" ]; then
     CURRENT_ADMIN="$(sed -n 's/^remote_admin *= *"\(.*\)"/\1/p' "$CONFIG_DIR/admin.toml" | head -n 1)"
 fi
-if [ -z "$REMOTE_ADMIN" ]; then
-    case "$CURRENT_ADMIN" in
-        policy|full) ;; # the owner's earlier choice stands
-        *)
-            # New, or `off` today: ask, with `policy` preselected (Q4).
-            if [ -t 0 ]; then
-                echo "== remote admin for this node"
-                echo "   policy = K2 keeps this node updated and healthy: signed k2-node updates and"
-                echo "            rollbacks, limits (widening needs your approval), pause, the job wall"
-                echo "   off    = K2 can only narrow limits and read health; you update k2-node by hand"
-                echo "   full   = also root actions, each approved by you (Touch ID / password) on your K2"
-                printf "   Remote admin level? [policy/off/full] (policy) "
-                read -r answer
-                case "$answer" in off|full) REMOTE_ADMIN="$answer" ;; *) REMOTE_ADMIN="policy" ;; esac
-            elif [ -z "$CURRENT_ADMIN" ]; then
-                # Not a terminal, no flag, a first install: policy (Rosson
-                # 2026-10-24). --remote-admin off opts out.
-                REMOTE_ADMIN="policy"
-            fi
-            ;;
-    esac
+if [ -z "$REMOTE_ADMIN" ] && [ -z "$CURRENT_ADMIN" ]; then
+    # A first install: ask, `policy` preselected (Q4). A rerun keeps the
+    # owner's earlier choice, `off` included (never a silent raise); pass
+    # --remote-admin to change it.
+    if [ -t 0 ]; then
+        echo "== remote admin for this node"
+        echo "   policy = K2 keeps this node updated and healthy: signed k2-node updates and"
+        echo "            rollbacks, limits (widening needs your approval), pause, the job wall"
+        echo "   off    = K2 can only narrow limits and read health; you update k2-node by hand"
+        echo "   full   = also root actions, each approved by you (Touch ID / password) on your K2"
+        while [ -z "$REMOTE_ADMIN" ]; do
+            printf "   Remote admin level? [policy/off/full] (policy) "
+            read -r answer || answer=""
+            case "$answer" in
+                "") REMOTE_ADMIN="policy" ;;
+                policy|off|full) REMOTE_ADMIN="$answer" ;;
+                *) echo "   type policy, off or full (or press Enter for policy)" ;;
+            esac
+        done
+    else
+        # Not a terminal, no flag, a first install: policy (Rosson
+        # 2026-10-24). --remote-admin off opts out.
+        REMOTE_ADMIN="policy"
+    fi
 fi
 install -d -m 0700 -o root -g root "$ADMIN_STATE"
 level_args=()

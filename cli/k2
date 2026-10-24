@@ -16666,8 +16666,11 @@ Node admin (agents need "Allow this agent to operate compute nodes"):
                    Linux: turn the job wall on (jobs run as k2job, walled off
                    from the node's key, /home and /root). At once on 0.46.4+
                    nodes at remote admin policy; k2-node restarts to use it once
-                   its running jobs end (--no-restart: at the next restart).
-                   An older node holds it for the owner (exit 2)
+                   its running jobs end, only if this call changed the wall's
+                   files; after 30 min with jobs still running it gives up and
+                   restarts nothing (--no-restart: at the next restart). An
+                   older node, a node whose owner ran setup --no-job-wall, or
+                   one with its own job user holds it for the owner (exit 2)
   k2 compute node admin propose <node> <verb> [key=value…] --reason "…"
                    verbs today: unit.restart unit=k2-node [now=true], policy.set key=value,
                    control.pause|drain|resume, gc, jobs.kill job_id=…,
@@ -16698,8 +16701,11 @@ This computer (its owner):
                           K2 keeps this node updated and healthy; full also
                           lets it run root actions, each approved by you)
   k2 compute local remote-admin off|policy|full   change it later (root: one
-                          sudo or admin prompt; off = K2 can't update the node)
-  k2 compute local disable
+                          sudo or admin prompt; off = K2 can't update the node).
+                          Only the owner: this machine's K2, or the owner
+                          signed in over K2 Connect; never an agent
+  k2 compute local disable [--yes]   lists the jobs running here first; with
+                          jobs running it asks (or needs --yes): they stop now
 
 Never stuck: a job that can't start within --queue-timeout (default 30m
 attached, 24h --detach) fails with queue_timeout; --any jobs move off a node
@@ -18613,6 +18619,25 @@ if v.get("command"):
 '
             ;;
         disable)
+            # Q2 (Rosson 2026-10-24): an owner stop stops the jobs running
+            # here; name them first, and ask (or need --yes) when any run.
+            local yes=0
+            [ "${1:-}" = "--yes" ] && yes=1
+            _compute_call GET /cli/compute/local/status ""
+            local running
+            running="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(" ".join((v.get("node") or {}).get("running") or []))')"
+            if [ -n "$running" ] && [ "$yes" = "0" ]; then
+                echo "These jobs are running here and stop now: $running" >&2
+                if [ -t 0 ]; then
+                    printf "Stop being a compute node? [y/N] " >&2
+                    local answer=""
+                    read -r answer || answer=""
+                    case "$answer" in y|Y|yes) ;; *) echo "not stopped" >&2; exit 2 ;; esac
+                else
+                    echo "pass --yes to stop them (k2 compute local disable --yes)" >&2
+                    exit 2
+                fi
+            fi
             _compute_call POST /cli/compute/local/disable "{}" tcp
             printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
@@ -36832,7 +36857,9 @@ operate compute nodes", which your owner turns on — separate from
             (k2 compute node policy <node> set mem_cap_gb=6), node update /
             rollback to a newer signed build or the node's own previous one,
             turning a Linux node's job wall on (k2 compute node wall <node>;
-            k2-node restarts to use it once its running jobs end).
+            k2-node restarts to use it once its running jobs end, and never
+            kills a job: after 30 min it gives up). A node whose owner said
+            --no-job-wall holds it for the owner.
             Nodes on 0.46.3 or older need one manual install of 0.46.4 at
             the machine before an update works (sudo k2-node setup).
   Privileged (held for the owner EVERY time): raising limits, restarting
@@ -36851,8 +36878,10 @@ operate compute nodes", which your owner turns on — separate from
   a plan when the steps belong together (it stops at the first failure).
   Alerts (offline, disk, thermal, updates) go to the workspace your owner
   picked; they carry facts, never log text.
-  Needs a person at the machine: the first install, raising a node's
-  remote-admin level, macOS OS updates, FileVault unlock after a power cut.
+  Needs a person at the machine: the first install, macOS OS updates,
+  FileVault unlock after a power cut. Raising a node's remote-admin level
+  needs the machine's owner: at the machine, or the owner's own K2 on it
+  (Settings → Compute, also over K2 Connect). You can never raise it.
 
 MANAGING THE MACHINES (Agent switch "Allow managing compute nodes",
 which only your owner turns on: Settings → Workspaces → <you> → Agent,

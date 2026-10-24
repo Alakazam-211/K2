@@ -741,8 +741,10 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     // Nothing was made by any of it.
     let r = get(d.port, "/cli/app/test-guests", OWNER, "app=tgapp").await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let names: Vec<String> =
+    let mut names: Vec<String> =
         r.json()["testGuests"].as_array().expect("testGuests").iter().map(|t| t["username"].as_str().expect("username").to_string()).collect();
+    // Listed oldest first; guests made in the same second tie on time.
+    names.sort();
     assert_eq!(names, ["qa1", "qa2", "qa3", "qa4"], "{}", r.body);
     assert!(k2_core::skin::list_principals().unwrap().iter().all(|p| p.username != "qa-agent"), "no guest from an agent");
     // The App's own agent may read the list; another workspace's agent

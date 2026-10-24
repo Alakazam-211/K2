@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 import { scopeMayWrite } from '@/kessel/server-scope'
+import { SquareRadio } from '@/components/ui'
 
 export type NoOverlap = 'pause' | 'defer'
 
@@ -83,8 +84,7 @@ export function AppUpdateSetting({ scope, app }: { scope: ServerScope; app: stri
         <div role="radiogroup" aria-label="When an update can't run two copies" className="space-y-0.5">
           {CHOICES.map((c) => (
             <label key={c.value} className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-primary)]">
-              <input
-                type="radio"
+              <SquareRadio
                 name={`rehost-${app}`}
                 value={c.value}
                 checked={state.whenNoOverlap === c.value}

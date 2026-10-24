@@ -1255,6 +1255,23 @@ struct SessionRecord {
     /// that predate the field; no route exposes it yet.
     #[serde(default)]
     session_id: String,
+    /// Companion device sign-in (phone-web-off, 2026-10-24): set only on a
+    /// session minted by redeeming a pairing code
+    /// ([`create_device_session`]). Such a session slides
+    /// ([`DEVICE_SESSION_TTL_DAYS`] from its last use) and is what lets a
+    /// paired phone through the "web access off" wall. `None` on every
+    /// password login. Older daemons ignore the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<DeviceBinding>,
+}
+
+/// The phone a device session was paired to. Never a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct DeviceBinding {
+    /// The stable install id the Companion sent (`[A-Za-z0-9._:-]`, ≤128).
+    id: String,
+    /// The phone's display name (trimmed, ≤80).
+    name: String,
 }
 
 /// Per-username failed-attempt + lockout state. Persisted (K2 Connect #4)
@@ -1707,6 +1724,7 @@ pub fn create_session(username: &str) -> String {
         created_ip: None,
         user_agent: None,
         session_id: uuid::Uuid::new_v4().to_string(),
+        device: None,
     };
     // Persist. A write failure is logged but we STILL return the token so
     // the just-authenticated user isn't dead in the water; the worst case
@@ -1735,6 +1753,22 @@ pub fn create_session(username: &str) -> String {
 /// byte. We can't index records by the presented token (we only store
 /// digests), so we scan + compare each digest in constant time.
 pub fn validate_session(token: &str) -> Option<String> {
+    validate_session_record(token).map(|v| v.username)
+}
+
+/// What [`validate_session_record`] learned about a live session.
+struct ValidSession {
+    username: String,
+    session_id: String,
+    device: Option<DeviceBinding>,
+}
+
+/// [`validate_session`] that also returns the record's id and device
+/// binding. A device session ([`create_device_session`]) slides here: when
+/// less than `DEVICE_SESSION_TTL_DAYS - 1 day` is left, its expiry moves to
+/// now + [`DEVICE_SESSION_TTL_DAYS`] (so the file is rewritten at most about
+/// once a day per phone, never on every request).
+fn validate_session_record(token: &str) -> Option<ValidSession> {
     if token.is_empty() {
         return None;
     }
@@ -1780,7 +1814,18 @@ pub fn validate_session(token: &str) -> Option<String> {
         // was down — is rejected and the stale record deleted.
         match user_auth_state(&username) {
             Some((disabled, current_epoch)) if !disabled && current_epoch == record_epoch => {
-                Ok(Some(username))
+                let rec = &mut store.sessions[idx];
+                if rec.device.is_some() {
+                    let full = now + Duration::days(DEVICE_SESSION_TTL_DAYS);
+                    if rec.expires_at < full - Duration::days(1) {
+                        rec.expires_at = full;
+                    }
+                }
+                Ok(Some(ValidSession {
+                    username,
+                    session_id: rec.session_id.clone(),
+                    device: rec.device.clone(),
+                }))
             }
             _ => {
                 store.sessions.remove(idx);
@@ -1789,6 +1834,189 @@ pub fn validate_session(token: &str) -> Option<String> {
         }
     });
     result.unwrap_or(None)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Companion device sign-in (phone-web-off, Rosson 2026-10-24)
+// ─────────────────────────────────────────────────────────────────────
+//
+// "Web access off" (`webClientEnabled=false`) shuts the browser door, but
+// the Companion phone app signs in through the same public door
+// (`<label>.app.k2.dev`, where the edge stamps `X-K2-Client: web`). No
+// header can tell a phone from a browser, so the phone is recognised by a
+// credential only it holds: a **device session**, a Connect session bound
+// to one phone install. It is minted only by redeeming a one-time pairing
+// code (`crate::connect_device_pairing`); the code itself is minted only by
+// the owner token or by a login on a non-browser request. A password login
+// never yields one.
+
+/// A device session stays valid this many days after its last use.
+pub const DEVICE_SESSION_TTL_DAYS: i64 = 30;
+/// Live device sessions per person; pairing another phone past this ends
+/// the least recently used one.
+pub const MAX_DEVICE_SESSIONS_PER_USER: usize = 20;
+
+/// One live device session, for its person and the owner. Never a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceSessionView {
+    /// The session's id (what revoke takes).
+    pub id: String,
+    pub username: String,
+    /// The install id the phone sent when it paired.
+    pub device_id: String,
+    pub name: String,
+    pub created_at: String,
+    /// When it ends unless the phone uses it again.
+    pub expires_at: String,
+}
+
+/// The current `token_epoch` of an existing, enabled user; `None` when the
+/// user is missing or disabled. A pairing code stamps it so a password
+/// change, role change or disable between mint and redeem voids the code.
+pub fn live_user_epoch(username: &str) -> Option<u64> {
+    match user_auth_state(username) {
+        Some((false, epoch)) => Some(epoch),
+        _ => None,
+    }
+}
+
+/// Mint a device session for `username` bound to the phone install
+/// `device_id` (validated by the caller). Re-pairing the same install
+/// replaces its old session; a person past [`MAX_DEVICE_SESSIONS_PER_USER`]
+/// loses the least recently used one. `expected_epoch` (stamped on the
+/// pairing code) must still be the user's epoch. Unlike [`create_session`],
+/// a store write failure is an error: a phone credential that would not
+/// survive a restart is not handed out.
+pub fn create_device_session(
+    username: &str,
+    expected_epoch: u64,
+    device_id: &str,
+    device_name: &str,
+) -> Result<String, String> {
+    let username = normalize_username(username)?;
+    match live_user_epoch(&username) {
+        Some(epoch) if epoch == expected_epoch => {}
+        _ => return Err("that login changed or ended since the pairing code was made".to_string()),
+    }
+    let token = new_token();
+    let now = Utc::now();
+    let record = SessionRecord {
+        version: SESSION_RECORD_VERSION,
+        username: username.clone(),
+        token_digest: token_digest(&token),
+        created_at: now,
+        expires_at: now + Duration::days(DEVICE_SESSION_TTL_DAYS),
+        token_epoch: expected_epoch,
+        created_ip: None,
+        user_agent: None,
+        session_id: uuid::Uuid::new_v4().to_string(),
+        device: Some(DeviceBinding { id: device_id.to_string(), name: device_name.to_string() }),
+    };
+    let ended = update_sessions(|store| {
+        let mut ended = Vec::new();
+        store.sessions.retain(|s| {
+            let same = s.username == username && s.device.as_ref().is_some_and(|d| d.id == device_id);
+            if same {
+                ended.push(s.token_digest.clone());
+            }
+            !same
+        });
+        loop {
+            let oldest = store
+                .sessions
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.username == username && s.device.is_some())
+                .map(|(i, s)| (i, s.expires_at))
+                .collect::<Vec<_>>();
+            if oldest.len() < MAX_DEVICE_SESSIONS_PER_USER {
+                break;
+            }
+            let Some(&(idx, _)) = oldest.iter().min_by_key(|(_, e)| *e) else { break };
+            ended.push(store.sessions.remove(idx).token_digest);
+        }
+        store.sessions.push(record);
+        Ok(ended)
+    })?;
+    queue_sew_revokes(&ended);
+    Ok(token)
+}
+
+/// The live device session `token` names: `(username, session id)`.
+/// `None` for an unknown, expired or ended token and for every non-device
+/// credential (a password login's session, the owner token, an App pass).
+/// Slides the session like any validate.
+pub fn validate_device_session(token: &str) -> Option<(String, String)> {
+    let v = validate_session_record(token)?;
+    v.device.map(|_| (v.username, v.session_id))
+}
+
+/// The session id of a live session `token` (device or not).
+pub fn live_session_id(token: &str) -> Option<String> {
+    validate_session_record(token).map(|v| v.session_id)
+}
+
+/// Live device sessions: one person's (`Some(username)`) or everyone's.
+/// Read-only; a record whose user is gone, disabled or on another epoch is
+/// not live and is left out.
+pub fn device_sessions(username: Option<&str>) -> Result<Vec<DeviceSessionView>, String> {
+    let want = match username {
+        Some(u) => Some(normalize_username(u)?),
+        None => None,
+    };
+    let store = load_sessions()?;
+    let now = Utc::now();
+    let mut states: HashMap<String, Option<(bool, u64)>> = HashMap::new();
+    let mut out = Vec::new();
+    for rec in &store.sessions {
+        let Some(dev) = rec.device.as_ref() else { continue };
+        if rec.expires_at <= now || want.as_ref().is_some_and(|w| *w != rec.username) {
+            continue;
+        }
+        let state = states
+            .entry(rec.username.clone())
+            .or_insert_with(|| user_auth_state(&rec.username));
+        if !matches!(state, Some((false, e)) if *e == rec.token_epoch) {
+            continue;
+        }
+        out.push(DeviceSessionView {
+            id: rec.session_id.clone(),
+            username: rec.username.clone(),
+            device_id: dev.id.clone(),
+            name: dev.name.clone(),
+            created_at: rec.created_at.to_rfc3339(),
+            expires_at: rec.expires_at.to_rfc3339(),
+        });
+    }
+    out.sort_by(|a, b| a.username.cmp(&b.username).then(a.created_at.cmp(&b.created_at)));
+    Ok(out)
+}
+
+/// End one device session by its id. `only_user`: `Some(name)` ends it
+/// only when it belongs to that person (a login ending its own phone);
+/// `None` ends anyone's (the owner). Returns the person's username when a
+/// session ended, `None` when there is no such device session (or it is
+/// someone else's).
+pub fn revoke_device_session(id: &str, only_user: Option<&str>) -> Result<Option<String>, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Ok(None);
+    }
+    let only = match only_user {
+        Some(u) => Some(normalize_username(u)?),
+        None => None,
+    };
+    let removed = update_sessions(|store| {
+        let pos = store.sessions.iter().position(|s| {
+            s.device.is_some() && s.session_id == id && only.as_ref().is_none_or(|u| *u == s.username)
+        });
+        Ok(pos.map(|i| store.sessions.remove(i)))
+    })?;
+    Ok(removed.map(|rec| {
+        queue_sew_revokes(std::slice::from_ref(&rec.token_digest));
+        rec.username
+    }))
 }
 
 /// Revoke every persisted session belonging to `username`. Called on
@@ -2053,6 +2281,7 @@ mod tests {
                     // Legacy shape — records that predate session ids
                     // deserialize to "" via #[serde(default)].
                     session_id: String::new(),
+                    device: None,
                 });
                 Ok(())
             })
@@ -3271,6 +3500,7 @@ mod tests {
                     created_ip: None,
                     user_agent: None,
                     session_id: uuid::Uuid::new_v4().to_string(),
+                    device: None,
                 });
                 Ok(())
             })
@@ -3302,6 +3532,7 @@ mod tests {
                     created_ip: None,
                     user_agent: None,
                     session_id: String::new(),
+                    device: None,
                 });
                 Ok(())
             })
@@ -3625,6 +3856,7 @@ mod tests {
                 created_ip: None,
                 user_agent: None,
                 session_id: uuid::Uuid::new_v4().to_string(),
+                device: None,
             });
             Ok(())
         })

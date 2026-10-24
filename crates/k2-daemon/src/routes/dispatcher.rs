@@ -118,6 +118,26 @@ fn helper_caller(ingress: Ingress, query: &str, owner_token: &str) -> crate::pow
     }
 }
 
+/// phone-web-off: the caller of a `/cli/auth/device*` route, from the token
+/// only. The owner token, or an Owner login (the `owner_role_identity`
+/// bar), is [`Caller::Owner`](crate::connect_device_routes::Caller); any
+/// other live Connect login is `Login`. Everything else (no token, an agent
+/// passport, an App pass, an API key) is `None`.
+fn device_caller(query: &str, owner_token: &str) -> Option<crate::connect_device_routes::Caller> {
+    use crate::connect_device_routes::Caller;
+    let tok = super::http::extract_token(query).filter(|t| !t.is_empty())?;
+    if super::http::ct_eq_token(tok, owner_token) {
+        return Some(Caller::Owner { login: None });
+    }
+    let username = k2_core::connect_users::validate_session(tok)?;
+    let role = k2_core::connect_users::role_for_user(&username)?;
+    if k2_core::connect_users::can_change_roles(role) {
+        Some(Caller::Owner { login: Some(username) })
+    } else {
+        Some(Caller::Login(username))
+    }
+}
+
 /// 0.45.7 — who drives a `/cli/tunnel/*` request, for the tunnel audit
 /// line and the stop reason: the actor kind (`owner-token`,
 /// `user:<name>` for a Connect login such as an ops or remote user,
@@ -1220,13 +1240,23 @@ async fn handle_one_request(
     // the browser door (`webClientEnabled=false`), reject data-plane
     // requests that look like the web SPA. `/boot-status` stays open so
     // the loader does not look dead. Distinct from REMOTE_SESSIONS_DISABLED.
+    //
+    // phone-web-off (2026-10-24): the wall blocks browsers, never a paired
+    // Companion phone. A request whose Bearer / `?token=` is a live device
+    // session (minted only by a redeemed pairing code, never by a password
+    // login or a browser) passes even with the edge's `X-K2-Client: web`;
+    // a cookie session never does. The phone's first sign-in,
+    // `POST /cli/auth/device/pair`, stays open: the one-time code is the
+    // credential. See `super::http::device_session_passes_web_wall`.
     if !k2_core::app_settings::load().web_client_enabled
         && (path.starts_with("/cli/") || path == "/events")
         && path != "/cli/skin/login"
         && path != "/cli/skin/logout"
         && path != crate::app_mobile_routes::REFRESH
         && path != "/cli/skin/password/reset"
+        && path != crate::connect_device_routes::PAIR
         && super::http::is_web_client_request(&headers_blob)
+        && !super::http::device_session_passes_web_wall(&query, cookie_only)
     {
         let _ = stream.read(&mut buf).await;
         let r = super::http::web_client_disabled_response();
@@ -4644,6 +4674,99 @@ async fn handle_one_request(
                 Some(&clear),
             )
             .await;
+        }
+        // phone-web-off (2026-10-24): Companion pairing. See
+        // `crate::connect_device_routes` for the contract.
+        //
+        // POST /cli/auth/device/pair-code — the owner token or a login on a
+        // NON-browser request mints a one-time pairing code (a browser-shaped
+        // request is refused whatever the web setting, so the web app can
+        // never mint a phone credential).
+        p if p == crate::connect_device_routes::PAIR_CODE => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = match device_caller(&query, state.token.as_str()) {
+                None => crate::cli::CliResponse::forbidden(),
+                Some(_) if cookie_only || super::http::request_is_browser_shaped(&headers_blob) => {
+                    crate::connect_device_routes::browser_refused()
+                }
+                Some(caller) => tokio::task::spawn_blocking(move || {
+                    crate::connect_device_routes::handle_pair_code(&caller, &body_bytes)
+                })
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))),
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // POST /cli/auth/device/pair — PUBLIC (the code is the credential).
+        // Open while web access is off (the phone's first contact may come
+        // through the edge). Never sets a cookie. Audited like login.
+        p if p == crate::connect_device_routes::PAIR => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let reply = tokio::task::spawn_blocking(move || crate::connect_device_routes::handle_pair(&body_bytes))
+                .await
+                .unwrap_or_else(|e| crate::connect_device_routes::PairReply {
+                    response: crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")),
+                    user: String::new(),
+                    outcome: "error",
+                });
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                "device-pair",
+                &reply.user,
+                reply.outcome,
+                ingress.as_str(),
+                relay_client_ip(ingress, stream).map(|ip| ip.to_string()).unwrap_or_else(|| "-".to_string()),
+                if web_client_header { "web" } else { "api" },
+            ));
+            let r = reply.response;
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // GET /cli/auth/devices — live paired phones (the owner: everyone's;
+        // a login: its own).
+        p if p == crate::connect_device_routes::DEVICES => {
+            let _ = stream.read(&mut buf).await;
+            let r = match device_caller(&query, state.token.as_str()) {
+                None => crate::cli::CliResponse::forbidden(),
+                Some(caller) => {
+                    let current = super::http::extract_token(&query)
+                        .filter(|t| !super::http::ct_eq_token(t, state.token.as_str()))
+                        .and_then(k2_core::connect_users::live_session_id);
+                    tokio::task::spawn_blocking(move || {
+                        crate::connect_device_routes::handle_devices(&caller, current.as_deref())
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")))
+                }
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // POST /cli/auth/device/revoke {id} — end one paired phone (the
+        // owner: anyone's; a login: its own). Audited.
+        p if p == crate::connect_device_routes::REVOKE => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let (r, ended_for) = match device_caller(&query, state.token.as_str()) {
+                None => (crate::cli::CliResponse::forbidden(), None),
+                Some(caller) => tokio::task::spawn_blocking(move || {
+                    crate::connect_device_routes::handle_revoke(&caller, &body_bytes)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    (crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")), None)
+                }),
+            };
+            if let Some(user) = ended_for.as_deref() {
+                k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                    "device-revoke",
+                    user,
+                    "ok",
+                    ingress.as_str(),
+                    "-",
+                    if web_client_header { "web" } else { "api" },
+                ));
+            }
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // POST /cli/claude-auth/refresh-now — Phase 2 Unit 5.
         // No body required (the refresh token comes from the local

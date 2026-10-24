@@ -49,4 +49,5 @@ features:
   thread-context-v1
   app-resources-v1
   llm-account-for-v1
+  companion-pairing-v1
   boot-status-views-v1

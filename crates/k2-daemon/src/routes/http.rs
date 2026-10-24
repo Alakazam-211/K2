@@ -264,6 +264,61 @@ pub(crate) fn is_web_client_request(headers_blob: &str) -> bool {
         || host_is_web_app(headers_blob)
 }
 
+/// phone-web-off (Rosson 2026-10-24): while web access is OFF, a request
+/// that presents a live Companion **device session** passes the wall even
+/// though it looks like the web client (the edge stamps `X-K2-Client: web`
+/// on everything it proxies, the phone's sign-in included).
+///
+/// The phone is recognised by the credential, never by a header: the
+/// effective token (`Authorization: Bearer` or `?token=`, already folded
+/// into `query` by [`effective_auth_query`]) must validate as a device
+/// session, which only a redeemed pairing code mints. A cookie-borne
+/// credential never passes (`cookie_only`): that is the browser session
+/// the wall exists to stop. A forged `X-K2-Client` with no device session,
+/// or with a password login's ordinary session, is refused as before.
+pub(crate) fn device_session_passes_web_wall(query: &str, cookie_only: bool) -> bool {
+    if cookie_only {
+        return false;
+    }
+    extract_token(query)
+        .filter(|t| !t.is_empty())
+        .is_some_and(|t| k2_core::connect_users::validate_device_session(t).is_some())
+}
+
+/// phone-web-off: true when a request is shaped like a web browser, so a
+/// route that mints a phone credential must refuse it. Any of:
+/// - the hosted web markers [`is_web_client_request`] checks (the edge's
+///   `X-K2-Client: web`, a `k2_session` cookie, a `.app.k2.dev` Host) or an
+///   `X-Forwarded-Host` under `.app.k2.dev`;
+/// - an `Origin` that is not the Tauri webview's (or several `Origin`s);
+/// - no `Origin` but a `Sec-Fetch-Site` / `Sec-Fetch-Mode` header.
+///
+/// A page cannot remove the web markers the edge adds, cannot set or drop
+/// `Origin` or `Sec-*` (forbidden header names), and every browser sends
+/// `Origin` on a POST. So the web app, web on or off, can never mint. A
+/// non-browser client with a valid login (curl, the CLI, the desktop app,
+/// the Companion) is not what web access off is about, and passes, exactly
+/// as its `?token=` calls already pass the wall.
+pub(crate) fn request_is_browser_shaped(headers_blob: &str) -> bool {
+    let head = request_head(headers_blob);
+    if is_web_client_request(head) || push_key_via_web_path(head) {
+        return true;
+    }
+    let origins: Vec<&str> = head
+        .lines()
+        .skip(1)
+        .filter_map(|l| {
+            let (n, v) = l.split_once(':')?;
+            n.trim().eq_ignore_ascii_case("origin").then_some(v.trim())
+        })
+        .collect();
+    match origins.as_slice() {
+        [] => extract_header(head, "sec-fetch-site").is_some() || extract_header(head, "sec-fetch-mode").is_some(),
+        [one] => !TAURI_ORIGINS.contains(&one.to_ascii_lowercase().as_str()),
+        _ => true,
+    }
+}
+
 /// Layer-0 wall response when web access is OFF.
 pub(crate) fn web_client_disabled_response() -> crate::cli_response::CliResponse {
     crate::cli_response::CliResponse {
@@ -3194,5 +3249,72 @@ mod tests {
             ),
             "nested label without a Caddy target is not the front door"
         );
+    }
+
+    // ── phone-web-off: the device-session wall exception ────────────────
+
+    fn paired_device_token(user: &str) -> String {
+        k2_core::connect_users::add_user(user, "password123").expect("add_user");
+        let code = k2_core::connect_device_pairing::mint(user).expect("mint pairing code");
+        k2_core::connect_device_pairing::redeem(&code.code, "ios-install", "Phone")
+            .expect("session store")
+            .expect("code pairs")
+            .token
+    }
+
+    #[test]
+    fn only_a_device_session_outside_a_cookie_passes_the_web_wall() {
+        with_temp_home(|| {
+            let device = paired_device_token("wall_phone");
+            let plain = k2_core::connect_users::create_session("wall_phone");
+            // Bearer folded into `token=` by effective_auth_query.
+            assert!(device_session_passes_web_wall(&format!("token={device}"), false));
+            assert!(
+                !device_session_passes_web_wall(&format!("token={device}"), true),
+                "a cookie-borne credential is the browser session the wall stops"
+            );
+            assert!(
+                !device_session_passes_web_wall(&format!("token={plain}"), false),
+                "a password login's session is not a device session"
+            );
+            assert!(!device_session_passes_web_wall("token=not-a-real-token", false));
+            assert!(!device_session_passes_web_wall("token=", false));
+            assert!(!device_session_passes_web_wall("", false));
+            // Ended with the user's sessions (kick / password change).
+            k2_core::connect_users::revoke_user_sessions("wall_phone");
+            assert!(!device_session_passes_web_wall(&format!("token={device}"), false));
+        });
+    }
+
+    #[test]
+    fn browser_shaped_requests_are_recognised_for_the_mint_route() {
+        let req = |extra: &str| format!("POST /cli/auth/device/pair-code HTTP/1.1\r\nHost: rosson.k2.dev\r\n{extra}\r\n");
+        // Not a browser: CLI / desktop / Companion native HTTP, Tauri webviews.
+        assert!(!request_is_browser_shaped(&req("")));
+        assert!(!request_is_browser_shaped(&req("Authorization: Bearer x\r\n")));
+        for o in TAURI_ORIGINS {
+            assert!(
+                !request_is_browser_shaped(&req(&format!("Origin: {o}\r\nSec-Fetch-Site: cross-site\r\n"))),
+                "{o}"
+            );
+        }
+        // Browser-shaped.
+        assert!(request_is_browser_shaped(&req("X-K2-Client: web\r\n")), "the edge's marker");
+        assert!(request_is_browser_shaped(&req("X-K2-CSRF: web\r\n")));
+        assert!(request_is_browser_shaped(&req("Cookie: k2_session=abc\r\n")));
+        assert!(request_is_browser_shaped(&req("X-Forwarded-Host: rosson.app.k2.dev\r\n")));
+        assert!(request_is_browser_shaped(&req("Origin: https://rosson.app.k2.dev\r\n")));
+        assert!(request_is_browser_shaped(&req("Origin: https://evil.example\r\n")));
+        assert!(request_is_browser_shaped(&req("Origin: null\r\n")));
+        assert!(request_is_browser_shaped(&req("Origin: tauri://localhost\r\nOrigin: https://x\r\n")), "two Origins");
+        assert!(request_is_browser_shaped(&req("Sec-Fetch-Site: same-origin\r\n")), "no Origin but Sec-Fetch");
+        assert!(request_is_browser_shaped(&req("Sec-Fetch-Mode: cors\r\n")));
+        assert!(request_is_browser_shaped(
+            "POST /cli/auth/device/pair-code HTTP/1.1\r\nHost: rosson.app.k2.dev\r\n\r\n"
+        ));
+        // A body line never counts as a header.
+        assert!(!request_is_browser_shaped(
+            "POST /cli/auth/device/pair-code HTTP/1.1\r\nHost: rosson.k2.dev\r\n\r\nOrigin: https://evil.example\r\n"
+        ));
     }
 }

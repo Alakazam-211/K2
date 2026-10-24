@@ -370,6 +370,14 @@ pub const ROUTES: &[Route] = &[
     // 0.46.0 grace: what breaks at the 0.46.4 cut-over, per service.
     get("/cli/app/warnings", Member),
     post("/cli/auth/change-password", Member),
+    // phone-web-off (2026-10-24): Companion pairing. The pair redeem is
+    // Public (the one-time code is the credential); minting a code, the
+    // paired-phone list and revoke take a login (the owner sees and ends
+    // everyone's, a Member only its own; the handlers enforce that).
+    post("/cli/auth/device/pair", Public),
+    post("/cli/auth/device/pair-code", Member),
+    post("/cli/auth/device/revoke", Member),
+    get("/cli/auth/devices", Member),
     post("/cli/auth/login", Public),
     post("/cli/auth/logout", Member),
     get("/cli/auth/whoami", Member),
@@ -1882,6 +1890,7 @@ pub const GET_WRITE_PARAMS: &[(&str, &str, &[&str])] = &[
 #[cfg_attr(not(test), allow(dead_code))]
 pub const GET_READS_WITH_HOUSEKEEPING: &[(&str, &str)] = &[
     ("/cli/agents/running", "drops dead PTYs from the in-memory session map"),
+    ("/cli/auth/devices", "validating the caller's session may reap it or slide a paired phone's expiry"),
     ("/cli/auth/whoami", "validating a session may reap an expired one"),
     ("/cli/context/layers", "refreshes generated roster packs on disk when they changed"),
     ("/cli/db/dsn", "lazily mints the agent role's vaulted password / bind membership"),

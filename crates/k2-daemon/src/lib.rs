@@ -42,6 +42,8 @@ pub mod thread_transfer_routes;
 pub mod companion_host;
 pub mod companion_routes;
 pub mod connect_users_routes;
+// phone-web-off (2026-10-24): Companion pairing codes + device sessions.
+pub mod connect_device_routes;
 pub mod login_throttle;
 pub mod db_routes;
 pub mod events;

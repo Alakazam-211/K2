@@ -789,6 +789,14 @@ pub const FEATURE_CATCHUP_UNCHANGED: &str = "catchup-unchanged-v1";
 /// skin.db tables only, no SQL migration.
 pub const FEATURE_APP_MOBILE_ACCESS: &str = "app-mobile-access-v1";
 
+/// phone-web-off (2026-10-24): Companion phone pairing. `POST
+/// /cli/auth/device/pair-code` (owner token or a login, never a browser),
+/// `POST /cli/auth/device/pair {code, device}` (public, open while web
+/// access is off) answering a device session that passes the web-access
+/// wall, `GET /cli/auth/devices`, `POST /cli/auth/device/revoke`. No SQL
+/// migration (the Connect session file carries the device binding).
+pub const FEATURE_COMPANION_PAIRING: &str = "companion-pairing-v1";
+
 /// One live Thread stream across rooms (app-room-stream, 0.46.3):
 /// `WS /cli/thread/stream?rooms=all|<ids>` for an App pass (helper, link,
 /// main port) or a login, frames in the inbox stream format
@@ -923,6 +931,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_THREAD_CONTEXT);
     out.push(FEATURE_APP_RESOURCES);
     out.push(FEATURE_LLM_ACCOUNT_FOR);
+    out.push(FEATURE_COMPANION_PAIRING);
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1, §10):
     // listed only while the global switch is on (setting or env). Its flip
     // publishes a settings frame (`settings_routes::permission_cards_flipped`)
@@ -1012,6 +1021,7 @@ mod tests {
                 "thread-context-v1",
                 "app-resources-v1",
                 "llm-account-for-v1",
+                "companion-pairing-v1",
                 "boot-status-views-v1"
             ]
         );

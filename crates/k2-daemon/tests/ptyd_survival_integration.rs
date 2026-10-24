@@ -415,6 +415,12 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
             std::fs::read_to_string(&secret_file).unwrap_or_else(|e| panic!("{what}: secret file gone: {e}")),
             "kept-across-restarts"
         );
+        // P27: /boot-status says ptyd is on and this boot adopted 1 session.
+        let (s, b) = http(port, "GET", &format!("/boot-status?token={token}"), "");
+        assert_eq!(s, 200, "{what}: boot-status: {b}");
+        let bs: serde_json::Value = serde_json::from_str(&b).unwrap_or_else(|e| panic!("{what}: boot-status JSON {e}: {b}"));
+        assert_eq!(bs["ptyd"], "on", "{what}: {b}");
+        assert_eq!(bs["adopted"], 1, "{what}: {b}");
         // DA2: the adopted session has an activity row.
         let (s, b) = http(port, "GET", &format!("/cli/activity/snapshot?token={token}"), "");
         assert_eq!(s, 200, "{what}: activity snapshot: {b}");

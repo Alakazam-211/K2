@@ -96,6 +96,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
     : []),
   { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
   { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'When on, clicking the red close button hides the window and keeps the Agent & Companion server running. When off, the red button stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
+  { id: 'general.agents-survive-restarts', section: 'general', group: 'Server', label: 'Agents keep running through updates and restarts', description: 'Beta: new agent sessions keep running when K2 updates, restarts or crashes; quitting the server still stops them. macOS and Linux.', keywords: ['agents', 'survive', 'restart', 'update', 'crash', 'keep', 'running', 'ptyd', 'beta', 'session', 'terminal'] },
   { id: 'general.clone-personal-computers', section: 'general', group: 'Server', label: "Allow cloning agents to people's personal computers", description: 'When off, Admins and Members cannot clone agents from this server to their own computers. Owner only.', keywords: ['clone', 'copy', 'agent', 'workspace', 'personal', 'computer', 'pull', 'permission', 'migrate'] },
   { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected host', description: 'Restart the REMOTE machine you are connected to over K2 Connect', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
   { id: 'general.update-host', section: 'general', group: 'Server', label: 'Update connected host', description: 'Update the REMOTE machine you are connected to over K2 Connect', keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
@@ -461,6 +462,7 @@ export function GeneralSection(): React.JSX.Element {
           </p>
           <DaemonRow />
           <KeepDaemonOnQuitRow />
+          <AgentsSurviveRestartsRow />
           <ClonePersonalComputersRow scope={primaryScope()} />
         </div>
       )}
@@ -1208,6 +1210,57 @@ function DaemonRow(): React.JSX.Element {
           <p className="text-[10px] text-[var(--color-status-error-soft)] break-all">{error}</p>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Agents keep running through updates and restarts (Beta) ───────────
+// k2-ptyd (prd-k2-ptyd-v1 P67, 0.46.4 opt-in): the daemon's own setting
+// `terminal.ptyd` (`on` | `off`; unset = off). With it on, NEW agent
+// sessions run under k2-ptyd and survive a daemon update, restart or
+// crash; quitting the daemon still ends them. Daemon-first: the switch
+// lives in the daemon's settings, so headless servers honour it too
+// (`k2 settings agents-survive-restarts on`).
+
+function AgentsSurviveRestartsRow(): React.JSX.Element {
+  const [on, setOn] = useState<boolean>(false)
+
+  useEffect(() => {
+    settingsGet()
+      .then((s) => setOn(s.terminal?.ptyd === 'on'))
+      .catch((e) => console.warn('[agents-survive-restarts]', e))
+  }, [])
+
+  const toggle = async (): Promise<void> => {
+    const next = !on
+    setOn(next) // optimistic
+    try {
+      // The daemon deep-merges `terminal`, so the font settings stay.
+      await settingsUpdate({ terminal: { ptyd: next ? 'on' : 'off' } })
+    } catch (e) {
+      console.error('[agents-survive-restarts]', e)
+      setOn(!next) // revert
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
+      <div className="flex-1 min-w-0 mr-3">
+        <span className="text-xs text-[var(--color-text-secondary)]">
+          Agents keep running through updates and restarts{' '}
+          <span className="text-[10px] font-normal text-[var(--color-text-muted)]">Beta</span>
+        </span>
+        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+          {on
+            ? 'New agent sessions keep running when K2 updates, restarts or crashes, and pick up where they were. Quitting the server still stops them. Sessions already running before you turned this on stop at the next restart. macOS and Linux.'
+            : 'Off: updating or restarting K2 stops running agents; they resume their conversation afterwards.'}
+        </p>
+      </div>
+      <Toggle
+        checked={on}
+        onChange={() => void toggle()}
+        aria-label="Agents keep running through updates and restarts"
+      />
     </div>
   )
 }

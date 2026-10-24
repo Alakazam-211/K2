@@ -219,9 +219,15 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/clean-mode", Admin),
     // S13: narrowing applies now, widening fields are held.
     post("/cli/app/config", Admin),
+    // 0.46.4: read back, list, remove and rename inside an App's data
+    // folder (handler: as data put; no Member reads App data).
+    get("/cli/app/data/get", Admin),
+    get("/cli/app/data/ls", Admin),
+    post("/cli/app/data/mv", Admin),
     // 0.46.3: copy workspace files into an App's data folder (handler:
     // only the App's own workspace folder; switch 1 for passports).
     post("/cli/app/data/put", Admin),
+    post("/cli/app/data/rm", Admin),
     // deny is an Owner/Admin human's, or the requester's withdraw (handler).
     post("/cli/app/deny", Admin),
     post("/cli/app/deploy", Admin),

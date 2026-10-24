@@ -7693,6 +7693,9 @@ Make and ship:
                                        held for the owner).
   Moving a legacy --cmd service in: k2 study app-move (k2 app data put,
   k2 app label take|return).
+  k2 app data ls|get|rm|mv <app-id> …  Read back what the App wrote to /data
+                                       (answers, uploads), list, remove,
+                                       rename. k2 app data --help.
   k2 app deploy <app-id> <folder|seed> [--engine guarded|process]
                  [--reason TEXT] [--no-wait] [--types]
                                        Health gate, switch, drain; the old version
@@ -9353,6 +9356,9 @@ is one-way. Done = the URL serves the App AND the old service is stopped
        k2 app data put <app-id> <your-data-folder> [--to <dir>]
      Copies a file or folder of your workspace into $K2_APP_DATA. Copy
      again right before step 6 if the old service keeps writing.
+     Your pages write to /data now (not your workspace): read what they
+     wrote back with k2 app data get <app-id> var/answers.json [--to <file>]
+     (k2 app data ls <app-id> [<folder>] lists; rm and mv tidy).
   5. Check it:
        k2 app deployment <app-id> ; k2 app logs <app-id> ; k2 app errors <app-id>
        k2 app inspect <app-id>                 the front port: curl it
@@ -9877,6 +9883,9 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        Copy a file or folder of your workspace
                                        into the App's data folder ($K2_APP_DATA,
                                        /data in its wall). The App must be live.
+  k2 app data ls|get|rm|mv <app-id> …  Read back what its pages write to /data
+                                       (k2 app data get <app-id> var/answers.json),
+                                       list, remove, rename (k2 app data --help).
   k2 app label take <app-id> <label>   Your legacy service's public hostname
                                        now serves the App (the App must be
                                        healthy). The old service keeps running,
@@ -10265,12 +10274,221 @@ Exit codes: 0 ok, 2 usage error or held for the owner, 3 refused.
 EOF
 }
 
-# k2 app data put <app-id> <path> [--to <dir>] [--json] (0.46.3): copy a file
-# or folder of the App's workspace into its data folder.
+_app_data_usage() {
+    cat <<'EOF'
+k2 app data — an App's data folder ($K2_APP_DATA, /data in its wall)
+
+Your App's pages write to /data (answers, uploads); read them back here.
+Paths are inside the data folder: relative (var/answers.json) or as the App
+sees them (/data/var/answers.json). Never .., never through a symlink. A
+walled App must be running (these go through its own exec, as the App).
+
+  k2 app data put <app-id> <path> [--to <dir>] [--json]
+                                       Copy a file or folder of your workspace
+                                       into the data folder (64 MiB compressed
+                                       per put).
+  k2 app data ls <app-id> [<path>] [--json]
+                                       List a folder (at most 2000 entries) or
+                                       show one file. Links show as links,
+                                       never followed.
+  k2 app data get <app-id> <path> [--to <local path> | -] [--json]
+                                       Read a file back (256 MiB at most), in
+                                       512 KiB pieces into a temp file, then
+                                       renamed into place. Default: ./<name>;
+                                       --to a folder: into it; - : stdout.
+  k2 app data rm <app-id> <path> [--recursive] [--json]
+                                       Remove a file (a link: the link only). A
+                                       folder needs --recursive.
+  k2 app data mv <app-id> <from> <to> [--force] [--json]
+                                       Rename or move inside the data folder
+                                       (missing folders are made). Never
+                                       replaces a file without --force, never
+                                       lands inside or replaces a folder.
+
+Who: the App's workspace agent with "Build and run Apps" (without it, rm and
+mv wait for your owner; ls and get are refused), the owner, an Admin.
+
+Exit codes: 0 done, 2 usage error or held for your owner, 3 refused (JSON on
+stderr: data_not_found, data_symlink, data_is_folder, data_exists,
+data_too_large, app_not_running, …).
+EOF
+}
+
+# k2 app data put|ls|get|rm|mv (put 0.46.3; the rest 0.46.4).
 cmd_app_data() {
     local sub="${1:-}"
     shift || true
-    [ "$sub" = put ] || { echo "usage: k2 app data put <app-id> <path> [--to <dir>] [--json]" >&2; exit 2; }
+    case "$sub" in
+        put) _app_data_put "$@" ;;
+        ls|list) _app_data_ls "$@" ;;
+        get) _app_data_get "$@" ;;
+        rm|remove) _app_data_rm "$@" ;;
+        mv|move) _app_data_mv "$@" ;;
+        ""|-h|--help|help) _app_data_usage ;;
+        *) echo "usage: k2 app data put|ls|get|rm|mv <app-id> … (k2 app data --help)" >&2; exit 2 ;;
+    esac
+}
+
+# k2 app data ls <app-id> [<path>] [--json] (0.46.4).
+_app_data_ls() {
+    local app="" path="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_data_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$path" ]; then path="$1"; else echo "usage: k2 app data ls <app-id> [<path>]" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app data ls <app-id> [<path>] [--json]" >&2; exit 2; }
+    _compute_call GET /cli/app/data/ls "app=$(urlencode "$app")&path=$(urlencode "$path")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+def human(n):
+    if n is None:
+        return "-"
+    for u in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or u == "GiB":
+            return ("%d %s" % (n, u)) if u == "B" else ("%.1f %s" % (n, u))
+        n /= 1024.0
+ents = v.get("entries") or []
+print("%s (%s, %d %s)" % (v.get("at"), v.get("kind"), len(ents), "entry" if len(ents) == 1 else "entries"))
+for e in ents:
+    t = e.get("mtime")
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if t else "-"
+    name = e.get("name", "")
+    if e.get("type") == "dir":
+        name += "/"
+    elif e.get("type") == "link":
+        name += " (link: never followed)"
+    print("  %-5s %10s  %16s  %s" % (e.get("type"), human(e.get("size")), when, name))
+if v.get("truncated"):
+    print("  … more than %s entries: list a sub-folder" % v.get("max"))'
+}
+
+# k2 app data get <app-id> <path> [--to <local path> | -] [--json] (0.46.4).
+# Streams 512 KiB pieces into a temp file next to the target, then renames
+# it into place: a failed get never leaves half a file.
+_app_data_get() {
+    local app="" path="" to="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --to) to="${2:-}"; [ -n "$to" ] || { echo "usage: --to <local path> | -" >&2; exit 2; }; shift 2 ;;
+            --to=*) to="${1#--to=}"; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_data_usage; return 0 ;;
+            -) to="-"; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$path" ]; then path="$1"; else echo "usage: k2 app data get <app-id> <path> [--to <local path> | -]" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$path" ]; } && { echo "usage: k2 app data get <app-id> <path> [--to <local path> | -] [--json]" >&2; exit 2; }
+    [ "$to" = "-" ] && [ "$json_out" = 1 ] && { echo "k2 app data get: --json and - (stdout) don't go together" >&2; exit 2; }
+    local name="${path%/}"
+    name="${name##*/}"
+    [ -n "$to" ] || to="./$name"
+    [ "$to" != "-" ] && [ -d "$to" ] && to="${to%/}/$name"
+    local tmp="-"
+    if [ "$to" != "-" ]; then
+        tmp="$(dirname "$to")/.$(basename "$to").k2-part-$$"
+        : > "$tmp" || { echo "{\"error\":\"local_write\",\"hint\":\"can't write $to\"}" >&2; exit 3; }
+        # A refusal mid-way exits: drop the part file, keep the router's
+        # permission-note flush.
+        _K2_DG_TMP="$tmp"
+        trap 'rm -f "$_K2_DG_TMP"; _permission_note_flush' EXIT
+    else
+        exec 3>&1
+    fi
+    local off=0 size="" mtime="" next
+    while :; do
+        _compute_call GET /cli/app/data/get "app=$(urlencode "$app")&path=$(urlencode "$path")&offset=$off"
+        next="$(printf '%s' "$_CP_BODY" | K2_DG_OUT="$tmp" python3 -c '
+import base64, json, os, sys
+v = json.load(sys.stdin)
+data = base64.b64decode(v["data"])
+out = os.environ["K2_DG_OUT"]
+if out == "-":
+    while data:
+        n = os.write(3, data)
+        data = data[n:]
+else:
+    with open(out, "ab") as f:
+        f.write(data)
+print("%d %d %d %d" % (v["size"], v["mtime"], 1 if v["eof"] else 0, v["offset"] + v["length"]))')" || { echo '{"error":"local_write","hint":"writing the piece failed"}' >&2; exit 3; }
+        local s m eof nxt
+        read -r s m eof nxt <<<"$next"
+        if [ -z "$size" ]; then
+            size="$s"; mtime="$m"
+        elif [ "$s" != "$size" ] || [ "$m" != "$mtime" ]; then
+            echo "{\"error\":\"data_changed\",\"hint\":\"$path changed while it was read (size $size → $s): get it again\"}" >&2
+            exit 3
+        fi
+        [ "$eof" = 1 ] && break
+        off="$nxt"
+    done
+    if [ "$to" = "-" ]; then
+        exec 3>&-
+        return 0
+    fi
+    mv -f "$tmp" "$to"
+    trap _permission_note_flush EXIT
+    if [ "$json_out" = 1 ]; then
+        _compute_json K2_CJ_app="$app" K2_CJ_path="$path" K2_CJ_to="$to" K2_CJ_bytes_n="$size" K2_CJ_mtime_n="$mtime"
+        return 0
+    fi
+    echo "saved $path ($size bytes) from App $app to $to"
+}
+
+# k2 app data rm <app-id> <path> [--recursive] [--json] (0.46.4).
+_app_data_rm() {
+    local app="" path="" rec="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -r|--recursive) rec=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_data_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$path" ]; then path="$1"; else echo "usage: k2 app data rm <app-id> <path> [--recursive]" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$path" ]; } && { echo "usage: k2 app data rm <app-id> <path> [--recursive] [--json]" >&2; exit 2; }
+    _app_rt_post /cli/app/data/rm "$(_compute_json K2_CJ_app="$app" K2_CJ_path="$path" K2_CJ_recursive_b="$rec")"
+    _app_grace_done "$json_out"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+kind = {"dir": "folder", "link": "link (not what it pointed to)"}.get(v.get("removed"), v.get("removed"))
+print("removed %s %s from App %s" % (kind, v.get("at"), v.get("app")))'
+}
+
+# k2 app data mv <app-id> <from> <to> [--force] [--json] (0.46.4).
+_app_data_mv() {
+    local app="" from="" to="" force="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -f|--force) force=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_data_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$from" ]; then from="$1"; elif [ -z "$to" ]; then to="$1"; else echo "usage: k2 app data mv <app-id> <from> <to> [--force]" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$from" ] || [ -z "$to" ]; } && { echo "usage: k2 app data mv <app-id> <from> <to> [--force] [--json]" >&2; exit 2; }
+    _app_rt_post /cli/app/data/mv "$(_compute_json K2_CJ_app="$app" K2_CJ_from="$from" K2_CJ_to="$to" K2_CJ_force_b="$force")"
+    _app_grace_done "$json_out"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("moved %s to %s in App %s%s" % (v.get("from"), v.get("to"), v.get("app"), " (replaced what was there)" if v.get("replaced") else ""))'
+}
+
+# k2 app data put <app-id> <path> [--to <dir>] [--json] (0.46.3): copy a file
+# or folder of the App's workspace into its data folder.
+_app_data_put() {
     local app="" from="" to="" json_out=0 dov=""
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -65454,7 +65672,8 @@ EOF
         # Exact match only. Does not steal app-update or update --app.
         case "${2:-}" in
             # App runtime verbs (prd-k2-app-runtime-v1 stage 1) own their --help.
-            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|egress|approvals|approve|deny|guest)
+            # 0.46.4: `k2 app data` too (put|ls|get|rm|mv).
+            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|egress|approvals|approve|deny|guest|data)
                 shift; cmd_app "$@"
                 ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.

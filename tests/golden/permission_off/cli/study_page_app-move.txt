@@ -43,6 +43,9 @@ is one-way. Done = the URL serves the App AND the old service is stopped
        k2 app data put <app-id> <your-data-folder> [--to <dir>]
      Copies a file or folder of your workspace into $K2_APP_DATA. Copy
      again right before step 6 if the old service keeps writing.
+     Your pages write to /data now (not your workspace): read what they
+     wrote back with k2 app data get <app-id> var/answers.json [--to <file>]
+     (k2 app data ls <app-id> [<folder>] lists; rm and mv tidy).
   5. Check it:
        k2 app deployment <app-id> ; k2 app logs <app-id> ; k2 app errors <app-id>
        k2 app inspect <app-id>                 the front port: curl it

@@ -511,6 +511,10 @@ pub(crate) const MANAGE_HELD: &[&str] = &[
     "/cli/app/quota/set",
     // 0.46.3: moving a --cmd service in (its data, its public label).
     "/cli/app/data/put",
+    // 0.46.4: tidying an App's data (ls and get are reads: refused
+    // without the switch, since a held read would answer nobody).
+    "/cli/app/data/rm",
+    "/cli/app/data/mv",
     "/cli/app/label/take",
     "/cli/app/label/return",
 ];

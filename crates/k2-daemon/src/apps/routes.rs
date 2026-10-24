@@ -101,6 +101,7 @@ pub fn is_route(p: &str) -> bool {
         || super::ownership::ROUTES.contains(&p)
         || super::seal::ROUTES.contains(&p)
         || super::resources::ROUTES.contains(&p)
+        || super::data_files::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -112,6 +113,8 @@ pub fn is_post_route(p: &str) -> bool {
         || super::ownership::ROUTES.contains(&p)
         || super::seal::POST_ROUTES.contains(&p)
         || super::resources::POST_ROUTES.contains(&p)
+        // 0.46.4: rm and mv change an App's data; ls and get read it.
+        || super::data_files::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -399,6 +402,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         // 0.46.3: an agent moves its own --cmd service in: its data, then
         // its public label (legacy.rs, data_put.rs, labels.rs).
         "/cli/app/data/put" => super::data_put::route(&who, body),
+        // 0.46.4: read it back, list it, tidy it (data_files.rs).
+        p if super::data_files::ROUTES.contains(&p) => super::data_files::handle(p, &who, body, params),
         p if super::labels::ROUTES.contains(&p) => super::labels::handle(p, &who, body),
         "/cli/app/validate" => validate(&who, body),
         "/cli/app/install" => install(&who, body),

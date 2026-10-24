@@ -819,6 +819,11 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/build",
         // 0.46.3: data in, and the label from its own legacy service.
         "/cli/app/data/put",
+        // 0.46.4: read back, list, remove and rename what the App keeps.
+        "/cli/app/data/ls",
+        "/cli/app/data/get",
+        "/cli/app/data/rm",
+        "/cli/app/data/mv",
         "/cli/app/label/take",
         "/cli/app/label/return",
         "/cli/app/config",

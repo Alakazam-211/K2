@@ -9,6 +9,9 @@ pub mod access;
 pub mod auto_prepare;
 /// `k2 app data put`: a workspace's files into an App's data folder.
 pub mod data_put;
+/// `k2 app data ls|get|rm|mv`: read back and tidy an App's data folder
+/// (0.46.4).
+pub mod data_files;
 /// Box usage, measuring: folder walks, the engine's `disk-usage`,
 /// Postgres, mail, memory, the scan cache (0.46.3, disk guard A1).
 pub mod disk_scan;
@@ -96,3 +99,7 @@ mod cores_tests;
 /// Box usage and the disk guard (prd-app-resources-disk-guard-v1, 0.46.3).
 #[cfg(test)]
 mod disk_guard_tests;
+
+/// `k2 app data ls|get|rm|mv` through the routes (0.46.4).
+#[cfg(test)]
+mod data_files_tests;

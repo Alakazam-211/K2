@@ -51,9 +51,12 @@ fn alive(pid: i32) -> bool {
     if unsafe { libc::kill(pid, 0) } != 0 {
         return false;
     }
+    // kill(0) succeeded: the pid exists (same uid). Only rule out a zombie.
+    // ps may show nothing for a live process: k2-ptyd and the daemon are
+    // non-dumpable, so with /proc mounted hidepid=invisible (K2 compute's
+    // job sandbox) their /proc entries are hidden from non-root.
     let out = Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().expect("ps");
-    let st = String::from_utf8_lossy(&out.stdout);
-    !st.trim().is_empty() && !st.trim_start().starts_with('Z')
+    !String::from_utf8_lossy(&out.stdout).trim_start().starts_with('Z')
 }
 
 fn parent_pid(pid: i32) -> i32 {

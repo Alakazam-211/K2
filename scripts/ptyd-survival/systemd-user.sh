@@ -10,6 +10,12 @@
 #
 #   TARGET=$PWD/target/debug scripts/ptyd-survival/systemd-user.sh
 #
+# The unit keeps the user manager's own XDG_RUNTIME_DIR (/run/user/<uid>):
+# the daemon runs `systemctl --user list-jobs` (is this SIGTERM a stop?)
+# and `systemctl --user stop` (POST /cli/daemon/stop), which need the
+# user bus there. Running as root via sudo: pass XDG_RUNTIME_DIR too, e.g.
+#   sudo -u k2test XDG_RUNTIME_DIR=/run/user/$(id -u k2test) TARGET=… bash systemd-user.sh
+#
 # Cases: systemctl --user restart, kill -9 (Restart=always) keep the agent
 # (L3, L5); systemctl --user stop and POST /cli/daemon/stop end it (L2,
 # P55); a KillMode=control-group unit keeps new sessions in-process
@@ -40,7 +46,6 @@ RestartSec=1
 KillMode=$1
 Environment=HOME=$SCRATCH
 Environment=TMPDIR=$SCRATCH/tmp
-Environment=XDG_RUNTIME_DIR=$SCRATCH/xdg
 Environment=K2_PTYD=1
 Environment=K2_PTYD_BIN=$PTYD
 Environment=K2_TEST_AGENT_SHIM_DIR=$(dirname "$AGENT")

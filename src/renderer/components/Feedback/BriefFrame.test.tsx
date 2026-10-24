@@ -97,6 +97,9 @@ describe('buildBriefSrcDoc (T10)', () => {
     expect(briefStylesheet(fallbackBriefTokens('light'))).toContain('color-scheme:light')
     expect(briefStylesheet(tokens)).toContain('.k2-need{')
     expect(briefStylesheet(tokens)).not.toMatch(/background:\s*(#fff\b|#ffffff|white)/i)
+    // Table cells keep words whole (body's overflow-wrap:anywhere let a
+    // column shrink to one letter per line).
+    expect(briefStylesheet(tokens)).toMatch(/th,td\{[^}]*overflow-wrap:break-word/)
     // Inline data: images survive the presentation pass untouched.
     expect(frameHtml).toContain('src="data:image/png;base64,iVBORw0KGgo="')
   })

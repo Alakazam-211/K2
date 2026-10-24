@@ -128,7 +128,10 @@ export function briefStylesheet(tokens: BriefTokens): string {
     `blockquote{margin:.6em 0;padding:.2em .9em;border-left:3px solid var(--border);color:var(--text2)}`,
     `hr{border:0;border-top:1px solid var(--border);margin:1em 0}`,
     `table{border-collapse:collapse;margin:.6em 0;max-width:100%}`,
-    `th,td{border:1px solid var(--border);padding:.3em .6em;text-align:left;vertical-align:top}`,
+    // Cells wrap at word breaks only: body's `overflow-wrap:anywhere` lets a
+    // table squeeze a column to one character (a word stacked letter by
+    // letter); `break-word` still breaks a long URL but keeps words whole.
+    `th,td{border:1px solid var(--border);padding:.3em .6em;text-align:left;vertical-align:top;overflow-wrap:break-word}`,
     `th{background:color-mix(in srgb,var(--text) 6%,transparent)}`,
     `img{max-width:100%;height:auto}`,
     `figure{margin:.8em 0}figcaption{color:var(--muted);font-size:.9em}`,

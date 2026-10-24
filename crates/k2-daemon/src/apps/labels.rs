@@ -257,7 +257,9 @@ pub(crate) fn give_back_all(app: &AppRow) {
     // 0.46.4: hostnames attached with `k2 app domain add` go back to what
     // they served before, or are removed.
     for d in &cfg.subdomains {
-        super::domains::release(&app.owner_workspace, d);
+        if let Err(e) = super::domains::release(&app.owner_workspace, d) {
+            k2_core::log_debug!("[apps] uninstall {}: {} stays as it was: {e}", app.app_id, d.label);
+        }
     }
     for t in cfg.labels {
         let row = {

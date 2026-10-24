@@ -1547,6 +1547,12 @@ pub fn fetch_artifact_wait(
     wait: Duration,
 ) -> Result<Fetched, (String, String)> {
     let dst = artifact_cache_path(&job.id, job.generation, &info.sha256);
+    // Every 4 MB slice asks again: once the file is in (and hashed), answer
+    // from the cache without a thread.
+    let in_flight = with_bg(|m| m.contains_key(&dst));
+    if !in_flight && cache_holds(&dst, info) {
+        return Ok(Fetched::Ready(dst));
+    }
     let start = with_bg(|m| {
         // A finished pull nobody came back for doesn't stay forever.
         m.retain(|_, b| b.done.is_none() || b.at.elapsed() < Duration::from_secs(3600));

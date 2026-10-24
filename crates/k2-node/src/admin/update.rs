@@ -650,7 +650,7 @@ where
         AuditEntry { event: "drain".into(), cmd_id: Some(cmd_id.to_string()), detail: json!({"what": what, "running": running}), ..Default::default() },
         e.now(),
     );
-    let ex = e.handle();
+    let ex = e.bg_handle();
     let resp = json!({"phase": "draining", "what": what, "running": running, "max_secs": e.drain_max.as_secs()});
     let (what, cmd_id) = (what.to_string(), cmd_id.to_string());
     std::thread::spawn(move || {
@@ -697,7 +697,7 @@ where
 /// Run the health gate in the background (holding the busy lock so no
 /// other root action interleaves). Healthy → record; else roll back.
 pub fn start_gate(e: &Executor) {
-    let ex = e.handle();
+    let ex = e.bg_handle();
     std::thread::spawn(move || {
         // Wait until the request that started us released the lock.
         std::thread::sleep(Duration::from_millis(50));

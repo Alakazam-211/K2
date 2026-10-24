@@ -373,7 +373,7 @@ impl Executor {
 
     /// Another handle on the same executor (shared locks and flags) for a
     /// background thread (the health gate, a drain).
-    pub fn handle(&self) -> Executor {
+    pub fn bg_handle(&self) -> Executor {
         Executor {
             paths: self.paths.clone(),
             platform: self.platform.clone(),

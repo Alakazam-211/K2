@@ -32,7 +32,7 @@ PORT="${K2UC_DAEMON_PORT:-}"
 OLD_ENGINE="${K2UC_OLD_ENGINE:-}"
 ENGINE=/usr/local/libexec/k2-app-engine
 K2APP_UID="$(id -u k2app 2>/dev/null || echo 999)"
-ALL=(t15c-engine-restart t27-adopt-wait t15b-plain-restart t16-protocol2-heal t25-replay)
+ALL=(t15c-engine-restart t27-adopt-wait t15b-plain-restart t16-protocol2-heal t25-replay t26-reload-keeps-ports t15a-rehost-on-update)
 
 say() { printf '[k2uc %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 die() { say "FAIL: $*"; exit 1; }
@@ -153,6 +153,40 @@ t16-protocol2-heal() {
 # waiting_engine (never crashlooping), one owner notice, then the heal and
 # the R43 kick bring it back with no CLI call. An owner-stopped App stays
 # stopped.
+# T26 (S2/R19/R36): `systemctl reload` (the hand-off) with a guarded App:
+# apps.front_port unchanged, no failed front requests, the App's egress
+# proxy answers in the successor (k2 app egress shows it listening).
+t26-reload-keeps-ports() {
+    local f tmp; f="$(front)"; tmp="$(mktemp)"
+    loop_start "$tmp"
+    sudo systemctl reload "$UNIT"
+    wait_for 120 "the successor answers" bash -c "curl -fsS http://127.0.0.1:${PORT:-4646}/boot-status >/dev/null"
+    sleep 5
+    local fails; fails="$(loop_stop "$tmp")"
+    [ "$fails" = "0" ] || die "T26: $fails failed front requests across the reload"
+    [ "$(front)" = "$f" ] || die "T26: the front port moved ($f → $(front))"
+    k2 app egress "$APP" --json | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v.get("proxy",{}).get("listening") or v.get("listening"), v' \
+        || die "T26: the egress proxy isn't listening in the successor"
+    pass "T26: reload kept front port $f and egress; 0 failed requests"
+}
+
+# T15 (a) / S2: an update to a new candidate re-hosts the App on the new
+# engine with no failed requests (K2UC_NEXT_MANIFEST: the next build's
+# daemon-latest.json, file:// is fine).
+t15a-rehost-on-update() {
+    [ -n "${K2UC_NEXT_MANIFEST:-}" ] || die "set K2UC_NEXT_MANIFEST to the next candidate's daemon-latest.json"
+    local tmp; tmp="$(mktemp)"
+    loop_start "$tmp"
+    K2_NO_SERVICE=1 sh "$REPO/scripts/install-daemon.sh" --manifest-url "$K2UC_NEXT_MANIFEST"
+    restart_daemon_like_the_fleet
+    wait_for 900 "the re-host" bash -c "K2_TOKEN=$K2UC_TOKEN $CLI app history $APP --json | grep -q '\"kind\": *\"rehost\"'"
+    sleep 10
+    local fails; fails="$(loop_stop "$tmp")"
+    k2 app rehost status "$APP" --json | python3 -c 'import json,sys; r=json.load(sys.stdin)["rehost"]; assert r["due"] is None and (r["wave"] or {}).get("state")=="done", r' \
+        || die "T15a: the App isn't on the new runtime"
+    pass "T15a: re-hosted on update; $fails failed requests (want 0 outside the boot window)"
+}
+
 t25-replay() {
     local stopped="${K2UC_STOPPED_APP:-}"
     swap_engine_to_old

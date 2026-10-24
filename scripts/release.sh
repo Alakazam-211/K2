@@ -753,10 +753,13 @@ echo "Step 8.5: Building + signing standalone daemon + daemon-latest.json..."
 DIST_DIR="$PROJECT_DIR/target/release/daemon-dist"
 mkdir -p "$DIST_DIR"
 
-# The native standalone daemon is the SAME binary already built in Step 2.5
-# (target/release/k2-daemon). Publish it under its platform-stamped name.
+# The native standalone daemon: the Step 2 daemon rebuilt with the k2-ptyd
+# that Step 3 signed inside K2.app embedded (prd-k2-ptyd-v1 P84, as the
+# Linux daemons do), because the standalone install and the daemon
+# self-update fetch only `k2-daemon`. The app's own nested daemon was
+# already copied and signed and is NOT changed by this rebuild.
 MAC_ASSET="k2-daemon-macos-aarch64"
-cp "$PROJECT_DIR/target/release/k2-daemon" "$DIST_DIR/$MAC_ASSET"
+k2_build_standalone_macos_daemon "$PROJECT_DIR/target/release/bundle/macos/K2.app" "$DIST_DIR/$MAC_ASSET" "$PROJECT_DIR"
 
 # Sign with the Tauri updater key (minisign-format .sig, identical
 # mechanism to Step 5's K2.app.tar.gz.sig).

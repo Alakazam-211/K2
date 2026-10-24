@@ -206,6 +206,52 @@ k2_daemon_helper_sign() {
     echo "  Signed K2 Daemon.app (+ k2-ptyd)."
 }
 
+# k2_build_standalone_macos_daemon APP OUT [PROJECT_DIR]
+# k2-ptyd (prd-k2-ptyd-v1 P84) for the STANDALONE macOS daemon download
+# (`k2-daemon-macos-aarch64`: install-daemon.sh, `k2 daemon install`, the
+# daemon self-update). Those fetch only `k2-daemon`, so — as on Linux — the
+# daemon carries k2-ptyd inside it: build.rs embeds the file K2_PTYD_EMBED
+# names, and at run time the daemon writes it to
+# ~/.k2/bin/ptyd/<ver>-<sha12>/k2-ptyd and launches that.
+#
+# The embedded bytes are the k2-ptyd ALREADY SIGNED in APP (Step 3:
+# Developer ID, hardened runtime, no entitlements, dev.k2.app.ptyd), so the
+# copy the daemon writes keeps that signature. Call it after Step 3. The
+# app-bundled daemon is untouched: it was copied into K2 Daemon.app and
+# signed before this rebuild, embeds nothing, and keeps using the nested
+# k2-ptyd beside it. Only target/release/k2-daemon is rebuilt (the
+# k2-daemon crate relinks; build.rs reruns on the env change).
+k2_build_standalone_macos_daemon() {
+    local app="$1" out="$2" project="${3:-$PWD}" ptyd pinfo
+    ptyd="$(k2_daemon_helper_ptyd "$app")"
+    [ -x "$ptyd" ] || { echo "FATAL: no signed k2-ptyd at $ptyd (sign the app first)" >&2; return 1; }
+    codesign --verify --strict "$ptyd" \
+        || { echo "FATAL: $ptyd is not validly signed; refusing to embed it" >&2; return 1; }
+    pinfo="$(codesign -dv "$ptyd" 2>&1)" \
+        || { echo "FATAL: codesign -dv $ptyd failed: $pinfo" >&2; return 1; }
+    grep -q "^Identifier=dev.k2.app.ptyd\$" <<<"$pinfo" \
+        || { echo "FATAL: $ptyd is not dev.k2.app.ptyd; refusing to embed it" >&2; return 1; }
+    (
+        cd "$project" || exit 1
+        # shellcheck source=linux-ptyd-embed.sh
+        . "$project/scripts/linux-ptyd-embed.sh"
+        # The same environment and package set as Step 2's daemon build
+        # (scripts/lib/build-binaries.sh), so only the embed differs.
+        if declare -F k2_mac_build_env >/dev/null; then k2_mac_build_env; fi
+        K2_PTYD_EMBED="$ptyd"
+        K2_REQUIRE_PTYD_EMBED=1
+        export K2_PTYD_EMBED K2_REQUIRE_PTYD_EMBED
+        cargo build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper \
+            || { echo "FATAL: standalone k2-daemon build (embedding k2-ptyd) failed" >&2; exit 1; }
+        assert_daemon_embeds_ptyd "${CARGO_TARGET_DIR:-target}/release/k2-daemon" || exit 1
+        if declare -F assert_daemon_oauth_not_placeholder >/dev/null; then
+            assert_daemon_oauth_not_placeholder "${CARGO_TARGET_DIR:-target}/release/k2-daemon" || exit 1
+        fi
+        cp "${CARGO_TARGET_DIR:-target}/release/k2-daemon" "$out" || exit 1
+    ) || return 1
+    echo "  ✓ Standalone macOS daemon embeds the signed k2-ptyd: $out"
+}
+
 # k2_daemon_helper_verify_shipped_ptyd APP
 # k2-ptyd (prd-k2-ptyd-v1 P2): after notarization + staple, the app users
 # install still carries the nested k2-ptyd intact — same identifier, a

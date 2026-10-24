@@ -34,6 +34,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// This test (and so the daemon binary next to it, same cargo invocation)
+/// was built with `K2_PTYD_EMBED`: the daemon must launch its embedded
+/// k2-ptyd from `~/.k2/bin/ptyd/`, and the harness proves it.
+const EMBEDDED: bool = option_env!("K2_PTYD_EMBED").is_some();
+
 fn target_dir_bin(name: &str) -> PathBuf {
     // target/<profile>/deps/ptyd_survival_integration-<hash> → target/<profile>/<name>
     let exe = std::env::current_exe().expect("current_exe");
@@ -151,12 +156,17 @@ impl Harness {
         self.boots += 1;
         let log = std::fs::File::create(self.home.join(format!("daemon-{}.log", self.boots))).unwrap();
         let agent = bin("K2_PTYD_TEST_AGENT", "k2-ptyd-test-agent");
-        let child = Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_k2-daemon"));
+        // A daemon built with K2_PTYD_EMBED (the release Linux and standalone
+        // macOS daemons, P84) runs the k2-ptyd it carries: no K2_PTYD_BIN.
+        if !EMBEDDED {
+            cmd.env("K2_PTYD_BIN", bin("K2_PTYD_BIN", "k2-ptyd"));
+        }
+        let child = cmd
             .env("HOME", &self.home)
             .env("XDG_RUNTIME_DIR", self.home.join("xdg"))
             .env("TMPDIR", self.home.join("tmp"))
             .env("K2_PTYD", "1")
-            .env("K2_PTYD_BIN", bin("K2_PTYD_BIN", "k2-ptyd"))
             .env("K2_TEST_AGENT_SHIM_DIR", agent.parent().unwrap())
             .env("K2_TUNNEL_LEASE", "off")
             .env("K2_CONNECT_BASE", "http://127.0.0.1:1")
@@ -356,6 +366,18 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
     let pid: i32 = wait_for("agent pid file", Duration::from_secs(15), || std::fs::read_to_string(dir.join("pid")).ok()?.trim().parse().ok());
     h.agent_pid = Some(pid);
     let ptyd = h.ptyd_pid.expect("ptyd launched (the switch is on)");
+    if let Some(embedded) = option_env!("K2_PTYD_EMBED") {
+        // P84: the daemon wrote the k2-ptyd it carries to its versioned path
+        // (and runs that copy): byte-identical to what the build embedded.
+        let want = std::fs::read(embedded).unwrap_or_else(|e| panic!("read {embedded}: {e}"));
+        let copies: Vec<PathBuf> = std::fs::read_dir(h.k2.join("bin/ptyd"))
+            .expect("~/.k2/bin/ptyd exists")
+            .filter_map(|e| e.ok().map(|e| e.path().join("k2-ptyd")))
+            .filter(|p| p.is_file())
+            .collect();
+        assert_eq!(copies.len(), 1, "one versioned k2-ptyd copy: {copies:?}");
+        assert!(std::fs::read(&copies[0]).unwrap() == want, "the versioned copy is the embedded k2-ptyd");
+    }
     assert_eq!(parent_pid(pid), ptyd, "the agent's parent is k2-ptyd, not the daemon");
     assert_ne!(ptyd, h.daemon_pid());
     wait_for("the agent's first served hook call", Duration::from_secs(15), || hook_lines(&dir).iter().any(|(_, r)| served(r)).then_some(()));

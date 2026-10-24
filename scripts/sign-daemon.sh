@@ -19,13 +19,17 @@
 #      right arch, exactly one K2_DAEMON_BUILD marker for this version, no
 #      test-keys, k2-ptyd embedded), then the OAuth bake check
 #      (assert_daemon_oauth_not_placeholder);
-#   3. sign with the update key (scripts/lib/sign-updater.sh: raw minisig
-#      text, trusted comment `timestamp:…\tfile:k2-daemon-linux-<arch>`),
-#      verified against the source tree's public key;
+#   3. sign twice (scripts/lib/sign-updater.sh, each verified against the
+#      source tree's keys): `.sig` with the retired key U1 (raw minisig,
+#      `timestamp:…\tfile:k2-daemon-linux-<arch>`, for installs older than
+#      0.46.4) and `.sig2` with U2 (`…\tversion:<v>`, the only one 0.46.4+
+#      accepts; SS4/SS5);
 # then merge both into daemon-latest.json with scripts/merge-daemon-manifest.py
-# (the same script and output CI's old merge job had, so installs see the
-# same keys and fields) and upload the .sig files, THEN the manifest, so the
-# manifest never lists a daemon whose .sig isn't up yet.
+# (the same script CI's old merge job ran: same keys and fields, plus
+# `sig2`) and upload the .sig/.sig2 files, THEN the manifest, so the
+# manifest never lists a daemon whose signatures aren't up yet. Finally it
+# re-downloads the published manifest and .sig2 files and checks them the
+# way a 0.46.4 install does.
 #
 # What this does NOT fix: a poisoned build. A compromised runner or compute
 # node can still build a bad daemon that passes these byte checks, and this
@@ -183,7 +187,8 @@ for ARCH in "${ARCHES[@]}"; do
     ( # shellcheck source=require-mail-oauth-build-env.sh
       source "$ROOT/scripts/require-mail-oauth-build-env.sh"
       assert_daemon_oauth_not_placeholder "$ASSETS/$A" ) || die "$A: OAuth bake check failed — not signing a placeholder build"
-    k2u_sign u1 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig" raw || die "$A: signing failed"
+    k2u_sign u1 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig" raw || die "$A: U1 signing failed"
+    k2u_sign u2 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig2" raw || die "$A: U2 signing failed"
 done
 
 # 4. Manifest: the released one (Step 9 published it with macos-aarch64),
@@ -199,7 +204,7 @@ python3 -I "$ROOT/scripts/merge-daemon-manifest.py" "$ASSETS/daemon-latest.json"
     "https://github.com/$REPO/releases/download/$TAG" "$ASSETS"
 
 if [ "$DRY" = 1 ]; then
-    for ARCH in "${ARCHES[@]}"; do cp "$ASSETS/k2-daemon-linux-$ARCH.sig" "$OUT/"; done
+    for ARCH in "${ARCHES[@]}"; do cp "$ASSETS/k2-daemon-linux-$ARCH.sig" "$ASSETS/k2-daemon-linux-$ARCH.sig2" "$OUT/"; done
     cp "$ASSETS/daemon-latest.json" "$OUT/"
     log "dry run: signatures + manifest in $OUT (nothing uploaded)"
     exit 0
@@ -209,11 +214,27 @@ fi
 up=()
 for ARCH in "${ARCHES[@]}"; do
     A="k2-daemon-linux-$ARCH"
-    up+=("$ASSETS/$A.sig")
+    up+=("$ASSETS/$A.sig" "$ASSETS/$A.sig2")
     # Files that came from compute aren't on the release yet.
     if [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/$A" ]; then up+=("$ASSETS/$A" "$ASSETS/$A.sha256"); fi
 done
 gh release upload "$TAG" -R "$REPO" "${up[@]}" --clobber
 gh release upload "$TAG" -R "$REPO" "$ASSETS/daemon-latest.json" --clobber
-[ -z "$OUT" ] || cp "$ASSETS"/*.sig "$ASSETS/daemon-latest.json" "$OUT/"
-log "done: $TAG Linux daemons signed; daemon-latest.json lists them"
+[ -z "$OUT" ] || cp "$ASSETS"/*.sig "$ASSETS"/*.sig2 "$ASSETS/daemon-latest.json" "$OUT/"
+
+# 6. What a 0.46.4 install sees: the published manifest's sig2 for each
+# Linux daemon, downloaded, verified with the source tree's UPDATER_KEYS.
+CHECK="$WORK/published"; mkdir -p "$CHECK"
+gh release download "$TAG" -R "$REPO" -p daemon-latest.json -D "$CHECK" --clobber
+for ARCH in "${ARCHES[@]}"; do
+    A="k2-daemon-linux-$ARCH"
+    python3 -I - "$CHECK/daemon-latest.json" "linux-$ARCH" "$(sha256_of "$ASSETS/$A")" "https://github.com/$REPO/releases/download/$TAG/$A.sig2" <<'PY' \
+        || die "published daemon-latest.json linux-$ARCH is wrong (sha256 or sig2): no 0.46.4+ Linux install could update"
+import json, sys
+e = json.load(open(sys.argv[1]))["artifacts"][sys.argv[2]]
+sys.exit(0 if e.get("sha256") == sys.argv[3] and e.get("sig2") == sys.argv[4] else 1)
+PY
+    gh release download "$TAG" -R "$REPO" -p "$A.sig2" -D "$CHECK" --clobber
+    k2u_verify_u2 "$ASSETS/$A" "$CHECK/$A.sig2" "$A" "$VERSION" || die "published $A.sig2 does not verify with UPDATER_KEYS"
+done
+log "done: $TAG Linux daemons signed (U1 + U2); daemon-latest.json lists them; the published sig2 files verify"

@@ -305,6 +305,169 @@ pub async fn probe_install_update() -> Result<InstallUpdateProbe, String> {
     Ok(probe)
 }
 
+// ── Desktop app update, verified with the K2 update keys (SS4) ───────
+//
+// prd-security-sweep-0464-v1 SS4 (option C): the Tauri plugin verifies a
+// download with ONE key, the `signature` field, which carries the retired
+// key U1 for installs older than 0.46.4. This app instead trusts only
+// `k2_release_keys::UPDATER_KEYS` (U2 + the offline backup U3) and reads
+// `k2_signatures` from latest.json. The plugin still finds the update
+// (`check()`, which verifies nothing) and installs the bytes (`install()`,
+// which verifies nothing either); the download and the verify are ours.
+// The webview no longer calls the plugin (no `updater:default`).
+
+/// What the renderer shows for an available update.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AppUpdateAvailable {
+    pub version: String,
+    pub notes: Option<String>,
+}
+
+/// Progress events while downloading (`app-update-progress`).
+#[derive(Debug, Clone, Serialize)]
+struct AppUpdateProgress {
+    downloaded: u64,
+    total: Option<u64>,
+}
+
+struct StagedAppUpdate {
+    update: tauri_plugin_updater::Update,
+    /// Set once downloaded AND verified.
+    verified_bytes: Option<Vec<u8>>,
+}
+
+fn staged_app_update() -> &'static std::sync::Mutex<Option<StagedAppUpdate>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<Option<StagedAppUpdate>>> = std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Refuse before a 100 MB download when the entry has no K2 signature
+/// from a key this build trusts (the full check runs on the bytes).
+fn app_update_has_trusted_signature(raw_json: &serde_json::Value, download_url: &str) -> Result<(), String> {
+    let entry = raw_json
+        .get("platforms")
+        .and_then(|p| p.as_object())
+        .and_then(|p| p.values().find(|e| e.get("url").and_then(|u| u.as_str()) == Some(download_url)))
+        .ok_or_else(|| format!("latest.json lists no platform with url {download_url}"))?;
+    let sigs = entry.get("k2_signatures").and_then(|s| s.as_object()).ok_or_else(|| {
+        format!(
+            "this update has no K2 signature (k2_signatures): releases before {} are signed with the retired key only; download K2 from the website instead",
+            k2_release_keys::FIRST_U2_SIGNED_VERSION
+        )
+    })?;
+    if k2_release_keys::UPDATER_KEYS.iter().any(|k| sigs.contains_key(k.key_id)) {
+        Ok(())
+    } else {
+        Err("this update isn't signed by a key this version of K2 trusts".to_string())
+    }
+}
+
+fn download_app_update(app: &tauri::AppHandle, url: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    use tauri::Emitter;
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("K2-Updater")
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(30 * 60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut resp = client
+        .get(url)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("download {url}: {e}"))?;
+    let total = resp.content_length();
+    let mut out = Vec::with_capacity(total.unwrap_or(0).min(512 * 1024 * 1024) as usize);
+    let mut chunk = vec![0u8; 256 * 1024];
+    let mut last_emit = 0u64;
+    loop {
+        let n = resp.read(&mut chunk).map_err(|e| format!("download {url}: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&chunk[..n]);
+        let done = out.len() as u64;
+        if done - last_emit >= 1024 * 1024 {
+            last_emit = done;
+            let _ = app.emit("app-update-progress", AppUpdateProgress { downloaded: done, total });
+        }
+    }
+    let _ = app.emit("app-update-progress", AppUpdateProgress { downloaded: out.len() as u64, total });
+    Ok(out)
+}
+
+/// Is there a newer K2? (The plugin's `check()`; nothing is verified yet.)
+#[tauri::command]
+pub async fn app_update_check(app: tauri::AppHandle) -> Result<Option<AppUpdateAvailable>, String> {
+    use tauri_plugin_updater::UpdaterExt as _;
+    if k2_client::airgap::enabled_for_client() {
+        return Err(k2_client::airgap::TEACHING.to_string());
+    }
+    let found = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut slot = staged_app_update().lock().map_err(|_| "update state poisoned".to_string())?;
+    Ok(match found {
+        Some(update) => {
+            let info = AppUpdateAvailable { version: update.version.clone(), notes: update.body.clone() };
+            *slot = Some(StagedAppUpdate { update, verified_bytes: None });
+            Some(info)
+        }
+        None => {
+            *slot = None;
+            None
+        }
+    })
+}
+
+/// Download the update found by [`app_update_check`] and verify it with
+/// the K2 update keys (`k2_signatures`: the URL's file name and the
+/// announced version must both be in the signed comment). Returns the key
+/// id that signed it. Nothing unverified is ever kept.
+#[tauri::command]
+pub async fn app_update_download(app: tauri::AppHandle) -> Result<String, String> {
+    let update = staged_app_update()
+        .lock()
+        .map_err(|_| "update state poisoned".to_string())?
+        .as_ref()
+        .map(|s| s.update.clone())
+        .ok_or("no update to download (check for updates first)")?;
+    let url = update.download_url.to_string();
+    let raw = update.raw_json.clone();
+    let version = update.version.clone();
+    app_update_has_trusted_signature(&raw, &url)?;
+    let app2 = app.clone();
+    let url2 = url.clone();
+    let bytes = tokio::task::spawn_blocking(move || download_app_update(&app2, &url2))
+        .await
+        .map_err(|e| e.to_string())??;
+    let v = k2_release_keys::verify_app_update(&raw, &url, &version, &bytes)
+        .map_err(|e| format!("K2 refused this update: {e}"))?;
+    let mut slot = staged_app_update().lock().map_err(|_| "update state poisoned".to_string())?;
+    match slot.as_mut() {
+        Some(s) if s.update.version == version => s.verified_bytes = Some(bytes),
+        _ => return Err("the update changed while downloading; check again".into()),
+    }
+    Ok(v.key_id)
+}
+
+/// Install the downloaded, verified update (the plugin's `install()`).
+#[tauri::command]
+pub async fn app_update_install() -> Result<(), String> {
+    let staged = staged_app_update()
+        .lock()
+        .map_err(|_| "update state poisoned".to_string())?
+        .take()
+        .ok_or("no update to install (download it first)")?;
+    let Some(bytes) = staged.verified_bytes else {
+        return Err("the update isn't downloaded and verified yet".into());
+    };
+    staged.update.install(&bytes).map_err(|e| e.to_string())
+}
+
 /// Broadcast an event from one window to all windows (used for tab sync etc.)
 #[tauri::command]
 pub fn broadcast_sync(

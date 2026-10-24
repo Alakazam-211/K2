@@ -22,6 +22,8 @@ const KNOWN_NOOPS = new Set([
   'stop_bundled_daemon_for_update',
   'restart_app',
   'open_app_devtools',
+  // No in-browser app updates: null = no update.
+  'app_update_check',
 ])
 
 function storageGet(key: string): string | null {

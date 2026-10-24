@@ -3,11 +3,16 @@
 
 Usage: merge-daemon-manifest.py <manifest.json> <release-download-base> <asset-dir>
 
-Run by CI's `merge-daemon-manifest` job (daemon-binaries.yml) after the
-Linux matrix (and by its K2 Compute replacement in 0.46.4; keep one copy of
-these rules). Idempotent: re-runs overwrite the same keys.
+Run on z3mbpZ by scripts/sign-daemon.sh after it signs the Linux daemons
+(0.46.4, SS1; CI's merge job is gone), for GitHub and K2 Compute builds
+alike: keep one copy of these rules. Idempotent: re-runs overwrite the same
+keys.
 
-- `linux-<arch>`: k2-daemon-linux-<arch> (url, sig, sha256), as before.
+- `linux-<arch>`: k2-daemon-linux-<arch> (url, sig, sha256), as before,
+  plus `sig2` (prd-security-sweep-0464-v1 SS4): the URL of the `.sig2`
+  made with the K2 update key U2, the only signature 0.46.4+ installs
+  accept. `sig` (the retired key U1) stays for older installs; their parsers
+  ignore the new field (tests/packaging/daemon-manifest.sh).
 - `k2-app-engine-linux-<arch>` (prd-app-runtime-update-continuity-v1 A1,
   R2): the engine build, `Artifact`-shaped so every daemon's parser reads
   it, under its OWN key. Never nested in or beside a "linux-<arch>" key:
@@ -48,7 +53,9 @@ def main(argv):
         m = json.load(f)
     arts = m.setdefault("artifacts", {})
     for arch in ARCHES:
-        arts[f"linux-{arch}"] = entry(base, assets, f"k2-daemon-linux-{arch}")
+        e = entry(base, assets, f"k2-daemon-linux-{arch}")
+        e["sig2"] = f"{e['url']}.sig2"
+        arts[f"linux-{arch}"] = e
     for arch in ARCHES:
         name = f"k2-app-engine-linux-{arch}"
         if os.path.isfile(os.path.join(assets, name)):

@@ -65,7 +65,13 @@ def mac(pk, data):
 
 def main():
     log()
-    a = sys.argv[1:]
+    # Combined short flags, as real minisign takes them (`-Vm file`).
+    a = []
+    for x in sys.argv[1:]:
+        if len(x) in (3, 4) and x[0] == "-" and x[1:].isalpha():
+            a.extend("-" + c for c in x[1:])
+        else:
+            a.append(x)
     if "-v" in a:
         print("minisign " + os.environ.get("STUB_MINISIGN_VERSION", "0.12"))
         return 0

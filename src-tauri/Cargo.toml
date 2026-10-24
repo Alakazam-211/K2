@@ -24,6 +24,9 @@ path = "src/main.rs"
 # second time in every release build, with different features than the
 # daemon's build.
 k2-client = { path = "../crates/k2-client" }
+# The update-signing key list and verify (SS4): app_update_install checks
+# latest.json `k2_signatures` with it. Tiny, verify-only, not k2-core.
+k2-release-keys = { path = "../crates/k2-release-keys" }
 
 # NOTE: tauri's `unstable` (multiwebview, for the Browser Tab) is pulled in
 # ONLY via the opt-in `browser-pane` cargo feature below — never here.

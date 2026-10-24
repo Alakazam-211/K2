@@ -87,24 +87,78 @@ export K2_RELEASE_AUDIT_DIR="$tmp/audit"
 export K2_UPDATER_SRC_ROOT="$tmp/src"
 : > "$STUB_MINISIGN_LOG"; : > "$STUB_SECURITY_LOG"; : > "$STUB_GH_LOG"
 
-# ── a throwaway U1 key, stored the way the one-time setup stores it ──
-PW="pw-$(python3 -I -c 'import secrets; print(secrets.token_hex(12))')"
+# ── throwaway keys: U1 (the retired key), U2 (new primary), U3 (backup) ──
+rand() { python3 -I -c 'import secrets; print(secrets.token_hex(12))'; }
+PW="pw1-$(rand)"; PW2="pw2-$(rand)"
 mkdir -p "$tmp/gen"
 printf '%s\n' "$PW" | minisign -G -p "$tmp/gen/u1.pub" -s "$tmp/gen/u1.key" >/dev/null
+printf '%s\n' "$PW2" | minisign -G -p "$tmp/gen/u2.pub" -s "$tmp/gen/u2.key" >/dev/null
+printf '%s\n' "pw3-$(rand)" | minisign -G -p "$tmp/gen/u3.pub" -s "$tmp/gen/u3.key" >/dev/null
 mkdir -p "$HOME/.k2-updater"; chmod 700 "$HOME/.k2-updater"
-# Tauri format: base64 of the minisign secret key file, one line.
+# U1 in Tauri format (base64 of the minisign secret key file, one line), as
+# ~/.tauri/k2-updater.key is; U2 as minisign writes it.
 python3 -I -c 'import base64,sys; sys.stdout.write(base64.b64encode(open(sys.argv[1],"rb").read()).decode())' "$tmp/gen/u1.key" > "$HOME/.k2-updater/k2-updater-u1.key"
-chmod 600 "$HOME/.k2-updater/k2-updater-u1.key"
+cp "$tmp/gen/u2.key" "$HOME/.k2-updater/k2-updater-u2.key"
+chmod 600 "$HOME/.k2-updater/k2-updater-u1.key" "$HOME/.k2-updater/k2-updater-u2.key"
 printf '%s' "$PW" > "$STUB_KEYCHAIN/k2-updater-signing-u1"
+printf '%s' "$PW2" > "$STUB_KEYCHAIN/k2-updater-signing-u2"
 KEY_B64_FILE_CONTENT="$(cat "$HOME/.k2-updater/k2-updater-u1.key")"
 KEY_INNER_LINE="$(sed -n 2p "$tmp/gen/u1.key")"
-mkdir -p "$K2_UPDATER_SRC_ROOT/src-tauri"
-python3 -I -c '
-import base64, json, sys
-pk = base64.b64encode(open(sys.argv[1], "rb").read()).decode()
-json.dump({"plugins": {"updater": {"pubkey": pk}}}, open(sys.argv[2], "w"))' "$tmp/gen/u1.pub" "$K2_UPDATER_SRC_ROOT/src-tauri/tauri.conf.json"
-U1_PUB_LINE="$(sed -n 2p "$tmp/gen/u1.pub")"
-U1_ID="$(sed -n 1p "$tmp/gen/u1.pub" | sed 's/.*: //')"
+KEY2_INNER_LINE="$(sed -n 2p "$tmp/gen/u2.key")"
+U1_PUB_LINE="$(sed -n 2p "$tmp/gen/u1.pub")"; U1_ID="$(sed -n 1p "$tmp/gen/u1.pub" | sed 's/.*: //')"
+U2_PUB_LINE="$(sed -n 2p "$tmp/gen/u2.pub")"; U2_ID="$(sed -n 1p "$tmp/gen/u2.pub" | sed 's/.*: //')"
+U3_PUB_LINE="$(sed -n 2p "$tmp/gen/u3.pub")"
+
+# A fixture source tree: copies of the four verifier files, U1 swapped for
+# the throwaway one, then the ceremony's own `pubkeys` writes U2/U3.
+SRC="$K2_UPDATER_SRC_ROOT"
+for f in crates/k2-release-keys/src/lib.rs cli/k2 scripts/install-daemon.sh src-tauri/tauri.conf.json; do
+    mkdir -p "$SRC/$(dirname "$f")"; cp "$ROOT/$f" "$SRC/$f"
+done
+python3 -I - "$SRC" "$U1_PUB_LINE" <<'PY'
+import base64, re, sys
+root, u1 = sys.argv[1:3]
+p = root + "/crates/k2-release-keys/src/lib.rs"
+s = open(p).read()
+s, n = re.subn(r'pub const LEGACY_UPDATER_KEY_B64: &str = "[^"]+";', 'pub const LEGACY_UPDATER_KEY_B64: &str = "%s";' % u1, s)
+assert n == 1
+open(p, "w").write(s)
+PY
+
+echo "== the ceremony writes the public keys into every verifier copy =="
+if bash "$ROOT/scripts/updater-key-ceremony.sh" pubkeys --root "$SRC" "$U2_PUB_LINE" "$U3_PUB_LINE" >"$tmp/cer.out" 2>&1; then
+    pass "pubkeys: written"
+else
+    fail "pubkeys" "$(cat "$tmp/cer.out")"
+fi
+python3 -I - "$SRC" "$U2_PUB_LINE" "$U3_PUB_LINE" "$U2_ID" <<'PY' && pass "the four copies agree (the Rust copies test's rule): primary U2, backup U3, tauri.conf.json = U2" || fail "copies" "see $SRC"
+import base64, json, re, sys
+root, u2, u3, u2id = sys.argv[1:5]
+src = open(root + "/crates/k2-release-keys/src/lib.rs").read()
+block = src[src.index("// BEGIN UPDATER_KEYS"):src.index("// END UPDATER_KEYS")]
+keys = re.findall(r'role: "([a-z]+)",\s*key_id: "([0-9A-F]{16})",\s*public_key_b64: "([^"]+)"', block)
+assert [(k[0], k[2]) for k in keys] == [("primary", u2), ("backup", u3)], keys
+assert keys[0][1] == u2id
+for f, var in (("cli/k2", "_DAEMON_UPDATE_PUBKEYS"), ("scripts/install-daemon.sh", "K2_DAEMON_PUBKEYS")):
+    lines = re.findall(r'^%s="([^"]*)"$' % var, open(root + "/" + f).read(), re.M)
+    assert lines == ["%s %s" % (u2, u3)], (f, lines)
+pk = json.load(open(root + "/src-tauri/tauri.conf.json"))["plugins"]["updater"]["pubkey"]
+assert base64.b64decode(pk).decode().splitlines() == ["untrusted comment: minisign public key: %s" % u2id, u2]
+PY
+cer_refuses() { # <label> <expect> <args…>
+    local label="$1" expect="$2"; shift 2
+    if bash "$ROOT/scripts/updater-key-ceremony.sh" pubkeys --root "$SRC" "$@" >"$tmp/cer.out" 2>&1; then
+        fail "ceremony $label" "accepted"
+    elif grep -q -- "$expect" "$tmp/cer.out"; then
+        pass "ceremony refuses $label"
+    else
+        fail "ceremony $label" "$(cat "$tmp/cer.out")"
+    fi
+}
+cer_refuses "the real U1" "retired key" "RWQFu172RhQR6QBqzmij2E9btDGhDWmpdH+ah1/M4PmuHPINUWvKLf6o" "$U3_PUB_LINE"
+cer_refuses "one key twice" "two different keys" "$U2_PUB_LINE" "$U2_PUB_LINE"
+cer_refuses "garbage" "not a minisign public key" "not-a-key" "$U3_PUB_LINE"
+cer_refuses "a second identical run" "no change" "$U2_PUB_LINE" "$U3_PUB_LINE"
 
 LIB="$ROOT/scripts/lib/sign-updater.sh"
 lib() { bash -c 'source "$1"; shift; "$@"' _ "$LIB" "$@"; }
@@ -142,13 +196,31 @@ base64_dec() { python3 -I -c 'import base64,sys; sys.stdout.write(base64.b64deco
 base64_dec "$tmp/app.sig" > "$tmp/app.raw"
 minisign -V -P "$U1_PUB_LINE" -m "$tmp/K2.app.tar.gz" -x "$tmp/app.raw" -q && pass "b64 verifies once unwrapped" || fail "b64 verify" ""
 
+echo "== k2u_sign u2: version in the signed comment, checked like a 0.46.4 install =="
+lib k2u_sign u2 "$tmp/k2-daemon-macos-aarch64" k2-daemon-macos-aarch64 9.9.9 "$tmp/raw.sig2" raw 2>"$tmp/err" \
+    && pass "U2 signature written" || fail "u2 sign" "$(cat "$tmp/err")"
+python3 -I - "$tmp/raw.sig2" "$U2_ID" <<'PY' && pass "U2: ED, key id U2, trusted comment timestamp + file + version" || fail "u2 format" "$(cat "$tmp/raw.sig2")"
+import base64, re, sys
+lines = open(sys.argv[1]).read().split("\n")
+raw = base64.b64decode(lines[1])
+assert raw[:2] == b"ED" and raw[2:10][::-1].hex().upper() == sys.argv[2]
+assert re.fullmatch(r"trusted comment: timestamp:\d+\tfile:k2-daemon-macos-aarch64\tversion:9\.9\.9", lines[2]), lines[2]
+PY
+lib k2u_verify_u2 "$tmp/k2-daemon-macos-aarch64" "$tmp/raw.sig2" k2-daemon-macos-aarch64 9.9.9 2>/dev/null && pass "k2u_verify_u2 accepts it" || fail "verify_u2" ""
+if lib k2u_verify_u2 "$tmp/k2-daemon-macos-aarch64" "$tmp/raw.sig2" k2-daemon-macos-aarch64 9.9.8 2>/dev/null; then fail "verify_u2 version" "accepted 9.9.8"; else pass "k2u_verify_u2 refuses another version"; fi
+if lib k2u_verify_u2 "$tmp/k2-daemon-macos-aarch64" "$tmp/raw.sig2" k2-daemon-linux-x86_64 9.9.9 2>/dev/null; then fail "verify_u2 file" "accepted"; else pass "k2u_verify_u2 refuses another file"; fi
+if lib k2u_verify_u2 "$tmp/k2-daemon-macos-aarch64" "$tmp/raw.sig" k2-daemon-macos-aarch64 9.9.9 2>/dev/null; then fail "verify_u2 U1" "a U1 signature passed"; else pass "k2u_verify_u2 refuses a U1 signature"; fi
+python3 -I -c 'import base64,sys; sys.stdout.write(base64.b64encode(open(sys.argv[1],"rb").read()).decode())' "$tmp/raw.sig2" > "$tmp/wrapped.sig2"
+lib k2u_verify_u2 "$tmp/k2-daemon-macos-aarch64" "$tmp/wrapped.sig2" k2-daemon-macos-aarch64 9.9.9 2>/dev/null && pass "k2u_verify_u2 reads the base64-wrapped form" || fail "verify_u2 wrapped" ""
+[ "$(lib k2u_slot_key_id u2)" = "$U2_ID" ] && pass "k2u_slot_key_id u2 = the source tree's primary" || fail "slot key id" ""
+
 echo "== the audit log has one line per signature =="
 tsv="$K2_RELEASE_AUDIT_DIR/9.9.9/signatures.tsv"
 python3 -I - "$tsv" "$tmp/k2-daemon-macos-aarch64" "$U1_ID" "${USER:-$(id -un)}" <<'PY' && pass "signatures.tsv: header + asset, sha256, key id, comment (\\t), user" || fail "audit" "$(cat "$tsv")"
 import hashlib, sys
 rows = [l.split("\t") for l in open(sys.argv[1]).read().splitlines()]
 assert rows[0] == ["time", "asset", "sha256", "key_id", "trusted_comment", "user"], rows[0]
-assert len(rows) == 3, rows
+assert len(rows) == 4, rows
 r = rows[1]
 assert r[1] == "k2-daemon-macos-aarch64"
 assert r[2] == hashlib.sha256(open(sys.argv[2], "rb").read()).hexdigest()
@@ -156,27 +228,28 @@ assert r[3] == sys.argv[3]
 assert r[4].startswith("timestamp:") and r[4].endswith("\\tfile:k2-daemon-macos-aarch64"), r[4]
 assert r[5] == sys.argv[4]
 assert rows[2][1] == "K2.app.tar.gz"
+assert rows[3][1] == "k2-daemon-macos-aarch64" and rows[3][4].endswith("\\tversion:9.9.9"), rows[3]
 PY
 
 echo "== the secret never reaches argv or an environment (A7) =="
-python3 -I - "$STUB_MINISIGN_LOG" "$STUB_SECURITY_LOG" "$PW" "$KEY_B64_FILE_CONTENT" "$KEY_INNER_LINE" "$HOME/.k2-updater/k2-updater-u1.key" <<'PY' && pass "password and key: on no argv, in no env; -s is a /dev/fd pipe, never the key file or a temp copy" || fail "leak" "see logs in the test tmp"
+python3 -I - "$STUB_MINISIGN_LOG" "$STUB_SECURITY_LOG" "$PW" "$KEY_B64_FILE_CONTENT" "$KEY_INNER_LINE" "$HOME/.k2-updater/k2-updater-u1.key" "$PW2" "$KEY2_INNER_LINE" "$HOME/.k2-updater/k2-updater-u2.key" <<'PY' && pass "password and key: on no argv, in no env; -s is a /dev/fd pipe, never the key file or a temp copy" || fail "leak" "see logs in the test tmp"
 import json, sys
-mlog, slog, pw, keyfile_b64, key_line, key_path = sys.argv[1:7]
+mlog, slog, pw, keyfile_b64, key_line, key_path, pw2, key2_line, key2_path = sys.argv[1:10]
 calls = [json.loads(l) for l in open(mlog) if l.strip()]
 signs = [c for c in calls if "-S" in c["argv"]]
 assert signs, "no minisign -S call logged"
 for c in calls:
     blob = json.dumps(c)
-    for secret in (pw, keyfile_b64, key_line):
+    for secret in (pw, keyfile_b64, key_line, pw2, key2_line):
         assert secret not in blob, "secret in minisign argv/env: %s" % c["argv"]
     for k in c["env"]:
         assert not k.startswith("TAURI_SIGNING"), k
 for c in signs:
     s = c["argv"][c["argv"].index("-s") + 1]
     assert s.startswith("/dev/fd/"), s
-    assert key_path not in json.dumps(c["argv"])
+    assert key_path not in json.dumps(c["argv"]) and key2_path not in json.dumps(c["argv"])
 sec = open(slog).read()
-assert pw not in sec
+assert pw not in sec and pw2 not in sec
 PY
 
 echo "== refusals: wrong password, wrong key, exported key, old minisign =="
@@ -203,8 +276,16 @@ if TAURI_SIGNING_PRIVATE_KEY_PASSWORD=x lib k2u_env_guard 2>"$tmp/err"; then fai
 lib k2u_env_guard && pass "k2u_env_guard passes a clean env" || fail "env guard clean" ""
 
 echo "== k2u_preflight =="
-lib k2u_preflight 9.9.7 2>"$tmp/err" && pass "preflight passes (self-test signature verifies)" || fail "preflight" "$(cat "$tmp/err")"
-grep -q $'\tk2-preflight-self-test\t' "$K2_RELEASE_AUDIT_DIR/9.9.7/signatures.tsv" && pass "the self-test signature is logged too" || fail "self-test audit" ""
+lib k2u_preflight 9.9.7 2>"$tmp/err" && pass "preflight passes (U1 and U2 self-test signatures verify)" || fail "preflight" "$(cat "$tmp/err")"
+[ "$(grep -c $'\tk2-preflight-self-test\t' "$K2_RELEASE_AUDIT_DIR/9.9.7/signatures.tsv")" = 2 ] && pass "both self-tests are logged" || fail "self-test count" "$(cat "$K2_RELEASE_AUDIT_DIR/9.9.7/signatures.tsv")"
+if K2_UPDATER_SRC_ROOT="$ROOT" lib k2u_preflight 9.9.7 2>"$tmp/err"; then
+    grep -q 'role: "primary"' "$ROOT/crates/k2-release-keys/src/lib.rs" && pass "(real tree already has keys)" || fail "empty UPDATER_KEYS" "preflight passed"
+else
+    grep -qE "ceremony|empty|does not verify|primary" "$tmp/err" && pass "a tree whose UPDATER_KEYS don't hold this U2 (pre-ceremony main) is refused" || fail "empty keys" "$(cat "$tmp/err")"
+fi
+mv "$STUB_KEYCHAIN/k2-updater-signing-u2" "$tmp/kc2.bak"
+if lib k2u_preflight 9.9.7 2>"$tmp/err"; then fail "no u2 keychain" "passed"; else grep -q "k2-updater-signing-u2" "$tmp/err" && pass "no U2 keychain item: refused" || fail "u2 keychain" "$(cat "$tmp/err")"; fi
+mv "$tmp/kc2.bak" "$STUB_KEYCHAIN/k2-updater-signing-u2"
 if STUB_MINISIGN_VERSION=0.9 lib k2u_preflight 9.9.7 2>"$tmp/err"; then fail "old minisign" "passed"; else grep -q "too old" "$tmp/err" && pass "minisign < 0.11 refused" || fail "old minisign" "$(cat "$tmp/err")"; fi
 chmod 644 "$HOME/.k2-updater/k2-updater-u1.key"
 if lib k2u_preflight 9.9.7 2>"$tmp/err"; then fail "key mode" "passed with 644"; else grep -q "mode 600" "$tmp/err" && pass "key file not 600: refused" || fail "key mode" "$(cat "$tmp/err")"; fi
@@ -276,6 +357,8 @@ else
     fail "sign-daemon dry" "$(tail -20 "$tmp/sd.log")"
 fi
 for a in x86_64 aarch64; do
+    lib k2u_verify_u2 "$good/k2-daemon-linux-$a" "$out/k2-daemon-linux-$a.sig2" "k2-daemon-linux-$a" "$V" 2>/dev/null \
+        && pass "linux-$a .sig2: U2, file + version, as 0.46.4 installs check" || fail "linux-$a sig2" ""
     o="$(minisign -V -P "$U1_PUB_LINE" -m "$good/k2-daemon-linux-$a" -x "$out/k2-daemon-linux-$a.sig" -Q 2>&1)" \
         && [[ "$o" == *$'\tfile:k2-daemon-linux-'"$a" ]] && head -1 "$out/k2-daemon-linux-$a.sig" | grep -qx 'untrusted comment: signature from tauri secret key' \
         && pass "linux-$a .sig: raw minisig, verifies, file:k2-daemon-linux-$a" || fail "linux-$a sig" "$o"
@@ -283,14 +366,15 @@ done
 # Byte-compatible: exactly what CI's old merge job wrote for the same inputs.
 cp "$tmp/daemon-latest.json" "$tmp/ci-merge.json"
 python3 -I "$ROOT/scripts/merge-daemon-manifest.py" "$tmp/ci-merge.json" "https://github.com/Alakazam-211/K2/releases/download/v$V" "$good" >/dev/null
-cmp -s "$tmp/ci-merge.json" "$out/daemon-latest.json" && pass "daemon-latest.json is byte-identical to the old CI merge output" || fail "manifest bytes" "$(diff "$tmp/ci-merge.json" "$out/daemon-latest.json" | head)"
-python3 -I - "$out/daemon-latest.json" "$V" <<'PY' && pass "linux entries keep exactly url, sig, sha256 (same keys as 0.46.3)" || fail "manifest fields" "$(cat "$out/daemon-latest.json")"
+cmp -s "$tmp/ci-merge.json" "$out/daemon-latest.json" && pass "daemon-latest.json is exactly what merge-daemon-manifest.py writes (the script CI's merge job ran)" || fail "manifest bytes" "$(diff "$tmp/ci-merge.json" "$out/daemon-latest.json" | head)"
+python3 -I - "$out/daemon-latest.json" "$V" <<'PY' && pass "linux entries keep url, sig, sha256 (0.46.3's fields, same values) and add sig2" || fail "manifest fields" "$(cat "$out/daemon-latest.json")"
 import json, sys
 m = json.load(open(sys.argv[1]))
 for a in ("x86_64", "aarch64"):
     e = m["artifacts"]["linux-" + a]
-    assert sorted(e) == ["sha256", "sig", "url"], e
-    assert e["sig"] == "https://github.com/Alakazam-211/K2/releases/download/v%s/k2-daemon-linux-%s.sig" % (sys.argv[2], a)
+    assert list(e) == ["url", "sig", "sha256", "sig2"], e
+    base = "https://github.com/Alakazam-211/K2/releases/download/v%s/k2-daemon-linux-%s" % (sys.argv[2], a)
+    assert e["url"] == base and e["sig"] == base + ".sig" and e["sig2"] == base + ".sig2"
 assert sorted(m) == ["artifacts", "notes", "pub_date", "version"], sorted(m)
 PY
 sed -n '/^manifest_field() {/,/^}/p' "$SCRIPT_DIR/fixtures/install-daemon-0.46.3-manifest_field.sh" > "$tmp/p0463.sh"
@@ -340,10 +424,10 @@ cp "$good"/k2-daemon-linux-* "$good"/k2-app-engine-linux-* "$rel/"
 cp "$tmp/daemon-latest.json" "$rel/daemon-latest.json"
 : > "$STUB_GH_LOG"
 if K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" >"$tmp/gh.out" 2>&1; then pass "signs from the release and uploads"; else fail "github path" "$(tail -20 "$tmp/gh.out")"; fi
-python3 -I - "$STUB_GH_LOG" <<'PY' && pass "uploads both .sig files before daemon-latest.json" || fail "upload order" "$(grep UPLOAD "$STUB_GH_LOG")"
+python3 -I - "$STUB_GH_LOG" <<'PY' && pass "uploads the .sig and .sig2 files before daemon-latest.json" || fail "upload order" "$(grep UPLOAD "$STUB_GH_LOG")"
 import sys
 ups = [l.split()[1] for l in open(sys.argv[1]) if l.startswith("UPLOAD ")]
-assert set(ups) == {"k2-daemon-linux-x86_64.sig", "k2-daemon-linux-aarch64.sig", "daemon-latest.json"}, ups
+assert set(ups) == {"k2-daemon-linux-x86_64.sig", "k2-daemon-linux-aarch64.sig", "k2-daemon-linux-x86_64.sig2", "k2-daemon-linux-aarch64.sig2", "daemon-latest.json"}, ups
 assert ups[-1] == "daemon-latest.json", ups
 PY
 python3 -I -c 'import json,sys; a=json.load(open(sys.argv[1]))["artifacts"]; sys.exit(0 if {"macos-aarch64","linux-x86_64","linux-aarch64","k2-app-engine-linux-x86_64","k2-app-engine-linux-aarch64"} == set(a) else 1)' "$rel/daemon-latest.json" \
@@ -377,8 +461,124 @@ PY
     cp "$tmp/K2_${V}_x64-setup.exe" "$tmp/setup.exe"
     o="$(minisign -V -P "$U1_PUB_LINE" -m "$tmp/setup.exe" -x "$tmp/w.sig" -Q)" && [[ "$o" == *$'\tfile:setup.exe' ]] \
         && pass "latest.json windows-x86_64 signature verifies (b64, file:setup.exe)" || fail "windows sig" "$o"
+    python3 -I - "$STUB_REL/v$V/latest.json" "$U2_ID" > "$tmp/w.sig2" <<'PY'
+import base64, json, sys
+print(base64.b64decode(json.load(open(sys.argv[1]))["platforms"]["windows-x86_64"]["k2_signatures"][sys.argv[2]]).decode(), end="")
+PY
+    lib k2u_verify_u2 "$tmp/setup.exe" "$tmp/w.sig2" "K2_${V}_x64-setup.exe" "$V" 2>/dev/null \
+        && pass "latest.json windows-x86_64 k2_signatures: U2, file = the URL's setup name, version" || fail "windows k2_signatures" "$(cat "$tmp/w.sig2")"
 else
     fail "windows patch" "$(tail -10 "$tmp/w.out")"
+fi
+
+echo "== installers: a dual-signed release on old and new installs (SS4) =="
+case "$(uname -s)" in Darwin) pos=macos ;; Linux) pos=linux ;; *) pos=unknown ;; esac
+case "$(uname -m)" in arm64|aarch64) parch=aarch64 ;; x86_64|amd64) parch=x86_64 ;; *) parch=unknown ;; esac
+PLAT="$pos-$parch"; DA="k2-daemon-$PLAT"
+inst="$tmp/inst"; mkdir -p "$inst"
+printf 'the new daemon for %s\n' "$PLAT" > "$inst/$DA"
+lib k2u_sign u1 "$inst/$DA" "$DA" 9.9.9 "$inst/$DA.sig" raw 2>/dev/null
+lib k2u_sign u2 "$inst/$DA" "$DA" 9.9.9 "$inst/$DA.sig2" raw 2>/dev/null
+mkman() { # <out> <version> <sig2 file, or "" for none>
+    python3 -I - "$1" "$2" "$3" "$inst/$DA" "$PLAT" <<'PY'
+import hashlib, json, sys
+out, version, sig2, binary, plat = sys.argv[1:6]
+e = {"url": "file://" + binary, "sig": "file://" + binary + ".sig", "sha256": hashlib.sha256(open(binary, "rb").read()).hexdigest()}
+if sig2:
+    e["sig2"] = "file://" + sig2
+json.dump({"version": version, "pub_date": "", "artifacts": {plat: e}}, open(out, "w"), indent=2)
+PY
+}
+mkman "$inst/dual.json" 9.9.9 "$inst/$DA.sig2"
+# 0.46.3's installer: its frozen manifest parser + `minisign -Vm … -p <U1>`.
+old_sig="$(bash -c "source '$tmp/p0463.sh'; manifest_field \"\$(cat '$inst/dual.json')\" '$PLAT' sig")"
+old_url="$(bash -c "source '$tmp/p0463.sh'; manifest_field \"\$(cat '$inst/dual.json')\" '$PLAT' url")"
+if minisign -Vm "${old_url#file://}" -p "$tmp/gen/u1.pub" -x "${old_sig#file://}" >/dev/null 2>&1; then
+    pass "an install that trusts only U1 (0.46.3 install-daemon.sh logic) accepts the dual-signed release"
+else
+    fail "old installer" "sig=$old_sig url=$old_url"
+fi
+new_install() { # <manifest> [env…]: the fixture tree's install-daemon.sh (trusts U2/U3)
+    local m="$1"; shift
+    rm -rf "$tmp/ib"
+    env K2_MANIFEST_URL="file://$m" K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 K2_APP_ENGINE_PATH="$tmp/no-engine" "$@" \
+        sh "$SRC/scripts/install-daemon.sh" >"$tmp/inst.out" 2>&1
+}
+if new_install "$inst/dual.json" && cmp -s "$tmp/ib/k2-daemon" "$inst/$DA"; then
+    pass "an install that trusts only U2 (install-daemon.sh) installs the dual-signed release"
+else
+    fail "new installer" "$(tail -5 "$tmp/inst.out")"
+fi
+inst_refuses() { # <label> <expect> <manifest> [env…]
+    local label="$1" expect="$2" m="$3"; shift 3
+    if new_install "$m" "$@"; then
+        fail "install-daemon.sh $label" "installed"
+    elif ! grep -q -- "$expect" "$tmp/inst.out"; then
+        fail "install-daemon.sh $label" "wrong reason: $(tail -3 "$tmp/inst.out")"
+    elif [ -e "$tmp/ib/k2-daemon" ]; then
+        fail "install-daemon.sh $label" "left a binary"
+    else
+        pass "install-daemon.sh refuses $label"
+    fi
+}
+mkman "$inst/u1only.json" 0.46.3 ""
+inst_refuses "a U1-only release (no sig2)" "retired update key" "$inst/u1only.json"
+mkman "$inst/u1as2.json" 9.9.9 "$inst/$DA.sig"
+inst_refuses "a U1 signature in sig2" "VERIFICATION FAILED" "$inst/u1as2.json"
+mkman "$inst/ver.json" 9.9.10 "$inst/$DA.sig2"
+inst_refuses "a signature for another version" "for version" "$inst/ver.json"
+lib k2u_sign u2 "$inst/$DA" k2-root-helper-linux-x86_64 9.9.9 "$inst/other.sig2" raw 2>/dev/null
+mkman "$inst/file.json" 9.9.9 "$inst/other.sig2"
+inst_refuses "a signature for another file" "is for 'k2-root-helper-linux-x86_64'" "$inst/file.json"
+cp "$inst/$DA" "$inst/tampered"; printf 'x' >> "$inst/tampered"
+python3 -I - "$inst/dual.json" "$inst/tampered" > "$inst/tamper.json" <<'PY'
+import hashlib, json, sys
+m = json.load(open(sys.argv[1]))
+e = next(iter(m["artifacts"].values()))
+e["url"] = "file://" + sys.argv[2]
+e["sha256"] = hashlib.sha256(open(sys.argv[2], "rb").read()).hexdigest()
+print(json.dumps(m))
+PY
+inst_refuses "a changed binary" "VERIFICATION FAILED" "$inst/tamper.json"
+rm -rf "$tmp/ib"
+if env -u K2_MANIFEST_URL K2_VERSION=0.46.3 K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 sh "$SRC/scripts/install-daemon.sh" >"$tmp/inst.out" 2>&1; then
+    fail "install-daemon.sh --version 0.46.3" "ran"
+else
+    grep -q "Versions before 0.46.4" "$tmp/inst.out" && pass "install-daemon.sh --version 0.46.3: refused before any download" || fail "version refusal" "$(cat "$tmp/inst.out")"
+fi
+rm -rf "$tmp/ib"
+if env K2_MANIFEST_URL="file://$inst/dual.json" K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 K2_APP_ENGINE_PATH="$tmp/no-engine" sh "$ROOT/scripts/install-daemon.sh" >"$tmp/inst.out" 2>&1; then
+    grep -q '^K2_DAEMON_PUBKEYS="RW' "$ROOT/scripts/install-daemon.sh" && pass "(this tree already has keys)" || fail "pre-ceremony installer" "installed with no keys"
+else
+    grep -qE "trusts no update key|VERIFICATION FAILED" "$tmp/inst.out" && pass "this tree's install-daemon.sh refuses a release its keys didn't sign (pre-ceremony: trusts nothing)" || fail "pre-ceremony installer" "$(tail -3 "$tmp/inst.out")"
+fi
+
+echo "== k2 daemon install (cli/k2) checks sig2 the same way =="
+cli_install() { # <manifest> [extra args…]
+    local m="$1"; shift
+    rm -rf "$tmp/cb"
+    bash "$SRC/cli/k2" daemon install --manifest-url "file://$m" --bin-dir "$tmp/cb" --no-service "$@" >"$tmp/cli.out" 2>&1
+}
+if cli_install "$inst/dual.json" && cmp -s "$tmp/cb/k2so-daemon" "$inst/$DA"; then
+    pass "k2 daemon install installs the dual-signed release (trusts only U2/U3)"
+else
+    fail "cli install" "$(tail -5 "$tmp/cli.out")"
+fi
+for case_ in "u1only.json:retired update key" "u1as2.json:VERIFICATION FAILED" "ver.json:for version" "file.json:is for 'k2-root-helper" "tamper.json:VERIFICATION FAILED"; do
+    m="${case_%%:*}"; want="${case_#*:}"
+    if cli_install "$inst/$m"; then
+        fail "cli $m" "installed"
+    elif grep -q -- "$want" "$tmp/cli.out" && [ ! -e "$tmp/cb/k2so-daemon" ]; then
+        pass "k2 daemon install refuses $m"
+    else
+        fail "cli $m" "$(tail -3 "$tmp/cli.out")"
+    fi
+done
+rm -rf "$tmp/cb"
+if bash "$SRC/cli/k2" daemon install --version 0.46.3 --bin-dir "$tmp/cb" --no-service >"$tmp/cli.out" 2>&1; then
+    fail "cli --version 0.46.3" "ran"
+else
+    grep -q "Versions before 0.46.4" "$tmp/cli.out" && pass "k2 daemon install --version 0.46.3: refused with the retired-key message" || fail "cli version" "$(cat "$tmp/cli.out")"
 fi
 
 echo "== no signing key outside the helper, no unpinned signer, no key on argv =="
@@ -411,6 +611,21 @@ rh_line=$(grep -n 'bash "$PROJECT_DIR/scripts/sign-root-helper.sh" "${VERSION}"'
 grep -q '^k2u_sign u1 "target/release/bundle/macos/K2.app.tar.gz" K2.app.tar.gz "$VERSION" \\$' "$R" \
     && grep -q '^k2u_sign u1 "$DIST_DIR/$MAC_ASSET" "$MAC_ASSET" "$VERSION" "$DIST_DIR/$MAC_ASSET.sig" raw$' "$R" \
     && pass "release.sh signs the app bundle (b64) and the macOS daemon (raw) through the helper" || fail "release.sh sign calls" ""
+
+for want in \
+    'k2u_sign u2 "target/release/bundle/macos/K2.app.tar.gz" K2.app.tar.gz "$VERSION" \' \
+    'k2u_sign u2 "$DIST_DIR/$MAC_ASSET" "$MAC_ASSET" "$VERSION" "$DIST_DIR/$MAC_ASSET.sig2" raw' \
+    '"k2_signatures": { "${U2_KEY_ID}": "${APP_SIG2_B64}" }' \
+    '"sig2": "${DL_BASE}/${MAC_ASSET}.sig2"' \
+    '"$DIST_DIR/${MAC_ASSET}.sig2"' \
+    'k2_verify_published_u2 || U2_VERIFY_FAILED=1' \
+    '[ -z "$U2_VERIFY_FAILED" ] && [ -z "$DAEMON_SIGN_FAILED" ]'; do
+    grep -qF -- "$want" "$R" && pass "release.sh (dual-sign): $want" || fail "release.sh dual-sign" "missing: $want"
+done
+grep -qF 'k2u_sign u2 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig2" raw' "$ROOT/scripts/sign-daemon.sh" \
+    && pass "sign-daemon.sh signs each Linux daemon with U2 too" || fail "sign-daemon u2" ""
+grep -qF 'k2u_sign u2 "$STAGE/setup.exe" "$WIN_ASSET" "$VERSION" "$STAGE/setup.exe.sig2" raw' "$ROOT/scripts/windows-patch-latest-json.sh" \
+    && pass "the Windows patch signs setup.exe with U2 too" || fail "windows u2" ""
 
 echo
 echo "updater-signing: $pass passed, $fail failed"

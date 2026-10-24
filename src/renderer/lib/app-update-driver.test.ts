@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
-vi.mock('@tauri-apps/plugin-updater', () => ({ check: vi.fn() }))
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }))
 
 import { invoke } from '@tauri-apps/api/core'
-import { check } from '@tauri-apps/plugin-updater'
 import { runTriggeredAppUpdate } from '@/lib/app-update-driver'
 import { setConnectedAirgap } from '@/lib/airgap'
 import { useUpdateStore } from '@/stores/update'
+
+/** Stands in for the Rust `app_update_check` (SS4). */
+const check = vi.fn()
 
 const ZST =
   'https://github.com/Alakazam-211/K2/releases/download/v9.9.9/k2-9.9.9-x86_64.pkg.tar.zst'
@@ -44,6 +46,7 @@ describe('runTriggeredAppUpdate Arch offer', () => {
           download_url: ZST,
         }
       }
+      if (cmd === 'app_update_check') return check()
       throw new Error(`unexpected invoke ${cmd}`)
     })
 
@@ -91,15 +94,13 @@ describe('runTriggeredAppUpdate target version relay (0.46.3)', () => {
       if (cmd === 'probe_install_update') {
         return { kind: 'macos', version: null, has_update: false, download_url: null }
       }
+      if (cmd === 'app_update_check') return check()
+      if (cmd === 'app_update_download') return 'ABCDEF0123456789'
+      if (cmd === 'app_update_install') return null
       if (cmd === 'stop_bundled_daemon_for_update' || cmd === 'relaunch_via_open') return undefined
       throw new Error(`unexpected invoke ${cmd}`)
     })
-    vi.mocked(check).mockResolvedValue({
-      version: '0.46.3',
-      body: null,
-      download: vi.fn(async () => {}),
-      install: vi.fn(async () => {}),
-    } as unknown as Awaited<ReturnType<typeof check>>)
+    check.mockResolvedValue({ version: '0.46.3', notes: null })
 
     await runTriggeredAppUpdate('job-7')
 

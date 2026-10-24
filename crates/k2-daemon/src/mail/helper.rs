@@ -2159,7 +2159,10 @@ mod tests {
             script.contains(&format!("K2_ROOT_HELPER_PUBKEYS=({})", keys.join(" "))),
             "installer keys must equal k2_root_proto::keys::RELEASE_KEYS"
         );
-        assert!(!script.contains(crate::update_routes::UPDATER_PUBKEY_B64), "never the app updater key");
+        assert!(!script.contains(k2_release_keys::LEGACY_UPDATER_KEY_B64), "never an app updater key");
+        for k in k2_release_keys::UPDATER_KEYS {
+            assert!(!script.contains(k.public_key_b64), "never an app updater key");
+        }
         assert!(script.contains(&format!("HELPER_PATH=\"{}\"", k2_root_proto::paths::HELPER_PATH)));
         assert!(
             script.contains(r#"printf '%s ALL=(root) NOPASSWD: %s\nDefaults:%s !requiretty\n'"#)

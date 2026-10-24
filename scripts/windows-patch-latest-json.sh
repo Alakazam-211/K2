@@ -48,6 +48,12 @@ echo "Signing $(basename "$SETUP") for updater..."
 # Base64-wrapped minisig (b64), as the tauri signer wrote it and the Tauri
 # updater reads it; trusted comment file:setup.exe as before.
 k2u_sign u1 "$STAGE/setup.exe" setup.exe "$VERSION" "$STAGE/setup.exe.sig" b64
+# U2 (SS4/SS5): `k2_signatures`, the only signature 0.46.4+ apps read. The
+# asset name is the URL's file name (what the app checks).
+WIN_ASSET="K2_${VERSION}_x64-setup.exe"
+k2u_sign u2 "$STAGE/setup.exe" "$WIN_ASSET" "$VERSION" "$STAGE/setup.exe.sig2" raw
+U2_KEY_ID="$(k2u_slot_key_id u2)"
+SIG2_B64="$(k2u_b64 "$STAGE/setup.exe.sig2")"
 if [ ! -f "$STAGE/setup.exe.sig" ]; then
     echo "ERROR: signer did not write setup.exe.sig" >&2
     ls -la "$STAGE" >&2
@@ -62,14 +68,14 @@ curl -fsSL "https://github.com/${RELEASE_REPO}/releases/download/${TAG}/latest.j
     || curl -fsSL "https://github.com/${RELEASE_REPO}/releases/latest/download/latest.json" \
         -o "$STAGE/latest.json"
 
-python3 - "$STAGE/latest.json" "$SIG_CONTENT" "$SETUP_URL" "$VERSION" <<'PY'
+python3 - "$STAGE/latest.json" "$SIG_CONTENT" "$SETUP_URL" "$VERSION" "$U2_KEY_ID" "$SIG2_B64" <<'PY'
 import json, sys
-path, sig, url, ver = sys.argv[1:5]
+path, sig, url, ver, u2_id, sig2 = sys.argv[1:7]
 with open(path) as f:
     data = json.load(f)
 data["version"] = ver
 plats = data.setdefault("platforms", {})
-plats["windows-x86_64"] = {"signature": sig, "url": url}
+plats["windows-x86_64"] = {"signature": sig, "url": url, "k2_signatures": {u2_id: sig2}}
 with open(path, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")

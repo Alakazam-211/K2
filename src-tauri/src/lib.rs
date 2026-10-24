@@ -1970,6 +1970,10 @@ pub fn run() {
             commands::updater::check_for_update,
             commands::updater::get_current_version,
             commands::updater::probe_install_update,
+            // SS4: app updates verified with the K2 update keys.
+            commands::updater::app_update_check,
+            commands::updater::app_update_download,
+            commands::updater::app_update_install,
             commands::updater::broadcast_sync,
             commands::linux_pkg_update::install_linux_package_update,
             commands::linux_pkg_update::relaunch_after_linux_package_update,

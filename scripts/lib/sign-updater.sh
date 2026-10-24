@@ -5,9 +5,24 @@
 # z3mbpZ only. Sets no shell options.
 #
 #   k2u_env_guard                         die if TAURI_SIGNING_* is in the env
-#   k2u_preflight <version>               key file, keychain item, minisign,
-#                                         and a self-test signature
-#   k2u_sign u1 <file> <asset> <version> <out> raw|b64
+#   k2u_preflight <version>               both key files, keychain items,
+#                                         minisign, a self-test signature each
+#   k2u_sign u1|u2 <file> <asset> <version> <out> raw|b64
+#   k2u_verify_u2 <file> <minisig> <asset> <version>
+#                                         verify with the SOURCE tree's
+#                                         UPDATER_KEYS (file: + version: exact)
+#   k2u_slot_key_id u2                    the U2 key id (k2_signatures key)
+#   k2u_b64 <file>                        one-line base64 of a file
+#
+# Two keys, every release signed with both (prd-security-sweep-0464-v1
+# SS4/SS5, option C, the bridge):
+#   U1  the retired key E9111446F65EBB05, for installs older than 0.46.4:
+#       the old fields (`signature` in latest.json, `.sig` for daemons),
+#       Tauri-signer format, trusted comment "timestamp:…\tfile:<asset>".
+#   U2  the new key (scripts/updater-key-ceremony.sh), the only one 0.46.4+
+#       trusts (with the offline backup U3): `k2_signatures` in latest.json,
+#       `.sig2` for daemons, trusted comment
+#       "timestamp:…\tfile:<asset>\tversion:<x.y.z>".
 #
 # How the secret is handled:
 #   - The key file is read only inside k2u_sign, through a process
@@ -24,7 +39,7 @@
 #     daemon .sig); `b64` writes it base64-wrapped on one line (the Tauri
 #     app updater's `signature` in latest.json and the .app.tar.gz.sig).
 #   - Every signature is verified with the public key from the SOURCE tree
-#     (src-tauri/tauri.conf.json) before it is kept, and is logged to
+#     (crates/k2-release-keys/src/lib.rs) before it is kept, and is logged to
 #     $K2_RELEASE_AUDIT_DIR/<version>/signatures.tsv.
 #
 # TODO(vault, Rosson 2026-10-24): the key and its password belong in
@@ -38,6 +53,8 @@
 # k2u_key_text only.
 #
 # ── One-time setup on z3mbpZ (Rosson, GUI terminal, before 0.46.4) ─────────
+# U2: scripts/updater-key-ceremony.sh generate (docs/release/updater-key-ceremony.md).
+# U1 (today's key, for the bridge):
 #   mkdir -p ~/.k2-updater && chmod 700 ~/.k2-updater
 #   cp ~/.tauri/k2-updater.key ~/.k2-updater/k2-updater-u1.key
 #   chmod 600 ~/.k2-updater/k2-updater-u1.key
@@ -51,6 +68,8 @@
 # Settings (env):
 #   K2_UPDATER_U1_KEY       default ~/.k2-updater/k2-updater-u1.key
 #   K2_UPDATER_U1_KEYCHAIN  default k2-updater-signing-u1 (keychain service)
+#   K2_UPDATER_U2_KEY       default ~/.k2-updater/k2-updater-u2.key
+#   K2_UPDATER_U2_KEYCHAIN  default k2-updater-signing-u2
 #   K2_RELEASE_AUDIT_DIR    default ~/k2-release-audit
 #   K2_UPDATER_SRC_ROOT     the source tree public keys are read from
 #                           (default: this checkout; tests point it at a
@@ -76,6 +95,7 @@ k2u_env_guard() {
 k2u_key_path() {
     case "$1" in
         u1) printf '%s' "${K2_UPDATER_U1_KEY:-$HOME/.k2-updater/k2-updater-u1.key}" ;;
+        u2) printf '%s' "${K2_UPDATER_U2_KEY:-$HOME/.k2-updater/k2-updater-u2.key}" ;;
         *) return 1 ;;
     esac
 }
@@ -83,27 +103,49 @@ k2u_key_path() {
 k2u_keychain_service() {
     case "$1" in
         u1) printf '%s' "${K2_UPDATER_U1_KEYCHAIN:-k2-updater-signing-u1}" ;;
+        u2) printf '%s' "${K2_UPDATER_U2_KEYCHAIN:-k2-updater-signing-u2}" ;;
         *) return 1 ;;
     esac
 }
 
+# Public keys from the SOURCE tree (crates/k2-release-keys/src/lib.rs),
+# so a signature is only kept when what installs trust accepts it.
+#   k2u_source_keys legacy   U1 (LEGACY_UPDATER_KEY_B64)
+#   k2u_source_keys primary  U2 (the primary in UPDATER_KEYS)
+#   k2u_source_keys all      every UPDATER_KEYS line (U2, U3), one per line
+k2u_source_keys() {
+    python3 -I - "$K2U_SRC_ROOT/crates/k2-release-keys/src/lib.rs" "$1" <<'PY'
+import re, sys
+src, which = open(sys.argv[1]).read(), sys.argv[2]
+if which == "legacy":
+    m = re.search(r'pub const LEGACY_UPDATER_KEY_B64: &str = "([^"]+)";', src)
+    print(m.group(1)) if m else sys.exit("no LEGACY_UPDATER_KEY_B64")
+    sys.exit(0)
+block = src[src.index("// BEGIN UPDATER_KEYS"):src.index("// END UPDATER_KEYS")]
+keys = re.findall(r'role: "([a-z]+)",\s*key_id: "([0-9A-F]{16})",\s*public_key_b64: "([^"]+)"', block)
+if which == "all":
+    print("\n".join(k[2] for k in keys))
+elif which == "primary":
+    p = [k[2] for k in keys if k[0] == "primary"]
+    print(p[0]) if p else sys.exit("UPDATER_KEYS has no primary key: the update-key ceremony (scripts/updater-key-ceremony.sh) has not landed")
+else:
+    sys.exit("which: legacy|primary|all")
+PY
+}
+
 # The public key (the minisign base64 line) a slot's signatures must verify
-# with, from the source tree, so a signature is only kept when what
-# installs trust accepts it.
+# with.
 k2u_pubkey() {
     case "$1" in
-        u1)
-            python3 -I - "$K2U_SRC_ROOT/src-tauri/tauri.conf.json" <<'PY'
-import base64, json, sys
-pk = json.load(open(sys.argv[1]))["plugins"]["updater"]["pubkey"]
-lines = base64.b64decode(pk).decode().splitlines()
-assert lines[0].startswith("untrusted comment:"), "pubkey is not a minisign public key"
-print(lines[1].strip())
-PY
-            ;;
+        u1) k2u_source_keys legacy ;;
+        u2) k2u_source_keys primary ;;
         *) return 1 ;;
     esac
 }
+
+k2u_slot_key_id() { k2u_key_id "$(k2u_pubkey "$1")"; }
+
+k2u_b64() { python3 -I -c 'import base64,sys; sys.stdout.write(base64.b64encode(open(sys.argv[1],"rb").read()).decode())' "$1"; }
 
 # Key id (16 hex, as minisign prints it) of a base64 key or signature line.
 k2u_key_id() {
@@ -163,6 +205,10 @@ k2u_sign() {
             tc="timestamp:$(date +%s)"$'\t'"file:$asset"
             uc="signature from tauri secret key"
             ;;
+        u2)
+            tc="timestamp:$(date +%s)"$'\t'"file:$asset"$'\t'"version:$version"
+            uc="signature from K2 update key"
+            ;;
     esac
     work="$(mktemp -d "${TMPDIR:-/tmp}/k2u-sign.XXXXXX")" || return 1
     # Subshell: pipefail and the pipe stay local; nothing is exported.
@@ -183,6 +229,9 @@ k2u_sign() {
     [ "$algo" = "ED" ] || { k2u_fail "$asset: signature is not prehashed (algorithm '$algo'); installs expect ED"; rm -rf "$work"; return 1; }
     id="$(k2u_key_id "$(sed -n 2p "$work/sig")")"
     [ "$id" = "$want_id" ] || { k2u_fail "$asset: signed by key $id, expected $want_id"; rm -rf "$work"; return 1; }
+    if [ "$slot" = u2 ] && ! k2u_verify_u2 "$file" "$work/sig" "$asset" "$version"; then
+        k2u_fail "$asset: the new U2 signature fails the installers' check"; rm -rf "$work"; return 1
+    fi
     if [ "$form" = "b64" ]; then
         python3 -I -c 'import base64,sys; sys.stdout.write(base64.b64encode(open(sys.argv[1],"rb").read()).decode())' "$work/sig" > "$out.tmp" \
             && mv "$out.tmp" "$out"
@@ -192,6 +241,45 @@ k2u_sign() {
     rm -rf "$work"
     k2u_audit "$version" "$asset" "$file" "$id" "$tc" || { k2u_fail "$asset: audit log write failed"; return 1; }
     k2u_log "$asset signed with $slot ($id), $form → $out"
+}
+
+# k2u_verify_u2 <file> <minisig (raw or base64)> <asset> <version>: what a
+# 0.46.4+ install checks — a key from the source tree's UPDATER_KEYS, a
+# prehashed signature, and a trusted comment with exactly one file:<asset>
+# and exactly one version:<version>.
+k2u_verify_u2() {
+    local file="$1" sigf="$2" asset="$3" version="$4" k tc tmp ok=1
+    tmp="$(mktemp "${TMPDIR:-/tmp}/k2u-v.XXXXXX")" || return 1
+    python3 -I - "$sigf" > "$tmp" <<'PY' || { rm -f "$tmp"; k2u_fail "$sigf is not a minisign signature"; return 1; }
+import base64, sys
+b = open(sys.argv[1], "rb").read().strip()
+if not b.startswith(b"untrusted comment:"):
+    b = base64.b64decode(b"".join(b.split()))
+if not b.startswith(b"untrusted comment:"):
+    sys.exit(1)
+sys.stdout.write(b.decode() + "\n")
+PY
+    if [ "$(sed -n 2p "$tmp" | python3 -I -c 'import base64,sys; print(base64.b64decode(sys.stdin.read().strip())[:2].decode("latin-1"))')" != "ED" ]; then
+        rm -f "$tmp"; k2u_fail "$asset: U2 signature is not prehashed"; return 1
+    fi
+    while IFS= read -r k; do
+        [ -n "$k" ] || continue
+        if tc="$(minisign -V -P "$k" -m "$file" -x "$tmp" -Q 2>/dev/null)"; then
+            if python3 -I -c '
+import sys
+f = sys.argv[1].split("\t")
+files = [x[5:] for x in f if x.startswith("file:")]
+vers = [x[8:] for x in f if x.startswith("version:")]
+sys.exit(0 if files == [sys.argv[2]] and vers == [sys.argv[3]] else 1)' "$(printf '%s\n' "$tc" | tail -n1)" "$asset" "$version"; then
+                ok=0
+            else
+                k2u_fail "$asset: U2 trusted comment '$tc' does not name file:$asset and version:$version"
+            fi
+            break
+        fi
+    done < <(k2u_source_keys all)
+    rm -f "$tmp"
+    return "$ok"
 }
 
 k2u_preflight_slot() {
@@ -220,5 +308,8 @@ k2u_preflight() {
     v="$(minisign -v 2>&1 | sed -n 's/^minisign \([0-9][0-9.]*\).*/\1/p' | head -1)"
     python3 -I -c 'import sys; p=[int(x) for x in sys.argv[1].split(".")]; sys.exit(0 if p >= [0,11] else 1)' "${v:-0}" \
         || { k2u_fail "minisign ${v:-?} is too old; 0.11 or newer signs prehashed by default (brew upgrade minisign)"; return 1; }
+    [ -n "$(k2u_source_keys all 2>/dev/null)" ] \
+        || { k2u_fail "UPDATER_KEYS in crates/k2-release-keys/src/lib.rs is empty: the update-key ceremony (scripts/updater-key-ceremony.sh) has not landed. A release now would ship installs that can never update."; return 1; }
     k2u_preflight_slot u1 "$version" || return 1
+    k2u_preflight_slot u2 "$version" || return 1
 }

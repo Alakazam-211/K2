@@ -83,6 +83,9 @@ k2-core = { path = "../k2-core" }
 # templates, signed-build check). The helper binary itself is its own
 # crate (k2-root-helper) and is never linked here.
 k2-root-proto = { path = "../k2-root-proto" }
+# The update-signing key list and the shared verify (prd-security-sweep-0464-v1
+# SS4): the daemon self-update checks `sig2` with it.
+k2-release-keys = { path = "../k2-release-keys" }
 # K2 vault (prd-k2-vault-v1): the store and its pure fetch policy; the daemon
 # does the I/O (`egress`, `vault_fetch`).
 k2-vault = { path = "../k2-vault" }

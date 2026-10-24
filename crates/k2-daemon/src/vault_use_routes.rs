@@ -157,7 +157,7 @@ fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value,
     if wanted.is_empty() {
         return Err(VaultError::bad_request("secret_required", "name the secret: --secret NAME"));
     }
-    let who = Requester::Session { workspace_id: a.workspace_id.clone(), session_id: c.session_id.clone() };
+    let who = c.requester()?;
     let mut injections = vec![];
     for w in &wanted {
         let sel = selector(c, &w.sel)?;
@@ -277,7 +277,7 @@ fn env_files_dir() -> Result<PathBuf, VaultError> {
 /// A 0600 env file for `docker run --env-file` / `podman run --env-file`,
 /// removed after `ttlSecs` (default 60) or on `done`.
 fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
-    let a = c.actor.agent().ok_or_else(|| VaultError::forbidden("use_env_file_as_agent", "env-file runs for an agent session"))?;
+    c.actor.agent().ok_or_else(|| VaultError::forbidden("use_env_file_as_agent", "env-file runs for an agent session"))?;
     let b: EnvFileBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
     let dir = env_files_dir()?;
     if let Some(done) = b.done.as_deref() {
@@ -291,7 +291,7 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     if b.secrets.is_empty() {
         return Err(VaultError::bad_request("secret_required", "name the secrets: --secret NAME"));
     }
-    let who = Requester::Session { workspace_id: a.workspace_id.clone(), session_id: c.session_id.clone() };
+    let who = c.requester()?;
     let mut lines = String::new();
     for n in &b.secrets {
         let sel = selector(c, &Sel { name: Some(n.clone()), ..Default::default() })?;

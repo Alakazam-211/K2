@@ -270,9 +270,11 @@ pub fn can_grant(actor: &Actor, f: &Facts<'_>, consumer: &Consumer, delivery: De
             let own_ws = consumer.kind == ConsumerKind::Workspace && consumer.id == a.workspace_id;
             let all_ws = consumer.kind == ConsumerKind::Workspace && consumer.id == "*";
             let own_session = consumer.kind == ConsumerKind::Session && a.session_id.as_deref() == Some(consumer.id.as_str());
+            // `k2 job` (item 5, Q14): a job in the agent's own workspace.
+            let own_job = consumer.job_workspace() == Some(a.workspace_id.as_str());
             // IT agents: server secrets to OTHER workspaces only.
             if a.vault_manage && f.scope.kind == ScopeKind::Server {
-                if own_ws || all_ws || own_session {
+                if own_ws || all_ws || own_session || own_job {
                     return Err(denied(
                         "vault_self_grant",
                         "an agent can't grant a server secret to its own workspace; ask the owner",
@@ -291,7 +293,7 @@ pub fn can_grant(actor: &Actor, f: &Facts<'_>, consumer: &Consumer, delivery: De
                 return Ok(());
             }
             can_manage(actor, f)?;
-            let within_own = (own_ws || own_session) && delivery.level() <= default_delivery.level();
+            let within_own = (own_ws || own_session || own_job) && delivery.level() <= default_delivery.level();
             if within_own {
                 return Ok(());
             }

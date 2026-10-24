@@ -72,6 +72,8 @@ pub mod agent_identity_routes;
 pub mod heartbeat_launch;
 pub mod heartbeat_monitor;
 pub mod heartbeat_routes;
+// `k2 job`: daemon-run scheduled jobs (prd-vault-gaps-v1 item 5).
+pub mod jobs;
 pub mod hire_routes;
 pub mod heartbeat_wait;
 pub mod home_avatar_routes;

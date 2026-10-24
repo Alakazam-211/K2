@@ -2058,6 +2058,21 @@ pub(crate) fn post_clone_text_line(conversation_id: &str, project_id: &str, addr
     }
 }
 
+/// One plain K2 line on a workspace's own Thread (its pinned Chat), e.g.
+/// "job collect added" (`k2 job`, item 5 Q14). No wake, no inject, no
+/// push: it is a record for the person who reads that Thread.
+pub(crate) fn post_workspace_note(workspace: &str, body: &str, via: &str) -> Result<(), String> {
+    let resolved = resolve_addr(workspace).map_err(|r| r.body)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (item, links) =
+        overlay::post_thread(&conn, &resolved.conversation_id, &resolved.project_id, &resolved.addr, &resolved.addr, body, via)?;
+    // Publish under the write's lock (bus order = commit order, 0.46.3).
+    crate::overlay_ws::emit_links(&links, &item.doc);
+    drop(conn);
+    Ok(())
+}
+
 /// The card's proposal from `--scope/--for/--delivery/--kind` (KV9).
 fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretProposal, k2_vault::VaultError> {
     let scope = opt_param(params, "scope").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());

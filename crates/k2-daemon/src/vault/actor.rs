@@ -51,6 +51,33 @@ impl VaultCaller {
     pub fn workspace_id(&self) -> Option<&str> {
         self.actor.agent().map(|a| a.workspace_id.as_str())
     }
+
+    /// A `k2 job` run's passport (selector `job-<run id>`, item 5).
+    pub fn is_job(&self) -> bool {
+        self.is_passport()
+            && self.session_id.as_deref().is_some_and(|s| s.starts_with(crate::session_token::JOB_SID_PREFIX))
+    }
+
+    /// Who is asking at use time. A session passport is its session; a job
+    /// run is `Requester::Job`, which reaches only `job:<name>` grants
+    /// (Q13: no implicit workspace grants). A job passport whose run has
+    /// ended is refused (it is revoked at run end anyway).
+    pub fn requester(&self) -> Result<k2_vault::Requester, VaultError> {
+        let a = self
+            .actor
+            .agent()
+            .ok_or_else(|| VaultError::forbidden("use_as_agent", "this runs for an agent session or a job"))?;
+        if self.is_job() {
+            let sid = self.session_id.as_deref().unwrap_or_default();
+            return match crate::jobs::live_run_for_session(sid) {
+                Some(r) if r.workspace_id == a.workspace_id => {
+                    Ok(k2_vault::Requester::Job { workspace_id: r.workspace_id, job_id: r.job_id, name: r.name })
+                }
+                _ => Err(VaultError::forbidden("job_run_ended", "this job run has ended")),
+            };
+        }
+        Ok(k2_vault::Requester::Session { workspace_id: a.workspace_id.clone(), session_id: self.session_id.clone() })
+    }
 }
 
 fn role_of(r: k2_core::connect_users::Role) -> Role {

@@ -38,6 +38,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   compute             Run builds/tests on your owner's other machines; logs are data
   compute-shared      A node many K2 servers share: its queue, what's hidden, the wall
   vault               Secrets: fetch not paste; references; who sets what
+  jobs                Scripts on a schedule: k2 job, job:<name> secrets, logs, kill
   notifications       Your Thread posts may push a phone; who gets it; post less
   data-sources        Checks this server runs: try, propose, approve; triggers; keys
   projects            k2 project: open by default; the per-agent switch

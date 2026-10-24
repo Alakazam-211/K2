@@ -19,6 +19,8 @@ START HERE
                               a plain/root systemd unit: SERVICES K2
                               DOESN'T RUN below
   handing a secret to an agent  k2 vault send NAME --to <agent>
+  a script on a schedule (cron) k2 job add, then grant --to job:<name>:
+                              SCHEDULED SCRIPTS below
   Each verb has its own help: k2 vault <verb> --help.
 
 ASKING: YOU MAKE THE CHOICES
@@ -146,11 +148,25 @@ CLI TOOLS (gh, vercel: tools that read a token from the environment)
      (Linux ~/.local/share, macOS ~/Library/Application Support).
   5. vercel link and vercel env pull write a .env.local of real values:
      delete it right after (k2 vault doctor flags it).
+  A script that runs these tools on a schedule: make it a k2 job and
+  grant --to job:<name> instead of ws:<you> (SCHEDULED SCRIPTS below).
+
+SCHEDULED SCRIPTS (k2 job, not cron)
+  A cron script gets no session, so no vault (and it holds the owner
+  token). Let the daemon run it instead:
+    k2 job add collect --every 15m -- ./scripts/collect.sh
+    k2 vault grant OVH_KEY --to job:collect --as env   (or file, fetch)
+  Each run gets its own K2 identity (k2 vault fetch, k2 db dsn work), only
+  the secrets granted to job:collect (not your workspace's own), your
+  workspace folder as its working folder, and a PATH with k2 on it.
+  k2 job logs collect shows the redacted output; k2 job kill / disable
+  stop it. More: k2 study jobs
 
 SERVICES K2 DOESN'T RUN
-  The vault reaches K2 sessions and k2 publish services only. A plain
-  systemd unit (a root service, a timer) can't use it. Use systemd's
-  encrypted credentials (systemd 250+), from a file delivery:
+  The vault reaches K2 sessions, k2 job runs and k2 publish services. A
+  plain systemd unit (a root service) can't use it; for a timer, use
+  k2 job (above). Use systemd's encrypted credentials (systemd 250+), from
+  a file delivery:
     sudo systemd-creds encrypt --name=api_key "$K2_SECRETS_DIR/API_KEY" \
       /etc/credstore.encrypted/api_key
     unit: LoadCredentialEncrypted=api_key:/etc/credstore.encrypted/api_key

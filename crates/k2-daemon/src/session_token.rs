@@ -292,7 +292,21 @@ impl SessionTokenRegistry {
         cred_mode: CredMode,
         provider: Provider,
     ) -> String {
-        let sid = session_id.to_string();
+        self.mint_sid(&session_id.to_string(), pane_id, principal, cred_mode, provider)
+    }
+
+    /// [`Self::mint`] for a selector that isn't a `SessionId` (a `k2 job`
+    /// run's `job-<run id>`). The selector must hold no `.`.
+    fn mint_sid(
+        &mut self,
+        sid: &str,
+        pane_id: &str,
+        principal: HookPrincipal,
+        cred_mode: CredMode,
+        provider: Provider,
+    ) -> String {
+        debug_assert!(!sid.contains('.'), "a token selector holds no dot");
+        let sid = sid.to_string();
         let secret = new_secret();
         let now = Utc::now();
         // Far-future stamp only — validate does not cut off live agents.
@@ -382,7 +396,12 @@ impl SessionTokenRegistry {
     /// `revoke_user_sessions`). The next call 403s within one request, no
     /// daemon restart.
     pub fn revoke(&mut self, session_id: &SessionId) {
-        let sid = session_id.to_string();
+        self.revoke_sid(&session_id.to_string())
+    }
+
+    /// [`Self::revoke`] by selector string (`k2 job` runs).
+    fn revoke_sid(&mut self, sid: &str) {
+        let sid = sid.to_string();
         let e = self.session_epochs.entry(sid.clone()).or_insert(0);
         *e = e.wrapping_add(1);
         self.records.remove(&sid);
@@ -689,6 +708,21 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/vault/ask",
         "/cli/vault/asks",
         "/cli/vault/unsend",
+        // `k2 job` (prd-vault-gaps-v1 item 5, Q14): an agent manages its
+        // own workspace's jobs; the handler pins the workspace, refuses a
+        // job run's own passport and keeps `pause --all` for people.
+        "/cli/jobs/list",
+        "/cli/jobs/show",
+        "/cli/jobs/logs",
+        "/cli/jobs/add",
+        "/cli/jobs/edit",
+        "/cli/jobs/run",
+        "/cli/jobs/enable",
+        "/cli/jobs/disable",
+        "/cli/jobs/kill",
+        "/cli/jobs/remove",
+        "/cli/jobs/pause",
+        "/cli/jobs/resume",
         "/cli/llm/accounts/login/status",
         "/cli/llm/accounts/add",
         "/cli/llm/accounts/login",
@@ -1150,6 +1184,65 @@ pub fn revoke_session(session_id: &SessionId) {
     save_to_disk(&g);
 }
 
+/// Selector prefix of a `k2 job` run's passport (`job-<run id>`).
+pub const JOB_SID_PREFIX: &str = "job-";
+
+/// Mint the passport of one `k2 job` run (prd-vault-gaps-v1 item 5): an
+/// agent-level principal of the job's workspace, selector `job-<run id>`,
+/// `agent_address` `job:<name>`. It dies at run end
+/// ([`revoke_job_passport`]) and at the next boot
+/// ([`revoke_job_passports_at_boot`]). Minted whatever `K2_HOOK_SCOPED`
+/// says: the alternative for an unattended run is the owner token.
+pub fn mint_job_passport(run_sid: &str, workspace_id: &str, job_name: &str) -> String {
+    assert!(run_sid.starts_with(JOB_SID_PREFIX) && !run_sid.contains('.'), "job passport selector");
+    let principal = HookPrincipal { workspace_uuid: workspace_id.to_string(), agent_address: format!("job:{job_name}") };
+    let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
+    let token = g.mint_sid(run_sid, run_sid, principal, CredMode::Subscription, Provider::Anthropic);
+    save_to_disk(&g);
+    token
+}
+
+/// A run ended: its passport stops working at once. A run id is never
+/// reused, so the record just goes (no epoch is kept: a job every minute
+/// would otherwise grow `hook-sessions.json` forever).
+pub fn revoke_job_passport(run_sid: &str) {
+    let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
+    if g.drop_job_sid(run_sid) {
+        save_to_disk(&g);
+    }
+}
+
+/// Boot: no job run survives a daemon restart, so no job passport does.
+pub fn revoke_job_passports_at_boot() -> usize {
+    let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
+    let n = g.revoke_job_selectors();
+    if n > 0 {
+        save_to_disk(&g);
+    }
+    n
+}
+
+impl SessionTokenRegistry {
+    /// Revoke every `job-…` record (see [`revoke_job_passports_at_boot`]).
+    fn revoke_job_selectors(&mut self) -> usize {
+        let sids: Vec<String> = self.records.keys().filter(|s| s.starts_with(JOB_SID_PREFIX)).cloned().collect();
+        for s in &sids {
+            self.drop_job_sid(s);
+        }
+        sids.len()
+    }
+
+    /// Remove a job run's record (and any epoch). `false` = nothing there.
+    fn drop_job_sid(&mut self, sid: &str) -> bool {
+        if !sid.starts_with(JOB_SID_PREFIX) {
+            return false;
+        }
+        let had = self.records.remove(sid).is_some();
+        self.session_epochs.remove(sid);
+        had
+    }
+}
+
 /// Daemon-wide kill switch via the process registry + persist.
 pub fn revoke_all() {
     let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
@@ -1455,6 +1548,29 @@ mod tests {
             workspace_uuid: "ws-uuid-1".to_string(),
             agent_address: "agent-a".to_string(),
         }
+    }
+
+    /// `k2 job` (item 5): a run's passport validates while the run lives,
+    /// then is gone without leaving an epoch behind; boot drops every
+    /// job record and leaves session records alone.
+    #[test]
+    fn job_passports_live_for_the_run_only() {
+        let mut reg = SessionTokenRegistry::new();
+        let jp = HookPrincipal { workspace_uuid: "ws-1".into(), agent_address: "job:collect".into() };
+        let tok = reg.mint_sid("job-r1", "job-r1", jp.clone(), CredMode::Subscription, Provider::Anthropic);
+        let v = reg.validate_hook(&tok).expect("valid during the run");
+        assert_eq!(v.session_id, "job-r1");
+        assert_eq!(v.principal, jp);
+        let sid = SessionId::new();
+        let stok = reg.mint(&sid, "pane", principal(), CredMode::ApiKey, Provider::Anthropic);
+        let tok2 = reg.mint_sid("job-r2", "job-r2", jp, CredMode::Subscription, Provider::Anthropic);
+        assert!(reg.drop_job_sid("job-r1"));
+        assert!(reg.validate_hook(&tok).is_none(), "gone at run end");
+        assert!(!reg.session_epochs.contains_key("job-r1"), "no epoch kept for a job run");
+        assert!(!reg.drop_job_sid(&sid.to_string()), "only job selectors drop this way");
+        assert_eq!(reg.revoke_job_selectors(), 1);
+        assert!(reg.validate_hook(&tok2).is_none(), "boot revokes job passports");
+        assert!(reg.validate_hook(&stok).is_some(), "session passports stay");
     }
 
     // ── env flag ─────────────────────────────────────────────────────

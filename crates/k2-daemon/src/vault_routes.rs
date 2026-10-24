@@ -22,7 +22,7 @@ use k2_vault::inject::{self, Enc as SignEnc, Inject, Sign};
 use k2_vault::vault::VaultStatus;
 use k2_vault::{
     Actor, AuditQuery, Consumer, ConsumerKind, Delivery, GrantRequest, HumanProof, Kind, ListFilter, LocalVault,
-    Namespace, PolicyPatch, PutMode, PutRequest, Requester, Scope, ScopeKind, SecretBytes, SecretMeta, SecretStore,
+    Namespace, PolicyPatch, PutMode, PutRequest, Scope, ScopeKind, SecretBytes, SecretMeta, SecretStore,
     Selector, Use, VaultError,
 };
 use serde::Deserialize;
@@ -101,6 +101,10 @@ pub const PASSPORT_DENIED: &[&str] = &[
     ROLLBACK,
     RESTORE,
 ];
+
+/// The only vault routes a `k2 job` run's passport may use (item 5).
+pub const JOB_ROUTES: &[&str] =
+    &[STATUS, GET, crate::vault_use_routes::FETCH, crate::vault_use_routes::ENV_FILE];
 
 /// Request bodies are small JSON (fetch bodies above 64 KiB go by file).
 pub const MAX_BODY: usize = 96 * 1024;
@@ -409,6 +413,15 @@ pub fn handle_on(
             "this is for the owner, from Settings → Vault or a terminal outside K2; agents can't do it",
         ));
     }
+    // A `k2 job` run (item 5) uses secrets; it never manages them. Granting
+    // itself more, or listing the workspace's secrets, would undo Q13.
+    if c.is_job() && !JOB_ROUTES.contains(&path) {
+        return refuse(&err(
+            "job_use_only",
+            403,
+            "a job uses its granted secrets (k2 vault fetch, env-file, get); managing them is for its workspace's agent or a person",
+        ));
+    }
     if crate::vault_use_routes::is_route(path) {
         return crate::vault_use_routes::handle(vault, path, &c, body, params, ingress);
     }
@@ -495,11 +508,7 @@ fn show(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -
         .map(|g| {
             let mut v = serde_json::to_value(g).unwrap_or(Value::Null);
             if let Value::Object(o) = &mut v {
-                if g.consumer.kind == ConsumerKind::Workspace && g.consumer.id != "*" {
-                    o.insert("consumerLabel".into(), json!(format!("ws:{}", crate::vault::workspace_label(&g.consumer.id))));
-                } else {
-                    o.insert("consumerLabel".into(), json!(g.consumer.label()));
-                }
+                o.insert("consumerLabel".into(), json!(consumer_label(c, &g.consumer)));
             }
             v
         })
@@ -1199,7 +1208,20 @@ pub fn consumer_for(c: &VaultCaller, to: &str) -> Result<Consumer, VaultError> {
             let sid = crate::vault_use_routes::published_service_id(c, id)?;
             Ok(Consumer::published_service(sid))
         }
-        _ => Err(err("bad_consumer", 400, "use ws:<name>, ws:*, session:<id> or service:<label>")),
+        "job" => {
+            let (ws, job) = crate::jobs::routes::job_for_grant(c, id)?;
+            Ok(Consumer::job(&ws, &job))
+        }
+        _ => Err(err("bad_consumer", 400, "use ws:<name>, ws:*, session:<id>, service:<label> or job:<name>")),
+    }
+}
+
+/// How people see a grant's consumer (`ws:sales`, `job:collect`).
+fn consumer_label(c: &VaultCaller, consumer: &Consumer) -> String {
+    match consumer.kind {
+        ConsumerKind::Workspace if consumer.id != "*" => format!("ws:{}", crate::vault::workspace_label(&consumer.id)),
+        ConsumerKind::Job => crate::jobs::routes::grant_label(c, consumer),
+        _ => consumer.label(),
     }
 }
 
@@ -1293,11 +1315,11 @@ fn status_change(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8]) -
 
 fn get_value(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
     let b: Sel = parse(body)?;
-    let a = c.actor.agent().ok_or_else(|| {
-        err("use_reveal", 403, "people see a value with reveal (it needs a confirm): k2 vault reveal NAME from a terminal outside K2")
-    })?;
+    if c.actor.agent().is_none() {
+        return Err(err("use_reveal", 403, "people see a value with reveal (it needs a confirm): k2 vault reveal NAME from a terminal outside K2"));
+    }
     let sel = selector(c, &b)?;
-    let who = Requester::Session { workspace_id: a.workspace_id.clone(), session_id: c.session_id.clone() };
+    let who = c.requester()?;
     let r = vault.resolve(&sel, Use::Api, &who)?;
     Ok(json!({
         "valueB64": base64::engine::general_purpose::STANDARD.encode(r.value.expose()),

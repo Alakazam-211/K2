@@ -197,20 +197,67 @@ pub fn materialize(env: &mut HashMap<String, String>, workspace_id: &str, sessio
         }
     }
     let who = Requester::Session { workspace_id: ws.to_string(), session_id: Some(session_id.to_string()) };
-    let items = match vault.spawn_items(&who) {
+    deliver_items(&vault, env, &who, session_id, sandboxed, &mut out);
+    if let Some(d) = &out.dir {
+        DIRS.lock().push((session_id.to_string(), d.clone()));
+    }
+    out
+}
+
+/// Env and file delivery for one `k2 job` run (prd-vault-gaps-v1 item 5):
+/// the same code path as a session ([`deliver_items`]), for
+/// `Requester::Job`, so a run gets exactly its `job:<name>` grants (Q13).
+///
+/// The run's dir is NOT in the session list: the 60 s `sweep_dead` (which
+/// keys on live v2 sessions) can never remove it mid-run. The job runner
+/// owns its lifecycle and calls [`job_ended`] when the run ends; a daemon
+/// restart sweeps it at boot like every other dir.
+///
+/// Item 3 (`agent` delivery) hook: a socket made by [`deliver_items`] for
+/// an `agent` item lives inside `out.dir` (or is listed in `out` by the
+/// builder who adds it), so a job gets it at start and [`job_ended`]
+/// removes it with the dir.
+pub fn materialize_job(env: &mut HashMap<String, String>, workspace_id: &str, job_id: &str, job_name: &str, run_sid: &str) -> Materialized {
+    let mut out = Materialized::default();
+    let Ok(vault) = super::get() else { return out };
+    let who = Requester::Job { workspace_id: workspace_id.to_string(), job_id: job_id.to_string(), name: job_name.to_string() };
+    deliver_items(&vault, env, &who, run_sid, false, &mut out);
+    out
+}
+
+/// A job run ended: its secrets dir (files, and any agent socket) goes.
+pub fn job_ended(m: &Materialized) {
+    if let Some(d) = &m.dir {
+        remove_dir(d);
+    }
+}
+
+/// The shared delivery loop: every env/file item `who` gets, into `env`
+/// and a fresh private dir tagged `tag`. Sessions and job runs both come
+/// through here.
+fn deliver_items(
+    vault: &k2_vault::LocalVault,
+    env: &mut HashMap<String, String>,
+    who: &Requester,
+    tag: &str,
+    sandboxed: bool,
+    out: &mut Materialized,
+) {
+    let session_id = tag;
+    let items = match vault.spawn_items(who) {
         Ok(i) => i,
         Err(e) => {
-            k2_core::log_debug!("[vault] spawn items for {ws}: {}", e.code);
-            return out;
+            k2_core::log_debug!("[vault] spawn items for {}: {}", who.label(), e.code);
+            return;
         }
     };
     if items.is_empty() {
-        return out;
+        return;
     }
     let mut dir: Option<PathBuf> = None;
     for it in items {
         let use_ = if it.delivery == Delivery::Env { Use::Env } else { Use::File };
-        let r = match vault.resolve(&Selector::Id(it.secret_id.clone()), use_, &who) {
+        let r = match vault.resolve(&Selector::Id(it.secret_id.clone()), use_, who) {
             Ok(r) => r,
             Err(e) => {
                 out.skipped.push(format!("{}: {}", it.name, e.code));
@@ -257,7 +304,6 @@ pub fn materialize(env: &mut HashMap<String, String>, workspace_id: &str, sessio
     }
     if let Some(d) = &dir {
         env.insert(SECRETS_DIR_ENV.to_string(), d.display().to_string());
-        DIRS.lock().push((session_id.to_string(), d.clone()));
         out.dir = Some(d.clone());
     }
     if !out.env_names.is_empty() || !out.files.is_empty() || !out.skipped.is_empty() {
@@ -268,7 +314,6 @@ pub fn materialize(env: &mut HashMap<String, String>, workspace_id: &str, sessio
             out.skipped
         );
     }
-    out
 }
 
 /// A `k2v://` reference in owner-set env → its value, when the secret's
@@ -412,6 +457,65 @@ mod tests {
         let out3 = materialize(&mut env3, &ws, "s3", true);
         assert!(out3.dir.is_none());
         assert_eq!(env3.get("AS_ENV").map(String::as_str), Some("env-value-1"));
+    }
+
+    /// Item 5: a job run gets its `job:` grants (env + file) through the
+    /// same delivery path, nothing from the workspace's implicit grants,
+    /// and the 60 s sweep (live v2 sessions) never touches its dir.
+    #[test]
+    fn a_job_run_gets_its_own_grants_and_the_session_sweep_leaves_it_alone() {
+        use k2_vault::{Actor, Consumer, GrantRequest, Kind, Namespace, PutRequest, Scope, SecretBytes};
+        let v = super::super::ensure_test_vault();
+        let ws = uuid::Uuid::new_v4().to_string();
+        let job_id = uuid::Uuid::new_v4().to_string();
+        let put = |name: &str, d: Delivery, val: &str| {
+            let mut r = PutRequest::new(Namespace::User, Scope::workspace(ws.clone()), name, Kind::Generic);
+            r.default_delivery = Some(d);
+            r.hosts = vec!["api.example.com".into()];
+            v.put(r, SecretBytes::from_slice(val.as_bytes()), &Actor::Owner).expect("put");
+        };
+        put("JOB_ENV", Delivery::Env, "job-env-value-1");
+        put("JOB_FILE", Delivery::File, "job-file-value-2");
+        put("WS_ONLY", Delivery::Env, "ws-only-value-3");
+        let grant = |name: &str, d: Delivery| {
+            v.grant(
+                GrantRequest {
+                    selector: k2_vault::Selector::user(Scope::workspace(ws.clone()), name),
+                    consumer: Consumer::job(&ws, &job_id),
+                    delivery: d,
+                    env_name: None,
+                    file_name: None,
+                    hosts_narrowed: None,
+                    expires_at: None,
+                    version: None,
+                },
+                &Actor::Owner,
+            )
+            .expect("grant")
+        };
+        grant("JOB_ENV", Delivery::Env);
+        grant("JOB_FILE", Delivery::File);
+        let mut env = HashMap::new();
+        let run_sid = format!("job-{}", uuid::Uuid::new_v4());
+        let out = materialize_job(&mut env, &ws, &job_id, "collect", &run_sid);
+        assert_eq!(env.get("JOB_ENV").map(String::as_str), Some("job-env-value-1"));
+        assert!(!env.contains_key("WS_ONLY"), "no implicit workspace grant for a job: {env:?}");
+        assert!(!env.values().any(|x| x.contains("ws-only-value-3")));
+        match &out.dir {
+            Some(dir) => {
+                assert_eq!(std::fs::read(dir.join("JOB_FILE")).expect("file"), b"job-file-value-2");
+                // The session sweep sees no live sessions at all: the job dir stays.
+                sweep_dead(&|_| false);
+                assert!(dir.join("JOB_FILE").exists(), "the session sweep never removes a job run's dir");
+                job_ended(&out);
+                assert!(!dir.exists(), "removed at run end");
+            }
+            None => assert!(out.skipped.iter().any(|s| s.contains("no_memory_fs")), "{out:?}"),
+        }
+        // Another job of the workspace gets nothing.
+        let mut env2 = HashMap::new();
+        let out2 = materialize_job(&mut env2, &ws, &uuid::Uuid::new_v4().to_string(), "other", "job-x");
+        assert!(env2.is_empty() && out2.dir.is_none(), "{out2:?}");
     }
 
     #[test]

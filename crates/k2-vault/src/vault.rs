@@ -1293,6 +1293,8 @@ impl LocalVault {
                 return Err(VaultError::bad_request("consumer_reserved", "app and widget grants aren't available yet"))
             }
             ConsumerKind::Workspace | ConsumerKind::Session | ConsumerKind::PublishedService => {}
+            // `k2 job` runs (item 5): user secrets only, id `<ws>/<job>`.
+            ConsumerKind::Job if m.namespace == Namespace::User && g.consumer.job_workspace().is_some() => {}
             ConsumerKind::Engine | ConsumerKind::Daemon if m.namespace == Namespace::System => {}
             // Garden v3 data sources [GV42]: a daemon consumer `source:<id>`
             // may hold a User secret (fetch only, narrowed to one origin by
@@ -1477,6 +1479,9 @@ impl LocalVault {
                 Requester::System(_) => false,
                 Requester::Source { id } => {
                     g.consumer.kind == ConsumerKind::Daemon && g.consumer.id.strip_prefix("source:") == Some(id.as_str())
+                }
+                Requester::Job { workspace_id, job_id, .. } => {
+                    g.consumer.kind == ConsumerKind::Job && g.consumer.id == format!("{workspace_id}/{job_id}")
                 }
             };
             if matches {

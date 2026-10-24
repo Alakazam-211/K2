@@ -1,0 +1,49 @@
+$ k2 study jobs
+exit: 0
+--- stdout
+k2 study jobs — scripts on a schedule, run by the K2 daemon
+
+WHY NOT CRON
+  Cron runs your script with no K2 session: no vault, cron's own PATH
+  (no k2 on it), $HOME as the folder, and the owner token from disk.
+  k2 job runs it from the daemon instead, headless, on Linux and macOS.
+
+  k2 job add collect --every 15m -- ./scripts/collect.sh
+  k2 job add report --cron '0 9 * * 1' --timeout 30m -- python3 report.py
+  k2 job list    k2 job show collect    k2 job logs collect
+
+WHAT A RUN GETS
+  - Its own K2 identity for the run (an agent-level passport of this
+    workspace): k2 vault fetch, k2 db dsn, k2 msg work as in a K2 tab.
+    It dies when the run ends. A run can't make or change jobs, or
+    manage secrets.
+  - Only the secrets granted to job:<name>, not your workspace's own:
+      k2 vault grant OVH_KEY --to job:collect --as env   ($OVH_KEY)
+      k2 vault grant FLEET_SSH --to job:collect --as file
+                                         ($K2_SECRETS_DIR/FLEET_SSH)
+      k2 vault grant STRIPE_KEY --to job:collect        (fetch only)
+    Env and files arrive at start and are gone at the end. You may grant
+    your workspace's secrets to your own jobs up to their default
+    delivery; more is a person's call.
+  - The workspace folder (or --cwd, a folder inside it) as its folder,
+    a clean environment (HOME, PATH with k2 on it, $K2_JOB, $K2_JOB_RUN).
+  - argv, not a shell: write -- sh -c '…' if you need one.
+
+RULES
+  Runs never overlap (a slot that finds one running is skipped and
+  logged). Timeout default 10m, max 6h: SIGTERM to the whole process
+  group, SIGKILL 10 s later. Missed slots (daemon down, laptop asleep) run
+  once if under 12 h late, else they are skipped and logged. Logs are
+  redacted ([k2v:NAME]) and capped at 1 MiB; the last 20 are kept.
+  A daemon restart marks a running run interrupted.
+
+WHO MAY
+  You may add, edit and remove jobs in your own workspace. Each add, edit
+  and removal posts a line on your workspace's Thread, so your person
+  sees it. Stopping: k2 job kill NAME (the run now), k2 job disable NAME,
+  k2 job rm NAME (also removes its grants). k2 job pause --all is for
+  the owner or an admin.
+
+  k2 job --help   k2 study vault
+--- stderr
+--- requests

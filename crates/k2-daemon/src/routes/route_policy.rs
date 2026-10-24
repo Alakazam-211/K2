@@ -711,6 +711,21 @@ pub const ROUTES: &[Route] = &[
     get("/cli/inbox/read", Member),
     post("/cli/inbox/respond", Member),
     get("/cli/inbox/search", Member),
+    // `k2 job` (prd-vault-gaps-v1 item 5): a job runs code unattended as
+    // the daemon user, so logins need Admin; agent passports reach these
+    // through is_agent_verb and are pinned to their own workspace.
+    post("/cli/jobs/add", Admin),
+    post("/cli/jobs/disable", Admin),
+    post("/cli/jobs/edit", Admin),
+    post("/cli/jobs/enable", Admin),
+    post("/cli/jobs/kill", Admin),
+    get("/cli/jobs/list", Admin),
+    get("/cli/jobs/logs", Admin),
+    post("/cli/jobs/pause", Admin),
+    post("/cli/jobs/remove", Admin),
+    post("/cli/jobs/resume", Admin),
+    post("/cli/jobs/run", Admin),
+    get("/cli/jobs/show", Admin),
     // LLM login wallet (Settings → LLMs, `k2 llm accounts`): the
     // `/cli/agents/*` floor. Passports are read-only in the handler.
     // Changing the server default (switch / next) is Admin and above

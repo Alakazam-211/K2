@@ -311,6 +311,10 @@ _cli_tool_id_for_verb() {
         # K2 vault: an `id` tool, so inside a K2 terminal the daemon sees the
         # session passport (agent-level), never the owner token.
         vault) echo "vault" ;;
+        # k2 job (prd-vault-gaps-v1 item 5): id + locked, so inside a K2
+        # terminal the daemon sees the session passport (its own workspace's
+        # jobs only), never the owner token.
+        job|jobs) echo "jobs" ;;
         # K2 projects (0.45.6): an `id` tool, so inside a K2 terminal the
         # daemon sees the session passport, never the owner token, and the
         # agent's "Manage K2 projects" switch applies to its mutations.
@@ -354,7 +358,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar|project) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat|jobs) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -362,7 +366,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat|jobs) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -715,6 +719,13 @@ if [ "${1:-}" = "vault" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
         *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+    esac
+fi
+# `k2 job` / `k2 job <verb> --help` only print help (no daemon needed).
+if [ "${1:-}" = "job" ] || [ "${1:-}" = "jobs" ]; then
+    case "${2:-}" in
+        ""|help|--help|-h) _skip_conn_gate=1 ;;
+        *) for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 usage` / `k2 usage --help` only print help.
@@ -20527,7 +20538,7 @@ k2 vault — secrets for agents, without showing them the value
                                            (no --env-name here: names live on grants)
   k2 vault sign NAME ovh|hmac-sha256|hmac-sha256-ts|none [--sign-header …]
                                            K2 signs fetch requests with the secret
-  k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label> [--as <d>] [--env-name X]
+  k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name> [--as <d>] [--env-name X]
   k2 vault revoke NAME --from <who>        (or --grant <id>)
   k2 vault disable|enable NAME             destroy NAME --yes
   k2 vault fetch --secret NAME [-X M] [-H 'N: v'] [-d @file] URL
@@ -21405,7 +21416,8 @@ k2 vault grant NAME --to <who> [--as <d>] [--env-name X] [--file-name F] [--scop
 Share NAME, or set how one consumer gets it (one grant per consumer and
 delivery; a new one replaces the old).
   --to ws:<name>     a workspace; ws:* = every workspace; session:<id>;
-                     service:<label> (a k2 publish service)
+                     service:<label> (a k2 publish service);
+                     job:<name> (a k2 job; its runs get only these)
   --as fetch|file|env|api   default: the secret's delivery; --env-name alone
                      means env, --file-name alone means file. Never above
                      the secret's ceiling.
@@ -21641,6 +21653,262 @@ EOF
     esac
 }
 
+# ── k2 job (prd-vault-gaps-v1 item 5) ─────────────────────────────────
+_job_usage() {
+    cat <<'EOF'
+k2 job — scheduled jobs the K2 daemon runs (no session, no LLM, no cron)
+
+  k2 job add NAME (--every 15m | --cron '*/15 * * * *') [--timeout 10m]
+             [--cwd <dir>] -- <cmd> [args…]
+  k2 job edit NAME [--every …|--cron …] [--timeout …] [--cwd …] [-- <cmd> …]
+  k2 job list [--all] [--json]          show NAME [--json]
+  k2 job logs NAME [--run ID] [--json]  run NAME (same: run-now)
+  k2 job enable|disable NAME            (same: resume|pause NAME)
+  k2 job kill NAME                      stop the run in progress
+  k2 job rm NAME                        remove it and its secret grants
+  k2 job pause --all | resume --all     every job (owner or admin only)
+  --workspace <name>                    people: which workspace (default:
+                                        the one this folder is in)
+
+Each run gets its own K2 identity (k2 vault fetch, k2 db dsn and k2 msg
+work as in a K2 tab), only the secrets granted to job:NAME
+(k2 vault grant KEY --to job:NAME --as env|file|fetch), the workspace
+folder as its working folder, and a PATH with k2 on it. No shell unless
+you write one: -- sh -c '…'. Runs never overlap. The timeout (default
+10m, max 6h) stops the whole process group. Logs are redacted
+([k2v:NAME]) and capped at 1 MiB; the last 20 are kept.
+Agents may add jobs in their own workspace; each add, edit and removal
+posts a line on the workspace's Thread.
+More: k2 study jobs
+EOF
+}
+
+_job_exit_for() {
+    case "$1" in
+        200) echo 0 ;;
+        400|413) echo 2 ;;
+        401|403) echo 3 ;;
+        404) echo 4 ;;
+        *) echo 1 ;;
+    esac
+}
+
+# _job_call GET|POST <route> [json|query] → _SC_BODY/_SC_STATUS; fails loud.
+_job_call() {
+    local method="$1" route="$2" payload="${3:-}"
+    _sidecar_split "$(_sidecar_send "$method" "/cli/jobs/${route}" "$payload")"
+    if [ "$_SC_STATUS" != "200" ]; then
+        if [ "$_SC_STATUS" = "000" ]; then
+            echo "daemon_unreachable: the K2 daemon did not answer" >&2
+            exit 1
+        fi
+        printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    e = json.loads(raw).get("error") or {}
+    print("%s: %s" % (e.get("code", "error"), e.get("hint", "")) if isinstance(e, dict) else str(e), file=sys.stderr)
+except Exception:
+    print(raw[:300] or "the daemon did not answer", file=sys.stderr)
+'
+        exit "$(_job_exit_for "$_SC_STATUS")"
+    fi
+}
+
+_job_render_list() {
+    printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+jobs = v.get("jobs") or []
+if v.get("paused"):
+    print("ALL JOBS PAUSED by %s (k2 job resume --all)" % (v.get("pausedBy") or "?"))
+if not jobs:
+    print("no jobs (k2 job add NAME --every 15m -- <cmd>)")
+    sys.exit(0)
+print("%-24s %-22s %-8s %-28s %s" % ("NAME", "SCHEDULE", "STATE", "LAST RUN", "COMMAND"))
+for j in jobs:
+    state = "running" if j.get("running") else ("on" if j.get("enabled") else "off")
+    last = j.get("lastRun") or {}
+    lr = ("%s %s" % (last.get("outcome", ""), (last.get("startedAt") or "")[5:16])) if last else "-"
+    name = j.get("name", "")
+    if v.get("all") or len({x.get("workspace") for x in jobs}) > 1:
+        name = "%s/%s" % (j.get("workspace"), name)
+    cmd = j.get("command", "")
+    if len(cmd) > 60:
+        cmd = cmd[:57] + "..."
+    print("%-24s %-22s %-8s %-28s %s" % (name, j.get("schedule", ""), state, lr, cmd))
+'
+}
+
+_job_render_show() {
+    printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+j = json.load(sys.stdin).get("job") or {}
+state = "running (run %s)" % j["running"] if j.get("running") else ("on" if j.get("enabled") else "off")
+print("job:        %s (workspace %s)" % (j.get("name"), j.get("workspace")))
+print("schedule:   %s" % j.get("schedule"))
+print("state:      %s" % state)
+print("next:       %s" % (j.get("next") or "-"))
+print("command:    %s" % j.get("command"))
+print("folder:     %s" % (j.get("cwd") or "(the workspace folder)"))
+print("timeout:    %ss" % j.get("timeoutSecs"))
+print("made by:    %s at %s" % (j.get("createdBy"), j.get("createdAt")))
+if j.get("updatedBy") and j.get("updatedAt") != j.get("createdAt"):
+    print("changed by: %s at %s" % (j.get("updatedBy"), j.get("updatedAt")))
+g = j.get("grants") or []
+print("secrets:    %s" % (", ".join("%s (%s%s)" % (x.get("secret"), x.get("delivery"), (" as $" + x["envName"]) if x.get("envName") else "") for x in g) if g else "none granted (k2 vault grant KEY --to job:%s)" % j.get("name")))
+runs = j.get("runs") or []
+if runs:
+    print()
+    print("%-38s %-16s %-10s %-6s %s" % ("RUN", "OUTCOME", "TRIGGER", "EXIT", "STARTED"))
+    for r in runs:
+        ec = r.get("exitCode")
+        print("%-38s %-16s %-10s %-6s %s" % (r.get("id"), r.get("outcome"), r.get("trigger"), "-" if ec is None else ec, r.get("startedAt")))
+'
+}
+
+cmd_job() {
+    local sub="${1:-}"
+    case "$sub" in
+        ""|help|--help|-h) _job_usage; return 0 ;;
+    esac
+    shift
+    local a
+    for a in "$@"; do
+        [ "$a" = "--" ] && break
+        case "$a" in -h|--help) _job_usage; return 0 ;; esac
+    done
+    local as_json=0 all=0 every="" cron="" timeout="" cwd="" ws="" run_id="" have_cwd=0 have_cmd=0
+    local pos=() argv=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --) shift; have_cmd=1; argv=("$@"); break ;;
+            --json) as_json=1; shift ;;
+            --all) all=1; shift ;;
+            --every|--cron|--timeout|--cwd|--workspace|--run)
+                [ -n "${2:-}" ] || { echo "usage: $1 needs a value (k2 job --help)" >&2; exit 2; }
+                case "$1" in
+                    --every) every="$2" ;; --cron) cron="$2" ;; --timeout) timeout="$2" ;;
+                    --cwd) cwd="$2"; have_cwd=1 ;; --workspace) ws="$2" ;; --run) run_id="$2" ;;
+                esac
+                shift 2 ;;
+            --*) echo "usage: unknown flag '$1' (k2 job --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    # People: the workspace this folder is in unless named. Inside a K2
+    # terminal the daemon pins the agent's own workspace.
+    if [ -z "$ws" ] && [ -z "${SCOPED_TOKEN:-}" ]; then
+        ws="$PROJECT"
+    fi
+    local name="${pos[0]:-}"
+    local body
+    body="$(python3 -c '
+import json, sys
+k = ["workspace", "name", "every", "cron", "timeout", "cwd"]
+vals = sys.argv[1:7]
+o = {kk: vv for kk, vv in zip(k, vals) if vv}
+flags = sys.argv[7]
+if "c" in flags:
+    o["cwd"] = sys.argv[6]
+if "a" in flags:
+    o["all"] = True
+if "x" in flags:
+    o["argv"] = sys.argv[8:]
+print(json.dumps(o))' "$ws" "$name" "$every" "$cron" "$timeout" "$cwd" \
+        "$([ "$have_cwd" = 1 ] && printf c)$([ "$all" = 1 ] && printf a)$([ "$have_cmd" = 1 ] && printf x)" \
+        ${argv[@]+"${argv[@]}"})"
+    local q
+    q="$(python3 -c '
+import sys, urllib.parse
+o = {}
+for k, v in zip(["workspace", "name", "run"], sys.argv[1:4]):
+    if v:
+        o[k] = v
+if sys.argv[4] == "1":
+    o["all"] = "1"
+print(urllib.parse.urlencode(o))' "$ws" "$name" "$run_id" "$all")"
+    local need_name=1
+    case "$sub" in
+        list|ls|pause|resume) need_name=0 ;;
+    esac
+    if [ "$need_name" = 1 ] && [ -z "$name" ]; then
+        echo "usage: k2 job $sub NAME (k2 job --help)" >&2
+        exit 2
+    fi
+    case "$sub" in
+        add)
+            [ "$have_cmd" = 1 ] && [ "${#argv[@]}" -gt 0 ] || { echo "usage: k2 job add NAME --every 15m -- <cmd> [args…]" >&2; exit 2; }
+            _job_call POST add "$body"
+            ;;
+        edit)
+            _job_call POST edit "$body" ;;
+        list|ls)
+            _job_call GET list "$q"
+            if [ "$as_json" = 1 ]; then printf '%s\n' "$_SC_BODY"; else _job_render_list; fi
+            return 0 ;;
+        show)
+            _job_call GET show "$q"
+            if [ "$as_json" = 1 ]; then printf '%s\n' "$_SC_BODY"; else _job_render_show; fi
+            return 0 ;;
+        logs|log)
+            _job_call GET logs "$q"
+            if [ "$as_json" = 1 ]; then
+                printf '%s\n' "$_SC_BODY"
+            else
+                printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+r = v.get("run") or {}
+ec = r.get("exitCode")
+print("# run %s  %s  %s  exit %s  %s bytes%s" % (r.get("id"), r.get("startedAt"), r.get("outcome"), "-" if ec is None else ec, r.get("bytes"), "  (tail)" if v.get("truncated") else ""))
+sys.stdout.write(v.get("log") or "")
+'
+            fi
+            return 0 ;;
+        run|run-now)
+            _job_call POST run "$body" ;;
+        enable|disable|kill)
+            _job_call POST "$sub" "$body" ;;
+        rm|remove|delete)
+            _job_call POST remove "$body" ;;
+        pause|resume)
+            if [ "$all" != 1 ] && [ -z "$name" ]; then
+                echo "usage: k2 job $sub NAME | k2 job $sub --all" >&2
+                exit 2
+            fi
+            _job_call POST "$sub" "$body" ;;
+        *) echo "usage: unknown k2 job verb '$sub' (k2 job --help)" >&2; exit 2 ;;
+    esac
+    if [ "$as_json" = 1 ]; then
+        printf '%s\n' "$_SC_BODY"
+        return 0
+    fi
+    printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+sub = sys.argv[1]
+v = json.load(sys.stdin)
+j = v.get("job") if isinstance(v.get("job"), dict) else None
+if sub == "add":
+    print("added %s: %s, runs %s" % (j.get("name"), j.get("schedule"), j.get("command")))
+    print("next run: %s. Grant it secrets with k2 vault grant KEY --to job:%s." % (j.get("next") or "-", j.get("name")))
+elif sub == "edit":
+    print("changed %s: %s, runs %s" % (j.get("name"), j.get("schedule"), j.get("command")))
+elif sub in ("run", "run-now"):
+    print("started %s, run %s (k2 job logs %s --run %s)" % (v.get("job"), v.get("run"), v.get("job"), v.get("run")))
+elif sub == "kill":
+    print("stopping %s, run %s" % (v.get("job"), v.get("run")))
+elif sub in ("rm", "remove", "delete"):
+    print("removed %s (%s secret grant(s) removed)" % (v.get("removed"), v.get("grantsRevoked")))
+elif j is not None:
+    print("%s is %s" % (j.get("name"), "on" if j.get("enabled") else "off"))
+elif "paused" in v:
+    print("every job is %s" % ("paused" if v.get("paused") else "running again"))
+else:
+    print("ok")
+' "$sub"
+}
+
 cmd_vault() {
     local sub="${1:-}"
     case "$sub" in
@@ -21871,7 +22139,7 @@ print(json.dumps(o))' "${pos[1]}" "$ceiling")"
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; m=json.load(sys.stdin).get("secret") or {}; print("%s: %s (at most %s)" % (m.get("name"), m.get("defaultDelivery"), m.get("deliveryCeiling")))'
             ;;
         grant)
-            [ -n "$name" ] && [ -n "$to" ] || { echo "usage: k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label> [--as <d>]" >&2; exit 2; }
+            [ -n "$name" ] && [ -n "$to" ] || { echo "usage: k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name> [--as <d>]" >&2; exit 2; }
             local gj
             gj="$(python3 -c 'import json,sys; o={"to": sys.argv[1]}
 for k,v in (("as",sys.argv[2]),("envName",sys.argv[3]),("fileName",sys.argv[4])):
@@ -28697,6 +28965,7 @@ cmd_help() {
         llm)                      _llm_accounts_usage ;;
         usage)                    _usage_cli_usage ;;
         vault)                    _vault_usage ;;
+        job|jobs)                 _job_usage ;;
         feedback|tickets)         cmd_help_feedback ;;
         mail)                     cmd_help_mail ;;
         calendar|cal)             cmd_help_calendar ;;
@@ -32360,7 +32629,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs"
 
 _study_usage() {
     cat <<'EOF'
@@ -32379,7 +32648,7 @@ Topics:
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
   app-identity  app-surfaces  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
   llm-accounts  publish-framing  compute  compute-shared  vault  notifications  data-sources
-  projects  hooks  agent-hire  garden-data  garden-access  garden-changes  changes  db-upgrade
+  projects  hooks  agent-hire  garden-data  garden-access  garden-changes  changes  db-upgrade  jobs
 EOF
 }
 
@@ -32418,6 +32687,7 @@ _study_title() {
         compute) echo "Compute nodes" ;;
         compute-shared) echo "Shared compute nodes" ;;
         vault) echo "Secrets (the vault)" ;;
+        jobs) echo "Scheduled jobs the daemon runs" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
         projects) echo "K2 projects and who may change them" ;;
@@ -32512,6 +32782,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   compute             Run builds/tests on your owner's other machines; logs are data
   compute-shared      A node many K2 servers share: its queue, what's hidden, the wall
   vault               Secrets: fetch not paste; references; who sets what
+  jobs                Scripts on a schedule: k2 job, job:<name> secrets, logs, kill
   notifications       Your Thread posts may push a phone; who gets it; post less
   data-sources        Checks this server runs: try, propose, approve; triggers; keys
   projects            k2 project: open by default; the per-agent switch
@@ -32573,6 +32844,7 @@ _study_page() {
         garden-data) _study_page_garden_data ;;
         changes) _study_page_changes ;;
         vault) _study_page_vault ;;
+        jobs) _study_page_jobs ;;
         notifications) _study_page_notifications ;;
         projects) _study_page_projects ;;
         hooks) _study_page_hooks ;;
@@ -32982,6 +33254,55 @@ NOT A THREAD PUSH
 EOF
 }
 
+_study_page_jobs() {
+    cat <<'EOF'
+k2 study jobs — scripts on a schedule, run by the K2 daemon
+
+WHY NOT CRON
+  Cron runs your script with no K2 session: no vault, cron's own PATH
+  (no k2 on it), $HOME as the folder, and the owner token from disk.
+  k2 job runs it from the daemon instead, headless, on Linux and macOS.
+
+  k2 job add collect --every 15m -- ./scripts/collect.sh
+  k2 job add report --cron '0 9 * * 1' --timeout 30m -- python3 report.py
+  k2 job list    k2 job show collect    k2 job logs collect
+
+WHAT A RUN GETS
+  - Its own K2 identity for the run (an agent-level passport of this
+    workspace): k2 vault fetch, k2 db dsn, k2 msg work as in a K2 tab.
+    It dies when the run ends. A run can't make or change jobs, or
+    manage secrets.
+  - Only the secrets granted to job:<name>, not your workspace's own:
+      k2 vault grant OVH_KEY --to job:collect --as env   ($OVH_KEY)
+      k2 vault grant FLEET_SSH --to job:collect --as file
+                                         ($K2_SECRETS_DIR/FLEET_SSH)
+      k2 vault grant STRIPE_KEY --to job:collect        (fetch only)
+    Env and files arrive at start and are gone at the end. You may grant
+    your workspace's secrets to your own jobs up to their default
+    delivery; more is a person's call.
+  - The workspace folder (or --cwd, a folder inside it) as its folder,
+    a clean environment (HOME, PATH with k2 on it, $K2_JOB, $K2_JOB_RUN).
+  - argv, not a shell: write -- sh -c '…' if you need one.
+
+RULES
+  Runs never overlap (a slot that finds one running is skipped and
+  logged). Timeout default 10m, max 6h: SIGTERM to the whole process
+  group, SIGKILL 10 s later. Missed slots (daemon down, laptop asleep) run
+  once if under 12 h late, else they are skipped and logged. Logs are
+  redacted ([k2v:NAME]) and capped at 1 MiB; the last 20 are kept.
+  A daemon restart marks a running run interrupted.
+
+WHO MAY
+  You may add, edit and remove jobs in your own workspace. Each add, edit
+  and removal posts a line on your workspace's Thread, so your person
+  sees it. Stopping: k2 job kill NAME (the run now), k2 job disable NAME,
+  k2 job rm NAME (also removes its grants). k2 job pause --all is for
+  the owner or an admin.
+
+  k2 job --help   k2 study vault
+EOF
+}
+
 _study_page_vault() {
     cat <<'EOF'
 k2 study vault — using secrets without seeing them
@@ -33002,6 +33323,8 @@ START HERE
                               a plain/root systemd unit: SERVICES K2
                               DOESN'T RUN below
   handing a secret to an agent  k2 vault send NAME --to <agent>
+  a script on a schedule (cron) k2 job add, then grant --to job:<name>:
+                              SCHEDULED SCRIPTS below
   Each verb has its own help: k2 vault <verb> --help.
 
 ASKING: YOU MAKE THE CHOICES
@@ -33129,11 +33452,25 @@ CLI TOOLS (gh, vercel: tools that read a token from the environment)
      (Linux ~/.local/share, macOS ~/Library/Application Support).
   5. vercel link and vercel env pull write a .env.local of real values:
      delete it right after (k2 vault doctor flags it).
+  A script that runs these tools on a schedule: make it a k2 job and
+  grant --to job:<name> instead of ws:<you> (SCHEDULED SCRIPTS below).
+
+SCHEDULED SCRIPTS (k2 job, not cron)
+  A cron script gets no session, so no vault (and it holds the owner
+  token). Let the daemon run it instead:
+    k2 job add collect --every 15m -- ./scripts/collect.sh
+    k2 vault grant OVH_KEY --to job:collect --as env   (or file, fetch)
+  Each run gets its own K2 identity (k2 vault fetch, k2 db dsn work), only
+  the secrets granted to job:collect (not your workspace's own), your
+  workspace folder as its working folder, and a PATH with k2 on it.
+  k2 job logs collect shows the redacted output; k2 job kill / disable
+  stop it. More: k2 study jobs
 
 SERVICES K2 DOESN'T RUN
-  The vault reaches K2 sessions and k2 publish services only. A plain
-  systemd unit (a root service, a timer) can't use it. Use systemd's
-  encrypted credentials (systemd 250+), from a file delivery:
+  The vault reaches K2 sessions, k2 job runs and k2 publish services. A
+  plain systemd unit (a root service) can't use it; for a timer, use
+  k2 job (above). Use systemd's encrypted credentials (systemd 250+), from
+  a file delivery:
     sudo systemd-creds encrypt --name=api_key "$K2_SECRETS_DIR/API_KEY" \
       /etc/credstore.encrypted/api_key
     unit: LoadCredentialEncrypted=api_key:/etc/credstore.encrypted/api_key
@@ -64885,6 +65222,10 @@ EOF
     vault)
         # K2 vault (prd-k2-vault-v1 §14).
         shift; cmd_vault "$@"
+        ;;
+    job|jobs)
+        # Daemon-run scheduled jobs (prd-vault-gaps-v1 item 5).
+        shift; cmd_job "$@"
         ;;
     reserve)
         shift; cmd_reserve "$@"

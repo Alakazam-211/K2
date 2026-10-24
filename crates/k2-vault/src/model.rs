@@ -99,6 +99,11 @@ str_enum!(
         Daemon = "daemon",
         /// Reserved for Zen v3 widgets (§10.8).
         Widget = "widget",
+        /// A daemon-run scheduled job (`k2 job`, prd-vault-gaps-v1 item 5).
+        /// Appended last (R3: `code()` is the position in `ALL`). The id is
+        /// `<workspace id>/<job id>`, so the rules can tell an agent's own
+        /// jobs from another workspace's without asking k2.db.
+        Job = "job",
     }
 );
 
@@ -221,6 +226,17 @@ impl Consumer {
     pub fn engine(id: impl Into<String>) -> Consumer {
         Consumer { kind: ConsumerKind::Engine, id: id.into() }
     }
+    /// A `k2 job` in `workspace_id` (`job_id` = `jobs.id` in k2.db).
+    pub fn job(workspace_id: &str, job_id: &str) -> Consumer {
+        Consumer { kind: ConsumerKind::Job, id: format!("{workspace_id}/{job_id}") }
+    }
+    /// The workspace half of a job consumer's id.
+    pub fn job_workspace(&self) -> Option<&str> {
+        if self.kind != ConsumerKind::Job {
+            return None;
+        }
+        self.id.split_once('/').map(|(ws, _)| ws).filter(|ws| !ws.is_empty())
+    }
     pub fn all_workspaces() -> Consumer {
         Consumer { kind: ConsumerKind::Workspace, id: "*".into() }
     }
@@ -256,6 +272,19 @@ mod tests {
         assert_eq!(Namespace::System.code(), 0);
         assert_eq!(Namespace::User.code(), 1);
         assert!(Kind::parse("nope").is_err());
+        // R3: new enum values go last, so every older code stays put.
+        assert_eq!(ConsumerKind::Job.code() as usize, ConsumerKind::ALL.len() - 1);
+        assert_eq!(ConsumerKind::Widget.code(), 6);
+    }
+
+    #[test]
+    fn job_consumers_carry_their_workspace() {
+        let c = Consumer::job("ws-1", "job-9");
+        assert_eq!(c.id, "ws-1/job-9");
+        assert_eq!(c.label(), "job:ws-1/job-9");
+        assert_eq!(c.job_workspace(), Some("ws-1"));
+        assert_eq!(Consumer::workspace("ws-1").job_workspace(), None);
+        assert_eq!(Consumer { kind: ConsumerKind::Job, id: "/x".into() }.job_workspace(), None);
     }
 
     #[test]

@@ -1508,6 +1508,11 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // empty until the switch's first off→on runs the G4 pass. The store
         // is `crate::zen::garden_access`.
         ("0219_garden_access", include_str!("../../drizzle_sql/0219_garden_access.sql")),
+        // 0220 — daemon-run scheduled jobs, `k2 job` (prd-vault-gaps-v1
+        // item 5; 0.46.4): `jobs`, the `job_runs` audit trail and the
+        // one-row `job_settings` (pause all). Additive; empty until a job is
+        // added. The store is `crate::jobs`.
+        ("0220_jobs", include_str!("../../drizzle_sql/0220_jobs.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2171,7 +2176,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0219_garden_access",
+            last_name, "0220_jobs",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2231,6 +2236,7 @@ mod tests {
                 "0216_compute_node_servers",
                 "0218_permission_cards",
                 "0219_garden_access",
+                "0220_jobs",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2296,6 +2302,8 @@ mod tests {
                 "0218_permission_cards",
                 // 0.46.3 (behind the default-off switch): Garden access.
                 "0219_garden_access",
+                // 0.46.4: `k2 job` (daemon-run scheduled jobs).
+                "0220_jobs",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );

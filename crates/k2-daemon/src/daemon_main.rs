@@ -1544,6 +1544,12 @@ async fn async_main() {
     // readiness gate so the scan runs against fully-migrated state.
     let _heartbeat_monitor_handle = heartbeat_monitor::spawn();
 
+    // `k2 job` (prd-vault-gaps-v1 item 5): runs a previous daemon left
+    // running are `interrupted` and their passports revoked; then the
+    // daemon's own scheduler loop runs due jobs, headless or not.
+    crate::jobs::boot();
+    let _jobs_handle = crate::jobs::spawn_loop();
+
     // Garden v3 data sources (prd-garden-v3-external-data-cards-v1): the
     // poller runs on its own threads, with no window open. Gaps from the
     // restart are marked first [GV57].

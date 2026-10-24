@@ -191,6 +191,10 @@ pub enum Requester {
     /// through an explicit `ConsumerKind::Daemon` grant with consumer id
     /// `source:<id>`, for `fetch`, to the source's exact origin.
     Source { id: String },
+    /// One run of a `k2 job` (prd-vault-gaps-v1 item 5). Only grants to
+    /// `job:<workspace id>/<job id>` reach it: no implicit workspace
+    /// grants (Q13, least privilege for unattended runs).
+    Job { workspace_id: String, job_id: String, name: String },
 }
 
 impl Requester {
@@ -202,6 +206,7 @@ impl Requester {
             Requester::Engine(e) => format!("engine:{e}"),
             Requester::System(s) => format!("daemon:{s}"),
             Requester::Source { id } => format!("source:{id}"),
+            Requester::Job { workspace_id, name, .. } => format!("job:{workspace_id}/{name}"),
         }
     }
 }

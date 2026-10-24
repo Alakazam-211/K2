@@ -918,6 +918,19 @@ mod unix_impl {
                 let vc = crate::vault::actor::from_caller(caller, Some(this_session_id.to_string()));
                 from_cli(crate::vault_routes::handle(p, vc, body, params, "cell"))
             }
+            // `k2 job` (item 5): this cell's agent manages its own
+            // workspace's jobs (the handler pins the workspace).
+            p if crate::jobs::routes::is_route(p) => {
+                if crate::jobs::routes::is_post_route(p) && !is_post {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                if body.len() > crate::jobs::routes::MAX_BODY {
+                    return from_cli(crate::jobs::routes::too_large());
+                }
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                let vc = crate::vault::actor::from_caller(caller, Some(this_session_id.to_string()));
+                from_cli(crate::jobs::routes::handle(p, vc, body, params))
+            }
             p if crate::llm_accounts_routes::is_route(p) => {
                 if crate::llm_accounts_routes::is_post_route(p) && !is_post {
                     return from_cli(crate::cli_response::CliResponse::method_not_allowed());

@@ -30,7 +30,7 @@ export const OUT = join(ROOT, 'src/shared/cli-catalog.generated.json')
 
 /** Nouns `k2 --schema` does not list yet. Their `--help` is captured when it
  *  prints without a daemon; the rest fall back to `k2 help <noun>`. */
-const HELP_ONLY_NOUNS = ['compute', 'sidecar', 'vault', 'whoami', 'hooks', 'root-helper', 'onboarding', 'commit']
+const HELP_ONLY_NOUNS = ['compute', 'sidecar', 'vault', 'job', 'whoami', 'hooks', 'root-helper', 'onboarding', 'commit']
 
 /** Leftover aliases `k2 study` keeps for old links; the explorer skips them. */
 const STUDY_ALIASES = new Set(['skins', 'llm-accounts'])

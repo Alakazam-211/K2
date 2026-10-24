@@ -1047,6 +1047,17 @@ async fn async_main() {
     // 503 for every non-liveness route until set_ready() at the end of boot.
     boot_status::set_detail("Applying updates…");
 
+    // 0.46.4: boot never waits on Finder. The migrations below send
+    // leftovers to the Trash; inside this scope that goes through a
+    // non-Finder Trash with a bounded wait, and a path whose trash doesn't
+    // answer stays in place (never deleted) and is trashed in the
+    // background after `set_ready()`. Before this a Mac with no GUI session
+    // (headless, before login, or waiting on Finder automation consent)
+    // hung the work→inbox migration's osascript child forever, so
+    // `/boot-status` stayed `migrating` and every route answered 503.
+    // Synchronous only: no `.await` while the scope is held.
+    let boot_trash = k2_core::safe_delete::BootTrashScope::enter();
+
     // 0.37.0 workspace–agent unification migration. Per-workspace,
     // sentinel-gated, idempotent. See
     // `.k2so/prds/workspace-agent-unification.md` and
@@ -1070,6 +1081,14 @@ async fn async_main() {
     run_migrate_k2so_dot_dirs();
 
     run_workspace_legacy_migrations_sweep();
+
+    let deferred_boot_trash = boot_trash.finish();
+    if !deferred_boot_trash.is_empty() {
+        log_debug!(
+            "[daemon/migrations] the Trash did not answer during boot: {} path(s) left in place, trashed in the background after ready",
+            deferred_boot_trash.len()
+        );
+    }
 
     // GH#25 (0.39.44) self-heal — migrate session dirs an EARLIER K2SO
     // build wrote under the OLD (underscore/literal-path-preserving) Claude
@@ -1388,6 +1407,9 @@ async fn async_main() {
 
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");
+    // 0.46.4: the boot migrations' leftovers whose trash timed out, now off
+    // the boot path (background thread, no Finder, never deleted).
+    let _deferred_trash = k2_core::safe_delete::trash_later(deferred_boot_trash);
     // P44: adopted sessions' cell sockets accept only from here on.
     crate::ptyd_adopt::serve_adopted_cells();
 

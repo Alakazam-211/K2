@@ -42,6 +42,85 @@ pub const NO_PUBLIC_LABEL: &str = "no_public_label";
 pub const NOT_TAKEN: &str = "label_not_taken";
 pub const LEGACY_DOWN: &str = "legacy_not_running";
 pub const MOVE_FAILED: &str = "label_move_failed";
+/// A label that already routes somewhere on this box and that the App's
+/// workspace doesn't hold (security review, 0.46.4).
+pub const LABEL_EXISTS: &str = "label_exists_elsewhere";
+
+/// One lock per App around its config's load → change → save (domain
+/// add/rm, label take/return, uninstall's give-back), so two of them at
+/// once never lose each other's change (security review, 0.46.4).
+pub(super) fn cfg_lock(app_id: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    let mut m = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    m.entry(app_id.to_string()).or_default().clone()
+}
+
+/// The workspace a nested label is attributed to (the 0074 row).
+pub(super) fn holder_of(label: &str) -> R<Option<String>> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, label).map_err(db_err)
+}
+
+/// May `who` point `label` at an App of workspace `ws` (domain add, App
+/// install)? A new label, or one `ws` holds, goes ahead. A label that
+/// already routes somewhere on this box and that `ws` doesn't hold (a
+/// hand-made `k2 publish subdomain create` hostname, say) is never
+/// repointed by an agent; a person repoints it only deliberately, with
+/// `transfer`. (Another workspace's label is refused before this, by
+/// `label_owner`.) `Ok(true)` = a deliberate transfer.
+pub(super) fn may_repoint(who: &Who, ws: &str, label: &str, transfer: bool) -> R<bool> {
+    if holder_of(label)?.as_deref() == Some(ws) {
+        return Ok(false);
+    }
+    let Some(target) = k2_core::tunnel::subdomains::current().targets.get(label).cloned() else {
+        return Ok(false);
+    };
+    if super::routes::agent_ws(who).is_some() {
+        return Err(no(
+            LABEL_EXISTS,
+            403,
+            format!(
+                "'{label}' already serves something on this box and isn't your workspace's: an agent never repoints it. \
+                 Pick a new label, or ask your owner to move it deliberately (--transfer, from a terminal outside K2)"
+            ),
+        ));
+    }
+    if !transfer {
+        return Err(no(
+            LABEL_EXISTS,
+            409,
+            format!("'{label}' already serves {target} on this box and no workspace holds it: repoint it deliberately with --transfer"),
+        ));
+    }
+    Ok(true)
+}
+
+/// Is `label` still `app`'s to give back? Only while it is attributed to
+/// the App's workspace and points at the App's front port: a label moved
+/// to another workspace, or repointed since, is left as it is (security
+/// review, 0.46.4). `Err(why)` = leave it.
+pub(crate) fn still_this_apps(app: &AppRow, label: &str) -> Result<(), String> {
+    let held = holder_of(label).map_err(|r| r.hint)?;
+    let front = app.front_port.and_then(|p| u16::try_from(p).ok()).unwrap_or(0);
+    release_check(&app.owner_workspace, front, held.as_deref(), super::domains::current_target(&app.owner_workspace, label).as_deref())
+}
+
+/// [`still_this_apps`]'s rule on plain values.
+pub(crate) fn release_check(ws: &str, front: u16, held: Option<&str>, target: Option<&str>) -> Result<(), String> {
+    match held {
+        Some(h) if h == ws => {}
+        Some(_) => return Err("it belongs to another workspace now".into()),
+        None => return Err("no workspace holds it now".into()),
+    }
+    match target.and_then(super::domains::loopback_port) {
+        Some(p) if front != 0 && p == front => Ok(()),
+        Some(p) => Err(format!("it points at port {p} now, not the App's front port")),
+        None => Err("it doesn't point at the App now".into()),
+    }
+}
 
 pub(crate) fn handle(path: &str, who: &Who, body: &[u8]) -> R<J> {
     need_build(who)?;
@@ -50,6 +129,8 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8]) -> R<J> {
     let label = s(&v, "label")
         .map(|l| l.to_ascii_lowercase())
         .ok_or_else(|| no(codes::BAD_REQUEST, 400, "label is required (the legacy service's publish name)"))?;
+    let lock = cfg_lock(&app.app_id);
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
     match path {
         "/cli/app/label/take" => take(who, &app, &label),
         "/cli/app/label/return" => give_back(who, &app, &label),
@@ -253,15 +334,23 @@ fn give_back(who: &Who, app: &AppRow, label: &str) -> R<J> {
 /// one answers, else its hostname is removed. Best effort; never blocks
 /// the uninstall.
 pub(crate) fn give_back_all(app: &AppRow) {
+    let lock = cfg_lock(&app.app_id);
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
     let Ok(cfg) = load_cfg(&app.app_id) else { return };
     // 0.46.4: hostnames attached with `k2 app domain add` go back to what
-    // they served before, or are removed.
+    // they served before, or are removed (only while still this App's).
     for d in &cfg.subdomains {
-        if let Err(e) = super::domains::release(&app.owner_workspace, d) {
-            k2_core::log_debug!("[apps] uninstall {}: {} stays as it was: {e}", app.app_id, d.label);
+        match super::domains::release(app, d) {
+            Ok(went) => k2_core::log_debug!("[apps] uninstall {}: {} → {went}", app.app_id, d.label),
+            Err(e) => k2_core::log_debug!("[apps] uninstall {}: {} stays as it was: {e}", app.app_id, d.label),
         }
     }
     for t in cfg.labels {
+        // A label moved to another workspace or repointed since is left alone.
+        if let Err(why) = still_this_apps(app, &t.label) {
+            k2_core::log_debug!("[apps] uninstall {}: {} left as it is: {why}", app.app_id, t.label);
+            continue;
+        }
         let row = {
             let db = k2_core::db::shared();
             let conn = db.lock();

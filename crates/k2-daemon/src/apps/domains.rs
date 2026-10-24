@@ -23,8 +23,13 @@
 //!   back on another number after a box restart is S2's R36 (the re-point
 //!   of every App hostname happens there, from [`hostnames`]).
 //! - The App sees the hostname in `K2_APP_ORIGINS` from its next start.
+//! - **Existing hostnames** (security review): a label that already routes
+//!   somewhere and that the workspace doesn't hold is never an agent's to
+//!   repoint; the owner does it with `--transfer` (audited).
 //! - **Remove** points the hostname back at what it served before the add
 //!   (when that still answers), else removes it; uninstall does the same.
+//!   Only while the hostname is still the App's (its workspace holds it and
+//!   it points at the App's front port); otherwise it is left as it is.
 
 use std::collections::HashMap;
 
@@ -34,7 +39,7 @@ use k2_core::published_services as ps;
 use serde_json::{json, Value as J};
 
 use super::labels;
-use super::routes::{actor, app_for, db_err, json_body, need_build, need_credential, no, s, Refusal, Who, R};
+use super::routes::{actor, app_for, b, db_err, json_body, need_build, need_credential, no, s, Refusal, Who, R};
 
 pub const ROUTES: &[&str] = &["/cli/app/domains", "/cli/app/domain/add", "/cli/app/domain/rm"];
 pub const POST_ROUTES: &[&str] = &["/cli/app/domain/add", "/cli/app/domain/rm"];
@@ -54,7 +59,7 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
 }
 
 /// `jobs`, or `jobs.<box>.k2.dev` → `jobs`.
-fn label_of(raw: &str) -> R<String> {
+pub(crate) fn label_of(raw: &str) -> R<String> {
     let t = raw.trim().trim_end_matches('.').to_ascii_lowercase();
     let suffix = format!(".{}", k2_core::tunnel::config::SUBDOMAIN_HOST);
     let first = if t.ends_with(&suffix) { t.split('.').next().unwrap_or("").to_string() } else { t };
@@ -109,7 +114,7 @@ fn served_by_other_app(app_id: &str, label: &str) -> R<Option<String>> {
 
 /// Where `label` points now (the control plane's map, else the last target
 /// this box stored for it).
-fn current_target(ws: &str, label: &str) -> Option<String> {
+pub(crate) fn current_target(ws: &str, label: &str) -> Option<String> {
     if let Some(t) = k2_core::tunnel::subdomains::current().targets.get(label) {
         return Some(t.clone());
     }
@@ -124,7 +129,7 @@ fn current_target(ws: &str, label: &str) -> Option<String> {
 }
 
 /// The loopback port of a `127.0.0.1:<port>` / `localhost:<port>` target.
-fn loopback_port(target: &str) -> Option<u16> {
+pub(crate) fn loopback_port(target: &str) -> Option<u16> {
     let (h, p) = target.trim().rsplit_once(':')?;
     matches!(h, "127.0.0.1" | "localhost").then(|| p.parse().ok()).flatten().filter(|p| *p != 0)
 }
@@ -147,6 +152,8 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
     if label == app.app_id {
         return Ok(json!({ "ok": true, "already": true, "app": app.app_id, "label": label, "note": "an App always serves its own label" }));
     }
+    let lock = labels::cfg_lock(&app.app_id);
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
     let mut cfg = labels::load_cfg(&app.app_id)?;
     if cfg.subdomains.iter().any(|d| d.label == label) || cfg.labels.iter().any(|l| l.label == label) {
         return Ok(json!({ "ok": true, "already": true, "app": app.app_id, "label": label }));
@@ -187,6 +194,9 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(USE_LABEL_TAKE, 409, hint));
     }
     crate::label_owner::check(&label, &ws, false).map_err(|r| foreign(&label, r))?;
+    // An existing hostname nobody holds: never an agent's to repoint; a
+    // person only with --transfer.
+    let transfer = labels::may_repoint(who, &ws, &label, b(&v, "transfer"))?;
     let front = labels::healthy(&app).map_err(|why| {
         no(
             labels::NOT_HEALTHY,
@@ -199,7 +209,17 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
     let by = actor(who);
     cfg.subdomains.push(AttachedSubdomain { label: label.clone(), added_at: deploy::now(), added_by: by.clone(), previous_target: previous.clone() });
     labels::save_cfg(&app.app_id, &cfg)?;
-    labels::audit(&app.app_id, "domain_add", &by, json!({ "label": label, "frontPort": front, "previousTarget": previous }));
+    labels::audit(&app.app_id, "domain_add", &by, json!({ "label": label, "frontPort": front, "previousTarget": previous, "transfer": transfer }));
+    if transfer {
+        k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+            "label-transfer",
+            &by,
+            format!("repointed the existing hostname {label} (no workspace held it) at App {}", app.app_id),
+            "cli",
+            "-",
+            "apps",
+        ));
+    }
     super::routes::mirror(&app.app_id);
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: ws.clone() });
     Ok(json!({
@@ -221,8 +241,14 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
 
 /// Give an attached hostname back: where it pointed before when that
 /// answers, else remove it. Best effort (uninstall); `Ok(where)` says
-/// which happened.
-pub(crate) fn release(ws: &str, d: &AttachedSubdomain) -> Result<String, String> {
+/// which happened. Only while it is still this App's (attributed to its
+/// workspace, pointing at its front port): otherwise it is left as it is
+/// and only drops out of the App's config.
+pub(crate) fn release(app: &AppRow, d: &AttachedSubdomain) -> Result<String, String> {
+    if let Err(why) = labels::still_this_apps(app, &d.label) {
+        return Ok(format!("left as it is ({why})"));
+    }
+    let ws = app.owner_workspace.as_str();
     if let Some(port) = d.previous_target.as_deref().and_then(loopback_port).filter(|p| labels::accepts(*p)) {
         labels::point(ws, &d.label, port)?;
         return Ok(format!("127.0.0.1:{port}"));
@@ -241,6 +267,8 @@ fn rm(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let label = label_of(s(&v, "label").ok_or_else(|| no(codes::BAD_REQUEST, 400, "label is required"))?)?;
+    let lock = labels::cfg_lock(&app.app_id);
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
     let mut cfg = labels::load_cfg(&app.app_id)?;
     let Some(i) = cfg.subdomains.iter().position(|d| d.label == label) else {
         let hint = if cfg.labels.iter().any(|l| l.label == label) {
@@ -251,7 +279,7 @@ fn rm(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(NOT_ATTACHED, 404, hint));
     };
     let d = cfg.subdomains[i].clone();
-    let went = release(&app.owner_workspace, &d).map_err(|e| no(labels::MOVE_FAILED, 409, format!("'{label}' still serves {}: {e}", app.app_id)))?;
+    let went = release(&app, &d).map_err(|e| no(labels::MOVE_FAILED, 409, format!("'{label}' still serves {}: {e}", app.app_id)))?;
     cfg.subdomains.remove(i);
     labels::save_cfg(&app.app_id, &cfg)?;
     let by = actor(who);
@@ -275,5 +303,19 @@ mod tests {
         assert_eq!(loopback_port("localhost:8788"), Some(8788));
         assert_eq!(loopback_port("10.0.0.2:80"), None, "never off loopback");
         assert_eq!(loopback_port("127.0.0.1:0"), None);
+    }
+
+    /// A hostname goes back (or is removed) only while it is still the
+    /// App's: its workspace holds it and it points at the App's front port.
+    #[test]
+    fn release_only_while_still_the_apps() {
+        use super::labels::release_check;
+        assert_eq!(release_check("ws1", 41_000, Some("ws1"), Some("127.0.0.1:41000")), Ok(()));
+        assert_eq!(release_check("ws1", 41_000, Some("ws1"), Some("localhost:41000")), Ok(()));
+        assert!(release_check("ws1", 41_000, Some("ws2"), Some("127.0.0.1:41000")).is_err(), "moved to another workspace");
+        assert!(release_check("ws1", 41_000, None, Some("127.0.0.1:41000")).is_err(), "nobody holds it");
+        assert!(release_check("ws1", 41_000, Some("ws1"), Some("127.0.0.1:3000")).is_err(), "repointed since");
+        assert!(release_check("ws1", 41_000, Some("ws1"), None).is_err(), "points nowhere");
+        assert!(release_check("ws1", 0, Some("ws1"), Some("127.0.0.1:0")).is_err(), "no front port");
     }
 }

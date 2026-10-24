@@ -7839,10 +7839,12 @@ Make and ship:
   k2 app build <folder> [--types] [--json]
                                        Store the folder as an immutable Seed
                                        and print its hash. Deploys nothing.
-  k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none]
+  k2 app install <app-id> [--workspace WS] [--tunnel [--transfer]] [--memory 8G|none]
                  [--engine guarded|process] [--seed S | --folder F]
                  [--pg-major 16|17]
-                                       Create the App (and its URL with --tunnel).
+                                       Create the App (and its URL with --tunnel;
+                                       --transfer: the owner repoints an existing
+                                       hostname no workspace holds).
                                        It starts walled (guarded container),
                                        even where the owner turned the
                                        unwalled process engine on; --engine
@@ -8692,9 +8694,10 @@ else:
 
 # k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--seed S | --folder F] [--pg-major M] [--json]
 cmd_app_install() {
-    local app="" ws="" tunnel=0 memory="" seed="" folder="" engine="" json_out=0 dov="" pgmajor=""
+    local app="" ws="" tunnel=0 memory="" seed="" folder="" engine="" json_out=0 dov="" pgmajor="" transfer=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --transfer) transfer=1; shift ;;
             --disk-override) dov="${2:-}"; shift 2 ;;
             --disk-override=*) dov="${1#--disk-override=}"; shift ;;
             --workspace) ws="${2:-}"; shift 2 ;;
@@ -8711,7 +8714,7 @@ cmd_app_install() {
             *) app="$1"; shift ;;
         esac
     done
-    [ -z "$app" ] && { echo "usage: k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--engine guarded|process] [--seed S|--folder F] [--pg-major 16|17]" >&2; exit 2; }
+    [ -z "$app" ] && { echo "usage: k2 app install <app-id> [--workspace WS] [--tunnel [--transfer]] [--memory 8G|none] [--engine guarded|process] [--seed S|--folder F] [--pg-major 16|17]" >&2; exit 2; }
     if [ -n "$pgmajor" ]; then
         case "$pgmajor" in [1-9][0-9]) ;; *) echo "usage: --pg-major takes a Postgres major, e.g. 17" >&2; exit 2 ;; esac
     fi
@@ -8720,7 +8723,7 @@ cmd_app_install() {
     { [ -n "$seed" ] || [ -n "$folder" ]; } && wait=150
     _app_rt_post /cli/app/install "$(_compute_json K2_CJ_app="$app" K2_CJ_workspace="$ws" K2_CJ_tunnel_b="$tunnel" \
         K2_CJ_memory="$memory" K2_CJ_engine="$engine" K2_CJ_seed="$seed" K2_CJ_folder="$folder" K2_CJ_wait_n="$wait" \
-        K2_CJ_diskOverride="$dov" K2_CJ_pgMajor_n="$pgmajor")"
+        K2_CJ_diskOverride="$dov" K2_CJ_pgMajor_n="$pgmajor" K2_CJ_transfer_b="$transfer")"
     # An agent asking for the unwalled process engine, or a disk override
     # that waits for the owner: held for the owner.
     if [ "$_CP_STATUS" = "202" ] && [[ "$_CP_BODY" != *'"frontPort"'* ]]; then
@@ -11329,7 +11332,8 @@ cmd_app_domain() {
             cat <<'EOF'
 k2 app domain — more hostnames for an App (0.46.4)
 
-  k2 app domain add <app-id> <subdomain>   <subdomain>.<box>.k2.dev serves the App
+  k2 app domain add <app-id> <subdomain> [--transfer]
+                                           <subdomain>.<box>.k2.dev serves the App
   k2 app domain rm <app-id> <subdomain>    back to what it served before (or removed)
   k2 app domains <app-id>                  its own label, taken labels, attached ones
 
@@ -11338,22 +11342,25 @@ k2 app domain — more hostnames for an App (0.46.4)
   it at the App's front port, so deploys and rollbacks never touch it. The
   App must be live. It is in K2_APP_ORIGINS from the App's next start
   (k2 app restart <app-id>). Your --cmd service's own label is
-  k2 app label take; another workspace's label is refused.
+  k2 app label take; another workspace's label is refused. A hostname that
+  already serves something and that no workspace holds is repointed only
+  by the owner, deliberately: --transfer (never by an agent).
 EOF
             [ -n "$verb" ] && return 0 || exit 2 ;;
         *) echo "usage: k2 app domain add|rm <app-id> <subdomain> [--json]" >&2; exit 2 ;;
     esac
-    local app="" label="" json_out=0
+    local app="" label="" json_out=0 transfer=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
+            --transfer) transfer=1; shift ;;
             -h|--help) cmd_app_domain --help; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) if [ -z "$app" ]; then app="$1"; else label="$1"; fi; shift ;;
         esac
     done
     { [ -z "$app" ] || [ -z "$label" ]; } && { echo "usage: k2 app domain $verb <app-id> <subdomain>" >&2; exit 2; }
-    _app_rt_post "/cli/app/domain/$verb" "$(_compute_json K2_CJ_app="$app" K2_CJ_label="$label")"
+    _app_rt_post "/cli/app/domain/$verb" "$(_compute_json K2_CJ_app="$app" K2_CJ_label="$label" K2_CJ_transfer_b="$transfer")"
     _app_grace_done "$json_out"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '

@@ -699,6 +699,9 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
         }
         out
     })?;
+    // Its public label: an existing hostname nobody holds is never an
+    // agent's to repoint; a person only with transfer (domain add's rule).
+    let transfer = tunnel && super::labels::may_repoint(who, &ws.id, &app_id, b(&v, "transfer"))?;
     // §4.3 admission-lite: the box's App memory pool (every caller).
     super::admission::check_memory(&app_id, memory)?;
     // C2 (disk guard), before the limits hold and before any folder: a
@@ -810,7 +813,7 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
             return Err(undo(format!("the URL step failed: {e}")));
         }
     }
-    audit_human(&app_id, "install", who, json!({ "workspace": ws.id, "tunnel": tunnel, "frontPort": port, "memoryLimitBytes": memory }));
+    audit_human(&app_id, "install", who, json!({ "workspace": ws.id, "tunnel": tunnel, "frontPort": port, "memoryLimitBytes": memory, "transfer": transfer }));
     mirror(&app_id);
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: ws.id.clone() });
     let mut out = json!({ "ok": true, "app": app_for(&Who::Owner, Some(&app_id))?, "frontPort": port });

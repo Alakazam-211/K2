@@ -398,6 +398,33 @@ async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
         let r = add(mine.clone(), label).await;
         assert_eq!((r.status, r.code()), (409, "app_not_healthy".to_string()), "{label}: {}", r.body);
     }
+    // An existing hostname nobody holds (a hand-made one): an agent never
+    // repoints it, transfer or not; the owner only with transfer. One its
+    // workspace holds, or a new one, goes on (here as far as the health).
+    k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap {
+        primary: "box".into(),
+        targets: [("domgrafana", "127.0.0.1:3000"), ("domextra", "127.0.0.1:47201")].into_iter().map(|(l, t)| (l.to_string(), t.to_string())).collect(),
+    });
+    let r = add(mine.clone(), "domgrafana").await;
+    assert_eq!((r.status, r.code()), (403, "label_exists_elsewhere".to_string()), "{}", r.body);
+    let r = post(d.port, "/cli/app/domain/add", &mine, json!({"app": "domapp", "label": "domgrafana", "transfer": true})).await;
+    assert_eq!((r.status, r.code()), (403, "label_exists_elsewhere".to_string()), "an agent's transfer: {}", r.body);
+    let r = post(d.port, "/cli/app/domain/add", OWNER, json!({"app": "domapp", "label": "domgrafana"})).await;
+    assert_eq!((r.status, r.code()), (409, "label_exists_elsewhere".to_string()), "the owner without transfer: {}", r.body);
+    let r = post(d.port, "/cli/app/domain/add", OWNER, json!({"app": "domapp", "label": "domgrafana", "transfer": true})).await;
+    assert_eq!((r.status, r.code()), (409, "app_not_healthy".to_string()), "the owner's transfer goes on: {}", r.body);
+    let r = add(mine.clone(), "domextra").await;
+    assert_eq!((r.status, r.code()), (409, "app_not_healthy".to_string()), "its own existing label: {}", r.body);
+    // App install's own label: the same rule.
+    let r = post(d.port, "/cli/app/install", &mine, json!({"app": "domgrafana", "tunnel": true})).await;
+    assert_eq!((r.status, r.code()), (403, "label_exists_elsewhere".to_string()), "agent install: {}", r.body);
+    let r = post(d.port, "/cli/app/install", OWNER, json!({"app": "domgrafana", "tunnel": true, "workspace": nsi.id})).await;
+    assert_eq!((r.status, r.code()), (409, "label_exists_elsewhere".to_string()), "owner install without transfer: {}", r.body);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert!(k2_core::deploy::store::get_app(&conn, "domgrafana").unwrap().is_none(), "nothing installed");
+    }
     // A full host name names the same label.
     let r = post(d.port, "/cli/app/domain/add", &mine, json!({"app": "domapp", "label": format!("domtheirs.box.{}", k2_core::tunnel::config::SUBDOMAIN_HOST)})).await;
     assert_eq!(r.code(), "label_owned_by_other_workspace", "{}", r.body);
@@ -409,6 +436,11 @@ async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
     allow_manage(&nsi, false);
     let r = add(mine.clone(), "domextra").await;
     assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
+    // The owner's card names the hostname.
+    let v = r.json();
+    assert!(v["request"]["summary"].as_str().expect("summary").ends_with("domain add domapp domextra"), "{v}");
+    let lines = v["diff"]["lines"].as_array().expect("diff lines");
+    assert!(lines.iter().any(|l| l.as_str().expect("line").starts_with("hostname: domextra.")), "{v}");
     allow_manage(&nsi, true);
 
     // rm of something never attached; of a taken label (that's label return).
@@ -454,6 +486,42 @@ async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
         let r = get(d.port, p, OWNER, "app=domapp&label=x").await;
         assert_eq!(r.status, 405, "{p}: {}", r.body);
     }
+
+    // A hostname moved to another workspace since: rm only drops it from
+    // the App (it is never removed or repointed), and so does uninstall.
+    let holder = |label: &str| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, label).unwrap()
+    };
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert!(k2_core::db::schema::SubdomainWorkspace::transfer(&conn, "domextra", &nsi.id, &other.id, None).unwrap());
+    }
+    let r = post(d.port, "/cli/app/domain/rm", &mine, json!({"app": "domapp", "label": "domextra"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.json()["now"].as_str().expect("now").starts_with("left as it is"), "{}", r.body);
+    assert_eq!(holder("domextra").as_deref(), Some(other.id.as_str()));
+    let r = get(d.port, "/cli/app/domains", &mine, "app=domapp").await;
+    assert_eq!(r.json()["attached"], json!([]), "{}", r.body);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::SubdomainWorkspace::claim(&conn, "domextra2", &other.id).unwrap();
+        let mut cfg = k2_core::app_grace::config::load(&conn, "domapp").unwrap();
+        cfg.subdomains.push(k2_core::app_grace::config::AttachedSubdomain {
+            label: "domextra2".into(),
+            added_at: 3,
+            added_by: "agent:domnsi".into(),
+            previous_target: None,
+        });
+        conn.execute("UPDATE apps SET config_json = ?2 WHERE app_id = ?1", rusqlite::params!["domapp", serde_json::to_string(&cfg).unwrap()]).unwrap();
+    }
+    let r = post(d.port, "/cli/app/uninstall", OWNER, json!({"app": "domapp"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(holder("domextra2").as_deref(), Some(other.id.as_str()), "uninstall leaves another workspace's hostname");
+    k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap::default());
     drop(seen);
     k2_daemon::apps::alerts::set_sink(None);
 }

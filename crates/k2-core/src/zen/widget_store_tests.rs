@@ -704,3 +704,74 @@ fn an_agents_widget_without_list_from_carries_no_list_key() {
         assert!(w["props"].get("list-from").is_none(), "{w}");
     }
 }
+
+/// Fleet Ops 2 (Rosson 2026-10-24): a Conversation whose header switches
+/// between a few agents (`pick`), with no Agents widget on the page.
+const PICK_PAGE: &str = "schema = 1\n\n[[widget]]\nid = \"talk\"\nkind = \"conversation\"\ncolumn = 0\n[widget.props]\npick = [\"k2-dev-web\", \" k2 \"]\nactivity-drawer = true\n";
+
+#[test]
+fn a_conversation_with_pick_needs_no_agents_widget_and_follows_nothing() {
+    let (_t, f) = set_up("pick");
+    let g = gid(&f, "Garden 2");
+    assert_eq!(page_errors(&f, &g, PICK_PAGE), Vec::<J>::new());
+    let page = f.resolve(Some(&g)).expect("resolve");
+    let talk = &page["page"]["widgets"][0];
+    assert_eq!(talk["kind"], "conversation", "{page}");
+    assert_eq!(talk["props"]["pick"], json!(["k2-dev-web", "k2"]), "names are trimmed, in order: {talk}");
+    assert!(talk["props"].get("agents").is_none(), "a pick Conversation follows no Agents widget: {talk}");
+    assert!(talk["props"].get("agent").is_none(), "{talk}");
+
+    // Beside an Agents widget it still follows nothing (no auto-link).
+    let beside = format!(
+        "schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 40\nmin-width = 200\n[[layout.column]]\nsize = 60\nmin-width = 200\n\n[[widget]]\nid = \"crew\"\nkind = \"agents\"\ncolumn = 1\n[widget.props]\nhome = \"Work\"\n\n{}",
+        PICK_PAGE.trim_start_matches("schema = 1\n\n")
+    );
+    assert_eq!(page_errors(&f, &g, &beside), Vec::<J>::new());
+    let page = f.resolve(Some(&g)).expect("resolve beside");
+    let widgets = page["page"]["widgets"].as_array().expect("widgets");
+    let talk = widgets.iter().find(|w| w["id"] == "talk").expect("talk");
+    assert!(talk["props"].get("agents").is_none(), "no auto-link to the Agents widget: {talk}");
+
+    // 8 names is the most; 2 the least.
+    let eight = PICK_PAGE.replace("[\"k2-dev-web\", \" k2 \"]", "[\"a\", \"b\", \"c\", \"d\", \"e\", \"f\", \"g\", \"h\"]");
+    assert_eq!(page_errors(&f, &g, &eight), Vec::<J>::new());
+}
+
+#[test]
+fn pick_refusals_each_at_their_line() {
+    let (_t, f) = set_up("pick-bad");
+    let g = gid(&f, "Garden 2");
+    // Not with agent or home: one error at the clashing prop (line 8).
+    for (prop, needle) in [
+        ("agent = \"k2\"", "agent pins one agent, but pick lists the agents"),
+        ("home = \"Work\"", "home picks a Home to look `agent` up in, but pick lists the agents"),
+    ] {
+        let clash = PICK_PAGE.replace("[widget.props]\n", &format!("[widget.props]\n{prop}\n"));
+        let errs = page_errors(&f, &g, &clash);
+        one_error(&errs, 8, needle, prop);
+        assert!(errs[0]["message"].as_str().is_some_and(|m| m.ends_with("drop one of them")), "{errs:?}");
+    }
+    // Not with agents, even when it names a real Agents widget.
+    let with_agents = format!(
+        "{}\n[[widget]]\nid = \"crew\"\nkind = \"agents\"\ncolumn = 0\n[widget.props]\nhome = \"Work\"\n",
+        PICK_PAGE.replace("[widget.props]\n", "[widget.props]\nagents = \"crew\"\n")
+    );
+    one_error(&page_errors(&f, &g, &with_agents), 8, "agents follows an Agents widget, but pick lists the agents", "pick with agents");
+    // The list itself: 2 to 8 names, text, no repeats (case aside), never a
+    // string. (An Agents widget rides along, so the refused list is the one
+    // finding, not also "no agent to show".)
+    let with_crew = format!("{PICK_PAGE}\n[[widget]]\nid = \"crew\"\nkind = \"agents\"\ncolumn = 0\n[widget.props]\nhome = \"Work\"\n");
+    assert_eq!(page_errors(&f, &g, &with_crew), Vec::<J>::new());
+    for (value, what) in [
+        ("[\"k2\"]", "one name"),
+        ("[\"a\", \"b\", \"c\", \"d\", \"e\", \"f\", \"g\", \"h\", \"i\"]", "nine names"),
+        ("[\"k2\", \"K2\"]", "a repeat"),
+        ("[\"k2\", \"  \"]", "a blank name"),
+        ("[\"k2\", 7]", "a number"),
+        ("\"k2-dev-web, k2\"", "a string"),
+        ("[]", "an empty list"),
+    ] {
+        let bad = with_crew.replace("[\"k2-dev-web\", \" k2 \"]", value);
+        one_error(&page_errors(&f, &g, &bad), 8, "conversation.pick must be a list of 2 to 8 agent names or addresses", what);
+    }
+}

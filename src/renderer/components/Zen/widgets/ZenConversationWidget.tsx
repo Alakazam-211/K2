@@ -25,8 +25,17 @@
 // read while it is looked at, says how many cards wait on you ("2
 // waiting", a click scrolls to the first) and, with `mute` (on in Garden
 // 1), has a bell to mute the Thread (`ZenThreadReadControls`).
+//
+// Fleet Ops 2 (Rosson 2026-10-24): with `pick` (2 to 8 agents) the header
+// is the drop-down, one layer: the shown agent plus a chevron and a badge
+// with the others' unread and waiting counts. A click (Enter, Space, ↓)
+// opens a panel over the Thread, from the header's top edge down, with one
+// card per agent in `pick` order, each drawn like the header
+// (`ZenConversationHead`). ↑/↓ move, Enter picks, Esc / a click outside
+// closes. An agent nothing answers to is a disabled card. Which one shows
+// is per Garden and widget on this computer (`zen-conversation-pick.ts`).
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from 'zustand'
 import { zenThreadFeeds } from '@/lib/zen/zen-data'
 import { ThreadAttachmentSourceProvider, type ThreadAttachmentSource } from '@/components/Thread/ThreadImageObjects'
@@ -48,11 +57,15 @@ import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { useZenMaterials } from '@/lib/zen/zen-materials'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
+import { ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
+import { useZenConversationPicksStore, zenConversationPick, zenFindPickRow } from '@/lib/zen/zen-conversation-pick'
+import { zenGardenHomeKey } from '@/lib/zen/zen-garden-homes'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenCompose } from './ZenCompose'
 import { ZenActivityDrawer, zenDrawerShows } from './ZenActivityDrawer'
-import { ZenStatusDot } from './ZenAgentsWidget'
+import { ZenStatusDot, ZenUnreadPills } from './ZenAgentsWidget'
+import { ZEN_DROPDOWN_STYLE } from './ZenChromeControls'
 import { ZenProgressiveBlur } from './ZenProgressiveBlur'
 import { ZenMuteButton, ZenWaitingChip, useZenThreadAutoRead, useZenThreadEntry, zenCardWaiting } from './ZenThreadReadControls'
 import { ZenAgentAvatar, ZenWidgetStyles, initials, useNowSec, useZenRows, useZenThread } from './zen-widget-kit'
@@ -189,14 +202,261 @@ export function ZenFileLinks({ address, children }: { address: string; children:
   )
 }
 
+/** The header's second line: the server, then the state or activity. */
+function zenConversationStatusText(row: ZenAgentRow): string {
+  const second =
+    row.state !== 'ok'
+      ? row.stateLabel
+      : row.activity === 'needs-you'
+        ? 'needs you'
+        : row.activity === 'unverifiable'
+          ? 'no update'
+          : row.activity
+  return [row.server ?? 'this computer', second].filter(Boolean).join(' · ')
+}
+
+/** One agent as the conversation header draws it: the 34 px picture, the
+ *  name, the status dot and the server / activity line. The header and
+ *  each card of the `pick` menu (`card`: the card's own marks). Its parent
+ *  lays it out (`flex items-center gap-3`). */
+export function ZenConversationHead({ row, card = false }: { row: ZenAgentRow; card?: boolean }): React.JSX.Element {
+  const status = row.activity ?? row.state
+  return (
+    <>
+      <ZenAgentAvatar
+        label={row.label}
+        url={row.avatarUrl}
+        size={34}
+        agentColor={row.color}
+        background="var(--zen-accent)"
+        color="var(--zen-accent-text)"
+        fontSize="0.9em"
+      />
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate" style={{ fontWeight: 600 }} {...(card ? { 'data-zen-pick-title': '' } : { 'data-zen-conversation-title': '' })}>
+          {row.label}
+        </span>
+        <span className="flex items-center gap-1.5 truncate" style={{ fontSize: '0.8em', color: 'var(--zen-text-muted)' }}>
+          <ZenStatusDot row={row} size={8} />
+          <span {...(card ? { 'data-zen-pick-status': status } : { 'data-zen-conversation-status': status })}>
+            {zenConversationStatusText(row)}
+          </span>
+        </span>
+      </span>
+    </>
+  )
+}
+
+/** One agent of `pick`: its row, or null when nothing answers to the name. */
+export interface ZenPickEntry {
+  name: string
+  row: ZenAgentRow | null
+}
+
+/** A `pick` conversation's agents and the switch. */
+export interface ZenConversationPicker {
+  entries: readonly ZenPickEntry[]
+  onPick(address: string): void
+  /** Set by a pick: the next conversation (a new mount) focuses its header,
+   *  so the keyboard stays where it was. */
+  refocus?: { current: boolean }
+}
+
+/** The second line of a card for an agent that isn't found. */
+export const zenPickMissingText = (name: string): string => `${name} isn’t on this Home.`
+
+/** The other agents' unread and waiting, summed for the header's badge. A
+ *  muted Thread's unread is left out (it never nags); its waiting cards
+ *  still count. */
+export function zenPickBadge(entries: readonly ZenPickEntry[], shown: string): NonNullable<ZenAgentRow['unread']> {
+  let unread = 0
+  let waiting = 0
+  for (const e of entries) {
+    if (!e.row || e.row.address === shown || !e.row.unread) continue
+    if (!e.row.unread.muted) unread += e.row.unread.unread
+    waiting += e.row.unread.waiting
+  }
+  return { unread, waiting, muted: false }
+}
+
+function Chevron({ open }: { open: boolean }): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      aria-hidden
+      data-zen-pick-chevron=""
+      style={{ flex: 'none', color: 'var(--zen-text-muted)', transform: open ? 'rotate(180deg)' : undefined }}
+    >
+      <path d="M2.5 4.5 L6 8 L9.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+/** A card's box: the header row's padding, so each card sits like it. */
+const CARD_STYLE: React.CSSProperties = { padding: '12px 18px', cursor: 'pointer' }
+
+/** The `pick` menu: a panel over the Thread from the header's top edge
+ *  down, one card per agent; a listbox (↑/↓ move, Home/End, Enter or Space
+ *  pick, Esc or Tab close). */
+function ZenPickMenu({
+  id,
+  picker,
+  shown,
+  buttonRef,
+  onClose,
+}: {
+  id: string
+  picker: ZenConversationPicker
+  shown: string
+  buttonRef: React.RefObject<HTMLButtonElement | null>
+  onClose(focusButton: boolean): void
+}): React.JSX.Element {
+  const { entries, onPick } = picker
+  const enabled = entries.flatMap((e, i) => (e.row ? [i] : []))
+  const [active, setActive] = useState(() => {
+    const cur = entries.findIndex((e) => e.row?.address === shown)
+    return cur >= 0 ? cur : (enabled[0] ?? -1)
+  })
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    listRef.current?.focus()
+  }, [])
+  // A click outside the panel and the header's button closes it.
+  useEffect(() => {
+    const onDown = (e: MouseEvent): void => {
+      const t = e.target as Node | null
+      if (t && (panelRef.current?.contains(t) || buttonRef.current?.contains(t))) return
+      onClose(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [buttonRef, onClose])
+  useEffect(() => {
+    if (active < 0) return
+    listRef.current?.querySelector<HTMLElement>(`[data-zen-pick-index="${active}"]`)?.scrollIntoView?.({ block: 'nearest' })
+  }, [active])
+  const pick = (i: number): void => {
+    const row = entries[i]?.row
+    if (!row) return
+    onClose(true)
+    if (row.address !== shown) onPick(row.address)
+  }
+  const move = (dir: 1 | -1): void => {
+    if (enabled.length === 0) return
+    const at = enabled.indexOf(active)
+    const next = at < 0 ? (dir === 1 ? 0 : enabled.length - 1) : (at + dir + enabled.length) % enabled.length
+    setActive(enabled[next])
+  }
+  const onKeyDown = (e: React.KeyboardEvent): void => {
+    if (e.key === 'Tab') {
+      onClose(false)
+      return
+    }
+    if (e.key === 'ArrowDown') move(1)
+    else if (e.key === 'ArrowUp') move(-1)
+    else if (e.key === 'Home') setActive(enabled[0] ?? -1)
+    else if (e.key === 'End') setActive(enabled[enabled.length - 1] ?? -1)
+    else if (e.key === 'Enter' || e.key === ' ') pick(active)
+    else if (e.key === 'Escape') onClose(true)
+    else return
+    e.preventDefault()
+    e.stopPropagation()
+  }
+  return (
+    <div
+      ref={panelRef}
+      data-zen-pick-menu=""
+      {...ZEN_TILE_RAISED_PROPS}
+      className="absolute overflow-y-auto"
+      // Zen's drop-down look (the Garden switcher's), edge to edge.
+      style={{ ...ZEN_DROPDOWN_STYLE, padding: 0, top: 0, left: 0, right: 0, maxHeight: '100%', zIndex: 4 }}
+    >
+      <div
+        ref={listRef}
+        id={id}
+        role="listbox"
+        aria-label="Switch agent"
+        tabIndex={-1}
+        aria-activedescendant={active >= 0 ? `${id}-${active}` : undefined}
+        onKeyDown={onKeyDown}
+        className="flex flex-col"
+        style={{ outline: 'none' }}
+      >
+        {entries.map((e, i) => {
+          const sep = i > 0 ? { borderTop: '1px solid var(--zen-border)' } : null
+          if (!e.row) {
+            return (
+              <div
+                key={`missing:${i}`}
+                id={`${id}-${i}`}
+                role="option"
+                aria-selected={false}
+                aria-disabled="true"
+                data-zen-pick-option=""
+                data-zen-pick-missing={e.name}
+                data-zen-pick-index={i}
+                className="flex items-center gap-3"
+                style={{ ...CARD_STYLE, ...sep, cursor: 'default', opacity: 0.55 }}
+              >
+                <ZenAgentAvatar label={e.name} url={null} size={34} background="var(--zen-surface)" color="var(--zen-text-muted)" fontSize="0.9em" />
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate" style={{ fontWeight: 600 }}>
+                    {e.name}
+                  </span>
+                  <span className="truncate" style={{ fontSize: '0.8em', color: 'var(--zen-text-muted)' }}>
+                    {zenPickMissingText(e.name)}
+                  </span>
+                </span>
+              </div>
+            )
+          }
+          const row = e.row
+          const selected = row.address === shown
+          return (
+            <div
+              key={row.address}
+              id={`${id}-${i}`}
+              role="option"
+              aria-selected={selected}
+              data-zen-pick-option={row.address}
+              data-zen-pick-index={i}
+              data-active={i === active ? '' : undefined}
+              className="flex items-center gap-3"
+              style={{ ...CARD_STYLE, ...sep, boxShadow: selected ? 'inset 3px 0 0 var(--zen-accent)' : undefined }}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => pick(i)}
+            >
+              <ZenConversationHead row={row} card />
+              <span className="ml-auto flex flex-shrink-0 items-center gap-2">
+                {row.unread ? <ZenUnreadPills unread={row.unread} /> : null}
+                {selected && (
+                  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden data-zen-pick-check="" style={{ color: 'var(--zen-accent)' }}>
+                    <path d="M3 7.4 L5.8 10 L11 4.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function ZenConversation({
   bridge,
   row,
   options = ALL_ON,
+  picker,
 }: {
   bridge: ZenWidgetBridge
   row: ZenAgentRow
   options?: ZenConversationOptions
+  /** `pick`: the header is the drop-down that switches agents. */
+  picker?: ZenConversationPicker
 }): React.JSX.Element {
   const view = useZenThread(bridge, row.address)
   const nowSec = useNowSec()
@@ -296,6 +556,21 @@ export function ZenConversation({
     const box = el?.firstElementChild as HTMLElement | null | undefined
     ;(box ?? el)?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
   }, [waitingInView, loadOlder])
+  // `pick`: the header's drop-down.
+  const menuId = useId()
+  const pickButtonRef = useRef<HTMLButtonElement | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const closeMenu = useCallback((focusButton: boolean) => {
+    setMenuOpen(false)
+    if (focusButton) pickButtonRef.current?.focus()
+  }, [])
+  const badge = picker ? zenPickBadge(picker.entries, row.address) : null
+  const refocus = picker?.refocus
+  useEffect(() => {
+    if (!refocus?.current) return
+    refocus.current = false
+    pickButtonRef.current?.focus()
+  }, [refocus])
   return (
     <div
       ref={rootRef}
@@ -315,28 +590,46 @@ export function ZenConversation({
         className={`${floating ? 'relative ' : ''}flex flex-shrink-0 items-center gap-3`}
         style={floating ? { zIndex: 1, padding: '12px 18px' } : { padding: '12px 18px', borderBottom: '1px solid var(--zen-border)' }}
       >
-        <ZenAgentAvatar
-          label={row.label}
-          url={row.avatarUrl}
-          size={34}
-          agentColor={row.color}
-          background="var(--zen-accent)"
-          color="var(--zen-accent-text)"
-          fontSize="0.9em"
-        />
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate" style={{ fontWeight: 600 }} data-zen-conversation-title="">
-            {row.label}
-          </span>
-          <span className="flex items-center gap-1.5 truncate" style={{ fontSize: '0.8em', color: 'var(--zen-text-muted)' }}>
-            <ZenStatusDot row={row} size={8} />
-            <span data-zen-conversation-status={row.activity ?? row.state}>
-              {[row.server ?? 'this computer', row.state !== 'ok' ? row.stateLabel : row.activity === 'needs-you' ? 'needs you' : row.activity === 'unverifiable' ? 'no update' : row.activity]
-                .filter(Boolean)
-                .join(' · ')}
-            </span>
-          </span>
-        </span>
+        {picker ? (
+          <button
+            ref={pickButtonRef}
+            type="button"
+            data-zen-pick-button=""
+            aria-haspopup="listbox"
+            aria-expanded={menuOpen}
+            aria-controls={menuOpen ? menuId : undefined}
+            title="Switch agent"
+            className="flex min-w-0 items-center gap-3"
+            style={{
+              margin: '-4px -6px',
+              padding: '4px 6px',
+              border: 'none',
+              borderRadius: 'var(--zen-radius)',
+              background: 'transparent',
+              color: 'inherit',
+              font: 'inherit',
+              textAlign: 'left',
+              cursor: 'pointer',
+            }}
+            onClick={() => setMenuOpen((o) => !o)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown' && !menuOpen) {
+                e.preventDefault()
+                setMenuOpen(true)
+              }
+            }}
+          >
+            <ZenConversationHead row={row} />
+            <Chevron open={menuOpen} />
+            {badge && (badge.unread > 0 || badge.waiting > 0) && (
+              <span data-zen-pick-badge="" title="Unread and waiting with your other agents here">
+                <ZenUnreadPills unread={badge} />
+              </span>
+            )}
+          </button>
+        ) : (
+          <ZenConversationHead row={row} />
+        )}
         <span className="ml-auto flex flex-shrink-0 items-center gap-2" data-zen-conversation-actions="">
         <ZenWaitingChip waiting={waiting} onShow={showWaiting} />
         {options.mute && <ZenMuteButton view={view} />}
@@ -476,6 +769,9 @@ export function ZenConversation({
           </div>
         </div>
       )}
+      {picker && menuOpen && (
+        <ZenPickMenu id={menuId} picker={picker} shown={row.address} buttonRef={pickButtonRef} onClose={closeMenu} />
+      )}
     </div>
   )
 }
@@ -491,10 +787,38 @@ export function zenConversationRow(rows: readonly ZenAgentRow[], props: Record<s
   return zenConversationPinned(props) ? (rows[0] ?? null) : (rows.find((r) => r.selected) ?? null)
 }
 
+/** `pick`: each name with its row (the view's rows are exactly the matched
+ *  ones, in `pick` order), and the one shown: the saved pick while it is
+ *  listed, else the first agent found. */
+export function zenPickState(
+  rows: readonly ZenAgentRow[],
+  pick: readonly string[],
+  saved: string | null,
+): { entries: ZenPickEntry[]; shown: ZenAgentRow | null } {
+  const entries = pick.map((name) => ({ name, row: zenFindPickRow(rows, name) }))
+  const found = entries.flatMap((e) => (e.row ? [e.row] : []))
+  return { entries, shown: found.find((r) => r.address === saved) ?? found[0] ?? null }
+}
+
 export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Element {
   const rows = useZenRows(bridge)
-  const pinned = zenConversationPinned(decl.props)
-  const row = zenConversationRow(rows, decl.props)
+  const pick = zenConversationPick(decl.props)
+  const pinned = !pick && zenConversationPinned(decl.props)
+  // `pick`: the shown agent is per Garden and widget, on this computer.
+  const pickKey = zenGardenHomeKey(bridge.gardens?.current?.()?.id ?? '', decl.id)
+  const saved = useZenConversationPicksStore((s) => s.picks[pickKey] ?? null)
+  const setPick = useZenConversationPicksStore((s) => s.setPick)
+  const refocus = useRef(false)
+  const onPick = useCallback(
+    (address: string) => {
+      refocus.current = true
+      setPick(pickKey, address)
+    },
+    [setPick, pickKey],
+  )
+  const picked = pick ? zenPickState(rows, pick, saved) : null
+  const picker: ZenConversationPicker | undefined = picked ? { entries: picked.entries, onPick, refocus } : undefined
+  const row = picked ? picked.shown : zenConversationRow(rows, decl.props)
   const options: ZenConversationOptions = {
     compose: decl.props.compose !== false,
     attachments: decl.props.attachments !== false,
@@ -502,21 +826,22 @@ export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.J
     activityDrawer: decl.props['activity-drawer'] === true,
     mute: decl.props.mute === true,
   }
-  // A pinned conversation opens itself.
+  // A pinned conversation opens itself; so does a `pick` one's shown agent.
+  const opens = pinned || pick !== null
   const opened = useRef<string | null>(null)
   useEffect(() => {
-    if (!pinned || !row || row.selected || opened.current === row.address) return
+    if (!opens || !row || row.selected || opened.current === row.address) return
     opened.current = row.address
     void Promise.resolve()
       .then(() => bridge.call('conversation.open', row.address))
       .catch((err: unknown) => console.warn('[zen] open pinned conversation failed:', err))
-  }, [bridge, pinned, row])
+  }, [bridge, opens, row])
   return (
     <div className="flex h-full min-h-0 w-full flex-col" data-zen-widget="conversation">
       <ZenWidgetStyles />
       {row ? (
         <ZenFileLinks address={row.address}>
-          <ZenConversation key={row.address} bridge={bridge} row={row} options={options} />
+          <ZenConversation key={row.address} bridge={bridge} row={row} options={options} picker={picker} />
         </ZenFileLinks>
       ) : (
         <div
@@ -524,7 +849,9 @@ export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.J
           data-zen-conversation-none=""
           style={{ padding: 24, color: 'var(--zen-text-muted)' }}
         >
-          {pinned
+          {pick
+            ? `None of ${pick.join(', ')} is on this Home.`
+            : pinned
             ? `${String(decl.props.agent)} isn’t on this Home.`
             : rows.length > 0
               ? 'Pick an agent to message.'

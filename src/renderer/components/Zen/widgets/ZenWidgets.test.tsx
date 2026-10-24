@@ -3267,6 +3267,42 @@ describe('built-in widgets: modes and layout (G38, answer 5)', () => {
     expect(composeInput()).toBeTruthy()
   })
 
+  it('a Conversation with `pick` gets exactly its agents, here and on another server, and switches from its header', async () => {
+    h.pages['g-layout'].widgets = [
+      // As the daemon sends it: no `agents` link for a pick Conversation.
+      { id: 'duo', kind: 'conversation', column: 0, props: { pick: ['sales', 'cortana', 'ghost'], compose: true, attachments: true, 'load-older': true, 'activity-drawer': true, mute: false }, caps: ['agents:read', 'thread:read', 'thread:post'], source: 'builtin' },
+    ]
+    h.pages['g-layout'].layout = { kind: 'columns', split: [100] }
+    await mountGarden('k2.blank@1')
+    // The first one (sales, on akzm) opens in place: no window switch.
+    await threadReady(ROWS.sales.address)
+    expect(h.switched).toEqual([])
+    expect(document.querySelector('[data-zen-agent-row]')).toBeNull()
+    const button = document.querySelector('[data-zen-pick-button]') as HTMLElement
+    expect(button.getAttribute('aria-haspopup')).toBe('listbox')
+    await act(async () => {
+      fireEvent.click(button)
+    })
+    const options = Array.from(document.querySelectorAll('[data-zen-pick-option]'))
+    expect(options.map((o) => o.getAttribute('data-zen-pick-option'))).toEqual([ROWS.sales.address, ROWS.cortana.address, ''])
+    expect(options[2].getAttribute('data-zen-pick-missing')).toBe('ghost')
+    await act(async () => {
+      fireEvent.click(options[1])
+    })
+    await threadReady(ROWS.cortana.address)
+    expect(document.querySelector('[data-zen-pick-menu]')).toBeNull()
+    expect(JSON.parse(localStorage.getItem('k2.zen.conversationPicks.v1') ?? 'null')).toEqual({
+      version: 1,
+      picks: { 'g-layout/duo': ROWS.cortana.address },
+    })
+    // Only the listed agents are this view's rows: previews are asked for
+    // them alone, never for the Home's other agents (julie, ops).
+    const latest = h.calls.filter((c) => c.route === 'thread/latest')
+    expect(latest.length).toBeGreaterThan(0)
+    expect(latest.every((c) => c.hostKey === 'local' || c.hostKey === B)).toBe(true)
+    expect(h.calls.some((c) => c.hostKey === C || c.hostKey === D)).toBe(false)
+  })
+
   it('display props: no preview, no server tag, only the statuses asked for, no compose box', async () => {
     h.pages['g-layout'].widgets = [
       { id: 'w', kind: 'agents', column: 0, props: { mode: 'home', home: 'Work', preview: false, 'server-tag': false, status: ['needs-you'] }, caps: ['agents:read'], source: 'builtin' },

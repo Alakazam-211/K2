@@ -37,6 +37,7 @@ fn prop_type(t: PropType) -> String {
         PropType::OneOf(xs) => format!("one of {}", ticks(xs)),
         PropType::SubsetOf(xs) => format!("a list from {}", ticks(xs)),
         PropType::Int { min, max } => format!("a whole number from {min} to {max}"),
+        PropType::Names { min, max } => format!("a list of {min} to {max} names or addresses"),
     }
 }
 
@@ -246,6 +247,10 @@ column it is `column` unless you set `orientation = \"row\"` or an `edge`.\n\n"
 - **One agent:** `kind = \"agents\"` with `agent = \"<name or address>\"` (and `home` to say\n\
   which Home it is in): only that agent's row. Or skip the list and pin the\n\
   conversation itself: `kind = \"conversation\"` with `agent = \"<name>\"` and `home`.\n\
+- **A few agents, one Conversation:** `kind = \"conversation\"` with `pick = [\"sales\", \"ops\"]`\n\
+  (2 to 8): no list beside it; its header is the drop-down. Each agent is looked up by name\n\
+  or address on this computer and the person's Homes on other servers. Not with `agent`,\n\
+  `agents` or `home`.\n\
 - **A chosen list:** `kind = \"agents\"` with `list-from = \"<custom widget id>\"` (mode `list`):\n\
   the agents that custom widget lists with `k2.agents.show([...])`, in its order, from this\n\
   computer and the person's Homes on other servers. \"Nothing listed yet\" until it lists some;\n\
@@ -1246,6 +1251,21 @@ mod tests {
         }
         for v in ["layout.get", "layout.set", "layout.toggle", "layout.subscribe", "agents.show", "conversation.setContext"] {
             assert!(s.contains(&format!("`k2.{v}")), "the k2-zen skill lists k2.{v}");
+        }
+    }
+
+    /// v32: the Conversation's `pick` (Fleet Ops 2): the prop row with its
+    /// type and rules, and the how-to bullet.
+    #[test]
+    fn skill_documents_the_conversation_pick() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 32, "pick needs a new skill version");
+        let s = generate_k2_zen_skill_for(false);
+        for needle in [
+            "- `pick` (a list of 2 to 8 names or addresses): the header is a drop-down that switches between these agents",
+            "not with `agent`, `agents` or `home`",
+            "**A few agents, one Conversation:** `kind = \"conversation\"` with `pick = [\"sales\", \"ops\"]`",
+        ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
     }
 

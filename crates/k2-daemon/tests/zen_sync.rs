@@ -269,7 +269,9 @@ const FROZEN: &[(&str, &str)] = &[
     // 0.46.3 r10 (GS45, prd-garden-column-collapse-and-agent-list-v1 A2):
     // `agents.list-from`, with no default (null), and `list` among the
     // modes: a synced Garden's page doesn't change.
-    ("widget-props", "51e3c98b13c4d20d"),
+    // Fleet Ops 2 (GS45, Rosson 2026-10-24): `conversation.pick`, with no
+    // default (null): a synced Garden's page doesn't change.
+    ("widget-props", "d8fa4b0a0b4f2653"),
 ];
 
 fn frozen_hashes() -> BTreeMap<String, String> {

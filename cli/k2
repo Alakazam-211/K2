@@ -58397,7 +58397,9 @@ CONTENT WIDGETS (in a column they need id, kind and column = n)
                 the agents that widget lists with k2.agents.show([...])
   conversation  one agent's Thread and a message box: agents = "<id of
                 an Agents widget>" to follow it, or agent = "<name>"
-                (with home) to pin one; compose, attachments, load-older,
+                (with home) to pin one, or pick = ["sales", "ops"] (2 to
+                8) to switch between a few from its header, no list
+                needed; compose, attachments, load-older,
                 activity-drawer, mute
   nav-rail      My Home, Agents, Projects, Tickets: a strip at the left
                 of its column, or a row in a band or at a column edge;

@@ -602,7 +602,8 @@ fn kind_is_chrome(w: &J) -> bool {
 
 /// Link each Conversation that follows nothing to the page's first Agents
 /// widget (column order, then declaration order), so the renderer reads
-/// an explicit `agents` prop (G27).
+/// an explicit `agents` prop (G27). A pinned one (`agent`) or one with its
+/// own list (`pick`) follows nothing.
 pub fn link_conversations(widgets: &mut [J]) {
     let mut agents: Vec<(u64, usize, String)> = widgets
         .iter()
@@ -613,7 +614,7 @@ pub fn link_conversations(widgets: &mut [J]) {
     agents.sort();
     let Some((_, _, first)) = agents.first().cloned() else { return };
     for w in widgets.iter_mut().filter(|w| w["kind"] == "conversation") {
-        if w["props"].get("agents").is_none() && w["props"].get("agent").is_none() {
+        if w["props"].get("agents").is_none() && w["props"].get("agent").is_none() && w["props"].get("pick").is_none() {
             w["props"]["agents"] = json!(first);
         }
     }

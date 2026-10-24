@@ -23,7 +23,10 @@
 // Agents widget, or the one its `agents` prop names. The empty-Garden
 // widget's "Ask my agent" opens a conversation with an agent on this
 // computer that needn't be on any Home. Selection is per view:
-// `<gardenId>/<widgetId>`.
+// `<gardenId>/<widgetId>`. A Conversation with `pick` (Fleet Ops 2, Rosson
+// 2026-10-24) shows exactly its listed agents, from the Garden's reach
+// (this computer and every Home, any server), in `pick` order
+// (`zen-conversation-pick.ts`); its header switches between them.
 //
 // Rows (`agents.list` / `agents.subscribe`): the view's rows in Home order
 // (so ⌘1–9 stays meaningful), multi-server, from the stores Home already
@@ -132,6 +135,7 @@ import { checkZenWidgetCap } from './zen-widget-routes'
 import { exitZen, zenShownNow } from './zen-view'
 import type { ZenResolvedPage, ZenWidgetDecl } from './zen-page'
 import { useZenGardenHomesStore, zenGardenHomeKey } from './zen-garden-homes'
+import { zenConversationPick, zenFindPickRow, zenMatchesAgent } from './zen-conversation-pick'
 import { ZEN_CUSTOM_KIND } from './zen-page'
 import { requestZenServerRoster, useZenServerRosters, zenRosterWorkspaces, zenWidgetReachRows } from './zen-custom-scope'
 import { ZEN_AGENTS_SHOW_MAX, zenWidgetMayRun, type ZenCustomWidgetPayload } from './zen-custom-types'
@@ -487,14 +491,18 @@ export interface ZenView {
    *  `list` (0.46.3 r10): an Agents widget with `list-from`: the rows its
    *  custom widget listed with `k2.agents.show`, in that order, that are in
    *  the reach now (`listKey`). Its `key` is the custom widget's, so the
-   *  custom widget, the list and a following Conversation share one pick. */
-  source?: 'home' | 'workspaces' | 'reach' | 'list'
+   *  custom widget, the list and a following Conversation share one pick.
+   *  `pick` (Fleet Ops 2): a Conversation's own short list (`pick`): the
+   *  reach rows its names match, in its order; the rest are left out. */
+  source?: 'home' | 'workspaces' | 'reach' | 'list' | 'pick'
   /** `source: 'reach'` or `'list'`: false for a widget that may not run
    *  (v4's imported widgets), or a list whose custom widget isn't on the
    *  page: no rows at all. */
   reach?: boolean
   /** `source: 'list'`: the custom widget's view key its list is held under. */
   listKey?: string
+  /** `source: 'pick'`: the names or addresses, in the file's order. */
+  pick?: readonly string[]
 }
 
 /** One focus group as the Agents view's dropdown shows it. */
@@ -885,6 +893,10 @@ export function zenViewFor(page: ZenResolvedPage, gardenId: string, widgetId: st
   if (w.kind === 'agents') return agentsView(page, gardenId, w)
   if (w.kind === ZEN_CUSTOM_KIND) return customView(gardenId, w)
   if (w.kind === 'conversation') {
+    const pick = zenConversationPick(w.props)
+    if (pick) {
+      return { key: zenGardenHomeKey(gardenId, w.id), gardenId, widgetId: w.id, homeId: null, agent: null, source: 'pick', pick }
+    }
     if (propString(w.props, 'agent')) return homeView(gardenId, w)
     const named = propString(w.props, 'agents')
     // UW40: it may follow a custom widget that reads agents (always named).
@@ -925,10 +937,19 @@ export function zenHomeIdForCtx(ctx: ZenVerbCtx): string | null {
 }
 
 function matchesAgent(row: HomeRow, agent: string): boolean {
-  const a = agent.toLocaleLowerCase()
-  if (row.address === a) return true
-  const p = parseHomeAddress(row.address)
-  return (p !== null && p.handle === a) || row.label.toLocaleLowerCase() === a
+  return zenMatchesAgent(row, agent)
+}
+
+/** A `pick` view's rows: per name, its row in the Garden's reach (each row
+ *  once), in `pick` order. A name nothing answers to is left out. */
+function pickRows(view: ZenView): HomeRow[] {
+  const reach = zenWidgetReachRows().rows
+  const out: HomeRow[] = []
+  for (const name of view.pick ?? []) {
+    const r = zenFindPickRow(reach, name)
+    if (r && !out.some((x) => x.address === r.address)) out.push(r)
+  }
+  return out
 }
 
 /** A row by address: on any Home, else an agent on this computer that
@@ -945,6 +966,7 @@ function anyRow(address: string): HomeRow | null {
 function viewRows(view: ZenView): HomeRow[] {
   if (view.source === 'reach') return view.reach ? zenWidgetReachRows().rows : []
   if (view.source === 'list') return listRows(view).listed
+  if (view.source === 'pick') return pickRows(view)
   if (view.source === 'workspaces') {
     const rows = workspaceRows()
     return view.agent ? rows.filter((r) => matchesAgent(r, view.agent as string)) : rows
@@ -1252,6 +1274,11 @@ function syncViewHomes(): void {
     // A custom widget reaches every Home's rows (so does a list, which is
     // drawn from that reach): they get Home's row-status poll too.
     if ((v?.source === 'reach' || v?.source === 'list') && v.reach) for (const id of allHomes()) ids.add(id)
+    // A pick view: the Homes its rows are on.
+    if (v?.source === 'pick') {
+      const on = new Set(pickRows(v).map((r) => r.address))
+      for (const home of useHomesStore.getState().homes) if (home.rows.some((r) => on.has(r.address))) ids.add(home.id)
+    }
   }
   const next = [...ids].sort()
   const prev = zenViewHomes.getState().homeIds
@@ -1454,7 +1481,7 @@ function findRow(view: ZenView, address: string): { row: HomeRow; index: number 
   const rows = viewRows(view)
   const index = rows.findIndex((r) => r.address === address)
   if (index >= 0) return { row: rows[index], index }
-  if (view.homeId === null && view.source !== 'workspaces' && view.source !== 'reach' && view.source !== 'list') {
+  if (view.homeId === null && (view.source === undefined || view.source === 'home')) {
     const loose = anyRow(address)
     if (loose) return { row: loose, index: 0 }
   }

@@ -253,6 +253,9 @@ pub const MAX_WIDGETS: usize = 12;
 pub const MAX_CHROME_WIDGETS: usize = 10;
 /// Longest text prop (a Home or agent name).
 pub const MAX_PROP_TEXT: usize = 200;
+/// A Conversation's `pick` (Fleet Ops 2, Rosson 2026-10-24): 2 to 8 agents.
+pub const PICK_MIN: usize = 2;
+pub const PICK_MAX: usize = 8;
 
 /// Built-in widget kinds a Garden file may place, with what they show.
 pub const WIDGET_KINDS: &[(&str, &str)] = &[
@@ -437,6 +440,9 @@ pub enum PropType {
     SubsetOf(&'static [&'static str]),
     /// A whole number from `min` to `max` (inclusive).
     Int { min: i64, max: i64 },
+    /// A list of `min` to `max` agent names or addresses (each like
+    /// [`PropType::Text`]), no repeats (case aside).
+    Names { min: usize, max: usize },
 }
 
 /// One prop of a built-in widget kind. `default` is JSON; `None` means
@@ -562,6 +568,13 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         ty: PropType::Text,
         default: None,
         doc: "pin one agent's conversation by name or address (no Agents widget needed); not with `agents`",
+    },
+    WidgetProp {
+        kind: "conversation",
+        name: "pick",
+        ty: PropType::Names { min: PICK_MIN, max: PICK_MAX },
+        default: None,
+        doc: "the header is a drop-down that switches between these agents, by name or address, from this computer and your Homes on other servers (no Agents widget needed); it badges the others' unread and waiting counts, the first one shows until the person picks (per computer), and one that isn't found is a disabled card; not with `agent`, `agents` or `home`",
     },
     WidgetProp {
         kind: "conversation",
@@ -1670,6 +1683,29 @@ fn check_prop(ctx: &mut Ctx, p: &WidgetProp, v: &Item, pos: (usize, usize)) -> O
                 None
             }
         },
+        PropType::Names { min, max } => {
+            let items: Option<Vec<&str>> = v
+                .as_value()
+                .and_then(Value::as_array)
+                .and_then(|a| a.iter().map(|x| x.as_str().map(str::trim)).collect::<Option<Vec<_>>>());
+            let ok_name = |s: &str| !s.is_empty() && s.chars().count() <= MAX_PROP_TEXT && !s.chars().any(char::is_control);
+            match items {
+                Some(xs)
+                    if (min..=max).contains(&xs.len())
+                        && xs.iter().all(|x| ok_name(x))
+                        && xs.iter().map(|x| x.to_lowercase()).collect::<std::collections::BTreeSet<_>>().len() == xs.len() =>
+                {
+                    Some(json!(xs))
+                }
+                _ => {
+                    ctx.error(
+                        vp,
+                        format!("{what} must be a list of {min} to {max} agent names or addresses (text, 1 to {MAX_PROP_TEXT} characters each, no repeats), like [\"sales\", \"ops\"]"),
+                    );
+                    None
+                }
+            }
+        }
         PropType::SubsetOf(allowed) => {
             let items: Option<Vec<&str>> = v
                 .as_value()
@@ -2218,7 +2254,25 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 ctx.error(p, "a Conversation either follows an Agents widget (agents) or pins one agent (agent), not both");
                 ok = false;
             }
-            if props.contains_key("home") && !props.contains_key("agent") {
+            // Fleet Ops 2: `pick` is its own list; nothing else chooses the agent.
+            if props.contains_key("pick") {
+                for (other, why) in [
+                    ("agent", "pins one agent"),
+                    ("agents", "follows an Agents widget"),
+                    ("home", "picks a Home to look `agent` up in"),
+                ] {
+                    if props.contains_key(other) {
+                        let p = prop_at(ctx, other);
+                        ctx.error(
+                            p,
+                            format!(
+                                "{other} {why}, but pick lists the agents this Conversation switches between (looked up on this computer and all your Homes); drop one of them"
+                            ),
+                        );
+                        ok = false;
+                    }
+                }
+            } else if props.contains_key("home") && !props.contains_key("agent") {
                 let p = prop_at(ctx, "home");
                 ctx.error(
                     p,
@@ -2476,7 +2530,7 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
         }
         if w["kind"] == "conversation" {
             if let Some(i) = idx {
-                let pinned = w["props"]["agent"].is_string();
+                let pinned = w["props"]["agent"].is_string() || w["props"]["pick"].is_array();
                 match w["props"]["agents"].as_str() {
                     Some(target) if !followable.iter().any(|a| a == target) => {
                         let p = ctx.pos.get(&format!("page.widget.{i}.props.agents")).copied().unwrap_or(at);

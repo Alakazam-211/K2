@@ -20,6 +20,7 @@ import { ZenBridgeError } from '@/lib/zen/zen-bridge'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import type { ZenWidgetDecl } from '@/lib/zen/zen-page'
 import { ZEN_COLUMN_TAB_MIN_HEIGHT_PX, ZEN_COLUMN_TAB_PX } from '@/lib/zen/zen-overflow'
+import { zenConversationPick } from '@/lib/zen/zen-conversation-pick'
 import { zenConversationRow } from './widgets/ZenConversationWidget'
 import { ZenUnreadPills } from './widgets/ZenAgentsWidget'
 import { TEXTING_BAR_HEIGHT_PX } from './ZenTemplateControls'
@@ -73,7 +74,8 @@ export function zenColumnUnread(rowsBySource: ReadonlyArray<readonly ZenAgentRow
 }
 
 function rowsOf(source: ZenColumnBadgeSource, rows: readonly ZenAgentRow[]): ZenAgentRow[] {
-  if (source.decl.kind !== 'conversation') return [...rows]
+  // A Conversation with `pick`: its rows are just its agents, all counted.
+  if (source.decl.kind !== 'conversation' || zenConversationPick(source.decl.props)) return [...rows]
   const row = zenConversationRow(rows, source.decl.props)
   return row ? [row] : []
 }

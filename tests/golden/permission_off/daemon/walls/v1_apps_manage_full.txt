@@ -22,12 +22,17 @@ content-type: application/json
     "ownerWorkspace": "<APPS_WS_ID>",
     "path": "guarded",
     "previewSeed": null,
+    "rehostPolicy": "auto",
+    "rehostWhenNoOverlap": "pause",
+    "rehostWindow": null,
     "seedId": null,
     "serviceId": "<UUID>",
     "source": "seed",
     "state": "stopped",
     "stateReason": "installed; no Seed deployed yet",
-    "updatedAt": "<updatedAt>"
+    "updatedAt": "<updatedAt>",
+    "warmDeployment": null,
+    "warmUntil": null
   },
   "applied": [],
   "held": {
@@ -117,12 +122,17 @@ content-type: application/json
     "ownerWorkspace": "<APPS_WS_ID>",
     "path": "guarded",
     "previewSeed": null,
+    "rehostPolicy": "auto",
+    "rehostWhenNoOverlap": "pause",
+    "rehostWindow": null,
     "seedId": null,
     "serviceId": "<UUID>",
     "source": "seed",
     "state": "stopped",
     "stateReason": "installed; no Seed deployed yet",
-    "updatedAt": "<updatedAt>"
+    "updatedAt": "<updatedAt>",
+    "warmDeployment": null,
+    "warmUntil": null
   },
   "applied": [],
   "held": {

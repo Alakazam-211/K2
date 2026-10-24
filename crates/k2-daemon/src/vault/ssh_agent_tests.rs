@@ -383,8 +383,9 @@ fn the_socket_goes_at_session_end_and_is_re_served_after_a_restart() {
     assert_eq!(rec.sock_path, sock.to_string_lossy());
     assert!(rec.ptyd_boot.is_empty(), "not bound until ptyd spawns the session");
     // What the ptyd spawn hook does once ptyd has started the process.
-    assert!(v.agent_socket_bind(&sid, "boot-life", 3131, 1_700_000_100).expect("bind"));
-    let proc = Adopted { boot_id: "boot-life", pid: 3131, started_at: 1_700_000_100 };
+    let (mut child, cpid, cstart) = live_child_for_tests();
+    assert!(v.agent_socket_bind(&sid, "boot-life", cpid, cstart).expect("bind"));
+    let proc = Adopted { boot_id: "boot-life", pid: cpid, started_at: cstart };
 
     // Restart: the server is gone but the session (and its dir) survive;
     // after adoption it is re-served from the record.
@@ -410,6 +411,8 @@ fn the_socket_goes_at_session_end_and_is_re_served_after_a_restart() {
     }
     assert!(UnixStream::connect(&sock).is_err());
     assert!(v.agent_socket_get(&sid).expect("record").is_none(), "record dropped at session end");
+    let _ = child.kill();
+    let _ = child.wait();
 
     // A sandboxed cell gets no socket.
     let mut env3 = HashMap::new();

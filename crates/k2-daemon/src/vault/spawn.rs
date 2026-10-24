@@ -441,14 +441,14 @@ fn remove_dir(d: &Path) {
 /// `O_WRONLY|O_NOFOLLOW|O_NONBLOCK` and the zeroing re-checks the open
 /// file (`fstat`): a regular file, ours, with one link (a hard link to
 /// another file of ours is unlinked, never zeroed), at most 16 MiB. A
-/// planted subdirectory is removed with [`wipe_tree`] (bounded, no
-/// following, never zeroing).
+/// planted subdirectory is removed with `std::fs::remove_dir_all`, which
+/// on Unix walks with `openat`/`O_NOFOLLOW` and never follows a symlink,
+/// even one swapped in mid-walk; nothing in it is zeroed.
 pub(crate) fn wipe_entry(p: &Path) {
     let me = unsafe { libc::geteuid() };
     let Ok(lm) = std::fs::symlink_metadata(p) else { return };
     if lm.file_type().is_dir() {
-        let mut budget = WIPE_TREE_MAX_ENTRIES;
-        wipe_tree(p, WIPE_TREE_MAX_DEPTH, &mut budget);
+        let _ = std::fs::remove_dir_all(p);
         return;
     }
     if lm.file_type().is_file() {
@@ -462,40 +462,6 @@ pub(crate) fn wipe_entry(p: &Path) {
         }
     }
     let _ = std::fs::remove_file(p);
-}
-
-const WIPE_TREE_MAX_DEPTH: usize = 4;
-const WIPE_TREE_MAX_ENTRIES: usize = 1000;
-
-/// Remove a directory planted in a secrets dir: unlink everything in it
-/// (files, sockets, FIFOs, links: never followed, never zeroed), at most
-/// [`WIPE_TREE_MAX_DEPTH`] levels and [`WIPE_TREE_MAX_ENTRIES`] entries;
-/// past either bound what's left stays (the secrets dir then can't be
-/// removed, which is harmless).
-fn wipe_tree(dir: &Path, depth: usize, budget: &mut usize) {
-    let Ok(m) = std::fs::symlink_metadata(dir) else { return };
-    if !m.file_type().is_dir() {
-        return;
-    }
-    if depth > 0 {
-        if let Ok(rd) = std::fs::read_dir(dir) {
-            for e in rd.flatten() {
-                if *budget == 0 {
-                    return;
-                }
-                *budget -= 1;
-                let p = e.path();
-                match std::fs::symlink_metadata(&p) {
-                    Ok(em) if em.file_type().is_dir() => wipe_tree(&p, depth - 1, budget),
-                    Ok(_) => {
-                        let _ = std::fs::remove_file(&p);
-                    }
-                    Err(_) => {}
-                }
-            }
-        }
-    }
-    let _ = std::fs::remove_dir(dir);
 }
 
 /// The secrets dir the boot sweep kept for a surviving session (item 3:
@@ -674,10 +640,12 @@ mod tests {
         let live_sock = agent::start(&v, who(&live), &live, &live_dir).expect("start");
         let dead_sock = agent::start(&v, who(&dead), &dead, &dead_dir).expect("start");
         assert!(v.agent_socket_get(&live).expect("rec").is_some(), "the daemon recorded the socket");
-        // k2-ptyd spawned `live`: its record is bound to that instance and process.
-        assert!(v.agent_socket_bind(&live, "boot-1", 4242, 1_700_000_000).expect("bind"));
-        assert!(!v.agent_socket_bind(&live, "boot-1", 9999, 1_700_000_000).expect("rebind"), "bound once, for the session's life");
-        let proc = agent::Adopted { boot_id: "boot-1", pid: 4242, started_at: 1_700_000_000 };
+        // k2-ptyd spawned `live`: its record is bound to that instance and
+        // process (a real, live process: the OS is checked too).
+        let (mut child, cpid, cstart) = agent::live_child_for_tests();
+        assert!(v.agent_socket_bind(&live, "boot-1", cpid, cstart).expect("bind"));
+        assert!(!v.agent_socket_bind(&live, "boot-1", cpid + 1, cstart).expect("rebind"), "bound once, for the session's life");
+        let proc = agent::Adopted { boot_id: "boot-1", pid: cpid, started_at: cstart };
         // Planted FIFOs (a reader-less FIFO blocks a plain open for write).
         mkfifo(&dead_dir.join("a.sock.path"));
         mkfifo(&dead_dir.join("token"));
@@ -700,7 +668,7 @@ mod tests {
         let e = agent::resume_adopted(&v, &live, proc, Some(&other_ws), Some(&live_dir), Some(&live_dir)).expect_err("rewritten meta");
         assert_eq!(e, ResumeRefused::WorkspaceMismatch);
         // Another process under the same sid (a forged spawn), or another ptyd: refused.
-        let forged = agent::Adopted { pid: 4243, ..proc };
+        let forged = agent::Adopted { pid: cpid + 100_000, ..proc };
         let e = agent::resume_adopted(&v, &live, forged, Some(&ws), Some(&live_dir), Some(&live_dir)).expect_err("forged spawn");
         assert_eq!(e, ResumeRefused::ProcessMismatch);
         let other_ptyd = agent::Adopted { boot_id: "boot-2", ..proc };
@@ -757,17 +725,35 @@ mod tests {
         let e = agent::resume_adopted(&v, &live, forged, Some(&ws), Some(&live_dir), Some(&live_dir)).expect_err("replayed record");
         assert_eq!(e, ResumeRefused::ProcessMismatch);
         // A record never bound to ptyd is never re-served.
-        v.agent_socket_put_unchecked_for_tests(&k2_vault::vault::AgentSocket { ptyd_boot: String::new(), pid: 0, started_at: 0, ..saved })
+        v.agent_socket_put_unchecked_for_tests(&k2_vault::vault::AgentSocket { ptyd_boot: String::new(), pid: 0, started_at: 0, ..saved.clone() })
             .expect("unbound record");
         let e = agent::resume_adopted(&v, &live, proc, Some(&ws), Some(&live_dir), Some(&live_dir)).expect_err("not ptyd");
         assert_eq!(e, ResumeRefused::NotPtyd);
+        // A fake ptyd repeating a replayed record's values: the OS says the
+        // pid is dead, or started at another time.
+        let mut dead = std::process::Command::new("true").spawn().expect("spawn true");
+        let dead_pid = i64::from(dead.id());
+        dead.wait().expect("reap");
+        v.agent_socket_put_unchecked_for_tests(&k2_vault::vault::AgentSocket { pid: dead_pid, started_at: cstart, ..saved.clone() })
+            .expect("dead-pid record");
+        let fake = agent::Adopted { boot_id: "boot-1", pid: dead_pid, started_at: cstart };
+        let e = agent::resume_adopted(&v, &live, fake, Some(&ws), Some(&live_dir), Some(&live_dir)).expect_err("dead pid");
+        assert_eq!(e, ResumeRefused::ProcessGone);
+        v.agent_socket_put_unchecked_for_tests(&k2_vault::vault::AgentSocket { started_at: cstart - 100, ..saved.clone() })
+            .expect("wrong-start record");
+        let fake = agent::Adopted { boot_id: "boot-1", pid: cpid, started_at: cstart - 100 };
+        let e = agent::resume_adopted(&v, &live, fake, Some(&ws), Some(&live_dir), Some(&live_dir)).expect_err("wrong start time");
+        assert_eq!(e, ResumeRefused::ProcessGone);
         v.agent_socket_remove(&live).expect("cleanup");
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
-    /// Item 3: short-path socket dirs of this vault's namespace that no
-    /// record names and nothing answers on (a crash) go at boot; named
-    /// ones, live ones and other namespaces' stay. Runs under a temp
-    /// `$TMPDIR` (env lock), never the real short-path root.
+    /// Item 3: short-path socket dirs in this vault's roots that no record
+    /// names (a crash) go at boot, with no connect probe: a planted
+    /// never-accepting listener (backlog 0) can't stall it. Named ones and
+    /// other namespaces' stay; a symlinked dir is never followed. Runs
+    /// under a temp `$TMPDIR` (env lock), never the real short-path root.
     #[test]
     fn boot_removes_orphaned_short_path_socket_dirs() {
         use super::super::ssh_agent as agent;
@@ -793,10 +779,36 @@ mod tests {
         std::fs::create_dir(&orphan).expect("orphan");
         let l = std::os::unix::net::UnixListener::bind(orphan.join("a.sock")).expect("bind");
         drop(l);
-        // A live socket nobody recorded (another daemon's, say): it answers.
-        let live = root.join(k2_vault::crypto::base62(8));
-        std::fs::create_dir(&live).expect("live");
-        let live_l = std::os::unix::net::UnixListener::bind(live.join("a.sock")).expect("bind live");
+        // A planted listener that never accepts, backlog 0 (a blocking
+        // connect to it would hang on Linux).
+        let stall = root.join(k2_vault::crypto::base62(8));
+        std::fs::create_dir(&stall).expect("stall");
+        let stall_fd = {
+            let path = std::ffi::CString::new(stall.join("a.sock").as_os_str().as_encoded_bytes()).expect("path");
+            // SAFETY: a fresh socket, a zeroed sockaddr_un filled within bounds.
+            unsafe {
+                let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+                assert!(fd >= 0, "socket");
+                let mut addr: libc::sockaddr_un = std::mem::zeroed();
+                addr.sun_family = libc::AF_UNIX as _;
+                let bytes = path.as_bytes_with_nul();
+                assert!(bytes.len() <= addr.sun_path.len());
+                for (i, b) in bytes.iter().enumerate() {
+                    addr.sun_path[i] = *b as libc::c_char;
+                }
+                let len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+                assert_eq!(libc::bind(fd, &addr as *const _ as *const libc::sockaddr, len), 0, "bind");
+                assert_eq!(libc::listen(fd, 0), 0, "listen");
+                fd
+            }
+        };
+        // A symlinked 8-char dir pointing at another dir with a socket.
+        let elsewhere = tmpdir.join("elsewhere");
+        std::fs::create_dir(&elsewhere).expect("elsewhere");
+        let el = std::os::unix::net::UnixListener::bind(elsewhere.join("a.sock")).expect("bind elsewhere");
+        drop(el);
+        let linked = root.join(k2_vault::crypto::base62(8));
+        std::os::unix::fs::symlink(&elsewhere, &linked).expect("symlink");
         // Another namespace's root: never looked at.
         let other_root = tmpdir.join("k2a-0badc0de");
         let other = other_root.join(k2_vault::crypto::base62(8));
@@ -811,12 +823,17 @@ mod tests {
         let ws = uuid::Uuid::new_v4().to_string();
         let sock = agent::start(&v, Requester::Session { workspace_id: ws, session_id: Some(tag.clone()) }, &tag, &long).expect("start");
         assert!(sock.as_os_str().len() <= agent::MAX_SOCK_PATH, "{}", sock.display());
+        let t0 = std::time::Instant::now();
         agent::boot_sweep(&v, &[(tag.clone(), long.clone())]);
+        assert!(t0.elapsed() < std::time::Duration::from_secs(5), "a never-accepting listener must not stall boot");
         assert!(!orphan.exists(), "an orphaned short-path dir goes");
+        assert!(!stall.exists(), "so does an unrecorded never-accepting one (no probe)");
         assert!(sock.exists(), "a recorded one stays");
-        assert!(live.join("a.sock").exists(), "a socket that answers is never removed");
+        assert!(std::fs::symlink_metadata(&linked).is_ok_and(|m| m.file_type().is_symlink()), "a symlinked dir is left alone");
+        assert!(std::fs::symlink_metadata(elsewhere.join("a.sock")).is_ok(), "and never followed");
         assert!(other.join("a.sock").exists(), "another K2 home's namespace is never swept");
-        drop(live_l);
+        // SAFETY: closing the test's own fd.
+        unsafe { libc::close(stall_fd) };
         agent::stop_dir(&long);
         assert!(!sock.exists() && !sock.parent().expect("dir").exists());
     }

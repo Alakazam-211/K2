@@ -411,6 +411,8 @@ pub struct LocalVault {
     /// connection's `PRAGMA data_version`): recomputed when K2 appends or
     /// anything else writes the file.
     audit_whole: Mutex<Option<(u64, i64, bool)>>,
+    /// Things worth telling the owner that aren't tamper (doctor `info`).
+    info: Mutex<Vec<String>>,
     rollups: Mutex<Rollups>,
     pub confirm: Broker,
     pub throttle: Throttle,
@@ -531,6 +533,7 @@ impl LocalVault {
             rollback: Mutex::new(false),
             tamper: Mutex::new(tamper_notes),
             audit_whole: Mutex::new(None),
+            info: Mutex::new(Vec::new()),
             rollups: Mutex::new(Rollups::default()),
             confirm: Broker::default(),
             throttle: Throttle::default(),
@@ -662,6 +665,19 @@ impl LocalVault {
 
     pub fn tamper_notes(&self) -> Vec<String> {
         self.tamper.lock().clone()
+    }
+
+    /// Notes for `k2 vault doctor` that aren't tamper (e.g. agent policies
+    /// reset by an upgrade from a pre-release build).
+    pub fn info_notes(&self) -> Vec<String> {
+        self.info.lock().clone()
+    }
+
+    fn info_once(&self, note: String) {
+        let mut t = self.info.lock();
+        if t.len() < TAMPER_NOTES_MAX && !t.contains(&note) {
+            t.push(note);
+        }
     }
 
     /// Record a tamper note once: a repeated read of the same bad row (a
@@ -985,6 +1001,11 @@ impl LocalVault {
                 if req.mode == PutMode::Create {
                     return Err(VaultError::conflict("secret_exists", format!("{} already exists; use rotate", req.name)));
                 }
+                // A new ssh_key version must read as a key (item 3), unless
+                // another vault already accepted it.
+                if row.meta.kind == Kind::SshKey && !req.landed_copy {
+                    crate::ssh_agent::check_ssh_key_value(value.expose())?;
+                }
                 self.rotate_row(row, value, actor, req.idempotent, trimmed, None)
             }
             None => {
@@ -1026,7 +1047,7 @@ impl LocalVault {
                     return Err(VaultError::bad_request("delivery_above_ceiling", "the delivery is looser than the ceiling"));
                 }
                 agent_store::check_agent_delivery(req.kind, &[default_delivery, ceiling], Some(value.expose()))?;
-                if req.kind == Kind::SshKey {
+                if req.kind == Kind::SshKey && !req.landed_copy {
                     crate::ssh_agent::check_ssh_key_value(value.expose())?;
                 }
                 if req.scope.kind == ScopeKind::Session && req.expires_at.is_none() {
@@ -1090,9 +1111,6 @@ impl LocalVault {
             s.check_value(value.expose())?;
         }
         agent_store::check_agent_delivery(m.kind, &[m.default_delivery, m.delivery_ceiling], Some(value.expose()))?;
-        if m.kind == Kind::SshKey {
-            crate::ssh_agent::check_ssh_key_value(value.expose())?;
-        }
         {
             let keys = self.keys.read();
             let conn = self.conn.lock();
@@ -3176,6 +3194,9 @@ impl SecretStore for LocalVault {
         let (value, trimmed) = Self::prepare_value(row.meta.kind, value)?;
         if row.meta.namespace == Namespace::User && *self.rollback.lock() {
             return Err(VaultError::new("vault_rollback", 409, "the vault looks rolled back; the owner must confirm in Settings → Vault"));
+        }
+        if row.meta.kind == Kind::SshKey {
+            crate::ssh_agent::check_ssh_key_value(value.expose())?;
         }
         self.rotate_row(row, value, actor, false, trimmed, None)
     }

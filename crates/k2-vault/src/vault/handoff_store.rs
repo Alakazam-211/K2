@@ -486,6 +486,8 @@ impl LocalVault {
         req.default_delivery = Some(d);
         req.delivery_ceiling = Some(c);
         req.origin = format!("{}{delivery_id}", h::ORIGIN_PREFIX);
+        // The sending vault accepted the value (item 3: no shape re-check).
+        req.landed_copy = true;
         let desc = if inc_item.description.trim().is_empty() {
             format!("From {label}")
         } else {

@@ -668,6 +668,9 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
     if let Some(f) = downgrade_finding(&vault.downgrade_blockers()?) {
         findings.push(f);
     }
+    for n in vault.info_notes() {
+        findings.push(json!({ "level": "info", "code": "vault_note", "message": n }));
+    }
     if let Some(r) = crate::vault::spawn::runtime_logind_risk() {
         findings.push(json!({
             "level": "warning",

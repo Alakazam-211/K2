@@ -68,7 +68,7 @@ fn agent_is_for_ssh_keys_the_agent_can_serve() {
     assert_eq!(v.put(r, SecretBytes::from_slice(b"not a key"), &Actor::Owner).expect_err("junk").code, "bad_value");
     let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), "OLD_RSA", Kind::SshKey);
     r.default_delivery = Some(Delivery::Agent);
-    assert_eq!(v.put(r, SecretBytes::from_slice(testkeys::rsa1024_pem().as_bytes()), &Actor::Owner).expect_err("1024").code, "bad_value");
+    assert_eq!(v.put(r, SecretBytes::from_slice(testkeys::rsa1024_pem().as_bytes()), &Actor::Owner).expect_err("1024").code, "agent_key_type");
     // A file-delivery ssh key may hold anything (unchanged), but can't be
     // switched to agent or granted as agent while its value isn't servable.
     let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), "ANY_FILE", Kind::SshKey);
@@ -367,6 +367,8 @@ fn a_vault_with_the_pre_release_agent_tables_opens() {
     let v = open(&t, &ks);
     let p = v.agent_policy(&k.id).expect("policy");
     assert_eq!((p.burst, p.per_minute, p.allow_forwarded), (1, 1, false), "a policy that was set reads as missing: strictest");
+    assert_eq!(v.status().tamper, "ok", "an upgrade's reset isn't an alarm");
+    assert!(v.info_notes().iter().any(|n| n.contains("reset by an upgrade")), "{:?}", v.info_notes());
     let d = v.agent_policy(&k2.id).expect("defaults");
     assert_eq!((d.burst, d.per_minute, d.allow_forwarded), (60, 240, false), "never set: the defaults");
     assert!(v.agent_sockets().expect("socks").is_empty(), "old socket records are dropped");
@@ -511,4 +513,110 @@ fn agent_rows_stay_readable_by_r2_tolerant_daemons() {
     assert!(v.spawn_items(&session("ws2", "s2")).expect("ws2").is_empty());
     assert!(v.agent_identities(&session("ws1", "s1")).expect("identities must not fail").is_empty());
     assert_eq!(v.status().tamper, "ok");
+}
+
+
+/// Round 4: every key format by delivery. File and env take any
+/// well-formed PEM or OpenSSH private key (any type, with or without a
+/// passphrase); agent takes only ed25519 and RSA >= 2048 (agent_key_type
+/// otherwise, ssh_key_encrypted with a passphrase). A key on one line is
+/// refused with the line-break hint; other junk without it.
+#[test]
+fn every_key_format_by_delivery() {
+    let (_t, v) = vault();
+    let pem = |label: &str| format!("-----BEGIN {label}-----\nMHcCAQEEIGbase64Body0123456789abcdef+/\nAwEHoUQDQgAE\n-----END {label}-----\n");
+    let enc_pem = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0011223344556677\n\nAAAAbase64body\n-----END RSA PRIVATE KEY-----\n".to_string();
+    let flat = testkeys::ed25519().replace('\n', " ");
+    // (name, value, file/env outcome, agent outcome); "" = accepted.
+    let cases: Vec<(&str, String, &str, &str)> = vec![
+        ("openssh_ed25519", testkeys::ed25519(), "", ""),
+        ("openssh_rsa2048", testkeys::rsa2048(), "", ""),
+        ("pkcs1_rsa2048", testkeys::rsa2048_pem(), "", ""),
+        ("pkcs8_rsa2048", testkeys::rsa2048_pkcs8(), "", ""),
+        ("openssh_p256", testkeys::p256(), "", "agent_key_type"),
+        ("pkcs1_rsa1024", testkeys::rsa1024_pem(), "", "agent_key_type"),
+        ("pem_ec", pem("EC PRIVATE KEY"), "", "agent_key_type"),
+        ("pem_pkcs8_other", pem("PRIVATE KEY"), "", "agent_key_type"),
+        ("pem_dsa", pem("DSA PRIVATE KEY"), "", "agent_key_type"),
+        ("pem_encrypted_rsa", enc_pem, "", "ssh_key_encrypted"),
+        ("pem_encrypted_pkcs8", pem("ENCRYPTED PRIVATE KEY"), "", "ssh_key_encrypted"),
+        ("flattened", flat, "bad_value", "bad_value"),
+        ("junk", "k2test-not-a-key".to_string(), "bad_value", "bad_value"),
+    ];
+    for (i, (name, value, file_code, agent_code)) in cases.iter().enumerate() {
+        for (d, want) in [(Delivery::File, *file_code), (Delivery::Env, *file_code), (Delivery::Agent, *agent_code)] {
+            let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), format!("K{i}_{}", d.as_str()), Kind::SshKey);
+            r.default_delivery = Some(d);
+            let got = v.put(r, SecretBytes::from_slice(value.as_bytes()), &Actor::Owner);
+            match (want, got) {
+                ("", Ok(_)) => {}
+                ("", Err(e)) => panic!("{name} as {d}: refused {e:?}"),
+                (code, Ok(_)) => panic!("{name} as {d}: accepted, want {code}"),
+                (code, Err(e)) => {
+                    assert_eq!(e.code, code, "{name} as {d}: {}", e.hint);
+                    if *name == "flattened" && d != Delivery::Agent {
+                        assert!(e.hint.contains("line breaks"), "{name}: {}", e.hint);
+                    }
+                    if *name == "junk" {
+                        assert!(!e.hint.contains("line breaks"), "{name}: {}", e.hint);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Round 4: a copy another vault accepted (carry, clone, handoff) lands
+/// without the shape re-check; agent delivery still needs a served key.
+#[test]
+fn a_landed_copy_skips_the_shape_check_but_not_the_agent_check() {
+    let (_t, v) = vault();
+    let flat = testkeys::ed25519().replace('\n', " ");
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), "CARRIED", Kind::SshKey);
+    r.default_delivery = Some(Delivery::File);
+    r.landed_copy = true;
+    v.put(r, SecretBytes::from_slice(flat.as_bytes()), &Actor::Owner).expect("a landed copy lands");
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), "CARRIED_AGENT", Kind::SshKey);
+    r.default_delivery = Some(Delivery::Agent);
+    r.landed_copy = true;
+    assert_eq!(v.put(r, SecretBytes::from_slice(flat.as_bytes()), &Actor::Owner).expect_err("agent").code, "bad_value");
+}
+
+/// Round 4 (RC): rewriting the newer policy audit row's action/outcome in
+/// place (so the older entry looks latest) and putting the older, looser
+/// row back can't revive it: the audit chain's MACs no longer hold.
+#[test]
+fn editing_an_audit_entry_in_place_cannot_revive_an_older_policy() {
+    let t = TestDir::new("agent-audit-edit");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let k = put_key(&v, "ws1", "KEY", &testkeys::ed25519(), Delivery::Agent, &Actor::Owner);
+    let sel = Selector::Id(k.id.clone());
+    v.set_agent_policy(&sel, AgentPolicyPatch { allow_forwarded: Some(true), ..Default::default() }, &Actor::Owner).expect("allow");
+    let db = t.path().join("vault/vault.db");
+    let old: (i64, i64, i64, String, String, i64, Vec<u8>) = rusqlite::Connection::open(&db)
+        .expect("db")
+        .query_row(
+            "SELECT burst, per_minute, allow_forwarded, updated_by, updated_at, audit_seq, row_mac FROM agent_policy WHERE secret_id = ?1",
+            [&k.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+        )
+        .expect("row");
+    v.set_agent_policy(&sel, AgentPolicyPatch { allow_forwarded: Some(false), ..Default::default() }, &Actor::Owner).expect("tighten");
+    drop(v);
+    let c = rusqlite::Connection::open(&db).expect("db");
+    let newest: i64 = c
+        .query_row("SELECT MAX(seq) FROM audit WHERE secret_id = ?1 AND action = 'policy' AND outcome LIKE 'ok:agent %'", [&k.id], |r| r.get(0))
+        .expect("newest");
+    c.execute("UPDATE audit SET action = 'note', outcome = 'ok' WHERE seq = ?1", [newest]).expect("edit in place");
+    c.execute(
+        "UPDATE agent_policy SET burst = ?2, per_minute = ?3, allow_forwarded = ?4, updated_by = ?5, updated_at = ?6, audit_seq = ?7, row_mac = ?8 WHERE secret_id = ?1",
+        rusqlite::params![k.id, old.0, old.1, old.2, old.3, old.4, old.5, old.6],
+    )
+    .expect("replay");
+    drop(c);
+    let v = open(&t, &ks);
+    let p = v.agent_policy(&k.id).expect("policy");
+    assert!(!p.allow_forwarded, "the looser row must not come back");
+    assert_eq!((p.burst, p.per_minute), (1, 1), "strictest while the audit chain is broken");
 }

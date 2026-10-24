@@ -42,6 +42,42 @@ pub const DEFAULT_PER_MINUTE: u32 = 240;
 pub const BURST_MAX: u32 = 600;
 pub const PER_MINUTE_MAX: u32 = 6000;
 
+/// Walk the whole audit chain: contiguous from 1, each row's MAC good and
+/// linked to the previous row's, ending at the header's seq and MAC.
+fn audit_chain_matches(conn: &Connection, keys: &Keys, h: &Header) -> rusqlite::Result<bool> {
+    let mut st = conn.prepare(
+        "SELECT seq, ts, secret_id, version, action, actor, consumer, target_host, outcome, count, prev_mac, row_mac FROM audit ORDER BY seq",
+    )?;
+    let mut rows = st.query([])?;
+    let mut prev = vec![0u8; 32];
+    let mut expect: i64 = 1;
+    while let Some(r) = rows.next()? {
+        let seq: i64 = r.get(0)?;
+        if seq != expect {
+            return Ok(false);
+        }
+        let e = Entry {
+            secret_id: r.get(2)?,
+            version: r.get(3)?,
+            action: r.get(4)?,
+            actor: r.get(5)?,
+            consumer: r.get(6)?,
+            target_host: r.get(7)?,
+            outcome: r.get(8)?,
+            count: r.get::<_, i64>(9)? as u64,
+        };
+        let t: String = r.get(1)?;
+        let p: Vec<u8> = r.get(10)?;
+        let m: Vec<u8> = r.get(11)?;
+        if p != prev || audit::row_mac(&keys.audit, seq as u64, &t, &e, &p).as_slice() != m.as_slice() {
+            return Ok(false);
+        }
+        prev = m;
+        expect += 1;
+    }
+    Ok(expect - 1 == h.audit_seq as i64 && (h.audit_seq == 0 || prev == h.audit_mac))
+}
+
 /// The settings a secret falls back to when its row can't be trusted.
 fn strictest() -> AgentPolicy {
     AgentPolicy { burst: 1, per_minute: 1, allow_forwarded: false, updated_by: None, updated_at: None }
@@ -270,11 +306,13 @@ impl LocalVault {
         Ok(Some((seq, e.outcome)))
     }
 
-    /// Is the audit log whole: rows 1..=header.audit_seq, no gap, the
-    /// header's MAC good? Cached per (header seq, `PRAGMA data_version`):
-    /// K2's own appends move the header, any other write to the file moves
-    /// the data version, so an entry deleted behind K2's back is seen on
-    /// the next check.
+    /// Is the audit log whole and untouched: rows 1..=header.audit_seq with
+    /// no gap, every row's MAC good and linked to the previous one
+    /// (`prev_mac`), the last row's MAC equal to the MAC'd header's
+    /// `audit_mac`? A row deleted, added or edited in place (its action or
+    /// outcome rewritten) fails it. Cached per (header seq,
+    /// `PRAGMA data_version`): K2's own appends move the header, any other
+    /// write to the file moves the data version.
     fn audit_log_whole(&self, conn: &Connection, keys: &Keys) -> bool {
         let Ok(Some((h, mac))) = load_header(conn) else { return false };
         if !hmac_verify(&keys.header, &h.mac_input(), &mac) {
@@ -286,9 +324,7 @@ impl LocalVault {
                 return ok;
             }
         }
-        let counted: rusqlite::Result<(i64, i64, i64)> =
-            conn.query_row("SELECT COUNT(*), COALESCE(MIN(seq), 1), COALESCE(MAX(seq), 0) FROM audit", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)));
-        let ok = counted.is_ok_and(|(n, lo, hi)| lo == 1 && hi == h.audit_seq as i64 && n == hi);
+        let ok = audit_chain_matches(conn, keys, &h).unwrap_or(false);
         *self.audit_whole.lock() = Some((h.audit_seq, dv, ok));
         ok
     }
@@ -312,13 +348,24 @@ impl LocalVault {
         };
         match (row, latest) {
             (None, None) => Ok(AgentPolicy::default()),
-            (None, Some(_)) => {
-                // The audit log says a policy was set; the row is gone
-                // (removed outside K2, or reset by an upgrade from a
-                // pre-release build). A person sets it again.
-                self.tamper_once(format!(
-                    "the agent policy of {secret_id} is missing (removed outside K2, or reset by an upgrade); set it again with k2 vault agent-limit"
-                ));
+            (None, Some((seq, _))) => {
+                // The audit log says a policy was set; the row is gone. An
+                // upgrade from a pre-release build rebuilt the table (info);
+                // anything else removed it outside K2 (tamper). Either way
+                // the strictest settings until a person sets it again.
+                let reset_at: Option<i64> = conn
+                    .query_row("SELECT value FROM agent_meta WHERE key = 'policies_reset_seq'", [], |r| r.get::<_, String>(0))
+                    .optional()
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.parse().ok());
+                if reset_at.is_some_and(|r| seq <= r) {
+                    self.info_once(format!(
+                        "the agent policy of {secret_id} was reset by an upgrade from a pre-release build; set it again with k2 vault agent-limit (until then: the strictest limits)"
+                    ));
+                } else {
+                    self.tamper_once(format!("the agent policy of {secret_id} was removed outside K2; set it again with k2 vault agent-limit"));
+                }
                 Ok(strictest())
             }
             (Some((p, seq, mac)), latest) => {

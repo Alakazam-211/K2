@@ -95,6 +95,11 @@ pub struct PutRequest {
     /// Treat the value as human-given even if the actor is a subsystem
     /// (adoption of things people typed before 0.45.2).
     pub human_given_override: Option<bool>,
+    /// A copy another vault already accepted (carry, clone, handoff): the
+    /// ssh_key shape check (item 3) is skipped, so a value that vault took
+    /// still lands; callers warn when it doesn't read as a key. Agent
+    /// delivery still needs a key the agent serves.
+    pub landed_copy: bool,
 }
 
 impl PutRequest {
@@ -115,6 +120,7 @@ impl PutRequest {
             mode: PutMode::Upsert,
             idempotent: false,
             human_given_override: None,
+            landed_copy: false,
         }
     }
 }

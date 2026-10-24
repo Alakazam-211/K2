@@ -357,7 +357,63 @@ pub enum ResumeRefused {
     DirMismatch,
     /// The recorded socket path isn't one this session may use.
     BadSocketPath,
+    /// The OS says the bound pid isn't alive, or it started at another
+    /// time than recorded (a fake ptyd reporting a replayed record's values).
+    ProcessGone,
     Io(String),
+}
+
+/// How far the kernel's start time may be from the time ptyd recorded at
+/// spawn (ptyd stamps it right after the fork).
+pub const START_TIME_SLACK_SECS: i64 = 2;
+
+/// The kernel's start time (Unix seconds) of a live process (`None`: not
+/// alive, a zombie, or unknown). Linux: `/proc/<pid>/stat` field 22 (clock
+/// ticks since boot) plus `btime`; macOS: `proc_pidinfo` `pbi_start_tvsec`.
+#[cfg(target_os = "linux")]
+pub fn process_start_secs(pid: i64) -> Option<i64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = &stat[stat.rfind(')')? + 1..];
+    let f: Vec<&str> = rest.split_whitespace().collect();
+    // f[0] is field 3 (state); field 22 (starttime) is f[19].
+    if matches!(*f.first()?, "Z" | "X" | "x") {
+        return None;
+    }
+    let ticks: u64 = f.get(19)?.parse().ok()?;
+    let btime: i64 = std::fs::read_to_string("/proc/stat")
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("btime ").and_then(|v| v.trim().parse().ok()))?;
+    // SAFETY: sysconf has no preconditions.
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if hz <= 0 {
+        return None;
+    }
+    Some(btime + (ticks / hz as u64) as i64)
+}
+
+#[cfg(target_os = "macos")]
+pub fn process_start_secs(pid: i64) -> Option<i64> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    // SAFETY: proc_pidinfo writes at most `size` bytes into `info`.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, &mut info as *mut _ as *mut libc::c_void, size) };
+    // SZOMB = 5: a zombie isn't alive.
+    if n != size || info.pbi_status == 5 {
+        return None;
+    }
+    Some(info.pbi_start_tvsec as i64)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn process_start_secs(_pid: i64) -> Option<i64> {
+    None
+}
+
+/// Is `pid` alive, and did it start within the slack of `started_at`?
+pub fn process_matches(pid: i64, started_at: i64) -> bool {
+    process_start_secs(pid).is_some_and(|t| (t - started_at).abs() <= START_TIME_SLACK_SECS)
 }
 
 /// What k2-ptyd says about the adopted session: its instance and process.
@@ -397,6 +453,12 @@ pub fn resume_adopted(
         return Err(ResumeRefused::DirMismatch);
     }
     let (sock, fallback) = record_socket(&rec, &all, &namespace(vault)).ok_or(ResumeRefused::BadSocketPath)?;
+    // What ptyd reported must also be what the OS says: the pid is alive
+    // and started when recorded (a fake ptyd can repeat a replayed
+    // record's values, not the kernel's).
+    if !process_matches(rec.pid, rec.started_at) {
+        return Err(ResumeRefused::ProcessGone);
+    }
     rebind(&rec, &sock, fallback).map_err(|e| ResumeRefused::Io(e.to_string()))
 }
 
@@ -485,15 +547,13 @@ pub fn stop_dir(dir: &Path) {
     }
 }
 
-/// Does something answer on this socket (a live agent of any daemon)?
-fn answers(sock: &Path) -> bool {
-    UnixStream::connect(sock).is_ok()
-}
-
 /// Boot (after the secrets-dir sweep): drop the record (and socket) of
-/// every tag that didn't survive, then remove short-path dirs of this
-/// vault's namespace that no record names and that nothing answers on
-/// (left by a crash).
+/// every tag that didn't survive, then remove short-path dirs in this
+/// vault's own roots that no record of this vault names (left by a crash).
+/// No connect probe (a planted never-accepting listener would block it):
+/// the per-vault namespace is what keeps other daemons' sockets out. Each
+/// dir is lstat'ed (a real dir, ours) and only its socket (a socket,
+/// ours) is unlinked; links are never followed.
 pub fn boot_sweep(vault: &LocalVault, kept: &[(String, PathBuf)]) {
     let Ok(all) = vault.agent_sockets() else { return };
     let ns = namespace(vault);
@@ -529,13 +589,27 @@ pub fn boot_sweep(vault: &LocalVault, kept: &[(String, PathBuf)]) {
             if short_dir_under(&p.join(SOCK_NAME), &root).is_none() || named.contains(&p) {
                 continue;
             }
-            if answers(&p.join(SOCK_NAME)) {
-                // Something serves it: never ours to remove.
-                continue;
-            }
             remove_fallback(&p);
         }
     }
+}
+
+/// Tests: a live child process and the start time the OS reports for it
+/// (what ptyd would have recorded). Kill it when done.
+#[cfg(test)]
+pub fn live_child_for_tests() -> (std::process::Child, i64, i64) {
+    let child = std::process::Command::new("sleep").arg("120").spawn().expect("spawn sleep");
+    let pid = i64::from(child.id());
+    let started = (0..50)
+        .find_map(|_| {
+            let t = process_start_secs(pid);
+            if t.is_none() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            t
+        })
+        .expect("the OS reports the child's start time");
+    (child, pid, started)
 }
 
 /// Tests: what a daemon crash leaves behind. The server stops, but its

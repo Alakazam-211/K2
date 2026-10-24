@@ -61,6 +61,11 @@ fn bad_value(hint: impl Into<String>) -> VaultError {
     VaultError::bad_request("bad_value", hint)
 }
 
+/// A key type (or size) the agent doesn't serve: file delivery still works.
+fn not_served(hint: impl Into<String>) -> VaultError {
+    VaultError::bad_request("agent_key_type", hint)
+}
+
 fn encrypted() -> VaultError {
     VaultError::bad_request(
         "ssh_key_encrypted",
@@ -92,9 +97,12 @@ impl AgentKey {
         } else if t.starts_with("-----BEGIN PRIVATE KEY-----") {
             use rsa::pkcs8::DecodePrivateKey;
             let r = rsa::RsaPrivateKey::from_pkcs8_pem(t).map_err(|_| {
-                bad_value("only RSA keys are read from PKCS#8 PEM; convert others to OpenSSH format (ssh-keygen -p -f <copy>)")
+                not_served("agent delivery reads only RSA keys from PKCS#8 PEM; convert an ed25519 key to OpenSSH format (ssh-keygen -p -f <copy>), or use file delivery")
             })?;
             from_rsa(r)?
+        } else if pem_private_key_block(t) {
+            // EC, DSA or another PEM private key: fine for file delivery.
+            return Err(not_served("agent delivery serves ed25519 and RSA keys; this PEM key type isn't one, so use file delivery"));
         } else {
             return Err(bad_value("agent delivery needs an ssh private key (OpenSSH or PEM)"));
         };
@@ -103,12 +111,12 @@ impl AgentKey {
             KeypairData::Rsa(r) => {
                 let bits = rsa_bits(r)?;
                 if bits < RSA_MIN_BITS {
-                    return Err(bad_value(format!("this RSA key is {bits} bits; agent delivery needs at least {RSA_MIN_BITS}")));
+                    return Err(not_served(format!("this RSA key is {bits} bits; agent delivery needs at least {RSA_MIN_BITS} (file delivery still works)")));
                 }
             }
             KeypairData::Encrypted(_) => return Err(encrypted()),
             _ => {
-                return Err(bad_value(format!(
+                return Err(not_served(format!(
                     "agent delivery serves ed25519 and RSA keys, not {}; use file delivery",
                     key.algorithm().as_str()
                 )))
@@ -213,21 +221,49 @@ pub fn check_value(value: &[u8]) -> Result<()> {
 /// lines of their own). Catches a key pasted into a one-line field, whose
 /// line breaks are gone (`bad_value`).
 pub fn check_ssh_key_value(value: &[u8]) -> Result<()> {
-    if public_of(value, "").is_ok() {
+    let text = std::str::from_utf8(value).map_err(|_| bad_value("an ssh private key is text (OpenSSH or PEM)"))?;
+    let t = text.trim();
+    if pem_private_key_block(t) || public_of(value, "").is_ok() {
         return Ok(());
     }
-    let text = std::str::from_utf8(value).unwrap_or("");
+    if !t.contains('\n') && t.contains("-----BEGIN ") {
+        return Err(bad_value(
+            "this key is on one line: its line breaks were lost (a one-line field?); paste it again in full, or use the file picker",
+        ));
+    }
+    Err(bad_value("this doesn't read as an ssh private key (OpenSSH or PEM)"))
+}
+
+/// A well-formed PEM private-key block, encrypted or not, of any key type
+/// (OpenSSH, RSA, EC, DSA, PKCS#8): a `-----BEGIN … PRIVATE KEY-----`
+/// line, base64 body lines (RFC 1421 headers such as `Proc-Type:` and a
+/// blank line allowed), and the matching `-----END … PRIVATE KEY-----`.
+pub fn pem_private_key_block(text: &str) -> bool {
     let lines: Vec<&str> = text.trim().lines().map(str::trim).collect();
-    let enc_pem = lines.len() >= 3
-        && lines.first().is_some_and(|l| l.starts_with("-----BEGIN ") && l.ends_with("PRIVATE KEY-----"))
-        && lines.last().is_some_and(|l| l.starts_with("-----END ") && l.ends_with("PRIVATE KEY-----"))
-        && text.contains("ENCRYPTED");
-    if enc_pem {
-        return Ok(());
+    if lines.len() < 3 {
+        return false;
     }
-    Err(bad_value(
-        "this doesn't read as an ssh private key (OpenSSH or PEM); if it was pasted into a one-line field, its line breaks were lost: paste it again in full",
-    ))
+    let (first, last) = (lines[0], lines[lines.len() - 1]);
+    let Some(label) = first.strip_prefix("-----BEGIN ").and_then(|l| l.strip_suffix("-----")) else { return false };
+    if !label.ends_with("PRIVATE KEY") || last != format!("-----END {label}-----") {
+        return false;
+    }
+    let mut body = 0;
+    for l in &lines[1..lines.len() - 1] {
+        if l.is_empty() {
+            continue;
+        }
+        if let Some((k, _)) = l.split_once(':') {
+            if !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                continue;
+            }
+        }
+        if !l.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')) {
+            return false;
+        }
+        body += 1;
+    }
+    body > 0
 }
 
 /// The `.pub` line (with `comment`) and `SHA256:` fingerprint of a stored
@@ -549,6 +585,12 @@ pub mod testkeys {
         rsa2048_raw().to_pkcs1_pem(rsa::pkcs8::LineEnding::LF).expect("pem").to_string()
     }
 
+    /// The same RSA-2048 key as PKCS#8 PEM (`BEGIN PRIVATE KEY`).
+    pub fn rsa2048_pkcs8() -> String {
+        use rsa::pkcs8::EncodePrivateKey;
+        rsa2048_raw().to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).expect("pkcs8").to_string()
+    }
+
     /// A 1024-bit RSA key (refused), PEM.
     pub fn rsa1024_pem() -> String {
         rsa(1024).to_pkcs1_pem(rsa::pkcs8::LineEnding::LF).expect("pem").to_string()
@@ -597,8 +639,8 @@ mod tests {
         // The same key from PKCS#1 PEM has the same public blob.
         let pem = AgentKey::parse(testkeys::rsa2048_pem().as_bytes()).expect("pem rsa");
         assert_eq!(pem.public_blob(), blob);
-        assert_eq!(check_value(testkeys::rsa1024_pem().as_bytes()).expect_err("1024").code, "bad_value");
-        assert_eq!(check_value(testkeys::p256().as_bytes()).expect_err("ecdsa").code, "bad_value");
+        assert_eq!(check_value(testkeys::rsa1024_pem().as_bytes()).expect_err("1024").code, "agent_key_type");
+        assert_eq!(check_value(testkeys::p256().as_bytes()).expect_err("ecdsa").code, "agent_key_type");
     }
 
     #[test]
@@ -629,10 +671,23 @@ mod tests {
         check_ssh_key_value(testkeys::p256().as_bytes()).expect("any OpenSSH key, even one agent doesn't serve");
         check_ssh_key_value(b"-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n").expect("passphrase PEM");
         let flat = k.replace('\n', "");
-        assert_eq!(check_ssh_key_value(flat.as_bytes()).expect_err("flattened").code, "bad_value");
+        let e = check_ssh_key_value(flat.as_bytes()).expect_err("flattened");
+        assert_eq!(e.code, "bad_value");
+        assert!(e.hint.contains("line breaks"), "{}", e.hint);
         let spaced = k.replace('\n', " ");
-        assert_eq!(check_ssh_key_value(spaced.as_bytes()).expect_err("one line").code, "bad_value");
-        assert_eq!(check_ssh_key_value(b"k2test-not-a-key").expect_err("text").code, "bad_value");
+        assert!(check_ssh_key_value(spaced.as_bytes()).expect_err("one line").hint.contains("line breaks"));
+        let e = check_ssh_key_value(b"k2test-not-a-key").expect_err("text");
+        assert_eq!(e.code, "bad_value");
+        assert!(!e.hint.contains("line breaks"), "the hint is only for a flattened paste: {}", e.hint);
+        // Every well-formed PEM private key block, any type, encrypted or not.
+        for label in ["EC PRIVATE KEY", "PRIVATE KEY", "DSA PRIVATE KEY", "RSA PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "OPENSSH PRIVATE KEY"] {
+            let pem = format!("-----BEGIN {label}-----\nMHcCAQEEIBbase64bodyLine0123456789+/=\nAAAA\n-----END {label}-----\n");
+            check_ssh_key_value(pem.as_bytes()).unwrap_or_else(|e| panic!("{label}: {e:?}"));
+        }
+        let mismatched = "-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n";
+        assert!(check_ssh_key_value(mismatched.as_bytes()).is_err(), "BEGIN and END must match");
+        let not_b64 = "-----BEGIN EC PRIVATE KEY-----\nnot base64 at all!\n-----END EC PRIVATE KEY-----\n";
+        assert!(check_ssh_key_value(not_b64.as_bytes()).is_err());
     }
 
     #[test]

@@ -813,8 +813,21 @@ pub(crate) fn apply_carry(
         req.mode = k2_vault::PutMode::Create;
         // VS20: person-given only survives the owner's own move.
         req.human_given_override = Some(i.human_given && p.own_box_move);
-        match vault.put(req, i.value()?, &k2_vault::Actor::System("carry".into())) {
-            Ok(_) => imported.push(i.name.clone()),
+        // The source vault accepted it: no shape re-check, but say so when
+        // an ssh key doesn't read as one (item 3).
+        req.landed_copy = true;
+        let value = i.value()?;
+        let shape_warning = (req.kind == k2_vault::Kind::SshKey)
+            .then(|| k2_vault::ssh_agent::check_ssh_key_value(value.expose()).err())
+            .flatten()
+            .map(|e| format!("{}: imported, but warning: {}", i.name, e.hint));
+        match vault.put(req, value, &k2_vault::Actor::System("carry".into())) {
+            Ok(_) => {
+                imported.push(i.name.clone());
+                if let Some(w) = shape_warning {
+                    skipped.push(w);
+                }
+            }
             Err(e) if e.code == "secret_exists" => skipped.push(format!("{}: already here (kept this box's)", i.name)),
             Err(e) => skipped.push(format!("{}: {}", i.name, e.code)),
         }

@@ -782,8 +782,21 @@ fn apply(vault: &LocalVault, caller: &VaultCaller, p: &CarryPayload, project_id:
         req.mode = PutMode::Create;
         // VS20: person-given only survives the owner's own move.
         req.human_given_override = Some(i.human_given && p.own_box_move);
-        let meta = match vault.put(req, i.value()?, &sys) {
-            Ok(o) => o.meta,
+        // The source vault accepted it: no shape re-check, but say so when
+        // an ssh key doesn't read as one (item 3).
+        req.landed_copy = true;
+        let value = i.value()?;
+        let shape_warning = (req.kind == Kind::SshKey)
+            .then(|| k2_vault::ssh_agent::check_ssh_key_value(value.expose()).err())
+            .flatten()
+            .map(|e| format!("{}: landed, but warning: {}", i.name, e.hint));
+        let meta = match vault.put(req, value, &sys) {
+            Ok(o) => {
+                if let Some(w) = shape_warning {
+                    skipped.push(w);
+                }
+                o.meta
+            }
             Err(e) if e.code == "secret_exists" => {
                 skipped.push(format!("{}: exists (kept this workspace's)", i.name));
                 continue;

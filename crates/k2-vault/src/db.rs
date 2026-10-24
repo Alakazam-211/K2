@@ -257,6 +257,11 @@ CREATE TABLE IF NOT EXISTS agent_socket (
     started_at INTEGER NOT NULL DEFAULT 0,
     row_mac BLOB NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS agent_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 "#;
 
 /// The columns a table has (empty when it doesn't exist).
@@ -275,6 +280,13 @@ fn rebuild_old_agent_tables(conn: &Connection) -> Result<()> {
     let p = columns(conn, "agent_policy")?;
     if !p.is_empty() && !p.iter().any(|c| c == "audit_seq") {
         conn.execute_batch("DROP TABLE agent_policy")?;
+        // Policies set before this point read as "reset by an upgrade"
+        // (an info note, still the strictest) rather than as tamper.
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS agent_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")?;
+        conn.execute(
+            "INSERT OR REPLACE INTO agent_meta (key, value) VALUES ('policies_reset_seq', (SELECT CAST(audit_seq AS TEXT) FROM header WHERE id = 1))",
+            [],
+        )?;
     }
     let s = columns(conn, "agent_socket")?;
     if !s.is_empty() && !["short_root", "ptyd_boot", "pid", "started_at"].iter().all(|c| s.iter().any(|x| x == c)) {

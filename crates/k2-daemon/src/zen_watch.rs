@@ -52,7 +52,21 @@ pub fn is_running() -> bool {
 pub fn start_at_boot() {
     if k2_core::zen::is_set_up() {
         // GS17: archive K2's defaults and run the Garden sync loader first.
-        k2_core::zen::ZenFiles::local().sync_boot();
+        let files = k2_core::zen::ZenFiles::local();
+        files.sync_boot();
+        // 0.46.4, once: Garden files that name a data-source card at @1 or
+        // @2 (its "Ask an agent" is retired) move to @3; locked Gardens are
+        // skipped and listed in k2 zen news.
+        match files.move_source_cards_once() {
+            Ok(Some(r)) => log_debug!(
+                "[daemon/zen] data cards to @3: {} Garden(s) moved, {} locked, {} left",
+                r.moved.len(),
+                r.locked.len(),
+                r.left.len()
+            ),
+            Ok(None) => {}
+            Err(e) => log_debug!("[daemon/zen] data cards to @3: {e} (tries again next boot)"),
+        }
         crate::zen_routes::prime();
         start();
     }

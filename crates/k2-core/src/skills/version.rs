@@ -201,7 +201,10 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// 0.46.4).
 /// v41 = box usage's Garden card `k2:box-disk@1` and the garden-local
 /// `app.resources` verb (disk guard Slice B, 0.46.4).
-pub const SKILL_VERSION_ZEN: u32 = 41;
+/// v42 = 0.46.4's first start moved the data-source cards from `@1`/`@2` to
+/// `@3` once in each Garden file it safely could; locked Gardens and ones
+/// with errors keep them and are listed in `k2 zen news` (for 0.46.4).
+pub const SKILL_VERSION_ZEN: u32 = 42;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

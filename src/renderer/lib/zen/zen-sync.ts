@@ -99,6 +99,14 @@ export type ZenNewsItem =
       previous: string
       keepPrevious: boolean
     }
+  | {
+      /** A one-time change K2 made to the person's Gardens (0.46.4: the
+       *  data cards moved to @3). The daemon writes the words. */
+      kind: 'notice'
+      id: string
+      title: string
+      body: string
+    }
 
 export interface ZenNews {
   /** Unseen, newest first. */
@@ -228,6 +236,13 @@ export function parseZenNews(raw: unknown): ZenNews {
         part,
         previous: str(r.previous, `items[${i}].previous`),
         keepPrevious: bool(r.keepPrevious, `items[${i}].keepPrevious`),
+      })
+    } else if (r.kind === 'notice') {
+      items.push({
+        kind: 'notice',
+        id: str(r.id, `items[${i}].id`),
+        title: str(r.title, `items[${i}].title`),
+        body: str(r.body, `items[${i}].body`),
       })
     }
   }
@@ -401,6 +416,9 @@ export function zenNewsCardModel(
 export function zenNewsCardText(item: ZenNewsItem): { title: string; lead: string | null; body: string; button: string | null } {
   if (item.kind === 'catalog') {
     return { title: 'New in the Garden catalog', lead: `${item.label}.`, body: item.description, button: 'See it in New Garden' }
+  }
+  if (item.kind === 'notice') {
+    return { title: item.title, lead: null, body: item.body, button: null }
   }
   return {
     title: `${item.gardenName} has a fresh look`,

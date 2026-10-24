@@ -1011,8 +1011,10 @@ keeps working when the source switches. `k2:version-spread@3` measures boxes aga
 `@3` (0.46.4) is `@2` without \"Ask an agent\". `@2` (0.46.1) merges `config.source` + `config.sources` by item key (a box in two sources is\n\
 one tile, the worst health wins), says \"soft crit 2/3\", keeps `extract.lists` items out of\n\
 the main grid (`config.list = \"certs\"` shows one), and subscribes again by itself after a\n\
-refusal (5 s, doubling to 60 s). `k2:<card>@1` and `@2` still run as shipped; move a\n\
-Garden's cards to `@3` when you next edit it.\n\n",
+refusal (5 s, doubling to 60 s). `k2:<card>@1` and `@2` still run as shipped. On its first\n\
+start 0.46.4 moved them to `@3` once, in each Garden file it safely could; a locked Garden\n\
+or one with errors kept them (`k2 zen news` lists those). Move any left to `@3` when you\n\
+next edit that Garden (never a locked one).\n\n",
     );
     s
 }
@@ -1453,6 +1455,8 @@ mod tests {
         {
             assert!(s.contains(needle), "the k2-zen skill lost {needle}");
         }
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 41, "the one-time move to @3 needs a new skill version");
+        assert!(s.contains("0.46.4 moved them to `@3` once") && s.contains("`k2 zen news` lists those"), "the k2-zen skill lost the move to @3");
     }
 
     #[test]

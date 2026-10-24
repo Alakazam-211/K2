@@ -217,6 +217,40 @@ describe('the What’s new side card rule (GS42, GS43)', () => {
     const noPrev = { ...update, keepPrevious: false } as typeof update
     expect(zenNewsCardText(noPrev).button).toBeNull()
   })
+
+  it('a notice (0.46.4: data cards moved to @3) shows the daemon’s words, no button, first', () => {
+    const withNotice = parseZenNews({
+      ...NEWS_ANSWER,
+      items: [
+        {
+          id: 'notice:source-cards-at-3',
+          kind: 'notice',
+          title: 'Data cards updated',
+          body: 'K2 moved the data cards in Ops to their newest version.',
+          detail: ['Ops (g-3): k2:fleet-grid@2 → k2:fleet-grid@3'],
+          at: '2026-10-24T00:00:00Z',
+        },
+        ...NEWS_ANSWER.items,
+      ],
+    })
+    const [notice] = withNotice.items
+    expect(notice).toEqual({
+      kind: 'notice',
+      id: 'notice:source-cards-at-3',
+      title: 'Data cards updated',
+      body: 'K2 moved the data cards in Ops to their newest version.',
+    })
+    expect(zenNewsCardText(notice)).toEqual({
+      title: 'Data cards updated',
+      lead: null,
+      body: 'K2 moved the data cards in Ops to their newest version.',
+      button: null,
+    })
+    const m = zenNewsCardModel(withNotice, { dialogVisible: true, viewportWidth: 1400 })
+    expect(m?.shownIds).toEqual(['notice:source-cards-at-3'])
+    expect(m?.more).toBe(2)
+    expect(() => parseZenNews({ ...NEWS_ANSWER, items: [{ id: 'notice:x', kind: 'notice', title: 'T' }] })).toThrow(/body/)
+  })
 })
 
 describe('loading and gestures go to THIS computer’s daemon', () => {

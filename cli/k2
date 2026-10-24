@@ -21432,8 +21432,10 @@ CARDS
   @2 (0.46.1) says "soft crit 2/3", reads K2 Web's ops shapes (boxes with
   customer / needs_go, edge relays, billing), shows a named list with
   config.list, and subscribes again by itself after a refusal. @1 and @2
-  still run as shipped. A custom widget asks for cap sources:read. Its
-  errors: k2 zen widget errors <name>.
+  still run as shipped. On its first start 0.46.4 moved them to @3 once,
+  in each Garden file it safely could; a locked Garden or one with errors
+  was left as it was and is listed in k2 zen news. A custom widget asks
+  for cap sources:read. Its errors: k2 zen widget errors <name>.
 EOF
 }
 # END_SOURCES_B2
@@ -33828,7 +33830,7 @@ cmd_schema() {
     {
       "name": "zen news",
       "usage": "k2 zen news [--json] | k2 zen news seen [<id>... | --all] [--json]",
-      "description": "Unseen Garden news (new catalog Gardens; K2 defaults a synced Garden picked up) and how many own copies have a newer default. seen marks ids, or every unseen item with --all, as read.",
+      "description": "Unseen Garden news (new catalog Gardens; K2 defaults a synced Garden picked up; notices of a one-time change K2 made, like 0.46.4 moving the data cards to @3 and listing the Gardens it left) and how many own copies have a newer default. seen marks ids, or every unseen item with --all, as read.",
       "args": [{"name": "seen", "required": false}, {"name": "id", "required": false}],
       "flags": [
         {"name": "--all", "arg": null, "description": "seen: every unseen item."},
@@ -60463,8 +60465,10 @@ COMMANDS
             are for the person only (agents get 403: ask the person to use
             Settings → Gardens). preview prints the Garden as if synced
             and writes nothing. Default part: both.
-  news      Unseen Garden news: new catalog Gardens and K2 defaults a
-            synced Garden picked up. seen marks ids (or --all) as read.
+  news      Unseen Garden news: new catalog Gardens, K2 defaults a
+            synced Garden picked up, and notices of a one-time change K2
+            made (0.46.4: data cards moved to @3, and the Gardens it left).
+            seen marks ids (or --all) as read.
   agents-order
             The person's order and pins in each Garden's Agents widget on
             this computer (they drag and pin in Zen). Read only: agents
@@ -62260,7 +62264,11 @@ elif verb == "news":
     if not items:
         print("no unseen Garden news")
     for it in items:
-        if it.get("kind") == "catalog":
+        if it.get("kind") == "notice":
+            print("%s  %s. %s" % (it.get("id"), it.get("title"), it.get("body")))
+            for line in it.get("detail") or []:
+                print("    %s" % line)
+        elif it.get("kind") == "catalog":
             print("%s  New in the Garden catalog: %s. %s" % (it.get("id"), it.get("label"), it.get("description")))
         elif it.get("kind") == "update":
             print("%s  %s has a fresh look (%s)%s" % (it.get("id"), it.get("gardenName"), it.get("part"), "; keep-previous offered" if it.get("keepPrevious") else ""))

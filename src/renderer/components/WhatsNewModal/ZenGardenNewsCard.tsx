@@ -53,6 +53,8 @@ export async function runZenNewsAction(item: ZenNewsItem): Promise<void> {
     }
     return
   }
+  // A notice only tells (it has no button).
+  if (item.kind === 'notice') return
   await keepZenPreviousLook(item.garden, item.part)
   useToastStore.getState().addToast(`${item.gardenName} keeps its previous look`, 'success', 8000, {
     label: 'Undo',

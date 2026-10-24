@@ -9,8 +9,13 @@
 //!   look differs between the previous set and the live one.
 //! - **Copies line**: how many own-copy Gardens have a newer default (no
 //!   item, no seen state).
+//! - **Notice item** `notice:<name>`: something K2 did to the person's
+//!   Gardens once, in plain words (0.46.4: the data-source cards moved to
+//!   `@3`, [`super::card_moves`]). The daemon writes the text; clients show
+//!   it as is.
 //!
-//! `news.json` (daemon-written): `{version, catalogSeen, items, seen}`. The
+//! `news.json` (daemon-written): `{version, catalogSeen, items, seen}`,
+//! plus `notices` once there is one (an older K2 keeps it as an unknown key). The
 //! catalog's metadata comes from the live defaults set, so a test set can
 //! carry its own catalog.
 
@@ -50,6 +55,21 @@ pub struct UpdateItem {
     pub at: String,
 }
 
+/// A one-time notice about the person's Gardens: K2 changed something in
+/// them (or left something for the person) and says what, once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoticeItem {
+    /// `notice:<name>`.
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    /// One line per Garden it names (the CLI prints them; the card doesn't).
+    #[serde(default)]
+    pub detail: Vec<String>,
+    pub at: String,
+}
+
 /// `news.json`. Unknown top-level keys (a newer K2's) are kept.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +83,8 @@ pub struct NewsFile {
     pub items: Vec<UpdateItem>,
     #[serde(default)]
     pub seen: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<NoticeItem>,
     #[serde(flatten)]
     pub other: BTreeMap<String, J>,
 }
@@ -184,6 +206,22 @@ impl ZenFiles {
         Ok(added)
     }
 
+    /// Keep a notice (once per id: the same id again changes nothing).
+    /// Answers whether it was new.
+    pub fn record_notice(&self, notice: NoticeItem) -> Result<bool, ZenError> {
+        if !notice.id.starts_with("notice:") {
+            return Err(ZenError::BadRequest(format!("'{}' is not a notice id (notice:<name>)", notice.id)));
+        }
+        let _g = news_lock();
+        let mut n = self.read_news();
+        if n.notices.iter().any(|x| x.id == notice.id) {
+            return Ok(false);
+        }
+        n.notices.push(notice);
+        self.write_news_file(&n)?;
+        Ok(true)
+    }
+
     /// GS43a: creating a Garden from a catalog entry marks it seen. A
     /// template that isn't a catalog entry changes nothing.
     pub fn news_mark_template_seen(&self, template: &str) -> Result<(), ZenError> {
@@ -206,13 +244,26 @@ impl ZenFiles {
         self.write_news_file(&n)
     }
 
-    /// Unseen news, newest first: update items (latest release first), then
-    /// new catalog Gardens.
+    /// Unseen news, newest first: notices (latest first), update items
+    /// (latest release first), then new catalog Gardens.
     fn unseen_items(&self) -> Result<Vec<J>, ZenError> {
         let n = self.read_news();
         let live = self.live_defaults();
         let gardens = self.gardens();
         let mut out = Vec::new();
+        for it in n.notices.iter().rev() {
+            if n.seen.contains(&it.id) {
+                continue;
+            }
+            out.push(json!({
+                "id": it.id,
+                "kind": "notice",
+                "title": it.title,
+                "body": it.body,
+                "detail": it.detail,
+                "at": it.at,
+            }));
+        }
         for it in n.items.iter().rev() {
             if n.seen.contains(&it.id) {
                 continue;
@@ -294,8 +345,10 @@ impl ZenFiles {
             return Err(ZenError::BadRequest("news/seen takes {ids: [...]} or {all: true}".into()));
         }
         for id in ids {
-            if !(id.starts_with("catalog:") || id.starts_with("update:")) || id.len() > 200 {
-                return Err(ZenError::BadRequest(format!("'{id}' is not a news id (catalog:<short> or update:<fp>:<garden>)")));
+            if !(id.starts_with("catalog:") || id.starts_with("update:") || id.starts_with("notice:")) || id.len() > 200 {
+                return Err(ZenError::BadRequest(format!(
+                    "'{id}' is not a news id (catalog:<short>, update:<fp>:<garden> or notice:<name>)"
+                )));
             }
         }
         let wanted: Vec<String> = if all {

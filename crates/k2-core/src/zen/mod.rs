@@ -25,6 +25,8 @@
 //!   pins in each Garden's Agents widget on this computer ([`agents_order`]):
 //!   never in a Garden file or Garden sync; agents read it, only the person
 //!   sets it.
+//! - `.moves/` (daemon-written, 0.46.4) holds one marker per one-time move
+//!   K2 made in Garden files ([`card_moves`]: the data-source cards to `@3`).
 //!
 //! The stack for one Garden: built-in `basic` → built-in `<active>` →
 //! `themes/<active>/theme.toml` → `zen.toml` → `gardens/<id>.toml`.
@@ -50,6 +52,7 @@ pub mod agent_edit;
 pub mod agents_order;
 pub mod builtin_widgets;
 pub mod bundle;
+pub mod card_moves;
 pub mod defaults;
 pub mod garden_access;
 pub mod garden_catalog;

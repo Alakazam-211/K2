@@ -65,7 +65,7 @@ pub const MAX_GARDEN_NAME: usize = 60;
 /// threads; two `garden/new` at once must not lose one).
 static LIST_LOCK: Mutex<()> = Mutex::new(());
 
-fn list_lock() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn list_lock() -> std::sync::MutexGuard<'static, ()> {
     LIST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 

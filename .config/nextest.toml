@@ -1,0 +1,41 @@
+# cargo-nextest profiles for K2's Rust suites (0.46.4 build infra).
+#
+# nextest runs every test in its own process, so the tests that set HOME /
+# K2_* with set_var no longer race the way they do as threads under plain
+# `cargo test`. No retries anywhere: a flaky test fails loudly and gets
+# fixed or ticketed, never retried green. Doctests don't run under nextest;
+# the crates scripts/ci/checks.sh tests whole have none (their doc blocks
+# are ```text).
+#
+#   default  local runs: stop at the first failure.
+#   ci       the K2 Compute CI gate (scripts/ci/checks.sh rust-test), the
+#            same steps in .github/workflows/checks.yml, and split runs
+#            (`k2 compute test --shards N --profile ci`,
+#            scripts/test-on-nodes.sh): run everything, write JUnit.
+#
+# JUnit lands in <target dir>/nextest/ci/junit.xml (nextest's default store,
+# so it follows CARGO_TARGET_DIR), which `k2 compute test` keeps
+# (`--artifact 'target/nextest/**/*.xml'` also reads the node's target dir)
+# and parses into the job's test counts and `k2 compute logs --failures`.
+
+[profile.default]
+retries = 0
+fail-fast = true
+# A test still running after 60 s is reported SLOW each period; one still
+# running after 10 periods (10 min) is killed and fails, so a hung test
+# never holds a node until the job's 2 h timeout.
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+[profile.ci]
+retries = 0
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 10 }
+# Every failing test's output once more at the end, so a long log still
+# ends with all of them together.
+failure-output = "immediate-final"
+success-output = "never"
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true

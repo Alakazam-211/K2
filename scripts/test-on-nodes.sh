@@ -2,11 +2,12 @@
 # K2's own Rust suites on compute nodes ("compute B").
 #
 # Each crate's cargo-nextest run is split across N nodes with nextest
-# partitions (`k2 compute test --shards N`): one shard per node where it
-# can, JUnit kept and parsed, ONE combined pass/fail per crate with the
-# merged failure list. Runs from a K2 terminal (the agent's passport) or
-# a plain shell (the owner token); needs "Allow compute nodes" and at
-# least one granted node.
+# partitions (`k2 compute test --shards N`, default 3: the three Linux
+# nodes): one shard per node where it can, the repo's `ci` profile
+# (.config/nextest.toml: no retries, JUnit), JUnit kept and parsed, ONE
+# combined pass/fail per crate with the merged failure list. Runs from a
+# K2 terminal (the agent's passport) or a plain shell (the owner token);
+# needs "Allow compute nodes" and at least one granted node.
 #
 # Every job starts from an empty env on the node: HOME and TMPDIR are the
 # job's own dirs, XDG_RUNTIME_DIR is set to a fresh dir under TMPDIR, and
@@ -15,6 +16,8 @@
 # usage: scripts/test-on-nodes.sh [--shards N] [--crate k2-core|k2-daemon]...
 #                                 [--os linux|macos] [--detach] [--json]
 #                                 [-- <extra nextest args, e.g. a filter>]
+#   --os defaults to linux: --shards runs on --any, and the Macs are
+#   either the release builder's or too small for a k2-core build.
 #
 # Exit: 0 every crate passed; the first failing crate's nextest exit code
 # (100 = tests failed, 101 = build failed); 2 bad usage; 3 infra (no node
@@ -23,8 +26,8 @@
 # message when it ends.
 set -euo pipefail
 
-shards=4
-os=""
+shards=3
+os=linux
 detach=0
 as_json=0
 crates=()
@@ -47,7 +50,9 @@ case "$shards" in ''|*[!0-9]*) echo "usage: --shards N (1–16)" >&2; exit 2 ;; 
 K2="${K2_CLI:-k2}"
 common=(
     compute test --any --shards "$shards"
-    --needs rust@stable,cargo-nextest,cmake,ninja,protoc,sys:pkg-config
+    --profile ci
+    --needs rust@stable,cargo-nextest,cmake@3,ninja,protoc,sys:pkg-config,sys:zlib1g-dev
+    --mem 16G --env CARGO_BUILD_JOBS=4
     # A cold node builds the whole workspace first.
     --timeout 2h --stall-timeout 30m --queue-timeout 2h --retries 1
 )

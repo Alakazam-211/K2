@@ -8,7 +8,9 @@
 #   web         packaging tests, bun install, gates, typecheck, vitest,
 #               SDK typecheck, zen widget CLI, vite build   (checks.yml web)
 #   rust-check  cargo check -D warnings, all targets + the airgap feature
-#   rust-test   the cargo test subsets of checks.yml's rust job
+#   rust-test   the test subsets of checks.yml's rust job, run with
+#               cargo-nextest (profile ci, .config/nextest.toml; the node
+#               needs cargo-nextest: run-checks.sh asks for it)
 #   audit       cargo audit + osv-scanner over Cargo.lock and bun.lock,
 #               pinned tools, the allow-list rules and a canary (checks.yml
 #               audit; prd-security-sweep-0464-v1 SS14)
@@ -46,6 +48,7 @@ part_web() {
     step "Linux builds on K2 Compute (stubbed)";   bash tests/packaging/compute-release.sh
     step "CI gate scripts (stubbed)";              bash tests/packaging/ci-gate.sh
     step "release.sh waits + Step 0.5 env (stubbed)"; bash tests/packaging/release-wait-and-preflight.sh
+    step "macOS sidecars build once (stubbed)";    bash tests/packaging/build-once.sh
     step "bun install";                            bun install --frozen-lockfile
     step "k2-home gate";                           bash scripts/k2-home-gate.sh
     step "private-docs gate";                      bash scripts/private-docs-gate.sh
@@ -83,19 +86,25 @@ part_audit() {
 }
 
 part_rust_test() {
-    step "cargo test k2-client"
-    cargo test -p k2-client
-    step "cargo test k2-ptyd (Linux)"
-    cargo build -p k2-ptyd --bin k2-ptyd
-    cargo test -p k2-ptyd
-    cargo test -p k2-core --test ptyd_backend
-
+    # cargo-nextest, profile `ci` (.config/nextest.toml): every test in its
+    # own process, no retries, JUnit at target/nextest/ci/junit.xml. One
+    # RUSTFLAGS for the whole part: a RUSTFLAGS change rebuilds every crate,
+    # and the k2-client / k2-ptyd steps used to run without it, so k2-core
+    # and its tree compiled twice per run. rust-check already holds every
+    # crate here to -D warnings, so the flag changes no outcome.
     export RUSTFLAGS="-D warnings"
-    step "cargo test root helper"
-    cargo test -p k2-root-proto --features test-signer
-    cargo test -p k2-root-helper
+    step "cargo nextest k2-client"
+    cargo nextest run --profile ci -p k2-client
+    step "cargo nextest k2-ptyd (Linux)"
+    cargo build -p k2-ptyd --bin k2-ptyd
+    cargo nextest run --profile ci -p k2-ptyd
+    cargo nextest run --profile ci -p k2-core --test ptyd_backend
+
+    step "cargo nextest root helper"
+    cargo nextest run --profile ci -p k2-root-proto --features test-signer
+    cargo nextest run --profile ci -p k2-root-helper
     cargo check -p k2-root-helper --features test-keys --examples
-    cargo test -p k2-daemon --lib -- root_helper:: mail::helper:: update_routes::tests::daemon_update cell_server:: front443:: mail::front_listener::
+    cargo nextest run --profile ci -p k2-daemon --lib root_helper:: mail::helper:: update_routes::tests::daemon_update cell_server:: front443:: mail::front_listener::
     bash tests/cli/install_root_helper.sh
     bash tests/cli/root_helper_cli.sh
     bash tests/cli/front_cli.sh
@@ -104,31 +113,23 @@ part_rust_test() {
     bash tests/cli/daemon_unit_runtime_dir.sh
     bash tests/cli/daemon_install_systemd_unit.sh
 
-    step "cargo test verb catalog + Zen"
-    cargo test -p k2-core --lib -- contract:: zen:: app_surface::
-    cargo test -p k2-daemon --test contract_routes
-    cargo test -p k2-daemon --test app_api_integration
+    step "cargo nextest verb catalog + Zen"
+    cargo nextest run --profile ci -p k2-core --lib contract:: zen:: app_surface::
+    cargo nextest run --profile ci -p k2-daemon --test contract_routes --test app_api_integration
 
-    step "cargo test compute nodes"
-    cargo test -p k2-node-proto -p k2-node
-    cargo test -p k2-core --lib -- compute::
-    cargo test -p k2-daemon --lib -- compute_ route_policy
-    cargo test -p k2-daemon --test compute_integration
-    cargo test -p k2-daemon --test compute_results_integration
+    step "cargo nextest compute nodes"
+    cargo nextest run --profile ci -p k2-node-proto -p k2-node
+    cargo nextest run --profile ci -p k2-core --lib compute::
+    cargo nextest run --profile ci -p k2-daemon --lib --test compute_integration --test compute_results_integration -E 'kind(test) | test(compute_) | test(route_policy)'
 
-    step "cargo test App runtime"
-    cargo test -p k2-core --lib -- deploy::
-    cargo test -p k2-daemon --lib -- apps::
-    cargo test -p k2-daemon --test apps_runtime_integration
-    cargo test -p k2-core --lib -- app_audit skin_link app_door app_grace::requests
-    cargo test -p k2-daemon --test apps_door_integration
-    cargo test -p k2-daemon --test apps_gateway_link_integration
-    cargo test -p k2-app-engine
+    step "cargo nextest App runtime"
+    cargo nextest run --profile ci -p k2-core --lib deploy:: app_audit skin_link app_door app_grace::requests
+    cargo nextest run --profile ci -p k2-daemon --lib --test apps_runtime_integration --test apps_door_integration --test apps_gateway_link_integration -E 'kind(test) | test(apps::)'
+    cargo nextest run --profile ci -p k2-app-engine
 
-    step "cargo test Sew (grant hook, chat pass)"
-    cargo test -p k2-core --lib -- tool_hook:: sew_revoke:: skin::sew_tests connect_users::
-    cargo test -p k2-daemon --lib -- chat_pass:: tool_hook_worker:: sew_mgmt::
-    cargo test -p k2-daemon --test chat_pass_integration --test chat_pass_mint_integration --test grant_hook_integration
+    step "cargo nextest Sew (grant hook, chat pass)"
+    cargo nextest run --profile ci -p k2-core --lib tool_hook:: sew_revoke:: skin::sew_tests connect_users::
+    cargo nextest run --profile ci -p k2-daemon --lib --test chat_pass_integration --test chat_pass_mint_integration --test grant_hook_integration -E 'kind(test) | test(chat_pass::) | test(tool_hook_worker::) | test(sew_mgmt::)'
     unset RUSTFLAGS
 }
 

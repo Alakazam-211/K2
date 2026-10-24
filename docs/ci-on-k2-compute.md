@@ -39,6 +39,15 @@ push to main / integ/*
   `K2_CI_NODE_RUST_TEST` set them (`any` means `--any --os linux --arch
   x86_64`). A wider run (`k2 compute test --shards N` over whole crates,
   `scripts/test-on-nodes.sh`) can be added as another part later.
+- **Tests run under cargo-nextest** (0.46.4), profile `ci` in
+  `.config/nextest.toml`: each test in its own process, no retries,
+  failures at the end of the log, JUnit for `k2 compute logs --failures`.
+  `run-checks.sh` asks the rust nodes for `cargo-nextest`; `checks.yml`
+  installs a pinned build. The whole rust-test part shares one
+  `RUSTFLAGS=-D warnings`, so the tree compiles once per run.
+- **Whole suites, split:** `scripts/test-on-nodes.sh [--crate C]...`
+  runs `k2 compute test --shards 3 --profile ci --os linux` per crate
+  (one nextest partition per Linux node, one combined result).
 
 ### Setting it up on z3mbpZ (Rosson approves first; see the open questions)
 

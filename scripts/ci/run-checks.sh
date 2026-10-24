@@ -54,7 +54,8 @@ trap 'rm -rf "$WORK"' EXIT
 git -C "$ROOT" cat-file -e "${SHA}^{commit}" 2>/dev/null || git -C "$ROOT" fetch -q origin "$SHA" \
     || { echo "FATAL: commit $SHA is not here and can't be fetched" >&2; exit 1; }
 
-RUST_NEEDS="${K2_CI_RUST_NEEDS:-rust@stable,cmake@3,sys:pkg-config,sys:zlib1g-dev}"
+# cargo-nextest: rust-test runs nextest (.config/nextest.toml, profile ci).
+RUST_NEEDS="${K2_CI_RUST_NEEDS:-rust@stable,cargo-nextest,cmake@3,sys:pkg-config,sys:zlib1g-dev}"
 WEB_NEEDS="${K2_CI_WEB_NEEDS:-bun@1.2,node@22,python@3.12}"
 AUDIT_NEEDS="${K2_CI_AUDIT_NEEDS:-rust@stable,python@3.12,sys:pkg-config}"
 

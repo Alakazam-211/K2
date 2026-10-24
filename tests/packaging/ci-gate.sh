@@ -43,14 +43,49 @@ while i < len(yml):
     i += 1
 missing = []
 for c in cmds:
-    # Comments, and the runner's own apt setup (nodes get packages via --needs).
-    if not c or c.startswith("#") or c.startswith("sudo ") or c.startswith("build-essential"):
+    # Comments, and the runner's own setup: apt packages and the pinned
+    # cargo-nextest download (nodes get both via --needs).
+    if not c or c.startswith("#") or c.startswith("sudo ") or c.startswith("build-essential") \
+            or c.startswith("curl -LsSf https://get.nexte.st/"):
         continue
     if " ".join(c.split()) not in sh:
         missing.append(c)
 for m in missing:
     print("missing from checks.sh: " + m)
 sys.exit(1 if missing else 0)
+PY
+python3 - "$ROOT/scripts/ci/checks.sh" "$ROOT/.github/workflows/checks.yml" "$ROOT/.config/nextest.toml" > "$tmp/nextest" <<'PY' && pass "tests run under cargo-nextest, profile ci (no retries, JUnit), in both files" || fail "nextest" "$(cat "$tmp/nextest")"
+import re, sys, tomllib
+bad = []
+for path in sys.argv[1:3]:
+    text = open(path).read().replace("\\\n", " ")
+    for line in text.splitlines():
+        cmd = line.strip()
+        if cmd.startswith("run:"):
+            cmd = cmd[4:].strip()
+        if re.match(r"cargo test\b", cmd):
+            bad.append("%s: plain cargo test: %s" % (path, cmd))
+        if cmd.startswith("cargo nextest run") and not cmd.startswith("cargo nextest run --profile ci "):
+            bad.append("%s: nextest without --profile ci: %s" % (path, cmd))
+    if "cargo nextest run --profile ci" not in text:
+        bad.append("%s: no nextest run at all" % path)
+cfg = tomllib.load(open(sys.argv[3], "rb"))
+profiles = cfg.get("profile", {})
+ci = profiles.get("ci")
+if ci is None:
+    bad.append("nextest.toml: no [profile.ci]")
+else:
+    if ci.get("retries") != 0:
+        bad.append("nextest.toml: profile ci must have retries = 0, has %r" % ci.get("retries"))
+    if ci.get("fail-fast") is not False:
+        bad.append("nextest.toml: profile ci must run every test (fail-fast = false)")
+    if not ci.get("junit", {}).get("path"):
+        bad.append("nextest.toml: profile ci writes no JUnit")
+if profiles.get("default", {}).get("retries") != 0:
+    bad.append("nextest.toml: profile default must have retries = 0")
+for b in bad:
+    print(b)
+sys.exit(1 if bad else 0)
 PY
 out="$(bash "$ROOT/scripts/ci/checks.sh" nope 2>&1 || true)"
 [[ "$out" == *usage* ]] && pass "checks.sh refuses an unknown part" || fail "checks usage" "$out"
@@ -149,6 +184,8 @@ grep -q "k2 compute run k2n4-vin --sha $SHA .*-- bash scripts/ci/checks.sh web" 
     && grep -q "k2 compute run k2n6-hil --sha $SHA .*-- bash scripts/ci/checks.sh rust-test" "$tmp/c-ok" \
     && grep -q "k2 compute run k2n5-vin --sha $SHA .*--needs rust@stable,python@3.12,sys:pkg-config .*-- bash scripts/ci/checks.sh audit" "$tmp/c-ok" \
     && pass "parts go to their nodes at the exact sha" || fail "submit lines" "$(cat "$tmp/c-ok")"
+[ "$(grep "checks.sh rust-" "$tmp/c-ok" | grep -c -- "--needs [^ ]*cargo-nextest")" = 2 ] \
+    && pass "rust parts ask the node for cargo-nextest" || fail "nextest need" "$(cat "$tmp/c-ok")"
 [ "$(grep -c '"state": "pending"' "$tmp/o-ok")" -ge 4 ] && pass "pending posted before the results" || fail "pending" "$(cat "$tmp/o-ok")"
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["ok"] and len(v["parts"])==4, v' "$tmp/state-ok/runs/$SHA.json" \
     && pass "run record written" || fail "record" "$(cat "$tmp/state-ok/runs/$SHA.json")"

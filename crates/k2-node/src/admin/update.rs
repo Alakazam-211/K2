@@ -620,13 +620,27 @@ pub fn update_mark_path(config_dir: &Path) -> PathBuf {
 
 /// Root side: make the mark's directory (0755) when it's missing. Only
 /// creates it; every check and write goes through the directory fd
-/// ([`write_owned_in`]).
+/// ([`write_owned_in`]). The mode is set with `fchmod` on a directory fd
+/// opened `O_NOFOLLOW`, never `chmod` on the path: on macOS `/var/run` is
+/// writable by the `daemon` group, which could swap the new directory for
+/// a symlink between the `mkdir` and a path `chmod` (round-5 review, L1).
 fn ensure_mark_dir(config_dir: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     let d = mark_dir(config_dir);
     if std::fs::symlink_metadata(&d).is_err() {
         std::fs::create_dir(&d).map_err(|x| format!("create {}: {x}", d.display()))?;
-        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).map_err(|x| format!("chmod {}: {x}", d.display()))?;
+        let dc = std::ffi::CString::new(d.as_os_str().as_encoded_bytes()).map_err(|x| x.to_string())?;
+        // SAFETY: valid C path; the fd is owned right below.
+        let dfd = unsafe { libc::open(dc.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+        if dfd < 0 {
+            return Err(format!("open {}: {}", d.display(), std::io::Error::last_os_error()));
+        }
+        // SAFETY: a fresh fd we own.
+        let dfd = unsafe { OwnedFd::from_raw_fd(dfd) };
+        // SAFETY: fchmod on our own directory fd.
+        if unsafe { libc::fchmod(dfd.as_raw_fd(), 0o755) } != 0 {
+            return Err(format!("fchmod {}: {}", d.display(), std::io::Error::last_os_error()));
+        }
     }
     Ok(())
 }

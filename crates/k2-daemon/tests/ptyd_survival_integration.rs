@@ -377,6 +377,9 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
             .collect();
         assert_eq!(copies.len(), 1, "one versioned k2-ptyd copy: {copies:?}");
         assert!(std::fs::read(&copies[0]).unwrap() == want, "the versioned copy is the embedded k2-ptyd");
+        // ...and it came from the daemon's own bytes, not a k2-ptyd beside it.
+        let log = std::fs::read_to_string(h.home.join("daemon-1.log")).unwrap_or_default();
+        assert!(log.contains("[ptyd] k2-ptyd source: embedded in the daemon"), "the daemon did not use its embedded k2-ptyd");
     }
     assert_eq!(parent_pid(pid), ptyd, "the agent's parent is k2-ptyd, not the daemon");
     assert_ne!(ptyd, h.daemon_pid());

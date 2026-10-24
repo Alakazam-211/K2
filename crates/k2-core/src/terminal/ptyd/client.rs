@@ -457,16 +457,26 @@ pub fn run_location(home: &Path) -> Result<PathBuf, String> {
     place_binary(home, from_env, EMBEDDED.get().copied())
 }
 
+/// Log the k2-ptyd source once per process (which copy runs: P84 support).
+fn note_source(what: &str) {
+    static NOTED: AtomicBool = AtomicBool::new(false);
+    if !NOTED.swap(true, Ordering::AcqRel) {
+        crate::log_debug!("[ptyd] k2-ptyd source: {what}");
+    }
+}
+
 fn place_binary(home: &Path, from_env: bool, embedded: Option<(&[u8], &str)>) -> Result<PathBuf, String> {
     if !from_env {
         if let Some((bytes, sha)) = embedded {
             if auth::sha256_hex(bytes) != sha {
                 return Err("embed_hash_mismatch".into());
             }
+            note_source(&format!("embedded in the daemon (sha256 {})", &sha[..12.min(sha.len())]));
             return versioned_copy(home, bytes, sha).map_err(|e| format!("copy_bin:{}", e.kind()));
         }
     }
     let src = shipped_binary()?;
+    note_source(&src.display().to_string());
     let bytes = std::fs::read(&src).map_err(|e| format!("read_bin:{}", e.kind()))?;
     let hash = auth::sha256_hex(&bytes);
     versioned_copy(home, &bytes, &hash).map_err(|e| format!("copy_bin:{}", e.kind()))

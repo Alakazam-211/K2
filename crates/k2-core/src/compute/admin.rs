@@ -546,11 +546,12 @@ pub const POLICY_KEYS: &[&str] = &[
     "write_smoke_lock",
     "network",
     "repo_toolchains",
+    "gate_reserved_slots",
 ];
 /// Policy keys where a bigger number gives jobs more.
 pub const POLICY_BIGGER_IS_WIDER: &[&str] = &["cpu_cap_percent", "mem_cap_gb", "disk_budget_gb", "max_parallel"];
 /// Policy keys where a smaller number gives jobs more.
-pub const POLICY_SMALLER_IS_WIDER: &[&str] = &["disk_floor_gb"];
+pub const POLICY_SMALLER_IS_WIDER: &[&str] = &["disk_floor_gb", "gate_reserved_slots"];
 
 /// The controller's guess whether a `policy.set` narrows, against the
 /// policy the node last reported (`policy.show`). Conservative: only a
@@ -1253,9 +1254,12 @@ mod tests {
 
     #[test]
     fn policy_change_classification() {
-        let cur = json!({"mem_cap_gb": 8, "max_parallel": 2, "disk_floor_gb": 30, "availability": "always"});
+        let cur = json!({"mem_cap_gb": 8, "max_parallel": 2, "disk_floor_gb": 30, "availability": "always", "gate_reserved_slots": 1});
         let cur = cur.as_object().unwrap();
         let ch = |v: Value| classify_policy_change(cur, v.as_object().unwrap());
+        // G4: more gate slots narrow normal work; fewer widen it.
+        assert_eq!(ch(json!({"gate_reserved_slots": 2})), Class::Operate);
+        assert_eq!(ch(json!({"gate_reserved_slots": 0})), Class::Privileged);
         assert_eq!(ch(json!({"mem_cap_gb": 6})), Class::Operate);
         assert_eq!(ch(json!({"mem_cap_gb": 10})), Class::Privileged);
         assert_eq!(ch(json!({"disk_floor_gb": 40})), Class::Operate);

@@ -67,6 +67,11 @@ pub struct Caps {
     /// A node-wide reason nothing starts (`paused`, `foreign_lock`,
     /// `disk_low`, `installing_tools`, a refusal code).
     pub blocked: Option<String>,
+    /// Slots only `gate` jobs may fill (policy `gate_reserved_slots`,
+    /// plan-ci-release-on-k2-compute G4): non-gate work never takes the
+    /// last of them, so a release gate starts at once instead of waiting
+    /// behind 2-hour test runs. See [`gate_reserve`].
+    pub gate_reserved: u32,
 }
 
 impl Caps {
@@ -356,6 +361,18 @@ enum Fit {
     Never,
 }
 
+/// The gate slots in force: the policy's `gate_reserved`, never all of
+/// the node's slots (at least one stays for normal work), and none when
+/// no server here may run gate jobs at all (an idle reservation nobody
+/// can use would only waste a slot).
+pub fn gate_reserve(input: &Input<'_>) -> u32 {
+    let r = input.caps.gate_reserved.min(input.caps.parallel_max.saturating_sub(1));
+    if r == 0 || !input.tenants.iter().any(|t| t.limits.allows_class(JobClass::Gate)) {
+        return 0;
+    }
+    r
+}
+
 fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
     let caps = input.caps;
     let cpu = e.cpu_millis.unwrap_or_else(|| caps.default_cpu());
@@ -375,6 +392,23 @@ fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
     let gate = effective_class(e, t, input.now, input.cfg) == JobClass::Gate;
     if gate && run.iter().any(|r| r.gate) {
         return Fit::Wait;
+    }
+    let reserve = gate_reserve(input);
+    if !gate && reserve > 0 {
+        // Non-gate work stays out of the reserved slots and their even
+        // share of CPU and memory. A job bigger than what's left may still
+        // run alone (the reservation never makes a job impossible; the
+        // gate then waits for capacity like before).
+        let others: Vec<&SimRun> = run.iter().filter(|r| !r.gate).collect();
+        if others.len() as u32 >= caps.parallel_max - reserve {
+            return Fit::Capacity;
+        }
+        let (rc, rm) = (caps.default_cpu() * u64::from(reserve), caps.default_mem() * u64::from(reserve));
+        let oc: u64 = others.iter().map(|r| r.cpu).sum();
+        let om: u64 = others.iter().map(|r| r.mem).sum();
+        if !others.is_empty() && (oc.saturating_add(cpu) > caps.cpu_millis.saturating_sub(rc) || om.saturating_add(mem) > caps.mem_bytes.saturating_sub(rm)) {
+            return Fit::Capacity;
+        }
     }
     let used_cpu: u64 = run.iter().map(|r| r.cpu).sum();
     let used_mem: u64 = run.iter().map(|r| r.mem).sum();
@@ -432,7 +466,9 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
     }
     let mut now: u64 = 0;
     for _round in 0..(4 * q.len() + 8) {
-        // Start pass at `now`, in order, with the backfill hold.
+        // Start pass at `now`, in order, with the backfill hold. (Gate
+        // jobs always come first in the order, so the hold never stands
+        // between a gate job and its reserved slot.)
         let mut held = false;
         let mut capacity_head_seen = false;
         let mut started = Vec::new();
@@ -673,7 +709,7 @@ mod tests {
     }
 
     fn caps(par: u32) -> Caps {
-        Caps { cpu_millis: 8000, mem_bytes: 32 << 30, parallel_max: par, blocked: None }
+        Caps { cpu_millis: 8000, mem_bytes: 32 << 30, parallel_max: par, blocked: None, gate_reserved: 0 }
     }
 
     fn q(slot: Slot, job: &str, ws: &str, at: i64) -> Queued {
@@ -758,6 +794,76 @@ mod tests {
         w.queued[1].class = JobClass::Interactive;
         w.queued[2].class = JobClass::Interactive;
         assert_eq!(w.order()[0], "g1", "tenant 1 can't gate, so b1 doesn't jump; slot 0 wins the tie");
+    }
+
+    /// G4 (plan-ci-release-on-k2-compute-v1): with `gate_reserved_slots
+    /// = 1`, normal work never fills the last slot, so a release gate
+    /// starts at once on a node busy with long test runs.
+    #[test]
+    fn a_reserved_gate_slot_keeps_normal_work_out_and_the_gate_starts_at_once() {
+        let owner = || {
+            let mut o = tenant(0, 1);
+            o.limits = ShareLimits::owner(8, 8, 32, 100, Network::On);
+            o
+        };
+        let mut w = World::new(3, vec![owner(), tenant(1, 1)]);
+        w.caps.gate_reserved = 1;
+        w.running = vec![running(1, "t1", 1000, Some(7200)), running(1, "t2", 1000, Some(7200))];
+        w.queued = vec![q(1, "b1", "w", 1)];
+        let d = w.decide();
+        assert!(d.start.is_empty(), "the third slot is the gate's: {:?}", w.ids(&d.start));
+        assert_eq!(d.info[0].eta_secs, Some(7200), "b1 starts when a normal slot frees");
+        // The gate arrives later and still starts now.
+        w.queued.push(q(0, "g1", "w", 50));
+        w.queued[1].class = JobClass::Gate;
+        let d = w.decide();
+        assert_eq!(w.ids(&d.start), vec!["g1"]);
+        // While the gate runs, normal work still has its two slots, no more.
+        let mut g = running(0, "g1", 1000, Some(1200));
+        g.class = JobClass::Gate;
+        w.running = vec![g, running(1, "t1", 1000, Some(7200))];
+        w.queued = vec![q(1, "b1", "w", 1), q(1, "b2", "w", 2)];
+        assert_eq!(w.ids(&w.decide().start), vec!["b1"], "one normal slot was free");
+
+        // Without the reservation the third slot goes to normal work (today).
+        let mut w = World::new(3, vec![owner(), tenant(1, 1)]);
+        w.running = vec![running(1, "t1", 1000, Some(7200)), running(1, "t2", 1000, Some(7200))];
+        w.queued = vec![q(1, "b1", "w", 1)];
+        assert_eq!(w.ids(&w.decide().start), vec!["b1"]);
+        // Nobody here may run gate jobs: the reservation is idle and off.
+        w.tenants = vec![tenant(0, 1), tenant(1, 1)];
+        w.caps.gate_reserved = 1;
+        assert_eq!(gate_reserve(&w.input()), 0);
+        assert_eq!(w.ids(&w.decide().start), vec!["b1"]);
+        // Never every slot: a one-slot node still runs normal work.
+        let mut w = World::new(1, vec![owner()]);
+        w.caps.gate_reserved = 1;
+        assert_eq!(gate_reserve(&w.input()), 0);
+        w.queued = vec![q(0, "b1", "w", 1)];
+        assert_eq!(w.ids(&w.decide().start), vec!["b1"]);
+        let mut w = World::new(4, vec![owner()]);
+        w.caps.gate_reserved = 9;
+        assert_eq!(gate_reserve(&w.input()), 3, "clamped to slots - 1");
+    }
+
+    /// The reserved slot keeps its even share of CPU and memory too, but
+    /// never makes a big job impossible: alone, it still runs.
+    #[test]
+    fn a_reserved_gate_slot_keeps_its_cpu_share_but_a_big_job_may_run_alone() {
+        let mut o = tenant(0, 1);
+        o.limits = ShareLimits::owner(8, 8, 32, 100, Network::On);
+        // 8 CPUs, 4 slots: the gate's share is 2000 millicores.
+        let mut w = World::new(4, vec![o]);
+        w.caps.gate_reserved = 1;
+        w.running = vec![running(0, "t1", 5000, Some(600))];
+        w.queued = vec![q(0, "b1", "w", 1)];
+        w.queued[0].cpu_millis = Some(1500); // 6500 > 8000 - 2000
+        assert!(w.decide().start.is_empty(), "it would eat the gate's CPU");
+        w.queued[0].cpu_millis = Some(1000); // 6000 fits
+        assert_eq!(w.ids(&w.decide().start), vec!["b1"]);
+        w.running.clear();
+        w.queued[0].cpu_millis = Some(7000);
+        assert_eq!(w.ids(&w.decide().start), vec!["b1"], "alone, a big job still runs");
     }
 
     #[test]

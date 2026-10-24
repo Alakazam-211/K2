@@ -24,6 +24,8 @@ WHAT YOU SEE
 
 THE QUEUE (the node decides, one queue for every server)
   1 gate first (only where the share allows it; one at a time; never kills)
+    A node's owner may keep slots for gate jobs (policy gate_reserved_slots=1):
+    normal work never fills them, so a release gate starts at once.
   2 servers within today's CPU-hours before servers over them
   3 interactive before batch (you get interactive for an attached run or
     --wait; --detach, more than 4 shards and soaks are batch). A batch job

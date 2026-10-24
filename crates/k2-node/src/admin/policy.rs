@@ -34,6 +34,7 @@ pub const FIELDS: &[&str] = &[
     "write_smoke_lock",
     "network",
     "repo_toolchains",
+    "gate_reserved_slots",
 ];
 
 fn bad(m: impl Into<String>) -> AdminRefusal {
@@ -175,6 +176,10 @@ pub fn widened(old: &Policy, new: &Policy) -> Vec<&'static str> {
     if !old.repo_toolchains && new.repo_toolchains {
         w.push("repo_toolchains");
     }
+    // Fewer gate slots gives normal work more (and can stall a release).
+    if new.gate_reserved_slots < old.gate_reserved_slots {
+        w.push("gate_reserved_slots");
+    }
     w
 }
 
@@ -275,6 +280,22 @@ mod tests {
         } else {
             Class::Privileged
         }
+    }
+
+    /// G4: reserving a gate slot narrows normal work (operate, at once);
+    /// giving it back widens it (held for the owner). Range 0..8.
+    #[test]
+    fn gate_reserved_slots_up_is_operate_down_is_privileged() {
+        let (l, m) = rig();
+        assert_eq!(class(&l, &m, json!({"gate_reserved_slots": 1})), Class::Operate);
+        let out = apply_set_with(&l, &json!({"gate_reserved_slots": 1}), &m).unwrap();
+        assert_eq!(out["policy"]["gate_reserved_slots"], 1);
+        let f = config::read_policy_file(&l.policy()).unwrap();
+        assert_eq!(f.gate_reserved_slots, Some(1));
+        assert_eq!(class(&l, &m, json!({"gate_reserved_slots": 0})), Class::Privileged);
+        assert_eq!(class(&l, &m, json!({"gate_reserved_slots": null})), Class::Privileged, "reset to 0 widens");
+        assert_eq!(class(&l, &m, json!({"gate_reserved_slots": 2})), Class::Operate);
+        assert_eq!(edit(&l, &json!({"gate_reserved_slots": 9}), &m).err().map(|e| e.code), Some(code::BAD_ARGS.to_string()));
     }
 
     #[test]

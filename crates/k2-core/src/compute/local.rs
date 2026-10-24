@@ -97,6 +97,7 @@ const POLICY_KEYS: &[(&str, &str)] = &[
     ("max_parallel", "int"),
     ("network", "enum"),
     ("repo_toolchains", "bool"),
+    ("gate_reserved_slots", "int"),
 ];
 
 fn enum_ok(key: &str, v: &str) -> bool {

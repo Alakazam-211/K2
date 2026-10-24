@@ -255,7 +255,7 @@ impl Node {
         if blocked.is_none() && crate::toolchain::installing(&self.toolchains().root) {
             blocked = Some(codes::INSTALLING_TOOLS.into());
         }
-        k2_node_proto::queue::Caps { cpu_millis: cpu, mem_bytes: mem, parallel_max: par, blocked }
+        k2_node_proto::queue::Caps { cpu_millis: cpu, mem_bytes: mem, parallel_max: par, blocked, gate_reserved: l.policy.gate_reserved_slots }
     }
 
     /// Every running attempt (all tenants).

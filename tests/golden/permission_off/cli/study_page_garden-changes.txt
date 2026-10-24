@@ -1,9 +1,9 @@
 $ k2 study garden-changes
 exit: 0
 --- stdout
-k2 study garden-changes — what changed for Gardens in 0.46.3, and what to update
+k2 study garden-changes — what changed for Gardens in <K2_CLI_VERSION>, and what to update
 
-WHAT CHANGED IN 0.46.3
+WHAT CHANGED IN <K2_CLI_VERSION>
   - Each Garden has an editor list. An agent on it may edit that Garden.
   - Editing needs the garden.access card once (k2 zen garden access <g>
     ask); making a Garden doesn't (k2 zen garden new).

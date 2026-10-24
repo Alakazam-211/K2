@@ -38,7 +38,7 @@ AN APP'S OWN SELF AND USAGE (app.self, app.usage; no cap, own App only)
   Agents  k2 app self <app>, k2 app usage <app> [--hours N] (an agent: its
           own workspace's Apps).
 
-PROJECT CHAT (0.46.3, App only; never on the Garden bridge)
+PROJECT CHAT (<K2_CLI_VERSION>, App only; never on the Garden bridge)
   A pass sees a project only when EVERY member agent is a room it holds
   with thread:read; one it can't reach and the project is skin_room, the
   same as one that doesn't exist. Posting also needs project:write in

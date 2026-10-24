@@ -1,7 +1,7 @@
 $ k2 study compute-shared
 exit: 0
 --- stdout
-k2 study compute-shared — a node many K2 servers share (0.46.3)
+k2 study compute-shared — a node many K2 servers share (<K2_CLI_VERSION>)
 
 WORDS
   server   a K2 that sends jobs to nodes (yours, or someone else's)
@@ -53,9 +53,9 @@ CODES (exit 3 with a JSON code)
   share_expired          your share's end date passed
   share_revoked          the node's owner removed your server
   not_node_owner         admin/update/servers verbs on a node you share
-  node_too_old           servers add on a pre-0.46.3 node: update it first
+  node_too_old           servers add on a pre-<K2_CLI_VERSION> node: update it first
   server_add_pending     one server is added at a time
-  server_too_old         a <K2_CLI_VERSION> server can't join: update it
+  server_too_old         a 0.46.2 server can't join: update it
   tenant_needs_job_wall  the node needs its job wall before a second server
   team_needs_tenant_wall other people's servers need the tenant wall
                          (Linux nodes; Macs in 0.46.4)
@@ -66,7 +66,7 @@ WHAT THE WALL DOES NOT STOP (say so before you share)
   share the kernel, CPU and disk, can reach the internet and any service
   on the machine's loopback, and the node's owner (root) can read
   everything. Don't send secrets to a node you don't own. On a Mac in
-  0.46.3 every server's jobs run as one user: share Macs only with your
+  <K2_CLI_VERSION> every server's jobs run as one user: share Macs only with your
   own servers.
 
 FOR THE NODE'S OWNER

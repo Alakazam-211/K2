@@ -385,7 +385,7 @@ export const LIBS: LibSpec[] = [
   },
   {
     id: 'dompurify',
-    version: '3.4.16',
+    version: '3.4.17',
     title: 'DOMPurify',
     global: 'DOMPurify',
     license: 'Apache-2.0',

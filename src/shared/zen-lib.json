@@ -373,7 +373,7 @@
     },
     {
       "id": "dompurify",
-      "version": "3.4.16",
+      "version": "3.4.17",
       "title": "DOMPurify",
       "global": "DOMPurify",
       "license": "Apache-2.0",
@@ -383,8 +383,8 @@
       "files": [
         {
           "name": "purify.min.js",
-          "bytes": 28853,
-          "sha256": "a3ed9c178c8c68079c073cd3b76e9af177d2e246274e397e443c70e21cdf63f3"
+          "bytes": 29796,
+          "sha256": "b08361de6f15903fc076dd17e1b3482457f3e50bc0d9e2118b3d529d4ed59e93"
         }
       ],
       "notes": "Dual-licensed MPL-2.0 OR Apache-2.0 upstream; K2 ships it under Apache-2.0."

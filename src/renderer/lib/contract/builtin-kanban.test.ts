@@ -61,7 +61,7 @@ function useVersion(dir: KanbanDir): void {
   SCRIPTS = SCRIPT_NAMES.map(read)
 }
 const MARKED = readFileSync(resolve(LIB, 'marked@18.0.14/marked.umd.js'), 'utf8')
-const PURIFY = readFileSync(resolve(LIB, 'dompurify@3.4.16/purify.min.js'), 'utf8')
+const PURIFY = readFileSync(resolve(LIB, 'dompurify@3.4.17/purify.min.js'), 'utf8')
 
 type Json = unknown
 interface Stored {

@@ -157,7 +157,7 @@ The file viewer draws Mermaid diagrams with a vendored build of **Mermaid**.
 
 | | |
 |--|--|
-| **What** | `src/renderer/public/vendor/mermaid.min.js` (Mermaid 11.16.0, prebuilt, loaded by `components/FileViewerPane/DiagramViewer.tsx`) |
+| **What** | `src/renderer/public/vendor/mermaid.min.js` (Mermaid 11.16.1, upstream `dist/mermaid.min.js` byte for byte, loaded by `components/FileViewerPane/DiagramViewer.tsx`; its inlined DOMPurify is 3.4.0, as upstream built it) |
 | **Upstream** | [mermaid](https://github.com/mermaid-js/mermaid) |
 | **License** | **MIT** (Copyright (c) 2014 - 2022 Knut Sveidqvist) — full text in `src/renderer/public/vendor/mermaid.LICENSE.txt`. The prebuilt file also carries Mermaid's own dependencies (among them d3, dagre-d3-es, cytoscape, khroma, DOMPurify, KaTeX, marked), each under its own permissive licence. |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. Mermaid does **not** relicense the product. |
@@ -236,7 +236,7 @@ text in `LICENSE.txt` (Apache-2.0 libraries include their upstream NOTICE).
 | Tone.js (`tone`) | 15.1.22 | MIT | Copyright (c) 2014-2020 Yotam Mann | shipped in the app, `src/renderer/zen-lib/tone@15.1.22/` |
 | Leaflet (`leaflet`) | 1.9.4 | BSD-2-Clause | Copyright (c) 2010-2023, Volodymyr Agafonkin | shipped in the app, `src/renderer/zen-lib/leaflet@1.9.4/` |
 | marked (`marked`) | 18.0.14 | MIT | Copyright (c) 2018+, MarkedJS (https://github.com/markedjs/) | shipped in the app, `src/renderer/zen-lib/marked@18.0.14/` |
-| DOMPurify (`dompurify`) | 3.4.16 | Apache-2.0 | (c) Cure53 and other contributors | shipped in the app, `src/renderer/zen-lib/dompurify@3.4.16/` |
+| DOMPurify (`dompurify`) | 3.4.17 | Apache-2.0 | (c) Cure53 and other contributors | shipped in the app, `src/renderer/zen-lib/dompurify@3.4.17/` |
 | highlight.js (`highlight.js`) | 11.12.0 | BSD-3-Clause | Copyright (c) 2006, Ivan Sagalaev. | shipped in the app, `src/renderer/zen-lib/highlight.js@11.12.0/` |
 | KaTeX (`katex`) | 0.18.9 | MIT | Copyright (c) 2013-2020 Khan Academy and other contributors | shipped in the app, `src/renderer/zen-lib/katex@0.18.9/` |
 | Preact + htm (`preact`) | 10.29.8 | MIT AND Apache-2.0 | Copyright (c) 2015-present Jason Miller; htm: Copyright 2018 Google Inc. | shipped in the app, `src/renderer/zen-lib/preact@10.29.8/` |

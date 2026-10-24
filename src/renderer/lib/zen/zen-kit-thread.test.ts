@@ -19,7 +19,7 @@ const { JSDOM } = createRequire(import.meta.url)('jsdom') as {
 const LIB = resolve(__dirname, '../../zen-lib')
 const THREAD = readFileSync(resolve(LIB, 'k2-thread@1.0.0/k2-thread.js'), 'utf8')
 const MARKED = readFileSync(resolve(LIB, 'marked@18.0.14/marked.umd.js'), 'utf8')
-const PURIFY = readFileSync(resolve(LIB, 'dompurify@3.4.16/purify.min.js'), 'utf8')
+const PURIFY = readFileSync(resolve(LIB, 'dompurify@3.4.17/purify.min.js'), 'utf8')
 
 const ALL = ['agents.subscribe', 'thread.subscribe', 'thread.post', 'thread.answer']
 const AGENT = 'ada::rosson.k2.dev'

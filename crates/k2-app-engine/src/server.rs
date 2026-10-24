@@ -873,10 +873,14 @@ impl Engine {
                 if f.path().extension().and_then(|e| e.to_str()) != Some("json") {
                     continue;
                 }
-                if let Some(s) = std::fs::read(f.path()).ok().and_then(|b| serde_json::from_slice::<RunState>(&b).ok()) {
-                    if AppId::parse(&s.app).is_some() && deployment_ok(&s.deployment) {
-                        out.push(s);
-                    }
+                // Update continuity R13 (A9): a state file this engine can't
+                // read (another version's fields) is said out loud, never
+                // dropped silently: adopt would miss its instance.
+                let parsed = std::fs::read(f.path()).map_err(|e| e.to_string()).and_then(|b| serde_json::from_slice::<RunState>(&b).map_err(|e| e.to_string()));
+                match parsed {
+                    Ok(s) if AppId::parse(&s.app).is_some() && deployment_ok(&s.deployment) => out.push(s),
+                    Ok(_) => eprintln!("k2-app-engine: state file {} names no valid App or deployment; skipped", f.path().display()),
+                    Err(e) => eprintln!("k2-app-engine: state file {} unreadable by this engine ({e}); its instance is not adopted", f.path().display()),
                 }
             }
         }

@@ -944,6 +944,8 @@
     }
     groups.viewer = Object.assign(viewer, groups.viewer)
   }
+  // k2.open(url) (0.46.4) = k2.links.open(url): a link in the person's browser.
+  if (groups.links && groups.links.open) k2.open = groups.links.open
 
   Object.keys(groups).forEach(function (surface) {
     if (surface === 'widget') return // served by the k2.widget getter

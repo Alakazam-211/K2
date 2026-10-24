@@ -80,6 +80,8 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/garden/sync",
     "/cli/zen/garden/template",
     "/cli/zen/lib/fetch",
+    "/cli/zen/links/allow",
+    "/cli/zen/links/forget",
     "/cli/zen/news/seen",
     "/cli/zen/proposals/approve",
     "/cli/zen/proposals/reject",
@@ -113,6 +115,7 @@ pub const GET_ROUTES: &[&str] = &[
     "/cli/zen/history",
     "/cli/zen/inspect",
     "/cli/zen/lib/file",
+    "/cli/zen/links",
     "/cli/zen/news",
     "/cli/zen/proposals",
     "/cli/zen/proposals/show",
@@ -1333,6 +1336,11 @@ pub fn handle(
     // CDN cache. It answers `None` for every other path and applies Zen's
     // owner-token rule itself.
     if let Some(r) = crate::zen_lib_routes::handle(path, owner, params, body) {
+        return r;
+    }
+    // `k2.open` (0.46.4): the per-Garden site list; its own credential
+    // rules (agents read, only the owner token writes).
+    if let Some(r) = crate::zen_links_routes::handle(path, owner, caller, params, body) {
         return r;
     }
     if !GET_ROUTES.contains(&path) && !POST_ROUTES.contains(&path) {

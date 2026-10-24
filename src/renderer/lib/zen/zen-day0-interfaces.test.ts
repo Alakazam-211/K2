@@ -62,6 +62,12 @@ describe('day-0: verb tables', () => {
         expect(verb in ZEN_VERBS, verb).toBe(false)
         continue
       }
+      // Catalog v21 (0.46.4): k2.open(url), answered by the custom layer only.
+      if (verb === 'links.open') {
+        expect(row).toEqual({ cap: 'links:open', reach: 'local', kind: 'call' })
+        expect(verb in ZEN_VERBS, verb).toBe(false)
+        continue
+      }
       // Garden v3: the data sources verbs, answered by the custom layer only.
       if (verb.startsWith('sources.')) {
         expect(row.cap).toBe('sources:read')

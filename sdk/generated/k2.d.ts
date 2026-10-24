@@ -703,6 +703,11 @@ export interface SourceAsk {
   readonly opened: boolean
 }
 
+export interface LinkOpened {
+  /** True when K2 opened it; false when the person said Don't open. */
+  readonly ok: boolean
+}
+
 export interface AppFileEntry {
   /** A symlinked folder reads false. */
   readonly isDirectory: boolean
@@ -1008,7 +1013,7 @@ export interface RoomMembers {
 }
 
 /** A cap a widget may ask for. */
-export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members'
+export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members'
 
 /** What k2.store.subscribe delivers: the changed keys (value null = deleted), or after a gap the whole list again. `by` names the writer: you (by your name), `<you> via <widget>`, or `agent:<handle>`. */
 export type StoreDelivery = Array<{ key: string; rev: number; value: unknown; by: string }> | { resync: true; items: StoreEntry[] }
@@ -1141,6 +1146,7 @@ export interface K2Verbs {
   'sources.subscribe': { args: [address: string]; value: SourceView }
   'sources.refresh': { args: [address: string]; value: SourceRefresh }
   'sources.ask': { args: [address: string, itemKey?: string | null]; value: SourceAsk }
+  'links.open': { args: [url: string]; value: LinkOpened }
   'files.list': { args: [args: { relPath: string; showHidden?: boolean; workspace: string }]; value: AppFileEntry[] }
   'files.read': { args: [args: { relPath: string; workspace: string }]; value: AppFileText }
   'files.readBinary': { args: [args: { relPath: string; workspace: string }]; value: AppFileBase64 }
@@ -1167,7 +1173,7 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'activity.snapshot' | 'room.members'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'activity.snapshot' | 'room.members'
 export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe'
 
 export interface K2 {
@@ -1315,6 +1321,10 @@ export interface K2 {
     /** Open K2's Ask an agent box about this source (K2 writes the draft; nothing is sent). cap sources:read · local · sources-v1. e.g. `await k2.sources.ask(k2.config.source, tile.key)` */
     ask(address: string, itemKey?: string | null): Promise<SourceAsk>
   }
+  readonly links: {
+    /** Open a link in the person's browser, only just after a click in this widget (once a second, 10 a minute). The first time for a site in each Garden, K2 asks them on its own card (Don't open, Open once, Always open this site from this Garden). Also k2.open(url). cap links:open · local · zen-widgets-v1. e.g. `const {ok} = await k2.open('https://example.com/report')` */
+    open(url: string): Promise<LinkOpened>
+  }
   readonly files: {
     /** A folder's entries, folders first. This computer only. cap files:read · portable · app-api-v1. e.g. `const entries = await k2.files.list({workspace, relPath: '.'})` */
     list(args: { relPath: string; showHidden?: boolean; workspace: string }): Promise<AppFileEntry[]>
@@ -1404,6 +1414,8 @@ export interface K2 {
   readonly config: Readonly<Record<string, string | number | boolean>>
   /** A file in the widget's folder as a data: URL, or null. */
   asset(name: string): string | null
+  /** Same as `k2.links.open(url)`: open an http(s) link in the person's browser, just after a click in this widget. */
+  open(url: string): Promise<LinkOpened>
   readonly motion: { readonly reduced: boolean }
   /** Guards for data you didn't make. */
   readonly shape: K2Shape

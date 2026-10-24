@@ -31,6 +31,12 @@
       "label": "Read data sources",
       "sentence": "Read the data sources this card names, on the servers you're signed in to. With thread:post or store:write too, what it shows can reach agents."
     },
+    {
+      "name": "links:open",
+      "exposure": ["widget"],
+      "label": "Open links in your browser",
+      "sentence": "Open web links in your browser when you click in it. K2 asks you the first time for each site."
+    },
     {"name": "agents:add", "label": "Open Add agent"},
     {"name": "gardens:manage", "label": "Create, rename and delete Gardens"},
     {"name": "gardens:template", "label": "Turn this Garden into a built-in page"},
@@ -3478,6 +3484,38 @@
       ],
       "doc": "Open K2's Ask an agent box about this source (K2 writes the draft; nothing is sent).",
       "example": "await k2.sources.ask(k2.config.source, tile.key)"
+    },
+    {
+      "verb": "links.open",
+      "cap": "links:open",
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-widgets-v1",
+      "bindings": {"renderer": {"impl": "frame"}},
+      "request": [
+        {
+          "title": "url",
+          "type": "string",
+          "description": "An http or https link (at most 2,048 characters; never one with a user name or password in it)."
+        }
+      ],
+      "response": {
+        "title": "LinkOpened",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "True when K2 opened it; false when the person said Don't open."
+          }
+        },
+        "required": ["ok"],
+        "additionalProperties": false
+      },
+      "errors": ["cap_not_granted", "bad_args", "rate_limited", "verb_unavailable", "failed"],
+      "doc": "Open a link in the person's browser, only just after a click in this widget (once a second, 10 a minute). The first time for a site in each Garden, K2 asks them on its own card (Don't open, Open once, Always open this site from this Garden). Also k2.open(url).",
+      "example": "const {ok} = await k2.open('https://example.com/report')"
     },
     {
       "verb": "store.get",

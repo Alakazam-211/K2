@@ -1598,6 +1598,12 @@ pub const ROUTES: &[Route] = &[
     get("/cli/zen/inspect", Member),
     post("/cli/zen/lib/fetch", Member),
     get("/cli/zen/lib/file", Member),
+    // `k2.open` (0.46.4): the sites a Garden opens without asking. Reads
+    // for the owner token and local passports; writes the owner token only
+    // (zen_links_routes).
+    get("/cli/zen/links", Member),
+    post("/cli/zen/links/allow", Member),
+    post("/cli/zen/links/forget", Member),
     get("/cli/zen/news", Member),
     post("/cli/zen/news/seen", Member),
     get("/cli/zen/proposals", Member),

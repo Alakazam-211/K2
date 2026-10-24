@@ -30,8 +30,9 @@ const K2_RUNTIME_MEMBERS: &[&str] =
 /// the tx / chunked helpers wrap `store.*` calls.
 const FRAME_HELPERS: &[&str] = &["store.subscribe", "store.tx", "store.putChunked", "store.getChunked"];
 
-/// Surfaces the frame makes callable: `k2.viewer()` is `viewer.get`.
-const CALLABLE_SURFACES: &[(&str, &str)] = &[("viewer", "viewer.get")];
+/// Surfaces the frame makes callable: `k2.viewer()` is `viewer.get`, and
+/// `k2.open(url)` is `links.open` (0.46.4).
+const CALLABLE_SURFACES: &[(&str, &str)] = &[("viewer", "viewer.get"), ("open", "links.open")];
 
 /// A row a custom widget can call: exposed to `widget` (the bridge) or
 /// `garden-local` (this computer's daemon, contract-garden-data-v1 §7.2) —

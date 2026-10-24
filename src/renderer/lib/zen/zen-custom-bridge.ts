@@ -38,7 +38,9 @@
 //      a press in that frame; `layout.*` (Garden columns, 0.46.3 r10) on
 //      the caller's own page only, 4 a second per verb, a fold or unfold
 //      only within 5 s of a press in that frame, saved per Garden on this
-//      computer like the person's own click (0.46.4).
+//      computer like the person's own click (0.46.4); `links.open`
+//      (`k2.open`, 0.46.4) only within 5 s of a press in that frame, once a
+//      second and 10 a minute, one card at a time (`zen-links`).
 // 0.46.3 Thread parity (Rosson 2026-10-20): `thread.read` takes `afterSeq`
 // (a delta: items, hasMore, changed, removed), and `thread.markRead`,
 // `thread.attachment`, `thread.open`, `thread.links` and `thread.pickFiles`
@@ -58,6 +60,7 @@ import { USER_WIDGET_CAPS, type UserWidgetCap } from '../k2-caps.generated'
 import type { CatalogErrorCode, CatalogWireError } from '../contract/catalog-types'
 import { ZEN_AGENTS_SHOW_MAX, type ZenCustomWidgetPayload, type ZenFrameReply, type ZenFrameRequest } from './zen-custom-types'
 import type { ZenAgentRow, ZenPerson, ZenThreadView } from './zen-data'
+import { ZEN_LINKS_OPEN, zenLinkTarget } from './zen-links'
 import {
   projectZenPeople,
   projectZenRows,
@@ -183,7 +186,21 @@ export interface ZenCustomLayerDeps {
    *  frame is drawn on, and no other (`ZenColumnsContext`). Without it the
    *  `layout.*` verbs answer `verb_unavailable`. */
   layout?: ZenCustomLayout
+  /** `k2.open(url)` (0.46.4): the person's browser, after K2's own card the
+   *  first time per site in this Garden. Without it `links.open` answers
+   *  `verb_unavailable`. */
+  links?: ZenCustomLinks
   now(): number
+}
+
+/** What the layer needs for `links.open` (`zen-links`). */
+export interface ZenCustomLinks {
+  /** Did the person press in this frame within the last 5 s? (A press
+   *  only; the frame having the focus is not enough.) */
+  pressed(): boolean
+  /** Open an already checked http(s) link for this Garden: K2's card the
+   *  first time per site; true when it opened. */
+  open(url: string, site: string): Promise<boolean>
 }
 
 /** What the layer needs for `k2.layout.*` (frame-only verbs, no cap). */
@@ -444,6 +461,35 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
 
   const layoutCalls = new Map<string, number[]>()
 
+  // ── k2.open / links.open (0.46.4) ───────────────────────────────────────
+  // Only just after the person's press in this frame, once a second and 10
+  // a minute (a refusal counts toward UW29), one K2 card at a time.
+  const linkCalls: number[] = []
+  let linkAsking = false
+
+  const openLink = async (args: unknown[]): Promise<{ ok: boolean }> => {
+    const links = deps.links
+    if (!links) refuse('verb_unavailable', 'links.open isn’t available here.')
+    const target = zenLinkTarget(args[0])
+    if (typeof target === 'string') refuse('bad_args', `links.open: ${target}`)
+    const now = deps.now()
+    while (linkCalls.length > 0 && now - linkCalls[0] >= 60_000) linkCalls.shift()
+    const lastSecond = linkCalls.filter((t) => now - t < 1_000).length
+    if (lastSecond >= ZEN_LINKS_OPEN.perSecond || linkCalls.length >= ZEN_LINKS_OPEN.perMinute) {
+      refuse('rate_limited', `links.open: at most ${ZEN_LINKS_OPEN.perSecond} a second and ${ZEN_LINKS_OPEN.perMinute} a minute.`)
+    }
+    if (!links!.pressed()) refuse('failed', 'links.open needs a click: it works only just after the person presses in the widget.')
+    if (linkAsking) refuse('rate_limited', 'links.open: K2 is already asking the person about a link.')
+    linkCalls.push(now)
+    const t = target as { url: string; site: string }
+    linkAsking = true
+    try {
+      return { ok: await links!.open(t.url, t.site) }
+    } finally {
+      linkAsking = false
+    }
+  }
+
   const needLayout = (verb: string): ZenCustomLayout => {
     if (!deps.layout) refuse('verb_unavailable', `${verb} isn’t available here.`)
     const now = deps.now()
@@ -513,6 +559,8 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       deps.canvas!.startDrag()
       return null
     },
+    // 0.46.4: k2.open(url), the person's browser (K2's card the first time per site).
+    'links.open': (args) => openLink(args),
     // A1: the page's columns: [{index, label, collapsible, collapsed}].
     'layout.get': () => ({ columns: needLayout('layout.get').columns() }),
     'layout.set': (args) => {

@@ -48,6 +48,7 @@ pub mod bundle;
 pub mod defaults;
 pub mod garden_access;
 pub mod garden_catalog;
+pub mod links;
 pub mod lock;
 pub mod news;
 pub mod schema;
@@ -280,6 +281,9 @@ pub const USER_WIDGET_CAPS: &[&str] = &[
     "thread:read",
     "thread:post",
     "sources:read",
+    // 0.46.4: `k2.open(url)` (links.open), answered by the custom layer; the
+    // first time per site in each Garden K2 asks the person on its own card.
+    "links:open",
     // 0.46.3 (garden-person-rows-v1): the Garden bridge's person rows.
     "files:read",
     "tickets:read",

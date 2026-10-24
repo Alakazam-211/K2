@@ -597,7 +597,7 @@ mod tests {
         let c = catalog();
         assert_eq!(
             c.caps_exposed_to(Exposure::Widget),
-            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read"]
+            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "links:open"]
         );
         // 0.46.3 (garden-person-rows-v1): files:read, tickets:read,
         // tickets:post and activity:read join through the Garden door.
@@ -609,6 +609,8 @@ mod tests {
                 "thread:read",
                 "thread:post",
                 "sources:read",
+                // 0.46.4: k2.open(url), answered by the custom layer.
+                "links:open",
                 "files:read",
                 "tickets:read",
                 "tickets:post",
@@ -627,6 +629,7 @@ mod tests {
         let local_scope = [
             "presence:read",
             "sources:read",
+            "links:open",
             "files:read",
             "tickets:read",
             "tickets:post",

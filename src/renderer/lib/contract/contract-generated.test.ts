@@ -160,6 +160,8 @@ describe('TUWA5: the generated tables', () => {
       'layout.set': { cap: null, reach: 'local', kind: 'call' },
       'layout.toggle': { cap: null, reach: 'local', kind: 'call' },
       'layout.subscribe': { cap: null, reach: 'local', kind: 'subscribe' },
+      // Catalog v21 (0.46.4): k2.open(url), answered by the custom layer.
+      'links.open': { cap: 'links:open', reach: 'local', kind: 'call' },
       // Garden data (contract-garden-data-v1 §7.2): garden-local rows, the
       // daemon answers them through /cli/zen/call.
       'save.get': { cap: null, reach: 'local', kind: 'call' },
@@ -241,6 +243,7 @@ describe('TUWA5: the generated tables', () => {
     // Garden-door caps (the daemon answers them through /cli/zen/call).
     const extra = [
       'sources:read',
+      'links:open',
       'store:read',
       'store:write',
       'guests:rooms',
@@ -257,6 +260,7 @@ describe('TUWA5: the generated tables', () => {
       'thread:read',
       'thread:post',
       'sources:read',
+      'links:open',
       'files:read',
       'tickets:read',
       'tickets:post',

@@ -61,8 +61,9 @@ pub const FRAME_MAX_BYTES: usize = 40 * 1024;
 /// parity 0.46.3 added thread.attachment/open/links/pickFiles/markRead;
 /// 128 since the Garden person rows, catalog v17: 12 rows and the files,
 /// tickets and activity cap groups; 136 since catalog v20's layout.*,
-/// agents.show and conversation.setContext rows).
-pub const GUIDE_MAX_LINES: usize = 136;
+/// agents.show and conversation.setContext rows; 144 since catalog v21's
+/// store.patch and links.open rows and the links:open cap group, 0.46.4).
+pub const GUIDE_MAX_LINES: usize = 144;
 
 /// Error codes every call may answer; the guide states them once.
 pub const ALWAYS_ERRORS: &[&str] = &["cap_not_granted", "verb_unavailable", "failed"];
@@ -83,7 +84,7 @@ pub const GUIDE_EXAMPLES: &[&str] = &[
 ];
 
 /// Members of the frame's `k2` object that aren't catalog helpers.
-pub const RUNTIME_MEMBERS: &[&str] = &["call", "subscribe", "on", "connected", "can", "ready", "config", "widget", "asset", "motion"];
+pub const RUNTIME_MEMBERS: &[&str] = &["call", "subscribe", "on", "connected", "can", "ready", "config", "widget", "asset", "motion", "open"];
 
 /// One rendered file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -591,7 +592,7 @@ const WIDGET_MEMBER_LINE: &str = "  readonly widget: { readonly id: string; read
 
 /// The end of `interface K2`: the runtime's own members.
 const K2_TAIL: &str =
-        "  /** Any widget verb by name; a refused call rejects with K2Error. */\n  call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>\n  /** Subscribe by name; returns the unsubscribe. A refused subscription ends and calls `onError` (the function after `cb`) once with a K2Error; with no `onError` K2 logs it as an uncaught error. */\n  subscribe<V extends K2SubscribeVerb>(\n    verb: V,\n    ...args:\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void, (error: K2Error) => void]\n  ): () => void\n  /** Alias of `subscribe`. */\n  on: K2['subscribe']\n  /** Resolves with the hello once K2 connects the frame (on its load, after your top-level script runs); rejects with K2Error `failed` \"not connected\" after 10 s. Await it before `can`, `config`, `widget` or `motion`: until then they read as empty. Calls wait for it on their own. */\n  readonly connected: Promise<K2Hello>\n  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. False until `connected` resolves. K2 still checks every call. */\n  can(verb: string): boolean\n  /** Tell K2 you have drawn (call once). */\n  ready(): void\n  /** The placement's `config` table from the Garden file (empty until `connected`). */\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  /** A file in the widget's folder as a data: URL, or null. */\n  asset(name: string): string | null\n  readonly motion: { readonly reduced: boolean }\n  /** Guards for data you didn't make. */\n  readonly shape: K2Shape\n  /** The error class (for `instanceof`). */\n  readonly K2Error: { new (wire: { code: K2ErrorCode; message: string }, verb: string): K2Error }\n  /** The codes worth retrying unchanged. */\n  readonly retryable: readonly K2ErrorCode[]\n}\n\ndeclare global {\n  const k2: K2\n  interface Window {\n    readonly k2: K2\n  }\n}\n";
+        "  /** Any widget verb by name; a refused call rejects with K2Error. */\n  call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>\n  /** Subscribe by name; returns the unsubscribe. A refused subscription ends and calls `onError` (the function after `cb`) once with a K2Error; with no `onError` K2 logs it as an uncaught error. */\n  subscribe<V extends K2SubscribeVerb>(\n    verb: V,\n    ...args:\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void, (error: K2Error) => void]\n  ): () => void\n  /** Alias of `subscribe`. */\n  on: K2['subscribe']\n  /** Resolves with the hello once K2 connects the frame (on its load, after your top-level script runs); rejects with K2Error `failed` \"not connected\" after 10 s. Await it before `can`, `config`, `widget` or `motion`: until then they read as empty. Calls wait for it on their own. */\n  readonly connected: Promise<K2Hello>\n  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. False until `connected` resolves. K2 still checks every call. */\n  can(verb: string): boolean\n  /** Tell K2 you have drawn (call once). */\n  ready(): void\n  /** The placement's `config` table from the Garden file (empty until `connected`). */\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  /** A file in the widget's folder as a data: URL, or null. */\n  asset(name: string): string | null\n  /** Same as `k2.links.open(url)`: open an http(s) link in the person's browser, just after a click in this widget. */\n  open(url: string): Promise<LinkOpened>\n  readonly motion: { readonly reduced: boolean }\n  /** Guards for data you didn't make. */\n  readonly shape: K2Shape\n  /** The error class (for `instanceof`). */\n  readonly K2Error: { new (wire: { code: K2ErrorCode; message: string }, verb: string): K2Error }\n  /** The codes worth retrying unchanged. */\n  readonly retryable: readonly K2ErrorCode[]\n}\n\ndeclare global {\n  const k2: K2\n  interface Window {\n    readonly k2: K2\n  }\n}\n";
 
 // ── k2-frame.js ──────────────────────────────────────────────────────────
 
@@ -805,10 +806,10 @@ mod tests {
         let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            70,
-            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch (0.46.4)"
+            71,
+            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch and links.open (0.46.4)"
         );
-        assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 36, "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows)");
+        assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 37, "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows; catalog v21's links.open)");
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",
             "thread.void", "gardens.create", "gardens.rename", "gardens.delete", "app.open"]
         {

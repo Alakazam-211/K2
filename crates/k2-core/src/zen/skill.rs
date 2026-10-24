@@ -746,7 +746,13 @@ cap:\n\n",
     s.push_str(
         "Also: `k2.call(verb, ...args)`, `k2.subscribe(verb, ...args, cb)` (alias `k2.on`),\n\
 `k2.connected`, `k2.can(verb)`, `k2.ready()` (call once you have drawn), `k2.config`,\n\
-`k2.widget`, `k2.asset(name)`, `k2.motion.reduced`.\n\n\
+`k2.widget`, `k2.asset(name)`, `k2.motion.reduced`, and `k2.open(url)` (= `k2.links.open`).\n\n\
+**Links open in the person's browser with `k2.open(url)`** (ask for `links:open`): http and\n\
+https only, within 5 s of the person's click in your widget (else `failed` \"needs a click\"),\n\
+once a second and 10 a minute. The first time for a site in each Garden, K2 asks them on its\n\
+own card (Don't open, Open once, Always open this site from this Garden); a no answers\n\
+`{ok: false}`. The frame can't open popups or navigate, so `<a target=_blank>` does nothing.\n\
+Agents can read what each Garden may open with `k2 zen links`; only the person changes it.\n\n\
 **`await k2.connected` before `k2.can`, `k2.config`, `k2.widget` or `k2.motion`.** K2\n\
 connects the frame after your top-level script runs; until then `k2.can()` is false and\n\
 the others are empty, so a widget that checks them at startup draws as if it had no\n\
@@ -1030,7 +1036,8 @@ fetches and checks it, the frame never touches the network, and air-gap blocks i
   bundled page 3 MB. Libraries: up to {} per widget, outside those limits.\n\
 - 10 custom widgets per page. Per widget: 60 calls a second, 16 live subscriptions,\n\
   64 KB per message, 8 live servers.\n\
-- WebGL, canvas, wasm and blob workers work. No network, storage, popups or dialogs.\n\n\
+- WebGL, canvas, wasm and blob workers work. No network, storage, popups or dialogs\n\
+  (open a link with `k2.open(url)`).\n\n\
 ### Examples to copy\n\n\
 - `k2:diary` (the Diary): a full widget with draggable page turns, handwriting and reduced motion.\n\
 - `hello`: a clock and a greeting; the smallest widget.\n\

@@ -58,6 +58,7 @@
       'sources.subscribe': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'subscribe', feature: 'sources-v1' }),
       'sources.refresh': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'call', feature: 'sources-v1' }),
       'sources.ask': Object.freeze({ cap: 'sources:read', reach: 'local', kind: 'call', feature: 'sources-v1' }),
+      'links.open': Object.freeze({ cap: 'links:open', reach: 'local', kind: 'call', feature: 'zen-widgets-v1' }),
       'files.list': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
       'files.read': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
       'files.readBinary': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
@@ -878,6 +879,7 @@ return viewerGet()
 }
 groups.viewer = Object.assign(viewer, groups.viewer)
 }
+if (groups.links && groups.links.open) k2.open = groups.links.open
 
 Object.keys(groups).forEach(function (surface) {
 if (surface === 'widget') return // served by the k2.widget getter

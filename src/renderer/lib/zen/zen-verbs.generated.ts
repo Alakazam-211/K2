@@ -60,7 +60,7 @@ export const ZEN_VERBS = {
 
 /** One custom-widget verb: its cap, portable or local, and how it answers. */
 export interface ZenCustomVerbRow {
-  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | null
+  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | null
   readonly reach: CatalogReach
   readonly kind: CatalogVerbKind
 }
@@ -118,6 +118,7 @@ export const ZEN_CUSTOM_VERBS = {
   'sources.subscribe': { cap: 'sources:read', reach: 'portable', kind: 'subscribe' },
   'sources.refresh': { cap: 'sources:read', reach: 'portable', kind: 'call' },
   'sources.ask': { cap: 'sources:read', reach: 'local', kind: 'call' },
+  'links.open': { cap: 'links:open', reach: 'local', kind: 'call' },
   'files.list': { cap: 'files:read', reach: 'portable', kind: 'call' },
   'files.read': { cap: 'files:read', reach: 'portable', kind: 'call' },
   'files.readBinary': { cap: 'files:read', reach: 'portable', kind: 'call' },

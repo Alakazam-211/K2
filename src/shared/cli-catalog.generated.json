@@ -1814,6 +1814,11 @@
     "description": "Whether each Garden's page and theme sync with K2's defaults or are its own copy (prd-zen-garden-sync-defaults-v1). No arguments: every Garden's state, its own changes and whether K2's default changed since its copy. on/off/undo/keep-previous are the person's (an agent gets 403 zen_local_only: ask the person, Settings → Gardens); preview prints the Garden as if synced and writes nothing."
    },
    {
+    "name": "zen links",
+    "usage": "k2 zen links [<garden>] [--json] | k2 zen links forget <garden> <site>",
+    "description": "The sites each Garden opens in the person's browser without asking (k2.open from a widget, 0.46.4): the person chose Always on K2's own card. Agents can read the list; only the person changes it (forget is refused inside a K2 terminal: run it outside K2)."
+   },
+   {
     "name": "zen news",
     "usage": "k2 zen news [--json] | k2 zen news seen [<id>... | --all] [--json]",
     "description": "Unseen Garden news (new catalog Gardens; K2 defaults a synced Garden picked up) and how many own copies have a newer default. seen marks ids, or every unseen item with --all, as read."

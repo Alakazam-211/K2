@@ -33551,6 +33551,13 @@ cmd_schema() {
       ]
     },
     {
+      "name": "zen links",
+      "usage": "k2 zen links [<garden>] [--json] | k2 zen links forget <garden> <site>",
+      "description": "The sites each Garden opens in the person's browser without asking (k2.open from a widget, 0.46.4): the person chose Always on K2's own card. Agents can read the list; only the person changes it (forget is refused inside a K2 terminal: run it outside K2).",
+      "args": [{"name": "garden|forget", "required": false}, {"name": "site", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Daemon JSON."}]
+    },
+    {
       "name": "zen news",
       "usage": "k2 zen news [--json] | k2 zen news seen [<id>... | --all] [--json]",
       "description": "Unseen Garden news (new catalog Gardens; K2 defaults a synced Garden picked up) and how many own copies have a newer default. seen marks ids, or every unseen item with --all, as read.",
@@ -59975,6 +59982,8 @@ USAGE
   k2 zen sync <garden> keep-previous [--page|--theme] [--json]
   k2 zen news [--json]
   k2 zen news seen [<id>... | --all] [--json]
+  k2 zen links [<garden>] [--json]          sites a Garden opens without asking (k2.open)
+  k2 zen links forget <garden> <site>       the person only: ask again next time
   k2 zen guide [<topic>] [--json]
   k2 zen data <list|show|grant|revoke|admin|unadmin|delete|move|export|import> …
   k2 zen guide example [<name> [--toml] | --list]
@@ -60843,6 +60852,8 @@ sources:read (Read data sources)
   k2.sources.subscribe(address, cb)                                                                   portable sources-v1             const off = k2.sources.subscribe(k2.config.source, (v) => draw(v))  [not_bound server_not_saved unreachable removed rate_limited]
   k2.sources.refresh(address)                                                                         portable sources-v1             await k2.sources.refresh(k2.config.source)  [not_bound server_not_saved unreachable removed rate_limited]
   k2.sources.ask(address, itemKey?)                                                                   local    sources-v1             await k2.sources.ask(k2.config.source, tile.key)  [not_bound]
+links:open (Open links in your browser)
+  k2.links.open(url)                                                                                  local    zen-widgets-v1         const {ok} = await k2.open('https://example.com/report')  [bad_args rate_limited]
 files:read (Read files (also shows heartbeat instructions))
   k2.files.list({relPath, showHidden, workspace})                                                     portable app-api-v1             const entries = await k2.files.list({workspace, relPath: '.'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
   k2.files.read({relPath, workspace})                                                                 portable app-api-v1             const {content} = await k2.files.read({workspace, relPath: 'notes.md'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
@@ -62890,6 +62901,69 @@ else:
     _zen_print news-seen "$as_json" "$raw"
 }
 
+# `k2 zen links [<garden>] [--json]` and `k2 zen links forget <garden>
+# <site>` (0.46.4): the sites a Garden's widgets open in the person's
+# browser without asking (k2.open). Agents read; forget is the person's
+# (the daemon refuses a passport with owner_only).
+cmd_zen_links() {
+    local as_json=false raw
+    local -a pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -h|--help) cmd_help_zen; exit 0 ;;
+            -*) echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local n=${#pos[@]}
+    if [ "$n" -gt 0 ] && [ "${pos[0]}" = "forget" ]; then
+        [ "$n" -eq 3 ] || { echo "Error: usage: k2 zen links forget <garden> <site>" >&2; exit 2; }
+        local body
+        body=$(python3 -c 'import json, sys; print(json.dumps({"garden": sys.argv[1], "site": sys.argv[2]}))' "${pos[1]}" "${pos[2]}")
+        raw=$(_zen_person_post "/cli/zen/links/forget" "$body")
+    elif [ "$n" -le 1 ]; then
+        if [ "$n" -eq 1 ]; then
+            raw=$(cli_request "/cli/zen/links" "garden=$(urlencode "${pos[0]}")")
+        else
+            raw=$(cli_request "/cli/zen/links")
+        fi
+    else
+        echo "Error: usage: k2 zen links [<garden>] | k2 zen links forget <garden> <site>" >&2
+        exit 2
+    fi
+    ZL_JSON="$as_json" ZL_RAW="$raw" python3 -c '
+import json, os, sys
+raw = os.environ.get("ZL_RAW") or ""
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: the daemon answered something that is not JSON: %s" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if os.environ.get("ZL_JSON") == "true":
+    print(json.dumps(d, separators=(",", ":")))
+err = d.get("error") if isinstance(d, dict) else None
+if err:
+    msg = d.get("message") or (err.get("hint") if isinstance(err, dict) else None) or str(err)
+    print("Error: %s" % msg, file=sys.stderr)
+    code = err if isinstance(err, str) else (err.get("code") if isinstance(err, dict) else "")
+    sys.exit(3 if code in ("owner_only", "zen_local_only") else 1)
+if os.environ.get("ZL_JSON") == "true":
+    sys.exit(0)
+if "removed" in d:
+    print(("Forgot %s for %s: K2 asks next time." if d["removed"] else "%s was not kept for %s.") % (d["site"], d["garden"]))
+elif "sites" in d:
+    print("
+".join(d["sites"]) if d["sites"] else "No sites: K2 asks the first time for each one.")
+else:
+    g = d.get("gardens") or {}
+    if not g:
+        print("No Garden opens a site without asking.")
+    for gid in sorted(g):
+        print("%s: %s" % (gid, ", ".join(g[gid])))
+'
+}
+
 # `k2 zen inspect <bundle-or-folder> [--json]` — a static review of a Garden
 # you received, before anything is added (Rosson 2026-10-11: importing a
 # Garden is an agent workflow, never a button click). Never runs the code.
@@ -63888,6 +63962,9 @@ print(json.dumps(b))
             ;;
         news)
             cmd_zen_news "$@"
+            ;;
+        links)
+            cmd_zen_links "$@"
             ;;
         proposals|proposal)
             cmd_zen_proposals "$@"

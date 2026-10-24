@@ -862,6 +862,9 @@ impl ZenFiles {
         if active.gardens.remove(&g.id).is_some() {
             self.write_active(&active)?;
         }
+        // 0.46.4 `k2.open`: the sites this Garden opened without asking go
+        // with it (a restored Garden asks again).
+        super::links::forget_garden(&self.root, &g.id)?;
         self.prune(&f);
         Ok(DeleteOutcome { deleted: g, snapshot })
     }

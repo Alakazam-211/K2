@@ -34,6 +34,9 @@ import { createZenCustomGuests, type ZenGuestRoomsAsk } from '@/lib/zen/zen-cust
 import { ZenGuestRoomsSheet } from './ZenGuestRoomsSheet'
 import { createZenPermissionSheet, type ZenPermissionAsk } from '@/lib/zen/permission-sheet'
 import { ZenPermissionSheet } from './ZenPermissionSheet'
+import { allowZenLinkSite, createZenLinks, fetchZenLinkSites, type ZenLinkAnswer, type ZenLinkAsk } from '@/lib/zen/zen-links'
+import { ZenLinkSheet } from './ZenLinkSheet'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { gardenCall } from '@/lib/garden-data/garden-data-api'
 import type { GardenCallBody } from '@/lib/garden-data/garden-data-types'
 import { onGardenDataChanged } from '@/stores/session-events'
@@ -49,7 +52,7 @@ import {
 import { ensureZenConversation, zenAgentRows, zenCustomViewFor, zenThreadItemTarget } from '@/lib/zen/zen-data'
 import { zenWidgetDisplayName } from '@/lib/zen/zen-custom-words'
 import { createZenChordGate, zenFrameHasFocus, type ZenChordActions } from '@/lib/zen/zen-shortcut'
-import { currentZenGardenId, switchZenGardenByIndex } from '@/lib/zen/zen-gardens'
+import { currentZenGardenId, switchZenGardenByIndex, useZenGardensStore } from '@/lib/zen/zen-gardens'
 import { cycleZenTheme } from '@/lib/zen/zen-theme-switch'
 import { useZenConfigStore, zenLocalScope } from '@/lib/zen/zen-api'
 import { exitZen } from '@/lib/zen/zen-view'
@@ -149,6 +152,8 @@ export function ZenCustomFrame({
   const [guestAsk, setGuestAsk] = useState<{ ask: ZenGuestRoomsAsk; resolve: (token: string | null) => void } | null>(null)
   // Permission cards (0.46.3): K2's sheet for a card the widget shows.
   const [permissionAsk, setPermissionAsk] = useState<{ ask: ZenPermissionAsk; resolve: () => void } | null>(null)
+  // `k2.open` (0.46.4): K2's card the first time a site is opened from this Garden.
+  const [linkAsk, setLinkAsk] = useState<{ ask: ZenLinkAsk; resolve: (answer: ZenLinkAnswer) => void } | null>(null)
   const loadedRef = useRef<Loaded | null>(null)
   loadedRef.current = loaded
   const boxRef = useRef<HTMLDivElement | null>(null)
@@ -333,6 +338,23 @@ export function ZenCustomFrame({
                 pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
               }
             : undefined,
+          // `k2.open` (0.46.4): only after a press in this frame within 5 s
+          // (focus alone isn't one); K2's card the first time per site in
+          // this Garden; the person's browser.
+          links: {
+            pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
+            open: createZenLinks({
+              gardenId: () => gardenId,
+              sites: fetchZenLinkSites,
+              allow: allowZenLinkSite,
+              ask: (ask) => new Promise<ZenLinkAnswer>((resolve) => setLinkAsk({ ask, resolve })),
+              describe: () => ({
+                widget: label,
+                garden: useZenGardensStore.getState().gardens.find((g) => g.id === gardenId)?.name ?? 'this Garden',
+              }),
+              openUrl: (url) => openUrl(url),
+            }).open,
+          },
           setTimer: (fn, ms) => window.setTimeout(fn, ms),
           clearTimer: (t) => window.clearTimeout(t as number),
           now: () => Date.now(),
@@ -367,6 +389,15 @@ export function ZenCustomFrame({
           onDone={() => {
             permissionAsk.resolve()
             setPermissionAsk(null)
+          }}
+        />
+      )}
+      {linkAsk && (
+        <ZenLinkSheet
+          ask={linkAsk.ask}
+          onDone={(answer) => {
+            linkAsk.resolve(answer)
+            setLinkAsk(null)
           }}
         />
       )}

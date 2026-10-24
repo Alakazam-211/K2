@@ -1105,10 +1105,8 @@ pub fn run() {
     // commands read the static directly.
 
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_opener::init())
@@ -1796,6 +1794,7 @@ pub fn run() {
             commands::projects::projects_pick_folder,
             commands::projects::pick_local_files,
             commands::projects::projects_open_in_finder,
+            commands::projects::open_folder,
             commands::projects::projects_open_in_editor,
             commands::projects::projects_open_in_terminal,
             commands::projects::projects_get_editors,

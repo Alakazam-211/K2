@@ -25,16 +25,6 @@
     "core:window:allow-start-dragging",
     "core:window:allow-start-resize-dragging",
     "core:webview:default",
-    "shell:default",
-    {
-      "identifier": "shell:allow-open",
-      "allow": [
-        { "url": "https://**" },
-        { "url": "http://**" },
-        { "url": "mailto:**" }
-      ]
-    },
-    "shell:allow-execute",
     {
       "identifier": "opener:allow-open-url",
       "allow": [
@@ -58,11 +48,9 @@
         { "url": "bear://**" },
         { "url": "addressbook://**" },
         { "url": "x-apple-reminderkit://**" },
-        { "url": "calshow:*" },
-        { "url": "file://**" }
+        { "url": "calshow:*" }
       ]
     },
-    "opener:allow-open-path",
     "opener:allow-reveal-item-in-dir",
     "dialog:default",
     "dialog:allow-open",
@@ -73,13 +61,6 @@
     "clipboard-manager:default",
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-read-text",
-    "fs:default",
-    "fs:allow-read",
-    "fs:allow-write",
-    "fs:allow-exists",
-    "fs:allow-mkdir",
-    "fs:allow-remove",
-    "fs:allow-rename",
     "deep-link:default",
     "drag:default",
     "updater:default",

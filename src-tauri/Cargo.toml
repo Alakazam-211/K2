@@ -30,10 +30,8 @@ k2-client = { path = "../crates/k2-client" }
 # `devtools` so Settings → General → Open DevTools works in release builds
 # (open_devtools is cfg'd on debug_assertions | feature = "devtools").
 tauri = { version = "2.12", features = ["protocol-asset", "macos-private-api", "tray-icon", "image-png", "devtools"] }
-tauri-plugin-shell = "2.4"
 tauri-plugin-dialog = "2.8"
 tauri-plugin-clipboard-manager = "2.4"
-tauri-plugin-fs = "2.6"
 tauri-plugin-deep-link = "2.5"
 tauri-plugin-updater = "2.13"
 tauri-plugin-process = "2.4"

@@ -84,6 +84,40 @@ pub fn projects_open_in_finder(path: String) -> Result<(), String> {
         .map(|_| ())
 }
 
+/// HOST: show a folder on this machine in the OS file manager.
+///
+/// Replaces the webview's `opener:allow-open-path` permission
+/// (prd-security-sweep-0464-v1 SS16): that one let the renderer open
+/// any path with its default app, which for a file means running it.
+/// This command opens only an existing directory given by an absolute
+/// path, and on macOS refuses an `.app` bundle (a directory that the
+/// OS would launch rather than show).
+#[tauri::command]
+pub fn open_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = folder_to_open(&path)?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| format!("open_folder: {e}"))
+}
+
+fn folder_to_open(path: &str) -> Result<std::path::PathBuf, String> {
+    let p = std::path::Path::new(path);
+    if path.is_empty() || !p.is_absolute() {
+        return Err(format!("open_folder: needs an absolute folder path, got {path:?}"));
+    }
+    let meta = std::fs::metadata(p).map_err(|e| format!("open_folder: {path}: {e}"))?;
+    if !meta.is_dir() {
+        return Err(format!("open_folder: not a folder: {path}"));
+    }
+    if cfg!(target_os = "macos")
+        && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("app"))
+    {
+        return Err(format!("open_folder: refusing an app bundle: {path}"));
+    }
+    Ok(p.to_path_buf())
+}
+
 #[tauri::command]
 pub fn projects_open_in_editor(editor_id: String, path: String) -> Result<(), String> {
     daemon()?
@@ -165,4 +199,36 @@ pub fn projects_open_focus_window(
         .map_err(|e| e.to_string())?;
 
     Ok(serde_json::json!({ "opened": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::folder_to_open;
+
+    #[test]
+    fn open_folder_takes_only_an_existing_absolute_directory() {
+        let d = tempfile::tempdir().expect("tempdir");
+        let dir = d.path().to_str().expect("utf8").to_string();
+        assert_eq!(folder_to_open(&dir).expect("a folder opens"), d.path());
+
+        let file = d.path().join("run-me.command");
+        std::fs::write(&file, "#!/bin/sh\n").expect("write file");
+        let err = folder_to_open(file.to_str().expect("utf8")).expect_err("a file is refused");
+        assert!(err.contains("not a folder"), "{err}");
+
+        let err = folder_to_open(d.path().join("missing").to_str().expect("utf8")).expect_err("missing is refused");
+        assert!(err.contains("open_folder:"), "{err}");
+        assert!(folder_to_open("relative/dir").expect_err("relative is refused").contains("absolute"));
+        assert!(folder_to_open("").expect_err("empty is refused").contains("absolute"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn open_folder_refuses_an_app_bundle_on_macos() {
+        let d = tempfile::tempdir().expect("tempdir");
+        let app = d.path().join("Evil.APP");
+        std::fs::create_dir_all(&app).expect("mkdir bundle");
+        let err = folder_to_open(app.to_str().expect("utf8")).expect_err("a bundle is refused");
+        assert!(err.contains("app bundle"), "{err}");
+    }
 }

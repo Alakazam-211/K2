@@ -879,14 +879,16 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           for (const item of pg.items) {
             if (item.type === 'terminal') {
               const termCwd = (item.data as TerminalItemData).cwd
-              // Open the cwd in the default terminal app
+              // Open the cwd in the default terminal app. `open_folder` is
+              // K2's own command and opens folders only; the webview no
+              // longer holds the opener's open-any-path permission (SS16).
               if (defaultTerminal === 'Terminal') {
-                import('@tauri-apps/plugin-opener').then(({ openPath }) => openPath(termCwd)).catch((e) => console.warn('[tab-bar]', e))
+                invoke('open_folder', { path: termCwd }).catch((e) => console.warn('[tab-bar]', e))
               } else {
                 // Use the terminal app's CLI to open
                 invoke('projects_open_in_terminal', { terminalApp: defaultTerminal, path: termCwd }).catch(() => {
-                  // Fallback to generic open
-                  import('@tauri-apps/plugin-opener').then(({ openPath }) => openPath(termCwd)).catch((e) => console.warn('[tab-bar]', e))
+                  // Fallback: the folder in the file manager
+                  invoke('open_folder', { path: termCwd }).catch((e) => console.warn('[tab-bar]', e))
                 })
               }
               return

@@ -635,6 +635,46 @@ pub fn summary(conn: &Connection, person: &Person, now: i64) -> Result<Summary, 
     Ok(out)
 }
 
+/// One workspace's Threads summed for one person (agent-unread-tickets-v1,
+/// 0.46.4): the numbers an agent row's Thread badge shows, the same fold
+/// as the desktop's `threadSumForProject`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProjectThreadSum {
+    /// Unread across the workspace's Threads, muted ones included, capped
+    /// at [`UNREAD_CAP`].
+    pub unread: i64,
+    /// Cards waiting on the person across those Threads.
+    pub waiting: i64,
+    /// Every Thread that has unread is muted (a grey badge).
+    pub muted: bool,
+}
+
+/// Fold a person's read items onto their workspaces: every Thread with
+/// something unread or waiting counts on its `project_id`. Project chats
+/// and Threads with no workspace are skipped. Pure.
+pub fn thread_sums_by_project(items: &[ReadItem]) -> std::collections::BTreeMap<String, ProjectThreadSum> {
+    let mut out: std::collections::BTreeMap<String, (ProjectThreadSum, i64)> = std::collections::BTreeMap::new();
+    for i in items {
+        if i.kind != KIND_THREAD || (i.unread <= 0 && i.waiting <= 0) {
+            continue;
+        }
+        let Some(pid) = i.project_id.as_deref().filter(|p| !p.is_empty()) else { continue };
+        let (sum, unmuted_unread) = out.entry(pid.to_string()).or_default();
+        sum.unread += i.unread.max(0);
+        sum.waiting += i.waiting.max(0);
+        if !i.muted {
+            *unmuted_unread += i.unread.max(0);
+        }
+    }
+    out.into_iter()
+        .map(|(pid, (mut sum, unmuted))| {
+            sum.muted = unmuted == 0 && sum.unread > 0;
+            sum.unread = sum.unread.min(UNREAD_CAP);
+            (pid, sum)
+        })
+        .collect()
+}
+
 /// This server's badge salt (`read_server.badge_salt`, minted once by
 /// migration 0190). Never leaves the daemon.
 fn badge_salt(conn: &Connection) -> Result<String, ReadError> {
@@ -1394,5 +1434,50 @@ mod tests {
         delete_person(&conn, "owner").expect("owner is a no-op");
         let people = known_people(&conn).expect("people");
         assert!(people.contains(&"owner".to_string()) && !people.contains(&"carol".to_string()), "{people:?}");
+    }
+
+    fn thread_item(id: &str, project: Option<&str>, unread: i64, waiting: i64, muted: bool) -> ReadItem {
+        ReadItem {
+            kind: KIND_THREAD.into(),
+            id: id.into(),
+            project_id: project.map(str::to_string),
+            unread,
+            waiting,
+            muted,
+            muted_until: None,
+            last_read_seq: 0,
+            last_seq: unread,
+        }
+    }
+
+    /// agent-unread-tickets-v1: Threads fold onto their workspace like the
+    /// desktop's `threadSumForProject`: muted unread still counts but greys
+    /// the badge only when all of it is muted; project chats, Threads with
+    /// no workspace and empty rows are skipped; unread caps at 100.
+    #[test]
+    fn thread_sums_by_project_fold_like_the_desktop_badge() {
+        let mut project_chat = thread_item("g1", None, 9, 0, false);
+        project_chat.kind = KIND_PROJECT.into();
+        let items = vec![
+            thread_item("a1", Some("pa"), 3, 0, false),
+            thread_item("a2", Some("pa"), 2, 1, true),
+            thread_item("b1", Some("pb"), 4, 0, true),
+            thread_item("c1", Some("pc"), 0, 2, false),
+            thread_item("d1", Some("pd"), 0, 0, true),
+            thread_item("e1", Some("pe"), 80, 0, false),
+            thread_item("e2", Some("pe"), 60, 0, false),
+            thread_item("x1", None, 5, 0, false),
+            project_chat,
+        ];
+        let sums = thread_sums_by_project(&items);
+        assert_eq!(
+            sums.into_iter().collect::<Vec<_>>(),
+            vec![
+                ("pa".to_string(), ProjectThreadSum { unread: 5, waiting: 1, muted: false }),
+                ("pb".to_string(), ProjectThreadSum { unread: 4, waiting: 0, muted: true }),
+                ("pc".to_string(), ProjectThreadSum { unread: 0, waiting: 2, muted: false }),
+                ("pe".to_string(), ProjectThreadSum { unread: UNREAD_CAP, waiting: 0, muted: false }),
+            ]
+        );
     }
 }

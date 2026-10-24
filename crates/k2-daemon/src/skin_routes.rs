@@ -1659,9 +1659,19 @@ pub fn handle_users_rooms(body: &[u8], actor: &str) -> CliResponse {
     }
 }
 
+/// `GET /cli/skin/agents` (`roomAgents.list`): the agents in the pass's
+/// rooms. 0.46.4 (agent-unread-tickets-v1): each row adds `unread`,
+/// `waiting`, `muted` where the pass holds `thread:read` in that room and
+/// `ticketsWaiting` where it holds `tickets:read`
+/// ([`crate::skin_me_routes::agent_counts`]); nothing for another room.
 pub fn handle_agents_get(pass: &skin::SkinPass) -> CliResponse {
     let agents = skin::live_agents(&pass.rooms);
-    CliResponse::ok_json(serde_json::json!({ "agents": agents }).to_string())
+    let mut rows: Vec<serde_json::Value> = match agents.iter().map(serde_json::to_value).collect() {
+        Ok(rows) => rows,
+        Err(e) => return CliResponse::internal_error(format!("serialize agents: {e}")),
+    };
+    crate::skin_me_routes::add_agent_counts(pass, &mut rows, "projectId");
+    CliResponse::ok_json(serde_json::json!({ "agents": rows }).to_string())
 }
 
 pub fn handle_tokens_revoke(body: &[u8], actor: &str) -> CliResponse {

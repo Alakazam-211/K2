@@ -593,6 +593,61 @@ pub struct SummaryActivity {
     pub busy: bool,
     /// D2: sessions per display.
     pub counts: SummaryCounts,
+    /// agent-unread-tickets-v1 (0.46.4): the CALLER's unread and waiting on
+    /// this agent's Threads plus its tickets. `None` on a daemon without
+    /// read state (migration 0190): the fields are left out, never 0.
+    #[serde(flatten)]
+    pub inbox: Option<SummaryInbox>,
+}
+
+/// agent-unread-tickets-v1 (0.46.4): what a remote Home row's badges need,
+/// for the person calling `presence/summary`.
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+pub struct SummaryInbox {
+    /// Unread items on the workspace's Threads for the caller (muted ones
+    /// included; capped at 100 = "99+"). `thread-read-v1` rules.
+    pub unread: i64,
+    /// Cards on those Threads waiting on the caller (choice / secret;
+    /// permission cards only at the caller's floor).
+    pub waiting: i64,
+    /// All of `unread` is on muted Threads (a grey badge).
+    pub muted: bool,
+    /// The workspace's tickets waiting on someone (`waiting` or
+    /// `needs_discussion`): the Tickets badge's set, per workspace.
+    #[serde(rename = "ticketsWaiting")]
+    pub tickets_waiting: i64,
+    /// Of those, the ones assigned to the caller ("Waiting on me", the
+    /// `me=1` badge's names).
+    #[serde(rename = "ticketsWaitingMe")]
+    pub tickets_waiting_me: i64,
+}
+
+impl SummaryInbox {
+    /// Anything for a badge.
+    pub fn any(&self) -> bool {
+        self.unread > 0 || self.waiting > 0 || self.tickets_waiting > 0
+    }
+}
+
+/// Join the caller's Thread sums and the per-workspace ticket counts into
+/// one inbox per workspace id (pure).
+pub fn summary_inboxes(
+    threads: &std::collections::BTreeMap<String, k2_core::read_state::ProjectThreadSum>,
+    tickets: &std::collections::BTreeMap<String, k2_core::feedback::ProjectWaiting>,
+) -> std::collections::BTreeMap<String, SummaryInbox> {
+    let mut out: std::collections::BTreeMap<String, SummaryInbox> = std::collections::BTreeMap::new();
+    for (pid, t) in threads {
+        let e = out.entry(pid.clone()).or_default();
+        e.unread = t.unread;
+        e.waiting = t.waiting;
+        e.muted = t.muted;
+    }
+    for (pid, w) in tickets {
+        let e = out.entry(pid.clone()).or_default();
+        e.tickets_waiting = w.waiting;
+        e.tickets_waiting_me = w.mine;
+    }
+    out
 }
 
 /// One live session as the summary folds it.
@@ -614,10 +669,16 @@ pub struct SummarySession {
 /// listed when its display is not idle, or (D2) it has a live PTY or a
 /// heartbeat. A cwd under no registered workspace is dropped (a Home row
 /// always names a registered one). Sorted by workspace id.
+///
+/// agent-unread-tickets-v1: with `inbox` (the caller's, by workspace id)
+/// every entry carries its inbox (zeros when none), and a workspace with
+/// anything unread, waiting or a ticket waiting is listed too, idle or
+/// not. `None` (no read state): no inbox fields, the D2 listing rule.
 pub fn fold_agent_activity(
     sessions: &[SummarySession],
     shells: &[String],
     workspaces: &[SummaryWorkspaceRef],
+    inbox: Option<&std::collections::BTreeMap<String, SummaryInbox>>,
 ) -> Vec<SummaryActivity> {
     use k2_core::activity::Display;
     #[derive(Default)]
@@ -650,8 +711,9 @@ pub fn fold_agent_activity(
         let Some(idx) = owner(cwd) else { continue };
         by_ws.entry(idx).or_default().live = true;
     }
+    let inbox_of = |w: &SummaryWorkspaceRef| inbox.map(|m| m.get(&w.id).copied().unwrap_or_default());
     for (idx, w) in workspaces.iter().enumerate() {
-        if w.heartbeat {
+        if w.heartbeat || inbox_of(w).is_some_and(|i| i.any()) {
             by_ws.entry(idx).or_default();
         }
     }
@@ -660,7 +722,8 @@ pub fn fold_agent_activity(
         .filter_map(|(idx, acc)| {
             let w = &workspaces[idx];
             let display = acc.display.unwrap_or(Display::Idle);
-            if display == Display::Idle && !acc.live && !w.heartbeat {
+            let inbox = inbox_of(w);
+            if display == Display::Idle && !acc.live && !w.heartbeat && !inbox.is_some_and(|i| i.any()) {
                 return None;
             }
             Some(SummaryActivity {
@@ -671,6 +734,7 @@ pub fn fold_agent_activity(
                 live: acc.live,
                 busy: acc.busy,
                 counts: acc.counts,
+                inbox,
             })
         })
         .collect();
@@ -692,9 +756,16 @@ pub fn fold_agent_activity(
 /// workspaces with a live PTY or a heartbeat are listed too (`status`
 /// `idle`, `display` `idle`; older clients keep only `working` /
 /// `permission` words or read `idle` as no activity).
+/// 0.46.4 (agent-unread-tickets-v1): each `agentActivity` entry adds the
+/// CALLER's `unread` / `waiting` / `muted` on that agent's Threads
+/// (thread-read-v1, the caller's person: `owner` for the owner token and
+/// owner-linked logins, else the Connect username) and the agent's
+/// `ticketsWaiting` / `ticketsWaitingMe`; workspaces with any of these are
+/// listed even when idle. The caller comes from the credential the
+/// dispatcher checked, never from a request field.
 /// Auth (owner token OR live connect session; app/skin passes and agent
 /// passports refused) is gated in the dispatcher, same gate as the roster.
-pub fn handle_summary() -> crate::cli_response::CliResponse {
+pub fn handle_summary(owner: bool, username: Option<String>) -> crate::cli_response::CliResponse {
     use crate::cli_response::CliResponse;
     let projects = match k2_core::projects_ops::projects_list() {
         Ok(rows) => rows,
@@ -728,6 +799,10 @@ pub fn handle_summary() -> crate::cli_response::CliResponse {
         })
         .collect();
     let shells = crate::activity_events::legacy_shell_cwds();
+    let inbox = match caller_inboxes(owner, username.as_deref()) {
+        Ok(i) => i,
+        Err(e) => return CliResponse::internal_error(format!("summary inbox: {e}")),
+    };
     // 0.46.0: the owner's displayName (linked account's "First Last",
     // else its username, else "Owner"); ownerDisplayName is not read.
     let owner_name = k2_core::person_name::load_effective(k2_core::notify_prefs::OWNER).display_name;
@@ -735,13 +810,41 @@ pub fn handle_summary() -> crate::cli_response::CliResponse {
     let body = serde_json::json!({
         "online": live.len(),
         "workspaces": summarize(&live, &refs, &owner_name),
-        "agentActivity": fold_agent_activity(&statuses, &shells, &refs),
+        "agentActivity": fold_agent_activity(&statuses, &shells, &refs, inbox.as_ref()),
         "activeProjectIds": active_ids,
     });
     match serde_json::to_string(&body) {
         Ok(s) => CliResponse::ok_json(s),
         Err(e) => CliResponse::internal_error(format!("serialize summary: {e}")),
     }
+}
+
+/// The caller's inbox per workspace id (agent-unread-tickets-v1): their
+/// Thread sums (`read_state::summary`, the same read `GET
+/// /cli/thread/unread` answers) and every workspace's waiting tickets with
+/// the caller's share. `Ok(None)` when the read-state tables are missing
+/// (an un-migrated DB): the summary then carries no inbox fields.
+fn caller_inboxes(
+    owner: bool,
+    username: Option<&str>,
+) -> Result<Option<std::collections::BTreeMap<String, SummaryInbox>>, String> {
+    let login = if owner { k2_core::notify_prefs::OWNER } else { username.unwrap_or("") };
+    if login.trim().is_empty() {
+        return Err("no caller for the inbox".into());
+    }
+    // File reads first, outside the DB lock.
+    let person = crate::read_routes::person_of_login(login)?;
+    let me = crate::feedback_routes::my_assignee_names_now(owner, if owner { None } else { username });
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if !k2_core::read_state::tables_exist(&conn) {
+        return Ok(None);
+    }
+    let summary = k2_core::read_state::summary(&conn, &person, k2_core::read_state::now_secs()).map_err(|e| e.to_string())?;
+    let tickets = k2_core::feedback::count_waiting_by_project_with(&conn, &me)?;
+    drop(conn);
+    let threads = k2_core::read_state::thread_sums_by_project(&summary.items);
+    Ok(Some(summary_inboxes(&threads, &tickets)))
 }
 
 /// Body of `POST /cli/presence/kick`.
@@ -1136,6 +1239,7 @@ mod tests {
             live: false,
             busy: false,
             counts: SummaryCounts::default(),
+            inbox: None,
         }
     }
 
@@ -1174,6 +1278,7 @@ mod tests {
             ],
             &[],
             &refs,
+            None,
         );
         assert_eq!(
             out,
@@ -1188,13 +1293,13 @@ mod tests {
             ]
         );
         // Order of the sessions doesn't change the answer.
-        let out2 = fold_agent_activity(&[s("/w", Waiting), s("/w/docs", Working)], &[], &refs);
-        let out2b = fold_agent_activity(&[s("/w/docs", Working), s("/w", Waiting)], &[], &refs);
+        let out2 = fold_agent_activity(&[s("/w", Waiting), s("/w/docs", Working)], &[], &refs, None);
+        let out2b = fold_agent_activity(&[s("/w/docs", Working), s("/w", Waiting)], &[], &refs, None);
         assert_eq!(out2, out2b);
         assert_eq!((out2[0].workspace_id.as_str(), out2[0].display.as_str()), ("id-w", "waiting"));
-        let out3 = fold_agent_activity(&[s("/w/docs", Monitoring), s("/w", Working)], &[], &refs);
+        let out3 = fold_agent_activity(&[s("/w/docs", Monitoring), s("/w", Working)], &[], &refs, None);
         assert_eq!((out3[0].status.as_str(), out3[0].display.as_str()), ("working", "working"));
-        assert!(fold_agent_activity(&[], &[], &refs).is_empty());
+        assert!(fold_agent_activity(&[], &[], &refs, None).is_empty());
     }
 
     /// D2 (plan-agent-status-unify-v1): remote Home rows get `heartbeat`,
@@ -1225,6 +1330,7 @@ mod tests {
             ],
             &["/shell/x".to_string(), "/nowhere".to_string()],
             &refs,
+            None,
         );
         let mut ask = act("id-ask", "permission", "waiting");
         ask.live = true;
@@ -1248,5 +1354,62 @@ mod tests {
                 "counts": { "working": 0, "monitoring": 0, "waiting": 1, "unverifiable": 0, "idle": 1 },
             })
         );
+    }
+
+    /// agent-unread-tickets-v1: with the caller's inbox every entry carries
+    /// it (zeros when the workspace has none), an idle workspace with
+    /// unread, a waiting card or a waiting ticket is listed, one with
+    /// nothing is not, and an unregistered workspace's inbox never shows.
+    #[test]
+    fn fold_agent_activity_adds_the_callers_inbox() {
+        use k2_core::activity::Display::*;
+        use k2_core::feedback::ProjectWaiting;
+        use k2_core::read_state::ProjectThreadSum;
+        let refs = vec![
+            wref("id-busy", "Busy", "/busy", "busy"),
+            wref("id-unread", "Unread", "/unread", "unread"),
+            wref("id-card", "Card", "/card", "card"),
+            wref("id-ticket", "Ticket", "/ticket", "ticket"),
+            wref("id-quiet", "Quiet", "/quiet", "quiet"),
+        ];
+        let threads: std::collections::BTreeMap<String, ProjectThreadSum> = [
+            ("id-unread".to_string(), ProjectThreadSum { unread: 4, waiting: 0, muted: true }),
+            ("id-card".to_string(), ProjectThreadSum { unread: 0, waiting: 1, muted: false }),
+            ("id-gone".to_string(), ProjectThreadSum { unread: 9, waiting: 9, muted: false }),
+        ]
+        .into_iter()
+        .collect();
+        let tickets: std::collections::BTreeMap<String, ProjectWaiting> = [
+            ("id-ticket".to_string(), ProjectWaiting { waiting: 3, mine: 1 }),
+            ("id-unread".to_string(), ProjectWaiting { waiting: 1, mine: 0 }),
+        ]
+        .into_iter()
+        .collect();
+        let inbox = summary_inboxes(&threads, &tickets);
+        let out = fold_agent_activity(&[sess("/busy", Working, true, true)], &[], &refs, Some(&inbox));
+        let ids: Vec<&str> = out.iter().map(|a| a.workspace_id.as_str()).collect();
+        assert_eq!(ids, vec!["id-busy", "id-card", "id-ticket", "id-unread"], "{out:?}");
+        assert_eq!(out[0].inbox, Some(SummaryInbox::default()), "a listed workspace with nothing: zeros");
+        assert_eq!(out[1].inbox, Some(SummaryInbox { waiting: 1, ..Default::default() }));
+        assert_eq!(out[1].display, "idle");
+        assert_eq!(
+            out[2].inbox,
+            Some(SummaryInbox { tickets_waiting: 3, tickets_waiting_me: 1, ..Default::default() })
+        );
+        let j = serde_json::to_value(&out[3]).expect("json");
+        assert_eq!(
+            j,
+            serde_json::json!({
+                "workspaceId": "id-unread", "status": "idle", "display": "idle",
+                "heartbeat": false, "live": false, "busy": false,
+                "counts": { "working": 0, "monitoring": 0, "waiting": 0, "unverifiable": 0, "idle": 0 },
+                "unread": 4, "waiting": 0, "muted": true, "ticketsWaiting": 1, "ticketsWaitingMe": 0,
+            })
+        );
+        // Without read state: no inbox fields and the D2 listing rule.
+        let none = fold_agent_activity(&[sess("/busy", Working, true, true)], &[], &refs, None);
+        assert_eq!(none.len(), 1);
+        let j = serde_json::to_value(&none[0]).expect("json");
+        assert!(j.get("unread").is_none() && j.get("ticketsWaiting").is_none(), "{j}");
     }
 }

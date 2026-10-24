@@ -177,7 +177,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
 import { __seedActivityForTests } from '@/stores/activity'
-import { __resetHostPoolForTests } from '@/lib/host-pool-instance'
+import { __resetHostPoolForTests, hostPool } from '@/lib/host-pool-instance'
 import { peekHostSelect, clearHostSelect, takeHostSelect } from '@/lib/home-pending-select'
 import { LS_REMOTE_ROOMS_PREVIEW, readRemoteRoomsPreview, useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
 import { homeRooms } from '@/stores/home-rooms'
@@ -204,10 +204,22 @@ const boxB: ConnectHost = {
 }
 const boxC: ConnectHost = { ...boxB, id: 'c', label: 'Box C', hostname: 'c.k2.dev', token: '' }
 
+// agent-unread-tickets-v1: what box B's /boot-status lists and its summary's
+// agentActivity (both absent by default: an older server).
+const boxBState: { features?: string[]; agentActivity?: unknown[] } = {}
+
 const fetchMock = vi.fn(async (url: string) => {
   // boot-status-views-v1: a held login sends its token on /boot-status.
   if (url === 'https://b.k2.dev/boot-status?token=tok-b') {
-    return new Response(JSON.stringify({ version: '0.41.6', protocol: 1, phase: 'ready' }), { status: 200 })
+    return new Response(
+      JSON.stringify({
+        version: '0.41.6',
+        protocol: 1,
+        phase: 'ready',
+        ...(boxBState.features ? { features: boxBState.features } : {}),
+      }),
+      { status: 200 },
+    )
   }
   if (url === 'https://b.k2.dev/cli/auth/whoami?token=tok-b') {
     return new Response(
@@ -232,6 +244,7 @@ const fetchMock = vi.fn(async (url: string) => {
             ],
           },
         ],
+        ...(boxBState.agentActivity ? { agentActivity: boxBState.agentActivity } : {}),
       }),
       { status: 200 },
     )
@@ -307,6 +320,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   fetchMock.mockClear()
+  delete boxBState.features
+  delete boxBState.agentActivity
 })
 
 // A probe still in flight when a test ends keeps using the stub (a later
@@ -523,6 +538,56 @@ describe('Home — the Agents page shell', () => {
     const cUrls = urls.filter((u) => u.includes('c.k2.dev'))
     expect(cUrls.length).toBeGreaterThan(0)
     expect(cUrls.every((u) => u === 'https://c.k2.dev/boot-status')).toBe(true)
+  })
+
+  // agent-unread-tickets-v1 (0.46.4): a remote row draws your unread /
+  // waiting and the agent's tickets from its server's summary, only when
+  // that server reports the feature.
+  const bInbox = [
+    {
+      workspaceId: 'pb',
+      status: 'idle',
+      display: 'idle',
+      heartbeat: false,
+      live: false,
+      busy: false,
+      counts: { working: 0, monitoring: 0, waiting: 0, unverifiable: 0, idle: 0 },
+      unread: 3,
+      waiting: 1,
+      muted: false,
+      ticketsWaiting: 2,
+      ticketsWaitingMe: 1,
+    },
+  ]
+
+  it('remote row: unread, waiting and ticket badges from a server with agent-unread-tickets-v1', async () => {
+    boxBState.features = ['activity-live-busy', 'agent-unread-tickets-v1']
+    boxBState.agentActivity = bInbox
+    render(<Shell />)
+    await waitFor(() => expect(rowOf('Bee').querySelector('[data-remote-row-badges]')).not.toBeNull())
+    const bee = rowOf('Bee')
+    expect(bee.querySelector('[data-unread-count]')?.getAttribute('data-unread-count')).toBe('3')
+    expect(bee.querySelector('[data-unread-waiting]')?.getAttribute('data-unread-waiting')).toBe('1')
+    const tickets = bee.querySelector('[data-ticket-count]')
+    expect(tickets?.getAttribute('data-ticket-count')).toBe('2')
+    expect(tickets?.getAttribute('title')).toBe('2 tickets waiting (1 on you)')
+    // The sign-in row (no login) never shows any.
+    expect(rowOf('Cee').querySelector('[data-remote-row-badges]')).toBeNull()
+  })
+
+  it('remote row: an older server (no agent-unread-tickets-v1) shows no badges, even with the fields', async () => {
+    boxBState.features = ['activity-live-busy']
+    boxBState.agentActivity = bInbox
+    render(<Shell />)
+    await waitFor(() =>
+      expect(rowOf('Bee').querySelector('[data-row-status]')?.getAttribute('data-row-status')).toBe('live'),
+    )
+    // The summary (with the fields) has landed in the pool: the row still
+    // draws none.
+    await waitFor(() => expect(hostPool.store.getState().entries['b.k2.dev']?.activity?.[0]?.unread).toBe(3))
+    expect(rowOf('Bee').querySelector('[data-remote-row-badges]')).toBeNull()
+    expect(rowOf('Bee').querySelector('[data-unread-count]')).toBeNull()
+    expect(rowOf('Bee').querySelector('[data-ticket-count]')).toBeNull()
   })
 
   it('Add Agent is the one bottom button; its picker has This server and From a server', () => {

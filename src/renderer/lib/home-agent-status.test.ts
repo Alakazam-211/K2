@@ -3,7 +3,7 @@
 // cluster from the summary (D2) or an open room.
 
 import { describe, expect, it } from 'vitest'
-import { grokAgentStatus, remoteAgentStatus, rowActionWord, rowReach, summaryRollup } from './home-agent-status'
+import { grokAgentStatus, remoteAgentStatus, remoteRowBadges, rowActionWord, rowReach, summaryRollup } from './home-agent-status'
 import type { PresenceActivity, RowStatus } from './home-status'
 import { parsePresenceActivity } from './host-pool'
 
@@ -125,6 +125,57 @@ describe('summary parsing (D2)', () => {
       busy: 1,
       live: 0,
     })
+  })
+})
+
+describe('remote row badges (agent-unread-tickets-v1)', () => {
+  const entry: PresenceActivity = {
+    workspaceId: 'w1',
+    status: 'working',
+    display: 'idle',
+    unread: 4,
+    waiting: 1,
+    muted: true,
+    ticketsWaiting: 2,
+    ticketsWaitingMe: 1,
+  }
+
+  it('parses the inbox fields and drops malformed ones', () => {
+    const out = parsePresenceActivity([
+      { workspaceId: 'w1', status: 'idle', display: 'idle', unread: 4, waiting: 1, muted: true, ticketsWaiting: 2, ticketsWaitingMe: 1 },
+      { workspaceId: 'w2', status: 'idle', display: 'idle', unread: -1, waiting: 'x', muted: 'no', ticketsWaiting: Number.NaN },
+    ])
+    expect(out).toEqual([
+      entry,
+      { workspaceId: 'w2', status: 'working', display: 'idle' },
+    ])
+  })
+
+  it('shows only with the feature, on a reachable signed-in row, from the row\'s own entry', () => {
+    const want = { unread: 4, waiting: 1, muted: true, tickets: 2, ticketsMine: 1 }
+    expect(remoteRowBadges({ status: live, row, activity: [entry], serverReports: true })).toEqual(want)
+    // An older server: never guessed, even if the fields are there.
+    expect(remoteRowBadges({ status: live, row, activity: [entry], serverReports: false })).toBeNull()
+    // Not reading that server (sign in, offline, no access): none.
+    for (const k of ['sign-in', 'offline', 'no-access', 'checking', 'not-found'] as const) {
+      expect(remoteRowBadges({ status: st(k), row, activity: [entry], serverReports: true })).toBeNull()
+    }
+    // Another workspace's entry, or none listed: nothing.
+    expect(remoteRowBadges({ status: live, row, activity: [{ ...entry, workspaceId: 'w9' }], serverReports: true })).toBeNull()
+    expect(remoteRowBadges({ status: live, row, activity: null, serverReports: true })).toBeNull()
+    // All zero: no badge.
+    expect(
+      remoteRowBadges({
+        status: live,
+        row,
+        activity: [{ ...entry, unread: 0, waiting: 0, ticketsWaiting: 0, ticketsWaitingMe: 0 }],
+        serverReports: true,
+      }),
+    ).toBeNull()
+    // Tickets alone are enough.
+    expect(
+      remoteRowBadges({ status: st('working'), row, activity: [{ ...entry, unread: 0, waiting: 0 }], serverReports: true }),
+    ).toEqual({ unread: 0, waiting: 0, muted: true, tickets: 2, ticketsMine: 1 })
   })
 })
 

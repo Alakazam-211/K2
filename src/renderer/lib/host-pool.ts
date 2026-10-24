@@ -67,6 +67,27 @@ function d2Fields(r: object): Pick<PresenceActivity, 'heartbeat' | 'live' | 'bus
   return out
 }
 
+type InboxFields = Pick<PresenceActivity, 'unread' | 'waiting' | 'muted' | 'ticketsWaiting' | 'ticketsWaitingMe'>
+
+/** agent-unread-tickets-v1 (0.46.4): the caller's unread / waiting and the
+ *  agent's ticket counts on a summary entry, kept only when well-formed. */
+function inboxFields(r: object): InboxFields {
+  const v = r as Record<string, unknown>
+  const out: InboxFields = {}
+  const count = (x: unknown): number | null =>
+    typeof x === 'number' && Number.isFinite(x) && x >= 0 ? Math.floor(x) : null
+  const unread = count(v.unread)
+  const waiting = count(v.waiting)
+  const tickets = count(v.ticketsWaiting)
+  const mine = count(v.ticketsWaitingMe)
+  if (unread !== null) out.unread = unread
+  if (waiting !== null) out.waiting = waiting
+  if (typeof v.muted === 'boolean') out.muted = v.muted
+  if (tickets !== null) out.ticketsWaiting = tickets
+  if (mine !== null) out.ticketsWaitingMe = mine
+  return out
+}
+
 export function parsePresenceActivity(raw: unknown): PresenceActivity[] | null {
   if (!Array.isArray(raw)) return null
   const out: PresenceActivity[] = []
@@ -76,7 +97,13 @@ export function parsePresenceActivity(raw: unknown): PresenceActivity[] | null {
     if (typeof workspaceId !== 'string' || workspaceId.length === 0) continue
     const real = typeof display === 'string' && DISPLAYS.has(display) ? (display as ActivityDisplay) : null
     if (real) {
-      out.push({ workspaceId, status: status === 'permission' ? 'permission' : 'working', display: real, ...d2Fields(r) })
+      out.push({
+        workspaceId,
+        status: status === 'permission' ? 'permission' : 'working',
+        display: real,
+        ...d2Fields(r),
+        ...inboxFields(r),
+      })
       continue
     }
     if (status !== 'working' && status !== 'permission') continue

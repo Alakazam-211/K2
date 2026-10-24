@@ -131,6 +131,43 @@ export function remoteAgentStatus(input: {
   return agentStatus({ rollup: summaryRollup(hit), unseen: null, heartbeatEnabled: heartbeat, daemonLive })
 }
 
+/** A remote row's badges (agent-unread-tickets-v1, 0.46.4): your unread /
+ *  waiting on the agent's Threads, as the connected rows'
+ *  `WorkspaceThreadUnreadBadge` draws them, and the agent's tickets waiting
+ *  on someone (`ticketsMine` of them assigned to you). */
+export interface RemoteRowBadges {
+  unread: number
+  waiting: number
+  muted: boolean
+  tickets: number
+  ticketsMine: number
+}
+
+/** What a remote row's badges say, or null for none. Only from a server
+ *  that reports `agent-unread-tickets-v1` (an older one never guesses), and
+ *  only while the row reads that server (reachable, signed in, allowed).
+ *  A workspace the summary doesn't list has nothing unread or waiting. */
+export function remoteRowBadges(input: {
+  status: RowStatus
+  row: HomeRowRef
+  activity: PresenceActivity[] | null | undefined
+  /** The server's `/boot-status` lists `agent-unread-tickets-v1`. */
+  serverReports: boolean
+}): RemoteRowBadges | null {
+  if (!input.serverReports || !ACTIVITY_KINDS.has(input.status.kind)) return null
+  const hit = summaryHit(input.activity ?? null, input.row)
+  if (!hit) return null
+  const out: RemoteRowBadges = {
+    unread: hit.unread ?? 0,
+    waiting: hit.waiting ?? 0,
+    muted: hit.muted === true,
+    tickets: hit.ticketsWaiting ?? 0,
+    ticketsMine: hit.ticketsWaitingMe ?? 0,
+  }
+  if (out.unread <= 0 && out.waiting <= 0 && out.tickets <= 0) return null
+  return out
+}
+
 /** A Grok Bot row (0.45.7) in the same language: working in its slot,
  *  needs-you as the status, live unknown. Not running is reach "offline". */
 export function grokAgentStatus(state: 'working' | 'needs-you' | 'idle' | 'not-running' | null): AgentStatusView {

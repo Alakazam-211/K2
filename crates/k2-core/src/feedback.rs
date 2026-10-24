@@ -489,6 +489,64 @@ pub fn count_waiting_for_with(conn: &rusqlite::Connection, me: &[String]) -> Res
     Ok(mine.len() as i64)
 }
 
+/// One workspace's Tickets badge numbers (agent-unread-tickets-v1, 0.46.4):
+/// `waiting` = its tickets that are `waiting` or `needs_discussion` (the
+/// host badge's set, per workspace); `mine` = those of them with an
+/// assignee in the caller's `me` names (the board's "Waiting on me").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProjectWaiting {
+    pub waiting: i64,
+    pub mine: i64,
+}
+
+/// [`count_waiting`] and [`count_waiting_for`] per workspace, in one read:
+/// every registered, non-sentinel workspace with at least one ticket
+/// waiting on someone, keyed by project id. The sum of `waiting` is
+/// [`count_waiting_with`]; the sum of `mine` is [`count_waiting_for_with`]
+/// for the same `me` (empty `me`: every `mine` is 0). Same matching rules.
+pub fn count_waiting_by_project_with(
+    conn: &rusqlite::Connection,
+    me: &[String],
+) -> Result<std::collections::BTreeMap<String, ProjectWaiting>, String> {
+    let me: std::collections::HashSet<String> = me
+        .iter()
+        .map(|n| n.trim().to_lowercase())
+        .filter(|n| !n.is_empty())
+        .collect();
+    let sql = format!(
+        "SELECT f.id, f.project_id, a.username FROM feedback f \
+         JOIN projects p ON p.id = f.project_id \
+         LEFT JOIN feedback_assignees a ON a.feedback_id = f.id \
+         WHERE f.status IN {BADGE_STATUSES_SQL} AND p.id NOT IN ({})",
+        sentinel_sql_list()
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("count waiting by project: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?))
+        })
+        .map_err(|e| format!("count waiting by project: {e}"))?;
+    // ticket id → (project, assigned to me)
+    let mut tickets: std::collections::HashMap<String, (String, bool)> = std::collections::HashMap::new();
+    for row in rows {
+        let (id, project, username) = row.map_err(|e| format!("count waiting by project: {e}"))?;
+        let assigned_to_me = username.is_some_and(|u| me.contains(&u.trim().to_lowercase()));
+        let slot = tickets.entry(id).or_insert((project, false));
+        slot.1 |= assigned_to_me;
+    }
+    let mut out: std::collections::BTreeMap<String, ProjectWaiting> = std::collections::BTreeMap::new();
+    for (project, mine) in tickets.into_values() {
+        let w = out.entry(project).or_default();
+        w.waiting += 1;
+        if mine {
+            w.mine += 1;
+        }
+    }
+    Ok(out)
+}
+
 /// One row of the host-wide list: the item plus where it lives. A ticket
 /// is `linked` when its `project_id` is a registered workspace that is
 /// not an audit sentinel. Otherwise `project_name` and `project_path`
@@ -1090,6 +1148,53 @@ mod tests {
         assert_eq!(count_waiting_for_with(&conn, &[]).expect("count"), 0);
         // Host-wide still counts every open ticket on a live workspace.
         assert_eq!(count_waiting_with(&conn).expect("count"), 4);
+    }
+
+    /// agent-unread-tickets-v1: the per-workspace counts add up to the host
+    /// badge and the "me" badge, a ticket assigned to me twice counts once,
+    /// and removed workspaces, sentinels and closed tickets stay out.
+    #[test]
+    fn t1d_count_waiting_by_project_splits_the_badges_per_workspace() {
+        let conn = crate::db::isolated_test_connection();
+        insert_project(&conn, "proj-a", "Alpha", "/tmp/tb-alpha");
+        insert_project(&conn, "proj-b", "Beta", "/tmp/tb-beta");
+        insert_project(&conn, "proj-c", "Gamma", "/tmp/tb-gamma");
+        let assign = |id: &str, who: &str| {
+            conn.execute(
+                "INSERT INTO feedback_assignees (feedback_id, username, assigned_at) VALUES (?1, ?2, 1)",
+                params![id, who],
+            )
+            .expect("assign");
+        };
+        let a1 = insert_ticket(&conn, "proj-a", "waiting", "a1", 100);
+        assign(&a1, "owner");
+        assign(&a1, "Rosson");
+        let a2 = insert_ticket(&conn, "proj-a", "needs_discussion", "a2", 101);
+        assign(&a2, "alice");
+        insert_ticket(&conn, "proj-a", "answered", "a3 closed-ish", 102);
+        insert_ticket(&conn, "proj-b", "waiting", "b1 unassigned", 103);
+        insert_ticket(&conn, "proj-c", "resolved", "c1 closed", 104);
+        insert_ticket(&conn, "_orphan", "waiting", "sentinel", 105);
+        insert_ticket(&conn, "gone-workspace", "waiting", "removed", 106);
+
+        let me = vec!["owner".to_string(), " rosson ".to_string()];
+        let by = count_waiting_by_project_with(&conn, &me).expect("by project");
+        assert_eq!(
+            by.into_iter().collect::<Vec<_>>(),
+            vec![
+                ("proj-a".to_string(), ProjectWaiting { waiting: 2, mine: 1 }),
+                ("proj-b".to_string(), ProjectWaiting { waiting: 1, mine: 0 }),
+            ]
+        );
+        let all = count_waiting_by_project_with(&conn, &[]).expect("by project, no me");
+        assert_eq!(all.values().map(|w| w.waiting).sum::<i64>(), count_waiting_with(&conn).expect("host"));
+        assert_eq!(all.values().map(|w| w.mine).sum::<i64>(), 0, "{all:?}");
+        let alice = count_waiting_by_project_with(&conn, &["ALICE".to_string()]).expect("alice");
+        assert_eq!(alice.get("proj-a"), Some(&ProjectWaiting { waiting: 2, mine: 1 }));
+        assert_eq!(
+            alice.values().map(|w| w.mine).sum::<i64>(),
+            count_waiting_for_with(&conn, &["ALICE".to_string()]).expect("alice host")
+        );
     }
 
     #[test]

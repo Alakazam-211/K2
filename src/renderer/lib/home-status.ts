@@ -65,6 +65,16 @@ export interface PresenceActivity {
   live?: boolean
   busy?: boolean
   counts?: Partial<Record<ActivityDisplay, number>>
+  /** 0.46.4 (agent-unread-tickets-v1): YOUR unread / waiting on this
+   *  agent's Threads (the summary is read with your login there; `muted` =
+   *  all of the unread is muted) and its tickets waiting on someone
+   *  (`ticketsWaitingMe`: the ones assigned to you). Workspaces with any
+   *  of these are listed even when idle. Absent from an older server. */
+  unread?: number
+  waiting?: number
+  muted?: boolean
+  ticketsWaiting?: number
+  ticketsWaitingMe?: number
 }
 
 /** What a Home row says an agent is doing: the daemon's display, with

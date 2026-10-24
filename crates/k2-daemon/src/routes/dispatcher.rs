@@ -4403,10 +4403,11 @@ async fn handle_one_request(
             }
             let _ = stream.read(&mut buf).await;
             let tok = super::http::extract_token(&query).unwrap_or("");
-            let authorized = (!tok.is_empty()
-                && super::http::ct_eq_token(tok, state.token.as_str()))
-                || k2_core::connect_users::validate_session(tok).is_some();
-            if !authorized {
+            let owner = !tok.is_empty() && super::http::ct_eq_token(tok, state.token.as_str());
+            // agent-unread-tickets-v1: the caller's unread / tickets are
+            // keyed by the login this credential is (never a param).
+            let username = if owner { None } else { k2_core::connect_users::validate_session(tok) };
+            if !owner && username.is_none() {
                 super::http::send_response(
                     &mut *stream,
                     "403 Forbidden",
@@ -4416,7 +4417,7 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
-            let r = tokio::task::spawn_blocking(crate::presence::handle_summary)
+            let r = tokio::task::spawn_blocking(move || crate::presence::handle_summary(owner, username))
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;

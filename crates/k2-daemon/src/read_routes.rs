@@ -336,6 +336,11 @@ fn guest_person(reader: &PassReader) -> Person {
     Person::app_guest(&reader.key, &reader.username)
 }
 
+/// The read-state person an App pass reads as ([`pass_reader`]).
+pub fn pass_person(pass: &k2_core::skin::SkinPass) -> Person {
+    guest_person(&pass_reader(pass))
+}
+
 /// A removed App guest's read state goes with them (TP11 for guests).
 pub fn forget_guest(principal_id: &str) {
     let id = principal_id.trim();

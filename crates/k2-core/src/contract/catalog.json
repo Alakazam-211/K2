@@ -4714,10 +4714,19 @@
                 },
                 "unread": {
                   "type": "integer",
-                  "description": "Unread Thread items for this person (when the server reads them)."
+                  "description": "This login's unread items on the room's Chat (capped at 100: show 99+). Present with thread:read in the room, on a server with agent-unread-tickets-v1."
+                },
+                "waiting": {
+                  "type": "integer",
+                  "description": "Cards on the room's Chat waiting for this login's answer. With thread:read, like unread."
                 },
                 "muted": {
-                  "type": "boolean"
+                  "type": "boolean",
+                  "description": "This login muted the room's Chat. With thread:read, like unread."
+                },
+                "ticketsWaiting": {
+                  "type": "integer",
+                  "description": "The room's tickets waiting on someone (waiting or needs_discussion). Present with tickets:read in the room (agent-unread-tickets-v1)."
                 }
               },
               "required": [
@@ -4773,7 +4782,7 @@
         "pass_wrong_link",
         "failed"
       ],
-      "doc": "Who this pass is: guest or App, its agents (identity, caps, what they allow, folders), this server's ids and features.",
+      "doc": "Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features.",
       "example": "const me = await k2.asGuest(pass).me.get()"
     },
     {
@@ -4825,6 +4834,22 @@
                     "null"
                   ],
                   "description": "A data: URL."
+                },
+                "unread": {
+                  "type": "integer",
+                  "description": "This pass's unread items on the room's Chat (capped at 100: show 99+). Present with thread:read in the room, on a server with agent-unread-tickets-v1."
+                },
+                "waiting": {
+                  "type": "integer",
+                  "description": "Cards on the room's Chat waiting for this pass's answer. With thread:read, like unread."
+                },
+                "muted": {
+                  "type": "boolean",
+                  "description": "The room's Chat is muted for this pass. With thread:read, like unread."
+                },
+                "ticketsWaiting": {
+                  "type": "integer",
+                  "description": "The room's tickets waiting on someone (waiting or needs_discussion). Present with tickets:read in the room (agent-unread-tickets-v1)."
                 }
               },
               "required": [
@@ -4849,7 +4874,7 @@
         "pass_wrong_link",
         "failed"
       ],
-      "doc": "The agents in the pass's rooms: handle, name, color and picture.",
+      "doc": "The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.",
       "example": "const {agents} = await k2.roomAgents.list()"
     },
     {

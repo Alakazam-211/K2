@@ -47,7 +47,7 @@ vi.mock('@/stores/context-menu', () => ({
 
 import { act } from 'react'
 import { cleanup, fireEvent, render, renderHook, waitFor } from '@testing-library/react'
-import { UnreadBadge, WorkspaceThreadUnreadBadge } from './UnreadBadge'
+import { TicketCountBadge, UnreadBadge, WorkspaceThreadUnreadBadge } from './UnreadBadge'
 import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
 import {
   __resetUnreadForTests,
@@ -154,6 +154,23 @@ describe('UnreadBadge', () => {
     const { container } = render(<UnreadBadge unread={5} waiting={1} variant="dot" />)
     expect(container.querySelector('[data-unread-count]')?.textContent).toBe('')
     expect(container.querySelector('[data-unread-waiting]')?.textContent).toBe('')
+  })
+})
+
+describe('TicketCountBadge (agent-unread-tickets-v1)', () => {
+  it('an outlined needs-you pill with the count; mine rides the tooltip; nothing at 0', () => {
+    const { container, rerender } = render(<TicketCountBadge count={3} mine={2} />)
+    const pill = container.querySelector('[data-ticket-count]')
+    expect(pill?.textContent).toBe('3')
+    expect(pill?.getAttribute('title')).toBe('3 tickets waiting (2 on you)')
+    expect(pill?.className).toContain('border-[var(--color-status-needs-you)]')
+    expect(pill?.className).not.toContain('bg-[var(--color-status-needs-you)]')
+    rerender(<TicketCountBadge count={1} />)
+    expect(container.querySelector('[data-ticket-count]')?.getAttribute('title')).toBe('1 ticket waiting')
+    rerender(<TicketCountBadge count={120} />)
+    expect(container.querySelector('[data-ticket-count]')?.textContent).toBe('99+')
+    rerender(<TicketCountBadge count={0} mine={0} />)
+    expect(container.innerHTML).toBe('')
   })
 })
 

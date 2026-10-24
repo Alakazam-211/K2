@@ -36,7 +36,8 @@ import { homeRoomVerdict, type HomeRoomVerdict } from '@/lib/home-room-floor'
 import { hostPool } from '@/lib/host-pool-instance'
 import { useStore } from 'zustand'
 import type { RowStatus } from '@/lib/home-status'
-import { remoteAgentStatus, rowActionWord, rowReach } from '@/lib/home-agent-status'
+import { remoteAgentStatus, remoteRowBadges, rowActionWord, rowReach } from '@/lib/home-agent-status'
+import { TicketCountBadge, UnreadBadge } from '@/components/common/UnreadBadge'
 import { MachineChip } from './MachineChip'
 import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
 import { openHomeRow } from '@/lib/home-open'
@@ -177,6 +178,19 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
       }),
     [status, row, summary, roomFacts, boot],
   )
+  // agent-unread-tickets-v1: your unread / waiting on this agent's Threads
+  // and its waiting tickets, from that server's summary (read with your
+  // login there). An older server reports neither: no badges.
+  const badges = useMemo(
+    () =>
+      remoteRowBadges({
+        status,
+        row,
+        activity: summary,
+        serverReports: boot?.features.includes('agent-unread-tickets-v1') ?? false,
+      }),
+    [status, row, summary, boot],
+  )
   const reach = rowReach(status.kind)
   const remoteOnWeb = isWebClient() && !onConnected
   // MS83: "No access" rows never open a room.
@@ -218,15 +232,28 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
       }
       name={row.label}
       nameAside={
-        <PresenceAvatarCluster
-          users={status.people.map((p) => ({
-            user: p.user,
-            role: asRole(p.role),
-            color: p.color,
-            firstName: p.firstName ?? null,
-            lastName: p.lastName ?? null,
-          }))}
-        />
+        <>
+          {badges && (
+            <span className="mr-1 inline-flex items-center gap-0.5" data-remote-row-badges="">
+              <TicketCountBadge count={badges.tickets} mine={badges.ticketsMine} />
+              <UnreadBadge
+                unread={badges.unread}
+                waiting={badges.waiting}
+                muted={badges.muted}
+                label="Thread messages"
+              />
+            </span>
+          )}
+          <PresenceAvatarCluster
+            users={status.people.map((p) => ({
+              user: p.user,
+              role: asRole(p.role),
+              color: p.color,
+              firstName: p.firstName ?? null,
+              lastName: p.lastName ?? null,
+            }))}
+          />
+        </>
       }
       subline={
         <>

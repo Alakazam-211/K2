@@ -22,11 +22,16 @@
 //!   color, image), caps, `can` (what the caps allow) and folders. A room
 //!   not on it is invisible to this pass (every door answers `skin_room`).
 //!   `serverId`, `publicHost` and `instanceId` key rows across servers.
+//!   0.46.4 (agent-unread-tickets-v1, [`agent_counts`]): `unread`,
+//!   `waiting`, `muted` with `thread:read` in the room and
+//!   `ticketsWaiting` with `tickets:read` there.
 //! - `features`: this server's `/boot-status` keys
 //!   (`boot_status::features()`), so an App can tell what the server has
 //!   without the owner-only `/boot-status`.
 //!
 //! The write half (invites, profile) is S25, 0.46.2.
+
+use std::collections::BTreeMap;
 
 use k2_core::skin::SkinPass;
 use serde_json::json;
@@ -45,6 +50,88 @@ pub fn kind_of(pass: &SkinPass, on_link: bool) -> &'static str {
         "app"
     } else {
         "token"
+    }
+}
+
+/// Per-agent counts for an App pass (agent-unread-tickets-v1, 0.46.4), by
+/// room (project id), over `rooms` the pass holds:
+/// - with `thread:read` in the room: `unread`, `waiting`, `muted` on the
+///   room's pinned Chat for the pass's own reader
+///   (`read_routes::pass_reader`: an App guest is the person
+///   `guest:<principalId>`, an App's own pass its `app:<serviceId>`
+///   bookmark), the same numbers `thread.unread` gives that room (a room
+///   whose Chat has no Thread yet: 0, 0, false);
+/// - with `tickets:read` in the room: `ticketsWaiting`, the room's tickets
+///   that are `waiting` or `needs_discussion` (the tickets an App may list
+///   there, counted).
+///
+/// A room the pass doesn't hold, or a cap it lacks there, gets no field,
+/// so a count never tells the pass about a room or a surface it can't
+/// read. `Err` on a store failure.
+pub fn agent_counts(pass: &SkinPass, rooms: &[String]) -> Result<BTreeMap<String, serde_json::Map<String, serde_json::Value>>, String> {
+    use k2_core::read_state::{self, ReadError, KIND_THREAD};
+    let held: Vec<&String> = rooms.iter().filter(|r| pass.has_room(r)).collect();
+    let thread_rooms: Vec<&String> =
+        held.iter().copied().filter(|r| pass.has_cap_in_room(r, k2_core::skin::CAP_THREAD_READ)).collect();
+    let ticket_rooms: Vec<&String> =
+        held.iter().copied().filter(|r| pass.has_cap_in_room(r, k2_core::skin::CAP_TICKETS_READ)).collect();
+    let mut out: BTreeMap<String, serde_json::Map<String, serde_json::Value>> = BTreeMap::new();
+    if thread_rooms.is_empty() && ticket_rooms.is_empty() {
+        return Ok(out);
+    }
+    // Each lookup takes the DB lock itself: before ours.
+    let chats: Vec<(&String, Option<String>)> =
+        thread_rooms.iter().map(|r| (*r, crate::overlay_routes::pinned_chat_of(r))).collect();
+    let person = crate::read_routes::pass_person(pass);
+    let now = read_state::now_secs();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if read_state::tables_exist(&conn) {
+        for (room, chat) in chats {
+            let (unread, waiting, muted) = match chat {
+                None => (0, 0, false),
+                Some(conv) => match read_state::item(&conn, &person, KIND_THREAD, &conv, now) {
+                    Ok(i) => (i.unread, i.waiting, i.muted),
+                    // A pinned Chat with no Thread yet: nothing unread.
+                    Err(ReadError::NotFound(_)) => (0, 0, false),
+                    Err(e) => return Err(e.to_string()),
+                },
+            };
+            let row = out.entry(room.clone()).or_default();
+            row.insert("unread".into(), json!(unread));
+            row.insert("waiting".into(), json!(waiting));
+            row.insert("muted".into(), json!(muted));
+        }
+    }
+    if !ticket_rooms.is_empty() {
+        let tickets = k2_core::feedback::count_waiting_by_project_with(&conn, &[])?;
+        for room in ticket_rooms {
+            let n = tickets.get(room.as_str()).map_or(0, |w| w.waiting);
+            out.entry(room.clone()).or_default().insert("ticketsWaiting".into(), json!(n));
+        }
+    }
+    Ok(out)
+}
+
+/// [`agent_counts`] merged into agent rows keyed by `key` (the room's
+/// project id field). A store failure leaves the counts out (logged): the
+/// fields are optional, and an App's sign-in must not fail on a badge.
+pub fn add_agent_counts(pass: &SkinPass, rows: &mut [serde_json::Value], key: &str) {
+    let rooms: Vec<String> = rows.iter().filter_map(|r| r.get(key).and_then(|v| v.as_str()).map(str::to_string)).collect();
+    let counts = match agent_counts(pass, &rooms) {
+        Ok(c) => c,
+        Err(e) => {
+            k2_core::log_debug!("[skin] agent counts: {e}");
+            return;
+        }
+    };
+    for row in rows.iter_mut() {
+        let Some(room) = row.get(key).and_then(|v| v.as_str()).map(str::to_string) else { continue };
+        if let (Some(c), Some(obj)) = (counts.get(&room), row.as_object_mut()) {
+            for (k, v) in c {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
     }
 }
 
@@ -82,6 +169,9 @@ pub fn view(pass: &SkinPass, on_link: bool) -> serde_json::Value {
         rooms.push(row);
         agents.push(agent);
     }
+    // agent-unread-tickets-v1: unread / waiting / muted and ticketsWaiting
+    // where the caps allow them.
+    add_agent_counts(pass, &mut agents, "room");
     json!({
         "ok": true,
         "kind": kind_of(pass, on_link),

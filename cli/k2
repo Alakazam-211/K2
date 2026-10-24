@@ -32941,8 +32941,8 @@ THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
 
 EVERY VERB, BY CAP (helper, method and route, what it does)
 no cap (your own rooms)
-  me.get                   GET  /cli/skin/me                                  Who this pass is: guest or App, its agents (identity, caps, what they allow, folders), this server's ids and features.
-  roomAgents.list          GET  /cli/skin/agents                              The agents in the pass's rooms: handle, name, color and picture.
+  me.get                   GET  /cli/skin/me                                  Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features.
+  roomAgents.list          GET  /cli/skin/agents                              The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.
   guests.login             POST /cli/skin/login (server only)                 Log a guest in through this App; the answer carries the guest's session pass.
   password.change          POST /cli/skin/password/change (browser only)      A guest changes their own password (browser only: it ends every session of theirs).
   guests.logout            POST /cli/skin/logout (server only)                Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).

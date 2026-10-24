@@ -63,6 +63,13 @@ export const REPORTED_FEATURES = {
    *  keeps its own live-session set and reads working from
    *  `counts.working`; a missing `live` is unknown, never 0. */
   'activity-live-busy': 'activity-live-busy',
+  /** agent-unread-tickets-v1 (0.46.4): `presence/summary` `agentActivity`
+   *  entries carry the caller's `unread` / `waiting` / `muted` on that
+   *  agent's Threads and its `ticketsWaiting` / `ticketsWaitingMe` (idle
+   *  workspaces with any listed too). A remote Home row draws its unread
+   *  and ticket badges only from a server with this key; an older server's
+   *  rows show none (never guessed). */
+  'agent-unread-tickets-v1': 'agent-unread-tickets-v1',
   /** thread-read-v1 (0.46.1): per-person unread counts for Threads and
    *  project chats. `GET /cli/thread/unread`, `POST /cli/thread/read`,
    *  `POST /cli/project-group/read`, `POST /cli/thread/mute`, the

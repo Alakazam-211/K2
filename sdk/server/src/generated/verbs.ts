@@ -48,7 +48,7 @@ export const APP_VERBS = {
     http: { method: 'GET', route: '/cli/skin/me', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"agents":{"items":{"additionalProperties":false,"properties":{"can":{"additionalProperties":false,"properties":{"activity":{"type":"boolean"},"chat":{"type":"boolean"},"files":{"type":"string"},"heartbeats":{"type":"string"},"identity":{"type":"boolean"},"members":{"type":"boolean"},"send":{"type":"boolean"},"store":{"type":"string"},"tickets":{"type":"string"},"wiki":{"type":"boolean"}},"type":"object"},"caps":{"items":{"type":"string"},"type":"array"},"color":{"type":["string","null"]},"displayName":{"type":"string"},"folders":{"additionalProperties":false,"properties":{"read":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"image":{"type":["string","null"]},"muted":{"type":"boolean"},"room":{"type":"string"},"unread":{"type":"integer"}},"type":"object"},"type":"array"},"app":{"type":"string"},"catalogVersion":{"type":"integer"},"features":{"items":{"type":"string"},"type":"array"},"instanceId":{"type":"string"},"kind":{"enum":["guest","app","token"]},"ok":{"type":"boolean"},"principalId":{"type":["string","null"]},"publicHost":{"type":["string","null"]},"rooms":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"folders":{"additionalProperties":false,"properties":{"read":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"serverId":{"type":["string","null"]},"username":{"type":"string"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"agents":{"items":{"additionalProperties":false,"properties":{"can":{"additionalProperties":false,"properties":{"activity":{"type":"boolean"},"chat":{"type":"boolean"},"files":{"type":"string"},"heartbeats":{"type":"string"},"identity":{"type":"boolean"},"members":{"type":"boolean"},"send":{"type":"boolean"},"store":{"type":"string"},"tickets":{"type":"string"},"wiki":{"type":"boolean"}},"type":"object"},"caps":{"items":{"type":"string"},"type":"array"},"color":{"type":["string","null"]},"displayName":{"type":"string"},"folders":{"additionalProperties":false,"properties":{"read":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"image":{"type":["string","null"]},"muted":{"type":"boolean"},"room":{"type":"string"},"ticketsWaiting":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},"type":"array"},"app":{"type":"string"},"catalogVersion":{"type":"integer"},"features":{"items":{"type":"string"},"type":"array"},"instanceId":{"type":"string"},"kind":{"enum":["guest","app","token"]},"ok":{"type":"boolean"},"principalId":{"type":["string","null"]},"publicHost":{"type":["string","null"]},"rooms":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"folders":{"additionalProperties":false,"properties":{"read":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"serverId":{"type":["string","null"]},"username":{"type":"string"}},"type":"object"},
   },
   'roomAgents.list': {
     cap: null,
@@ -59,7 +59,7 @@ export const APP_VERBS = {
     http: { method: 'GET', route: '/cli/skin/agents', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"agents":{"items":{"additionalProperties":false,"properties":{"color":{"type":["string","null"]},"displayName":{"type":"string"},"handle":{"type":"string"},"image":{"type":["string","null"]},"projectId":{"type":"string"}},"type":"object"},"type":"array"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"agents":{"items":{"additionalProperties":false,"properties":{"color":{"type":["string","null"]},"displayName":{"type":"string"},"handle":{"type":"string"},"image":{"type":["string","null"]},"muted":{"type":"boolean"},"projectId":{"type":"string"},"ticketsWaiting":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},"type":"array"}},"type":"object"},
   },
   'guests.login': {
     cap: null,
@@ -1121,11 +1121,16 @@ export interface AppMeAgent {
   readonly handle: string
   /** The agent's picture as a data URL, or null. */
   readonly image: string | null
+  /** This login muted the room's Chat. With thread:read, like unread. */
   readonly muted?: boolean
   /** The room's project id. */
   readonly room: string
-  /** Unread Thread items for this person (when the server reads them). */
+  /** The room's tickets waiting on someone (waiting or needs_discussion). Present with tickets:read in the room (agent-unread-tickets-v1). */
+  readonly ticketsWaiting?: number
+  /** This login's unread items on the room's Chat (capped at 100: show 99+). Present with thread:read in the room, on a server with agent-unread-tickets-v1. */
   readonly unread?: number
+  /** Cards on the room's Chat waiting for this login's answer. With thread:read, like unread. */
+  readonly waiting?: number
 }
 
 export interface AppMeFolders {
@@ -1175,7 +1180,15 @@ export interface AppRoomAgent {
   readonly handle: string
   /** A data: URL. */
   readonly image: string | null
+  /** The room's Chat is muted for this pass. With thread:read, like unread. */
+  readonly muted?: boolean
   readonly projectId: string
+  /** The room's tickets waiting on someone (waiting or needs_discussion). Present with tickets:read in the room (agent-unread-tickets-v1). */
+  readonly ticketsWaiting?: number
+  /** This pass's unread items on the room's Chat (capped at 100: show 99+). Present with thread:read in the room, on a server with agent-unread-tickets-v1. */
+  readonly unread?: number
+  /** Cards on the room's Chat waiting for this pass's answer. With thread:read, like unread. */
+  readonly waiting?: number
 }
 
 export interface AppRoomAgents {
@@ -2631,11 +2644,11 @@ export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
 export interface AppSurfaces {
   readonly me: {
-    /** Who this pass is: guest or App, its agents (identity, caps, what they allow, folders), this server's ids and features. no cap · GET /cli/skin/me. e.g. `const me = await k2.asGuest(pass).me.get()` */
+    /** Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features. no cap · GET /cli/skin/me. e.g. `const me = await k2.asGuest(pass).me.get()` */
     get(args?: Record<string, never>): Promise<AppMe>
   }
   readonly roomAgents: {
-    /** The agents in the pass's rooms: handle, name, color and picture. no cap · GET /cli/skin/agents. e.g. `const {agents} = await k2.roomAgents.list()` */
+    /** The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow. no cap · GET /cli/skin/agents. e.g. `const {agents} = await k2.roomAgents.list()` */
     list(args?: Record<string, never>): Promise<AppRoomAgents>
   }
   readonly guests: {

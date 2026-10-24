@@ -807,6 +807,18 @@ pub const FEATURE_THREAD_ACTIVITY_EAR: &str = "thread-activity-ear-v1";
 /// poll (`liveSessionCwds`) only on a server that reports this key.
 pub const FEATURE_ACTIVITY_LIVE_BUSY: &str = "activity-live-busy";
 
+/// Per-agent unread and ticket counts (0.46.4, Rosson 2026-10-24):
+/// `presence/summary` `agentActivity` entries carry the caller's `unread`,
+/// `waiting`, `muted` on that agent's Threads and the agent's
+/// `ticketsWaiting` / `ticketsWaitingMe` (workspaces with any of these
+/// listed even when idle), and the App surface's agent rows
+/// (`GET /cli/skin/agents` `roomAgents.list`, `GET /cli/skin/me`
+/// `agents[]`) carry `unread` / `waiting` / `muted` where the pass holds
+/// `thread:read` in the room and `ticketsWaiting` where it holds
+/// `tickets:read`. Listed with the read-state tables (migration 0190). A
+/// client without the key shows no remote row badges (never guesses).
+pub const FEATURE_AGENT_UNREAD_TICKETS: &str = "agent-unread-tickets-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -890,6 +902,7 @@ pub fn features() -> Vec<&'static str> {
         out.push(FEATURE_APP_THREAD_PARITY);
         out.push(FEATURE_APP_READ_STATE);
         out.push(FEATURE_GARDEN_PERSON_ROWS);
+        out.push(FEATURE_AGENT_UNREAD_TICKETS);
     }
     out.push(FEATURE_THREAD_STREAM);
     out.push(FEATURE_THREAD_ACTIVITY_EAR);
@@ -977,6 +990,7 @@ mod tests {
                 "app-thread-parity-v1",
                 "app-read-state-v1",
                 "garden-person-rows-v1",
+                "agent-unread-tickets-v1",
                 "thread-stream-v1",
                 "thread-activity-ear-v1",
                 "thread-context-v1",

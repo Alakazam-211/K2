@@ -27,6 +27,8 @@ const DOT = 'inline-block w-1.5 h-1.5 rounded-full'
 const UNREAD_BG = 'bg-[var(--color-accent)]'
 const MUTED_BG = 'bg-[var(--color-text-muted)]'
 const WAITING_BG = 'bg-[var(--color-status-needs-you)]'
+const TICKET_PILL =
+  'min-w-[14px] h-[14px] inline-flex flex-shrink-0 items-center justify-center text-[8px] font-bold rounded-full px-0.5 border border-[var(--color-status-needs-you)] text-[var(--color-status-needs-you)]'
 
 export function UnreadBadge({
   unread,
@@ -126,6 +128,35 @@ export function WorkspaceThreadUnreadBadge({
       className={className}
       label="Thread messages"
     />
+  )
+}
+
+/** An agent's tickets waiting on someone (agent-unread-tickets-v1): an
+ *  outlined pill in the Tickets tab's needs-you colour, so it reads apart
+ *  from the filled Thread-card marker beside it. `mine` (assigned to you)
+ *  rides the tooltip. Nothing at 0. */
+export function TicketCountBadge({
+  count,
+  mine = 0,
+  className = '',
+}: {
+  count: number
+  mine?: number
+  className?: string
+}): React.JSX.Element | null {
+  const text = unreadCountText(count)
+  if (text === null) return null
+  const noun = count === 1 ? 'ticket' : 'tickets'
+  const title = mine > 0 ? `${count} ${noun} waiting (${mine} on you)` : `${count} ${noun} waiting`
+  return (
+    <span
+      data-ticket-count={text}
+      data-ticket-mine={String(mine)}
+      title={title}
+      className={`${TICKET_PILL} ${className}`}
+    >
+      {text}
+    </span>
   )
 }
 

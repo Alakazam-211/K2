@@ -359,17 +359,19 @@ impl Node {
             return vec![];
         }
         // Still under the floor: one job stops a pass (its dir goes when it
-        // ends, then the next pass looks again). The server furthest over
-        // its disk share pays first (its newest job), so no server fills
-        // the disk to get another's job stopped (review A-disk 3); with
-        // none over, the newest job on the node.
+        // ends, then the next pass looks again). See [`disk_victim`].
         let over = self.furthest_over_share(budget).await;
         let jobs = self.jobs.lock().unwrap();
-        let newest = jobs
+        let cands: Vec<Candidate> = jobs
             .iter()
-            .filter(|((slot, _), j)| j.stop.borrow().is_none() && over.is_none_or(|(s, _)| s == *slot))
-            .max_by_key(|(_, j)| j.seq);
-        let Some(((slot, job), j)) = newest else { return vec![] };
+            .filter(|(_, j)| j.stop.borrow().is_none())
+            .map(|((slot, _), j)| Candidate { slot: *slot, seq: j.seq, gate: j.gate })
+            .collect();
+        let Some(pick) = disk_victim(&cands, over.map(|(s, _)| s)) else { return vec![] };
+        let picked = cands[pick];
+        let Some(((slot, job), j)) = jobs.iter().find(|((s, _), j)| *s == picked.slot && j.seq == picked.seq && j.stop.borrow().is_none()) else {
+            return vec![];
+        };
         let why = over.map(|(s, b)| format!(", server slot {s} is {} MB over its disk share", b >> 20)).unwrap_or_default();
         crate::nlog!("disk low ({} GB free, floor {} GB{why}): stopping job {job} (slot {slot})", free >> 30, floor >> 30);
         j.stop.send_replace(Some(StopReason { state: JobState::Failed, reason: refusal::DISK_LOW.into() }));
@@ -390,6 +392,32 @@ impl Node {
     }
 }
 
+/// A running job as the disk guard weighs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Candidate {
+    pub slot: k2_node_proto::share::Slot,
+    pub seq: u64,
+    pub gate: bool,
+}
+
+/// Which running job the disk guard stops (an index into `cands`).
+///
+/// 1. A gate job (a release build, plan-ci-release-on-k2-compute G5)
+///    only when no other job is left: before 0.46.4 the newest job paid,
+///    and a release build submitted last was exactly that job.
+/// 2. Among the rest, the server furthest over its disk share pays first
+///    (`over`), so no server fills the disk to get another's job stopped
+///    (review A-disk 3)…
+/// 3. …its newest job; with none over (or none of its jobs left), the
+///    newest job on the node.
+pub fn disk_victim(cands: &[Candidate], over: Option<k2_node_proto::share::Slot>) -> Option<usize> {
+    let any_plain = cands.iter().any(|c| !c.gate);
+    let pool: Vec<usize> = (0..cands.len()).filter(|i| !any_plain || !cands[*i].gate).collect();
+    let mine: Vec<usize> = pool.iter().copied().filter(|i| over.is_some_and(|s| cands[*i].slot == s)).collect();
+    let from = if mine.is_empty() { &pool } else { &mine };
+    from.iter().copied().max_by_key(|i| cands[*i].seq)
+}
+
 /// The `disk_low` stop's detail for the job's row and log.
 pub fn disk_low_detail(free: u64, floor: u64) -> String {
     format!("free disk fell under the node's floor ({} GB free, floor {} GB); the job was stopped so the disk doesn't fill", free >> 30, floor >> 30)
@@ -402,6 +430,34 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     const GIB: u64 = 1 << 30;
+
+    /// G5 (plan-ci-release-on-k2-compute-v1): the release build is
+    /// likely the newest job, and the guard used to stop the newest. A
+    /// gate job is stopped only when nothing else is left.
+    #[test]
+    fn the_disk_guard_stops_a_gate_job_only_when_nothing_else_runs() {
+        let c = |slot: k2_node_proto::share::Slot, seq: u64, gate: bool| Candidate { slot, seq, gate };
+        // The gate is newest: the newest plain job pays instead.
+        let cands = [c(0, 1, false), c(1, 2, false), c(1, 3, true)];
+        assert_eq!(disk_victim(&cands, None), Some(1));
+        // The server over its share pays first, its plain job…
+        let cands = [c(0, 5, false), c(1, 2, false), c(1, 9, true)];
+        assert_eq!(disk_victim(&cands, Some(1)), Some(1));
+        // …and when its only job is a gate, another server's plain job
+        // goes before any gate (the plan's rule: never a gate while a
+        // batch job exists).
+        let cands = [c(0, 5, false), c(1, 9, true)];
+        assert_eq!(disk_victim(&cands, Some(1)), Some(0));
+        // Only gates left: the over server's newest gate, else the newest.
+        let cands = [c(0, 5, true), c(1, 4, true)];
+        assert_eq!(disk_victim(&cands, Some(1)), Some(1));
+        assert_eq!(disk_victim(&cands, None), Some(0));
+        // Unchanged without gates: newest, or the over server's newest.
+        let cands = [c(0, 7, false), c(2, 3, false), c(2, 4, false)];
+        assert_eq!(disk_victim(&cands, None), Some(0));
+        assert_eq!(disk_victim(&cands, Some(2)), Some(2));
+        assert_eq!(disk_victim(&[], None), None);
+    }
 
     async fn node(tag: &str, policy: &str, free: Arc<AtomicU64>) -> (Arc<Node>, Layout) {
         let d = crate::util::temp_dir(tag);
@@ -756,6 +812,32 @@ mod tests {
         let mut c = crate::ledger::tests::assign("c", 1);
         c.plan.argv = vec!["/bin/true".into()];
         assert_eq!(n.assign_refusal(&n.owner(), &c).map(|r| r.code), Some(refusal::DISK_LOW.to_string()));
+    }
+
+    /// G5 end to end: the newest running job is a gate (a release build);
+    /// under the floor the older plain jobs stop first, the gate last.
+    #[tokio::test]
+    async fn the_guard_stops_plain_jobs_before_the_newest_gate_job() {
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, _layout) = node("disk-gate", "disk_floor_gb = 50\n", free.clone()).await;
+        sleeper(&n, "a");
+        sleeper(&n, "b");
+        let mut g = crate::ledger::tests::assign("g", 1);
+        g.plan.argv = vec!["/bin/sleep".into(), "30".into()];
+        g.plan.class = Some(k2_node_proto::share::JobClass::Gate);
+        g.fence.plan_digest = g.plan.digest().unwrap();
+        assert_eq!(n.on_assign(&n.owner(), g), Some(("g".to_string(), 1)));
+        n.fairq.tick(&n);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(n.running_ids().len(), 3);
+        free.store(40 * GIB, Ordering::SeqCst);
+        assert_eq!(n.disk_guard_pass().await, vec![(0u8, "b".to_string())], "the newest plain job, not the gate");
+        ended(&n, "b").await;
+        assert_eq!(n.disk_guard_pass().await, vec![(0u8, "a".to_string())]);
+        ended(&n, "a").await;
+        assert_eq!(n.disk_guard_pass().await, vec![(0u8, "g".to_string())], "only the gate left");
+        let r = ended(&n, "g").await;
+        assert_eq!(r.reason.as_deref(), Some(refusal::DISK_LOW));
     }
 
     /// (d) A ledger finish that fails (a full disk) is retried until it

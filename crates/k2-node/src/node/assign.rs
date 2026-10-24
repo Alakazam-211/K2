@@ -161,6 +161,7 @@ impl Node {
                 exclusive: a.plan.exclusive,
                 stop: stop_tx,
                 seq: self.job_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                gate: a.plan.class == Some(k2_node_proto::share::JobClass::Gate),
             },
         );
         let caps = self.queue_caps();
@@ -539,6 +540,7 @@ impl Node {
                     exclusive: false,
                     stop,
                     seq: 0,
+                    gate: false,
                 },
             );
         }

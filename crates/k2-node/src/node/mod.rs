@@ -195,6 +195,9 @@ struct RunningJob {
     stop: watch::Sender<Option<StopReason>>,
     /// Start order (the disk guard stops the newest first).
     seq: u64,
+    /// A release-gate job (`Plan.class` gate): the disk guard stops it
+    /// only when no other job is left to stop.
+    gate: bool,
 }
 
 /// The machine owner's side, refreshed every poll.

@@ -149,22 +149,32 @@ async fn weights_set_by_the_node_owner_steer_the_starts() {
     w.n.node.fairq.set_share(1, share("b.k2.dev", ShareLimits { weight: 1, max_running: 1, max_queued: 30, ..limits() }, ServerStatus::Active));
     let order = w.n.dir.join("order.txt");
     let o = order.display().to_string();
-    w.ca.send(Frame::Assign(assign(job("node-1", "hold", &["/bin/sh", "-c", "sleep 1"]), 1)));
+    // The hold keeps the only slot until every job below is queued, so no
+    // start happens while the loop still submits (under load a short hold
+    // ended mid-loop and B's first jobs started before A's were in: 3 of 21
+    // runs failed). It asks for the least CPU a plan can name, so the
+    // queue charges A next to nothing for it however long the submitting
+    // takes: the starts after it follow the weights alone.
+    let mut hold = job("node-1", "hold", &["/bin/sh", "-c", "sleep 60"]);
+    hold.limits.cpu_millis = Some(1);
+    w.ca.send(Frame::Assign(assign(hold, 1)));
     wait_row(&w.owner, "hold", 1, "started", started).await;
     let n = 12;
     for i in 0..n {
-        let line = format!("echo a{i} >> {o}; sleep 0.3");
+        let line = format!("echo a{i} >> {o}; sleep 0.5");
         w.ca.send(Frame::Assign(assign(job("node-1", &format!("a{i}"), &["/bin/sh", "-c", &line]), 1)));
-        let line = format!("echo b{i} >> {o}; sleep 0.3");
+        let line = format!("echo b{i} >> {o}; sleep 0.5");
         w.cb.send(Frame::Assign(assign(job("node-b", &format!("b{i}"), &["/bin/sh", "-c", &line]), 1)));
     }
     for i in 0..n {
-        wait_row(&w.owner, &format!("a{i}"), 1, "queued or later", |_| true).await;
-        wait_row(&w.tb, &format!("b{i}"), 1, "queued or later", |_| true).await;
+        wait_row(&w.owner, &format!("a{i}"), 1, "queued", queued).await;
+        wait_row(&w.tb, &format!("b{i}"), 1, "queued", queued).await;
     }
-    // While both still wait (the first 12 starts after the hold), A gets
-    // about two of every three.
-    for _ in 0..400 {
+    assert!(!order.exists(), "nothing started while the hold ran: {:?}", std::fs::read_to_string(&order));
+    // All 24 wait; free the slot. Both servers always wait during the
+    // first 12 starts, so A gets about two of every three.
+    w.ca.send(Frame::Cancel(Cancel { job_id: "hold".into(), generation: 1, reason: "cancelled".into() }));
+    for _ in 0..600 {
         if std::fs::read_to_string(&order).map(|s| s.lines().count()).unwrap_or(0) >= 12 {
             break;
         }

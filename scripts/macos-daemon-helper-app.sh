@@ -206,6 +206,40 @@ k2_daemon_helper_sign() {
     echo "  Signed K2 Daemon.app (+ k2-ptyd)."
 }
 
+# k2_daemon_helper_verify_shipped_ptyd APP
+# k2-ptyd (prd-k2-ptyd-v1 P2): after notarization + staple, the app users
+# install still carries the nested k2-ptyd intact — same identifier, a
+# signature that verifies strictly inside the stapled bundle, and Gatekeeper
+# accepts the bundle that contains it. Agents survive updates only if the
+# daemon finds this binary beside it.
+k2_daemon_helper_verify_shipped_ptyd() {
+    local app="$1" ptyd pinfo
+    ptyd="$(k2_daemon_helper_ptyd "$app")"
+    [ -x "$ptyd" ] || { echo "FATAL: the notarized app has no k2-ptyd at $ptyd" >&2; return 1; }
+    codesign --verify --strict "$ptyd" \
+        || { echo "FATAL: k2-ptyd in the notarized app does not verify" >&2; return 1; }
+    pinfo="$(codesign -dv "$ptyd" 2>&1)" \
+        || { echo "FATAL: codesign -dv $ptyd failed: $pinfo" >&2; return 1; }
+    grep -q "^Identifier=dev.k2.app.ptyd\$" <<<"$pinfo" \
+        || { echo "FATAL: k2-ptyd in the notarized app is not dev.k2.app.ptyd" >&2; return 1; }
+    spctl --assess --type execute "$app" \
+        || { echo "FATAL: Gatekeeper rejects the notarized app (with its k2-ptyd)" >&2; return 1; }
+    echo "  ✓ Notarized app ships a signed k2-ptyd (Gatekeeper accepts it)."
+}
+
+# k2_daemon_helper_verify_tarball_ptyd TARBALL
+# The update bundle (K2.app.tar.gz, what the desktop updater installs) holds
+# the nested k2-ptyd at the path the daemon looks for, executable.
+k2_daemon_helper_verify_tarball_ptyd() {
+    local tgz="$1" want listing
+    want="K2.app/Contents/Helpers/${K2_DAEMON_HELPER_APP}/Contents/MacOS/${K2_DAEMON_HELPER_PTYD}"
+    listing="$(tar -tvzf "$tgz")" \
+        || { echo "FATAL: cannot list $tgz" >&2; return 1; }
+    grep -F -- "$want" <<<"$listing" | grep -q '^-rwx' \
+        || { echo "FATAL: $tgz has no executable $want" >&2; return 1; }
+    echo "  ✓ Update bundle carries ${want}."
+}
+
 # k2_daemon_helper_verify_signed APP
 # After the outer APP is signed: deep-verify, check the helper kept its
 # identifier + entitlements, and exec the daemon past AMFI (`--version`

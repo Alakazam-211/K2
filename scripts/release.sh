@@ -586,6 +586,8 @@ xcrun notarytool submit "/tmp/K2_${VERSION}.zip" \
     "${NOTARY_AUTH[@]}" --wait
 staple_with_retry "K2.app"
 echo "  App notarized and stapled."
+# k2-ptyd (P2): the notarized app still ships the signed nested PTY host.
+k2_daemon_helper_verify_shipped_ptyd "K2.app"
 
 # ── Step 5: Create update bundle (tar.gz) from notarized app + sign it ──
 echo ""
@@ -593,6 +595,9 @@ echo "Step 5: Creating and signing update bundle..."
 cd "$PROJECT_DIR"
 COPYFILE_DISABLE=1 tar -czf "target/release/bundle/macos/K2.app.tar.gz" \
     -C "target/release/bundle/macos" "K2.app"
+# k2-ptyd (P59): the desktop update installs this bundle; it must carry the
+# PTY host, or agents would stop surviving after the update.
+k2_daemon_helper_verify_tarball_ptyd "target/release/bundle/macos/K2.app.tar.gz"
 
 # Sign the update bundle with Tauri updater key
 bunx @tauri-apps/cli@2 signer sign \

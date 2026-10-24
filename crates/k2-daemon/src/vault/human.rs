@@ -51,7 +51,28 @@ fn verdict(person: bool, reason: &'static str) -> PeerVerdict {
 /// Pure part of the check, for tests: the peer's ancestry (pid → … → 1),
 /// its environment, and (Linux) the two cgroup paths.
 pub fn judge(daemon_pid: u32, ancestry: &[u32], env: &[String], peer_cgroup: Option<&str>, daemon_cgroup: Option<&str>) -> PeerVerdict {
-    if ancestry.contains(&daemon_pid) {
+    judge_with(&[daemon_pid], false, ancestry, env, peer_cgroup, daemon_cgroup)
+}
+
+/// [`judge`] with every K2 process that can be an agent's ancestor.
+///
+/// k2-ptyd (PRD prd-k2-ptyd-v1 §8 S-10, P74, review V2): an agent hosted
+/// by k2-ptyd is ptyd's child, not the daemon's — and after a daemon
+/// restart its ancestry is agent → ptyd → launchd/init, with no daemon
+/// pid at all. So `k2_pids` carries ptyd's pid next to the daemon's, and
+/// `ptyd_ancestor` says an ancestor's executable is a `k2-ptyd` copy
+/// (covers a ptyd this daemon hasn't connected to). Either one means
+/// "inside K2": the person check never gets weaker on macOS, which has no
+/// cgroup belt.
+pub fn judge_with(
+    k2_pids: &[u32],
+    ptyd_ancestor: bool,
+    ancestry: &[u32],
+    env: &[String],
+    peer_cgroup: Option<&str>,
+    daemon_cgroup: Option<&str>,
+) -> PeerVerdict {
+    if ancestry.iter().any(|a| k2_pids.contains(a)) || ptyd_ancestor {
         return verdict(false, "runs inside K2 (a K2 terminal or agent)");
     }
     if env.iter().any(|e| K2_SESSION_MARKERS.iter().any(|m| e.starts_with(m))) {
@@ -192,7 +213,21 @@ pub fn check_peer(stream: &UnixStream) -> PeerVerdict {
     let env = os::env(pid);
     let pc = os::cgroup(&pid.to_string());
     let dc = os::cgroup("self");
-    judge(me, &ancestry, &env, pc.as_deref(), dc.as_deref())
+    // P74: k2-ptyd hosts agents too (it is their parent).
+    let mut k2_pids = vec![me];
+    if let Some(p) = k2_core::terminal::ptyd::client::global().ptyd_pid().and_then(|p| u32::try_from(p).ok()) {
+        k2_pids.push(p);
+    }
+    let ptyd_ancestor = ancestry.iter().skip(1).any(|a| is_ptyd_exe(*a));
+    judge_with(&k2_pids, ptyd_ancestor, &ancestry, &env, pc.as_deref(), dc.as_deref())
+}
+
+/// Is `pid` running a `k2-ptyd` binary (any copy: versioned, bundled)?
+fn is_ptyd_exe(pid: u32) -> bool {
+    let Ok(p) = i32::try_from(pid) else { return false };
+    k2_core::terminal::ptyd::client::exe_of(p)
+        .and_then(|e| e.file_name().map(|n| n == k2_core::terminal::ptyd::client::PTYD_BINARY_NAME))
+        .unwrap_or(false)
 }
 
 /// Bind `~/.k2/vault.sock` (0600) and serve vault routes on it.
@@ -322,6 +357,22 @@ async fn handle_conn(mut s: UnixStream) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P74 (V2): an agent under k2-ptyd, after a daemon restart, has NO
+    /// daemon ancestor and (macOS) no cgroup — with its K2 env stripped it
+    /// must still be refused, by ptyd's pid or by a `k2-ptyd` ancestor.
+    #[test]
+    fn judge_refuses_agents_hosted_by_ptyd() {
+        let (daemon, ptyd) = (100, 200);
+        // agent 500 → ptyd 200 → (launchd)
+        let v = judge_with(&[daemon, ptyd], false, &[500, 200], &["HOME=/h".into()], None, None);
+        assert!(!v.person, "ptyd pid in the ancestry is inside K2");
+        let v = judge_with(&[daemon], true, &[500, 300], &[], None, None);
+        assert!(!v.person, "an ancestor running a k2-ptyd copy is inside K2");
+        assert!(judge_with(&[daemon, ptyd], false, &[500, 300], &[], None, None).person, "an outside terminal still passes");
+        // Before the fix the daemon-only check let it through:
+        assert!(judge(daemon, &[500, 200], &[], None, None).person);
+    }
 
     #[test]
     fn judge_refuses_k2_processes() {

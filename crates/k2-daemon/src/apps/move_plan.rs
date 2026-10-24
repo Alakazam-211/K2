@@ -348,10 +348,26 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
         None => steps.push(step("copy_host", OWNER, BLOCKED, "Give box-login users the same access on the App", "after install", None)),
     }
 
-    // The guests-rooms grant.
+    // The guests-rooms grant: only when the old service hands its guests
+    // rooms (its own grant, or room lists on its guests' grants). Never
+    // asked for an App that doesn't need it (it would only widen).
     let (rooms, from) = rooms_in_use(&svc);
     let handles: Vec<String> = rooms.iter().map(|r| ws_handle(r)).collect();
+    let needed = !rooms.is_empty() || k2_core::skin::guest_rooms::get_grant(&svc.id).ok().flatten().is_some();
     match &app_row {
+        _ if !needed => {
+            let mut st = step(
+                "guest_rooms",
+                OWNER,
+                NA,
+                "Let the App set its guests' rooms (guests-rooms grant)",
+                "the old service hands its guests no rooms K2 can see: not needed (k2 app grant <app> --kind guests-rooms if the App sets rooms)",
+                None,
+            );
+            st["rooms"] = json!(rooms);
+            st["roomHandles"] = json!(handles);
+            steps.push(st);
+        }
         Some(a) => {
             let have = k2_core::skin::guest_rooms::get_grant(&a.service_id).ok().flatten();
             let covered = have.as_ref().is_some_and(|g| rooms.iter().all(|r| g.rooms.contains(r)));
@@ -362,7 +378,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
                 "Let the App set its guests' rooms (guests-rooms grant)",
                 match (&have, rooms.is_empty()) {
                     (Some(_), _) if covered => "granted".to_string(),
-                    (_, true) => "the App's own room; K2 can't tell which other rooms the old service hands out (add --room to the grant if it does)".to_string(),
+                    (_, true) => "the old service has the grant with only its own room: the App gets the same".to_string(),
                     _ => format!("rooms the old service hands out ({}): {}", from.join(", "), handles.join(", ")),
                 },
                 (!covered).then(|| {

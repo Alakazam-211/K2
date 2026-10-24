@@ -35,6 +35,7 @@ part_web() {
     step "Release k2-ptyd checks (dry)";           bash tests/packaging/release-ptyd-checks.sh
     step "Linux builds on K2 Compute (stubbed)";   bash tests/packaging/compute-release.sh
     step "CI gate scripts (stubbed)";              bash tests/packaging/ci-gate.sh
+    step "release.sh waits + Step 0.5 env (stubbed)"; bash tests/packaging/release-wait-and-preflight.sh
     step "bun install";                            bun install --frozen-lockfile
     step "k2-home gate";                           bash scripts/k2-home-gate.sh
     step "private-docs gate";                      bash scripts/private-docs-gate.sh

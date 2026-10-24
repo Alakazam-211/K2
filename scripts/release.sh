@@ -196,6 +196,9 @@ source "$PROJECT_DIR/scripts/lib/build-binaries.sh"
 # Compute" below).
 # shellcheck source=scripts/lib/compute-release.sh
 source "$PROJECT_DIR/scripts/lib/compute-release.sh"
+# Wait loops: one line, then dots, a status line every few minutes.
+# shellcheck source=scripts/lib/wait-progress.sh
+source "$PROJECT_DIR/scripts/lib/wait-progress.sh"
 # Gmail is required OOTB (DTL invalid_client). MS is optional unless set above.
 require_mail_oauth_build_env
 
@@ -464,6 +467,13 @@ trap 'exit 143' TERM
 if [ "$SKIP_BUILD" = 0 ]; then
 echo ""
 echo "Step 0.5: Pre-flight gates (cargo -D warnings, typecheck:web (tsc-rs), vitest, vite:build:web)..."
+# The same mac build env as the release build (scripts/lib/build-binaries.sh):
+# SDKROOT from xcrun, the cmake policy floor, and no half-configured cmake
+# dirs. Without it the check build's vendored cmake (llama-cpp-sys) picked
+# the Command Line Tools' default SDK, which on macOS 27 the Xcode 26.5 ld
+# rejects ("tapi: unknown architecture"): 0.46.3 attempt 1 died here.
+k2_mac_build_env
+k2_clear_failed_cmake_dirs
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets
 bun run typecheck:web
 bunx vitest run --reporter=dot
@@ -1184,9 +1194,10 @@ verify_manifest() {
         if printf '%s' "$body" | grep -q "\"version\"[[:space:]]*:[[:space:]]*\"${VERSION}\""; then
             ok=1; break
         fi
-        echo "    ${label}: not ready (attempt ${attempt}/8), retrying in 15s..."
+        k2_wait_tick "    ${label}: not ready yet, retrying every 15s (up to 8 tries)"
         sleep 15
     done
+    k2_wait_done
     if [ -n "$ok" ]; then
         echo "  ✓ ${label} → valid JSON, version ${VERSION}"
     else

@@ -39,6 +39,9 @@ set -euo pipefail
 REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
 SUMS_NAME="SHA256SUMS-linux-x86_64.txt"
 POLL="${K2_SUMS_POLL_SECS:-30}"
+# One "waiting for …" line, then dots, a status line every few minutes.
+# shellcheck source=lib/wait-progress.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/wait-progress.sh"
 WORK_DIRS=()
 cleanup() {
     local d
@@ -167,13 +170,15 @@ cmd_wait() {
     while :; do
         if gh release view "$tag" --repo "$REPO" --json assets --jq '.assets[].name' \
             | grep -qxF "$SUMS_NAME"; then
+            k2_wait_done
             log "${tag} has ${SUMS_NAME}"
             return 0
         fi
         if [ "$(date +%s)" -ge "$deadline" ]; then
+            k2_wait_done
             die "${tag} still has no ${SUMS_NAME} after ${minutes} min. app-linux.yml did not finish; re-run it, then re-run this job."
         fi
-        log "waiting for app-linux.yml to upload ${SUMS_NAME} to ${tag}..."
+        k2_wait_tick "[linux-sums] waiting for app-linux.yml to upload ${SUMS_NAME} to ${tag}..."
         sleep "$POLL"
     done
 }
@@ -259,20 +264,32 @@ cmd_check() {
     work="$(mktemp -d)"
     WORK_DIRS+=("$work")
     deadline=$(( $(date +%s) + wait_min * 60 ))
+    # Each pass's findings go to a file: shown on the first and every status
+    # line of the wait, and at the end; a dot for the passes in between.
+    local pass_err="$work/pass.err"
     while :; do
         rc=0
-        check_once "$version" "$work" || rc=$?
+        check_once "$version" "$work" 2>"$pass_err" || rc=$?
         if [ "$rc" = 0 ]; then
+            k2_wait_done
+            cat "$pass_err" >&2
             log "ok: every Linux package on v${version} has a matching ${SUMS_NAME} line"
             return 0
         fi
         if [ "$rc" = 1 ]; then
+            k2_wait_done
+            cat "$pass_err" >&2
             die "v${version} ${SUMS_NAME} is wrong (see above)"
         fi
         if [ "$(date +%s)" -ge "$deadline" ]; then
+            k2_wait_done
+            cat "$pass_err" >&2
             die "v${version} Linux packages or SUMS lines still missing after ${wait_min} min (see above). Re-run: bash scripts/linux-sums.sh check ${version} --wait-min 60"
         fi
-        log "waiting for app-linux.yml / arch-package.yml (v${version})..."
+        k2_wait_tick "[linux-sums] waiting for app-linux.yml / arch-package.yml (v${version})..."
+        if [ "$K2_WAIT_SAID" = 1 ]; then
+            sed 's/^/    /' "$pass_err" >&2
+        fi
         sleep "$POLL"
     done
 }

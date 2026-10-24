@@ -30,6 +30,7 @@
 #   K2_ROOT_HELPER_KEYCHAIN keychain service for the password (default k2-root-helper-signing)
 #   K2_RELEASE_REPO         default Alakazam-211/K2
 #   K2_SIGN_WAIT_MIN        minutes to wait for CI assets (default 60)
+#   K2_SIGN_POLL_SECS       seconds between polls for them (default 30)
 #   K2_RELEASE_KEYS_RS      keys.rs to read RELEASE_KEYS from (default the repo's; tests only)
 set -euo pipefail
 
@@ -39,6 +40,11 @@ PUB="${K2_ROOT_HELPER_PUB:-$HOME/.k2-root-helper/k2-root-helper.pub}"
 SERVICE="${K2_ROOT_HELPER_KEYCHAIN:-k2-root-helper-signing}"
 REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
 WAIT_MIN="${K2_SIGN_WAIT_MIN:-60}"
+# Seconds between polls for the CI assets (tests set 0).
+POLL_SECS="${K2_SIGN_POLL_SECS:-30}"
+# One "waiting for …" line, then dots, a status line every few minutes.
+# shellcheck source=lib/wait-progress.sh
+source "$ROOT/scripts/lib/wait-progress.sh"
 KEYS_RS="${K2_RELEASE_KEYS_RS:-$ROOT/crates/k2-root-proto/src/keys.rs}"
 ASSETS=(k2-app-engine-linux-x86_64 k2-app-engine-linux-aarch64)
 
@@ -122,10 +128,13 @@ wait_for_assets() {
 			printf '%s\n' "$names" | grep -qx "$a" || missing="$missing $a"
 			printf '%s\n' "$names" | grep -qx "$a.sha256" || missing="$missing $a.sha256"
 		done
-		[ -z "$missing" ] && return 0
-		[ "$(date +%s)" -lt "$deadline" ] || die "$TAG is missing within ${WAIT_MIN} min:$missing (daemon-binaries.yml)"
-		log "waiting for:$missing"
-		sleep 30
+		if [ -z "$missing" ]; then
+			k2_wait_done
+			return 0
+		fi
+		[ "$(date +%s)" -lt "$deadline" ] || { k2_wait_done; die "$TAG is missing within ${WAIT_MIN} min:$missing (daemon-binaries.yml)"; }
+		k2_wait_tick "[sign-app-engine] waiting for:$missing"
+		sleep "$POLL_SECS"
 	done
 }
 

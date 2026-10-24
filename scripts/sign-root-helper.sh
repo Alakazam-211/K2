@@ -45,6 +45,7 @@
 #   K2_ROOT_HELPER_KEYCHAIN keychain service for the password (default k2-root-helper-signing)
 #   K2_RELEASE_REPO         default Alakazam-211/K2
 #   K2_SIGN_WAIT_MIN        minutes to wait for CI assets (default 60)
+#   K2_SIGN_POLL_SECS       seconds between polls for them (default 30)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -53,6 +54,11 @@ PUB="${K2_ROOT_HELPER_PUB:-$HOME/.k2-root-helper/k2-root-helper.pub}"
 SERVICE="${K2_ROOT_HELPER_KEYCHAIN:-k2-root-helper-signing}"
 REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
 WAIT_MIN="${K2_SIGN_WAIT_MIN:-60}"
+# Seconds between polls for the CI assets (tests set 0).
+POLL_SECS="${K2_SIGN_POLL_SECS:-30}"
+# One "waiting for …" line, then dots, a status line every few minutes.
+# shellcheck source=lib/wait-progress.sh
+source "$ROOT/scripts/lib/wait-progress.sh"
 
 log() { printf '[sign-root-helper] %s\n' "$*"; }
 die() { printf '[sign-root-helper] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -98,11 +104,12 @@ wait_for_assets() {
 			&& printf '%s\n' "$names" | grep -qx k2-root-helper-linux-x86_64.sha256 \
 			&& printf '%s\n' "$names" | grep -qx k2-root-helper-linux-aarch64 \
 			&& printf '%s\n' "$names" | grep -qx k2-root-helper-linux-aarch64.sha256; then
+			k2_wait_done
 			return 0
 		fi
-		[ "$(date +%s)" -lt "$deadline" ] || die "CI did not upload the k2-root-helper assets to $TAG within ${WAIT_MIN} min (daemon-binaries.yml)"
-		log "waiting for daemon-binaries.yml to upload the root helper assets…"
-		sleep 30
+		[ "$(date +%s)" -lt "$deadline" ] || { k2_wait_done; die "CI did not upload the k2-root-helper assets to $TAG within ${WAIT_MIN} min (daemon-binaries.yml)"; }
+		k2_wait_tick "[sign-root-helper] waiting for daemon-binaries.yml to upload the root helper assets…"
+		sleep "$POLL_SECS"
 	done
 }
 

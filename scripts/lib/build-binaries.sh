@@ -43,7 +43,10 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/macos-daemon-helper-app
 # SDKROOT was the one that differed: some launchers exported it and the
 # scripts did not, and an unset SDKROOT let a vendored cmake configure pick
 # the Command Line Tools' newer SDK (`libSystem.tbd: unknown architecture`).
-# An explicit SDKROOT from the caller still wins.
+# An explicit SDKROOT from the caller still wins. CMAKE_POLICY_VERSION_MINIMUM
+# is exported too (same 3.5 as .cargo/config.toml [env]) so a cmake run
+# outside cargo, or a cargo that skips [env], gets the same floor; a value
+# from the caller still wins.
 k2_mac_build_env() {
     if [ -z "${SDKROOT:-}" ] && command -v xcrun >/dev/null 2>&1; then
         SDKROOT="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
@@ -52,6 +55,7 @@ k2_mac_build_env() {
     if [ -n "${SDKROOT:-}" ]; then
         echo "  build env: SDKROOT=$SDKROOT"
     fi
+    export CMAKE_POLICY_VERSION_MINIMUM="${CMAKE_POLICY_VERSION_MINIMUM:-3.5}"
 }
 
 # Why `target/release/build/llama-cpp-sys-2-*` (and prost-build's) had to be

@@ -39,7 +39,7 @@ pub const ZEN_LIB_JSON: &str = include_str!("../../../../src/shared/zen-lib.json
 pub struct ZenLibManifest {
     pub schema: u32,
     /// At most this many bytes of library text inlined into one widget
-    /// (UWB13: 8 MB), outside UW8's 256 KB code limit.
+    /// (UWB13: 8 MB), outside UW8's 512 KB code limit.
     pub max_bytes_per_widget: u64,
     /// Hosts a widget's `{url, integrity}` entry may name (R2).
     pub cdn_hosts: Vec<String>,

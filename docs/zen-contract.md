@@ -885,7 +885,7 @@ strip back to the widget (`src/renderer/lib/zen/zen-canvas.ts`):
 
 ### Limits (UW8, UW29, UWB8, UWB9, UWB13)
 
-Code (HTML + JS + CSS after inlining) 256 KB; each asset 1 MB, all assets
+Code (HTML + JS + CSS after inlining) 512 KB (256 KB before 0.46.4); each asset 1 MB, all assets
 2 MB; the bundle 3 MB; libraries (`requires.libs`, inlined after `k2.js`) up
 to 8 MB per widget, outside those. 10 custom widgets per page (6 before
 0.46.1). Per widget: 60

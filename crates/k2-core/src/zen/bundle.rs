@@ -40,7 +40,7 @@ use super::schema::Diagnostic;
 use crate::jscheck::{self, Lang, Severity, Surface};
 
 /// Code (HTML + JS + CSS that is inlined; assets excluded) per widget (UW8).
-pub const MAX_CODE_BYTES: usize = 256 * 1024;
+pub const MAX_CODE_BYTES: usize = 512 * 1024;
 /// The bundled document, assets included (UW8).
 pub const MAX_BUNDLE_BYTES: usize = 3 * 1024 * 1024;
 
@@ -85,7 +85,7 @@ pub struct Bundle {
     parts: Vec<String>,
     /// sha256 (hex) of the document with every nonce empty.
     pub hash: String,
-    /// HTML + JS + CSS bytes inlined (UW8's 256 KB limit).
+    /// HTML + JS + CSS bytes inlined (UW8's 512 KB limit; 256 KB before 0.46.4).
     pub code_bytes: usize,
 }
 
@@ -830,7 +830,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
             line: 1,
             col: 1,
             message: format!(
-                "this widget's code (HTML, JS and CSS) is {} bytes; the limit is {MAX_CODE_BYTES} bytes (256 KB)",
+                "this widget's code (HTML, JS and CSS) is {} bytes; the limit is {MAX_CODE_BYTES} bytes (512 KB)",
                 cx.code_bytes
             ),
         });
@@ -1061,12 +1061,24 @@ mod tests {
     }
 
     #[test]
-    fn code_over_256_kb_is_an_error() {
+    fn code_over_512_kb_is_an_error() {
+        assert_eq!(MAX_CODE_BYTES, 512 * 1024, "0.46.4: the code cap is 512 KB raw");
         let big = vec![b'x'; MAX_CODE_BYTES + 1];
         let f = files(&[("index.html", b"<script src=\"a.js\"></script>"), ("a.js", &big)]);
         let out = bundle("widgets/w", "index.html", &f);
         assert_eq!(out.errors.len(), 1, "{:?}", out.errors);
-        assert!(out.errors[0].message.contains("256 KB"));
+        assert!(out.errors[0].message.contains("512 KB"), "{:?}", out.errors);
+    }
+
+    #[test]
+    fn code_of_400_kb_bundles() {
+        // Baden's Board was 237 KB at 0.46.3's 256 KB cap; 0.46.4 doubles it
+        // and keeps the 3 MB bundle cap.
+        let big = vec![b'x'; 400 * 1024];
+        let f = files(&[("index.html", b"<script src=\"a.js\"></script>"), ("a.js", &big)]);
+        let out = bundle("widgets/w", "index.html", &f);
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        assert_eq!(MAX_BUNDLE_BYTES, 3 * 1024 * 1024, "the bundle cap stays 3 MB");
     }
 
     #[test]

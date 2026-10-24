@@ -11,7 +11,7 @@
 //   <script nonce> each `requires.libs` library, in order       (UWB13)
 //   …the daemon's bundle (its own scripts already carry the nonce)
 //
-// The runtime and libraries never count toward the widget's 256 KB
+// The runtime and libraries never count toward the widget's 512 KB
 // (UW8). Every script text has `</script` escaped, so no text can close
 // its element early.
 //

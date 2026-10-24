@@ -63,8 +63,9 @@ use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
 
 /// Request bodies over this are refused with 413 (Z15). Room for one
-/// widget code file (256 KiB, `agent_edit::MAX_PUT_BYTES`) in a JSON put.
-pub const MAX_BODY: usize = 320 * 1024;
+/// widget code file (512 KiB since 0.46.4, `agent_edit::MAX_PUT_BYTES`) in a
+/// JSON put, plus a quarter for escaping.
+pub const MAX_BODY: usize = 640 * 1024;
 
 /// The POST rows (G45, UW35). A GET on any of them is 405.
 /// `/cli/zen/lib/fetch` is `zen_lib_routes`'s (B3, UWB15).
@@ -156,7 +157,7 @@ pub fn local_only() -> CliResponse {
 pub fn too_large() -> CliResponse {
     resp(
         "413 Payload Too Large",
-        json!({ "error": "body_too_large", "message": "Zen request bodies must be under 320 KB." }),
+        json!({ "error": "body_too_large", "message": "Zen request bodies must be under 640 KB." }),
     )
 }
 

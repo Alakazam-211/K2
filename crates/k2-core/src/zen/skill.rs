@@ -556,7 +556,7 @@ A custom widget that asks for `store:read` / `store:write` gets its own keyspace
 `data:<widget>`, in a file K2 keeps on THIS computer (and `k2.save.*` for private\n\
 saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your side.\n\n\
 - **Use `k2.store` for data; never inline data into the widget's code** (code is capped\n\
-  at 256 KB, and a code edit is a new version).\n\
+  at 512 KB, and a code edit is a new version).\n\
 - One key per object (`obj/<id>`, or `project/<pid>/board/<bid>/obj/<id>`), values JSON\n\
   ≤ 60 KiB. Write with `{ifRev}`; on `conflict` read again and re-apply only the fields\n\
   you changed. `k2.store.subscribe(prefix, cb)` shows anyone's change live.\n\
@@ -1022,7 +1022,7 @@ that ends at a dot works: `\"three@0.170\"`). Each defines a global.\n\n",
 or name a pinned CDN file as `{{\"url\": …, \"integrity\": \"sha256-…\"}}` from {}; K2's daemon\n\
 fetches and checks it, the frame never touches the network, and air-gap blocks it.\n\n\
 ### Limits\n\n\
-- Code (HTML + JS + CSS after inlining): 256 KB. Each asset 1 MB; all assets 2 MB; the\n\
+- Code (HTML + JS + CSS after inlining): 512 KB. Each asset 1 MB; all assets 2 MB; the\n\
   bundled page 3 MB. Libraries: up to {} per widget, outside those limits.\n\
 - 10 custom widgets per page. Per widget: 60 calls a second, 16 live subscriptions,\n\
   64 KB per message, 8 live servers.\n\

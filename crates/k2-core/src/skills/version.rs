@@ -181,7 +181,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// click in it) is kept per Garden on this computer like the person's own,
 /// so the Kanban reopens with its Thread as the person left it (Rosson
 /// 2026-10-24, for 0.46.4).
-pub const SKILL_VERSION_ZEN: u32 = 34;
+/// v35 = a custom widget's code may be 512 KB raw (was 256 KB; the bundle
+/// stays 3 MB) (Baden's Board via Appa 2026-10-23, for 0.46.4).
+pub const SKILL_VERSION_ZEN: u32 = 35;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

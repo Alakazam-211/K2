@@ -548,7 +548,7 @@ mod tests {
             assert!(ok, "diary.js calls k2.{name}, which isn't a widget helper");
         }
         let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
-        assert!(code <= 256 * 1024, "UW8: {} is {code} bytes of code", w.id());
+        assert!(code <= crate::zen::bundle::MAX_CODE_BYTES, "UW8: {} is {code} bytes of code", w.id());
         // Rosson 2026-10-08: one page per agent on THIS computer. K2 binds
         // the grant to `{server: "local"}`; the page list keeps only
         // `<handle>::local` rows as a second lock.
@@ -1021,7 +1021,7 @@ mod tests {
         let css = file(w, "kanban.css");
         assert!(css.contains("@media (prefers-reduced-motion: reduce)"));
         let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
-        assert!(code <= 256 * 1024, "UW8: {id} is {code} bytes of code");
+        assert!(code <= crate::zen::bundle::MAX_CODE_BYTES, "UW8: {id} is {code} bytes of code");
     }
 
     /// Garden v3 (contract-sources-v1 §11.4, §12.3): each data-source card

@@ -56,15 +56,15 @@ pdir="$app/Contents/Helpers/$K2_DAEMON_HELPER_APP/Contents/MacOS"
 mkdir -p "$pdir"
 head -c 8192 /dev/urandom > "$pdir/$K2_DAEMON_HELPER_PTYD"; chmod 0755 "$pdir/$K2_DAEMON_HELPER_PTYD"
 sha="$(shasum -a 256 "$pdir/$K2_DAEMON_HELPER_PTYD" | cut -d' ' -f1)"
-PATH="$stub:$PATH" k2_build_standalone_macos_daemon "$app" "$work/standalone" "$work/proj" >/dev/null \
+CARGO_TARGET_DIR="$work/proj/target" PATH="$stub:$PATH" k2_build_standalone_macos_daemon "$app" "$work/standalone" "$work/proj" >/dev/null \
     || { echo "FAIL: the standalone build with a signed k2-ptyd was refused"; exit 1; }
 grep -q "$sha" "$work/standalone" || { echo "FAIL: the standalone daemon does not carry the signed k2-ptyd's sha256"; exit 1; }
 rm -f "$work/standalone"
-if STUB_NO_EMBED=1 PATH="$stub:$PATH" k2_build_standalone_macos_daemon "$app" "$work/standalone" "$work/proj" >/dev/null 2>&1; then
+if STUB_NO_EMBED=1 CARGO_TARGET_DIR="$work/proj/target" PATH="$stub:$PATH" k2_build_standalone_macos_daemon "$app" "$work/standalone" "$work/proj" >/dev/null 2>&1; then
     echo "FAIL: a standalone daemon without the embed passed"; exit 1
 fi
 [ ! -e "$work/standalone" ] || { echo "FAIL: a daemon without the embed was published"; exit 1; }
-if STUB_BAD_SIG=1 PATH="$stub:$PATH" k2_build_standalone_macos_daemon "$app" "$work/standalone" "$work/proj" >/dev/null 2>&1; then
+if STUB_BAD_SIG=1 CARGO_TARGET_DIR="$work/proj/target" PATH="$stub:$PATH" k2_build_standalone_macos_daemon "$app" "$work/standalone" "$work/proj" >/dev/null 2>&1; then
     echo "FAIL: an unsigned k2-ptyd was embedded"; exit 1
 fi
 grep -q '^k2_build_standalone_macos_daemon "$PROJECT_DIR/target/release/bundle/macos/K2.app" "$DIST_DIR/$MAC_ASSET" "$PROJECT_DIR"$' "$here/scripts/release.sh" \

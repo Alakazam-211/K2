@@ -1106,8 +1106,34 @@ fn a_tenant_node_is_taken_over_only_in_person_after_it_confirms() {
         let n = row();
         assert!(n.is_tenant() && !n.owned_for_secrets() && n.owner_claim(), "a claim, still a tenant");
     }
-    // An agent never takes a node over, even one under "operate".
+    // What the person confirms (verification M1): the node's full key, the
+    // owner until now, that this server becomes its admin, and the
+    // compute:<ws>/* grants that would reach it. Nothing changes.
+    let p = call(TAKE_OWNER, &Who::Owner, json!({"node": f.node_name, "preview": true})).unwrap();
+    assert_eq!(p["fingerprint"], fp_of(&f.node), "{p}");
+    assert_eq!((p["from"].as_str(), p["becomesAdmin"].as_bool(), p["grantsKnown"].as_bool()), (Some("rosson.k2.dev"), Some(true), Some(true)), "{p}");
+    assert_eq!(p["secretGrants"], json!([]), "{p}");
+    assert!(row().is_tenant(), "a preview changes nothing");
+    // The owner gets the same in its note.
+    on_owner_claim(&row());
+    let note: String = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.query_row(
+            "SELECT json_extract(detail_json, '$.text') FROM compute_events WHERE kind = 'share_note' AND node_id = ?1 ORDER BY rowid DESC LIMIT 1",
+            rusqlite::params![f.node],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    for want in [fp_of(&f.node).as_str(), "rosson.k2.dev", "its admin", "compute:<workspace>/* secret grant", "none today", "type"] {
+        assert!(note.contains(want), "the note says {want:?}: {note}");
+    }
+    // An agent never takes a node over (nor previews it), even one under
+    // "operate".
     let e = call(TAKE_OWNER, &agent(&f), body()).unwrap_err();
+    assert_eq!(e.0, 403, "{e:?}");
+    let e = call(TAKE_OWNER, &agent(&f), json!({"node": f.node_name, "preview": true})).unwrap_err();
     assert_eq!(e.0, 403, "{e:?}");
     // The owner needs a fresh confirm, for this node and this action.
     assert_eq!(call(TAKE_OWNER, &Who::Owner, body()).unwrap_err(), (403, cadmin::codes::VAULT_CONFIRM_REQUIRED.to_string()));
@@ -1141,4 +1167,8 @@ fn a_tenant_node_is_taken_over_only_in_person_after_it_confirms() {
     // Once only.
     let e = call(TAKE_OWNER, &Who::Owner, json!({"node": f.node_name, "confirmToken": token()})).unwrap_err();
     assert_eq!(e.0, 409);
+    // How the grants read for a person (M1).
+    let g = Some(vec![("k2".to_string(), "GH_TOKEN".to_string()), ("k2".to_string(), "NPM".to_string()), ("ops".to_string(), "AWS".to_string())]);
+    assert_eq!(crate::compute_secrets::star_grants_text(&g), "k2: GH_TOKEN, NPM; ops: AWS");
+    assert!(crate::compute_secrets::star_grants_text(&None).contains("vault is closed"), "never \"none\" when they can't be listed");
 }

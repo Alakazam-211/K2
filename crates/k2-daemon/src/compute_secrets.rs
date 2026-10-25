@@ -554,6 +554,53 @@ pub fn running_with(secret_id: &str, consumer: &Consumer) -> Vec<serde_json::Val
     out
 }
 
+/// Every live `compute:<ws>/*` env grant, as `(workspace, secret name)`,
+/// sorted: what starts reaching a node the moment this server owns it
+/// (Q2; the take-over's confirm names them, verification M1). `None` when
+/// the vault is closed (they can't be listed, so nobody is told "none").
+pub fn star_grants() -> Option<Vec<(String, String)>> {
+    let vault = crate::vault::get().ok()?;
+    star_grants_in(&vault)
+}
+
+/// [`star_grants`] in a given vault.
+pub fn star_grants_in(vault: &k2_vault::LocalVault) -> Option<Vec<(String, String)>> {
+    let ids: Vec<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut st = conn.prepare("SELECT id FROM projects").ok()?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0)).ok()?;
+        rows.filter_map(Result::ok).collect()
+    };
+    let mut out = Vec::new();
+    for ws in ids {
+        let Ok(gs) = vault.grants_to(&Consumer::compute(&ws, "*")) else { return None };
+        for (g, name) in gs {
+            if g.delivery == k2_vault::Delivery::Env && !expired(&g) {
+                out.push((crate::compute_routes::ws_handle(&ws), name));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    Some(out)
+}
+
+/// [`star_grants`] as one line for a person: `ws: A, B; ws2: C`.
+pub fn star_grants_text(g: &Option<Vec<(String, String)>>) -> String {
+    match g {
+        None => "(the vault is closed, so they can't be listed: open it first and look again)".into(),
+        Some(v) if v.is_empty() => "none today".into(),
+        Some(v) => {
+            let mut by: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+            for (ws, s) in v {
+                by.entry(ws.as_str()).or_default().push(s.as_str());
+            }
+            by.iter().map(|(ws, ss)| format!("{ws}: {}", ss.join(", "))).collect::<Vec<_>>().join("; ")
+        }
+    }
+}
+
 /// The env names a job gets (`get` / `status` / `receipt`, SE8).
 pub fn job_secret_names(j: &JobRow) -> Vec<String> {
     j.plan().map(|p| p.secret_env).unwrap_or_default()

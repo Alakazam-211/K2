@@ -1852,12 +1852,24 @@ pub fn on_owner_claim(node: &store::NodeRow) {
         &node.id,
         &format!("owner-claim:{}", compute::now()),
         &format!(
-            "{} says this server is its owner now (an owner change from {owner}). It stays {owner}'s here until you take it over in person: \
-             k2 compute node take-owner {} (Touch ID or your vault password). If you didn't change its owner, leave it: nothing changes.",
-            node.name, node.name
+            "{} (key {}) says this server is its owner now (an owner change from {owner}). It stays {owner}'s here: no admin, no secrets. \
+             Only the node says so: take it over only if you changed its owner yourself and that key is the node you know. Taking it over \
+             makes this server its admin (root admin on that machine), and every compute:<workspace>/* secret grant starts sending its \
+             secrets to it: {}. To take it over in person: k2 compute node take-owner {} (it shows all this again, asks you to type \
+             the node's name, then Touch ID or your vault password). If you didn't change its owner, leave it: nothing changes.",
+            node.name,
+            node.fingerprint,
+            crate::compute_secrets::star_grants_text(&star_grants()),
+            node.name
         ),
     );
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({"compute": "owner_claim", "node": node.name}));
+}
+
+/// Every `compute:<ws>/*` grant ([`crate::compute_secrets::star_grants`]),
+/// through this module's vault seam.
+fn star_grants() -> Option<Vec<(String, String)>> {
+    vault().ok().and_then(|v| crate::compute_secrets::star_grants_in(&v))
 }
 
 /// The confirm subject for taking over `node_id` (never a request id).
@@ -1907,6 +1919,21 @@ fn take_owner(who: &Who, body: &[u8]) -> R<Value> {
     }
     if !online(&node.id) {
         return Err(no(codes::NODE_OFFLINE, 409, format!("{} isn't connected now: take it over while its session is live", node.name)));
+    }
+    // What the person confirms (verification M1): the node's word is only
+    // a claim, so the confirm is the guard; the CLI shows this first.
+    if crate::compute_routes::b(&v, "preview") == Some(true) {
+        let grants = star_grants();
+        return Ok(json!({
+            "preview": true,
+            "node": node.name,
+            "fingerprint": node.fingerprint,
+            "from": node.owner_label,
+            "becomesAdmin": true,
+            "grantsKnown": grants.is_some(),
+            "secretGrants": grants.as_ref().map(|g| g.iter().map(|(ws, s)| json!({"workspace": ws, "secret": s})).collect::<Vec<_>>()),
+            "secretGrantsText": crate::compute_secrets::star_grants_text(&grants),
+        }));
     }
     let Some(token) = s(&v, "confirmToken") else {
         return Err(no(acodes::VAULT_CONFIRM_REQUIRED, 403, "taking over a node needs a fresh owner confirm (Touch ID, your login or vault password): k2 compute node take-owner <node> asks for it"));

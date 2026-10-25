@@ -51,6 +51,7 @@ pub const MAX_ITEMS: usize = 500;
 pub const LEN_DEFAULT: u64 = 8 * 1024 * 1024;
 pub const LEN_MAX: u64 = 16 * 1024 * 1024;
 
+
 fn refused() -> CliResponse {
     crate::skin_routes::missing_cap_response(CAP_FILES_DOWNLOAD)
 }
@@ -69,6 +70,10 @@ pub fn not_a_guest() -> CliResponse {
     }
 }
 
+fn who(pass: &SkinPass) -> String {
+    format!("guest:{}", pass.username.trim())
+}
+
 /// The room, `files:download` in it and the line's scope; else the
 /// refusal (the room's own `skin_room`, or the missing-cap 403; a scope
 /// that can't be read fails closed with the same 403).
@@ -82,31 +87,54 @@ fn gate(params: &HashMap<String, String>, pass: &SkinPass) -> Result<(SkinWorksp
     Ok((resolved, scope))
 }
 
+/// Paths the download door never serves, by name (review A3): K2's own
+/// secret patterns, plus anything in a `.git/` folder and these files.
+fn denied_by_name(rel: &str) -> bool {
+    if k2_core::secret_paths::is_secret_rel(rel) {
+        return true;
+    }
+    let parts: Vec<String> = rel.split(['/', '\\']).filter(|p| !p.is_empty() && *p != ".").map(str::to_ascii_lowercase).collect();
+    let Some(name) = parts.last() else { return true };
+    if parts.iter().any(|p| p == ".git") {
+        return true;
+    }
+    if matches!(name.as_str(), ".env.k2" | ".pgpass" | "terraform.tfstate" | "terraform.tfstate.backup") || name.ends_with(".p8") {
+        return true;
+    }
+    let tail2 = |a: &str, b: &str| parts.len() >= 2 && parts[parts.len() - 2] == a && parts[parts.len() - 1] == b;
+    tail2(".aws", "credentials") || tail2(".kube", "config") || tail2(".docker", "config.json")
+}
+
 /// May a download entry serve the room-relative `rel` (as written)?
 fn entry_allows_rel(scope: &RoomPathScope, rel: &str) -> bool {
     match sp::rel_segments(rel) {
-        Ok(segs) => {
-            !segs.is_empty()
-                && sp::download_allows(scope, &segs)
-                && !lexically_in_agent_config(rel, false)
-                && !k2_core::secret_paths::is_secret_rel(rel)
-        }
+        Ok(segs) => !segs.is_empty() && sp::download_allows(scope, &segs) && !lexically_in_agent_config(rel, false) && !denied_by_name(rel),
         Err(_) => false,
     }
 }
 
 /// The landed check for the entry arm: the resolved path is still inside a
-/// download entry, never in `.k2/`, never secret-named.
+/// download entry, never in `.k2/`, never denied by name.
 fn entry_allows_landed(scope: &RoomPathScope, resolved: &SkinWorkspace, real: &Path) -> bool {
     let Some(landed) = rel_in_room(&resolved.path, real) else { return false };
     entry_allows_rel(scope, &landed) && !abs_in_agent_config(&resolved.path, real, false)
+}
+
+/// Review A3: every file listed or served also passes K2's secret
+/// classifier on the landed path (names and the content scan).
+fn secret_file(resolved: &SkinWorkspace, real: &Path) -> bool {
+    let Some(landed) = rel_in_room(&resolved.path, real) else { return true };
+    denied_by_name(&landed) || k2_core::secret_paths::classify(&landed, real).is_some()
 }
 
 /// `GET /cli/fs/downloads` for an App guest.
 pub fn handle_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
     let (resolved, scope) = match gate(params, pass) {
         Ok(g) => g,
-        Err(r) => return r,
+        Err(r) => {
+            crate::thread_attachments::audit("files.downloads_refused", &who(pass), "list".to_string());
+            return r;
+        }
     };
     let mut items: Vec<serde_json::Value> = Vec::new();
     let mut seen_files: HashSet<PathBuf> = HashSet::new();
@@ -126,11 +154,17 @@ pub fn handle_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliResp
         let mut visited: HashSet<PathBuf> = HashSet::new();
         truncated = walk(&scope, &resolved, &real, 0, &mut visited, &mut seen_files, &mut items);
     }
+    crate::thread_attachments::audit(
+        "files.downloads",
+        &who(pass),
+        format!("room={} items={} truncated={truncated}", resolved.project_id, items.len()),
+    );
     CliResponse::ok_json(serde_json::json!({ "ok": true, "items": items, "truncated": truncated }).to_string())
 }
 
 /// Add `real` (a file, or a folder walked to [`MAX_DEPTH`]) to `items`.
-/// Returns `true` once [`MAX_ITEMS`] is passed (the walk stops).
+/// Returns `true` once [`MAX_ITEMS`] is passed (the walk stops). `.git`
+/// folders are never walked; secret files are never listed.
 fn walk(
     scope: &RoomPathScope,
     resolved: &SkinWorkspace,
@@ -142,7 +176,7 @@ fn walk(
 ) -> bool {
     let Ok(meta) = std::fs::metadata(real) else { return false };
     if meta.is_file() {
-        if !seen_files.insert(real.to_path_buf()) {
+        if !seen_files.insert(real.to_path_buf()) || secret_file(resolved, real) {
             return false;
         }
         if items.len() >= MAX_ITEMS {
@@ -160,6 +194,9 @@ fn walk(
     let mut children: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
     children.sort();
     for child in children {
+        if child.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(".git")) {
+            continue;
+        }
         // Symlinks are followed only when they land inside a download
         // entry (and inside the room): the same landed rule as a save.
         let Ok(canon) = child.canonicalize() else { continue };
@@ -195,7 +232,10 @@ fn item(resolved: &SkinWorkspace, real: &Path, meta: &std::fs::Metadata) -> Opti
 pub fn handle_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
     let (resolved, scope) = match gate(params, pass) {
         Ok(g) => g,
-        Err(r) => return r,
+        Err(r) => {
+            crate::thread_attachments::audit("files.download_refused", &who(pass), "gate".to_string());
+            return r;
+        }
     };
     let rel = match need_rel_path(params) {
         Ok(p) => p,
@@ -218,37 +258,46 @@ pub fn handle_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliRespo
     if len == 0 || len > LEN_MAX {
         return CliResponse::bad_request(format!("len is 1..={LEN_MAX}"));
     }
+    let deny = |why: &str| {
+        crate::thread_attachments::audit(
+            "files.download_refused",
+            &who(pass),
+            format!("room={} rel={rel:?} why={why}", resolved.project_id),
+        );
+        refused()
+    };
     // Rule 2, as written, before the disk is touched.
     let by_entry = entry_allows_rel(&scope, &rel);
     let by_read = pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_READ)
         && sp::allows_rel(&scope, &rel, PathNeed::Read).unwrap_or(false);
     if !by_entry && !by_read {
-        return refused();
+        return deny("outside");
     }
-    let real = match jail_rel_path(&resolved.path, &rel, false) {
-        Ok(p) => p,
-        Err(e) => return CliResponse::bad_request(e),
-    };
-    // …and where it lands.
+    // Review A6: from here on, missing, a link out, a folder and a secret
+    // are all the same missing-cap 403 (no oracle inside an entry).
+    let Ok(real) = jail_rel_path(&resolved.path, &rel, false) else { return deny("unresolved") };
     let landed_entry = by_entry && entry_allows_landed(&scope, &resolved, &real);
     let landed_read = by_read && scope_gate_landed(&scope, &resolved, &real, PathNeed::Read, true).is_none();
     if !landed_entry && !landed_read {
-        return refused();
+        return deny("landed");
     }
-    match std::fs::metadata(&real) {
-        Ok(m) if m.is_file() => {}
-        Ok(_) => return CliResponse::bad_request("not a file: save files one at a time (files.downloads lists them)"),
-        Err(e) => return CliResponse::bad_request(format!("Invalid path: {e}")),
+    if !std::fs::metadata(&real).is_ok_and(|m| m.is_file()) {
+        return deny("not_a_file");
     }
+    if secret_file(&resolved, &real) {
+        return deny("secret");
+    }
+    let landed = rel_in_room(&resolved.path, &real).unwrap_or_else(|| rel.clone());
     let name = real.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     match fsc::read_file_range(&real.to_string_lossy(), offset, len) {
         Ok((bytes, size)) => {
             let eof = offset.saturating_add(bytes.len() as u64) >= size;
+            // The path actually read (review A6).
             crate::thread_attachments::audit(
                 "files.download",
-                &format!("guest:{}", pass.username.trim()),
+                &who(pass),
                 format!(
-                    "room={} rel={rel:?} offset={offset} len={} via={}",
+                    "room={} rel={landed:?} asked={rel:?} offset={offset} len={} via={}",
                     resolved.project_id,
                     bytes.len(),
                     if landed_entry { "entry" } else { "files:read" }
@@ -268,7 +317,10 @@ pub fn handle_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliRespo
                 .to_string(),
             )
         }
-        Err(e) => CliResponse::bad_request(e),
+        Err(e) => {
+            k2_core::log_debug!("[fs/download] read {landed:?}: {e}");
+            deny("read")
+        }
     }
 }
 
@@ -287,10 +339,30 @@ mod tests {
         assert!(entry_allows_rel(&s, "public/x.txt"));
         assert!(entry_allows_rel(&s, "reports/a.pdf"));
         assert!(!entry_allows_rel(&s, "reports/b.pdf"));
-        assert!(!entry_allows_rel(&s, "public/.env"), "secret-named files never through an entry");
-        assert!(!entry_allows_rel(&s, "public/id_rsa"));
         assert!(!entry_allows_rel(&s, "public/../x"));
         assert!(!entry_allows_rel(&s, "."), "the room root is never an entry");
         assert!(!entry_allows_rel(&scope(&[]), "anything"), "no entries: nothing");
+        // Review A3: names the door never serves.
+        for rel in [
+            "public/.env",
+            "public/id_rsa",
+            "public/.env.k2",
+            "public/.git/config",
+            "public/repo/.git/HEAD",
+            "public/.GIT/objects/ab",
+            "public/.aws/credentials",
+            "public/.kube/config",
+            "public/.docker/config.json",
+            "public/.pgpass",
+            "public/AuthKey_ABC123.p8",
+            "public/infra/terraform.tfstate",
+            "public/infra/terraform.tfstate.backup",
+        ] {
+            assert!(!entry_allows_rel(&s, rel), "{rel} must never be served");
+        }
+        // Their near-misses are ordinary files.
+        for rel in ["public/kube-config.md", "public/docker/config.json.example", "public/notes.p8x", "public/git/HEAD"] {
+            assert!(entry_allows_rel(&s, rel), "{rel} is an ordinary file");
+        }
     }
 }

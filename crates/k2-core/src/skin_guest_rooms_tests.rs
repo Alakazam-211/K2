@@ -190,6 +190,13 @@ fn sixty_calls_a_minute_per_app() {
     // Per App: another App's budget is its own.
     add_principal_for_app("erin", None, &f.other_app, None, "test").unwrap();
     read(&f.other_app, "erin").unwrap();
+    // Review B4: the owner never spends (or is stopped by) the App's budget,
+    // and app.rooms has its own.
+    for i in 0..(RATE_PER_MIN + 5) {
+        with_owner_budget(|| read(&f.app, "dana")).unwrap_or_else(|e| panic!("owner call {i}: {e:?}"));
+    }
+    assert!(matches!(read(&f.app, "dana"), Err(Refusal::RateLimited { .. })), "the App is still limited");
+    rate_take(&app_rooms_rate_key(&f.app)).expect("app.rooms has its own bucket");
 }
 
 #[test]

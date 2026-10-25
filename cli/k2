@@ -36375,6 +36375,11 @@ EXIT 3 — STOP LOOPING
                  a K2 terminal or an App's server never can, your own card
                  included: close it with `k2 thread void <addr> <id>`.
                  An App answers with the guest's own pass, never its own.
+                 A guest you added counts as you until a person resets
+                 its password or claims it. Known, by design for now: a
+                 Garden widget you made, once the person approves its
+                 thread:post, can answer your ordinary choice cards (it
+                 runs in the person's own Garden view).
 
 USAGE (2)
   Unknown flags fail loud. `k2 study nosuch` is exit 2 and lists
@@ -37599,7 +37604,10 @@ FOLDERS PER ROOM LINE (path scope, 0.46.1)
   - Drop folders (0.46.4): --upload Inbox/ + files:upload (no files:read or
     files:write) = upload only. Each file lands in Inbox/<username>/; the
     guest can't list, read, move or overwrite anything there, its own
-    uploads included (the upload answer is the receipt). An agent with
+    uploads included (the upload answer is the receipt). A dir below the
+    drop folder lands below the guest's own folder (Inbox/<username>/x).
+    Each guest holds at most 1000 files and 2 GiB of drops per room
+    (K2_DROP_MAX_FILES, K2_DROP_MAX_BYTES on the daemon). An agent with
     "manage Apps" may set drop folders. Role template: dropbox.
   - Download entries (0.46.4): --download reports/,price-list.pdf + files:download
     = the guest may save those (files.downloads lists, files.download saves)

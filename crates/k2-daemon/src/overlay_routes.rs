@@ -2471,6 +2471,17 @@ fn refuse_card_non_person(params: &HashMap<String, String>) -> Result<(), CliRes
                 return Err(card_person_only());
             }
         }
+        // Review B1: a guest an agent added (and no person has taken over)
+        // isn't a person either: the agent could set its password and sign
+        // in as it. `skin::creators::clear_agent_tie` lifts it.
+        match k2_core::skin::creators::agent_tie(principal) {
+            Ok(None) => {}
+            Ok(Some(_)) => return Err(card_person_only()),
+            Err(e) => {
+                k2_core::log_debug!("[overlay] card answer: agent tie unreadable for {principal}: {e}");
+                return Err(card_person_only());
+            }
+        }
     }
     Ok(())
 }

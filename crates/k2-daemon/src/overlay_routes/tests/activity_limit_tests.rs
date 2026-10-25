@@ -77,19 +77,38 @@ fn the_eleventh_catch_up_is_refused_without_touching_the_tracker() {
 #[test]
 fn callers_are_keyed_by_person_pass_login_and_agent() {
     use crate::thread_activity_limit::key_for;
+    use crate::thread_activity_limit::hashed_key;
     let mut guest = platform_pass("room-1");
-    assert!(key_for(&HashMap::new(), Some(&guest)).is_some_and(|k| k.starts_with("pass:n1-")));
+    let pass_key = key_for(&HashMap::new(), Some(&guest)).expect("a pass is limited");
+    assert_eq!(pass_key, hashed_key("pass", &guest.id));
     guest.session = true;
     guest.principal_id = Some("p-42".into());
-    assert_eq!(key_for(&HashMap::new(), Some(&guest)).as_deref(), Some("guest:p-42"), "one person across devices and Apps");
-    let passport = params_of(&[(crate::caller_workspace::PRINCIPAL_BOUND_KEY, "1"), ("project_id", "ws-9"), ("from", "ws-9")]);
-    let agent = crate::caller_workspace::principal_from_params(&passport).map(|p| p.workspace_uuid);
-    assert_eq!(key_for(&passport, None), agent.map(|w| format!("agent:{w}")));
-    assert!(key_for(&passport, None).is_some(), "an agent passport is limited");
-    assert_eq!(key_for(&params_of(&[("cell_session_id", "c-1")]), None).as_deref(), Some("cell:c-1"));
+    assert_eq!(key_for(&HashMap::new(), Some(&guest)), Some(hashed_key("guest", "p-42")), "one person across devices and Apps");
+    // An agent: the request's principal slot (TCP passport and cell alike).
+    let slot = crate::session_token::HookPrincipal { workspace_uuid: "ws-9".into(), agent_address: "ws-9".into() };
+    let agent = crate::caller_workspace::with_request_principal(Some(slot), || key_for(&HashMap::new(), None));
+    assert_eq!(agent, Some(hashed_key("agent", "ws-9")));
     let login = crate::read_routes::with_read_login(Some("mel".into()), || key_for(&HashMap::new(), None));
-    assert_eq!(login.as_deref(), Some("user:mel"));
+    assert_eq!(login, Some(hashed_key("user", "mel")));
     let owner = crate::read_routes::with_read_login(Some("owner".into()), || key_for(&HashMap::new(), None));
     assert_eq!(owner, None, "the owner token is exempt");
     assert_eq!(key_for(&HashMap::new(), None), None);
+    // Review B2: a login's raw query params never move it to another key:
+    // not an agent's (draining it), not a fresh one per cell id.
+    let spoof = params_of(&[
+        (crate::caller_workspace::PRINCIPAL_BOUND_KEY, "1"),
+        ("project_id", "ws-9"),
+        ("from", "ws-9"),
+        ("cell_session_id", "fresh-1"),
+    ]);
+    let spoofed = crate::read_routes::with_read_login(Some("mel".into()), || key_for(&spoof, None));
+    assert_eq!(spoofed, Some(hashed_key("user", "mel")), "the login's own key, whatever it sends");
+    let again = crate::read_routes::with_read_login(Some("mel".into()), || {
+        key_for(&params_of(&[("cell_session_id", "fresh-2")]), None)
+    });
+    assert_eq!(again, Some(hashed_key("user", "mel")));
+    // Fixed length, however long the name.
+    let long = "x".repeat(10_000);
+    let k = crate::read_routes::with_read_login(Some(long), || key_for(&HashMap::new(), None)).expect("key");
+    assert_eq!(k.len(), "user:".len() + 32, "{k}");
 }

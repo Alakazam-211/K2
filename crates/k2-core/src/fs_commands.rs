@@ -504,13 +504,16 @@ pub(crate) fn sanitize_filename(filename: &str) -> String {
     }
 }
 
-/// Build a non-colliding target path inside `dir` for `filename`. If
-/// `dir/filename` is free it's used as-is; otherwise appends
-/// ` (1)`, ` (2)`, … before the extension: `name (1).ext`.
-fn collision_free_path(dir: &Path, filename: &str) -> PathBuf {
-    let initial = dir.join(filename);
-    if !initial.exists() {
-        return initial;
+/// How many names [`collision_free_path`] / [`create_new_free`] try:
+/// `name.ext`, then `name (1).ext` … `name (9999).ext`. Past that the
+/// upload fails; it never falls back to a taken name (0.46.4 security
+/// review A2: the old fallback overwrote).
+pub const MAX_NAME_TRIES: usize = 10_000;
+
+/// The `i`-th candidate name for `filename` (0 = the name itself).
+fn numbered_name(filename: &str, i: usize) -> String {
+    if i == 0 {
+        return filename.to_string();
     }
     let name_path = Path::new(filename);
     let stem = name_path
@@ -521,16 +524,48 @@ fn collision_free_path(dir: &Path, filename: &str) -> PathBuf {
         .extension()
         .map(|e| format!(".{}", e.to_string_lossy()))
         .unwrap_or_default();
-    for i in 1..10_000 {
-        let candidate = dir.join(format!("{stem} ({i}){ext}"));
-        if !candidate.exists() {
-            return candidate;
+    format!("{stem} ({i}){ext}")
+}
+
+/// Build a non-colliding target path inside `dir` for `filename`. If
+/// `dir/filename` is free it's used as-is; otherwise appends
+/// ` (1)`, ` (2)`, … before the extension: `name (1).ext`. "Taken" never
+/// follows a symlink (a dangling link is taken too). `Err` after
+/// [`MAX_NAME_TRIES`] names, never a taken one. Racy by nature (check,
+/// then the caller's rename): only the owner's chunked upload uses it;
+/// single-request uploads use [`create_new_free`].
+fn collision_free_path(dir: &Path, filename: &str) -> Result<PathBuf, String> {
+    for i in 0..MAX_NAME_TRIES {
+        let candidate = dir.join(numbered_name(filename, i));
+        if fs::symlink_metadata(&candidate).is_err() {
+            return Ok(candidate);
         }
     }
-    // Pathological fallback — 10k collisions. Return the initial path;
-    // the caller's write will overwrite, but this is effectively
-    // unreachable.
-    initial
+    Err(format!("no free name for {filename:?} after {MAX_NAME_TRIES} tries; pick another name"))
+}
+
+/// Create a NEW file in `dir` named `filename` (or `name (1).ext`, …)
+/// atomically: `O_CREAT|O_EXCL` (plus `O_NOFOLLOW` on unix) never opens or
+/// replaces anything that is already there, a symlink or a dangling link
+/// included, so two racing uploads can't overwrite each other. `Err` after
+/// [`MAX_NAME_TRIES`] taken names.
+pub fn create_new_free(dir: &Path, filename: &str) -> Result<(PathBuf, fs::File), String> {
+    for i in 0..MAX_NAME_TRIES {
+        let candidate = dir.join(numbered_name(filename, i));
+        let mut o = fs::OpenOptions::new();
+        o.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            o.custom_flags(libc::O_NOFOLLOW);
+        }
+        match o.open(&candidate) {
+            Ok(f) => return Ok((candidate, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(map_io_err(e)),
+        }
+    }
+    Err(format!("no free name for {filename:?} after {MAX_NAME_TRIES} tries; pick another name"))
 }
 
 /// Write `bytes` into `dir` under a sanitized, collision-free name.
@@ -569,8 +604,16 @@ pub fn write_upload(dir: &str, filename: &str, bytes: &[u8]) -> Result<PathBuf, 
         return Err(crate::disk_guard::upload_refusal_text(&f));
     }
     let safe_name = sanitize_filename(filename);
-    let target = collision_free_path(&dir_path, &safe_name);
-    fs::write(&target, bytes).map_err(map_io_err)?;
+    // A2: created new and exclusively; a failed write leaves no stub.
+    let (target, mut f) = create_new_free(&dir_path, &safe_name)?;
+    {
+        use std::io::Write as _;
+        if let Err(e) = f.write_all(bytes) {
+            drop(f);
+            let _ = fs::remove_file(&target);
+            return Err(map_io_err(e));
+        }
+    }
     Ok(target)
 }
 
@@ -749,7 +792,7 @@ pub fn write_upload_chunk(
         f.sync_all().map_err(map_io_err)?;
         drop(f);
         let safe_name = sanitize_filename(filename);
-        let target = collision_free_path(&dir_path, &safe_name);
+        let target = collision_free_path(&dir_path, &safe_name)?;
         fs::rename(&part_path, &target).map_err(map_io_err)?;
         Ok(Some(target))
     } else {
@@ -1490,6 +1533,33 @@ mod tests {
         assert_eq!(fs::read(&p1).unwrap(), b"a");
         assert_eq!(fs::read(&p2).unwrap(), b"b");
         assert_eq!(fs::read(&p3).unwrap(), b"c");
+    }
+
+    /// 0.46.4 review A2: an upload never writes through a link already at
+    /// its name (dangling or not) and never falls back to a taken name.
+    #[cfg(unix)]
+    #[test]
+    fn write_upload_never_follows_or_replaces_a_link_at_its_name() {
+        let tmp = TempDir::new("upload-link");
+        let canon = tmp.path().canonicalize().unwrap();
+        let outside = TempDir::new("upload-link-outside");
+        let victim = outside.path().join("victim.txt");
+        // A dangling link and a live one at the upload's name.
+        std::os::unix::fs::symlink(outside.path().join("nothing-here"), tmp.path().join("a.txt")).unwrap();
+        fs::write(&victim, b"keep me").unwrap();
+        std::os::unix::fs::symlink(&victim, tmp.path().join("a (1).txt")).unwrap();
+        let p = write_upload(&tmp.s(), "a.txt", b"new").expect("upload");
+        assert_eq!(p, canon.join("a (2).txt"), "both link names are taken");
+        assert_eq!(fs::read(&victim).unwrap(), b"keep me", "the link target is untouched");
+        assert!(!outside.path().join("nothing-here").exists(), "nothing created through the dangling link");
+        // create_new_free gives up rather than reuse a name.
+        let names = TempDir::new("upload-names");
+        for i in 0..MAX_NAME_TRIES {
+            fs::write(names.path().join(numbered_name("x.bin", i)), b"").unwrap();
+        }
+        let err = create_new_free(names.path(), "x.bin").expect_err("every name taken");
+        assert!(err.contains("no free name"), "{err}");
+        assert_eq!(fs::read(names.path().join("x.bin")).unwrap(), b"", "the first name is not overwritten");
     }
 
     #[test]

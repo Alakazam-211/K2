@@ -140,3 +140,106 @@ async fn the_activity_catch_up_is_limited_per_caller_and_never_for_the_owner() {
     .unwrap();
     assert!(out >= 10);
 }
+
+/// Review B1: a guest an agent added (and set the password of) is not a
+/// person: signed in, it can't answer the agent's card. Once a person takes
+/// it over (`skin::creators::clear_agent_tie`) it can. An owner's guest can.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guest_its_agent_added_cant_answer_that_agents_cards() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    let (ws, _) = pinned_ws(&env, &format!("b1{tag}"));
+    allow_manage(&ws, true);
+    let agent = passport(&ws);
+    // The agent adds a guest and sets its password itself.
+    let sock = format!("sock{tag}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": sock })).await;
+    assert_eq!(r.status, 200, "an agent with manage Apps adds a guest: {}", r.body);
+    let r = post(port, "/cli/skin/users/password", &agent, json!({ "username": sock, "password": "s3cret-horse" })).await;
+    assert_eq!(r.status, 200, "and sets its password: {}", r.body);
+    // Thread rights from the owner (nothing here clears the tie).
+    let role = format!("r-{sock}");
+    ok_post(port, "/cli/skin/roles", OWNER, json!({ "name": role })).await;
+    ok_post(port, "/cli/skin/roles/room", OWNER, json!({ "name": role, "handle": ws.handle, "caps": ["thread:read", "thread:post"] })).await;
+    ok_post(port, "/cli/skin/roles/assign", OWNER, json!({ "username": sock, "role": role })).await;
+    let body = json!({ "username": sock, "password": "s3cret-horse" }).to_string();
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();
+    assert_eq!(r.status, 200, "{}", r.body);
+    let sock_pass = r.json()["token"].as_str().expect("token").to_string();
+    let person = guest(port, &format!("pat{tag}"), &ws, &["thread:read", "thread:post"]).await;
+
+    let ask = |prompt: &'static str| {
+        let agent = agent.clone();
+        let h = ws.handle.clone();
+        async move {
+            let v = ok_post(port, "/cli/thread/ask", &agent, json!({ "addr": h, "prompt": prompt, "options": "Go,Stop", "from": h })).await;
+            v["id"].as_str().expect("card id").to_string()
+        }
+    };
+    let id = ask("Ship it?").await;
+    let r = post(port, "/cli/thread/answer", &sock_pass, json!({ "addr": ws.handle, "id": id, "answer": "Go" })).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert_eq!(r.code(), "card_person_only", "{}", r.body);
+    let (pid, h) = (id.clone(), ws.handle.clone());
+    assert_eq!(tokio::task::spawn_blocking(move || card_status(port, &h, &pid)).await.unwrap(), "pending", "nothing written");
+    // An owner's guest is a person.
+    let r = post(port, "/cli/thread/answer", &person, json!({ "addr": ws.handle, "id": id, "answer": "Go" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // A person takes the agent's guest over: from then on it answers.
+    let principal = k2_core::skin::list_principals()
+        .expect("principals")
+        .into_iter()
+        .find(|p| p.username == sock)
+        .expect("the agent's guest")
+        .id;
+    k2_core::skin::creators::clear_agent_tie(&principal, "owner-token").expect("clear");
+    let id2 = ask("And this?").await;
+    let r = post(port, "/cli/thread/answer", &sock_pass, json!({ "addr": ws.handle, "id": id2, "answer": "Stop" })).await;
+    assert_eq!(r.status, 200, "after a person claimed it: {}", r.body);
+}
+
+/// Review B2: a Connect login's raw query params never move its activity
+/// bucket: not onto an agent's (draining it), not onto a fresh one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_login_can_neither_dodge_nor_drain_another_callers_bucket() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    let (ws, _) = pinned_ws(&env, &format!("b2{tag}"));
+    ok_post(port, "/cli/users/add", OWNER, json!({ "username": format!("mel{tag}"), "password": "password123" })).await;
+    let body = json!({ "username": format!("mel{tag}"), "password": "password123" }).to_string();
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/auth/login", Some(body))).await.unwrap();
+    assert_eq!(r.status, 200, "connect login: {}", r.body);
+    let mel = r.json()["token"].as_str().expect("token").to_string();
+    let agent = passport(&ws);
+    let (h, id) = (ws.handle.clone(), ws.id.clone());
+    tokio::task::spawn_blocking(move || {
+        let call = |tok: &str, extra: &str| {
+            req_blocking(port, "GET", &format!("/cli/thread/activity?token={}&addr={}{extra}", enc(tok), enc(&h)), None)
+        };
+        // The login spends its own burst while claiming to be the agent and
+        // a new cell on every call.
+        let mut answered = 0;
+        loop {
+            let spoof = format!("&principal_bound=1&project_id={}&from={}&cell_session_id=c{answered}", enc(&id), enc(&h));
+            let r = call(&mel, &spoof);
+            if r.status == 429 {
+                break;
+            }
+            assert_eq!(r.status, 200, "call {answered}: {}", r.body);
+            answered += 1;
+            assert!(answered <= 20, "fresh buckets: the limit never refused");
+        }
+        assert!((10..=12).contains(&answered), "one burst of 10, whatever the params ({answered})");
+        // The agent's own bucket is untouched: its full burst still answers.
+        for i in 0..10 {
+            let r = call(&agent, "");
+            assert_eq!(r.status, 200, "agent call {i}: the login didn't drain it: {}", r.body);
+        }
+    })
+    .await
+    .unwrap();
+}

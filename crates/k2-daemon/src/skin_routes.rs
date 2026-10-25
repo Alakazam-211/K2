@@ -1967,8 +1967,8 @@ pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
         Err(e) => return CliResponse::bad_request(e),
     };
     let clear = v.get("clear").and_then(|x| x.as_bool()).unwrap_or(false);
-    let scope = if clear {
-        skin::RoomPathScope::default()
+    let req: Option<PathsBody> = if clear {
+        None
     } else {
         let read = match folder_list(&v, "read") {
             Ok(l) => l,
@@ -1998,38 +1998,50 @@ pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
                 "nothing to set: send read, write, upload, uploadDir or download, or clear:true for the whole room",
             );
         }
-        // The stored line: kept download entries, the widening check, and
-        // a download-only body's other folders.
-        let stored = match skin::paths::role_line_paths(id_or_name, &ids[0]) {
-            Ok(s) => s,
-            Err(e) => return CliResponse::bad_request(e),
-        };
-        let download = if download_sent {
-            let mut n: Vec<String> = Vec::new();
-            for e in &download {
-                match skin::paths::normalize_folder(e) {
-                    Ok(f) if !n.contains(&f) => n.push(f),
-                    Ok(_) => {}
-                    Err(e) => return CliResponse::bad_request(format!("download: {e}")),
+        let mut sent_download: Vec<String> = Vec::new();
+        for e in &download {
+            match skin::paths::normalize_folder(e) {
+                Ok(f) if !sent_download.contains(&f) => sent_download.push(f),
+                Ok(_) => {}
+                Err(e) => return CliResponse::bad_request(format!("download: {e}")),
+            }
+        }
+        Some(PathsBody { download_sent, sent_download, folders_sent, read, write, upload_dir, upload })
+    };
+    let is_agent = actor_is_agent(actor);
+    // Review A5: the stored line is read, the widening checked and the new
+    // line written in ONE transaction (`update_role_room_paths`).
+    let written = skin::paths::update_role_room_paths(id_or_name, &ids[0], |stored| {
+        let Some(b) = &req else { return Ok(skin::RoomPathScope::default()) };
+        // The stored line: kept download entries, the widening check, and a
+        // download-only body's other folders.
+        let download = if b.download_sent {
+            if is_agent {
+                if let Some(entry) = skin::paths::download_widening(&stored.download, &b.sent_download) {
+                    return Err(skin::paths::PathsUpdateError::Refused(entry.to_string()));
                 }
             }
-            if actor_is_agent(actor) {
-                if let Some(entry) = skin::paths::download_widening(&stored.download, &n) {
-                    return download_entries_refused(entry);
-                }
-            }
-            n
+            b.sent_download.clone()
         } else {
             stored.download.clone()
         };
-        if folders_sent {
-            skin::RoomPathScope { read, write, upload_dir, upload, download }
+        Ok(if b.folders_sent {
+            skin::RoomPathScope {
+                read: b.read.clone(),
+                write: b.write.clone(),
+                upload_dir: b.upload_dir.clone(),
+                upload: b.upload.clone(),
+                download,
+            }
         } else {
-            skin::RoomPathScope { download, ..stored }
-        }
-    };
-    match skin::paths::set_role_room_paths(id_or_name, &ids[0], &scope) {
+            skin::RoomPathScope { download, ..stored.clone() }
+        })
+    });
+    match written {
+        Err(skin::paths::PathsUpdateError::Refused(entry)) => download_entries_refused(&entry),
+        Err(skin::paths::PathsUpdateError::Bad(e)) => CliResponse::bad_request(e),
         Ok(role) => {
+            let scope = role.room_paths.get(&ids[0]).cloned().unwrap_or_default();
             k2_core::log_debug!(
                 "[skin] actor={actor} role paths {} handle={handle} clear={clear} read={:?} write={:?} upload={:?} uploadDir={:?} download={:?}",
                 role.name,
@@ -2041,8 +2053,19 @@ pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
             );
             CliResponse::ok_json(serde_json::to_string(&role).unwrap_or_else(|_| "{}".into()))
         }
-        Err(e) => CliResponse::bad_request(e),
     }
+}
+
+/// What a `POST /cli/skin/roles/paths` body asks for (`download`
+/// normalized here for the widening check; the store normalizes the rest).
+struct PathsBody {
+    download_sent: bool,
+    sent_download: Vec<String>,
+    folders_sent: bool,
+    read: Vec<String>,
+    write: Vec<String>,
+    upload_dir: Option<String>,
+    upload: Vec<String>,
 }
 
 pub fn handle_roles_remove(body: &[u8], actor: &str) -> CliResponse {

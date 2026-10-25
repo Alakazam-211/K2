@@ -1300,9 +1300,92 @@ fn upload_target(
                 return Err(r);
             }
             let segs = k2_core::skin::paths::rel_segments(&folder).map_err(CliResponse::bad_request)?;
-            Ok((scope, format!("{}/{user}", segs.join("/")), PathNeed::Upload))
+            // Review A1: always `<drop root>/<user>/<rest>`, the root being
+            // the outermost drop or write folder holding `dir`, so the
+            // uploader's name is the first segment under every root: `dir`
+            // can add subfolders inside the guest's own folder, never reach
+            // another person's.
+            let Some(root) = k2_core::skin::paths::drop_root(&scope, &segs) else {
+                return Err(scope_refused(PathNeed::Upload));
+            };
+            let root_len = root.split('/').count();
+            let mut landing = vec![root, user.clone()];
+            landing.extend(segs[root_len..].iter().cloned());
+            Ok((scope, landing.join("/"), PathNeed::Upload))
         }
     }
+}
+
+/// Review A4: per guest and room, the drop folders hold at most this many
+/// files (`K2_DROP_MAX_FILES`) …
+pub const DROP_MAX_FILES_DEFAULT: u64 = 1_000;
+/// … and this many bytes in all, chunk parts included (`K2_DROP_MAX_BYTES`).
+pub const DROP_MAX_BYTES_DEFAULT: u64 = 2 * 1024 * 1024 * 1024;
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    match std::env::var(key).ok().map(|v| v.trim().parse::<u64>()) {
+        Some(Ok(n)) if n > 0 => n,
+        _ => default,
+    }
+}
+
+/// The drop caps in force: `(files, bytes)`.
+pub fn drop_limits() -> (u64, u64) {
+    (env_u64("K2_DROP_MAX_FILES", DROP_MAX_FILES_DEFAULT), env_u64("K2_DROP_MAX_BYTES", DROP_MAX_BYTES_DEFAULT))
+}
+
+/// Files and bytes under `dir` (never following a symlink; a link counts
+/// as one entry of its own size). Stops early once past `stop_files`.
+fn tally(dir: &Path, files: &mut u64, bytes: &mut u64, stop_files: u64) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        if *files > stop_files {
+            return;
+        }
+        let Ok(m) = std::fs::symlink_metadata(e.path()) else { continue };
+        if m.file_type().is_dir() {
+            tally(&e.path(), files, bytes, stop_files);
+        } else {
+            *files += 1;
+            *bytes += m.len();
+        }
+    }
+}
+
+/// Review A4: refuse an upload-only drop that would take this guest past
+/// its caps in this room: every `<root>/<user>` of the line's drop and
+/// write folders, counted together. `add_files`/`add_bytes` are what this
+/// request adds. The refusal names only the guest's own totals.
+fn drop_quota_check(resolved: &SkinWorkspace, scope: &RoomPathScope, user: &str, add_files: u64, add_bytes: u64) -> Option<CliResponse> {
+    let (max_files, max_bytes) = drop_limits();
+    let Ok(root) = Path::new(&resolved.path).canonicalize() else {
+        return Some(CliResponse::internal_error("workspace root unavailable"));
+    };
+    let (mut files, mut bytes) = (0u64, 0u64);
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for f in scope.write.iter().chain(scope.upload.iter()) {
+        let mine = root.join(f).join(user);
+        let Ok(canon) = mine.canonicalize() else { continue };
+        if !canon.starts_with(&root) || seen.iter().any(|s| canon.starts_with(s) || s.starts_with(&canon)) {
+            continue;
+        }
+        tally(&canon, &mut files, &mut bytes, max_files);
+        seen.push(canon);
+    }
+    if files + add_files > max_files || bytes.saturating_add(add_bytes) > max_bytes {
+        return Some(CliResponse {
+            status: "413 Payload Too Large",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": "too_large",
+                "message": format!(
+                    "your drop folders in this room are full: {files} files, {bytes} bytes (at most {max_files} files and {max_bytes} bytes); ask the owner to clear them"
+                ),
+            })
+            .to_string(),
+        });
+    }
+    None
 }
 
 fn skin_json_workspace(v: &serde_json::Value) -> Result<String, CliResponse> {
@@ -1458,18 +1541,26 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
     ) {
         return r;
     }
-    let abs_dir = match mode {
+    let abs_dir = match &mode {
         UploadMode::Write => jailed_dir.to_string_lossy().to_string(),
         // An upload-only drop makes its own subfolder through the jail
         // (never through a symlink out), then checks where it landed.
-        UploadMode::Drop { .. } => {
+        UploadMode::Drop { user } => {
+            if let Some(r) = drop_quota_check(&resolved, &scope, user, 1, bytes.len() as u64) {
+                return r;
+            }
             let root = match Path::new(&resolved.path).canonicalize() {
                 Ok(r) => r,
                 Err(e) => return CliResponse::internal_error(format!("workspace root unavailable: {e}")),
             };
+            // Any mkdir failure (a file in the way, a link out) is the
+            // plain missing-cap 403: no "not a folder" oracle (review A1).
             let canon = match jail_mkdir_p(&root, &dir) {
                 Ok(d) => d,
-                Err(e) => return CliResponse::bad_request(e),
+                Err(e) => {
+                    k2_core::log_debug!("[fs/upload-binary] drop mkdir refused for {user}: {e}");
+                    return scope_refused(PathNeed::Upload);
+                }
             };
             if let Some(r) = refuse_protected_upload(pass, &scope, &resolved, &dir, &canon, true, need) {
                 return r;
@@ -1744,8 +1835,21 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
             fsc::MAX_UPLOAD_CHUNK_SIZE
         )));
     }
+    if let UploadMode::Drop { user } = &mode {
+        // Review A4: the first chunk counts a new file and its declared
+        // size; every chunk counts its own bytes.
+        let (add_files, add_bytes) = if offset == 0 { (1, total_bytes.unwrap_or(bytes.len() as u64)) } else { (0, bytes.len() as u64) };
+        if let Some(r) = drop_quota_check(&resolved, &scope, user, add_files, add_bytes) {
+            return r;
+        }
+    }
     let canon_dir = match jail_mkdir_p(&root, &dir) {
         Ok(d) => d,
+        // An upload-only drop gets no "not a folder" oracle (review A1).
+        Err(e) if matches!(mode, UploadMode::Drop { .. }) => {
+            k2_core::log_debug!("[fs/upload-chunk] drop mkdir refused: {e}");
+            return scope_refused(PathNeed::Upload);
+        }
         Err(e) => return CliResponse::bad_request(e),
     };
     if let Some(r) = refuse_protected_upload(pass, &scope, &resolved, &dir, &canon_dir, true, need) {

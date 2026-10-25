@@ -231,10 +231,17 @@ pub fn handle_read(route: &str, pass: Option<SkinPass>, link: Option<&OnLink>, i
         return refusal(&Refusal::NotFound);
     }
     match route {
-        APP_ROOMS_ROUTE => match gr::app_rooms(&app) {
-            Ok(v) => CliResponse::ok_json(serde_json::to_string(&v).unwrap_or_else(|_| "{}".into())),
-            Err(e) => refusal(&Refusal::Store(e)),
-        },
+        APP_ROOMS_ROUTE => {
+            // Review B4: a light limit of its own (60/min per App), apart
+            // from the guest-rooms calls' budget.
+            if let Err(e) = gr::rate_take(&gr::app_rooms_rate_key(&app)) {
+                return refusal(&e);
+            }
+            match gr::app_rooms(&app) {
+                Ok(v) => CliResponse::ok_json(serde_json::to_string(&v).unwrap_or_else(|_| "{}".into())),
+                Err(e) => refusal(&Refusal::Store(e)),
+            }
+        }
         LIST_ROUTE => {
             match gr::get_grant(&app) {
                 Ok(Some(_)) => {}

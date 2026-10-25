@@ -214,6 +214,22 @@ pub fn allows(scope: &RoomPathScope, rel: &[String], need: PathNeed) -> bool {
     }
 }
 
+/// The drop root an upload-only drop at `rel` (already split) lands under:
+/// the OUTERMOST write or drop folder holding `rel` (0.46.4 review A1).
+/// The file then lands in `<root>/<username>/<rest of rel>`, so the
+/// uploader's own name is always the first segment under the root and no
+/// `dir` can reach another person's subfolder. `None` = outside every
+/// write and drop folder.
+pub fn drop_root(scope: &RoomPathScope, rel: &[String]) -> Option<String> {
+    scope
+        .write
+        .iter()
+        .chain(scope.upload.iter())
+        .filter(|f| is_inside(f, rel))
+        .min_by_key(|f| folder_segments(f).len())
+        .cloned()
+}
+
 /// Is the room-relative `rel` (already split) inside one of the line's
 /// download entries (AC15)? A file entry matches itself exactly (the same
 /// segment rule as a folder: `reports/a.pdf` never matches
@@ -365,16 +381,68 @@ pub(super) fn step5_room_paths_column(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// One room line's stored folders on a role (`RoomPathScope::default()`
-/// when the line has none). `Err` when the role is unknown or its stored
-/// scope can't be read.
-pub fn role_line_paths(id_or_name: &str, project_id: &str) -> Result<RoomPathScope, String> {
-    with_conn(|conn| {
-        let Some(role) = role_by_id_or_name(conn, id_or_name)? else {
+/// Why [`update_role_room_paths`] wrote nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathsUpdateError {
+    /// The caller's rule refused the change (the daemon's person-only
+    /// download widening: the entry it would add).
+    Refused(String),
+    /// A bad role, room or folder, or storage.
+    Bad(String),
+}
+
+/// Read one room line's stored folders, let `f` build the new line from
+/// them (or refuse), and store it: ONE skin.db transaction under the store
+/// lock, so no other writer lands between the read and the write (0.46.4
+/// review A5: the download-widening check sees exactly what it replaces).
+pub fn update_role_room_paths<F>(id_or_name: &str, project_id: &str, f: F) -> Result<SkinRole, PathsUpdateError>
+where
+    F: FnOnce(&RoomPathScope) -> Result<RoomPathScope, PathsUpdateError>,
+{
+    let rooms = normalize_room_ids(std::slice::from_ref(&project_id.to_string()));
+    let Some(project_id) = rooms.into_iter().next() else {
+        return Err(PathsUpdateError::Bad("missing workspace".to_string()));
+    };
+    let mut refused: Option<PathsUpdateError> = None;
+    let out = with_conn(|conn| {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("skin role paths: {e}"))?;
+        let Some(mut role) = role_by_id_or_name(&tx, id_or_name)? else {
             return Err(format!("unknown skin role '{id_or_name}'"));
         };
-        Ok(role_room_paths(conn, &role.id)?.get(project_id.trim()).cloned().unwrap_or_default())
+        if !role.room_policy.contains_key(&project_id) {
+            return Err(format!(
+                "role '{}' has no line for that room; add it first with k2 app role room {} <room> --caps …",
+                role.name, role.name
+            ));
+        }
+        let mut paths = role_room_paths(&tx, &role.id)?;
+        let stored = paths.get(&project_id).cloned().unwrap_or_default();
+        let next = match f(&stored) {
+            Ok(n) => normalize_scope(&n)?,
+            Err(e) => {
+                refused = Some(e);
+                return Ok(None);
+            }
+        };
+        if next.is_empty() {
+            paths.remove(&project_id);
+        } else {
+            paths.insert(project_id.clone(), next);
+        }
+        persist_role_paths(&tx, &role.id, &paths)?;
+        tx.commit().map_err(|e| format!("skin role paths commit: {e}"))?;
+        role.room_paths = paths;
+        Ok(Some(role))
     })
+    .map_err(PathsUpdateError::Bad)?;
+    match (out, refused) {
+        (Some(role), _) => {
+            crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+            Ok(attach_role_handles(role))
+        }
+        (None, Some(e)) => Err(e),
+        (None, None) => Err(PathsUpdateError::Bad("skin role paths: nothing written".to_string())),
+    }
 }
 
 /// Set one room line's folders on a role (`k2 app role paths`). The room
@@ -596,6 +664,17 @@ mod tests {
     }
 
     #[test]
+    fn drop_root_is_the_outermost_folder_holding_the_path() {
+        let s = drop_scope(&[], &["Work"], &["Inbox", "Inbox/vip"], None).unwrap();
+        assert_eq!(drop_root(&s, &segs("Inbox")).as_deref(), Some("Inbox"));
+        assert_eq!(drop_root(&s, &segs("Inbox/vip/x")).as_deref(), Some("Inbox"), "outermost, so a user's folder is always first");
+        assert_eq!(drop_root(&s, &segs("Inbox/dana")).as_deref(), Some("Inbox"));
+        assert_eq!(drop_root(&s, &segs("Work/a")).as_deref(), Some("Work"));
+        assert_eq!(drop_root(&s, &segs("Other")), None);
+        assert_eq!(drop_root(&s, &segs(".")), None);
+    }
+
+    #[test]
     fn download_widening_finds_the_first_uncovered_entry() {
         let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(download_widening(&v(&[]), &v(&[])), None);
@@ -713,6 +792,30 @@ mod tests {
         let platform = resolve_skin_token(&platform).unwrap();
         assert_eq!(platform.room_paths, PassPaths::Whole);
         assert_eq!(platform.path_scope(&docs).unwrap(), RoomPathScope::default());
+    }
+
+    /// Review A5: one transaction; a refusal from the caller's rule writes
+    /// nothing, and the rule sees exactly the stored line it replaces.
+    #[test]
+    fn update_role_room_paths_reads_checks_and_writes_at_once() {
+        use super::super::*;
+        let _home = crate::test_env::TempHome::new();
+        let docs = uuid::Uuid::new_v4().to_string();
+        create_role("tx-role", &policy(&[(&docs, &[CAP_FILES_READ])])).unwrap();
+        let first = update_role_room_paths("tx-role", &docs, |stored| {
+            assert_eq!(*stored, RoomPathScope::default());
+            Ok(RoomPathScope { download: vec!["reports".into()], ..Default::default() })
+        })
+        .unwrap();
+        assert_eq!(first.room_paths[&docs].download, ["reports"]);
+        let refused = update_role_room_paths("tx-role", &docs, |stored| {
+            assert_eq!(stored.download, ["reports"], "the rule sees the stored line");
+            Err(PathsUpdateError::Refused("private".into()))
+        });
+        assert_eq!(refused.unwrap_err(), PathsUpdateError::Refused("private".into()));
+        assert_eq!(find_role("tx-role").unwrap().unwrap().room_paths[&docs].download, ["reports"], "nothing written");
+        let bad = update_role_room_paths("tx-role", &uuid::Uuid::new_v4().to_string(), |_| Ok(RoomPathScope::default()));
+        assert!(matches!(bad, Err(PathsUpdateError::Bad(ref e)) if e.contains("no line for that room")), "{bad:?}");
     }
 
     /// RS-A3 fail closed: a stored scope that doesn't parse, or a session

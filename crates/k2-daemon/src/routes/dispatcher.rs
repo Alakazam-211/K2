@@ -12780,6 +12780,12 @@ async fn handle_one_request(
                     params.insert("project".to_string(), t.clone());
                     params.insert("project_path".to_string(), t);
                 }
+            } else {
+                // 0.46.4 review B2: the server-set identity keys never come
+                // from a TCP query (only `stamp_principal` and the cell
+                // socket write them).
+                params.remove(crate::caller_workspace::PRINCIPAL_BOUND_KEY);
+                params.remove("cell_session_id");
             }
             let p_owned = p.to_string();
             // thread-read-v1: a person's `thread/latest` rows carry their

@@ -148,6 +148,35 @@ async fn drop_folders_take_uploads_into_each_guests_own_subfolder_and_nothing_el
     assert_eq!(r.json(), json!({ "path": format!("Inbox/{erin_user}/big.bin"), "done": true, "size": 16 }));
     assert_eq!(std::fs::read(docs.path.join(format!("Inbox/{erin_user}/big.bin"))).unwrap(), b"0123456789abcdef");
 
+    // Review A1: a `dir` naming someone else's folder lands in the guest's
+    // OWN folder (`<root>/<user>/<rest>`), never in theirs, and whether a
+    // file or folder exists there never changes the answer.
+    let dana_before: Vec<_> = {
+        let mut v: Vec<_> = std::fs::read_dir(docs.path.join(format!("Inbox/{dana_user}"))).unwrap().map(|e| e.unwrap().file_name()).collect();
+        v.sort();
+        v
+    };
+    for (dir, want) in [
+        (format!("Inbox/{dana_user}"), format!("Inbox/{erin_user}/{dana_user}/probe.bin")),
+        (format!("Inbox/{dana_user}/a.pdf"), format!("Inbox/{erin_user}/{dana_user}/a.pdf/probe.bin")),
+        (format!("Inbox/{dana_user}/no-such-file"), format!("Inbox/{erin_user}/{dana_user}/no-such-file/probe.bin")),
+    ] {
+        let r = upload_binary(port, &erin, &docs, Some(&dir), "probe.bin", b"p").await;
+        assert_eq!(r.status, 200, "{dir}: {}", r.body);
+        assert_eq!(r.json()["path"], want, "{dir}: lands in erin's own folder");
+    }
+    let dana_after: Vec<_> = {
+        let mut v: Vec<_> = std::fs::read_dir(docs.path.join(format!("Inbox/{dana_user}"))).unwrap().map(|e| e.unwrap().file_name()).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(dana_after, dana_before, "nothing landed in dana's folder");
+    assert!(docs.path.join(format!("Inbox/{dana_user}/a.pdf")).is_file(), "dana's file is still a file");
+    // A file of the guest's own in the way of its own subfolder: the plain
+    // missing-cap 403, never a "not a folder" 400.
+    let r = upload_binary(port, &erin, &docs, Some("Inbox/a.pdf"), "x.bin", b"x").await;
+    assert_missing_cap(&r, "files:upload", "own file in the way");
+
     // Outside the drop folder: the missing files:upload 403, nothing lands.
     for dir in ["jobs/J2", ".", "Inboxes", "top.txt"] {
         let r = upload_binary(port, &dana, &docs, Some(dir), "x.bin", b"x").await;
@@ -237,7 +266,7 @@ async fn nowhere_to_drop_links_out_and_write_holders_keep_todays_landing() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["path"], format!("intake/{user}/x.bin"));
     let r = upload_binary(port, &pass, &docs, Some("intake/batch"), "y.bin", b"y").await;
-    assert_eq!(r.json()["path"], format!("intake/batch/{user}/y.bin"));
+    assert_eq!(r.json()["path"], format!("intake/{user}/batch/y.bin"), "a subfolder goes under the guest's own folder (review A1)");
     let r = upload_binary(port, &pass, &docs, Some("jobs/J2"), "x.bin", b"x").await;
     assert_missing_cap(&r, "files:upload", "unscoped line, outside its uploadDir");
     // ...and an uploadDir alone walls nothing for the read/write doors (it
@@ -287,6 +316,46 @@ async fn nowhere_to_drop_links_out_and_write_holders_keep_todays_landing() {
     // (Refused at the dispatcher, as before: a platform pass needs
     // files:write at the pass level for the upload doors.)
     assert_missing_cap(&r, "files:write", "a platform pass can't drop");
+}
+
+/// Review A4: per guest and room, drops stop at the file and byte caps
+/// (`K2_DROP_MAX_FILES`, `K2_DROP_MAX_BYTES`), counted over the guest's own
+/// folders only; another guest is unaffected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drops_stop_at_each_guests_caps() {
+    let env = setup(&[("K2_DROP_MAX_FILES", "2"), ("K2_DROP_MAX_BYTES", "100")]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let docs = seed_ws(&env, &format!("cap{tag}"));
+    let role = format!("capped{tag}");
+    role_with_rooms(port, &role, &[(&docs, &["files:upload"])]).await;
+    owner_ok(port, "/cli/skin/roles/paths", json!({ "name": role, "handle": docs.handle, "upload": ["Inbox"], "uploadDir": "Inbox" })).await;
+    let a = login_with_role(port, &format!("capa{tag}"), &role).await;
+    let b = login_with_role(port, &format!("capb{tag}"), &role).await;
+    for name in ["1.bin", "2.bin"] {
+        let r = upload_binary(port, &a, &docs, None, name, b"0123456789").await;
+        assert_eq!(r.status, 200, "{name}: {}", r.body);
+    }
+    let r = upload_binary(port, &a, &docs, None, "3.bin", b"x").await;
+    assert_eq!(r.status, 413, "the third file is over the cap: {}", r.body);
+    assert_eq!(r.json()["error"], "too_large");
+    assert!(!docs.path.join(format!("Inbox/capa{tag}/3.bin")).exists());
+    // Bytes: one 101-byte file is over 100.
+    let r = upload_binary(port, &b, &docs, None, "big.bin", &[7u8; 101]).await;
+    assert_eq!(r.status, 413, "{}", r.body);
+    // The other guest's own count starts at zero.
+    let r = upload_binary(port, &b, &docs, None, "ok.bin", b"fine").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // Chunked: the first chunk counts the declared size.
+    let r = post(
+        port,
+        "/cli/fs/upload-chunk",
+        &b,
+        json!({ "workspace": docs.handle, "filename": "c.bin", "upload_id": "u1", "offset": 0, "base64": b64(b"x"), "is_last": false, "total_bytes": 500 }),
+    )
+    .await;
+    assert_eq!(r.status, 413, "{}", r.body);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

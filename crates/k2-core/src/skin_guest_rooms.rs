@@ -339,8 +339,32 @@ fn rate_buckets() -> &'static Mutex<HashMap<String, VecDeque<Instant>>> {
     B.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Count one call for `app`; refuse past [`RATE_PER_MIN`] in the last minute.
+thread_local! {
+    static OWNER_BUDGET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` as the owner (0.46.4 review B4): the owner's CLI and an
+/// owner-rights Garden widget don't spend the App's own 60/min budget, so
+/// they can never starve the App. Every rule but the rate still applies.
+pub fn with_owner_budget<T>(f: impl FnOnce() -> T) -> T {
+    let before = OWNER_BUDGET.with(|c| c.replace(true));
+    let out = f();
+    OWNER_BUDGET.with(|c| c.set(before));
+    out
+}
+
+/// The bucket key of `app.rooms` (review B4: its own light budget, apart
+/// from the guest-rooms calls).
+pub fn app_rooms_rate_key(app: &str) -> String {
+    format!("app-rooms:{}", app.trim())
+}
+
+/// Count one call for `app`; refuse past [`RATE_PER_MIN`] in the last
+/// minute. Inside [`with_owner_budget`] nothing is counted.
 pub fn rate_take(app: &str) -> Result<(), Refusal> {
+    if OWNER_BUDGET.with(|c| c.get()) {
+        return Ok(());
+    }
     let now = Instant::now();
     let mut all = rate_buckets().lock().unwrap_or_else(|p| p.into_inner());
     let q = all.entry(app.trim().to_string()).or_default();

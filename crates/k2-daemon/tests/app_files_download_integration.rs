@@ -73,6 +73,13 @@ fn seed(docs: &Ws) {
     write(&docs.path, "private/secret.txt", b"private");
     write(&docs.path, ".k2/AGENT.md", b"agent config");
     std::os::unix::fs::symlink(docs.path.join("private"), docs.path.join("public/to-private")).unwrap();
+    // Review A3: never listed or served, by name or by content.
+    write(&docs.path, "public/.git/config", b"[core]\n");
+    write(&docs.path, "public/.git/HEAD", b"ref: refs/heads/main\n");
+    write(&docs.path, "public/.aws/credentials", b"[default]\n");
+    write(&docs.path, "public/infra/terraform.tfstate", b"{}");
+    write(&docs.path, "public/AuthKey_X.p8", b"key");
+    write(&docs.path, "public/notes-with-key.txt", b"token: ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -130,9 +137,21 @@ async fn download_entries_expose_exactly_their_files_and_nothing_else() {
         let r = download(port, &pass, &docs, rel, "").await;
         assert_missing_cap(&r, "files:download", rel);
     }
-    // A folder inside an entry is no file.
-    let r = download(port, &pass, &docs, "public/sub", "").await;
-    assert_eq!(r.status, 400, "{}", r.body);
+    // Review A6: inside an entry, a folder, a missing file and a link out
+    // are all the same missing-cap 403; so are the A3 secrets.
+    for rel in [
+        "public/sub",
+        "public/no-such-file.txt",
+        "public/to-private/secret.txt",
+        "public/.git/config",
+        "public/.aws/credentials",
+        "public/infra/terraform.tfstate",
+        "public/AuthKey_X.p8",
+        "public/notes-with-key.txt",
+    ] {
+        let r = download(port, &pass, &docs, rel, "").await;
+        assert_missing_cap(&r, "files:download", rel);
+    }
     // Every read door is the plain files:read 403 (no files:read).
     for route in ["/cli/fs/read-dir", "/cli/fs/read-file", "/cli/fs/read-binary", "/cli/fs/stat"] {
         let r = get(port, route, &pass, &format!("workspace={}&path={}", enc(&docs.handle), enc("public/a.txt"))).await;
@@ -147,7 +166,7 @@ async fn download_entries_expose_exactly_their_files_and_nothing_else() {
     assert_eq!(v["truncated"], false);
     let mut rels: Vec<String> = v["items"].as_array().unwrap().iter().map(|i| i["relPath"].as_str().unwrap().to_string()).collect();
     rels.sort();
-    assert_eq!(rels, ["public/a.txt", "public/sub/b.txt", "reports/2026-10.pdf"]);
+    assert_eq!(rels, ["public/a.txt", "public/sub/b.txt", "reports/2026-10.pdf"], ".git, secrets and the content-flagged file are never listed");
     let item = v["items"].as_array().unwrap().iter().find(|i| i["relPath"] == "public/a.txt").cloned().unwrap();
     assert_eq!((item["name"].as_str(), item["size"].as_u64(), item["mime"].as_str()), (Some("a.txt"), Some(8), Some("text/plain")));
     assert!(item["modifiedAt"].as_u64().is_some_and(|t| t > 1_000_000_000_000), "{item}");
@@ -169,6 +188,16 @@ async fn download_entries_expose_exactly_their_files_and_nothing_else() {
     // Three saved chunks (the full file, its offset-5 chunk, public/sub/b.txt);
     // the refused and 400 calls leave none.
     assert_eq!(lines.len(), 3, "one audit line per saved chunk: {audit:?}");
+    // Review A6: refusals and listings are audited too.
+    let refusals = audit
+        .iter()
+        .filter(|e| e["event"] == "files.download_refused" && e["user"] == format!("guest:{user}").as_str())
+        .count();
+    assert!(refusals >= 15, "every refused save leaves a line: {refusals}");
+    assert!(
+        audit.iter().any(|e| e["event"] == "files.downloads" && e["user"] == format!("guest:{user}").as_str()),
+        "the listing leaves a line"
+    );
     let report_lines = lines.iter().filter(|e| e["outcome"].as_str().is_some_and(|o| o.contains("reports/2026-10.pdf"))).count();
     assert_eq!(report_lines, 2, "{lines:?}");
     assert!(lines.iter().all(|e| e["outcome"].as_str().is_some_and(|o| o.contains("via=entry"))), "{lines:?}");

@@ -12,8 +12,12 @@
 //!
 //! Keys ([`key_for`]): an App guest login `guest:<principal>` (one person
 //! across devices and Apps), any other `k2skn_` pass `pass:<id>`, a Connect
-//! login `user:<name>`, an agent passport `agent:<workspace id>` (a cell
-//! without a stamped principal `cell:<session>`). The owner token is never
+//! login `user:<name>`, an agent passport or cell `agent:<workspace id>`,
+//! each value hashed to a fixed length. Only server-set identity counts:
+//! the resolved pass, the request's principal slot and its login, never a
+//! raw query parameter (0.46.4 review B2: a Connect login sending
+//! `principal_bound=1&project_id=…` or a fresh `cell_session_id` neither
+//! drains an agent's bucket nor gets a new one). The owner token is never
 //! limited. Refusal: 429 `{"error":"rate_limited","retryAfterMs":N,
 //! "retryAfterSecs":⌈N/1000⌉}` (the daemon's `retryAfterMs` convention plus
 //! the field the server SDK reads; the SDK doesn't retry on its own).
@@ -38,24 +42,37 @@ pub const IDLE: Duration = Duration::from_secs(60);
 /// At most this many keys; past it the least recently used is dropped.
 pub const MAX_KEYS: usize = 10_000;
 
+/// A bucket key: `kind:` plus the first 32 hex digits of the value's
+/// SHA-256, so every key has the same short length (B2).
+pub fn hashed_key(kind: &str, value: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(value.as_bytes());
+    let hex: String = d.iter().take(16).map(|b| format!("{b:02x}")).collect();
+    format!("{kind}:{hex}")
+}
+
 /// Who is calling, for the bucket key. `None` = the owner (never limited).
+/// Server-set identity only, in this order: the resolved pass; the
+/// request's principal slot (an agent passport or cell, set by the
+/// dispatcher and the cell socket); the request's login (a Connect login:
+/// its raw query parameters never move it to another key). Only when none
+/// of those names a caller (the owner token, or a handler called with a
+/// server-stamped map and no slot) are stamped params read; there they can
+/// only move the owner's own calls under a key, never take a login's away.
 pub fn key_for(params: &std::collections::HashMap<String, String>, pass: Option<&k2_core::skin::SkinPass>) -> Option<String> {
     if let Some(pass) = pass {
         let principal = pass.principal_id.as_deref().map(str::trim).filter(|p| !p.is_empty());
         return Some(match principal {
-            Some(p) if pass.session => format!("guest:{p}"),
-            _ => format!("pass:{}", pass.id),
+            Some(p) if pass.session => hashed_key("guest", p),
+            _ => hashed_key("pass", &pass.id),
         });
     }
-    if let Some(p) = crate::caller_workspace::principal_from_params(params) {
-        return Some(format!("agent:{}", p.workspace_uuid));
-    }
-    if let Some(cell) = params.get("cell_session_id").map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        return Some(format!("cell:{cell}"));
+    if let Some(p) = crate::caller_workspace::request_principal() {
+        return Some(hashed_key("agent", &p.workspace_uuid));
     }
     match crate::read_routes::request_login() {
-        Some(login) if login != "owner" => Some(format!("user:{login}")),
-        _ => None,
+        Some(login) if login != "owner" => Some(hashed_key("user", &login)),
+        _ => crate::caller_workspace::principal_from_params(params).map(|p| hashed_key("agent", &p.workspace_uuid)),
     }
 }
 

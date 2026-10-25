@@ -193,6 +193,16 @@ fn core_refusal(e: gr::Refusal) -> Refusal {
     Refusal { code: e.code(), status: e.status(), hint: e.hint(), extra }
 }
 
+/// Review B4: the owner's calls don't spend the App's 60/min budget; an
+/// agent's do (it acts for its own App).
+fn owner_budget<T>(who: &Who, f: impl FnOnce() -> T) -> T {
+    if owner_rights(who) {
+        gr::with_owner_budget(f)
+    } else {
+        f()
+    }
+}
+
 /// GET `/cli/app/guest/rooms?app=&username=`.
 fn guest_read(who: &Who, params: &HashMap<String, String>) -> R<J> {
     need_credential(who)?;
@@ -200,7 +210,7 @@ fn guest_read(who: &Who, params: &HashMap<String, String>) -> R<J> {
     ceiling_for(who, &t)?;
     let user = params.get("username").map(String::as_str).filter(|u| !u.trim().is_empty());
     let user = user.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the guest (username)"))?;
-    let view = gr::read(&t.service_id, user).map_err(core_refusal)?;
+    let view = owner_budget(who, || gr::read(&t.service_id, user)).map_err(core_refusal)?;
     serde_json::to_value(view).map_err(|e| store(e.to_string()))
 }
 
@@ -228,7 +238,7 @@ fn guest_list(who: &Who, params: &HashMap<String, String>) -> R<J> {
         Some(n) => Some(n.parse::<usize>().map_err(|_| no(codes::BAD_REQUEST, 400, format!("limit is a number, 1..={}", gr::LIST_MAX)))?),
     };
     let cursor = params.get("cursor").map(String::as_str).unwrap_or("");
-    let page = gr::list(&t.service_id, cursor, limit).map_err(core_refusal)?;
+    let page = owner_budget(who, || gr::list(&t.service_id, cursor, limit)).map_err(core_refusal)?;
     serde_json::to_value(page).map_err(|e| store(e.to_string()))
 }
 
@@ -241,7 +251,7 @@ fn guest_set(who: &Who, body: &[u8]) -> R<J> {
     let user = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the guest (username)"))?;
     let rooms = crate::guest_rooms_routes::rooms_of(&v)
         .ok_or_else(|| no(codes::BAD_REQUEST, 400, "rooms is required: handles or ids ([] takes every room away)"))?;
-    let out = gr::set(&t.service_id, user, &rooms, &ceiling, &actor(who), "cli").map_err(core_refusal)?;
+    let out = owner_budget(who, || gr::set(&t.service_id, user, &rooms, &ceiling, &actor(who), "cli")).map_err(core_refusal)?;
     let mut j = serde_json::to_value(&out.view).map_err(|e| store(e.to_string()))?;
     j["before"] = json!(out.before);
     j["beforeHandles"] = json!(k2_core::skin::handles_for_project_ids(&out.before));

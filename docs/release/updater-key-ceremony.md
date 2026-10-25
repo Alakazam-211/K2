@@ -134,9 +134,10 @@ rm ~/.tauri/k2-updater.key ~/.tauri/k2so-updater.key
 - **Typo in a password:** the self-test fails. Delete the keychain item
   (`security delete-generic-password -s k2-updater-signing-u2`) and
   `~/.k2-updater/k2-updater-u2.*`, then run `generate` again.
-- **U2 lost (disk dies):** restore U3 from the password manager onto z3mbpZ as
-  the signing key and ship a release signed with U3, then run a new
-  ceremony (U3 becomes primary, a new backup U4), the same way the root-helper
-  key rotates.
+- **U2 lost (disk dies):** installs already trust U3, so nothing is
+  stranded. Make a new backup U4, run `pubkeys <U3 line> <U4 line>` (U3
+  becomes the primary), put U3's secret key from the password manager at
+  `~/.k2-updater/k2-updater-u2.key` (the signing slot) and its password in
+  the `k2-updater-signing-u2` keychain item, and release as usual.
 - **U2 stolen:** an emergency release signed with U3 that drops U2 from
   `UPDATER_KEYS`, plus a new backup.

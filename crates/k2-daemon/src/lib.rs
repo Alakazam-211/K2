@@ -219,6 +219,8 @@ pub mod activity_events;
 pub mod activity_routes;
 // S6: the Thread working strip (turns, ephemeral `activity` frames).
 pub mod thread_activity;
+/// N1 (prd-app-caps-0464-v1 AC29, 0.46.4): the catch-up GET's per-caller limit.
+pub mod thread_activity_limit;
 pub mod hook_install;
 pub mod session_events;
 pub mod session_events_ws;

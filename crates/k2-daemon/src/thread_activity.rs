@@ -1365,9 +1365,25 @@ fn wait_for_wake(timeout: Duration) {
     *guard = false;
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test seam (N1, prd-app-caps-0464-v1 §6.3): how many times this
+    /// thread took the tracker lock through [`run`]. Per thread, so
+    /// parallel tests' turns never count.
+    static RUN_CALLS_HERE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// [`run`] calls made on this thread (unit tests).
+#[cfg(test)]
+pub(crate) fn run_calls_here() -> u64 {
+    RUN_CALLS_HERE.with(|c| c.get())
+}
+
 /// Run one input under the tracker lock and publish what it sends. Frames
 /// go out under the lock, so their order is the tracker's order.
 fn run(f: impl FnOnce(&mut Tracker, i64) -> Vec<Out>) {
+    #[cfg(test)]
+    RUN_CALLS_HERE.with(|c| c.set(c.get() + 1));
     let now = now_ms();
     {
         let mut t = tracker().lock();

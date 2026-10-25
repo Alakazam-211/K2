@@ -3348,8 +3348,20 @@ fn display_addr_for(
 /// `activity:read` in that room (coded `cap_not_granted` naming the cap),
 /// and only the counts-only guest projection
 /// (`thread_activity::guest_turn_body`), never the owner body.
+///
+/// N1 (0.46.4, AC29): every caller but the owner passes the per-caller
+/// bucket first (`thread_activity_limit`), before any address resolution
+/// or tracker work, so a refused call never takes the tracker lock. A HEAD
+/// that reaches this handler counts like a GET (the main port answers
+/// HEAD 405 before any handler).
 fn handle_get_thread_activity(params: &HashMap<String, String>) -> CliResponse {
-    if let Some(pass) = request_skin() {
+    let skin = request_skin();
+    if let Some(key) = crate::thread_activity_limit::key_for(params, skin.as_ref()) {
+        if let Err(ms) = crate::thread_activity_limit::take(&key) {
+            return crate::thread_activity_limit::refused(ms);
+        }
+    }
+    if let Some(pass) = skin {
         return guest_thread_activity(params, &pass);
     }
     let addr = str_param(params, "addr");
@@ -7681,4 +7693,8 @@ mod tests {
     // The Board context chip (thread-context-v1, 0.46.3 r10).
     #[path = "thread_context_tests.rs"]
     mod thread_context;
+
+    // N1: the activity catch-up GET's per-caller limit (0.46.4).
+    #[path = "activity_limit_tests.rs"]
+    mod activity_limit;
 }

@@ -37735,6 +37735,11 @@ THREAD EAR (thread:read + activity:read; K2 0.46.3+, thread-activity-ear-v1)
   gets exactly the frames it got before 0.46.3. The GET needs no opt-in.
   Catch-up: {"ok":true,"addr":"<handle>","conversation_id":"<id>",
              "turn":{…}|null}
+  Live state comes from the socket (thread.stream, ?ear=1); call the GET
+  only to catch up after a (re)connect. 0.46.4: 2 calls a second per
+  person or pass (bursts of 10; the owner is exempt), else 429
+  {"error":"rate_limited","retryAfterMs":N,"retryAfterSecs":S}. Back off;
+  the SDK doesn't retry on its own.
   turn / activity (exactly these keys):
     {"turnId":"<thread message id>","rev":3,"state":"working",
      "phase":"tool","phaseSince":1781812201000,"startedAt":1781812199000,

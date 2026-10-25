@@ -832,6 +832,7 @@ fn moves_dir(ctx: &Ctx) -> HResult<()> {
     // Re-check #1 R1: an owner passfile a killed helper left behind (one
     // move at a time, so any passfile here is stale).
     as_postgres(ctx, FIND, &[MOVES_DIR, "-maxdepth", "1", "-type", "f", "-name", ".k2pass-*", "-delete"], None)?;
+    as_postgres(ctx, FIND, &[MOVES_DIR, "-maxdepth", "1", "-type", "f", "-name", ".k2toc-*", "-delete"], None)?;
     Ok(())
 }
 
@@ -857,10 +858,62 @@ fn run_restore(ctx: &Ctx, section: &str, args: &[&str]) -> HResult<()> {
     Ok(())
 }
 
+/// The dump's table of contents split for the restore (0.46.4 drill H1):
+/// `(schemas, superuser, owner)` lists for `pg_restore -L`. Only
+/// extensions and their comments go to the superuser (they need it, and run
+/// no tenant code); the schemas go first, as the owner (an extension may
+/// live in one of them; empty then); every other entry is restored as the
+/// owner after the extensions. A line goes to the
+/// superuser list only when it is exactly an extension entry as
+/// `pg_restore -l` prints it (dump id; pg_extension's catalog oid; a plain
+/// extension name), so no tenant-chosen object name can put an entry there.
+pub(crate) fn split_toc(toc: &str) -> (String, String, String) {
+    fn ext_name_ok(n: &str) -> bool {
+        !n.is_empty() && n.len() <= 63 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+    }
+    fn superuser_line(l: &str) -> bool {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        let id_ok = f.first().and_then(|x| x.strip_suffix(';')).is_some_and(|x| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit()));
+        if !id_ok || f.len() < 6 || f[1].bytes().any(|b| !b.is_ascii_digit()) || f[2].bytes().any(|b| !b.is_ascii_digit()) {
+            return false;
+        }
+        // `<id>; 3079 <oid> EXTENSION - <name> [<owner>]`
+        let ext = f[1] == "3079" && f[3] == "EXTENSION" && f[4] == "-" && ext_name_ok(f[5]) && f.len() <= 7;
+        // `<id>; 0 0 COMMENT - EXTENSION <name> [<owner>]`
+        let comment = f.len() >= 7 && f.len() <= 8 && f[1] == "0" && f[2] == "0" && f[3] == "COMMENT" && f[4] == "-" && f[5] == "EXTENSION" && ext_name_ok(f[6]);
+        ext || comment
+    }
+    // `<id>; 2615 <oid> SCHEMA - <name> [<owner>]`: a bare CREATE SCHEMA.
+    fn schema_line(l: &str) -> bool {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        (f.len() == 6 || f.len() == 7) && f[0].strip_suffix(';').is_some_and(|x| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit())) && f[1] == "2615" && f[3] == "SCHEMA" && f[4] == "-"
+    }
+    let (mut schemas, mut su, mut own) = (String::new(), String::new(), String::new());
+    for l in toc.lines() {
+        if l.trim_start().starts_with(';') || l.trim().is_empty() {
+            continue;
+        }
+        let out = if superuser_line(l) {
+            &mut su
+        } else if schema_line(l) {
+            &mut schemas
+        } else {
+            &mut own
+        };
+        out.push_str(l);
+        out.push('\n');
+    }
+    (schemas, su, own)
+}
+
 /// `pg move-restore <to> <db> <tag>`, stdin [`MoveLogin`] (the database
-/// owner). No tenant code ever runs as the superuser (review #1 H1, #2 F2):
-/// - pre-data (DDL: schemas, tables, types, functions, ACLs) as postgres:
-///   nothing in it executes a tenant function;
+/// owner). No tenant code ever runs as the superuser (review #1 H1, #2 F2,
+/// and the 0.46.4 drill: restoring a generated column plans its expression,
+/// which runs an IMMUTABLE owner function with constant arguments as the
+/// restoring role, so pre-data as postgres made the owner a superuser):
+/// - pre-data: extensions alone as postgres ([`split_toc`]); every other
+///   entry (schemas, tables, types, functions, ACLs) as the owner, over
+///   loopback with its own password;
 /// - FORCE ROW LEVEL SECURITY lifted from the tables that have it;
 /// - data and post-data as the owner, over loopback with its own password
 ///   (CHECK and domain constraints, generated columns, triggers, index
@@ -910,35 +963,15 @@ pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, keep_force_o
     let restore = to.bin("pg_restore");
     let (d, r) = (db.as_str(), login.role.as_str());
 
-    // 1. pre-data as postgres.
-    run_restore(
-        ctx,
-        "pre-data",
-        &[
-            ENV,
-            "PGOPTIONS=-c search_path=pg_catalog,pg_temp -c role=none -c temp_file_limit=-1 -c statement_timeout=0 -c lock_timeout=0",
-            &restore,
-            "--section=pre-data",
-            "--exit-on-error",
-            "-h",
-            PG_SOCKET_DIR,
-            "-p",
-            &pt,
-            "-d",
-            d,
-            &file,
-        ],
-    )?;
-    // 2. FORCE off while the owner loads (it would hide its own rows).
-    let forced = sql_at(
-        ctx,
-        to,
-        dst.port,
-        d,
-        "SELECT coalesce(pg_catalog.string_agg(c.oid::text, ','), '') FROM pg_catalog.pg_class c WHERE c.relforcerowsecurity;\n",
-    )?;
-    let forced: Vec<u32> = forced.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    let force_sql = |on: bool| {
+    // 1. The table of contents, split: extensions for the superuser, the
+    // rest for the owner (lists in the postgres-only moves dir).
+    moves_dir(ctx)?;
+    let toc = as_postgres(ctx, &restore, &["-l", &file], None)?;
+    let (schema_list, su_list, own_list) = split_toc(&String::from_utf8_lossy(&toc.stdout));
+    let schema_file = format!("{MOVES_DIR}/.k2toc-schemas-{tag}");
+    let su_file = format!("{MOVES_DIR}/.k2toc-su-{tag}");
+    let own_file = format!("{MOVES_DIR}/.k2toc-own-{tag}");
+    let force_sql = |forced: &[u32], on: bool| {
         let list = forced.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
         format!(
             "DO $k2$DECLARE t oid; BEGIN FOREACH t IN ARRAY ARRAY[{list}]::oid[] LOOP \
@@ -946,6 +979,7 @@ pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, keep_force_o
             if on { "" } else { "NO" }
         )
     };
+    let mut forced: Vec<u32> = Vec::new();
     // FORCE, the owner's temp-file setting and the passfile come back in
     // one cleanup path, whatever fails (re-check #1 R1). A helper killed
     // mid-load leaves the passfile to the next `moves_dir` sweep; the
@@ -955,48 +989,88 @@ pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, keep_force_o
     let pass = format!("{MOVES_DIR}/.k2pass-{tag}");
     let (mut force_lifted, mut temp_set) = (false, false);
     let owner_steps = (|| -> HResult<()> {
-        if !forced.is_empty() {
-            force_lifted = true;
-            sql_at(ctx, to, dst.port, d, &force_sql(false))?;
-        }
+        as_postgres(ctx, DD, &[&format!("of={schema_file}"), "status=none"], Some(schema_list.as_bytes()))?;
+        as_postgres(ctx, DD, &[&format!("of={su_file}"), "status=none"], Some(su_list.as_bytes()))?;
+        as_postgres(ctx, DD, &[&format!("of={own_file}"), "status=none"], Some(own_list.as_bytes()))?;
         // The owner's sessions may need big temp files (index builds,
         // V40): for this database only, reset after.
         temp_set = true;
         sql_at(ctx, to, dst.port, "postgres", &format!("ALTER ROLE {quoted} SET temp_file_limit = -1;\n"))?;
-        // 3–4. data and post-data as the owner, its password in a 0600 file.
-        moves_dir(ctx)?;
+        // Its password in a 0600 file for every owner step.
         as_postgres(ctx, DD, &[&format!("of={pass}"), "status=none"], Some(login.passfile_line(dst.port, d).as_bytes()))?;
         as_postgres(ctx, CHMOD, &["0600", "--", &pass], None)?;
         let env_pass = format!("PGPASSFILE={pass}");
-        for section in ["data", "post-data"] {
+        let owner_restore = |section: &str, list: Option<&str>| -> HResult<()> {
+            let sec = format!("--section={section}");
+            let mut args: Vec<&str> = vec![
+                ENV,
+                &env_pass,
+                "PGOPTIONS=-c statement_timeout=0 -c lock_timeout=0 -c idle_in_transaction_session_timeout=0",
+                &restore,
+                &sec,
+                "--exit-on-error",
+            ];
+            if let Some(l) = list {
+                args.extend(["-L", l]);
+            }
+            args.extend(["-h", "127.0.0.1", "-p", &pt, "-U", r, "-d", d, &file]);
+            run_restore(ctx, section, &args)
+        };
+        // 2. The schemas as the owner (empty: an extension may go in one).
+        if !schema_list.is_empty() {
+            owner_restore("pre-data", Some(&schema_file))?;
+        }
+        // 3. Extensions (and their comments) as postgres: no tenant code.
+        if !su_list.is_empty() {
             run_restore(
                 ctx,
-                section,
+                "pre-data (extensions)",
                 &[
                     ENV,
-                    &env_pass,
-                    "PGOPTIONS=-c statement_timeout=0 -c lock_timeout=0 -c idle_in_transaction_session_timeout=0",
+                    "PGOPTIONS=-c search_path=pg_catalog,pg_temp -c role=none -c statement_timeout=0 -c lock_timeout=0",
                     &restore,
-                    &format!("--section={section}"),
+                    "--section=pre-data",
                     "--exit-on-error",
+                    "-L",
+                    &su_file,
                     "-h",
-                    "127.0.0.1",
+                    PG_SOCKET_DIR,
                     "-p",
                     &pt,
-                    "-U",
-                    r,
                     "-d",
                     d,
                     &file,
                 ],
             )?;
         }
+        // 4. The rest of pre-data as the owner (never the superuser: a
+        // generated column's expression is planned at CREATE TABLE).
+        owner_restore("pre-data", Some(&own_file))?;
+        // 5. FORCE off while the owner loads (it would hide its own rows).
+        let f = sql_at(
+            ctx,
+            to,
+            dst.port,
+            d,
+            "SELECT coalesce(pg_catalog.string_agg(c.oid::text, ','), '') FROM pg_catalog.pg_class c WHERE c.relforcerowsecurity;\n",
+        )?;
+        forced = f.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        if !forced.is_empty() {
+            force_lifted = true;
+            sql_at(ctx, to, dst.port, d, &force_sql(&forced, false))?;
+        }
+        // 6. data and post-data as the owner.
+        for section in ["data", "post-data"] {
+            owner_restore(section, None)?;
+        }
         Ok(())
     })();
-    // 5. Cleanup, on success and failure alike.
+    // 7. Cleanup, on success and failure alike.
     let mut undone: Vec<String> = Vec::new();
-    if let Err(e) = as_postgres(ctx, RM, &["-f", "--", &pass], None) {
-        undone.push(format!("remove the passfile: {}", e.msg));
+    for f in [&pass, &schema_file, &su_file, &own_file] {
+        if let Err(e) = as_postgres(ctx, RM, &["-f", "--", f], None) {
+            undone.push(format!("remove {f}: {}", e.msg));
+        }
     }
     if temp_set {
         if let Err(e) = sql_at(ctx, to, dst.port, "postgres", &format!("ALTER ROLE {quoted} RESET temp_file_limit;\n")) {
@@ -1004,7 +1078,7 @@ pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, keep_force_o
         }
     }
     if force_lifted && !(keep_force_off && owner_steps.is_ok()) {
-        if let Err(e) = sql_at(ctx, to, dst.port, d, &force_sql(true)) {
+        if let Err(e) = sql_at(ctx, to, dst.port, d, &force_sql(&forced, true)) {
             undone.push(format!("put FORCE back: {}", e.msg));
         }
     }

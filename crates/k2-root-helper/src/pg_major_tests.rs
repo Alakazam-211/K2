@@ -349,6 +349,9 @@ fn pg_box() -> (T, W) {
                     out(0, "")
                 }
                 "pg_restore" => {
+                    if a.iter().any(|x| x == "-l") {
+                        return out(0, TOC);
+                    }
                     let section = a.iter().find_map(|x| x.strip_prefix("--section=")).unwrap().to_string();
                     if w.restore_fail.as_deref() == Some(section.as_str()) {
                         return ExecOut {
@@ -871,6 +874,25 @@ fn copy_roles_refusals_change_nothing() {
 
 // ── dump, restore, lock, drop ───────────────────────────────────────────
 
+/// `pg_restore -l` of the fake dump: two extensions and a comment on one,
+/// tenant objects, and a table whose name tries to pass for an extension
+/// entry (pg_restore prints a newline in a name as a space; the rest of
+/// its line still isn't an extension entry).
+const TOC: &str = ";\n; Archive created at 2026-10-20 10:15:00 UTC\n;\n\
+2; 3079 16385 EXTENSION - pgcrypto \n\
+4321; 0 0 COMMENT - EXTENSION pgcrypto \n\
+3; 3079 16420 EXTENSION - pg_trgm \n\
+7; 2615 16500 SCHEMA - k2 ws_jobs_migrator\n\
+9; 1255 16510 FUNCTION public h1_who(integer) ws_jobs_migrator\n\
+11; 1259 16520 TABLE public h1 ws_jobs_migrator\n\
+12; 1259 16530 TABLE public x 13; 3079 1 EXTENSION - evil ws_jobs_migrator\n\
+14; 0 0 COMMENT - EXTENSION evil x ws_jobs_migrator\n";
+
+fn get_list(w: &W, name: &str) -> String {
+    let files = w.borrow().passfiles.clone();
+    files.iter().find(|(f, _)| f.ends_with(name)).map(|(_, b)| b.clone()).unwrap_or_else(|| panic!("{name}: {files:?}"))
+}
+
 fn login(role: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({"role": role, "password": "pw:with\\colon"})).unwrap()
 }
@@ -891,6 +913,7 @@ fn dump_restore_use_the_targets_binaries_as_postgres() {
         pc.contains(&"/usr/bin/find /var/lib/postgresql/k2-moves -maxdepth 1 -type f -name .k2pass-* -delete".to_string()),
         "R1: stale passfiles swept: {pc:?}"
     );
+    assert!(pc.contains(&"/usr/bin/find /var/lib/postgresql/k2-moves -maxdepth 1 -type f -name .k2toc-* -delete".to_string()), "{pc:?}");
     assert!(w.borrow().sql.iter().any(|(p, s)| *p == 5432 && s.starts_with("SHOW server_version_num")), "R2: the source server's version read");
     assert!(pc.contains(&format!(
         "PGOPTIONS=-c search_path=pg_catalog,pg_temp -c role=none /usr/lib/postgresql/17/bin/pg_dump -Fc --no-subscriptions --no-publications -h /var/run/postgresql -p 5432 -f {file} -d ws_jobs"
@@ -901,7 +924,9 @@ fn dump_restore_use_the_targets_binaries_as_postgres() {
     assert_eq!(o.code, exit::STATE);
     assert!(o.stderr.starts_with("dump_exists"));
 
-    // Restore: pre-data as postgres, data + post-data as the owner (H1/F2).
+    // Restore: extensions alone as postgres; the rest of pre-data, data and
+    // post-data as the owner (H1/F2; the 0.46.4 drill: a generated column's
+    // IMMUTABLE function ran as postgres during pre-data).
     w.borrow_mut().forced = "16384,16390".into();
     w.borrow_mut().postgres_calls.clear();
     let v = json(&t.call_in(&["pg", "move-restore", "17", "ws_jobs", tag], &login("ws_jobs_migrator")));
@@ -911,29 +936,46 @@ fn dump_restore_use_the_targets_binaries_as_postgres() {
     );
     let pc = w.borrow().postgres_calls.clone();
     let restores: Vec<&String> = pc.iter().filter(|c| c.contains("pg_restore")).collect();
-    assert_eq!(restores.len(), 3, "{restores:?}");
+    assert_eq!(restores.len(), 6, "{restores:?}");
+    assert!(restores[0].ends_with(&format!("/usr/lib/postgresql/17/bin/pg_restore -l {}", "/var/lib/postgresql/k2-moves/ws_jobs-20261020T101500Z.dump")), "{}", restores[0]);
+    assert!(restores[1].contains("-L /var/lib/postgresql/k2-moves/.k2toc-schemas-20261020T101500Z") && restores[1].contains(" -U ws_jobs_migrator "), "schemas as the owner, first: {}", restores[1]);
+    let su = restores[2];
     assert!(
-        restores[0].contains("--section=pre-data") && restores[0].contains("-h /var/run/postgresql") && !restores[0].contains(" -U "),
-        "{}",
-        restores[0]
+        su.contains("--section=pre-data") && su.contains("-L /var/lib/postgresql/k2-moves/.k2toc-su-20261020T101500Z")
+            && su.contains("-h /var/run/postgresql") && !su.contains(" -U "),
+        "extensions as postgres: {su}"
     );
-    for (r, section) in [(restores[1], "data"), (restores[2], "post-data")] {
+    for (r, section) in [(restores[1], "pre-data"), (restores[3], "pre-data"), (restores[4], "data"), (restores[5], "post-data")] {
         assert!(r.contains(&format!("--section={section}")), "{r}");
         assert!(r.contains("-h 127.0.0.1 -p 5433 -U ws_jobs_migrator -d ws_jobs"), "the owner over loopback: {r}");
         assert!(r.starts_with("PGPASSFILE=/var/lib/postgresql/k2-moves/.k2pass-20261020T101500Z "), "{r}");
         assert!(!r.contains("pw:with"), "the password is never in argv: {r}");
-        assert!(!r.contains("temp_file_limit"), "a non-superuser can't set it: {r}");
+        assert!(!r.contains("temp_file_limit") && !r.contains("role=none"), "a non-superuser session: {r}");
     }
-    let pass = w.borrow().passfiles.clone();
+    assert!(restores[3].contains("-L /var/lib/postgresql/k2-moves/.k2toc-own-20261020T101500Z"), "{}", restores[3]);
+    assert_eq!(get_list(&w, ".k2toc-schemas-20261020T101500Z"), "7; 2615 16500 SCHEMA - k2 ws_jobs_migrator\n");
+    let files = w.borrow().passfiles.clone();
+    let get = |name: &str| files.iter().find(|(f, _)| f.ends_with(name)).map(|(_, b)| b.clone()).unwrap_or_else(|| panic!("{name}: {files:?}"));
+    assert_eq!(get(".k2pass-20261020T101500Z"), "127.0.0.1:5433:ws_jobs:ws_jobs_migrator:pw\\:with\\\\colon\n");
     assert_eq!(
-        pass,
-        vec![(
-            "/var/lib/postgresql/k2-moves/.k2pass-20261020T101500Z".to_string(),
-            "127.0.0.1:5433:ws_jobs:ws_jobs_migrator:pw\\:with\\\\colon\n".to_string()
-        )]
+        get(".k2toc-su-20261020T101500Z"),
+        "2; 3079 16385 EXTENSION - pgcrypto \n4321; 0 0 COMMENT - EXTENSION pgcrypto \n3; 3079 16420 EXTENSION - pg_trgm \n",
+        "only real extension entries go to the superuser"
     );
+    let own = get(".k2toc-own-20261020T101500Z");
+    assert!(!own.contains("7; 2615"), "{own}");
+    for l in ["9; 1255", "11; 1259", "12; 1259 16530 TABLE public x 13; 3079 1 EXTENSION - evil", "14; 0 0 COMMENT - EXTENSION evil x"] {
+        assert!(own.contains(l), "{l}: {own}");
+    }
+    assert!(!own.contains("EXTENSION - pgcrypto") && !own.contains("Archive created"), "{own}");
     assert!(pc.contains(&"/usr/bin/chmod 0600 -- /var/lib/postgresql/k2-moves/.k2pass-20261020T101500Z".to_string()), "{pc:?}");
-    assert!(pc.iter().any(|c| c == "/usr/bin/rm -f -- /var/lib/postgresql/k2-moves/.k2pass-20261020T101500Z"), "the passfile goes: {pc:?}");
+    for f in [".k2pass-", ".k2toc-schemas-", ".k2toc-su-", ".k2toc-own-"] {
+        assert!(pc.iter().any(|c| *c == format!("/usr/bin/rm -f -- /var/lib/postgresql/k2-moves/{f}20261020T101500Z")), "{f} goes: {pc:?}");
+    }
+    // FORCE is read and lifted only after the owner's pre-data.
+    let own_pre = pc.iter().position(|c| c.contains("--section=pre-data") && c.contains(".k2toc-own-")).unwrap();
+    let data = pc.iter().position(|c| c.contains("--section=data")).unwrap();
+    assert!(own_pre < data);
     let sql: Vec<String> = w.borrow().sql.iter().map(|(_, s)| s.clone()).collect();
     let nof = sql.iter().position(|s| s.contains("NO FORCE ROW LEVEL SECURITY")).expect("FORCE lifted");
     let refo = sql
@@ -944,6 +986,21 @@ fn dump_restore_use_the_targets_binaries_as_postgres() {
     assert!(sql.iter().any(|s| s == "ALTER ROLE \"ws_jobs_migrator\" IN DATABASE \"ws_jobs\" SET temp_file_limit = -1;\n"));
     assert!(sql.iter().any(|s| s == "ALTER ROLE \"ws_jobs_migrator\" IN DATABASE \"ws_jobs\" RESET temp_file_limit;\n"));
 
+    // A failing owner pre-data (the schemas, the first owner step): the
+    // passfile, the lists and the temp setting come back; FORCE untouched.
+    w.borrow_mut().restore_fail = Some("pre-data".into());
+    w.borrow_mut().postgres_calls.clear();
+    w.borrow_mut().sql.clear();
+    let o = t.call_in(&["pg", "move-restore", "17", "ws_jobs", tag], &login("ws_jobs_migrator"));
+    assert_eq!(o.code, exit::IO, "{}", o.stderr);
+    assert!(o.stderr.contains("pg_restore (pre-data)"), "{}", o.stderr);
+    let pc = w.borrow().postgres_calls.clone();
+    for f in [".k2pass-", ".k2toc-schemas-", ".k2toc-su-", ".k2toc-own-"] {
+        assert!(pc.iter().any(|c| c.starts_with(&format!("/usr/bin/rm -f -- /var/lib/postgresql/k2-moves/{f}"))), "{f}: {pc:?}");
+    }
+    let sql: Vec<String> = w.borrow().sql.iter().map(|(_, s)| s.clone()).collect();
+    assert!(!sql.iter().any(|s| s.contains("FORCE ROW LEVEL SECURITY")), "{sql:?}");
+    assert!(sql.iter().any(|s| s.ends_with("RESET temp_file_limit;\n")), "{sql:?}");
     // A failing data or post-data load: only the ERROR line, never the row
     // (I4); the passfile, the temp setting and FORCE all come back in the
     // same cleanup (re-check #1 R1).
@@ -1332,7 +1389,7 @@ fn dual_detach_teardown_and_status() {
     let drop_sub = sql.iter().position(|(p, s)| *p == 5433 && s.contains("SET (slot_name = NONE)")).expect("subscription dropped on the target");
     let src = sql
         .iter()
-        .position(|(p, s)| *p == 5432 && s.starts_with("DROP EVENT TRIGGER IF EXISTS k2_dual_freeze"))
+        .position(|(p, s)| *p == 5432 && s.contains("DROP EVENT TRIGGER k2_dual_freeze"))
         .expect("source detached");
     assert!(drop_sub < src, "the subscription before the slot");
     assert!(!sql.iter().any(|(_, s)| s.contains("DROP ROLE")), "detach keeps the role");
@@ -1361,7 +1418,7 @@ fn dual_detach_teardown_and_status() {
         let o = t.call(&["pg", "dual", "teardown", "16", "17", "ws_jobs", DUAL_ID]);
         let sql = w.borrow().sql.clone();
         let open = sql.iter().position(|(p, s)| *p == 5432 && s.contains("CONNECTION LIMIT 0;\nALTER DATABASE \"ws_jobs\" ALLOW_CONNECTIONS true")).expect("opened");
-        let clean = sql.iter().position(|(p, s)| *p == 5432 && s.starts_with("DROP EVENT TRIGGER")).expect("cleanup ran");
+        let clean = sql.iter().position(|(p, s)| *p == 5432 && s.contains("DROP EVENT TRIGGER")).expect("cleanup ran");
         let close = sql.iter().position(|(p, s)| *p == 5432 && s.contains("ALLOW_CONNECTIONS false")).expect("closed again");
         assert!(open < clean && clean < close, "{fail}");
         if fail {

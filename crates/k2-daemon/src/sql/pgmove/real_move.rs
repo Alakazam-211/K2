@@ -279,7 +279,9 @@ fn fixture(ops: &dyn ClusterOps, db: &str, extra_ext: Option<&str>) {
 }
 
 /// H1: objects whose restore runs an owner-written function (a CHECK, a
-/// domain CHECK and a generated column). If the function runs as a
+/// domain CHECK, a generated column, an index expression, and, the 0.46.4
+/// drill's finding, a generated column calling an IMMUTABLE function with
+/// a constant argument: CREATE TABLE plans it, so it runs during pre-data). If the function runs as a
 /// superuser it records that and makes the owner a superuser.
 fn plant_h1(ops: &dyn ClusterOps, db: &str) {
     let mig = format!("{db}_migrator");
@@ -301,7 +303,9 @@ fn plant_h1(ops: &dyn ClusterOps, db: &str) {
            RETURN current_user::text || '/' || session_user::text;\n\
          END $f$;\n\
          CREATE DOMAIN h1_dom AS int CHECK (public.h1_probe(VALUE));\n\
-         CREATE TABLE h1 (id h1_dom PRIMARY KEY CHECK (public.h1_probe(id)), who text GENERATED ALWAYS AS (public.h1_who(id)) STORED);\n\
+         CREATE TABLE h1 (id h1_dom PRIMARY KEY CHECK (public.h1_probe(id)), who text GENERATED ALWAYS AS (public.h1_who(id)) STORED,\n\
+           k text GENERATED ALWAYS AS (public.h1_who(0)) STORED);\n\
+         CREATE INDEX h1_ix ON h1 ((public.h1_who(id)));\n\
          INSERT INTO h1 (id) SELECT g FROM generate_series(1, 5) g;\n\
          RESET ROLE;\n"
     );

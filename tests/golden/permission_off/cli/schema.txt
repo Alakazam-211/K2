@@ -370,6 +370,20 @@ exit: 0
       ]
     },
     {
+      "name": "workspace trust status",
+      "usage": "k2 workspace trust status [<folder>] [--json]",
+      "description": "Folder trust: what K2 found in a folder before letting AI tools trust it (settings that run commands or send logins elsewhere), and its state: clean, trusted, always, pending, undecided, changed or denied. No folder: every workspace. See k2 study folder-trust.",
+      "args": [{"name": "folder", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw daemon JSON."}]
+    },
+    {
+      "name": "workspace trust request",
+      "usage": "k2 workspace trust request <folder> --why \"…\"",
+      "description": "Ask the owner to trust a folder that has risky settings: presents the Thread card (Trust it / Always trust this folder / Don't trust). It only asks; deciding (k2 workspace trust <folder> --yes|--always|--no) is the owner's, and an agent gets exit 3.",
+      "args": [{"name": "folder", "required": true}],
+      "flags": [{"name": "--why", "arg": "text", "description": "One line for the owner: why you need AI tools there."}]
+    },
+    {
       "name": "agent hire",
       "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
       "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",

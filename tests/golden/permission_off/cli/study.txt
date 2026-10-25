@@ -52,6 +52,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   garden-changes      Gardens in <K2_CLI_VERSION>: what's retired, what to update before 0.47.0
   changes             Git changes (the Changes tab): your own workspace; discard = Trash
   design              Design notes from a page: the shape, k2 browser note, answer in Thread
+  folder-trust        Folder trust: the card, asking vs deciding, re-scan, honest limits
 
 Usage: k2 study [list|<topic>|--json]
 --- stderr

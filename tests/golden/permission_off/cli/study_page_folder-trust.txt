@@ -1,0 +1,86 @@
+$ k2 study folder-trust
+exit: 0
+--- stdout
+k2 study folder-trust — who may start AI tools in a folder
+
+WHAT K2 DOES
+  Before K2 tells Claude, Codex, Grok, Gemini or Cursor that a folder is
+  trusted, it looks inside. A clean folder is trusted as before. A folder
+  with settings that make those tools run commands or send logins
+  elsewhere when they start (hooks, apiKeyHelper, env redirects, MCP
+  servers, Codex/Grok project config, Cursor worktree scripts, a VS Code
+  folderOpen task, git hooks/fsmonitor, a launch: block in the agent's
+  own .k2/agent file) waits for the owner: a card on Thread with Trust it /
+  Always trust this folder / Don't trust. Every program K2 starts there is
+  gated (wrappers and bash -c included); only a plain shell tab isn't: your
+  login shell, no args but -l/-i, and no env beyond K2's own. A shell with
+  env (PROMPT_COMMAND, ZDOTDIR, ENV, PATH…) or a shell path inside the
+  folder is gated like any program.
+
+  Trust it      this version only; K2 asks again when those settings change
+  Always        any version; undo in Settings → Workspaces → Folder trust
+  Don't trust   K2 starts no program there (but a plain shell tab) and
+                removes the trust entries it wrote; it lists entries it
+                didn't write that still trust it
+  Entries K2 didn't write (yours, a parent folder's, and the Codex and Grok
+  entries K2 wrote before it checked, which look like yours) stay whatever
+  the decision. The card, status and a held spawn list them; the owner
+  removes them all with k2 workspace trust forget <folder>.
+
+  While a card waits: no new session starts in that folder (the spawn gets
+  409 folder_trust_pending and runs once the owner trusts it), heartbeats
+  are skipped (held: folder trust), k2 msg tells you the same. Print mode
+  (claude -p) is gated too: it runs project hooks with no trust dialog.
+
+YOU (AN AGENT)
+  k2 workspace trust status [<folder>]        what K2 found, the state
+  k2 workspace trust request <folder> --why "…"   ask: presents the card
+  Both work on your own workspace's folder only. request only asks: it
+  never trusts anything. You never decide: k2 workspace trust <folder>
+  --yes|--always|--no is the owner's (you get exit 3; the card is the
+  request). Don't edit the trust files (~/.claude.json,
+  ~/.codex/config.toml, ~/.gemini/trustedFolders.json,
+  ~/.grok/trusted_folders.toml, ~/.cursor/projects/…) to get around it.
+
+RE-SCAN ON CHANGE
+  Every spawn, and every reuse of a running session, scans (a folder whose
+  files are unchanged, by inode, size and change time, reuses its last
+  scan). Claude also reloads hooks mid-session, so K2 watches the risky
+  files of every folder where it runs a session: when they change, a
+  "Trust it" folder is undecided again, K2's grants come off, K2 stops its
+  sessions there and the owner gets the card. The window: K2 sees a
+  change in a watched config folder within about a second, and a file
+  deeper under one (a script under .claude/, a nested clone) within a
+  minute. Claude may load
+  a new hook before that, so a running session can run new settings in
+  that window. "Trust it" and the CLI apply only to the settings shown; if
+  they changed in between, nothing is decided and K2 asks again.
+
+WHAT IT CAN'T DO (honest limits)
+  - It is not a wall against an agent running as the same OS user: such an
+    agent can read the owner token (~/.k2/heartbeat.token) and decide its
+    own card through the API, edit the trust files itself, or run claude /
+    codex outside K2. That needs agent isolation (a later arc).
+  - It doesn't look at CLAUDE.md / AGENTS.md text (prompt injection), or
+    your user-level settings. npm/pnpm/yarn/bun/make/just files are in the
+    fingerprint only when a hook or MCP command goes through that runner.
+  - It hashes the files a hook or MCP server names (a script, the runner's
+    manifest and lockfiles), not the modules those import: a hook that runs
+    node ./tool.mjs is re-asked when tool.mjs changes, not when a file it
+    imports does.
+  - Gemini and Cursor let a nested clone inherit a trusted parent's trust.
+    K2 scans nested repos at any depth below a folder it trusts (over 20,000
+    folders, or a folder it can't read, counts as a finding); one cloned
+    later is seen at the next scan, not before.
+  - Gemini reads a .env from any parent folder; K2 scans the folders from
+    the session's folder up to its repo top, not above it.
+  - $HOME, / and parents of $HOME are never trusted by K2, and K2 starts no
+    program there but a plain shell tab (a launch: block's cwd: pointing
+    there is refused). A launch: block's cwd: elsewhere is checked on both
+    folders: the workspace that holds it and the cwd.
+  - A sandboxed cell seeds its own trust inside the cell (not covered).
+  What it does stop: K2's own silent trust, and any session K2 starts
+  (spawn, heartbeat, wake, pinned or wallet login) running start-up code
+  from outside that no person has seen.
+--- stderr
+--- requests

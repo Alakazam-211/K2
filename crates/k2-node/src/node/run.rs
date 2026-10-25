@@ -326,13 +326,28 @@ impl Node {
                 return;
             }
         };
-        let mut journal = match dirs.create_for(unit_mode).and_then(|_| JournalWriter::create(&t.paths.journal(&job, gen), a.plan.limits.log_cap_bytes)) {
+        // A secret job (secret-env, review B-H1) keeps nothing where another
+        // workspace's job (same uid on the owner's slot) could read it: its
+        // journal is node-only (0600), it gets no warm slot and no shared
+        // project cache or sccache server, and its whole tree goes when it
+        // ends, before another workspace's job may start.
+        let secret_job = !a.plan.secret_env.is_empty();
+        let journal_path = t.paths.journal(&job, gen);
+        let mut journal = match dirs.create_for(unit_mode).and_then(|_| JournalWriter::create(&journal_path, a.plan.limits.log_cap_bytes)) {
             Ok(j) => j,
             Err(e) => {
                 self.finish_job(&t, &a, None, JobState::Failed, Some("job_dir_failed"), Some(&e), None, None, None, None, None).await;
                 return;
             }
         };
+        if secret_job {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) = std::fs::set_permissions(&journal_path, std::fs::Permissions::from_mode(0o600)) {
+                let e = format!("journal mode: {e}");
+                self.finish_job(&t, &a, Some(&dirs), JobState::Failed, Some("job_dir_failed"), Some(&e), None, None, Some(journal), None, None).await;
+                return;
+            }
+        }
         let sys = |j: &mut JournalWriter, msg: &str| {
             let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {msg}\n").as_bytes());
         };
@@ -343,6 +358,12 @@ impl Node {
         let mut cwd = dirs.root.clone();
         if let Some(src) = &a.plan.src {
             match self.sync_src(&t, &a, &dirs, &mut journal, &mut stop).await {
+                Ok(ran) if secret_job => {
+                    // No warm slot: the build's outputs may hold the value.
+                    cwd = dirs.src.clone();
+                    sys(&mut journal, "target dir: job-private (a secret job never uses a warm slot)");
+                    src_ran = Some(SrcRan { slot: None, warmth: Some("private".into()), ..ran });
+                }
                 Ok(ran) => {
                     cwd = dirs.src.clone();
                     let pc = t.paths.project_cache(&src.project_key);
@@ -389,6 +410,8 @@ impl Node {
         // workspace id and remote; never a name the submitter picks), or
         // the job's own dir when there's no code.
         let cache_dir = match &a.plan.src {
+            // A secret job's cargo home and sccache dir are its own.
+            Some(_) if secret_job => dirs.private_cache(),
             Some(s) => t.paths.project_cache(&s.project_key),
             None => dirs.private_cache(),
         };
@@ -404,7 +427,9 @@ impl Node {
                 sys(&mut journal, &format!("preparing {}: {e}", slot_tmp.display()));
             }
         }
-        let sccache_socket = t.paths.sccache_socket();
+        // A secret job's sccache server is its own (in its own tmp, killed
+        // with its unit), never the slot's shared one.
+        let sccache_socket = if secret_job { dirs.tmp.join("sccache.sock") } else { t.paths.sccache_socket() };
         if unit_mode {
             // The job (k2job, the node's group) writes these.
             let prep = (target.clone(), sccache.clone(), cargo_home.clone(), a.plan.src.is_some().then(|| dirs.src.clone()));
@@ -428,7 +453,7 @@ impl Node {
             extra: &a.plan.env,
             tool_paths: &resolved.path_prepend,
             tool_env: &resolved.env,
-            sccache_socket: slot_tmp.is_dir().then_some(sccache_socket.as_path()),
+            sccache_socket: (secret_job || slot_tmp.is_dir()).then_some(sccache_socket.as_path()),
         }) {
             Ok(e) => e,
             Err((code, name)) => {
@@ -474,7 +499,8 @@ impl Node {
         self.take_smoke_lock(&job);
         let started = if unit_mode {
             let mut rw = vec![target.clone(), sccache.clone(), cargo_home.clone()];
-            if slot_tmp.is_dir() {
+            // The slot's shared tmp (its sccache socket) only for other jobs.
+            if slot_tmp.is_dir() && !secret_job {
                 rw.push(slot_tmp.clone());
             }
             self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit, secrets.as_ref()).await
@@ -1030,6 +1056,15 @@ impl Node {
     ) {
         let job = &a.fence.job_id;
         let gen = a.fence.generation;
+        // Review B-H1: a secret attempt's tree (home, checkout, target,
+        // caches, tmp) goes now, while the job still counts as running, so
+        // no other workspace's job (same uid) starts before it's gone. Only
+        // the node-only journal stays (it may not be shipped yet).
+        if !a.plan.secret_env.is_empty() {
+            if let Some(d) = dirs {
+                self.strip_job_dir(t, &d.root, a.plan.src.as_ref().map(|s| s.project_key.as_str()), SECRET_END_KEEP).await;
+            }
+        }
         // SE23: a secret job's detail and test summary go through its
         // redactor too (the journal holds it); kept artifacts are the
         // job's own bytes and are never rewritten (SV10).
@@ -1183,6 +1218,10 @@ impl Node {
         t.ledger.lock().unwrap().end_attempt(job, gen, state, reason, detail, exit, log_seq, now, src, outputs, signed)
     }
 }
+
+/// What stays of a secret attempt's tree after it ends: only the journal
+/// (node-only, 0600; review B-H1).
+pub const SECRET_END_KEEP: &[&str] = &["log"];
 
 /// A secret job's redactor (SE23) and the names whose values are too short
 /// to redact (under [`k2_redact::SURFACE_MIN_LEN`]).

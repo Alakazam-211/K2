@@ -411,6 +411,11 @@ async fn a_secret_job_gets_its_env_on_stdin_and_nothing_keeps_the_value() {
     });
     let body: serde_json::Value = serde_json::from_str(&receipt.expect("receipt").body).unwrap();
     assert_eq!(body["secret_env"], serde_json::json!(["K2T_SECRET"]));
+    // Review B-H1: the attempt's tree is gone, only its node-only log stays.
+    let dir = n.layout.job_dir("sec1", 1);
+    let left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(left, vec!["log".to_string()], "only the journal stays: {left:?}");
+    assert_eq!(std::fs::metadata(dir.join("log")).unwrap().permissions().mode() & 0o777, 0o600, "the journal is the node's alone");
 
     // While one runs: the unit's properties hold no value, LimitCORE=0;
     // another workspace's job of the same slot waits (SE26); the same

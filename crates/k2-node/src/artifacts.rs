@@ -137,11 +137,21 @@ pub fn dir(root: &Path, job: &str, generation: u32) -> PathBuf {
 
 /// Copy `src` to `dst` and hash it (one read).
 fn copy_hash(src: &Path, dst: &Path) -> Result<(String, u64), String> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    // Kept artifacts are the node's alone (0700 dirs, 0600 files): the
+    // owner's `artifacts/` sits in the node home every owner-slot job
+    // (another workspace's included) can traverse (review B-H1).
     if let Some(p) = dst.parent() {
-        std::fs::create_dir_all(p).map_err(|e| format!("create {}: {e}", p.display()))?;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(p).map_err(|e| format!("create {}: {e}", p.display()))?;
     }
     let mut f = std::fs::File::open(src).map_err(|e| format!("open {}: {e}", src.display()))?;
-    let mut w = std::fs::File::create(dst).map_err(|e| format!("create {}: {e}", dst.display()))?;
+    let mut w = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(dst)
+        .map_err(|e| format!("create {}: {e}", dst.display()))?;
     let mut h = crypto::Sha256Stream::default();
     let mut buf = vec![0u8; 1 << 16];
     let mut n_total = 0u64;
@@ -324,6 +334,12 @@ mod tests {
         assert_eq!(t.failing[0].name, "bad");
         assert!(o.notes.iter().any(|n| n == "nothing/* matched nothing"), "{:?}", o.notes);
         assert!(o.notes.iter().any(|n| n.starts_with("artifact_glob_escapes")), "{:?}", o.notes);
+        // Review B-H1: kept files are the node's alone.
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&keep.join("target/nextest/ci/junit.xml")), 0o600);
+        assert_eq!(mode(&keep.join("target/nextest/ci")), 0o700);
+        assert_eq!(mode(&keep.join("dist/k2.tar.gz")), 0o600);
     }
 
     #[test]

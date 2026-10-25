@@ -13,7 +13,8 @@
 #
 #   bash scripts/updater-key-ceremony.sh drill <U3 key file> [--root DIR]
 #       The U3 restore drill: sign a throwaway file with U3 restored from the
-#       password manager, check it against UPDATER_KEYS' backup key.
+#       password manager, check it against UPDATER_KEYS' backup key, then
+#       delete the restored key file (pass or fail).
 #
 #   bash scripts/updater-key-ceremony.sh pubkeys [--root DIR] <U2-line> <U3-line>
 #       K2 (a builder), in the repo: writes the two public keys into every
@@ -186,7 +187,10 @@ generate() {
 
     say ""
     say "── 2/3  U3, the offline backup key (goes to your password manager, NOT this Mac) ──"
-    U3DIR="$(mktemp -d "$HOME/K2-U3-backup.XXXXXX")"; chmod 700 "$U3DIR"
+    # $TMPDIR (/var/folders/…) is never backed up by Time Machine; the
+    # explicit exclusion is a belt.
+    U3DIR="$(mktemp -d "${TMPDIR:-/tmp}/K2-U3-backup.XXXXXX")"; chmod 700 "$U3DIR"
+    tmutil addexclusion "$U3DIR" 2>/dev/null || say "(note: tmutil addexclusion failed; \$TMPDIR is outside Time Machine anyway)"
     say "minisign asks for a NEW password twice (different from U2's)."
     minisign -G -p "$U3DIR/k2-updater-u3.pub" -s "$U3DIR/k2-updater-u3.key"
     chmod 600 "$U3DIR/k2-updater-u3.key"
@@ -229,6 +233,12 @@ drill() {
         esac
     done
     [ -n "$key" ] && [ -f "$key" ] || die "usage: updater-key-ceremony.sh drill <U3 secret key file> [--root DIR]"
+    DRILL_TMP="$(mktemp -d "${TMPDIR:-/tmp}/k2-u3-drill.XXXXXX")"; chmod 700 "$DRILL_TMP"
+    # The restored key is deleted when the drill ends, pass or fail (the
+    # password manager keeps the real copy).
+    DRILL_KEY="$key"
+    trap 'rm -rf "$DRILL_TMP"; shred_file "$DRILL_KEY"; say "Deleted the restored key file $DRILL_KEY."' EXIT
+    local t="$DRILL_TMP"
     command -v minisign >/dev/null 2>&1 || die "minisign is not installed (brew install minisign)"
     line="$(python3 -I - "$root/crates/k2-release-keys/src/lib.rs" <<'PY'
 import re, sys
@@ -238,9 +248,6 @@ keys = re.findall(r'role: "backup",\s*key_id: "[0-9A-F]{16}",\s*public_key_b64: 
 print(keys[0]) if keys else sys.exit("no backup key in UPDATER_KEYS: run `pubkeys` first")
 PY
 )" || die "the source tree has no U3 (backup) key yet"
-    DRILL_TMP="$(mktemp -d "${TMPDIR:-/tmp}/k2-u3-drill.XXXXXX")"; chmod 700 "$DRILL_TMP"
-    trap 'rm -rf "$DRILL_TMP"' EXIT
-    local t="$DRILL_TMP"
     printf 'K2 U3 drill %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$t/drill"
     tc="timestamp:$(date +%s)"$'\t'"file:k2-u3-drill"$'\t'"version:0.0.0"
     minisign -S -s "$key" -m "$t/drill" -x "$t/drill.sig" -t "$tc" >/dev/null || die "U3 did not sign (wrong password, or not U3's key file)"
@@ -249,7 +256,6 @@ PY
         || die "this key is NOT the backup key the installs trust (UPDATER_KEYS backup)"
     [ "$(printf '%s\n' "$out" | tail -n1)" = "$tc" ] || die "trusted comment round-trip mismatch"
     say "U3 drill ok: the restored key signs, and the installs' backup key accepts it."
-    say "Now delete the restored copy: $key"
 }
 
 case "${1:-}" in

@@ -135,6 +135,9 @@ pub struct Objects {
     pub end_as: Option<RunState>,
     #[serde(default)]
     pub end_why: Option<String>,
+    /// Roles the setup created on the target (dropped by an undo).
+    #[serde(default)]
+    pub roles_created: Vec<String>,
 }
 
 /// The watch loop's last sample (PA29).
@@ -503,7 +506,12 @@ fn setup(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: &dy
         return Err(format!("extension_missing: no {to} build of {}", missing.join(", ")));
     }
     // Roles with their verifiers, then memberships (as the copy path).
-    ops.copy_roles(from, to, &report.roles, false).map_err(|e| format!("copy roles: {e}"))?;
+    let out = ops.copy_roles(from, to, &report.roles, false).map_err(|e| format!("copy roles: {e}"))?;
+    run.objects.roles_created = out["created"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    save(store, run).map_err(|e| format!("run row: {e}"))?;
     let m = ops.sql(from, &db, &catalog::memberships_sql(&report.roles))?;
     let grants = catalog::membership_grants(&m, ok_name).ok_or("memberships: unexpected answer")?;
     if !grants.is_empty() {
@@ -585,12 +593,46 @@ fn undo_objects(ops: &dyn ClusterOps, dops: &dyn DualOps, run: &mut DualRun) -> 
             Err(e) => errs.push(format!("drop the target copy: {e}")),
         }
     }
+    // The roles the setup created on the target (0.46.4 drill: left
+    // behind, they blocked the next move of a database with this name).
+    if !run.objects.target_created && !run.objects.roles_created.is_empty() {
+        match catalog::drop_roles_sql(&run.objects.roles_created, super::ok_name) {
+            Some(sql) => match ops.sql(to, "postgres", &sql) {
+                Ok(_) => run.objects.roles_created.clear(),
+                Err(e) => errs.push(format!("drop the roles made on {to}: {e}")),
+            },
+            None => errs.push("roles made on the target: not role names".into()),
+        }
+    }
     if !run.objects.tag.is_empty() {
         if let Err(e) = ops.remove_dump(&db, &run.objects.tag) {
             run.lag.errors.push(format!("remove the schema dump: {e}"));
         }
     }
     errs
+}
+
+/// After a cut-over undone before the detach (0.46.4 drill): a walsender
+/// ended in the write block makes Postgres disable the subscription
+/// (`disable_on_error`), and nothing would enable it again. Enabled here,
+/// then read back. `Err` = it can't stream on. An unreadable status is
+/// left to the watch loop (never a guess).
+fn resume_stream(ops: &dyn ClusterOps, dops: &dyn DualOps, run: &DualRun) -> Result<(), String> {
+    let Ok(st) = status_now(dops, run) else { return Ok(()) };
+    let tgt = &st["target"];
+    if tgt["subscription"].as_bool() == Some(false) {
+        return Err("the subscription is gone".into());
+    }
+    if tgt["enabled"].as_bool() != Some(false) {
+        return Ok(());
+    }
+    let n = k2_root_proto::pg_dual::DualNames::of(&run.objects.object_id).ok_or("the run's id is not 12 hex digits")?;
+    ops.sql(run.to, &run.db, &k2_root_proto::pg_dual::enable_subscription_sql(&n)).map_err(|e| format!("enable the subscription: {e}"))?;
+    let st = status_now(dops, run).map_err(|e| format!("after enabling the subscription: {e}"))?;
+    if st["target"]["enabled"].as_bool() != Some(true) {
+        return Err("the subscription stays disabled after ALTER SUBSCRIPTION … ENABLE".into());
+    }
+    Ok(())
 }
 
 /// `--abort`, a failure, a lost slot or the 7-day limit: everything the run
@@ -907,9 +949,18 @@ fn settle_switch(run: Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mut Du
             dr.finished_at = Some(env.now());
         }
         MoveState::Aborted | MoveState::RolledBack if !detached => {
-            // Undone before the stream was detached: the run streams on.
+            // Undone before the stream was detached: the run streams on,
+            // once its subscription is enabled again; else it ends failed.
             dr.state = RunState::Streaming;
             dr.last_error = p.last_error.clone();
+            if let Err(e) = resume_stream(ops, dops, dr) {
+                if let Err(e2) = store.save_run(dr) {
+                    eprintln!("[db] live {}: run row: {e2}", dr.db);
+                }
+                let why = format!("{}; then the stream couldn't resume: {e}", p.last_error.clone().unwrap_or_default());
+                *dr = abort_run(ops, dops, env, store, dr.clone(), &why, true);
+                return p;
+            }
         }
         MoveState::Aborted | MoveState::RolledBack => {
             // The target copy was dropped by the undo; what is left of the

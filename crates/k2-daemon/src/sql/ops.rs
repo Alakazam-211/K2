@@ -2162,7 +2162,47 @@ pub fn drop_database(ops: &dyn SystemOps, project_id: &str) -> Result<serde_json
         )
         .map_err(|e| OpsError::Engine(format!("catalog drop: {e}")))?;
     }
-    Ok(serde_json::json!({ "ok": true, "dropped": row.name }))
+    let roles_left = drop_database_roles(ops, &row.name);
+    Ok(serde_json::json!({ "ok": true, "dropped": row.name, "rolesKept": roles_left }))
+}
+
+/// The two roles K2 made for one database alone (`<db>_migrator`,
+/// `<db>_agent`; never a bind role or another workspace's grantee).
+fn database_only_roles(db_name: &str) -> [String; 2] {
+    [format!("{db_name}_migrator"), format!("{db_name}_agent")]
+}
+
+/// `DROP ROLE` of [`database_only_roles`] on one cluster, each in its own
+/// statement; a role that still owns or holds something there (a kept
+/// rollback copy) stays.
+fn drop_database_roles_sql(db_name: &str) -> String {
+    database_only_roles(db_name)
+        .iter()
+        .map(|r| {
+            format!(
+                "DO $k2$BEGIN DROP ROLE IF EXISTS {q}; EXCEPTION WHEN dependent_objects_still_exist THEN \
+                 RAISE WARNING 'k2: role % still holds objects; kept', {l}; END$k2$;\n",
+                q = pg_quote_ident(r),
+                l = pg_quote_literal(r)
+            )
+        })
+        .collect()
+}
+
+/// After `k2 db drop` (0.46.4 drill): the database's own roles on every
+/// K2 cluster go (left behind, they blocked a later database, or move, of
+/// the same name). Best effort: the drop already happened; a cluster that
+/// can't be reached keeps them, named in the answer.
+fn drop_database_roles(ops: &dyn SystemOps, db_name: &str) -> Vec<String> {
+    let sql = drop_database_roles_sql(db_name);
+    let mut kept = Vec::new();
+    for cl in cluster::k2_clusters() {
+        if let Err(e) = su_psql(ops, &cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes())) {
+            eprintln!("[db] drop {db_name}: roles on {}: {e:?}", cl.major);
+            kept.push(format!("{}", cl.major));
+        }
+    }
+    kept
 }
 
 /// Drop the workspace test database (`status=test` only). Missing → 404,
@@ -4056,6 +4096,18 @@ pub(crate) fn exec_guest_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 0.46.4 drill: `k2 db drop` takes the database's own two roles with
+    /// it (never a bind role or a grantee); one still holding something stays.
+    #[test]
+    fn a_dropped_databases_own_roles_go_too() {
+        let sql = drop_database_roles_sql("ws_jobs");
+        assert_eq!(sql.matches("DROP ROLE IF EXISTS").count(), 2, "{sql}");
+        assert!(sql.contains("DROP ROLE IF EXISTS \"ws_jobs_migrator\";") && sql.contains("DROP ROLE IF EXISTS \"ws_jobs_agent\";"), "{sql}");
+        assert_eq!(sql.matches("EXCEPTION WHEN dependent_objects_still_exist").count(), 2);
+        assert!(!sql.contains("_bind"), "{sql}");
+        refuse_dangerous_role_sql(&sql).unwrap();
+    }
 
     #[test]
     fn seal_sql_puts_row_security_on_both_k2_tables_for_guest_principals() {

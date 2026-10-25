@@ -201,6 +201,14 @@ pub fn setup_role_sql(n: &DualNames, db: &str, s: &DualSecret) -> String {
     )
 }
 
+/// The comment K2 puts on the objects a run makes in the source database
+/// (publication, freeze schema, freeze event trigger). Teardown drops an
+/// object of those names only when it carries this mark (0.46.4 drill: a
+/// refused setup's teardown tried to drop a tenant's own `_k2_dual`).
+pub fn object_mark(n: &DualNames) -> String {
+    format!("k2:dual:{}", n.role.strip_prefix(ROLE_PREFIX).unwrap_or(&n.role))
+}
+
 /// In the source database, one transaction: `USAGE` on every user schema,
 /// `SELECT` on every table, the publication, then the DDL freeze last
 /// (PA23, PA26, PA27). The freeze catches DDL from any role at
@@ -215,14 +223,18 @@ pub fn setup_db_sql(n: &DualNames, db: &str) -> String {
          EXECUTE pg_catalog.format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO %I', s, '{r}');\n\
          END LOOP; END$k2$;\n\
          CREATE PUBLICATION \"{p}\" FOR ALL TABLES;\n\
+         COMMENT ON PUBLICATION \"{p}\" IS '{mark}';\n\
          CREATE SCHEMA \"{fs}\" AUTHORIZATION postgres;\n\
+         COMMENT ON SCHEMA \"{fs}\" IS '{mark}';\n\
          REVOKE ALL ON SCHEMA \"{fs}\" FROM PUBLIC;\n\
          CREATE FUNCTION \"{fs}\".freeze() RETURNS event_trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $k2f$\n\
          BEGIN RAISE EXCEPTION '{fe}: a Postgres move is replicating this database; schema changes wait'\n\
          USING HINT = 'k2 db upgrade {db} --abort or --switch first'; END $k2f$;\n\
          REVOKE ALL ON FUNCTION \"{fs}\".freeze() FROM PUBLIC;\n\
          CREATE EVENT TRIGGER {ft} ON ddl_command_start EXECUTE FUNCTION \"{fs}\".freeze();\n\
+         COMMENT ON EVENT TRIGGER {ft} IS '{mark}';\n\
          COMMIT;\n",
+        mark = object_mark(n),
         r = n.role,
         p = n.publication,
         fs = FREEZE_SCHEMA,
@@ -294,6 +306,13 @@ pub fn subscribe_sql(n: &DualNames, db: &str, src_port: u16, s: &DualSecret) -> 
     )
 }
 
+/// In the target database: enable the subscription again (Postgres
+/// disables it on an error, `disable_on_error`; an undone cut-over that
+/// lost its walsender is one).
+pub fn enable_subscription_sql(n: &DualNames) -> String {
+    format!("ALTER SUBSCRIPTION \"{}\" ENABLE;\n", n.subscription)
+}
+
 /// Does the subscription exist (in the target database)?
 pub fn subscription_count_sql(n: &DualNames) -> String {
     format!("SELECT count(*) FROM pg_catalog.pg_subscription WHERE subname = '{}';\n", n.subscription)
@@ -313,19 +332,26 @@ pub fn drop_subscription_sql(n: &DualNames) -> String {
 
 /// In the source database: the slot (its walsender ended first, waited
 /// up to 10 s), the freeze (first, so the DDL after it isn't frozen), the
-/// grants and the publication. Idempotent: everything `IF EXISTS`.
+/// grants and the publication. Idempotent. The freeze trigger, its schema
+/// and the publication go only when they carry this run's
+/// [`object_mark`]: an object of those names K2 didn't make is never
+/// dropped. Each statement is its own transaction (the freeze is gone
+/// before the next DDL).
 pub fn detach_source_sql(n: &DualNames, db: &str) -> String {
     format!(
-        "DROP EVENT TRIGGER IF EXISTS {ft};\n\
-         DROP FUNCTION IF EXISTS \"{fs}\".freeze();\n\
-         DROP SCHEMA IF EXISTS \"{fs}\";\n\
+        "DO $k2$BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = '{ft}' \
+         AND pg_catalog.obj_description(oid, 'pg_event_trigger') = '{mark}') THEN DROP EVENT TRIGGER {ft}; END IF; END$k2$;\n\
+         DO $k2$BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = '{fs}' \
+         AND pg_catalog.obj_description(oid, 'pg_namespace') = '{mark}') THEN \
+         DROP FUNCTION IF EXISTS \"{fs}\".freeze(); DROP SCHEMA \"{fs}\"; END IF; END$k2$;\n\
          DO $k2$DECLARE i int := 0; BEGIN\n\
          PERFORM pg_catalog.pg_terminate_backend(active_pid) FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}' AND database = '{db}' AND active;\n\
          WHILE EXISTS (SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}' AND database = '{db}' AND active) AND i < 100 LOOP\n\
          PERFORM pg_catalog.pg_sleep(0.1); i := i + 1; END LOOP;\n\
          IF EXISTS (SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}' AND database = '{db}') THEN\n\
          PERFORM pg_catalog.pg_drop_replication_slot('{slot}'); END IF; END$k2$;\n\
-         DROP PUBLICATION IF EXISTS \"{p}\";\n\
+         DO $k2$BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_publication WHERE pubname = '{p}' \
+         AND pg_catalog.obj_description(oid, 'pg_publication') = '{mark}') THEN DROP PUBLICATION \"{p}\"; END IF; END$k2$;\n\
          DO $k2$DECLARE s name; BEGIN\n\
          IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{r}') THEN\n\
          FOR s IN SELECT nspname FROM pg_catalog.pg_namespace WHERE nspname NOT IN ('pg_catalog', 'information_schema') \
@@ -334,6 +360,7 @@ pub fn detach_source_sql(n: &DualNames, db: &str) -> String {
          EXECUTE pg_catalog.format('REVOKE ALL ON SCHEMA %I FROM %I', s, '{r}');\n\
          END LOOP; END IF; END$k2$;\n\
          SELECT 'detached {db}';\n",
+        mark = object_mark(n),
         ft = FREEZE_TRIGGER,
         fs = FREEZE_SCHEMA,
         slot = n.slot,
@@ -546,13 +573,24 @@ mod tests {
         assert!(dis < none && none < drop, "never reaches the closed publisher (L24)");
 
         let src = detach_source_sql(&n(), "ws_jobs");
-        assert!(src.starts_with("DROP EVENT TRIGGER IF EXISTS k2_dual_freeze;"), "the freeze goes first");
+        assert!(src.starts_with("DO $k2$BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = 'k2_dual_freeze'"), "the freeze goes first: {src}");
+        // 0.46.4 drill: only K2's marked objects are dropped.
+        assert_eq!(object_mark(&n()), "k2:dual:0123456789ab");
+        for (what, cat) in [("DROP EVENT TRIGGER k2_dual_freeze", "pg_event_trigger"), ("DROP SCHEMA \"_k2_dual\"", "pg_namespace"), ("DROP PUBLICATION \"k2_dual_0123456789ab\"", "pg_publication")] {
+            let at = src.find(what).unwrap_or_else(|| panic!("{what}: {src}"));
+            let guard = src[..at].rfind(&format!("obj_description(oid, '{cat}') = 'k2:dual:0123456789ab'")).unwrap_or_else(|| panic!("{what} unguarded: {src}"));
+            assert!(src[guard..at].find("END$k2$").is_none(), "{what}: the guard is its own statement's");
+        }
+        assert!(!src.contains("DROP SCHEMA IF EXISTS") && !src.contains("DROP PUBLICATION IF EXISTS") && !src.contains("DROP EVENT TRIGGER IF EXISTS"), "{src}");
+        for w in ["COMMENT ON PUBLICATION \"k2_dual_0123456789ab\" IS 'k2:dual:0123456789ab';", "COMMENT ON SCHEMA \"_k2_dual\" IS 'k2:dual:0123456789ab';", "COMMENT ON EVENT TRIGGER k2_dual_freeze IS 'k2:dual:0123456789ab';"] {
+            assert!(d.contains(w), "{w}");
+        }
         assert!(!src.contains("CASCADE"), "never a cascade: a tenant object depending on the freeze fails the drop loudly");
         assert!(src.contains("pg_drop_replication_slot('k2_dual_0123456789ab')"));
         // A-L1: every slot test is tied to this run's database.
         assert_eq!(src.matches("slot_name = 'k2_dual_0123456789ab'").count(), 3);
         assert_eq!(src.matches("slot_name = 'k2_dual_0123456789ab' AND database = 'ws_jobs'").count(), 3, "{src}");
-        assert!(src.contains("DROP PUBLICATION IF EXISTS \"k2_dual_0123456789ab\";"));
+        assert!(src.contains("THEN DROP PUBLICATION \"k2_dual_0123456789ab\"; END IF;"));
         assert!(!src.contains("DROP ROLE"), "the role stays until teardown");
         let role = drop_role_sql(&n(), "ws_jobs");
         assert!(role.contains("REVOKE CONNECT ON DATABASE \"ws_jobs\"") && role.contains("DROP ROLE \"k2_repl_0123456789ab\""));

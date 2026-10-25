@@ -363,6 +363,62 @@ fn strip_acl(item: &str, letters: &[char]) -> String {
     }
 }
 
+/// From the target's `postgres` database: drop the roles a move created
+/// there (its undo: they existed nowhere else on that cluster). One
+/// statement per role; a role that still owns or holds something (the
+/// target copy's drop failed) stays, with a warning. `None` = a name isn't
+/// a role name (never interpolated).
+pub fn drop_roles_sql(roles: &[String], ok: impl Fn(&str) -> bool) -> Option<String> {
+    let mut out = String::new();
+    for r in roles {
+        if !ok(r) {
+            return None;
+        }
+        out.push_str(&format!(
+            "DO $k2$BEGIN DROP ROLE IF EXISTS {q}; EXCEPTION WHEN dependent_objects_still_exist THEN \
+             RAISE WARNING 'k2: role % still holds objects; kept', {l}; END$k2$;\n",
+            q = quote_ident(r),
+            l = quote_lit(r)
+        ));
+    }
+    Some(out)
+}
+
+/// Drop `k2_repl_*=…` items from every ACL list of a fingerprint.
+fn strip_repl_grants(print: &mut Value) {
+    fn drop_repl(acl: &mut Value) {
+        if let Some(a) = acl.as_array_mut() {
+            a.retain(|x| !x.as_str().is_some_and(|s| s.starts_with(k2_root_proto::pg_dual::ROLE_PREFIX)));
+        }
+    }
+    // [owner, [acl…]] pairs.
+    if let Some(acl) = print.get_mut("database").and_then(|d| d.get_mut(1)) {
+        drop_repl(acl);
+    }
+    if let Some(o) = print.get_mut("schemas").and_then(Value::as_object_mut) {
+        for v in o.values_mut() {
+            if let Some(acl) = v.get_mut(1) {
+                drop_repl(acl);
+            }
+        }
+    }
+    // [kind, owner, [acl…]] and [owner, secdef, [acl…]].
+    for key in ["relations", "functions"] {
+        if let Some(o) = print.get_mut(key).and_then(Value::as_object_mut) {
+            for v in o.values_mut() {
+                if let Some(acl) = v.get_mut(2) {
+                    drop_repl(acl);
+                }
+            }
+        }
+    }
+    if let Some(o) = print.get_mut("defaultAcls").and_then(Value::as_object_mut) {
+        for v in o.values_mut() {
+            drop_repl(v);
+        }
+    }
+}
+
 fn strip_list(v: &mut Value, letters: &[char]) {
     if let Some(a) = v.as_array_mut() {
         for x in a.iter_mut() {
@@ -373,8 +429,12 @@ fn strip_list(v: &mut Value, letters: &[char]) {
     }
 }
 
-/// [`fingerprint_sql`]'s answer with the privileges `from` doesn't know removed.
+/// [`fingerprint_sql`]'s answer with the privileges `from` doesn't know
+/// removed, and every grant to a live run's replication role
+/// (`k2_repl_<id>`, the 0.46.4 drill: the source's `CONNECT` grant to it
+/// stays until teardown, after the verify) dropped from every ACL.
 pub fn normalize_privileges(print: &mut Value, from: u32) {
+    strip_repl_grants(print);
     let letters = new_privileges_since(from);
     if letters.is_empty() {
         return;
@@ -550,6 +610,41 @@ mod tests {
         assert!(create_db_sql("d", &bad, k2).is_none());
         let su = json!({"owner": "postgres", "enc": "UTF8", "datcollate": "C", "datctype": "C"});
         assert!(create_db_sql("d", &su, k2).is_none(), "K2 databases are never owned by postgres");
+    }
+
+    #[test]
+    fn a_runs_replication_grants_never_count_as_a_difference() {
+        let mut src = serde_json::json!({
+            "database": ["ws_jobs_migrator", ["=Tc/ws_jobs_migrator", "k2_repl_0123456789ab=c/postgres", "ws_jobs_agent=c/ws_jobs_migrator"]],
+            "schemas": {"public": ["ws_jobs_migrator", ["k2_repl_0123456789ab=U/ws_jobs_migrator", "ws_jobs_agent=U/ws_jobs_migrator"]]},
+            "relations": {"public.t": ["r", "ws_jobs_migrator", ["k2_repl_0123456789ab=r/ws_jobs_migrator", "ws_jobs_migrator=arwdDxtm/ws_jobs_migrator"]]},
+            "functions": {"public.f()": ["ws_jobs_migrator", false, ["=X/ws_jobs_migrator", "k2_repl_ffffffffffff=X/x"]]},
+            "defaultAcls": {"ws_jobs_migrator::r": ["k2_repl_0123456789ab=r/ws_jobs_migrator"]}
+        });
+        let mut dst = serde_json::json!({
+            "database": ["ws_jobs_migrator", ["=Tc/ws_jobs_migrator", "ws_jobs_agent=c/ws_jobs_migrator"]],
+            "schemas": {"public": ["ws_jobs_migrator", ["ws_jobs_agent=U/ws_jobs_migrator"]]},
+            "relations": {"public.t": ["r", "ws_jobs_migrator", ["ws_jobs_migrator=arwdDxtm/ws_jobs_migrator"]]},
+            "functions": {"public.f()": ["ws_jobs_migrator", false, ["=X/ws_jobs_migrator"]]},
+            "defaultAcls": {"ws_jobs_migrator::r": []}
+        });
+        assert!(!diff(&src, &dst).is_empty(), "raw, the run's grants differ");
+        normalize_privileges(&mut src, 16);
+        normalize_privileges(&mut dst, 16);
+        assert_eq!(diff(&src, &dst), Vec::<String>::new());
+        // A tenant's own grant still counts.
+        dst["database"][1].as_array_mut().unwrap().push(serde_json::json!("intruder=c/postgres"));
+        assert!(!diff(&src, &dst).is_empty());
+    }
+
+    #[test]
+    fn drop_roles_sql_is_validated_and_tolerant() {
+        let ok = |n: &str| k2_root_proto::pg_major::role_name_ok(n);
+        let s = drop_roles_sql(&["ws_jobs_agent".into(), "ws_jobs_migrator".into()], ok).unwrap();
+        assert_eq!(s.matches("DROP ROLE IF EXISTS").count(), 2);
+        assert!(s.contains("DROP ROLE IF EXISTS \"ws_jobs_agent\";") && s.contains("dependent_objects_still_exist"));
+        assert!(drop_roles_sql(&["x\"; DROP".into()], ok).is_none());
+        assert_eq!(drop_roles_sql(&[], ok).unwrap(), "");
     }
 
     #[test]

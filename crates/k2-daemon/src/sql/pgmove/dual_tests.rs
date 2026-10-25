@@ -316,6 +316,7 @@ fn start_sets_up_in_order_and_leaves_the_run_syncing() {
     assert_eq!(run.objects.object_id, "9f1c2b3a4d5e");
     assert_eq!(run.objects.forced_oids, vec![16500]);
     assert!(run.objects.target_created && run.objects.source_setup && run.objects.subscribed && !run.objects.detached);
+    assert_eq!(run.objects.roles_created, vec!["ws_jobs_agent".to_string(), "ws_jobs_bind".into(), "ws_jobs_migrator".into()]);
     let d = dops.log();
     let order = ["logical_conf 16 Some(", "dump_schema 16 17 ws_jobs", "restore_keep_force_off 17 ws_jobs as ws_jobs_migrator", "dual setup-source 16 17 ws_jobs 9f1c2b3a4d5e", "dual subscribe 16 17 ws_jobs 9f1c2b3a4d5e"];
     let mut last = 0;
@@ -359,6 +360,10 @@ fn a_setup_failure_drops_everything_and_records_aborted() {
         let made_source = matches!(step, "setup" | "subscribe");
         assert_eq!(dops.did("dual teardown"), made_source, "{step}: {:?}", dops.log());
         assert!(!run.objects.target_created, "{step}");
+        // 0.46.4 drill: the roles it made on 17 go (they blocked a later run).
+        let dropped = ops.0.borrow().full_sql.iter().any(|(m, d, s)| *m == 17 && d == "postgres" && s.contains("DROP ROLE IF EXISTS \"ws_jobs_migrator\""));
+        assert_eq!(dropped, step != "logical_conf", "{step}");
+        assert!(run.objects.roles_created.is_empty(), "{step}");
         assert!(!ops.did("allow_conn 16"), "{step}: the source was never paused");
         assert!(env.0.borrow().audits.iter().any(|(a, _)| a == "db-upgrade-live-abort"), "{step}");
     }
@@ -519,6 +524,11 @@ fn so() -> SwitchOpts {
 fn the_switch_runs_every_step_in_order() {
     let (ops, dops, store, env) = streaming();
     dops.statuses(vec![streaming_status(0, "0/16B3748")]);
+    // 0.46.4 drill: the source's ACL still grants the run's role CONNECT at
+    // the verify (it goes at teardown); it must not count as a difference.
+    ops.0.borrow_mut().prints.get_mut(&16).unwrap()["database"] =
+        json!(["ws_jobs_migrator", ["=Tc/ws_jobs_migrator", "k2_repl_9f1c2b3a4d5e=c/postgres", "ws_jobs_agent=c/ws_jobs_migrator"]]);
+    ops.0.borrow_mut().prints.get_mut(&17).unwrap()["database"] = json!(["ws_jobs_migrator", ["=Tc/ws_jobs_migrator", "ws_jobs_agent=c/ws_jobs_migrator"]]);
     let (p, run) = switch(&ops, &dops, &env, &store, "ws_jobs", &so()).unwrap();
     assert_eq!(p.state, MoveState::Succeeded, "{:?}", p.last_error);
     assert_eq!(p.method, "dual");
@@ -767,6 +777,35 @@ fn prepare_live_restarts_once_and_only_when_needed() {
     ops2.0.borrow_mut().answers.push(("SHOW wal_level".into(), "replica".into()));
     let e = prepare_live(&ops2, &FakeDual::new(), &env, 16, true, &notice).unwrap_err();
     assert!(e.contains("still runs with wal_level = replica"), "{e}");
+}
+
+// ── VM drill fixes (0.46.4) ─────────────────────────────────────────────
+
+/// A walsender ended in the write block: Postgres disables the
+/// subscription; the undo enables it again and the run streams on. If it
+/// stays disabled, the run ends failed and everything goes.
+#[test]
+fn an_undone_switch_enables_a_disabled_subscription_or_fails_the_run() {
+    let mut gone = streaming_status(0, "0/2000");
+    gone["source"]["walsenders"] = json!(0);
+    let mut disabled = streaming_status(0, "0/2000");
+    disabled["target"]["enabled"] = json!(false);
+    let ok = streaming_status(0, "0/2000");
+    let (ops, dops, store, env) = streaming();
+    dops.statuses(vec![ok.clone(), ok.clone(), gone.clone(), disabled.clone(), ok.clone()]);
+    let (p, run) = switch(&ops, &dops, &env, &store, "ws_jobs", &so()).unwrap();
+    assert_eq!((p.state, run.state), (MoveState::Aborted, RunState::Streaming), "{:?}", run.last_error);
+    assert!(ops.0.borrow().full_sql.iter().any(|(m, d, s)| *m == 17 && d == "ws_jobs" && s == "ALTER SUBSCRIPTION \"k2_dual_9f1c2b3a4d5e\" ENABLE;\n"), "enabled on the target");
+    assert!(!ops.did("drop_db") && !dops.did("dual teardown"));
+    // Still disabled after ENABLE: failed, cleaned, the owner told.
+    let (ops, dops, store, env) = streaming();
+    dops.statuses(vec![ok.clone(), ok.clone(), gone, disabled]);
+    let (p, run) = switch(&ops, &dops, &env, &store, "ws_jobs", &so()).unwrap();
+    assert_eq!((p.state, run.state), (MoveState::Aborted, RunState::Failed), "{:?}", run.last_error);
+    assert!(run.last_error.as_deref().unwrap_or_default().contains("couldn't resume"), "{:?}", run.last_error);
+    assert!(dops.did("dual teardown") && ops.did("drop_db 17 ws_jobs") && ops.did("allow_conn 16 ws_jobs on"));
+    assert!(env.0.borrow().inbox.iter().any(|(t, _)| t.contains("live move failed")), "{:?}", env.0.borrow().inbox);
+    assert_eq!(store.only().state, RunState::Failed);
 }
 
 // ── security review fixes (B1–B8) ───────────────────────────────────────

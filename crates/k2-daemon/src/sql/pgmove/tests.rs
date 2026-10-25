@@ -735,6 +735,15 @@ fn dump_or_restore_failure_aborts_and_undoes() {
         }
         // An aborted move keeps no dump (F7).
         assert!(ops.did("remove_dump ws_jobs 20261020T101500Z"), "{op}: {:?}", ops.log());
+        // 0.46.4 drill: nor the roles it created on 17 (they blocked the next move).
+        let drops: Vec<String> = ops.0.borrow().full_sql.iter().filter(|(m, d, s)| *m == 17 && d == "postgres" && s.contains("DROP ROLE IF EXISTS")).map(|(_, _, s)| s.clone()).collect();
+        assert_eq!(drops.len(), 1, "{op}: {drops:?}");
+        for r in ["ws_jobs_agent", "ws_jobs_bind", "ws_jobs_migrator"] {
+            assert!(drops[0].contains(&format!("DROP ROLE IF EXISTS \"{r}\";")), "{op}: {r}");
+        }
+        if created {
+            assert!(ops.pos("drop_db 17 ws_jobs") < ops.log().iter().position(|l| l.starts_with("sql 17 postgres DO $k2$BEGIN DROP ROLE")).unwrap(), "the copy first");
+        }
         assert!(ops.did("allow_conn 16 ws_jobs on"), "{op}");
         assert_eq!(env.0.borrow().started, vec!["jobs".to_string()], "{op}");
         assert!(env.0.borrow().majors.is_empty(), "{op}");

@@ -451,6 +451,18 @@ impl Run<'_> {
                 }
             }
         }
+        // 0.46.4 drill: the roles this move created on the target go too
+        // (left behind, they blocked the next move of a database with the
+        // same name). One that still holds something stays, warned.
+        if !live_on_target && !self.p.roles_created.is_empty() {
+            match catalog::drop_roles_sql(&self.p.roles_created, ok_name) {
+                Some(sql) => match self.ops.sql(to, "postgres", &sql) {
+                    Ok(_) => self.p.roles_created.clear(),
+                    Err(e) => self.p.warnings.push(format!("drop the roles made on {to}: {e}")),
+                },
+                None => errs.push("roles made on the target: not role names".into()),
+            }
+        }
         if self.p.quiesced && !live_on_target {
             match self.ops.allow_conn(from, &db, ConnMode::On) {
                 Ok(()) => self.p.quiesced = false,

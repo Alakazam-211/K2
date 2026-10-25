@@ -1118,8 +1118,12 @@ export interface RoomMember {
   readonly displayName: string | null
   /** agent: a login marked as an agent (k2 app user agent). */
   readonly kind: 'guest' | 'agent'
+  /** Owner, agent and Garden views only (never an App's): an agent set this person up and the extra access the owner gave waits for their password reset. */
+  readonly pendingReset?: boolean
   /** The role on the grant; null = a grant with rooms only (Thread). */
   readonly role: string | null
+  /** Owner, agent and Garden views only: the workspace whose agent set this person up (their access stays there until an owner reset), or null. */
+  readonly tiedTo?: string | null
   /** null when the owner hides names in this room (App callers only). */
   readonly username: string | null
 }

@@ -1115,7 +1115,7 @@ export const APP_VERBS = {
     http: { method: 'GET', route: '/cli/skin/members', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"admins":{"type":"string"},"count":{"type":"integer"},"members":{"items":{"additionalProperties":false,"properties":{"app":{"type":"string"},"caps":{"items":{"type":"string"},"type":"array"},"displayName":{"type":["string","null"]},"kind":{"enum":["guest","agent"]},"role":{"type":["string","null"]},"username":{"type":["string","null"]}},"type":"object"},"type":"array"},"namesHidden":{"type":"boolean"},"room":{"type":"string"},"workspace":{"type":"string"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"admins":{"type":"string"},"count":{"type":"integer"},"members":{"items":{"additionalProperties":false,"properties":{"app":{"type":"string"},"caps":{"items":{"type":"string"},"type":"array"},"displayName":{"type":["string","null"]},"kind":{"enum":["guest","agent"]},"pendingReset":{"type":"boolean"},"role":{"type":["string","null"]},"tiedTo":{"type":["string","null"]},"username":{"type":["string","null"]}},"type":"object"},"type":"array"},"namesHidden":{"type":"boolean"},"room":{"type":"string"},"workspace":{"type":"string"}},"type":"object"},
   },
   'app.self': {
     cap: null,
@@ -2659,8 +2659,12 @@ export interface RoomMember {
   readonly displayName: string | null
   /** agent: a login marked as an agent (k2 app user agent). */
   readonly kind: 'guest' | 'agent'
+  /** Owner, agent and Garden views only (never an App's): an agent set this person up and the extra access the owner gave waits for their password reset. */
+  readonly pendingReset?: boolean
   /** The role on the grant; null = a grant with rooms only (Thread). */
   readonly role: string | null
+  /** Owner, agent and Garden views only: the workspace whose agent set this person up (their access stays there until an owner reset), or null. */
+  readonly tiedTo?: string | null
   /** null when the owner hides names in this room (App callers only). */
   readonly username: string | null
 }

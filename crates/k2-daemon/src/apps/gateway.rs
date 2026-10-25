@@ -246,6 +246,35 @@ fn bind(handle: &tokio::runtime::Handle, port: u16) -> Result<(tokio::net::TcpLi
     Ok((l, bound))
 }
 
+/// End a link's accept task and return only once it has ended, so its
+/// listener is closed (the task owns it). `abort` alone only marks the
+/// task: it is cancelled, and the listener dropped, the next time a runtime
+/// worker gets to it. Until then the old listener still takes connections
+/// into its backlog and holds the port, so a stop could return with the
+/// link still reachable, and a re-open on the same slot port could fail
+/// `EADDRINUSE` (S14 test, intermittent under a loaded parallel run).
+/// Bounded: a runtime that can't get to the task in 2 s is logged, not
+/// waited on forever.
+fn end_accept_task(app_id: &str, task: tokio::task::JoinHandle<()>) {
+    task.abort();
+    let wait = || {
+        let until = std::time::Instant::now() + Duration::from_secs(2);
+        while !task.is_finished() && std::time::Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    // On a multi-thread runtime worker, hand this worker's queue to another
+    // thread while waiting (the cancel may need this very worker); a
+    // current-thread runtime can't do that (block_in_place panics there).
+    match tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(wait),
+        _ => wait(),
+    }
+    if !task.is_finished() {
+        k2_core::log_debug!("[apps/gateway] {app_id}: the old link's listener is still closing after 2 s");
+    }
+}
+
 fn spawn_accept(handle: &tokio::runtime::Handle, l: tokio::net::TcpListener, ctx: Arc<LinkCtx>, state: crate::DaemonState) -> tokio::task::JoinHandle<()> {
     handle.spawn(async move {
         loop {
@@ -312,7 +341,7 @@ pub fn open(mut spec: LinkSpec, deliver: Option<Deliver>) -> Result<String, Stri
     let keep = map.get(&spec.app_id).is_some_and(|e| !e.task.is_finished() && (spec.port == 0 || e.ctx.port == spec.port) && e.spec.service_id == spec.service_id);
     if !keep {
         if let Some(old) = map.remove(&spec.app_id) {
-            old.task.abort();
+            end_accept_task(&spec.app_id, old.task);
         }
         let (l, port) = bind(&handle, spec.port)?;
         let ctx = Arc::new(LinkCtx {
@@ -359,7 +388,7 @@ pub fn close(app_id: &str, service_id: Option<&str>, revoke: bool) -> usize {
     let entry = links().lock().unwrap_or_else(|e| e.into_inner()).remove(app_id);
     let svc = entry.as_ref().map(|e| e.ctx.service_id.clone()).or_else(|| service_id.map(str::to_string));
     if let Some(e) = entry {
-        e.task.abort();
+        end_accept_task(app_id, e.task);
     }
     match (revoke, svc) {
         (true, Some(svc)) => passes::revoke_link_passes(&svc).unwrap_or_else(|e| {

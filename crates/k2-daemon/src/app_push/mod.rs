@@ -34,6 +34,25 @@ pub(crate) mod test_keys;
 
 use k2_core::skin::{self, app_push as store};
 
+/// The vault confirm action for turning an App's push on or raising its
+/// device ceiling (`secretId` = the App's service id).
+pub const CONFIRM_ON: &str = "app-push-on";
+
+/// The text the person approves on the confirm sheet for an App push
+/// action, built here from the App's real name and service id, never from
+/// a client's label (review A-L1). `None` = not an App push action.
+pub fn confirm_reason(action: &str, service_id: Option<&str>) -> Option<Result<String, &'static str>> {
+    let what = match action {
+        a if a == creds::CONFIRM_ACTION => "change the push keys of App",
+        CONFIRM_ON => "turn on notifications (or raise the device ceiling) for App",
+        _ => return None,
+    };
+    let Some(id) = service_id.map(str::trim).filter(|s| !s.is_empty()) else { return Some(Err("secretId (the App's service id) is required")) };
+    let Some(row) = published(id) else { return Some(Err("no published App by that service id")) };
+    let name: String = row.name.chars().filter(|c| !c.is_control()).take(64).collect();
+    Some(Ok(format!("{what} {name} ({})", row.id)))
+}
+
 /// The box-wide switch: `off` (or `0`/`false`/`no`) stops every App.
 pub const SWITCH_ENV: &str = "K2_APP_PUSH";
 

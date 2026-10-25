@@ -11718,6 +11718,23 @@ _app_push_keys_post() {
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
 }
 
+# POST /cli/app/push/set; turning on (or raising the device ceiling) asks
+# the owner, outside K2, for a fresh confirm bound to the App.
+_app_push_on_post() {
+    local body="$1"
+    _app_rt_post /cli/app/push/set "$body"
+    if [ "$_CP_STATUS" = "403" ] && [[ "$_CP_BODY" == *'"vault_confirm_required"'* ]] && ! _compute_in_session; then
+        local svc tok
+        svc="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or {}).get("serviceId") or "")')"
+        [ -n "$svc" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+        tok="$(_vault_confirm_token app-push-on "$svc" "")" || exit 3
+        body="$(printf '%s' "$body" | K2_AP_TOK="$tok" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_AP_TOK"]; print(json.dumps(b))')"
+        tok=""
+        _app_rt_post /cli/app/push/set "$body"
+    fi
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+}
+
 cmd_app_push_setup() {
     local app="" p8="" kid="" team="" bundle="" sa="" json_out=0
     while [ $# -gt 0 ]; do
@@ -11827,7 +11844,7 @@ cmd_app_push_onoff() {
     [ -n "$app" ] || { echo "usage: k2 app push on|off <app>" >&2; exit 2; }
     local on=0
     [ "$mode" = on ] && on=1
-    _compute_call POST /cli/app/push/set "$(_compute_json K2_CJ_app="$app" K2_CJ_enabled_b="$on")"
+    _app_push_on_post "$(_compute_json K2_CJ_app="$app" K2_CJ_enabled_b="$on")"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | _app_push_status_print
 }
@@ -11851,7 +11868,7 @@ cmd_app_push_set() {
     case "$previews" in on) p_b=1 ;; off) p_b=0 ;; "") ;; *) echo "$usage" >&2; exit 2 ;; esac
     case "$maxd" in ""|*[!0-9]*) [ -z "$maxd" ] || { echo "$usage" >&2; exit 2; } ;; esac
     { [ -z "$r_b" ] && [ -z "$p_b" ] && [ -z "$maxd" ]; } && { echo "$usage" >&2; exit 2; }
-    _compute_call POST /cli/app/push/set "$(_compute_json K2_CJ_app="$app" K2_CJ_agentReplies_b="$r_b" K2_CJ_previews_b="$p_b" K2_CJ_maxDevices_n="$maxd")"
+    _app_push_on_post "$(_compute_json K2_CJ_app="$app" K2_CJ_agentReplies_b="$r_b" K2_CJ_previews_b="$p_b" K2_CJ_maxDevices_n="$maxd")"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | _app_push_status_print
 }

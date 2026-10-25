@@ -213,27 +213,31 @@ fn keys_confirm(who: &Who, t: &Target, v: &J) -> R<()> {
              An agent asks with a permission card.",
         ));
     }
+    fresh_confirm(
+        who,
+        t,
+        v,
+        super::creds::CONFIRM_ACTION,
+        "push keys are credentials: setting or removing them needs a fresh owner confirm (Touch ID, your login or vault password). \
+         k2 app push setup asks for it from a terminal outside K2.",
+        "confirm again: a confirm works once, for this App's push keys, within 60 seconds",
+    )
+}
+
+/// A fresh vault confirm of `action`, bound to this App's service id, from
+/// the owner in person (the caller checked who). The owner token alone is
+/// never enough: agents can read it (review A-L2, B-M2).
+fn fresh_confirm(who: &Who, t: &Target, v: &J, action: &str, ask: &str, again: &str) -> R<()> {
     let stamp = match who {
         Who::Owner => "owner".to_string(),
         Who::Login { username, .. } => format!("connect:{username}"),
         _ => String::new(),
     };
     let Some(token) = s(v, "confirmToken") else {
-        return Err(Refusal {
-            extra: Some(json!({ "serviceId": t.service_id })),
-            ..no(
-                "vault_confirm_required",
-                403,
-                "push keys are credentials: setting or removing them needs a fresh owner confirm (Touch ID, your login or vault password). \
-                 k2 app push setup asks for it from a terminal outside K2.",
-            )
-        });
+        return Err(Refusal { extra: Some(json!({ "serviceId": t.service_id, "action": action })), ..no("vault_confirm_required", 403, ask) });
     };
     let vault = crate::vault::get().map_err(|_| no("vault_closed", 503, "the vault isn't open yet"))?;
-    vault
-        .confirm
-        .take(token, super::creds::CONFIRM_ACTION, Some(&t.service_id), &stamp)
-        .map_err(|_| no("vault_confirm_required", 403, "confirm again: a confirm works once, for this App's push keys, within 60 seconds"))?;
+    vault.confirm.take(token, action, Some(&t.service_id), &stamp).map_err(|_| no("vault_confirm_required", 403, again.to_string()))?;
     Ok(())
 }
 
@@ -372,15 +376,32 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
     if enabled.is_none() && agent_replies.is_none() && previews.is_none() && max_devices.is_none() {
         return Err(no("usage", 400, "send {app} with enabled, agentReplies, previews and/or maxDevices"));
     }
-    // On (and raising the device ceiling) is the owner's approval of push
-    // for this App (CP36): never an agent, never an Admin.
-    let owner = owner_in_person(who) || matches!(who, Who::Shell { .. });
-    if (enabled == Some(true) || max_devices.is_some()) && !owner {
-        return Err(no(
-            "owner_only",
-            403,
-            "turning an App's notifications on is the owner's approval (k2 app push on <app>); an agent asks with a permission card",
-        ));
+    // On, and raising the device ceiling, are the owner's approval of push
+    // for this App (CP36): the owner in person with a fresh vault confirm
+    // bound to the App (review A-L2, B-M2), never an agent or an Admin.
+    // Lowering the ceiling and turning off need no confirm.
+    let cur_max = before_max(&t)?;
+    let raises = enabled == Some(true) || max_devices.is_some_and(|m| m > cur_max);
+    if raises {
+        if !owner_in_person(who) {
+            return Err(no(
+                "owner_only",
+                403,
+                "turning an App's notifications on (or raising its device ceiling) is the owner's approval, in person \
+                 (k2 app push on <app> from a terminal outside K2); an agent asks with a permission card",
+            ));
+        }
+        fresh_confirm(
+            who,
+            &t,
+            &v,
+            super::CONFIRM_ON,
+            "turning an App's notifications on (or raising its device ceiling) needs a fresh owner confirm \
+             (Touch ID, your login or vault password); k2 app push on asks for it from a terminal outside K2",
+            "confirm again: a confirm works once, for this App's notifications, within 60 seconds",
+        )?;
+    } else if max_devices.is_some() && !admin_human(who) {
+        return Err(no("forbidden", 403, "lowering an App's device ceiling is for the owner and Admins"));
     }
     if enabled == Some(false) && !admin_human(who) && !app_agent_at(who, &t, Level::Build) {
         return Err(no("forbidden", 403, "turning notifications off is for the owner, Admins and this App's own agent"));
@@ -416,6 +437,11 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
         super::audit_line("app-push-settings", &by, &format!("app={} agentReplies={:?} previews={:?}", t.service_id, agent_replies, previews));
     }
     status_json(&t)
+}
+
+/// The App's device ceiling now.
+fn before_max(t: &Target) -> R<i64> {
+    Ok(store::config(&t.service_id).map_err(|e| no("store", 500, e))?.max_devices.unwrap_or(store::DEFAULT_MAX_DEVICES_PER_APP))
 }
 
 /// May `who` send for this App (CP36: Admin, or the App's agent at switch 2)?

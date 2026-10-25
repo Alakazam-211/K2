@@ -1600,6 +1600,7 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // removing an App's Apple/Google push keys, every caller (the owner
     // token included: agents can read it). `secretId` = the service id.
     crate::app_push::creds::CONFIRM_ACTION,
+    crate::app_push::CONFIRM_ON,
     // App runtime (prd-k2-app-runtime-v1 §4.3): moving one App out of its
     // guarded container into the process exception (`secretId` = App id).
     "app-process-exception",
@@ -1691,6 +1692,11 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
             return Err(err("clone_plan_mismatch", 400, "the plan changed; preview the clone again"));
         }
         (Some(sid), reason)
+    } else if let Some(reason) = crate::app_push::confirm_reason(action, b.secret_id.as_deref()) {
+        // App push: the sheet names the App from the daemon's own record,
+        // never from the client's label (review A-L1).
+        let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
+        (b.secret_id.clone(), reason)
     } else {
         let label = b.label.as_deref().map(|l| format!(" {}", l.chars().take(64).collect::<String>())).unwrap_or_default();
         (b.secret_id.clone(), format!("{}{label}", action.replace('-', " ")))

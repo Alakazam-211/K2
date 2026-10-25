@@ -337,8 +337,42 @@ fn owner_and_agent_rules_for_send_test_set_and_log() {
     assert_eq!((st, v["state"].clone(), v["off"].clone()), (200, json!("off"), json!("owner_off")), "{v}");
     let (st, v) = owner_post(owner_routes::SET, &Who::Login { username: "ada".into(), role: Role::Admin }, json!({"app": f.app, "enabled": true}));
     assert_eq!(st, 403, "an Admin can't turn it on: {v}");
-    let (st, v) = owner_post(owner_routes::SET, &Who::Owner, json!({"app": f.app, "enabled": true, "maxDevices": 50}));
-    assert_eq!((st, v["state"].clone(), v["maxDevices"].clone()), (200, json!("on"), json!(50)), "{v}");
+    let shell = Who::Shell { project_id: f.ws.clone(), session_id: "s".into() };
+    let (st, v) = owner_post(owner_routes::SET, &shell, json!({"app": f.app, "enabled": true}));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("owner_only")), "a shell tab can't pass the confirm: {v}");
+    // The owner token alone is not enough to turn it on (review A-L2/B-M2).
+    let (st, v) = owner_post(owner_routes::SET, &Who::Owner, json!({"app": f.app, "enabled": true}));
+    assert_eq!((st, v["error"]["code"].clone(), v["error"]["serviceId"].clone()), (403, json!("vault_confirm_required"), json!(f.app)), "{v}");
+    assert_eq!(v["error"]["action"], super::super::CONFIRM_ON);
+    let vault = crate::vault::ensure_test_vault();
+    let keys_tok = vault.confirm.mint(super::super::creds::CONFIRM_ACTION, Some(&f.app), "owner", "local-auth");
+    let (st, v) = owner_post(owner_routes::SET, &Who::Owner, json!({"app": f.app, "enabled": true, "confirmToken": keys_tok}));
+    assert_eq!(st, 403, "a keys confirm doesn't turn push on: {v}");
+    let other_tok = vault.confirm.mint(super::super::CONFIRM_ON, Some(&f.other_app), "owner", "local-auth");
+    let (st, v) = owner_post(owner_routes::SET, &Who::Owner, json!({"app": f.app, "enabled": true, "confirmToken": other_tok}));
+    assert_eq!(st, 403, "another App's confirm doesn't either: {v}");
+    let tok = vault.confirm.mint(super::super::CONFIRM_ON, Some(&f.app), "owner", "local-auth");
+    let (st, v) = owner_post(owner_routes::SET, &Who::Owner, json!({"app": f.app, "enabled": true, "confirmToken": tok}));
+    assert_eq!((st, v["state"].clone()), (200, json!("on")), "{v}");
+    // Lowering the ceiling needs no confirm (an Admin may); raising does.
+    let admin = Who::Login { username: "ada".into(), role: Role::Admin };
+    let (st, v) = owner_post(owner_routes::SET, &admin, json!({"app": f.app, "maxDevices": 50}));
+    assert_eq!((st, v["maxDevices"].clone()), (200, json!(50)), "{v}");
+    let (st, v) = owner_post(owner_routes::SET, &admin, json!({"app": f.app, "maxDevices": 60}));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("owner_only")), "{v}");
+    let (st, v) = owner_post(owner_routes::SET, &Who::Owner, json!({"app": f.app, "maxDevices": 60}));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("vault_confirm_required")), "{v}");
+    let tok = vault.confirm.mint(super::super::CONFIRM_ON, Some(&f.app), "owner", "local-auth");
+    let (st, v) = owner_post(owner_routes::SET, &Who::Owner, json!({"app": f.app, "maxDevices": 60, "confirmToken": tok}));
+    assert_eq!((st, v["maxDevices"].clone()), (200, json!(60)), "{v}");
+    // The confirm sheet names the App from the daemon's record (review A-L1).
+    let reason = super::super::confirm_reason(super::super::CONFIRM_ON, Some(&f.app)).expect("an App push action").expect("a known App");
+    assert!(reason.contains("jobs") && reason.contains(&f.app), "{reason}");
+    let keys = super::super::confirm_reason(super::super::creds::CONFIRM_ACTION, Some(&f.app)).expect("action").expect("App");
+    assert!(keys.contains("push keys") && keys.contains(&f.app), "{keys}");
+    assert!(super::super::confirm_reason(super::super::CONFIRM_ON, Some("no-such-app")).expect("action").is_err());
+    assert!(super::super::confirm_reason(super::super::CONFIRM_ON, None).expect("action").is_err());
+    assert!(super::super::confirm_reason("app-key-mint", Some(&f.app)).is_none(), "other actions keep their own text");
     // Another workspace's agent can't name the App at all.
     let stranger = Who::Agent { project_id: "nope".into(), session_id: "s".into() };
     let (st, _) = owner_post(owner_routes::SEND, &stranger, send_body);

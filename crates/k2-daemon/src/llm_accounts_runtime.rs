@@ -1112,7 +1112,7 @@ pub fn reseed_after_adoption(llm: &Value, pid: i32) {
     }
 }
 
-fn is_resume_argv(tool: Tool, args: &[String]) -> bool {
+pub(crate) fn is_resume_argv(tool: Tool, args: &[String]) -> bool {
     match tool {
         Tool::Codex => args.iter().any(|a| a == "resume"),
         Tool::Claude => args.iter().any(|a| a == "--resume" || a == "-r" || a == "--continue" || a == "-c"),

@@ -666,6 +666,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/llm/accounts/list",
         "/cli/llm/accounts/status",
         "/cli/llm/accounts/usage",
+        // The token one chat runs on and its chip number (read-only; its
+        // refresh POST is people-only, refused in the handler).
+        "/cli/llm/accounts/for",
         // Usage v2 (prd-usage-v2 §1): an agent reads its OWN workspace's
         // tokens and turns, and the limits; the handler forces the
         // workspace. `/cli/usage/limits/refresh` is NOT here (people only).
@@ -751,6 +754,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/llm/accounts/unpin",
         "/cli/llm/accounts/add-key",
         "/cli/llm/accounts/clear-default",
+        "/cli/llm/accounts/for/refresh",
         // App users' wallets (0.46.3): an agent of an App's own workspace
         // with switch 2 reads and sets that App's fallback only (the
         // handler checks; every other /cli/app/wallet/* answers owner_only).

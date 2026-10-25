@@ -760,6 +760,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/llm/accounts/add", Member),
     post("/cli/llm/accounts/add-key", Member),
     post("/cli/llm/accounts/clear-default", Admin),
+    get("/cli/llm/accounts/for", Member),
+    post("/cli/llm/accounts/for/refresh", Member),
     get("/cli/llm/accounts/list", Member),
     post("/cli/llm/accounts/login", Member),
     post("/cli/llm/accounts/login/cancel", Member),
@@ -2782,9 +2784,15 @@ mod tests {
             assert!(floor.admits(Role::Admin), "{p}");
             assert!(floor.admits(Role::Owner), "{p}");
         }
-        for p in ["/cli/llm/accounts/list", "/cli/llm/accounts/status", "/cli/llm/accounts/usage"] {
+        for p in ["/cli/llm/accounts/list", "/cli/llm/accounts/status", "/cli/llm/accounts/usage", "/cli/llm/accounts/for"] {
             assert_eq!(lookup(p).expect("classified").get.expect("GET").as_wire(), "member", "{p}");
         }
+        // The phone's chat-header chip: read like the list; its one-token
+        // refresh is a Member POST (no GET).
+        assert!(lookup("/cli/llm/accounts/for").expect("classified").post.is_none());
+        let refresh = lookup("/cli/llm/accounts/for/refresh").expect("classified");
+        assert!(refresh.get.is_none(), "for/refresh is POST-only");
+        assert_eq!(refresh.post.expect("POST floor").as_wire(), "member");
         crate::test_support::with_temp_home(|| {
             let member = session("llm_member", Role::Member);
             let admin = session("llm_admin", Role::Admin);

@@ -73,10 +73,20 @@ A TOKEN FOR ONE WORKSPACE OR CHAT
   CLI: k2 llm tokens pin --workspace <ws>|--session <key> <tool> <label>;
   unpin goes back to Server default.
 
+WHICH TOKEN ONE CHAT IS ON
+  k2 llm tokens for <agent> (a workspace's pinned chat, or a sidecar
+  ws/2) shows the token that chat runs on and why: set for the chat, set
+  for its workspace, the token its conversation started on, or the
+  server default. A sidecar with no token of its own uses its
+  workspace's. A running chat shows the token it started on; a change
+  shows "from its next start". The usage percent is the same number the
+  top-bar chip shows for that token. --refresh re-reads it (at most once
+  a minute per token).
+
 WHO
   Owner, Admin and Member users change tokens on Settings → Language
   Models → Subs / Tokens. Agents and K2 terminals are read-only: list,
-  status, usage, pins. Change tokens on Settings → Language Models →
+  status, usage, pins, for. Change tokens on Settings → Language Models →
   Subs / Tokens, or run k2 from a terminal outside K2 (otherwise exit 3,
   owner_only). No route ever returns a token.
 

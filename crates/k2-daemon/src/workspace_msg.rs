@@ -1807,7 +1807,7 @@ pub(crate) fn lookup_live_for_sidecar(
     })
 }
 
-fn tab_row_for_conversation(
+pub(crate) fn tab_row_for_conversation(
     project_id: &str,
     conversation_key: &str,
 ) -> Option<k2_core::db::schema::WorkspaceTabSession> {

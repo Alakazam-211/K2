@@ -340,6 +340,16 @@ exit: 0
       "flags": [{"name": "--json", "arg": null, "description": "Raw daemon JSON."}]
     },
     {
+      "name": "llm tokens for",
+      "usage": "k2 llm tokens for <agent> [--refresh] [--json]",
+      "description": "The token one chat runs on (a workspace's pinned chat, or a sidecar ws/2) and why: set for the chat, set for its workspace, the token its conversation started on, or the server default. Shows that token's usage as the top-bar chip computes it. A running chat shows the token it started on. Read-only from K2 terminals.",
+      "args": [{"name": "agent", "required": true}],
+      "flags": [
+        {"name": "--refresh", "arg": null, "description": "Re-read that token's usage first (people only; at most once a minute per token)."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON (GET /cli/llm/accounts/for)."}
+      ]
+    },
+    {
       "name": "connections",
       "usage": "k2 connections <list|add|remove> [<target>] [--json] [--users]",
       "description": "Manage/list the workspaces this one is connected to (the yellow pages used for name addressing).",

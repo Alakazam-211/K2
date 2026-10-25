@@ -127,15 +127,16 @@ assert_eq "catalog: llm-accounts is an id tool" "$(_cli_tool_default_mode llm-ac
 if _cli_tool_is_locked llm-accounts; then ok "catalog: llm-accounts is locked"; else bad "catalog: llm-accounts is locked"; fi
 
 schema="$(env HOME="$HOME1" "$K2_CLI" --schema)"
-python3 -c '
+# On stdin: the schema is over Linux's 128 KiB limit for one argv string.
+printf '%s' "$schema" | python3 -c '
 import json, sys
-d = json.loads(sys.argv[1])
+d = json.load(sys.stdin)
 names = {c["name"] for c in d["commands"]}
 for n in ("llm tokens list", "llm tokens status", "llm tokens usage", "llm tokens add", "llm tokens switch", "llm tokens next",
-          "llm tokens add-key", "llm tokens pin", "llm tokens unpin", "llm tokens pins"):
+          "llm tokens add-key", "llm tokens pin", "llm tokens unpin", "llm tokens pins", "llm tokens for"):
     assert n in names, n
 assert not any(n.startswith("llm accounts") for n in names), sorted(n for n in names if n.startswith("llm"))
-' "$schema" && ok "schema lists llm tokens verbs" || bad "schema llm tokens verbs"
+' && ok "schema lists llm tokens verbs" || bad "schema llm tokens verbs"
 help_daily="$(sed -n '/^cmd_help_v2_daily() {/,/^}/p' "$K2_CLI")"
 assert_contains "daily help lists llm tokens" "$help_daily" "llm tokens list"
 
@@ -155,7 +156,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 work, scoped = sys.argv[1], sys.argv[2]
 POST_ONLY = {"add", "login", "login/input", "login/cancel", "switch", "next", "rename", "remove", "refresh",
-             "pin", "unpin", "add-key", "clear-default"}
+             "pin", "unpin", "add-key", "clear-default", "for/refresh"}
+FOR = {"address": "builder/2", "workspaceId": "proj-1", "sessionKey": "tab-p2", "sidecar": True, "conversationId": "conv-2",
+       "live": True, "tool": "claude", "accountId": "acc_personal", "label": "personal", "kind": "subscription",
+       "source": "pinned", "pinScope": "workspace", "usageFrom": "token", "maxPercent": 42, "updatedAt": "2026-10-24T11:00:00Z",
+       "state": "ok", "airgap": False,
+       "windows": [{"label": "Session", "used": 0.41496, "usedPercent": 41.5, "resetsAt": "2099-01-01T00:00:00Z", "chip": True},
+                   {"label": "Weekly", "used": 0.2, "usedPercent": 20.0, "resetsAt": "2099-01-07T00:00:00Z", "chip": True}],
+       "nextStart": {"accountId": "acc_key", "source": "pinned"}}
 state = {"polls": 0, "input": None}
 
 def acct(i, label, active, st="signed_in", tool="claude"):
@@ -278,6 +286,13 @@ class H(BaseHTTPRequestHandler):
             out = {"unpinned": b.get("scopeId") != "nothing-here"}
         elif verb == "add-key":
             out = {"account": dict(KEY_ACCT, tool=b.get("tool"), label=b.get("label"))}
+        elif verb == "for":
+            if rec["query"].get("addr") == "nobody":
+                status, out = 404, {"error": {"code": "not_found", "hint": "no agent nobody on this server"}}
+            else:
+                out = FOR
+        elif verb == "for/refresh":
+            out = dict(FOR, refreshed=False, reason="rate_limited", retryAfterSecs=37)
         else:
             status, out = 404, {"error": {"code": "not_found", "hint": "no route"}}
         data = json.dumps(out).encode()
@@ -421,7 +436,7 @@ assert_eq "refresh body" "$(last_body)" '{"usage": true}'
 python3 - "$WORK/reqs.jsonl" <<'PY' && ok "no POST-only route was ever a GET" || bad "a POST-only route was sent as GET"
 import json, sys
 post_only = {"add", "login", "login/input", "login/cancel", "switch", "next", "rename", "remove", "refresh",
-             "pin", "unpin", "add-key", "clear-default"}
+             "pin", "unpin", "add-key", "clear-default", "for/refresh"}
 for line in open(sys.argv[1]):
     r = json.loads(line)
     verb = r["path"][len("/cli/llm/accounts/"):]
@@ -531,6 +546,40 @@ cell llm tokens pin --workspace builder claude personal >/dev/null 2>"$WORK/err"
 set -e
 assert_eq "passport pin → exit 3" "$rc" "3"
 assert_contains "passport pin owner_only" "$(cat "$WORK/err")" "owner_only:"
+
+echo "== for: the token one chat runs on =="
+capture_nod llm tokens for
+assert_eq "for without an agent exit 2" "$rc" "2"
+capture_nod llm tokens for a b
+assert_eq "for with two agents exit 2" "$rc" "2"
+out="$(owner llm tokens for builder/2)"
+assert_eq "for is a GET" "$(last method)" "GET"
+assert_eq "for path" "$(last path)" "/cli/llm/accounts/for"
+assert_eq "for sends addr" "$(tail -n 1 "$WORK/reqs.jsonl" | python3 -c 'import json,sys; print(json.load(sys.stdin)["query"]["addr"])')" "builder/2"
+assert_contains "for: token and why" "$out" "builder/2: claude token personal (set for its workspace)"
+assert_contains "for: chip number + windows" "$out" "usage: 42% (Session 42% · Weekly 20%)"
+assert_contains "for: read at" "$out" "read at 2026-10-24T11:00:00Z"
+assert_contains "for: next start" "$out" "from its next start: acc_key (pinned)"
+json_out="$(owner llm tokens for builder/2 --json)"
+python3 -c 'import json,sys; v=json.loads(sys.argv[1]); assert v["maxPercent"]==42 and v["source"]=="pinned", v' "$json_out" \
+    && ok "for --json passes the body through" || bad "for --json passthrough"
+out="$(cell llm tokens for builder/2)"
+assert_contains "for works from a K2 terminal" "$out" "usage: 42%"
+assert_eq "passport for sends the scoped token" "$(last token)" "$SCOPED"
+out="$(owner llm tokens for builder/2 --refresh)"
+assert_eq "for --refresh is a POST" "$(last method)" "POST"
+assert_eq "for --refresh path" "$(last path)" "/cli/llm/accounts/for/refresh"
+assert_eq "for --refresh body" "$(last_body)" '{"addr": "builder/2"}'
+assert_contains "for --refresh: rate limited" "$out" "not re-read: read less than a minute ago (try in 37s)"
+set +e
+cell llm tokens for builder/2 --refresh >/dev/null 2>"$WORK/err"; rc=$?
+set -e
+assert_eq "passport for --refresh → exit 3" "$rc" "3"
+set +e
+owner llm tokens for nobody >/dev/null 2>"$WORK/err"; rc=$?
+set -e
+assert_eq "for unknown agent → exit 4" "$rc" "4"
+assert_contains "for 404 hint" "$(cat "$WORK/err")" "not_found"
 
 echo "== add-key =="
 API_KEY="sk-fake-K2TEST-0123456789abcdef"

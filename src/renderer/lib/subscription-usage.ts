@@ -21,6 +21,9 @@ export interface UsageWindow {
   windowStart?: string
   /** `resetsAt` had passed when the daemon served it; a re-check is under way. */
   resetPassed?: boolean
+  /** This window drives the top-bar chip (the daemon's rule; served with
+   *  `maxPercent` by daemons that own the chip number). */
+  chip?: boolean
 }
 
 /** Why a login has (no) numbers (Usage v2 §3.2). */
@@ -51,6 +54,10 @@ export interface HarnessUsage {
   nextProbeAt?: string
   /** When the failed check ran. */
   attemptedAt?: string
+  /** The top-bar chip's number for this row, computed by the daemon (the
+   *  same number `GET /cli/llm/accounts/for` gives the phone). `null` = no
+   *  chip. Absent = an older daemon: the renderer computes it itself. */
+  maxPercent?: number | null
 }
 
 export interface SubscriptionDoc {
@@ -102,6 +109,7 @@ export function parseWindow(raw: unknown): UsageWindow | null {
   const start = nonEmpty(raw.windowStart)
   if (start) w.windowStart = start
   if (raw.resetPassed === true) w.resetPassed = true
+  if (typeof raw.chip === 'boolean') w.chip = raw.chip
   return w
 }
 
@@ -135,7 +143,16 @@ function parseHarness(raw: unknown): HarnessUsage | null {
     status: str(raw.status),
     ...(typeof raw.error === 'string' && raw.error !== '' ? { error: raw.error } : {}),
     ...parseRowExtras(raw),
+    ...parseMaxPercent(raw),
   }
+}
+
+/** `maxPercent` when the daemon sent the field (a number or null). It is
+ *  absent on an older daemon, which is how the chip tells them apart. */
+function parseMaxPercent(raw: Record<string, unknown>): Pick<HarnessUsage, 'maxPercent'> {
+  if (!('maxPercent' in raw)) return {}
+  const n = finite(raw.maxPercent)
+  return { maxPercent: n === undefined ? null : Math.round(n) }
 }
 
 /**
@@ -194,7 +211,34 @@ function chipWindows<W extends { label: string }>(harness: ProbedHarness, window
   return windows.filter((window) => CLAUDE_CHIP_LABELS.has(window.label))
 }
 
+/** The chip number for an older daemon (no `maxPercent`): the highest chip
+ *  window, where a window past its reset counts 0 when `nowMs` is given.
+ *  Only used for those daemons. */
+function legacyChipPercent(harness: ProbedHarness, row: HarnessUsage, nowMs?: number): number | null {
+  if (!isSignedIn(row) || !Array.isArray(row.windows) || row.windows.length === 0) return null
+  let used = 0
+  for (const window of chipWindows(harness, row.windows)) {
+    used = Math.max(used, nowMs === undefined ? percentUsed(window.used) : windowPercent(window, nowMs))
+  }
+  return used
+}
+
+/** The daemon's chip number for a row that carries `maxPercent`. Between
+ *  polls, if one of the daemon's chip windows passes its reset after it
+ *  was served, the same reset rule is applied to the daemon's own window
+ *  values (its `chip` flags and `usedPercent`). Nothing else is
+ *  recomputed here. */
+function daemonChipPercent(row: HarnessUsage, nowMs?: number): number | null {
+  if (row.maxPercent === null || row.maxPercent === undefined) return null
+  if (nowMs === undefined) return row.maxPercent
+  const chipWins = row.windows.filter((w) => w.chip === true)
+  const resetSinceServed = chipWins.some((w) => w.resetPassed !== true && windowReset(w, nowMs))
+  if (!resetSinceServed) return row.maxPercent
+  return chipWins.reduce((max, w) => Math.max(max, windowPercent(w, nowMs)), 0)
+}
+
 /** One top-bar chip per signed-in harness that has a window. Highest window wins inside that harness. Claude, then Codex, then Grok.
+ *  The number is the daemon's `maxPercent`, which the phone's chat header also shows. An older daemon that does not send it gets the renderer's own calculation.
  *  With `nowMs`, a window past its reset counts 0 (Usage v2 P8: the old % is not shown as current). */
 export function buttonChips(
   doc: SubscriptionDoc | null,
@@ -204,11 +248,8 @@ export function buttonChips(
   const chips: { harness: ProbedHarness; used: number }[] = []
   for (const row of visibleHarnesses(doc)) {
     if (!isProbedHarness(row.harness)) continue
-    if (!isSignedIn(row) || !Array.isArray(row.windows) || row.windows.length === 0) continue
-    let used = 0
-    for (const window of chipWindows(row.harness, row.windows)) {
-      used = Math.max(used, nowMs === undefined ? percentUsed(window.used) : windowPercent(window, nowMs))
-    }
+    const used = 'maxPercent' in row ? daemonChipPercent(row, nowMs) : legacyChipPercent(row.harness, row, nowMs)
+    if (used === null) continue
     chips.push({ harness: row.harness, used })
   }
   const order = new Map(PROBED_HARNESSES.map((id, index) => [id, index]))

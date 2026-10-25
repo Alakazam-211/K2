@@ -825,6 +825,14 @@ pub const FEATURE_ACTIVITY_LIVE_BUSY: &str = "activity-live-busy";
 /// client without the key shows no remote row badges (never guesses).
 pub const FEATURE_AGENT_UNREAD_TICKETS: &str = "agent-unread-tickets-v1";
 
+/// `GET /cli/llm/accounts/for?addr=` answers the LLM token one chat (the
+/// pinned chat or a sidecar `ws/N`) runs on, with that token's chip number
+/// (`maxPercent`, the desktop top-bar chip's own calculation, also served
+/// on each `/cli/usage/subscriptions` row), and `POST
+/// /cli/llm/accounts/for/refresh` re-reads that one token (once a minute).
+/// The phone shows it in a chat header and never probes an older server.
+pub const FEATURE_LLM_ACCOUNT_FOR: &str = "llm-account-for-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -914,6 +922,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_THREAD_ACTIVITY_EAR);
     out.push(FEATURE_THREAD_CONTEXT);
     out.push(FEATURE_APP_RESOURCES);
+    out.push(FEATURE_LLM_ACCOUNT_FOR);
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1, §10):
     // listed only while the global switch is on (setting or env). Its flip
     // publishes a settings frame (`settings_routes::permission_cards_flipped`)
@@ -1002,6 +1011,7 @@ mod tests {
                 "thread-activity-ear-v1",
                 "thread-context-v1",
                 "app-resources-v1",
+                "llm-account-for-v1",
                 "boot-status-views-v1"
             ]
         );

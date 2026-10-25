@@ -188,6 +188,8 @@ mod tests {
         ("POST", "/cli/daemon/update/start"),
         ("GET", "/cli/daemon/update/check"),
         ("GET", "/cli/llm/accounts/list"),
+        ("GET", "/cli/llm/accounts/for"),
+        ("POST", "/cli/llm/accounts/for/refresh"),
         ("GET", "/cli/me/homes"),
         ("GET", "/cli/settings/get"),
         ("POST", "/cli/settings/update"),

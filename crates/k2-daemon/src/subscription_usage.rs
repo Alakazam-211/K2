@@ -608,6 +608,93 @@ fn decorate_file(doc: SubscriptionFile, now: DateTime<Utc>) -> SubscriptionFile 
     }
 }
 
+// ── The top-bar chip: ONE number for the desktop and the phone ─────
+//
+// The desktop top-bar chip and the phone's chat header
+// (`GET /cli/llm/accounts/for`) both show the number computed here, served
+// as `maxPercent` on each `/cli/usage/subscriptions` row and on the `/for`
+// answer, from the same cached readings. The renderer no longer computes
+// its own max (it falls back to its old copy only for a daemon that sends
+// no `maxPercent`). The parity test pins the same fixture to the same
+// numbers on both sides (`tests/fixtures/usage-chip-parity.json`).
+
+/// Claude's chip is the greater of its Session (5-hour) and Weekly
+/// windows; model-scoped limits ("Fable Weekly") stay in the menu but never
+/// drive it. Other tools use every window.
+const CLAUDE_CHIP_LABELS: [&str; 2] = ["Session", "Weekly"];
+
+/// Does this window drive the chip? (Served as the window's `chip`.)
+pub fn chip_window(harness: &str, w: &UsageWindow) -> bool {
+    harness != HARNESS_CLAUDE || CLAUDE_CHIP_LABELS.contains(&w.label.as_str())
+}
+
+/// The whole percent a window counts for: 0 once its reset time has passed
+/// (the old number is not shown as current while the re-check runs), else
+/// its `usedPercent` (the served 2-decimal rounding of `used`) clamped to
+/// 0..100 and rounded.
+pub fn window_percent(w: &UsageWindow, now: DateTime<Utc>) -> i64 {
+    let reset = w.reset_passed
+        || DateTime::parse_from_rfc3339(&w.resets_at).is_ok_and(|t| t.with_timezone(&Utc) <= now);
+    if reset {
+        return 0;
+    }
+    let used_percent = (w.used * 10_000.0).round() / 100.0;
+    used_percent.clamp(0.0, 100.0).round() as i64
+}
+
+/// The chip's number for one row: the highest [`window_percent`] over its
+/// [`chip_window`]s. `None` when the chip shows nothing for it: not a
+/// probed tool, not signed in, its sign-in expired, or no window at all.
+/// Never invented: no reading means `None`, not 0.
+pub fn chip_percent(h: &HarnessUsage, now: DateTime<Utc>) -> Option<i64> {
+    if !is_known_harness(&h.harness) || h.status == STATUS_NOT_SIGNED_IN || h.status == STATUS_SIGN_IN_EXPIRED {
+        return None;
+    }
+    // A client drops a window whose `used` is not a finite number.
+    let windows: Vec<&UsageWindow> = h.windows.iter().filter(|w| w.used.is_finite()).collect();
+    if windows.is_empty() {
+        return None;
+    }
+    Some(
+        windows
+            .iter()
+            .filter(|w| chip_window(&h.harness, w))
+            .map(|w| window_percent(w, now))
+            .max()
+            .unwrap_or(0),
+    )
+}
+
+/// A served row as JSON: the row (already decorated) plus `maxPercent`
+/// ([`chip_percent`], `null` = no chip) and each window's `chip`.
+pub fn served_row_json(h: &HarnessUsage, now: DateTime<Utc>) -> Value {
+    let mut v = serde_json::to_value(h).unwrap_or(Value::Null);
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("maxPercent".into(), serde_json::json!(chip_percent(h, now)));
+        if let Some(ws) = obj.get_mut("windows").and_then(Value::as_array_mut) {
+            for (wv, w) in ws.iter_mut().zip(h.windows.iter()) {
+                if let Some(wo) = wv.as_object_mut() {
+                    wo.insert("chip".into(), Value::Bool(chip_window(&h.harness, w)));
+                }
+            }
+        }
+    }
+    v
+}
+
+/// The served `/cli/usage/subscriptions` body.
+pub fn served_doc_json(doc: &SubscriptionFile, now: DateTime<Utc>) -> Value {
+    serde_json::json!({
+        "harnesses": doc.harnesses.iter().map(|h| served_row_json(h, now)).collect::<Vec<_>>(),
+    })
+}
+
+/// The shared cache's row for one tool, decorated as served (the row the
+/// top-bar chip reads). `None` when the cache has none.
+pub fn served_shared_row(harness: &str, now: DateTime<Utc>) -> Option<HarnessUsage> {
+    cached_rows().into_iter().find(|h| h.harness == harness).map(|h| decorate_row(h, now, harness))
+}
+
 fn io_for_probe() -> Arc<dyn UsageIo> {
     if let Some(io) = test_io_slot()
         .lock()
@@ -620,7 +707,7 @@ fn io_for_probe() -> Arc<dyn UsageIo> {
 }
 
 fn ok_doc(doc: &SubscriptionFile) -> CliResponse {
-    match serde_json::to_string(doc) {
+    match serde_json::to_string(&served_doc_json(doc, Utc::now())) {
         Ok(body) => CliResponse::ok_json(body),
         Err(e) => CliResponse::internal_error(format!("subscriptions json: {e}")),
     }
@@ -3849,5 +3936,88 @@ mod tests {
         assert!(!joined.contains("--reauth"));
         assert!(!joined.contains("auth.json"));
         assert!(!joined.contains("cli-chat-proxy"));
+    }
+
+    // ── Chip parity: the same fixture the renderer test reads ──────────
+
+    const CHIP_PARITY: &str = include_str!("../../../src/shared/usage-chip-parity.json");
+
+    fn at(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).expect("fixture time").with_timezone(&Utc)
+    }
+
+    fn expected_of(v: &Value, harness: &str) -> Option<i64> {
+        let e = v.get(harness).unwrap_or_else(|| panic!("fixture expected has no {harness}"));
+        if e.is_null() {
+            None
+        } else {
+            Some(e.as_i64().unwrap_or_else(|| panic!("fixture expected {harness} is not an integer: {e}")))
+        }
+    }
+
+    /// The daemon serves exactly the fixture's `served` windows (usedPercent,
+    /// resetPassed, chip) and `maxPercent` for its cache rows, and the chip
+    /// at the later clock — the numbers the renderer test pins too.
+    #[test]
+    fn chip_parity_fixture_matches_the_renderer() {
+        let fixture: Value = serde_json::from_str(CHIP_PARITY).expect("parity fixture is JSON");
+        let cases = fixture["cases"].as_array().expect("cases");
+        assert!(cases.len() >= 2, "the parity fixture lost its cases");
+        for case in cases {
+            let name = case["name"].as_str().expect("case name");
+            let now = at(case["now"].as_str().expect("now"));
+            let rows: Vec<HarnessUsage> = serde_json::from_value(case["rows"].clone()).expect("rows are cache rows");
+            let served = case["served"].as_array().expect("served");
+            assert_eq!(rows.len(), served.len(), "{name}");
+            for (row, want) in rows.into_iter().zip(served) {
+                let harness = row.harness.clone();
+                let got = served_row_json(&decorate_row(row, now, &format!("chip-parity-{harness}")), now);
+                assert_eq!(got["harness"], want["harness"], "{name}");
+                assert_eq!(got["maxPercent"], want["maxPercent"], "{name} {harness} maxPercent");
+                assert_eq!(
+                    got["maxPercent"].as_i64(),
+                    expected_of(&case["expected"], &harness),
+                    "{name} {harness}: served maxPercent vs expected"
+                );
+                let gw = got["windows"].as_array().expect("served windows");
+                let ww = want["windows"].as_array().expect("fixture windows");
+                assert_eq!(gw.len(), ww.len(), "{name} {harness} windows");
+                for (g, w) in gw.iter().zip(ww) {
+                    for key in ["label", "used", "resetsAt", "usedPercent", "resetPassed", "chip"] {
+                        assert_eq!(g[key], w[key], "{name} {harness} window {} field {key}", w["label"]);
+                    }
+                }
+            }
+            // The same served doc at a later clock (before the next poll).
+            let later = at(case["later"]["now"].as_str().expect("later.now"));
+            let served_rows: Vec<HarnessUsage> = serde_json::from_value(case["served"].clone()).expect("served rows parse");
+            for row in &served_rows {
+                assert_eq!(
+                    chip_percent(row, later),
+                    expected_of(&case["later"]["expected"], &row.harness),
+                    "{name} {} at the later clock",
+                    row.harness
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn window_percent_counts_a_passed_reset_as_zero_and_never_rounds_twice_differently() {
+        let now = at("2026-10-24T12:00:00Z");
+        let w = |used: f64, resets: &str| UsageWindow { label: "Session".into(), used, resets_at: resets.into(), ..Default::default() };
+        assert_eq!(window_percent(&w(0.41496, "2026-10-24T13:00:00Z"), now), 42, "41.5 served → 42, as the renderer rounds it");
+        assert_eq!(window_percent(&w(0.004, ""), now), 0);
+        assert_eq!(window_percent(&w(1.7, ""), now), 100);
+        assert_eq!(window_percent(&w(-0.2, ""), now), 0);
+        assert_eq!(window_percent(&w(0.97, "2026-10-24T12:00:00Z"), now), 0, "reset at exactly now counts 0");
+        let mut flagged = w(0.97, "2026-10-24T13:00:00Z");
+        flagged.reset_passed = true;
+        assert_eq!(window_percent(&flagged, now), 0);
+        // No reading → no number.
+        let empty = HarnessUsage { harness: "claude".into(), status: STATUS_NO_WINDOW.into(), ..Default::default() };
+        assert_eq!(chip_percent(&empty, now), None);
+        let gemini = HarnessUsage { harness: "gemini".into(), windows: vec![w(0.5, "")], ..Default::default() };
+        assert_eq!(chip_percent(&gemini, now), None, "only probed tools have a chip");
     }
 }

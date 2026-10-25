@@ -266,6 +266,7 @@ pub mod zen_garden_cards;
 pub mod zen_access_routes;
 // Garden History (A6, G29): edits outside K2 and the History merge.
 pub mod zen_history;
+pub mod llm_account_for;
 pub mod llm_accounts_routes;
 pub mod llm_accounts_runtime;
 pub mod person_wallet_routes;

@@ -686,14 +686,71 @@ fn pool(conn: &Connection, tool: Tool) -> Result<SpawnLogin, WalletError> {
     Ok(SpawnLogin { tool, account_id: None, kind: None, source: Source::Pool, home: None, env: Vec::new(), carry: None })
 }
 
-/// Decide the login for a spawn. `conversation_id` + `is_resume`: a
-/// resume runs on its chat's pin (session key or conversation, the newer
-/// pick) when there is one, with [`SpawnLogin::carry`] set when the
-/// conversation's history lives in another home; otherwise on the login
+/// The login a session runs on, decided from the pins and the records
+/// alone: no file, slot or env is touched. [`decide_spawn`] turns it into
+/// a [`SpawnLogin`]; `GET /cli/llm/accounts/for` reports it, so the
+/// phone's chat header and the spawn share one set of rules.
+#[derive(Debug, Clone)]
+pub struct Decision {
+    pub tool: Tool,
+    pub source: Source,
+    /// The wallet login. `None` = the pool: the tool's live home, or the
+    /// pool's active API key ([`Source::Pool`], or a [`Source::Resume`] of
+    /// a conversation that started there). A resume onto a REMOVED login
+    /// returns it here with `removed_at` set; [`decide_spawn`] refuses it.
+    pub account: Option<Entry>,
+    /// The pin that decided it ([`Source::SessionPin`] /
+    /// [`Source::WorkspacePin`]).
+    pub pin: Option<Pin>,
+    /// What the conversation (or session key) last started under.
+    recorded: Option<Recorded>,
+}
+
+/// Decide the login for a session, read-only. `conversation_id` +
+/// `is_resume`: a resume runs on its chat's pin (session key or
+/// conversation, the newer pick) when there is one; otherwise on the login
 /// its conversation (or, for ids the CLI minted itself, its session key)
 /// started under, even when workspace pins or the server default have
-/// changed since; a conversation with no record started in the live
-/// home. A fresh spawn takes chat pin > workspace pin > pool.
+/// changed since; a conversation with no record started in the live home.
+/// A fresh spawn takes chat pin > workspace pin > pool.
+pub fn decide(
+    conn: &Connection,
+    tool: Tool,
+    session_key: &str,
+    project_id: Option<&str>,
+    conversation_id: Option<&str>,
+    is_resume: bool,
+) -> Result<Decision, WalletError> {
+    if is_resume {
+        let rec = recorded(conn, tool, session_key, conversation_id)?;
+        if let Some(p) = chat_pin(conn, tool, session_key, conversation_id)? {
+            if let Some(e) = get(conn, &p.account_id)?.filter(|e| e.removed_at.is_none()) {
+                return Ok(Decision { tool, source: Source::SessionPin, account: Some(e), pin: Some(p), recorded: rec });
+            }
+        }
+        let account = match rec.as_ref().and_then(|(a, _)| a.clone()) {
+            Some(id) => Some(get(conn, &id)?.ok_or_else(|| WalletError::NotFound(id.clone()))?),
+            // Started in the live home (or before K2 tracked logins).
+            None => None,
+        };
+        return Ok(Decision { tool, source: Source::Resume, account, pin: None, recorded: rec });
+    }
+    if let Some(p) = pin_for(conn, tool, session_key, conversation_id, project_id)? {
+        if let Some(e) = get(conn, &p.account_id)? {
+            if e.removed_at.is_none() {
+                let src = if p.scope_kind == "session" { Source::SessionPin } else { Source::WorkspacePin };
+                return Ok(Decision { tool, source: src, account: Some(e), pin: Some(p), recorded: None });
+            }
+        }
+    }
+    Ok(Decision { tool, source: Source::Pool, account: None, pin: None, recorded: None })
+}
+
+/// Decide the login for a spawn ([`decide`]) and build what it needs: a
+/// pinned subscription's slot home, an API key, or the live home. A resume
+/// moved to its chat's pinned login gets [`SpawnLogin::carry`] when the
+/// conversation's history lives in another home. A resume onto a removed
+/// login is refused (`account_unavailable`).
 pub fn decide_spawn(
     conn: &Connection,
     tool: Tool,
@@ -702,49 +759,29 @@ pub fn decide_spawn(
     conversation_id: Option<&str>,
     is_resume: bool,
 ) -> Result<SpawnLogin, WalletError> {
-    if is_resume {
-        let rec = recorded(conn, tool, session_key, conversation_id)?;
-        if let Some(p) = chat_pin(conn, tool, session_key, conversation_id)? {
-            if let Some(e) = get(conn, &p.account_id)?.filter(|e| e.removed_at.is_none()) {
-                let mut l = login_env(tool, &e, Source::SessionPin)?;
-                if let Some(cid) = conversation_id.map(str::trim).filter(|c| valid_conversation_id(c)) {
-                    let from = recorded_home(&rec, tool);
-                    let to = l.home.clone().unwrap_or_else(|| store::live_home(tool).0);
-                    if from != to {
-                        l.carry = Some(Carry { conversation_id: cid.to_string(), from, to });
-                    }
-                }
-                return Ok(l);
-            }
-        }
-        return match rec.map(|(a, _)| a) {
-            Some(Some(id)) => {
-                let e = get(conn, &id)?.ok_or_else(|| WalletError::NotFound(id.clone()))?;
-                if e.removed_at.is_some() {
-                    return Err(WalletError::Conflict(
-                        "account_unavailable",
-                        format!("this chat started on the {} token, which was removed; continue it in a new chat", e.label),
-                    ));
-                }
-                login_env(tool, &e, Source::Resume)
-            }
-            // Started in the live home (or before K2 tracked logins).
-            _ => {
-                let mut l = pool(conn, tool)?;
-                l.source = Source::Resume;
-                Ok(l)
-            }
-        };
+    let d = decide(conn, tool, session_key, project_id, conversation_id, is_resume)?;
+    let Some(e) = d.account else {
+        let mut l = pool(conn, tool)?;
+        l.source = d.source;
+        return Ok(l);
+    };
+    if d.source == Source::Resume && e.removed_at.is_some() {
+        return Err(WalletError::Conflict(
+            "account_unavailable",
+            format!("this chat started on the {} token, which was removed; continue it in a new chat", e.label),
+        ));
     }
-    if let Some(p) = pin_for(conn, tool, session_key, conversation_id, project_id)? {
-        if let Some(e) = get(conn, &p.account_id)? {
-            if e.removed_at.is_none() {
-                let src = if p.scope_kind == "session" { Source::SessionPin } else { Source::WorkspacePin };
-                return login_env(tool, &e, src);
+    let mut l = login_env(tool, &e, d.source)?;
+    if is_resume && d.source == Source::SessionPin {
+        if let Some(cid) = conversation_id.map(str::trim).filter(|c| valid_conversation_id(c)) {
+            let from = recorded_home(&d.recorded, tool);
+            let to = l.home.clone().unwrap_or_else(|| store::live_home(tool).0);
+            if from != to {
+                l.carry = Some(Carry { conversation_id: cid.to_string(), from, to });
             }
         }
     }
-    pool(conn, tool)
+    Ok(l)
 }
 
 /// Record the login a session / conversation started under.

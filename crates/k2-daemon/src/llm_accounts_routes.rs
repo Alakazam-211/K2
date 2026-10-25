@@ -8,7 +8,9 @@
 //!   2026-10-20; [`default_change_refusal`]);
 //! - a session passport — an agent tab **and** a K2 shell tab (Rosson:
 //!   a K2 terminal has its workspace agent's permissions) — is read-only:
-//!   `list`, `status`, `usage`, and sees no email / org;
+//!   `list`, `status`, `usage`, `for`, and sees no email / org;
+//! - `for` / `for/refresh`: the token one chat runs on and its chip number
+//!   ([`crate::llm_account_for`]); `for/refresh` is a POST for people.
 //! - app passes and anything else: refused.
 //!
 //! No route ever returns a token, a refresh token or a credential file.
@@ -45,11 +47,18 @@ pub const ADD_KEY: &str = "/cli/llm/accounts/add-key";
 /// Leave a tool with no server default token (an API token default only).
 pub const CLEAR_DEFAULT: &str = "/cli/llm/accounts/clear-default";
 
+/// The token one chat runs on, with its chip number
+/// ([`crate::llm_account_for`]).
+pub const FOR: &str = crate::llm_account_for::FOR;
+/// Re-read that one token's usage (once a minute per token).
+pub const FOR_REFRESH: &str = crate::llm_account_for::FOR_REFRESH;
+
 /// Read routes (passports allowed).
-pub const READ_ROUTES: &[&str] = &[LIST, STATUS, USAGE, LOGIN_STATUS, PINS];
+pub const READ_ROUTES: &[&str] = &[LIST, STATUS, USAGE, LOGIN_STATUS, PINS, FOR];
 /// POST-only routes (humans only).
 pub const POST_ROUTES: &[&str] = &[
     ADD, LOGIN, LOGIN_INPUT, LOGIN_CANCEL, SWITCH, NEXT, RENAME, REMOVE, REFRESH, PIN, UNPIN, ADD_KEY, CLEAR_DEFAULT,
+    FOR_REFRESH,
 ];
 
 /// Request bodies here are small JSON objects.
@@ -300,6 +309,11 @@ pub(crate) fn pin_json(conn: &rusqlite::Connection, p: &k2_core::llm_accounts::p
     } else {
         p.scope_id.clone()
     };
+    // Ids a client can match on (additive): the workspace of a workspace
+    // pin; the conversation of a chat pin that follows one; the session key
+    // of a chat pin made on a tab or pinned chat (the pinned chat's key is
+    // its workspace id, so that one also names `workspaceId`).
+    let (workspace_id, conversation_id, session_key) = pin_ids(conn, p);
     json!({
         "scopeKind": p.scope_kind,
         "scopeId": p.scope_id,
@@ -307,7 +321,38 @@ pub(crate) fn pin_json(conn: &rusqlite::Connection, p: &k2_core::llm_accounts::p
         "accountId": p.account_id,
         "label": label,
         "createdAt": p.created_at,
+        "workspaceId": workspace_id,
+        "conversationId": conversation_id,
+        "sessionKey": session_key,
     })
+}
+
+/// `(workspaceId, conversationId, sessionKey)` for a pin row.
+pub(crate) fn pin_ids(
+    conn: &rusqlite::Connection,
+    p: &k2_core::llm_accounts::pins::Pin,
+) -> (Option<String>, Option<String>, Option<String>) {
+    if p.scope_kind == "workspace" {
+        return (Some(p.scope_id.clone()), None, None);
+    }
+    if let Some(cid) = p.scope_id.strip_prefix(k2_core::llm_accounts::pins::CONVERSATION_PREFIX) {
+        let ws = k2_core::workspace_session_handles::project_id_for_session_id(conn, cid).ok().flatten();
+        return (ws, Some(cid.to_string()), None);
+    }
+    // A session key: the pinned chat's is its workspace id; a tab's is
+    // `tab-<pane>` (its workspace from the tab row).
+    let ws = conn
+        .query_row("SELECT id FROM projects WHERE id = ?1", rusqlite::params![p.scope_id], |r| r.get::<_, String>(0))
+        .ok()
+        .or_else(|| {
+            conn.query_row(
+                "SELECT project_id FROM workspace_tab_sessions WHERE agent_name = ?1 ORDER BY last_seen_at DESC LIMIT 1",
+                rusqlite::params![p.scope_id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+        });
+    (ws, None, Some(p.scope_id.clone()))
 }
 
 fn pinned_to(e: &Entry) -> Value {
@@ -609,6 +654,7 @@ pub fn handle(
                 Err(e) => wallet_err(e),
             }
         }
+        FOR => crate::llm_account_for::handle_get(params),
         PINS => {
             let res = with_conn(|conn| -> Result<Vec<Value>, WalletError> {
                 Ok(k2_core::llm_accounts::pins::list_pins(conn)?.iter().map(|p| pin_json(conn, p)).collect())
@@ -633,6 +679,9 @@ pub fn handle(
 }
 
 fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliResponse {
+    if path == FOR_REFRESH {
+        return crate::llm_account_for::handle_refresh(body);
+    }
     let b = match parse_body(body) {
         Ok(b) => b,
         Err(r) => return r,

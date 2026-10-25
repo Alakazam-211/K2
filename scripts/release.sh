@@ -1144,6 +1144,7 @@ else
 fi
 echo ""
 echo "Step 9.5: Windows NSIS installer, Alpha (${K2_WINDOWS_SSH_HOST:-k2-win-ax41})..."
+WIN_PATCH_FAILED=""
 set +e
 "$PROJECT_DIR/scripts/windows-nsis-build.sh" "$VERSION"
 WIN_NSIS_RC=$?
@@ -1178,7 +1179,12 @@ if [ "$WIN_NSIS_RC" -eq 0 ] && [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
         if bash "$PROJECT_DIR/scripts/windows-patch-latest-json.sh" "$VERSION" "$WIN_SETUP"; then
             echo "  Patched + re-uploaded latest.json with windows-x86_64."
         else
-            echo "  WARNING: windows-patch-latest-json failed — Win setup is on the release, but auto-update may lack windows-x86_64 until re-run." >&2
+            # Loud, and the release ends with exit 1 (Steps 10-10.5 still run:
+            # the Linux daemons must still be signed). Windows installs can't
+            # update until this is fixed.
+            WIN_PATCH_FAILED=1
+            printf '\033[1;31m  ✗ FATAL: the setup is on %s but latest.json has no signed windows-x86_64 entry: Windows installs cannot update.\033[0m\n' "$TAG" >&2
+            printf '\033[1;31m  ✗ Re-run: bash scripts/windows-patch-latest-json.sh %s %s\033[0m\n' "$VERSION" "$WIN_SETUP" >&2
         fi
     else
         echo "  WARNING: windows-nsis-build reported OK but ${WIN_SETUP} missing." >&2
@@ -1361,6 +1367,7 @@ echo "════════════════════════�
 echo "  Release ${TAG} complete!"
 echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "$VERIFY_FAILED" ] && echo "  ⚠  UPDATER MANIFEST CHECK FAILED — see Step 10 above (updater may 'Could not fetch a valid release JSON' until it clears)"
+[ -n "$WIN_PATCH_FAILED" ] && echo "  ⚠  WINDOWS latest.json NOT PATCHED — bash scripts/windows-patch-latest-json.sh ${VERSION} dist-windows/K2_${VERSION}_x64-setup.exe"
 [ -n "$U2_VERIFY_FAILED" ] && echo "  ⚠  U2 SIGNATURES MISSING OR BAD IN THE PUBLISHED MANIFESTS — 0.46.4+ installs can't update (Step 10)"
 [ -n "$DAEMON_SIGN_FAILED" ] && echo "  ⚠  LINUX DAEMONS NOT SIGNED — bash scripts/sign-daemon.sh ${VERSION}"
 [ -n "$ROOT_HELPER_SIGN_FAILED" ] && echo "  ⚠  ROOT HELPER NOT SIGNED — bash scripts/sign-root-helper.sh ${VERSION}"
@@ -1368,4 +1375,4 @@ echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "$APP_ENGINE_SIGN_FAILED" ] && echo "  ⚠  K2-APP-ENGINE NOT SIGNED — bash scripts/sign-app-engine.sh ${VERSION}"
 [ -n "$LINUX_SUMS_FAILED" ] && echo "  ⚠  LINUX SHA256SUMS INCOMPLETE — bash scripts/linux-sums.sh check ${VERSION} --wait-min 60"
 echo "═══════════════════════════════════════════════════"
-[ -z "$U2_VERIFY_FAILED" ] && [ -z "$DAEMON_SIGN_FAILED" ] && [ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] && [ -z "$APP_ENGINE_SIGN_FAILED" ] && [ -z "$LINUX_SUMS_FAILED" ] || exit 1
+[ -z "$WIN_PATCH_FAILED" ] && [ -z "$U2_VERIFY_FAILED" ] && [ -z "$DAEMON_SIGN_FAILED" ] && [ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] && [ -z "$APP_ENGINE_SIGN_FAILED" ] && [ -z "$LINUX_SUMS_FAILED" ] || exit 1

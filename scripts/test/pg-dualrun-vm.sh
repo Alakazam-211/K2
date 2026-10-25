@@ -44,7 +44,11 @@ WRITER_PW="drill-writer-Pw-0464"
 ALL=(prepare happy security freeze failures rollback statement-timeout per-app)
 
 say() { printf '[k2dr %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
-die() { say "FAIL: $*"; exit 1; }
+# Writers still running are stopped on any exit (a failed check included).
+WRITER_LOGS=()
+stop_writers() { local l; for l in "${WRITER_LOGS[@]}"; do touch "$l.stop"; done; wait 2>/dev/null || true; }
+trap stop_writers EXIT
+die() { say "FAIL: $*"; stop_writers; exit 1; }
 pass() { say "PASS: $*"; }
 
 [ "$(uname -s)" = "Linux" ] || die "Linux VM only"
@@ -73,13 +77,35 @@ not_state() { [ "$(live_state "$1")" != "$2" ]; }
 restart_daemon() { sudo systemctl restart "$UNIT"; sleep 3; wait_for 120 "the daemon answers" k2 db status --json; }
 journal_since() { sudo journalctl -u "$UNIT" --since "$1" --no-pager -o cat; }
 
+# Roles a database of this name left on any cluster when the database
+# itself is gone (an earlier failed run): a fresh database of the same name
+# must not inherit them.
+clean_name() {
+    local name="$1" m
+    for m in $(pg_lsclusters -h | awk '$4 == "online" {print $1}'); do
+        if [ "$(pg_sql "$m" postgres "SELECT count(*) FROM pg_database WHERE datname = '$name'")" = "0" ]; then
+            pg_sql "$m" postgres "DROP ROLE IF EXISTS ${name}_migrator; DROP ROLE IF EXISTS ${name}_agent;" >/dev/null 2>&1 || true
+        fi
+    done
+}
 # A fresh K2 database in the workspace (its name on stdout).
 new_db() {
     local name="$1"
+    clean_name "$name"
     k2 db create --name "$name" --json >/dev/null
     echo "$name"
 }
-drop_db() { k2 db drop "$1" --yes >/dev/null 2>&1 || true; }
+# `k2 db drop` takes no name: it drops the workspace's live database. The
+# name is checked so a drill never drops the wrong one.
+drop_db() {
+    local name="$1" live
+    live="$(k2 db list --json 2>/dev/null | python3 -c 'import json,sys; v=json.load(sys.stdin); d=v.get("databases", v) if isinstance(v, dict) else v; print(next((x.get("name","") for x in d if x.get("status","active") == "active"), ""))' 2>/dev/null || true)"
+    if [ -n "$live" ] && [ "$live" != "$name" ]; then
+        say "note: the live database is $live, not $name; $name not dropped"
+        return 0
+    fi
+    k2 db drop --yes >/dev/null 2>&1 || true
+}
 
 # The fixture (PRD §12 drill 3): RLS + FORCE, a policy, an identity column,
 # a bigserial, a materialized view, a partitioned table, a SECURITY DEFINER
@@ -117,6 +143,7 @@ fixture() {
 # -(100000 + i), apart from the sync writer's.
 writer_start() { # writer_start <db> <log> [async]
     local db="$1" log="$2" mode="${3:-sync}"
+    WRITER_LOGS+=("$log")
     : >"$log"
     (
         n=0
@@ -225,15 +252,18 @@ security() {
     # generated column), logging who it ran as.
     pg_sql 16 "$db" "
       SET ROLE ${db}_migrator;
-      CREATE TABLE drill.h1_log (who text, sup boolean, at timestamptz DEFAULT now());
+      CREATE TABLE drill.h1_log (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), who text, sup boolean, at timestamptz DEFAULT now());
       CREATE FUNCTION drill.h1() RETURNS boolean LANGUAGE plpgsql AS \$\$
       BEGIN
         INSERT INTO drill.h1_log (who, sup) VALUES (current_user, (SELECT rolsuper FROM pg_roles WHERE rolname = current_user));
         IF (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN EXECUTE 'ALTER ROLE ${db}_migrator SUPERUSER'; END IF;
         RETURN true;
       END \$\$;
+      -- IMMUTABLE with no argument: CREATE TABLE plans the generated
+      -- column and runs it then (the 0.46.4 drill's superuser path).
+      CREATE FUNCTION drill.h1_imm() RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT drill.h1()';
       CREATE FUNCTION drill.h1_t() RETURNS trigger LANGUAGE plpgsql AS \$\$ BEGIN PERFORM drill.h1(); RETURN NEW; END \$\$;
-      CREATE TABLE drill.planted (id bigint PRIMARY KEY, v int CHECK (drill.h1()), g boolean GENERATED ALWAYS AS (drill.h1()) STORED);
+      CREATE TABLE drill.planted (id bigint PRIMARY KEY, v int CHECK (drill.h1()), g boolean GENERATED ALWAYS AS (drill.h1_imm()) STORED);
       CREATE TRIGGER planted_t BEFORE INSERT OR UPDATE ON drill.planted FOR EACH ROW EXECUTE FUNCTION drill.h1_t();
       ALTER TABLE drill.planted ENABLE ALWAYS TRIGGER planted_t;
       INSERT INTO drill.planted (id, v) SELECT g, 1 FROM generate_series(1, 50) g;
@@ -374,13 +404,16 @@ failures() {
     # the slot is lost → the run fails and cleans; the source is fine.
     db="$(new_db drill_wal)"; fixture "$db"
     start_live "$db"
-    pg_sql 16 postgres "ALTER SYSTEM SET max_slot_wal_keep_size = '64MB'; SELECT pg_reload_conf();" >/dev/null
+    # ALTER SYSTEM can't run in a transaction block: one statement per call.
+    pg_sql 16 postgres "ALTER SYSTEM SET max_slot_wal_keep_size = '64MB'" >/dev/null
+    pg_sql 16 postgres "SELECT pg_reload_conf()" >/dev/null
     sudo pg_ctlcluster 17 main stop -m fast
     pg_sql 16 "$db" "SET ROLE ${db}_migrator; CREATE TEMP TABLE IF NOT EXISTS t AS SELECT 1" >/dev/null 2>&1 || true
     for _ in 1 2 3 4 5 6; do pg_sql 16 "$db" "INSERT INTO drill.ticks (n) SELECT g FROM generate_series((SELECT coalesce(max(n),0)+1 FROM drill.ticks), (SELECT coalesce(max(n),0)+200000 FROM drill.ticks)) g" >/dev/null; pg_sql 16 postgres "CHECKPOINT" >/dev/null; done
     sudo pg_ctlcluster 17 main start
     wait_for 300 "the run fails on the lost slot" is_state "$db" failed
-    pg_sql 16 postgres "ALTER SYSTEM RESET max_slot_wal_keep_size; SELECT pg_reload_conf();" >/dev/null
+    pg_sql 16 postgres "ALTER SYSTEM RESET max_slot_wal_keep_size" >/dev/null
+    pg_sql 16 postgres "SELECT pg_reload_conf()" >/dev/null
     pg_sql 16 "$db" "SELECT count(*) FROM drill.ticks" >/dev/null || die "the source doesn't answer"
     no_dual_objects
     drop_db "$db"
@@ -452,8 +485,8 @@ seed_dir() { # seed_dir <dir> <app-id> <requires.postgres>
     mkdir -p "$1"
     cat >"$1/manifest.json" <<EOF
 {"schema":1,"kind":"app","id":"$2","name":"$2","version":"1.0.0",
- "requires":{"k2":">=0.46.4","postgres":"$3"},
- "host":{"mode":"cmd","start":["python3","-m","http.server","\$PORT"],"health":{"path":"/"}}}
+ "requires":{"k2":">=0.46.3","postgres":"$3"},
+ "host":{"mode":"cmd","start":["sh","-c","exec python3 -m http.server \\"\$PORT\\""],"health":{"path":"/"}}}
 EOF
     echo ok >"$1/index.html"
 }
@@ -480,7 +513,7 @@ per-app() {
     local before; before="$(db_major "$db")"
     k2 db upgrade --app drill-any --check >/dev/null 2>&1 || true
     [ "$(db_major "$db")" = "$before" ] || die "--check moved a database"
-    for a in drill-pg17 drill-any drill-old; do k2 app uninstall "$a" --yes >/dev/null 2>&1 || true; done
+    for a in drill-pg17 drill-any drill-old; do k2 app uninstall "$a" >/dev/null 2>&1 || k2in "$WS2" app uninstall "$a" >/dev/null 2>&1 || true; done
     drop_db "$db"
     pass "per-app: created on 17 with its ref; '16' refused on 17; a shared 16 database's move refused naming drill-old"
 }

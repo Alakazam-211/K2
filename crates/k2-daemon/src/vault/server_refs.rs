@@ -151,7 +151,7 @@ pub fn done(vault: &LocalVault) -> bool {
 
 /// What a pass looks at.
 #[derive(Debug, Default, Clone)]
-pub struct Scope {
+pub struct PassScope {
     /// `None`: every service (the first pass). `Some`: only these service
     /// ids, the ones an earlier pass couldn't read (round 2 fix 1).
     pub only: Option<BTreeSet<String>>,
@@ -197,7 +197,7 @@ pub fn upgrade_once(vault: &LocalVault) {
     if is_done {
         return;
     }
-    let scope = Scope {
+    let scope = PassScope {
         only: first.as_ref().map(|_| {
             let scanned: BTreeSet<String> = scanned.into_iter().collect();
             unreadable.into_iter().filter(|u| !scanned.contains(u)).collect()
@@ -506,12 +506,12 @@ fn evidence(
 
 /// The first pass over every service (tests call it with their own clock).
 pub fn run(vault: &LocalVault, now: chrono::DateTime<chrono::Utc>) -> Report {
-    run_scoped(vault, now, &Scope::default())
+    run_scoped(vault, now, &PassScope::default())
 }
 
 /// A pass over `scope` (round 2 fix 1: a rerun reads only the services an
 /// earlier pass couldn't, and never decides a pair twice).
-pub fn run_scoped(vault: &LocalVault, now: chrono::DateTime<chrono::Utc>, scope: &Scope) -> Report {
+pub fn run_scoped(vault: &LocalVault, now: chrono::DateTime<chrono::Utc>, scope: &PassScope) -> Report {
     vault.flush_rollups();
     let rerun = scope.only.is_some();
     let cutoff = now - chrono::Duration::days(WINDOW_DAYS);

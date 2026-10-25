@@ -570,7 +570,7 @@ fn a_pair_that_had_an_upgrade_grant_is_never_granted_again() {
     let g = grant_of(&v, &sel).expect("granted");
     v.revoke(&g.id, &Actor::Owner).expect("owner revokes it");
     let only: std::collections::BTreeSet<String> = [sid.clone()].into_iter().collect();
-    let r = run_scoped(&v, chrono::Utc::now(), &Scope { only: Some(only), decided: Default::default() });
+    let r = run_scoped(&v, chrono::Utc::now(), &PassScope { only: Some(only), decided: Default::default() });
     assert!(r.granted.is_empty() && grant_of(&v, &sel).is_none(), "never again: {r:#?}");
     let r = run(&v, chrono::Utc::now());
     assert!(r.granted.is_empty() && grant_of(&v, &sel).is_none(), "not by a full pass either: {r:#?}");

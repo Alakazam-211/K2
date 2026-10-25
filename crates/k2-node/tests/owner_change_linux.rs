@@ -462,9 +462,21 @@ fn the_owner_changes_with_real_users() {
     let mut owner_job = leftover(r.job);
     let (u2, g2) = r.slot_user(2).unwrap();
     let mut slot2 = leftover((u2, g2));
+    let (slot1_pid, owner_pid) = (slot1.id(), owner_job.id());
     change(&r, OldOwner::Keep);
     assert!(killed(&mut slot1), "slot 1's leftover process is stopped");
     assert!(killed(&mut owner_job), "the owner's job leftover is stopped");
+    // It was the trees step that stopped them (before anything moved, and
+    // before the users step, which would stop slot 1's too).
+    let audit = r.exec.audit().verify().unwrap();
+    let stop = audit.iter().position(|l| l.event == "tenant.stop").expect("the trees step stopped the leftovers (tenant.stop)");
+    let unuser = audit.iter().position(|l| l.event == "tenant.unuser").expect("the users step (tenant.unuser)");
+    assert!(stop < unuser, "tenant.stop comes first");
+    assert!(audit[stop].code.is_none(), "{:?}", audit[stop]);
+    let removed: Vec<String> = audit[stop].detail["removed"].as_array().expect("its removed list").iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert!(removed.contains(&format!("slot 1 pid {slot1_pid}")), "slot 1's leftover was stopped by the trees step: {removed:?}");
+    assert!(removed.contains(&format!("owner job pid {owner_pid}")), "and the owner's: {removed:?}");
+    assert!(!removed.iter().any(|x| x.starts_with("slot 2 ")), "never another server's: {removed:?}");
     assert!(slot2.try_wait().unwrap().is_none(), "another server's process is left alone");
     let _ = slot2.kill();
     let _ = slot2.wait();

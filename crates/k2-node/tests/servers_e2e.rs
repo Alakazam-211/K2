@@ -198,6 +198,34 @@ async fn the_owner_gets_its_view_whenever_servers_toml_exists() {
     assert_eq!((s.role, s.slot, s.shared, s.servers, s.owner_label), (Role::Owner, 0, false, 1, None));
 }
 
+/// Verification L3: root's public marker of an unfinished owner change
+/// holds new work on the node itself, whatever control.toml says: an
+/// active control reads as draining until the marker goes.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unfinished_owner_change_reads_as_draining() {
+    use std::os::unix::fs::PermissionsExt;
+    let a = Fake::start().await;
+    let n = start_node(&a, "srv-own-held", "", walled(Wall::Seatbelt)).await;
+    let control = || n.node.local.lock().unwrap().control.clone();
+    n.node.refresh_local(false);
+    assert_eq!(control().control, frames::Control::Active);
+    // Root's marker, as root writes it (here the node's own user: a test
+    // node's mark dir is its own).
+    let dir = k2_node::admin::update::mark_dir(&n.layout.config);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let marker = dir.join(k2_node::admin::owner::ACTIVE_FILE);
+    std::fs::write(&marker, "c1").unwrap();
+    std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o644)).unwrap();
+    n.node.refresh_local(false);
+    let c = control();
+    assert_eq!(c.control, frames::Control::Draining, "{c:?}");
+    assert!(c.by.as_deref().is_some_and(|b| b.contains("servers.owner")), "{c:?}");
+    std::fs::remove_file(&marker).unwrap();
+    n.node.refresh_local(false);
+    assert_eq!(control().control, frames::Control::Active, "back once the change is over");
+}
+
 /// §4.1 and V53: the node enrols with a second server by the code's
 /// binding, the SAS shows on the node, and once its owner confirms it the
 /// second session runs beside the owner's, seeing only its own share.

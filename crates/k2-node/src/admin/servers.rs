@@ -787,6 +787,13 @@ pub(crate) fn servers_lock(ctx: &Ctx) -> Result<crate::util::FileLock, AdminRefu
 }
 
 pub(crate) fn prune_locked(ctx: &Ctx) -> Result<Value, AdminRefusal> {
+    // An unfinished owner change holds the lines it's rewriting: nothing
+    // is promoted, dropped or wiped meanwhile (a target line that expires
+    // during a stuck change must never get its slot, which holds the
+    // moved trees, wiped; verification M2). Only the leftover sweep runs.
+    if ctx.state_dir.join(super::owner::STEP_FILE).exists() || super::owner::change_in_progress(&ctx.config_dir) {
+        return Ok(json!({"changed": [], "wiped": [], "held": super::owner::IN_PROGRESS}));
+    }
     let Some(mut f) = read_file(&ctx.config_dir).map_err(|e| refuse(code::NOT_CONFIGURED, e))? else {
         return Ok(json!({"changed": [], "wiped": []}));
     };

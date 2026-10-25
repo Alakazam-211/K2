@@ -134,7 +134,23 @@ impl AdminConfig {
             o => return Err(format!("auto_update {o:?} is not follow|off")),
         };
         let node_user = f.node_user.clone().unwrap_or_else(|| default_node_user().to_string());
+        check_node_user(&node_user)?;
         Ok(Self { level, controller, approval_keys, auto_update, node_user, file: f })
+    }
+}
+
+/// A node user name root can act for (verification L2): a plain account
+/// name (letters, digits, `_`, `.`, `-`; not starting with `-`; at most 32),
+/// never `root`.
+pub fn check_node_user(name: &str) -> Result<(), String> {
+    let ok = (1..=32).contains(&name.len())
+        && !name.starts_with('-')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        && name != "root";
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("node_user {name:?} isn't a plain account name (never root)"))
     }
 }
 
@@ -201,6 +217,11 @@ mod tests {
             "remote_admin = \"full\"\ncontroller_fp = \"aa\"\n",
             "remote_admin = \"full\"\napproval_keys = [\"rsa:x\"]\n",
             "remote_admin = \"full\"\nauto_update = \"yes\"\n",
+            // The node user is checked at load (verification L2).
+            "remote_admin = \"off\"\nnode_user = \"root\"\n",
+            "remote_admin = \"off\"\nnode_user = \"-k2\"\n",
+            "remote_admin = \"off\"\nnode_user = \"k2 node\"\n",
+            "remote_admin = \"off\"\nnode_user = \"\"\n",
         ] {
             std::fs::write(&p, bad).unwrap();
             assert!(read(&p).is_err(), "{bad}");
@@ -214,5 +235,20 @@ mod tests {
             ..Default::default()
         };
         assert!(write(&p, &f).is_err(), "never written");
+    }
+
+    /// Verification L2: plain account names load; a macOS node user's
+    /// orphans are signalled only for a system account.
+    #[test]
+    fn node_users_are_plain_accounts() {
+        for ok in ["k2node", "_k2node", "k2nodet", "z3thon", "k2.node-1"] {
+            check_node_user(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        use crate::admin::tenants::is_system_account;
+        assert!(is_system_account("_k2node", 299));
+        assert!(is_system_account("_k2node", 601), "a `_` name is a role account");
+        assert!(is_system_account("daemon", 1));
+        assert!(!is_system_account("rosson", 501), "a login account never");
+        assert!(!is_system_account("root", 0), "never root");
     }
 }

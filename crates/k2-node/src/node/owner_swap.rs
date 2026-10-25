@@ -131,6 +131,18 @@ fn applied(layout: &Layout) -> Option<String> {
 /// Swap if root's instruction says so (see the module doc). `Err` stops
 /// the node's start: launchd/systemd start it again and it finishes.
 pub fn apply(layout: &Layout, now: i64) -> Result<Outcome, String> {
+    // Root's swap lock, held from reading the instruction to the end of
+    // the swap, so root's `--abort` never removes an instruction mid-swap
+    // (verification L1). A node whose root wrote no lock (no instruction
+    // ever) goes on without it.
+    let lock = crate::admin::owner::open_swap_lock(&layout.config);
+    if let Some(fd) = &lock {
+        use std::os::fd::AsRawFd;
+        // SAFETY: flock on our own fd; blocks while `--abort` holds it.
+        if unsafe { libc::flock(fd.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(format!("the owner change's swap lock: {}", std::io::Error::last_os_error()));
+        }
+    }
     let Some(n) = crate::admin::owner::read_node_change(&layout.config) else { return Ok(Outcome::Nothing) };
     apply_change(layout, &n, now)
 }

@@ -53,6 +53,15 @@ ROOT_RUNS=(
   "k2-daemon cell_egress::tests::refused_localhost_port_is_refused_while_a_cell_table_exists"
 )
 
+# Root-only integration suites the gate RUNS whole when it is root (every
+# test in them is #[ignore]: real users, systemd units, ACLs), one test at
+# a time: "<package> <test target>".
+ROOT_SUITES=(
+  "k2-node job_wall_linux"
+  "k2-node tenant_wall_linux"
+  "k2-node owner_change_linux"
+)
+
 avail_gb() { df --output=avail -BG "$1" | tail -1 | tr -dc '0-9'; }
 
 # The real-Postgres smoke: all three knobs or none (a partial set is a
@@ -120,6 +129,13 @@ if [ "$(id -u)" -eq 0 ]; then
     pkg=${entry%% *}; filter=${entry#* }
     echo "gate: root-only: $pkg $filter"
     if ! clean_cargo "$LOGS/root-${filter//::/_}.log" test -p "$pkg" --lib -- --ignored --exact "$filter"; then
+      STATUS=1
+    fi
+  done
+  for entry in "${ROOT_SUITES[@]}"; do
+    pkg=${entry%% *}; suite=${entry#* }
+    echo "gate: root-only suite: $pkg --test $suite"
+    if ! clean_cargo "$LOGS/root-suite-$suite.log" test -p "$pkg" --test "$suite" -- --ignored --test-threads=1; then
       STATUS=1
     fi
   done

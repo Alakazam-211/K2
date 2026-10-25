@@ -1090,6 +1090,10 @@ impl Executor {
     pub fn handle_job(&self, op: &JobOp, fds: Vec<OwnedFd>) -> JobAnswer {
         let r = match op {
             JobOp::Ready => self.job_user().map(|(u, _)| JobAnswer::Ready { job_user: u, stdin: true }),
+            // No job starts while an owner change is unfinished (its trees
+            // and users are moving), whatever the node's control says
+            // (verification L3).
+            JobOp::Start(_) if super::update::control_held(self) => Err(super::owner::in_progress_refusal("a job start")),
             JobOp::Start(s) => self.start_job(s, fds).map(|unit| JobAnswer::Started { unit }),
             JobOp::Status { unit } => self.with_unit(unit, |u| unit_status(u).map(JobAnswer::Status)),
             JobOp::Stop { unit } => self.with_unit(unit, |u| systemctl(&["stop", "--no-block", u]).map(|_| JobAnswer::Done { detail: json!({"stopping": u}) })),

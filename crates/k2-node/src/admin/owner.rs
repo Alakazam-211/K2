@@ -65,6 +65,8 @@ pub const STEP_FILE: &str = "owner-change.json";
 /// In the update mark's directory (root-owned, node-readable): what the
 /// node swaps at its next start.
 pub const NODE_FILE: &str = "owner-change.json";
+/// Root's swap lock beside it ([`open_swap_lock`]).
+pub const SWAP_LOCK_FILE: &str = "owner-change.lock";
 /// In the mark directory (root-owned, readable by all): an owner change is
 /// under way. The machine owner's own tools (`k2-node pause|drain|resume`,
 /// `k2-node servers …` without sudo) can't see root's step file; they see
@@ -318,10 +320,12 @@ pub fn plan(e: &Executor, a: &OwnerArgs, need_fp: bool, check_online: bool) -> R
     // Every tree goes by rename (moved, or into its side's trash on a
     // wipe): a tree that's a volume of its own can't (verification #4).
     let slot_dir = open_dir(&layout.tenant(to.slot).root()).ok();
-    let sides = [(Some(&h), hd, e.paths.home.clone()), (slot_dir.as_ref(), td, layout.tenant(to.slot).root())];
-    for (parent, want, at) in sides {
+    // The home's trees against the home; slot N's root against `<home>-t`
+    // (where its trash is), then its trees against that.
+    let sides = [(Some(&h), hd, e.paths.home.clone(), false), (slot_dir.as_ref(), td, layout.tenant(to.slot).root(), true)];
+    for (parent, want, at, check_parent) in sides {
         let Some(parent) = parent else { continue };
-        if dev(parent)? != want {
+        if check_parent && dev(parent)? != want {
             return Err(refuse(code::BAD_ARGS, format!("{} is a volume of its own; an owner change moves files only by rename, within one volume", at.display())));
         }
         for name in TREES.iter().chain(&["tmp"]) {
@@ -566,11 +570,12 @@ pub fn abort(e: &Executor) -> Result<Value, AdminRefusal> {
     }
     let ctx = Ctx::for_executor(e, &format!("owner-change-abort:{}", step.id));
     let _s = servers::servers_lock(&ctx)?;
+    // The node reads its instruction and swaps only under the swap lock
+    // (verification L1): once it's ours, a node start either finished its
+    // swap already (it shows) or reads no instruction at all.
+    let _swap = take_swap_lock(e)?;
     retire_node_change_now(e);
     if step.phase == Phase::Restart {
-        // A node start that read the instruction just before it went
-        // shows its swap (staging, pin, record) within this settle.
-        std::thread::sleep(e.drain_settle.max(std::time::Duration::from_millis(if cfg!(test) { 10 } else { 2000 })));
         if node_swapped(e, &step) {
             write_node_change(e, &step)?;
             return Err(forward_only());
@@ -947,8 +952,42 @@ fn write_node_change(e: &Executor, step: &Step) -> Result<(), AdminRefusal> {
     };
     let cfg = &e.paths.config_dir;
     super::update::ensure_mark_dir(cfg).map_err(failed)?;
+    // The swap lock exists before any instruction does (made once, never
+    // replaced: a lock held on a replaced file would guard nothing).
+    if open_swap_lock(cfg).is_none() {
+        super::update::write_owned_in(&super::update::mark_dir(cfg), SWAP_LOCK_FILE, b"", 0o644, super::update::mark_owner(cfg)).map_err(failed)?;
+    }
     let b = serde_json::to_vec(&n).map_err(|x| failed(x.to_string()))?;
     super::update::write_owned_in(&super::update::mark_dir(cfg), NODE_FILE, &b, 0o644, super::update::mark_owner(cfg)).map_err(failed)
+}
+
+/// Root's swap lock in the mark dir (verification L1): the node holds it
+/// (`flock`, exclusive) from reading its instruction to the end of its
+/// swap; `--abort` takes it before it removes the instruction. Opened
+/// read-only (the node can't write the mark dir; `flock` needs no write).
+/// `None` when it doesn't exist (no instruction was ever written).
+pub fn open_swap_lock(config_dir: &Path) -> Option<OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let dir = open_dir(&super::update::mark_dir(config_dir)).ok()?;
+    // SAFETY: openat a fixed name relative to our directory fd.
+    let fd = unsafe { libc::openat(dir.as_raw_fd(), cname(SWAP_LOCK_FILE).as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+    // SAFETY: a fresh fd we own.
+    (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+/// `--abort`'s side of the swap lock: held until it's dropped. Busy after
+/// 30 s (a node applying its half doesn't take that long).
+fn take_swap_lock(e: &Executor) -> Result<Option<OwnedFd>, AdminRefusal> {
+    use std::os::fd::AsRawFd;
+    let Some(fd) = open_swap_lock(&e.paths.config_dir) else { return Ok(None) };
+    for _ in 0..300 {
+        // SAFETY: flock on our own fd.
+        if unsafe { libc::flock(fd.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(Some(fd));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(if cfg!(test) { 5 } else { 100 }));
+    }
+    Err(refuse(code::BUSY, "the node is applying its half of the change right now; abort again in a minute"))
 }
 
 /// The node's instruction, as the node reads it: only when root (the

@@ -648,6 +648,23 @@ fn nothing_acts_beside_an_unfinished_change() {
     assert_eq!(e.code, IN_PROGRESS, "{e:?}");
     let e = servers::run(&ctx, share::VERB_REVOKE, &json!({"server": "z3thon.k2.dev", "now": false, "wipe": false})).unwrap_err();
     assert_eq!(e.code, IN_PROGRESS, "{e:?}");
+    // No job starts through root either, whatever control says (L3).
+    let start = crate::admin::jobs::JobOp::Start(crate::admin::jobs::JobStart {
+        key: "k-g1".into(),
+        root: "/r".into(),
+        rw: vec![],
+        network_none: false,
+        mem_bytes: None,
+        cpu_millis: None,
+        stop_grace_secs: 1,
+        tenant: 0,
+        no_lan: false,
+        stdin: false,
+    });
+    match r.exec.handle_job(&start, vec![]) {
+        crate::admin::jobs::JobAnswer::Refused(e) => assert_eq!(e.code, IN_PROGRESS, "{e:?}"),
+        other => panic!("a job start during the change: {other:?}"),
+    }
     assert!(r.plat.calls.lock().unwrap().is_empty(), "nothing restarted");
     assert_eq!(file(r).entry(2).unwrap().state, ShareState::Active, "baden untouched");
     // Over (here: ended by hand): everything works again.
@@ -656,6 +673,69 @@ fn nothing_acts_beside_an_unfinished_change() {
     let res = r.run(&r.sign(&r.cmd("control.resume", json!({}))));
     assert_eq!(res.state, "done", "{res:?}");
     servers::run(&ctx, share::VERB_PAUSE, &json!({"server": "baden.k2.dev"})).unwrap();
+}
+
+/// Verification M2: the prune holds while a change is unfinished: a line
+/// due to go (here baden's, past its end) is neither dropped nor wiped
+/// until the change is over; the leftover sweep alone runs.
+#[test]
+fn the_prune_holds_while_a_change_is_unfinished() {
+    let t = setup("full");
+    let r = &t.r;
+    let mut f = file(r);
+    // A pending add past its 10 minutes and its end: the prune wipes it.
+    let baden = f.servers.iter_mut().find(|e| e.slot == 2).unwrap();
+    baden.state = ShareState::Pending;
+    baden.pending_until = 1;
+    baden.expires_at = Some(1);
+    servers::write_file(&r.exec.paths.config_dir, &f).unwrap();
+    let path = servers::servers_path(&r.exec.paths.config_dir);
+    let before = std::fs::read(&path).unwrap();
+    write_step(&r.exec, &step_for(&t, "prune1", Phase::Restart)).unwrap();
+    let ctx = Ctx::for_executor(&r.exec, "node:prune");
+    let p = servers::prune(&ctx).unwrap();
+    assert_eq!(p["held"], IN_PROGRESS, "{p}");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "nothing promoted, dropped or wiped");
+    let crate::admin::exec::LocalResponse::Result(res) =
+        r.exec.handle(&crate::admin::exec::LocalRequest::Servers { servers: crate::admin::exec::ServersOp::Prune }, None)
+    else {
+        panic!("a result")
+    };
+    assert_eq!(res.result["held"], IN_PROGRESS, "the node's own prune holds too: {res:?}");
+    assert!(exists(r.exec.paths.layout().tenant(2).root().join("jobs/slot2-job")), "baden's files stay");
+    // Over: the prune does what's due.
+    end_step(&r.exec).unwrap();
+    let p = servers::prune(&ctx).unwrap();
+    assert!(p.get("held").is_none(), "{p}");
+    assert!(file(r).entry(2).is_none(), "the expired add is wiped now: {p}");
+}
+
+/// Verification L1: `--abort` takes the node's swap lock first: while the
+/// node holds it (applying its half), the abort waits and then answers
+/// busy with nothing changed (the instruction stays); once it's free the
+/// abort goes ahead.
+#[test]
+fn abort_waits_for_the_nodes_swap_lock() {
+    let t = setup("full");
+    let r = &t.r;
+    let step = step_for(&t, "lock1", Phase::Restart);
+    let ctx = Ctx::for_executor(&r.exec, "test");
+    move_trees(&r.exec, &ctx, &step).unwrap();
+    remove_stage(&r.exec);
+    write_node_change(&r.exec, &step).unwrap();
+    write_step(&r.exec, &step).unwrap();
+    let held = open_swap_lock(&r.exec.paths.config_dir).expect("root makes the lock with the instruction");
+    use std::os::fd::AsRawFd;
+    // SAFETY: flock on our own fd (the node's side).
+    assert_eq!(unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX) }, 0);
+    let e = abort(&r.exec).unwrap_err();
+    assert_eq!(e.code, code::BUSY, "{e:?}");
+    assert!(read_node_change(&r.exec.paths.config_dir).is_some(), "the instruction stays while the node holds the lock");
+    assert!(exists(r.exec.paths.state_dir.join(STEP_FILE)));
+    drop(held);
+    abort(&r.exec).unwrap();
+    trees_unchanged(r, "aborted after the lock");
+    assert!(read_node_change(&r.exec.paths.config_dir).is_none());
 }
 
 /// Verification #5: the files step waits for the node's applied record

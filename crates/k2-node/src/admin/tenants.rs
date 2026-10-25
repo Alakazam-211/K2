@@ -144,8 +144,25 @@ fn bsd_info(pid: i32) -> Option<(u32, u32)> {
     (n == size).then_some((info.pbi_ppid, info.pbi_uid))
 }
 
+/// macOS: the executable path of a process (`proc_pidpath`).
+#[cfg(target_os = "macos")]
+fn mac_path(pid: i32) -> Option<String> {
+    let mut buf = vec![0u8; 4096];
+    // SAFETY: a buffer of the size we pass.
+    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr() as *mut libc::c_void, buf.len() as u32) };
+    (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+}
+
+/// Where Apple's launchd per-user agents live (`distnoted`, `cfprefsd`,
+/// `trustd`, ...): launchd starts them for any uid that uses those
+/// services, also with launchd as their parent. Never a job's leftover.
+#[cfg(target_os = "macos")]
+const LAUNCHD_AGENT_DIRS: &[&str] = &["/System/", "/usr/libexec/", "/usr/sbin/"];
+
 /// macOS: every process of `uid` whose parent is launchd (pid 1): what a
-/// job left running after its process group ended.
+/// job left running after its process group ended. Apple's per-user
+/// agents ([`LAUNCHD_AGENT_DIRS`]) and a process whose path can't be read
+/// are skipped (verification L2).
 #[cfg(target_os = "macos")]
 fn mac_orphans_of(uid: u32) -> Vec<i32> {
     let mut pids: Vec<libc::c_int> = vec![0; 8192];
@@ -156,7 +173,18 @@ fn mac_orphans_of(uid: u32) -> Vec<i32> {
         return Vec::new();
     }
     pids.truncate(n as usize);
-    pids.into_iter().filter(|p| *p > 1 && bsd_info(*p) == Some((1, uid))).collect()
+    pids.into_iter()
+        .filter(|p| *p > 1 && bsd_info(*p) == Some((1, uid)))
+        .filter(|p| mac_path(*p).is_some_and(|path| !LAUNCHD_AGENT_DIRS.iter().any(|d| path.starts_with(d))))
+        .collect()
+}
+
+/// A macOS system account (`_k2node`): uid below 500 or a name starting
+/// with `_`, never root. Only such a node user's orphans are ever
+/// signalled: a person's own login account runs their apps and agents too
+/// (verification L2).
+pub fn is_system_account(name: &str, uid: u32) -> bool {
+    uid != 0 && (uid < 500 || name.starts_with('_'))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -462,7 +490,11 @@ impl Executor {
         } else if let Some((node_uid, _)) = super::server::user_ids(&self.node_user()).filter(|(u, _)| *u != 0) {
             // The node itself is the user's one other orphan: without its pid
             // nothing is signalled (it must never be hit).
+            let node_user = self.node_user();
             match self.platform.node_pid() {
+                _ if !is_system_account(&node_user, node_uid) => errors.push(format!(
+                    "the node user {node_user} (uid {node_uid}) isn't a system account, so its leftover processes weren't stopped (never a login account's)"
+                )),
                 Some(node_pid) => {
                     for p in mac_orphans_of(node_uid) {
                         if p as u32 == node_pid {
@@ -524,6 +556,10 @@ impl Executor {
                 }
                 for p in pids {
                     kill_if_still(p, uid);
+                    let what = format!("slot {slot} pid {p}");
+                    if !removed.contains(&what) {
+                        removed.push(what);
+                    }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }

@@ -670,6 +670,14 @@ impl Node {
             Err(e) => l.policy_error = Some(e),
         }
         match control {
+            // Root's public marker of an unfinished owner change holds new
+            // work whatever the file says (verification L3): an active
+            // control reads as draining until the change is over.
+            Ok(mut c) if c.control == Control::Active && crate::admin::owner::change_in_progress(&layout.config) => {
+                c.control = Control::Draining;
+                c.by = Some("k2-node servers.owner (in progress)".into());
+                l.control = c;
+            }
             Ok(c) => l.control = c,
             Err(e) => {
                 // Unreadable control = stopped for new work; say why.

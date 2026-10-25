@@ -1252,6 +1252,12 @@ mod tests {
         std::fs::set_permissions(inner.join("sub"), std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::write(inner.join("f"), "x").unwrap();
         std::os::unix::fs::symlink(&inner, gate.join("alias")).unwrap();
+        // As root the test made the link itself, so it IS root's own: give
+        // it to another user, as a link a job planted would be.
+        // SAFETY: no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            std::os::unix::fs::lchown(gate.join("alias"), Some(65534), Some(65534)).unwrap();
+        }
         std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o111)).unwrap();
         // SAFETY: no preconditions.
         if unsafe { libc::geteuid() } != 0 {

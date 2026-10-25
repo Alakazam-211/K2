@@ -96,6 +96,9 @@ pub struct Want {
     pub mem_bytes: Option<u64>,
     /// An explicit `--stall-timeout` (the node must enforce it).
     pub stall: bool,
+    /// Compute secret-env (SE6): the vault secret ids the job gets. A node
+    /// must offer `secret-env` and be covered by a grant for each.
+    pub secret_ids: Vec<String>,
 }
 
 impl Want {
@@ -111,6 +114,7 @@ impl Want {
             cpu_millis: plan.limits.cpu_millis,
             mem_bytes: plan.limits.mem_bytes,
             stall: j.ctl.stall_secs.is_some_and(|s| s > 0),
+            secret_ids: j.ctl.secrets.iter().map(|p| p.secret_id.clone()).collect(),
         }
     }
 
@@ -205,6 +209,9 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     if w.stall {
         f.push(FEATURE_STALL);
     }
+    if !w.secret_ids.is_empty() {
+        f.push(k2_core::compute::proto::secret::FEATURE_SECRET_ENV);
+    }
     f
 }
 
@@ -261,6 +268,11 @@ pub fn candidates(w: &Want, exclude: &[String], now: i64) -> Vec<Cand> {
         // Over the node's caps (--cpus/--mem): it would never start there
         // (compute DX slice A: never queued where it can't ever fit).
         if scheduler::never_fits(&offer, &w.probe()).is_some() {
+            continue;
+        }
+        // Secret-env (SE6): only nodes a grant covers for every secret
+        // (`*` covers only nodes this server owns, Q2).
+        if !w.secret_ids.is_empty() && !crate::compute_secrets::covers_all(&w.ws_id, &n, &w.secret_ids) {
             continue;
         }
         out.push(Cand { node: n, online, offer, load, queued: queued_all, grant });

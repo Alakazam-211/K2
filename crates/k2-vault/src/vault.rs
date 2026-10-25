@@ -1520,6 +1520,16 @@ impl LocalVault {
         self.grants_for(&conn, &keys, &row.meta.id)
     }
 
+    /// One grant by id, integrity-checked (subsystems: e.g. what a revoke
+    /// is about to remove). `None` when missing or failing its MAC.
+    pub fn grant_info(&self, grant_id: &str) -> Option<Grant> {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let r = conn.query_row("SELECT * FROM grants WHERE id = ?1", params![grant_id], |r| Ok(read_grant_raw(r))).optional().ok()??;
+        let (g, mac) = r.ok()?;
+        hmac_verify(&keys.row, &grant_mac_input(&g), &mac).then_some(g)
+    }
+
     /// Every grant naming `consumer`, with the secret's name (people and
     /// subsystems; e.g. a published service's bindings).
     pub fn grants_to(&self, consumer: &Consumer) -> Result<Vec<(Grant, String)>> {

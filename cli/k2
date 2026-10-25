@@ -17626,6 +17626,9 @@ elif verb == "get":
     j = v
     print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
     print("  argv: %s" % " ".join(j.get("argv") or []))
+    if j.get("secrets"):
+        # Secret-env: the env names it gets from the vault, never values.
+        print("  secrets (env names): %s" % ", ".join(j["secrets"]))
     print("  commit: %s  tree: %s" % (j.get("srcCommit") or "-", j.get("srcTree") or "-"))
     print("  exit: %s  signal: %s  attempt %s (generation %s)" % (j.get("exitCode"), j.get("signal"), j.get("attempt"), j.get("generation")))
     if j.get("queue") and j["queue"].get("onNode"):
@@ -17890,11 +17893,12 @@ cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate=""
-    local -a labels=() envs=() needs=() artifacts=()
+    local -a labels=() envs=() needs=() artifacts=() secrets=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
             --gate) gate=1; shift ;;
+            --secret) secrets+=("${2:-}"); shift 2 ;;
             --wait) wait=1; shift ;;
             --failures) wait_failures=1; shift ;;
             --max-wait) max_wait="${2:-}"; shift 2 ;;
@@ -18001,12 +18005,28 @@ print(json.dumps(out))' "${needs[@]}")"
     if [ "${#artifacts[@]}" -gt 0 ]; then
         artifacts_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${artifacts[@]}")"
     fi
+    # --secret NAME[=ENVNAME]: names only (the value never leaves the vault
+    # until the node asks for it at spawn, sealed).
+    local secrets_json=""
+    if [ "${#secrets[@]}" -gt 0 ]; then
+        secrets_json="$(python3 -c '
+import json, sys
+out = []
+for a in sys.argv[1:]:
+    if not a or a.startswith("="):
+        sys.stderr.write("usage: --secret NAME[=ENVNAME]\n"); sys.exit(2)
+    n, _, e = a.partition("=")
+    o = {"name": n}
+    if e: o["env"] = e
+    out.append(o)
+print(json.dumps(out))' "${secrets[@]}")" || exit 2
+    fi
     local ws_name
     ws_name="$(_compute_ws "$workspace")"
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_arch="$arch" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
-        K2_CJ_artifacts_j="$artifacts_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_plan_b="$plan" \
+        K2_CJ_artifacts_j="$artifacts_json" K2_CJ_secrets_j="$secrets_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_plan_b="$plan" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
@@ -18191,7 +18211,7 @@ cmd_compute_test() {
             --needs|--need)
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--arch|--label|--env|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout)
+            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout)
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--raw|--json|--no-retry|--retry-interrupted|--no-source) pass+=("$1"); shift ;;
             -*) echo "usage: unknown flag '$1' (k2 compute test --help)" >&2; exit 2 ;;
@@ -24011,6 +24031,12 @@ print(json.dumps(o))' "$grant_id" "$from")"
             _vault_call POST revoke "$(_vault_merge "$sj" "$nj" "$rj")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             echo "removed"
+            # A compute grant (secret-env SE28): jobs that already got it keep it.
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+for j in v.get("stillRunning") or []:
+    print("still running with it: job %s on %s (%s, %s); revoking stops its next attempt, not this one (k2 compute cancel %s)" % (j["short"], j["node"], j["env"], j["state"], j["short"]))'
             ;;
         disable|enable)
             [ -n "$name" ] || { echo "usage: k2 vault $sub NAME" >&2; exit 2; }

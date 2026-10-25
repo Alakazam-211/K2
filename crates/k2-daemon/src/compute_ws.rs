@@ -548,7 +548,7 @@ async fn run_session(
     let (work_tx, work_rx) = std::sync::mpsc::channel::<Frame>();
     let worker_node = node_id.clone();
     let worker_route = route;
-    let worker = tokio::task::spawn_blocking(move || frame_worker(worker_node, worker_route, work_rx));
+    let worker = tokio::task::spawn_blocking(move || frame_worker(worker_node, worker_route, conn_id, work_rx));
 
     let mut ping = tokio::time::interval(Duration::from_secs(frames::PING_SECS));
     ping.tick().await;
@@ -635,23 +635,24 @@ struct LogTally {
     flushed: Instant,
 }
 
-fn frame_worker(node_id: String, route: &'static str, rx: std::sync::mpsc::Receiver<Frame>) {
+fn frame_worker(node_id: String, route: &'static str, conn_id: u64, rx: std::sync::mpsc::Receiver<Frame>) {
     let mut tallies: HashMap<(String, u32), LogTally> = HashMap::new();
     let mut snapshot_seen: HashSet<String> = HashSet::new();
     while let Ok(f) = rx.recv() {
-        handle_frame(&node_id, route, f, &mut tallies, &mut snapshot_seen);
+        handle_frame(&node_id, route, conn_id, f, &mut tallies, &mut snapshot_seen);
     }
     for ((job, _), t) in tallies {
         flush_tally(&job, &t);
     }
 }
 
-fn handle_frame(node_id: &str, route: &'static str, f: Frame, tallies: &mut HashMap<(String, u32), LogTally>, snapshot_seen: &mut HashSet<String>) {
+fn handle_frame(node_id: &str, route: &'static str, conn_id: u64, f: Frame, tallies: &mut HashMap<(String, u32), LogTally>, snapshot_seen: &mut HashSet<String>) {
     let node_id = node_id.to_string();
     match f {
         Frame::Offer(o) => on_offer(&node_id, o),
         Frame::JobsSnapshot(s) => on_snapshot(&node_id, s, snapshot_seen),
         Frame::Need(n) => on_need(&node_id, route, n),
+        Frame::SecretNeed(n) => on_secret_need(&node_id, conn_id, n),
         Frame::State(s) => {
             if let Some(t) = tallies.remove(&(s.job_id.clone(), s.generation)) {
                 flush_tally(&s.job_id, &t);
@@ -718,7 +719,8 @@ pub fn test_attach(node_id: &str, offer: Offer) -> TestConn {
             Conn { conn_id: id, tx, route: "loopback", offer: None, bytes_in: Arc::new(AtomicU64::new(0)), bytes_out: Arc::new(AtomicU64::new(0)) },
         );
     });
-    handle_frame(node_id, "loopback", Frame::Offer(offer), &mut HashMap::new(), &mut HashSet::new());
+    let conn_id = with_engine(|e| e.conns.get(node_id).map(|c| c.conn_id)).unwrap_or(0);
+    handle_frame(node_id, "loopback", conn_id, Frame::Offer(offer), &mut HashMap::new(), &mut HashSet::new());
     TestConn { rx }
 }
 
@@ -732,7 +734,63 @@ pub fn test_detach(node_id: &str) {
 /// a live session (blocking).
 #[doc(hidden)]
 pub fn test_frame(node_id: &str, f: Frame) {
-    handle_frame(node_id, "loopback", f, &mut HashMap::new(), &mut HashSet::new());
+    let conn_id = with_engine(|e| e.conns.get(node_id).map(|c| c.conn_id)).unwrap_or(0);
+    handle_frame(node_id, "loopback", conn_id, f, &mut HashMap::new(), &mut HashSet::new());
+}
+
+/// Test seam: wait (≤ `timeout`) until no secret release is in flight
+/// (they run on their own threads, SE9).
+#[doc(hidden)]
+pub fn test_wait_releases(timeout: Duration) -> bool {
+    let t0 = Instant::now();
+    while RELEASES.load(Ordering::SeqCst) > 0 {
+        if t0.elapsed() > timeout {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+/// Secret releases running now (test seam).
+static RELEASES: AtomicU64 = AtomicU64::new(0);
+
+/// `secret_need` (SE9–SE12): on its own thread, so this connection's frame
+/// loop never waits on the vault (SV6). The answer goes only to the
+/// connection that asked (SV5); a node that reconnected meanwhile times
+/// out and fails the attempt `secret_unavailable`.
+fn on_secret_need(node_id: &str, conn_id: u64, n: frames::SecretNeed) {
+    let node = node_id.to_string();
+    RELEASES.fetch_add(1, Ordering::SeqCst);
+    std::thread::spawn(move || {
+        let r = crate::compute_secrets::release(&node, &n);
+        let (frame, recorded) = match r {
+            Ok((env, names, redactor)) => {
+                crate::compute_secrets::belt_arm(&n.job_id, n.generation, redactor);
+                (Frame::SecretEnv(env), Ok(names))
+            }
+            Err((code, message)) => (
+                Frame::SecretRefused(frames::SecretRefused { job_id: n.job_id.clone(), generation: n.generation, code: code.to_string(), message: message.clone() }),
+                Err((code, message)),
+            ),
+        };
+        crate::compute_secrets::record(&node, &n, &recorded);
+        if !send_to_conn(&node, conn_id, frame) {
+            log_debug!("[compute] secret answer for {} dropped: node {node} reconnected or left", n.job_id);
+            if recorded.is_ok() {
+                crate::compute_secrets::belt_disarm(&n.job_id, n.generation);
+            }
+        }
+        notify_change();
+        RELEASES.fetch_sub(1, Ordering::SeqCst);
+    });
+}
+
+/// Queue a frame on one connection only (same `conn_id`), never on a newer
+/// one of the same node.
+fn send_to_conn(node_id: &str, conn_id: u64, f: Frame) -> bool {
+    let tx = with_engine(|e| e.conns.get(node_id).filter(|c| c.conn_id == conn_id).map(|c| c.tx.clone()));
+    tx.is_some_and(|tx| tx.send(Out::Frame(Box::new(f))).is_ok())
 }
 
 fn flush_tally(job: &str, t: &LogTally) {
@@ -823,6 +881,9 @@ fn on_log(tallies: &mut HashMap<(String, u32), LogTally>, l: LogChunk) {
     if data.len() > frames::MAX_LOG_CHUNK {
         return;
     }
+    // The belt (secret-env SE24): a released attempt's chunks are
+    // redacted here too, per chunk, before anything is stored.
+    let data = crate::compute_secrets::belt(&l.job_id, l.generation, &data).unwrap_or(data);
     // The generation is checked against the job row lazily (a stale
     // attempt's chunks land in that attempt's own file).
     match logs::append(&l.job_id, l.generation as i64, l.seq, l.stream, &data) {
@@ -1178,6 +1239,7 @@ fn on_state(node_id: &str, s: StateUpdate) {
     }
     apply_observation(node_id, &s.job_id, s.generation, s.state, s.reason.as_deref(), s.detail.as_deref(), s.exit.as_ref(), s.src.as_ref(), s.queue.as_ref());
     if s.state.is_terminal() {
+        crate::compute_secrets::belt_disarm(&s.job_id, s.generation);
         kick(node_id);
     }
     notify_change();
@@ -1833,6 +1895,12 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             pass.fail.push((j.id.clone(), r));
             continue;
         }
+        // Secret-env (SE6): a secret plan goes only to a node offering
+        // `secret-env` right now; it waits on this server otherwise.
+        if !plan.secret_env.is_empty() && !offer.features.iter().any(|f| f == k2_core::compute::proto::secret::FEATURE_SECRET_ENV) {
+            wait(secret_feature_wait(), &mut pass);
+            continue;
+        }
         let class = pshare::JobClass::parse(&j.class).unwrap_or_default();
         let ask = share::ShareAsk { cpu_millis: plan.limits.cpu_millis, mem_bytes: plan.limits.mem_bytes, max_secs: plan.limits.max_secs, exclusive: j.exclusive, class };
         if let Some((code, msg)) = share::share_refusal(&view.limits, &ask) {
@@ -1985,7 +2053,7 @@ fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
 pub fn kick(node_id: &str) {
     let _k = KICK.lock().unwrap_or_else(|p| p.into_inner());
     let Some((tx, offer)) = with_engine(|e| e.conns.get(node_id).map(|c| (c.tx.clone(), c.offer.clone()))) else { return };
-    if let Some(o) = offer.filter(share::is_shared) {
+    if let Some(o) = offer.clone().filter(share::is_shared) {
         return kick_shared(node_id, &tx, &o);
     }
     let decision = decision_for(node_id);
@@ -2035,6 +2103,15 @@ pub fn kick(node_id: &str) {
     let conn = db.lock();
     let Some(job) = store::job_by_id(&conn, &id) else { return };
     let Some(plan) = job.plan() else { return };
+    // Secret-env (SE6): never assign a secret plan to a node whose live
+    // offer lacks `secret-env` (it would refuse it at assign anyway).
+    if !plan.secret_env.is_empty() && !offer.as_ref().is_some_and(|o| o.features.iter().any(|f| f == k2_core::compute::proto::secret::FEATURE_SECRET_ENV)) {
+        let w = secret_feature_wait();
+        if job.reason.as_deref() != Some(w.code.as_str()) {
+            store::set_job_reason(&conn, &job.id, Some(&w.code), Some(&w.message));
+        }
+        return;
+    }
     let fence = Fence { job_id: job.id.clone(), attempt: job.attempt as u32, generation: job.generation as u32, plan_digest: job.plan_digest.clone() };
     // Compare-and-set: the decision was read under a different DB lock,
     // and a cancel may have ended the job since. Never assign over it.
@@ -2049,6 +2126,14 @@ pub fn kick(node_id: &str) {
     drop(conn);
     with_engine(|e| e.last_ws.insert(node_id.to_string(), job.workspace_id.clone()));
     notify_change();
+}
+
+/// Why a secret job waits for its node (SE6).
+fn secret_feature_wait() -> frames::Refusal {
+    frames::Refusal::new(
+        k2_core::compute::proto::secret::codes::FEATURE_MISSING,
+        "the node doesn't take --secret jobs right now (k2-node 0.46.4 on Linux with the job wall, and trust 'own' for this server)",
+    )
 }
 
 /// Ask the node to stop a job (cancel route).

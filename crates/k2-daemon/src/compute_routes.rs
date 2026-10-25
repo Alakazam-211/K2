@@ -1522,6 +1522,10 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let (cpu_millis, mem_bytes) = job_resources(&v)?;
     // Files to keep after the command exits (results back, G1).
     let artifacts = artifacts_from(&v)?;
+    // Vault secrets as env (secret-env SE1–SE4): names → ids now (no
+    // value), env names and grant coverage once the node is known.
+    let secret_asks = crate::compute_secrets::asks_from(v)?;
+    let secrets_found = crate::compute_secrets::find(&ws.id, &ws.handle, &secret_asks)?;
     let detach = b(&v, "detach") == Some(true);
     // Never stuck (G3/G4): queue timeout, infra retries.
     let tun = compute::retry::tuning();
@@ -1564,6 +1568,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         cpu_millis,
         mem_bytes,
         stall: stall.is_some_and(|x| x > 0),
+        secret_ids: secrets_found.iter().map(|f| f.secret_id.clone()).collect(),
     };
     // Node: by name, or --any.
     let mut warnings: Vec<String> = Vec::new();
@@ -1574,6 +1579,23 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             409,
             format!("'{}' runs an older k2-node that can't keep --artifact files; update k2-node on that machine (sudo k2-node setup), or run without --artifact", node.name),
         ));
+    }
+    if !secrets_found.is_empty() && !node_features(&node).iter().any(|f| f == k2_core::compute::proto::secret::FEATURE_SECRET_ENV) {
+        return Err(no(
+            "node_upgrade_required",
+            409,
+            format!(
+                "'{}' can't take --secret: it needs k2-node 0.46.4 on Linux with the job wall on, and this server's trust there must be 'own' (k2 compute info {} shows its features)",
+                node.name, node.name
+            ),
+        ));
+    }
+    // Env names and coverage on this node (SE2, SE4, SE7).
+    let secret_envs = if secrets_found.is_empty() { Vec::new() } else { crate::compute_secrets::env_names(&ws.id, &node, &secrets_found, &env)? };
+    if !opts.dry {
+        if let Some(r) = crate::compute_secrets::not_granted(&secret_envs, &ws.handle, &node) {
+            return Err(r);
+        }
     }
     if want.stall && !node_features(&node).iter().any(|f| f == k2_core::compute::proto::frames::FEATURE_STALL) {
         return Err(no(
@@ -1713,6 +1735,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             warnings: &warnings,
             class,
             shared: shared_view.as_ref(),
+            secrets: &secret_envs,
         });
         return Ok(Submitted { job: None, warnings, source: None, preview: Some(preview) });
     }
@@ -1734,6 +1757,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         retries,
         stall_secs: stall,
         shard: opts.shard.clone(),
+        secrets: crate::compute_secrets::pins(&secret_envs).0,
         ..Default::default()
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
@@ -1765,7 +1789,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         needs: needs.clone(),
         artifacts,
         stall_secs,
-        secret_env: Vec::new(),
+        // Names only (SE5): the values come sealed at spawn.
+        secret_env: crate::compute_secrets::pins(&secret_envs).1,
     };
     let job = {
         let db = k2_core::db::shared();
@@ -1794,7 +1819,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             Some(&j.id),
             serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach, "needs": plan.needs,
                 "source": source.as_ref().map(SourceInfo::json), "any": any, "retries": retries, "queueTimeoutSecs": queue_timeout,
-                "shard": opts.shard}),
+                "shard": opts.shard, "secrets": plan.secret_env}),
         );
         j
     };
@@ -1827,6 +1852,8 @@ struct PlanFacts<'a> {
     class: pshare::JobClass,
     /// This server's share, when the node is shared.
     shared: Option<&'a pshare::ShareView>,
+    /// `--secret`s: (found, env name, covered on this node) (SE7).
+    secrets: &'a [(crate::compute_secrets::Found, String, bool)],
 }
 
 /// `--plan`: the node it would pick and whether it starts now, the queue
@@ -1897,6 +1924,10 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
         "artifacts": f.artifacts,
         "warnings": f.warnings,
     });
+    if !f.secrets.is_empty() {
+        // Names and coverage only, never a value (SE7).
+        out["secrets"] = crate::compute_secrets::plan_view(f.secrets);
+    }
     // A shared node (§6 `--plan`): who owns it, this server's share and
     // the node's quote for this ask. Absent on solo nodes.
     if let Some(view) = f.shared {
@@ -2151,6 +2182,12 @@ fn job_summary(j: &store::JobRow) -> serde_json::Value {
         v["queue"] = node_queue_json(j, node.as_deref());
     }
     v["node"] = node.into();
+    // Secret-env (SE8): the env names the job gets from the vault. Names
+    // only; absent for every other job, so their JSON is unchanged.
+    let secrets = crate::compute_secrets::job_secret_names(j);
+    if !secrets.is_empty() {
+        v["secrets"] = secrets.into();
+    }
     v
 }
 
@@ -2514,6 +2551,9 @@ fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> 
     } else {
         compute::result::envelope_with_shards(&j, &crate::compute_shards::children(&j))
     };
+    if let Some(s) = v.get("secrets").cloned() {
+        v["result"]["secrets"] = s;
+    }
     Ok(v)
 }
 
@@ -2849,13 +2889,18 @@ fn job_receipt(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Val
     let signed: k2_core::compute::proto::frames::SignedReceipt =
         serde_json::from_str(raw).map_err(|e| no("internal", 500, format!("stored receipt: {e}")))?;
     let body: serde_json::Value = serde_json::from_str(&signed.body).unwrap_or_default();
-    Ok(serde_json::json!({
+    let mut out = serde_json::json!({
         "job": compute::message::short(&j.id),
         "verified": j.receipt_ok == Some(true),
         "receipt": body,
         "signature": signed.sig,
         "proves": "which node said it ran which inputs and got which outputs — not that the node is honest",
-    }))
+    });
+    // SE8/SE29: the env names the node says the job got from the vault.
+    if let Some(s) = body.get("secret_env").filter(|s| s.as_array().is_some_and(|a| !a.is_empty())) {
+        out["secrets"] = s.clone();
+    }
+    Ok(out)
 }
 
 /// The job has left the queue; a queued-only cancel (`ifState: queued`,

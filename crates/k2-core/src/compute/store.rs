@@ -570,6 +570,22 @@ pub struct JobCtl {
     /// no news to them, so no `[compute]` completion message.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cancelled_by_requester: bool,
+    /// Compute secret-env (SE4): the vault secrets this job gets, pinned at
+    /// submit by id. Names and ids only, never a value; controller-only
+    /// (never sent: `Plan.secret_env` carries the env names to the node).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<SecretPin>,
+}
+
+/// One secret a compute job gets (SE4): what was asked, the vault id it
+/// resolved to at submit, and the env name the job sees.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretPin {
+    /// As the submitter wrote it (`NAME` or a `k2v://` reference).
+    pub name: String,
+    pub secret_id: String,
+    pub env: String,
 }
 
 /// Which shard a child job is.

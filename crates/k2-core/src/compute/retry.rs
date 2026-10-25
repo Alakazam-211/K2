@@ -109,12 +109,31 @@ const JOB_FAILED_REASONS: &[&str] = &[
     "queue_timeout",
     // Over the node's caps (compute DX slice A): the job asks too much.
     "exceeds_node_caps",
+    // Compute secret-env (SE11, SE20): the grant, the secret or the ask
+    // decides these, the same on every node.
+    super::proto::secret::codes::NOT_GRANTED,
+    super::proto::secret::codes::NOT_ACTIVE,
+    super::proto::secret::codes::ATTEMPT_STALE,
+    super::proto::secret::codes::ALREADY_RUNNING,
+    super::proto::secret::codes::TOO_LARGE,
+    super::proto::secret::codes::PAYLOAD_MISMATCH,
 ];
 
 /// `Failed` reasons that are about the job's needs on this node (a
 /// package the owner hasn't approved, a tool that won't install): worth
 /// another node, but not the node's fault.
-const NEEDS_FAILED_REASONS: &[&str] = &["package_not_approved", "package_missing", "tool_install_failed", "relay_cap"];
+const NEEDS_FAILED_REASONS: &[&str] = &[
+    "package_not_approved",
+    "package_missing",
+    "tool_install_failed",
+    "relay_cap",
+    // Secret-env refused at assign by this node (SE17): no wall, not a
+    // `trust own` server, or an older executor. Another node may serve it.
+    super::proto::secret::codes::NEEDS_WALL,
+    super::proto::secret::codes::UNTRUSTED_SERVER,
+    super::proto::secret::codes::NEEDS_UPDATE,
+    super::proto::secret::codes::LINUX_ONLY,
+];
 
 /// Is this end an infrastructure failure (the command never got a fair
 /// run)? `Done` (any exit code), `Timeout`, `Cancelled` are results.
@@ -134,7 +153,13 @@ pub fn retry_elsewhere_only(reason: Option<&str>) -> bool {
 
 /// Ends that are infrastructure (retried) but never the node's fault:
 /// `interrupted/node_update`, a shared node's drained update (V55).
-const NO_STRIKE_REASONS: &[&str] = &[super::proto::share::codes::NODE_UPDATE];
+/// Secret-env (SE11): the link dropped or the vault was locked during the
+/// release: infrastructure, retried, never the node's fault.
+const NO_STRIKE_REASONS: &[&str] = &[
+    super::proto::share::codes::NODE_UPDATE,
+    super::proto::secret::codes::UNAVAILABLE,
+    super::proto::secret::codes::VAULT_LOCKED,
+];
 
 /// Does this end count against the node (quarantine)?
 pub fn counts_against_node(state: JobState, reason: Option<&str>) -> bool {
@@ -271,5 +296,25 @@ mod tests {
         assert!(h.record(JobState::Failed, Some("spawn_failed"), 7, &t), "third in a row");
         assert!(h.is_set_aside(50));
         assert!(!h.is_set_aside(107), "for a while, not forever");
+    }
+
+    /// SE11: grant/secret refusals are results; a dropped link or a locked
+    /// vault is infrastructure that never counts against the node; a node
+    /// that can't take secrets is worth another node only.
+    #[test]
+    fn secret_env_reasons_are_classified() {
+        use crate::compute::proto::secret::codes as c;
+        for r in [c::NOT_GRANTED, c::NOT_ACTIVE, c::ATTEMPT_STALE, c::ALREADY_RUNNING, c::TOO_LARGE, c::PAYLOAD_MISMATCH] {
+            assert!(!is_infra(JobState::Failed, Some(r)), "{r} is a result");
+            assert!(!counts_against_node(JobState::Failed, Some(r)), "{r}");
+        }
+        for r in [c::UNAVAILABLE, c::VAULT_LOCKED] {
+            assert!(is_infra(JobState::Failed, Some(r)), "{r} is retried");
+            assert!(!counts_against_node(JobState::Failed, Some(r)), "{r} never strikes the node");
+        }
+        for r in [c::NEEDS_WALL, c::UNTRUSTED_SERVER, c::NEEDS_UPDATE, c::LINUX_ONLY] {
+            assert!(is_infra(JobState::Failed, Some(r)) && retry_elsewhere_only(Some(r)), "{r}");
+            assert!(!counts_against_node(JobState::Failed, Some(r)), "{r}");
+        }
     }
 }

@@ -1385,23 +1385,41 @@ struct RevokeBody {
 fn revoke(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
     let b: RevokeBody = parse(body)?;
     if let Some(id) = b.grant_id.as_deref() {
+        // Secret-env (SE28): a compute grant's running jobs keep what they
+        // got; say which ones.
+        let before = vault.grant_info(id);
         vault.revoke(id, &c.actor)?;
-        return Ok(json!({ "ok": true, "revoked": [id] }));
+        let running: Vec<Value> = before.iter().flat_map(|g| crate::compute_secrets::running_with(&g.secret_id, &g.consumer)).collect();
+        return Ok(revoked_json(&[id.to_string()], running));
     }
     let sel = selector(c, &b.sel)?;
     let from = b.from.as_deref().ok_or_else(|| err("consumer_required", 400, "--from ws:<name> or a grant id"))?;
     let consumer = consumer_for(c, from)?;
     let mut done = vec![];
+    let mut running = vec![];
     for g in vault.grants(&sel, &c.actor)? {
         if g.consumer == consumer {
             vault.revoke(&g.id, &c.actor)?;
+            running.extend(crate::compute_secrets::running_with(&g.secret_id, &g.consumer));
             done.push(g.id);
         }
     }
     if done.is_empty() {
         return Err(VaultError::not_found("no share to remove"));
     }
-    Ok(json!({ "ok": true, "revoked": done }))
+    Ok(revoked_json(&done, running))
+}
+
+/// The revoke answer. `stillRunning` (compute grants, SE28): jobs that
+/// already got the value keep it until they end; only later attempts are
+/// refused. Absent when none, so other revokes answer as before.
+fn revoked_json(done: &[String], running: Vec<Value>) -> Value {
+    let mut v = json!({ "ok": true, "revoked": done });
+    if !running.is_empty() {
+        v["stillRunning"] = Value::Array(running);
+        v["note"] = "these jobs already have the value in their environment; revoking stops the next attempt, not them (k2 compute cancel <job> stops one)".into();
+    }
+    v
 }
 
 #[derive(Debug, Default, Deserialize)]

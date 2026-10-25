@@ -567,6 +567,41 @@ async fn secret_env_release_end_to_end() {
     compute_ws::test_detach("old-1");
 }
 
+/// Review round 3: a node answering `queued / secret_isolation_wait` (SE26,
+/// solo path) leaves the job queued here, and the next offer sends the same
+/// attempt again (the node never retries it itself).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_isolation_wait_is_sent_again_on_the_next_offer() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
+    let ws = seed_ws(&env, "isow");
+    active_node("iso-1", "iso-node", &ws);
+    let secret_id = put_secret(&ws);
+    owner_grant(&secret_id, Consumer::compute(&ws.id, "iso-1"), None);
+    let feats = [psecret::FEATURE_SECRET_ENV, "artifacts", "stall"];
+    let mut node = compute_ws::test_attach("iso-1", offer(&feats, None));
+    let r = run(d.port, &passport(&ws), json!({"node": "iso-node", "secrets": [{"name": "GMAIL_CLIENT_SECRET"}]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let assigned = |frames: &[Frame]| frames.iter().filter(|f| matches!(f, Frame::Assign(a) if a.fence.job_id == job)).count();
+    assert_eq!(assigned(&node.frames()), 1);
+    let gen = row(&job).generation as u32;
+    compute_ws::test_frame("iso-1", state(&job, gen, JobState::Queued, Some(scodes::ISOLATION_WAIT)));
+    let q = row(&job);
+    assert_eq!((q.state.as_str(), q.reason.as_deref()), ("queued", Some(scodes::ISOLATION_WAIT)), "waits here");
+    assert!(node.frames().is_empty(), "not re-sent before the node says anything new");
+    // The hold cleared: the node's next offer.
+    let mut o = offer(&feats, None);
+    o.revision = 2;
+    compute_ws::test_frame("iso-1", Frame::Offer(o));
+    let again = node.frames();
+    assert_eq!(assigned(&again), 1, "the same attempt is sent again: {again:?}");
+    let r2 = row(&job);
+    assert_eq!((r2.generation as u32, r2.state.as_str()), (gen, "assigned"));
+    compute_ws::test_detach("iso-1");
+}
+
 /// `--any` (SE6): only nodes offering `secret-env` that a grant covers;
 /// `compute:<ws>/*` covers only nodes this server owns (Q2).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

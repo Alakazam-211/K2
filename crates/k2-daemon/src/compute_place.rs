@@ -408,6 +408,8 @@ fn leave_reason(j: &JobRow, node: Option<&NodeRow>, decisions: &mut HashMap<Stri
         "any_hold",
         pshare::codes::TENANT_QUEUE_FULL,
         pshare::codes::FAIR_SHARE_WAIT,
+        // Secret-env SE26: another workspace's job runs as the same user.
+        k2_core::compute::proto::secret::codes::ISOLATION_WAIT,
     ];
     if busy.contains(&why.code.as_str()) {
         Some(("node_busy", false))

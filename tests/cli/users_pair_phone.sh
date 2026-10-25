@@ -13,6 +13,11 @@ K2="$PROJECT_ROOT/cli/k2"
 
 for v in $(env | grep -E '^K2(SO)?_' | cut -d= -f1); do unset "$v"; done
 
+# BUILD_DAEMON=1 builds the daemon first (a fresh K2 Compute checkout).
+if [ "${BUILD_DAEMON:-0}" = "1" ]; then
+    (cd "$PROJECT_ROOT" && cargo build -p k2-daemon)
+fi
+
 # shellcheck source=_sandbox_daemon.sh
 source "$SCRIPT_DIR/_sandbox_daemon.sh"
 sandbox_daemon_start

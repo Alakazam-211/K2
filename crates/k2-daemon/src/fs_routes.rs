@@ -852,6 +852,7 @@ fn scope_refused(need: PathNeed) -> CliResponse {
     crate::skin_routes::missing_cap_response(match need {
         PathNeed::Write => crate::skin_routes::FILES_WRITE,
         PathNeed::List | PathNeed::Read => crate::skin_routes::FILES_READ,
+        PathNeed::Upload => k2_core::skin::CAP_FILES_UPLOAD,
     })
 }
 
@@ -921,16 +922,17 @@ fn scope_gate_landed(
     }
 }
 
-/// Both checks for one write target (`rel` as sent, `abs` jailed).
+/// Both checks for one write target (`rel` as sent, `abs` jailed). `need`
+/// is `Write`, or `Upload` for an upload-only drop (AC10).
 fn scope_write_target(
     scope: &RoomPathScope,
     resolved: &SkinWorkspace,
     rel: &str,
     abs: &Path,
     follow_leaf: bool,
+    need: PathNeed,
 ) -> Option<CliResponse> {
-    scope_lexical(scope, rel, PathNeed::Write)
-        .or_else(|| scope_gate_landed(scope, resolved, abs, PathNeed::Write, follow_leaf))
+    scope_lexical(scope, rel, need).or_else(|| scope_gate_landed(scope, resolved, abs, need, follow_leaf))
 }
 
 // ── Agent config folder (GH#72) ────────────────────────────────────────
@@ -1063,28 +1065,34 @@ fn refuse_protected_write(
     abs: &Path,
     ancestors: bool,
 ) -> Option<CliResponse> {
-    refuse_protected_write_at(pass, scope, resolved, rel, abs, ancestors, true)
+    refuse_protected_write_at(pass, scope, resolved, rel, abs, ancestors, true, PathNeed::Write)
 }
 
-/// [`refuse_protected_write`] for a NEW name that the door never writes
-/// through: upload-chunk publishes with a no-replace hard link (or a
-/// rename after a no-follow existence check) and picks `name (1).ext` when
-/// anything, a symlink included, already sits at `<dir>/<name>`. So the
-/// leaf is checked as written and NOT followed. Following it made an
-/// existing leaf symlink that points out of the room (resolved target not
-/// under the room → fail closed) refuse an ordinary upload with
-/// `agent_config_protected`. The folder is still resolved (the caller has
-/// also checked it on its own), and `.k2` as the name is still refused.
-fn refuse_protected_new_name(
+/// [`refuse_protected_write`] for an upload door, which acts with `need`
+/// (`Write`, or `Upload` for an upload-only drop, AC10). `follow_leaf =
+/// false` is for a NEW name that the door never writes through
+/// (`refuse_protected_new_name` before 0.46.4): upload-chunk publishes
+/// with a no-replace hard link (or a rename after a no-follow existence
+/// check) and picks `name (1).ext` when anything, a symlink included,
+/// already sits at `<dir>/<name>`. So the leaf is checked as written and
+/// NOT followed. Following it made an existing leaf symlink that points
+/// out of the room (resolved target not under the room → fail closed)
+/// refuse an ordinary upload with `agent_config_protected`. The folder is
+/// still resolved (the caller has also checked it on its own), and `.k2`
+/// as the name is still refused.
+fn refuse_protected_upload(
     pass: &SkinPass,
     scope: &RoomPathScope,
     resolved: &SkinWorkspace,
     rel: &str,
     abs: &Path,
+    follow_leaf: bool,
+    need: PathNeed,
 ) -> Option<CliResponse> {
-    refuse_protected_write_at(pass, scope, resolved, rel, abs, false, false)
+    refuse_protected_write_at(pass, scope, resolved, rel, abs, false, follow_leaf, need)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn refuse_protected_write_at(
     pass: &SkinPass,
     scope: &RoomPathScope,
@@ -1093,10 +1101,11 @@ fn refuse_protected_write_at(
     abs: &Path,
     ancestors: bool,
     follow_leaf: bool,
+    need: PathNeed,
 ) -> Option<CliResponse> {
-    // R3 first: outside the line's write folders is the missing-cap 403,
-    // whatever else the path is.
-    if let Some(r) = scope_write_target(scope, resolved, rel, abs, follow_leaf) {
+    // R3 first: outside the line's write folders (an upload-only drop: its
+    // drop folders) is the missing-cap 403, whatever else the path is.
+    if let Some(r) = scope_write_target(scope, resolved, rel, abs, follow_leaf, need) {
         return Some(r);
     }
     if let Some(r) = refuse_heartbeats_area(resolved, rel, abs, ancestors) {
@@ -1114,7 +1123,9 @@ fn refuse_protected_write_at(
             return Some(heartbeats_area_response());
         }
     }
-    if pass.has_cap_in_room(&resolved.project_id, k2_core::skin::CAP_FILES_AGENT_CONFIG) {
+    // The `.k2/` opt-in widens `files:write` only; an upload-only drop
+    // never reaches `.k2/`, whatever the line holds.
+    if need != PathNeed::Upload && pass.has_cap_in_room(&resolved.project_id, k2_core::skin::CAP_FILES_AGENT_CONFIG) {
         return None;
     }
     if lexically_in_agent_config(rel, ancestors)
@@ -1178,6 +1189,120 @@ fn skin_resolve_write(
         ));
     }
     Ok(resolved)
+}
+
+// ── Upload-only drops (prd-app-caps-0464-v1 AC7–AC10, 0.46.4) ─────────
+//
+// The two upload doors (upload-binary, upload-chunk) take `files:write`
+// OR `files:upload` in the room. `files:write` keeps today's rules byte
+// for byte (the folder sent or `uploadDir`, `PathNeed::Write`; the answer
+// gains `size`). With `files:upload` and no `files:write`:
+// - the folder sent (else `uploadDir`) must be a drop or write folder of
+//   the room line (`PathNeed::Upload`); an unscoped line drops only into
+//   its `uploadDir` (and below), and a line with nowhere to drop is the
+//   missing-cap 403 with a hint, so "anywhere in the room" never happens;
+// - the file lands in `<folder>/<username>/` (Q1: a per-uploader
+//   subfolder), so the collision-free name only ever collides with the
+//   guest's own files and the answer is no oracle about anyone else's;
+// - only a login with a principal may drop (its username names the
+//   subfolder); a platform pass is refused;
+// - lexical and landed checks run on the subfolder and the file, `.k2/`
+//   is never reached (the `files:agentconfig` opt-in doesn't apply), and
+//   heartbeat ground stays refused.
+// Every other files door still needs `files:read` / `files:write`, so an
+// upload-only holder can't list, read, write, move or rename anything,
+// its own uploads included (AC11).
+
+/// How an upload door acts for this caller in the room.
+enum UploadMode {
+    /// `files:write`: today's rules.
+    Write,
+    /// `files:upload` without `files:write`: drop into the uploader's own
+    /// subfolder (`user` = the login's normalized username).
+    Drop { user: String },
+}
+
+/// The room and the upload mode, or the missing-cap 403 (`files:write`,
+/// as today, for a caller with neither cap).
+fn skin_resolve_upload(pass: &SkinPass, workspace: &str) -> Result<(SkinWorkspace, UploadMode), CliResponse> {
+    let resolved = resolve_skin_workspace(pass, workspace)?;
+    if pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_WRITE) {
+        return Ok((resolved, UploadMode::Write));
+    }
+    if !pass.has_cap_in_room(&resolved.project_id, k2_core::skin::CAP_FILES_UPLOAD) {
+        return Err(crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_WRITE));
+    }
+    let principal = pass.principal_id.as_deref().map(str::trim).filter(|p| !p.is_empty());
+    let user = match (pass.session, principal) {
+        (true, Some(_)) => k2_core::skin::normalize_username(&pass.username).ok(),
+        _ => None,
+    };
+    match user {
+        Some(user) => Ok((resolved, UploadMode::Drop { user })),
+        None => Err(crate::skin_routes::missing_cap_response(k2_core::skin::CAP_FILES_UPLOAD)),
+    }
+}
+
+/// 403 for an upload-only login whose room line has nowhere to drop: the
+/// missing-cap answer plus how the owner adds a drop folder (says nothing
+/// about any file).
+fn no_drop_folder() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": format!("missing capability {}", k2_core::skin::CAP_FILES_UPLOAD),
+            "hint": "this room has no drop folder: ask the owner (k2 app role paths <role> <room> --upload <folder>)",
+        })
+        .to_string(),
+    }
+}
+
+/// The scope an upload-only drop is checked against: a scoped line as is
+/// (its drop and write folders take uploads), an unscoped line as its
+/// `uploadDir` alone. `None` = nowhere to drop.
+fn drop_scope(line: &RoomPathScope) -> Option<RoomPathScope> {
+    if line.is_scoped() {
+        return (!line.write.is_empty() || !line.upload.is_empty()).then(|| line.clone());
+    }
+    let dir = line.upload_dir.clone()?;
+    Some(RoomPathScope { upload: vec![dir.clone()], upload_dir: Some(dir), ..Default::default() })
+}
+
+/// Where an upload door lands: `(scope, folder, need)`. `folder` is the
+/// room-relative landing folder (an upload-only drop: the uploader's own
+/// subfolder under the drop folder).
+fn upload_target(
+    pass: &SkinPass,
+    resolved: &SkinWorkspace,
+    mode: &UploadMode,
+    sent: String,
+) -> Result<(RoomPathScope, String, PathNeed), CliResponse> {
+    match mode {
+        UploadMode::Write => {
+            let scope = room_scope(pass, resolved, PathNeed::Write)?;
+            let dir = upload_dir_or_default(sent, &scope)?;
+            Ok((scope, dir, PathNeed::Write))
+        }
+        UploadMode::Drop { user } => {
+            let line = room_scope(pass, resolved, PathNeed::Upload)?;
+            let Some(scope) = drop_scope(&line) else { return Err(no_drop_folder()) };
+            let folder = if sent.is_empty() {
+                match scope.upload_dir.clone() {
+                    Some(d) => d,
+                    None => return Err(no_drop_folder()),
+                }
+            } else {
+                sent
+            };
+            // The drop folder itself first (lexical, before the disk).
+            if let Some(r) = scope_lexical(&scope, &folder, PathNeed::Upload) {
+                return Err(r);
+            }
+            let segs = k2_core::skin::paths::rel_segments(&folder).map_err(CliResponse::bad_request)?;
+            Ok((scope, format!("{}/{user}", segs.join("/")), PathNeed::Upload))
+        }
+    }
 }
 
 fn skin_json_workspace(v: &serde_json::Value) -> Result<String, CliResponse> {
@@ -1304,39 +1429,54 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(b) => b,
         Err(e) => return CliResponse::bad_request(format!("invalid base64: {e}")),
     };
-    let resolved = match skin_resolve_write(pass, &workspace) {
+    let (resolved, mode) = match skin_resolve_upload(pass, &workspace) {
         Ok(r) => r,
         Err(e) => return e,
     };
-    let scope = match room_scope(pass, &resolved, PathNeed::Write) {
-        Ok(s) => s,
+    let (scope, dir, need) = match upload_target(pass, &resolved, &mode, dir_sent) {
+        Ok(t) => t,
         Err(r) => return r,
     };
-    let dir = match upload_dir_or_default(dir_sent, &scope) {
-        Ok(d) => d,
-        Err(r) => return r,
-    };
-    if let Some(r) = scope_lexical(&scope, &dir, PathNeed::Write) {
+    if let Some(r) = scope_lexical(&scope, &dir, need) {
         return r;
     }
     let jailed_dir = match jail_rel_path(&resolved.path, &dir, true) {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_protected_write(pass, &scope, &resolved, &dir, &jailed_dir, false) {
+    if let Some(r) = refuse_protected_upload(pass, &scope, &resolved, &dir, &jailed_dir, true, need) {
         return r;
     }
-    if let Some(r) = refuse_protected_write(
+    if let Some(r) = refuse_protected_upload(
         pass,
         &scope,
         &resolved,
         &format!("{dir}/{filename}"),
         &jailed_dir.join(&filename),
-        false,
+        true,
+        need,
     ) {
         return r;
     }
-    let abs_dir = jailed_dir.to_string_lossy().to_string();
+    let abs_dir = match mode {
+        UploadMode::Write => jailed_dir.to_string_lossy().to_string(),
+        // An upload-only drop makes its own subfolder through the jail
+        // (never through a symlink out), then checks where it landed.
+        UploadMode::Drop { .. } => {
+            let root = match Path::new(&resolved.path).canonicalize() {
+                Ok(r) => r,
+                Err(e) => return CliResponse::internal_error(format!("workspace root unavailable: {e}")),
+            };
+            let canon = match jail_mkdir_p(&root, &dir) {
+                Ok(d) => d,
+                Err(e) => return CliResponse::bad_request(e),
+            };
+            if let Some(r) = refuse_protected_upload(pass, &scope, &resolved, &dir, &canon, true, need) {
+                return r;
+            }
+            canon.to_string_lossy().to_string()
+        }
+    };
     match fsc::write_upload(&abs_dir, &filename, &bytes) {
         Ok(path) => {
             let root = Path::new(&resolved.path)
@@ -1345,7 +1485,8 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
             let abs = path.to_string_lossy().to_string();
             crate::session_events::emit_fs_changed_for_paths([abs.clone()]);
             let rel = relative_under(&root, &abs);
-            CliResponse::ok_json(serde_json::json!({ "path": rel }).to_string())
+            // AC10: `size` is additive for both caps.
+            CliResponse::ok_json(serde_json::json!({ "path": rel, "size": bytes.len() as u64 }).to_string())
         }
         Err(e) => CliResponse::bad_request(e),
     }
@@ -1478,12 +1619,14 @@ fn guest_chunk_error(e: k2_core::fs_guest_upload::GuestChunkError) -> CliRespons
 /// - `offset`, `base64` (one chunk, at most 16 MiB decoded), `is_last`,
 ///   optional `total_bytes` on the offset-0 chunk.
 ///
-/// Needs `files:write` in that room. The temp part lives in the
+/// Needs `files:write` in that room, or `files:upload` (an upload-only
+/// drop: the file lands in `<drop folder>/<username>/`, see
+/// [`upload_target`]). The temp part lives in the
 /// destination folder under a dot-name bound to the guest
 /// (`fs_guest_upload::guest_part_name`); the final chunk publishes it
 /// under `filename`, or `name (1).ext` when taken, never replacing a file.
-/// Responses: 200 `{received, done:false}` / `{path, done:true}` (`path`
-/// room-relative); 409 `{error:"offset_mismatch", expected}` or
+/// Responses: 200 `{received, done:false}` / `{path, done:true, size}`
+/// (`path` room-relative); 409 `{error:"offset_mismatch", expected}` or
 /// `{error:"upload_busy"}` (a retry racing its original); 413 chunk
 /// or transfer too large; 507 not enough disk; 400 bad input or a path
 /// outside the room; 403 room/cap.
@@ -1520,37 +1663,37 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
         ));
     }
     let status_only = v.get("status").and_then(|x| x.as_bool()).unwrap_or(false);
-    let resolved = match skin_resolve_write(pass, &workspace) {
+    // AC10: files:write (today's rules) or files:upload (a drop into the
+    // uploader's own subfolder, `upload_target`).
+    let (resolved, mode) = match skin_resolve_upload(pass, &workspace) {
         Ok(r) => r,
         Err(e) => return e,
     };
-    let scope = match room_scope(pass, &resolved, PathNeed::Write) {
-        Ok(s) => s,
+    let (scope, dir, need) = match upload_target(pass, &resolved, &mode, dir_sent) {
+        Ok(t) => t,
         Err(r) => return r,
     };
-    let dir = match upload_dir_or_default(dir_sent, &scope) {
-        Ok(d) => d,
-        Err(r) => return r,
-    };
-    if let Some(r) = scope_lexical(&scope, &dir, PathNeed::Write) {
+    if let Some(r) = scope_lexical(&scope, &dir, need) {
         return r;
     }
     let jailed_dir = match jail_rel_path(&resolved.path, &dir, true) {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_protected_write(pass, &scope, &resolved, &dir, &jailed_dir, false) {
+    if let Some(r) = refuse_protected_upload(pass, &scope, &resolved, &dir, &jailed_dir, true, need) {
         return r;
     }
     let name = gu::final_name(&filename);
     // The published name never writes through an existing entry (see
-    // `refuse_protected_new_name`), so the leaf is not followed here.
-    if let Some(r) = refuse_protected_new_name(
+    // `refuse_protected_upload`), so the leaf is not followed here.
+    if let Some(r) = refuse_protected_upload(
         pass,
         &scope,
         &resolved,
         &format!("{dir}/{name}"),
         &jailed_dir.join(&name),
+        false,
+        need,
     ) {
         return r;
     }
@@ -1605,7 +1748,7 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(d) => d,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_protected_write(pass, &scope, &resolved, &dir, &canon_dir, false) {
+    if let Some(r) = refuse_protected_upload(pass, &scope, &resolved, &dir, &canon_dir, true, need) {
         return r;
     }
     let part = gu::guest_part_name(&principal, &resolved.project_id, &canon_dir, &name, &upload_id);
@@ -1629,7 +1772,12 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
             let abs = path.to_string_lossy().to_string();
             crate::session_events::emit_fs_changed_for_paths([abs.clone()]);
             let rel = relative_under(&root, &abs);
-            CliResponse::ok_json(serde_json::json!({ "path": rel, "done": true }).to_string())
+            // AC10: `size` (the landed file's bytes) is additive.
+            let size = match std::fs::symlink_metadata(&path) {
+                Ok(m) => m.len(),
+                Err(e) => return CliResponse::internal_error(format!("landed upload stat: {e}")),
+            };
+            CliResponse::ok_json(serde_json::json!({ "path": rel, "done": true, "size": size }).to_string())
         }
         Err(e) => guest_chunk_error(e),
     }

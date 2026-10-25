@@ -338,6 +338,7 @@ mod tests {
             read: vec!["jobs/J1".into()],
             write: vec!["jobs/J3/in".into()],
             upload_dir: None,
+            ..Default::default()
         })
         .expect("scope");
         let ev = |paths: &[&str]| crate::session_events::SessionEvent::FsChanged {

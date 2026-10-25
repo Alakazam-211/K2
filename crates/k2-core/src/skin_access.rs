@@ -21,7 +21,8 @@ use serde_json::{json, Value};
 use super::{
     create_role_for_app, grant_login_policy, map_grant_row, normalize_app_target, normalize_username, paths,
     with_conn, RoomPathScope, RoomPolicy, SkinRole, CAP_ACTIVITY_READ, CAP_AGENT_IDENTITY, CAP_FILES_READ,
-    CAP_FILES_WRITE, CAP_HEARTBEATS_READ, CAP_HEARTBEATS_WRITE, CAP_ROOM_MEMBERS, CAP_STORE_READ, CAP_STORE_WRITE,
+    CAP_FILES_UPLOAD, CAP_FILES_WRITE, CAP_HEARTBEATS_READ, CAP_HEARTBEATS_WRITE, CAP_ROOM_MEMBERS, CAP_STORE_READ,
+    CAP_STORE_WRITE,
     CAP_THREAD_POST, CAP_THREAD_READ, CAP_TICKETS_POST, CAP_TICKETS_READ, CAP_WIKI_READ, GRANT_SELECT,
 };
 
@@ -39,7 +40,9 @@ fn level(caps: &BTreeSet<&str>, read: &str, write: &str) -> &'static str {
 
 /// What one room's caps let a person do (`me.get` → `agents[].can`).
 /// `files`, `tickets`, `heartbeats` and `store` are `none` / `read` /
-/// `write` (tickets `write` = may post); the rest are booleans.
+/// `write` (tickets `write` = may post); the rest are booleans. `upload`
+/// (0.46.4, additive) is `files:upload`: drop files, never see them; it
+/// never changes `files`.
 pub fn can_of(caps: &[String]) -> Value {
     let c: BTreeSet<&str> = caps.iter().map(String::as_str).collect();
     json!({
@@ -53,6 +56,7 @@ pub fn can_of(caps: &[String]) -> Value {
         "wiki": c.contains(CAP_WIKI_READ),
         "store": level(&c, CAP_STORE_READ, CAP_STORE_WRITE),
         "identity": c.contains(CAP_AGENT_IDENTITY),
+        "upload": c.contains(CAP_FILES_UPLOAD),
     })
 }
 
@@ -85,6 +89,9 @@ pub struct RoleTemplate {
 pub struct TemplateFolders {
     pub read: &'static [&'static str],
     pub write: &'static [&'static str],
+    /// Drop folders (`files:upload`, 0.46.4).
+    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
+    pub upload: &'static [&'static str],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upload_dir: Option<&'static str>,
 }
@@ -164,24 +171,24 @@ pub const TEMPLATES: &[RoleTemplate] = &[
             CAP_TICKETS_POST,
             CAP_STORE_WRITE,
         ],
-        folders: Some(TemplateFolders { read: &["Plans", "Start Here"], write: &["Inbox"], upload_dir: Some("Inbox") }),
-        note: "Upload-only arrives later; for now Field can read and write in Inbox. Data writes reach every row of the room's tables until own-row writes land.",
+        folders: Some(TemplateFolders { read: &["Plans", "Start Here"], write: &["Inbox"], upload: &[], upload_dir: Some("Inbox") }),
+        note: "Field can read and write in Inbox; for Upload-only, start from Drop box. Data writes reach every row of the room's tables until own-row writes land.",
     },
     RoleTemplate {
         id: "client",
         label: "Client",
         description: "A customer who sees their own work only: one client-facing agent, a Shared folder to read and an Inbox to upload into.",
         caps: &[CAP_THREAD_READ, CAP_THREAD_POST, CAP_FILES_READ, CAP_FILES_WRITE, CAP_TICKETS_READ, CAP_TICKETS_POST],
-        folders: Some(TemplateFolders { read: &["Shared"], write: &["Inbox"], upload_dir: Some("Inbox") }),
-        note: "Upload-only arrives later; for now a Client can read and write in Inbox. No data access yet: reading only their own rows arrives later.",
+        folders: Some(TemplateFolders { read: &["Shared"], write: &["Inbox"], upload: &[], upload_dir: Some("Inbox") }),
+        note: "A Client can read and write in Inbox; for Upload-only, start from Drop box. No data access yet: reading only their own rows arrives later.",
     },
     RoleTemplate {
         id: "vendor",
         label: "Vendor or partner",
         description: "An outside party who sends paperwork into one intake agent's Uploads folder.",
         caps: &[CAP_FILES_READ, CAP_FILES_WRITE],
-        folders: Some(TemplateFolders { read: &[], write: &["Uploads"], upload_dir: Some("Uploads") }),
-        note: "No Thread or tickets. Upload-only and a folder per vendor arrive later; for now everyone on this role shares Uploads (read and write).",
+        folders: Some(TemplateFolders { read: &[], write: &["Uploads"], upload: &[], upload_dir: Some("Uploads") }),
+        note: "No Thread or tickets. Everyone on this role shares Uploads (read and write); for Upload-only with a folder per person, start from Drop box.",
     },
     RoleTemplate {
         id: "auditor",
@@ -190,6 +197,15 @@ pub const TEMPLATES: &[RoleTemplate] = &[
         caps: &[CAP_THREAD_READ, CAP_FILES_READ, CAP_STORE_READ, CAP_ACTIVITY_READ],
         folders: None,
         note: "Read-only Thread is thread:read without thread:post. Download as its own cap arrives later.",
+    },
+    // prd-app-caps-0464-v1 AC13 (0.46.4): upload-only.
+    RoleTemplate {
+        id: "dropbox",
+        label: "Drop box",
+        description: "Sends files in and chats: drops files into the agent's Inbox, each person in their own subfolder, and can't see or open what's there.",
+        caps: &[CAP_THREAD_READ, CAP_THREAD_POST, CAP_FILES_UPLOAD],
+        folders: Some(TemplateFolders { read: &[], write: &[], upload: &["Inbox"], upload_dir: Some("Inbox") }),
+        note: "Upload-only: an upload's answer is its receipt; a person can't list or re-open their own uploads yet.",
     },
     RoleTemplate {
         id: "app",
@@ -281,6 +297,7 @@ pub fn create_from_template(
             read: f.read.iter().map(|s| (*s).to_string()).collect(),
             write: f.write.iter().map(|s| (*s).to_string()).collect(),
             upload_dir: f.upload_dir.map(str::to_string),
+            upload: f.upload.iter().map(|s| (*s).to_string()).collect(),
         };
         let rooms: Vec<String> = role.room_policy.keys().cloned().collect();
         for room in rooms {

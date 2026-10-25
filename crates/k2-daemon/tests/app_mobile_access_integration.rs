@@ -429,7 +429,7 @@ async fn role_templates_and_the_people_grid() {
     let t = get(port, "/cli/skin/roles/suggest", OWNER, "").await;
     assert_eq!(t.status, 200, "{}", t.body);
     let ids: Vec<String> = t.json()["templates"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap().to_string()).collect();
-    assert_eq!(ids, ["owner", "manager", "staff", "field", "client", "vendor", "auditor", "app"]);
+    assert_eq!(ids, ["owner", "manager", "staff", "field", "client", "vendor", "auditor", "dropbox", "app"]);
     let r = owner_post(port, "/cli/skin/roles/from-template", json!({ "template": "client", "app": app })).await;
     let role = r["role"]["name"].as_str().unwrap().to_string();
     assert_eq!(role, "jobs-client");

@@ -7561,12 +7561,14 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Add/replace functions on one room. Omit --caps = Thread-only. Not --caps with --agent.
                                         files:write never reaches the agent's .k2/ folder unless you add
                                         files:agentconfig too (owner only; not recommended). k2 study apps.
+                                        files:upload = drop files into --upload folders, never see them.
   k2 app role room <role> <handle> --clear
                                         Drop that room from the role
-  k2 app role paths <role> <room> [--read jobs/J1/,jobs/J3/] [--write jobs/J1/in/] [--upload-dir jobs/J1/in]
+  k2 app role paths <role> <room> [--read jobs/J1/,jobs/J3/] [--write jobs/J1/in/] [--upload Inbox/] [--upload-dir jobs/J1/in]
                                         Folders this role reaches in one room (any room on the role). Unlisted
                                         folders get the same 403 as a missing cap. --write folders are readable
-                                        too; caps still decide. --upload-dir = default upload folder.
+                                        too; caps still decide. --upload = drop folders (files:upload adds files
+                                        in its own subfolder, never lists or reads). --upload-dir = default upload folder.
   k2 app role paths <role> <room> --clear
                                         Back to the whole room
   k2 app role list                     Roles (per-room lines; no secrets)
@@ -13164,19 +13166,20 @@ for a in access:
     caps=", ".join(a.get("caps") or []) or "thread-only"
     print("  %s  %s" % (a.get("handle") or "", caps))
     f=a.get("folders") or {}
-    if f.get("read") or f.get("write"):
-        print("      folders: %s" % ", ".join((f.get("read") or []) + [w + " (write)" for w in (f.get("write") or [])]))'
+    if f.get("read") or f.get("write") or f.get("upload"):
+        print("      folders: %s" % ", ".join((f.get("read") or []) + [w + " (write)" for w in (f.get("write") or [])] + [u + " (drop)" for u in (f.get("upload") or [])]))'
                     ;;
                 paths|folders)
                     # Room-scope R3 (RS-A1..A3): one room line's folders.
-                    local role="" handle="" read="" write="" upload="" clear=0
+                    local role="" handle="" read="" write="" upload="" drop="" clear=0
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
                             --read) read="${2:-}"; shift 2 ;;
                             --write) write="${2:-}"; shift 2 ;;
+                            --upload) drop="${2:-}"; shift 2 ;;
                             --upload-dir) upload="${2:-}"; shift 2 ;;
                             --clear) clear=1; shift ;;
-                            --help|-h) echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload-dir c/in] | --clear" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] | --clear" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *)
                                 if [[ -z "$role" ]]; then role="$1"
@@ -13186,23 +13189,23 @@ for a in access:
                                 shift ;;
                         esac
                     done
-                    [[ -z "$role" || -z "$handle" ]] && { echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload-dir c/in] | --clear" >&2; exit 1; }
-                    if [[ "$clear" == "1" && ( -n "$read" || -n "$write" || -n "$upload" ) ]]; then
+                    [[ -z "$role" || -z "$handle" ]] && { echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] | --clear" >&2; exit 1; }
+                    if [[ "$clear" == "1" && ( -n "$read" || -n "$write" || -n "$upload" || -n "$drop" ) ]]; then
                         echo "Error: --clear puts the room back to the whole room; don't pass folders with it" >&2
                         exit 2
                     fi
-                    if [[ "$clear" == "0" && -z "$read" && -z "$write" && -z "$upload" ]]; then
-                        echo "Error: name folders (--read, --write, --upload-dir) or pass --clear for the whole room" >&2
+                    if [[ "$clear" == "0" && -z "$read" && -z "$write" && -z "$upload" && -z "$drop" ]]; then
+                        echo "Error: name folders (--read, --write, --upload, --upload-dir) or pass --clear for the whole room" >&2
                         exit 2
                     fi
                     local body raw
-                    body=$(K2_SKIN_ROLE="$role" K2_SKIN_HANDLE="$handle" K2_SKIN_READ="$read" K2_SKIN_WRITE="$write" K2_SKIN_UPLOAD="$upload" K2_SKIN_CLEAR="$clear" python3 -c '
+                    body=$(K2_SKIN_ROLE="$role" K2_SKIN_HANDLE="$handle" K2_SKIN_READ="$read" K2_SKIN_WRITE="$write" K2_SKIN_DROP="$drop" K2_SKIN_UPLOAD="$upload" K2_SKIN_CLEAR="$clear" python3 -c '
 import json,os
 b={"name": os.environ["K2_SKIN_ROLE"], "handle": os.environ["K2_SKIN_HANDLE"]}
 if os.environ.get("K2_SKIN_CLEAR","0") == "1":
     b["clear"]=True
 else:
-    for key, env in (("read","K2_SKIN_READ"), ("write","K2_SKIN_WRITE")):
+    for key, env in (("read","K2_SKIN_READ"), ("write","K2_SKIN_WRITE"), ("upload","K2_SKIN_DROP")):
         v=[s.strip() for s in os.environ.get(env,"").split(",") if s.strip()]
         if v:
             b[key]=v
@@ -13223,12 +13226,14 @@ for a in d.get("roomAccess") or d.get("room_access") or []:
     f=a.get("folders") or {}
     caps=", ".join(a.get("caps") or []) or "thread-only"
     print("  %s  %s" % (a.get("handle") or "", caps))
-    if not (f.get("read") or f.get("write")):
+    if not (f.get("read") or f.get("write") or f.get("upload")):
         print("      folders: whole room")
     if f.get("read"):
         print("      read:   %s" % ", ".join(f["read"]))
     if f.get("write"):
         print("      write:  %s" % ", ".join(f["write"]))
+    if f.get("upload"):
+        print("      drop:   %s (files:upload: add only, never list or read)" % ", ".join(f["upload"]))
     if f.get("uploadDir"):
         print("      upload: %s" % f["uploadDir"])'
                     ;;
@@ -34119,7 +34124,7 @@ cmd_schema() {
     },
     {
       "name": "app role paths",
-      "usage": "k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload-dir c/in] | --clear",
+      "usage": "k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] | --clear",
       "description": "Folder path scope on one room line of a role (room-scope R3). Replaces the line's folders; unlisted folders are refused with the missing-cap 403. Works on any room the role holds and for agent logins alike.",
       "args": [
         {"name": "role", "required": true},
@@ -34128,7 +34133,8 @@ cmd_schema() {
       "flags": [
         {"name": "--read", "arg": "list", "description": "Comma-separated room-relative folders to list and read."},
         {"name": "--write", "arg": "list", "description": "Comma-separated folders to write (and read)."},
-        {"name": "--upload-dir", "arg": "folder", "description": "Default upload folder (inside a --write folder when folders are listed)."},
+        {"name": "--upload", "arg": "list", "description": "Comma-separated drop folders: files:upload adds files there (each person in their own subfolder), never lists or reads them."},
+        {"name": "--upload-dir", "arg": "folder", "description": "Default upload folder (inside a --write or --upload folder when folders are listed)."},
         {"name": "--clear", "arg": null, "description": "Back to the whole room."}
       ]
     },
@@ -37223,6 +37229,10 @@ PROJECT CHAT (0.46.3, App only; never on the Garden bridge)
           WS   /cli/skin/projects/events?group=   {collection:"project"|"read",...}
   Read state is the guest's own person key (guest:<principalId>).
 
+FILES (0.46.4, App only; k2 app role paths, k2 study apps)
+  files:upload  upload doors drop into the line's --upload folders, in
+                <folder>/<username>/; no list, read or overwrite, own files included.
+
 EVENTS (WS /cli/activity/events?workspace=<handle>; room:members opens it)
   {"kind":"room_members_changed","workspace":"<handle>"}  refetch members
   {"kind":"app_deployed","workspace":"<handle>","app":"<id>"}  to the App's
@@ -37565,6 +37575,11 @@ FOLDERS PER ROOM LINE (path scope, 0.46.1)
     (no "does it exist" answer). Listing a parent shows only the way in.
   - --write folders are readable; caps still decide (files:write to write).
   - Uploads with no dir land in --upload-dir. fs/events carries only your folders.
+  - Drop folders (0.46.4): --upload Inbox/ + files:upload (no files:read or
+    files:write) = upload only. Each file lands in Inbox/<username>/; the
+    guest can't list, read, move or overwrite anything there, its own
+    uploads included (the upload answer is the receipt). An agent with
+    "manage Apps" may set drop folders. Role template: dropbox.
   - GET /cli/fs/stat?workspace=<room>&path=… (files.stat): kind, size,
     modifiedAt, ext, mime under the same rules.
   - Native agents reading another room by disk path are NOT walled (RS-A4);

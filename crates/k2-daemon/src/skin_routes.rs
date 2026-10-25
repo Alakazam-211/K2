@@ -1925,9 +1925,11 @@ fn folder_list(v: &serde_json::Value, key: &str) -> Result<Vec<String>, CliRespo
 
 /// `POST /cli/skin/roles/paths` (`k2 app role paths`, room-scope R3,
 /// RS-A1..A3): set one room line's folders on a role. Body `{name, handle,
-/// read?: [..], write?: [..], uploadDir?: ".."}` replaces the line's
-/// folders; `{name, handle, clear: true}` (or nothing listed) puts the
-/// line back to the whole room. The room must already be on the role.
+/// read?: [..], write?: [..], upload?: [..], uploadDir?: ".."}` replaces
+/// the line's folders; `{name, handle, clear: true}` (or nothing listed)
+/// puts the line back to the whole room. The room must already be on the
+/// role. `upload` (0.46.4, AC8) is the line's drop folders: narrower than
+/// `write`, so an agent with "manage Apps" may set them like any folder.
 pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
@@ -1951,17 +1953,21 @@ pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
             Ok(l) => l,
             Err(r) => return r,
         };
+        let upload = match folder_list(&v, "upload") {
+            Ok(l) => l,
+            Err(r) => return r,
+        };
         let upload_dir = match v.get("uploadDir").or_else(|| v.get("upload_dir")) {
             None | Some(serde_json::Value::Null) => None,
             Some(serde_json::Value::String(s)) => Some(s.clone()),
             Some(_) => return CliResponse::bad_request("uploadDir must be a folder string"),
         };
-        if read.is_empty() && write.is_empty() && upload_dir.is_none() {
+        if read.is_empty() && write.is_empty() && upload.is_empty() && upload_dir.is_none() {
             return CliResponse::bad_request(
-                "nothing to set: send read, write or uploadDir folders, or clear:true for the whole room",
+                "nothing to set: send read, write, upload or uploadDir folders, or clear:true for the whole room",
             );
         }
-        skin::RoomPathScope { read, write, upload_dir }
+        skin::RoomPathScope { read, write, upload_dir, upload }
     };
     let ids = match skin::resolve_room_tokens(&[handle.to_string()]) {
         Ok(ids) if ids.len() == 1 => ids,
@@ -1971,10 +1977,11 @@ pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
     match skin::paths::set_role_room_paths(id_or_name, &ids[0], &scope) {
         Ok(role) => {
             k2_core::log_debug!(
-                "[skin] actor={actor} role paths {} handle={handle} clear={clear} read={:?} write={:?} uploadDir={:?}",
+                "[skin] actor={actor} role paths {} handle={handle} clear={clear} read={:?} write={:?} upload={:?} uploadDir={:?}",
                 role.name,
                 scope.read,
                 scope.write,
+                scope.upload,
                 scope.upload_dir
             );
             CliResponse::ok_json(serde_json::to_string(&role).unwrap_or_else(|_| "{}".into()))

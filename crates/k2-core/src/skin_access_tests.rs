@@ -43,20 +43,24 @@ fn can_reads_the_caps() {
     assert_eq!(c["heartbeats"], "none");
     assert_eq!((c["activity"].as_bool(), c["members"].as_bool(), c["wiki"].as_bool(), c["identity"].as_bool()), (Some(false), Some(false), Some(false), Some(false)));
     assert_eq!(can_of(&[])["files"], "none");
+    // 0.46.4: files:upload is its own flag and never moves `files`.
+    assert_eq!(c["upload"], false);
+    let up = can_of(&["files:upload".into()]);
+    assert_eq!((up["upload"].as_bool(), up["files"].as_str()), (Some(true), Some("none")));
 }
 
 #[test]
 fn templates_use_only_caps_that_exist_and_name_their_gaps() {
     let ids: Vec<&str> = TEMPLATES.iter().map(|t| t.id).collect();
-    assert_eq!(ids, ["owner", "manager", "staff", "field", "client", "vendor", "auditor", "app"]);
+    assert_eq!(ids, ["owner", "manager", "staff", "field", "client", "vendor", "auditor", "dropbox", "app"]);
     for t in TEMPLATES {
         for c in t.caps {
             assert!(ACCEPTED_CAPS.contains(c), "{}: {c} is not a cap K2 has", t.id);
         }
         assert!(!t.description.is_empty() && !t.label.is_empty(), "{}", t.id);
         if let Some(f) = &t.folders {
-            assert!(t.caps.contains(&"files:write"), "{}: folders need files", t.id);
-            for d in f.read.iter().chain(f.write.iter()) {
+            assert!(t.caps.contains(&"files:write") || t.caps.contains(&"files:upload"), "{}: folders need files", t.id);
+            for d in f.read.iter().chain(f.write.iter()).chain(f.upload.iter()) {
                 crate::skin::paths::normalize_folder(d).unwrap_or_else(|e| panic!("{}: {e}", t.id));
             }
         }
@@ -64,10 +68,13 @@ fn templates_use_only_caps_that_exist_and_name_their_gaps() {
     // Read-only Thread is today's thread:read without thread:post.
     let auditor = template("auditor").unwrap();
     assert!(auditor.caps.contains(&"thread:read") && !auditor.caps.contains(&"thread:post"));
-    // Upload-only doesn't exist yet: the notes say so.
+    // Upload-only is the Drop box template (0.46.4): the others point at it.
     for id in ["field", "client", "vendor"] {
-        assert!(template(id).unwrap().note.contains("Upload-only"), "{id}: {}", template(id).unwrap().note);
+        assert!(template(id).unwrap().note.contains("Drop box"), "{id}: {}", template(id).unwrap().note);
     }
+    let drop = template("dropbox").unwrap();
+    assert_eq!(drop.caps, ["thread:read", "thread:post", "files:upload"]);
+    assert!(!drop.caps.contains(&"files:read") && !drop.caps.contains(&"files:write"), "upload-only");
     assert!(template("app").unwrap().caps.is_empty());
     assert!(template("OWNER").is_some(), "case-insensitive");
     assert!(template("nope").is_none());
@@ -99,6 +106,11 @@ fn a_role_from_a_template_is_an_ordinary_editable_role() {
     let owner = create_from_template("owner", &f.app, "Jobs App", None, &[f.room.clone(), f.desk.clone()]).unwrap();
     assert_eq!(owner.name, "jobs-app-owner");
     assert_eq!(owner.room_policy.len(), 2);
+    // Drop box: drop folder Inbox (walls the room), uploads land there.
+    let drop = create_from_template("dropbox", &f.app, "Jobs App", None, &[f.room.clone()]).unwrap();
+    let scope = &drop.room_paths[&f.room];
+    assert_eq!((scope.upload.clone(), scope.upload_dir.as_deref()), (vec!["Inbox".to_string()], Some("Inbox")));
+    assert!(scope.read.is_empty() && scope.write.is_empty() && scope.is_scoped());
     // The App service account has no room lines.
     let app_role = create_from_template("app", &f.app, "Jobs App", None, &[f.room.clone()]).unwrap();
     assert!(app_role.room_policy.is_empty());

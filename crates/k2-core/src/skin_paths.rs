@@ -10,10 +10,15 @@
 //!   readable too; the caps still decide: `files:write` is still needed
 //!   to write, `files:read` to read);
 //! - `uploadDir`: the default folder an upload lands in when the caller
-//!   names none.
+//!   names none;
+//! - `upload` (drop folders, prd-app-caps-0464-v1 AC8, 0.46.4): folders a
+//!   login with `files:upload` may put files in (each lands in the
+//!   uploader's own subfolder) and can never list or read through this
+//!   list (only through a `read` or `write` entry, if the line has one).
 //!
 //! **No folders listed = the whole room** (today's behaviour). Once a room
-//! line lists any folder, everything else in that room is refused **with
+//! line lists any folder (read, write or drop), everything else in that
+//! room is refused **with
 //! the same 403 a missing cap gets** (RS-A3), checked on the room-relative
 //! path before the disk is touched, so an unlisted path never says whether
 //! it exists. The folders of the room's ancestors are listable only down
@@ -61,12 +66,19 @@ pub struct RoomPathScope {
     /// Where an upload lands when the caller names no folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upload_dir: Option<String>,
+    /// Drop folders (AC8): `files:upload` may add files here, never list or
+    /// read them. Counts towards [`Self::is_scoped`]: a line that lists only
+    /// drop folders walls the rest of the room. An older K2 refuses this
+    /// key (`deny_unknown_fields`), so after a downgrade the role reads as
+    /// unreadable and every file door fails closed for it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub upload: Vec<String>,
 }
 
 impl RoomPathScope {
     /// `true` when the line lists any folder (the room is walled).
     pub fn is_scoped(&self) -> bool {
-        !self.read.is_empty() || !self.write.is_empty()
+        !self.read.is_empty() || !self.write.is_empty() || !self.upload.is_empty()
     }
 
     /// `true` when there is nothing to store (no folders, no upload dir).
@@ -102,6 +114,10 @@ pub enum PathNeed {
     Read,
     /// Create, write, upload, rename or move: inside a write folder.
     Write,
+    /// Add a new file through an upload door with `files:upload` (AC9):
+    /// inside a write folder or a drop folder. `List`, `Read` and `Write`
+    /// never match a drop-only folder.
+    Upload,
 }
 
 /// Segments of a room-relative request path. `.` and empty segments drop
@@ -180,6 +196,7 @@ pub fn allows(scope: &RoomPathScope, rel: &[String], need: PathNeed) -> bool {
     }
     match need {
         PathNeed::Write => scope.write.iter().any(|f| is_inside(f, rel)),
+        PathNeed::Upload => scope.write.iter().chain(scope.upload.iter()).any(|f| is_inside(f, rel)),
         PathNeed::Read => readable(scope).any(|f| is_inside(f, rel)),
         PathNeed::List => readable(scope).any(|f| is_inside(f, rel) || is_ancestor(f, rel)),
     }
@@ -192,6 +209,13 @@ pub fn allows_rel(scope: &RoomPathScope, rel: &str, need: PathNeed) -> Result<bo
         return Ok(true);
     }
     Ok(allows(scope, &rel_segments(rel)?, need))
+}
+
+/// `true` when a folder names the agent's config folder `.k2` or sits
+/// inside it: its first segment, ASCII case-folded, trailing dots and
+/// spaces ignored (the daemon's `is_agent_config_segment` rule).
+pub fn folder_in_agent_config(folder: &str) -> bool {
+    folder_segments(folder).first().is_some_and(|s| s.trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".k2"))
 }
 
 /// Normalize, dedupe and check one room line's folders.
@@ -216,13 +240,20 @@ pub fn normalize_scope(scope: &RoomPathScope) -> Result<RoomPathScope, String> {
         Some(raw) => Some(normalize_folder(raw).map_err(|e| format!("uploadDir: {e}"))?),
         None => None,
     };
-    let out = RoomPathScope { read, write, upload_dir };
+    // A drop folder that is also a write folder adds nothing; drop it.
+    let upload: Vec<String> = list(&scope.upload, "upload")?.into_iter().filter(|f| !write.contains(f)).collect();
+    if let Some(f) = upload.iter().find(|f| folder_in_agent_config(f)) {
+        return Err(format!("upload folder {f:?} is the agent's .k2 folder or inside it; a drop folder never is"));
+    }
+    let out = RoomPathScope { read, write, upload_dir, upload };
     if let (true, Some(dir)) = (out.is_scoped(), out.upload_dir.as_deref()) {
         let segs: Vec<String> = dir.split('/').map(str::to_string).collect();
-        if !allows(&out, &segs, PathNeed::Write) {
+        // AC8: inside a write folder or a drop folder.
+        if !allows(&out, &segs, PathNeed::Upload) {
+            let places: Vec<String> = out.write.iter().chain(out.upload.iter()).cloned().collect();
             return Err(format!(
-                "uploadDir {dir:?} must be inside one of this room's write folders ({})",
-                if out.write.is_empty() { "none listed".to_string() } else { out.write.join(", ") }
+                "uploadDir {dir:?} must be inside one of this room's write or upload folders ({})",
+                if places.is_empty() { "none listed".to_string() } else { places.join(", ") }
             ));
         }
     }
@@ -369,7 +400,7 @@ mod tests {
         normalize_scope(&RoomPathScope {
             read: read.iter().map(|s| s.to_string()).collect(),
             write: write.iter().map(|s| s.to_string()).collect(),
-            upload_dir: None,
+            ..Default::default()
         })
         .expect("valid scope")
     }
@@ -431,11 +462,14 @@ mod tests {
                 read: read.iter().map(|s| s.to_string()).collect(),
                 write: write.iter().map(|s| s.to_string()).collect(),
                 upload_dir: Some(dir.to_string()),
+                ..Default::default()
             })
         };
         assert_eq!(up("jobs/J1/in/", &["jobs/J1"], &[]).unwrap().upload_dir.as_deref(), Some("jobs/J1/in"));
         assert!(up("jobs/J2", &["jobs/J1"], &[]).is_err(), "outside the write folders");
         assert!(up("jobs/J1", &[], &["jobs/J1"]).is_err(), "a read-only line has nowhere to upload");
+        let err = up("jobs/J1", &[], &["jobs/J1"]).unwrap_err();
+        assert!(err.contains("write or upload folders"), "{err}");
         // No folders: the upload dir is only a default (the whole room is open).
         assert_eq!(up("inbox", &[], &[]).unwrap().upload_dir.as_deref(), Some("inbox"));
         assert!(!up("inbox", &[], &[]).unwrap().is_scoped());
@@ -455,7 +489,70 @@ mod tests {
             read: read.iter().map(|s| s.to_string()).collect(),
             write: write.iter().map(|s| s.to_string()).collect(),
             upload_dir: upload.map(str::to_string),
+            ..Default::default()
         }
+    }
+
+    fn drop_scope(read: &[&str], write: &[&str], upload: &[&str], dir: Option<&str>) -> Result<RoomPathScope, String> {
+        normalize_scope(&RoomPathScope {
+            read: read.iter().map(|s| s.to_string()).collect(),
+            write: write.iter().map(|s| s.to_string()).collect(),
+            upload: upload.iter().map(|s| s.to_string()).collect(),
+            upload_dir: dir.map(str::to_string),
+        })
+    }
+
+    /// AC8/AC9: a drop folder takes uploads only. It is never listable or
+    /// readable through the drop list, it walls the rest of the room, and
+    /// `List`, `Read` and `Write` never match it.
+    #[test]
+    fn drop_folders_take_uploads_and_nothing_else() {
+        let s = drop_scope(&[], &[], &["Inbox/"], None).expect("valid");
+        assert_eq!(s.upload, ["Inbox"]);
+        assert!(s.is_scoped(), "a line with only drop folders is walled");
+        assert!(!s.is_empty());
+        assert!(allows(&s, &segs("Inbox/dana/a.pdf"), PathNeed::Upload));
+        assert!(allows(&s, &segs("Inbox"), PathNeed::Upload));
+        for need in [PathNeed::List, PathNeed::Read, PathNeed::Write] {
+            assert!(!allows(&s, &segs("Inbox"), need), "{need:?} on the drop folder");
+            assert!(!allows(&s, &segs("Inbox/dana/a.pdf"), need), "{need:?} inside the drop folder");
+            assert!(!allows(&s, &segs("other/x"), need), "{need:?}: the rest of the room is walled");
+        }
+        assert!(!allows(&s, &segs("."), PathNeed::List), "the drop folder is not even on the way in");
+        assert!(!allows(&s, &segs("Inboxes/x"), PathNeed::Upload), "a prefix of a name is not the folder");
+        assert!(!allows(&s, &segs("other/x"), PathNeed::Upload));
+        // A write folder takes uploads too; a read folder doesn't.
+        let s = drop_scope(&["Plans"], &["Work"], &["Drop"], None).expect("valid");
+        assert!(allows(&s, &segs("Work/a"), PathNeed::Upload));
+        assert!(!allows(&s, &segs("Plans/a"), PathNeed::Upload));
+        assert!(allows(&s, &segs("Plans/a"), PathNeed::Read));
+        assert!(!allows(&s, &segs("Drop/a"), PathNeed::Read), "read never reaches a drop folder");
+        // A drop folder inside a read folder is readable through the read entry.
+        let s = drop_scope(&["Shared"], &[], &["Shared/Inbox"], None).expect("valid");
+        assert!(allows(&s, &segs("Shared/Inbox/a"), PathNeed::Read));
+    }
+
+    #[test]
+    fn drop_folder_rules_when_set() {
+        // uploadDir may sit inside a drop folder (AC8 relaxes R3).
+        assert_eq!(drop_scope(&[], &[], &["Inbox"], Some("Inbox")).unwrap().upload_dir.as_deref(), Some("Inbox"));
+        assert_eq!(drop_scope(&[], &[], &["Inbox"], Some("Inbox/new")).unwrap().upload_dir.as_deref(), Some("Inbox/new"));
+        assert!(drop_scope(&[], &[], &["Inbox"], Some("Elsewhere")).is_err());
+        // .k2 (any case, trailing dots or spaces) is never a drop folder.
+        for bad in [".k2", ".K2", ".k2/inbox", ".k2.", ".k2 /x"] {
+            let err = drop_scope(&[], &[], &[bad], None).unwrap_err();
+            assert!(err.contains(".k2"), "{bad:?}: {err}");
+        }
+        assert!(drop_scope(&[], &[], &["docs/.k2"], None).is_ok(), "only the room's own .k2 is the agent's");
+        // A drop folder that is also a write folder is dropped (write covers it).
+        let s = drop_scope(&[], &["Inbox"], &["Inbox", "Drop", "Drop/"], None).unwrap();
+        assert_eq!(s.upload, ["Drop"]);
+        // Same normalization and limits as read/write.
+        assert!(drop_scope(&[], &[], &["../x"], None).is_err());
+        assert!(drop_scope(&[], &[], &["."], None).is_err());
+        let many: Vec<String> = (0..=MAX_FOLDERS_PER_LIST).map(|i| format!("f{i}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert!(drop_scope(&[], &[], &many, None).is_err());
     }
 
     /// RS-A1: folders on ANY room line of the role (here `docs`, while the
@@ -549,6 +646,12 @@ mod tests {
         assert_eq!(p["r1"].read, ["a"]);
         assert!(parse_room_paths(Some("[]")).is_err());
         assert!(parse_room_paths(Some(r#"{"r1":{"reed":["a"]}}"#)).is_err(), "unknown keys fail");
+        // Drop folders parse (AC8) and are checked like any other list.
+        let p = parse_room_paths(Some(r#"{"r1":{"upload":["Inbox/"]}}"#)).unwrap();
+        assert_eq!(p["r1"].upload, ["Inbox"]);
+        assert!(p["r1"].is_scoped());
+        assert!(parse_room_paths(Some(r#"{"r1":{"upload":[".k2"]}}"#)).is_err());
+        assert!(parse_room_paths(Some(r#"{"r1":{"upload":"Inbox"}}"#)).is_err(), "a list, not a string");
         assert!(parse_room_paths(Some(r#"{"r1":{"read":["../x"]}}"#)).is_err());
         assert!(parse_room_paths(Some("not json")).is_err());
     }

@@ -71,6 +71,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useRoom } from '@/components/Room/RoomContext'
 import { scopeMayWrite } from '@/kessel/server-scope'
 import { planRoomSpawn } from '@/lib/room-spawn'
+import { folderTrustMessage } from './folderTrustMessage'
 import { openTerminalUrl } from '@/lib/terminal-link-open'
 import { paneRoomMode } from '@/stores/room'
 import { LEGACY_SCREEN_ROWS } from '@/stores/activity-legacy'
@@ -1549,6 +1550,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               // rotation step; the spawn error below still surfaces.
               const active = useConnectHostStore.getState().activeHost
               if (room.scope.isWindowHost() && active !== 'local') requirePasswordRotation(active.id)
+            }
+            // Folder trust: a held or denied folder says so in words, not
+            // as the raw 409 body.
+            const trustMessage = folderTrustMessage(spawnRes.status, body)
+            if (trustMessage) {
+              if (!cancelled) setPhase({ kind: 'error', message: trustMessage })
+              return
             }
             // 4xx — genuine request error, surface immediately. Bad
             // body, missing field, etc. Won't get better by waiting.

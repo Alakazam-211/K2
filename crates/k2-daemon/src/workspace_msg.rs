@@ -150,7 +150,7 @@ impl MsgReason {
                 "Waiting for the owner to trust the recipient's folder (it has settings that run commands when AI tools start). K2 starts the session and delivers this message when they answer Trust on Thread (or: k2 workspace trust <folder> --yes)."
             }
             Self::FolderTrustDenied => {
-                "The owner chose \"Don't trust\" for the recipient's folder, so K2 starts no AI tool there. They can change it in Settings → Workspaces → Folder trust."
+                "The owner chose \"Don't trust\" for the recipient's folder, so K2 starts no program there. They can change it in Settings → Workspaces → Folder trust."
             }
         }
     }

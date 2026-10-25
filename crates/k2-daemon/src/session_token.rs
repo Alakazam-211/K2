@@ -576,6 +576,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // Folder trust (SS10): the owner decides; agents only ask.
         "/cli/folder-trust/decide",
         "/cli/folder-trust/reset",
+        "/cli/folder-trust/forget",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;

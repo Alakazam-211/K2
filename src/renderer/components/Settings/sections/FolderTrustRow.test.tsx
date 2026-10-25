@@ -39,7 +39,7 @@ describe('folderTrustLine', () => {
     expect(folderTrustLine(status({ state: 'clean' }))).toBe('Clean, no risky settings')
     expect(folderTrustLine(status({}))).toBe('Trusted this version by rosson on 10-24')
     expect(folderTrustLine(status({ state: 'always' }))).toBe('Always by rosson on 10-24')
-    expect(folderTrustLine(status({ state: 'denied' }))).toBe('Not trusted by rosson on 10-24: K2 starts no AI tools here')
+    expect(folderTrustLine(status({ state: 'denied' }))).toBe('Not trusted by rosson on 10-24: K2 starts no programs here')
     expect(folderTrustLine(status({ state: 'pending', decided_by: null }))).toBe('Waiting for you: answer the card on Thread')
     expect(folderTrustLine(status({ state: 'trusted', decided_by: 'upgrade' }))).toBe(
       'Trusted before K2 checked; K2 asks again if these settings change',

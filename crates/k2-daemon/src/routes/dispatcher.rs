@@ -2680,7 +2680,18 @@ async fn handle_one_request(
             // R8: the body's env is owner-set only for the owner token or an
             // Owner/Admin login (a Member may spawn, not resolve the owner's refs).
             let owner_set_env = super::http::token_is_owner_or_admin(&query, state.token.as_str());
-            let result = crate::v2_spawn::handle_v2_spawn_as(&body_bytes, owner_set_env);
+            // Folder trust: a card this spawn raises names the person who
+            // opened the tab, not the folder's agent (review round 2 Low).
+            let person = if super::http::token_is_owner(&query, state.token.as_str()) {
+                Some("A K2 tab you opened".to_string())
+            } else {
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+                    .map(|user| format!("{user}'s K2 tab"))
+            };
+            let result = crate::folder_trust::with_person(person, || {
+                crate::v2_spawn::handle_v2_spawn_as(&body_bytes, owner_set_env)
+            });
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }

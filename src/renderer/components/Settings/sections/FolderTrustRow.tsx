@@ -47,7 +47,7 @@ export function folderTrustLine(s: FolderTrustStatus): string {
     case 'always':
       return `Always${by}`
     case 'denied':
-      return `Not trusted${by}: K2 starts no AI tools here`
+      return `Not trusted${by}: K2 starts no programs here`
     case 'pending':
       return 'Waiting for you: answer the card on Thread'
     case 'changed':

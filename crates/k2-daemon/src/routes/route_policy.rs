@@ -651,6 +651,7 @@ pub const ROUTES: &[Route] = &[
     // token or an Owner login; the handler's `require_action_card_person`
     // also refuses passports, terminals, widgets and guests).
     post("/cli/folder-trust/decide", Owner),
+    post("/cli/folder-trust/forget", Owner),
     post("/cli/folder-trust/request", Member),
     post("/cli/folder-trust/reset", Owner),
     both("/cli/folder-trust/status", Member),

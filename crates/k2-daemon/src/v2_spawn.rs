@@ -1013,7 +1013,8 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         // passes the gate (a live change held it, or "Don't trust").
         let live_cwd = existing.cwd.as_ref().map(|c| c.to_string_lossy().to_string()).unwrap_or_else(|| req.cwd.clone());
         let env_home = req.env.as_ref().and_then(|e| e.get("HOME")).map(String::as_str);
-        if let Err(r) = crate::folder_trust::gate_spawn(existing.program.as_deref(), &existing.args, &live_cwd, env_home, project_id.as_deref(), "v2_spawn") {
+        let caller_env = req.env.clone().unwrap_or_default();
+        if let Err(r) = crate::folder_trust::gate_spawn(existing.program.as_deref(), &existing.args, &caller_env, &live_cwd, env_home, project_id.as_deref(), "v2_spawn") {
             v2_session_map::unregister(&req.agent_name);
             existing.kill();
             return HandlerResult { status: "409 Conflict", body: r.to_json().to_string() };
@@ -1241,6 +1242,9 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         ptyd_meta: None,
     };
     let session_id_for_response = cfg.session_id;
+    // The env the caller and the agent's launch block set, before K2's own
+    // injections: what the folder-trust gate judges (review round 2 H2).
+    let gate_env = cfg.env.clone();
     // k2-ptyd S3 (PRD §7.5 meta): what a restarted daemon needs to adopt
     // this session. Identity only (P72).
     let mut ptyd_meta = serde_json::Map::new();
@@ -1377,6 +1381,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     if let Err(r) = crate::folder_trust::gate_spawn(
         cfg.program.as_deref(),
         &cfg.args,
+        &gate_env,
         &req.cwd,
         cfg.env.get("HOME").map(String::as_str),
         project_id.as_deref(),

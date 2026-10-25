@@ -224,7 +224,7 @@ fn the_card_answer_runs_the_decision_only_for_what_it_showed() {
     let fresh = action(now.fingerprint.as_deref(), &now.scope);
     let out = crate::action_cards::run(&fresh, DONT, "owner").expect("deny");
     assert_eq!(out["decision"], "deny");
-    assert!(out["message"].as_str().unwrap().starts_with("Not trusted. K2 won't start AI tools in this folder."), "{out}");
+    assert!(out["message"].as_str().unwrap().starts_with("Not trusted. K2 won't start programs in this folder (a plain shell tab still opens)."), "{out}");
     assert_eq!(gate::status(&s(&ws)).unwrap().state, "denied");
     assert!(crate::action_cards::run(&fresh, "Sure", "owner").is_err());
 }
@@ -284,7 +284,7 @@ fn the_card_is_escaped_ranked_and_names_the_caller() {
     }
     let eval = gate::evaluate(&s(&ws)).unwrap();
     let actor = Actor { tool: Some("/usr/local/bin/claude".into()), why: Some("line one\n**line two** [x](y)".into()), ..Default::default() };
-    let p = card_prompt("evil*agent_[x]", &eval, &actor);
+    let p = card_prompt("evil*agent_[x]", &eval, &actor, &[]);
     assert!(p.starts_with("**evil\\*agent\\_\\[x\\] wants to start Claude in "), "{p}");
     assert!(p.contains(&format!("This folder has {} settings", eval.findings.len())), "{p}");
     let fence_open = p.find("````text\n").expect("a 4-backtick fence (content has ```)");
@@ -298,8 +298,21 @@ fn the_card_is_escaped_ranked_and_names_the_caller() {
     // A detail cut at 120 characters says so plainly.
     std::fs::write(ws.join(".claude/settings.json"), format!(r#"{{"hooks":{{"Stop":[{{"hooks":[{{"command":"{}"}}]}}]}}}}"#, "x".repeat(300))).unwrap();
     let eval = gate::evaluate(&s(&ws)).unwrap();
-    let p = card_prompt("builder", &eval, &Actor::default());
+    let p = card_prompt("builder", &eval, &Actor::default(), &[]);
     assert!(p.contains("Some lines are truncated; the full list: "), "{p}");
+
+    // Round 2 Low: a program that isn't an AI tool is named as itself, and
+    // the card says programs, not AI tools. M2: leftover trust is shown
+    // with the command that removes it.
+    let leftover = vec!["Codex: /x/y (~/.codex/config.toml)".to_string()];
+    let p = card_prompt("builder", &eval, &Actor { tool: Some("/bin/bash".into()), ..Default::default() }, &leftover);
+    assert!(p.starts_with("**builder wants to start ` /bin/bash ` in "), "{p}");
+    assert!(p.contains("run commands or send your logins elsewhere when programs start here"), "{p}");
+    assert!(!p.contains("AI tools"), "{p}");
+    assert!(p.contains("Trust K2 didn't write still covers this folder"), "{p}");
+    assert!(p.contains("Codex: /x/y (~/.codex/config.toml)"), "{p}");
+    assert!(p.contains(&format!("To remove it: ` {} `", gate::forget_hint(&eval.path))), "{p}");
+    assert!(p.ends_with("If you didn't put these there, don't trust it."), "{p}");
 
     // The caller is the agent whose passport asked, not the folder's agent.
     let asker = folder(&e.home, "asker", None);
@@ -310,6 +323,10 @@ fn the_card_is_escaped_ranked_and_names_the_caller() {
     );
     assert_eq!(named, agent_name_of(&asker_id));
     assert_eq!(caller_name(&Actor { caller: Some("The owner".into()), ..Default::default() }, None), "The owner");
+    // A tab the owner opened names the owner's tab, not the folder's agent.
+    let by_person = with_person(Some("A K2 tab you opened".into()), || caller_name(&Actor::by("spawn"), Some(&asker_id)));
+    assert_eq!(by_person, "A K2 tab you opened");
+    assert_eq!(caller_name(&Actor::by("spawn"), Some(&asker_id)), agent_name_of(&asker_id), "the thread-local is reset");
 }
 
 /// Review B#8: held spawns keep the caller and expire after 24 h; heartbeat
@@ -396,4 +413,88 @@ fn markdown_helpers_contain_their_input() {
     let block = md_code_block(&["``` close".to_string(), "two\nlines".to_string()]);
     assert!(block.starts_with("````text\n") && block.ends_with("\n````"), "{block}");
     assert!(block.contains("two lines"), "newlines flattened: {block}");
+}
+
+/// Review round 2 H1: a persona `launch:` block's `cwd:` can point the
+/// spawn anywhere. The workspace folder that holds the persona is gated
+/// too, and a cwd K2 can't check (`$HOME`, `/`) refuses every program but
+/// a plain login shell.
+#[test]
+fn a_launch_cwd_elsewhere_is_gated_on_the_workspace_too() {
+    let e = env();
+    let ws = folder(&e.home, "persona-ws", Some(HOOK));
+    let id = register(&ws);
+    let elsewhere = folder(&e.home, "elsewhere-clean", None);
+    let none: HashMap<String, String> = HashMap::new();
+    let r = gate_spawn(Some("claude"), &[], &none, &s(&elsewhere), None, Some(&id), "spawn").expect_err("the workspace is held");
+    assert_eq!(r.error, gate::PENDING);
+    assert_eq!(r.path, s(&ws), "refused on the workspace folder: {}", r.message);
+
+    for cwd in [s(&e.home), "/".to_string()] {
+        let r = gate_spawn(Some("bash"), &["-c".into(), "id".into()], &none, &cwd, None, None, "spawn")
+            .expect_err("a folder K2 can't check refuses a gated program");
+        assert_eq!(r.error, gate::DENIED, "{cwd}: {}", r.message);
+        assert!(r.message.starts_with("K2 won't start programs in "), "{}", r.message);
+    }
+    let login = k2_core::terminal::detect_shell();
+    gate_spawn(Some(&login), &[], &none, &s(&e.home), None, None, "spawn").expect("a plain login shell runs anywhere");
+    gate_spawn(None, &[], &none, "/", None, None, "spawn").expect("no program is the login shell");
+
+    // Trusting the workspace lets the launch block run in the other folder.
+    let fp = gate::evaluate(&s(&ws)).unwrap().fingerprint;
+    gate::decide(&s(&ws), Decision::Once, "owner", fp.as_deref()).unwrap();
+    gate_spawn(Some("claude"), &[], &none, &s(&elsewhere), None, Some(&id), "spawn").expect("both folders pass");
+}
+
+/// Review round 2 H2: a shell with env of its own, a shell outside the
+/// login shells, or a launch block that only sets env is gated.
+#[test]
+fn shells_with_env_or_odd_paths_are_gated() {
+    let e = env();
+    let ws = folder(&e.home, "shellenv", Some(HOOK));
+    let login = k2_core::terminal::detect_shell();
+    let env_of = |k: &str, v: &str| -> HashMap<String, String> { [(k.to_string(), v.to_string())].into_iter().collect() };
+    for (prog, env) in [
+        (Some(login.as_str()), env_of("PROMPT_COMMAND", "./x.sh")),
+        (Some(login.as_str()), env_of("ZDOTDIR", ".")),
+        (Some(login.as_str()), env_of("ENV", "./rc")),
+        (Some(login.as_str()), env_of("PATH", "./bin:/usr/bin")),
+        (None, env_of("BASH_ENV", "./rc")),
+        (Some("./bin/zsh"), HashMap::new()),
+    ] {
+        let r = gate_spawn(prog, &[], &env, &s(&ws), None, None, "spawn").expect_err("gated and held");
+        assert_eq!(r.error, gate::PENDING, "{prog:?} {env:?}");
+    }
+    let k2_only = env_of("K2_AGENT_NAME", "x");
+    gate_spawn(Some(&login), &["-l".into()], &k2_only, &s(&ws), None, None, "spawn").expect("K2's own env keeps a plain shell plain");
+}
+
+/// Review round 2 M2: the hold reports trust K2 didn't write, the card and
+/// status show it with the command that removes it, and the owner's
+/// `forget` removes it.
+#[test]
+fn leftover_trust_is_reported_and_forget_removes_it() {
+    let e = env();
+    let ws = folder(&e.home, "leftover", Some(HOOK));
+    register(&ws);
+    let path = s(&ws);
+    std::fs::create_dir_all(e.home.join(".codex")).unwrap();
+    std::fs::write(e.home.join(".codex/config.toml"), format!("[projects.\"{path}\"]\ntrust_level = \"trusted\"\n")).unwrap();
+    let r = held(&ws);
+    assert_eq!(r.leftover, vec![format!("Codex: {path} (~/.codex/config.toml)")]);
+    assert!(r.message.contains(&gate::forget_hint(&path)), "{}", r.message);
+    let st = gate::status(&path).unwrap();
+    assert_eq!(st.forget.as_deref(), Some(gate::forget_hint(&path).as_str()));
+
+    assert_eq!(dispatch(false, FORGET_PATH, &params(&[("path", path.as_str())]), b"", "owner").status, "405 Method Not Allowed");
+    let r = dispatch(true, FORGET_PATH, &passport("x", &[("path", path.as_str())]), b"", "owner");
+    assert_eq!(r.status, "403 Forbidden", "a passport never forgets: {}", r.body);
+    let r = dispatch(true, FORGET_PATH, &params(&[("path", path.as_str())]), b"", "owner");
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let v = json_of(&r);
+    assert_eq!(v["removed"], serde_json::json!([format!("Codex: {path} (~/.codex/config.toml)")]));
+    assert_eq!(v["status"]["trusted_by"], serde_json::json!([]));
+    let toml = std::fs::read_to_string(e.home.join(".codex/config.toml")).unwrap();
+    assert!(!toml.contains("trusted"), "{toml}");
+    assert!(held(&ws).leftover.is_empty());
 }

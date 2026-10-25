@@ -264,6 +264,7 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
             if let Err(r) = crate::folder_trust::gate_spawn(
                 existing.program.as_deref(),
                 &existing.args,
+                &req.env,
                 &live_cwd,
                 req.env.get("HOME").map(String::as_str),
                 req.project_id.as_deref(),
@@ -320,6 +321,7 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
     if let Err(r) = crate::folder_trust::gate_spawn(
         req.command.as_deref(),
         req.args.as_deref().unwrap_or(&[]),
+        &req.env,
         &req.cwd,
         req.env.get("HOME").map(String::as_str),
         req.project_id.as_deref(),

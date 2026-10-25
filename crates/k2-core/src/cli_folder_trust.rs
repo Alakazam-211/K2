@@ -78,12 +78,14 @@ pub fn trust_all_registered_projects() -> usize {
     granted
 }
 
-/// Spawn door (P18 + SS11). Every program but a plain interactive shell
-/// ([`needs_gate`]): a harness with any args (`claude -p` runs project
-/// hooks with no trust dialog), a wrapper, a launch-block command. `Ok`
-/// when the folder may run it (grants written as before), `Err` with the
-/// refusal when the folder is held (a card is waiting) or denied. A plain
-/// shell, a missing cwd and refused paths pass (`Ok(None)`).
+/// Spawn door (P18 + SS11). Every program but a plain interactive login
+/// shell ([`needs_gate`]): a harness with any args (`claude -p` runs
+/// project hooks with no trust dialog), a wrapper, a launch-block command,
+/// a shell with env or args of its own. `Ok` when the folder may run it
+/// (grants written as before), `Err` with the refusal when the folder is
+/// held (a card is waiting), denied, or can't be checked at all (no cwd,
+/// `$HOME`, `/`, a parent of `$HOME`: review round 2 H1, a skip never
+/// passes). Only the exempt plain shell passes without a decision.
 ///
 /// `env_home`: the child's HOME when it differs from the daemon's. A guest
 /// path that doesn't exist on the host gets no host write, but the decision
@@ -91,15 +93,16 @@ pub fn trust_all_registered_projects() -> usize {
 pub fn gate_harness_spawn(
     command: Option<&str>,
     args: &[String],
+    env: &std::collections::HashMap<String, String>,
     cwd: Option<&Path>,
     env_home: Option<&str>,
     actor: &gate::Actor,
 ) -> Result<Option<gate::Outcome>, gate::Refusal> {
-    if !needs_gate(command, args) {
+    if !needs_gate(command, args, env) {
         return Ok(None);
     }
     let Some(cwd) = cwd else {
-        return Ok(None);
+        return Err(gate::refusal_unchecked("(no folder)", "the session has no folder K2 can check"));
     };
     let cwd_s = cwd.to_string_lossy();
     let outcome = match env_home.map(str::trim).filter(|s| !s.is_empty()) {
@@ -121,25 +124,59 @@ pub fn gate_harness_spawn(
     };
     match outcome {
         gate::Outcome::Held(r) | gate::Outcome::Denied(r) => Err(r),
+        // A test build's non-temp HOME writes nothing and checks nothing
+        // (never in a release build); every other skip refuses.
+        gate::Outcome::Skipped(why) if why == gate::SKIP_TEST_HOME => Ok(Some(gate::Outcome::Skipped(why))),
+        gate::Outcome::Skipped(why) => Err(gate::refusal_unchecked(&cwd_s, &why)),
         other => Ok(Some(other)),
     }
 }
 
+/// Env keys K2 itself (or the terminal) sets on a spawn. A shell carrying
+/// any other key (`PROMPT_COMMAND`, `ENV`, `ZDOTDIR`, `PATH`, a launch
+/// block's env…) can run folder code before the first prompt.
+fn k2_own_env_key(k: &str) -> bool {
+    k.starts_with("K2_")
+        || k.starts_with("K2SO_")
+        || matches!(k, "TERM" | "COLORTERM" | "TERM_PROGRAM" | "TERM_PROGRAM_VERSION" | "LANG" | "LC_ALL" | "LC_CTYPE" | "COLUMNS" | "LINES")
+}
+
+/// `cmd` is the person's login shell: what K2 itself starts for a shell
+/// tab ([`crate::terminal::detect_shell`]), by its path or its bare name,
+/// or an absolute path listed in `/etc/shells`. A relative path
+/// (`./bin/zsh`) or another name is not.
+fn is_login_shell(cmd: &str) -> bool {
+    let login = crate::terminal::detect_shell();
+    if cmd == login {
+        return true;
+    }
+    let p = Path::new(cmd);
+    if !p.is_absolute() {
+        return !cmd.contains('/') && !cmd.contains('\\') && Path::new(&login).file_name().and_then(|n| n.to_str()) == Some(cmd);
+    }
+    read_to_string_lossy(Path::new("/etc/shells"))
+        .map(|t| t.lines().map(str::trim).any(|l| !l.starts_with('#') && l == cmd))
+        .unwrap_or(false)
+}
+
 /// Whether a K2-started session in a folder must pass the folder decision
-/// (review A-H2): every program does — a wrapper (`npx`, `ccr`, `happy`),
-/// `bash -c "…; claude -p"`, a custom launch block — except a plain
-/// interactive shell (no command, `$SHELL`, or a shell with no args or
-/// only `-l`/`--login`/`-i`), which is a person's terminal tab.
-pub fn needs_gate(command: Option<&str>, args: &[String]) -> bool {
+/// (reviews A-H2, round 2 H2): every program does — a wrapper (`npx`,
+/// `ccr`, `happy`), `bash -c "…; claude -p"`, a launch block — except a
+/// plain interactive login shell: no command / `$SHELL` / the login shell
+/// ([`is_login_shell`]), no args but `-l`/`--login`/`-i`, and no env beyond
+/// K2's own. That is the person's own terminal tab.
+pub fn needs_gate(command: Option<&str>, args: &[String], env: &std::collections::HashMap<String, String>) -> bool {
+    let plain_env = env.keys().all(|k| k2_own_env_key(k));
+    let plain_args = args.iter().all(|a| matches!(a.as_str(), "-l" | "--login" | "-i"));
     let Some(cmd) = command.map(str::trim).filter(|s| !s.is_empty()) else {
-        return false;
+        return !(plain_env && plain_args);
     };
     if cmd == "$SHELL" {
-        return false;
+        return !(plain_env && plain_args);
     }
     let base = program_basename(cmd);
     let is_shell = LOGIN_SHELL_BASENAMES.iter().any(|s| base.eq_ignore_ascii_case(s));
-    !(is_shell && args.iter().all(|a| matches!(a.as_str(), "-l" | "--login" | "-i")))
+    !(is_shell && is_login_shell(cmd) && plain_args && plain_env)
 }
 
 /// True when `command` is claude/codex/grok/gemini/cursor-agent (basename).
@@ -172,7 +209,7 @@ fn program_basename(program: &str) -> String {
     lower.strip_suffix(".exe").unwrap_or(&lower).to_string()
 }
 
-fn current_home() -> Option<PathBuf> {
+pub fn current_home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
@@ -1078,6 +1115,75 @@ fn revoke_gemini(path: &Path, keys: &[String]) -> Result<(), String> {
     atomic_write_with_bak(path, body.as_bytes()).map_err(|e| e.to_string())
 }
 
+/// Remove every entry [`leftover_grants`] lists for `keys` (review round 2
+/// M2): exact and parent-folder entries in every store, whoever wrote
+/// them (the person's own, 0.46.3's), Gemini `TRUST_PARENT` entries that
+/// trust a parent, and Cursor markers of any method. Returns the lines it
+/// removed and the errors (never silent).
+pub fn forget_grants(home: &Path, keys: &[String]) -> (Vec<String>, Vec<String>) {
+    let before = leftover_grants(home, keys, true);
+    let mut all: Vec<String> = Vec::new();
+    for key in keys {
+        let mut cur = Some(Path::new(key));
+        while let Some(dir) = cur {
+            let d = dir.to_string_lossy().to_string();
+            if !all.contains(&d) {
+                all.push(d);
+            }
+            cur = dir.parent();
+        }
+    }
+    let mut gemini: Vec<String> = all.clone();
+    gemini.extend(all.iter().map(|k| k.to_lowercase()));
+    gemini.sort();
+    gemini.dedup();
+    let keys_all = GrantedKeys { claude: all.clone(), codex: all.clone(), grok: all.clone(), gemini: gemini.clone(), cursor: Vec::new() };
+    let mut errors = revoke_grants(home, &keys_all);
+    if let Err(e) = forget_gemini_parents(&home.join(".gemini").join("trustedFolders.json"), &all) {
+        errors.push(format!("Gemini (~/.gemini/trustedFolders.json): {e}"));
+    }
+    for key in &all {
+        let marker = cursor_marker_path(home, key);
+        if marker.is_file() {
+            if let Err(e) = fs::remove_file(&marker) {
+                errors.push(format!("Cursor ({}): {e}", marker.display()));
+            }
+        }
+    }
+    errors.extend(revoke_slot_homes(&all));
+    let after = leftover_grants(home, keys, true);
+    let removed = before.into_iter().filter(|l| !after.contains(l)).collect();
+    (removed, errors)
+}
+
+/// Drop Gemini `TRUST_PARENT` entries whose parent is one of `dirs`.
+fn forget_gemini_parents(path: &Path, dirs: &[String]) -> Result<(), String> {
+    let Some(original) = read_to_string_lossy(path) else {
+        return Ok(());
+    };
+    if original.trim().is_empty() {
+        return Ok(());
+    }
+    let mut root: serde_json::Value = serde_json::from_str(&original).map_err(|e| format!("parse: {e}"))?;
+    let obj = root.as_object_mut().ok_or_else(|| "trustedFolders.json is not an object".to_string())?;
+    let drop: Vec<String> = obj
+        .iter()
+        .filter(|(k, v)| {
+            v.as_str() == Some("TRUST_PARENT")
+                && Path::new(k.as_str()).parent().map(|p| dirs.iter().any(|d| p.to_string_lossy() == d.as_str())).unwrap_or(false)
+        })
+        .map(|(k, _)| k.clone())
+        .collect();
+    if drop.is_empty() {
+        return Ok(());
+    }
+    for k in &drop {
+        obj.remove(k);
+    }
+    let body = serialize_json(&root, &original);
+    atomic_write_with_bak(path, body.as_bytes()).map_err(|e| e.to_string())
+}
+
 /// Every grant that still makes a CLI trust one of `keys` in `home`: an
 /// exact entry in any store, or a parent folder's entry for the CLIs that
 /// inherit it (Gemini and Cursor always; Claude outside git; U0 Q4). Each
@@ -1196,6 +1302,7 @@ fn gemini_value(home: &Path, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::process::Command;
 
     struct HomeGuard {
@@ -1352,24 +1459,44 @@ mod tests {
         crate::workspace::lifecycle::register_workspace_ex(&main_s, false, false, false)
             .expect("register");
         assert_all_stores(&g.home, &main);
-        gate_harness_spawn(Some("claude"), &[], Some(&wt), None, &gate::Actor::default()).expect("clean worktree passes");
+        gate_harness_spawn(Some("claude"), &[], &HashMap::new(), Some(&wt), None, &gate::Actor::default()).expect("clean worktree passes");
         assert_all_stores(&g.home, &main);
         assert_all_stores(&g.home, &wt);
     }
 
-    /// Review A-H2: only a plain interactive shell skips the gate; every
-    /// other program (a wrapper, `bash -c`, `cat`) is gated.
+    /// Reviews A-H2 and round 2 H2: only a plain interactive login shell
+    /// (the login shell, no args but `-l`/`-i`, no env beyond K2's own)
+    /// skips the gate; every other program (a wrapper, `bash -c`, `cat`, a
+    /// shell with env, a relative shell path) is gated.
     #[test]
     fn spawn_helper_gates_everything_but_a_plain_shell() {
         let g = HomeGuard::new("spawn-skip");
         let ws = unique_ws(&g.home, "skip");
         let a = gate::Actor::default();
         let none: Vec<String> = Vec::new();
-        assert!(gate_harness_spawn(None, &none, Some(&ws), None, &a).expect("no program").is_none());
-        assert!(gate_harness_spawn(Some("zsh"), &none, Some(&ws), None, &a).expect("shell").is_none());
-        assert!(gate_harness_spawn(Some("$SHELL"), &none, Some(&ws), None, &a).expect("shell").is_none());
-        assert!(gate_harness_spawn(Some("/bin/bash"), &["-l".to_string()], Some(&ws), None, &a).expect("login shell").is_none());
+        let no_env: HashMap<String, String> = HashMap::new();
+        let login = crate::terminal::detect_shell();
+        let login_name = Path::new(&login).file_name().unwrap().to_string_lossy().to_string();
+        assert!(gate_harness_spawn(None, &none, &no_env, Some(&ws), None, &a).expect("no program").is_none());
+        assert!(gate_harness_spawn(Some(&login_name), &none, &no_env, Some(&ws), None, &a).expect("shell").is_none());
+        assert!(gate_harness_spawn(Some("$SHELL"), &none, &no_env, Some(&ws), None, &a).expect("shell").is_none());
+        assert!(gate_harness_spawn(Some(&login), &["-l".to_string()], &no_env, Some(&ws), None, &a).expect("login shell").is_none());
+        let k2_env: HashMap<String, String> = [("K2_AGENT_NAME".to_string(), "x".to_string()), ("TERM".to_string(), "xterm".to_string())].into_iter().collect();
+        assert!(!needs_gate(Some(&login), &none, &k2_env), "K2's own env keeps a shell plain");
         assert!(!g.home.join(".claude.json").exists(), "a plain shell writes no grant");
+        let env1 = |k: &str| -> HashMap<String, String> { [(k.to_string(), "./x".to_string())].into_iter().collect() };
+        for (prog, env) in [
+            (Some(login.as_str()), env1("PROMPT_COMMAND")),
+            (Some(login.as_str()), env1("ZDOTDIR")),
+            (Some(login.as_str()), env1("ENV")),
+            (Some(login.as_str()), env1("PATH")),
+            (Some("$SHELL"), env1("BASH_ENV")),
+            (None, env1("NODE_OPTIONS")),
+        ] {
+            assert!(needs_gate(prog, &none, &env), "{prog:?} {env:?}");
+        }
+        assert!(needs_gate(Some("./bin/zsh"), &none, &no_env), "a relative shell path runs folder code");
+        assert!(needs_gate(Some("/tmp/x/bash"), &none, &no_env), "a shell outside /etc/shells");
         for (prog, args) in [
             ("cat", vec![]),
             ("/bin/bash", vec!["-c".to_string(), "claude -p hi".to_string()]),
@@ -1377,15 +1504,26 @@ mod tests {
             ("ccr", vec!["code".to_string()]),
             ("happy", vec![]),
         ] {
-            assert!(needs_gate(Some(prog), &args), "{prog} {args:?}");
-            let out = gate_harness_spawn(Some(prog), &args, Some(&ws), None, &a).expect("clean folder passes");
+            assert!(needs_gate(Some(prog), &args, &no_env), "{prog} {args:?}");
+            let out = gate_harness_spawn(Some(prog), &args, &no_env, Some(&ws), None, &a).expect("clean folder passes");
             assert!(matches!(out, Some(gate::Outcome::Granted { clean: true, .. })), "{prog}: {out:?}");
         }
+        // Round 2 H1: no folder, or one K2 can't check, refuses a gated
+        // program instead of passing it.
+        let r = gate_harness_spawn(Some("claude"), &none, &no_env, None, None, &a).expect_err("no folder");
+        assert_eq!(r.error, gate::DENIED);
+        let r = gate_harness_spawn(Some("claude"), &none, &no_env, Some(&g.home), None, &a).expect_err("$HOME");
+        assert_eq!(r.error, gate::DENIED);
+        assert!(r.message.contains("K2 won't start programs in"), "{}", r.message);
+        assert!(gate_harness_spawn(None, &none, &no_env, Some(&g.home), None, &a).expect("a plain shell in $HOME").is_none());
         // A risky folder holds the wrapper too (no card presenter here).
         fs::create_dir_all(ws.join(".claude")).unwrap();
         fs::write(ws.join(".claude/settings.json"), r#"{"hooks":{"Stop":[{"hooks":[{"command":"./x.sh"}]}]}}"#).unwrap();
-        let held = gate_harness_spawn(Some("/bin/bash"), &["-c".to_string(), "claude -p x".to_string()], Some(&ws), None, &a)
+        let held = gate_harness_spawn(Some("/bin/bash"), &["-c".to_string(), "claude -p x".to_string()], &no_env, Some(&ws), None, &a)
             .expect_err("bash -c claude in a risky folder is held");
+        assert_eq!(held.error, gate::PENDING);
+        let held = gate_harness_spawn(Some(&login), &none, &env1("PROMPT_COMMAND"), Some(&ws), None, &a)
+            .expect_err("a shell with PROMPT_COMMAND in a risky folder is held");
         assert_eq!(held.error, gate::PENDING);
     }
 
@@ -1393,7 +1531,7 @@ mod tests {
     fn spawn_helper_grants_harness_cwd() {
         let g = HomeGuard::new("spawn-ok");
         let ws = unique_ws(&g.home, "ok");
-        let out = gate_harness_spawn(Some("/usr/local/bin/claude"), &[], Some(&ws), None, &gate::Actor::default())
+        let out = gate_harness_spawn(Some("/usr/local/bin/claude"), &[], &HashMap::new(), Some(&ws), None, &gate::Actor::default())
             .expect("clean folder passes");
         assert!(matches!(out, Some(gate::Outcome::Granted { clean: true, .. })), "{out:?}");
         assert_all_stores(&g.home, &ws);
@@ -1406,6 +1544,7 @@ mod tests {
         let out = gate_harness_spawn(
             Some("claude"),
             &[],
+            &HashMap::new(),
             Some(&ws),
             Some("/home/k2-does-not-exist-on-host"),
             &gate::Actor::default(),

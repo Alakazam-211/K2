@@ -54,6 +54,7 @@ pub const STATUS_PATH: &str = "/cli/folder-trust/status";
 pub const REQUEST_PATH: &str = "/cli/folder-trust/request";
 pub const DECIDE_PATH: &str = "/cli/folder-trust/decide";
 pub const RESET_PATH: &str = "/cli/folder-trust/reset";
+pub const FORGET_PATH: &str = "/cli/folder-trust/forget";
 
 /// Findings listed on a card (the rest: `k2 workspace trust status`).
 pub const CARD_LINES: usize = 5;
@@ -112,18 +113,52 @@ fn agent_name_of(project_id: &str) -> String {
     k2_core::workspace_session_handles::workspace_address_name_shared(project_id).unwrap_or_else(|_| "An agent".to_string())
 }
 
-fn tool_display(tool: Option<&str>) -> &'static str {
-    match tool.map(|t| {
+/// The workspace folder of a registered project id.
+fn project_path_for_id(project_id: &str) -> Option<String> {
+    k2_core::projects_ops::projects_list()
+        .ok()?
+        .into_iter()
+        .find(|pr| pr.id == project_id && !pr.path.is_empty())
+        .map(|pr| pr.path)
+}
+
+/// What the card says is being started: an AI tool's name, else the
+/// program itself in code (review round 2 Low: a gated shell or script
+/// is not "AI tools").
+fn tool_display(tool: Option<&str>) -> String {
+    let base = tool.map(|t| {
         let base = Path::new(t).file_name().and_then(|s| s.to_str()).unwrap_or(t).to_ascii_lowercase();
         base.trim_end_matches(".exe").to_string()
-    }) {
-        Some(t) if t == "claude" => "Claude",
-        Some(t) if t == "codex" => "Codex",
-        Some(t) if t == "grok" => "Grok",
-        Some(t) if t == "gemini" => "Gemini",
-        Some(t) if t == "cursor-agent" => "Cursor",
-        _ => "AI tools",
+    });
+    match base.as_deref() {
+        Some("claude") => "Claude".into(),
+        Some("codex") => "Codex".into(),
+        Some("grok") => "Grok".into(),
+        Some("gemini") => "Gemini".into(),
+        Some("cursor-agent") => "Cursor".into(),
+        Some(_) => md_code_inline(&tool.unwrap_or_default().chars().take(80).collect::<String>()),
+        None => "a program".into(),
     }
+}
+
+// ── Who opened a tab (review round 2 Low) ────────────────────────────
+
+thread_local! {
+    /// The person whose request is being served (the owner token, a
+    /// Connect login), for the card's "who asked".
+    static PERSON: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with `person` named as the caller of any card it raises.
+pub fn with_person<T>(person: Option<String>, f: impl FnOnce() -> T) -> T {
+    let prev = PERSON.with(|p| p.replace(person));
+    let out = f();
+    PERSON.with(|p| *p.borrow_mut() = prev);
+    out
+}
+
+fn request_person() -> Option<String> {
+    PERSON.with(|p| p.borrow().clone())
 }
 
 // ── Markdown safety (review B#1) ─────────────────────────────────────
@@ -202,7 +237,7 @@ fn finding_rank(what: &str) -> u8 {
 /// The card's words (PRD §3.4, reviews B#1, B#4): who asked, the folder,
 /// how many findings, the most important ones in a code block, and a plain
 /// note when a line was cut or more findings exist.
-pub fn card_prompt(caller: &str, eval: &gate::Evaluation, actor: &Actor) -> String {
+pub fn card_prompt(caller: &str, eval: &gate::Evaluation, actor: &Actor, leftover: &[String]) -> String {
     let tool = tool_display(actor.tool.as_deref());
     let caller = md_text(caller, 80);
     let folder = md_code_inline(&eval.path);
@@ -210,12 +245,12 @@ pub fn card_prompt(caller: &str, eval: &gate::Evaluation, actor: &Actor) -> Stri
     let mut s = if actor.changed_live {
         format!(
             "**The settings in {folder} changed while {caller} was running.** K2 stopped its sessions there until you decide. \
-             {n} setting{} make the AI tools run commands or send your logins elsewhere (Claude picks up new hooks without a restart):\n",
+             {n} setting{} run commands or send your logins elsewhere when programs start here (Claude picks up new hooks without a restart):\n",
             if n == 1 { "" } else { "s" }
         )
     } else {
         format!(
-            "**{caller} wants to start {tool} in {folder}.** This folder has {n} setting{} that make the AI tools run commands or send your logins elsewhere when they start:\n",
+            "**{caller} wants to start {tool} in {folder}.** This folder has {n} setting{} that run commands or send your logins elsewhere when programs start here:\n",
             if n == 1 { "" } else { "s" }
         )
     };
@@ -235,6 +270,15 @@ pub fn card_prompt(caller: &str, eval: &gate::Evaluation, actor: &Actor) -> Stri
     if let Some(why) = actor.why.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
         s.push_str(&format!("{caller} says: {}\n", md_text(why, 300)));
     }
+    if !leftover.is_empty() {
+        // Review round 2 M2: trust K2 didn't write (or can't tell from
+        // yours) still covers this folder whatever you choose here.
+        let shown: Vec<String> = leftover.iter().take(CARD_LINES).cloned().collect();
+        s.push_str("Trust K2 didn't write still covers this folder in these tools, whatever you choose:\n");
+        s.push_str(&md_code_block(&shown));
+        s.push('\n');
+        s.push_str(&format!("To remove it: {}\n", md_code_inline(&gate::forget_hint(&eval.path))));
+    }
     s.push_str("If you didn't put these there, don't trust it.");
     s
 }
@@ -247,6 +291,9 @@ fn caller_name(actor: &Actor, folder_project: Option<&str>) -> String {
     }
     if let Some(p) = crate::caller_workspace::request_principal().filter(|p| !p.workspace_uuid.is_empty()) {
         return agent_name_of(&p.workspace_uuid);
+    }
+    if let Some(person) = request_person().filter(|p| !p.trim().is_empty()) {
+        return person;
     }
     let folder_agent = folder_project.map(agent_name_of).unwrap_or_else(|| "An agent".to_string());
     match actor.by.as_str() {
@@ -276,7 +323,10 @@ fn present(ask: &Ask<'_>) -> Asked {
         }
     }
     let caller = caller_name(ask.actor, folder.as_deref());
-    let prompt = card_prompt(&caller, eval, ask.actor);
+    let leftover = k2_core::cli_folder_trust::current_home()
+        .map(|h| k2_core::cli_folder_trust::leftover_grants(&h, &eval.keys, eval.in_git))
+        .unwrap_or_default();
+    let prompt = card_prompt(&caller, eval, ask.actor, &leftover);
     let action = k2_core::overlay::CardAction {
         id: CARD_ACTION.to_string(),
         params: json!({
@@ -338,14 +388,21 @@ fn present(ask: &Ask<'_>) -> Asked {
         return Asked { ticket: Some(id), project: Some(project.clone()), ..Default::default() };
     }
     let fp = eval.fingerprint.as_deref().unwrap_or("");
+    // Commands in a code block, so a path can't add markdown (review round
+    // 2 Low).
+    let q = gate::shell_quote(&eval.path);
+    let commands = md_code_block(&[
+        "# Trust it (this version):".to_string(),
+        format!("k2 workspace trust {q} --yes --fingerprint {fp}"),
+        "# Always trust this folder:".to_string(),
+        format!("k2 workspace trust {q} --always --fingerprint {fp}"),
+        "# Don't trust:".to_string(),
+        format!("k2 workspace trust {q} --no --fingerprint {fp}"),
+    ]);
     let body = format!(
-        "{prompt}\n\nThere is no Thread to put a card on, so K2 filed this ticket. Choose one (owner):\n\
-         • Trust it (this version): k2 workspace trust {q} --yes --fingerprint {fp}\n\
-         • Always trust this folder: k2 workspace trust {q} --always --fingerprint {fp}\n\
-         • Don't trust: k2 workspace trust {q} --no --fingerprint {fp}\n\
+        "{prompt}\n\nThere is no Thread to put a card on, so K2 filed this ticket. Choose one (owner):\n\n{commands}\n\n\
          If these settings change, K2 refuses these commands and files a new ticket. \
-         Until then K2 starts no AI tool in this folder. Settings → Workspaces → Folder trust shows it too.",
-        q = gate::shell_quote(&eval.path)
+         Until then K2 starts no program in this folder but a plain terminal. Settings → Workspaces → Folder trust shows it too."
     );
     match crate::feedback_routes::file_owners_only_notice(project, &agent_name_of(project), &title, &body) {
         Ok(item) => Asked { ticket: Some(item.id), project: Some(project.clone()), ..Default::default() },
@@ -371,10 +428,17 @@ static HELD: Mutex<Option<HashMap<String, Vec<HeldSpawn>>>> = Mutex::new(None);
 const HELD_MAX: usize = 16;
 
 /// The spawn door: `Err(refusal)` when the folder is held or denied.
-/// Every program is gated but a plain interactive shell (review A-H2).
+/// Every program is gated but a plain interactive login shell with no env
+/// of its own (reviews A-H2, round 2 H2). `env` is what the caller and the
+/// agent's launch block set (not K2's own injections).
+///
+/// A workspace spawn whose cwd is somewhere else (a persona `launch:`
+/// block's `cwd:`, review round 2 H1) is gated on the workspace folder
+/// that holds the persona too: both must pass.
 pub fn gate_spawn(
     program: Option<&str>,
     args: &[String],
+    env: &HashMap<String, String>,
     cwd: &str,
     env_home: Option<&str>,
     project_id: Option<&str>,
@@ -386,7 +450,18 @@ pub fn gate_spawn(
         tool: program.map(str::to_string),
         ..Default::default()
     };
-    k2_core::cli_folder_trust::gate_harness_spawn(program, args, Some(Path::new(cwd)), env_home, &actor).map(|_| ())
+    if k2_core::cli_folder_trust::needs_gate(program, args, env) {
+        if let Some(ws) = project_id.and_then(project_path_for_id) {
+            let same = match (Path::new(&ws).canonicalize(), Path::new(cwd).canonicalize()) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => ws == cwd,
+            };
+            if !same {
+                k2_core::cli_folder_trust::gate_harness_spawn(program, args, env, Some(Path::new(&ws)), env_home, &actor)?;
+            }
+        }
+    }
+    k2_core::cli_folder_trust::gate_harness_spawn(program, args, env, Some(Path::new(cwd)), env_home, &actor).map(|_| ())
 }
 
 /// Queue a held spawn (not heartbeat lanes: those are skipped), with the
@@ -445,7 +520,7 @@ pub fn heartbeat_hold(project_path: &str, project_id: &str) -> Option<Refusal> {
 /// [`heartbeat_hold`] with the agent's program given. Gated like a spawn:
 /// every program but a plain shell (an empty program is no agent).
 pub fn heartbeat_hold_for(project_path: &str, project_id: &str, program: &str) -> Option<Refusal> {
-    if !k2_core::cli_folder_trust::needs_gate(Some(program), &[]) {
+    if !k2_core::cli_folder_trust::needs_gate(Some(program), &[], &HashMap::new()) {
         return None;
     }
     let actor = Actor {
@@ -506,7 +581,7 @@ pub fn after_decision(scope: &str, decision: Decision, granted: bool) -> usize {
 pub fn stop_sessions_in(scope: &str) -> usize {
     let mut n = 0;
     for (key, s) in crate::v2_session_map::snapshot() {
-        if !k2_core::cli_folder_trust::needs_gate(s.program.as_deref(), &s.args) {
+        if !k2_core::cli_folder_trust::needs_gate(s.program.as_deref(), &s.args, &HashMap::new()) {
             continue;
         }
         let Some(cwd) = s.cwd.as_ref() else { continue };
@@ -681,6 +756,15 @@ pub fn dispatch(is_post: bool, path: &str, params: &HashMap<String, String>, bod
             }
             reset_route(params, body, session_author)
         }
+        FORGET_PATH => {
+            if !is_post {
+                return CliResponse::method_not_allowed();
+            }
+            if let Err(r) = crate::overlay_routes::require_action_card_person(params, session_author, "answers") {
+                return r;
+            }
+            forget_route(params, body, session_author)
+        }
         _ => CliResponse::not_found(),
     }
 }
@@ -822,6 +906,32 @@ fn reset_route(params: &HashMap<String, String>, body: &[u8], by: &str) -> CliRe
     }
 }
 
+/// `POST /cli/folder-trust/forget` (owner, review round 2 M2): remove
+/// every trust entry for the folder in every CLI's store, the person's own
+/// and parent folders' included. 200 with what was removed; a store K2
+/// couldn't change is a 500 that names it.
+fn forget_route(params: &HashMap<String, String>, body: &[u8], by: &str) -> CliResponse {
+    let folder = match folder_param(params, body) {
+        Ok(f) => f,
+        Err(r) => return r,
+    };
+    match gate::forget(&folder, by) {
+        Ok(f) if f.errors.is_empty() => {
+            let mut v = serde_json::to_value(&f).unwrap_or(J::Null);
+            v["ok"] = json!(true);
+            CliResponse::ok_json(v.to_string())
+        }
+        Ok(f) => {
+            let mut v = serde_json::to_value(&f).unwrap_or(J::Null);
+            v["ok"] = json!(false);
+            v["error"] = json!("forget_incomplete");
+            v["message"] = json!(format!("K2 couldn't change: {}", f.errors.join("; ")));
+            CliResponse { status: "500 Internal Server Error", content_type: "application/json", body: v.to_string() }
+        }
+        Err(e) => err("400 Bad Request", "usage", e),
+    }
+}
+
 // ── Boot ─────────────────────────────────────────────────────────────
 
 /// After ready: finish the 0.46.3 upgrade (one owner summary listing the
@@ -851,10 +961,26 @@ fn file_upgrade_summary(folders: &[gate::UpgradedFolder]) {
         let lines: Vec<String> = f.findings.iter().take(CARD_LINES).map(|l| format!("{}: {}", l.file, l.detail)).collect();
         body.push_str(&md_code_block(&lines));
         body.push('\n');
+        let status_cmd = md_code_inline(&format!("k2 workspace trust status {}", gate::shell_quote(&f.path)));
         if f.findings.len() > CARD_LINES || f.more > 0 {
-            body.push_str(&format!("More: k2 workspace trust status {}\n", gate::shell_quote(&f.path)));
+            body.push_str(&format!("More: {status_cmd}\n"));
         }
-        body.push_str(&format!("Review: k2 workspace trust status {}, then --yes / --always / --no\n", gate::shell_quote(&f.path)));
+        body.push_str(&format!("Review: {status_cmd}, then --yes / --always / --no\n"));
+        // Review round 2 M2: entries K2 can't tell from the person's (Codex,
+        // Grok, Claude entries with more than the trust flag) stay whatever
+        // the decision; say so, with the command that removes them.
+        let leftover = k2_core::cli_folder_trust::current_home()
+            .map(|h| {
+                let keys = vec![f.path.clone()];
+                k2_core::cli_folder_trust::leftover_grants(&h, &keys, true)
+            })
+            .unwrap_or_default();
+        if !leftover.is_empty() {
+            let shown: Vec<String> = leftover.iter().take(CARD_LINES).cloned().collect();
+            body.push_str("Trust K2 didn't write (or can't tell from yours) stays whatever you decide:\n");
+            body.push_str(&md_code_block(&shown));
+            body.push_str(&format!("\nTo remove it: {}\n", md_code_inline(&gate::forget_hint(&f.path))));
+        }
     }
     body.push_str("\nSettings → Workspaces → Folder trust shows each one, with Reset.");
     let agent = agent_name_of(&project);

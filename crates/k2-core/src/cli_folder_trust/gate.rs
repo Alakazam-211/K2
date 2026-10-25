@@ -86,6 +86,9 @@ const MAX_BETWEEN: usize = 8;
 const NESTED_TOOLS: &[&str] = &["gemini", "cursor", "claude"];
 /// The marker a refusal leaves in an error string (see [`Refusal::to_error_string`]).
 const TOKEN_OPEN: &str = "[k2ft:";
+/// The one skip a gated spawn may pass: a test build whose HOME isn't a
+/// temp folder writes and checks nothing (never in a release build).
+pub const SKIP_TEST_HOME: &str = "test HOME is not isolated";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -238,7 +241,8 @@ pub struct Refusal {
     pub ticket: Option<String>,
     /// How the owner decides.
     pub decide: String,
-    /// Denied: grants K2 didn't write that still trust this folder.
+    /// Held or denied: grants K2 didn't write (or can't tell from the
+    /// person's) that still trust this folder; [`forget_hint`] removes them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub leftover: Vec<String>,
     /// A fresh random token per refusal (review B#6): what the error
@@ -413,12 +417,16 @@ fn git_tracked(root: &Path, rel: &Path) -> bool {
 }
 
 /// What the nested-repo walk found below one granted folder.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct NestedWalk {
     repos: Vec<PathBuf>,
     /// Why the walk is incomplete (over budget, a folder it couldn't
     /// read): each one is a finding, so the folder isn't called clean.
     problems: Vec<String>,
+    /// Every folder the walk listed and every `.git` it saw (the cache's
+    /// stamp).
+    dirs: Vec<PathBuf>,
+    dotgits: Vec<PathBuf>,
 }
 
 /// A `.git` FILE pointing into `<main>/.git/worktrees/…`: a worktree of the
@@ -443,21 +451,34 @@ fn same_repo_worktree(dir: &Path, main: Option<&Path>) -> bool {
 /// entered); everything else is entered, hidden folders included (a
 /// submodule may sit in one). Over [`NESTED_MAX_DIRS`] folders or a folder
 /// that can't be read makes the walk incomplete.
+///
+/// Breadth first, each folder's entries in name order (review round 2 M4):
+/// the same tree always stops at the same folder when it is over budget,
+/// so the fingerprint can't flap between scans. A folder a rootless
+/// container's user owns (uid ≥ 100000, not ours: podman volume data) that
+/// we can't read is left out, not a finding: no CLI running as us can
+/// read it either.
 fn nested_repos(root: &Path, main: Option<&Path>) -> NestedWalk {
     let mut w = NestedWalk::default();
-    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    let mut queue: std::collections::VecDeque<PathBuf> = std::collections::VecDeque::from([root.to_path_buf()]);
     let mut visited = 0usize;
-    while let Some(dir) = stack.pop() {
+    while let Some(dir) = queue.pop_front() {
+        w.dirs.push(dir.clone());
         let rd = match std::fs::read_dir(&dir) {
             Ok(rd) => rd,
             // A folder that isn't there (a cwd not made yet, one removed
             // mid-walk) holds nothing to trust; anything else fails closed.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && container_owned(&dir) => {
+                log_debug!("[folder-trust] nested walk: {} is a container's (left out)", dir.display());
+                continue;
+            }
             Err(e) => {
                 w.problems.push(format!("can't read {} ({:?})", dir.display(), e.kind()));
                 continue;
             }
         };
+        let mut entries: Vec<(String, PathBuf)> = Vec::new();
         for e in rd {
             let e = match e {
                 Ok(e) => e,
@@ -480,24 +501,260 @@ fn nested_repos(root: &Path, main: Option<&Path>) -> NestedWalk {
             if NESTED_SKIP.contains(&name.as_str()) {
                 continue;
             }
+            entries.push((name, e.path()));
+        }
+        entries.sort();
+        for (_, p) in entries {
             visited += 1;
             if visited > NESTED_MAX_DIRS {
                 w.problems.push(format!("over {NESTED_MAX_DIRS} folders below {}", root.display()));
                 w.repos.sort();
                 return w;
             }
-            let p = e.path();
-            if std::fs::symlink_metadata(p.join(".git")).is_ok() {
+            let dotgit = p.join(".git");
+            if std::fs::symlink_metadata(&dotgit).is_ok() {
+                w.dotgits.push(dotgit);
                 if same_repo_worktree(&p, main) {
                     continue;
                 }
                 w.repos.push(p.clone());
             }
-            stack.push(p);
+            queue.push_back(p);
         }
     }
     w.repos.sort();
     w
+}
+
+/// A folder owned by another uid in the rootless-container range (podman
+/// and docker rootless map container users to subuids ≥ 100000).
+#[cfg(unix)]
+fn container_owned(dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: geteuid has no preconditions and can't fail.
+    let me = unsafe { libc::geteuid() };
+    std::fs::symlink_metadata(dir).map(|m| m.uid() >= 100_000 && m.uid() != me).unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn container_owned(_dir: &Path) -> bool {
+    false
+}
+
+// ── Scan caches (review round 2 M4) ──────────────────────────────────
+//
+// Spawns, heartbeats, status and the watcher evaluate the same folders
+// over and over. Each cache entry holds a stamp of what its result read:
+// inode, size, mode and ctime of every entry (ctime can't be set back by
+// a process, unlike mtime). A stamp taken within [`RACY_SECS`] of the
+// scan's start isn't cached (git's "racily clean" rule), so an edit
+// during a scan is never hidden.
+
+/// Entries stamped for one cached result; more and the result isn't cached.
+const SIG_MAX: usize = 6000;
+/// A stamp this close to the scan's start isn't trusted to cache.
+const RACY_SECS: i64 = 2;
+/// Cached folders kept (all dropped when full).
+const CACHE_MAX: usize = 1024;
+/// Config folders the scanner reads (walked whole for the stamp).
+const SIG_DIRS: &[&str] = &[
+    ".claude",
+    ".cursor",
+    ".gemini",
+    ".codex",
+    ".grok",
+    ".vscode",
+    ".git/hooks",
+    ".k2/agent",
+    ".k2/agents",
+    ".k2/skills",
+    ".k2/agent-templates",
+    ".k2so/agent",
+    ".k2so/agents",
+    ".k2so/skills",
+    ".k2so/agent-templates",
+];
+/// Entries of `.claude` the scanner skips (its worktrees).
+const SIG_SKIP_TOP: &[&str] = &["worktrees"];
+
+/// (path, inode, size, mode, ctime seconds, ctime nanos); a missing path
+/// stamps as zeros.
+type Stamp = (String, u64, u64, u32, i64, i64);
+
+fn stamp_of(p: &Path) -> Stamp {
+    let key = p.to_string_lossy().to_string();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match std::fs::symlink_metadata(p) {
+            Ok(m) => (key, m.ino(), m.size(), m.mode(), m.ctime(), m.ctime_nsec()),
+            Err(_) => (key, 0, 0, 0, 0, 0),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match std::fs::symlink_metadata(p) {
+            Ok(m) => {
+                let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).unwrap_or_default();
+                (key, 0, m.len(), u32::from(m.is_dir()), t.as_secs() as i64, i64::from(t.subsec_nanos()))
+            }
+            Err(_) => (key, 0, 0, 0, 0, 0),
+        }
+    }
+}
+
+/// The stamp of everything [`scan::scan_folder`] reads in `root`: the root
+/// and each of its entries, every entry of the config folders, git's
+/// config and index (the tracked check), and `inputs` with their parents.
+/// `None` when there is too much to stamp.
+fn scan_signature(root: &Path, inputs: &[String]) -> Option<Vec<Stamp>> {
+    let mut out: Vec<Stamp> = vec![stamp_of(root)];
+    let rd = match std::fs::read_dir(root) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(out),
+        Err(_) => return None,
+    };
+    let mut top: Vec<PathBuf> = rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    if top.len() > SIG_MAX {
+        return None;
+    }
+    top.sort();
+    out.extend(top.iter().map(|p| stamp_of(p)));
+    for rel in [".git/config", ".git/index"] {
+        out.push(stamp_of(&root.join(rel)));
+    }
+    // A worktree's index lives in its gitdir.
+    if let Ok(text) = std::fs::read_to_string(root.join(".git")) {
+        if let Some(g) = text.lines().find_map(|l| l.trim().strip_prefix("gitdir:")).map(str::trim) {
+            let g = if Path::new(g).is_absolute() { PathBuf::from(g) } else { root.join(g) };
+            out.push(stamp_of(&g.join("index")));
+        }
+    }
+    for d in SIG_DIRS {
+        let base = root.join(d);
+        out.push(stamp_of(&base));
+        let mut stack = vec![(base, 0usize)];
+        while let Some((dir, depth)) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            let mut names: Vec<(PathBuf, bool)> = Vec::new();
+            for e in rd.filter_map(|e| e.ok()) {
+                if depth == 0 && *d == ".claude" && SIG_SKIP_TOP.iter().any(|s| e.file_name() == *s) {
+                    continue;
+                }
+                let is_dir = e.file_type().map(|t| t.is_dir() && !t.is_symlink()).unwrap_or(false);
+                names.push((e.path(), is_dir));
+            }
+            names.sort();
+            for (p, is_dir) in names {
+                out.push(stamp_of(&p));
+                if out.len() > SIG_MAX {
+                    return None;
+                }
+                if is_dir {
+                    stack.push((p, depth + 1));
+                }
+            }
+        }
+    }
+    for rel in inputs {
+        let p = root.join(rel);
+        out.push(stamp_of(&p));
+        if let Some(parent) = p.parent() {
+            out.push(stamp_of(parent));
+        }
+    }
+    if out.len() > SIG_MAX {
+        return None;
+    }
+    Some(out)
+}
+
+/// The stamp of a nested walk: every folder it listed and every `.git` it
+/// saw (a folder's ctime moves when an entry is added, removed or renamed
+/// in it; a `.git` file's when it is rewritten).
+fn nested_signature(w: &NestedWalk) -> Vec<Stamp> {
+    w.dirs.iter().chain(w.dotgits.iter()).map(|p| stamp_of(p)).collect()
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Every stamp is older than `started` by [`RACY_SECS`].
+fn settled(sig: &[Stamp], started: i64) -> bool {
+    sig.iter().all(|s| s.4 < started - RACY_SECS)
+}
+
+type ScanCache = Mutex<HashMap<PathBuf, (Vec<Stamp>, scan::ScanResult)>>;
+type NestedCache = Mutex<HashMap<(PathBuf, Option<PathBuf>), (Vec<Stamp>, NestedWalk)>>;
+
+fn scan_cache() -> &'static ScanCache {
+    static C: OnceLock<ScanCache> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn nested_cache() -> &'static NestedCache {
+    static C: OnceLock<NestedCache> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Scans served from the cache (tests read it).
+static CACHE_HITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn cache_hits() -> usize {
+    CACHE_HITS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// [`scan::scan_folder`] with git's tracked check, from the cache when
+/// nothing it read has changed.
+fn scan_cached(root: &Path) -> scan::ScanResult {
+    let cached = scan_cache().lock().unwrap_or_else(|e| e.into_inner()).get(root).cloned();
+    if let Some((sig, result)) = cached {
+        if scan_signature(root, &result.inputs).as_ref() == Some(&sig) {
+            CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return result;
+        }
+    }
+    let started = now_secs();
+    let tracked = |rel: &Path| git_tracked(root, rel);
+    let result = scan::scan_folder(root, &tracked);
+    if let Some(sig) = scan_signature(root, &result.inputs) {
+        if settled(&sig, started) {
+            let mut g = scan_cache().lock().unwrap_or_else(|e| e.into_inner());
+            if g.len() >= CACHE_MAX {
+                g.clear();
+            }
+            g.insert(root.to_path_buf(), (sig, result.clone()));
+        }
+    }
+    result
+}
+
+/// [`nested_repos`] from the cache when no folder it listed changed.
+fn nested_cached(root: &Path, main: Option<&Path>) -> NestedWalk {
+    let key = (root.to_path_buf(), main.map(Path::to_path_buf));
+    let cached = nested_cache().lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
+    if let Some((sig, walk)) = cached {
+        if nested_signature(&walk) == sig {
+            CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return walk;
+        }
+    }
+    let started = now_secs();
+    let walk = nested_repos(root, main);
+    let sig = nested_signature(&walk);
+    if walk.dirs.len() + walk.dotgits.len() <= NESTED_MAX_DIRS + 1 && settled(&sig, started) {
+        let mut g = nested_cache().lock().unwrap_or_else(|e| e.into_inner());
+        if g.len() >= CACHE_MAX {
+            g.clear();
+        }
+        g.insert(key, (sig, walk.clone()));
+    }
+    walk
 }
 
 fn label_for(root: &Path, cwd: &Path) -> String {
@@ -566,8 +823,7 @@ pub fn evaluate_in(path: &str, home: &Path) -> Option<Evaluation> {
     // their position (an inherited clone is a different thing).
     let mut prints: BTreeSet<String> = BTreeSet::new();
     for root in &uniq {
-        let tracked = |rel: &Path| git_tracked(root, rel);
-        let r = scan::scan_folder(root, &tracked);
+        let r = scan_cached(root);
         let label = label_for(root, &cwd);
         if let Some(fp) = &r.fingerprint {
             prints.insert(fp.clone());
@@ -582,7 +838,7 @@ pub fn evaluate_in(path: &str, home: &Path) -> Option<Evaluation> {
     // Only what the inheriting CLIs read.
     let mut seen_nested: Vec<PathBuf> = Vec::new();
     for base in keys.iter().map(PathBuf::from) {
-        let walk = nested_repos(&base, common.as_deref());
+        let walk = nested_cached(&base, common.as_deref());
         for problem in &walk.problems {
             // Fail closed: a walk that couldn't see everything is a finding.
             let label = label_for(&base, &cwd);
@@ -599,8 +855,7 @@ pub fn evaluate_in(path: &str, home: &Path) -> Option<Evaluation> {
                 continue;
             }
             seen_nested.push(repo.clone());
-            let tracked = |rel: &Path| git_tracked(&repo, rel);
-            let r = scan::scan_folder(&repo, &tracked);
+            let r = scan_cached(&repo);
             let nested_fp = r.fingerprint.clone().unwrap_or_default();
             let kept: Vec<Finding> = r.findings.into_iter().filter(|f| NESTED_TOOLS.contains(&f.tool)).collect();
             if kept.is_empty() {
@@ -786,6 +1041,33 @@ pub fn decide_hint(path: &str) -> String {
     format!("k2 workspace trust {} --yes|--always|--no (owner)", shell_quote(path))
 }
 
+/// `k2 workspace trust forget <folder> (owner)`: remove every trust entry
+/// for the folder in every CLI's store, the person's own included.
+pub fn forget_hint(path: &str) -> String {
+    format!("k2 workspace trust forget {} (owner)", shell_quote(path))
+}
+
+/// A gated program in a folder K2 can't check at all (no folder, `$HOME`,
+/// `/`, a parent of `$HOME`): refused, never passed (review round 2 H1).
+pub fn refusal_unchecked(path: &str, why: &str) -> Refusal {
+    Refusal {
+        error: DENIED.to_string(),
+        message: format!(
+            "K2 won't start programs in {path}: {why}. Only a plain terminal tab runs there; start the program in a project folder instead."
+        ),
+        path: path.to_string(),
+        scope: path.to_string(),
+        findings: Vec::new(),
+        more: 0,
+        fingerprint: None,
+        card: None,
+        ticket: None,
+        decide: "start it in a project folder".to_string(),
+        leftover: Vec::new(),
+        token: uuid::Uuid::new_v4().simple().to_string(),
+    }
+}
+
 /// One finding as a card / message line: "`file`: detail".
 pub fn finding_line(f: &Finding) -> String {
     format!("{}: {}", f.file, f.detail)
@@ -794,15 +1076,24 @@ pub fn finding_line(f: &Finding) -> String {
 fn refusal(code: &str, eval: &Evaluation, pending: Option<&Pending>, leftover: Vec<String>) -> Refusal {
     let more = eval.findings.len().saturating_sub(MAX_LISTED);
     let first = eval.findings.first().map(finding_line).unwrap_or_default();
+    let leftover_note = if leftover.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " Trust K2 didn't write still covers it ({}); to remove it: {}.",
+            leftover.join("; "),
+            forget_hint(&eval.path)
+        )
+    };
     let message = if code == DENIED {
         format!(
-            "K2 won't start AI tools in {}: the owner chose \"Don't trust\" for its settings ({first}). To change it: Settings → Workspaces → Folder trust → Reset, or {}.",
+            "K2 won't start programs in {}: the owner chose \"Don't trust\" for its settings ({first}). To change it: Settings → Workspaces → Folder trust → Reset, or {}.{leftover_note}",
             eval.path,
             decide_hint(&eval.path)
         )
     } else {
         format!(
-            "Waiting for the owner to trust {}: it has settings that run commands when AI tools start ({first}{}). Answer the card on Thread, or: {}.",
+            "Waiting for the owner to trust {}: it has settings that run commands when programs start there ({first}{}). Answer the card on Thread, or: {}.{leftover_note}",
             eval.path,
             if eval.findings.len() > 1 { format!(", and {} more", eval.findings.len() - 1) } else { String::new() },
             decide_hint(&eval.path)
@@ -860,16 +1151,16 @@ fn ensure_inner(path: &str, door: Door, actor: &Actor, home: Option<&Path>, writ
     };
     if skip_unisolated_home(&home) {
         log_debug!("[folder-trust] skip: test HOME is not isolated ({})", home.display());
-        return Outcome::Skipped("test HOME is not isolated".into());
+        return Outcome::Skipped(SKIP_TEST_HOME.into());
     }
     let home = canonical_abs(&home).unwrap_or(home);
-    // A 0.46.3 database's rows wait for the upgrade marks (A4): a spawn
-    // that comes before the boot pass runs them first, so a folder 0.46.3
-    // already trusted is never held by the race.
-    upgrade_if_pending();
     let Some(eval) = evaluate_in(path, &home) else {
         return Outcome::Skipped(format!("refused path {path}"));
     };
+    // A 0.46.3 database's rows wait for the upgrade marks (A4): a door that
+    // comes before the boot pass finishes this folder's rows inline with
+    // the scan it just made (no lock held across a scan, round 2 M4).
+    upgrade_rows_for(&eval, &home);
     let db = crate::db::shared();
     let row = {
         let conn = db.lock();
@@ -941,7 +1232,11 @@ fn ensure_inner(path: &str, door: Door, actor: &Actor, home: Option<&Path>, writ
         Door::Add | Door::Spawn | Door::Request => Some(ask(&eval, actor, existing.as_ref(), &fp)),
         Door::Sweep | Door::Check => existing.filter(|p| p.fingerprint == fp),
     };
-    Outcome::Held(refusal(PENDING, &eval, pending.as_ref(), Vec::new()))
+    // What still trusts the folder outside K2's own entries (the person's,
+    // a parent's, 0.46.3 entries that can't be told from the person's):
+    // shown, with how to remove it (round 2 M2).
+    let leftover = leftover_grants(&home, &eval.keys, eval.in_git);
+    Outcome::Held(refusal(PENDING, &eval, pending.as_ref(), leftover))
 }
 
 /// Pinned-login and wallet slot homes keep their own trust entries; on
@@ -1050,7 +1345,7 @@ pub fn decide(path: &str, decision: Decision, by: &str, card_fingerprint: Option
                 errors.extend(revoke_slot_homes(&eval.keys));
             }
             let leftover = leftover_grants(&home, &eval.keys, eval.in_git);
-            let mut message = "Not trusted. K2 won't start AI tools in this folder.".to_string();
+            let mut message = "Not trusted. K2 won't start programs in this folder (a plain shell tab still opens).".to_string();
             if !leftover.is_empty() {
                 message.push_str(&format!(" Still trusted elsewhere: {}.", leftover.join("; ")));
             }
@@ -1098,6 +1393,39 @@ pub fn reset(path: &str, by: &str) -> Result<StatusView, String> {
     }
     log_debug!("[folder-trust] {by} reset {}", eval.scope);
     status(path)
+}
+
+/// What [`forget`] removed.
+#[derive(Debug, Clone, Serialize)]
+pub struct Forgotten {
+    /// One line per entry removed (tool, folder, file).
+    pub removed: Vec<String>,
+    /// Stores K2 couldn't change (never silent).
+    pub errors: Vec<String>,
+    pub status: StatusView,
+}
+
+/// Remove every trust entry for `path`, in every CLI's store, whoever
+/// wrote it (review round 2 M2): K2's, 0.46.3's, the person's own, and
+/// parent folders' entries a CLI would inherit. The owner's command for
+/// the leftovers a hold or "Don't trust" reports. The decision is kept:
+/// a folder K2 trusts gets K2's own entries back at its next start.
+pub fn forget(path: &str, by: &str) -> Result<Forgotten, String> {
+    let home = current_home().ok_or("no HOME")?;
+    if skip_unisolated_home(&home) {
+        return Err(SKIP_TEST_HOME.into());
+    }
+    let home = canonical_abs(&home).unwrap_or(home);
+    let eval = evaluate_in(path, &home).ok_or_else(|| format!("K2 never trusts {path} ($HOME, / or a parent of $HOME)"))?;
+    let mut errors = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        revoke_k2(&conn, &eval.scope, &home)
+    };
+    let (removed, more) = super::forget_grants(&home, &eval.keys);
+    errors.extend(more);
+    log_debug!("[folder-trust] {by} forgot {} ({} entries, {} errors)", eval.scope, removed.len(), errors.len());
+    Ok(Forgotten { removed, errors, status: status(path)? })
 }
 
 /// What the person saw when they chose: the card's (or the CLI's status)
@@ -1166,6 +1494,9 @@ pub struct StatusView {
     /// Every grant that trusts this folder now (K2's and the rest).
     pub trusted_by: Vec<String>,
     pub decide: String,
+    /// How the owner removes `trusted_by` (when there is any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forget: Option<String>,
 }
 
 /// Status of one folder (no grant, no card).
@@ -1190,6 +1521,7 @@ pub fn status(path: &str) -> Result<StatusView, String> {
         None => "undecided",
     };
     let state = if state == "changed" && pending.is_some() { "pending" } else { state };
+    let trusted_by = leftover_grants(&home, &eval.keys, eval.in_git);
     Ok(StatusView {
         path: eval.path.clone(),
         scope: eval.scope.clone(),
@@ -1203,8 +1535,9 @@ pub fn status(path: &str) -> Result<StatusView, String> {
         card: pending.as_ref().and_then(|p| p.card.clone()),
         ticket: pending.as_ref().and_then(|p| p.ticket.clone()),
         k2_granted: row.as_ref().map(|r| r.granted.clone()).unwrap_or_default(),
-        trusted_by: leftover_grants(&home, &eval.keys, eval.in_git),
+        trusted_by: trusted_by.clone(),
         decide: decide_hint(&eval.path),
+        forget: if trusted_by.is_empty() { None } else { Some(forget_hint(&eval.path)) },
     })
 }
 
@@ -1245,39 +1578,75 @@ pub struct UpgradedFolder {
 /// (`decided_by = 'upgrade'`), so nothing breaks today. Returns the risky
 /// ones for the owner's one summary. Idempotent: rows end `upgrade = 0`.
 pub fn upgrade_pass() -> Vec<UpgradedFolder> {
-    upgrade_if_pending();
+    upgrade_rows();
     let mut g = UPGRADED.lock().unwrap_or_else(|e| e.into_inner());
     std::mem::take(&mut *g)
 }
 
-/// Folders the upgrade marked, waiting for the boot pass's summary (the
-/// marks may run first from a spawn).
+/// Folders the upgrade marked, waiting for the boot pass's summary (a door
+/// may mark its own folder first).
 static UPGRADED: Mutex<Vec<UpgradedFolder>> = Mutex::new(Vec::new());
 
-/// Run the upgrade marks once there are `upgrade = 1` rows. Serialized by
-/// the shared DB's own (reentrant) lock, held for the whole pass: a caller
-/// that already holds it (a register door) runs it inline, and no second
-/// lock can deadlock against it.
-fn upgrade_if_pending() {
-    let db = crate::db::shared();
-    let conn = db.lock();
-    let pending: bool = conn
-        .query_row("SELECT EXISTS (SELECT 1 FROM folder_trust WHERE upgrade = 1)", [], |r| r.get(0))
-        .unwrap_or(false);
-    if !pending {
-        return;
-    }
-    let found = upgrade_rows();
-    drop(conn);
-    if !found.is_empty() {
-        UPGRADED.lock().unwrap_or_else(|e| e.into_inner()).extend(found);
+fn note_upgraded(found: Option<UpgradedFolder>) {
+    if let Some(f) = found {
+        let mut g = UPGRADED.lock().unwrap_or_else(|e| e.into_inner());
+        if !g.iter().any(|u| u.scope == f.scope) {
+            g.push(f);
+        }
     }
 }
 
-fn upgrade_rows() -> Vec<UpgradedFolder> {
-    let Some(home) = current_home() else { return Vec::new() };
+/// One row's marks inside a savepoint (review B#9): a row ends
+/// `upgrade = 0` only with all of its marks, so an error leaves it to be
+/// redone, and redoing is idempotent. The caller holds the DB lock, never
+/// across a scan (`eval` is already computed; round 2 M4).
+fn upgrade_row_locked(conn: &Connection, home: &Path, old: &Row, eval: Option<&Evaluation>) {
+    let still: bool = conn
+        .query_row("SELECT EXISTS (SELECT 1 FROM folder_trust WHERE scope = ?1 AND upgrade = 1)", params![old.scope], |r| r.get(0))
+        .unwrap_or(false);
+    if !still {
+        return; // another door or pass did it
+    }
+    if let Err(e) = conn.execute_batch("SAVEPOINT folder_trust_upgrade") {
+        log_debug!("[folder-trust] upgrade {}: savepoint: {e}", old.scope);
+        return;
+    }
+    match upgrade_one(conn, home, old, eval) {
+        Ok(found) => match conn.execute_batch("RELEASE folder_trust_upgrade") {
+            Ok(()) => note_upgraded(found),
+            Err(e) => log_debug!("[folder-trust] upgrade {}: release: {e}", old.scope),
+        },
+        Err(e) => {
+            log_debug!("[folder-trust] upgrade {}: {e} (left for the next pass)", old.scope);
+            let _ = conn.execute_batch("ROLLBACK TO folder_trust_upgrade; RELEASE folder_trust_upgrade");
+        }
+    }
+}
+
+/// A door's own folder: finish its 0.46.3 upgrade rows inline, with the
+/// scan the door already made, so a folder 0.46.3 trusted is never held
+/// because the boot pass hasn't reached it yet.
+fn upgrade_rows_for(eval: &Evaluation, home: &Path) {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let rows: Vec<Row> = {
+        let Ok(mut stmt) = conn.prepare(&format!("SELECT {ROW_COLS} FROM folder_trust WHERE upgrade = 1 AND (scope = ?1 OR scope = ?2)")) else {
+            return;
+        };
+        let rows = stmt.query_map(params![eval.scope, eval.path], row_from).map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>());
+        rows.unwrap_or_default()
+    };
+    for old in rows {
+        upgrade_row_locked(&conn, home, &old, Some(eval));
+    }
+}
+
+/// The boot pass: list the pending rows, then for each scan with no lock
+/// held and write under a short lock.
+fn upgrade_rows() {
+    let Some(home) = current_home() else { return };
     if skip_unisolated_home(&home) {
-        return Vec::new();
+        return;
     }
     let home = canonical_abs(&home).unwrap_or(home);
     let db = crate::db::shared();
@@ -1287,43 +1656,17 @@ fn upgrade_rows() -> Vec<UpgradedFolder> {
             Ok(s) => s,
             Err(e) => {
                 log_debug!("[folder-trust] upgrade read: {e}");
-                return Vec::new();
+                return;
             }
         };
         let rows = stmt.query_map([], row_from).map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>());
         rows.unwrap_or_default()
     };
-    let mut out = Vec::new();
     for old in raw {
         let eval = evaluate_in(&old.scope, &home);
         let conn = db.lock();
-        // One row at a time inside a savepoint (review B#9): a row ends
-        // `upgrade = 0` only with all of its marks, so a crash or an error
-        // leaves it to be redone, and redoing is idempotent.
-        if let Err(e) = conn.execute_batch("SAVEPOINT folder_trust_upgrade") {
-            log_debug!("[folder-trust] upgrade {}: savepoint: {e}", old.scope);
-            continue;
-        }
-        let step = upgrade_one(&conn, &home, &old, eval.as_ref());
-        match step {
-            Ok(found) => {
-                if let Err(e) = conn.execute_batch("RELEASE folder_trust_upgrade") {
-                    log_debug!("[folder-trust] upgrade {}: release: {e}", old.scope);
-                    continue;
-                }
-                if let Some(f) = found {
-                    if !out.iter().any(|u: &UpgradedFolder| u.scope == f.scope) {
-                        out.push(f);
-                    }
-                }
-            }
-            Err(e) => {
-                log_debug!("[folder-trust] upgrade {}: {e} (left for the next pass)", old.scope);
-                let _ = conn.execute_batch("ROLLBACK TO folder_trust_upgrade; RELEASE folder_trust_upgrade");
-            }
-        }
+        upgrade_row_locked(&conn, &home, &old, eval.as_ref());
     }
-    out
 }
 
 /// One upgrade row's marks (inside the caller's savepoint).

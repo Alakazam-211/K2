@@ -31465,9 +31465,15 @@ owner: a card on Thread (Trust it / Always trust this folder / Don't trust).
   k2 workspace trust <folder> --yes|--always|--no [--fingerprint <fp>]
                                     Owner: Trust it (this version) / Always
                                     trust this folder / Don't trust, for the
-                                    settings shown (status, or the ticket's
-                                    fingerprint); refused if they changed
+                                    settings shown. A risky folder needs the
+                                    fingerprint from status or the ticket,
+                                    or a yes at the prompt in a terminal;
+                                    refused if the settings changed
   k2 workspace trust reset <folder> Owner: back to undecided (asks again)
+  k2 workspace trust forget <folder>
+                                    Owner: remove every trust entry for the
+                                    folder in every tool's file (yours and
+                                    parent folders' too); status lists them
 
 Deciding is the owner's: an agent or a K2 terminal gets exit 3 (the card is
 the request). More: k2 study folder-trust
@@ -31510,8 +31516,14 @@ def show(v):
         print("  Card waiting on Thread: %s" % v["card"])
     if v.get("ticket"):
         print("  Owner ticket: %s" % v["ticket"])
+    if v.get("scope") and v.get("scope") != v.get("path"):
+        print("  Decision covers: %s" % v["scope"])
+    if v.get("fingerprint"):
+        print("  Fingerprint: %s" % v["fingerprint"])
     for t in v.get("trusted_by") or []:
         print("  Trusted by: %s" % t)
+    if v.get("forget"):
+        print("  Remove those entries (owner): %s" % v["forget"])
     if state in ("pending", "undecided", "changed", "denied"):
         print("  Decide (owner): %s" % v.get("decide", ""))
 if mode == "status":
@@ -31528,13 +31540,26 @@ elif mode == "request":
         print("Already trusted (a decision covers these settings).")
     elif st == "held":
         where = ("card " + d["card"]) if d.get("card") else (("owner ticket " + d["ticket"]) if d.get("ticket") else "no Thread or ticket")
-        print("Asked the owner (%s). K2 starts no AI tool there until they answer." % where)
+        print("Asked the owner (%s). K2 starts no program there (but a plain shell tab) until they answer." % where)
         for f in (d.get("findings") or [])[:5]:
             print("  • %s: %s" % (f.get("file"), f.get("detail")))
+        for t in d.get("leftover") or []:
+            print("  Still trusted outside K2: %s" % t)
     elif st == "denied":
         print("Not trusted: the owner chose \"Don'"'"'t trust\". Only the owner can change it (Settings → Workspaces → Folder trust → Reset).")
     else:
         print("Not gated: %s" % (d.get("reason") or st))
+elif mode == "forget":
+    removed = d.get("removed") or []
+    if removed:
+        print("Removed:")
+        for t in removed:
+            print("  %s" % t)
+    else:
+        print("Nothing to remove: no tool trusts this folder outside K2'"'"'s own entries.")
+    st = d.get("status") or {}
+    for t in st.get("trusted_by") or []:
+        print("  Still trusted: %s" % t)
 else:
     print(d.get("message") or "Done.")
     for t in d.get("leftover") or []:
@@ -31589,21 +31614,25 @@ cmd_workspace_trust() {
             return
             ;;
     esac
-    # Owner verbs: <folder> --yes|--always|--no, and reset <folder>.
+    # Owner verbs: <folder> --yes|--always|--no, reset <folder>, forget <folder>.
     local endpoint="/cli/folder-trust/decide" folder="" decision=""
     if [ "$sub" = "reset" ]; then
         endpoint="/cli/folder-trust/reset"
         decision="reset"
         shift
+    elif [ "$sub" = "forget" ]; then
+        endpoint="/cli/folder-trust/forget"
+        decision="forget"
+        shift
     fi
-    local usage="Usage: k2 workspace trust <folder> --yes|--always|--no [--fingerprint <fp>]   (or: reset <folder>)"
+    local usage="Usage: k2 workspace trust <folder> --yes|--always|--no [--fingerprint <fp>]   (or: reset <folder>, forget <folder>)"
     local fingerprint=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --yes)    [ "$decision" != "reset" ] || { echo "$usage" >&2; exit 2; }; decision="once"; shift ;;
-            --always) [ "$decision" != "reset" ] || { echo "$usage" >&2; exit 2; }; decision="always"; shift ;;
-            --no)     [ "$decision" != "reset" ] || { echo "$usage" >&2; exit 2; }; decision="deny"; shift ;;
-            --fingerprint) [ $# -ge 2 ] && [ "$decision" != "reset" ] || { echo "$usage" >&2; exit 2; }; fingerprint="$2"; shift 2 ;;
+            --yes)    case "$decision" in reset|forget) echo "$usage" >&2; exit 2 ;; esac; decision="once"; shift ;;
+            --always) case "$decision" in reset|forget) echo "$usage" >&2; exit 2 ;; esac; decision="always"; shift ;;
+            --no)     case "$decision" in reset|forget) echo "$usage" >&2; exit 2 ;; esac; decision="deny"; shift ;;
+            --fingerprint) case "$decision" in reset|forget) echo "$usage" >&2; exit 2 ;; esac; [ $# -ge 2 ] || { echo "$usage" >&2; exit 2; }; fingerprint="$2"; shift 2 ;;
             -*) echo "Unknown flag: $1" >&2; echo "$usage" >&2; exit 2 ;;
             *) [ -z "$folder" ] || { echo "$usage" >&2; exit 2; }; folder="$1"; shift ;;
         esac
@@ -31624,19 +31653,48 @@ cmd_workspace_trust() {
     if [ "$decision" = "reset" ]; then
         resp=$(cli_request_post "$endpoint" "path=$(urlencode "$folder")")
         _workspace_trust_print "$resp" status
+    elif [ "$decision" = "forget" ]; then
+        resp=$(cli_request_post "$endpoint" "path=$(urlencode "$folder")")
+        _workspace_trust_print "$resp" forget
     else
-        # The daemon decides only for the settings the owner saw (review
-        # B#3): the ticket's --fingerprint, or the one status shows now
-        # (printed first, so the owner sees what they decide on).
+        # The daemon decides only for the settings the owner saw (reviews
+        # B#3, round 2 M3): the --fingerprint from status or the ticket, or
+        # a yes at a terminal prompt that shows the findings first. A risky
+        # folder is never decided from a fingerprint fetched and sent back
+        # unseen.
+        local scope_arg=""
         if [ -z "$fingerprint" ]; then
-            local st
+            local st fp_scope
             st=$(cli_request "/cli/folder-trust/status" "path=$(urlencode "$folder")")
             _workspace_trust_print "$st" status
-            fingerprint=$(printf '%s' "$st" | python3 -c 'import json,sys
+            fp_scope=$(printf '%s' "$st" | python3 -c 'import json,sys
 d = json.load(sys.stdin)
-print(d.get("fingerprint") or "none")')
+print(d.get("fingerprint") or "none")
+print(d.get("scope") or "")')
+            fingerprint=$(printf '%s\n' "$fp_scope" | sed -n 1p)
+            local scope
+            scope=$(printf '%s\n' "$fp_scope" | sed -n 2p)
+            if [ "$fingerprint" != "none" ]; then
+                if [ -t 0 ] && [ -t 1 ]; then
+                    local answer=""
+                    printf 'Decide "%s" for the settings above (fingerprint %s)? [y/N] ' "$decision" "$fingerprint"
+                    read -r answer || answer=""
+                    case "$answer" in
+                        y|Y|yes|YES|Yes) ;;
+                        *) echo "Nothing decided." >&2; exit 1 ;;
+                    esac
+                else
+                    echo "Error: this folder has risky settings; decide for the ones you saw: add --fingerprint $fingerprint (from k2 workspace trust status or the ticket), or run it in a terminal to confirm at a prompt." >&2
+                    exit 2
+                fi
+            fi
+            [ -z "$scope" ] || scope_arg="scope=$(urlencode "$scope")"
         fi
-        resp=$(cli_request_post "$endpoint" "path=$(urlencode "$folder")" "decision=$decision" "fingerprint=$(urlencode "$fingerprint")")
+        if [ -n "$scope_arg" ]; then
+            resp=$(cli_request_post "$endpoint" "path=$(urlencode "$folder")" "decision=$decision" "fingerprint=$(urlencode "$fingerprint")" "$scope_arg")
+        else
+            resp=$(cli_request_post "$endpoint" "path=$(urlencode "$folder")" "decision=$decision" "fingerprint=$(urlencode "$fingerprint")")
+        fi
         _workspace_trust_print "$resp" decide
     fi
 }
@@ -36362,12 +36420,20 @@ WHAT K2 DOES
   folderOpen task, git hooks/fsmonitor, a launch: block in the agent's
   own .k2/agent file) waits for the owner: a card on Thread with Trust it /
   Always trust this folder / Don't trust. Every program K2 starts there is
-  gated (wrappers and bash -c included); only a plain shell tab isn't.
+  gated (wrappers and bash -c included); only a plain shell tab isn't: your
+  login shell, no args but -l/-i, and no env beyond K2's own. A shell with
+  env (PROMPT_COMMAND, ZDOTDIR, ENV, PATH…) or a shell path inside the
+  folder is gated like any program.
 
   Trust it      this version only; K2 asks again when those settings change
   Always        any version; undo in Settings → Workspaces → Folder trust
-  Don't trust   K2 starts no AI tool there and removes the trust entries it
-                wrote; it lists entries it didn't write that still trust it
+  Don't trust   K2 starts no program there (but a plain shell tab) and
+                removes the trust entries it wrote; it lists entries it
+                didn't write that still trust it
+  Entries K2 didn't write (yours, a parent folder's, and the Codex and Grok
+  entries K2 wrote before it checked, which look like yours) stay whatever
+  the decision. The card, status and a held spawn list them; the owner
+  removes them all with k2 workspace trust forget <folder>.
 
   While a card waits: no new session starts in that folder (the spawn gets
   409 folder_trust_pending and runs once the owner trusts it), heartbeats
@@ -36385,13 +36451,15 @@ YOU (AN AGENT)
   ~/.grok/trusted_folders.toml, ~/.cursor/projects/…) to get around it.
 
 RE-SCAN ON CHANGE
-  Every spawn, and every reuse of a running session, scans. Claude also
-  reloads hooks mid-session, so K2 watches the risky files of every folder
-  where it runs a session: when they change, a "Trust it" folder is
-  undecided again, K2's grants come off, K2 stops its sessions there and
-  the owner gets the card. The window: K2 sees a change in a watched
-  config folder within about a second, and a file deeper under one (a
-  script under .claude/, a nested clone) within a minute. Claude may load
+  Every spawn, and every reuse of a running session, scans (a folder whose
+  files are unchanged, by inode, size and change time, reuses its last
+  scan). Claude also reloads hooks mid-session, so K2 watches the risky
+  files of every folder where it runs a session: when they change, a
+  "Trust it" folder is undecided again, K2's grants come off, K2 stops its
+  sessions there and the owner gets the card. The window: K2 sees a
+  change in a watched config folder within about a second, and a file
+  deeper under one (a script under .claude/, a nested clone) within a
+  minute. Claude may load
   a new hook before that, so a running session can run new settings in
   that window. "Trust it" and the CLI apply only to the settings shown; if
   they changed in between, nothing is decided and K2 asks again.
@@ -36401,16 +36469,23 @@ WHAT IT CAN'T DO (honest limits)
     agent can read the owner token (~/.k2/heartbeat.token) and decide its
     own card through the API, edit the trust files itself, or run claude /
     codex outside K2. That needs agent isolation (a later arc).
-  - It doesn't look at CLAUDE.md / AGENTS.md text (prompt injection), npm or
-    make scripts (agents run those anyway), or your user-level settings.
+  - It doesn't look at CLAUDE.md / AGENTS.md text (prompt injection), or
+    your user-level settings. npm/pnpm/yarn/bun/make/just files are in the
+    fingerprint only when a hook or MCP command goes through that runner.
+  - It hashes the files a hook or MCP server names (a script, the runner's
+    manifest and lockfiles), not the modules those import: a hook that runs
+    node ./tool.mjs is re-asked when tool.mjs changes, not when a file it
+    imports does.
   - Gemini and Cursor let a nested clone inherit a trusted parent's trust.
     K2 scans nested repos at any depth below a folder it trusts (over 20,000
     folders, or a folder it can't read, counts as a finding); one cloned
     later is seen at the next scan, not before.
   - Gemini reads a .env from any parent folder; K2 scans the folders from
     the session's folder up to its repo top, not above it.
-  - $HOME, / and parents of $HOME are never trusted by K2, so they aren't
-    gated either: the CLI's own prompt applies there (and claude -p has none).
+  - $HOME, / and parents of $HOME are never trusted by K2, and K2 starts no
+    program there but a plain shell tab (a launch: block's cwd: pointing
+    there is refused). A launch: block's cwd: elsewhere is checked on both
+    folders: the workspace that holds it and the cwd.
   - A sandboxed cell seeds its own trust inside the cell (not covered).
   What it does stop: K2's own silent trust, and any session K2 starts
   (spawn, heartbeat, wake, pinned or wallet login) running start-up code

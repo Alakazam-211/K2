@@ -608,7 +608,7 @@ fn a_forged_audit_row_is_not_believed() {
     let sel = put_server(&v, &name, "k2test_forge_value_12345678901234");
     let dir = crate::test_support::Scratch::new();
     env_k2(dir.path(), &[("FORGE_TOKEN", format!("k2v://server/{name}"))]);
-    insert_service("ws-r8-forge", "forgesvc", dir.path(), "running");
+    let sid = insert_service("ws-r8-forge", "forgesvc", dir.path(), "running");
     set_started("ws-r8-forge", "forgesvc", None, chrono::Utc::now().timestamp() + 1);
     old_path_resolve(&v, &sel);
     {
@@ -622,8 +622,22 @@ fn a_forged_audit_row_is_not_believed() {
     }
     assert!(v.verify_audit_chain().is_err(), "the chain check catches it");
     assert!(!done(&v), "a forged done flag isn't believed");
+    NOTICES.with(|n| n.set(0));
     upgrade_once(&v);
     assert!(grant_of(&v, &sel).is_none(), "no grants on a chain that doesn't verify");
+    // Fail closed, but the owner is told what and how to fix it.
+    assert_eq!(NOTICES.with(|n| n.get()), 1, "one owner notice");
+    let notice = LAST_NOTICE.with(|l| l.borrow().clone());
+    assert!(notice.contains("doesn't verify"), "names the problem: {notice}");
+    assert!(notice.contains("K2 made no upgrade grants"), "{notice}");
+    assert!(notice.contains("will start without them"), "{notice}");
+    assert!(notice.contains("k2 vault doctor"), "{notice}");
+    assert!(
+        notice.contains(&format!("k2 vault grant {name} --scope server --to service:{sid} --as env --env-name FORGE_TOKEN")),
+        "the exact grant command for the reference: {notice}"
+    );
+    assert!(!notice.contains("k2test_forge_value"), "never a value");
+    assert!(!done(&v), "still not done: it stays off until the chain verifies");
 }
 
 /// Round 2 fix 4: the card only makes a time-boxed upgrade grant

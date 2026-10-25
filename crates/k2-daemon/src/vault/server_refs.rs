@@ -176,6 +176,12 @@ fn pair(service_id: &str, secret_id: &str) -> String {
 pub fn upgrade_once(vault: &LocalVault) {
     if let Err(e) = vault.verify_audit_chain() {
         k2_core::log_debug!("WARN [vault] R8 upgrade skipped: the vault audit chain doesn't verify ({}); no grants made", e.code);
+        // Fail closed, but say so: the owner hears what is refused and how
+        // to fix it (listed from the services' files and the grants table,
+        // never from the chain).
+        let r = chain_broken_report(vault, &e.code);
+        let (title, body) = chain_broken_notice(&e.code, &r);
+        file_notice(&title, &body);
         return;
     }
     let state = (|| -> Result<(bool, Option<String>, Vec<String>, Vec<String>, Vec<String>), k2_vault::VaultError> {
@@ -768,6 +774,102 @@ fn safe_text(s: &str) -> String {
     s.chars().filter(|c| !c.is_control() && *c != '`').take(300).collect()
 }
 
+/// What the new rule refuses, listed without the audit chain: every
+/// reference in a service's `.env.k2` that the old rule resolved and the new
+/// one refuses. No grant is made and nothing is recorded.
+fn chain_broken_report(vault: &LocalVault, code: &str) -> Report {
+    let mut report = Report { done_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true), ..Default::default() };
+    let cutoff = chrono::Utc::now().timestamp() - WINDOW_DAYS * 86_400;
+    let svcs = match services(cutoff) {
+        Ok(s) => s,
+        Err(why) => {
+            report.unreadable.push(why);
+            return report;
+        }
+    };
+    for svc in &svcs {
+        let env_file = super::publish_env::get(&svc.id).env_file.unwrap_or_else(|| ".env.k2".into());
+        let mut seen = BTreeSet::new();
+        for dir in &svc.dirs {
+            let found = match refs_in(dir, &env_file) {
+                Read::Lines(l) => l,
+                Read::Absent => continue,
+                Read::Unreadable(why) => {
+                    report.unreadable.push(format!("service {}: {why}", svc.id));
+                    continue;
+                }
+            };
+            for (key, r) in found {
+                if !seen.insert((key.clone(), r.clone())) {
+                    continue;
+                }
+                let Ok(sel) = super::selector_for_ref(&r) else { continue };
+                let Some(m) = old_rule_resolves(vault, &sel, Some(&svc.workspace_id)) else { continue };
+                let who = Requester::PublishedService { id: svc.id.clone(), workspace_id: svc.workspace_id.clone() };
+                if vault.ref_would_resolve(&sel, &who).unwrap_or(false) {
+                    continue;
+                }
+                report.refused.push(RefLine {
+                    service_id: svc.id.clone(),
+                    service: safe_label(&svc.name),
+                    workspace_id: svc.workspace_id.clone(),
+                    workspace: safe_label(&super::workspace_label(&svc.workspace_id)),
+                    key,
+                    secret: m.name.clone(),
+                    secret_id: m.id.clone(),
+                    scope: if m.scope.kind == ScopeKind::Server { "server".into() } else { "workspace".into() },
+                    reason: format!("the vault audit chain doesn't verify ({code}), so K2 made no upgrade grants"),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    report
+}
+
+/// The owner notice when the audit chain doesn't verify (the pass stays
+/// off: fail closed).
+pub fn chain_broken_notice(code: &str, r: &Report) -> (String, String) {
+    let title = "Vault: the audit log doesn't verify, so .env.k2 references weren't carried over".to_string();
+    let mut b = format!(
+        "K2 0.46.4 asks for a grant before a service reads a secret through a k2v:// line in .env.k2. On update K2 would \
+         grant references that services were really using, but it decides that from the vault's audit log, and that log \
+         doesn't verify ({code}). So K2 made no upgrade grants. Services using k2v://server/… (or fetch-only workspace) \
+         references will start without them.\n\nCheck the vault: k2 vault doctor\n"
+    );
+    if r.refused.is_empty() {
+        b.push_str("\nK2 found no such references in your services' .env.k2 files.\n");
+    } else {
+        b.push_str("\nTo let a service keep one, grant it (names and service ids only):\n");
+        for l in &r.refused {
+            b.push_str(&format!(
+                "- service {} (\"{}\", workspace {}): {} = {} ({} secret): k2 vault grant {} {} --to service:{} --as env --env-name {}\n",
+                l.service_id, l.service, l.workspace, l.key, l.secret, l.scope, l.secret, scope_flag(l), l.service_id, l.key
+            ));
+        }
+    }
+    if !r.unreadable.is_empty() {
+        b.push_str("\nK2 couldn't read these, so they may hold more references:\n");
+        for u in &r.unreadable {
+            b.push_str(&format!("- {}\n", safe_text(u)));
+        }
+    }
+    (title, b)
+}
+
+/// File one owner notice (tests record it instead).
+fn file_notice(title: &str, body: &str) {
+    #[cfg(not(test))]
+    if let Err(e) = crate::feedback_routes::file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "k2-vault", title, body) {
+        k2_core::log_debug!("WARN [vault] R8 upgrade notice: {e}");
+    }
+    #[cfg(test)]
+    {
+        NOTICES.with(|n| n.set(n.get() + 1));
+        LAST_NOTICE.with(|l| *l.borrow_mut() = format!("{title}\n{body}"));
+    }
+}
+
 fn notify_owner(r: &Report) {
     let n = r.granted.len() + r.refused.len() + r.launch_refused.len();
     let title = format!("Vault: {n} secret reference{} now need a grant", if n == 1 { "" } else { "s" });
@@ -778,21 +880,15 @@ fn notify_owner(r: &Report) {
         &format!("granted {} refused {} launch {} unreadable {}", r.granted.len(), r.refused.len(), r.launch_refused.len(), r.unreadable.len()),
         "-",
     );
-    #[cfg(not(test))]
-    if let Err(e) = crate::feedback_routes::file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "k2-vault", &title, &body) {
-        k2_core::log_debug!("WARN [vault] R8 upgrade notice: {e}");
-    }
-    #[cfg(test)]
-    {
-        let _ = (title, body);
-        NOTICES.with(|n| n.set(n.get() + 1));
-    }
+    file_notice(&title, &body);
 }
 
 #[cfg(test)]
 thread_local! {
     /// Notices filed on this test's thread.
     pub static NOTICES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The last one (title, newline, body).
+    pub static LAST_NOTICE: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
 }
 
 /// One card row (the action's params).

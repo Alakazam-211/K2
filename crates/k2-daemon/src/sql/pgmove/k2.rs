@@ -235,6 +235,47 @@ impl MoveEnv for K2Env {
         let p = crate::apps::admission::pool();
         (p.source != "unknown").then(|| (p.total - p.size).max(0) as u64)
     }
+    /// PA10: every App first (a stopped App starts on the new DSN; a
+    /// running one gets a fresh instance beside it, or stop-first when it
+    /// can't run two copies), then wait for each to go live.
+    fn rehost_apps(&self, apps: &[String], epoch: &str) -> Vec<String> {
+        let mut failed = Vec::new();
+        let mut begun = Vec::new();
+        for id in apps {
+            let app = {
+                let k2db = k2_core::db::shared();
+                let conn = k2db.lock();
+                k2_core::deploy::store::get_app(&conn, id).ok().flatten()
+            };
+            let Some(app) = app else {
+                failed.push(id.clone());
+                continue;
+            };
+            let running = crate::apps::supervisor::live_instance(id).is_some();
+            let one_copy = running && crate::apps::rehost::no_overlap_shape_live(&app).is_some();
+            match crate::apps::supervisor::begin_db_switch(&app, &self.actor, epoch, one_copy) {
+                Ok(dep) => begun.push((id.clone(), dep)),
+                Err(e) => {
+                    eprintln!("[db] upgrade: re-host {id}: {}", e.message);
+                    failed.push(id.clone());
+                }
+            }
+        }
+        for (id, dep) in begun {
+            match crate::apps::supervisor::wait_done(&dep, 30 * 60) {
+                Some(d) if d.result == k2_core::deploy::store::RESULT_LIVE => {}
+                _ => failed.push(id),
+            }
+        }
+        failed
+    }
+    fn rehost_running(&self, db: &str) -> Option<String> {
+        let mut apps = self.users(db).apps;
+        apps.extend(crate::apps::pg_choice::apps_using(db).into_iter().map(|u| u.app));
+        apps.sort();
+        apps.dedup();
+        apps.into_iter().find(|a| crate::apps::supervisor::in_flight_kind(a).as_deref() == Some(k2_core::deploy::store::KIND_REHOST))
+    }
     /// The owner workspace's and every grantee workspace's running Apps (F11).
     fn users(&self, db: &str) -> Users {
         let Ok(r) = row(db) else { return Users::default() };

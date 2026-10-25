@@ -1479,6 +1479,72 @@ pub(crate) fn set_stop_first(app_id: &str) {
     with_rt(app_id, |rt| rt.stop_first = true);
 }
 
+// ── the database switch re-host (prd-app-pg-choice-dualrun-v1 PA10–PA12) ──
+
+/// The reason a database switch's re-host carries: `db-switch <move id>`.
+/// The move id is the deployment's database epoch (PA11): any later
+/// instance, a rollback by Seed included, reads the vaulted DSN of its
+/// own start, so it lands on the current major.
+pub const DB_SWITCH_REASON: &str = "db-switch";
+/// `k2 app rollback` with no `--to` right after a database switch (PA11).
+pub const DB_SWITCHED: &str = "db_switched";
+
+pub fn db_switch_reason(epoch: &str) -> String {
+    format!("{DB_SWITCH_REASON} {epoch}")
+}
+
+/// The move id when this deployment is a database switch's re-host.
+pub fn db_switch_epoch(d: &DeploymentRow) -> Option<String> {
+    if d.kind != store::KIND_REHOST {
+        return None;
+    }
+    let r = d.reason.as_deref()?;
+    let rest = r.strip_prefix(DB_SWITCH_REASON)?;
+    if rest.is_empty() {
+        return Some(String::new());
+    }
+    rest.strip_prefix(' ').map(str::to_string)
+}
+
+/// The App's live deployment is a database switch's re-host: its epoch.
+pub fn live_db_switch(app: &AppRow) -> Option<String> {
+    let dep = app.live_deployment.as_deref()?;
+    db(|c| store::get_deployment(c, dep)).ok().flatten().as_ref().and_then(db_switch_epoch)
+}
+
+/// PA10/PA11: re-host the live Seed so a fresh instance reads the new
+/// DSN at start, through the health gate, then the old one drains and
+/// stops. Nothing stays warm (the old instance holds the closed source's
+/// DSN), so it is never an auto-rollback target; an older warm instance is
+/// retired too. `stop_first`: the App can't run two copies (PA10).
+pub fn begin_db_switch(app: &AppRow, actor: &str, epoch: &str, stop_first: bool) -> Result<String, Fail> {
+    let Some(seed) = app.live_seed.clone() else {
+        return Err(fail(codes::SEED_NOT_FOUND, 409, format!("{} has no live Seed to re-host", app.app_id)));
+    };
+    with_rt(&app.app_id, |rt| {
+        rt.retire_on_live = true;
+        if stop_first {
+            rt.stop_first = true;
+        }
+    });
+    reset_backoff(&app.app_id);
+    let r = begin(app, &seed, store::KIND_REHOST, actor, Some(&db_switch_reason(epoch)));
+    if r.is_err() {
+        with_rt(&app.app_id, |rt| {
+            rt.retire_on_live = false;
+            rt.stop_first = false;
+        });
+    }
+    r
+}
+
+/// PA12: the kind of the deployment whose pipeline is running for this
+/// App right now (`rehost`, `deploy`, …).
+pub fn in_flight_kind(app_id: &str) -> Option<String> {
+    let dep = with_rt(app_id, |rt| if rt.busy { rt.in_flight.clone() } else { None })?;
+    db(|c| store::get_deployment(c, &dep)).ok().flatten().map(|d| d.kind)
+}
+
 /// R12: the live instance's measured memory (engine `stats`).
 pub(crate) fn live_mem_current(app_id: &str) -> Option<u64> {
     let live = live_instance(app_id)?;

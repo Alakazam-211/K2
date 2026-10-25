@@ -278,6 +278,10 @@ struct EnvState {
     ranges: Vec<(String, Option<String>)>,
     /// RAM outside the Apps' pool (PA16).
     spare_ram: Option<u64>,
+    /// PA10: (Apps, epoch) of every database-switch re-host.
+    rehosted: Vec<(Vec<String>, String)>,
+    /// PA12: an App on the database mid re-host.
+    rehost_running: Option<String>,
 }
 
 struct FakeEnv(RefCell<EnvState>);
@@ -426,6 +430,15 @@ impl MoveEnv for FakeEnv {
     fn spare_ram_bytes(&self) -> Option<u64> {
         self.0.borrow().spare_ram
     }
+    fn rehost_apps(&self, apps: &[String], epoch: &str) -> Vec<String> {
+        let mut s = self.0.borrow_mut();
+        s.rehosted.push((apps.to_vec(), epoch.to_string()));
+        s.running_apps.extend(apps.iter().cloned());
+        vec![]
+    }
+    fn rehost_running(&self, _db: &str) -> Option<String> {
+        self.0.borrow().rehost_running.clone()
+    }
     fn audit(&self, act: &str, line: Value) {
         self.0.borrow_mut().audits.push((act.into(), line));
     }
@@ -508,7 +521,10 @@ fn a_move_runs_every_step_in_order() {
     assert_eq!(e.doors, vec![true, false]);
     assert_eq!(e.majors, vec![17]);
     assert_eq!(e.repoints, vec![(5432, 5433)]);
-    assert_eq!(e.started, vec!["jobs".to_string()]);
+    // PA10: back on the new DSN through a re-host tagged with the move id,
+    // never a plain start.
+    assert!(e.started.is_empty(), "{:?}", e.started);
+    assert_eq!(e.rehosted, vec![(vec!["jobs".to_string()], p.id.clone())]);
     assert_eq!(e.clusters_recorded, vec![(17, 5433)]);
     let moved = e.moved.last().unwrap().clone().unwrap();
     assert_eq!(moved, MovedInfo { from: 16, at: NOW, until: NOW + 14 * 86_400, tag: "20261020T101500Z".into(), source_state: SourceState::Kept });
@@ -811,7 +827,8 @@ fn recovery_undoes_before_the_switch_and_finishes_after_it() {
     let e = env.0.borrow();
     assert_eq!(e.rec.as_ref().unwrap().major, 17);
     assert_eq!(e.repoints, vec![(5432, 5433)]);
-    assert_eq!(e.started, vec!["jobs".to_string()]);
+    assert!(e.started.is_empty());
+    assert_eq!(e.rehosted.len(), 1, "finished forward through a re-host");
     assert_eq!(e.moved.last().unwrap().as_ref().unwrap().source_state, SourceState::Kept);
     assert!(ops.did("allow_conn 16 ws_jobs off"));
     drop(e);
@@ -847,7 +864,8 @@ fn a_failure_after_the_switch_never_undoes() {
     assert_eq!(e.rec.as_ref().unwrap().major, 17, "the record stays on the target");
     assert_eq!(e.majors, vec![17]);
     assert!(e.unpoints.is_empty());
-    assert_eq!(e.started, vec!["jobs".to_string()], "Apps back on the target");
+    assert!(e.started.is_empty());
+    assert_eq!(e.rehosted.len(), 1, "Apps back on the target through a re-host");
     assert_eq!(e.doors.last(), Some(&false));
     assert!(e.inbox.iter().any(|(t, b)| t.contains("failed") && b.contains("--acknowledge-failed")));
 }
@@ -935,6 +953,8 @@ fn rollback_goes_back_to_the_kept_source() {
     assert_eq!(e.majors, vec![16]);
     assert_eq!(e.repoints, vec![(5433, 5432)]);
     assert_eq!(e.moved.last(), Some(&None));
+    assert_eq!(e.rehosted, vec![(vec!["jobs".to_string()], v.id.clone())], "PA10: a rollback switches the database too");
+    assert!(e.started.is_empty());
     assert_eq!(e.sleeps, vec![60]);
     assert!(e.inbox.iter().any(|(t, b)| t.contains("rolled back 17 → 16") && b.contains("not carried back")));
     assert!(!ops.did("drop_db"), "a rollback never drops");
@@ -1167,4 +1187,34 @@ fn a_second_cluster_on_a_small_box_warns() {
     ops.0.borrow_mut().clusters.push(row(17, 5433, true));
     ops.0.borrow_mut().installed.push(17);
     assert!(!check_only(&ops, &env, "ws_jobs", &opts()).unwrap().lines.iter().any(|l| l.id == "memory"), "17 already runs");
+}
+
+// ── the database switch re-host (PA10–PA12) ───────────────────────────
+
+/// PA12: a move never starts beside an App's re-host; nothing changes.
+#[test]
+fn a_rehost_in_flight_refuses_the_move() {
+    let (ops, env) = (FakeOps::new(), FakeEnv::new());
+    env.0.borrow_mut().rehost_running = Some("jobs".into());
+    let r = check_only(&ops, &env, "ws_jobs", &opts()).unwrap();
+    let l = r.lines.iter().find(|l| l.id == check::REHOST_RUNNING).expect("refused");
+    assert_eq!(l.level, Level::Refuse);
+    assert!(l.text.contains("jobs"), "{l:?}");
+    let p = run_move(&ops, &env, "ws_jobs", &opts()).unwrap();
+    assert_eq!(p.state, MoveState::Aborted);
+    assert!(mutated(&ops).is_empty(), "{:?}", mutated(&ops));
+    assert!(env.0.borrow().rehosted.is_empty());
+}
+
+/// PA10: an undo before the switch starts the Apps on the old DSN (a
+/// plain start), never a database-switch re-host.
+#[test]
+fn an_undo_before_the_switch_is_a_plain_start() {
+    let (ops, env) = (FakeOps::new(), FakeEnv::new());
+    ops.0.borrow_mut().fail.insert("restore");
+    let p = run_move(&ops, &env, "ws_jobs", &opts()).unwrap();
+    assert_eq!(p.state, MoveState::Aborted);
+    let e = env.0.borrow();
+    assert_eq!(e.started, vec!["jobs".to_string()]);
+    assert!(e.rehosted.is_empty(), "{:?}", e.rehosted);
 }

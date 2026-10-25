@@ -191,6 +191,18 @@ pub trait MoveEnv {
     fn spare_ram_bytes(&self) -> Option<u64> {
         None
     }
+    /// PA10: once the record points at the new major, each App comes back
+    /// through a re-host (a fresh instance reads the new DSN, the health
+    /// gate, no warm instance kept: PA11), tagged with `epoch` (the move
+    /// id). Answers the Apps that didn't go live.
+    fn rehost_apps(&self, apps: &[String], _epoch: &str) -> Vec<String> {
+        self.start_apps(apps)
+    }
+    /// PA12: an App on this database being re-hosted right now (a move or
+    /// cut-over waits for it).
+    fn rehost_running(&self, _db: &str) -> Option<String> {
+        None
+    }
     fn audit(&self, act: &str, line: Value);
     fn inbox(&self, title: &str, body: &str);
 }
@@ -482,7 +494,8 @@ impl Run<'_> {
     fn fail_after_switch(&mut self, why: String) -> MoveProgress {
         let db = self.p.db.clone();
         if !self.p.stopped_apps.is_empty() {
-            let failed = self.env.start_apps(&self.p.stopped_apps);
+            let id = self.p.id.clone();
+            let failed = self.env.rehost_apps(&self.p.stopped_apps, &id);
             if !failed.is_empty() {
                 self.p.warnings.push(format!("Apps that didn't start: {}", failed.join(", ")));
             }
@@ -755,7 +768,8 @@ fn finish_forward(run: &mut Run, from: Major, to: Major, to_port: u16) -> Result
     let db = run.p.db.clone();
     // 9. resume
     run.at(Step::Resume, MoveState::Switching)?;
-    let failed = run.env.start_apps(&run.p.stopped_apps);
+    // PA10: back through a re-host on the new DSN (no warm instance, PA11).
+    let failed = run.env.rehost_apps(&run.p.stopped_apps, &run.p.id);
     if !failed.is_empty() {
         run.p.warnings.push(format!("Apps that didn't start: {}", failed.join(", ")));
     }
@@ -967,7 +981,7 @@ fn rollback_forward(run: &mut Run) -> Result<(), StepFail> {
     run.at(Step::Resume, MoveState::Switching)?;
     run.ops.allow_conn(back_to, &db, ConnMode::On).map_err(|e| format!("re-open the old copy: {e}"))?;
     run.env.set_moved(&db, None).map_err(|e| format!("clear the move: {e}"))?;
-    let failed = run.env.start_apps(&run.p.stopped_apps);
+    let failed = run.env.rehost_apps(&run.p.stopped_apps, &run.p.id);
     if !failed.is_empty() {
         run.p.warnings.push(format!("Apps that didn't start: {}", failed.join(", ")));
     }

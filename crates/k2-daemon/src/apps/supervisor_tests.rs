@@ -628,6 +628,77 @@ fn a_rehost_is_a_fresh_instance_with_a_fingerprint_and_rolls_back_to_warm() {
     assert_eq!(app_row(id).live_deployment.as_deref(), Some(dep2.as_str()), "nothing moved");
 }
 
+/// prd-app-pg-choice-dualrun-v1 PA10–PA11: a database switch's re-host is
+/// a fresh instance through the gate with NOTHING warm (the old instance
+/// held the closed source's DSN), records its epoch, is never an
+/// auto-rollback target, and `k2 app rollback` with no `--to` answers
+/// `db_switched` pointing at the database's own rollback.
+#[test]
+fn a_db_switch_rehost_keeps_nothing_warm_and_rollback_says_db_switched() {
+    let f = fx();
+    let eng = TestEngine::leak(OK);
+    let id = "s2t-dbswitch";
+    app(id, &f.seed, store::STATE_INSTALLING, eng);
+    let first = go_live_first(id, &f.seed);
+    // A deploy just before the move leaves a warm instance: retired too.
+    let second = begin(&app_row(id), &f.seed, store::KIND_DEPLOY, "owner", None).unwrap();
+    assert_eq!(wait_done(&second, 30).unwrap().result, store::RESULT_LIVE);
+    assert_eq!(with_rt(id, |rt| rt.warm.as_ref().map(|w| w.handle.deployment_id.clone())), Some(first.clone()));
+    let dep = begin_db_switch(&app_row(id), "owner", "mv_ws_jobs_20261024t100000z", false).unwrap();
+    let row = wait_done(&dep, 30).unwrap();
+    assert_eq!((row.result.as_str(), row.kind.as_str()), (store::RESULT_LIVE, store::KIND_REHOST));
+    assert_eq!(row.reason.as_deref(), Some("db-switch mv_ws_jobs_20261024t100000z"));
+    assert_eq!(db_switch_epoch(&row).as_deref(), Some("mv_ws_jobs_20261024t100000z"));
+    assert!(with_rt(id, |rt| rt.warm.is_none()), "nothing warm after a database switch");
+    assert!(!with_rt(id, |rt| rt.retire_on_live), "the flag is spent");
+    settle(id);
+    // Both stops run on background threads (retire; drain then stop).
+    let end = Instant::now() + Duration::from_secs(15);
+    while !(eng.stopped.lock().unwrap().contains(&first) && eng.stopped.lock().unwrap().contains(&second)) {
+        assert!(Instant::now() < end, "the older warm instance and the replaced one must both stop: {:?}", eng.stopped.lock().unwrap());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let a = app_row(id);
+    assert_eq!(live_db_switch(&a).as_deref(), Some("mv_ws_jobs_20261024t100000z"));
+    assert_eq!(rollback_to_same_seed_warm(&a, "owner").unwrap(), None, "no warm rollback across a switch");
+    k2_core::deploy::set_enabled(true);
+    let r = super::super::routes::handle("/cli/app/rollback", super::super::routes::Who::Owner, format!(r#"{{"app":"{id}"}}"#).as_bytes(), &Default::default());
+    assert!(r.status.starts_with("409"), "{} {}", r.status, r.body);
+    assert!(r.body.contains(DB_SWITCHED) && r.body.contains("--rollback --yes"), "{}", r.body);
+    assert_eq!(app_row(id).live_deployment.as_deref(), Some(dep.as_str()), "nothing moved");
+    // An ordinary re-host is not a switch.
+    let plain = begin(&app_row(id), &f.seed, store::KIND_REHOST, "system", Some("K2 updated to 9.9.9")).unwrap();
+    let prow = wait_done(&plain, 30).unwrap();
+    assert_eq!(db_switch_epoch(&prow), None);
+    assert_eq!(live_db_switch(&app_row(id)), None);
+}
+
+/// PA12: the kind of the pipeline in flight, for the move's re-host check.
+#[test]
+fn in_flight_kind_names_a_running_rehost() {
+    let f = fx();
+    let eng = TestEngine::leak(OK);
+    let id = "s2t-inflight";
+    app(id, &f.seed, store::STATE_INSTALLING, eng);
+    go_live_first(id, &f.seed);
+    assert_eq!(in_flight_kind(id), None);
+    let dep = begin(&app_row(id), &f.seed, store::KIND_REHOST, "system", None).unwrap();
+    assert_eq!(wait_done(&dep, 30).unwrap().result, store::RESULT_LIVE);
+    settle(id);
+    assert_eq!(in_flight_kind(id), None, "done: nothing in flight");
+    // The pipeline's own state while that re-host runs (busy + in flight).
+    with_rt(id, |rt| {
+        rt.busy = true;
+        rt.in_flight = Some(dep.clone());
+    });
+    assert_eq!(in_flight_kind(id).as_deref(), Some(store::KIND_REHOST));
+    with_rt(id, |rt| {
+        rt.busy = false;
+        rt.in_flight = None;
+    });
+    assert_eq!(in_flight_kind(id), None);
+}
+
 /// A13: a failed re-host wakes nobody (no deploy_failed wake), writes its
 /// R44 line, and the old instance keeps serving.
 #[test]

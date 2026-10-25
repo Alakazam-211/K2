@@ -13,6 +13,8 @@ use super::{free_band_port, port_of, roles_to_copy, ClusterOps, ClusterRole, DbR
 /// The refusal line's id when an App on the database excludes the target
 /// major (PA6).
 pub const APP_REQUIRES_MAJOR: &str = "app_requires_major";
+/// The refusal line's id while an App on the database is mid re-host (PA12).
+pub const REHOST_RUNNING: &str = "rehost_running";
 /// PA16: under this much RAM outside the Apps' pool, starting a second
 /// cluster is a warning.
 pub const MIN_SPARE_RAM: u64 = 2 << 30;
@@ -179,6 +181,16 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
                 );
             }
         }
+    }
+
+    // PA12: never beside an App's re-host (the wave waits for a busy move
+    // the other way round).
+    if let Some(app) = env.rehost_running(db) {
+        l.refuse(
+            REHOST_RUNNING,
+            format!("{app} (on this database) is being re-hosted right now"),
+            "wait for it to finish (k2 app rehost status), then run this again",
+        );
     }
 
     // PA3/PA6: every App on this database must accept the target major.

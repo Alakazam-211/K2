@@ -1556,6 +1556,20 @@ mod tests {
         assert_eq!(box_env_name("sew-signal"), "K2_BOX_SEW_SIGNAL");
     }
 
+    /// prd-app-pg-choice-dualrun-v1 PA14: an App whose database moved to a
+    /// second cluster (5433) still reaches it on loopback, and no box
+    /// service, even from a doctored state file, forwards into it.
+    #[test]
+    fn a_second_cluster_is_reachable_by_apps_and_never_a_box_service() {
+        let r = nft_ruleset(997, None, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
+        assert!(r.contains("oifname \"lo\" tcp dport 5432-5449 accept"), "{r}");
+        assert!((DB_PORTS.lo..=DB_PORTS.hi).contains(&5433));
+        assert!(box_port_refusal(5433).is_some_and(|w| w.contains("Postgres")));
+        let doctored = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_601, box_ports: vec![5433, 5449, 5432] };
+        let sc = nft_apps_script(&[doctored]);
+        assert!(!sc.contains("5433") && !sc.contains("5449") && !sc.contains("5432"), "{sc}");
+    }
+
     #[test]
     fn box_ports_join_the_apps_own_rule() {
         let rule = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_601, box_ports: vec![8470, 7880, 22, 8470, 38_650] };

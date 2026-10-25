@@ -1140,6 +1140,27 @@ fn rollback(who: &Who, body: &[u8]) -> R<J> {
     // id, and a re-host with no warm instance left refuses instead of
     // falling through to an older Seed (for Hearth: a pre-TPL1 one).
     if s(&v, "to").is_none() {
+        // 0.46.4 (prd-app-pg-choice-dualrun-v1 PA11): the live instance is a
+        // database switch's re-host. Its predecessor held the old major's
+        // DSN, which is closed: the way back is the database's own rollback.
+        if let Some(epoch) = super::supervisor::live_db_switch(&app) {
+            let db = match super::pg_choice::db_of(&app) {
+                super::pg_choice::DbOf::Known(r) => r.name,
+                _ => "<db>".into(),
+            };
+            let mut r = no(
+                super::supervisor::DB_SWITCHED,
+                409,
+                format!(
+                    "db_switched: {} was re-hosted onto its database's new Postgres major (move {epoch}); the previous instance \
+                     used the old copy, which is closed. Roll the database back instead: k2 db upgrade {db} --rollback --yes \
+                     (it re-hosts the App again). To run an older Seed on the current database: k2 app rollback {} --to <seed>",
+                    app.app_id, app.app_id
+                ),
+            );
+            r.extra = Some(json!({ "move": epoch, "db": db }));
+            return Err(r);
+        }
         if let Some(id) = super::supervisor::rollback_to_same_seed_warm(&app, &actor(who))? {
             let mut out = deployment_answer(&id, 0)?;
             out["instant"] = json!(true);

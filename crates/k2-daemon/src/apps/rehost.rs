@@ -623,6 +623,12 @@ impl WaveOps for LiveOps {
     }
 }
 
+/// [`no_overlap_shape`] with the live Seed's manifest (a database switch's
+/// re-host, prd-app-pg-choice-dualrun-v1 PA10).
+pub fn no_overlap_shape_live(app: &AppRow) -> Option<String> {
+    no_overlap_shape(app, live_manifest(app).and_then(|(m, _)| m.host.overlap))
+}
+
 /// Why an App can't run two copies by its shape (A12 + Rosson Q16): extra
 /// ports, the process exception, a `handover` policy or manifest hint.
 pub fn no_overlap_shape(app: &AppRow, manifest_overlap: Option<k2_core::deploy::manifest::Overlap>) -> Option<String> {

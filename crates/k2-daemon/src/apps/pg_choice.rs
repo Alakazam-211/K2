@@ -411,6 +411,29 @@ pub fn install_plan_live(app: &str, workspace: &str, range: Option<&str>, pick: 
     install_plan(app, range, pick, existing.as_ref().map(|(n, m)| (n.as_str(), *m)))
 }
 
+// ── walled Apps (PA15) ────────────────────────────────────────────────
+
+/// PA15, the contract for when the walled App's database door lands (S21;
+/// `db_port` is `None` until then, `guarded.rs`): a walled App always dials
+/// `127.0.0.1:5432` inside its wall, and the door's host port is its
+/// database's cluster port (`cluster::for_db`). A database switch changes
+/// the door (the App is re-hosted with the new `db_port`), never the
+/// App's DSN. Answers `(in-wall DSN, door host port)`; `None` for a URL
+/// that isn't Postgres or a port outside K2's band.
+pub fn walled_door(dsn: &str, cluster_port: u16) -> Option<(String, u16)> {
+    if !k2_root_proto::engine::db_port_ok(cluster_port) {
+        return None;
+    }
+    let (scheme, rest) = dsn.split_once("://").filter(|(s, _)| *s == "postgres" || *s == "postgresql")?;
+    let (authority, tail) = rest.split_once('/')?;
+    let (userinfo, _hostport) = match authority.rsplit_once('@') {
+        Some((u, h)) => (Some(u), h),
+        None => (None, authority),
+    };
+    let at = userinfo.map(|u| format!("{u}@")).unwrap_or_default();
+    Some((format!("{scheme}://{at}127.0.0.1:{}/{tail}", k2_root_proto::engine::IN_WALL_DB_PORT), cluster_port))
+}
+
 // ── status (PA17) ─────────────────────────────────────────────────────
 
 /// `database: {name, major, source, sharedWith[], requires, available[]}`
@@ -512,6 +535,23 @@ mod tests {
         assert!(u.hint.contains("k2 db create --major 17"), "{}", u.hint);
         assert_eq!(check("jobs", ">=17", &DbOf::Unknown("external".into())), Ok(()));
         assert_eq!(check("jobs", "x", &known_db(16)).unwrap_err().code, "requires_unmet");
+    }
+
+    /// PA15: a walled App keeps dialling 127.0.0.1:5432 in its wall across
+    /// a database switch (16 on 5432 → 17 on 5433); only the door's host
+    /// port follows the cluster. Pinned now, with `db_port` still stubbed.
+    #[test]
+    fn a_walled_app_keeps_the_in_wall_address_across_a_switch() {
+        let on16 = "postgres://ws_jobs_agent:pw@127.0.0.1:5432/ws_jobs?sslmode=disable";
+        let on17 = "postgres://ws_jobs_agent:pw@127.0.0.1:5433/ws_jobs?sslmode=disable";
+        let (a, door_a) = walled_door(on16, 5432).unwrap();
+        let (b, door_b) = walled_door(on17, 5433).unwrap();
+        assert_eq!(a, "postgres://ws_jobs_agent:pw@127.0.0.1:5432/ws_jobs?sslmode=disable");
+        assert_eq!(a, b, "the App's DSN never changes on a switch");
+        assert_eq!((door_a, door_b), (5432, 5433), "the door follows the cluster");
+        assert_eq!(walled_door("postgres://u:p@db.example.com:6543/x", 5433).unwrap().0, "postgres://u:p@127.0.0.1:5432/x");
+        assert!(walled_door(on17, 6000).is_none(), "outside the band");
+        assert!(walled_door("mysql://u@h/x", 5433).is_none());
     }
 
     /// PA7: the install table.

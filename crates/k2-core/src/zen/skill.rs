@@ -543,9 +543,10 @@ change, `k2 zen validate --widget <w> --sign`.**\n\n\
         "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\nchecked call (a folder with errors writes nothing) and signs it as you. It needs you\non the list of every Garden that places the widget (a draft placed nowhere is open);\notherwise it answers `garden_access_needed` (exit 3) and K2 asks the person.\n",
     ),
     (
-        // 0.46.4: `retired` (k2.sources.ask until 0.47.0) is the last code.
-        "`duplicate_label`, `retired`).\n\n### Rules\n\n",
-        "`duplicate_label`, `needs_editor`, `retired`).\n\n### Rules\n\n",
+        // 0.46.4: `retired` (k2.sources.ask until 0.47.0), then catalog v22's
+        // `card_person_only` (only a person answers a card) close the list.
+        "`duplicate_label`, `retired`, `card_person_only`).\n\n### Rules\n\n",
+        "`duplicate_label`, `needs_editor`, `retired`, `card_person_only`).\n\n### Rules\n\n",
     ),
 ];
 

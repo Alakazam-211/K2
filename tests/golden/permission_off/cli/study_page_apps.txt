@@ -124,6 +124,10 @@ GUESTS' ROOMS FROM THE APP (RS-A15, 0.46.1; no owner token)
   Gardens: k2.guests.rooms / k2.guests.setRooms({app, username, rooms}) for
   any local App (cap guests:rooms); every write asks you on K2's own sheet.
   This replaces POST /cli/skin/users/rooms with the owner token.
+  0.46.4: GET /cli/skin/app-rooms (app.rooms: own room, granted, ceiling;
+  no grant needed) and GET /cli/skin/guests/list?cursor=&limit= (guests.list:
+  its own guests with rooms, role, agent mark; needs the grant; 60/min).
+  Agents: k2 app guest ceiling|list <app>.
 
 BYO BFF (not --skin)
   Same permission system as official --skin. Same Apps roster,
@@ -197,6 +201,16 @@ FOLDERS PER ROOM LINE (path scope, 0.46.1)
     (no "does it exist" answer). Listing a parent shows only the way in.
   - --write folders are readable; caps still decide (files:write to write).
   - Uploads with no dir land in --upload-dir. fs/events carries only your folders.
+  - Drop folders (0.46.4): --upload Inbox/ + files:upload (no files:read or
+    files:write) = upload only. Each file lands in Inbox/<username>/; the
+    guest can't list, read, move or overwrite anything there, its own
+    uploads included (the upload answer is the receipt). An agent with
+    "manage Apps" may set drop folders. Role template: dropbox.
+  - Download entries (0.46.4): --download reports/,price-list.pdf + files:download
+    = the guest may save those (files.downloads lists, files.download saves)
+    and nothing else; no entries = nothing new. A person adds entries; an
+    agent may only remove them. files:read = can see the bytes;
+    files:download = can save them, or get exposed files without files:read.
   - GET /cli/fs/stat?workspace=<room>&path=… (files.stat): kind, size,
     modifiedAt, ext, mime under the same rules.
   - Native agents reading another room by disk path are NOT walled (RS-A4);
@@ -367,6 +381,11 @@ THREAD EAR (thread:read + activity:read; K2 <K2_CLI_VERSION>+, thread-activity-e
   gets exactly the frames it got before <K2_CLI_VERSION>. The GET needs no opt-in.
   Catch-up: {"ok":true,"addr":"<handle>","conversation_id":"<id>",
              "turn":{…}|null}
+  Live state comes from the socket (thread.stream, ?ear=1); call the GET
+  only to catch up after a (re)connect. 0.46.4: 2 calls a second per
+  person or pass (bursts of 10; the owner is exempt), else 429
+  {"error":"rate_limited","retryAfterMs":N,"retryAfterSecs":S}. Back off;
+  the SDK doesn't retry on its own.
   turn / activity (exactly these keys):
     {"turnId":"<thread message id>","rev":3,"state":"working",
      "phase":"tool","phaseSince":1781812201000,"startedAt":1781812199000,

@@ -38,6 +38,13 @@ AN APP'S OWN SELF AND USAGE (app.self, app.usage; no cap, own App only)
   Agents  k2 app self <app>, k2 app usage <app> [--hours N] (an agent: its
           own workspace's Apps).
 
+AN APP'S ROOMS AND GUESTS (0.46.4; the App's own pass, never a guest's)
+  App     GET /cli/skin/app-rooms   app.rooms: own room, granted, ceiling (no grant needed)
+          GET /cli/skin/guests/list?cursor=&limit=   guests.list (needs guests-rooms)
+  Garden  k2.app.rooms({app}), k2.guests.list({app}) (cap guests:rooms)
+  Login without the owner token: grant once, app.rooms + guests.list at
+  boot, guests.login, guests.setRooms (k2 study app-move).
+
 PROJECT CHAT (<K2_CLI_VERSION>, App only; never on the Garden bridge)
   A pass sees a project only when EVERY member agent is a room it holds
   with thread:read; one it can't reach and the project is skin_room, the
@@ -49,6 +56,12 @@ PROJECT CHAT (<K2_CLI_VERSION>, App only; never on the Garden bridge)
           POST /cli/skin/projects/read {group, seq?}   a guest only
           WS   /cli/skin/projects/events?group=   {collection:"project"|"read",...}
   Read state is the guest's own person key (guest:<principalId>).
+
+FILES (0.46.4, App only; k2 app role paths, k2 study apps)
+  files:upload  upload doors drop into the line's --upload folders, in
+                <folder>/<username>/; no list, read or overwrite, own files included.
+  files:download + the line's --download entries: GET /cli/fs/downloads lists,
+                GET /cli/fs/download?path= saves (chunks; App only, no Garden door).
 
 EVENTS (WS /cli/activity/events?workspace=<handle>; room:members opens it)
   {"kind":"room_members_changed","workspace":"<handle>"}  refetch members

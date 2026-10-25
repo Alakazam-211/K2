@@ -2431,7 +2431,7 @@ exit: 0
     },
     {
       "name": "app role paths",
-      "usage": "k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload-dir c/in] | --clear",
+      "usage": "k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] | --clear",
       "description": "Folder path scope on one room line of a role (room-scope R3). Replaces the line's folders; unlisted folders are refused with the missing-cap 403. Works on any room the role holds and for agent logins alike.",
       "args": [
         {"name": "role", "required": true},
@@ -2440,7 +2440,10 @@ exit: 0
       "flags": [
         {"name": "--read", "arg": "list", "description": "Comma-separated room-relative folders to list and read."},
         {"name": "--write", "arg": "list", "description": "Comma-separated folders to write (and read)."},
-        {"name": "--upload-dir", "arg": "folder", "description": "Default upload folder (inside a --write folder when folders are listed)."},
+        {"name": "--upload", "arg": "list", "description": "Comma-separated drop folders: files:upload adds files there (each person in their own subfolder), never lists or reads them."},
+        {"name": "--upload-dir", "arg": "folder", "description": "Default upload folder (inside a --write or --upload folder when folders are listed)."},
+        {"name": "--download", "arg": "list", "description": "Comma-separated folders or single files files:download may save without files:read. Adding entries is person-only; omitted = the stored entries stay; alone it changes only the entries."},
+        {"name": "--no-download", "arg": null, "description": "Clear the line's download entries."},
         {"name": "--clear", "arg": null, "description": "Back to the whole room."}
       ]
     },
@@ -2554,6 +2557,26 @@ exit: 0
       "flags": [
         {"name": "set", "arg": "rooms", "description": "Comma-separated handles or ids; - for no rooms."},
         {"name": "--json", "arg": null, "description": "Print AppGuestRooms {ok,app,username,rooms,roomHandles,role,enabled,changed}."}
+      ]
+    },
+    {
+      "name": "app guest ceiling",
+      "usage": "k2 app guest ceiling <app> [--json]",
+      "description": "What <app> may hand its guests (app.rooms, 0.46.4): its own room, whether the owner granted guests-rooms, the grant's rooms and the ceiling guests.setRooms enforces (empty without the grant). The owner: any App; an agent: its own workspace's App. Reads only.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print AppRooms {ok,app,ownRoom,granted,grantedAt,grantRooms,ceiling} plus appInfo."}
+      ]
+    },
+    {
+      "name": "app guest list",
+      "usage": "k2 app guest list <app> [--limit N] [--cursor <user>] [--json]",
+      "description": "<app>'s own guests by username with their rooms on it, role, on/off and agent mark (guests.list, 0.46.4). Never the owner, a Connect login or another App's guest. The owner: any App; an agent: its own workspace's App while the owner's guests-rooms grant stands. One page counts against the App's 60 calls a minute.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--limit", "arg": "N", "description": "Guests per page (default 100, at most 500)."},
+        {"name": "--cursor", "arg": "user", "description": "The previous page's nextCursor."},
+        {"name": "--json", "arg": null, "description": "Print AppGuestList {ok,app,guests,nextCursor}."}
       ]
     },
     {

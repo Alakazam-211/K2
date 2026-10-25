@@ -94,6 +94,13 @@ guest: ask them for a test guest (k2 app user add <app-id> <name> --test,
 from a terminal outside K2). It signs in only through the App's link and
 ends on its own; k2 app test-guests <app-id> lists them.
 
+GUESTS WITHOUT THE OWNER TOKEN (0.46.4). Your App calls with its own pass:
+  1. Your owner, once: k2 app grant <app> --kind guests-rooms [--room …]
+  2. At boot: k2.asApp().app.rooms() (GET /cli/skin/app-rooms: its own room,
+     granted, the ceiling), then k2.asApp().guests.list() to reconcile.
+  3. At login: guests.login, then guests.setRooms if their rooms change.
+  4. The guest's own pass reads me.get. Check: k2 app guest ceiling|list <app>.
+
 Exit codes: 0 done, 2 held for your owner, 3 refused (JSON on stderr: the
 hint says why, e.g. app_not_healthy, label_owned_by_other_workspace).
 --- stderr

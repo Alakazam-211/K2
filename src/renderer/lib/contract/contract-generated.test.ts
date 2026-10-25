@@ -220,6 +220,9 @@ describe('TUWA5: the generated tables', () => {
       // RS-A15: one row on both the App route and the Garden door.
       'guests.rooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
       'guests.setRooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
+      // Catalog v22 (0.46.4): the App's own ceiling and guest list, both doors.
+      'app.rooms': { cap: null, reach: 'portable', kind: 'call' },
+      'guests.list': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
       // garden-person-rows-v1 (catalog v17, 0.46.3): App rows the Garden
       // shares, as the person on this computer (no project chat).
       'thread.catchup': { cap: 'thread:read', reach: 'portable', kind: 'call' },

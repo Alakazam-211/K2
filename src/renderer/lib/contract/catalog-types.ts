@@ -149,6 +149,8 @@ export const CATALOG_ERROR_CODES = [
   'needs_editor',
   // 0.46.4: a retired verb (k2.sources.ask until 0.47.0).
   'retired',
+  // 0.46.4 (catalog v22): only a person answers a card.
+  'card_person_only',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

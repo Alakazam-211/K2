@@ -189,3 +189,26 @@ no timestamps or absolute paths in the binary (plan-ci-release-on-k2-compute
 G12; the shadow report already compares the two). Owner: K2 (this
 workspace), for 0.46.5. Until then the residual risk is written down in the
 SS1 threat notes.
+
+## Threat notes (what 0.46.4 does and doesn't stop)
+
+- **Key theft from GitHub (SS1):** stopped. No signing key on GitHub; the
+  runner builds unsigned and z3mbpZ signs.
+- **A swapped Linux release asset:** stopped. z3mbpZ signs only an attested
+  build from `daemon-binaries.yml` at the tag's commit, uploaded once by
+  `github-actions[bot]`, and re-checks the published bytes after signing.
+- **A poisoned build on the self-hosted runner:** NOT stopped. Next step:
+  two independent builds (above), 0.46.5.
+- **Same-user read on z3mbpZ:** NOT stopped, accepted for 0.46.4 pending
+  Rosson's OK. Any process running as Rosson's macOS user (a build script, a
+  package, an agent) can read `~/.k2-updater/*.key` and ask the unlocked
+  login keychain for the passwords, exactly like the root-helper key today.
+  The release run itself never puts the keys in an environment or on argv.
+  Real fix: SS2b, a separate `k2sign` macOS user that holds the keys and
+  only signs (0.46.5).
+- **A stolen U1:** can't make 0.46.4+ installs accept anything (they trust
+  only U2/U3). It still works on installs that never updated past 0.46.3,
+  until the bridge ends (SS6).
+- **Rollback:** a 0.46.4+ daemon refuses an older or the same version unless
+  the owner asks for it (`allowDowngrade` / `reinstall`).
+- **Linux packages (deb/rpm/AppImage):** still HTTPS + sha256 only, until SS7.

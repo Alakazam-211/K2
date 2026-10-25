@@ -1253,8 +1253,12 @@ async fn copy_host_leaves_out_box_guests_another_workspaces_agent_added() {
     let svc_a = app_row(&a, "cpappa");
     let svc_b = app_row(&b, "cpappb");
     allow_manage(&a, true);
+    // Since agent-app-users S2 an agent adds App users only; a box guest an
+    // agent added before that is legacy data: stamped, with the box login.
     let r = post(d.port, "/cli/skin/users", &passport(&a), json!({"username": "cp-agentguest"})).await;
-    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    let legacy = k2_core::skin::add_principal("cp-agentguest").expect("legacy box guest");
+    k2_core::skin::creators::stamp(&legacy.id, &a.id).expect("stamped as a's");
     k2_core::skin::set_host_login("cp-agentguest", true).expect("host login");
     box_login_user("cp-ownerguest");
     let names = |v: &Value, key: &str| -> Vec<String> {

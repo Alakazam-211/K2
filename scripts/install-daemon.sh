@@ -58,7 +58,11 @@ GitHub release, minisign-verified with the embedded K2 update keys
 Flags (or matching env vars K2_VERSION / K2_BIN_DIR /
 K2_MANIFEST_URL / K2_NO_SERVICE=1 / K2_DRY_RUN=1; legacy K2SO_*
 twins still honored):
-  --version       install a specific release tag (default: latest)
+  --version       install a specific release tag (default: latest);
+                  0.46.4 or newer. An OLDER release than the one installed
+                  is allowed here on purpose (a local, explicit action); the
+                  daemon's own self-update refuses a downgrade unless the
+                  owner asks for it.
   --bin-dir       install dir (default: ~/.local/bin)
   --manifest-url  override daemon-latest.json URL (supports file://)
   --no-service    skip the systemd/launchd supervisor unit

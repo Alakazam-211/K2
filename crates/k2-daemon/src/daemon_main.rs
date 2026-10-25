@@ -529,6 +529,9 @@ async fn async_main() {
         log_debug!("[daemon] FATAL: db::init_database: {e}");
         std::process::exit(2);
     }
+    // Folder trust (prd-security-sweep-0464-v1 SS10): the card presenter,
+    // before anything can spawn a harness.
+    crate::folder_trust::install();
     // 0.46.3 box usage (prd-app-resources-disk-guard-v1 A1/A4/A5): the
     // scanner, the 60 s disk watch with its notices, and the daily Seed
     // sweep. Own threads (never the ticker), headless, every platform;
@@ -1476,11 +1479,16 @@ async fn async_main() {
     // attach/refresh wake it. Skips under air-gap / unpaired.
     domains::pending_watch::spawn();
 
-    // P19: re-assert CLI folder trust after ready (never blocks the gate;
-    // worktree cwds not in projects.path are covered by spawn P16).
+    // P19 + SS9: after ready (never blocks the gate), finish the 0.46.3
+    // upgrade marks (one owner summary), then re-assert only decisions
+    // that grant (never a card in bulk, never a grant for an undecided
+    // risky folder). Worktree cwds not in projects.path are covered by the
+    // spawn gate. Then follow folders with live AI sessions for changes
+    // (U0: Claude reloads hooks mid-session).
     tokio::spawn(async move {
         let _ = tokio::task::spawn_blocking(|| {
-            k2_core::cli_folder_trust::trust_all_registered_projects();
+            crate::folder_trust::boot_pass();
+            crate::folder_trust_watch::start();
         })
         .await;
     });

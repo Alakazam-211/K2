@@ -1327,6 +1327,15 @@ pub(crate) async fn send_response_with_cookie_and_location(
     set_cookie: Option<&str>,
     location: Option<&str>,
 ) {
+    // Folder trust (prd-security-sweep-0464-v1 SS11): a spawn error that
+    // carries the gate's token becomes its 409 (`folder_trust_pending` /
+    // `folder_trust_denied` with the findings and how to decide), whatever
+    // route and prefix it came through.
+    let ft = crate::folder_trust::rewrite_refusal(status, body);
+    let (status, body): (&str, &str) = match &ft {
+        Some((s, b)) => (s, b.as_str()),
+        None => (status, body),
+    };
     // Permission cards (PRD rev 3.1 §3.1): a refusal to an agent whose
     // switches are both on gains its `permission` object. A no-op (the same
     // bytes) while the global switch is off, and for everyone but a valid
@@ -1373,7 +1382,13 @@ pub(crate) async fn send_response_with_headers(
     body: &str,
     extra: &str,
 ) {
-    // Permission cards: as in `send_response_with_cookie_and_location`.
+    // Folder trust and permission cards: as in
+    // `send_response_with_cookie_and_location`.
+    let ft = crate::folder_trust::rewrite_refusal(status, body);
+    let (status, body): (&str, &str) = match &ft {
+        Some((s, b)) => (s, b.as_str()),
+        None => (status, body),
+    };
     let taught = crate::permission::walls::teach_tcp(status, body);
     let body: &str = &taught;
     let resp = format!(

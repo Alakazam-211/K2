@@ -573,6 +573,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // passes and people (contract-app-room-stream-0463 §1: a passport
         // is 403). A WebSocket, never a cell-socket GET.
         "/cli/thread/stream",
+        // Folder trust (SS10): the owner decides; agents only ask.
+        "/cli/folder-trust/decide",
+        "/cli/folder-trust/reset",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;
@@ -618,6 +621,11 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // (arms Grace). Does NOT append a product message to the respond drain.
         // Exact match; same scoped-hook auth as `/cli/respond`.
         "/cli/session/complete",
+        // Folder trust (prd-security-sweep-0464-v1 SS10): agents ask
+        // (`k2 workspace trust request`, which only presents the card) and
+        // read the status; people decide (`decide`/`reset` are denied below).
+        "/cli/folder-trust/status",
+        "/cli/folder-trust/request",
         // 0.40.34 browser-open: the staged k2-open shim's egress from a
         // SCOPED session (K2_HOOK_SOCK + K2_HOOK_TOKEN) — xdg-open/$BROWSER
         // inside the cell forwards the URL so the CONNECTED app opens it.

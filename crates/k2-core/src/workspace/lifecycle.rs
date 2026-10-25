@@ -149,7 +149,9 @@ pub fn register_workspace_ex(
                 seed_agents_md,
                 fanout,
             );
-            crate::cli_folder_trust::trust_cli_folder(path);
+            // Folder-trust gate (SS9): a risky folder is held and its card
+            // presented; the answer carries the outcome.
+            let folder_trust = crate::cli_folder_trust::trust_cli_folder(path).to_json();
             Ok(serde_json::json!({
                 "success": true,
                 "projectId": project_id,
@@ -159,6 +161,7 @@ pub fn register_workspace_ex(
                 "wikiSeeded": seed_wiki,
                 "agentsMdSeeded": seed_agents_md,
                 "fanout": fanout,
+                "folderTrust": folder_trust,
             })
             .to_string())
         }

@@ -170,6 +170,24 @@ fn smart_launch_checked(
             &format!("WAKEUP.md missing at {}", hb.wakeup_path), name);
     }
 
+    // Folder-trust gate (prd-security-sweep-0464-v1 SS11): while the
+    // workspace's folder waits for a person to trust it (or after "Don't
+    // trust"), heartbeat fires are skipped, not failed: no spawn, no inject
+    // into a running session, and no strike toward auto-disable. The card
+    // is presented (once) by the check itself.
+    if let Some(r) = crate::folder_trust::heartbeat_hold(project_path, &project_id) {
+        write_audit(&project_id, &agent_name, &hb, "held_folder_trust",
+            &format!("held: folder trust ({})", r.error));
+        return serde_json::json!({
+            "success": false,
+            "decision": "held_folder_trust",
+            "reason": "held: folder trust",
+            "error": r.error,
+            "decide": r.decide,
+            "name": hb.name,
+        });
+    }
+
     // Atomic claim of the in-flight lease — fixes the pre-existing
     // TOCTOU between scheduler eval and spawn. Honors the row's
     // `concurrency_policy`: under `forbid` (default) a second caller

@@ -45,6 +45,9 @@ pub fn run(action: &CardAction, answer: &str, by: &str) -> Result<J, String> {
         KEEP_WIDGET => keep_widget(&action.params, answer, by),
         // R8 upgrade (prd-env-to-vault-v1): keep time-boxed `.env.k2` grants.
         crate::vault::server_refs::KEEP_ACTION => crate::vault::server_refs::keep_action(&action.params, answer, by),
+        // prd-security-sweep-0464-v1 SS10: Trust it / Always trust this
+        // folder / Don't trust.
+        crate::folder_trust::CARD_ACTION => crate::folder_trust::run_card(&action.params, answer, by),
         other => Err(format!("K2 doesn't know the card action '{other}'")),
     }
 }

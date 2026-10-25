@@ -691,6 +691,11 @@ mod unix_impl {
                 crate::hook_ingest::legacy_complete(params).to_string(),
             ),
             "/cli/workspace/msg" => from_cli(crate::cli::dispatch(path, params)),
+            // Folder trust (SS10): an agent reads status and asks (the
+            // card); deciding is the owner's (not an agent verb).
+            crate::folder_trust::STATUS_PATH | crate::folder_trust::REQUEST_PATH => {
+                from_cli(crate::folder_trust::dispatch(is_post, path, params, body, "agent"))
+            }
             // 0.46.1 `k2 agent identity`: this passport's own color and
             // picture (the handler pins the workspace and refuses a name).
             // Same body cap as TCP (413).
@@ -1265,6 +1270,13 @@ mod unix_impl {
     }
 
     async fn write_response(stream: &mut UnixStream, status: &str, content_type: &str, body: &str) {
+        // Folder trust (SS11): a spawn error carrying the gate's token
+        // answers as its 409, as on TCP.
+        let ft = crate::folder_trust::rewrite_refusal(status, body);
+        let (status, body): (&str, &str) = match &ft {
+            Some((s, b)) => (s, b.as_str()),
+            None => (status, body),
+        };
         let resp = format!(
             "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{}",
             body.len(),

@@ -1358,6 +1358,20 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         }
     }
 
+    // Folder-trust gate (prd-security-sweep-0464-v1 SS11): before the cell,
+    // the login slot or any trust grant. A held folder (card waiting) or a
+    // denied one starts no harness: 409 with the body that says how to
+    // decide. A guest HOME that isn't on the host gets no host write.
+    if let Err(r) = crate::folder_trust::gate_spawn(
+        cfg.program.as_deref(),
+        &req.cwd,
+        cfg.env.get("HOME").map(String::as_str),
+        project_id.as_deref(),
+        "v2_spawn",
+    ) {
+        return HandlerResult { status: "409 Conflict", body: r.to_json().to_string() };
+    }
+
     // P4-H6 — PER-SESSION worker uid + fail-closed PER-SESSION egress, set up
     // BEFORE the cell boots. Each microVM cell now drops to its OWN distinct uid
     // (allocated here from the reserved range) instead of the shared `k2cell`, so
@@ -1521,11 +1535,6 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             llm_login.as_ref().map(|g| g.ptyd_meta()),
         ));
     }
-    k2_core::cli_folder_trust::maybe_trust_harness_spawn(
-        cfg.program.as_deref(),
-        cfg.cwd.as_deref(),
-        cfg.env.get("HOME").map(String::as_str),
-    );
     let __t_spawn = std::time::Instant::now();
     let session = match DaemonPtySession::spawn(cfg) {
         Ok(s) => s,

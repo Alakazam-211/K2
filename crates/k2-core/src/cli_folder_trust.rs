@@ -1,17 +1,30 @@
 //! Pre-trust CLI folders when a K2 workspace is added or a harness spawns.
 //!
-//! Merge-only grants into Claude / Codex / Grok / Gemini stores (and an
-//! optional Cursor marker). Never `$HOME` or `/`. Best-effort: lock/parse/
-//! EPERM logs that tool and continues. See `.k2/prds/prd-cli-folder-trust-on-add-v1.md`.
+//! Merge-only grants into Claude / Codex / Grok / Gemini stores and Cursor's
+//! trust marker. Never `$HOME` or `/`. Best-effort: lock/parse/EPERM logs
+//! that tool and continues. See `.k2/prds/prd-cli-folder-trust-on-add-v1.md`.
+//!
+//! **Every grant goes through the folder-trust gate** ([`gate`],
+//! prd-security-sweep-0464-v1 SS9–SS11): K2 scans the folder first
+//! ([`scan`]); a clean folder is trusted as before, a risky one needs a
+//! person's decision (a Thread card). The raw writers below are private to
+//! this module and [`gate`]; the public entry points ([`trust_cli_folder`],
+//! [`gate_harness_spawn`], [`trust_all_registered_projects`]) are gate
+//! doors. K2 records which entries it wrote ([`GrantedKeys`]) so "Don't
+//! trust" removes exactly those and reports the rest ([`leftover_grants`]).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::fs_atomic;
 
-/// Risky per-project config scanner (SS8). Not wired into the grants yet.
+/// Risky per-project config scanner (SS8).
 pub mod scan;
+/// The folder-trust gate: decisions, card asks, re-scan (SS9–SS11).
+pub mod gate;
 
 const HARNESS_BASENAMES: &[&str] = &["claude", "codex", "grok", "gemini", "cursor-agent"];
 const LOGIN_SHELL_BASENAMES: &[&str] = &[
@@ -26,55 +39,22 @@ const LOGIN_SHELL_BASENAMES: &[&str] = &[
     "powershell.exe",
 ];
 
-/// Merge folder-trust grants for `abs_path` into the current process HOME.
-///
-/// Idempotent. Never errors to the caller (P20). Refuse `$HOME`, `/`, and
-/// any parent of `$HOME` (P4).
-pub fn trust_cli_folder(abs_path: &str) {
-    let Some(home) = current_home() else {
-        log_debug!("[cli-folder-trust] skip: no HOME");
-        return;
-    };
-    trust_cli_folder_in_home(abs_path, &home);
+/// Add / register door: run the gate for `abs_path` in the process HOME.
+/// A clean folder is granted as before; a risky one is granted only under
+/// a decision that covers it, else held (a card is presented).
+pub fn trust_cli_folder(abs_path: &str) -> gate::Outcome {
+    gate::ensure(abs_path, gate::Door::Add, &gate::Actor::default(), None)
 }
 
 /// Same as [`trust_cli_folder`] but writes into `home` (guest / sandbox / tests).
-pub fn trust_cli_folder_in_home(abs_path: &str, home: &Path) {
-    if abs_path.trim().is_empty() {
-        return;
-    }
-    if skip_unisolated_home(home) {
-        log_debug!(
-            "[cli-folder-trust] skip: test HOME is not isolated ({})",
-            home.display()
-        );
-        return;
-    }
-    let Some(cwd) = canonical_abs(Path::new(abs_path)) else {
-        log_debug!("[cli-folder-trust] skip: cannot resolve {abs_path}");
-        return;
-    };
-    let home = canonical_abs(home).unwrap_or_else(|| home.to_path_buf());
-    if is_refused_path(&cwd, &home) {
-        log_debug!(
-            "[cli-folder-trust] refuse {} (HOME={}, / or parent of HOME)",
-            cwd.display(),
-            home.display()
-        );
-        return;
-    }
-    let keys = grant_keys(&cwd, &home);
-    if keys.is_empty() {
-        return;
-    }
-    grant_claude(home.as_path(), &keys);
-    grant_codex(home.as_path(), &keys);
-    grant_grok(home.as_path(), &keys);
-    grant_gemini(home.as_path(), &keys);
-    grant_cursor(&cwd);
+pub fn trust_cli_folder_in_home(abs_path: &str, home: &Path) -> gate::Outcome {
+    gate::ensure(abs_path, gate::Door::Add, &gate::Actor::default(), Some(home))
 }
 
-/// Re-assert grants for every registered `projects.path` (boot sweep, P13/P16/P19).
+/// Re-assert grants for every registered `projects.path` (boot sweep,
+/// P13/P16/P19; `POST /cli/trust-folders`). Sweep door: only decisions that
+/// already grant are re-asserted. A risky folder with no decision is never
+/// granted and no card is presented in bulk.
 pub fn trust_all_registered_projects() -> usize {
     let paths = match crate::projects_ops::projects_list() {
         Ok(ps) => ps.into_iter().map(|p| p.path).collect::<Vec<_>>(),
@@ -83,42 +63,64 @@ pub fn trust_all_registered_projects() -> usize {
             return 0;
         }
     };
-    let n = paths.len();
+    let mut granted = 0usize;
     for p in &paths {
-        trust_cli_folder(p);
+        if let gate::Outcome::Granted { .. } =
+            gate::ensure(p, gate::Door::Sweep, &gate::Actor::by("sweep"), None)
+        {
+            granted += 1;
+        }
     }
-    log_debug!("[cli-folder-trust] boot sweep: re-asserted {n} project path(s)");
-    n
+    log_debug!(
+        "[cli-folder-trust] sweep: {granted} of {} project path(s) re-asserted",
+        paths.len()
+    );
+    granted
 }
 
-/// Spawn-door helper (P18). No-op for reuse callers (they never reach here),
-/// login-shell, empty command, or non-harness binaries.
-pub fn maybe_trust_harness_spawn(
+/// Spawn door (P18 + SS11). For a harness (claude/codex/grok/gemini/
+/// cursor-agent), whatever its args (`claude -p` runs project hooks with no
+/// trust dialog, so print mode is gated too): `Ok` when the folder may run
+/// it (grants written as before), `Err` with the refusal when the folder is
+/// held (a card is waiting) or denied. Non-harness programs, a missing cwd
+/// and refused paths pass (`Ok(None)`).
+///
+/// `env_home`: the child's HOME when it differs from the daemon's. A guest
+/// path that doesn't exist on the host gets no host write, but the decision
+/// still applies (P21).
+pub fn gate_harness_spawn(
     command: Option<&str>,
     cwd: Option<&Path>,
     env_home: Option<&str>,
-) {
+    actor: &gate::Actor,
+) -> Result<Option<gate::Outcome>, gate::Refusal> {
     if !is_folder_trust_harness(command) {
-        return;
+        return Ok(None);
     }
     let Some(cwd) = cwd else {
-        return;
+        return Ok(None);
     };
     let cwd_s = cwd.to_string_lossy();
-    match env_home.map(str::trim).filter(|s| !s.is_empty()) {
+    let outcome = match env_home.map(str::trim).filter(|s| !s.is_empty()) {
         Some(h) => {
             let home = Path::new(h);
-            if !home.is_dir() {
-                // Guest path that does not exist on the host (P21).
+            if home.is_dir() {
+                gate::ensure(&cwd_s, gate::Door::Spawn, actor, Some(home))
+            } else {
+                // Guest path that does not exist on the host (P21): no host
+                // write, the decision still holds.
                 log_debug!(
-                    "[cli-folder-trust] skip host write for missing HOME {} (guest-init seeds in-cell)",
+                    "[cli-folder-trust] no host write for missing HOME {} (guest-init seeds in-cell)",
                     home.display()
                 );
-                return;
+                gate::ensure_no_write(&cwd_s, gate::Door::Spawn, actor)
             }
-            trust_cli_folder_in_home(&cwd_s, home);
         }
-        None => trust_cli_folder(&cwd_s),
+        None => gate::ensure(&cwd_s, gate::Door::Spawn, actor, None),
+    };
+    match outcome {
+        gate::Outcome::Held(r) | gate::Outcome::Denied(r) => Err(r),
+        other => Ok(Some(other)),
     }
 }
 
@@ -318,15 +320,18 @@ fn toml_quote(path: &str) -> String {
 
 // ── Claude ────────────────────────────────────────────────────────────
 
-fn grant_claude(home: &Path, keys: &[String]) {
+fn grant_claude(home: &Path, keys: &[String]) -> Vec<String> {
     let path = home.join(".claude.json");
     match grant_claude_inner(&path, keys) {
-        Ok(()) => {}
-        Err(e) => log_debug!("[cli-folder-trust] claude {}: {e}", path.display()),
+        Ok(changed) => changed,
+        Err(e) => {
+            log_debug!("[cli-folder-trust] claude {}: {e}", path.display());
+            Vec::new()
+        }
     }
 }
 
-fn grant_claude_inner(path: &Path, keys: &[String]) -> Result<(), String> {
+fn grant_claude_inner(path: &Path, keys: &[String]) -> Result<Vec<String>, String> {
     let original = read_to_string_lossy(path).unwrap_or_default();
     let mut root: serde_json::Value = if original.trim().is_empty() {
         serde_json::json!({"projects": {}})
@@ -342,7 +347,7 @@ fn grant_claude_inner(path: &Path, keys: &[String]) -> Result<(), String> {
     let projects = projects
         .as_object_mut()
         .ok_or_else(|| "projects is not an object".to_string())?;
-    let mut changed = false;
+    let mut changed: Vec<String> = Vec::new();
     for key in keys {
         let entry = projects
             .entry(key.clone())
@@ -362,28 +367,31 @@ fn grant_claude_inner(path: &Path, keys: &[String]) -> Result<(), String> {
                 "hasTrustDialogAccepted".into(),
                 serde_json::Value::Bool(true),
             );
-            changed = true;
+            changed.push(key.clone());
         }
     }
-    if !changed {
-        return Ok(());
+    if changed.is_empty() {
+        return Ok(changed);
     }
     let body = serialize_json(&root, &original);
     atomic_write_with_bak(path, body.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(changed)
 }
 
 // ── Codex ─────────────────────────────────────────────────────────────
 
-fn grant_codex(home: &Path, keys: &[String]) {
+fn grant_codex(home: &Path, keys: &[String]) -> Vec<String> {
     let path = home.join(".codex").join("config.toml");
     match grant_codex_inner(&path, keys) {
-        Ok(()) => {}
-        Err(e) => log_debug!("[cli-folder-trust] codex {}: {e}", path.display()),
+        Ok(changed) => changed,
+        Err(e) => {
+            log_debug!("[cli-folder-trust] codex {}: {e}", path.display());
+            Vec::new()
+        }
     }
 }
 
-fn grant_codex_inner(path: &Path, keys: &[String]) -> Result<(), String> {
+fn grant_codex_inner(path: &Path, keys: &[String]) -> Result<Vec<String>, String> {
     let original = read_to_string_lossy(path).unwrap_or_default();
     let parsed: Option<toml::Value> = if original.trim().is_empty() {
         Some(toml::Value::Table(toml::Table::new()))
@@ -397,6 +405,7 @@ fn grant_codex_inner(path: &Path, keys: &[String]) -> Result<(), String> {
     };
     let table = parsed.as_ref().and_then(|v| v.as_table());
     let mut missing: Vec<&str> = Vec::new();
+    let mut changed: Vec<String> = Vec::new();
     let mut needs_rewrite = false;
     for key in keys {
         let trusted = table
@@ -408,6 +417,7 @@ fn grant_codex_inner(path: &Path, keys: &[String]) -> Result<(), String> {
         if trusted {
             continue;
         }
+        changed.push(key.clone());
         let exists = table
             .and_then(|t| t.get("projects"))
             .and_then(|p| p.get(key.as_str()))
@@ -419,7 +429,7 @@ fn grant_codex_inner(path: &Path, keys: &[String]) -> Result<(), String> {
         }
     }
     if !needs_rewrite && missing.is_empty() {
-        return Ok(());
+        return Ok(changed);
     }
     if needs_rewrite {
         let mut root: toml::Value = original
@@ -444,7 +454,7 @@ fn grant_codex_inner(path: &Path, keys: &[String]) -> Result<(), String> {
         }
         let body = toml::to_string(&root).map_err(|e| e.to_string())?;
         atomic_write_with_bak(path, body.as_bytes()).map_err(|e| e.to_string())?;
-        return Ok(());
+        return Ok(changed);
     }
     let mut append = String::new();
     if !original.is_empty() && !original.ends_with('\n') {
@@ -467,20 +477,23 @@ fn grant_codex_inner(path: &Path, keys: &[String]) -> Result<(), String> {
         body.push_str(&append);
         atomic_write_with_bak(path, body.as_bytes()).map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(changed)
 }
 
 // ── Grok ──────────────────────────────────────────────────────────────
 
-fn grant_grok(home: &Path, keys: &[String]) {
+fn grant_grok(home: &Path, keys: &[String]) -> Vec<String> {
     let path = home.join(".grok").join("trusted_folders.toml");
     match grant_grok_inner(&path, keys) {
-        Ok(()) => {}
-        Err(e) => log_debug!("[cli-folder-trust] grok {}: {e}", path.display()),
+        Ok(changed) => changed,
+        Err(e) => {
+            log_debug!("[cli-folder-trust] grok {}: {e}", path.display());
+            Vec::new()
+        }
     }
 }
 
-fn grant_grok_inner(path: &Path, keys: &[String]) -> Result<(), String> {
+fn grant_grok_inner(path: &Path, keys: &[String]) -> Result<Vec<String>, String> {
     let _lock = match grok_try_lock(path) {
         Ok(l) => l,
         Err(e) => return Err(e),
@@ -497,6 +510,7 @@ fn grant_grok_inner(path: &Path, keys: &[String]) -> Result<(), String> {
     let table = parsed.as_ref().and_then(|v| v.as_table());
     let now = chrono::Utc::now().timestamp();
     let mut missing: Vec<&str> = Vec::new();
+    let mut changed: Vec<String> = Vec::new();
     let mut needs_rewrite = false;
     for key in keys {
         let entry = table
@@ -509,6 +523,7 @@ fn grant_grok_inner(path: &Path, keys: &[String]) -> Result<(), String> {
         if trusted {
             continue;
         }
+        changed.push(key.clone());
         if entry.is_some() {
             needs_rewrite = true;
         } else {
@@ -516,7 +531,7 @@ fn grant_grok_inner(path: &Path, keys: &[String]) -> Result<(), String> {
         }
     }
     if !needs_rewrite && missing.is_empty() {
-        return Ok(());
+        return Ok(changed);
     }
     if needs_rewrite {
         let mut root: toml::Value = original
@@ -544,7 +559,7 @@ fn grant_grok_inner(path: &Path, keys: &[String]) -> Result<(), String> {
         }
         let body = toml::to_string(&root).map_err(|e| e.to_string())?;
         atomic_write_with_bak(path, body.as_bytes()).map_err(|e| e.to_string())?;
-        return Ok(());
+        return Ok(changed);
     }
     let mut append = String::new();
     if !original.is_empty() && !original.ends_with('\n') {
@@ -567,7 +582,7 @@ fn grant_grok_inner(path: &Path, keys: &[String]) -> Result<(), String> {
         body.push_str(&append);
         atomic_write_with_bak(path, body.as_bytes()).map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(changed)
 }
 
 struct GrokLock(Option<File>);
@@ -607,15 +622,18 @@ impl Drop for GrokLock {
 
 // ── Gemini ────────────────────────────────────────────────────────────
 
-fn grant_gemini(home: &Path, keys: &[String]) {
+fn grant_gemini(home: &Path, keys: &[String]) -> Vec<String> {
     let path = home.join(".gemini").join("trustedFolders.json");
     match grant_gemini_inner(&path, keys) {
-        Ok(()) => {}
-        Err(e) => log_debug!("[cli-folder-trust] gemini {}: {e}", path.display()),
+        Ok(changed) => changed,
+        Err(e) => {
+            log_debug!("[cli-folder-trust] gemini {}: {e}", path.display());
+            Vec::new()
+        }
     }
 }
 
-fn grant_gemini_inner(path: &Path, keys: &[String]) -> Result<(), String> {
+fn grant_gemini_inner(path: &Path, keys: &[String]) -> Result<Vec<String>, String> {
     let original = read_to_string_lossy(path).unwrap_or_default();
     let mut root: serde_json::Value = if original.trim().is_empty() {
         serde_json::json!({})
@@ -625,7 +643,7 @@ fn grant_gemini_inner(path: &Path, keys: &[String]) -> Result<(), String> {
     let obj = root
         .as_object_mut()
         .ok_or_else(|| "trustedFolders.json is not an object".to_string())?;
-    let mut changed = false;
+    let mut changed: Vec<String> = Vec::new();
     let mut to_set: Vec<String> = Vec::new();
     for key in keys {
         to_set.push(key.clone());
@@ -639,56 +657,402 @@ fn grant_gemini_inner(path: &Path, keys: &[String]) -> Result<(), String> {
         if already {
             continue;
         }
-        obj.insert(key, serde_json::Value::String("TRUST_FOLDER".into()));
-        changed = true;
+        obj.insert(key.clone(), serde_json::Value::String("TRUST_FOLDER".into()));
+        changed.push(key);
     }
-    if !changed {
-        return Ok(());
+    if changed.is_empty() {
+        return Ok(changed);
     }
     let body = serialize_json(&root, &original);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     atomic_write_with_bak(path, body.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(changed)
 }
 
 // ── Cursor ────────────────────────────────────────────────────────────
+//
+// cursor-agent reads `<data>/projects/<slug(path)>/.workspace-trusted`,
+// where `<data>` is `$CURSOR_DATA_DIR` or `~/.cursor` and the slug is the
+// path with every run of non-alphanumerics turned into one `-`, trimmed
+// (cursor-agent 2026.09.15 `utils/dist/workspace-paths.js` `r_`,
+// `cursor-config/dist/paths.js` `Xq`; U0 finding 3). Before 0.46.4 K2 wrote
+// `<ws>/.cursor/.workspace-trusted`, which Cursor never reads; that file is
+// removed when it is K2's (`trusted\n`).
 
-fn grant_cursor(workspace: &Path) {
-    let cursor_dir = workspace.join(".cursor");
-    if !cursor_dir.is_dir() {
-        return;
+/// What K2 writes as `trustMethod` in a Cursor marker, so a revoke removes
+/// only K2's own markers.
+const CURSOR_TRUST_METHOD: &str = "k2";
+/// The content of K2's pre-0.46.4 in-folder marker.
+const LEGACY_CURSOR_MARKER: &[u8] = b"trusted\n";
+
+/// Cursor's per-folder slug (`r_` in cursor-agent).
+pub(crate) fn cursor_slug(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    let mut dash = false;
+    for c in path.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            dash = false;
+        } else if !dash {
+            out.push('-');
+            dash = true;
+        }
     }
-    let marker = cursor_dir.join(".workspace-trusted");
-    if marker.exists() {
-        return;
+    out.trim_matches('-').to_string()
+}
+
+/// Cursor's data dir for `home`: `$CURSOR_DATA_DIR` when `home` is the
+/// process HOME and it is set, else `<home>/.cursor`.
+fn cursor_data_dir(home: &Path) -> PathBuf {
+    let is_process_home = current_home()
+        .and_then(|h| canonical_abs(&h))
+        .is_some_and(|h| canonical_abs(home).as_deref() == Some(h.as_path()));
+    if is_process_home {
+        if let Some(d) = std::env::var_os("CURSOR_DATA_DIR").filter(|d| !d.is_empty()) {
+            return PathBuf::from(d);
+        }
     }
-    if let Err(e) = atomic_write_with_bak(&marker, b"trusted\n") {
-        log_debug!("[cli-folder-trust] cursor {}: {e}", marker.display());
+    home.join(".cursor")
+}
+
+/// Where cursor-agent looks for `key`'s trust marker under `home`.
+pub(crate) fn cursor_marker_path(home: &Path, key: &str) -> PathBuf {
+    cursor_data_dir(home)
+        .join("projects")
+        .join(cursor_slug(key))
+        .join(".workspace-trusted")
+}
+
+/// Write Cursor's marker for each key, only when Cursor's data dir exists
+/// (Cursor is installed). Returns the keys K2 wrote a marker for.
+fn grant_cursor(home: &Path, keys: &[String]) -> Vec<String> {
+    let mut changed = Vec::new();
+    for key in keys {
+        remove_legacy_cursor_marker(Path::new(key));
+    }
+    if !cursor_data_dir(home).is_dir() {
+        return changed;
+    }
+    for key in keys {
+        let marker = cursor_marker_path(home, key);
+        if marker.exists() {
+            continue;
+        }
+        let body = serde_json::json!({
+            "trustedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "workspacePath": key,
+            "trustMethod": CURSOR_TRUST_METHOD,
+        });
+        let text = serde_json::to_string_pretty(&body).unwrap_or_default();
+        let res = marker
+            .parent()
+            .map(fs::create_dir_all)
+            .unwrap_or(Ok(()))
+            .and_then(|_| fs_atomic::atomic_write(&marker, text.as_bytes()));
+        match res {
+            Ok(()) => changed.push(key.clone()),
+            Err(e) => log_debug!("[cli-folder-trust] cursor {}: {e}", marker.display()),
+        }
+    }
+    changed
+}
+
+/// K2's pre-0.46.4 marker inside the folder (never read by Cursor).
+fn remove_legacy_cursor_marker(folder: &Path) {
+    let legacy = folder.join(".cursor").join(".workspace-trusted");
+    if fs::read(&legacy).ok().as_deref() == Some(LEGACY_CURSOR_MARKER) {
+        if let Err(e) = fs::remove_file(&legacy) {
+            log_debug!("[cli-folder-trust] legacy cursor marker {}: {e}", legacy.display());
+        }
     }
 }
 
-/// Test helper: read grant flags from a HOME tree.
-#[cfg(test)]
-fn claude_trusted(home: &Path, key: &str) -> bool {
+fn cursor_marker_is_k2s(marker: &Path) -> bool {
+    read_to_string_lossy(marker)
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("trustMethod").and_then(|m| m.as_str()).map(|m| m == CURSOR_TRUST_METHOD))
+        .unwrap_or(false)
+}
+
+// ── What K2 wrote, removing it, and what else still trusts a folder ──
+
+/// The trust entries K2 itself wrote, per store (`folder_trust.granted_keys`).
+/// An entry the person (or the CLI's own dialog) had before K2 wrote is
+/// never listed, so "Don't trust" never removes it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantedKeys {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claude: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codex: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grok: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gemini: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cursor: Vec<String>,
+}
+
+impl GrantedKeys {
+    pub fn is_empty(&self) -> bool {
+        self.claude.is_empty()
+            && self.codex.is_empty()
+            && self.grok.is_empty()
+            && self.gemini.is_empty()
+            && self.cursor.is_empty()
+    }
+
+    /// Union, keeping order and no duplicates.
+    pub fn merge(&mut self, other: &GrantedKeys) {
+        fn add(into: &mut Vec<String>, from: &[String]) {
+            for k in from {
+                if !into.contains(k) {
+                    into.push(k.clone());
+                }
+            }
+        }
+        add(&mut self.claude, &other.claude);
+        add(&mut self.codex, &other.codex);
+        add(&mut self.grok, &other.grok);
+        add(&mut self.gemini, &other.gemini);
+        add(&mut self.cursor, &other.cursor);
+    }
+}
+
+/// Write every store's grant for `keys` into `home`; returns what changed.
+/// Callers are the gate only (a clean folder, or a decision that covers
+/// the scan).
+pub(crate) fn write_grants(home: &Path, keys: &[String]) -> GrantedKeys {
+    GrantedKeys {
+        claude: grant_claude(home, keys),
+        codex: grant_codex(home, keys),
+        grok: grant_grok(home, keys),
+        gemini: grant_gemini(home, keys),
+        cursor: grant_cursor(home, keys),
+    }
+}
+
+/// The entries for `keys` that are trusted in `home` right now, per store
+/// (0.46.3 upgrade: K2 wrote every one of those, A4).
+pub(crate) fn present_grants(home: &Path, keys: &[String]) -> GrantedKeys {
+    let pick = |f: &dyn Fn(&str) -> bool| keys.iter().filter(|k| f(k)).cloned().collect::<Vec<_>>();
+    let mut gemini = pick(&|k| gemini_trusted(home, k));
+    for k in keys {
+        let lower = k.to_lowercase();
+        if lower != *k && gemini_trusted(home, &lower) && !gemini.contains(&lower) {
+            gemini.push(lower);
+        }
+    }
+    GrantedKeys {
+        claude: pick(&|k| claude_trusted(home, k)),
+        codex: pick(&|k| codex_trusted(home, k)),
+        grok: pick(&|k| grok_trusted(home, k)),
+        gemini,
+        cursor: pick(&|k| cursor_marker_path(home, k).is_file() && cursor_marker_is_k2s(&cursor_marker_path(home, k))),
+    }
+}
+
+/// Remove exactly the entries in `granted` from `home`'s stores. Errors
+/// per store are collected (the gate reports them; a failed removal is
+/// never silent).
+pub(crate) fn revoke_grants(home: &Path, granted: &GrantedKeys) -> Vec<String> {
+    let mut errors = Vec::new();
+    if !granted.claude.is_empty() {
+        if let Err(e) = revoke_claude(&home.join(".claude.json"), &granted.claude) {
+            errors.push(format!("Claude (~/.claude.json): {e}"));
+        }
+    }
+    if !granted.codex.is_empty() {
+        if let Err(e) = revoke_toml_tables(&home.join(".codex").join("config.toml"), "projects", &granted.codex, Some("trust_level")) {
+            errors.push(format!("Codex (~/.codex/config.toml): {e}"));
+        }
+    }
+    if !granted.grok.is_empty() {
+        let path = home.join(".grok").join("trusted_folders.toml");
+        let res = grok_try_lock(&path).and_then(|_lock| revoke_toml_tables(&path, "folders", &granted.grok, None));
+        if let Err(e) = res {
+            errors.push(format!("Grok (~/.grok/trusted_folders.toml): {e}"));
+        }
+    }
+    if !granted.gemini.is_empty() {
+        if let Err(e) = revoke_gemini(&home.join(".gemini").join("trustedFolders.json"), &granted.gemini) {
+            errors.push(format!("Gemini (~/.gemini/trustedFolders.json): {e}"));
+        }
+    }
+    for key in &granted.cursor {
+        let marker = cursor_marker_path(home, key);
+        if marker.is_file() && cursor_marker_is_k2s(&marker) {
+            if let Err(e) = fs::remove_file(&marker) {
+                errors.push(format!("Cursor ({}): {e}", marker.display()));
+            }
+        }
+    }
+    errors
+}
+
+fn revoke_claude(path: &Path, keys: &[String]) -> Result<(), String> {
+    let Some(original) = read_to_string_lossy(path) else {
+        return Ok(());
+    };
+    if original.trim().is_empty() {
+        return Ok(());
+    }
+    let mut root: serde_json::Value = serde_json::from_str(&original).map_err(|e| format!("parse: {e}"))?;
+    let mut changed = false;
+    if let Some(projects) = root.get_mut("projects").and_then(|p| p.as_object_mut()) {
+        for key in keys {
+            if let Some(entry) = projects.get_mut(key).and_then(|e| e.as_object_mut()) {
+                if entry.remove("hasTrustDialogAccepted").is_some() {
+                    changed = true;
+                }
+            }
+        }
+    }
+    if !changed {
+        return Ok(());
+    }
+    let body = serialize_json(&root, &original);
+    atomic_write_with_bak(path, body.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// Remove `[<table>."<key>"]` for each key (or only its `field`, dropping
+/// the table when that leaves it empty).
+fn revoke_toml_tables(path: &Path, table: &str, keys: &[String], field: Option<&str>) -> Result<(), String> {
+    let Some(original) = read_to_string_lossy(path) else {
+        return Ok(());
+    };
+    if original.trim().is_empty() {
+        return Ok(());
+    }
+    let mut root: toml::Value = original.parse::<toml::Value>().map_err(|e| format!("parse: {e}"))?;
+    let mut changed = false;
+    if let Some(t) = root.get_mut(table).and_then(|t| t.as_table_mut()) {
+        for key in keys {
+            match field {
+                Some(f) => {
+                    let now_empty = match t.get_mut(key.as_str()).and_then(|e| e.as_table_mut()) {
+                        Some(entry) => {
+                            if entry.remove(f).is_some() {
+                                changed = true;
+                            }
+                            entry.is_empty()
+                        }
+                        None => false,
+                    };
+                    if now_empty {
+                        t.remove(key.as_str());
+                    }
+                }
+                None => {
+                    if t.remove(key.as_str()).is_some() {
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    if !changed {
+        return Ok(());
+    }
+    let body = toml::to_string(&root).map_err(|e| e.to_string())?;
+    atomic_write_with_bak(path, body.as_bytes()).map_err(|e| e.to_string())
+}
+
+fn revoke_gemini(path: &Path, keys: &[String]) -> Result<(), String> {
+    let Some(original) = read_to_string_lossy(path) else {
+        return Ok(());
+    };
+    if original.trim().is_empty() {
+        return Ok(());
+    }
+    let mut root: serde_json::Value = serde_json::from_str(&original).map_err(|e| format!("parse: {e}"))?;
+    let obj = root.as_object_mut().ok_or_else(|| "trustedFolders.json is not an object".to_string())?;
+    let mut changed = false;
+    for key in keys {
+        if obj.get(key).and_then(|v| v.as_str()) == Some("TRUST_FOLDER") {
+            obj.remove(key);
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(());
+    }
+    let body = serialize_json(&root, &original);
+    atomic_write_with_bak(path, body.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// Every grant that still makes a CLI trust one of `keys` in `home`: an
+/// exact entry in any store, or a parent folder's entry for the CLIs that
+/// inherit it (Gemini and Cursor always; Claude outside git; U0 Q4). Each
+/// line names the tool, the entry and its file, for the card result and
+/// `status`. Used after "Don't trust" removed K2's own entries.
+pub fn leftover_grants(home: &Path, keys: &[String], in_git: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut push = |line: String| {
+        if seen.insert(line.clone()) {
+            out.push(line);
+        }
+    };
+    for key in keys {
+        if claude_trusted(home, key) {
+            push(format!("Claude: {key} (~/.claude.json)"));
+        }
+        if codex_trusted(home, key) {
+            push(format!("Codex: {key} (~/.codex/config.toml)"));
+        }
+        if grok_trusted(home, key) {
+            push(format!("Grok: {key} (~/.grok/trusted_folders.toml)"));
+        }
+        if gemini_trusted(home, key) || gemini_trusted(home, &key.to_lowercase()) {
+            push(format!("Gemini: {key} (~/.gemini/trustedFolders.json)"));
+        }
+        if cursor_marker_path(home, key).is_file() {
+            push(format!("Cursor: {key} ({})", cursor_marker_path(home, key).display()));
+        }
+        let mut cur = Path::new(key).parent();
+        while let Some(dir) = cur {
+            if dir.parent().is_none() {
+                break;
+            }
+            let d = dir.to_string_lossy().to_string();
+            if gemini_trusted(home, &d) || gemini_trusted(home, &d.to_lowercase()) {
+                push(format!("Gemini: parent folder {d} (~/.gemini/trustedFolders.json)"));
+            }
+            if gemini_parent_trusted(home, &d) {
+                push(format!("Gemini: parent folder {d} (TRUST_PARENT in ~/.gemini/trustedFolders.json)"));
+            }
+            if cursor_marker_path(home, &d).is_file() && Path::new(&d).components().count() > 3 && Some(dir) != canonical_abs(home).as_deref() {
+                push(format!("Cursor: parent folder {d} ({})", cursor_marker_path(home, &d).display()));
+            }
+            if !in_git && claude_trusted(home, &d) {
+                push(format!("Claude: parent folder {d} (~/.claude.json)"));
+            }
+            cur = dir.parent();
+        }
+    }
+    out
+}
+
+// ── Store readers ─────────────────────────────────────────────────────
+
+pub(crate) fn claude_trusted(home: &Path, key: &str) -> bool {
     let p = home.join(".claude.json");
-    let text = read_to_string_lossy(&p).unwrap_or_default();
-    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
+    let Some(text) = read_to_string_lossy(&p) else { return false };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return false };
     v.get("projects")
         .and_then(|p| p.get(key))
         .and_then(|e| e.get("hasTrustDialogAccepted"))
         .and_then(|v| v.as_bool())
-        .unwrap_or(false)
+        == Some(true)
 }
 
-#[cfg(test)]
-fn codex_trusted(home: &Path, key: &str) -> bool {
+pub(crate) fn codex_trusted(home: &Path, key: &str) -> bool {
     let p = home.join(".codex").join("config.toml");
-    let text = read_to_string_lossy(&p).unwrap_or_default();
-    let v: toml::Value = text
-        .parse()
-        .unwrap_or(toml::Value::Table(Default::default()));
+    let Some(text) = read_to_string_lossy(&p) else { return false };
+    let Ok(v) = text.parse::<toml::Value>() else { return false };
     v.get("projects")
         .and_then(|p| p.get(key))
         .and_then(|e| e.get("trust_level"))
@@ -696,28 +1060,38 @@ fn codex_trusted(home: &Path, key: &str) -> bool {
         == Some("trusted")
 }
 
-#[cfg(test)]
-fn grok_trusted(home: &Path, key: &str) -> bool {
+pub(crate) fn grok_trusted(home: &Path, key: &str) -> bool {
     let p = home.join(".grok").join("trusted_folders.toml");
-    let text = read_to_string_lossy(&p).unwrap_or_default();
-    let v: toml::Value = text
-        .parse()
-        .unwrap_or(toml::Value::Table(Default::default()));
+    let Some(text) = read_to_string_lossy(&p) else { return false };
+    let Ok(v) = text.parse::<toml::Value>() else { return false };
     v.get("folders")
         .and_then(|p| p.get(key))
         .and_then(|e| e.get("trusted"))
         .and_then(|v| v.as_bool())
-        .unwrap_or(false)
+        == Some(true)
 }
 
-#[cfg(test)]
-fn gemini_trusted(home: &Path, key: &str) -> bool {
+pub(crate) fn gemini_trusted(home: &Path, key: &str) -> bool {
+    gemini_value(home, key).as_deref() == Some("TRUST_FOLDER")
+}
+
+/// Gemini's `TRUST_PARENT` on a child of `dir` trusts `dir` (its dirname).
+fn gemini_parent_trusted(home: &Path, dir: &str) -> bool {
     let p = home.join(".gemini").join("trustedFolders.json");
-    let text = read_to_string_lossy(&p).unwrap_or_default();
-    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
-    v.get(key).and_then(|v| v.as_str()) == Some("TRUST_FOLDER")
+    let Some(text) = read_to_string_lossy(&p) else { return false };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return false };
+    let Some(obj) = v.as_object() else { return false };
+    obj.iter().any(|(k, val)| {
+        val.as_str() == Some("TRUST_PARENT") && Path::new(k).parent().map(|p| p.to_string_lossy() == dir).unwrap_or(false)
+    })
 }
 
+fn gemini_value(home: &Path, key: &str) -> Option<String> {
+    let p = home.join(".gemini").join("trustedFolders.json");
+    let text = read_to_string_lossy(&p)?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get(key).and_then(|v| v.as_str()).map(str::to_string)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -877,7 +1251,7 @@ mod tests {
         crate::workspace::lifecycle::register_workspace_ex(&main_s, false, false, false)
             .expect("register");
         assert_all_stores(&g.home, &main);
-        maybe_trust_harness_spawn(Some("claude"), Some(&wt), None);
+        gate_harness_spawn(Some("claude"), Some(&wt), None, &gate::Actor::default()).expect("clean worktree passes");
         assert_all_stores(&g.home, &main);
         assert_all_stores(&g.home, &wt);
     }
@@ -886,9 +1260,10 @@ mod tests {
     fn spawn_helper_skips_empty_and_shell() {
         let g = HomeGuard::new("spawn-skip");
         let ws = unique_ws(&g.home, "skip");
-        maybe_trust_harness_spawn(None, Some(&ws), None);
-        maybe_trust_harness_spawn(Some("zsh"), Some(&ws), None);
-        maybe_trust_harness_spawn(Some("cat"), Some(&ws), None);
+        let a = gate::Actor::default();
+        assert!(gate_harness_spawn(None, Some(&ws), None, &a).expect("no program").is_none());
+        assert!(gate_harness_spawn(Some("zsh"), Some(&ws), None, &a).expect("shell").is_none());
+        assert!(gate_harness_spawn(Some("cat"), Some(&ws), None, &a).expect("cat").is_none());
         assert!(!g.home.join(".claude.json").exists());
     }
 
@@ -896,7 +1271,9 @@ mod tests {
     fn spawn_helper_grants_harness_cwd() {
         let g = HomeGuard::new("spawn-ok");
         let ws = unique_ws(&g.home, "ok");
-        maybe_trust_harness_spawn(Some("/usr/local/bin/claude"), Some(&ws), None);
+        let out = gate_harness_spawn(Some("/usr/local/bin/claude"), Some(&ws), None, &gate::Actor::default())
+            .expect("clean folder passes");
+        assert!(matches!(out, Some(gate::Outcome::Granted { clean: true, .. })), "{out:?}");
         assert_all_stores(&g.home, &ws);
     }
 
@@ -904,23 +1281,49 @@ mod tests {
     fn missing_env_home_skips_host_write() {
         let g = HomeGuard::new("guest");
         let ws = unique_ws(&g.home, "guestws");
-        maybe_trust_harness_spawn(
+        let out = gate_harness_spawn(
             Some("claude"),
             Some(&ws),
             Some("/home/k2-does-not-exist-on-host"),
-        );
+            &gate::Actor::default(),
+        )
+        .expect("clean folder passes");
+        assert!(matches!(out, Some(gate::Outcome::Granted { .. })), "{out:?}");
         assert!(!g.home.join(".claude.json").exists());
     }
 
+    /// U0 finding 3: cursor-agent reads `~/.cursor/projects/<slug>/
+    /// .workspace-trusted`, not `<ws>/.cursor/.workspace-trusted`. K2
+    /// writes the marker there only when Cursor's data dir exists, and
+    /// removes its own pre-0.46.4 in-folder marker.
     #[test]
-    fn cursor_marker_only_when_dot_cursor_exists() {
+    fn cursor_marker_goes_where_cursor_reads_it() {
         let g = HomeGuard::new("cursor");
-        let ws = unique_ws(&g.home, "cur");
-        trust_cli_folder(&key(&ws));
-        assert!(!ws.join(".cursor").join(".workspace-trusted").exists());
+        let ws = unique_ws(&g.home, "cur dir.v2");
+        let k = key(&ws);
+        trust_cli_folder(&k);
+        let marker = cursor_marker_path(&g.home, &k);
+        assert!(!marker.exists(), "no Cursor data dir, no marker");
+
         fs::create_dir_all(ws.join(".cursor")).unwrap();
-        trust_cli_folder(&key(&ws));
-        assert!(ws.join(".cursor").join(".workspace-trusted").is_file());
+        fs::write(ws.join(".cursor").join(".workspace-trusted"), LEGACY_CURSOR_MARKER).unwrap();
+        fs::create_dir_all(g.home.join(".cursor")).unwrap();
+        trust_cli_folder(&k);
+        assert!(marker.is_file(), "marker at {}", marker.display());
+        let slug = marker.parent().unwrap().file_name().unwrap().to_string_lossy().to_string();
+        assert_eq!(slug, cursor_slug(&k));
+        assert!(!slug.contains("--") && !slug.starts_with('-') && !slug.contains(' ') && !slug.contains('.'), "{slug}");
+        let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&marker).unwrap()).unwrap();
+        assert_eq!(v["workspacePath"], k.as_str());
+        assert_eq!(v["trustMethod"], CURSOR_TRUST_METHOD);
+        assert!(!ws.join(".cursor").join(".workspace-trusted").exists(), "K2's old in-folder marker is removed");
+    }
+
+    #[test]
+    fn cursor_slug_matches_cursor_agent() {
+        assert_eq!(cursor_slug("/Users/z3thon/DevProjects/Alakazam Labs/K2"), "Users-z3thon-DevProjects-Alakazam-Labs-K2");
+        assert_eq!(cursor_slug("/home/k2/ai/nora/"), "home-k2-ai-nora");
+        assert_eq!(cursor_slug("/a//b__c"), "a-b-c");
     }
 
     #[test]

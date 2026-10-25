@@ -1539,6 +1539,14 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // 0220 because 0.46.3 databases already have 0218 and 0219. The store is
         // `crate::resource_samples`.
         ("0217_app_resource_samples", include_str!("../../drizzle_sql/0217_app_resource_samples.sql")),
+        // 0223 — folder-trust decisions (prd-security-sweep-0464-v1 SS9;
+        // 0.46.4): `folder_trust`, one row per repo scope (git common dir)
+        // or folder: the person's decision on a risky folder, the scan
+        // fingerprint it covers, which trust entries K2 wrote, and the open
+        // card. Every 0.46.3 registered path starts `k2_granted = 1` (A4).
+        // 0222 is reserved (per-App Postgres / compute rollouts). The store
+        // is `crate::cli_folder_trust::gate`.
+        ("0223_folder_trust", include_str!("../../drizzle_sql/0223_folder_trust.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2202,7 +2210,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0217_app_resource_samples",
+            last_name, "0223_folder_trust",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2266,6 +2274,8 @@ mod tests {
                 "0221_app_rehost",
                 // 0.46.4: box usage trends (held for Slice B, after 0219).
                 "0217_app_resource_samples",
+                // 0.46.4: folder-trust decisions (security sweep SS9).
+                "0223_folder_trust",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2337,6 +2347,8 @@ mod tests {
                 "0221_app_rehost",
                 // 0.46.4: box usage trends (held for Slice B, after 0219).
                 "0217_app_resource_samples",
+                // 0.46.4: folder-trust decisions (security sweep SS9).
+                "0223_folder_trust",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2533,7 +2545,11 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let last: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(last, "0217_app_resource_samples", "0217 runs last on a 0.46.3 database (after 0220)");
+        assert_eq!(last, "0223_folder_trust", "0223 runs last on a 0.46.3 database");
+        let before_last: String = conn
+            .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1 OFFSET 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before_last, "0217_app_resource_samples", "0217 runs after 0220, before 0223");
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
         let kept: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE id = 'p-old'", [], |r| r.get(0)).unwrap();
@@ -3269,7 +3285,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0217 (box usage trends, 0.46.4) is the newest: its record goes
+            // 0223 (folder-trust decisions, 0.46.4) is the newest: its record
+            // goes (its table is IF NOT EXISTS and its insert OR IGNORE).
+            conn.execute("DELETE FROM _migrations WHERE name = '0223_folder_trust'", []).unwrap();
+            // 0217 (box usage trends, 0.46.4) came before it: its record goes
             // (its table and index are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0217_app_resource_samples'", []).unwrap();
             // 0221 (App re-host, 0.46.4) came before it: its record goes (its

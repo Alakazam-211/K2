@@ -63,6 +63,12 @@ pub mod fs_routes;
 pub mod fs_download;
 pub mod fs_live;
 pub mod charter_compose_watch;
+/// Folder-trust gate, daemon side (security sweep SS9–SS11): the card,
+/// the spawn gate, the 409, `/cli/folder-trust/*`, boot.
+pub mod folder_trust;
+/// Re-scan folders with live K2 sessions when their risky files change
+/// (U0: Claude reloads hooks mid-session).
+pub mod folder_trust_watch;
 pub mod notify_bound;
 // Zen Mode v1 (prd-zen-mode-v1 S1): `/cli/zen/*` + the `~/.k2/zen` watcher.
 pub mod zen_lib_routes;

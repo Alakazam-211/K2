@@ -640,6 +640,13 @@ pub fn prepare_person_home(tool: Tool, item_id: &str, cwd: Option<&Path>) -> Res
     store::ensure_private_dir(&slot).map_err(|e| WalletError::Io(e.to_string()))?;
     match tool {
         Tool::Codex => {
+            // Folder-trust gate (A1): a private Codex home carries no trust
+            // entries, but a held or denied folder still gets no session.
+            if let Some(c) = cwd {
+                if let Some(r) = crate::cli_folder_trust::gate::check(&c.to_string_lossy()).refusal() {
+                    return Err(WalletError::Io(r.to_error_string()));
+                }
+            }
             for f in llm_accounts::pins::CODEX_PRIVATE_FILES {
                 let p = slot.join(f);
                 if std::fs::symlink_metadata(&p).map(|m| m.file_type().is_symlink()).unwrap_or(false) {

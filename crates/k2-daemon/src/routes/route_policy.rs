@@ -646,6 +646,14 @@ pub const ROUTES: &[Route] = &[
     get("/cli/focus-groups/list", Member),
     post("/cli/focus-groups/reconcile", Member),
     post("/cli/focus-groups/update", Member),
+    // Folder trust (prd-security-sweep-0464-v1 SS10): status and the
+    // agent's ask are Member; deciding and Reset are the owner's (owner
+    // token or an Owner login; the handler's `require_action_card_person`
+    // also refuses passports, terminals, widgets and guests).
+    post("/cli/folder-trust/decide", Owner),
+    post("/cli/folder-trust/request", Member),
+    post("/cli/folder-trust/reset", Owner),
+    both("/cli/folder-trust/status", Member),
     // front443 (0.46.1): the box :443 SNI router. Enable/disable change who
     // owns the box's :443 (a root-helper socket) and restart the daemon.
     post("/cli/front/disable", Admin),
@@ -2577,6 +2585,7 @@ mod tests {
     /// whose GET is a read (verified handler by handler for 0.44.4).
     const GET_VERB_NAMED_READS: &[(&str, &str)] = &[
         ("/cli/agents/work/create", "410 Gone, no state"),
+        ("/cli/folder-trust/status", "reads the scan and the stored decision; grants, cards and decisions are POST routes"),
         ("/cli/agents/work/move", "410 Gone, no state"),
         ("/cli/app/move-plan", "lists a move's steps (doctor, dry-run copy-host); the request is POST /cli/app/move-plan/request"),
         ("/cli/work/inbox/create", "410 Gone, no state"),

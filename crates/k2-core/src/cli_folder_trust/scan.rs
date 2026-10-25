@@ -4,8 +4,8 @@
 //! trusted, it should know whether the folder carries settings that make
 //! those tools run commands or send logins elsewhere when they start: the
 //! worm pattern (CVE-2025-59536, CVE-2026-21852; Tensorlake, ChainDrop).
-//! This module only **finds** them. Nothing calls it on a spawn yet: the
-//! gate, store and card (SS9–SS11) wait for the amended design.
+//! This module only **finds** them; the gate (`super::gate`, SS9–SS11)
+//! decides what K2 does about it.
 //!
 //! [`scan_folder`] is a pure function of the folder's files plus one input
 //! from the caller, `is_tracked` (is this relative path in `git ls-files`?),
@@ -53,9 +53,10 @@ const MAX_WALK_DEPTH: usize = 8;
 /// person approves or turns off a project MCP server. In an untracked
 /// local file they record the person's own choice, not outside content, so
 /// they are neither findings nor part of the fingerprint (A5). `.mcp.json`
-/// is the finding. (U0 found Claude also writes `enableAllProjectMcpServers`
-/// there; PRD rev 2 keeps that one a finding.)
-const CLAUDE_LOCAL_APPROVAL_KEYS: &[&str] = &["enabledMcpjsonServers", "disabledMcpjsonServers"];
+/// is the finding. U0 (Extra c) found Claude's approval dialog also writes
+/// `enableAllProjectMcpServers` ("approve all") there, so it is the
+/// person's choice too; the `.mcp.json` servers it approves stay findings.
+const CLAUDE_LOCAL_APPROVAL_KEYS: &[&str] = &["enabledMcpjsonServers", "disabledMcpjsonServers", "enableAllProjectMcpServers"];
 
 const CLAUDE_HELPER_KEYS: &[&str] = &["apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "otelHeadersHelper"];
 const CLAUDE_MCP_KEYS: &[&str] = &["enableAllProjectMcpServers", "enabledMcpjsonServers"];
@@ -131,6 +132,11 @@ enum Got {
 
 fn sha_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+/// [`MAX_DETAIL`] clip for a detail line built outside this module.
+pub fn clip_detail(s: &str) -> String {
+    clip(s)
 }
 
 fn clip(s: &str) -> String {
@@ -1085,6 +1091,23 @@ mod tests {
         assert!(whats(&r3).contains(&(".claude/settings.local.json".into(), "hooks".into())));
         put(&d.0, ".claude/settings.local.json", r#"{"enabledMcpjsonServers":["k2","later"],"hooks":{"Stop":[{"hooks":[{"command":"./x"}]}]}}"#);
         assert_eq!(scan_folder(&d.0, &untracked).fingerprint, r3.fingerprint);
+    }
+
+    /// U0 Extra (c): "approve all" in Claude's dialog writes
+    /// `enableAllProjectMcpServers` into the untracked local file. That is
+    /// the person's choice (not a finding, not in the fingerprint); the
+    /// `.mcp.json` server stays the finding. Committed, it is a finding.
+    #[test]
+    fn claude_local_approve_all_is_not_a_finding_when_untracked() {
+        let d = dir("a5all");
+        put(&d.0, ".mcp.json", r#"{"mcpServers":{"k2":{"command":"k2","args":["mcp"]}}}"#);
+        let r0 = scan_folder(&d.0, &untracked);
+        put(&d.0, ".claude/settings.local.json", r#"{"enableAllProjectMcpServers":true}"#);
+        let r1 = scan_folder(&d.0, &untracked);
+        assert_eq!(whats(&r1), vec![(".mcp.json".to_string(), "mcp-command".to_string())]);
+        assert_eq!(r1.fingerprint, r0.fingerprint);
+        let r2 = scan_folder(&d.0, &tracked);
+        assert!(whats(&r2).contains(&(".claude/settings.local.json".into(), "enableAllProjectMcpServers".into())), "{:?}", r2.findings);
     }
 
     /// This repo's own shape on z3mbp: an untracked `.mcp.json` with a

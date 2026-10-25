@@ -425,6 +425,19 @@ fn symlink(_src: &Path, _dst: &Path) -> std::io::Result<()> {
 /// slot grew for itself (e.g. from a sign-in run) is moved aside, never
 /// deleted.
 pub fn materialize_codex_shadow(slot: &Path, shared: &Path) -> Result<(), String> {
+    materialize_codex_shadow_for(slot, shared, None)
+}
+
+/// [`materialize_codex_shadow`] for a session in `cwd`, through the
+/// folder-trust gate (A1): held → refused before the slot is touched;
+/// denied → the shadow `config.toml` is copied without the cwd's
+/// `[projects."<cwd>"]` tables, then refused.
+pub fn materialize_codex_shadow_for(slot: &Path, shared: &Path, cwd: Option<&Path>) -> Result<(), String> {
+    let allowed = slot_trust(cwd)?;
+    let strip: Vec<String> = match (allowed, cwd) {
+        (false, Some(c)) => slot_keys(c),
+        _ => Vec::new(),
+    };
     std::fs::create_dir_all(shared).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(shared.join("sessions")).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(slot).map_err(|e| e.to_string())?;
@@ -443,6 +456,7 @@ pub fn materialize_codex_shadow(slot: &Path, shared: &Path) -> Result<(), String
     }
     // config.toml: the shared settings plus the file credential store.
     let shared_cfg = std::fs::read_to_string(shared.join("config.toml")).unwrap_or_default();
+    let shared_cfg = if strip.is_empty() { shared_cfg } else { strip_codex_projects(&shared_cfg, &strip)? };
     let mut lines: Vec<String> = Vec::new();
     lines.push("# Written by K2 for a pinned Codex login: the shared config.toml with".into());
     lines.push("# the file credential store forced. Edit ~/.codex/config.toml instead.".into());
@@ -486,6 +500,9 @@ pub fn materialize_codex_shadow(slot: &Path, shared: &Path) -> Result<(), String
         }
         symlink(&src, &dst).map_err(|e| e.to_string())?;
     }
+    if let (false, Some(c)) = (allowed, cwd) {
+        return Err(denied_error(c));
+    }
     Ok(())
 }
 
@@ -494,10 +511,41 @@ pub fn materialize_codex_shadow(slot: &Path, shared: &Path) -> Result<(), String
 pub const CLAUDE_SHARED_ENTRIES: &[&str] =
     &["settings.json", "skills", "plugins", "agents", "commands", "CLAUDE.md", "hooks"];
 
+/// The folder-trust gate for a slot home (prd-security-sweep-0464-v1 A1,
+/// T16): a slot's own `.claude.json` / Codex `config.toml` is a trust
+/// store too. `Ok(true)`: the cwd may be trusted in the slot. `Ok(false)`:
+/// "Don't trust": strip the cwd from the slot, then refuse. `Err`: held
+/// (a card is waiting), nothing in the slot is touched.
+fn slot_trust(cwd: Option<&Path>) -> Result<bool, String> {
+    let Some(cwd) = cwd else { return Ok(true) };
+    match crate::cli_folder_trust::gate::check(&cwd.to_string_lossy()) {
+        crate::cli_folder_trust::gate::Outcome::Held(r) => Err(r.to_error_string()),
+        crate::cli_folder_trust::gate::Outcome::Denied(_) => Ok(false),
+        _ => Ok(true),
+    }
+}
+
+/// The keys a slot store may carry for `cwd` (the same keys K2 grants).
+fn slot_keys(cwd: &Path) -> Vec<String> {
+    crate::cli_folder_trust::gate::evaluate(&cwd.to_string_lossy())
+        .map(|e| e.keys)
+        .unwrap_or_else(|| vec![cwd.to_string_lossy().to_string()])
+}
+
 /// Prepare a Claude slot for a pinned session: link the shared settings
 /// entries that exist in `shared`, and mark `cwd` trusted in the slot's
-/// own `.claude.json` (a new config dir would otherwise ask again).
+/// own `.claude.json` (a new config dir would otherwise ask again), when
+/// the folder-trust gate allows it. A held folder is refused before the
+/// slot is touched; a denied one has the cwd's trust stripped from the
+/// slot, then is refused (409 `folder_trust_denied`).
 pub fn prepare_claude_home(slot: &Path, shared: &Path, cwd: Option<&Path>) -> Result<(), String> {
+    let allowed = slot_trust(cwd)?;
+    if !allowed {
+        if let Some(cwd) = cwd {
+            strip_claude_slot_trust(slot, &slot_keys(cwd))?;
+            return Err(denied_error(cwd));
+        }
+    }
     std::fs::create_dir_all(slot).map_err(|e| e.to_string())?;
     for name in CLAUDE_SHARED_ENTRIES {
         let src = shared.join(name);
@@ -536,6 +584,45 @@ pub fn prepare_claude_home(slot: &Path, shared: &Path, cwd: Option<&Path>) -> Re
         store::write_private(&path, &bytes).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// The denied refusal's error string for `cwd` (the gate's own text).
+fn denied_error(cwd: &Path) -> String {
+    match crate::cli_folder_trust::gate::check(&cwd.to_string_lossy()) {
+        crate::cli_folder_trust::gate::Outcome::Denied(r) | crate::cli_folder_trust::gate::Outcome::Held(r) => r.to_error_string(),
+        _ => format!("{}: K2 won't start AI tools in {}", crate::cli_folder_trust::gate::DENIED, cwd.display()),
+    }
+}
+
+/// Remove `hasTrustDialogAccepted` for `keys` from a slot's `.claude.json`.
+pub fn strip_claude_slot_trust(slot: &Path, keys: &[String]) -> Result<(), String> {
+    let path = slot.join(".claude.json");
+    let Ok(bytes) = std::fs::read(&path) else { return Ok(()) };
+    let mut v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| format!("slot .claude.json: {e}"))?;
+    let mut changed = false;
+    if let Some(projects) = v.get_mut("projects").and_then(|p| p.as_object_mut()) {
+        for k in keys {
+            if let Some(e) = projects.get_mut(k).and_then(|e| e.as_object_mut()) {
+                changed |= e.remove("hasTrustDialogAccepted").is_some();
+            }
+        }
+    }
+    if changed {
+        let bytes = serde_json::to_vec_pretty(&v).map_err(|e| e.to_string())?;
+        store::write_private(&path, &bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Drop `[projects."<key>"]` for `keys` from a Codex config text.
+fn strip_codex_projects(cfg: &str, keys: &[String]) -> Result<String, String> {
+    let mut root: toml::Value = cfg.parse::<toml::Value>().map_err(|e| format!("codex config.toml: {e}"))?;
+    if let Some(p) = root.get_mut("projects").and_then(|p| p.as_table_mut()) {
+        for k in keys {
+            p.remove(k.as_str());
+        }
+    }
+    toml::to_string(&root).map_err(|e| e.to_string())
 }
 
 // ── The per-session decision ───────────────────────────────────────
@@ -892,7 +979,7 @@ pub fn prepare_slot_home(tool: Tool, id: &str, cwd: Option<&Path>) -> Result<(),
     let slot = store::slot_dir(tool, id);
     let (live, _) = store::live_home(tool);
     match tool {
-        Tool::Codex => materialize_codex_shadow(&slot, &live).map_err(WalletError::Io),
+        Tool::Codex => materialize_codex_shadow_for(&slot, &live, cwd).map_err(WalletError::Io),
         Tool::Claude => prepare_claude_home(&slot, &live, cwd).map_err(WalletError::Io),
         _ => Ok(()),
     }

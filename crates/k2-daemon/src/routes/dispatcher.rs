@@ -8066,6 +8066,62 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
         }
+        // Folder trust (prd-security-sweep-0464-v1 SS10): `status` (GET or
+        // POST, any login or an agent passport), `request` (agents ask: it
+        // only presents the card), `decide` / `reset` (the owner: the
+        // handler runs `require_action_card_person`; a passport never gets
+        // this far, they aren't agent verbs). The POST-only ones answered a
+        // GET with 405 above, before auth.
+        p if p.starts_with("/cli/folder-trust/") => {
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let mut params = super::http::parse_params(&path, &query);
+            if let Some(v) = {
+                let presented = bearer_token
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| super::http::extract_token(&query));
+                presented.and_then(|t| crate::session_token::require_hook(t, p))
+            } {
+                params.insert("cell_session_id".to_string(), v.session_id);
+            }
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            let session_author = if super::http::token_is_owner(&query, state.token.as_str()) {
+                "owner".to_string()
+            } else {
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+                    .unwrap_or_else(|| "agent".to_string())
+            };
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::folder_trust::dispatch(is_post, &p_owned, &params, &body_bytes, &session_author)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
+        }
         p if is_post && post_allowed && p.starts_with("/cli/thread/") => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;

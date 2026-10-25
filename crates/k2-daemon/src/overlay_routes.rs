@@ -2641,7 +2641,7 @@ fn action_card_person_only(hint: &str) -> CliResponse {
 /// "answers" or "dismisses" (the refusals also say "only you answer it":
 /// [`base_form`]). The daemon's own replace (a newer change voids the
 /// waiting card) never comes through a route, so it isn't checked here.
-fn require_action_card_person(params: &HashMap<String, String>, session_author: &str, verb: &str) -> Result<(), CliResponse> {
+pub(crate) fn require_action_card_person(params: &HashMap<String, String>, session_author: &str, verb: &str) -> Result<(), CliResponse> {
     refuse_action_card_non_person(params, verb)?;
     let owner = session_author == "owner"
         || matches!(k2_core::connect_users::role_for_user(session_author), Some(k2_core::connect_users::Role::Owner));

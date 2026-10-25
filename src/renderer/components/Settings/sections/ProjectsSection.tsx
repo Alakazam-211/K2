@@ -57,6 +57,7 @@ import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { HideApiSessionsToggle } from '@/components/WorkspacePanel/HideApiSessionsToggle'
 import { WorkspaceCompletionSoundToggle } from '@/components/WorkspacePanel/WorkspaceCompletionSoundToggle'
 import { DesignModeSettingRow } from '@/components/Design/DesignModeSettingRow'
+import { FolderTrustRow } from './FolderTrustRow'
 import { WorkspacePhonePushToggle } from '@/components/WorkspacePanel/WorkspacePhonePushToggle'
 import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess, setWorkspaceDbUpgrade } from './data-api'
@@ -1380,6 +1381,7 @@ function ProjectDetail({
               <DefaultModelControls project={project} />
               <WorkspaceCompletionSoundToggle project={project} />
               <DesignModeSettingRow project={project} scope={primaryScope()} />
+              <FolderTrustRow scope={primaryScope()} projectPath={project.path} />
               <WorkspacePhonePushToggle project={project} />
             </SettingsGroup>
 

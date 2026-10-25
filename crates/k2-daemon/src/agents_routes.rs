@@ -343,7 +343,7 @@ pub fn handle_agents_launch(
         label: None,
     }) {
         Ok(o) => o,
-        Err(e) => return CliResponse::bad_request(format!("spawn failed: {e}")),
+        Err(e) => return crate::folder_trust::spawn_failed_response(&e),
     };
 
     // Mark the session `running` in `agent_sessions` so the
@@ -471,7 +471,7 @@ pub fn handle_agents_delegate(
         label: None,
     }) {
         Ok(o) => o,
-        Err(e) => return CliResponse::bad_request(format!("spawn failed: {e}")),
+        Err(e) => return crate::folder_trust::spawn_failed_response(&e),
     };
 
     let _ = k2_core::workspace::session::k2so_agents_lock(

@@ -1053,6 +1053,8 @@ cli_post_json_uds() {
 _uds_eligible() {
     case "$1" in
         /cli/workspace/msg|/cli/awareness/publish) return 0 ;;
+        # Folder trust (SS10): agents read status and ask (the card).
+        /cli/folder-trust/status|/cli/folder-trust/request) return 0 ;;
         # C2: peer-gated live terminal peek (k2 read <ws>).
         /cli/terminal/read) return 0 ;;
         /cli/inbox/*|/cli/review-checklist/*) return 0 ;;
@@ -31387,6 +31389,8 @@ if not e:
     sys.exit(0)
 if isinstance(e, dict):
     print(e.get("hint") or e.get("code") or "daemon refused")
+elif e in ("folder_trust_pending", "folder_trust_denied") and d.get("message"):
+    print("%s: %s" % (e, d["message"]))
 else:
     print(e)' 2>/dev/null)
     if [ -n "$err" ]; then
@@ -31431,9 +31435,195 @@ cmd_workspace_create() {
     cli_print_or_fail "$resp"
 }
 
-# P13: re-assert Claude/Codex/Grok/Gemini folder trust for every registered workspace.
+# P13: re-assert Claude/Codex/Grok/Gemini folder trust for every registered
+# workspace. Since 0.46.4 (SS9) only folders a decision covers (or clean ones)
+# are re-asserted; a risky folder with no decision is never granted.
 cmd_trust_folders() {
     cli_request_post "/cli/trust-folders"
+}
+
+# Folder trust (prd-security-sweep-0464-v1 SS10). K2 looks inside a folder
+# before it tells Claude, Codex, Grok, Gemini or Cursor to trust it. A folder
+# with settings that run commands needs the owner's decision: the Thread card,
+# or this command from the owner's own terminal. Agents ask (`request`, which
+# only presents the card); people decide.
+cmd_help_workspace_trust() {
+    cat <<'EOF'
+k2 workspace trust — folder trust (who may start AI tools in a folder)
+
+K2 looks inside a folder before it tells Claude, Codex, Grok, Gemini or
+Cursor to trust it. A clean folder is trusted as before. A folder with
+settings that run commands or send your logins elsewhere waits for the
+owner: a card on Thread (Trust it / Always trust this folder / Don't trust).
+
+  k2 workspace trust status [<folder>] [--json]
+                                    One folder (or every workspace): clean,
+                                    trusted, always, pending, undecided,
+                                    changed or denied, with the findings
+  k2 workspace trust request <folder> --why "…"
+                                    Agents: present the card (only asks)
+  k2 workspace trust <folder> --yes|--always|--no
+                                    Owner: Trust it (this version) / Always
+                                    trust this folder / Don't trust
+  k2 workspace trust reset <folder> Owner: back to undecided (asks again)
+
+Deciding is the owner's: an agent or a K2 terminal gets exit 3 (the card is
+the request). More: k2 study folder-trust
+EOF
+}
+
+_workspace_trust_print() {
+    # $1 = response body, $2 = mode (status|request|decide)
+    printf '%s' "$1" | python3 -c '
+import json, sys
+mode = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("Error: the daemon answered something that is not JSON", file=sys.stderr)
+    sys.exit(1)
+err = d.get("error")
+if err:
+    msg = d.get("message") or d.get("hint") or ""
+    if isinstance(err, dict):
+        msg = err.get("hint") or err.get("message") or msg
+        err = err.get("code") or "refused"
+    print("Error: %s%s" % (err, (": " + msg) if msg else ""), file=sys.stderr)
+    if err == "action_card_person_only":
+        print("It can'"'"'t be requested.", file=sys.stderr)
+        sys.exit(3)
+    sys.exit(1)
+def show(v):
+    state = v.get("state", "?")
+    line = "%s: %s" % (v.get("path", "?"), state)
+    by = v.get("decided_by")
+    if by and state in ("trusted", "always", "denied", "changed"):
+        line += " (by %s)" % by
+    print(line)
+    for f in v.get("findings") or []:
+        print("  • %s: %s" % (f.get("file"), f.get("detail")))
+    if v.get("more"):
+        print("  (and %d more)" % v["more"])
+    if v.get("card"):
+        print("  Card waiting on Thread: %s" % v["card"])
+    if v.get("ticket"):
+        print("  Owner ticket: %s" % v["ticket"])
+    for t in v.get("trusted_by") or []:
+        print("  Trusted by: %s" % t)
+    if state in ("pending", "undecided", "changed", "denied"):
+        print("  Decide (owner): %s" % v.get("decide", ""))
+if mode == "status":
+    if "folders" in d:
+        for v in d["folders"]:
+            print("%-10s %s" % (v.get("state", "?"), v.get("path", "?")))
+    else:
+        show(d)
+elif mode == "request":
+    st = d.get("state")
+    if st == "clean":
+        print("Clean: no risky settings, so the folder is trusted as before.")
+    elif st == "trusted":
+        print("Already trusted (a decision covers these settings).")
+    elif st == "held":
+        where = ("card " + d["card"]) if d.get("card") else (("owner ticket " + d["ticket"]) if d.get("ticket") else "no Thread or ticket")
+        print("Asked the owner (%s). K2 starts no AI tool there until they answer." % where)
+        for f in (d.get("findings") or [])[:5]:
+            print("  • %s: %s" % (f.get("file"), f.get("detail")))
+    elif st == "denied":
+        print("Not trusted: the owner chose \"Don'"'"'t trust\". Only the owner can change it (Settings → Workspaces → Folder trust → Reset).")
+    else:
+        print("Not gated: %s" % (d.get("reason") or st))
+else:
+    print(d.get("message") or "Done.")
+    for t in d.get("leftover") or []:
+        print("  Still trusted elsewhere: %s" % t)
+' "$2"
+}
+
+cmd_workspace_trust() {
+    local sub="${1:-}"
+    case "$sub" in
+        ""|-h|--help|help) cmd_help_workspace_trust; return 0 ;;
+        status)
+            shift
+            local folder="" json=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) json=1; shift ;;
+                    -*) echo "Unknown flag: $1" >&2; echo "Usage: k2 workspace trust status [<folder>] [--json]" >&2; exit 2 ;;
+                    *) [ -z "$folder" ] || { echo "Usage: k2 workspace trust status [<folder>] [--json]" >&2; exit 2; }; folder="$1"; shift ;;
+                esac
+            done
+            local resp
+            if [ -n "$folder" ]; then
+                resp=$(cli_send cli_request "/cli/folder-trust/status" "path=$(urlencode "$(cli_abs_path "$folder")")")
+            else
+                resp=$(cli_send cli_request "/cli/folder-trust/status")
+            fi
+            if [ "$json" -eq 1 ]; then
+                cli_print_or_fail "$resp"
+                return
+            fi
+            _workspace_trust_print "$resp" status
+            return
+            ;;
+        request)
+            shift
+            local folder="" why=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --why) [ $# -ge 2 ] || { echo "Usage: k2 workspace trust request <folder> --why \"…\"" >&2; exit 2; }; why="$2"; shift 2 ;;
+                    -*) echo "Unknown flag: $1" >&2; echo "Usage: k2 workspace trust request <folder> --why \"…\"" >&2; exit 2 ;;
+                    *) [ -z "$folder" ] || { echo "Usage: k2 workspace trust request <folder> --why \"…\"" >&2; exit 2; }; folder="$1"; shift ;;
+                esac
+            done
+            if [ -z "$folder" ]; then
+                echo "Usage: k2 workspace trust request <folder> --why \"…\"" >&2
+                exit 2
+            fi
+            local resp
+            resp=$(cli_send cli_request_post "/cli/folder-trust/request" "path=$(urlencode "$(cli_abs_path "$folder")")" "why=$(urlencode "$why")")
+            _workspace_trust_print "$resp" request
+            return
+            ;;
+    esac
+    # Owner verbs: <folder> --yes|--always|--no, and reset <folder>.
+    local endpoint="/cli/folder-trust/decide" folder="" decision=""
+    if [ "$sub" = "reset" ]; then
+        endpoint="/cli/folder-trust/reset"
+        decision="reset"
+        shift
+    fi
+    local usage="Usage: k2 workspace trust <folder> --yes|--always|--no   (or: reset <folder>)"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --yes)    [ "$decision" != "reset" ] || { echo "$usage" >&2; exit 2; }; decision="once"; shift ;;
+            --always) [ "$decision" != "reset" ] || { echo "$usage" >&2; exit 2; }; decision="always"; shift ;;
+            --no)     [ "$decision" != "reset" ] || { echo "$usage" >&2; exit 2; }; decision="deny"; shift ;;
+            -*) echo "Unknown flag: $1" >&2; echo "$usage" >&2; exit 2 ;;
+            *) [ -z "$folder" ] || { echo "$usage" >&2; exit 2; }; folder="$1"; shift ;;
+        esac
+    done
+    if [ -z "$folder" ] || [ -z "$decision" ]; then
+        echo "$usage" >&2
+        exit 2
+    fi
+    folder="$(cli_abs_path "$folder")"
+    # A session passport (an agent, a K2 terminal) never decides: the card
+    # is the request.
+    if [ -n "$SCOPED_TOKEN" ]; then
+        echo "Error: only the owner decides folder trust; an agent or a K2 terminal can't. The card is the request: k2 workspace trust request $(printf '%q' "$folder") --why \"…\"" >&2
+        echo "It can't be requested." >&2
+        exit 3
+    fi
+    local resp
+    if [ "$decision" = "reset" ]; then
+        resp=$(cli_request_post "$endpoint" "path=$(urlencode "$folder")")
+        _workspace_trust_print "$resp" status
+    else
+        resp=$(cli_request_post "$endpoint" "path=$(urlencode "$folder")" "decision=$decision")
+        _workspace_trust_print "$resp" decide
+    fi
 }
 
 cmd_workspace_preview() {
@@ -32527,6 +32717,20 @@ cmd_schema() {
         {"name": "--json", "arg": null, "description": "Machine-readable peer JSON. Combined with --users, adds a users array (username/role/disabled only)."},
         {"name": "--users", "arg": null, "description": "Also list humans on this host and their roles. Do not k2 msg those names."}
       ]
+    },
+    {
+      "name": "workspace trust status",
+      "usage": "k2 workspace trust status [<folder>] [--json]",
+      "description": "Folder trust: what K2 found in a folder before letting AI tools trust it (settings that run commands or send logins elsewhere), and its state: clean, trusted, always, pending, undecided, changed or denied. No folder: every workspace. See k2 study folder-trust.",
+      "args": [{"name": "folder", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw daemon JSON."}]
+    },
+    {
+      "name": "workspace trust request",
+      "usage": "k2 workspace trust request <folder> --why \"…\"",
+      "description": "Ask the owner to trust a folder that has risky settings: presents the Thread card (Trust it / Always trust this folder / Don't trust). It only asks; deciding (k2 workspace trust <folder> --yes|--always|--no) is the owner's, and an agent gets exit 3.",
+      "args": [{"name": "folder", "required": true}],
+      "flags": [{"name": "--why", "arg": "text", "description": "One line for the owner: why you need AI tools there."}]
     },
     {
       "name": "agent hire",
@@ -35474,7 +35678,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-push skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-push skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs folder-trust"
 
 _study_usage() {
     cat <<'EOF'
@@ -35495,6 +35699,7 @@ Topics:
   zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  db-upgrade  jobs
+  folder-trust
 EOF
 }
 
@@ -35537,6 +35742,7 @@ _study_title() {
         compute-shared) echo "Shared compute nodes" ;;
         vault) echo "Secrets (the vault)" ;;
         jobs) echo "Scheduled jobs the daemon runs" ;;
+        folder-trust) echo "Who may start AI tools in a folder" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
         projects) echo "K2 projects and who may change them" ;;
@@ -35645,6 +35851,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   garden-changes      Gardens in 0.46.3: what's retired, what to update before 0.47.0
   changes             Git changes (the Changes tab): your own workspace; discard = Trash
   design              Design notes from a page: the shape, k2 browser note, answer in Thread
+  folder-trust        Folder trust: the card, asking vs deciding, re-scan, honest limits
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -35700,6 +35907,7 @@ _study_page() {
         changes) _study_page_changes ;;
         vault) _study_page_vault ;;
         jobs) _study_page_jobs ;;
+        folder-trust) _study_page_folder_trust ;;
         notifications) _study_page_notifications ;;
         projects) _study_page_projects ;;
         hooks) _study_page_hooks ;;
@@ -36123,6 +36331,65 @@ NOT A THREAD PUSH
   k2 msg, k2 mail and terminal output never push. `k2 feedback ask`
   tickets push on their own (the server bell silences those too).
   An air-gapped server sends no pushes at all.
+EOF
+}
+
+_study_page_folder_trust() {
+    cat <<'EOF'
+k2 study folder-trust — who may start AI tools in a folder
+
+WHAT K2 DOES
+  Before K2 tells Claude, Codex, Grok, Gemini or Cursor that a folder is
+  trusted, it looks inside. A clean folder is trusted as before. A folder
+  with settings that make those tools run commands or send logins
+  elsewhere when they start (hooks, apiKeyHelper, env redirects, MCP
+  servers, Codex/Grok project config, Cursor worktree scripts, a VS Code
+  folderOpen task, git hooks/fsmonitor) waits for the owner: a card on
+  Thread with Trust it / Always trust this folder / Don't trust.
+
+  Trust it      this version only; K2 asks again when those settings change
+  Always        any version; undo in Settings → Workspaces → Folder trust
+  Don't trust   K2 starts no AI tool there and removes the trust entries it
+                wrote; it lists entries it didn't write that still trust it
+
+  While a card waits: no new session starts in that folder (the spawn gets
+  409 folder_trust_pending and runs once the owner trusts it), heartbeats
+  are skipped (held: folder trust), k2 msg tells you the same. Print mode
+  (claude -p) is gated too: it runs project hooks with no trust dialog.
+
+YOU (AN AGENT)
+  k2 workspace trust status [<folder>]        what K2 found, the state
+  k2 workspace trust request <folder> --why "…"   ask: presents the card
+  You never decide: k2 workspace trust <folder> --yes|--always|--no is the
+  owner's (you get exit 3; the card is the request). Don't edit the trust
+  files (~/.claude.json, ~/.codex/config.toml, ~/.gemini/trustedFolders.json,
+  ~/.grok/trusted_folders.toml, ~/.cursor/projects/…) to get around it.
+
+RE-SCAN ON CHANGE
+  Every spawn scans. Claude also reloads hooks mid-session, so K2 watches
+  the risky files of every folder where it runs a session: when they
+  change, a "Trust it" folder is undecided again, K2's grants come off and
+  the owner gets the card. Claude may load a new hook before K2 sees the
+  change; "Don't trust" stops K2's sessions there.
+
+WHAT IT CAN'T DO (honest limits)
+  - It is not a wall against an agent running as the same OS user: such an
+    agent can read the owner token (~/.k2/heartbeat.token) and decide its
+    own card through the API, edit the trust files itself, or run claude /
+    codex outside K2. That needs agent isolation (a later arc).
+  - It doesn't look at CLAUDE.md / AGENTS.md text (prompt injection), npm or
+    make scripts (agents run those anyway), or your user-level settings.
+  - Gemini and Cursor let a nested clone inherit a trusted parent's trust.
+    K2 scans nested repos up to 3 levels below a folder it trusts; one
+    cloned later is seen at the next scan, not before.
+  - Gemini reads a .env from any parent folder; K2 scans the folders from
+    the session's folder up to its repo top, not above it.
+  - $HOME, / and parents of $HOME are never trusted by K2, so they aren't
+    gated either: the CLI's own prompt applies there (and claude -p has none).
+  - A sandboxed cell seeds its own trust inside the cell (not covered).
+  What it does stop: K2's own silent trust, and any session K2 starts
+  (spawn, heartbeat, wake, pinned or wallet login) running start-up code
+  from outside that no person has seen.
 EOF
 }
 
@@ -39982,6 +40249,13 @@ LIFECYCLE (less common)
                                     Register existing folder (same defaults)
   remove <path>                     Deregister (files stay)
   triage                            This workspace's inbox list (same as k2 inbox list)
+
+FOLDER TRUST (who may start AI tools in a folder; k2 workspace trust --help)
+  trust status [<folder>] [--json]  Clean / trusted / pending / denied + findings
+  trust request <folder> --why "…"  Agents: ask the owner (a Thread card)
+  trust <folder> --yes|--always|--no
+                                    Owner: Trust it / Always / Don't trust
+  trust reset <folder>              Owner: back to undecided
 
 WORKSPACE RESOURCES
   resources list [--json]           Files pinned in the Files drawer for this workspace
@@ -68384,6 +68658,8 @@ EOF
             open)              shift 2; cmd_workspace_open "$@" ;;
             remove)            shift 2; cmd_workspace_remove "$@" ;;
             resources)         shift 2; cmd_workspace_resources "$@" ;;
+            # Folder trust (security sweep SS10): status / request / decide.
+            trust)             shift 2; cmd_workspace_trust "$@" ;;
             preview)           shift 2; cmd_workspace_preview "$@" ;;
             cleanup)           cmd_workspace_cleanup ;;
             agent-name)        shift 2; cmd_workspace_get_agent_display_name "$@" ;;
@@ -68403,7 +68679,7 @@ EOF
             default-model)     shift 2; cmd_workspace_default_model "$@" ;;
             force-model-on-resume) shift 2; cmd_workspace_force_model_on_resume "$@" ;;
             design-mode)       shift 2; cmd_workspace_design_mode "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|resources|triage|set-agent-name|set-agent-identity|set-handle|resume-chat-args|swap-canonical|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|default-model|force-model-on-resume|design-mode|...> [args]" >&2; exit 1 ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|resources|trust|triage|set-agent-name|set-agent-identity|set-handle|resume-chat-args|swap-canonical|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|default-model|force-model-on-resume|design-mode|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)

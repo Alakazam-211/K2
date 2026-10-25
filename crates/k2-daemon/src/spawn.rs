@@ -285,6 +285,25 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         existing.kill();
     }
 
+    // Folder-trust gate (prd-security-sweep-0464-v1 SS11). Every harness
+    // spawn (canonical, heartbeat, wake, sidecar, agents launch, terminal,
+    // `claude -p` included: print mode runs project hooks with no trust
+    // dialog) asks first, BEFORE the login slot home is prepared or any
+    // grant is written. Held (a card is waiting): the request is queued and
+    // retried once when the person trusts the folder. Denied: no harness.
+    if let Err(r) = crate::folder_trust::gate_spawn(
+        req.command.as_deref(),
+        &req.cwd,
+        req.env.get("HOME").map(String::as_str),
+        req.project_id.as_deref(),
+        "spawn",
+    ) {
+        if r.error == k2_core::cli_folder_trust::gate::PENDING {
+            crate::folder_trust::hold_spawn(&r.scope, &req);
+        }
+        return Err(r.to_error_string());
+    }
+
     // Phase B: seed the session's label with the workspace's
     // primary-agent display name and LOCK it. This is the
     // canonical workspace+agent session — its tab label should be
@@ -505,11 +524,6 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
             llm_login.as_ref().map(|g| g.ptyd_meta()),
         ));
     }
-    k2_core::cli_folder_trust::maybe_trust_harness_spawn(
-        cfg.program.as_deref(),
-        cfg.cwd.as_deref(),
-        cfg.env.get("HOME").map(String::as_str),
-    );
     let session = DaemonPtySession::spawn(cfg).map_err(|e| format!("v2 spawn failed: {e}"))?;
     if let Some(g) = llm_login {
         g.spawned(session.child_pid());

@@ -819,7 +819,7 @@ fn spawn_terminal_impl(
         label: None,
     }) {
         Ok(o) => o,
-        Err(e) => return CliResponse::bad_request(format!("spawn failed: {e}")),
+        Err(e) => return crate::folder_trust::spawn_failed_response(&e),
     };
 
     // Emit the HookEvent so Tauri (or any other subscriber on the

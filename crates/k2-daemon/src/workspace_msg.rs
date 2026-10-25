@@ -98,6 +98,14 @@ pub enum MsgReason {
     /// is HELD (nothing written); transient like [`Self::PtyStalled`] —
     /// re-fire once a human resolves the gate.
     HitlGateOpen,
+    /// prd-security-sweep-0464-v1 SS11: the recipient's folder has settings
+    /// that run commands and waits for a person to trust it (a card is on
+    /// Thread). K2 started no session; the wake is queued and runs once
+    /// when the person answers "Trust it". Permanent for THIS call.
+    FolderTrustPending,
+    /// The owner chose "Don't trust" for the recipient's folder: K2 starts
+    /// no AI tool there. Permanent.
+    FolderTrustDenied,
 }
 
 impl MsgReason {
@@ -110,6 +118,8 @@ impl MsgReason {
             Self::PtyStalled => "pty_stalled",
             Self::DormantNoWake => "dormant_no_wake",
             Self::HitlGateOpen => "hitl_gate_open",
+            Self::FolderTrustPending => "folder_trust_pending",
+            Self::FolderTrustDenied => "folder_trust_denied",
         }
     }
 
@@ -136,6 +146,12 @@ impl MsgReason {
             Self::HitlGateOpen => {
                 "Recipient is sitting on an open permission gate (grok `⚠ Action Required` — its default answer is always-approve, so K2 held the message rather than risk auto-approving). Resolve the gate in the terminal, then re-send."
             }
+            Self::FolderTrustPending => {
+                "Waiting for the owner to trust the recipient's folder (it has settings that run commands when AI tools start). K2 starts the session and delivers this message when they answer Trust on Thread (or: k2 workspace trust <folder> --yes)."
+            }
+            Self::FolderTrustDenied => {
+                "The owner chose \"Don't trust\" for the recipient's folder, so K2 starts no AI tool there. They can change it in Settings → Workspaces → Folder trust."
+            }
         }
     }
 
@@ -147,8 +163,22 @@ impl MsgReason {
     fn is_permanent(self) -> bool {
         matches!(
             self,
-            Self::WorkspaceNotFound | Self::NoAgentMode | Self::DormantNoWake
+            Self::WorkspaceNotFound
+                | Self::NoAgentMode
+                | Self::DormantNoWake
+                | Self::FolderTrustPending
+                | Self::FolderTrustDenied
         )
+    }
+}
+
+/// A wake spawn's error: the folder-trust gate's refusal (SS11) keeps its
+/// own reason, so the sender is told the folder waits for a person.
+fn spawn_fail_reason(e: &str) -> MsgReason {
+    match k2_core::cli_folder_trust::gate::refusal_in_text(e) {
+        Some(r) if r.error == k2_core::cli_folder_trust::gate::DENIED => MsgReason::FolderTrustDenied,
+        Some(_) => MsgReason::FolderTrustPending,
+        None => MsgReason::SpawnFailed,
     }
 }
 
@@ -1045,7 +1075,11 @@ fn deliver_live_inner(
         if let Some(reason) = result.reason.as_deref() {
             let permanent = matches!(
                 reason,
-                "workspace_not_found" | "no_agent_mode" | "dormant_no_wake"
+                "workspace_not_found"
+                    | "no_agent_mode"
+                    | "dormant_no_wake"
+                    | "folder_trust_pending"
+                    | "folder_trust_denied"
             );
             if permanent {
                 return result;
@@ -2103,7 +2137,7 @@ fn wake_sidecar_and_fire(
         Ok(o) => o,
         Err(e) => {
             log_debug!("[msg/wake_sidecar] spawn failed: {e}");
-            return MsgResponse::fail(MsgReason::SpawnFailed);
+            return MsgResponse::fail(spawn_fail_reason(&e));
         }
     };
     let target_id = outcome.session_id.to_string();
@@ -2541,7 +2575,7 @@ fn wake_and_fire(
         Ok(o) => o,
         Err(e) => {
             log_debug!("[msg/wake_and_fire] spawn failed: {e}");
-            return MsgResponse::fail(MsgReason::SpawnFailed);
+            return MsgResponse::fail(spawn_fail_reason(&e));
         }
     };
     let target_id = outcome.session_id.to_string();
@@ -2982,6 +3016,16 @@ mod tests {
     }
 
     #[test]
+    fn folder_trust_reasons_are_permanent_with_stable_codes() {
+        assert!(MsgReason::FolderTrustPending.is_permanent());
+        assert!(MsgReason::FolderTrustDenied.is_permanent());
+        assert_eq!(MsgReason::FolderTrustPending.code(), "folder_trust_pending");
+        assert_eq!(MsgReason::FolderTrustDenied.code(), "folder_trust_denied");
+        assert!(MsgReason::FolderTrustPending.hint().contains("trust"));
+        assert_eq!(spawn_fail_reason("spawn failed: no such file"), MsgReason::SpawnFailed);
+    }
+
+    #[test]
     fn every_reason_has_a_nonempty_hint() {
         for reason in [
             MsgReason::WorkspaceNotFound,
@@ -2990,6 +3034,8 @@ mod tests {
             MsgReason::PtyDied,
             MsgReason::PtyStalled,
             MsgReason::DormantNoWake,
+            MsgReason::FolderTrustPending,
+            MsgReason::FolderTrustDenied,
         ] {
             assert!(
                 !reason.hint().is_empty(),

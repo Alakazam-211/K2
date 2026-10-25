@@ -335,6 +335,12 @@ async fn web_off_lets_a_paired_phone_through_and_keeps_browsers_out() {
     assert!(mints.iter().any(|e| e["outcome"] == "bad_creds" && e["actor"] == "user:phone_user"), "bad password row: {mints:?}");
     let pairs = audit_rows(port, "device-pair");
     assert!(pairs.iter().any(|e| e["outcome"] == "ok" && e["actor"] == "owner-token"), "pair row: {pairs:?}");
+    // Review L1: off the tunnel the rows carry the socket peer, not "-".
+    assert!(mints.iter().any(|e| e["actor"] == "owner-token" && e["ip"] == "127.0.0.1"), "mint row ip: {mints:?}");
+    assert!(pairs.iter().all(|e| e["ip"] == "127.0.0.1"), "pair row ip: {pairs:?}");
+    // Review L3: a token that is not session-shaped is no login.
+    let r = http(port, "GET", "/cli/auth/devices", None, &[&bearer("not-a-session-token")]);
+    assert_code(&r, 401, "login_required", "a garbage bearer");
     let tickets = http(port, "GET", &format!("/cli/feedback/list-all?token={OWNER_TOKEN}"), None, &[]);
     assert_eq!(tickets.status, 200, "{}", tickets.body);
     assert!(tickets.body.contains("paired for phone_user"), "pair notice filed: {}", tickets.body);
@@ -434,6 +440,12 @@ async fn who_a_pairing_code_signs_in_as() {
     assert_eq!(r.json()["pairAs"]["user"], Value::Null, "{}", r.body);
     assert_eq!(r.json()["pairAs"]["error"]["code"], "owner_login_not_linked", "{}", r.body);
 
+    // Review M1: a Member-only link is not the owner's admin account → 409.
+    k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["crew"] })).expect("link crew");
+    let r = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some("{}"), &[]);
+    assert_code(&r, 409, "owner_login_not_linked", "a Member-only linked login");
+    assert!(r.json()["error"]["hint"].as_str().is_some_and(|h| h.contains("admin login")), "{}", r.body);
+
     // Linked → the code pairs as the linked login.
     k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["deputy"] })).expect("link deputy");
     let r = http(port, "GET", &format!("/cli/auth/devices?token={OWNER_TOKEN}"), None, &[]);
@@ -530,6 +542,64 @@ async fn the_pair_page_and_app_links_answer_with_web_off() {
     assert_eq!(r.status, 404, "{}", r.body);
     let r = http(port, "GET", "/.well-known/assetlinks.json", None, &[]);
     assert_eq!(r.status, 404, "not served until the Play fingerprint is known: {}", r.body);
+}
+
+/// Companion's pair screen: `POST /cli/auth/device/pair/check` says what a
+/// code pairs as WITHOUT using it, works with web access off through the
+/// edge, and shares the redeem's buckets and failure accounting.
+#[tokio::test(flavor = "multi_thread")]
+async fn pair_check_never_uses_a_code_and_is_throttled_like_a_pair() {
+    let _g = lock();
+    let _home = HomeEnv::set();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let port = d.port;
+    connect_users::add_user("checked", PW).expect("add");
+    set_web(port, false);
+    let code = owner_code(port, "checked");
+    let check_body = format!(r#"{{"code":"{code}"}}"#);
+    for _ in 0..3 {
+        let r = http(port, "POST", "/cli/auth/device/pair/check", Some(&check_body), EDGE);
+        assert_eq!(r.status, 200, "check with web off through the edge: {}", r.body);
+        let v = r.json();
+        assert_eq!(v["ok"], true, "{}", r.body);
+        assert_eq!(v["user"], "checked", "{}", r.body);
+        assert_eq!(v["host"], Value::Null, "no public host on this test box: {}", r.body);
+        assert!(v["expiresInSecs"].as_i64().is_some_and(|s| s > 0 && s <= 600), "{}", r.body);
+    }
+    pair_through_edge(port, &code, "checked-phone");
+    let r = http(port, "POST", "/cli/auth/device/pair/check", Some(&check_body), EDGE);
+    assert_code(&r, 401, "pair_code_invalid", "a used code");
+    let r = http(port, "POST", "/cli/auth/device/pair/check", Some(r#"{"code":"K2P-00000-00000-00000-00000"}"#), EDGE);
+    assert_code(&r, 401, "pair_code_invalid", "an unknown code");
+    let r = http(port, "POST", "/cli/auth/device/pair/check", Some(&check_body), &refs(&with(EDGE, &["Origin: https://evil.example"])));
+    assert_code(&r, 403, "device_pairing_not_from_browser", "a browser page checking");
+    let r = http(port, "GET", "/cli/auth/device/pair/check", None, EDGE);
+    assert_eq!(r.status, 405, "check is POST only: {}", r.body);
+    let checks = audit_rows(port, "device-pair-check");
+    assert_eq!(checks.len(), 2, "failed checks are audited, successful ones are not: {checks:?}");
+    assert!(checks.iter().all(|e| e["outcome"] == "unknown" && e["ip"] == "127.0.0.1"), "{checks:?}");
+
+    // Throttle: on the tunnel (no relay address) checks share the redeem's
+    // shared bucket, so failed guesses run out for both.
+    let bad = r#"{"code":"K2P-11111-11111-11111-11111"}"#;
+    for i in 0..crate_shared_limit() {
+        let r = http(d.tunnel_port, "POST", "/cli/auth/device/pair/check", Some(bad), &[]);
+        assert_code(&r, 401, "pair_code_invalid", &format!("guess {i}"));
+    }
+    let r = http(d.tunnel_port, "POST", "/cli/auth/device/pair/check", Some(bad), &[]);
+    assert_code(&r, 429, "rate_limited", "the next check");
+    let r = http(
+        d.tunnel_port,
+        "POST",
+        "/cli/auth/device/pair",
+        Some(r#"{"code":"K2P-11111-11111-11111-11111","device":{"id":"d","name":"D"}}"#),
+        &[],
+    );
+    assert_code(&r, 429, "rate_limited", "a pair after the checks used the bucket");
+}
+
+fn crate_shared_limit() -> usize {
+    k2_daemon::login_throttle::TUNNEL_SHARED_LIMIT
 }
 
 /// With a public host, a code comes with its link and QR.

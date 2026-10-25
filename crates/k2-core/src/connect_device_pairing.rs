@@ -238,6 +238,39 @@ pub fn mint(username: &str, minted_by: &str) -> Result<PairCode, MintError> {
     Ok(PairCode { code: display(&body), username, expires_at })
 }
 
+/// What a still-valid code would pair as (`POST /cli/auth/device/pair/check`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checked {
+    pub username: String,
+    /// Seconds left before the code expires (at least 1).
+    pub expires_in_secs: i64,
+}
+
+/// Look at `raw` WITHOUT consuming it (Companion's pair screen confirms the
+/// login before pairing). Refuses exactly what a redeem would refuse at
+/// this moment: unknown/used, expired, the login changed, or the login must
+/// change its password. Never mints anything. The route throttles it like
+/// a redeem, so it is no cheaper a guessing oracle.
+pub fn check(raw: &str) -> Result<Checked, Refused> {
+    let Some(body) = normalize(raw) else { return Err(Refused::Unknown) };
+    let (username, epoch, expires_at) = {
+        let map = codes();
+        let Some(p) = map.get(&digest(&body)) else { return Err(Refused::Unknown) };
+        (p.username.clone(), p.epoch, p.expires_at)
+    };
+    let left = (expires_at - Utc::now()).num_seconds();
+    if left <= 0 {
+        return Err(Refused::Expired);
+    }
+    if connect_users::live_user_epoch(&username) != Some(epoch) {
+        return Err(Refused::LoginChanged);
+    }
+    if connect_users::must_change_password(&username) {
+        return Err(Refused::PasswordChangeRequired);
+    }
+    Ok(Checked { username, expires_in_secs: left })
+}
+
 /// Redeem `raw` for a device session bound to `device_id` / `device_name`
 /// (already validated). The code is consumed by the attempt, paired or
 /// not. `Err` only for a session-store failure.
@@ -312,6 +345,22 @@ mod tests {
             connect_users::set_must_change_password("rotate_first", true).expect("flag");
             assert_eq!(mint("rotate_first", "owner-token").err(), Some(MintError::PasswordChangeRequired));
             assert_eq!(redeem(&code.code, "d", "D").expect("store").err(), Some(Refused::PasswordChangeRequired));
+        });
+    }
+
+    #[test]
+    fn a_check_never_consumes_the_code() {
+        with_temp_home(|| {
+            connect_users::add_user("checker", "password123").expect("add");
+            let code = mint("checker", "owner-token").expect("mint").code;
+            for _ in 0..3 {
+                let c = check(&code).expect("valid");
+                assert_eq!(c.username, "checker");
+                assert!(c.expires_in_secs > 0 && c.expires_in_secs <= CODE_TTL_SECS, "{c:?}");
+            }
+            assert!(redeem(&code, "chk-1", "C").expect("store").is_ok(), "still redeemable after checks");
+            assert_eq!(check(&code), Err(Refused::Unknown), "used");
+            assert_eq!(check("K2P-garbage"), Err(Refused::Unknown));
         });
     }
 

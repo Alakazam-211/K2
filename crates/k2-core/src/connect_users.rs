@@ -1820,8 +1820,27 @@ struct ValidSession {
 /// now + [`DEVICE_SESSION_TTL_DAYS`] (so the file is rewritten at most about
 /// once a day per phone, never on every request).
 fn validate_session_record(token: &str) -> Option<ValidSession> {
+    match lookup_session(token) {
+        Lookup::Live(v) => Some(v),
+        Lookup::DeviceEnded | Lookup::Unknown => None,
+    }
+}
+
+/// One locked pass over the session store for `token`.
+enum Lookup {
+    Live(ValidSession),
+    /// No live record, and the token was a device session that ended
+    /// (its tombstone, or its record found invalid and removed just now).
+    DeviceEnded,
+    Unknown,
+}
+
+/// [`validate_session_record`] plus the ended-device check, in the SAME
+/// `update_sessions` pass (review L3: no second load of the session file
+/// for a token that is not a device token).
+fn lookup_session(token: &str) -> Lookup {
     if token.is_empty() {
-        return None;
+        return Lookup::Unknown;
     }
     let presented = token_digest(token);
     let presented_bytes = presented.as_bytes();
@@ -1847,13 +1866,20 @@ fn validate_session_record(token: &str) -> Option<ValidSession> {
             }
         }
         let Some(idx) = matched_idx else {
-            return Ok(None);
+            let mut ended = false;
+            for e in &store.ended_devices {
+                let eq: bool = e.digest.as_bytes().ct_eq(presented_bytes).into();
+                ended |= eq;
+            }
+            return Ok(if ended { Lookup::DeviceEnded } else { Lookup::Unknown });
         };
+        let was_device = store.sessions[idx].device.is_some();
+        let gone = if was_device { Lookup::DeviceEnded } else { Lookup::Unknown };
 
         // Expired? Reap + reject.
         if store.sessions[idx].expires_at <= now {
             store.sessions.remove(idx);
-            return Ok(None);
+            return Ok(gone);
         }
 
         let username = store.sessions[idx].username.clone();
@@ -1872,7 +1898,7 @@ fn validate_session_record(token: &str) -> Option<ValidSession> {
                         rec.expires_at = full;
                     }
                 }
-                Ok(Some(ValidSession {
+                Ok(Lookup::Live(ValidSession {
                     username,
                     session_id: rec.session_id.clone(),
                     device: rec.device.clone(),
@@ -1880,11 +1906,11 @@ fn validate_session_record(token: &str) -> Option<ValidSession> {
             }
             _ => {
                 store.sessions.remove(idx);
-                Ok(None)
+                Ok(gone)
             }
         }
     });
-    result.unwrap_or(None)
+    result.unwrap_or(Lookup::Unknown)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1948,24 +1974,10 @@ pub fn token_state(token: &str) -> TokenState {
     if !looks_like_session_token(token) {
         return TokenState::Unknown;
     }
-    if validate_session_record(token).is_some() {
-        return TokenState::Live;
-    }
-    let presented = token_digest(token);
-    match load_sessions() {
-        Ok(store) => {
-            let mut hit = false;
-            for e in &store.ended_devices {
-                let eq: bool = e.digest.as_bytes().ct_eq(presented.as_bytes()).into();
-                hit |= eq;
-            }
-            if hit {
-                TokenState::DeviceEnded
-            } else {
-                TokenState::Unknown
-            }
-        }
-        Err(_) => TokenState::Unknown,
+    match lookup_session(token) {
+        Lookup::Live(_) => TokenState::Live,
+        Lookup::DeviceEnded => TokenState::DeviceEnded,
+        Lookup::Unknown => TokenState::Unknown,
     }
 }
 /// Live device sessions per person; pairing another phone past this ends

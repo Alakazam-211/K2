@@ -376,6 +376,7 @@ pub const ROUTES: &[Route] = &[
     // everyone's, a Member only its own; the handlers enforce that).
     post("/cli/auth/device/pair", Public),
     post("/cli/auth/device/pair-code", Member),
+    post("/cli/auth/device/pair/check", Public),
     post("/cli/auth/device/revoke", Member),
     get("/cli/auth/devices", Member),
     post("/cli/auth/login", Public),

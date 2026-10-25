@@ -128,6 +128,11 @@ fn device_caller(query: &str, owner_token: &str) -> Option<crate::connect_device
     if super::http::ct_eq_token(tok, owner_token) {
         return Some(Caller::OwnerToken);
     }
+    // Review L3: anything not shaped like a session token never reaches the
+    // session store (or its lock).
+    if !k2_core::connect_users::looks_like_session_token(tok) {
+        return None;
+    }
     let username = k2_core::connect_users::validate_session(tok)?;
     let role = k2_core::connect_users::role_for_user(&username)?;
     Some(Caller::Login { owner_role: k2_core::connect_users::can_change_roles(role), username })
@@ -160,7 +165,8 @@ async fn device_pair_code(
 ) -> crate::cli_response::CliResponse {
     use crate::connect_device_routes as dev;
     let relay = relay_client_ip(ingress, stream);
-    let ip = relay.map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
+    // Review L1: the relay's address on the tunnel, else the socket peer.
+    let ip = client_ip_for(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
     let Some(caller) = device_caller(query, owner_token) else {
         return dev::login_required();
     };
@@ -229,6 +235,11 @@ async fn device_pair_code(
 /// the per-client and global limiter buckets (F3, no audit row once
 /// limited), the redeem, the audit row with the minting actor (F2), and
 /// the paired notice (F1).
+///
+/// `check`: `POST /cli/auth/device/pair/check` instead: the same refusal,
+/// buckets and failure accounting (so it is no cheaper a guessing oracle),
+/// but the code is only looked at, never used; a failed check is audited
+/// as `device-pair-check`, a successful one is not audited.
 async fn device_pair(
     limiter: &crate::login_throttle::LoginLimiter,
     stream: &tokio::net::TcpStream,
@@ -236,6 +247,7 @@ async fn device_pair(
     headers_blob: &str,
     web: bool,
     body: Vec<u8>,
+    check: bool,
 ) -> crate::cli_response::CliResponse {
     use crate::connect_device_routes as dev;
     if super::http::pair_request_is_browser_shaped(headers_blob) {
@@ -259,7 +271,14 @@ async fn device_pair(
     if anonymous && limiter.global_ceiling_reached(crate::login_throttle::Door::Connect, limiter.now()) {
         return dev::rate_limited();
     }
-    let reply = tokio::task::spawn_blocking(move || dev::handle_pair(&body))
+    let host = if check { crate::boot_status::public_host() } else { None };
+    let reply = tokio::task::spawn_blocking(move || {
+        if check {
+            dev::handle_pair_check(&body, host.as_deref())
+        } else {
+            dev::handle_pair(&body)
+        }
+    })
         .await
         .unwrap_or_else(|e| dev::PairReply {
             response: crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")),
@@ -270,7 +289,13 @@ async fn device_pair(
     if reply.response.status.starts_with("401") && anonymous {
         limiter.record_global_failure(crate::login_throttle::Door::Connect, limiter.now());
     }
-    let ip = relay.map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
+    let ip = client_ip_for(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
+    if check {
+        if reply.outcome != "ok" {
+            device_audit("device-pair-check", &reply.user, reply.outcome, ingress, &ip, web, None);
+        }
+        return reply.response;
+    }
     let minted_by = reply.paired.as_ref().map(|(_, m, _)| m.clone());
     device_audit("device-pair", &reply.user, reply.outcome, ingress, &ip, web, minted_by.as_deref());
     if let Some((name, minted_by, _)) = reply.paired.clone() {
@@ -1396,6 +1421,7 @@ async fn handle_one_request(
     // boot handshake and the pair redeem itself stay open.
     if !matches!(path.as_str(), "/ping" | "/health" | "/boot-status")
         && path != crate::connect_device_routes::PAIR
+        && path != crate::connect_device_routes::PAIR_CHECK
     {
         if let Some(r) = super::http::device_session_ended_gate(&query, state.token.as_str()) {
             let _ = stream.read(&mut buf).await;
@@ -1411,6 +1437,7 @@ async fn handle_one_request(
         && path != crate::app_mobile_routes::REFRESH
         && path != "/cli/skin/password/reset"
         && path != crate::connect_device_routes::PAIR
+        && path != crate::connect_device_routes::PAIR_CHECK
         && super::http::is_web_client_request(&headers_blob)
         && !super::http::device_session_passes_web_wall(&query, cookie_only)
     {
@@ -4872,7 +4899,15 @@ async fn handle_one_request(
         p if p == crate::connect_device_routes::PAIR => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let r = device_pair(&state.login_limiter, &*stream, ingress, &headers_blob, web_client_header, body_bytes).await;
+            let r = device_pair(&state.login_limiter, &*stream, ingress, &headers_blob, web_client_header, body_bytes, false).await;
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // POST /cli/auth/device/pair/check {code} — PUBLIC, never uses the
+        // code: what it would pair as. Throttled and audited like a pair.
+        p if p == crate::connect_device_routes::PAIR_CHECK => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = device_pair(&state.login_limiter, &*stream, ingress, &headers_blob, web_client_header, body_bytes, true).await;
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // GET /cli/auth/devices — live paired phones (the owner: everyone's;
@@ -4913,7 +4948,7 @@ async fn handle_one_request(
                 }),
             };
             if let Some(user) = ended_for.as_deref() {
-                let ip = relay_client_ip(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
+                let ip = client_ip_for(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
                 device_audit("device-revoke", user, "ok", ingress, &ip, web_client_header, actor.as_deref());
             }
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;

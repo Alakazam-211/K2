@@ -793,7 +793,8 @@ pub const FEATURE_APP_MOBILE_ACCESS: &str = "app-mobile-access-v1";
 /// /cli/auth/device/pair-code` (owner token or a login, never a browser),
 /// `POST /cli/auth/device/pair {code, device}` (public, open while web
 /// access is off) answering a device session that passes the web-access
-/// wall, `GET /cli/auth/devices`, `POST /cli/auth/device/revoke`. No SQL
+/// wall, `POST /cli/auth/device/pair/check {code}` (public, never uses the
+/// code), `GET /cli/auth/devices`, `POST /cli/auth/device/revoke`. No SQL
 /// migration (the Connect session file carries the device binding).
 pub const FEATURE_COMPANION_PAIRING: &str = "companion-pairing-v1";
 

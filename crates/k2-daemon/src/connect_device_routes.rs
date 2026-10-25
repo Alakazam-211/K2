@@ -13,7 +13,7 @@
 //! Routes (the dispatcher resolves the caller, throttles and audits):
 //! - `POST /cli/auth/device/pair-code {user?, password?}`: mint a code.
 //!   - The owner token: `user` names any login; without `user` the code
-//!     pairs as the login the owner linked to themselves (`ownerAccounts`,
+//!     pairs as the Owner/Admin login the owner linked to themselves (`ownerAccounts`,
 //!     Settings → General → Your account), else 409
 //!     `owner_login_not_linked` (Rosson 2026-10-24).
 //!   - A login: for itself only, and only with its `password` typed again
@@ -31,6 +31,10 @@
 //!   is off; refuses a browser `Origin` / `Sec-Fetch-*` (F5) but not the
 //!   edge's markers; behind the login limiter's per-IP and global buckets
 //!   (F3). Never sets a cookie. The person and the owner get a notice.
+//! - `POST /cli/auth/device/pair/check {code}` (Public): what a code would
+//!   pair as (`{user, host, expiresInSecs}`) WITHOUT using it; same browser
+//!   refusal, buckets and failure accounting as a redeem; a failed check is
+//!   audited (`device-pair-check`).
 //! - `GET /cli/auth/devices`: live paired phones (the owner token or an
 //!   Owner login: everyone's; any other login: its own) plus `pairAs`, the
 //!   login a new code from this caller would pair as.
@@ -52,6 +56,8 @@ use crate::cli_response::CliResponse;
 
 pub const PAIR_CODE: &str = "/cli/auth/device/pair-code";
 pub const PAIR: &str = "/cli/auth/device/pair";
+/// Companion's pair screen: what a code would pair as, without using it.
+pub const PAIR_CHECK: &str = "/cli/auth/device/pair/check";
 pub const DEVICES: &str = "/cli/auth/devices";
 pub const REVOKE: &str = "/cli/auth/device/revoke";
 
@@ -180,32 +186,52 @@ pub fn parse_pair_code_body(body: &[u8]) -> Result<PairCodeBody, CliResponse> {
 /// The login the owner linked to themselves (`ownerAccounts`): the first
 /// listed that exists and is enabled, preferring an Owner, then an Admin
 /// role. `None` when none is linked.
-pub fn owner_linked_login() -> Option<String> {
+pub fn owner_linked_login() -> Result<String, LinkedMiss> {
     let linked = k2_core::app_settings::load().owner_accounts;
     let mut best: Option<(u8, String)> = None;
+    let mut member_only = false;
     for name in linked {
         let Ok(n) = connect_users::normalize_username(&name) else { continue };
         if connect_users::live_user_epoch(&n).is_none() {
             continue;
         }
+        // Review M1 (Rosson: "the admin account"): only an Owner- or
+        // Admin-role linked login counts; a Member link is not the owner's
+        // admin account.
         let rank = match connect_users::role_for_user(&n) {
             Some(connect_users::Role::Owner) => 0,
             Some(connect_users::Role::Admin) => 1,
-            _ => 2,
+            _ => {
+                member_only = true;
+                continue;
+            }
         };
         if best.as_ref().is_none_or(|(r, _)| rank < *r) {
             best = Some((rank, n));
         }
     }
-    best.map(|(_, n)| n)
+    match best {
+        Some((_, n)) => Ok(n),
+        None if member_only => Err(LinkedMiss::MemberOnly),
+        None => Err(LinkedMiss::None),
+    }
 }
 
-fn not_linked() -> CliResponse {
-    refusal(
-        "409 Conflict",
-        "owner_login_not_linked",
-        "the owner token has no login of its own to pair a phone as. Link the Connect login you use (Settings → General → Your account), or name one: k2 users pair-phone --user <login>",
-    )
+/// Why the owner token has no linked login to pair as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkedMiss {
+    /// Nothing linked (or nothing enabled).
+    None,
+    /// Only Member-role logins are linked.
+    MemberOnly,
+}
+
+fn not_linked(miss: LinkedMiss) -> CliResponse {
+    let hint = match miss {
+        LinkedMiss::None => "the owner token has no login of its own to pair a phone as. Link your admin Connect login (an Owner or Admin role; Settings → General → Your account), or name one: k2 users pair-phone --user <login>",
+        LinkedMiss::MemberOnly => "the login linked to the owner is a Member; a phone paired from the owner token needs an admin login (an Owner or Admin role). Link your admin Connect login (Settings → General → Your account), or name one: k2 users pair-phone --user <login>",
+    };
+    refusal("409 Conflict", "owner_login_not_linked", hint)
 }
 
 fn password_change_required() -> CliResponse {
@@ -220,7 +246,7 @@ fn password_change_required() -> CliResponse {
 pub fn pair_target(caller: &Caller, asked: Option<&str>) -> Result<String, CliResponse> {
     match (caller, asked) {
         (Caller::OwnerToken, Some(u)) => connect_users::normalize_username(u).map_err(|e| refusal("400 Bad Request", "no_such_login", &e)),
-        (Caller::OwnerToken, None) => owner_linked_login().ok_or_else(not_linked),
+        (Caller::OwnerToken, None) => owner_linked_login().map_err(not_linked),
         (Caller::Login { username, .. }, None) => Ok(username.clone()),
         (Caller::Login { username, .. }, Some(u)) => match connect_users::normalize_username(u) {
             Ok(n) if n == *username => Ok(username.clone()),
@@ -351,6 +377,33 @@ pub fn handle_pair(body: &[u8]) -> PairReply {
     }
 }
 
+/// `POST /cli/auth/device/pair/check {code}` (Public): what a still-valid
+/// code would pair as, WITHOUT using it. Same refusals as a redeem; the
+/// dispatcher throttles and audits failures exactly like a failed pair.
+pub fn handle_pair_check(body: &[u8], host: Option<&str>) -> PairReply {
+    let reply = |response: CliResponse, user: &str, outcome: &'static str| PairReply {
+        response,
+        user: user.to_string(),
+        outcome,
+        paired: None,
+    };
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return reply(r, "", "rejected"),
+    };
+    let Some(code) = text(&v, "code") else {
+        return reply(usage("send {code}"), "", "rejected");
+    };
+    match pairing::check(code) {
+        Ok(c) => {
+            let body = json!({ "ok": true, "user": c.username, "host": host, "expiresInSecs": c.expires_in_secs });
+            reply(CliResponse::ok_json(body.to_string()), &c.username, "ok")
+        }
+        Err(pairing::Refused::PasswordChangeRequired) => reply(password_change_required(), "", "password_change_required"),
+        Err(why) => reply(pair_invalid(), "", why.as_str()),
+    }
+}
+
 /// A device name as plain, single-line Markdown-safe text for a notice
 /// (F7): Markdown/HTML punctuation escaped with a backslash.
 pub fn notice_safe(name: &str) -> String {
@@ -366,8 +419,10 @@ pub fn notice_safe(name: &str) -> String {
 
 /// F1: tell the person and the owner a phone was paired.
 pub fn notify_paired(username: &str, device_name: &str, minted_by: &str) {
+    // The title is plain text (already free of control/bidi characters);
+    // only the Markdown body escapes the name.
+    let title = format!("Phone \"{device_name}\" paired for {username}");
     let name = notice_safe(device_name);
-    let title = format!("Phone \"{name}\" paired for {username}");
     let body = format!(
         "A phone named \"{name}\" was paired to the login **{username}** (code made by {minted_by}).\n\n\
          Not you? Revoke it: Settings → Admin Access → Paired phones, or `k2 users phones` then `k2 users unpair-phone <id>`. \

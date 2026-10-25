@@ -69,19 +69,34 @@ line from `.env`**: `release.sh` refuses to run while it is there.
 
 ### 2. Make U2 and U3
 
+Run it from a checkout of the `k2/sign-on-z3mbpz` branch (the keys land
+together with the code; main doesn't have the script yet). It needs only
+bash, python3, minisign and `security`:
+
 ```sh
+git fetch origin && git checkout k2/sign-on-z3mbpz   # or the commit K2 names
 bash scripts/updater-key-ceremony.sh generate
 ```
+
+Stopping part-way (Ctrl-C, a typo, answering anything but `saved`) removes
+everything that run made: the U3 folder (overwritten), U2's files and its
+keychain item. Then start again.
 
 It walks you through:
 1. **U2**: minisign asks for a new password twice; the keychain asks for the
    same password once more. A self-test proves the keychain password opens
    the key.
 2. **U3**: minisign asks for a different new password twice. The U3 secret
-   key file goes onto the clipboard: paste it into a password manager entry
-   named "K2 update key U3 (offline backup)", together with U3's password.
-   Press Enter; the clipboard is cleared and the U3 secret key is deleted
-   from z3mbpZ. Its public key stays at `~/.k2-updater/k2-updater-u3.pub`.
+   key is written (still encrypted with U3's password) to
+   `~/K2-U3-backup.XXXXXX/k2-updater-u3.key` in a private folder, and a
+   Finder window shows it. Make **two** password-manager entries:
+   - "K2 update key U3 - key file": **attach** that file;
+   - "K2 update key U3 - password": U3's password, and nothing else.
+
+   Never the clipboard, never both in one entry. Type `saved`; the file is
+   overwritten and deleted from z3mbpZ (best effort on an SSD; it is
+   encrypted either way). U3's public key stays at
+   `~/.k2-updater/k2-updater-u3.pub`.
 3. It prints two **public** key lines (U2 and U3) with their key ids.
 
 ### 3. Send K2 the two public key lines
@@ -94,12 +109,14 @@ bash scripts/updater-key-ceremony.sh pubkeys <U2 line> <U3 line>
 
 This writes them into every verifier copy (`crates/k2-release-keys/src/lib.rs`,
 `cli/k2`, `scripts/install-daemon.sh`, `src-tauri/tauri.conf.json`); the
-`k2-release-keys` copies test checks they agree. K2 lands it on main before
-the 0.46.4 tag.
+`k2-release-keys` copies test checks they agree (release.sh Step 0.45 runs
+it). K2 lands the keys together with the SS4/SS5 code, before the 0.46.4 tag:
+this branch never lands on main without them, because a main build installed
+before the keys exist could never self-update.
 
 ### 4. Prove it on z3mbpZ
 
-After pulling main:
+After the public keys have landed (on this branch, or on main once it merges):
 
 ```sh
 bash scripts/sign-daemon.sh --preflight 0.46.4
@@ -110,6 +127,20 @@ self-test signature from each key against the keys in the source tree, and
 that GitHub no longer has the `TAURI_SIGNING_*` secrets (SS1). Every
 signature, including these self-tests, is logged in
 `~/k2-release-audit/<version>/signatures.tsv`.
+
+### 4b. The U3 drill (once now, then yearly)
+
+Proves the backup can actually take over. On any Mac with minisign and a
+checkout that has the public keys landed:
+
+1. Save the "key file" attachment from the password manager to a temp path,
+   for example `~/Desktop/u3.key`.
+2. Run `bash scripts/updater-key-ceremony.sh drill ~/Desktop/u3.key` and type
+   U3's password from the other entry when minisign asks.
+3. It signs a throwaway file named `k2-u3-drill` (no installer accepts that
+   name) and checks the signature with the **backup key in UPDATER_KEYS**.
+   "U3 drill ok" means U3 restores and installs would accept it.
+4. Delete `~/Desktop/u3.key` (and empty the Trash).
 
 ### 5. Delete the GitHub secrets (SS1)
 

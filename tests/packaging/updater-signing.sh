@@ -121,7 +121,8 @@ PW="pw1-$(rand)"; PW2="pw2-$(rand)"
 mkdir -p "$tmp/gen"
 printf '%s\n' "$PW" | minisign -G -p "$tmp/gen/u1.pub" -s "$tmp/gen/u1.key" >/dev/null
 printf '%s\n' "$PW2" | minisign -G -p "$tmp/gen/u2.pub" -s "$tmp/gen/u2.key" >/dev/null
-printf '%s\n' "pw3-$(rand)" | minisign -G -p "$tmp/gen/u3.pub" -s "$tmp/gen/u3.key" >/dev/null
+PW3="pw3-$(rand)"
+printf '%s\n' "$PW3" | minisign -G -p "$tmp/gen/u3.pub" -s "$tmp/gen/u3.key" >/dev/null
 mkdir -p "$HOME/.k2-updater"; chmod 700 "$HOME/.k2-updater"
 # U1 in Tauri format (base64 of the minisign secret key file, one line), as
 # ~/.tauri/k2-updater.key is; U2 as minisign writes it.
@@ -188,9 +189,41 @@ cer_refuses "one key twice" "two different keys" "$U2_PUB_LINE" "$U2_PUB_LINE"
 cer_refuses "garbage" "not a minisign public key" "not-a-key" "$U3_PUB_LINE"
 cer_refuses "a second identical run" "no change" "$U2_PUB_LINE" "$U3_PUB_LINE"
 
+echo "== the U3 drill (restore the backup key, sign, check with UPDATER_KEYS' backup) =="
+CER="$ROOT/scripts/updater-key-ceremony.sh"
+if printf '%s\n' "$PW3" | bash "$CER" drill "$tmp/gen/u3.key" --root "$SRC" >"$tmp/drill.out" 2>&1 && grep -q "U3 drill ok" "$tmp/drill.out"; then
+    pass "drill: U3 restored from its file signs, and the backup key in UPDATER_KEYS accepts it"
+else
+    fail "drill" "$(cat "$tmp/drill.out")"
+fi
+drill_refuses() { # <label> <expect (ERE)> <key file> <password> [root]
+    if printf '%s\n' "$4" | bash "$CER" drill "$3" --root "${5:-$SRC}" >"$tmp/drill.out" 2>&1; then
+        fail "drill $1" "passed"
+    elif grep -qE -- "$2" "$tmp/drill.out"; then
+        pass "drill refuses $1"
+    else
+        fail "drill $1" "$(cat "$tmp/drill.out")"
+    fi
+}
+drill_refuses "the U2 key (not the backup)" "NOT the backup key" "$tmp/gen/u2.key" "$PW2"
+drill_refuses "a wrong password" "did not sign" "$tmp/gen/u3.key" "wrong"
+drill_refuses "a tree whose UPDATER_KEYS don't hold this U3 (pre-ceremony: none)" "no U3 \\(backup\\) key|NOT the backup key" "$tmp/gen/u3.key" "$PW3" "$ROOT"
+python3 -I - "$CER" <<'PY' && pass "ceremony: no clipboard; U3 file in a 0700 folder, password in a separate entry, shredded; abort trap removes what the run made; generate needs a terminal" || fail "ceremony static" "see $CER"
+import re, sys
+t = open(sys.argv[1]).read()
+assert "pbcopy" not in t
+assert 'mktemp -d "$HOME/K2-U3-backup.XXXXXX"' in t and 'chmod 700 "$U3DIR"' in t
+assert "SEPARATE entry" in t and "shred_file \"$U3DIR/k2-updater-u3.key\"" in t
+assert "trap ceremony_cleanup EXIT" in t and "security delete-generic-password" in t
+assert '[ -t 0 ] && [ -t 1 ]' in t
+PY
+if bash "$CER" generate </dev/null >"$tmp/gen.out" 2>&1; then fail "generate without a tty" "ran"; else grep -qE "macOS|terminal" "$tmp/gen.out" && pass "generate refuses to run without a terminal (or off macOS)" || fail "generate tty" "$(cat "$tmp/gen.out")"; fi
+
 LIB="$ROOT/scripts/lib/sign-updater.sh"
 lib() { bash -c 'source "$1"; shift; "$@"' _ "$LIB" "$@"; }
 
+# The leak checks below are about the signing helper: start its logs fresh.
+: > "$STUB_MINISIGN_LOG"; : > "$STUB_SECURITY_LOG"
 echo "== k2u_sign u1: raw and b64, same format as the tauri signer =="
 printf 'daemon bytes\n' > "$tmp/k2-daemon-macos-aarch64"
 if lib k2u_sign u1 "$tmp/k2-daemon-macos-aarch64" k2-daemon-macos-aarch64 9.9.9 "$tmp/raw.sig" raw 2>"$tmp/err"; then

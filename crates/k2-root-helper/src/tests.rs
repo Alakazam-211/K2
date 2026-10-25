@@ -233,6 +233,27 @@ fn box_root() -> T {
             "/run",
         ],
     );
+    // A provisioned box's system dirs are root's 0755, whatever umask this
+    // test runs under (K2 Compute's walled jobs run with `UMask=0002`, so
+    // `create_dir_all` alone makes them group-writable, and every verb that
+    // checks a directory's mode — `helper cli-refresh` first — refuses it).
+    for d in [
+        "/etc",
+        "/etc/k2-root-helper",
+        "/etc/systemd",
+        "/etc/systemd/system",
+        "/etc/sudoers.d",
+        "/usr",
+        "/usr/local",
+        "/usr/local/libexec",
+        "/usr/local/bin",
+        "/var",
+        "/var/lib",
+        "/var/log",
+        "/run",
+    ] {
+        std::fs::set_permissions(under(&root, d), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let toml = "[[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon.service\"\nscope = \"system\"\n";
     std::fs::write(under(&root, DAEMON_TOML), toml).unwrap();
     std::fs::set_permissions(
@@ -250,10 +271,6 @@ fn box_root() -> T {
         std::fs::Permissions::from_mode(0o755),
     )
     .unwrap();
-    for d in ["/usr/local/libexec", "/usr/local", "/usr"] {
-        std::fs::set_permissions(under(&root, d), std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-
     let exec = FakeExec::default();
     exec.0
         .borrow_mut()
@@ -1624,6 +1641,8 @@ fn cli_refresh_is_the_daemons_call_and_takes_no_argv_or_stdin() {
     std::fs::create_dir_all(t.p(CLI_DIR)).unwrap();
     let stale = "#!/bin/bash\nK2_CLI_VERSION=\"0.40.148\"\n";
     std::fs::write(t.p(CLI_PATH), stale).unwrap();
+    // Root's 0755 CLI, whatever the umask (a group-writable one is skipped).
+    std::fs::set_permissions(t.p(CLI_PATH), std::fs::Permissions::from_mode(0o755)).unwrap();
     // An agent (a child of the daemon) may not ask root to write PATH.
     t.as_agent();
     assert_eq!(t.call(&["helper", "cli-refresh"]).code, exit::NOT_DAEMON);

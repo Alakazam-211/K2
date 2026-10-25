@@ -385,6 +385,7 @@ function ServerRow({
         <OwnerConfirm
           node={node}
           label={r.label}
+          fp={r.fp ?? ""}
           onCancel={() => setPane('none')}
           onConfirm={async (opts) => {
             const ok = await act(() => changeNodeOwner(node, server, opts))
@@ -519,11 +520,13 @@ function RevokeConfirm({
 function OwnerConfirm({
   node,
   label,
+  fp,
   onConfirm,
   onCancel,
 }: {
   node: string
   label: string
+  fp: string
   onConfirm: (opts: { old: 'keep' | 'revoke'; caches: 'move' | 'wipe'; now: boolean }) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
@@ -539,6 +542,10 @@ function OwnerConfirm({
         {label} gets this node&apos;s admin, updates and approvals, and pins its own approval key. After you approve, the node drains (running jobs
         finish, up to 30 min), the two servers swap places, root re-pins to {label}, and k2-node restarts once. Queued jobs stay with their server;
         other servers on the node are untouched.
+      </p>
+      <p className={`text-[11px] ${secondary}`} data-testid="compute-owner-key">
+        Its key: <span className={`font-mono break-all ${primary}`}>{fp}</span>. Check it matches what {label} shows (controllerFp in{' '}
+        <span className="font-mono">k2 compute nodes --json</span> there) before you approve.
       </p>
       <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
         <SquareCheckbox checked={leave} onChange={(e) => setLeave(e.target.checked)} aria-label="Remove this server from the node" />

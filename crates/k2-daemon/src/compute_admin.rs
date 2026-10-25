@@ -543,6 +543,16 @@ fn classify_body(node_name: &str, kind: &str, body: &Value) -> R<(Class, String)
     let mut class = Class::Operate;
     let mut lines = Vec::new();
     for st in &steps {
+        // Changing a node's owner is the server owner's alone, through its
+        // own route (its checks, the full key on the card); never a
+        // generic proposal, by an agent or anyone (review F4).
+        if st.verb == pshare::VERB_OWNER {
+            return Err(no(
+                codes::OWNER_ONLY,
+                403,
+                "servers.owner is never proposed: the server's owner asks for it in Settings → Compute or with k2 compute node servers <node> owner <server>",
+            ));
+        }
         let c = admin::validate_step(&st.verb, &st.args).map_err(|(code, hint)| no(code, 400, hint))?;
         if kind == "service" && !st.verb.starts_with("svc.") {
             return Err(no(acodes::BAD_ARGS, 400, "a service request is svc.apply, svc.adopt or svc.remove"));

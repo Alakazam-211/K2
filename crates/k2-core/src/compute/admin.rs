@@ -808,10 +808,15 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
             if a.get("wipe").and_then(Value::as_bool) == Some(true) { ", wipe its files now" } else { ", wipe its files in 24 h" }
         ),
         "servers.owner" => format!(
-            "make {} the owner of {node} (as root): it gets this node's admin and approvals, after a drain{}; {}; caches {}",
+            "make {} (key {}; check it matches what that server shows as controllerFp in k2 compute nodes --json) the owner of {node} (as root): it gets this node's admin and approvals, after a drain{}; {}; caches {}",
             s("server"),
+            s("fp"),
             if a.get("now").and_then(Value::as_bool) == Some(true) { " that stops running jobs" } else { " (running jobs finish first, up to 30 min)" },
-            if s("old") == "revoke" { "this server leaves the node (its files are wiped)" } else { "this server stays on it as one of your servers" },
+            if s("old") == "revoke" {
+                "this server leaves the node (its queued jobs there end, its files go after 24 h)"
+            } else {
+                "this server stays on it as one of your servers, with a new server's default share"
+            },
             if s("caches") == "wipe" { "are wiped (cold builds once)" } else { "move with their server" }
         ),
         "node.update" => format!("update k2-node on {node} to {}", s("version")),
@@ -1324,7 +1329,7 @@ mod tests {
         assert_eq!(validate_step("servers.owner", &json!({"server": "z3thon.k2.dev", "fp": fp})).unwrap(), Class::Privileged);
         assert_eq!(validate_step("servers.owner", &json!({"server": "slot:0", "fp": fp})).unwrap_err().0, codes::BAD_ARGS);
         let s = summarize("k2n2-m1", "servers.owner", &json!({"server": "z3thon.k2.dev", "fp": fp, "old": "revoke", "caches": "wipe", "now": true}));
-        assert!(s.contains("make z3thon.k2.dev the owner of k2n2-m1") && s.contains("leaves") && s.contains("wiped") && s.contains("stops running jobs"), "{s}");
+        assert!(s.contains("make z3thon.k2.dev (key ") && s.contains(&fp) && s.contains("the owner of k2n2-m1") && s.contains("leaves") && s.contains("wiped") && s.contains("stops running jobs"), "{s}");
         let s = summarize("k2n2-m1", "servers.owner", &json!({"server": "z3thon.k2.dev", "fp": fp}));
         assert!(s.contains("stays on it") && s.contains("move with their server"), "{s}");
         assert_eq!(validate_step("servers.add", &json!({"url": "https://b.k2.dev", "code_binding": "ab", "fp_prefix": "0123456789abcdef", "trust": "team"})).unwrap(), Class::Privileged);

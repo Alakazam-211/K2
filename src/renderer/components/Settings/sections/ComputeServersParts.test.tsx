@@ -309,6 +309,7 @@ describe('make owner (S6)', () => {
     const dlg = screen.getByRole('dialog', { name: 'Make z3thon.k2.dev the owner of mini-2?' })
     expect(dlg.textContent).toContain('drains')
     expect(dlg.textContent).toContain('stays as one of your servers')
+    expect(within(dlg).getByTestId('compute-owner-key').textContent).toContain(FP_B)
     fireEvent.click(within(dlg).getByLabelText('Wipe the build caches'))
     fireEvent.click(within(dlg).getByRole('button', { name: 'Ask to change the owner' }))
     await waitFor(() => expect(m.changeNodeOwner).toHaveBeenCalledWith('mini-2', 'z3thon.k2.dev', { old: 'keep', caches: 'wipe', now: false }))

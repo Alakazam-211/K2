@@ -713,6 +713,9 @@ fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>
         "nodes": nodes,
         "waitingCodes": codes,
         "controller": compute_ws::controller_label(),
+        // This server's full controller key: what the person checks before
+        // approving a node's move to this server (servers.owner, review F5).
+        "controllerFp": compute::controller_key().ok().map(|k| k.fingerprint()),
         "ticketSupported": compute::ticket::supported(),
     });
     if detail {

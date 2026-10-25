@@ -947,6 +947,23 @@ fn an_owner_change_is_the_owners_held_and_names_the_key() {
     // Never an agent (even with the operate switch on).
     let e = call(SERVERS_OWNER, &agent(&f), body.clone()).unwrap_err();
     assert_eq!(e, (403, codes::OWNER_ONLY.to_string()));
+    // Review F4: nor through the generic proposal, by an agent or the owner,
+    // as a command or a plan step; nothing is filed.
+    let args = json!({"server": "z3thon.k2.dev", "fp": target_fp});
+    for (who, req) in [
+        (agent(&f), json!({"node": f.node_name, "verb": "servers.owner", "args": args})),
+        (Who::Owner, json!({"node": f.node_name, "verb": "servers.owner", "args": args})),
+        (agent(&f), json!({"node": f.node_name, "kind": "plan", "steps": [{"verb": "unit.restart", "args": {"unit": "k2-node"}}, {"verb": "servers.owner", "args": args}]})),
+    ] {
+        let e = call(PROPOSE, &who, req.clone()).unwrap_err();
+        assert_eq!(e, (403, codes::OWNER_ONLY.to_string()), "{req}");
+    }
+    let filed = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        cadmin::list_requests(&conn, &cadmin::ReqFilter { node_id: Some(&f.node), state: None, limit: 100, ..Default::default() }).len()
+    };
+    assert_eq!(filed, 0, "nothing was filed");
 
     // A team target, then an offline one: refused before anything is filed.
     let responder = answer_servers(f.node.clone(), servers_listed_for_owner(&target_fp, true), "servers.list");
@@ -977,7 +994,7 @@ fn an_owner_change_is_the_owners_held_and_names_the_key() {
     let r = call(SERVERS_OWNER, &Who::Owner, json!({"node": f.node_name, "server": "z3thon.k2.dev", "old": "revoke", "caches": "wipe", "now": true, "reason": "drill"})).unwrap();
     assert_eq!((r["held"].as_bool(), r["request"]["class"].as_str()), (Some(true), Some("privileged")), "{r}");
     let summary = r["request"]["summary"].as_str().unwrap();
-    assert!(summary.contains("make z3thon.k2.dev the owner of") && summary.contains("leaves"), "{summary}");
+    assert!(summary.contains("make z3thon.k2.dev (key ") && summary.contains(&target_fp) && summary.contains("leaves"), "the card shows the full key: {summary}");
     assert!(test_seams::take_sent(&f.node).is_empty(), "nothing goes out while held");
     let e = call(SERVERS_OWNER, &Who::Owner, body.clone()).unwrap_err();
     assert_eq!(e, (409, "owner_change_pending".to_string()));

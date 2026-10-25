@@ -188,61 +188,7 @@ pub(crate) fn actor_lock_sql(actor: &GuestActor) -> String {
 /// `k2.actor_info()` / `k2.actor_kind()` / `k2.actor()`. Part of
 /// [`super::ops::ensure_k2_helpers_sql`]; `k2.actor_info()` must be owned
 /// by the migrator (see [`super::ops::k2_helper_owner_sql`]).
-pub(crate) const ACTOR_HELPERS_SQL: &str = r#"CREATE OR REPLACE FUNCTION k2.actor_info() RETURNS jsonb
-LANGUAGE plpgsql
-STABLE
-SECURITY DEFINER
-SET search_path = pg_catalog, pg_temp
-AS $k2fn$
-DECLARE
-  rel oid;
-  info jsonb;
-BEGIN
-  BEGIN
-    rel := 'pg_temp.k2_actor_lock'::regclass;
-  EXCEPTION
-    WHEN undefined_table OR invalid_schema_name THEN
-      RETURN NULL;
-  END;
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_catalog.pg_class c
-    WHERE c.oid = rel
-      AND c.relpersistence = 't'
-      AND c.relowner = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = current_user)
-  ) THEN
-    RETURN NULL;
-  END IF;
-  SELECT pg_catalog.jsonb_build_object(
-           'kind', l.kind,
-           'actor', l.actor,
-           'principal', l.principal,
-           'pass', l.pass,
-           'workspace', l.workspace,
-           'on_behalf_of', l.on_behalf_of)
-    INTO info
-    FROM pg_temp.k2_actor_lock l
-    LIMIT 1;
-  RETURN info;
-END;
-$k2fn$;
-GRANT EXECUTE ON FUNCTION k2.actor_info() TO PUBLIC;
-CREATE OR REPLACE FUNCTION k2.actor_kind() RETURNS text
-LANGUAGE sql
-STABLE
-SET search_path = pg_catalog, pg_temp
-AS $k2fn$
-  SELECT k2.actor_info() ->> 'kind'
-$k2fn$;
-GRANT EXECUTE ON FUNCTION k2.actor_kind() TO PUBLIC;
-CREATE OR REPLACE FUNCTION k2.actor() RETURNS text
-LANGUAGE sql
-STABLE
-SET search_path = pg_catalog, pg_temp
-AS $k2fn$
-  SELECT k2.actor_info() ->> 'actor'
-$k2fn$;
-GRANT EXECUTE ON FUNCTION k2.actor() TO PUBLIC;
-"#;
+pub(crate) const ACTOR_HELPERS_SQL: &str = k2_root_proto::k2_db::ACTOR_HELPERS_SQL;
 
 #[cfg(test)]
 mod tests {

@@ -858,8 +858,21 @@ fn run_restore(ctx: &Ctx, section: &str, args: &[&str]) -> HResult<()> {
     Ok(())
 }
 
-/// The dump's table of contents split for the restore (0.46.4 drill H1):
-/// `(schemas, superuser, owner)` lists for `pg_restore -L`. Only
+/// The dump's table of contents split for the restore (0.46.4 drill H1).
+pub(crate) struct TocSplit {
+    /// Schemas, first, as the owner.
+    pub schemas: String,
+    /// Extensions and their comments, as postgres.
+    pub superuser: String,
+    /// Everything else, as the owner.
+    pub owner: String,
+    /// K2's own schema `k2` and helpers ([`k2_root_proto::k2_db::is_k2_entry`]):
+    /// never replayed from the dump; installed canned as postgres.
+    pub k2_schema: bool,
+    pub k2_functions: Vec<String>,
+}
+
+/// The `pg_restore -l` lists for the restore. Only
 /// extensions and their comments go to the superuser (they need it, and run
 /// no tenant code); the schemas go first, as the owner (an extension may
 /// live in one of them; empty then); every other entry is restored as the
@@ -867,11 +880,19 @@ fn run_restore(ctx: &Ctx, section: &str, args: &[&str]) -> HResult<()> {
 /// superuser list only when it is exactly an extension entry as
 /// `pg_restore -l` prints it (dump id; pg_extension's catalog oid; a plain
 /// extension name), so no tenant-chosen object name can put an entry there.
-pub(crate) fn split_toc(toc: &str) -> (String, String, String) {
+pub(crate) fn split_toc(toc: &str, migrator: &str) -> TocSplit {
     fn ext_name_ok(n: &str) -> bool {
         !n.is_empty() && n.len() <= 63 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
     }
-    fn superuser_line(l: &str) -> bool {
+    // The extensions the dump creates (their comments must name one).
+    let extensions: Vec<String> = toc
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            (f.len() >= 6 && f[1] == "3079" && f[3] == "EXTENSION" && f[4] == "-" && ext_name_ok(f[5])).then(|| f[5].to_string())
+        })
+        .collect();
+    let superuser_line = |l: &str| -> bool {
         let f: Vec<&str> = l.split_whitespace().collect();
         let id_ok = f.first().and_then(|x| x.strip_suffix(';')).is_some_and(|x| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit()));
         if !id_ok || f.len() < 6 || f[1].bytes().any(|b| !b.is_ascii_digit()) || f[2].bytes().any(|b| !b.is_ascii_digit()) {
@@ -879,18 +900,33 @@ pub(crate) fn split_toc(toc: &str) -> (String, String, String) {
         }
         // `<id>; 3079 <oid> EXTENSION - <name> [<owner>]`
         let ext = f[1] == "3079" && f[3] == "EXTENSION" && f[4] == "-" && ext_name_ok(f[5]) && f.len() <= 7;
-        // `<id>; 0 0 COMMENT - EXTENSION <name> [<owner>]`
-        let comment = f.len() >= 7 && f.len() <= 8 && f[1] == "0" && f[2] == "0" && f[3] == "COMMENT" && f[4] == "-" && f[5] == "EXTENSION" && ext_name_ok(f[6]);
+        // `<id>; 0 0 COMMENT - EXTENSION <name> [<owner>]`; pg_restore
+        // quotes a name that needs it (`"uuid-ossp"`, drill B). The name
+        // must be one of the dump's own extensions.
+        let named = |n: &str| {
+            let bare = n.strip_prefix('"').and_then(|x| x.strip_suffix('"')).unwrap_or(n);
+            (bare == n || ext_name_ok(bare)) && extensions.iter().any(|e| e == bare)
+        };
+        let comment = f.len() >= 7 && f.len() <= 8 && f[1] == "0" && f[2] == "0" && f[3] == "COMMENT" && f[4] == "-" && f[5] == "EXTENSION" && named(f[6]);
         ext || comment
-    }
+    };
     // `<id>; 2615 <oid> SCHEMA - <name> [<owner>]`: a bare CREATE SCHEMA.
     fn schema_line(l: &str) -> bool {
         let f: Vec<&str> = l.split_whitespace().collect();
         (f.len() == 6 || f.len() == 7) && f[0].strip_suffix(';').is_some_and(|x| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit())) && f[1] == "2615" && f[3] == "SCHEMA" && f[4] == "-"
     }
     let (mut schemas, mut su, mut own) = (String::new(), String::new(), String::new());
+    let (mut k2_schema, mut k2_functions) = (false, Vec::new());
     for l in toc.lines() {
         if l.trim_start().starts_with(';') || l.trim().is_empty() {
+            continue;
+        }
+        if let Some(what) = k2_root_proto::k2_db::is_k2_entry(l, migrator) {
+            match what.as_str() {
+                "schema" => k2_schema = true,
+                w if !w.contains(' ') => k2_functions.push(w.to_string()),
+                _ => {} // its ACL or comment: the canned install sets K2's.
+            }
             continue;
         }
         let out = if superuser_line(l) {
@@ -903,7 +939,7 @@ pub(crate) fn split_toc(toc: &str) -> (String, String, String) {
         out.push_str(l);
         out.push('\n');
     }
-    (schemas, su, own)
+    TocSplit { schemas, superuser: su, owner: own, k2_schema, k2_functions }
 }
 
 /// `pg move-restore <to> <db> <tag>`, stdin [`MoveLogin`] (the database
@@ -967,7 +1003,10 @@ pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, keep_force_o
     // rest for the owner (lists in the postgres-only moves dir).
     moves_dir(ctx)?;
     let toc = as_postgres(ctx, &restore, &["-l", &file], None)?;
-    let (schema_list, su_list, own_list) = split_toc(&String::from_utf8_lossy(&toc.stdout));
+    let split = split_toc(&String::from_utf8_lossy(&toc.stdout), r);
+    let (schema_list, su_list, own_list) = (&split.schemas, &split.superuser, &split.owner);
+    let k2_install = k2_root_proto::k2_db::install_sql(split.k2_schema, &split.k2_functions, r)
+        .ok_or_else(|| Fail::state("restore refused: the owner is not a role name"))?;
     let schema_file = format!("{MOVES_DIR}/.k2toc-schemas-{tag}");
     let su_file = format!("{MOVES_DIR}/.k2toc-su-{tag}");
     let own_file = format!("{MOVES_DIR}/.k2toc-own-{tag}");
@@ -1042,6 +1081,13 @@ pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, keep_force_o
                     &file,
                 ],
             )?;
+        }
+        // 3b. K2's own schema `k2` and helpers: canned, as postgres, while
+        // the target holds no tenant object yet (drill A: they are owned by
+        // postgres, which the owner can't replay; and no tenant DDL ever
+        // runs as postgres).
+        if split.k2_schema || !split.k2_functions.is_empty() {
+            sql_at(ctx, to, dst.port, d, &k2_install)?;
         }
         // 4. The rest of pre-data as the owner (never the superuser: a
         // generated column's expression is planned at CREATE TABLE).

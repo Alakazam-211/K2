@@ -882,7 +882,15 @@ const TOC: &str = ";\n; Archive created at 2026-10-20 10:15:00 UTC\n;\n\
 2; 3079 16385 EXTENSION - pgcrypto \n\
 4321; 0 0 COMMENT - EXTENSION pgcrypto \n\
 3; 3079 16420 EXTENSION - pg_trgm \n\
-7; 2615 16500 SCHEMA - k2 ws_jobs_migrator\n\
+5; 3079 16430 EXTENSION - uuid-ossp \n\
+4322; 0 0 COMMENT - EXTENSION \"uuid-ossp\" \n\
+4323; 0 0 COMMENT - EXTENSION \"not-here\" \n\
+6; 2615 16490 SCHEMA - k2 ws_jobs_migrator\n\
+61; 1255 16491 FUNCTION k2 actor() postgres\n\
+62; 1255 16492 FUNCTION k2 skin_uid() ws_jobs_migrator\n\
+63; 0 0 ACL k2 FUNCTION actor() postgres\n\
+64; 1255 16493 FUNCTION k2 whoami() ws_jobs_migrator\n\
+7; 2615 16500 SCHEMA - app ws_jobs_migrator\n\
 9; 1255 16510 FUNCTION public h1_who(integer) ws_jobs_migrator\n\
 11; 1259 16520 TABLE public h1 ws_jobs_migrator\n\
 12; 1259 16530 TABLE public x 13; 3079 1 EXTENSION - evil ws_jobs_migrator\n\
@@ -953,17 +961,33 @@ fn dump_restore_use_the_targets_binaries_as_postgres() {
         assert!(!r.contains("temp_file_limit") && !r.contains("role=none"), "a non-superuser session: {r}");
     }
     assert!(restores[3].contains("-L /var/lib/postgresql/k2-moves/.k2toc-own-20261020T101500Z"), "{}", restores[3]);
-    assert_eq!(get_list(&w, ".k2toc-schemas-20261020T101500Z"), "7; 2615 16500 SCHEMA - k2 ws_jobs_migrator\n");
+    assert_eq!(get_list(&w, ".k2toc-schemas-20261020T101500Z"), "7; 2615 16500 SCHEMA - app ws_jobs_migrator\n");
     let files = w.borrow().passfiles.clone();
     let get = |name: &str| files.iter().find(|(f, _)| f.ends_with(name)).map(|(_, b)| b.clone()).unwrap_or_else(|| panic!("{name}: {files:?}"));
     assert_eq!(get(".k2pass-20261020T101500Z"), "127.0.0.1:5433:ws_jobs:ws_jobs_migrator:pw\\:with\\\\colon\n");
     assert_eq!(
         get(".k2toc-su-20261020T101500Z"),
-        "2; 3079 16385 EXTENSION - pgcrypto \n4321; 0 0 COMMENT - EXTENSION pgcrypto \n3; 3079 16420 EXTENSION - pg_trgm \n",
-        "only real extension entries go to the superuser"
+        "2; 3079 16385 EXTENSION - pgcrypto \n4321; 0 0 COMMENT - EXTENSION pgcrypto \n3; 3079 16420 EXTENSION - pg_trgm \n\
+         5; 3079 16430 EXTENSION - uuid-ossp \n4322; 0 0 COMMENT - EXTENSION \"uuid-ossp\" \n",
+        "only real extension entries (a quoted name too, drill B) go to the superuser"
     );
+    // Drill A: K2's own schema and helpers are never replayed; the canned
+    // install runs as postgres, in the target, before the owner's pre-data.
+    let sql = w.borrow().sql.clone();
+    let install = sql.iter().position(|(p, s)| *p == 5433 && s.starts_with("SET check_function_bodies = off;\nCREATE SCHEMA k2;\n")).expect("K2's install");
+    let s = &sql[install].1;
+    assert!(s.contains("CREATE OR REPLACE FUNCTION k2.actor() RETURNS text") && s.contains("CREATE OR REPLACE FUNCTION k2.skin_uid()"), "{s}");
+    assert!(!s.contains("whoami") && !s.contains("set_principal"), "only K2's listed helpers: {s}");
+    assert!(s.contains("ALTER FUNCTION k2.skin_uid() OWNER TO \"ws_jobs_migrator\";") && s.contains("ALTER SCHEMA k2 OWNER TO \"ws_jobs_migrator\";"), "{s}");
+    let force_read = sql.iter().position(|(_, s)| s.contains("WHERE c.relforcerowsecurity")).unwrap();
+    assert!(install < force_read, "before the owner's pre-data");
     let own = get(".k2toc-own-20261020T101500Z");
     assert!(!own.contains("7; 2615"), "{own}");
+    for k2 in ["6; 2615", "61; 1255", "62; 1255", "63; 0 0 ACL"] {
+        assert!(!own.contains(k2), "K2's own entries are never replayed: {own}");
+    }
+    assert!(own.contains("64; 1255 16493 FUNCTION k2 whoami()"), "a tenant function in k2 is the owner's: {own}");
+    assert!(own.contains("4323; 0 0 COMMENT - EXTENSION \"not-here\""), "a comment on no extension of the dump: {own}");
     for l in ["9; 1255", "11; 1259", "12; 1259 16530 TABLE public x 13; 3079 1 EXTENSION - evil", "14; 0 0 COMMENT - EXTENSION evil x"] {
         assert!(own.contains(l), "{l}: {own}");
     }

@@ -49,6 +49,7 @@ pub mod caller;
 pub mod cli;
 pub mod creds;
 pub mod engine;
+pub mod k2_db;
 pub mod keys;
 pub mod node_build;
 pub mod paths;

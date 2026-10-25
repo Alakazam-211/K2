@@ -334,52 +334,7 @@ pub(crate) fn k2_helper_owner_sql(db_name: &str) -> String {
     )
 }
 
-const PRINCIPAL_HELPERS_SQL: &str = r#"CREATE SCHEMA IF NOT EXISTS k2;
-GRANT USAGE ON SCHEMA k2 TO PUBLIC;
-CREATE OR REPLACE FUNCTION k2.skin_uid() RETURNS uuid
-LANGUAGE plpgsql
-STABLE
-SECURITY DEFINER
-SET search_path = pg_temp, pg_catalog
-AS $k2fn$
-DECLARE
-  locked uuid;
-BEGIN
-  BEGIN
-    SELECT id INTO locked FROM pg_temp.k2_principal_lock LIMIT 1;
-    IF FOUND THEN
-      RETURN locked;
-    END IF;
-  EXCEPTION
-    WHEN undefined_table THEN
-      NULL;
-  END;
-  RETURN nullif(current_setting('k2.skin_principal', true), '')::uuid;
-END;
-$k2fn$;
-GRANT EXECUTE ON FUNCTION k2.skin_uid() TO PUBLIC;
-CREATE OR REPLACE FUNCTION k2.set_principal(p uuid) RETURNS void
-LANGUAGE plpgsql
-AS $k2fn$
-BEGIN
-  PERFORM set_config('k2.skin_principal', COALESCE(p::text, ''), true);
-END;
-$k2fn$;
-GRANT EXECUTE ON FUNCTION k2.set_principal(uuid) TO PUBLIC;
-CREATE OR REPLACE FUNCTION k2.clear_principal() RETURNS void
-LANGUAGE sql
-AS $k2fn$
-  SELECT set_config('k2.skin_principal', '', true)
-$k2fn$;
-GRANT EXECUTE ON FUNCTION k2.clear_principal() TO PUBLIC;
-CREATE OR REPLACE FUNCTION k2.principal_hygiene() RETURNS boolean
-LANGUAGE sql
-STABLE
-AS $k2fn$
-  SELECT coalesce(current_setting('k2.skin_principal', true), '') = ''
-$k2fn$;
-GRANT EXECUTE ON FUNCTION k2.principal_hygiene() TO PUBLIC;
-"#;
+const PRINCIPAL_HELPERS_SQL: &str = k2_root_proto::k2_db::PRINCIPAL_HELPERS_SQL;
 
 /// One sql_grants LOGIN in a privilege sync. Empty `relations` is the
 /// broad grant (ALL TABLES + default privileges). A non-empty list is
@@ -591,19 +546,7 @@ pub(crate) fn seal_k2_internal_tables_sql(db_name: &str) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "CREATE OR REPLACE FUNCTION k2.internal_table_ok() RETURNS boolean\n\
-         LANGUAGE plpgsql\n\
-         STABLE\n\
-         SET search_path = pg_catalog, pg_temp\n\
-         AS $k2fn$\n\
-         BEGIN\n\
-           IF k2.skin_uid() IS NOT NULL THEN\n\
-             RAISE EXCEPTION 'permission denied for K2 internal table' USING ERRCODE = 'insufficient_privilege';\n\
-           END IF;\n\
-           RETURN true;\n\
-         END;\n\
-         $k2fn$;\n\
-         GRANT EXECUTE ON FUNCTION k2.internal_table_ok() TO PUBLIC;\n\
+        "{internal}\
          ALTER FUNCTION k2.internal_table_ok() OWNER TO {mig_ident};\n\
          DO $k2seal$\n\
          DECLARE\n\
@@ -633,6 +576,7 @@ pub(crate) fn seal_k2_internal_tables_sql(db_name: &str) -> String {
            END LOOP;\n\
          END\n\
          $k2seal$;",
+        internal = k2_root_proto::k2_db::INTERNAL_TABLE_OK_SQL,
         mig_ident = pg_quote_ident(&migrator),
         mig_lit = pg_quote_literal(&migrator),
     )

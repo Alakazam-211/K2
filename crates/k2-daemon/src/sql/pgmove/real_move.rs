@@ -275,6 +275,14 @@ fn fixture(ops: &dyn ClusterOps, db: &str, extra_ext: Option<&str>) {
          RESET ROLE;\n"
     );
     ops.sql(16, db, &body).expect("fixture objects");
+    // K2's own helpers as `k2 db create` installs them: as postgres, most
+    // owned by postgres (0.46.4 drill A: the owner can't replay those).
+    let k2 = format!(
+        "{}\n{}\n",
+        crate::sql::ops::ensure_k2_helpers_sql(),
+        crate::sql::ops::k2_helper_owner_sql(db)
+    );
+    ops.sql(16, db, &k2).expect("fixture: K2's helpers");
     println!("fixture {db} on 16: ready");
 }
 
@@ -327,6 +335,28 @@ fn h1_checks(ops: &dyn ClusterOps, m: Major, db: &str) {
         ops.sql(m, "postgres", &format!("SELECT rolsuper::text FROM pg_roles WHERE rolname = '{mig}';\n")),
         "false",
         &format!("H1 {m}: the owner is not a superuser"),
+    );
+}
+
+/// Drill A: K2's helpers on the target, canned (never replayed from the
+/// dump), with the owners `k2 db create` gives them; the tenant's own
+/// function in schema `k2` came along as the owner's.
+fn k2_helper_checks(ops: &dyn ClusterOps, m: Major, db: &str) {
+    let mig = format!("{db}_migrator");
+    let owners = "SELECT string_agg(p.oid::regprocedure::text || '=' || pg_get_userbyid(p.proowner), ',' ORDER BY 1) \
+                  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'k2';\n";
+    want(
+        ops.sql(m, db, owners),
+        &format!(
+            "k2.actor()=postgres,k2.actor_info()={mig},k2.actor_kind()=postgres,k2.clear_principal()=postgres,\
+             k2.principal_hygiene()=postgres,k2.set_principal(uuid)=postgres,k2.skin_uid()={mig},k2.whoami()={mig}"
+        ),
+        &format!("{m}: K2's helpers canned with K2's owners; the tenant's k2.whoami() the owner's"),
+    );
+    want(
+        ops.sql(m, db, "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'k2';\n"),
+        &mig,
+        &format!("{m}: schema k2 is the migrator's"),
     );
 }
 
@@ -472,6 +502,7 @@ fn real_move_16_to_17_rollback_forget_and_refusals() {
     assert!(env.dsn.borrow().contains(&format!(":{port17}/")), "DSN re-pointed: {}", env.dsn.borrow());
     agent_checks(17, port17, db, "250", "501");
     h1_checks(&ops, 17, db);
+    k2_helper_checks(&ops, 17, db);
     want(as_role(17, port17, db, &format!("{db}_migrator"), PW_MIG, "SELECT count(*) FROM jobs"), "501", "17: FORCE RLS on the owner, its own policy");
     want(ops.sql(17, db, "SELECT count(*) FROM pg_largeobject_metadata;\n"), "1", "17: the large object came along");
     want(

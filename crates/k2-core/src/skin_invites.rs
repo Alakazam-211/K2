@@ -193,29 +193,65 @@ pub fn check_body(raw: &str) -> Result<String, String> {
     Ok(s.replace("\r\n", "\n"))
 }
 
-/// The set-password link is K2's to place, never the template's.
+/// The set-password link is K2's to place, never the template's, and a
+/// template carries no other link either (security review 2026-10-25: a
+/// template link is a phishing surface).
 fn check_no_link(s: &str) -> Result<(), String> {
-    if s.contains("{link}") || s.contains(INVITE_PREFIX) {
+    let lower = s.to_ascii_lowercase();
+    if lower.contains("{link}") || lower.contains(INVITE_PREFIX) {
         return Err("K2 adds the set-password link itself; a template can't place it ({link} and k2inv_ are not allowed)".into());
+    }
+    if lower.contains("http://") || lower.contains("https://") || lower.contains("www.") {
+        return Err("a template carries no links (http://, https:// or www.): K2 adds the one set-password link itself".into());
     }
     Ok(())
 }
 
-/// Check a set-password page: `https://…` (or `http://localhost…` for a
-/// local App), no fragment (K2 puts the token there).
-pub fn check_set_password_url(raw: &str) -> Result<String, String> {
+/// `(scheme, host, port)` of an absolute `http(s)://` URL; `None` for
+/// anything else (userinfo, an empty host, a bad port).
+pub fn url_host(raw: &str) -> Option<(String, String, Option<u16>)> {
+    let (scheme, rest) = raw.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "https" && scheme != "http" {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    let (host, port) = match authority.split_once(':') {
+        Some((h, p)) => (h, Some(p.parse::<u16>().ok()?)),
+        None => (authority, None),
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() || host.chars().any(|c| !(c.is_ascii_alphanumeric() || c == '.' || c == '-')) {
+        return None;
+    }
+    Some((scheme, host, port))
+}
+
+/// Check a set-password page (security review 2026-10-25): `https://` on
+/// one of `allowed_hosts` (the App's own domains or K2's), or exactly
+/// `http://localhost` / `http://127.0.0.1` (any port) for a local App; no
+/// userinfo, no #fragment (K2 puts the token there).
+pub fn check_set_password_url(raw: &str, allowed_hosts: &[String]) -> Result<String, String> {
     let u = raw.trim();
-    let lower = u.to_ascii_lowercase();
-    let local = lower.starts_with("http://localhost") || lower.starts_with("http://127.0.0.1");
-    if !(lower.starts_with("https://") || local) || u.contains('#') || u.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err("set-password page: an https:// URL with no #fragment (K2 adds #k2inv_… itself)".into());
+    let bad = || "set-password page: https:// on the App's own domain or this box's K2 domain, no #fragment (K2 adds #k2inv_… itself)".to_string();
+    if u.contains('#') || u.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(bad());
+    }
+    let (scheme, host, _) = url_host(u).ok_or_else(bad)?;
+    let local = scheme == "http" && (host == "localhost" || host == "127.0.0.1");
+    let allowed = scheme == "https" && allowed_hosts.iter().any(|h| h.eq_ignore_ascii_case(&host));
+    if !(local || allowed) {
+        return Err(format!("{}; allowed hosts: {}", bad(), if allowed_hosts.is_empty() { "none yet".to_string() } else { allowed_hosts.join(", ") }));
     }
     Ok(u.to_string())
 }
 
 /// Apply `patch` to `app`'s settings (checked first; nothing is written
 /// when any field is bad). Returns the new settings.
-pub fn set_settings(app: &str, patch: &InviteSettingsPatch, actor: &str) -> Result<InviteSettings, String> {
+pub fn set_settings(app: &str, patch: &InviteSettingsPatch, allowed_hosts: &[String], actor: &str) -> Result<InviteSettings, String> {
     let app = normalize_app_target(Some(app));
     let ttl_ok = |v: &Option<Option<i64>>| match v {
         Some(Some(s)) if !(MIN_TTL_SECS..=MAX_TTL_SECS).contains(s) => Err("a link lives between 15 minutes and 30 days".to_string()),
@@ -231,7 +267,12 @@ pub fn set_settings(app: &str, patch: &InviteSettingsPatch, actor: &str) -> Resu
             Some(Some(s)) => check(s).map(|c| Some(Some(c))),
         }
     };
-    let url = text(&patch.set_password_url, check_set_password_url)?;
+    let url = match &patch.set_password_url {
+        None => None,
+        Some(None) => Some(None),
+        Some(Some(s)) if s.trim().is_empty() => Some(None),
+        Some(Some(s)) => Some(Some(check_set_password_url(s, allowed_hosts)?)),
+    };
     let isub = text(&patch.invite_subject, check_subject)?;
     let ibody = text(&patch.invite_body, check_body)?;
     let rsub = text(&patch.reset_subject, check_subject)?;
@@ -367,6 +408,11 @@ fn generate_token() -> String {
 /// for that (person, App). Not usable until [`activate`]. `sent_to`: the
 /// address it is mailed to (`None` = handed to the owner); `set_email`:
 /// on use, the person's stored email becomes `sent_to` (owner `--to`).
+/// `tie_on_use`: `(workspace, reason)` the person is tied to when the link
+/// is used, because an App page, an App key or a workspace mailbox could
+/// see this token (security review 2026-10-25). `None` only for links that
+/// leave K2's own hands for the person's alone (an owner reset).
+#[allow(clippy::too_many_arguments)]
 pub fn mint(
     principal_id: &str,
     app: &str,
@@ -374,6 +420,7 @@ pub fn mint(
     ttl_secs: i64,
     sent_to: Option<&str>,
     set_email: bool,
+    tie_on_use: Option<(&str, &str)>,
     created_by: &str,
 ) -> Result<Minted, MintError> {
     if ![PURPOSE_INVITE, PURPOSE_RESET, PURPOSE_OWNER_RESET].contains(&purpose) {
@@ -396,15 +443,23 @@ pub fn mint(
                 return Ok(Err(MintError::Throttled));
             }
         }
+        // A new link voids the older unused ones for this (person, App),
+        // but an invite or an App's forgot (reachable from outside) never
+        // voids the owner's pending reset.
         tx.execute(
-            "DELETE FROM app_user_invites WHERE principal_id = ?1 AND app = ?2 AND used_at IS NULL",
-            params![principal_id, app],
+            "DELETE FROM app_user_invites WHERE principal_id = ?1 AND app = ?2 AND used_at IS NULL
+               AND (purpose != 'owner_reset' OR ?3 = 'owner_reset')",
+            params![principal_id, app, purpose],
         )
         .map_err(|e| format!("invite void: {e}"))?;
+        let (tie_ws, tie_reason) = match tie_on_use {
+            Some((ws, reason)) => (Some(ws), Some(reason)),
+            None => (None, None),
+        };
         tx.execute(
-            "INSERT INTO app_user_invites (id, principal_id, app, purpose, token_hash, sent_to, set_email, ttl_secs, created_by, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![id, principal_id, app, purpose, sha256_hex(&token), sent_to, set_email as i64, ttl_secs, created_by, now],
+            "INSERT INTO app_user_invites (id, principal_id, app, purpose, token_hash, sent_to, set_email, ttl_secs, created_by, created_at, tie_workspace, tie_reason)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![id, principal_id, app, purpose, sha256_hex(&token), sent_to, set_email as i64, ttl_secs, created_by, now, tie_ws, tie_reason],
         )
         .map_err(|e| format!("invite insert: {e}"))?;
         tx.commit().map_err(|e| format!("invite commit: {e}"))?;
@@ -538,16 +593,17 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
     let now = now_secs();
     with_conn(|conn| {
         let tx = immediate_tx(conn)?;
-        let row: Option<(String, String, String, Option<String>, i64)> = tx
+        type Row = (String, String, String, Option<String>, i64, Option<String>, Option<String>);
+        let row: Option<Row> = tx
             .query_row(
-                "SELECT i.id, i.principal_id, i.purpose, i.sent_to, i.set_email FROM app_user_invites i
+                "SELECT i.id, i.principal_id, i.purpose, i.sent_to, i.set_email, i.tie_workspace, i.tie_reason FROM app_user_invites i
                    JOIN principals p ON p.id = i.principal_id WHERE i.token_hash = ?1",
                 params![token_hash],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
             )
             .optional()
             .map_err(|e| format!("invite lookup: {e}"))?;
-        let Some((id, principal_id, purpose, sent_to, set_email)) = row else { return Ok(Consume::BadToken) };
+        let Some((id, principal_id, purpose, sent_to, set_email, tie_ws, tie_reason)) = row else { return Ok(Consume::BadToken) };
         let claimed = tx
             .execute(
                 "UPDATE app_user_invites SET used_at = ?2
@@ -561,6 +617,12 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
         tx.execute("UPDATE principals SET password_hash = ?1 WHERE id = ?2", params![pw_hash, principal_id])
             .map_err(|e| format!("invite password: {e}"))?;
         revoke_sessions_for_principal(&tx, &principal_id)?;
+        // A link an App page, App key or workspace mailbox could see ties
+        // the person to that workspace as it is used (never dropped by it).
+        if let Some(ws) = tie_ws.as_deref().filter(|w| !w.is_empty()) {
+            let set_by = format!("link:{purpose}");
+            ties::set_conn(&tx, &principal_id, ties::TieWrite { workspace_id: ws, set_by: &set_by, reason: tie_reason.as_deref().unwrap_or(ties::REASON_INVITE) })?;
+        }
         if purpose == PURPOSE_OWNER_RESET {
             if set_email != 0 {
                 if let Some(addr) = sent_to.as_deref() {
@@ -574,4 +636,49 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
         tx.commit().map_err(|e| format!("invite commit: {e}"))?;
         Ok(Consume::Ok)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_set_password_page_is_https_on_an_allowed_host_or_exact_localhost() {
+        let hosts = vec!["shop.box.k2.dev".to_string(), "door.example.test".to_string()];
+        for ok in ["https://shop.box.k2.dev/set", "https://door.example.test", "http://localhost:3000/set", "http://127.0.0.1/x", "https://SHOP.box.k2.dev/set"] {
+            assert!(check_set_password_url(ok, &hosts).is_ok(), "{ok}");
+        }
+        for bad in [
+            "https://evil.example/set",
+            "http://shop.box.k2.dev/set",
+            "http://localhost.attacker.tld/set",
+            "http://localhost@evil.example/set",
+            "https://shop.box.k2.dev.evil.example/set",
+            "https://shop.box.k2.dev/set#x",
+            "javascript:alert(1)",
+            "https://shop.box.k2.dev:99999/",
+            "",
+        ] {
+            assert!(check_set_password_url(bad, &hosts).is_err(), "{bad}");
+        }
+        assert!(check_set_password_url("https://shop.box.k2.dev/set", &[]).is_err(), "no allowed host, no https page");
+    }
+
+    #[test]
+    fn templates_carry_no_links() {
+        for bad in ["see https://x.example", "HTTP://x", "visit www.example.com", "{link}", "k2inv_abc"] {
+            assert!(check_body(bad).is_err(), "{bad}");
+            assert!(check_subject(bad).is_err(), "{bad}");
+        }
+        assert!(check_body("Hi {name}, the {app} team saved you a seat.\nSee you soon.").is_ok());
+    }
+
+    #[test]
+    fn render_never_rescans_values() {
+        let v = MailVars { app: "{name}", name: "Ada", username: "ada", sender: "the owner", expires: "in 1 hour" };
+        assert_eq!(render("{app} / {name} / {nope}", &v), "{name} / Ada / {nope}");
+        let c = compose(PURPOSE_OWNER_RESET, &InviteTemplate::default(), &v, "https://door.example/cli/skin/password/set#k2inv_t");
+        assert!(c.subject.starts_with("Reset your password for"), "{}", c.subject);
+        assert!(c.body.contains("Set your password: https://door.example/cli/skin/password/set#k2inv_t"), "{}", c.body);
+    }
 }

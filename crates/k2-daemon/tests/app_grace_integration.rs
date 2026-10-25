@@ -259,14 +259,11 @@ async fn app_key_is_minted_in_person_held_for_agents_and_opens_only_its_app() {
     assert!(k2_core::skin::principal_exists("boxperson").unwrap(), "the person keeps their box login");
     let r = v1(d.port, "POST", &format!("{base}/users"), &key, Some(json!({"username": "guest2", "email": "g2@example.com", "password": "another long pass 9"}))).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    // A person took guest2 over; the key minting its reset token ties it again.
-    let g2 = k2_core::skin::list_principals().unwrap().into_iter().find(|p| p.username == "guest2").expect("guest2").id;
-    k2_core::skin::creators::clear_agent_tie(&g2, "owner-token").unwrap();
-    assert_eq!(tie_of("guest2"), None);
+    // agent-app-users review item 4: the key never gets the token; with no
+    // set-password page or mail path nothing is minted or sent.
     let r = v1(d.port, "POST", &format!("{base}/users/password-reset"), &key, Some(json!({"username": "guest2"}))).await;
-    assert_eq!(r.status, 200, "{}", r.body);
-    assert!(r.json()["token"].as_str().is_some_and(|t| !t.is_empty()));
-    assert_eq!(tie_of("guest2"), Some(format!("app-key:{svc}")), "the key holder holds its reset token: tied again");
+    assert_eq!((r.status, r.code()), (409, "no_set_password_page".to_string()), "{}", r.body);
+    assert!(!r.body.contains("k2inv_") && r.json()["token"].is_null(), "{}", r.body);
     let r = v1(d.port, "POST", &format!("{base}/users/remove"), &key, Some(json!({"username": "guest2"}))).await;
     assert_eq!(r.json()["removed"], "person", "{}", r.body);
 

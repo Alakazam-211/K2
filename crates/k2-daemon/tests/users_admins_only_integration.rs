@@ -6,9 +6,11 @@
 //! - T1.2: the arm list is read from `dispatcher.rs` itself; an arm this
 //!   file has no case for fails the test.
 //! - T1.1: every arm, with an agent passport (`?token=` and Bearer, the
-//!   workspace's "manage Apps" switch on), a `k2skn_` login session, a
-//!   `k2skn_` platform pass and an App key (`k2sk_`): 403 every time, and
-//!   the Connect user store is byte-for-byte unchanged afterwards.
+//!   workspace's "manage Apps" switch on), a K2 shell tab's passport, a
+//!   `k2skn_` login session, a `k2skn_` platform pass, an App's link pass,
+//!   an App key (`k2sk_`), a Connect Member login and a Sew chat pass: 403
+//!   every time, and the Connect user store is byte-for-byte unchanged
+//!   afterwards.
 //!
 //! Fail loudly: every assertion names the arm and the credential.
 
@@ -162,13 +164,55 @@ async fn t1_1_no_agent_credential_reaches_any_users_arm() {
     assert!(app_key.starts_with("k2sk_"));
     assert!(session.starts_with("k2skn_") && platform.starts_with("k2skn_"));
 
+    // A K2 shell tab's passport: a live login-shell PTY (a human typing
+    // inside K2, `Who::Shell`).
+    let shell = {
+        let cfg = k2_core::terminal::DaemonPtyConfig { cols: 80, rows: 24, cwd: Some(ws.path.clone()), program: None, ..Default::default() };
+        let pty = k2_core::terminal::DaemonPtySession::spawn(cfg).expect("spawn a login shell");
+        k2_daemon::v2_session_map::register(format!("shell-{tag}"), std::sync::Arc::clone(&pty));
+        k2_daemon::session_token::mint_session_token(
+            &pty.session_id,
+            &pty.session_id.to_string(),
+            k2_daemon::session_token::HookPrincipal { workspace_uuid: ws.id.clone(), agent_address: format!("shell-{tag}") },
+            k2_daemon::session_token::CredMode::ApiKey,
+            k2_daemon::session_token::Provider::Anthropic,
+        )
+    };
+    // An App's link pass (valid only on its own link, never here).
+    let link = k2_core::skin::link::mint_link_pass(&svc, "app", &format!("gw:{}", 47_102), &["thread:read".to_string()], std::slice::from_ref(&ws.id))
+        .expect("link pass")
+        .raw;
+    // A Connect Member login.
+    k2_core::connect_users::add_user("member1", "Member-pass-1234").expect("add member");
+    let member = k2_core::connect_users::create_session("member1");
+    // A Sew chat pass minted for a guest with a chat grant.
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
+    let mut row = k2_daemon::sew::store::Row::new("0.1.2", 0);
+    row.status = "running".into();
+    row.install_id = Some("123456789".into());
+    k2_daemon::sew::store::save(&row).expect("sew row");
+    let chat_guest = format!("cg{tag}");
+    let cg = k2_core::skin::add_principal(&chat_guest).expect("chat guest");
+    k2_core::skin::insert_chat_grant_for_tests(&cg.id).expect("chat grant");
+    let (_, cg_session) = k2_core::skin::create_session_token(&chat_guest).expect("chat guest login");
+    let chat_pass = {
+        let (pq, tok) = ("/cli/sew/pass".to_string(), cg_session.clone());
+        let (status, body) = tokio::task::spawn_blocking(move || raw(port, "POST", &pq, Some(&tok), Some("{}"))).await.unwrap();
+        assert_eq!(status, 200, "a chat pass to try: {body}");
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["pass"].as_str().expect("pass").to_string()
+    };
+
     let before = store_snapshot();
     let creds: Vec<(&str, String, bool)> = vec![
         ("agent passport ?token=", agent.clone(), false),
         ("agent passport Bearer (manage Apps on)", agent.clone(), true),
+        ("K2 shell tab passport", shell.clone(), false),
         ("k2skn_ login session", session.clone(), false),
         ("k2skn_ platform pass", platform.clone(), false),
+        ("App link pass", link.clone(), true),
         ("App key k2sk_", app_key.clone(), true),
+        ("Connect Member login", member.clone(), false),
+        ("Sew chat pass", chat_pass.clone(), true),
     ];
     let mut checked = 0usize;
     for (path, methods) in KNOWN_ARMS {
@@ -188,7 +232,7 @@ async fn t1_1_no_agent_credential_reaches_any_users_arm() {
             }
         }
     }
-    assert_eq!(checked, 11 * 5, "every arm × method × credential ran");
+    assert_eq!(checked, 11 * creds.len(), "every arm × method × credential ran");
     assert_eq!(store_snapshot(), before, "the Connect user store is unchanged");
     assert!(!k2_core::connect_users::verify("intruder", "Intruder-pass-123"), "no user was added");
     assert!(k2_core::connect_users::verify("admin1", "Admin-pass-1234"), "the admin's password is unchanged");

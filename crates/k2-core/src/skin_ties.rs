@@ -33,6 +33,8 @@ pub const REASON_PASSWORD: &str = "password";
 pub const REASON_EMAIL: &str = "email";
 pub const REASON_INVITE: &str = "invite";
 pub const REASON_APP_KEY: &str = "app_key";
+/// An App's own forgot-password link was used (the App's page saw it).
+pub const REASON_APP_RESET: &str = "app_reset";
 
 /// Step 6: the ties and the invite / owner-reset links.
 pub(super) fn step6_ties_and_invites(conn: &Connection) -> Result<(), String> {
@@ -54,6 +56,8 @@ pub(super) fn step6_ties_and_invites(conn: &Connection) -> Result<(), String> {
             sent_to      TEXT,
             set_email    INTEGER NOT NULL DEFAULT 0,
             ttl_secs     INTEGER NOT NULL DEFAULT 0,
+            tie_workspace TEXT,
+            tie_reason   TEXT,
             outbound_id  TEXT,
             created_by   TEXT NOT NULL,
             created_at   INTEGER NOT NULL,
@@ -122,6 +126,14 @@ pub(super) fn set_conn(conn: &Connection, principal_id: &str, w: TieWrite<'_>) -
     }
     let host_ok = holds_host_conn(conn, principal_id)?;
     let existing = get_conn(conn, principal_id)?;
+    // A tied person gets no chat pass (a chat grant is box-wide): end the
+    // ones already out (security review 2026-10-25, item 14).
+    if existing.is_none() && super::principal_has_chat_grant_conn(conn, principal_id)? {
+        crate::sew_revoke::enqueue(
+            conn,
+            &crate::sew_revoke::SewSessionRevoke::ExternalId(crate::sew_revoke::principal_external_id(principal_id)),
+        )?;
+    }
     match existing {
         None => {
             conn.execute(

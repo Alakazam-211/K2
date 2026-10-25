@@ -2055,6 +2055,21 @@ impl StalwartClient {
         rcpt_to: &[String],
         email_create: serde_json::Value,
     ) -> Result<(), String> {
+        self.submission_send_opts(account_id, from_email, rcpt_to, email_create, false)
+    }
+
+    /// [`Self::submission_send`]; `destroy_copy` asks the server to delete
+    /// the created Email once the submission succeeds (RFC 8621 §7.5
+    /// `onSuccessDestroyEmail`): one-time-link mails leave no copy in the
+    /// sending mailbox.
+    pub fn submission_send_opts(
+        &self,
+        account_id: &str,
+        from_email: &str,
+        rcpt_to: &[String],
+        email_create: serde_json::Value,
+        destroy_copy: bool,
+    ) -> Result<(), String> {
         if rcpt_to.is_empty() {
             return Err("submission: empty rcptTo".to_string());
         }
@@ -2067,39 +2082,7 @@ impl StalwartClient {
             Some(id) => id,
             None => self.mailbox_inbox_id(account_id)?,
         };
-        let mut email = email_create;
-        email["mailboxIds"] = serde_json::json!({ mailbox_id: true });
-        let envelope_rcpts: Vec<serde_json::Value> = rcpt_to
-            .iter()
-            .map(|e| serde_json::json!({ "email": e }))
-            .collect();
-        let body = serde_json::json!({
-            "using": JMAP_SUBMISSION_USING,
-            "methodCalls": [
-                [
-                    "Email/set",
-                    { "accountId": account_id, "create": { SUBMIT_EMAIL_TAG: email } },
-                    "0"
-                ],
-                [
-                    "EmailSubmission/set",
-                    {
-                        "accountId": account_id,
-                        "create": {
-                            SUBMIT_SUB_TAG: {
-                                "emailId": format!("#{SUBMIT_EMAIL_TAG}"),
-                                "identityId": identity_id,
-                                "envelope": {
-                                    "mailFrom": { "email": from_email },
-                                    "rcptTo": envelope_rcpts,
-                                },
-                            }
-                        }
-                    },
-                    "1"
-                ]
-            ],
-        });
+        let body = submission_request(account_id, &identity_id, &mailbox_id, from_email, rcpt_to, email_create, destroy_copy);
         let api_url = self.discover_api_url()?;
         let reply = self.post_json_url(&api_url, &body)?;
         parse_submission_created(&reply)
@@ -5162,6 +5145,56 @@ fn parse_identity_for(args: &serde_json::Value, from_email: &str) -> Option<Stri
 /// must have succeeded — a JMAP-level `error`, a `notCreated` on
 /// either, or a missing response is a loud Err carrying the server's
 /// SetError (never the message content).
+/// The one JMAP request a submission sends: `Email/set create` in
+/// `mailbox_id` plus `EmailSubmission/set create` referencing it. With
+/// `destroy_copy` the server deletes the created Email once the submission
+/// succeeds (`onSuccessDestroyEmail`, RFC 8621 §7.5): one-time-link mails
+/// leave no Drafts/Sent copy in the sending mailbox.
+pub(crate) fn submission_request(
+    account_id: &str,
+    identity_id: &str,
+    mailbox_id: &str,
+    from_email: &str,
+    rcpt_to: &[String],
+    email_create: serde_json::Value,
+    destroy_copy: bool,
+) -> serde_json::Value {
+    let mut email = email_create;
+    email["mailboxIds"] = serde_json::json!({ mailbox_id: true });
+    let envelope_rcpts: Vec<serde_json::Value> = rcpt_to.iter().map(|e| serde_json::json!({ "email": e })).collect();
+    let mut body = serde_json::json!({
+        "using": JMAP_SUBMISSION_USING,
+        "methodCalls": [
+            [
+                "Email/set",
+                { "accountId": account_id, "create": { SUBMIT_EMAIL_TAG: email } },
+                "0"
+            ],
+            [
+                "EmailSubmission/set",
+                {
+                    "accountId": account_id,
+                    "create": {
+                        SUBMIT_SUB_TAG: {
+                            "emailId": format!("#{SUBMIT_EMAIL_TAG}"),
+                            "identityId": identity_id,
+                            "envelope": {
+                                "mailFrom": { "email": from_email },
+                                "rcptTo": envelope_rcpts,
+                            },
+                        }
+                    }
+                },
+                "1"
+            ]
+        ],
+    });
+    if destroy_copy {
+        body["methodCalls"][1][1]["onSuccessDestroyEmail"] = serde_json::json!([format!("#{SUBMIT_SUB_TAG}")]);
+    }
+    body
+}
+
 fn parse_submission_created(reply: &serde_json::Value) -> Result<(), String> {
     let responses = reply
         .get("methodResponses")
@@ -7589,6 +7622,17 @@ mod s4_mail_tests {
         assert_eq!(parse_identity_for(&args, "bot@acme.dev").as_deref(), Some("I2"));
         assert_eq!(parse_identity_for(&args, "nobody@acme.dev"), None);
         assert_eq!(parse_identity_for(&serde_json::json!({}), "x@y.z"), None);
+    }
+
+    #[test]
+    fn a_one_time_link_submission_destroys_its_stored_copy() {
+        let rcpts = vec!["ada@example.test".to_string()];
+        let keep = submission_request("acc", "id1", "mb1", "bot@x.test", &rcpts, serde_json::json!({ "subject": "s" }), false);
+        assert!(keep["methodCalls"][1][1].get("onSuccessDestroyEmail").is_none(), "{keep}");
+        let gone = submission_request("acc", "id1", "mb1", "bot@x.test", &rcpts, serde_json::json!({ "subject": "s" }), true);
+        assert_eq!(gone["methodCalls"][1][1]["onSuccessDestroyEmail"], serde_json::json!(["#k2sub"]), "{gone}");
+        assert_eq!(gone["methodCalls"][1][1]["create"]["k2sub"]["emailId"], "#k2out", "{gone}");
+        assert_eq!(gone["methodCalls"][0][1]["create"]["k2out"]["mailboxIds"], serde_json::json!({ "mb1": true }));
     }
 
     #[test]

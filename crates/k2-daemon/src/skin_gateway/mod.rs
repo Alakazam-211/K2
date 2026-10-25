@@ -42,6 +42,12 @@ pub const CROSS_ORIGIN_REFUSED_JSON: &str =
     r#"{"error":"cross-origin request refused","code":"cross_origin_refused"}"#;
 const LOGIN_HTML: &str = include_str!("login.html");
 const RESET_HTML: &str = include_str!("reset.html");
+/// K2's own set-password page (agent-app-users): the owner's reset links
+/// land here. Served from these bundled bytes only, never from a skin
+/// `--root` or an App, on the gateway and by the daemon.
+pub const SET_PASSWORD_HTML: &str = include_str!("set_password.html");
+/// Where K2's own set-password page lives on every front door.
+pub const SET_PASSWORD_PATH: &str = "/cli/skin/password/set";
 const APP_HTML: &str = include_str!("app.html");
 const APP_CSS: &str = include_str!("app.css");
 const APP_JS: &str = include_str!("app.js");
@@ -419,7 +425,7 @@ fn query_has_param(query: &str, key: &str) -> bool {
 
 pub fn is_static_path(path: &str) -> bool {
     let p = path_only(path);
-    p == "/" || p == "/login" || p == "/reset" || p == "/index.html" || p.starts_with("/assets")
+    p == "/" || p == "/login" || p == "/reset" || p == "/index.html" || p.starts_with("/assets") || p == SET_PASSWORD_PATH
 }
 
 fn path_only(path: &str) -> &str {
@@ -1105,6 +1111,10 @@ fn reset_static_bytes(root: Option<&Path>) -> Vec<u8> {
 }
 
 async fn serve_static(gw: &Gateway, stream: &mut TcpStream, path: &str, head_only: bool) {
+    if path == SET_PASSWORD_PATH {
+        write_bytes(gw, stream, "200 OK", "text/html; charset=utf-8", SET_PASSWORD_HTML.as_bytes(), head_only).await;
+        return;
+    }
     if path == "/login" {
         let body = login_static_bytes(gw.root.as_deref());
         write_bytes(

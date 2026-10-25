@@ -213,6 +213,78 @@ pub fn invite_sender(app_ws: Option<&str>, by: &By, from: Option<&str>) -> Resul
     Ok(Some(Sender { project_id: ws.to_string(), project_path: path, address: address.address, account_id, from_name, gate }))
 }
 
+/// K2's own set-password page on this box's front door
+/// (`<front door>/cli/skin/password/set`): served by K2 from bundled bytes
+/// (the daemon, or the gateway, never a skin root, a UI port or an App).
+/// `None` when the box has no front door URL. Owner resets always land
+/// here (security review 2026-10-25, item 1).
+pub fn k2_set_password_page() -> Option<String> {
+    skin::effective_front_door()
+        .ok()
+        .and_then(|d| d.url)
+        .map(|u| u.trim().trim_end_matches('/').to_string())
+        .filter(|u| invites::url_host(u).is_some())
+        .map(|u| format!("{u}{}", crate::skin_gateway::SET_PASSWORD_PATH))
+}
+
+/// Can any workspace's agent read hosted mailbox `address` (its own, or a
+/// mailbox shared with it)?
+fn agent_readable(address: &str) -> bool {
+    let ids: Vec<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut st = match conn.prepare("SELECT id FROM projects") {
+            Ok(s) => s,
+            Err(_) => return true,
+        };
+        let rows = st.query_map([], |r| r.get::<_, String>(0));
+        match rows {
+            Ok(r) => r.filter_map(Result::ok).collect(),
+            Err(_) => return true,
+        }
+    };
+    ids.iter().any(|id| crate::mail::access::can_read(id, address).is_ok())
+}
+
+/// The sender of an owner reset (security review 2026-10-25, item 2): a
+/// hosted address of this box's mail that no workspace's agent can read
+/// (a box/system mailbox), never a workspace mailbox; the mail's stored
+/// copy is destroyed once the server takes it. `from`: the owner's pick;
+/// none given → `Ok(None)` (K2 has no box sender of its own yet: the
+/// caller asks for `from` or `code`).
+pub fn owner_reset_sender(from: Option<&str>) -> Result<Option<Sender>, CliResponse> {
+    let Some(raw) = from.map(str::trim).filter(|s| !s.is_empty()) else { return Ok(None) };
+    let address = raw.to_ascii_lowercase();
+    let row: Option<(Option<String>, Option<String>)> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT stalwart_account_id, owner_project_id FROM mail_addresses WHERE address = ?1 AND status = 'active'",
+            rusqlite::params![address],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok()
+    };
+    let Some((Some(account_id), owner)) = row else {
+        return Err(usage("from must be an active hosted address on this box's mail"));
+    };
+    if agent_readable(&address) {
+        return Err(refusal(
+            "409 Conflict",
+            "sender_agent_readable",
+            &format!("{address} is a mailbox an agent can read; a reset mailed from it could be taken. Use an address no agent reads, or --code to get the link yourself"),
+        ));
+    }
+    Ok(Some(Sender {
+        project_id: owner.unwrap_or_else(|| "box".to_string()),
+        project_path: String::new(),
+        address,
+        account_id,
+        from_name: box_label(),
+        gate: Gate::On,
+    }))
+}
+
 /// How the owner is named in a mail: the box's front door host, else
 /// "this K2 server".
 fn box_label() -> String {
@@ -299,7 +371,13 @@ fn dispatch(m: &Mail<'_>, minted: &invites::Minted) -> Result<Delivered, CliResp
     };
     let expires = format!("{} after it was sent", ttl_words(minted.ttl_secs));
     let vars = invites::MailVars { app: &app_name, name: &name, username: &m.person.username, sender: &sender_label, expires: &expires };
-    let tpl = if m.purpose == invites::PURPOSE_INVITE { &m.settings.invite } else { &m.settings.reset };
+    // An owner reset is K2's fixed text, never the App's template.
+    let k2_text = invites::InviteTemplate::default();
+    let tpl = match m.purpose {
+        invites::PURPOSE_OWNER_RESET => &k2_text,
+        invites::PURPOSE_INVITE => &m.settings.invite,
+        _ => &m.settings.reset,
+    };
     let composed = invites::compose(m.purpose, tpl, &vars, &invites::link_for(m.page, &minted.token));
     let to = match send::normalize_recipients(&[m.to.to_string()]) {
         Ok(t) => t,
@@ -318,6 +396,8 @@ fn dispatch(m: &Mail<'_>, minted: &invites::Minted) -> Result<Delivered, CliResp
         references: None,
         reply_source: None,
         attachments: Vec::new(),
+        // One-time link: no stored copy stays in the sending mailbox.
+        ephemeral: true,
     };
     if let Err(e) = send::check_domain_send_mode(&crate::mail::secrets::FileSecretStore::default(), &m.sender.address) {
         return Err(fail(send_error(e)));
@@ -433,7 +513,10 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
                 let test_guest = skin::test_guests::get(&p.id).ok().flatten().is_some();
                 let in_ws = crate::skin_routes::principal_in_workspace(p, &roles, &grants, ws);
                 let on_app = grants.iter().any(|g| g.subject_kind == "principal" && g.subject_id == p.id && g.kind == "app" && g.target_id == app);
-                if test_guest || !in_ws || !on_app {
+                // Only a person this workspace's agent added (security
+                // review item 10): inviting the owner's people is the owner's.
+                let its_own = skin::creators::workspace_of(&p.id).ok().flatten().as_deref() == Some(ws.as_str());
+                if test_guest || !in_ws || !on_app || !its_own {
                     return owner_only(&format!(
                         "'{}' isn't your workspace's App user on that App: only the owner invites them (ask your human).",
                         p.username
@@ -515,7 +598,10 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
             return CliResponse::internal_error(e);
         }
     }
-    let minted = match invites::mint(&person.id, &app, invites::PURPOSE_INVITE, settings.invite_ttl_secs, sender.as_ref().map(|_| email.as_str()), false, by.actor()) {
+    // An App page or a workspace mailbox can see an invite: using it ties
+    // the person to the App's workspace (security review item 5).
+    let tie_on_use = app_ws.as_deref().map(|w| (w, skin::ties::REASON_INVITE));
+    let minted = match invites::mint(&person.id, &app, invites::PURPOSE_INVITE, settings.invite_ttl_secs, sender.as_ref().map(|_| email.as_str()), false, tie_on_use, by.actor()) {
         Ok(m) => m,
         Err(invites::MintError::Throttled) => {
             return refusal("429 Too Many Requests", "throttled", "one invite per person a minute: wait, then send it again")
@@ -644,35 +730,65 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
         Ok(s) => s,
         Err(e) => return CliResponse::internal_error(e),
     };
-    let Some(page) = set_password_page(&settings) else {
-        return refusal("409 Conflict", "no_set_password_page", &no_page_hint(&app));
-    };
-    let by = By::Owner { actor: actor.to_string() };
+    // K2's own page only, never the App's (its agent controls that one).
+    let page = k2_set_password_page();
+    if page.is_none() && !code {
+        return refusal(
+            "409 Conflict",
+            "no_front_door",
+            "this box has no front door, so K2 has no set-password page of its own to send: use --code and give the person the code yourself",
+        );
+    }
+    // An agent set this person's email: never send to it by default
+    // (security review item 3).
+    let tie = skin::ties::get(&person.id).ok().flatten();
+    if !code && to.is_none() && tie.as_ref().is_some_and(|t| t.reasons.iter().any(|r| r == skin::ties::REASON_EMAIL)) {
+        return refusal(
+            "409 Conflict",
+            "email_set_by_agent",
+            &format!(
+                "an agent set {}'s email, so a reset sent there could reach the agent: give another address (--to <email>) or get the link yourself (--code)",
+                person.username
+            ),
+        );
+    }
     let recipient = to.clone().or_else(|| person.email.clone());
     if !code && recipient.is_none() {
         return refusal(
             "409 Conflict",
             "no_email",
-            &format!("'{}' has no email: give one (to), or ask for a one-time link (code).", person.username),
+            &format!("'{}' has no email: give one (--to), or get the link yourself (--code).", person.username),
         );
     }
     let sender = if code {
         None
     } else {
-        match invite_sender(skin::ties::app_workspace(&app).as_deref(), &by, text(&v, &["from"])) {
-            Ok(s) => s,
+        match owner_reset_sender(text(&v, &["from"])) {
+            Ok(Some(s)) => Some(s),
+            Ok(None) => {
+                return refusal(
+                    "409 Conflict",
+                    "owner_sender_required",
+                    "a reset mailed from a workspace's mailbox could be read by its agent, and this box has no system sender: pass --from <an address no agent reads>, or --code",
+                )
+            }
             Err(r) => return r,
         }
     };
-    let sent_to = sender.as_ref().and(recipient.as_deref());
-    let minted = match invites::mint(&person.id, &app, invites::PURPOSE_OWNER_RESET, settings.reset_ttl_secs, sent_to.or(to.as_deref()), to.is_some(), actor) {
+    let by = By::Owner { actor: actor.to_string() };
+    let sent_to = if code { None } else { recipient.as_deref() };
+    let minted = match invites::mint(&person.id, &app, invites::PURPOSE_OWNER_RESET, settings.reset_ttl_secs, sent_to.or(to.as_deref()), to.is_some(), None, actor) {
         Ok(m) => m,
         Err(invites::MintError::Throttled) => return refusal("429 Too Many Requests", "throttled", "wait a minute, then send it again"),
         Err(invites::MintError::Store(e)) => return CliResponse::internal_error(e),
     };
     let Some(sender) = sender else {
-        return returned_link(&minted, &page, &person, &app, actor, "reset");
+        return match page {
+            Some(page) => returned_link(&minted, &page, &person, &app, actor, "reset"),
+            None => returned_code(&minted, &person, &app, actor),
+        };
     };
+    let page = page.unwrap_or_default();
     let to_addr = recipient.unwrap_or_default();
     let mail = Mail { purpose: invites::PURPOSE_OWNER_RESET, app: &app, to: &to_addr, person: &person, page: &page, sender: &sender, by: &by, settings: &settings };
     match dispatch(&mail, &minted) {
@@ -684,6 +800,70 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
     }
 }
 
+/// The owner's one-time code when the box has no front door page: the
+/// person enters it on K2's set-password page once the box has one.
+fn returned_code(minted: &invites::Minted, person: &skin::SkinPrincipal, app: &str, actor: &str) -> CliResponse {
+    let exp = match invites::activate(&minted.id) {
+        Ok(Some(e)) => e,
+        Ok(None) => return CliResponse::internal_error("the link vanished"),
+        Err(e) => return CliResponse::internal_error(e),
+    };
+    audit("app_user_reset_code", actor, &format!("{} app={app} returned to the owner", person.username));
+    CliResponse::ok_json(
+        json!({
+            "ok": true,
+            "username": person.username,
+            "app": app,
+            "delivered": "returned",
+            "code": minted.token,
+            "expiresAt": exp,
+            "ttlSecs": minted.ttl_secs,
+            "hint": "shown once: this box has no front door page, so give the person this code with the password they should set via POST /cli/skin/password/reset",
+        })
+        .to_string(),
+    )
+}
+
+// ── an App key's reset (security review item 4) ──────────────────────
+
+/// `/v1/apps/<id>/users/password-reset`: the App key never sees the
+/// token. The person is tied to the App's workspace (`app_key`) now, and
+/// the reset link is mailed to their own email from that workspace's
+/// address under its governance. `Err((status, code, hint))`.
+pub fn app_key_reset(app: &str, username: &str, actor: &str) -> Result<Value, (u16, &'static str, String)> {
+    let person = match principal(username) {
+        Ok(Some(p)) => p,
+        _ => return Err((404, "not_found", "no such App user".to_string())),
+    };
+    let Some(ws) = skin::ties::app_workspace(app) else { return Err((409, "app_gone", "this App's service is gone".to_string())) };
+    let Some(email) = person.email.clone() else {
+        return Err((409, "no_email", "a reset needs an email on the person".to_string()));
+    };
+    let settings = invites::settings(app).map_err(|e| (500, "store", e))?;
+    let Some(page) = set_password_page(&settings) else {
+        return Err((409, "no_set_password_page", no_page_hint(app)));
+    };
+    let by = By::App { ws: ws.clone(), actor: actor.to_string() };
+    let sender = match invite_sender(Some(&ws), &by, None) {
+        Ok(Some(s)) if s.gate != Gate::Off => s,
+        Ok(Some(_)) => return Err((403, "gated", gated_hint())),
+        Ok(None) => return Err((409, "no_mail", "the App's workspace has no address it can send from (k2 hostmail create); the key never gets the link".to_string())),
+        Err(r) => return Err((409, "no_mail", r.body)),
+    };
+    skin::ties::set(&person.id, skin::ties::TieWrite { workspace_id: &ws, set_by: actor, reason: skin::ties::REASON_APP_KEY }).map_err(|e| (500, "store", e))?;
+    let minted = match invites::mint(&person.id, app, invites::PURPOSE_RESET, settings.reset_ttl_secs, Some(&email), false, Some((&ws, skin::ties::REASON_APP_KEY)), actor) {
+        Ok(m) => m,
+        Err(invites::MintError::Throttled) => return Err((429, "throttled", "wait a minute".to_string())),
+        Err(invites::MintError::Store(e)) => return Err((500, "store", e)),
+    };
+    let mail = Mail { purpose: invites::PURPOSE_RESET, app, to: &email, person: &person, page: &page, sender: &sender, by: &by, settings: &settings };
+    match dispatch(&mail, &minted) {
+        Ok(Delivered::Sent { expires_at, .. }) => Ok(json!({ "ok": true, "username": person.username, "delivered": "sent", "sentTo": email, "expiresAt": expires_at })),
+        Ok(Delivered::Held { .. }) => Ok(json!({ "ok": true, "username": person.username, "delivered": "held", "sentTo": email })),
+        Err(r) => Err((502, "not_sent", serde_json::from_str::<Value>(&r.body).ok().and_then(|v| v["error"]["hint"].as_str().map(str::to_string)).unwrap_or(r.body))),
+    }
+}
+
 // ── an App's forgot (S0 follow-up) ───────────────────────────────────
 
 /// An App's `password.forgot` for a guest its pass may reset (`ws`: the
@@ -692,6 +872,17 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
 /// answers the bare `{ok:true}`; a guest with no password or email, no
 /// set-password page, no mail path or mail off sends nothing (logged).
 pub fn forgot_by_pass(pass: &skin::SkinPass, ws: &str, username: &str) {
+    // Off the request thread: the forgot answer takes the same time whether
+    // or not a mail goes out (security review item 7).
+    let (pass, ws, username) = (pass.clone(), ws.to_string(), username.to_string());
+    let spawned = std::thread::Builder::new().name("k2-app-forgot".into()).spawn(move || forgot_by_pass_now(&pass, &ws, &username));
+    if let Err(e) = spawned {
+        k2_core::log_debug!("[invites] forgot thread: {e}");
+    }
+}
+
+/// [`forgot_by_pass`] on the calling thread.
+pub fn forgot_by_pass_now(pass: &skin::SkinPass, ws: &str, username: &str) {
     let skip = |why: &str| k2_core::log_debug!("[invites] forgot via pass {} for {username}: nothing sent ({why})", pass.id);
     let person = match principal(username) {
         Ok(Some(p)) => p,
@@ -713,7 +904,7 @@ pub fn forgot_by_pass(pass: &skin::SkinPass, ws: &str, username: &str) {
         Ok(None) => return skip("no address to send from"),
         Err(r) => return skip(&r.body),
     };
-    let minted = match invites::mint(&person.id, &app, invites::PURPOSE_RESET, settings.reset_ttl_secs, Some(&email), false, by.actor()) {
+    let minted = match invites::mint(&person.id, &app, invites::PURPOSE_RESET, settings.reset_ttl_secs, Some(&email), false, Some((ws, skin::ties::REASON_APP_RESET)), by.actor()) {
         Ok(m) => m,
         Err(e) => return skip(&format!("{e:?}")),
     };
@@ -767,11 +958,8 @@ pub fn handle_settings(body: &[u8], who: &crate::compute_routes::Who, is_post: b
         Ok(a) => a,
         Err(e) => return usage(&e),
     };
-    let allowed = match skin::ties::app_workspace(&app) {
-        Some(ws) => crate::app_mobile_routes::may_set_listed(who, &ws),
-        // `host` (the box login): the owner's alone.
-        None => crate::app_mobile_routes::may_set_listed(who, ""),
-    };
+    let app_ws = skin::ties::app_workspace(&app);
+    let allowed = may_set_invite_settings(who, &app, app_ws.as_deref());
     if !allowed {
         return owner_only("only the owner, or this App's own agent with \"…manage them end to end\" on, sets an App's invite settings");
     }
@@ -791,13 +979,55 @@ pub fn handle_settings(body: &[u8], who: &crate::compute_routes::Who, is_post: b
         Err(r) => return r,
     };
     let actor = who.label();
-    match invites::set_settings(&app, &patch, &actor) {
+    let hosts = page_hosts(&app);
+    match invites::set_settings(&app, &patch, &hosts, &actor) {
         Ok(s) => {
             audit("app_invite_settings", &actor, &format!("app={app} invite={}s reset={}s", s.invite_ttl_secs, s.reset_ttl_secs));
             CliResponse::ok_json(json!({ "ok": true, "app": app, "settings": s }).to_string())
         }
         Err(e) => usage(&e),
     }
+}
+
+/// Who sets an App's invite settings (security review item 8): the owner
+/// (owner token or an Owner login), or the App's own agent with "…manage
+/// them end to end" for its own App, never the box login (`host`). A K2
+/// shell tab is not the owner here.
+pub fn may_set_invite_settings(who: &crate::compute_routes::Who, app: &str, app_ws: Option<&str>) -> bool {
+    use crate::compute_routes::Who;
+    match who {
+        Who::Owner | Who::Login { role: k2_core::connect_users::Role::Owner, .. } => true,
+        Who::Agent { project_id, .. } => {
+            app != skin::HOST_APP_ID
+                && app_ws == Some(project_id.as_str())
+                && crate::apps::access::level(project_id) == crate::apps::access::Level::Full
+        }
+        _ => false,
+    }
+}
+
+/// Hosts an App's set-password page may be on: its own public domains and
+/// this box's front door (K2's).
+fn page_hosts(app: &str) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    if app != skin::HOST_APP_ID {
+        let name = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::published_services::get_by_id(&conn, app).ok().flatten().map(|s| s.name).unwrap_or_default()
+        };
+        for o in crate::apps::origins::for_service(app, &name) {
+            if let Some((_, h, _)) = invites::url_host(&o) {
+                hosts.push(h);
+            }
+        }
+    }
+    if let Some((_, h, _)) = skin::effective_front_door().ok().and_then(|d| d.url).and_then(|u| invites::url_host(&u)) {
+        hosts.push(h);
+    }
+    hosts.sort();
+    hosts.dedup();
+    hosts
 }
 
 // ── the owner's card (§5.5) ──────────────────────────────────────────
@@ -932,7 +1162,7 @@ fn card_text(t: &crate::skin_routes::TieDisplay, p: &skin::SkinPrincipal, grants
     let parts = waiting_parts(&t.tie, grants, roles);
     let what = if parts.is_empty() { "more access".to_string() } else { parts.join(", ") };
     let to = match p.email.as_deref() {
-        Some(e) if t.tie.reasons.iter().any(|r| r == "email") => format!("Reset link goes to {e} — set by {agent}."),
+        Some(e) if t.tie.reasons.iter().any(|r| r == "email") => format!("{agent} set the email ({e}), so the reset link can't go there: send it to another email, or show a one-time link."),
         Some(e) => format!("Reset link goes to {e}."),
         None => format!("{u} has no email yet: send to another email, or show a one-time link."),
     };
@@ -953,7 +1183,12 @@ fn post_card(t: &crate::skin_routes::TieDisplay, p: &skin::SkinPrincipal, grants
         result: None,
         view: None,
     };
-    let options = [CARD_SEND, CARD_OTHER_EMAIL, CARD_SHOW_LINK, CARD_NOT_NOW];
+    // An agent set the email: never offer to send there (item 3).
+    let options: Vec<&str> = if t.tie.reasons.iter().any(|r| r == skin::ties::REASON_EMAIL) {
+        vec![CARD_OTHER_EMAIL, CARD_SHOW_LINK, CARD_NOT_NOW]
+    } else {
+        vec![CARD_SEND, CARD_OTHER_EMAIL, CARD_SHOW_LINK, CARD_NOT_NOW]
+    };
     match crate::overlay_routes::present_action_card(
         None,
         &t.tie.workspace_id,

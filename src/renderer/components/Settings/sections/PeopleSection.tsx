@@ -33,6 +33,8 @@ export type PersonRow = {
   tiedTo: string | null
   /** Tied, and given more than that workspace: the extra waits for a reset. */
   pendingReset: boolean
+  /** Why the tie exists: created | password | email | invite | app_key | app_reset. */
+  tiedReasons: string[]
 }
 
 type RoomAccess = { handle: string; caps: string[] }
@@ -113,6 +115,7 @@ export function parsePeople(raw: unknown): PersonRow[] {
       email: asString(rec.email),
       tiedTo: asString(rec.tiedTo),
       pendingReset: rec.pendingReset === true,
+      tiedReasons: parseStringList(rec.tiedReasons),
     }]
   })
 }
@@ -635,13 +638,17 @@ export function ResetPanel({ person }: { person: PersonRow }): React.JSX.Element
   const [askOther, setAskOther] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [link, setLink] = useState<string | null>(null)
+  const [from, setFrom] = useState('')
   if (!person.tiedTo) return null
+  // An agent set this email: a reset never goes there (security review).
+  const agentEmail = person.tiedReasons.includes('email')
   const send = async (body: Record<string, unknown>) => {
     setBusy(true)
     setNote(null)
     setLink(null)
     try {
-      const r = asRecord(await daemonCliPost(primaryScope(), 'skin/users/reset-link', { username: person.username, ...body }))
+      const withFrom = body.code || !from.trim() ? body : { ...body, from: from.trim() }
+      const r = asRecord(await daemonCliPost(primaryScope(), 'skin/users/reset-link', { username: person.username, ...withFrom }))
       if (r.delivered === 'returned' && typeof r.link === 'string') {
         setLink(r.link)
         setNote('One-time link (shown once; give it to them yourself):')
@@ -663,11 +670,19 @@ export function ResetPanel({ person }: { person: PersonRow }): React.JSX.Element
         {person.pendingReset
           ? `${person.tiedTo}'s agent set ${person.username} up, so the extra access you gave starts only after ${person.username} resets their password. Until then they keep ${person.tiedTo}'s access.`
           : `${person.tiedTo}'s agent set ${person.username} up. More access you give waits for their password reset.`}
-        {person.email ? ` Reset link goes to ${person.email}.` : ''}
+        {person.email && !agentEmail ? ` Reset link goes to ${person.email}.` : ''}
+        {agentEmail ? ` ${person.tiedTo}'s agent set the email${person.email ? ` (${person.email})` : ''}, so a reset can't go there: send it to another email or show a one-time link.` : ''}
+        {' '}Mail leaves from an address no agent reads; links open K2's own page.
       </p>
       {person.pendingReset ? (
         <div className="flex flex-wrap items-center gap-3 pt-1">
-          <button type="button" className={btn} disabled={busy || !person.email} onClick={() => void send({})}>
+          <button
+            type="button"
+            className={btn}
+            disabled={busy || !person.email || agentEmail}
+            title={agentEmail ? 'An agent set this email: use another email or a one-time link' : undefined}
+            onClick={() => void send({})}
+          >
             Send reset link
           </button>
           <button type="button" className={btn} disabled={busy} onClick={() => setAskOther(true)}>
@@ -677,6 +692,15 @@ export function ResetPanel({ person }: { person: PersonRow }): React.JSX.Element
             Show a one-time link
           </button>
         </div>
+      ) : null}
+      {person.pendingReset ? (
+        <input
+          className={INPUT_CLS}
+          aria-label={`Reset mail sender for ${person.username}`}
+          placeholder="send from (an address no agent reads)"
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+        />
       ) : null}
       {askOther ? (
         <form

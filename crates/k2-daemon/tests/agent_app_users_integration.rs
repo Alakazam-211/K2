@@ -449,12 +449,19 @@ async fn s3_a_tied_user_stays_at_the_agents_workspace_until_their_own_reset() {
     assert_eq!(r.status, 401, "another workspace's App waits for the reset: {}", r.body);
     assert_eq!(user_row(port, &g1).await["pendingReset"], json!(true));
 
-    // An agent's email write ties too.
+    // An agent sets the email only of a person its agent added (review
+    // item 10); that write ties too. The owner's person: refused, untied.
     let g2 = format!("g2{tag}");
     owner_post(port, "/cli/skin/users", json!({ "username": g2, "app": shop })).await;
     let r = post(port, "/cli/skin/users/email", &agent, json!({ "username": g2, "email": format!("{g2}@example.test") })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert!(tie_of(&g2).is_none(), "the owner's person stays untied");
+    let a2 = format!("a2{tag}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": a2, "app": shop })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(tie_of(&g2).expect("tied by the email write").reasons, vec!["email".to_string()]);
+    let r = post(port, "/cli/skin/users/email", &agent, json!({ "username": a2, "email": format!("{a2}@example.test") })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(tie_of(&a2).expect("tied").reasons, vec!["created".to_string(), "email".to_string()]);
 
     assert_eq!(k2_core::skin::ties::LOCK_ORDER_VIOLATIONS.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
@@ -587,6 +594,25 @@ async fn reset_with(port: u16, token: &str, password: &str) -> Resp {
 
 const RESET_FAILED: &str = r#"{"error":"invalid or expired reset token"}"#;
 
+/// The box's front door URL (direct mode, not applied: no Caddy).
+async fn set_front_door(port: u16, url: &str) {
+    owner_post(port, "/cli/skin/front-door", json!({ "mode": "direct", "url": url, "apply": false })).await;
+}
+
+/// A hosted mailbox no workspace's agent can read (a box/system sender).
+fn seed_system_sender(domain: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let addr = format!("noreply@{domain}");
+    conn.execute(
+        "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, owner_project_id, status, created_at)
+         VALUES (?1, ?2, 'dom-x', ?3, 'box-system', 'active', 100)",
+        rusqlite::params![uuid::Uuid::new_v4().to_string(), addr, format!("acct-sys-{domain}")],
+    )
+    .expect("system sender");
+    addr
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     let env = setup(&[]);
@@ -603,11 +629,14 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     let domain = format!("inv{tag}.example.test");
     let from = seed_mail(&sales, &domain, "on");
 
-    // POST only, both new routes.
+    // POST only, all three new routes; K2's own page is a GET.
     for path in ["/cli/skin/users/invite", "/cli/skin/users/reset-link", "/cli/skin/access/invites"] {
         let r = get(port, path, OWNER, "").await;
         assert_eq!(r.status, 405, "GET {path}: {}", r.body);
     }
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "GET", "/cli/skin/password/set", None)).await.unwrap();
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.body.contains("Set your password") && r.body.contains("/cli/skin/password/reset"), "{}", r.body);
 
     // T5.7: no set-password page (no App page, no front door) → 409.
     let u3 = format!("u3{tag}");
@@ -616,21 +645,41 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     assert_eq!((r.status, r.code()), (409, "no_set_password_page".to_string()), "{}", r.body);
     assert!(!principal_exists(&u3), "nothing written");
 
-    // The App's own page: the owner sets it (an agent without switch 2 can't).
-    let r = post(port, "/cli/skin/access/invites", &agent, json!({ "app": shop, "setPasswordUrl": "https://evil.example.test/" })).await;
+    // The App's own page: the owner sets it (an agent without switch 2
+    // can't); https on the App's own domain or K2's, or exact localhost.
+    let door = format!("https://door{tag}.example.test");
+    set_front_door(port, &door).await;
+    let r = post(port, "/cli/skin/access/invites", &agent, json!({ "app": shop, "setPasswordUrl": format!("{door}/x") })).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
-    let page = "https://shop.example.test/set-password";
+    let page = format!("{door}/apps/shop/set-password");
+    for bad in [
+        json!({ "app": shop, "setPasswordUrl": "https://evil.example.test/set" }),
+        json!({ "app": shop, "setPasswordUrl": "http://localhost.attacker.tld/set" }),
+        json!({ "app": shop, "setPasswordUrl": format!("{door}/set#a") }),
+        json!({ "app": shop, "setPasswordUrl": format!("http://door{tag}.example.test/set") }),
+        json!({ "app": shop, "inviteTtl": "5m" }),
+        json!({ "app": shop, "inviteTtl": "31d" }),
+        json!({ "app": shop, "inviteBody": "click {link}" }),
+        json!({ "app": shop, "inviteBody": "see https://evil.example.test" }),
+        json!({ "app": shop, "inviteBody": "see www.evil.example" }),
+        json!({ "app": shop, "inviteSubject": "Hi from HTTP://evil" }),
+    ] {
+        let r = post(port, "/cli/skin/access/invites", OWNER, bad.clone()).await;
+        assert_eq!(r.status, 400, "{bad}: {}", r.body);
+    }
+    let r = post(port, "/cli/skin/access/invites", OWNER, json!({ "app": shop, "setPasswordUrl": "http://localhost:3000/set" })).await;
+    assert_eq!(r.status, 200, "a local App's page: {}", r.body);
     let r = post(port, "/cli/skin/access/invites", OWNER, json!({ "app": shop, "setPasswordUrl": page })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["settings"]["inviteTtlSecs"], 72 * 3600, "{}", r.body);
     assert_eq!(r.json()["settings"]["resetTtlSecs"], 24 * 3600, "{}", r.body);
-    for bad in [json!({ "app": shop, "inviteTtl": "5m" }), json!({ "app": shop, "inviteTtl": "31d" }), json!({ "app": shop, "inviteBody": "click {link}" }), json!({ "app": shop, "setPasswordUrl": "http://x.example/#a" })] {
-        let r = post(port, "/cli/skin/access/invites", OWNER, bad.clone()).await;
-        assert_eq!(r.status, 400, "{bad}: {}", r.body);
-    }
+    // The box login's settings are the owner's alone.
+    let r = post(port, "/cli/skin/access/invites", &agent, json!({ "app": "host", "inviteTtl": "1h" })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
 
     // T5.1: mode on, a new person: App-only, stamped, tied; one mail from
-    // the agent's address; the link in the fragment; 72 h from the send.
+    // the agent's address, no stored copy; the link in the fragment; 72 h
+    // from the send.
     let before = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
     let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u3, "app": shop, "email": e3 })).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -644,13 +693,13 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     assert_eq!(mails.len(), 1, "one mail");
     let m = &mails[0];
     assert_eq!(m.from, from);
-    assert!(m.subject.contains("invited") || m.subject.contains("You're invited"), "{}", m.subject);
+    assert!(m.ephemeral, "the server destroys its stored copy once it takes the mail");
+    assert!(m.subject.contains("invited"), "{}", m.subject);
     assert!(m.text_body.contains(&format!("Set your password: {page}#k2inv_")), "{}", m.text_body);
     assert!(m.text_body.contains("Nobody at") && m.text_body.contains("will ask for your password"), "{}", m.text_body);
     for never in ["k2skn_", "?token="] {
         assert!(!m.text_body.contains(never), "{never} in {}", m.text_body);
     }
-    // No "password: <value>" anywhere but K2's own link line.
     for line in m.text_body.lines().filter(|l| l.to_ascii_lowercase().contains("password:")) {
         assert!(line.starts_with(&format!("Set your password: {page}#k2inv_")), "a password value in {line:?}");
     }
@@ -659,7 +708,11 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     assert_eq!(rows.len(), 1);
     let exp = rows[0].expires_at.expect("the clock started at the send");
     assert!(exp >= before + 72 * 3600 && exp <= before + 72 * 3600 + 30, "72 h from the send: {exp} vs {before}");
-    // Use it: the password is set; the tie stays (only an owner reset drops it, T4.5).
+    // The agent's own mail reads never carry the token.
+    let r = get(port, "/cli/mail/outbox", &agent, &format!("project={}", sales.id)).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!r.body.contains("k2inv_"), "the outbox never shows the link: {}", r.body);
+    // Use it: the password is set; the tie stays (only an owner reset drops it).
     let tok = token_in(&m.text_body);
     let r = reset_with(port, &tok, "my-own-pass-1").await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -694,19 +747,24 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u5, "app": shop })).await;
     assert_eq!((r.status, r.code()), (409, "no_email".to_string()), "{}", r.body);
 
-    // T5.5: another workspace's App, another workspace's person: refused,
-    // nothing written; an agent can't pick the sender.
+    // T5.5 + review item 10: another workspace's App or person, or the
+    // owner's own person on the agent's App: refused, nothing written; an
+    // agent can't pick the sender.
     let theirs = format!("th{tag}");
     owner_post(port, "/cli/skin/users", json!({ "username": theirs, "app": desk, "email": format!("{theirs}@example.test") })).await;
+    let owners = format!("ow{tag}");
+    owner_post(port, "/cli/skin/users", json!({ "username": owners, "app": shop, "email": format!("{owners}@example.test") })).await;
     let sent_before = outbound_rows(&from).len();
     for body in [
         json!({ "username": format!("nx{tag}"), "app": desk, "email": "nx@example.test" }),
         json!({ "username": theirs, "app": shop }),
         json!({ "username": theirs, "app": desk }),
+        json!({ "username": owners, "app": shop }),
     ] {
         let r = post(port, "/cli/skin/users/invite", &agent, body.clone()).await;
         assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{body}: {}", r.body);
     }
+    assert!(tie_of(&owners).is_none(), "an agent's refused invite ties nobody");
     let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u3, "app": shop, "from": "other@example.test" })).await;
     assert_eq!(r.status, 400, "an agent can't pick the sender: {}", r.body);
     assert!(!principal_exists(&format!("nx{tag}")));
@@ -739,7 +797,8 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     let r = post(port, "/cli/skin/access/invites", OWNER, json!({ "app": shop, "inviteTtl": null, "inviteSubject": null, "inviteBody": null })).await;
     assert_eq!(r.json()["settings"]["inviteTtlSecs"], 72 * 3600, "back to the default: {}", r.body);
 
-    // T5.2: approval: held, the link dead until the owner approves.
+    // T5.2: approval: held, the link dead until the owner approves; the
+    // approvals preview hides it.
     set_mode(&sales, "approval");
     let u7 = format!("u7{tag}");
     let e7 = format!("{u7}@example.test");
@@ -753,12 +812,17 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     assert_eq!(status, "pending");
     let held: Value = serde_json::from_str(&std::fs::read_to_string(&body_ref).unwrap()).unwrap();
     let held_tok = token_in(held["textBody"].as_str().unwrap());
+    let r = get(port, "/cli/mail/approvals/list", OWNER, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!r.body.contains(&held_tok) && r.body.contains("k2inv_[hidden]"), "the preview hides the link: {}", r.body);
     assert_eq!(invite_rows(&u7)[0].expires_at, None);
     let r = reset_with(port, &held_tok, "early-pass-123").await;
     assert_eq!((r.status, r.body.as_str()), (401, RESET_FAILED), "a held link never works");
     let r = post(port, "/cli/mail/approvals/approve", OWNER, json!({ "id": out_id })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(mails_to(&rec, &e7).len(), 1, "it left on approval");
+    let sent = mails_to(&rec, &e7);
+    assert_eq!(sent.len(), 1, "it left on approval");
+    assert!(sent[0].ephemeral, "an approved link mail leaves no copy either");
     assert!(invite_rows(&u7)[0].expires_at.is_some(), "the clock started");
     let r = reset_with(port, &held_tok, "later-pass-123").await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -788,14 +852,13 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
             .expect("fill");
         }
     }
-    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u5, "app": shop })).await;
-    assert_eq!(r.status, 409, "u5 has no email still: {}", r.body);
     let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": format!("u9{tag}"), "app": shop, "email": "u9@example.test" })).await;
     assert_eq!((r.status, r.code()), (429, "rate_limited".to_string()), "{}", r.body);
     assert!(invite_rows(&format!("u9{tag}")).is_empty(), "a refused send leaves no link");
 
     // T5.4: no address to send from: an agent is refused and never sees a
-    // link; the owner gets the link once.
+    // link; the owner gets the link once. Using it ties the person to the
+    // App's workspace (the App's page could see the token).
     let lone = seed_ws(&env, &format!("lone{tag}"));
     let lone_app = app_row(&lone, &format!("lapp{tag}"));
     allow_manage(&lone, true);
@@ -805,14 +868,17 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     assert_eq!((r.status, r.code()), (409, "no_mail".to_string()), "{}", r.body);
     assert!(!r.body.contains("k2inv_"), "{}", r.body);
     assert!(!principal_exists(&format!("la{tag}")));
-    let r = post(port, "/cli/skin/users/invite", OWNER, json!({ "username": format!("lo{tag}"), "app": lone_app, "email": "lo@example.test" })).await;
+    let lo = format!("lo{tag}");
+    let r = post(port, "/cli/skin/users/invite", OWNER, json!({ "username": lo, "app": lone_app, "email": "lo@example.test" })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["delivered"], "returned");
     let link = r.json()["link"].as_str().expect("the owner's link").to_string();
     assert!(link.starts_with(&format!("{page}#k2inv_")), "{link}");
-    assert!(tie_of(&format!("lo{tag}")).is_none(), "the owner's invite ties nobody");
+    assert!(tie_of(&lo).is_none(), "nobody is tied until the link is used");
     let r = reset_with(port, link.split('#').nth(1).unwrap(), "owner-made-pass-1").await;
     assert_eq!(r.status, 200, "{}", r.body);
+    let t = tie_of(&lo).expect("an invite an App page could see ties as it is used");
+    assert_eq!((t.workspace_id.as_str(), t.reasons.clone()), (lone.id.as_str(), vec!["invite".to_string()]));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -828,9 +894,8 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     allow_manage(&sales, true);
     let agent = passport(&sales);
     let domain = format!("rst{tag}.example.test");
-    let from = seed_mail(&sales, &domain, "on");
-    let page = "https://shop.example.test/set-password";
-    owner_post(port, "/cli/skin/access/invites", json!({ "app": shop, "setPasswordUrl": page })).await;
+    let ws_mailbox = seed_mail(&sales, &domain, "on");
+    let system = seed_system_sender(&domain);
     let pw = "agent-chosen-1";
     let role = format!("r{tag}");
     owner_post(port, "/cli/skin/roles", json!({ "name": role, "roomAccess": [{ "handle": sales.handle, "caps": ["thread:read"] }] })).await;
@@ -844,8 +909,27 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     assert_eq!(r.status, 200, "{}", r.body);
     let s_old = login(port, json!({ "username": u1, "password": pw, "app": shop })).await.json()["token"].as_str().unwrap().to_string();
 
+    // No front door yet: K2 has no page of its own; only --code works, and
+    // it hands the bare code.
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u1, "to": "x@example.test", "from": system })).await;
+    assert_eq!((r.status, r.code()), (409, "no_front_door".to_string()), "{}", r.body);
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u1, "code": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.json()["link"].is_null() && r.json()["code"].as_str().is_some_and(|c| c.starts_with("k2inv_")), "{}", r.body);
+    let door = format!("https://door{tag}.example.test");
+    set_front_door(port, &door).await;
+    let k2_page = format!("{door}/cli/skin/password/set");
+    // The App's own page and template are never used for an owner reset.
+    owner_post(
+        port,
+        "/cli/skin/access/invites",
+        json!({ "app": shop, "setPasswordUrl": format!("{door}/apps/shop/set"), "resetSubject": "App reset {app}", "resetBody": "The App's own reset text." }),
+    )
+    .await;
+
     // T4.8: the owner widens: one card (here an owners-only note: the
-    // workspace has no Thread); a second widen adds none.
+    // workspace has no Thread); a later widen adds none. It never offers
+    // the email the agent set.
     owner_post(port, "/cli/skin/grants/host", json!({ "username": u1, "present": true })).await;
     owner_post(port, "/cli/skin/roles/room", json!({ "name": role, "handle": ops.handle, "caps": ["thread:read"] })).await;
     let card_notes = || -> Vec<k2_core::feedback::FeedbackItem> {
@@ -855,20 +939,29 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
             .filter(|i| i.title == format!("Extra access for {u1} waits for a password reset"))
             .collect()
     };
-    // The sweep runs off the request (it never holds up the owner's write).
     wait_until("the owner's card", 10, || !card_notes().is_empty()).await;
     k2_daemon::app_user_invites::sweep_pending_now();
     let notes = card_notes();
     assert_eq!(notes.len(), 1, "one card per newly pending person");
     let note = notes[0].body.clone().unwrap_or_default();
-    // The card names what was waiting when it was posted (the box login);
-    // the later role widen adds no second card.
     assert!(note.contains("the box login"), "{note}");
-    assert!(note.contains(&format!("Reset link goes to {e1} — set by")), "{note}");
+    assert!(note.contains("set the email") && note.contains("can't go there"), "{note}");
 
-    // T4.4: never an agent's (manage-Apps on), and POST only.
+    // T4.4: never an agent's (manage-Apps on).
     let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": u1 })).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+
+    // Review items 2 and 3: the agent-set email is refused; mail needs a
+    // sender no agent reads; the workspace mailbox is refused.
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u1, "from": system })).await;
+    assert_eq!((r.status, r.code()), (409, "email_set_by_agent".to_string()), "{}", r.body);
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u1, "to": "real@example.test" })).await;
+    assert_eq!((r.status, r.code()), (409, "owner_sender_required".to_string()), "{}", r.body);
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u1, "to": "real@example.test", "from": ws_mailbox })).await;
+    assert_eq!((r.status, r.code()), (409, "sender_agent_readable".to_string()), "{}", r.body);
+    // The system sender is not readable through k2 mail by the agent.
+    let r = get(port, "/cli/mail/messages", &agent, &format!("project={}&address={}", sales.id, enc(&system))).await;
+    assert_ne!(r.status, 200, "the agent can't read the system sender: {}", r.body);
 
     // T4.5: none of these drop the tie.
     // - the old forgot → reset;
@@ -882,7 +975,7 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     let r = post(port, "/cli/skin/password/change", &s, json!({ "oldPassword": "forgot-pass-123", "password": "changed-pass-12" })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(tie_of(&u1).is_some(), "password/change keeps the tie");
-    // - an App key's reset token.
+    // - an App key's reset: mailed (never returned to the key), tying.
     let (_, key) = k2_core::api_keys::create_app_key("t4", &shop, r#"{"scopes":["users","rooms"]}"#).expect("app key");
     let u2 = format!("u2{tag}");
     let e2 = format!("{u2}@example.test");
@@ -891,30 +984,48 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     let t2 = tie_of(&u2).expect("an App key's person is tied (Q3)");
     assert_eq!((t2.workspace_id.as_str(), t2.reasons.clone()), (sales.id.as_str(), vec!["app_key".to_string()]));
     assert!(t2.set_by.starts_with("app-key:"), "{t2:?}");
+    // An owner reset waiting for u2 is never voided by the App's own reset.
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u2, "code": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let owner_tok = r.json()["link"].as_str().unwrap().split('#').nth(1).unwrap().to_string();
     let r = bearer_post(port, &format!("/v1/apps/{shop}/users/password-reset"), &key, json!({ "username": u2 })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let r = reset_with(port, r.json()["token"].as_str().unwrap(), "key-reset-pass-1").await;
+    assert_eq!(r.json()["delivered"], "sent", "{}", r.body);
+    assert!(!r.body.contains("k2inv_") && r.json()["token"].is_null(), "the key never sees the token: {}", r.body);
+    let mk = mails_to(&rec, &e2);
+    assert_eq!(mk.len(), 1);
+    assert!(mk[0].ephemeral);
+    assert!(
+        invite_rows(&u2).iter().any(|r| r.purpose == "owner_reset" && r.used_at.is_none()),
+        "the App's reset never voids the owner's pending reset (review item 6)"
+    );
+    let r = reset_with(port, &token_in(&mk[0].text_body), "key-reset-pass-1").await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(tie_of(&u2).is_some(), "an App key's reset keeps the tie");
 
-    // T4.1: the owner's default: mailed to the stored email; using it sets
-    // the password, ends every session, drops the tie: full access.
-    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u1 })).await;
+    // T4.1: the owner's reset: K2's own page and fixed text, from the
+    // system sender, to another email; using it sets the password, ends
+    // every session, drops the tie, stores the new email: full access.
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u1, "to": "real@example.test", "from": system })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let v = r.json();
-    assert_eq!((v["delivered"].clone(), v["sentTo"].clone(), v["from"].clone()), (json!("sent"), json!(e1), json!(from)), "{v}");
+    assert_eq!((v["delivered"].clone(), v["sentTo"].clone(), v["from"].clone()), (json!("sent"), json!("real@example.test"), json!(system)), "{v}");
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
     let exp = v["expiresAt"].as_i64().expect("expiresAt");
     assert!((now + 24 * 3600 - 30..=now + 24 * 3600 + 30).contains(&exp), "24 h: {exp}");
-    let m = mails_to(&rec, &e1);
+    let m = mails_to(&rec, "real@example.test");
     assert_eq!(m.len(), 1);
-    assert!(m[0].subject.starts_with("Reset your password for"), "{}", m[0].subject);
+    assert!(m[0].ephemeral);
+    assert!(m[0].subject.starts_with("Reset your password for"), "K2's text, not the App's: {}", m[0].subject);
+    assert!(!m[0].text_body.contains("The App's own reset text"), "{}", m[0].text_body);
+    assert!(m[0].text_body.contains(&format!("Set your password: {k2_page}#k2inv_")), "K2's own page: {}", m[0].text_body);
     let tok = token_in(&m[0].text_body);
     let r = reset_with(port, &tok, "their-own-pass-1").await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(tie_of(&u1).is_none(), "an owner reset drops the tie");
     assert!(policy_of(&s_old).is_none(), "every old session ended");
     assert!(policy_of(&s).is_none(), "every old session ended");
+    assert_eq!(user_row(port, &u1).await["email"], "real@example.test");
     let r = login(port, json!({ "username": u1, "password": "their-own-pass-1" })).await;
     assert_eq!(r.status, 200, "the box login works now: {}", r.body);
     let r = login(port, json!({ "username": u1, "password": "their-own-pass-1", "app": shop })).await;
@@ -924,17 +1035,19 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     assert_eq!(rooms(&policy_of(r.json()["token"].as_str().unwrap()).unwrap()), both, "the widened access is live");
     assert_eq!(user_row(port, &u1).await["tiedTo"], Value::Null);
 
-    // T4.2: --to: mailed there; on use, the stored email becomes it.
-    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u2, "to": "new@example.test" })).await;
+    // T4.2: the stored email when no agent set it (u2's came from the App
+    // key at creation): mailed there; the owner's earlier code still works.
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u2, "from": system })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let m = mails_to(&rec, "new@example.test");
-    assert_eq!(m.len(), 1);
-    let r = reset_with(port, &token_in(&m[0].text_body), "fresh-pass-1234").await;
+    let m = mails_to(&rec, &e2);
+    assert_eq!(m.len(), 2);
+    let r = reset_with(port, &token_in(&m[1].text_body), "fresh-pass-1234").await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(user_row(port, &u2).await["email"], "new@example.test");
     assert!(tie_of(&u2).is_none());
+    let r = reset_with(port, &owner_tok, "late-pass-12345").await;
+    assert_eq!((r.status, r.body.as_str()), (401, RESET_FAILED), "the newer owner reset voided the older one");
 
-    // T4.3: --code: nothing mailed, the link to the owner; it works.
+    // T4.3: --code: nothing mailed, K2's own page to the owner; it works.
     let g = format!("g{tag}");
     let r = post(port, "/cli/skin/users", &agent, json!({ "username": g, "app": shop, "password": pw })).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -944,6 +1057,7 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     assert_eq!(r.json()["delivered"], "returned");
     assert_eq!(rec.0.lock().unwrap().len(), sent_before, "nothing mailed");
     let link = r.json()["link"].as_str().unwrap().to_string();
+    assert!(link.starts_with(&format!("{k2_page}#k2inv_")), "{link}");
 
     // T4.6: two uses at once: exactly one wins.
     let token = link.split('#').nth(1).unwrap().to_string();
@@ -971,4 +1085,46 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     let r = reset_with(port, &token, "too-late-pass-1").await;
     assert_eq!((r.status, r.body.as_str()), (401, RESET_FAILED));
     assert!(tie_of(&h).is_some());
+}
+
+/// Review item 7: an App's forgot answers the same for everyone (one
+/// throttle per pass and name, taken first), never returns a token, and a
+/// used App reset link ties the person to the App's workspace.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s0_an_apps_forgot_is_uniform_and_its_link_ties() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let rec = recorder();
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let sales = seed_ws(&env, &format!("sales{tag}"));
+    let shop = app_row(&sales, &format!("shop{tag}"));
+    let domain = format!("fgt{tag}.example.test");
+    seed_mail(&sales, &domain, "on");
+    let door = format!("https://door{tag}.example.test");
+    set_front_door(port, &door).await;
+    // The owner's guest of the App, wholly inside the workspace.
+    let g = format!("g{tag}");
+    let e = format!("{g}@example.test");
+    owner_post(port, "/cli/skin/users", json!({ "username": g, "app": shop, "email": e, "password": "s3cret-horse" })).await;
+    owner_post(port, "/cli/skin/users/rooms", json!({ "username": g, "app": shop, "rooms": [sales.handle] })).await;
+    let r = post(port, "/cli/skin-tokens", OWNER, json!({ "name": format!("p{tag}"), "caps": ["thread:read"], "rooms": [sales.handle] })).await;
+    let pass = r.json()["token"].as_str().unwrap().to_string();
+    for who in [g.clone(), format!("nobody{tag}")] {
+        let r = post(port, "/cli/skin/password/forgot", &pass, json!({ "username": who })).await;
+        assert_eq!((r.status, r.json()), (200, json!({ "ok": true })), "{who}: {}", r.body);
+        let r = post(port, "/cli/skin/password/forgot", &pass, json!({ "username": who })).await;
+        assert_eq!(r.status, 429, "every name is throttled the same way ({who}): {}", r.body);
+    }
+    // The owner's own forgot is not blocked by the pass's throttle.
+    let r = post(port, "/cli/skin/password/forgot", OWNER, json!({ "username": g })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    wait_until("the App's reset mail", 10, || !mails_to(&rec, &e).is_empty()).await;
+    let m = mails_to(&rec, &e);
+    assert!(m[0].ephemeral);
+    assert!(tie_of(&g).is_none(), "nothing ties until the link is used");
+    let r = reset_with(port, &token_in(&m[0].text_body), "app-reset-pass-1").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let t = tie_of(&g).expect("a used App reset link ties");
+    assert_eq!((t.workspace_id.as_str(), t.reasons.clone()), (sales.id.as_str(), vec!["app_reset".to_string()]));
 }

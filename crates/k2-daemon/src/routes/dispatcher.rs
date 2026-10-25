@@ -4595,6 +4595,17 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // GET /cli/skin/password/set — PUBLIC: K2's own set-password page
+        // (agent-app-users). Fixed bundled bytes; the token rides the
+        // #fragment, so this request carries none.
+        crate::skin_gateway::SET_PASSWORD_PATH => {
+            let _ = stream.read(&mut buf).await;
+            if is_post {
+                super::http::send_response(&mut *stream, "405 Method Not Allowed", "application/json", r#"{"error":"method not allowed for this route"}"#).await;
+            } else {
+                super::http::send_response(&mut *stream, "200 OK", "text/html; charset=utf-8", crate::skin_gateway::SET_PASSWORD_HTML).await;
+            }
+        }
         // POST /cli/skin/password/reset — PUBLIC (no token gate). Ignore
         // presented auth. 500 ms on 401 like login. Does not mint a session.
         "/cli/skin/password/reset" => {

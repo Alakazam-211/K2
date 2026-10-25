@@ -215,6 +215,29 @@ pub struct OutboundMessage {
     /// logged. Empty for hosted sends (hosted attachments aren't built).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<StoredAttachment>,
+    /// A one-time-link mail (an App user's invite or reset,
+    /// agent-app-users): the server destroys its stored copy as soon as
+    /// it takes the message (JMAP `onSuccessDestroyEmail`), so no Drafts or
+    /// Sent copy keeps the link in the sending mailbox, and previews hide
+    /// the link.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral: bool,
+}
+
+/// `k2inv_…` tokens in `text` replaced by `k2inv_[hidden]` (previews of
+/// one-time-link mails).
+pub fn hide_links(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("k2inv_") {
+        out.push_str(&rest[..i]);
+        out.push_str("k2inv_[hidden]");
+        let after = &rest[i + "k2inv_".len()..];
+        let n = after.find(|c: char| !c.is_ascii_alphanumeric()).unwrap_or(after.len());
+        rest = &after[n..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// One attachment held in an outbound body file (MCS2). `Debug` prints
@@ -957,11 +980,12 @@ pub trait SubmitBackend {
 
 impl SubmitBackend for StalwartClient {
     fn submit(&self, account_id: &str, msg: &OutboundMessage) -> Result<(), String> {
-        self.submission_send(
+        self.submission_send_opts(
             account_id,
             &msg.from,
             &msg.all_recipients(),
             submission_email_json(msg),
+            msg.ephemeral,
         )
     }
 }
@@ -1579,6 +1603,27 @@ mod tests {
     use crate::mail::jmap::MailAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[test]
+    fn hide_links_masks_one_time_tokens_only() {
+        assert_eq!(
+            hide_links("Set your password: https://d.example/set#k2inv_ab12CD34 now. k2inv_x9"),
+            "Set your password: https://d.example/set#k2inv_[hidden] now. k2inv_[hidden]"
+        );
+        assert_eq!(hide_links("no link here"), "no link here");
+    }
+
+    #[test]
+    fn an_ephemeral_message_round_trips_and_a_plain_one_stays_lean() {
+        let mut m = msg();
+        m.ephemeral = true;
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(s.contains("\"ephemeral\":true"), "{s}");
+        assert!(serde_json::from_str::<OutboundMessage>(&s).unwrap().ephemeral);
+        let plain = serde_json::to_string(&msg()).unwrap();
+        assert!(!plain.contains("ephemeral"), "old body files stay byte-identical: {plain}");
+        assert!(!serde_json::from_str::<OutboundMessage>(&plain).unwrap().ephemeral);
+    }
+
     fn msg() -> OutboundMessage {
         OutboundMessage {
             from_name: Some("Research Bot".to_string()),
@@ -1593,6 +1638,7 @@ mod tests {
             references: None,
             reply_source: None,
             attachments: Vec::new(),
+            ephemeral: false,
         }
     }
 

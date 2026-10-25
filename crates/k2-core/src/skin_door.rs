@@ -362,6 +362,9 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     push_handle(out, "/cli/skin/login", daemon);
     push_handle(out, "/cli/skin/logout", daemon);
     push_handle(out, "/cli/skin/password/reset", daemon);
+    // K2's own set-password page (agent-app-users): always the daemon,
+    // never the UI port, so an owner's reset link never lands on an App.
+    push_handle(out, "/cli/skin/password/set", daemon);
     push_handle(out, "/cli/thread", daemon);
     push_handle(out, "/cli/thread/*", daemon);
     push_handle(out, "/cli/overlay/events*", daemon);

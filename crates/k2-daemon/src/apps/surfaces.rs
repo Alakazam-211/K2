@@ -124,6 +124,10 @@ pub fn members_view(project_id: &str, handle: &str, target: Option<&str>, hide: 
     let hidden = k2_core::skin::members::names_hidden(project_id)?;
     let rows = k2_core::skin::members::room_members(project_id, target)?;
     let mut cache = HashMap::new();
+    // agent-app-users (security review item 11): the owner's and the
+    // agent's views say who an agent set up and whose extra access waits;
+    // an App's own view never does.
+    let tied = if hide { HashMap::new() } else { crate::skin_routes::tie_display()? };
     let members: Vec<J> = rows
         .iter()
         .map(|m| {
@@ -132,14 +136,20 @@ pub fn members_view(project_id: &str, handle: &str, target: Option<&str>, hide: 
             } else {
                 (J::String(m.username.clone()), J::String(m.display_name.clone()))
             };
-            json!({
+            let mut row = json!({
                 "username": username,
                 "displayName": display,
                 "kind": m.kind,
                 "role": m.role,
                 "app": app_label(&m.app, &mut cache),
                 "caps": m.caps,
-            })
+            });
+            if !hide {
+                let t = tied.get(&m.principal_id);
+                row["pendingReset"] = json!(t.is_some_and(|t| t.pending));
+                row["tiedTo"] = json!(t.map(|t| t.handle.clone()));
+            }
+            row
         })
         .collect();
     Ok(json!({

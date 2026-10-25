@@ -1723,6 +1723,12 @@ fn run_schema_steps(conn: &mut Connection) -> Result<(), String> {
     if v > SKIN_SCHEMA_VERSION {
         return Err(schema_newer_error(v));
     }
+    // agent-app-users (security review item 13): an existing file is copied
+    // before step 6, so a downgrade can restore it (a 0.46.3 K2 refuses a
+    // version-6 file). `skin.db.pre-6.bak` beside it, 0600.
+    if (1..6).contains(&v) {
+        backup_before_step(conn, 6)?;
+    }
     while v < SKIN_SCHEMA_VERSION {
         let next = v + 1;
         let tx = conn
@@ -1769,6 +1775,23 @@ fn run_schema_steps(conn: &mut Connection) -> Result<(), String> {
         }
         v = next;
     }
+    Ok(())
+}
+
+/// Copy the open skin.db to `skin.db.pre-<step>.bak` (SQLite `VACUUM
+/// INTO`, a consistent copy) unless that backup already exists.
+fn backup_before_step(conn: &Connection, step: i64) -> Result<(), String> {
+    let path = store_path();
+    let bak = path.with_file_name(format!("skin.db.pre-{step}.bak"));
+    if bak.exists() {
+        return Ok(());
+    }
+    conn.execute("VACUUM INTO ?1", params![bak.to_string_lossy()])
+        .map_err(|e| format!("skin.db backup before step {step}: {e}"))?;
+    if let Err(e) = crate::private_home::restrict_db_files(&bak) {
+        crate::log_debug!("[skin] WARN {e}");
+    }
+    record_access_audit("skin_db_backup", "daemon", &format!("before step {step}: {}", bak.display()));
     Ok(())
 }
 

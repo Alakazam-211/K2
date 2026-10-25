@@ -359,12 +359,8 @@ fn create_user(c: &Ctx, v: &J) -> R {
         }
     })?;
     // Round-2 review B1: the key holder may set this guest's password, so
-    // it is tied (not "a person" for card answers) until a person takes it
-    // over. A tie that can't be written removes the new guest again.
-    if let Err(e) = skin::creators::tie(&p.id, &skin::creators::app_key_marker(&c.app)) {
-        let _ = skin::remove_principal_as(&p.username, &actor);
-        return Err(err(500, "store", e));
-    }
+    // it is tied (not "a person" for card answers) until an owner reset:
+    // written above, in the same transaction as the guest (`app_key`).
     if let Some(ids) = room_ids.filter(|_| role_id.is_none()) {
         skin::set_app_grant_rooms(&user, &c.app, &ids, true, &actor).map_err(|e| err(400, "bad_request", e))?;
     }
@@ -422,13 +418,10 @@ fn password_reset(c: &Ctx, v: &J) -> R {
     if !only_this_app(c, &pid)? {
         return Err(err(403, "not_only_this_app", "this person also signs in elsewhere on this box; only the owner resets their password"));
     }
-    // Round-2 review B1: the reset token goes back to the key holder, who
-    // could use it: tie the guest first (and drop any person claim).
-    skin::creators::tie(&pid, &skin::creators::app_key_marker(&c.app)).map_err(|e| err(500, "store", e))?;
-    match skin::mint_password_reset(&user).map_err(|e| err(500, "store", e))? {
-        Some(m) => Ok(json!({ "ok": true, "username": user, "token": m.token, "expiresAt": m.expires_at, "email": m.email })),
-        None => Err(err(409, "no_reset", "a reset needs a password already set and an email on the person")),
-    }
+    // Security review 2026-10-25, item 4: the key never sees the token.
+    // The person is tied to the App's workspace (`app_key`) and the link is
+    // mailed to their own email; using it ties them too.
+    crate::app_user_invites::app_key_reset(&c.app, &user, &c.actor()).map_err(|(status, code, hint)| err(status, code, hint))
 }
 
 // ── fetch: outside APIs with secrets by name ──────────────────────────

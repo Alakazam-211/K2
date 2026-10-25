@@ -1303,6 +1303,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/password/change", Public),
     post("/cli/skin/password/forgot", Public),
     post("/cli/skin/password/reset", Public),
+    get("/cli/skin/password/set", Public),
     // 0.46.3 App project chat: a pass reads and posts in the projects
     // whose every member room it holds (the handler's all-members rule).
     get("/cli/skin/projects", NoLogin),

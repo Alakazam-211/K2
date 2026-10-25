@@ -974,6 +974,23 @@ fn users_email(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse 
         Ok(e) => e,
         Err(r) => return r,
     };
+    if let Some(ws) = agent_ws {
+        // Security review item 10: an agent sets the email only of a person
+        // its own workspace's agent added; the owner's people are the
+        // owner's (a set would tie them and steer their resets).
+        match principal_named(username) {
+            Ok(Some(p)) => {
+                if skin::creators::workspace_of(&p.id).ok().flatten().as_deref() != Some(ws) {
+                    return owner_only_with_hint(&format!(
+                        "'{}' was added by the owner: only the owner sets their email (ask your human)",
+                        p.username
+                    ));
+                }
+            }
+            Ok(None) => {}
+            Err(r) => return r,
+        }
+    }
     let tie = agent_ws.map(|ws| skin::ties::TieWrite { workspace_id: ws, set_by: actor, reason: skin::ties::REASON_EMAIL });
     match skin::set_principal_email_tied(username, email, actor, tie) {
         Ok(p) => {
@@ -3178,27 +3195,8 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str, pass:
         .unwrap_or("")
         .trim()
         .to_string();
-    let mut pass_ws: Option<String> = None;
     if let ForgotCaller::Pass(pass) = &caller {
-        // Scope first, so a pass can't spend the 60 s throttle of a guest
-        // it may not touch (an owner reset would be blocked by it).
-        let target = match principal_named(&username) {
-            Ok(t) => t,
-            Err(r) => return r,
-        };
-        let reachable = match &target {
-            Some(p) => match pass_may_reset(pass, p) {
-                Ok(ws) => ws,
-                Err(r) => return r,
-            },
-            None => None,
-        };
-        let Some(ws) = reachable else {
-            skin::reset_miss_dummy();
-            k2_core::log_debug!("[skin] forgot via pass {}: no guest it may reset", pass.id);
-            return CliResponse::ok_json(FORGOT_OK_JSON.to_string());
-        };
-        pass_ws = Some(ws);
+        return forgot_by_pass(pass, &username);
     }
     match skin::password_reset_throttled(&username) {
         Ok(true) => {
@@ -3210,9 +3208,6 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str, pass:
         }
         Ok(false) => {}
         Err(e) => return CliResponse::internal_error(e),
-    }
-    if let (ForgotCaller::Pass(pass), Some(ws)) = (&caller, pass_ws.as_deref()) {
-        return forgot_by_pass(pass, ws, &username);
     }
     match skin::mint_password_reset(&username) {
         Ok(Some(mint)) => {
@@ -3234,12 +3229,35 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str, pass:
     }
 }
 
-/// A pass's forgot for a guest it may reset (`ws`: the workspace it
-/// matched): the reset link is mailed to the guest's own email
-/// ([`crate::app_user_invites::forgot_by_pass`]). The token never goes
-/// back to the caller: the answer is always the bare `{ok:true}`.
-fn forgot_by_pass(pass: &skin::SkinPass, ws: &str, username: &str) -> CliResponse {
-    crate::app_user_invites::forgot_by_pass(pass, ws, username);
+/// A pass's forgot (security review 2026-10-25, item 7): the same work
+/// and the same answers whoever the name is. The throttle is per pass and
+/// name, taken first for every name (a 429 says nothing about who exists,
+/// and a pass never blocks the owner's own forgot); the dummy argon2 runs
+/// every time; a guest the pass may reset gets the link mailed to their
+/// own email off the request thread
+/// ([`crate::app_user_invites::forgot_by_pass`]). The token never goes back
+/// to the caller: the answer is the bare `{ok:true}`.
+fn forgot_by_pass(pass: &skin::SkinPass, username: &str) -> CliResponse {
+    match skin::password_reset_throttled(&format!("pass:{}:{username}", pass.id)) {
+        Ok(true) => {
+            return CliResponse {
+                status: "429 Too Many Requests",
+                content_type: "application/json",
+                body: FORGOT_THROTTLED_JSON.to_string(),
+            };
+        }
+        Ok(false) => {}
+        Err(e) => return CliResponse::internal_error(e),
+    }
+    let reachable = match principal_named(username) {
+        Ok(Some(p)) => pass_may_reset(pass, &p).ok().flatten(),
+        _ => None,
+    };
+    skin::reset_miss_dummy();
+    match reachable {
+        Some(ws) => crate::app_user_invites::forgot_by_pass(pass, &ws, username),
+        None => k2_core::log_debug!("[skin] forgot via pass {}: no guest it may reset", pass.id),
+    }
     CliResponse::ok_json(FORGOT_OK_JSON.to_string())
 }
 

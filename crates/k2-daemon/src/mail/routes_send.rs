@@ -869,6 +869,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         references: None,
         reply_source: None,
         attachments: Vec::new(),
+        ephemeral: false,
     };
     send::apply_policy_bcc(&mut msg, policy_bcc);
     if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1202,6 +1203,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 references: None,
                 reply_source: Some(email_id.clone()),
                 attachments: Vec::new(),
+                ephemeral: false,
             };
             send::apply_policy_bcc(&mut msg, policy_bcc);
             if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1286,6 +1288,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 ),
                 reply_source: None,
                 attachments: Vec::new(),
+                ephemeral: false,
             };
             send::apply_policy_bcc(&mut msg, policy_bcc);
             if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1446,7 +1449,7 @@ pub fn handle_approvals_list(_params: &HashMap<String, String>) -> CliResponse {
             // loudly on the unreadable body).
             let stored = store.load_message(&row.id).ok();
             let preview: Option<String> =
-                stored.as_ref().map(|m| m.text_body.chars().take(280).collect());
+                stored.as_ref().map(|m| send::hide_links(&m.text_body).chars().take(280).collect());
             v["bodyPreview"] = serde_json::json!(preview);
             // The From display name the recipient will see (agent name
             // or the agent's --from-name) — the approver sees it first.
@@ -2158,6 +2161,7 @@ mod tests {
             references: None,
             reply_source: None,
             attachments: Vec::new(),
+            ephemeral: false,
         };
         let id = send::record_linked_submitted(&store, &project_id, "Agent", &msg, &[], now_secs())
             .expect("record linked send");
@@ -2211,6 +2215,7 @@ mod tests {
             references: None,
             reply_source: None,
             attachments: Vec::new(),
+            ephemeral: false,
         };
         let names = vec!["invoice.pdf".to_string(), "photo.jpg".to_string()];
         let id = send::record_linked_submitted(
@@ -2646,6 +2651,7 @@ mod tests {
             references: None,
             reply_source: None,
             attachments: Vec::new(),
+            ephemeral: false,
         };
         let now = now_secs();
         for _ in 0..send::RATE_LIMIT_HOURLY {
@@ -2801,6 +2807,7 @@ mod tests {
             references: None,
             reply_source: None,
             attachments: Vec::new(),
+            ephemeral: false,
         };
         let foreign_id = store
             .insert(&NewOutbound {
@@ -3445,6 +3452,7 @@ mod tests {
             references: None,
             reply_source: None,
             attachments: Vec::new(),
+            ephemeral: false,
         }
     }
 

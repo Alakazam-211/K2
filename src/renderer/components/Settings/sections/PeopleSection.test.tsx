@@ -200,6 +200,7 @@ describe('PeopleSection', () => {
       email: null,
       tiedTo: null,
       pendingReset: false,
+      tiedReasons: [],
     }])
   })
 
@@ -230,12 +231,24 @@ describe('PeopleSection', () => {
     })
     await waitFor(() => expect(screen.getByText('Reset link sent to tina@example.test.')).toBeTruthy())
 
-    h.daemonCliPost.mockResolvedValue({ ok: true, delivered: 'returned', link: 'https://x.example/reset#k2inv_abc' })
+    h.daemonCliPost.mockResolvedValue({ ok: true, delivered: 'returned', link: 'https://x.example/cli/skin/password/set#k2inv_abc' })
     fireEvent.click(screen.getByRole('button', { name: 'Show a one-time link' }))
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/reset-link', { username: 'tina', code: true })
     })
-    await waitFor(() => expect(screen.getByText('https://x.example/reset#k2inv_abc')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('https://x.example/cli/skin/password/set#k2inv_abc')).toBeTruthy())
+  })
+
+  // Security review item 3: an email an agent set is never a reset target.
+  it('never offers the stored email when an agent set it', async () => {
+    allowRoster([{ username: 'tess', pendingReset: true, tiedTo: 'sales', tiedReasons: ['created', 'email'], email: 'tess@agent.test' }])
+    render(<PeopleSection />)
+    await waitFor(() => expect(screen.getByLabelText('Open tess')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('Open tess'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send reset link' })).toBeTruthy())
+    expect((screen.getByRole('button', { name: 'Send reset link' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(/so a reset can't go there/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Show a one-time link' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('adds a person with password, full name, and optional email', async () => {

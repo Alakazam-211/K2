@@ -2049,6 +2049,30 @@ mod tests {
         );
     }
 
+    /// R1 (agent-app-users S1, T1.3): the admin logins (`/cli/users`, the
+    /// bare path too, and every arm under it) are never an agent verb,
+    /// with permission cards on or off.
+    #[test]
+    fn users_routes_are_never_agent_verbs() {
+        const ARMS: &[&str] = &[
+            "/cli/users",
+            "/cli/users/add",
+            "/cli/users/remove",
+            "/cli/users/set-password",
+            "/cli/users/unlock",
+            "/cli/users/set-disabled",
+            "/cli/users/set-role",
+            "/cli/users/set-can-clone",
+            "/cli/users/policy",
+            "/cli/users/audit",
+        ];
+        for on in [false, true] {
+            for p in ARMS {
+                assert!(!is_agent_verb_when(p, on), "{p} must never be an agent verb (permission cards on={on})");
+            }
+        }
+    }
+
     #[test]
     fn is_agent_verb_denies_federation_owner_surfaces() {
         // pair/confirm stay owner-or-admin; outbox/pubkey stay owner-gated.

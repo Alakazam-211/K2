@@ -139,6 +139,49 @@ async fn solo_is_today_plus_the_servers_feature() {
     assert!(has(&o, k2_node_proto::share::FEATURE_SERVERS_OWNER), "the owner may move the node (0.46.4): {:?}", o.features);
 }
 
+/// Review F10: an old owner that left with `servers owner --old revoke`
+/// has a revoked line and, from the node's swap, its own slot state with
+/// queued jobs still in its ledger. The node opens it only to tell its
+/// server those jobs ended `cancelled/share_revoked` (never lost).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revoked_line_with_queued_jobs_hears_they_ended() {
+    let mut a = Fake::start().await;
+    let mut b = Fake::start().await;
+    let n = start_node(&a, "srv-revq", "", walled(Wall::Seatbelt)).await;
+    let mut ca = a.next_conn().await;
+    ready(&mut ca).await;
+    pin_second(&n, &b, 1, "node-b");
+    // B still wants q1 (its resume list names it, V47): the node must say
+    // why it ended, not drop it as superseded.
+    *b.resume.lock().unwrap() = vec![k2_node_proto::frames::ResumeHint { job_id: "q1".into(), generation: 1, since_seq: 0 }];
+    write_shared(&n, 1, &prefix(&b.key), "b.k2.dev", ShareState::Revoked, None);
+    let line = servers::read_file(&n.layout.config).unwrap().unwrap().entry(1).cloned().unwrap();
+    let t = n.layout.tenant(1);
+    let mut p = plan("q1", &["/bin/echo", "x"]);
+    p.node_id = "node-b".into();
+    let l = k2_node::ledger::Ledger::open(&t.ledger()).unwrap();
+    l.insert_queued(&assign(p, 1), &k2_node::ledger::SystemClock::new()).unwrap();
+    drop(l);
+    // The mark last: only a slot marked for this very line opens.
+    std::fs::write(t.state().join("line"), format!("{}:{}", line.fp_prefix, line.added_at)).unwrap();
+    let mut cb = b.next_conn().await;
+    let ended = |f: &Frame| match f {
+        Frame::State(s) => s.job_id == "q1" && s.state == JobState::Cancelled,
+        Frame::JobsSnapshot(s) => s.jobs.iter().any(|j| j.job_id == "q1" && j.state == JobState::Cancelled),
+        _ => false,
+    };
+    let seen = cb.until(ended).await;
+    let reason = seen.iter().rev().find_map(|f| match f {
+        Frame::State(s) if s.job_id == "q1" => s.reason.clone(),
+        Frame::JobsSnapshot(s) => s.jobs.iter().find(|j| j.job_id == "q1").and_then(|j| j.reason.clone()),
+        _ => None,
+    });
+    assert_eq!(reason.as_deref(), Some(codes::SHARE_REVOKED), "B hears why: {seen:?}");
+    let row = eventually("q1 ended", || n.node.tenant(1).and_then(|t| t.ledger.lock().unwrap().get("q1", 1).unwrap()).filter(|r| r.state.is_terminal())).await;
+    assert_eq!((row.state, row.reason.as_deref()), (JobState::Cancelled, Some(codes::SHARE_REVOKED)));
+    assert!(n.node.running_by_tenant().get(&1).is_none(), "nothing of a revoked share starts");
+}
+
 /// A2 / MT34: once `servers.toml` exists, the owner gets its share view,
 /// shared or not, so a new owner on a node left with no other server
 /// learns it's the owner (its server would otherwise keep `tenant`).

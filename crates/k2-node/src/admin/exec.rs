@@ -90,6 +90,9 @@ pub trait Platform: Send + Sync {
     }
 }
 
+/// See [`Executor::node_swap_wait`].
+pub const OWNER_SWAP_WAIT_SECS: u64 = 180;
+
 /// How long a staged build's `version` may take in the preflight.
 pub const PREFLIGHT_SECS: u64 = 10;
 
@@ -411,6 +414,9 @@ pub struct Executor {
     /// status write (10 s) plus a control poll (2 s), so a job the node
     /// accepted just before it saw `draining` is in the count (round 4, 1).
     pub drain_settle: std::time::Duration,
+    /// How long `servers.owner` waits, after its marked restart, for the
+    /// node to show it swapped its files (its owner pin; review F3).
+    pub node_swap_wait: std::time::Duration,
 }
 
 type Refused = (String, String, AdminRefusal);
@@ -435,6 +441,7 @@ impl Executor {
             drain_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             reexec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             drain_settle: std::time::Duration::from_secs(super::update::DRAIN_SETTLE_SECS),
+            node_swap_wait: std::time::Duration::from_secs(OWNER_SWAP_WAIT_SECS),
         }
     }
 
@@ -452,6 +459,7 @@ impl Executor {
             drain_gen: self.drain_gen.clone(),
             reexec: self.reexec.clone(),
             drain_settle: self.drain_settle,
+            node_swap_wait: self.node_swap_wait,
         }
     }
 
@@ -841,7 +849,11 @@ impl Executor {
         if resume {
             return match super::owner::resume(self, true) {
                 None => AdminResult::done(name, "", json!({"resumed": false, "note": "no owner change is waiting"})),
-                Some(Ok(v)) => AdminResult::done(name, "", json!({"resumed": true, "result": v})),
+                Some(Ok(v)) => {
+                    // Done: control goes back to what the owner had.
+                    super::update::recover_drain(self);
+                    AdminResult::done(name, "", json!({"resumed": true, "result": v}))
+                }
                 Some(Err(r)) => self.refuse_result((name.to_string(), String::new(), r)),
             };
         }
@@ -860,7 +872,7 @@ impl Executor {
             AuditEntry { event: "local".into(), cmd_id: Some(id.clone()), verb: Some(name.into()), proposed_by: Some(by.clone()), detail: json!({"args": a}), ..Default::default() },
             self.now(),
         );
-        match super::owner::start(self, a, &id, &by, false) {
+        match super::owner::start(self, a, &id, &by, true) {
             Ok(v) => AdminResult::done(&id, "", v),
             Err(r) => self.refuse_result((id, String::new(), r)),
         }

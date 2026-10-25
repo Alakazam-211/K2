@@ -80,8 +80,36 @@ fn setup(level: &str) -> T {
     std::fs::write(layout.ledger(), "LEDGER-0").unwrap();
     std::fs::write(layout.jobs().join("owner-job"), "x").unwrap();
     std::fs::write(layout.cache().join("owner-cache"), "warm").unwrap();
+    // Slot scratch (sccache sockets): never moves, goes to the trash (F8).
+    std::fs::create_dir_all(layout.tenant(0).tmp()).unwrap();
+    std::fs::write(layout.tenant(0).tmp().join("owner-sock"), "s").unwrap();
+    std::fs::create_dir_all(layout.tenant(1).tmp()).unwrap();
+    std::fs::write(layout.tenant(1).tmp().join("slot1-sock"), "s").unwrap();
     online(&r, &[1, 2]);
+    // Root's key records, as the confirming prune takes them (F5).
+    servers::prune(&Ctx::for_executor(&r.exec, "node:prune")).unwrap();
+    assert_eq!(servers::recorded_key(&r.exec.paths.state_dir, 1, 100).as_deref(), Some(b.fingerprint().as_str()));
+    swap_on_restart(&r);
     T { r, b }
+}
+
+/// The node's half at its start, as a real restart would run it.
+fn swap_on_restart(r: &Rig) {
+    let layout = r.exec.paths.layout();
+    *r.plat.on_restart.lock().unwrap() = Some(Box::new(move || {
+        crate::node::owner_swap::apply(&layout, crate::admin::tests::NOW).unwrap();
+    }));
+}
+
+/// Call `resume` past `busy` answers (control just held at draining).
+fn resume_past_busy(r: &Rig) -> Option<Result<serde_json::Value, AdminRefusal>> {
+    for _ in 0..3 {
+        match resume(&r.exec, false) {
+            Some(Err(e)) if e.code == code::BUSY => continue,
+            other => return other,
+        }
+    }
+    panic!("resume stayed busy");
 }
 
 fn online(r: &Rig, slots: &[u8]) {
@@ -147,6 +175,8 @@ fn the_owner_moves_to_another_own_server() {
     let old = f.entry(1).unwrap();
     assert_eq!((old.label.as_str(), old.fp_prefix.as_str(), old.trust, old.state), ("rosson.k2.dev", &r.ctl.fingerprint()[..16], Trust::Own, ShareState::Active));
     assert!(old.added_by.starts_with("owner-change:"), "{}", old.added_by);
+    assert_eq!(old.limits(), ShareLimits::new_server(Trust::Own, cfg!(target_os = "macos")), "a new server's default share, not the owner's (F9)");
+    assert_eq!(servers::recorded_key(&r.exec.paths.state_dir, 1, old.added_at).as_deref(), Some(r.ctl.fingerprint().as_str()), "root records the old owner's key");
     assert_eq!(f.entry(2), Some(&baden_before), "another server's line is untouched (O7)");
 
     // admin.toml (MT32).
@@ -162,6 +192,8 @@ fn the_owner_moves_to_another_own_server() {
     assert!(!exists(layout.jobs().join("owner-job")) && !exists(t1.root().join("jobs/slot1-job")));
     assert!(exists(layout.tenant(2).root().join("jobs/slot2-job")) && exists(layout.tenant(2).root().join("cache/slot2-cache")));
     assert!(!exists(layout.tenants_root().join(STAGE_DIR)), "no staging left");
+    assert!(!exists(layout.tenant(0).tmp().join("owner-sock")) && !exists(t1.tmp().join("slot1-sock")), "tmp never moves with a server");
+    assert!(!exists(t1.tmp().join("owner-sock")) && !exists(layout.tenant(0).tmp().join("slot1-sock")));
 
     // One marked restart; the node's instruction is in the mark dir.
     assert_eq!(r.plat.calls.lock().unwrap().iter().filter(|c| *c == "restart-unit k2-node").count(), 1);
@@ -174,8 +206,9 @@ fn the_owner_moves_to_another_own_server() {
     let c = crate::config::read_control(&layout.control()).unwrap();
     assert_eq!(c.control, k2_node_proto::frames::Control::Active);
 
-    // The node's half at its start: pins and ledgers trade places.
-    assert_eq!(crate::node::owner_swap::apply(&layout, r.exec.now()).unwrap(), crate::node::owner_swap::Outcome::Swapped);
+    // The node's half ran at its start (F3 waited for it): pins and
+    // ledgers traded places.
+    assert_eq!(crate::node::owner_swap::apply(&layout, r.exec.now()).unwrap(), crate::node::owner_swap::Outcome::Nothing, "already applied");
     assert_eq!(crate::identity::read_pin(&layout.pin()).unwrap().unwrap().controller_fp, t.b.fingerprint());
     assert_eq!(std::fs::read_to_string(layout.ledger()).unwrap(), "LEDGER-1", "queued jobs stay with their server (MT29)");
     assert_eq!(std::fs::read_to_string(t1.ledger()).unwrap(), "LEDGER-0");
@@ -205,7 +238,7 @@ fn bad_targets_are_refused_before_any_change() {
     assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "a signed command names the key: {res:?}");
     let res = owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": "c".repeat(64)}));
     assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "the node's pin has another key: {res:?}");
-    assert!(res.message.as_deref().unwrap_or("").contains("another key"), "{res:?}");
+    assert!(res.message.as_deref().unwrap_or("").contains("isn't the one named"), "{res:?}");
     let res = owner_cmd(&t, json!({"server": "slot:0", "fp": fp}));
     assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS));
     let res = owner_cmd(&t, json!({"server": "nope.k2.dev", "fp": fp}));
@@ -230,6 +263,17 @@ fn bad_targets_are_refused_before_any_change() {
     assert_eq!(owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": fp})).code.as_deref(), Some(codes::OWNER_NEEDS_OWN_SERVER));
     std::fs::write(servers::servers_path(&layout.config), &before_file).unwrap();
 
+    // No key record from root (or one for another key): refused (F5).
+    let keys = r.exec.paths.state_dir.join(servers::KEYS_FILE);
+    let saved = std::fs::read(&keys).unwrap();
+    std::fs::remove_file(&keys).unwrap();
+    assert_eq!(owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": fp})).code.as_deref(), Some(codes::OWNER_TARGET_NOT_READY));
+    servers::record_key(&r.exec.paths.state_dir, 1, &"9".repeat(64), 100).unwrap();
+    let res = owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": fp}));
+    assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "the pin isn't the key root recorded: {res:?}");
+    assert!(res.message.as_deref().unwrap_or("").contains("recorded"), "{res:?}");
+    std::fs::write(&keys, saved).unwrap();
+
     // An unconfirmed pin.
     let mut p = pin_of(&t.b, "https://z3thon.k2.dev", 200);
     p.confirmed = false;
@@ -249,21 +293,32 @@ fn bad_targets_are_refused_before_any_change() {
     assert!(res.message.as_deref().unwrap_or("").contains("sudo k2-node servers owner"), "{res:?}");
 }
 
-/// `old = revoke`, `caches = wipe`: the old owner's line goes (wiped at
-/// once), both slots' trees are emptied, admin re-pinned.
+/// `old = revoke`, `caches = wipe`: admin re-pinned, the old owner's line
+/// revoked as a plain revoke (the node tells it its queued jobs ended;
+/// wiped 24 h later by the prune, F10), both slots' trees emptied, even a
+/// tree too deep to delete (F2: it goes to the trash by rename).
 #[test]
 fn the_old_owner_can_leave_and_caches_can_be_wiped() {
     let t = setup("full");
     let r = &t.r;
     let layout = r.exec.paths.layout();
+    let mut deep = layout.cache().join("deep");
+    for _ in 0..300 {
+        deep = deep.join("d");
+    }
+    std::fs::create_dir_all(&deep).unwrap();
     let res = owner_cmd(&t, json!({"server": "slot:1", "fp": t.b.fingerprint(), "old": "revoke", "caches": "wipe"}));
     assert_eq!(res.state, "done", "{res:?}");
     let l = wait_done(r);
     assert!(l.code.is_none(), "{l:?}");
     let f = file(r);
     assert_eq!(f.owner, t.b.fingerprint());
-    assert!(f.entry(1).is_none(), "the old owner's slot is revoked and wiped at once: {f:?}");
+    let old = f.entry(1).expect("the old owner's line stays until its 24 h wipe");
+    assert_eq!((old.label.as_str(), old.state), ("rosson.k2.dev", ShareState::Revoked));
+    let book = servers::read_book(&r.exec.paths.state_dir).unwrap();
+    assert_eq!(book.revoked.get("1").map(|b| b.1), Some(false), "wiped by the prune later, not at once");
     assert!(f.entry(2).is_some());
+    assert!(!exists(r.exec.paths.state_dir.join(STEP_FILE)), "a tree too deep to delete never holds the change up");
     assert!(std::fs::read_dir(layout.jobs()).unwrap().next().is_none(), "the owner's job folders are wiped");
     assert!(std::fs::read_dir(layout.cache()).unwrap().next().is_none(), "and its caches");
     assert!(exists(layout.tenant(2).root().join("cache/slot2-cache")), "another slot's caches stay");
@@ -301,7 +356,8 @@ fn a_crash_at_any_step_resumes_on_the_next_start() {
             // Half of phase A: the owner's jobs went to staging already.
             let troot = open_troot(&ctx).unwrap();
             let stage = crate::wall::ensure_child_dir(&troot, &cname(STAGE_DIR), 0o700).unwrap();
-            let from = crate::wall::ensure_child_dir(&stage, &cname("from"), 0o700).unwrap();
+            let work = crate::wall::ensure_child_dir(&stage, &cname(&work_name(&step)), 0o700).unwrap();
+            let from = crate::wall::ensure_child_dir(&work, &cname("from"), 0o700).unwrap();
             let dst = crate::wall::ensure_child_dir(&from, &cname("jobs"), 0o700).unwrap();
             let src = open_dir(&layout.jobs()).unwrap();
             move_entries(&src, &dst, "jobs").unwrap();
@@ -316,7 +372,7 @@ fn a_crash_at_any_step_resumes_on_the_next_start() {
         }
         step.phase = phase;
         write_step(&r.exec, &step).unwrap();
-        let out = resume(&r.exec, false).expect("a change to resume");
+        let out = resume_past_busy(r).expect("a change to resume");
         assert!(out.is_ok(), "{phase:?}: {out:?}");
         let f = file(r);
         assert_eq!(f.owner, t.b.fingerprint(), "{phase:?}");
@@ -347,6 +403,11 @@ fn a_crash_at_any_step_resumes_on_the_next_start() {
         attempts: 0,
     };
     write_step(&r.exec, &step).unwrap();
+    // Control isn't draining yet: held now, and this first resume waits a
+    // settle without counting an attempt (F1).
+    assert_eq!(resume(&r.exec, false).unwrap().unwrap_err().code, code::BUSY);
+    assert_eq!(read_step(&r.exec).unwrap().unwrap().attempts, 0);
+    assert_eq!(crate::config::read_control(&r.exec.paths.layout().control()).unwrap().control, k2_node_proto::frames::Control::Draining);
     for i in 1..=MAX_ATTEMPTS {
         assert!(resume(&r.exec, false).unwrap().is_err());
         assert_eq!(read_step(&r.exec).unwrap().unwrap().attempts, i);
@@ -367,14 +428,18 @@ fn the_machine_changes_the_owner_without_signatures() {
     assert!(!crate::admin::server::owner_change_peer_ok(54_321), "nobody else (the node user included)");
     let t = setup("policy");
     let r = &t.r;
-    let req = crate::admin::exec::LocalRequest::OwnerChange {
-        args: Some(OwnerArgs { server: "z3thon.k2.dev".into(), fp: None, old: OldOwner::Keep, caches: Caches::Move, now: false }),
+    // The full key is required at the machine too (F5).
+    let req = |fp: Option<String>| crate::admin::exec::LocalRequest::OwnerChange {
+        args: Some(OwnerArgs { server: "z3thon.k2.dev".into(), fp, old: OldOwner::Keep, caches: Caches::Move, now: false }),
         resume: false,
         by: "rosson".into(),
     };
-    let crate::admin::exec::LocalResponse::Result(res) = r.exec.handle(&req, None) else { panic!("a result") };
+    let crate::admin::exec::LocalResponse::Result(res) = r.exec.handle(&req(None), None) else { panic!("a result") };
+    assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "{res:?}");
+    assert!(res.message.as_deref().unwrap_or("").contains("controllerFp"), "{res:?}");
+    let crate::admin::exec::LocalResponse::Result(res) = r.exec.handle(&req(Some(t.b.fingerprint())), None) else { panic!("a result") };
     assert_eq!(res.state, "done", "at the machine no signature and any level: {res:?}");
-    assert_eq!(res.result["fp"], t.b.fingerprint(), "root shows the key it read from the pin");
+    assert_eq!(res.result["fp"], t.b.fingerprint());
     let l = wait_done(r);
     assert!(l.code.is_none(), "{l:?}");
     assert_eq!(file(r).owner, t.b.fingerprint());
@@ -406,12 +471,52 @@ fn swap_lines_keeps_everyone_else() {
         at: 777,
         attempts: 0,
     };
-    let g = swap_lines(&f, &step).unwrap();
+    let g = swap_lines(&f, &step, false).unwrap();
     assert_eq!(g.servers.iter().map(|e| e.slot).collect::<Vec<_>>(), vec![0, 1, 2]);
     assert_eq!(g.entry(1).unwrap().added_at, 777);
     assert_eq!(crate::session::line_mark(g.entry(1).unwrap()), old_line_mark(&step.from_fp, 777), "the node's line mark matches the new line");
     let mut wrong = step.clone();
     wrong.to_fp = "f".repeat(64);
-    assert!(swap_lines(&f, &wrong).is_err(), "slot 1 must still hold the target");
+    assert!(swap_lines(&f, &wrong, false).is_err(), "slot 1 must still hold the target");
+}
 
+/// F1 + F3: the node never shows it swapped (its owner pin stays the old
+/// owner's): the change stops at its restart step with nothing else
+/// changed, control stays `draining` and its drain record stays, a resume
+/// waits while a job runs; once the node does swap, the resume finishes
+/// and control goes back.
+#[test]
+fn control_stays_draining_until_a_stopped_change_finishes() {
+    let mut t = setup("full");
+    t.r.exec.node_swap_wait = Duration::from_millis(200);
+    *t.r.plat.on_restart.lock().unwrap() = None;
+    let r = &t.r;
+    let layout = r.exec.paths.layout();
+    let res = owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": t.b.fingerprint()}));
+    assert_eq!(res.state, "done", "{res:?}");
+    let l = wait_done(r);
+    assert_eq!(l.code.as_deref(), Some(code::FAILED), "{l:?}");
+    assert!(l.detail["error"].as_str().unwrap_or("").contains("didn't swap"), "{l:?}");
+    assert_eq!(read_step(&r.exec).unwrap().unwrap().phase, Phase::Restart, "stopped at the restart");
+    assert_eq!(file(r).owner, r.ctl.fingerprint(), "servers.toml untouched");
+    assert_eq!(crate::admin::config::read(&r.exec.paths.admin()).unwrap().unwrap().controller.unwrap().fp, r.ctl.fingerprint(), "admin.toml untouched");
+    let draining = || crate::config::read_control(&layout.control()).unwrap().control == k2_node_proto::frames::Control::Draining;
+    assert!(draining(), "no job may start while the change is unfinished");
+    assert!(r.exec.paths.state_dir.join(crate::admin::update::DRAIN_FILE).exists(), "the drain record stays to put control back later");
+    // An executor start: the drain record isn't recovered while it's held.
+    crate::admin::update::recover_drain(&r.exec);
+    assert!(draining());
+    // A job running: the resume waits, and counts no attempt.
+    let st = crate::status::Status { running: vec!["j1-g1".into()], ..crate::status::read(&layout.status()).unwrap() };
+    crate::status::write(&layout.status(), &st).unwrap();
+    assert_eq!(resume(&r.exec, false).unwrap().unwrap_err().code, code::BUSY);
+    assert_eq!(read_step(&r.exec).unwrap().unwrap().attempts, 0);
+    online(r, &[1, 2]);
+    // The node swaps on the next restart: the resume finishes.
+    swap_on_restart(r);
+    let out = resume_past_busy(r).expect("a change to resume");
+    assert!(out.is_ok(), "{out:?}");
+    assert_eq!(file(r).owner, t.b.fingerprint());
+    crate::admin::update::recover_drain(&r.exec);
+    assert_eq!(crate::config::read_control(&layout.control()).unwrap().control, k2_node_proto::frames::Control::Active, "control is back once it's done");
 }

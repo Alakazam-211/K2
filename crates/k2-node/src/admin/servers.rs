@@ -351,6 +351,66 @@ pub(crate) fn write_book(state_dir: &Path, b: &Book) -> Result<(), String> {
     crate::util::atomic_write(&book_path(state_dir), &body, 0o600)
 }
 
+/// Root-only (executor state dir, 0600): each tenant line's full key, as
+/// root recorded it when the line's add was confirmed (review F5). The
+/// anchor `servers.owner` checks the node's pin against.
+pub const KEYS_FILE: &str = "servers-keys.json";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Keys {
+    /// slot → (the line's `added_at`, full fingerprint).
+    #[serde(default)]
+    slots: BTreeMap<String, (i64, String)>,
+}
+
+fn read_keys(state_dir: &Path) -> Result<Keys, String> {
+    let p = state_dir.join(KEYS_FILE);
+    match std::fs::read(&p) {
+        Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", p.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Keys::default()),
+        Err(e) => Err(format!("read {}: {e}", p.display())),
+    }
+}
+
+/// Record a line's full key (replacing a reused slot's old one).
+pub(crate) fn record_key(state_dir: &Path, slot: Slot, fp: &str, added_at: i64) -> Result<(), String> {
+    if !share::valid_fp(fp) {
+        return Err(format!("{fp:?} isn't a full fingerprint"));
+    }
+    let mut k = read_keys(state_dir)?;
+    if k.slots.get(&slot.to_string()) == Some(&(added_at, fp.to_string())) {
+        return Ok(());
+    }
+    k.slots.insert(slot.to_string(), (added_at, fp.to_string()));
+    crate::util::mkdir_mode(state_dir, 0o700)?;
+    let body = serde_json::to_vec_pretty(&k).map_err(|e| e.to_string())?;
+    crate::util::atomic_write(&state_dir.join(KEYS_FILE), &body, 0o600)
+}
+
+/// The key root recorded for slot `slot`'s line added at `added_at`.
+pub(crate) fn recorded_key(state_dir: &Path, slot: Slot, added_at: i64) -> Option<String> {
+    read_keys(state_dir).ok()?.slots.get(&slot.to_string()).filter(|(at, _)| *at == added_at).map(|(_, fp)| fp.clone())
+}
+
+/// Record the key of every live tenant line whose confirmed pin serves it
+/// and that has none yet: at the add's confirmation (the prune that
+/// promotes it), and once for lines confirmed before 0.46.4.
+fn record_confirmed_keys(ctx: &Ctx, f: &ServersFile) {
+    let layout = ctx.layout();
+    for e in f.servers.iter().filter(|e| e.slot != OWNER_SLOT && matches!(e.state, ShareState::Active | ShareState::Paused)) {
+        if recorded_key(&ctx.state_dir, e.slot, e.added_at).is_some() {
+            continue;
+        }
+        let pin = crate::identity::read_tenant_pin_safely(&layout.tenant(e.slot).pin()).ok().flatten();
+        let Some((p, _)) = pin.filter(|(p, _)| p.confirmed && !p.revoked && crate::node::tenant::pin_serves(e, p)) else { continue };
+        let Ok(der) = p.controller_spki() else { continue };
+        let fp = k2_node_proto::crypto::fingerprint_of_spki_der(&der);
+        if let Err(x) = record_key(&ctx.state_dir, e.slot, &fp, e.added_at) {
+            crate::nlog!("servers: recording slot {}'s key: {x}", e.slot);
+        }
+    }
+}
+
 // ── shared helpers ───────────────────────────────────────────────────
 
 /// A plain label from a URL's host (`https://baden.k2.dev:8443/` →
@@ -753,6 +813,7 @@ pub(crate) fn prune_locked(ctx: &Ctx) -> Result<Value, AdminRefusal> {
     if f != before {
         write_file(&ctx.config_dir, &f).map_err(failed)?;
     }
+    record_confirmed_keys(ctx, &f);
     Ok(json!({"changed": changed, "wiped": wiped, "wipe_failed": wipe_failed}))
 }
 
@@ -1175,6 +1236,49 @@ mod tests {
         assert_eq!(r["slot"].as_u64(), Some(1));
         let b = read_file(&t.ctx.config_dir).unwrap().unwrap();
         assert_eq!((b.entry(1).unwrap().label.as_str(), b.entry(1).unwrap().state), ("b.k2.dev", ShareState::Pending));
+    }
+
+    /// Review F5: the prune that confirms an add records the server's full
+    /// key in root's own file, for that line only (a reused slot's new line
+    /// has none until its own confirmation); a later change of the node's
+    /// pin never changes the record.
+    #[test]
+    fn the_confirming_prune_records_the_full_key() {
+        let t = setup(false);
+        // A real key whose first 16 hex are the code's prefix.
+        let k = SigningKey::generate().unwrap();
+        let prefix = k.fingerprint()[..16].to_string();
+        add(&t.ctx, &add_args("https://a.k2.dev", &prefix, Trust::Own)).unwrap();
+        let added_at = read_file(&t.ctx.config_dir).unwrap().unwrap().entry(1).unwrap().added_at;
+        prune(&t.ctx).unwrap();
+        assert_eq!(recorded_key(&t.ctx.state_dir, 1, added_at), None, "not confirmed yet: no record");
+        let pin_with = |key: &SigningKey, fp: String| crate::identity::Pin {
+            controller_fp: fp,
+            controller_public_key_pem: key.spki_pem(),
+            routes: vec!["https://a.k2.dev".into()],
+            node_id: "n1".into(),
+            name: "mini-1".into(),
+            enrolled_at: t.ctx.now,
+            sas: "1".into(),
+            revoked: false,
+            revoked_reason: None,
+            labels: Default::default(),
+            confirmed: true,
+        };
+        let pin_path = t.ctx.layout().tenant(1).pin();
+        crate::identity::write_tenant_pin(&pin_path, &pin_with(&k, k.fingerprint()), &Default::default()).unwrap();
+        prune(&t.ctx).unwrap();
+        let rec = recorded_key(&t.ctx.state_dir, 1, added_at).expect("recorded at confirmation");
+        assert_eq!(rec, k.fingerprint());
+        assert_eq!(recorded_key(&t.ctx.state_dir, 1, added_at + 1), None, "only for that very line");
+        // The node's pin changes later (another key): the record stays.
+        let other = SigningKey::generate().unwrap();
+        crate::identity::write_tenant_pin(&pin_path, &pin_with(&other, other.fingerprint()), &Default::default()).unwrap();
+        prune(&t.ctx).unwrap();
+        assert_eq!(recorded_key(&t.ctx.state_dir, 1, added_at).as_deref(), Some(rec.as_str()), "a record is never replaced by the node's word");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(t.ctx.state_dir.join(KEYS_FILE)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     /// Narrowing is Operate; any widening (or a later end date) is

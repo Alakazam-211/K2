@@ -940,14 +940,59 @@ fn restore_control(e: &Executor, d: &DrainRecord) {
     }
 }
 
+/// Control must stay at `draining` (prd-macos-tenant-compute-v1 MT33, review
+/// F1): an owner change is unfinished (its root-only step file exists), so
+/// no job may start until it ends. Its drain record stays too, so control
+/// goes back once the change is done.
+pub(crate) fn control_held(e: &Executor) -> bool {
+    e.paths.state_dir.join(super::owner::STEP_FILE).exists()
+}
+
+/// Make sure control says `draining` for `what`, recording the owner's own
+/// control first when no drain record exists (so it's put back later).
+/// `Ok(true)` when control changed now (a job the node accepted just before
+/// may not be counted yet: wait a settle before acting).
+pub(crate) fn hold_draining(e: &Executor, what: &str, cmd_id: &str) -> Result<bool, String> {
+    let control_path = e.paths.layout().control();
+    let cur = crate::config::read_control(&control_path)?;
+    let rec = match std::fs::read(drain_path(e)).ok().and_then(|b| serde_json::from_slice::<DrainRecord>(&b).ok()) {
+        Some(r) => r,
+        None => {
+            let r = DrainRecord {
+                what: what.to_string(),
+                cmd_id: cmd_id.to_string(),
+                by: format!("k2-node {what} (draining)"),
+                prior_control: cur.control,
+                prior_by: cur.by.clone(),
+                prior_at: cur.at,
+                at: e.now(),
+            };
+            let b = serde_json::to_vec(&r).map_err(|x| x.to_string())?;
+            crate::util::atomic_write(&drain_path(e), &b, 0o600)?;
+            r
+        }
+    };
+    if cur.control == k2_node_proto::frames::Control::Draining && cur.by.as_deref() == Some(rec.by.as_str()) {
+        return Ok(false);
+    }
+    crate::config::write_control(&control_path, k2_node_proto::frames::Control::Draining, &rec.by, e.now())?;
+    Ok(true)
+}
+
 /// On executor start: a drain the last executor didn't finish (it exited
-/// to re-exec, or crashed) never acts now; control goes back to the owner's.
+/// to re-exec, or crashed) never acts now; control goes back to the owner's,
+/// unless an owner change is unfinished ([`control_held`]): then control
+/// stays `draining` until it's done.
 pub fn recover_drain(e: &Executor) {
     let p = drain_path(e);
     let Some(d) = std::fs::read(&p).ok().and_then(|b| serde_json::from_slice::<DrainRecord>(&b).ok()) else {
         let _ = std::fs::remove_file(&p);
         return;
     };
+    if control_held(e) {
+        crate::nlog!("admin: an owner change is unfinished; control stays draining until it's done");
+        return;
+    }
     restore_control(e, &d);
     let _ = std::fs::remove_file(&p);
     crate::nlog!("admin: drain for {} (cmd {}) ended with the last executor; control is back to {:?}", d.what, d.cmd_id, d.prior_control);
@@ -1060,8 +1105,15 @@ where
             } else {
                 act(&ex)
             };
-            restore_control(&ex, &rec);
-            let _ = std::fs::remove_file(drain_path(&ex));
+            if control_held(&ex) {
+                // An owner change stopped part way: no job may start until
+                // it's finished (on resume), so control stays `draining` and
+                // the drain record stays to put it back then (review F1).
+                crate::nlog!("admin: {} stopped part way; control stays draining until it's finished", rec.what);
+            } else {
+                restore_control(&ex, &rec);
+                let _ = std::fs::remove_file(drain_path(&ex));
+            }
             r
         };
         let _ = ex.audit().append(

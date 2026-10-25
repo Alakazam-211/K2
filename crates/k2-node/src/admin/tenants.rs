@@ -384,6 +384,27 @@ impl Executor {
         r
     }
 
+    /// `servers.owner`'s first act (review F6): every unit and process of
+    /// slot `slot`'s user stops before its files move. Only `servers.owner`
+    /// calls it, after its drain; never reachable from the node's socket.
+    /// Linux only. Audited.
+    pub fn tenant_stop_processes(&self, slot: Slot) -> Result<Value, AdminRefusal> {
+        if slot == OWNER_SLOT || !share::valid_slot(slot) {
+            return Err(refuse(code::BAD_ARGS, format!("slot {slot} isn't a tenant slot (1–7)")));
+        }
+        let _g = ops_lock(self)?;
+        let mut removed: Vec<String> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+        self.stop_slot_processes(slot, &mut removed, &mut errors);
+        let r = if errors.is_empty() {
+            Ok(json!({"slot": slot, "removed": removed}))
+        } else {
+            Err(failed(format!("slot {slot}'s processes only partly stopped: {}", errors.join("; "))))
+        };
+        self.audit_tenant_op("tenant.stop", slot, &r);
+        r
+    }
+
     /// Linux: every unit and process of the slot's user, and its leftovers
     /// in `/dev/shm`, `/tmp` and `/var/tmp`. Nothing on macOS (no user).
     fn stop_slot_processes(&self, slot: Slot, removed: &mut Vec<String>, errors: &mut Vec<String>) {

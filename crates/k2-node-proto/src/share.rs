@@ -1131,10 +1131,13 @@ impl Caches {
 pub struct OwnerArgs {
     /// A label, or `slot:<n>` (never `slot:0`).
     pub server: String,
-    /// The target's full key fingerprint as the owner server saw it. The
-    /// executor checks the node's pin against it, so the node can't put
-    /// another key in. Required on a signed command; at the machine root
-    /// reads it from the pin and shows it.
+    /// The target's full key fingerprint. Required (signed or at the
+    /// machine). The executor checks it, and the node's pin, against the key
+    /// root recorded in its own state when the target's add was confirmed:
+    /// that record is the anchor (its first 64 bits were fixed by the add's
+    /// code). An owner server fills this from the node's own list, so it
+    /// catches a mix-up, not a lying node; the person checks the full key on
+    /// the approval card against what the new owner server shows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fp: Option<String>,
     #[serde(default)]

@@ -59,7 +59,7 @@ More than one K2 server (0.46.3; the machine owner, at this machine):
                  (the add flags; key=value works too: cpus=8 mem=32G cpu-hours=48)
   k2-node servers pause|resume <server>
   sudo k2-node servers revoke <server> [--now] [--wipe]
-  sudo k2-node servers owner <server> [--old keep|revoke] [--caches move|wipe] [--now] [--fp FP]
+  sudo k2-node servers owner <server> --fp FP [--old keep|revoke] [--caches move|wipe] [--now]
                  make another of your own servers on this node its owner (it must be active,
                  confirmed and online): after a drain (--now stops running jobs), the two swap
                  slots, caches move with their server (or --caches wipe), root re-pins admin.toml.
@@ -653,7 +653,12 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
                     Some(v) => share::Caches::parse(v).ok_or("--caches move|wipe")?,
                     None => share::Caches::Move,
                 };
-                let o = share::OwnerArgs { server: server()?, fp: a.get("fp").map(str::to_string), old, caches, now: a.has("--now") };
+                // The full key, typed by the person who read it on the new
+                // owner server: never taken from this node (review F5).
+                let fp = a.get("fp").ok_or(
+                    "--fp is the new owner's full key fingerprint (64 hex): on the new owner server, `k2 compute nodes --json` shows it as controllerFp",
+                )?;
+                let o = share::OwnerArgs { server: server()?, fp: Some(fp.to_string()), old, caches, now: a.has("--now") };
                 share::check_verb_args(share::VERB_OWNER, &serde_json::to_value(&o).map_err(|e| e.to_string())?)?;
                 Some(o)
             };

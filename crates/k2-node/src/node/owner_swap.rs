@@ -57,14 +57,65 @@ fn exists(p: &Path) -> bool {
     std::fs::symlink_metadata(p).is_ok()
 }
 
+/// Move `from` to `to`. Nothing to move is fine. When both exist, an empty
+/// directory at `to` (made by a start in between) gives way; anything else
+/// refuses: both copies stay for a person, never one deleted (review F7).
 fn mv(from: &Path, to: &Path) -> Result<(), String> {
-    if !exists(from) || exists(to) {
+    if !exists(from) {
         return Ok(());
+    }
+    if exists(to) {
+        let empty_dir = std::fs::symlink_metadata(to).is_ok_and(|m| m.is_dir()) && std::fs::read_dir(to).is_ok_and(|mut d| d.next().is_none());
+        if !empty_dir {
+            return Err(format!("both {} and {} exist; nothing more moved (a person must look; neither is deleted)", from.display(), to.display()));
+        }
+        std::fs::remove_dir(to).map_err(|e| format!("remove empty {}: {e}", to.display()))?;
     }
     if let Some(d) = to.parent() {
         std::fs::create_dir_all(d).map_err(|e| format!("create {}: {e}", d.display()))?;
     }
     std::fs::rename(from, to).map_err(|e| format!("move {} → {}: {e}", from.display(), to.display()))
+}
+
+/// The new owner's journals (slot N's node-only logs, staged in `to/`)
+/// go into its job folders, now under the node home (an owner's journal is
+/// `jobs/<attempt>/log`); one whose folder is gone, or taken, is kept in a
+/// node-only folder of this change. Never deleted (review F7, F8).
+fn place_owner_journals(layout: &Layout, staged: &Path, keep: &Path) -> Result<(), String> {
+    let Ok(rd) = std::fs::read_dir(staged) else { return Ok(()) };
+    for ent in rd.flatten() {
+        let name = ent.file_name().to_string_lossy().into_owned();
+        let Some(attempt) = name.strip_suffix(".log") else { continue };
+        let dir = layout.jobs().join(attempt);
+        let dest = dir.join("log");
+        let real_dir = std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir());
+        if real_dir && !exists(&dest) {
+            mv(&ent.path(), &dest)?;
+        } else {
+            crate::util::mkdir_mode(keep, 0o700)?;
+            mv(&ent.path(), &keep.join(&name))?;
+        }
+    }
+    Ok(())
+}
+
+/// The old owner's job logs (`jobs/<attempt>/log`, which root moved with
+/// its job folders into slot N's tree, where slot N's jobs may write) go to
+/// slot N's node-only journal (`state/tenants/N/journal/<attempt>.log`),
+/// so a tenant's job can never edit them (review F8). Plain files only.
+fn take_old_owner_logs(layout: &Layout, slot: u8) -> Result<(), String> {
+    let t = layout.tenant(slot);
+    let journal = t.state().join("journal");
+    let Ok(rd) = std::fs::read_dir(t.jobs()) else { return Ok(()) };
+    for ent in rd.flatten() {
+        let log = ent.path().join("log");
+        if !std::fs::symlink_metadata(&log).is_ok_and(|m| m.file_type().is_file()) {
+            continue;
+        }
+        crate::util::mkdir_mode(&journal, 0o700)?;
+        mv(&log, &journal.join(format!("{}.log", ent.file_name().to_string_lossy())))?;
+    }
+    Ok(())
 }
 
 fn fsync_dir(p: &Path) {
@@ -114,6 +165,8 @@ pub fn apply_change(layout: &Layout, n: &NodeChange, now: i64) -> Result<Outcome
             mv(&owner, &from.join(name))?;
             mv(&tenant, &to.join(name))?;
         }
+        // Slot N's node-only journals are the new owner's logs.
+        mv(&layout.tenant(n.slot).state().join("journal"), &to.join("journal"))?;
         fsync_dir(&from);
         fsync_dir(&to);
         std::fs::create_dir(&marker).or_else(|e| if e.kind() == std::io::ErrorKind::AlreadyExists { Ok(()) } else { Err(e) }).map_err(|e| format!("create {}: {e}", marker.display()))?;
@@ -127,12 +180,15 @@ pub fn apply_change(layout: &Layout, n: &NodeChange, now: i64) -> Result<Outcome
         match name {
             // The pins change format: the owner's is a plain `Pin`, a
             // tenant's carries the node's flags (fresh for the old owner).
+            // Each staged pin goes only once its new copy is written.
             "pin" => {
                 if let Some((p, _)) = crate::identity::read_tenant_pin(&to.join(name))? {
                     crate::identity::write_pin(&owner, &p)?;
+                    std::fs::remove_file(to.join(name)).map_err(|e| format!("remove the staged pin: {e}"))?;
                 }
                 if let Some(p) = crate::identity::read_pin(&from.join(name))? {
                     crate::identity::write_tenant_pin(&tenant, &p, &Default::default())?;
+                    std::fs::remove_file(from.join(name)).map_err(|e| format!("remove the staged pin: {e}"))?;
                 }
             }
             _ => {
@@ -140,6 +196,12 @@ pub fn apply_change(layout: &Layout, n: &NodeChange, now: i64) -> Result<Outcome
                 mv(&from.join(name), &tenant)?;
             }
         }
+    }
+    // Logs: each server keeps its own, node-only for the tenant (F8).
+    take_old_owner_logs(layout, n.slot)?;
+    place_owner_journals(layout, &to.join("journal"), &layout.state().join("owner-change-logs").join(&n.id))?;
+    if exists(&to.join("journal")) {
+        std::fs::remove_dir(to.join("journal")).map_err(|e| format!("the staged journal folder isn't empty: {e}"))?;
     }
     layout.tenant(n.slot).ensure_state()?;
     // The old owner's state in slot N belongs to its new line.
@@ -150,15 +212,22 @@ pub fn apply_change(layout: &Layout, n: &NodeChange, now: i64) -> Result<Outcome
     Ok(Outcome::Swapped)
 }
 
-/// The queue rows (once per id), the done record, the staging folder.
+/// The staging folder goes only when everything staged was placed: each
+/// part is removed with `remove_dir`, which refuses a folder with anything
+/// left in it (review F7). Then the queue rows (once per id) and the done
+/// record.
 fn finish(layout: &Layout, n: &NodeChange, stage: &Path) -> Result<(), String> {
+    if exists(stage) {
+        for d in [stage.join("from"), stage.join("to"), stage.join("b"), stage.to_path_buf()] {
+            if exists(&d) {
+                std::fs::remove_dir(&d).map_err(|e| format!("{} still holds staged files ({e}); nothing deleted, a person must look", d.display()))?;
+            }
+        }
+    }
     let mut q = crate::queue_store::QueueStore::open(&layout.state().join("queue.sqlite"))?;
     q.swap_slots(0, n.slot, &n.id)?;
     drop(q);
     crate::util::atomic_write(&layout.state().join(APPLIED), n.id.as_bytes(), 0o600)?;
-    if exists(stage) {
-        std::fs::remove_dir_all(stage).map_err(|e| format!("remove {}: {e}", stage.display()))?;
-    }
     Ok(())
 }
 
@@ -189,6 +258,14 @@ mod tests {
         std::fs::create_dir_all(layout.tenant(0).artifacts()).unwrap();
         std::fs::write(layout.tenant(0).artifacts().join("a.txt"), b"owner artifact").unwrap();
         std::fs::write(t.state().join(crate::session::LINE_MARK_FILE), b"bbbbbbbbbbbbbbbb:10").unwrap();
+        // Logs, after root's tree move: the new owner's job folder is under
+        // the home now (its log still node-only in slot 2's journal); the
+        // old owner's job folder, with its log, is in slot 2's tree.
+        std::fs::create_dir_all(layout.jobs().join("jb-g1")).unwrap();
+        std::fs::write(t.state().join("journal").join("jb-g1.log"), b"B-LOG").unwrap();
+        std::fs::write(t.state().join("journal").join("jc-g1.log"), b"C-LOG").unwrap();
+        std::fs::create_dir_all(t.jobs().join("ja-g1")).unwrap();
+        std::fs::write(t.jobs().join("ja-g1").join("log"), b"A-LOG").unwrap();
         let n = NodeChange { v: 1, id: "c1".into(), slot: 2, from_fp: a.clone(), to_fp: b, line_mark: format!("{}:500", &a[..16]), at: 500 };
         (layout, n)
     }
@@ -213,8 +290,37 @@ mod tests {
         assert_eq!(read(t.artifacts().join("a.txt")), "owner artifact");
         assert_eq!(read(t.state().join(crate::session::LINE_MARK_FILE)), n.line_mark);
         assert!(!exists(&layout.state().join(STAGE).join("c1")), "the staging folder is gone");
+        // F8: each server keeps its own logs; the old owner's leave the
+        // tree slot 2's jobs can write.
+        assert_eq!(read(layout.jobs().join("jb-g1").join("log")), "B-LOG", "the new owner's log is in its job folder");
+        assert_eq!(read(t.state().join("journal").join("ja-g1.log")), "A-LOG", "the old owner's log is node-only in slot 2");
+        assert!(!exists(&t.jobs().join("ja-g1").join("log")), "no log left where slot 2's jobs can edit it");
+        assert_eq!(read(layout.state().join("owner-change-logs").join("c1").join("jc-g1.log")), "C-LOG", "a log whose folder is gone is kept, never deleted");
+        assert!(!exists(&t.state().join("journal").join("jb-g1.log")), "the new owner's logs left slot 2");
         assert_eq!(apply_change(&layout, &n, 601).unwrap(), Outcome::Nothing, "done: never swapped back");
         assert_eq!(crate::identity::read_pin(&layout.pin()).unwrap().unwrap().controller_fp, n.to_fp);
+    }
+
+    /// F7: a staged file whose destination exists too (something made it in
+    /// between) stops the swap; both copies stay, nothing is deleted, and
+    /// the staging folder is kept.
+    #[test]
+    fn a_staged_file_is_never_deleted_unplaced() {
+        let (layout, n) = setup();
+        let stage = layout.state().join(STAGE).join(&n.id);
+        for (name, owner, tenant) in items(&layout, 2) {
+            mv(&owner, &stage.join("from").join(name)).unwrap();
+            mv(&tenant, &stage.join("to").join(name)).unwrap();
+        }
+        std::fs::create_dir(stage.join("b")).unwrap();
+        // A new owner ledger appeared before phase B.
+        std::fs::write(layout.ledger(), b"FRESH").unwrap();
+        let e = apply_change(&layout, &n, 600).unwrap_err();
+        assert!(e.contains("both") && e.contains("neither is deleted"), "{e}");
+        assert_eq!(read(layout.ledger()), "FRESH");
+        assert_eq!(read(stage.join("to").join("ledger.sqlite")), "B-LEDGER", "the staged copy is still there");
+        assert!(exists(&stage), "the staging folder stays for a person");
+        assert_ne!(applied(&layout).as_deref(), Some("c1"), "not recorded as done");
     }
 
     /// MT33: a start that died in phase A or B finishes the swap.

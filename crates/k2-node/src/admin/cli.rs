@@ -46,9 +46,9 @@ pub fn serve(paths: ExecPaths, socket: &Path) -> Result<(), String> {
     super::update::resume_pending(&exec);
     // An owner change the last executor didn't finish goes on first, while
     // control still says `draining` (prd-macos-tenant-compute-v1 MT33).
-    if let Some(Err(e)) = super::owner::resume(&exec, false) {
-        crate::nlog!("admin: owner change not finished: {} ({})", e.message, e.code);
-    }
+    // In the background: it holds control at `draining` and waits for
+    // running jobs first (review F1); control stays held until it's done.
+    super::owner::spawn_resume(&exec);
     // A drain the last executor left behind never keeps the owner's
     // control at `draining` (B-M2).
     super::update::recover_drain(&exec);

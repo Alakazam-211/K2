@@ -8,9 +8,15 @@
 //! owner: it would get root admin over the machine.
 //!
 //! Who: the current owner server, with the owner's approval signature at
-//! `full` (the signed verb, which names the target's full fingerprint so
-//! the node can't slip another key in), or root at the machine (`sudo
-//! k2-node servers owner …`, an unsigned local op only root may send).
+//! `full`, or root at the machine (`sudo k2-node servers owner … --fp FP`,
+//! an unsigned local op only root may send). Both name the target's full
+//! key fingerprint. What anchors that key is root's own record, taken when
+//! the target's add was confirmed (`servers.prune`, from the confirmed pin
+//! whose first 64 bits the add's code fixed); the node's pin of today and
+//! the named `fp` must both equal it. The owner server's `fp` comes from
+//! the node's own list, so it guards against a mix-up, not a lying node:
+//! the person compares the full key on the approval card with what the new
+//! owner server shows (`controllerFp` in `k2 compute nodes --json`).
 //!
 //! What root does, never during work: a settling drain first (no new
 //! starts; running jobs finish, or stop with `now` as
@@ -227,14 +233,35 @@ pub fn plan(e: &Executor, a: &OwnerArgs, need_fp: bool, check_online: bool) -> R
     }
     let der = pin.controller_spki().map_err(|x| refuse(codes::OWNER_TARGET_NOT_READY, format!("{}'s pin: {x}", to.label)))?;
     let to_fp = crypto::fingerprint_of_spki_der(&der);
+    // The anchor (review F5): the full key root recorded in its own state
+    // when this server's add was confirmed (servers.prune), never the
+    // node's pin of today alone. The pin, the caller's `fp` and the record
+    // must all be the same key.
+    let recorded = servers::recorded_key(&e.paths.state_dir, to.slot, to.added_at).ok_or_else(|| {
+        refuse(
+            codes::OWNER_TARGET_NOT_READY,
+            format!("root has no record of {}'s key yet (taken when its add is confirmed, on the next prune); try again in a minute", to.label),
+        )
+    })?;
+    if recorded != to_fp {
+        return Err(refuse(
+            code::BAD_ARGS,
+            format!("the node's pin for {} has another key ({}) than root recorded when it was confirmed ({}); nothing changed", to.label, &to_fp[..16], &recorded[..16]),
+        ));
+    }
     match a.fp.as_deref() {
         Some(want) if want != to_fp => {
             return Err(refuse(
                 code::BAD_ARGS,
-                format!("the node's pin for {} has another key ({}) than the one named ({}); nothing changed", to.label, &to_fp[..16], &want[..16.min(want.len())]),
+                format!("{}'s key here ({}) isn't the one named ({}); nothing changed", to.label, &to_fp[..16], &want[..16.min(want.len())]),
             ))
         }
-        None if need_fp => return Err(refuse(code::BAD_ARGS, "servers.owner names the new owner's full key fingerprint (fp)")),
+        None if need_fp => {
+            return Err(refuse(
+                code::BAD_ARGS,
+                "name the new owner's full key fingerprint (fp): the new owner server shows it as controllerFp in `k2 compute nodes --json`",
+            ))
+        }
         _ => {}
     }
     if to_fp == from.fp_prefix {
@@ -320,10 +347,16 @@ fn finish(e: &Executor, step: Step) -> Result<Value, AdminRefusal> {
 }
 
 /// The steps from wherever `step` stands (each recorded before it runs).
+/// Control stays `draining` while the step file exists (review F1).
 pub fn run_steps(e: &Executor, mut step: Step) -> Result<Value, AdminRefusal> {
     let ctx = Ctx::for_executor(e, &format!("owner-change:{}", step.id));
     let _g = servers::servers_lock(&ctx)?;
     if step.phase == Phase::Trees {
+        // Nothing of slot N's may still be running while its files move
+        // (a daemonized leftover of an ended job; review F6).
+        if ctx.root && cfg!(target_os = "linux") {
+            e.tenant_stop_processes(step.slot)?;
+        }
         move_trees(e, &ctx, &step)?;
         step.phase = Phase::Users;
         write_step(e, &step)?;
@@ -341,10 +374,16 @@ pub fn run_steps(e: &Executor, mut step: Step) -> Result<Value, AdminRefusal> {
         // The node swaps its files at start, while servers.toml still names
         // the old owner (it opens no tenant in between).
         super::update::restart_marked(e, share::VERB_OWNER, &step.id, |e| e.platform.restart_unit("k2-node")).map_err(failed)?;
+        // Nothing else moves until the node shows it swapped (review F3).
+        wait_for_swap(e, &step)?;
         step.phase = Phase::Files;
         write_step(e, &step)?;
     }
     rewrite_servers(&ctx, &step)?;
+    // Root's admin goes to the new owner before anything of the old
+    // owner's slot is touched, so nothing after this can leave it with the
+    // old one (review F2).
+    repin_admin(e, &step)?;
     let old_uid = match step.old {
         OldOwner::Keep => prepare_old_owner(&ctx, &step)?,
         OldOwner::Revoke => {
@@ -353,14 +392,36 @@ pub fn run_steps(e: &Executor, mut step: Step) -> Result<Value, AdminRefusal> {
         }
     };
     let rehomed = rehome(e, &ctx, &step)?;
-    repin_admin(e, &step)?;
     std::fs::remove_file(step_path(e)).map_err(|x| failed(format!("remove {STEP_FILE}: {x}")))?;
     Ok(json!({"owner": step.to_label, "slot": step.slot, "old": step.old.as_str(), "caches": step.caches.as_str(), "old_uid": old_uid, "rehomed": rehomed}))
 }
 
-/// On executor start (before the drain record is recovered, so control
-/// still says `draining`): finish an owner change the last executor
-/// didn't, and drop a node instruction past its age.
+/// After the marked restart: the node's own owner pin must name the new
+/// owner (it swapped its files at start) before the Files step. Never
+/// arriving fails the step; it's retried on resume (review F3).
+fn wait_for_swap(e: &Executor, step: &Step) -> Result<(), AdminRefusal> {
+    let pin = e.paths.layout().pin();
+    let deadline = std::time::Instant::now() + e.node_swap_wait;
+    loop {
+        if crate::identity::read_pin_safely(&pin).ok().flatten().is_some_and(|p| p.controller_fp == step.to_fp) {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(failed(format!(
+                "k2-node didn't swap its files within {} s of the restart (its owner pin isn't {}'s); nothing else changed, the change resumes",
+                e.node_swap_wait.as_secs(),
+                step.to_label
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(if cfg!(test) { 10 } else { 1000 }));
+    }
+}
+
+/// Finish an owner change the last executor didn't, and drop a node
+/// instruction past its age. Never with a job running: control is held at
+/// `draining` first, and a job still running (or a control that only just
+/// went to `draining`) answers `busy` without counting an attempt (review
+/// F1). [`spawn_resume`] retries those.
 pub fn resume(e: &Executor, force: bool) -> Option<Result<Value, AdminRefusal>> {
     retire_node_change(e);
     let mut step = match read_step(e) {
@@ -375,13 +436,52 @@ pub fn resume(e: &Executor, force: bool) -> Option<Result<Value, AdminRefusal>> 
         crate::nlog!("admin: owner change {} failed {} times; it waits for sudo k2-node servers owner --resume", step.id, step.attempts);
         return Some(Err(failed(format!("owner change {} failed {} times; run sudo k2-node servers owner --resume", step.id, step.attempts))));
     }
+    let _g = e.busy.lock().unwrap_or_else(|p| p.into_inner());
+    match super::update::hold_draining(e, share::VERB_OWNER, &step.id) {
+        Err(x) => return Some(Err(failed(format!("control can't be held at draining: {x}")))),
+        Ok(true) => {
+            return Some(Err(refuse(code::BUSY, "control was set to draining just now; the owner change resumes after one settle")));
+        }
+        Ok(false) => {}
+    }
+    let running = super::update::running_jobs(e);
+    if running > 0 {
+        return Some(Err(refuse(code::BUSY, format!("{running} job(s) still running; the owner change resumes once they end (control stays draining)"))));
+    }
     crate::nlog!("admin: resuming owner change {} (to {}) at {:?}", step.id, step.to_label, step.phase);
     step.attempts += 1;
     if let Err(x) = write_step(e, &step) {
         return Some(Err(x));
     }
-    let _g = e.busy.lock().unwrap_or_else(|p| p.into_inner());
     Some(finish(e, step))
+}
+
+/// On executor start: resume an unfinished owner change in the background,
+/// again after `busy` (jobs still running, control just held), until it's
+/// done or waits for a person; then put control back.
+pub fn spawn_resume(e: &Executor) {
+    if !matches!(read_step(e), Ok(Some(_))) {
+        retire_node_change(e);
+        return;
+    }
+    let ex = e.bg_handle();
+    std::thread::spawn(move || loop {
+        match resume(&ex, false) {
+            None => return,
+            Some(Ok(_)) => {
+                super::update::recover_drain(&ex);
+                return;
+            }
+            Some(Err(r)) if r.code == code::BUSY => std::thread::sleep(ex.drain_settle.max(std::time::Duration::from_millis(if cfg!(test) { 20 } else { 2000 }))),
+            Some(Err(r)) => {
+                crate::nlog!("admin: owner change not finished: {} ({})", r.message, r.code);
+                if read_step(&ex).ok().flatten().is_none_or(|s| s.attempts >= MAX_ATTEMPTS) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(if cfg!(test) { 20 } else { 60_000 }));
+            }
+        }
+    });
 }
 
 // ── 1. trees ─────────────────────────────────────────────────────────
@@ -447,30 +547,69 @@ fn node_ids(ctx: &Ctx) -> Option<(u32, u32)> {
     }
 }
 
-/// Step 1 (see the module doc). Idempotent per entry: phase A empties
-/// both slots' trees into the staging folder (`from/` = the old owner's,
-/// `to/` = the target's), the marker `b` says it's done, phase B fills
-/// each slot from the other's staging.
+/// Move every entry of `src` into the root-only trash `dst` (renames only:
+/// nothing a job planted, however deep, can make this fail; a name already
+/// in the trash gets a random suffix).
+fn trash_entries(src: &OwnedFd, dst: &OwnedFd, what: &str) -> Result<(), AdminRefusal> {
+    for name in crate::wall::entry_names(src).map_err(io(what))? {
+        let mut to = name.clone();
+        if crate::wall::exists_at(dst, &to) {
+            let r = crypto::random_id().map_err(failed)?;
+            to = CString::new(format!("{}.{}", name.to_string_lossy(), &r[..12.min(r.len())])).map_err(|x| failed(x.to_string()))?;
+        }
+        crate::wall::rename_between(src, &name, dst, &to).map_err(io(what))?;
+    }
+    crate::wall::sync_dir(src);
+    crate::wall::sync_dir(dst);
+    Ok(())
+}
+
+/// Empty `trees` of each `(tag, parent)` into the trash folder.
+fn trash_trees(parents: &[(&str, &OwnedFd)], trees: &[&str], trash: &OwnedFd) -> Result<(), AdminRefusal> {
+    for (tag, parent) in parents {
+        for t in trees {
+            let Ok(src) = crate::wall::open_child_dir(parent, &cname(t)) else { continue };
+            let dst = crate::wall::ensure_child_dir(trash, &cname(&format!("{tag}-{t}")), 0o700).map_err(io(t))?;
+            trash_entries(&src, &dst, t)?;
+        }
+    }
+    Ok(())
+}
+
+/// The change's own staging folder name (its id when that's a plain name).
+fn work_name(step: &Step) -> String {
+    let ok = (1..=80).contains(&step.id.len()) && step.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if ok {
+        format!("change-{}", step.id)
+    } else {
+        "change".into()
+    }
+}
+
+/// Step 1 (see the module doc). Both slots' `tmp/` (sccache sockets,
+/// scratch) never move: they go to the root-only trash. With `caches =
+/// wipe`, so do the trees, by rename: a wipe can never fail half-way
+/// because of what a job left behind (the trash is removed afterwards, best
+/// effort; review F2). With `move`, idempotent per entry: phase A empties
+/// both slots' trees into this change's staging folder (`from/` = the old
+/// owner's, `to/` = the target's), the marker `b` says it's done, phase B
+/// fills each slot from the other's staging.
 fn move_trees(e: &Executor, ctx: &Ctx, step: &Step) -> Result<(), AdminRefusal> {
     let home = open_dir(&e.paths.home).map_err(failed)?;
     let troot = open_troot(ctx)?;
     let nu = node_ids(ctx);
     let slot = tree_dir(&troot, &step.slot.to_string(), nu, 0o700)?;
+    let stage_root = crate::wall::ensure_child_dir(&troot, &cname(STAGE_DIR), 0o700).map_err(io(STAGE_DIR))?;
+    let trash = crate::wall::ensure_child_dir(&stage_root, &cname("trash"), 0o700).map_err(io("trash"))?;
+    trash_trees(&[("owner", &home), ("slot", &slot)], &["tmp"], &trash)?;
     if step.caches == Caches::Wipe {
-        for t in TREES {
-            for parent in [&home, &slot] {
-                let Ok(d) = crate::wall::open_child_dir(parent, &cname(t)) else { continue };
-                for name in crate::wall::entry_names(&d).map_err(io(t))? {
-                    crate::wall::remove_tree_at(&d, &name).map_err(failed)?;
-                }
-            }
-        }
+        trash_trees(&[("owner", &home), ("slot", &slot)], TREES, &trash)?;
         return Ok(());
     }
     if crate::wall::device_of(&home).map_err(io("home"))? != crate::wall::device_of(&troot).map_err(io("tenants root"))? {
         return Err(failed("the node home and the tenants root are on different volumes; nothing moved (use caches wipe)"));
     }
-    let stage = crate::wall::ensure_child_dir(&troot, &cname(STAGE_DIR), 0o700).map_err(io(STAGE_DIR))?;
+    let stage = crate::wall::ensure_child_dir(&stage_root, &cname(&work_name(step)), 0o700).map_err(io(STAGE_DIR))?;
     let from = crate::wall::ensure_child_dir(&stage, &cname("from"), 0o700).map_err(io("from"))?;
     let to = crate::wall::ensure_child_dir(&stage, &cname("to"), 0o700).map_err(io("to"))?;
     let marker = cname("b");
@@ -522,7 +661,9 @@ fn write_node_change(e: &Executor, step: &Step) -> Result<(), AdminRefusal> {
         from_fp: step.from_fp.clone(),
         to_fp: step.to_fp.clone(),
         line_mark: old_line_mark(&step.from_fp, step.at),
-        at: step.at,
+        // Written now, so a late resume is never ignored as too old (the
+        // line mark keeps the change's own time; review F3).
+        at: e.now(),
     };
     let cfg = &e.paths.config_dir;
     super::update::ensure_mark_dir(cfg).map_err(failed)?;
@@ -566,6 +707,9 @@ fn retire_node_change(e: &Executor) {
 /// the old owner at slot N (`own`, active or revoked), every other line
 /// untouched. A file that names the target as owner already is done.
 fn rewrite_servers(ctx: &Ctx, step: &Step) -> Result<(), AdminRefusal> {
+    // Root's key record for the old owner's new line: its key is the one
+    // root pinned as controller (admin.toml), known for certain.
+    servers::record_key(&ctx.state_dir, step.slot, &step.from_fp, step.at).map_err(failed)?;
     let mut f = servers::read_file(&ctx.config_dir).map_err(failed)?.ok_or_else(|| failed("servers.toml is gone"))?;
     if f.owner == step.to_fp {
         return Ok(());
@@ -573,13 +717,15 @@ fn rewrite_servers(ctx: &Ctx, step: &Step) -> Result<(), AdminRefusal> {
     if f.owner != step.from_fp {
         return Err(failed("servers.toml names neither the old nor the new owner; fix it at the machine"));
     }
-    let f2 = swap_lines(&f, step)?;
+    let f2 = swap_lines(&f, step, ctx.macos)?;
     f = f2;
     servers::write_file(&ctx.config_dir, &f).map_err(failed)
 }
 
-/// The rewritten file (pure; see [`rewrite_servers`]).
-pub fn swap_lines(f: &ServersFile, step: &Step) -> Result<ServersFile, AdminRefusal> {
+/// The rewritten file (pure; see [`rewrite_servers`]). The old owner's new
+/// line gets a new server's default share, not the owner's limits: a raise
+/// goes through the usual approval (review F9).
+pub fn swap_lines(f: &ServersFile, step: &Step, macos: bool) -> Result<ServersFile, AdminRefusal> {
     let to = f.entry(step.slot).filter(|e| e.matches_fp(&step.to_fp)).cloned().ok_or_else(|| failed(format!("slot {} no longer holds {}", step.slot, step.to_label)))?;
     let from = f.entry(OWNER_SLOT).cloned().ok_or_else(|| failed("no owner line"))?;
     let by = format!("owner-change:{}", step.id);
@@ -597,6 +743,7 @@ pub fn swap_lines(f: &ServersFile, step: &Step) -> Result<ServersFile, AdminRefu
     old.fp_prefix = step.from_fp[..16].to_string();
     old.trust = Trust::Own;
     old.state = if step.old == OldOwner::Revoke { ShareState::Revoked } else { ShareState::Active };
+    old.set_limits(&share::ShareLimits::new_server(Trust::Own, macos));
     old.uid = None;
     old.expires_at = None;
     old.pending_until = 0;
@@ -627,21 +774,19 @@ fn prepare_old_owner(ctx: &Ctx, step: &Step) -> Result<Option<u32>, AdminRefusal
     Ok(uid)
 }
 
-/// `old = revoke`: slot N (now the old owner's) is revoked and wiped at
-/// once. Gone already = done.
+/// `old = revoke`: slot N (now the old owner's) is written revoked, as a
+/// plain revoke: the node opens it just long enough to tell the old owner
+/// its queued jobs ended `share_revoked` (review F10), and the slot is
+/// wiped 24 h later by the prune, which retries a wipe that fails. Nothing
+/// here can fail the change (review F2).
 fn revoke_old_owner(ctx: &Ctx, step: &Step) -> Result<(), AdminRefusal> {
     let f = servers::read_file(&ctx.config_dir).map_err(failed)?.ok_or_else(|| failed("servers.toml is gone"))?;
     if f.entry(step.slot).is_none() {
         return Ok(());
     }
     let mut b = servers::read_book(&ctx.state_dir).map_err(failed)?;
-    b.revoked.insert(step.slot.to_string(), (ctx.now, true));
-    servers::write_book(&ctx.state_dir, &b).map_err(failed)?;
-    let r = servers::prune_locked(ctx)?;
-    if let Some(x) = r["wipe_failed"].as_array().and_then(|v| v.iter().find(|x| x["slot"] == step.slot)) {
-        return Err(failed(format!("the old owner's slot {} is revoked, but its wipe failed: {} (retried on every prune)", step.slot, x["error"].as_str().unwrap_or("?"))));
-    }
-    Ok(())
+    b.revoked.entry(step.slot.to_string()).or_insert((ctx.now, false));
+    servers::write_book(&ctx.state_dir, &b).map_err(failed)
 }
 
 /// The moved trees, re-owned for their new slot (Linux, root): the new

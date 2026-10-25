@@ -1020,6 +1020,18 @@ pub(crate) fn line_mark(e: &ServerEntry) -> String {
     format!("{}:{}", e.fp_prefix, e.added_at)
 }
 
+/// Does a revoked line's own slot state (marked for this very line) hold
+/// jobs that never ended? Read without opening the tenant; a missing
+/// ledger is none.
+fn revoked_slot_has_open_jobs(layout: &crate::paths::Layout, e: &ServerEntry, slot: Slot) -> bool {
+    let t = layout.tenant(slot);
+    let marked = std::fs::read_to_string(t.state().join(LINE_MARK_FILE)).is_ok_and(|m| m == line_mark(e));
+    if !marked || !t.ledger().is_file() {
+        return false;
+    }
+    crate::ledger::Ledger::open(&t.ledger()).ok().and_then(|l| l.non_terminal().ok()).is_some_and(|v| !v.is_empty())
+}
+
 /// Forget a slot that has no server: its state dir and pin (the node's own
 /// files; quiet when already gone).
 fn forget_slot(layout: &crate::paths::Layout, slot: Slot) {
@@ -1179,7 +1191,12 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
             Some(t) => t,
             None => {
                 let pin_now = crate::identity::read_tenant_pin(&layout.tenant(slot).pin()).ok().flatten();
-                if !pin_now.is_some_and(|(p, _)| crate::node::tenant::pin_serves(e, &p)) || e.state == ShareState::Revoked {
+                // A revoked line opens only to report jobs it still has here:
+                // its queued ones end `share_revoked` on its own session (an
+                // old owner that left with `servers owner --old revoke`,
+                // review F10), never silently lost.
+                let revoked_idle = e.state == ShareState::Revoked && !revoked_slot_has_open_jobs(&layout, e, slot);
+                if !pin_now.is_some_and(|(p, _)| crate::node::tenant::pin_serves(e, &p)) || revoked_idle {
                     continue;
                 }
                 // The slot's node-only state belongs to one line: another

@@ -22,6 +22,9 @@ pub struct RecPlatform {
     pub fail_preflight: Mutex<bool>,
     /// `enable_job_wall` calls (the job user each named).
     pub walls: Mutex<Vec<String>>,
+    /// Runs on every `restart_unit` (the owner-change tests: the node's
+    /// half swaps its files as a real restart would).
+    pub on_restart: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 /// The node pid [`RecPlatform`] reports: this test process, so the mark
@@ -49,6 +52,9 @@ impl Platform for RecPlatform {
     }
     fn restart_unit(&self, unit: &str) -> Result<(), String> {
         self.calls.lock().unwrap().push(format!("restart-unit {unit}"));
+        if let Some(f) = self.on_restart.lock().unwrap().as_ref() {
+            f();
+        }
         Ok(())
     }
     fn node_pid(&self) -> Option<u32> {
@@ -126,9 +132,11 @@ impl Rig {
             preflights: Mutex::new(vec![]),
             fail_preflight: Mutex::new(false),
             walls: Mutex::new(vec![]),
+            on_restart: Mutex::new(None),
         });
         let mut exec = Executor::new(paths, plat.clone());
         exec.drain_settle = std::time::Duration::from_millis(60);
+        exec.node_swap_wait = std::time::Duration::from_secs(2);
         Self { exec, plat, ctl, owner, node_fp: node_key.fingerprint(), dir }
     }
 

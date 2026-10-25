@@ -38,7 +38,9 @@ str_enum!(
     ScopeKind {
         Server = "server",
         Workspace = "workspace",
-        /// Reserved until app installs exist (KV27).
+        /// Reserved in the `user` namespace until app installs exist (KV27).
+        /// In the `system` namespace (0.46.4, prd-custom-app-push-v1 CP12):
+        /// a custom App's push keys, `app/<service id>`, daemon only.
         App = "app",
         Session = "session",
         Engine = "engine",
@@ -186,15 +188,21 @@ impl Scope {
     pub fn person(id: impl Into<String>) -> Scope {
         Scope { kind: ScopeKind::Person, id: id.into() }
     }
+    /// One published App's own system secrets (its push keys): `id` = the
+    /// App's service id. `system` namespace only.
+    pub fn app(id: impl Into<String>) -> Scope {
+        Scope { kind: ScopeKind::App, id: id.into() }
+    }
 
     /// [`Self::validate`] for a write into `namespace`: the `person` scope
-    /// opens in the `system` namespace only (a person's wallet is K2's
-    /// own secret: no route ever returns a system value). Everything else
+    /// (a person's wallet) and the `app` scope (a custom App's push keys,
+    /// 0.46.4) open in the `system` namespace only: they are K2's own
+    /// secrets, and no route ever returns a system value. Everything else
     /// is [`Self::validate`].
     pub fn validate_for(&self, namespace: Namespace) -> Result<()> {
-        if self.kind == ScopeKind::Person && namespace == Namespace::System {
+        if matches!(self.kind, ScopeKind::Person | ScopeKind::App) && namespace == Namespace::System {
             if self.id.is_empty() || self.id.len() > 128 || self.id.chars().any(|c| c.is_control()) {
-                return Err(VaultError::bad_request("bad_scope", "person scope needs an id"));
+                return Err(VaultError::bad_request("bad_scope", format!("{} scope needs an id", self.kind)));
             }
             return Ok(());
         }
@@ -370,7 +378,14 @@ mod tests {
         assert_eq!(Scope::person("p-1").validate_for(Namespace::User).expect_err("user").code, "scope_reserved");
         assert_eq!(Scope::person("p-1").validate().expect_err("plain validate").code, "scope_reserved");
         assert_eq!(Scope::person("").validate_for(Namespace::System).expect_err("id").code, "bad_scope");
-        // App stays reserved everywhere.
-        assert_eq!(Scope { kind: ScopeKind::App, id: "x".into() }.validate_for(Namespace::System).expect_err("app").code, "scope_reserved");
+    }
+
+    #[test]
+    fn the_app_scope_opens_in_the_system_namespace_only() {
+        Scope::app("svc-1").validate_for(Namespace::System).expect("system ok");
+        assert_eq!(Scope::app("svc-1").validate_for(Namespace::User).expect_err("user").code, "scope_reserved");
+        assert_eq!(Scope::app("svc-1").validate().expect_err("plain validate").code, "scope_reserved");
+        assert_eq!(Scope::app("").validate_for(Namespace::System).expect_err("id").code, "bad_scope");
+        assert_eq!(Scope::app("a\nb").validate_for(Namespace::System).expect_err("control").code, "bad_scope");
     }
 }

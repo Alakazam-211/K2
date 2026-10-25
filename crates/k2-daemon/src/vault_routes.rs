@@ -1596,6 +1596,10 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // App's service id). Every caller, the owner token included (AR14).
     "app-approve",
     "app-key-mint",
+    // Custom App push (prd-custom-app-push-v1 CP13, CP17): setting or
+    // removing an App's Apple/Google push keys, every caller (the owner
+    // token included: agents can read it). `secretId` = the service id.
+    crate::app_push::creds::CONFIRM_ACTION,
     // App runtime (prd-k2-app-runtime-v1 §4.3): moving one App out of its
     // guarded container into the process exception (`secretId` = App id).
     "app-process-exception",

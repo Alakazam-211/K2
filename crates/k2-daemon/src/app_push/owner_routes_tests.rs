@@ -116,3 +116,101 @@ fn removing_a_device_is_admins_and_per_app() {
     assert_eq!((st, v.clone()), (200, json!({"ok": true, "removed": true})), "{v}");
     assert!(store::devices_for_app(&f.app, None).expect("list").is_empty());
 }
+
+pub(super) fn switches(ws: &str, build: bool, full: bool) {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    conn.execute(
+        "UPDATE projects SET agents_can_manage_skin = ?2, agents_can_manage_apps_full = ?3 WHERE id = ?1",
+        params![ws, build as i64, full as i64],
+    )
+    .expect("switches");
+}
+
+fn apns_body(app: &str) -> J {
+    json!({"app": app, "apns": {"p8": super::super::test_keys::EC_P256_P8, "keyId": "ABC123DEFG", "teamId": "TEAM123456", "bundleId": "com.example.app"}})
+}
+
+#[test]
+fn only_the_owner_in_person_with_a_fresh_confirm_sets_keys() {
+    let f = fx("keys");
+    let vault = crate::vault::ensure_test_vault();
+    switches(&f.ws, true, true);
+    // An agent (even at switch 2), an Admin and a shell tab: owner_only.
+    for who in [agent(&f.ws), login(Role::Admin), Who::Shell { project_id: f.ws.clone(), session_id: "s".into() }] {
+        let (st, v, _) = post(CREDENTIALS, &who, apns_body(&f.app));
+        assert_eq!((st, code(&v)), (403, "owner_only"), "{who:?}: {v}");
+    }
+    // The owner token without a confirm: asked for one, bound to this App.
+    let (st, v, raw) = post(CREDENTIALS, &Who::Owner, apns_body(&f.app));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
+    assert_eq!(v["error"]["serviceId"], f.app.as_str());
+    assert!(!raw.contains("PRIVATE KEY"), "{raw}");
+    // A bad key is refused before the confirm is spent.
+    let tok = vault.confirm.mint(super::super::creds::CONFIRM_ACTION, Some(&f.app), "owner", "local-auth");
+    let mut bad = apns_body(&f.app);
+    bad["apns"]["keyId"] = json!("short");
+    bad["confirmToken"] = json!(tok);
+    let (st, v, _) = post(CREDENTIALS, &Who::Owner, bad);
+    assert_eq!((st, code(&v)), (400, "usage"), "{v}");
+    // A confirm minted for another App doesn't open this one.
+    let other = vault.confirm.mint(super::super::creds::CONFIRM_ACTION, Some(&f.other_app), "owner", "local-auth");
+    let mut b = apns_body(&f.app);
+    b["confirmToken"] = json!(other);
+    let (st, v, _) = post(CREDENTIALS, &Who::Owner, b);
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
+    // The unspent confirm from above works once.
+    let mut b = apns_body(&f.app);
+    b["confirmToken"] = json!(tok);
+    let (st, v, raw) = post(CREDENTIALS, &Who::Owner, b.clone());
+    assert_eq!(st, 200, "{v}");
+    assert!(!raw.contains("PRIVATE KEY") && !raw.contains("MIG"), "never the key: {raw}");
+    assert_eq!(v["apns"]["keyId"], "ABC123DEFG");
+    assert_eq!(v["apns"]["bundleId"], "com.example.app");
+    assert_eq!(v["fcm"], J::Null);
+    let (st, v, _) = post(CREDENTIALS, &Who::Owner, b);
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "a confirm works once: {v}");
+    assert!(super::super::creds::load_apns(&f.app).is_ok());
+    // Nothing to set is usage.
+    let (st, v, _) = post(CREDENTIALS, &Who::Owner, json!({"app": f.app}));
+    assert_eq!((st, code(&v)), (400, "usage"), "{v}");
+}
+
+#[test]
+fn removing_keys_needs_the_same_confirm_and_status_shows_metadata_only() {
+    let f = fx("rmkeys");
+    let vault = crate::vault::ensure_test_vault();
+    let mut b = apns_body(&f.app);
+    b["confirmToken"] = json!(vault.confirm.mint(super::super::creds::CONFIRM_ACTION, Some(&f.app), "owner", "local-auth"));
+    let (st, v, _) = post(CREDENTIALS, &Who::Owner, b);
+    assert_eq!(st, 200, "{v}");
+    // Status: the owner, an Admin, and the App's own agent at switch 1.
+    switches(&f.ws, false, false);
+    let (st, v, _) = get(STATUS, &agent(&f.ws), &[("app", &f.app)]);
+    assert_eq!(st, 403, "switch 1 off: {v}");
+    switches(&f.ws, true, false);
+    for who in [Who::Owner, login(Role::Admin), agent(&f.ws)] {
+        let (st, v, raw) = get(STATUS, &who, &[("app", &f.app)]);
+        assert_eq!(st, 200, "{who:?}: {v}");
+        assert_eq!(v["state"], "off");
+        assert_eq!(v["off"], "not_approved");
+        assert_eq!(v["apns"]["teamId"], "TEAM123456");
+        assert!(!raw.contains("PRIVATE KEY"), "{raw}");
+    }
+    let (st, v, _) = get(STATUS, &agent(&f.other_ws), &[("app", &f.app)]);
+    assert_eq!(st, 404, "{v}");
+    // Remove: agent refused, owner needs a confirm.
+    switches(&f.ws, true, true);
+    let (st, v, _) = post(CREDENTIALS_REMOVE, &agent(&f.ws), json!({"app": f.app, "platform": "apns"}));
+    assert_eq!((st, code(&v)), (403, "owner_only"), "{v}");
+    let (st, v, _) = post(CREDENTIALS_REMOVE, &Who::Owner, json!({"app": f.app, "platform": "apns"}));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
+    let (st, v, _) = post(CREDENTIALS_REMOVE, &Who::Owner, json!({"app": f.app, "platform": "web"}));
+    assert_eq!((st, code(&v)), (400, "usage"), "{v}");
+    let tok = vault.confirm.mint(super::super::creds::CONFIRM_ACTION, Some(&f.app), "owner", "local-auth");
+    let (st, v, _) = post(CREDENTIALS_REMOVE, &Who::Owner, json!({"app": f.app, "platform": "all", "confirmToken": tok}));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["removed"], json!(["apns"]));
+    assert_eq!(v["apns"], J::Null);
+    assert_eq!(super::super::creds::load_apns(&f.app), Err(super::super::creds::KeyError::NotConfigured));
+}

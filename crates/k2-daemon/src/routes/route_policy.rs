@@ -301,6 +301,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/park", Admin),
     // prd-custom-app-push-v1 CP36: `k2 app push …` (the handler checks
     // callers; keys need the owner and a fresh confirm).
+    get("/cli/app/push", Admin),
+    post("/cli/app/push/credentials", Owner),
+    post("/cli/app/push/credentials/remove", Owner),
     get("/cli/app/push/devices", Admin),
     post("/cli/app/push/devices/remove", Admin),
     // S19: per-App quotas. Lowering applies now (manage); a raise is the

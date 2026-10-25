@@ -20,8 +20,11 @@
 //! no keys yet, so a mobile developer can integrate before they exist.
 
 pub mod budget;
+pub mod creds;
 pub mod guest_routes;
 pub mod owner_routes;
+#[cfg(test)]
+pub(crate) mod test_keys;
 
 use k2_core::skin::{self, app_push as store};
 
@@ -111,9 +114,10 @@ pub fn who(app: &str, principal_id: &str) -> Result<String, String> {
     k2_core::read_state::app_push_who(&conn, app, principal_id).map_err(|e| e.to_string())
 }
 
-/// An App went away (`publish rm`, `k2 app uninstall`): its devices and
-/// settings go.
+/// An App went away (`publish rm`, `k2 app uninstall`): its keys, devices
+/// and settings go.
 pub fn forget_app(service_id: &str) {
+    creds::forget_app(service_id);
     match store::purge_app(service_id) {
         Ok(n) if n > 0 => k2_core::log_debug!("[app-push] {service_id} removed: {n} push device(s) dropped"),
         Ok(_) => {}

@@ -7540,6 +7540,16 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Owner only. A test guest of ONE App: signs in only through
                                         that App's link, a role the App defines, ends on its own
                                         (24 h, at most 7 d), at most 5 per App (k2 app test-guests)
+  k2 app user invite <username> --app <app> [--email e] [--role R] [--from <address>] [--json]
+                                        Mail a one-time link to set their own password (new people
+                                        need --email and are made App-only). The owner, or an agent
+                                        for its own workspace's Apps (from its workspace's address,
+                                        under its email sending mode). Links expire (k2 app login settings)
+  k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>] [--json]
+                                        Owner only. A one-time reset link: when used, extra access
+                                        that waits for a reset (an agent set this person up) starts
+  k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] …
+                                        The App's link lives, set-password page and own mail text
   k2 app user email <username> [--email e]
                                         Set/clear guest email (omit/empty clears)
   k2 app user full-name <username> [--name <text>]
@@ -12539,6 +12549,73 @@ d = s.get("staySignedInDays")
 print("Stay signed in: %s" % (("%s days" % d) if d else "off (7-day login)"))'
 }
 
+# k2 app login settings <app> [flags] (also: k2 app invite-settings): how long
+# an App's invite and reset links live, its own set-password page, and its
+# own invite / reset subject and body (K2 always adds the link itself). The
+# owner, or the App's own agent with "…manage them end to end".
+cmd_app_invite_settings() {
+    local app="" json_out=0 invite_ttl="" reset_ttl="" url="" isub="" ibody="" rsub="" rbody="" defaults=""
+    _read_body_file() { [ -f "$1" ] || { echo "no such file: $1" >&2; exit 2; }; cat "$1"; }
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --invite-ttl) invite_ttl="${2:-}"; shift 2 ;;
+            --reset-ttl) reset_ttl="${2:-}"; shift 2 ;;
+            --set-password-url) url="${2:-}"; shift 2 ;;
+            --invite-subject) isub="${2:-}"; shift 2 ;;
+            --invite-body-file) ibody="$(_read_body_file "${2:-}")"; shift 2 ;;
+            --reset-subject) rsub="${2:-}"; shift 2 ;;
+            --reset-body-file) rbody="$(_read_body_file "${2:-}")"; shift 2 ;;
+            --default) defaults="$defaults ${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help)
+                cat <<'EOF'
+usage: k2 app login settings <app> [flags]        (also: k2 app invite-settings)
+  --invite-ttl 72h          invite links live this long (15m to 30d; default 72h)
+  --reset-ttl 24h           reset links live this long (15m to 30d; default 24h)
+  --set-password-url <url>  the App's own set-password page (https, no #; K2 adds #k2inv_…)
+  --invite-subject <text>   the App's invite subject ({app} {name} {username} {sender} {expires})
+  --invite-body-file <f>    the App's invite body (plain text; K2 adds the link after it)
+  --reset-subject <text>    the App's reset subject
+  --reset-body-file <f>     the App's reset body
+  --default <field>         back to K2's: inviteTtl resetTtl setPasswordUrl inviteSubject inviteBody resetSubject resetBody
+No flags: show the settings. The owner, or the App's own agent with "…manage them end to end".
+EOF
+                return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { echo "usage: k2 app login settings <app> [flags]   (k2 app login settings --help)" >&2; exit 2; }
+    local body
+    body=$(K2_IS_APP="$app" K2_IS_IT="$invite_ttl" K2_IS_RT="$reset_ttl" K2_IS_URL="$url" K2_IS_ISUB="$isub" K2_IS_IBODY="$ibody" K2_IS_RSUB="$rsub" K2_IS_RBODY="$rbody" K2_IS_DEF="$defaults" python3 -c '
+import json, os
+b = {"app": os.environ["K2_IS_APP"]}
+for env, key in [("K2_IS_IT","inviteTtl"),("K2_IS_RT","resetTtl"),("K2_IS_URL","setPasswordUrl"),("K2_IS_ISUB","inviteSubject"),("K2_IS_IBODY","inviteBody"),("K2_IS_RSUB","resetSubject"),("K2_IS_RBODY","resetBody")]:
+    v = os.environ.get(env, "")
+    if v:
+        b[key] = v
+for f in os.environ.get("K2_IS_DEF", "").split():
+    b[f] = None
+print(json.dumps(b))')
+    _compute_call POST /cli/skin/access/invites "$body"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+s = v.get("settings") or {}
+def life(n, own):
+    n = int(n or 0)
+    t = ("%d days" % (n // 86400)) if n % 86400 == 0 and n >= 4 * 86400 else ("%d hours" % (n // 3600)) if n % 3600 == 0 else ("%d minutes" % (n // 60))
+    return t + ("" if own else " (default)")
+print("App %s" % v.get("app"))
+print("  invite links live %s" % life(s.get("inviteTtlSecs"), s.get("inviteTtlSet")))
+print("  reset links live  %s" % life(s.get("resetTtlSecs"), s.get("resetTtlSet")))
+print("  set-password page %s" % (s.get("setPasswordUrl") or "the box front door /reset (default)"))
+for k, label in [("invite", "invite"), ("reset", "reset")]:
+    t = s.get(k) or {}
+    print("  %s mail: %s" % (label, "the App template" if (t.get("subject") or t.get("body")) else "K2 template"))'
+}
+
 cmd_app_members() {
     local room="" app="" json_out=0
     while [ $# -gt 0 ]; do
@@ -13146,6 +13223,14 @@ cmd_app() {
         people) shift; cmd_app_people "$@" ;;
         discovery) shift; cmd_app_discovery "$@" ;;
         stay-signed-in) shift; cmd_app_stay "$@" ;;
+        invite-settings) shift; cmd_app_invite_settings "$@" ;;
+        login)
+            shift
+            case "${1:-}" in
+                settings) shift; cmd_app_invite_settings "$@" ;;
+                *) echo "usage: k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] [--invite-subject <s>] [--invite-body-file <f>] [--reset-subject <s>] [--reset-body-file <f>] [--default <field>]" >&2; exit 2 ;;
+            esac
+            ;;
         room-names) shift; cmd_app_room_names "$@" ;;
         self) shift; cmd_app_self "$@" ;;
         usage) shift; cmd_app_usage "$@" ;;
@@ -13239,6 +13324,75 @@ if app:
     print("App user added: %s (App %s only; no box login)" % (d.get("username",""), app))
 else:
     print("Skin user added: %s" % d.get("username",""))'
+                    ;;
+                invite)
+                    local username="" app="" email="" role="" from="" json_out=0
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --app) app="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --app=*) app="${1#--app=}"; shift ;;
+                            --email) email="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --email=*) email="${1#--email=}"; shift ;;
+                            --role) role="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --role=*) role="${1#--role=}"; shift ;;
+                            --from) from="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --from=*) from="${1#--from=}"; shift ;;
+                            --json) json_out=1; shift ;;
+                            --help|-h) echo "Usage: k2 app user invite <username> --app <app> [--email e] [--role R] [--from <address>] [--json]" >&2; exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) [[ -z "$username" ]] && username="$1"; shift ;;
+                        esac
+                    done
+                    [[ -z "$username" || -z "$app" ]] && { echo "Usage: k2 app user invite <username> --app <app> [--email e] [--role R] [--from <address>]" >&2; exit 1; }
+                    local body raw
+                    body=$(_compute_json K2_CJ_username="$username" K2_CJ_app="$app" K2_CJ_email="$email" K2_CJ_role="$role" K2_CJ_from="$from")
+                    raw=$(cli_post_json "/cli/skin/users/invite" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    if [[ "$json_out" -eq 1 ]]; then printf '%s\n' "$raw"; return 0; fi
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+how=d.get("delivered")
+if how=="sent":
+    print("Invite sent to %s from %s (the link works once; it expires in %s hours)" % (d.get("sentTo"), d.get("from"), d.get("ttlSecs",0)//3600 or "<1"))
+elif how=="held":
+    print(d.get("hint") or "Invite held for approval.")
+else:
+    print("No mail path on this box: give %s this one-time link yourself (shown once):\n%s" % (d.get("username"), d.get("link")))'
+                    ;;
+                reset)
+                    local username="" app="" to="" code=0 from="" json_out=0
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --app) app="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --app=*) app="${1#--app=}"; shift ;;
+                            --to) to="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --to=*) to="${1#--to=}"; shift ;;
+                            --code) code=1; shift ;;
+                            --from) from="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --from=*) from="${1#--from=}"; shift ;;
+                            --json) json_out=1; shift ;;
+                            --help|-h) echo "Usage: k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>] [--json]   (owner only)" >&2; exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) [[ -z "$username" ]] && username="$1"; shift ;;
+                        esac
+                    done
+                    [[ -z "$username" ]] && { echo "Usage: k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>]" >&2; exit 1; }
+                    local body raw
+                    body=$(_compute_json K2_CJ_username="$username" K2_CJ_app="$app" K2_CJ_to="$to" K2_CJ_code_b="$code" K2_CJ_from="$from")
+                    raw=$(cli_post_json "/cli/skin/users/reset-link" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    if [[ "$json_out" -eq 1 ]]; then printf '%s\n' "$raw"; return 0; fi
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+how=d.get("delivered")
+if how=="sent":
+    print("Reset link sent to %s (works once; when it is used, %s gets every access you gave them)" % (d.get("sentTo"), d.get("username")))
+elif how=="held":
+    print(d.get("hint") or "Reset link held for approval.")
+else:
+    print("One-time reset link for %s (shown once; give it to them yourself):\n%s" % (d.get("username"), d.get("link")))'
                     ;;
                 password)
                     local username=""
@@ -34750,6 +34904,49 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app user invite",
+      "usage": "k2 app user invite <username> --app <app> [--email e] [--role R] [--from <address>] [--json]",
+      "description": "Mail a person a one-time link to set their own password for one App (no password ever goes in the mail). A new person needs --email and is made App-only (that App's grant, no box login). The owner, or an agent with \"manage Apps\" for its own workspace's Apps: an agent's invite leaves from its workspace's address under its email sending mode (off: exit 3; approval: held, the link's clock starts when it is sent). No mail path: an agent is refused, the owner gets the link once. Links expire (invites 72 h by default; k2 app login settings).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "The App (service id, App id or <workspace>/<name>)."},
+        {"name": "--email", "arg": "e", "description": "The new person's email (an existing person uses their stored email)."},
+        {"name": "--role", "arg": "R", "description": "With a new person: the role on that App."},
+        {"name": "--from", "arg": "address", "description": "Owner only: the hosted address to send from (agents always use their workspace's)."},
+        {"name": "--json", "arg": null, "description": "{ok, username, app, delivered: sent|held|returned, sentTo, from, expiresAt, link (returned only)}."}
+      ]
+    },
+    {
+      "name": "app user reset",
+      "usage": "k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>] [--json]",
+      "description": "Owner only. A one-time reset link. When it is used, the password is set, every session ends, and extra access that waited for a reset (an agent made or set up this person) starts. Mailed to the stored email by default; --to mails another address (stored as their email on use); --code shows the link to you instead of mailing it. Reset links expire (24 h by default; k2 app login settings).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "Whose set-password page and link life to use (default: the App the person uses)."},
+        {"name": "--to", "arg": "email", "description": "Mail it here instead; becomes their email when used."},
+        {"name": "--code", "arg": null, "description": "Show the link once instead of mailing it."},
+        {"name": "--from", "arg": "address", "description": "The hosted address to send from."},
+        {"name": "--json", "arg": null, "description": "{ok, username, app, delivered, sentTo, expiresAt, link (returned only)}."}
+      ]
+    },
+    {
+      "name": "app login settings",
+      "usage": "k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] [--invite-subject <s>] [--invite-body-file <f>] [--reset-subject <s>] [--reset-body-file <f>] [--default <field>] [--json]",
+      "description": "An App's invite and reset links: how long they live (15m to 30d; invites 72h and resets 24h by default), its own set-password page (else the box front door's /reset), and its own subject and body ({app} {name} {username} {sender} {expires}; K2 always adds the link and the safety line itself). The owner, or the App's own agent with \"...manage them end to end\". No flags: show them. Also: k2 app invite-settings.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--invite-ttl", "arg": "dur", "description": "Invite link life (15m to 30d)."},
+        {"name": "--reset-ttl", "arg": "dur", "description": "Reset link life (15m to 30d)."},
+        {"name": "--set-password-url", "arg": "url", "description": "The App's set-password page (https, no #fragment)."},
+        {"name": "--invite-subject", "arg": "text", "description": "The App's invite subject."},
+        {"name": "--invite-body-file", "arg": "file", "description": "The App's invite body (plain text)."},
+        {"name": "--reset-subject", "arg": "text", "description": "The App's reset subject."},
+        {"name": "--reset-body-file", "arg": "file", "description": "The App's reset body (plain text)."},
+        {"name": "--default", "arg": "field", "description": "Put one field back to K2's (repeatable)."},
+        {"name": "--json", "arg": null, "description": "{ok, app, settings}."}
+      ]
+    },
+    {
       "name": "app user email",
       "usage": "k2 app user email <username> [--email e]",
       "description": "Set or clear an app guest email. Omit or empty --email clears. Needed to mint a password-reset token.",
@@ -38441,6 +38638,44 @@ PER-APP LOGINS (0.45.5)
   their rooms (k2 app user rooms <u> --app <app> --agent <its room>). Those
   people get that App only, never the box login: an agent add without
   --app is refused (owner_only); box logins are the owner's.
+  WAITS FOR A RESET: a person an agent created, or whose password or
+  email it set, or invited (or an App key made) is tied to that agent's
+  workspace. If you give them more (the box login, another App or room,
+  files:download, chat), the extra waits until they reset their password:
+  sign-in, refresh and live sessions stay at that workspace's access, no
+  chat pass. Settings → User Access shows "Waiting for reset"; K2 also
+  posts one card. k2 app user reset <u> mails a reset link (stored email,
+  or --to <email>, or --code to see it yourself); using it starts the rest.
+
+INVITES (0.46.4)
+  k2 app user invite <u> --app <app> [--email e] [--role R]
+    Mails a one-time link to set their own password; new people need
+    --email and are made App-only. No password ever goes in a mail. An
+    agent invites for its own workspace's Apps, from its workspace's
+    hosted address, under its email sending mode: off → exit 3, approval →
+    held (the link's clock starts when it is sent), on → sent. No address:
+    refused for an agent (it never sees a link); the owner gets the link.
+    One invite per person a minute; a new link voids the older one.
+  Mail leaves through this box's own mail (Stalwart), never a linked inbox.
+  The link is <set-password page>#k2inv_… (the token is in the fragment,
+  so no server log or Referer carries it). The page is the App's own
+  (setPasswordUrl; it finishes with password.reset {token, password}) or
+  the box front door's /reset.
+  An App's own forgot-password (password.forgot with its pass) mails a
+  reset link the same way; the App never gets the token, and reaches only
+  people of its own workspace (and App).
+  LINK LIVES (named settings): invites 72 hours, resets 24 hours by
+  default. The App's builder (its own agent with "…manage them end to
+  end") or the owner sets its own, 15 minutes to 30 days:
+    k2 app login settings <app> --invite-ttl 7d --reset-ttl 2h
+  (--app host sets the box login's). Back to the default: --default inviteTtl.
+  MAIL TEXT: the App may give its own subject and body:
+    k2 app login settings <app> --invite-subject "Welcome to {app}" --invite-body-file invite.txt
+  Placeholders {app} {name} {username} {sender} {expires}. K2 always adds
+  the set-password link, its expiry and "If you weren't expecting this,
+  ignore it. Nobody at <App> will ask for your password." after the body;
+  a template can't place the link ({link} and k2inv_ are refused). No
+  template: K2's own ("You're invited to <App>").
   Isolation for a person only holds when they have no box login (User
   Access → host switch off). Box login off still ends ALL their sessions.
   Removing an App (`k2 publish rm`) ends its passes; its grants stay.

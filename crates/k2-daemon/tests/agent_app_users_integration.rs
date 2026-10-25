@@ -506,3 +506,454 @@ async fn s3_a_tied_login_never_waits_on_the_daemon_db_under_the_skin_lock() {
     holder.join().expect("holder");
     assert_eq!(k2_core::skin::ties::LOCK_ORDER_VIOLATIONS.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+// ── S4 / S5: links and mail ──────────────────────────────────────────
+
+/// Every hosted submit, in place of the mail server (no real sends).
+#[derive(Default)]
+struct Recorder(std::sync::Mutex<Vec<k2_daemon::mail::send::OutboundMessage>>);
+
+impl k2_daemon::mail::send::SubmitBackend for Recorder {
+    fn submit(&self, _account_id: &str, msg: &k2_daemon::mail::send::OutboundMessage) -> Result<(), String> {
+        self.0.lock().unwrap().push(msg.clone());
+        Ok(())
+    }
+}
+
+fn recorder() -> std::sync::Arc<Recorder> {
+    static R: std::sync::OnceLock<std::sync::Arc<Recorder>> = std::sync::OnceLock::new();
+    let r = R.get_or_init(|| std::sync::Arc::new(Recorder::default())).clone();
+    let b: std::sync::Arc<dyn k2_daemon::mail::send::SubmitBackend + Send + Sync> = r.clone();
+    k2_daemon::app_user_invites::set_backend_override(Some(b));
+    r
+}
+
+/// The mails sent to `to` so far.
+fn mails_to(r: &Recorder, to: &str) -> Vec<k2_daemon::mail::send::OutboundMessage> {
+    r.0.lock().unwrap().iter().filter(|m| m.to.iter().any(|t| t == to)).cloned().collect()
+}
+
+/// The `k2inv_…` token in a mail body.
+fn token_in(body: &str) -> String {
+    let i = body.find("#k2inv_").unwrap_or_else(|| panic!("no #k2inv_ link in {body}"));
+    body[i + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect()
+}
+
+/// A hosted mailbox `bot@<domain>` for `ws` (direct send), and its mode.
+fn seed_mail(ws: &Ws, domain: &str, mode: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let addr = format!("bot@{domain}");
+    conn.execute(
+        "INSERT INTO mail_domains (id, domain, send_mode, status, created_at) VALUES (?1, ?2, 'direct', 'verified', 100)",
+        rusqlite::params![uuid::Uuid::new_v4().to_string(), domain],
+    )
+    .expect("domain");
+    conn.execute(
+        "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, owner_project_id, status, created_at)
+         VALUES (?1, ?2, 'dom-x', ?3, ?4, 'active', 100)",
+        rusqlite::params![uuid::Uuid::new_v4().to_string(), addr, format!("acct-{domain}"), ws.id],
+    )
+    .expect("address");
+    conn.execute("UPDATE projects SET mail_agent_send = ?2 WHERE id = ?1", rusqlite::params![ws.id, mode]).expect("mode");
+    addr
+}
+
+fn set_mode(ws: &Ws, mode: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute("UPDATE projects SET mail_agent_send = ?2 WHERE id = ?1", rusqlite::params![ws.id, mode]).expect("mode");
+}
+
+fn outbound_rows(from: &str) -> Vec<(String, String, String)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut st = conn.prepare("SELECT id, status, body_ref FROM mail_outbound WHERE from_address = ?1 ORDER BY created_at, id").unwrap();
+    let rows = st.query_map([from], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    rows.collect::<rusqlite::Result<Vec<_>>>().unwrap()
+}
+
+fn invite_rows(username: &str) -> Vec<k2_core::skin::invites::InviteRow> {
+    k2_core::skin::invites::rows_for(&principal_id(username)).expect("invite rows")
+}
+
+async fn reset_with(port: u16, token: &str, password: &str) -> Resp {
+    let b = json!({ "token": token, "password": password }).to_string();
+    tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/password/reset", Some(b))).await.unwrap()
+}
+
+const RESET_FAILED: &str = r#"{"error":"invalid or expired reset token"}"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let rec = recorder();
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let sales = seed_ws(&env, &format!("sales{tag}"));
+    let ops = seed_ws(&env, &format!("ops{tag}"));
+    let shop = app_row(&sales, &format!("shop{tag}"));
+    let desk = app_row(&ops, &format!("desk{tag}"));
+    allow_manage(&sales, true);
+    let agent = passport(&sales);
+    let domain = format!("inv{tag}.example.test");
+    let from = seed_mail(&sales, &domain, "on");
+
+    // POST only, both new routes.
+    for path in ["/cli/skin/users/invite", "/cli/skin/users/reset-link", "/cli/skin/access/invites"] {
+        let r = get(port, path, OWNER, "").await;
+        assert_eq!(r.status, 405, "GET {path}: {}", r.body);
+    }
+
+    // T5.7: no set-password page (no App page, no front door) → 409.
+    let u3 = format!("u3{tag}");
+    let e3 = format!("{u3}@example.test");
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u3, "app": shop, "email": e3 })).await;
+    assert_eq!((r.status, r.code()), (409, "no_set_password_page".to_string()), "{}", r.body);
+    assert!(!principal_exists(&u3), "nothing written");
+
+    // The App's own page: the owner sets it (an agent without switch 2 can't).
+    let r = post(port, "/cli/skin/access/invites", &agent, json!({ "app": shop, "setPasswordUrl": "https://evil.example.test/" })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    let page = "https://shop.example.test/set-password";
+    let r = post(port, "/cli/skin/access/invites", OWNER, json!({ "app": shop, "setPasswordUrl": page })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["settings"]["inviteTtlSecs"], 72 * 3600, "{}", r.body);
+    assert_eq!(r.json()["settings"]["resetTtlSecs"], 24 * 3600, "{}", r.body);
+    for bad in [json!({ "app": shop, "inviteTtl": "5m" }), json!({ "app": shop, "inviteTtl": "31d" }), json!({ "app": shop, "inviteBody": "click {link}" }), json!({ "app": shop, "setPasswordUrl": "http://x.example/#a" })] {
+        let r = post(port, "/cli/skin/access/invites", OWNER, bad.clone()).await;
+        assert_eq!(r.status, 400, "{bad}: {}", r.body);
+    }
+
+    // T5.1: mode on, a new person: App-only, stamped, tied; one mail from
+    // the agent's address; the link in the fragment; 72 h from the send.
+    let before = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u3, "app": shop, "email": e3 })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    assert_eq!((v["delivered"].clone(), v["sentTo"].clone(), v["from"].clone()), (json!("sent"), json!(e3), json!(from)), "{v}");
+    assert!(!r.body.contains("k2inv_"), "an agent never sees the link: {}", r.body);
+    assert_eq!(grants_of(&u3), vec![("app".to_string(), shop.clone())]);
+    assert_eq!(creator_of(&u3).as_deref(), Some(sales.id.as_str()));
+    assert_eq!(tie_of(&u3).expect("tied").reasons, vec!["created".to_string(), "invite".to_string()]);
+    let mails = mails_to(&rec, &e3);
+    assert_eq!(mails.len(), 1, "one mail");
+    let m = &mails[0];
+    assert_eq!(m.from, from);
+    assert!(m.subject.contains("invited") || m.subject.contains("You're invited"), "{}", m.subject);
+    assert!(m.text_body.contains(&format!("Set your password: {page}#k2inv_")), "{}", m.text_body);
+    assert!(m.text_body.contains("Nobody at") && m.text_body.contains("will ask for your password"), "{}", m.text_body);
+    for never in ["k2skn_", "?token=", "password:"] {
+        assert!(!m.text_body.contains(never), "{never} in {}", m.text_body);
+    }
+    assert_eq!(outbound_rows(&from).len(), 1, "one audit row");
+    let rows = invite_rows(&u3);
+    assert_eq!(rows.len(), 1);
+    let exp = rows[0].expires_at.expect("the clock started at the send");
+    assert!(exp >= before + 72 * 3600 && exp <= before + 72 * 3600 + 30, "72 h from the send: {exp} vs {before}");
+    // Use it: the password is set; the tie stays (only an owner reset drops it, T4.5).
+    let tok = token_in(&m.text_body);
+    let r = reset_with(port, &tok, "my-own-pass-1").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(tie_of(&u3).is_some(), "an invite never drops the tie");
+    let r = login(port, json!({ "username": u3, "password": "my-own-pass-1", "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = reset_with(port, &tok, "again-pass-12").await;
+    assert_eq!((r.status, r.body.as_str()), (401, RESET_FAILED), "single use");
+
+    // T5.8: one invite a minute; after a minute a new one voids the older.
+    let u4 = format!("u4{tag}");
+    let e4 = format!("{u4}@example.test");
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u4, "app": shop, "email": e4 })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u4, "app": shop })).await;
+    assert_eq!((r.status, r.code()), (429, "throttled".to_string()), "{}", r.body);
+    skin_db().execute("UPDATE app_user_invites SET created_at = created_at - 120 WHERE principal_id = ?1", [principal_id(&u4)]).unwrap();
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u4, "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let m4 = mails_to(&rec, &e4);
+    assert_eq!(m4.len(), 2);
+    let (first, second) = (token_in(&m4[0].text_body), token_in(&m4[1].text_body));
+    let r = reset_with(port, &first, "first-pass-123").await;
+    assert_eq!((r.status, r.body.as_str()), (401, RESET_FAILED), "voided");
+    let r = reset_with(port, &second, "second-pass-12").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    // T5.6: an existing person without an email.
+    let u5 = format!("u5{tag}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u5, "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u5, "app": shop })).await;
+    assert_eq!((r.status, r.code()), (409, "no_email".to_string()), "{}", r.body);
+
+    // T5.5: another workspace's App, another workspace's person: refused,
+    // nothing written; an agent can't pick the sender.
+    let theirs = format!("th{tag}");
+    owner_post(port, "/cli/skin/users", json!({ "username": theirs, "app": desk, "email": format!("{theirs}@example.test") })).await;
+    let sent_before = outbound_rows(&from).len();
+    for body in [
+        json!({ "username": format!("nx{tag}"), "app": desk, "email": "nx@example.test" }),
+        json!({ "username": theirs, "app": shop }),
+        json!({ "username": theirs, "app": desk }),
+    ] {
+        let r = post(port, "/cli/skin/users/invite", &agent, body.clone()).await;
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{body}: {}", r.body);
+    }
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u3, "app": shop, "from": "other@example.test" })).await;
+    assert_eq!(r.status, 400, "an agent can't pick the sender: {}", r.body);
+    assert!(!principal_exists(&format!("nx{tag}")));
+    assert!(invite_rows(&theirs).is_empty());
+    assert_eq!(outbound_rows(&from).len(), sent_before);
+
+    // TTL and template from the App's settings (Rosson 2026-10-24).
+    let r = post(
+        port,
+        "/cli/skin/access/invites",
+        OWNER,
+        json!({ "app": shop, "inviteTtl": "15m", "inviteSubject": "Welcome to {app}, {name}", "inviteBody": "Hi {username}, the {app} team ({sender}) saved you a seat." }),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["settings"]["inviteTtlSecs"], 900);
+    let u6 = format!("u6{tag}");
+    let e6 = format!("{u6}@example.test");
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u6, "app": shop, "email": e6 })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let m6 = mails_to(&rec, &e6);
+    assert_eq!(m6.len(), 1);
+    assert_eq!(m6[0].subject, format!("Welcome to shop{tag}, u6{tag}"));
+    assert!(m6[0].text_body.starts_with(&format!("Hi u6{tag}, the shop{tag} team (the ")), "{}", m6[0].text_body);
+    assert!(m6[0].text_body.contains(&format!("Set your password: {page}#k2inv_")), "K2 adds the link: {}", m6[0].text_body);
+    assert!(m6[0].text_body.contains("15 minutes after it was sent"), "{}", m6[0].text_body);
+    let row = invite_rows(&u6).remove(0);
+    assert_eq!(row.ttl_secs, 900);
+    assert!(row.expires_at.unwrap() - row.created_at <= 900 + 30);
+    let r = post(port, "/cli/skin/access/invites", OWNER, json!({ "app": shop, "inviteTtl": null, "inviteSubject": null, "inviteBody": null })).await;
+    assert_eq!(r.json()["settings"]["inviteTtlSecs"], 72 * 3600, "back to the default: {}", r.body);
+
+    // T5.2: approval: held, the link dead until the owner approves.
+    set_mode(&sales, "approval");
+    let u7 = format!("u7{tag}");
+    let e7 = format!("{u7}@example.test");
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u7, "app": shop, "email": e7 })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["delivered"], "held", "{}", r.body);
+    assert!(r.json()["hint"].as_str().unwrap().contains("72 hours start when it's sent"), "{}", r.body);
+    let out_id = r.json()["outboundId"].as_str().unwrap().to_string();
+    assert!(mails_to(&rec, &e7).is_empty(), "nothing left yet");
+    let (_, status, body_ref) = outbound_rows(&from).into_iter().find(|(id, _, _)| *id == out_id).expect("the held row");
+    assert_eq!(status, "pending");
+    let held: Value = serde_json::from_str(&std::fs::read_to_string(&body_ref).unwrap()).unwrap();
+    let held_tok = token_in(held["textBody"].as_str().unwrap());
+    assert_eq!(invite_rows(&u7)[0].expires_at, None);
+    let r = reset_with(port, &held_tok, "early-pass-123").await;
+    assert_eq!((r.status, r.body.as_str()), (401, RESET_FAILED), "a held link never works");
+    let r = post(port, "/cli/mail/approvals/approve", OWNER, json!({ "id": out_id })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(mails_to(&rec, &e7).len(), 1, "it left on approval");
+    assert!(invite_rows(&u7)[0].expires_at.is_some(), "the clock started");
+    let r = reset_with(port, &held_tok, "later-pass-123").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    // T5.3: off: 403 gated, nothing written (no person, no link, no row).
+    set_mode(&sales, "off");
+    let u8 = format!("u8{tag}");
+    let rows_before = outbound_rows(&from).len();
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u8, "app": shop, "email": format!("{u8}@example.test") })).await;
+    assert_eq!((r.status, r.code()), (403, "gated".to_string()), "{}", r.body);
+    assert!(!principal_exists(&u8));
+    assert_eq!(outbound_rows(&from).len(), rows_before);
+
+    // T5.9: the per-address limits hold (20 an hour).
+    set_mode(&sales, "on");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let have = rows_before as i64;
+        for i in have..20 {
+            conn.execute(
+                "INSERT INTO mail_outbound (id, owner_project_id, agent_name, from_address, to_json, subject, body_ref, status, created_at, updated_at)
+                 VALUES (?1, ?2, 'x', ?3, '[]', 's', '', 'sent', ?4, ?4)",
+                rusqlite::params![format!("out_fill{i}{tag}"), sales.id, from, now],
+            )
+            .expect("fill");
+        }
+    }
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": u5, "app": shop })).await;
+    assert_eq!(r.status, 409, "u5 has no email still: {}", r.body);
+    let r = post(port, "/cli/skin/users/invite", &agent, json!({ "username": format!("u9{tag}"), "app": shop, "email": "u9@example.test" })).await;
+    assert_eq!((r.status, r.code()), (429, "rate_limited".to_string()), "{}", r.body);
+    assert!(invite_rows(&format!("u9{tag}")).is_empty(), "a refused send leaves no link");
+
+    // T5.4: no address to send from: an agent is refused and never sees a
+    // link; the owner gets the link once.
+    let lone = seed_ws(&env, &format!("lone{tag}"));
+    let lone_app = app_row(&lone, &format!("lapp{tag}"));
+    allow_manage(&lone, true);
+    let lone_agent = passport(&lone);
+    owner_post(port, "/cli/skin/access/invites", json!({ "app": lone_app, "setPasswordUrl": page })).await;
+    let r = post(port, "/cli/skin/users/invite", &lone_agent, json!({ "username": format!("la{tag}"), "app": lone_app, "email": "la@example.test" })).await;
+    assert_eq!((r.status, r.code()), (409, "no_mail".to_string()), "{}", r.body);
+    assert!(!r.body.contains("k2inv_"), "{}", r.body);
+    assert!(!principal_exists(&format!("la{tag}")));
+    let r = post(port, "/cli/skin/users/invite", OWNER, json!({ "username": format!("lo{tag}"), "app": lone_app, "email": "lo@example.test" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["delivered"], "returned");
+    let link = r.json()["link"].as_str().expect("the owner's link").to_string();
+    assert!(link.starts_with(&format!("{page}#k2inv_")), "{link}");
+    assert!(tie_of(&format!("lo{tag}")).is_none(), "the owner's invite ties nobody");
+    let r = reset_with(port, link.split('#').nth(1).unwrap(), "owner-made-pass-1").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let rec = recorder();
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let sales = seed_ws(&env, &format!("sales{tag}"));
+    let ops = seed_ws(&env, &format!("ops{tag}"));
+    let shop = app_row(&sales, &format!("shop{tag}"));
+    allow_manage(&sales, true);
+    let agent = passport(&sales);
+    let domain = format!("rst{tag}.example.test");
+    let from = seed_mail(&sales, &domain, "on");
+    let page = "https://shop.example.test/set-password";
+    owner_post(port, "/cli/skin/access/invites", json!({ "app": shop, "setPasswordUrl": page })).await;
+    let pw = "agent-chosen-1";
+    let role = format!("r{tag}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": role, "roomAccess": [{ "handle": sales.handle, "caps": ["thread:read"] }] })).await;
+
+    // u1: the agent made it, set its password and its email.
+    let u1 = format!("u1{tag}");
+    let e1 = format!("{u1}@example.test");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u1, "app": shop, "role": role, "password": pw })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/email", &agent, json!({ "username": u1, "email": e1 })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let s_old = login(port, json!({ "username": u1, "password": pw, "app": shop })).await.json()["token"].as_str().unwrap().to_string();
+
+    // T4.8: the owner widens: one card (here an owners-only note: the
+    // workspace has no Thread); a second widen adds none.
+    owner_post(port, "/cli/skin/grants/host", json!({ "username": u1, "present": true })).await;
+    owner_post(port, "/cli/skin/roles/room", json!({ "name": role, "handle": ops.handle, "caps": ["thread:read"] })).await;
+    let notes: Vec<_> = k2_core::feedback::list_for_project(&sales.id, &k2_core::feedback::ListFilter::Open)
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.title == format!("Extra access for {u1} waits for a password reset"))
+        .collect();
+    assert_eq!(notes.len(), 1, "one card per newly pending person");
+    let note = notes[0].body.clone().unwrap_or_default();
+    assert!(note.contains("the box login") && note.contains(&format!("room {}", ops.handle)), "{note}");
+    assert!(note.contains(&format!("Reset link goes to {e1} — set by")), "{note}");
+
+    // T4.4: never an agent's (manage-Apps on), and POST only.
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": u1 })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+
+    // T4.5: none of these drop the tie.
+    // - the old forgot → reset;
+    let r = post(port, "/cli/skin/password/forgot", OWNER, json!({ "username": u1 })).await;
+    let old_tok = r.json()["token"].as_str().expect("owner forgot token").to_string();
+    let r = reset_with(port, &old_tok, "forgot-pass-123").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(tie_of(&u1).is_some(), "forgot → reset keeps the tie");
+    // - password/change;
+    let s = login(port, json!({ "username": u1, "password": "forgot-pass-123", "app": shop })).await.json()["token"].as_str().unwrap().to_string();
+    let r = post(port, "/cli/skin/password/change", &s, json!({ "oldPassword": "forgot-pass-123", "password": "changed-pass-12" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(tie_of(&u1).is_some(), "password/change keeps the tie");
+    // - an App key's reset token.
+    let (_, key) = k2_core::api_keys::create_app_key("t4", &shop, r#"{"scopes":["users","rooms"]}"#).expect("app key");
+    let u2 = format!("u2{tag}");
+    let e2 = format!("{u2}@example.test");
+    let r = bearer_post(port, &format!("/v1/apps/{shop}/users"), &key, json!({ "username": u2, "email": e2, "password": "app-key-pass-1" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let t2 = tie_of(&u2).expect("an App key's person is tied (Q3)");
+    assert_eq!((t2.workspace_id.as_str(), t2.reasons.clone()), (sales.id.as_str(), vec!["app_key".to_string()]));
+    assert!(t2.set_by.starts_with("app-key:"), "{t2:?}");
+    let r = bearer_post(port, &format!("/v1/apps/{shop}/users/password-reset"), &key, json!({ "username": u2 })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = reset_with(port, r.json()["token"].as_str().unwrap(), "key-reset-pass-1").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(tie_of(&u2).is_some(), "an App key's reset keeps the tie");
+
+    // T4.1: the owner's default: mailed to the stored email; using it sets
+    // the password, ends every session, drops the tie: full access.
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u1 })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    assert_eq!((v["delivered"].clone(), v["sentTo"].clone(), v["from"].clone()), (json!("sent"), json!(e1), json!(from)), "{v}");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let exp = v["expiresAt"].as_i64().expect("expiresAt");
+    assert!((now + 24 * 3600 - 30..=now + 24 * 3600 + 30).contains(&exp), "24 h: {exp}");
+    let m = mails_to(&rec, &e1);
+    assert_eq!(m.len(), 1);
+    assert!(m[0].subject.starts_with("Reset your password for"), "{}", m[0].subject);
+    let tok = token_in(&m[0].text_body);
+    let r = reset_with(port, &tok, "their-own-pass-1").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(tie_of(&u1).is_none(), "an owner reset drops the tie");
+    assert!(policy_of(&s_old).is_none(), "every old session ended");
+    assert!(policy_of(&s).is_none(), "every old session ended");
+    let r = login(port, json!({ "username": u1, "password": "their-own-pass-1" })).await;
+    assert_eq!(r.status, 200, "the box login works now: {}", r.body);
+    let r = login(port, json!({ "username": u1, "password": "their-own-pass-1", "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let mut both = vec![sales.id.clone(), ops.id.clone()];
+    both.sort();
+    assert_eq!(rooms(&policy_of(r.json()["token"].as_str().unwrap()).unwrap()), both, "the widened access is live");
+    assert_eq!(user_row(port, &u1).await["tiedTo"], Value::Null);
+
+    // T4.2: --to: mailed there; on use, the stored email becomes it.
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u2, "to": "new@example.test" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let m = mails_to(&rec, "new@example.test");
+    assert_eq!(m.len(), 1);
+    let r = reset_with(port, &token_in(&m[0].text_body), "fresh-pass-1234").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(user_row(port, &u2).await["email"], "new@example.test");
+    assert!(tie_of(&u2).is_none());
+
+    // T4.3: --code: nothing mailed, the link to the owner; it works.
+    let g = format!("g{tag}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": g, "app": shop, "password": pw })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let sent_before = rec.0.lock().unwrap().len();
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": g, "code": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["delivered"], "returned");
+    assert_eq!(rec.0.lock().unwrap().len(), sent_before, "nothing mailed");
+    let link = r.json()["link"].as_str().unwrap().to_string();
+
+    // T4.6: two uses at once: exactly one wins.
+    let token = link.split('#').nth(1).unwrap().to_string();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles: Vec<_> = (0..2)
+        .map(|i| {
+            let (t, b) = (token.clone(), barrier.clone());
+            std::thread::spawn(move || {
+                b.wait();
+                k2_core::skin::invites::consume(&t, &format!("racer-pass-{i}")).expect("consume")
+            })
+        })
+        .collect();
+    let outcomes: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert_eq!(outcomes.iter().filter(|o| **o == k2_core::skin::invites::Consume::Ok).count(), 1, "{outcomes:?}");
+    assert!(tie_of(&g).is_none());
+
+    // T4.7: an expired link: the generic 401.
+    let h = format!("h{tag}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": h, "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": h, "code": true })).await;
+    let token = r.json()["link"].as_str().unwrap().split('#').nth(1).unwrap().to_string();
+    skin_db().execute("UPDATE app_user_invites SET expires_at = 1 WHERE principal_id = ?1", [principal_id(&h)]).unwrap();
+    let r = reset_with(port, &token, "too-late-pass-1").await;
+    assert_eq!((r.status, r.body.as_str()), (401, RESET_FAILED));
+    assert!(tie_of(&h).is_some());
+}

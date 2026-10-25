@@ -165,6 +165,12 @@ retired_key_release() {
 verify_update_sig() {
     _vb="$1"; _vs="$2"; _va="$3"; _vv="$4"
     [ -n "$K2_DAEMON_PUBKEYS" ] || die "This installer trusts no update key yet (the update-key ceremony has not landed). Refusing."
+    # Prehashed (ED) only, like the daemon: `minisign -V` alone would also
+    # take a legacy (Ed) signature. Base64 "RU[QRST]" is exactly "ED".
+    case "$(sed -n 2p "$_vs")" in
+        RU[QRST]*) ;;
+        *) die "The signature is not a prehashed minisign signature. Refusing." ;;
+    esac
     for _k in $K2_DAEMON_PUBKEYS; do
         if _tc=$(minisign -V -P "$_k" -m "$_vb" -x "$_vs" -Q 2>/dev/null); then
             _files=$(printf '%s\n' "$_tc" | tr '\t' '\n' | grep '^file:' || true)

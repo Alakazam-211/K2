@@ -682,6 +682,12 @@ e["sha256"] = hashlib.sha256(open(sys.argv[2], "rb").read()).hexdigest()
 print(json.dumps(m))
 PY
 inst_refuses "a changed binary" "VERIFICATION FAILED" "$inst/tamper.json"
+# A legacy (non-prehashed, "Ed") signature by U2 itself: minisign -V would
+# accept it, the installers must not (the daemon doesn't either).
+printf '%s\n' "$PW2" | minisign -S -l -s "$tmp/gen/u2.key" -m "$inst/$DA" -x "$inst/legacy.sig2" -t "timestamp:1"$'\t'"file:$DA"$'\t'"version:9.9.9" >/dev/null
+minisign -V -P "$U2_PUB_LINE" -m "$inst/$DA" -x "$inst/legacy.sig2" -q && pass "(control: plain minisign -V accepts the legacy signature)" || fail "legacy control" ""
+mkman "$inst/legacy.json" 9.9.9 "$inst/legacy.sig2"
+inst_refuses "a legacy (non-prehashed) U2 signature" "not a prehashed" "$inst/legacy.json"
 rm -rf "$tmp/ib"
 if env -u K2_MANIFEST_URL K2_VERSION=0.46.3 K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 sh "$SRC/scripts/install-daemon.sh" >"$tmp/inst.out" 2>&1; then
     fail "install-daemon.sh --version 0.46.3" "ran"
@@ -706,7 +712,7 @@ if cli_install "$inst/dual.json" && cmp -s "$tmp/cb/k2so-daemon" "$inst/$DA"; th
 else
     fail "cli install" "$(tail -5 "$tmp/cli.out")"
 fi
-for case_ in "u1only.json:retired update key" "u1as2.json:VERIFICATION FAILED" "ver.json:for version" "file.json:is for 'k2-root-helper" "tamper.json:VERIFICATION FAILED"; do
+for case_ in "u1only.json:retired update key" "u1as2.json:VERIFICATION FAILED" "ver.json:for version" "file.json:is for 'k2-root-helper" "tamper.json:VERIFICATION FAILED" "legacy.json:not a prehashed"; do
     m="${case_%%:*}"; want="${case_#*:}"
     if cli_install "$inst/$m"; then
         fail "cli $m" "installed"

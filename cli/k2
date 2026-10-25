@@ -4322,6 +4322,12 @@ _daemon_verify_update_sig() {
         echo "This k2 trusts no update key yet (the update-key ceremony has not landed). Refusing." >&2
         return 1
     fi
+    # Prehashed (ED) only, like the daemon: `minisign -V` alone would also
+    # take a legacy (Ed) signature. Base64 "RU[QRST]" is exactly "ED".
+    case "$(sed -n 2p "$sigf")" in
+        RU[QRST]*) ;;
+        *) echo "The signature is not a prehashed minisign signature. Refusing." >&2; return 1 ;;
+    esac
     for k in $_DAEMON_UPDATE_PUBKEYS; do
         if tc=$(minisign -V -P "$k" -m "$bin" -x "$sigf" -Q 2>/dev/null); then
             files=$(printf '%s\n' "$tc" | tr '\t' '\n' | grep '^file:' || true)

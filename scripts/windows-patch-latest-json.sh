@@ -39,7 +39,7 @@ fi
 source "$PROJECT_DIR/scripts/lib/sign-updater.sh"
 k2u_env_guard
 
-STAGE="$(mktemp -d -t k2-win-latest)"
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/k2-win-latest.XXXXXX")"
 cleanup() { rm -rf "$STAGE"; }
 trap cleanup EXIT
 

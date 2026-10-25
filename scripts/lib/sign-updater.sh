@@ -172,7 +172,8 @@ k2u_password() {
     security find-generic-password -s "$1" -w
 }
 
-k2u_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+# GNU stat first: on Linux `stat -f` means file-system status.
+k2u_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 
 # Append one line per signature: utc time, asset, sha256, key id, trusted
 # comment (tabs written as \t), user.

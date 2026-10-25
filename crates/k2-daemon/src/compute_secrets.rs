@@ -89,7 +89,7 @@ pub struct Ask {
 
 /// `secrets: [{"name": "...", "env": "..."}]` (or `"NAME[=ENV]"` strings).
 /// At most 16 (SE3: 400, exit 2).
-pub fn asks_from(v: &serde_json::Value) -> R<Vec<Ask>> {
+pub(crate) fn asks_from(v: &serde_json::Value) -> R<Vec<Ask>> {
     let list = match v.get("secrets") {
         None | Some(serde_json::Value::Null) => return Ok(Vec::new()),
         Some(serde_json::Value::Array(a)) => a,
@@ -132,7 +132,7 @@ pub struct Found {
 
 /// Each ask → its secret id: `NAME` in the job's workspace scope, or a
 /// `k2v://` reference. Missing → 404 (exit 3).
-pub fn find(ws_id: &str, ws_handle: &str, asks: &[Ask]) -> R<Vec<Found>> {
+pub(crate) fn find(ws_id: &str, ws_handle: &str, asks: &[Ask]) -> R<Vec<Found>> {
     if asks.is_empty() {
         return Ok(Vec::new());
     }
@@ -205,7 +205,7 @@ pub fn plan_view(found: &[(Found, String, bool)]) -> serde_json::Value {
 /// The env name each secret is delivered under on `node` (the ask's, else
 /// the covering grant's, else the vault default), checked against both
 /// deny lists and `--env` (SE2), with the node's coverage (SE4).
-pub fn env_names(ws_id: &str, node: &NodeRow, found: &[Found], env: &BTreeMap<String, String>) -> R<Vec<(Found, String, bool)>> {
+pub(crate) fn env_names(ws_id: &str, node: &NodeRow, found: &[Found], env: &BTreeMap<String, String>) -> R<Vec<(Found, String, bool)>> {
     let mut out = Vec::new();
     let mut names = BTreeSet::new();
     for f in found {
@@ -231,7 +231,7 @@ pub fn env_names(ws_id: &str, node: &NodeRow, found: &[Found], env: &BTreeMap<St
 }
 
 /// `secret_not_granted` (403, exit 3) with the owner's exact command.
-pub fn not_granted(found: &[(Found, String, bool)], ws_handle: &str, node: &NodeRow) -> Option<crate::compute_routes::Refusal> {
+pub(crate) fn not_granted(found: &[(Found, String, bool)], ws_handle: &str, node: &NodeRow) -> Option<crate::compute_routes::Refusal> {
     let missing: Vec<&(Found, String, bool)> = found.iter().filter(|(_, _, c)| !c).collect();
     if missing.is_empty() {
         return None;

@@ -13,10 +13,12 @@
 #            (`k2 compute test --shards N --profile ci`,
 #            scripts/test-on-nodes.sh): run everything, write JUnit.
 #
-# JUnit lands in <target dir>/nextest/ci/junit.xml (nextest's default store,
-# so it follows CARGO_TARGET_DIR), which `k2 compute test` keeps
-# (`--artifact 'target/nextest/**/*.xml'` also reads the node's target dir)
-# and parses into the job's test counts and `k2 compute logs --failures`.
+# JUnit lands in target/nextest/ci/junit.xml under the workspace root
+# (nextest's default store dir; it stays there even when CARGO_TARGET_DIR
+# points elsewhere, as it does on compute nodes), which `k2 compute test`
+# keeps (`--artifact 'target/nextest/**/*.xml'`, relative to the job's
+# checkout) and parses into the job's test counts and
+# `k2 compute logs --failures`.
 
 [profile.default]
 retries = 0

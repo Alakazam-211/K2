@@ -66,6 +66,14 @@ impl NodeRow {
     pub fn is_tenant(&self) -> bool {
         self.role == "tenant"
     }
+
+    /// This server owns the node for secret-env purposes (`compute:<ws>/*`
+    /// covers it, Q2): never a tenant (sticky, from enrolment) and never
+    /// given an owner label (only a node another server owns has one).
+    /// Nothing the node's offer says can make this true (review A-H1).
+    pub fn owned_for_secrets(&self) -> bool {
+        !self.is_tenant() && self.owner_label.is_none()
+    }
 }
 
 const NODE_COLS: &str = "id, name, fingerprint, public_key_pem, os, arch, labels_json, state, enrolled_via, \
@@ -313,9 +321,14 @@ pub fn store_offer(conn: &Connection, id: &str, offer: &Offer, at: i64) {
 /// `shared` and the view but keeps the role: a tenant stays a tenant.
 pub fn store_share(conn: &Connection, id: &str, share: Option<&ShareView>, at: i64) {
     let _ = match share {
+        // The role is sticky one way (security review A-H1): an offer may
+        // turn an owned node into a tenant one, never a tenant back into
+        // owned. `tenant` comes from the enrolment (`set_tenant_of`,
+        // `EnrollRequest.shared_by`) or an earlier offer, and a node's own
+        // offer can't lift it.
         Some(v) => conn.execute(
-            "UPDATE compute_nodes SET role = ?2, shared = ?3, owner_label = COALESCE(?4, owner_label), share_json = ?5, share_at = ?6 \
-             WHERE id = ?1",
+            "UPDATE compute_nodes SET role = CASE WHEN role = 'tenant' THEN 'tenant' ELSE ?2 END, shared = ?3, \
+             owner_label = COALESCE(?4, owner_label), share_json = ?5, share_at = ?6 WHERE id = ?1",
             params![id, v.role.as_str(), v.shared as i64, v.owner_label, serde_json::to_string(v).unwrap_or_default(), at],
         ),
         None => conn.execute(

@@ -1525,7 +1525,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // Vault secrets as env (secret-env SE1–SE4): names → ids now (no
     // value), env names and grant coverage once the node is known.
     let secret_asks = crate::compute_secrets::asks_from(v)?;
-    let secrets_found = crate::compute_secrets::find(&ws.id, &ws.handle, &secret_asks)?;
+    let secrets_found = crate::compute_secrets::find(&ws.id, &ws.handle, who.is_admin(), &secret_asks)?;
     let detach = b(&v, "detach") == Some(true);
     // Never stuck (G3/G4): queue timeout, infra retries.
     let tun = compute::retry::tuning();

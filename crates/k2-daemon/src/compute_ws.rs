@@ -760,28 +760,39 @@ static RELEASES: AtomicU64 = AtomicU64::new(0);
 /// connection that asked (SV5); a node that reconnected meanwhile times
 /// out and fails the attempt `secret_unavailable`.
 fn on_secret_need(node_id: &str, conn_id: u64, n: frames::SecretNeed) {
+    // Caps (review A-L1/L2): one release in flight per (job, generation),
+    // one answer per attempt; anything past that is dropped unanswered (a
+    // node asks once per attempt; a retry is a new attempt).
+    if !crate::compute_secrets::need_begin(&n) {
+        return;
+    }
     let node = node_id.to_string();
     RELEASES.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
         let r = crate::compute_secrets::release(&node, &n);
-        let (frame, recorded) = match r {
+        let answer = match r {
             Ok((env, names, redactor)) => {
                 crate::compute_secrets::belt_arm(&n.job_id, n.generation, redactor);
-                (Frame::SecretEnv(env), Ok(names))
+                Some((Frame::SecretEnv(env), Ok(names)))
             }
-            Err((code, message)) => (
+            Err(Some((code, message))) => Some((
                 Frame::SecretRefused(frames::SecretRefused { job_id: n.job_id.clone(), generation: n.generation, code: code.to_string(), message: message.clone() }),
                 Err((code, message)),
-            ),
+            )),
+            // Not a job of this node: dropped, no answer and no k2.db row.
+            Err(None) => None,
         };
-        crate::compute_secrets::record(&node, &n, &recorded);
-        if !send_to_conn(&node, conn_id, frame) {
-            log_debug!("[compute] secret answer for {} dropped: node {node} reconnected or left", n.job_id);
-            if recorded.is_ok() {
-                crate::compute_secrets::belt_disarm(&n.job_id, n.generation);
+        if let Some((frame, recorded)) = answer {
+            crate::compute_secrets::record(&node, &n, &recorded);
+            if !send_to_conn(&node, conn_id, frame) {
+                log_debug!("[compute] secret answer for {} dropped: node {node} reconnected or left", n.job_id);
+                if recorded.is_ok() {
+                    crate::compute_secrets::belt_disarm(&n.job_id, n.generation);
+                }
             }
+            notify_change();
         }
-        notify_change();
+        crate::compute_secrets::need_end(&n);
         RELEASES.fetch_sub(1, Ordering::SeqCst);
     });
 }
@@ -804,10 +815,13 @@ fn on_offer(node_id: &str, o: Offer) {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let before = store::node_by_id(&conn, node_id);
-        store::store_offer(&conn, node_id, &o, compute::now());
-        // The node is the truth: mirror this server's share (0214).
-        store::store_share(&conn, node_id, o.share.as_ref(), compute::now());
+        // V52 first, from what this server already knew (review A-H1): a
+        // node another server owns stays one whatever its offer says.
         let tenant = share::is_tenant(&o) || before.as_ref().is_some_and(store::NodeRow::is_tenant);
+        store::store_offer(&conn, node_id, &o, compute::now());
+        // The node is the truth for its share, but never for its role
+        // upward: `store_share` keeps a tenant a tenant.
+        store::store_share(&conn, node_id, o.share.as_ref(), compute::now());
         (before, tenant)
     };
     // V52: a node another server owns never gets node admin from here

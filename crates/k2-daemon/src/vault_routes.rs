@@ -1370,7 +1370,12 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
     if delivery == Delivery::Api {
         crate::vault::auth_audit("vault-api-grant", &c.actor.stamp(), &format!("ok {}", g.secret_id), "-");
     }
-    Ok(json!({ "ok": true, "grant": g }))
+    let mut out = json!({ "ok": true, "grant": g });
+    // A compute grant to a node another K2 server owns (review B-L3).
+    if let Some(w) = crate::compute_secrets::grant_warning(&g.consumer) {
+        out["warning"] = w.into();
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Default, Deserialize)]

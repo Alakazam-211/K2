@@ -130,9 +130,27 @@ pub struct Found {
     pub scope_arg: String,
 }
 
+/// May `ws_id`'s compute jobs name the secret `m` at all (review B-L4,
+/// A-L3)? Its own workspace's secrets, yes; a person (owner/admin) any;
+/// an agent another scope's (server, another workspace) only once a
+/// person granted it to this workspace's compute jobs. Anything else
+/// answers exactly like a missing secret.
+fn may_name(vault: &k2_vault::LocalVault, ws_id: &str, admin: bool, m: &k2_vault::SecretMeta) -> bool {
+    if m.namespace != k2_vault::Namespace::User {
+        return false;
+    }
+    if (m.scope.kind == ScopeKind::Workspace && m.scope.id == ws_id) || admin {
+        return true;
+    }
+    vault
+        .grants(&Selector::Id(m.id.clone()), &Actor::System("compute".into()))
+        .is_ok_and(|gs| gs.iter().any(|g| g.consumer.compute_parts().is_some_and(|(w, _)| w == ws_id)))
+}
+
 /// Each ask → its secret id: `NAME` in the job's workspace scope, or a
-/// `k2v://` reference. Missing → 404 (exit 3).
-pub(crate) fn find(ws_id: &str, ws_handle: &str, asks: &[Ask]) -> R<Vec<Found>> {
+/// `k2v://` reference the caller may name ([`may_name`]). Missing or not
+/// nameable → the same 404 (exit 3).
+pub(crate) fn find(ws_id: &str, ws_handle: &str, admin: bool, asks: &[Ask]) -> R<Vec<Found>> {
     if asks.is_empty() {
         return Ok(Vec::new());
     }
@@ -145,9 +163,11 @@ pub(crate) fn find(ws_id: &str, ws_handle: &str, asks: &[Ask]) -> R<Vec<Found>> 
         } else {
             Selector::user(Scope::workspace(ws_id), a.name.clone())
         };
-        let m = vault
-            .meta(&sel, &Actor::System("compute".into()))
-            .map_err(|_| no("secret_not_found", 404, format!("--secret {}: no such secret in workspace {ws_handle}'s vault (k2 vault list)", a.name)))?;
+        let missing = || no("secret_not_found", 404, format!("--secret {}: no such secret in workspace {ws_handle}'s vault (k2 vault list)", a.name));
+        let m = vault.meta(&sel, &Actor::System("compute".into())).map_err(|_| missing())?;
+        if !may_name(&vault, ws_id, admin, &m) {
+            return Err(missing());
+        }
         if !seen.insert(m.id.clone()) {
             return Err(no("secret_invalid", 400, format!("--secret {} is named twice", a.name)));
         }
@@ -174,7 +194,7 @@ fn expired(g: &k2_vault::Grant) -> bool {
 pub fn covering_grant(ws_id: &str, node: &NodeRow, secret_id: &str) -> Option<k2_vault::Grant> {
     let vault = crate::vault::get().ok()?;
     let mut consumers = vec![Consumer::compute(ws_id, &node.id)];
-    if !node.is_tenant() {
+    if node.owned_for_secrets() {
         consumers.push(Consumer::compute(ws_id, "*"));
     }
     consumers.iter().find_map(|c| {
@@ -244,12 +264,39 @@ pub(crate) fn not_granted(found: &[(Found, String, bool)], ws_handle: &str, node
         scodes::NOT_GRANTED,
         403,
         format!(
-            "{} isn't granted to workspace {ws_handle}'s compute jobs on '{}'. Only a person can grant it; ask your owner to run: {}",
+            "{} isn't granted to workspace {ws_handle}'s compute jobs on '{}'. Only a person can grant it; ask your owner to run: {}{}",
             missing.iter().map(|(f, _, _)| f.secret_name.as_str()).collect::<Vec<_>>().join(", "),
             node.name,
-            cmds.join(" ; ")
+            cmds.join(" ; "),
+            tenant_warning(node).map(|w| format!(". {w}")).unwrap_or_default()
         ),
     ))
+}
+
+/// A node this server doesn't own (review B-L3): its machine's admin
+/// (root) and its k2-node user can read any value a job there gets.
+pub fn tenant_warning(node: &NodeRow) -> Option<String> {
+    (!node.owned_for_secrets()).then(|| {
+        format!(
+            "Warning: '{}' belongs to another K2 server ({}); that machine's admin (root) and its k2-node user can read the value",
+            node.name,
+            node.owner_label.as_deref().unwrap_or("its owner")
+        )
+    })
+}
+
+/// The warning a `compute:` grant answers with (`k2 vault grant`), when its
+/// node isn't this server's own.
+pub fn grant_warning(c: &Consumer) -> Option<String> {
+    let (_, node) = c.compute_parts()?;
+    if node == "*" {
+        return None;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let n = store::node_by_id(&conn, node)?;
+    drop(conn);
+    tenant_warning(&n)
 }
 
 /// The pins and the plan's env names (sorted, unique).
@@ -266,23 +313,59 @@ pub fn pins(found: &[(Found, String, bool)]) -> (Vec<SecretPin>, Vec<String>) {
 /// A refusal to release: `(code, message)`.
 pub type Refused = (&'static str, String);
 
+/// Releases in flight by (job, generation), and attempts already answered
+/// (bounded, oldest out first).
+static NEEDS: Mutex<Option<(BTreeSet<(String, u32)>, std::collections::VecDeque<(String, u32, u32)>, BTreeSet<(String, u32, u32)>)>> = Mutex::new(None);
+const NEED_LATCH_CAP: usize = 4096;
+
+/// Take one `secret_need` (review A-L1/L2): false when a release for this
+/// (job, generation) is in flight, or this attempt was already answered.
+pub fn need_begin(n: &SecretNeed) -> bool {
+    let mut g = NEEDS.lock().unwrap_or_else(|p| p.into_inner());
+    let (flight, order, latched) = g.get_or_insert_with(Default::default);
+    let attempt = (n.job_id.clone(), n.generation, n.attempt);
+    if flight.contains(&(n.job_id.clone(), n.generation)) || latched.contains(&attempt) {
+        return false;
+    }
+    flight.insert((n.job_id.clone(), n.generation));
+    latched.insert(attempt.clone());
+    order.push_back(attempt);
+    while order.len() > NEED_LATCH_CAP {
+        if let Some(old) = order.pop_front() {
+            latched.remove(&old);
+        }
+    }
+    true
+}
+
+pub fn need_end(n: &SecretNeed) {
+    let mut g = NEEDS.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((flight, _, _)) = g.as_mut() {
+        flight.remove(&(n.job_id.clone(), n.generation));
+    }
+}
+
 /// Check everything for one `secret_need` and seal the values. On success:
 /// the `secret_env` frame, the env names, and the belt's redactor.
-pub fn release(node_id: &str, n: &SecretNeed) -> Result<(SecretEnv, Vec<String>, Redactor), Refused> {
-    let stale = |m: &str| (scodes::ATTEMPT_STALE, m.to_string());
+/// `Err(None)`: not a job of this node, dropped without an answer or a
+/// k2.db row (review A-L1).
+pub fn release(node_id: &str, n: &SecretNeed) -> Result<(SecretEnv, Vec<String>, Redactor), Option<Refused>> {
+    let stale = |m: &str| Some((scodes::ATTEMPT_STALE, m.to_string()));
     let (job, node) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         (store::job_by_id(&conn, &n.job_id), store::node_by_id(&conn, node_id))
     };
-    let job = job.ok_or_else(|| stale("no such job"))?;
-    let node = node.ok_or_else(|| stale("no such node"))?;
-    if job.node_id != node_id || job.generation != n.generation as i64 || job.attempt != n.attempt as i64 || !k2_core::compute::proto::crypto::ct_eq(job.plan_digest.as_bytes(), n.plan_digest.as_bytes()) {
+    let (Some(job), Some(node)) = (job, node) else { return Err(None) };
+    if job.node_id != node_id {
+        return Err(None);
+    }
+    if job.generation != n.generation as i64 || job.attempt != n.attempt as i64 || !k2_core::compute::proto::crypto::ct_eq(job.plan_digest.as_bytes(), n.plan_digest.as_bytes()) {
         return Err(stale("not this job's current attempt on this node"));
     }
     match job.state.as_str() {
         "assigned" | "preparing" => {}
-        "running" | "finishing" => return Err((scodes::ALREADY_RUNNING, "the job already runs; a secret is released only before it starts".into())),
+        "running" | "finishing" => return Err(Some((scodes::ALREADY_RUNNING, "the job already runs; a secret is released only before it starts".into()))),
         s => return Err(stale(&format!("the job is {s}"))),
     }
     let plan = job.plan().ok_or_else(|| stale("the job's plan is unreadable"))?;
@@ -291,14 +374,14 @@ pub fn release(node_id: &str, n: &SecretNeed) -> Result<(SecretEnv, Vec<String>,
     if want.is_empty() || want != have {
         return Err(stale("this job has no secret env"));
     }
-    let key = compute::controller_key().map_err(|e| (scodes::UNAVAILABLE, format!("controller key: {e}")))?;
-    let vault = crate::vault::get().map_err(|e| (scodes::VAULT_LOCKED, format!("the vault isn't open ({})", e.code)))?;
+    let key = compute::controller_key().map_err(|e| Some((scodes::UNAVAILABLE, format!("controller key: {e}"))))?;
+    let vault = crate::vault::get().map_err(|e| Some((scodes::VAULT_LOCKED, format!("the vault isn't open ({})", e.code))))?;
     let who = Requester::Compute {
         workspace_id: job.workspace_id.clone(),
         node_id: node_id.to_string(),
         job_id: job.id.clone(),
         generation: n.generation,
-        owned_node: !node.is_tenant(),
+        owned_node: node.owned_for_secrets(),
     };
     let mut values: Vec<(String, Vec<u8>)> = Vec::new();
     let wipe_all = |v: &mut Vec<(String, Vec<u8>)>| {
@@ -317,7 +400,7 @@ pub fn release(node_id: &str, n: &SecretNeed) -> Result<(SecretEnv, Vec<String>,
                     "vault_not_open" | "vault_locked" => scodes::VAULT_LOCKED,
                     _ => scodes::UNAVAILABLE,
                 };
-                return Err((code, format!("{}: {}", p.name, e.hint)));
+                return Err(Some((code, format!("{}: {}", p.name, e.hint))));
             }
         }
     }
@@ -339,7 +422,7 @@ pub fn release(node_id: &str, n: &SecretNeed) -> Result<(SecretEnv, Vec<String>,
         } else {
             "the node's key for this attempt is unusable".to_string()
         };
-        (code, m)
+        Some((code, m))
     })?;
     let names: Vec<String> = plan.secret_env.clone();
     Ok((SecretEnv { job_id: job.id.clone(), generation: n.generation, epk, ct }, names, redactor))
@@ -430,11 +513,15 @@ pub fn running_with(secret_id: &str, consumer: &Consumer) -> Vec<serde_json::Val
         if node != "*" && n.id != node {
             continue;
         }
-        if node == "*" && n.is_tenant() {
+        if node == "*" && !n.owned_for_secrets() {
             continue;
         }
         for j in store::jobs_in_states(&conn, &n.id, &["preparing", "running", "finishing"]) {
             if j.workspace_id != ws {
+                continue;
+            }
+            // Still covered by another grant (review item 8): not news.
+            if covering_grant(ws, &n, secret_id).is_some() {
                 continue;
             }
             for p in j.ctl.secrets.iter().filter(|p| p.secret_id == secret_id) {

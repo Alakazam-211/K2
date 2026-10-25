@@ -397,6 +397,28 @@ async fn secret_env_release_end_to_end() {
     assert_eq!(p["secrets"], json!([{"name": "GMAIL_CLIENT_SECRET", "secret": "GMAIL_CLIENT_SECRET", "env": ENV, "covered": true}]), "{p}");
 
     // Submit. The plan carries the env name only.
+    // Another workspace's secret by reference (review B-L4): answered
+    // exactly like a missing one; a person may name it.
+    let other = seed_ws(&env, "otherws");
+    {
+        let vault = k2_daemon::vault::get().unwrap();
+        let mut p = PutRequest::new(Namespace::User, Scope::workspace(&other.id), "OTHER_KEY", Kind::ApiKey);
+        p.delivery_ceiling = Some(Delivery::Env);
+        p.hosts = vec!["api.example.com".into()];
+        vault.put(p, SecretBytes::from_slice(b"k2test-secret-OTHER-1234567890"), &Actor::Owner).expect("put other");
+    }
+    let probe = run(d.port, &agent, json!({"node": "k2n4", "secrets": [{"name": "k2v://ws/otherws/OTHER_KEY"}]})).await;
+    let none = run(d.port, &agent, json!({"node": "k2n4", "secrets": [{"name": "k2v://ws/otherws/NO_SUCH_KEY"}]})).await;
+    assert_eq!((probe.status, code(&probe).as_str()), (404, "secret_not_found"), "{}", probe.body);
+    assert_eq!((none.status, code(&none).as_str()), (404, "secret_not_found"), "{}", none.body);
+    assert_eq!(
+        j(&probe)["error"]["hint"].as_str().unwrap().replace("OTHER_KEY", "X"),
+        j(&none)["error"]["hint"].as_str().unwrap().replace("NO_SUCH_KEY", "X"),
+        "an existing secret of another workspace reads like a missing one"
+    );
+    let as_owner = run(d.port, OWNER, json!({"node": "k2n4", "workspace": ws.id, "secrets": [{"name": "k2v://ws/otherws/OTHER_KEY"}]})).await;
+    assert_eq!((as_owner.status, code(&as_owner).as_str()), (403, scodes::NOT_GRANTED), "a person may name it: {}", as_owner.body);
+
     let r = run(d.port, &agent, json!({"node": "k2n4", "retries": 3, "secrets": [{"name": "GMAIL_CLIENT_SECRET"}]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
@@ -452,11 +474,24 @@ async fn secret_env_release_end_to_end() {
     assert_eq!(String::from_utf8(stored).unwrap(), format!("token=[k2v:{ENV}]\n"));
     assert_eq!(events(scodes::REDACTION_MISS, &job).len(), 1);
 
-    // Running: no more releases for this attempt.
-    compute_ws::test_frame("sec-1", state(&job, r1.generation as u32, JobState::Running, None));
+    // One answer per attempt (review A-L2): asking again is dropped, with
+    // no answer and no new event.
     let key = NodeKey::generate().unwrap();
-    compute_ws::test_frame("sec-1", need(&job, &row(&job), &key));
-    assert!(matches!(answer(&mut node, &job, &mut sent), Answer::Refused(c) if c == scodes::ALREADY_RUNNING));
+    compute_ws::test_frame("sec-1", need(&job, &r1, &key));
+    assert!(compute_ws::test_wait_releases(Duration::from_secs(20)));
+    let again = node.frames();
+    assert!(!again.iter().any(|f| matches!(f, Frame::SecretEnv(_) | Frame::SecretRefused(_))), "a second ask for one attempt is answered");
+    assert_eq!(events("secret_release", &job).len(), 1);
+    // Another node asking for this job (review A-L1): dropped, no k2.db row.
+    let refused_before = events("secret_refused", &job).len();
+    let mut other_attempt = r1.clone();
+    other_attempt.attempt += 7;
+    compute_ws::test_frame("old-1", need(&job, &other_attempt, &NodeKey::generate().unwrap()));
+    assert!(compute_ws::test_wait_releases(Duration::from_secs(20)));
+    assert!(old.frames().is_empty(), "another node gets no answer");
+    assert!(node.frames().is_empty());
+    assert_eq!(events("secret_refused", &job).len(), refused_before, "no event for another node's ask");
+    compute_ws::test_frame("sec-1", state(&job, r1.generation as u32, JobState::Running, None));
 
     // The attempt is interrupted: a retry is a new attempt that asks again,
     // and gets its own release and its own audit row (SE27).
@@ -475,8 +510,13 @@ async fn secret_env_release_end_to_end() {
     let releases: Vec<_> = audit.iter().filter(|a| a.actor == "compute:".to_string() + &ws.id + "/sec-1" && a.outcome == "ok").collect();
     assert_eq!(releases.len(), 2, "one audit row per release: {audit:?}");
 
-    // Revoked: the next attempt is refused; the revoke names the running job.
+    // Revoked: the next attempt is refused; the revoke names the running job,
+    // but only once no other grant still covers it (review item 8).
     compute_ws::test_frame("sec-1", state(&job, r2.generation as u32, JobState::Running, None));
+    let star = owner_grant(&secret_id, Consumer::compute(&ws.id, "*"), None);
+    let r = post(d.port, "/cli/vault/revoke", OWNER, json!({"grantId": star})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(j(&r).get("stillRunning").is_none(), "the node grant still covers it: {}", r.body);
     let r = post(d.port, "/cli/vault/revoke", OWNER, json!({"grantId": grant_id})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let still = j(&r)["stillRunning"].as_array().cloned().unwrap_or_default();
@@ -487,8 +527,18 @@ async fn secret_env_release_end_to_end() {
     let r3 = row(&job);
     assert!(r3.attempt > r2.attempt);
     sent.extend(node.frames());
+    // Already running (the node said so): never released.
+    compute_ws::test_frame("sec-1", state(&job, r3.generation as u32, JobState::Running, None));
     let key = NodeKey::generate().unwrap();
-    compute_ws::test_frame("sec-1", need(&job, &r3, &key));
+    compute_ws::test_frame("sec-1", need(&job, &row(&job), &key));
+    assert!(matches!(answer(&mut node, &job, &mut sent), Answer::Refused(c) if c == scodes::ALREADY_RUNNING));
+    compute_ws::test_frame("sec-1", state(&job, r3.generation as u32, JobState::Interrupted, Some("node_restart")));
+    compute_ws::kick("sec-1");
+    let r4 = row(&job);
+    assert!(r4.attempt > r3.attempt);
+    sent.extend(node.frames());
+    let key = NodeKey::generate().unwrap();
+    compute_ws::test_frame("sec-1", need(&job, &r4, &key));
     assert!(matches!(answer(&mut node, &job, &mut sent), Answer::Refused(c) if c == scodes::NOT_GRANTED));
     assert!(!events("secret_refused", &job).is_empty());
 
@@ -538,9 +588,32 @@ async fn any_places_only_on_covered_nodes() {
     }
     assert!(ten.frames().iter().all(|f| !matches!(f, Frame::Assign(_))), "the tenant node never gets the job");
     assert!(own.frames().iter().any(|f| matches!(f, Frame::Assign(_))));
-    // Named, on the tenant node: `*` doesn't cover it.
+    // Named, on the tenant node: `*` doesn't cover it, and the refusal says
+    // that machine's admin could read the value (review B-L3).
     let r = run(d.port, &agent, json!({"node": "tenant-node", "secrets": [{"name": "GMAIL_CLIENT_SECRET"}]})).await;
     assert_eq!((r.status, code(&r).as_str()), (403, scodes::NOT_GRANTED), "{}", r.body);
+    let hint = j(&r)["error"]["hint"].as_str().unwrap().to_string();
+    assert!(hint.contains("belongs to another K2 server") && hint.contains("can read the value"), "{hint}");
+    // Review A-H1: the tenant node's offer now claims it's the owner. The
+    // role stays tenant and `*` still doesn't cover it.
+    let mut owner_view = tenant_view();
+    owner_view.role = Role::Owner;
+    owner_view.slot = 0;
+    owner_view.owner_label = None;
+    compute_ws::test_frame("ten-1", Frame::Offer(offer(&feats, Some(owner_view))));
+    let row_now = {
+        let db = k2_core::db::shared();
+        let n = store::node_by_id(&db.lock(), "ten-1").unwrap();
+        n
+    };
+    assert!(row_now.is_tenant() && !row_now.owned_for_secrets(), "an offer never turns a tenant node into an owned one");
+    assert!(k2_daemon::compute_secrets::covering_grant(&ws.id, &row_now, &secret_id).is_none(), "`*` never covers a tenant node");
+    let r = run(d.port, &agent, json!({"node": "tenant-node", "secrets": [{"name": "GMAIL_CLIENT_SECRET"}]})).await;
+    assert_eq!((r.status, code(&r).as_str()), (403, scodes::NOT_GRANTED), "{}", r.body);
+    // A grant naming the tenant node answers with the warning.
+    let r = post(d.port, "/cli/vault/grant", OWNER, json!({"id": secret_id, "to": format!("compute:anyw/tenant-node"), "as": "env"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(j(&r)["warning"].as_str().is_some_and(|w| w.contains("can read the value")), "{}", r.body);
     compute_ws::test_detach("own-1");
     compute_ws::test_detach("ten-1");
 }

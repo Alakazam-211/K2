@@ -854,11 +854,38 @@ fn waiting_parts(tie: &skin::ties::Tie, grants: &[skin::SkinGrant], roles: &[ski
     out
 }
 
-/// After an owner's skin write: each tied person whose grants now reach
-/// past their ceiling gets one card on their tie's Thread (an inbox note
-/// when that workspace has no Thread). One per person while it stays
-/// pending; nothing again until it clears and comes back.
+/// After an owner's skin write: queue a [`sweep_pending_now`] on a
+/// background thread, so posting a card never holds up the owner's write.
+/// One sweep runs at a time; writes during it ask for one more.
 pub fn sweep_pending() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    static AGAIN: AtomicBool = AtomicBool::new(false);
+    AGAIN.store(true, Ordering::SeqCst);
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("k2-tie-sweep".into()).spawn(|| loop {
+        while AGAIN.swap(false, Ordering::SeqCst) {
+            sweep_pending_now();
+        }
+        RUNNING.store(false, Ordering::SeqCst);
+        // A write that came in between the last check and now.
+        if !AGAIN.load(Ordering::SeqCst) || RUNNING.swap(true, Ordering::SeqCst) {
+            break;
+        }
+    });
+    if let Err(e) = spawned {
+        RUNNING.store(false, Ordering::SeqCst);
+        k2_core::log_debug!("[invites] pending sweep thread: {e}");
+    }
+}
+
+/// Each tied person whose grants now reach past their ceiling gets one
+/// card on their tie's Thread (an inbox note when that workspace has no
+/// Thread). One per person while it stays pending; nothing again until it
+/// clears and comes back.
+pub fn sweep_pending_now() {
     let tied = match crate::skin_routes::tie_display() {
         Ok(t) => t,
         Err(e) => {

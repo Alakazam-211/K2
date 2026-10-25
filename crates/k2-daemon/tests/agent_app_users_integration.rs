@@ -848,11 +848,17 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     // workspace has no Thread); a second widen adds none.
     owner_post(port, "/cli/skin/grants/host", json!({ "username": u1, "present": true })).await;
     owner_post(port, "/cli/skin/roles/room", json!({ "name": role, "handle": ops.handle, "caps": ["thread:read"] })).await;
-    let notes: Vec<_> = k2_core::feedback::list_for_project(&sales.id, &k2_core::feedback::ListFilter::Open)
-        .unwrap()
-        .into_iter()
-        .filter(|i| i.title == format!("Extra access for {u1} waits for a password reset"))
-        .collect();
+    let card_notes = || -> Vec<k2_core::feedback::FeedbackItem> {
+        k2_core::feedback::list_for_project(&sales.id, &k2_core::feedback::ListFilter::Open)
+            .unwrap()
+            .into_iter()
+            .filter(|i| i.title == format!("Extra access for {u1} waits for a password reset"))
+            .collect()
+    };
+    // The sweep runs off the request (it never holds up the owner's write).
+    wait_until("the owner's card", 10, || !card_notes().is_empty()).await;
+    k2_daemon::app_user_invites::sweep_pending_now();
+    let notes = card_notes();
     assert_eq!(notes.len(), 1, "one card per newly pending person");
     let note = notes[0].body.clone().unwrap_or_default();
     // The card names what was waiting when it was posted (the box login);

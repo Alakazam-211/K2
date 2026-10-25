@@ -312,6 +312,28 @@ fn open_dir_at(dirfd: libc::c_int, name: &CStr) -> std::io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
+/// Open a directory on the WAY to another one, without following a symlink
+/// at its last component. On Linux an `O_PATH` fd: it needs only search
+/// (`x`) on the directory, never read, so a walk passes through an
+/// ancestor the caller may enter but not list (a job's temp dir under the
+/// node's `0710` state dir, `/home/<user>` at `0711`). Such an fd is only
+/// ever a dirfd for the next `fstatat`/`readlinkat`/`openat` and an
+/// `fstat`; the directory the walk ends at is opened for real by
+/// [`open_dir_at`]. Elsewhere (no `O_PATH`) the same as [`open_dir_at`].
+fn open_way_at(dirfd: libc::c_int, name: &CStr) -> std::io::Result<OwnedFd> {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: valid C string; the fd is owned by the returned OwnedFd.
+        let fd = unsafe { libc::openat(dirfd, name.as_ptr(), libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(errno());
+        }
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+    #[cfg(not(target_os = "linux"))]
+    open_dir_at(dirfd, name)
+}
+
 /// Open the directory at absolute `p` one component at a time, each with
 /// `O_NOFOLLOW` (review A, H2): a link the node or a job planted anywhere
 /// on the way fails the open instead of moving root somewhere else, and
@@ -319,6 +341,8 @@ fn open_dir_at(dirfd: libc::c_int, name: &CStr) -> std::io::Result<OwnedFd> {
 /// Only a link root owns, in a directory only root may write, is followed
 /// (`/var` → `private/var` on macOS; nobody else can plant or swap one),
 /// and never at the last component: the directory itself is never a link.
+/// Ancestors are only passed through ([`open_way_at`]: search permission,
+/// no read); the last component is opened readable, as the walks need.
 pub fn open_dir_path(p: &Path) -> Result<OwnedFd, String> {
     use std::collections::VecDeque;
     use std::path::Component;
@@ -379,7 +403,8 @@ pub fn open_dir_path(p: &Path) -> Result<OwnedFd, String> {
             push_path(&mut todo, &target, true).map_err(bad)?;
             continue;
         }
-        cur = open_dir_at(cur.as_raw_fd(), &name).map_err(|e| bad(format!("{}: {e}", n.to_string_lossy())))?;
+        let open: fn(libc::c_int, &CStr) -> std::io::Result<OwnedFd> = if todo.is_empty() { open_dir_at } else { open_way_at };
+        cur = open(cur.as_raw_fd(), &name).map_err(|e| bad(format!("{}: {e}", n.to_string_lossy())))?;
     }
     Ok(cur)
 }
@@ -966,6 +991,42 @@ mod tests {
         std::fs::hard_link(d.join("victim"), t.join("hl")).unwrap();
         let s = reclaim(&t, uid, gid).unwrap();
         assert!(s.skipped >= 1, "{s:?}");
+    }
+
+    /// A walk needs only search permission on the directories on its way
+    /// (K2 Compute's job wall: the job's temp dir sits under the node's
+    /// state dir, which the job user may enter but not list). The test
+    /// builds that shape in its own temp dir: an ancestor this user may
+    /// enter (`--x`) but not read; the walk still opens the directory past
+    /// it, reads it and changes modes in it, and a link planted past the
+    /// unreadable ancestor is still refused. (Linux: `O_PATH`.)
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn walks_pass_an_ancestor_they_may_enter_but_not_list() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = crate::util::temp_dir("search-only");
+        let gate = d.join("gate");
+        let inner = gate.join("inner");
+        std::fs::create_dir_all(inner.join("sub")).unwrap();
+        std::fs::set_permissions(inner.join("sub"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(inner.join("f"), "x").unwrap();
+        std::os::unix::fs::symlink(&inner, gate.join("alias")).unwrap();
+        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o111)).unwrap();
+        // SAFETY: no preconditions.
+        if unsafe { libc::geteuid() } != 0 {
+            assert!(std::fs::read_dir(&gate).is_err(), "the fixture: this user can't list {}", gate.display());
+        }
+        let fd = open_dir_path(&inner).expect("through a search-only ancestor");
+        let mut got: Vec<String> = names(&fd).unwrap().iter().map(|n| n.to_string_lossy().into_owned()).collect();
+        got.sort();
+        assert_eq!(got, vec!["f", "sub"], "the directory the walk ends at is opened readable");
+        let s = share_with_jobs(&inner).unwrap();
+        assert!(s.changed >= 1, "{s:?}");
+        assert_eq!(std::fs::metadata(inner.join("sub")).unwrap().permissions().mode() & 0o770, 0o770);
+        let e = open_dir_path(&gate.join("alias/sub")).map(|_| ()).unwrap_err();
+        assert!(e.contains("a link not root's own"), "{e}");
+        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

@@ -113,8 +113,10 @@ PER-APP LOGINS (0.45.5)
   files:download, chat), the extra waits until they reset their password:
   sign-in, refresh and live sessions stay at that workspace's access, no
   chat pass. Settings → User Access shows "Waiting for reset"; K2 also
-  posts one card. k2 app user reset <u> mails a reset link (stored email,
-  or --to <email>, or --code to see it yourself); using it starts the rest.
+  posts one card. k2 app user reset <u> --code gives you a one-time link
+  on K2's own page (never the App's); using it starts the rest. Mail it
+  with --from <an address no agent reads> to the stored email or --to; an
+  email an agent set is never used (--to or --code).
 
 INVITES (0.46.4)
   k2 app user invite <u> --app <app> [--email e] [--role R]
@@ -132,18 +134,25 @@ INVITES (0.46.4)
   the box front door's /reset.
   An App's own forgot-password (password.forgot with its pass) mails a
   reset link the same way; the App never gets the token, and reaches only
-  people of its own workspace (and App).
+  people of its own workspace (and App). An App key's reset
+  (/v1/apps/<id>/users/password-reset) mails the link too, never returns
+  it. A person who uses an invite, an App's reset or an App key's reset is
+  tied to that workspace (the App's page, key or mailbox could see it).
+  Every link mail leaves no copy in the sending mailbox.
   LINK LIVES (named settings): invites 72 hours, resets 24 hours by
   default. The App's builder (its own agent with "…manage them end to
   end") or the owner sets its own, 15 minutes to 30 days:
     k2 app login settings <app> --invite-ttl 7d --reset-ttl 2h
-  (--app host sets the box login's). Back to the default: --default inviteTtl.
+  (the owner only for --app host, the box login). Back to the default:
+  --default inviteTtl. The set-password page is https on the App's own
+  domain or this box's K2 domain (or http://localhost for a local App).
   MAIL TEXT: the App may give its own subject and body:
     k2 app login settings <app> --invite-subject "Welcome to {app}" --invite-body-file invite.txt
   Placeholders {app} {name} {username} {sender} {expires}. K2 always adds
   the set-password link, its expiry and "If you weren't expecting this,
   ignore it. Nobody at <App> will ask for your password." after the body;
-  a template can't place the link ({link} and k2inv_ are refused). No
+  a template carries no links at all ({link}, k2inv_, http(s):// and www.
+  are refused). An owner reset always uses K2's own text. No
   template: K2's own ("You're invited to <App>").
   Isolation for a person only holds when they have no box login (User
   Access → host switch off). Box login off still ends ALL their sessions.

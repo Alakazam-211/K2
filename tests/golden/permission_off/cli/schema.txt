@@ -2341,7 +2341,7 @@ exit: 0
     {
       "name": "app user reset",
       "usage": "k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>] [--json]",
-      "description": "Owner only. A one-time reset link. When it is used, the password is set, every session ends, and extra access that waited for a reset (an agent made or set up this person) starts. Mailed to the stored email by default; --to mails another address (stored as their email on use); --code shows the link to you instead of mailing it. Reset links expire (24 h by default; k2 app login settings).",
+      "description": "Owner only. A one-time reset link. When it is used, the password is set, every session ends, and extra access that waited for a reset (an agent made or set up this person) starts. The link is always K2's own set-password page (the box front door's /cli/skin/password/set, never an App's) with K2's fixed text. --code shows the link to you (the code alone when the box has no front door). Mailing needs --from <an address no agent can read> (a workspace mailbox could be read by its agent); it goes to the stored email, or --to (stored as their email on use). When an agent set the email, the stored email is refused: use --to or --code. Reset links expire (24 h by default; k2 app login settings).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--app", "arg": "app", "description": "Whose set-password page and link life to use (default: the App the person uses)."},

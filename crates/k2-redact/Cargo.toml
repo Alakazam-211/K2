@@ -8,5 +8,8 @@ description = "K2 exact-value redaction: one redactor shared by the vault (daemo
 
 [dependencies]
 aho-corasick = "1"
-base64 = "0.22"
 serde_json = "1"
+
+[dev-dependencies]
+# The tests check the patterns against a real encoder.
+base64 = "0.22"

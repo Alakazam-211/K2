@@ -6,13 +6,12 @@
 //! job's output before the journal), so both redact byte-for-byte alike.
 //!
 //! Each value is matched raw and in the encodings it most often turns up
-//! in: base64 (std and url-safe, all three byte alignments, padding
-//! stripped), lower/upper hex, percent-encoding, and JSON string escaping.
+//! in: base64 (std and url-safe, all three byte alignments, the partial
+//! characters at both edges and any padding included), lower/upper hex,
+//! percent-encoding, and JSON string escaping.
 //! Matches become `[k2v:NAME]`.
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
-use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
-use base64::Engine as _;
 
 /// Values shorter than this aren't matched in K2's own surfaces (too many
 /// false hits). Fetch/proxy redaction of the injected value has no floor.
@@ -50,21 +49,74 @@ pub struct Redactor {
     first: [bool; 256],
 }
 
+const B64_STD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const B64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/// Bit `i` of `v`, most significant bit of `v[0]` first.
+fn bit(v: &[u8], i: usize) -> u8 {
+    (v[i / 8] >> (7 - (i % 8))) & 1
+}
+
+/// The value of `n` bits of `v` from bit `from`.
+fn bits(v: &[u8], from: usize, n: usize) -> u8 {
+    (0..n).fold(0u8, |acc, k| (acc << 1) | bit(v, from + k))
+}
+
+/// Every base64 form of `v` at each of the three byte alignments, in both
+/// alphabets. Beyond the characters `v` alone determines, the partial
+/// characters at either edge are matched too, in every form consistent with
+/// `v`'s own bits there (the other bits come from the neighbouring bytes,
+/// so each edge has 4 or 16 forms), and a final partial character is also
+/// matched with its `=`/`==` padding. So a redacted value leaves no
+/// character that carries any of its bits (VM root test, round 2: a
+/// trailing `g==` survived and leaked the last byte's top bits).
 fn base64_variants(v: &[u8], out: &mut Vec<Vec<u8>>) {
     if v.len() < 3 {
         return;
     }
+    let nbits = v.len() * 8;
     for shift in 0..3usize {
-        let mut buf = vec![0u8; shift];
-        buf.extend_from_slice(v);
-        for engine in [&STANDARD_NO_PAD, &URL_SAFE_NO_PAD] {
-            let enc = engine.encode(&buf);
-            let start = (8 * shift).div_ceil(6);
-            let end = (8 * (shift + v.len())) / 6; // exclusive
-            if end > start && end <= enc.len() {
-                let s = enc.as_bytes()[start..end].to_vec();
-                if s.len() >= 4 {
-                    out.push(s);
+        // `v` sits at bits [8·shift, 8·shift + nbits) of the encoded data.
+        let s0 = 8 * shift;
+        let s1 = s0 + nbits;
+        let first = s0.div_ceil(6); // first char made of v's bits only
+        let end = s1 / 6; // one past the last such char
+        for alpha in [B64_STD, B64_URL] {
+            let full: Vec<u8> = (first..end).map(|c| alpha[bits(v, 6 * c - s0, 6) as usize]).collect();
+            // Leading partial char: its low k bits are v's first k bits.
+            let lead: Vec<Option<u8>> = if s0 % 6 == 0 {
+                vec![None]
+            } else {
+                let k = 6 * first - s0;
+                let known = bits(v, 0, k);
+                (0..(1u8 << (6 - k))).map(|u| Some(alpha[((u << k) | known) as usize])).collect()
+            };
+            // Trailing partial char: its high k bits are v's last k bits.
+            let (trail, padded): (Vec<Option<u8>>, Option<(u8, usize)>) = if s1 % 6 == 0 {
+                (vec![None], None)
+            } else {
+                let k = s1 - 6 * end;
+                let known = bits(v, nbits - k, k);
+                let forms = (0..(1u8 << (6 - k))).map(|u| Some(alpha[((known << (6 - k)) | u) as usize])).collect();
+                (forms, Some((alpha[(known << (6 - k)) as usize], (6 - k) / 2)))
+            };
+            for l in &lead {
+                let mut p: Vec<u8> = l.iter().copied().collect();
+                p.extend_from_slice(&full);
+                for t in &trail {
+                    let mut q = p.clone();
+                    q.extend(t.iter().copied());
+                    if q.len() >= 4 {
+                        out.push(q);
+                    }
+                }
+                if let Some((c, pads)) = padded {
+                    let mut q = p.clone();
+                    q.push(c);
+                    q.extend(std::iter::repeat(b'=').take(pads));
+                    if q.len() >= 4 {
+                        out.push(q);
+                    }
                 }
             }
         }
@@ -261,8 +313,44 @@ impl Drop for StreamRedactor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
+    use base64::Engine as _;
 
     const KEY: &[u8] = b"k2test_fake_key_4eC39HqLyjWDarjt";
+
+    /// Round 2 (VM root test): no base64 character that carries any bit of
+    /// the value survives, at either edge, with or without padding, in both
+    /// alphabets, at every alignment, for 31-, 32- and 33-byte values (all
+    /// three `len % 3`). Strict: the output is exactly the characters made
+    /// of the neighbours' bits only, around the marker.
+    #[test]
+    fn base64_edges_and_padding_leave_nothing_of_the_value() {
+        for len in [31usize, 32, 33] {
+            let v: Vec<u8> = (0..len).map(|i| b"k2test-secret-EDGE-q8Zr3Lx0PwMnBvC1"[i % 34]).collect();
+            let r = Redactor::new([("K", v.as_slice())]);
+            for prefix in [&b""[..], b"x", b"\xffy"] {
+                for suffix in [&b""[..], b"tail!", b"\x00"] {
+                    for (name, engine) in [("std", &STANDARD), ("url", &URL_SAFE), ("std-nopad", &STANDARD_NO_PAD), ("url-nopad", &URL_SAFE_NO_PAD)] {
+                        let data = [prefix, v.as_slice(), suffix].concat();
+                        let enc = engine.encode(&data);
+                        let head = &enc[..(8 * prefix.len()) / 6];
+                        let tail = if suffix.is_empty() { "" } else { &enc[(8 * (prefix.len() + len)).div_ceil(6)..] };
+                        let want = format!("{head}[k2v:K]{tail}");
+                        let got = r.redact_str(&enc);
+                        assert_eq!(got, want, "len {len} prefix {prefix:?} suffix {suffix:?} {name}");
+                        // A stream split anywhere gives the same.
+                        let mut s = r.stream();
+                        let mut out = Vec::new();
+                        for b in enc.as_bytes() {
+                            out.extend(s.push(std::slice::from_ref(b)));
+                        }
+                        out.extend(s.finish());
+                        assert_eq!(String::from_utf8(out).unwrap(), want, "stream: len {len} prefix {prefix:?} suffix {suffix:?} {name}");
+                    }
+                }
+            }
+        }
+    }
 
     fn r() -> Redactor {
         Redactor::new([("STRIPE_KEY", KEY)])

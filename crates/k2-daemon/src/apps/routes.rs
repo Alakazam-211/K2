@@ -380,6 +380,16 @@ fn validate_opts(v: &J) -> deploy::validate::Options {
 
 /// Route a runtime request. Blocking.
 pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
+    // An agent passport is the label caller for everything below, so the
+    // hostname step (`attach_hostname`) knows it's an agent's call
+    // (security review D); other callers keep the fail-closed default.
+    if matches!(who, Who::Agent { .. }) {
+        return crate::label_owner::with_caller(crate::label_owner::Caller::Agent, || handle_inner(path, who, body, params));
+    }
+    handle_inner(path, who, body, params)
+}
+
+fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
     if !deploy::enabled() {
         return dark();
     }

@@ -799,6 +799,17 @@ fn gate_hint(kind: &str) -> String {
     )
 }
 
+/// The code an agent gets for an existing hostname its workspace doesn't
+/// hold (the same as `apps::labels::LABEL_EXISTS`).
+pub(crate) const AGENT_LABEL_EXISTS: &str = "label_exists_elsewhere";
+
+/// `project_id` holds `label` (the 0074 attribution row).
+fn agent_holds_label(project_id: &str, label: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    SubdomainWorkspace::owner_of(&conn, label).ok().flatten().as_deref() == Some(project_id)
+}
+
 pub(crate) fn attach_hostname(
     project_id: &str,
     name: &str,
@@ -821,6 +832,15 @@ pub(crate) fn attach_hostname(
         // this workspace holds it (or it is unattributed, or an audited
         // owner/admin transfer).
         Err(e) if e.contains("label_taken") => {
+            // The control plane says the label exists. An agent repoints it
+            // only when its own workspace holds it: never on the word of a
+            // cached hostname map that is empty or stale (security review D).
+            if caller == crate::label_owner::Caller::Agent && !agent_holds_label(project_id, name) {
+                return Err(format!(
+                    "{AGENT_LABEL_EXISTS}: '{name}' already exists on this box and isn't your workspace's: an agent never repoints it. \
+                     Pick a new label, or ask your owner to move it deliberately (--transfer, from a terminal outside K2)"
+                ));
+            }
             subdomains::point_subdomain(token, name, &target)?;
         }
         Err(e) => return Err(e),
@@ -2689,6 +2709,49 @@ mod tests {
             assert!(err.contains("target_is_daemon"), "{caller:?}: {err}");
         }
         assert_eq!(mock.hits.load(AtomOrd::SeqCst), 0, "no control-plane call on refusal");
+    }
+
+    /// Security review D: when the control plane says a label exists
+    /// (`label_taken`), an agent repoints it only when its own workspace
+    /// holds it, whatever the (here empty) cached hostname map says; the
+    /// owner and the agent's own label go on to the repoint.
+    #[test]
+    fn an_agent_never_repoints_an_existing_label_its_workspace_doesnt_hold() {
+        let _home = crate::test_support::TempHome::new();
+        let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
+        fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+        let mock = start_mock_cp(409, r#"{"error":"label_taken"}"#, "*");
+        let dir = _home.path().join("ws-taken");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let hold = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = hold.local_addr().unwrap().port();
+        // The cached map has never heard of it (stale): only the control
+        // plane's answer says it exists.
+        let handmade = unique("handmade");
+        assert!(!subdomains::current().targets.contains_key(&handmade), "the cached map knows nothing of it");
+        let err = crate::label_owner::with_caller(crate::label_owner::Caller::Agent, || {
+            attach_hostname(&project_id, &handmade, port, "tok_test", "rosson", false)
+        })
+        .expect_err("an agent never repoints a label nobody holds");
+        assert!(err.starts_with(AGENT_LABEL_EXISTS), "{err}");
+        assert_eq!(mock.hits.load(AtomOrd::SeqCst), 1, "the create only, never the repoint");
+        // The owner goes on to the repoint (the mock refuses that too).
+        let _ = crate::label_owner::with_caller(crate::label_owner::Caller::Manager { actor: "owner".into() }, || {
+            attach_hostname(&project_id, &handmade, port, "tok_test", "rosson", false)
+        });
+        assert_eq!(mock.hits.load(AtomOrd::SeqCst), 3, "the owner's create and repoint");
+        // The agent's own workspace's label goes on to the repoint too.
+        let mine = unique("mine");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            SubdomainWorkspace::claim(&conn, &mine, &project_id).expect("claim");
+        }
+        let _ = crate::label_owner::with_caller(crate::label_owner::Caller::Agent, || {
+            attach_hostname(&project_id, &mine, port, "tok_test", "rosson", false)
+        });
+        assert_eq!(mock.hits.load(AtomOrd::SeqCst), 5, "its own label: create and repoint");
     }
 
     /// AR6: `rm` of a same-named service never drops another workspace's

@@ -507,6 +507,11 @@ fn agent_may_write_pass(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
             return Err(outside_workspace("that sign-in belongs to a guest outside your workspace".to_string()));
         }
     }
+    // A pass whose rooms are empty or can't be read says nothing about
+    // where it reaches: never an agent's (hardening).
+    if !t.session && (!t.rooms_readable || t.rooms.is_empty()) {
+        return Err(outside_workspace("that pass names no room an agent can check (none, or unreadable)".to_string()));
+    }
     if t.app_service_id.as_deref().is_some_and(|app| !app_of_workspace(app, ws)) || !rooms_in(&t.rooms, ws) {
         return Err(outside_workspace("that pass reaches outside your workspace (another workspace's room or App)".to_string()));
     }

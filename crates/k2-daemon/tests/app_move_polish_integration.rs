@@ -1154,6 +1154,26 @@ async fn an_agent_mints_and_edits_only_its_own_workspaces_platform_passes() {
     let r = post(d.port, "/cli/skin-tokens/revoke", OWNER, json!({"id": session.id})).await;
     assert_eq!((r.status, r.json()["success"].clone()), (200, json!(true)), "still live until the owner revokes it: {}", r.body);
 
+    // A pass with no rooms, or rooms that can't be read: never the agent's.
+    let r = post(d.port, "/cli/skin-tokens", OWNER, json!({"name": "pt-dark", "caps": ["thread:read"], "rooms": [a.handle]})).await;
+    let dark = r.json()["id"].as_str().expect("id").to_string();
+    let r = post(d.port, "/cli/skin-tokens/rooms", OWNER, json!({"id": dark, "rooms": []})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/skin-tokens", OWNER, json!({"name": "pt-garbled", "caps": ["thread:read"], "rooms": [a.handle]})).await;
+    let garbled = r.json()["id"].as_str().expect("id").to_string();
+    {
+        let conn = rusqlite::Connection::open(k2_core::paths::k2_home().join("skin.db")).expect("skin.db");
+        let n = conn.execute("UPDATE tokens SET rooms = 'not json' WHERE id = ?1", rusqlite::params![garbled]).expect("garble");
+        assert_eq!(n, 1);
+    }
+    for id in [&dark, &garbled] {
+        let r = post(d.port, "/cli/skin-tokens/rooms", &agent, json!({"id": id, "rooms": [a.handle]})).await;
+        refused(&r, "re-room a pass naming no room");
+        let r = post(d.port, "/cli/skin-tokens/revoke", &agent, json!({"id": id})).await;
+        refused(&r, "revoke a pass naming no room");
+        assert_eq!(pass(id).revoked_at, None, "still live");
+    }
+
     // Its own pass: revoked. The owner is unchanged.
     let r = post(d.port, "/cli/skin-tokens/revoke", &agent, json!({"id": mine})).await;
     assert_eq!((r.status, r.json()["success"].clone()), (200, json!(true)), "{}", r.body);

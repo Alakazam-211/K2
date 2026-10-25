@@ -3647,6 +3647,9 @@ pub struct TokenScope {
     pub linked: bool,
     pub caps: Vec<String>,
     pub rooms: Vec<String>,
+    /// The stored rooms parsed as a list of rooms (else `rooms` is empty
+    /// because it couldn't be read, not because there are none).
+    pub rooms_readable: bool,
 }
 
 /// [`TokenScope`] of the token `id` (any kind, live or revoked).
@@ -3666,6 +3669,7 @@ pub fn token_scope(id: &str) -> Result<Option<TokenScope>, String> {
                     linked: r.get::<_, Option<String>>(3)?.is_some_and(|l| !l.trim().is_empty()),
                     caps: caps_from_json(&caps_raw),
                     rooms: rooms_from_json(&rooms_raw),
+                    rooms_readable: serde_json::from_str::<Vec<String>>(&rooms_raw).is_ok(),
                 })
             },
         )

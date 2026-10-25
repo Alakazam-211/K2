@@ -158,6 +158,16 @@ pub fn verify_updater_sig_with(
     Err(last)
 }
 
+/// The release asset each `latest.json` platform installs (what release.sh
+/// and windows-patch-latest-json.sh sign); `None` = not a K2 app update.
+pub fn app_update_asset(platform: &str, version: &str) -> Option<String> {
+    match platform {
+        "darwin-aarch64" => Some("K2.app.tar.gz".to_string()),
+        "windows-x86_64" => Some(format!("K2_{version}_x64-setup.exe")),
+        _ => None,
+    }
+}
+
 /// The last path segment of a URL (the asset name a signature must name).
 pub fn url_asset_name(url: &str) -> Option<&str> {
     let path = url.split(['?', '#']).next()?;
@@ -190,16 +200,22 @@ pub fn verify_app_update_with(
         .get("platforms")
         .and_then(|p| p.as_object())
         .ok_or("latest.json has no platforms")?;
-    let entries: Vec<&serde_json::Value> = platforms
-        .values()
-        .filter(|e| e.get("url").and_then(|u| u.as_str()) == Some(download_url))
+    let entries: Vec<(&String, &serde_json::Value)> = platforms
+        .iter()
+        .filter(|(_, e)| e.get("url").and_then(|u| u.as_str()) == Some(download_url))
         .collect();
-    let entry = match entries.as_slice() {
+    let (platform, entry) = match entries.as_slice() {
         [one] => *one,
         [] => return Err(format!("latest.json lists no platform with url {download_url}")),
         _ => return Err(format!("latest.json lists {download_url} under more than one platform")),
     };
-    let asset = url_asset_name(download_url).ok_or("the update URL has no file name")?;
+    // The file a platform's update must be, pinned here, not taken from the
+    // (unsigned) manifest URL: the signature has to name exactly this.
+    let asset = app_update_asset(platform, version)
+        .ok_or_else(|| format!("K2 publishes no app update for platform {platform}"))?;
+    if url_asset_name(download_url) != Some(asset.as_str()) {
+        return Err(format!("the {platform} update URL is not {asset}: {download_url}"));
+    }
     let sigs = entry.get("k2_signatures").and_then(|s| s.as_object()).ok_or_else(|| {
         format!(
             "this update has no K2 signature (k2_signatures): releases before {FIRST_U2_SIGNED_VERSION} are signed with the retired key only, and this version can't install them"
@@ -212,7 +228,7 @@ pub fn verify_app_update_with(
             .ok()
             .and_then(|b| String::from_utf8(b).ok())
             .ok_or_else(|| format!("k2_signatures[{}] is not base64 text", k.key_id))?;
-        return verify_updater_sig_with(&[*k], data, &text, asset, version);
+        return verify_updater_sig_with(&[*k], data, &text, &asset, version);
     }
     if keys.is_empty() {
         return Err("this build trusts no update key yet (the update-key ceremony has not landed); refusing".into());

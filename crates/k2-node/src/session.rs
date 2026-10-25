@@ -1082,7 +1082,15 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
             st.last_good = Some(f.clone());
             (Some(f), None)
         }
-        Ok(Some(_)) => (None, Some("servers.toml names another owner server than this node's; serving the owner only (re-add the servers after a re-enrol)".to_string())),
+        Ok(Some(_)) => (
+            None,
+            Some(
+                "servers.toml names another owner server than this node's (a re-enrol with --force?): serving the owner only, the other servers are on hold. \
+                 To move a shared node to another of your servers without dropping the rest, enrol back to the old owner and use \
+                 `sudo k2-node servers owner <server>` (or `k2 compute node servers <node> owner <server>`)"
+                    .to_string(),
+            ),
+        ),
         Err(e) => (st.last_good.clone().filter(|f| mine(f)), Some(format!("{e} (serving on with the last good copy)"))),
     };
 

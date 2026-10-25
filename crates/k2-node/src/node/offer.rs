@@ -161,10 +161,10 @@ impl Node {
         let info = t.share()?;
         let now = self.now();
         let state = t.status_at(now)?;
-        // The owner sees a share view only once someone shares its node.
-        if t.is_owner() && !info.shared {
-            return None;
-        }
+        // The owner gets its view whenever `servers.toml` exists (`share()`
+        // is set only then), shared or not: a new owner on a node left with
+        // no other server must still learn it's the owner (A2, MT34). A
+        // solo node without the file sends none, as in 0.46.2.
         let running = self.running_by_tenant().get(&t.slot).map(|v| v.len() as u32).unwrap_or(0);
         // Its own statement: the ledger guard must be gone before `quotes`
         // (the queue's snapshot locks every ledger).

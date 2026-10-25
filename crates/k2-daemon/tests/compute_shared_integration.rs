@@ -779,3 +779,89 @@ async fn servers_add_is_held_one_at_a_time_and_hides_the_binding() {
         compute_ws::test_detach(id);
     }
 }
+
+/// prd-macos-tenant-compute-v1 §6.3 (MT34–MT36): after an owner change.
+/// Owner → tenant follows the node: the mirrored server list goes, open
+/// admin requests fail `not_node_owner`. Tenant → owner never follows the
+/// node's offer (share view or owner-only features).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_role_follows_the_node_after_an_owner_change() {
+    let env = setup();
+    let _d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "flip");
+    active_node("flip-1", "flip-1", "linux", &ws);
+    let admin_feats = [FEATURE_QUEUE, FEATURE_SERVERS, "admin", "health", "self-update"];
+    let _n = compute_ws::test_attach("flip-1", offer(&admin_feats, 0, Some(view(Role::Owner, 0, 0))));
+    let role = || store::node_by_id(&k2_core::db::shared().lock(), "flip-1").unwrap().role;
+    let flips = || -> i64 {
+        k2_core::db::shared().lock().query_row("SELECT COUNT(*) FROM compute_events WHERE kind = 'role_change' AND node_id = 'flip-1'", [], |r| r.get(0)).unwrap()
+    };
+    assert_eq!(role(), "owner");
+    let req_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let row = k2_core::compute::share::ServerRow {
+            slot: 1,
+            label: "z3thon.k2.dev".into(),
+            fp: Some("ab".repeat(32)),
+            state: "active".into(),
+            trust: "own".into(),
+            limits: ShareLimits::new_server(Trust::Own, false),
+            usage: Some(json!({"online": true})),
+            expires_at: None,
+            added_at: Some(1),
+            added_by: Some("local:test".into()),
+        };
+        store::replace_node_servers(&conn, "flip-1", &[row], k2_core::compute::now()).unwrap();
+        let body = json!({"verb": "unit.restart", "args": {"unit": "k2-node"}});
+        k2_core::compute::admin::insert_request(
+            &conn,
+            &k2_core::compute::admin::NewRequest {
+                node_id: "flip-1",
+                kind: "command",
+                class: k2_core::compute::proto::admin::Class::Privileged,
+                body: &body,
+                summary: "restart k2-node on flip-1 (as root)",
+                reason: None,
+                proposed_by: "owner",
+                proposer_workspace: None,
+                proposer_session: None,
+                now: k2_core::compute::now(),
+            },
+        )
+        .unwrap()
+        .id
+    };
+
+    // The node now belongs to another server: this one is a tenant.
+    compute_ws::test_frame("flip-1", Frame::Offer(offer(&[FEATURE_QUEUE, FEATURE_SERVERS], 0, Some(view(Role::Tenant, 0, 0)))));
+    assert_eq!(role(), "tenant");
+    assert_eq!(flips(), 1);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert!(store::node_servers(&conn, "flip-1").is_empty(), "a tenant keeps no server list");
+        let r = k2_core::compute::admin::request_by_id(&conn, &req_id).unwrap();
+        assert_eq!(r.state, "failed");
+        assert_eq!(r.result.as_ref().and_then(|v| v["code"].as_str()), Some("not_node_owner"), "{:?}", r.result);
+    }
+    // The same tenant view again: no second flip.
+    compute_ws::test_frame("flip-1", Frame::Offer(offer(&[FEATURE_QUEUE, FEATURE_SERVERS], 0, Some(view(Role::Tenant, 0, 0)))));
+    assert_eq!(flips(), 1);
+
+    // The node now says this server owns it: by owner-only features with
+    // no view, then by a share view saying owner, solo or shared (MT34).
+    // Never taken at its word (the role is one way, review A-H1): it
+    // stays a tenant, no flip, never owned for secrets.
+    let mut solo = view(Role::Owner, 0, 0);
+    solo.shared = false;
+    solo.servers = 1;
+    for o in [offer(&admin_feats, 0, None), offer(&admin_feats, 0, Some(view(Role::Owner, 0, 0))), offer(&admin_feats, 0, Some(solo))] {
+        compute_ws::test_frame("flip-1", Frame::Offer(o));
+        let n = store::node_by_id(&k2_core::db::shared().lock(), "flip-1").unwrap();
+        assert_eq!(n.role, "tenant", "an offer never lifts a tenant");
+        assert!(!n.owned_for_secrets());
+    }
+    assert_eq!(flips(), 1, "no flip to owner");
+    compute_ws::test_detach("flip-1");
+}

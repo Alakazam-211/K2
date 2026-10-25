@@ -172,6 +172,51 @@ fn enroll_rejects_a_bad_enroll_string_before_dialing() {
     assert!(err.contains("private network"), "plaintext to a public host is refused: {err}");
 }
 
+/// MT37: `enroll --force` on a shared node no longer drops the other
+/// servers in silence: it refuses before dialing and points at `servers
+/// owner`; `--drop-servers` goes ahead on purpose.
+#[test]
+fn enroll_force_on_a_shared_node_points_at_servers_owner() {
+    use k2_node_proto::share::{Network, ServersFile, ShareLimits, Trust};
+    let d = k2_node::util::temp_dir("cli-enroll-shared");
+    let layout = k2_node::paths::Layout::new(d.join("home"), d.join("cfg"));
+    layout.ensure().unwrap();
+    std::fs::create_dir_all(&layout.config).unwrap();
+    let k = k2_node_proto::crypto::SigningKey::generate().unwrap();
+    let pin = k2_node::identity::Pin {
+        controller_fp: k.fingerprint(),
+        controller_public_key_pem: k.spki_pem(),
+        routes: vec!["https://rosson.k2.dev".into()],
+        node_id: "n0".into(),
+        name: "mini-1".into(),
+        enrolled_at: 1,
+        sas: "000 000".into(),
+        revoked: false,
+        revoked_reason: None,
+        labels: Default::default(),
+        confirmed: true,
+    };
+    k2_node::identity::write_pin(&layout.pin(), &pin).unwrap();
+    let mut f = ServersFile::new(&k.fingerprint(), "rosson.k2.dev", ShareLimits::owner(1, 1, 1, 1, Network::On), 3, 1, "local:test");
+    let mut b = f.servers[0].clone();
+    b.slot = 1;
+    b.label = "z3thon.k2.dev".into();
+    b.fp_prefix = "0123456789abcdef".into();
+    b.set_limits(&ShareLimits::new_server(Trust::Own, false));
+    f.servers.push(b);
+    k2_node::admin::servers::write_file(&layout.config, &f).unwrap();
+    let (home, cfg) = (layout.home.display().to_string(), layout.config.display().to_string());
+    let mut args = vec!["enroll", "--controller", "https://127.0.0.1:9", "--enroll", "ABCDE-FGHJK.0123456789abcdef", "--name", "mini-1", "--home", &home, "--config-dir", &cfg, "--force"];
+    let (ok, _, err) = run(&args);
+    assert!(!ok);
+    assert!(err.contains("z3thon.k2.dev") && err.contains("sudo k2-node servers owner") && err.contains("--drop-servers"), "{err}");
+    assert_eq!(k2_node::identity::read_pin(&layout.pin()).unwrap().unwrap().controller_fp, k.fingerprint(), "nothing changed");
+    args.push("--drop-servers");
+    let (ok, _, err) = run(&args);
+    assert!(!ok, "nobody answers at 127.0.0.1:9");
+    assert!(!err.contains("servers owner"), "past the check, it dials: {err}");
+}
+
 #[test]
 fn install_files_writes_the_service_and_default_config() {
     let d = k2_node::util::temp_dir("cli-install");

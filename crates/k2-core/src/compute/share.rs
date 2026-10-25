@@ -68,6 +68,19 @@ pub fn is_tenant(offer: &Offer) -> bool {
     view(offer).is_some_and(|v| v.role == Role::Tenant)
 }
 
+/// The role an offer says (prd-macos-tenant-compute-v1 MT36): its share
+/// view's when it has one; else `owner` when it lists a feature only the
+/// owner's session ever gets (admin, health, self-update: V52, a tenant's
+/// offer never carries them); else nothing (a solo 0.46.2 node: keep the
+/// stored role).
+pub fn offer_role(offer: &Offer) -> Option<Role> {
+    if let Some(v) = view(offer) {
+        return Some(v.role);
+    }
+    let owner_only = [super::proto::admin::FEATURE_ADMIN, super::proto::admin::FEATURE_HEALTH, super::proto::admin::FEATURE_SELF_UPDATE];
+    offer.features.iter().any(|f| owner_only.contains(&f.as_str())).then_some(Role::Owner)
+}
+
 /// The class the server sets from facts (§7 rule 3): `--gate` (where the
 /// share allows it) is `gate`; `--detach`, a split run over
 /// [`BATCH_SHARDS_OVER`] shards and soaks are `batch`; an attached run or
@@ -334,6 +347,39 @@ mod tests {
             skew_secs: None,
             quotes,
         }
+    }
+
+    /// MT36: the share view's role first; with none, owner-only features
+    /// say owner; a bare 0.46.2-style offer says nothing.
+    #[test]
+    fn the_offer_says_the_role() {
+        use crate::compute::proto::frames::{Availability, Caps, Control, Free};
+        let mut o = Offer {
+            share: None,
+            revision: 1,
+            control: Control::Active,
+            control_by: None,
+            control_at: None,
+            availability: Availability { ok: true, reasons: vec![] },
+            caps: Caps { cpu_millis: 1000, mem_bytes: 1 << 30, disk_budget_bytes: 1 << 30, hard: true },
+            free: Free { cpu_millis: 1000, mem_bytes: 1 << 30, disk_free_bytes: 1 << 30 },
+            slots: vec![],
+            running: 0,
+            parallel_max: 1,
+            refusal: None,
+            labels: Default::default(),
+            tools: Default::default(),
+            protocol: crate::compute::proto::PROTOCOL,
+            boot_id: "b".into(),
+            ledger_id: "l".into(),
+            node_version: "0.46.4".into(),
+            features: vec![share::FEATURE_SERVERS.into()],
+        };
+        assert_eq!(offer_role(&o), None, "nothing to go on: keep the stored role");
+        o.features.push(crate::compute::proto::admin::FEATURE_ADMIN.into());
+        assert_eq!(offer_role(&o), Some(Role::Owner), "only the owner's session gets admin (V52)");
+        o.share = Some(view(vec![], 0, 0));
+        assert_eq!(offer_role(&o), Some(Role::Tenant), "the share view wins");
     }
 
     #[test]

@@ -136,6 +136,23 @@ async fn solo_is_today_plus_the_servers_feature() {
     }
     assert!(n.node.tenants().len() == 1 && status(&n).servers.is_empty() && status(&n).servers_error.is_none());
     assert_eq!(n.node.owner().protocol(), frames::PROTOCOL);
+    assert!(has(&o, k2_node_proto::share::FEATURE_SERVERS_OWNER), "the owner may move the node (0.46.4): {:?}", o.features);
+}
+
+/// A2 / MT34: once `servers.toml` exists, the owner gets its share view,
+/// shared or not, so a new owner on a node left with no other server
+/// learns it's the owner (its server would otherwise keep `tenant`).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_owner_gets_its_view_whenever_servers_toml_exists() {
+    let mut a = Fake::start().await;
+    let n = start_node(&a, "srv-own-solo", "", walled(Wall::Seatbelt)).await;
+    let mut ca = a.next_conn().await;
+    ready(&mut ca).await;
+    let f = ServersFile::new(&a.key.fingerprint(), "rosson.k2.dev", ShareLimits::owner(1, 1, 1, 1, Network::On), 3, 1, "local:test");
+    servers::write_file(&n.layout.config, &f).unwrap();
+    let o = offer_of(&ca.until(|f| matches!(f, Frame::Offer(o) if o.share.is_some())).await);
+    let s = o.share.unwrap();
+    assert_eq!((s.role, s.slot, s.shared, s.servers, s.owner_label), (Role::Owner, 0, false, 1, None));
 }
 
 /// §4.1 and V53: the node enrols with a second server by the code's
@@ -208,7 +225,7 @@ async fn a_second_server_enrols_by_sas_and_sees_only_its_own() {
     assert!(t1.pin.lock().unwrap().as_ref().unwrap().confirmed);
 
     // The owner now sees a shared node.
-    let oa = offer_of(&ca.until(|f| matches!(f, Frame::Offer(o) if o.share.is_some())).await);
+    let oa = offer_of(&ca.until(|f| matches!(f, Frame::Offer(o) if o.share.as_ref().is_some_and(|s| s.shared))).await);
     let sa = oa.share.clone().unwrap();
     assert_eq!((sa.role, sa.slot, sa.servers, sa.shared, sa.owner_label), (Role::Owner, 0, 2, true, None));
     assert!(has(&oa, k2_node_proto::admin::FEATURE_ADMIN), "the owner keeps admin");

@@ -29,7 +29,9 @@ Install (root, once; the installers are inside this binary):
 
   k2-node run [--home DIR] [--config-dir DIR] [--dev [--allow-fake-clock]]   (tests: K2_NODE_FAKE_CLOCK_OFFSET=+600 moves a --dev node's clock)
   k2-node enroll --controller <https://you.k2.dev> (--enroll <ABCDE-FGHJK.0123456789abcdef> | --ticket T) --name <name>
-                 [--label k=v]... [--home DIR] [--force]
+                 [--label k=v]... [--home DIR] [--force [--drop-servers]]
+                 (on a shared node --force would drop the other servers: to change the
+                  owner and keep them, sudo k2-node servers owner <server>)
   k2-node request --controller URL (--enroll CODE.FP | --ticket T) --name NAME [--config-dir DIR]
                  (the machine owner: ask the running node to enroll itself)
   k2-node tools install <need>... [--home DIR]   (as the node user: node@22 python@3.12 rust@stable cargo-nextest sys:pkg-config)
@@ -119,6 +121,7 @@ const SWITCHES: &[&str] = &[
     "--toolchains",
     "--no-wait",
     "--resume",
+    "--drop-servers",
 ];
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -277,6 +280,20 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
     Ok(())
 }
 
+/// The other servers `servers.toml` lists (not revoked), by label, or
+/// `None` when this node serves only its owner. A broken file is an error
+/// (never read as "no others").
+fn other_servers(config_dir: &std::path::Path) -> Result<Option<String>, String> {
+    let Some(f) = k2_node::admin::servers::read_file(config_dir)? else { return Ok(None) };
+    let others: Vec<String> = f
+        .servers
+        .iter()
+        .filter(|e| e.slot != k2_node_proto::share::OWNER_SLOT && e.state != k2_node_proto::share::ShareState::Revoked)
+        .map(|e| e.label.clone())
+        .collect();
+    Ok((!others.is_empty()).then(|| others.join(", ")))
+}
+
 async fn cmd_enroll(a: &Args) -> Result<(), String> {
     if is_root() {
         return Err("enroll as the node user (sudo -u k2node k2-node enroll …), not root".into());
@@ -307,6 +324,19 @@ async fn cmd_enroll(a: &Args) -> Result<(), String> {
                 p.name,
                 p.controller_label()
             ));
+        }
+        // MT37: on a shared node, `--force` would quietly stop serving every
+        // other server (servers.toml still names the old owner). Moving the
+        // owner is `servers owner`; dropping them is a choice said out loud.
+        if !p.revoked && a.has("--force") && !a.has("--drop-servers") {
+            if let Some(others) = other_servers(&layout.config)? {
+                return Err(format!(
+                    "this node also serves {others}. A re-enrol with --force would stop serving them until they're added again.\n\
+                     To make another of your servers this node's owner and keep the rest: sudo k2-node servers owner <server> \
+                     (or k2 compute node servers <node> owner <server> from the owner server).\n\
+                     To re-enrol anyway and drop them: add --drop-servers."
+                ));
+            }
         }
     }
     let key = k2_node::identity::load_or_create_key(&layout.key())?;

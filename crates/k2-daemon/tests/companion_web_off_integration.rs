@@ -470,6 +470,55 @@ async fn who_a_pairing_code_signs_in_as() {
     pair_through_edge(port, &codes[3], "cap-3");
 }
 
+/// The landing page and the iOS app-site-association file: exact content,
+/// no redirect, no credential, open with web access off.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_pair_page_and_app_links_answer_with_web_off() {
+    let _g = lock();
+    let _home = HomeEnv::set();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let port = d.port;
+    set_web(port, false);
+    for hdrs in [vec![], EDGE.to_vec()] {
+        let r = http(port, "GET", "/.well-known/apple-app-site-association", None, &hdrs);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(r.header("content-type").as_deref(), Some("application/json"));
+        assert_eq!(r.header("location"), None, "no redirect");
+        let v = r.json();
+        assert_eq!(
+            v,
+            serde_json::json!({"applinks":{"apps":[],"details":[{
+                "appID":"36B8R93HXV.com.alakazamlabs.k2so.companion",
+                "paths":["/pair"],
+                "appIDs":["36B8R93HXV.com.alakazamlabs.k2so.companion"],
+                "components":[{"/":"/pair"}]
+            }]}}),
+            "{}",
+            r.body
+        );
+
+        let r = http(port, "GET", "/pair", None, &hdrs);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(r.header("content-type").as_deref(), Some("text/html; charset=utf-8"));
+        let csp = r.header("content-security-policy").expect("CSP");
+        assert!(csp.starts_with("default-src 'none'; script-src 'nonce-"), "{csp}");
+        assert_eq!(r.header("referrer-policy").as_deref(), Some("no-referrer"));
+        assert_eq!(r.header("cache-control").as_deref(), Some("no-store"));
+        assert!(r.body.contains("Open this in the K2 app"));
+        assert!(r.body.contains("k2companion://pair?server="));
+    }
+    // A query is ignored; a fragment never reaches a server at all.
+    let r = http(port, "GET", "/pair?code=leak", None, &[]);
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!r.body.contains("leak"), "the page never echoes the request");
+    // Nothing else is served under /.well-known/ by this dispatcher (ACME
+    // HTTP-01 has its own :80 listener), so an ACME path answers as before.
+    let r = http(port, "GET", "/.well-known/acme-challenge/some-token", None, &[]);
+    assert_eq!(r.status, 404, "{}", r.body);
+    let r = http(port, "GET", "/.well-known/assetlinks.json", None, &[]);
+    assert_eq!(r.status, 404, "not served until the Play fingerprint is known: {}", r.body);
+}
+
 /// With a public host, a code comes with its link and QR.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_code_comes_with_its_pair_link_and_qr() {

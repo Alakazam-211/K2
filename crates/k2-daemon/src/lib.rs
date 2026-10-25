@@ -44,6 +44,8 @@ pub mod companion_routes;
 pub mod connect_users_routes;
 // phone-web-off (2026-10-24): Companion pairing codes + device sessions.
 pub mod connect_device_routes;
+// phone-web-off: the /pair landing page + the iOS app-site-association file.
+pub mod pair_page;
 pub mod login_throttle;
 pub mod db_routes;
 pub mod events;

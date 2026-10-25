@@ -1697,6 +1697,17 @@ async fn handle_one_request(
     }
 
     match path.as_str() {
+        // phone-web-off: the pairing link's landing page and the iOS
+        // universal-link file. Static, no credential, not under /cli/ (so
+        // never behind the web-access wall). See `crate::pair_page`.
+        crate::pair_page::PAIR_PAGE => {
+            let _ = stream.read(&mut buf).await;
+            crate::pair_page::send_pair_page(&mut *stream).await;
+        }
+        crate::pair_page::AASA => {
+            let _ = stream.read(&mut buf).await;
+            crate::pair_page::send_aasa(&mut *stream).await;
+        }
         "/ping" => {
             let _ = stream.read(&mut buf).await;
             // Unauthenticated. Smallest liveness check. PRD boot-status-ghost

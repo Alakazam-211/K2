@@ -1526,6 +1526,19 @@ async fn async_main() {
         }
     });
 
+    // prd-custom-app-push-v1 CP6: push devices whose pass or device
+    // sign-in expired without a revoke. First pass ~6 min after boot,
+    // then hourly.
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(360)).await;
+        loop {
+            if let Err(e) = tokio::task::spawn_blocking(crate::app_push::sweep).await {
+                log_debug!("[app-push] WARN: sweep join: {e}");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
+    });
+
     // task #672 — canonical daemon-owned Active reaper. A single
     // long-lived task that owns the grace-reap of dormant workspace
     // chat PTYs, keyed on the canonical Active set (replaces the

@@ -699,6 +699,14 @@ pub fn badge_key_for(conn: &Connection, person: &str) -> Result<String, ReadErro
     Ok(crate::push::badge_key(&badge_salt(conn)?, person))
 }
 
+/// `k2Who` for a custom App's push (prd-custom-app-push-v1 CP29): an
+/// opaque key per (server, App, guest) so a phone app holding two accounts
+/// knows whose push arrived. [`crate::push::app_push_who`] of the badge
+/// salt. `Err` when the salt can't be read: the caller then refuses.
+pub fn app_push_who(conn: &Connection, app: &str, principal_id: &str) -> Result<String, ReadError> {
+    Ok(crate::push::app_push_who(&badge_salt(conn)?, app, principal_id))
+}
+
 /// [`badge_key_for`] on the shared DB, for a person key or a login (a
 /// login is mapped to its person). `""` when it can't be computed (no DB
 /// or no salt): a push then carries no key rather than a name.

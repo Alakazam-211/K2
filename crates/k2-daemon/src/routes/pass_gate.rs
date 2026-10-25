@@ -354,6 +354,7 @@ mod tests {
                 crate::heartbeat_app_routes::READ_PATHS.iter().chain(crate::heartbeat_app_routes::WRITE_PATHS.iter()).copied().collect(),
             ),
             ("crate::app_mobile_routes::PASS_ROUTES", crate::app_mobile_routes::PASS_ROUTES.to_vec()),
+            ("crate::app_push::guest_routes::PASS_ROUTES", crate::app_push::guest_routes::PASS_ROUTES.to_vec()),
             // 0.46.3 lanes folded in at r4: App project chat's socket, the
             // App room stream and the read-state arm.
             ("crate::apps::project_chat::EVENTS_WS_PATH", vec![crate::apps::project_chat::EVENTS_WS_PATH]),

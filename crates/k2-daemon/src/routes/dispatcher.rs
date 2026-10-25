@@ -7204,6 +7204,33 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // prd-custom-app-push-v1 (0.46.4): `k2 app push …` for the owner,
+        // Admins and the App's agent. Caller rules live in the handler.
+        p if crate::app_push::owner_routes::is_route(p) => {
+            if crate::app_push::owner_routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::app_push::owner_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::app_push::owner_routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || crate::app_push::owner_routes::handle(&p_owned, who, &body_bytes, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // RS-A15 (0.46.1): the owner's per-App grants and guest rooms over
         // the CLI. Not behind the preview flag (every published service).
         // Caller rules live in the handler.
@@ -9925,6 +9952,42 @@ async fn handle_one_request(
                 }
             } else {
                 crate::app_mobile_routes::pass_required()
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // prd-custom-app-push-v1 (0.46.4): a guest's own push device. A
+        // guest session pass only (the handler checks), any door.
+        p if crate::app_push::guest_routes::PASS_ROUTES.contains(&p) => {
+            if crate::app_push::guest_routes::POST_ROUTES.contains(&p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::app_push::owner_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::app_push::owner_routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let presented = super::http::extract_token(&query);
+            let r = match presented {
+                None => crate::app_push::guest_routes::pass_required(),
+                Some(t) if k2_core::skin::is_skin_token(t) => match crate::apps::gateway::resolve_pass(t) {
+                    Some(pass) => {
+                        let route = p.to_string();
+                        let params = super::http::parse_params(&path, &query);
+                        tokio::task::spawn_blocking(move || crate::app_push::guest_routes::handle_pass(&route, &pass, is_post, &body, &params))
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                    None => crate::skin_routes::revoked_skin_response(),
+                },
+                Some(_) => crate::app_push::guest_routes::not_a_pass(),
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }

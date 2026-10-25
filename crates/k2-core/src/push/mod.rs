@@ -166,6 +166,24 @@ pub fn badge_key(server_salt: &str, person_key: &str) -> String {
     digest.iter().take(16).map(|b| format!("{b:02x}")).collect()
 }
 
+/// `k2Who` (prd-custom-app-push-v1 CP29): the first 32 hex chars of
+/// `sha256("k2-app-push\0" + server_salt + "\0" + app + "\0" + principal_id)`.
+/// Stable per (server, App, guest); never the guest's name or id, so Apple
+/// and Google can't see who. A different App gets a different key for the
+/// same person.
+pub fn app_push_who(server_salt: &str, app: &str, principal_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"k2-app-push\0");
+    h.update(server_salt.trim().as_bytes());
+    h.update(b"\0");
+    h.update(app.trim().as_bytes());
+    h.update(b"\0");
+    h.update(principal_id.trim().as_bytes());
+    let digest = h.finalize();
+    digest.iter().take(16).map(|b| format!("{b:02x}")).collect()
+}
+
 /// The kind of Thread post a push announces (`data.msgKind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadMsgKind {

@@ -1572,6 +1572,8 @@ pub fn rm(project_id: &str, name: &str, keep_hostname: bool) -> Result<(), Publi
             Ok(_) => {}
             Err(e) => log_debug!("[publish] rm {project_id}/{name}: WARN end App sessions: {e}"),
         }
+        // prd-custom-app-push-v1 CP17: its push devices, settings and keys go.
+        crate::app_push::forget_app(&row.id);
     }
     if !keep_hostname && label_is_ours {
         if row.as_ref().is_some_and(|r| r.expose == EXPOSE_TUNNEL) {

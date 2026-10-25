@@ -278,6 +278,14 @@ fn end_chain_conn(conn: &Connection, id: &str, reason: &str) -> Result<bool, Str
     if let Some(t) = session {
         end_session_conn(conn, &t)?;
     }
+    // Push devices tied to this sign-in go with it (CP6).
+    let principal: Option<String> = conn
+        .query_row("SELECT principal_id FROM device_logins WHERE id = ?1", params![id], |r| r.get(0))
+        .optional()
+        .map_err(|e| format!("device login lookup: {e}"))?;
+    if let Some(p) = principal {
+        super::app_push::prune_principal_conn(conn, &p)?;
+    }
     Ok(true)
 }
 
@@ -288,10 +296,21 @@ pub(super) fn end_chains_where(conn: &Connection, filter: &str, args: &[&dyn rus
     let now = now_secs();
     let mut all: Vec<&dyn rusqlite::ToSql> = vec![&now, &reason];
     all.extend_from_slice(args);
+    // The people whose push devices may hang on these chains (CP6).
+    let people: Vec<String> = {
+        let sql = format!("SELECT DISTINCT principal_id FROM device_logins WHERE revoked_at IS NULL AND ({filter})");
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("device logins end: {e}"))?;
+        let rows = stmt.query_map(all.as_slice(), |r| r.get::<_, String>(0)).map_err(|e| format!("device logins end: {e}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("device logins end: {e}"))?
+    };
     let sql = format!(
         "UPDATE device_logins SET revoked_at = ?1, revoked_reason = ?2 WHERE revoked_at IS NULL AND ({filter})"
     );
-    conn.execute(&sql, all.as_slice()).map_err(|e| format!("device logins end: {e}"))
+    let n = conn.execute(&sql, all.as_slice()).map_err(|e| format!("device logins end: {e}"))?;
+    for p in &people {
+        super::app_push::prune_principal_conn(conn, p)?;
+    }
+    Ok(n)
 }
 
 const DEVICE_SELECT: &str = "SELECT d.id, d.principal_id, COALESCE(p.username, ''), d.app_id, d.device_id, d.device_name,

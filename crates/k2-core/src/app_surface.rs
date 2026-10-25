@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 22;
+pub const CATALOG_VERSION: u32 = 23;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -43,6 +43,11 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/cli/skin/devices"),
     ("HEAD", "/cli/skin/devices"),
     ("POST", "/cli/skin/devices/revoke"),
+    ("POST", "/cli/skin/push/register"),
+    ("POST", "/cli/skin/push/unregister"),
+    ("GET", "/cli/skin/push/device"),
+    ("HEAD", "/cli/skin/push/device"),
+    ("POST", "/cli/skin/push/prefs"),
     ("GET", "/cli/thread"),
     ("HEAD", "/cli/thread"),
     ("GET", "/cli/thread/latest"),
@@ -158,6 +163,11 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("GET", "/cli/skin/devices"),
     ("HEAD", "/cli/skin/devices"),
     ("POST", "/cli/skin/devices/revoke"),
+    ("POST", "/cli/skin/push/register"),
+    ("POST", "/cli/skin/push/unregister"),
+    ("GET", "/cli/skin/push/device"),
+    ("HEAD", "/cli/skin/push/device"),
+    ("POST", "/cli/skin/push/prefs"),
     ("GET", "/cli/skin/app-info"),
     ("HEAD", "/cli/skin/app-info"),
     ("POST", "/cli/skin/password/forgot"),
@@ -307,6 +317,10 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("POST", "/cli/skin/refresh", "guests.refresh", "link"),
     ("GET", "/cli/skin/devices", "guests.devices", "both"),
     ("POST", "/cli/skin/devices/revoke", "guests.revokeDevice", "both"),
+    ("POST", "/cli/skin/push/register", "push.register", "both"),
+    ("POST", "/cli/skin/push/unregister", "push.unregister", "both"),
+    ("GET", "/cli/skin/push/device", "push.device", "both"),
+    ("POST", "/cli/skin/push/prefs", "push.prefs", "both"),
     ("GET", "/cli/skin/app-info", "app.info", "link"),
     ("POST", "/cli/skin/password/forgot", "password.forgot", "link"),
     ("POST", "/cli/skin/password/reset", "password.reset", "link"),

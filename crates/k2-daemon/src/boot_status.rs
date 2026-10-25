@@ -686,6 +686,13 @@ pub const FEATURE_APP_PROJECT_CHAT: &str = crate::apps::project_chat::FEATURE;
 /// (`/cli/skin/wallet/*`, a guest's own session pass, cap `wallet:self`)
 /// and the owner's `/cli/app/wallet/*`.
 pub const FEATURE_APP_WALLET: &str = "app-wallet-v1";
+
+/// Push notifications for custom Apps (prd-custom-app-push-v1, 0.46.4):
+/// `push.register|unregister|device|prefs` for a guest's own phone app,
+/// `push.send|status|devices` on the App's link (cap `push:send`),
+/// `/v1/apps/<id>/push/*` (App key scope `push`) and `/cli/app/push/*`.
+/// skin.db tables only, no SQL migration.
+pub const FEATURE_APP_PUSH: &str = "custom-app-push-v1";
 /// Thread push message previews (0.46.1): `POST /cli/push/register-device`
 /// takes `previews` (absent = keep the stored value), its reply and
 /// `GET /cli/push/device` carry `previews` + `previewsAllowed`, and a
@@ -907,6 +914,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_PROJECT_CHAT);
     out.push(FEATURE_APP_MOBILE_ACCESS);
     out.push(FEATURE_APP_WALLET);
+    out.push(FEATURE_APP_PUSH);
     out.push(FEATURE_ACTIVITY_LIVE_BUSY);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
@@ -1011,6 +1019,7 @@ mod tests {
                 "app-project-chat-v1",
                 "app-mobile-access-v1",
                 "app-wallet-v1",
+                "custom-app-push-v1",
                 "activity-live-busy",
                 "thread-push-v1",
                 "push-previews-v1",

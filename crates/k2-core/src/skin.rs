@@ -98,6 +98,10 @@ pub mod creators;
 /// suggested role templates (app-mobile-access-v1, 0.46.3).
 #[path = "skin_access.rs"]
 pub mod access;
+/// Push notifications for custom Apps: the device list and per-App push
+/// settings (prd-custom-app-push-v1, 0.46.4).
+#[path = "skin_app_push.rs"]
+pub mod app_push;
 pub use paths::{RoomPathScope, RoomPaths};
 
 /// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).
@@ -197,6 +201,12 @@ pub const CAP_FILES_DOWNLOAD: &str = "files:download";
 /// App core. Strictly narrower than `files:write`, so an agent with
 /// "manage Apps" may grant it (it is not in [`PERSON_ONLY_CAPS`]).
 pub const CAP_FILES_UPLOAD: &str = "files:upload";
+/// Send notifications to this App's guests' phones (prd-custom-app-push-v1
+/// CP37, 0.46.4): the App's own cap, never a guest's (no role holds it:
+/// it isn't in the accepted role caps). In no App core
+/// (`app_core_of_cap` answers `None`), so a deploy that adds it is held for
+/// the owner's one-time approval, as App mail sends are (N4).
+pub const CAP_PUSH_SEND: &str = "push:send";
 /// Caps only a person may grant ([`person_only_cap_in`]).
 pub const PERSON_ONLY_CAPS: &[&str] = &[CAP_FILES_AGENT_CONFIG, CAP_FILES_DOWNLOAD];
 
@@ -1451,6 +1461,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     test_guests::ensure_schema(&conn)?;
     // 0.46.4: which workspace's agent added a guest. Additive, no step.
     creators::ensure_schema(&conn)?;
+    // prd-custom-app-push-v1 (0.46.4): push devices and per-App push
+    // settings. Additive, no numbered step.
+    app_push::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;
@@ -2978,6 +2991,15 @@ fn live_session_rows(
 /// transaction.
 fn enqueue_session_revokes(conn: &Connection, ended: &[(String, String)]) -> Result<(), String> {
     let mut chat: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
+    // prd-custom-app-push-v1 CP6: a push device registered by an ended
+    // pass (and not tied to a live device sign-in) goes in the same
+    // transaction.
+    let mut pruned: HashSet<&str> = HashSet::new();
+    for (_, principal_id) in ended {
+        if pruned.insert(principal_id.as_str()) {
+            app_push::prune_principal_conn(conn, principal_id)?;
+        }
+    }
     for (token_id, principal_id) in ended {
         let has = match chat.get(principal_id.as_str()) {
             Some(v) => *v,
@@ -3008,6 +3030,8 @@ fn revoke_sessions_for_principal(conn: &Connection, principal_id: &str) -> Resul
         .map_err(|e| format!("skin session revoke: {e}"))?;
     // A device sign-in ends with the person's sessions (app-mobile-access-v1).
     app_login::end_chains_where(conn, "principal_id = ?3", &[&principal_id], app_login::REASON_SESSIONS_ENDED)?;
+    // Their push devices go with the sessions (prd-custom-app-push-v1 CP6).
+    app_push::prune_principal_conn(conn, principal_id)?;
     if n > 0 && principal_has_chat_grant_conn(conn, principal_id)? {
         crate::sew_revoke::enqueue(
             conn,

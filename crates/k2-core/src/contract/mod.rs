@@ -570,6 +570,13 @@ mod tests {
                 // App users' personal wallets (0.46.3).
                 "person_pass_required",
                 "wallet_off",
+                // prd-custom-app-push-v1 (0.46.4): App push. Before
+                // duplicate_label so `retired` stays the widget guide's last
+                // code (the Garden access edit anchors on it).
+                "push_off",
+                "not_for_host",
+                "channel_unavailable",
+                "push_devices_full",
                 "duplicate_label",
                 // Garden access lists (prd-garden-access-v1 G22): the
                 // signer gate's refusal (switch on only).

@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 22,
+  "catalogVersion": 23,
   "caps": [
     {
       "name": "agents:read",
@@ -199,6 +199,10 @@
     {"code": "refresh_reused", "doc": "Device sign-in: a refresh token came back after it was used; that device is signed out (sign in again)."},
     {"code": "person_pass_required", "doc": "Wallet verbs need an App user's own login session pass. Connect logins, the owner token, agent passports and an App's own pass have no wallet."},
     {"code": "wallet_off", "doc": "This App doesn't use personal wallets; its owner turns them on."},
+    {"code": "push_off", "doc": "This App doesn't send notifications: its owner turns them on (approving push:send, or k2 app push on)."},
+    {"code": "not_for_host", "doc": "Push is for a published App's own users, never the box login (host)."},
+    {"code": "channel_unavailable", "doc": "K2 Companion can't receive this App's notifications yet; register the App's own phone app (channel app)."},
+    {"code": "push_devices_full", "doc": "This App holds as many push devices as its owner allows."},
     {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."},
     {"code": "needs_editor", "doc": "Garden access lists on: this widget version isn't signed by the person, K2 or an agent on this Garden's list, so only its own store and save keyspace and widget.self answer. Someone who edits this Garden has to sign this version."},
     {"code": "retired", "doc": "K2 retired this verb: it answers this until a later release removes it (the message says which)."},
@@ -7408,6 +7412,524 @@
       ],
       "doc": "Sign one of this guest's own devices out (its pass and refresh token end).",
       "example": "await k2.asGuest(pass).guests.revokeDevice({id})"
+    },
+    {
+      "verb": "push.register",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "custom-app-push-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/push/register"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "deviceId": {
+              "type": "string",
+              "description": "Your app's install id: use the device sign-in's device.id."
+            },
+            "platform": {
+              "enum": [
+                "apns",
+                "fcm"
+              ],
+              "description": "apns: the iOS device token as hex. fcm: an FCM token (Android, or iOS through Firebase)."
+            },
+            "pushToken": {
+              "type": "string",
+              "description": "The native token from the OS (never an Expo push token)."
+            },
+            "environment": {
+              "enum": [
+                "production",
+                "sandbox"
+              ],
+              "description": "APNs only: sandbox for Debug builds.",
+              "default": "production"
+            },
+            "channel": {
+              "enum": [
+                "app",
+                "k2-companion"
+              ],
+              "description": "app: this App's own phone app. k2-companion isn't available yet.",
+              "default": "app"
+            },
+            "previews": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Show agent-reply text on this device; null = on."
+            },
+            "mutedTopics": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Topics to skip (at most 32, each a-z 0-9 . _ -)."
+            }
+          },
+          "required": [
+            "deviceId",
+            "platform",
+            "pushToken"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPushDevice",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "description": "This registration's id (apd_...)."
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "platform": {
+            "enum": [
+              "apns",
+              "fcm"
+            ]
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ]
+          },
+          "channel": {
+            "enum": [
+              "app",
+              "k2-companion"
+            ]
+          },
+          "previews": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "This device's own choice for agent-reply text; null = on."
+          },
+          "mutedTopics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Topics this device skips."
+          },
+          "lastSeenAt": {
+            "type": "integer",
+            "description": "Last register, seconds since the epoch."
+          },
+          "who": {
+            "type": "string",
+            "description": "An opaque key for this person on this App; every push carries it as k2Who."
+          },
+          "configured": {
+            "title": "AppPushConfigured",
+            "type": "object",
+            "properties": {
+              "apns": {
+                "type": "boolean",
+                "description": "The owner set this App's Apple key."
+              },
+              "fcm": {
+                "type": "boolean",
+                "description": "The owner set this App's Firebase service account."
+              }
+            },
+            "required": [
+              "apns",
+              "fcm"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "deviceId",
+          "platform",
+          "environment",
+          "channel",
+          "previews",
+          "mutedTopics",
+          "lastSeenAt",
+          "who",
+          "configured"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "push_off",
+        "not_for_host",
+        "channel_unavailable",
+        "push_devices_full",
+        "rate_limited",
+        "usage",
+        "failed"
+      ],
+      "doc": "Register this guest's phone for this App's notifications; call it on every launch and whenever the token changes.",
+      "example": "await k2.asGuest(pass).push.register({deviceId, platform: 'apns', pushToken, environment: 'sandbox'})"
+    },
+    {
+      "verb": "push.unregister",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "custom-app-push-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/push/unregister"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "deviceId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "deviceId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPushRemoved",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "removed": {
+            "type": "boolean",
+            "description": "false when this guest had no such device (the same answer for anyone else's)."
+          }
+        },
+        "required": [
+          "ok",
+          "removed"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "usage",
+        "failed"
+      ],
+      "doc": "Stop this App's notifications on one of this guest's own devices (signing out also removes it).",
+      "example": "await k2.asGuest(pass).push.unregister({deviceId})"
+    },
+    {
+      "verb": "push.device",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "custom-app-push-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/push/device"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "deviceId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "deviceId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPushDevice",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "description": "This registration's id (apd_...)."
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "platform": {
+            "enum": [
+              "apns",
+              "fcm"
+            ]
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ]
+          },
+          "channel": {
+            "enum": [
+              "app",
+              "k2-companion"
+            ]
+          },
+          "previews": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "This device's own choice for agent-reply text; null = on."
+          },
+          "mutedTopics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Topics this device skips."
+          },
+          "lastSeenAt": {
+            "type": "integer",
+            "description": "Last register, seconds since the epoch."
+          },
+          "who": {
+            "type": "string",
+            "description": "An opaque key for this person on this App; every push carries it as k2Who."
+          },
+          "configured": {
+            "title": "AppPushConfigured",
+            "type": "object",
+            "properties": {
+              "apns": {
+                "type": "boolean",
+                "description": "The owner set this App's Apple key."
+              },
+              "fcm": {
+                "type": "boolean",
+                "description": "The owner set this App's Firebase service account."
+              }
+            },
+            "required": [
+              "apns",
+              "fcm"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "deviceId",
+          "platform",
+          "environment",
+          "channel",
+          "previews",
+          "mutedTopics",
+          "lastSeenAt",
+          "who",
+          "configured"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "not_found",
+        "usage",
+        "failed"
+      ],
+      "doc": "This guest's own push registration for one device (never the token).",
+      "example": "const d = await k2.asGuest(pass).push.device({deviceId})"
+    },
+    {
+      "verb": "push.prefs",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "custom-app-push-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/push/prefs"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "deviceId": {
+              "type": "string"
+            },
+            "previews": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Show agent-reply text on this device; null = on."
+            },
+            "mutedTopics": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Topics to skip; replaces the list."
+            }
+          },
+          "required": [
+            "deviceId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPushDevice",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "description": "This registration's id (apd_...)."
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "platform": {
+            "enum": [
+              "apns",
+              "fcm"
+            ]
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ]
+          },
+          "channel": {
+            "enum": [
+              "app",
+              "k2-companion"
+            ]
+          },
+          "previews": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "This device's own choice for agent-reply text; null = on."
+          },
+          "mutedTopics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Topics this device skips."
+          },
+          "lastSeenAt": {
+            "type": "integer",
+            "description": "Last register, seconds since the epoch."
+          },
+          "who": {
+            "type": "string",
+            "description": "An opaque key for this person on this App; every push carries it as k2Who."
+          },
+          "configured": {
+            "title": "AppPushConfigured",
+            "type": "object",
+            "properties": {
+              "apns": {
+                "type": "boolean",
+                "description": "The owner set this App's Apple key."
+              },
+              "fcm": {
+                "type": "boolean",
+                "description": "The owner set this App's Firebase service account."
+              }
+            },
+            "required": [
+              "apns",
+              "fcm"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "deviceId",
+          "platform",
+          "environment",
+          "channel",
+          "previews",
+          "mutedTopics",
+          "lastSeenAt",
+          "who",
+          "configured"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "not_found",
+        "usage",
+        "failed"
+      ],
+      "doc": "Change one device's notification choices (previews, muted topics) without its token.",
+      "example": "await k2.asGuest(pass).push.prefs({deviceId, mutedTopics: ['marketing']})"
     },
     {
       "verb": "app.info",

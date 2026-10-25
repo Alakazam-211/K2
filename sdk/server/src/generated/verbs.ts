@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 22
+export const CATALOG_VERSION = 23
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -269,6 +269,50 @@ export const APP_VERBS = {
     socket: null,
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'push.register': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'custom-app-push-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/skin/push/register', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"channel":{"enum":["app","k2-companion"]},"configured":{"additionalProperties":false,"properties":{"apns":{"type":"boolean"},"fcm":{"type":"boolean"}},"type":"object"},"deviceId":{"type":"string"},"environment":{"enum":["production","sandbox"]},"id":{"type":"string"},"lastSeenAt":{"type":"integer"},"mutedTopics":{"items":{"type":"string"},"type":"array"},"ok":{"type":"boolean"},"platform":{"enum":["apns","fcm"]},"previews":{"type":["boolean","null"]},"who":{"type":"string"}},"type":"object"},
+  },
+  'push.unregister': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'custom-app-push-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/skin/push/unregister', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"},"removed":{"type":"boolean"}},"type":"object"},
+  },
+  'push.device': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'custom-app-push-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/skin/push/device', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"channel":{"enum":["app","k2-companion"]},"configured":{"additionalProperties":false,"properties":{"apns":{"type":"boolean"},"fcm":{"type":"boolean"}},"type":"object"},"deviceId":{"type":"string"},"environment":{"enum":["production","sandbox"]},"id":{"type":"string"},"lastSeenAt":{"type":"integer"},"mutedTopics":{"items":{"type":"string"},"type":"array"},"ok":{"type":"boolean"},"platform":{"enum":["apns","fcm"]},"previews":{"type":["boolean","null"]},"who":{"type":"string"}},"type":"object"},
+  },
+  'push.prefs': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'custom-app-push-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/skin/push/prefs', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"channel":{"enum":["app","k2-companion"]},"configured":{"additionalProperties":false,"properties":{"apns":{"type":"boolean"},"fcm":{"type":"boolean"}},"type":"object"},"deviceId":{"type":"string"},"environment":{"enum":["production","sandbox"]},"id":{"type":"string"},"lastSeenAt":{"type":"integer"},"mutedTopics":{"items":{"type":"string"},"type":"array"},"ok":{"type":"boolean"},"platform":{"enum":["apns","fcm"]},"previews":{"type":["boolean","null"]},"who":{"type":"string"}},"type":"object"},
   },
   'app.info': {
     cap: null,
@@ -1489,6 +1533,38 @@ export interface AppDevices {
   readonly ok: boolean
 }
 
+export interface AppPushConfigured {
+  /** The owner set this App's Apple key. */
+  readonly apns: boolean
+  /** The owner set this App's Firebase service account. */
+  readonly fcm: boolean
+}
+
+export interface AppPushDevice {
+  readonly channel: 'app' | 'k2-companion'
+  readonly configured: AppPushConfigured
+  readonly deviceId: string
+  readonly environment: 'production' | 'sandbox'
+  /** This registration's id (apd_...). */
+  readonly id: string
+  /** Last register, seconds since the epoch. */
+  readonly lastSeenAt: number
+  /** Topics this device skips. */
+  readonly mutedTopics: string[]
+  readonly ok: boolean
+  readonly platform: 'apns' | 'fcm'
+  /** This device's own choice for agent-reply text; null = on. */
+  readonly previews: boolean | null
+  /** An opaque key for this person on this App; every push carries it as k2Who. */
+  readonly who: string
+}
+
+export interface AppPushRemoved {
+  readonly ok: boolean
+  /** false when this guest had no such device (the same answer for anyone else's). */
+  readonly removed: boolean
+}
+
 export interface AppSignIn {
   /** password (a username or an email). */
   readonly methods: string[]
@@ -2689,7 +2765,7 @@ export interface AppProjectFrame {
 }
 
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -2716,6 +2792,10 @@ export interface AppVerbs {
   'guests.refresh': { args: { app?: string; refresh: string }; value: AppDeviceSession }
   'guests.devices': { args: {  }; value: AppDevices }
   'guests.revokeDevice': { args: { id: string }; value: AppOk }
+  'push.register': { args: { channel?: 'app' | 'k2-companion'; deviceId: string; environment?: 'production' | 'sandbox'; mutedTopics?: string[]; platform: 'apns' | 'fcm'; previews?: boolean | null; pushToken: string }; value: AppPushDevice }
+  'push.unregister': { args: { deviceId: string }; value: AppPushRemoved }
+  'push.device': { args: { deviceId: string }; value: AppPushDevice }
+  'push.prefs': { args: { deviceId: string; mutedTopics?: string[]; previews?: boolean | null }; value: AppPushDevice }
   'app.info': { args: { app: string }; value: AppInfo }
   'password.forgot': { args: { username: string }; value: AppOk }
   'password.reset': { args: { password: string; resetToken: string }; value: AppOk }
@@ -2796,7 +2876,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -2836,6 +2916,16 @@ export interface AppSurfaces {
     self(args?: { app?: string }): Promise<AppSelf>
     /** This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest). no cap · GET /cli/skin/usage. e.g. `const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})` */
     usage(args?: { app?: string; hours?: number }): Promise<AppUsage>
+  }
+  readonly push: {
+    /** Register this guest's phone for this App's notifications; call it on every launch and whenever the token changes. no cap · POST /cli/skin/push/register. e.g. `await k2.asGuest(pass).push.register({deviceId, platform: 'apns', pushToken, environment: 'sandbox'})` */
+    register(args: { channel?: 'app' | 'k2-companion'; deviceId: string; environment?: 'production' | 'sandbox'; mutedTopics?: string[]; platform: 'apns' | 'fcm'; previews?: boolean | null; pushToken: string }): Promise<AppPushDevice>
+    /** Stop this App's notifications on one of this guest's own devices (signing out also removes it). no cap · POST /cli/skin/push/unregister. e.g. `await k2.asGuest(pass).push.unregister({deviceId})` */
+    unregister(args: { deviceId: string }): Promise<AppPushRemoved>
+    /** This guest's own push registration for one device (never the token). no cap · GET /cli/skin/push/device. e.g. `const d = await k2.asGuest(pass).push.device({deviceId})` */
+    device(args: { deviceId: string }): Promise<AppPushDevice>
+    /** Change one device's notification choices (previews, muted topics) without its token. no cap · POST /cli/skin/push/prefs. e.g. `await k2.asGuest(pass).push.prefs({deviceId, mutedTopics: ['marketing']})` */
+    prefs(args: { deviceId: string; mutedTopics?: string[]; previews?: boolean | null }): Promise<AppPushDevice>
   }
   readonly password: {
     /** Start a guest's password reset (a platform pass; the guest gets the reset link by email). no cap · POST /cli/skin/password/forgot. e.g. `await k2.asApp().password.forgot({username})` */
@@ -3018,4 +3108,4 @@ export interface AppSurfaces {
 }
 
 /** The surface names, in catalog order (the client builds one object each). */
-export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'app', 'password', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'project'] as const
+export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'app', 'push', 'password', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'project'] as const

@@ -802,6 +802,18 @@ mod unix_impl {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::apps::guest_rooms::handle(p, &who, is_post, body, params))
             }
+            // prd-custom-app-push-v1 (0.46.4): `k2 app push …` for this
+            // cell's passport (its own workspace's Apps; the handler checks).
+            p if crate::app_push::owner_routes::is_route(p) => {
+                if crate::app_push::owner_routes::is_post_route(p) && !is_post {
+                    return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
+                }
+                if body.len() > crate::app_push::owner_routes::MAX_BODY {
+                    return from_cli(crate::app_push::owner_routes::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::app_push::owner_routes::handle(p, who, body, params))
+            }
             // 0.46.0 App grace (no preview flag): this cell's passport; the
             // handler scopes it to its own workspace's Apps and holds what
             // widens.

@@ -1,5 +1,5 @@
-//! phone-web-off (Rosson 2026-10-24): "web access off" blocks browsers but
-//! never a paired Companion phone.
+//! phone-web-off (Rosson 2026-10-24, security review F1–F7): "web access
+//! off" blocks browsers but never a paired Companion phone.
 //!
 //! The Companion signs in through the same public door as the web app
 //! (`<label>.app.k2.dev`, where the edge stamps `X-K2-Client: web` and an
@@ -12,8 +12,12 @@
 //! - web off + a forged header with no valid device session → refused;
 //! - web off: the phone's first sign-in (`POST /cli/auth/device/pair`)
 //!   works, and the App device sign-in refresh is not walled;
-//! - a pairing code can't be minted from a browser-shaped request, web on
-//!   or off; who may mint for whom; list + revoke;
+//! - who may mint for whom: the owner token for a named login or its linked
+//!   login (409 `owner_login_not_linked` without one); a login only for
+//!   itself and only with its password again; never from a browser;
+//! - an ended device session answers 403 `device_session_ended`, sockets
+//!   included; audit rows name the actor; the pair notice is filed;
+//! - the `/pair` page and the iOS app-site-association file;
 //! - web on → unchanged.
 
 #![cfg(unix)]
@@ -23,7 +27,7 @@ use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
-use k2_core::connect_users;
+use k2_core::connect_users::{self, Role};
 use k2_daemon::test_harness;
 use serde_json::Value;
 
@@ -34,12 +38,14 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 const OWNER_TOKEN: &str = "owner-token-phone-web-off-0aa1";
+const PW: &str = "password123";
 
 /// The headers the K2 Connect edge adds to every proxied request.
 const EDGE: &[&str] = &["X-K2-Client: web", "X-Forwarded-Host: rosson.app.k2.dev", "X-Forwarded-Proto: https"];
 
 struct Resp {
     status: u16,
+    head: String,
     body: String,
 }
 
@@ -50,14 +56,47 @@ impl Resp {
     fn code(&self) -> String {
         match self.json()["error"]["code"].as_str() {
             Some(c) => c.to_string(),
-            None => panic!("no error.code in {:?}", self.body),
+            None => panic!("no error.code in {} {:?}", self.status, self.body),
         }
+    }
+    fn header(&self, name: &str) -> Option<String> {
+        self.head.lines().find_map(|l| {
+            let (n, v) = l.split_once(':')?;
+            n.trim().eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+        })
     }
 }
 
-fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>, extra_headers: &[&str]) -> Resp {
+fn raw(port: u16, req: &str) -> Resp {
     let mut stream = StdTcpStream::connect(("127.0.0.1", port)).expect("connect to test daemon");
     stream.set_read_timeout(Some(Duration::from_secs(10))).expect("set read timeout");
+    stream.write_all(req.as_bytes()).expect("write request");
+    stream.flush().expect("flush");
+    let mut buf = Vec::new();
+    loop {
+        let mut chunk = [0u8; 4096];
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::UnexpectedEof) => break,
+            Err(e) => panic!("read response: {e:?}"),
+        }
+    }
+    let text = String::from_utf8_lossy(&buf).to_string();
+    let status = text
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("could not parse status from response: {text:?}"));
+    let (head, body) = match text.split_once("\r\n\r\n") {
+        Some((h, b)) => (h.to_string(), b.to_string()),
+        None => panic!("no header/body split in {text:?}"),
+    };
+    Resp { status, head, body }
+}
+
+fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>, extra_headers: &[&str]) -> Resp {
     let mut extra = String::new();
     for h in extra_headers {
         extra.push_str(h);
@@ -70,30 +109,7 @@ fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>, extra
         ),
         None => format!("{method} {path_and_query} HTTP/1.1\r\nHost: rosson.k2.dev\r\nConnection: close\r\n{extra}\r\n"),
     };
-    stream.write_all(req.as_bytes()).expect("write request");
-    stream.flush().expect("flush");
-    let mut raw = Vec::new();
-    loop {
-        let mut chunk = [0u8; 4096];
-        match stream.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => raw.extend_from_slice(&chunk[..n]),
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::UnexpectedEof) => break,
-            Err(e) => panic!("read response: {e:?}"),
-        }
-    }
-    let text = String::from_utf8_lossy(&raw).to_string();
-    let status = text
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or_else(|| panic!("could not parse status from response: {text:?}"));
-    let body = match text.split_once("\r\n\r\n") {
-        Some((_h, b)) => b.to_string(),
-        None => panic!("no header/body split in {text:?}"),
-    };
-    Resp { status, body }
+    raw(port, &req)
 }
 
 struct HomeEnv {
@@ -129,6 +145,10 @@ fn refs(v: &[String]) -> Vec<&str> {
     v.iter().map(String::as_str).collect()
 }
 
+fn bearer(tok: &str) -> String {
+    format!("Authorization: Bearer {tok}")
+}
+
 fn set_web(port: u16, on: bool) {
     let r = http(
         port,
@@ -139,6 +159,14 @@ fn set_web(port: u16, on: bool) {
     );
     assert_eq!(r.status, 200, "settings update: {}", r.body);
     assert_eq!(r.json()["webClientEnabled"], on, "{}", r.body);
+}
+
+fn add_login(name: &str, role: Role) -> String {
+    connect_users::add_user(name, PW).expect("add_user");
+    if role != Role::Member {
+        connect_users::set_role(name, role).expect("set_role");
+    }
+    connect_users::create_session(name)
 }
 
 /// Owner token (loopback, no web markers) mints a code for `user`.
@@ -166,14 +194,24 @@ fn pair_through_edge(port: u16, code: &str, device_id: &str) -> Value {
     let r = http(port, "POST", "/cli/auth/device/pair", Some(&body), EDGE);
     assert_eq!(r.status, 200, "pair through the edge: {}", r.body);
     let v = r.json();
-    assert!(v["token"].as_str().is_some_and(|t| !t.is_empty()), "{}", r.body);
+    assert!(v["token"].as_str().is_some_and(|t| t.len() == 64), "{}", r.body);
     assert_eq!(v["device"]["id"], device_id, "{}", r.body);
     assert_eq!(v["slidingDays"], 30, "{}", r.body);
+    assert_eq!(v["maxDays"], 180, "{}", r.body);
+    assert_eq!(v["mustChangePassword"], false, "{}", r.body);
     v
 }
 
-fn bearer(tok: &str) -> String {
-    format!("Authorization: Bearer {tok}")
+fn audit_rows(port: u16, event: &str) -> Vec<Value> {
+    let r = http(port, "GET", &format!("/cli/users/audit?tail=1000&token={OWNER_TOKEN}"), None, &[]);
+    assert_eq!(r.status, 200, "audit: {}", r.body);
+    let v = r.json();
+    let rows = v["events"].as_array().cloned().unwrap_or_else(|| panic!("audit shape: {}", r.body));
+    rows.into_iter().filter(|e| e["event"] == event).collect()
+}
+
+fn assert_code(r: &Resp, status: u16, code: &str, what: &str) {
+    assert_eq!((r.status, r.code()), (status, code.to_string()), "{what}: {}", r.body);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -182,8 +220,8 @@ async fn web_off_lets_a_paired_phone_through_and_keeps_browsers_out() {
     let _home = HomeEnv::set();
     let d = test_harness::start(OWNER_TOKEN).await;
     let port = d.port;
-    connect_users::add_user("phone_user", "password123").expect("add phone_user");
-    connect_users::add_user("other_user", "password123").expect("add other_user");
+    connect_users::add_user("phone_user", PW).expect("add phone_user");
+    connect_users::add_user("other_user", PW).expect("add other_user");
 
     // ── web ON: pair a phone the normal way, through the edge ──────────
     let code = owner_code(port, "phone_user");
@@ -191,7 +229,7 @@ async fn web_off_lets_a_paired_phone_through_and_keeps_browsers_out() {
     let device = paired["token"].as_str().expect("token").to_string();
     assert_eq!(paired["username"], "phone_user");
     let r = http(port, "POST", "/cli/auth/device/pair", Some(&format!(r#"{{"code":"{code}","device":{{"id":"x","name":"x"}}}}"#)), EDGE);
-    assert_eq!((r.status, r.code()), (401, "pair_code_invalid".to_string()), "a code pairs once: {}", r.body);
+    assert_code(&r, 401, "pair_code_invalid", "a code pairs once");
 
     // A browser session (password login → cookie) while web is ON works.
     let browser = connect_users::create_session("phone_user");
@@ -210,20 +248,24 @@ async fn web_off_lets_a_paired_phone_through_and_keeps_browsers_out() {
     assert_eq!(r.status, 200, "web off + device session (?token=): {}", r.body);
     let r = http(port, "GET", "/cli/auth/devices", None, &refs(&with(EDGE, &[&bearer(&device)])));
     assert_eq!(r.status, 200, "{}", r.body);
-    let list = r.json()["devices"].as_array().cloned().unwrap_or_else(|| panic!("devices list: {}", r.body));
+    let v = r.json();
+    let list = v["devices"].as_array().cloned().unwrap_or_else(|| panic!("devices list: {}", r.body));
     assert_eq!(list.len(), 1, "{}", r.body);
     assert_eq!(list[0]["deviceId"], "ios-install-a");
     assert_eq!(list[0]["current"], true, "the caller's own phone is marked: {}", r.body);
+    assert_eq!(list[0]["pairedBy"], "owner-token", "{}", r.body);
+    assert_eq!(v["pairAs"]["user"], "phone_user", "{}", r.body);
+    assert_eq!(v["pairAs"]["source"], "self", "{}", r.body);
+    assert_eq!(v["pairAs"]["needsPassword"], true, "a login types its password: {}", r.body);
 
     // 2. A browser session → 403 WEB_CLIENT_DISABLED (cookie, or the
     //    password login's token as a Bearer).
     for (what, hdr) in [("cookie", cookie.clone()), ("bearer", bearer(&browser))] {
         let r = http(port, "GET", "/cli/auth/whoami", None, &refs(&with(EDGE, &[&hdr])));
-        assert_eq!((r.status, r.code()), (403, "WEB_CLIENT_DISABLED".to_string()), "web off + browser {what}: {}", r.body);
+        assert_code(&r, 403, "WEB_CLIENT_DISABLED", &format!("web off + browser {what}"));
     }
-    // The browser's password login itself stays walled.
     let r = http(port, "POST", "/cli/auth/login", Some(r#"{"username":"phone_user","password":"password123","web":true}"#), EDGE);
-    assert_eq!((r.status, r.code()), (403, "WEB_CLIENT_DISABLED".to_string()), "web off + password login via the edge: {}", r.body);
+    assert_code(&r, 403, "WEB_CLIENT_DISABLED", "web off + password login via the edge");
 
     // 3. A forged header without a valid device session → refused.
     for (what, hdrs) in [
@@ -234,99 +276,127 @@ async fn web_off_lets_a_paired_phone_through_and_keeps_browsers_out() {
         ("X-K2-CSRF + plain session", vec!["X-K2-CSRF: web".to_string(), bearer(&browser)]),
     ] {
         let r = http(port, "GET", "/cli/auth/whoami", None, &refs(&hdrs));
-        assert_eq!((r.status, r.code()), (403, "WEB_CLIENT_DISABLED".to_string()), "web off + forged header ({what}): {}", r.body);
+        assert_code(&r, 403, "WEB_CLIENT_DISABLED", &format!("web off + forged header ({what})"));
     }
-    // The non-web CLI / desktop path is unchanged.
     let r = http(port, "GET", &format!("/cli/auth/whoami?token={OWNER_TOKEN}"), None, &[]);
-    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.status, 200, "the CLI path is unchanged: {}", r.body);
 
-    // 4. A browser can't mint a pairing code (web off, so the wall answers
-    //    for web-marked requests; a device session through the edge passes
-    //    the wall and the mint route itself refuses).
+    // 4. A browser can't mint (the wall answers web-marked requests; a
+    //    device session through the edge passes the wall and the mint
+    //    route itself refuses; a browser Origin on the direct host too).
     let r = http(port, "POST", "/cli/auth/device/pair-code", Some("{}"), &refs(&with(EDGE, &[&cookie])));
-    assert_eq!((r.status, r.code()), (403, "WEB_CLIENT_DISABLED".to_string()), "{}", r.body);
-    let r = http(port, "POST", "/cli/auth/device/pair-code", Some("{}"), &refs(&with(EDGE, &[&bearer(&device)])));
-    assert_eq!((r.status, r.code()), (403, "device_pairing_not_from_browser".to_string()), "{}", r.body);
+    assert_code(&r, 403, "WEB_CLIENT_DISABLED", "cookie through the edge");
+    let r = http(port, "POST", "/cli/auth/device/pair-code", Some(r#"{"password":"password123"}"#), &refs(&with(EDGE, &[&bearer(&device)])));
+    assert_code(&r, 403, "device_pairing_not_from_browser", "device session through the edge");
     let r = http(
         port,
         "POST",
         "/cli/auth/device/pair-code",
-        Some("{}"),
+        Some(r#"{"password":"password123"}"#),
         &[&bearer(&browser), "Origin: https://rosson.app.k2.dev", "Sec-Fetch-Site: cross-site"],
     );
-    assert_eq!((r.status, r.code()), (403, "device_pairing_not_from_browser".to_string()), "a browser calling the direct host: {}", r.body);
+    assert_code(&r, 403, "device_pairing_not_from_browser", "a browser calling the direct host");
 
     // 5. The phone's FIRST sign-in works with web off: a code from the
     //    desktop (owner token), redeemed through the edge.
-    let code = owner_code(port, "phone_user");
-    let second = pair_through_edge(port, &code, "android-install-b");
+    let second = pair_through_edge(port, &owner_code(port, "phone_user"), "android-install-b");
     let device_b = second["token"].as_str().expect("token").to_string();
     let r = http(port, "GET", "/cli/auth/whoami", None, &refs(&with(EDGE, &[&bearer(&device_b)])));
     assert_eq!(r.status, 200, "a phone paired while web is off: {}", r.body);
-    //    …or a code the signed-in Companion makes for itself (its own
-    //    native request, the Tauri origin, no edge markers).
-    let r = http(
-        port,
-        "POST",
-        "/cli/auth/device/pair-code",
-        Some("{}"),
-        &[&bearer(&device), "Origin: tauri://localhost", "Sec-Fetch-Site: cross-site"],
-    );
+    //    …or a code the signed-in Companion makes for itself (native
+    //    request or the Tauri origin, no edge markers) with its password.
+    let tauri = ["Origin: tauri://localhost", "Sec-Fetch-Site: cross-site"];
+    let r = http(port, "POST", "/cli/auth/device/pair-code", Some("{}"), &refs(&with(&tauri, &[&bearer(&device)])));
+    assert_code(&r, 400, "usage", "a login must type its password again");
+    let r = http(port, "POST", "/cli/auth/device/pair-code", Some(r#"{"password":"nope-nope"}"#), &refs(&with(&tauri, &[&bearer(&device)])));
+    assert_code(&r, 401, "password_invalid", "a wrong password");
+    let r = http(port, "POST", "/cli/auth/device/pair-code", Some(r#"{"password":"password123"}"#), &refs(&with(&tauri, &[&bearer(&device)])));
     assert_eq!(r.status, 200, "self pair-code from the Companion: {}", r.body);
     assert_eq!(r.json()["user"], "phone_user", "{}", r.body);
-    //    A login can't name someone else.
-    let r = http(port, "POST", "/cli/auth/device/pair-code", Some(r#"{"user":"other_user"}"#), &[&bearer(&device)]);
-    assert_eq!((r.status, r.code()), (403, "owner_required".to_string()), "{}", r.body);
-    //    The owner token has no login of its own.
-    let r = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some("{}"), &[]);
-    assert_eq!((r.status, r.code()), (400, "usage".to_string()), "{}", r.body);
-    //    Unknown login.
+    assert_eq!(r.json()["pairUrl"], Value::Null, "no public host on this test box: {}", r.body);
+    let r = http(port, "POST", "/cli/auth/device/pair-code", Some(r#"{"user":"other_user","password":"password123"}"#), &[&bearer(&device)]);
+    assert_code(&r, 403, "owner_token_required", "a login can't name someone else");
     let r = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some(r#"{"user":"nobody"}"#), &[]);
-    assert_eq!((r.status, r.code()), (400, "no_such_login".to_string()), "{}", r.body);
-    //    No credential at all.
+    assert_code(&r, 400, "no_such_login", "unknown login");
     let r = http(port, "POST", "/cli/auth/device/pair-code", Some(r#"{"user":"phone_user"}"#), &[]);
-    assert_eq!(r.status, 403, "{}", r.body);
+    assert_code(&r, 401, "login_required", "no credential at all");
+
+    // Mint audit rows name actor and target (F2); the pair row carries the
+    // minter; a notice went to the person and the owner (F1).
+    let mints = audit_rows(port, "device-pair-code");
+    assert!(
+        mints.iter().any(|e| e["outcome"] == "ok" && e["user"] == "phone_user" && e["actor"] == "user:phone_user"),
+        "self mint row: {mints:?}"
+    );
+    assert!(
+        mints.iter().any(|e| e["outcome"] == "ok" && e["user"] == "phone_user" && e["actor"] == "owner-token"),
+        "owner mint row: {mints:?}"
+    );
+    assert!(mints.iter().any(|e| e["outcome"] == "bad_creds" && e["actor"] == "user:phone_user"), "bad password row: {mints:?}");
+    let pairs = audit_rows(port, "device-pair");
+    assert!(pairs.iter().any(|e| e["outcome"] == "ok" && e["actor"] == "owner-token"), "pair row: {pairs:?}");
+    let tickets = http(port, "GET", &format!("/cli/feedback/list-all?token={OWNER_TOKEN}"), None, &[]);
+    assert_eq!(tickets.status, 200, "{}", tickets.body);
+    assert!(tickets.body.contains("paired for phone_user"), "pair notice filed: {}", tickets.body);
 
     // Bad redeems: one answer, no oracle.
     let r = http(port, "POST", "/cli/auth/device/pair", Some(r#"{"code":"K2P-00000-00000-00000-00000","device":{"id":"d","name":"D"}}"#), EDGE);
-    assert_eq!((r.status, r.code()), (401, "pair_code_invalid".to_string()), "{}", r.body);
+    assert_code(&r, 401, "pair_code_invalid", "unknown code");
     let code = owner_code(port, "phone_user");
     let r = http(port, "POST", "/cli/auth/device/pair", Some(&format!(r#"{{"code":"{code}"}}"#)), EDGE);
-    assert_eq!((r.status, r.code()), (400, "usage".to_string()), "device is required: {}", r.body);
+    assert_code(&r, 400, "usage", "device is required");
     let r = http(port, "POST", "/cli/auth/device/pair", Some(&format!(r#"{{"code":"{code}","device":{{"id":"bad id!","name":"x"}}}}"#)), EDGE);
-    assert_eq!((r.status, r.code()), (400, "usage".to_string()), "{}", r.body);
+    assert_code(&r, 400, "usage", "bad device id");
+    let r = http(
+        port,
+        "POST",
+        "/cli/auth/device/pair",
+        Some(&format!(r#"{{"code":"{code}","device":{{"id":"d","name":"D"}}}}"#)),
+        &refs(&with(EDGE, &["Origin: https://evil.example"])),
+    );
+    assert_code(&r, 403, "device_pairing_not_from_browser", "a browser page redeeming (F5)");
     let r = http(port, "GET", "/cli/auth/device/pair", None, EDGE);
     assert_eq!(r.status, 405, "pair is POST only: {}", r.body);
     let r = http(port, "GET", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), None, &[]);
     assert_eq!(r.status, 405, "pair-code is POST only: {}", r.body);
 
-    // App device sign-in (0.46.3) is not walled either: its refresh answers
-    // for itself (a garbage refresh token → refresh_invalid).
+    // App device sign-in (0.46.3) is not walled either.
     let r = http(port, "POST", "/cli/skin/refresh", Some(r#"{"refresh":"k2skr_nope"}"#), EDGE);
-    assert_ne!(r.status, 403, "App device refresh must not be walled: {}", r.body);
-    assert_eq!(r.code(), "refresh_invalid", "{}", r.body);
+    assert_code(&r, 401, "refresh_invalid", "App device refresh must not be walled");
 
     // 6. Revoke: someone else can't end it; the phone's person can; then
-    //    the wall refuses that token.
+    //    every route answers that token 403 device_session_ended, sockets
+    //    included, with web on or off.
     let other = connect_users::create_session("other_user");
     let id_b = second["device"]["sessionId"].as_str().expect("sessionId").to_string();
     let r = http(port, "POST", "/cli/auth/device/revoke", Some(&format!(r#"{{"id":"{id_b}"}}"#)), &[&bearer(&other)]);
-    assert_eq!((r.status, r.code()), (404, "no_such_device".to_string()), "{}", r.body);
+    assert_code(&r, 404, "no_such_device", "another login's phone");
     let r = http(port, "POST", "/cli/auth/device/revoke", Some(&format!(r#"{{"id":"{id_b}"}}"#)), &refs(&with(EDGE, &[&bearer(&device)])));
     assert_eq!(r.status, 200, "own phone revoke: {}", r.body);
     let r = http(port, "GET", "/cli/auth/whoami", None, &refs(&with(EDGE, &[&bearer(&device_b)])));
-    assert_eq!((r.status, r.code()), (403, "WEB_CLIENT_DISABLED".to_string()), "a revoked phone: {}", r.body);
+    assert_code(&r, 403, "device_session_ended", "a revoked phone through the edge");
+    let r = http(port, "GET", &format!("/cli/auth/whoami?token={device_b}"), None, &[]);
+    assert_code(&r, 403, "device_session_ended", "a revoked phone on the direct path");
+    let ws = raw(
+        port,
+        &format!(
+            "GET /events?token={device_b} HTTP/1.1\r\nHost: rosson.k2.dev\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        ),
+    );
+    assert_code(&ws, 403, "device_session_ended", "a revoked phone opening a socket");
+    let revokes = audit_rows(port, "device-revoke");
+    assert!(revokes.iter().any(|e| e["actor"] == "user:phone_user"), "revoke row: {revokes:?}");
     //    The owner sees and ends everyone's.
     let r = http(port, "GET", &format!("/cli/auth/devices?token={OWNER_TOKEN}"), None, &[]);
     assert_eq!(r.status, 200, "{}", r.body);
     let all = r.json()["devices"].as_array().cloned().unwrap_or_else(|| panic!("{}", r.body));
     assert_eq!(all.len(), 1, "only ios-install-a is left: {}", r.body);
-    assert_eq!(all[0]["username"], "phone_user");
     let id_a = all[0]["id"].as_str().expect("id").to_string();
     let r = http(port, "POST", &format!("/cli/auth/device/revoke?token={OWNER_TOKEN}"), Some(&format!(r#"{{"id":"{id_a}"}}"#)), &[]);
     assert_eq!(r.status, 200, "{}", r.body);
     let r = http(port, "GET", "/cli/auth/whoami", None, &refs(&with(EDGE, &[&bearer(&device)])));
-    assert_eq!((r.status, r.code()), (403, "WEB_CLIENT_DISABLED".to_string()), "{}", r.body);
+    assert_code(&r, 403, "device_session_ended", "the owner revoked it");
 
     // ── web ON again: unchanged ────────────────────────────────────────
     set_web(port, true);
@@ -334,22 +404,107 @@ async fn web_off_lets_a_paired_phone_through_and_keeps_browsers_out() {
     assert_eq!(r.status, 200, "web on: browser session: {}", r.body);
     let r = http(port, "GET", "/cli/auth/whoami", None, &refs(&with(EDGE, &[&bearer(&browser)])));
     assert_eq!(r.status, 200, "web on: bearer session through the edge: {}", r.body);
-    // Even with web on, the web app can't mint a phone credential.
-    let r = http(port, "POST", "/cli/auth/device/pair-code", Some("{}"), &refs(&with(EDGE, &[&cookie, "Origin: https://rosson.app.k2.dev"])));
-    assert_eq!((r.status, r.code()), (403, "device_pairing_not_from_browser".to_string()), "{}", r.body);
-    let r = http(port, "POST", "/cli/auth/device/pair-code", Some("{}"), &refs(&with(EDGE, &[&bearer(&browser)])));
-    assert_eq!((r.status, r.code()), (403, "device_pairing_not_from_browser".to_string()), "{}", r.body);
+    let r = http(port, "GET", "/cli/auth/whoami", None, &[&bearer(&device)]);
+    assert_code(&r, 403, "device_session_ended", "web on: an ended phone is still told so");
+    let r = http(port, "POST", "/cli/auth/device/pair-code", Some(r#"{"password":"password123"}"#), &refs(&with(EDGE, &[&cookie, "Origin: https://rosson.app.k2.dev"])));
+    assert_code(&r, 403, "device_pairing_not_from_browser", "web on: a cookie session can't mint");
+    let r = http(port, "POST", "/cli/auth/device/pair-code", Some(r#"{"password":"password123"}"#), &refs(&with(EDGE, &[&bearer(&browser)])));
+    assert_code(&r, 403, "device_pairing_not_from_browser", "web on: the web app can't mint");
 }
 
-/// A password change (or any session revoke) ends paired phones like every
-/// other session, and voids an unredeemed code.
+/// Which login a code pairs as (Rosson 2026-10-24): a login → itself; the
+/// owner token with `user` → that login; the owner token alone → the login
+/// linked to the owner, else 409 `owner_login_not_linked`. Owner and Admin
+/// LOGINS can't mint for anyone else (F2).
+#[tokio::test(flavor = "multi_thread")]
+async fn who_a_pairing_code_signs_in_as() {
+    let _g = lock();
+    let _home = HomeEnv::set();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let port = d.port;
+    let owner_login = add_login("boss", Role::Owner);
+    let admin_login = add_login("deputy", Role::Admin);
+    let _member = add_login("crew", Role::Member);
+
+    // Owner token, no user, nothing linked → 409; pairAs says so.
+    let r = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some("{}"), &[]);
+    assert_code(&r, 409, "owner_login_not_linked", "owner token with no linked login");
+    assert!(r.json()["error"]["hint"].as_str().is_some_and(|h| h.contains("Your account")), "{}", r.body);
+    let r = http(port, "GET", &format!("/cli/auth/devices?token={OWNER_TOKEN}"), None, &[]);
+    assert_eq!(r.json()["pairAs"]["user"], Value::Null, "{}", r.body);
+    assert_eq!(r.json()["pairAs"]["error"]["code"], "owner_login_not_linked", "{}", r.body);
+
+    // Linked → the code pairs as the linked login.
+    k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["deputy"] })).expect("link deputy");
+    let r = http(port, "GET", &format!("/cli/auth/devices?token={OWNER_TOKEN}"), None, &[]);
+    assert_eq!(r.json()["pairAs"], serde_json::json!({ "user": "deputy", "source": "owner-linked", "needsPassword": false }), "{}", r.body);
+    let r = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some("{}"), &[]);
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["user"], "deputy", "{}", r.body);
+    let paired = pair_through_edge(port, r.json()["code"].as_str().expect("code"), "linked-1");
+    assert_eq!(paired["username"], "deputy");
+
+    // Owner token naming a login → that login.
+    let named = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some(r#"{"user":"crew"}"#), &[]);
+    assert_eq!(named.json()["user"], "crew", "{}", named.body);
+
+    // Owner and Admin LOGINS: themselves only.
+    for (who, tok) in [("boss", &owner_login), ("deputy", &admin_login)] {
+        let r = http(port, "POST", "/cli/auth/device/pair-code", Some(r#"{"user":"crew","password":"password123"}"#), &[&bearer(tok)]);
+        assert_code(&r, 403, "owner_token_required", &format!("{who} minting for crew"));
+        let r = http(port, "POST", "/cli/auth/device/pair-code", Some(r#"{"password":"password123"}"#), &[&bearer(tok)]);
+        assert_eq!(r.status, 200, "{who} for itself: {}", r.body);
+        assert_eq!(r.json()["user"], who, "{}", r.body);
+    }
+
+    // A login that must change its password gets no code (409).
+    connect_users::set_must_change_password("crew", true).expect("flag crew");
+    let r = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some(r#"{"user":"crew"}"#), &[]);
+    assert_code(&r, 409, "password_change_required", "owner token naming a must-change login");
+
+    // Pending codes per login are capped at 3: the oldest stops working.
+    let codes: Vec<String> = (0..4).map(|_| owner_code(port, "boss")).collect();
+    let body = format!(r#"{{"code":"{}","device":{{"id":"cap-0","name":"C"}}}}"#, codes[0]);
+    let r = http(port, "POST", "/cli/auth/device/pair", Some(&body), EDGE);
+    assert_code(&r, 401, "pair_code_invalid", "the 4th code evicted the 1st");
+    pair_through_edge(port, &codes[3], "cap-3");
+}
+
+/// With a public host, a code comes with its link and QR.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_code_comes_with_its_pair_link_and_qr() {
+    let _g = lock();
+    let _home = HomeEnv::set();
+    k2_core::tunnel::config::save(&k2_core::tunnel::config::TunnelConfig {
+        token: "tok".to_string(),
+        subdomain: "rosson".to_string(),
+        ..Default::default()
+    })
+    .expect("seed tunnel config");
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let port = d.port;
+    connect_users::add_user("linked", PW).expect("add");
+    let r = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some(r#"{"user":"linked"}"#), &[]);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    let code = v["code"].as_str().expect("code");
+    assert_eq!(v["host"], "rosson.k2.dev", "{}", r.body);
+    assert_eq!(v["pairUrl"], format!("https://rosson.k2.dev/pair#{code}"), "{}", r.body);
+    let size = v["qr"]["size"].as_u64().expect("qr size") as usize;
+    let rows = v["qr"]["rows"].as_array().expect("qr rows");
+    assert_eq!(rows.len(), size);
+    assert!(rows.iter().all(|row| row.as_str().is_some_and(|s| s.len() == size && s.bytes().all(|b| b == b'0' || b == b'1'))));
+}
+
+/// A password change ends paired phones (403 `device_session_ended`) and
+/// voids an unredeemed code.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_password_change_ends_paired_phones_and_voids_codes() {
     let _g = lock();
     let _home = HomeEnv::set();
     let d = test_harness::start(OWNER_TOKEN).await;
     let port = d.port;
-    connect_users::add_user("rotating_user", "password123").expect("add");
+    connect_users::add_user("rotating_user", PW).expect("add");
     set_web(port, false);
     let paired = pair_through_edge(port, &owner_code(port, "rotating_user"), "ios-1");
     let device = paired["token"].as_str().expect("token").to_string();
@@ -360,10 +515,10 @@ async fn a_password_change_ends_paired_phones_and_voids_codes() {
     connect_users::set_password("rotating_user", "a-new-password-789").expect("set_password");
 
     let r = http(port, "GET", "/cli/auth/whoami", None, &refs(&with(EDGE, &[&bearer(&device)])));
-    assert_eq!((r.status, r.code()), (403, "WEB_CLIENT_DISABLED".to_string()), "{}", r.body);
+    assert_code(&r, 403, "device_session_ended", "after a password change, through the edge");
     let r = http(port, "GET", &format!("/cli/auth/whoami?token={device}"), None, &[]);
-    assert_eq!(r.status, 403, "the device session is gone on every path: {}", r.body);
+    assert_code(&r, 403, "device_session_ended", "after a password change, direct");
     let body = format!(r#"{{"code":"{pending}","device":{{"id":"ios-2","name":"P"}}}}"#);
     let r = http(port, "POST", "/cli/auth/device/pair", Some(&body), EDGE);
-    assert_eq!((r.status, r.code()), (401, "pair_code_invalid".to_string()), "{}", r.body);
+    assert_code(&r, 401, "pair_code_invalid", "a code made before the password change");
 }

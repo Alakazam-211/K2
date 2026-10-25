@@ -1270,8 +1270,24 @@ struct SessionRecord {
 struct DeviceBinding {
     /// The stable install id the Companion sent (`[A-Za-z0-9._:-]`, ≤128).
     id: String,
-    /// The phone's display name (trimmed, ≤80).
+    /// The phone's display name (trimmed, ≤80, no control or bidi
+    /// characters).
     name: String,
+    /// Who made the pairing code it was redeemed with (`owner-token` or
+    /// `user:<name>`, security review F2). Absent on records written
+    /// before the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paired_by: Option<String>,
+}
+
+/// A device session that ended (revoked, signed out, expired, its login's
+/// sessions ended or replaced by a re-pair): only the token digest, so a
+/// phone presenting it again gets `device_session_ended` instead of the
+/// generic invalid-token answer. Kept [`ENDED_DEVICE_KEEP_DAYS`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EndedDevice {
+    digest: String,
+    ended_at: DateTime<Utc>,
 }
 
 /// Per-username failed-attempt + lockout state. Persisted (K2 Connect #4)
@@ -1300,6 +1316,11 @@ struct SessionStore {
     sessions: Vec<SessionRecord>,
     #[serde(default)]
     locks: HashMap<String, LockEntry>,
+    /// phone-web-off: digests of ended device sessions (see
+    /// [`EndedDevice`]). Older daemons drop the field on their next write;
+    /// those tokens then answer as unknown, never as live.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ended_devices: Vec<EndedDevice>,
 }
 
 impl Default for SessionStore {
@@ -1308,6 +1329,7 @@ impl Default for SessionStore {
             version: SESSION_RECORD_VERSION,
             sessions: Vec::new(),
             locks: HashMap::new(),
+            ended_devices: Vec::new(),
         }
     }
 }
@@ -1431,7 +1453,10 @@ fn update_sessions_locked<R>(
     let mut store = load_sessions()?;
     let before = serde_json::to_vec(&store).map_err(|e| format!("serialize store: {e}"))?;
     let digests_before: Vec<String> = store.sessions.iter().map(|s| s.token_digest.clone()).collect();
+    let devices_before: Vec<String> =
+        store.sessions.iter().filter(|s| s.device.is_some()).map(|s| s.token_digest.clone()).collect();
     let r = f(&mut store)?;
+    note_ended_devices(&mut store, &devices_before);
     let after = serde_json::to_vec(&store).map_err(|e| format!("serialize store: {e}"))?;
     let mut ended = Vec::new();
     if before != after {
@@ -1441,6 +1466,32 @@ fn update_sessions_locked<R>(
         ended = digests_before.into_iter().filter(|d| !live.contains(d.as_str())).collect();
     }
     Ok((r, ended))
+}
+
+/// phone-web-off: every device session `f` removed (any reason) leaves a
+/// tombstone; tombstones older than [`ENDED_DEVICE_KEEP_DAYS`] or past
+/// [`MAX_ENDED_DEVICES`] (oldest first) go. Changes nothing on the steady
+/// path, so it never forces a rewrite by itself.
+fn note_ended_devices(store: &mut SessionStore, devices_before: &[String]) {
+    let now = Utc::now();
+    if !devices_before.is_empty() {
+        let live: std::collections::HashSet<&str> = store.sessions.iter().map(|s| s.token_digest.as_str()).collect();
+        let gone: Vec<String> = devices_before.iter().filter(|d| !live.contains(d.as_str())).cloned().collect();
+        for d in gone {
+            if !store.ended_devices.iter().any(|e| e.digest == d) {
+                store.ended_devices.push(EndedDevice { digest: d, ended_at: now });
+            }
+        }
+    }
+    let cutoff = now - Duration::days(ENDED_DEVICE_KEEP_DAYS);
+    if store.ended_devices.iter().any(|e| e.ended_at <= cutoff) {
+        store.ended_devices.retain(|e| e.ended_at > cutoff);
+    }
+    if store.ended_devices.len() > MAX_ENDED_DEVICES {
+        store.ended_devices.sort_by_key(|e| e.ended_at);
+        let extra = store.ended_devices.len() - MAX_ENDED_DEVICES;
+        store.ended_devices.drain(..extra);
+    }
 }
 
 /// 0.46.3: drop the phone push registrations made by these ended sessions
@@ -1816,7 +1867,7 @@ fn validate_session_record(token: &str) -> Option<ValidSession> {
             Some((disabled, current_epoch)) if !disabled && current_epoch == record_epoch => {
                 let rec = &mut store.sessions[idx];
                 if rec.device.is_some() {
-                    let full = now + Duration::days(DEVICE_SESSION_TTL_DAYS);
+                    let full = device_expiry(rec.created_at, now);
                     if rec.expires_at < full - Duration::days(1) {
                         rec.expires_at = full;
                     }
@@ -1852,6 +1903,71 @@ fn validate_session_record(token: &str) -> Option<ValidSession> {
 
 /// A device session stays valid this many days after its last use.
 pub const DEVICE_SESSION_TTL_DAYS: i64 = 30;
+/// Security review F1: however much it is used, a device session ends this
+/// many days after it was paired (sliding stops; the phone re-pairs and
+/// gets `device_session_ended` until it does).
+pub const DEVICE_SESSION_MAX_DAYS: i64 = 180;
+/// Ended device-session tombstones are kept this long (the longest a
+/// device token can have existed).
+pub const ENDED_DEVICE_KEEP_DAYS: i64 = DEVICE_SESSION_MAX_DAYS;
+/// At most this many tombstones (oldest dropped first).
+pub const MAX_ENDED_DEVICES: usize = 4096;
+
+/// A device session's expiry when used at `now`: 30 days on, never past
+/// 180 days from pairing.
+fn device_expiry(created_at: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
+    (now + Duration::days(DEVICE_SESSION_TTL_DAYS)).min(created_at + Duration::days(DEVICE_SESSION_MAX_DAYS))
+}
+
+/// True when `token` has the shape of a Connect session token (64 lower
+/// hex). Callers use it to skip the session store for anything else (owner
+/// tokens of another shape, passports, App passes, garbage), security
+/// review F6.
+pub fn looks_like_session_token(token: &str) -> bool {
+    token.len() == 64 && token.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// What a presented token is to the session store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenState {
+    /// A live Connect session (device or not).
+    Live,
+    /// A device session that ended: revoked, signed out, expired (30 days
+    /// unused or 180 days since pairing), replaced by a re-pair, or ended
+    /// with its login's sessions (password change, disable, kick, removal).
+    DeviceEnded,
+    /// Anything else (unknown, a password login's ended session, not a
+    /// session token at all).
+    Unknown,
+}
+
+/// Classify `token`. Validating a present-but-invalid record removes it
+/// (and tombstones it when it was a device session), so a lapsed phone gets
+/// [`TokenState::DeviceEnded`] on its very first request after it lapsed.
+pub fn token_state(token: &str) -> TokenState {
+    if !looks_like_session_token(token) {
+        return TokenState::Unknown;
+    }
+    if validate_session_record(token).is_some() {
+        return TokenState::Live;
+    }
+    let presented = token_digest(token);
+    match load_sessions() {
+        Ok(store) => {
+            let mut hit = false;
+            for e in &store.ended_devices {
+                let eq: bool = e.digest.as_bytes().ct_eq(presented.as_bytes()).into();
+                hit |= eq;
+            }
+            if hit {
+                TokenState::DeviceEnded
+            } else {
+                TokenState::Unknown
+            }
+        }
+        Err(_) => TokenState::Unknown,
+    }
+}
 /// Live device sessions per person; pairing another phone past this ends
 /// the least recently used one.
 pub const MAX_DEVICE_SESSIONS_PER_USER: usize = 20;
@@ -1869,6 +1985,10 @@ pub struct DeviceSessionView {
     pub created_at: String,
     /// When it ends unless the phone uses it again.
     pub expires_at: String,
+    /// When it ends however much it is used (180 days from pairing).
+    pub max_expires_at: String,
+    /// Who made the pairing code (`owner-token` / `user:<name>`).
+    pub paired_by: Option<String>,
 }
 
 /// The current `token_epoch` of an existing, enabled user; `None` when the
@@ -1893,6 +2013,7 @@ pub fn create_device_session(
     expected_epoch: u64,
     device_id: &str,
     device_name: &str,
+    paired_by: &str,
 ) -> Result<String, String> {
     let username = normalize_username(username)?;
     match live_user_epoch(&username) {
@@ -1906,12 +2027,16 @@ pub fn create_device_session(
         username: username.clone(),
         token_digest: token_digest(&token),
         created_at: now,
-        expires_at: now + Duration::days(DEVICE_SESSION_TTL_DAYS),
+        expires_at: device_expiry(now, now),
         token_epoch: expected_epoch,
         created_ip: None,
         user_agent: None,
         session_id: uuid::Uuid::new_v4().to_string(),
-        device: Some(DeviceBinding { id: device_id.to_string(), name: device_name.to_string() }),
+        device: Some(DeviceBinding {
+            id: device_id.to_string(),
+            name: device_name.to_string(),
+            paired_by: Some(paired_by.to_string()),
+        }),
     };
     let ended = update_sessions(|store| {
         let mut ended = Vec::new();
@@ -1987,6 +2112,8 @@ pub fn device_sessions(username: Option<&str>) -> Result<Vec<DeviceSessionView>,
             name: dev.name.clone(),
             created_at: rec.created_at.to_rfc3339(),
             expires_at: rec.expires_at.to_rfc3339(),
+            max_expires_at: (rec.created_at + Duration::days(DEVICE_SESSION_MAX_DAYS)).to_rfc3339(),
+            paired_by: dev.paired_by.clone(),
         });
     }
     out.sort_by(|a, b| a.username.cmp(&b.username).then(a.created_at.cmp(&b.created_at)));

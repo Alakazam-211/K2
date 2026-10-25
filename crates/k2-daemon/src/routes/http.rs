@@ -280,9 +280,55 @@ pub(crate) fn device_session_passes_web_wall(query: &str, cookie_only: bool) -> 
     if cookie_only {
         return false;
     }
+    // F6: anything not shaped like a session token never reaches the store.
     extract_token(query)
-        .filter(|t| !t.is_empty())
+        .filter(|t| k2_core::connect_users::looks_like_session_token(t))
         .is_some_and(|t| k2_core::connect_users::validate_device_session(t).is_some())
+}
+
+/// phone-web-off: a request whose credential is a device session that
+/// ended (revoked, signed out, 30 days unused, 180 days old, replaced by a
+/// re-pair, or ended with its login's sessions) is answered 403
+/// `device_session_ended` on every route, so the phone knows to re-pair
+/// rather than retry. Only a session-shaped token that is not the owner
+/// token is looked up (F6); every other credential passes untouched.
+pub(crate) fn device_session_ended_gate(query: &str, owner_token: &str) -> Option<crate::cli_response::CliResponse> {
+    let tok = extract_token(query).filter(|t| k2_core::connect_users::looks_like_session_token(t))?;
+    if ct_eq_token(tok, owner_token) {
+        return None;
+    }
+    match k2_core::connect_users::token_state(tok) {
+        k2_core::connect_users::TokenState::DeviceEnded => Some(crate::connect_device_routes::device_session_ended()),
+        _ => None,
+    }
+}
+
+/// phone-web-off F5: the redeem route refuses what only a browser page
+/// sends: an `Origin` other than the Tauri webview's (or several), or a
+/// `Sec-Fetch-*` header with no `Origin`. The edge's own markers
+/// (`X-K2-Client: web`, `X-Forwarded-Host`) are allowed: the phone's first
+/// contact may come through `<label>.app.k2.dev`.
+pub(crate) fn pair_request_is_browser_shaped(headers_blob: &str) -> bool {
+    let head = request_head(headers_blob);
+    origin_or_fetch_metadata_is_browser(head)
+}
+
+fn origin_or_fetch_metadata_is_browser(head: &str) -> bool {
+    let origins: Vec<&str> = head
+        .lines()
+        .skip(1)
+        .filter_map(|l| {
+            let (n, v) = l.split_once(':')?;
+            n.trim().eq_ignore_ascii_case("origin").then_some(v.trim())
+        })
+        .collect();
+    match origins.as_slice() {
+        [] => head.lines().skip(1).any(|l| {
+            l.split_once(':').is_some_and(|(n, _)| n.trim().to_ascii_lowercase().starts_with("sec-fetch-"))
+        }),
+        [one] => !TAURI_ORIGINS.contains(&one.to_ascii_lowercase().as_str()),
+        _ => true,
+    }
 }
 
 /// phone-web-off: true when a request is shaped like a web browser, so a
@@ -304,19 +350,7 @@ pub(crate) fn request_is_browser_shaped(headers_blob: &str) -> bool {
     if is_web_client_request(head) || push_key_via_web_path(head) {
         return true;
     }
-    let origins: Vec<&str> = head
-        .lines()
-        .skip(1)
-        .filter_map(|l| {
-            let (n, v) = l.split_once(':')?;
-            n.trim().eq_ignore_ascii_case("origin").then_some(v.trim())
-        })
-        .collect();
-    match origins.as_slice() {
-        [] => extract_header(head, "sec-fetch-site").is_some() || extract_header(head, "sec-fetch-mode").is_some(),
-        [one] => !TAURI_ORIGINS.contains(&one.to_ascii_lowercase().as_str()),
-        _ => true,
-    }
+    origin_or_fetch_metadata_is_browser(head)
 }
 
 /// Layer-0 wall response when web access is OFF.
@@ -3255,7 +3289,7 @@ mod tests {
 
     fn paired_device_token(user: &str) -> String {
         k2_core::connect_users::add_user(user, "password123").expect("add_user");
-        let code = k2_core::connect_device_pairing::mint(user).expect("mint pairing code");
+        let code = k2_core::connect_device_pairing::mint(user, "owner-token").expect("mint pairing code");
         k2_core::connect_device_pairing::redeem(&code.code, "ios-install", "Phone")
             .expect("session store")
             .expect("code pairs")
@@ -3283,6 +3317,34 @@ mod tests {
             // Ended with the user's sessions (kick / password change).
             k2_core::connect_users::revoke_user_sessions("wall_phone");
             assert!(!device_session_passes_web_wall(&format!("token={device}"), false));
+        });
+    }
+
+    #[test]
+    fn the_redeem_route_allows_the_edge_but_not_a_browser_page() {
+        let req = |extra: &str| format!("POST /cli/auth/device/pair HTTP/1.1\r\nHost: rosson.k2.dev\r\n{extra}\r\n");
+        assert!(!pair_request_is_browser_shaped(&req("")), "native HTTP from the phone");
+        assert!(!pair_request_is_browser_shaped(&req("X-K2-Client: web\r\nX-Forwarded-Host: rosson.app.k2.dev\r\n")), "the edge");
+        assert!(!pair_request_is_browser_shaped(&req("Origin: tauri://localhost\r\nSec-Fetch-Site: cross-site\r\n")));
+        assert!(pair_request_is_browser_shaped(&req("Origin: https://rosson.app.k2.dev\r\n")));
+        assert!(pair_request_is_browser_shaped(&req("Origin: https://evil.example\r\nX-K2-Client: web\r\n")));
+        assert!(pair_request_is_browser_shaped(&req("Sec-Fetch-Dest: empty\r\n")), "any Sec-Fetch-* without Origin");
+        assert!(pair_request_is_browser_shaped(&req("Origin: tauri://localhost\r\nOrigin: null\r\n")));
+    }
+
+    #[test]
+    fn the_ended_gate_only_looks_at_session_shaped_tokens() {
+        with_temp_home(|| {
+            let owner = "f".repeat(64);
+            let device = paired_device_token("ended_phone");
+            assert!(device_session_ended_gate(&format!("token={device}"), &owner).is_none(), "live");
+            k2_core::connect_users::revoke_user_sessions("ended_phone");
+            let r = device_session_ended_gate(&format!("token={device}"), &owner).expect("ended");
+            assert_eq!(r.status, "403 Forbidden");
+            assert!(r.body.contains("\"device_session_ended\""), "{}", r.body);
+            assert!(device_session_ended_gate(&format!("token={owner}"), &owner).is_none(), "the owner token");
+            assert!(device_session_ended_gate("token=garbage", &owner).is_none());
+            assert!(device_session_ended_gate("", &owner).is_none());
         });
     }
 

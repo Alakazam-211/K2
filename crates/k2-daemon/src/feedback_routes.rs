@@ -587,7 +587,20 @@ pub(crate) fn file_owner_notice(
     title: &str,
     body: &str,
 ) -> Result<feedback::FeedbackItem, String> {
-    file_notice_for(project_id, agent_name, title, body, true)
+    file_notice_for(project_id, agent_name, title, body, true, &[])
+}
+
+/// [`file_owner_notice`] that also reaches `extra` logins (phone-web-off
+/// F1: a phone paired to a Member's login tells that Member as well as the
+/// owner and Admins).
+pub(crate) fn file_people_notice(
+    project_id: &str,
+    agent_name: &str,
+    title: &str,
+    body: &str,
+    extra: &[String],
+) -> Result<feedback::FeedbackItem, String> {
+    file_notice_for(project_id, agent_name, title, body, true, extra)
 }
 
 /// [`file_owner_notice`] for Owner logins only (no Admins): a notice whose
@@ -599,7 +612,7 @@ pub(crate) fn file_owners_only_notice(
     title: &str,
     body: &str,
 ) -> Result<feedback::FeedbackItem, String> {
-    file_notice_for(project_id, agent_name, title, body, false)
+    file_notice_for(project_id, agent_name, title, body, false, &[])
 }
 
 /// A permission card's Tickets item (prd-agent-settings-cards-v1 rev 3.1
@@ -656,6 +669,7 @@ fn file_notice_for(
     title: &str,
     body: &str,
     admins_too: bool,
+    extra: &[String],
 ) -> Result<feedback::FeedbackItem, String> {
     let mut item = feedback::create(feedback::NewFeedback {
         project_id: project_id.to_string(),
@@ -679,6 +693,10 @@ fn file_notice_for(
         })
         .map(|u| u.username)
         .collect();
+    let mut people = people;
+    people.extend(extra.iter().map(|e| e.trim().to_string()).filter(|e| !e.is_empty()));
+    people.sort();
+    people.dedup();
     if !people.is_empty() {
         item = feedback::set_assignees(&item.id, &people)?;
     }

@@ -39,6 +39,10 @@ pub struct AuditEvent {
     pub ip: String,
     /// `web` | `api`.
     pub client: String,
+    /// Who acted when that is not `user` (phone-web-off F2: the minting
+    /// actor of a pairing code, `owner-token` or `user:<name>`). Written
+    /// only when set.
+    pub actor: Option<String>,
 }
 
 impl AuditEvent {
@@ -57,7 +61,14 @@ impl AuditEvent {
             ingress: ingress.into(),
             ip: ip.into(),
             client: client.to_string(),
+            actor: None,
         }
+    }
+
+    /// The same record naming who acted (see [`AuditEvent::actor`]).
+    pub fn with_actor(mut self, actor: &str) -> Self {
+        self.actor = Some(clean_user(actor));
+        self
     }
 }
 
@@ -103,7 +114,7 @@ fn restrict_mode(file: &std::path::Path) {
 fn restrict_mode(_file: &std::path::Path) {}
 
 fn render_line(ev: &AuditEvent) -> String {
-    serde_json::json!({
+    let mut v = serde_json::json!({
         "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "event": ev.event,
         "user": ev.user,
@@ -111,8 +122,11 @@ fn render_line(ev: &AuditEvent) -> String {
         "ingress": ev.ingress,
         "ip": ev.ip,
         "client": ev.client,
-    })
-    .to_string()
+    });
+    if let Some(actor) = &ev.actor {
+        v["actor"] = serde_json::Value::String(actor.clone());
+    }
+    v.to_string()
 }
 
 /// Append one record. Never panics; a write failure is logged (the auth

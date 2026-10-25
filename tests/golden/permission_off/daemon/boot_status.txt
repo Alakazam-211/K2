@@ -50,4 +50,5 @@ features:
   app-resources-v1
   llm-account-for-v1
   companion-pairing-v1
+  files-download-v1
   boot-status-views-v1

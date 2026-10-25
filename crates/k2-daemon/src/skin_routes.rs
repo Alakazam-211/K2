@@ -351,8 +351,10 @@ fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse>
     match path {
         "/cli/skin/roles/assign" => {
             if let Some(token) = str_field(&v, &["role", "name", "id"]) {
-                if let Some(r) = roles.iter().find(|r| r.id == token || r.name.eq_ignore_ascii_case(token)) {
-                    if !role_in_workspace(r, ws) {
+                // The handler's own lookup (id first, then name), so a role
+                // named like another role's id is never the one checked.
+                if let Some(r) = skin::find_role(token).map_err(CliResponse::internal_error)? {
+                    if !role_in_workspace(&r, ws) {
                         return Err(outside_workspace(format!("role '{}' reaches outside your workspace", r.name)));
                     }
                 }
@@ -379,11 +381,12 @@ fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse>
 /// elsewhere is `owner_only`. What the handler can't read is its own 400.
 fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse> {
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else { return Ok(()) };
-    let roles = skin::list_roles().map_err(CliResponse::internal_error)?;
     let existing = |keys: &[&str]| -> Result<(), CliResponse> {
         let Some(token) = str_field(&v, keys) else { return Ok(()) };
-        match roles.iter().find(|r| r.id == token || r.name.eq_ignore_ascii_case(token)) {
-            Some(r) if !role_in_workspace(r, ws) => {
+        // The handlers' own lookup (id first, then name): a decoy role named
+        // like another role's id never stands in for it.
+        match skin::find_role(token).map_err(CliResponse::internal_error)? {
+            Some(r) if !role_in_workspace(&r, ws) => {
                 Err(outside_workspace(format!("role '{}' reaches outside your workspace (another workspace's room or App)", r.name)))
             }
             _ => Ok(()),

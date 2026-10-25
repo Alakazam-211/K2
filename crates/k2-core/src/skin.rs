@@ -3947,6 +3947,9 @@ pub fn thread_only_room_policy(rooms: &[String]) -> RoomPolicy {
 /// Mint a named per-room bundle. Empty map = Thread dark.
 /// `app_id` omitted (`None`) stays NULL — host-wide. Role names stay
 /// box-unique (`roles_name`); this does not change that index.
+/// A role name may not parse as a UUID (role ids are UUIDs).
+pub const ROLE_NAME_LOOKS_LIKE_ID: &str = "a role name can't look like a role id (a UUID): pick a word";
+
 pub fn create_role(name: &str, policy: &RoomPolicy) -> Result<SkinRole, String> {
     create_role_for_app(name, policy, None)
 }
@@ -3962,6 +3965,11 @@ pub fn create_role_for_app(
     let name = normalize_username(name)?;
     if is_connect_role_name(&name) {
         return Err(CONNECT_ROLE_NAME_ERR.to_string());
+    }
+    // Roles are found by id first, then name: a name shaped like an id
+    // could stand in for another role (security review, 0.46.4).
+    if uuid::Uuid::parse_str(&name).is_ok() {
+        return Err(ROLE_NAME_LOOKS_LIKE_ID.to_string());
     }
     let app_id = app_id
         .map(str::trim)

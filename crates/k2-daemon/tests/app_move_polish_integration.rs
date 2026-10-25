@@ -1130,6 +1130,60 @@ async fn an_agent_mints_and_edits_only_its_own_workspaces_platform_passes() {
     k2_daemon::apps::alerts::set_sink(None);
 }
 
+/// A decoy role named like another role's id never stands in for it: the
+/// checks resolve a role as the handlers do (id first, then name), and a
+/// new role's name may not look like an id (security review A).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_role_named_like_another_roles_id_is_never_the_one_checked() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let a = seed_ws(&env, "decoya");
+    let b = seed_ws(&env, "decoyb");
+    allow_manage(&a, true);
+    let agent = passport(&a);
+    let mut policy_b = k2_core::skin::RoomPolicy::new();
+    policy_b.insert(b.id.clone(), vec!["thread:read".to_string()]);
+    let victim = k2_core::skin::create_role_for_app("decoy-victim", &policy_b, None).unwrap();
+    // No new role may be named like an id, for anyone.
+    for who in [agent.as_str(), OWNER] {
+        let r = post(d.port, "/cli/skin/roles", who, json!({"name": victim.id, "roomAccess": [{"handle": a.handle, "caps": ["thread:read"]}]})).await;
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert!(r.body.contains("can't look like a role id"), "{}", r.body);
+    }
+    // A decoy left from before (written straight into skin.db): its own
+    // workspace's rooms, named like the victim's id.
+    {
+        let conn = rusqlite::Connection::open(k2_core::paths::k2_home().join("skin.db")).expect("skin.db");
+        let mut policy = serde_json::Map::new();
+        policy.insert(a.id.clone(), json!(["thread:read"]));
+        let policy = Value::Object(policy).to_string();
+        conn.execute(
+            "INSERT INTO roles (id, name, caps, rooms, created_at, room_policy, app_id) VALUES (?1, ?2, '[\"thread:read\"]', ?3, 1, ?4, NULL)",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), victim.id, json!([a.id.clone()]).to_string(), policy],
+        )
+        .expect("insert the decoy");
+    }
+    let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "decoy-guest"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    for (path, body) in [
+        ("/cli/skin/roles/assign", json!({"username": "decoy-guest", "role": victim.id})),
+        ("/cli/skin/roles/update", json!({"name": victim.id, "roomAccess": [{"handle": a.handle, "caps": ["thread:read"]}]})),
+        ("/cli/skin/roles/room", json!({"name": victim.id, "handle": a.handle, "caps": ["thread:read"]})),
+        ("/cli/skin/roles/paths", json!({"name": victim.id, "handle": b.handle, "read": ["docs"]})),
+        ("/cli/skin/roles/remove", json!({"name": victim.id})),
+    ] {
+        let r = post(d.port, path, &agent, body).await;
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{path}: {}", r.body);
+        assert!(r.body.contains("decoy-victim"), "the refusal names the real role: {path}: {}", r.body);
+    }
+    let after = k2_core::skin::find_role(&victim.id).unwrap().expect("the victim role");
+    assert_eq!((after.name.as_str(), after.rooms.clone()), ("decoy-victim", vec![b.id.clone()]), "the victim is unchanged");
+    let guest = k2_core::skin::list_principals().unwrap().into_iter().find(|p| p.username == "decoy-guest").expect("guest");
+    assert_eq!(guest.role_id, None, "no role handed out");
+    k2_daemon::apps::alerts::set_sink(None);
+}
+
 /// C: first write verbs are one digest per App per window, and nothing at
 /// all for what one of the App's test guests did (someone testing it; the
 /// owner made the guest: agents make none).

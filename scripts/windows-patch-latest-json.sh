@@ -62,18 +62,21 @@ fi
 SIG_CONTENT="$(tr -d '\n\r' < "$STAGE/setup.exe.sig")"
 SETUP_URL="https://github.com/${RELEASE_REPO}/releases/download/${TAG}/K2_${VERSION}_x64-setup.exe"
 
-echo "Fetching current latest.json..."
+# This release's own latest.json, never the `latest` alias: patching some
+# other release's manifest and stamping this version on it would publish a
+# mismatched manifest (security review). Missing → stop.
+echo "Fetching ${TAG}'s latest.json..."
 curl -fsSL "https://github.com/${RELEASE_REPO}/releases/download/${TAG}/latest.json" \
     -o "$STAGE/latest.json" \
-    || curl -fsSL "https://github.com/${RELEASE_REPO}/releases/latest/download/latest.json" \
-        -o "$STAGE/latest.json"
+    || { echo "ERROR: ${TAG} has no latest.json to patch (release.sh Step 9 publishes it); not falling back to another release" >&2; exit 1; }
 
 python3 - "$STAGE/latest.json" "$SIG_CONTENT" "$SETUP_URL" "$VERSION" "$U2_KEY_ID" "$SIG2_B64" <<'PY'
 import json, sys
 path, sig, url, ver, u2_id, sig2 = sys.argv[1:7]
 with open(path) as f:
     data = json.load(f)
-data["version"] = ver
+if data.get("version") != ver:
+    sys.exit("ERROR: the fetched latest.json is for %r, not %s; refusing to patch it" % (data.get("version"), ver))
 plats = data.setdefault("platforms", {})
 plats["windows-x86_64"] = {"signature": sig, "url": url, "k2_signatures": {u2_id: sig2}}
 with open(path, "w") as f:

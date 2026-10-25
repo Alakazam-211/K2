@@ -22,9 +22,30 @@ const h = vi.hoisted(() => ({
   posts: [] as Array<{ route: string; body: Record<string, unknown> }>,
   postRoutes: {} as Record<string, (body: Record<string, unknown>) => unknown>,
   settingsUpdates: [] as Array<Record<string, unknown>>,
+  // Your phones (phone-web-off): the pairing API, as the daemon answers it.
+  phoneCalls: [] as Array<{ mine: boolean; scope?: unknown }>,
+  pairCalls: [] as Array<Record<string, unknown>>,
+  phones: null as unknown,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
+vi.mock('@/components/Settings/shared/phone-pairing-api', async (orig) => {
+  const real = await orig<typeof import('@/components/Settings/shared/phone-pairing-api')>()
+  return {
+    ...real,
+    fetchPairedPhones: vi.fn(async (opts: { mine: boolean; scope?: unknown }) => {
+      h.phoneCalls.push(opts)
+      return { ok: true, value: real.parseDevices(h.phones) }
+    }),
+    makePairCode: vi.fn(async (opts: Record<string, unknown>) => {
+      h.pairCalls.push(opts)
+      return {
+        ok: true,
+        value: real.parsePairCode({ code: 'K2P-AAAAA-BBBBB-CCCCC-DDDDD', user: 'rosson-phone', expiresAt: new Date(Date.now() + 600_000).toISOString(), expiresInSecs: 600, host: null, pairUrl: null }),
+      }
+    }),
+  }
+})
 // `/cli/settings/update`: where the settings store saves the owner's
 // display name (Settings → General uses the same store action).
 vi.mock('@/lib/daemon-settings', async (orig) => {
@@ -165,6 +186,9 @@ beforeEach(() => {
   h.posts = []
   h.postRoutes = {}
   h.settingsUpdates = []
+  h.phoneCalls = []
+  h.pairCalls = []
+  h.phones = { ok: true, devices: [], pairAs: { user: 'rosson-phone', source: 'owner-linked', needsPassword: false, choices: ['rosson-phone', 'sam'] } }
   h.routes = ownerRoutes()
   h.scope = { label: 'This computer', isRemote: false, host: null }
   useSettingsStore.setState({ settingsOpen: false, ownerDisplayName: 'Rosson Long' })
@@ -195,6 +219,41 @@ function connectAdmin(remember = true): void {
   h.routes['people/color'] = colorView('owner', null, '#8c62c4')
   delete h.routes['users/audit']
 }
+
+describe('the Admin profile modal: Your phones (phone-web-off)', () => {
+  it('the owner on this computer sees their own phones and pairs without a password or a login picker', async () => {
+    h.phones = {
+      ok: true,
+      devices: [{ id: 's1', username: 'rosson-phone', deviceId: 'ios', name: 'Rosson iPhone', createdAt: '2026-10-24T10:00:00Z', expiresAt: '2026-11-23T10:00:00Z', current: false }],
+      pairAs: { user: 'rosson-phone', source: 'owner-linked', needsPassword: false, choices: ['rosson-phone', 'sam'] },
+    }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    const section = await waitFor(() => screen.getByTestId('admin-profile-phones'))
+    await waitFor(() => expect(section.textContent).toContain('Rosson iPhone'))
+    expect(h.phoneCalls[0]?.mine, 'own phones only').toBe(true)
+    expect(within(section).queryByLabelText('Pairs as')).toBeNull()
+    expect(within(section).queryByLabelText('Your password')).toBeNull()
+    act(() => void fireEvent.click(within(section).getByRole('button', { name: 'Pair a phone' })))
+    await waitFor(() => expect(section.textContent).toContain('K2P-AAAAA-BBBBB-CCCCC-DDDDD'))
+    expect(h.pairCalls[0]).toMatchObject({ password: undefined, user: undefined })
+  })
+
+  it('a Connect login types its password before a code is made', async () => {
+    connectAdmin()
+    h.phones = { ok: true, devices: [], pairAs: { user: 'rosson-phone', source: 'self', needsPassword: true } }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    const section = await waitFor(() => screen.getByTestId('admin-profile-phones'))
+    const pw = await within(section).findByLabelText('Your password')
+    const btn = within(section).getByRole('button', { name: 'Pair a phone' }) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    act(() => void fireEvent.change(pw, { target: { value: 'my-password' } }))
+    act(() => void fireEvent.click(btn))
+    await waitFor(() => expect(h.pairCalls).toHaveLength(1))
+    expect(h.pairCalls[0]).toMatchObject({ password: 'my-password', user: undefined })
+  })
+})
 
 describe('the Admin profile button in the top bar', () => {
   it('sits immediately right of the Zen toggle and matches its look', () => {

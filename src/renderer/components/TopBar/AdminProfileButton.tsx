@@ -63,6 +63,7 @@ import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
 import { saveRememberedPassword, useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
 import { AdminIcon } from '@/components/icons/K2Icons'
+import { PhonePairing } from '@/components/Settings/shared/PhonePairing'
 import { NAV_SECTION_HOVER_CLASS, NavSectionChevron, NavSectionLabel } from '@/components/Sidebar/NavSection'
 import {
   loadAdminProfile,
@@ -510,6 +511,14 @@ function LoadedProfile({
             </SettingRow>
           </div>
         ) : null}
+
+        {/* Your phones (phone-web-off): pair your own phone and revoke your
+            own phones. A Connect login types its password first; the owner
+            key does not (the daemon decides). */}
+        <section className="mt-3" data-testid="admin-profile-phones">
+          <div className="mb-1 text-[11px] text-[var(--color-text-secondary)]">Your phones</div>
+          <PhonePairing mode="mine" scope={scope} />
+        </section>
 
         {showSignIns ? (
           <section className="mt-3" data-testid="admin-profile-security">

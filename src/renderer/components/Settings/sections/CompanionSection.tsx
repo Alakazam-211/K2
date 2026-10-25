@@ -8,6 +8,7 @@ import type { SettingEntry } from '../searchManifest'
 import appStoreBadge from '@/assets/app-store-badge.svg?url'
 import googlePlayBadge from '@/assets/google-play-badge.png'
 import { primaryScope } from '@/kessel/server-scope'
+import { PhonePairing } from '../shared/PhonePairing'
 
 // K2 Companion (task #615) — the mobile app and K2 Connect now share ONE
 // tunnel (the frpc reverse tunnel exposed by K2 Connect at <sub>.k2.dev).
@@ -41,6 +42,7 @@ async function tunnelStatus(): Promise<TunnelStatus> {
 export const COMPANION_MANIFEST: SettingEntry[] = [
   { id: 'companion.get-app', section: 'companion', label: 'Get the K2 mobile app', description: 'Install the K2 Companion app on iPhone or Android', keywords: ['mobile', 'companion', 'app', 'download', 'install', 'iphone', 'ios', 'app store', 'android', 'google play', 'qr'] },
   { id: 'companion.status', section: 'companion', label: 'K2 Connect Status', description: 'Whether your daemon is reachable for the mobile app', keywords: ['status', 'tunnel', 'connect', 'reachable', 'subdomain', 'k2.dev', 'pair'] },
+  { id: 'companion.pair', section: 'companion', label: 'Pair a phone', description: 'A one-time code and QR that pair the K2 phone app; every paired phone, with Revoke', keywords: ['pair', 'phone', 'qr', 'code', 'companion', 'mobile', 'device', 'revoke', 'iphone', 'android', 'web access'] },
 ]
 
 export function CompanionSection(): React.JSX.Element {
@@ -132,6 +134,18 @@ export function CompanionSection(): React.JSX.Element {
           <StoreQrCard url={APP_STORE_URL} label="App Store" badgeSrc={appStoreBadge} />
           <StoreQrCard url={PLAY_STORE_URL} label="Google Play" badgeSrc={googlePlayBadge} />
         </div>
+      </div>
+
+      {/* ── Pair a phone (phone-web-off) ──────────────────────────── */}
+      <div className="mb-4 px-3 py-3 border border-[var(--color-border)]" data-settings-id="companion.pair">
+        <div className="text-xs text-[var(--color-text-primary)]">Pair a phone</div>
+        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 mb-3 leading-relaxed">
+          A one-time code (10 minutes) signs the K2 app in on a phone. A paired phone keeps working when web
+          access is off, and stays signed in while it&apos;s used: it pairs again after 30 days unused or 180
+          days in all, after its login&apos;s password changes, or when you revoke it. Password sign-in on the
+          phone keeps working too.
+        </p>
+        <PhonePairing mode="all" />
       </div>
 
       {/* ── K2 Connect status (live) ──────────────────────────────── */}

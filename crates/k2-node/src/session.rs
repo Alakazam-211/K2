@@ -662,6 +662,15 @@ where
                     tenant.ship.notify_one();
                 }
             }
+            // Secret-env (SE18): only to a job of this server waiting for it.
+            Frame::SecretEnv(e) => {
+                let (job, gen) = (e.job_id.clone(), e.generation);
+                tenant.hub.route_secret(&job, gen, crate::node::tenant::SecretAnswer::Env(e));
+            }
+            Frame::SecretRefused(r) => {
+                let (job, gen) = (r.job_id.clone(), r.generation);
+                tenant.hub.route_secret(&job, gen, crate::node::tenant::SecretAnswer::Refused(r));
+            }
             Frame::Transfer(t) => tenant.hub.route_transfer((t.job_id.clone(), t.generation, crate::node::kind_name(t.kind)), crate::node::TransferEvent::Chunk(t)),
             Frame::TransferFailed(t) => tenant.hub.route_transfer((t.job_id.clone(), t.generation, crate::node::kind_name(t.kind)), crate::node::TransferEvent::Failed(t)),
             Frame::Cancel(c) => node.cancel(&tenant, &c.job_id, c.generation, &c.reason),
@@ -1226,8 +1235,11 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
     if st.last_wall_probe.is_none_or(|t| t.elapsed() >= WALL_PROBE_EVERY) {
         st.last_wall_probe = Some(std::time::Instant::now());
         let on = tenant_wall_on(node).await;
+        // Secret-env (SV18): an executor restart may have changed whether
+        // it relays a stdin pipe; ask again with the wall probe.
+        let stdin_changed = node.refresh_exec_stdin().await;
         for t in node.tenants() {
-            if t.tenant_wall.swap(on, std::sync::atomic::Ordering::SeqCst) != on {
+            if t.tenant_wall.swap(on, std::sync::atomic::Ordering::SeqCst) != on || stdin_changed {
                 t.offer_changed.notify_one();
             }
         }

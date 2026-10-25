@@ -50,12 +50,24 @@ pub struct Config {
     pub backfill_hold_secs: i64,
     /// What an unknown job is charged while ordering (CPU × this).
     pub default_est_secs: u64,
+    /// Every slot's jobs share one uid (macOS); else one uid per slot
+    /// (Linux). The secret-env isolation rule (SE26) reads it.
+    pub one_uid: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { half_life_secs: 24 * 3600, batch_aging_secs: 3600, backfill_hold_secs: 20 * 60, default_est_secs: 600 }
+        Self { half_life_secs: 24 * 3600, batch_aging_secs: 3600, backfill_hold_secs: 20 * 60, default_est_secs: 600, one_uid: false }
     }
+}
+
+/// Secret-env same-uid isolation (SE26): may a job of `ws` in `slot`
+/// (`secret`: it gets vault secrets) start beside `running` = `(slot,
+/// workspace, secret)`? Never beside another workspace's job under the
+/// same uid when either of the two is a secret job; same-workspace jobs
+/// may share it (the grant is per workspace anyway).
+pub fn isolation_blocks<'a>(one_uid: bool, slot: Slot, ws: &str, secret: bool, running: impl IntoIterator<Item = (Slot, &'a str, bool)>) -> bool {
+    running.into_iter().any(|(s, w, sec)| (one_uid || s == slot) && w != ws && (secret || sec))
 }
 
 /// The node's capacity for queued work right now.
@@ -120,6 +132,8 @@ pub struct Running {
     /// Expected seconds left (p50 / p90); `None` = unknown.
     pub left_p50: Option<u64>,
     pub left_p90: Option<u64>,
+    /// It got vault secrets (SE26).
+    pub secret: bool,
 }
 
 /// A job waiting in the node queue.
@@ -147,6 +161,8 @@ pub struct Queued {
     pub ws_max_running: Option<u32>,
     /// May start: its server's session is up and listed it (V47).
     pub eligible: bool,
+    /// It gets vault secrets at spawn (`Plan.secret_env`, SE26).
+    pub secret: bool,
 }
 
 /// Who was served last (the tie and the inside-tenant rotations).
@@ -341,6 +357,7 @@ fn before(input: &Input<'_>, a: (usize, Slot), b: (usize, Slot), usage: &BTreeMa
 struct SimRun {
     slot: Slot,
     ws: String,
+    secret: bool,
     gate: bool,
     cpu: u64,
     mem: u64,
@@ -382,6 +399,10 @@ fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
     }
     let mine = run.iter().filter(|r| r.slot == e.slot).count() as u32;
     if mine >= t.limits.max_running {
+        return Fit::Wait;
+    }
+    // SE26: no secret job beside another workspace's job under one uid.
+    if isolation_blocks(input.cfg.one_uid, e.slot, &e.workspace_id, e.secret, run.iter().map(|r| (r.slot, r.ws.as_str(), r.secret))) {
         return Fit::Wait;
     }
     if let Some(m) = e.ws_max_running {
@@ -439,6 +460,7 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
         .map(|r| SimRun {
             slot: r.slot,
             ws: r.workspace_id.clone(),
+            secret: r.secret,
             gate: r.class == JobClass::Gate,
             cpu: r.cpu_millis,
             mem: r.mem_bytes,
@@ -483,6 +505,7 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
                     run.push(SimRun {
                         slot: e.slot,
                         ws: e.workspace_id.clone(),
+                        secret: e.secret,
                         gate: effective_class(e, t, input.now, input.cfg) == JobClass::Gate,
                         cpu,
                         mem,
@@ -541,6 +564,13 @@ pub fn decide(input: &Input<'_>) -> Decision {
                 }
             }
         }
+        // SE26: say why it waits when only the isolation rule holds it now.
+        if blocked_by.is_none()
+            && !now
+            && isolation_blocks(input.cfg.one_uid, e.slot, &e.workspace_id, e.secret, input.running.iter().map(|r| (r.slot, r.workspace_id.as_str(), r.secret)))
+        {
+            blocked_by = Some(crate::secret::codes::ISOLATION_WAIT.into());
+        }
         info[*i] = Info {
             pos: pos as u32 + 1,
             starts_now: now,
@@ -573,6 +603,7 @@ pub fn quote(input: &Input<'_>, slot: Slot, cpu_millis: u64, mem_bytes: u64) -> 
         est_p90: None,
         ws_max_running: None,
         eligible: true,
+        secret: false,
     });
     let probe = Input { queued: &queued, ..input.clone() };
     let d = decide(&probe);
@@ -729,6 +760,7 @@ mod tests {
             est_p90: Some(120),
             ws_max_running: None,
             eligible: true,
+            secret: false,
         }
     }
 
@@ -745,7 +777,53 @@ mod tests {
             exclusive: false,
             left_p50: left,
             left_p90: left.map(|l| l * 2),
+            secret: false,
         }
+    }
+
+    /// SE26: a secret job never starts beside another workspace's job of
+    /// the same slot (one uid on Linux), nor that job beside it; same
+    /// workspace and other slots may; on macOS (one uid) other slots wait
+    /// too. The waiting job says `secret_isolation_wait`.
+    #[test]
+    fn a_secret_job_never_shares_a_uid_with_another_workspace() {
+        let mut w = World::new(4, vec![tenant(0, 1), tenant(1, 1)]);
+        let mut r = running(0, "other-ws", 1000, Some(60));
+        r.workspace_id = "w-other".into();
+        w.running = vec![r];
+        let mut sec = q(0, "sec", "w-rel", 1);
+        sec.secret = true;
+        let same_slot_other_ws = sec.clone();
+        w.queued = vec![same_slot_other_ws];
+        let d = w.decide();
+        assert!(d.start.is_empty(), "waits beside another workspace's job");
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(crate::secret::codes::ISOLATION_WAIT));
+        // Another slot (another uid on Linux): starts.
+        let mut other_slot = sec.clone();
+        other_slot.slot = 1;
+        w.queued = vec![other_slot.clone()];
+        assert_eq!(w.decide().start, vec![0]);
+        // macOS: one uid for every slot: waits.
+        w.cfg.one_uid = true;
+        assert!(w.decide().start.is_empty());
+        w.cfg.one_uid = false;
+        // Same workspace beside it: fine.
+        w.running[0].workspace_id = "w-rel".into();
+        w.queued = vec![sec.clone()];
+        assert_eq!(w.decide().start, vec![0]);
+        // A plain job of another workspace beside a running secret job: waits.
+        w.running[0].secret = true;
+        w.queued = vec![q(0, "plain", "w-x", 1)];
+        let d = w.decide();
+        assert!(d.start.is_empty());
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(crate::secret::codes::ISOLATION_WAIT));
+        // Two queued at once: the secret job and another workspace's job
+        // never start together in one pass.
+        w.running.clear();
+        w.queued = vec![sec.clone(), q(0, "plain", "w-x", 2)];
+        assert_eq!(w.decide().start.len(), 1);
+        assert!(isolation_blocks(false, 0, "a", true, [(0u8, "b", false)]));
+        assert!(!isolation_blocks(false, 0, "a", false, [(0u8, "b", false)]), "no secret anywhere: no rule");
     }
 
     struct World {

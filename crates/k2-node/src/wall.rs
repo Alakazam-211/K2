@@ -251,8 +251,15 @@ pub fn seatbelt_argv(profile: &str, argv: &[String]) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecSpec {
     pub argv: Vec<String>,
+    /// The job's env without any secret value (secret-env SE19: values
+    /// never touch this file).
     pub env: Vec<(String, String)>,
     pub cwd: PathBuf,
+    /// Secret-env (SE21): the secret env arrives on stdin (`K2SE1\n` +
+    /// JSON); the shim reads it to EOF, points fd 0 at `/dev/null` and
+    /// merges it. Absent = false (a 0.46.3 spec).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stdin_env: bool,
 }
 
 /// Under the job root, in its own group-writable dir so the shim (as the
@@ -292,8 +299,63 @@ pub fn job_exec(spec_path: &Path) -> String {
     for (k, v) in &spec.env {
         cmd.env(k, v);
     }
+    if spec.stdin_env {
+        // Secret-env (SE21): fd 0 is the node's pipe. Read it to EOF
+        // (capped), then fd 0 becomes /dev/null before anything else runs.
+        let secrets = match read_stdin_secrets(&spec.env) {
+            Ok(s) => s,
+            Err(e) => return format!("k2-node job-exec: {e}"),
+        };
+        for (k, v) in &secrets.0 {
+            cmd.env(k, v);
+        }
+        // On success the process image (and every copy above) is gone.
+        let e = cmd.exec();
+        drop(secrets);
+        return format!("k2-node job-exec: exec {program}: {e}");
+    }
     let e = cmd.exec();
     format!("k2-node job-exec: exec {program}: {e}")
+}
+
+/// The secret env on fd 0 (SE21): `K2SE1\n` + JSON, at most
+/// [`k2_node_proto::secret::MAX_PIPE_BYTES`]. fd 0 is pointed at
+/// `/dev/null` right after the read, whatever happened, so nothing the job
+/// starts can read the pipe (or block on it). The names must pass the
+/// node's rule and not repeat a name `env` already sets. Errors never
+/// carry a value.
+pub fn read_stdin_secrets(env: &[(String, String)]) -> Result<k2_node_proto::secret::Plain, String> {
+    use k2_node_proto::secret::{parse_payload, wipe, MAX_PIPE_BYTES, PIPE_MAGIC};
+    use std::io::Read;
+    let mut buf = Vec::with_capacity(MAX_PIPE_BYTES + 1);
+    // SAFETY: fd 0 is ours; ManuallyDrop keeps it open for the dup2 below.
+    let mut stdin = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(0) });
+    let read = (&mut *stdin).take(MAX_PIPE_BYTES as u64 + 1).read_to_end(&mut buf);
+    let null = std::fs::OpenOptions::new().read(true).open("/dev/null");
+    let swapped = match &null {
+        // SAFETY: dup2 onto fd 0 with a valid fd.
+        Ok(f) => unsafe { libc::dup2(f.as_raw_fd(), 0) } == 0,
+        Err(_) => false,
+    };
+    let r = (|| {
+        read.map_err(|e| format!("read the secret env from stdin: {e}"))?;
+        if !swapped {
+            return Err("couldn't point stdin at /dev/null".to_string());
+        }
+        if buf.len() > MAX_PIPE_BYTES {
+            return Err(format!("the secret env on stdin is over {MAX_PIPE_BYTES} bytes"));
+        }
+        let body = buf.strip_prefix(PIPE_MAGIC).ok_or_else(|| "no secret env on stdin (an older executor, or the node never sent it)".to_string())?;
+        let plain = parse_payload(body)?;
+        for (k, _) in &plain.0 {
+            if env.iter().any(|(e, _)| e == k) {
+                return Err(format!("secret env name {k} is also in the job's env"));
+            }
+        }
+        Ok(plain)
+    })();
+    wipe(&mut buf);
+    r
 }
 
 // ── race-free tree walks (no symlink is ever followed) ──────────────
@@ -892,7 +954,7 @@ mod tests {
     fn exec_spec_round_trips_and_is_group_readable() {
         use std::os::unix::fs::PermissionsExt;
         let d = crate::util::temp_dir("exec-spec");
-        let s = ExecSpec { argv: vec!["cargo".into(), "test".into(), "$HOME".into()], env: vec![("PATH".into(), "/bin".into())], cwd: d.clone() };
+        let s = ExecSpec { argv: vec!["cargo".into(), "test".into(), "$HOME".into()], env: vec![("PATH".into(), "/bin".into())], cwd: d.clone(), stdin_env: false };
         let p = write_exec_spec(&d, &s).unwrap();
         assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o640);
         let back: ExecSpec = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();

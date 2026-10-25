@@ -65,6 +65,8 @@ struct RunMeta {
     accounted: std::time::Instant,
     /// (p50, p90) run time when it started.
     est: Option<(u64, u64)>,
+    /// It got vault secrets (secret-env SE26).
+    secret: bool,
 }
 
 type Key = (Slot, String, u32);
@@ -152,7 +154,8 @@ impl FairQ {
             last_persist: 0,
             day_cpu: BTreeMap::new(),
         };
-        Ok(Self { cfg: Config::default(), st: Mutex::new(st), kick: Notify::new() })
+        // macOS runs every slot's jobs as one uid (SE26 reads it).
+        Ok(Self { cfg: Config { one_uid: cfg!(target_os = "macos"), ..Config::default() }, st: Mutex::new(st), kick: Notify::new() })
     }
 
     // ── inputs ──────────────────────────────────────────────────────
@@ -267,6 +270,7 @@ impl FairQ {
             started: std::time::Instant::now(),
             accounted: std::time::Instant::now(),
             est,
+            secret: !a.plan.secret_env.is_empty(),
         };
         let key = (slot, a.fence.job_id.clone(), a.fence.generation);
         st.gates.remove(&key);
@@ -372,6 +376,7 @@ impl FairQ {
                     exclusive: m.exclusive,
                     left_p50: m.est.map(|e| left(e.0)),
                     left_p90: m.est.map(|e| left(e.1)),
+                    secret: m.secret,
                 }
             })
             .collect();
@@ -399,6 +404,7 @@ impl FairQ {
                     est_p90: hist.map(|h| h.1).or(r.plan.est_p90_secs).or(r.plan.est_secs),
                     ws_max_running: r.plan.ws_max_running,
                     eligible: epoch != 0 && gate == Some(epoch),
+                    secret: !r.plan.secret_env.is_empty(),
                 });
                 rows.push((t.clone(), r));
             }

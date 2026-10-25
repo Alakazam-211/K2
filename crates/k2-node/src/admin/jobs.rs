@@ -231,7 +231,9 @@ pub enum JobOp {
     /// Is the wall set up? (job user + systemd).
     Ready,
     /// Start a job. The request is followed by one `SCM_RIGHTS` message
-    /// carrying exactly two fds: the job's stdout and stderr.
+    /// carrying exactly two fds: the job's stdout and stderr; with
+    /// `JobStart.stdin` exactly three: stdout, stderr, and the read end of
+    /// the pipe the job's secret env arrives on (secret-env SE21).
     Start(JobStart),
     Status { unit: String },
     /// SIGTERM everything in the unit, SIGKILL after its stop timeout
@@ -282,6 +284,14 @@ pub struct JobStart {
     /// address (V62). Root also applies the share's own network.
     #[serde(default)]
     pub no_lan: bool,
+    /// Secret-env (SE21, SE22): a third fd follows, the read end of a pipe
+    /// that becomes the unit's stdin (the `job-exec` shim reads the secret
+    /// env from it). Root never reads it and only checks that it is the
+    /// read end of a pipe. Such a unit also gets `LimitCORE=0`. An older
+    /// executor ignores the field and refuses the third fd; the node never
+    /// sends one unless `Ready` said `stdin` (SV18).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stdin: bool,
 }
 
 /// What `Tenants` answers.
@@ -302,7 +312,14 @@ pub struct TenantWall {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "answer", rename_all = "snake_case")]
 pub enum JobAnswer {
-    Ready { job_user: String },
+    /// `stdin`: this executor relays a secret-env stdin pipe (0.46.4,
+    /// SE21). An older executor omits it (false): the node then never
+    /// offers `secret-env`.
+    Ready {
+        job_user: String,
+        #[serde(default)]
+        stdin: bool,
+    },
     Started { unit: String },
     Status(UnitStatus),
     Done { detail: Value },
@@ -571,6 +588,8 @@ pub struct UnitPlan {
     /// `no-lan` only: this machine's own on-link prefixes and addresses,
     /// denied beside [`NO_LAN_DENY`].
     pub lan_extra: Vec<String>,
+    /// Secret-env (SE22): no core dumps (`LimitCORE=0`).
+    pub no_core: bool,
 }
 
 /// The fixed template (argv[0] is `systemd-run`).
@@ -627,6 +646,10 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
     if p.private_ipc {
         prop("PrivateIPC=yes".into());
     }
+    if p.no_core {
+        // A secret job's memory never lands in a core file (SE22).
+        prop("LimitCORE=0".into());
+    }
     prop(format!("TimeoutStopSec={}", p.stop_grace_secs.clamp(1, 600)));
     // The job's /tmp and /var/tmp are its own folders in its job root (not
     // PrivateTmp, whose /var/tmp/systemd-private-* sits outside the slot):
@@ -678,6 +701,28 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
 
 fn refuse(c: &str, m: impl Into<String>) -> AdminRefusal {
     AdminRefusal::new(c, m)
+}
+
+/// The secret-env stdin fd (SE21) must be the read end of a pipe: a FIFO
+/// opened read-only. Root checks only the fd's type and mode (`fstat`,
+/// `F_GETFL`), never reads it and never opens a path for it.
+pub fn check_stdin_pipe(fd: &OwnedFd) -> Result<(), AdminRefusal> {
+    use std::os::fd::AsRawFd;
+    let raw = fd.as_raw_fd();
+    // SAFETY: fstat on a valid fd we own, into a zeroed stat.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(raw, &mut st) } != 0 {
+        return Err(refuse(code::BAD_ARGS, "the stdin fd can't be inspected"));
+    }
+    if st.st_mode & libc::S_IFMT != libc::S_IFIFO {
+        return Err(refuse(code::BAD_ARGS, "the stdin fd must be a pipe"));
+    }
+    // SAFETY: F_GETFL on a valid fd.
+    let fl = unsafe { libc::fcntl(raw, libc::F_GETFL) };
+    if fl < 0 || fl & libc::O_ACCMODE != libc::O_RDONLY {
+        return Err(refuse(code::BAD_ARGS, "the stdin fd must be a pipe's read end"));
+    }
+    Ok(())
 }
 
 fn canon(p: &Path) -> Result<PathBuf, AdminRefusal> {
@@ -1044,7 +1089,7 @@ impl Executor {
     /// The job ops (the server checked the peer: root or the node user).
     pub fn handle_job(&self, op: &JobOp, fds: Vec<OwnedFd>) -> JobAnswer {
         let r = match op {
-            JobOp::Ready => self.job_user().map(|(u, _)| JobAnswer::Ready { job_user: u }),
+            JobOp::Ready => self.job_user().map(|(u, _)| JobAnswer::Ready { job_user: u, stdin: true }),
             JobOp::Start(s) => self.start_job(s, fds).map(|unit| JobAnswer::Started { unit }),
             JobOp::Status { unit } => self.with_unit(unit, |u| unit_status(u).map(JobAnswer::Status)),
             JobOp::Stop { unit } => self.with_unit(unit, |u| systemctl(&["stop", "--no-block", u]).map(|_| JobAnswer::Done { detail: json!({"stopping": u}) })),
@@ -1129,7 +1174,19 @@ impl Executor {
         let (root, rw) = check_paths(&self.paths.home, s.tenant, &s.root, &s.rw)?;
         let node_uid = super::server::user_ids(&self.node_user()).map(|(u, _)| u).ok_or_else(|| refuse(code::NOT_CONFIGURED, "the node user is missing"))?;
         check_bind_sources(&root, node_uid)?;
-        let [out, err]: [OwnedFd; 2] = fds.try_into().map_err(|_| refuse(code::BAD_ARGS, "start needs exactly the job's stdout and stderr"))?;
+        // Exactly two fds, or exactly three with `stdin` (SE21): a fixed,
+        // checked relay. The third must be the read end of a pipe; root
+        // never reads from it, it only becomes systemd-run's stdin, which
+        // `--pipe` hands to the unit.
+        let (out, err, input) = if s.stdin {
+            let [out, err, input]: [OwnedFd; 3] =
+                fds.try_into().map_err(|_| refuse(code::BAD_ARGS, "a stdin start needs exactly the job's stdout, stderr and stdin pipe"))?;
+            check_stdin_pipe(&input)?;
+            (out, err, Some(input))
+        } else {
+            let [out, err]: [OwnedFd; 2] = fds.try_into().map_err(|_| refuse(code::BAD_ARGS, "start needs exactly the job's stdout and stderr"))?;
+            (out, err, None)
+        };
         // The node's ask, narrowed by a tenant's share (V65): root never
         // widens what the node asked, and a tenant never gets more than
         // its line in servers.toml.
@@ -1161,6 +1218,7 @@ impl Executor {
             protect_proc: v >= MIN_SYSTEMD_PROTECT_PROC,
             private_ipc: v >= MIN_SYSTEMD_PRIVATE_IPC,
             lan_extra: if network == Network::NoLan { lan_deny_extra() } else { Vec::new() },
+            no_core: s.stdin,
         };
         {
             let mut g = starting().lock().unwrap_or_else(|e| e.into_inner());
@@ -1168,12 +1226,14 @@ impl Executor {
                 return Err(refuse(code::BUSY, format!("{unit} is already starting")));
             }
         }
-        let r = self.spawn_unit(&plan, &unit, out, err);
+        let r = self.spawn_unit(&plan, &unit, out, err, input);
         starting().lock().unwrap_or_else(|e| e.into_inner()).remove(&unit);
         let _ = self.audit().append(
             super::store::AuditEntry {
                 event: "job".into(),
-                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok()}),
+                // `stdin` only says a secret-env pipe was relayed; root never
+                // sees what is in it.
+                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok(), "stdin": s.stdin}),
                 ..Default::default()
             },
             self.now(),
@@ -1181,7 +1241,7 @@ impl Executor {
         r.map(|_| unit)
     }
 
-    fn spawn_unit(&self, plan: &UnitPlan, unit: &str, out: OwnedFd, err: OwnedFd) -> Result<(), AdminRefusal> {
+    fn spawn_unit(&self, plan: &UnitPlan, unit: &str, out: OwnedFd, err: OwnedFd, input: Option<OwnedFd>) -> Result<(), AdminRefusal> {
         // A leftover unit of the same name (a node restart) goes first, but
         // only once its command is over: a start never stops a running job
         // (V48). The name carries the slot, so it's never another slot's.
@@ -1201,7 +1261,7 @@ impl Executor {
             .env_clear()
             .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
             .current_dir("/")
-            .stdin(Stdio::null())
+            .stdin(input.map(Stdio::from).unwrap_or_else(Stdio::null))
             .stdout(Stdio::from(out))
             .stderr(Stdio::from(err))
             .spawn()
@@ -1431,7 +1491,38 @@ mod tests {
             protect_proc: false,
             private_ipc: false,
             lan_extra: Vec::new(),
+            no_core: false,
         }
+    }
+
+    /// SE22: a secret-env unit gets `LimitCORE=0`; every other unit's
+    /// template is unchanged.
+    #[test]
+    fn a_stdin_unit_gets_no_core_dumps() {
+        let plain = systemd_run_argv(&plan());
+        assert!(!plain.iter().any(|x| x.starts_with("LimitCORE")));
+        let mut p = plan();
+        p.no_core = true;
+        let a = systemd_run_argv(&p);
+        assert!(a.iter().any(|x| x == "LimitCORE=0"), "{a:?}");
+        let mut b = a.clone();
+        b.retain(|x| x != "LimitCORE=0" && x != "-p");
+        let mut c = plain.clone();
+        c.retain(|x| x != "-p");
+        assert_eq!(b, c, "only LimitCORE differs");
+    }
+
+    /// SE21: only the read end of a pipe passes as the stdin fd.
+    #[test]
+    fn the_stdin_fd_must_be_a_pipes_read_end() {
+        let (r, w) = std::io::pipe().unwrap();
+        check_stdin_pipe(&OwnedFd::from(r)).expect("read end");
+        assert_eq!(check_stdin_pipe(&OwnedFd::from(w)).expect_err("write end").code, code::BAD_ARGS);
+        let d = crate::util::temp_dir("stdin-fd");
+        let f = std::fs::File::create(d.join("f")).unwrap();
+        assert_eq!(check_stdin_pipe(&OwnedFd::from(f)).expect_err("a file").code, code::BAD_ARGS);
+        let f = std::fs::File::open(d.join("f")).unwrap();
+        assert_eq!(check_stdin_pipe(&OwnedFd::from(f)).expect_err("a read-only file").code, code::BAD_ARGS);
     }
 
     /// Review A M3 / B3: no-lan denies the IPv6 encodings of private IPv4,
@@ -1793,7 +1884,8 @@ mod tests {
     fn ops_round_trip_on_the_wire() {
         let ops = [
             JobOp::Ready,
-            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true }),
+            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false }),
+            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true }),
             JobOp::Tenants,
             JobOp::TenantPrepare(share::TenantPrepare { slot: 1, trust: share::Trust::Own, weight: 1, network: Network::On }),
             JobOp::TenantWipe(share::TenantWipe { slot: 1 }),
@@ -1809,6 +1901,12 @@ mod tests {
         // A 0.46.2 node's start (no tenant, no no_lan) is the owner's.
         let old: JobOp = serde_json::from_str(r#"{"do":"start","key":"j-g1","root":"/r","rw":[],"network_none":false,"mem_bytes":null,"cpu_millis":null,"stop_grace_secs":10}"#).unwrap();
         let JobOp::Start(s) = old else { panic!() };
-        assert_eq!((s.tenant, s.no_lan), (0, false));
+        assert_eq!((s.tenant, s.no_lan, s.stdin), (0, false, false));
+        // A start without stdin is the 0.46.3 wire, byte for byte.
+        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false });
+        assert!(!serde_json::to_string(&plain).unwrap().contains("stdin"));
+        // An older executor's Ready (no stdin) reads as "can't relay stdin".
+        let a: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job"}"#).unwrap();
+        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false });
     }
 }

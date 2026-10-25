@@ -4256,6 +4256,7 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "k2-node-proto",
+ "k2-redact",
  "k2-root-proto",
  "libc",
  "rusqlite",

@@ -88,6 +88,11 @@ pub struct NodeOptions {
     pub disk_poll: Duration,
     /// Free bytes on the node's disk (tests fake it); `None` = statvfs.
     pub disk_free: Option<Arc<dyn Fn() -> u64 + Send + Sync>>,
+    /// Does the executor relay a secret-env stdin pipe? `None` = ask it
+    /// (`Ready.stdin`) at start and on every wall probe (tests set it).
+    pub exec_stdin: Option<bool>,
+    /// How long a job waits for its secret env (SE18; tests shorten it).
+    pub secret_wait: Duration,
 }
 
 impl NodeOptions {
@@ -115,8 +120,21 @@ impl NodeOptions {
             unit_poll: Duration::from_millis(300),
             disk_poll: Duration::from_secs(10),
             disk_free: None,
+            exec_stdin: None,
+            secret_wait: Duration::from_secs(k2_node_proto::secret::NEED_TIMEOUT_SECS),
         }
     }
+}
+
+/// Does the executor relay a secret-env stdin pipe (`Ready.stdin`, SE21,
+/// SV18)? An older executor omits it: false.
+pub async fn probe_exec_stdin(admin_socket: &Path) -> bool {
+    let sock = admin_socket.to_path_buf();
+    let r = tokio::task::spawn_blocking(move || {
+        crate::admin::server::job_request(&sock, &crate::admin::jobs::JobOp::Ready, &[], Duration::from_secs(10))
+    })
+    .await;
+    matches!(r, Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin: true, .. })))
 }
 
 /// How this node walls its jobs (module `wall`). `--dev` (the node runs as
@@ -140,7 +158,7 @@ pub async fn detect_wall(dev: bool, admin_socket: &Path) -> Wall {
     })
     .await;
     match r {
-        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { job_user })) => Wall::JobUser { user: job_user },
+        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { job_user, .. })) => Wall::JobUser { user: job_user },
         Ok(Ok(other)) => Wall::None { why: format!("the executor answered {other:?}") },
         Ok(Err(e)) => Wall::None { why: format!("{}: {}", e.code, e.message) },
         Err(e) => Wall::None { why: format!("wall check: {e}") },
@@ -198,6 +216,10 @@ struct RunningJob {
     /// A release-gate job (`Plan.class` gate): the disk guard stops it
     /// only when no other job is left to stop.
     gate: bool,
+    /// Its workspace and whether it gets vault secrets (secret-env SE26:
+    /// a secret job never shares a uid with another workspace's job).
+    workspace: String,
+    secret: bool,
 }
 
 /// The machine owner's side, refreshed every poll.
@@ -255,6 +277,9 @@ pub struct Node {
     job_seq: std::sync::atomic::AtomicU64,
     /// Warm target slots' last measured size and use (module `disk`).
     slot_use: Mutex<HashMap<PathBuf, disk::SlotUse>>,
+    /// The executor relays a secret-env stdin pipe (`Ready.stdin`; asked at
+    /// start and on every wall probe, so an executor restart is noticed).
+    pub exec_stdin: std::sync::atomic::AtomicBool,
 }
 
 /// What this node understands beyond protocol 1 (the offer says it).
@@ -291,6 +316,11 @@ impl Node {
             Wall::Seatbelt => String::new(),
         });
         tenant::reconcile(&owner, &opts, &wall).await?;
+        let exec_stdin = match (opts.exec_stdin, &wall) {
+            (Some(v), _) => v,
+            (None, Wall::JobUser { .. }) => probe_exec_stdin(&opts.admin_socket).await,
+            (None, _) => false,
+        };
         let facts = opts.facts.clone().unwrap_or_else(|| machine_facts(&layout));
         let policy = Policy::resolve(&config::PolicyFile::default(), &facts)?;
         let cgroups = if opts.use_cgroups { Cgroups::detect() } else { None };
@@ -325,6 +355,7 @@ impl Node {
             owner_name: Mutex::new(None),
             job_seq: Default::default(),
             slot_use: Mutex::new(HashMap::new()),
+            exec_stdin: std::sync::atomic::AtomicBool::new(exec_stdin),
             opts,
         });
         node.refresh_local(true);
@@ -363,6 +394,61 @@ impl Node {
             f.push(k2_node_proto::frames::FEATURE_NETWORK_NONE.to_string());
         }
         f
+    }
+
+    /// Ask the executor again whether it relays a stdin pipe (the wall
+    /// probe; an executor restart may have changed it). True when it
+    /// changed.
+    pub async fn refresh_exec_stdin(&self) -> bool {
+        if self.opts.exec_stdin.is_some() || !matches!(self.wall, Wall::JobUser { .. }) {
+            return false;
+        }
+        let now = probe_exec_stdin(&self.opts.admin_socket).await;
+        self.exec_stdin.swap(now, std::sync::atomic::Ordering::SeqCst) != now
+    }
+
+    /// Why this node won't take a secret-env job of `t` now (SE16, SE17),
+    /// or `None`: Linux job-user wall, a server speaking protocol ≥ 4 whose
+    /// trust is `own` (the owner, or its `servers.toml` line), for a
+    /// tenant the per-tenant wall on, and an executor that relays stdin.
+    pub fn secret_env_refusal(&self, t: &Tenant) -> Option<(&'static str, &'static str)> {
+        use k2_node_proto::secret::codes;
+        if !cfg!(target_os = "linux") {
+            return Some((codes::LINUX_ONLY, "secret env runs only on Linux nodes in this release"));
+        }
+        if !matches!(self.wall, Wall::JobUser { .. }) {
+            return Some((codes::NEEDS_WALL, "secret env needs the job wall (sudo k2-node setup)"));
+        }
+        if t.protocol() < k2_node_proto::frames::PROTOCOL_SECRETS {
+            return Some((codes::NEEDS_UPDATE, "this server is too old for secret env"));
+        }
+        if !t.is_owner() {
+            let own = t.share().is_some_and(|s| s.entry.trust == k2_node_proto::share::Trust::Own);
+            if !own {
+                return Some((codes::UNTRUSTED_SERVER, "secret env goes only to servers this node trusts as its own (trust own)"));
+            }
+            if !t.tenant_wall.load(std::sync::atomic::Ordering::SeqCst) {
+                return Some((codes::NEEDS_WALL, "secret env for another server needs the per-tenant wall"));
+            }
+        }
+        if !self.exec_stdin.load(std::sync::atomic::Ordering::SeqCst) {
+            return Some((codes::NEEDS_UPDATE, "the node's root executor can't pass secret env yet (update k2-node)"));
+        }
+        None
+    }
+
+    /// SE26: may a job of `ws` in `slot` (`secret`: it gets vault secrets)
+    /// start beside the jobs running now? `Some(reason)` when not.
+    pub(crate) fn secret_isolation_wait(&self, slot: Slot, ws: &str, secret: bool) -> Option<String> {
+        let jobs = self.jobs.lock().unwrap();
+        let blocked = k2_node_proto::queue::isolation_blocks(
+            cfg!(target_os = "macos"),
+            slot,
+            ws,
+            secret,
+            jobs.iter().map(|((s, _), j)| (*s, j.workspace.as_str(), j.secret)),
+        );
+        blocked.then(|| k2_node_proto::secret::codes::ISOLATION_WAIT.to_string())
     }
 
     /// What a Seatbelt profile closes (macOS): the node's own state, the

@@ -442,6 +442,33 @@ impl Node {
             return;
         }
 
+        // Secret-env (SE18–SE20): right before spawn, the job's secret env,
+        // sealed to a one-time key; held in memory only, until the spawn.
+        // A secret job always takes the pipe path below (SE25: no spool
+        // file, no adoption across a k2-node restart; a restart interrupts
+        // it and the retry asks again).
+        let mut secrets: Option<k2_node_proto::secret::Plain> = None;
+        let mut redactor: Option<Arc<k2_redact::Redactor>> = None;
+        if !a.plan.secret_env.is_empty() {
+            match self.pull_secrets(&t, &a, unit_mode, &env, &mut stop).await {
+                Ok(p) => {
+                    let (r, short) = job_redactor(&p);
+                    journal.set_redactor(r.clone());
+                    for n in short {
+                        sys(&mut journal, &format!("secret env {n}: its value is under {} bytes, so it isn't redacted from the logs", k2_redact::SURFACE_MIN_LEN));
+                    }
+                    sys(&mut journal, &format!("secret env: {} (from the server's vault, sealed to this attempt)", p.names().join(", ")));
+                    redactor = Some(r);
+                    secrets = Some(p);
+                }
+                Err((state, code, detail)) => {
+                    sys(&mut journal, &format!("secret env: {code}: {detail}"));
+                    self.finish_job(&t, &a, Some(&dirs), state, Some(&code), Some(&detail), src_ran, None, Some(journal), lease, None).await;
+                    return;
+                }
+            }
+        }
+
         // Smoke lock + spawn, behind the wall.
         let mem_limit = a.plan.limits.mem_bytes.unwrap_or_else(|| self.local.lock().unwrap().policy.mem_cap_bytes);
         self.take_smoke_lock(&job);
@@ -450,10 +477,13 @@ impl Node {
             if slot_tmp.is_dir() {
                 rw.push(slot_tmp.clone());
             }
-            self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit).await
+            self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit, secrets.as_ref()).await
         } else {
             self.start_local(&t, &a, &cwd, &env, network)
         };
+        // SE19: the plaintext goes as soon as the unit has it (the
+        // redactor's copy stays until the job ends).
+        drop(secrets.take());
         let (mut proc, out_pipe, err_pipe) = match started {
             Ok(s) => s,
             Err(e) => {
@@ -480,19 +510,42 @@ impl Node {
                 let j = journal.clone();
                 let tenant = t.clone();
                 let last = last_out.clone();
+                let red = redactor.clone();
                 pumps.push(tokio::spawn(async move {
                     use tokio::io::AsyncReadExt;
                     let mut buf = vec![0u8; k2_node_proto::frames::MAX_LOG_CHUNK];
+                    // SE23: a secret job's output is stream-redacted before
+                    // the journal (a value split across reads is caught).
+                    let mut sr = red.as_ref().map(|r| r.stream());
                     loop {
                         match pipe.read(&mut buf).await {
                             Ok(0) | Err(_) => break,
                             Ok(n) => {
-                                let _ = j.lock().unwrap().append(stream, &buf[..n]);
+                                match sr.as_mut() {
+                                    Some(s) => {
+                                        let out = s.push(&buf[..n]);
+                                        if !out.is_empty() {
+                                            let _ = j.lock().unwrap().append(stream, &out);
+                                        }
+                                    }
+                                    None => {
+                                        let _ = j.lock().unwrap().append(stream, &buf[..n]);
+                                    }
+                                }
                                 last.store(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
                                 tenant.ship.notify_one();
                             }
                         }
                     }
+                    if let Some(s) = sr.as_mut() {
+                        let rest = s.finish();
+                        if !rest.is_empty() {
+                            let _ = j.lock().unwrap().append(stream, &rest);
+                            tenant.ship.notify_one();
+                        }
+                    }
+                    drop(sr);
+                    k2_redact::wipe(&mut buf);
                 }));
             }
         }
@@ -654,7 +707,12 @@ impl Node {
     }
 
     /// Linux wall: the executor starts the job as the job user in its own
-    /// unit; we keep the read ends of its stdout/stderr pipes.
+    /// unit; we keep the read ends of its stdout/stderr pipes. With
+    /// `secrets` (SE21) a third pipe carries them to the unit's stdin: the
+    /// node writes `K2SE1\n` + JSON from a blocking thread (a small pipe
+    /// can't deadlock it), closes its end, and passes the read end; the
+    /// `job-exec` shim reads it to EOF. No value is in argv, a unit
+    /// property, D-Bus, `exec.json` or any file.
     #[allow(clippy::too_many_arguments)]
     async fn start_unit(
         &self,
@@ -666,12 +724,26 @@ impl Node {
         rw: Vec<PathBuf>,
         network: Network,
         mem_limit: u64,
+        secrets: Option<&k2_node_proto::secret::Plain>,
     ) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
         use crate::admin::jobs::{JobAnswer, JobOp, JobStart};
         let key = t.job_key(&a.fence.job_id, a.fence.generation);
-        crate::wall::write_exec_spec(&dirs.root, &crate::wall::ExecSpec { argv: a.plan.argv.clone(), env: env.to_vec(), cwd: cwd.to_path_buf() })?;
+        crate::wall::write_exec_spec(&dirs.root, &crate::wall::ExecSpec { argv: a.plan.argv.clone(), env: env.to_vec(), cwd: cwd.to_path_buf(), stdin_env: secrets.is_some() })?;
         let (out_r, out_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
         let (err_r, err_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
+        let mut fds: Vec<std::os::fd::OwnedFd> = vec![out_w.into(), err_w.into()];
+        if let Some(p) = secrets {
+            let mut body = secret_pipe_body(p)?;
+            let (in_r, mut in_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
+            fds.push(in_r.into());
+            std::thread::spawn(move || {
+                use std::io::Write;
+                // EPIPE (the unit never started) just ends the write.
+                let _ = in_w.write_all(&body);
+                drop(in_w);
+                k2_redact::wipe(&mut body);
+            });
+        }
         let start = JobStart {
             key,
             root: dirs.root.clone(),
@@ -682,9 +754,11 @@ impl Node {
             stop_grace_secs: self.opts.cancel_grace.as_secs().max(1),
             tenant: t.slot,
             no_lan: network == Network::NoLan,
+            stdin: secrets.is_some(),
         };
-        // The write ends go to root (and the unit); ours close with the call.
-        let ans = self.job_op(JobOp::Start(start), vec![out_w.into(), err_w.into()], Duration::from_secs(60)).await;
+        // The write ends (and the stdin read end) go to root (and the
+        // unit); ours close with the call.
+        let ans = self.job_op(JobOp::Start(start), fds, Duration::from_secs(60)).await;
         let unit = match ans {
             Ok(JobAnswer::Started { unit }) => unit,
             Ok(JobAnswer::Refused(r)) => return Err(format!("the job wall refused to start it: {}: {}", r.code, r.message)),
@@ -836,6 +910,101 @@ impl Node {
         }
     }
 
+    /// SE18: send `secret_need` with a fresh one-time key and wait (≤ 60 s)
+    /// for this attempt's answer. A cancel ends the wait; no session, a
+    /// dropped link or the timeout is `secret_unavailable` (the retry asks
+    /// again). The answer must open with this key and binding and name
+    /// exactly the plan's env names (SE20). `Err((state, code, detail))`.
+    async fn pull_secrets(
+        &self,
+        t: &Tenant,
+        a: &Assign,
+        unit_mode: bool,
+        env: &[(String, String)],
+        stop: &mut watch::Receiver<Option<StopReason>>,
+    ) -> Result<k2_node_proto::secret::Plain, (JobState, String, String)> {
+        use k2_node_proto::secret::{codes, NodeKey};
+        let failed = |code: &str, detail: String| (JobState::Failed, code.to_string(), detail);
+        if !cfg!(target_os = "linux") {
+            return Err(failed(codes::LINUX_ONLY, "secret env runs only on Linux nodes in this release".into()));
+        }
+        if !unit_mode {
+            return Err(failed(codes::NEEDS_WALL, "secret env needs the job wall (sudo k2-node setup)".into()));
+        }
+        if !self.exec_stdin.load(Ordering::SeqCst) {
+            return Err(failed(codes::NEEDS_UPDATE, "the node's root executor can't pass secret env yet (update k2-node)".into()));
+        }
+        let job = a.fence.job_id.clone();
+        let gen = a.fence.generation;
+        let controller_fp = t.pin.lock().unwrap().as_ref().map(|p| p.controller_fp.clone()).ok_or_else(|| failed(codes::UNAVAILABLE, "no server pin".into()))?;
+        let key = NodeKey::generate().map_err(|e| failed(codes::UNAVAILABLE, e))?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        t.hub.secrets.lock().unwrap().insert((job.clone(), gen), tx);
+        let epoch = *t.hub.connected.borrow();
+        let need = k2_node_proto::frames::SecretNeed { job_id: job.clone(), generation: gen, attempt: a.fence.attempt, plan_digest: a.fence.plan_digest.clone(), epk: key.public_b64() };
+        let sent = epoch != 0 && t.speaks_secrets() && t.hub.send(Frame::SecretNeed(need));
+        let answer = if !sent {
+            None
+        } else {
+            let mut connected = t.hub.connected.subscribe();
+            let deadline = tokio::time::sleep(self.opts.secret_wait);
+            tokio::pin!(deadline);
+            tokio::pin!(rx);
+            let mut stop_open = true;
+            loop {
+                tokio::select! {
+                    r = &mut rx => break r.ok().map(Ok),
+                    _ = &mut deadline => break None,
+                    r = connected.changed() => {
+                        if r.is_err() || *connected.borrow() != epoch { break None; }
+                    }
+                    c = stop.changed(), if stop_open => {
+                        if c.is_err() {
+                            stop_open = false;
+                        } else if let Some(s) = stop.borrow().clone() {
+                            break Some(Err(s));
+                        }
+                    }
+                }
+            }
+        };
+        t.hub.secrets.lock().unwrap().remove(&(job.clone(), gen));
+        let answer = match answer {
+            None => return Err(failed(codes::UNAVAILABLE, format!("no answer from the server within {}s (or the link dropped)", self.opts.secret_wait.as_secs()))),
+            Some(Err(s)) => return Err((s.state, s.reason, "stopped while waiting for the secret env".into())),
+            Some(Ok(a)) => a,
+        };
+        let env_msg = match answer {
+            crate::node::tenant::SecretAnswer::Refused(r) => {
+                // Only codes K2 defines pass through (a server can't make up reasons).
+                let known = [
+                    codes::NOT_GRANTED,
+                    codes::NOT_ACTIVE,
+                    codes::ATTEMPT_STALE,
+                    codes::ALREADY_RUNNING,
+                    codes::TOO_LARGE,
+                    codes::VAULT_LOCKED,
+                    codes::UNAVAILABLE,
+                ];
+                let code = known.iter().find(|c| **c == r.code).copied().unwrap_or(codes::UNAVAILABLE);
+                let detail: String = r.message.chars().filter(|c| !c.is_control()).take(300).collect();
+                return Err(failed(code, format!("the server refused: {detail}")));
+            }
+            crate::node::tenant::SecretAnswer::Env(e) => e,
+        };
+        let binding = k2_node_proto::secret::Binding {
+            controller_fp,
+            node_fp: self.key.fingerprint(),
+            job_id: job.clone(),
+            generation: gen,
+            attempt: a.fence.attempt,
+            plan_digest: a.fence.plan_digest.clone(),
+        };
+        let plain = key.open(&env_msg.epk, &env_msg.ct, &binding).map_err(|e| failed(codes::PAYLOAD_MISMATCH, e))?;
+        check_secret_names(&plain, &a.plan.secret_env, env).map_err(|e| failed(codes::PAYLOAD_MISMATCH, e))?;
+        Ok(plain)
+    }
+
     fn take_smoke_lock(&self, job: &str) {
         let path = self.local.lock().unwrap().policy.write_smoke_lock.clone();
         if let Some(p) = path {
@@ -861,6 +1030,19 @@ impl Node {
     ) {
         let job = &a.fence.job_id;
         let gen = a.fence.generation;
+        // SE23: a secret job's detail and test summary go through its
+        // redactor too (the journal holds it); kept artifacts are the
+        // job's own bytes and are never rewritten (SV10).
+        let redactor = journal.as_ref().and_then(|j| j.redactor().cloned());
+        let detail_red = match (&redactor, detail) {
+            (Some(r), Some(d)) => Some(r.redact_str(d)),
+            _ => detail.map(str::to_string),
+        };
+        let detail = detail_red.as_deref();
+        let outputs = match (&redactor, outputs) {
+            (Some(r), Some(o)) => Some(redact_outputs(r, o)),
+            (_, o) => o,
+        };
         let (log_sha, log_bytes, truncated, log_seq) = match journal {
             Some(mut j) => match j.finish() {
                 Ok((s, b, t)) => (s, b, t, j.seq),
@@ -902,7 +1084,8 @@ impl Node {
             exit: exit.clone(),
             log: ReceiptLog { sha256: log_sha, bytes: log_bytes, truncated },
             artifacts: outputs.as_ref().map(|o| o.artifacts.clone()).unwrap_or_default(),
-            secret_env: Vec::new(),
+            // SE29: names only.
+            secret_env: a.plan.secret_env.clone(),
         };
         let signed = SignedReceipt::sign(&self.key, &receipt);
         if let Err(e) = &signed {
@@ -999,6 +1182,75 @@ impl Node {
         }
         t.ledger.lock().unwrap().end_attempt(job, gen, state, reason, detail, exit, log_seq, now, src, outputs, signed)
     }
+}
+
+/// A secret job's redactor (SE23) and the names whose values are too short
+/// to redact (under [`k2_redact::SURFACE_MIN_LEN`]).
+pub fn job_redactor(p: &k2_node_proto::secret::Plain) -> (Arc<k2_redact::Redactor>, Vec<String>) {
+    let mut short = Vec::new();
+    let mut entries: Vec<(&str, &[u8])> = Vec::new();
+    for (k, v) in &p.0 {
+        if v.len() < k2_redact::SURFACE_MIN_LEN {
+            short.push(k.clone());
+        } else {
+            entries.push((k.as_str(), v.as_bytes()));
+        }
+    }
+    (Arc::new(k2_redact::Redactor::new(entries)), short)
+}
+
+/// SE20: the opened names are exactly the plan's (sorted, unique), each
+/// passes the node's rule, and none repeats a name the job's env sets.
+pub fn check_secret_names(p: &k2_node_proto::secret::Plain, plan: &[String], env: &[(String, String)]) -> Result<(), String> {
+    let mut got = p.names();
+    got.sort();
+    let mut want = plan.to_vec();
+    want.sort();
+    want.dedup();
+    if got != want {
+        return Err(format!("the secret env names ({}) aren't the plan's ({})", got.join(", "), want.join(", ")));
+    }
+    for n in &got {
+        if let Some(c) = k2_node_proto::secret::name_refusal(n) {
+            return Err(format!("secret env name {n}: {c}"));
+        }
+        if env.iter().any(|(k, _)| k == n) {
+            return Err(format!("secret env name {n} is also set by the job's env"));
+        }
+    }
+    Ok(())
+}
+
+/// The bytes on the stdin pipe (SE21): `K2SE1\n` + the canonical payload.
+fn secret_pipe_body(p: &k2_node_proto::secret::Plain) -> Result<Vec<u8>, String> {
+    let mut values: Vec<(String, Vec<u8>)> = p.0.iter().map(|(k, v)| (k.clone(), v.as_bytes().to_vec())).collect();
+    let json = k2_node_proto::secret::payload(&values);
+    for (_, v) in &mut values {
+        k2_redact::wipe(v);
+    }
+    let mut json = json.map_err(|c| format!("secret env: {c}"))?;
+    let mut body = Vec::with_capacity(k2_node_proto::secret::PIPE_MAGIC.len() + json.len());
+    body.extend_from_slice(k2_node_proto::secret::PIPE_MAGIC);
+    body.extend_from_slice(&json);
+    k2_redact::wipe(&mut json);
+    Ok(body)
+}
+
+/// The test summary K2 derives, redacted (SE23): failing names, classes,
+/// files and messages, and the node's notes. Artifacts are untouched.
+pub fn redact_outputs(r: &k2_redact::Redactor, mut o: Outputs) -> Outputs {
+    if let Some(t) = o.tests.as_mut() {
+        for f in &mut t.failing {
+            f.name = r.redact_str(&f.name);
+            f.classname = f.classname.as_deref().map(|c| r.redact_str(c));
+            f.file = f.file.as_deref().map(|c| r.redact_str(c));
+            f.message = r.redact_str(&f.message);
+        }
+    }
+    for n in &mut o.notes {
+        *n = r.redact_str(n);
+    }
+    o
 }
 
 /// The wait before ledger finish retry `n` (from 1): `base` doubling,

@@ -115,6 +115,13 @@ impl Node {
             t.hub.send(self.state_frame(&job, gen, JobState::Queued, Some(refusal::LOCAL_STOPPED), Some("k2-node is stopping")));
             return None;
         }
+        // Secret-env (SE17): checked again here, before any ledger row.
+        if !a.plan.secret_env.is_empty() {
+            if let Some((code, detail)) = self.secret_env_refusal(t) {
+                t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some(code), Some(detail)));
+                return None;
+            }
+        }
         // Only the owner, on a node nobody shares, takes today's path. Any
         // other server always goes through its share (a paused, expired or
         // revoked share must never fall back to "solo").
@@ -140,6 +147,11 @@ impl Node {
             t.hub.send(self.state_frame(&job, gen, JobState::Queued, Some(&r.code), Some(&r.message)));
             return None;
         }
+        // SE26 (solo path): answered as queued, so the server just waits.
+        if let Some(code) = self.secret_isolation_wait(t.slot, &a.plan.workspace_id, !a.plan.secret_env.is_empty()) {
+            t.hub.send(self.state_frame(&job, gen, JobState::Queued, Some(&code), Some("a job of another workspace runs as the same user and one of them gets vault secrets; it starts when that ends")));
+            return None;
+        }
         if let Err(e) = t.ledger.lock().unwrap().insert(&a, self.opts.clock.as_ref()) {
             t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some("ledger_error"), Some(&e)));
             return None;
@@ -162,6 +174,8 @@ impl Node {
                 stop: stop_tx,
                 seq: self.job_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 gate: a.plan.class == Some(k2_node_proto::share::JobClass::Gate),
+                workspace: a.plan.workspace_id.clone(),
+                secret: !a.plan.secret_env.is_empty(),
             },
         );
         let caps = self.queue_caps();
@@ -542,6 +556,8 @@ impl Node {
                     stop,
                     seq: 0,
                     gate: false,
+                    workspace: String::new(),
+                    secret: false,
                 },
             );
         }

@@ -27,6 +27,9 @@ required-features = ["test-keys"]
 
 [dependencies]
 k2-node-proto = { path = "../k2-node-proto" }
+# The vault's exact-value redactor (compute secret-env SE23/SE24b): a secret
+# job's output is redacted before it reaches the journal.
+k2-redact = { path = "../k2-redact" }
 # Signed node builds use the root-helper key + verifier (node admin §8.1).
 k2-root-proto = { path = "../k2-root-proto" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "process", "io-util", "fs", "sync", "signal"] }

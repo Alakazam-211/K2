@@ -39,6 +39,10 @@ pub struct JournalWriter {
     pub dropped: u64,
     cap: u64,
     hash: Option<Sha256Stream>,
+    /// Secret-env (SE23): every append is redacted before it is written
+    /// (the stdout/stderr pumps also stream-redact first, so a value split
+    /// across reads is caught too).
+    redactor: Option<std::sync::Arc<k2_redact::Redactor>>,
 }
 
 impl JournalWriter {
@@ -48,7 +52,17 @@ impl JournalWriter {
             .append(true)
             .open(path)
             .map_err(|e| format!("open journal {}: {e}", path.display()))?;
-        Ok(Self { file, seq: 0, bytes: 0, dropped: 0, cap, hash: Some(Sha256Stream::default()) })
+        Ok(Self { file, seq: 0, bytes: 0, dropped: 0, cap, hash: Some(Sha256Stream::default()), redactor: None })
+    }
+
+    /// From now on, redact every append with `r` (a secret job, SE23).
+    pub fn set_redactor(&mut self, r: std::sync::Arc<k2_redact::Redactor>) {
+        self.redactor = Some(r);
+    }
+
+    /// The redactor in force, if any (the job's other text uses it too).
+    pub fn redactor(&self) -> Option<&std::sync::Arc<k2_redact::Redactor>> {
+        self.redactor.as_ref()
     }
 
     /// Open an existing journal to add to it: its sequence, kept bytes and
@@ -94,6 +108,14 @@ impl JournalWriter {
     /// Append output, split into chunks ≤ MAX_LOG_CHUNK, honouring the cap.
     /// Returns how many records were written.
     pub fn append(&mut self, stream: LogStream, data: &[u8]) -> Result<usize, String> {
+        let redacted;
+        let data = match self.redactor.as_ref().filter(|r| r.hits(data)) {
+            Some(r) => {
+                redacted = r.redact(data);
+                &redacted[..]
+            }
+            None => data,
+        };
         let room = self.cap.saturating_sub(self.bytes) as usize;
         let keep = data.len().min(room);
         self.dropped += (data.len() - keep) as u64;

@@ -329,3 +329,158 @@ async fn exit_logs_cancel_and_the_jobs_own_dirs() {
     n.node.reclaim_blocking(0, &n.layout.job_dir("ex1", 1));
     assert!(std::fs::read_to_string(n.layout.job_dir("ex1", 1).join("home/f")).is_ok());
 }
+
+// ── compute secret-env (prd-compute-secret-env-v1 §10 "Node, Linux") ──
+
+const SECRET: &str = "k2test-secret-WALL-u7Yb2Kq9Xm4N";
+
+fn b64(v: &[u8]) -> String {
+    k2_node_proto::crypto::b64(v).trim_end_matches('=').to_string()
+}
+
+/// Answer the node's `secret_need` for `job` like a controller: seal
+/// `{K2T_SECRET: SECRET}` to its one-time key.
+async fn answer_need(c: &mut Conn, fake: &Fake, n: &TestNode, job: &str) -> Vec<Frame> {
+    let fr = c.until(|f| matches!(f, Frame::SecretNeed(s) if s.job_id == job)).await;
+    let Some(Frame::SecretNeed(need)) = fr.last().cloned() else { unreachable!() };
+    let b = k2_node_proto::secret::Binding {
+        controller_fp: fake.key.fingerprint(),
+        node_fp: n.node.key.fingerprint(),
+        job_id: need.job_id.clone(),
+        generation: need.generation,
+        attempt: need.attempt,
+        plan_digest: need.plan_digest.clone(),
+    };
+    let (epk, ct) = k2_node_proto::secret::seal(&[("K2T_SECRET".to_string(), SECRET.as_bytes().to_vec())], &need.epk, &b).expect("seal");
+    c.send(Frame::SecretEnv(k2_node_proto::frames::SecretEnv { job_id: need.job_id, generation: need.generation, epk, ct }));
+    fr
+}
+
+/// Fail if `SECRET` (raw, base64 or hex) is in any file under `root`.
+fn assert_secret_not_on_disk(root: &Path) {
+    let pats = [SECRET.as_bytes().to_vec(), b64(SECRET.as_bytes()).into_bytes(), k2_node_proto::crypto::hex(SECRET.as_bytes()).into_bytes()];
+    let mut stack = vec![root.to_path_buf()];
+    let mut scanned = 0;
+    while let Some(p) = stack.pop() {
+        let Ok(m) = std::fs::symlink_metadata(&p) else { continue };
+        if m.is_dir() {
+            for e in std::fs::read_dir(&p).unwrap().flatten() {
+                stack.push(e.path());
+            }
+        } else if m.is_file() {
+            let bytes = std::fs::read(&p).unwrap_or_default();
+            scanned += 1;
+            for pat in &pats {
+                assert!(!bytes.windows(pat.len()).any(|w| w == &pat[..]), "the secret is on disk in {}", p.display());
+            }
+        }
+    }
+    assert!(scanned > 3, "scanned only {scanned} files");
+}
+
+/// SE16–SE23, SE29: the walled node offers `secret-env`, asks for the
+/// value right before spawn, hands it to the job on stdin (the job sees it,
+/// its stdin is then /dev/null, no core dumps), redacts raw, base64 and hex
+/// prints before the journal, and keeps it in no file (ledger, journal,
+/// exec.json, status) nor in the unit's properties; the receipt names it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "root + systemd: run on a Linux box with --ignored"]
+async fn a_secret_job_gets_its_env_on_stdin_and_nothing_keeps_the_value() {
+    let r = rig("secret");
+    let mut fake = Fake::start().await;
+    let n = walled_node(&fake, &r, "max_parallel = 4\n").await;
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let offer = n.node.offer(&n.node.owner());
+    assert!(offer.features.iter().any(|f| f == k2_node_proto::secret::FEATURE_SECRET_ENV), "a walled node with this executor offers secret-env: {:?}", offer.features);
+    let script = "printf 'raw=%s\\n' \"$K2T_SECRET\"; printf '%s' \"$K2T_SECRET\" | base64 -w0; echo; printf '%s' \"$K2T_SECRET\" | od -An -tx1 | tr -d ' \\n'; echo; echo core=$(ulimit -c); if [ -z \"$(cat)\" ]; then echo stdin-empty; fi";
+    let mut p = plan("sec1", &["/bin/sh", "-c", script]);
+    p.secret_env = vec!["K2T_SECRET".into()];
+    c.send(Frame::Assign(assign(p, 1)));
+    let mut fr = answer_need(&mut c, &fake, &n, "sec1").await;
+    fr.extend(run_to_receipt(&mut c, "sec1").await);
+    let s = last(&fr, "sec1");
+    assert_eq!((s.state, s.exit.as_ref().and_then(|e| e.code)), (JobState::Done, Some(0)), "{s:?}: {}", text(&logs_of(&fr, "sec1"), LogStream::Sys));
+    let out = text(&logs_of(&fr, "sec1"), LogStream::Out);
+    assert_eq!(out, "raw=[k2v:K2T_SECRET]\n[k2v:K2T_SECRET]\n[k2v:K2T_SECRET]\ncore=0\nstdin-empty\n", "{out}");
+    let wire: String = fr.iter().map(|f| serde_json::to_string(f).unwrap()).collect();
+    assert!(!wire.contains(SECRET) && !wire.contains(&b64(SECRET.as_bytes())), "a frame carried the value");
+    let receipt = fr.iter().find_map(|f| match f {
+        Frame::Receipt(r) if r.job_id == "sec1" => Some(r.receipt.clone()),
+        _ => None,
+    });
+    let body: serde_json::Value = serde_json::from_str(&receipt.expect("receipt").body).unwrap();
+    assert_eq!(body["secret_env"], serde_json::json!(["K2T_SECRET"]));
+
+    // While one runs: the unit's properties hold no value, LimitCORE=0;
+    // another workspace's job of the same slot waits (SE26); the same
+    // workspace's doesn't.
+    let mut p = plan("sec2", &["/bin/sh", "-c", "echo up; exec sleep 1000"]);
+    p.secret_env = vec!["K2T_SECRET".into()];
+    c.send(Frame::Assign(assign(p, 1)));
+    answer_need(&mut c, &fake, &n, "sec2").await;
+    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "sec2")).await;
+    let show = std::process::Command::new("systemctl").args(["show", "k2job-sec2-g1.service"]).output().unwrap();
+    let show = String::from_utf8_lossy(&show.stdout);
+    assert!(!show.contains(SECRET), "the unit's properties carry the value");
+    assert!(show.lines().any(|l| l == "LimitCORE=0"), "no core dumps for a secret unit");
+    let mut other = plan("oth1", &["/bin/sh", "-c", "echo other"]);
+    other.workspace_id = "ws-other".into();
+    c.send(Frame::Assign(assign(other, 1)));
+    let fr2 = c.until(|f| matches!(f, Frame::State(s) if s.job_id == "oth1")).await;
+    let st = states_of(&fr2, "oth1").into_iter().last().unwrap();
+    assert_eq!((st.state, st.reason.as_deref()), (JobState::Queued, Some(k2_node_proto::secret::codes::ISOLATION_WAIT)), "{st:?}");
+    c.send(Frame::Assign(assign(plan("same1", &["/bin/sh", "-c", "echo same"]), 1)));
+    let fr3 = run_to_receipt(&mut c, "same1").await;
+    assert_eq!(last(&fr3, "same1").state, JobState::Done);
+    c.send(Frame::Cancel(Cancel { job_id: "sec2".into(), generation: 1, reason: "test".into() }));
+    run_to_receipt(&mut c, "sec2").await;
+    // Now it starts.
+    c.send(Frame::Assign(assign({
+        let mut o = plan("oth1", &["/bin/sh", "-c", "echo other"]);
+        o.workspace_id = "ws-other".into();
+        o
+    }, 1)));
+    let fr4 = run_to_receipt(&mut c, "oth1").await;
+    assert_eq!(last(&fr4, "oth1").state, JobState::Done);
+    assert_secret_not_on_disk(&r.base);
+}
+
+/// SE18: no answer in time (or a refusal) fails the attempt before
+/// anything runs: `secret_unavailable` (infra, retried) / the code.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "root + systemd: run on a Linux box with --ignored"]
+async fn a_secret_job_without_an_answer_never_runs() {
+    let r = rig("secret-wait");
+    let mut fake = Fake::start().await;
+    let sock = r.socket.clone();
+    let _n = start_node_in(&fake, r.base.clone(), "", move |o| {
+        o.wall = Some(Wall::JobUser { user: "nobody".into() });
+        o.admin_socket = sock;
+        o.unit_poll = std::time::Duration::from_millis(100);
+        o.secret_wait = std::time::Duration::from_secs(2);
+    })
+    .await;
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let mut p = plan("w1", &["/bin/sh", "-c", "echo ran"]);
+    p.secret_env = vec!["K2T_SECRET".into()];
+    c.send(Frame::Assign(assign(p.clone(), 1)));
+    let fr = run_to_receipt(&mut c, "w1").await;
+    let s = last(&fr, "w1");
+    assert_eq!((s.state, s.reason.as_deref()), (JobState::Failed, Some(k2_node_proto::secret::codes::UNAVAILABLE)), "{s:?}");
+    assert!(!text(&logs_of(&fr, "w1"), LogStream::Out).contains("ran"));
+    let mut p2 = p.clone();
+    p2.job_id = "w2".into();
+    c.send(Frame::Assign(assign(p2, 1)));
+    c.until(|f| matches!(f, Frame::SecretNeed(s) if s.job_id == "w2")).await;
+    c.send(Frame::SecretRefused(k2_node_proto::frames::SecretRefused {
+        job_id: "w2".into(),
+        generation: 1,
+        code: k2_node_proto::secret::codes::NOT_GRANTED.into(),
+        message: "revoked".into(),
+    }));
+    let fr = run_to_receipt(&mut c, "w2").await;
+    let s = last(&fr, "w2");
+    assert_eq!((s.state, s.reason.as_deref()), (JobState::Failed, Some(k2_node_proto::secret::codes::NOT_GRANTED)), "{s:?}");
+}

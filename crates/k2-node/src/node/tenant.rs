@@ -53,6 +53,15 @@ pub struct Hub {
     /// Current epoch (0 = no session).
     pub connected: watch::Sender<u64>,
     pub(super) transfers: Mutex<HashMap<TransferKey, mpsc::UnboundedSender<TransferEvent>>>,
+    /// Jobs waiting for their secret env (secret-env SE18), by (job,
+    /// generation): the answer goes to exactly one waiter, once.
+    pub(super) secrets: Mutex<HashMap<(String, u32), tokio::sync::oneshot::Sender<SecretAnswer>>>,
+}
+
+/// The controller's answer to `secret_need`.
+pub enum SecretAnswer {
+    Env(k2_node_proto::frames::SecretEnv),
+    Refused(k2_node_proto::frames::SecretRefused),
 }
 
 impl Hub {
@@ -62,6 +71,15 @@ impl Hub {
             next_epoch: AtomicU64::new(1),
             connected: watch::channel(0).0,
             transfers: Mutex::new(HashMap::new()),
+            secrets: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Route a `secret_env` / `secret_refused` to the job waiting for it
+    /// (dropped when nobody waits: a stale or unasked answer).
+    pub fn route_secret(&self, job_id: &str, generation: u32, a: SecretAnswer) {
+        if let Some(tx) = self.secrets.lock().unwrap().remove(&(job_id.to_string(), generation)) {
+            let _ = tx.send(a);
         }
     }
 
@@ -307,6 +325,11 @@ impl Tenant {
     /// May this session see protocol-3 sharing fields and features?
     pub fn speaks_shared(&self) -> bool {
         self.protocol() >= PROTOCOL_SHARED
+    }
+
+    /// May this session get secret-env frames (protocol 4)?
+    pub fn speaks_secrets(&self) -> bool {
+        self.protocol() >= k2_node_proto::frames::PROTOCOL_SECRETS
     }
 
     pub fn share(&self) -> Option<ShareInfo> {

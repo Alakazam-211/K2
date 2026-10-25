@@ -137,6 +137,12 @@ impl Node {
         if t.speaks_shared() && t.tenant_wall.load(Ordering::SeqCst) && !f.iter().any(|x| x == FEATURE_TENANT_WALL) {
             f.push(FEATURE_TENANT_WALL.to_string());
         }
+        // Secret-env (SE16): only when every condition holds for this
+        // session (protocol 4, Linux wall, trust own, tenant wall for a
+        // tenant, an executor that relays stdin). Not owner-only.
+        if self.secret_env_refusal(t).is_none() {
+            f.push(k2_node_proto::secret::FEATURE_SECRET_ENV.to_string());
+        }
         f
     }
 
@@ -175,5 +181,97 @@ impl Node {
             // Start-now / ETA for this server's last four sizes (V53).
             quotes,
         })
+    }
+}
+
+/// SE16/SE17: who is offered `secret-env`, and who is refused at assign.
+/// The node runs with the Linux job-user wall set (no executor needed for
+/// the offer) and an executor that relays stdin.
+#[cfg(all(test, target_os = "linux"))]
+mod secret_env_tests {
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    use k2_node_proto::frames::{Frame, JobState};
+    use k2_node_proto::secret::{codes, FEATURE_SECRET_ENV};
+    use k2_node_proto::share::{Network, ServersFile, ShareLimits, Trust};
+
+    use crate::node::tenant::ShareInfo;
+    use crate::node::{Node, NodeOptions};
+    use crate::wall::Wall;
+
+    fn has(n: &Node, t: &crate::node::Tenant) -> bool {
+        n.session_features(t).iter().any(|f| f == FEATURE_SECRET_ENV)
+    }
+
+    #[tokio::test]
+    async fn only_trusted_walled_protocol_4_sessions_get_secret_env() {
+        let d = crate::util::temp_dir("secret-offer");
+        let layout = crate::paths::Layout::new(d.join("home"), d.join("cfg"));
+        layout.ensure().unwrap();
+        std::fs::create_dir_all(&layout.config).unwrap();
+        let mut f = ServersFile::new(&"a".repeat(64), "o", ShareLimits::owner(2, 8, 16, 100, Network::On), 8, 1, "local:t");
+        for (slot, trust) in [(1u8, Trust::Own), (2, Trust::Team)] {
+            let mut e = f.servers[0].clone();
+            e.slot = slot;
+            e.label = format!("s{slot}");
+            e.fp_prefix = format!("{:016x}", slot);
+            e.trust = trust;
+            e.set_limits(&ShareLimits::new_server(trust, false));
+            f.servers.push(e);
+        }
+        let entries = f.servers.clone();
+        std::fs::write(layout.config.join(k2_node_proto::share::SERVERS_FILE), toml::to_string(&f).unwrap()).unwrap();
+        let mut o = NodeOptions::new(layout.clone());
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        o.wall = Some(Wall::JobUser { user: "k2job".into() });
+        o.exec_stdin = Some(true);
+        o.cancel_grace = Duration::from_millis(100);
+        o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: false });
+        let n = Node::open(o).await.unwrap();
+        let owner = n.owner();
+        // The owner: only with a protocol-4 session.
+        owner.protocol.store(3, Ordering::SeqCst);
+        assert!(!has(&n, &owner), "a protocol-3 server never sees it");
+        owner.protocol.store(4, Ordering::SeqCst);
+        assert!(has(&n, &owner));
+        // An executor that can't relay stdin: no.
+        n.exec_stdin.store(false, Ordering::SeqCst);
+        assert!(!has(&n, &owner));
+        assert_eq!(n.secret_env_refusal(&owner).map(|r| r.0), Some(codes::NEEDS_UPDATE));
+        n.exec_stdin.store(true, Ordering::SeqCst);
+        // Tenants: `own` with the tenant wall only; `team` never.
+        for slot in [1u8, 2] {
+            layout.tenant(slot).ensure_state().unwrap();
+        }
+        let t_own = n.add_tenant(1).await.unwrap();
+        let t_team = n.add_tenant(2).await.unwrap();
+        for (t, e) in [(&t_own, &entries[1]), (&t_team, &entries[2])] {
+            *t.share.lock().unwrap() = Some(ShareInfo { entry: e.clone(), servers: 3, shared: true, owner_label: "o".into() });
+            t.protocol.store(4, Ordering::SeqCst);
+        }
+        assert!(!has(&n, &t_own), "no tenant wall yet");
+        assert_eq!(n.secret_env_refusal(&t_own).map(|r| r.0), Some(codes::NEEDS_WALL));
+        t_own.tenant_wall.store(true, Ordering::SeqCst);
+        t_team.tenant_wall.store(true, Ordering::SeqCst);
+        assert!(has(&n, &t_own), "a trust-own server with the tenant wall");
+        assert!(!has(&n, &t_team), "a team server never sees it");
+        assert_eq!(n.secret_env_refusal(&t_team).map(|r| r.0), Some(codes::UNTRUSTED_SERVER));
+        // At assign: a team server's secret plan fails before any row.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        t_team.hub.attach(tx);
+        let mut a = crate::ledger::tests::assign("sj", 1);
+        a.plan.node_id = t_team.node_id();
+        a.plan.secret_env = vec!["K2T_SECRET".into()];
+        a.fence.plan_digest = a.plan.digest().unwrap();
+        assert_eq!(n.on_assign(&t_team, a), None);
+        let Some(Frame::State(s)) = rx.recv().await else { panic!("no answer") };
+        assert_eq!((s.state, s.reason.as_deref()), (JobState::Failed, Some(codes::UNTRUSTED_SERVER)));
+        assert!(t_team.ledger.lock().unwrap().get("sj", 1).unwrap().is_none(), "no ledger row");
+        // The offer itself (owner) lists the feature beside the others.
+        let off = n.offer(&owner);
+        assert!(off.features.iter().any(|f| f == FEATURE_SECRET_ENV), "{:?}", off.features);
     }
 }

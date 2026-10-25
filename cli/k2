@@ -37971,8 +37971,13 @@ SECRETS (vault values as env, 0.46.4, Linux nodes)
   k2-node restart the slot waits until the old unit is confirmed gone.
   The job gets its own target dir, cargo home and sccache (no warm slot,
   no shared cache), and its folders are deleted when it ends, before
-  another workspace's job may start; its log stays on the node, readable
-  by the node only. Your own workspace's jobs may run beside it.
+  another workspace's job may start (if a delete fails, or a k2-node
+  restart left one, the slot stays held until it's gone); its log stays
+  on the node, readable by the node only. Your own workspace's jobs may
+  run beside it. So a secret job starts with an EMPTY cargo home: its
+  build is cold, and it needs the network for dependencies unless they
+  are vendored (cargo vendor). Split slow builds from the step that
+  needs the secret when you can.
   Revoking a grant never stops a running job (it already has the value);
   the next attempt is refused (secret_not_granted). k2 vault revoke lists
   the running jobs that got it. --plan shows each secret's env name and

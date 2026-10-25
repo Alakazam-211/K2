@@ -60,17 +60,21 @@ thread_local! {
     static CALLER: RefCell<Option<Caller>> = const { RefCell::new(None) };
 }
 
-/// Run `f` with `caller` as the request-scoped label caller. Always
-/// clears the slot afterward (including on panic).
+/// Run `f` with `caller` as the request-scoped label caller. Afterward
+/// (including on panic) the slot holds what it held before: a nested call
+/// (an approved agent request replayed inside the owner's request) hands
+/// the rest of the outer request back its own caller, never the
+/// fail-closed default.
 pub fn with_caller<R>(caller: Caller, f: impl FnOnce() -> R) -> R {
-    struct ClearOnDrop;
-    impl Drop for ClearOnDrop {
+    struct RestoreOnDrop(Option<Caller>);
+    impl Drop for RestoreOnDrop {
         fn drop(&mut self) {
-            CALLER.with(|c| *c.borrow_mut() = None);
+            let previous = self.0.take();
+            CALLER.with(|c| *c.borrow_mut() = previous);
         }
     }
-    let _guard = ClearOnDrop;
-    CALLER.with(|c| *c.borrow_mut() = Some(caller));
+    let previous = CALLER.with(|c| c.borrow_mut().replace(caller));
+    let _guard = RestoreOnDrop(previous);
     f()
 }
 
@@ -319,6 +323,24 @@ pub fn refuse_reserved_claim(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A nested caller (an approved agent request replayed inside the
+    /// owner's request) gives the outer request its own caller back, also
+    /// after a panic; outside every call the slot is empty again.
+    #[test]
+    fn a_nested_caller_restores_the_outer_one() {
+        let owner = Caller::Manager { actor: "owner".into() };
+        assert_eq!(current(), Caller::Member, "nothing installed");
+        with_caller(owner.clone(), || {
+            assert_eq!(current(), owner);
+            with_caller(Caller::Agent, || assert_eq!(current(), Caller::Agent));
+            assert_eq!(current(), owner, "back to the owner after the nested call");
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| with_caller(Caller::Agent, || panic!("boom"))));
+            assert!(panicked.is_err());
+            assert_eq!(current(), owner, "back to the owner after a nested panic");
+        });
+        assert_eq!(current(), Caller::Member, "empty again outside");
+    }
 
     fn make_project(tag: &str) -> String {
         let id = uuid::Uuid::new_v4().to_string();

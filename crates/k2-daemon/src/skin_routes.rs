@@ -742,18 +742,38 @@ fn login_app_is_live(app: &str) -> bool {
 pub fn handle_users_post_as(agent_ws: Option<&str>, body: &[u8], actor: &str) -> CliResponse {
     let r = handle_users_post(body, actor);
     let Some(ws) = agent_ws else { return r };
+    let requested = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| str_field(&v, &["username", "name"]).map(str::to_string));
+    stamp_agent_added(r, ws, requested.as_deref(), actor)
+}
+
+/// Stamp the guest an agent's add just made (`r`, the handler's answer) as
+/// workspace `ws`'s. Whenever it can't be stamped (no id in the answer, or
+/// the stamp write fails) the guest is removed again, by the answer's
+/// username or else the one asked for: an unstamped guest would read as
+/// the owner's, with a password the agent may have picked.
+fn stamp_agent_added(r: CliResponse, ws: &str, requested: Option<&str>, actor: &str) -> CliResponse {
     if !r.status.starts_with("200") {
         return r;
     }
-    let made: Option<(String, String)> = serde_json::from_str::<serde_json::Value>(&r.body)
-        .ok()
-        .and_then(|v| Some((v["id"].as_str()?.to_string(), v["username"].as_str()?.to_string())));
-    let Some((id, username)) = made else {
-        return CliResponse::internal_error("the new guest has no id to stamp");
+    let v = serde_json::from_str::<serde_json::Value>(&r.body).ok();
+    let username = v
+        .as_ref()
+        .and_then(|v| v["username"].as_str())
+        .map(str::to_string)
+        .or_else(|| requested.and_then(|u| skin::normalize_username(u).ok()));
+    let undo = |why: String| {
+        if let Some(u) = &username {
+            let _ = skin::remove_principal_as(u, actor);
+        }
+        CliResponse::internal_error(format!("'{}' wasn't added: {why}", username.as_deref().unwrap_or("the new guest")))
+    };
+    let Some(id) = v.as_ref().and_then(|v| v["id"].as_str()).map(str::to_string) else {
+        return undo("the new guest has no id to stamp".to_string());
     };
     if let Err(e) = skin::creators::stamp(&id, ws) {
-        let _ = skin::remove_principal_as(&username, actor);
-        return CliResponse::internal_error(format!("'{username}' wasn't added: {e}"));
+        return undo(e);
     }
     r
 }
@@ -3132,6 +3152,33 @@ mod tests {
             "must stay owner_only, not gated: {}",
             r.body
         );
+    }
+
+    #[test]
+    fn an_agent_added_guest_that_cant_be_stamped_is_removed_again() {
+        let _home = crate::test_support::TempHome::new();
+        let exists = |u: &str| skin::list_principals().expect("principals").iter().any(|p| p.username == u);
+        // The answer has no id: removed (by the answer's username).
+        skin::add_principal("nit-noid").expect("add");
+        let r = stamp_agent_added(CliResponse::ok_json(r#"{"username":"nit-noid"}"#.to_string()), "ws-nit", Some("nit-noid"), "agent:nit");
+        assert_eq!(r.status, "500 Internal Server Error", "{}", r.body);
+        assert!(!exists("nit-noid"), "an unstamped guest never stays behind");
+        // No id and no username in the answer: removed by the name asked for.
+        skin::add_principal("nit-bare").expect("add");
+        let r = stamp_agent_added(CliResponse::ok_json("{}".to_string()), "ws-nit", Some("Nit-Bare"), "agent:nit");
+        assert_eq!(r.status, "500 Internal Server Error", "{}", r.body);
+        assert!(!exists("nit-bare"), "removed by the requested name");
+        // A full answer: stamped and kept.
+        let p = skin::add_principal("nit-ok").expect("add");
+        let body = serde_json::to_string(&p).expect("json");
+        let r = stamp_agent_added(CliResponse::ok_json(body), "ws-nit", Some("nit-ok"), "agent:nit");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert!(exists("nit-ok"));
+        assert_eq!(skin::creators::workspace_of(&p.id).expect("stamp lookup").as_deref(), Some("ws-nit"));
+        // A refusal passes through untouched.
+        let r = stamp_agent_added(CliResponse::bad_request("nope"), "ws-nit", Some("nit-ok"), "agent:nit");
+        assert!(r.status.starts_with("400"), "{}", r.status);
+        assert!(exists("nit-ok"));
     }
 
     #[test]

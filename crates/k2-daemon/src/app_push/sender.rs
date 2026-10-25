@@ -83,11 +83,15 @@ impl Hosts {
     }
 }
 
-fn loopback_http(url: &str) -> Option<String> {
-    let u = url.trim().trim_end_matches('/');
-    let rest = u.strip_prefix("http://")?;
-    let host = rest.split(['/', ':']).next().unwrap_or("");
-    matches!(host, "127.0.0.1" | "localhost" | "[::1]").then(|| u.to_string())
+fn loopback_http(raw: &str) -> Option<String> {
+    let u = url::Url::parse(raw.trim()).ok()?;
+    if u.scheme() != "http" || !u.username().is_empty() || u.password().is_some() || u.query().is_some() || u.fragment().is_some() {
+        return None;
+    }
+    if !matches!(u.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")) {
+        return None;
+    }
+    Some(u.as_str().trim_end_matches('/').to_string())
 }
 
 /// The hosts for a build: `debug = false` (a release build) always answers
@@ -138,12 +142,19 @@ impl std::fmt::Debug for HttpReq {
 }
 
 /// Its answer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct HttpResp {
     pub status: u16,
     /// `Retry-After`, in seconds, when the vendor sent one.
     pub retry_after: Option<u64>,
     pub body: Vec<u8>,
+}
+
+impl std::fmt::Debug for HttpResp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The body can carry an access token (Google's token answer).
+        f.debug_struct("HttpResp").field("status", &self.status).field("retry_after", &self.retry_after).field("body", &"<redacted>").finish()
+    }
 }
 
 /// A transport failure, reduced to its kind (never the URL).
@@ -345,7 +356,9 @@ fn fcm_verdict(status: u16, body: &[u8], retry_after: Option<u64>) -> Verdict {
     let (code, names_token) = fcm_error(body);
     let tag = format!("fcm:{}", if code.is_empty() { status.to_string() } else { code.clone() });
     match (status, code.as_str()) {
-        (404, _) if code == "UNREGISTERED" || code == "NOT_FOUND" => Verdict::Dead { wrong_app: false },
+        // Only Google's UNREGISTERED says the token is gone; any other 404
+        // (a wrong project, a stray route) must never delete devices.
+        (404, "UNREGISTERED") => Verdict::Dead { wrong_app: false },
         (403, "SENDER_ID_MISMATCH") => Verdict::Dead { wrong_app: true },
         (400, "INVALID_ARGUMENT") if names_token => Verdict::Dead { wrong_app: false },
         (401, _) | (403, _) => Verdict::Reauth(tag),
@@ -355,11 +368,21 @@ fn fcm_verdict(status: u16, body: &[u8], retry_after: Option<u64>) -> Verdict {
     }
 }
 
+/// The code a wrong-app answer is stored under.
+fn wrong_app_code(platform: &str) -> &'static str {
+    if platform == store::PLATFORM_APNS {
+        "apns:DeviceTokenNotForTopic"
+    } else {
+        "fcm:SENDER_ID_MISMATCH"
+    }
+}
+
 // ── auth caches ──────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct ApnsAuth {
-    fpr: String,
+    /// The key it was minted with: (fingerprint, key id, team id).
+    key: (String, String, String),
     jwt: String,
     minted: i64,
     hold_until: i64,
@@ -395,6 +418,7 @@ pub struct Sender {
     fcm: Mutex<HashMap<String, FcmAuth>>,
     paused: Mutex<HashMap<(String, String), Instant>>,
     noted: Mutex<HashMap<String, Instant>>,
+    proven: Mutex<std::collections::HashSet<(String, String)>>,
 }
 
 fn wall_now() -> i64 {
@@ -415,6 +439,7 @@ impl Sender {
             fcm: Mutex::new(HashMap::new()),
             paused: Mutex::new(HashMap::new()),
             noted: Mutex::new(HashMap::new()),
+            proven: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -448,16 +473,18 @@ impl Sender {
     /// Lift a pause (new keys were set).
     pub fn reset_app(&self, app: &str) {
         self.paused.lock().unwrap_or_else(|e| e.into_inner()).retain(|(a, _), _| a != app);
+        self.proven.lock().unwrap_or_else(|e| e.into_inner()).retain(|(a, _)| a != app);
         self.apns.lock().unwrap_or_else(|e| e.into_inner()).remove(app);
         self.fcm.lock().unwrap_or_else(|e| e.into_inner()).remove(app);
     }
 
     fn apns_jwt(&self, app: &str, force: bool) -> Result<String, AuthErr> {
         let now = (self.now)();
-        let fpr = store::config(app).map_err(|_| AuthErr::Fail("store".into()))?.apns.map(|m| m.key_fingerprint).ok_or(AuthErr::Fail("push_not_configured".into()))?;
+        let meta = store::config(app).map_err(|_| AuthErr::Fail("store".into()))?.apns.ok_or(AuthErr::Fail("push_not_configured".into()))?;
+        let id = (meta.key_fingerprint, meta.key_id, meta.team_id);
         {
             let m = self.apns.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(a) = m.get(app).filter(|a| a.fpr == fpr) {
+            if let Some(a) = m.get(app).filter(|a| a.key == id) {
                 let fresh = now - a.minted < JWT_REFRESH_SECS;
                 let held = now < a.hold_until;
                 if (fresh && !force) || held {
@@ -467,7 +494,7 @@ impl Sender {
         }
         let key = creds::load_apns(app).map_err(key_err)?;
         let jwt = creds::apns_jwt(&key, now).map_err(|_| AuthErr::Cred("apns:key_unusable".into()))?;
-        self.apns.lock().unwrap_or_else(|e| e.into_inner()).insert(app.to_string(), ApnsAuth { fpr, jwt: jwt.clone(), minted: now, hold_until: 0 });
+        self.apns.lock().unwrap_or_else(|e| e.into_inner()).insert(app.to_string(), ApnsAuth { key: id, jwt: jwt.clone(), minted: now, hold_until: 0 });
         Ok(jwt)
     }
 
@@ -610,7 +637,18 @@ impl Sender {
             _ => Verdict::Failed("platform".into()),
         };
         match v {
-            Verdict::Sent => Outcome::Sent,
+            Verdict::Sent => {
+                self.prove(&t.app, &t.platform);
+                Outcome::Sent
+            }
+            // A token "from another app" before this key ever got a send
+            // through means the key's bundle id / Firebase project is wrong,
+            // not that the phone is gone: keep the rows, trip the breaker.
+            Verdict::Dead { wrong_app: true } if !self.proven(&t.app, &t.platform) => {
+                let code = wrong_app_code(&t.platform);
+                self.cred_refused(&t.app, &t.platform, code);
+                Outcome::Failed(code.to_string())
+            }
             Verdict::Dead { wrong_app } => {
                 if let Err(e) = store::delete_dead(&t.app, &t.id, &t.token) {
                     log(&format!("{} device {}: dead token not removed: {e}", t.app, t.id));
@@ -628,6 +666,40 @@ impl Sender {
                 Outcome::Failed(code)
             }
             Verdict::Failed(code) | Verdict::Retry(code) | Verdict::Reauth(code) | Verdict::HoldJwt(code) => Outcome::Failed(code),
+        }
+    }
+
+    /// Has the platform's current key had an accepted send (cached once
+    /// true; new keys reset the cache with [`Self::reset_app`])?
+    fn proven(&self, app: &str, platform: &str) -> bool {
+        let key = (app.to_string(), platform.to_string());
+        if self.proven.lock().unwrap_or_else(|e| e.into_inner()).contains(&key) {
+            return true;
+        }
+        let cfg = match store::config(app) {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        let yes = match platform {
+            store::PLATFORM_APNS => cfg.apns.and_then(|m| m.proven_at).is_some(),
+            store::PLATFORM_FCM => cfg.fcm.and_then(|m| m.proven_at).is_some(),
+            _ => false,
+        };
+        if yes {
+            self.proven.lock().unwrap_or_else(|e| e.into_inner()).insert(key);
+        }
+        yes
+    }
+
+    fn prove(&self, app: &str, platform: &str) {
+        if self.proven(app, platform) {
+            return;
+        }
+        match store::mark_proven(app, platform) {
+            Ok(_) => {
+                self.proven.lock().unwrap_or_else(|e| e.into_inner()).insert((app.to_string(), platform.to_string()));
+            }
+            Err(e) => log(&format!("{app} {platform}: first accepted send not recorded: {e}")),
         }
     }
 
@@ -675,7 +747,10 @@ impl Sender {
     }
 
     /// `k2 app push check` (CP16): one real call per configured platform to
-    /// a well-formed fake token. A token refusal means the key works.
+    /// a well-formed fake token. A token refusal means the key (and, for
+    /// Apple, the team and topic it may push to) works. A fake token can't
+    /// prove that the bundle id or Firebase project matches the phone app:
+    /// only a real device's token can ([`CHECK_LIMITS`]).
     pub fn check(&self, app: &str, platform: &str) -> Result<&'static str, String> {
         let fake = Target {
             id: "check".into(),
@@ -706,8 +781,16 @@ impl Sender {
             _ => return Err("platform is apns or fcm".into()),
         };
         match v {
+            // A wrong-app answer names a key/topic mismatch.
+            Verdict::Dead { wrong_app: true } => {
+                let c = wrong_app_code(platform).to_string();
+                if let Err(e) = store::set_cred_error(app, &c) {
+                    log(&format!("{app}: credential error not stored: {e}"));
+                }
+                Err(c)
+            }
             // The fake token was refused: the key itself works.
-            Verdict::Dead { .. } => Ok("ok"),
+            Verdict::Dead { wrong_app: false } => Ok("ok"),
             Verdict::Failed(c) if c == "fcm:INVALID_ARGUMENT" => Ok("ok"),
             Verdict::Sent => Ok("ok"),
             Verdict::Cred(c) => {
@@ -720,6 +803,22 @@ impl Sender {
         }
     }
 }
+
+/// What `push check` can't prove, per platform, in plain words.
+pub const CHECK_LIMITS: &[(&str, &str)] = &[
+    (
+        store::PLATFORM_APNS,
+        "Apple checks the key, the team and that the team may push to this bundle id. It can't tell from a test token \
+         whether your phone app is built with this bundle id: the first real send does (a mismatch pauses sends and \
+         sets the key error apns:DeviceTokenNotForTopic; nothing is deleted).",
+    ),
+    (
+        store::PLATFORM_FCM,
+        "Google checks the service account. It can't tell from a test token whether your phone app belongs to this \
+         Firebase project: the first real send does (a mismatch pauses sends and sets the key error \
+         fcm:SENDER_ID_MISMATCH; nothing is deleted).",
+    ),
+];
 
 // ── the daemon's sender ──────────────────────────────────────────────
 

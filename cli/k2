@@ -11809,6 +11809,8 @@ for p, name in (("apns", "Apple"), ("fcm", "Firebase")):
     else:
         bad = 1
         print("%-9s refused: %s" % (name, r.get("code")))
+    if r.get("limits"):
+        print("          " + r["limits"])
 sys.exit(1 if bad else 0)'
 }
 

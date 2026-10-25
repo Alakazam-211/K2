@@ -159,7 +159,18 @@ fn release_builds_never_take_the_test_hosts() {
     assert_eq!(d.apns_sandbox, "http://127.0.0.1:9999/sandbox");
     assert_eq!(d.fcm, "http://localhost:9998");
     assert_eq!(d.google_token, "http://localhost:9998/token");
-    for bad in ["https://evil.example", "http://10.0.0.1:1", "http://127.0.0.1.evil.example", "ftp://127.0.0.1"] {
+    let v6 = hosts_for(true, Some("http://[::1]:9999"), None);
+    assert_eq!(v6.apns_production, "http://[::1]:9999", "IPv6 loopback");
+    for bad in [
+        "https://evil.example",
+        "http://10.0.0.1:1",
+        "http://127.0.0.1.evil.example",
+        "ftp://127.0.0.1",
+        "http://user@127.0.0.1:9",
+        "http://127.0.0.1@evil.example",
+        "http://localhost.evil.example",
+        "not a url",
+    ] {
         assert_eq!(hosts_for(true, Some(bad), Some(bad)), Hosts::vendor(), "{bad}: loopback http only");
     }
     assert_eq!(Hosts::vendor().apns_production, "https://api.push.apple.com");
@@ -225,10 +236,31 @@ fn apns_answers_map_to_dead_failed_and_the_breaker() {
     fake.then(resp(410, json!({"reason": "Unregistered"})));
     assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Dead { wrong_app: false });
     assert!(store::devices_for_app(&f.app, None).expect("list").is_empty());
-    // DeviceTokenNotForTopic: dead and counted as another app's token.
+    // DeviceTokenNotForTopic before this key ever got a send through: the
+    // key's bundle id is wrong. The breaker, the code, and the row stays.
     let t = device(&f, "p1", "apns", "production");
     fake.then(resp(400, json!({"reason": "DeviceTokenNotForTopic"})));
+    assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Failed("apns:DeviceTokenNotForTopic".into()));
+    assert_eq!(store::devices_for_app(&f.app, None).expect("list").len(), 1, "a wrong key never deletes devices");
+    assert_eq!(store::config(&f.app).expect("cfg").cred_error.as_deref(), Some("apns:DeviceTokenNotForTopic"));
+    assert!(s.paused(&f.app, "apns"));
+    s.reset_app(&f.app);
+    // One accepted send proves the key; after that the same answer is one
+    // phone's token from another app: that row goes.
+    assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Sent);
+    assert!(store::config(&f.app).expect("cfg").apns.expect("apns").proven_at.is_some());
+    fake.then(resp(400, json!({"reason": "DeviceTokenNotForTopic"})));
     assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Dead { wrong_app: true });
+    assert!(store::devices_for_app(&f.app, None).expect("list").is_empty());
+    // New keys are unproven again.
+    let k = creds::validate_apns(EC_P256_P8, "XYZ123DEFG", "TEAM123456", "com.example.app").expect("apns");
+    creds::store_apns(&f.app, &k, "owner").expect("store");
+    s.reset_app(&f.app);
+    let t = device(&f, "p1", "apns", "production");
+    fake.then(resp(400, json!({"reason": "DeviceTokenNotForTopic"})));
+    assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Failed("apns:DeviceTokenNotForTopic".into()));
+    assert_eq!(store::devices_for_app(&f.app, None).expect("list").len(), 1);
+    s.reset_app(&f.app);
     // BadDeviceToken: dead.
     let t = device(&f, "p1", "apns", "production");
     fake.then(resp(400, json!({"reason": "BadDeviceToken"})));
@@ -320,9 +352,15 @@ fn fcm_sends_with_a_cached_oauth_token_and_maps_its_errors() {
     fake.then(resp(400, bad_tok));
     assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Dead { wrong_app: false });
     let t = device(&f, "a1", "fcm", "production");
+    // A 404 that isn't UNREGISTERED (a wrong project, a stray route): failed, kept.
+    fake.then(resp(404, json!({"error": {"code": 404, "status": "NOT_FOUND"}})));
+    assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Failed("fcm:NOT_FOUND".into()));
+    assert_eq!(store::devices_for_app(&f.app, None).expect("list").len(), 1, "only UNREGISTERED deletes");
     fake.then(resp(404, json!({"error": {"code": 404, "status": "NOT_FOUND", "details": [{"errorCode": "UNREGISTERED"}]}})));
     assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Dead { wrong_app: false });
     let t = device(&f, "a1", "fcm", "production");
+    // The service account had accepted sends above: SENDER_ID_MISMATCH is
+    // this one phone's token from another project.
     fake.then(resp(403, json!({"error": {"code": 403, "status": "PERMISSION_DENIED", "details": [{"errorCode": "SENDER_ID_MISMATCH"}]}})));
     assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Dead { wrong_app: true });
     let t = device(&f, "a1", "fcm", "production");
@@ -376,6 +414,36 @@ fn the_check_reads_a_token_refusal_as_a_working_key() {
     assert_eq!(s.check(&f.app, "fcm"), Ok("ok"));
     assert_eq!(fake.seen()[0].0, format!("http://apns.test/3/device/{}", "0".repeat(64)), "a fake token, production");
     assert!(s.check(&f.app, "web").is_err());
+    // A topic the key may not push to is a failed check.
+    fake.then(resp(400, json!({"reason": "DeviceTokenNotForTopic"})));
+    assert_eq!(s.check(&f.app, "apns"), Err("apns:DeviceTokenNotForTopic".into()));
+    fake.then(resp(400, json!({"reason": "TopicDisallowed"})));
+    assert_eq!(s.check(&f.app, "apns"), Err("apns:TopicDisallowed".into()));
+    assert_eq!(store::config(&f.app).expect("cfg").cred_error.as_deref(), Some("apns:TopicDisallowed"));
+    // And the check says plainly what it can't prove.
+    for (p, text) in CHECK_LIMITS {
+        assert!(text.contains("can't tell"), "{p}: {text}");
+    }
+}
+
+#[test]
+fn a_new_key_id_or_team_mints_a_new_provider_token() {
+    let f = fx("jwtkey");
+    let fake = Fake::new(happy());
+    let s = Sender::with_clock(hosts(), fake.clone(), clock);
+    let t = device(&f, "p1", "apns", "production");
+    assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Sent);
+    let first = header(&fake.seen()[0].1, "authorization").map(str::to_string).expect("auth");
+    // The same .p8 (same fingerprint) under another key id and team.
+    let k = creds::validate_apns(EC_P256_P8, "NEWKEY1234", "NEWTEAM123", "com.example.app").expect("apns");
+    creds::store_apns(&f.app, &k, "owner").expect("store");
+    assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Sent);
+    let second = header(&fake.seen()[1].1, "authorization").map(str::to_string).expect("auth");
+    assert_ne!(first, second, "the cache is keyed on the key id and team, not the key bytes alone");
+    let hd = jsonwebtoken::decode_header(second.strip_prefix("bearer ").expect("bearer")).expect("jwt");
+    assert_eq!(hd.kid.as_deref(), Some("NEWKEY1234"));
+    let r = HttpResp { status: 200, retry_after: None, body: b"{\"access_token\":\"ya29.secret\"}".to_vec() };
+    assert!(!format!("{r:?}").contains("ya29"), "Debug never shows a vendor body");
 }
 
 #[test]

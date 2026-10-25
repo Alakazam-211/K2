@@ -333,12 +333,13 @@ fn check(who: &Who, body: &[u8]) -> R<J> {
     let cfg = store::config(&t.service_id).map_err(|e| no("store", 500, e))?;
     let mut results = serde_json::Map::new();
     for (platform, set) in [(store::PLATFORM_APNS, cfg.apns.is_some()), (store::PLATFORM_FCM, cfg.fcm.is_some())] {
+        let limits = super::sender::CHECK_LIMITS.iter().find(|(p, _)| *p == platform).map(|(_, t)| *t).unwrap_or("");
         let r = if !set {
             json!({ "configured": false })
         } else {
             match super::sender::global().check(&t.service_id, platform) {
-                Ok(_) => json!({ "configured": true, "ok": true }),
-                Err(code) => json!({ "configured": true, "ok": false, "code": code }),
+                Ok(_) => json!({ "configured": true, "ok": true, "limits": limits }),
+                Err(code) => json!({ "configured": true, "ok": false, "code": code, "limits": limits }),
             }
         };
         results.insert(platform.to_string(), r);

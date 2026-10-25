@@ -85,8 +85,8 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
             agent_replies INTEGER NOT NULL DEFAULT 0,
             previews INTEGER NOT NULL DEFAULT 1,
             max_devices INTEGER,
-            apns_key_id TEXT, apns_team_id TEXT, apns_bundle_id TEXT, apns_key_fpr TEXT, apns_set_at INTEGER,
-            fcm_project_id TEXT, fcm_client_email TEXT, fcm_key_fpr TEXT, fcm_set_at INTEGER,
+            apns_key_id TEXT, apns_team_id TEXT, apns_bundle_id TEXT, apns_key_fpr TEXT, apns_set_at INTEGER, apns_ok_at INTEGER,
+            fcm_project_id TEXT, fcm_client_email TEXT, fcm_key_fpr TEXT, fcm_set_at INTEGER, fcm_ok_at INTEGER,
             cred_error TEXT, cred_error_at INTEGER,
             updated_at INTEGER NOT NULL,
             updated_by TEXT
@@ -765,6 +765,10 @@ pub struct ApnsMeta {
     /// First 8 bytes of the key's SHA-256, hex.
     pub key_fingerprint: String,
     pub set_at: i64,
+    /// The first send Apple accepted with this key (`None` = not yet). Until
+    /// then a token "from another app" is read as a wrong bundle id, not a
+    /// dead device (security review A-M1).
+    pub proven_at: Option<i64>,
 }
 
 /// The Firebase service account's metadata (never the key).
@@ -775,6 +779,8 @@ pub struct FcmMeta {
     pub client_email: String,
     pub key_fingerprint: String,
     pub set_at: i64,
+    /// The first send Google accepted with this service account.
+    pub proven_at: Option<i64>,
 }
 
 /// One App's push settings (defaults when the owner never set any).
@@ -828,7 +834,7 @@ fn config_conn(conn: &Connection, app: &str) -> Result<PushConfig, String> {
             "SELECT enabled, owner_on, agent_replies, previews, max_devices,
                     apns_key_id, apns_team_id, apns_bundle_id, apns_key_fpr, apns_set_at,
                     fcm_project_id, fcm_client_email, fcm_key_fpr, fcm_set_at,
-                    cred_error, cred_error_at, updated_at, updated_by
+                    cred_error, cred_error_at, updated_at, updated_by, apns_ok_at, fcm_ok_at
                FROM app_push_config WHERE app_id = ?1",
             params![app],
             |r| {
@@ -839,6 +845,7 @@ fn config_conn(conn: &Connection, app: &str) -> Result<PushConfig, String> {
                         bundle_id,
                         key_fingerprint: r.get::<_, Option<String>>(8)?.unwrap_or_default(),
                         set_at: r.get::<_, Option<i64>>(9)?.unwrap_or(0),
+                        proven_at: r.get(18)?,
                     }),
                     _ => None,
                 };
@@ -848,6 +855,7 @@ fn config_conn(conn: &Connection, app: &str) -> Result<PushConfig, String> {
                         client_email,
                         key_fingerprint: r.get::<_, Option<String>>(12)?.unwrap_or_default(),
                         set_at: r.get::<_, Option<i64>>(13)?.unwrap_or(0),
+                        proven_at: r.get(19)?,
                     }),
                     _ => None,
                 };
@@ -956,7 +964,7 @@ pub fn set_apns_meta(app: &str, meta: Option<&ApnsMeta>, actor: &str) -> Result<
     with_conn(|conn| {
         ensure_row(conn, &app, actor)?;
         conn.execute(
-            "UPDATE app_push_config SET apns_key_id = ?2, apns_team_id = ?3, apns_bundle_id = ?4, apns_key_fpr = ?5, apns_set_at = ?6,
+            "UPDATE app_push_config SET apns_key_id = ?2, apns_team_id = ?3, apns_bundle_id = ?4, apns_key_fpr = ?5, apns_set_at = ?6, apns_ok_at = NULL,
                     cred_error = NULL, cred_error_at = NULL, updated_at = ?7, updated_by = ?8
               WHERE app_id = ?1",
             params![
@@ -982,7 +990,7 @@ pub fn set_fcm_meta(app: &str, meta: Option<&FcmMeta>, actor: &str) -> Result<Pu
     with_conn(|conn| {
         ensure_row(conn, &app, actor)?;
         conn.execute(
-            "UPDATE app_push_config SET fcm_project_id = ?2, fcm_client_email = ?3, fcm_key_fpr = ?4, fcm_set_at = ?5,
+            "UPDATE app_push_config SET fcm_project_id = ?2, fcm_client_email = ?3, fcm_key_fpr = ?4, fcm_set_at = ?5, fcm_ok_at = NULL,
                     cred_error = NULL, cred_error_at = NULL, updated_at = ?6, updated_by = ?7
               WHERE app_id = ?1",
             params![
@@ -998,6 +1006,18 @@ pub fn set_fcm_meta(app: &str, meta: Option<&FcmMeta>, actor: &str) -> Result<Pu
         .map_err(|e| format!("push config write: {e}"))?;
         config_conn(conn, &app)
     })
+}
+
+/// Record the first accepted send with the platform's current key
+/// (`Ok(true)` = this call proved it). New keys reset it.
+pub fn mark_proven(app: &str, platform: &str) -> Result<bool, String> {
+    let app = normalize_app_target(Some(app));
+    let sql = match platform {
+        PLATFORM_APNS => "UPDATE app_push_config SET apns_ok_at = ?2 WHERE app_id = ?1 AND apns_key_id IS NOT NULL AND apns_ok_at IS NULL",
+        PLATFORM_FCM => "UPDATE app_push_config SET fcm_ok_at = ?2 WHERE app_id = ?1 AND fcm_project_id IS NOT NULL AND fcm_ok_at IS NULL",
+        _ => return Err("platform is apns or fcm".into()),
+    };
+    with_conn(|conn| Ok(conn.execute(sql, params![app, now_secs()]).map_err(|e| format!("push config write: {e}"))? > 0))
 }
 
 /// Store the last credential refusal (a reason code such as

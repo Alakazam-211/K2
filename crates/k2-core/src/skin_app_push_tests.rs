@@ -347,6 +347,7 @@ fn purge_takes_both_tables_and_settings_default_safely() {
         bundle_id: "com.example.app".into(),
         key_fingerprint: "0011223344556677".into(),
         set_at: 42,
+        proven_at: None,
     };
     set_cred_error(&f.app, "apns:InvalidProviderToken\n<script>").expect("err");
     assert_eq!(config(&f.app).expect("cfg").cred_error.as_deref(), Some("apns:InvalidProviderTokenscript"), "codes only");
@@ -354,9 +355,23 @@ fn purge_takes_both_tables_and_settings_default_safely() {
     assert_eq!(c.apns, Some(meta));
     assert_eq!(c.cred_error, None, "new keys clear the last error");
     assert_eq!(config(&f.other_app).expect("cfg").apns, None, "per App");
-    let fm = FcmMeta { project_id: "proj".into(), client_email: "sa@proj.iam.gserviceaccount.com".into(), key_fingerprint: "aa".into(), set_at: 7 };
-    assert_eq!(set_fcm_meta(&f.app, Some(&fm), "owner").expect("fcm").fcm, Some(fm));
+    let fm = FcmMeta {
+        project_id: "proj".into(),
+        client_email: "sa@proj.iam.gserviceaccount.com".into(),
+        key_fingerprint: "aa".into(),
+        set_at: 7,
+        proven_at: None,
+    };
+    assert_eq!(set_fcm_meta(&f.app, Some(&fm), "owner").expect("fcm").fcm, Some(fm.clone()));
+    // The first accepted send proves a key; new keys make it unproven again.
+    assert!(mark_proven(&f.app, PLATFORM_FCM).expect("prove"));
+    assert!(!mark_proven(&f.app, PLATFORM_FCM).expect("again"), "once");
+    assert!(config(&f.app).expect("cfg").fcm.expect("fcm").proven_at.is_some());
+    set_fcm_meta(&f.app, Some(&fm), "owner").expect("new key");
+    assert_eq!(config(&f.app).expect("cfg").fcm.expect("fcm").proven_at, None, "a new key is unproven");
+    assert!(mark_proven(&f.app, "web").is_err());
     assert_eq!(set_apns_meta(&f.app, None, "owner").expect("clear").apns, None);
+    assert!(!mark_proven(&f.app, PLATFORM_APNS).expect("no apns key"), "nothing to prove without a key");
 
     let p = session("dana", &f.app);
     register(&f.app, &f.dana, &p, &reg("p1", "apns", APNS_A)).expect("register");

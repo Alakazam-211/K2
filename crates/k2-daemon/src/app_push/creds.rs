@@ -229,6 +229,7 @@ impl ApnsKey {
             bundle_id: self.bundle_id.clone(),
             key_fingerprint: self.fingerprint(),
             set_at,
+            proven_at: None,
         }
     }
 }
@@ -244,6 +245,7 @@ impl FcmKey {
             client_email: self.client_email.clone(),
             key_fingerprint: self.fingerprint(),
             set_at,
+            proven_at: None,
         }
     }
 }

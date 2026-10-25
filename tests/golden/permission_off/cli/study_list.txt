@@ -29,6 +29,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-surfaces        Room members (who holds a grant), an App's own self and usage
   app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends
   app-runtime         K2 updates move your App to the new runtime: re-host, setting, checks
+  app-push            Your App's own phone app: keys in the vault, register, send, limits
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries

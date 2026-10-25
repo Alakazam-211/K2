@@ -54,7 +54,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity app-surfaces app-runtime skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data garden-access garden-changes design"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity app-surfaces app-runtime app-push skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data garden-access garden-changes design"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -728,6 +728,18 @@ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-run
 echo "  PASS: app-runtime --json id+body"
 pass=$((pass + 1))
 assert_contains "catalog: app-runtime row" "$("$K2" study)" "  app-runtime         K2 updates move your App to the new runtime"
+
+echo "== k2 study app-push (prd-custom-app-push-v1, 0.46.4) =="
+ap_out="$("$K2" study app-push)"
+assert_contains "title" "$ap_out" "k2 study app-push — notifications to a custom App's own phone app"
+for needle in "k2 app push setup <app> --apns-key" "k2 app push check <app>" "POST /cli/skin/push/register" \
+    "getDevicePushTokenAsync" "k2Who" "await k2.push.send" "/v1/apps/<id>/push/send" "--scopes push" \
+    "push_not_configured" "channel_unavailable" "K2_APP_PUSH=off" "permission card" "k2 push"; do
+    assert_contains "app-push: $needle" "$ap_out" "$needle"
+done
+ap_lines="$(printf '%s\n' "$ap_out" | wc -l | tr -d ' ')"
+if [ "$ap_lines" -le 80 ]; then echo "  PASS: app-push is bounded ($ap_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-push is $ap_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: app-push row" "$("$K2" study)" "  app-push            Your App's own phone app"
 assert_contains "usage lists app-runtime" "$("$K2" study --help)" "app-resources  app-runtime"
 assert_contains "k2 app help points at the page" "$(grep -F 'Re-hosts explained: k2 study app-runtime.' "$K2_CLI" || true)" "k2 study app-runtime"
 

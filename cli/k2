@@ -35455,7 +35455,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-push skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs"
 
 _study_usage() {
     cat <<'EOF'
@@ -35472,7 +35472,7 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
-  app-identity  app-surfaces  app-resources  app-runtime  skins  feedback-loop  ticket-brief
+  app-identity  app-surfaces  app-resources  app-runtime  app-push  skins  feedback-loop  ticket-brief
   zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  db-upgrade  jobs
@@ -35505,6 +35505,7 @@ _study_title() {
         app-surfaces) echo "Room members, and an App's own self and usage" ;;
         app-resources) echo "Box usage, the disk guard, clean and trends" ;;
         app-runtime) echo "K2 updates and your App: the re-host" ;;
+        app-push) echo "Notifications to a custom App's own phone app" ;;
         skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
         ticket-brief) echo "Ticket HTML brief" ;;
@@ -35602,6 +35603,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-surfaces        Room members (who holds a grant), an App's own self and usage
   app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends
   app-runtime         K2 updates move your App to the new runtime: re-host, setting, checks
+  app-push            Your App's own phone app: keys in the vault, register, send, limits
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries
@@ -35655,6 +35657,7 @@ _study_page() {
         app-surfaces) _study_page_app_surfaces ;;
         app-resources) _study_page_app_resources ;;
         app-runtime) _study_page_app_runtime ;;
+        app-push) _study_page_app_push ;;
         skins)
             echo "k2 study skins is now k2 study apps — this page still works."
             echo
@@ -37555,6 +37558,79 @@ TRENDS:
 
 ELSEWHERE: Settings → Apps → This server → Box usage shows the same, with
 bars. A Garden can show it with the built-in card k2:box-disk@1.
+EOF
+}
+
+_study_page_app_push() {
+    cat <<'EOF'
+k2 study app-push — notifications to a custom App's own phone app
+
+THE MODEL
+  Your App's own phone app (your bundle id, your Apple team, your Firebase
+  project) gets notifications from K2. The owner gives K2 the App's Apple
+  key and/or Firebase service account once; K2 keeps them in the vault and
+  the daemon sends to Apple and Google itself. No K2 Connect relay. The App,
+  its agent and other Apps can use the keys, never read them. Push is per
+  App and off until the owner approves push:send (or runs k2 app push on).
+
+ONCE, AS THE OWNER (from a terminal outside K2; Touch ID confirms)
+  Apple: turn on Push Notifications for the app id; create an APNs key
+  (.p8); note its Key ID and your Team ID. Firebase (Android, or iOS through
+  Firebase): Project settings > Service accounts > Generate new private key.
+  google-services.json / GoogleService-Info.plist go in the app, not to K2.
+  k2 app push setup <app> --apns-key AuthKey_XXXX.p8 --key-id XXXX \
+      --team-id YYYY --bundle-id com.you.app --fcm-service-account sa.json
+  k2 app push check <app>      a fake token: says whether each key works
+  k2 app push on <app>         (or approve push:send in the App's deploy)
+
+IN THE PHONE APP (the guest's own session pass, Authorization: Bearer)
+  1 Sign in with a device: POST /cli/skin/login {username, password, app,
+    device: {id, name}}; keep the pass and refresh token in the Keychain /
+    Keystore; POST /cli/skin/refresh for the next pair.
+  2 Ask for notification permission; take the NATIVE token: the APNs
+    device token as hex, or the FCM token (Expo: getDevicePushTokenAsync).
+  3 On every launch and token change: POST /cli/skin/push/register
+    {deviceId: <device.id>, platform: apns|fcm, pushToken, environment:
+    sandbox|production}. Debug builds are sandbox. Answer: id, who,
+    configured {apns, fcm}; never the token.
+  4 Sign-out: POST /cli/skin/push/unregister {deviceId} (signing out of the
+    device sign-in also removes it). push.device / push.prefs read and change
+    previews and mutedTopics.
+  5 Receive: your own data keys plus k2App, k2Send, k2Kind (app or agent),
+    k2Topic and k2Who (match it to register's who to tell accounts apart).
+  6 Sensitive content: send a short line and an id; fetch the rest on open.
+
+FROM THE APP
+  On its link (push:send):  await k2.push.send({to: {guest}, title, body,
+    data, topic})  then k2.push.status({sendId}); k2.push.devices().
+  A BFF outside the wall: POST /v1/apps/<id>/push/send with an App key of
+    scope push (k2 app key mint <app> --scopes push).
+  to: {guest} | {guests: [...]} (at most 1,000) | {room} (one of the App's
+  rooms). Only this App's guests; anyone else is skipped.not_a_guest.
+
+THE APP'S AGENT
+  k2 app push status|log <app> (Build and run Apps); send, test and
+  set --agent-replies (…and manage them end to end). Never the keys: ask
+  the owner with a permission card.
+
+LIMITS (an hour)
+  600 push.send calls per App; 30 alerts and 60 silent pushes per guest;
+  20,000 device sends per App; 5,000 waiting (push_queue_full); 20 phones
+  per guest; 10,000 per App (k2 app push set --max-devices).
+
+REFUSALS
+  push_off (not approved or turned off)  push_not_configured (no key)
+  not_for_host  guest_required (register is a guest's own pass)
+  channel_unavailable (k2-companion isn't ready)  too_many_recipients
+  outside_app_rooms  rate_limited (retryAfterMs)  too_large (4,096 bytes)
+  airgap  vault_closed  app_pass_required / cap_not_granted (push.send)
+
+WHEN APPLE OR GOOGLE SAY NO
+  A gone token removes that device (dead; wrongApp = a token from another
+  app: check the bundle id). A refused key pauses that platform 10 minutes
+  and leaves the App's agent a note; k2 app push status shows the code.
+  K2_APP_PUSH=off in the daemon's environment stops every App's push.
+  K2 Companion's own phones are k2 push, not this.
 EOF
 }
 

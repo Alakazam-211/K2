@@ -399,14 +399,15 @@ fn purge_takes_both_tables_and_settings_default_safely() {
     };
     assert_eq!(set_fcm_meta(&f.app, Some(&fm), "owner").expect("fcm").fcm, Some(fm.clone()));
     // The first accepted send proves a key; new keys make it unproven again.
-    assert!(mark_proven(&f.app, PLATFORM_FCM).expect("prove"));
-    assert!(!mark_proven(&f.app, PLATFORM_FCM).expect("again"), "once");
+    assert!(!mark_proven(&f.app, PLATFORM_FCM, "old-key-fpr").expect("stale"), "a send with a replaced key proves nothing");
+    assert!(mark_proven(&f.app, PLATFORM_FCM, "aa").expect("prove"));
+    assert!(!mark_proven(&f.app, PLATFORM_FCM, "aa").expect("again"), "once");
     assert!(config(&f.app).expect("cfg").fcm.expect("fcm").proven_at.is_some());
     set_fcm_meta(&f.app, Some(&fm), "owner").expect("new key");
     assert_eq!(config(&f.app).expect("cfg").fcm.expect("fcm").proven_at, None, "a new key is unproven");
-    assert!(mark_proven(&f.app, "web").is_err());
+    assert!(mark_proven(&f.app, "web", "aa").is_err());
     assert_eq!(set_apns_meta(&f.app, None, "owner").expect("clear").apns, None);
-    assert!(!mark_proven(&f.app, PLATFORM_APNS).expect("no apns key"), "nothing to prove without a key");
+    assert!(!mark_proven(&f.app, PLATFORM_APNS, "0011223344556677").expect("no apns key"), "nothing to prove without a key");
 
     let p = session("dana", &f.app);
     register(&f.app, &f.dana, &p, &reg("p1", "apns", APNS_A)).expect("register");

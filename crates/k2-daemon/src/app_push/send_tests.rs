@@ -409,6 +409,12 @@ fn a_queued_send_is_dropped_when_the_device_guest_or_app_changed() {
     assert!(!worker::deliverable(&t), "push off");
     store::set_switches(&f.app, store::Switches { enabled: Some(true), ..Default::default() }, "owner").expect("on");
     assert!(worker::deliverable(&t));
+    // The approval withdrawn (no push:send, no owner on): queued sends stop
+    // (review L1).
+    store::set_switches(&f.app, store::Switches { owner_on: Some(false), ..Default::default() }, "owner").expect("unapprove");
+    assert!(!worker::deliverable(&t), "push:send no longer approved");
+    store::set_switches(&f.app, store::Switches { owner_on: Some(true), ..Default::default() }, "owner").expect("approve");
+    assert!(worker::deliverable(&t));
     // The guest's grant disabled (their sessions end with it).
     let g = skin::list_grants().expect("grants").into_iter().find(|g| g.subject_id == principal("dana") && g.target_id == f.app).expect("grant");
     skin::set_grant_enabled(&g.id, false).expect("disable");

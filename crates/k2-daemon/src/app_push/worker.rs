@@ -80,8 +80,16 @@ impl<T> Fair<T> {
     }
 }
 
+/// A queued job. In tests it carries the enqueuing thread's DB (a test's
+/// scoped k2.db is thread-local; the worker threads must read the same one).
+struct Queued {
+    job: Job,
+    #[cfg(test)]
+    db: std::sync::Arc<parking_lot::ReentrantMutex<rusqlite::Connection>>,
+}
+
 struct State {
-    queue: Fair<Job>,
+    queue: Fair<Queued>,
     pending: HashMap<String, usize>,
     in_flight: usize,
 }
@@ -116,7 +124,16 @@ pub fn enqueue(app: &str, jobs: Vec<Job>) -> Result<usize, usize> {
     }
     let n = jobs.len();
     *st.pending.entry(app.to_string()).or_insert(0) += n;
-    st.queue.push_all(app, jobs);
+    #[cfg(test)]
+    let db = k2_core::db::shared();
+    st.queue.push_all(
+        app,
+        jobs.into_iter().map(|job| Queued {
+            job,
+            #[cfg(test)]
+            db: db.clone(),
+        }),
+    );
     drop(st);
     q.work.notify_all();
     Ok(n)
@@ -133,19 +150,26 @@ fn run() {
         let job = {
             let mut st = q.state.lock().unwrap_or_else(|e| e.into_inner());
             loop {
-                if let Some(j) = st.queue.pop() {
+                if let Some(q) = st.queue.pop() {
                     st.in_flight += 1;
-                    break j;
+                    break q;
                 }
                 st = q.work.wait(st).unwrap_or_else(|e| e.into_inner());
             }
         };
-        let outcome = if deliverable(&job.target) {
-            sender::global().deliver(&job.target, &job.notification, &job.stamps)
-        } else {
-            sender::log(&format!("{} send {} device {}: dropped (the phone, the guest's access or the App's push changed before it went out)", job.target.app, job.stamps.send_id, job.target.id));
-            Outcome::Dropped
+        let run = |job: &Job| {
+            if deliverable(&job.target) {
+                sender::global().deliver(&job.target, &job.notification, &job.stamps)
+            } else {
+                sender::log(&format!("{} send {} device {}: dropped (the phone, the guest's access or the App's push changed before it went out)", job.target.app, job.stamps.send_id, job.target.id));
+                Outcome::Dropped
+            }
         };
+        #[cfg(test)]
+        let outcome = k2_core::db::with_scoped_handle(job.db.clone(), || run(&job.job));
+        #[cfg(not(test))]
+        let outcome = run(&job.job);
+        let job = job.job;
         sendlog::record(&job.target.app, &job.stamps.send_id, &outcome);
         if let Outcome::Failed(code) = &outcome {
             sender::log(&format!("{} send {} device {}: failed ({code})", job.target.app, job.stamps.send_id, job.target.id));
@@ -164,16 +188,13 @@ fn run() {
     }
 }
 
-/// Still sendable right now (review B-L1): push isn't off for the box or
-/// by the App's owner, and the row exists with this exact token, its
-/// guest's grant enabled and its sign-in live. (An App that went away took
-/// its rows and settings with it, so the row check covers removal.) A
-/// store error is "no": never send on a doubt.
+/// Still sendable right now (review B-L1, L1): the App's push state is on
+/// (the box switch, the owner's switch and the `push:send` approval or the
+/// owner's on), and the row exists with this exact token, its guest's grant
+/// enabled and its sign-in live. A store error is "no": never send on a
+/// doubt.
 pub(crate) fn deliverable(t: &Target) -> bool {
-    use k2_core::skin::app_push as store;
-    super::box_enabled()
-        && store::config(&t.app).map(|c| c.enabled).unwrap_or(false)
-        && store::still_deliverable(&t.app, &t.id, &t.token).unwrap_or(false)
+    super::state(&t.app).is_ok() && k2_core::skin::app_push::still_deliverable(&t.app, &t.id, &t.token).unwrap_or(false)
 }
 
 /// Tests: wait until one App's sends are done (or `max` passes).

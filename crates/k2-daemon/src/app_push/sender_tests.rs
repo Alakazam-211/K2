@@ -236,12 +236,29 @@ fn apns_answers_map_to_dead_failed_and_the_breaker() {
     fake.then(resp(410, json!({"reason": "Unregistered"})));
     assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Dead { wrong_app: false });
     assert!(store::devices_for_app(&f.app, None).expect("list").is_empty());
-    // DeviceTokenNotForTopic before this key ever got a send through: the
-    // key's bundle id is wrong. The breaker, the code, and the row stays.
+    // DeviceTokenNotForTopic before this key ever got a send through, from
+    // ONE guest: maybe that guest's phone registered another app's token.
+    // That row is skipped and kept; no breaker, no key error (review L2).
     let t = device(&f, "p1", "apns", "production");
     fake.then(resp(400, json!({"reason": "DeviceTokenNotForTopic"})));
     assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Failed("apns:DeviceTokenNotForTopic".into()));
-    assert_eq!(store::devices_for_app(&f.app, None).expect("list").len(), 1, "a wrong key never deletes devices");
+    assert_eq!(store::devices_for_app(&f.app, None).expect("list").len(), 1, "never deleted");
+    assert_eq!(store::config(&f.app).expect("cfg").cred_error, None, "one guest's answer doesn't say the key is wrong");
+    assert!(!s.paused(&f.app, "apns"));
+    fake.then(resp(400, json!({"reason": "DeviceTokenNotForTopic"})));
+    assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Failed("apns:DeviceTokenNotForTopic".into()));
+    assert!(!s.paused(&f.app, "apns"), "the same guest again is still one guest");
+    // A second guest gets the same answer: the key's bundle id is wrong.
+    // The breaker, the code, and every row stays.
+    let eli = skin::add_principal_for_app("eli", None, &f.app, None, "test").expect("eli").id;
+    let e = {
+        let ses = skin::create_app_session_token("eli", &f.app).expect("session");
+        let reg = store::parse_registration(&json!({"deviceId": "e1", "platform": "apns", "pushToken": "ee".repeat(32)})).expect("reg");
+        Target::from(&store::register(&f.app, &eli, &ses.meta.id, &reg).expect("register"))
+    };
+    fake.then(resp(400, json!({"reason": "DeviceTokenNotForTopic"})));
+    assert_eq!(s.deliver(&e, &note(), &stamps(&f)), Outcome::Failed("apns:DeviceTokenNotForTopic".into()));
+    assert_eq!(store::devices_for_app(&f.app, None).expect("list").len(), 2, "a wrong key never deletes devices");
     assert_eq!(store::config(&f.app).expect("cfg").cred_error.as_deref(), Some("apns:DeviceTokenNotForTopic"));
     assert!(s.paused(&f.app, "apns"));
     s.reset_app(&f.app);
@@ -251,7 +268,7 @@ fn apns_answers_map_to_dead_failed_and_the_breaker() {
     assert!(store::config(&f.app).expect("cfg").apns.expect("apns").proven_at.is_some());
     fake.then(resp(400, json!({"reason": "DeviceTokenNotForTopic"})));
     assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Dead { wrong_app: true });
-    assert!(store::devices_for_app(&f.app, None).expect("list").is_empty());
+    assert!(store::devices_for_app(&f.app, Some(&f.dana)).expect("list").is_empty());
     // New keys are unproven again.
     let k = creds::validate_apns(EC_P256_P8, "XYZ123DEFG", "TEAM123456", "com.example.app").expect("apns");
     creds::store_apns(&f.app, &k, "owner").expect("store");
@@ -259,7 +276,7 @@ fn apns_answers_map_to_dead_failed_and_the_breaker() {
     let t = device(&f, "p1", "apns", "production");
     fake.then(resp(400, json!({"reason": "DeviceTokenNotForTopic"})));
     assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Failed("apns:DeviceTokenNotForTopic".into()));
-    assert_eq!(store::devices_for_app(&f.app, None).expect("list").len(), 1);
+    assert_eq!(store::devices_for_app(&f.app, Some(&f.dana)).expect("list").len(), 1, "unproven again: kept");
     s.reset_app(&f.app);
     // BadDeviceToken: dead.
     let t = device(&f, "p1", "apns", "production");
@@ -269,7 +286,7 @@ fn apns_answers_map_to_dead_failed_and_the_breaker() {
     let t = device(&f, "p1", "apns", "production");
     fake.then(resp(400, json!({"reason": "PayloadTooLarge"})));
     assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Failed("apns:PayloadTooLarge".into()));
-    assert_eq!(store::devices_for_app(&f.app, None).expect("list").len(), 1);
+    assert_eq!(store::devices_for_app(&f.app, Some(&f.dana)).expect("list").len(), 1);
     // 5xx, then 200: retried once.
     fake.then(resp(503, json!({"reason": "ServiceUnavailable"})));
     assert_eq!(s.deliver(&t, &note(), &stamps(&f)), Outcome::Sent);

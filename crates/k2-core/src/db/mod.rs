@@ -189,6 +189,18 @@ pub fn scoped_for_test() -> TestDbGuard {
     TestDbGuard { handle, prev, _not_send: std::marker::PhantomData }
 }
 
+/// Test-only: run `f` on THIS thread with `handle` (another thread's
+/// [`TestDbGuard::handle`]) as its scoped DB, then restore what was there.
+/// For code under test that hands work to a long-lived thread (the App push
+/// worker) and must read the test's own DB there.
+#[cfg(any(test, feature = "test-util"))]
+pub fn with_scoped_handle<T>(handle: Arc<ReentrantMutex<Connection>>, f: impl FnOnce() -> T) -> T {
+    let prev = SCOPED.with(|s| s.borrow_mut().replace(handle));
+    let out = f();
+    SCOPED.with(|s| *s.borrow_mut() = prev);
+    out
+}
+
 /// A fresh in-memory connection, migrated + seeded like the shared one.
 #[cfg(any(test, feature = "test-util"))]
 fn fresh_test_connection() -> Connection {

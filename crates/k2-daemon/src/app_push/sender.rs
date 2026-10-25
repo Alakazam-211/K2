@@ -256,6 +256,9 @@ pub enum Outcome {
 pub struct Target {
     pub id: String,
     pub app: String,
+    /// The guest the device is registered to (never sent anywhere; it tells
+    /// one guest's bad token from a wrong key).
+    pub principal: String,
     pub platform: String,
     pub environment: String,
     pub token: String,
@@ -275,7 +278,14 @@ impl std::fmt::Debug for Target {
 
 impl From<&store::PushDevice> for Target {
     fn from(d: &store::PushDevice) -> Self {
-        Target { id: d.id.clone(), app: d.app.clone(), platform: d.platform.clone(), environment: d.environment.clone(), token: d.push_token.clone() }
+        Target {
+            id: d.id.clone(),
+            app: d.app.clone(),
+            principal: d.principal_id.clone(),
+            platform: d.platform.clone(),
+            environment: d.environment.clone(),
+            token: d.push_token.clone(),
+        }
     }
 }
 
@@ -368,6 +378,10 @@ fn fcm_verdict(status: u16, body: &[u8], retry_after: Option<u64>) -> Verdict {
     }
 }
 
+/// Distinct guests answering "another app's token" before the key's first
+/// accepted send that trip the breaker (one guest is one bad row).
+pub const WRONG_APP_GUESTS: usize = 2;
+
 /// The code a wrong-app answer is stored under.
 fn wrong_app_code(platform: &str) -> &'static str {
     if platform == store::PLATFORM_APNS {
@@ -419,6 +433,9 @@ pub struct Sender {
     paused: Mutex<HashMap<(String, String), Instant>>,
     noted: Mutex<HashMap<String, Instant>>,
     proven: Mutex<std::collections::HashSet<(String, String)>>,
+    /// Guests whose devices answered "another app's token" while the key
+    /// was unproven, per (App, platform).
+    wrong_seen: Mutex<HashMap<(String, String), std::collections::HashSet<String>>>,
 }
 
 fn wall_now() -> i64 {
@@ -440,6 +457,7 @@ impl Sender {
             paused: Mutex::new(HashMap::new()),
             noted: Mutex::new(HashMap::new()),
             proven: Mutex::new(std::collections::HashSet::new()),
+            wrong_seen: Mutex::new(HashMap::new()),
         }
     }
 
@@ -474,11 +492,13 @@ impl Sender {
     pub fn reset_app(&self, app: &str) {
         self.paused.lock().unwrap_or_else(|e| e.into_inner()).retain(|(a, _), _| a != app);
         self.proven.lock().unwrap_or_else(|e| e.into_inner()).retain(|(a, _)| a != app);
+        self.wrong_seen.lock().unwrap_or_else(|e| e.into_inner()).retain(|(a, _), _| a != app);
         self.apns.lock().unwrap_or_else(|e| e.into_inner()).remove(app);
         self.fcm.lock().unwrap_or_else(|e| e.into_inner()).remove(app);
     }
 
-    fn apns_jwt(&self, app: &str, force: bool) -> Result<String, AuthErr> {
+    /// The provider token and the key fingerprint it was minted with.
+    fn apns_jwt(&self, app: &str, force: bool) -> Result<(String, String), AuthErr> {
         let now = (self.now)();
         let meta = store::config(app).map_err(|_| AuthErr::Fail("store".into()))?.apns.ok_or(AuthErr::Fail("push_not_configured".into()))?;
         let id = (meta.key_fingerprint, meta.key_id, meta.team_id);
@@ -488,14 +508,15 @@ impl Sender {
                 let fresh = now - a.minted < JWT_REFRESH_SECS;
                 let held = now < a.hold_until;
                 if (fresh && !force) || held {
-                    return Ok(a.jwt.clone());
+                    return Ok((a.jwt.clone(), a.key.0.clone()));
                 }
             }
         }
         let key = creds::load_apns(app).map_err(key_err)?;
         let jwt = creds::apns_jwt(&key, now).map_err(|_| AuthErr::Cred("apns:key_unusable".into()))?;
+        let fpr = id.0.clone();
         self.apns.lock().unwrap_or_else(|e| e.into_inner()).insert(app.to_string(), ApnsAuth { key: id, jwt: jwt.clone(), minted: now, hold_until: 0 });
-        Ok(jwt)
+        Ok((jwt, fpr))
     }
 
     fn hold_jwt(&self, app: &str) {
@@ -505,14 +526,15 @@ impl Sender {
         }
     }
 
-    fn fcm_token(&self, app: &str, force: bool) -> Result<(String, String), AuthErr> {
+    /// The access token, the project id and the key fingerprint behind them.
+    fn fcm_token(&self, app: &str, force: bool) -> Result<(String, String, String), AuthErr> {
         let now = (self.now)();
         let cfg = store::config(app).map_err(|_| AuthErr::Fail("store".into()))?;
         let meta = cfg.fcm.ok_or(AuthErr::Fail("push_not_configured".into()))?;
         if !force {
             let m = self.fcm.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(a) = m.get(app).filter(|a| a.fpr == meta.key_fingerprint && now < a.expires_at - OAUTH_EARLY_SECS) {
-                return Ok((a.token.clone(), meta.project_id.clone()));
+                return Ok((a.token.clone(), meta.project_id.clone(), a.fpr.clone()));
             }
         }
         let key = creds::load_fcm(app).map_err(key_err)?;
@@ -545,7 +567,7 @@ impl Sender {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(app.to_string(), FcmAuth { fpr: meta.key_fingerprint.clone(), token: token.clone(), expires_at: now + expires_in });
-        Ok((token, meta.project_id))
+        Ok((token, meta.project_id, meta.key_fingerprint))
     }
 
     /// POST with one retry after [`RETRY_DELAY`] for a 5xx or a transport
@@ -569,7 +591,8 @@ impl Sender {
         last
     }
 
-    fn apns_send(&self, t: &Target, n: &Notification, s: &Stamps) -> Verdict {
+    /// `used` = the key fingerprint the request went out with.
+    fn apns_send(&self, t: &Target, n: &Notification, s: &Stamps, used: &mut Option<String>) -> Verdict {
         let host = if t.environment == store::ENV_SANDBOX { &self.hosts.apns_sandbox } else { &self.hosts.apns_production };
         let bundle = match store::config(&t.app) {
             Ok(c) => match c.apns {
@@ -582,7 +605,10 @@ impl Sender {
         let mut reauthed = false;
         loop {
             let jwt = match self.apns_jwt(&t.app, reauthed) {
-                Ok(j) => j,
+                Ok((j, fpr)) => {
+                    *used = Some(fpr);
+                    j
+                }
                 Err(AuthErr::Cred(c)) => return Verdict::Cred(c),
                 Err(AuthErr::Fail(c)) => return Verdict::Failed(c),
             };
@@ -601,11 +627,14 @@ impl Sender {
         }
     }
 
-    fn fcm_send(&self, t: &Target, n: &Notification, s: &Stamps) -> Verdict {
+    fn fcm_send(&self, t: &Target, n: &Notification, s: &Stamps, used: &mut Option<String>) -> Verdict {
         let mut refreshed = false;
         loop {
             let (token, project) = match self.fcm_token(&t.app, refreshed) {
-                Ok(x) => x,
+                Ok((tok, project, fpr)) => {
+                    *used = Some(fpr);
+                    (tok, project)
+                }
                 Err(AuthErr::Cred(c)) => return Verdict::Cred(c),
                 Err(AuthErr::Fail(c)) => return Verdict::Failed(c),
             };
@@ -631,22 +660,38 @@ impl Sender {
         if self.paused(&t.app, &t.platform) {
             return Outcome::Failed(format!("{}:paused", t.platform));
         }
+        let mut used: Option<String> = None;
         let v = match t.platform.as_str() {
-            store::PLATFORM_APNS => self.apns_send(t, n, s),
-            store::PLATFORM_FCM => self.fcm_send(t, n, s),
+            store::PLATFORM_APNS => self.apns_send(t, n, s, &mut used),
+            store::PLATFORM_FCM => self.fcm_send(t, n, s, &mut used),
             _ => Verdict::Failed("platform".into()),
         };
         match v {
             Verdict::Sent => {
-                self.prove(&t.app, &t.platform);
+                if let Some(fpr) = used.as_deref() {
+                    self.prove(&t.app, &t.platform, fpr);
+                }
                 Outcome::Sent
             }
             // A token "from another app" before this key ever got a send
-            // through means the key's bundle id / Firebase project is wrong,
-            // not that the phone is gone: keep the rows, trip the breaker.
+            // through: from two or more guests it means the key's bundle id
+            // / Firebase project is wrong, so the breaker trips (rows kept).
+            // From one guest it may be that guest's phone registering
+            // another app's token: that one row is skipped, never deleted,
+            // and nobody is told the key is wrong (review L2).
             Verdict::Dead { wrong_app: true } if !self.proven(&t.app, &t.platform) => {
                 let code = wrong_app_code(&t.platform);
-                self.cred_refused(&t.app, &t.platform, code);
+                let guests = {
+                    let mut m = self.wrong_seen.lock().unwrap_or_else(|e| e.into_inner());
+                    let set = m.entry((t.app.clone(), t.platform.clone())).or_default();
+                    set.insert(t.principal.clone());
+                    set.len()
+                };
+                if guests >= WRONG_APP_GUESTS {
+                    self.cred_refused(&t.app, &t.platform, code);
+                } else {
+                    log(&format!("{} device {} ({}): another app's token before the key's first accepted send; skipped, kept", t.app, t.id, t.platform));
+                }
                 Outcome::Failed(code.to_string())
             }
             Verdict::Dead { wrong_app } => {
@@ -691,14 +736,18 @@ impl Sender {
         yes
     }
 
-    fn prove(&self, app: &str, platform: &str) {
+    /// Record the first accepted send, only for the key the send used: a
+    /// send that started before the keys changed proves nothing (review).
+    fn prove(&self, app: &str, platform: &str, fpr: &str) {
         if self.proven(app, platform) {
             return;
         }
-        match store::mark_proven(app, platform) {
-            Ok(_) => {
+        match store::mark_proven(app, platform, fpr) {
+            Ok(true) => {
                 self.proven.lock().unwrap_or_else(|e| e.into_inner()).insert((app.to_string(), platform.to_string()));
+                self.wrong_seen.lock().unwrap_or_else(|e| e.into_inner()).remove(&(app.to_string(), platform.to_string()));
             }
+            Ok(false) => {}
             Err(e) => log(&format!("{app} {platform}: first accepted send not recorded: {e}")),
         }
     }
@@ -755,6 +804,7 @@ impl Sender {
         let fake = Target {
             id: "check".into(),
             app: app.to_string(),
+            principal: String::new(),
             platform: platform.to_string(),
             environment: store::ENV_PRODUCTION.into(),
             token: if platform == store::PLATFORM_APNS { "0".repeat(64) } else { "k2-check-not-a-real-token".into() },
@@ -775,9 +825,10 @@ impl Sender {
             android_channel: None,
         };
         let s = Stamps { app: app.to_string(), send_id: "check".into(), kind: payload::KIND_APP, who: "0".repeat(32) };
+        let mut used = None;
         let v = match platform {
-            store::PLATFORM_APNS => self.apns_send(&fake, &n, &s),
-            store::PLATFORM_FCM => self.fcm_send(&fake, &n, &s),
+            store::PLATFORM_APNS => self.apns_send(&fake, &n, &s, &mut used),
+            store::PLATFORM_FCM => self.fcm_send(&fake, &n, &s, &mut used),
             _ => return Err("platform is apns or fcm".into()),
         };
         match v {

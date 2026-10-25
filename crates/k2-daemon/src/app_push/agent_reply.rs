@@ -157,10 +157,14 @@ struct Event {
     preview: String,
 }
 
-fn events() -> &'static Mutex<std::sync::mpsc::Sender<Event>> {
-    static TX: OnceLock<Mutex<std::sync::mpsc::Sender<Event>>> = OnceLock::new();
+/// Agent posts waiting for the fan-out thread; past this, a post's guest
+/// pushes are skipped (logged), never queued without bound.
+pub const MAX_QUEUED_POSTS: usize = 1_024;
+
+fn events() -> &'static Mutex<std::sync::mpsc::SyncSender<Event>> {
+    static TX: OnceLock<Mutex<std::sync::mpsc::SyncSender<Event>>> = OnceLock::new();
     TX.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<Event>();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Event>(MAX_QUEUED_POSTS);
         let spawned = std::thread::Builder::new().name("app-push-replies".into()).spawn(move || {
             let mut last_flush = Instant::now();
             loop {
@@ -190,8 +194,12 @@ pub fn on_agent_post(conversation: &str, room: &str, agent_name: &str, seq: i64,
         return;
     }
     let e = Event { conversation: conversation.into(), room: room.into(), agent_name: agent_name.into(), seq, preview: preview.into() };
-    if events().lock().unwrap_or_else(|p| p.into_inner()).send(e).is_err() {
-        super::sender::log("agent reply not queued: the agent-reply thread is gone");
+    match events().lock().unwrap_or_else(|p| p.into_inner()).try_send(e) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::TrySendError::Full(_)) => {
+            super::sender::log(&format!("agent reply not pushed: {MAX_QUEUED_POSTS} posts already wait for the agent-reply thread"));
+        }
+        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => super::sender::log("agent reply not queued: the agent-reply thread is gone"),
     }
 }
 

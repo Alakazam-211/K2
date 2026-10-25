@@ -1062,15 +1062,21 @@ pub fn set_fcm_meta(app: &str, meta: Option<&FcmMeta>, actor: &str) -> Result<Pu
 }
 
 /// Record the first accepted send with the platform's current key
-/// (`Ok(true)` = this call proved it). New keys reset it.
-pub fn mark_proven(app: &str, platform: &str) -> Result<bool, String> {
+/// (`Ok(true)` = this call proved it). `fpr` is the fingerprint of the key
+/// the send went out with: a send that used a key since replaced proves
+/// nothing. New keys reset it.
+pub fn mark_proven(app: &str, platform: &str, fpr: &str) -> Result<bool, String> {
     let app = normalize_app_target(Some(app));
     let sql = match platform {
-        PLATFORM_APNS => "UPDATE app_push_config SET apns_ok_at = ?2 WHERE app_id = ?1 AND apns_key_id IS NOT NULL AND apns_ok_at IS NULL",
-        PLATFORM_FCM => "UPDATE app_push_config SET fcm_ok_at = ?2 WHERE app_id = ?1 AND fcm_project_id IS NOT NULL AND fcm_ok_at IS NULL",
+        PLATFORM_APNS => {
+            "UPDATE app_push_config SET apns_ok_at = ?2 WHERE app_id = ?1 AND apns_key_id IS NOT NULL AND apns_key_fpr = ?3 AND apns_ok_at IS NULL"
+        }
+        PLATFORM_FCM => {
+            "UPDATE app_push_config SET fcm_ok_at = ?2 WHERE app_id = ?1 AND fcm_project_id IS NOT NULL AND fcm_key_fpr = ?3 AND fcm_ok_at IS NULL"
+        }
         _ => return Err("platform is apns or fcm".into()),
     };
-    with_conn(|conn| Ok(conn.execute(sql, params![app, now_secs()]).map_err(|e| format!("push config write: {e}"))? > 0))
+    with_conn(|conn| Ok(conn.execute(sql, params![app, now_secs(), fpr]).map_err(|e| format!("push config write: {e}"))? > 0))
 }
 
 /// Store the last credential refusal (a reason code such as

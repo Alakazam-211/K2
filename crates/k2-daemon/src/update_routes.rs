@@ -828,7 +828,8 @@ pub fn handle_check_body(body: &[u8]) -> CliResponse {
 /// the running daemon (an old manifest replayed as "latest", or a pinned
 /// old version) is refused, and so is the running version itself, unless
 /// the OWNER asks for it on purpose: `allowDowngrade` for an older target,
-/// `reinstall` for the same one. Admins can update, never roll back. An
+/// `reinstall` for the same one. "Owner" = the owner token or an Owner-role
+/// Connect login (hosted owners). Admins can update, never roll back. An
 /// unparsable version counts as older (fail closed).
 pub fn rollback_guard(
     target: &str,

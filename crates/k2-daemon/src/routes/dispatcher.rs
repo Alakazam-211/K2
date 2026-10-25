@@ -4039,9 +4039,9 @@ async fn handle_one_request(
             // emits the app:update-trigger frame over `event_tx` (Shape A) and
             // returns immediately. Thread the broadcast sender in for that.
             let event_tx = Some(state.event_tx.clone());
-            // Rollback guard: only the owner may ask for an older or the
-            // same version (allowDowngrade / reinstall).
-            let caller_is_owner = super::http::token_is_owner(&query, state.token.as_str());
+            // Rollback guard: only the owner (token or Owner-role login) may
+            // ask for an older or the same version (allowDowngrade / reinstall).
+            let caller_is_owner = super::http::may_override_daemon_version(&query, state.token.as_str());
             let r = tokio::task::spawn_blocking(move || {
                 crate::update_routes::handle_start(&body_bytes, event_tx, caller_is_owner)
             })

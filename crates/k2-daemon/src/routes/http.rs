@@ -839,6 +839,15 @@ pub(crate) fn token_is_owner(query: &str, owner_token: &str) -> bool {
     extract_token(query).is_some_and(|tok| ct_eq_token(tok, owner_token))
 }
 
+/// Who may install an older (`allowDowngrade`) or the same (`reinstall`)
+/// daemon version on purpose: the on-box owner token OR an Owner-ROLE
+/// connect-user session (hosted owners never hold the on-box token and must
+/// be able to recover). Admin and Member sessions, agents and unknown tokens
+/// may not.
+pub(crate) fn may_override_daemon_version(query: &str, owner_token: &str) -> bool {
+    matches!(actor_role(query, owner_token), Some(k2_core::connect_users::Role::Owner))
+}
+
 /// Owner-OR-Admin gate in the SYNC boolean shape (mirrors `token_is_owner`),
 /// for routes that already drained the request stream and return a
 /// `CliResponse` themselves. Accepts the on-box owner token OR a live
@@ -2971,6 +2980,30 @@ mod tests {
                 token_is_owner_or_admin(&format!("token={session}"), owner),
                 "an Admin-role connect-user session must pass the owner-or-admin gate",
             );
+        });
+    }
+
+    #[test]
+    fn daemon_version_override_is_owner_token_or_owner_login_only() {
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            assert!(may_override_daemon_version(&format!("token={owner}"), owner), "the owner token");
+            for (user, role) in [
+                ("owner_login", Some(k2_core::connect_users::Role::Owner)),
+                ("admin_login", Some(k2_core::connect_users::Role::Admin)),
+                ("member_login", None),
+            ] {
+                k2_core::connect_users::add_user(user, "password123").expect("add_user");
+                if let Some(r) = role {
+                    k2_core::connect_users::set_role(user, r).expect("set_role");
+                }
+                let session = k2_core::connect_users::create_session(user);
+                let got = may_override_daemon_version(&format!("token={session}"), owner);
+                assert_eq!(got, user == "owner_login", "{user}: override allowed = {got}");
+            }
+            assert!(!may_override_daemon_version("token=", owner));
+            assert!(!may_override_daemon_version("token=garbage", owner));
+            assert!(!may_override_daemon_version("", owner));
         });
     }
 

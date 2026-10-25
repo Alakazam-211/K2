@@ -356,7 +356,8 @@ SHARED NODES
   k2 study compute-shared. Adding a server from K2 (k2 compute node
   servers <node> add) needs the node's remote-admin level `full`; on a
   node set to `policy`, servers are added at the machine
-  (sudo k2-node servers add).
+  (sudo k2-node servers add). Moving the node to another of your own
+  servers: k2 compute node servers <node> owner <server> (0.46.4).
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr

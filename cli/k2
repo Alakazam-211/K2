@@ -7532,9 +7532,10 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   Leftover aliases (still work): k2 skin …    k2 skin-token …
 
   k2 app user add <username> [--email e] [--password-stdin]
-                                        Add an app principal (not a Connect user) with the box login
+                                        Owner only. Add an app principal (not a Connect user) with the box login
   k2 app user add <username> --app <app> [--role R] [--email e] [--password-stdin]
-                                        Owner only. A guest of ONE App: that App's grant, no box login
+                                        A guest of ONE App: that App's grant, no box login. The owner,
+                                        or an agent with "manage Apps" for its own workspace's Apps
   k2 app user add <app-id> <name> --test [--role R] [--expires 24h]
                                         Owner only. A test guest of ONE App: signs in only through
                                         that App's link, a role the App defines, ends on its own
@@ -7553,7 +7554,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app user list                     Roster (username  full name|—  role|—  rooms|—  email|—  [agent:<ws>]; no secrets)
   k2 app user remove <username>        Drop principal + login sessions (platform tokens survive)
   k2 app user rooms <username> --agent sales [--apply-tokens] [--app <app>]
-                                        Set default rooms (unassigned guests only); --app sets that App's rooms (owner)
+                                        Set default rooms (unassigned guests only); --app sets that App's rooms
+                                        (the owner, or an agent for its own workspace's Apps)
   k2 app user role <username> <role>   Assign an app role (not Connect owner/admin/member)
   k2 app user unassign <username>      Clear the assigned role (restore Thread-only + default rooms)
   k2 app role create <name> [--agent sales] [--app <app>]
@@ -34738,12 +34740,12 @@ cmd_schema() {
     {
       "name": "app user add",
       "usage": "k2 app user add <username> [--email e] [--password-stdin] [--app <app> [--role R]]",
-      "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host). With --app (owner only) the person is a guest of that one App: its grant (the role, or no rooms) and no box login.",
+      "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host; owner only). With --app the person is a guest of that one App: its grant (the role, or no rooms) and no box login. An agent with \"manage Apps\" adds App users of its own workspace's Apps only.",
       "args": [{"name": "username", "required": true}],
       "flags": [
-        {"name": "--email", "arg": "e", "description": "Optional guest email (password-reset plumbing; K2 never mails guests)."},
+        {"name": "--email", "arg": "e", "description": "Optional guest email, used for invites and password resets."},
         {"name": "--password-stdin", "arg": null, "description": "Read K2-login password from stdin (no public register)."},
-        {"name": "--app", "arg": "app", "description": "Owner only. Published service id or <workspace>/<name>. No box login."},
+        {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>. No box login. Agents: one of their own workspace's Apps."},
         {"name": "--role", "arg": "role", "description": "With --app: the role on that App (host-wide or tagged for that App)."}
       ]
     },
@@ -34809,12 +34811,12 @@ cmd_schema() {
     {
       "name": "app user rooms",
       "usage": "k2 app user rooms <username> --agent sales [--apply-tokens] [--app <app>]",
-      "description": "Set default rooms for an unassigned guest (the box login). Assigned guests 400 until unassigned. --apply-tokens copies onto live sessions only (never platform tokens). --app (owner only) sets the rooms of that guest's role-less grant on one App, creating it if missing.",
+      "description": "Set default rooms for an unassigned guest (the box login). Assigned guests 400 until unassigned. --apply-tokens copies onto live sessions only (never platform tokens). --app sets the rooms of that guest's role-less grant on one App, creating it if missing (the owner, or an agent for its own workspace's Apps).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
         {"name": "--apply-tokens", "arg": null, "description": "Copy onto live login sessions."},
-        {"name": "--app", "arg": "app", "description": "Owner only. Published service id or <workspace>/<name>."}
+        {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>. Agents: one of their own workspace's Apps."}
       ]
     },
     {
@@ -35144,7 +35146,7 @@ cmd_schema() {
       "description": "Leftover of k2 app user add. Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login.",
       "args": [{"name": "username", "required": true}],
       "flags": [
-        {"name": "--email", "arg": "e", "description": "Optional guest email (password-reset plumbing; K2 never mails guests)."},
+        {"name": "--email", "arg": "e", "description": "Optional guest email, used for invites and password resets."},
         {"name": "--password-stdin", "arg": null, "description": "Read K2-login password from stdin (no public register)."}
       ]
     },
@@ -38433,6 +38435,12 @@ PER-APP LOGINS (0.45.5)
     k2 app grant add … --kind app --target <app> --role R | --room sales
     k2 app role create R --app <app>           a role only that App can use
   <app> = a service id, or <workspace>/<publish name>. `host` = box login.
+  AGENT APP USERS (0.46.4): an agent with "manage Apps" adds people to its
+  own workspace's Apps (k2 app user add <u> --app <app> [--role R], a role
+  of its own workspace without files:download/files:agentconfig) and sets
+  their rooms (k2 app user rooms <u> --app <app> --agent <its room>). Those
+  people get that App only, never the box login: an agent add without
+  --app is refused (owner_only); box logins are the owner's.
   Isolation for a person only holds when they have no box login (User
   Access → host switch off). Box login off still ends ALL their sessions.
   Removing an App (`k2 publish rm`) ends its passes; its grants stay.

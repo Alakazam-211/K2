@@ -320,6 +320,18 @@ fn seed_thread_addr(handle: &str) -> (String, String) {
     (id, conv)
 }
 
+/// A published service row (never started) in workspace `project_id`:
+/// an App an agent of that workspace may add App users to.
+fn seed_app(project_id: &str, name: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let dir = std::env::temp_dir().join(format!("skin-it-app-{name}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("app dir");
+    k2_core::published_services::insert(&conn, project_id, name, "node s.mjs", &dir.to_string_lossy(), 47_301, "local", "stopped", "cmd", "")
+        .expect("insert service")
+        .id
+}
+
 fn seed_sidecar(project_id: &str, conv: &str, slug: &str) {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -2978,11 +2990,20 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
         let on_v = json(&on.body);
         assert_eq!(on_v["agentsCanManageSkin"], true, "{}", on.body);
 
-        let add = http(
+        // agent-app-users S2: an agent adds App users only.
+        let box_add = http(
             port,
             "POST",
             &format!("/cli/skin/users?token={hook_a}"),
             Some(r#"{"username":"bob"}"#),
+        );
+        assert_owner_only(&box_add, "toggle ON agent add without an App");
+        let sales_app = seed_app(&sales_id, "front");
+        let add = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={hook_a}"),
+            Some(&format!(r#"{{"username":"bob","app":"{sales_app}"}}"#)),
         );
         assert_eq!(add.status, 200, "toggle ON user add; {}", add.body);
         let add_v = json(&add.body);
@@ -4112,11 +4133,12 @@ async fn skin_guest_full_name_owner_set_clear_and_list() {
         let hook = mint_scoped_hook_for(&sales_id);
         let on = set_agents_manage_skin(port, &sales_id, 1);
         assert_eq!(on.status, 200, "owner enable manage; {}", on.body);
+        let agent_app = seed_app(&sales_id, "desk");
         let agent_add = http(
             port,
             "POST",
             &format!("/cli/skin/users?token={hook}"),
-            Some(r#"{"username":"fromagent"}"#),
+            Some(&format!(r#"{{"username":"fromagent","app":"{agent_app}"}}"#)),
         );
         assert_eq!(
             agent_add.status, 200,
@@ -4251,7 +4273,7 @@ async fn skin_guest_agent_mark_is_owner_only() {
             port,
             "POST",
             &format!("/cli/skin/users?token={hook}"),
-            Some(&serde_json::json!({"username": "smuggled", "agentWorkspace": sales_id, "agent_workspace": sales_id, "workspace": handle}).to_string()),
+            Some(&serde_json::json!({"username": "smuggled", "app": seed_app(&sales_id, "mark"), "agentWorkspace": sales_id, "agent_workspace": sales_id, "workspace": handle}).to_string()),
         );
         assert_eq!(smuggle.status, 200, "{}", smuggle.body);
         let r = http(port, "GET", &format!("/cli/skin/users?token={OWNER_TOKEN}"), None);

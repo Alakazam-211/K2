@@ -5496,6 +5496,42 @@ pub fn add_principal_for_app(
     role: Option<&str>,
     created_by: &str,
 ) -> Result<SkinPrincipal, String> {
+    add_principal_for_app_by(username, email, app, role, created_by, AddedBy::default())
+}
+
+/// Who, beyond the actor label, made an App guest (agent-app-users S2).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AddedBy<'a> {
+    /// The workspace whose agent added the guest: its creator stamp
+    /// ([`creators`]) is written in the same transaction as the principal
+    /// and its grant, so there is never a moment when the guest exists
+    /// unstamped (read as the owner's).
+    pub agent_workspace: Option<&'a str>,
+}
+
+/// Test-only failpoint: an error after the principal, grant and stamp
+/// are written, before the commit (agent-app-users T2.4).
+#[cfg(any(test, feature = "test-util"))]
+pub static AGENT_ADD_FAIL_BEFORE_COMMIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn agent_add_failpoint() -> Result<(), String> {
+    #[cfg(any(test, feature = "test-util"))]
+    if AGENT_ADD_FAIL_BEFORE_COMMIT.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("injected failure before commit".to_string());
+    }
+    Ok(())
+}
+
+/// [`add_principal_for_app`] with [`AddedBy`]: everything it writes
+/// commits together or not at all.
+pub fn add_principal_for_app_by(
+    username: &str,
+    email: Option<&str>,
+    app: &str,
+    role: Option<&str>,
+    created_by: &str,
+    by: AddedBy<'_>,
+) -> Result<SkinPrincipal, String> {
     let username = normalize_username(username)?;
     let email = match email {
         Some(raw) => normalize_email(raw)?,
@@ -5550,6 +5586,12 @@ pub fn add_principal_for_app(
             ],
         )
         .map_err(|e| format!("skin app grant insert: {e}"))?;
+        if let Some(ws) = by.agent_workspace {
+            creators::stamp_conn(&tx, &id, ws)?;
+        }
+        if by.agent_workspace.is_some() {
+            agent_add_failpoint()?;
+        }
         tx.commit()
             .map_err(|e| format!("skin principal commit: {e}"))?;
         Ok(SkinPrincipal {
@@ -7908,6 +7950,46 @@ mod tests {
                 resolve_skin_token(&static_raw).is_some(),
                 "platform token survives consume"
             );
+        });
+    }
+
+    /// agent-app-users T2.1/T2.4: an agent's App user is the guest, its one
+    /// App grant (no box login) and its creator stamp, written together; a
+    /// failure before the commit leaves none of them.
+    #[test]
+    fn an_agent_add_is_one_transaction_and_app_only() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                AGENT_ADD_FAIL_BEFORE_COMMIT.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        with_temp_home(|| {
+            let by = AddedBy { agent_workspace: Some("ws-tina") };
+            {
+                let _reset = Reset;
+                AGENT_ADD_FAIL_BEFORE_COMMIT.store(true, std::sync::atomic::Ordering::SeqCst);
+                let err = add_principal_for_app_by("tina", Some("tina@example.test"), "svc-tina", None, "agent:tina", by).unwrap_err();
+                assert!(err.contains("injected"), "{err}");
+            }
+            assert!(!principal_exists("tina").unwrap(), "no principal after a failed agent add");
+            let (stamps, grants): (i64, i64) = with_conn(|conn| {
+                let s = conn
+                    .query_row("SELECT COUNT(*) FROM principal_agent_creators", [], |r| r.get(0))
+                    .map_err(|e| e.to_string())?;
+                let g = conn.query_row("SELECT COUNT(*) FROM grants", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+                Ok((s, g))
+            })
+            .unwrap();
+            assert_eq!((stamps, grants), (0, 0), "no stamp and no grant left behind");
+
+            let p = add_principal_for_app_by("tina", Some("tina@example.test"), "svc-tina", None, "agent:tina", by).expect("agent add");
+            assert_eq!(creators::workspace_of(&p.id).unwrap().as_deref(), Some("ws-tina"));
+            let mine: Vec<SkinGrant> =
+                list_grants().unwrap().into_iter().filter(|g| g.subject_kind == "principal" && g.subject_id == p.id).collect();
+            assert_eq!(mine.len(), 1, "{mine:?}");
+            assert_eq!((mine[0].kind.as_str(), mine[0].target_id.as_str()), ("app", "svc-tina"));
+            assert!(host_grants(&mine, &p.id).is_empty(), "never a box login");
         });
     }
 

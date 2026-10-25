@@ -4,6 +4,8 @@
 //! - S0: a platform pass (an agent can mint one for its own room) never
 //!   gets a reset token from `/cli/skin/password/forgot`, and reaches only
 //!   guests wholly inside its workspace; the owner still gets the token.
+//! - S2: an agent adds App users of its own workspace's Apps only (one App
+//!   grant, never the box login, stamped in the same transaction).
 //!
 //! Never the real `~/.k2`, never the keychain, never a real mail send.
 
@@ -136,4 +138,129 @@ async fn s0_a_pass_never_gets_a_reset_token_and_reaches_only_its_own_guests() {
     let r = forgot(port, &sess, &own).await;
     assert_eq!(r.status, 403, "{}", r.body);
     let _ = principal_id(&own);
+}
+
+// ── S2 ───────────────────────────────────────────────────────────────
+
+/// A published service row in `ws` (never started): an App.
+fn app_row(ws: &Ws, name: &str) -> String {
+    let dir = ws.path.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::published_services::insert(&conn, &ws.id, name, "node s.mjs", &dir.to_string_lossy(), 47_501, "local", "stopped", "cmd", "")
+        .expect("insert service")
+        .id
+}
+
+/// `(kind, target_id)` of every grant `username` holds.
+fn grants_of(username: &str) -> Vec<(String, String)> {
+    let db = skin_db();
+    let mut stmt = db
+        .prepare(
+            "SELECT g.kind, g.target_id FROM grants g JOIN principals p ON p.id = g.subject_id
+             WHERE g.subject_kind = 'principal' AND p.username = ?1 ORDER BY g.kind, g.target_id",
+        )
+        .unwrap();
+    let rows = stmt.query_map([username], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    rows.collect::<rusqlite::Result<Vec<_>>>().unwrap()
+}
+
+fn principal_exists(username: &str) -> bool {
+    count("SELECT COUNT(*) FROM principals WHERE username = ?1", &[&username]) == 1
+}
+
+fn creator_of(username: &str) -> Option<String> {
+    use rusqlite::OptionalExtension;
+    skin_db()
+        .query_row(
+            "SELECT c.workspace_id FROM principal_agent_creators c JOIN principals p ON p.id = c.principal_id WHERE p.username = ?1",
+            [username],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s2_an_agent_adds_app_users_of_its_own_apps_only() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let sales = seed_ws(&env, &format!("sales{tag}"));
+    let ops = seed_ws(&env, &format!("ops{tag}"));
+    let shop = app_row(&sales, &format!("shop{tag}"));
+    let desk = app_row(&ops, &format!("desk{tag}"));
+    allow_manage(&sales, true);
+    let agent = passport(&sales);
+
+    // T2.1: one App grant on its own App, no box login, stamped.
+    let u1 = format!("u1{tag}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u1, "app": shop, "email": format!("{u1}@example.test") })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.json()["actor"].as_str().expect("actor").starts_with("agent:"), "{}", r.body);
+    assert_eq!(grants_of(&u1), vec![("app".to_string(), shop.clone())], "App only, never host");
+    assert_eq!(creator_of(&u1).as_deref(), Some(sales.id.as_str()));
+
+    // T2.2: no App → the teaching refusal, and no principal.
+    let u2 = format!("u2{tag}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2 })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert_eq!(
+        r.json()["error"]["hint"],
+        "Agents add App users only: name one of your workspace's Apps (k2 app user add <u> --app <app>). Box logins are the owner's (ask your human)."
+    );
+    assert!(!principal_exists(&u2));
+    // `host` is the box login: the same refusal.
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2, "app": "host" })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert!(!principal_exists(&u2));
+
+    // T2.3: another workspace's App; a role reaching another room; a role
+    // holding files:download. Nothing written in any case.
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2, "app": desk })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert!(r.json()["error"]["hint"].as_str().unwrap().contains("isn't an App of your workspace"), "{}", r.body);
+    let wide = format!("wide{tag}");
+    owner_post(
+        port,
+        "/cli/skin/roles",
+        json!({ "name": wide, "roomAccess": [{ "handle": sales.handle, "caps": ["thread:read"] }, { "handle": ops.handle, "caps": ["thread:read"] }] }),
+    )
+    .await;
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2, "app": shop, "role": wide })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    let dl = format!("dl{tag}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": dl, "roomAccess": [{ "handle": sales.handle, "caps": ["thread:read", "files:read", "files:download"] }] })).await;
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2, "app": shop, "role": dl })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert!(r.body.contains("files:download"), "{}", r.body);
+    assert!(!principal_exists(&u2), "no row after any refusal");
+
+    // A role of its own workspace is fine.
+    let staff = format!("staff{tag}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": staff, "roomAccess": [{ "handle": sales.handle, "caps": ["thread:read", "thread:post"] }] })).await;
+    let u3 = format!("u3{tag}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u3, "app": shop, "role": staff })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(grants_of(&u3), vec![("app".to_string(), shop.clone())]);
+
+    // T2.5: rooms on its own App user's App grant: 200; another
+    // workspace's App: 403 and nothing written.
+    let r = post(port, "/cli/skin/users/rooms", &agent, json!({ "username": u1, "app": shop, "rooms": [sales.handle] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["rooms"], json!([sales.id]));
+    let r = post(port, "/cli/skin/users/rooms", &agent, json!({ "username": u1, "app": desk, "rooms": [] })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert_eq!(grants_of(&u1), vec![("app".to_string(), shop.clone())], "no grant on the other App");
+
+    // T2.6: the owner's add without an App still writes the box login.
+    let box_guest = format!("box{tag}");
+    owner_post(port, "/cli/skin/users", json!({ "username": box_guest })).await;
+    assert_eq!(grants_of(&box_guest), vec![("app".to_string(), "host".to_string())]);
+    assert_eq!(creator_of(&box_guest), None, "the owner's guest carries no stamp");
+    // And the owner may still name any App.
+    let r = post(port, "/cli/skin/users", OWNER, json!({ "username": format!("o{tag}"), "app": desk })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
 }

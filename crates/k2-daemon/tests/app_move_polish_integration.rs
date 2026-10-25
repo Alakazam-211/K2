@@ -998,8 +998,11 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     assert_eq!(r.status, 200, "its own App's guest: {}", r.body);
     assert!(user("scope-ga").has_password);
 
-    // A box guest it adds (stamped as its workspace's): only its own rooms and roles.
+    // A box guest it may not add (agent-app-users S2: App users only).
     let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "scope-fresh"})).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "no box login from an agent: {}", r.body);
+    // An App user it adds (stamped as its workspace's): only its own rooms and roles.
+    let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "scope-fresh", "app": svc_a})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(k2_core::skin::creators::workspace_of(&user("scope-fresh").id).unwrap().as_deref(), Some(a.id.as_str()), "stamped");
     let r = post(d.port, "/cli/skin/users/password", &agent, json!({"username": "scope-fresh", "password": "agent-chosen-pw-4"})).await;
@@ -1216,7 +1219,7 @@ async fn a_role_named_like_another_roles_id_is_never_the_one_checked() {
         )
         .expect("insert the decoy");
     }
-    let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "decoy-guest"})).await;
+    let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "decoy-guest", "app": svc_a})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     for (path, body) in [
         ("/cli/skin/roles/assign", json!({"username": "decoy-guest", "role": victim.id})),

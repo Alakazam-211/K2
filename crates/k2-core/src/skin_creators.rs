@@ -174,15 +174,22 @@ pub fn stamp(principal_id: &str, workspace_id: &str) -> Result<(), String> {
     if pid.is_empty() || ws.is_empty() {
         return Err("a creator stamp needs a guest and a workspace".into());
     }
-    with_conn(|conn| {
-        conn.execute(
-            "INSERT INTO principal_agent_creators (principal_id, workspace_id, created_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(principal_id) DO UPDATE SET workspace_id = excluded.workspace_id",
-            params![pid, ws, now_secs()],
-        )
-        .map_err(|e| format!("creator stamp: {e}"))?;
-        Ok(())
-    })
+    with_conn(|conn| stamp_conn(conn, &pid, &ws))
+}
+
+/// [`stamp`] on an open connection (inside the caller's transaction).
+pub(super) fn stamp_conn(conn: &Connection, principal_id: &str, workspace_id: &str) -> Result<(), String> {
+    let (pid, ws) = (principal_id.trim(), workspace_id.trim());
+    if pid.is_empty() || ws.is_empty() {
+        return Err("a creator stamp needs a guest and a workspace".into());
+    }
+    conn.execute(
+        "INSERT INTO principal_agent_creators (principal_id, workspace_id, created_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(principal_id) DO UPDATE SET workspace_id = excluded.workspace_id",
+        params![pid, ws, now_secs()],
+    )
+    .map_err(|e| format!("creator stamp: {e}"))?;
+    Ok(())
 }
 
 /// The workspace whose agent added `principal_id` (`None`: the owner's).

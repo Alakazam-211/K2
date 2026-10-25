@@ -268,7 +268,14 @@ async fn files_download_is_person_only_to_grant() {
     let r = post(port, "/cli/skin/roles/room", OWNER, json!({ "name": role, "handle": ws.handle, "caps": flagged })).await;
     assert_eq!(r.status, 200, "the owner grants files:download: {}", r.body);
     // An agent handing that role to a guest would spread it.
-    let r = post(port, "/cli/skin/users", &hook, json!({ "username": format!("g{tag}") })).await;
+    let app = {
+        let dir = ws.path.join("dlapp");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::insert(&conn, &ws.id, "dlapp", "node s.mjs", &dir.to_string_lossy(), 47_402, "local", "stopped", "cmd", "").expect("service").id
+    };
+    let r = post(port, "/cli/skin/users", &hook, json!({ "username": format!("g{tag}"), "app": app })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let r = post(port, "/cli/skin/roles/assign", &hook, json!({ "username": format!("g{tag}"), "role": role })).await;
     owner_only(&r, "agent hands out a role holding files:download");

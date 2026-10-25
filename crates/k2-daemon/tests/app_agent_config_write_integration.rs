@@ -328,8 +328,16 @@ async fn guests_cannot_write_agent_config_unless_the_owner_opts_in() {
         owner_only(&r, "agent adds the opt-in to a room");
         let r = post(port, &hook, "/cli/skin/roles/update", serde_json::json!({"name": "agent-r", "roomAccess": [{"handle": a.handle, "caps": flagged}]}));
         owner_only(&r, "agent updates a role to carry the opt-in");
-        let r = post(port, &hook, "/cli/skin/users", serde_json::json!({"username": "agentguest"}));
-        assert_eq!(r.status, 200, "agent adds a box-login guest; {}", r.body);
+        // agent-app-users S2: an agent adds App users only (one of its Apps).
+        let app_dir = std::env::temp_dir().join(format!("cfg-app-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&app_dir).expect("app dir");
+        let app = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::published_services::insert(&conn, &a.id, "cfgapp", "node s.mjs", &app_dir.to_string_lossy(), 47_401, "local", "stopped", "cmd", "").expect("service").id
+        };
+        let r = post(port, &hook, "/cli/skin/users", serde_json::json!({"username": "agentguest", "app": app}));
+        assert_eq!(r.status, 200, "agent adds an App user; {}", r.body);
         let r = post(port, &hook, "/cli/skin/roles/assign", serde_json::json!({"username": "agentguest", "role": "r-gopt"}));
         owner_only(&r, "agent hands out the owner's opted-in role");
         let r = post(port, &hook, "/cli/skin-tokens", serde_json::json!({"name": "agent-tok", "caps": flagged, "rooms": [a.handle]}));

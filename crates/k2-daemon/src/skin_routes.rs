@@ -255,13 +255,6 @@ fn email_field(v: &serde_json::Value) -> Result<Option<&str>, CliResponse> {
     }
 }
 
-/// Q5 default (S24-12): an agent with "manage Apps" keeps exactly its
-/// 0.45.4 powers in this slice — it may add box-login guests as before, but
-/// naming an `app` (an App-only guest, or App rooms) is owner-only. Flip to
-/// `true` to let agents do it for their own workspace's Apps with that
-/// App's roles (the vs-live recommendation, not built here).
-pub const AGENTS_MAY_NAME_APP: bool = false;
-
 /// Owner-tier actors are `owner-token` / `user:<name>`; a scoped hook that
 /// passed the manage gate is `agent:<handle>` ([`skin_manage_actor_label`]).
 pub fn actor_is_agent(actor: &str) -> bool {
@@ -339,6 +332,11 @@ pub fn agent_scoped(
                 return r;
             }
         }
+        // The checks above passed for `ws`: the handlers that act
+        // differently for an agent get its workspace.
+        if path == "/cli/skin/users/rooms" {
+            return users_rooms(body, actor, Some(ws));
+        }
     }
     handler(body, actor)
 }
@@ -395,6 +393,13 @@ fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse>
                     if ids.iter().any(|id| id != ws) {
                         return Err(outside_workspace("those rooms are outside your workspace".to_string()));
                     }
+                }
+            }
+            // agent-app-users S2: an App's rooms only for an App of `ws`
+            // (the box login, `host`, is the plain rooms path).
+            if let Some(Ok(app)) = app_field(&v).map(resolve_app_target) {
+                if app != skin::HOST_APP_ID && !app_of_workspace(&app, ws) {
+                    return Err(not_your_app(&app));
                 }
             }
         }
@@ -673,10 +678,53 @@ fn app_field(v: &serde_json::Value) -> Option<&str> {
     str_field(v, &["app", "appId", "app_id"])
 }
 
+/// An agent action on App guests that didn't come through the scoped gate
+/// (no workspace known): never an agent's.
 fn agent_app_refused() -> CliResponse {
     owner_only_with_hint(
-        "naming an App (app) on an app user is owner-only — ask your human (k2 app user add <username> --app <app> [--role R], k2 app user rooms <username> --app <app> --agent <room>)",
+        "naming an App (app) on an app user needs your workspace's \"manage Apps\" switch — ask your human (k2 app user add <username> --app <app> [--role R])",
     )
+}
+
+/// agent-app-users §9: an agent add without an App.
+pub const AGENT_ADD_NEEDS_APP_HINT: &str = "Agents add App users only: name one of your workspace's Apps (k2 app user add <u> --app <app>). Box logins are the owner's (ask your human).";
+
+/// agent-app-users §9: an agent naming another workspace's App.
+fn not_your_app(app: &str) -> CliResponse {
+    owner_only_with_hint(&format!("'{app}' isn't an App of your workspace: only the owner adds people to it (ask your human)."))
+}
+
+/// agent-app-users S2 (§5.3): what an agent's `POST /cli/skin/users` must
+/// name. An App of its own workspace (never the box login), a role (if
+/// any) wholly inside its workspace and holding no person-only cap.
+/// Returns the App's service id. Anything else is `owner_only`, before
+/// any write; a body or App the handler can't read is its own 400.
+fn agent_add_app(ws: &str, v: &serde_json::Value) -> Result<String, CliResponse> {
+    let Some(raw_app) = app_field(v) else {
+        return Err(owner_only_with_hint(AGENT_ADD_NEEDS_APP_HINT));
+    };
+    let app = resolve_app_target(raw_app).map_err(CliResponse::bad_request)?;
+    if app == skin::HOST_APP_ID {
+        return Err(owner_only_with_hint(AGENT_ADD_NEEDS_APP_HINT));
+    }
+    if !app_of_workspace(&app, ws) {
+        return Err(not_your_app(&app));
+    }
+    if let Some(token) = str_field(v, &["role", "roleId", "role_id"]) {
+        match skin::find_role(token).map_err(CliResponse::internal_error)? {
+            Some(r) => {
+                if !role_in_workspace(&r, ws) {
+                    return Err(outside_workspace(format!("role '{}' reaches outside your workspace", r.name)));
+                }
+                if let Some(cap) = skin::person_only_cap_in_policy(&r.room_policy) {
+                    return Err(person_only_refused(cap));
+                }
+            }
+            // Unknown: the add's own 400.
+            None => {}
+        }
+    }
+    Ok(app)
 }
 
 /// An App target from an owner/agent body or CLI: `host`, a published
@@ -762,51 +810,25 @@ fn login_app_is_live(app: &str) -> bool {
     )
 }
 
-/// `POST /cli/skin/users` with the caller's workspace from the gate: a
-/// guest an agent adds is stamped as its workspace's (`skin::creators`),
-/// so that agent may set it up while it has nothing yet (security review
-/// B). If the stamp can't be written the guest is removed again: an
-/// unstamped guest would be the owner's, not what the agent asked for.
+/// `POST /cli/skin/users` with the caller's workspace from the gate.
+///
+/// agent-app-users S2 (Rosson 2026-10-24): an agent (`agent_ws` = its
+/// workspace) adds **App users only**: one App of its own workspace
+/// ([`agent_add_app`]), that App's grant and never a box login (`host`).
+/// The guest's creator stamp (`skin::creators`) is written in the same
+/// transaction as the guest and its grant. The owner's path is unchanged.
 pub fn handle_users_post_as(agent_ws: Option<&str>, body: &[u8], actor: &str) -> CliResponse {
-    let r = handle_users_post(body, actor);
-    let Some(ws) = agent_ws else { return r };
-    let requested = serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| str_field(&v, &["username", "name"]).map(str::to_string));
-    stamp_agent_added(r, ws, requested.as_deref(), actor)
+    users_post(body, actor, agent_ws)
 }
 
-/// Stamp the guest an agent's add just made (`r`, the handler's answer) as
-/// workspace `ws`'s. Whenever it can't be stamped (no id in the answer, or
-/// the stamp write fails) the guest is removed again, by the answer's
-/// username or else the one asked for: an unstamped guest would read as
-/// the owner's, with a password the agent may have picked.
-fn stamp_agent_added(r: CliResponse, ws: &str, requested: Option<&str>, actor: &str) -> CliResponse {
-    if !r.status.starts_with("200") {
-        return r;
-    }
-    let v = serde_json::from_str::<serde_json::Value>(&r.body).ok();
-    let username = v
-        .as_ref()
-        .and_then(|v| v["username"].as_str())
-        .map(str::to_string)
-        .or_else(|| requested.and_then(|u| skin::normalize_username(u).ok()));
-    let undo = |why: String| {
-        if let Some(u) = &username {
-            let _ = skin::remove_principal_as(u, actor);
-        }
-        CliResponse::internal_error(format!("'{}' wasn't added: {why}", username.as_deref().unwrap_or("the new guest")))
-    };
-    let Some(id) = v.as_ref().and_then(|v| v["id"].as_str()).map(str::to_string) else {
-        return undo("the new guest has no id to stamp".to_string());
-    };
-    if let Err(e) = skin::creators::stamp(&id, ws) {
-        return undo(e);
-    }
-    r
-}
-
+/// The owner's `POST /cli/skin/users` (no agent workspace). An agent
+/// actor that reaches it without the scoped gate never names an App and
+/// never gets a box login.
 pub fn handle_users_post(body: &[u8], actor: &str) -> CliResponse {
+    users_post(body, actor, None)
+}
+
+fn users_post(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
         Err(r) => return r,
@@ -819,31 +841,40 @@ pub fn handle_users_post(body: &[u8], actor: &str) -> CliResponse {
         Err(r) => return r,
     };
     let role = str_field(&v, &["role", "roleId", "role_id"]);
-    let added = match app_field(&v) {
-        // S24-12: an App-only guest — that App's grant, no box login.
-        Some(raw_app) => {
-            if actor_is_agent(actor) && !AGENTS_MAY_NAME_APP {
-                return agent_app_refused();
-            }
-            let app = match resolve_app_target(raw_app) {
-                Ok(a) if a == skin::HOST_APP_ID => {
-                    return CliResponse::bad_request(
-                        "app host is the box login: add the user without app",
-                    )
-                }
+    if actor_is_agent(actor) && agent_ws.is_none() {
+        return if app_field(&v).is_some() { agent_app_refused() } else { owner_only_with_hint(AGENT_ADD_NEEDS_APP_HINT) };
+    }
+    let added = match agent_ws {
+        Some(ws) => {
+            let app = match agent_add_app(ws, &v) {
                 Ok(a) => a,
-                Err(e) => return CliResponse::bad_request(e),
+                Err(r) => return r,
             };
-            skin::add_principal_for_app(username, email, &app, role, actor)
+            skin::add_principal_for_app_by(username, email, &app, role, actor, skin::AddedBy { agent_workspace: Some(ws) })
         }
-        None => {
-            if role.is_some() {
-                return CliResponse::bad_request(
-                    "role on user add needs app (box-login roles: k2 app user role <username> <role>)",
-                );
+        None => match app_field(&v) {
+            // S24-12: an App-only guest — that App's grant, no box login.
+            Some(raw_app) => {
+                let app = match resolve_app_target(raw_app) {
+                    Ok(a) if a == skin::HOST_APP_ID => {
+                        return CliResponse::bad_request(
+                            "app host is the box login: add the user without app",
+                        )
+                    }
+                    Ok(a) => a,
+                    Err(e) => return CliResponse::bad_request(e),
+                };
+                skin::add_principal_for_app(username, email, &app, role, actor)
             }
-            skin::add_principal_with_email(username, email)
-        }
+            None => {
+                if role.is_some() {
+                    return CliResponse::bad_request(
+                        "role on user add needs app (box-login roles: k2 app user role <username> <role>)",
+                    );
+                }
+                skin::add_principal_with_email(username, email)
+            }
+        },
     };
     match added {
         Ok(p) => {
@@ -2164,6 +2195,13 @@ pub fn handle_roles_unassign(body: &[u8], actor: &str) -> CliResponse {
 }
 
 pub fn handle_users_rooms(body: &[u8], actor: &str) -> CliResponse {
+    users_rooms(body, actor, None)
+}
+
+/// `agent_ws`: the agent's workspace once [`agent_scoped`] checked the
+/// guest, the rooms and the App against it (agent-app-users S2: an agent
+/// sets the rooms of its own workspace's App users).
+fn users_rooms(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
         Err(r) => return r,
@@ -2182,9 +2220,10 @@ pub fn handle_users_rooms(body: &[u8], actor: &str) -> CliResponse {
         Err(e) => return e,
     };
     let apply = apply_tokens_field(&v);
-    // S24-15: `app` sets that App grant's role-less rooms (owner only).
+    // S24-15: `app` sets that App grant's role-less rooms (the owner, or
+    // an agent for an App of its own workspace, checked by agent_scoped).
     if let Some(raw_app) = app_field(&v) {
-        if actor_is_agent(actor) && !AGENTS_MAY_NAME_APP {
+        if actor_is_agent(actor) && agent_ws.is_none() {
             return agent_app_refused();
         }
         let app = match resolve_app_target(raw_app) {
@@ -3201,22 +3240,26 @@ pub fn handle_password_change(body: &[u8], presented: Option<&str>) -> CliRespon
 mod tests {
     use super::*;
 
-    /// Q5 (S24-12): an agent that may manage Apps keeps exactly its 0.45.4
-    /// powers — naming an App on user add is owner-only. Refused before any
-    /// store is touched.
+    /// agent-app-users S2: an agent actor that reaches the add without the
+    /// scoped gate (no workspace) never names an App and never gets a box
+    /// login; through the gate, an add without an App is refused with the
+    /// teaching text. Refused before any store is touched.
     #[test]
-    fn agent_cannot_name_an_app_on_user_add() {
-        assert!(!AGENTS_MAY_NAME_APP, "Q5 default for 0.45.5");
+    fn agent_user_add_needs_the_gate_and_an_app() {
         assert!(actor_is_agent("agent:sales"));
         assert!(!actor_is_agent("owner-token"));
         assert!(!actor_is_agent("user:rosson"));
-        let r = handle_users_post(
-            br#"{"username":"eve","app":"0f5e7c1a-3b2d-4e6f-8a9b-1c2d3e4f5a6b"}"#,
-            "agent:sales",
-        );
-        assert!(r.status.starts_with("403"), "{} {}", r.status, r.body);
+        for body in [&br#"{"username":"eve","app":"0f5e7c1a-3b2d-4e6f-8a9b-1c2d3e4f5a6b"}"#[..], br#"{"username":"eve"}"#] {
+            let r = handle_users_post(body, "agent:sales");
+            assert!(r.status.starts_with("403"), "{} {}", r.status, r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["error"]["code"], "owner_only", "{v}");
+        }
+        let r = handle_users_post_as(Some("ws-sales"), br#"{"username":"eve"}"#, "agent:sales");
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
         let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
         assert_eq!(v["error"]["code"], "owner_only", "{v}");
+        assert_eq!(v["error"]["hint"], AGENT_ADD_NEEDS_APP_HINT, "{v}");
         let r = handle_users_post(br#"{"username":"eve","role":"x"}"#, "owner-token");
         assert!(r.status.starts_with("400"), "role needs app: {}", r.body);
     }
@@ -3333,33 +3376,6 @@ mod tests {
             "must stay owner_only, not gated: {}",
             r.body
         );
-    }
-
-    #[test]
-    fn an_agent_added_guest_that_cant_be_stamped_is_removed_again() {
-        let _home = crate::test_support::TempHome::new();
-        let exists = |u: &str| skin::list_principals().expect("principals").iter().any(|p| p.username == u);
-        // The answer has no id: removed (by the answer's username).
-        skin::add_principal("nit-noid").expect("add");
-        let r = stamp_agent_added(CliResponse::ok_json(r#"{"username":"nit-noid"}"#.to_string()), "ws-nit", Some("nit-noid"), "agent:nit");
-        assert_eq!(r.status, "500 Internal Server Error", "{}", r.body);
-        assert!(!exists("nit-noid"), "an unstamped guest never stays behind");
-        // No id and no username in the answer: removed by the name asked for.
-        skin::add_principal("nit-bare").expect("add");
-        let r = stamp_agent_added(CliResponse::ok_json("{}".to_string()), "ws-nit", Some("Nit-Bare"), "agent:nit");
-        assert_eq!(r.status, "500 Internal Server Error", "{}", r.body);
-        assert!(!exists("nit-bare"), "removed by the requested name");
-        // A full answer: stamped and kept.
-        let p = skin::add_principal("nit-ok").expect("add");
-        let body = serde_json::to_string(&p).expect("json");
-        let r = stamp_agent_added(CliResponse::ok_json(body), "ws-nit", Some("nit-ok"), "agent:nit");
-        assert_eq!(r.status, "200 OK", "{}", r.body);
-        assert!(exists("nit-ok"));
-        assert_eq!(skin::creators::workspace_of(&p.id).expect("stamp lookup").as_deref(), Some("ws-nit"));
-        // A refusal passes through untouched.
-        let r = stamp_agent_added(CliResponse::bad_request("nope"), "ws-nit", Some("nit-ok"), "agent:nit");
-        assert!(r.status.starts_with("400"), "{}", r.status);
-        assert!(exists("nit-ok"));
     }
 
     #[test]

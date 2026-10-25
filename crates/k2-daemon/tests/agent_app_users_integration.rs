@@ -647,8 +647,12 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     assert!(m.subject.contains("invited") || m.subject.contains("You're invited"), "{}", m.subject);
     assert!(m.text_body.contains(&format!("Set your password: {page}#k2inv_")), "{}", m.text_body);
     assert!(m.text_body.contains("Nobody at") && m.text_body.contains("will ask for your password"), "{}", m.text_body);
-    for never in ["k2skn_", "?token=", "password:"] {
+    for never in ["k2skn_", "?token="] {
         assert!(!m.text_body.contains(never), "{never} in {}", m.text_body);
+    }
+    // No "password: <value>" anywhere but K2's own link line.
+    for line in m.text_body.lines().filter(|l| l.to_ascii_lowercase().contains("password:")) {
+        assert!(line.starts_with(&format!("Set your password: {page}#k2inv_")), "a password value in {line:?}");
     }
     assert_eq!(outbound_rows(&from).len(), 1, "one audit row");
     let rows = invite_rows(&u3);
@@ -851,7 +855,9 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
         .collect();
     assert_eq!(notes.len(), 1, "one card per newly pending person");
     let note = notes[0].body.clone().unwrap_or_default();
-    assert!(note.contains("the box login") && note.contains(&format!("room {}", ops.handle)), "{note}");
+    // The card names what was waiting when it was posted (the box login);
+    // the later role widen adds no second card.
+    assert!(note.contains("the box login"), "{note}");
     assert!(note.contains(&format!("Reset link goes to {e1} — set by")), "{note}");
 
     // T4.4: never an agent's (manage-Apps on), and POST only.

@@ -69,7 +69,14 @@ pub const HOST_LOGIN_DENIED: &str = "invalid username or password";
 ///       can never accept a link pass on its main port.
 ///   5 = `roles.room_paths`: folder path scope per room line (room-scope
 ///       R3, RS-A1..A3, 0.46.1, [`paths`]). `{}` = every line unscoped.
-pub const SKIN_SCHEMA_VERSION: i64 = 5;
+///   6 = `principal_agent_ties` + `app_user_invites` (agent-app-users,
+///       0.46.4, [`ties`]). A K2 older than this refuses the file, so a
+///       downgrade can never ignore a tie and mint an uncapped session.
+pub const SKIN_SCHEMA_VERSION: i64 = 6;
+
+/// Agent ties and the tied user's ceiling (agent-app-users, 0.46.4).
+#[path = "skin_ties.rs"]
+pub mod ties;
 
 #[path = "skin_link.rs"]
 pub mod link;
@@ -1741,6 +1748,10 @@ fn run_schema_steps(conn: &mut Connection) -> Result<(), String> {
                 paths::step5_room_paths_column(&tx)?;
                 Vec::new()
             }
+            6 => {
+                ties::step6_ties_and_invites(&tx)?;
+                Vec::new()
+            }
             other => return Err(format!("skin.db: no schema step {other}")),
         };
         tx.execute_batch(&format!("PRAGMA user_version = {next};"))
@@ -2025,6 +2036,7 @@ fn with_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Result<T, 
         });
     }
     let conn = &guard.as_ref().expect("skin db opened").conn;
+    let _held = ties::HeldGuard::enter();
     f(conn)
 }
 
@@ -2462,7 +2474,9 @@ pub fn normalize_app_target(raw: Option<&str>) -> String {
 pub fn create_app_session_token(username: &str, app: &str) -> Result<SkinAppSession, String> {
     let username = normalize_username(username)?;
     let app = normalize_app_target(Some(app));
-    let r = with_conn(|conn| mint_app_session_conn(conn, &username, &app))?;
+    // A21: the App's workspace (daemon DB) before the skin mutex.
+    let app_ws = ties::app_workspace(&app);
+    let r = with_conn(|conn| mint_app_session_conn(conn, &username, &app, app_ws.as_deref()))?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
     Ok(SkinAppSession {
         meta: attach_token_handles(r.meta),
@@ -2474,7 +2488,18 @@ pub fn create_app_session_token(username: &str, app: &str) -> Result<SkinAppSess
 /// device sign-in, [`app_login`], mints and rotates in one transaction).
 /// `username` and `app` are already normalized. The caller refreshes the
 /// roster and attaches handles.
-pub(crate) fn mint_app_session_conn(conn: &Connection, username: &str, app: &str) -> Result<SkinAppSession, String> {
+///
+/// `app_ws` is the App's workspace ([`ties::app_workspace`]), looked up by
+/// the caller **before** it took the skin mutex. A tied guest
+/// ([`ties`]) is held to its ceiling here: an App outside it, or the
+/// chat-only box login, is [`HOST_LOGIN_DENIED`]; inside it, only the
+/// tie's room without person-only caps.
+pub(crate) fn mint_app_session_conn(
+    conn: &Connection,
+    username: &str,
+    app: &str,
+    app_ws: Option<&str>,
+) -> Result<SkinAppSession, String> {
     let username = username.to_string();
     let app = app.to_string();
     let id = uuid::Uuid::new_v4().to_string();
@@ -2504,17 +2529,26 @@ pub(crate) fn mint_app_session_conn(conn: &Connection, username: &str, app: &str
                 }
             }
         }
+        let tie = ties::get_conn(conn, &principal.id)?;
         let (policy, role_name) = match enabled_app_grant(conn, &principal.id, &app)? {
             Some(grant) => grant_login_policy(conn, &grant)?,
             // Sew S28 §13 (G7): chat-only login. A box login (`host`) with
             // no host grant but a `chat` grant gets a session with an
             // EMPTY room policy (Thread, files, tickets, wiki and store
             // stay dark): it exists to mint chat passes. App logins keep
-            // needing that App's own grant (rev 147).
-            None if app == HOST_APP_ID && principal_has_chat_grant_conn(conn, &principal.id)? => {
+            // needing that App's own grant (rev 147). A tied guest never
+            // (a chat grant is box-wide: agent-app-users A3).
+            None if app == HOST_APP_ID && tie.is_none() && principal_has_chat_grant_conn(conn, &principal.id)? => {
                 (thread_only_policy(&[]), None)
             }
             None => return Err(HOST_LOGIN_DENIED.to_string()),
+        };
+        let policy = match ties::clamp(tie.as_ref(), &app, app_ws, policy) {
+            Ok(p) => p,
+            Err(ties::Denied) => {
+                crate::log_debug!("[skin] tied guest {username}: {app} is outside the ceiling");
+                return Err(HOST_LOGIN_DENIED.to_string());
+            }
         };
         let caps = union_caps(&policy);
         let rooms = rooms_from_policy(&policy);
@@ -2656,6 +2690,16 @@ pub fn set_principal_password(
     username: &str,
     password: Option<&str>,
 ) -> Result<SkinPrincipal, String> {
+    set_principal_password_tied(username, password, None)
+}
+
+/// [`set_principal_password`] that also ties the guest (`tie`: an agent or
+/// an App key set it, agent-app-users R2) in the same transaction.
+pub fn set_principal_password_tied(
+    username: &str,
+    password: Option<&str>,
+    tie: Option<ties::TieWrite<'_>>,
+) -> Result<SkinPrincipal, String> {
     let username = normalize_username(username)?;
     let hash = match password.map(str::trim).filter(|s| !s.is_empty()) {
         Some(pw) => Some(hash_password(pw)?),
@@ -2667,6 +2711,9 @@ pub fn set_principal_password(
             return Err(format!("unknown skin user '{username}'"));
         };
         let tx = immediate_tx(conn)?;
+        if let Some(t) = tie {
+            ties::set_conn(&tx, &p.id, t)?;
+        }
         tx.execute(
             "UPDATE principals SET password_hash = ?1 WHERE id = ?2",
             params![hash, p.id],
@@ -2703,6 +2750,17 @@ pub fn set_principal_email_as(
     email: Option<&str>,
     actor: &str,
 ) -> Result<SkinPrincipal, String> {
+    set_principal_email_tied(username, email, actor, None)
+}
+
+/// [`set_principal_email_as`] that also ties the guest (an agent set it,
+/// agent-app-users R2) in the same transaction.
+pub fn set_principal_email_tied(
+    username: &str,
+    email: Option<&str>,
+    actor: &str,
+    tie: Option<ties::TieWrite<'_>>,
+) -> Result<SkinPrincipal, String> {
     let actor = hook_actor(Some(actor));
     let username = normalize_username(username)?;
     let email = match email {
@@ -2719,6 +2777,9 @@ pub fn set_principal_email_as(
         let tx = conn
             .unchecked_transaction()
             .map_err(|e| format!("skin email begin: {e}"))?;
+        if let Some(t) = tie {
+            ties::set_conn(&tx, &p.id, t)?;
+        }
         tx.execute(
             "UPDATE principals SET email = ?1 WHERE id = ?2",
             params![email, p.id],
@@ -5505,8 +5566,12 @@ pub struct AddedBy<'a> {
     /// The workspace whose agent added the guest: its creator stamp
     /// ([`creators`]) is written in the same transaction as the principal
     /// and its grant, so there is never a moment when the guest exists
-    /// unstamped (read as the owner's).
+    /// unstamped (read as the owner's). It is also tied to that workspace
+    /// (`created`, [`ties`]) in the same transaction.
     pub agent_workspace: Option<&'a str>,
+    /// The workspace of the App whose App key made the guest: tied to it
+    /// (`app_key`, Q3), no creator stamp.
+    pub app_key_workspace: Option<&'a str>,
 }
 
 /// Test-only failpoint: an error after the principal, grant and stamp
@@ -5591,6 +5656,12 @@ pub fn add_principal_for_app_by(
         }
         if by.agent_workspace.is_some() {
             agent_add_failpoint()?;
+        }
+        if let Some(ws) = by.agent_workspace {
+            ties::set_conn(&tx, &id, ties::TieWrite { workspace_id: ws, set_by: created_by, reason: ties::REASON_CREATED })?;
+        }
+        if let Some(ws) = by.app_key_workspace {
+            ties::set_conn(&tx, &id, ties::TieWrite { workspace_id: ws, set_by: created_by, reason: ties::REASON_APP_KEY })?;
         }
         tx.commit()
             .map_err(|e| format!("skin principal commit: {e}"))?;
@@ -6291,9 +6362,11 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                         EXISTS (
                           SELECT 1 FROM grants g
                           WHERE g.subject_kind = 'principal' AND g.subject_id = t.principal_id
-                            AND g.kind = ?4 AND g.target_id = ?5 AND g.enabled != 0)
+                            AND g.kind = ?4 AND g.target_id = ?5 AND g.enabled != 0),
+                        tie.workspace_id, tie.host_ok, tie.reasons, tie.set_by, tie.set_at
                  FROM tokens t
                  LEFT JOIN principals p ON p.id = t.principal_id
+                 LEFT JOIN principal_agent_ties tie ON tie.principal_id = t.principal_id AND t.session = 1
                  WHERE t.key_hash = ?1 AND t.revoked_at IS NULL
                    AND (t.expires_at IS NULL OR t.expires_at > ?2)
                    AND t.link_id IS NULL
@@ -6329,6 +6402,17 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                     };
                     let app_ok: bool = r.get(9)?;
                     let chat_ok: bool = r.get(10)?;
+                    let tie = match (principal_id.as_ref(), r.get::<_, Option<String>>(11)?) {
+                        (Some(pid), Some(ws)) if session != 0 => Some(ties::Tie {
+                            principal_id: pid.clone(),
+                            workspace_id: ws,
+                            host_ok: r.get::<_, Option<i64>>(12)?.unwrap_or(0) != 0,
+                            reasons: serde_json::from_str(&r.get::<_, Option<String>>(13)?.unwrap_or_default()).unwrap_or_default(),
+                            set_by: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
+                            set_at: r.get::<_, Option<i64>>(15)?.unwrap_or(0),
+                        }),
+                        _ => None,
+                    };
                     let app = if session_b {
                         blank_to_none(app_raw).unwrap_or_else(|| HOST_APP_ID.to_string())
                     } else {
@@ -6345,33 +6429,60 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                     if !admitted {
                         return Ok(None);
                     }
-                    Ok(Some(SkinPass {
-                        id: r.get(0)?,
-                        principal_id,
-                        username: stamp,
-                        caps,
-                        rooms,
-                        session: session_b,
-                        room_policy,
-                        app,
-                        room_paths: Default::default(),
-                    }))
+                    Ok(Some((
+                        SkinPass {
+                            id: r.get(0)?,
+                            principal_id,
+                            username: stamp,
+                            caps,
+                            rooms,
+                            session: session_b,
+                            room_policy,
+                            app,
+                            room_paths: Default::default(),
+                        },
+                        tie,
+                    )))
                 },
             )
             .optional()
             .map_err(|e| format!("skin token resolve: {e}"))?
             .flatten();
         // R3: a login's folders come from its own grant → role, now.
-        let row = row.map(|mut pass| {
+        let row = row.map(|(mut pass, tie)| {
             if pass.session {
                 pass.room_paths = paths::session_paths(conn, &pass);
             }
-            pass
+            (pass, tie)
         });
         Ok(row)
     })
     .ok()
     .flatten()
+    .and_then(|(pass, tie)| match tie {
+        None => Some(pass),
+        // agent-app-users R2 (A2): a tied guest's live session is held to
+        // the ceiling on every use, whatever rewrote it since the mint
+        // (role and grant edits rewrite live sessions in place). The App's
+        // workspace is read after the skin mutex is released (A21).
+        Some(tie) => clamp_resolved(pass, &tie),
+    })
+}
+
+/// [`resolve_skin_token`]'s clamp for a tied guest's session: `None` when
+/// its App is outside the ceiling, else its policy cut to the tie's room.
+fn clamp_resolved(mut pass: SkinPass, tie: &ties::Tie) -> Option<SkinPass> {
+    let app_ws = ties::app_workspace(&pass.app);
+    let policy = std::mem::take(&mut pass.room_policy);
+    match ties::clamp(Some(tie), &pass.app, app_ws.as_deref(), policy) {
+        Ok(p) => {
+            pass.caps = union_caps(&p);
+            pass.rooms = rooms_from_policy(&p);
+            pass.room_policy = p;
+            Some(pass)
+        }
+        Err(ties::Denied) => None,
+    }
 }
 
 // ── Front door ───────────────────────────────────────────────────────
@@ -7965,7 +8076,7 @@ mod tests {
             }
         }
         with_temp_home(|| {
-            let by = AddedBy { agent_workspace: Some("ws-tina") };
+            let by = AddedBy { agent_workspace: Some("ws-tina"), ..Default::default() };
             {
                 let _reset = Reset;
                 AGENT_ADD_FAIL_BEFORE_COMMIT.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -7990,6 +8101,90 @@ mod tests {
             assert_eq!(mine.len(), 1, "{mine:?}");
             assert_eq!((mine[0].kind.as_str(), mine[0].target_id.as_str()), ("app", "svc-tina"));
             assert!(host_grants(&mine, &p.id).is_empty(), "never a box login");
+            let tie = ties::get(&p.id).unwrap().expect("tied in the same transaction");
+            assert_eq!(
+                (tie.workspace_id.as_str(), tie.host_ok, tie.reasons.clone(), tie.set_by.as_str()),
+                ("ws-tina", false, vec!["created".to_string()], "agent:tina")
+            );
+        });
+    }
+
+    /// agent-app-users T3.1: a step-5 file (0.46.3) gains the step-6
+    /// tables on open and reads version 6; its rows survive. A file newer
+    /// than this binary is refused with the exact newer-schema text.
+    #[test]
+    fn step6_adds_ties_and_invites_to_a_v5_file() {
+        with_temp_home(|| {
+            assert_eq!(SKIN_SCHEMA_VERSION, 6);
+            add_principal("ada").unwrap();
+            let path = store_path();
+            *db().lock() = None;
+            {
+                let conn = Connection::open(&path).unwrap();
+                conn.execute_batch("DROP TABLE principal_agent_ties; DROP TABLE app_user_invites; PRAGMA user_version = 5;")
+                    .unwrap();
+            }
+            assert!(principal_exists("ada").unwrap(), "the v5 file opens and keeps its rows");
+            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 6);
+            let tables: Vec<String> = with_conn(|c| {
+                let mut st = c
+                    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('principal_agent_ties','app_user_invites') ORDER BY name")
+                    .map_err(|e| e.to_string())?;
+                let rows = st.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+                rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
+            })
+            .unwrap();
+            assert_eq!(tables, vec!["app_user_invites".to_string(), "principal_agent_ties".to_string()]);
+            // A file from a newer K2 than this one: refused, exact text.
+            with_conn(|c| c.execute_batch("PRAGMA user_version = 7;").map_err(|e| e.to_string())).unwrap();
+            *db().lock() = None;
+            let err = open_db(&path).expect_err("newer schema must refuse");
+            assert_eq!(
+                err,
+                "skin.db schema version 7 is newer than this K2 understands (6). Refusing to open it: update K2, or restore the skin.db backup taken before the downgrade."
+            );
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("PRAGMA user_version = 6;").unwrap();
+        });
+    }
+
+    /// agent-app-users T3.2/T3.7 (core): a tied guest's login is held to
+    /// the ceiling at mint, and an agent's password write ties with
+    /// `host_ok` = whether the guest holds the box login then.
+    #[test]
+    fn a_tied_login_is_clamped_at_mint_and_at_resolve() {
+        with_temp_home(|| {
+            let ws = uuid::Uuid::new_v4().to_string();
+            let other = uuid::Uuid::new_v4().to_string();
+            let mut policy = one_room_policy(&ws, &[CAP_THREAD_READ, CAP_FILES_READ, CAP_FILES_DOWNLOAD]);
+            policy.insert(other.clone(), vec![CAP_THREAD_READ.to_string()]);
+            create_role("wide", &policy).unwrap();
+            add_principal("gina").unwrap();
+            assign_role("gina", "wide").unwrap();
+            let (_, before) = create_session_token("gina").unwrap();
+            let t = ties::TieWrite { workspace_id: &ws, set_by: "agent:sales", reason: ties::REASON_PASSWORD };
+            set_principal_password_tied("gina", Some("s3cret-horse"), Some(t)).unwrap();
+            assert!(resolve_skin_token(&before).is_none(), "a password set ends the old sessions");
+            let tie = ties::get(&host_login_detail("gina").unwrap().principal_id).unwrap().expect("tied");
+            assert!(tie.host_ok, "she held the box login when the agent set her password");
+            assert_eq!(tie.reasons, vec!["password".to_string()]);
+            // Box login (host_ok): only ws, without files:download.
+            let s = create_app_session_token("gina", HOST_APP_ID).unwrap();
+            let pass = resolve_skin_token(&s.raw).expect("host login inside the ceiling");
+            assert_eq!(pass.room_policy.keys().cloned().collect::<Vec<_>>(), vec![ws.clone()]);
+            assert!(pass.has_cap_in_room(&ws, CAP_FILES_READ));
+            assert!(!pass.has_cap_in_room(&ws, CAP_FILES_DOWNLOAD), "person-only caps are outside the ceiling");
+            assert!(!pass.rooms.contains(&other));
+            // A second write keeps the first workspace and merges the reason.
+            let t2 = ties::TieWrite { workspace_id: &other, set_by: "agent:ops", reason: ties::REASON_EMAIL };
+            set_principal_email_tied("gina", Some("gina@example.test"), "agent:ops", Some(t2)).unwrap();
+            let tie = ties::get(&tie.principal_id).unwrap().unwrap();
+            assert_eq!((tie.workspace_id.as_str(), tie.reasons.clone()), (ws.as_str(), vec!["password".to_string(), "email".to_string()]));
+            // An App that isn't the workspace's (no published row here): denied.
+            set_app_grant_rooms("gina", "svc-elsewhere", std::slice::from_ref(&ws), false, "owner-token").unwrap();
+            let err = create_app_session_token("gina", "svc-elsewhere").unwrap_err();
+            assert_eq!(err, HOST_LOGIN_DENIED);
+            assert_eq!(ties::LOCK_ORDER_VIOLATIONS.load(std::sync::atomic::Ordering::SeqCst), 0, "the App lookup never ran under the skin mutex");
         });
     }
 
@@ -10772,7 +10967,7 @@ mod tests {
     #[test]
     fn r3_step5_adds_room_paths_to_a_v4_file() {
         with_temp_home(|| {
-            assert_eq!(SKIN_SCHEMA_VERSION, 5);
+            assert_eq!(SKIN_SCHEMA_VERSION, 6);
             let room = uuid::Uuid::new_v4().to_string();
             create_role("staff", &one_room_policy(&room, &[CAP_FILES_READ])).unwrap();
             add_principal("ada").unwrap();
@@ -10789,7 +10984,7 @@ mod tests {
             }
             // The next open runs step 5.
             let pass = resolve_skin_token(&raw).expect("a 0.46.0 session still resolves after the upgrade");
-            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 5);
+            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), SKIN_SCHEMA_VERSION, "steps 5 and 6 ran");
             let cols = with_conn(|c| Ok(table_columns(c, "roles"))).unwrap();
             assert!(cols.split(',').any(|c| c == "room_paths"), "{cols}");
             let stored: String = with_conn(|c| {

@@ -117,6 +117,10 @@ pub enum Refusal {
     NotAllowed { hint: &'static str, actor: String },
     /// 403 `no_chat_grant`.
     NoChatGrant { actor: String },
+    /// 403 `tied_pending_reset` (agent-app-users A3): an agent could know
+    /// this person's credentials, and a chat grant is box-wide, so no chat
+    /// pass until their own password reset drops the tie.
+    TiedPendingReset { actor: String },
     /// 503 `chat_unavailable` (a store failed).
     Unavailable(String),
 }
@@ -226,6 +230,11 @@ pub fn classify_with(bearer: &str, owner_token: &str, owner_connect_is_k2_owner:
         match k2_core::skin::principal_has_chat_grant(&principal_id) {
             Ok(true) => {}
             Ok(false) => return Err(Refusal::NoChatGrant { actor }),
+            Err(e) => return Err(Refusal::Unavailable(e)),
+        }
+        match k2_core::skin::ties::get(&principal_id) {
+            Ok(None) => {}
+            Ok(Some(_)) => return Err(Refusal::TiedPendingReset { actor }),
             Err(e) => return Err(Refusal::Unavailable(e)),
         }
         return Ok(PassIdentity {

@@ -271,6 +271,9 @@ pub fn link_admits(ident: &PassIdentity, link: OnLink<'_>) -> bool {
     ident.provenance == Provenance::AppSession && ident.app.as_deref() == Some(link.service_id)
 }
 
+/// agent-app-users §9: the tied person's chat-pass refusal.
+pub const TIED_PENDING_RESET_MESSAGE: &str = "This person's extra access starts after their password reset.";
+
 /// `POST /cli/sew/pass` with the live keyring, link and limiter.
 pub fn handle_pass(req: &PassRequest<'_>) -> Reply {
     let status = super::link::SewRow;
@@ -402,6 +405,10 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                 Err(Refusal::NoChatGrant { actor }) => {
                     audit("chat-pass", &actor, "no_chat_grant", req.ingress, req.ip);
                     return error(403, "no_chat_grant", "this person has no chat access (grant kind chat)", None).into();
+                }
+                Err(Refusal::TiedPendingReset { actor }) => {
+                    audit("chat-pass", &actor, "tied_pending_reset", req.ingress, req.ip);
+                    return error(403, "tied_pending_reset", TIED_PENDING_RESET_MESSAGE, None).into();
                 }
                 Err(Refusal::Unavailable(e)) => {
                     super::keyring::klog(format!("pass mint: store unavailable: {e}"));

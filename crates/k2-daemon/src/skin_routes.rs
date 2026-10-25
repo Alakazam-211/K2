@@ -217,10 +217,28 @@ pub fn handle_users_get() -> CliResponse {
             // 0.46.4: a test guest says so (`test`: its App, its end).
             let tests: HashMap<String, skin::test_guests::TestGuest> =
                 skin::test_guests::list(None).unwrap_or_default().into_iter().map(|t| (t.principal_id.clone(), t)).collect();
+            // agent-app-users R2: who is tied, and whose extra access waits.
+            let tied = match tie_display() {
+                Ok(t) => t,
+                Err(e) => return CliResponse::internal_error(e),
+            };
             let users: Vec<serde_json::Value> = users
                 .iter()
                 .map(|u| {
                     let mut v = serde_json::to_value(u).unwrap_or(serde_json::Value::Null);
+                    match tied.get(&u.id) {
+                        Some(t) => {
+                            v["pendingReset"] = serde_json::json!(t.pending);
+                            v["tiedTo"] = serde_json::json!(t.handle);
+                            v["tiedToId"] = serde_json::json!(t.tie.workspace_id);
+                            v["tiedReasons"] = serde_json::json!(t.tie.reasons);
+                            v["tiedBy"] = serde_json::json!(t.tie.set_by);
+                        }
+                        None => {
+                            v["pendingReset"] = serde_json::json!(false);
+                            v["tiedTo"] = serde_json::Value::Null;
+                        }
+                    }
                     if let Some(t) = tests.get(&u.id) {
                         let app_id = {
                             let db = k2_core::db::shared();
@@ -242,6 +260,41 @@ pub fn handle_users_get() -> CliResponse {
         }
         Err(e) => CliResponse::internal_error(e),
     }
+}
+
+/// One tied guest, for displays (agent-app-users R2, §5.2).
+pub struct TieDisplay {
+    pub tie: skin::ties::Tie,
+    /// The tie's workspace handle (its id when the workspace is gone).
+    pub handle: String,
+    /// Grants reach past the ceiling: the extra access waits for a reset.
+    pub pending: bool,
+}
+
+/// Every tied guest by principal id, with whether they are pending.
+pub fn tie_display() -> Result<HashMap<String, TieDisplay>, String> {
+    let ties = skin::ties::list()?;
+    if ties.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let grants = skin::list_grants()?;
+    let roles = skin::list_roles()?;
+    let mut app_ws: HashMap<String, Option<String>> = HashMap::new();
+    let mut out = HashMap::new();
+    for tie in ties {
+        let pending = skin::ties::pending(&tie, &tie.principal_id, &grants, &roles, &|app: &str| {
+            if let Some(hit) = app_ws.get(app) {
+                return hit.clone();
+            }
+            skin::ties::app_workspace(app)
+        });
+        for g in grants.iter().filter(|g| g.subject_id == tie.principal_id && g.kind == "app") {
+            app_ws.entry(g.target_id.clone()).or_insert_with(|| skin::ties::app_workspace(&g.target_id));
+        }
+        let handle = crate::apps::routes::ws_handle(&tie.workspace_id);
+        out.insert(tie.principal_id.clone(), TieDisplay { handle, pending, tie });
+    }
+    Ok(out)
 }
 
 fn email_field(v: &serde_json::Value) -> Result<Option<&str>, CliResponse> {
@@ -334,8 +387,11 @@ pub fn agent_scoped(
         }
         // The checks above passed for `ws`: the handlers that act
         // differently for an agent get its workspace.
-        if path == "/cli/skin/users/rooms" {
-            return users_rooms(body, actor, Some(ws));
+        match path {
+            "/cli/skin/users/rooms" => return users_rooms(body, actor, Some(ws)),
+            "/cli/skin/users/password" => return users_password(body, actor, Some(ws)),
+            "/cli/skin/users/email" => return users_email(body, actor, Some(ws)),
+            _ => {}
         }
     }
     handler(body, actor)
@@ -850,7 +906,7 @@ fn users_post(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
                 Ok(a) => a,
                 Err(r) => return r,
             };
-            skin::add_principal_for_app_by(username, email, &app, role, actor, skin::AddedBy { agent_workspace: Some(ws) })
+            skin::add_principal_for_app_by(username, email, &app, role, actor, skin::AddedBy { agent_workspace: Some(ws), ..Default::default() })
         }
         None => match app_field(&v) {
             // S24-12: an App-only guest — that App's grant, no box login.
@@ -881,7 +937,8 @@ fn users_post(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
             k2_core::log_debug!("[skin] actor={actor} added principal {}", p.username);
             let password = str_field(&v, &["password"]);
             if password.is_some() {
-                match skin::set_principal_password(&p.username, password) {
+                let tie = agent_ws.map(|ws| skin::ties::TieWrite { workspace_id: ws, set_by: actor, reason: skin::ties::REASON_PASSWORD });
+                match skin::set_principal_password_tied(&p.username, password, tie) {
                     Ok(p) => {
                         return CliResponse::ok_json(
                             serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()),
@@ -897,6 +954,12 @@ fn users_post(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
 }
 
 pub fn handle_users_email(body: &[u8], actor: &str) -> CliResponse {
+    users_email(body, actor, None)
+}
+
+/// `agent_ws`: an agent of that workspace set it (agent-app-users R2): the
+/// guest is tied to the workspace in the same transaction.
+fn users_email(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
         Err(r) => return r,
@@ -911,7 +974,8 @@ pub fn handle_users_email(body: &[u8], actor: &str) -> CliResponse {
         Ok(e) => e,
         Err(r) => return r,
     };
-    match skin::set_principal_email_as(username, email, actor) {
+    let tie = agent_ws.map(|ws| skin::ties::TieWrite { workspace_id: ws, set_by: actor, reason: skin::ties::REASON_EMAIL });
+    match skin::set_principal_email_tied(username, email, actor, tie) {
         Ok(p) => {
             k2_core::log_debug!(
                 "[skin] actor={actor} set email for {} has_email={}",
@@ -1025,6 +1089,12 @@ pub fn handle_users_agent(body: &[u8], actor: &str) -> CliResponse {
 }
 
 pub fn handle_users_password(body: &[u8], actor: &str) -> CliResponse {
+    users_password(body, actor, None)
+}
+
+/// `agent_ws`: an agent of that workspace set it (agent-app-users R2): the
+/// guest is tied to the workspace in the same transaction.
+fn users_password(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
         Err(r) => return r,
@@ -1040,7 +1110,8 @@ pub fn handle_users_password(body: &[u8], actor: &str) -> CliResponse {
         .and_then(|x| x.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    match skin::set_principal_password(username, password) {
+    let tie = agent_ws.map(|ws| skin::ties::TieWrite { workspace_id: ws, set_by: actor, reason: skin::ties::REASON_PASSWORD });
+    match skin::set_principal_password_tied(username, password, tie) {
         Ok(p) => {
             k2_core::log_debug!(
                 "[skin] actor={actor} set password for {} has_password={}",

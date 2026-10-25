@@ -346,7 +346,12 @@ fn create_user(c: &Ctx, v: &J) -> R {
         None => None,
     };
     let actor = c.actor();
-    let p = skin::add_principal_for_app(&user, field(v, "email"), &c.app, role_id.as_deref(), &actor).map_err(|e| {
+    // agent-app-users Q3/A12: the key lives in the App's runtime, which
+    // that workspace's agent can read, so a person the key makes (or gives
+    // a password) is tied to the App's workspace like an agent's.
+    let ws = skin::ties::app_workspace(&c.app).ok_or_else(|| err(409, "app_gone", "this App's service is gone"))?;
+    let by = skin::AddedBy { app_key_workspace: Some(&ws), ..Default::default() };
+    let p = skin::add_principal_for_app_by(&user, field(v, "email"), &c.app, role_id.as_deref(), &actor, by).map_err(|e| {
         if e.contains("already exists") {
             err(409, "user_exists", e)
         } else {
@@ -364,7 +369,8 @@ fn create_user(c: &Ctx, v: &J) -> R {
         skin::set_app_grant_rooms(&user, &c.app, &ids, true, &actor).map_err(|e| err(400, "bad_request", e))?;
     }
     if let Some(pw) = field(v, "password") {
-        skin::set_principal_password(&user, Some(pw)).map_err(|e| err(400, "bad_password", e))?;
+        let tie = skin::ties::TieWrite { workspace_id: &ws, set_by: &actor, reason: skin::ties::REASON_APP_KEY };
+        skin::set_principal_password_tied(&user, Some(pw), Some(tie)).map_err(|e| err(400, "bad_password", e))?;
     }
     let (_, g) = app_grant(c, &p.username)?;
     let p = skin::list_principals().map_err(|e| err(500, "store", e))?.into_iter().find(|x| x.id == p.id).unwrap_or(p);

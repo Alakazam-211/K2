@@ -459,13 +459,15 @@ fn finish(session: SkinAppSession) -> SkinAppSession {
 pub fn login_device(username: &str, app: &str, device: &Device) -> Result<Option<DeviceSession>, String> {
     let username = normalize_username(username)?;
     let app = normalize_app_target(Some(app));
+    // A21: the App's workspace (daemon DB) before the skin mutex.
+    let app_ws = super::ties::app_workspace(&app);
     let r = with_conn(|conn| {
         let tx = immediate_tx(conn)?;
         let stay = settings_conn(&tx, &app)?.stay_signed_in_days;
         if stay == 0 {
             return Ok(None);
         }
-        let session = mint_app_session_conn(&tx, &username, &app)?;
+        let session = mint_app_session_conn(&tx, &username, &app, app_ws.as_deref())?;
         let principal = principal_by_username(&tx, &username)?.ok_or_else(|| HOST_LOGIN_DENIED.to_string())?;
         let (chain, refresh, expires) = new_chain_conn(&tx, &principal.id, &app, device, &session.meta.id, stay)?;
         let pass_expires = cap_pass_expiry(&tx, &session.meta.id, expires)?;
@@ -503,6 +505,14 @@ pub fn refresh(raw: &str, app: Option<&str>) -> Result<Refresh, String> {
     }
     let hash = sha256_hex(raw);
     let asked_app = app.map(str::trim).filter(|a| !a.is_empty()).map(|a| normalize_app_target(Some(a)));
+    // A21: the chain's App and its workspace (daemon DB) before the skin
+    // mutex is taken for the rotation. A chain's App never changes.
+    let chain_app: Option<String> = with_conn(|conn| {
+        conn.query_row("SELECT app_id FROM device_logins WHERE refresh_hash = ?1", params![hash], |r| r.get(0))
+            .optional()
+            .map_err(|e| format!("refresh lookup: {e}"))
+    })?;
+    let chain_ws = chain_app.as_deref().and_then(super::ties::app_workspace);
     let r = with_conn(|conn| {
         let tx = immediate_tx(conn)?;
         struct Row {
@@ -576,7 +586,10 @@ pub fn refresh(raw: &str, app: Option<&str>) -> Result<Refresh, String> {
             .optional()
             .map_err(|e| format!("refresh principal: {e}"))?;
         let minted = match username {
-            Some(u) => mint_app_session_conn(&tx, &u, &row.app),
+            Some(u) if chain_app.as_deref() == Some(row.app.as_str()) => {
+                mint_app_session_conn(&tx, &u, &row.app, chain_ws.as_deref())
+            }
+            Some(_) => Err(HOST_LOGIN_DENIED.to_string()),
             None => Err(HOST_LOGIN_DENIED.to_string()),
         };
         let session = match minted {

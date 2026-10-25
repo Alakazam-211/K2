@@ -7,14 +7,27 @@
 #
 #   bash scripts/sign-daemon.sh --preflight [<version>]   # release.sh Step 0.45
 #   bash scripts/sign-daemon.sh <version>                 # release.sh Step 10.5
-#   bash scripts/sign-daemon.sh <version> --from-dir <dir>  # K2 Compute files
-#   bash scripts/sign-daemon.sh <version> --dry --from-dir <dir> \
+#   bash scripts/sign-daemon.sh <version> --from-dir <dir> --compute-verdict <state-dir>
+#                                                         # K2 Compute files
+#   bash scripts/sign-daemon.sh <version> --dry --from-dir <dir> --compute-verdict <state-dir> \
 #        --manifest <daemon-latest.json> --out <dir>      # no GitHub at all
 #
 # For each arch (x86_64, aarch64):
 #   1. get k2-daemon-linux-<arch> + .sha256: from --from-dir when it has
 #      them (K2 Compute, after compute_release.py checked the receipts),
 #      else wait for daemon-binaries.yml to upload them to the release;
+#   1b. provenance (security review of SS1): a daemon is signed only when
+#      we know where it came from.
+#      GitHub builds: (a) `gh attestation verify` passes for this repo, the
+#      daemon-binaries.yml workflow, the tag's ref and the tag's commit (the
+#      workflow attests each daemon with actions/attest-build-provenance);
+#      (b) the release asset and its .sha256 were uploaded exactly once, by
+#      github-actions[bot], after the release was created (the workflow
+#      uploads them without --clobber).
+#      K2 Compute builds (--from-dir): --compute-verdict names the state dir
+#      where compute_release.py wrote <label>.verdict.json after checking
+#      each job's signed receipt; the daemon's sha256 must be in a verdict
+#      with ok:true (and, off --dry, that verdict's commit is the tag's);
 #   2. check the sha256, then scripts/lib/check-daemon-asset.py (ELF of the
 #      right arch, exactly one K2_DAEMON_BUILD marker for this version, no
 #      test-keys, k2-ptyd embedded), then the OAuth bake check
@@ -28,12 +41,18 @@
 # (the same script CI's old merge job ran: same keys and fields, plus
 # `sig2`) and upload the .sig/.sig2 files, THEN the manifest, so the
 # manifest never lists a daemon whose signatures aren't up yet. Finally it
-# re-downloads the published manifest and .sig2 files and checks them the
-# way a 0.46.4 install does.
+# re-downloads the published manifest, each published daemon (its hash must
+# be the one it signed) and the .sig2 files, and checks them the way a
+# 0.46.4 install does.
 #
-# What this does NOT fix: a poisoned build. A compromised runner or compute
-# node can still build a bad daemon that passes these byte checks, and this
-# script will sign it. SS1 stops the key from being copied off GitHub.
+# What this does NOT fix: a poisoned build. The attestation proves the bytes
+# came out of daemon-binaries.yml at the tag's commit, not that the runner
+# was clean: a compromised self-hosted runner can still build a bad daemon
+# that passes every check here, and this script will sign it. SS1 stops the
+# key from being copied off GitHub and stops a swapped release asset. The
+# real fix is two independent builds (GitHub + K2 Compute) whose hashes
+# must match, which needs reproducible builds: 0.46.5 work, owner K2 (plan
+# G12; docs/release/updater-key-ceremony.md "Next: two independent builds").
 #
 # Environment:
 #   K2_RELEASE_REPO           default Alakazam-211/K2
@@ -94,10 +113,11 @@ VERSION="${1:-}"
 VERSION="${VERSION#v}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "usage: sign-daemon.sh <x.y.z> [--from-dir DIR] [--dry --manifest FILE --out DIR] | --preflight [<x.y.z>]"
 shift
-FROM_DIR="" MANIFEST="" OUT="" DRY=0
+FROM_DIR="" MANIFEST="" OUT="" DRY=0 VERDICTS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --from-dir) FROM_DIR="${2:?--from-dir DIR}"; shift 2 ;;
+        --compute-verdict) VERDICTS="${2:?--compute-verdict DIR}"; shift 2 ;;
         --manifest) MANIFEST="${2:?--manifest FILE}"; shift 2 ;;
         --out) OUT="${2:?--out DIR}"; shift 2 ;;
         --dry) DRY=1; shift ;;
@@ -110,6 +130,9 @@ else
     command -v gh >/dev/null 2>&1 || die "gh is not installed"
 fi
 [ -z "$FROM_DIR" ] || [ -d "$FROM_DIR" ] || die "--from-dir $FROM_DIR is not a directory"
+if [ -n "$FROM_DIR" ]; then
+    [ -n "$VERDICTS" ] && [ -d "$VERDICTS" ] || die "--from-dir needs --compute-verdict <state dir> (compute_release.py's receipt checks): no provenance, no signature"
+fi
 k2u_env_guard || exit 1
 
 # The OAuth bake check needs the real values; take only these names from .env.
@@ -148,6 +171,57 @@ wait_for_github() {
     done
 }
 
+# Provenance.
+TAG_COMMIT=""
+if [ "$DRY" = 0 ]; then
+    TAG_COMMIT="$(gh api "repos/$REPO/commits/$TAG" --jq .sha)" || die "can't resolve the commit of $TAG"
+    [[ "$TAG_COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "$TAG resolves to '$TAG_COMMIT', not a commit"
+fi
+
+check_github_provenance() { # <file> <asset>
+    local f="$1" a="$2"
+    if ! gh attestation verify "$f" -R "$REPO" \
+        --signer-workflow "$REPO/.github/workflows/daemon-binaries.yml" \
+        --source-ref "refs/tags/$TAG" --source-digest "$TAG_COMMIT" >"$WORK/attest-$a.out" 2>&1; then
+        sed 's/^/    /' "$WORK/attest-$a.out" >&2
+        die "$a: no valid build-provenance attestation from daemon-binaries.yml at $TAG ($TAG_COMMIT) — not signing"
+    fi
+    gh api "repos/$REPO/releases/tags/$TAG" > "$WORK/release.json" || die "can't read the $TAG release"
+    python3 -I - "$WORK/release.json" "$a" <<'PY' || die "$a: the release asset's uploader or upload time is wrong — not signing"
+import json, sys
+rel, name = json.load(open(sys.argv[1])), sys.argv[2]
+created = rel["created_at"]
+for n in (name, name + ".sha256"):
+    hits = [x for x in rel["assets"] if x["name"] == n]
+    if len(hits) != 1:
+        sys.exit("%s: %d assets with that name" % (n, len(hits)))
+    x = hits[0]
+    if (x.get("uploader") or {}).get("login") != "github-actions[bot]":
+        sys.exit("%s: uploaded by %r, not github-actions[bot]" % (n, (x.get("uploader") or {}).get("login")))
+    if x["created_at"] < created:
+        sys.exit("%s: uploaded %s, before the release (%s)" % (n, x["created_at"], created))
+PY
+    log "$a: provenance ok (attested by daemon-binaries.yml at $TAG, uploaded by github-actions[bot])"
+}
+
+check_compute_provenance() { # <file> <asset>
+    python3 -I - "$VERDICTS" "$2" "$(sha256_of "$1")" "$TAG_COMMIT" <<'PY' || die "$2: no ok compute verdict lists these bytes — not signing"
+import glob, json, os, sys
+d, name, sha, commit = sys.argv[1:5]
+for p in sorted(glob.glob(os.path.join(d, "*.verdict.json"))):
+    v = json.load(open(p))
+    if v.get("ok") is not True or v.get("problems"):
+        continue
+    if commit and v.get("commit") != commit:
+        continue
+    for k, meta in (v.get("files") or {}).items():
+        if k.rsplit("/", 1)[-1] == name and meta.get("sha256") == sha:
+            print("%s: in %s (job %s)" % (name, os.path.basename(p), v.get("job")))
+            sys.exit(0)
+sys.exit(1)
+PY
+}
+
 # 1. Fetch.
 gh_needed=()
 for ARCH in "${ARCHES[@]}"; do
@@ -183,6 +257,11 @@ for ARCH in "${ARCHES[@]}"; do
     want="$(awk '{print $1; exit}' "$ASSETS/$A.sha256")"
     got="$(sha256_of "$ASSETS/$A")"
     [ -n "$want" ] && [ "$want" = "$got" ] || die "$A: sha256 differs from its .sha256 ($got vs $want)"
+    if [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/$A" ]; then
+        check_compute_provenance "$ASSETS/$A" "$A"
+    else
+        check_github_provenance "$ASSETS/$A" "$A"
+    fi
     python3 -I "$ROOT/scripts/lib/check-daemon-asset.py" "$ASSETS/$A" "$ARCH" "$VERSION" || die "$A failed the byte checks (above) — not signing"
     ( # shellcheck source=require-mail-oauth-build-env.sh
       source "$ROOT/scripts/require-mail-oauth-build-env.sh"
@@ -234,7 +313,9 @@ import json, sys
 e = json.load(open(sys.argv[1]))["artifacts"][sys.argv[2]]
 sys.exit(0 if e.get("sha256") == sys.argv[3] and e.get("sig2") == sys.argv[4] else 1)
 PY
-    gh release download "$TAG" -R "$REPO" -p "$A.sig2" -D "$CHECK" --clobber
-    k2u_verify_u2 "$ASSETS/$A" "$CHECK/$A.sig2" "$A" "$VERSION" || die "published $A.sig2 does not verify with UPDATER_KEYS"
+    gh release download "$TAG" -R "$REPO" -p "$A" -p "$A.sig2" -D "$CHECK" --clobber
+    [ "$(sha256_of "$CHECK/$A")" = "$(sha256_of "$ASSETS/$A")" ] \
+        || die "the published $A is not the binary that was signed (swapped after signing?) — delete its .sig/.sig2 from $TAG now"
+    k2u_verify_u2 "$CHECK/$A" "$CHECK/$A.sig2" "$A" "$VERSION" || die "published $A.sig2 does not verify with UPDATER_KEYS"
 done
-log "done: $TAG Linux daemons signed (U1 + U2); daemon-latest.json lists them; the published sig2 files verify"
+log "done: $TAG Linux daemons signed (U1 + U2); daemon-latest.json lists them; the published binaries are the signed ones and their sig2 verify"

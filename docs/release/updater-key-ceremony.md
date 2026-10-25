@@ -141,3 +141,20 @@ rm ~/.tauri/k2-updater.key ~/.tauri/k2so-updater.key
   the `k2-updater-signing-u2` keychain item, and release as usual.
 - **U2 stolen:** an emergency release signed with U3 that drops U2 from
   `UPDATER_KEYS`, plus a new backup.
+
+## Next: two independent builds (0.46.5, owner: K2)
+
+0.46.4 signs a Linux daemon only when GitHub's build-provenance attestation
+says it came out of `daemon-binaries.yml` at the tag's commit, and the
+release asset was uploaded once by `github-actions[bot]` (`sign-daemon.sh`).
+That stops a swapped release asset. It does **not** stop a poisoned build:
+a compromised self-hosted runner can build a bad daemon, attest it and pass
+every byte check.
+
+The real fix is to build each Linux daemon twice, on GitHub and on K2
+Compute (different machines, different owners), and sign only when the two
+hashes match. That needs reproducible builds: a pinned rustc, `--remap-path-prefix`,
+no timestamps or absolute paths in the binary (plan-ci-release-on-k2-compute
+G12; the shadow report already compares the two). Owner: K2 (this
+workspace), for 0.46.5. Until then the residual risk is written down in the
+SS1 threat notes.

@@ -92,7 +92,8 @@
 #     compute           stage 1 (compute files are the release, signed
 #                       here, one publish): not built yet, refused. The
 #                       daemon signing piece exists already:
-#                       scripts/sign-daemon.sh <v> --from-dir <compute dist>.
+#                       scripts/sign-daemon.sh <v> --from-dir <compute dist>
+#                       --compute-verdict <audit dir> (receipt-checked).
 #   aarch64 stays on GitHub until the ARM Linux VM node exists
 #   (K2_COMPUTE_ARM_NODE, plan G10).
 #

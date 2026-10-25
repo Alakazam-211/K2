@@ -67,6 +67,34 @@ case "$1 $2" in
         while [ $# -gt 0 ]; do
             case "$1" in -R|--repo) shift 2 ;; --clobber) shift ;; *) cp "$1" "$STUB_REL/$tag/"; printf 'UPLOAD %s\n' "$(basename "$1")" >> "$STUB_GH_LOG"; shift ;; esac
         done
+        # A swap right after the manifest goes up (the post-publish check).
+        if [ -n "${STUB_SWAP_AFTER_MANIFEST:-}" ] && [ -f "$STUB_REL/$tag/daemon-latest.json" ]; then
+            printf 'swapped' >> "$STUB_REL/$tag/$STUB_SWAP_AFTER_MANIFEST"
+        fi
+        exit 0 ;;
+    "attestation verify")
+        # Passes only for bytes listed in $STUB_ATTESTED (sha256 per line) and
+        # only when asked for this workflow + the tag commit.
+        f="$3"; shift 3; wf="" digest="" ref=""
+        while [ $# -gt 0 ]; do
+            case "$1" in --signer-workflow) wf="$2"; shift 2 ;; --source-digest) digest="$2"; shift 2 ;; --source-ref) ref="$2"; shift 2 ;; *) shift ;; esac
+        done
+        sha="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$f")"
+        [ "$wf" = "Alakazam-211/K2/.github/workflows/daemon-binaries.yml" ] || { echo "wrong workflow $wf" >&2; exit 1; }
+        [ "$digest" = "${STUB_ATTESTED_COMMIT:-$STUB_TAG_COMMIT}" ] || { echo "no attestation for commit $digest" >&2; exit 1; }
+        case "$ref" in refs/tags/v*) ;; *) echo "wrong ref $ref" >&2; exit 1 ;; esac
+        grep -qx "$sha" "${STUB_ATTESTED:-/dev/null}" || { echo "Error: no attestations found for subject" >&2; exit 1; }
+        exit 0 ;;
+    "api repos/Alakazam-211/K2/commits/"*)
+        printf '%s\n' "$STUB_TAG_COMMIT"; exit 0 ;;
+    "api repos/Alakazam-211/K2/releases/tags/"*)
+        tag="${2##*/}"
+        python3 -I - "$STUB_REL/$tag" "${STUB_UPLOADER:-github-actions[bot]}" "${STUB_ASSET_TIME:-2026-10-24T12:00:00Z}" <<'PY'
+import json, os, sys
+d, who, t = sys.argv[1:4]
+print(json.dumps({"created_at": "2026-10-24T11:00:00Z", "assets": [
+    {"name": n, "uploader": {"login": who}, "created_at": t} for n in sorted(os.listdir(d))]}))
+PY
         exit 0 ;;
 esac
 echo "stub gh: unsupported: $*" >&2; exit 2
@@ -349,9 +377,23 @@ bash -c "source '$ROOT/scripts/daemon-manifest.sh'; k2_daemon_manifest $V 2026-1
 echo "== check-daemon-asset.py =="
 python3 -I "$ROOT/scripts/lib/check-daemon-asset.py" "$good/k2-daemon-linux-x86_64" x86_64 "$V" >/dev/null && pass "a good x86_64 daemon passes" || fail "good asset" ""
 
+# What compute_release.py writes after checking a job's signed receipt.
+mkverdict() { # <dist dir> <state dir> [ok=true]
+    mkdir -p "$2"
+    python3 -I - "$1" "$2" "${3:-true}" <<'PY'
+import hashlib, json, os, sys
+d, out, ok = sys.argv[1:4]
+files = {"dist/" + n: {"sha256": hashlib.sha256(open(os.path.join(d, n), "rb").read()).hexdigest(), "bytes": 1}
+         for n in sorted(os.listdir(d)) if n.startswith("k2-daemon-linux-") and not n.endswith(".sha256")}
+json.dump({"label": "L1", "ok": ok == "true", "commit": "c" * 40, "files": files, "problems": [] if ok == "true" else ["x"]},
+          open(os.path.join(out, "L1.verdict.json"), "w"))
+PY
+}
+mkverdict "$good" "$tmp/verdict-good"
+
 echo "== sign-daemon.sh --dry: good builds =="
 out="$tmp/out-good"
-if bash "$ROOT/scripts/sign-daemon.sh" "$V" --dry --from-dir "$good" --manifest "$tmp/daemon-latest.json" --out "$out" >"$tmp/sd.log" 2>&1; then
+if bash "$ROOT/scripts/sign-daemon.sh" "$V" --dry --from-dir "$good" --compute-verdict "$tmp/verdict-good" --manifest "$tmp/daemon-latest.json" --out "$out" >"$tmp/sd.log" 2>&1; then
     pass "signs both arches and merges the manifest"
 else
     fail "sign-daemon dry" "$(tail -20 "$tmp/sd.log")"
@@ -386,9 +428,11 @@ echo "== sign-daemon.sh --dry: refusals (nothing signed) =="
 refuse() { # <label> <expect-in-output> <setup cmd…>
     local label="$1" expect="$2"; shift 2
     local d="$tmp/bad-$label" o="$tmp/out-$label"
-    rm -rf "$d" "$o"; cp -R "$good" "$d"
+    rm -rf "$d" "$o" "$d.verdict"; cp -R "$good" "$d"
     "$@" "$d"
-    if bash "$ROOT/scripts/sign-daemon.sh" "$V" --dry --from-dir "$d" --manifest "$tmp/daemon-latest.json" --out "$o" >"$tmp/r.log" 2>&1; then
+    # The verdict follows the (changed) bytes, so the byte checks get a turn.
+    mkverdict "$d" "$d.verdict"
+    if bash "$ROOT/scripts/sign-daemon.sh" "$V" --dry --from-dir "$d" --compute-verdict "$d.verdict" --manifest "$tmp/daemon-latest.json" --out "$o" >"$tmp/r.log" 2>&1; then
         fail "$label" "signed anyway"
     elif ! grep -q -- "$expect" "$tmp/r.log"; then
         fail "$label" "wrong reason: $(tail -5 "$tmp/r.log")"
@@ -416,14 +460,64 @@ refuse test-pins "K2_SEW_TEST_PINS_ENABLED" t_test
 refuse no-ptyd "does not embed k2-ptyd" t_ptyd
 refuse placeholder-oauth "OAuth bake check failed" t_oauth
 refuse missing-sha "not in" t_missing
-if bash "$ROOT/scripts/sign-daemon.sh" "$V" --dry --from-dir "$good" --out "$tmp/o2" >/dev/null 2>&1; then fail "dry needs manifest" "ran"; else pass "--dry without --manifest refused (never falls back to GitHub)"; fi
+if bash "$ROOT/scripts/sign-daemon.sh" "$V" --dry --from-dir "$good" --compute-verdict "$tmp/verdict-good" --out "$tmp/o2" >/dev/null 2>&1; then fail "dry needs manifest" "ran"; else pass "--dry without --manifest refused (never falls back to GitHub)"; fi
+
+echo "== compute provenance: no ok verdict for these bytes, no signature =="
+prov_refuses() { # <label> <expect> <args…>
+    local label="$1" expect="$2"; shift 2
+    rm -rf "$tmp/o3"
+    if bash "$ROOT/scripts/sign-daemon.sh" "$V" --dry --from-dir "$good" --manifest "$tmp/daemon-latest.json" --out "$tmp/o3" "$@" >"$tmp/r.log" 2>&1; then
+        fail "provenance $label" "signed anyway"
+    elif grep -q -- "$expect" "$tmp/r.log" && ! ls "$tmp/o3"/*.sig >/dev/null 2>&1; then
+        pass "refused: $label"
+    else
+        fail "provenance $label" "$(tail -3 "$tmp/r.log")"
+    fi
+}
+prov_refuses "--from-dir without --compute-verdict" "needs --compute-verdict"
+mkverdict "$good" "$tmp/verdict-bad" false
+prov_refuses "a verdict that isn't ok" "no ok compute verdict" --compute-verdict "$tmp/verdict-bad"
+mkdir -p "$tmp/other-dist"; cp "$good"/k2-daemon-linux-* "$tmp/other-dist/"; printf 'x' >> "$tmp/other-dist/k2-daemon-linux-aarch64"
+mkverdict "$tmp/other-dist" "$tmp/verdict-other"
+prov_refuses "a verdict for other bytes" "no ok compute verdict" --compute-verdict "$tmp/verdict-other"
 
 echo "== sign-daemon.sh: the GitHub path (stub gh) =="
-rel="$STUB_REL/v$V"; mkdir -p "$rel"
-cp "$good"/k2-daemon-linux-* "$good"/k2-app-engine-linux-* "$rel/"
-cp "$tmp/daemon-latest.json" "$rel/daemon-latest.json"
-: > "$STUB_GH_LOG"
+export STUB_TAG_COMMIT="$(printf 'a%.0s' $(seq 1 40))"
+export STUB_ATTESTED="$tmp/attested"
+for a in x86_64 aarch64; do awk '{print $1}' "$good/k2-daemon-linux-$a.sha256"; done > "$STUB_ATTESTED"
+fresh_rel() {
+    rm -rf "$STUB_REL/v$V"; mkdir -p "$STUB_REL/v$V"
+    cp "$good"/k2-daemon-linux-* "$good"/k2-app-engine-linux-* "$STUB_REL/v$V/"
+    cp "$tmp/daemon-latest.json" "$STUB_REL/v$V/daemon-latest.json"
+    : > "$STUB_GH_LOG"
+}
+gh_refuses() { # <label> <expect> [env…]
+    local label="$1" expect="$2"; shift 2
+    fresh_rel
+    if env "$@" K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" >"$tmp/gh.out" 2>&1; then
+        fail "github $label" "signed"
+    elif ! grep -q -- "$expect" "$tmp/gh.out"; then
+        fail "github $label" "wrong reason: $(tail -4 "$tmp/gh.out")"
+    elif grep -q '^UPLOAD .*\.sig' "$STUB_GH_LOG"; then
+        fail "github $label" "uploaded a signature"
+    else
+        pass "refused: $label (no signature uploaded)"
+    fi
+}
+gh_refuses "no build-provenance attestation" "no valid build-provenance attestation" STUB_ATTESTED=/dev/null
+gh_refuses "an attestation made at another commit" "no valid build-provenance attestation" STUB_ATTESTED_COMMIT="$(printf 'b%.0s' $(seq 1 40))"
+gh_refuses "an asset uploaded by a person" "uploaded by 'mallory', not github-actions" STUB_UPLOADER=mallory
+gh_refuses "an asset uploaded before the release existed" "before the release" STUB_ASSET_TIME=2026-10-24T10:00:00Z
+fresh_rel
+if STUB_SWAP_AFTER_MANIFEST=k2-daemon-linux-x86_64 K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" >"$tmp/gh.out" 2>&1; then
+    fail "post-publish swap" "not caught"
+else
+    grep -q "is not the binary that was signed" "$tmp/gh.out" && pass "a daemon swapped after signing is caught by the post-publish check" || fail "post-publish swap" "$(tail -4 "$tmp/gh.out")"
+fi
+fresh_rel
+rel="$STUB_REL/v$V"
 if K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" >"$tmp/gh.out" 2>&1; then pass "signs from the release and uploads"; else fail "github path" "$(tail -20 "$tmp/gh.out")"; fi
+grep -q "provenance ok (attested by daemon-binaries.yml" "$tmp/gh.out" && pass "both daemons passed the provenance checks" || fail "provenance log" "$(grep provenance "$tmp/gh.out")"
 python3 -I - "$STUB_GH_LOG" <<'PY' && pass "uploads the .sig and .sig2 files before daemon-latest.json" || fail "upload order" "$(grep UPLOAD "$STUB_GH_LOG")"
 import sys
 ups = [l.split()[1] for l in open(sys.argv[1]) if l.startswith("UPLOAD ")]
@@ -597,6 +691,17 @@ else
 fi
 grep -q '"${{ matrix.asset }}.sha256"' "$wf" && ! grep -q '"${{ matrix.asset }}.sig"' "$wf" \
     && pass "daemon-binaries.yml uploads the daemon .sha256, not a .sig" || fail "workflow upload" ""
+python3 -I - "$wf" <<'PY' && pass "daemon-binaries.yml: SHA-pinned attest-build-provenance for the daemon, id-token/attestations permissions, daemon upload without --clobber" || fail "workflow provenance" "see $wf"
+import re, sys
+t = open(sys.argv[1]).read()
+assert re.search(r"uses: actions/attest-build-provenance@[0-9a-f]{40} # v", t), "attest action not SHA-pinned"
+assert "subject-path: ${{ matrix.asset }}" in t
+assert re.search(r"permissions:\n\s+contents: write\n\s+id-token: write\n\s+attestations: write", t)
+up = t[t.index("- name: Upload to release"):]
+first = up[up.index('gh release upload "$TAG"'):]
+first = first[:first.index("\n          gh release upload", 1)]
+assert "${{ matrix.asset }}" in first and "--clobber" not in first, first
+PY
 R="$ROOT/scripts/release.sh"
 env_line=$(grep -n 'source "$PROJECT_DIR/.env"' "$R" | head -1 | cut -d: -f1)
 guard_line=$(grep -n '^k2u_env_guard$' "$R" | head -1 | cut -d: -f1)

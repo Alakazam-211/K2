@@ -285,10 +285,14 @@ jobs:
       # root-helper key and keep --clobber.
       - name: Upload to release
         env:
+          IN_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="$IN_TAG"
+          # A dispatch input is user text: env only, never spliced into the
+          # script (security review), and it must look like a release tag.
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG" >&2; exit 1; }
           gh release upload "$TAG" \
             "${{ matrix.asset }}" \
             "${{ matrix.asset }}.sha256"
@@ -316,12 +320,16 @@ jobs:
 
       - name: Upload installer
         env:
+          IN_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           bash -n scripts/install-mail-helper.sh
           bash -n scripts/install-root-helper.sh
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="$IN_TAG"
+          # A dispatch input is user text: env only, never spliced into the
+          # script (security review), and it must look like a release tag.
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG" >&2; exit 1; }
           gh release upload "$TAG" scripts/install-mail-helper.sh scripts/install-root-helper.sh --clobber
 
   # No manifest merge here any more (SS1): z3mbpZ signs the Linux daemons

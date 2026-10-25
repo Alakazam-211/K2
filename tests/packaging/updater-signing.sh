@@ -756,6 +756,36 @@ first = up[up.index('gh release upload "$TAG"'):]
 first = first[:first.index("\n          gh release upload", 1)]
 assert "${{ matrix.asset }}" in first and "--clobber" not in first, first
 PY
+python3 -I - "$ROOT/.github/workflows" <<'PY' && pass "no workflow splices a \${{ }} value (other than matrix) into a run: script, and no secret is used outside env:" || fail "workflow injection" "see above"
+import glob, os, re, sys
+bad = []
+for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml"))):
+    lines = open(f).read().split("\n")
+    run_indent = None
+    for n, l in enumerate(lines, 1):
+        ind = len(l) - len(l.lstrip())
+        if run_indent is not None and l.strip() and ind <= run_indent:
+            run_indent = None
+        m = re.match(r"^(\s*)(?:- )?run:\s*(.*)$", l)
+        if m:
+            if m.group(2).strip() in ("|", ">", "|-", ">-"):
+                run_indent = len(m.group(1))
+                continue
+            text = m.group(2)
+        elif run_indent is not None:
+            text = l
+        else:
+            text = None
+        if text is not None:
+            for e in re.findall(r"\$\{\{[^}]*\}\}", text):
+                if not re.match(r"\$\{\{\s*matrix\.", e):
+                    bad.append("%s:%d spliced into run: %s" % (os.path.basename(f), n, e))
+            if "secrets." in text:
+                bad.append("%s:%d secret in a run: script" % (os.path.basename(f), n))
+for b in bad:
+    print(b)
+sys.exit(1 if bad else 0)
+PY
 R="$ROOT/scripts/release.sh"
 env_line=$(grep -n 'source "$PROJECT_DIR/.env"' "$R" | head -1 | cut -d: -f1)
 guard_line=$(grep -n '^k2u_env_guard$' "$R" | head -1 | cut -d: -f1)

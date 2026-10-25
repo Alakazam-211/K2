@@ -93,7 +93,9 @@ assert_daemon_oauth_not_placeholder() {
     fi
     _k2_bin_has() {
         local needle="$1"
-        [ -n "$needle" ] && grep -aF -q "$needle" "$bin" 2>/dev/null
+        # The value goes to grep on stdin (printf is a builtin), never on
+        # argv, where any process on the build box could read it in `ps`.
+        [ -n "$needle" ] && printf '%s\n' "$needle" | grep -aF -q -f - "$bin" 2>/dev/null
     }
     # Env must already be non-placeholder (require_mail_oauth_build_env).
     if _k2_oauth_is_placeholder "${K2_GMAIL_CLIENT_ID:-}"; then

@@ -401,6 +401,11 @@ pub struct Job {
     /// done yet). Never blocks the daemon update.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine: Option<serde_json::Value>,
+    /// The owner asked for this older (`allowDowngrade`) or same-version
+    /// (`reinstall`) target on purpose; [`prepare_apply`] refuses either
+    /// without it.
+    #[serde(skip)]
+    pub version_override: bool,
 }
 
 impl Job {
@@ -416,6 +421,7 @@ impl Job {
             from_version: current_version().to_string(),
             target_known: true,
             engine: None,
+            version_override: false,
         }
     }
 }
@@ -700,6 +706,7 @@ pub fn reconcile_persisted_job(running_version: &str) {
         from_version: rec.from_version.clone(),
         target_known: rec.target_known,
         engine: None,
+        version_override: false,
     };
     jobs()
         .lock()
@@ -817,9 +824,48 @@ pub fn handle_check_body(body: &[u8]) -> CliResponse {
 /// co-located Tauri app (Shape A). `None` in the test harness ⇒ the Shape A
 /// branch fails the job with the "app isn't running" reason (receiver_count
 /// is 0), which is the correct observable behavior with no app attached.
+/// Rollback guard (security review of SS4): a signed release older than
+/// the running daemon (an old manifest replayed as "latest", or a pinned
+/// old version) is refused, and so is the running version itself, unless
+/// the OWNER asks for it on purpose: `allowDowngrade` for an older target,
+/// `reinstall` for the same one. Admins can update, never roll back. An
+/// unparsable version counts as older (fail closed).
+pub fn rollback_guard(
+    target: &str,
+    current: &str,
+    allow_downgrade: bool,
+    reinstall: bool,
+    caller_is_owner: bool,
+) -> Result<bool, CliResponse> {
+    let older = k2_release_keys::version_older_than(target, current);
+    let same = !older && !k2_release_keys::version_older_than(current, target);
+    if !older && !same {
+        return Ok(false);
+    }
+    let (asked, flag, what) = if older {
+        (allow_downgrade, r#"{"allowDowngrade": true} in the update/start body"#, "older than")
+    } else {
+        (reinstall, r#"{"reinstall": true} in the update/start body"#, "the same as")
+    };
+    if !asked {
+        return Err(CliResponse::bad_request(format!(
+            "refusing {target}: it is {what} the running {current}. Only the owner can do that on purpose, with {flag}."
+        )));
+    }
+    if !caller_is_owner {
+        return Err(CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({ "error": format!("only the owner can install {target} over {current}") }).to_string(),
+        });
+    }
+    Ok(true)
+}
+
 pub fn handle_start(
     body: &[u8],
     event_tx: Option<std::sync::Arc<tokio::sync::broadcast::Sender<crate::events::WireEvent>>>,
+    caller_is_owner: bool,
 ) -> CliResponse {
     if k2_core::airgap::enabled() {
         return CliResponse {
@@ -829,9 +875,14 @@ pub fn handle_start(
         };
     }
     #[derive(Deserialize, Default)]
+    #[serde(rename_all = "camelCase")]
     struct Req {
         #[serde(default)]
         version: Option<String>,
+        #[serde(default)]
+        allow_downgrade: bool,
+        #[serde(default)]
+        reinstall: bool,
     }
     let req: Req = if body.is_empty() {
         Req::default()
@@ -849,6 +900,13 @@ pub fn handle_start(
     // doesn't use daemon-latest.json at all (the app has its OWN updater
     // feed); it just needs a job + a trigger.
     if crate::boot_status::install_kind() == "bundled-app" {
+        // The app's own updater offers only newer builds; a pinned older or
+        // same version is still refused here.
+        if let Some(v) = req.version.as_deref() {
+            if let Err(r) = rollback_guard(v, current_version(), req.allow_downgrade, req.reinstall, caller_is_owner) {
+                return r;
+            }
+        }
         return start_bundled_app_update(req.version, event_tx);
     }
 
@@ -878,6 +936,10 @@ pub fn handle_start(
             manifest.version
         ));
     }
+    let version_override = match rollback_guard(&target, current_version(), req.allow_downgrade, req.reinstall, caller_is_owner) {
+        Ok(o) => o,
+        Err(r) => return r,
+    };
     let artifact = match manifest.artifact_for_current_platform() {
         Some(a) => a.clone(),
         None => {
@@ -889,6 +951,7 @@ pub fn handle_start(
     };
 
     let job_id = create_job(&target);
+    update_job(&job_id, |j| j.version_override = version_override);
 
     // Detached worker: download + verify + stage. Runs on the blocking
     // pool so it NEVER ties up an accept-loop thread. The HTTP thread has
@@ -1219,6 +1282,11 @@ pub fn prepare_apply(job_id: &str) -> Result<ApplyPlan, CliResponse> {
             "staged binary missing at {}",
             staged_path.display()
         )));
+    }
+    // Rollback guard again at apply: a staged job never swaps in an older or
+    // the same version unless the owner asked for it when it started.
+    if !job.version_override {
+        rollback_guard(&job.target_version, current_version(), false, false, false)?;
     }
     let running_path = std::env::current_exe()
         .map_err(|e| CliResponse::internal_error(format!("resolve current_exe: {e}")))?;
@@ -2530,6 +2598,51 @@ mod tests {
     }
 
     #[test]
+    fn daemon_update_rollback_guard_refuses_older_and_same_unless_the_owner_asks() {
+        // An older signed release served as "latest" (a replayed manifest).
+        let e = rollback_guard("0.46.4", "0.46.5", false, false, true).unwrap_err();
+        assert_eq!(e.status, "400 Bad Request");
+        assert!(e.body.contains("older than") && e.body.contains("allowDowngrade"), "{}", e.body);
+        // Admin asking: still no.
+        let e = rollback_guard("0.46.4", "0.46.5", true, false, false).unwrap_err();
+        assert_eq!(e.status, "403 Forbidden");
+        assert_eq!(rollback_guard("0.46.4", "0.46.5", true, false, true).expect("owner downgrade"), true);
+        // reinstall does not unlock a downgrade.
+        assert!(rollback_guard("0.46.4", "0.46.5", false, true, true).is_err());
+        // Same version: refused unless the owner reinstalls on purpose.
+        assert!(rollback_guard("0.46.5", "0.46.5", false, false, true).unwrap_err().body.contains("the same as"));
+        assert!(rollback_guard("0.46.5", "0.46.5", false, true, false).is_err());
+        assert_eq!(rollback_guard("0.46.5", "0.46.5", false, true, true).expect("owner reinstall"), true);
+        // allowDowngrade does not unlock a reinstall.
+        assert!(rollback_guard("0.46.5", "0.46.5", true, false, true).is_err());
+        // Newer: fine for anyone allowed to update, no override recorded.
+        assert_eq!(rollback_guard("0.46.6", "0.46.5", false, false, false).expect("newer"), false);
+        assert_eq!(rollback_guard("0.47.0", "0.46.10", false, false, false).expect("newer"), false);
+        // Unparsable counts as older: refused.
+        assert!(rollback_guard("junk", "0.46.5", false, false, true).is_err());
+    }
+
+    #[test]
+    fn daemon_update_apply_refuses_a_staged_rollback_without_the_owner_override() {
+        let _g = clear_jobs_for_test();
+        let dir = std::env::temp_dir().join(format!("k2-rollback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let staged = dir.join("k2-daemon");
+        std::fs::write(&staged, b"x").expect("write");
+        let older = "0.0.1";
+        let id = create_job(older);
+        update_job(&id, |j| {
+            j.phase = Phase::Staged;
+            j.staged_path = Some(staged.clone());
+        });
+        let e = prepare_apply(&id).err().expect("an older staged build is refused at apply");
+        assert!(e.body.contains("older than"), "{}", e.body);
+        update_job(&id, |j| j.version_override = true);
+        prepare_apply(&id).expect("the owner's override applies");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn daemon_update_a_u1_only_release_is_refused_before_any_download() {
         let _g = clear_jobs_for_test();
         let platform = platform_key();
@@ -2882,7 +2995,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("mk tmp");
         let staged = dir.join("k2-daemon");
         std::fs::write(&staged, b"#!fake binary").expect("write staged");
-        let id = create_job("0.40.0");
+        let id = create_job("999.0.0");
         update_job(&id, |j| {
             j.phase = Phase::Staged;
             j.staged_path = Some(staged.clone());
@@ -2891,10 +3004,10 @@ mod tests {
             Ok(p) => p,
             Err(resp) => panic!("staged + existing file should plan; got {}", resp.status),
         };
-        assert_eq!(plan.target_version, "0.40.0");
+        assert_eq!(plan.target_version, "999.0.0");
         assert_eq!(plan.staged_path, staged);
         assert!(
-            plan.backup_path.to_string_lossy().contains("backup-0.40.0"),
+            plan.backup_path.to_string_lossy().contains("backup-999.0.0"),
             "backup path: {}",
             plan.backup_path.display()
         );
@@ -2910,7 +3023,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("mk tmp");
         let staged = dir.join("k2-daemon");
         std::fs::write(&staged, b"#!fake binary").expect("write staged");
-        let id = create_job("0.40.0");
+        let id = create_job("999.0.0");
         update_job(&id, |j| {
             j.phase = Phase::Staged;
             j.staged_path = Some(staged.clone());

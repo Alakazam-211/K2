@@ -205,11 +205,13 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
             Some(_) => return Err(no(400, "usage", format!("limit is 1..={}", gr::LIST_MAX), None)),
         };
         let cursor = field("cursor").unwrap_or_default();
-        let page = garden_budget(&ceiling, || gr::list(&t.service_id, &cursor, limit)).map_err(core)?;
+        let page = garden_budget(&maker, || gr::list(&t.service_id, &cursor, limit)).map_err(core)?;
         return serde_json::to_value(page).map_err(|e| no(500, "failed", e.to_string(), None));
     }
     if !write {
-        let view = garden_budget(&ceiling, || gr::read(&t.service_id, &username)).map_err(core)?;
+        // Round-2 B4: a read spends the placement's read budget too.
+        spend_read(&w)?;
+        let view = garden_budget(&maker, || gr::read(&t.service_id, &username)).map_err(core)?;
         return serde_json::to_value(view).map_err(|e| no(500, "failed", e.to_string(), None));
     }
     let rooms: Vec<String> = match args.get("rooms") {
@@ -217,9 +219,10 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
         _ => return Err(no(400, "usage", "guests.setRooms needs rooms: a list of room handles or ids ([] takes every room away)", None)),
     };
     // The confirm-less first call checks everything and counts against
-    // the App's rate too, so a widget can't flood the person with sheets.
+    // the App's rate too (an agent-made widget's; see `garden_budget`), so
+    // a widget can't flood the person with sheets.
     if b.confirm_token.is_none() {
-        garden_budget(&ceiling, || gr::rate_take(&t.service_id)).map_err(core)?;
+        garden_budget(&maker, || gr::rate_take(&t.service_id)).map_err(core)?;
     }
     let (plan, ids) = gr::plan(&t.service_id, &username, &rooms, &ceiling).map_err(core)?;
     if !plan.view.changed {
@@ -248,15 +251,18 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
         ));
     };
     take_confirm(token, &secret)?;
-    let out = garden_budget(&ceiling, || gr::set(&t.service_id, &username, &rooms, &ceiling, &actor(&w, &maker), "garden")).map_err(core)?;
+    let out = garden_budget(&maker, || gr::set(&t.service_id, &username, &rooms, &ceiling, &actor(&w, &maker), "garden")).map_err(core)?;
     serde_json::to_value(out.view).map_err(|e| no(500, "failed", e.to_string(), None))
 }
 
-/// Review B4: a widget with the owner's rights (`Ceiling::AnyRoom`)
-/// doesn't spend the App's 60/min budget (its placement budget and the
-/// confirm sheet still hold); an agent-made widget does.
-fn garden_budget<T>(ceiling: &Ceiling, f: impl FnOnce() -> T) -> T {
-    if *ceiling == Ceiling::AnyRoom {
+/// Review B4 (round 2): only a widget the OWNER (or K2) made skips the
+/// App's 60/min guest-rooms budget. The ceiling is no guide: with Garden
+/// access on, every signed version gets `Ceiling::AnyRoom`, an agent-signed
+/// one included, and that widget pays the App's budget (and the
+/// placement's read budget) like any agent-made code, so it can neither
+/// starve the App nor flood the person with confirm sheets.
+fn garden_budget<T>(maker: &MadeBy, f: impl FnOnce() -> T) -> T {
+    if matches!(maker, MadeBy::Owner | MadeBy::K2) {
         gr::with_owner_budget(f)
     } else {
         f()

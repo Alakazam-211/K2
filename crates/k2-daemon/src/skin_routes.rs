@@ -330,8 +330,27 @@ pub fn agent_scoped(
             k2_core::log_debug!("[skin] actor={actor} refused outside its workspace on {path}");
             return r;
         }
+        // Round-2 review B1: an agent that sets a guest's password or email
+        // could sign in as it, so the guest is tied to the agent's
+        // workspace (and any person claim dropped) BEFORE the change: it
+        // can't answer cards until a person takes it over again.
+        if matches!(path, "/cli/skin/users/password" | "/cli/skin/users/email") {
+            if let Err(r) = tie_named_guest(ws, body) {
+                return r;
+            }
+        }
     }
     handler(body, actor)
+}
+
+/// Tie the guest a password or email body names to the agent's workspace
+/// `ws` ([`skin::creators::tie`]). An unreadable body or an unknown guest
+/// falls through to the handler's own answer (nothing to tie).
+fn tie_named_guest(ws: &str, body: &[u8]) -> Result<(), CliResponse> {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else { return Ok(()) };
+    let Some(username) = str_field(&v, &["username", "name"]) else { return Ok(()) };
+    let Some(p) = principal_named(username)? else { return Ok(()) };
+    skin::creators::tie(&p.id, ws).map_err(CliResponse::internal_error)
 }
 
 fn outside_workspace(what: String) -> CliResponse {

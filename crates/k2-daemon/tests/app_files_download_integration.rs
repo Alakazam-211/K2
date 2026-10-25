@@ -80,6 +80,8 @@ fn seed(docs: &Ws) {
     write(&docs.path, "public/infra/terraform.tfstate", b"{}");
     write(&docs.path, "public/AuthKey_X.p8", b"key");
     write(&docs.path, "public/notes-with-key.txt", b"token: ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n");
+    // Round 2 A3: a hard link into the entry under a harmless name.
+    std::fs::hard_link(docs.path.join("private/secret.txt"), docs.path.join("public/harmless.txt")).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -148,6 +150,7 @@ async fn download_entries_expose_exactly_their_files_and_nothing_else() {
         "public/infra/terraform.tfstate",
         "public/AuthKey_X.p8",
         "public/notes-with-key.txt",
+        "public/harmless.txt",
     ] {
         let r = download(port, &pass, &docs, rel, "").await;
         assert_missing_cap(&r, "files:download", rel);

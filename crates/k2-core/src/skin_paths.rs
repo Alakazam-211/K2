@@ -230,6 +230,14 @@ pub fn drop_root(scope: &RoomPathScope, rel: &[String]) -> Option<String> {
         .cloned()
 }
 
+/// Is `folder` the room-relative `dir` (already split) or inside it?
+/// (Round 2 A1: a guest's `<root>/<user>` must not be, or hold, a folder
+/// some role lists.)
+pub fn folder_holds(dir: &[String], folder: &str) -> bool {
+    let f = folder_segments(folder);
+    f.len() >= dir.len() && dir.iter().zip(f.iter()).all(|(a, b)| a.as_str() == *b)
+}
+
 /// Is the room-relative `rel` (already split) inside one of the line's
 /// download entries (AC15)? A file entry matches itself exactly (the same
 /// segment rule as a folder: `reports/a.pdf` never matches
@@ -661,6 +669,15 @@ mod tests {
         }
         assert!(dl(&[], &["../x"]).is_err());
         assert!(parse_room_paths(Some(r#"{"r1":{"download":["a/b.pdf"]}}"#)).unwrap()["r1"].download == ["a/b.pdf"]);
+    }
+
+    #[test]
+    fn folder_holds_is_the_folder_or_below_it() {
+        assert!(folder_holds(&segs("Inbox/vip"), "Inbox/vip"));
+        assert!(folder_holds(&segs("Inbox/vip"), "Inbox/vip/deep"));
+        assert!(!folder_holds(&segs("Inbox/vip"), "Inbox"));
+        assert!(!folder_holds(&segs("Inbox/vip"), "Inbox/vipx"));
+        assert!(!folder_holds(&segs("Inbox/dana"), "Inbox/vip"));
     }
 
     #[test]

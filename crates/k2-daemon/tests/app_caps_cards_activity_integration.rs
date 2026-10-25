@@ -187,6 +187,18 @@ async fn a_guest_its_agent_added_cant_answer_that_agents_cards() {
     // An owner's guest is a person.
     let r = post(port, "/cli/thread/answer", &person, json!({ "addr": ws.handle, "id": id, "answer": "Go" })).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    // Round-2 B1: the agent resets the password of an OWNER-made guest that
+    // lives wholly in its workspace: that guest is tied from then on.
+    let r = post(port, "/cli/skin/users/password", &agent, json!({ "username": format!("pat{tag}"), "password": "agent-picked-pw" })).await;
+    assert_eq!(r.status, 200, "an agent resets its own workspace's guest: {}", r.body);
+    let body = json!({ "username": format!("pat{tag}"), "password": "agent-picked-pw" }).to_string();
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();
+    assert_eq!(r.status, 200, "{}", r.body);
+    let pat_as_agent = r.json()["token"].as_str().expect("token").to_string();
+    let id3 = ask("One more?").await;
+    let r = post(port, "/cli/thread/answer", &pat_as_agent, json!({ "addr": ws.handle, "id": id3, "answer": "Go" })).await;
+    assert_eq!(r.status, 403, "a guest the agent re-keyed is tied: {}", r.body);
+    assert_eq!(r.code(), "card_person_only", "{}", r.body);
     // A person takes the agent's guest over: from then on it answers.
     let principal = k2_core::skin::list_principals()
         .expect("principals")

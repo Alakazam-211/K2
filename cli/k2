@@ -37614,6 +37614,9 @@ FOLDERS PER ROOM LINE (path scope, 0.46.1)
     and nothing else; no entries = nothing new. A person adds entries; an
     agent may only remove them. files:read = can see the bytes;
     files:download = can save them, or get exposed files without files:read.
+    Never served: .git/, keys and env files, cloud and kube credentials,
+    hard links, and text files whose content looks like a secret. Files over
+    1 MiB or binary files are checked by name only, not by content.
   - GET /cli/fs/stat?workspace=<room>&path=… (files.stat): kind, size,
     modifiedAt, ext, mime under the same rules.
   - Native agents reading another room by disk path are NOT walled (RS-A4);

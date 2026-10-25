@@ -12774,18 +12774,27 @@ async fn handle_one_request(
             } else {
                 None
             };
+            // 0.46.4 review B2 (+ round 2, item 8): the server-set identity
+            // keys never come from a TCP query. `cell_session_id` comes from
+            // the hook token, as the POST arm takes it; `principal_bound`
+            // only from `stamp_principal`.
+            params.remove("cell_session_id");
+            params.remove(crate::caller_workspace::PRINCIPAL_BOUND_KEY);
+            if let Some(v) = {
+                let presented = bearer_token
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| super::http::extract_token(&query));
+                presented.and_then(|t| crate::session_token::require_hook(t, p))
+            } {
+                params.insert("cell_session_id".to_string(), v.session_id);
+            }
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
                 if let Some(t) = resource_target {
                     params.insert("project".to_string(), t.clone());
                     params.insert("project_path".to_string(), t);
                 }
-            } else {
-                // 0.46.4 review B2: the server-set identity keys never come
-                // from a TCP query (only `stamp_principal` and the cell
-                // socket write them).
-                params.remove(crate::caller_workspace::PRINCIPAL_BOUND_KEY);
-                params.remove("cell_session_id");
             }
             let p_owned = p.to_string();
             // thread-read-v1: a person's `thread/latest` rows carry their

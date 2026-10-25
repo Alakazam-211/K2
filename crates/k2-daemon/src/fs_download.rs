@@ -122,10 +122,35 @@ fn entry_allows_landed(scope: &RoomPathScope, resolved: &SkinWorkspace, real: &P
 
 /// Review A3: every file listed or served also passes K2's secret
 /// classifier on the landed path (names and the content scan).
+///
+/// Known limit (round 2, documented): the content scan reads text files up
+/// to `secret_paths::MAX_SCAN_BYTES` (1 MiB). A larger file, or one with
+/// NUL bytes (binary), is served on its name and path alone, so a secret
+/// inside a big or binary file is not caught: expose files, not folders,
+/// when that matters.
 fn secret_file(resolved: &SkinWorkspace, real: &Path) -> bool {
     let Some(landed) = rel_in_room(&resolved.path, real) else { return true };
     denied_by_name(&landed) || k2_core::secret_paths::classify(&landed, real).is_some()
 }
+
+/// Round 2 A3: a hard link (`nlink > 1`) may be another path's file under
+/// a harmless name; the download door never lists or serves one.
+fn hard_linked(meta: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        meta.nlink() > 1
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
+/// Round 2 A3: the content bytes one listing may scan (each text file
+/// costs up to 1 MiB); past it the listing stops and says `truncated`.
+pub const LIST_SCAN_BUDGET: u64 = 64 * 1024 * 1024;
 
 /// `GET /cli/fs/downloads` for an App guest.
 pub fn handle_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
@@ -139,6 +164,7 @@ pub fn handle_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliResp
     let mut items: Vec<serde_json::Value> = Vec::new();
     let mut seen_files: HashSet<PathBuf> = HashSet::new();
     let mut truncated = false;
+    let mut scan_left = LIST_SCAN_BUDGET;
     for entry in &scope.download {
         if truncated {
             break;
@@ -152,7 +178,7 @@ pub fn handle_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliResp
             continue;
         }
         let mut visited: HashSet<PathBuf> = HashSet::new();
-        truncated = walk(&scope, &resolved, &real, 0, &mut visited, &mut seen_files, &mut items);
+        truncated = walk(&scope, &resolved, &real, 0, &mut visited, &mut seen_files, &mut items, &mut scan_left);
     }
     crate::thread_attachments::audit(
         "files.downloads",
@@ -163,8 +189,10 @@ pub fn handle_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliResp
 }
 
 /// Add `real` (a file, or a folder walked to [`MAX_DEPTH`]) to `items`.
-/// Returns `true` once [`MAX_ITEMS`] is passed (the walk stops). `.git`
-/// folders are never walked; secret files are never listed.
+/// Returns `true` once [`MAX_ITEMS`] is passed or the scan budget is spent
+/// (the walk stops). `.git` folders are never walked; secret and
+/// hard-linked files are never listed.
+#[allow(clippy::too_many_arguments)]
 fn walk(
     scope: &RoomPathScope,
     resolved: &SkinWorkspace,
@@ -173,14 +201,24 @@ fn walk(
     visited: &mut HashSet<PathBuf>,
     seen_files: &mut HashSet<PathBuf>,
     items: &mut Vec<serde_json::Value>,
+    scan_left: &mut u64,
 ) -> bool {
     let Ok(meta) = std::fs::metadata(real) else { return false };
     if meta.is_file() {
-        if !seen_files.insert(real.to_path_buf()) || secret_file(resolved, real) {
-            return false;
-        }
         if items.len() >= MAX_ITEMS {
             return true;
+        }
+        if !seen_files.insert(real.to_path_buf()) || hard_linked(&meta) {
+            return false;
+        }
+        // A file past the scan limit isn't read (it costs nothing).
+        let cost = if meta.len() <= k2_core::secret_paths::MAX_SCAN_BYTES { meta.len() } else { 0 };
+        if cost > *scan_left {
+            return true;
+        }
+        *scan_left -= cost;
+        if secret_file(resolved, real) {
+            return false;
         }
         if let Some(row) = item(resolved, real, &meta) {
             items.push(row);
@@ -203,7 +241,7 @@ fn walk(
         if !entry_allows_landed(scope, resolved, &canon) {
             continue;
         }
-        if walk(scope, resolved, &canon, depth + 1, visited, seen_files, items) {
+        if walk(scope, resolved, &canon, depth + 1, visited, seen_files, items, scan_left) {
             return true;
         }
     }
@@ -281,8 +319,10 @@ pub fn handle_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliRespo
     if !landed_entry && !landed_read {
         return deny("landed");
     }
-    if !std::fs::metadata(&real).is_ok_and(|m| m.is_file()) {
-        return deny("not_a_file");
+    match std::fs::metadata(&real) {
+        Ok(m) if m.is_file() && !hard_linked(&m) => {}
+        Ok(m) if m.is_file() => return deny("hard_link"),
+        _ => return deny("not_a_file"),
     }
     if secret_file(&resolved, &real) {
         return deny("secret");

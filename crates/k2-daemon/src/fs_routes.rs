@@ -1269,20 +1269,71 @@ fn drop_scope(line: &RoomPathScope) -> Option<RoomPathScope> {
     Some(RoomPathScope { upload: vec![dir.clone()], upload_dir: Some(dir), ..Default::default() })
 }
 
-/// Where an upload door lands: `(scope, folder, need)`. `folder` is the
-/// room-relative landing folder (an upload-only drop: the uploader's own
-/// subfolder under the drop folder).
-fn upload_target(
-    pass: &SkinPass,
-    resolved: &SkinWorkspace,
-    mode: &UploadMode,
-    sent: String,
-) -> Result<(RoomPathScope, String, PathNeed), CliResponse> {
+/// Where an upload door lands.
+struct UploadTarget {
+    /// The caller's own scope on the room line (the lexical and landed
+    /// checks run against it).
+    scope: RoomPathScope,
+    /// The room-relative landing folder (an upload-only drop: inside the
+    /// uploader's own folder under its drop root).
+    dir: String,
+    need: PathNeed,
+    /// Set for an upload-only drop.
+    drop: Option<DropTarget>,
+}
+
+/// An upload-only drop's own folder (review A1, A4).
+struct DropTarget {
+    /// Every drop and write folder of the room, across ALL roles: the
+    /// roots a guest's own folder sits under (and the quota counts).
+    roots: RoomPathScope,
+    /// `<root>/<user>`, room-relative.
+    user_dir: String,
+    user: String,
+}
+
+/// Every room line of every role on room `project_id` (round-2 A1). A
+/// store that can't be read fails closed (the missing-cap 403).
+fn room_lines(project_id: &str) -> Result<Vec<RoomPathScope>, CliResponse> {
+    let roles = k2_core::skin::list_roles().map_err(|e| {
+        k2_core::log_debug!("[fs] room lines unreadable: {e}");
+        scope_refused(PathNeed::Upload)
+    })?;
+    Ok(roles.into_iter().filter_map(|r| r.room_paths.get(project_id).cloned()).collect())
+}
+
+/// The roots scope of a room (round-2 A1): the drop and write folders of
+/// every role line there (an unscoped line's `uploadDir` counts as a drop
+/// folder), plus the caller's own drop scope.
+fn room_roots(lines: &[RoomPathScope], own: &RoomPathScope) -> RoomPathScope {
+    let mut roots = RoomPathScope::default();
+    let mut push = |list: &mut Vec<String>, f: &String| {
+        if !list.contains(f) {
+            list.push(f.clone());
+        }
+    };
+    for l in lines.iter().chain(std::iter::once(own)) {
+        for f in &l.write {
+            push(&mut roots.write, f);
+        }
+        for f in &l.upload {
+            push(&mut roots.upload, f);
+        }
+        if !l.is_scoped() {
+            if let Some(d) = &l.upload_dir {
+                push(&mut roots.upload, d);
+            }
+        }
+    }
+    roots
+}
+
+fn upload_target(pass: &SkinPass, resolved: &SkinWorkspace, mode: &UploadMode, sent: String) -> Result<UploadTarget, CliResponse> {
     match mode {
         UploadMode::Write => {
             let scope = room_scope(pass, resolved, PathNeed::Write)?;
             let dir = upload_dir_or_default(sent, &scope)?;
-            Ok((scope, dir, PathNeed::Write))
+            Ok(UploadTarget { scope, dir, need: PathNeed::Write, drop: None })
         }
         UploadMode::Drop { user } => {
             let line = room_scope(pass, resolved, PathNeed::Upload)?;
@@ -1300,19 +1351,94 @@ fn upload_target(
                 return Err(r);
             }
             let segs = k2_core::skin::paths::rel_segments(&folder).map_err(CliResponse::bad_request)?;
-            // Review A1: always `<drop root>/<user>/<rest>`, the root being
-            // the outermost drop or write folder holding `dir`, so the
-            // uploader's name is the first segment under every root: `dir`
-            // can add subfolders inside the guest's own folder, never reach
-            // another person's.
-            let Some(root) = k2_core::skin::paths::drop_root(&scope, &segs) else {
+            // Review A1 (+ round 2): always `<drop root>/<user>/<rest>`, the
+            // root being the OUTERMOST drop or write folder holding `dir`
+            // across every role of the room, so a guest's own folder is
+            // always the first segment under a root, whichever role made
+            // the folders: `dir` adds subfolders inside the guest's own
+            // folder and can never reach another person's.
+            let lines = room_lines(&resolved.project_id)?;
+            let roots = room_roots(&lines, &scope);
+            let Some(root) = k2_core::skin::paths::drop_root(&roots, &segs) else {
                 return Err(scope_refused(PathNeed::Upload));
             };
             let root_len = root.split('/').count();
+            let user_dir = format!("{root}/{user}");
             let mut landing = vec![root, user.clone()];
             landing.extend(segs[root_len..].iter().cloned());
-            Ok((scope, landing.join("/"), PathNeed::Upload))
+            let landing = landing.join("/");
+            // The landing must still be one of the caller's own drop places
+            // (a drop folder nested inside another role's root can't be).
+            if let Some(r) = scope_lexical(&scope, &landing, PathNeed::Upload) {
+                return Err(r);
+            }
+            // A username that is (or holds) a folder some role lists is
+            // refused: it isn't that guest's folder (round 2 A1).
+            let user_segs: Vec<String> = user_dir.split('/').map(str::to_string).collect();
+            let listed = lines.iter().flat_map(|l| {
+                l.read.iter().chain(l.write.iter()).chain(l.upload.iter()).chain(l.download.iter()).chain(l.upload_dir.iter())
+            });
+            for f in listed {
+                if k2_core::skin::paths::folder_holds(&user_segs, f) {
+                    return Err(scope_refused(PathNeed::Upload));
+                }
+            }
+            Ok(UploadTarget { scope, dir: landing, need: PathNeed::Upload, drop: Some(DropTarget { roots, user_dir, user: user.clone() }) })
         }
+    }
+}
+
+/// The marker a guest's own drop folder carries (round 2 A1): its
+/// username. A folder at `<root>/<user>` without it (made by the owner or
+/// an agent) is not that guest's, and the drop is refused.
+pub const DROP_USER_MARKER: &str = ".k2-drop-user";
+
+/// Make (or check) the guest's own folder `<root>/<user>` and its marker.
+/// Any problem is the plain missing-cap 403 (no oracle).
+fn ensure_user_dir(resolved: &SkinWorkspace, scope: &RoomPathScope, d: &DropTarget) -> Result<(), CliResponse> {
+    let refuse = |why: &str| {
+        k2_core::log_debug!("[fs] drop refused for {}: {why}", d.user);
+        scope_refused(PathNeed::Upload)
+    };
+    let Ok(root) = Path::new(&resolved.path).canonicalize() else { return Err(refuse("room root")) };
+    let lexical = root.join(&d.user_dir);
+    // Where it lands, before anything is made (a drop folder that links to
+    // a sibling folder never gets a guest folder or marker there).
+    if scope_gate_landed(scope, resolved, &lexical, PathNeed::Upload, true).is_some() {
+        return Err(refuse("lands outside the drop folders"));
+    }
+    // One guest folder is made (and its marker written) at a time, so a
+    // racing drop of the same guest never sees a folder without its marker.
+    static MAKING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _making = MAKING.lock().unwrap_or_else(|p| p.into_inner());
+    let existed = std::fs::symlink_metadata(&lexical).is_ok();
+    let canon = jail_mkdir_p(&root, &d.user_dir).map_err(|e| refuse(&e))?;
+    let marker = canon.join(DROP_USER_MARKER);
+    if !existed {
+        let mut o = std::fs::OpenOptions::new();
+        o.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            o.custom_flags(libc::O_NOFOLLOW);
+        }
+        match o.open(&marker) {
+            Ok(mut f) => {
+                use std::io::Write as _;
+                f.write_all(d.user.as_bytes()).map_err(|e| refuse(&format!("marker: {e}")))?;
+                return Ok(());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(refuse(&format!("marker: {e}"))),
+        }
+    }
+    match std::fs::symlink_metadata(&marker) {
+        Ok(m) if m.file_type().is_file() => {}
+        _ => return Err(refuse("a folder without the guest's marker")),
+    }
+    match std::fs::read_to_string(&marker) {
+        Ok(name) if name == d.user => Ok(()),
+        _ => Err(refuse("another name's folder")),
     }
 }
 
@@ -1345,6 +1471,8 @@ fn tally(dir: &Path, files: &mut u64, bytes: &mut u64, stop_files: u64) {
         let Ok(m) = std::fs::symlink_metadata(e.path()) else { continue };
         if m.file_type().is_dir() {
             tally(&e.path(), files, bytes, stop_files);
+        } else if e.file_name() == DROP_USER_MARKER {
+            // The guest-folder marker is K2's, not a drop.
         } else {
             *files += 1;
             *bytes += m.len();
@@ -1352,19 +1480,54 @@ fn tally(dir: &Path, files: &mut u64, bytes: &mut u64, stop_files: u64) {
     }
 }
 
-/// Review A4: refuse an upload-only drop that would take this guest past
-/// its caps in this room: every `<root>/<user>` of the line's drop and
-/// write folders, counted together. `add_files`/`add_bytes` are what this
-/// request adds. The refusal names only the guest's own totals.
-fn drop_quota_check(resolved: &SkinWorkspace, scope: &RoomPathScope, user: &str, add_files: u64, add_bytes: u64) -> Option<CliResponse> {
+/// The guests whose drop is being written, per room (round 2 A4): one
+/// drop per guest and room at a time, so the count on disk is exact while
+/// it is checked and written (parallel uploads can't overshoot the caps).
+fn drop_busy() -> &'static (std::sync::Mutex<std::collections::HashSet<String>>, std::sync::Condvar) {
+    static M: std::sync::OnceLock<(std::sync::Mutex<std::collections::HashSet<String>>, std::sync::Condvar)> =
+        std::sync::OnceLock::new();
+    M.get_or_init(|| (std::sync::Mutex::new(std::collections::HashSet::new()), std::sync::Condvar::new()))
+}
+
+/// A guest's turn to drop in a room; the next one waits until this request
+/// ends (its file is on disk by then, or the write failed).
+struct DropReservation {
+    key: String,
+}
+
+impl Drop for DropReservation {
+    fn drop(&mut self) {
+        let (m, c) = drop_busy();
+        let mut busy = m.lock().unwrap_or_else(|p| p.into_inner());
+        busy.remove(&self.key);
+        c.notify_all();
+    }
+}
+
+/// Review A4 (+ round 2): take this guest's turn in this room, then check
+/// the drop against its caps: every `<root>/<user>` of the room's roots on
+/// disk, counted while no other drop of this guest is being written. The
+/// turn is held until the request ends. The refusal names only the guest's
+/// own totals.
+fn drop_reserve(resolved: &SkinWorkspace, d: &DropTarget, add_files: u64, add_bytes: u64) -> Result<DropReservation, CliResponse> {
     let (max_files, max_bytes) = drop_limits();
     let Ok(root) = Path::new(&resolved.path).canonicalize() else {
-        return Some(CliResponse::internal_error("workspace root unavailable"));
+        return Err(CliResponse::internal_error("workspace root unavailable"));
+    };
+    let key = format!("{}\u{0}{}", resolved.project_id, d.user);
+    let turn = {
+        let (m, c) = drop_busy();
+        let mut busy = m.lock().unwrap_or_else(|p| p.into_inner());
+        while busy.contains(&key) {
+            busy = c.wait(busy).unwrap_or_else(|p| p.into_inner());
+        }
+        busy.insert(key.clone());
+        DropReservation { key }
     };
     let (mut files, mut bytes) = (0u64, 0u64);
     let mut seen: Vec<PathBuf> = Vec::new();
-    for f in scope.write.iter().chain(scope.upload.iter()) {
-        let mine = root.join(f).join(user);
+    for f in d.roots.write.iter().chain(d.roots.upload.iter()) {
+        let mine = root.join(f).join(&d.user);
         let Ok(canon) = mine.canonicalize() else { continue };
         if !canon.starts_with(&root) || seen.iter().any(|s| canon.starts_with(s) || s.starts_with(&canon)) {
             continue;
@@ -1373,7 +1536,7 @@ fn drop_quota_check(resolved: &SkinWorkspace, scope: &RoomPathScope, user: &str,
         seen.push(canon);
     }
     if files + add_files > max_files || bytes.saturating_add(add_bytes) > max_bytes {
-        return Some(CliResponse {
+        return Err(CliResponse {
             status: "413 Payload Too Large",
             content_type: "application/json",
             body: serde_json::json!({
@@ -1385,7 +1548,7 @@ fn drop_quota_check(resolved: &SkinWorkspace, scope: &RoomPathScope, user: &str,
             .to_string(),
         });
     }
-    None
+    Ok(turn)
 }
 
 fn skin_json_workspace(v: &serde_json::Value) -> Result<String, CliResponse> {
@@ -1516,10 +1679,12 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
-    let (scope, dir, need) = match upload_target(pass, &resolved, &mode, dir_sent) {
+    let UploadTarget { scope, dir, need, drop: drop_target } = match upload_target(pass, &resolved, &mode, dir_sent) {
         Ok(t) => t,
         Err(r) => return r,
     };
+    // Round 2 A4: the drop's reservation lives until this request ends.
+    let mut _reserved: Option<DropReservation> = None;
     if let Some(r) = scope_lexical(&scope, &dir, need) {
         return r;
     }
@@ -1546,7 +1711,12 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
         // An upload-only drop makes its own subfolder through the jail
         // (never through a symlink out), then checks where it landed.
         UploadMode::Drop { user } => {
-            if let Some(r) = drop_quota_check(&resolved, &scope, user, 1, bytes.len() as u64) {
+            let Some(d) = &drop_target else { return CliResponse::internal_error("drop target missing") };
+            match drop_reserve(&resolved, d, 1, bytes.len() as u64) {
+                Ok(r) => _reserved = Some(r),
+                Err(r) => return r,
+            }
+            if let Err(r) = ensure_user_dir(&resolved, &scope, d) {
                 return r;
             }
             let root = match Path::new(&resolved.path).canonicalize() {
@@ -1760,10 +1930,12 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
-    let (scope, dir, need) = match upload_target(pass, &resolved, &mode, dir_sent) {
+    let UploadTarget { scope, dir, need, drop: drop_target } = match upload_target(pass, &resolved, &mode, dir_sent) {
         Ok(t) => t,
         Err(r) => return r,
     };
+    // Round 2 A4: the drop's reservation lives until this request ends.
+    let mut _reserved: Option<DropReservation> = None;
     if let Some(r) = scope_lexical(&scope, &dir, need) {
         return r;
     }
@@ -1835,11 +2007,16 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
             fsc::MAX_UPLOAD_CHUNK_SIZE
         )));
     }
-    if let UploadMode::Drop { user } = &mode {
+    if let Some(d) = &drop_target {
         // Review A4: the first chunk counts a new file and its declared
-        // size; every chunk counts its own bytes.
+        // size; every chunk counts its own bytes (reserved until this
+        // request ends, round 2).
         let (add_files, add_bytes) = if offset == 0 { (1, total_bytes.unwrap_or(bytes.len() as u64)) } else { (0, bytes.len() as u64) };
-        if let Some(r) = drop_quota_check(&resolved, &scope, user, add_files, add_bytes) {
+        match drop_reserve(&resolved, d, add_files, add_bytes) {
+            Ok(r) => _reserved = Some(r),
+            Err(r) => return r,
+        }
+        if let Err(r) = ensure_user_dir(&resolved, &scope, d) {
             return r;
         }
     }

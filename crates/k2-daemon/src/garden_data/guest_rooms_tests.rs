@@ -198,6 +198,27 @@ fn an_agent_made_widget_acts_with_its_makers_rights() {
     assert_eq!(change.actor, "garden:guestdesk (agent:board-builder)");
 }
 
+/// Round-2 review B4: only an owner-made widget skips the App's 60/min
+/// guest-rooms budget; an agent-made one pays it (whatever ceiling Garden
+/// access gives it), so it can't starve the App or flood confirm sheets.
+#[test]
+fn an_agent_made_widget_pays_the_apps_budget_and_an_owner_made_one_doesnt() {
+    let d = desk(&["guests:rooms"], "gr-budget");
+    gr::grant(&d.jobs, &[], "owner").unwrap();
+    // The App spends its whole minute.
+    for i in 0..gr::RATE_PER_MIN {
+        gr::rate_take(&d.jobs).unwrap_or_else(|e| panic!("App call {i}: {e:?}"));
+    }
+    d.stamp(MadeBy::Agent { project_id: "w-builder".into() });
+    let (st, v) = d.raw("guests.rooms", json!({ "app": d.jobs, "username": "dana" }), None);
+    assert_eq!((st, code(&v)), (429, "rate_limited"), "an agent-made widget pays the App's budget: {v}");
+    let (st, v) = d.raw("guests.setRooms", json!({ "app": d.jobs, "username": "dana", "rooms": ["board-builder"] }), None);
+    assert_eq!((st, code(&v)), (429, "rate_limited"), "no confirm sheet past the budget: {v}");
+    d.stamp(MadeBy::Owner);
+    let (st, v) = d.raw("guests.rooms", json!({ "app": d.jobs, "username": "dana" }), None);
+    assert_eq!(st, 200, "the owner's own widget doesn't spend the App's budget: {v}");
+}
+
 #[test]
 fn an_unsigned_widget_and_a_paused_placement_are_refused() {
     let d = desk(&["guests:rooms"], "gr-paused");

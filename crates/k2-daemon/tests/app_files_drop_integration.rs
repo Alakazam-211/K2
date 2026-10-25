@@ -318,6 +318,93 @@ async fn nowhere_to_drop_links_out_and_write_holders_keep_todays_landing() {
     assert_missing_cap(&r, "files:write", "a platform pass can't drop");
 }
 
+/// Round-2 review A1: the drop root is the outermost drop folder across
+/// EVERY role of the room, so a guest of a role whose drop folder sits
+/// inside another role's can't use it (it would land inside someone's
+/// guest-folder space), and a username that is a folder some role lists,
+/// or an existing folder without that guest's marker, is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drop_roots_span_every_role_and_never_take_a_folder_that_isnt_the_guests() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let docs = seed_ws(&env, &format!("nest{tag}"));
+    let outer = format!("outer{tag}");
+    let inner = format!("inner{tag}");
+    role_with_rooms(port, &outer, &[(&docs, &["files:upload"])]).await;
+    role_with_rooms(port, &inner, &[(&docs, &["files:upload"])]).await;
+    owner_ok(port, "/cli/skin/roles/paths", json!({ "name": outer, "handle": docs.handle, "upload": ["Inbox"] })).await;
+    // The inner role's drop folder is named like a guest of the outer role.
+    let vip = format!("vip{tag}");
+    owner_ok(port, "/cli/skin/roles/paths", json!({ "name": inner, "handle": docs.handle, "upload": [format!("Inbox/{vip}")] })).await;
+    // A guest named like the inner role's folder: refused (it isn't theirs).
+    let v = login_with_role(port, &vip, &outer).await;
+    let r = upload_binary(port, &v, &docs, Some("Inbox"), "x.bin", b"x").await;
+    assert_missing_cap(&r, "files:upload", "a username that is another role's drop folder");
+    // The inner role's guest: its folder is inside the outer root's guest
+    // space, so it can't drop there (fail closed), and nothing is made.
+    let i = login_with_role(port, &format!("in{tag}"), &inner).await;
+    let r = upload_binary(port, &i, &docs, Some(&format!("Inbox/{vip}")), "y.bin", b"y").await;
+    assert_missing_cap(&r, "files:upload", "a drop folder nested in another role's root");
+    assert!(!docs.path.join(format!("Inbox/{vip}")).exists(), "nothing made under the nested root");
+    // An existing folder the owner made, named like a guest: not theirs.
+    let arch = format!("arch{tag}");
+    std::fs::create_dir_all(docs.path.join(format!("Inbox/{arch}"))).unwrap();
+    std::fs::write(docs.path.join(format!("Inbox/{arch}/owner-notes.txt")), b"owner").unwrap();
+    let a = login_with_role(port, &arch, &outer).await;
+    let r = upload_binary(port, &a, &docs, Some("Inbox"), "z.bin", b"z").await;
+    assert_missing_cap(&r, "files:upload", "an owner folder without the guest's marker");
+    assert!(!docs.path.join(format!("Inbox/{arch}/z.bin")).exists());
+    // An ordinary guest of the outer role drops fine (and gets its marker).
+    let ok_user = format!("ok{tag}");
+    let o = login_with_role(port, &ok_user, &outer).await;
+    let r = upload_binary(port, &o, &docs, Some("Inbox"), "a.bin", b"a").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["path"], format!("Inbox/{ok_user}/a.bin"));
+    assert_eq!(std::fs::read_to_string(docs.path.join(format!("Inbox/{ok_user}/.k2-drop-user"))).unwrap(), ok_user);
+}
+
+/// Round-2 review A4: parallel drops can't overshoot the caps (bytes and
+/// files are reserved under one lock).
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn parallel_drops_never_overshoot_the_caps() {
+    let env = setup(&[("K2_DROP_MAX_FILES", "3"), ("K2_DROP_MAX_BYTES", "1000000")]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let docs = seed_ws(&env, &format!("par{tag}"));
+    let role = format!("par{tag}");
+    role_with_rooms(port, &role, &[(&docs, &["files:upload"])]).await;
+    owner_ok(port, "/cli/skin/roles/paths", json!({ "name": role, "handle": docs.handle, "upload": ["Inbox"], "uploadDir": "Inbox" })).await;
+    let user = format!("par{tag}");
+    let pass = login_with_role(port, &user, &role).await;
+    let mut tasks = Vec::new();
+    for i in 0..12 {
+        let pass = pass.clone();
+        let h = docs.handle.clone();
+        tasks.push(tokio::spawn(async move {
+            let b = json!({ "workspace": h, "filename": format!("f{i}.bin"), "base64": b64(&vec![1u8; 4096]) });
+            post(port, "/cli/fs/upload-binary", &pass, b).await.status
+        }));
+    }
+    let mut ok = 0;
+    for t in tasks {
+        match t.await.unwrap() {
+            200 => ok += 1,
+            413 => {}
+            s => panic!("unexpected status {s}"),
+        }
+    }
+    let landed: Vec<_> = std::fs::read_dir(docs.path.join(format!("Inbox/{user}")))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .filter(|n| n != ".k2-drop-user")
+        .collect();
+    assert_eq!(ok, 3, "exactly the cap succeeds");
+    assert_eq!(landed.len(), 3, "exactly the cap landed: {landed:?}");
+}
+
 /// Review A4: per guest and room, drops stop at the file and byte caps
 /// (`K2_DROP_MAX_FILES`, `K2_DROP_MAX_BYTES`), counted over the guest's own
 /// folders only; another guest is unaffected.

@@ -316,6 +316,13 @@ fn create_user(c: &Ctx, v: &J) -> R {
             err(400, "bad_request", e)
         }
     })?;
+    // Round-2 review B1: the key holder may set this guest's password, so
+    // it is tied (not "a person" for card answers) until a person takes it
+    // over. A tie that can't be written removes the new guest again.
+    if let Err(e) = skin::creators::tie(&p.id, &skin::creators::app_key_marker(&c.app)) {
+        let _ = skin::remove_principal_as(&p.username, &actor);
+        return Err(err(500, "store", e));
+    }
     if let Some(ids) = room_ids.filter(|_| role_id.is_none()) {
         skin::set_app_grant_rooms(&user, &c.app, &ids, true, &actor).map_err(|e| err(400, "bad_request", e))?;
     }
@@ -372,6 +379,9 @@ fn password_reset(c: &Ctx, v: &J) -> R {
     if !only_this_app(c, &pid)? {
         return Err(err(403, "not_only_this_app", "this person also signs in elsewhere on this box; only the owner resets their password"));
     }
+    // Round-2 review B1: the reset token goes back to the key holder, who
+    // could use it: tie the guest first (and drop any person claim).
+    skin::creators::tie(&pid, &skin::creators::app_key_marker(&c.app)).map_err(|e| err(500, "store", e))?;
     match skin::mint_password_reset(&user).map_err(|e| err(500, "store", e))? {
         Some(m) => Ok(json!({ "ok": true, "username": user, "token": m.token, "expiresAt": m.expires_at, "email": m.email })),
         None => Err(err(409, "no_reset", "a reset needs a password already set and an email on the person")),

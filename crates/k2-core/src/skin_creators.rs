@@ -10,13 +10,20 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{now_secs, with_conn};
 
-/// skin.db DDL (run by the idempotent open block).
+/// skin.db DDL (run by the idempotent open block). `principal_agent_ties`
+/// and `principal_person_claims` are additive too (an older K2 ignores
+/// them).
 pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS principal_agent_creators (
             principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
             workspace_id TEXT NOT NULL,
             created_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS principal_agent_ties (
+            principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
+            tied_to TEXT NOT NULL,
+            tied_at INTEGER NOT NULL
          );
          CREATE TABLE IF NOT EXISTS principal_person_claims (
             principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
@@ -27,40 +34,54 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|e| format!("skin.db principal_agent_creators: {e}"))
 }
 
-/// The agent tie of a guest (0.46.4 security review B1): the workspace
-/// whose agent added `principal_id`, while no person has taken the guest
-/// over ([`clear_agent_tie`]). An agent could add a guest, set its
-/// password and sign in as it, so a tied guest is not "a person" for
-/// person-only actions (answering a card). `None`: the owner's guest, or
-/// one a person claimed.
+// -- agent ties (0.46.4 security review B1, round 2) ------------------
+//
+// A guest is "tied" while something other than a person could know its
+// password: the agent that added it (its creator stamp, above), an agent
+// that set its password or email, or a `/v1` App key that created it or
+// minted its reset token ([`tie`], in `principal_agent_ties`). A tied guest
+// is not "a person" for person-only actions (answering a card). Only the
+// owner lifts a tie ([`clear_agent_tie`]); a later re-key ties it again.
+// The creator stamps stay a pure record of who added the guest: a tie never
+// writes them.
+
+fn claimed(conn: &Connection, principal_id: &str) -> Result<bool, String> {
+    conn.query_row("SELECT 1 FROM principal_person_claims WHERE principal_id = ?1", params![principal_id], |_| Ok(()))
+        .optional()
+        .map(|o| o.is_some())
+        .map_err(|e| format!("person claim lookup: {e}"))
+}
+
+/// The guest's tie: the FIRST workspace (or `app-key:<service id>`) it was
+/// tied to, else the workspace whose agent added it; `None` for the
+/// owner's untouched guest, or one the owner has taken over since its last
+/// re-key.
 pub fn agent_tie(principal_id: &str) -> Result<Option<String>, String> {
     with_conn(|conn| {
-        let Some(ws) = workspace_of_conn(conn, principal_id)? else { return Ok(None) };
-        let claimed: Option<i64> = conn
-            .query_row(
-                "SELECT claimed_at FROM principal_person_claims WHERE principal_id = ?1",
-                params![principal_id],
-                |r| r.get(0),
-            )
+        if claimed(conn, principal_id)? {
+            return Ok(None);
+        }
+        let tied: Option<String> = conn
+            .query_row("SELECT tied_to FROM principal_agent_ties WHERE principal_id = ?1", params![principal_id], |r| r.get(0))
             .optional()
-            .map_err(|e| format!("person claim lookup: {e}"))?;
-        Ok(claimed.is_none().then_some(ws))
+            .map_err(|e| format!("agent tie lookup: {e}"))?;
+        match tied {
+            Some(t) => Ok(Some(t)),
+            None => workspace_of_conn(conn, principal_id),
+        }
     })
 }
 
-/// The marker an App key's tie carries instead of a workspace id
-/// (`app-key:<service id>`): it never matches a workspace, so it grants no
-/// agent any rights over the guest; it only makes [`agent_tie`] `Some`.
+/// What an App key's tie names instead of a workspace id.
 pub fn app_key_marker(service_id: &str) -> String {
     format!("app-key:{}", service_id.trim())
 }
 
-/// Tie a guest to whoever could know its password (round-2 review B1): an
-/// agent that set its password or email (`tied_to` = that agent's
-/// workspace id), or a `/v1` App key that created it or minted its reset
-/// token (`tied_to` = [`app_key_marker`]). Writes the tie row AND drops any
-/// person claim, so a guest an agent just re-keyed is never "a person".
-/// One transaction.
+/// Tie a guest whose password an agent or App key could now know (an agent
+/// set its password or email: `tied_to` = that agent's workspace id; a
+/// `/v1` App key created it or minted its reset token: [`app_key_marker`]).
+/// The first tie is kept (a later one never overwrites it), and any person
+/// claim is dropped: the guest is tied again. One transaction.
 pub fn tie(principal_id: &str, tied_to: &str) -> Result<(), String> {
     let (pid, to) = (principal_id.trim().to_string(), tied_to.trim().to_string());
     if pid.is_empty() || to.is_empty() {
@@ -69,8 +90,8 @@ pub fn tie(principal_id: &str, tied_to: &str) -> Result<(), String> {
     with_conn(|conn| {
         let tx = conn.unchecked_transaction().map_err(|e| format!("agent tie: {e}"))?;
         tx.execute(
-            "INSERT INTO principal_agent_creators (principal_id, workspace_id, created_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(principal_id) DO UPDATE SET workspace_id = excluded.workspace_id",
+            "INSERT INTO principal_agent_ties (principal_id, tied_to, tied_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(principal_id) DO NOTHING",
             params![pid, to, now_secs()],
         )
         .map_err(|e| format!("agent tie: {e}"))?;
@@ -80,33 +101,25 @@ pub fn tie(principal_id: &str, tied_to: &str) -> Result<(), String> {
     })
 }
 
-/// Is `by` a person who may take a guest over (round-2 review, item 4)?
-/// An ALLOWLIST, never "anything but agent:": the owner token
-/// (`owner-token`), an Owner or Admin Connect login (`user:<name>`), or the
-/// guest itself proving it holds the account (`self:<principal id>`, e.g.
-/// an email reset link it redeemed). `app-key:…`, `garden:…`, `agent:…`
-/// and a Member login never are.
-pub fn is_person_actor(by: &str, principal_id: &str) -> bool {
+/// Who may lift a tie: ONLY the owner token (`owner-token`) or an Owner
+/// Connect login (`user:<name>` whose role is Owner). Never the guest
+/// itself (a reset link can reach the agent: its mailbox, its own App's
+/// set-password page), never an Admin or Member login, an App key, a Garden
+/// widget or an agent.
+fn person_may_claim(by: &str) -> bool {
     let by = by.trim();
-    if by == "owner-token" {
-        return true;
-    }
-    if let Some(name) = by.strip_prefix("user:") {
-        return matches!(crate::connect_users::role_for_user(name), Some(crate::connect_users::Role::Owner | crate::connect_users::Role::Admin));
-    }
-    by.strip_prefix("self:").is_some_and(|p| !p.is_empty() && p == principal_id.trim())
+    by == "owner-token"
+        || by.strip_prefix("user:").is_some_and(|n| crate::connect_users::role_for_user(n) == Some(crate::connect_users::Role::Owner))
 }
 
-/// A person took an agent-added guest over (reset its password, or claimed
-/// it): from now on it counts as a person ([`agent_tie`] is `None`) until
-/// an agent or App key re-keys it ([`tie`]). `by` must pass
-/// [`is_person_actor`]; anything else is refused and nothing is written.
-/// Idempotent. (The person-claim route that calls it lives with the
-/// agent-App-users work.)
+/// The owner took a tied guest over: from now on it counts as a person
+/// ([`agent_tie`] is `None`) until an agent or App key re-keys it. `by`
+/// must be the owner token or an Owner login; anything else is refused and
+/// nothing is written. Idempotent.
 pub fn clear_agent_tie(principal_id: &str, by: &str) -> Result<(), String> {
     let (pid, by) = (principal_id.trim().to_string(), by.trim().to_string());
-    if pid.is_empty() || !is_person_actor(&by, &pid) {
-        return Err("only a person (the owner, an Owner or Admin login, or the guest itself) clears a guest's agent tie".into());
+    if pid.is_empty() || !person_may_claim(&by) {
+        return Err("only the owner (the owner token or an Owner login) clears a guest's agent tie".into());
     }
     with_conn(|conn| {
         conn.execute(
@@ -124,31 +137,34 @@ mod tie_tests {
     use super::*;
 
     #[test]
-    fn an_agent_added_guest_is_tied_until_a_person_claims_it() {
+    fn a_tied_guest_stays_tied_until_the_owner_claims_it() {
         let _home = crate::test_env::TempHome::new();
         let owners = super::super::add_principal("owners-guest").unwrap();
         let bots = super::super::add_principal("bots-guest").unwrap();
         stamp(&bots.id, "ws-agent").unwrap();
         assert_eq!(agent_tie(&owners.id).unwrap(), None, "the owner's guest is a person");
         assert_eq!(agent_tie(&bots.id).unwrap().as_deref(), Some("ws-agent"), "an agent-added guest is tied");
-        // Item 4: an allowlist of people, never "anything but agent:".
-        for by in ["agent:bot", "app-key:k1", "garden:board", "user:no-such-login", "self:someone-else", "", "owner"] {
-            assert!(clear_agent_tie(&bots.id, by).is_err(), "{by:?} is not a person");
+        // Only the owner token or an Owner login: never the guest itself, an
+        // Admin or Member login, an App key, a Garden or an agent.
+        let self_claim = format!("self:{}", bots.id);
+        for by in ["agent:bot", "app-key:k1", "garden:board", "user:no-such-login", self_claim.as_str(), "", "owner"] {
+            assert!(clear_agent_tie(&bots.id, by).is_err(), "{by:?} may not claim");
         }
         assert_eq!(agent_tie(&bots.id).unwrap().as_deref(), Some("ws-agent"));
         clear_agent_tie(&bots.id, "owner-token").unwrap();
-        assert_eq!(agent_tie(&bots.id).unwrap(), None, "a person took it over");
-        // The creator stamp itself stays (the agent's management rights are
-        // another question).
+        assert_eq!(agent_tie(&bots.id).unwrap(), None, "the owner took it over");
+        // The creator stamp stays a record of who added the guest.
         assert_eq!(workspace_of(&bots.id).unwrap().as_deref(), Some("ws-agent"));
-        // Round-2 B1: an agent re-keying the guest ties it again and drops
-        // the person's claim; so does an App key.
-        tie(&bots.id, "ws-agent").unwrap();
-        assert_eq!(agent_tie(&bots.id).unwrap().as_deref(), Some("ws-agent"), "re-keyed: tied again");
-        clear_agent_tie(&bots.id, &format!("self:{}", bots.id)).unwrap();
-        assert_eq!(agent_tie(&bots.id).unwrap(), None, "the guest itself proved the account");
+        // A re-key ties it again; the first tie is kept.
+        tie(&bots.id, "ws-other").unwrap();
+        assert_eq!(agent_tie(&bots.id).unwrap().as_deref(), Some("ws-other"), "re-keyed: tied again");
+        tie(&bots.id, "ws-third").unwrap();
+        assert_eq!(agent_tie(&bots.id).unwrap().as_deref(), Some("ws-other"), "a second tie never overwrites the first");
+        // An App key's tie never touches the creator stamps.
         tie(&owners.id, &app_key_marker("svc-1")).unwrap();
         assert_eq!(agent_tie(&owners.id).unwrap().as_deref(), Some("app-key:svc-1"));
+        assert_eq!(workspace_of(&owners.id).unwrap(), None, "no creator stamp for an App key's guest");
+        assert_eq!(workspace_of(&bots.id).unwrap().as_deref(), Some("ws-agent"), "the agent's stamp is untouched");
     }
 }
 

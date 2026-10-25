@@ -143,7 +143,7 @@ async fn the_activity_catch_up_is_limited_per_caller_and_never_for_the_owner() {
 
 /// Review B1: a guest an agent added (and set the password of) is not a
 /// person: signed in, it can't answer the agent's card. Once a person takes
-/// it over (`skin::creators::clear_agent_tie`) it can. An owner's guest can.
+/// it over as the owner (`skin::creators::clear_agent_tie`) it can. An owner's guest can.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_guest_its_agent_added_cant_answer_that_agents_cards() {
     let env = setup(&[]);

@@ -171,7 +171,21 @@ fn a_dual_signed_app_update_installs_on_old_and_new_apps() {
     let other_url = url.replace("K2.app.tar.gz", "K2-old.app.tar.gz");
     let mut moved = raw.clone();
     moved["platforms"]["darwin-aarch64"]["url"] = serde_json::json!(other_url);
-    assert!(verify_app_update_with(&keys, &moved, &other_url, "0.46.4", data).unwrap_err().contains("names file"));
+    let e = verify_app_update_with(&keys, &moved, &other_url, "0.46.4", data).unwrap_err();
+    assert!(e.contains("is not K2.app.tar.gz"), "the asset is pinned per platform, not taken from the URL: {e}");
+    // A platform K2 doesn't publish: refused even with a good signature.
+    let mut odd = raw.clone();
+    let entry = odd["platforms"]["darwin-aarch64"].clone();
+    odd["platforms"] = serde_json::json!({ "linux-x86_64": entry });
+    assert!(verify_app_update_with(&keys, &odd, url, "0.46.4", data).unwrap_err().contains("no app update for platform"));
+    // Windows: the setup name carries the version.
+    let win_url = "https://dl.invalid/v0.46.4/K2_0.46.4_x64-setup.exe";
+    let win_sig = u2.sign(data, &tc("K2_0.46.4_x64-setup.exe", "0.46.4"));
+    let win = serde_json::json!({ "version": "0.46.4", "platforms": { "windows-x86_64": {
+        "signature": b64(&u1_sig), "url": win_url, "k2_signatures": { id2.clone(): b64(&win_sig) } } } });
+    verify_app_update_with(&keys, &win, win_url, "0.46.4", data).expect("windows setup verifies");
+    let e = verify_app_update_with(&keys, &win, win_url, "0.46.5", data).unwrap_err();
+    assert!(e.contains("is not K2_0.46.5_x64-setup.exe"), "{e}");
     assert!(verify_app_update_with(&keys, &raw, &other_url, "0.46.4", data).unwrap_err().contains("no platform"));
     let unknown = latest_json("0.46.4", url, &u1_sig, Some(("0123456789ABCDEF", &u2_sig)));
     assert!(verify_app_update_with(&keys, &unknown, url, "0.46.4", data).unwrap_err().contains("trusts"));

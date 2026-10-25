@@ -88,8 +88,9 @@ It walks you through:
    the key.
 2. **U3**: minisign asks for a different new password twice. The U3 secret
    key is written (still encrypted with U3's password) to
-   `~/K2-U3-backup.XXXXXX/k2-updater-u3.key` in a private folder, and a
-   Finder window shows it. Make **two** password-manager entries:
+   `$TMPDIR/K2-U3-backup.XXXXXX/k2-updater-u3.key` in a private folder that
+   Time Machine never backs up (also excluded with `tmutil addexclusion`),
+   and a Finder window shows it. Make **two** password-manager entries:
    - "K2 update key U3 - key file": **attach** that file;
    - "K2 update key U3 - password": U3's password, and nothing else.
 
@@ -140,7 +141,8 @@ checkout that has the public keys landed:
 3. It signs a throwaway file named `k2-u3-drill` (no installer accepts that
    name) and checks the signature with the **backup key in UPDATER_KEYS**.
    "U3 drill ok" means U3 restores and installs would accept it.
-4. Delete `~/Desktop/u3.key` (and empty the Trash).
+4. The drill deletes `~/Desktop/u3.key` itself when it ends (pass or
+   fail); the password manager keeps the real copy.
 
 ### 4c. Re-running the Linux build by hand
 

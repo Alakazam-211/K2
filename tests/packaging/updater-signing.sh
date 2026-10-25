@@ -197,14 +197,18 @@ cer_refuses "a second identical run" "no change" "$U2_PUB_LINE" "$U3_PUB_LINE"
 
 echo "== the U3 drill (restore the backup key, sign, check with UPDATER_KEYS' backup) =="
 CER="$ROOT/scripts/updater-key-ceremony.sh"
-if printf '%s\n' "$PW3" | bash "$CER" drill "$tmp/gen/u3.key" --root "$SRC" >"$tmp/drill.out" 2>&1 && grep -q "U3 drill ok" "$tmp/drill.out"; then
+restored() { cp "$1" "$tmp/restored.key"; printf '%s' "$tmp/restored.key"; }
+if printf '%s\n' "$PW3" | bash "$CER" drill "$(restored "$tmp/gen/u3.key")" --root "$SRC" >"$tmp/drill.out" 2>&1 && grep -q "U3 drill ok" "$tmp/drill.out"; then
     pass "drill: U3 restored from its file signs, and the backup key in UPDATER_KEYS accepts it"
 else
     fail "drill" "$(cat "$tmp/drill.out")"
 fi
+[ ! -e "$tmp/restored.key" ] && pass "drill deletes the restored key file when it finishes" || fail "drill cleanup" "restored key left behind"
 drill_refuses() { # <label> <expect (ERE)> <key file> <password> [root]
-    if printf '%s\n' "$4" | bash "$CER" drill "$3" --root "${5:-$SRC}" >"$tmp/drill.out" 2>&1; then
+    if printf '%s\n' "$4" | bash "$CER" drill "$(restored "$3")" --root "${5:-$SRC}" >"$tmp/drill.out" 2>&1; then
         fail "drill $1" "passed"
+    elif [ -e "$tmp/restored.key" ]; then
+        fail "drill $1" "left the restored key behind after a failure"
     elif grep -qE -- "$2" "$tmp/drill.out"; then
         pass "drill refuses $1"
     else
@@ -218,7 +222,8 @@ python3 -I - "$CER" <<'PY' && pass "ceremony: no clipboard; U3 file in a 0700 fo
 import re, sys
 t = open(sys.argv[1]).read()
 assert "pbcopy" not in t
-assert 'mktemp -d "$HOME/K2-U3-backup.XXXXXX"' in t and 'chmod 700 "$U3DIR"' in t
+assert 'mktemp -d "${TMPDIR:-/tmp}/K2-U3-backup.XXXXXX"' in t and 'chmod 700 "$U3DIR"' in t
+assert 'tmutil addexclusion "$U3DIR"' in t
 assert "SEPARATE entry" in t and "shred_file \"$U3DIR/k2-updater-u3.key\"" in t
 assert "trap ceremony_cleanup EXIT" in t and "security delete-generic-password" in t
 assert '[ -t 0 ] && [ -t 1 ]' in t

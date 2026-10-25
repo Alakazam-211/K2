@@ -334,7 +334,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
     // callers who may list App users (a human, an agent with switch 1);
     // everyone gets the count and a hash the approval binds to.
     match &app_row {
-        Some(a) => match k2_core::skin::copy_host_grants_to_app(&a.service_id, &actor(who), true) {
+        Some(a) => match k2_core::skin::copy_host_grants_to_app_in(&a.service_id, Some(&a.owner_workspace), &actor(who), true) {
             Ok(rep) => {
                 let users: Vec<String> = rep.added.clone();
                 let mut st = step(
@@ -614,7 +614,7 @@ fn run_step(st: &J, svc: &ps::PublishedService, app_id: &str, ws: &str, by: &str
         }
         "copy_host" => {
             let a = app.ok_or_else(|| no(codes::APP_NOT_FOUND, 409, format!("App {app_id} isn't installed")))?;
-            let now = k2_core::skin::copy_host_grants_to_app(&a.service_id, by, true).map_err(|e| no("copy_host_failed", 409, e))?;
+            let now = k2_core::skin::copy_host_grants_to_app_in(&a.service_id, Some(&a.owner_workspace), by, true).map_err(|e| no("copy_host_failed", 409, e))?;
             if now.added.is_empty() {
                 return Ok(None);
             }
@@ -630,7 +630,7 @@ fn run_step(st: &J, svc: &ps::PublishedService, app_id: &str, ws: &str, by: &str
                     ),
                 ));
             }
-            let rep = k2_core::skin::copy_host_grants_to_app(&a.service_id, by, false).map_err(|e| no("copy_host_failed", 409, e))?;
+            let rep = k2_core::skin::copy_host_grants_to_app_in(&a.service_id, Some(&a.owner_workspace), by, false).map_err(|e| no("copy_host_failed", 409, e))?;
             Ok(Some(json!({ "added": rep.added })))
         }
         "guest_rooms" => {

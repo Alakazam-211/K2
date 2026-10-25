@@ -5172,6 +5172,10 @@ pub struct CopyHostReport {
     /// Usernames whose box-login role is tagged for a different App: not
     /// copied (Q2).
     pub skipped_other_app_role: Vec<String>,
+    /// Box-login guests another workspace's agent added (`creators`): not
+    /// copied onto this App (security review E).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped_other_workspace_agent: Vec<String>,
 }
 
 /// Copy every ENABLED box login (`host` grant) onto App `app` (S24-10,
@@ -5183,6 +5187,7 @@ pub struct CopyHostReport {
 fn copy_host_to_app_tx(
     conn: &Connection,
     app: &str,
+    app_workspace: Option<&str>,
     created_by: &str,
     dry_run: bool,
 ) -> Result<CopyHostReport, String> {
@@ -5222,6 +5227,14 @@ fn copy_host_to_app_tx(
         ..Default::default()
     };
     for (pid, username, role_id, scope, role_app) in rows {
+        // A box guest another workspace's agent added never lands on this
+        // App (only its own workspace's Apps; unknown workspace: none).
+        if let Some(by_ws) = creators::workspace_of_conn(conn, &pid)? {
+            if app_workspace != Some(by_ws.as_str()) {
+                report.skipped_other_workspace_agent.push(username);
+                continue;
+            }
+        }
         if let Some(existing) = app_grant(conn, &pid, app)? {
             report.kept_existing.push((username, existing.enabled));
             continue;
@@ -5310,12 +5323,25 @@ pub fn copy_host_grants_to_app(
     created_by: &str,
     dry_run: bool,
 ) -> Result<CopyHostReport, String> {
+    copy_host_grants_to_app_in(app, None, created_by, dry_run)
+}
+
+/// [`copy_host_grants_to_app`] for an App of `app_workspace`
+/// (`projects.id`, from the daemon: this module never reads k2so.db). A
+/// box guest an agent added is copied only onto its own workspace's Apps;
+/// with no workspace given, none of them is.
+pub fn copy_host_grants_to_app_in(
+    app: &str,
+    app_workspace: Option<&str>,
+    created_by: &str,
+    dry_run: bool,
+) -> Result<CopyHostReport, String> {
     let app = app.trim().to_string();
     let report = with_conn(|conn| {
         let tx = conn
             .unchecked_transaction()
             .map_err(|e| format!("skin copy host begin: {e}"))?;
-        let report = copy_host_to_app_tx(&tx, &app, created_by, dry_run)?;
+        let report = copy_host_to_app_tx(&tx, &app, app_workspace, created_by, dry_run)?;
         tx.commit()
             .map_err(|e| format!("skin copy host commit: {e}"))?;
         Ok(report)
@@ -5372,7 +5398,7 @@ pub fn run_skin_app_backfill(
             if app.is_empty() || app == HOST_APP_ID || !seen.insert(app.to_string()) {
                 continue;
             }
-            reports.push(copy_host_to_app_tx(&tx, app, UPGRADE_CREATED_BY, false)?);
+            reports.push(copy_host_to_app_tx(&tx, app, None, UPGRADE_CREATED_BY, false)?);
         }
         let summary = serde_json::to_string(&reports).unwrap_or_else(|_| "[]".to_string());
         tx.execute(

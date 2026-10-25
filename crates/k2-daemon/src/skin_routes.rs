@@ -1495,7 +1495,14 @@ pub fn handle_grants_copy_host(body: &[u8], actor: &str) -> CliResponse {
         .or_else(|| v.get("dry_run"))
         .and_then(|x| x.as_bool())
         .unwrap_or(false);
-    match skin::copy_host_grants_to_app(&app, actor, dry_run) {
+    // The App's workspace: a box guest an agent added lands only on its
+    // own workspace's Apps (security review E).
+    let app_ws = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::get_by_id(&conn, &app).ok().flatten().map(|r| r.project_id)
+    };
+    match skin::copy_host_grants_to_app_in(&app, app_ws.as_deref(), actor, dry_run) {
         Ok(report) => {
             k2_core::log_debug!(
                 "[skin] actor={actor} copy-host app={} dry_run={dry_run} added={} kept={} skipped={}",
@@ -1509,17 +1516,18 @@ pub fn handle_grants_copy_host(body: &[u8], actor: &str) -> CliResponse {
                 .iter()
                 .map(|(u, enabled)| serde_json::json!({ "username": u, "enabled": enabled }))
                 .collect();
-            CliResponse::ok_json(
-                serde_json::json!({
-                    "ok": true,
-                    "app": report.app,
-                    "dryRun": report.dry_run,
-                    "added": report.added,
-                    "keptExisting": kept,
-                    "skippedOtherAppRole": report.skipped_other_app_role,
-                })
-                .to_string(),
-            )
+            let mut out = serde_json::json!({
+                "ok": true,
+                "app": report.app,
+                "dryRun": report.dry_run,
+                "added": report.added,
+                "keptExisting": kept,
+                "skippedOtherAppRole": report.skipped_other_app_role,
+            });
+            if !report.skipped_other_workspace_agent.is_empty() {
+                out["skippedOtherWorkspaceAgent"] = serde_json::json!(report.skipped_other_workspace_agent);
+            }
+            CliResponse::ok_json(out.to_string())
         }
         Err(e) => CliResponse::bad_request(e),
     }

@@ -1216,6 +1216,46 @@ async fn a_role_named_like_another_roles_id_is_never_the_one_checked() {
     k2_daemon::apps::alerts::set_sink(None);
 }
 
+/// Copy of box logins onto an App leaves out the box guests another
+/// workspace's agent added (security review E); its own workspace's Apps
+/// get them, the owner's guests go everywhere as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn copy_host_leaves_out_box_guests_another_workspaces_agent_added() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let a = seed_ws(&env, "cpa");
+    let b = seed_ws(&env, "cpb");
+    let svc_a = app_row(&a, "cpappa");
+    let svc_b = app_row(&b, "cpappb");
+    allow_manage(&a, true);
+    let r = post(d.port, "/cli/skin/users", &passport(&a), json!({"username": "cp-agentguest"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    k2_core::skin::set_host_login("cp-agentguest", true).expect("host login");
+    box_login_user("cp-ownerguest");
+    let names = |v: &Value, key: &str| -> Vec<String> {
+        v[key].as_array().unwrap_or_else(|| panic!("no {key}: {v}")).iter().map(|x| x.as_str().expect("name").to_string()).collect()
+    };
+    // Another workspace's App: the owner's guest only.
+    let r = post(d.port, "/cli/skin/grants/copy-host", OWNER, json!({"app": svc_b, "dryRun": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    let added = names(&v, "added");
+    assert!(added.contains(&"cp-ownerguest".to_string()) && !added.contains(&"cp-agentguest".to_string()), "{v}");
+    assert_eq!(names(&v, "skippedOtherWorkspaceAgent"), ["cp-agentguest"], "{v}");
+    // Its own workspace's App: both.
+    let r = post(d.port, "/cli/skin/grants/copy-host", OWNER, json!({"app": svc_a, "dryRun": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    let added = names(&v, "added");
+    assert!(added.contains(&"cp-ownerguest".to_string()) && added.contains(&"cp-agentguest".to_string()), "{v}");
+    assert!(v.get("skippedOtherWorkspaceAgent").is_none(), "{v}");
+    // No workspace known: none of the agents' guests.
+    let rep = k2_core::skin::copy_host_grants_to_app(&svc_a, "test", true).unwrap();
+    assert!(rep.skipped_other_workspace_agent.contains(&"cp-agentguest".to_string()) && !rep.added.contains(&"cp-agentguest".to_string()), "{rep:?}");
+    k2_daemon::apps::alerts::set_sink(None);
+}
+
 /// C: first write verbs are one digest per App per window, and nothing at
 /// all for what one of the App's test guests did (someone testing it; the
 /// owner made the guest: agents make none).

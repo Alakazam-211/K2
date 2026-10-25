@@ -124,9 +124,14 @@ jobs:
 
       - name: Collect + checksum artifacts
         id: collect
+        env:
+          IN_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="$IN_TAG"
+          # A dispatch input is user text: env only, never spliced into the
+          # script (security review), and it must look like a release tag.
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG" >&2; exit 1; }
           VERSION="${TAG#v}"
           # The tag and the app's own version must agree, or the names
           # below would pick nothing (or the wrong build).
@@ -164,10 +169,14 @@ jobs:
 
       - name: Upload to release
         env:
+          IN_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="$IN_TAG"
+          # A dispatch input is user text: env only, never spliced into the
+          # script (security review), and it must look like a release tag.
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG" >&2; exit 1; }
           VERSION="${TAG#v}"
           # Name every file: never a glob over a folder that could hold
           # another build's output.
@@ -197,12 +206,16 @@ jobs:
 
       - name: Merge the lines into the release SHA256SUMS
         env:
+          IN_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           K2_RELEASE_REPO: ${{ github.repository }}
           SUMS_B64: ${{ needs.build-linux-app.outputs.sums_b64 }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="$IN_TAG"
+          # A dispatch input is user text: env only, never spliced into the
+          # script (security review), and it must look like a release tag.
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG" >&2; exit 1; }
           test -n "$SUMS_B64"
           printf '%s' "$SUMS_B64" | base64 -d > "$RUNNER_TEMP/app-linux.sums"
           test "$(grep -c . "$RUNNER_TEMP/app-linux.sums")" = 3

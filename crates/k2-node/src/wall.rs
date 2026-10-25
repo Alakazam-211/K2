@@ -924,11 +924,17 @@ mod tests {
         std::fs::set_permissions(t.join("a/f.rs"), std::fs::Permissions::from_mode(0o644)).unwrap();
         std::fs::write(t.join("a/run.sh"), "x").unwrap();
         std::fs::set_permissions(t.join("a/run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::set_permissions(t.join("a/b"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Every fixture mode explicit: the test's umask (0002 in a walled
+        // K2 Compute job) must not pre-share anything.
+        for dir in [t.clone(), t.join("a"), t.join("a/b")] {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         std::os::unix::fs::symlink(&outside, t.join("a/link.pem")).unwrap();
         let s = share_with_jobs(&t).unwrap();
-        assert!(s.changed >= 4, "{s:?}");
+        assert_eq!(s, WalkStats { changed: 5, skipped: 0 }, "tree, a, a/b, f.rs, run.sh; the link is not touched");
         let mode = |p: &Path| std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&t), 0o775);
+        assert_eq!(mode(&t.join("a")), 0o775);
         assert_eq!(mode(&t.join("a/f.rs")), 0o664);
         assert_eq!(mode(&t.join("a/run.sh")), 0o775);
         assert_eq!(mode(&t.join("a/b")), 0o775);

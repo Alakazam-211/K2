@@ -980,6 +980,16 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
         assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "owner's empty guest {path}: {}", r.body);
         assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("or it is the owner's"), "{path}: {}", r.body);
     }
+    // Unlock by email resolves the guest as unlock does (security review C);
+    // a name that is no guest is never the agent's to unlock.
+    let r = post(d.port, "/cli/skin/users/email", OWNER, json!({"username": "scope-boxb", "email": "boxb@example.com"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    for name in ["boxb@example.com", "BoxB@Example.com", "nobody-at-all", "nobody@example.com"] {
+        let r = post(d.port, "/cli/skin/users/unlock", &agent, json!({"username": name})).await;
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "unlock {name}: {}", r.body);
+    }
+    let r = post(d.port, "/cli/skin/users/unlock", OWNER, json!({"username": "boxb@example.com"})).await;
+    assert_eq!(r.status, 200, "the owner unlocks by email: {}", r.body);
     let alice = user("scope-alice");
     assert_eq!((alice.has_password, alice.email.clone(), alice.default_rooms.clone(), alice.role_id.clone()), (false, None, Vec::<String>::new(), None), "{alice:?}");
 

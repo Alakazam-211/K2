@@ -269,8 +269,11 @@ pub fn actor_is_agent(actor: &str) -> bool {
 }
 
 /// The principal named `username` (normalized), if there is one.
+/// Resolved as login and unlock resolve a name (an email works too), so a
+/// guest named by its email is checked like one named by its username
+/// (security review C).
 fn principal_named(username: &str) -> Result<Option<skin::SkinPrincipal>, CliResponse> {
-    let Ok(u) = skin::normalize_username(username) else { return Ok(None) };
+    let Some(u) = skin::login_principal_username(username).map_err(CliResponse::internal_error)? else { return Ok(None) };
     skin::list_principals().map(|ps| ps.into_iter().find(|p| p.username == u)).map_err(CliResponse::internal_error)
 }
 
@@ -339,7 +342,14 @@ fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse>
     // A body the handler can't read is its 400, not ours.
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else { return Ok(()) };
     let Some(username) = str_field(&v, &["username", "name"]) else { return Ok(()) };
-    let Some(p) = principal_named(username)? else { return Ok(()) };
+    let Some(p) = principal_named(username)? else {
+        // Unlock clears lockout rows by the name given: a name that is no
+        // guest is never an agent's to clear.
+        if path == "/cli/skin/users/unlock" {
+            return Err(outside_workspace(format!("'{username}' is no guest of your workspace")));
+        }
+        return Ok(());
+    };
     let roles = skin::list_roles().map_err(CliResponse::internal_error)?;
     let grants = skin::list_grants().map_err(CliResponse::internal_error)?;
     if !principal_in_workspace(&p, &roles, &grants, ws) {

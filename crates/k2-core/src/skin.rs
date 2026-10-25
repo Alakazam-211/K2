@@ -3332,6 +3332,14 @@ fn login_lock_slot(presented_key: &str, principal: Option<&LoginPrincipalRow>) -
 /// presented row. Does not create a principal, touch `password_hash`, or
 /// revoke sessions. Returns the presented key and whether any row was
 /// deleted (`false` when none was stored).
+/// The username a presented login name resolves to, as login and unlock
+/// resolve it: an `@` means email (any case), else username. `None`: no
+/// such guest.
+pub fn login_principal_username(presented: &str) -> Result<Option<String>, String> {
+    let presented = presented.trim().to_ascii_lowercase();
+    with_conn(|conn| Ok(lookup_login_principal(conn, &presented)?.map(|p| p.username)))
+}
+
 pub fn clear_login_lockout(username: &str) -> Result<(String, bool), String> {
     let key = login_lockout_key(username);
     let presented = username.trim().to_ascii_lowercase();

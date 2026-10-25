@@ -2210,6 +2210,35 @@ exit: 0
       ]
     },
     {
+      "name": "users pair-phone",
+      "usage": "k2 users pair-phone [--user <login>] [--json] [--invert]",
+      "description": "Make a one-time pairing code (10 minutes) plus a QR for the K2 Companion phone app (POST /cli/auth/device/pair-code). The owner token pairs as --user, else as the login linked to the owner; a login pairs only as itself and types its password again. Never from a browser. Exit 3 when refused.",
+      "args": [],
+      "flags": [
+        {"name": "--user", "arg": "login", "description": "The login the phone signs in as (owner token only)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon body {ok,code,user,expiresAt,expiresInSecs,host,pairUrl,qr}."},
+        {"name": "--invert", "arg": null, "description": "Draw the QR for a light-background terminal."}
+      ]
+    },
+    {
+      "name": "users phones",
+      "usage": "k2 users phones [--json]",
+      "description": "List paired phones (GET /cli/auth/devices): the owner token or an Owner login sees everyone's, any other login its own. Also shows the login a new code pairs as.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon body {ok,devices[],pairAs}."}
+      ]
+    },
+    {
+      "name": "users unpair-phone",
+      "usage": "k2 users unpair-phone <id> [--json]",
+      "description": "End one paired phone (POST /cli/auth/device/revoke). The owner token or an Owner login may end anyone's, any other login its own. The phone then gets device_session_ended and must pair again.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Print the daemon body {ok,revoked,username}."}
+      ]
+    },
+    {
       "name": "users set-can-clone",
       "usage": "k2 users set-can-clone <username> on|off",
       "description": "Settings → Admin Access → Can clone (POST /cli/users/set-can-clone, owner only). Defaults on; Owners can always clone.",

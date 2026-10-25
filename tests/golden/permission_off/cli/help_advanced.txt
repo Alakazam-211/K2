@@ -81,6 +81,8 @@ USERS (local daemon connect-user accounts)
   users | users list [--json]                   List accounts (username, name, role, disabled)
   users add <username> [--role owner|admin|member] [--password-stdin]
                                                 Create account (password via prompt or stdin)
+  users pair-phone [--user <login>]             One-time code + QR to pair the K2 phone app
+  users phones | users unpair-phone <id>        Paired phones; end one
 
 SKIN (guest list + roles + k2skn_ passes — Thread rooms, never grid)
   skin user add|list|remove|password|email|rooms Skin principals (not Connect users)

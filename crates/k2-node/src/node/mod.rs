@@ -688,6 +688,12 @@ impl Node {
         }
         l.unavailable = un;
         let owned = self.smoke.lock().unwrap().owned();
+        // A smoke lock a killed k2-node left (round 3) isn't a foreign lock.
+        if let (Some(p), false) = (l.policy.write_smoke_lock.as_deref(), owned) {
+            if locks::clear_stale_smoke(p) {
+                crate::nlog!("removed {p}: a k2-node that's no longer running left it");
+            }
+        }
         l.locks = locks::scan(&l.policy.foreign_locks, l.policy.write_smoke_lock.as_deref(), owned, now);
         let after = (l.control.control, l.unavailable.clone(), l.policy_error.clone(), l.locks.clone());
         let stop_all = l.control.control == Control::Stopped;
@@ -1046,16 +1052,26 @@ mod wall_tests {
         std::fs::create_dir_all(root.join("home/.cargo")).unwrap();
         std::fs::write(root.join("home/.cargo/credentials.toml"), "k2test-secret-cred").unwrap();
         std::fs::write(root.join("log"), "journal").unwrap();
-        // A folder the node can't empty yet (no write bit): the delete fails.
-        std::fs::set_permissions(root.join("home/.cargo"), std::fs::Permissions::from_mode(0o500)).unwrap();
-        if disk::delete_secret_tree(&d.join("none.sock"), false, OWNER_SLOT, &root).is_ok() {
-            // Running as root (permissions don't bind): nothing to hold.
-            return;
-        }
+        // Something the node can't delete yet. As a user: a folder with no
+        // write bit. As root (permissions don't bind root): an immutable
+        // file (chattr +i), as the VM drill did. Either way the first
+        // delete must fail, or this test proves nothing.
+        let root_user = unsafe { libc::geteuid() } == 0;
+        let pinned = root.join("home/.cargo/credentials.toml");
+        let block = |on: bool| {
+            if root_user {
+                let st = std::process::Command::new("chattr").arg(if on { "+i" } else { "-i" }).arg(&pinned).status().expect("chattr (e2fsprogs) runs");
+                assert!(st.success(), "chattr {} failed: this filesystem can't hold an immutable file", if on { "+i" } else { "-i" });
+            } else {
+                std::fs::set_permissions(root.join("home/.cargo"), std::fs::Permissions::from_mode(if on { 0o500 } else { 0o700 })).unwrap();
+            }
+        };
+        block(true);
+        assert!(disk::delete_secret_tree(&d.join("none.sock"), false, OWNER_SLOT, &root).is_err(), "the blocked delete must fail (root: {root_user})");
         n.hold_lingering(OWNER_SLOT, vec![Linger { key: "sj-g1".into(), unit: None, tree: Some(root.clone()) }]);
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(n.secret_isolation_wait(OWNER_SLOT, "ws-b", false).is_some(), "a failed delete keeps the slot held");
-        std::fs::set_permissions(root.join("home/.cargo"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        block(false);
         let t0 = std::time::Instant::now();
         while n.secret_isolation_wait(OWNER_SLOT, "ws-b", false).is_some() {
             assert!(t0.elapsed() < Duration::from_secs(10), "the hold never cleared");

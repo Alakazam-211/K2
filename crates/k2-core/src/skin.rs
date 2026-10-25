@@ -77,6 +77,10 @@ pub const SKIN_SCHEMA_VERSION: i64 = 6;
 /// Agent ties and the tied user's ceiling (agent-app-users, 0.46.4).
 #[path = "skin_ties.rs"]
 pub mod ties;
+/// One-time set-password links: invites, App resets, owner resets
+/// (agent-app-users, 0.46.4).
+#[path = "skin_invites.rs"]
+pub mod invites;
 
 #[path = "skin_link.rs"]
 pub mod link;
@@ -1468,6 +1472,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // app-mobile-access-v1 (0.46.3): device sign-ins, per-App sign-in
     // settings. Additive, no numbered step.
     app_login::ensure_schema(&conn)?;
+    // agent-app-users (0.46.4): per-App invite settings. Additive.
+    invites::ensure_schema(&conn)?;
     // 0.46.4: test guests of one App. Additive, no step.
     test_guests::ensure_schema(&conn)?;
     // 0.46.4: which workspace's agent added a guest. Additive, no step.

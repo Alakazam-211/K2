@@ -1262,6 +1262,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin-tokens/rooms", Owner),
     get("/cli/skin/access", Owner),
     post("/cli/skin/access/devices/revoke", Owner),
+    post("/cli/skin/access/invites", Owner),
     post("/cli/skin/access/listed", Owner),
     post("/cli/skin/access/settings", Owner),
     get("/cli/skin/agents", NoLogin),
@@ -1341,8 +1342,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/users/agent", Owner),
     post("/cli/skin/users/email", Owner),
     post("/cli/skin/users/full-name", Owner),
+    post("/cli/skin/users/invite", Owner),
     post("/cli/skin/users/password", Owner),
     post("/cli/skin/users/remove", Owner),
+    post("/cli/skin/users/reset-link", Owner),
     post("/cli/skin/users/rooms", Owner),
     post("/cli/skin/users/unlock", Owner),
     // App users' personal wallets (0.46.3): an App user's OWN session

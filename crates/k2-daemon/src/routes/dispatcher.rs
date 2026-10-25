@@ -10371,6 +10371,60 @@ async fn handle_one_request(
                             })
                     }
                 }
+                // agent-app-users S5: the owner, or an agent with "manage
+                // Apps" for its own workspace's Apps (checked in the handler).
+                crate::app_user_invites::INVITE_ROUTE => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let (actor, agent_ws) = match owner_or_skin_manage_hook_scoped(p, &query, bearer_token.as_deref(), state.token.as_str()) {
+                        Ok(a) => a,
+                        Err(f) => {
+                            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
+                            return DispatchOutcome::Done;
+                        }
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::stamp_actor(
+                            crate::app_user_invites::handle_invite(&body, &actor, agent_ws.as_deref(), is_post),
+                            &actor,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                // agent-app-users S4: the owner only (never an agent verb).
+                crate::app_user_invites::RESET_LINK_ROUTE => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) = super::http::owner_role_identity(&query, state.token.as_str()) else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::stamp_actor(crate::app_user_invites::handle_reset_link(&body, &actor, is_post), &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                // agent-app-users: an App's invite settings (the owner, or the
+                // App's own agent with switch 2; checked in the handler).
+                crate::app_user_invites::SETTINGS_ROUTE => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+                    tokio::task::spawn_blocking(move || crate::app_user_invites::handle_settings(&body, &who, is_post))
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
                 "/cli/skin/users/rooms" => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;

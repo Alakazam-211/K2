@@ -339,6 +339,8 @@ pub mod skin_me_routes;
 pub mod app_mobile_routes;
 // Push notifications for custom Apps (prd-custom-app-push-v1, 0.46.4).
 pub mod app_push;
+// agent-app-users (0.46.4): invites, owner reset links, App invite settings.
+pub mod app_user_invites;
 pub mod guest_rooms_routes;
 pub mod skin_gateway;
 // The daemon's Tokio runtime for plain std threads (wakes off the runtime).

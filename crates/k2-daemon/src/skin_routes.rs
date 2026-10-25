@@ -2600,6 +2600,11 @@ pub fn stamp_actor(mut r: CliResponse, actor: &str) -> CliResponse {
     if !r.status.starts_with("200") {
         return r;
     }
+    // agent-app-users §5.5: after an owner's skin write, a tied person
+    // whose access now waits for a reset gets one card to the owner.
+    if !actor_is_agent(actor) {
+        crate::app_user_invites::sweep_pending();
+    }
     if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&r.body) {
         if v.is_object() {
             v["actor"] = serde_json::json!(actor);
@@ -3130,12 +3135,12 @@ fn forgot_auth(query: &str, owner_token: &str, pass: Option<skin::SkinPass>) -> 
 /// guest write uses), never a test guest (the owner's), and, for a pass
 /// bound to one App, only a guest of that App. A pass with no rooms
 /// reaches nobody.
-pub fn pass_may_reset(pass: &skin::SkinPass, p: &skin::SkinPrincipal) -> Result<bool, CliResponse> {
+pub fn pass_may_reset(pass: &skin::SkinPass, p: &skin::SkinPrincipal) -> Result<Option<String>, CliResponse> {
     if pass.session || pass.rooms.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     if skin::test_guests::get(&p.id).map_err(CliResponse::internal_error)?.is_some() {
-        return Ok(false);
+        return Ok(None);
     }
     let grants = skin::list_grants().map_err(CliResponse::internal_error)?;
     let app_bound = !pass.app.is_empty() && pass.app != skin::HOST_APP_ID;
@@ -3144,10 +3149,10 @@ pub fn pass_may_reset(pass: &skin::SkinPass, p: &skin::SkinPrincipal) -> Result<
             .iter()
             .any(|g| g.subject_kind == "principal" && g.subject_id == p.id && g.kind == "app" && g.target_id == pass.app)
     {
-        return Ok(false);
+        return Ok(None);
     }
     let roles = skin::list_roles().map_err(CliResponse::internal_error)?;
-    Ok(pass.rooms.iter().any(|ws| principal_in_workspace(p, &roles, &grants, ws)))
+    Ok(pass.rooms.iter().find(|ws| principal_in_workspace(p, &roles, &grants, ws)).cloned())
 }
 
 /// `POST /cli/skin/password/forgot` `{username}` — owner | platform `--name`.
@@ -3173,6 +3178,7 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str, pass:
         .unwrap_or("")
         .trim()
         .to_string();
+    let mut pass_ws: Option<String> = None;
     if let ForgotCaller::Pass(pass) = &caller {
         // Scope first, so a pass can't spend the 60 s throttle of a guest
         // it may not touch (an owner reset would be blocked by it).
@@ -3182,16 +3188,17 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str, pass:
         };
         let reachable = match &target {
             Some(p) => match pass_may_reset(pass, p) {
-                Ok(ok) => ok,
+                Ok(ws) => ws,
                 Err(r) => return r,
             },
-            None => false,
+            None => None,
         };
-        if !reachable {
+        let Some(ws) = reachable else {
             skin::reset_miss_dummy();
             k2_core::log_debug!("[skin] forgot via pass {}: no guest it may reset", pass.id);
             return CliResponse::ok_json(FORGOT_OK_JSON.to_string());
-        }
+        };
+        pass_ws = Some(ws);
     }
     match skin::password_reset_throttled(&username) {
         Ok(true) => {
@@ -3204,8 +3211,8 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str, pass:
         Ok(false) => {}
         Err(e) => return CliResponse::internal_error(e),
     }
-    if let ForgotCaller::Pass(pass) = &caller {
-        return forgot_by_pass(pass, &username);
+    if let (ForgotCaller::Pass(pass), Some(ws)) = (&caller, pass_ws.as_deref()) {
+        return forgot_by_pass(pass, ws, &username);
     }
     match skin::mint_password_reset(&username) {
         Ok(Some(mint)) => {
@@ -3227,10 +3234,12 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str, pass:
     }
 }
 
-/// A pass's forgot for a guest it may reset. The token never goes back
-/// to the caller: the answer is always the bare `{ok:true}`.
-fn forgot_by_pass(pass: &skin::SkinPass, username: &str) -> CliResponse {
-    k2_core::log_debug!("[skin] forgot via pass {} for {username}: no reset mail path yet, nothing minted", pass.id);
+/// A pass's forgot for a guest it may reset (`ws`: the workspace it
+/// matched): the reset link is mailed to the guest's own email
+/// ([`crate::app_user_invites::forgot_by_pass`]). The token never goes
+/// back to the caller: the answer is always the bare `{ok:true}`.
+fn forgot_by_pass(pass: &skin::SkinPass, ws: &str, username: &str) -> CliResponse {
+    crate::app_user_invites::forgot_by_pass(pass, ws, username);
     CliResponse::ok_json(FORGOT_OK_JSON.to_string())
 }
 
@@ -3248,6 +3257,14 @@ pub fn handle_password_reset(body: &[u8]) -> CliResponse {
     let password = v.get("password").and_then(|x| x.as_str()).unwrap_or("");
     if password.is_empty() || password.len() < skin::PUBLIC_PASSWORD_MIN_LEN {
         return CliResponse::bad_request("password must be at least 8 characters");
+    }
+    // agent-app-users §5.4: an invite / owner-reset / App reset link.
+    if token.trim().starts_with(skin::invites::INVITE_PREFIX) {
+        return match skin::invites::consume(token, password) {
+            Ok(skin::invites::Consume::Ok) => CliResponse::ok_json(r#"{"ok":true}"#.to_string()),
+            Ok(skin::invites::Consume::BadToken) => reset_failed(),
+            Err(e) => CliResponse::internal_error(e),
+        };
     }
     match skin::consume_password_reset(token, password) {
         Ok(skin::SkinResetConsume::Ok) => {

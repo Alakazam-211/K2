@@ -1519,6 +1519,9 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
     // Microsoft Graph); a hosted one through the local Stalwart (only
     // dialled when the message is hosted).
     let engine = std::cell::OnceCell::new();
+    // The invites' test seam (never set in production): hosted mail goes
+    // to it instead of the local Stalwart.
+    let override_backend = crate::app_user_invites::backend_override();
     let mut resolve = |msg: &OutboundMessage| -> Result<Box<dyn crate::mail::submit::MailSubmit + '_>, String> {
         if let Some(inbox) = external::inbox_for_address(&msg.from) {
             return crate::mail::submit::submit_for_linked(&inbox);
@@ -1535,13 +1538,19 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
             .ok()
             .flatten()
         };
+        let account = account.ok_or_else(|| {
+            format!("sender address unavailable: sender address '{}' is no longer active", msg.from)
+        })?;
+        if let Some(b) = override_backend.as_ref() {
+            return Ok(Box::new(crate::mail::submit::HostedSubmit {
+                backend: &**b as &dyn SubmitBackend,
+                account_id: account,
+            }));
+        }
         let client = match engine.get_or_init(domains::engine_from_db) {
             Ok((client, _)) => client,
             Err(e) => return Err(format!("mail server unavailable: {e}")),
         };
-        let account = account.ok_or_else(|| {
-            format!("sender address unavailable: sender address '{}' is no longer active", msg.from)
-        })?;
         Ok(Box::new(crate::mail::submit::HostedSubmit {
             backend: client as &dyn SubmitBackend,
             account_id: account,
@@ -1556,6 +1565,8 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
         now,
     ) {
         Ok(send::ApproveOutcome::Submitted) => {
+            // agent-app-users: a held invite's link starts its clock now.
+            crate::app_user_invites::outbound_sent(id);
             k2_core::agent_hooks::emit(
                 k2_core::agent_hooks::HookEvent::MailSendDecided,
                 serde_json::json!({ "outboundId": id, "status": "submitted" }),

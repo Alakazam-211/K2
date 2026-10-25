@@ -48,6 +48,8 @@ pub fn run(action: &CardAction, answer: &str, by: &str) -> Result<J, String> {
         // prd-security-sweep-0464-v1 SS10: Trust it / Always trust this
         // folder / Don't trust.
         crate::folder_trust::CARD_ACTION => crate::folder_trust::run_card(&action.params, answer, by),
+        // agent-app-users §5.5: a tied person's access waits for a reset.
+        crate::app_user_invites::CARD_ACTION => crate::app_user_invites::run_card(&action.params, answer, by),
         other => Err(format!("K2 doesn't know the card action '{other}'")),
     }
 }

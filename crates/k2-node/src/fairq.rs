@@ -93,6 +93,9 @@ struct State {
     /// by `(slot, day)`: flushed with the usage, so a tick does no disk
     /// write while jobs just run.
     day_cpu: BTreeMap<(Slot, String), u64>,
+    /// Job units a previous k2-node left, maybe still stopping (review
+    /// B-M2): each counts as a running secret job of an unknown workspace.
+    lingering: std::collections::BTreeSet<(Slot, String)>,
 }
 
 pub struct FairQ {
@@ -153,6 +156,7 @@ impl FairQ {
             sent: HashMap::new(),
             last_persist: 0,
             day_cpu: BTreeMap::new(),
+            lingering: std::collections::BTreeSet::new(),
         };
         // macOS runs every slot's jobs as one uid (SE26 reads it).
         Ok(Self { cfg: Config { one_uid: cfg!(target_os = "macos"), ..Config::default() }, st: Mutex::new(st), kick: Notify::new() })
@@ -278,6 +282,18 @@ impl FairQ {
         st.runs.insert(key, meta);
     }
 
+    /// A lingering unit appears (`on`) or is confirmed gone (review B-M2).
+    pub(crate) fn set_lingering(&self, slot: Slot, unit: &str, on: bool) {
+        let mut st = self.st.lock().unwrap();
+        if on {
+            st.lingering.insert((slot, unit.to_string()));
+        } else {
+            st.lingering.remove(&(slot, unit.to_string()));
+        }
+        drop(st);
+        self.kick.notify_one();
+    }
+
     /// Decayed usage of every server now (millicore-seconds).
     pub fn usage(&self, now: i64) -> BTreeMap<Slot, u64> {
         let st = self.st.lock().unwrap();
@@ -379,6 +395,20 @@ impl FairQ {
                     secret: m.secret,
                 }
             })
+            .chain(st.lingering.iter().map(|(slot, unit)| Running {
+                slot: *slot,
+                job_id: format!("{}{unit}", crate::node::LINGER_PREFIX),
+                generation: 0,
+                workspace_id: crate::node::LINGER_WORKSPACE.to_string(),
+                session_id: None,
+                class: k2_node_proto::share::JobClass::Batch,
+                cpu_millis: 0,
+                mem_bytes: 0,
+                exclusive: false,
+                left_p50: None,
+                left_p90: None,
+                secret: true,
+            }))
             .collect();
         let mut queued = Vec::new();
         let mut rows = Vec::new();

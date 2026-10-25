@@ -456,7 +456,10 @@ pub fn job_key(slot: Slot, job_id: &str, generation: u32) -> String {
 /// `interrupted/node_reboot`, and this boot's open ones (the previous
 /// `k2-node` process's, which can't be re-adopted)
 /// `interrupted/node_restart`, stopping what's left of them.
-pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Result<(), String> {
+/// Returns the job units it asked the executor to release (Linux wall):
+/// until each is confirmed gone, the node holds the slot as if a secret job
+/// of an unknown workspace still ran there (review B-M2, SE26).
+pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Result<Vec<String>, String> {
     // A restart the executor made for an update, rollback or k2-node
     // restart: `node_update` (infra, no node-health strike, V55).
     let why = if crate::admin::update::recent_update_mark(&opts.layout.config, opts.clock.now()) {
@@ -474,16 +477,21 @@ pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Re
     for (j, g) in &changed {
         crate::nlog!("job {j} gen {g}: interrupted by a node reboot");
     }
+    let mut lingering = Vec::new();
     for (j, g, pgid) in interrupted {
         crate::nlog!("job {j} gen {g}: interrupted by a k2-node restart");
-        // Under the Linux wall the job lives in its own unit: stop it.
+        // Under the Linux wall the job lives in its own unit: stop it. It
+        // may outlive this call (a job that ignores SIGTERM): the node
+        // holds its slot until `Status` says it's gone.
         if matches!(wall, Wall::JobUser { .. }) {
             if let Some(unit) = crate::admin::jobs::unit_name(&t.job_key(&j, g)) {
                 let sock = opts.admin_socket.clone();
+                let u = unit.clone();
                 let _ = tokio::task::spawn_blocking(move || {
-                    crate::admin::server::job_request(&sock, &crate::admin::jobs::JobOp::Release { unit }, &[], Duration::from_secs(60))
+                    crate::admin::server::job_request(&sock, &crate::admin::jobs::JobOp::Release { unit: u }, &[], Duration::from_secs(60))
                 })
                 .await;
+                lingering.push(unit);
             }
         }
         // The node user can only signal its own processes, so a reused
@@ -494,7 +502,7 @@ pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Re
             crate::runner::signal_group(p, libc::SIGKILL);
         }
     }
-    Ok(())
+    Ok(lingering)
 }
 
 impl Node {
@@ -515,14 +523,18 @@ impl Node {
     /// Open tenant `slot` (or return it if open), reconciling its ledger
     /// like the owner's at start. Solo mode never calls it; S1 does for
     /// each server `servers.toml` approves.
-    pub async fn add_tenant(&self, slot: Slot) -> Result<Arc<Tenant>, String> {
+    pub async fn add_tenant(self: &Arc<Self>, slot: Slot) -> Result<Arc<Tenant>, String> {
         if let Some(t) = self.tenant(slot) {
             return Ok(t);
         }
         let t = Arc::new(Tenant::open(self.layout(), slot)?);
-        reconcile(&t, &self.opts, &self.wall).await?;
-        let mut m = self.tenants.write().unwrap();
-        Ok(m.entry(slot).or_insert(t).clone())
+        let lingering = reconcile(&t, &self.opts, &self.wall).await?;
+        let t = {
+            let mut m = self.tenants.write().unwrap();
+            m.entry(slot).or_insert(t).clone()
+        };
+        self.hold_lingering(slot, lingering);
+        Ok(t)
     }
 
     /// Forget a non-owner tenant whose `servers.toml` line went away (wiped)

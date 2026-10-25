@@ -282,6 +282,11 @@ pub struct Node {
     pub exec_stdin: std::sync::atomic::AtomicBool,
 }
 
+/// The running-jobs key prefix of a stand-in for a lingering unit, and the
+/// workspace it stands for (no workspace has that id).
+pub(crate) const LINGER_PREFIX: &str = "lingering:";
+pub(crate) const LINGER_WORKSPACE: &str = "(unknown workspace)";
+
 /// What this node understands beyond protocol 1 (the offer says it).
 pub fn node_features() -> Vec<String> {
     let mut f = vec![
@@ -315,7 +320,7 @@ impl Node {
             Wall::JobUser { user } => format!(" (jobs run as {user})"),
             Wall::Seatbelt => String::new(),
         });
-        tenant::reconcile(&owner, &opts, &wall).await?;
+        let lingering = tenant::reconcile(&owner, &opts, &wall).await?;
         let exec_stdin = match (opts.exec_stdin, &wall) {
             (Some(v), _) => v,
             (None, Wall::JobUser { .. }) => probe_exec_stdin(&opts.admin_socket).await,
@@ -358,6 +363,7 @@ impl Node {
             exec_stdin: std::sync::atomic::AtomicBool::new(exec_stdin),
             opts,
         });
+        node.hold_lingering(OWNER_SLOT, lingering);
         node.refresh_local(true);
         node.probe_tools().await;
         {
@@ -435,6 +441,69 @@ impl Node {
             return Some((codes::NEEDS_UPDATE, "the node's root executor can't pass secret env yet (update k2-node)"));
         }
         None
+    }
+
+    /// Review B-M2: job units the last k2-node process left (released at
+    /// start, maybe still stopping). Until `Status` says each is gone, its
+    /// slot holds a stand-in that counts as a running secret job of an
+    /// unknown workspace, so neither a secret job nor another workspace's
+    /// job starts beside what may still run as that uid (SE26).
+    pub(crate) fn hold_lingering(self: &Arc<Self>, slot: Slot, units: Vec<String>) {
+        if units.is_empty() {
+            return;
+        }
+        {
+            let mut jobs = self.jobs.lock().unwrap();
+            for u in &units {
+                jobs.insert(
+                    (slot, format!("{LINGER_PREFIX}{u}")),
+                    RunningJob {
+                        generation: 0,
+                        cpu_millis: Some(0),
+                        mem_bytes: Some(0),
+                        exclusive: false,
+                        stop: watch::channel(None).0,
+                        seq: 0,
+                        gate: false,
+                        workspace: LINGER_WORKSPACE.to_string(),
+                        secret: true,
+                    },
+                );
+                self.fairq.set_lingering(slot, u, true);
+            }
+        }
+        self.jobs_changed();
+        let node = self.clone();
+        tokio::spawn(async move {
+            let mut left = units;
+            let mut passes = 0u32;
+            while !left.is_empty() {
+                let mut still = Vec::new();
+                for u in left {
+                    let gone = match node.job_op(crate::admin::jobs::JobOp::Status { unit: u.clone() }, vec![], Duration::from_secs(30)).await {
+                        Ok(crate::admin::jobs::JobAnswer::Status(s)) => !s.loaded || s.active_state == "inactive" || s.active_state == "failed",
+                        _ => false,
+                    };
+                    if gone {
+                        node.jobs.lock().unwrap().remove(&(slot, format!("{LINGER_PREFIX}{u}")));
+                        node.fairq.set_lingering(slot, &u, false);
+                        crate::nlog!("{u}: gone; slot {slot} is free again");
+                        node.jobs_changed();
+                    } else {
+                        if passes % 100 == 99 {
+                            // Ask again now and then (an executor restart).
+                            let _ = node.job_op(crate::admin::jobs::JobOp::Release { unit: u.clone() }, vec![], Duration::from_secs(60)).await;
+                        }
+                        still.push(u);
+                    }
+                }
+                left = still;
+                passes += 1;
+                if !left.is_empty() {
+                    tokio::time::sleep(node.opts.unit_poll.max(Duration::from_millis(100))).await;
+                }
+            }
+        });
     }
 
     /// SE26: may a job of `ws` in `slot` (`secret`: it gets vault secrets)
@@ -883,6 +952,36 @@ mod wall_tests {
             let s = crate::status::read(&n.layout().status()).unwrap();
             assert_eq!((s.wall.as_str(), s.network_none), (wall.label(), net));
         }
+    }
+
+    /// Review B-M2: a unit the last k2-node left holds its slot as a running
+    /// secret job of an unknown workspace until `Status` says it's gone;
+    /// while the executor can't say (here: no executor), the hold stays.
+    #[tokio::test]
+    async fn a_lingering_unit_holds_its_slot_until_confirmed_gone() {
+        let d = crate::util::temp_dir("linger");
+        let mut o = NodeOptions::new(Layout::new(d.join("home"), d.join("cfg")));
+        o.dev = true;
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        o.admin_socket = d.join("no-executor.sock");
+        o.unit_poll = Duration::from_millis(20);
+        let n = Node::open(o).await.unwrap();
+        assert_eq!(n.secret_isolation_wait(OWNER_SLOT, "ws-a", true), None, "nothing runs yet");
+        n.hold_lingering(OWNER_SLOT, vec!["k2job-old-g1.service".into()]);
+        for (ws, secret) in [("ws-a", true), ("ws-a", false), ("ws-b", false)] {
+            assert_eq!(
+                n.secret_isolation_wait(OWNER_SLOT, ws, secret).as_deref(),
+                Some(k2_node_proto::secret::codes::ISOLATION_WAIT),
+                "{ws} secret={secret}: held beside a lingering unit"
+            );
+        }
+        // Another slot is another uid on Linux; macOS runs every slot as one.
+        assert_eq!(n.secret_isolation_wait(1, "ws-a", true).is_some(), cfg!(target_os = "macos"));
+        assert_eq!(n.running_by_tenant().get(&OWNER_SLOT), Some(&vec!["lingering:k2job-old-g1.service".to_string()]));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(n.secret_isolation_wait(OWNER_SLOT, "ws-b", false).is_some(), "no Status answer: still held (fail closed)");
     }
 
     #[tokio::test]

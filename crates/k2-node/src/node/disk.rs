@@ -364,12 +364,13 @@ impl Node {
         let jobs = self.jobs.lock().unwrap();
         let cands: Vec<Candidate> = jobs
             .iter()
-            .filter(|(_, j)| j.stop.borrow().is_none())
+            // A lingering unit's stand-in (review B-M2) isn't a job to stop.
+            .filter(|((_, id), j)| j.stop.borrow().is_none() && !id.starts_with(super::LINGER_PREFIX))
             .map(|((slot, _), j)| Candidate { slot: *slot, seq: j.seq, gate: j.gate })
             .collect();
         let Some(pick) = disk_victim(&cands, over.map(|(s, _)| s)) else { return vec![] };
         let picked = cands[pick];
-        let Some(((slot, job), j)) = jobs.iter().find(|((s, _), j)| *s == picked.slot && j.seq == picked.seq && j.stop.borrow().is_none()) else {
+        let Some(((slot, job), j)) = jobs.iter().find(|((s, id), j)| *s == picked.slot && j.seq == picked.seq && j.stop.borrow().is_none() && !id.starts_with(super::LINGER_PREFIX)) else {
             return vec![];
         };
         let why = over.map(|(s, b)| format!(", server slot {s} is {} MB over its disk share", b >> 20)).unwrap_or_default();

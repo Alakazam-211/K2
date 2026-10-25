@@ -24032,6 +24032,11 @@ print(json.dumps(o))' "$to" "$as_d" "$env_name" "$file_name")"
             _vault_call POST grant "$(_vault_merge "$sj" "$nj" "$gj")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             echo "shared ${name} with ${to}"
+            # A compute: grant to a node another K2 server owns.
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+w = json.load(sys.stdin).get("warning")
+if w: sys.stderr.write(w + "\n")'
             ;;
         revoke)
             local rj
@@ -37956,8 +37961,18 @@ SECRETS (vault values as env, 0.46.4, Linux nodes)
   processes inherit it. Only give a job what it needs.
   The node must be Linux with the job wall, k2-node 0.46.4, and treat
   this server as its own (trust own); --any skips nodes that aren't or
-  that no grant covers. A secret job never runs beside another
-  workspace's job under the same user (secret_isolation_wait).
+  that no grant covers.
+  Who can read it on the node: root and the k2-node user, always. On a
+  node another K2 server owns (shared with you), that is someone else's
+  machine: compute:<you>/* never covers it, and a grant naming it warns.
+  Other jobs: while a secret job runs, K2 starts no job of another
+  workspace as the same OS user (your server's slot on that node), and
+  the secret job waits for one running (secret_isolation_wait); after a
+  k2-node restart the slot waits until the old unit is confirmed gone.
+  The job gets its own target dir, cargo home and sccache (no warm slot,
+  no shared cache), and its folders are deleted when it ends, before
+  another workspace's job may start; its log stays on the node, readable
+  by the node only. Your own workspace's jobs may run beside it.
   Revoking a grant never stops a running job (it already has the value);
   the next attempt is refused (secret_not_granted). k2 vault revoke lists
   the running jobs that got it. --plan shows each secret's env name and

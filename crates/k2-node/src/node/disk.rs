@@ -70,6 +70,70 @@ fn real_dir(e: &std::fs::DirEntry) -> bool {
     e.file_type().is_ok_and(|f| f.is_dir())
 }
 
+/// Delete a secret attempt's job folder, all but its node-only journal
+/// (`log`, 0600) (review B-H1). Under the Linux wall each subfolder is first
+/// given back to the node by the executor (`Reclaim`, never through a
+/// link), as the end-of-job strip does. Blocking. `Err` unless only `log`
+/// is left (or the folder is gone): the caller keeps the slot held and
+/// tries again; it never frees a slot over a failed delete.
+pub(crate) fn delete_secret_tree(admin_socket: &Path, walled: bool, slot: k2_node_proto::share::Slot, root: &Path) -> Result<(), String> {
+    let meta = match std::fs::symlink_metadata(root) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("{}: {e}", root.display())),
+    };
+    if !meta.is_dir() {
+        return Err(format!("{} isn't a plain folder", root.display()));
+    }
+    let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(root).map_err(|e| format!("{}: {e}", root.display()))?.flatten().filter(|e| e.file_name() != "log").collect();
+    for e in &entries {
+        let p = e.path();
+        if real_dir(e) {
+            if walled {
+                let op = crate::admin::jobs::JobOp::Reclaim { path: p.clone(), slot };
+                crate::admin::server::job_request(admin_socket, &op, &[], Duration::from_secs(600)).map_err(|x| format!("reclaim {}: {}: {}", p.display(), x.code, x.message))?;
+            }
+            std::fs::remove_dir_all(&p).map_err(|x| format!("delete {}: {x}", p.display()))?;
+        } else {
+            std::fs::remove_file(&p).map_err(|x| format!("delete {}: {x}", p.display()))?;
+        }
+    }
+    let left: Vec<String> = std::fs::read_dir(root)
+        .map_err(|e| format!("{}: {e}", root.display()))?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "log")
+        .collect();
+    if !left.is_empty() {
+        return Err(format!("still in {}: {}", root.display(), left.join(", ")));
+    }
+    Ok(())
+}
+
+/// The job units that are live on this machine right now (loaded and
+/// active, activating or deactivating), from `systemctl list-units` as the
+/// node user (review round 2, item 4: holds also come from what runs, not
+/// only from the ledger). `None` when systemctl can't say.
+pub(crate) fn live_job_units() -> Option<Vec<String>> {
+    let text = crate::admin::jobs::systemctl(&["list-units", "--all", "--plain", "--no-legend", "--no-pager", "k2job-*"]).ok()?;
+    Some(parse_live_units(&text))
+}
+
+pub(crate) fn parse_live_units(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut cols = line.split_whitespace().filter(|c| *c != "●" && *c != "*");
+        let (Some(unit), Some(_load), Some(active)) = (cols.next(), cols.next(), cols.next()) else { continue };
+        if !crate::admin::jobs::valid_unit(unit) || unit.starts_with("k2job-selftest-") {
+            continue;
+        }
+        if matches!(active, "active" | "activating" | "deactivating" | "reloading") {
+            out.push(unit.to_string());
+        }
+    }
+    out
+}
+
 /// Bytes on disk under `p` (allocated blocks, no link followed).
 fn bytes_of(p: &Path) -> u64 {
     super::run::disk_usage(p)
@@ -589,6 +653,13 @@ mod tests {
         put(&dir.join("log"), 1);
         std::os::unix::fs::symlink(elsewhere.join("job"), dir.join("target")).unwrap();
         assert_eq!(n.strip_job_dir(&n.owner(), &dir, None, JOB_END_KEEP).await, 1);
+        // Live units from systemctl's list (review round 2, item 4).
+        let listed = "k2job-j1-g1.service loaded active running K2 compute job k2job-j1-g1\n\
+                      ● k2job-j2-g1.service loaded failed failed K2 compute job\n\
+                      k2job-t1-0123456789abcdef.service loaded deactivating stop-sigterm K2\n\
+                      k2job-selftest-1-0.service loaded active running x\n\
+                      k2job-j3-g1.service loaded inactive dead K2\n";
+        assert_eq!(parse_live_units(listed), vec!["k2job-j1-g1.service".to_string(), "k2job-t1-0123456789abcdef.service".to_string()]);
         assert!(std::fs::symlink_metadata(dir.join("target")).is_err() && elsewhere.join("job/keep").exists());
         // A job dir that is itself a link is left alone.
         std::os::unix::fs::symlink(elsewhere.join("job"), layout.job_dir("k", 1)).unwrap();

@@ -1060,9 +1060,26 @@ impl Node {
         // caches, tmp) goes now, while the job still counts as running, so
         // no other workspace's job (same uid) starts before it's gone. Only
         // the node-only journal stays (it may not be shipped yet).
+        // Round 2, item 2: fail closed. If the delete fails, the slot stays
+        // held (a stand-in for a secret job of an unknown workspace takes
+        // this job's place before it leaves the running map) and the delete
+        // is retried until it works.
+        let mut secret_tree_left: Option<PathBuf> = None;
         if !a.plan.secret_env.is_empty() {
             if let Some(d) = dirs {
-                self.strip_job_dir(t, &d.root, a.plan.src.as_ref().map(|s| s.project_key.as_str()), SECRET_END_KEEP).await;
+                let (sock, walled, slot, root) = (self.opts.admin_socket.clone(), matches!(self.wall, Wall::JobUser { .. }), t.slot, d.root.clone());
+                let r = tokio::task::spawn_blocking(move || super::disk::delete_secret_tree(&sock, walled, slot, &root)).await;
+                match r {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        crate::nlog!("job {job} gen {gen}: its secret attempt's folder isn't deleted yet ({e}); slot {} stays held until it is", t.slot);
+                        secret_tree_left = Some(d.root.clone());
+                    }
+                    Err(e) => {
+                        crate::nlog!("job {job} gen {gen}: deleting its secret attempt's folder: {e}; slot {} stays held", t.slot);
+                        secret_tree_left = Some(d.root.clone());
+                    }
+                }
             }
         }
         // SE23: a secret job's detail and test summary go through its
@@ -1129,6 +1146,10 @@ impl Node {
         let record = || self.record_finish(t, job, gen, state, reason, detail, exit.as_ref(), log_seq, now, src.as_ref(), outputs.as_ref(), signed.as_ref().ok());
         let mut recorded = record();
         let gone = || {
+            if let Some(root) = secret_tree_left.clone() {
+                // The stand-in goes in first: no moment with the slot free.
+                self.hold_lingering(t.slot, vec![super::Linger { key: format!("{job}-g{gen}"), unit: None, tree: Some(root) }]);
+            }
             self.jobs.lock().unwrap().remove(&(t.slot, job.clone()));
             if self.jobs.lock().unwrap().is_empty() {
                 self.smoke.lock().unwrap().release();
@@ -1218,10 +1239,6 @@ impl Node {
         t.ledger.lock().unwrap().end_attempt(job, gen, state, reason, detail, exit, log_seq, now, src, outputs, signed)
     }
 }
-
-/// What stays of a secret attempt's tree after it ends: only the journal
-/// (node-only, 0600; review B-H1).
-pub const SECRET_END_KEEP: &[&str] = &["log"];
 
 /// A secret job's redactor (SE23) and the names whose values are too short
 /// to redact (under [`k2_redact::SURFACE_MIN_LEN`]).

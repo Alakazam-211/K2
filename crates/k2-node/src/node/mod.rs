@@ -287,6 +287,17 @@ pub struct Node {
 pub(crate) const LINGER_PREFIX: &str = "lingering:";
 pub(crate) const LINGER_WORKSPACE: &str = "(unknown workspace)";
 
+/// Something that holds a slot until it's confirmed gone ([`Node::hold_lingering`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Linger {
+    /// The stand-in's name (a unit name or a job folder name).
+    pub key: String,
+    /// A job unit that may still run.
+    pub unit: Option<String>,
+    /// A secret attempt's job folder still to delete (all but its 0600 log).
+    pub tree: Option<PathBuf>,
+}
+
 /// What this node understands beyond protocol 1 (the offer says it).
 pub fn node_features() -> Vec<String> {
     let mut f = vec![
@@ -443,20 +454,24 @@ impl Node {
         None
     }
 
-    /// Review B-M2: job units the last k2-node process left (released at
-    /// start, maybe still stopping). Until `Status` says each is gone, its
-    /// slot holds a stand-in that counts as a running secret job of an
-    /// unknown workspace, so neither a secret job nor another workspace's
-    /// job starts beside what may still run as that uid (SE26).
-    pub(crate) fn hold_lingering(self: &Arc<Self>, slot: Slot, units: Vec<String>) {
-        if units.is_empty() {
+    /// Review B-M2 / B-H1: what may still run, or still lie on disk, as a
+    /// slot's uid: a job unit the last k2-node process left (maybe still
+    /// stopping) and/or a secret attempt's tree a delete hasn't removed yet.
+    /// Until each is confirmed gone (`Status` says the unit is; then the
+    /// tree delete succeeds), its slot holds a stand-in that counts as a
+    /// running secret job of an unknown workspace, so neither a secret job
+    /// nor another workspace's job starts beside it (SE26). Fail closed:
+    /// while the executor can't answer or the delete fails, the hold stays
+    /// and both are tried again.
+    pub(crate) fn hold_lingering(self: &Arc<Self>, slot: Slot, items: Vec<Linger>) {
+        if items.is_empty() {
             return;
         }
         {
             let mut jobs = self.jobs.lock().unwrap();
-            for u in &units {
+            for it in &items {
                 jobs.insert(
-                    (slot, format!("{LINGER_PREFIX}{u}")),
+                    (slot, format!("{LINGER_PREFIX}{}", it.key)),
                     RunningJob {
                         generation: 0,
                         cpu_millis: Some(0),
@@ -469,32 +484,45 @@ impl Node {
                         secret: true,
                     },
                 );
-                self.fairq.set_lingering(slot, u, true);
+                self.fairq.set_lingering(slot, &it.key, true);
             }
         }
         self.jobs_changed();
         let node = self.clone();
         tokio::spawn(async move {
-            let mut left = units;
+            let mut left = items;
             let mut passes = 0u32;
             while !left.is_empty() {
                 let mut still = Vec::new();
-                for u in left {
-                    let gone = match node.job_op(crate::admin::jobs::JobOp::Status { unit: u.clone() }, vec![], Duration::from_secs(30)).await {
-                        Ok(crate::admin::jobs::JobAnswer::Status(s)) => !s.loaded || s.active_state == "inactive" || s.active_state == "failed",
-                        _ => false,
-                    };
-                    if gone {
-                        node.jobs.lock().unwrap().remove(&(slot, format!("{LINGER_PREFIX}{u}")));
-                        node.fairq.set_lingering(slot, &u, false);
-                        crate::nlog!("{u}: gone; slot {slot} is free again");
-                        node.jobs_changed();
-                    } else {
-                        if passes % 100 == 99 {
+                for mut it in left {
+                    if let Some(u) = it.unit.clone() {
+                        let gone = match node.job_op(crate::admin::jobs::JobOp::Status { unit: u.clone() }, vec![], Duration::from_secs(30)).await {
+                            Ok(crate::admin::jobs::JobAnswer::Status(s)) => !s.loaded || s.active_state == "inactive" || s.active_state == "failed",
+                            _ => false,
+                        };
+                        if gone {
+                            it.unit = None;
+                        } else if passes % 100 == 99 {
                             // Ask again now and then (an executor restart).
-                            let _ = node.job_op(crate::admin::jobs::JobOp::Release { unit: u.clone() }, vec![], Duration::from_secs(60)).await;
+                            let _ = node.job_op(crate::admin::jobs::JobOp::Release { unit: u }, vec![], Duration::from_secs(60)).await;
                         }
-                        still.push(u);
+                    }
+                    // A tree goes only once nothing runs that could write it.
+                    if it.unit.is_none() {
+                        if let Some(root) = it.tree.clone() {
+                            let (sock, walled) = (node.opts.admin_socket.clone(), matches!(node.wall, Wall::JobUser { .. }));
+                            let r = tokio::task::spawn_blocking(move || disk::delete_secret_tree(&sock, walled, slot, &root)).await;
+                            match r {
+                                Ok(Ok(())) => it.tree = None,
+                                Ok(Err(e)) if passes % 100 == 0 => crate::nlog!("slot {slot}: a secret attempt's folder isn't deleted yet ({e}); the slot stays held"),
+                                _ => {}
+                            }
+                        }
+                    }
+                    if it.unit.is_none() && it.tree.is_none() {
+                        node.release_lingering(slot, &it.key);
+                    } else {
+                        still.push(it);
                     }
                 }
                 left = still;
@@ -504,6 +532,22 @@ impl Node {
                 }
             }
         });
+    }
+
+    /// A stand-in's unit and tree are gone: free the slot (and the smoke
+    /// lock when nothing else runs, as a job's end does).
+    fn release_lingering(&self, slot: Slot, key: &str) {
+        let empty = {
+            let mut jobs = self.jobs.lock().unwrap();
+            jobs.remove(&(slot, format!("{LINGER_PREFIX}{key}")));
+            jobs.is_empty()
+        };
+        if empty {
+            self.smoke.lock().unwrap().release();
+        }
+        self.fairq.set_lingering(slot, key, false);
+        crate::nlog!("{key}: gone; slot {slot} is free again");
+        self.jobs_changed();
     }
 
     /// SE26: may a job of `ws` in `slot` (`secret`: it gets vault secrets)
@@ -969,7 +1013,7 @@ mod wall_tests {
         o.unit_poll = Duration::from_millis(20);
         let n = Node::open(o).await.unwrap();
         assert_eq!(n.secret_isolation_wait(OWNER_SLOT, "ws-a", true), None, "nothing runs yet");
-        n.hold_lingering(OWNER_SLOT, vec!["k2job-old-g1.service".into()]);
+        n.hold_lingering(OWNER_SLOT, vec![Linger { key: "k2job-old-g1.service".into(), unit: Some("k2job-old-g1.service".into()), tree: None }]);
         for (ws, secret) in [("ws-a", true), ("ws-a", false), ("ws-b", false)] {
             assert_eq!(
                 n.secret_isolation_wait(OWNER_SLOT, ws, secret).as_deref(),
@@ -982,6 +1026,44 @@ mod wall_tests {
         assert_eq!(n.running_by_tenant().get(&OWNER_SLOT), Some(&vec!["lingering:k2job-old-g1.service".to_string()]));
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(n.secret_isolation_wait(OWNER_SLOT, "ws-b", false).is_some(), "no Status answer: still held (fail closed)");
+    }
+
+    /// Review B-H1 round 2: a secret attempt's folder that can't be deleted
+    /// holds its slot, and the hold clears (smoke lock too) once the delete
+    /// succeeds; the 0600 log stays.
+    #[tokio::test]
+    async fn an_undeleted_secret_tree_holds_its_slot_until_it_goes() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = crate::util::temp_dir("linger-tree");
+        let mut o = NodeOptions::new(Layout::new(d.join("home"), d.join("cfg")));
+        o.dev = true;
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        o.unit_poll = Duration::from_millis(20);
+        let n = Node::open(o).await.unwrap();
+        let root = n.layout().job_dir("sj", 1);
+        std::fs::create_dir_all(root.join("home/.cargo")).unwrap();
+        std::fs::write(root.join("home/.cargo/credentials.toml"), "k2test-secret-cred").unwrap();
+        std::fs::write(root.join("log"), "journal").unwrap();
+        // A folder the node can't empty yet (no write bit): the delete fails.
+        std::fs::set_permissions(root.join("home/.cargo"), std::fs::Permissions::from_mode(0o500)).unwrap();
+        if disk::delete_secret_tree(&d.join("none.sock"), false, OWNER_SLOT, &root).is_ok() {
+            // Running as root (permissions don't bind): nothing to hold.
+            return;
+        }
+        n.hold_lingering(OWNER_SLOT, vec![Linger { key: "sj-g1".into(), unit: None, tree: Some(root.clone()) }]);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(n.secret_isolation_wait(OWNER_SLOT, "ws-b", false).is_some(), "a failed delete keeps the slot held");
+        std::fs::set_permissions(root.join("home/.cargo"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let t0 = std::time::Instant::now();
+        while n.secret_isolation_wait(OWNER_SLOT, "ws-b", false).is_some() {
+            assert!(t0.elapsed() < Duration::from_secs(10), "the hold never cleared");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let left: Vec<String> = std::fs::read_dir(&root).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left, vec!["log".to_string()]);
+        assert!(n.running_by_tenant().is_empty());
     }
 
     #[tokio::test]

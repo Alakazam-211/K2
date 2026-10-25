@@ -456,10 +456,14 @@ pub fn job_key(slot: Slot, job_id: &str, generation: u32) -> String {
 /// `interrupted/node_reboot`, and this boot's open ones (the previous
 /// `k2-node` process's, which can't be re-adopted)
 /// `interrupted/node_restart`, stopping what's left of them.
-/// Returns the job units it asked the executor to release (Linux wall):
-/// until each is confirmed gone, the node holds the slot as if a secret job
-/// of an unknown workspace still ran there (review B-M2, SE26).
-pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Result<Vec<String>, String> {
+/// Returns what holds the slot until confirmed gone ([`super::Linger`],
+/// review B-M2 / B-H1): the job units it asked the executor to release, any
+/// other live job unit of this slot (a second restart: rows already ended),
+/// and secret attempts' folders it couldn't delete yet (a secret attempt's
+/// folder is deleted here, all but its 0600 log, once nothing runs that
+/// could still write it). Until each is gone the node holds the slot as if
+/// a secret job of an unknown workspace still ran there (SE26).
+pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Result<Vec<super::Linger>, String> {
     // A restart the executor made for an update, rollback or k2-node
     // restart: `node_update` (infra, no node-health strike, V55).
     let why = if crate::admin::update::recent_update_mark(&opts.layout.config, opts.clock.now()) {
@@ -477,7 +481,21 @@ pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Re
     for (j, g) in &changed {
         crate::nlog!("job {j} gen {g}: interrupted by a node reboot");
     }
-    let mut lingering = Vec::new();
+    let walled = matches!(wall, Wall::JobUser { .. });
+    // What runs now, as systemd says (round 2, item 4): holds don't depend
+    // on the ledger alone (a second restart finds its rows already ended).
+    let live: Vec<String> = if walled && cfg!(target_os = "linux") {
+        match tokio::task::spawn_blocking(super::disk::live_job_units).await.ok().flatten() {
+            Some(v) => v.into_iter().filter(|u| crate::admin::jobs::unit_slot(u) == Some(t.slot)).collect(),
+            None => {
+                crate::nlog!("warning: systemctl couldn't list job units; only this slot's ledger rows hold it after the restart");
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let mut lingering: Vec<super::Linger> = Vec::new();
     for (j, g, pgid) in interrupted {
         crate::nlog!("job {j} gen {g}: interrupted by a k2-node restart");
         // Under the Linux wall the job lives in its own unit: stop it. It
@@ -491,7 +509,7 @@ pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Re
                     crate::admin::server::job_request(&sock, &crate::admin::jobs::JobOp::Release { unit: u }, &[], Duration::from_secs(60))
                 })
                 .await;
-                lingering.push(unit);
+                lingering.push(super::Linger { key: unit.clone(), unit: Some(unit), tree: None });
             }
         }
         // The node user can only signal its own processes, so a reused
@@ -502,7 +520,52 @@ pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Re
             crate::runner::signal_group(p, libc::SIGKILL);
         }
     }
+    // Any other live job unit of this slot (released again: it belongs to
+    // no running attempt of this process).
+    for u in &live {
+        if !lingering.iter().any(|l| l.unit.as_deref() == Some(u.as_str())) {
+            crate::nlog!("{u}: a job unit from before this k2-node still runs; releasing it and holding slot {}", t.slot);
+            let (sock, op) = (opts.admin_socket.clone(), crate::admin::jobs::JobOp::Release { unit: u.clone() });
+            let _ = tokio::task::spawn_blocking(move || crate::admin::server::job_request(&sock, &op, &[], Duration::from_secs(60))).await;
+            lingering.push(super::Linger { key: u.clone(), unit: Some(u.clone()), tree: None });
+        }
+    }
+    // Secret attempts' folders (round 2, item 1): every ended secret row
+    // whose folder still holds more than its log. With a unit that may
+    // still write it, the folder goes after the unit (the hold does it);
+    // otherwise now, and a failed delete holds the slot until it works.
+    let rows = t.ledger.lock().unwrap().all()?;
+    for r in rows.into_iter().filter(|r| !r.plan.secret_env.is_empty() && r.state.is_terminal()) {
+        let root = t.paths.job_dir(&r.job_id, r.generation);
+        if !has_more_than_log(&root) {
+            continue;
+        }
+        let unit = crate::admin::jobs::unit_name(&t.job_key(&r.job_id, r.generation));
+        if let Some(l) = lingering.iter_mut().find(|l| l.unit.is_some() && l.unit == unit) {
+            l.tree = Some(root);
+            continue;
+        }
+        let (sock, slot, rt) = (opts.admin_socket.clone(), t.slot, root.clone());
+        let deleted = tokio::task::spawn_blocking(move || super::disk::delete_secret_tree(&sock, walled, slot, &rt)).await;
+        match deleted {
+            Ok(Ok(())) => crate::nlog!("job {} gen {}: its secret attempt's folder is deleted", r.job_id, r.generation),
+            other => {
+                let why = match other {
+                    Ok(Err(e)) => e,
+                    Err(e) => e.to_string(),
+                    Ok(Ok(())) => unreachable!(),
+                };
+                crate::nlog!("job {} gen {}: its secret attempt's folder isn't deleted yet ({why}); slot {} stays held", r.job_id, r.generation, t.slot);
+                lingering.push(super::Linger { key: format!("{}-g{}", r.job_id, r.generation), unit: None, tree: Some(root) });
+            }
+        }
+    }
     Ok(lingering)
+}
+
+/// A job folder with anything besides its journal.
+fn has_more_than_log(root: &std::path::Path) -> bool {
+    std::fs::read_dir(root).is_ok_and(|rd| rd.flatten().any(|e| e.file_name() != "log"))
 }
 
 impl Node {

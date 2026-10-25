@@ -281,6 +281,14 @@ fn ensure_local_daemon_process() {
     log_debug!("[k2so] local daemon spawn timed out waiting for boot-status ready");
 }
 
+/// After an app update that did NOT install: start again the daemon that
+/// `stop_bundled_daemon_for_update` stopped (Windows). macOS never stops it
+/// (launchd keeps it), so there is nothing to do there.
+pub(crate) fn restart_daemon_after_failed_update() {
+    #[cfg(not(target_os = "macos"))]
+    ensure_local_daemon_process();
+}
+
 /// Kill local `k2-daemon.exe` and orphaned `frpc.exe` (Windows file lock
 /// + version heal). Best-effort; never panics. macOS uses launchd.
 pub fn stop_bundled_daemon_processes() {

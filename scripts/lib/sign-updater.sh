@@ -24,6 +24,15 @@
 #       `.sig2` for daemons, trusted comment
 #       "timestamp:…\tfile:<asset>\tversion:<x.y.z>".
 #
+# What this stops and what it doesn't (security review, accepted risk for
+# 0.46.4 pending Rosson's OK): the key never sits in the environment or argv
+# of anything release.sh starts, so builds and packages don't inherit it.
+# Any process running as this macOS user can still read the key file and
+# ask the unlocked login keychain for its password (no `-T ""`: that would
+# break unattended releases). Same model as the root-helper key. The real
+# fix is SS2b: a separate `k2sign` user that holds the keys and only signs
+# (0.46.5).
+#
 # How the secret is handled:
 #   - The key file is read only inside k2u_sign, through a process
 #     substitution (a /dev/fd pipe, never a temp file, never a variable).

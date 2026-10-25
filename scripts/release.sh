@@ -20,9 +20,16 @@
 #   - The update-signing keys in ~/.k2-updater/ and their passwords in the
 #     login keychain: U1 (the retired key, bridge signatures for installs
 #     older than 0.46.4) and U2 (the new key; docs/release/updater-key-ceremony.md).
-#     Every update file is signed with BOTH. The keys are read ONLY inside
-#     scripts/lib/sign-updater.sh, at each signing step; never exported, so
-#     no build script or package in this run can see them.
+#     Every update file is signed with BOTH. The keys are read only inside
+#     scripts/lib/sign-updater.sh, at each signing step. That keeps them out
+#     of the environment and the argv of every build, test and package this
+#     run starts, so nothing inherits them by accident.
+#     It does NOT stop code running as this macOS user (a build script, an
+#     npm or cargo package, an agent) from reading ~/.k2-updater/*.key and
+#     asking the unlocked login keychain for the password itself. That is
+#     an accepted risk for 0.46.4, the same model as the root-helper key,
+#     pending Rosson's OK; the real fix is SS2b (a separate `k2sign` macOS
+#     user that only signs, 0.46.5).
 #     TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) must NOT be set (refused).
 #   - Apple signing identity in keychain (GUI login session — see above)
 #   - gh CLI authenticated (or GH_TOKEN / GITHUB_TOKEN)

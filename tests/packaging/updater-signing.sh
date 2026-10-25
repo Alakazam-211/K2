@@ -833,7 +833,9 @@ for want in \
     '"sig2": "${DL_BASE}/${MAC_ASSET}.sig2"' \
     '"$DIST_DIR/${MAC_ASSET}.sig2"' \
     'k2_verify_published_u2 || U2_VERIFY_FAILED=1' \
-    '[ -z "$U2_VERIFY_FAILED" ] && [ -z "$DAEMON_SIGN_FAILED" ]'; do
+    '[ -z "$WIN_PATCH_FAILED" ] && [ -z "$U2_VERIFY_FAILED" ] && [ -z "$DAEMON_SIGN_FAILED" ]' \
+    'WIN_PATCH_FAILED=1' \
+    'Re-run: bash scripts/windows-patch-latest-json.sh'; do
     grep -qF -- "$want" "$R" && pass "release.sh (dual-sign): $want" || fail "release.sh dual-sign" "missing: $want"
 done
 grep -qF 'k2u_sign u2 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig2" raw' "$ROOT/scripts/sign-daemon.sh" \

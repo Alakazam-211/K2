@@ -437,12 +437,25 @@ async fn who_a_pairing_code_signs_in_as() {
     // Linked → the code pairs as the linked login.
     k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["deputy"] })).expect("link deputy");
     let r = http(port, "GET", &format!("/cli/auth/devices?token={OWNER_TOKEN}"), None, &[]);
-    assert_eq!(r.json()["pairAs"], serde_json::json!({ "user": "deputy", "source": "owner-linked", "needsPassword": false }), "{}", r.body);
+    let pa = r.json()["pairAs"].clone();
+    assert_eq!((pa["user"].clone(), pa["source"].clone(), pa["needsPassword"].clone()), (Value::from("deputy"), Value::from("owner-linked"), Value::from(false)), "{}", r.body);
+    assert_eq!(pa["choices"], serde_json::json!(["boss", "crew", "deputy"]), "the owner token may pick any enabled login: {}", r.body);
+    let r = http(port, "GET", "/cli/auth/devices", None, &[&bearer(&owner_login)]);
+    assert_eq!(r.json()["pairAs"].get("choices"), None, "a login gets no choices (F2): {}", r.body);
     let r = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some("{}"), &[]);
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["user"], "deputy", "{}", r.body);
     let paired = pair_through_edge(port, r.json()["code"].as_str().expect("code"), "linked-1");
     assert_eq!(paired["username"], "deputy");
+    let crew_phone = pair_through_edge(port, &owner_code(port, "crew"), "crew-1");
+    assert_eq!(crew_phone["username"], "crew");
+    // mine=1 (the profile modal): the owner token sees its linked login's
+    // phones only; without it, everyone's.
+    let r = http(port, "GET", &format!("/cli/auth/devices?mine=1&token={OWNER_TOKEN}"), None, &[]);
+    let mine: Vec<Value> = r.json()["devices"].as_array().cloned().unwrap_or_else(|| panic!("{}", r.body));
+    assert_eq!(mine.iter().map(|d| d["username"].clone()).collect::<Vec<_>>(), vec![Value::from("deputy")], "{}", r.body);
+    let r = http(port, "GET", &format!("/cli/auth/devices?token={OWNER_TOKEN}"), None, &[]);
+    assert_eq!(r.json()["devices"].as_array().map(Vec::len), Some(2), "{}", r.body);
 
     // Owner token naming a login → that login.
     let named = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some(r#"{"user":"crew"}"#), &[]);

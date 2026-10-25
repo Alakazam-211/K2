@@ -4885,8 +4885,9 @@ async fn handle_one_request(
                     let current = super::http::extract_token(&query)
                         .filter(|t| !super::http::ct_eq_token(t, state.token.as_str()))
                         .and_then(k2_core::connect_users::live_session_id);
+                    let mine = super::http::parse_params(&path, &query).get("mine").is_some_and(|v| v == "1" || v == "true");
                     tokio::task::spawn_blocking(move || {
-                        crate::connect_device_routes::handle_devices(&caller, current.as_deref())
+                        crate::connect_device_routes::handle_devices(&caller, current.as_deref(), mine)
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")))

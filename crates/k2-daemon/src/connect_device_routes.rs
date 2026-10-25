@@ -386,9 +386,9 @@ pub fn notify_paired(username: &str, device_name: &str, minted_by: &str) {
 
 /// `GET /cli/auth/devices`. `current` = the caller's own session id (to
 /// mark "this phone").
-pub fn handle_devices(caller: &Caller, current: Option<&str>) -> CliResponse {
-    let who = if caller.sees_everyone() { None } else { caller.login() };
-    let pair_as = match pair_target(caller, None) {
+pub fn handle_devices(caller: &Caller, current: Option<&str>, mine: bool) -> CliResponse {
+    let target = pair_target(caller, None);
+    let mut pair_as = match &target {
         Ok(user) => json!({
             "user": user,
             "source": if caller.login().is_some() { "self" } else { "owner-linked" },
@@ -399,7 +399,30 @@ pub fn handle_devices(caller: &Caller, current: Option<&str>) -> CliResponse {
             json!({ "user": Value::Null, "needsPassword": caller.login().is_some(), "error": err["error"].clone() })
         }
     };
-    match connect_users::device_sessions(who) {
+    // F2: only the owner token may pick another login; it gets the enabled
+    // logins to choose from (Settings → K2 Companion).
+    if *caller == Caller::OwnerToken {
+        let mut choices: Vec<String> = connect_users::list_users()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|u| !u.disabled)
+            .map(|u| u.username)
+            .collect();
+        choices.sort();
+        pair_as["choices"] = json!(choices);
+    }
+    // `mine=1` (the profile modal): only the phones of the login a new code
+    // from this caller pairs as (a login: itself; the owner token: its
+    // linked login, or none).
+    let listed = if mine {
+        match &target {
+            Ok(user) => connect_users::device_sessions(Some(user)),
+            Err(_) => Ok(Vec::new()),
+        }
+    } else {
+        connect_users::device_sessions(if caller.sees_everyone() { None } else { caller.login() })
+    };
+    match listed {
         Ok(list) => {
             let devices: Vec<Value> = list
                 .iter()

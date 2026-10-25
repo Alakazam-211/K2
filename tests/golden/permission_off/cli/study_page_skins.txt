@@ -101,6 +101,50 @@ PER-APP LOGINS (0.45.5)
     k2 app grant add … --kind app --target <app> --role R | --room sales
     k2 app role create R --app <app>           a role only that App can use
   <app> = a service id, or <workspace>/<publish name>. `host` = box login.
+  AGENT APP USERS (0.46.4): an agent with "manage Apps" adds people to its
+  own workspace's Apps (k2 app user add <u> --app <app> [--role R], a role
+  of its own workspace without files:download/files:agentconfig) and sets
+  their rooms (k2 app user rooms <u> --app <app> --agent <its room>). Those
+  people get that App only, never the box login: an agent add without
+  --app is refused (owner_only); box logins are the owner's.
+  WAITS FOR A RESET: a person an agent created, or whose password or
+  email it set, or invited (or an App key made) is tied to that agent's
+  workspace. If you give them more (the box login, another App or room,
+  files:download, chat), the extra waits until they reset their password:
+  sign-in, refresh and live sessions stay at that workspace's access, no
+  chat pass. Settings → User Access shows "Waiting for reset"; K2 also
+  posts one card. k2 app user reset <u> mails a reset link (stored email,
+  or --to <email>, or --code to see it yourself); using it starts the rest.
+
+INVITES (0.46.4)
+  k2 app user invite <u> --app <app> [--email e] [--role R]
+    Mails a one-time link to set their own password; new people need
+    --email and are made App-only. No password ever goes in a mail. An
+    agent invites for its own workspace's Apps, from its workspace's
+    hosted address, under its email sending mode: off → exit 3, approval →
+    held (the link's clock starts when it is sent), on → sent. No address:
+    refused for an agent (it never sees a link); the owner gets the link.
+    One invite per person a minute; a new link voids the older one.
+  Mail leaves through this box's own mail (Stalwart), never a linked inbox.
+  The link is <set-password page>#k2inv_… (the token is in the fragment,
+  so no server log or Referer carries it). The page is the App's own
+  (setPasswordUrl; it finishes with password.reset {token, password}) or
+  the box front door's /reset.
+  An App's own forgot-password (password.forgot with its pass) mails a
+  reset link the same way; the App never gets the token, and reaches only
+  people of its own workspace (and App).
+  LINK LIVES (named settings): invites 72 hours, resets 24 hours by
+  default. The App's builder (its own agent with "…manage them end to
+  end") or the owner sets its own, 15 minutes to 30 days:
+    k2 app login settings <app> --invite-ttl 7d --reset-ttl 2h
+  (--app host sets the box login's). Back to the default: --default inviteTtl.
+  MAIL TEXT: the App may give its own subject and body:
+    k2 app login settings <app> --invite-subject "Welcome to {app}" --invite-body-file invite.txt
+  Placeholders {app} {name} {username} {sender} {expires}. K2 always adds
+  the set-password link, its expiry and "If you weren't expecting this,
+  ignore it. Nobody at <App> will ask for your password." after the body;
+  a template can't place the link ({link} and k2inv_ are refused). No
+  template: K2's own ("You're invited to <App>").
   Isolation for a person only holds when they have no box login (User
   Access → host switch off). Box login off still ends ALL their sessions.
   Removing an App (`k2 publish rm`) ends its passes; its grants stay.

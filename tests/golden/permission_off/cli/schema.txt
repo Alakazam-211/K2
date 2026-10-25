@@ -2316,13 +2316,56 @@ exit: 0
     {
       "name": "app user add",
       "usage": "k2 app user add <username> [--email e] [--password-stdin] [--app <app> [--role R]]",
-      "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host). With --app (owner only) the person is a guest of that one App: its grant (the role, or no rooms) and no box login.",
+      "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host; owner only). With --app the person is a guest of that one App: its grant (the role, or no rooms) and no box login. An agent with \"manage Apps\" adds App users of its own workspace's Apps only.",
       "args": [{"name": "username", "required": true}],
       "flags": [
-        {"name": "--email", "arg": "e", "description": "Optional guest email (password-reset plumbing; K2 never mails guests)."},
+        {"name": "--email", "arg": "e", "description": "Optional guest email, used for invites and password resets."},
         {"name": "--password-stdin", "arg": null, "description": "Read K2-login password from stdin (no public register)."},
-        {"name": "--app", "arg": "app", "description": "Owner only. Published service id or <workspace>/<name>. No box login."},
+        {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>. No box login. Agents: one of their own workspace's Apps."},
         {"name": "--role", "arg": "role", "description": "With --app: the role on that App (host-wide or tagged for that App)."}
+      ]
+    },
+    {
+      "name": "app user invite",
+      "usage": "k2 app user invite <username> --app <app> [--email e] [--role R] [--from <address>] [--json]",
+      "description": "Mail a person a one-time link to set their own password for one App (no password ever goes in the mail). A new person needs --email and is made App-only (that App's grant, no box login). The owner, or an agent with \"manage Apps\" for its own workspace's Apps: an agent's invite leaves from its workspace's address under its email sending mode (off: exit 3; approval: held, the link's clock starts when it is sent). No mail path: an agent is refused, the owner gets the link once. Links expire (invites 72 h by default; k2 app login settings).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "The App (service id, App id or <workspace>/<name>)."},
+        {"name": "--email", "arg": "e", "description": "The new person's email (an existing person uses their stored email)."},
+        {"name": "--role", "arg": "R", "description": "With a new person: the role on that App."},
+        {"name": "--from", "arg": "address", "description": "Owner only: the hosted address to send from (agents always use their workspace's)."},
+        {"name": "--json", "arg": null, "description": "{ok, username, app, delivered: sent|held|returned, sentTo, from, expiresAt, link (returned only)}."}
+      ]
+    },
+    {
+      "name": "app user reset",
+      "usage": "k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>] [--json]",
+      "description": "Owner only. A one-time reset link. When it is used, the password is set, every session ends, and extra access that waited for a reset (an agent made or set up this person) starts. Mailed to the stored email by default; --to mails another address (stored as their email on use); --code shows the link to you instead of mailing it. Reset links expire (24 h by default; k2 app login settings).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "Whose set-password page and link life to use (default: the App the person uses)."},
+        {"name": "--to", "arg": "email", "description": "Mail it here instead; becomes their email when used."},
+        {"name": "--code", "arg": null, "description": "Show the link once instead of mailing it."},
+        {"name": "--from", "arg": "address", "description": "The hosted address to send from."},
+        {"name": "--json", "arg": null, "description": "{ok, username, app, delivered, sentTo, expiresAt, link (returned only)}."}
+      ]
+    },
+    {
+      "name": "app login settings",
+      "usage": "k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] [--invite-subject <s>] [--invite-body-file <f>] [--reset-subject <s>] [--reset-body-file <f>] [--default <field>] [--json]",
+      "description": "An App's invite and reset links: how long they live (15m to 30d; invites 72h and resets 24h by default), its own set-password page (else the box front door's /reset), and its own subject and body ({app} {name} {username} {sender} {expires}; K2 always adds the link and the safety line itself). The owner, or the App's own agent with \"...manage them end to end\". No flags: show them. Also: k2 app invite-settings.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--invite-ttl", "arg": "dur", "description": "Invite link life (15m to 30d)."},
+        {"name": "--reset-ttl", "arg": "dur", "description": "Reset link life (15m to 30d)."},
+        {"name": "--set-password-url", "arg": "url", "description": "The App's set-password page (https, no #fragment)."},
+        {"name": "--invite-subject", "arg": "text", "description": "The App's invite subject."},
+        {"name": "--invite-body-file", "arg": "file", "description": "The App's invite body (plain text)."},
+        {"name": "--reset-subject", "arg": "text", "description": "The App's reset subject."},
+        {"name": "--reset-body-file", "arg": "file", "description": "The App's reset body (plain text)."},
+        {"name": "--default", "arg": "field", "description": "Put one field back to K2's (repeatable)."},
+        {"name": "--json", "arg": null, "description": "{ok, app, settings}."}
       ]
     },
     {
@@ -2387,12 +2430,12 @@ exit: 0
     {
       "name": "app user rooms",
       "usage": "k2 app user rooms <username> --agent sales [--apply-tokens] [--app <app>]",
-      "description": "Set default rooms for an unassigned guest (the box login). Assigned guests 400 until unassigned. --apply-tokens copies onto live sessions only (never platform tokens). --app (owner only) sets the rooms of that guest's role-less grant on one App, creating it if missing.",
+      "description": "Set default rooms for an unassigned guest (the box login). Assigned guests 400 until unassigned. --apply-tokens copies onto live sessions only (never platform tokens). --app sets the rooms of that guest's role-less grant on one App, creating it if missing (the owner, or an agent for its own workspace's Apps).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
         {"name": "--apply-tokens", "arg": null, "description": "Copy onto live login sessions."},
-        {"name": "--app", "arg": "app", "description": "Owner only. Published service id or <workspace>/<name>."}
+        {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>. Agents: one of their own workspace's Apps."}
       ]
     },
     {
@@ -2722,7 +2765,7 @@ exit: 0
       "description": "Leftover of k2 app user add. Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login.",
       "args": [{"name": "username", "required": true}],
       "flags": [
-        {"name": "--email", "arg": "e", "description": "Optional guest email (password-reset plumbing; K2 never mails guests)."},
+        {"name": "--email", "arg": "e", "description": "Optional guest email, used for invites and password resets."},
         {"name": "--password-stdin", "arg": null, "description": "Read K2-login password from stdin (no public register)."}
       ]
     },

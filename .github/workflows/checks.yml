@@ -70,6 +70,11 @@ jobs:
 
       # The macOS sidecars build in ONE cargo call, and release.sh's Step
       # 8.5 standalone daemon uses the same package set (stub cargo/bun).
+      # release.sh's dot-progress waits and the Step 0.5 mac build env
+      # (stubbed; mirrors scripts/ci/checks.sh web).
+      - name: release.sh waits + Step 0.5 env (stubbed)
+        run: bash tests/packaging/release-wait-and-preflight.sh
+
       - name: macOS sidecars build once (stubbed)
         run: bash tests/packaging/build-once.sh
 
@@ -182,6 +187,7 @@ jobs:
           bash tests/cli/provision_mail_helper.sh
           bash tests/cli/daemon_unit_oompolicy.sh
           bash tests/cli/daemon_unit_runtime_dir.sh
+          bash tests/cli/daemon_install_systemd_unit.sh
 
       # Zen v2 (prd-zen-user-widgets-v2 UWB28): the verb catalog's lint,
       # the generated-file freshness check and the catalog-vs-ROUTES tests,

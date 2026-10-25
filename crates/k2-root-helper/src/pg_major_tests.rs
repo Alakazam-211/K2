@@ -58,6 +58,10 @@ struct World {
     server_num: HashMap<u16, String>,
     /// the restore target's owner is a superuser
     super_owner: bool,
+    /// pgdual tests: psql answers by needle (checked first, in order)
+    answers: Vec<(String, String)>,
+    /// pgdual tests: psql fails (exit 3, this stderr) on SQL with the needle
+    fail_on: Option<(String, String)>,
 }
 
 type W = Rc<RefCell<World>>;
@@ -270,6 +274,12 @@ fn pg_box() -> (T, W) {
                     let port: u16 = arg_after(a, "-p").map(|p| p.parse().unwrap()).unwrap_or(5432);
                     let sql = String::from_utf8_lossy(stdin.unwrap_or_default()).to_string();
                     w.sql.push((port, sql.clone()));
+                    if let Some((_, e)) = w.fail_on.as_ref().filter(|(n, _)| sql.contains(n.as_str())) {
+                        return ExecOut { status: 3, stdout: vec![], stderr: e.clone().into_bytes() };
+                    }
+                    if let Some((_, a)) = w.answers.iter().find(|(n, _)| sql.contains(n.as_str())) {
+                        return out(0, &a.clone());
+                    }
                     if sql.starts_with("SHOW server_version_num") {
                         let d = if port == 5432 { "160015" } else { "170011" };
                         return out(0, &format!("{}\n", w.server_num.get(&port).cloned().unwrap_or_else(|| d.into())));
@@ -1101,4 +1111,265 @@ fn version_announces_pgmajor_on_protocol_9() {
     assert_eq!(v["namespaces"]["pgmajor"], true);
     assert_eq!(v["namespaces"]["pg"], true, "protocols are additive");
     assert!(PROTOCOL >= k2_root_proto::version::PGMAJOR_MIN_PROTOCOL);
+}
+
+// ── pgdual (protocol 10, prd-app-pg-choice-dualrun-v1 §9) ───────────────
+
+const DUAL_PW: &str = "Rk2dualSecretOnlyOnStdinNeverArgv012345678";
+const DUAL_ID: &str = "0123456789ab";
+
+fn dual_pw() -> Vec<u8> {
+    serde_json::to_vec(&json!({ "password": DUAL_PW })).unwrap()
+}
+
+fn answer(w: &W, needle: &str, a: &str) {
+    w.borrow_mut().answers.push((needle.into(), a.into()));
+}
+
+fn hba_file(t: &T, m: u32) {
+    std::fs::write(
+        t.p(&format!("/etc/postgresql/{m}/main/pg_hba.conf")),
+        "# PostgreSQL Client Authentication\nlocal all postgres peer\nhost replication all 127.0.0.1/32 scram-sha-256\nhost all all 127.0.0.1/32 scram-sha-256\n",
+    )
+    .unwrap();
+}
+
+/// No password anywhere a log could keep it.
+fn no_password_leak(t: &T, o: &crate::Outcome) {
+    assert!(!String::from_utf8_lossy(&o.stdout).contains(DUAL_PW), "stdout");
+    assert!(!o.stderr.contains(DUAL_PW), "stderr: {}", o.stderr);
+    assert!(!t.audit.0.borrow().iter().any(|l| l.contains(DUAL_PW)), "audit");
+    for (_, a, _) in t.calls() {
+        assert!(!a.iter().any(|x| x.contains(DUAL_PW)), "argv: {a:?}");
+    }
+}
+
+/// PA21/PA22/PA24/L25: the dry run is open and writes nothing; the write
+/// is daemon-only; `--if-logical` never introduces `wal_level`.
+#[test]
+fn logical_conf_dry_run_write_and_if_logical() {
+    let (t, w) = pg_box();
+    hba_file(&t, 16);
+    answer(&w, "SHOW wal_level", "replica\n");
+    let conf = t.p("/etc/postgresql/16/main/conf.d/97-k2-logical.conf");
+    let hba = t.p("/etc/postgresql/16/main/pg_hba.conf");
+    let hba_before = std::fs::read_to_string(&hba).unwrap();
+    t.as_agent();
+    let v = json(&t.call(&["pg", "logical-conf", "16", "--dry-run"]));
+    assert_eq!((v["walLevel"].as_str(), v["restartNeeded"].as_bool()), (Some("replica"), Some(true)), "{v}");
+    assert_eq!(t.call(&["pg", "logical-conf", "16", "--wal-keep", "2048"]).code, exit::NOT_DAEMON);
+    t.as_daemon();
+    let o = t.call(&["pg", "logical-conf", "16", "--wal-keep", "2048", "--if-logical"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("not_logical"), "{}", o.stderr);
+    assert!(!conf.exists(), "nothing written");
+    assert_eq!(std::fs::read_to_string(&hba).unwrap(), hba_before, "hba untouched");
+    // The owner's prepare: the drop-in and the guard, then a reload.
+    let v = json(&t.call(&["pg", "logical-conf", "16", "--wal-keep", "2048"]));
+    assert_eq!((v["changed"].as_bool(), v["guardChanged"].as_bool(), v["restartNeeded"].as_bool()), (Some(true), Some(true), Some(true)), "{v}");
+    assert_eq!(std::fs::read_to_string(&conf).unwrap(), k2_root_proto::pg_dual::logical_conf(2048));
+    let h = std::fs::read_to_string(&hba).unwrap();
+    assert!(h.find(k2_root_proto::apps::REPL_GUARD_LINE).unwrap() < h.find("host replication all").unwrap(), "{h}");
+    assert!(t.non_query_calls().iter().any(|c| c.ends_with("reload postgresql@16-main")), "{:?}", t.non_query_calls());
+    // Idempotent; once logical, --if-logical may set the cap.
+    w.borrow_mut().answers.clear();
+    answer(&w, "SHOW wal_level", "logical\n");
+    let v = json(&t.call(&["pg", "logical-conf", "16", "--wal-keep", "2048", "--if-logical"]));
+    assert_eq!((v["changed"].as_bool(), v["guardChanged"].as_bool()), (Some(false), Some(false)), "{v}");
+    let v = json(&t.call(&["pg", "logical-conf", "16", "--wal-keep", "1024", "--if-logical"]));
+    assert_eq!(v["changed"], true);
+    assert!(std::fs::read_to_string(&conf).unwrap().contains("max_slot_wal_keep_size = 1024MB"));
+    never_destructive(&t);
+}
+
+fn dual_box() -> (T, W) {
+    let (t, w) = two_clusters();
+    mkdirs(&t.root, &["/etc/postgresql/17/main/conf.d", "/var/lib/postgresql/17/main"]);
+    hba_file(&t, 16);
+    hba_file(&t, 17);
+    w.borrow_mut().dbs.get_mut(&5433).unwrap().push("ws_jobs".into());
+    (t, w)
+}
+
+/// PA23/PA25/PA26: setup on the source, the subscription on the target,
+/// from canned SQL; the password only on stdin.
+#[test]
+fn dual_setup_source_then_subscribe() {
+    let (t, w) = dual_box();
+    answer(&w, "SHOW wal_level", "logical\n");
+    answer(&w, "pg_roles WHERE rolname = 'k2_repl_", "0\n");
+    let argv = ["pg", "dual", "setup-source", "16", "17", "ws_jobs", DUAL_ID];
+    let o = t.call_in(&argv, &dual_pw());
+    let v = json(&o);
+    no_password_leak(&t, &o);
+    assert_eq!(v["role"], "k2_repl_0123456789ab");
+    let sql = w.borrow().sql.clone();
+    let role = sql.iter().find(|(_, s)| s.contains("CREATE ROLE \"k2_repl_")).expect("role sql");
+    assert_eq!(role.0, 5432);
+    assert!(role.1.starts_with(k2_root_proto::pg_dual::QUIET_SQL));
+    assert!(role.1.contains("LOGIN REPLICATION BYPASSRLS NOINHERIT") && role.1.contains(DUAL_PW));
+    let db = sql.iter().find(|(_, s)| s.contains("CREATE PUBLICATION")).expect("db sql");
+    assert_eq!(db.0, 5432);
+    assert!(db.1.contains("CREATE EVENT TRIGGER k2_dual_freeze"));
+    let h = std::fs::read_to_string(t.p("/etc/postgresql/16/main/pg_hba.conf")).unwrap();
+    assert!(h.contains(k2_root_proto::apps::REPL_GUARD_LINE), "the guard is there before the role");
+    assert!(t.audit.0.borrow().iter().any(|l| l.contains("\"verb\":\"pg dual setup-source 16 17\"") && l.contains("\"dualId\":\"0123456789ab\"")));
+
+    answer(&w, "datconnlimit FROM pg_catalog.pg_database", "0,0,0\n");
+    answer(&w, "pg_publication WHERE pubname", "1\n");
+    let o = t.call_in(&["pg", "dual", "subscribe", "16", "17", "ws_jobs", DUAL_ID], &dual_pw());
+    ok(&o);
+    no_password_leak(&t, &o);
+    let sub = w.borrow().sql.iter().find(|(_, s)| s.contains("CREATE SUBSCRIPTION")).cloned().expect("sub sql");
+    assert_eq!(sub.0, 5433, "the subscription lives on the target");
+    assert!(sub.1.contains("port=5432 dbname=ws_jobs user=k2_repl_0123456789ab") && sub.1.contains("run_as_owner = false"));
+    // An agent: refused before anything.
+    t.as_agent();
+    assert_eq!(t.call_in(&argv, &dual_pw()).code, exit::NOT_DAEMON);
+}
+
+#[test]
+fn dual_refusals_change_nothing() {
+    // Not logical: no role, no guard.
+    let (t, w) = dual_box();
+    answer(&w, "SHOW wal_level", "replica\n");
+    let o = t.call_in(&["pg", "dual", "setup-source", "16", "17", "ws_jobs", DUAL_ID], &dual_pw());
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("not_logical"), "{}", o.stderr);
+    assert!(!w.borrow().sql.iter().any(|(_, s)| s.contains("CREATE ROLE")));
+    assert!(!std::fs::read_to_string(t.p("/etc/postgresql/16/main/pg_hba.conf")).unwrap().contains("k2_repl"));
+    // A second setup of the same id.
+    let (t, w) = dual_box();
+    answer(&w, "SHOW wal_level", "logical\n");
+    answer(&w, "pg_roles WHERE rolname = 'k2_repl_", "1\n");
+    let o = t.call_in(&["pg", "dual", "setup-source", "16", "17", "ws_jobs", DUAL_ID], &dual_pw());
+    assert!(o.stderr.starts_with("dual_exists"), "{}", o.stderr);
+    assert!(!w.borrow().sql.iter().any(|(_, s)| s.contains("CREATE ROLE")));
+    // Not a K2 database.
+    let (t, w) = dual_box();
+    answer(&w, "SHOW wal_level", "logical\n");
+    w.borrow_mut().owners.insert((5432, "ws_jobs".into()), "alice".into());
+    let o = t.call_in(&["pg", "dual", "setup-source", "16", "17", "ws_jobs", DUAL_ID], &dual_pw());
+    assert!(o.stderr.starts_with("not_k2_database"), "{}", o.stderr);
+    // A bad password or extra keys: refused as input.
+    let (t, w) = dual_box();
+    for bad in [
+        &br#"{"password":"short"}"#[..],
+        br#"{"password":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; DROP"}"#,
+        br#"{"password":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sql":"x"}"#,
+        b"nope",
+    ] {
+        let o = t.call_in(&["pg", "dual", "setup-source", "16", "17", "ws_jobs", DUAL_ID], bad);
+        assert_eq!(o.code, exit::ARGV, "{}", String::from_utf8_lossy(bad));
+    }
+    assert!(w.borrow().sql.is_empty());
+    // Subscribe into an open target, one with FORCE still on, or one with
+    // a subscription already.
+    for state in ["-1,0,0", "0,2,0", "0,0,1"] {
+        let (t, w) = dual_box();
+        answer(&w, "datconnlimit FROM pg_catalog.pg_database", &format!("{state}\n"));
+        answer(&w, "pg_publication WHERE pubname", "1\n");
+        let o = t.call_in(&["pg", "dual", "subscribe", "16", "17", "ws_jobs", DUAL_ID], &dual_pw());
+        assert!(o.stderr.starts_with("target_not_ready"), "{state}: {}", o.stderr);
+        assert!(!w.borrow().sql.iter().any(|(_, s)| s.contains("CREATE SUBSCRIPTION")), "{state}");
+    }
+    // A failing CREATE ROLE whose psql echo carries the password: masked.
+    let (t, w) = dual_box();
+    answer(&w, "SHOW wal_level", "logical\n");
+    answer(&w, "pg_roles WHERE rolname = 'k2_repl_", "0\n");
+    w.borrow_mut().fail_on =
+        Some(("CREATE ROLE".into(), format!("ERROR:  boom at '{DUAL_PW}'\nLINE 1: CREATE ROLE x LOGIN '{DUAL_PW}'")));
+    let o = t.call_in(&["pg", "dual", "setup-source", "16", "17", "ws_jobs", DUAL_ID], &dual_pw());
+    assert_eq!(o.code, exit::IO);
+    assert!(o.stderr.contains("setup-source: the replication role") && o.stderr.contains("***"), "{}", o.stderr);
+    assert!(!o.stderr.contains("LINE 1"), "{}", o.stderr);
+    no_password_leak(&t, &o);
+}
+
+/// PA31 step 4 / PA34: detach drops the subscription (slot name cleared
+/// first) then the source's objects; teardown also drops the role and
+/// carries on when the target cluster is down; status is open.
+#[test]
+fn dual_detach_teardown_and_status() {
+    let (t, w) = dual_box();
+    answer(&w, "pg_subscription WHERE subname", "1\n");
+    let v = json(&t.call(&["pg", "dual", "detach", "16", "17", "ws_jobs", DUAL_ID]));
+    assert_eq!((v["subscriptionDropped"].as_bool(), v["roleDropped"].as_bool()), (Some(true), Some(false)), "{v}");
+    let sql = w.borrow().sql.clone();
+    let drop_sub = sql.iter().position(|(p, s)| *p == 5433 && s.contains("SET (slot_name = NONE)")).expect("subscription dropped on the target");
+    let src = sql
+        .iter()
+        .position(|(p, s)| *p == 5432 && s.starts_with("DROP EVENT TRIGGER IF EXISTS k2_dual_freeze"))
+        .expect("source detached");
+    assert!(drop_sub < src, "the subscription before the slot");
+    assert!(!sql.iter().any(|(_, s)| s.contains("DROP ROLE")), "detach keeps the role");
+    let v = json(&t.call(&["pg", "dual", "teardown", "16", "17", "ws_jobs", DUAL_ID]));
+    assert_eq!(v["roleDropped"], true);
+    assert!(w.borrow().sql.iter().any(|(p, s)| *p == 5432 && s.contains("DROP ROLE \"k2_repl_0123456789ab\"")));
+    // The target cluster down: teardown still cleans the source, detach refuses.
+    let (t, w) = dual_box();
+    w.borrow_mut().clusters[1].2 = false;
+    let o = t.call(&["pg", "dual", "detach", "16", "17", "ws_jobs", DUAL_ID]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(w.borrow().sql.iter().all(|(_, s)| !s.contains("DROP EVENT TRIGGER")), "detach refused before the source");
+    let v = json(&t.call(&["pg", "dual", "teardown", "16", "17", "ws_jobs", DUAL_ID]));
+    assert!(v["notes"].to_string().contains("target cluster is down"), "{v}");
+    assert!(w.borrow().sql.iter().any(|(p, s)| *p == 5432 && s.contains("pg_drop_replication_slot")));
+    // Status: open, read-only, each side its own answer.
+    let (t, w) = dual_box();
+    answer(&w, "'walLevel', pg_catalog.current_setting", r#"{"walLevel":"logical","slot":{"active":true,"lagBytes":12}}"#);
+    answer(&w, "'subscription', EXISTS", r#"{"subscription":true,"tablesReady":3,"tablesTotal":3}"#);
+    t.as_agent();
+    let v = json(&t.call(&["pg", "dual", "status", "16", "17", "ws_jobs", DUAL_ID]));
+    assert_eq!(v["source"]["slot"]["lagBytes"], 12, "{v}");
+    assert_eq!(v["target"]["tablesReady"], 3, "{v}");
+    assert!(!w.borrow().sql.iter().any(|(_, s)| s.contains("DROP") || s.contains("CREATE")), "status changes nothing");
+    never_destructive(&t);
+}
+
+/// PA25/PA31: the schema-only dump, FORCE kept off then put back on the
+/// recorded tables only, and the write block that spares the walsender.
+#[test]
+fn schema_only_dump_force_kept_off_force_back_and_quiesce_repl() {
+    let (t, w) = two_clusters();
+    w.borrow_mut().dbs.get_mut(&5433).unwrap().push("ws_jobs".into());
+    ok(&t.call(&["pg", "move-dump", "16", "17", "ws_jobs", "20261024T101500Z", "--schema-only"]));
+    assert!(
+        w.borrow().postgres_calls.iter().any(|c| c.contains("pg_dump -Fc --schema-only --no-subscriptions")),
+        "{:?}",
+        w.borrow().postgres_calls
+    );
+    w.borrow_mut().forced = "16500,16501".into();
+    let v = json(&t.call_in(&["pg", "move-restore", "17", "ws_jobs", "20261024T101500Z", "--keep-force-off"], &login("ws_jobs_migrator")));
+    assert_eq!(v["forcedOids"], json!([16500, 16501]));
+    assert_eq!(v["forceKeptOff"], true);
+    let force_sql: Vec<String> = w.borrow().sql.iter().filter(|(_, s)| s.contains("FORCE ROW LEVEL SECURITY")).map(|(_, s)| s.clone()).collect();
+    assert_eq!(force_sql.len(), 1, "lifted once, never put back: {force_sql:?}");
+    assert!(force_sql[0].contains(" NO FORCE ROW LEVEL SECURITY"), "{force_sql:?}");
+    // force-rls: exactly those tables, checked in the database.
+    let v = json(&t.call_in(&["pg", "force-rls", "17", "ws_jobs", "on"], br#"{"oids":[16500,16501]}"#));
+    assert_eq!(v["major"], 17);
+    let f = w.borrow().sql.last().cloned().unwrap();
+    assert_eq!(f.0, 5433);
+    assert!(f.1.contains("ARRAY[16500, 16501]") && f.1.contains("RAISE EXCEPTION"));
+    for bad in [&br#"{"oids":[1259]}"#[..], br#"{"oids":"16500"}"#, br#"{"oids":[16500],"sql":"x"}"#] {
+        assert_eq!(t.call_in(&["pg", "force-rls", "17", "ws_jobs", "on"], bad).code, exit::ARGV, "{}", String::from_utf8_lossy(bad));
+    }
+    // quiesce-repl: CONNECTION LIMIT 0, every session but the walsender.
+    ok(&t.call(&["pg", "allow-conn", "16", "ws_jobs", "quiesce-repl"]));
+    let (port, sql) = w.borrow().sql.last().cloned().unwrap();
+    assert_eq!(port, 5432);
+    assert!(sql.starts_with("ALTER DATABASE \"ws_jobs\" CONNECTION LIMIT 0;") && sql.contains("backend_type <> 'walsender'"), "{sql}");
+    t.as_agent();
+    assert_eq!(t.call_in(&["pg", "force-rls", "17", "ws_jobs", "on"], br#"{"oids":[16500]}"#).code, exit::NOT_DAEMON);
+}
+
+#[test]
+fn version_announces_pgdual_on_protocol_10() {
+    let t = box_root();
+    let v = json(&t.call(&["helper", "version"]));
+    assert_eq!(v["protocol"], 10, "pgdual joins 0.46.4's one bump; never 11");
+    assert_eq!(v["namespaces"]["pgdual"], true);
+    assert_eq!(v["namespaces"]["creds"], true);
+    assert_eq!(k2_root_proto::version::PGDUAL_MIN_PROTOCOL, 10);
 }

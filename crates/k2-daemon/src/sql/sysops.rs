@@ -322,6 +322,26 @@ pub fn pgmajor_gate() -> Result<(), String> {
     }
 }
 
+/// `Ok` when the root helper speaks the live dual-run verbs (protocol ≥ 10
+/// and `namespaces.pgdual`, prd-app-pg-choice-dualrun-v1 §9), else the
+/// `helper_needed: …` message (`--live` answers `helper_old`; the copy
+/// path keeps working).
+pub fn pgdual_gate() -> Result<(), String> {
+    use k2_root_proto::version::PGDUAL_MIN_PROTOCOL;
+    let st = crate::root_helper::state();
+    let ns = st
+        .version_json
+        .as_ref()
+        .and_then(|v| v.pointer("/namespaces/pgdual"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    if st.usable(PGDUAL_MIN_PROTOCOL) && ns {
+        Ok(())
+    } else {
+        Err(crate::root_helper::helper_needed("a live Postgres move", PGDUAL_MIN_PROTOCOL, &st))
+    }
+}
+
 /// Mirror of `scripts/k2-pg-helper`'s `psql` argv allowlist (after the
 /// `psql` word): `-d <db>` exactly once, optional `-v ON_ERROR_STOP=1`
 /// and `-tA`, nothing else; `<db>` is `[a-z0-9_]{1,63}` and not

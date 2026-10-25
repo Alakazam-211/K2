@@ -460,7 +460,44 @@ pub fn hba_line(id: &AppId) -> String {
 /// dropped when its last line goes. A damaged block (two BEGINs, no END,
 /// END first, a foreign line inside) is a refusal, never a repair.
 pub fn hba_edit(text: &str, add: bool, id: &AppId) -> Result<Option<String>, &'static str> {
-    let line = hba_line(id);
+    hba_block_set(text, &hba_line(id), add)
+}
+
+/// prd-app-pg-choice-dualrun-v1 PA24 (protocol 10, `pgdual`): the one
+/// fixed line that refuses physical replication (a whole-cluster base
+/// backup) to every K2 replication role, above Debian's default
+/// `host replication all 127.0.0.1/32` allow. Logical replication
+/// connections are matched by database name, never by the `replication`
+/// keyword, so live moves still connect. Regex users need Postgres 16+
+/// (K2's floor).
+pub const REPL_GUARD_LINE: &str = "host replication /^k2_repl_ all reject";
+
+/// Put [`REPL_GUARD_LINE`] in the K2 block (created above the first rule
+/// when missing). `Ok(None)` = already there. The line stays after a run
+/// (harmless). A damaged block refuses, as [`hba_edit`].
+pub fn hba_guard(text: &str) -> Result<Option<String>, &'static str> {
+    hba_block_set(text, REPL_GUARD_LINE, true)
+}
+
+/// A line K2 writes into its block: an App's canned line, or the guard.
+fn block_line_ok(l: &str) -> bool {
+    if l == REPL_GUARD_LINE {
+        return true;
+    }
+    let f: Vec<&str> = l.split_whitespace().collect();
+    f.len() == 5
+        && f[0] == "host"
+        && f[1] == f[2]
+        && f[1].strip_prefix("app_").is_some_and(|n| {
+            !n.is_empty() && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        })
+        && f[3] == "127.0.0.1/32"
+        && f[4] == "scram-sha-256"
+        && l == f.join(" ")
+}
+
+fn hba_block_set(text: &str, line: &str, add: bool) -> Result<Option<String>, &'static str> {
+    let line = line.to_string();
     let lines: Vec<&str> = text.lines().collect();
     let begins: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.trim_end() == HBA_BEGIN).map(|(i, _)| i).collect();
     let ends: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.trim_end() == HBA_END).map(|(i, _)| i).collect();
@@ -473,19 +510,9 @@ pub fn hba_edit(text: &str, add: bool, id: &AppId) -> Result<Option<String>, &'s
         None => Vec::new(),
         Some((b, e)) => lines[b + 1..e].iter().map(|l| l.trim_end().to_string()).collect(),
     };
-    // Only canned App lines live in the block.
+    // Only canned lines live in the block.
     for l in &inside {
-        let f: Vec<&str> = l.split_whitespace().collect();
-        let ok = f.len() == 5
-            && f[0] == "host"
-            && f[1] == f[2]
-            && f[1].strip_prefix("app_").is_some_and(|n| {
-                !n.is_empty() && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-            })
-            && f[3] == "127.0.0.1/32"
-            && f[4] == "scram-sha-256"
-            && *l == f.join(" ");
-        if !ok {
+        if !block_line_ok(l) {
             return Err("pg_hba.conf: the K2 Apps block holds a line K2 didn't write");
         }
     }
@@ -1335,6 +1362,31 @@ mod tests {
         ] {
             assert!(hba_edit(&bad, true, &jobs).is_err(), "{bad:?}");
         }
+    }
+
+    /// PA24: the replication guard sits in the K2 block above Debian's
+    /// `host replication all` allow, is idempotent, lives beside App lines
+    /// (and outlives them), and a damaged block still refuses.
+    #[test]
+    fn the_replication_guard_line() {
+        let jobs = AppId::parse("jobs").unwrap();
+        let base = "# PostgreSQL Client Authentication\nlocal all postgres peer\nhost replication all 127.0.0.1/32 scram-sha-256\nhost all all 127.0.0.1/32 scram-sha-256\n";
+        let g = hba_guard(base).unwrap().unwrap();
+        assert!(g.find(REPL_GUARD_LINE).unwrap() < g.find("host replication all").unwrap(), "first match wins: {g}");
+        assert!(g.contains(&format!("{HBA_BEGIN}\n{REPL_GUARD_LINE}\n{HBA_END}\n")), "{g}");
+        assert_eq!(hba_guard(&g).unwrap(), None, "idempotent");
+        // App lines and the guard share the block.
+        let a = hba_edit(&g, true, &jobs).unwrap().unwrap();
+        assert!(a.contains(REPL_GUARD_LINE) && a.contains("host app_jobs app_jobs"));
+        assert_eq!(hba_guard(&a).unwrap(), None);
+        // The last App line out keeps the block for the guard.
+        let back = hba_edit(&a, false, &jobs).unwrap().unwrap();
+        assert_eq!(back, g);
+        // Damage refuses before any change.
+        let bad = format!("{HBA_BEGIN}\nhost replication all 127.0.0.1/32 trust\n{HBA_END}\n");
+        assert!(hba_guard(&bad).is_err());
+        assert!(hba_guard(&format!("{HBA_BEGIN}\n{REPL_GUARD_LINE}\n")).is_err());
+        assert_eq!(REPL_GUARD_LINE, "host replication /^k2_repl_ all reject");
     }
 
     #[test]

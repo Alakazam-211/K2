@@ -154,6 +154,9 @@ pub enum ConnMode {
     On,
     Quiesce,
     Off,
+    /// Protocol 10 (`pgdual`): the cut-over's write block. Like `quiesce`
+    /// but the logical walsender keeps streaming (L6).
+    QuiesceRepl,
 }
 
 impl ConnMode {
@@ -162,6 +165,7 @@ impl ConnMode {
             "on" => Self::On,
             "quiesce" => Self::Quiesce,
             "off" => Self::Off,
+            "quiesce-repl" => Self::QuiesceRepl,
             _ => return None,
         })
     }
@@ -170,6 +174,7 @@ impl ConnMode {
             Self::On => "on",
             Self::Quiesce => "quiesce",
             Self::Off => "off",
+            Self::QuiesceRepl => "quiesce-repl",
         }
     }
 }
@@ -572,12 +577,17 @@ pub enum Verb {
     /// `pg move-dump <from> <to> <db> <tag>`: `<to>`'s `pg_dump -Fc
     /// --no-subscriptions --no-publications` of `<db>` on `<from>`'s
     /// cluster, as postgres, into `MOVES_DIR/<db>-<tag>.dump`.
-    PgMoveDump { from: PgMajor, to: PgMajor, db: DbName, tag: String },
+    /// `--schema-only` (protocol 10, `pgdual`): DDL only, for a live
+    /// dual-run's target (PA25).
+    PgMoveDump { from: PgMajor, to: PgMajor, db: DbName, tag: String, schema_only: bool },
     /// `pg move-restore <to> <db> <tag>`: `<to>`'s `pg_restore
     /// --exit-on-error` of that dump into `<db>` (which must exist) on
     /// `<to>`'s cluster, as postgres, with the temp-file and statement caps
     /// lifted for the session (V40).
-    PgMoveRestore { to: PgMajor, db: DbName, tag: String },
+    /// `--keep-force-off` (protocol 10, `pgdual`): FORCE RLS stays lifted
+    /// (the apply worker writes as the owner) and the answer lists the
+    /// tables that had it (`forcedOids`) for `pg force-rls` at the switch.
+    PgMoveRestore { to: PgMajor, db: DbName, tag: String, keep_force_off: bool },
     /// `pg move-file-remove <db> <tag>`: that dump file (forget-old).
     PgMoveFileRemove { db: DbName, tag: String },
     /// `pg allow-conn <M> <db> on|quiesce|off` (a move's lock, §6.2):
@@ -590,6 +600,22 @@ pub enum Verb {
     /// `pg drop-db <M> <db>`: `DROP DATABASE … WITH (FORCE)` on that
     /// cluster (forget-old; the daemon allows it for the owner only).
     PgDropDb { major: PgMajor, db: DbName },
+    // pg, protocol 10 (`namespaces.pgdual`, see `crate::pg_dual`)
+    /// `pg logical-conf <M> --wal-keep <MB> [--if-logical]` (daemon):
+    /// `conf.d/97-k2-logical.conf` (`wal_level = logical`,
+    /// `max_slot_wal_keep_size`) and the `pg_hba.conf` replication guard,
+    /// then a reload. `--if-logical` refuses unless the running cluster is
+    /// already logical (an agent's live move never changes `wal_level`).
+    /// `pg logical-conf <M> --dry-run` (open): what is there now.
+    /// `wal_keep_mb: None` = the dry run.
+    PgLogicalConf { major: PgMajor, wal_keep_mb: Option<u32>, if_logical: bool },
+    /// `pg force-rls <M> <db> on` (daemon), stdin [`crate::pg_dual::ForceOids`]:
+    /// FORCE ROW LEVEL SECURITY back on exactly those tables of `<db>`.
+    PgForceRls { major: PgMajor, db: DbName },
+    /// `pg dual <op> <from> <to> <db> <id>` ([`crate::pg_dual::DualOp`]):
+    /// canned SQL as postgres from validated names; `status` is open and
+    /// read-only, the rest daemon-only. `<from>` < `<to>`; `<id>` is 12 hex.
+    PgDual { op: crate::pg_dual::DualOp, from: PgMajor, to: PgMajor, db: DbName, id: String },
     // keep
     KeepStatus,
     KeepKekInit,
@@ -780,6 +806,30 @@ fn major(t: &str) -> Result<PgMajor, &'static str> {
 
 fn db_name(t: &str) -> Result<DbName, &'static str> {
     DbName::parse(t).ok_or(REFUSED)
+}
+
+/// A tenant database: never `postgres` (the cluster's own) — the dual-run
+/// verbs act on one K2 database only.
+fn user_db(t: &str) -> Result<DbName, &'static str> {
+    let d = db_name(t)?;
+    if d.as_str() == "postgres" {
+        return Err(REFUSED);
+    }
+    Ok(d)
+}
+
+/// `--wal-keep <MB>`: digits, no leading zero, inside
+/// [`crate::pg_dual::WAL_KEEP_MB`].
+fn wal_keep_token(t: &str) -> Result<u32, &'static str> {
+    if t.is_empty() || t.len() > 5 || t.starts_with('0') || !t.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(REFUSED);
+    }
+    let mb: u32 = t.parse().map_err(|_| REFUSED)?;
+    if crate::pg_dual::wal_keep_ok(mb) {
+        Ok(mb)
+    } else {
+        Err(REFUSED)
+    }
 }
 
 fn tag_token(t: &str) -> Result<String, &'static str> {
@@ -974,16 +1024,26 @@ impl Verb {
                 };
                 Verb::PgCopyRoles { from, to, dry_run }
             }
-            ["pg", "move-dump", f, t, db, tag] => {
+            ["pg", "move-dump", f, t, db, tag, rest @ ..] => {
                 let (from, to) = (major(f)?, major(t)?);
                 // Never an older pg_dump than the server it reads.
                 if to < from {
                     return Err(REFUSED);
                 }
-                Verb::PgMoveDump { from, to, db: db_name(db)?, tag: tag_token(tag)? }
+                let schema_only = match rest {
+                    [] => false,
+                    ["--schema-only"] => true,
+                    _ => return Err(REFUSED),
+                };
+                Verb::PgMoveDump { from, to, db: db_name(db)?, tag: tag_token(tag)?, schema_only }
             }
-            ["pg", "move-restore", t, db, tag] => {
-                Verb::PgMoveRestore { to: major(t)?, db: db_name(db)?, tag: tag_token(tag)? }
+            ["pg", "move-restore", t, db, tag, rest @ ..] => {
+                let keep_force_off = match rest {
+                    [] => false,
+                    ["--keep-force-off"] => true,
+                    _ => return Err(REFUSED),
+                };
+                Verb::PgMoveRestore { to: major(t)?, db: db_name(db)?, tag: tag_token(tag)?, keep_force_off }
             }
             ["pg", "move-file-remove", db, tag] => {
                 Verb::PgMoveFileRemove { db: db_name(db)?, tag: tag_token(tag)? }
@@ -994,6 +1054,33 @@ impl Verb {
                 mode: ConnMode::parse(t).ok_or(REFUSED)?,
             },
             ["pg", "drop-db", m, db] => Verb::PgDropDb { major: major(m)?, db: db_name(db)? },
+            ["pg", "logical-conf", m, "--dry-run"] => Verb::PgLogicalConf { major: major(m)?, wal_keep_mb: None, if_logical: false },
+            ["pg", "logical-conf", m, "--wal-keep", mb, rest @ ..] => {
+                let if_logical = match rest {
+                    [] => false,
+                    ["--if-logical"] => true,
+                    _ => return Err(REFUSED),
+                };
+                let mb = wal_keep_token(mb)?;
+                Verb::PgLogicalConf { major: major(m)?, wal_keep_mb: Some(mb), if_logical }
+            }
+            ["pg", "force-rls", m, db, "on"] => Verb::PgForceRls { major: major(m)?, db: user_db(db)? },
+            ["pg", "dual", op, f, t, db, id] => {
+                let (from, to) = (major(f)?, major(t)?);
+                if to <= from {
+                    return Err(REFUSED);
+                }
+                if !crate::pg_dual::dual_id_ok(id) {
+                    return Err(REFUSED);
+                }
+                Verb::PgDual {
+                    op: crate::pg_dual::DualOp::parse(op).ok_or(REFUSED)?,
+                    from,
+                    to,
+                    db: user_db(db)?,
+                    id: id.to_string(),
+                }
+            }
 
             ["keep", "status"] => Verb::KeepStatus,
             ["keep", "kek", "init"] => Verb::KeepKekInit,
@@ -1229,17 +1316,37 @@ impl Verb {
                 }
                 v
             }
-            Verb::PgMoveDump { from, to, db, tag } => {
-                s(&["pg", "move-dump", &from.token(), &to.token(), db.as_str(), tag])
+            Verb::PgMoveDump { from, to, db, tag, schema_only } => {
+                let mut v = s(&["pg", "move-dump", &from.token(), &to.token(), db.as_str(), tag]);
+                if *schema_only {
+                    v.push("--schema-only".into());
+                }
+                v
             }
-            Verb::PgMoveRestore { to, db, tag } => {
-                s(&["pg", "move-restore", &to.token(), db.as_str(), tag])
+            Verb::PgMoveRestore { to, db, tag, keep_force_off } => {
+                let mut v = s(&["pg", "move-restore", &to.token(), db.as_str(), tag]);
+                if *keep_force_off {
+                    v.push("--keep-force-off".into());
+                }
+                v
             }
             Verb::PgMoveFileRemove { db, tag } => s(&["pg", "move-file-remove", db.as_str(), tag]),
             Verb::PgAllowConn { major, db, mode } => {
                 s(&["pg", "allow-conn", &major.token(), db.as_str(), mode.token()])
             }
             Verb::PgDropDb { major, db } => s(&["pg", "drop-db", &major.token(), db.as_str()]),
+            Verb::PgLogicalConf { major, wal_keep_mb: None, .. } => s(&["pg", "logical-conf", &major.token(), "--dry-run"]),
+            Verb::PgLogicalConf { major, wal_keep_mb: Some(mb), if_logical } => {
+                let mut v = s(&["pg", "logical-conf", &major.token(), "--wal-keep", &mb.to_string()]);
+                if *if_logical {
+                    v.push("--if-logical".into());
+                }
+                v
+            }
+            Verb::PgForceRls { major, db } => s(&["pg", "force-rls", &major.token(), db.as_str(), "on"]),
+            Verb::PgDual { op, from, to, db, id } => {
+                s(&["pg", "dual", op.token(), &from.token(), &to.token(), db.as_str(), id])
+            }
             Verb::KeepStatus => s(&["keep", "status"]),
             Verb::KeepKekInit => s(&["keep", "kek", "init"]),
             Verb::KeepKekGet => s(&["keep", "kek", "get"]),
@@ -1362,6 +1469,14 @@ impl Verb {
             | Verb::PgMoveFileRemove { .. }
             | Verb::PgAllowConn { .. }
             | Verb::PgDropDb { .. } => Daemon,
+            // Live dual-run (protocol 10). Reading: open. Writing the
+            // `wal_level` drop-in (any later restart applies it, L25), a
+            // replication role, a publication, a subscription, the DDL
+            // freeze, FORCE RLS: the daemon's call only (the owner's for
+            // `--prepare-live`, the daemon gate's otherwise).
+            Verb::PgLogicalConf { wal_keep_mb: None, .. } => Open,
+            Verb::PgDual { op: crate::pg_dual::DualOp::Status, .. } => Open,
+            Verb::PgLogicalConf { .. } | Verb::PgForceRls { .. } | Verb::PgDual { .. } => Daemon,
 
             Verb::KeepStatus | Verb::KeepGenGet => Open,
             Verb::KeepKekInit
@@ -1468,6 +1583,11 @@ impl Verb {
             Verb::PgCopyRoles { .. } => Some(CAP_ROLES),
             // The database owner's login (review #1 H1): one small JSON object.
             Verb::PgMoveRestore { .. } => Some(CAP_MOVE_LOGIN),
+            // The replication role's password (never argv, never audited).
+            Verb::PgDual { op: crate::pg_dual::DualOp::SetupSource | crate::pg_dual::DualOp::Subscribe, .. } => {
+                Some(crate::pg_dual::CAP_DUAL_SECRET)
+            }
+            Verb::PgForceRls { .. } => Some(crate::pg_dual::CAP_FORCE_OIDS),
             // The plaintext value; never in argv or the audit line.
             Verb::CredsPut(_) => Some(crate::creds::CAP_CRED),
             Verb::Sew(v) => v.stdin_cap(),
@@ -1495,6 +1615,8 @@ impl Verb {
                 // make every restart "busy" (Postgres orders the SQL).
                 | Verb::PgMoveDump { .. }
                 | Verb::PgMoveRestore { .. }
+                | Verb::PgLogicalConf { wal_keep_mb: None, .. }
+                | Verb::PgDual { op: crate::pg_dual::DualOp::Status, .. }
                 | Verb::PgSystemctl {
                     op: PgOp::IsActive,
                     ..
@@ -1524,13 +1646,19 @@ impl Verb {
             Verb::PgPsql { cluster: None, .. } => "pg psql".to_string(),
             Verb::PgPsql { cluster: Some(m), .. } => format!("pg psql --cluster {}", m.token()),
             // The db and tag go in their own fields.
-            Verb::PgMoveDump { from, to, .. } => format!("pg move-dump {} {}", from.token(), to.token()),
-            Verb::PgMoveRestore { to, .. } => format!("pg move-restore {}", to.token()),
+            Verb::PgMoveDump { from, to, schema_only, .. } => {
+                format!("pg move-dump {} {}{}", from.token(), to.token(), if *schema_only { " --schema-only" } else { "" })
+            }
+            Verb::PgMoveRestore { to, keep_force_off, .. } => {
+                format!("pg move-restore {}{}", to.token(), if *keep_force_off { " --keep-force-off" } else { "" })
+            }
             Verb::PgMoveFileRemove { .. } => "pg move-file-remove".to_string(),
             Verb::PgAllowConn { major, mode, .. } => {
                 format!("pg allow-conn {} {}", major.token(), mode.token())
             }
             Verb::PgDropDb { major, .. } => format!("pg drop-db {}", major.token()),
+            Verb::PgForceRls { major, .. } => format!("pg force-rls {}", major.token()),
+            Verb::PgDual { op, from, to, .. } => format!("pg dual {} {} {}", op.token(), from.token(), to.token()),
             _ => v.join(" "),
         }
     }
@@ -1613,17 +1741,29 @@ pub fn catalog() -> Vec<Verb> {
         Verb::PgInstallSlice,
         Verb::PgCopyRoles { from: m16, to: m17, dry_run: false },
         Verb::PgCopyRoles { from: m16, to: m17, dry_run: true },
-        Verb::PgMoveDump { from: m16, to: m17, db: jobs.clone(), tag: "20261020T101500Z".into() },
-        Verb::PgMoveRestore { to: m17, db: jobs.clone(), tag: "20261020T101500Z".into() },
+        Verb::PgMoveDump { from: m16, to: m17, db: jobs.clone(), tag: "20261020T101500Z".into(), schema_only: false },
+        Verb::PgMoveDump { from: m16, to: m17, db: jobs.clone(), tag: "20261020T101500Z".into(), schema_only: true },
+        Verb::PgMoveRestore { to: m17, db: jobs.clone(), tag: "20261020T101500Z".into(), keep_force_off: false },
+        Verb::PgMoveRestore { to: m17, db: jobs.clone(), tag: "20261020T101500Z".into(), keep_force_off: true },
         Verb::PgMoveFileRemove { db: jobs.clone(), tag: "20261020T101500Z".into() },
         Verb::PgAllowConn { major: m16, db: jobs.clone(), mode: ConnMode::Off },
         Verb::PgAllowConn { major: m16, db: jobs.clone(), mode: ConnMode::Quiesce },
         Verb::PgAllowConn { major: m16, db: jobs.clone(), mode: ConnMode::On },
-        Verb::PgDropDb { major: m16, db: jobs },
+        Verb::PgAllowConn { major: m16, db: jobs.clone(), mode: ConnMode::QuiesceRepl },
+        Verb::PgLogicalConf { major: m16, wal_keep_mb: None, if_logical: false },
+        Verb::PgLogicalConf { major: m16, wal_keep_mb: Some(2048), if_logical: false },
+        Verb::PgLogicalConf { major: m16, wal_keep_mb: Some(8192), if_logical: true },
+        Verb::PgForceRls { major: m17, db: jobs.clone() },
+        Verb::PgDropDb { major: m16, db: jobs.clone() },
         Verb::PgHbaApp {
             add: true,
             id: AppId::parse("jobs").expect("id"),
         },
+        Verb::PgDual { op: crate::pg_dual::DualOp::SetupSource, from: m16, to: m17, db: jobs.clone(), id: "0123456789ab".into() },
+        Verb::PgDual { op: crate::pg_dual::DualOp::Subscribe, from: m16, to: m17, db: jobs.clone(), id: "0123456789ab".into() },
+        Verb::PgDual { op: crate::pg_dual::DualOp::Detach, from: m16, to: m17, db: jobs.clone(), id: "0123456789ab".into() },
+        Verb::PgDual { op: crate::pg_dual::DualOp::Teardown, from: m16, to: m17, db: jobs.clone(), id: "0123456789ab".into() },
+        Verb::PgDual { op: crate::pg_dual::DualOp::Status, from: m16, to: m17, db: jobs, id: "0123456789ab".into() },
         Verb::PgHbaApp {
             add: false,
             id: AppId::parse("nsi-skin").expect("id"),
@@ -2307,6 +2447,10 @@ mod tests {
                 Verb::Sew(SewVerb::RotateMaster) => assert_eq!(cap, Some(CAP_SEW_KEY)),
                 Verb::AppsPodmanInstall => assert_eq!(cap, Some(crate::podman::CAP_BUNDLE)),
                 Verb::CredsPut(_) => assert_eq!(cap, Some(crate::creds::CAP_CRED)),
+                Verb::PgDual { op: crate::pg_dual::DualOp::SetupSource | crate::pg_dual::DualOp::Subscribe, .. } => {
+                    assert_eq!(cap, Some(crate::pg_dual::CAP_DUAL_SECRET))
+                }
+                Verb::PgForceRls { .. } => assert_eq!(cap, Some(crate::pg_dual::CAP_FORCE_OIDS)),
                 _ => assert_eq!(cap, None, "{v:?} reads no stdin"),
             }
             if v.class() == Class::Daemon
@@ -2390,6 +2534,96 @@ mod tests {
         let v = Verb::parse(&["pg", "psql", "--cluster", "17", "-d", "ws_jobs"]).unwrap();
         assert_eq!(v.audit_name(), "pg psql --cluster 17");
         assert_eq!(v.argv(), vec!["pg", "psql", "--cluster", "17", "-d", "ws_jobs"]);
+    }
+
+    /// The live dual-run verbs (protocol 10, `pgdual`): classes, locks,
+    /// stdin and audit names written out by hand.
+    #[test]
+    fn pgdual_class_table() {
+        let open: &[&[&str]] = &[
+            &["pg", "logical-conf", "16", "--dry-run"],
+            &["pg", "dual", "status", "16", "17", "ws_jobs", "0123456789ab"],
+        ];
+        let daemon: &[&[&str]] = &[
+            &["pg", "logical-conf", "16", "--wal-keep", "2048"],
+            &["pg", "logical-conf", "16", "--wal-keep", "8192", "--if-logical"],
+            &["pg", "move-dump", "16", "17", "ws_jobs", "20261020T101500Z", "--schema-only"],
+            &["pg", "move-restore", "17", "ws_jobs", "20261020T101500Z", "--keep-force-off"],
+            &["pg", "force-rls", "17", "ws_jobs", "on"],
+            &["pg", "allow-conn", "16", "ws_jobs", "quiesce-repl"],
+            &["pg", "dual", "setup-source", "16", "17", "ws_jobs", "0123456789ab"],
+            &["pg", "dual", "subscribe", "16", "17", "ws_jobs", "0123456789ab"],
+            &["pg", "dual", "detach", "16", "17", "ws_jobs", "0123456789ab"],
+            &["pg", "dual", "teardown", "16", "17", "ws_jobs", "0123456789ab"],
+        ];
+        for a in open {
+            let v = Verb::parse(a).unwrap_or_else(|e| panic!("{a:?}: {e}"));
+            assert_eq!(v.class(), Class::Open, "{a:?}");
+            assert!(!v.takes_lock(), "{a:?}: reads never lock");
+            assert_eq!(v.stdin_cap(), None);
+            assert_eq!(v.argv(), a.iter().map(|x| x.to_string()).collect::<Vec<_>>(), "round trip");
+        }
+        for a in daemon {
+            let v = Verb::parse(a).unwrap_or_else(|e| panic!("{a:?}: {e}"));
+            assert_eq!(v.class(), Class::Daemon, "{a:?}");
+            assert_eq!(v.argv(), a.iter().map(|x| x.to_string()).collect::<Vec<_>>(), "round trip");
+            assert_eq!(v.namespace(), "pg");
+        }
+        for a in [&["pg", "dual", "setup-source", "16", "17", "ws_jobs", "0123456789ab"][..], &["pg", "dual", "subscribe", "16", "17", "ws_jobs", "0123456789ab"]] {
+            assert_eq!(Verb::parse(a).unwrap().stdin_cap(), Some(crate::pg_dual::CAP_DUAL_SECRET), "{a:?}");
+        }
+        for a in [&["pg", "dual", "detach", "16", "17", "ws_jobs", "0123456789ab"][..], &["pg", "dual", "teardown", "16", "17", "ws_jobs", "0123456789ab"]] {
+            assert_eq!(Verb::parse(a).unwrap().stdin_cap(), None, "{a:?}");
+            assert!(Verb::parse(a).unwrap().takes_lock());
+        }
+        let v = Verb::parse(&["pg", "dual", "setup-source", "16", "17", "ws_jobs", "0123456789ab"]).unwrap();
+        assert_eq!(v.audit_name(), "pg dual setup-source 16 17", "the db and id go in their own fields");
+        let v = Verb::parse(&["pg", "move-dump", "16", "17", "ws_jobs", "20261020T101500Z", "--schema-only"]).unwrap();
+        assert_eq!(v.audit_name(), "pg move-dump 16 17 --schema-only");
+        assert!(Verb::parse(&["pg", "logical-conf", "16", "--wal-keep", "2048"]).unwrap().takes_lock());
+    }
+
+    #[test]
+    fn pgdual_attack_table_is_refused() {
+        let rejects: &[&[&str]] = &[
+            &["pg", "logical-conf", "16"],
+            &["pg", "logical-conf", "16", "--wal-keep"],
+            &["pg", "logical-conf", "16", "--wal-keep", "63"],
+            &["pg", "logical-conf", "16", "--wal-keep", "8193"],
+            &["pg", "logical-conf", "16", "--wal-keep", "02048"],
+            &["pg", "logical-conf", "16", "--wal-keep", "2G"],
+            &["pg", "logical-conf", "16", "--wal-keep", "2048", "--force"],
+            &["pg", "logical-conf", "16", "--if-logical"],
+            &["pg", "logical-conf", "16", "--dry-run", "--wal-keep", "64"],
+            &["pg", "logical-conf", "15", "--dry-run"],
+            &["pg", "logical-conf", "16", "wal_level=logical"],
+            &["pg", "move-dump", "16", "17", "ws_jobs", "20261020T101500Z", "--data-only"],
+            &["pg", "move-dump", "16", "17", "ws_jobs", "20261020T101500Z", "--schema-only", "--schema-only"],
+            &["pg", "move-restore", "17", "ws_jobs", "20261020T101500Z", "--keep-force-off", "x"],
+            &["pg", "move-restore", "17", "ws_jobs", "20261020T101500Z", "--keep-force"],
+            &["pg", "force-rls", "17", "ws_jobs"],
+            &["pg", "force-rls", "17", "ws_jobs", "off"],
+            &["pg", "force-rls", "17", "postgres", "on"],
+            &["pg", "force-rls", "17", "ws_jobs", "on", "16500"],
+            &["pg", "allow-conn", "16", "ws_jobs", "quiesce_repl"],
+            &["pg", "dual", "setup-source", "16", "17", "ws_jobs"],
+            &["pg", "dual", "setup-source", "17", "16", "ws_jobs", "0123456789ab"],
+            &["pg", "dual", "setup-source", "17", "17", "ws_jobs", "0123456789ab"],
+            &["pg", "dual", "setup-source", "16", "17", "postgres", "0123456789ab"],
+            &["pg", "dual", "setup-source", "16", "17", "template1", "0123456789ab"],
+            &["pg", "dual", "setup-source", "16", "17", "ws_jobs", "0123456789AB"],
+            &["pg", "dual", "setup-source", "16", "17", "ws_jobs", "0123456789a"],
+            &["pg", "dual", "setup-source", "16", "17", "ws_jobs", "../../etc"],
+            &["pg", "dual", "setup-source", "16", "17", "ws_jobs", "0123456789ab", "x"],
+            &["pg", "dual", "refresh", "16", "17", "ws_jobs", "0123456789ab"],
+            &["pg", "dual", "drop", "16", "17", "ws_jobs", "0123456789ab"],
+            &["pg", "dual", "sql", "16", "17", "ws_jobs", "0123456789ab"],
+            &["pg", "dual", "status", "16", "15", "ws_jobs", "0123456789ab"],
+            &["pg", "dual", "status", "16", "17", "ws;jobs", "0123456789ab"],
+        ];
+        for r in rejects {
+            assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");
+        }
     }
 
     /// Majors outside the table, ports outside the band, paths, SQL,

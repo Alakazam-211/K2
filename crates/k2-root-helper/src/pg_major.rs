@@ -129,7 +129,7 @@ const DU: &str = "/usr/bin/du";
 const FIND: &str = "/usr/bin/find";
 
 /// The K2-layout cluster of `m` (`<M>/main` under /var/lib/postgresql).
-fn cluster_of(ctx: &Ctx, m: PgMajor) -> HResult<ClusterRow> {
+pub(crate) fn cluster_of(ctx: &Ctx, m: PgMajor) -> HResult<ClusterRow> {
     let rows = lsclusters(ctx)?;
     let row = rows
         .into_iter()
@@ -456,7 +456,7 @@ fn slice_in(ctx: &Ctx, m: PgMajor) -> HResult<bool> {
 }
 
 /// `/etc/postgresql/<M>/main/conf.d` of a cluster, opened without links.
-fn confd(ctx: &Ctx, m: PgMajor) -> HResult<Dir> {
+pub(crate) fn confd(ctx: &Ctx, m: PgMajor) -> HResult<Dir> {
     ctx.dir(&format!("{}/conf.d", m.etc_dir()))
         .map_err(|e| Fail::io_err("open the cluster's conf.d", e))
 }
@@ -580,7 +580,7 @@ fn real_dir(ctx: &Ctx, abs: &str) -> bool {
 
 /// Review #1 L5: no link on the way to `m`'s data and config dirs (each
 /// component either missing or a real directory).
-fn no_links_above(ctx: &Ctx, m: PgMajor) -> HResult<()> {
+pub(crate) fn no_links_above(ctx: &Ctx, m: PgMajor) -> HResult<()> {
     for parent in ["/var/lib/postgresql".to_string(), format!("/var/lib/postgresql/{}", m.get()), "/etc/postgresql".to_string(), format!("/etc/postgresql/{}", m.get())] {
         if present(ctx, &parent) && !real_dir(ctx, &parent) {
             return Err(Fail::state(format!("cluster_layout_refused: {parent} is a link or a file; nothing changed")));
@@ -619,7 +619,7 @@ pub fn start_conf(ctx: &Ctx, m: PgMajor, auto: bool) -> HResult<J> {
 
 // ── SQL as postgres, against one cluster ────────────────────────────────
 
-fn as_postgres(ctx: &Ctx, prog: &str, args: &[&str], stdin: Option<&[u8]>) -> HResult<ExecOut> {
+pub(crate) fn as_postgres(ctx: &Ctx, prog: &str, args: &[&str], stdin: Option<&[u8]>) -> HResult<ExecOut> {
     let mut a: Vec<String> = vec!["-u".into(), PG_OS_USER.into(), "--".into(), prog.into()];
     a.extend(args.iter().map(|s| s.to_string()));
     let out = ctx
@@ -636,7 +636,7 @@ fn as_postgres(ctx: &Ctx, prog: &str, args: &[&str], stdin: Option<&[u8]>) -> HR
 /// `psql -X -tA -v ON_ERROR_STOP=1` of `m` against `db`, SQL on stdin, with
 /// `search_path` pinned to pg_catalog (review #2 F1): every superuser
 /// session the helper opens goes through here or `pg::psql`.
-fn sql_at(ctx: &Ctx, m: PgMajor, port: u16, db: &str, sql: &str) -> HResult<String> {
+pub(crate) fn sql_at(ctx: &Ctx, m: PgMajor, port: u16, db: &str, sql: &str) -> HResult<String> {
     let pt = port.to_string();
     let psql = m.bin("psql");
     let out = as_postgres(
@@ -675,7 +675,7 @@ fn db_owner(ctx: &Ctx, m: PgMajor, port: u16, db: &DbName) -> HResult<Option<Str
 }
 
 /// Only databases K2 made (review #1 L1).
-fn k2_db(ctx: &Ctx, m: PgMajor, port: u16, db: &DbName) -> HResult<String> {
+pub(crate) fn k2_db(ctx: &Ctx, m: PgMajor, port: u16, db: &DbName) -> HResult<String> {
     let owner = db_owner(ctx, m, port, db)?.ok_or_else(|| Fail::state("no_database: no such database in that cluster"))?;
     if !k2_stamp_ok(db.as_str(), &owner) {
         return Err(Fail::state("not_k2_database: that database isn't one K2 made (owner <name>_migrator); nothing changed"));
@@ -689,7 +689,7 @@ pub fn psql_args(ctx: &Ctx, m: PgMajor) -> HResult<(String, Vec<String>)> {
     Ok((m.bin("psql"), vec!["-h".into(), PG_SOCKET_DIR.into(), "-p".into(), row.port.to_string()]))
 }
 
-fn db_exists(ctx: &Ctx, m: PgMajor, port: u16, db: &DbName) -> HResult<bool> {
+pub(crate) fn db_exists(ctx: &Ctx, m: PgMajor, port: u16, db: &DbName) -> HResult<bool> {
     let n = sql_at(ctx, m, port, "postgres", &format!("SELECT count(*) FROM pg_database WHERE datname = '{}';\n", db.as_str()))?;
     Ok(n == "1")
 }
@@ -780,8 +780,9 @@ fn postgres_test(ctx: &Ctx, path: &str) -> HResult<Option<u64>> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().parse().ok())
 }
 
-/// `pg move-dump <from> <to> <db> <tag>`.
-pub fn move_dump(ctx: &Ctx, from: PgMajor, to: PgMajor, db: &DbName, tag: &str) -> HResult<J> {
+/// `pg move-dump <from> <to> <db> <tag> [--schema-only]` (`--schema-only`:
+/// protocol 10, a live dual-run's target gets the DDL only, PA25).
+pub fn move_dump(ctx: &Ctx, from: PgMajor, to: PgMajor, db: &DbName, tag: &str, schema_only: bool) -> HResult<J> {
     if !major_installed(ctx, to) {
         return Err(Fail::state("major_not_installed: the target major's pg_dump isn't installed"));
     }
@@ -808,16 +809,16 @@ pub fn move_dump(ctx: &Ctx, from: PgMajor, to: PgMajor, db: &DbName, tag: &str) 
     }
     let pt = src.port.to_string();
     let pg_dump = to.bin("pg_dump");
-    as_postgres(
-        ctx,
-        ENV,
-        &[SAFE_PGOPTIONS, &pg_dump, "-Fc", "--no-subscriptions", "--no-publications", "-h", PG_SOCKET_DIR, "-p", &pt, "-f", &file, "-d", db.as_str()],
-        None,
-    )?;
+    let mut args: Vec<&str> =
+        vec![SAFE_PGOPTIONS, &pg_dump, "-Fc", "--no-subscriptions", "--no-publications", "-h", PG_SOCKET_DIR, "-p", &pt, "-f", &file, "-d", db.as_str()];
+    if schema_only {
+        args.insert(3, "--schema-only");
+    }
+    as_postgres(ctx, ENV, &args, None)?;
     // Full tenant data: postgres only (review #1 L4).
     as_postgres(ctx, CHMOD, &["0600", "--", &file], None)?;
     let bytes = postgres_test(ctx, &file)?.ok_or_else(|| Fail::io("pg_dump finished but the dump is missing"))?;
-    Ok(json!({"file": file, "bytes": bytes, "from": from.get(), "pgDump": to.get()}))
+    Ok(json!({"file": file, "bytes": bytes, "from": from.get(), "pgDump": to.get(), "schemaOnly": schema_only}))
 }
 
 /// `MOVES_DIR`, postgres-owned 0700 whatever made it first (review #1 L4).
@@ -864,8 +865,12 @@ fn run_restore(ctx: &Ctx, section: &str, args: &[&str]) -> HResult<()> {
 /// - data and post-data as the owner, over loopback with its own password
 ///   (CHECK and domain constraints, generated columns, triggers, index
 ///   expressions and REFRESH run as the owner, a non-superuser);
-/// - FORCE put back.
-pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, stdin: &[u8]) -> HResult<J> {
+/// - FORCE put back — except with `--keep-force-off` (protocol 10, a live
+///   dual-run's target, L10): on success FORCE stays lifted (the apply
+///   worker writes as the owner) and the answer's `forcedOids` lists the
+///   tables for `pg force-rls` at the switch. A failed restore still puts
+///   it back.
+pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, keep_force_off: bool, stdin: &[u8]) -> HResult<J> {
     let login: MoveLogin =
         serde_json::from_slice(stdin).map_err(|_| Fail::argv("move-restore: stdin is not the owner's login JSON"))?;
     login.validate().map_err(Fail::argv)?;
@@ -998,13 +1003,16 @@ pub fn move_restore(ctx: &Ctx, to: PgMajor, db: &DbName, tag: &str, stdin: &[u8]
             undone.push(format!("reset temp_file_limit: {}", e.msg));
         }
     }
-    if force_lifted {
+    if force_lifted && !(keep_force_off && owner_steps.is_ok()) {
         if let Err(e) = sql_at(ctx, to, dst.port, d, &force_sql(true)) {
             undone.push(format!("put FORCE back: {}", e.msg));
         }
     }
     match (owner_steps, undone.is_empty()) {
-        (Ok(()), true) => Ok(json!({"to": to.get(), "file": file, "loadedAs": r, "forcedTables": forced.len()})),
+        (Ok(()), true) => Ok(json!({
+            "to": to.get(), "file": file, "loadedAs": r, "forcedTables": forced.len(),
+            "forceKeptOff": keep_force_off && !forced.is_empty(), "forcedOids": forced,
+        })),
         (Ok(()), false) => Err(Fail::io(format!("restore cleanup: {}", undone.join("; ")))),
         (Err(e), true) => Err(e),
         (Err(mut e), false) => {
@@ -1039,6 +1047,8 @@ pub fn allow_conn(ctx: &Ctx, m: PgMajor, db: &DbName, mode: ConnMode) -> HResult
         ConnMode::On => format!("ALTER DATABASE \"{n}\" ALLOW_CONNECTIONS true;\nALTER DATABASE \"{n}\" CONNECTION LIMIT -1;\nSELECT 0;\n"),
         ConnMode::Quiesce => format!("ALTER DATABASE \"{n}\" CONNECTION LIMIT 0;\n{end}"),
         ConnMode::Off => format!("ALTER DATABASE \"{n}\" ALLOW_CONNECTIONS false;\n{end}"),
+        // Protocol 10: the cut-over's write block keeps the walsender.
+        ConnMode::QuiesceRepl => k2_root_proto::pg_dual::quiesce_repl_sql(n),
     };
     let out = sql_at(ctx, m, row.port, "postgres", &sql)?;
     let ended: u64 = out.lines().last().and_then(|l| l.trim().parse().ok()).unwrap_or(0);

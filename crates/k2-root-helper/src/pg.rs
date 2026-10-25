@@ -303,6 +303,48 @@ pub fn hba_app(ctx: &Ctx, add: bool, id: &AppId) -> HResult<serde_json::Value> {
     }))
 }
 
+/// Protocol 10 (`pgdual`, PA24): the fixed replication guard line
+/// ([`k2_root_proto::apps::REPL_GUARD_LINE`]) in the K2 block of `m`'s
+/// `pg_hba.conf` (owner and mode kept, no link followed, a damaged block
+/// refuses), then a reload of that cluster when it runs. `Ok(true)` when
+/// the file changed.
+pub fn hba_guard(ctx: &Ctx, m: PgMajor) -> HResult<bool> {
+    let want = OsString::from(m.get().to_string());
+    let mains = cluster_mains(ctx)?;
+    let (_, main) = mains
+        .iter()
+        .find(|(v, _)| *v == want)
+        .ok_or_else(|| Fail::state("hba-guard refused: no /etc/postgresql/<M>/main for that major"))?;
+    let hba = OsStr::new("pg_hba.conf");
+    let st = main
+        .lstat(hba)
+        .map_err(|e| Fail::io_err("stat pg_hba.conf", e))?
+        .ok_or_else(|| Fail::state("hba-guard refused: the cluster has no pg_hba.conf"))?;
+    if crate::fsx::kind_of(st.st_mode as u32) != Kind::File {
+        return Err(Fail::state("hba-guard refused: pg_hba.conf is not a regular file"));
+    }
+    let bytes = main
+        .read_file(hba, HBA_MAX_BYTES)
+        .map_err(|e| Fail::io_err("read pg_hba.conf", e))?
+        .ok_or_else(|| Fail::state("hba-guard refused: pg_hba.conf vanished"))?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| Fail::state("hba-guard refused: pg_hba.conf is not UTF-8"))?;
+    let Some(next) = k2_root_proto::apps::hba_guard(text).map_err(Fail::state)? else {
+        return Ok(false);
+    };
+    let owner = ctx.real_owners.then_some((st.st_uid, st.st_gid));
+    main.write_atomic(hba, next.as_bytes(), (st.st_mode as u32) & 0o7777, owner)
+        .map_err(|e| Fail::io_err("write pg_hba.conf", e))?;
+    let unit = m.unit();
+    let active = ctx
+        .exec
+        .run(SYSTEMCTL, &["is-active".into(), "--quiet".into(), unit.clone()], None)
+        .is_ok_and(|o| o.status == 0);
+    if active {
+        ctx.run_ok(SYSTEMCTL, &["reload", &unit], None)?;
+    }
+    Ok(true)
+}
+
 /// `runuser -u postgres -- /usr/bin/psql -X -d <db> …`, SQL on stdin.
 /// psql's own stdout goes to stdout; its stderr (Postgres's words) is
 /// relayed on failure so the daemon can show the SQL error.

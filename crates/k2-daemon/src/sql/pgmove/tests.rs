@@ -205,6 +205,7 @@ impl ClusterOps for FakeOps {
             ConnMode::On => "allow_on",
             ConnMode::Quiesce => "allow_quiesce",
             ConnMode::Off => "allow_off",
+            ConnMode::QuiesceRepl => "allow_quiesce_repl",
         })
     }
     fn dump(&self, from: Major, to: Major, db: &str, tag: &str) -> Result<u64, String> {

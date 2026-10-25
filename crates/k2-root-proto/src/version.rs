@@ -51,7 +51,13 @@
 //!   `creds put <cred>` (value on stdin), `creds bind|unbind <unit>
 //!   <cred>`, `creds restart <unit>`, `creds remove <cred>`
 //!   ([`crate::creds`]). The daemon gates it on this AND
-//!   `namespaces.creds == true` ([`CREDS_MIN_PROTOCOL`]). Another 0.46.4
+//!   `namespaces.creds == true` ([`CREDS_MIN_PROTOCOL`]). Also the live
+//!   dual-run verbs (`prd-app-pg-choice-dualrun-v1` §9,
+//!   `namespaces.pgdual`, [`PGDUAL_MIN_PROTOCOL`]): `pg logical-conf`,
+//!   `pg move-dump … --schema-only`, `pg move-restore … --keep-force-off`,
+//!   `pg force-rls`, `pg allow-conn … quiesce-repl` and `pg dual
+//!   setup-source|subscribe|detach|teardown|status` ([`crate::pg_dual`]),
+//!   plus the `pg_hba.conf` replication guard line. Another 0.46.4
 //!   lane that needs a helper change joins 10 here and adds its own
 //!   namespace flag; never 11 before 10 ships. Anything after a 10 build
 //!   ships needs 11.
@@ -108,6 +114,11 @@ pub const PGMAJOR_MIN_PROTOCOL: u32 = 9;
 /// namespace. 0.46.4's one helper bump (9 → 10), shared by every lane.
 /// Gated on this AND `namespaces.creds == true`.
 pub const CREDS_MIN_PROTOCOL: u32 = 10;
+/// Live dual-run (prd-app-pg-choice-dualrun-v1 §9, 0.46.4): joins 10 (never
+/// 11 before 10 ships). Gated on this AND `namespaces.pgdual == true`; a
+/// helper without it answers `--live` with `helper_old` and keeps the copy
+/// path.
+pub const PGDUAL_MIN_PROTOCOL: u32 = 10;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 

@@ -29,6 +29,7 @@ pub mod mail;
 pub mod mail_data;
 pub mod pg;
 pub mod pg_major;
+pub mod pg_dual;
 pub mod sew;
 pub mod sew_teardown;
 pub mod podman;
@@ -197,11 +198,16 @@ fn dispatch(
         Verb::PgStartConf { major, auto } => Some(pg_major::start_conf(ctx, *major, *auto)?),
         Verb::PgInstallSlice => Some(pg_major::install_slice(ctx)?),
         Verb::PgCopyRoles { from, to, dry_run } => Some(pg_major::copy_roles(ctx, *from, *to, *dry_run, stdin)?),
-        Verb::PgMoveDump { from, to, db, tag } => Some(pg_major::move_dump(ctx, *from, *to, db, tag)?),
-        Verb::PgMoveRestore { to, db, tag } => Some(pg_major::move_restore(ctx, *to, db, tag, stdin)?),
+        Verb::PgMoveDump { from, to, db, tag, schema_only } => Some(pg_major::move_dump(ctx, *from, *to, db, tag, *schema_only)?),
+        Verb::PgMoveRestore { to, db, tag, keep_force_off } => {
+            Some(pg_major::move_restore(ctx, *to, db, tag, *keep_force_off, stdin)?)
+        }
         Verb::PgMoveFileRemove { db, tag } => Some(pg_major::move_file_remove(ctx, db, tag)?),
         Verb::PgAllowConn { major, db, mode } => Some(pg_major::allow_conn(ctx, *major, db, *mode)?),
         Verb::PgDropDb { major, db } => Some(pg_major::drop_db(ctx, *major, db)?),
+        Verb::PgLogicalConf { major, wal_keep_mb, if_logical } => Some(pg_dual::logical_conf(ctx, *major, *wal_keep_mb, *if_logical)?),
+        Verb::PgForceRls { major, db } => Some(pg_dual::force_rls(ctx, *major, db, stdin)?),
+        Verb::PgDual { op, from, to, db, id } => Some(pg_dual::run(ctx, *op, *from, *to, db, id, stdin)?),
 
         Verb::KeepStatus => Some(keep::status(ctx, who.user.as_deref())?),
         Verb::KeepKekInit => keep::kek_init(ctx, &user()?).map(|_| None)?,
@@ -357,8 +363,14 @@ fn audit(
             line["db"] = serde_json::json!(db.as_str());
             line["tag"] = serde_json::json!(tag);
         }
-        Some(Verb::PgAllowConn { db, .. } | Verb::PgDropDb { db, .. }) => {
+        Some(Verb::PgAllowConn { db, .. } | Verb::PgDropDb { db, .. } | Verb::PgForceRls { db, .. }) => {
             line["db"] = serde_json::json!(db.as_str());
+        }
+        // A dual-run step: the database and the run id (never the
+        // replication password, which only ever arrives on stdin).
+        Some(Verb::PgDual { db, id, .. }) => {
+            line["db"] = serde_json::json!(db.as_str());
+            line["dualId"] = serde_json::json!(id);
         }
         _ => {}
     }

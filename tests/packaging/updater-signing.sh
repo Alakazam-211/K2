@@ -73,14 +73,19 @@ case "$1 $2" in
         fi
         exit 0 ;;
     "attestation verify")
+        if [ "${3:-}" = "--help" ]; then
+            printf '      --cert-identity string\n      --signer-workflow string\n'
+            [ "${STUB_GH_OLD:-0}" = 1 ] || printf '      --source-digest string\n      --source-ref string\n'
+            exit 0
+        fi
         # Passes only for bytes listed in $STUB_ATTESTED (sha256 per line) and
-        # only when asked for this workflow + the tag commit.
-        f="$3"; shift 3; wf="" digest="" ref=""
+        # only for the exact certificate identity + the tag ref and commit.
+        f="$3"; shift 3; ident="" digest="" ref=""
         while [ $# -gt 0 ]; do
-            case "$1" in --signer-workflow) wf="$2"; shift 2 ;; --source-digest) digest="$2"; shift 2 ;; --source-ref) ref="$2"; shift 2 ;; *) shift ;; esac
+            case "$1" in --cert-identity) ident="$2"; shift 2 ;; --source-digest) digest="$2"; shift 2 ;; --source-ref) ref="$2"; shift 2 ;; *) shift ;; esac
         done
         sha="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$f")"
-        [ "$wf" = "Alakazam-211/K2/.github/workflows/daemon-binaries.yml" ] || { echo "wrong workflow $wf" >&2; exit 1; }
+        [ "$ident" = "https://github.com/Alakazam-211/K2/.github/workflows/daemon-binaries.yml@$ref" ] || { echo "wrong certificate identity $ident" >&2; exit 1; }
         [ "$digest" = "${STUB_ATTESTED_COMMIT:-$STUB_TAG_COMMIT}" ] || { echo "no attestation for commit $digest" >&2; exit 1; }
         case "$ref" in refs/tags/v*) ;; *) echo "wrong ref $ref" >&2; exit 1 ;; esac
         grep -qx "$sha" "${STUB_ATTESTED:-/dev/null}" || { echo "Error: no attestations found for subject" >&2; exit 1; }
@@ -516,7 +521,13 @@ mkverdict "$tmp/other-dist" "$tmp/verdict-other"
 prov_refuses "a verdict for other bytes" "no ok compute verdict" --compute-verdict "$tmp/verdict-other"
 
 echo "== sign-daemon.sh: the GitHub path (stub gh) =="
-export STUB_TAG_COMMIT="$(printf 'a%.0s' $(seq 1 40))"
+# The release commit comes from the LOCAL tag (a fixture checkout here).
+srcrepo="$tmp/srcrepo"; mkdir -p "$srcrepo"
+git -C "$srcrepo" init -q
+git -C "$srcrepo" -c user.email=t@example.invalid -c user.name=t commit -q --allow-empty -m release
+git -C "$srcrepo" tag "v$V"
+export K2_SIGN_SOURCE_DIR="$srcrepo"
+export STUB_TAG_COMMIT="$(git -C "$srcrepo" rev-parse "refs/tags/v$V^{commit}")"
 export STUB_ATTESTED="$tmp/attested"
 for a in x86_64 aarch64; do awk '{print $1}' "$good/k2-daemon-linux-$a.sha256"; done > "$STUB_ATTESTED"
 fresh_rel() {
@@ -538,6 +549,9 @@ gh_refuses() { # <label> <expect> [env…]
         pass "refused: $label (no signature uploaded)"
     fi
 }
+gh_refuses "GitHub's tag moved off the local tag's commit" "the tag moved" STUB_TAG_COMMIT="$(printf 'c%.0s' $(seq 1 40))"
+mkdir -p "$tmp/notags"; git -C "$tmp/notags" init -q
+gh_refuses "no local release tag" "no local tag v$V" K2_SIGN_SOURCE_DIR="$tmp/notags"
 gh_refuses "no build-provenance attestation" "no valid build-provenance attestation" STUB_ATTESTED=/dev/null
 gh_refuses "an attestation made at another commit" "no valid build-provenance attestation" STUB_ATTESTED_COMMIT="$(printf 'b%.0s' $(seq 1 40))"
 gh_refuses "an asset uploaded by a person" "uploaded by 'mallory', not github-actions" STUB_UPLOADER=mallory
@@ -561,7 +575,15 @@ PY
 python3 -I -c 'import json,sys; a=json.load(open(sys.argv[1]))["artifacts"]; sys.exit(0 if {"macos-aarch64","linux-x86_64","linux-aarch64","k2-app-engine-linux-x86_64","k2-app-engine-linux-aarch64"} == set(a) else 1)' "$rel/daemon-latest.json" \
     && pass "the released manifest lists macOS, both Linux daemons and both engines" || fail "released manifest" "$(cat "$rel/daemon-latest.json")"
 
-echo "== sign-daemon.sh --preflight: the GitHub secrets =="
+echo "== sign-daemon.sh --preflight: the GitHub secrets, and gh can check provenance =="
+if STUB_GH_OLD=1 bash "$ROOT/scripts/sign-daemon.sh" --preflight "$V" >"$tmp/p.out" 2>&1; then
+    fail "old gh" "preflight passed"
+else
+    grep -qE "has no --source-(ref|digest)" "$tmp/p.out" && pass "preflight refuses a gh whose attestation verify lacks --source-ref/--source-digest" || fail "old gh" "$(cat "$tmp/p.out")"
+fi
+grep -qF -- '--cert-identity "https://github.com/$REPO/.github/workflows/daemon-binaries.yml@refs/tags/$TAG"' "$ROOT/scripts/sign-daemon.sh" \
+    && ! grep -q -- '--signer-workflow' "$ROOT/scripts/sign-daemon.sh" \
+    && pass "sign-daemon.sh pins the exact certificate identity (no prefix-matching --signer-workflow)" || fail "cert identity" ""
 STUB_SECRETS="K2_GMAIL_CLIENT_ID" bash "$ROOT/scripts/sign-daemon.sh" --preflight "$V" >/dev/null 2>&1 && pass "preflight passes with no TAURI_SIGNING_* secret on GitHub" || fail "preflight clean" ""
 if STUB_SECRETS="TAURI_SIGNING_PRIVATE_KEY K2_GMAIL_CLIENT_ID" bash "$ROOT/scripts/sign-daemon.sh" --preflight "$V" >"$tmp/p.out" 2>&1; then
     fail "secret present" "preflight passed"

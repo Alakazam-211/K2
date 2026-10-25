@@ -142,6 +142,19 @@ checkout that has the public keys landed:
    "U3 drill ok" means U3 restores and installs would accept it.
 4. Delete `~/Desktop/u3.key` (and empty the Trash).
 
+### 4c. Re-running the Linux build by hand
+
+The workflow uploads the daemons without `--clobber`, and `sign-daemon.sh`
+checks the attestation's identity, which names the ref the workflow ran on.
+So, for a re-run:
+
+1. Delete the release's `k2-daemon-linux-<arch>` and
+   `k2-daemon-linux-<arch>.sha256` (both arches you rebuild).
+2. `gh workflow run daemon-binaries.yml --ref v<x> -f tag=v<x>` (the `--ref`
+   must be the tag; running it from main gives an attestation for main,
+   which signing refuses).
+3. `bash scripts/sign-daemon.sh <x>` from the checkout that holds the tag.
+
 ### 5. Delete the GitHub secrets (SS1)
 
 Since SS1 nothing on GitHub signs. Once SS1 is on main:
@@ -176,9 +189,11 @@ rm ~/.tauri/k2-updater.key ~/.tauri/k2so-updater.key
 ## Next: two independent builds (0.46.5, owner: K2)
 
 0.46.4 signs a Linux daemon only when GitHub's build-provenance attestation
-says it came out of `daemon-binaries.yml` at the tag's commit, and the
-release asset was uploaded once by `github-actions[bot]` (`sign-daemon.sh`).
-That stops a swapped release asset. It does **not** stop a poisoned build:
+has the exact certificate identity of `daemon-binaries.yml` at
+`refs/tags/v<x>` and its source commit is the commit of the LOCAL tag (the
+checkout the Mac build came from), with GitHub's tag pointing at that same
+commit (`sign-daemon.sh`). That stops a swapped release asset and a moved
+tag. It does **not** stop a poisoned build:
 a compromised self-hosted runner can build a bad daemon, attest it and pass
 every byte check.
 
@@ -194,9 +209,14 @@ SS1 threat notes.
 
 - **Key theft from GitHub (SS1):** stopped. No signing key on GitHub; the
   runner builds unsigned and z3mbpZ signs.
-- **A swapped Linux release asset:** stopped. z3mbpZ signs only an attested
-  build from `daemon-binaries.yml` at the tag's commit, uploaded once by
-  `github-actions[bot]`, and re-checks the published bytes after signing.
+- **A swapped Linux release asset:** stopped. The real controls are the
+  attestation (exact identity: `daemon-binaries.yml@refs/tags/v<x>`) and the
+  local tag commit: the attestation's source commit and GitHub's tag must
+  both equal the commit of `refs/tags/v<x>` in the checkout release.sh
+  tagged. After signing, z3mbpZ re-downloads the published binaries and
+  checks they are the bytes it signed. The uploader / upload-time checks
+  are belts only: any workflow token uploads as `github-actions[bot]`, and
+  GitHub never lists two assets with one name, so they prove little.
 - **A poisoned build on the self-hosted runner:** NOT stopped. Next step:
   two independent builds (above), 0.46.5.
 - **Same-user read on z3mbpZ:** NOT stopped, accepted for 0.46.4 pending

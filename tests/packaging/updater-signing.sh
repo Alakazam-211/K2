@@ -723,6 +723,11 @@ else
     grep -qE "trusts no update key|VERIFICATION FAILED" "$tmp/inst.out" && pass "this tree's install-daemon.sh refuses a release its keys didn't sign (pre-ceremony: trusts nothing)" || fail "pre-ceremony installer" "$(tail -3 "$tmp/inst.out")"
 fi
 
+cli_help="$(bash "$ROOT/cli/k2" daemon install --help 2>&1 || true)"
+grep -qi "an OLDER release than the one installed" "$ROOT/scripts/install-daemon.sh" \
+    && [[ "$cli_help" == *"an OLDER release than the one installed"* ]] \
+    && pass "install-daemon.sh and k2 daemon install --help say an older 0.46.4+ install is an allowed explicit action" || fail "downgrade help" ""
+
 echo "== k2 daemon install (cli/k2) checks sig2 the same way =="
 cli_install() { # <manifest> [extra args…]
     local m="$1"; shift

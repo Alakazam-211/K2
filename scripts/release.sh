@@ -460,6 +460,10 @@ trap 'exit 143' TERM
 # no TAURI_SIGNING_* secrets left on GitHub.
 echo ""
 echo "Step 0.45: Update-signing preflight..."
+# The update keys must agree in every verifier copy (k2-release-keys
+# `copies` test: lib.rs, cli/k2, install-daemon.sh, tauri.conf.json). A
+# dropped copy would ship installs that can't verify this release.
+cargo test -p k2-release-keys
 bash "$PROJECT_DIR/scripts/sign-daemon.sh" --preflight "$VERSION"
 
 # ── Step 0.5: Pre-flight quality gates ──

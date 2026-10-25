@@ -706,7 +706,10 @@ R="$ROOT/scripts/release.sh"
 env_line=$(grep -n 'source "$PROJECT_DIR/.env"' "$R" | head -1 | cut -d: -f1)
 guard_line=$(grep -n '^k2u_env_guard$' "$R" | head -1 | cut -d: -f1)
 pre_line=$(grep -n 'scripts/sign-daemon.sh" --preflight "$VERSION"' "$R" | head -1 | cut -d: -f1)
-first_build=$(grep -nE '^(RUSTFLAGS=.*)?cargo |^bun |^bunx ' "$R" | head -1 | cut -d: -f1)
+copies_line=$(grep -n '^cargo test -p k2-release-keys$' "$R" | head -1 | cut -d: -f1)
+[ -n "$copies_line" ] && [ -n "$pre_line" ] && [ "$copies_line" -lt "$pre_line" ] && [ "$copies_line" -lt "$(grep -n '^if \[ "$SKIP_BUILD" = 0 \]; then$' "$R" | head -1 | cut -d: -f1)" ] \
+    && pass "release.sh Step 0.45 runs the key copies test (cargo test -p k2-release-keys) before anything else signs or builds" || fail "copies test in release.sh" "line=$copies_line pre=$pre_line"
+first_build=$(grep -nE '^(RUSTFLAGS=.*)?cargo |^bun |^bunx ' "$R" | grep -v ':cargo test -p k2-release-keys$' | head -1 | cut -d: -f1)
 [ -n "$env_line" ] && [ -n "$guard_line" ] && [ -n "$pre_line" ] && [ -n "$first_build" ] \
     && [ "$guard_line" -gt "$env_line" ] && [ "$pre_line" -gt "$guard_line" ] && [ "$first_build" -gt "$pre_line" ] \
     && pass "release.sh: .env → k2u_env_guard → signing preflight → first build" || fail "release.sh order" "env=$env_line guard=$guard_line pre=$pre_line build=$first_build"

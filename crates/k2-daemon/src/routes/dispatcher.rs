@@ -4582,8 +4582,14 @@ async fn handle_one_request(
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let query = query.clone();
             let owner = state.token.as_str().to_string();
+            // Resolved here, on the request's task: an App's link pass
+            // resolves only on its own link (task-local), which a blocking
+            // thread can't see.
+            let pass = super::http::extract_token(&query)
+                .filter(|t| k2_core::skin::is_skin_token(t))
+                .and_then(crate::apps::gateway::resolve_pass);
             let r = tokio::task::spawn_blocking(move || {
-                crate::skin_routes::handle_password_forgot(&body_bytes, &query, &owner)
+                crate::skin_routes::handle_password_forgot(&body_bytes, &query, &owner, pass)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));

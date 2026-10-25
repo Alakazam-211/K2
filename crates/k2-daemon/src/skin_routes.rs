@@ -2974,19 +2974,32 @@ fn change_failed() -> CliResponse {
     }
 }
 
+/// Who may start a forgot-password reset.
+pub enum ForgotCaller {
+    /// The owner token or an Owner-role Connect login: gets the token back.
+    Owner,
+    /// A platform pass (an App's link pass, or a `k2 app token` pass):
+    /// never gets the token, and reaches only guests it may touch
+    /// ([`pass_may_reset`]).
+    Pass(skin::SkinPass),
+}
+
 /// Owner-ROLE or platform `--name`. Guest session / hook / Connect member
 /// 403 before lookup. Missing/invalid → 401. Does not use `token_ok`.
-fn forgot_auth(query: &str, owner_token: &str) -> Result<(), CliResponse> {
+/// `pass` is the presented `k2skn_` pass as the dispatcher resolved it
+/// (`apps::gateway::resolve_pass`, on the request's own task so an App's
+/// link pass resolves on its link).
+fn forgot_auth(query: &str, owner_token: &str, pass: Option<skin::SkinPass>) -> Result<ForgotCaller, CliResponse> {
     let presented = crate::routes::http::extract_token(query).unwrap_or("");
     if presented.is_empty() {
         return Err(forgot_unauthorized());
     }
     if crate::routes::http::owner_role_identity(query, owner_token).is_some() {
-        return Ok(());
+        return Ok(ForgotCaller::Owner);
     }
     if skin::is_skin_token(presented) {
-        return match skin::resolve_skin_token(presented) {
-            Some(pass) if !pass.session => Ok(()),
+        return match pass {
+            Some(pass) if !pass.session => Ok(ForgotCaller::Pass(pass)),
             Some(_) => Err(forgot_forbidden()),
             None => Err(forgot_unauthorized()),
         };
@@ -3000,11 +3013,45 @@ fn forgot_auth(query: &str, owner_token: &str) -> Result<(), CliResponse> {
     Err(forgot_unauthorized())
 }
 
-/// `POST /cli/skin/password/forgot` `{username}` — owner | platform `--name`.
-pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str) -> CliResponse {
-    if let Err(r) = forgot_auth(query, owner_token) {
-        return r;
+/// 0.46.4 (agent-app-users S0, finding F1): may platform pass `pass`
+/// start a reset for guest `p`? An agent can mint a pass for its own
+/// room, so a pass reaches only a guest wholly inside one of the pass's
+/// rooms' workspaces ([`principal_in_workspace`], the rule every agent
+/// guest write uses), never a test guest (the owner's), and, for a pass
+/// bound to one App, only a guest of that App. A pass with no rooms
+/// reaches nobody.
+pub fn pass_may_reset(pass: &skin::SkinPass, p: &skin::SkinPrincipal) -> Result<bool, CliResponse> {
+    if pass.session || pass.rooms.is_empty() {
+        return Ok(false);
     }
+    if skin::test_guests::get(&p.id).map_err(CliResponse::internal_error)?.is_some() {
+        return Ok(false);
+    }
+    let grants = skin::list_grants().map_err(CliResponse::internal_error)?;
+    let app_bound = !pass.app.is_empty() && pass.app != skin::HOST_APP_ID;
+    if app_bound
+        && !grants
+            .iter()
+            .any(|g| g.subject_kind == "principal" && g.subject_id == p.id && g.kind == "app" && g.target_id == pass.app)
+    {
+        return Ok(false);
+    }
+    let roles = skin::list_roles().map_err(CliResponse::internal_error)?;
+    Ok(pass.rooms.iter().any(|ws| principal_in_workspace(p, &roles, &grants, ws)))
+}
+
+/// `POST /cli/skin/password/forgot` `{username}` — owner | platform `--name`.
+///
+/// The owner gets the one-time token back (`{ok, token, expiresAt,
+/// email}`). A platform pass never does (S0): it reaches only guests it
+/// may touch ([`pass_may_reset`]); a guest outside its reach answers
+/// exactly like an unknown name (`{ok:true}`), and so does one inside it
+/// (the reset link goes to the guest's own email, never to the caller).
+pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str, pass: Option<skin::SkinPass>) -> CliResponse {
+    let caller = match forgot_auth(query, owner_token, pass) {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
     let v = match json_body(body) {
         Ok(v) => v,
         Err(r) => return r,
@@ -3016,6 +3063,26 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str) -> Cl
         .unwrap_or("")
         .trim()
         .to_string();
+    if let ForgotCaller::Pass(pass) = &caller {
+        // Scope first, so a pass can't spend the 60 s throttle of a guest
+        // it may not touch (an owner reset would be blocked by it).
+        let target = match principal_named(&username) {
+            Ok(t) => t,
+            Err(r) => return r,
+        };
+        let reachable = match &target {
+            Some(p) => match pass_may_reset(pass, p) {
+                Ok(ok) => ok,
+                Err(r) => return r,
+            },
+            None => false,
+        };
+        if !reachable {
+            skin::reset_miss_dummy();
+            k2_core::log_debug!("[skin] forgot via pass {}: no guest it may reset", pass.id);
+            return CliResponse::ok_json(FORGOT_OK_JSON.to_string());
+        }
+    }
     match skin::password_reset_throttled(&username) {
         Ok(true) => {
             return CliResponse {
@@ -3026,6 +3093,9 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str) -> Cl
         }
         Ok(false) => {}
         Err(e) => return CliResponse::internal_error(e),
+    }
+    if let ForgotCaller::Pass(pass) = &caller {
+        return forgot_by_pass(pass, &username);
     }
     match skin::mint_password_reset(&username) {
         Ok(Some(mint)) => {
@@ -3045,6 +3115,13 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str) -> Cl
         Ok(None) => CliResponse::ok_json(FORGOT_OK_JSON.to_string()),
         Err(e) => CliResponse::internal_error(e),
     }
+}
+
+/// A pass's forgot for a guest it may reset. The token never goes back
+/// to the caller: the answer is always the bare `{ok:true}`.
+fn forgot_by_pass(pass: &skin::SkinPass, username: &str) -> CliResponse {
+    k2_core::log_debug!("[skin] forgot via pass {} for {username}: no reset mail path yet, nothing minted", pass.id);
+    CliResponse::ok_json(FORGOT_OK_JSON.to_string())
 }
 
 /// Public `POST /cli/skin/password/reset` `{token, password}`. Ignore

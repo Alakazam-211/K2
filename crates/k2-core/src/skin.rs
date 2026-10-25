@@ -3214,9 +3214,17 @@ pub enum SkinResetConsume {
     BadToken,
 }
 
-/// Consume a reset token. Hashed lookup, TTL, single-use. Success calls
-/// [`set_principal_password`] (revokes session=1). Empty password is refused
-/// so this door never clears a hash. Does not mint a session.
+/// Consume a reset token. Hashed lookup, TTL, single-use. Success sets
+/// the password and revokes every login session (as
+/// [`set_principal_password`] does). Empty password is refused so this
+/// door never clears a hash. Does not mint a session.
+///
+/// 0.46.4 (agent-app-users S0): the use is one compare-and-set inside one
+/// IMMEDIATE transaction: `used_at` is stamped only where it is still NULL
+/// and the token unexpired, and the password write and session revoke
+/// ride the same commit. Two requests presenting the same token at the
+/// same moment get exactly one success (the old code checked, set the
+/// password, then marked the token used, each under its own lock).
 pub fn consume_password_reset(token: &str, password: &str) -> Result<SkinResetConsume, String> {
     let token = token.trim();
     if token.is_empty() {
@@ -3226,40 +3234,48 @@ pub fn consume_password_reset(token: &str, password: &str) -> Result<SkinResetCo
     if password.trim().is_empty() {
         return Err("password must not be empty".to_string());
     }
-    let hash = sha256_hex(token);
+    let token_hash = sha256_hex(token);
+    // argon2 before the skin mutex, like `set_principal_password`; it also
+    // stands in for the dummy verify on a miss (same cost either way).
+    let pw_hash = hash_password(password.trim())?;
     let now = now_secs();
-    let row = with_conn(|conn| {
-        let row: Option<(String, String, i64, Option<i64>)> = conn
+    let used = with_conn(|conn| {
+        let tx = immediate_tx(conn)?;
+        let row: Option<(String, String)> = tx
             .query_row(
-                "SELECT t.id, p.username, t.expires_at, t.used_at
-                 FROM password_reset_tokens t
+                "SELECT t.id, t.principal_id FROM password_reset_tokens t
                  JOIN principals p ON p.id = t.principal_id
                  WHERE t.token_hash = ?1",
-                params![hash],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                params![token_hash],
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()
             .map_err(|e| format!("skin reset consume lookup: {e}"))?;
-        Ok(row)
+        let Some((id, principal_id)) = row else { return Ok(false) };
+        let claimed = tx
+            .execute(
+                "UPDATE password_reset_tokens SET used_at = ?1
+                 WHERE id = ?2 AND used_at IS NULL AND expires_at > ?1",
+                params![now, id],
+            )
+            .map_err(|e| format!("skin reset mark used: {e}"))?;
+        if claimed != 1 {
+            return Ok(false);
+        }
+        tx.execute("UPDATE principals SET password_hash = ?1 WHERE id = ?2", params![pw_hash, principal_id])
+            .map_err(|e| format!("skin password update: {e}"))?;
+        revoke_sessions_for_principal(&tx, &principal_id)?;
+        tx.commit().map_err(|e| format!("skin reset commit: {e}"))?;
+        Ok(true)
     })?;
-    let Some((id, username, expires_at, used_at)) = row else {
-        dummy_verify(password);
-        return Ok(SkinResetConsume::BadToken);
-    };
-    if used_at.is_some() || expires_at <= now {
-        dummy_verify(password);
-        return Ok(SkinResetConsume::BadToken);
-    }
-    set_principal_password(&username, Some(password))?;
-    with_conn(|conn| {
-        conn.execute(
-            "UPDATE password_reset_tokens SET used_at = ?1 WHERE id = ?2",
-            params![now_secs(), id],
-        )
-        .map_err(|e| format!("skin reset mark used: {e}"))?;
-        Ok(())
-    })?;
-    Ok(SkinResetConsume::Ok)
+    Ok(if used { SkinResetConsume::Ok } else { SkinResetConsume::BadToken })
+}
+
+/// The dummy argon2 verify a miss spends, for callers that answer a miss
+/// without reaching a store lookup that already does (forgot through a
+/// pass for a guest it may not touch).
+pub fn reset_miss_dummy() {
+    dummy_verify("k2-skin-dummy-verify-target");
 }
 
 /// Verify a guest's current password. Dummy argon2 on miss / NULL hash.
@@ -7892,6 +7908,48 @@ mod tests {
                 resolve_skin_token(&static_raw).is_some(),
                 "platform token survives consume"
             );
+        });
+    }
+
+    /// agent-app-users S0 / T4.6: the same reset token presented by many
+    /// threads at once is used exactly once (compare-and-set in one
+    /// transaction), and the password that won is the one stored.
+    #[test]
+    fn consume_password_reset_is_single_use_under_a_race() {
+        with_temp_home(|| {
+            add_principal("cara").unwrap();
+            set_principal_password("cara", Some("s3cret-horse")).unwrap();
+            set_principal_email("cara", Some("cara@clinic.com")).unwrap();
+            let raw = mint_password_reset("cara").unwrap().expect("mint").token;
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(6));
+            let handles: Vec<_> = (0..6)
+                .map(|i| {
+                    let (raw, barrier) = (raw.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        let pw = format!("winner-pass-{i}");
+                        barrier.wait();
+                        (pw.clone(), consume_password_reset(&raw, &pw).expect("consume"))
+                    })
+                })
+                .collect();
+            let results: Vec<(String, SkinResetConsume)> = handles.into_iter().map(|h| h.join().expect("thread")).collect();
+            let winners: Vec<&String> = results.iter().filter(|(_, r)| *r == SkinResetConsume::Ok).map(|(pw, _)| pw).collect();
+            assert_eq!(winners.len(), 1, "exactly one use wins: {results:?}");
+            assert_eq!(
+                results.iter().filter(|(_, r)| *r == SkinResetConsume::BadToken).count(),
+                5,
+                "every other use is a bad token: {results:?}"
+            );
+            match check_and_record_login("cara", winners[0]) {
+                SkinLoginOutcome::Ok(p) => assert_eq!(p.username, "cara"),
+                other => panic!("the winner's password is stored, got {other:?}"),
+            }
+            let used: i64 = with_conn(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM password_reset_tokens WHERE used_at IS NOT NULL", [], |r| r.get(0))
+                    .map_err(|e| e.to_string())
+            })
+            .unwrap();
+            assert_eq!(used, 1);
         });
     }
 

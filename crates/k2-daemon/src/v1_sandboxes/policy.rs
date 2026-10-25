@@ -205,8 +205,11 @@ pub(crate) fn resolve_spawn(
         overlay: None,
         forced_session_id: None,
         attach_only: false,
-        // Host-curated cell env: nothing in it is owner-set (R8).
+        // Host-curated cell env: nothing in it is owner-set, and nothing in
+        // it is a reference: the caller's prompt is data (R8 review fix 2).
         owner_env: HashMap::new(),
+        env_refs_are_data: true,
+        audit_via: Some(format!("v1:{}", sanitize_id(&principal.display_id()))),
     })
 }
 
@@ -869,8 +872,11 @@ pub(crate) fn resolve_workspace_mirror_with_argv(
         // equals the persistent-layer + `.jsonl` key.
         forced_session_id: Some(*session_id),
         attach_only: false,
-        // Host-curated cell env: nothing in it is owner-set (R8).
+        // Host-curated cell env: nothing in it is owner-set, and nothing in
+        // it is a reference: the caller's prompt is data (R8 review fix 2).
         owner_env: HashMap::new(),
+        env_refs_are_data: true,
+        audit_via: Some(format!("v1:{}", sanitize_id(&principal.display_id()))),
     })
 }
 

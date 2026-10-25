@@ -771,3 +771,24 @@ fn one_confirm_approves_a_proposal_and_covers_its_secret_copy() {
         let _ = k2_core::projects_ops::projects_delete(&other_id);
     });
 }
+
+/// R8 review fix 8: a `.env.k2` reference to a server secret the workspace
+/// isn't granted doesn't make it "used": the plan never offers it.
+#[test]
+fn an_ungranted_env_k2_reference_is_not_a_used_secret() {
+    crate::test_support::with_temp_home(|| {
+        let v = crate::vault::ensure_test_vault();
+        let s = Src::new(&v);
+        let stray = format!("STRAY_{}", sfx());
+        let mut r = PutRequest::new(Namespace::User, Scope::server(), &stray, Kind::ApiKey);
+        r.hosts = vec!["https://api.example.com".into()];
+        v.put(r, SecretBytes::from_slice(b"stray-value-ca"), &Actor::Owner).expect("put stray");
+        let envk2 = Path::new(&s.path).join(".env.k2");
+        let mut text = fs::read_to_string(&envk2).expect("read .env.k2");
+        text.push_str(&format!("STRAY_TOKEN=k2v://server/{stray}\n"));
+        fs::write(&envk2, text).expect("write .env.k2");
+        let plan = build_plan(&v, &owner(), &s.id, &s.ask(None, None)).expect("plan");
+        assert!(plan.rows.iter().all(|r| r.name != stray), "an ungranted reference isn't used: {:?}", plan.rows.iter().map(|r| &r.name).collect::<Vec<_>>());
+        assert_eq!(row(&plan, &s.openai).group, "server", "the granted one still is");
+    });
+}

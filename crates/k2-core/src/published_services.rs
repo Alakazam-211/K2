@@ -280,6 +280,11 @@ pub struct ServiceJson {
     /// running, unrouted (`k2 app label return` moves the label back).
     #[serde(default)]
     pub label_moved_to: Option<String>,
+    /// R8 (prd-env-to-vault-v1): `.env.k2` references the vault refused at
+    /// the last start (`KEY: code`, names only), e.g. a server secret not
+    /// granted to this service. Omitted when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_refused: Vec<String>,
 }
 
 impl ServiceJson {
@@ -342,6 +347,7 @@ impl ServiceJson {
             legacy_label: None,
             legacy_hint: None,
             label_moved_to: None,
+            env_refused: vec![],
         }
     }
 }

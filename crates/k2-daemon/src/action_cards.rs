@@ -43,6 +43,8 @@ pub fn keep_prompt(agent: &str, widget: &str, garden: &str) -> String {
 pub fn run(action: &CardAction, answer: &str, by: &str) -> Result<J, String> {
     match action.id.as_str() {
         KEEP_WIDGET => keep_widget(&action.params, answer, by),
+        // R8 upgrade (prd-env-to-vault-v1): keep time-boxed `.env.k2` grants.
+        crate::vault::server_refs::KEEP_ACTION => crate::vault::server_refs::keep_action(&action.params, answer, by),
         other => Err(format!("K2 doesn't know the card action '{other}'")),
     }
 }

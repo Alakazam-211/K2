@@ -200,6 +200,16 @@ pub struct SpawnRequest {
     /// every host-curated door (`/v1/sandboxes`).
     #[serde(skip)]
     pub owner_env: HashMap<String, String>,
+    /// Review fix 2: every non-owner value in `env` is data, never a
+    /// `k2v://` reference (a `/v1` caller's prompt, host-curated `/v1`
+    /// env). `#[serde(skip)]`; set by the `/v1` doors only.
+    #[serde(skip)]
+    pub env_refs_are_data: bool,
+    /// Review fix 10: `v1:<principal>` when an external `/v1` caller
+    /// drives this cell; its vault deliveries are audited under that
+    /// label too. `#[serde(skip)]`; set by the `/v1` doors only.
+    #[serde(skip)]
+    pub audit_via: Option<String>,
 }
 
 /// Default session cwd when the client omits one.
@@ -1303,12 +1313,17 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
                 owner_env.insert(k.clone(), v.clone());
             }
         }
+        let refs_from = crate::vault::spawn::SpawnRefs {
+            owner_env,
+            others_are_data: req.env_refs_are_data,
+            via: req.audit_via.clone(),
+        };
         let delivered = crate::vault::spawn::materialize(
             &mut cfg.env,
             &workspace_uuid,
             &session_id_for_response.to_string(),
             matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Microvm),
-            &owner_env,
+            &refs_from,
         );
         ptyd_meta.insert("workspace_uuid".into(), workspace_uuid.clone().into());
         if let Some(dir) = delivered.dir {
@@ -2112,6 +2127,8 @@ pub fn handle_v2_refresh(body: &[u8]) -> HandlerResult {
         forced_session_id: None,
         attach_only: false,
         owner_env: HashMap::new(),
+        env_refs_are_data: false,
+        audit_via: None,
     })
 }
 

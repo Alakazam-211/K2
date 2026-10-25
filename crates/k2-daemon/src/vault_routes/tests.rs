@@ -1081,3 +1081,42 @@ fn the_doctor_warns_against_a_downgrade_once_newer_rows_exist() {
     let m = s["message"].as_str().expect("message");
     assert!(m.contains("3 signed secret(s)") && m.contains("Bearer") && !m.contains("job grants"), "{m}");
 }
+
+/// R8 review fix 3: an IT agent can't grant a server secret to ANY session
+/// of its own workspace (a sidecar, its pinned chat, a heartbeat session),
+/// nor to a session K2 can't place; another workspace's session is fine.
+#[test]
+fn it_agents_cant_grant_server_secrets_to_any_own_workspace_session() {
+    let _home = crate::test_support::TempHome::new();
+    let t = vault();
+    set_server(&t, "FLEET", "k2test-fleet-0123456789abcdef");
+    let it = agent("it-ws", true);
+    let mint = |ws: &str| {
+        let sid = k2_core::session::SessionId::new();
+        crate::session_token::mint_session_token(
+            &sid,
+            &sid.to_string(),
+            crate::session_token::HookPrincipal { workspace_uuid: ws.into(), agent_address: "sidecar".into() },
+            crate::session_token::CredMode::default(),
+            crate::session_token::Provider::default(),
+        );
+        sid.to_string()
+    };
+    let own_sidecar = mint("it-ws");
+    let other = mint("sales-ws");
+    assert_eq!(crate::session_token::workspace_for_session(&own_sidecar).as_deref(), Some("it-ws"));
+    let g = |to: String| json!({ "name": "FLEET", "scope": "server", "to": to, "as": "fetch" });
+    let (s, v) = call(&t, GRANT, &it, g(format!("session:{own_sidecar}")));
+    assert_eq!((s, code(&v)), (403, "vault_self_grant"), "own workspace's other session: {v}");
+    let (s, v) = call(&t, GRANT, &it, g("session:not-a-known-session".into()));
+    assert_eq!((s, code(&v)), (403, "vault_self_grant"), "unknown session fails closed: {v}");
+    let (s, v) = call(&t, GRANT, &it, g(format!("session:{other}")));
+    assert_eq!(s, 200, "another workspace's session: {v}");
+    // The owner is never limited by this.
+    let (s, v) = call(&t, GRANT, &owner(), g(format!("session:{own_sidecar}")));
+    assert_eq!(s, 200, "{v}");
+    // A plain session-scope grant of the IT agent's OWN workspace secret
+    // to its sidecar is untouched by the server rule.
+    let r = session_self_grant(&it.actor, k2_vault::ScopeKind::Workspace, Some("it-ws".into()));
+    assert!(r.is_ok(), "{r:?}");
+}

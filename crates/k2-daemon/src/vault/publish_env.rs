@@ -40,6 +40,11 @@ pub struct ServiceEnv {
     /// to this service is refused (Linux).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clean_mode: bool,
+    /// R8 review fix 6: the `.env.k2` references the vault refused at the
+    /// service's last start (`KEY: code`, names only). Rewritten on every
+    /// start (empty clears it); shown in the service's status.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -372,6 +377,8 @@ pub struct Granted {
     pub env: Vec<(String, String)>,
     /// (file name, bytes) for `K2_SECRETS_DIR`.
     pub files: Vec<(String, Vec<u8>)>,
+    /// `.env.k2` references the vault refused (`KEY: code`; names only).
+    pub refused: Vec<String>,
 }
 
 /// Resolve the vault half of a clean start (`.env.k2` in `cwd`, then the
@@ -392,7 +399,10 @@ pub fn granted(service_id: &str, workspace_id: &str, cwd: &Path) -> Granted {
                 if k2_vault::refs::VaultRef::is_ref(&v) {
                     match resolve_ref(&vault, &v, service_id, workspace_id) {
                         Ok(val) => out.env.push((k, val)),
-                        Err(e) => k2_core::log_debug!("[vault] publish {service_id}: {k}: {}", e.code),
+                        Err(e) => {
+                            k2_core::log_debug!("WARN [vault] publish {service_id}: {k} not delivered: {} ({})", e.code, e.hint);
+                            out.refused.push(format!("{k}: {}", e.code));
+                        }
                     }
                 } else if !k2_vault::delivery::is_sensitive_name(&k) {
                     out.env.push((k, v));
@@ -421,6 +431,7 @@ pub fn granted(service_id: &str, workspace_id: &str, cwd: &Path) -> Granted {
         }
         out.files.push((it.file_name.clone().unwrap_or_else(|| it.name.clone()), r.value.expose().to_vec()));
     }
+    record_refused(service_id, &out.refused);
     out
 }
 
@@ -462,6 +473,28 @@ pub fn database_url(service_id: &str, workspace_id: &str, cwd: &Path) -> DbUrl {
     } else {
         DbUrl::Absent
     }
+}
+
+/// R8 review fix 6: keep this start's refused references (names and codes
+/// only) where the service's status shows them.
+fn record_refused(service_id: &str, refused: &[String]) {
+    let _g = LOCK.lock();
+    let mut m = load();
+    let had = m.services.get(service_id).map(|e| e.refused_refs.clone()).unwrap_or_default();
+    if had == refused {
+        return;
+    }
+    let default_mode = if m.seeded { "clean" } else { "legacy" };
+    let e = m.services.entry(service_id.to_string()).or_insert_with(|| ServiceEnv { mode: default_mode.into(), ..Default::default() });
+    e.refused_refs = refused.to_vec();
+    if let Err(e) = save(&m) {
+        k2_core::log_debug!("[vault] publish {service_id}: refused list not saved: {e}");
+    }
+}
+
+/// The references refused at the service's last start (names and codes).
+pub fn refused_refs(service_id: &str) -> Vec<String> {
+    load().services.get(service_id).map(|e| e.refused_refs.clone()).unwrap_or_default()
 }
 
 /// The vault half of a clean start: `.env.k2` references (in `cwd`) and the

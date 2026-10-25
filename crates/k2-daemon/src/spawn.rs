@@ -361,8 +361,11 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         );
         // K2 vault (KV19): this session's file/env secrets. References in
         // owner-set env resolve as the owner's; others need a grant (R8).
-        let owner_env = if req.env_owner_set { req.env.clone() } else { HashMap::new() };
-        let delivered = crate::vault::spawn::materialize(&mut env, &workspace_uuid, &session_id.to_string(), false, &owner_env);
+        let refs_from = crate::vault::spawn::SpawnRefs {
+            owner_env: if req.env_owner_set { req.env.clone() } else { HashMap::new() },
+            ..Default::default()
+        };
+        let delivered = crate::vault::spawn::materialize(&mut env, &workspace_uuid, &session_id.to_string(), false, &refs_from);
         ptyd_meta.insert("workspace_uuid".into(), workspace_uuid.clone().into());
         if let Some(dir) = delivered.dir {
             ptyd_meta.insert("secrets_dir".into(), dir.to_string_lossy().into_owned().into());

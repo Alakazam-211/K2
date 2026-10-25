@@ -744,6 +744,7 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
         json.label_moved_to = crate::apps::labels::moved_to(&row.id);
     }
     if row.kind != KIND_SKIN {
+        json.env_refused = crate::vault::publish_env::refused_refs(&row.id);
         json.clean_mode = crate::vault::publish_env::is_clean_mode(&row.id);
         if crate::vault::publish_env::is_legacy(&row.id) {
             json.env_mode = Some("legacy".into());

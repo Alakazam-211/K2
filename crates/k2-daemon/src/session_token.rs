@@ -1214,6 +1214,14 @@ pub fn validate_hook(bearer: &str) -> Option<ValidatedHook> {
         .validate_hook(bearer)
 }
 
+/// The workspace (`projects.id`) a live passport's session belongs to, by
+/// the daemon session id (the vault's `session:<id>` consumer). `None` when
+/// no live passport names it.
+pub fn workspace_for_session(session_id: &str) -> Option<String> {
+    let g = registry().lock().unwrap_or_else(|e| e.into_inner());
+    g.records.get(session_id.trim()).map(|r| r.principal.workspace_uuid.clone())
+}
+
 /// Revoke one session's token via the process registry + persist. Phase 1
 /// calls this on cell teardown/kill (the child-exit observer) so a dead
 /// cell's token 403s immediately, no daemon restart.

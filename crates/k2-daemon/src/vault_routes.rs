@@ -1354,6 +1354,10 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
         (None, None, Some(_)) => Delivery::File,
         (None, _, _) => vault.meta(&sel, &c.actor)?.default_delivery,
     };
+    if consumer.kind == ConsumerKind::Session && c.actor.agent().is_some_and(|a| a.vault_manage) {
+        let scope = vault.meta(&sel, &c.actor)?.scope.kind;
+        session_self_grant(&c.actor, scope, session_workspace(&consumer.id))?;
+    }
     let g = vault.grant(
         GrantRequest {
             selector: sel,
@@ -1376,6 +1380,41 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
         out["warning"] = w.into();
     }
     Ok(out)
+}
+
+/// The workspace a `session:<id>` consumer belongs to: a live passport's
+/// session, else the session tables. `None`: K2 can't tell.
+fn session_workspace(session_id: &str) -> Option<String> {
+    if let Some(ws) = crate::session_token::workspace_for_session(session_id) {
+        return Some(ws);
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::workspace_session_handles::project_id_for_session_id(&conn, session_id).ok().flatten()
+}
+
+/// R8 review fix 3: an IT agent ("Allow managing server-wide secrets") may
+/// grant a server secret to another workspace's session, never to any
+/// session of its own workspace (its sidecars, pinned chat, heartbeat
+/// sessions), and not to a session K2 can't place (fail closed; grant to
+/// `ws:<name>` instead). `vault_self_grant` only covered its current
+/// session before.
+pub(crate) fn session_self_grant(actor: &Actor, scope: ScopeKind, session_ws: Option<String>) -> Result<(), VaultError> {
+    let Some(a) = actor.agent() else { return Ok(()) };
+    if !a.vault_manage || scope != ScopeKind::Server {
+        return Ok(());
+    }
+    match session_ws {
+        Some(ws) if ws != a.workspace_id => Ok(()),
+        Some(_) => Err(VaultError::forbidden(
+            "vault_self_grant",
+            "an agent can't grant a server secret to a session of its own workspace; ask the owner",
+        )),
+        None => Err(VaultError::forbidden(
+            "vault_self_grant",
+            "K2 can't tell which workspace that session belongs to; grant to ws:<name> instead",
+        )),
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]

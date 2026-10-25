@@ -177,27 +177,43 @@ pub struct Materialized {
     /// names of the keys it serves at spawn.
     pub agent_sock: Option<PathBuf>,
     pub agent_keys: Vec<String>,
+    /// (secret id, version) of everything delivered: the `/v1` cell audit
+    /// line ([`SpawnRefs::via`]). Ids only.
+    pub delivered: Vec<(String, u32)>,
+}
+
+/// Where a spawn's env came from, for its `k2v://` references (R8,
+/// prd-env-to-vault-v1).
+#[derive(Debug, Default, Clone)]
+pub struct SpawnRefs {
+    /// The part of the env an Owner or Admin set (an agent preset's env, an
+    /// Owner/Admin v2 spawn body): a reference there resolves as the
+    /// owner's choice. Counts only when the same key holds the same
+    /// reference here.
+    pub owner_env: HashMap<String, String>,
+    /// The rest of the env is data, never a reference (a `/v1` caller's
+    /// prompt, host-curated `/v1` env): left exactly as it is, unresolved
+    /// (review fix 2). `false`: other references resolve only for secrets
+    /// the session may have (an AGENT.md launch block).
+    pub others_are_data: bool,
+    /// An external `/v1` caller drives this cell (`v1:<principal>`): what
+    /// it received is also written to the vault audit under that label, so
+    /// it reads apart from the workspace's own agent (review fix 10).
+    pub via: Option<String>,
 }
 
 /// Add this session's env/file secrets to `env`, and `SSH_AUTH_SOCK` when
 /// it has `agent` items. `sandboxed` cells get env delivery only (a host
 /// directory or socket isn't visible inside the cell).
 ///
-/// `owner_env` is the part of `env` an Owner or Admin set (an agent preset's
-/// env, an owner-token spawn body): a `k2v://` reference there resolves as
-/// the owner's own choice. Any other reference in `env` (an AGENT.md
-/// launch block the agent can edit, a `/v1` caller's prompt) resolves only
-/// when this session may have the secret: its own workspace's or chat's,
-/// or one granted to it or its workspace at env delivery (R8,
-/// prd-env-to-vault-v1). A reference counts as owner-set only when the
-/// same key holds the same reference in `owner_env`.
-pub fn materialize(
-    env: &mut HashMap<String, String>,
-    workspace_id: &str,
-    session_id: &str,
-    sandboxed: bool,
-    owner_env: &HashMap<String, String>,
-) -> Materialized {
+/// `k2v://` references in `env` ([`SpawnRefs`]): an owner-set one resolves
+/// as the owner's choice (audited under this session); with
+/// `others_are_data` every other value stays as it is; otherwise another
+/// reference (an AGENT.md launch block the agent can edit) resolves only
+/// when this session may have the secret: its own workspace's or chat's at
+/// env default delivery, or one granted to it or its workspace at env
+/// delivery. A refused reference is removed from the env.
+pub fn materialize(env: &mut HashMap<String, String>, workspace_id: &str, session_id: &str, sandboxed: bool, refs_from: &SpawnRefs) -> Materialized {
     let mut out = Materialized::default();
     let ws = workspace_id.trim();
     if ws.is_empty() {
@@ -211,19 +227,27 @@ pub fn materialize(
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     for (k, r) in refs {
-        let owner_set = owner_env.get(&k) == Some(&r);
+        let owner_set = refs_from.owner_env.get(&k) == Some(&r);
+        if !owner_set && refs_from.others_are_data {
+            continue; // data, not a reference
+        }
         match resolve_env_ref(&vault, &r, owner_set, &who) {
-            Ok(v) => {
+            Ok((v, id, version)) => {
                 env.insert(k.clone(), v);
                 out.env_names.push(k);
+                out.delivered.push((id, version));
             }
             Err(e) => {
                 env.remove(&k);
+                k2_core::log_debug!("WARN [vault] spawn {session_id}: {k} not delivered: {}", e.code);
                 out.skipped.push(format!("{k}: {}", e.code));
             }
         }
     }
     deliver_items(&vault, env, &who, session_id, sandboxed, &mut out);
+    if let (Some(via), false) = (refs_from.via.as_deref(), out.delivered.is_empty()) {
+        vault.audit_carry("v1_cell_delivery", &k2_vault::Actor::System(via.to_string()), &who.label(), &out.delivered);
+    }
     if let Some(d) = &out.dir {
         // The session registers only after its PTY is up (seconds when
         // k2-ptyd launches); the 60 s sweep must not take the dir first.
@@ -297,7 +321,10 @@ fn deliver_items(
         }
         let use_ = if it.delivery == Delivery::Env { Use::Env } else { Use::File };
         let r = match vault.resolve(&Selector::Id(it.secret_id.clone()), use_, who) {
-            Ok(r) => r,
+            Ok(r) => {
+                out.delivered.push((r.meta.id.clone(), r.version));
+                r
+            }
             Err(e) => {
                 out.skipped.push(format!("{}: {}", it.name, e.code));
                 continue;
@@ -408,25 +435,29 @@ fn deliver_agent(
     }
 }
 
-/// A `k2v://` reference in a session's env → its value. Owner-set
-/// (`owner_set`): the owner chose it, so it resolves whenever the secret's
-/// ceiling allows env. Otherwise the session itself is the requester and
-/// needs the secret to be its own or granted to it
-/// ([`k2_vault::LocalVault::resolve_ref_env`]).
-fn resolve_env_ref(vault: &k2_vault::LocalVault, r: &str, owner_set: bool, who: &Requester) -> Result<String, k2_vault::VaultError> {
+/// A `k2v://` reference in a session's env → (value, secret id, version).
+/// Owner-set (`owner_set`): the owner chose it, so it resolves whenever the
+/// secret's ceiling allows env; the audit names this session as the
+/// consumer (`daemon:preset-env:<ws>/<sid>`, review fix 10). Otherwise the
+/// session itself is the requester and needs the secret to be its own or
+/// granted to it ([`k2_vault::LocalVault::resolve_ref_env`]).
+fn resolve_env_ref(vault: &k2_vault::LocalVault, r: &str, owner_set: bool, who: &Requester) -> Result<(String, String, u32), k2_vault::VaultError> {
     let sel = super::selector_for_ref(r)?;
+    let not_text = || k2_vault::VaultError::bad_request("not_text", "env values must be text");
     if !owner_set {
         let v = vault.resolve_ref_env(&sel, who)?;
-        return String::from_utf8(v.value.expose().to_vec())
-            .map_err(|_| k2_vault::VaultError::bad_request("not_text", "env values must be text"));
+        let s = String::from_utf8(v.value.expose().to_vec()).map_err(|_| not_text())?;
+        return Ok((s, v.meta.id.clone(), v.version));
     }
     let m = vault.meta(&sel, &k2_vault::Actor::System("preset-env".into()))?;
     if m.delivery_ceiling.level() < Delivery::Env.level() {
         return Err(k2_vault::VaultError::forbidden("delivery_above_ceiling", "this secret can't be delivered as env"));
     }
-    let v = vault.resolve(&Selector::Id(m.id), Use::System, &Requester::System("preset-env".into()))?;
-    String::from_utf8(v.value.expose().to_vec())
-        .map_err(|_| k2_vault::VaultError::bad_request("not_text", "env values must be text"))
+    let consumer = who.label();
+    let label = format!("preset-env:{}", consumer.strip_prefix("session:").unwrap_or(&consumer));
+    let v = vault.resolve(&Selector::Id(m.id), Use::System, &Requester::System(label))?;
+    let s = String::from_utf8(v.value.expose().to_vec()).map_err(|_| not_text())?;
+    Ok((s, v.meta.id.clone(), v.version))
 }
 
 /// Session ended: its secrets dir and placeholders go.
@@ -946,7 +977,7 @@ mod tests {
         put("AS_FETCH", Delivery::Fetch, "fetch-value-3");
         let mut env = HashMap::new();
         let sid = uuid::Uuid::new_v4().to_string();
-        let out = materialize(&mut env, &ws, &sid, false, &HashMap::new());
+        let out = materialize(&mut env, &ws, &sid, false, &SpawnRefs::default());
         assert_eq!(env.get("AS_ENV").map(String::as_str), Some("env-value-1"));
         assert!(!env.values().any(|x| x.contains("fetch-value-3")), "fetch secrets never reach env");
         assert!(!env.contains_key("AS_FETCH"));
@@ -960,11 +991,11 @@ mod tests {
         }
         // Another workspace gets nothing.
         let mut env2 = HashMap::new();
-        let out2 = materialize(&mut env2, &uuid::Uuid::new_v4().to_string(), "s2", false, &HashMap::new());
+        let out2 = materialize(&mut env2, &uuid::Uuid::new_v4().to_string(), "s2", false, &SpawnRefs::default());
         assert!(env2.is_empty() && out2.files.is_empty(), "{out2:?}");
         // A sandboxed cell gets env only.
         let mut env3 = HashMap::new();
-        let out3 = materialize(&mut env3, &ws, "s3", true, &HashMap::new());
+        let out3 = materialize(&mut env3, &ws, "s3", true, &SpawnRefs::default());
         assert!(out3.dir.is_none());
         assert_eq!(env3.get("AS_ENV").map(String::as_str), Some("env-value-1"));
     }

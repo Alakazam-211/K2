@@ -544,6 +544,10 @@ pub(crate) fn resolve_host_spawn(
         forced_session_id: Some(*session_id),
         attach_only: false,
         owner_env,
+        // Everything else is K2-staged (credentials, identity): data, never
+        // a reference (R8 review fix 2).
+        env_refs_are_data: true,
+        audit_via: Some(format!("v1:{}", sanitize_id(&principal.display_id()))),
     };
     (spawn, plan, model_decision)
 }

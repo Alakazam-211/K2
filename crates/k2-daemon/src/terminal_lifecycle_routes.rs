@@ -152,7 +152,7 @@ pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
         );
         // K2 vault (KV19): this session's file/env secrets. No owner-set
         // env here (R8): the env is K2's own.
-        crate::vault::spawn::materialize(&mut env, &workspace_uuid, &sid.to_string(), false, &std::collections::HashMap::new());
+        crate::vault::spawn::materialize(&mut env, &workspace_uuid, &sid.to_string(), false, &crate::vault::spawn::SpawnRefs::default());
         // Renderer `create` often has no agent_name (shell vs harness).
         // Classify from cwd + command; unknown/shell → omit identity.
         let mut spawn_args = body.args.clone().unwrap_or_default();

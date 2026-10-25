@@ -263,16 +263,28 @@ fn session_project(session_id: &str) -> Option<String> {
     k2_core::workspace_session_handles::project_id_for_session_id(&conn, session_id).ok().flatten()
 }
 
-/// `k2v://` references in the workspace's `.env.k2` → secret ids.
+/// `k2v://` references in the workspace's `.env.k2` → secret ids, only
+/// those the workspace really gets (R8 review fix 8): one that resolves for
+/// the workspace or one of its published services under the vault's rule.
+/// A reference to a secret it isn't granted doesn't make it "used".
 fn env_k2_refs(vault: &LocalVault, project_id: &str) -> HashSet<String> {
     let mut out = HashSet::new();
     let Some(dir) = crate::vault::workspace_path(project_id) else { return out };
     let Ok(text) = std::fs::read_to_string(Path::new(&dir).join(".env.k2")) else { return out };
+    let mut consumers = vec![k2_vault::Requester::Session { workspace_id: project_id.to_string(), session_id: None }];
+    consumers.extend(
+        published_services(project_id)
+            .into_iter()
+            .map(|id| k2_vault::Requester::PublishedService { id, workspace_id: project_id.to_string() }),
+    );
     for (_, v) in crate::vault::publish_env::parse_env_k2(&text) {
         if !k2_vault::refs::VaultRef::is_ref(&v) {
             continue;
         }
         let Ok(sel) = crate::vault::selector_for_ref(&v) else { continue };
+        if !consumers.iter().any(|who| vault.ref_would_resolve(&sel, who).unwrap_or(false)) {
+            continue;
+        }
         if let Ok(m) = vault.meta(&sel, &Actor::System("clone".into())) {
             out.insert(m.id);
         }

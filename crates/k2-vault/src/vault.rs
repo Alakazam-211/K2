@@ -1784,18 +1784,25 @@ impl LocalVault {
     }
 
     /// May `who` have `m` through a `k2v://` reference in its own config
-    /// (prd-env-to-vault-v1 R8)? Implicit: its own workspace's secret (a
-    /// session, a published service) or its own chat's secret (a session).
-    /// Otherwise an explicit, unexpired grant at env delivery or above: to
-    /// the session or its workspace (`ws:<id>`, `ws:*`); to the service, or
-    /// to the service's workspace (`ws:<id>`, `ws:*`); to the job. Explicit
-    /// grants stop while the vault is rolled back (VS8).
+    /// (prd-env-to-vault-v1 R8)? `Some(version)` when it may (`None` =
+    /// latest, `Some(v)` = the version a grant pins), `None` when not.
+    ///
+    /// - Implicit: its own workspace's secret (a session, a published
+    ///   service) or its own chat's secret (a session), and only when the
+    ///   secret's **default delivery** is env or above, the same cap the
+    ///   implicit grant has in [`Self::effective`]. A fetch- or proxy-only
+    ///   key never becomes raw env through a reference (review fix 1).
+    /// - Explicit: an unexpired grant at env delivery or above, to the
+    ///   session or its workspace (`ws:<id>`, `ws:*`); to the service, or
+    ///   to the service's workspace (`ws:<id>`, `ws:*`); to the job.
+    ///   Explicit grants stop while the vault is rolled back (VS8). An
+    ///   unpinned grant wins over a pinned one.
     ///
     /// A workspace grant counts for a service only here, when the service
     /// names the secret itself: [`Self::spawn_items`] still delivers a
     /// service only the grants made to that service.
-    fn ref_entitled(&self, conn: &Connection, keys: &Keys, m: &SecretMeta, who: &Requester) -> Result<bool> {
-        let implicit = match who {
+    fn ref_entitled(&self, conn: &Connection, keys: &Keys, m: &SecretMeta, who: &Requester) -> Result<Option<Option<u32>>> {
+        let own = match who {
             Requester::Session { workspace_id, session_id } => match m.scope.kind {
                 ScopeKind::Workspace => &m.scope.id == workspace_id,
                 ScopeKind::Session => session_id.as_deref() == Some(m.scope.id.as_str()),
@@ -1805,13 +1812,14 @@ impl LocalVault {
             // A job gets nothing by default (Q13); the rest never name refs.
             _ => false,
         };
-        if implicit {
-            return Ok(true);
+        if own && m.default_delivery.level() >= Delivery::Env.level() {
+            return Ok(Some(None));
         }
         if *self.rollback.lock() {
-            return Ok(false);
+            return Ok(None);
         }
         let t = now();
+        let mut pinned: Option<u32> = None;
         for g in self.grants_for(conn, keys, &m.id)? {
             if g.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x < t) {
                 continue;
@@ -1833,11 +1841,35 @@ impl LocalVault {
                 }
                 _ => false,
             };
-            if ok {
-                return Ok(true);
+            if !ok {
+                continue;
+            }
+            match g.version_selector.parse::<u32>() {
+                Ok(v) => pinned = Some(pinned.map_or(v, |p| p.max(v))),
+                Err(_) => return Ok(Some(None)),
             }
         }
-        Ok(false)
+        Ok(pinned.map(Some))
+    }
+
+    /// Write one daemon note into the vault's own audit chain (MAC'd,
+    /// append-only): `action` by `actor`, about `consumer`. Names only.
+    /// The R8 upgrade's done flag lives here, not in a file an agent could
+    /// delete (review fix 4).
+    pub fn audit_note(&self, action: &str, actor: &Actor, consumer: &str) -> Result<()> {
+        let e = Entry::new(action, &actor.stamp(), "ok").consumer(consumer.to_string());
+        self.mutate(false, |_, _| Ok(((), vec![e])))
+    }
+
+    /// Is there an audit row with exactly this `action` and `actor` stamp?
+    pub fn audit_has(&self, action: &str, actor: &Actor) -> Result<bool> {
+        let conn = self.conn.lock();
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM audit WHERE action = ?1 AND actor = ?2 AND outcome = 'ok'",
+            params![action, actor.stamp()],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
     }
 
     /// Would [`Self::resolve_ref_env`] give `who` this secret? Names only,
@@ -1856,7 +1888,7 @@ impl LocalVault {
         if m.delivery_ceiling.level() < Delivery::Env.level() {
             return Ok(false);
         }
-        self.ref_entitled(&conn, &keys, m, who)
+        Ok(self.ref_entitled(&conn, &keys, m, who)?.is_some())
     }
 
     /// Resolve a `k2v://` reference that a consumer's own config names (a
@@ -1880,6 +1912,7 @@ impl LocalVault {
         };
         let m = row.meta.clone();
         let deny_entry = Entry::new("resolve_ref", &actor_label, "deny").secret(&m.id, None).consumer(actor_label.clone());
+        let entitled = if m.namespace == Namespace::User { self.ref_entitled(&conn, &keys, &m, who)? } else { None };
         let refusal = if m.namespace != Namespace::User {
             Some(VaultError::forbidden("vault_system_namespace", "K2's own secrets are used only by K2"))
         } else if m.status != SecretStatus::Active {
@@ -1888,7 +1921,7 @@ impl LocalVault {
             Some(VaultError::forbidden("secret_expired", "that secret has expired"))
         } else if m.delivery_ceiling.level() < Delivery::Env.level() {
             Some(VaultError::forbidden("delivery_above_ceiling", "this secret can't be delivered as env"))
-        } else if !self.ref_entitled(&conn, &keys, &m, who)? {
+        } else if entitled.is_none() {
             Some(VaultError::forbidden(
                 "not_granted",
                 format!(
@@ -1904,15 +1937,24 @@ impl LocalVault {
             drop(keys);
             return Err(self.deny(deny_entry, e));
         }
-        let v = self.decrypt_version(&conn, &keys, &m, m.latest_version)?;
+        // Review fix 9: a version a grant pins is the version delivered.
+        let version = entitled.flatten().unwrap_or(m.latest_version);
+        let v = match self.decrypt_version(&conn, &keys, &m, version) {
+            Ok(v) => v,
+            Err(e) => {
+                drop(conn);
+                drop(keys);
+                return Err(self.deny(deny_entry, e));
+            }
+        };
         drop(conn);
         drop(keys);
         self.rollups
             .lock()
-            .add(&Entry::new("resolve_ref", &actor_label, "ok").secret(&m.id, Some(m.latest_version)).consumer(actor_label.clone()));
+            .add(&Entry::new("resolve_ref", &actor_label, "ok").secret(&m.id, Some(version)).consumer(actor_label.clone()));
         Ok(Resolved {
             value: v,
-            version: m.latest_version,
+            version,
             delivery: Delivery::Env,
             env_name: None,
             file_name: None,

@@ -48,6 +48,7 @@
       "sentence": "Read files in the agents' rooms on this computer (the room's files, never a path outside it)."
     },
     {"name": "files:write", "exposure": ["app"], "label": "Write files (not the agent's .k2 folder)"},
+    {"name": "push:send", "exposure": ["app"], "label": "Send notifications to this App's users' phones"},
     {
       "name": "tickets:read",
       "exposure": ["app", "garden-local"],
@@ -203,6 +204,11 @@
     {"code": "not_for_host", "doc": "Push is for a published App's own users, never the box login (host)."},
     {"code": "channel_unavailable", "doc": "K2 Companion can't receive this App's notifications yet; register the App's own phone app (channel app)."},
     {"code": "push_devices_full", "doc": "This App holds as many push devices as its owner allows."},
+    {"code": "push_not_configured", "doc": "This App has no Apple or Google push key yet; its owner runs k2 app push setup."},
+    {"code": "too_many_recipients", "doc": "More than 1,000 recipients in one call; send in batches with to.guests."},
+    {"code": "push_queue_full", "doc": "This App has too many notifications waiting to go out; try again shortly."},
+    {"code": "airgap", "doc": "Air-gap is on: nothing leaves this server."},
+    {"code": "vault_closed", "doc": "The vault isn't open yet (K2 is still starting); try again shortly."},
     {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."},
     {"code": "needs_editor", "doc": "Garden access lists on: this widget version isn't signed by the person, K2 or an agent on this Garden's list, so only its own store and save keyspace and widget.self answer. Someone who edits this Garden has to sign this version."},
     {"code": "retired", "doc": "K2 retired this verb: it answers this until a later release removes it (the message says which)."},
@@ -7930,6 +7936,411 @@
       ],
       "doc": "Change one device's notification choices (previews, muted topics) without its token.",
       "example": "await k2.asGuest(pass).push.prefs({deviceId, mutedTopics: ['marketing']})"
+    },
+    {
+      "verb": "push.send",
+      "cap": "push:send",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "custom-app-push-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/push/send",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "to": {
+              "title": "AppPushTo",
+              "type": "object",
+              "description": "Exactly one of guest, guests or room.",
+              "properties": {
+                "guest": {
+                  "type": "string",
+                  "description": "A principal id or username of this App's guest."
+                },
+                "guests": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "At most 1,000."
+                },
+                "room": {
+                  "type": "string",
+                  "description": "One of this App's rooms (a handle or project id): its guests with a grant there."
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "title": {
+              "type": "string",
+              "description": "At most 200 bytes; required unless silent."
+            },
+            "body": {
+              "type": "string",
+              "description": "At most 1,024 bytes; required unless silent."
+            },
+            "data": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Your own keys, strings only (at most 32, 2 KiB); aps, k2*, google.*, gcm.* are reserved."
+            },
+            "topic": {
+              "type": "string",
+              "description": "A category guests can mute (a-z 0-9 . _ -)."
+            },
+            "collapseId": {
+              "type": "string",
+              "description": "A newer push with the same id replaces this one (at most 64 bytes)."
+            },
+            "threadId": {
+              "type": "string",
+              "description": "Groups notifications on iOS."
+            },
+            "sound": {
+              "type": "string",
+              "description": "A sound name, default, or none."
+            },
+            "badge": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 99999
+            },
+            "silent": {
+              "type": "boolean",
+              "description": "Wake the app to sync, no banner (its own budget)."
+            },
+            "priority": {
+              "enum": [
+                "high",
+                "normal"
+              ]
+            },
+            "ttlSecs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2419200,
+              "description": "How long Apple and Google keep trying, in seconds."
+            },
+            "mutable": {
+              "type": "boolean",
+              "description": "iOS: let a Notification Service Extension change it."
+            },
+            "androidChannel": {
+              "type": "string",
+              "description": "The Android notification channel id."
+            }
+          },
+          "required": [
+            "to"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPushQueued",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "sendId": {
+            "type": "string",
+            "description": "What push.status takes."
+          },
+          "queued": {
+            "type": "integer",
+            "description": "Device sends queued."
+          },
+          "skipped": {
+            "title": "AppPushSkipped",
+            "type": "object",
+            "properties": {
+              "not_a_guest": {
+                "type": "integer",
+                "description": "Names that aren't this App's guests (unknown, or another App's: the same count)."
+              },
+              "no_devices": {
+                "type": "integer",
+                "description": "Guests with no registered phone."
+              },
+              "muted_topic": {
+                "type": "integer",
+                "description": "Devices that muted this topic."
+              },
+              "rate_limited": {
+                "type": "integer",
+                "description": "Guests over their hourly push budget."
+              },
+              "platform_not_configured": {
+                "type": "integer",
+                "description": "Devices on a platform this App has no key for."
+              }
+            },
+            "required": [
+              "not_a_guest",
+              "no_devices",
+              "muted_topic",
+              "rate_limited",
+              "platform_not_configured"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "sendId",
+          "queued",
+          "skipped"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "not_on_link",
+        "app_pass_required",
+        "cap_not_granted",
+        "push_off",
+        "push_not_configured",
+        "outside_app_rooms",
+        "too_many_recipients",
+        "push_queue_full",
+        "rate_limited",
+        "too_large",
+        "airgap",
+        "vault_closed",
+        "usage",
+        "failed"
+      ],
+      "doc": "Notify this App's own guests' phones (a guest, a list, or a room's guests); answers at once with a sendId.",
+      "example": "const {sendId} = await k2.push.send({to: {guest: principalId}, title, body, data: {jobId}, topic: 'jobs'})"
+    },
+    {
+      "verb": "push.status",
+      "cap": "push:send",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "custom-app-push-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/push/status",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "sendId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sendId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPushStatus",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "sendId": {
+            "type": "string"
+          },
+          "at": {
+            "type": "integer",
+            "description": "When it was sent, seconds since the epoch."
+          },
+          "queued": {
+            "type": "integer"
+          },
+          "sent": {
+            "type": "integer",
+            "description": "Apple or Google accepted it (neither reports display)."
+          },
+          "dead": {
+            "type": "integer",
+            "description": "The phone's token was gone; K2 removed that device."
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "wrongApp": {
+            "type": "integer",
+            "description": "Tokens from another app (check the bundle id)."
+          },
+          "dropped": {
+            "type": "integer",
+            "description": "Dropped before sending (air-gap)."
+          },
+          "skipped": {
+            "title": "AppPushSkipped",
+            "type": "object",
+            "properties": {
+              "not_a_guest": {
+                "type": "integer",
+                "description": "Names that aren't this App's guests (unknown, or another App's: the same count)."
+              },
+              "no_devices": {
+                "type": "integer",
+                "description": "Guests with no registered phone."
+              },
+              "muted_topic": {
+                "type": "integer",
+                "description": "Devices that muted this topic."
+              },
+              "rate_limited": {
+                "type": "integer",
+                "description": "Guests over their hourly push budget."
+              },
+              "platform_not_configured": {
+                "type": "integer",
+                "description": "Devices on a platform this App has no key for."
+              }
+            },
+            "required": [
+              "not_a_guest",
+              "no_devices",
+              "muted_topic",
+              "rate_limited",
+              "platform_not_configured"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "sendId",
+          "at",
+          "queued",
+          "sent",
+          "dead",
+          "failed",
+          "wrongApp",
+          "dropped",
+          "skipped"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "not_on_link",
+        "app_pass_required",
+        "cap_not_granted",
+        "not_found",
+        "usage",
+        "failed"
+      ],
+      "doc": "One send's counts (kept for an hour): sent, dead, failed; never who.",
+      "example": "const s = await k2.push.status({sendId})"
+    },
+    {
+      "verb": "push.devices",
+      "cap": "push:send",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "custom-app-push-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/push/devices",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppPushDevices",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "guests": {
+            "type": "array",
+            "items": {
+              "title": "AppPushGuestDevices",
+              "type": "object",
+              "properties": {
+                "guest": {
+                  "type": "string",
+                  "description": "The guest's principal id."
+                },
+                "devices": {
+                  "type": "integer"
+                },
+                "platforms": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "guest",
+                "devices",
+                "platforms"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "guests"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "not_on_link",
+        "app_pass_required",
+        "cap_not_granted",
+        "failed"
+      ],
+      "doc": "Which of this App's guests have phones registered, and on which platforms (never a token).",
+      "example": "const {guests} = await k2.push.devices()"
     },
     {
       "verb": "app.info",

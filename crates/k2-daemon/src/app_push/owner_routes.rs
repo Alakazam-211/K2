@@ -8,6 +8,13 @@
 //!                                                  the owner in person + a fresh confirm
 //! POST /cli/app/push/credentials/remove {app, platform, confirmToken}   the same
 //! POST /cli/app/push/check          {app}          the owner: one real call per platform to a fake token (CP16)
+//! POST /cli/app/push/set            {app, enabled?, agentReplies?, previews?, maxDevices?}
+//!                                                  on: the owner; off: Admin or the App's agent (switch 1);
+//!                                                  agentReplies/previews: Admin or the App's agent (switch 2);
+//!                                                  maxDevices: the owner
+//! POST /cli/app/push/send           {app, to, title, body, …}   Admin, or the App's agent (switch 2) → 202
+//! POST /cli/app/push/test           {app, to}      the same, fixed text "Test notification from K2"
+//! GET  /cli/app/push/log            ?app=          Admin; the App's agent (switch 1): the last hour's sends, counts only
 //! GET  /cli/app/push/devices        ?app=&guest=   Admin: platform, environment, channel, last seen; never tokens
 //! POST /cli/app/push/devices/remove {app, id}      Admin
 //! ```
@@ -33,11 +40,17 @@ pub const STATUS: &str = "/cli/app/push";
 pub const CREDENTIALS: &str = "/cli/app/push/credentials";
 pub const CREDENTIALS_REMOVE: &str = "/cli/app/push/credentials/remove";
 pub const CHECK: &str = "/cli/app/push/check";
+pub const SET: &str = "/cli/app/push/set";
+pub const SEND: &str = "/cli/app/push/send";
+pub const TEST: &str = "/cli/app/push/test";
+pub const LOG: &str = "/cli/app/push/log";
+/// The fixed text of `k2 app push test`.
+pub const TEST_TEXT: &str = "Test notification from K2";
 pub const DEVICES: &str = "/cli/app/push/devices";
 pub const DEVICES_REMOVE: &str = "/cli/app/push/devices/remove";
 
-pub const ROUTES: &[&str] = &[STATUS, CREDENTIALS, CREDENTIALS_REMOVE, CHECK, DEVICES, DEVICES_REMOVE];
-pub const POST_ROUTES: &[&str] = &[CREDENTIALS, CREDENTIALS_REMOVE, CHECK, DEVICES_REMOVE];
+pub const ROUTES: &[&str] = &[STATUS, CREDENTIALS, CREDENTIALS_REMOVE, CHECK, SET, SEND, TEST, LOG, DEVICES, DEVICES_REMOVE];
+pub const POST_ROUTES: &[&str] = &[CREDENTIALS, CREDENTIALS_REMOVE, CHECK, SET, SEND, TEST, DEVICES_REMOVE];
 /// Request bodies here are at most this many bytes (keys included).
 pub const MAX_BODY: usize = 64 * 1024;
 
@@ -334,6 +347,131 @@ fn check(who: &Who, body: &[u8]) -> R<J> {
     Ok(json!({ "ok": true, "app": t.service_id, "name": t.name, "results": results }))
 }
 
+fn bool_opt(v: &J, k: &str) -> R<Option<bool>> {
+    match v.get(k) {
+        None | Some(J::Null) => Ok(None),
+        Some(J::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(no("usage", 400, format!("{k} must be true or false"))),
+    }
+}
+
+/// POST `/cli/app/push/set`.
+fn set(who: &Who, body: &[u8]) -> R<J> {
+    use crate::apps::access::Level;
+    let v = json_body(body)?;
+    let t = push_target(who, s(&v, "app"))?;
+    let enabled = bool_opt(&v, "enabled")?;
+    let agent_replies = bool_opt(&v, "agentReplies")?;
+    let previews = bool_opt(&v, "previews")?;
+    let max_devices = match v.get("maxDevices") {
+        None | Some(J::Null) => None,
+        Some(J::Number(n)) => Some(n.as_i64().ok_or_else(|| no("usage", 400, "maxDevices is a whole number"))?),
+        Some(_) => return Err(no("usage", 400, "maxDevices is a whole number")),
+    };
+    if enabled.is_none() && agent_replies.is_none() && previews.is_none() && max_devices.is_none() {
+        return Err(no("usage", 400, "send {app} with enabled, agentReplies, previews and/or maxDevices"));
+    }
+    // On (and raising the device ceiling) is the owner's approval of push
+    // for this App (CP36): never an agent, never an Admin.
+    let owner = owner_in_person(who) || matches!(who, Who::Shell { .. });
+    if (enabled == Some(true) || max_devices.is_some()) && !owner {
+        return Err(no(
+            "owner_only",
+            403,
+            "turning an App's notifications on is the owner's approval (k2 app push on <app>); an agent asks with a permission card",
+        ));
+    }
+    if enabled == Some(false) && !admin_human(who) && !app_agent_at(who, &t, Level::Build) {
+        return Err(no("forbidden", 403, "turning notifications off is for the owner, Admins and this App's own agent"));
+    }
+    if (agent_replies.is_some() || previews.is_some()) && !admin_human(who) && !app_agent_at(who, &t, Level::Full) {
+        return Err(no(
+            "forbidden",
+            403,
+            "agent replies and previews are set by the owner, Admins, or this App's own agent with \"…and manage them end to end\" on",
+        ));
+    }
+    let by = actor(who);
+    let before = store::config(&t.service_id).map_err(|e| no("store", 500, e))?;
+    let sw = store::Switches {
+        enabled,
+        owner_on: if enabled == Some(true) { Some(true) } else { None },
+        agent_replies,
+        previews,
+    };
+    store::set_switches(&t.service_id, sw, &by).map_err(|e| no("usage", 400, e))?;
+    if let Some(m) = max_devices {
+        store::set_max_devices(&t.service_id, Some(m), &by).map_err(|e| no("usage", 400, e))?;
+    }
+    if let Some(e) = enabled.filter(|e| *e != (before.enabled && (before.owner_on || super::push_send_approved(&t.service_id)))) {
+        super::audit_line("app-push-state", &by, &format!("app={} enabled={e}", t.service_id));
+        crate::apps::alerts::note(
+            &t.project_id,
+            "App notifications changed",
+            &format!("Notifications for {} are now {} (by {by}).", t.name, if e { "on" } else { "off" }),
+        );
+    }
+    if agent_replies.is_some_and(|a| a != before.agent_replies) || previews.is_some_and(|p| p != before.previews) {
+        super::audit_line("app-push-settings", &by, &format!("app={} agentReplies={:?} previews={:?}", t.service_id, agent_replies, previews));
+    }
+    status_json(&t)
+}
+
+/// May `who` send for this App (CP36: Admin, or the App's agent at switch 2)?
+fn may_send(who: &Who, t: &Target) -> R<()> {
+    if admin_human(who) || app_agent_at(who, t, crate::apps::access::Level::Full) {
+        return Ok(());
+    }
+    Err(no(
+        "forbidden",
+        403,
+        "sending is for the owner, Admins, or this App's own agent with \"…and manage them end to end\" on",
+    ))
+}
+
+fn send_refusal(e: super::send::SendErr) -> Refusal {
+    Refusal { code: e.code, status: e.status, hint: e.hint, extra: Some(J::Object(e.extra)) }
+}
+
+/// POST `/cli/app/push/send {app, to, title, body, …}`.
+fn send(who: &Who, body: &[u8]) -> R<J> {
+    let mut v = json_body(body)?;
+    let t = push_target(who, s(&v, "app"))?;
+    may_send(who, &t)?;
+    if let Some(o) = v.as_object_mut() {
+        o.remove("app");
+    }
+    let to = super::send::parse_to(&v).map_err(send_refusal)?;
+    let n = super::payload::parse(&v).map_err(|r| send_refusal(r.into()))?;
+    let caller = super::send::Caller { actor: actor(who), kind: super::payload::KIND_APP };
+    let mut out = super::send::send(&t.service_id, &caller, &to, n).map_err(send_refusal)?;
+    out["status"] = json!("queued");
+    Ok(out)
+}
+
+/// POST `/cli/app/push/test {app, to}`: the fixed text.
+fn test(who: &Who, body: &[u8]) -> R<J> {
+    let v = json_body(body)?;
+    let t = push_target(who, s(&v, "app"))?;
+    may_send(who, &t)?;
+    let to = super::send::parse_to(&v).map_err(send_refusal)?;
+    let n = super::payload::parse(&json!({ "title": TEST_TEXT, "body": TEST_TEXT, "topic": "k2.test" })).map_err(|r| send_refusal(r.into()))?;
+    let caller = super::send::Caller { actor: actor(who), kind: super::payload::KIND_APP };
+    let mut out = super::send::send(&t.service_id, &caller, &to, n).map_err(send_refusal)?;
+    out["status"] = json!("queued");
+    Ok(out)
+}
+
+/// GET `/cli/app/push/log?app=`.
+fn log(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    let t = push_target(who, params.get("app").map(String::as_str))?;
+    if !admin_human(who) && !app_agent_at(who, &t, crate::apps::access::Level::Build) {
+        return Err(no("forbidden", 403, "the send log is the owner's, Admins' and this App's own agent's"));
+    }
+    let sends: Vec<J> = super::sendlog::list(&t.service_id).iter().map(super::send::record_json).collect();
+    Ok(json!({ "ok": true, "app": t.service_id, "name": t.name, "pending": super::worker::pending(&t.service_id), "sends": sends }))
+}
+
 pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
     if is_post_route(path) {
         if let Err(e) = crate::apps::access::member_read_only(&who) {
@@ -345,11 +483,20 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         CREDENTIALS => credentials(&who, body),
         CREDENTIALS_REMOVE => credentials_remove(&who, body),
         CHECK => check(&who, body),
+        SET => set(&who, body),
+        SEND => send(&who, body),
+        TEST => test(&who, body),
+        LOG => log(&who, params),
         DEVICES => devices(&who, params),
         DEVICES_REMOVE => devices_remove(&who, body),
         _ => Err(no("not_found", 404, "no such App push route")),
     };
-    respond(r)
+    match r {
+        Ok(v) if v.get("status").and_then(J::as_str) == Some("queued") => {
+            CliResponse { status: "202 Accepted", content_type: "application/json", body: v.to_string() }
+        }
+        other => respond(other),
+    }
 }
 
 #[cfg(test)]

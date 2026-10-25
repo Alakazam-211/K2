@@ -9981,7 +9981,11 @@ async fn handle_one_request(
                     Some(pass) => {
                         let route = p.to_string();
                         let params = super::http::parse_params(&path, &query);
-                        tokio::task::spawn_blocking(move || crate::app_push::guest_routes::handle_pass(&route, &pass, is_post, &body, &params))
+                        // The link's App, read on this task (task-local).
+                        let link_app = crate::apps::gateway::current().map(|l| l.service_id.clone());
+                        tokio::task::spawn_blocking(move || {
+                            crate::app_push::guest_routes::handle_pass(&route, &pass, link_app.as_deref(), is_post, &body, &params)
+                        })
                             .await
                             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                     }

@@ -387,7 +387,9 @@ mod tests {
         let pass_caps: Vec<&str> = c
             .caps_exposed_to(Exposure::App)
             .into_iter()
-            .filter(|cap| *cap != crate::skin::guest_rooms::CAP && *cap != crate::person_wallet::CAP)
+            // `push:send` (0.46.4) is the App's own cap (its link pass),
+            // never a guest role's.
+            .filter(|cap| *cap != crate::skin::guest_rooms::CAP && *cap != crate::person_wallet::CAP && *cap != crate::skin::CAP_PUSH_SEND)
             .collect();
         assert_eq!(pass_caps, accepted, "ACCEPTED_CAPS vs the catalog's app caps");
         assert!(!accepted.contains(&crate::skin::guest_rooms::CAP), "guests:rooms is an owner grant, never a pass cap");
@@ -577,6 +579,11 @@ mod tests {
                 "not_for_host",
                 "channel_unavailable",
                 "push_devices_full",
+                "push_not_configured",
+                "too_many_recipients",
+                "push_queue_full",
+                "airgap",
+                "vault_closed",
                 "duplicate_label",
                 // Garden access lists (prd-garden-access-v1 G22): the
                 // signer gate's refusal (switch on only).

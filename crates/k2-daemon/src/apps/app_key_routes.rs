@@ -10,6 +10,8 @@
 //! POST /v1/apps/<id>/users/disable|enable|remove|unlock {username}              users
 //! POST /v1/apps/<id>/users/password-reset {username}                            users
 //! POST /v1/apps/<id>/fetch       {url, secret|secrets, method?, headers?, bodyB64?, maxBytes?, timeoutSecs?}  fetch
+//! POST /v1/apps/<id>/push/send   {to, title, body, data?, topic?, …}             push (prd-custom-app-push-v1)
+//! GET  /v1/apps/<id>/push/status?sendId=                                         push
 //! ```
 //!
 //! Rules:
@@ -104,6 +106,7 @@ fn scope_for(method_post: bool, verb: &str) -> Option<&'static str> {
         (true, "users/rooms") => Some(keys::SCOPE_ROOMS),
         (true, "users/disable" | "users/enable" | "users/remove" | "users/unlock" | "users/password-reset") => Some(keys::SCOPE_USERS),
         (true, "fetch") => Some(keys::SCOPE_FETCH),
+        (true, "push/send") | (false, "push/status") => Some(keys::SCOPE_PUSH),
         _ => None,
     }
 }
@@ -140,7 +143,7 @@ fn audit(c: &Ctx, verb: &str, outcome: &str) {
 
 /// Handle one call. `presented` is the Bearer (or `?token=`) credential.
 /// Blocking (fetch makes an outbound call): run it on a blocking task.
-pub fn handle(path: &str, is_post: bool, presented: Option<&str>, body: &[u8], _params: &HashMap<String, String>) -> CliResponse {
+pub fn handle(path: &str, is_post: bool, presented: Option<&str>, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
     let Some((app, verb)) = split(path) else { return not_found() };
     let Some(scope) = scope_for(is_post, verb) else {
         // A GET to a POST verb (or the reverse) is a 405 only for a key
@@ -171,6 +174,12 @@ pub fn handle(path: &str, is_post: bool, presented: Option<&str>, body: &[u8], _
         }
     };
     let c = Ctx { key_id: key.id.clone(), app: app.to_string(), workspace, grant };
+    // App push keeps its own answers (202, sendId, the push refusal codes).
+    if verb == "push/send" || verb == "push/status" {
+        let r = push(&c, verb, body, params);
+        audit(&c, verb, if r.status.starts_with('2') { "ok" } else { r.status });
+        return r;
+    }
     let body_v: J = if is_post {
         if body.is_empty() {
             json!({})
@@ -211,6 +220,34 @@ pub fn handle(path: &str, is_post: bool, presented: Option<&str>, body: &[u8], _
 }
 
 type R = Result<J, CliResponse>;
+
+/// `/v1/apps/<id>/push/*` (scope `push`): the same rules as the link's
+/// `push.send` (the App comes from the key, never the body).
+fn push(c: &Ctx, verb: &str, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
+    use crate::app_push::send;
+    if verb == "push/status" {
+        let Some(id) = params.get("sendId").map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+            return err(400, "usage", "send ?sendId= (from push/send)");
+        };
+        return match crate::app_push::sendlog::get(&c.app, id) {
+            Some(r) => {
+                let mut v = send::record_json(&r);
+                v["ok"] = json!(true);
+                ok(v)
+            }
+            None => err(404, "not_found", "no send of this App by that id in the last hour"),
+        };
+    }
+    let (to, n) = match send::parse_request(body) {
+        Ok(x) => x,
+        Err(e) => return send::err_response(&e),
+    };
+    let caller = send::Caller { actor: c.actor(), kind: crate::app_push::payload::KIND_APP };
+    match send::send(&c.app, &caller, &to, n) {
+        Ok(v) => CliResponse { status: "202 Accepted", content_type: "application/json", body: v.to_string() },
+        Err(e) => send::err_response(&e),
+    }
+}
 
 fn whoami(c: &Ctx) -> R {
     Ok(json!({

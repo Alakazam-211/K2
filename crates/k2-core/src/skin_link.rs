@@ -76,7 +76,7 @@ pub fn link_caps(manifest_caps: &[String]) -> (Vec<String>, Vec<String>) {
         if t.is_empty() {
             continue;
         }
-        if t == CAP_FILES_AGENT_CONFIG || !ACCEPTED_CAPS.contains(&t) {
+        if t == CAP_FILES_AGENT_CONFIG || !(ACCEPTED_CAPS.contains(&t) || super::APP_ONLY_CAPS.contains(&t)) {
             if !dropped.iter().any(|d| d == t) {
                 dropped.push(t.to_string());
             }
@@ -474,6 +474,10 @@ mod tests {
         assert_eq!(k, caps(&["thread:read", "files:write"]));
         assert_eq!(d, caps(&["files:agentconfig", "pty:write"]));
         assert_eq!(link_caps(&[]).0, Vec::<String>::new());
+        // push:send is the App's own cap (custom-app-push-v1): a link pass
+        // carries it; no guest role can (parse_caps refuses it).
+        assert_eq!(link_caps(&caps(&["push:send"])).0, vec!["push:send".to_string()]);
+        assert!(crate::skin::parse_caps(Some(&["push:send".to_string()])).is_err(), "never a role cap");
     }
 
     /// AR9/AR50/§5.2: a link pass works only on its own link and App,

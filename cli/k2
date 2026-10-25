@@ -8076,6 +8076,9 @@ Getting existing Apps ready (not behind the Apps switch): k2 app warnings,
 clean-mode, key mint|revoke, keys, approvals, approve, deny, access
 (k2 app grace for the details).
 
+Phone notifications for a custom App's own phone app: k2 app push
+(k2 app push --help, k2 study app-push).
+
 Read `k2 study apps` first. Guests, roles and tokens: k2 app user|role|grant|token.
 EOF
 }
@@ -10365,7 +10368,7 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        system PATH, its own HOME, owner-token
                                        calls refused (Linux). On narrows (agents
                                        may); off is the owner's (held otherwise).
-  k2 app key mint <app> --scopes users,rooms,fetch [--rooms a,b] [--roles r]
+  k2 app key mint <app> --scopes users,rooms,fetch,push [--rooms a,b] [--roles r]
                  [--label L] [--show]
                                        An App-scoped key instead of the owner
                                        token: it opens /v1/apps/<app id>/… only.
@@ -11517,7 +11520,7 @@ cmd_app_key_mint() {
             *) app="$1"; shift ;;
         esac
     done
-    { [ -z "$app" ] || [ -z "$scopes" ]; } && { echo "usage: k2 app key mint <app> --scopes users,rooms,fetch [--rooms a,b] [--roles r] [--label L] [--show]" >&2; exit 2; }
+    { [ -z "$app" ] || [ -z "$scopes" ]; } && { echo "usage: k2 app key mint <app> --scopes users,rooms,fetch,push [--rooms a,b] [--roles r] [--label L] [--show]" >&2; exit 2; }
     local deliver=vault
     [ "$show" = 1 ] && deliver=show
     local body
@@ -11577,6 +11580,429 @@ if not ks:
     print("No App keys."); sys.exit(0)
 for k in ks:
     print("%s  %-8s %-24s scopes=%s rooms=%s" % (k["id"], k["state"], (k.get("label") or "-")[:24], ",".join(k.get("scopes") or []), ",".join(k.get("rooms") or []) or "-"))'
+}
+
+# k2 app push … (prd-custom-app-push-v1, 0.46.4): push notifications for a
+# custom App's own phone app. The daemon sends to Apple and Google with the
+# App owner's own keys, held in the vault. Keys are read from files here and
+# sent over the local socket; a path never leaves this CLI, and nothing
+# prints a key.
+_app_push_usage() {
+    cat <<'EOF'
+k2 app push — notifications to a custom App's own phone app (its bundle id,
+its Apple team, its Firebase project). K2 keeps the App owner's Apple and
+Google keys in the vault and sends to Apple and Google itself. The App, its
+agent and other Apps can use the keys, never read them.
+
+  k2 app push status <app> [--json]   On or off, the keys' ids and fingerprints
+                                       (never a key), device counts.
+  k2 app push setup <app> [--apns-key AuthKey_XXXXXXXXXX.p8 --key-id XXXXXXXXXX
+                 --team-id YYYYYYYYYY --bundle-id com.you.app]
+                 [--fcm-service-account sa.json]
+                                       Store the App's Apple key and/or Firebase
+                                       service account. The owner, in person:
+                                       Touch ID, your login or the vault password
+                                       confirms it (from a terminal outside K2).
+                                       K2 checks each key before storing it.
+  k2 app push creds rm <app> --apns|--fcm|--all
+                                       Remove a key (the same confirm).
+  k2 app push check <app>              One real call per key to a fake token:
+                                       says whether Apple and Google accept it.
+  k2 app push on|off <app>             On is the owner's approval (also given by
+                                       approving push:send in a deploy); off is
+                                       the owner's, an Admin's or the App agent's.
+  k2 app push set <app> [--agent-replies on|off] [--previews on|off]
+                 [--max-devices N]     Agent-reply pushes (off by default) and
+                                       their previews; the device ceiling (owner).
+  k2 app push send <app> (--to <user> [--to <user>…] | --room <room>)
+                 --title T --body B [--data key=value]… [--topic t]
+                 [--collapse-id c] [--thread-id t] [--sound s] [--badge n]
+                 [--priority high|normal] [--ttl secs] [--android-channel c]
+                 [--silent] [--json]   Send to this App's own users only.
+  k2 app push test <app> --to <user>  "Test notification from K2".
+  k2 app push log <app> [--json]       The last hour's sends: counts only.
+  k2 app push devices <app> [--guest <user>] [--json]
+                                       Each registered phone: platform,
+                                       environment, last seen. Never a token.
+  k2 app push devices rm <app> <apd_…> Remove one.
+
+Who: status and log: an Admin or the App's own agent. send, test and
+agent replies: an Admin or the App's agent with "…and manage them end to end".
+Keys: the owner in person only; an agent asks with a permission card.
+
+The phone app registers with the guest's own pass (push.register); see
+k2 study app-push for the whole mobile guide. K2 Companion's own phones are
+`k2 push` (k2 push --help).
+EOF
+}
+
+# Print one push status (stdin: the status JSON).
+_app_push_status_print() {
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+state = v.get("state")
+line = "%s: notifications %s" % (v.get("name") or v.get("app"), state)
+if state != "on":
+    why = {"owner_off": "the owner turned them off", "not_approved": "not approved yet (k2 app push on, or approve push:send)",
+           "box_off": "K2_APP_PUSH=off on this server"}.get(v.get("off"), v.get("off") or "")
+    line += " (" + why + ")"
+print(line)
+a = v.get("apns")
+print("  Apple:    " + ("key %s, team %s, bundle %s, fingerprint %s" % (a["keyId"], a["teamId"], a["bundleId"], a["keyFingerprint"]) if a else "no key"))
+f = v.get("fcm")
+print("  Firebase: " + ("project %s, %s, fingerprint %s" % (f["projectId"], f["clientEmail"], f["keyFingerprint"]) if f else "no service account"))
+if v.get("credError"):
+    print("  last key refusal: %s" % v["credError"])
+d = v.get("devices") or {}
+print("  devices:  %s for %s people (apns %s, fcm %s; sandbox %s)" % (d.get("total", 0), d.get("guests", 0), d.get("apns", 0), d.get("fcm", 0), d.get("sandbox", 0)))
+print("  agent replies %s, previews %s, at most %s devices" % ("on" if v.get("agentReplies") else "off", "on" if v.get("previews") else "off", v.get("maxDevices")))
+for s in v.get("set") or []:
+    print("  set: " + s)
+for r in v.get("removed") or []:
+    print("  removed: " + r)'
+}
+
+cmd_app_push() {
+    local sub="${1:-}"
+    case "$sub" in
+        ""|-h|--help|help) _app_push_usage; return 0 ;;
+    esac
+    shift
+    case "$sub" in
+        status) cmd_app_push_status "$@" ;;
+        setup) cmd_app_push_setup "$@" ;;
+        creds|credentials) cmd_app_push_creds "$@" ;;
+        check) cmd_app_push_check "$@" ;;
+        on|off) cmd_app_push_onoff "$sub" "$@" ;;
+        set) cmd_app_push_set "$@" ;;
+        send) cmd_app_push_send send "$@" ;;
+        test) cmd_app_push_send test "$@" ;;
+        log) cmd_app_push_log "$@" ;;
+        devices) cmd_app_push_devices "$@" ;;
+        *) echo "usage: k2 app push status|setup|creds|check|on|off|set|send|test|log|devices (k2 app push --help)" >&2; exit 2 ;;
+    esac
+}
+
+cmd_app_push_status() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_push_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app push status <app> [--json]" >&2; exit 2; }
+    _compute_call GET /cli/app/push "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_push_status_print
+}
+
+# POST a keys body; on vault_confirm_required (the owner, outside K2)
+# confirm in person, bound to the App, and send it again.
+_app_push_keys_post() {
+    local path="$1" body="$2" app="$3" label="$4"
+    _app_rt_post "$path" "$body"
+    if [ "$_CP_STATUS" = "403" ] && [[ "$_CP_BODY" == *'"vault_confirm_required"'* ]] && ! _compute_in_session; then
+        local svc tok
+        svc="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or {}).get("serviceId") or "")')"
+        [ -n "$svc" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+        tok="$(_vault_confirm_token app-push-keys "$svc" "$label")" || exit 3
+        body="$(printf '%s' "$body" | K2_AP_TOK="$tok" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_AP_TOK"]; print(json.dumps(b))')"
+        tok=""
+        _app_rt_post "$path" "$body"
+    fi
+    body=""
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+}
+
+cmd_app_push_setup() {
+    local app="" p8="" kid="" team="" bundle="" sa="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --apns-key) p8="${2:-}"; shift 2 ;;
+            --key-id) kid="${2:-}"; shift 2 ;;
+            --team-id) team="${2:-}"; shift 2 ;;
+            --bundle-id) bundle="${2:-}"; shift 2 ;;
+            --fcm-service-account|--fcm) sa="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_push_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    local usage="usage: k2 app push setup <app> [--apns-key FILE.p8 --key-id ID --team-id ID --bundle-id com.you.app] [--fcm-service-account sa.json]"
+    [ -n "$app" ] || { echo "$usage" >&2; exit 2; }
+    { [ -z "$p8" ] && [ -z "$sa" ]; } && { echo "$usage" >&2; exit 2; }
+    if [ -n "$p8" ] && { [ -z "$kid" ] || [ -z "$team" ] || [ -z "$bundle" ]; }; then
+        echo "--apns-key needs --key-id, --team-id and --bundle-id" >&2; exit 2
+    fi
+    [ -z "$p8" ] || [ -r "$p8" ] || { echo "can't read $p8" >&2; exit 2; }
+    [ -z "$sa" ] || [ -r "$sa" ] || { echo "can't read $sa" >&2; exit 2; }
+    local body
+    body="$(K2_AP_APP="$app" K2_AP_P8="$p8" K2_AP_KID="$kid" K2_AP_TEAM="$team" K2_AP_BUNDLE="$bundle" K2_AP_SA="$sa" python3 -c '
+import json, os
+e = os.environ
+b = {"app": e["K2_AP_APP"]}
+if e.get("K2_AP_P8"):
+    with open(e["K2_AP_P8"], encoding="utf-8") as f:
+        b["apns"] = {"p8": f.read(), "keyId": e["K2_AP_KID"], "teamId": e["K2_AP_TEAM"], "bundleId": e["K2_AP_BUNDLE"]}
+if e.get("K2_AP_SA"):
+    with open(e["K2_AP_SA"], encoding="utf-8") as f:
+        b["fcm"] = {"serviceAccountJson": f.read()}
+print(json.dumps(b))')" || { echo "couldn't read the key file(s)" >&2; exit 2; }
+    _app_push_keys_post /cli/app/push/credentials "$body" "$app" "Push keys for $app"
+    body=""
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_push_status_print
+    echo "Next: k2 app push check $app"
+}
+
+cmd_app_push_creds() {
+    local verb="${1:-}"
+    case "$verb" in
+        rm|remove) shift ;;
+        -h|--help|"") _app_push_usage; return 0 ;;
+        *) echo "usage: k2 app push creds rm <app> --apns|--fcm|--all" >&2; exit 2 ;;
+    esac
+    local app="" platform="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --apns) platform=apns; shift ;;
+            --fcm) platform=fcm; shift ;;
+            --all) platform=all; shift ;;
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$platform" ]; } && { echo "usage: k2 app push creds rm <app> --apns|--fcm|--all" >&2; exit 2; }
+    _app_push_keys_post /cli/app/push/credentials/remove "$(_compute_json K2_CJ_app="$app" K2_CJ_platform="$platform")" "$app" "Remove push keys for $app"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_push_status_print
+}
+
+cmd_app_push_check() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app push check <app> [--json]" >&2; exit 2; }
+    _compute_call POST /cli/app/push/check "$(_compute_json K2_CJ_app="$app")" tcp
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+bad = 0
+for p, name in (("apns", "Apple"), ("fcm", "Firebase")):
+    r = (v.get("results") or {}).get(p) or {}
+    if not r.get("configured"):
+        print("%-9s no key" % name)
+    elif r.get("ok"):
+        print("%-9s key works" % name)
+    else:
+        bad = 1
+        print("%-9s refused: %s" % (name, r.get("code")))
+sys.exit(1 if bad else 0)'
+}
+
+cmd_app_push_onoff() {
+    local mode="$1"; shift
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app push on|off <app>" >&2; exit 2; }
+    local on=0
+    [ "$mode" = on ] && on=1
+    _compute_call POST /cli/app/push/set "$(_compute_json K2_CJ_app="$app" K2_CJ_enabled_b="$on")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_push_status_print
+}
+
+cmd_app_push_set() {
+    local app="" replies="" previews="" maxd="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --agent-replies) replies="${2:-}"; shift 2 ;;
+            --previews) previews="${2:-}"; shift 2 ;;
+            --max-devices) maxd="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    local usage="usage: k2 app push set <app> [--agent-replies on|off] [--previews on|off] [--max-devices N]"
+    [ -n "$app" ] || { echo "$usage" >&2; exit 2; }
+    local r_b="" p_b=""
+    case "$replies" in on) r_b=1 ;; off) r_b=0 ;; "") ;; *) echo "$usage" >&2; exit 2 ;; esac
+    case "$previews" in on) p_b=1 ;; off) p_b=0 ;; "") ;; *) echo "$usage" >&2; exit 2 ;; esac
+    case "$maxd" in ""|*[!0-9]*) [ -z "$maxd" ] || { echo "$usage" >&2; exit 2; } ;; esac
+    { [ -z "$r_b" ] && [ -z "$p_b" ] && [ -z "$maxd" ]; } && { echo "$usage" >&2; exit 2; }
+    _compute_call POST /cli/app/push/set "$(_compute_json K2_CJ_app="$app" K2_CJ_agentReplies_b="$r_b" K2_CJ_previews_b="$p_b" K2_CJ_maxDevices_n="$maxd")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_push_status_print
+}
+
+cmd_app_push_send() {
+    local mode="$1"; shift
+    local app="" room="" title="" text="" topic="" collapse="" thread="" sound="" badge="" prio="" ttl="" chan="" silent=0 json_out=0
+    local tos=() datas=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --to) tos+=("${2:-}"); shift 2 ;;
+            --room) room="${2:-}"; shift 2 ;;
+            --title) title="${2:-}"; shift 2 ;;
+            --body) text="${2:-}"; shift 2 ;;
+            --data) datas+=("${2:-}"); shift 2 ;;
+            --topic) topic="${2:-}"; shift 2 ;;
+            --collapse-id) collapse="${2:-}"; shift 2 ;;
+            --thread-id) thread="${2:-}"; shift 2 ;;
+            --sound) sound="${2:-}"; shift 2 ;;
+            --badge) badge="${2:-}"; shift 2 ;;
+            --priority) prio="${2:-}"; shift 2 ;;
+            --ttl) ttl="${2:-}"; shift 2 ;;
+            --android-channel) chan="${2:-}"; shift 2 ;;
+            --silent) silent=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_push_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    if [ "$mode" = test ]; then
+        { [ -z "$app" ] || [ "${#tos[@]}" -eq 0 ]; } && { echo "usage: k2 app push test <app> --to <user>" >&2; exit 2; }
+    else
+        [ -n "$app" ] || { echo "usage: k2 app push send <app> (--to <user>… | --room <room>) --title T --body B" >&2; exit 2; }
+        { [ "${#tos[@]}" -eq 0 ] && [ -z "$room" ]; } && { echo "name --to <user> (one or more) or --room <room>" >&2; exit 2; }
+        { [ "${#tos[@]}" -gt 0 ] && [ -n "$room" ]; } && { echo "--to or --room, not both" >&2; exit 2; }
+    fi
+    local body
+    body="$(K2_AP_APP="$app" K2_AP_ROOM="$room" K2_AP_TITLE="$title" K2_AP_BODY="$text" K2_AP_TOPIC="$topic" K2_AP_COLLAPSE="$collapse" \
+        K2_AP_THREAD="$thread" K2_AP_SOUND="$sound" K2_AP_BADGE="$badge" K2_AP_PRIO="$prio" K2_AP_TTL="$ttl" K2_AP_CHAN="$chan" \
+        K2_AP_SILENT="$silent" K2_AP_MODE="$mode" python3 -c '
+import json, os, sys
+e = os.environ
+args = sys.argv[1:]
+sep = args.index("--")
+tos, datas = args[:sep], args[sep + 1:]
+b = {"app": e["K2_AP_APP"]}
+if e.get("K2_AP_ROOM"):
+    b["to"] = {"room": e["K2_AP_ROOM"]}
+elif len(tos) == 1:
+    b["to"] = {"guest": tos[0]}
+else:
+    b["to"] = {"guests": tos}
+if e["K2_AP_MODE"] == "send":
+    for k, name in (("K2_AP_TITLE", "title"), ("K2_AP_BODY", "body"), ("K2_AP_TOPIC", "topic"), ("K2_AP_COLLAPSE", "collapseId"),
+                    ("K2_AP_THREAD", "threadId"), ("K2_AP_SOUND", "sound"), ("K2_AP_PRIO", "priority"), ("K2_AP_CHAN", "androidChannel")):
+        if e.get(k):
+            b[name] = e[k]
+    for k, name in (("K2_AP_BADGE", "badge"), ("K2_AP_TTL", "ttlSecs")):
+        if e.get(k):
+            try:
+                b[name] = int(e[k])
+            except ValueError:
+                print("--%s is a number" % name.lower(), file=sys.stderr); sys.exit(2)
+    if e.get("K2_AP_SILENT") == "1":
+        b["silent"] = True
+    if datas:
+        d = {}
+        for kv in datas:
+            if "=" not in kv:
+                print("--data is key=value", file=sys.stderr); sys.exit(2)
+            k, v = kv.split("=", 1)
+            d[k] = v
+        b["data"] = d
+print(json.dumps(b))' "${tos[@]}" -- "${datas[@]}")" || exit 2
+    _compute_send_call POST "/cli/app/push/$mode" "$body"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+s = v.get("skipped") or {}
+skipped = ", ".join("%s %s" % (n, k.replace("_", " ")) for k, n in s.items() if n)
+print("queued %s device send(s), send %s%s" % (v.get("queued"), v.get("sendId"), ("; skipped: " + skipped) if skipped else ""))
+print("  counts: k2 app push log " + sys.argv[1])' "$app"
+}
+
+# POST that also takes 202 (a queued send) as success.
+_compute_send_call() {
+    local raw
+    raw="$(_compute_send "$1" "$2" "$3")"
+    _compute_split "$raw"
+    case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
+}
+
+cmd_app_push_log() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app push log <app> [--json]" >&2; exit 2; }
+    _compute_call GET /cli/app/push/log "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, datetime
+v = json.load(sys.stdin)
+rows = v.get("sends") or []
+if not rows:
+    print("No sends in the last hour."); sys.exit(0)
+for r in rows:
+    at = datetime.datetime.fromtimestamp(r.get("at") or 0).strftime("%H:%M:%S")
+    sk = sum((r.get("skipped") or {}).values())
+    print("%s  %s  queued %s  sent %s  dead %s  failed %s  wrong app %s  dropped %s  skipped %s" % (
+        at, r.get("sendId"), r.get("queued"), r.get("sent"), r.get("dead"), r.get("failed"), r.get("wrongApp"), r.get("dropped"), sk))
+if v.get("pending"):
+    print("%s device send(s) still going out" % v["pending"])'
+}
+
+cmd_app_push_devices() {
+    if [ "${1:-}" = rm ] || [ "${1:-}" = remove ]; then
+        shift
+        local app="${1:-}" id="${2:-}"
+        { [ -z "$app" ] || [ -z "$id" ]; } && { echo "usage: k2 app push devices rm <app> <apd_…>" >&2; exit 2; }
+        _compute_call POST /cli/app/push/devices/remove "$(_compute_json K2_CJ_app="$app" K2_CJ_id="$id")"
+        echo "removed $id"
+        return 0
+    fi
+    local app="" guest="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --guest|--user) guest="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app push devices <app> [--guest <user>] [--json]" >&2; exit 2; }
+    local q="app=$(urlencode "$app")"
+    [ -n "$guest" ] && q="$q&guest=$(urlencode "$guest")"
+    _compute_call GET /cli/app/push/devices "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, datetime
+v = json.load(sys.stdin)
+ds = v.get("devices") or []
+if not ds:
+    print("No registered phones."); sys.exit(0)
+for d in ds:
+    seen = datetime.datetime.fromtimestamp(d.get("lastSeenAt") or 0).strftime("%Y-%m-%d %H:%M")
+    print("%s  %-16s %-5s %-10s %-24s seen %s" % (d["id"], (d.get("username") or "-")[:16], d.get("platform"), d.get("environment"), (d.get("deviceId") or "")[:24], seen))'
 }
 
 # Held App requests of every kind (an agent's widening, an App key, clean
@@ -12670,6 +13096,7 @@ cmd_app() {
         clean-mode) shift; cmd_app_clean_mode "$@" ;;
         key) shift; cmd_app_key "$@" ;;
         keys) shift; cmd_app_keys "$@" ;;
+        push) shift; cmd_app_push "$@" ;;
         approvals) shift; cmd_app_approvals "$@" ;;
         approve) shift; cmd_app_approve "$@" ;;
         deny) shift; cmd_app_deny "$@" ;;
@@ -17071,6 +17498,9 @@ k2 push — the phones that get this server's pushes, and encrypted pushes
 
 Owner only (the owner token or an Owner login). Exit 2 usage, 3 not allowed,
 4 no such device.
+
+These are K2 Companion's phones. A custom App's own phone app (its own
+bundle id and keys) is `k2 app push` (k2 app push --help).
 EOF
 }
 
@@ -35405,6 +35835,10 @@ files:write (Write files (not the agent's .k2 folder))
   files.rename             POST /cli/fs/rename                                Rename a file or folder in place.
   resources.add            POST /cli/workspace/resources/add                  Pin an existing file to the room's resources.
   resources.remove         POST /cli/workspace/resources/remove               Unpin a file from the room's resources.
+push:send (Send notifications to this App's users' phones)
+  push.send                POST /cli/skin/push/send (server only)             Notify this App's own guests' phones (a guest, a list, or a room's guests); answers at once with a sendId.
+  push.status              GET  /cli/skin/push/status (server only)           One send's counts (kept for an hour): sent, dead, failed; never who.
+  push.devices             GET  /cli/skin/push/devices (server only)          Which of this App's guests have phones registered, and on which platforms (never a token).
 tickets:read (Read tickets and get live ticket updates)
   tickets.list             GET  /cli/feedback/list                            A room's tickets, newest first.
   tickets.show             GET  /cli/feedback/show                            One ticket with its comments (and brief).

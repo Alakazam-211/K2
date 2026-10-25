@@ -54,7 +54,7 @@ fn status(r: &crate::cli_response::CliResponse) -> u16 {
 
 fn call(path: &str, pass: &SkinPass, is_post: bool, body: J, q: &[(&str, &str)]) -> (u16, J, String) {
     let params: HashMap<String, String> = q.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-    let r = handle_pass(path, pass, is_post, body.to_string().as_bytes(), &params);
+    let r = handle_pass(path, pass, None, is_post, body.to_string().as_bytes(), &params);
     let v: J = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("json body ({e}): {}", r.body));
     (status(&r), v, r.body)
 }
@@ -133,9 +133,9 @@ fn only_a_guest_session_pass_registers() {
     let (st, v, _) = call(REGISTER, &host, true, reg_body("x"), &[]);
     assert_eq!((st, code(&v)), (400, "not_for_host"), "{v}");
     // Wrong methods.
-    let r = handle_pass(REGISTER, &pass_for("dana", &f.app), false, b"", &HashMap::new());
+    let r = handle_pass(REGISTER, &pass_for("dana", &f.app), None, false, b"", &HashMap::new());
     assert_eq!(status(&r), 405);
-    let r = handle_pass(DEVICE, &pass_for("dana", &f.app), true, b"{}", &HashMap::new());
+    let r = handle_pass(DEVICE, &pass_for("dana", &f.app), None, true, b"{}", &HashMap::new());
     assert_eq!(status(&r), 405);
 }
 
@@ -151,7 +151,7 @@ fn companion_channel_and_bad_bodies_are_refused_before_anything_is_stored() {
     let (st, v, raw) = call(REGISTER, &p, true, json!({"deviceId": "x", "platform": "apns", "pushToken": "not-hex-but-long-0123456789"}), &[]);
     assert_eq!((st, code(&v)), (400, "usage"), "{v}");
     assert!(!raw.contains("not-hex-but-long"), "never echoes the token: {raw}");
-    let r = handle_pass(REGISTER, &p, true, b"[1,2]", &HashMap::new());
+    let r = handle_pass(REGISTER, &p, None, true, b"[1,2]", &HashMap::new());
     assert_eq!(status(&r), 400);
     assert_eq!(store::devices_for_app(&f.app, None).expect("list").len(), 0);
 }

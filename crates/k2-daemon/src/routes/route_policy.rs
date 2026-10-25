@@ -299,14 +299,18 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/move-plan/request", Admin),
     // Q8: park stops an App and holds it for the owner (lowering: Admin).
     post("/cli/app/park", Admin),
-    // prd-custom-app-push-v1 CP36: `k2 app push …` (the handler checks
-    // callers; keys need the owner and a fresh confirm).
+    // prd-custom-app-push-v1 CP36: status, devices, send are Admin-floor
+    // (the App's agent by its passport); keys and check are the Owner's.
     get("/cli/app/push", Admin),
     post("/cli/app/push/check", Owner),
     post("/cli/app/push/credentials", Owner),
     post("/cli/app/push/credentials/remove", Owner),
     get("/cli/app/push/devices", Admin),
     post("/cli/app/push/devices/remove", Admin),
+    get("/cli/app/push/log", Admin),
+    post("/cli/app/push/send", Admin),
+    post("/cli/app/push/set", Admin),
+    post("/cli/app/push/test", Admin),
     // S19: per-App quotas. Lowering applies now (manage); a raise is the
     // owner's, anyone else's is a held `quota` request (handler).
     get("/cli/app/quota", Member),
@@ -1299,8 +1303,11 @@ pub const ROUTES: &[Route] = &[
     // prd-custom-app-push-v1: a guest's own device and the App's link
     // verbs (the handler checks the pass).
     get("/cli/skin/push/device", NoLogin),
+    get("/cli/skin/push/devices", NoLogin),
     post("/cli/skin/push/prefs", NoLogin),
     post("/cli/skin/push/register", NoLogin),
+    post("/cli/skin/push/send", NoLogin),
+    get("/cli/skin/push/status", NoLogin),
     post("/cli/skin/push/unregister", NoLogin),
     post("/cli/skin/refresh", Public),
     both("/cli/skin/roles", Owner),

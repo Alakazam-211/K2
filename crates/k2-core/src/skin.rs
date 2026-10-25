@@ -207,6 +207,10 @@ pub const CAP_FILES_UPLOAD: &str = "files:upload";
 /// (`app_core_of_cap` answers `None`), so a deploy that adds it is held for
 /// the owner's one-time approval, as App mail sends are (N4).
 pub const CAP_PUSH_SEND: &str = "push:send";
+/// Caps an App's own pass may carry that no guest role ever holds (they
+/// aren't in the accepted role caps): the link's ceiling adds them
+/// ([`link::link_caps`]).
+pub const APP_ONLY_CAPS: &[&str] = &[CAP_PUSH_SEND];
 /// Caps only a person may grant ([`person_only_cap_in`]).
 pub const PERSON_ONLY_CAPS: &[&str] = &[CAP_FILES_AGENT_CONFIG, CAP_FILES_DOWNLOAD];
 

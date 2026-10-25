@@ -88,6 +88,10 @@ files:write (Write files (not the agent's .k2 folder))
   files.rename             POST /cli/fs/rename                                Rename a file or folder in place.
   resources.add            POST /cli/workspace/resources/add                  Pin an existing file to the room's resources.
   resources.remove         POST /cli/workspace/resources/remove               Unpin a file from the room's resources.
+push:send (Send notifications to this App's users' phones)
+  push.send                POST /cli/skin/push/send (server only)             Notify this App's own guests' phones (a guest, a list, or a room's guests); answers at once with a sendId.
+  push.status              GET  /cli/skin/push/status (server only)           One send's counts (kept for an hour): sent, dead, failed; never who.
+  push.devices             GET  /cli/skin/push/devices (server only)          Which of this App's guests have phones registered, and on which platforms (never a token).
 tickets:read (Read tickets and get live ticket updates)
   tickets.list             GET  /cli/feedback/list                            A room's tickets, newest first.
   tickets.show             GET  /cli/feedback/show                            One ticket with its comments (and brief).

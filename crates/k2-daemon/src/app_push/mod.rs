@@ -24,6 +24,7 @@ pub mod creds;
 pub mod guest_routes;
 pub mod owner_routes;
 pub mod payload;
+pub mod send;
 pub mod sender;
 pub mod sendlog;
 pub mod worker;

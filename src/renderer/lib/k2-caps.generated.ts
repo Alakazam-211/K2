@@ -53,6 +53,7 @@ export const K2_CAPS = {
     exposure: ['app', 'garden-local'],
   },
   'files:write': { label: "Write files (not the agent's .k2 folder)", exposure: ['app'] },
+  'push:send': { label: "Send notifications to this App's users' phones", exposure: ['app'] },
   'tickets:read': {
     label: 'Read tickets and get live ticket updates',
     sentence: "Read the tickets in the agents' rooms on this computer, with their comments.",

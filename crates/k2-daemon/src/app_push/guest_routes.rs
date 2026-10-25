@@ -7,6 +7,14 @@
 //! POST /cli/skin/push/prefs      {deviceId, previews?, mutedTopics?}
 //! ```
 //!
+//! And the App's own verbs on its link (its link pass, `push:send`, §8):
+//!
+//! ```text
+//! POST /cli/skin/push/send       {to, title, body, data?, topic?, …}   → 202 {sendId, queued, skipped}
+//! GET  /cli/skin/push/status     ?sendId=                              counts only
+//! GET  /cli/skin/push/devices                                          per guest: device count, platforms
+//! ```
+//!
 //! - **A guest's own session pass only** (`principal_id` set, `session=1`),
 //!   on any door: the main port (a native app with `Authorization: Bearer
 //!   k2skn_…`, admitted by the A′ fence because these are catalog `app`
@@ -37,11 +45,14 @@ pub const REGISTER: &str = "/cli/skin/push/register";
 pub const UNREGISTER: &str = "/cli/skin/push/unregister";
 pub const DEVICE: &str = "/cli/skin/push/device";
 pub const PREFS: &str = "/cli/skin/push/prefs";
+pub const SEND: &str = "/cli/skin/push/send";
+pub const STATUS: &str = "/cli/skin/push/status";
+pub const DEVICES: &str = "/cli/skin/push/devices";
 
 /// The routes a pass calls (the dispatcher resolves the pass).
-pub const PASS_ROUTES: &[&str] = &[REGISTER, UNREGISTER, DEVICE, PREFS];
+pub const PASS_ROUTES: &[&str] = &[REGISTER, UNREGISTER, DEVICE, PREFS, SEND, STATUS, DEVICES];
 /// The POST ones (the dispatcher's method guard).
-pub const POST_ROUTES: &[&str] = &[REGISTER, UNREGISTER, PREFS];
+pub const POST_ROUTES: &[&str] = &[REGISTER, UNREGISTER, PREFS, SEND];
 
 /// Registers per pass an hour (CP8).
 pub const REGISTERS_PER_HOUR: usize = 30;
@@ -193,13 +204,94 @@ pub fn handle_prefs(pass: &SkinPass, body: &[u8]) -> CliResponse {
     })())
 }
 
-/// The pass routes (the dispatcher resolved `pass`).
-pub fn handle_pass(path: &str, pass: &SkinPass, is_post: bool, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
+// ── the App's own verbs on its link ──────────────────────────────────
+
+/// The App a link pass sends for: this link's own App pass (never a guest
+/// session on the link, never off a link), holding `push:send`.
+/// `link_app` is the link's App (the dispatcher read it on the request's
+/// task; the handler runs on a blocking thread).
+fn app_on_link(pass: &SkinPass, link_app: Option<&str>) -> Result<String, CliResponse> {
+    let not_app = || refusal("403 Forbidden", "app_pass_required", "only this App's own pass, on its link, sends notifications (a guest never does)");
+    let Some(app) = link_app else { return Err(not_app()) };
+    if pass.session || pass.principal_id.is_some() || pass.app != app {
+        return Err(not_app());
+    }
+    if !pass.has_cap(k2_core::skin::CAP_PUSH_SEND) {
+        let mut extra = serde_json::Map::new();
+        extra.insert("cap".into(), json!(k2_core::skin::CAP_PUSH_SEND));
+        return Err(refusal_with(
+            "403 Forbidden",
+            "cap_not_granted",
+            "this App's pass doesn't carry push:send (add it to the manifest; the owner approves it once)",
+            extra,
+        ));
+    }
+    Ok(app.to_string())
+}
+
+/// `POST /cli/skin/push/send` (link).
+pub fn handle_send(pass: &SkinPass, link_app: Option<&str>, body: &[u8]) -> CliResponse {
+    answer((|| {
+        let app = app_on_link(pass, link_app)?;
+        let (to, n) = super::send::parse_request(body).map_err(|e| super::send::err_response(&e))?;
+        let caller = super::send::Caller { actor: format!("app:{app}"), kind: super::payload::KIND_APP };
+        super::send::send(&app, &caller, &to, n).map_err(|e| super::send::err_response(&e))
+    })())
+    .accepted()
+}
+
+/// `GET /cli/skin/push/status?sendId=` (link): counts only.
+pub fn handle_status(pass: &SkinPass, link_app: Option<&str>, params: &HashMap<String, String>) -> CliResponse {
+    answer((|| {
+        let app = app_on_link(pass, link_app)?;
+        let id = params.get("sendId").map(|s| s.trim()).filter(|s| !s.is_empty()).ok_or_else(|| usage("send ?sendId= (from push.send)"))?;
+        match super::sendlog::get(&app, id) {
+            Some(r) => {
+                let mut v = super::send::record_json(&r);
+                v["ok"] = json!(true);
+                Ok(v)
+            }
+            None => Err(refusal("404 Not Found", "not_found", "no send of this App by that id in the last hour")),
+        }
+    })())
+}
+
+/// `GET /cli/skin/push/devices` (link): per guest, a device count and the
+/// platforms. Never a token, a device id or a name.
+pub fn handle_devices(pass: &SkinPass, link_app: Option<&str>) -> CliResponse {
+    answer((|| {
+        let app = app_on_link(pass, link_app)?;
+        let counts = store::device_counts(&app).map_err(CliResponse::internal_error)?;
+        let guests: Vec<Value> = counts.iter().map(|(pid, n, plats)| json!({ "guest": pid, "devices": n, "platforms": plats })).collect();
+        Ok(json!({ "ok": true, "guests": guests }))
+    })())
+}
+
+trait Accepted {
+    fn accepted(self) -> Self;
+}
+
+impl Accepted for CliResponse {
+    /// A queued send answers 202 (CP28).
+    fn accepted(mut self) -> Self {
+        if self.status.starts_with("200") {
+            self.status = "202 Accepted";
+        }
+        self
+    }
+}
+
+/// The pass routes (the dispatcher resolved `pass`; `link_app` is the
+/// request's link App, if it came in on one).
+pub fn handle_pass(path: &str, pass: &SkinPass, link_app: Option<&str>, is_post: bool, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
     match (path, is_post) {
         (REGISTER, true) => handle_register(pass, body),
         (UNREGISTER, true) => handle_unregister(pass, body),
         (DEVICE, false) => handle_device(pass, params),
         (PREFS, true) => handle_prefs(pass, body),
+        (SEND, true) => handle_send(pass, link_app, body),
+        (STATUS, false) => handle_status(pass, link_app, params),
+        (DEVICES, false) => handle_devices(pass, link_app),
         _ => CliResponse::method_not_allowed(),
     }
 }

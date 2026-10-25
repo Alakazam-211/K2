@@ -602,6 +602,88 @@ pub fn delete_dead(app: &str, id: &str, push_token: &str) -> Result<bool, String
     })
 }
 
+// ── recipients (CP24, CP25, CP40) ────────────────────────────────────
+
+/// The principals among `names` (principal ids or usernames) that hold a
+/// live, enabled `kind=app` grant on `app`, de-duplicated in order, and how
+/// many names didn't (an unknown name, a Connect name, another App's guest:
+/// one count, no oracle).
+pub fn resolve_guests(app: &str, names: &[String]) -> Result<(Vec<String>, usize), String> {
+    let app = normalize_app_target(Some(app));
+    with_conn(|conn| {
+        let mut out: Vec<String> = Vec::new();
+        let mut missing = 0usize;
+        for raw in names {
+            let n = raw.trim();
+            let found: Option<String> = if n.is_empty() {
+                None
+            } else {
+                conn.query_row(
+                    "SELECT p.id FROM principals p JOIN grants g
+                       ON g.subject_kind = 'principal' AND g.subject_id = p.id AND g.kind = 'app' AND g.target_id = ?2 AND g.enabled != 0
+                      WHERE p.id = ?1 OR p.username = lower(?1) LIMIT 1",
+                    params![n, app],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| format!("push recipients: {e}"))?
+            };
+            match found {
+                Some(id) if !out.contains(&id) => out.push(id),
+                Some(_) => {}
+                None => missing += 1,
+            }
+        }
+        Ok((out, missing))
+    })
+}
+
+/// This App's guests holding any grant line on `room` (a project id): the
+/// role's room lines, or a role-less grant's rooms (CP25).
+pub fn room_guests(app: &str, room: &str) -> Result<Vec<String>, String> {
+    let app = normalize_app_target(Some(app));
+    with_conn(|conn| {
+        let grants: Vec<super::SkinGrant> = {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "{} WHERE subject_kind = 'principal' AND kind = 'app' AND target_id = ?1 AND enabled != 0",
+                    super::GRANT_SELECT
+                ))
+                .map_err(|e| format!("push room recipients: {e}"))?;
+            let rows = stmt.query_map(params![app], super::map_grant_row).map_err(|e| format!("push room recipients: {e}"))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("push room recipients: {e}"))?
+        };
+        let mut out = Vec::new();
+        for g in &grants {
+            let (policy, _) = super::grant_login_policy(conn, g)?;
+            if policy.contains_key(room) && !out.contains(&g.subject_id) {
+                out.push(g.subject_id.clone());
+            }
+        }
+        Ok(out)
+    })
+}
+
+/// The `app`-channel devices of these principals on `app`, each still
+/// holding a live, enabled `kind=app` grant on it at this moment (CP24).
+/// The only reader of push tokens (the daemon's sender).
+pub fn targets(app: &str, principal_ids: &[String]) -> Result<Vec<PushDevice>, String> {
+    let app = normalize_app_target(Some(app));
+    with_conn(|conn| {
+        let mut out = Vec::new();
+        for pid in principal_ids {
+            out.extend(devices_where(
+                conn,
+                "d.app_id = ?1 AND d.principal_id = ?2 AND d.channel = 'app' AND EXISTS (
+                    SELECT 1 FROM grants g WHERE g.subject_kind = 'principal' AND g.subject_id = d.principal_id
+                       AND g.kind = 'app' AND g.target_id = d.app_id AND g.enabled != 0)",
+                &[&app, pid],
+            )?);
+        }
+        Ok(out)
+    })
+}
+
 // ── cleanup (CP6) ────────────────────────────────────────────────────
 
 /// The rows that outlived their sign-in: a row tied to a device sign-in

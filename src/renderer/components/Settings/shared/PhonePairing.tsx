@@ -66,9 +66,9 @@ export function PhonePairing({
   nowMs = defaultNow,
 }: {
   mode: PhonePairingMode
-  /** The server to talk to (the profile modal's window server); defaults
-   *  to the primary one. */
-  scope?: ServerScope
+  /** The server to talk to (Settings: the window's primary server; the
+   *  profile modal: the window's own server). */
+  scope: ServerScope
   /** Test seam for the countdown. */
   nowMs?: () => number
 }): React.JSX.Element {

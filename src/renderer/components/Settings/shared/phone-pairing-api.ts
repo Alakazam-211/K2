@@ -9,7 +9,7 @@
 
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { cliSearchParams, withDaemonFetch } from '@/web/session-token'
-import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 
 export interface PairedPhone {
   id: string
@@ -159,9 +159,9 @@ async function callOnce(
 }
 
 /** `mine`: only the phones of the login a new code pairs as (profile modal). */
-export async function fetchPairedPhones(opts: { mine: boolean; scope?: ServerScope }): Promise<Result<DevicesView>> {
+export async function fetchPairedPhones(opts: { mine: boolean; scope: ServerScope }): Promise<Result<DevicesView>> {
   const { status, body } = await call(
-    opts.scope ?? primaryScope(),
+    opts.scope,
     '/cli/auth/devices',
     opts.mine ? { mine: '1' } : {},
     { method: 'GET' },
@@ -173,12 +173,12 @@ export async function fetchPairedPhones(opts: { mine: boolean; scope?: ServerSco
 export async function makePairCode(opts: {
   password?: string
   user?: string
-  scope?: ServerScope
+  scope: ServerScope
 }): Promise<Result<PairCode>> {
   const payload: Record<string, string> = {}
   if (opts.password) payload.password = opts.password
   if (opts.user) payload.user = opts.user
-  const { status, body } = await call(opts.scope ?? primaryScope(), '/cli/auth/device/pair-code', {}, {
+  const { status, body } = await call(opts.scope, '/cli/auth/device/pair-code', {}, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -187,8 +187,8 @@ export async function makePairCode(opts: {
   return { ok: true, value: parsePairCode(body) }
 }
 
-export async function revokePairedPhone(id: string, scope?: ServerScope): Promise<Result<string>> {
-  const { status, body } = await call(scope ?? primaryScope(), '/cli/auth/device/revoke', {}, {
+export async function revokePairedPhone(id: string, scope: ServerScope): Promise<Result<string>> {
+  const { status, body } = await call(scope, '/cli/auth/device/revoke', {}, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id }),

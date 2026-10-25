@@ -66,6 +66,7 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'kessel-term/TerminalPane.tsx': 'v2 spawn (M4 gives the pane a scope prop)',
   'components/Settings/sections/access-audit-api.ts': 'raw /cli fetch via getDaemonWs(scope)',
   'components/Settings/sections/CompanionSection.tsx': 'raw /cli fetch via getDaemonWs(scope)',
+  'components/Settings/shared/phone-pairing-api.ts': 'raw /cli fetch via getDaemonWs(scope) (its 401 password_invalid must not reach the shared re-auth path)',
   'components/Settings/sections/DomainsSection.tsx': 'raw /cli fetch via getDaemonWs(scope)',
   'components/Settings/sections/K2ConnectSection.tsx': 'raw /cli fetch via getDaemonWs(scope)',
   'hooks/useTunnelUrls.ts': 'raw /cli fetch via getDaemonWs(scope)',

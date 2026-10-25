@@ -145,7 +145,7 @@ export function CompanionSection(): React.JSX.Element {
           days in all, after its login&apos;s password changes, or when you revoke it. Password sign-in on the
           phone keeps working too.
         </p>
-        <PhonePairing mode="all" />
+        <PhonePairing mode="all" scope={primaryScope()} />
       </div>
 
       {/* ── K2 Connect status (live) ──────────────────────────────── */}

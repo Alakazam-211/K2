@@ -17,6 +17,9 @@ vi.mock('@/kessel/daemon-ws', () => ({
 
 import { PhonePairing } from './PhonePairing'
 import { parseDevices, parsePairCode, secondsLeft } from './phone-pairing-api'
+import type { ServerScope } from '@/kessel/server-scope'
+
+const SCOPE = { label: 'This computer', isRemote: false } as unknown as ServerScope
 
 type Handler = (url: string, init?: RequestInit) => { status: number; body: unknown }
 let handler: Handler
@@ -101,7 +104,7 @@ describe('PhonePairing in Settings → K2 Companion (mode="all")', () => {
       if (url.includes('/cli/auth/device/pair-code')) return { status: 200, body: CODE }
       throw new Error(`unexpected ${url}`)
     }
-    render(<PhonePairing mode="all" nowMs={() => now} />)
+    render(<PhonePairing scope={SCOPE} mode="all" nowMs={() => now} />)
     const select = (await screen.findByLabelText('Pairs as')) as HTMLSelectElement
     expect(select.value).toBe('rosson')
     expect(screen.getByText('rosson (your linked login)')).toBeTruthy()
@@ -124,7 +127,7 @@ describe('PhonePairing in Settings → K2 Companion (mode="all")', () => {
       }
       return { status: 200, body: { ...CODE, user: 'ada' } }
     }
-    render(<PhonePairing mode="all" />)
+    render(<PhonePairing scope={SCOPE} mode="all" />)
     fireEvent.change(await screen.findByLabelText('Pairs as'), { target: { value: 'ada' } })
     fireEvent.click(screen.getByRole('button', { name: 'Pair a phone' }))
     await waitFor(() => expect(document.querySelector('[data-pair-code]')?.textContent).toContain('Pairs as ada'))
@@ -141,7 +144,7 @@ describe('PhonePairing in Settings → K2 Companion (mode="all")', () => {
       }
       throw new Error(`unexpected ${url}`)
     }
-    render(<PhonePairing mode="all" />)
+    render(<PhonePairing scope={SCOPE} mode="all" />)
     await waitFor(() => expect(document.querySelector('[data-pair-as-missing]')?.textContent).toContain('Your account'))
     expect((screen.getByRole('button', { name: 'Pair a phone' }) as HTMLButtonElement).disabled).toBe(true)
   })
@@ -159,7 +162,7 @@ describe('PhonePairing in Settings → K2 Companion (mode="all")', () => {
       }
       throw new Error(`unexpected ${url}`)
     }
-    render(<PhonePairing mode="all" />)
+    render(<PhonePairing scope={SCOPE} mode="all" />)
     const row = await waitFor(() => {
       const el = document.querySelector('[data-pair-device="sess-1"]')
       if (!el) throw new Error('no row yet')
@@ -186,7 +189,7 @@ describe('PhonePairing in the profile modal (mode="mine")', () => {
       }
       throw new Error(`unexpected ${url}`)
     }
-    render(<PhonePairing mode="mine" />)
+    render(<PhonePairing scope={SCOPE} mode="mine" />)
     const pw = await screen.findByLabelText('Your password')
     expect(screen.queryByLabelText('Pairs as')).toBeNull()
     expect(document.querySelector('[data-pair-as]')?.textContent).toContain('A new code pairs as ada.')
@@ -210,7 +213,7 @@ describe('PhonePairing in the profile modal (mode="mine")', () => {
       }
       return { status: 200, body: CODE }
     }
-    render(<PhonePairing mode="mine" />)
+    render(<PhonePairing scope={SCOPE} mode="mine" />)
     await waitFor(() => expect(document.querySelector('[data-pair-as]')?.textContent).toContain('A new code pairs as rosson.'))
     expect(screen.queryByLabelText('Pairs as'), 'no picker in your own profile').toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Pair a phone' }))
@@ -222,7 +225,7 @@ describe('PhonePairing in the profile modal (mode="mine")', () => {
     handler = () => {
       throw new Error('connection refused')
     }
-    render(<PhonePairing mode="mine" />)
+    render(<PhonePairing scope={SCOPE} mode="mine" />)
     await waitFor(() => expect(document.querySelector('[data-pair-error]')?.textContent).toContain('connection refused'))
   })
 })

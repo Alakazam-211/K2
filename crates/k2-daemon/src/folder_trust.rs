@@ -9,32 +9,37 @@
 //!   trust) on the folder's own workspace Thread, else on the asking
 //!   agent's Thread, else an owner ticket (a `/v1` hire or clone, a
 //!   headless box with no pinned Chat). Only the owner answers
-//!   (`require_action_card_person`, E2/A2);
-//! - **the spawn gate** ([`gate_spawn`]): every harness spawn (canonical,
-//!   heartbeat, wake, sidecar, v2/terminal) asks the gate first; a held
-//!   folder's spawn is queued and retried once when the person trusts it
-//!   ([`hold_spawn`], [`after_decision`]); heartbeats are skipped
-//!   ([`heartbeat_hold`]);
-//! - **the 409** ([`rewrite_refusal`]): a spawn error carrying the gate's
-//!   token becomes `409 folder_trust_pending|folder_trust_denied` with the
-//!   body that says how to decide, whatever route it came through;
-//! - **the routes** ([`dispatch`]): `GET /cli/folder-trust/status`,
-//!   `POST /cli/folder-trust/request` (agents ask), `POST
-//!   /cli/folder-trust/decide` and `POST /cli/folder-trust/reset` (the
-//!   owner decides; Settings → Reset);
+//!   (`require_action_card_person`, E2/A2). The card names who really
+//!   asked, every line is escaped and the findings sit in a code block
+//!   (reviews B#1, B#4); a tap is refused when the folder isn't what the
+//!   card showed any more, and a fresh card is posted (B#2);
+//! - **the spawn gate** ([`gate_spawn`]): every K2-started session in a
+//!   folder, whatever the program (A-H2), asks the gate first; a held
+//!   folder's spawn is queued for 24 h and retried once when the person
+//!   trusts it, as the same caller ([`hold_spawn`], [`after_decision`]);
+//!   heartbeats are skipped ([`heartbeat_hold`]);
+//! - **the 409** ([`refusal_response`]): on the spawn routes only (B#6), a
+//!   spawn error carrying the gate's random per-refusal token becomes
+//!   `409 folder_trust_pending|folder_trust_denied` with the body that
+//!   says how to decide;
+//! - **the routes** ([`dispatch`]): `GET /cli/folder-trust/status` and
+//!   `POST /cli/folder-trust/request` for registered workspace folders
+//!   only (an agent: its own), `POST /cli/folder-trust/decide` (with the
+//!   fingerprint the owner saw) and `POST /cli/folder-trust/reset` (the
+//!   owner);
 //! - **boot** ([`boot_pass`]): the 0.46.3 upgrade marks (one owner summary)
 //!   and the re-assert sweep;
-//! - "Don't trust" also stops K2's running AI sessions in that folder:
-//!   Claude reloads hooks mid-session (U0 finding 1), so a running session
-//!   would pick up settings the person just refused.
+//! - "Don't trust", and a live change that holds a folder again, stop K2's
+//!   running AI sessions in that scope (only that scope: B#5, A-M1).
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value as J};
 
-use k2_core::cli_folder_trust::gate::{self, Actor, Ask, Asked, Decision, Door, Outcome, Presenter, Refusal};
+use k2_core::cli_folder_trust::gate::{self, Actor, Ask, Asked, Decision, DecideError, Door, Outcome, Presenter, Refusal, Seen};
 use k2_core::log_debug;
 
 use crate::cli_response::CliResponse;
@@ -51,7 +56,11 @@ pub const DECIDE_PATH: &str = "/cli/folder-trust/decide";
 pub const RESET_PATH: &str = "/cli/folder-trust/reset";
 
 /// Findings listed on a card (the rest: `k2 workspace trust status`).
-const CARD_LINES: usize = 5;
+pub const CARD_LINES: usize = 5;
+/// The 409 when the owner's decision names a folder state that changed.
+pub const CHANGED: &str = "folder_trust_changed";
+/// Held spawns older than this are dropped, not retried (review B#8).
+pub const HELD_TTL: Duration = Duration::from_secs(24 * 3600);
 
 // ── Install ──────────────────────────────────────────────────────────
 
@@ -75,6 +84,16 @@ pub(crate) fn project_for_path(path: &str) -> Option<(String, String)> {
         .into_iter()
         .filter(|pr| !pr.path.is_empty() && (pr.path == path || p.starts_with(&pr.path)))
         .max_by_key(|pr| pr.path.len())
+        .map(|pr| (pr.id, pr.path))
+}
+
+/// The registered workspace whose folder IS `path` (canonical compare).
+fn registered_exact(path: &str) -> Option<(String, String)> {
+    let want = Path::new(path).canonicalize().ok()?;
+    k2_core::projects_ops::projects_list()
+        .ok()?
+        .into_iter()
+        .find(|pr| !pr.path.is_empty() && Path::new(&pr.path).canonicalize().ok().as_deref() == Some(want.as_path()))
         .map(|pr| (pr.id, pr.path))
 }
 
@@ -107,35 +126,138 @@ fn tool_display(tool: Option<&str>) -> &'static str {
     }
 }
 
-/// The card's words (PRD §3.4).
-pub fn card_prompt(agent: &str, eval: &gate::Evaluation, actor: &Actor) -> String {
+// ── Markdown safety (review B#1) ─────────────────────────────────────
+
+/// One line of plain text for a Thread card: control characters and
+/// newlines become spaces, markdown punctuation is backslash-escaped, at
+/// most `max` characters (an ellipsis says it was cut).
+pub fn md_text(s: &str, max: usize) -> String {
+    let flat: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let flat = flat.trim();
+    let (cut, cutted) = if flat.chars().count() > max {
+        (flat.chars().take(max.saturating_sub(1)).collect::<String>(), true)
+    } else {
+        (flat.to_string(), false)
+    };
+    let mut out = String::with_capacity(cut.len() + 8);
+    for c in cut.chars() {
+        if "\\`*_{}[]()<>#+-.!|~>".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    if cutted {
+        out.push('…');
+    }
+    out
+}
+
+fn longest_backtick_run(s: &str) -> usize {
+    let (mut best, mut run) = (0usize, 0usize);
+    for c in s.chars() {
+        if c == '`' {
+            run += 1;
+            best = best.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    best
+}
+
+/// Inline code that `s` can't break out of: a backtick fence longer than
+/// any run inside, newlines flattened.
+pub fn md_code_inline(s: &str) -> String {
+    let flat: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let fence = "`".repeat(longest_backtick_run(&flat) + 1);
+    format!("{fence} {flat} {fence}")
+}
+
+/// A fenced code block of `lines` (each flattened to one line) that the
+/// content can't close: the fence is longer than any backtick run inside.
+pub fn md_code_block(lines: &[String]) -> String {
+    let flat: Vec<String> = lines.iter().map(|l| l.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()).collect();
+    let longest = flat.iter().map(|l| longest_backtick_run(l)).max().unwrap_or(0);
+    let fence = "`".repeat((longest + 1).max(3));
+    format!("{fence}text\n{}\n{fence}", flat.join("\n"))
+}
+
+/// How much a finding matters on a card, most first, so padding the folder
+/// with filler can't push the real risk out of the lines shown.
+fn finding_rank(what: &str) -> u8 {
+    match what {
+        "hooks" | "frontmatter-hooks" | "launch" | "apiKeyHelper" | "awsAuthRefresh" | "awsCredentialExport" | "otelHeadersHelper"
+        | "statusLine" | "mcp-command" | "env" | "folderOpen-task" | "core.fsmonitor" | "core.hooksPath" | "hook"
+        | "worktree-setup" | "environment" | "toolDiscoveryCommand" | "toolCallCommand" | "tools.discoveryCommand"
+        | "tools.callCommand" => 0,
+        "mcp-url" | "mcp-server" | "enableAllProjectMcpServers" | "enabledMcpjsonServers" | "enabledPlugins"
+        | "extraKnownMarketplaces" | "filter" | "diff-driver" | "diff.external" | "credential.helper" | "include"
+        | "core.sshCommand" | "core.pager" | "core.editor" | "core.askPass" | "gpg.program" | "sequence.editor"
+        | "merge-driver" | "pager" | "script" => 1,
+        "symlink" | "too-big" | "unreadable" | "unparseable" | "too-many-files" | "too-deep" | "not-fully-scanned" => 2,
+        _ => 3,
+    }
+}
+
+/// The card's words (PRD §3.4, reviews B#1, B#4): who asked, the folder,
+/// how many findings, the most important ones in a code block, and a plain
+/// note when a line was cut or more findings exist.
+pub fn card_prompt(caller: &str, eval: &gate::Evaluation, actor: &Actor) -> String {
     let tool = tool_display(actor.tool.as_deref());
+    let caller = md_text(caller, 80);
+    let folder = md_code_inline(&eval.path);
+    let n = eval.findings.len();
     let mut s = if actor.changed_live {
         format!(
-            "**The settings in `{}` changed while {agent} was running.** They make the AI tools run commands or send your logins elsewhere (Claude picks up new hooks without a restart):\n",
-            eval.path
+            "**The settings in {folder} changed while {caller} was running.** K2 stopped its sessions there until you decide. \
+             {n} setting{} make the AI tools run commands or send your logins elsewhere (Claude picks up new hooks without a restart):\n",
+            if n == 1 { "" } else { "s" }
         )
     } else {
         format!(
-            "**{agent} wants to start {tool} in `{}`.** This folder has settings that make the AI tools run commands or send your logins elsewhere when they start:\n",
-            eval.path
+            "**{caller} wants to start {tool} in {folder}.** This folder has {n} setting{} that make the AI tools run commands or send your logins elsewhere when they start:\n",
+            if n == 1 { "" } else { "s" }
         )
     };
-    for f in eval.findings.iter().take(CARD_LINES) {
-        s.push_str(&format!("• `{}`: {}\n", f.file, f.detail));
+    let mut ranked: Vec<&k2_core::cli_folder_trust::scan::Finding> = eval.findings.iter().collect();
+    ranked.sort_by_key(|f| finding_rank(&f.what));
+    let shown: Vec<String> = ranked.iter().take(CARD_LINES).map(|f| format!("{}: {}", f.file, f.detail)).collect();
+    let truncated = shown.iter().any(|l| l.ends_with('…'));
+    s.push_str(&md_code_block(&shown));
+    s.push('\n');
+    let status_cmd = md_code_inline(&format!("k2 workspace trust status {}", gate::shell_quote(&eval.path)));
+    if n > CARD_LINES {
+        s.push_str(&format!("{} more finding{} not shown: {status_cmd}\n", n - CARD_LINES, if n - CARD_LINES == 1 { "" } else { "s" }));
     }
-    if eval.findings.len() > CARD_LINES {
-        s.push_str(&format!(
-            "(and {} more: `k2 workspace trust status {}`)\n",
-            eval.findings.len() - CARD_LINES,
-            gate::shell_quote(&eval.path)
-        ));
+    if truncated {
+        s.push_str(&format!("Some lines are truncated; the full list: {status_cmd}\n"));
     }
     if let Some(why) = actor.why.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
-        s.push_str(&format!("{agent} says: {}\n", why.chars().take(300).collect::<String>()));
+        s.push_str(&format!("{caller} says: {}\n", md_text(why, 300)));
     }
     s.push_str("If you didn't put these there, don't trust it.");
     s
+}
+
+/// Who asked, for the card: the actor's own caller, else the agent whose
+/// passport made this request, else the folder's agent.
+fn caller_name(actor: &Actor, folder_project: Option<&str>) -> String {
+    if let Some(c) = actor.caller.as_deref().filter(|c| !c.trim().is_empty()) {
+        return c.to_string();
+    }
+    if let Some(p) = crate::caller_workspace::request_principal().filter(|p| !p.workspace_uuid.is_empty()) {
+        return agent_name_of(&p.workspace_uuid);
+    }
+    let folder_agent = folder_project.map(agent_name_of).unwrap_or_else(|| "An agent".to_string());
+    match actor.by.as_str() {
+        "heartbeat" => format!("{folder_agent}'s heartbeat"),
+        _ => folder_agent,
+    }
+}
+
+fn ticket_title(eval: &gate::Evaluation) -> String {
+    let fp = eval.fingerprint.as_deref().unwrap_or("");
+    format!("Trust {}? (settings {})", eval.path, &fp[..fp.len().min(8)])
 }
 
 /// The presenter: a Thread card where there is a Thread, else an owner
@@ -153,30 +275,37 @@ fn present(ask: &Ask<'_>) -> Asked {
             }
         }
     }
-    let agent = candidates.first().map(|p| agent_name_of(p)).unwrap_or_else(|| "An agent".to_string());
-    let prompt = card_prompt(&agent, eval, ask.actor);
+    let caller = caller_name(ask.actor, folder.as_deref());
+    let prompt = card_prompt(&caller, eval, ask.actor);
     let action = k2_core::overlay::CardAction {
         id: CARD_ACTION.to_string(),
         params: json!({
             "path": eval.path,
             "scope": eval.scope,
             "fingerprint": eval.fingerprint,
-            "agent": agent,
+            "caller": caller,
         }),
         dedupe: eval.scope.clone(),
         result: None,
         view: None,
     };
     let options = [TRUST_IT, ALWAYS, DONT];
-    let title = format!("Trust {}?", eval.path);
-    // An owner ticket filed earlier (no Thread then) rides along with the
-    // card, so the decision closes it too.
-    let open_ticket = |project: &str| {
-        k2_core::feedback::list_for_project(project, &k2_core::feedback::ListFilter::Open)
-            .unwrap_or_default()
-            .into_iter()
-            .find(|i| i.title == title)
-            .map(|i| i.id)
+    let title = ticket_title(eval);
+    let ticket_prefix = format!("Trust {}? ", eval.path);
+    // Tickets for this folder: the one for these settings stays; one for
+    // older settings is resolved (review B#3: refresh on a new fingerprint).
+    let open_ticket = |project: &str| -> Option<String> {
+        let mut current = None;
+        for i in k2_core::feedback::list_for_project(project, &k2_core::feedback::ListFilter::Open).unwrap_or_default() {
+            if i.title == title {
+                current = Some(i.id);
+            } else if i.title.starts_with(&ticket_prefix) {
+                if let Err(e) = k2_core::feedback::set_status(&i.id, "resolved") {
+                    log_debug!("[folder-trust] resolve stale ticket {}: {e}", i.id);
+                }
+            }
+        }
+        current
     };
     for project in &candidates {
         let Some(conversation) = pinned_conversation(project) else { continue };
@@ -199,8 +328,8 @@ fn present(ask: &Ask<'_>) -> Asked {
             Err(e) => log_debug!("[folder-trust] card for {} on {project}: {e}", eval.scope),
         }
     }
-    // No person and no Thread (A6): an owner ticket with the findings and
-    // the three choices.
+    // No person and no Thread (A6): an owner ticket with the findings, the
+    // three choices and the fingerprint they apply to.
     let Some(project) = candidates.first() else {
         log_debug!("[folder-trust] {}: no workspace to post a card or ticket on", eval.scope);
         return Asked::default();
@@ -208,15 +337,17 @@ fn present(ask: &Ask<'_>) -> Asked {
     if let Some(id) = open_ticket(project) {
         return Asked { ticket: Some(id), project: Some(project.clone()), ..Default::default() };
     }
+    let fp = eval.fingerprint.as_deref().unwrap_or("");
     let body = format!(
         "{prompt}\n\nThere is no Thread to put a card on, so K2 filed this ticket. Choose one (owner):\n\
-         • Trust it (this version): k2 workspace trust {q} --yes\n\
-         • Always trust this folder: k2 workspace trust {q} --always\n\
-         • Don't trust: k2 workspace trust {q} --no\n\
+         • Trust it (this version): k2 workspace trust {q} --yes --fingerprint {fp}\n\
+         • Always trust this folder: k2 workspace trust {q} --always --fingerprint {fp}\n\
+         • Don't trust: k2 workspace trust {q} --no --fingerprint {fp}\n\
+         If these settings change, K2 refuses these commands and files a new ticket. \
          Until then K2 starts no AI tool in this folder. Settings → Workspaces → Folder trust shows it too.",
         q = gate::shell_quote(&eval.path)
     );
-    match crate::feedback_routes::file_owners_only_notice(project, &agent, &title, &body) {
+    match crate::feedback_routes::file_owners_only_notice(project, &agent_name_of(project), &title, &body) {
         Ok(item) => Asked { ticket: Some(item.id), project: Some(project.clone()), ..Default::default() },
         Err(e) => {
             log_debug!("[folder-trust] ticket for {}: {e}", eval.scope);
@@ -227,15 +358,23 @@ fn present(ask: &Ask<'_>) -> Asked {
 
 // ── Spawn gate, held spawns, heartbeats ──────────────────────────────
 
+/// A spawn held for a scope: the request, when, and who asked (review B#8).
+struct HeldSpawn {
+    req: crate::spawn::SpawnWorkspaceSessionRequest,
+    at: Instant,
+    principal: Option<crate::session_token::HookPrincipal>,
+}
+
 /// Spawns held for a scope, retried once when the person trusts it.
-static HELD: Mutex<Option<HashMap<String, Vec<crate::spawn::SpawnWorkspaceSessionRequest>>>> = Mutex::new(None);
+static HELD: Mutex<Option<HashMap<String, Vec<HeldSpawn>>>> = Mutex::new(None);
 /// At most this many held spawns per scope (the newest per map key wins).
 const HELD_MAX: usize = 16;
 
-/// The spawn door: `Err(refusal)` when the folder is held or denied. Non-
-/// harness programs pass.
+/// The spawn door: `Err(refusal)` when the folder is held or denied.
+/// Every program is gated but a plain interactive shell (review A-H2).
 pub fn gate_spawn(
     program: Option<&str>,
+    args: &[String],
     cwd: &str,
     env_home: Option<&str>,
     project_id: Option<&str>,
@@ -247,25 +386,30 @@ pub fn gate_spawn(
         tool: program.map(str::to_string),
         ..Default::default()
     };
-    k2_core::cli_folder_trust::gate_harness_spawn(program, Some(Path::new(cwd)), env_home, &actor).map(|_| ())
+    k2_core::cli_folder_trust::gate_harness_spawn(program, args, Some(Path::new(cwd)), env_home, &actor).map(|_| ())
 }
 
-/// Queue a held spawn (not heartbeat lanes: those are skipped).
+/// Queue a held spawn (not heartbeat lanes: those are skipped), with the
+/// request's caller, for at most [`HELD_TTL`].
 pub fn hold_spawn(scope: &str, req: &crate::spawn::SpawnWorkspaceSessionRequest) {
     if req.canonical_key.as_deref().is_some_and(|k| k.contains(":hb:")) {
         return;
     }
     let key = crate::spawn::canonical_key_for_request(req);
     let mut g = HELD.lock().unwrap_or_else(|e| e.into_inner());
-    let list = g.get_or_insert_with(HashMap::new).entry(scope.to_string()).or_default();
-    list.retain(|r| crate::spawn::canonical_key_for_request(r) != key);
-    list.push(req.clone());
+    let map = g.get_or_insert_with(HashMap::new);
+    for list in map.values_mut() {
+        list.retain(|h| h.at.elapsed() < HELD_TTL);
+    }
+    let list = map.entry(scope.to_string()).or_default();
+    list.retain(|h| crate::spawn::canonical_key_for_request(&h.req) != key);
+    list.push(HeldSpawn { req: req.clone(), at: Instant::now(), principal: crate::caller_workspace::request_principal() });
     if list.len() > HELD_MAX {
         list.remove(0);
     }
 }
 
-fn take_held(scope: &str) -> Vec<crate::spawn::SpawnWorkspaceSessionRequest> {
+fn take_held(scope: &str) -> Vec<HeldSpawn> {
     let mut g = HELD.lock().unwrap_or_else(|e| e.into_inner());
     g.as_mut().and_then(|m| m.remove(scope)).unwrap_or_default()
 }
@@ -276,11 +420,19 @@ pub fn held_count(scope: &str) -> usize {
     g.as_ref().and_then(|m| m.get(scope)).map(Vec::len).unwrap_or(0)
 }
 
-/// Heartbeats: `Some(refusal)` when the workspace's agent is a gated
-/// harness (claude/codex/grok/gemini/cursor-agent) and its folder is held
-/// or denied, so the fire is skipped (an activity row says `held: folder
-/// trust`). A held folder still gets its card. A custom (no-model) agent
-/// or another program isn't gated, as at the spawn door.
+#[cfg(test)]
+fn age_held_for_tests(scope: &str, by: Duration) {
+    let mut g = HELD.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(list) = g.as_mut().and_then(|m| m.get_mut(scope)) {
+        for h in list {
+            h.at = h.at.checked_sub(by).unwrap_or(h.at);
+        }
+    }
+}
+
+/// Heartbeats: `Some(refusal)` when the workspace's folder is held or
+/// denied, so the fire is skipped (an activity row says `held: folder
+/// trust`). A held folder still gets its card.
 pub fn heartbeat_hold(project_path: &str, project_id: &str) -> Option<Refusal> {
     let program = {
         let db = k2_core::db::shared();
@@ -290,9 +442,10 @@ pub fn heartbeat_hold(project_path: &str, project_id: &str) -> Option<Refusal> {
     heartbeat_hold_for(project_path, project_id, &program)
 }
 
-/// [`heartbeat_hold`] with the agent's program given.
+/// [`heartbeat_hold`] with the agent's program given. Gated like a spawn:
+/// every program but a plain shell (an empty program is no agent).
 pub fn heartbeat_hold_for(project_path: &str, project_id: &str, program: &str) -> Option<Refusal> {
-    if !k2_core::cli_folder_trust::is_folder_trust_harness(Some(program)) {
+    if !k2_core::cli_folder_trust::needs_gate(Some(program), &[]) {
         return None;
     }
     let actor = Actor {
@@ -307,13 +460,14 @@ pub fn heartbeat_hold_for(project_path: &str, project_id: &str, program: &str) -
     }
 }
 
-/// After a person's decision: retry held spawns once on trust; on "Don't
-/// trust", drop them and stop K2's running AI sessions in the folder.
-/// Returns how many sessions were stopped.
-pub fn after_decision(scope: &str, keys: &[String], decision: Decision, granted: bool) -> usize {
+/// After a person's decision: retry held spawns once on trust (each as the
+/// caller that asked, if under [`HELD_TTL`]); on "Don't trust", drop them
+/// and stop K2's running AI sessions in that scope. Returns how many
+/// sessions were stopped.
+pub fn after_decision(scope: &str, decision: Decision, granted: bool) -> usize {
     match decision {
         Decision::Once | Decision::Always if granted => {
-            let held = take_held(scope);
+            let held: Vec<HeldSpawn> = take_held(scope).into_iter().filter(|h| h.at.elapsed() < HELD_TTL).collect();
             if !held.is_empty() {
                 // The spawn registers the session and emits session events,
                 // which need the daemon's tokio runtime: carry its handle
@@ -323,9 +477,12 @@ pub fn after_decision(scope: &str, keys: &[String], decision: Decision, granted:
                     .name("k2-folder-trust-retry".into())
                     .spawn(move || {
                         let _rt = rt.as_ref().map(|h| h.enter());
-                        for req in held {
-                            let key = crate::spawn::canonical_key_for_request(&req);
-                            match crate::spawn::spawn_agent_session_v2_blocking(req) {
+                        for h in held {
+                            let key = crate::spawn::canonical_key_for_request(&h.req);
+                            let r = crate::caller_workspace::with_request_principal(h.principal, || {
+                                crate::spawn::spawn_agent_session_v2_blocking(h.req)
+                            });
+                            match r {
                                 Ok(o) => log_debug!("[folder-trust] held spawn {key} started (session {})", o.session_id),
                                 Err(e) => log_debug!("[folder-trust] held spawn {key}: {e}"),
                             }
@@ -337,24 +494,26 @@ pub fn after_decision(scope: &str, keys: &[String], decision: Decision, granted:
         }
         Decision::Deny => {
             take_held(scope);
-            stop_sessions_in(scope, keys)
+            stop_sessions_in(scope)
         }
         _ => 0,
     }
 }
 
-/// Stop K2's live harness sessions in a folder: cwd under one of
-/// `folders`, or in another work tree of the same repo (`scope`).
-pub fn stop_sessions_in(scope: &str, folders: &[String]) -> usize {
+/// Stop K2's live AI sessions whose own folder's scope is `scope` (review
+/// B#5: never a nested workspace with its own scope). A plain shell is a
+/// person's terminal and stays.
+pub fn stop_sessions_in(scope: &str) -> usize {
     let mut n = 0;
     for (key, s) in crate::v2_session_map::snapshot() {
-        if !k2_core::cli_folder_trust::is_folder_trust_harness(s.program.as_deref()) {
+        if !k2_core::cli_folder_trust::needs_gate(s.program.as_deref(), &s.args) {
             continue;
         }
-        let Some(cwd) = s.cwd.as_ref().and_then(|c| c.canonicalize().ok().or_else(|| Some(c.clone()))) else { continue };
-        let inside = folders.iter().any(|f| cwd.starts_with(f))
-            || gate::scope_for(&cwd.to_string_lossy()).as_deref() == Some(scope);
-        if inside && crate::v2_session_map::unregister(&key).is_some() {
+        let Some(cwd) = s.cwd.as_ref() else { continue };
+        if gate::scope_for(&cwd.to_string_lossy()).as_deref() != Some(scope) {
+            continue;
+        }
+        if crate::v2_session_map::unregister(&key).is_some() {
             log_debug!("[folder-trust] stopped {key} ({}): folder not trusted", cwd.display());
             n += 1;
         }
@@ -362,46 +521,54 @@ pub fn stop_sessions_in(scope: &str, folders: &[String]) -> usize {
     n
 }
 
-// ── 409 ──────────────────────────────────────────────────────────────
+// ── 409 (spawn routes only, review B#6) ──────────────────────────────
 
-/// A non-2xx response whose body carries the gate's token becomes the 409
-/// the PRD names. `None` = leave the response alone.
-pub fn rewrite_refusal(status: &str, body: &str) -> Option<(&'static str, String)> {
-    if status.starts_with('2') || !gate::has_refusal_token(body) {
-        return None;
-    }
-    let r = gate::refusal_in_text(body)?;
-    Some(("409 Conflict", r.to_json().to_string()))
+/// The 409 body for a spawn error that carries the gate's token.
+pub fn refusal_response(e: &str) -> Option<CliResponse> {
+    gate::refusal_in_text(e).map(|r| CliResponse { status: "409 Conflict", content_type: "application/json", body: r.to_json().to_string() })
 }
 
-/// A spawn error for a route: the refusal's 409, else the old 400.
+/// A spawn error for a spawn route: the refusal's 409, else the old 400.
 pub fn spawn_failed_response(e: &str) -> CliResponse {
-    match gate::refusal_in_text(e) {
-        Some(r) => CliResponse { status: "409 Conflict", content_type: "application/json", body: r.to_json().to_string() },
-        None => CliResponse::bad_request(format!("spawn failed: {e}")),
-    }
+    refusal_response(e).unwrap_or_else(|| CliResponse::bad_request(format!("spawn failed: {e}")))
 }
 
 // ── The card's answer (action_cards::run) ────────────────────────────
 
 /// A person tapped an option on a `folder.trust` card (already checked to
 /// be the owner by `require_action_card_person`). `by`: `owner` or a login.
+/// The tap counts only while the folder still resolves to the card's path
+/// and scope with the card's fingerprint (review B#2), for every answer;
+/// otherwise nothing is recorded and a fresh card is posted.
 pub fn run_card(params: &J, answer: &str, by: &str) -> Result<J, String> {
     let path = params["path"].as_str().filter(|p| !p.is_empty()).ok_or("the card names no folder")?;
-    let card_fp = params["fingerprint"].as_str();
     let decision = match answer {
         TRUST_IT => Decision::Once,
         ALWAYS => Decision::Always,
         DONT => Decision::Deny,
         other => return Err(format!("'{other}' isn't an answer to this card")),
     };
+    let seen = Seen { path: Some(path), scope: params["scope"].as_str(), fingerprint: params["fingerprint"].as_str() };
     let pending = gate::scope_for(path).as_deref().and_then(gate::pending_of);
-    let r = gate::decide(path, decision, by, if decision == Decision::Once { card_fp } else { None })?;
+    let r = match gate::decide_checked(path, decision, by, seen) {
+        Ok(r) => r,
+        Err(DecideError::Changed(why)) => {
+            let fresh = gate::request(path, &Actor { by: "recheck".into(), caller: Some("K2".into()), ..Default::default() });
+            let next = match fresh {
+                Outcome::Held(r) if r.card.is_some() => "K2 posted a new card for what's there now.".to_string(),
+                Outcome::Held(_) => "Decide on what's there now: k2 workspace trust status shows it.".to_string(),
+                Outcome::Granted { .. } => "There's nothing risky to decide now.".to_string(),
+                Outcome::Denied(_) => "The folder is already not trusted.".to_string(),
+                Outcome::Skipped(why) => format!("K2 can't check it now ({why})."),
+            };
+            return Err(format!("Nothing was decided: {why}. {next}"));
+        }
+        Err(DecideError::Failed(e)) => return Err(e),
+    };
     if let Some(p) = pending {
         close_pending(&p, false);
     }
-    let keys = gate::evaluate(path).map(|e| e.keys).unwrap_or_else(|| vec![r.path.clone()]);
-    let stopped = after_decision(&r.scope, &keys, decision, r.granted);
+    let stopped = after_decision(&r.scope, decision, r.granted);
     let mut message = r.message.clone();
     if stopped > 0 {
         message.push_str(&format!(" Stopped {stopped} running session{} there.", if stopped == 1 { "" } else { "s" }));
@@ -454,16 +621,39 @@ fn folder_param(params: &HashMap<String, String>, body: &[u8]) -> Result<String,
         .ok_or_else(|| err("400 Bad Request", "usage", "path required (the folder)"))
 }
 
-/// The workspace a passport caller belongs to (for the card's place).
-fn caller_project(params: &HashMap<String, String>) -> Option<String> {
+/// The passport's workspace, when an agent asks (`None` for a person).
+fn passport_workspace(params: &HashMap<String, String>) -> Option<String> {
+    let bound = params.get(crate::caller_workspace::PRINCIPAL_BOUND_KEY).map(String::as_str) == Some("1")
+        || params.contains_key("cell_session_id");
     crate::caller_workspace::principal_from_params(params)
         .map(|p| p.workspace_uuid)
         .or_else(|| crate::caller_workspace::request_principal().map(|p| p.workspace_uuid))
         .filter(|w| !w.is_empty())
+        .or_else(|| bound.then(String::new))
 }
 
-/// `/cli/folder-trust/*`. `session_author`: `owner` or a login name (the
-/// dispatcher's), used by the person check on decide/reset.
+/// Which registered workspace folder `folder` is, for this caller (reviews
+/// A-H1, B#7): a registered workspace folder only, and for an agent only
+/// its own workspace's folder. `Err` is the refusal.
+fn workspace_folder_for(params: &HashMap<String, String>, folder: &str) -> Result<(String, String), CliResponse> {
+    let Some((id, path)) = registered_exact(folder) else {
+        return Err(err(
+            "404 Not Found",
+            "not_a_workspace",
+            format!("{folder} isn't a registered workspace folder; folder trust only covers workspaces"),
+        ));
+    };
+    if let Some(own) = passport_workspace(params) {
+        if own != id {
+            return Err(err("403 Forbidden", "not_your_workspace", "an agent can only ask about or read its own workspace's folder"));
+        }
+    }
+    Ok((id, path))
+}
+
+/// `/cli/folder-trust/*`. `session_author`: `owner`, a login name, or
+/// `agent` (the dispatcher's), used by the person check on decide/reset
+/// and to name the caller on the card.
 pub fn dispatch(is_post: bool, path: &str, params: &HashMap<String, String>, body: &[u8], session_author: &str) -> CliResponse {
     match path {
         STATUS_PATH => status_route(params, body),
@@ -471,7 +661,7 @@ pub fn dispatch(is_post: bool, path: &str, params: &HashMap<String, String>, bod
             if !is_post {
                 return CliResponse::method_not_allowed();
             }
-            request_route(params, body)
+            request_route(params, body, session_author)
         }
         DECIDE_PATH => {
             if !is_post {
@@ -495,43 +685,66 @@ pub fn dispatch(is_post: bool, path: &str, params: &HashMap<String, String>, bod
     }
 }
 
+fn status_json(id: &str, s: &gate::StatusView) -> J {
+    let mut v = serde_json::to_value(s).unwrap_or(J::Null);
+    v["projectId"] = json!(id);
+    v
+}
+
 fn status_route(params: &HashMap<String, String>, body: &[u8]) -> CliResponse {
     match param(params, body, "path").or_else(|| param(params, body, "folder")) {
-        Some(p) => match gate::status(&p) {
-            Ok(v) => CliResponse::ok_json(serde_json::to_string(&v).unwrap_or_default()),
-            Err(e) => err("400 Bad Request", "usage", e),
-        },
+        Some(p) => {
+            let (id, path) = match workspace_folder_for(params, &p) {
+                Ok(w) => w,
+                Err(r) => return r,
+            };
+            match gate::status(&path) {
+                Ok(v) => CliResponse::ok_json(status_json(&id, &v).to_string()),
+                Err(e) => err("400 Bad Request", "usage", e),
+            }
+        }
         None => {
-            // Every registered workspace (Settings → Workspaces).
+            // Every registered workspace (Settings → Workspaces); an agent
+            // sees only its own.
             let projects = match k2_core::projects_ops::projects_list() {
                 Ok(p) => p,
                 Err(e) => return CliResponse::internal_error(e),
             };
+            let own = passport_workspace(params);
             let folders: Vec<J> = projects
                 .iter()
-                .filter_map(|p| gate::status(&p.path).ok().map(|s| {
-                    let mut v = serde_json::to_value(&s).unwrap_or(J::Null);
-                    v["projectId"] = json!(p.id);
-                    v
-                }))
+                .filter(|p| own.as_deref().is_none_or(|o| o == p.id))
+                .filter_map(|p| gate::status(&p.path).ok().map(|s| status_json(&p.id, &s)))
                 .collect();
             CliResponse::ok_json(json!({ "folders": folders }).to_string())
         }
     }
 }
 
-fn request_route(params: &HashMap<String, String>, body: &[u8]) -> CliResponse {
+fn request_route(params: &HashMap<String, String>, body: &[u8], session_author: &str) -> CliResponse {
     let folder = match folder_param(params, body) {
         Ok(f) => f,
         Err(r) => return r,
     };
+    let (id, path) = match workspace_folder_for(params, &folder) {
+        Ok(w) => w,
+        Err(r) => return r,
+    };
+    let caller = match passport_workspace(params) {
+        Some(ws) if !ws.is_empty() => agent_name_of(&ws),
+        Some(_) => "An agent".to_string(),
+        None if session_author == "owner" => "The owner".to_string(),
+        None => session_author.to_string(),
+    };
     let actor = Actor {
-        project_id: caller_project(params),
+        project_id: Some(id),
         by: "request".into(),
         why: param(params, body, "why"),
+        caller: Some(caller),
         ..Default::default()
     };
-    let out = gate::ensure(&folder, Door::Spawn, &actor, None);
+    // Only asks: no grant is written or removed (review A-H1).
+    let out = gate::request(&path, &actor);
     CliResponse::ok_json(out.to_json().to_string())
 }
 
@@ -549,18 +762,44 @@ fn decide_route(params: &HashMap<String, String>, body: &[u8], by: &str) -> CliR
         Ok(d) => d,
         Err(r) => return r,
     };
+    // The fingerprint the owner saw (status, or the ticket) is required
+    // (review B#3): "none" means they saw a folder with no risky settings.
+    let Some(fp) = param(params, body, "fingerprint") else {
+        return err(
+            "400 Bad Request",
+            "usage",
+            "fingerprint required: the CLI sends the one `k2 workspace trust status` showed (or the ticket's)",
+        );
+    };
+    let fp = (fp != "none").then_some(fp);
+    let scope_seen = param(params, body, "scope");
     let scope = gate::scope_for(&folder);
     let pending = scope.as_deref().and_then(gate::pending_of);
-    let r = match gate::decide(&folder, decision, by, None) {
+    let seen = Seen { path: None, scope: scope_seen.as_deref(), fingerprint: fp.as_deref() };
+    let r = match gate::decide_checked(&folder, decision, by, seen) {
         Ok(r) => r,
-        Err(e) => return err("400 Bad Request", "usage", e),
+        Err(DecideError::Changed(why)) => {
+            // Refresh the ask (a new card or ticket for what's there now).
+            let _ = gate::request(&folder, &Actor { by: "recheck".into(), caller: Some("K2".into()), ..Default::default() });
+            let current = gate::status(&folder).ok().map(|s| serde_json::to_value(&s).unwrap_or(J::Null));
+            return CliResponse {
+                status: "409 Conflict",
+                content_type: "application/json",
+                body: json!({
+                    "error": CHANGED,
+                    "message": format!("Nothing was decided: {why}. Look again: k2 workspace trust status {}", gate::shell_quote(&folder)),
+                    "current": current,
+                })
+                .to_string(),
+            };
+        }
+        Err(DecideError::Failed(e)) => return err("400 Bad Request", "usage", e),
     };
     // The card that was waiting no longer asks anything.
     if let Some(p) = pending {
         close_pending(&p, true);
     }
-    let keys = gate::evaluate(&folder).map(|e| e.keys).unwrap_or_else(|| vec![r.path.clone()]);
-    let stopped = after_decision(&r.scope, &keys, decision, r.granted);
+    let stopped = after_decision(&r.scope, decision, r.granted);
     let mut v = serde_json::to_value(&r).unwrap_or(J::Null);
     v["ok"] = json!(true);
     v["stopped"] = json!(stopped);
@@ -608,14 +847,14 @@ fn file_upgrade_summary(folders: &[gate::UpgradedFolder]) {
          They stay trusted as they are; K2 asks again if these settings change.\n",
     );
     for f in folders {
-        body.push_str(&format!("\n{}\n", f.path));
-        for line in f.findings.iter().take(CARD_LINES) {
-            body.push_str(&format!("  • {}: {}\n", line.file, line.detail));
-        }
+        body.push_str(&format!("\n{}\n", md_text(&f.path, 300)));
+        let lines: Vec<String> = f.findings.iter().take(CARD_LINES).map(|l| format!("{}: {}", l.file, l.detail)).collect();
+        body.push_str(&md_code_block(&lines));
+        body.push('\n');
         if f.findings.len() > CARD_LINES || f.more > 0 {
-            body.push_str(&format!("  (more: k2 workspace trust status {})\n", gate::shell_quote(&f.path)));
+            body.push_str(&format!("More: k2 workspace trust status {}\n", gate::shell_quote(&f.path)));
         }
-        body.push_str(&format!("  Review: k2 workspace trust {} --yes|--always|--no\n", gate::shell_quote(&f.path)));
+        body.push_str(&format!("Review: k2 workspace trust status {}, then --yes / --always / --no\n", gate::shell_quote(&f.path)));
     }
     body.push_str("\nSettings → Workspaces → Folder trust shows each one, with Reset.");
     let agent = agent_name_of(&project);

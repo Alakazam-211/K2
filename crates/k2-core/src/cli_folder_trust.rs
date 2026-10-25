@@ -78,23 +78,24 @@ pub fn trust_all_registered_projects() -> usize {
     granted
 }
 
-/// Spawn door (P18 + SS11). For a harness (claude/codex/grok/gemini/
-/// cursor-agent), whatever its args (`claude -p` runs project hooks with no
-/// trust dialog, so print mode is gated too): `Ok` when the folder may run
-/// it (grants written as before), `Err` with the refusal when the folder is
-/// held (a card is waiting) or denied. Non-harness programs, a missing cwd
-/// and refused paths pass (`Ok(None)`).
+/// Spawn door (P18 + SS11). Every program but a plain interactive shell
+/// ([`needs_gate`]): a harness with any args (`claude -p` runs project
+/// hooks with no trust dialog), a wrapper, a launch-block command. `Ok`
+/// when the folder may run it (grants written as before), `Err` with the
+/// refusal when the folder is held (a card is waiting) or denied. A plain
+/// shell, a missing cwd and refused paths pass (`Ok(None)`).
 ///
 /// `env_home`: the child's HOME when it differs from the daemon's. A guest
 /// path that doesn't exist on the host gets no host write, but the decision
 /// still applies (P21).
 pub fn gate_harness_spawn(
     command: Option<&str>,
+    args: &[String],
     cwd: Option<&Path>,
     env_home: Option<&str>,
     actor: &gate::Actor,
 ) -> Result<Option<gate::Outcome>, gate::Refusal> {
-    if !is_folder_trust_harness(command) {
+    if !needs_gate(command, args) {
         return Ok(None);
     }
     let Some(cwd) = cwd else {
@@ -122,6 +123,23 @@ pub fn gate_harness_spawn(
         gate::Outcome::Held(r) | gate::Outcome::Denied(r) => Err(r),
         other => Ok(Some(other)),
     }
+}
+
+/// Whether a K2-started session in a folder must pass the folder decision
+/// (review A-H2): every program does — a wrapper (`npx`, `ccr`, `happy`),
+/// `bash -c "…; claude -p"`, a custom launch block — except a plain
+/// interactive shell (no command, `$SHELL`, or a shell with no args or
+/// only `-l`/`--login`/`-i`), which is a person's terminal tab.
+pub fn needs_gate(command: Option<&str>, args: &[String]) -> bool {
+    let Some(cmd) = command.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    if cmd == "$SHELL" {
+        return false;
+    }
+    let base = program_basename(cmd);
+    let is_shell = LOGIN_SHELL_BASENAMES.iter().any(|s| base.eq_ignore_ascii_case(s));
+    !(is_shell && args.iter().all(|a| matches!(a.as_str(), "-l" | "--login" | "-i")))
 }
 
 /// True when `command` is claude/codex/grok/gemini/cursor-agent (basename).
@@ -212,11 +230,13 @@ fn is_refused_path(path: &Path, home: &Path) -> bool {
     home.starts_with(path) && home != path
 }
 
-/// Exact cwd plus git root when they differ (worktree / nested git).
+/// Exact cwd plus its repo's main checkout when they differ (worktree /
+/// subfolder). The main checkout is only another repo's when the link is
+/// verified ([`main_checkout`]).
 fn grant_keys(cwd: &Path, home: &Path) -> Vec<String> {
     let mut keys = Vec::new();
     push_key(&mut keys, cwd, home);
-    if let Some(root) = git_root(cwd) {
+    if let Some(root) = main_checkout(cwd, home) {
         push_key(&mut keys, &root, home);
     }
     keys
@@ -236,47 +256,76 @@ fn push_key(keys: &mut Vec<String>, path: &Path, home: &Path) {
     }
 }
 
-fn git_root(path: &Path) -> Option<PathBuf> {
-    let repo = git2::Repository::discover(path).ok()?;
-    if let Some(main) = git_common_workdir(path) {
-        return Some(main);
+/// The nearest folder at or above `path` that holds a `.git` (a folder, or
+/// a worktree's or submodule's file). Read from the filesystem, no git
+/// process. `$HOME`, `/` and parents of `$HOME` don't count: a dotfiles
+/// repo in `$HOME` is not every folder's repo.
+pub(crate) fn worktree_top(path: &Path, home: &Path) -> Option<PathBuf> {
+    for d in path.ancestors() {
+        if fs::symlink_metadata(d.join(".git")).is_ok() {
+            if is_refused_path(d, home) {
+                return None;
+            }
+            return Some(d.to_path_buf());
+        }
     }
-    repo.workdir()
-        .and_then(|w| canonical_abs(w).or_else(|| Some(w.to_path_buf())))
+    None
 }
 
-/// Main checkout for a worktree: parent of `git rev-parse --git-common-dir`.
-fn git_common_workdir(path: &Path) -> Option<PathBuf> {
-    let out = crate::git_safe::git(path)
-        .args(["rev-parse", "--git-common-dir"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let raw = String::from_utf8_lossy(&out.stdout);
-    let common = raw.trim();
-    if common.is_empty() {
-        return None;
-    }
-    let common_path = {
-        let p = Path::new(common);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            path.join(p)
+/// The repo's main checkout for `path` (review A-M4). A work tree with a
+/// `.git` FOLDER is its own main checkout. A `.git` FILE (`gitdir: …`) is
+/// followed only when it is a real worktree of a registered workspace:
+/// the gitdir is `<main>/.git/worktrees/<name>`, that folder's `gitdir`
+/// back-link names this work tree's `.git`, and `<main>` is a registered
+/// workspace. Otherwise (a submodule, a hand-made or planted `.git` file)
+/// the folder is its own scope, so a `.git` file can't borrow another
+/// repo's decision or grants.
+pub(crate) fn main_checkout(path: &Path, home: &Path) -> Option<PathBuf> {
+    let top = worktree_top(path, home)?;
+    let dotgit = top.join(".git");
+    let meta = fs::symlink_metadata(&dotgit).ok()?;
+    if meta.is_file() {
+        if let Some(main) = linked_main_checkout(&top) {
+            if !is_refused_path(&main, home) {
+                return Some(main);
+            }
         }
-    };
-    let common_path = canonical_abs(&common_path).unwrap_or(common_path);
-    if common_path
-        .file_name()
-        .map(|n| n == ".git")
-        .unwrap_or(false)
-    {
-        common_path.parent().map(|p| p.to_path_buf())
-    } else {
-        None
     }
+    Some(top)
+}
+
+fn linked_main_checkout(top: &Path) -> Option<PathBuf> {
+    let dotgit = top.join(".git");
+    let text = read_to_string_lossy(&dotgit)?;
+    let gitdir = text.lines().find_map(|l| l.trim().strip_prefix("gitdir:"))?.trim().to_string();
+    let gitdir = if Path::new(&gitdir).is_absolute() { PathBuf::from(&gitdir) } else { top.join(&gitdir) };
+    let wt = gitdir.canonicalize().ok()?;
+    let worktrees = wt.parent()?;
+    if worktrees.file_name()? != "worktrees" {
+        return None;
+    }
+    let common = worktrees.parent()?;
+    if common.file_name()? != ".git" || !fs::symlink_metadata(common).map(|m| m.is_dir()).unwrap_or(false) {
+        return None;
+    }
+    let main = common.parent()?.to_path_buf();
+    let back = read_to_string_lossy(&wt.join("gitdir"))?;
+    let back = PathBuf::from(back.trim());
+    let back = if back.is_absolute() { back } else { wt.join(back) };
+    if back.canonicalize().ok()? != dotgit.canonicalize().ok()? {
+        return None;
+    }
+    is_registered_workspace(&main).then_some(main)
+}
+
+/// `path` is a registered workspace folder (`projects.path`, compared as
+/// canonical paths).
+pub(crate) fn is_registered_workspace(path: &Path) -> bool {
+    let Some(want) = canonical_abs(path) else { return false };
+    let Ok(projects) = crate::projects_ops::projects_list() else { return false };
+    projects
+        .iter()
+        .any(|p| !p.path.is_empty() && canonical_abs(Path::new(&p.path)).as_deref() == Some(want.as_path()))
 }
 
 fn bak_path(path: &Path) -> PathBuf {
@@ -834,24 +883,70 @@ pub(crate) fn write_grants(home: &Path, keys: &[String]) -> GrantedKeys {
     }
 }
 
-/// The entries for `keys` that are trusted in `home` right now, per store
-/// (0.46.3 upgrade: K2 wrote every one of those, A4).
-pub(crate) fn present_grants(home: &Path, keys: &[String]) -> GrantedKeys {
-    let pick = |f: &dyn Fn(&str) -> bool| keys.iter().filter(|k| f(k)).cloned().collect::<Vec<_>>();
-    let mut gemini = pick(&|k| gemini_trusted(home, k));
+/// The entries for `keys` that are trusted in `home` right now AND look
+/// like K2 wrote them (0.46.3 upgrade; review B#9: never record the
+/// person's own entries as K2's, so "Don't trust" never removes them):
+/// - Claude: the project entry holds only `hasTrustDialogAccepted` (K2
+///   makes `{}` + the flag; Claude's own dialog leaves more keys);
+/// - Gemini: the path and its lowercased twin both say TRUST_FOLDER (K2's
+///   own quirk; Gemini writes one key);
+/// - Cursor: the marker says `trustMethod: k2`.
+///
+/// Codex and Grok entries look the same whoever wrote them, so they are
+/// not recorded: after "Don't trust" they are reported, not removed.
+pub(crate) fn upgrade_k2_grants(home: &Path, keys: &[String]) -> GrantedKeys {
+    let mut gemini = Vec::new();
     for k in keys {
         let lower = k.to_lowercase();
-        if lower != *k && gemini_trusted(home, &lower) && !gemini.contains(&lower) {
+        if lower != *k && gemini_trusted(home, k) && gemini_trusted(home, &lower) {
+            gemini.push(k.clone());
             gemini.push(lower);
         }
     }
     GrantedKeys {
-        claude: pick(&|k| claude_trusted(home, k)),
-        codex: pick(&|k| codex_trusted(home, k)),
-        grok: pick(&|k| grok_trusted(home, k)),
+        claude: keys.iter().filter(|k| claude_entry_is_k2s(home, k)).cloned().collect(),
+        codex: Vec::new(),
+        grok: Vec::new(),
         gemini,
-        cursor: pick(&|k| cursor_marker_path(home, k).is_file() && cursor_marker_is_k2s(&cursor_marker_path(home, k))),
+        cursor: keys
+            .iter()
+            .filter(|k| cursor_marker_path(home, k).is_file() && cursor_marker_is_k2s(&cursor_marker_path(home, k)))
+            .cloned()
+            .collect(),
     }
+}
+
+fn claude_entry_is_k2s(home: &Path, key: &str) -> bool {
+    let Some(text) = read_to_string_lossy(&home.join(".claude.json")) else { return false };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return false };
+    let Some(entry) = v.get("projects").and_then(|p| p.get(key)).and_then(|e| e.as_object()) else { return false };
+    entry.len() == 1 && entry.get("hasTrustDialogAccepted") == Some(&serde_json::Value::Bool(true))
+}
+
+/// Remove `keys`' trust from every pinned-login and wallet slot home
+/// (`~/.k2/llm-accounts/{claude,codex}/<id>`): the slot's own
+/// `.claude.json` and the Codex shadow `config.toml` (review item 14).
+/// Returns the errors (never silent).
+pub(crate) fn revoke_slot_homes(keys: &[String]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for tool in [crate::llm_accounts::Tool::Claude, crate::llm_accounts::Tool::Codex] {
+        let Ok(rd) = fs::read_dir(crate::llm_accounts::store::tool_dir(tool)) else { continue };
+        for e in rd.filter_map(|e| e.ok()) {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let slot = e.path();
+            let r = match tool {
+                crate::llm_accounts::Tool::Claude => crate::llm_accounts::pins::strip_claude_slot_trust(&slot, keys),
+                _ => crate::llm_accounts::pins::strip_codex_slot_trust(&slot, keys),
+            };
+            if let Err(err) = r {
+                errors.push(format!("{}: {err}", slot.display()));
+            }
+        }
+    }
+    errors
 }
 
 /// Remove exactly the entries in `granted` from `home`'s stores. Errors
@@ -1012,23 +1107,29 @@ pub fn leftover_grants(home: &Path, keys: &[String], in_git: bool) -> Vec<String
         if cursor_marker_path(home, key).is_file() {
             push(format!("Cursor: {key} ({})", cursor_marker_path(home, key).display()));
         }
+        // Every ancestor, in every store (review A-H1/B#4): a parent's
+        // entry may trust this folder in a CLI that walks up.
+        let _ = in_git;
         let mut cur = Path::new(key).parent();
         while let Some(dir) = cur {
-            if dir.parent().is_none() {
-                break;
-            }
             let d = dir.to_string_lossy().to_string();
+            if claude_trusted(home, &d) {
+                push(format!("Claude: parent folder {d} (~/.claude.json)"));
+            }
+            if codex_trusted(home, &d) {
+                push(format!("Codex: parent folder {d} (~/.codex/config.toml)"));
+            }
+            if grok_trusted(home, &d) {
+                push(format!("Grok: parent folder {d} (~/.grok/trusted_folders.toml)"));
+            }
             if gemini_trusted(home, &d) || gemini_trusted(home, &d.to_lowercase()) {
                 push(format!("Gemini: parent folder {d} (~/.gemini/trustedFolders.json)"));
             }
             if gemini_parent_trusted(home, &d) {
                 push(format!("Gemini: parent folder {d} (TRUST_PARENT in ~/.gemini/trustedFolders.json)"));
             }
-            if cursor_marker_path(home, &d).is_file() && Path::new(&d).components().count() > 3 && Some(dir) != canonical_abs(home).as_deref() {
+            if cursor_marker_path(home, &d).is_file() {
                 push(format!("Cursor: parent folder {d} ({})", cursor_marker_path(home, &d).display()));
-            }
-            if !in_git && claude_trusted(home, &d) {
-                push(format!("Claude: parent folder {d} (~/.claude.json)"));
             }
             cur = dir.parent();
         }
@@ -1251,27 +1352,48 @@ mod tests {
         crate::workspace::lifecycle::register_workspace_ex(&main_s, false, false, false)
             .expect("register");
         assert_all_stores(&g.home, &main);
-        gate_harness_spawn(Some("claude"), Some(&wt), None, &gate::Actor::default()).expect("clean worktree passes");
+        gate_harness_spawn(Some("claude"), &[], Some(&wt), None, &gate::Actor::default()).expect("clean worktree passes");
         assert_all_stores(&g.home, &main);
         assert_all_stores(&g.home, &wt);
     }
 
+    /// Review A-H2: only a plain interactive shell skips the gate; every
+    /// other program (a wrapper, `bash -c`, `cat`) is gated.
     #[test]
-    fn spawn_helper_skips_empty_and_shell() {
+    fn spawn_helper_gates_everything_but_a_plain_shell() {
         let g = HomeGuard::new("spawn-skip");
         let ws = unique_ws(&g.home, "skip");
         let a = gate::Actor::default();
-        assert!(gate_harness_spawn(None, Some(&ws), None, &a).expect("no program").is_none());
-        assert!(gate_harness_spawn(Some("zsh"), Some(&ws), None, &a).expect("shell").is_none());
-        assert!(gate_harness_spawn(Some("cat"), Some(&ws), None, &a).expect("cat").is_none());
-        assert!(!g.home.join(".claude.json").exists());
+        let none: Vec<String> = Vec::new();
+        assert!(gate_harness_spawn(None, &none, Some(&ws), None, &a).expect("no program").is_none());
+        assert!(gate_harness_spawn(Some("zsh"), &none, Some(&ws), None, &a).expect("shell").is_none());
+        assert!(gate_harness_spawn(Some("$SHELL"), &none, Some(&ws), None, &a).expect("shell").is_none());
+        assert!(gate_harness_spawn(Some("/bin/bash"), &["-l".to_string()], Some(&ws), None, &a).expect("login shell").is_none());
+        assert!(!g.home.join(".claude.json").exists(), "a plain shell writes no grant");
+        for (prog, args) in [
+            ("cat", vec![]),
+            ("/bin/bash", vec!["-c".to_string(), "claude -p hi".to_string()]),
+            ("npx", vec!["@anthropic-ai/claude-code".to_string()]),
+            ("ccr", vec!["code".to_string()]),
+            ("happy", vec![]),
+        ] {
+            assert!(needs_gate(Some(prog), &args), "{prog} {args:?}");
+            let out = gate_harness_spawn(Some(prog), &args, Some(&ws), None, &a).expect("clean folder passes");
+            assert!(matches!(out, Some(gate::Outcome::Granted { clean: true, .. })), "{prog}: {out:?}");
+        }
+        // A risky folder holds the wrapper too (no card presenter here).
+        fs::create_dir_all(ws.join(".claude")).unwrap();
+        fs::write(ws.join(".claude/settings.json"), r#"{"hooks":{"Stop":[{"hooks":[{"command":"./x.sh"}]}]}}"#).unwrap();
+        let held = gate_harness_spawn(Some("/bin/bash"), &["-c".to_string(), "claude -p x".to_string()], Some(&ws), None, &a)
+            .expect_err("bash -c claude in a risky folder is held");
+        assert_eq!(held.error, gate::PENDING);
     }
 
     #[test]
     fn spawn_helper_grants_harness_cwd() {
         let g = HomeGuard::new("spawn-ok");
         let ws = unique_ws(&g.home, "ok");
-        let out = gate_harness_spawn(Some("/usr/local/bin/claude"), Some(&ws), None, &gate::Actor::default())
+        let out = gate_harness_spawn(Some("/usr/local/bin/claude"), &[], Some(&ws), None, &gate::Actor::default())
             .expect("clean folder passes");
         assert!(matches!(out, Some(gate::Outcome::Granted { clean: true, .. })), "{out:?}");
         assert_all_stores(&g.home, &ws);
@@ -1283,6 +1405,7 @@ mod tests {
         let ws = unique_ws(&g.home, "guestws");
         let out = gate_harness_spawn(
             Some("claude"),
+            &[],
             Some(&ws),
             Some("/home/k2-does-not-exist-on-host"),
             &gate::Actor::default(),

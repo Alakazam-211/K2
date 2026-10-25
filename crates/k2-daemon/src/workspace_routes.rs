@@ -274,7 +274,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         .to_string(),
                     )
                 }
-                Err(e) => CliResponse::bad_request(e),
+                // Folder trust (SS11): held/denied → 409 (a spawn route).
+                Err(e) => crate::folder_trust::refusal_response(&e).unwrap_or_else(|| CliResponse::bad_request(e)),
             },
             Err(r) => r,
         },

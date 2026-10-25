@@ -1270,13 +1270,6 @@ mod unix_impl {
     }
 
     async fn write_response(stream: &mut UnixStream, status: &str, content_type: &str, body: &str) {
-        // Folder trust (SS11): a spawn error carrying the gate's token
-        // answers as its 409, as on TCP.
-        let ft = crate::folder_trust::rewrite_refusal(status, body);
-        let (status, body): (&str, &str) = match &ft {
-            Some((s, b)) => (s, b.as_str()),
-            None => (status, body),
-        };
         let resp = format!(
             "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{}",
             body.len(),

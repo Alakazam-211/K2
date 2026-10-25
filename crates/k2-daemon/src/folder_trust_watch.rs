@@ -19,11 +19,14 @@
 //!   ([`k2_core::cli_folder_trust::gate::ensure`]): a `once` folder whose
 //!   settings changed (or a clean one that became risky) loses K2's grants
 //!   and the owner gets the card, worded "changed while <agent> was
-//!   running". An `always` folder is left alone.
+//!   running", and K2's sessions in that scope stop (review A-M1). An
+//!   `always` folder is left alone.
 //!
 //! What it can't do: Claude may load a new hook before K2 sees the change
-//! (both watch the same files). The card and the grant removal follow
-//! within about a second; "Don't trust" then stops K2's sessions there.
+//! (both watch the same files). For the watched config folders K2 notices
+//! within about a second; for a file deeper under them (a script under
+//! `.claude/…`, a nested clone) it can take up to [`RESCAN`]. In that
+//! window a running session can run the new settings.
 //! The honest limits are in `k2 study folder-trust`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -79,7 +82,7 @@ pub(crate) struct Live {
 pub(crate) fn live_folders() -> Vec<Live> {
     let mut seen: BTreeMap<String, Live> = BTreeMap::new();
     for (_key, s) in crate::v2_session_map::snapshot() {
-        if !k2_core::cli_folder_trust::is_folder_trust_harness(s.program.as_deref()) || !s.is_child_alive() {
+        if !k2_core::cli_folder_trust::needs_gate(s.program.as_deref(), &s.args) || !s.is_child_alive() {
             continue;
         }
         let Some(cwd) = s.cwd.as_ref() else { continue };
@@ -136,13 +139,13 @@ pub(crate) fn recheck(live: &Live, last: Option<&Option<String>>) -> Option<Stri
         ..Default::default()
     };
     match gate::ensure(&live.cwd, Door::Spawn, &actor, None) {
-        gate::Outcome::Held(r) => log_debug!("[folder-trust-watch] {} changed while running: held (card {:?})", live.cwd, r.card),
-        gate::Outcome::Denied(_) => {
-            // Denied with a live session (started before the decision, or
-            // outside K2's spawn doors): stop it.
-            let keys = gate::evaluate(&live.cwd).map(|e| e.keys).unwrap_or_else(|| vec![live.cwd.clone()]);
-            let scope = gate::scope_for(&live.cwd).unwrap_or_else(|| live.cwd.clone());
-            crate::folder_trust::stop_sessions_in(&scope, &keys);
+        gate::Outcome::Held(r) | gate::Outcome::Denied(r) => {
+            // Held again (a live change on a `once` folder, a clean folder
+            // that became risky) or denied: K2's sessions in that scope stop
+            // (review A-M1), so a running Claude doesn't keep working under
+            // settings nobody has trusted. The card says so.
+            let n = crate::folder_trust::stop_sessions_in(&r.scope);
+            log_debug!("[folder-trust-watch] {} {}: stopped {n} session(s) (card {:?})", live.cwd, r.error, r.card);
         }
         _ => {}
     }
@@ -226,8 +229,9 @@ fn watch_loop() -> Result<(), String> {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn recheck_for_tests(cwd: &std::path::Path, last: Option<&Option<String>>, project_id: Option<&str>) -> Option<String> {
+/// One re-check of `cwd` as the watcher does it (`last`: the fingerprint
+/// it saw before; `None` = first sighting). For tests and tools.
+pub fn recheck_path(cwd: &std::path::Path, last: Option<&Option<String>>, project_id: Option<&str>) -> Option<String> {
     recheck(
         &Live { cwd: cwd.to_string_lossy().to_string(), program: Some("claude".into()), project_id: project_id.map(str::to_string) },
         last,

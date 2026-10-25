@@ -92,6 +92,16 @@ fn spawn(path: &Path) -> Outcome {
     ensure(&s(path), Door::Spawn, &Actor::by("test"), None)
 }
 
+fn register(path: &Path) {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+        params![uuid::Uuid::new_v4().to_string(), s(path), "ft-test"],
+    )
+    .unwrap();
+}
+
 #[test]
 fn clean_folder_is_granted_without_a_card() {
     let e = env();
@@ -256,6 +266,9 @@ fn worktrees_share_the_decision_by_common_dir() {
     put(&main, ".claude/settings.json", HOOK);
     git(&main, &["add", "-A"]);
     git(&main, &["commit", "-m", "init"]);
+    // A worktree shares the main checkout's decision only when the main
+    // checkout is a registered workspace (review A-M4).
+    register(&main);
     let same = e.home.join("wt-same");
     git(&main, &["worktree", "add", &s(&same), "-b", "same"]);
     let other = e.home.join("wt-other");
@@ -308,6 +321,167 @@ fn nested_repos_are_scanned_for_the_inheriting_clis() {
     assert!(f.detail.starts_with("nested repo: "), "{}", f.detail);
 }
 
+/// Review A-M4: a `.git` FILE doesn't choose another repo's scope unless
+/// it is a verified worktree (gitdir in `<main>/.git/worktrees/<name>`,
+/// the back-link pointing here) of a registered workspace.
+#[test]
+fn a_planted_git_file_cant_borrow_another_repos_decision() {
+    let e = env();
+    let main = folder(&e.home, "trusted-repo");
+    git(&main, &["init"]);
+    put(&main, ".claude/settings.json", HOOK);
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-m", "init"]);
+    register(&main);
+    decide(&s(&main), Decision::Always, "owner", None).unwrap();
+
+    // A planted `.git` file pointing at the trusted repo's git dir (no
+    // worktree entry): its own scope, held.
+    let evil = folder(&e.home, "evil");
+    put(&evil, ".claude/settings.json", HOOK2);
+    fs::write(evil.join(".git"), format!("gitdir: {}\n", s(&main.join(".git")))).unwrap();
+    let Outcome::Held(r) = spawn(&evil) else { panic!("held") };
+    assert_eq!(r.scope, s(&evil), "not the trusted repo's scope");
+    assert!(r.findings.iter().any(|f| f.file == ".claude/settings.json"), "{:?}", r.findings);
+
+    // A fake worktree entry without the back-link: still its own scope.
+    let fake_wt = main.join(".git/worktrees/fake");
+    fs::create_dir_all(&fake_wt).unwrap();
+    fs::write(fake_wt.join("gitdir"), "/somewhere/else/.git\n").unwrap();
+    fs::write(evil.join(".git"), format!("gitdir: {}\n", s(&fake_wt))).unwrap();
+    let Outcome::Held(r) = spawn(&evil) else { panic!("held") };
+    assert_eq!(r.scope, s(&evil));
+    assert!(!r.findings.is_empty());
+    assert!(!crate::cli_folder_trust::grant_keys(&evil, &e.home).contains(&s(&main)), "no grant for the other repo's folder");
+
+    // With the back-link but an unregistered main: own scope too.
+    let other = folder(&e.home, "unregistered");
+    git(&other, &["init"]);
+    git(&other, &["commit", "--allow-empty", "-m", "x"]);
+    let wt = e.home.join("wt-of-unregistered");
+    git(&other, &["worktree", "add", &s(&wt), "-b", "b"]);
+    let wt = wt.canonicalize().unwrap();
+    assert_eq!(scope_for(&s(&wt)).as_deref(), Some(s(&wt).as_str()));
+}
+
+/// Review A-H1: the nested walk fails closed: over its folder budget is a
+/// "not fully scanned" finding, not clean.
+#[test]
+fn a_nested_walk_over_budget_is_a_finding() {
+    let e = env();
+    let ws = folder(&e.home, "huge");
+    for i in 0..=NESTED_MAX_DIRS {
+        fs::create_dir(ws.join(format!("d{i}"))).unwrap();
+    }
+    let out = spawn(&ws);
+    let Outcome::Held(r) = out else { panic!("held: {out:?}") };
+    let f = r.findings.iter().find(|f| f.what == "not-fully-scanned").expect("not fully scanned");
+    assert!(f.detail.contains("over 20000 folders"), "{}", f.detail);
+}
+
+/// Review A-H1: an agent's request scans and asks; it never writes or
+/// removes a grant.
+#[test]
+fn request_never_writes_or_removes_grants() {
+    let e = env();
+    let clean = folder(&e.home, "req-clean");
+    let out = request(&s(&clean), &Actor::by("request"));
+    assert!(matches!(out, Outcome::Granted { clean: true, .. }), "{out:?}");
+    assert!(!e.home.join(".claude.json").exists(), "request wrote no grant for a clean folder");
+
+    let ws = folder(&e.home, "req-risky");
+    put(&ws, ".claude/settings.json", HOOK);
+    decide(&s(&ws), Decision::Once, "owner", None).unwrap();
+    assert!(all_trusted(&e.home, &s(&ws)));
+    put(&ws, ".claude/settings.json", HOOK2);
+    let Outcome::Held(r) = request(&s(&ws), &Actor::by("request")) else { panic!("held") };
+    assert!(r.card.is_some(), "the card is presented");
+    assert!(all_trusted(&e.home, &s(&ws)), "request removed nothing (the spawn door does that)");
+}
+
+/// Review A-H1/B#4: leftovers include grants on ancestors, in every store.
+#[test]
+fn leftovers_include_ancestor_grants_in_every_store() {
+    let e = env();
+    let parent = folder(&e.home, "anc");
+    let ws = folder(&parent, "child");
+    put(&ws, ".claude/settings.json", HOOK);
+    crate::cli_folder_trust::write_grants(&e.home, &[s(&parent)]);
+    let d = decide(&s(&ws), Decision::Deny, "owner", None).unwrap();
+    for tool in ["Claude", "Codex", "Grok", "Gemini"] {
+        assert!(d.leftover.iter().any(|l| l.starts_with(&format!("{tool}: parent folder"))), "{tool}: {:?}", d.leftover);
+    }
+}
+
+/// Reviews B#2/B#3: a decision counts only for the folder the person saw.
+#[test]
+fn decide_checked_refuses_a_changed_folder_for_every_answer() {
+    let e = env();
+    let ws = folder(&e.home, "toctou");
+    put(&ws, ".claude/settings.json", HOOK);
+    let Outcome::Held(r) = spawn(&ws) else { panic!("held") };
+    put(&ws, ".claude/settings.json", HOOK2);
+    for d in [Decision::Once, Decision::Always, Decision::Deny] {
+        let seen = Seen { path: Some(&r.path), scope: Some(&r.scope), fingerprint: r.fingerprint.as_deref() };
+        let err = decide_checked(&s(&ws), d, "owner", seen).expect_err("changed");
+        assert!(matches!(&err, DecideError::Changed(m) if m.contains("changed since you saw them")), "{d:?}: {err:?}");
+    }
+    assert_eq!(status(&s(&ws)).unwrap().decision, None, "nothing was recorded");
+    let seen = Seen { path: Some(&r.path), scope: Some("/some/other/scope"), fingerprint: None };
+    assert!(matches!(decide_checked(&s(&ws), Decision::Deny, "owner", seen), Err(DecideError::Changed(_))));
+    let now = evaluate(&s(&ws)).unwrap();
+    let seen = Seen { path: Some(&now.path), scope: Some(&now.scope), fingerprint: now.fingerprint.as_deref() };
+    let ok = decide_checked(&s(&ws), Decision::Once, "owner", seen).expect("same folder");
+    assert!(ok.granted);
+}
+
+/// Review item 14: a hold strips the folder's trust from pinned and
+/// wallet slot homes too, and deny sweeps every slot.
+#[test]
+fn hold_and_deny_strip_slot_homes() {
+    let e = env();
+    let ws = folder(&e.home, "slotstale");
+    let k = s(&ws);
+    put(&ws, ".claude/settings.json", HOOK);
+    decide(&k, Decision::Once, "owner", None).unwrap();
+    let shared = folder(&e.home, "shared-cl");
+    let slot = e.home.join("slot-a");
+    crate::llm_accounts::pins::prepare_claude_home(&slot, &shared, Some(&ws)).expect("trusted");
+    put(&ws, ".claude/settings.json", HOOK2);
+    let err = crate::llm_accounts::pins::prepare_claude_home(&slot, &shared, Some(&ws)).expect_err("held");
+    assert!(err.starts_with(PENDING), "{err}");
+    let v: serde_json::Value = serde_json::from_slice(&fs::read(slot.join(".claude.json")).unwrap()).unwrap();
+    assert!(v["projects"][&k].get("hasTrustDialogAccepted").is_none(), "stale slot trust stripped on hold: {v}");
+
+    // Deny sweeps every slot under ~/.k2/llm-accounts.
+    let c_slot = crate::llm_accounts::store::tool_dir(crate::llm_accounts::Tool::Claude).join("pin-1");
+    fs::create_dir_all(&c_slot).unwrap();
+    fs::write(c_slot.join(".claude.json"), serde_json::json!({ "projects": { k.clone(): { "hasTrustDialogAccepted": true } } }).to_string()).unwrap();
+    let x_slot = crate::llm_accounts::store::tool_dir(crate::llm_accounts::Tool::Codex).join("pin-2");
+    fs::create_dir_all(&x_slot).unwrap();
+    fs::write(x_slot.join("config.toml"), format!("[projects.\"{k}\"]\ntrust_level = \"trusted\"\n")).unwrap();
+    decide(&k, Decision::Deny, "owner", None).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&fs::read(c_slot.join(".claude.json")).unwrap()).unwrap();
+    assert!(v["projects"][&k].get("hasTrustDialogAccepted").is_none(), "{v}");
+    assert!(!fs::read_to_string(x_slot.join("config.toml")).unwrap().contains(&k));
+}
+
+/// Review B#6: each refusal carries its own random token; a made-up one
+/// maps to nothing.
+#[test]
+fn refusal_tokens_are_random_per_refusal() {
+    let e = env();
+    let ws = folder(&e.home, "rand");
+    put(&ws, ".claude/settings.json", HOOK);
+    let Outcome::Held(a) = spawn(&ws) else { panic!("held") };
+    let Outcome::Held(b) = spawn(&ws) else { panic!("held") };
+    let (ta, tb) = (a.to_error_string(), b.to_error_string());
+    assert_ne!(ta, tb, "same folder, two refusals, two tokens");
+    assert!(refusal_in_text(&ta).is_some() && refusal_in_text(&tb).is_some());
+    let forged = format!("[k2ft:{}]", "0".repeat(32));
+    assert!(refusal_in_text(&forged).is_none());
+}
+
 /// The error-string token survives prefixes, quote swaps and JSON
 /// escaping, and maps back to the full refusal.
 #[test]
@@ -354,6 +528,14 @@ fn upgrade_marks_risky_folders_once_and_records_k2_grants() {
             .unwrap();
         }
     }
+    // The person's own Claude entry (Claude's dialog leaves more keys) for
+    // `c`: never recorded as K2's (review B#9).
+    {
+        let text = fs::read_to_string(e.home.join(".claude.json")).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        v["projects"][s(&c)] = serde_json::json!({ "hasTrustDialogAccepted": true, "allowedTools": ["Read"], "projectOnboardingSeenCount": 2 });
+        fs::write(e.home.join(".claude.json"), v.to_string()).unwrap();
+    }
     let up = upgrade_pass();
     let mine: Vec<&UpgradedFolder> = up.iter().filter(|u| u.path == s(&a) || u.path == s(&b)).collect();
     assert_eq!(mine.len(), 2, "{up:?}");
@@ -365,10 +547,18 @@ fn upgrade_marks_risky_folders_once_and_records_k2_grants() {
         assert_eq!(st.k2_granted.claude, vec![s(p)], "0.46.3's grant is recorded as K2's");
         assert!(matches!(spawn(p), Outcome::Granted { clean: false, .. }), "nothing breaks today");
     }
+    let cst = status(&s(&c)).unwrap();
+    assert!(cst.k2_granted.claude.is_empty(), "the person's own entry isn't K2's: {:?}", cst.k2_granted);
+    assert!(cst.k2_granted.codex.is_empty() && cst.k2_granted.grok.is_empty(), "Codex/Grok entries look the same whoever wrote them");
     assert!(upgrade_pass().iter().all(|u| u.path != s(&a)), "the pass runs once");
     put(&a, ".claude/settings.json", HOOK2);
     assert!(matches!(spawn(&a), Outcome::Held(_)), "a later change asks again");
-    assert!(none_trusted(&e.home, &s(&a)));
+    assert!(!claude_trusted(&e.home, &s(&a)), "the entry recorded as K2's comes off");
+    // The Codex/Grok/Gemini entries can't be told from the person's own, so
+    // they stay, and the folder's status says they still trust it (B#9).
+    assert!(codex_trusted(&e.home, &s(&a)));
+    let st = status(&s(&a)).unwrap();
+    assert!(st.trusted_by.iter().any(|t| t.starts_with("Codex: ")), "{:?}", st.trusted_by);
 }
 
 /// T16: slot homes. A held folder is refused before the slot is written;

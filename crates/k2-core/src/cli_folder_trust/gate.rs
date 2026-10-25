@@ -30,9 +30,10 @@
 //! checkout (the grant keys), every folder between the cwd and the top
 //! (Codex reads each `.codex/config.toml` from the project root down to
 //! the cwd, Grok each hook folder, Gemini the nearest `.env`), and nested
-//! git repos up to [`NESTED_MAX_DEPTH`] levels below the cwd: Gemini and
-//! Cursor let a nested clone inherit the parent's trust, so K2 trusting
-//! the parent trusts them too. Nested findings are kept for the CLIs that
+//! git repos at any depth below each granted folder (at most
+//! [`NESTED_MAX_DIRS`] folders; over that, or an unreadable folder, is a
+//! finding): Gemini and Cursor let a nested clone inherit the parent's
+//! trust, so K2 trusting the parent trusts them too. Nested findings are kept for the CLIs that
 //! inherit (Gemini, Cursor, and Claude's settings files, which Cursor
 //! also runs). A clone made later is seen at the next scan; the daemon's
 //! watcher re-scans folders with live sessions.
@@ -60,8 +61,8 @@ use sha2::{Digest, Sha256};
 
 use super::scan::{self, Finding};
 use super::{
-    canonical_abs, current_home, git_common_workdir, grant_keys, is_refused_path, leftover_grants,
-    present_grants, revoke_grants, skip_unisolated_home, write_grants, GrantedKeys,
+    canonical_abs, current_home, grant_keys, is_refused_path, leftover_grants, main_checkout, revoke_grants,
+    revoke_slot_homes, skip_unisolated_home, upgrade_k2_grants, worktree_top, write_grants, GrantedKeys,
 };
 
 /// The 409 code while a card is waiting (or nobody decided yet).
@@ -70,10 +71,14 @@ pub const PENDING: &str = "folder_trust_pending";
 pub const DENIED: &str = "folder_trust_denied";
 /// Findings listed in a refusal or a card; the rest are counted.
 pub const MAX_LISTED: usize = 20;
-/// Nested repos: how deep below a scanned root, and how many folders.
-pub const NESTED_MAX_DEPTH: usize = 3;
-const NESTED_MAX_DIRS: usize = 400;
-const NESTED_SKIP: &[&str] = &["node_modules", "target", "vendor", "dist", "build", "venv", "__pycache__"];
+/// Nested repos: the walk below a granted folder looks at at most this many
+/// folders, at any depth. Over the budget, or a folder it can't read, is a
+/// finding ("not fully scanned"): the scan fails closed (review A-H1).
+pub const NESTED_MAX_DIRS: usize = 20_000;
+/// Folders the nested walk never enters: git's own data and package
+/// caches that can't hold a nested checkout's `.git` (npm, cargo and pip
+/// strip it).
+const NESTED_SKIP: &[&str] = &[".git", "node_modules", "target", "__pycache__", ".venv", "venv"];
 /// Folders between the cwd and its work tree top that are scanned.
 const MAX_BETWEEN: usize = 8;
 /// Tools whose settings a nested clone inherits through the parent's
@@ -129,6 +134,9 @@ pub enum Door {
     /// Look only: no grant written, nothing removed, no card (slot homes,
     /// heartbeat pre-checks, status).
     Check,
+    /// An agent's `k2 workspace trust request`: present the card when held,
+    /// but never write or remove a grant (review A-H1).
+    Request,
 }
 
 /// Who asks (for the card's place and wording, and the audit).
@@ -146,6 +154,10 @@ pub struct Actor {
     pub changed_live: bool,
     /// The harness about to start (`claude`, `codex`…), for the card's words.
     pub tool: Option<String>,
+    /// Who really asked, as the card names them (review B#4): the agent
+    /// whose passport made the request, a login, `the owner`, or "<agent>'s
+    /// heartbeat". `None`: the presenter works it out.
+    pub caller: Option<String>,
 }
 
 impl Actor {
@@ -229,14 +241,15 @@ pub struct Refusal {
     /// Denied: grants K2 didn't write that still trust this folder.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub leftover: Vec<String>,
+    /// A fresh random token per refusal (review B#6): what the error
+    /// string carries, so nothing can name a refusal it didn't get.
+    #[serde(skip)]
+    token: String,
 }
 
 impl Refusal {
-    /// The id the error-string token carries (state + scope).
     fn token_id(&self) -> String {
-        let h = format!("{:x}", Sha256::digest(self.scope.as_bytes()));
-        let state = if self.error == DENIED { "d" } else { "p" };
-        format!("{state}{}", &h[..20])
+        self.token.clone()
     }
 
     /// For the `Result<_, String>` spawn paths: the code, the sentence and
@@ -399,45 +412,92 @@ fn git_tracked(root: &Path, rel: &Path) -> bool {
     out.status.success()
 }
 
-/// The work tree that holds `cwd` (its own top for a worktree).
-fn own_worktree_top(cwd: &Path) -> Option<PathBuf> {
-    let repo = git2::Repository::discover(cwd).ok()?;
-    let w = repo.workdir()?;
-    canonical_abs(w).or_else(|| Some(w.to_path_buf()))
+/// What the nested-repo walk found below one granted folder.
+#[derive(Default)]
+struct NestedWalk {
+    repos: Vec<PathBuf>,
+    /// Why the walk is incomplete (over budget, a folder it couldn't
+    /// read): each one is a finding, so the folder isn't called clean.
+    problems: Vec<String>,
 }
 
-/// Git repos below `root` (a `.git` file or folder), up to
-/// [`NESTED_MAX_DEPTH`] levels, skipping hidden and build folders.
-fn nested_repos(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
+/// A `.git` FILE pointing into `<main>/.git/worktrees/…`: a worktree of the
+/// same repo (K2's and Claude Code's own worktrees), not a nested clone.
+fn same_repo_worktree(dir: &Path, main: Option<&Path>) -> bool {
+    let Some(main) = main else { return false };
+    let dotgit = dir.join(".git");
+    if !std::fs::symlink_metadata(&dotgit).map(|m| m.is_file()).unwrap_or(false) {
+        return false;
+    }
+    let Ok(text) = std::fs::read_to_string(&dotgit) else { return false };
+    let Some(gitdir) = text.lines().find_map(|l| l.trim().strip_prefix("gitdir:")).map(str::trim) else { return false };
+    let gitdir = if Path::new(gitdir).is_absolute() { PathBuf::from(gitdir) } else { dir.join(gitdir) };
+    match (gitdir.canonicalize(), main.join(".git").join("worktrees").canonicalize()) {
+        (Ok(g), Ok(w)) => g.starts_with(w),
+        _ => false,
+    }
+}
+
+/// Git repos below `root` (a `.git` file or folder), at any depth, never
+/// following a symlink. Worktrees of the same repo are skipped (not
+/// entered); everything else is entered, hidden folders included (a
+/// submodule may sit in one). Over [`NESTED_MAX_DIRS`] folders or a folder
+/// that can't be read makes the walk incomplete.
+fn nested_repos(root: &Path, main: Option<&Path>) -> NestedWalk {
+    let mut w = NestedWalk::default();
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
     let mut visited = 0usize;
-    while let Some((dir, depth)) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-        for e in rd.filter_map(|e| e.ok()) {
-            let Ok(ft) = e.file_type() else { continue };
+    while let Some(dir) = stack.pop() {
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            // A folder that isn't there (a cwd not made yet, one removed
+            // mid-walk) holds nothing to trust; anything else fails closed.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                w.problems.push(format!("can't read {} ({:?})", dir.display(), e.kind()));
+                continue;
+            }
+        };
+        for e in rd {
+            let e = match e {
+                Ok(e) => e,
+                Err(err) => {
+                    w.problems.push(format!("can't list {} ({:?})", dir.display(), err.kind()));
+                    continue;
+                }
+            };
+            let ft = match e.file_type() {
+                Ok(ft) => ft,
+                Err(err) => {
+                    w.problems.push(format!("can't read {} ({:?})", e.path().display(), err.kind()));
+                    continue;
+                }
+            };
             if !ft.is_dir() || ft.is_symlink() {
                 continue;
             }
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') || NESTED_SKIP.contains(&name.as_str()) {
+            if NESTED_SKIP.contains(&name.as_str()) {
                 continue;
             }
             visited += 1;
             if visited > NESTED_MAX_DIRS {
-                return out;
+                w.problems.push(format!("over {NESTED_MAX_DIRS} folders below {}", root.display()));
+                w.repos.sort();
+                return w;
             }
             let p = e.path();
             if std::fs::symlink_metadata(p.join(".git")).is_ok() {
-                out.push(p.clone());
+                if same_repo_worktree(&p, main) {
+                    continue;
+                }
+                w.repos.push(p.clone());
             }
-            if depth + 1 < NESTED_MAX_DEPTH {
-                stack.push((p, depth + 1));
-            }
+            stack.push(p);
         }
     }
-    out.sort();
-    out
+    w.repos.sort();
+    w
 }
 
 fn label_for(root: &Path, cwd: &Path) -> String {
@@ -459,9 +519,11 @@ pub fn evaluate_in(path: &str, home: &Path) -> Option<Evaluation> {
         return None;
     }
     let keys = grant_keys(&cwd, &home);
-    let top = own_worktree_top(&cwd);
+    let top = worktree_top(&cwd, &home);
     let in_git = top.is_some();
-    let common = git_common_workdir(&cwd);
+    // The main checkout only when a `.git` file's link is verified (A-M4);
+    // else the work tree is its own scope.
+    let common = main_checkout(&cwd, &home);
     let scope = common
         .clone()
         .or_else(|| top.clone())
@@ -520,7 +582,19 @@ pub fn evaluate_in(path: &str, home: &Path) -> Option<Evaluation> {
     // Only what the inheriting CLIs read.
     let mut seen_nested: Vec<PathBuf> = Vec::new();
     for base in keys.iter().map(PathBuf::from) {
-        for repo in nested_repos(&base) {
+        let walk = nested_repos(&base, common.as_deref());
+        for problem in &walk.problems {
+            // Fail closed: a walk that couldn't see everything is a finding.
+            let label = label_for(&base, &cwd);
+            prints.insert(format!("incomplete:{label}:{problem}"));
+            findings.push(Finding {
+                tool: "k2",
+                file: if label.is_empty() { ".".into() } else { label.trim_end_matches('/').to_string() },
+                what: "not-fully-scanned".into(),
+                detail: super::scan::clip_detail(&format!("nested repos not fully scanned: {problem}")),
+            });
+        }
+        for repo in walk.repos {
             if uniq.contains(&repo) || seen_nested.contains(&repo) {
                 continue;
             }
@@ -746,6 +820,7 @@ fn refusal(code: &str, eval: &Evaluation, pending: Option<&Pending>, leftover: V
         ticket: pending.and_then(|p| p.ticket.clone()),
         decide: decide_hint(&eval.path),
         leftover,
+        token: uuid::Uuid::new_v4().simple().to_string(),
     }
 }
 
@@ -755,7 +830,14 @@ fn refusal(code: &str, eval: &Evaluation, pending: Option<&Pending>, leftover: V
 /// (writing into `home`, default the process HOME), hold or deny. See the
 /// module doc for the rules.
 pub fn ensure(path: &str, door: Door, actor: &Actor, home: Option<&Path>) -> Outcome {
-    ensure_inner(path, door, actor, home, door != Door::Check)
+    ensure_inner(path, door, actor, home, !matches!(door, Door::Check | Door::Request))
+}
+
+/// An agent's ask (`k2 workspace trust request`, review A-H1): scan, and
+/// when the folder is held present the card. Never writes or removes a
+/// grant, whatever the folder's state.
+pub fn request(path: &str, actor: &Actor) -> Outcome {
+    ensure_inner(path, Door::Request, actor, None, false)
 }
 
 /// [`ensure`] without writing or removing any grant (a guest HOME that
@@ -815,6 +897,8 @@ fn ensure_inner(path: &str, door: Door, actor: &Actor, home: Option<&Path>, writ
         if write {
             let conn = db.lock();
             revoke_k2(&conn, &eval.scope, &home);
+            drop(conn);
+            revoke_slots(&eval, &home);
         }
         let leftover = leftover_grants(&home, &eval.keys, eval.in_git);
         return Outcome::Denied(refusal(DENIED, &eval, None, leftover));
@@ -848,14 +932,28 @@ fn ensure_inner(path: &str, door: Door, actor: &Actor, home: Option<&Path>, writ
     if write {
         let conn = db.lock();
         revoke_k2(&conn, &eval.scope, &home);
+        drop(conn);
+        revoke_slots(&eval, &home);
     }
     let fp = eval.fingerprint.clone().unwrap_or_default();
     let existing = row.as_ref().and_then(|r| r.pending.clone());
     let pending = match door {
-        Door::Add | Door::Spawn => Some(ask(&eval, actor, existing.as_ref(), &fp)),
+        Door::Add | Door::Spawn | Door::Request => Some(ask(&eval, actor, existing.as_ref(), &fp)),
         Door::Sweep | Door::Check => existing.filter(|p| p.fingerprint == fp),
     };
     Outcome::Held(refusal(PENDING, &eval, pending.as_ref(), Vec::new()))
+}
+
+/// Pinned-login and wallet slot homes keep their own trust entries; on
+/// hold and deny they lose this folder's too (review item 14). Only the
+/// process user's slots.
+fn revoke_slots(eval: &Evaluation, home: &Path) {
+    if !is_process_home(home) {
+        return;
+    }
+    for e in revoke_slot_homes(&eval.keys) {
+        log_debug!("[folder-trust] slot home: {e}");
+    }
 }
 
 /// Present the card unless one for this fingerprint is still open. Two
@@ -927,6 +1025,9 @@ pub struct DecideResult {
 /// removed) in the process HOME.
 pub fn decide(path: &str, decision: Decision, by: &str, card_fingerprint: Option<&str>) -> Result<DecideResult, String> {
     let home = current_home().ok_or("no HOME")?;
+    if skip_unisolated_home(&home) {
+        return Err("test HOME is not isolated".into());
+    }
     let home = canonical_abs(&home).unwrap_or(home);
     let eval = evaluate_in(path, &home).ok_or_else(|| format!("K2 never trusts {path} ($HOME, / or a parent of $HOME), so there is nothing to decide"))?;
     let fingerprint = match decision {
@@ -941,10 +1042,13 @@ pub fn decide(path: &str, decision: Decision, by: &str, card_fingerprint: Option
     log_debug!("[folder-trust] {} decided {} for {}", by, decision.as_str(), eval.scope);
     match decision {
         Decision::Deny => {
-            let errors = {
+            let mut errors = {
                 let conn = db.lock();
                 revoke_k2(&conn, &eval.scope, &home)
             };
+            if is_process_home(&home) {
+                errors.extend(revoke_slot_homes(&eval.keys));
+            }
             let leftover = leftover_grants(&home, &eval.keys, eval.in_git);
             let mut message = "Not trusted. K2 won't start AI tools in this folder.".to_string();
             if !leftover.is_empty() {
@@ -976,6 +1080,9 @@ pub fn decide(path: &str, decision: Decision, by: &str, card_fingerprint: Option
 /// K2's own grants come off when the folder is risky right now.
 pub fn reset(path: &str, by: &str) -> Result<StatusView, String> {
     let home = current_home().ok_or("no HOME")?;
+    if skip_unisolated_home(&home) {
+        return Err("test HOME is not isolated".into());
+    }
     let home = canonical_abs(&home).unwrap_or(home);
     let eval = evaluate_in(path, &home).ok_or_else(|| format!("K2 never trusts {path}, so there is nothing to reset"))?;
     let db = crate::db::shared();
@@ -986,8 +1093,55 @@ pub fn reset(path: &str, by: &str) -> Result<StatusView, String> {
             revoke_k2(&conn, &eval.scope, &home);
         }
     }
+    if !eval.is_clean() {
+        revoke_slots(&eval, &home);
+    }
     log_debug!("[folder-trust] {by} reset {}", eval.scope);
     status(path)
+}
+
+/// What the person saw when they chose: the card's (or the CLI's status)
+/// folder, scope and fingerprint.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Seen<'a> {
+    pub path: Option<&'a str>,
+    pub scope: Option<&'a str>,
+    pub fingerprint: Option<&'a str>,
+}
+
+/// Why [`decide_checked`] didn't record a decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecideError {
+    /// The folder isn't what the person saw any more (path, scope or
+    /// settings): nothing was recorded; ask again.
+    Changed(String),
+    Failed(String),
+}
+
+/// [`decide`] only when the folder still is what the person saw (reviews
+/// B#2, B#3): it resolves to the same path and scope, and its fingerprint
+/// is the one shown. This holds for Trust it, Always and Don't trust
+/// alike; on a mismatch nothing is recorded.
+pub fn decide_checked(path: &str, decision: Decision, by: &str, seen: Seen<'_>) -> Result<DecideResult, DecideError> {
+    let home = current_home().ok_or_else(|| DecideError::Failed("no HOME".into()))?;
+    let home = canonical_abs(&home).unwrap_or(home);
+    let eval = evaluate_in(path, &home)
+        .ok_or_else(|| DecideError::Failed(format!("K2 never trusts {path} ($HOME, / or a parent of $HOME), so there is nothing to decide")))?;
+    if let Some(p) = seen.path {
+        if p != eval.path {
+            return Err(DecideError::Changed(format!("{p} now resolves to {}", eval.path)));
+        }
+    }
+    if let Some(s) = seen.scope {
+        if s != eval.scope {
+            return Err(DecideError::Changed(format!("{} now belongs to {} (was {s})", eval.path, eval.scope)));
+        }
+    }
+    if seen.fingerprint != eval.fingerprint.as_deref() {
+        let now = if eval.is_clean() { "it has no risky settings now".to_string() } else { format!("{} finding(s) now", eval.findings.len()) };
+        return Err(DecideError::Changed(format!("the settings in {} changed since you saw them ({now})", eval.path)));
+    }
+    decide(&eval.path, decision, by, seen.fingerprint).map_err(DecideError::Failed)
 }
 
 /// One folder's trust as Settings and `k2 workspace trust status` show it.
@@ -1062,13 +1216,7 @@ pub fn scope_for(path: &str) -> Option<String> {
     if is_refused_path(&cwd, &home) {
         return None;
     }
-    Some(
-        git_common_workdir(&cwd)
-            .or_else(|| own_worktree_top(&cwd))
-            .unwrap_or(cwd)
-            .to_string_lossy()
-            .to_string(),
-    )
+    Some(main_checkout(&cwd, &home).unwrap_or(cwd).to_string_lossy().to_string())
 }
 
 /// The fingerprint a pending card for `scope` was presented for (the
@@ -1149,38 +1297,61 @@ fn upgrade_rows() -> Vec<UpgradedFolder> {
     for old in raw {
         let eval = evaluate_in(&old.scope, &home);
         let conn = db.lock();
-        let Some(eval) = eval else {
-            let _ = conn.execute("DELETE FROM folder_trust WHERE scope = ?1 AND upgrade = 1", params![old.scope]);
-            continue;
-        };
-        let present = present_grants(&home, &eval.keys);
-        if eval.scope != old.scope {
-            let _ = conn.execute("DELETE FROM folder_trust WHERE scope = ?1 AND upgrade = 1", params![old.scope]);
-        }
-        if ensure_row(&conn, &eval.scope).is_err() {
+        // One row at a time inside a savepoint (review B#9): a row ends
+        // `upgrade = 0` only with all of its marks, so a crash or an error
+        // leaves it to be redone, and redoing is idempotent.
+        if let Err(e) = conn.execute_batch("SAVEPOINT folder_trust_upgrade") {
+            log_debug!("[folder-trust] upgrade {}: savepoint: {e}", old.scope);
             continue;
         }
-        let _ = conn.execute("UPDATE folder_trust SET upgrade = 0 WHERE scope = ?1", params![eval.scope]);
-        if let Err(e) = record_granted(&conn, &eval.scope, &present) {
-            log_debug!("[folder-trust] upgrade {}: {e}", eval.scope);
-        }
-        let current = load_row(&conn, &eval.scope).ok().flatten();
-        if !eval.is_clean() && current.as_ref().and_then(|r| r.decision).is_none() {
-            if let Err(e) = set_decision(&conn, &eval.scope, Some(Decision::Once), eval.fingerprint.as_deref(), Some("upgrade")) {
-                log_debug!("[folder-trust] upgrade {}: {e}", eval.scope);
-                continue;
+        let step = upgrade_one(&conn, &home, &old, eval.as_ref());
+        match step {
+            Ok(found) => {
+                if let Err(e) = conn.execute_batch("RELEASE folder_trust_upgrade") {
+                    log_debug!("[folder-trust] upgrade {}: release: {e}", old.scope);
+                    continue;
+                }
+                if let Some(f) = found {
+                    if !out.iter().any(|u: &UpgradedFolder| u.scope == f.scope) {
+                        out.push(f);
+                    }
+                }
             }
-            if !out.iter().any(|u: &UpgradedFolder| u.scope == eval.scope) {
-                out.push(UpgradedFolder {
-                    path: eval.path.clone(),
-                    scope: eval.scope.clone(),
-                    more: eval.findings.len().saturating_sub(MAX_LISTED),
-                    findings: eval.findings.iter().take(MAX_LISTED).cloned().collect(),
-                });
+            Err(e) => {
+                log_debug!("[folder-trust] upgrade {}: {e} (left for the next pass)", old.scope);
+                let _ = conn.execute_batch("ROLLBACK TO folder_trust_upgrade; RELEASE folder_trust_upgrade");
             }
         }
     }
     out
+}
+
+/// One upgrade row's marks (inside the caller's savepoint).
+fn upgrade_one(conn: &Connection, home: &Path, old: &Row, eval: Option<&Evaluation>) -> Result<Option<UpgradedFolder>, String> {
+    let db_err = |e: rusqlite::Error| format!("folder_trust write: {e}");
+    let Some(eval) = eval else {
+        conn.execute("DELETE FROM folder_trust WHERE scope = ?1 AND upgrade = 1", params![old.scope]).map_err(db_err)?;
+        return Ok(None);
+    };
+    if eval.scope != old.scope {
+        conn.execute("DELETE FROM folder_trust WHERE scope = ?1 AND upgrade = 1", params![old.scope]).map_err(db_err)?;
+    }
+    ensure_row(conn, &eval.scope)?;
+    // Only entries that look like K2 wrote them (never the person's own).
+    record_granted(conn, &eval.scope, &upgrade_k2_grants(home, &eval.keys))?;
+    let current = load_row(conn, &eval.scope)?;
+    let mut found = None;
+    if !eval.is_clean() && current.as_ref().and_then(|r| r.decision).is_none() {
+        set_decision(conn, &eval.scope, Some(Decision::Once), eval.fingerprint.as_deref(), Some("upgrade"))?;
+        found = Some(UpgradedFolder {
+            path: eval.path.clone(),
+            scope: eval.scope.clone(),
+            more: eval.findings.len().saturating_sub(MAX_LISTED),
+            findings: eval.findings.iter().take(MAX_LISTED).cloned().collect(),
+        });
+    }
+    conn.execute("UPDATE folder_trust SET upgrade = 0 WHERE scope = ?1", params![eval.scope]).map_err(db_err)?;
+    Ok(found)
 }
 
 #[cfg(test)]

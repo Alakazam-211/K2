@@ -1007,6 +1007,18 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         s.is_child_alive() && live_program_matches(s.program.as_deref(), command.as_deref())
     });
 
+    if let Some(existing) = existing.as_ref() {
+        // Folder trust (review A-M1): attaching to a live AI session is
+        // refused, and the session stopped, once its folder no longer
+        // passes the gate (a live change held it, or "Don't trust").
+        let live_cwd = existing.cwd.as_ref().map(|c| c.to_string_lossy().to_string()).unwrap_or_else(|| req.cwd.clone());
+        let env_home = req.env.as_ref().and_then(|e| e.get("HOME")).map(String::as_str);
+        if let Err(r) = crate::folder_trust::gate_spawn(existing.program.as_deref(), &existing.args, &live_cwd, env_home, project_id.as_deref(), "v2_spawn") {
+            v2_session_map::unregister(&req.agent_name);
+            existing.kill();
+            return HandlerResult { status: "409 Conflict", body: r.to_json().to_string() };
+        }
+    }
     if let Some(existing) = existing {
         // Sidecar refresh: a later v2/spawn may attach to this live PTY.
         // Do not evict a matching program because the body is the tab's
@@ -1364,6 +1376,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     // decide. A guest HOME that isn't on the host gets no host write.
     if let Err(r) = crate::folder_trust::gate_spawn(
         cfg.program.as_deref(),
+        &cfg.args,
         &req.cwd,
         cfg.env.get("HOME").map(String::as_str),
         project_id.as_deref(),

@@ -566,9 +566,14 @@ pub fn handle_ensure_pinned_chat(body: &[u8]) -> HandlerResult {
             status: "200 OK",
             body: out.to_json().to_string(),
         },
-        Err(e) => HandlerResult {
-            status: "400 Bad Request",
-            body: serde_json::json!({ "error": e }).to_string(),
+        // Folder trust (SS11): a held or denied folder answers 409 with how
+        // to decide (spawn route; review B#6).
+        Err(e) => match crate::folder_trust::refusal_response(&e) {
+            Some(r) => HandlerResult { status: r.status, body: r.body },
+            None => HandlerResult {
+                status: "400 Bad Request",
+                body: serde_json::json!({ "error": e }).to_string(),
+            },
         },
     }
 }

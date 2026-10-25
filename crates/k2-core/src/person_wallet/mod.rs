@@ -644,6 +644,11 @@ pub fn prepare_person_home(tool: Tool, item_id: &str, cwd: Option<&Path>) -> Res
             // entries, but a held or denied folder still gets no session.
             if let Some(c) = cwd {
                 if let Some(r) = crate::cli_folder_trust::gate::check(&c.to_string_lossy()).refusal() {
+                    // And no stale trust left in the person's home (item 14).
+                    let keys = crate::cli_folder_trust::gate::evaluate(&c.to_string_lossy())
+                        .map(|e| e.keys)
+                        .unwrap_or_else(|| vec![c.to_string_lossy().to_string()]);
+                    llm_accounts::pins::strip_codex_slot_trust(&slot, &keys).map_err(WalletError::Io)?;
                     return Err(WalletError::Io(r.to_error_string()));
                 }
             }

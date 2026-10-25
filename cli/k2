@@ -31462,9 +31462,11 @@ owner: a card on Thread (Trust it / Always trust this folder / Don't trust).
                                     changed or denied, with the findings
   k2 workspace trust request <folder> --why "…"
                                     Agents: present the card (only asks)
-  k2 workspace trust <folder> --yes|--always|--no
+  k2 workspace trust <folder> --yes|--always|--no [--fingerprint <fp>]
                                     Owner: Trust it (this version) / Always
-                                    trust this folder / Don't trust
+                                    trust this folder / Don't trust, for the
+                                    settings shown (status, or the ticket's
+                                    fingerprint); refused if they changed
   k2 workspace trust reset <folder> Owner: back to undecided (asks again)
 
 Deciding is the owner's: an agent or a K2 terminal gets exit 3 (the card is
@@ -31594,12 +31596,14 @@ cmd_workspace_trust() {
         decision="reset"
         shift
     fi
-    local usage="Usage: k2 workspace trust <folder> --yes|--always|--no   (or: reset <folder>)"
+    local usage="Usage: k2 workspace trust <folder> --yes|--always|--no [--fingerprint <fp>]   (or: reset <folder>)"
+    local fingerprint=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --yes)    [ "$decision" != "reset" ] || { echo "$usage" >&2; exit 2; }; decision="once"; shift ;;
             --always) [ "$decision" != "reset" ] || { echo "$usage" >&2; exit 2; }; decision="always"; shift ;;
             --no)     [ "$decision" != "reset" ] || { echo "$usage" >&2; exit 2; }; decision="deny"; shift ;;
+            --fingerprint) [ $# -ge 2 ] && [ "$decision" != "reset" ] || { echo "$usage" >&2; exit 2; }; fingerprint="$2"; shift 2 ;;
             -*) echo "Unknown flag: $1" >&2; echo "$usage" >&2; exit 2 ;;
             *) [ -z "$folder" ] || { echo "$usage" >&2; exit 2; }; folder="$1"; shift ;;
         esac
@@ -31621,7 +31625,18 @@ cmd_workspace_trust() {
         resp=$(cli_request_post "$endpoint" "path=$(urlencode "$folder")")
         _workspace_trust_print "$resp" status
     else
-        resp=$(cli_request_post "$endpoint" "path=$(urlencode "$folder")" "decision=$decision")
+        # The daemon decides only for the settings the owner saw (review
+        # B#3): the ticket's --fingerprint, or the one status shows now
+        # (printed first, so the owner sees what they decide on).
+        if [ -z "$fingerprint" ]; then
+            local st
+            st=$(cli_request "/cli/folder-trust/status" "path=$(urlencode "$folder")")
+            _workspace_trust_print "$st" status
+            fingerprint=$(printf '%s' "$st" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+print(d.get("fingerprint") or "none")')
+        fi
+        resp=$(cli_request_post "$endpoint" "path=$(urlencode "$folder")" "decision=$decision" "fingerprint=$(urlencode "$fingerprint")")
         _workspace_trust_print "$resp" decide
     fi
 }
@@ -36344,8 +36359,10 @@ WHAT K2 DOES
   with settings that make those tools run commands or send logins
   elsewhere when they start (hooks, apiKeyHelper, env redirects, MCP
   servers, Codex/Grok project config, Cursor worktree scripts, a VS Code
-  folderOpen task, git hooks/fsmonitor) waits for the owner: a card on
-  Thread with Trust it / Always trust this folder / Don't trust.
+  folderOpen task, git hooks/fsmonitor, a launch: block in the agent's
+  own .k2/agent file) waits for the owner: a card on Thread with Trust it /
+  Always trust this folder / Don't trust. Every program K2 starts there is
+  gated (wrappers and bash -c included); only a plain shell tab isn't.
 
   Trust it      this version only; K2 asks again when those settings change
   Always        any version; undo in Settings → Workspaces → Folder trust
@@ -36360,17 +36377,24 @@ WHAT K2 DOES
 YOU (AN AGENT)
   k2 workspace trust status [<folder>]        what K2 found, the state
   k2 workspace trust request <folder> --why "…"   ask: presents the card
-  You never decide: k2 workspace trust <folder> --yes|--always|--no is the
-  owner's (you get exit 3; the card is the request). Don't edit the trust
-  files (~/.claude.json, ~/.codex/config.toml, ~/.gemini/trustedFolders.json,
+  Both work on your own workspace's folder only. request only asks: it
+  never trusts anything. You never decide: k2 workspace trust <folder>
+  --yes|--always|--no is the owner's (you get exit 3; the card is the
+  request). Don't edit the trust files (~/.claude.json,
+  ~/.codex/config.toml, ~/.gemini/trustedFolders.json,
   ~/.grok/trusted_folders.toml, ~/.cursor/projects/…) to get around it.
 
 RE-SCAN ON CHANGE
-  Every spawn scans. Claude also reloads hooks mid-session, so K2 watches
-  the risky files of every folder where it runs a session: when they
-  change, a "Trust it" folder is undecided again, K2's grants come off and
-  the owner gets the card. Claude may load a new hook before K2 sees the
-  change; "Don't trust" stops K2's sessions there.
+  Every spawn, and every reuse of a running session, scans. Claude also
+  reloads hooks mid-session, so K2 watches the risky files of every folder
+  where it runs a session: when they change, a "Trust it" folder is
+  undecided again, K2's grants come off, K2 stops its sessions there and
+  the owner gets the card. The window: K2 sees a change in a watched
+  config folder within about a second, and a file deeper under one (a
+  script under .claude/, a nested clone) within a minute. Claude may load
+  a new hook before that, so a running session can run new settings in
+  that window. "Trust it" and the CLI apply only to the settings shown; if
+  they changed in between, nothing is decided and K2 asks again.
 
 WHAT IT CAN'T DO (honest limits)
   - It is not a wall against an agent running as the same OS user: such an
@@ -36380,8 +36404,9 @@ WHAT IT CAN'T DO (honest limits)
   - It doesn't look at CLAUDE.md / AGENTS.md text (prompt injection), npm or
     make scripts (agents run those anyway), or your user-level settings.
   - Gemini and Cursor let a nested clone inherit a trusted parent's trust.
-    K2 scans nested repos up to 3 levels below a folder it trusts; one
-    cloned later is seen at the next scan, not before.
+    K2 scans nested repos at any depth below a folder it trusts (over 20,000
+    folders, or a folder it can't read, counts as a finding); one cloned
+    later is seen at the next scan, not before.
   - Gemini reads a .env from any parent folder; K2 scans the folders from
     the session's folder up to its repo top, not above it.
   - $HOME, / and parents of $HOME are never trusted by K2, so they aren't

@@ -256,6 +256,32 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         if existing.is_child_alive()
             && live_program_matches(existing.program.as_deref(), req.command.as_deref())
         {
+            // Folder trust (review A-M1): a live session is reused only
+            // while its folder still passes the gate. A change that held
+            // the folder again (or "Don't trust") stops it instead of
+            // handing it more work.
+            let live_cwd = existing.cwd.as_ref().map(|c| c.to_string_lossy().to_string()).unwrap_or_else(|| req.cwd.clone());
+            if let Err(r) = crate::folder_trust::gate_spawn(
+                existing.program.as_deref(),
+                &existing.args,
+                &live_cwd,
+                req.env.get("HOME").map(String::as_str),
+                req.project_id.as_deref(),
+                "spawn",
+            ) {
+                log_debug!(
+                    "[daemon/spawn] not reusing session={} canonical_key={}: {} (stopped)",
+                    existing.session_id,
+                    canonical_key,
+                    r.error
+                );
+                v2_session_map::unregister(&canonical_key);
+                existing.kill();
+                if r.error == k2_core::cli_folder_trust::gate::PENDING {
+                    crate::folder_trust::hold_spawn(&r.scope, &req);
+                }
+                return Err(r.to_error_string());
+            }
             log_debug!(
                 "[daemon/spawn] v2 reuse session={} canonical_key={} program={:?}",
                 existing.session_id,
@@ -285,14 +311,15 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         existing.kill();
     }
 
-    // Folder-trust gate (prd-security-sweep-0464-v1 SS11). Every harness
-    // spawn (canonical, heartbeat, wake, sidecar, agents launch, terminal,
-    // `claude -p` included: print mode runs project hooks with no trust
-    // dialog) asks first, BEFORE the login slot home is prepared or any
+    // Folder-trust gate (prd-security-sweep-0464-v1 SS11). Every spawn but
+    // a plain shell (canonical, heartbeat, wake, sidecar, agents launch,
+    // terminal; `claude -p`, wrappers and launch-block commands included,
+    // review A-H2) asks first, BEFORE the login slot home is prepared or any
     // grant is written. Held (a card is waiting): the request is queued and
     // retried once when the person trusts the folder. Denied: no harness.
     if let Err(r) = crate::folder_trust::gate_spawn(
         req.command.as_deref(),
+        req.args.as_deref().unwrap_or(&[]),
         &req.cwd,
         req.env.get("HOME").map(String::as_str),
         req.project_id.as_deref(),

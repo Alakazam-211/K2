@@ -939,7 +939,13 @@ fn handle_new(
             launch_prompt: launch_prompt.clone(),
             label: Some(display_name.clone()),
         })
-        .map_err(|e| err("spawn_failed", 500, e))?;
+        // Folder trust (SS11): held/denied is its own 409, with the message
+        // that says how the owner decides.
+        .map_err(|e| match k2_core::cli_folder_trust::gate::refusal_in_text(&e) {
+            Some(r) if r.error == k2_core::cli_folder_trust::gate::DENIED => err("folder_trust_denied", 409, r.message),
+            Some(r) => err("folder_trust_pending", 409, r.message),
+            None => err("spawn_failed", 500, e),
+        })?;
 
     // Tab-row sidecar columns (SC38).
     {

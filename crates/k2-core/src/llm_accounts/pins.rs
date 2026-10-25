@@ -433,11 +433,11 @@ pub fn materialize_codex_shadow(slot: &Path, shared: &Path) -> Result<(), String
 /// denied → the shadow `config.toml` is copied without the cwd's
 /// `[projects."<cwd>"]` tables, then refused.
 pub fn materialize_codex_shadow_for(slot: &Path, shared: &Path, cwd: Option<&Path>) -> Result<(), String> {
-    let allowed = slot_trust(cwd)?;
-    let strip: Vec<String> = match (allowed, cwd) {
-        (false, Some(c)) => slot_keys(c),
-        _ => Vec::new(),
+    let refused = match (slot_trust(cwd), cwd) {
+        (SlotTrust::Refused(err), Some(c)) => Some((err, slot_keys(c))),
+        _ => None,
     };
+    let strip: Vec<String> = refused.as_ref().map(|(_, k)| k.clone()).unwrap_or_default();
     std::fs::create_dir_all(shared).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(shared.join("sessions")).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(slot).map_err(|e| e.to_string())?;
@@ -500,8 +500,8 @@ pub fn materialize_codex_shadow_for(slot: &Path, shared: &Path, cwd: Option<&Pat
         }
         symlink(&src, &dst).map_err(|e| e.to_string())?;
     }
-    if let (false, Some(c)) = (allowed, cwd) {
-        return Err(denied_error(c));
+    if let Some((err, _)) = refused {
+        return Err(err);
     }
     Ok(())
 }
@@ -516,12 +516,22 @@ pub const CLAUDE_SHARED_ENTRIES: &[&str] =
 /// store too. `Ok(true)`: the cwd may be trusted in the slot. `Ok(false)`:
 /// "Don't trust": strip the cwd from the slot, then refuse. `Err`: held
 /// (a card is waiting), nothing in the slot is touched.
-fn slot_trust(cwd: Option<&Path>) -> Result<bool, String> {
-    let Some(cwd) = cwd else { return Ok(true) };
+enum SlotTrust {
+    Allowed,
+    /// Held or denied: the error string to return after stripping.
+    Refused(String),
+}
+
+/// Held and denied both strip the cwd's trust from the slot (review item
+/// 14: a slot keeps stale trust otherwise), then refuse. Nothing else in
+/// the slot is touched.
+fn slot_trust(cwd: Option<&Path>) -> SlotTrust {
+    let Some(cwd) = cwd else { return SlotTrust::Allowed };
     match crate::cli_folder_trust::gate::check(&cwd.to_string_lossy()) {
-        crate::cli_folder_trust::gate::Outcome::Held(r) => Err(r.to_error_string()),
-        crate::cli_folder_trust::gate::Outcome::Denied(_) => Ok(false),
-        _ => Ok(true),
+        crate::cli_folder_trust::gate::Outcome::Held(r) | crate::cli_folder_trust::gate::Outcome::Denied(r) => {
+            SlotTrust::Refused(r.to_error_string())
+        }
+        _ => SlotTrust::Allowed,
     }
 }
 
@@ -539,12 +549,9 @@ fn slot_keys(cwd: &Path) -> Vec<String> {
 /// slot is touched; a denied one has the cwd's trust stripped from the
 /// slot, then is refused (409 `folder_trust_denied`).
 pub fn prepare_claude_home(slot: &Path, shared: &Path, cwd: Option<&Path>) -> Result<(), String> {
-    let allowed = slot_trust(cwd)?;
-    if !allowed {
-        if let Some(cwd) = cwd {
-            strip_claude_slot_trust(slot, &slot_keys(cwd))?;
-            return Err(denied_error(cwd));
-        }
+    if let (SlotTrust::Refused(err), Some(cwd)) = (slot_trust(cwd), cwd) {
+        strip_claude_slot_trust(slot, &slot_keys(cwd))?;
+        return Err(err);
     }
     std::fs::create_dir_all(slot).map_err(|e| e.to_string())?;
     for name in CLAUDE_SHARED_ENTRIES {
@@ -586,14 +593,6 @@ pub fn prepare_claude_home(slot: &Path, shared: &Path, cwd: Option<&Path>) -> Re
     Ok(())
 }
 
-/// The denied refusal's error string for `cwd` (the gate's own text).
-fn denied_error(cwd: &Path) -> String {
-    match crate::cli_folder_trust::gate::check(&cwd.to_string_lossy()) {
-        crate::cli_folder_trust::gate::Outcome::Denied(r) | crate::cli_folder_trust::gate::Outcome::Held(r) => r.to_error_string(),
-        _ => format!("{}: K2 won't start AI tools in {}", crate::cli_folder_trust::gate::DENIED, cwd.display()),
-    }
-}
-
 /// Remove `hasTrustDialogAccepted` for `keys` from a slot's `.claude.json`.
 pub fn strip_claude_slot_trust(slot: &Path, keys: &[String]) -> Result<(), String> {
     let path = slot.join(".claude.json");
@@ -612,6 +611,23 @@ pub fn strip_claude_slot_trust(slot: &Path, keys: &[String]) -> Result<(), Strin
         store::write_private(&path, &bytes).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Drop `[projects."<key>"]` for `keys` from a slot's Codex `config.toml`
+/// (a shadow copy or a person's private home). Missing file: nothing to do.
+pub fn strip_codex_slot_trust(slot: &Path, keys: &[String]) -> Result<(), String> {
+    let path = slot.join("config.toml");
+    let Ok(text) = std::fs::read_to_string(&path) else { return Ok(()) };
+    let has_any = text
+        .parse::<toml::Value>()
+        .ok()
+        .and_then(|v| v.get("projects").and_then(|p| p.as_table()).map(|t| keys.iter().any(|k| t.contains_key(k.as_str()))))
+        .unwrap_or(false);
+    if !has_any {
+        return Ok(());
+    }
+    let stripped = strip_codex_projects(&text, keys)?;
+    store::write_private(&path, stripped.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Drop `[projects."<key>"]` for `keys` from a Codex config text.

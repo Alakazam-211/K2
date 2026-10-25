@@ -1307,7 +1307,7 @@ fn room_lines(project_id: &str) -> Result<Vec<RoomPathScope>, CliResponse> {
 /// folder), plus the caller's own drop scope.
 fn room_roots(lines: &[RoomPathScope], own: &RoomPathScope) -> RoomPathScope {
     let mut roots = RoomPathScope::default();
-    let mut push = |list: &mut Vec<String>, f: &String| {
+    let push = |list: &mut Vec<String>, f: &String| {
         if !list.contains(f) {
             list.push(f.clone());
         }

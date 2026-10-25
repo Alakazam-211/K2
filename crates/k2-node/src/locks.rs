@@ -42,6 +42,54 @@ pub fn scan(paths: &[String], smoke: Option<&str>, we_own_smoke: bool, now: i64)
     out
 }
 
+/// The pid a k2-node smoke lock names (`k2-node pid=<n> …`); `None` for
+/// anything else (another tool's lock).
+pub fn smoke_lock_pid(body: &str) -> Option<i32> {
+    let rest = body.strip_prefix("k2-node pid=")?;
+    rest.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok().filter(|p: &i32| *p > 0)
+}
+
+/// Is `pid` a live k2-node process? (A lock naming a dead pid, or a pid
+/// reused by another program, is a leftover.) This very process counts as
+/// live: the lock is ours, or a sibling node's in the same process (tests).
+fn live_k2_node(pid: i32) -> bool {
+    if pid as u32 == std::process::id() {
+        return true;
+    }
+    // SAFETY: signal 0 only checks the pid exists.
+    if unsafe { libc::kill(pid, 0) } != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+        return false;
+    }
+    process_name(pid).is_some_and(|n| n == "k2-node")
+}
+
+#[cfg(target_os = "linux")]
+fn process_name(pid: i32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim().to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_name(pid: i32) -> Option<String> {
+    let out = std::process::Command::new("/bin/ps").args(["-o", "comm=", "-p", &pid.to_string()]).output().ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!s.is_empty()).then(|| s.rsplit('/').next().unwrap_or(&s).to_string())
+}
+
+/// A k2-node smoke lock left by a k2-node that's gone (killed mid-job; the
+/// file is in /var/tmp, which survives a reboot): its pid isn't a live
+/// k2-node. Removed, so it doesn't hold this node for 12 h as a foreign
+/// lock. Another tool's lock, or a live k2-node's, is never touched.
+/// Returns whether it removed one.
+pub fn clear_stale_smoke(path: &str) -> bool {
+    let p = Path::new(path);
+    let Ok(body) = std::fs::read_to_string(p) else { return false };
+    let Some(pid) = smoke_lock_pid(&body) else { return false };
+    if live_k2_node(pid) {
+        return false;
+    }
+    std::fs::remove_file(p).is_ok()
+}
+
 /// The node's own smoke lock while jobs run.
 #[derive(Debug, Default)]
 pub struct SmokeLock {
@@ -114,6 +162,56 @@ mod tests {
         let s = scan(&[old.display().to_string()], None, false, now);
         assert_eq!(s.holding, None);
         assert!(old.exists(), "stale locks are never deleted");
+    }
+
+    /// Review round 3: a k2-node smoke lock whose pid is dead, or reused by
+    /// another program, is a leftover and goes; another tool's lock and a
+    /// live k2-node's stay.
+    #[test]
+    fn a_dead_k2_nodes_smoke_lock_is_cleared_and_others_stay() {
+        let d = crate::util::temp_dir("smoke-stale");
+        let p = d.join("k2-smoke.lock");
+        let ps = p.display().to_string();
+        assert_eq!(smoke_lock_pid("k2-node pid=4242 job=j started=1 purpose=x\n"), Some(4242));
+        assert_eq!(smoke_lock_pid("builder smoke\n"), None);
+        // A dead pid.
+        let mut c = std::process::Command::new("/bin/sh").args(["-c", "exit 0"]).spawn().unwrap();
+        let dead = c.id() as i32;
+        c.wait().unwrap();
+        std::fs::write(&p, format!("k2-node pid={dead} job=j started=1 purpose=k2 compute job\n")).unwrap();
+        assert!(clear_stale_smoke(&ps), "a dead pid's lock goes");
+        assert!(!p.exists());
+        // A pid reused by another program.
+        let mut other = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        std::fs::write(&p, format!("k2-node pid={} job=j started=1 purpose=k2 compute job\n", other.id())).unwrap();
+        assert!(clear_stale_smoke(&ps), "a pid that isn't k2-node goes");
+        let _ = other.kill();
+        let _ = other.wait();
+        // This very process's pid: ours (or a sibling node's): kept.
+        std::fs::write(&p, format!("k2-node pid={} job=j started=1 purpose=x\n", std::process::id())).unwrap();
+        assert!(!clear_stale_smoke(&ps));
+        assert!(p.exists());
+        // Another tool's lock: untouched.
+        std::fs::write(&p, "builder subagent smoke\n").unwrap();
+        assert!(!clear_stale_smoke(&ps));
+        assert!(p.exists());
+        std::fs::remove_file(&p).unwrap();
+        // A live k2-node (Linux: comm is the exec'd name): untouched.
+        if cfg!(target_os = "linux") {
+            let link = d.join("k2-node");
+            std::os::unix::fs::symlink("/bin/sleep", &link).unwrap();
+            let mut node = std::process::Command::new(&link).arg("30").spawn().unwrap();
+            let t0 = std::time::Instant::now();
+            while process_name(node.id() as i32).as_deref() != Some("k2-node") {
+                assert!(t0.elapsed() < std::time::Duration::from_secs(5), "the stand-in never showed as k2-node");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            std::fs::write(&p, format!("k2-node pid={} job=j started=1 purpose=x\n", node.id())).unwrap();
+            assert!(!clear_stale_smoke(&ps), "a live k2-node's lock stays");
+            assert!(p.exists());
+            let _ = node.kill();
+            let _ = node.wait();
+        }
     }
 
     #[test]

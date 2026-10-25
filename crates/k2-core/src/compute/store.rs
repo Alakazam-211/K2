@@ -74,6 +74,23 @@ impl NodeRow {
     pub fn owned_for_secrets(&self) -> bool {
         !self.is_tenant() && self.owner_label.is_none()
     }
+
+    /// The node says this server is its owner now while this server still
+    /// has it as a tenant (an owner change on the node, prd-macos-tenant-
+    /// compute-v1 §6.3): its last offer's share view says `owner`, or (an
+    /// offer with no view) it lists a feature only the owner's session
+    /// gets. Only a claim: the node is never taken at its word. The row
+    /// turns owned only through [`mark_node_owned`], after the person here
+    /// confirms (`POST /cli/compute/nodes/take-owner`).
+    pub fn owner_claim(&self) -> bool {
+        if !self.is_tenant() {
+            return false;
+        }
+        match self.last_offer.as_ref() {
+            Some(o) => super::share::offer_role(o) == Some(super::proto::share::Role::Owner),
+            None => false,
+        }
+    }
 }
 
 const NODE_COLS: &str = "id, name, fingerprint, public_key_pem, os, arch, labels_json, state, enrolled_via, \
@@ -1585,6 +1602,84 @@ mod tests {
         let bad = crate::compute::share::ServerRow { slot: 9, ..rows[1].clone() };
         assert!(replace_node_servers(&c, "n1", &[bad], 90).is_err(), "slot 0–7 is checked by the table");
         assert_eq!(node_servers(&c, "n1").len(), 1, "a failed refresh keeps the last good list");
+    }
+
+    /// Security review (cross-branch): a tenant row never turns owned by
+    /// anything its node says: not a share view saying `owner`, not an
+    /// offer with no view and owner-only features (the old MT36 path). It
+    /// is only a claim until `mark_node_owned` (the person's take-over), which
+    /// also clears the owner label.
+    #[test]
+    fn a_tenant_row_never_turns_owned_by_an_offer() {
+        use crate::compute::proto::frames::{Availability, Caps, Control, Free};
+        use crate::compute::proto::share::{Role, ServerStatus, ShareLimits, Trust};
+        let c = conn();
+        insert_pending_node(&c, "n1", "mini-1", "fp1", "pem", &labels(), "owner", "1", 1).unwrap();
+        confirm_node(&c, "n1", "owner", 2).unwrap();
+        set_tenant_of(&c, "n1", "rosson.k2.dev").unwrap();
+        let view = |role: Role| ShareView {
+            role,
+            slot: 0,
+            shared: false,
+            servers: 1,
+            owner_label: None,
+            state: ServerStatus::Active,
+            limits: ShareLimits::new_server(Trust::Own, false),
+            running: 0,
+            queued: 0,
+            cpu_secs_today: 0,
+            expires_in_secs: None,
+            skew_secs: None,
+            quotes: vec![],
+        };
+        let offer = |share: Option<ShareView>, features: &[&str]| Offer {
+            share,
+            revision: 1,
+            control: Control::Active,
+            control_by: None,
+            control_at: None,
+            availability: Availability { ok: true, reasons: vec![] },
+            caps: Caps { cpu_millis: 1000, mem_bytes: 1 << 30, disk_budget_bytes: 1 << 30, hard: true },
+            free: Free { cpu_millis: 1000, mem_bytes: 1 << 30, disk_free_bytes: 1 << 30 },
+            slots: vec![],
+            running: 0,
+            parallel_max: 1,
+            refusal: None,
+            labels: Default::default(),
+            tools: Default::default(),
+            protocol: crate::compute::proto::PROTOCOL,
+            boot_id: "b".into(),
+            ledger_id: "l".into(),
+            node_version: "0.46.4".into(),
+            features: features.iter().map(|f| f.to_string()).collect(),
+        };
+        let owner_feats = ["queue", "servers", "admin", "health", "self-update"];
+        assert!(!node_by_id(&c, "n1").unwrap().owner_claim(), "no offer yet: no claim");
+        for o in [offer(Some(view(Role::Owner)), &owner_feats), offer(None, &owner_feats)] {
+            store_offer(&c, "n1", &o, 10);
+            store_share(&c, "n1", o.share.as_ref(), 10);
+            let n = node_by_id(&c, "n1").unwrap();
+            assert!(n.is_tenant(), "the offer can't lift a tenant: {:?}", o.share);
+            assert!(!n.owned_for_secrets());
+            assert_eq!(n.owner_label.as_deref(), Some("rosson.k2.dev"));
+            assert!(n.owner_claim(), "it's a claim, for the person to confirm");
+        }
+        // A plain tenant offer is no claim.
+        let o = offer(Some(view(Role::Tenant)), &["queue", "servers"]);
+        store_offer(&c, "n1", &o, 11);
+        store_share(&c, "n1", o.share.as_ref(), 11);
+        assert!(!node_by_id(&c, "n1").unwrap().owner_claim());
+        // The person's take-over: owned, the label gone.
+        mark_node_owned(&c, "n1").unwrap();
+        let n = node_by_id(&c, "n1").unwrap();
+        assert!(!n.is_tenant() && n.owned_for_secrets() && n.owner_label.is_none());
+        assert!(!n.owner_claim(), "an owned node makes no claim");
+        // Owned → tenant by an offer is still allowed (one way).
+        let mut v = view(Role::Tenant);
+        v.owner_label = Some("z3thon.k2.dev".into());
+        store_share(&c, "n1", Some(&v), 12);
+        let n = node_by_id(&c, "n1").unwrap();
+        assert!(n.is_tenant() && !n.owned_for_secrets());
     }
 
     #[test]

@@ -89,6 +89,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/nodes/servers/owner",
     "/cli/compute/nodes/servers/pause",
     "/cli/compute/nodes/servers/revoke",
+    "/cli/compute/nodes/take-owner",
     "/cli/compute/nodes/update",
     "/cli/compute/nodes/wall",
     "/cli/compute/queue",
@@ -129,6 +130,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/nodes/servers/owner",
     "/cli/compute/nodes/servers/pause",
     "/cli/compute/nodes/servers/revoke",
+    "/cli/compute/nodes/take-owner",
     "/cli/compute/nodes/update",
     "/cli/compute/nodes/wall",
     "/cli/compute/run",
@@ -634,6 +636,9 @@ fn share_json(n: &store::NodeRow) -> Option<serde_json::Value> {
         "shared": n.shared,
         "role": n.role,
         "ownerLabel": n.owner_label,
+        // The node says this server owns it now; only the owner's
+        // take-over makes it so (MT36, `k2 compute node take-owner`).
+        "ownerClaim": n.owner_claim(),
         "servers": v.map(|v| v.servers),
         "state": v.map(|v| v.state.as_str()),
         "expiresAt": expires_at,

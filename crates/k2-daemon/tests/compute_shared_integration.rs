@@ -783,11 +783,13 @@ async fn servers_add_is_held_one_at_a_time_and_hides_the_binding() {
 /// prd-macos-tenant-compute-v1 §6.3 (MT34–MT36): after an owner change.
 /// Owner → tenant follows the node: the mirrored server list goes, open
 /// admin requests fail `not_node_owner`. Tenant → owner never follows the
-/// node's offer (share view or owner-only features).
+/// node's offer (share view or owner-only features): it's a claim, taken
+/// over only by the owner in person (`take-owner`, unit-tested with a
+/// confirm in `compute_admin::tests`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_role_follows_the_node_after_an_owner_change() {
     let env = setup();
-    let _d = test_harness::start(OWNER).await;
+    let d = test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "flip");
     active_node("flip-1", "flip-1", "linux", &ws);
     let admin_feats = [FEATURE_QUEUE, FEATURE_SERVERS, "admin", "health", "self-update"];
@@ -849,10 +851,14 @@ async fn the_role_follows_the_node_after_an_owner_change() {
     compute_ws::test_frame("flip-1", Frame::Offer(offer(&[FEATURE_QUEUE, FEATURE_SERVERS], 0, Some(view(Role::Tenant, 0, 0)))));
     assert_eq!(flips(), 1);
 
-    // The node now says this server owns it: by owner-only features with
-    // no view, then by a share view saying owner, solo or shared (MT34).
-    // Never taken at its word (the role is one way, review A-H1): it
-    // stays a tenant, no flip, never owned for secrets.
+    // The node now claims this server owns it (security review, cross-
+    // branch): by owner-only features with no view (the old MT36 path),
+    // then by a share view saying owner, solo or shared (MT34). Never
+    // taken at its word: it stays a tenant, no flip, no secrets; the
+    // person gets one note to take it over in person.
+    let claims = || -> i64 {
+        k2_core::db::shared().lock().query_row("SELECT COUNT(*) FROM compute_events WHERE kind = 'owner_claim' AND node_id = 'flip-1'", [], |r| r.get(0)).unwrap()
+    };
     let mut solo = view(Role::Owner, 0, 0);
     solo.shared = false;
     solo.servers = 1;
@@ -861,7 +867,19 @@ async fn the_role_follows_the_node_after_an_owner_change() {
         let n = store::node_by_id(&k2_core::db::shared().lock(), "flip-1").unwrap();
         assert_eq!(n.role, "tenant", "an offer never lifts a tenant");
         assert!(!n.owned_for_secrets());
+        assert!(n.owner_claim(), "only a claim");
     }
     assert_eq!(flips(), 1, "no flip to owner");
+    assert_eq!(claims(), 1, "one note for the claim");
+    let r = get(d.port, "/cli/compute/nodes/info", OWNER, "node=flip-1").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["share"]["ownerClaim"], true, "{}", r.body);
+    // Taking it over needs the owner in person: an agent never can, and
+    // the owner needs a fresh confirm.
+    let r = post(d.port, "/cli/compute/nodes/take-owner", &passport(&ws), json!({"node": "flip-1"})).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    let r = post(d.port, "/cli/compute/nodes/take-owner", OWNER, json!({"node": "flip-1"})).await;
+    assert_eq!((r.status, code(&r).as_str()), (403, "vault_confirm_required"), "{}", r.body);
+    assert_eq!(role(), "tenant");
     compute_ws::test_detach("flip-1");
 }

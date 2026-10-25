@@ -77,6 +77,9 @@ pub const SERVERS_REVOKE: &str = "/cli/compute/nodes/servers/revoke";
 /// Make another of this owner's own servers on a node its owner
 /// (prd-macos-tenant-compute-v1 §6): owner only, held for approval.
 pub const SERVERS_OWNER: &str = "/cli/compute/nodes/servers/owner";
+/// Take over a node that says this server owns it now (after an owner
+/// change on it): owner only, in person (prd-macos-tenant-compute-v1 MT36).
+pub const TAKE_OWNER: &str = "/cli/compute/nodes/take-owner";
 
 /// Every node admin route (also listed in `compute_routes::ROUTES`).
 pub const ROUTES: &[&str] = &[
@@ -99,6 +102,7 @@ pub const ROUTES: &[&str] = &[
     SERVERS_PAUSE,
     SERVERS_REVOKE,
     SERVERS_OWNER,
+    TAKE_OWNER,
 ];
 
 /// POST-only (also in `compute_routes::POST_ROUTES`).
@@ -117,6 +121,7 @@ pub const POST_ROUTES: &[&str] = &[
     SERVERS_PAUSE,
     SERVERS_REVOKE,
     SERVERS_OWNER,
+    TAKE_OWNER,
 ];
 
 /// Passport-reachable (also in `session_token::is_agent_verb`). approve,
@@ -150,6 +155,7 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
         SERVERS_PAUSE => servers_pause(who, body, mgr),
         SERVERS_REVOKE => servers_revoke(who, body),
         SERVERS_OWNER => servers_owner(who, body),
+        TAKE_OWNER => take_owner(who, body),
         _ => Err(no("not_found", 404, "no such compute admin route")),
     }
 }
@@ -1829,6 +1835,112 @@ pub fn on_role_change(node_id: &str, from: &str, node: &store::NodeRow) {
     }
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({"compute": "role_change", "node": node.name}));
 }
+
+/// The node says this server owns it now while this server still has it as
+/// a tenant ([`store::NodeRow::owner_claim`]; MT36). Never taken at the
+/// node's word (a node another person owns could say anything to be sent
+/// admin or secrets here): it stays a tenant, and the person is told how
+/// to take it over in person ([`take_owner`]).
+pub fn on_owner_claim(node: &store::NodeRow) {
+    let owner = node.owner_label.clone().unwrap_or_else(|| "another server".into());
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::record_event(&conn, "node", "owner_claim", Some(&node.id), None, None, json!({"owner": node.owner_label}));
+    }
+    share_note(
+        &node.id,
+        &format!("owner-claim:{}", compute::now()),
+        &format!(
+            "{} says this server is its owner now (an owner change from {owner}). It stays {owner}'s here until you take it over in person: \
+             k2 compute node take-owner {} (Touch ID or your vault password). If you didn't change its owner, leave it: nothing changes.",
+            node.name, node.name
+        ),
+    );
+    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({"compute": "owner_claim", "node": node.name}));
+}
+
+/// The confirm subject for taking over `node_id` (never a request id).
+pub fn take_owner_subject(node_id: &str) -> String {
+    format!("take-owner:{node_id}")
+}
+
+/// `POST /cli/compute/nodes/take-owner {node, confirmToken}` (MT36): the
+/// one way a node this server has as a tenant becomes its own after its
+/// enrolment. Both halves of an owner change must be there:
+///
+/// - the node confirmed it: its live offer says this server is its owner
+///   (the node shows that only from its new owner pin, after root's
+///   approved swap: F3);
+/// - the person here approved it: the server's owner, in person (a fresh
+///   vault confirm for this node; never an agent, a passport or an admin).
+///
+/// Then the row is owned (owner label cleared) and the role change runs
+/// (the approval key is pinned at once, the server list mirrored).
+fn take_owner(who: &Who, body: &[u8]) -> R<Value> {
+    if who.passport().is_some() || !who.is_owner() {
+        crate::compute_routes::need_credential(who)?;
+        return Err(no(
+            codes::OWNER_ONLY,
+            403,
+            "only the server's owner takes over a node, in person: k2 compute node take-owner <node> from a terminal outside K2. An agent never can.",
+        ));
+    }
+    let v = json_body(body)?;
+    let node = node_or_404(s(&v, "node"))?;
+    if node.state != "active" {
+        return Err(no(codes::NODE_NOT_FOUND, 404, format!("{} isn't an active node", node.name)));
+    }
+    if !node.is_tenant() {
+        return Err(no(acodes::BAD_ARGS, 409, format!("{} is this server's already", node.name)));
+    }
+    let owner = node.owner_label.clone().unwrap_or_else(|| "its owner".into());
+    if !node.owner_claim() {
+        return Err(no(
+            NO_OWNER_CLAIM,
+            409,
+            format!(
+                "{} doesn't say this server owns it: {owner} changes its owner first (k2 compute node servers {} owner <this server>, approved there); then {} shows the swap done and you can take it over here",
+                node.name, node.name, node.name
+            ),
+        ));
+    }
+    if !online(&node.id) {
+        return Err(no(codes::NODE_OFFLINE, 409, format!("{} isn't connected now: take it over while its session is live", node.name)));
+    }
+    let Some(token) = s(&v, "confirmToken") else {
+        return Err(no(acodes::VAULT_CONFIRM_REQUIRED, 403, "taking over a node needs a fresh owner confirm (Touch ID, your login or vault password): k2 compute node take-owner <node> asks for it"));
+    };
+    let stamp = confirm_stamp(who).ok_or_else(owner_only)?;
+    let vault = vault()?;
+    let proof = vault
+        .confirm
+        .take(token, admin::CONFIRM_ACTION, Some(&take_owner_subject(&node.id)), &stamp)
+        .map_err(|_| no(acodes::VAULT_CONFIRM_REQUIRED, 403, "confirm again: a confirm works once, for this node, within 60 seconds"))?;
+    let via = match proof {
+        k2_vault::HumanProof::Confirmed { method } => method,
+        k2_vault::HumanProof::None => return Err(no(acodes::VAULT_CONFIRM_REQUIRED, 403, "no owner confirm")),
+    };
+    let after = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        // Both halves again, under the lock the write takes: the row is
+        // still an active tenant whose node says this server owns it.
+        let now = store::node_by_id(&conn, &node.id).filter(|n| n.state == "active" && n.owner_claim());
+        if now.is_none() {
+            return Err(no(acodes::BAD_ARGS, 409, format!("{} changed while you confirmed; look again (k2 compute nodes)", node.name)));
+        }
+        store::mark_node_owned(&conn, &node.id).map_err(|e| no("store", 500, e))?;
+        store::record_event(&conn, &who.label(), "owner_taken", Some(&node.id), None, None, json!({"from": node.owner_label, "via": via}));
+        store::node_by_id(&conn, &node.id)
+    }
+    .ok_or_else(|| no(codes::NODE_NOT_FOUND, 404, "the node was removed"))?;
+    on_role_change(&node.id, "tenant", &after);
+    Ok(json!({"ok": true, "node": node.name, "role": "owner", "from": node.owner_label, "via": via}))
+}
+
+/// [`take_owner`] on a node that doesn't say this server owns it.
+pub const NO_OWNER_CLAIM: &str = "no_owner_claim";
 
 /// An operator ([`operator`]) or a local agent under "Allow managing
 /// compute nodes": may propose an add or a widening, pause, resume and

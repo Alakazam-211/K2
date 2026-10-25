@@ -1026,3 +1026,119 @@ fn an_owner_change_is_the_owners_held_and_names_the_key() {
     let e = call(SERVERS_OWNER, &Who::Owner, body).unwrap_err();
     assert_eq!(e, (409, cadmin::codes::REMOTE_ADMIN_OFF.to_string()));
 }
+
+/// An offer as the node would send it to this server's session.
+fn offer_with(share: Option<pshare::ShareView>, features: &[&str]) -> Offer {
+    Offer {
+        share,
+        revision: 1,
+        control: frames::Control::Active,
+        control_by: None,
+        control_at: None,
+        availability: frames::Availability { ok: true, reasons: vec![] },
+        caps: frames::Caps { cpu_millis: 1000, mem_bytes: 1 << 30, disk_budget_bytes: 1 << 30, hard: true },
+        free: frames::Free { cpu_millis: 1000, mem_bytes: 1 << 30, disk_free_bytes: 1 << 30 },
+        slots: vec![],
+        running: 0,
+        parallel_max: 1,
+        refusal: None,
+        labels: Default::default(),
+        tools: Default::default(),
+        protocol: k2_core::compute::proto::PROTOCOL,
+        boot_id: "b".into(),
+        ledger_id: "l".into(),
+        node_version: "0.46.4".into(),
+        features: features.iter().map(|f| f.to_string()).collect(),
+    }
+}
+
+fn share_view(role: pshare::Role) -> pshare::ShareView {
+    pshare::ShareView {
+        role,
+        slot: if role == pshare::Role::Owner { 0 } else { 1 },
+        shared: true,
+        servers: 2,
+        owner_label: (role == pshare::Role::Tenant).then(|| "rosson.k2.dev".to_string()),
+        state: pshare::ServerStatus::Active,
+        limits: pshare::ShareLimits::new_server(pshare::Trust::Own, false),
+        running: 0,
+        queued: 0,
+        cpu_secs_today: 0,
+        expires_in_secs: None,
+        skew_secs: None,
+        quotes: vec![],
+    }
+}
+
+/// Security review (cross-branch) + MT36: a tenant node's offer that
+/// claims owner-only features (or a share view saying owner) stays a
+/// tenant; it becomes this server's only after an owner change both the
+/// node confirmed (its live offer says owner) and the person here
+/// approved in person (`take-owner` with a fresh confirm for this node).
+/// Then the owner label goes and the role change runs.
+#[test]
+fn a_tenant_node_is_taken_over_only_in_person_after_it_confirms() {
+    let f = fx("take", true);
+    let owner_feats = [wire::FEATURE_ADMIN, wire::FEATURE_HEALTH, wire::FEATURE_SELF_UPDATE, pshare::FEATURE_QUEUE, pshare::FEATURE_SERVERS];
+    let set_offer = |o: Offer| {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::store_offer(&conn, &f.node, &o, compute::now());
+        store::store_share(&conn, &f.node, o.share.as_ref(), compute::now());
+    };
+    let row = || store::node_by_id(&k2_core::db::shared().lock(), &f.node).unwrap();
+    {
+        let h = k2_core::db::shared();
+        store::set_tenant_of(&h.lock(), &f.node, "rosson.k2.dev").unwrap();
+    }
+    let body = || json!({"node": f.node_name});
+    let token = || test_seams::vault_handle().confirm.mint(cadmin::CONFIRM_ACTION, Some(&take_owner_subject(&f.node)), "owner", "local-auth");
+
+    // Still the other server's (its offer says tenant): nothing to take.
+    set_offer(offer_with(Some(share_view(pshare::Role::Tenant)), &[pshare::FEATURE_QUEUE, pshare::FEATURE_SERVERS]));
+    assert!(!row().owner_claim());
+    let e = call(TAKE_OWNER, &Who::Owner, json!({"node": f.node_name, "confirmToken": token()})).unwrap_err();
+    assert_eq!(e, (409, NO_OWNER_CLAIM.to_string()));
+
+    // The node claims it: owner-only features with no view, then a view.
+    for o in [offer_with(None, &owner_feats), offer_with(Some(share_view(pshare::Role::Owner)), &owner_feats)] {
+        set_offer(o);
+        let n = row();
+        assert!(n.is_tenant() && !n.owned_for_secrets() && n.owner_claim(), "a claim, still a tenant");
+    }
+    // An agent never takes a node over, even one under "operate".
+    let e = call(TAKE_OWNER, &agent(&f), body()).unwrap_err();
+    assert_eq!(e.0, 403, "{e:?}");
+    // The owner needs a fresh confirm, for this node and this action.
+    assert_eq!(call(TAKE_OWNER, &Who::Owner, body()).unwrap_err(), (403, cadmin::codes::VAULT_CONFIRM_REQUIRED.to_string()));
+    let other_subject = test_seams::vault_handle().confirm.mint(cadmin::CONFIRM_ACTION, Some(&f.node), "owner", "local-auth");
+    let e = call(TAKE_OWNER, &Who::Owner, json!({"node": f.node_name, "confirmToken": other_subject})).unwrap_err();
+    assert_eq!(e, (403, cadmin::codes::VAULT_CONFIRM_REQUIRED.to_string()), "a confirm for another subject");
+    let wrong_action = test_seams::vault_handle().confirm.mint("reveal", Some(&take_owner_subject(&f.node)), "owner", "local-auth");
+    let e = call(TAKE_OWNER, &Who::Owner, json!({"node": f.node_name, "confirmToken": wrong_action})).unwrap_err();
+    assert_eq!(e, (403, cadmin::codes::VAULT_CONFIRM_REQUIRED.to_string()), "a confirm for another action");
+    // Offline: the claim must come from a live session.
+    test_seams::set_online(&f.node, false);
+    let e = call(TAKE_OWNER, &Who::Owner, json!({"node": f.node_name, "confirmToken": token()})).unwrap_err();
+    assert_eq!(e, (409, codes::NODE_OFFLINE.to_string()));
+    test_seams::set_online(&f.node, true);
+    assert!(row().is_tenant(), "nothing above changed the row");
+
+    // Confirmed by the node and approved in person: owned.
+    let r = call(TAKE_OWNER, &Who::Owner, json!({"node": f.node_name, "confirmToken": token()})).unwrap();
+    assert_eq!((r["role"].as_str(), r["from"].as_str(), r["via"].as_str()), (Some("owner"), Some("rosson.k2.dev"), Some("local-auth")), "{r}");
+    let n = row();
+    assert!(!n.is_tenant() && n.owner_label.is_none() && n.owned_for_secrets());
+    let events: Vec<String> = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let mut st = conn.prepare("SELECT kind || ':' || detail_json FROM compute_events WHERE node_id = ?1 ORDER BY rowid").unwrap();
+        let rows: Vec<String> = st.query_map(rusqlite::params![f.node], |r| r.get(0)).unwrap().map(|x| x.unwrap()).collect();
+        rows
+    };
+    assert!(events.iter().any(|e| e.starts_with("owner_taken:") && e.contains("local-auth")), "{events:?}");
+    assert!(events.iter().any(|e| e.starts_with("role_change:") && e.contains("\"to\":\"owner\"")), "{events:?}");
+    // Once only.
+    let e = call(TAKE_OWNER, &Who::Owner, json!({"node": f.node_name, "confirmToken": token()})).unwrap_err();
+    assert_eq!(e.0, 409);
+}

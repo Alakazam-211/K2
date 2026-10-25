@@ -17311,6 +17311,11 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    controllerFp (k2 compute nodes --json there). Needs
                    remote admin `full`; else at the machine:
                    sudo k2-node servers owner <server> --fp <full key>
+  k2 compute node take-owner <node>   (owner, in person; 0.46.4)
+                   a node another of your servers made this server's owner:
+                   it says so, but stays that server's here until you take
+                   it over (Touch ID / vault password). An offer alone never
+                   makes a node this server's.
   k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G]
                    [--max-parallel 1] [--max-queued 10]
   k2 compute revoke <node> --workspace WS
@@ -18718,6 +18723,23 @@ cmd_compute_node() {
             ;;
         admin) cmd_compute_node_admin "$@" ;;
         servers) cmd_compute_node_servers "$@" ;;
+        take-owner)
+            # MT36 (0.46.4): a node that says this server owns it now (an
+            # owner change on it) is taken over only by the owner, in person.
+            [ $# -eq 1 ] && [ "${1#-}" = "$1" ] || { echo "usage: k2 compute node take-owner <node>" >&2; exit 2; }
+            _compute_call GET /cli/compute/nodes/info "node=$(urlencode "$1")"
+            local tid tname towner
+            tid="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+            tname="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
+            towner="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("share") or {}).get("ownerLabel") or "its owner")')"
+            echo "Take over $tname: it says this server is its owner now (an owner change from $towner)." >&2
+            local tok
+            tok="$(_vault_confirm_token node-admin "take-owner:$tid" "take over $tname")" || exit 3
+            _compute_call POST /cli/compute/nodes/take-owner "$(_compute_json K2_CJ_node="$tid" K2_CJ_confirmToken="$tok")" tcp
+            tok=""
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin); print("%s is this server'"'"'s now (taken over from %s): its admin, updates, servers and approvals are here." % (v["node"], v.get("from") or "its owner"))'
+            ;;
         policy)
             local node="${1:-}" act="${2:-show}"
             [ -n "$node" ] || { echo "usage: k2 compute node policy <node> show|set key=value..." >&2; exit 2; }
@@ -38395,12 +38417,17 @@ CHANGING THE NODE'S OWNER (0.46.4)
   builds once). The approval card shows the new owner's full key: check
   it against that server's controllerFp (k2 compute nodes --json there).
   Root checks it against the key it recorded when that server was
-  confirmed. The new owner pins its own approval key on its first
-  attach. At `policy`, or from the machine:
+  confirmed. The new owner pins its own approval key once it takes the
+  node over. At `policy`, or from the machine:
   sudo k2-node servers owner <server> --fp <full key>.
+  The new owner server takes the node over in person: the node says it's
+  the owner now, but stays the old owner's there (no admin, no secrets)
+  until its owner runs k2 compute node take-owner <node> (Touch ID /
+  vault password). An offer alone never makes a node a server's own.
   Codes: owner_needs_own_server (a team server would get root admin),
   owner_target_not_ready (not active, confirmed or online),
-  owner_change_pending (one at a time).
+  owner_change_pending (one at a time), no_owner_claim (take-owner on a
+  node that doesn't say this server owns it).
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF

@@ -72,7 +72,8 @@ pub fn is_tenant(offer: &Offer) -> bool {
 /// view's when it has one; else `owner` when it lists a feature only the
 /// owner's session ever gets (admin, health, self-update: V52, a tenant's
 /// offer never carries them); else nothing (a solo 0.46.2 node: keep the
-/// stored role).
+/// stored role). Only ever the node's word: `owner` here never promotes a
+/// tenant row ([`super::store::NodeRow::owner_claim`]).
 pub fn offer_role(offer: &Offer) -> Option<Role> {
     if let Some(v) = view(offer) {
         return Some(v.role);

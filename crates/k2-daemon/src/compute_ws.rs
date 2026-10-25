@@ -835,11 +835,16 @@ fn on_offer(node_id: &str, o: Offer) {
         store::store_share(&conn, node_id, o.share.as_ref(), compute::now());
         (before, tenant, store::node_by_id(&conn, node_id))
     };
-    // MT35: owned -> tenant (an owner change on the node gave it to another
-    // server, or a re-enrol). The only flip an offer can make.
     if let (Some(b), Some(a)) = (&before, &after) {
+        // MT35: owned → tenant (an owner change on the node gave it to
+        // another server). The only flip an offer can make.
         if b.role != a.role {
             crate::compute_admin::on_role_change(node_id, &b.role, a);
+        }
+        // MT36: the node says this server owns it now. Never taken at its
+        // word: the person here is asked to take it over (in person).
+        if a.owner_claim() && !b.owner_claim() {
+            crate::compute_admin::on_owner_claim(a);
         }
     }
     // V52: a node another server owns never gets node admin from here

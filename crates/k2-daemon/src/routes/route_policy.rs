@@ -513,6 +513,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/nodes/servers/owner", Owner),
     post("/cli/compute/nodes/servers/pause", Admin),
     post("/cli/compute/nodes/servers/revoke", Owner),
+    // A node that says this server owns it now is taken over only by the
+    // owner, in person (prd-macos-tenant-compute-v1 MT36).
+    post("/cli/compute/nodes/take-owner", Owner),
     post("/cli/compute/nodes/update", Admin),
     // Q5 (0.46.4): an operator turns the Linux job wall on (handler: operator()).
     post("/cli/compute/nodes/wall", Admin),

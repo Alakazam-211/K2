@@ -286,7 +286,8 @@ pub fn drop_subscription_sql(n: &DualNames) -> String {
 pub fn detach_source_sql(n: &DualNames, db: &str) -> String {
     format!(
         "DROP EVENT TRIGGER IF EXISTS {ft};\n\
-         DROP SCHEMA IF EXISTS \"{fs}\" CASCADE;\n\
+         DROP FUNCTION IF EXISTS \"{fs}\".freeze();\n\
+         DROP SCHEMA IF EXISTS \"{fs}\";\n\
          DO $k2$DECLARE i int := 0; BEGIN\n\
          PERFORM pg_catalog.pg_terminate_backend(active_pid) FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}' AND active;\n\
          WHILE EXISTS (SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}' AND active) AND i < 100 LOOP\n\
@@ -490,6 +491,7 @@ mod tests {
 
         let src = detach_source_sql(&n(), "ws_jobs");
         assert!(src.starts_with("DROP EVENT TRIGGER IF EXISTS k2_dual_freeze;"), "the freeze goes first");
+        assert!(!src.contains("CASCADE"), "never a cascade: a tenant object depending on the freeze fails the drop loudly");
         assert!(src.contains("pg_drop_replication_slot('k2_dual_0123456789ab')"));
         assert!(src.contains("DROP PUBLICATION IF EXISTS \"k2_dual_0123456789ab\";"));
         assert!(!src.contains("DROP ROLE"), "the role stays until teardown");

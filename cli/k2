@@ -17215,6 +17215,8 @@ Agents:
   k2 compute run <node>|--any [--os linux] [--arch x86_64] [--label k=v]
                  [--detach] [--dirty] [--sha REV] [--no-source]
                  [--env K=V]... [--cpus N] [--mem 16G]
+                 [--secret NAME[=ENVNAME]]...  a vault secret as env, sealed to the
+                                node at spawn; names only in the plan (k2 study compute)
                  [--timeout D (≤ the grant's max, default 2h; k2 compute nodes shows it)]
                  [--exclusive] [--retry-interrupted|--no-retry] [--raw] [--workspace WS]
                  [--wait [--failures] [--max-wait 9m]]
@@ -17372,7 +17374,10 @@ Exit codes: 0–255 = the command's own exit (attached runs); 2 = bad usage;
 compute_off, queue_full, owner_only, job_started, …); 130 = you detached
 with Ctrl-C (the job keeps running). run --json prints one result object
 on stdout (logs go to stderr). Jobs see K2_COMPUTE_JOB=<id> (set by the
-node; the only K2_* variable in a job). Read `k2 study compute` first.
+node; the only K2_* variable in a job). --secret: the job gets a vault
+secret as env; only a person grants it (k2 vault grant NAME --to
+compute:<ws>/<node> --as env), and the job can print or send what it's
+given. Read `k2 study compute` first.
 EOF
 }
 
@@ -22001,7 +22006,7 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault public-key NAME                 an ssh key's .pub line (never the private key)
   k2 vault agent-limit NAME [--burst N] [--per-minute M] [--allow-forwarded|--no-forwarded]
                                            an ssh key's agent signing limits (agent delivery)
-  k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name> [--as <d>] [--env-name X]
+  k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name>|compute:<ws>/<node> [--as <d>] [--env-name X]
   k2 vault revoke NAME --from <who>        (or --grant <id>)
   k2 vault disable|enable NAME             destroy NAME --yes
   k2 vault fetch --secret NAME [-X M] [-H 'N: v'] [-d @file] URL
@@ -22891,7 +22896,11 @@ Share NAME, or set how one consumer gets it (one grant per consumer and
 delivery; a new one replaces the old).
   --to ws:<name>     a workspace; ws:* = every workspace; session:<id>;
                      service:<label> (a k2 publish service);
-                     job:<name> (a k2 job; its runs get only these)
+                     job:<name> (a k2 job; its runs get only these);
+                     compute:<ws>/<node> (that workspace's compute jobs on
+                     that node: k2 compute run --secret NAME), or
+                     compute:<ws>/* (every node this server owns). People
+                     only (the value leaves this machine), --as env only.
   --as fetch|agent|file|env|api   default: the secret's delivery; --env-name alone
                      means env, --file-name alone means file. Never above
                      the secret's ceiling.
@@ -22913,7 +22922,9 @@ k2 vault revoke --grant <id>
 
 Remove a share (<who> as in grant --to; grant ids are in k2 vault show
 --json). New sessions and fetches stop getting it. A value already read
-stays read: rotate the key at the provider if that matters.
+stays read: rotate the key at the provider if that matters. A compute:
+grant's running jobs keep what they got (they're listed); the next
+attempt is refused.
 
 Example: k2 vault revoke STRIPE_KEY --from ws:billing
 EOF
@@ -24012,7 +24023,7 @@ print(json.dumps(o))' "${pos[1]}" "$ceiling")"
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; m=json.load(sys.stdin).get("secret") or {}; print("%s: %s (at most %s)" % (m.get("name"), m.get("defaultDelivery"), m.get("deliveryCeiling")))'
             ;;
         grant)
-            [ -n "$name" ] && [ -n "$to" ] || { echo "usage: k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name> [--as <d>]" >&2; exit 2; }
+            [ -n "$name" ] && [ -n "$to" ] || { echo "usage: k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name>|compute:<ws>/<node> [--as <d>]" >&2; exit 2; }
             local gj
             gj="$(python3 -c 'import json,sys; o={"to": sys.argv[1]}
 for k,v in (("as",sys.argv[2]),("envName",sys.argv[3]),("fileName",sys.argv[4])):
@@ -35580,6 +35591,9 @@ WHO SETS WHAT
   Secrets your workspace created are yours to widen.
   "Allow managing server-wide secrets" (vault_manage) lets an IT agent
   share server secrets with OTHER workspaces — never its own.
+  compute:<ws>/<node> grants (a secret as env in compute jobs on another
+  machine) are people only, for every agent: ask your owner with the
+  exact line `k2 compute run --secret` prints (k2 study compute, SECRETS).
 
 PEOPLE ONLY
   The recovery key, the vault password, reveal and key rotation are for
@@ -37912,6 +37926,42 @@ RUN
   dir per project keeps cargo incremental.
   Env starts empty: PATH, HOME, CARGO_*, TMPDIR, CI=1 and your --env
   NAME=value. No K2 token, socket or port ever reaches a job.
+  --env values are stored (the plan, the job row, the node's ledger):
+  never put a key in --env. Use --secret (SECRETS below).
+
+SECRETS (vault values as env, 0.46.4, Linux nodes)
+  k2 compute run <node> --secret GMAIL_CLIENT_SECRET -- make release
+  k2 compute run <node> --secret STRIPE_KEY=STRIPE_TEST_KEY -- cargo test
+    NAME is a secret in your workspace's vault (or k2v://server/NAME);
+    =ENVNAME picks the variable (default: the grant's, else NAME in
+    capitals). K2_*, the node's own names and loader names (LD_*, PATH…)
+    are refused (env_refused, exit 2), and so is a name also in --env
+    (env_secret_collision). At most 16 secrets, 8 KiB each, text.
+  A person grants it first, per node (it leaves this machine):
+    k2 vault grant NAME --scope ws:<you> --to compute:<you>/<node> --as env
+    (compute:<you>/* = every node this server owns, never one it shares
+    from another server). Agents can't: secret_not_granted (exit 3)
+    prints the owner's exact command.
+  What's stored: the names and the vault ids, never a value. Not in the
+  plan, the job row, the node's ledger or files, the receipt, events or
+  messages. The node asks for the value right before the command starts;
+  it comes sealed to a one-time key (the relay sees ciphertext) and goes
+  to the job on stdin, then memory only. Every release is a vault audit
+  row and a secret_release event on the job; a retry asks again.
+  If the job prints it, the logs K2 keeps show [k2v:ENVNAME] (raw,
+  base64, hex, percent and JSON forms; values under 8 bytes aren't
+  matched). Your kept artifacts are your bytes: never rewritten.
+  The job HAS the value: it can print it in a form K2 doesn't spot,
+  write it to a file or an artifact, or send it over the network. Child
+  processes inherit it. Only give a job what it needs.
+  The node must be Linux with the job wall, k2-node 0.46.4, and treat
+  this server as its own (trust own); --any skips nodes that aren't or
+  that no grant covers. A secret job never runs beside another
+  workspace's job under the same user (secret_isolation_wait).
+  Revoking a grant never stops a running job (it already has the value);
+  the next attempt is refused (secret_not_granted). k2 vault revoke lists
+  the running jobs that got it. --plan shows each secret's env name and
+  whether a grant covers the node; get/status/receipt show the env names.
 
 CANCEL
   k2 compute cancel <job> cancels a QUEUED job at once. A job that already
@@ -38157,7 +38207,13 @@ COMMON ERRORS
   too_many_pending       10 requests already wait for the owner; withdraw some
   approval_expired       the owner didn't decide in 24 h, or the node stayed offline
   verb_not_allowed       not an admin verb; a root script is the escape hatch
-  node_upgrade_required  --needs on an older k2-node: update it there (sudo k2-node setup)
+  node_upgrade_required  --needs on an older k2-node: update it there (sudo k2-node setup);
+                         --secret: the node isn't Linux + job wall + 0.46.4 + trust own
+  secret_not_granted     no compute: grant for that secret on that node; only a person
+                         grants it (the error prints the command); exit 3
+  secret_unavailable     the node got no answer for its secret in 60 s (link dropped);
+                         infrastructure, retried
+  secret_isolation_wait  another workspace's job runs as the same user; it waits
   tool_install_failed    a --needs tool didn't install, or installed without its
                          command (version wrong, no network); the job never started
   tool_unsupported       k2-node doesn't install that tool (exit 2, nothing runs):

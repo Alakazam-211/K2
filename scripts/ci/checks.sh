@@ -63,7 +63,7 @@ part_web() {
 part_rust_check() {
     step "cargo check -D warnings, all targets"
     RUSTFLAGS="-D warnings" cargo check -p k2-core -p k2-client -p k2-daemon -p k2-node-proto -p k2-node \
-        -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd --all-targets
+        -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd -p k2-release-keys --all-targets
     step "cargo check airgap feature"
     RUSTFLAGS="-D warnings" cargo check -p k2-core -p k2-daemon --features airgap --all-targets
 }
@@ -103,6 +103,7 @@ part_rust_test() {
 
     step "cargo nextest root helper"
     cargo nextest run --profile ci -p k2-root-proto --features test-signer
+    cargo nextest run --profile ci -p k2-release-keys
     cargo nextest run --profile ci -p k2-root-helper
     cargo check -p k2-root-helper --features test-keys --examples
     cargo nextest run --profile ci -p k2-daemon --lib root_helper:: root_helper_routes::update_version_tests:: mail::helper:: update_routes::tests::daemon_update cell_server:: front443:: mail::front_listener::

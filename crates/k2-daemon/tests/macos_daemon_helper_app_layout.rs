@@ -55,10 +55,19 @@ fn helper_bundle_id_matches_build_script() {
 /// `if`/`case`/loop and after no early `return`), and each of the three
 /// must both source the file and call the function. build-local.sh still
 /// builds inline and is checked as before.
+///
+/// Since 0.46.4 that function builds every sidecar in one cargo call over
+/// `K2_MAC_SIDECAR_CARGO_ARGS` (scripts/macos-daemon-helper-app.sh), so
+/// the build step is that call, and the array (defined at the script's top
+/// level, not inside a function or conditional) must list
+/// `-p k2-ptyd --bin k2-ptyd`.
 #[cfg(unix)]
 #[test]
 fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
     const PTYD_BUILD: &str = "cargo build --release -p k2-ptyd --bin k2-ptyd";
+    const SIDECAR_BUILD: &str = "cargo build --release \"${K2_MAC_SIDECAR_CARGO_ARGS[@]}\"";
+    const SIDECAR_ARRAY: &str = "K2_MAC_SIDECAR_CARGO_ARGS=(";
+    const PTYD_ARGS: &str = "-p k2-ptyd --bin k2-ptyd";
     const SHARED: &str = "scripts/lib/build-binaries.sh";
     const SHARED_FN: &str = "k2_build_mac_binaries";
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -102,7 +111,32 @@ fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
         }
         panic!("{SHARED_FN} does not {what}");
     };
-    unconditional(&|t| t.starts_with(PTYD_BUILD), "build k2-ptyd");
+    unconditional(&|t| t.starts_with(SIDECAR_BUILD), "build the sidecars (K2_MAC_SIDECAR_CARGO_ARGS)");
+    // The array that call expands: assigned once, at column 0 (top level),
+    // and one of its lines is exactly k2-ptyd's package + bin.
+    let arrays: Vec<usize> = helper
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.trim_start().starts_with(SIDECAR_ARRAY))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(arrays.len(), 1, "scripts/macos-daemon-helper-app.sh must assign {SIDECAR_ARRAY}…) exactly once");
+    let lines: Vec<&str> = helper.lines().collect();
+    assert_eq!(
+        lines[arrays[0]].trim_end(),
+        SIDECAR_ARRAY,
+        "{SIDECAR_ARRAY} must start a multi-line array at column 0 (top level)"
+    );
+    let array: Vec<&str> = lines[arrays[0] + 1..]
+        .iter()
+        .take_while(|l| l.trim() != ")")
+        .map(|l| l.trim())
+        .filter(|t| !t.is_empty() && !t.starts_with('#'))
+        .collect();
+    assert!(
+        array.iter().any(|t| *t == PTYD_ARGS),
+        "K2_MAC_SIDECAR_CARGO_ARGS no longer builds k2-ptyd ({PTYD_ARGS}): {array:?}"
+    );
     let call = unconditional(&|t| t.starts_with("k2_daemon_helper_assemble "), "assemble K2 Daemon.app");
     assert!(call.contains("\"$out/k2-ptyd\""), "{SHARED_FN} assembles without k2-ptyd: {call}");
 

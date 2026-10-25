@@ -584,6 +584,7 @@ mod tests {
                 "push_queue_full",
                 "airgap",
                 "vault_closed",
+                "token_in_use",
                 "duplicate_label",
                 // Garden access lists (prd-garden-access-v1 G22): the
                 // signer gate's refusal (switch on only).

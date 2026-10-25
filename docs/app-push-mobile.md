@@ -56,7 +56,7 @@ k2 app push setup <app> \
   --fcm-service-account service-account.json
 
 k2 app push check <app>   # one real call per key to a fake token
-k2 app push on <app>      # or approve push:send when the App's deploy asks
+k2 app push on <app>      # (confirmed again) or approve push:send when the App's deploy asks
 ```
 
 How K2 handles them:
@@ -157,6 +157,10 @@ The other calls:
 
 Signing the device out also removes its registration on the server. So do
 a password change, the owner removing the person, and the App being removed.
+
+A phone's token belongs to one person per App. If another person is still
+signed in with the same token, register answers `409 token_in_use`: call
+`push.unregister` when a person signs out, before the next one signs in.
 
 ### Receive
 
@@ -276,6 +280,7 @@ These are the defaults, per hour:
 | `push_off` | the owner hasn't turned the App's notifications on (or turned them off) |
 | `push_not_configured` | no Apple or Google key yet |
 | `guest_required` | register needs a person's own session pass |
+| `token_in_use` | another person on this App is still signed in with this phone's token |
 | `channel_unavailable` | `channel: "k2-companion"` isn't available yet |
 | `not_for_host` | the box login has no push |
 | `too_many_recipients` | more than 1,000 recipients in one call; batch with `guests` |
@@ -288,8 +293,14 @@ These are the defaults, per hour:
 
 When Apple or Google refuse:
 
-- **A gone token** removes that device (`dead`). `wrongApp` counts tokens
-  from another app: check the bundle id in `k2 app push status`.
+- **A gone token** removes that device (`dead`).
+- **A token "from another app"** before the key has ever got a send
+  through means the key's bundle id or Firebase project is wrong: sends
+  pause for 10 minutes, `k2 app push status` shows
+  `apns:DeviceTokenNotForTopic` or `fcm:SENDER_ID_MISMATCH`, and no device is
+  deleted. After the first accepted send it means that one phone runs
+  another app: that device goes (`wrongApp`). `k2 app push check` can't tell
+  the bundle id or project from a test token; the first real send does.
 - **A refused key** pauses that platform for 10 minutes and leaves the
   App's agent a note. `k2 app push status` shows the reason code; replace
   the key with `k2 app push setup`.

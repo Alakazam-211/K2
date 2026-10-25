@@ -37600,7 +37600,7 @@ ONCE, AS THE OWNER (from a terminal outside K2; Touch ID confirms)
   k2 app push setup <app> --apns-key AuthKey_XXXX.p8 --key-id XXXX \
       --team-id YYYY --bundle-id com.you.app --fcm-service-account sa.json
   k2 app push check <app>      a fake token: says whether each key works
-  k2 app push on <app>         (or approve push:send in the App's deploy)
+  k2 app push on <app>         (confirmed again; or approve push:send in a deploy)
 
 IN THE PHONE APP (the guest's own session pass, Authorization: Bearer)
   1 Sign in with a device: POST /cli/skin/login {username, password, app,
@@ -37612,9 +37612,9 @@ IN THE PHONE APP (the guest's own session pass, Authorization: Bearer)
     {deviceId: <device.id>, platform: apns|fcm, pushToken, environment:
     sandbox|production}. Debug builds are sandbox. Answer: id, who,
     configured {apns, fcm}; never the token.
-  4 Sign-out: POST /cli/skin/push/unregister {deviceId} (signing out of the
-    device sign-in also removes it). push.device / push.prefs read and change
-    previews and mutedTopics.
+  4 Sign-out: POST /cli/skin/push/unregister {deviceId} before the next
+    person signs in (else token_in_use). push.device / push.prefs read and
+    change previews and mutedTopics.
   5 Receive: your own data keys plus k2App, k2Send, k2Kind (app or agent),
     k2Topic and k2Who (match it to register's who to tell accounts apart).
   6 Sensitive content: send a short line and an id; fetch the rest on open.
@@ -37639,15 +37639,16 @@ LIMITS (an hour)
 
 REFUSALS
   push_off (not approved or turned off)  push_not_configured (no key)
-  not_for_host  guest_required (register is a guest's own pass)
+  not_for_host  guest_required (register is a guest's own pass)  token_in_use
   channel_unavailable (k2-companion isn't ready)  too_many_recipients
   outside_app_rooms  rate_limited (retryAfterMs)  too_large (4,096 bytes)
   airgap  vault_closed  app_pass_required / cap_not_granted (push.send)
 
 WHEN APPLE OR GOOGLE SAY NO
-  A gone token removes that device (dead; wrongApp = a token from another
-  app: check the bundle id). A refused key pauses that platform 10 minutes
-  and leaves the App's agent a note; k2 app push status shows the code.
+  A gone token removes that device. A token "from another app" before the
+  key's first accepted send means a wrong bundle id / project: sends pause,
+  nothing is deleted. A refused key pauses that platform 10 minutes and
+  leaves the App's agent a note; k2 app push status shows the code.
   K2_APP_PUSH=off in the daemon's environment stops every App's push.
   K2 Companion's own phones are k2 push, not this.
 EOF

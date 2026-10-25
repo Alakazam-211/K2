@@ -209,6 +209,7 @@
     {"code": "push_queue_full", "doc": "This App has too many notifications waiting to go out; try again shortly."},
     {"code": "airgap", "doc": "Air-gap is on: nothing leaves this server."},
     {"code": "vault_closed", "doc": "The vault isn't open yet (K2 is still starting); try again shortly."},
+    {"code": "token_in_use", "doc": "Another person on this App is still signed in with this phone's push token; they sign out (push.unregister) first."},
     {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."},
     {"code": "needs_editor", "doc": "Garden access lists on: this widget version isn't signed by the person, K2 or an agent on this Garden's list, so only its own store and save keyspace and widget.self answer. Someone who edits this Garden has to sign this version."},
     {"code": "retired", "doc": "K2 retired this verb: it answers this until a later release removes it (the message says which)."},
@@ -7592,6 +7593,7 @@
         "not_for_host",
         "channel_unavailable",
         "push_devices_full",
+        "token_in_use",
         "rate_limited",
         "usage",
         "failed"
@@ -8196,7 +8198,7 @@
           },
           "dropped": {
             "type": "integer",
-            "description": "Dropped before sending (air-gap)."
+            "description": "Dropped before sending: air-gap, or the phone, the person's access or the App's push changed after it was queued."
           },
           "skipped": {
             "title": "AppPushSkipped",

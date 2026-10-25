@@ -156,11 +156,12 @@ pub fn boot(home: &Path) {
             #[cfg(unix)]
             k2_core::terminal::ptyd::set_spawned_hook(ssh_agent::on_ptyd_spawned);
             publish_env::seed_existing();
+            // Non-dumpable before the R8 pass reads any value (round 2 fix 6).
+            let nd = k2_vault::secret::set_non_dumpable();
+            let _ = NON_DUMPABLE.set(nd);
             // R8 (prd-env-to-vault-v1): once, before any service starts.
             server_refs::upgrade_once(v);
             start_ticker(v.clone());
-            let nd = k2_vault::secret::set_non_dumpable();
-            let _ = NON_DUMPABLE.set(nd);
             k2_core::log_debug!(
                 "[vault] open: key={} recovery={} non_dumpable={nd}",
                 v.key_store().kind().as_str(),

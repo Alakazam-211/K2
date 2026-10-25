@@ -312,9 +312,12 @@ fn the_upgrade_grants_only_with_per_service_evidence_and_time_boxes_it() {
     assert!(again.granted.is_empty(), "a second run grants nothing new: {again:#?}");
 }
 
-/// Review fix 5 (strong evidence): a running service whose environment
-/// holds the value is granted even when another service names the same
-/// secret; a running service that doesn't hold it is refused.
+/// Review fix 5 + round 2 fix 2 (strong evidence): a running service whose
+/// process provably is that start (its start time matches) and whose
+/// environment holds the value is granted, even when other services name
+/// the same secret. A live pid that isn't that start (a reboot reused it),
+/// or a process whose environment lacks the value (environ rewritten for a
+/// title), proves nothing either way: it falls back to the audit path.
 #[test]
 fn a_running_service_is_judged_by_its_own_environment() {
     let _home = crate::test_support::TempHome::new();
@@ -323,28 +326,47 @@ fn a_running_service_is_judged_by_its_own_environment() {
     let value = format!("k2test_{}", uuid::Uuid::new_v4().simple());
     let name = uniq("R8_LIVE");
     put_server(&v, &name, &value);
-    let (d_has, d_hasnt) = (crate::test_support::Scratch::new(), crate::test_support::Scratch::new());
-    env_k2(d_has.path(), &[("LIVE_TOKEN", format!("k2v://server/{name}"))]);
-    env_k2(d_hasnt.path(), &[("LIVE_TOKEN", format!("k2v://server/{name}"))]);
+    let (d_has, d_hasnt, d_stale) = (crate::test_support::Scratch::new(), crate::test_support::Scratch::new(), crate::test_support::Scratch::new());
+    for d in [&d_has, &d_hasnt, &d_stale] {
+        env_k2(d.path(), &[("LIVE_TOKEN", format!("k2v://server/{name}"))]);
+    }
+    let spawned_at = chrono::Utc::now().timestamp();
     let mut has = std::process::Command::new("sleep").arg("60").env("LIVE_TOKEN", &value).spawn().expect("spawn child with env");
     let mut hasnt = std::process::Command::new("sleep").arg("60").env_remove("LIVE_TOKEN").spawn().expect("spawn child without env");
+    let mut stale = std::process::Command::new("sleep").arg("60").env("LIVE_TOKEN", &value).spawn().expect("spawn stale child");
     let ws = "ws-r8-live";
     let s_has = insert_service(ws, "hassvc", d_has.path(), "running");
     let s_hasnt = insert_service(ws, "hasntsvc", d_hasnt.path(), "running");
-    let t = chrono::Utc::now().timestamp();
-    set_started(ws, "hassvc", Some(has.id() as i64), t - 60);
-    set_started(ws, "hasntsvc", Some(hasnt.id() as i64), t - 60);
+    let s_stale = insert_service(ws, "stalesvc", d_stale.path(), "running");
+    set_started(ws, "hassvc", Some(has.id() as i64), spawned_at);
+    set_started(ws, "hasntsvc", Some(hasnt.id() as i64), spawned_at);
+    // Recorded an hour before this process started: a different process.
+    set_started(ws, "stalesvc", Some(stale.id() as i64), spawned_at - 3600);
+    assert!(pid_started_near(has.id() as i64, spawned_at), "the child's start time is read");
+    assert!(!pid_started_near(stale.id() as i64, spawned_at - 3600), "an hour off is another start");
     let report = run(&v, chrono::Utc::now());
-    let _ = has.kill();
-    let _ = hasnt.kill();
-    let _ = has.wait();
-    let _ = hasnt.wait();
+    for c in [&mut has, &mut hasnt, &mut stale] {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
     assert_eq!(report.granted.len(), 1, "{report:#?}");
     assert_eq!(report.granted[0].service_id, s_has);
     assert!(report.granted[0].reason.contains("running service has it"), "{report:#?}");
-    let r = report.refused.iter().find(|l| l.service_id == s_hasnt).expect("the other is refused");
-    assert!(r.reason.contains("doesn't have it"), "{report:#?}");
+    for sid in [&s_hasnt, &s_stale] {
+        let r = report.refused.iter().find(|l| &l.service_id == sid).expect("refused");
+        assert!(r.reason.contains("3 services name it"), "fell back to the audit path: {report:#?}");
+    }
     assert!(!format!("{report:?}").contains(&value));
+}
+
+#[test]
+fn etime_parses_every_ps_shape() {
+    assert_eq!(parse_etime("00:07"), Some(7));
+    assert_eq!(parse_etime("12:34"), Some(754));
+    assert_eq!(parse_etime("01:02:03"), Some(3723));
+    assert_eq!(parse_etime("2-01:02:03"), Some(2 * 86_400 + 3723));
+    assert_eq!(parse_etime("junk"), None);
+    assert_eq!(parse_etime(""), None);
 }
 
 /// Review fix 4 and 6: the done flag lives in the vault's audit chain, so
@@ -364,8 +386,14 @@ fn the_done_flag_is_in_the_vault_and_a_partial_pass_runs_again() {
     let broken = crate::test_support::Scratch::new();
     std::fs::create_dir_all(broken.path().join(".env.k2")).expect("dir in place of the file");
     insert_service("ws-r8-done", "brokensvc", broken.path(), "running");
+    NOTICES.with(|n| n.set(0));
     upgrade_once(&v);
     assert!(!done(&v), "a partial pass doesn't mark itself done");
+    assert_eq!(NOTICES.with(|n| n.get()), 1, "the first pass tells the owner what it couldn't read");
+    // Still broken next boot: a rerun, no new decision, no new notice.
+    upgrade_once(&v);
+    assert!(!done(&v));
+    assert_eq!(NOTICES.with(|n| n.get()), 1, "a rerun that decided nothing doesn't nag");
     let report: Report = serde_json::from_slice(&std::fs::read(report_path()).expect("report")).expect("report json");
     assert_eq!(report.unreadable.len(), 1, "{report:#?}");
     // Fixed: the next boot completes and marks it done in the audit chain.
@@ -454,4 +482,193 @@ fn the_keep_card_keeps_upgrade_grants_only_for_the_owner() {
         assert_eq!(g.granted_by, "owner");
         assert_eq!(g.delivery, Delivery::Env);
     }
+}
+
+fn own_vault(tag: &str) -> (k2_vault::fsutil::TestDir, k2_vault::LocalVault) {
+    let dir = k2_vault::fsutil::TestDir::new(tag);
+    let ks: std::sync::Arc<dyn k2_vault::KeyStore> = std::sync::Arc::new(k2_vault::keystore::fake::FakeKeyStore::new());
+    let v = k2_vault::LocalVault::open(dir.path().join("vault"), ks, k2_vault::OpenOptions { kdf: k2_vault::confirm::KdfCost::Floor })
+        .expect("open vault");
+    (dir, v)
+}
+
+fn grant_of(v: &k2_vault::LocalVault, sel: &Selector) -> Option<k2_vault::Grant> {
+    v.grants(sel, &Actor::Owner).expect("grants").into_iter().next()
+}
+
+/// Round 2 fix 1: an agent keeping one of its services' `.env.k2`
+/// unreadable can't make every boot re-scan and renew grants. A rerun reads
+/// only the services that were unreadable, never renews a grant the first
+/// pass made, accepts only live-env evidence (no audit window, no mtime),
+/// and tells the owner only about new decisions.
+#[test]
+fn a_rerun_reads_only_unreadable_services_and_never_renews() {
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let (_d, v) = own_vault("r8-rerun");
+    let value = format!("k2test_{}", uuid::Uuid::new_v4().simple());
+    let (used, later) = (uniq("R8_RR_USED"), uniq("R8_RR_LATER"));
+    let sel_used = put_server(&v, &used, &value);
+    let sel_later = put_server(&v, &later, &value);
+    let (d_used, d_broken) = (crate::test_support::Scratch::new(), crate::test_support::Scratch::new());
+    env_k2(d_used.path(), &[("USED_TOKEN", format!("k2v://server/{used}"))]);
+    std::fs::create_dir_all(d_broken.path().join(".env.k2")).expect("dir in place of the file");
+    let ws = "ws-r8-rr";
+    let s_used = insert_service(ws, "usedsvc", d_used.path(), "running");
+    insert_service(ws, "brokensvc", d_broken.path(), "running");
+    let t = chrono::Utc::now().timestamp();
+    set_started(ws, "usedsvc", None, t + 1);
+    set_started(ws, "brokensvc", None, t + 1);
+    old_path_resolve(&v, &sel_used);
+    old_path_resolve(&v, &sel_later);
+    NOTICES.with(|n| n.set(0));
+
+    upgrade_once(&v);
+    let first = grant_of(&v, &sel_used).expect("first pass grants the used one");
+    assert_eq!(first.consumer, Consumer::published_service(s_used.clone()));
+    assert!(!done(&v));
+    assert_eq!(NOTICES.with(|n| n.get()), 1);
+
+    // Boots while it stays unreadable: nothing renewed, no notice.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    upgrade_once(&v);
+    upgrade_once(&v);
+    let again = grant_of(&v, &sel_used).expect("still there");
+    assert_eq!((again.id.clone(), again.expires_at.clone()), (first.id.clone(), first.expires_at.clone()), "never renewed");
+    assert_eq!(NOTICES.with(|n| n.get()), 1, "no notice for a rerun that decided nothing");
+
+    // Readable now, naming a secret with audit-only evidence: a rerun
+    // refuses it (it accepts only a live environment), and says so once.
+    std::fs::remove_dir_all(d_broken.path().join(".env.k2")).expect("fix");
+    env_k2(d_broken.path(), &[("LATER_TOKEN", format!("k2v://server/{later}"))]);
+    upgrade_once(&v);
+    assert!(grant_of(&v, &sel_later).is_none(), "a rerun never grants on audit evidence");
+    assert!(done(&v), "every service read: done");
+    assert_eq!(NOTICES.with(|n| n.get()), 2, "the new refusal is told once");
+    let again = grant_of(&v, &sel_used).expect("still there");
+    assert_eq!(again.expires_at, first.expires_at, "the first grant's time box is unchanged");
+}
+
+/// Round 2 fix 1: a pair that had an upgrade grant (since revoked or
+/// lapsed) is never granted again by a later pass.
+#[test]
+fn a_pair_that_had_an_upgrade_grant_is_never_granted_again() {
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let (_d, v) = own_vault("r8-had");
+    let value = format!("k2test_{}", uuid::Uuid::new_v4().simple());
+    let name = uniq("R8_HAD");
+    let sel = put_server(&v, &name, &value);
+    let dir = crate::test_support::Scratch::new();
+    env_k2(dir.path(), &[("HAD_TOKEN", format!("k2v://server/{name}"))]);
+    let ws = "ws-r8-had";
+    let sid = insert_service(ws, "hadsvc", dir.path(), "running");
+    set_started(ws, "hadsvc", None, chrono::Utc::now().timestamp() + 1);
+    old_path_resolve(&v, &sel);
+    let r = run(&v, chrono::Utc::now());
+    assert_eq!(r.granted.len(), 1, "{r:#?}");
+    let g = grant_of(&v, &sel).expect("granted");
+    v.revoke(&g.id, &Actor::Owner).expect("owner revokes it");
+    let only: std::collections::BTreeSet<String> = [sid.clone()].into_iter().collect();
+    let r = run_scoped(&v, chrono::Utc::now(), &Scope { only: Some(only), decided: Default::default() });
+    assert!(r.granted.is_empty() && grant_of(&v, &sel).is_none(), "never again: {r:#?}");
+    let r = run(&v, chrono::Utc::now());
+    assert!(r.granted.is_empty() && grant_of(&v, &sel).is_none(), "not by a full pass either: {r:#?}");
+}
+
+/// Round 2 fix 5: when the list of services can't be read the pass isn't
+/// done, and the owner is told.
+#[test]
+fn an_unreadable_service_list_is_not_a_complete_pass() {
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let (_d, v) = own_vault("r8-sqlerr");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute_batch("DROP TABLE apps;").expect("drop apps");
+    }
+    NOTICES.with(|n| n.set(0));
+    upgrade_once(&v);
+    assert!(!done(&v), "no done flag after a SQL error");
+    assert_eq!(NOTICES.with(|n| n.get()), 1, "and a notice");
+    let report: Report = serde_json::from_slice(&std::fs::read(report_path()).expect("report")).expect("json");
+    assert_eq!(report.unreadable_ids, vec!["*".to_string()], "{report:#?}");
+}
+
+/// Round 2 fix 6: a row written straight into `vault.db` (no audit key)
+/// fails the chain check: a forged done flag isn't believed, and the pass
+/// makes no grants on a chain it can't verify (fail closed).
+#[test]
+fn a_forged_audit_row_is_not_believed() {
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let (d, v) = own_vault("r8-forge");
+    let name = uniq("R8_FORGE");
+    let sel = put_server(&v, &name, "k2test_forge_value_12345678901234");
+    let dir = crate::test_support::Scratch::new();
+    env_k2(dir.path(), &[("FORGE_TOKEN", format!("k2v://server/{name}"))]);
+    insert_service("ws-r8-forge", "forgesvc", dir.path(), "running");
+    set_started("ws-r8-forge", "forgesvc", None, chrono::Utc::now().timestamp() + 1);
+    old_path_resolve(&v, &sel);
+    {
+        let raw = rusqlite::Connection::open(d.path().join("vault").join("vault.db")).expect("open vault.db directly");
+        let seq: i64 = raw.query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM audit", [], |r| r.get(0)).expect("seq");
+        raw.execute(
+            "INSERT INTO audit (seq, ts, action, actor, outcome, count, prev_mac, row_mac) VALUES (?1, '2026-01-01T00:00:00Z', ?2, 'system:upgrade-r8', 'ok', 1, x'00', x'00')",
+            rusqlite::params![seq, DONE_ACTION],
+        )
+        .expect("forge a done row");
+    }
+    assert!(v.verify_audit_chain().is_err(), "the chain check catches it");
+    assert!(!done(&v), "a forged done flag isn't believed");
+    upgrade_once(&v);
+    assert!(grant_of(&v, &sel).is_none(), "no grants on a chain that doesn't verify");
+}
+
+/// Round 2 fix 4: the card only makes a time-boxed upgrade grant
+/// permanent, never some other grant, and keeps a version pin.
+#[test]
+fn the_keep_card_only_keeps_upgrade_grants_and_keeps_the_pin() {
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let v = crate::vault::ensure_test_vault();
+    let svc = uuid::Uuid::new_v4().to_string();
+    let mk = |key: &str, by: &Actor, expires: bool, version: Option<u32>| {
+        let name = uniq(key);
+        let sel = put_server(&v, &name, "k2test_pin_value_1234567890abcd");
+        if version.is_some() {
+            v.rotate(&sel, SecretBytes::from_slice(b"k2test_pin_value_second_000000"), &Actor::Owner).expect("rotate");
+        }
+        let g = v
+            .grant(
+                GrantRequest {
+                    selector: sel.clone(),
+                    consumer: Consumer::published_service(svc.clone()),
+                    delivery: Delivery::Env,
+                    env_name: Some(key.into()),
+                    file_name: None,
+                    hosts_narrowed: None,
+                    expires_at: expires.then(|| (chrono::Utc::now() + chrono::Duration::days(UPGRADE_GRANT_DAYS)).to_rfc3339()),
+                    version,
+                },
+                by,
+            )
+            .expect("grant");
+        CardRow { grant_id: g.id, secret_id: g.secret_id, service_id: svc.clone(), key: key.into(), secret: name }
+    };
+    let up = Actor::System("upgrade-r8".into());
+    let owners = mk("OWNERS_OWN", &Actor::Owner, true, None);
+    let pinned = mk("PINNED_UP", &up, true, Some(1));
+    let params = serde_json::json!({ "workspaceId": "ws-pin", "rows": [owners.clone(), pinned.clone()], "expiresAt": 0 });
+    let r = keep_action(&params, KEEP_ALL, "owner").expect("keep all");
+    assert_eq!(r["kept"], 1, "{r}");
+    assert!(r["message"].as_str().expect("message").contains("isn't a time-boxed upgrade grant"), "{r}");
+    let grants = v.grants_to(&Consumer::published_service(svc.clone())).expect("grants");
+    let own = grants.iter().find(|(g, _)| g.env_name.as_deref() == Some("OWNERS_OWN")).expect("owner's grant").0.clone();
+    assert!(own.expires_at.is_some(), "an owner's own grant is never touched by the card");
+    let kept = grants.iter().find(|(g, _)| g.env_name.as_deref() == Some("PINNED_UP")).expect("kept").0.clone();
+    assert_eq!(kept.expires_at, None);
+    assert_eq!(kept.version_selector, "1", "the pin is kept");
+    assert_eq!(kept.granted_by, "owner");
 }

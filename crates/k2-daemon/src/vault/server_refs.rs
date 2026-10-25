@@ -43,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use k2_vault::{
-    Actor, AuditQuery, Consumer, Delivery, GrantRequest, LocalVault, Namespace, Requester, ScopeKind, SecretStatus, SecretStore,
+    Actor, Consumer, Delivery, GrantRequest, LocalVault, Namespace, Requester, ScopeKind, SecretStatus, SecretStore,
     Selector, Use,
 };
 use serde::{Deserialize, Serialize};
@@ -104,22 +104,41 @@ pub struct Report {
     pub done_at: String,
     pub window_days: i64,
     pub grant_days: i64,
+    /// A rerun after an unreadable first pass (only those services).
+    #[serde(default)]
+    pub rerun: bool,
     /// Granted to that one service, time-boxed.
     pub granted: Vec<RefLine>,
     /// Service references now refused.
     pub refused: Vec<RefLine>,
     /// Agent launch-block references now refused (never granted).
     pub launch_refused: Vec<RefLine>,
-    /// Services whose `.env.k2` or Seed couldn't be read: the pass is
-    /// partial and runs again next boot.
+    /// What couldn't be read (a service's `.env.k2` or Seed, or the list of
+    /// services itself): the pass is partial and those are checked again.
     pub unreadable: Vec<String>,
+    /// The service ids behind `unreadable` (`*` = the list of services).
+    #[serde(default)]
+    pub unreadable_ids: Vec<String>,
+    /// Services read in full this pass.
+    #[serde(default)]
+    pub scanned_ids: Vec<String>,
 }
 
 impl Report {
     pub fn is_empty(&self) -> bool {
         self.granted.is_empty() && self.refused.is_empty() && self.launch_refused.is_empty() && self.unreadable.is_empty()
     }
+    /// Anything the owner must hear about: something granted or refused.
+    pub fn has_decisions(&self) -> bool {
+        !self.granted.is_empty() || !self.refused.is_empty() || !self.launch_refused.is_empty()
+    }
 }
+
+/// Audit actions the pass keeps its state in (all by `system:upgrade-r8`).
+const PASS_ACTION: &str = "upgrade_r8_pass";
+const DECIDED_ACTION: &str = "upgrade_r8_decided";
+const UNREADABLE_ACTION: &str = "upgrade_r8_unreadable";
+const SCANNED_ACTION: &str = "upgrade_r8_scanned";
 
 fn report_path() -> PathBuf {
     super::vault_dir(&k2_core::paths::k2_home()).join("r8-server-refs.json")
@@ -130,18 +149,62 @@ pub fn done(vault: &LocalVault) -> bool {
     vault.audit_has(DONE_ACTION, &actor()).unwrap_or(false)
 }
 
+/// What a pass looks at.
+#[derive(Debug, Default, Clone)]
+pub struct Scope {
+    /// `None`: every service (the first pass). `Some`: only these service
+    /// ids, the ones an earlier pass couldn't read (round 2 fix 1).
+    pub only: Option<BTreeSet<String>>,
+    /// `<service id>/<secret id>` pairs an earlier pass decided: never again.
+    pub decided: BTreeSet<String>,
+}
+
+fn pair(service_id: &str, secret_id: &str) -> String {
+    format!("{service_id}/{secret_id}")
+}
+
 /// The once-only boot step (from [`super::boot`], before services start).
+///
+/// State lives in the vault's audit chain, verified before anything is
+/// read from it. Forging a row there needs the audit key; a row written
+/// straight into `vault.db` fails the chain check and the pass doesn't run
+/// (no grants: fail closed). The first pass is stamped (`upgrade_r8_pass`);
+/// each decided (service, secret) pair is recorded and never decided again;
+/// unreadable services are recorded and are the only ones a rerun reads; a
+/// rerun accepts only the live-env evidence (no audit window, no mtime) and
+/// posts a notice and cards only when it decided something new.
 pub fn upgrade_once(vault: &LocalVault) {
-    match vault.audit_has(DONE_ACTION, &actor()) {
-        Ok(true) => return,
-        Ok(false) => {}
+    if let Err(e) = vault.verify_audit_chain() {
+        k2_core::log_debug!("WARN [vault] R8 upgrade skipped: the vault audit chain doesn't verify ({}); no grants made", e.code);
+        return;
+    }
+    let state = (|| -> Result<(bool, Option<String>, Vec<String>, Vec<String>, Vec<String>), k2_vault::VaultError> {
+        Ok((
+            vault.audit_has(DONE_ACTION, &actor())?,
+            vault.audit_first_ts(PASS_ACTION, &actor())?,
+            vault.audit_consumers(DECIDED_ACTION, &actor())?,
+            vault.audit_consumers(UNREADABLE_ACTION, &actor())?,
+            vault.audit_consumers(SCANNED_ACTION, &actor())?,
+        ))
+    })();
+    let (is_done, first, decided, unreadable, scanned) = match state {
+        Ok(s) => s,
         Err(e) => {
-            // Fail closed: no grants made, the new rule applies; try next boot.
             k2_core::log_debug!("WARN [vault] R8 upgrade skipped: the audit couldn't be read ({})", e.code);
             return;
         }
+    };
+    if is_done {
+        return;
     }
-    let report = run(vault, chrono::Utc::now());
+    let scope = Scope {
+        only: first.as_ref().map(|_| {
+            let scanned: BTreeSet<String> = scanned.into_iter().collect();
+            unreadable.into_iter().filter(|u| !scanned.contains(u)).collect()
+        }),
+        decided: decided.into_iter().collect(),
+    };
+    let report = run_scoped(vault, chrono::Utc::now(), &scope);
     if let Ok(body) = serde_json::to_vec_pretty(&report) {
         let path = report_path();
         if let Some(dir) = path.parent() {
@@ -151,22 +214,40 @@ pub fn upgrade_once(vault: &LocalVault) {
             k2_core::log_debug!("[vault] R8 upgrade report not saved: {}", e.hint);
         }
     }
+    let note = |action: &str, consumer: &str| {
+        if let Err(e) = vault.audit_note(action, &actor(), consumer) {
+            k2_core::log_debug!("WARN [vault] R8 upgrade: {action} not recorded ({})", e.code);
+        }
+    };
+    if first.is_none() {
+        note(PASS_ACTION, &report.done_at);
+    }
+    for l in report.granted.iter().chain(report.refused.iter()) {
+        note(DECIDED_ACTION, &pair(&l.service_id, &l.secret_id));
+    }
+    for id in &report.scanned_ids {
+        note(SCANNED_ACTION, id);
+    }
+    for id in &report.unreadable_ids {
+        note(UNREADABLE_ACTION, id);
+    }
     if report.unreadable.is_empty() {
         let summary = format!("granted {} refused {} launch {}", report.granted.len(), report.refused.len(), report.launch_refused.len());
-        if let Err(e) = vault.audit_note(DONE_ACTION, &actor(), &summary) {
-            k2_core::log_debug!("WARN [vault] R8 upgrade done flag not written ({}); it runs again next boot", e.code);
-        }
+        note(DONE_ACTION, &summary);
     } else {
-        k2_core::log_debug!("WARN [vault] R8 upgrade partial ({} unreadable); it runs again next boot", report.unreadable.len());
+        k2_core::log_debug!("WARN [vault] R8 upgrade partial ({} unreadable); only those are read again next boot", report.unreadable.len());
     }
     k2_core::log_debug!(
-        "[vault] R8 upgrade: granted {} refused {} launch-block refused {} unreadable {}",
+        "[vault] R8 upgrade{}: granted {} refused {} launch-block refused {} unreadable {}",
+        if report.rerun { " (rerun)" } else { "" },
         report.granted.len(),
         report.refused.len(),
         report.launch_refused.len(),
         report.unreadable.len()
     );
-    if !report.is_empty() {
+    // The first pass always tells the owner; a rerun only when it decided
+    // something new (an agent can't make it nag by keeping a file unreadable).
+    if (!report.rerun && !report.is_empty()) || report.has_decisions() {
         notify_owner(&report);
         present_cards(&report);
     }
@@ -178,6 +259,8 @@ struct Service {
     name: String,
     is_app: bool,
     dirs: Vec<PathBuf>,
+    /// The recorded pid, only when it is alive AND provably this service's
+    /// process (started when K2 says the service started; round 2 fix 2).
     pid: Option<i64>,
     /// Running, wanted running, or started in the window.
     recent: bool,
@@ -185,44 +268,43 @@ struct Service {
 }
 
 #[allow(clippy::type_complexity)]
-fn services(cutoff_unix: i64) -> Vec<Service> {
+fn services(cutoff_unix: i64) -> Result<Vec<Service>, String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let sql = "SELECT ps.id, ps.project_id, ps.name, ps.cmd, ps.cwd, ps.last_started_at, ps.pid, ps.desired, \
                a.live_seed, a.preview_seed, a.state, a.updated_at \
                FROM published_services ps LEFT JOIN apps a ON a.service_id = ps.id";
-    let mut st = match conn.prepare(sql) {
-        Ok(s) => s,
-        Err(e) => {
-            k2_core::log_debug!("WARN [vault] R8 upgrade: services: {e}");
-            return vec![];
-        }
-    };
-    let rows = st.query_map([], |r| {
-        Ok((
-            (r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?),
-            (r.get::<_, Option<i64>>(5)?, r.get::<_, Option<i64>>(6)?, r.get::<_, String>(7)?),
-            (r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, Option<String>>(10)?, r.get::<_, Option<i64>>(11)?),
-        ))
-    });
-    let Ok(rows) = rows else { return vec![] };
+    let mut st = conn.prepare(sql).map_err(|e| format!("the list of services couldn't be read ({e})"))?;
+    let rows = st
+        .query_map([], |r| {
+            Ok((
+                (r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?),
+                (r.get::<_, Option<i64>>(5)?, r.get::<_, Option<i64>>(6)?, r.get::<_, String>(7)?),
+                (r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, Option<String>>(10)?, r.get::<_, Option<i64>>(11)?),
+            ))
+        })
+        .map_err(|e| format!("the list of services couldn't be read ({e})"))?;
     let mut out = vec![];
-    for ((id, ws, name, cmd, cwd), (started, pid, desired), (live, preview, state, app_updated)) in rows.flatten() {
+    for row in rows {
+        // Round 2 fix 5: one bad row makes the pass partial, never "done".
+        let ((id, ws, name, cmd, cwd), (started, pid, desired), (live, preview, state, app_updated)) =
+            row.map_err(|e| format!("a service row couldn't be read ({e})"))?;
         let is_app = cmd == k2_core::published_services::CMD_APP_SENTINEL;
-        let pid = pid.filter(|p| pid_alive(*p));
+        let live_pid = pid.filter(|p| pid_alive(*p));
+        let pid = live_pid.filter(|p| started.is_some_and(|s| pid_started_near(*p, s)));
         let dirs: Vec<PathBuf> = if is_app {
             // An App resolves `.env.k2` inside its Seed (the engine's workdir).
             [live, preview].into_iter().flatten().filter(|h| !h.is_empty()).map(|h| k2_core::deploy::seed::seed_path(&h)).collect()
         } else {
             vec![PathBuf::from(cwd)]
         };
-        let recent = pid.is_some()
+        let recent = live_pid.is_some()
             || desired == k2_core::published_services::DESIRED_RUNNING
             || started.is_some_and(|t| t >= cutoff_unix)
             || (is_app && (state.as_deref() == Some("running") || app_updated.is_some_and(|t| t >= cutoff_unix)));
         out.push(Service { id, workspace_id: ws, name, is_app, dirs, pid, recent, last_started_at: started });
     }
-    out
+    Ok(out)
 }
 
 fn pid_alive(pid: i64) -> bool {
@@ -230,35 +312,80 @@ fn pid_alive(pid: i64) -> bool {
     p > 0 && unsafe { libc::kill(p, 0) == 0 }
 }
 
+/// How far a process's start may be from `last_started_at` and still be
+/// that start (K2 stamps the time right after the spawn returns).
+const START_SLACK_SECS: i64 = 10;
+
+/// Did process `pid` start within [`START_SLACK_SECS`] of `started_at`?
+/// After a reboot the recorded pid can be some other process: this tells
+/// them apart. `false` when K2 can't tell.
+pub fn pid_started_near(pid: i64, started_at: i64) -> bool {
+    match process_start_unix(pid) {
+        Some(t) => (t - started_at).abs() <= START_SLACK_SECS,
+        None => false,
+    }
+}
+
+/// When process `pid` started (unix seconds), from `ps -o etime=`
+/// (`[[dd-]hh:]mm:ss`, on Linux and macOS).
+pub fn process_start_unix(pid: i64) -> Option<i64> {
+    let out = std::process::Command::new("ps").args(["-o", "etime=", "-p", &pid.to_string()]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let elapsed = parse_etime(std::str::from_utf8(&out.stdout).ok()?.trim())?;
+    Some(chrono::Utc::now().timestamp() - elapsed)
+}
+
+/// `[[dd-]hh:]mm:ss` → seconds.
+pub fn parse_etime(s: &str) -> Option<i64> {
+    let (days, rest) = match s.split_once('-') {
+        Some((d, r)) => (d.parse::<i64>().ok()?, r),
+        None => (0, s),
+    };
+    let parts: Vec<i64> = rest.split(':').map(|p| p.parse::<i64>().ok()).collect::<Option<_>>()?;
+    let (h, m, sec) = match parts.as_slice() {
+        [m, s] => (0, *m, *s),
+        [h, m, s] => (*h, *m, *s),
+        _ => return None,
+    };
+    Some(((days * 24 + h) * 60 + m) * 60 + sec)
+}
+
 /// Does process `pid`'s environment hold exactly `key=value`? `None` when
-/// K2 can't read it (another user's process, no `ps`, gone).
+/// K2 can't read it (another user's process, no `ps`, gone). Every buffer
+/// that held the value is zeroed before it's dropped.
 pub fn process_env_has(pid: i64, key: &str, value: &[u8]) -> Option<bool> {
-    let mut want = Vec::with_capacity(key.len() + 1 + value.len());
+    use zeroize::Zeroizing;
+    let mut want = Zeroizing::new(Vec::with_capacity(key.len() + 1 + value.len()));
     want.extend_from_slice(key.as_bytes());
     want.push(b'=');
     want.extend_from_slice(value);
     #[cfg(target_os = "linux")]
     {
-        let env = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+        let env = Zeroizing::new(std::fs::read(format!("/proc/{pid}/environ")).ok()?);
         Some(env.split(|b| *b == 0).any(|kv| kv == want.as_slice()))
     }
     #[cfg(target_os = "macos")]
     {
         let out = std::process::Command::new("/bin/ps").args(["-E", "-ww", "-o", "command=", "-p", &pid.to_string()]).output().ok()?;
-        if !out.status.success() || out.stdout.is_empty() {
+        let ok = out.status.success();
+        let stdout = Zeroizing::new(out.stdout);
+        if !ok || stdout.is_empty() {
             return None;
         }
-        let line = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
-        let mut tok = vec![b' '];
+        let line = stdout.strip_suffix(b"\n").unwrap_or(&stdout);
+        let mut tok = Zeroizing::new(vec![b' ']);
         tok.extend_from_slice(&want);
-        let hit = line.windows(tok.len()).enumerate().any(|(i, w)| {
-            w == tok.as_slice() && line.get(i + tok.len()).is_none_or(|c| *c == b' ')
-        });
+        let hit = line
+            .windows(tok.len())
+            .enumerate()
+            .any(|(i, w)| w == tok.as_slice() && line.get(i + tok.len()).is_none_or(|c| *c == b' '));
         Some(hit)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = want;
+        let _ = (&want, pid);
         None
     }
 }
@@ -334,19 +461,8 @@ fn old_rule_resolves(vault: &LocalVault, sel: &Selector, workspace_id: Option<&s
     .then_some(m)
 }
 
-/// Did the old `.env.k2` path resolve this secret since `since`?
-fn resolved_by_publish_since(vault: &LocalVault, secret_id: &str, since: &str) -> bool {
-    let q = AuditQuery { secret_id: Some(secret_id.to_string()), since: Some(since.to_string()), workspace_id: None, limit: Some(5000) };
-    match vault.audit(&q, &actor()) {
-        Ok(rows) => rows.iter().any(|r| r.actor == OLD_PUBLISH_ACTOR && r.action == "resolve" && r.outcome.starts_with("ok")),
-        Err(e) => {
-            k2_core::log_debug!("WARN [vault] R8 upgrade: audit: {}", e.code);
-            false
-        }
-    }
-}
-
 /// Why this service may keep it, or why not.
+#[allow(clippy::too_many_arguments)]
 fn evidence(
     vault: &LocalVault,
     svc: &Service,
@@ -355,14 +471,18 @@ fn evidence(
     referrers: usize,
     env_mtime: Option<i64>,
     since: &str,
+    rerun: bool,
 ) -> Result<&'static str, String> {
     if let Some(pid) = svc.pid {
         let value = vault.resolve(&Selector::Id(m.id.clone()), Use::System, &Requester::System(ACTOR.into())).map_err(|e| e.code.to_string())?;
-        match process_env_has(pid, key, value.value.expose()) {
-            Some(true) => return Ok("the running service has it in its environment"),
-            Some(false) => return Err("the running service doesn't have it in its environment".into()),
-            None => {} // can't read: fall back to the audit evidence
+        if process_env_has(pid, key, value.value.expose()) == Some(true) {
+            return Ok("the running service has it in its environment");
         }
+        // Not found (or unreadable): a process may rewrite its environ for
+        // its title (nginx, postgres, node), so this is no proof against.
+    }
+    if rerun {
+        return Err("checked again after its .env.k2 couldn't be read: only a running service holding it in its environment counts".into());
     }
     if referrers != 1 {
         return Err(format!("{referrers} services name it, so K2 can't tell which one used it"));
@@ -377,15 +497,23 @@ fn evidence(
             _ => return Err("its .env.k2 changed after it last started".into()),
         }
     }
-    if !resolved_by_publish_since(vault, &m.id, since) {
+    let used = vault.audit_seen(&m.id, "resolve", OLD_PUBLISH_ACTOR, None, Some(since), None).map_err(|e| e.code.to_string())?;
+    if !used {
         return Err(format!("the vault shows no use in the last {WINDOW_DAYS} days"));
     }
     Ok("the only service that names it, and the vault shows it was used")
 }
 
-/// The pass itself (tests call it with their own clock).
+/// The first pass over every service (tests call it with their own clock).
 pub fn run(vault: &LocalVault, now: chrono::DateTime<chrono::Utc>) -> Report {
+    run_scoped(vault, now, &Scope::default())
+}
+
+/// A pass over `scope` (round 2 fix 1: a rerun reads only the services an
+/// earlier pass couldn't, and never decides a pair twice).
+pub fn run_scoped(vault: &LocalVault, now: chrono::DateTime<chrono::Utc>, scope: &Scope) -> Report {
     vault.flush_rollups();
+    let rerun = scope.only.is_some();
     let cutoff = now - chrono::Duration::days(WINDOW_DAYS);
     let since = cutoff.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let expires = (now + chrono::Duration::days(UPGRADE_GRANT_DAYS)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -393,20 +521,43 @@ pub fn run(vault: &LocalVault, now: chrono::DateTime<chrono::Utc>) -> Report {
         done_at: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         window_days: WINDOW_DAYS,
         grant_days: UPGRADE_GRANT_DAYS,
+        rerun,
         ..Default::default()
     };
-    let svcs = services(cutoff.timestamp());
-    // Pass 1: every reference line, and who names each secret.
+    if let Err(e) = vault.verify_audit_chain() {
+        report.unreadable.push(format!("the vault audit chain doesn't verify ({})", e.code));
+        report.unreadable_ids.push("*".into());
+        return report;
+    }
+    let all = match services(cutoff.timestamp()) {
+        Ok(s) => s,
+        Err(why) => {
+            report.unreadable.push(why);
+            report.unreadable_ids.push("*".into());
+            return report;
+        }
+    };
+    let wanted = |id: &str| match &scope.only {
+        None => true,
+        Some(only) => only.contains(id) || only.contains("*"),
+    };
+    // Referrer counts look at every service (a rerun too), so a secret two
+    // services name is never pinned on one of them.
     let mut lines: Vec<Line> = vec![];
     let mut mtimes: BTreeMap<usize, Option<i64>> = BTreeMap::new();
     let mut referrers: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
-    for (i, svc) in svcs.iter().enumerate() {
+    for (i, svc) in all.iter().enumerate() {
         let env_file = super::publish_env::get(&svc.id).env_file.unwrap_or_else(|| ".env.k2".into());
+        let mine = wanted(&svc.id);
         if svc.is_app && svc.dirs.iter().any(|d| !d.is_dir()) {
-            report.unreadable.push(format!("App service {}: its Seed folder is missing", svc.id));
+            if mine {
+                report.unreadable.push(format!("App service {}: its Seed folder is missing", svc.id));
+                report.unreadable_ids.push(svc.id.clone());
+            }
             continue;
         }
         let mut seen = BTreeSet::new();
+        let mut readable = true;
         for dir in &svc.dirs {
             if !svc.is_app {
                 mtimes.insert(i, mtime(dir, &env_file));
@@ -415,7 +566,11 @@ pub fn run(vault: &LocalVault, now: chrono::DateTime<chrono::Utc>) -> Report {
                 Read::Lines(l) => l,
                 Read::Absent => continue,
                 Read::Unreadable(why) => {
-                    report.unreadable.push(format!("service {}: {why}", svc.id));
+                    if mine {
+                        report.unreadable.push(format!("service {}: {why}", svc.id));
+                        report.unreadable_ids.push(svc.id.clone());
+                    }
+                    readable = false;
                     continue;
                 }
             };
@@ -427,17 +582,30 @@ pub fn run(vault: &LocalVault, now: chrono::DateTime<chrono::Utc>) -> Report {
                 if let Ok(m) = vault.meta(&sel, &actor()) {
                     referrers.entry(m.id).or_default().insert(i);
                 }
-                lines.push(Line { svc: i, key, sel });
+                if mine {
+                    lines.push(Line { svc: i, key, sel });
+                }
             }
         }
+        if mine && readable {
+            report.scanned_ids.push(svc.id.clone());
+        }
     }
-    // Pass 2: what the new rule refuses, and the evidence for each.
     for l in lines {
-        let svc = &svcs[l.svc];
+        let svc = &all[l.svc];
         let Some(m) = old_rule_resolves(vault, &l.sel, Some(&svc.workspace_id)) else { continue };
+        if scope.decided.contains(&pair(&svc.id, &m.id)) {
+            continue; // an earlier pass decided this pair
+        }
+        // Never a second upgrade grant for a pair that has (or had) one,
+        // even expired, revoked or lapsed.
+        let consumer = Consumer::published_service(svc.id.clone()).label();
+        if vault.audit_seen(&m.id, "grant", &actor().stamp(), Some(&consumer), None, None).unwrap_or(true) {
+            continue;
+        }
         let who = Requester::PublishedService { id: svc.id.clone(), workspace_id: svc.workspace_id.clone() };
         if vault.ref_would_resolve(&l.sel, &who).unwrap_or(false) {
-            continue; // the new rule allows it (or an earlier pass granted it)
+            continue; // the new rule allows it
         }
         let mut line = RefLine {
             service_id: svc.id.clone(),
@@ -451,7 +619,7 @@ pub fn run(vault: &LocalVault, now: chrono::DateTime<chrono::Utc>) -> Report {
             ..Default::default()
         };
         let n = referrers.get(&m.id).map(BTreeSet::len).unwrap_or(0);
-        match evidence(vault, svc, &l.key, &m, n, mtimes.get(&l.svc).copied().flatten(), &since) {
+        match evidence(vault, svc, &l.key, &m, n, mtimes.get(&l.svc).copied().flatten(), &since, rerun) {
             Err(why) => {
                 line.reason = why;
                 report.refused.push(line);
@@ -482,7 +650,9 @@ pub fn run(vault: &LocalVault, now: chrono::DateTime<chrono::Utc>) -> Report {
             }
         }
     }
-    report.launch_refused = launch_block_refusals(vault);
+    if !rerun {
+        report.launch_refused = launch_block_refusals(vault);
+    }
     report
 }
 
@@ -536,11 +706,13 @@ fn launch_block_refusals(vault: &LocalVault) -> Vec<RefLine> {
     out
 }
 
+/// The `--scope` a printed command needs: the workspace **id** (round 2
+/// fix 7: a sanitized label may not name the workspace).
 fn scope_flag(l: &RefLine) -> String {
     if l.scope == "server" {
         "--scope server".into()
     } else {
-        format!("--scope ws:{}", l.workspace)
+        format!("--scope ws:{}", l.workspace_id)
     }
 }
 
@@ -577,8 +749,8 @@ pub fn notice_body(r: &Report) -> String {
         b.push_str("\nAgent launch blocks now refused (the agent's next session starts without it):\n");
         for l in &r.launch_refused {
             b.push_str(&format!(
-                "- workspace {}: {} = {}: {}. To allow: k2 vault grant {} {} --to ws:{} --as env\n",
-                l.workspace, l.key, l.secret, l.reason, l.secret, scope_flag(l), l.workspace
+                "- workspace {} ({}): {} = {}: {}. To allow: k2 vault grant {} {} --to ws:{} --as env\n",
+                l.workspace, l.workspace_id, l.key, l.secret, l.reason, l.secret, scope_flag(l), l.workspace_id
             ));
         }
     }
@@ -611,7 +783,16 @@ fn notify_owner(r: &Report) {
         k2_core::log_debug!("WARN [vault] R8 upgrade notice: {e}");
     }
     #[cfg(test)]
-    let _ = (title, body);
+    {
+        let _ = (title, body);
+        NOTICES.with(|n| n.set(n.get() + 1));
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Notices filed on this test's thread.
+    pub static NOTICES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// One card row (the action's params).
@@ -701,13 +882,18 @@ pub fn present_card(workspace_id: &str, rows: &[CardRow], expires_at: i64) {
     let _ = (prompt, opts, action, expires_at);
 }
 
-/// Make one upgrade grant permanent, as the person who tapped: the grant
-/// must still be the one the card names (same id, secret and service).
+/// Make one upgrade grant permanent, as the person who tapped. The grant
+/// must still be the one the card names (same id, secret and service), and
+/// still an upgrade grant with an expiry (round 2 fix 4): a card never
+/// turns some other grant into a permanent one. A version pin is kept.
 fn keep_one(vault: &LocalVault, row: &CardRow, person: &Actor) -> Result<(), String> {
     let grants = vault.grants_to(&Consumer::published_service(row.service_id.clone())).map_err(|e| e.code.to_string())?;
     let Some((g, _)) = grants.into_iter().find(|(g, _)| g.id == row.grant_id && g.secret_id == row.secret_id) else {
         return Err(format!("{} for service {} is no longer there", row.key, row.service_id));
     };
+    if g.granted_by != actor().stamp() || g.expires_at.is_none() {
+        return Err(format!("{} for service {} isn't a time-boxed upgrade grant any more", row.key, row.service_id));
+    }
     vault
         .grant(
             GrantRequest {
@@ -718,7 +904,7 @@ fn keep_one(vault: &LocalVault, row: &CardRow, person: &Actor) -> Result<(), Str
                 file_name: g.file_name.clone(),
                 hosts_narrowed: g.hosts_narrowed.clone(),
                 expires_at: None,
-                version: None,
+                version: g.version_selector.parse::<u32>().ok(),
             },
             person,
         )
@@ -727,8 +913,10 @@ fn keep_one(vault: &LocalVault, row: &CardRow, person: &Actor) -> Result<(), Str
 }
 
 /// The card action ([`crate::action_cards::run`]). `by` is the answering
-/// person (`owner` or a login; the answer route already refuses agents,
-/// terminals, widgets and App guests). Only the owner or an Admin keeps.
+/// person. The action-card answer route lets only the server's **owner**
+/// answer (the owner token or an Owner login; agents, terminals, widgets,
+/// App guests and Admins are refused there), and this checks the same
+/// again: only the owner keeps (round 2 fix 3).
 pub fn keep_action(params: &serde_json::Value, answer: &str, by: &str) -> Result<serde_json::Value, String> {
     let rows: Vec<CardRow> = serde_json::from_value(params["rows"].clone()).map_err(|_| "the card names no grants".to_string())?;
     let ws = params["workspaceId"].as_str().unwrap_or_default().to_string();
@@ -745,8 +933,8 @@ pub fn keep_action(params: &serde_json::Value, answer: &str, by: &str) -> Result
         crate::sidecar_routes::Caller::Login { username: by.to_string() }
     };
     let c = crate::vault::actor::from_caller(caller, None).map_err(|e| e.hint)?;
-    if !c.actor.is_admin_human() {
-        return Err("only the owner or an Admin keeps a vault grant".into());
+    if !matches!(c.actor, Actor::Owner | Actor::Login { role: k2_vault::Role::Owner, .. }) {
+        return Err("only the server's owner keeps a vault grant from this card".into());
     }
     let vault = crate::vault::get().map_err(|e| e.hint)?;
     let (chosen, rest): (Vec<CardRow>, Vec<CardRow>) = if answer == KEEP_ALL {

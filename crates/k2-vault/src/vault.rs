@@ -1854,19 +1854,71 @@ impl LocalVault {
 
     /// Write one daemon note into the vault's own audit chain (MAC'd,
     /// append-only): `action` by `actor`, about `consumer`. Names only.
-    /// The R8 upgrade's done flag lives here, not in a file an agent could
-    /// delete (review fix 4).
+    /// The R8 upgrade keeps its state here (done flag, first pass, the
+    /// pairs it decided), not in a file an agent could delete.
     pub fn audit_note(&self, action: &str, actor: &Actor, consumer: &str) -> Result<()> {
         let e = Entry::new(action, &actor.stamp(), "ok").consumer(consumer.to_string());
         self.mutate(false, |_, _| Ok(((), vec![e])))
     }
 
-    /// Is there an audit row with exactly this `action` and `actor` stamp?
+    /// Check every audit row's MAC and the chain. Callers that make
+    /// decisions from audit rows (the R8 upgrade) call this first, so a row
+    /// written straight into `vault.db` without the audit key is refused.
+    pub fn verify_audit_chain(&self) -> Result<()> {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        verify_chain(&conn, &keys.audit)
+    }
+
+    /// Is there an `ok` audit row with exactly this `action` and `actor`
+    /// stamp? Verifies the chain first.
     pub fn audit_has(&self, action: &str, actor: &Actor) -> Result<bool> {
+        Ok(self.audit_first_ts(action, actor)?.is_some())
+    }
+
+    /// The earliest `ok` row's time for `action` by `actor` (chain verified).
+    pub fn audit_first_ts(&self, action: &str, actor: &Actor) -> Result<Option<String>> {
+        self.verify_audit_chain()?;
+        let conn = self.conn.lock();
+        let ts: Option<String> = conn
+            .query_row(
+                "SELECT ts FROM audit WHERE action = ?1 AND actor = ?2 AND outcome = 'ok' ORDER BY seq ASC LIMIT 1",
+                params![action, actor.stamp()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(ts)
+    }
+
+    /// Every `consumer` of `ok` rows for `action` by `actor` (chain
+    /// verified). No row cap.
+    pub fn audit_consumers(&self, action: &str, actor: &Actor) -> Result<Vec<String>> {
+        self.verify_audit_chain()?;
+        let conn = self.conn.lock();
+        let mut st = conn.prepare("SELECT consumer FROM audit WHERE action = ?1 AND actor = ?2 AND outcome = 'ok' AND consumer IS NOT NULL ORDER BY seq")?;
+        let rows = st.query_map(params![action, actor.stamp()], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Is there a row for `secret_id` with this `action`, raw `actor`
+    /// label (e.g. `daemon:publish`), an outcome starting `ok`, at or
+    /// after `since` and (when given) before `until`, and (when given) this
+    /// `consumer`? One query by secret, no row cap. Call
+    /// [`Self::verify_audit_chain`] first when the answer grants anything.
+    pub fn audit_seen(
+        &self,
+        secret_id: &str,
+        action: &str,
+        actor_label: &str,
+        consumer: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> Result<bool> {
         let conn = self.conn.lock();
         let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM audit WHERE action = ?1 AND actor = ?2 AND outcome = 'ok'",
-            params![action, actor.stamp()],
+            "SELECT COUNT(*) FROM audit WHERE secret_id = ?1 AND action = ?2 AND actor = ?3 AND outcome LIKE 'ok%' \
+             AND (?4 IS NULL OR consumer = ?4) AND (?5 IS NULL OR ts >= ?5) AND (?6 IS NULL OR ts < ?6)",
+            params![secret_id, action, actor_label, consumer, since, until],
             |r| r.get(0),
         )?;
         Ok(n > 0)

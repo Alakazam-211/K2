@@ -111,16 +111,25 @@ fixture() {
 # The App stand-in: one insert per ~100 ms as a non-superuser over TCP on
 # the database's CURRENT cluster (it follows K2's record, as an App's DSN
 # does after its re-host). Each line of the log: <n> <ok|fail> <epoch ms>.
-writer_start() { # writer_start <db> <log>
-    local db="$1" log="$2"
+# `async`: every insert commits with synchronous_commit = off (security
+# review B2: an acknowledged commit can sit past the WAL write position
+# when the write block lands; it must still reach 17). Its n are
+# -(100000 + i), apart from the sync writer's.
+writer_start() { # writer_start <db> <log> [async]
+    local db="$1" log="$2" mode="${3:-sync}"
     : >"$log"
     (
         n=0
         while [ ! -f "$log.stop" ]; do
             n=$((n + 1))
             port="$(pg_port "$(db_major "$db" 2>/dev/null || echo 16)")"
+            if [ "$mode" = async ]; then
+                q="SET synchronous_commit = off; INSERT INTO drill.ticks (n) VALUES (-$((100000 + n)))"
+            else
+                q="INSERT INTO drill.ticks (n) VALUES ($n)"
+            fi
             if PGPASSWORD="$WRITER_PW" psql -X -qtA -h 127.0.0.1 -p "$port" -U drill_writer -d "$db" \
-                -c "INSERT INTO drill.ticks (n) VALUES ($n)" >/dev/null 2>&1; then
+                -c "$q" >/dev/null 2>&1; then
                 echo "$n ok $(date +%s%3N)" >>"$log"
             else
                 echo "$n fail $(date +%s%3N)" >>"$log"
@@ -135,12 +144,16 @@ writer_stop() { touch "$1.stop"; wait "$(cat "$1.pid")" 2>/dev/null || true; rm 
 max_gap_ms() { awk '$2 == "ok" { if (last) { g = $3 - last; if (g > max) max = g } last = $3 } END { print max + 0 }' "$1"; }
 oks() { awk '$2 == "ok"' "$1" | wc -l | tr -d ' '; }
 
-no_dual_objects() { # every cluster: no k2_dual_* slot/publication/subscription, no k2_repl_* role
+no_dual_objects() { # every cluster: no k2_dual_* slot/publication/subscription, no k2_repl_* role, no run's hba line
     local m
     for m in $(pg_lsclusters -h | awk '$4 == "online" {print $1}'); do
         local left
         left="$(pg_sql "$m" postgres "SELECT (SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE 'k2\_dual\_%') + (SELECT count(*) FROM pg_roles WHERE rolname LIKE 'k2\_repl\_%') + (SELECT count(*) FROM pg_subscription WHERE subname LIKE 'k2\_dual\_%')")"
         [ "$left" = "0" ] || die "cluster $m still holds $left k2_dual/k2_repl object(s)"
+        # Security review A-M2: a run's allow lines go at teardown (the guards stay).
+        if sudo grep -Eq '^host [^ ]+ k2_repl_[0-9a-f]{12} ' "/etc/postgresql/$m/main/pg_hba.conf"; then
+            die "cluster $m's pg_hba.conf still lets a run's k2_repl_ role in"
+        fi
     done
 }
 
@@ -170,9 +183,10 @@ prepare() {
 
 # ── drill 3: the happy path ─────────────────────────────────────────────
 happy() {
-    local db log; db="$(new_db drill_live)"; log="$(mktemp)"
+    local db log alog; db="$(new_db drill_live)"; log="$(mktemp)"; alog="$(mktemp)"
     fixture "$db"
     writer_start "$db" "$log"
+    writer_start "$db" "$alog" async
     sleep 5
     start_live "$db"
     say "streaming; writing for ${STREAM_SECS}s"
@@ -180,10 +194,16 @@ happy() {
     k2 db upgrade "$db" --switch --now >/dev/null || die "--switch failed: $(k2 db upgrade "$db" --status)"
     sleep 10
     writer_stop "$log"
+    writer_stop "$alog"
     [ "$(db_major "$db")" = "17" ] || die "the record isn't on 17"
-    local gap written on17; gap="$(max_gap_ms "$log")"; written="$(oks "$log")"
-    on17="$(pg_sql 17 "$db" 'SELECT count(*) FROM drill.ticks')"
+    local gap written awritten on17 aon17; gap="$(max_gap_ms "$log")"; written="$(oks "$log")"; awritten="$(oks "$alog")"
+    on17="$(pg_sql 17 "$db" 'SELECT count(*) FROM drill.ticks WHERE n > 0')"
     [ "$on17" = "$written" ] || die "rows lost or extra: the writer wrote $written, 17 holds $on17"
+    # B2: every acknowledged synchronous_commit = off insert reached 17.
+    aon17="$(pg_sql 17 "$db" 'SELECT count(*) FROM drill.ticks WHERE n < -100000')"
+    [ "$aon17" = "$awritten" ] || die "async commits lost at the cut-over: the writer had $awritten acknowledged, 17 holds $aon17"
+    local amissing; amissing="$(awk '$2 == "ok" {print -(100000 + $1)}' "$alog" | while read -r n; do [ "$(pg_sql 17 "$db" "SELECT count(*) FROM drill.ticks WHERE n = $n")" = "1" ] || echo "$n"; done | head -5)"
+    [ -z "$amissing" ] || die "acknowledged async commits missing on 17: $amissing"
     # Sequences continue without collision (identity and bigserial).
     pg_sql 17 "$db" "SET ROLE ${db}_migrator; INSERT INTO drill.items (body) VALUES ('after'); INSERT INTO drill.ticks (n) VALUES (-1);" >/dev/null || die "a sequence collided on 17"
     [ "$(pg_sql 17 "$db" 'SELECT n FROM drill.item_count')" = "5000" ] || die "the materialized view wasn't refreshed"
@@ -191,7 +211,8 @@ happy() {
     [ "$(pg_sql 16 postgres "SELECT datallowconn FROM pg_database WHERE datname = '$db'")" = "f" ] || die "the 16 copy isn't closed"
     no_dual_objects
     say "write gap: ${gap} ms over ${written} writes"
-    pass "happy: streamed ${STREAM_SECS}s, switched; longest write gap ${gap} ms; no row lost; sequences continue; FORCE back; source closed; nothing left"
+    sudo grep -qF "host all /^k2_repl_ all reject" /etc/postgresql/16/main/pg_hba.conf || die "the k2_repl_ guard isn't in 16's pg_hba.conf"
+    pass "happy: streamed ${STREAM_SECS}s, switched; longest write gap ${gap} ms; no row lost (sync $written, async $awritten); sequences continue; FORCE back; source closed; nothing left"
     echo "$db" >"$log.db"
 }
 
@@ -233,6 +254,26 @@ security() {
     if PGPASSWORD="$pw" timeout 30 pg_basebackup -h 127.0.0.1 -p "$(pg_port 16)" -U "$role" -D "$(mktemp -d)" -X none >/dev/null 2>&1; then
         die "pg_basebackup as $role succeeded: the hba guard didn't hold"
     fi
+    # Security review A-M2: the role reaches its own database (the run's
+    # allow line) and nothing else: another tenant's database (PUBLIC has
+    # CONNECT there) and `postgres`, plainly or as a logical walsender, are
+    # refused by pg_hba before any password check.
+    local other; other="$(new_db drill_sec_other)"
+    PGPASSWORD="$pw" psql -X -qtA -h 127.0.0.1 -p "$(pg_port 16)" -U "$role" -d "$db" -c "SELECT 1" >/dev/null 2>&1 \
+        || die "$role can't reach its own database: the drill would prove nothing"
+    local tgt out2
+    for tgt in "$other" postgres; do
+        out2="$(PGPASSWORD="$pw" psql -X -qtA -h 127.0.0.1 -p "$(pg_port 16)" -U "$role" -d "$tgt" -c "SELECT 1" 2>&1 || true)"
+        grep -q "pg_hba.conf rejects connection" <<<"$out2" || die "$role reached $tgt: $out2"
+        out2="$(PGPASSWORD="$pw" psql -X -qtA "host=127.0.0.1 port=$(pg_port 16) user=$role dbname=$tgt replication=database" -c "IDENTIFY_SYSTEM" 2>&1 || true)"
+        grep -q "pg_hba.conf rejects" <<<"$out2" || die "$role opened a logical replication connection to $tgt: $out2"
+        out2="$(PGPASSWORD="$pw" psql -X -qtA "host=::1 port=$(pg_port 16) user=$role dbname=$tgt" -c "SELECT 1" 2>&1 || true)"
+        grep -q "pg_hba.conf rejects\|could not connect\|Connection refused" <<<"$out2" || die "$role reached $tgt over ::1: $out2"
+    done
+    drop_db "$other"
+    # A-L2: the run refuses names it would later drop. Abort later checks
+    # the source has no _k2_dual schema left (K2's, dropped by name).
+    [ "$(pg_sql 16 "$db" "SELECT count(*) FROM pg_namespace WHERE nspname = '_k2_dual'")" = "1" ] || die "the freeze schema isn't there while streaming"
     # A migrator can't create a subscription.
     local m_out; m_out="$(pg_sql 16 "$db" "SET ROLE ${db}_migrator; CREATE SUBSCRIPTION evil CONNECTION 'host=127.0.0.1 dbname=$db' PUBLICATION x WITH (connect = false)" 2>&1 || true)"
     grep -qi "permission denied\|must be superuser\|must have privileges" <<<"$m_out" || die "a migrator's CREATE SUBSCRIPTION wasn't refused: $m_out"
@@ -284,6 +325,33 @@ failures() {
     no_dual_objects
     drop_db "$db"
     pass "failures/no-pk: refused, nothing published; --replica-identity-full passes; abort cleans"
+
+    # Security review A-L2: a tenant's own `_k2_dual` schema: refused at
+    # setup, never dropped by a teardown.
+    db="$(new_db drill_reserved)"; fixture "$db"
+    pg_sql 16 "$db" "SET ROLE ${db}_migrator; CREATE SCHEMA _k2_dual; CREATE TABLE _k2_dual.mine (id int PRIMARY KEY); INSERT INTO _k2_dual.mine VALUES (1);" >/dev/null
+    out="$(k2 db upgrade "$db" --live --to 17 2>&1 || true)"
+    grep -q "reserved_names" <<<"$out" || die "a tenant _k2_dual schema wasn't refused: $out"
+    wait_for 120 "the refused run ends" not_state "$db" setting_up
+    [ "$(pg_sql 16 "$db" "SELECT count(*) FROM _k2_dual.mine")" = "1" ] || die "the tenant's _k2_dual schema was touched"
+    [ "$(pg_sql 16 "$db" "SELECT count(*) FROM pg_publication")" = "0" ] || die "a publication exists after the refusal"
+    no_dual_objects
+    drop_db "$db"
+    pass "failures/reserved-names: refused; the tenant's schema kept; nothing left"
+
+    # Security review B3: a large object made while streaming (lo_create
+    # isn't DDL): the switch is undone under the write block; abort cleans.
+    db="$(new_db drill_lob)"; fixture "$db"
+    start_live "$db"
+    pg_sql 16 "$db" "SET ROLE ${db}_migrator; SELECT lo_from_bytea(0, 'drill')" >/dev/null
+    k2 db upgrade "$db" --switch --now >/dev/null 2>&1 || true
+    wait_for 300 "the switch is undone" is_state "$db" streaming
+    [ "$(db_major "$db")" = "16" ] || die "the record moved with a large object left behind"
+    k2 db upgrade "$db" --status --json | grep -q "large_objects" || die "the run doesn't say large_objects: $(k2 db upgrade "$db" --status)"
+    k2 db upgrade "$db" --abort >/dev/null
+    no_dual_objects
+    drop_db "$db"
+    pass "failures/large-object: the switch undid itself and said why; abort cleaned"
 
     # The target cluster killed mid-sync: stalled (or failed), --abort
     # cleans, the source unaffected.

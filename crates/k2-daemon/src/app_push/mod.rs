@@ -23,6 +23,10 @@ pub mod budget;
 pub mod creds;
 pub mod guest_routes;
 pub mod owner_routes;
+pub mod payload;
+pub mod sender;
+pub mod sendlog;
+pub mod worker;
 #[cfg(test)]
 pub(crate) mod test_keys;
 
@@ -133,6 +137,14 @@ pub fn sweep() {
         Ok(_) => {}
         Err(e) => k2_core::log_debug!("[app-push] WARN sweep: {e}"),
     }
+}
+
+/// The App id `app-audit.db` rows use: the runtime App id when the
+/// service is a runtime App, else the service id.
+pub(crate) fn audit_app_id(service_id: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::deploy::store::get_app_by_service(&conn, service_id).ok().flatten().map(|a| a.app_id).unwrap_or_else(|| service_id.to_string())
 }
 
 /// One Access Audit line (`auth-audit.jsonl`). Never a key, a token or a

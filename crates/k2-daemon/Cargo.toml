@@ -162,7 +162,9 @@ arc-swap = "1"
 # reqwest blocking — Phase 2 Unit 5 Claude Auth OAuth refresh. Same
 # features the Tauri side used (and k2so-core's llm::download still
 # uses) so reqwest resolves to a single crate version.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+# `http2` (prd-custom-app-push-v1 CP18): APNs is HTTP/2 only; Apple picks
+# h2 by ALPN. `h2` was already in Cargo.lock through hyper.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "http2"] }
 
 # Phase 2 Unit 2 — `libc::_exit` (LLM worker process exit that skips
 # C++ static destructors so ggml_metal's cleanup doesn't race macOS

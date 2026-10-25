@@ -302,6 +302,7 @@ pub const ROUTES: &[Route] = &[
     // prd-custom-app-push-v1 CP36: `k2 app push …` (the handler checks
     // callers; keys need the owner and a fresh confirm).
     get("/cli/app/push", Admin),
+    post("/cli/app/push/check", Owner),
     post("/cli/app/push/credentials", Owner),
     post("/cli/app/push/credentials/remove", Owner),
     get("/cli/app/push/devices", Admin),

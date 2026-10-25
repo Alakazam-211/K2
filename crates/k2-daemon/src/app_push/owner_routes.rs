@@ -7,6 +7,7 @@
 //! POST /cli/app/push/credentials    {app, apns?: {p8, keyId, teamId, bundleId}, fcm?: {serviceAccountJson}, confirmToken}
 //!                                                  the owner in person + a fresh confirm
 //! POST /cli/app/push/credentials/remove {app, platform, confirmToken}   the same
+//! POST /cli/app/push/check          {app}          the owner: one real call per platform to a fake token (CP16)
 //! GET  /cli/app/push/devices        ?app=&guest=   Admin: platform, environment, channel, last seen; never tokens
 //! POST /cli/app/push/devices/remove {app, id}      Admin
 //! ```
@@ -31,11 +32,12 @@ use crate::cli_response::CliResponse;
 pub const STATUS: &str = "/cli/app/push";
 pub const CREDENTIALS: &str = "/cli/app/push/credentials";
 pub const CREDENTIALS_REMOVE: &str = "/cli/app/push/credentials/remove";
+pub const CHECK: &str = "/cli/app/push/check";
 pub const DEVICES: &str = "/cli/app/push/devices";
 pub const DEVICES_REMOVE: &str = "/cli/app/push/devices/remove";
 
-pub const ROUTES: &[&str] = &[STATUS, CREDENTIALS, CREDENTIALS_REMOVE, DEVICES, DEVICES_REMOVE];
-pub const POST_ROUTES: &[&str] = &[CREDENTIALS, CREDENTIALS_REMOVE, DEVICES_REMOVE];
+pub const ROUTES: &[&str] = &[STATUS, CREDENTIALS, CREDENTIALS_REMOVE, CHECK, DEVICES, DEVICES_REMOVE];
+pub const POST_ROUTES: &[&str] = &[CREDENTIALS, CREDENTIALS_REMOVE, CHECK, DEVICES_REMOVE];
 /// Request bodies here are at most this many bytes (keys included).
 pub const MAX_BODY: usize = 64 * 1024;
 
@@ -259,6 +261,7 @@ fn credentials(who: &Who, body: &[u8]) -> R<J> {
         super::creds::store_fcm(&t.service_id, k, &by).map_err(key_refusal)?;
         set.push(format!("Firebase service account {} (project {}, fingerprint {})", k.client_email, k.project_id, k.fingerprint()));
     }
+    super::sender::global().reset_app(&t.service_id);
     super::audit_line("app-push-keys-set", &by, &format!("app={} {}", t.service_id, set.join("; ")));
     crate::apps::alerts::note(
         &t.project_id,
@@ -288,6 +291,7 @@ fn credentials_remove(who: &Who, body: &[u8]) -> R<J> {
             removed.push(p);
         }
     }
+    super::sender::global().reset_app(&t.service_id);
     super::audit_line("app-push-keys-remove", &by, &format!("app={} removed={}", t.service_id, removed.join(",")));
     if !removed.is_empty() {
         crate::apps::alerts::note(
@@ -301,6 +305,35 @@ fn credentials_remove(who: &Who, body: &[u8]) -> R<J> {
     Ok(out)
 }
 
+/// POST `/cli/app/push/check {app}`: the owner only (it calls Apple and
+/// Google). Never in tests against the vendors: tests fake the transport.
+fn check(who: &Who, body: &[u8]) -> R<J> {
+    let v = json_body(body)?;
+    let t = push_target(who, s(&v, "app"))?;
+    if !owner_in_person(who) && !matches!(who, Who::Shell { .. }) {
+        return Err(no("owner_only", 403, "checking an App's push keys calls Apple and Google: the owner runs k2 app push check"));
+    }
+    if crate::push_routes::airgap_blocks() {
+        return Err(no("airgap", 503, "air-gap is on: nothing leaves this server"));
+    }
+    crate::vault::get().map_err(|_| no("vault_closed", 503, "the vault isn't open yet"))?;
+    let cfg = store::config(&t.service_id).map_err(|e| no("store", 500, e))?;
+    let mut results = serde_json::Map::new();
+    for (platform, set) in [(store::PLATFORM_APNS, cfg.apns.is_some()), (store::PLATFORM_FCM, cfg.fcm.is_some())] {
+        let r = if !set {
+            json!({ "configured": false })
+        } else {
+            match super::sender::global().check(&t.service_id, platform) {
+                Ok(_) => json!({ "configured": true, "ok": true }),
+                Err(code) => json!({ "configured": true, "ok": false, "code": code }),
+            }
+        };
+        results.insert(platform.to_string(), r);
+    }
+    super::audit_line("app-push-check", &actor(who), &format!("app={} {}", t.service_id, J::Object(results.clone())));
+    Ok(json!({ "ok": true, "app": t.service_id, "name": t.name, "results": results }))
+}
+
 pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
     if is_post_route(path) {
         if let Err(e) = crate::apps::access::member_read_only(&who) {
@@ -311,6 +344,7 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         STATUS => status(&who, params),
         CREDENTIALS => credentials(&who, body),
         CREDENTIALS_REMOVE => credentials_remove(&who, body),
+        CHECK => check(&who, body),
         DEVICES => devices(&who, params),
         DEVICES_REMOVE => devices_remove(&who, body),
         _ => Err(no("not_found", 404, "no such App push route")),

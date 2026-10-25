@@ -2,8 +2,10 @@
 
 The scripts for U0 of `prd-compute-update-continuity-v1` (rev 2, §10). Each answers
 one question the code can't, and prints a table to a report file. None of them touch
-the real node (`k2-node*`, `k2job*`, `k2-jobs*`, `dev.k2.node*`); every unit, user and
-file they make starts with `k2spike` and is removed at the end, also on failure.
+the real node (`k2-node*`, `k2job*`, `k2-jobs*`, `dev.k2.node*`); every unit they make
+starts with `k2test-spike-` (the test-fixture family the root helper's creds deny list
+always refuses), every user and file with `k2spike`, and all of it is removed at the
+end, also on failure.
 
 | Script | What it proves | Needs | Box |
 |---|---|---|---|

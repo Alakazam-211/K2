@@ -9,10 +9,12 @@
 # spool file, U2) passed as the job's stdout through `--pipe` keep taking
 # the job's writes after the helper is gone?
 #
-# It builds a stand-in for k2-node-admin.service (`k2spike-admin@<mode>`),
+# It builds a stand-in for k2-node-admin.service (`k2test-spike-admin-<n>`),
 # never the real units: nothing named k2-node*, k2job* or k2-jobs* is
-# touched. Every unit it makes starts with `k2spike-` and is removed at
-# the end (also on failure).
+# touched. Every unit it makes starts with `k2test-spike-` (the `k2test-`
+# fixture family the root helper's creds deny list always refuses,
+# k2_root_proto::creds::K2_UNIT_FAMILIES) and is removed at the end (also
+# on failure).
 #
 # Needs: root on a DISPOSABLE or test Linux box with systemd >= 245 (the
 # job wall's floor; z13flow or a throwaway VM). Not a customer box, not a
@@ -55,11 +57,11 @@ ROWS=()
 
 cleanup() {
     local rc=$?
-    for u in $(systemctl list-units --all --plain --no-legend 'k2spike-*' | awk '{print $1}'); do
+    for u in $(systemctl list-units --all --plain --no-legend 'k2test-spike-*' | awk '{print $1}'); do
         systemctl stop "$u" >/dev/null 2>&1 || true
         systemctl reset-failed "$u" >/dev/null 2>&1 || true
     done
-    rm -f "$UNITS_DIR"/k2spike-admin-*.service
+    rm -f "$UNITS_DIR"/k2test-spike-admin-*.service
     systemctl daemon-reload || true
     rm -rf "$W"
     exit "$rc"
@@ -78,7 +80,7 @@ cat >| "$W/executor.sh" <<'EOF'
 #!/bin/bash
 # $1 = job unit name, $2 = spool path
 exec 3>>"$2"
-systemd-run --pipe --wait --quiet --unit "$1" --slice k2spike.slice \
+systemd-run --pipe --wait --quiet --unit "$1" --slice k2test-spike.slice \
     --property=RemainAfterExit=yes --property=KillMode=control-group --property=TimeoutStopSec=5 \
     /bin/sh -c 'i=0; while true; do i=$((i+1)); echo "tick $i $(date +%s)"; sleep 1; done' <&- >&3 2>&3 &
 echo "helper $!" > "$2.helper"
@@ -88,12 +90,12 @@ chmod 0755 "$W/executor.sh"
 
 mk_executor() { # <mode: process|control-group> <n>
     local mode="$1" n="$2"
-    cat >| "$UNITS_DIR/k2spike-admin-$n.service" <<EOF
+    cat >| "$UNITS_DIR/k2test-spike-admin-$n.service" <<EOF
 [Unit]
 Description=K2 spike: stand-in for k2-node-admin.service (KillMode=$mode)
 [Service]
 Type=simple
-ExecStart=$W/executor.sh k2spike-job-$n $W/spool-$n.out
+ExecStart=$W/executor.sh k2test-spike-job-$n $W/spool-$n.out
 KillMode=$mode
 Restart=no
 UMask=0077
@@ -105,31 +107,31 @@ case_run() { # <n> <mode> <how: stop|exit|kill9-exec|kill9-helper> <title>
     local n="$1" mode="$2" how="$3" title="$4"
     mk_executor "$mode" "$n"
     : >| "$W/spool-$n.out"
-    systemctl start "k2spike-admin-$n.service"
-    wait_active "k2spike-job-$n.service" || { row "$title" "job never started" "spike failed"; return 1; }
+    systemctl start "k2test-spike-admin-$n.service"
+    wait_active "k2test-spike-job-$n.service" || { row "$title" "job never started" "spike failed"; return 1; }
     sleep 3
     local helper; helper="$(awk '{print $2}' "$W/spool-$n.out.helper")"
-    local ex; ex="$(main_pid "k2spike-admin-$n.service")"
-    local job_pid; job_pid="$(main_pid "k2spike-job-$n.service")"
+    local ex; ex="$(main_pid "k2test-spike-admin-$n.service")"
+    local job_pid; job_pid="$(main_pid "k2test-spike-job-$n.service")"
     local before; before="$(wc -l < "$W/spool-$n.out")"
     case "$how" in
-        stop) systemctl stop "k2spike-admin-$n.service" ;;
+        stop) systemctl stop "k2test-spike-admin-$n.service" ;;
         exit) kill -TERM "$ex" ;;               # the executor exits by itself (re-exec after an update)
         kill9-exec) kill -KILL "$ex" ;;          # the executor crashes
         kill9-helper) kill -KILL "$helper" ;;    # the systemd-run helper dies on its own (OOM, R1)
     esac
     sleep 4
     local job_now="dies"
-    if active "k2spike-job-$n.service" && [ "$(main_pid "k2spike-job-$n.service")" = "$job_pid" ]; then job_now="keeps running"; fi
+    if active "k2test-spike-job-$n.service" && [ "$(main_pid "k2test-spike-job-$n.service")" = "$job_pid" ]; then job_now="keeps running"; fi
     local helper_now="gone"; kill -0 "$helper" 2>/dev/null && helper_now="alive"
     sleep 3
     local after; after="$(wc -l < "$W/spool-$n.out")"
     local spool="stopped at $before→$after lines"
     [ "$after" -gt $((before + 4)) ] && spool="still written ($before→$after lines)"
-    row "$title" "job $job_now" "helper $helper_now; spool $spool; job unit $(systemctl show -p ActiveState --value "k2spike-job-$n.service")/$(systemctl show -p SubState --value "k2spike-job-$n.service")"
-    systemctl stop "k2spike-job-$n.service" >/dev/null 2>&1 || true
-    systemctl reset-failed "k2spike-job-$n.service" >/dev/null 2>&1 || true
-    systemctl stop "k2spike-admin-$n.service" >/dev/null 2>&1 || true
+    row "$title" "job $job_now" "helper $helper_now; spool $spool; job unit $(systemctl show -p ActiveState --value "k2test-spike-job-$n.service")/$(systemctl show -p SubState --value "k2test-spike-job-$n.service")"
+    systemctl stop "k2test-spike-job-$n.service" >/dev/null 2>&1 || true
+    systemctl reset-failed "k2test-spike-job-$n.service" >/dev/null 2>&1 || true
+    systemctl stop "k2test-spike-admin-$n.service" >/dev/null 2>&1 || true
 }
 
 echo "== systemd $SDV, $(uname -r), $(. /etc/os-release && echo "$PRETTY_NAME")"

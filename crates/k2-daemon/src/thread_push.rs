@@ -537,6 +537,11 @@ pub fn on_agent_post(
     let msg = k2_core::push::ThreadMsg::new(item_id, seq, conversation_id, from, created_at, kind, text);
     let preview = post_preview(kind, text, files);
     note_last_preview(conversation_id, &preview);
+    // prd-custom-app-push-v1 CP34 (off by default per App): this App's
+    // guests who read the room's pinned Chat, on their App's own phone app.
+    if kind == ThreadMsgKind::Text {
+        crate::app_push::agent_reply::on_agent_post(conversation_id, project_id, &agent_name_for(from), seq, &preview);
+    }
     // The same rev `GET /cli/projects/list` shows as this row's `iconRev`.
     let (agent_color, avatar_rev) = k2_core::projects_ops::project_push_look(project_id);
     let post = Post {

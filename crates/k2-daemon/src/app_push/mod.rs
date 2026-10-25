@@ -19,6 +19,7 @@
 //! App off (Rosson's switch rule). Keys are separate: an App can be on with
 //! no keys yet, so a mobile developer can integrate before they exist.
 
+pub mod agent_reply;
 pub mod budget;
 pub mod creds;
 pub mod guest_routes;

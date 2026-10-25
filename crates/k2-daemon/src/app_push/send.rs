@@ -159,7 +159,7 @@ fn recipients(app: &str, to: &To) -> Result<(Vec<String>, usize), SendErr> {
             if !app_rooms(app)?.contains(&room) {
                 return Err(outside());
             }
-            let guests = store::room_guests(app, &room).map_err(|e| err(500, "failed", e))?;
+            let guests = store::room_guests(app, &room, None).map_err(|e| err(500, "failed", e))?;
             if guests.len() > MAX_RECIPIENTS {
                 return Err(err_with(
                     413,

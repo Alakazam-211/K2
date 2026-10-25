@@ -639,8 +639,9 @@ pub fn resolve_guests(app: &str, names: &[String]) -> Result<(Vec<String>, usize
 }
 
 /// This App's guests holding any grant line on `room` (a project id): the
-/// role's room lines, or a role-less grant's rooms (CP25).
-pub fn room_guests(app: &str, room: &str) -> Result<Vec<String>, String> {
+/// role's room lines, or a role-less grant's rooms (CP25). With `cap`, only
+/// those whose line on that room holds it (agent replies: `thread:read`).
+pub fn room_guests(app: &str, room: &str, cap: Option<&str>) -> Result<Vec<String>, String> {
     let app = normalize_app_target(Some(app));
     with_conn(|conn| {
         let grants: Vec<super::SkinGrant> = {
@@ -656,7 +657,12 @@ pub fn room_guests(app: &str, room: &str) -> Result<Vec<String>, String> {
         let mut out = Vec::new();
         for g in &grants {
             let (policy, _) = super::grant_login_policy(conn, g)?;
-            if policy.contains_key(room) && !out.contains(&g.subject_id) {
+            let holds = match (policy.get(room), cap) {
+                (Some(caps), Some(c)) => caps.iter().any(|x| x == c),
+                (Some(_), None) => true,
+                (None, _) => false,
+            };
+            if holds && !out.contains(&g.subject_id) {
                 out.push(g.subject_id.clone());
             }
         }
@@ -681,6 +687,17 @@ pub fn targets(app: &str, principal_ids: &[String]) -> Result<Vec<PushDevice>, S
             )?);
         }
         Ok(out)
+    })
+}
+
+/// The Apps with agent-reply pushes on (and not turned off by the owner).
+pub fn apps_with_agent_replies() -> Result<Vec<String>, String> {
+    with_conn(|conn| {
+        let mut stmt = conn
+            .prepare("SELECT app_id FROM app_push_config WHERE agent_replies = 1 AND enabled = 1 ORDER BY app_id")
+            .map_err(|e| format!("push config: {e}"))?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| format!("push config: {e}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("push config: {e}"))
     })
 }
 

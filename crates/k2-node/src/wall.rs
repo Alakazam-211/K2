@@ -334,7 +334,7 @@ pub fn read_stdin_secrets(env: &[(String, String)]) -> Result<k2_node_proto::sec
     let null = std::fs::OpenOptions::new().read(true).open("/dev/null");
     let swapped = match &null {
         // SAFETY: dup2 onto fd 0 with a valid fd.
-        Ok(f) => unsafe { libc::dup2(f.as_raw_fd(), 0) } == 0,
+        Ok(f) => (unsafe { libc::dup2(f.as_raw_fd(), 0) }) == 0,
         Err(_) => false,
     };
     let r = (|| {

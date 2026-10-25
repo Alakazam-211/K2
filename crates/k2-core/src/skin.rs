@@ -1693,6 +1693,11 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, S
     Ok(false)
 }
 
+fn table_exists_conn(conn: &Connection, name: &str) -> Result<bool, String> {
+    conn.query_row("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)", params![name], |r| r.get::<_, bool>(0))
+        .map_err(|e| format!("skin.db table lookup {name}: {e}"))
+}
+
 fn schema_version(conn: &Connection) -> Result<i64, String> {
     conn.query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|e| format!("skin.db user_version: {e}"))
@@ -2927,11 +2932,19 @@ pub fn set_principal_agent(
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
-        conn.execute(
+        let tx = immediate_tx(conn)?;
+        tx.execute(
             "UPDATE principals SET agent_workspace = ?1 WHERE id = ?2",
             params![workspace_id, p.id],
         )
         .map_err(|e| format!("skin agent mark update: {e}"))?;
+        // agent-app-users: an agent's own login is that workspace's to
+        // control, so the mark agrees with the tie store (clearing the mark
+        // leaves the tie: only an owner reset or claim lifts it).
+        if let Some(ws) = workspace_id.as_deref() {
+            ties::set_conn(&tx, &p.id, ties::TieWrite { workspace_id: ws, set_by: "owner-mark", reason: ties::REASON_AGENT_LOGIN })?;
+        }
+        tx.commit().map_err(|e| format!("skin agent mark commit: {e}"))?;
         Ok(SkinPrincipal {
             agent_workspace: workspace_id,
             agent_handle: None,
@@ -8174,6 +8187,56 @@ mod tests {
             );
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch("PRAGMA user_version = 6;").unwrap();
+        });
+    }
+
+    /// Reconcile with App caps: a file an earlier 0.46.4 build opened holds
+    /// the first `principal_agent_ties` (`tied_to`) and
+    /// `principal_person_claims`. Step 6 moves the ties into the one store
+    /// (a claimed guest stays a person), ties stamped guests that had no
+    /// tie, drops both old tables, and backs the file up first.
+    #[test]
+    fn step6_folds_app_caps_ties_and_claims_into_the_one_store() {
+        with_temp_home(|| {
+            let tied = add_principal("tied").unwrap();
+            let claimed = add_principal("claimed").unwrap();
+            let stamped = add_principal("stamped").unwrap();
+            creators::stamp(&stamped.id, "ws-s").unwrap();
+            creators::stamp(&claimed.id, "ws-c").unwrap();
+            let path = store_path();
+            *db().lock() = None;
+            {
+                let conn = Connection::open(&path).unwrap();
+                conn.execute_batch(
+                    "DROP TABLE principal_agent_ties; DROP TABLE app_user_invites;
+                     CREATE TABLE principal_agent_ties (principal_id TEXT PRIMARY KEY, tied_to TEXT NOT NULL, tied_at INTEGER NOT NULL);
+                     CREATE TABLE principal_person_claims (principal_id TEXT PRIMARY KEY, claimed_by TEXT NOT NULL, claimed_at INTEGER NOT NULL);
+                     PRAGMA user_version = 5;",
+                )
+                .unwrap();
+                conn.execute("INSERT INTO principal_agent_ties VALUES (?1, 'ws-t', 7)", params![tied.id]).unwrap();
+                conn.execute("INSERT INTO principal_agent_ties VALUES (?1, 'ws-c', 7)", params![claimed.id]).unwrap();
+                conn.execute("INSERT INTO principal_person_claims VALUES (?1, 'owner-token', 8)", params![claimed.id]).unwrap();
+            }
+            let _ = std::fs::remove_file(path.with_file_name("skin.db.pre-6.bak"));
+            assert!(principal_exists("tied").unwrap(), "the file opens");
+            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 6);
+            assert!(path.with_file_name("skin.db.pre-6.bak").exists(), "backed up before step 6");
+            let t = ties::get(&tied.id).unwrap().expect("moved");
+            assert_eq!((t.workspace_id.as_str(), t.reasons.clone()), ("ws-t", vec!["upgrade".to_string()]));
+            assert!(ties::get(&claimed.id).unwrap().is_none(), "a guest the owner claimed stays a person");
+            let s = ties::get(&stamped.id).unwrap().expect("a stamped guest is tied");
+            assert_eq!((s.workspace_id.as_str(), s.host_ok), ("ws-s", true), "it keeps the box login it was given");
+            let left: i64 = with_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('principal_person_claims', 'principal_agent_ties_v1')",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())
+            })
+            .unwrap();
+            assert_eq!(left, 0, "the old tables are gone");
         });
     }
 

@@ -35,9 +35,23 @@ pub const REASON_INVITE: &str = "invite";
 pub const REASON_APP_KEY: &str = "app_key";
 /// An App's own forgot-password link was used (the App's page saw it).
 pub const REASON_APP_RESET: &str = "app_reset";
+/// The owner marked this login as the workspace's agent (`k2 app user agent`).
+pub const REASON_AGENT_LOGIN: &str = "agent_login";
+/// Carried over from App caps' first tie table (step 6).
+pub const REASON_UPGRADE: &str = "upgrade";
 
-/// Step 6: the ties and the invite / owner-reset links.
+/// Step 6: the ties and the invite / owner-reset links. A file an earlier
+/// 0.46.4 build opened may already hold App caps' first `principal_agent_ties`
+/// (`principal_id, tied_to, tied_at`) and `principal_person_claims`: their
+/// rows move into the one tie table (a claimed guest stays a person) and
+/// both old tables go. Guests an agent added before ties existed (a creator
+/// stamp, no tie) are tied to that workspace.
 pub(super) fn step6_ties_and_invites(conn: &Connection) -> Result<(), String> {
+    let old_shape = super::column_exists(conn, "principal_agent_ties", "tied_to")?;
+    if old_shape {
+        conn.execute_batch("ALTER TABLE principal_agent_ties RENAME TO principal_agent_ties_v1;")
+            .map_err(|e| format!("skin.db step 6 (old ties): {e}"))?;
+    }
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS principal_agent_ties (
             principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
@@ -66,7 +80,67 @@ pub(super) fn step6_ties_and_invites(conn: &Connection) -> Result<(), String> {
          );
          CREATE INDEX IF NOT EXISTS app_user_invites_principal ON app_user_invites(principal_id, app);",
     )
-    .map_err(|e| format!("skin.db step 6: {e}"))
+    .map_err(|e| format!("skin.db step 6: {e}"))?;
+    let claims = table_exists(conn, "principal_person_claims")?;
+    let unclaimed = if claims { "AND x.principal_id NOT IN (SELECT principal_id FROM principal_person_claims)" } else { "" };
+    if old_shape {
+        conn.execute(
+            &format!(
+                "INSERT OR IGNORE INTO principal_agent_ties (principal_id, workspace_id, host_ok, reasons, set_by, set_at)
+                 SELECT x.principal_id, x.tied_to, 0, '[\"{REASON_UPGRADE}\"]', 'upgrade:0.46.4', x.tied_at
+                   FROM principal_agent_ties_v1 x WHERE 1 = 1 {unclaimed}"
+            ),
+            [],
+        )
+        .map_err(|e| format!("skin.db step 6 (move old ties): {e}"))?;
+        conn.execute_batch("DROP TABLE principal_agent_ties_v1;").map_err(|e| format!("skin.db step 6: {e}"))?;
+    }
+    // Agent-added guests from before ties: tied to the adding workspace,
+    // keeping the box login they were given then.
+    if super::table_exists_conn(conn, "principal_agent_creators")? {
+        conn.execute(
+            &format!(
+                "INSERT OR IGNORE INTO principal_agent_ties (principal_id, workspace_id, host_ok, reasons, set_by, set_at)
+                 SELECT x.principal_id, x.workspace_id,
+                        EXISTS (SELECT 1 FROM grants g WHERE g.subject_kind = 'principal' AND g.subject_id = x.principal_id
+                                  AND g.kind = 'app' AND g.target_id = '{HOST_APP_ID}' AND g.enabled != 0),
+                        '[\"created\"]', 'upgrade:0.46.4', x.created_at
+                   FROM principal_agent_creators x WHERE 1 = 1 {unclaimed}"
+            ),
+            [],
+        )
+        .map_err(|e| format!("skin.db step 6 (stamped guests): {e}"))?;
+    }
+    if claims {
+        conn.execute_batch("DROP TABLE principal_person_claims;").map_err(|e| format!("skin.db step 6: {e}"))?;
+    }
+    Ok(())
+}
+
+fn table_exists(conn: &Connection, name: &str) -> Result<bool, String> {
+    super::table_exists_conn(conn, name)
+}
+
+/// The owner takes a tied guest over (see `creators::clear_agent_tie`, which
+/// checks `by`): one IMMEDIATE transaction drops the tie, wipes the
+/// password, ends every session and device sign-in, and voids the links an
+/// App or agent could see.
+pub(super) fn owner_claim(principal_id: &str, by: &str) -> Result<(), String> {
+    with_conn(|conn| {
+        let tx = super::immediate_tx(conn)?;
+        drop_conn(&tx, principal_id)?;
+        tx.execute("UPDATE principals SET password_hash = NULL WHERE id = ?1", params![principal_id])
+            .map_err(|e| format!("owner claim: {e}"))?;
+        super::revoke_sessions_for_principal(&tx, principal_id)?;
+        tx.execute(
+            "DELETE FROM app_user_invites WHERE principal_id = ?1 AND used_at IS NULL AND purpose != 'owner_reset'",
+            params![principal_id],
+        )
+        .map_err(|e| format!("owner claim: {e}"))?;
+        tx.commit().map_err(|e| format!("owner claim commit: {e}"))?;
+        crate::log_debug!("[skin] owner claim of {principal_id} by {by}: tie dropped, password wiped");
+        Ok(())
+    })
 }
 
 /// One tie.

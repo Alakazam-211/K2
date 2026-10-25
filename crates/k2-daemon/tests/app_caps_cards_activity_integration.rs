@@ -142,8 +142,9 @@ async fn the_activity_catch_up_is_limited_per_caller_and_never_for_the_owner() {
 }
 
 /// Review B1: a guest an agent added (and set the password of) is not a
-/// person: signed in, it can't answer the agent's card. Once a person takes
-/// it over as the owner (`skin::creators::clear_agent_tie`) it can. An owner's guest can.
+/// person: signed in, it can't answer the agent's card. Once the owner takes
+/// it over (`skin::creators::clear_agent_tie`, which also wipes the password
+/// the agent knew) and gives it a new password, it can. An owner's guest can.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_guest_its_agent_added_cant_answer_that_agents_cards() {
     let env = setup(&[]);
@@ -153,18 +154,28 @@ async fn a_guest_its_agent_added_cant_answer_that_agents_cards() {
     let (ws, _) = pinned_ws(&env, &format!("b1{tag}"));
     allow_manage(&ws, true);
     let agent = passport(&ws);
-    // The agent adds a guest and sets its password itself.
+    // The agent adds a guest of its own App (agents add App users only) and
+    // sets its password itself.
+    let app = {
+        let dir = ws.path.join("b1app");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::insert(&conn, &ws.id, &format!("b1app{tag}"), "node s.mjs", &dir.to_string_lossy(), 47_601, "local", "stopped", "cmd", "")
+            .expect("service")
+            .id
+    };
     let sock = format!("sock{tag}");
-    let r = post(port, "/cli/skin/users", &agent, json!({ "username": sock })).await;
-    assert_eq!(r.status, 200, "an agent with manage Apps adds a guest: {}", r.body);
-    let r = post(port, "/cli/skin/users/password", &agent, json!({ "username": sock, "password": "s3cret-horse" })).await;
-    assert_eq!(r.status, 200, "and sets its password: {}", r.body);
-    // Thread rights from the owner (nothing here clears the tie).
     let role = format!("r-{sock}");
     ok_post(port, "/cli/skin/roles", OWNER, json!({ "name": role })).await;
     ok_post(port, "/cli/skin/roles/room", OWNER, json!({ "name": role, "handle": ws.handle, "caps": ["thread:read", "thread:post"] })).await;
-    ok_post(port, "/cli/skin/roles/assign", OWNER, json!({ "username": sock, "role": role })).await;
-    let body = json!({ "username": sock, "password": "s3cret-horse" }).to_string();
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": sock, "app": app, "role": role })).await;
+    assert_eq!(r.status, 200, "an agent with manage Apps adds a guest: {}", r.body);
+    let r = post(port, "/cli/skin/users/password", &agent, json!({ "username": sock, "password": "s3cret-horse" })).await;
+    assert_eq!(r.status, 200, "and sets its password: {}", r.body);
+    // Thread rights come with the role on its App grant (nothing here
+    // clears the tie).
+    let body = json!({ "username": sock, "password": "s3cret-horse", "app": app }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();
     assert_eq!(r.status, 200, "{}", r.body);
     let sock_pass = r.json()["token"].as_str().expect("token").to_string();
@@ -207,9 +218,18 @@ async fn a_guest_its_agent_added_cant_answer_that_agents_cards() {
         .expect("the agent's guest")
         .id;
     k2_core::skin::creators::clear_agent_tie(&principal, "owner-token").expect("clear");
+    // The claim ended the session the agent's password opened.
     let id2 = ask("And this?").await;
     let r = post(port, "/cli/thread/answer", &sock_pass, json!({ "addr": ws.handle, "id": id2, "answer": "Stop" })).await;
-    assert_eq!(r.status, 200, "after a person claimed it: {}", r.body);
+    assert_eq!(r.status, 401, "the claim ends every old session: {}", r.body);
+    // The owner gives the person a new password: now it answers.
+    ok_post(port, "/cli/skin/users/password", OWNER, json!({ "username": sock, "password": "persons-own-pw-1" })).await;
+    let body = json!({ "username": sock, "password": "persons-own-pw-1", "app": app }).to_string();
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();
+    assert_eq!(r.status, 200, "{}", r.body);
+    let sock_pass = r.json()["token"].as_str().expect("token").to_string();
+    let r = post(port, "/cli/thread/answer", &sock_pass, json!({ "addr": ws.handle, "id": id2, "answer": "Stop" })).await;
+    assert_eq!(r.status, 200, "after the owner claimed it: {}", r.body);
 }
 
 /// Review B2: a Connect login's raw query params never move its activity

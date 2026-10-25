@@ -237,7 +237,7 @@ async fn app_key_is_minted_in_person_held_for_agents_and_opens_only_its_app() {
         let id = k2_core::skin::list_principals().unwrap().into_iter().find(|p| p.username == name).expect("the guest").id;
         k2_core::skin::creators::agent_tie(&id).expect("tie lookup")
     };
-    assert_eq!(tie_of("guest1"), Some(format!("app-key:{svc}")), "an App key's guest is tied");
+    assert_eq!(tie_of("guest1"), Some(ws.id.clone()), "an App key's guest is tied to the App's workspace");
     let r = v1(d.port, "POST", &format!("{base}/users/rooms"), &key, Some(json!({"username": "guest1", "rooms": [room_b.handle]}))).await;
     assert_eq!((r.status, r.code()), (403, "outside_ceiling".to_string()), "{}", r.body);
     let r = v1(d.port, "POST", &format!("{base}/users/rooms"), &key, Some(json!({"username": "guest1", "rooms": []}))).await;

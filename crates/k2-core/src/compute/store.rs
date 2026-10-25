@@ -338,6 +338,17 @@ pub fn store_share(conn: &Connection, id: &str, share: Option<&ShareView>, at: i
     };
 }
 
+/// The one way a node becomes this server's own after enrolment (for the
+/// owner-change flow): call it ONLY after a person approved the change and
+/// the node confirmed it, never from an offer. It clears the tenant role
+/// and the owner label, so [`NodeRow::owned_for_secrets`] becomes true and
+/// `compute:<ws>/*` grants cover the node from then on.
+pub fn mark_node_owned(conn: &Connection, id: &str) -> Result<(), String> {
+    conn.execute("UPDATE compute_nodes SET role = 'owner', owner_label = NULL WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())
+        .map(|_| ())
+}
+
 /// A node another server's `servers.add` enrolled with this server
 /// (`EnrollRequest.shared_by`): this server is a tenant there.
 pub fn set_tenant_of(conn: &Connection, id: &str, owner_label: &str) -> Result<(), String> {
@@ -1526,6 +1537,19 @@ mod tests {
         assert!(n.is_tenant(), "a tenant stays a tenant");
         assert!(!n.shared && n.share.is_none());
         assert!(serde_json::to_value(&n).unwrap().get("role").is_none(), "solo JSON is unchanged");
+        // Review A-H1: the node's own offer can't lift it back to owner.
+        let mut lie = v.clone();
+        lie.role = Role::Owner;
+        lie.owner_label = None;
+        store_share(&c, "n1", Some(&lie), 70);
+        let n = node_by_id(&c, "n1").unwrap();
+        assert!(n.is_tenant() && !n.owned_for_secrets(), "an offer never turns a tenant into owned");
+        // Only the confirmed owner-change hook does.
+        mark_node_owned(&c, "n1").unwrap();
+        let n = node_by_id(&c, "n1").unwrap();
+        assert!(!n.is_tenant() && n.owned_for_secrets());
+        let owned = insert_pending_node(&c, "n9", "mini-9", "fp9", "pem", &labels(), "owner", "1", 1).unwrap();
+        assert!(owned.owned_for_secrets(), "a node this server enrolled is its own");
         // Owner side: the node's server list.
         let rows = vec![
             crate::compute::share::ServerRow {

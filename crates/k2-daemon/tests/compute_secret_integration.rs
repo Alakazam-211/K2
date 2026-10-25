@@ -447,6 +447,12 @@ async fn secret_env_release_end_to_end() {
     compute_ws::test_frame("sec-1", need(&job, &bad, &key));
     assert!(matches!(answer(&mut node, &job, &mut sent), Answer::Refused(c) if c == scodes::ATTEMPT_STALE));
 
+    // Another node asking for this very attempt first (round 2, item 3):
+    // dropped, and it doesn't use up the real node's attempt.
+    compute_ws::test_frame("old-1", need(&job, &r1, &NodeKey::generate().unwrap()));
+    assert!(compute_ws::test_wait_releases(Duration::from_secs(20)));
+    assert!(old.frames().is_empty() && node.frames().is_empty(), "another node's ask gets no answer");
+
     // The release: opens with the node's one-time key, nothing else does.
     let key = NodeKey::generate().unwrap();
     compute_ws::test_frame("sec-1", need(&job, &r1, &key));

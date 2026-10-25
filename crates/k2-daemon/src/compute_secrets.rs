@@ -164,7 +164,16 @@ pub(crate) fn find(ws_id: &str, ws_handle: &str, admin: bool, asks: &[Ask]) -> R
             Selector::user(Scope::workspace(ws_id), a.name.clone())
         };
         let missing = || no("secret_not_found", 404, format!("--secret {}: no such secret in workspace {ws_handle}'s vault (k2 vault list)", a.name));
-        let m = vault.meta(&sel, &Actor::System("compute".into())).map_err(|_| missing())?;
+        let m = match vault.meta(&sel, &Actor::System("compute".into())) {
+            Ok(m) => m,
+            Err(_) => {
+                // Round 2, item 5: a grants query on this path too, so a
+                // missing secret and one the caller may not name take about
+                // as long (residual difference: one row lookup; accepted).
+                let _ = vault.grants_to(&Consumer::compute(ws_id, "*"));
+                return Err(missing());
+            }
+        };
         if !may_name(&vault, ws_id, admin, &m) {
             return Err(missing());
         }
@@ -318,14 +327,34 @@ pub type Refused = (&'static str, String);
 static NEEDS: Mutex<Option<(BTreeSet<(String, u32)>, std::collections::VecDeque<(String, u32, u32)>, BTreeSet<(String, u32, u32)>)>> = Mutex::new(None);
 const NEED_LATCH_CAP: usize = 4096;
 
-/// Take one `secret_need` (review A-L1/L2): false when a release for this
+/// Is `job_id` a job this server placed on `node_id` (any attempt)? Checked
+/// before a `secret_need` takes a place (round 2, item 3).
+pub fn job_on_node(node_id: &str, job_id: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    store::job_by_id(&conn, job_id).is_some_and(|j| j.node_id == node_id)
+}
+
+/// A taken in-flight place; dropping it (also on a panic) frees it.
+pub struct NeedPlace(String, u32);
+
+impl Drop for NeedPlace {
+    fn drop(&mut self) {
+        let mut g = NEEDS.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((flight, _, _)) = g.as_mut() {
+            flight.remove(&(std::mem::take(&mut self.0), self.1));
+        }
+    }
+}
+
+/// Take one `secret_need` (review A-L1/L2): `None` when a release for this
 /// (job, generation) is in flight, or this attempt was already answered.
-pub fn need_begin(n: &SecretNeed) -> bool {
+pub fn need_begin(n: &SecretNeed) -> Option<NeedPlace> {
     let mut g = NEEDS.lock().unwrap_or_else(|p| p.into_inner());
     let (flight, order, latched) = g.get_or_insert_with(Default::default);
     let attempt = (n.job_id.clone(), n.generation, n.attempt);
     if flight.contains(&(n.job_id.clone(), n.generation)) || latched.contains(&attempt) {
-        return false;
+        return None;
     }
     flight.insert((n.job_id.clone(), n.generation));
     latched.insert(attempt.clone());
@@ -335,14 +364,7 @@ pub fn need_begin(n: &SecretNeed) -> bool {
             latched.remove(&old);
         }
     }
-    true
-}
-
-pub fn need_end(n: &SecretNeed) {
-    let mut g = NEEDS.lock().unwrap_or_else(|p| p.into_inner());
-    if let Some((flight, _, _)) = g.as_mut() {
-        flight.remove(&(n.job_id.clone(), n.generation));
-    }
+    Some(NeedPlace(n.job_id.clone(), n.generation))
 }
 
 /// Check everything for one `secret_need` and seal the values. On success:

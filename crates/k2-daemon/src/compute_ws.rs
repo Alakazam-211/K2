@@ -759,16 +759,29 @@ static RELEASES: AtomicU64 = AtomicU64::new(0);
 /// loop never waits on the vault (SV6). The answer goes only to the
 /// connection that asked (SV5); a node that reconnected meanwhile times
 /// out and fails the attempt `secret_unavailable`.
-fn on_secret_need(node_id: &str, conn_id: u64, n: frames::SecretNeed) {
-    // Caps (review A-L1/L2): one release in flight per (job, generation),
-    // one answer per attempt; anything past that is dropped unanswered (a
-    // node asks once per attempt; a retry is a new attempt).
-    if !crate::compute_secrets::need_begin(&n) {
-        return;
+/// Counts a release thread while it lives (test seam), panic or not.
+struct ReleaseCount;
+
+impl Drop for ReleaseCount {
+    fn drop(&mut self) {
+        RELEASES.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+fn on_secret_need(node_id: &str, conn_id: u64, n: frames::SecretNeed) {
     let node = node_id.to_string();
     RELEASES.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
+        let _counted = ReleaseCount;
+        // Only a job of the asking node takes a place (round 2, item 3: a
+        // node can't burn another node's attempt). Then the caps (A-L1/L2):
+        // one release in flight per (job, generation), one answer per
+        // attempt; past that, dropped unanswered. The guard frees the
+        // in-flight place even if the release panics.
+        if !crate::compute_secrets::job_on_node(&node, &n.job_id) {
+            return;
+        }
+        let Some(_place) = crate::compute_secrets::need_begin(&n) else { return };
         let r = crate::compute_secrets::release(&node, &n);
         let answer = match r {
             Ok((env, names, redactor)) => {
@@ -792,8 +805,6 @@ fn on_secret_need(node_id: &str, conn_id: u64, n: frames::SecretNeed) {
             }
             notify_change();
         }
-        crate::compute_secrets::need_end(&n);
-        RELEASES.fetch_sub(1, Ordering::SeqCst);
     });
 }
 

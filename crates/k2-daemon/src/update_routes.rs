@@ -2606,18 +2606,18 @@ mod tests {
         // Admin asking: still no.
         let e = rollback_guard("0.46.4", "0.46.5", true, false, false).unwrap_err();
         assert_eq!(e.status, "403 Forbidden");
-        assert_eq!(rollback_guard("0.46.4", "0.46.5", true, false, true).expect("owner downgrade"), true);
+        assert_eq!(rollback_guard("0.46.4", "0.46.5", true, false, true).unwrap_or_else(|e| panic!("owner downgrade: {} {}", e.status, e.body)), true);
         // reinstall does not unlock a downgrade.
         assert!(rollback_guard("0.46.4", "0.46.5", false, true, true).is_err());
         // Same version: refused unless the owner reinstalls on purpose.
         assert!(rollback_guard("0.46.5", "0.46.5", false, false, true).unwrap_err().body.contains("the same as"));
         assert!(rollback_guard("0.46.5", "0.46.5", false, true, false).is_err());
-        assert_eq!(rollback_guard("0.46.5", "0.46.5", false, true, true).expect("owner reinstall"), true);
+        assert_eq!(rollback_guard("0.46.5", "0.46.5", false, true, true).unwrap_or_else(|e| panic!("owner reinstall: {} {}", e.status, e.body)), true);
         // allowDowngrade does not unlock a reinstall.
         assert!(rollback_guard("0.46.5", "0.46.5", true, false, true).is_err());
         // Newer: fine for anyone allowed to update, no override recorded.
-        assert_eq!(rollback_guard("0.46.6", "0.46.5", false, false, false).expect("newer"), false);
-        assert_eq!(rollback_guard("0.47.0", "0.46.10", false, false, false).expect("newer"), false);
+        assert_eq!(rollback_guard("0.46.6", "0.46.5", false, false, false).unwrap_or_else(|e| panic!("newer: {} {}", e.status, e.body)), false);
+        assert_eq!(rollback_guard("0.47.0", "0.46.10", false, false, false).unwrap_or_else(|e| panic!("newer: {} {}", e.status, e.body)), false);
         // Unparsable counts as older: refused.
         assert!(rollback_guard("junk", "0.46.5", false, false, true).is_err());
     }
@@ -2638,7 +2638,9 @@ mod tests {
         let e = prepare_apply(&id).err().expect("an older staged build is refused at apply");
         assert!(e.body.contains("older than"), "{}", e.body);
         update_job(&id, |j| j.version_override = true);
-        prepare_apply(&id).expect("the owner's override applies");
+        if let Err(e) = prepare_apply(&id) {
+            panic!("the owner's override applies: {} {}", e.status, e.body);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

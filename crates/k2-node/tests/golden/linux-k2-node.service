@@ -21,6 +21,8 @@ ProtectHome=read-only
 ReadWritePaths=/var/lib/k2node /var/tmp /tmp
 WorkingDirectory=/var/lib/k2node
 LimitNOFILE=65536
+# No core files: k2-node holds secret-env values in memory (0.46.4).
+LimitCORE=0
 
 [Install]
 WantedBy=multi-user.target

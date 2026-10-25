@@ -187,6 +187,17 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
     if is_root() {
         return Err("k2-node never runs as root (jobs would run as root). Run it as the node user, e.g. k2node.".into());
     }
+    // Secret-env (review A-M1): k2-node holds a secret job's value in memory
+    // from release to spawn, and its redactor until the job ends. Not
+    // dumpable: no core file, and no other process of the node user can
+    // read its memory or environment through /proc or ptrace.
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: prctl with constant arguments.
+        if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+            return Err(format!("prctl(PR_SET_DUMPABLE, 0): {}", std::io::Error::last_os_error()));
+        }
+    }
     let found = k2_files_in_home();
     if !found.is_empty() {
         if a.has("--dev") {

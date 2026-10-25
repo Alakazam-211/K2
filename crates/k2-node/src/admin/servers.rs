@@ -955,6 +955,12 @@ pub fn node_list(node: &crate::node::Node) -> Result<ServersList, String> {
 /// where 0.46.3 tenants share the node's uid behind Seatbelt). A `--dev`
 /// test node (not root) gets only a plain root dir.
 pub fn prepare_tenant(ctx: &Ctx, e: &ServerEntry) -> Result<Option<u32>, AdminRefusal> {
+    prepare_tenant_with(ctx, e, None)
+}
+
+/// [`prepare_tenant`] on root's running executor `exec` when given (its
+/// own platform; `servers.owner`), else on one made for the call.
+pub(crate) fn prepare_tenant_with(ctx: &Ctx, e: &ServerEntry, exec: Option<&super::exec::Executor>) -> Result<Option<u32>, AdminRefusal> {
     let root = ctx.layout().tenants_root();
     let dir = root.join(e.slot.to_string());
     if std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
@@ -962,7 +968,10 @@ pub fn prepare_tenant(ctx: &Ctx, e: &ServerEntry) -> Result<Option<u32>, AdminRe
     }
     if ctx.root {
         let ask = share::TenantPrepare { slot: e.slot, trust: e.trust, weight: e.weight, network: e.network };
-        let r = ctx.executor().tenant_prepare(&ask)?;
+        let r = match exec {
+            Some(x) => x.tenant_prepare(&ask)?,
+            None => ctx.executor().tenant_prepare(&ask)?,
+        };
         return Ok(r.get("uid").and_then(|v| v.as_u64()).and_then(|v| u32::try_from(v).ok()));
     }
     std::fs::create_dir_all(&dir).map_err(|x| failed(format!("create {}: {x}", dir.display())))?;

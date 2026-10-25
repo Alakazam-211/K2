@@ -1,6 +1,9 @@
 //! `servers.owner` without root (prd-macos-tenant-compute-v1 §10: O1, O2,
-//! O4, O5, O7 at the file level; the users and re-own walk run in the
-//! Linux root suite). A real executor (temp dirs, a recording platform,
+//! O4, O5, O7 at the file level). What runs only as root (the users step,
+//! the re-own walk and its ACL strip, stopping leftover processes, the old
+//! owner's new user, a revoke's wipe, an abort's re-own, a crash after
+//! each step) is in `tests/owner_change_linux.rs`: `#[ignore]` tests run
+//! as root in a throwaway Linux box. A real executor (temp dirs, a recording platform,
 //! real signatures), a node that isn't running: its half
 //! (`node::owner_swap`) is called where the restart would run it.
 

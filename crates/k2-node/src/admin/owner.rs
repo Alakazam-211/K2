@@ -443,7 +443,7 @@ pub fn run_steps(e: &Executor, mut step: Step) -> Result<Value, AdminRefusal> {
     // old one (review F2).
     repin_admin(e, &step)?;
     let old_uid = match step.old {
-        OldOwner::Keep => prepare_old_owner(&ctx, &step)?,
+        OldOwner::Keep => prepare_old_owner(e, &ctx, &step)?,
         OldOwner::Revoke => {
             revoke_old_owner(&ctx, &step)?;
             None
@@ -595,7 +595,7 @@ pub fn abort(e: &Executor) -> Result<Value, AdminRefusal> {
     // line still names the target (servers.toml changes only in the files
     // step), so this gives the target a new user, recorded in its line.
     if step.phase > Phase::Trees && ctx.root && cfg!(target_os = "linux") {
-        prepare_old_owner(&ctx, &step)?;
+        prepare_old_owner(e, &ctx, &step)?;
         if step.caches == Caches::Move {
             let group = super::jobs::tenant_group_name(step.slot);
             let tgid = super::jobs::group_id(&group).ok_or_else(|| failed(format!("group {group} is missing")))?;
@@ -1036,10 +1036,10 @@ pub fn swap_lines(f: &ServersFile, step: &Step, macos: bool) -> Result<ServersFi
 
 /// `old = keep`: the old owner's new user in slot N (`tenant.prepare`, a
 /// new uid), recorded in its line.
-fn prepare_old_owner(ctx: &Ctx, step: &Step) -> Result<Option<u32>, AdminRefusal> {
+fn prepare_old_owner(e: &Executor, ctx: &Ctx, step: &Step) -> Result<Option<u32>, AdminRefusal> {
     let mut f = servers::read_file(&ctx.config_dir).map_err(failed)?.ok_or_else(|| failed("servers.toml is gone"))?;
     let line = f.entry(step.slot).cloned().ok_or_else(|| failed(format!("slot {} has no line", step.slot)))?;
-    let uid = servers::prepare_tenant(ctx, &line)?;
+    let uid = servers::prepare_tenant_with(ctx, &line, Some(e))?;
     if uid.is_some() && line.uid != uid {
         if let Some(x) = f.servers.iter_mut().find(|x| x.slot == step.slot) {
             x.uid = uid;

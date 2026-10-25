@@ -28,6 +28,11 @@ export type PersonRow = {
   roleName: string | null
   defaultRooms: string[]
   defaultRoomHandles: string[]
+  email: string | null
+  /** An agent tie (agent-app-users R2): the workspace handle it holds them to. */
+  tiedTo: string | null
+  /** Tied, and given more than that workspace: the extra waits for a reset. */
+  pendingReset: boolean
 }
 
 type RoomAccess = { handle: string; caps: string[] }
@@ -105,6 +110,9 @@ export function parsePeople(raw: unknown): PersonRow[] {
       roleName: asString(rec.roleName) ?? asString(rec.role_name),
       defaultRooms: parseStringList(rec.defaultRooms ?? rec.default_rooms),
       defaultRoomHandles: parseStringList(rec.defaultRoomHandles ?? rec.default_room_handles),
+      email: asString(rec.email),
+      tiedTo: asString(rec.tiedTo),
+      pendingReset: rec.pendingReset === true,
     }]
   })
 }
@@ -467,6 +475,11 @@ export function PeopleSection(): React.JSX.Element {
               >
                 <span className="block text-xs font-mono text-[var(--color-text-primary)] truncate">
                   {row.username}
+                  {row.pendingReset ? (
+                    <span className="ml-1.5 text-[9px] font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-warning-soft,#b7791f)]/20 text-[var(--color-text-secondary)]">
+                      Waiting for reset
+                    </span>
+                  ) : null}
                 </span>
                 {row.fullName ? (
                   <span className="block text-[10px] text-[var(--color-text-muted)] truncate">
@@ -610,6 +623,88 @@ function roleBits(role: RoleRow | null, fallbackHandles: string[]): React.JSX.El
   )
 }
 
+/**
+ * agent-app-users §5.5: a person an agent set up is tied to that agent's
+ * workspace. When you gave them more, the extra waits for their own reset:
+ * send a reset link (to the stored email, another email, or show a
+ * one-time link here). Nothing for an untied person.
+ */
+export function ResetPanel({ person }: { person: PersonRow }): React.JSX.Element | null {
+  const [busy, setBusy] = useState(false)
+  const [other, setOther] = useState('')
+  const [askOther, setAskOther] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+  const [link, setLink] = useState<string | null>(null)
+  if (!person.tiedTo) return null
+  const send = async (body: Record<string, unknown>) => {
+    setBusy(true)
+    setNote(null)
+    setLink(null)
+    try {
+      const r = asRecord(await daemonCliPost(primaryScope(), 'skin/users/reset-link', { username: person.username, ...body }))
+      if (r.delivered === 'returned' && typeof r.link === 'string') {
+        setLink(r.link)
+        setNote('One-time link (shown once; give it to them yourself):')
+      } else if (r.delivered === 'held') {
+        setNote(asString(r.hint) ?? 'Held for approval.')
+      } else {
+        setNote(`Reset link sent to ${asString(r.sentTo) ?? 'their email'}.`)
+      }
+    } catch (e) {
+      setNote(errText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const btn = 'text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer disabled:opacity-40'
+  return (
+    <SettingsGroup title={person.pendingReset ? 'Waiting for reset' : 'Set up by an agent'}>
+      <p className="text-[10px] text-[var(--color-text-muted)]">
+        {person.pendingReset
+          ? `${person.tiedTo}'s agent set ${person.username} up, so the extra access you gave starts only after ${person.username} resets their password. Until then they keep ${person.tiedTo}'s access.`
+          : `${person.tiedTo}'s agent set ${person.username} up. More access you give waits for their password reset.`}
+        {person.email ? ` Reset link goes to ${person.email}.` : ''}
+      </p>
+      {person.pendingReset ? (
+        <div className="flex flex-wrap items-center gap-3 pt-1">
+          <button type="button" className={btn} disabled={busy || !person.email} onClick={() => void send({})}>
+            Send reset link
+          </button>
+          <button type="button" className={btn} disabled={busy} onClick={() => setAskOther(true)}>
+            Send to another email…
+          </button>
+          <button type="button" className={btn} disabled={busy} onClick={() => void send({ code: true })}>
+            Show a one-time link
+          </button>
+        </div>
+      ) : null}
+      {askOther ? (
+        <form
+          className="flex items-center gap-2 pt-1"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (other.trim()) void send({ to: other.trim() })
+          }}
+        >
+          <input
+            type="email"
+            className={INPUT_CLS}
+            aria-label={`Reset link email for ${person.username}`}
+            placeholder="email"
+            value={other}
+            onChange={(e) => setOther(e.target.value)}
+          />
+          <button type="submit" className={btn} disabled={busy || !other.trim()}>
+            Send
+          </button>
+        </form>
+      ) : null}
+      {note ? <p className="text-[10px] text-[var(--color-text-secondary)] pt-1">{note}</p> : null}
+      {link ? <p className="text-[10px] font-mono break-all select-all text-[var(--color-text-primary)]">{link}</p> : null}
+    </SettingsGroup>
+  )
+}
+
 function PersonDetail({
   person,
   grants,
@@ -717,6 +812,8 @@ function PersonDetail({
           </button>
         ) : null}
       </form>
+
+      <ResetPanel key={person.username} person={person} />
 
       <SettingsGroup title="Grants">
         {grants.length === 0 ? (

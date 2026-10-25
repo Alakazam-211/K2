@@ -197,7 +197,45 @@ describe('PeopleSection', () => {
       roleName: null,
       defaultRooms: [],
       defaultRoomHandles: [],
+      email: null,
+      tiedTo: null,
+      pendingReset: false,
     }])
+  })
+
+  // agent-app-users T6.1: a tied, pending person shows the badge and the
+  // three reset actions; an untied person shows none.
+  it('shows Waiting for reset with its actions only for a tied, pending person', async () => {
+    allowRoster([
+      { username: 'tina', pendingReset: true, tiedTo: 'sales', email: 'tina@example.test' },
+      { username: 'owen', pendingReset: false, tiedTo: null },
+    ])
+    h.daemonCliPost.mockResolvedValue({ ok: true, delivered: 'sent', sentTo: 'tina@example.test' })
+    render(<PeopleSection />)
+    await waitFor(() => expect(screen.getByLabelText('Open tina')).toBeTruthy())
+    expect(screen.getByLabelText('Open tina').textContent).toContain('Waiting for reset')
+    expect(screen.getByLabelText('Open owen').textContent).not.toContain('Waiting for reset')
+
+    fireEvent.click(screen.getByLabelText('Open owen'))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Send reset link' })).toBeNull())
+    expect(screen.queryByRole('button', { name: 'Show a one-time link' })).toBeNull()
+
+    fireEvent.click(screen.getByLabelText('Open tina'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send reset link' })).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'Send to another email…' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show a one-time link' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Send reset link' }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/reset-link', { username: 'tina' })
+    })
+    await waitFor(() => expect(screen.getByText('Reset link sent to tina@example.test.')).toBeTruthy())
+
+    h.daemonCliPost.mockResolvedValue({ ok: true, delivered: 'returned', link: 'https://x.example/reset#k2inv_abc' })
+    fireEvent.click(screen.getByRole('button', { name: 'Show a one-time link' }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/reset-link', { username: 'tina', code: true })
+    })
+    await waitFor(() => expect(screen.getByText('https://x.example/reset#k2inv_abc')).toBeTruthy())
   })
 
   it('adds a person with password, full name, and optional email', async () => {

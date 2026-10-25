@@ -78,6 +78,9 @@ pub mod quotas;
 pub mod resources;
 /// `requires.sew` / `requires.voice` against this box's Sew (0.46.3).
 pub mod requires;
+/// Per-App Postgres majors: the App's database and `requires.postgres`
+/// (prd-app-pg-choice-dualrun-v1 Part A, 0.46.4).
+pub mod pg_choice;
 pub mod router;
 pub mod routes;
 /// The per-App seal key in the vault (K-M3, 0.46.3).

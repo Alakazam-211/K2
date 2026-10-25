@@ -155,30 +155,55 @@ pub fn check(req: Option<&Requires>, st: &BoxSew) -> Result<(), Unmet> {
     }
 }
 
-/// The live check for an App's Seed manifest (the deploy pipeline's entry
-/// and the install precheck).
-pub fn check_live(app: &str, req: Option<&Requires>) -> Result<(), (String, J)> {
+/// A refused `requires` (the route's and the pipeline's answer).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Refused {
+    pub code: &'static str,
+    pub status: u16,
+    pub msg: String,
+    pub extra: J,
+}
+
+/// Sew and voice only (install with a Seed checks these before the App
+/// exists; `requires.postgres` is the install's database plan, PA7).
+fn check_sew_live(app: &str, req: Option<&Requires>) -> Result<(), Refused> {
     if req.is_none_or(|r| r.sew.is_none() && !r.voice) {
         return Ok(());
     }
     let st = BoxSew::read();
-    check(req, &st).map_err(|u| (u.message(app), u.json(&st)))
+    check(req, &st).map_err(|u| Refused { code: codes::REQUIRES_UNMET, status: 409, msg: u.message(app), extra: u.json(&st) })
 }
 
-/// The routes' refusal for an unmet `requires`.
-pub(crate) fn refusal(app: &str, req: Option<&Requires>) -> Result<(), super::routes::Refusal> {
-    check_live(app, req).map_err(|(msg, extra)| {
-        let mut r = super::routes::no(codes::REQUIRES_UNMET, 409, msg);
-        r.extra = Some(extra);
-        r
-    })
+/// The live check for an App's Seed manifest (the deploy pipeline's entry
+/// and the re-host pre-flight): Sew and voice, then (0.46.4, PA5)
+/// `requires.postgres` against the App's database. An App not installed
+/// yet passes the Postgres half: the install's database plan checks it
+/// (PA7).
+pub fn check_live(app: &str, req: Option<&Requires>) -> Result<(), Refused> {
+    check_sew_live(app, req)?;
+    let Some(range) = req.and_then(|r| r.postgres.as_deref()) else { return Ok(()) };
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::store::get_app(&conn, app).ok().flatten()
+    };
+    let Some(row) = row else { return Ok(()) };
+    super::pg_choice::check_live(&row, Some(range)).map_err(|u| Refused { code: u.code, status: u.status, msg: u.hint, extra: u.extra })
+}
+
+fn to_refusal(r: Refused) -> super::routes::Refusal {
+    let mut out = super::routes::no(r.code, r.status, r.msg);
+    out.extra = Some(r.extra);
+    out
 }
 
 /// `k2 app install … --seed S | --folder F`: check the Seed's (or the
-/// folder's `manifest.json`) `requires` before anything is created, so an
-/// unmet one leaves no half-installed App. A manifest that doesn't parse
-/// is left to the build, which reports it with its place.
-pub(crate) fn install_precheck(who: &super::routes::Who, app: &str, v: &J) -> Result<(), super::routes::Refusal> {
+/// folder's `manifest.json`) `requires.sew`/`voice` before anything is
+/// created, so an unmet one leaves no half-installed App, and hand back
+/// its `requires` (the install's database plan reads `postgres`, PA7). A
+/// manifest that doesn't parse is left to the build, which reports it
+/// with its place.
+pub(crate) fn install_precheck(who: &super::routes::Who, app: &str, v: &J) -> Result<Option<Requires>, super::routes::Refusal> {
     use super::routes::s;
     let m: Option<k2_core::deploy::manifest::Manifest> = if let Some(seed) = s(v, "seed") {
         let row = {
@@ -196,8 +221,11 @@ pub(crate) fn install_precheck(who: &super::routes::Who, app: &str, v: &J) -> Re
         None
     };
     match m {
-        Some(m) => refusal(app, m.requires.as_ref()),
-        None => Ok(()),
+        Some(m) => {
+            check_sew_live(app, m.requires.as_ref()).map_err(to_refusal)?;
+            Ok(m.requires)
+        }
+        None => Ok(None),
     }
 }
 
@@ -206,7 +234,7 @@ mod tests {
     use super::*;
 
     fn req(sew: Option<&str>, voice: bool) -> Requires {
-        Requires { k2: None, features: vec![], sew: sew.map(str::to_string), voice }
+        Requires { k2: None, features: vec![], sew: sew.map(str::to_string), voice, postgres: None }
     }
 
     fn running(v: &str, voice: bool) -> BoxSew {

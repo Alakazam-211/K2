@@ -47,7 +47,7 @@ vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi
 import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { AppsBoxSection } from './AppsBoxSection'
-import { memoryLabel, parseBoxApps, stateLabel } from './app-access-api'
+import { memoryLabel, parseBoxApps, postgresChip, stateLabel } from './app-access-api'
 
 function project(id: string, name: string, over: Partial<ProjectWithWorkspaces> = {}): ProjectWithWorkspaces {
   return { id, name, path: `/ws/${name}`, color: '#22c55e', iconUrl: null, handle: name, workspaces: [], ...over } as ProjectWithWorkspaces
@@ -65,6 +65,7 @@ const BOX = {
       memory: { limitBytes: 512 * 1024 * 1024 },
       hostnames: ['shop.rosson.k2.dev'],
       switches: { buildAndRun: true, manageEndToEnd: false, cores: ['db', 'thread'] },
+      database: { name: 'ws_sales', major: 16, source: 'default', sharedWith: [], requires: '>=16', available: [17] },
     },
     {
       appId: 'old',
@@ -111,6 +112,18 @@ describe('parsing', () => {
       'no memory limit',
     ])
   })
+
+  it('reads the App database into the Postgres chip (0.46.4, PA17)', () => {
+    const apps = parseBoxApps(BOX)
+    expect(apps[1].database).toEqual({ name: 'ws_sales', major: 16, available: [17], sharedWith: [], unknown: null })
+    expect(apps[0].database).toBeNull()
+    expect(postgresChip(apps[1].database)).toBe('Postgres 16 · 17 available')
+    expect(postgresChip({ name: 'ws_a', major: 17, available: [], sharedWith: ['b'], unknown: null })).toBe('Postgres 17')
+    expect(postgresChip({ name: null, major: null, available: [], sharedWith: [], unknown: 'external' })).toBe(
+      'Postgres: not a K2 database',
+    )
+    expect(postgresChip(null)).toBeNull()
+  })
 })
 
 describe('the Apps rows', () => {
@@ -120,6 +133,8 @@ describe('the Apps rows', () => {
     expect(within(row).getByTestId('apps-row-shop-agent').textContent).toBe('Sales · sales::rosson.k2.dev')
     expect(row.textContent).toContain('running')
     expect(row.textContent).toContain('512 MiB · shop.rosson.k2.dev')
+    expect(within(row).getByTestId('apps-row-shop-postgres').textContent).toBe('Postgres 16 · 17 available')
+    expect(screen.queryByTestId('apps-row-old-postgres')).toBeNull()
     expect(within(row).getByTestId('apps-row-shop-access').textContent).toContain('Build and run Apps · uses Database, Thread')
     expect(within(row).queryByTestId('apps-row-shop-actions')).toBeNull()
     expect(h.gets.find((g) => g.route === 'app/list' && g.params?.box === '1')).toBeTruthy()

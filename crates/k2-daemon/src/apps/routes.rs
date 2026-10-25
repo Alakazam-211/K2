@@ -621,7 +621,24 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
     };
     let tunnel = b(&v, "tunnel");
     // 0.46.3: the Seed's requires.sew / requires.voice, before anything exists.
-    super::requires::install_precheck(who, &app_id, &v)?;
+    let requires = super::requires::install_precheck(who, &app_id, &v)?;
+    // 0.46.4 (prd-app-pg-choice-dualrun-v1 PA7): the App's database, from
+    // the Seed's requires.postgres and `pgMajor`. Decided now (a refusal
+    // leaves nothing behind), created after the holds below.
+    let pg_pick = match v.get("pgMajor") {
+        None | Some(J::Null) => None,
+        Some(x) => Some(
+            x.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| no(codes::BAD_REQUEST, 400, "pgMajor must be a Postgres major number, like 17"))?,
+        ),
+    };
+    let db_plan = super::pg_choice::install_plan_live(&app_id, &ws.id, requires.as_ref().and_then(|r| r.postgres.as_deref()), pg_pick)
+        .map_err(|u| {
+            let mut r = no(u.code, u.status, u.hint);
+            r.extra = Some(u.extra);
+            r
+        })?;
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -706,6 +723,17 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
             format!("App id '{app_id}' doesn't fit the guarded engine (at most 32 characters, no '--'): pick a shorter id"),
         ));
     }
+    // PA7/PA8: create the workspace's database (and its DATABASE_URL
+    // reference) now that every hold has passed; the same gates as
+    // `k2 db create --major` for an agent.
+    let database = match &db_plan {
+        super::pg_choice::InstallDb::Nothing => None,
+        super::pg_choice::InstallDb::Fits(name, major) => Some(json!({ "name": name, "major": major, "created": false })),
+        super::pg_choice::InstallDb::Create(m) => Some(
+            crate::sql::routes::create_for_app_install(&ws.id, &ws.path, *m, agent_ws(who).is_some())
+                .map_err(|(st, code, hint)| no(code, st, hint))?,
+        ),
+    };
     let dir = deploy::app_dir(&app_id);
     std::fs::create_dir_all(dir.join("logs")).map_err(|e| no("io_error", 500, e.to_string()))?;
     let actor_s = actor(who);
@@ -763,6 +791,9 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
     mirror(&app_id);
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: ws.id.clone() });
     let mut out = json!({ "ok": true, "app": app_for(&Who::Owner, Some(&app_id))?, "frontPort": port });
+    if let Some(d) = database {
+        out["database"] = d;
+    }
     if s(&v, "seed").is_some() || s(&v, "folder").is_some() {
         let mut dv = v.clone();
         dv["app"] = json!(app_id);
@@ -1829,6 +1860,8 @@ fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
             .map(|a| {
                 let mut v = app_summary(a);
                 v["engine"] = super::rehost::engine_json(a);
+                // 0.46.4 (PA17): the App's database and its major.
+                v["database"] = super::pg_choice::database_json(a);
                 v
             })
             .collect::<Vec<_>>(),
@@ -1855,6 +1888,8 @@ fn inspect(who: &Who, params: &HashMap<String, String>) -> R<J> {
     need_credential(who)?;
     let app = app_for(who, params.get("app").map(String::as_str))?;
     let box_services = super::box_service_routes::summary_json(&app);
+    // 0.46.4 (PA17): before the lock below (it reads K2's records too).
+    let database = super::pg_choice::database_json(&app);
     let db = k2_core::db::shared();
     let conn = db.lock();
     let seed = match app.live_seed.as_deref() {
@@ -1866,6 +1901,7 @@ fn inspect(who: &Who, params: &HashMap<String, String>) -> R<J> {
     Ok(json!({
         "ok": true,
         "app": app_summary(&app),
+        "database": database,
         "row": app,
         "runtime": super::supervisor::runtime_json(&app.app_id),
         // 0.46.4 (update continuity R16): fingerprint, policy, the "can't run

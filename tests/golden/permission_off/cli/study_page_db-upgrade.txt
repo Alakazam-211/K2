@@ -32,6 +32,21 @@ THE MOVE (one database at a time, by copy)
   finished or undone that move (at most 30 minutes once Postgres runs;
   then it becomes a failure for the owner: --acknowledge-failed).
 
+PER APP (0.46.4)
+  An App's database is the K2 database its DATABASE_URL names (else its
+  workspace's default database). k2 db upgrade --app <id> moves only that
+  one; when K2 can't tell (a DATABASE_URL it can't map), --check lists
+  every database of the workspace and a move needs --all-workspace-dbs.
+  A manifest says which majors the App works with:
+    "requires": {"k2": ">=0.46.4", "postgres": ">=16 <18"}
+  Every App on the database must allow the target (shared databases too:
+  --check names them all); without --to, the target is the highest
+  supported major they all allow. k2 app install --pg-major 17 (or the
+  Seed's requires.postgres) creates the workspace's database on that major
+  when it has none; install and deploy refuse a database outside the range
+  (requires_unmet) and never move one. k2 app list --json shows each App's
+  database and its major.
+
 THE OLD COPY (14 days)
   Kept closed (no one connects) in the old cluster for 14 days.
   k2 db upgrade <db> --rollback --yes   back to it. Writes made on the new

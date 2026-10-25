@@ -96,6 +96,17 @@ REQUIRES (Apps on Sew)
   enable --voice, k2 hostchat upgrade, k2 hostchat media install). K2
   never turns Sew or voice on by itself. Rollbacks and restarts don't check.
 
+REQUIRES (Postgres, 0.46.4)
+  "requires": {"k2": ">=0.46.4", "postgres": ">=16 <18"}
+  Whole majors: "17", ">=17", ">=16 <18". The App's database is the one its
+  DATABASE_URL names (else its workspace's). Install, deploy and re-host
+  refuse a database on a major outside the range (requires_unmet, with the
+  move: k2 db upgrade <db> --to 17); a range only 18 meets is
+  major_unsupported. k2 app install --pg-major 17 creates the workspace's
+  database on 17 (with its DATABASE_URL reference) when there is none;
+  install never moves one. Older K2s refuse the key: keep requires.k2.
+  Rollbacks and restarts don't check. k2 study db-upgrade.
+
 READING WHAT WENT WRONG
   k2 app errors <app-id> [--since 1h] [--kind crash|health|build|deploy]
                             every crash, failed health gate and failed

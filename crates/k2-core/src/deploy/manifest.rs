@@ -129,6 +129,16 @@ pub struct Requires {
     /// Voice (Sew's media engine, `k2 hostchat media`) must be on (0.46.3).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub voice: bool,
+    /// The Postgres majors the App works with (0.46.4,
+    /// prd-app-pg-choice-dualrun-v1 PA4): a major range in `requires.k2`'s
+    /// form with whole majors (`"17"`, `">=17"`, `">=16 <18"`). Install,
+    /// deploy and re-host check it against the major of the App's database
+    /// (the one its `DATABASE_URL` names); `k2 db upgrade` refuses a target
+    /// outside it. `k2 app validate` checks only the form. **Needs K2
+    /// 0.46.4**: older daemons refuse a manifest carrying it (pair it with
+    /// `requires.k2: ">=0.46.4"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgres: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

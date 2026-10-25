@@ -417,6 +417,46 @@ pub fn granted(service_id: &str, workspace_id: &str, cwd: &Path) -> Granted {
     out
 }
 
+/// What a service's `DATABASE_URL` is at its next start
+/// (prd-app-pg-choice-dualrun-v1 PA1): the same sources a clean start
+/// reads (its `.env.k2` references, then its granted env secrets).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DbUrl {
+    /// Neither source names one.
+    Absent,
+    /// The value the service gets.
+    Value(String),
+    /// A source names one K2 can't read now (a broken reference, a sealed
+    /// vault): the service may not get it either.
+    Unreadable,
+}
+
+pub const DATABASE_URL: &str = "DATABASE_URL";
+
+/// [`DbUrl`] for one service, read the way [`granted`] reads it.
+pub fn database_url(service_id: &str, workspace_id: &str, cwd: &Path) -> DbUrl {
+    let g = granted(service_id, workspace_id, cwd);
+    if let Some((_, v)) = g.env.iter().rev().find(|(k, _)| k == DATABASE_URL) {
+        return DbUrl::Value(v.clone());
+    }
+    // Named but not resolved: a reference that didn't resolve, or a grant.
+    let se = get(service_id);
+    let env_file = se.env_file.clone().unwrap_or_else(|| ".env.k2".into());
+    let in_file = crate::vault_use_routes::jailed_path(cwd, &env_file)
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|t| parse_env_k2(&t).iter().any(|(k, v)| k == DATABASE_URL && k2_vault::refs::VaultRef::is_ref(v)));
+    let granted_one = super::get().ok().is_some_and(|vault| {
+        let who = Requester::PublishedService { id: service_id.to_string(), workspace_id: workspace_id.to_string() };
+        vault.spawn_items(&who).unwrap_or_default().iter().any(|it| it.delivery == Delivery::Env && it.env_name.as_deref() == Some(DATABASE_URL))
+    });
+    if in_file || granted_one {
+        DbUrl::Unreadable
+    } else {
+        DbUrl::Absent
+    }
+}
+
 /// The vault half of a clean start: `.env.k2` references (in `cwd`) and the
 /// secrets granted to the service. The App runtime's process engine builds
 /// its own clean base and calls this (prd-k2-app-runtime-v1 §4.2 item 9).

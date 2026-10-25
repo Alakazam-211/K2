@@ -344,6 +344,46 @@ fn check_contract(m: &Manifest, errors: &mut Vec<Issue>, _warnings: &mut Vec<Iss
                 errors.push(issue("manifest_invalid", format!("requires.sew: {e}"), Some("requires.sew".into())));
             }
         }
+        // requires.postgres (0.46.4, PA4): the form only; the App's
+        // database is checked at install, deploy and re-host.
+        if let Some(range) = &req.postgres {
+            if let Err(e) = pg_range_form_ok(range) {
+                errors.push(issue("manifest_invalid", format!("requires.postgres: {e}"), Some("requires.postgres".into())));
+            }
+        }
+    }
+}
+
+/// `requires.postgres` (PA4): `requires.k2`'s operators over whole
+/// Postgres majors (`17`, `>=16`, `>=16 <18`). Does `major` satisfy it?
+/// A part with a minor (`17.2`), a sign or a word is a form error.
+pub fn pg_range_ok(range: &str, major: u32) -> Result<bool, String> {
+    let mut any = false;
+    for part in range.split_whitespace() {
+        any = true;
+        let v = part.trim_start_matches(['>', '<', '=']);
+        let ops = &part[..part.len() - v.len()];
+        if !matches!(ops, "" | ">=" | "<=" | ">" | "<" | "=") {
+            return Err(format!("\"{part}\" is not a Postgres major range like >=17"));
+        }
+        if v.is_empty() || v.len() > 3 || !v.bytes().all(|b| b.is_ascii_digit()) || v.starts_with('0') {
+            return Err(format!("\"{part}\" is not a whole Postgres major (like 17)"));
+        }
+    }
+    if !any {
+        return Err("empty range".into());
+    }
+    k2_range_ok(range, &major.to_string())
+}
+
+/// Form only (`k2 app validate`): a range of whole majors that some major
+/// from 10 to 99 satisfies (`>=18 <17` names none and is refused).
+pub fn pg_range_form_ok(range: &str) -> Result<(), String> {
+    pg_range_ok(range, 0)?;
+    if (10..=99).any(|m| pg_range_ok(range, m) == Ok(true)) {
+        Ok(())
+    } else {
+        Err(format!("\"{range}\" is met by no Postgres major"))
     }
 }
 
@@ -673,6 +713,43 @@ mod tests {
         write_executable(&fake, "#!/bin/sh\nexit 0\n");
         let (r, _) = validate_tree(&f, &Options { types: true, checker: Some(fake) });
         assert!(r.ok, "{r:?}");
+    }
+
+    /// 0.46.4 (PA4): `requires.postgres` is a range of whole majors;
+    /// validate checks only the form, never the box.
+    #[test]
+    fn requires_postgres_form_is_checked() {
+        let h = TempHome::new();
+        let with = |req: &str| GOOD.replace(r#""requires":{"k2":">=0.1.0","features":["thread-latest"]}"#, req);
+        for ok in [r#""requires":{"postgres":"17"}"#, r#""requires":{"postgres":">=16 <18"}"#, r#""requires":{"postgres":">=17","sew":">=0.3.0"}"#] {
+            let (r, m) = validate_tree(&app(h.path(), &with(ok)), &Options::default());
+            assert!(r.ok, "{ok}: {r:?}");
+            assert!(m.unwrap().requires.unwrap().postgres.is_some(), "{ok}");
+        }
+        for bad in [
+            r#""requires":{"postgres":"17.2"}"#,
+            r#""requires":{"postgres":"latest"}"#,
+            r#""requires":{"postgres":""}"#,
+            r#""requires":{"postgres":">=18 <17"}"#,
+            r#""requires":{"postgres":"=>17"}"#,
+            r#""requires":{"postgres":"^17"}"#,
+        ] {
+            let (r, _) = validate_tree(&app(h.path(), &with(bad)), &Options::default());
+            assert!(!r.ok, "{bad}: {r:?}");
+            let e = r.errors.iter().find(|e| e.at.as_deref() == Some("requires.postgres")).unwrap_or_else(|| panic!("{bad}: {r:?}"));
+            assert_eq!(e.code, "manifest_invalid", "{e:?}");
+        }
+        // A number, not a string: a parse error with a place.
+        let (r, m) = validate_tree(&app(h.path(), &with(r#""requires":{"postgres":17}"#)), &Options::default());
+        assert!(!r.ok && m.is_none(), "{r:?}");
+        assert_eq!(pg_range_ok("17", 17), Ok(true));
+        assert_eq!(pg_range_ok("17", 16), Ok(false));
+        assert_eq!(pg_range_ok(">=16 <18", 17), Ok(true));
+        assert_eq!(pg_range_ok(">=16 <18", 18), Ok(false));
+        assert_eq!(pg_range_ok(">16", 16), Ok(false));
+        assert_eq!(pg_range_ok("<=16", 16), Ok(true));
+        assert!(pg_range_ok("17.0", 17).is_err());
+        assert!(pg_range_ok("017", 17).is_err());
     }
 
     #[test]

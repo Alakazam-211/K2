@@ -34,6 +34,9 @@ pub struct UpgradeRequest {
     pub now: bool,
     pub allow_adopted: bool,
     pub force_now: bool,
+    /// `--app` when K2 can't tell the App's database (PA2): move every
+    /// database of its workspace.
+    pub all_workspace_dbs: bool,
 }
 
 fn db_name_ok(s: &str) -> bool {
@@ -52,7 +55,7 @@ pub fn parse(body: &[u8]) -> Result<UpgradeRequest, String> {
         serde_json::from_str(trimmed).map_err(|e| format!("invalid JSON body: {e}"))?
     };
     let obj = v.as_object().ok_or("body must be a JSON object")?;
-    let mut r = UpgradeRequest { scope: None, act: Act::Move, to: None, yes: false, now: false, allow_adopted: false, force_now: false };
+    let mut r = UpgradeRequest { scope: None, act: Act::Move, to: None, yes: false, now: false, allow_adopted: false, force_now: false, all_workspace_dbs: false };
     let mut acts = Vec::new();
     let mut scopes = 0;
     for (k, val) in obj {
@@ -102,6 +105,7 @@ pub fn parse(body: &[u8]) -> Result<UpgradeRequest, String> {
             "now" => r.now = flag()?,
             "allowAdopted" => r.allow_adopted = flag()?,
             "forceNow" => r.force_now = flag()?,
+            "allWorkspaceDbs" => r.all_workspace_dbs = flag()?,
             other => return Err(format!("unknown field '{other}'")),
         }
     }
@@ -130,6 +134,9 @@ pub fn parse(body: &[u8]) -> Result<UpgradeRequest, String> {
     if r.yes && r.act != Act::Rollback {
         return Err("yes is a rollback flag".into());
     }
+    if r.all_workspace_dbs && !matches!(r.scope, Some(Scope::App(_))) {
+        return Err("allWorkspaceDbs goes with app".into());
+    }
     Ok(r)
 }
 
@@ -151,6 +158,7 @@ mod tests {
         assert_eq!(p(r#"{"app":"jobs"}"#).unwrap().scope, Some(Scope::App("jobs".into())));
         assert_eq!(p(r#"{"all":true,"check":true}"#).unwrap().scope, Some(Scope::All));
         assert_eq!(p(r#"{"acknowledgeFailed":true}"#).unwrap().act, Act::AcknowledgeFailed);
+        assert!(p(r#"{"app":"jobs","allWorkspaceDbs":true}"#).unwrap().all_workspace_dbs);
         for bad in [
             "",
             "[]",
@@ -169,6 +177,8 @@ mod tests {
             r#"{"db":"ws_jobs","to":-1}"#,
             r#"{"check":true}"#,
             r#"{"db":"ws_jobs","acknowledgeFailed":true}"#,
+            r#"{"db":"ws_jobs","allWorkspaceDbs":true}"#,
+            r#"{"app":"jobs","allWorkspaceDbs":"yes"}"#,
         ] {
             assert!(p(bad).is_err(), "{bad}");
         }

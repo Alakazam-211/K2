@@ -750,13 +750,14 @@ pub fn begin(app: &AppRow, seed: &str, kind: &str, actor: &str, reason: Option<&
         }
     };
     // 0.46.3: a deploy checks the Seed's requires.sew / requires.voice
-    // against this box's Sew (rollbacks and restarts don't: they keep or
+    // against this box's Sew, and (0.46.4, PA5) requires.postgres against
+    // the App's database (rollbacks and restarts don't: they keep or
     // put back what ran).
     if kind == store::KIND_DEPLOY || kind == store::KIND_REHOST {
         let req = serde_json::from_value::<Manifest>(seed_row.manifest.clone()).ok().and_then(|m| m.requires);
-        if let Err((msg, _)) = super::requires::check_live(&app.app_id, req.as_ref()) {
+        if let Err(r) = super::requires::check_live(&app.app_id, req.as_ref()) {
             release();
-            return Err(fail(codes::REQUIRES_UNMET, 409, msg));
+            return Err(fail(r.code, r.status, r.msg));
         }
     }
     let commit = seed_row.source_ref.clone().unwrap_or_else(|| seed_row.hash.clone());

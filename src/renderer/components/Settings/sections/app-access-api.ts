@@ -113,6 +113,39 @@ export interface BoxApp {
   buildAndRun: boolean | null
   manageEndToEnd: boolean | null
   cores: AppCoreId[]
+  /** 0.46.4 (PA17): the App's Postgres database; null with none. */
+  database: BoxAppDatabase | null
+}
+
+export interface BoxAppDatabase {
+  name: string | null
+  major: number | null
+  /** Newer majors the App's requires.postgres allows. */
+  available: number[]
+  sharedWith: string[]
+  /** K2 can't tell which database (a DATABASE_URL it can't map). */
+  unknown: string | null
+}
+
+function parseDatabase(v: unknown): BoxAppDatabase | null {
+  if (!isObj(v)) return null
+  const nums = (x: unknown): number[] => (Array.isArray(x) ? x.filter((n): n is number => typeof n === 'number') : [])
+  return {
+    name: strOrNull(v.name),
+    major: typeof v.major === 'number' ? v.major : null,
+    available: nums(v.available),
+    sharedWith: Array.isArray(v.sharedWith) ? v.sharedWith.filter((s): s is string => typeof s === 'string') : [],
+    unknown: strOrNull(v.unknown),
+  }
+}
+
+/** The Apps-row chip: "Postgres 16 · 17 available", or null with no database. */
+export function postgresChip(db: BoxAppDatabase | null): string | null {
+  if (!db) return null
+  if (db.unknown) return 'Postgres: not a K2 database'
+  if (db.major === null) return null
+  const avail = db.available.length ? ` · ${db.available.join(', ')} available` : ''
+  return `Postgres ${db.major}${avail}`
 }
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -149,6 +182,7 @@ export function parseBoxApps(raw: unknown): BoxApp[] {
         buildAndRun: sw ? sw.buildAndRun === true : null,
         manageEndToEnd: sw ? sw.manageEndToEnd === true : null,
         cores: sw ? parseAppCores(sw.cores) : [],
+        database: parseDatabase(a.database),
       }
     })
     .sort((x, y) => x.appId.localeCompare(y.appId))

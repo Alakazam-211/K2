@@ -568,7 +568,7 @@ impl WaveOps for LiveOps {
     }
     fn requires(&self, app: &AppRow) -> Result<(), String> {
         let req = live_manifest(app).and_then(|(m, _)| m.requires);
-        super::requires::check_live(&app.app_id, req.as_ref()).map_err(|(m, _)| m)
+        super::requires::check_live(&app.app_id, req.as_ref()).map_err(|r| r.msg)
     }
     fn sessions(&self, app: &AppRow) -> SessionStore {
         match live_manifest(app) {

@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 use super::request::{self, Act, Scope, UpgradeRequest};
 use super::{
-    check_only, forget_old, recover, rollback, run_move, sweep_rollback_copies, worker, ClusterRole, DbRecord,
+    check_only, default_target, forget_old, recover, rollback, run_move, sweep_rollback_copies, worker, ClusterRole, DbRecord,
     ForgetOpts, Major, MoveEnv, MoveOpts, MoveProgress, MovedInfo, MoveState, RollbackOpts, SourceState, Users,
 };
 use crate::cli_response::CliResponse;
@@ -227,6 +227,13 @@ impl MoveEnv for K2Env {
     }
     fn logins(&self, db: &str) -> Result<Vec<(String, String)>, String> {
         crate::sql::ops::move_logins(db).map_err(|e| e.hint().to_string())
+    }
+    fn app_ranges(&self, db: &str) -> Vec<(String, Option<String>)> {
+        crate::apps::pg_choice::apps_using(db).into_iter().map(|u| (u.app, u.requires)).collect()
+    }
+    fn spare_ram_bytes(&self) -> Option<u64> {
+        let p = crate::apps::admission::pool();
+        (p.source != "unknown").then(|| (p.total - p.size).max(0) as u64)
     }
     /// The owner workspace's and every grantee workspace's running Apps (F11).
     fn users(&self, db: &str) -> Users {
@@ -475,8 +482,37 @@ pub fn acts_for(r: &UpgradeRequest) -> Vec<VersionsAct> {
     v
 }
 
-/// The K2 databases a scope names: (db, owner project).
-fn databases_for(scope: &Scope, to: Major) -> Result<Vec<(String, String)>, CliResponse> {
+/// The K2 databases a scope names: (db, owner project). `--app` is the
+/// App's own database (prd-app-pg-choice-dualrun-v1 PA2: the one its
+/// `DATABASE_URL` names, else its workspace's default); when K2 can't
+/// tell, `--check` lists every database of its workspace and a move needs
+/// `--all-workspace-dbs`.
+fn databases_for(scope: &Scope, to: Major, all_workspace_dbs: bool, check: bool) -> Result<Vec<(String, String)>, CliResponse> {
+    if let Scope::App(id) = scope {
+        let app = {
+            let k2db = k2_core::db::shared();
+            let conn = k2db.lock();
+            k2_core::deploy::store::get_app(&conn, id).ok().flatten()
+        }
+        .ok_or_else(|| err(404, "not_found", format!("no App {id}")))?;
+        use crate::apps::pg_choice::DbOf;
+        match crate::apps::pg_choice::db_of(&app) {
+            _ if all_workspace_dbs => {}
+            DbOf::Known(r) => return Ok(vec![(r.name, r.project_id)]),
+            DbOf::None => return Err(err(404, "not_found", format!("App {id} has no database (no DATABASE_URL, and its workspace has none)"))),
+            DbOf::Unknown(why) if !check => {
+                return Err(err(
+                    409,
+                    "app_db_unknown",
+                    format!(
+                        "K2 can't tell which database App {id} uses ({why}). `k2 db upgrade --app {id} --check` lists its workspace's databases; \
+                         name one (k2 db upgrade <db>) or move them all with --all-workspace-dbs"
+                    ),
+                ))
+            }
+            DbOf::Unknown(_) => {}
+        }
+    }
     let k2db = k2_core::db::shared();
     let conn = k2db.lock();
     let q = |sql: &str, p: &str| -> Vec<(String, String)> {
@@ -566,10 +602,18 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
         }
         return ok(json!({"acknowledged": worker::acknowledge()}));
     }
-    let to = req.to.unwrap_or(k2_root_proto::pg_major::NEW_INSTALL);
-    let dbs = match databases_for(req.scope.as_ref().expect("parse requires a scope"), to) {
+    let scope = req.scope.as_ref().expect("parse requires a scope");
+    let dbs = match databases_for(scope, req.to.unwrap_or(k2_root_proto::pg_major::NEW_INSTALL), req.all_workspace_dbs, req.act == Act::Check) {
         Ok(d) => d,
         Err(r) => return r,
+    };
+    // PA6: without --to, the highest supported major every App on these
+    // databases allows (`--all` keeps K2's default; the check refuses the
+    // databases whose Apps exclude it).
+    let to = match (req.to, scope) {
+        (Some(t), _) => t,
+        (None, Scope::All) => k2_root_proto::pg_major::NEW_INSTALL,
+        (None, _) => default_target(&dbs.iter().map(|d| d.0.clone()).collect::<Vec<_>>(), &K2Env { actor: label.clone() }),
     };
     let agent_switch = match &who {
         Who::Agent { project_id, .. } => versions_access::switch_on(project_id),

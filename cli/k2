@@ -7837,12 +7837,17 @@ Make and ship:
                                        and print its hash. Deploys nothing.
   k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none]
                  [--engine guarded|process] [--seed S | --folder F]
+                 [--pg-major 16|17]
                                        Create the App (and its URL with --tunnel).
                                        It starts walled (guarded container),
                                        even where the owner turned the
                                        unwalled process engine on; --engine
                                        process only there (an agent's ask is
-                                       held for the owner).
+                                       held for the owner). --pg-major (or the
+                                       Seed's requires.postgres) creates the
+                                       workspace's database on that major with
+                                       its DATABASE_URL reference when it has
+                                       none; install never moves a database.
   Moving a legacy --cmd service in: k2 study app-move (k2 app data put,
   k2 app label take|return).
   k2 app data ls|get|rm|mv <app-id> …  Read back what the App wrote to /data
@@ -8680,9 +8685,9 @@ else:
     esac
 }
 
-# k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--seed S | --folder F] [--json]
+# k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--seed S | --folder F] [--pg-major M] [--json]
 cmd_app_install() {
-    local app="" ws="" tunnel=0 memory="" seed="" folder="" engine="" json_out=0 dov=""
+    local app="" ws="" tunnel=0 memory="" seed="" folder="" engine="" json_out=0 dov="" pgmajor=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --disk-override) dov="${2:-}"; shift 2 ;;
@@ -8693,19 +8698,24 @@ cmd_app_install() {
             --engine) engine="${2:-}"; shift 2 ;;
             --seed) seed="${2:-}"; shift 2 ;;
             --folder) folder="$(_app_rt_abs "${2:-}")"; shift 2 ;;
+            --pg-major) pgmajor="${2:-}"; shift 2 ;;
+            --pg-major=*) pgmajor="${1#--pg-major=}"; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
         esac
     done
-    [ -z "$app" ] && { echo "usage: k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--engine guarded|process] [--seed S|--folder F]" >&2; exit 2; }
+    [ -z "$app" ] && { echo "usage: k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--engine guarded|process] [--seed S|--folder F] [--pg-major 16|17]" >&2; exit 2; }
+    if [ -n "$pgmajor" ]; then
+        case "$pgmajor" in [1-9][0-9]) ;; *) echo "usage: --pg-major takes a Postgres major, e.g. 17" >&2; exit 2 ;; esac
+    fi
     ws="$(_compute_ws "$ws")"
     local wait=""
     { [ -n "$seed" ] || [ -n "$folder" ]; } && wait=150
     _app_rt_post /cli/app/install "$(_compute_json K2_CJ_app="$app" K2_CJ_workspace="$ws" K2_CJ_tunnel_b="$tunnel" \
         K2_CJ_memory="$memory" K2_CJ_engine="$engine" K2_CJ_seed="$seed" K2_CJ_folder="$folder" K2_CJ_wait_n="$wait" \
-        K2_CJ_diskOverride="$dov")"
+        K2_CJ_diskOverride="$dov" K2_CJ_pgMajor_n="$pgmajor")"
     # An agent asking for the unwalled process engine, or a disk override
     # that waits for the owner: held for the owner.
     if [ "$_CP_STATUS" = "202" ] && [[ "$_CP_BODY" != *'"frontPort"'* ]]; then
@@ -8720,6 +8730,12 @@ v = json.load(sys.stdin)
 a = v["app"]
 print("App %s installed (front port %s, memory limit %s)" % (a["appId"], v["frontPort"],
       "none" if a.get("memoryLimitBytes") is None else "%d MiB" % (a["memoryLimitBytes"] >> 20)))
+db = v.get("database")
+if db:
+    if db.get("created"):
+        print("database %s created on Postgres %s; DATABASE_URL reference %s (put it in .env.k2)" % (db["name"], db["major"], db.get("ref")))
+    else:
+        print("database %s on Postgres %s (already there)" % (db["name"], db["major"]))
 d = (v.get("deploy") or {}).get("deployment")
 if d:
     print("deploy %s: %s %s" % (d["id"], d["result"], d.get("error") or ""))
@@ -9807,6 +9823,17 @@ REQUIRES (Apps on Sew)
   requires_unmet, naming what's missing and the owner's fix (k2 hostchat
   enable --voice, k2 hostchat upgrade, k2 hostchat media install). K2
   never turns Sew or voice on by itself. Rollbacks and restarts don't check.
+
+REQUIRES (Postgres, 0.46.4)
+  "requires": {"k2": ">=0.46.4", "postgres": ">=16 <18"}
+  Whole majors: "17", ">=17", ">=16 <18". The App's database is the one its
+  DATABASE_URL names (else its workspace's). Install, deploy and re-host
+  refuse a database on a major outside the range (requires_unmet, with the
+  move: k2 db upgrade <db> --to 17); a range only 18 meets is
+  major_unsupported. k2 app install --pg-major 17 creates the workspace's
+  database on 17 (with its DATABASE_URL reference) when there is none;
+  install never moves one. Older K2s refuse the key: keep requires.k2.
+  Rollbacks and restarts don't check. k2 study db-upgrade.
 
 READING WHAT WENT WRONG
   k2 app errors <app-id> [--since 1h] [--kind crash|health|build|deploy]
@@ -31503,13 +31530,14 @@ cmd_schema() {
     },
     {
       "name": "db upgrade",
-      "usage": "k2 db upgrade <db>|--app <id>|--all [--to 17] [--check] [--rollback --yes] [--forget-old [--force-now]] [--now] [--allow-adopted] [--acknowledge-failed] [--no-wait] [--json]",
+      "usage": "k2 db upgrade <db>|--app <id> [--all-workspace-dbs]|--all [--to 17] [--check] [--rollback --yes] [--forget-old [--force-now]] [--now] [--allow-adopted] [--acknowledge-failed] [--no-wait] [--json]",
       "description": "Move a database to a newer Postgres major by copy (dump/restore into that major's cluster; the old copy is kept closed 14 days). --check is read-only. A move gives a 60 s notice, stops the database's Apps, pauses its guest doors (503 db_maintenance), recreates its roles with the same passwords, copies, verifies (rows, RLS, policies, grants, sequences, logins), re-points the vaulted DATABASE_URL and starts the Apps. --rollback --yes goes back within 14 days (writes since the move are lost). Agents need the \"Allow this agent to manage Postgres versions\" switch and move only their own and their Apps' databases; --forget-old, --now, --all, --allow-adopted and --acknowledge-failed are the owner's. Exit 0 done, 3 refused (nothing changed), 1 failed.",
       "args": [{"name": "db", "required": false}],
       "flags": [
-        {"name": "--app", "arg": "id", "description": "Every database of that App's workspace."},
+        {"name": "--app", "arg": "id", "description": "The App's own database: the one its DATABASE_URL names, else its workspace's default."},
+        {"name": "--all-workspace-dbs", "arg": null, "description": "With --app when K2 can't tell its database: every database of its workspace."},
         {"name": "--all", "arg": null, "description": "Owner: every K2 database below --to, one at a time; stops at the first failure."},
-        {"name": "--to", "arg": "major", "description": "Target major (default 17). Upward only, supported majors only."},
+        {"name": "--to", "arg": "major", "description": "Target major (default: the highest supported one every App on the database allows, else 17). Upward only, supported majors only."},
         {"name": "--check", "arg": null, "description": "Read-only report (ok / warn / refuse per line)."},
         {"name": "--rollback", "arg": null, "description": "Back to the kept old copy (needs --yes)."},
         {"name": "--yes", "arg": null, "description": "Confirms a rollback (writes since the move are not carried back)."},
@@ -35432,6 +35460,21 @@ THE MOVE (one database at a time, by copy)
   After a daemon restart mid-move, `recovering` lasts until K2 has
   finished or undone that move (at most 30 minutes once Postgres runs;
   then it becomes a failure for the owner: --acknowledge-failed).
+
+PER APP (0.46.4)
+  An App's database is the K2 database its DATABASE_URL names (else its
+  workspace's default database). k2 db upgrade --app <id> moves only that
+  one; when K2 can't tell (a DATABASE_URL it can't map), --check lists
+  every database of the workspace and a move needs --all-workspace-dbs.
+  A manifest says which majors the App works with:
+    "requires": {"k2": ">=0.46.4", "postgres": ">=16 <18"}
+  Every App on the database must allow the target (shared databases too:
+  --check names them all); without --to, the target is the highest
+  supported major they all allow. k2 app install --pg-major 17 (or the
+  Seed's requires.postgres) creates the workspace's database on that major
+  when it has none; install and deploy refuse a database outside the range
+  (requires_unmet) and never move one. k2 app list --json shows each App's
+  database and its major.
 
 THE OLD COPY (14 days)
   Kept closed (no one connects) in the old cluster for 14 days.
@@ -59042,12 +59085,13 @@ print("Allow this agent to manage Postgres versions: %s for %s%s" % ("on" if on 
             # major by copy; the old copy is kept 14 days. POST/GET
             # /cli/db/upgrade. Exit 0 done, 3 refused, 1 failed.
             local u_db="" u_app="" u_all=false u_to="" u_check=false u_rb=false u_yes=false u_forget=false
-            local u_force=false u_now=false u_adopted=false u_ack=false u_wait=true
+            local u_force=false u_now=false u_adopted=false u_ack=false u_wait=true u_allws=false
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
                     --app) u_app="${2:-}"; shift 2 ;;
                     --all) u_all=true; shift ;;
+                    --all-workspace-dbs) u_allws=true; shift ;;
                     --to) u_to="${2:-}"; shift 2 ;;
                     --to=*) u_to="${1#*=}"; shift ;;
                     --check) u_check=true; shift ;;
@@ -59071,7 +59115,7 @@ print("Allow this agent to manage Postgres versions: %s for %s%s" % ("on" if on 
                 K2_CJ_to_n="$u_to" K2_CJ_check_b="$($u_check && echo 1)" K2_CJ_rollback_b="$($u_rb && echo 1)" \
                 K2_CJ_yes_b="$($u_yes && echo 1)" K2_CJ_forgetOld_b="$($u_forget && echo 1)" K2_CJ_forceNow_b="$($u_force && echo 1)" \
                 K2_CJ_now_b="$($u_now && echo 1)" K2_CJ_allowAdopted_b="$($u_adopted && echo 1)" \
-                K2_CJ_acknowledgeFailed_b="$($u_ack && echo 1)")"
+                K2_CJ_acknowledgeFailed_b="$($u_ack && echo 1)" K2_CJ_allWorkspaceDbs_b="$($u_allws && echo 1)")"
             _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST /cli/db/upgrade "$u_body")"
             if [ "$_CP_STATUS" != "200" ]; then
                 printf '%s' "$_CP_BODY" | python3 -c 'import json,sys

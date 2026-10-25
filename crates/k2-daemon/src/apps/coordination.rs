@@ -227,12 +227,34 @@ fn box_row(conn: &Connection, app: &AppRow, names: &mut HashMap<String, Maintain
 pub(crate) fn box_view(who: &Who) -> R<J> {
     need_credential(who)?;
     let pool = super::admission::pool();
+    let person = super::routes::agent_ws(who).is_none();
+    // 0.46.4 (PA17): people see each App's database and its major (the
+    // Settings chip "Postgres 16 · 17 available"); read before the lock
+    // below, since it reads K2's records itself.
+    let databases: HashMap<String, J> = if person {
+        let apps = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::list_apps(&conn, None).map_err(db_err)?
+        };
+        apps.iter().map(|a| (a.app_id.clone(), super::pg_choice::database_json(a))).collect()
+    } else {
+        HashMap::new()
+    };
     let db = k2_core::db::shared();
     let conn = db.lock();
     let apps = store::list_apps(&conn, None).map_err(db_err)?;
     let mut names = HashMap::new();
-    let person = super::routes::agent_ws(who).is_none();
-    let rows: Vec<J> = apps.iter().map(|a| box_row(&conn, a, &mut names, person)).collect();
+    let rows: Vec<J> = apps
+        .iter()
+        .map(|a| {
+            let mut row = box_row(&conn, a, &mut names, person);
+            if let Some(d) = databases.get(&a.app_id) {
+                row["database"] = d.clone();
+            }
+            row
+        })
+        .collect();
     let used: i64 =
         apps.iter().filter(|a| a.state != store::STATE_PARKED).map(|a| super::admission::counted(a.memory_limit_bytes)).sum();
     Ok(json!({

@@ -180,6 +180,17 @@ pub trait MoveEnv {
     fn shared_with(&self, _db: &str) -> Vec<String> {
         Vec::new()
     }
+    /// Every App whose database is `db` (owner and grantee workspaces),
+    /// with its live Seed's `requires.postgres` (prd-app-pg-choice-dualrun-v1
+    /// PA3, PA6).
+    fn app_ranges(&self, _db: &str) -> Vec<(String, Option<String>)> {
+        Vec::new()
+    }
+    /// RAM outside the Apps' pool (a second cluster starts there, PA16);
+    /// `None` when the box's memory can't be read.
+    fn spare_ram_bytes(&self) -> Option<u64> {
+        None
+    }
     fn audit(&self, act: &str, line: Value);
     fn inbox(&self, title: &str, body: &str);
 }
@@ -526,6 +537,14 @@ fn new_progress(kind: &str, db: &str, from: Major, to: Major, actor: &str, now: 
         kept_as: None,
         move_tag: None,
     }
+}
+
+/// PA6: `--to` left out is the highest supported major every App on these
+/// databases allows; K2's default when none does (the check then refuses,
+/// naming the App).
+pub fn default_target(dbs: &[String], env: &dyn MoveEnv) -> Major {
+    let ranges: Vec<String> = dbs.iter().flat_map(|d| env.app_ranges(d)).filter_map(|(_, r)| r).collect();
+    crate::apps::pg_choice::best_major(ranges.iter().map(String::as_str)).unwrap_or(k2_root_proto::pg_major::NEW_INSTALL)
 }
 
 /// `--check` alone: the report, nothing changed.

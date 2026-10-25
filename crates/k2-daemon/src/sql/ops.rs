@@ -746,6 +746,13 @@ fn load_active_default(conn: &rusqlite::Connection, project_id: &str) -> Option<
     .ok()
 }
 
+/// The workspace's default database: the oldest active one, the one
+/// `k2 db dsn` (and so a workspace `DATABASE_URL`) names
+/// (prd-app-pg-choice-dualrun-v1 PA1).
+pub fn active_default_name_in(conn: &rusqlite::Connection, project_id: &str) -> Option<String> {
+    load_active_default(conn, project_id).map(|r| r.name)
+}
+
 fn load_test_row(conn: &rusqlite::Connection, project_id: &str) -> Option<DbRow> {
     conn.query_row(
         &format!(

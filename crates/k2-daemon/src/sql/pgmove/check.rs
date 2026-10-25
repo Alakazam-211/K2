@@ -10,6 +10,13 @@ use k2_root_proto::pg_major::{check_move, k2_layout, NEW_INSTALL};
 use super::catalog;
 use super::{free_band_port, port_of, roles_to_copy, ClusterOps, ClusterRole, DbRecord, Major, MoveEnv, MoveOpts, SourceState, Users};
 
+/// The refusal line's id when an App on the database excludes the target
+/// major (PA6).
+pub const APP_REQUIRES_MAJOR: &str = "app_requires_major";
+/// PA16: under this much RAM outside the Apps' pool, starting a second
+/// cluster is a warning.
+pub const MIN_SPARE_RAM: u64 = 2 << 30;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Level {
@@ -158,6 +165,35 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
     }
     if !installed.contains(&to) {
         l.ok("install", format!("postgresql-{to} will be installed (PGDG, pinned key)"));
+    }
+    // PA16: a second cluster starting on a box with little RAM outside the
+    // Apps' pool (they share one `k2-postgres.slice`).
+    let target_running = rows.iter().any(|r| r.major == to && r.name == "main" && r.online());
+    if !target_running {
+        if let Some(spare) = env.spare_ram_bytes() {
+            if spare < MIN_SPARE_RAM {
+                l.warn(
+                    "memory",
+                    format!("the {to} cluster starts as a second Postgres with {} MiB of RAM outside the Apps' pool", spare >> 20),
+                    "both clusters share k2-postgres.slice (40% of RAM at most); k2 db doctor shows each cluster's memory",
+                );
+            }
+        }
+    }
+
+    // PA3/PA6: every App on this database must accept the target major.
+    for (app, range) in env.app_ranges(db) {
+        match range {
+            Some(r) if k2_core::deploy::validate::pg_range_ok(&r, to) == Ok(true) => {
+                l.ok("apps", format!("{app}: requires.postgres \"{r}\" allows {to}"))
+            }
+            Some(r) => l.refuse(
+                APP_REQUIRES_MAJOR,
+                format!("{app} needs Postgres {r}, and {to} is outside it"),
+                "pick a --to every App on this database allows, or change that App's requires.postgres first",
+            ),
+            None => l.ok("apps", format!("{app}: no requires.postgres")),
+        }
     }
 
     // One kept rollback copy per database at most (F7).

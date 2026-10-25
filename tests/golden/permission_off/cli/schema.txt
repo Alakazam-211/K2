@@ -759,13 +759,14 @@ exit: 0
     },
     {
       "name": "db upgrade",
-      "usage": "k2 db upgrade <db>|--app <id>|--all [--to 17] [--check] [--rollback --yes] [--forget-old [--force-now]] [--now] [--allow-adopted] [--acknowledge-failed] [--no-wait] [--json]",
+      "usage": "k2 db upgrade <db>|--app <id> [--all-workspace-dbs]|--all [--to 17] [--check] [--rollback --yes] [--forget-old [--force-now]] [--now] [--allow-adopted] [--acknowledge-failed] [--no-wait] [--json]",
       "description": "Move a database to a newer Postgres major by copy (dump/restore into that major's cluster; the old copy is kept closed 14 days). --check is read-only. A move gives a 60 s notice, stops the database's Apps, pauses its guest doors (503 db_maintenance), recreates its roles with the same passwords, copies, verifies (rows, RLS, policies, grants, sequences, logins), re-points the vaulted DATABASE_URL and starts the Apps. --rollback --yes goes back within 14 days (writes since the move are lost). Agents need the \"Allow this agent to manage Postgres versions\" switch and move only their own and their Apps' databases; --forget-old, --now, --all, --allow-adopted and --acknowledge-failed are the owner's. Exit 0 done, 3 refused (nothing changed), 1 failed.",
       "args": [{"name": "db", "required": false}],
       "flags": [
-        {"name": "--app", "arg": "id", "description": "Every database of that App's workspace."},
+        {"name": "--app", "arg": "id", "description": "The App's own database: the one its DATABASE_URL names, else its workspace's default."},
+        {"name": "--all-workspace-dbs", "arg": null, "description": "With --app when K2 can't tell its database: every database of its workspace."},
         {"name": "--all", "arg": null, "description": "Owner: every K2 database below --to, one at a time; stops at the first failure."},
-        {"name": "--to", "arg": "major", "description": "Target major (default 17). Upward only, supported majors only."},
+        {"name": "--to", "arg": "major", "description": "Target major (default: the highest supported one every App on the database allows, else 17). Upward only, supported majors only."},
         {"name": "--check", "arg": null, "description": "Read-only report (ok / warn / refuse per line)."},
         {"name": "--rollback", "arg": null, "description": "Back to the kept old copy (needs --yes)."},
         {"name": "--yes", "arg": null, "description": "Confirms a rollback (writes since the move are not carried back)."},

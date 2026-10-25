@@ -41,6 +41,7 @@ import {
   needsOwner,
   parkApp,
   parseAppCores,
+  postgresChip,
   stateLabel,
   uninstallApp,
   unparkApp,
@@ -235,6 +236,15 @@ export function AppsBoxSection(): React.JSX.Element | null {
                         <div className={`text-[10px] ${muted}`}>
                           {memoryLabel(app.memoryLimitBytes)}
                           {app.hostnames.length ? ` · ${app.hostnames.join(', ')}` : ' · no public hostname'}
+                          {postgresChip(app.database) ? (
+                            <span
+                              className="ml-2 px-1.5 py-px border border-[var(--color-border)] text-[10px]"
+                              data-testid={`apps-row-${app.appId}-postgres`}
+                              title={app.database?.name ? `database ${app.database.name}` : undefined}
+                            >
+                              {postgresChip(app.database)}
+                            </span>
+                          ) : null}
                         </div>
                         {app.maintainer.kind === 'agent' ? (
                           <div className={`text-[10px] ${muted}`} data-testid={`apps-row-${app.appId}-access`}>

@@ -510,6 +510,53 @@ fn dsn_ref(project_id: &str, v: &serde_json::Value, test: bool) -> CliResponse {
     }
 }
 
+/// `k2 app install … --pg-major M` / a Seed's `requires.postgres` with no
+/// workspace database yet (prd-app-pg-choice-dualrun-v1 PA7, Q2): create
+/// the workspace's database on `major` and vault its `DATABASE_URL`
+/// reference, as `k2 db create --major M` then `k2 db dsn --ref` do.
+/// `agent` = the caller is an agent passport: then, as `k2 db create`,
+/// `db_agent_access` must be `write` and a major other than the box
+/// default needs the versions switch (PA8). Answers `{name, major, ref}`.
+pub(crate) fn create_for_app_install(project_id: &str, path: &str, major: u32, agent: bool) -> Result<serde_json::Value, (u16, &'static str, String)> {
+    if !sql_supported() {
+        return Err((409, "requires_unmet", "the App needs a Postgres database, and K2 runs Postgres on Linux boxes only".into()));
+    }
+    if agent {
+        let mode = k2_core::workspace::settings::db_agent_access_for_path(path);
+        if mode != "write" {
+            return Err((
+                403,
+                "forbidden",
+                format!("the App needs a database and workspace db_agent_access is '{mode}' (need write to create one) — ask your human"),
+            ));
+        }
+        let (default, _) = super::cluster::default_major();
+        if major != default && !super::versions_access::switch_on(project_id) {
+            return Err((
+                403,
+                "db_upgrade_off",
+                format!(
+                    "creating the App's database on Postgres {major} (not this box's default {default}) needs \"Allow this agent to manage Postgres versions\" — ask your human to turn it on, or install with --pg-major {default} if the App allows it"
+                ),
+            ));
+        }
+    }
+    let secrets = FileSecretStore::default();
+    let v = ops::create_database_on(ops(), &secrets, project_id, cap_for(path), None, None, Some(major))
+        .map_err(|e| (e.status().get(..3).and_then(|s| s.parse().ok()).unwrap_or(500), e.code(), e.hint().to_string()))?;
+    let name = v["name"].as_str().unwrap_or_default().to_string();
+    let r = dsn_ref(project_id, &v, false);
+    let body: serde_json::Value = serde_json::from_str(&r.body).unwrap_or(serde_json::Value::Null);
+    if !r.status.starts_with("200") {
+        return Err((
+            500,
+            "vault",
+            format!("database {name} was created on Postgres {major}, but its DATABASE_URL reference wasn't kept: {} — run k2 db dsn --ref", body["hint"].as_str().unwrap_or(&r.body)),
+        ));
+    }
+    Ok(serde_json::json!({ "name": name, "major": v["major"], "ref": body["ref"], "created": true }))
+}
+
 /// `k2 db upgrade`'s re-point (V35): the same `k2 db dsn --ref` upsert,
 /// from the record (already on the new cluster), under the same ref.
 pub(crate) fn dsn_ref_for_move(project_id: &str, v: &serde_json::Value, test: bool) -> CliResponse {

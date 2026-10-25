@@ -274,6 +274,10 @@ struct EnvState {
     progress_fail_at: Option<Step>,
     set_moved_fails: bool,
     shared: Vec<String>,
+    /// Apps on the database and their requires.postgres (PA3/PA6).
+    ranges: Vec<(String, Option<String>)>,
+    /// RAM outside the Apps' pool (PA16).
+    spare_ram: Option<u64>,
 }
 
 struct FakeEnv(RefCell<EnvState>);
@@ -415,6 +419,12 @@ impl MoveEnv for FakeEnv {
     }
     fn shared_with(&self, _db: &str) -> Vec<String> {
         self.0.borrow().shared.clone()
+    }
+    fn app_ranges(&self, _db: &str) -> Vec<(String, Option<String>)> {
+        self.0.borrow().ranges.clone()
+    }
+    fn spare_ram_bytes(&self) -> Option<u64> {
+        self.0.borrow().spare_ram
     }
     fn audit(&self, act: &str, line: Value) {
         self.0.borrow_mut().audits.push((act.into(), line));
@@ -1102,4 +1112,59 @@ fn free_band_port_skips_clusters_and_listeners() {
     let rows = vec![row(16, 5432, true)];
     assert_eq!(free_band_port(&rows, &[5432, 5433]), Some(5434));
     assert_eq!(free_band_port(&rows, &(5433..=5449).collect::<Vec<_>>()), None);
+}
+
+// ── per-App majors (prd-app-pg-choice-dualrun-v1 PA3, PA6, PA16) ──────
+
+/// PA6: one App on the database whose range excludes the target refuses
+/// the move, naming it; nothing changes.
+#[test]
+fn an_app_whose_range_excludes_the_target_refuses_the_move() {
+    let (ops, env) = (FakeOps::new(), FakeEnv::new());
+    env.0.borrow_mut().ranges = vec![("jobs".into(), Some(">=16".into())), ("legacy".into(), Some("16".into())), ("notes".into(), None)];
+    let r = check_only(&ops, &env, "ws_jobs", &opts()).unwrap();
+    let refused: Vec<_> = r.lines.iter().filter(|l| l.level == Level::Refuse).collect();
+    assert_eq!(refused.len(), 1, "{:?}", r.lines);
+    assert_eq!(refused[0].id, check::APP_REQUIRES_MAJOR);
+    assert!(refused[0].text.contains("legacy") && refused[0].text.contains("16") && refused[0].text.contains("17"), "{:?}", refused[0]);
+    assert!(r.lines.iter().any(|l| l.id == "apps" && l.text.contains("jobs") && l.level == Level::Ok));
+    assert!(r.lines.iter().any(|l| l.id == "apps" && l.text.contains("notes: no requires.postgres")));
+    let p = run_move(&ops, &env, "ws_jobs", &opts()).unwrap();
+    assert_eq!(p.state, MoveState::Aborted);
+    assert!(p.last_error.as_deref().unwrap_or_default().contains("legacy"), "{:?}", p.last_error);
+    assert!(mutated(&ops).is_empty(), "a refused check changes nothing: {:?}", mutated(&ops));
+    // Every App allows 17: the check passes.
+    env.0.borrow_mut().ranges = vec![("jobs".into(), Some(">=16".into())), ("legacy".into(), Some(">=16 <18".into()))];
+    let r = check_only(&ops, &env, "ws_jobs", &opts()).unwrap();
+    assert!(!r.refused(), "{:?}", r.lines);
+}
+
+/// PA6: `--to` left out is the highest major every App allows.
+#[test]
+fn the_default_target_respects_every_app() {
+    let env = FakeEnv::new();
+    assert_eq!(default_target(&["ws_jobs".into()], &env), 17, "no App: K2's default");
+    env.0.borrow_mut().ranges = vec![("a".into(), Some(">=16".into())), ("b".into(), Some("<17".into()))];
+    assert_eq!(default_target(&["ws_jobs".into()], &env), 16);
+    env.0.borrow_mut().ranges = vec![("a".into(), Some("16".into())), ("b".into(), Some("17".into()))];
+    assert_eq!(default_target(&["ws_jobs".into()], &env), 17, "none fits both: K2's default, and the check refuses");
+}
+
+/// PA16: a new target cluster on a box with little spare RAM warns; an
+/// already-running target doesn't.
+#[test]
+fn a_second_cluster_on_a_small_box_warns() {
+    let (ops, env) = (FakeOps::new(), FakeEnv::new());
+    env.0.borrow_mut().spare_ram = Some(1 << 30);
+    let r = check_only(&ops, &env, "ws_jobs", &opts()).unwrap();
+    let w = r.lines.iter().find(|l| l.id == "memory").expect("memory warning");
+    assert_eq!(w.level, Level::Warn);
+    assert!(w.text.contains("1024 MiB"), "{w:?}");
+    assert!(!r.refused());
+    env.0.borrow_mut().spare_ram = Some(4 << 30);
+    assert!(!check_only(&ops, &env, "ws_jobs", &opts()).unwrap().lines.iter().any(|l| l.id == "memory"));
+    env.0.borrow_mut().spare_ram = Some(1 << 30);
+    ops.0.borrow_mut().clusters.push(row(17, 5433, true));
+    ops.0.borrow_mut().installed.push(17);
+    assert!(!check_only(&ops, &env, "ws_jobs", &opts()).unwrap().lines.iter().any(|l| l.id == "memory"), "17 already runs");
 }

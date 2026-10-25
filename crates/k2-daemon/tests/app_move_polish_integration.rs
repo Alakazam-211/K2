@@ -1219,7 +1219,8 @@ async fn a_role_named_like_another_roles_id_is_never_the_one_checked() {
         )
         .expect("insert the decoy");
     }
-    let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "decoy-guest", "app": svc_a})).await;
+    let decoy_app = app_row(&a, "decoyappa");
+    let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "decoy-guest", "app": decoy_app})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     for (path, body) in [
         ("/cli/skin/roles/assign", json!({"username": "decoy-guest", "role": victim.id})),

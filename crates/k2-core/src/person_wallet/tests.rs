@@ -123,7 +123,7 @@ fn signed_in_sub(conn: &Connection, v: &FakeVault, principal: &str, label: &str,
 fn person(id: &str, app: &str, rooms: &[&str]) -> Person {
     let mut apps = BTreeMap::new();
     apps.insert(app.to_string(), rooms.iter().map(|r| r.to_string()).collect());
-    Person { principal_id: id.into(), username: format!("user-{id}"), full_name: Some("Patty Lee".into()), is_agent_login: false, apps }
+    Person { principal_id: id.into(), username: format!("user-{id}"), full_name: Some("Patty Lee".into()), is_agent_login: false, apps, ..Default::default() }
 }
 
 // ── Isolation between people ───────────────────────────────────────

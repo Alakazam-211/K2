@@ -330,7 +330,8 @@ pub fn release(node_id: &str, n: &SecretNeed) -> Result<(SecretEnv, Vec<String>,
         plan_digest: job.plan_digest.clone(),
     };
     let sealed = psecret::seal(&values, &n.epk, &binding);
-    let redactor = Redactor::new(values.iter().map(|(k, v)| (k.as_str(), v.as_slice())));
+    // The belt matches what the node matches: values of 8+ bytes (SE23).
+    let redactor = Redactor::new(values.iter().filter(|(_, v)| v.len() >= k2_vault::redact::SURFACE_MIN_LEN).map(|(k, v)| (k.as_str(), v.as_slice())));
     wipe_all(&mut values);
     let (epk, ct) = sealed.map_err(|code| {
         let m = if code == scodes::TOO_LARGE {

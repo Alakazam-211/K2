@@ -91,7 +91,16 @@ out="$(bash "$ROOT/scripts/ci/checks.sh" nope 2>&1 || true)"
 [[ "$out" == *usage* ]] && pass "checks.sh refuses an unknown part" || fail "checks usage" "$out"
 
 echo "post-status.sh:"
-SHA="$(git -C "$ROOT" rev-parse HEAD)"
+# The scripts under test run from a scratch repo of this test's own (copies
+# of scripts/ci), never through git on $ROOT: a K2 Compute node's checkout
+# belongs to the node user, so git there refuses it ("dubious ownership").
+# run-checks.sh needs the sha to be a commit in its own checkout.
+mkdir -p "$tmp/rc/scripts/ci"
+cp "$ROOT"/scripts/ci/*.sh "$tmp/rc/scripts/ci/"
+git -C "$tmp/rc" init -q
+git -C "$tmp/rc" add scripts
+git -C "$tmp/rc" -c user.email=t@t -c user.name=t commit -q -m checks
+SHA="$(git -C "$tmp/rc" rev-parse HEAD)"
 out="$(K2_CI_DRY_RUN=1 bash "$ROOT/scripts/ci/post-status.sh" "$SHA" success k2-compute/web "job abc on k2n4-vin, 9m")"
 [[ "$out" == *'"state": "success"'* && "$out" == *'"context": "k2-compute/web"'* ]] && pass "dry run prints the status" || fail "dry run" "$out"
 for bad in "nothex success k2-compute/web d" "$SHA green k2-compute/web d" "$SHA success web d" "$SHA success k2-compute/a/b d"; do
@@ -170,7 +179,7 @@ run_checks() {
     export STUB_DIR="$tmp/s-$name" STUB_CALLS="$tmp/c-$name" K2_CI_STATE="$tmp/state-$name"
     mkdir -p "$STUB_DIR"; : > "$STUB_CALLS"
     local rc=0
-    bash "$ROOT/scripts/ci/run-checks.sh" "$SHA" "$@" > "$tmp/o-$name" 2>&1 || rc=$?
+    bash "$tmp/rc/scripts/ci/run-checks.sh" "$SHA" "$@" > "$tmp/o-$name" 2>&1 || rc=$?
     echo "$rc"
 }
 final() { grep "context\": \"k2-compute/$2\"" "$tmp/o-$1" | tail -1; }
@@ -248,6 +257,35 @@ grep -q "another run holds" "$tmp/p4" && ! grep -q checking "$tmp/p4" && pass "a
 echo 999999 > "$K2_CI_STATE/poll.lock/pid"
 bash "$tmp/ci/scripts/ci/k2-ci-poll.sh" --once > "$tmp/p5" 2>&1
 grep -q "checking refs/heads/main" "$tmp/p5" && [ ! -d "$K2_CI_STATE/poll.lock" ] && pass "a dead poller's lock is cleared" || fail "dead lock" "$(cat "$tmp/p5")"
+
+echo "gates read files, not git (node checkouts: dubious ownership):"
+# A `git` that refuses every repo, the way git refuses a node checkout the
+# job user doesn't own. The web part's gates must not need it.
+mkdir -p "$tmp/nogit"
+printf '#!/bin/sh\necho "fatal: detected dubious ownership in repository" >&2\nexit 128\n' > "$tmp/nogit/git"
+chmod +x "$tmp/nogit/git"
+for g in k2-home-gate.sh private-docs-gate.sh; do
+    rc=0; out="$(cd / && PATH="$tmp/nogit:$PATH" bash "$ROOT/scripts/$g" 2>&1)" || rc=$?
+    [ "$rc" = 0 ] && [[ "$out" == *": clean"* || "$out" == *": OK"* ]] && pass "$g passes this checkout with git refusing it" || fail "$g without git" "rc=$rc $out"
+done
+# ...and still catches what it's for, in a tree of the test's own.
+mkdir -p "$tmp/gt/scripts" "$tmp/gt/crates/x" "$tmp/gt/src-tauri" "$tmp/gt/src" "$tmp/gt/cli" "$tmp/gt/.k2/prds" "$tmp/gt/.k2/notes"
+cp "$ROOT/scripts/k2-home-gate.sh" "$ROOT/scripts/private-docs-gate.sh" "$tmp/gt/scripts/"
+: > "$tmp/gt/scripts/k2-home-allowlist.txt"
+printf 'let p = "~/.k2so/x";\n// a comment: ~/.k2so is fine\n' > "$tmp/gt/crates/x/lib.rs"
+mkdir -p "$tmp/gt/crates/x/target"; printf 'let p = "~/.k2so/built";\n' > "$tmp/gt/crates/x/target/out.rs"
+rc=0; out="$(PATH="$tmp/nogit:$PATH" bash "$tmp/gt/scripts/k2-home-gate.sh" 2>&1)" || rc=$?
+[ "$rc" = 1 ] && [[ "$out" == *"VIOLATION: crates/x/lib.rs:1:"* ]] && [[ "$out" != *"lib.rs:2:"* && "$out" != *target* ]] \
+    && pass "k2-home-gate flags a ~/.k2so literal (not comments, not build output)" || fail "k2-home-gate catch" "rc=$rc $out"
+echo 'crates/x/lib.rs :: ~/.k2so/x' > "$tmp/gt/scripts/k2-home-allowlist.txt"
+rc=0; out="$(PATH="$tmp/nogit:$PATH" bash "$tmp/gt/scripts/k2-home-gate.sh" 2>&1)" || rc=$?
+[ "$rc" = 0 ] && pass "k2-home-gate honours its allowlist" || fail "k2-home-gate allowlist" "rc=$rc $out"
+: > "$tmp/gt/.k2/prds/prd-agent-voice-v1.md"
+rc=0; out="$(PATH="$tmp/nogit:$PATH" bash "$tmp/gt/scripts/private-docs-gate.sh" 2>&1)" || rc=$?
+[ "$rc" = 0 ] && pass "private-docs-gate: a product PRD is fine" || fail "private-docs ok" "rc=$rc $out"
+: > "$tmp/gt/.k2/notes/fleet-supply.md"
+rc=0; out="$(PATH="$tmp/nogit:$PATH" bash "$tmp/gt/scripts/private-docs-gate.sh" 2>&1)" || rc=$?
+[ "$rc" = 1 ] && [[ "$out" == *".k2/notes/fleet-supply.md"* ]] && pass "private-docs-gate flags a cloud-business doc" || fail "private-docs catch" "rc=$rc $out"
 
 echo "syntax:"
 for s in checks.sh run-checks.sh post-status.sh k2-ci-poll.sh; do

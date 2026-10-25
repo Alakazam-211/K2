@@ -14,8 +14,13 @@ cd "$(dirname "$0")/.."
 PATTERN='~/\.k2so|\$HOME/\.k2so|HOME.*/\.k2so|home(_dir\(\))?\.join\("\.k2so|join\('"'"'\.k2so|homedir\(\), *'"'"'\.k2so|\{home\}/\.k2so|/tmp/\.k2so'
 ALLOWLIST="scripts/k2-home-allowlist.txt"
 
-hits=$(git grep -InE "$PATTERN" -- src-tauri crates src cli scripts \
-  ':!scripts/k2-home-gate.sh' ':!scripts/k2-home-allowlist.txt' \
+# The files themselves, not `git grep`: a K2 Compute node's checkout belongs
+# to the node user, not the job user, so git there refuses the repo
+# ("dubious ownership"). Build output and fetched binaries are skipped (on
+# a clean checkout this matches exactly what `git grep` matched).
+hits=$(grep -rInE --exclude-dir=target --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=binaries \
+  "$PATTERN" src-tauri crates src cli scripts \
+  | grep -v -e '^scripts/k2-home-gate\.sh:' -e '^scripts/k2-home-allowlist\.txt:' \
   | grep -vE ':[0-9]+:\s*(//|#|\*|//!|///)' || true)
 
 fail=0

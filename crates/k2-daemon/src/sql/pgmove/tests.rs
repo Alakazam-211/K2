@@ -34,6 +34,11 @@ struct OpsState {
     src_state: String,
     /// the source server's `server_version_num`
     server_num: u64,
+    /// Live-run tests: (needle, answer) checked first, in order; a needle
+    /// ending in `!` fails with the answer as the error.
+    answers: Vec<(String, String)>,
+    /// Every SQL text, in full: (major, db, sql).
+    full_sql: Vec<(Major, String, String)>,
 }
 
 struct FakeOps(RefCell<OpsState>);
@@ -125,6 +130,11 @@ impl ClusterOps for FakeOps {
         let s = &self.0;
         let first = sql.lines().next().unwrap_or("").chars().take(60).collect::<String>();
         self.push(format!("sql {m} {db} {first}"));
+        s.borrow_mut().full_sql.push((m, db.to_string(), sql.to_string()));
+        let hit = s.borrow().answers.iter().find(|(n, _)| sql.contains(n.trim_end_matches('!'))).cloned();
+        if let Some((n, a)) = hit {
+            return if n.ends_with('!') { Err(a) } else { Ok(a) };
+        }
         if sql.contains("k2rb") && sql.contains("string_agg(datname") {
             let st = s.borrow();
             let mut names: Vec<String> = st.dbs.iter().filter(|(dm, n)| *dm == m && n.contains("__k2rb_")).map(|(_, n)| n.clone()).collect();
@@ -471,6 +481,9 @@ fn assert_undone(ops: &FakeOps, env: &FakeEnv) {
     assert!(!ops.0.borrow().dbs.contains(&(17, "ws_jobs".into())));
 }
 
+#[path = "dual_tests.rs"]
+mod dual_tests;
+
 #[test]
 fn tag_is_utc_compact() {
     assert_eq!(tag_for(NOW), "20261020T101500Z");
@@ -775,6 +788,7 @@ fn an_incomplete_undo_latches_failed() {
 #[test]
 fn recovery_undoes_before_the_switch_and_finishes_after_it() {
     let base = |step: Step, switched: bool| MoveProgress {
+        method: "copy".into(),
         id: "mv".into(),
         kind: "move".into(),
         db: "ws_jobs".into(),

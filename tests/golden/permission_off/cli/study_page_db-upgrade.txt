@@ -63,16 +63,42 @@ WHO
   turns it on: Agent tab, or `k2 db versions-access on`), and then moves,
   checks and rolls back its OWN workspace's and its own Apps' databases.
   Owner only: --forget-old, --now (skip the notice), --allow-adopted,
-  --all, --acknowledge-failed.
+  --all, --acknowledge-failed, and for now --live, --switch, --abort,
+  --replica-identity-full and --prepare-live. A database shared with other
+  workspaces moves live by the owner only.
 
 AIR-GAP
   Installing 17 needs apt.postgresql.org (pinned key, pinned packages).
   Without it: install postgresql-17 and postgresql-client-17 from your
   mirror (apt install ./*.deb), then re-run.
 
-LATER (0.46.4)
-  Live dual-run (logical replication, a near-zero pause) and the
-  whole-cluster path for very large clusters.
+LIVE MOVES (0.46.4, the owner's for now)
+  k2 db upgrade <db> --check --live   read-only: the copy's lines plus a
+                                       logical source, primary keys, no large
+                                       objects / unlogged / foreign tables,
+                                       disk for the copy and the WAL cap
+  k2 db upgrade <db> --live           copies by logical replication while the
+                                       database keeps serving; schema changes
+                                       (DDL, temp tables too) are refused on it
+                                       until the switch, at most 7 days
+  k2 db upgrade <db> --status         tables ready/total, lag, WAL status
+  k2 db upgrade <db> --switch         once it streams: writes pause a few
+                                       seconds (drain, exact sequences, a full
+                                       row count), the record moves, every App
+                                       on it is re-hosted on the new DSN; the
+                                       old copy is kept closed 14 days
+  k2 db upgrade <db> --abort          before the switch: free, the database
+                                       never stopped
+  Pick it for big databases or Apps that can't take the copy's pause. Use
+  the copy for tables without a primary key (or the owner's
+  --replica-identity-full), large objects or unlogged tables. A lost
+  replication slot (past its WAL cap: min 8 GB, 25% of free disk) fails the
+  run, never the database. Rollback after the switch works as above
+  (writes since the switch are lost). An App that must restart to read the
+  new DSN still pays its own boot time.
+  Older boxes' 16 cluster isn't logical yet: the owner runs
+  k2 db upgrade --prepare-live 16 once (every database on it pauses about
+  5-15 s). Boxes born on <K2_CLI_VERSION> or later never need it.
 
 EXITS
   0 done · 3 refused (nothing changed) · 1 failed (the owner gets an inbox

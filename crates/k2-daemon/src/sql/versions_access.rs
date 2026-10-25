@@ -120,6 +120,15 @@ pub enum VersionsAct {
     DefaultMajor,
     /// `k2 db upgrade --all`.
     All,
+    /// `k2 db upgrade <db> --live` (0.46.4, prd-app-pg-choice-dualrun-v1
+    /// PA18): start a live dual-run.
+    LiveMove,
+    /// `--switch`: cut a live run over.
+    LiveSwitch,
+    /// `--abort`: end a live run before its switch.
+    LiveAbort,
+    /// `--replica-identity-full` (owner only, Q10).
+    ReplicaIdentityFull,
 }
 
 impl VersionsAct {
@@ -138,12 +147,19 @@ impl VersionsAct {
             Self::AcknowledgeFailed => "acknowledge-failed",
             Self::DefaultMajor => "default-major",
             Self::All => "all",
+            Self::LiveMove => "live",
+            Self::LiveSwitch => "switch",
+            Self::LiveAbort => "abort",
+            Self::ReplicaIdentityFull => "replica-identity-full",
         }
     }
 
     /// The acts the switch hands an agent (on its own scope).
     pub fn agent_may(self) -> bool {
         matches!(self, Self::Check | Self::Move | Self::Rollback | Self::CreateOnMajor | Self::ClustersTidy)
+            // §13: live moves are the owner's until the first owner-run
+            // moves are clean; then the constant flips (no migration).
+            || (crate::sql::pgmove::dual::DUAL_LIVE_AGENTS && matches!(self, Self::LiveMove | Self::LiveSwitch | Self::LiveAbort))
     }
 
     /// Acts that don't name one database (no scope to check).
@@ -327,7 +343,7 @@ mod tests {
     use super::*;
     use VersionsAct::*;
 
-    const ALL_ACTS: [VersionsAct; 13] = [
+    const ALL_ACTS: [VersionsAct; 17] = [
         Check,
         Move,
         Rollback,
@@ -341,6 +357,10 @@ mod tests {
         AcknowledgeFailed,
         DefaultMajor,
         All,
+        LiveMove,
+        LiveSwitch,
+        LiveAbort,
+        ReplicaIdentityFull,
     ];
 
     fn agent(local: bool, sandboxed: bool) -> Who {
@@ -397,9 +417,23 @@ mod tests {
     #[test]
     fn owner_only_acts_stay_the_owners_even_with_the_switch() {
         let a = agent(true, false);
-        for act in [ForgetOld, AllowAdopted, Now, WholeCluster, WalLevelRestart, AcknowledgeFailed, DefaultMajor, All] {
+        for act in [ForgetOld, AllowAdopted, Now, WholeCluster, WalLevelRestart, AcknowledgeFailed, DefaultMajor, All, ReplicaIdentityFull] {
             assert_eq!(code(decide(&a, act, Some("w"), false, true)), OWNER_ONLY, "{act:?}");
             assert!(!act.agent_may());
+        }
+    }
+
+    /// prd-app-pg-choice-dualrun-v1 §13 / Q6: live moves stay the owner's in
+    /// the first release, even for an agent with the switch on its own
+    /// database; an Admin may only check (`--check --live` is Check).
+    #[test]
+    fn live_moves_are_the_owners_in_the_first_release() {
+        assert!(!crate::sql::pgmove::dual::DUAL_LIVE_AGENTS, "flip only after the first owner-run moves are clean");
+        let a = agent(true, false);
+        for act in [LiveMove, LiveSwitch, LiveAbort, ReplicaIdentityFull] {
+            assert_eq!(code(decide(&a, act, Some("w"), false, true)), OWNER_ONLY, "{act:?}");
+            assert_eq!(code(decide(&Who::Admin { username: "a".into() }, act, Some("w"), false, true)), OWNER_ONLY, "{act:?}");
+            assert_eq!(decide(&Who::Owner, act, Some("w"), false, false), Ok(()), "{act:?}");
         }
     }
 

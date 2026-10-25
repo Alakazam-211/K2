@@ -860,11 +860,33 @@ pub fn doctor_with(ops: &dyn SystemOps) -> serde_json::Value {
                 let mut v = c.json();
                 v["unitState"] = serde_json::json!(unit_state);
                 v["databases"] = serde_json::json!(dbs);
+                // prd-app-pg-choice-dualrun-v1 PA16: each cluster's share of
+                // the one k2-postgres.slice (a second cluster starts there).
+                let unit = if c.is_primary() { ram_unit.clone() } else { c.unit.clone() };
+                let mem = parse_systemctl_show(&ops.systemctl_query(&["show", &unit, "--property=MemoryCurrent"]));
+                v["memoryCurrent"] = serde_json::json!(mem.get("MemoryCurrent").and_then(|s| parse_mem_bytes(s)));
                 v
             })
             .collect()
     };
-    let ok = baked
+    // PA35: live runs and any k2_dual_* / k2_repl_* object no open run
+    // owns (read-only here; boot cleans those of finished runs). An inactive
+    // slot holding WAL that K2 can't tie to a run is a failure.
+    let live = if ping.is_ok() && crate::sql::sysops::pgdual_gate().is_ok() {
+        use crate::sql::pgmove::dual::RunStore as _;
+        let door = crate::root_helper::RealDoor;
+        let hops = crate::sql::pgmove::helper_ops::HelperOps { door: &door };
+        let dops = crate::sql::pgmove::dual_k2::HelperDualOps { door: &door };
+        let store = crate::sql::pgmove::dual_k2::K2Store;
+        let mut v = crate::sql::pgmove::dual::sweep_orphans(&hops, &dops, &store, false);
+        v["runs"] = serde_json::json!(store.open_runs().iter().map(|r| r.json()).collect::<Vec<_>>());
+        v
+    } else {
+        serde_json::Value::Null
+    };
+    let live_ok = live["failures"].as_array().is_none_or(|a| a.is_empty());
+    let ok = live_ok
+        && baked
         && active == "active"
         && ping.is_ok()
         && ram_applied
@@ -884,6 +906,11 @@ pub fn doctor_with(ops: &dyn SystemOps) -> serde_json::Value {
         serde_json::Value::String(
             "a Postgres cluster that serves databases is not running — see clusters[] (k2 db doctor --json)".into(),
         )
+    } else if !live_ok {
+        serde_json::Value::String(format!(
+            "a live move left replication objects K2 can't tie to a run (an inactive slot holds WAL): {} — see liveMoves (k2 db doctor --json)",
+            live["failures"]
+        ))
     } else if !baked {
         serde_json::Value::String(NOT_BAKED_HINT.into())
     } else if !ram_applied {
@@ -915,6 +942,7 @@ pub fn doctor_with(ops: &dyn SystemOps) -> serde_json::Value {
         "liveMajor": live_major,
         "majorMismatch": major_mismatch,
         "clusters": clusters_view,
+        "liveMoves": live,
         "listen": "localhost",
         "ram": {
             "unit": ram_unit,

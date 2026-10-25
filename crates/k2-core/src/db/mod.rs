@@ -1544,9 +1544,15 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // or folder: the person's decision on a risky folder, the scan
         // fingerprint it covers, which trust entries K2 wrote, and the open
         // card. Every 0.46.3 registered path starts `k2_granted = 1` (A4).
-        // 0222 is reserved (per-App Postgres / compute rollouts). The store
+        // 0222 (per-App Postgres dual-run) applies after this. The store
         // is `crate::cli_folder_trust::gate`.
         ("0223_folder_trust", include_str!("../../drizzle_sql/0223_folder_trust.sql")),
+        // 0222 — live dual-run of one database (prd-app-pg-choice-dualrun-v1
+        // §8, PA42; 0.46.4): one additive table, `sql_dual_runs` (a run lives
+        // for days; the cut-over is an ordinary `sql_moves` row with method
+        // `dual`). Empty until the owner starts a `k2 db upgrade --live`.
+        // After 0217. The store is `k2-daemon` `sql::pgmove::dual`.
+        ("0222_pg_dual_runs", include_str!("../../drizzle_sql/0222_pg_dual_runs.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2210,7 +2216,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0223_folder_trust",
+            last_name, "0222_pg_dual_runs",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2276,6 +2282,8 @@ mod tests {
                 "0217_app_resource_samples",
                 // 0.46.4: folder-trust decisions (security sweep SS9).
                 "0223_folder_trust",
+                // 0.46.4: live dual-run of one database (after 0217).
+                "0222_pg_dual_runs",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2349,6 +2357,8 @@ mod tests {
                 "0217_app_resource_samples",
                 // 0.46.4: folder-trust decisions (security sweep SS9).
                 "0223_folder_trust",
+                // 0.46.4: live dual-run of one database (after 0217).
+                "0222_pg_dual_runs",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2442,6 +2452,37 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0219_garden_access'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(once, 1, "0219 is recorded once");
+    }
+
+    /// 0222 (prd-app-pg-choice-dualrun-v1 PA42) on a database that stops at
+    /// 0217: the table appears empty, its state CHECK refuses an unknown
+    /// state, one open run per database (a finished one doesn't count), and
+    /// a re-run is a no-op.
+    #[test]
+    fn a_pre_0222_database_upgrades_through_0222_dual_runs() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0217_app_resource_samples")).unwrap();
+        assert!(!table_names(&conn).iter().any(|n| n == "sql_dual_runs"), "no table before 0222");
+        run_migrations(&conn).unwrap();
+        assert!(table_names(&conn).iter().any(|n| n == "sql_dual_runs"));
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM sql_dual_runs", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        let ins = |id: &str, state: &str| {
+            conn.execute(
+                "INSERT INTO sql_dual_runs (id, database_id, db, from_major, to_major, state, started_at) VALUES (?1, 'd1', 'ws_a', 16, 17, ?2, 1)",
+                params![id, state],
+            )
+        };
+        assert!(ins("r0", "copying").is_err(), "unknown state refused");
+        ins("r1", "syncing").unwrap();
+        assert!(ins("r2", "setting_up").is_err(), "one open run per database");
+        conn.execute("UPDATE sql_dual_runs SET state = 'aborted' WHERE id = 'r1'", []).unwrap();
+        ins("r2", "setting_up").unwrap();
+        conn.execute("UPDATE sql_dual_runs SET state = 'switched' WHERE id = 'r2'", []).unwrap();
+        ins("r3", "streaming").unwrap();
+        run_migrations(&conn).unwrap();
+        let once: i64 = conn.query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0222_pg_dual_runs'", [], |r| r.get(0)).unwrap();
+        assert_eq!(once, 1);
     }
 
     /// 0220 (`k2 job`, prd-vault-gaps-v1 item 5) on a database that stops
@@ -2545,11 +2586,20 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let last: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(last, "0223_folder_trust", "0223 runs last on a 0.46.3 database");
+        assert_eq!(last, "0222_pg_dual_runs", "0222 runs last on a 0.46.3 database");
         let before_last: String = conn
             .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1 OFFSET 1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(before_last, "0217_app_resource_samples", "0217 runs after 0220, before 0223");
+        assert_eq!(before_last, "0223_folder_trust", "0223 runs after 0217, before 0222");
+        let tail: Vec<String> = {
+            let mut st = conn.prepare("SELECT name FROM _migrations WHERE name >= '0220' OR name = '0217_app_resource_samples' ORDER BY id").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(
+            tail,
+            vec!["0220_jobs", "0221_app_rehost", "0217_app_resource_samples", "0223_folder_trust", "0222_pg_dual_runs"],
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, then 0222)"
+        );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
         let kept: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE id = 'p-old'", [], |r| r.get(0)).unwrap();
@@ -3285,7 +3335,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0223 (folder-trust decisions, 0.46.4) is the newest: its record
+            // 0222 (live dual-runs, 0.46.4) is the newest: its record goes
+            // (its table and index are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0222_pg_dual_runs'", []).unwrap();
+            // 0223 (folder-trust decisions, 0.46.4) came before it: its record
             // goes (its table is IF NOT EXISTS and its insert OR IGNORE).
             conn.execute("DELETE FROM _migrations WHERE name = '0223_folder_trust'", []).unwrap();
             // 0217 (box usage trends, 0.46.4) came before it: its record goes

@@ -17,6 +17,7 @@ use super::{
 use crate::cli_response::CliResponse;
 use crate::sql::cluster;
 use crate::sql::versions_access::{self, VersionsAct, Who};
+use super::dual::RunStore as _;
 
 // ── the guest-door pause and the per-database move lock ─────────────────
 
@@ -407,16 +408,32 @@ impl MoveEnv for K2Env {
         let state = serde_json::to_value(p.state).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
         let pj = serde_json::to_string(p).map_err(|e| e.to_string())?;
         let kind = if p.kind == "rollback" { "rollback" } else { "move" };
+        // 0201 allows `copy`, `dual` and `cluster`; a live cut-over is `dual`.
+        let method = if p.method == "dual" { "dual" } else { "copy" };
         let k2db = k2_core::db::shared();
         let conn = k2db.lock();
         conn.execute(
             "INSERT INTO sql_moves (id, database_id, db, from_major, to_major, method, kind, state, progress_json, actor, started_at, finished_at, last_error) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 'copy', ?12, ?6, ?7, ?8, ?9, ?10, ?11) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?13, ?12, ?6, ?7, ?8, ?9, ?10, ?11) \
              ON CONFLICT(id) DO UPDATE SET state = ?6, progress_json = ?7, finished_at = ?10, last_error = ?11",
-            rusqlite::params![p.id, r.id, p.db, p.from as i64, p.to as i64, state, pj, p.actor, p.started_at, p.finished_at, p.last_error, kind],
+            rusqlite::params![p.id, r.id, p.db, p.from as i64, p.to as i64, state, pj, p.actor, p.started_at, p.finished_at, p.last_error, kind, method],
         )
         .map(|_| ())
         .map_err(|e| format!("sql_moves: {e}"))
+    }
+    fn one_copy_apps(&self, apps: &[String]) -> Vec<String> {
+        let k2db = k2_core::db::shared();
+        let rows: Vec<k2_core::deploy::store::AppRow> = {
+            let conn = k2db.lock();
+            apps.iter().filter_map(|a| k2_core::deploy::store::get_app(&conn, a).ok().flatten()).collect()
+        };
+        rows.into_iter().filter(|a| crate::apps::rehost::no_overlap_shape_live(a).is_some()).map(|a| a.app_id).collect()
+    }
+    fn dual_running(&self, db: &str) -> bool {
+        super::dual_k2::running(db)
+    }
+    fn owner_note(&self, title: &str, body: &str) {
+        crate::apps::runtime_notes::owner_notice(title, body);
     }
     fn audit(&self, act: &str, line: Value) {
         k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(act, &self.actor, line.to_string(), "-", "-", "api"));
@@ -510,9 +527,17 @@ pub fn acts_for(r: &UpgradeRequest) -> Vec<VersionsAct> {
         Act::Rollback => VersionsAct::Rollback,
         Act::ForgetOld => VersionsAct::ForgetOld,
         Act::AcknowledgeFailed => VersionsAct::AcknowledgeFailed,
+        Act::Live => VersionsAct::LiveMove,
+        Act::Switch => VersionsAct::LiveSwitch,
+        Act::Abort => VersionsAct::LiveAbort,
+        // The owner's one cluster restart (L25, PA21).
+        Act::PrepareLive => VersionsAct::WalLevelRestart,
     }];
     if r.now {
         v.push(VersionsAct::Now);
+    }
+    if r.replica_identity_full {
+        v.push(VersionsAct::ReplicaIdentityFull);
     }
     if r.allow_adopted {
         v.push(VersionsAct::AllowAdopted);
@@ -643,6 +668,9 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
         }
         return ok(json!({"acknowledged": worker::acknowledge()}));
     }
+    if req.act == Act::PrepareLive {
+        return prepare_live_route(&who, &req, label);
+    }
     let scope = req.scope.as_ref().expect("parse requires a scope");
     let dbs = match databases_for(scope, req.to.unwrap_or(k2_root_proto::pg_major::NEW_INSTALL), req.all_workspace_dbs, req.act == Act::Check) {
         Ok(d) => d,
@@ -697,7 +725,116 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
     }
     let opts = MoveOpts { to: Some(to), actor: label.clone(), now: req.now, allow_adopted: req.allow_adopted, helper_ok: helper_ok() };
     let helper = crate::root_helper::RealDoor;
+    let live_act = matches!(req.act, Act::Live | Act::Switch | Act::Abort) || (req.act == Act::Check && req.live);
+    if live_act {
+        if dbs.len() != 1 {
+            return err(409, "app_db_unknown", "a live move is one database: name it (k2 db upgrade <db> --live)");
+        }
+        // PA18: a database shared with other workspaces is the owner's
+        // (their Apps would pause too); an Admin may still check.
+        if !matches!(who, Who::Owner) && req.act != Act::Check {
+            let shared = K2Env { actor: label.clone() }.shared_with(&dbs[0].0);
+            if !shared.is_empty() {
+                return err(
+                    403,
+                    "shared_database",
+                    format!("{} is shared with {} other workspace(s); a live move of it is the owner's", dbs[0].0, shared.len()),
+                );
+            }
+        }
+    }
+    let dual_ok = crate::sql::sysops::pgdual_gate().is_ok();
+    if matches!(req.act, Act::Live | Act::Switch | Act::Abort) && !dual_ok {
+        return err(
+            409,
+            "helper_old",
+            crate::sql::sysops::pgdual_gate().err().unwrap_or_else(|| "the root helper doesn't speak live moves (protocol 10, pgdual)".into())
+                + "; a move by copy still works (k2 db upgrade <db>)",
+        );
+    }
+    let live_opts = super::dual::LiveOpts { base: opts.clone(), replica_identity_full: req.replica_identity_full, dual_ok };
     match req.act {
+        Act::Check if req.live => {
+            let ops = super::helper_ops::HelperOps { door: &helper };
+            let env = K2Env { actor: label };
+            let db = dbs[0].0.clone();
+            let r = env.record(&db).and_then(|rec| super::dual::check_live(&ops, &env, &super::dual_k2::K2Store, &rec, &live_opts));
+            match r {
+                Ok((report, _)) => {
+                    let mut v = serde_json::to_value(&report).unwrap_or(Value::Null);
+                    v["live"] = json!(true);
+                    ok(json!({"check": [v]}))
+                }
+                Err(e) => ok(json!({"check": [{"db": db, "error": e}]})),
+            }
+        }
+        Act::Live => {
+            let db = dbs[0].0.clone();
+            let _busy = match worker::begin(&db) {
+                Ok(b) => b,
+                Err(e) => return err(409, worker::refusal_code(&e), e),
+            };
+            let ops = super::helper_ops::HelperOps { door: &helper };
+            let dops = super::dual_k2::HelperDualOps { door: &helper };
+            let env = K2Env { actor: label };
+            match super::dual::start(&ops, &dops, &env, &super::dual_k2::K2Store, &db, &live_opts) {
+                Ok(run) => ok(json!({"live": run.json(), "poll": format!("GET /cli/db/upgrade?db={db}")})),
+                Err(e) => err(409, e.split(':').next().unwrap_or("refused"), e.clone()),
+            }
+        }
+        Act::Switch => {
+            let db = dbs[0].0.clone();
+            let busy = match worker::begin(&db) {
+                Ok(b) => b,
+                Err(e) => return err(409, worker::refusal_code(&e), e),
+            };
+            // Refused before anything changes: the run, its lag, re-hosts.
+            {
+                let dops = super::dual_k2::HelperDualOps { door: &helper };
+                let env = K2Env { actor: label.clone() };
+                if let Err(e) = super::dual::switch_ready(&dops, &env, &super::dual_k2::K2Store, &db) {
+                    return err(409, e.split(':').next().unwrap_or("refused"), e.clone());
+                }
+            }
+            let so = super::dual::SwitchOpts { actor: label, now: req.now };
+            let db2 = db.clone();
+            let spawned = std::thread::Builder::new().name("db-live-switch".into()).spawn(move || {
+                let _busy = busy;
+                let door = crate::root_helper::RealDoor;
+                let ops = super::helper_ops::HelperOps { door: &door };
+                let dops = super::dual_k2::HelperDualOps { door: &door };
+                let env = K2Env { actor: so.actor.clone() };
+                match super::dual::switch(&ops, &dops, &env, &super::dual_k2::K2Store, &db2, &so) {
+                    Ok((p, run)) => {
+                        worker::settle(&p);
+                        eprintln!("[db] live {db2}: switch {:?}, run {}", p.state, run.state.as_str());
+                    }
+                    Err(e) => eprintln!("[db] live {db2}: switch refused: {e}"),
+                }
+            });
+            if let Err(e) = spawned {
+                return err(500, "spawn_failed", e.to_string());
+            }
+            ok(json!({"switching": db, "poll": format!("GET /cli/db/upgrade?db={db}")}))
+        }
+        Act::Abort => {
+            let db = dbs[0].0.clone();
+            let _busy = match worker::begin(&db) {
+                Ok(b) => b,
+                Err(e) => return err(409, worker::refusal_code(&e), e),
+            };
+            let Some(run) = super::dual_k2::K2Store.open_run(&db) else {
+                return err(404, "no_live_move", format!("{db} has no live move to abort"));
+            };
+            if run.state == super::dual::RunState::Switching {
+                return err(409, "switching", format!("{db} is switching right now; it ends by itself (k2 db upgrade {db})"));
+            }
+            let ops = super::helper_ops::HelperOps { door: &helper };
+            let dops = super::dual_k2::HelperDualOps { door: &helper };
+            let env = K2Env { actor: label.clone() };
+            let r = super::dual::abort_run(&ops, &dops, &env, &super::dual_k2::K2Store, run, &format!("aborted by {label}"), false);
+            ok(json!({"live": r.json()}))
+        }
         Act::Check => {
             let ops = super::helper_ops::HelperOps { door: &helper };
             let env = K2Env { actor: label };
@@ -780,8 +917,70 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
                 Err(e) => err(409, e.split(':').next().unwrap_or("refused"), e.clone()),
             }
         }
-        Act::AcknowledgeFailed => unreachable!("handled above"),
+        Act::AcknowledgeFailed | Act::PrepareLive => unreachable!("handled above"),
     }
+}
+
+/// `POST /cli/db/upgrade {"prepareLive": M}` (PA21, owner only): the
+/// logical drop-in and the replication guard, then (only when the cluster
+/// isn't logical yet) a 60 s notice to every workspace with a database on
+/// it and one restart. Never implicit, never on an update.
+fn prepare_live_route(who: &Who, req: &UpgradeRequest, label: String) -> CliResponse {
+    let m = req.prepare_major.expect("parse sets it");
+    let mut acts = vec![VersionsAct::WalLevelRestart];
+    if req.now {
+        acts.push(VersionsAct::Now);
+    }
+    for act in acts {
+        if let Err(r) = versions_access::decide(who, act, None, false, false) {
+            return err(r.status, r.code, r.hint);
+        }
+    }
+    if k2_root_proto::pg_major::PgMajor::new(m).is_none() {
+        return err(400, "usage", format!("prepareLive: {m} is not a Postgres major K2 knows"));
+    }
+    if let Some((status, code, hint)) = sidecar_refusal(
+        crate::sql::supervisor::current_status().as_deref(),
+        crate::sql::supervisor::current_last_error().as_deref(),
+        &worker::pending(),
+    ) {
+        return err(status, code, hint);
+    }
+    if let Err(e) = crate::sql::sysops::pgdual_gate() {
+        return err(409, "helper_old", e);
+    }
+    let _busy = match worker::begin(&format!("prepare-live {m}")) {
+        Ok(b) => b,
+        Err(e) => return err(409, worker::refusal_code(&e), e),
+    };
+    let door = crate::root_helper::RealDoor;
+    let ops = super::helper_ops::HelperOps { door: &door };
+    let dops = super::dual_k2::HelperDualOps { door: &door };
+    let env = K2Env { actor: label };
+    let notice = |major: Major, text: &str| {
+        for path in workspaces_on_major(major) {
+            let _ = k2_core::inbox::compose(std::path::Path::new(&path), "Database maintenance", text, Some("high"), Some("db"), Some("db"));
+        }
+    };
+    match super::dual::prepare_live(&ops, &dops, &env, m, req.now, &notice) {
+        Ok(v) => ok(v),
+        Err(e) => err(409, "prepare_failed", e),
+    }
+}
+
+/// The folders of every workspace with an active database on `major`'s
+/// cluster (owners and grantees).
+fn workspaces_on_major(major: Major) -> Vec<String> {
+    let primary = {
+        let k2db = k2_core::db::shared();
+        let conn = k2db.lock();
+        cluster::primary_in(&conn).major
+    };
+    let k2db = k2_core::db::shared();
+    let conn = k2db.lock();
+    let sql = "SELECT DISTINCT p.path FROM sql_databases d JOIN projects p ON p.id = d.project_id                WHERE d.status = 'active' AND coalesce(nullif(d.cluster_major, 0), ?2) = ?1                UNION SELECT DISTINCT p.path FROM sql_grants g JOIN sql_databases d ON d.id = g.database_id JOIN projects p ON p.id = g.project_id                WHERE d.status = 'active' AND coalesce(nullif(d.cluster_major, 0), ?2) = ?1";
+    let Ok(mut st) = conn.prepare(sql) else { return Vec::new() };
+    st.query_map(rusqlite::params![major as i64, primary as i64], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
 }
 
 /// `GET /cli/db/upgrade[?db=]` (review #2 F3): the owner and Admin logins
@@ -840,6 +1039,27 @@ pub fn status(db: Option<&str>, project: Option<&str>, owner: bool) -> CliRespon
         &worker::pending(),
     )
     .map(|(_, code, hint)| json!({"code": code, "hint": hint}));
+    // PA29: live runs (open ones, and the last one of a named database),
+    // filtered to the caller's workspace like the moves.
+    let store = super::dual_k2::K2Store;
+    let mut runs: Vec<super::dual::DualRun> = match db {
+        Some(d) => store.open_run(d).or_else(|| store.last_run(d)).into_iter().collect(),
+        None => store.open_runs(),
+    };
+    if let Some(pid) = project {
+        runs.retain(|r| crate::sql::ops::move_roles(&r.db).is_ok_and(|(_, p, _)| p == pid));
+    }
+    // PA40: which clusters a live move can start from (Settings' "Prepare
+    // for live moves"): the owner and Admins, without a db (no poll cost).
+    let wal_levels: Option<Vec<Value>> = (project.is_none() && db.is_none() && postgres.as_deref() == Some("running")).then(|| {
+        let door = crate::root_helper::RealDoor;
+        let ops = super::helper_ops::HelperOps { door: &door };
+        cluster::list()
+            .into_iter()
+            .filter(|c| c.role == "k2" || c.role == "adopted")
+            .map(|c| json!({"major": c.major, "walLevel": super::ClusterOps::sql(&ops, c.major, "postgres", "SHOW wal_level;\n").ok()}))
+            .collect()
+    });
     ok(json!({
         "busy": busy,
         "failed": failed,
@@ -849,6 +1069,9 @@ pub fn status(db: Option<&str>, project: Option<&str>, owner: bool) -> CliRespon
         "postgres": postgres,
         "blocked": blocked,
         "moves": moves,
+        "live": runs.iter().map(|r| r.json()).collect::<Vec<_>>(),
+        "liveHelper": crate::sql::sysops::pgdual_gate().is_ok(),
+        "walLevels": wal_levels,
     }))
 }
 
@@ -945,7 +1168,13 @@ fn recover_open(open: Vec<MoveProgress>) {
         };
         let env = K2Env { actor: format!("recovery ({})", p.actor) };
         let db = p.db.clone();
-        let done = recover(&ops, &env, p);
+        // A live cut-over (PA36): its own recovery, which knows the run.
+        let done = if p.method == "dual" {
+            let dops = super::dual_k2::HelperDualOps { door: &door };
+            super::dual::recover_switch(&ops, &dops, &env, &super::dual_k2::K2Store, p)
+        } else {
+            recover(&ops, &env, p)
+        };
         worker::settle(&done);
         drop(busy);
         eprintln!("[db] upgrade {db}: recovered after a restart → {:?}", done.state);
@@ -987,6 +1216,9 @@ pub fn spawn_boot_recovery() {
             &BootSteps { status: &status, pause: &pause, now: &now_secs, recover: &recover_open, sweep: &sweep_now },
         );
     });
+    // PA29/PA35/PA36: the live runs' watch loop (it waits for the move
+    // recovery above before it looks).
+    super::dual_k2::spawn_watch();
 }
 
 #[cfg(test)]
@@ -1016,6 +1248,47 @@ mod tests {
         assert!(refused(r#"{"db":"ws_a","forgetOld":true}"#));
         assert!(refused(r#"{"all":true}"#));
         assert!(versions_access::decide(&agent, VersionsAct::Move, Some("other"), false, true).is_err());
+        // 0.46.4 live (PA18, §10): owner-only in the first release; an Admin
+        // may run --check --live (a Check).
+        assert_eq!(acts_for(&p(r#"{"db":"ws_a","live":true}"#)), vec![VersionsAct::LiveMove]);
+        assert_eq!(
+            acts_for(&p(r#"{"db":"ws_a","live":true,"replicaIdentityFull":true}"#)),
+            vec![VersionsAct::LiveMove, VersionsAct::ReplicaIdentityFull]
+        );
+        assert_eq!(acts_for(&p(r#"{"db":"ws_a","switch":true,"now":true}"#)), vec![VersionsAct::LiveSwitch, VersionsAct::Now]);
+        assert_eq!(acts_for(&p(r#"{"db":"ws_a","abort":true}"#)), vec![VersionsAct::LiveAbort]);
+        assert_eq!(acts_for(&p(r#"{"prepareLive":16}"#)), vec![VersionsAct::WalLevelRestart]);
+        assert_eq!(acts_for(&p(r#"{"db":"ws_a","check":true,"live":true}"#)), vec![VersionsAct::Check]);
+        for body in [r#"{"db":"ws_a","live":true}"#, r#"{"db":"ws_a","switch":true}"#, r#"{"db":"ws_a","abort":true}"#, r#"{"prepareLive":16}"#] {
+            assert!(refused(body), "an agent with the switch: {body}");
+        }
+        let admin = Who::Admin { username: "a".into() };
+        assert!(versions_access::decide(&admin, VersionsAct::Check, Some("w"), false, false).is_ok());
+        assert!(versions_access::decide(&admin, VersionsAct::LiveMove, Some("w"), false, false).is_err());
+    }
+
+    /// PA18: a live act through the route as an agent is refused before
+    /// anything is read (owner-only for now), and so is a non-owner's prepare.
+    #[test]
+    fn live_acts_are_refused_for_an_agent_at_the_route() {
+        let (_home, _g) = fresh();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT OR IGNORE INTO sql_databases (id, project_id, name, status, created_at) VALUES ('d-live-route', 'w-live', 'ws_liveroute', 'active', 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let agent = Who::Agent { project_id: "w-live".into(), session_id: "s".into(), local: true, sandboxed: false };
+        for body in [&br#"{"db":"ws_liveroute","live":true}"#[..], br#"{"db":"ws_liveroute","switch":true}"#, br#"{"db":"ws_liveroute","abort":true}"#, br#"{"prepareLive":16}"#] {
+            let r = handle(agent.clone(), true, body, &HashMap::new());
+            // Postgres is Linux-only: elsewhere the route answers 503 first.
+            let want = if cfg!(target_os = "linux") { "403" } else { "503" };
+            assert!(r.status.starts_with(want), "{}: {} {}", String::from_utf8_lossy(body), r.status, r.body);
+            assert!(!r.body.contains("started"), "{}", r.body);
+        }
     }
 
     #[test]

@@ -404,10 +404,111 @@ pub fn disk_needed(size_bytes: u64) -> u64 {
     size_bytes.saturating_mul(2).saturating_add(1 << 30)
 }
 
+// ── live dual-run (prd-app-pg-choice-dualrun-v1 §5) ──────────────────────
+
+/// PA19/PA20: what a live move needs to know about the database, one JSON
+/// object. `noPk`: plain tables (partitions included, they are what is
+/// published) with no primary key and replica identity default/nothing,
+/// whose UPDATE/DELETE would fail on the live source once published.
+pub fn live_facts_sql() -> String {
+    format!(
+        "SELECT json_build_object(\
+         'noPk', (SELECT coalesce(json_agg(n.nspname || '.' || c.relname ORDER BY n.nspname, c.relname), '[]'::json) \
+                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'r' AND c.relpersistence = 'p' \
+                  AND c.relreplident IN ('d', 'n') AND {USER_NS} \
+                  AND NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisprimary) \
+                  AND NOT EXISTS (SELECT 1 FROM pg_depend dp WHERE dp.classid = 'pg_class'::regclass AND dp.objid = c.oid AND dp.deptype = 'e')), \
+         'largeObjects', (SELECT count(*) FROM pg_largeobject_metadata), \
+         'unlogged', (SELECT coalesce(json_agg(n.nspname || '.' || c.relname ORDER BY n.nspname, c.relname), '[]'::json) \
+                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND c.relpersistence = 'u' AND {USER_NS}), \
+         'foreign', (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'f' AND {USER_NS}), \
+         'matviews', (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'm' AND {USER_NS}), \
+         'partitioned', (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'p' AND {USER_NS}), \
+         'generated', (SELECT count(*) FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
+                  WHERE a.attgenerated <> '' AND NOT a.attisdropped AND c.relkind IN ('r', 'p') AND {USER_NS})\
+         );\n"
+    )
+}
+
+/// `schema.table` → `"schema"."table"` (one dot: K2 lists names as
+/// `nspname || '.' || relname`; a name with a dot in it splits at the
+/// first and is quoted, so it can only name a table or fail).
+pub fn qualified(name: &str) -> String {
+    match name.split_once('.') {
+        Some((s, t)) => format!("{}.{}", quote_ident(s), quote_ident(t)),
+        None => quote_ident(name),
+    }
+}
+
+/// `--replica-identity-full` (owner, PA19/Q10) or putting it back.
+pub fn replica_identity_sql(tables: &[String], full: bool) -> String {
+    tables
+        .iter()
+        .map(|t| format!("ALTER TABLE {} REPLICA IDENTITY {};\n", qualified(t), if full { "FULL" } else { "DEFAULT" }))
+        .collect()
+}
+
+/// PA31 step 5: every sequence of the source, `[schema, name, last_value
+/// (NULL = never called), start_value]`.
+pub fn sequences_sql() -> &'static str {
+    "SELECT coalesce(json_agg(json_build_array(schemaname, sequencename, last_value, start_value) ORDER BY schemaname, sequencename), '[]'::json) \
+     FROM pg_sequences WHERE schemaname NOT IN ('pg_catalog', 'information_schema');\n"
+}
+
+/// The target's `setval`s from [`sequences_sql`]'s answer, exact (L21):
+/// `last_value` with `is_called = true`, or the start value not yet called.
+/// `None` for an answer that isn't the expected shape.
+pub fn setval_script(answer: &str) -> Option<String> {
+    let rows: Vec<Value> = serde_json::from_str(answer.trim()).ok()?;
+    let mut out = String::new();
+    for r in rows {
+        let a = r.as_array()?;
+        let (s, n) = (a.first()?.as_str()?, a.get(1)?.as_str()?);
+        let start = a.get(3)?.as_i64()?;
+        let (v, called) = match a.get(2)? {
+            Value::Null => (start, false),
+            x => (x.as_i64()?, true),
+        };
+        out.push_str(&format!(
+            "SELECT pg_catalog.setval({}::regclass, {v}, {called});\n",
+            quote_lit(&format!("{}.{}", quote_ident(s), quote_ident(n)))
+        ));
+    }
+    Some(out)
+}
+
+/// `pg_current_wal_lsn` text (`16/B374D848`) as a number, for the drain
+/// compare (PA31 step 3).
+pub fn lsn(t: &str) -> Option<u64> {
+    let (hi, lo) = t.trim().split_once('/')?;
+    Some((u64::from_str_radix(hi, 16).ok()? << 32) | u64::from_str_radix(lo, 16).ok()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn live_helpers() {
+        assert_eq!(qualified("public.t"), "\"public\".\"t\"");
+        assert_eq!(qualified("we\"ird.t"), "\"we\"\"ird\".\"t\"");
+        assert_eq!(replica_identity_sql(&["public.log".into()], true), "ALTER TABLE \"public\".\"log\" REPLICA IDENTITY FULL;\n");
+        let s = setval_script(r#"[["public","jobs_id_seq",42,1],["a","never",null,100]]"#).unwrap();
+        assert_eq!(
+            s,
+            "SELECT pg_catalog.setval('\"public\".\"jobs_id_seq\"'::regclass, 42, true);\n\
+             SELECT pg_catalog.setval('\"a\".\"never\"'::regclass, 100, false);\n"
+        );
+        assert_eq!(setval_script("[]").unwrap(), "");
+        assert!(setval_script("nope").is_none());
+        assert!(setval_script(r#"[["a","b","x",1]]"#).is_none());
+        assert_eq!(lsn("0/16B3748"), Some(0x16B3748));
+        assert_eq!(lsn("16/B374D848"), Some((0x16 << 32) | 0xB374D848));
+        assert!(lsn("16/B374D848") > lsn("16/B374D847"));
+        assert!(lsn("x").is_none());
+        assert!(live_facts_sql().contains("'noPk'") && live_facts_sql().contains("indisprimary"));
+    }
 
     fn k2(n: &str) -> bool {
         k2_root_proto::pg_major::role_name_ok(n)

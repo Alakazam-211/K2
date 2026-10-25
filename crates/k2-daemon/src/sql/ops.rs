@@ -131,6 +131,17 @@ fn refuse_if_moving(db_name: &str) -> Result<(), OpsError> {
             "db_maintenance: {db_name} is moving to another Postgres major; try again after the move"
         )));
     }
+    // prd-app-pg-choice-dualrun-v1 PA27: a live run outlives a daemon
+    // restart, so the persisted run row (not the in-memory lock) decides.
+    if super::pgmove::dual_k2::running(db_name) {
+        return Err(OpsError::Refused(
+            "db_dual_running",
+            format!(
+                "{db_name} is being copied live to a newer Postgres; schema changes and K2's own grants wait. \
+                 k2 db upgrade {db_name} --switch (or --abort) first"
+            ),
+        ));
+    }
     Ok(())
 }
 
@@ -653,7 +664,7 @@ pub fn seal_existing_databases(ops: &dyn SystemOps) -> Vec<String> {
     };
     names
         .into_iter()
-        .filter(|name| !super::pgmove::k2::moving(name))
+        .filter(|name| !super::pgmove::k2::moving(name) && !super::pgmove::dual_k2::running(name))
         .map(|name| match ensure_k2_helpers_db(ops, &name) {
             Ok(()) => format!("{name}: sealed"),
             Err(e) => format!("{name}: not sealed ({})", e.hint()),
@@ -2299,6 +2310,10 @@ pub fn rotate_db_role_passwords(ops: &dyn SystemOps) -> Vec<String> {
     for (name, agent_ref, mig_ref) in rows {
         if super::pgmove::k2::moving(&name) {
             out.push(format!("{name}: skipped (moving to another Postgres major)"));
+            continue;
+        }
+        if super::pgmove::dual_k2::running(&name) {
+            out.push(format!("{name}: skipped (a live move is copying it)"));
             continue;
         }
         for (role, sref) in [(format!("{name}_agent"), agent_ref), (format!("{name}_migrator"), mig_ref)] {

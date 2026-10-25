@@ -24,6 +24,8 @@
 
 pub mod catalog;
 pub mod check;
+pub mod dual;
+pub mod dual_k2;
 pub mod helper_ops;
 pub mod k2;
 pub mod request;
@@ -203,6 +205,18 @@ pub trait MoveEnv {
     fn rehost_running(&self, _db: &str) -> Option<String> {
         None
     }
+    /// The Apps (of these) that can't run two copies: a live cut-over stops
+    /// them at the write block (PA10, PA31 step 2).
+    fn one_copy_apps(&self, _apps: &[String]) -> Vec<String> {
+        Vec::new()
+    }
+    /// A live dual-run of this database is open (PA27, PA35): moves and
+    /// rollbacks refuse `dual_running`.
+    fn dual_running(&self, _db: &str) -> bool {
+        false
+    }
+    /// The server's owner hears it too (a live run's notes, PA29).
+    fn owner_note(&self, _title: &str, _body: &str) {}
     fn audit(&self, act: &str, line: Value);
     fn inbox(&self, title: &str, body: &str);
 }
@@ -246,6 +260,10 @@ pub struct MoveProgress {
     /// `move` or `rollback`.
     #[serde(default = "kind_move")]
     pub kind: String,
+    /// `copy` (0.46.3) or `dual` (a live run's cut-over,
+    /// prd-app-pg-choice-dualrun-v1 PA31): the `sql_moves.method` column.
+    #[serde(default = "method_copy")]
+    pub method: String,
     pub db: String,
     pub from: Major,
     pub to: Major,
@@ -284,6 +302,10 @@ pub struct MoveProgress {
 
 fn kind_move() -> String {
     "move".into()
+}
+
+fn method_copy() -> String {
+    "copy".into()
 }
 
 /// What the caller may skip or widen (§12: owner-only flags).
@@ -524,6 +546,7 @@ fn new_progress(kind: &str, db: &str, from: Major, to: Major, actor: &str, now: 
     MoveProgress {
         id: format!("{}_{}_{}", if kind == "rollback" { "rb" } else { "mv" }, db, tag.to_ascii_lowercase()),
         kind: kind.into(),
+        method: method_copy(),
         db: db.into(),
         from,
         to,

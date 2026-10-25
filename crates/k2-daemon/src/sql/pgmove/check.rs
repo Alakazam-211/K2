@@ -183,6 +183,16 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
         }
     }
 
+    // PA27/PA35: a live run of this database owns it until it switches or
+    // is aborted (its own publication and freeze aren't "foreign").
+    if env.dual_running(db) {
+        l.refuse(
+            super::dual::DUAL_RUNNING,
+            format!("a live move of {db} is running"),
+            "k2 db upgrade <db> --switch or --abort it first",
+        );
+    }
+
     // PA12: never beside an App's re-host (the wave waits for a busy move
     // the other way round).
     if let Some(app) = env.rehost_running(db) {

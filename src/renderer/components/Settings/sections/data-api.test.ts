@@ -15,6 +15,11 @@ import {
   dbTypeLabel,
   formatSqlListen,
   setSqlDbAgentAccess,
+  abortLiveMove,
+  liveLine,
+  parseLiveStatus,
+  prepareLiveMoves,
+  switchLiveMove,
   sqlErrorInfo,
   sqlErrorMessage,
   type SqlDatabase,
@@ -116,5 +121,36 @@ describe('setSqlDbAgentAccess', () => {
       project: '/ws/sales',
       fields: { db_agent_access: 'off' },
     })
+  })
+})
+
+describe('live moves (PA40)', () => {
+  beforeEach(() => {
+    post.mockReset()
+    post.mockResolvedValue({ ok: true })
+  })
+
+  it('reads the runs and the clusters that are not logical yet', () => {
+    const v = parseLiveStatus({
+      live: [{ db: 'ws_jobs', from: 16, to: 17, state: 'streaming', tables: { ready: 3, total: 3 }, lagBytes: 2 * 1024 ** 2, walStatus: 'reserved', lastError: null }],
+      walLevels: [{ major: 16, walLevel: 'replica' }, { major: 17, walLevel: 'logical' }, { major: 18, walLevel: null }],
+      liveHelper: true,
+    })
+    expect(v.runs).toEqual([{ db: 'ws_jobs', from: 16, to: 17, state: 'streaming', ready: 3, total: 3, lagBytes: 2 * 1024 ** 2, walStatus: 'reserved', lastError: null }])
+    expect(v.notLogical).toEqual([16])
+    expect(v.helper).toBe(true)
+    expect(liveLine(v.runs[0])).toBe('3/3 tables · 2 MiB behind · WAL reserved')
+    expect(parseLiveStatus(null)).toEqual({ runs: [], notLogical: [], helper: false })
+  })
+
+  it('posts switch, abort and prepare to the one upgrade route', async () => {
+    await switchLiveMove('ws_jobs')
+    await abortLiveMove('ws_jobs')
+    await prepareLiveMoves(16)
+    expect(post.mock.calls).toEqual([
+      [primaryScope(), 'db/upgrade', { db: 'ws_jobs', switch: true }],
+      [primaryScope(), 'db/upgrade', { db: 'ws_jobs', abort: true }],
+      [primaryScope(), 'db/upgrade', { prepareLive: 16 }],
+    ])
   })
 })

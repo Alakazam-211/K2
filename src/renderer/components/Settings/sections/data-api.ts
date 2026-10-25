@@ -263,3 +263,82 @@ export const SAMPLE_DATABASES: SqlDatabase[] = [
     dbAgentAccess: 'off',
   },
 ]
+
+// ── live moves (prd-app-pg-choice-dualrun-v1 PA40, 0.46.4) ──────────────
+
+export interface LiveRun {
+  db: string
+  from: number
+  to: number
+  state: string
+  ready: number
+  total: number
+  lagBytes: number | null
+  walStatus: string | null
+  lastError: string | null
+}
+
+export interface LiveStatus {
+  runs: LiveRun[]
+  /** Clusters a live move can't start from yet (wal_level not logical). */
+  notLogical: number[]
+  /** The root helper speaks live moves (protocol 10, pgdual). */
+  helper: boolean
+}
+
+function num(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+/** GET /cli/db/upgrade (no db): the live runs and each cluster's wal_level. */
+export function parseLiveStatus(raw: unknown): LiveStatus {
+  const v = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const runs = Array.isArray(v.live) ? v.live : []
+  const levels = Array.isArray(v.walLevels) ? v.walLevels : []
+  return {
+    runs: runs
+      .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object')
+      .map((r) => {
+        const t = r.tables && typeof r.tables === 'object' ? (r.tables as Record<string, unknown>) : {}
+        return {
+          db: typeof r.db === 'string' ? r.db : '?',
+          from: num(r.from) ?? 0,
+          to: num(r.to) ?? 0,
+          state: typeof r.state === 'string' ? r.state : 'unknown',
+          ready: num(t.ready) ?? 0,
+          total: num(t.total) ?? 0,
+          lagBytes: num(r.lagBytes),
+          walStatus: typeof r.walStatus === 'string' ? r.walStatus : null,
+          lastError: typeof r.lastError === 'string' ? r.lastError : null,
+        }
+      }),
+    notLogical: levels
+      .filter((l): l is Record<string, unknown> => !!l && typeof l === 'object')
+      .filter((l) => typeof l.walLevel === 'string' && l.walLevel.trim() !== 'logical')
+      .map((l) => num(l.major))
+      .filter((m): m is number => m !== null),
+    helper: v.liveHelper === true,
+  }
+}
+
+/** "3/3 tables · 2 MiB behind · WAL reserved" */
+export function liveLine(r: LiveRun): string {
+  const lag = r.lagBytes === null ? 'lag unknown' : `${Math.round(r.lagBytes / 1024 ** 2)} MiB behind`
+  return `${r.ready}/${r.total} tables · ${lag}${r.walStatus ? ` · WAL ${r.walStatus}` : ''}`
+}
+
+export async function fetchLiveStatus(): Promise<LiveStatus> {
+  return parseLiveStatus(await daemonCliGet<unknown>(primaryScope(), 'db/upgrade'))
+}
+
+export async function switchLiveMove(db: string): Promise<unknown> {
+  return daemonCliPost(primaryScope(), 'db/upgrade', { db, switch: true })
+}
+
+export async function abortLiveMove(db: string): Promise<unknown> {
+  return daemonCliPost(primaryScope(), 'db/upgrade', { db, abort: true })
+}
+
+export async function prepareLiveMoves(major: number): Promise<unknown> {
+  return daemonCliPost(primaryScope(), 'db/upgrade', { prepareLive: major })
+}

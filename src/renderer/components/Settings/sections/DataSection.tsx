@@ -28,6 +28,12 @@ import {
   grantSqlAccess,
   revokeSqlAccess,
   sqlErrorMessage,
+  abortLiveMove,
+  fetchLiveStatus,
+  liveLine,
+  prepareLiveMoves,
+  switchLiveMove,
+  type LiveStatus,
   type SqlDatabase,
   type SqlLevel,
   type SqlStatus,
@@ -54,6 +60,13 @@ export const DATA_MANIFEST: SettingEntry[] = [
     label: 'Database access',
     description: 'Grant other workspaces manage / read / write (not skin people)',
     keywords: ['grant', 'access', 'read', 'write', 'manage', 'workspace'],
+  },
+  {
+    id: 'data.live',
+    section: 'data',
+    label: 'Live moves',
+    description: 'Move a database to a newer Postgres while it keeps serving: switch or abort, prepare an older cluster',
+    keywords: ['live', 'dual-run', 'logical replication', 'upgrade', 'postgres', 'switch', 'abort', 'wal_level'],
   },
   {
     id: 'data.bind',
@@ -485,6 +498,8 @@ function ServerPanel({
         </div>
       )}
 
+      {status.state === 'running' && !sample && <LiveMovesPanel canMutate={canMutate} />}
+
       {status.state === 'running' && (
         <div className="space-y-2 pb-6">
           <SectionTitle>Danger zone</SectionTitle>
@@ -510,6 +525,105 @@ function ServerPanel({
       {error && (
         <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
       )}
+    </div>
+  )
+}
+
+/** PA40: the live runs (tables, lag, WAL), Switch now / Abort, and
+ *  "Prepare for live moves" on a cluster that isn't logical yet. The daemon
+ *  decides who may (the owner, for now) and answers a refusal we show. */
+function LiveMovesPanel({ canMutate }: { canMutate: boolean }): React.JSX.Element | null {
+  const [live, setLive] = useState<LiveStatus | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [confirm, setConfirm] = useState<string | null>(null)
+
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      setLive(await fetchLiveStatus())
+    } catch (e) {
+      setError(sqlErrorMessage(e))
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const act = useCallback(
+    async (key: string, fn: () => Promise<unknown>): Promise<void> => {
+      setBusy(key)
+      setError(null)
+      setConfirm(null)
+      try {
+        await fn()
+      } catch (e) {
+        setError(sqlErrorMessage(e))
+      } finally {
+        setBusy(null)
+        await load()
+      }
+    },
+    [load],
+  )
+
+  if (!live || (live.runs.length === 0 && live.notLogical.length === 0)) {
+    return error ? <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p> : null
+  }
+  const btn =
+    'px-2.5 py-1 text-[10px] font-medium border border-[var(--color-border)] hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0'
+  return (
+    <div className="space-y-2" data-settings-id="data.live" data-testid="data-live-moves">
+      <SectionTitle>Live moves</SectionTitle>
+      <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
+        {live.runs.map((r) => (
+          <div key={r.db} className="px-3 py-2 flex items-center gap-3" data-testid={`data-live-${r.db}`}>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-[var(--color-text-primary)] font-mono">
+                {r.db} · PG {r.from} → {r.to} · {r.state}
+              </p>
+              <p className="text-[10px] text-[var(--color-text-muted)]">{liveLine(r)}</p>
+              {r.lastError ? <p className="text-[10px] text-[var(--color-status-error-soft)] break-words">{r.lastError}</p> : null}
+            </div>
+            {r.state === 'streaming' ? (
+              confirm === `switch:${r.db}` ? (
+                <button type="button" className={btn} disabled={!canMutate || busy !== null} onClick={() => void act(`switch:${r.db}`, () => switchLiveMove(r.db))}>
+                  Writes pause a few seconds: switch
+                </button>
+              ) : (
+                <button type="button" className={btn} disabled={!canMutate || busy !== null} onClick={() => setConfirm(`switch:${r.db}`)}>
+                  Switch now
+                </button>
+              )
+            ) : null}
+            {['syncing', 'streaming', 'stalled'].includes(r.state) ? (
+              <button type="button" className={btn} disabled={!canMutate || busy !== null} onClick={() => void act(`abort:${r.db}`, () => abortLiveMove(r.db))}>
+                Abort
+              </button>
+            ) : null}
+          </div>
+        ))}
+        {live.notLogical.map((m) => (
+          <div key={m} className="px-3 py-2 flex items-center gap-3" data-testid={`data-live-prepare-${m}`}>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-[var(--color-text-primary)]">Postgres {m} can&apos;t move live yet</p>
+              <p className="text-[10px] text-[var(--color-text-muted)]">
+                One restart allows it: every database on Postgres {m} pauses for about 5–15 s (a 60 s notice first).
+              </p>
+            </div>
+            {confirm === `prepare:${m}` ? (
+              <button type="button" className={btn} disabled={!canMutate || busy !== null} onClick={() => void act(`prepare:${m}`, () => prepareLiveMoves(m))}>
+                Restart Postgres {m} now
+              </button>
+            ) : (
+              <button type="button" className={btn} disabled={!canMutate || busy !== null || !live.helper} onClick={() => setConfirm(`prepare:${m}`)}>
+                Prepare for live moves
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+      {error ? <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p> : null}
     </div>
   )
 }

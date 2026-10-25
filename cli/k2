@@ -33205,15 +33205,21 @@ cmd_schema() {
     },
     {
       "name": "db upgrade",
-      "usage": "k2 db upgrade <db>|--app <id> [--all-workspace-dbs]|--all [--to 17] [--check] [--rollback --yes] [--forget-old [--force-now]] [--now] [--allow-adopted] [--acknowledge-failed] [--no-wait] [--json]",
-      "description": "Move a database to a newer Postgres major by copy (dump/restore into that major's cluster; the old copy is kept closed 14 days). --check is read-only. A move gives a 60 s notice, stops the database's Apps, pauses its guest doors (503 db_maintenance), recreates its roles with the same passwords, copies, verifies (rows, RLS, policies, grants, sequences, logins), re-points the vaulted DATABASE_URL and starts the Apps. --rollback --yes goes back within 14 days (writes since the move are lost). Agents need the \"Allow this agent to manage Postgres versions\" switch and move only their own and their Apps' databases; --forget-old, --now, --all, --allow-adopted and --acknowledge-failed are the owner's. Exit 0 done, 3 refused (nothing changed), 1 failed.",
+      "usage": "k2 db upgrade <db>|--app <id> [--all-workspace-dbs]|--all [--to 17] [--check] [--live [--replica-identity-full]] [--switch] [--abort] [--status] [--rollback --yes] [--forget-old [--force-now]] [--now] [--allow-adopted] [--acknowledge-failed] [--no-wait] [--json] | k2 db upgrade --prepare-live <major>",
+      "description": "Move a database to a newer Postgres major by copy (dump/restore into that major's cluster; the old copy is kept closed 14 days). --check is read-only. A move gives a 60 s notice, stops the database's Apps, pauses its guest doors (503 db_maintenance), recreates its roles with the same passwords, copies, verifies (rows, RLS, policies, grants, sequences, logins), re-points the vaulted DATABASE_URL and starts the Apps. --rollback --yes goes back within 14 days (writes since the move are lost). Agents need the \"Allow this agent to manage Postgres versions\" switch and move only their own and their Apps' databases; --forget-old, --now, --all, --allow-adopted and --acknowledge-failed are the owner's. --live (owner, 0.46.4) copies by logical replication while the database keeps serving, then --switch (writes pause a few seconds, Apps re-hosted) or --abort (free); --prepare-live <major> makes an older cluster logical with one restart. Exit 0 done, 3 refused (nothing changed), 1 failed.",
       "args": [{"name": "db", "required": false}],
       "flags": [
         {"name": "--app", "arg": "id", "description": "The App's own database: the one its DATABASE_URL names, else its workspace's default."},
         {"name": "--all-workspace-dbs", "arg": null, "description": "With --app when K2 can't tell its database: every database of its workspace."},
         {"name": "--all", "arg": null, "description": "Owner: every K2 database below --to, one at a time; stops at the first failure."},
         {"name": "--to", "arg": "major", "description": "Target major (default: the highest supported one every App on the database allows, else 17). Upward only, supported majors only."},
-        {"name": "--check", "arg": null, "description": "Read-only report (ok / warn / refuse per line)."},
+        {"name": "--check", "arg": null, "description": "Read-only report (ok / warn / refuse per line); with --live, the live move's report."},
+        {"name": "--live", "arg": null, "description": "Owner (0.46.4): copy by logical replication while the database keeps serving; schema changes wait (at most 7 days). Returns once copying starts."},
+        {"name": "--switch", "arg": null, "description": "Owner: cut a streaming live move over (writes pause a few seconds; Apps re-hosted on the new major)."},
+        {"name": "--abort", "arg": null, "description": "Owner: end a live move before its switch; the database never stopped."},
+        {"name": "--status", "arg": null, "description": "The database's live move and latest moves (read-only)."},
+        {"name": "--replica-identity-full", "arg": null, "description": "Owner, with --live: REPLICA IDENTITY FULL on tables without a primary key (slower updates on them)."},
+        {"name": "--prepare-live", "arg": "major", "description": "Owner: allow live moves out of an older cluster (one restart; every database on it pauses about 5-15 s)."},
         {"name": "--rollback", "arg": null, "description": "Back to the kept old copy (needs --yes)."},
         {"name": "--yes", "arg": null, "description": "Confirms a rollback (writes since the move are not carried back)."},
         {"name": "--forget-old", "arg": null, "description": "Owner: drop the kept old copy and its dump (24 h after the move)."},
@@ -37344,16 +37350,42 @@ WHO
   turns it on: Agent tab, or `k2 db versions-access on`), and then moves,
   checks and rolls back its OWN workspace's and its own Apps' databases.
   Owner only: --forget-old, --now (skip the notice), --allow-adopted,
-  --all, --acknowledge-failed.
+  --all, --acknowledge-failed, and for now --live, --switch, --abort,
+  --replica-identity-full and --prepare-live. A database shared with other
+  workspaces moves live by the owner only.
 
 AIR-GAP
   Installing 17 needs apt.postgresql.org (pinned key, pinned packages).
   Without it: install postgresql-17 and postgresql-client-17 from your
   mirror (apt install ./*.deb), then re-run.
 
-LATER (0.46.4)
-  Live dual-run (logical replication, a near-zero pause) and the
-  whole-cluster path for very large clusters.
+LIVE MOVES (0.46.4, the owner's for now)
+  k2 db upgrade <db> --check --live   read-only: the copy's lines plus a
+                                       logical source, primary keys, no large
+                                       objects / unlogged / foreign tables,
+                                       disk for the copy and the WAL cap
+  k2 db upgrade <db> --live           copies by logical replication while the
+                                       database keeps serving; schema changes
+                                       (DDL, temp tables too) are refused on it
+                                       until the switch, at most 7 days
+  k2 db upgrade <db> --status         tables ready/total, lag, WAL status
+  k2 db upgrade <db> --switch         once it streams: writes pause a few
+                                       seconds (drain, exact sequences, a full
+                                       row count), the record moves, every App
+                                       on it is re-hosted on the new DSN; the
+                                       old copy is kept closed 14 days
+  k2 db upgrade <db> --abort          before the switch: free, the database
+                                       never stopped
+  Pick it for big databases or Apps that can't take the copy's pause. Use
+  the copy for tables without a primary key (or the owner's
+  --replica-identity-full), large objects or unlogged tables. A lost
+  replication slot (past its WAL cap: min 8 GB, 25% of free disk) fails the
+  run, never the database. Rollback after the switch works as above
+  (writes since the switch are lost). An App that must restart to read the
+  new DSN still pays its own boot time.
+  Older boxes' 16 cluster isn't logical yet: the owner runs
+  k2 db upgrade --prepare-live 16 once (every database on it pauses about
+  5-15 s). Boxes born on 0.46.3 or later never need it.
 
 EXITS
   0 done · 3 refused (nothing changed) · 1 failed (the owner gets an inbox
@@ -61154,10 +61186,13 @@ print("Allow this agent to manage Postgres versions: %s for %s%s" % ("on" if on 
             D_VERB="create" D_JSON="$as_json" D_ID="$client_id" D_NAME="$name" D_ACCESS="$access" D_TEST="$test" D_MAJOR="$major" _db_py ;;
         upgrade)
             # `k2 db upgrade` (0.46.3): move a database to a newer Postgres
-            # major by copy; the old copy is kept 14 days. POST/GET
-            # /cli/db/upgrade. Exit 0 done, 3 refused, 1 failed.
+            # major by copy; the old copy is kept 14 days. 0.46.4: --live
+            # (logical replication while it serves), --switch, --abort,
+            # --prepare-live <major>, --status. POST/GET /cli/db/upgrade.
+            # Exit 0 done, 3 refused, 1 failed.
             local u_db="" u_app="" u_all=false u_to="" u_check=false u_rb=false u_yes=false u_forget=false
             local u_force=false u_now=false u_adopted=false u_ack=false u_wait=true u_allws=false
+            local u_live=false u_switch=false u_abort=false u_prep="" u_rif=false u_status=false
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
@@ -61175,6 +61210,13 @@ print("Allow this agent to manage Postgres versions: %s for %s%s" % ("on" if on 
                     --allow-adopted) u_adopted=true; shift ;;
                     --acknowledge-failed) u_ack=true; shift ;;
                     --no-wait) u_wait=false; shift ;;
+                    --live) u_live=true; shift ;;
+                    --switch) u_switch=true; shift ;;
+                    --abort) u_abort=true; shift ;;
+                    --prepare-live) u_prep="${2:-}"; shift 2 ;;
+                    --prepare-live=*) u_prep="${1#*=}"; shift ;;
+                    --replica-identity-full) u_rif=true; shift ;;
+                    --status) u_status=true; shift ;;
                     -*) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                     *) [ -z "$u_db" ] || { _db_err "usage" "one database"; exit 2; }; u_db="$1"; shift ;;
                 esac
@@ -61182,12 +61224,38 @@ print("Allow this agent to manage Postgres versions: %s for %s%s" % ("on" if on 
             if [ -n "$u_to" ]; then
                 case "$u_to" in [1-9][0-9]) ;; *) _db_err "usage" "--to takes a Postgres major, e.g. 17"; exit 2 ;; esac
             fi
+            if [ -n "$u_prep" ]; then
+                case "$u_prep" in [1-9][0-9]) ;; *) _db_err "usage" "--prepare-live takes a Postgres major, e.g. 16"; exit 2 ;; esac
+            fi
+            # --status: the database's live run and its latest moves (read-only).
+            if $u_status; then
+                [ -n "$u_db" ] || { _db_err "usage" "k2 db upgrade <db> --status"; exit 2; }
+                _compute_split "$(_compute_send GET "/cli/db/upgrade?db=$(urlencode "$u_db")" "")"
+                [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+                if $as_json; then printf '%s\n' "$_CP_BODY"; exit 0; fi
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+for r in v.get("live") or []:
+    t=r.get("tables") or {}
+    lag=r.get("lagBytes")
+    print("live %s: Postgres %s → %s, %s; tables %s/%s; lag %s; WAL %s" % (r["db"], r["from"], r["to"], r["state"], t.get("ready"), t.get("total"),
+          "-" if lag is None else "%d MiB" % (lag >> 20), r.get("walStatus") or "-"))
+    if r.get("lastError"): print("  " + r["lastError"])
+    if r["state"] == "streaming": print("  ready: k2 db upgrade %s --switch (or --abort)" % r["db"])
+for m in (v.get("moves") or [])[:3]:
+    print("%s %s %s → %s: %s (%s)%s" % (m.get("kind", "move"), m.get("method", "copy"), m.get("from"), m.get("to"), m.get("state"), m.get("step"),
+          ("  " + m["lastError"]) if m.get("lastError") else ""))
+if not (v.get("live") or v.get("moves")): print("no moves and no live move for this database")'
+                exit 0
+            fi
             local u_body
             u_body="$(_compute_json K2_CJ_db="$u_db" K2_CJ_app="$u_app" K2_CJ_all_b="$($u_all && echo 1)" \
                 K2_CJ_to_n="$u_to" K2_CJ_check_b="$($u_check && echo 1)" K2_CJ_rollback_b="$($u_rb && echo 1)" \
                 K2_CJ_yes_b="$($u_yes && echo 1)" K2_CJ_forgetOld_b="$($u_forget && echo 1)" K2_CJ_forceNow_b="$($u_force && echo 1)" \
                 K2_CJ_now_b="$($u_now && echo 1)" K2_CJ_allowAdopted_b="$($u_adopted && echo 1)" \
-                K2_CJ_acknowledgeFailed_b="$($u_ack && echo 1)" K2_CJ_allWorkspaceDbs_b="$($u_allws && echo 1)")"
+                K2_CJ_acknowledgeFailed_b="$($u_ack && echo 1)" K2_CJ_allWorkspaceDbs_b="$($u_allws && echo 1)" \
+                K2_CJ_live_b="$($u_live && echo 1)" K2_CJ_switch_b="$($u_switch && echo 1)" K2_CJ_abort_b="$($u_abort && echo 1)" \
+                K2_CJ_prepareLive_n="$u_prep" K2_CJ_replicaIdentityFull_b="$($u_rif && echo 1)")"
             _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST /cli/db/upgrade "$u_body")"
             if [ "$_CP_STATUS" != "200" ]; then
                 printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
@@ -61197,7 +61265,23 @@ except Exception: v={"error":"daemon_unreachable","hint":raw[:200] or "no answer
 print(json.dumps({"error": v.get("error"), "hint": v.get("hint", "")}))' >&2
                 case "$_CP_STATUS" in 400) exit 2 ;; *) exit 3 ;; esac
             fi
-            if $as_json && { ! $u_wait || $u_check || $u_rb || $u_forget || $u_ack; }; then printf '%s\n' "$_CP_BODY"; exit 0; fi
+            if $as_json && { ! $u_wait || $u_check || $u_rb || $u_forget || $u_ack || $u_abort || [ -n "$u_prep" ] || { $u_live && ! $u_check; }; }; then printf '%s\n' "$_CP_BODY"; exit 0; fi
+            # A live run started, aborted, or a cluster prepared: one answer.
+            if { $u_live && ! $u_check; } || $u_abort || [ -n "$u_prep" ]; then
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+r=v.get("live")
+if r:
+    print("live move of %s: Postgres %s → %s, %s" % (r["db"], r["from"], r["to"], r["state"]))
+    if r["state"] in ("syncing", "streaming"):
+        print("copying while it serves; schema changes wait until the switch (at most 7 days)")
+        print("watch: k2 db upgrade %s --status; then k2 db upgrade %s --switch (or --abort)" % (r["db"], r["db"]))
+    elif r.get("lastError"):
+        print("  " + r["lastError"])
+else:
+    print("Postgres %s: wal_level %s%s" % (v.get("major"), v.get("walLevel"), " (restarted once)" if v.get("restarted") else " (nothing restarted)"))'
+                exit 0
+            fi
             if $u_check || $u_rb || $u_forget || $u_ack; then
                 printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
 v=json.load(sys.stdin)
@@ -61215,11 +61299,15 @@ if "check" not in v:
 sys.exit(3 if refused else 0)'
                 exit $?
             fi
-            # A move: watch it until it ends.
+            # A move (or a live switch): watch it until it ends.
             local u_name="$u_db"
-            [ -n "$u_name" ] || u_name="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["started"][0])')"
+            [ -n "$u_name" ] || u_name="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("switching") or v["started"][0])')"
             if ! $u_wait; then printf '%s\n' "$_CP_BODY"; exit 0; fi
-            echo "moving $u_name (the old copy stays 14 days; k2 db upgrade $u_name --rollback --yes)" >&2
+            if $u_switch; then
+                echo "switching $u_name (writes pause a few seconds; the old copy stays 14 days)" >&2
+            else
+                echo "moving $u_name (the old copy stays 14 days; k2 db upgrade $u_name --rollback --yes)" >&2
+            fi
             local u_seen="" u_out u_rc
             while true; do
                 sleep 3

@@ -254,6 +254,49 @@ async fn s14_the_link_admits_only_its_own_pass_on_app_routes() {
     gateway::close("crm", None, true);
 }
 
+/// A stopped link is closed when `close` returns, even when every runtime
+/// worker is busy at that moment (a loaded box, a parallel test run): the
+/// accept task owns the listener, and an abort is only acted on when a
+/// worker next gets to the task. Before the fix `close` returned at once
+/// and the listener kept taking connections until then (the intermittent
+/// "the listener closed" failure above under nextest's parallel run).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s14_a_closed_link_is_closed_when_close_returns_even_on_a_busy_runtime() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let env = setup(&[]);
+    let _d = k2_daemon::test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "busyws");
+    gateway::open(spec("busy", "svc-busy-3333", &ws, &["thread:read"]), None).expect("open link");
+    let port = gateway::port_of("busy").expect("listening");
+    assert!(TcpStream::connect(("127.0.0.1", port)).is_ok(), "open before the close");
+
+    // Both workers blocked for 500 ms (this test body runs on the block_on
+    // thread, not a worker).
+    let started = Arc::new(AtomicUsize::new(0));
+    let hogs: Vec<_> = (0..2)
+        .map(|_| {
+            let s = started.clone();
+            tokio::spawn(async move {
+                s.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(500));
+            })
+        })
+        .collect();
+    let t0 = std::time::Instant::now();
+    while started.load(Ordering::SeqCst) < 2 {
+        assert!(t0.elapsed() < Duration::from_secs(10), "the workers never picked up the blocking tasks");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    assert_eq!(gateway::close("busy", None, true), 1, "the one pass revoked");
+    assert!(gateway::port_of("busy").is_none());
+    let refused = TcpStream::connect_timeout(&format!("127.0.0.1:{port}").parse().unwrap(), Duration::from_millis(200)).is_err();
+    assert!(refused, "the listener is closed when close returns, not when a worker frees up");
+    for h in hogs {
+        h.await.unwrap();
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s14_k2_app_link_routes_scope_and_rotate() {
     let env = setup(&[]);

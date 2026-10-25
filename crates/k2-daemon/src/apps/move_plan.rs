@@ -129,10 +129,23 @@ fn users_hash(users: &[String]) -> String {
     Sha256::digest(v.join("\n").as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// May this caller see box-login usernames and run the box checks (the
-/// doctor's probes)? The owner, a shell tab, an Owner or Admin login, or an
-/// agent that already manages its Apps' users (switch 1); never a Member
-/// login (security review, 0.46.4: the plan's GET is open to Members).
+/// May this caller run the box checks (the doctor's probes) for the
+/// box_prep and engine steps? Everyone the owner card is for: the owner, a
+/// shell tab, an Owner or Admin login, and the service's own agent with or
+/// without switch 1 (its `--request` carries those steps to the owner).
+/// Never a Member login (security review, 0.46.4).
+fn may_run_box_checks(who: &Who) -> bool {
+    match who {
+        Who::Owner | Who::Shell { .. } | Who::Agent { .. } => true,
+        Who::Login { role, .. } => matches!(role, k2_core::connect_users::Role::Owner | k2_core::connect_users::Role::Admin),
+        _ => false,
+    }
+}
+
+/// May this caller see box-login usernames? The owner, a shell tab, an
+/// Owner or Admin login, or an agent that already manages its Apps' users
+/// (switch 1); never a Member login (security review, 0.46.4: the plan's
+/// GET is open to Members).
 fn may_see_users(who: &Who) -> bool {
     match who {
         Who::Owner | Who::Shell { .. } => true,
@@ -265,7 +278,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
         let why = if process { "this App runs on the process engine: no wall to prepare" } else { "not a Linux box: Apps run walled on Linux only" };
         steps.push(step("box_prep", OWNER, NA, "Prepare the box for Apps", why, None));
         steps.push(step("engine", OWNER, NA, "Install the App engine", why, None));
-    } else if !may_see_users(who) {
+    } else if !may_run_box_checks(who) {
         // A Member's look never runs the box probes.
         let why = "an Owner or Admin sees the box checks (k2 app doctor)";
         steps.push(step("box_prep", OWNER, BLOCKED, "Prepare the box for Apps", why, None));
@@ -709,4 +722,25 @@ pub(crate) fn apply(r: &reqs::AppRequest, by: &str) -> R<J> {
         }
     }
     Ok(json!({ "applied": "move-plan", "service": svc.name, "app": app_id, "steps": done }))
+}
+
+#[cfg(test)]
+mod box_check_tests {
+    use super::*;
+    use k2_core::connect_users::Role;
+
+    /// The owner card keeps box prep and the engine for an agent without
+    /// switch 1 (they ride its --request); a Member never runs the probes.
+    #[test]
+    fn the_box_checks_run_for_the_owner_card_and_never_for_a_member() {
+        let agent = Who::Agent { project_id: "ws-no-switch".into(), session_id: "s1".into() };
+        assert!(may_run_box_checks(&agent), "an agent without switch 1 still gets box_prep and engine");
+        assert!(may_run_box_checks(&Who::Owner));
+        assert!(may_run_box_checks(&Who::Shell { project_id: "ws".into(), session_id: "s2".into() }));
+        assert!(may_run_box_checks(&Who::Login { username: "ad".into(), role: Role::Admin }));
+        assert!(may_run_box_checks(&Who::Login { username: "ow".into(), role: Role::Owner }));
+        assert!(!may_run_box_checks(&Who::Login { username: "me".into(), role: Role::Member }), "never a Member");
+        assert!(!may_run_box_checks(&Who::Wrong));
+        assert!(!may_run_box_checks(&Who::Invalid));
+    }
 }

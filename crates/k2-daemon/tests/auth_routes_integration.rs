@@ -1442,6 +1442,28 @@ async fn update_start_owner_gets_job_id_no_real_download() {
     });
 }
 
+/// Rollback guard (security review of SS4): an OLDER signed release served
+/// as "latest" (a replayed daemon-latest.json) is refused at start, before
+/// any job or download, unless the owner asks for it on purpose.
+const OLD_STUB_MANIFEST: &str = r#"{"version":"0.0.1","pub_date":"2020-01-01T00:00:00Z","artifacts":{"macos-aarch64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00","sig2":"PLACEHOLDER"},"macos-x86_64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00","sig2":"PLACEHOLDER"},"linux-x86_64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00","sig2":"PLACEHOLDER"},"linux-aarch64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00","sig2":"PLACEHOLDER"}}}"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn update_start_refuses_an_older_release_served_as_latest() {
+    let _g = lock();
+    with_temp_home(|| {
+        let base = start_stub_manifest_server(OLD_STUB_MANIFEST);
+        std::env::set_var("K2SO_DAEMON_MANIFEST_URL", format!("{base}daemon-latest.json"));
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let r = http(d.port, "POST", &format!("/cli/daemon/update/start?token={OWNER_TOKEN}"), Some("{}"));
+        // A bundled-app host refuses only a pinned version; this harness is a
+        // standalone daemon, so the manifest's 0.0.1 is the target.
+        assert_eq!(r.status, 400, "an older release must be refused; body={}", r.body);
+        assert!(r.body.contains("older than") && r.body.contains("allowDowngrade"), "body={}", r.body);
+        assert!(!r.body.contains("job_id"), "no job for a rollback; body={}", r.body);
+        std::env::remove_var("K2SO_DAEMON_MANIFEST_URL");
+    });
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn update_apply_unknown_job_passes_gate_then_400() {
     let _g = lock();

@@ -739,7 +739,7 @@ cli_install() { # <manifest> [extra args…]
     rm -rf "$tmp/cb"
     bash "$SRC/cli/k2" daemon install --manifest-url "file://$m" --bin-dir "$tmp/cb" --no-service "$@" >"$tmp/cli.out" 2>&1
 }
-if cli_install "$inst/dual.json" && cmp -s "$tmp/cb/k2so-daemon" "$inst/$DA"; then
+if cli_install "$inst/dual.json" && cmp -s "$tmp/cb/k2-daemon" "$inst/$DA"; then
     pass "k2 daemon install installs the dual-signed release (trusts only U2/U3)"
 else
     fail "cli install" "$(tail -5 "$tmp/cli.out")"
@@ -748,7 +748,7 @@ for case_ in "u1only.json:retired update key" "u1as2.json:VERIFICATION FAILED" "
     m="${case_%%:*}"; want="${case_#*:}"
     if cli_install "$inst/$m"; then
         fail "cli $m" "installed"
-    elif grep -q -- "$want" "$tmp/cli.out" && [ ! -e "$tmp/cb/k2so-daemon" ]; then
+    elif grep -q -- "$want" "$tmp/cli.out" && [ ! -e "$tmp/cb/k2-daemon" ]; then
         pass "k2 daemon install refuses $m"
     else
         fail "cli $m" "$(tail -3 "$tmp/cli.out")"

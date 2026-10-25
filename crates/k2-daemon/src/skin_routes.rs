@@ -344,7 +344,7 @@ fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse>
     let grants = skin::list_grants().map_err(CliResponse::internal_error)?;
     if !principal_in_workspace(&p, &roles, &grants, ws) {
         return Err(outside_workspace(format!(
-            "'{}' reaches outside your workspace (another workspace's App or room, or a box-wide grant)",
+            "'{}' isn't your workspace's guest: it reaches outside your workspace (another workspace's App or room, a box-wide grant) or it is the owner's",
             p.username
         )));
     }
@@ -529,24 +529,36 @@ fn app_of_workspace(id: &str, ws: &str) -> bool {
 /// every grant it holds: the box login (`app=host`) or an App of `ws`,
 /// each with rooms and a role inside `ws`. Any other grant (chat,
 /// mailbox, database, cli: box-wide) or an agent mark for another
-/// workspace puts it outside. A guest with no rooms, role or App yet
-/// (one the agent just added) is inside.
+/// workspace puts it outside. It must also be tied to `ws`: a room, a
+/// role room or an App of `ws`, the agent mark, or the stamp of `ws`'s
+/// agent having added it (`skin::creators`). A guest with nothing yet is
+/// inside only when this workspace's agent added it; the owner's empty
+/// guests stay the owner's (security review B).
 pub(crate) fn principal_in_workspace(p: &skin::SkinPrincipal, roles: &[skin::SkinRole], grants: &[skin::SkinGrant], ws: &str) -> bool {
-    let role_ok = |id: &Option<String>| match id {
+    let role = |id: &Option<String>| id.as_ref().map(|id| roles.iter().find(|r| &r.id == id));
+    let role_ok = |id: &Option<String>| match role(id) {
         None => true,
-        Some(id) => roles.iter().find(|r| &r.id == id).is_some_and(|r| role_in_workspace(r, ws)),
+        Some(found) => found.is_some_and(|r| role_in_workspace(r, ws)),
     };
+    let role_ties = |id: &Option<String>| matches!(role(id), Some(Some(r)) if !r.rooms.is_empty() || r.app_id.is_some());
     if p.agent_workspace.as_deref().is_some_and(|a| a != ws) || !rooms_in(&p.default_rooms, ws) || !role_ok(&p.role_id) {
         return false;
     }
-    grants.iter().filter(|g| g.subject_kind == "principal" && g.subject_id == p.id).all(|g| {
-        let target_ok = g.kind == "app" && (g.target_id == skin::HOST_APP_ID || app_of_workspace(&g.target_id, ws));
-        let scope_ok = match g.scope.as_deref().map(str::trim) {
-            None | Some("") => true,
-            Some(raw) => serde_json::from_str::<Vec<String>>(raw).is_ok_and(|rooms| rooms_in(&rooms, ws)),
+    let mut tied = p.agent_workspace.as_deref() == Some(ws) || !p.default_rooms.is_empty() || role_ties(&p.role_id);
+    for g in grants.iter().filter(|g| g.subject_kind == "principal" && g.subject_id == p.id) {
+        let own_app = g.kind == "app" && g.target_id != skin::HOST_APP_ID && app_of_workspace(&g.target_id, ws);
+        let target_ok = g.kind == "app" && (g.target_id == skin::HOST_APP_ID || own_app);
+        let scope = match g.scope.as_deref().map(str::trim) {
+            None | Some("") => Some(Vec::new()),
+            Some(raw) => serde_json::from_str::<Vec<String>>(raw).ok(),
         };
-        target_ok && scope_ok && role_ok(&g.role_id)
-    })
+        let scope_ok = scope.as_ref().is_some_and(|rooms| rooms_in(rooms, ws));
+        if !(target_ok && scope_ok && role_ok(&g.role_id)) {
+            return false;
+        }
+        tied |= own_app || scope.is_some_and(|rooms| !rooms.is_empty()) || role_ties(&g.role_id);
+    }
+    tied || skin::creators::workspace_of(&p.id).ok().flatten().as_deref() == Some(ws)
 }
 
 /// 0.46.4 security review: a test guest is the owner's while agent test
@@ -705,6 +717,30 @@ fn login_app_is_live(app: &str) -> bool {
         k2_core::published_services::get_by_id(&conn, app),
         Ok(Some(_))
     )
+}
+
+/// `POST /cli/skin/users` with the caller's workspace from the gate: a
+/// guest an agent adds is stamped as its workspace's (`skin::creators`),
+/// so that agent may set it up while it has nothing yet (security review
+/// B). If the stamp can't be written the guest is removed again: an
+/// unstamped guest would be the owner's, not what the agent asked for.
+pub fn handle_users_post_as(agent_ws: Option<&str>, body: &[u8], actor: &str) -> CliResponse {
+    let r = handle_users_post(body, actor);
+    let Some(ws) = agent_ws else { return r };
+    if !r.status.starts_with("200") {
+        return r;
+    }
+    let made: Option<(String, String)> = serde_json::from_str::<serde_json::Value>(&r.body)
+        .ok()
+        .and_then(|v| Some((v["id"].as_str()?.to_string(), v["username"].as_str()?.to_string())));
+    let Some((id, username)) = made else {
+        return CliResponse::internal_error("the new guest has no id to stamp");
+    };
+    if let Err(e) = skin::creators::stamp(&id, ws) {
+        let _ = skin::remove_principal_as(&username, actor);
+        return CliResponse::internal_error(format!("'{username}' wasn't added: {e}"));
+    }
+    r
 }
 
 pub fn handle_users_post(body: &[u8], actor: &str) -> CliResponse {

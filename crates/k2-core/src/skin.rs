@@ -91,6 +91,9 @@ pub mod app_login;
 /// Test guests of one App, short-lived (0.46.4).
 #[path = "skin_test_guests.rs"]
 pub mod test_guests;
+/// Which workspace's agent added a guest (0.46.4 security review).
+#[path = "skin_creators.rs"]
+pub mod creators;
 /// The agent access list, the owner's person × agent grid and the
 /// suggested role templates (app-mobile-access-v1, 0.46.3).
 #[path = "skin_access.rs"]
@@ -1437,6 +1440,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     app_login::ensure_schema(&conn)?;
     // 0.46.4: test guests of one App. Additive, no step.
     test_guests::ensure_schema(&conn)?;
+    // 0.46.4: which workspace's agent added a guest. Additive, no step.
+    creators::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;

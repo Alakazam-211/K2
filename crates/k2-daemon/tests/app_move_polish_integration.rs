@@ -964,14 +964,36 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     assert_eq!((gb.has_password, gb.email.clone()), (false, None), "{gb:?}");
     assert_eq!((boxb.has_password, boxb.role_name.as_deref()), (false, Some("scope-rb")), "{boxb:?}");
 
+    // The owner's guest with nothing yet (no room, role or App): still the
+    // owner's, on every route (security review B).
+    k2_core::skin::add_principal("scope-alice").unwrap();
+    for (path, body) in [
+        ("/cli/skin/users/password", json!({"username": "scope-alice", "password": "agent-chosen-pw-3"})),
+        ("/cli/skin/users/email", json!({"username": "scope-alice", "email": "alice@example.com"})),
+        ("/cli/skin/users/rooms", json!({"username": "scope-alice", "rooms": [a.handle]})),
+        ("/cli/skin/users/unlock", json!({"username": "scope-alice"})),
+        ("/cli/skin/roles/assign", json!({"username": "scope-alice", "role": "scope-ra"})),
+        ("/cli/skin/roles/unassign", json!({"username": "scope-alice"})),
+        ("/cli/skin/users/remove", json!({"username": "scope-alice"})),
+    ] {
+        let r = post(d.port, path, &agent, body.clone()).await;
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "owner's empty guest {path}: {}", r.body);
+        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("or it is the owner's"), "{path}: {}", r.body);
+    }
+    let alice = user("scope-alice");
+    assert_eq!((alice.has_password, alice.email.clone(), alice.default_rooms.clone(), alice.role_id.clone()), (false, None, Vec::<String>::new(), None), "{alice:?}");
+
     // Its own App's guest: allowed.
     let r = post(d.port, "/cli/skin/users/password", &agent, json!({"username": "scope-ga", "password": "agent-chosen-pw-2"})).await;
     assert_eq!(r.status, 200, "its own App's guest: {}", r.body);
     assert!(user("scope-ga").has_password);
 
-    // A box guest it adds: only its own rooms and roles.
+    // A box guest it adds (stamped as its workspace's): only its own rooms and roles.
     let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "scope-fresh"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(k2_core::skin::creators::workspace_of(&user("scope-fresh").id).unwrap().as_deref(), Some(a.id.as_str()), "stamped");
+    let r = post(d.port, "/cli/skin/users/password", &agent, json!({"username": "scope-fresh", "password": "agent-chosen-pw-4"})).await;
+    assert_eq!(r.status, 200, "its own new guest, still empty: {}", r.body);
     let r = post(d.port, "/cli/skin/users/rooms", &agent, json!({"username": "scope-fresh", "rooms": [b.handle]})).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "another workspace's room: {}", r.body);
     let r = post(d.port, "/cli/skin/roles/assign", &agent, json!({"username": "scope-fresh", "role": "scope-rb"})).await;

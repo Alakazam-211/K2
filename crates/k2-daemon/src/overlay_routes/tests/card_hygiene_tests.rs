@@ -6,7 +6,8 @@
 //!   owner, a Member, an agent, a Garden widget or an App guest (C13).
 //! - An agent session voids only a card it posted, and never a secret card.
 //! - A sidecar can't answer or void the canonical Thread's cards.
-//! - An agent's answer to an ordinary choice card is stamped with its name.
+//! - An agent's answer to an ordinary choice card (only with
+//!   K2_CARD_PERSON_ONLY=off since 0.46.4) is stamped with its name.
 //! - A choice ask has at most 8 options of 80 characters and a 1,000-
 //!   character prompt.
 
@@ -124,12 +125,17 @@ fn a_sidecar_neither_answers_nor_voids_the_canonical_threads_cards() {
     assert_eq!(r.status, "403 Forbidden", "{}", r.body);
     assert!(r.body.contains("canonical-only"), "{}", r.body);
     assert_eq!(choice_of(&conv, &id).status, "pending");
-    // The canonical agent still answers on its own Thread.
-    let r = post_json(
-        "/cli/thread/answer",
-        &passport_params(&project_id, &handle),
-        serde_json::json!({ "addr": handle, "id": id, "answer": "Go" }),
-    );
+    // 0.46.4 (AC24): the canonical agent no longer answers either: only a
+    // person answers a card...
+    let canonical = passport_params(&project_id, &handle);
+    let answer = serde_json::json!({ "addr": handle, "id": id, "answer": "Go" });
+    let r = post_json("/cli/thread/answer", &canonical, answer.clone());
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    assert_eq!(json_body(&r)["error"]["code"], "card_person_only", "{}", r.body);
+    assert_eq!(choice_of(&conv, &id).status, "pending", "a refusal writes nothing");
+    // ...unless the owner turned the rule off (K2_CARD_PERSON_ONLY=off):
+    // then today's canonical-only rule is all that applies.
+    let r = with_card_person_only(false, || post_json("/cli/thread/answer", &canonical, answer.clone()));
     assert_eq!(r.status, "200 OK", "{}", r.body);
 }
 
@@ -140,11 +146,14 @@ fn an_agents_answer_is_stamped_with_its_name_and_a_persons_is_unchanged() {
     let conv = uuid::Uuid::new_v4().to_string();
     pin(&project_id, &conv);
     let id = ask_as(&HashMap::new(), &handle, "k2");
-    let r = post_json(
-        "/cli/thread/answer",
-        &passport_params(&project_id, &handle),
-        serde_json::json!({ "addr": handle, "id": id, "answer": "Go" }),
-    );
+    // An agent answers only with the 0.46.4 rule switched off.
+    let r = with_card_person_only(false, || {
+        post_json(
+            "/cli/thread/answer",
+            &passport_params(&project_id, &handle),
+            serde_json::json!({ "addr": handle, "id": id, "answer": "Go" }),
+        )
+    });
     assert_eq!(r.status, "200 OK", "{}", r.body);
     let by = choice_of(&conv, &id).answered_by.expect("an agent's answer names it");
     assert_eq!((by.kind.as_str(), by.login.as_str(), by.name.as_deref()), ("agent", handle.as_str(), None));
@@ -182,5 +191,100 @@ fn a_choice_ask_is_capped_at_eight_options_of_eighty_and_a_thousand_char_prompt(
     ] {
         assert_eq!(r.status, "400 Bad Request", "{what}: {}", r.body);
         assert_eq!(json_body(&r)["error"]["code"], "usage", "{what}: {}", r.body);
+    }
+}
+
+/// prd-app-caps-0464-v1 AC24/AC25/AC27 (0.46.4): only a person answers an
+/// ordinary choice card. Refused (403 `card_person_only`, the card stays
+/// pending): the asking agent's own passport (stamped and in the request
+/// slot), a K2 terminal cell, an App's own pass, a platform pass and a
+/// marked agent guest login. Allowed: a person's guest login, a Connect
+/// login and the owner token. `K2_CARD_PERSON_ONLY=off` is the old path.
+#[test]
+fn only_a_person_answers_a_choice_card() {
+    let _home = crate::test_support::TempHome::new();
+    let handle = format!("ovlhyp{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let (project_id, _) = seed(&handle);
+    let conv = uuid::Uuid::new_v4().to_string();
+    pin(&project_id, &conv);
+    let pass = |session: bool, principal: Option<&str>| SkinPass {
+        id: format!("t-{}", uuid::Uuid::new_v4()),
+        principal_id: principal.map(str::to_string),
+        username: "guest".into(),
+        caps: vec![k2_core::skin::CAP_THREAD_READ.into(), k2_core::skin::CAP_THREAD_POST.into()],
+        rooms: vec![project_id.clone()],
+        session,
+        room_policy: [(project_id.clone(), vec![k2_core::skin::CAP_THREAD_READ.to_string(), k2_core::skin::CAP_THREAD_POST.to_string()])]
+            .into_iter()
+            .collect(),
+        app: if session { "host".into() } else { String::new() },
+        room_paths: Default::default(),
+    };
+    let person = k2_core::skin::add_principal(&format!("pat{}", &uuid::Uuid::new_v4().simple().to_string()[..6])).expect("person");
+    let bot_name = format!("bot{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
+    let bot = k2_core::skin::add_principal(&bot_name).expect("bot");
+    k2_core::skin::set_principal_agent(&bot_name, Some(&project_id)).expect("agent mark");
+
+    let answer = |id: &str| serde_json::json!({ "addr": handle, "id": id, "answer": "Go" });
+    fn boxed<'a>(f: impl Fn(&str) -> CliResponse + 'a) -> Box<dyn Fn(&str) -> CliResponse + 'a> {
+        Box::new(f)
+    }
+    let refused: Vec<(&str, Box<dyn Fn(&str) -> CliResponse + '_>)> = vec![
+        ("its own agent's passport", boxed(|id: &str| post_json("/cli/thread/answer", &passport_params(&project_id, &handle), answer(id)))),
+        (
+            "its agent in the request slot",
+            boxed(|id: &str| {
+                crate::caller_workspace::with_request_principal(
+                    Some(crate::session_token::HookPrincipal { workspace_uuid: project_id.clone(), agent_address: handle.clone() }),
+                    || post_json("/cli/thread/answer", &HashMap::new(), answer(id)),
+                )
+            }),
+        ),
+        ("a K2 terminal cell", boxed(|id: &str| post_json("/cli/thread/answer", &params_of(&[("cell_session_id", "cell-p")]), answer(id)))),
+        ("an App's own pass", boxed(|id: &str| with_request_skin(Some(pass(false, None)), || post_json("/cli/thread/answer", &HashMap::new(), answer(id))))),
+        (
+            "a marked agent guest login",
+            boxed(|id: &str| with_request_skin(Some(pass(true, Some(&bot.id))), || post_json("/cli/thread/answer", &HashMap::new(), answer(id)))),
+        ),
+    ];
+    for (who, call) in &refused {
+        let id = ask_as(&HashMap::new(), &handle, "k2");
+        let r = call(&id);
+        assert_error_code(&r, "403 Forbidden", "card_person_only");
+        assert!(r.body.contains("k2 thread void"), "{who}: the hint says how to close it: {}", r.body);
+        assert_eq!(choice_of(&conv, &id).status, "pending", "{who}: a refusal writes nothing");
+        // The old path (K2_CARD_PERSON_ONLY=off): today's rules, so it answers.
+        let r = with_card_person_only(false, || call(&id));
+        assert_eq!(r.status, "200 OK", "{who} with the switch off: {}", r.body);
+    }
+    // A platform pass (owner-minted, no login): refused as well.
+    let id = ask_as(&HashMap::new(), &handle, "k2");
+    let mut platform = pass(false, None);
+    platform.app = String::new();
+    let r = with_request_skin(Some(platform), || post_json("/cli/thread/answer", &HashMap::new(), answer(&id)));
+    assert_error_code(&r, "403 Forbidden", "card_person_only");
+
+    // People answer: a person's own guest login, a Connect login, the owner.
+    let r = with_request_skin(Some(pass(true, Some(&person.id))), || post_json("/cli/thread/answer", &HashMap::new(), answer(&id)));
+    assert_eq!(r.status, "200 OK", "a person's guest login: {}", r.body);
+    let id = ask_as(&HashMap::new(), &handle, "k2");
+    let r = dispatch_post_as("/cli/thread/answer", &HashMap::new(), answer(&id).to_string().as_bytes(), "hyg-member");
+    assert_eq!(r.status, "200 OK", "a Connect login: {}", r.body);
+    let id = ask_as(&HashMap::new(), &handle, "k2");
+    let r = post_json("/cli/thread/answer", &HashMap::new(), answer(&id));
+    assert_eq!(r.status, "200 OK", "the owner token: {}", r.body);
+    // The agent still closes its own card (void is another route).
+    let id = ask_as(&passport_params(&project_id, &handle), &handle, &handle);
+    let r = void(&passport_params(&project_id, &handle), &handle, &id);
+    assert_eq!(r.status, "200 OK", "k2 thread void by its agent: {}", r.body);
+}
+
+#[test]
+fn the_switch_reads_off_0_false_and_no() {
+    for v in ["off", "OFF", " 0 ", "false", "no"] {
+        assert!(!card_person_only_from(Some(v)), "{v:?}");
+    }
+    for v in [None, Some("on"), Some("1"), Some(""), Some("yes")] {
+        assert!(card_person_only_from(v), "{v:?}");
     }
 }

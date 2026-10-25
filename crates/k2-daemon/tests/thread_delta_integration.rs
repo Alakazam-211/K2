@@ -178,8 +178,12 @@ async fn thread_after_seq_pages_forward_and_carries_card_changes() {
     let v = ok_get(port, "/cli/thread", OWNER, &format!("addr={h}&after_seq=7")).await;
     assert_eq!(v["changed"], json!([]), "nothing changed yet: {v}");
 
-    // Card A is answered (the asking agent's own answer: no wake).
-    ok_post(port, "/cli/thread/answer", &agent, json!({ "addr": h, "id": a_id, "answer": "Ship" })).await;
+    // Card A is answered. Since 0.46.4 only a person answers a card (the
+    // asking agent gets card_person_only), so the owner answers it.
+    let refused = post(port, "/cli/thread/answer", &agent, json!({ "addr": h, "id": a_id, "answer": "Ship" })).await;
+    assert_eq!(refused.status, 403, "{}", refused.body);
+    assert_eq!(refused.json()["error"]["code"], "card_person_only", "{}", refused.body);
+    ok_post(port, "/cli/thread/answer", OWNER, json!({ "addr": h, "id": a_id, "answer": "Ship" })).await;
     let v = ok_get(port, "/cli/thread", OWNER, &format!("addr={h}&after_seq=7")).await;
     assert_eq!(v["conversation_id"], conv.as_str(), "still the warmed-up conversation: {v}");
     assert_eq!((seqs(&v["items"]), seqs(&v["changed"])), (vec![], vec![6]), "the answer is in changed: {v}");

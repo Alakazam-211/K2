@@ -2329,6 +2329,26 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
             return secret_card_human_only();
         }
     }
+    // 0.46.4 (prd-app-caps-0464-v1 AC24): only a person answers any card.
+    // After KV8 (secret cards keep its words for passports), before the
+    // vault branch and `answer_card`, so a refusal writes nothing.
+    if let Err(r) = refuse_card_non_person(params) {
+        // A K2 terminal cell (or any passport KV8 didn't see) on a secret
+        // card keeps KV8's own words.
+        let session_caller = principal_is_bound(params) || principal.is_some() || params.contains_key("cell_session_id");
+        if session_caller {
+            let is_secret_card = opt_param(params, "secret").is_some()
+                || opt_param(params, "value").is_some()
+                || match overlay::card_is_secret(&resolved.conversation_id, &card_id) {
+                    Ok(b) => b,
+                    Err(e) => return card_error(e),
+                };
+            if is_secret_card {
+                return secret_card_human_only();
+            }
+        }
+        return r;
+    }
     // Secret cards are answered into the K2 vault (prd-k2-vault-v1 §10.1).
     if crate::vault::get().is_ok_and(|v| v.request_get(&card_id).is_ok()) {
         return answer_secret_card(params, &resolved, &card_id, session_author);
@@ -2373,6 +2393,86 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
         }
         Err(e) => card_error(e),
     }
+}
+
+/// The daemon environment switch for [`refuse_card_non_person`]; `off`
+/// (or `0`/`false`/`no`) = the 0.46.3 behaviour (agents, K2 terminals and
+/// App or platform passes may answer ordinary choice cards). On by
+/// default. Retirement ledger: removed in 0.46.6.
+pub const CARD_PERSON_ONLY_ENV: &str = "K2_CARD_PERSON_ONLY";
+
+/// Is the choice-card person-only rule on (default yes)?
+pub fn card_person_only_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(on) = CARD_PERSON_ONLY_TEST.with(|c| c.get()) {
+        return on;
+    }
+    card_person_only_from(std::env::var(CARD_PERSON_ONLY_ENV).ok().as_deref())
+}
+
+/// [`card_person_only_enabled`] for one value of the switch (pure).
+pub fn card_person_only_from(value: Option<&str>) -> bool {
+    !matches!(value.map(|v| v.trim().to_ascii_lowercase()).as_deref(), Some("off" | "0" | "false" | "no"))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Unit tests flip the switch on their own thread (never the process
+    /// environment, which parallel tests share).
+    static CARD_PERSON_ONLY_TEST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with the switch forced on this thread (unit tests).
+#[cfg(test)]
+pub(crate) fn with_card_person_only<T>(on: bool, f: impl FnOnce() -> T) -> T {
+    CARD_PERSON_ONLY_TEST.with(|c| c.set(Some(on)));
+    let out = f();
+    CARD_PERSON_ONLY_TEST.with(|c| c.set(None));
+    out
+}
+
+const CARD_PERSON_ONLY_HINT: &str = "only a person answers a card (the Thread tab, the phone, an App's sign-in with the guest's own pass); an agent, a K2 terminal or an App's server never can. To close your own card, k2 thread void.";
+
+/// 403 `card_person_only`.
+fn card_person_only() -> CliResponse {
+    error_json("403 Forbidden", "card_person_only", CARD_PERSON_ONLY_HINT)
+}
+
+/// prd-app-caps-0464-v1 AC24/AC25 (0.46.4): who may answer an ordinary
+/// choice card (and a secret card that got past KV8). Refused with 403
+/// `card_person_only`: an agent passport (its own Thread's card
+/// included), the cell socket, an App's own pass or an owner-minted
+/// platform pass (`request_skin` without a login session), and a guest
+/// login the owner marked as an agent (`k2 app user agent`). Still allowed:
+/// the owner token, Connect logins (their route floor), a person's own App
+/// login session, and a Garden widget with `thread:post` approved on its
+/// placement (it rides the owner token, Q5). Void and ask are other routes.
+/// A mark that can't be read fails closed.
+fn refuse_card_non_person(params: &HashMap<String, String>) -> Result<(), CliResponse> {
+    if !card_person_only_enabled() {
+        return Ok(());
+    }
+    if principal_is_bound(params)
+        || crate::caller_workspace::principal_from_params(params).is_some()
+        || params.contains_key("cell_session_id")
+    {
+        return Err(card_person_only());
+    }
+    if let Some(pass) = request_skin() {
+        let principal = pass.principal_id.as_deref().map(str::trim).filter(|p| !p.is_empty());
+        let Some(principal) = principal.filter(|_| pass.session) else {
+            return Err(card_person_only());
+        };
+        match k2_core::skin::principal_agent_workspace(principal) {
+            Ok(None) => {}
+            Ok(Some(_)) => return Err(card_person_only()),
+            Err(e) => {
+                k2_core::log_debug!("[overlay] card answer: agent mark unreadable for {principal}: {e}");
+                return Err(card_person_only());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// KV8 refusal: a session passport tried to answer a secret card.
@@ -3962,10 +4062,11 @@ mod tests {
         assert_eq!(confirmed.status, "200 OK", "{}", confirmed.body);
     }
 
-    /// KV8 is scoped to secret cards: an agent may still tap its own
-    /// choice card (unchanged behaviour).
+    /// KV8 is scoped to secret cards. Since 0.46.4 (prd-app-caps-0464-v1
+    /// AC24) an agent can't tap its own choice card either
+    /// (`card_person_only`); with `K2_CARD_PERSON_ONLY=off` it still can.
     #[test]
-    fn passport_may_still_answer_a_choice_card() {
+    fn passport_answers_a_choice_card_only_with_the_switch_off() {
         let handle = format!("ovlkv8c{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
@@ -3981,11 +4082,15 @@ mod tests {
         );
         assert_eq!(ask.status, "200 OK", "{}", ask.body);
         let id = json_body(&ask)["id"].as_str().expect("id").to_string();
-        let tap = post_json(
-            "/cli/thread/answer",
-            &passport_params(&project_id, &handle),
-            serde_json::json!({ "addr": handle, "id": id, "answer": "Go" }),
-        );
+        let tap = || {
+            post_json(
+                "/cli/thread/answer",
+                &passport_params(&project_id, &handle),
+                serde_json::json!({ "addr": handle, "id": id, "answer": "Go" }),
+            )
+        };
+        assert_error_code(&tap(), "403 Forbidden", "card_person_only");
+        let tap = with_card_person_only(false, tap);
         assert_eq!(tap.status, "200 OK", "{}", tap.body);
         assert_eq!(json_body(&tap)["status"], "answered");
     }
@@ -5695,7 +5800,7 @@ mod tests {
     #[test]
     fn card_answers_inject_and_record_the_real_answerer() {
         // Reads $HOME (the owner display name) at tap time and again at assert time: hold the env lock so a concurrent temp-HOME test cannot swap it in between.
-        let _home_lock = crate::test_support::lock_home();
+        let _home = crate::test_support::TempHome::new(); // the person pass's agent mark is read from this home's skin.db
         let handle = format!("ovlwho{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
@@ -5703,7 +5808,7 @@ mod tests {
 
         // App guest through the gateway's pass.
         let guest_name = format!("guest{}", &uuid::Uuid::new_v4().to_string()[..6]);
-        let mut pass = skin_pass(&[project_id.clone()]);
+        let mut pass = person_pass(&[project_id.clone()]);
         pass.username = guest_name.clone();
         let g_card = ask_card(&handle, "GuestGo,Stop");
         let g = with_request_skin(Some(pass.clone()), || {
@@ -5781,6 +5886,7 @@ mod tests {
     /// A guest's secret card answer is stamped with the guest, not the owner.
     #[test]
     fn guest_secret_answer_injects_from_the_guest() {
+        let _home = crate::test_support::TempHome::new();
         crate::vault::ensure_test_vault();
         let handle = format!("ovlgsec{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
@@ -5795,7 +5901,7 @@ mod tests {
         assert_eq!(posted.status, "200 OK", "{}", posted.body);
         let id = json_body(&posted)["id"].as_str().expect("id").to_string();
         let guest_name = format!("gsec{}", &uuid::Uuid::new_v4().to_string()[..6]);
-        let mut pass = skin_pass(&[project_id]);
+        let mut pass = person_pass(&[project_id]);
         pass.username = guest_name.clone();
         let set = with_request_skin(Some(pass), || {
             dispatch_post(
@@ -6017,6 +6123,24 @@ mod tests {
         }
     }
 
+    /// A person's own App login session in `rooms` (Thread caps): who may
+    /// answer a card since 0.46.4 (prd-app-caps-0464-v1 AC25). The principal
+    /// carries no agent mark.
+    fn person_pass(rooms: &[String]) -> k2_core::skin::SkinPass {
+        let caps = vec!["thread:read".to_string(), "thread:post".to_string()];
+        k2_core::skin::SkinPass {
+            id: "person-pass".into(),
+            principal_id: Some(format!("prin-{}", uuid::Uuid::new_v4())),
+            username: "guest".into(),
+            caps: caps.clone(),
+            rooms: rooms.to_vec(),
+            session: true,
+            room_policy: rooms.iter().map(|r| (r.clone(), caps.clone())).collect(),
+            app: "host".into(),
+            room_paths: Default::default(),
+        }
+    }
+
     #[test]
     fn skin_thread_rooms_pinned_only() {
         let handle = format!("ovlskin{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -6209,13 +6333,14 @@ mod tests {
 
     #[test]
     fn skin_answer_and_void_use_thread_rooms() {
+        let _home = crate::test_support::TempHome::new();
         let handle = format!("ovlskans{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let other = format!("ovlskoth{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         let (other_id, _) = seed(&other);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
         pin(&other_id, &uuid::Uuid::new_v4().to_string());
-        let pass = skin_pass(&[project_id.clone()]);
+        let pass = person_pass(&[project_id.clone()]);
 
         let ask = dispatch_post(
             "/cli/thread/ask",
@@ -6324,6 +6449,7 @@ mod tests {
 
     #[test]
     fn skin_secret_answer_omits_value() {
+        let _home = crate::test_support::TempHome::new();
         crate::vault::ensure_test_vault();
         let handle = format!("ovlsksec{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
@@ -6344,7 +6470,7 @@ mod tests {
         );
         assert_eq!(posted.status, "200 OK", "{}", posted.body);
         let id = json_body(&posted)["id"].as_str().expect("id").to_string();
-        let pass = skin_pass(&[project_id]);
+        let pass = person_pass(&[project_id]);
         let set = with_request_skin(Some(pass), || {
             dispatch_post(
                 "/cli/thread/answer",
@@ -7350,7 +7476,8 @@ mod tests {
         let card = ask(None);
         drain(&card);
         let before = crate::overlay_ws::current_rev();
-        let r = post_json("/cli/thread/answer", &passport_params(&project_id, &handle), serde_json::json!({ "addr": handle, "id": card, "answer": "Go" }));
+        // A person answers (since 0.46.4 an agent never does).
+        let r = post_json("/cli/thread/answer", &HashMap::new(), serde_json::json!({ "addr": handle, "id": card, "answer": "Go" }));
         assert_eq!(r.status, "200 OK", "{}", r.body);
         check("answer", before, &drain(&card));
 

@@ -36346,6 +36346,10 @@ EXIT 3 — STOP LOOPING
   forbidden      policy said no (including some peer/federation cases).
   not_connected  live msg / tray / read needs a local connection first
                  (`k2 connections add`). Not "try a different username".
+  card_person_only  (0.46.4) only a person answers a Thread card. You,
+                 a K2 terminal or an App's server never can, your own card
+                 included: close it with `k2 thread void <addr> <id>`.
+                 An App answers with the guest's own pass, never its own.
 
 USAGE (2)
   Unknown flags fail loud. `k2 study nosuch` is exit 2 and lists

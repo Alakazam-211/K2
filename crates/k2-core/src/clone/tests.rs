@@ -2102,6 +2102,14 @@ fn older_destination_manifest_ignores_new_fields() {
 /// with `fs::write` (0666 & umask). An executable round-trips executable,
 /// every regular file keeps its permission bits, and setuid/setgid/sticky
 /// never come through.
+///
+/// The special bits are tested from the bundle's tar headers, not from a
+/// source file: making a setuid file needs a privilege K2 Compute's job wall
+/// removes (`RestrictSUIDSGID`), and the unpack is the guard either way (a
+/// bundle can be hand-made with any header). So: a real source tree with
+/// ordinary modes round-trips through inventory → bundle → unpack, and a
+/// hand-built bundle whose headers carry setuid, setgid and sticky (checked
+/// to be in the archive as written) unpacks without them.
 #[cfg(unix)]
 #[test]
 fn unpack_keeps_file_modes_but_never_setuid_setgid_or_sticky() {
@@ -2116,8 +2124,6 @@ fn unpack_keeps_file_modes_but_never_setuid_setgid_or_sticky() {
     set("scripts/deploy.sh", "#!/bin/sh\necho deploy\n", 0o755);
     set("scripts/owner-only.sh", "#!/bin/sh\necho mine\n", 0o700);
     set("notes/private.txt", "private\n", 0o640);
-    set("tools/setuid-tool", "#!/bin/sh\n", 0o4755);
-    set("tools/sticky", "x\n", 0o1755);
 
     let project = fx.project.to_string_lossy().to_string();
     let inv = inventory(&project, opts(&fx.home)).unwrap();
@@ -2134,8 +2140,6 @@ fn unpack_keeps_file_modes_but_never_setuid_setgid_or_sticky() {
     assert_eq!(mode("scripts/deploy.sh"), 0o755, "an executable script stays executable");
     assert_eq!(mode("scripts/owner-only.sh"), 0o700);
     assert_eq!(mode("notes/private.txt"), 0o640);
-    assert_eq!(mode("tools/setuid-tool"), 0o755, "setuid never comes through a clone");
-    assert_eq!(mode("tools/sticky"), 0o755, "sticky never comes through a clone");
     assert_eq!(mode("README.md") & 0o111, 0, "a plain file does not become executable");
     assert_eq!(
         fs::read_to_string(res.dest_path.join("scripts/deploy.sh")).unwrap(),
@@ -2150,5 +2154,63 @@ fn unpack_keeps_file_modes_but_never_setuid_setgid_or_sticky() {
     assert!(!sessions.is_empty(), "the fixture's sessions landed");
     for s in sessions {
         assert_eq!(fs::metadata(&s).unwrap().permissions().mode() & 0o7000, 0, "{}", s.display());
+    }
+
+    // The special bits, from the headers of a hand-built bundle.
+    let source = "/x/privileged";
+    let slug = claude_project_hash(source);
+    let session_rel = format!("sessions/{slug}/s.jsonl");
+    let entries: Vec<(String, u32, u32)> = vec![
+        // (archive path, header mode, mode after unpack)
+        ("workspace/tools/setuid-tool".into(), 0o4755, 0o755),
+        ("workspace/tools/setgid-tool".into(), 0o2755, 0o755),
+        ("workspace/tools/sticky".into(), 0o1755, 0o755),
+        ("workspace/tools/all-special".into(), 0o7750, 0o750),
+        ("workspace/tools/plain".into(), 0o644, 0o644),
+        (session_rel, 0o6600, 0o600),
+    ];
+    let hostile = fx._root.path().join("privileged-bundle.tar.gz");
+    {
+        let f = fs::File::create(&hostile).unwrap();
+        let mut b = tar::Builder::new(flate2::write::GzEncoder::new(f, flate2::Compression::default()));
+        let manifest_json = serde_json::to_vec(&manual_manifest(source)).unwrap();
+        let mut h = tar::Header::new_gnu();
+        h.set_size(manifest_json.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, "manifest.json", &manifest_json[..]).unwrap();
+        for (rel, m, _) in &entries {
+            let body = b"#!/bin/sh\n";
+            let mut h = tar::Header::new_gnu();
+            h.set_size(body.len() as u64);
+            h.set_mode(*m);
+            h.set_cksum();
+            b.append_data(&mut h, rel, &body[..]).unwrap();
+        }
+        b.into_inner().unwrap().finish().unwrap();
+    }
+    // The input really carries the bits: read the headers back.
+    let mut in_archive = std::collections::BTreeMap::new();
+    let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(&hostile).unwrap()));
+    for e in ar.entries().unwrap() {
+        let e = e.unwrap();
+        in_archive.insert(e.path().unwrap().to_string_lossy().into_owned(), e.header().mode().unwrap());
+    }
+    for (rel, m, _) in &entries {
+        assert_eq!(in_archive.get(rel), Some(m), "header mode of {rel} in the hand-built bundle");
+    }
+
+    let dest_parent2 = fx._root.path().join("dest-parent-2");
+    let dest_home2 = fx._root.path().join("dest-home-2");
+    fs::create_dir_all(&dest_parent2).unwrap();
+    fs::create_dir_all(&dest_home2).unwrap();
+    let (res2, _m2) = unpack_bundle(&hostile, &dest_parent2, &dest_home2).unwrap();
+    for (rel, header, want) in &entries {
+        let out = match rel.strip_prefix("workspace/") {
+            Some(r) => res2.dest_path.join(r),
+            None => dest_home2.join(".claude/projects").join(&res2.remote_slug).join("s.jsonl"),
+        };
+        let got = fs::metadata(&out).unwrap_or_else(|e| panic!("{rel} unpacked to {}: {e}", out.display())).permissions().mode() & 0o7777;
+        assert_eq!(got, *want, "{rel}: header {header:o} unpacks as {want:o}, never setuid/setgid/sticky");
     }
 }

@@ -459,9 +459,10 @@ async fn s3_a_tied_user_stays_at_the_agents_workspace_until_their_own_reset() {
     assert_eq!(k2_core::skin::ties::LOCK_ORDER_VIOLATIONS.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
-/// T3.9: the App → workspace lookup never runs under the skin mutex, so a
-/// thread holding the daemon DB mutex while it waits on the skin mutex
-/// never deadlocks with a tied login.
+/// T3.9: the App → workspace lookup never runs under the skin mutex. While
+/// one thread holds the daemon DB mutex, a tied login waits for it with
+/// the skin mutex free (another thread reads skin.db meanwhile), and
+/// finishes once the DB is released; the probe counts no violation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s3_a_tied_login_never_waits_on_the_daemon_db_under_the_skin_lock() {
     let env = setup(&[]);
@@ -475,35 +476,37 @@ async fn s3_a_tied_login_never_waits_on_the_daemon_db_under_the_skin_lock() {
     let u = format!("lk{tag}");
     let r = post(port, "/cli/skin/users", &agent, json!({ "username": u, "app": shop, "password": "s3cret-horse" })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let holder = {
-        let stop = stop.clone();
-        std::thread::spawn(move || {
-            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
-                let db = k2_core::db::shared();
-                let _conn = db.lock();
-                // DB mutex held → wants the skin mutex.
-                let _ = k2_core::skin::list_principals().expect("principals");
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        })
-    };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    for _ in 0..20 {
-        let u = u.clone();
-        let shop = shop.clone();
-        let r = tokio::time::timeout(
-            deadline.saturating_duration_since(std::time::Instant::now()),
+    for round in 0..3 {
+        let (held_tx, held_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let db = k2_core::db::shared();
+            let _conn = db.lock();
+            held_tx.send(()).expect("held");
+            release_rx.recv_timeout(std::time::Duration::from_secs(10)).expect("release");
+        });
+        held_rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the holder took the DB mutex");
+        let login = {
+            let (u, shop) = (u.clone(), shop.clone());
             tokio::task::spawn_blocking(move || {
                 let token = k2_core::skin::create_app_session_token(&u, &shop).expect("tied login");
                 k2_core::skin::resolve_skin_token(&token.raw).expect("resolves")
-            }),
-        )
-        .await;
-        assert!(r.is_ok(), "a tied login deadlocked against a DB-then-skin holder");
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        // The login waits on the DB, never holding the skin mutex: skin.db
+        // stays readable from another thread.
+        let read = tokio::time::timeout(std::time::Duration::from_secs(3), tokio::task::spawn_blocking(|| k2_core::skin::ties::list().expect("ties")))
+            .await;
+        assert!(read.is_ok(), "round {round}: the skin mutex was held while the login waited on the DB");
+        release_tx.send(()).expect("release");
+        holder.join().expect("holder");
+        let pass = tokio::time::timeout(std::time::Duration::from_secs(5), login)
+            .await
+            .unwrap_or_else(|_| panic!("round {round}: the tied login never finished"))
+            .expect("login task");
+        assert_eq!(pass.rooms, Vec::<String>::new(), "a role-less App grant: Thread-dark, inside the ceiling");
     }
-    stop.store(true, std::sync::atomic::Ordering::SeqCst);
-    holder.join().expect("holder");
     assert_eq!(k2_core::skin::ties::LOCK_ORDER_VIOLATIONS.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 

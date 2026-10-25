@@ -1126,6 +1126,9 @@ fn answer(w: &W, needle: &str, a: &str) {
     w.borrow_mut().answers.push((needle.into(), a.into()));
 }
 
+/// The A-L2 check's needle: the reserved names in the source database.
+const RESERVED: &str = "pg_namespace WHERE nspname = '_k2_dual'";
+
 fn hba_file(t: &T, m: u32) {
     std::fs::write(
         t.p(&format!("/etc/postgresql/{m}/main/pg_hba.conf")),
@@ -1198,6 +1201,7 @@ fn dual_setup_source_then_subscribe() {
     let (t, w) = dual_box();
     answer(&w, "SHOW wal_level", "logical\n");
     answer(&w, "pg_roles WHERE rolname = 'k2_repl_", "0\n");
+    answer(&w, RESERVED, "0\n");
     let argv = ["pg", "dual", "setup-source", "16", "17", "ws_jobs", DUAL_ID];
     let o = t.call_in(&argv, &dual_pw());
     let v = json(&o);
@@ -1213,6 +1217,15 @@ fn dual_setup_source_then_subscribe() {
     assert!(db.1.contains("CREATE EVENT TRIGGER k2_dual_freeze"));
     let h = std::fs::read_to_string(t.p("/etc/postgresql/16/main/pg_hba.conf")).unwrap();
     assert!(h.contains(k2_root_proto::apps::REPL_GUARD_LINE), "the guard is there before the role");
+    // A-M2: the run's own allow lines above the guard that refuses every
+    // other database, all above Debian's `host all all`.
+    let allow = h.find("host ws_jobs k2_repl_0123456789ab 127.0.0.1/32 scram-sha-256").expect("allow v4");
+    assert!(h.contains("host ws_jobs k2_repl_0123456789ab ::1/128 scram-sha-256"), "{h}");
+    let all = h.find(k2_root_proto::apps::REPL_GUARD_ALL_LINE).expect("guard all");
+    assert!(allow < all && all < h.find("host all all").unwrap(), "{h}");
+    assert!(t.non_query_calls().iter().any(|c| c.ends_with("reload postgresql@16-main")), "{:?}", t.non_query_calls());
+    let reserved = sql.iter().position(|(_, s)| s.contains(RESERVED)).expect("reserved names checked");
+    assert!(reserved < sql.iter().position(|(_, s)| s.contains("CREATE ROLE")).unwrap());
     assert!(t.audit.0.borrow().iter().any(|l| l.contains("\"verb\":\"pg dual setup-source 16 17\"") && l.contains("\"dualId\":\"0123456789ab\"")));
 
     answer(&w, "datconnlimit FROM pg_catalog.pg_database", "0,0,0\n");
@@ -1245,6 +1258,18 @@ fn dual_refusals_change_nothing() {
     let o = t.call_in(&["pg", "dual", "setup-source", "16", "17", "ws_jobs", DUAL_ID], &dual_pw());
     assert!(o.stderr.starts_with("dual_exists"), "{}", o.stderr);
     assert!(!w.borrow().sql.iter().any(|(_, s)| s.contains("CREATE ROLE")));
+    // A-L2: a tenant's own `_k2_dual` schema / `k2_dual_<id>` publication /
+    // `k2_dual_freeze` trigger: refused, never taken over (teardown would
+    // drop them by name).
+    let (t, w) = dual_box();
+    answer(&w, "SHOW wal_level", "logical\n");
+    answer(&w, "pg_roles WHERE rolname = 'k2_repl_", "0\n");
+    answer(&w, RESERVED, "1\n");
+    let o = t.call_in(&["pg", "dual", "setup-source", "16", "17", "ws_jobs", DUAL_ID], &dual_pw());
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("reserved_names"), "{}", o.stderr);
+    assert!(!w.borrow().sql.iter().any(|(_, s)| s.contains("CREATE ROLE") || s.contains("CREATE PUBLICATION")));
+    assert!(!std::fs::read_to_string(t.p("/etc/postgresql/16/main/pg_hba.conf")).unwrap().contains("k2_repl"), "hba untouched");
     // Not a K2 database.
     let (t, w) = dual_box();
     answer(&w, "SHOW wal_level", "logical\n");
@@ -1277,6 +1302,7 @@ fn dual_refusals_change_nothing() {
     let (t, w) = dual_box();
     answer(&w, "SHOW wal_level", "logical\n");
     answer(&w, "pg_roles WHERE rolname = 'k2_repl_", "0\n");
+    answer(&w, RESERVED, "0\n");
     w.borrow_mut().fail_on =
         Some(("CREATE ROLE".into(), format!("ERROR:  boom at '{DUAL_PW}'\nLINE 1: CREATE ROLE x LOGIN '{DUAL_PW}'")));
     let o = t.call_in(&["pg", "dual", "setup-source", "16", "17", "ws_jobs", DUAL_ID], &dual_pw());
@@ -1292,9 +1318,16 @@ fn dual_refusals_change_nothing() {
 #[test]
 fn dual_detach_teardown_and_status() {
     let (t, w) = dual_box();
+    let hba = t.p("/etc/postgresql/16/main/pg_hba.conf");
+    let with_run = k2_root_proto::apps::hba_dual(&std::fs::read_to_string(&hba).unwrap(), "ws_jobs", DUAL_ID, true).unwrap().unwrap();
+    std::fs::write(&hba, &with_run).unwrap();
     answer(&w, "pg_subscription WHERE subname", "1\n");
     let v = json(&t.call(&["pg", "dual", "detach", "16", "17", "ws_jobs", DUAL_ID]));
     assert_eq!((v["subscriptionDropped"].as_bool(), v["roleDropped"].as_bool()), (Some(true), Some(false)), "{v}");
+    // A-M2: the run's allow lines go at detach; the guards stay.
+    assert_eq!(v["hbaChanged"], true, "{v}");
+    let h = std::fs::read_to_string(&hba).unwrap();
+    assert!(!h.contains("k2_repl_0123456789ab") && h.contains(k2_root_proto::apps::REPL_GUARD_ALL_LINE), "{h}");
     let sql = w.borrow().sql.clone();
     let drop_sub = sql.iter().position(|(p, s)| *p == 5433 && s.contains("SET (slot_name = NONE)")).expect("subscription dropped on the target");
     let src = sql
@@ -1315,11 +1348,41 @@ fn dual_detach_teardown_and_status() {
     let v = json(&t.call(&["pg", "dual", "teardown", "16", "17", "ws_jobs", DUAL_ID]));
     assert!(v["notes"].to_string().contains("target cluster is down"), "{v}");
     assert!(w.borrow().sql.iter().any(|(p, s)| *p == 5432 && s.contains("pg_drop_replication_slot")));
-    // Status: open, read-only, each side its own answer.
+    // A-M1: a closed source (the kept copy after a switch) is opened to
+    // the helper alone (connection limit 0 first), cleaned, closed again,
+    // and the role dropped; closed again even when the cleanup fails.
+    for fail in [false, true] {
+        let (t, w) = dual_box();
+        answer(&w, "datallowconn::text FROM pg_catalog.pg_database", "false\n");
+        answer(&w, "pg_subscription WHERE subname", "0\n");
+        if fail {
+            w.borrow_mut().fail_on = Some(("DROP EVENT TRIGGER".into(), "ERROR:  boom".into()));
+        }
+        let o = t.call(&["pg", "dual", "teardown", "16", "17", "ws_jobs", DUAL_ID]);
+        let sql = w.borrow().sql.clone();
+        let open = sql.iter().position(|(p, s)| *p == 5432 && s.contains("CONNECTION LIMIT 0;\nALTER DATABASE \"ws_jobs\" ALLOW_CONNECTIONS true")).expect("opened");
+        let clean = sql.iter().position(|(p, s)| *p == 5432 && s.starts_with("DROP EVENT TRIGGER")).expect("cleanup ran");
+        let close = sql.iter().position(|(p, s)| *p == 5432 && s.contains("ALLOW_CONNECTIONS false")).expect("closed again");
+        assert!(open < clean && clean < close, "{fail}");
+        if fail {
+            assert_ne!(o.code, exit::OK);
+            assert!(!sql.iter().any(|(_, s)| s.contains("DROP ROLE")), "a failed cleanup keeps the role (its grants would block the drop)");
+        } else {
+            let v = json(&o);
+            assert_eq!(v["roleDropped"], true);
+            let drop = sql.iter().position(|(p, s)| *p == 5432 && s.contains("DROP ROLE \"k2_repl_0123456789ab\"")).expect("role dropped");
+            assert!(close < drop);
+            assert!(v["notes"].to_string().contains("opened to the helper alone"), "{v}");
+        }
+    }
+    // Status: read-only, each side its own answer; the daemon's alone (A-L3).
     let (t, w) = dual_box();
     answer(&w, "'walLevel', pg_catalog.current_setting", r#"{"walLevel":"logical","slot":{"active":true,"lagBytes":12}}"#);
     answer(&w, "'subscription', EXISTS", r#"{"subscription":true,"tablesReady":3,"tablesTotal":3}"#);
     t.as_agent();
+    assert_eq!(t.call(&["pg", "dual", "status", "16", "17", "ws_jobs", DUAL_ID]).code, exit::NOT_DAEMON);
+    assert!(w.borrow().sql.is_empty(), "refused before any query");
+    t.as_daemon();
     let v = json(&t.call(&["pg", "dual", "status", "16", "17", "ws_jobs", DUAL_ID]));
     assert_eq!(v["source"]["slot"]["lagBytes"], 12, "{v}");
     assert_eq!(v["target"]["tablesReady"], 3, "{v}");
@@ -1360,6 +1423,13 @@ fn schema_only_dump_force_kept_off_force_back_and_quiesce_repl() {
     let (port, sql) = w.borrow().sql.last().cloned().unwrap();
     assert_eq!(port, 5432);
     assert!(sql.starts_with("ALTER DATABASE \"ws_jobs\" CONNECTION LIMIT 0;") && sql.contains("backend_type <> 'walsender'"), "{sql}");
+    assert!(sql.contains("RAISE EXCEPTION 'k2_quiesce_busy"), "B2: waits for the sessions to exit: {sql}");
+    // Sessions that outlive the wait: the error reaches the daemon.
+    w.borrow_mut().fail_on = Some(("k2_quiesce_busy".into(), "ERROR:  k2_quiesce_busy: sessions of ws_jobs did not exit".into()));
+    let o = t.call(&["pg", "allow-conn", "16", "ws_jobs", "quiesce-repl"]);
+    assert_ne!(o.code, exit::OK);
+    assert!(o.stderr.contains("k2_quiesce_busy"), "{}", o.stderr);
+    w.borrow_mut().fail_on = None;
     t.as_agent();
     assert_eq!(t.call_in(&["pg", "force-rls", "17", "ws_jobs", "on"], br#"{"oids":[16500]}"#).code, exit::NOT_DAEMON);
 }

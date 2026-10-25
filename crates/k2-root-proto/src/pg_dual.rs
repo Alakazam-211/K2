@@ -231,6 +231,37 @@ pub fn setup_db_sql(n: &DualNames, db: &str) -> String {
     )
 }
 
+/// In the source database: how many of the names a run reserves already
+/// exist there (the freeze schema, this run's publication, the freeze
+/// event trigger). `setup-source` refuses unless `0`, so teardown, which
+/// drops them by name, only ever drops what K2 made (security review A-L2).
+pub fn reserved_count_sql(n: &DualNames) -> String {
+    format!(
+        "SELECT (SELECT count(*) FROM pg_catalog.pg_namespace WHERE nspname = '{fs}') + \
+         (SELECT count(*) FROM pg_catalog.pg_publication WHERE pubname = '{p}') + \
+         (SELECT count(*) FROM pg_catalog.pg_event_trigger WHERE evtname = '{ft}');\n",
+        fs = FREEZE_SCHEMA,
+        p = n.publication,
+        ft = FREEZE_TRIGGER,
+    )
+}
+
+/// From the `postgres` database: does `db` accept connections
+/// (`datallowconn`)? `true`/`false`, empty when it's gone.
+pub fn db_open_sql(db: &str) -> String {
+    format!("SELECT datallowconn::text FROM pg_catalog.pg_database WHERE datname = '{db}';\n")
+}
+
+/// From the `postgres` database: let the helper (a superuser) into a closed
+/// database for teardown without letting anyone else in (`CONNECTION
+/// LIMIT 0` first; superusers are exempt), and close it again after.
+pub fn open_for_cleanup_sql(db: &str) -> String {
+    format!("ALTER DATABASE \"{db}\" CONNECTION LIMIT 0;\nALTER DATABASE \"{db}\" ALLOW_CONNECTIONS true;\n")
+}
+pub fn close_after_cleanup_sql(db: &str) -> String {
+    format!("ALTER DATABASE \"{db}\" ALLOW_CONNECTIONS false;\n")
+}
+
 /// The publication exists on the source (`subscribe` checks first).
 pub fn publication_count_sql(n: &DualNames) -> String {
     format!("SELECT count(*) FROM pg_catalog.pg_publication WHERE pubname = '{}';\n", n.publication)
@@ -289,10 +320,10 @@ pub fn detach_source_sql(n: &DualNames, db: &str) -> String {
          DROP FUNCTION IF EXISTS \"{fs}\".freeze();\n\
          DROP SCHEMA IF EXISTS \"{fs}\";\n\
          DO $k2$DECLARE i int := 0; BEGIN\n\
-         PERFORM pg_catalog.pg_terminate_backend(active_pid) FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}' AND active;\n\
-         WHILE EXISTS (SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}' AND active) AND i < 100 LOOP\n\
+         PERFORM pg_catalog.pg_terminate_backend(active_pid) FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}' AND database = '{db}' AND active;\n\
+         WHILE EXISTS (SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}' AND database = '{db}' AND active) AND i < 100 LOOP\n\
          PERFORM pg_catalog.pg_sleep(0.1); i := i + 1; END LOOP;\n\
-         IF EXISTS (SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}') THEN\n\
+         IF EXISTS (SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}' AND database = '{db}') THEN\n\
          PERFORM pg_catalog.pg_drop_replication_slot('{slot}'); END IF; END$k2$;\n\
          DROP PUBLICATION IF EXISTS \"{p}\";\n\
          DO $k2$DECLARE s name; BEGIN\n\
@@ -312,23 +343,47 @@ pub fn detach_source_sql(n: &DualNames, db: &str) -> String {
 }
 
 /// In the source cluster's `postgres` database: the role (after
-/// [`detach_source_sql`] took its grants inside the database).
+/// [`detach_source_sql`] took its grants inside the database). The
+/// `REVOKE CONNECT` only while the database still exists (security review
+/// A-M1: a dropped database left the role behind).
 pub fn drop_role_sql(n: &DualNames, db: &str) -> String {
     format!(
         "DO $k2$BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{r}') THEN\n\
-         EXECUTE 'REVOKE CONNECT ON DATABASE \"{db}\" FROM \"{r}\"';\n\
+         IF EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname = '{db}') THEN\n\
+         EXECUTE 'REVOKE CONNECT ON DATABASE \"{db}\" FROM \"{r}\"'; END IF;\n\
          EXECUTE 'DROP ROLE \"{r}\"'; END IF; END$k2$;\n",
         r = n.role
     )
 }
 
+/// How long the write block waits for the ended sessions to exit, in
+/// tenths of a second.
+pub const QUIESCE_WAIT_TENTHS: u32 = 300;
+/// The error the write block raises when sessions outlive the wait.
+pub const QUIESCE_BUSY: &str = "k2_quiesce_busy";
+
 /// The `ALTER DATABASE … CONNECTION LIMIT 0` write block that keeps the
-/// logical walsender (L6): every other session of the database ends.
+/// logical walsender (L6): every other session of the database ends, and
+/// the block returns only once they have all exited (security review B2:
+/// `pg_terminate_backend` only signals; a commit in flight lands in WAL
+/// before its backend is gone, so the drain target is read after this).
+/// Sessions still there after [`QUIESCE_WAIT_TENTHS`] raise
+/// [`QUIESCE_BUSY`] (the cut-over then undoes). The last line is the
+/// number of sessions ended.
 pub fn quiesce_repl_sql(db: &str) -> String {
     format!(
         "ALTER DATABASE \"{db}\" CONNECTION LIMIT 0;\n\
-         SELECT count(pg_catalog.pg_terminate_backend(pid)) FROM pg_catalog.pg_stat_activity \
-         WHERE datname = '{db}' AND pid <> pg_catalog.pg_backend_pid() AND backend_type <> 'walsender';\n"
+         SELECT pg_catalog.set_config('k2.ended', count(pg_catalog.pg_terminate_backend(pid))::text, false) \
+         FROM pg_catalog.pg_stat_activity \
+         WHERE datname = '{db}' AND pid <> pg_catalog.pg_backend_pid() AND backend_type <> 'walsender';\n\
+         DO $k2$DECLARE i int := 0; BEGIN\n\
+         WHILE EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE datname = '{db}' \
+         AND pid <> pg_catalog.pg_backend_pid() AND backend_type <> 'walsender') AND i < {QUIESCE_WAIT_TENTHS} LOOP\n\
+         PERFORM pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE datname = '{db}' \
+         AND pid <> pg_catalog.pg_backend_pid() AND backend_type <> 'walsender';\n\
+         PERFORM pg_catalog.pg_sleep(0.1); i := i + 1; END LOOP;\n\
+         IF i >= {QUIESCE_WAIT_TENTHS} THEN RAISE EXCEPTION '{QUIESCE_BUSY}: sessions of {db} did not exit'; END IF; END$k2$;\n\
+         SELECT pg_catalog.current_setting('k2.ended');\n"
     )
 }
 
@@ -371,10 +426,11 @@ pub fn status_source_sql(n: &DualNames) -> String {
         "SELECT pg_catalog.json_build_object(\
          'walLevel', pg_catalog.current_setting('wal_level'), \
          'currentLsn', pg_catalog.pg_current_wal_lsn()::text, \
+         'insertLsn', pg_catalog.pg_current_wal_insert_lsn()::text, \
          'slot', (SELECT pg_catalog.json_build_object('active', active, 'confirmedFlushLsn', confirmed_flush_lsn::text, \
            'walStatus', wal_status, 'safeWalSize', safe_wal_size, \
            'lagBytes', pg_catalog.pg_wal_lsn_diff(pg_catalog.pg_current_wal_lsn(), confirmed_flush_lsn)) \
-           FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}'), \
+           FROM pg_catalog.pg_replication_slots WHERE slot_name = '{slot}' AND database = pg_catalog.current_database()), \
          'walsenders', (SELECT count(*) FROM pg_catalog.pg_stat_replication WHERE usename = '{r}'), \
          'publication', EXISTS (SELECT 1 FROM pg_catalog.pg_publication WHERE pubname = '{p}'), \
          'freeze', EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = '{ft}'), \
@@ -493,18 +549,43 @@ mod tests {
         assert!(src.starts_with("DROP EVENT TRIGGER IF EXISTS k2_dual_freeze;"), "the freeze goes first");
         assert!(!src.contains("CASCADE"), "never a cascade: a tenant object depending on the freeze fails the drop loudly");
         assert!(src.contains("pg_drop_replication_slot('k2_dual_0123456789ab')"));
+        // A-L1: every slot test is tied to this run's database.
+        assert_eq!(src.matches("slot_name = 'k2_dual_0123456789ab'").count(), 3);
+        assert_eq!(src.matches("slot_name = 'k2_dual_0123456789ab' AND database = 'ws_jobs'").count(), 3, "{src}");
         assert!(src.contains("DROP PUBLICATION IF EXISTS \"k2_dual_0123456789ab\";"));
         assert!(!src.contains("DROP ROLE"), "the role stays until teardown");
         let role = drop_role_sql(&n(), "ws_jobs");
         assert!(role.contains("REVOKE CONNECT ON DATABASE \"ws_jobs\"") && role.contains("DROP ROLE \"k2_repl_0123456789ab\""));
+        // A-M1: the REVOKE only while the database exists; the DROP ROLE regardless.
+        let (guard, revoke, drop) =
+            (role.find("datname = 'ws_jobs'").unwrap(), role.find("REVOKE CONNECT").unwrap(), role.find("DROP ROLE").unwrap());
+        assert!(guard < revoke && revoke < drop);
+        assert!(role[revoke..drop].contains("END IF;"), "the DROP ROLE is outside the database guard: {role}");
+
+        // A-L2: the names teardown drops are refused at setup when present.
+        let res = reserved_count_sql(&n());
+        for w in ["nspname = '_k2_dual'", "pubname = 'k2_dual_0123456789ab'", "evtname = 'k2_dual_freeze'"] {
+            assert!(res.contains(w), "{w}");
+        }
+        assert_eq!(db_open_sql("ws_jobs"), "SELECT datallowconn::text FROM pg_catalog.pg_database WHERE datname = 'ws_jobs';\n");
+        let o = open_for_cleanup_sql("ws_jobs");
+        assert!(o.find("CONNECTION LIMIT 0").unwrap() < o.find("ALLOW_CONNECTIONS true").unwrap(), "nobody else gets in");
 
         let q = quiesce_repl_sql("ws_jobs");
         assert!(q.contains("CONNECTION LIMIT 0") && q.contains("backend_type <> 'walsender'"));
+        // B2: waits (bounded) for the ended sessions to exit, raises when they don't.
+        let (term, wait, raise) = (q.find("set_config('k2.ended'").unwrap(), q.find("WHILE EXISTS").unwrap(), q.find("RAISE EXCEPTION 'k2_quiesce_busy").unwrap());
+        assert!(term < wait && wait < raise);
+        assert!(q.contains(&format!("i < {QUIESCE_WAIT_TENTHS}")));
+        assert!(q.trim_end().ends_with("SELECT pg_catalog.current_setting('k2.ended');"), "the last line is the count");
 
         let f = force_rls_sql(&[16500, 16501]);
         assert!(f.contains("ARRAY[16500, 16501]") && f.contains("relkind IN ('r', 'p')") && f.contains("RAISE EXCEPTION"));
         assert!(f.trim_end().ends_with("SELECT 2;"));
         assert!(REFRESH_SQL.contains("REFRESH MATERIALIZED VIEW"));
         assert!(status_source_sql(&n()).contains("pg_wal_lsn_diff") && status_target_sql(&n()).contains("srsubstate = 'r'"));
+        let st = status_source_sql(&n());
+        assert!(st.contains("'insertLsn', pg_catalog.pg_current_wal_insert_lsn()"), "B2: the drain target");
+        assert!(st.contains("slot_name = 'k2_dual_0123456789ab' AND database = pg_catalog.current_database()"), "A-L1");
     }
 }

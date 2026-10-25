@@ -1469,13 +1469,16 @@ impl Verb {
             | Verb::PgMoveFileRemove { .. }
             | Verb::PgAllowConn { .. }
             | Verb::PgDropDb { .. } => Daemon,
-            // Live dual-run (protocol 10). Reading: open. Writing the
+            // Live dual-run (protocol 10). Reading the drop-in: open.
+            // `pg dual status` reads both clusters' catalogs per call, so
+            // it is the daemon's alone (security review A-L3: no caller but
+            // the daemon, whose loops pace it, can make root run it in a
+            // loop). Writing the
             // `wal_level` drop-in (any later restart applies it, L25), a
             // replication role, a publication, a subscription, the DDL
             // freeze, FORCE RLS: the daemon's call only (the owner's for
             // `--prepare-live`, the daemon gate's otherwise).
             Verb::PgLogicalConf { wal_keep_mb: None, .. } => Open,
-            Verb::PgDual { op: crate::pg_dual::DualOp::Status, .. } => Open,
             Verb::PgLogicalConf { .. } | Verb::PgForceRls { .. } | Verb::PgDual { .. } => Daemon,
 
             Verb::KeepStatus | Verb::KeepGenGet => Open,
@@ -2463,6 +2466,9 @@ mod tests {
                         | Verb::PgMoveRestore { .. }
                         // Daemon-class only to keep targets from agents; read-only.
                         | Verb::CredsStatus
+                        // Daemon-class so no other caller can loop it (A-L3);
+                        // read-only, and the drain polls it mid cut-over.
+                        | Verb::PgDual { op: crate::pg_dual::DualOp::Status, .. }
                 )
             {
                 assert!(v.takes_lock(), "{v:?}");
@@ -2542,9 +2548,9 @@ mod tests {
     fn pgdual_class_table() {
         let open: &[&[&str]] = &[
             &["pg", "logical-conf", "16", "--dry-run"],
-            &["pg", "dual", "status", "16", "17", "ws_jobs", "0123456789ab"],
         ];
         let daemon: &[&[&str]] = &[
+            &["pg", "dual", "status", "16", "17", "ws_jobs", "0123456789ab"],
             &["pg", "logical-conf", "16", "--wal-keep", "2048"],
             &["pg", "logical-conf", "16", "--wal-keep", "8192", "--if-logical"],
             &["pg", "move-dump", "16", "17", "ws_jobs", "20261020T101500Z", "--schema-only"],
@@ -2569,6 +2575,8 @@ mod tests {
             assert_eq!(v.argv(), a.iter().map(|x| x.to_string()).collect::<Vec<_>>(), "round trip");
             assert_eq!(v.namespace(), "pg");
         }
+        let st = Verb::parse(&["pg", "dual", "status", "16", "17", "ws_jobs", "0123456789ab"]).unwrap();
+        assert!(!st.takes_lock() && st.stdin_cap().is_none(), "the drain polls it during the cut-over");
         for a in [&["pg", "dual", "setup-source", "16", "17", "ws_jobs", "0123456789ab"][..], &["pg", "dual", "subscribe", "16", "17", "ws_jobs", "0123456789ab"]] {
             assert_eq!(Verb::parse(a).unwrap().stdin_cap(), Some(crate::pg_dual::CAP_DUAL_SECRET), "{a:?}");
         }

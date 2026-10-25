@@ -27,6 +27,11 @@ fn names(id: &str) -> HResult<DualNames> {
     DualNames::of(id).ok_or_else(|| Fail::argv("pg dual: the id is not 12 hex digits"))
 }
 
+/// The run id inside a validated [`DualNames`] (`k2_repl_<id>`).
+fn id_of(n: &DualNames) -> &str {
+    n.role.strip_prefix("k2_repl_").unwrap_or(&n.role)
+}
+
 fn secret(stdin: &[u8]) -> HResult<DualSecret> {
     let s: DualSecret = serde_json::from_slice(stdin).map_err(|_| Fail::argv("pg dual: stdin is not {\"password\": …}"))?;
     s.validate().map_err(Fail::argv)?;
@@ -136,9 +141,16 @@ fn setup_source(ctx: &Ctx, from: PgMajor, db: &DbName, n: &DualNames, s: &DualSe
     if count(ctx, from, src.port, "postgres", &pd::role_count_sql(n))? != 0 {
         return Err(Fail::state("dual_exists: this run's replication role already exists; tear it down first; nothing changed"));
     }
-    // PA24: physical replication by a k2_repl_* role is refused before
-    // the role exists.
-    let guard = crate::pg::hba_guard(ctx, from)?;
+    // A-L2: teardown drops these names; they must be K2's own.
+    if count(ctx, from, src.port, db.as_str(), &pd::reserved_count_sql(n))? != 0 {
+        return Err(Fail::state(format!(
+            "reserved_names: the database already has a schema {}, a publication {} or an event trigger {}; K2 won't take them over; nothing changed",
+            pd::FREEZE_SCHEMA, n.publication, pd::FREEZE_TRIGGER
+        )));
+    }
+    // PA24 + A-M2: before the role exists, a k2_repl_* role is refused
+    // physical replication and every database but this run's one.
+    let guard = crate::pg::hba_dual(ctx, from, db.as_str(), id_of(n), true)?;
     sql_at(ctx, from, src.port, "postgres", &pd::setup_role_sql(n, db.as_str(), s))
         .map_err(|e| masked("setup-source: the replication role", &e, &s.password))?;
     sql_at(ctx, from, src.port, db.as_str(), &pd::setup_db_sql(n, db.as_str()))?;
@@ -201,9 +213,23 @@ fn detach(ctx: &Ctx, from: PgMajor, to: PgMajor, db: &DbName, n: &DualNames, tea
     if !src.online() {
         return Err(Fail::state("cluster_down: the source cluster is not running"));
     }
+    // A-M2: the role's way in goes first (the guards stay and refuse it).
+    let hba_changed = crate::pg::hba_dual(ctx, from, db.as_str(), id_of(n), false)?;
     if db_exists(ctx, from, src.port, db)? {
         k2_db(ctx, from, src.port, db)?;
-        sql_at(ctx, from, src.port, db.as_str(), &pd::detach_source_sql(n, db.as_str()))?;
+        // A-M1: a closed database (a kept source) still gets its slot,
+        // freeze, grants and publication dropped: the helper alone goes in
+        // (connection limit 0 first) and closes it again, whatever happens.
+        let closed = sql_at(ctx, from, src.port, "postgres", &pd::db_open_sql(db.as_str()))?.trim() == "false";
+        if closed {
+            sql_at(ctx, from, src.port, "postgres", &pd::open_for_cleanup_sql(db.as_str()))?;
+            notes.push("the source database was closed: opened to the helper alone for cleanup, closed again".into());
+        }
+        let done = sql_at(ctx, from, src.port, db.as_str(), &pd::detach_source_sql(n, db.as_str()));
+        if closed {
+            sql_at(ctx, from, src.port, "postgres", &pd::close_after_cleanup_sql(db.as_str()))?;
+        }
+        done?;
     } else {
         notes.push("the source database is gone".into());
     }
@@ -212,7 +238,7 @@ fn detach(ctx: &Ctx, from: PgMajor, to: PgMajor, db: &DbName, n: &DualNames, tea
     }
     Ok(json!({
         "from": from.get(), "to": to.get(), "teardown": teardown,
-        "subscriptionDropped": dropped_subscription, "roleDropped": teardown, "notes": notes,
+        "subscriptionDropped": dropped_subscription, "roleDropped": teardown, "hbaChanged": hba_changed, "notes": notes,
     }))
 }
 

@@ -460,7 +460,7 @@ pub fn hba_line(id: &AppId) -> String {
 /// dropped when its last line goes. A damaged block (two BEGINs, no END,
 /// END first, a foreign line inside) is a refusal, never a repair.
 pub fn hba_edit(text: &str, add: bool, id: &AppId) -> Result<Option<String>, &'static str> {
-    hba_block_set(text, &hba_line(id), add)
+    hba_block_apply(text, &[(hba_line(id), add)])
 }
 
 /// prd-app-pg-choice-dualrun-v1 PA24 (protocol 10, `pgdual`): the one
@@ -471,17 +471,78 @@ pub fn hba_edit(text: &str, add: bool, id: &AppId) -> Result<Option<String>, &'s
 /// keyword, so live moves still connect. Regex users need Postgres 16+
 /// (K2's floor).
 pub const REPL_GUARD_LINE: &str = "host replication /^k2_repl_ all reject";
+/// Security review A-M2: a K2 replication role may log in to its own
+/// run's database only (the per-run allow lines sit above these); every
+/// other database, over TCP or the socket, is refused, so it can't decode
+/// another database logically even where PUBLIC has CONNECT.
+pub const REPL_GUARD_ALL_LINE: &str = "host all /^k2_repl_ all reject";
+pub const REPL_GUARD_LOCAL_LINE: &str = "local all /^k2_repl_ reject";
+/// Every guard line, in block order.
+pub const REPL_GUARDS: [&str; 3] = [REPL_GUARD_LINE, REPL_GUARD_ALL_LINE, REPL_GUARD_LOCAL_LINE];
 
-/// Put [`REPL_GUARD_LINE`] in the K2 block (created above the first rule
-/// when missing). `Ok(None)` = already there. The line stays after a run
-/// (harmless). A damaged block refuses, as [`hba_edit`].
+/// Put the guards ([`REPL_GUARDS`]) in the K2 block (created above the
+/// first rule when missing). `Ok(None)` = already there. They stay after a
+/// run (harmless). A damaged block refuses, as [`hba_edit`].
 pub fn hba_guard(text: &str) -> Result<Option<String>, &'static str> {
-    hba_block_set(text, REPL_GUARD_LINE, true)
+    let changes: Vec<(String, bool)> = REPL_GUARDS.iter().map(|l| (l.to_string(), true)).collect();
+    hba_block_apply(text, &changes)
 }
 
-/// A line K2 writes into its block: an App's canned line, or the guard.
+/// The two lines that let one run's replication role (`k2_repl_<id>`)
+/// reach its one database, loopback only, by password.
+pub fn hba_dual_lines(db: &str, id: &str) -> [String; 2] {
+    [
+        format!("host {db} k2_repl_{id} 127.0.0.1/32 scram-sha-256"),
+        format!("host {db} k2_repl_{id} ::1/128 scram-sha-256"),
+    ]
+}
+
+/// A live run's lines: `add` puts the guards and its two allow lines in
+/// (allow lines first: first match wins), `!add` takes its allow lines out
+/// (the guards stay). The names must be validated by the caller (a
+/// [`crate::verbs::DbName`] and a 12-hex id); anything else refuses.
+pub fn hba_dual(text: &str, db: &str, id: &str, add: bool) -> Result<Option<String>, &'static str> {
+    if crate::verbs::DbName::parse(db).is_none() || db == "postgres" || !crate::pg_dual::dual_id_ok(id) {
+        return Err("pg_hba.conf: not a K2 database name and run id");
+    }
+    let mut changes: Vec<(String, bool)> = Vec::new();
+    if add {
+        changes.extend(REPL_GUARDS.iter().map(|l| (l.to_string(), true)));
+    }
+    changes.extend(hba_dual_lines(db, id).into_iter().map(|l| (l, add)));
+    hba_block_apply(text, &changes)
+}
+
+/// One run's allow line: `host <db> k2_repl_<12 hex> <loopback> scram-sha-256`.
+fn dual_line_ok(l: &str) -> bool {
+    let f: Vec<&str> = l.split_whitespace().collect();
+    f.len() == 5
+        && f[0] == "host"
+        && crate::verbs::DbName::parse(f[1]).is_some()
+        && f[1] != "postgres"
+        && f[2].strip_prefix("k2_repl_").is_some_and(crate::pg_dual::dual_id_ok)
+        && (f[3] == "127.0.0.1/32" || f[3] == "::1/128")
+        && f[4] == "scram-sha-256"
+        && l == f.join(" ")
+}
+
+/// Block order: run allow lines, then the guards, then App lines (each
+/// group sorted). App lines name their own roles, so they never meet the
+/// replication lines.
+fn block_rank(l: &str) -> u8 {
+    if dual_line_ok(l) {
+        0
+    } else if REPL_GUARDS.contains(&l) {
+        1
+    } else {
+        2
+    }
+}
+
+/// A line K2 writes into its block: an App's canned line, a guard, or a
+/// live run's allow line.
 fn block_line_ok(l: &str) -> bool {
-    if l == REPL_GUARD_LINE {
+    if REPL_GUARDS.contains(&l) || dual_line_ok(l) {
         return true;
     }
     let f: Vec<&str> = l.split_whitespace().collect();
@@ -496,8 +557,7 @@ fn block_line_ok(l: &str) -> bool {
         && l == f.join(" ")
 }
 
-fn hba_block_set(text: &str, line: &str, add: bool) -> Result<Option<String>, &'static str> {
-    let line = line.to_string();
+fn hba_block_apply(text: &str, changes: &[(String, bool)]) -> Result<Option<String>, &'static str> {
     let lines: Vec<&str> = text.lines().collect();
     let begins: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.trim_end() == HBA_BEGIN).map(|(i, _)| i).collect();
     let ends: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.trim_end() == HBA_END).map(|(i, _)| i).collect();
@@ -516,15 +576,18 @@ fn hba_block_set(text: &str, line: &str, add: bool) -> Result<Option<String>, &'
             return Err("pg_hba.conf: the K2 Apps block holds a line K2 didn't write");
         }
     }
-    let has = inside.contains(&line);
-    if has == add {
-        return Ok(None);
+    let before = inside.clone();
+    for (line, add) in changes {
+        let has = inside.contains(line);
+        if *add && !has {
+            inside.push(line.clone());
+        } else if !*add && has {
+            inside.retain(|l| l != line);
+        }
     }
-    if add {
-        inside.push(line);
-        inside.sort();
-    } else {
-        inside.retain(|l| *l != line);
+    inside.sort_by(|a, b| block_rank(a).cmp(&block_rank(b)).then_with(|| a.cmp(b)));
+    if inside == before {
+        return Ok(None);
     }
     let mut out: Vec<String> = Vec::with_capacity(lines.len() + 3);
     let render_block = |out: &mut Vec<String>| {
@@ -1373,7 +1436,11 @@ mod tests {
         let base = "# PostgreSQL Client Authentication\nlocal all postgres peer\nhost replication all 127.0.0.1/32 scram-sha-256\nhost all all 127.0.0.1/32 scram-sha-256\n";
         let g = hba_guard(base).unwrap().unwrap();
         assert!(g.find(REPL_GUARD_LINE).unwrap() < g.find("host replication all").unwrap(), "first match wins: {g}");
-        assert!(g.contains(&format!("{HBA_BEGIN}\n{REPL_GUARD_LINE}\n{HBA_END}\n")), "{g}");
+        assert!(
+            g.contains(&format!("{HBA_BEGIN}\n{REPL_GUARD_ALL_LINE}\n{REPL_GUARD_LINE}\n{REPL_GUARD_LOCAL_LINE}\n{HBA_END}\n")),
+            "{g}"
+        );
+        assert!(g.find(REPL_GUARD_ALL_LINE).unwrap() < g.find("host all all").unwrap(), "{g}");
         assert_eq!(hba_guard(&g).unwrap(), None, "idempotent");
         // App lines and the guard share the block.
         let a = hba_edit(&g, true, &jobs).unwrap().unwrap();
@@ -1387,6 +1454,64 @@ mod tests {
         assert!(hba_guard(&bad).is_err());
         assert!(hba_guard(&format!("{HBA_BEGIN}\n{REPL_GUARD_LINE}\n")).is_err());
         assert_eq!(REPL_GUARD_LINE, "host replication /^k2_repl_ all reject");
+    }
+
+    /// The first `pg_hba.conf` line that matches a TCP login of `role` to
+    /// `db` (`replication` = a physical replication connection), the way
+    /// Postgres picks it (first match wins): its method.
+    fn hba_method(text: &str, db: &str, role: &str) -> Option<String> {
+        for l in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            if f[0] != "host" {
+                continue;
+            }
+            let db_ok = match f[1] {
+                "all" => db != "replication",
+                d => d == db,
+            };
+            let role_ok = match f[2] {
+                "all" => true,
+                r if r.starts_with('/') => role.starts_with(r.trim_start_matches("/^")),
+                r => r == role,
+            };
+            if db_ok && role_ok {
+                return Some(f.last().unwrap().to_string());
+            }
+        }
+        None
+    }
+
+    /// Security review A-M2: a run's replication role reaches its one
+    /// database, and every other database (and physical replication) is
+    /// refused, whatever Debian's own lines below allow.
+    #[test]
+    fn a_runs_role_reaches_only_its_database() {
+        let base = "# PostgreSQL Client Authentication\nlocal all postgres peer\nhost replication all 127.0.0.1/32 scram-sha-256\nhost all all 127.0.0.1/32 scram-sha-256\n";
+        let jobs = AppId::parse("jobs").unwrap();
+        let with_app = hba_edit(base, true, &jobs).unwrap().unwrap();
+        let t = hba_dual(&with_app, "ws_jobs", "0123456789ab", true).unwrap().unwrap();
+        let role = "k2_repl_0123456789ab";
+        assert_eq!(hba_method(&t, "ws_jobs", role).as_deref(), Some("scram-sha-256"));
+        for other in ["postgres", "ws_other", "template1", "replication"] {
+            assert_eq!(hba_method(&t, other, role).as_deref(), Some("reject"), "{other}: {t}");
+        }
+        assert_eq!(hba_method(&t, "ws_jobs", "k2_repl_ffffffffffff").as_deref(), Some("reject"), "another run's role");
+        assert_eq!(hba_method(&t, "ws_other", "ws_other_agent").as_deref(), Some("scram-sha-256"), "tenants are untouched");
+        assert_eq!(hba_method(&t, "app_jobs", "app_jobs").as_deref(), Some("scram-sha-256"), "App lines are untouched");
+        assert!(t.contains(REPL_GUARD_LOCAL_LINE));
+        assert_eq!(hba_dual(&t, "ws_jobs", "0123456789ab", true).unwrap(), None, "idempotent");
+        // Teardown takes the run's lines out; the guards stay and refuse it everywhere.
+        let back = hba_dual(&t, "ws_jobs", "0123456789ab", false).unwrap().unwrap();
+        assert_eq!(hba_method(&back, "ws_jobs", role).as_deref(), Some("reject"));
+        assert!(!back.contains("0123456789ab") && back.contains(REPL_GUARD_ALL_LINE));
+        assert_eq!(hba_dual(&back, "ws_jobs", "0123456789ab", false).unwrap(), None);
+        // Validated names only.
+        for (db, id) in [("ws jobs", "0123456789ab"), ("postgres", "0123456789ab"), ("ws_jobs", "XYZ"), ("ws_jobs;", "0123456789ab")] {
+            assert!(hba_dual(base, db, id, true).is_err(), "{db} {id}");
+        }
+        // A planted look-alike line in the block is still foreign.
+        let bad = format!("{HBA_BEGIN}\nhost all k2_repl_0123456789ab 0.0.0.0/0 trust\n{HBA_END}\n");
+        assert!(hba_dual(&bad, "ws_jobs", "0123456789ab", true).is_err());
     }
 
     #[test]

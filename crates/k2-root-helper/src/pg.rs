@@ -303,12 +303,24 @@ pub fn hba_app(ctx: &Ctx, add: bool, id: &AppId) -> HResult<serde_json::Value> {
     }))
 }
 
-/// Protocol 10 (`pgdual`, PA24): the fixed replication guard line
-/// ([`k2_root_proto::apps::REPL_GUARD_LINE`]) in the K2 block of `m`'s
+/// Protocol 10 (`pgdual`, PA24): the fixed replication guard lines
+/// ([`k2_root_proto::apps::REPL_GUARDS`]) in the K2 block of `m`'s
 /// `pg_hba.conf` (owner and mode kept, no link followed, a damaged block
 /// refuses), then a reload of that cluster when it runs. `Ok(true)` when
 /// the file changed.
 pub fn hba_guard(ctx: &Ctx, m: PgMajor) -> HResult<bool> {
+    hba_apply(ctx, m, k2_root_proto::apps::hba_guard)
+}
+
+/// Security review A-M2: one live run's allow lines (`host <db>
+/// k2_repl_<id> <loopback> scram-sha-256`, above the guards) in `m`'s K2
+/// block (`add`), or out (`!add`; the guards stay). Names validated by
+/// [`k2_root_proto::apps::hba_dual`].
+pub fn hba_dual(ctx: &Ctx, m: PgMajor, db: &str, id: &str, add: bool) -> HResult<bool> {
+    hba_apply(ctx, m, |t| k2_root_proto::apps::hba_dual(t, db, id, add))
+}
+
+fn hba_apply(ctx: &Ctx, m: PgMajor, edit: impl Fn(&str) -> Result<Option<String>, &'static str>) -> HResult<bool> {
     let want = OsString::from(m.get().to_string());
     let mains = cluster_mains(ctx)?;
     let (_, main) = mains
@@ -328,7 +340,7 @@ pub fn hba_guard(ctx: &Ctx, m: PgMajor) -> HResult<bool> {
         .map_err(|e| Fail::io_err("read pg_hba.conf", e))?
         .ok_or_else(|| Fail::state("hba-guard refused: pg_hba.conf vanished"))?;
     let text = std::str::from_utf8(&bytes).map_err(|_| Fail::state("hba-guard refused: pg_hba.conf is not UTF-8"))?;
-    let Some(next) = k2_root_proto::apps::hba_guard(text).map_err(Fail::state)? else {
+    let Some(next) = edit(text).map_err(Fail::state)? else {
         return Ok(false);
     };
     let owner = ctx.real_owners.then_some((st.st_uid, st.st_gid));

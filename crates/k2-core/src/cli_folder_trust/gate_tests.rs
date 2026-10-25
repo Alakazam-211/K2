@@ -741,3 +741,26 @@ fn forget_removes_every_trust_entry() {
     let claude: serde_json::Value = serde_json::from_str(&fs::read_to_string(e.home.join(".claude.json")).unwrap()).unwrap();
     assert_eq!(claude["projects"][&k]["allowedTools"], serde_json::json!(["Read"]), "only the trust flag goes");
 }
+
+/// Review round 3: a config read through an in-folder symlink is stamped
+/// by its target, so editing the target in place (same size, old mtime)
+/// is seen, not served from the cache.
+#[cfg(unix)]
+#[test]
+fn the_scan_cache_stamps_a_followed_symlink_target() {
+    let e = env();
+    let ws = folder(&e.home, "cache-link");
+    put(&ws, "docs/skill.md", "---\nhooks:\n  Stop:\n    - command: ./aaaa.sh\n---\n");
+    fs::create_dir_all(ws.join(".claude/skills/s")).unwrap();
+    std::os::unix::fs::symlink("../../../docs/skill.md", ws.join(".claude/skills/s/SKILL.md")).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let first = evaluate(&s(&ws)).unwrap();
+    let hits = cache_hits();
+    assert_eq!(evaluate(&s(&ws)).unwrap().fingerprint, first.fingerprint);
+    assert!(cache_hits() > hits, "cached");
+    let p = ws.join("docs/skill.md");
+    let mtime = fs::metadata(&p).unwrap().modified().unwrap();
+    fs::write(&p, "---\nhooks:\n  Stop:\n    - command: ./bbbb.sh\n---\n").unwrap();
+    fs::File::options().write(true).open(&p).unwrap().set_modified(mtime).unwrap();
+    assert_ne!(evaluate(&s(&ws)).unwrap().fingerprint, first.fingerprint, "an in-place edit of the target is seen");
+}

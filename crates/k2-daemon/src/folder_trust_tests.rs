@@ -498,3 +498,24 @@ fn leftover_trust_is_reported_and_forget_removes_it() {
     assert!(!toml.contains("trusted"), "{toml}");
     assert!(held(&ws).leftover.is_empty());
 }
+
+/// Review round 3: a shell gated only by its env stays gated for reuse
+/// and "Don't trust" (the session map doesn't keep env), and a plain shell
+/// under the same key later is plain again.
+#[test]
+fn an_env_gated_shell_stays_gated_for_reuse_and_stop() {
+    let e = env();
+    let ws = folder(&e.home, "envgated", Some(HOOK));
+    let login = k2_core::terminal::detect_shell();
+    let key = format!("tab-envgated-{}", uuid::Uuid::new_v4());
+    let none: HashMap<String, String> = HashMap::new();
+    let with_env: HashMap<String, String> = [("PROMPT_COMMAND".to_string(), "./x.sh".to_string())].into_iter().collect();
+    assert!(!session_is_gated(&key, Some(&login), &[]));
+    note_spawn(&key, Some(&login), &[], &with_env);
+    assert!(session_is_gated(&key, Some(&login), &[]), "recorded as gated by its env");
+    let r = gate_live(&key, Some(&login), &[], &none, &s(&ws), None, None, "test").expect_err("reuse without the env is still gated");
+    assert_eq!(r.error, gate::PENDING);
+    note_spawn(&key, Some(&login), &[], &none);
+    assert!(!session_is_gated(&key, Some(&login), &[]));
+    gate_live(&key, Some(&login), &[], &none, &s(&ws), None, None, "test").expect("a plain shell again");
+}

@@ -261,7 +261,8 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
             // the folder again (or "Don't trust") stops it instead of
             // handing it more work.
             let live_cwd = existing.cwd.as_ref().map(|c| c.to_string_lossy().to_string()).unwrap_or_else(|| req.cwd.clone());
-            if let Err(r) = crate::folder_trust::gate_spawn(
+            if let Err(r) = crate::folder_trust::gate_live(
+                &canonical_key,
                 existing.program.as_deref(),
                 &existing.args,
                 &req.env,
@@ -332,6 +333,14 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         }
         return Err(r.to_error_string());
     }
+    crate::folder_trust::note_spawn(&canonical_key, req.command.as_deref(), req.args.as_deref().unwrap_or(&[]), &req.env);
+    // An exempt shell named bare (`zsh`) starts as the login shell's
+    // absolute path, never through the child's PATH (review round 3).
+    let exempt_program = if k2_core::cli_folder_trust::needs_gate(req.command.as_deref(), req.args.as_deref().unwrap_or(&[]), &req.env) {
+        None
+    } else {
+        k2_core::cli_folder_trust::exempt_shell_path(req.command.as_deref())
+    };
 
     // Phase B: seed the session's label with the workspace's
     // primary-agent display name and LOCK it. This is the
@@ -505,7 +514,7 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         cols: req.cols,
         rows: req.rows,
         cwd: Some(PathBuf::from(&req.cwd)),
-        program: req.command.clone(),
+        program: exempt_program.or_else(|| req.command.clone()),
         args: exec,
         durable_args: if attached { Some(identity) } else { None },
         env,

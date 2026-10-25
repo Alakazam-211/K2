@@ -464,6 +464,66 @@ pub fn gate_spawn(
     k2_core::cli_folder_trust::gate_harness_spawn(program, args, env, Some(Path::new(cwd)), env_home, &actor).map(|_| ())
 }
 
+/// Session-map keys of shells that were gated only because of their env
+/// (a launch block's `PROMPT_COMMAND`, `ZDOTDIR`…): their program looks
+/// like a plain shell, but "Don't trust" and the watcher must treat them
+/// as gated (review round 3). Kept in memory; after a daemon restart an
+/// adopted session is judged by its program and args only.
+static ENV_GATED: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+
+/// Record how a spawn under `key` was judged (call after the gate passed).
+pub fn note_spawn(key: &str, program: Option<&str>, args: &[String], env: &HashMap<String, String>) {
+    let by_env = k2_core::cli_folder_trust::needs_gate(program, args, env)
+        && !k2_core::cli_folder_trust::needs_gate(program, args, &HashMap::new());
+    let mut g = ENV_GATED.lock().unwrap_or_else(|e| e.into_inner());
+    let set = g.get_or_insert_with(Default::default);
+    if by_env {
+        set.insert(key.to_string());
+    } else {
+        set.remove(key);
+    }
+}
+
+/// Whether a live session in the map is a gated one (not a person's plain
+/// shell): by its program and args, or because its env made it gated.
+pub fn session_is_gated(key: &str, program: Option<&str>, args: &[String]) -> bool {
+    if k2_core::cli_folder_trust::needs_gate(program, args, &HashMap::new()) {
+        return true;
+    }
+    let g = ENV_GATED.lock().unwrap_or_else(|e| e.into_inner());
+    g.as_ref().is_some_and(|s| s.contains(key))
+}
+
+/// The gate for reusing a live session under `key`: like [`gate_spawn`],
+/// and a session recorded as gated by its env ([`note_spawn`]) stays
+/// gated even when this request carries no env (review round 3).
+#[allow(clippy::too_many_arguments)]
+pub fn gate_live(
+    key: &str,
+    program: Option<&str>,
+    args: &[String],
+    env: &HashMap<String, String>,
+    cwd: &str,
+    env_home: Option<&str>,
+    project_id: Option<&str>,
+    by: &str,
+) -> Result<(), Refusal> {
+    let recorded = {
+        let g = ENV_GATED.lock().unwrap_or_else(|e| e.into_inner());
+        g.as_ref().is_some_and(|s| s.contains(key))
+    };
+    if recorded && !k2_core::cli_folder_trust::needs_gate(program, args, env) {
+        // A marker key outside K2's own (`K2_*`) keeps the shell gated.
+        let mut env = env.clone();
+        env.insert(RECORDED_ENV_MARKER.to_string(), "1".to_string());
+        return gate_spawn(program, args, &env, cwd, env_home, project_id, by);
+    }
+    gate_spawn(program, args, env, cwd, env_home, project_id, by)
+}
+
+/// See [`gate_live`]; never set on a child.
+const RECORDED_ENV_MARKER: &str = "K2FT_RECORDED_ENV";
+
 /// Queue a held spawn (not heartbeat lanes: those are skipped), with the
 /// request's caller, for at most [`HELD_TTL`].
 pub fn hold_spawn(scope: &str, req: &crate::spawn::SpawnWorkspaceSessionRequest) {
@@ -581,7 +641,7 @@ pub fn after_decision(scope: &str, decision: Decision, granted: bool) -> usize {
 pub fn stop_sessions_in(scope: &str) -> usize {
     let mut n = 0;
     for (key, s) in crate::v2_session_map::snapshot() {
-        if !k2_core::cli_folder_trust::needs_gate(s.program.as_deref(), &s.args, &HashMap::new()) {
+        if !session_is_gated(&key, s.program.as_deref(), &s.args) {
             continue;
         }
         let Some(cwd) = s.cwd.as_ref() else { continue };

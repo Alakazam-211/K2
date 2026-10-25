@@ -1013,8 +1013,14 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         // passes the gate (a live change held it, or "Don't trust").
         let live_cwd = existing.cwd.as_ref().map(|c| c.to_string_lossy().to_string()).unwrap_or_else(|| req.cwd.clone());
         let env_home = req.env.as_ref().and_then(|e| e.get("HOME")).map(String::as_str);
-        let caller_env = req.env.clone().unwrap_or_default();
-        if let Err(r) = crate::folder_trust::gate_spawn(existing.program.as_deref(), &existing.args, &caller_env, &live_cwd, env_home, project_id.as_deref(), "v2_spawn") {
+        // The caller's env and the agent's launch-block env (review round 3).
+        let mut live_env = req.env.clone().unwrap_or_default();
+        if let Some(resolved_env) = canonical_resolved.as_ref().and_then(|r| r.env.as_ref()) {
+            for (k, v) in resolved_env {
+                live_env.insert(k.clone(), v.clone());
+            }
+        }
+        if let Err(r) = crate::folder_trust::gate_live(&req.agent_name, existing.program.as_deref(), &existing.args, &live_env, &live_cwd, env_home, project_id.as_deref(), "v2_spawn") {
             v2_session_map::unregister(&req.agent_name);
             existing.kill();
             return HandlerResult { status: "409 Conflict", body: r.to_json().to_string() };
@@ -1388,6 +1394,14 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         "v2_spawn",
     ) {
         return HandlerResult { status: "409 Conflict", body: r.to_json().to_string() };
+    }
+    crate::folder_trust::note_spawn(&req.agent_name, cfg.program.as_deref(), &cfg.args, &gate_env);
+    // An exempt shell named bare (`zsh`) starts as the login shell's
+    // absolute path, never through the child's PATH (review round 3).
+    if !k2_core::cli_folder_trust::needs_gate(cfg.program.as_deref(), &cfg.args, &gate_env) {
+        if let Some(p) = k2_core::cli_folder_trust::exempt_shell_path(cfg.program.as_deref()) {
+            cfg.program = Some(p);
+        }
     }
 
     // P4-H6 — PER-SESSION worker uid + fail-closed PER-SESSION egress, set up

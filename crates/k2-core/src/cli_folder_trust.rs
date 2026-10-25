@@ -179,6 +179,20 @@ pub fn needs_gate(command: Option<&str>, args: &[String], env: &std::collections
     !(is_shell && is_login_shell(cmd) && plain_args && plain_env)
 }
 
+/// The program to start for an exempt plain shell given by its bare name
+/// (`zsh`): the login shell's absolute path, so the child's PATH (which can
+/// hold relative entries) never picks a `zsh` inside the folder (review
+/// round 3). `None` when `command` isn't a bare exempt shell name; call it
+/// only after [`needs_gate`] said no.
+pub fn exempt_shell_path(command: Option<&str>) -> Option<String> {
+    let cmd = command.map(str::trim).filter(|s| !s.is_empty())?;
+    if cmd == "$SHELL" || cmd.contains('/') || cmd.contains('\\') || !is_login_shell(cmd) {
+        return None;
+    }
+    let login = crate::terminal::detect_shell();
+    Path::new(&login).is_absolute().then_some(login)
+}
+
 /// True when `command` is claude/codex/grok/gemini/cursor-agent (basename).
 pub fn is_folder_trust_harness(command: Option<&str>) -> bool {
     let Some(cmd) = command.map(str::trim).filter(|s| !s.is_empty()) else {
@@ -1477,6 +1491,12 @@ mod tests {
         let no_env: HashMap<String, String> = HashMap::new();
         let login = crate::terminal::detect_shell();
         let login_name = Path::new(&login).file_name().unwrap().to_string_lossy().to_string();
+        // Round 3: a bare exempt shell name starts as the login shell's
+        // absolute path, never through the child's PATH.
+        assert_eq!(exempt_shell_path(Some(&login_name)), Some(login.clone()));
+        assert_eq!(exempt_shell_path(Some(&login)), None, "already a path");
+        assert_eq!(exempt_shell_path(Some("./bin/zsh")), None);
+        assert_eq!(exempt_shell_path(Some("$SHELL")), None);
         assert!(gate_harness_spawn(None, &none, &no_env, Some(&ws), None, &a).expect("no program").is_none());
         assert!(gate_harness_spawn(Some(&login_name), &none, &no_env, Some(&ws), None, &a).expect("shell").is_none());
         assert!(gate_harness_spawn(Some("$SHELL"), &none, &no_env, Some(&ws), None, &a).expect("shell").is_none());

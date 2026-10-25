@@ -31684,7 +31684,7 @@ print(d.get("scope") or "")')
                         *) echo "Nothing decided." >&2; exit 1 ;;
                     esac
                 else
-                    echo "Error: this folder has risky settings; decide for the ones you saw: add --fingerprint $fingerprint (from k2 workspace trust status or the ticket), or run it in a terminal to confirm at a prompt." >&2
+                    echo "Error: this folder has risky settings; decide only for the ones you read. Run: k2 workspace trust status $(printf '%q' "$folder"), read the findings, then pass the --fingerprint it shows (or run this in a terminal to confirm at a prompt)." >&2
                     exit 2
                 fi
             fi

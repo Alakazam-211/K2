@@ -455,6 +455,29 @@ pub fn handle_agents_delegate(
     // canonical-agent slot — it has its own identity. project_id
     // intentionally None so the registration uses the worktree-
     // unique agent_name as the slot key.
+    //
+    // Folder trust (review round 3): the persona that chose this program
+    // lives in the parent workspace, so that folder is gated too (the
+    // spawn below gates the worktree cwd).
+    {
+        let parent_id = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::workspace::agent_identity::resolve_project_id(&conn, project_path)
+        };
+        let delegate_args = args.clone();
+        if let Err(r) = crate::folder_trust::gate_spawn(
+            Some(command.as_str()),
+            &delegate_args,
+            &spawn_env,
+            project_path,
+            spawn_env.get("HOME").map(String::as_str),
+            parent_id.as_deref(),
+            "delegate",
+        ) {
+            return crate::folder_trust::spawn_failed_response(&r.to_error_string());
+        }
+    }
     let outcome = match spawn_agent_session_v2_blocking(SpawnWorkspaceSessionRequest {
         agent_name: agent_name.clone(),
         project_id: None,

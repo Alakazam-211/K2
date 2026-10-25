@@ -81,8 +81,8 @@ pub(crate) struct Live {
 /// Every folder with a live K2 harness session.
 pub(crate) fn live_folders() -> Vec<Live> {
     let mut seen: BTreeMap<String, Live> = BTreeMap::new();
-    for (_key, s) in crate::v2_session_map::snapshot() {
-        if !k2_core::cli_folder_trust::needs_gate(s.program.as_deref(), &s.args, &std::collections::HashMap::new()) || !s.is_child_alive() {
+    for (key, s) in crate::v2_session_map::snapshot() {
+        if !crate::folder_trust::session_is_gated(&key, s.program.as_deref(), &s.args) || !s.is_child_alive() {
             continue;
         }
         let Some(cwd) = s.cwd.as_ref() else { continue };

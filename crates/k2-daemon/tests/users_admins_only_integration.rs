@@ -226,6 +226,14 @@ async fn t1_1_no_agent_credential_reaches_any_users_arm() {
                 })
                 .await
                 .unwrap();
+                // The one read a Connect login (a person, not an agent) has:
+                // the password policy, so a login screen can show its rules.
+                if *what == "Connect Member login" && *method == "GET" && *path == "/cli/users/policy" {
+                    assert_eq!(status, 200, "{resp}");
+                    assert!(resp.contains("minLength") && !resp.contains("\"users\""), "{resp}");
+                    checked += 1;
+                    continue;
+                }
                 assert_eq!(status, 403, "{method} {path} with {what}: must be 403, got {status} {resp}");
                 assert!(!resp.contains("\"success\":true") && !resp.contains("\"users\""), "{method} {path} with {what}: {resp}");
                 checked += 1;

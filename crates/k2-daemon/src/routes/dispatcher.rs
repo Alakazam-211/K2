@@ -9557,7 +9557,7 @@ async fn handle_one_request(
         // Skin slice 1+2+3+123 — guest list, k2skn_ passes, Caddy front door,
         // Hydra OIDC sidecar. GET users/tokens: owner_role_identity OR scoped
         // hook (workspace agent passport). Admin/Member connect sessions stay
-        // 403. Manage mutations: owner_or_skin_manage_hook (owner OR hook +
+        // 403. Manage mutations: owner_or_skin_manage_hook_scoped (owner OR hook +
         // this workspace's Agent-tab column ON). GET/POST front-door + hydra
         // and `/cli/skin/grants*` stay owner_role_identity even when the
         // toggle is ON. Skin tokens themselves never manage the roster.
@@ -13354,18 +13354,10 @@ fn owner_or_scoped_hook_auth(
 /// `agents_can_manage_skin` is consulted for that path only. Hook + OFF
 /// → teaching `owner_only` with the Agent-tab sentence. Missing/garbage
 /// → classic forbidden via [`skin_dual_auth_failure`].
-fn owner_or_skin_manage_hook(
-    path: &str,
-    query: &str,
-    bearer: Option<&str>,
-    owner_token: &str,
-) -> Result<String, crate::cli_response::CliResponse> {
-    owner_or_skin_manage_hook_scoped(path, query, bearer, owner_token).map(|(actor, _)| actor)
-}
-
-/// [`owner_or_skin_manage_hook`] plus the agent's workspace (`projects.id`)
-/// when the caller is an agent passport (`None`: the owner, an Owner
-/// login), for `skin_routes::agent_scoped`.
+///
+/// Also returns the agent's workspace (`projects.id`) when the caller is an
+/// agent passport (`None`: the owner, an Owner login), for
+/// `skin_routes::agent_scoped`.
 fn owner_or_skin_manage_hook_scoped(
     path: &str,
     query: &str,

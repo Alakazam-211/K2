@@ -71,9 +71,73 @@ fn service_id(app: &str) -> String {
     k2_core::deploy::store::get_app(&conn, app).unwrap().expect("the App row").service_id
 }
 
+/// Where a running instance reads its seal key: `$K2_SECRETS_DIR/K2_APP_SEAL_KEY`
+/// (`port` = the instance's own port, not the front). Since the vault's
+/// Linux secrets root follows `K2_RUNTIME_DIR` (b9d0d87d3, akzm 2026-10-24)
+/// and the test home points that at `<home>/run`, the delivered file sits
+/// under the temp `$HOME` the leak scan walks; it is the one place the key
+/// belongs. It must be under the vault's secrets root (the memory-backed
+/// runtime dir), never elsewhere in the home.
+fn delivered_seal(port: u16) -> std::path::PathBuf {
+    let dir = env_val(port, "K2_SECRETS_DIR").expect("the instance has K2_SECRETS_DIR");
+    let root = k2_daemon::vault::spawn::secrets_root().expect("a secrets root");
+    let dir = std::path::PathBuf::from(dir);
+    assert!(dir.starts_with(&root), "the instance's K2_SECRETS_DIR {dir:?} is not under the vault secrets root {root:?}");
+    let f = dir.join(SEAL);
+    assert!(f.is_file(), "no delivered seal file at {f:?}");
+    f
+}
+
+/// The delivered seal files of every instance of `app` that is running on
+/// purpose: the live one and, inside the watch window (`K2_APPS_WATCH_SECS`),
+/// the warm previous one kept up for an instant rollback.
+async fn running_seals(port: u16, app: &str) -> Vec<std::path::PathBuf> {
+    let r = get(port, "/cli/app/inspect", OWNER, &format!("app={app}")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    let rt = &v["runtime"];
+    assert!(rt["live"]["port"].is_u64(), "{app} has no live instance: {rt}");
+    let mut out = Vec::new();
+    for slot in ["live", "warm"] {
+        if let Some(p) = rt[slot]["port"].as_u64() {
+            let p = u16::try_from(p).unwrap_or_else(|_| panic!("{app} {slot} port {p}"));
+            out.push(delivered_seal(p));
+        }
+    }
+    out
+}
+
+/// No file under the temp `$HOME` holds `key` except the running instances'
+/// own delivered seal files. An instance a restart or rollback replaced
+/// drains and stops in the background (`K2_APPS_DRAIN_SECS` +
+/// `K2_APPS_STOP_GRACE_SECS`, 2 s each here), and its secrets dir goes with
+/// it; this waits up to 15 s for that, then fails with whatever is left (a
+/// stopped instance's dir that is never removed is a leak).
+async fn assert_key_in_no_other_file(home: &std::path::Path, port: u16, apps: &[&str], key: &str, what: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let mut delivered = Vec::new();
+        for app in apps {
+            delivered.extend(running_seals(port, app).await);
+        }
+        let hits = files_holding(home, key, &delivered);
+        if hits.is_empty() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} leaked into: {hits:?} (running instances' own files: {delivered:?})"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
 /// Every file under `dir` that holds `needle` (the temp `$HOME`: daemon
-/// logs, App logs, audit, records). The vault database holds ciphertext.
-fn files_holding(dir: &std::path::Path, needle: &str) -> Vec<String> {
+/// logs, App logs, audit, records, runtime dir), except exactly the
+/// `delivered` files (the running Apps' own `$K2_SECRETS_DIR/K2_APP_SEAL_KEY`).
+/// A copy anywhere else, including a stopped instance's secrets dir that
+/// was never removed, is a leak. The vault database holds ciphertext.
+fn files_holding(dir: &std::path::Path, needle: &str, delivered: &[std::path::PathBuf]) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
@@ -84,6 +148,9 @@ fn files_holding(dir: &std::path::Path, needle: &str) -> Vec<String> {
             if ft.is_dir() {
                 stack.push(p);
             } else if ft.is_file() {
+                if delivered.contains(&p) {
+                    continue;
+                }
                 if let Ok(bytes) = std::fs::read(&p) {
                     if bytes.windows(needle.len()).any(|w| w == needle.as_bytes()) {
                         out.push(p.display().to_string());
@@ -174,8 +241,7 @@ async fn identity_origin_and_seal_key_reach_the_app_and_stay_stable() {
 
     // No log, audit, record or route body holds a key.
     for k in [&k1, &ko] {
-        let hits = files_holding(env.path(), k);
-        assert!(hits.is_empty(), "a seal key leaked into: {hits:?}");
+        assert_key_in_no_other_file(env.path(), d.port, &["hearth", "meet-x"], k, "a seal key").await;
         for (path, q) in [
             ("/cli/app/logs", "app=hearth&tail=500"),
             ("/cli/app/inspect", "app=hearth"),
@@ -216,7 +282,7 @@ async fn identity_origin_and_seal_key_reach_the_app_and_stay_stable() {
     assert_eq!(r.status, 200, "the owner rotates too: {}", r.body);
     let audit = get(d.port, "/cli/app/history", OWNER, "app=hearth").await;
     assert_eq!(audit.status, 200);
-    assert!(files_holding(env.path(), &k2).is_empty(), "the rotated key leaked");
+    assert_key_in_no_other_file(env.path(), d.port, &["hearth", "meet-x"], &k2, "the rotated key").await;
 
     // A plain uninstall keeps the key for a reinstall, like the App's data
     // (purge destroys it: apps::seal's unit test).

@@ -488,11 +488,13 @@ pub async fn app_update_download(app: tauri::AppHandle) -> Result<String, String
 /// Install the downloaded, verified update (the plugin's `install()`).
 #[tauri::command]
 pub async fn app_update_install() -> Result<(), String> {
-    let staged = staged_app_update()
-        .lock()
-        .map_err(|_| "update state poisoned".to_string())?
-        .take()
-        .ok_or("no update to install (download it first)")?;
+    let staged = staged_app_update().lock().map_err(|_| "update state poisoned".to_string())?.take();
+    let Some(staged) = staged else {
+        // The renderer already stopped the bundled daemon (Windows) before
+        // calling this; nothing will install, so bring it back.
+        let _ = tokio::task::spawn_blocking(crate::restart_daemon_after_failed_update).await;
+        return Err("no update to install (download it first)".into());
+    };
     let Some(bytes) = staged.verified_bytes else {
         let _ = tokio::task::spawn_blocking(crate::restart_daemon_after_failed_update).await;
         return Err("the update isn't downloaded and verified yet".into());

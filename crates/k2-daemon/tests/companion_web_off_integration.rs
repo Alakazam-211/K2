@@ -579,21 +579,25 @@ async fn pair_check_never_uses_a_code_and_is_throttled_like_a_pair() {
     assert_eq!(checks.len(), 2, "failed checks are audited, successful ones are not: {checks:?}");
     assert!(checks.iter().all(|e| e["outcome"] == "unknown" && e["ip"] == "127.0.0.1"), "{checks:?}");
 
-    // Throttle: on the tunnel (no relay address) checks share the redeem's
-    // shared bucket, so failed guesses run out for both.
+    // Throttle, exactly as a hosted server's phone arrives: through
+    // <label>.app.k2.dev, i.e. the tunnel ingress (no relay address here)
+    // with the Worker's headers, web access off, no Origin. Checks share the
+    // redeem's shared bucket, so failed guesses run out for both.
     let bad = r#"{"code":"K2P-11111-11111-11111-11111"}"#;
+    let r = http(d.tunnel_port, "POST", "/cli/auth/device/pair/check", Some(&check_body), &refs(&with(EDGE, &["Origin: https://rosson.app.k2.dev"])));
+    assert_code(&r, 403, "device_pairing_not_from_browser", "a browser Origin through the edge");
     for i in 0..crate_shared_limit() {
-        let r = http(d.tunnel_port, "POST", "/cli/auth/device/pair/check", Some(bad), &[]);
-        assert_code(&r, 401, "pair_code_invalid", &format!("guess {i}"));
+        let r = http(d.tunnel_port, "POST", "/cli/auth/device/pair/check", Some(bad), EDGE);
+        assert_code(&r, 401, "pair_code_invalid", &format!("guess {i} through the edge"));
     }
-    let r = http(d.tunnel_port, "POST", "/cli/auth/device/pair/check", Some(bad), &[]);
+    let r = http(d.tunnel_port, "POST", "/cli/auth/device/pair/check", Some(bad), EDGE);
     assert_code(&r, 429, "rate_limited", "the next check");
     let r = http(
         d.tunnel_port,
         "POST",
         "/cli/auth/device/pair",
         Some(r#"{"code":"K2P-11111-11111-11111-11111","device":{"id":"d","name":"D"}}"#),
-        &[],
+        EDGE,
     );
     assert_code(&r, 429, "rate_limited", "a pair after the checks used the bucket");
 }

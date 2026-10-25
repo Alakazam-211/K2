@@ -3,11 +3,16 @@
 //! Sends never run on a route thread and never one thread per send (today's
 //! Companion dispatch is a detached thread each; App push must not copy
 //! that, or one App's fan-out could start thousands). A fixed pool of
-//! [`WORKERS`] threads drains one queue; each App may hold at most
-//! [`MAX_PENDING_PER_APP`] pending device sends (`429 push_queue_full`
-//! beyond, all or nothing). Nothing survives a restart: pending sends are
-//! dropped with the process, like the Companion `PushTarget` contract
-//! (`push/mod.rs:39-42`); the in-memory send log goes with them.
+//! [`WORKERS`] threads drains a queue per App, taken round-robin ([`Fair`]),
+//! so one App's backlog never delays another App's sends (review B-L3);
+//! each App may hold at most [`MAX_PENDING_PER_APP`] pending device sends
+//! (`429 push_queue_full` beyond, all or nothing). Right before calling
+//! Apple or Google a worker checks again that the App's push is on and the
+//! row still holds that token, with its guest's grant enabled and sign-in
+//! live (review B-L1); otherwise the send is `dropped`. Nothing survives a
+//! restart: pending sends are dropped with the process, like the Companion
+//! `PushTarget` contract (`push/mod.rs:39-42`); the in-memory send log goes
+//! with them.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -30,8 +35,53 @@ pub struct Job {
     pub stamps: Stamps,
 }
 
+/// One queue per key, served round-robin: each pop takes the next key's
+/// oldest item, then that key goes to the back of the ring.
+pub struct Fair<T> {
+    queues: HashMap<String, VecDeque<T>>,
+    ring: VecDeque<String>,
+}
+
+impl<T> Default for Fair<T> {
+    fn default() -> Self {
+        Fair { queues: HashMap::new(), ring: VecDeque::new() }
+    }
+}
+
+impl<T> Fair<T> {
+    pub fn push_all(&mut self, key: &str, items: impl IntoIterator<Item = T>) {
+        let q = self.queues.entry(key.to_string()).or_default();
+        let was_empty = q.is_empty();
+        q.extend(items);
+        if was_empty && !q.is_empty() {
+            self.ring.push_back(key.to_string());
+        }
+    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        while let Some(key) = self.ring.pop_front() {
+            let Some(q) = self.queues.get_mut(&key) else { continue };
+            let Some(item) = q.pop_front() else {
+                self.queues.remove(&key);
+                continue;
+            };
+            if q.is_empty() {
+                self.queues.remove(&key);
+            } else {
+                self.ring.push_back(key);
+            }
+            return Some(item);
+        }
+        None
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ring.is_empty()
+    }
+}
+
 struct State {
-    queue: VecDeque<Job>,
+    queue: Fair<Job>,
     pending: HashMap<String, usize>,
     in_flight: usize,
 }
@@ -51,7 +101,7 @@ fn queue() -> &'static Queue {
                 sender::log("a push worker thread didn't start");
             }
         }
-        Queue { state: Mutex::new(State { queue: VecDeque::new(), pending: HashMap::new(), in_flight: 0 }), work: Condvar::new(), idle: Condvar::new() }
+        Queue { state: Mutex::new(State { queue: Fair::default(), pending: HashMap::new(), in_flight: 0 }), work: Condvar::new(), idle: Condvar::new() }
     })
 }
 
@@ -66,7 +116,7 @@ pub fn enqueue(app: &str, jobs: Vec<Job>) -> Result<usize, usize> {
     }
     let n = jobs.len();
     *st.pending.entry(app.to_string()).or_insert(0) += n;
-    st.queue.extend(jobs);
+    st.queue.push_all(app, jobs);
     drop(st);
     q.work.notify_all();
     Ok(n)
@@ -83,14 +133,19 @@ fn run() {
         let job = {
             let mut st = q.state.lock().unwrap_or_else(|e| e.into_inner());
             loop {
-                if let Some(j) = st.queue.pop_front() {
+                if let Some(j) = st.queue.pop() {
                     st.in_flight += 1;
                     break j;
                 }
                 st = q.work.wait(st).unwrap_or_else(|e| e.into_inner());
             }
         };
-        let outcome = sender::global().deliver(&job.target, &job.notification, &job.stamps);
+        let outcome = if deliverable(&job.target) {
+            sender::global().deliver(&job.target, &job.notification, &job.stamps)
+        } else {
+            sender::log(&format!("{} send {} device {}: dropped (the phone, the guest's access or the App's push changed before it went out)", job.target.app, job.stamps.send_id, job.target.id));
+            Outcome::Dropped
+        };
         sendlog::record(&job.target.app, &job.stamps.send_id, &outcome);
         if let Outcome::Failed(code) = &outcome {
             sender::log(&format!("{} send {} device {}: failed ({code})", job.target.app, job.stamps.send_id, job.target.id));
@@ -109,6 +164,18 @@ fn run() {
     }
 }
 
+/// Still sendable right now (review B-L1): push isn't off for the box or
+/// by the App's owner, and the row exists with this exact token, its
+/// guest's grant enabled and its sign-in live. (An App that went away took
+/// its rows and settings with it, so the row check covers removal.) A
+/// store error is "no": never send on a doubt.
+pub(crate) fn deliverable(t: &Target) -> bool {
+    use k2_core::skin::app_push as store;
+    super::box_enabled()
+        && store::config(&t.app).map(|c| c.enabled).unwrap_or(false)
+        && store::still_deliverable(&t.app, &t.id, &t.token).unwrap_or(false)
+}
+
 /// Tests: wait until one App's sends are done (or `max` passes).
 #[cfg(test)]
 pub(crate) fn wait_app(app: &str, max: Duration) -> bool {
@@ -125,5 +192,26 @@ pub(crate) fn wait_app(app: &str, max: Duration) -> bool {
         }
         let (s, _) = q.idle.wait_timeout(st, left.min(Duration::from_millis(20))).unwrap_or_else(|e| e.into_inner());
         st = s;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Fair;
+
+    #[test]
+    fn apps_are_served_round_robin_so_one_backlog_never_starves_another() {
+        let mut f: Fair<String> = Fair::default();
+        f.push_all("big", (0..5).map(|i| format!("big{i}")));
+        f.push_all("small", ["small0".to_string()]);
+        f.push_all("big", ["big5".to_string()]);
+        let order: Vec<String> = std::iter::from_fn(|| f.pop()).collect();
+        assert_eq!(order, ["big0", "small0", "big1", "big2", "big3", "big4", "big5"], "small goes second, not after big's backlog");
+        assert!(f.is_empty());
+        f.push_all("a", ["a0".to_string(), "a1".to_string()]);
+        f.push_all("b", ["b0".to_string(), "b1".to_string()]);
+        f.push_all("c", Vec::<String>::new());
+        let order: Vec<String> = std::iter::from_fn(|| f.pop()).collect();
+        assert_eq!(order, ["a0", "b0", "a1", "b1"]);
     }
 }

@@ -148,8 +148,55 @@ fn viewing(pid: &str, conversation: &str) -> bool {
     crate::thread_viewers::global().is_viewing(&guest_key(pid), conversation, Instant::now())
 }
 
-/// The trigger (`thread_push::on_agent_post`, text replies only).
+/// One agent post, queued for the fan-out thread.
+struct Event {
+    conversation: String,
+    room: String,
+    agent_name: String,
+    seq: i64,
+    preview: String,
+}
+
+fn events() -> &'static Mutex<std::sync::mpsc::Sender<Event>> {
+    static TX: OnceLock<Mutex<std::sync::mpsc::Sender<Event>>> = OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Event>();
+        let spawned = std::thread::Builder::new().name("app-push-replies".into()).spawn(move || {
+            let mut last_flush = Instant::now();
+            loop {
+                match rx.recv_timeout(Duration::from_secs(1)) {
+                    Ok(e) => fan_out(&e.conversation, &e.room, &e.agent_name, e.seq, &e.preview),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                }
+                if last_flush.elapsed() >= Duration::from_secs(1) {
+                    flush(Instant::now());
+                    last_flush = Instant::now();
+                }
+            }
+        });
+        if spawned.is_err() {
+            super::sender::log("the agent-reply thread didn't start");
+        }
+        Mutex::new(tx)
+    })
+}
+
+/// The trigger (`thread_push::on_agent_post`, text replies only). It only
+/// queues the post: the recipients' lookups and the coalescing run on the
+/// agent-reply thread, never on the agent's post request (review B-L3).
 pub fn on_agent_post(conversation: &str, room: &str, agent_name: &str, seq: i64, preview: &str) {
+    if !super::box_enabled() || crate::push_routes::airgap_blocks() {
+        return;
+    }
+    let e = Event { conversation: conversation.into(), room: room.into(), agent_name: agent_name.into(), seq, preview: preview.into() };
+    if events().lock().unwrap_or_else(|p| p.into_inner()).send(e).is_err() {
+        super::sender::log("agent reply not queued: the agent-reply thread is gone");
+    }
+}
+
+/// The fan-out for one post (the agent-reply thread).
+fn fan_out(conversation: &str, room: &str, agent_name: &str, seq: i64, preview: &str) {
     if !super::box_enabled() || crate::push_routes::airgap_blocks() {
         return;
     }
@@ -196,7 +243,6 @@ pub fn on_agent_post(conversation: &str, room: &str, agent_name: &str, seq: i64,
             }
         }
     }
-    ensure_ticker();
 }
 
 /// Flush closed windows (the ticker, once a second; tests call it).
@@ -208,19 +254,6 @@ pub fn flush(now: Instant) {
         }
         deliver(&app, &pid, &post, held);
     }
-}
-
-fn ensure_ticker() {
-    static STARTED: OnceLock<()> = OnceLock::new();
-    STARTED.get_or_init(|| {
-        let spawned = std::thread::Builder::new().name("app-push-replies".into()).spawn(|| loop {
-            std::thread::sleep(Duration::from_secs(1));
-            flush(Instant::now());
-        });
-        if spawned.is_err() {
-            super::sender::log("the agent-reply ticker didn't start");
-        }
-    });
 }
 
 /// The notification for one post: `count` = 1 for the leading push, the
@@ -266,12 +299,13 @@ fn deliver(app: &str, pid: &str, post: &Post, count: u32) {
         Ok(c) => c,
         Err(_) => return,
     };
-    if per_guest().take(&format!("{app}\0{pid}"), PER_GUEST_HOUR).is_err() {
-        return;
-    }
     let configured = |d: &store::PushDevice| (d.platform == store::PLATFORM_APNS && cfg.apns.is_some()) || (d.platform == store::PLATFORM_FCM && cfg.fcm.is_some());
     let sendable: Vec<&store::PushDevice> = devices.iter().filter(|d| configured(d)).collect();
+    // The App's bucket before the guest's (review B-L5).
     if sendable.is_empty() || per_app().take_n(app, sendable.len(), PER_APP_HOUR).is_err() {
+        return;
+    }
+    if per_guest().take(&format!("{app}\0{pid}"), PER_GUEST_HOUR).is_err() {
         return;
     }
     let Ok(who) = super::who(app, pid) else { return };

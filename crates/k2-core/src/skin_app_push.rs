@@ -369,6 +369,10 @@ fn new_id() -> String {
 pub enum RegisterError {
     /// The App holds its device ceiling (`limit` = the ceiling).
     AppFull { limit: i64 },
+    /// Another guest of this App still holds this token on a live sign-in
+    /// (review B-L4): that guest signs out first (`push.unregister`, or the
+    /// sign-in ends). Never a silent takeover.
+    TokenInUse,
     Store(String),
 }
 
@@ -405,10 +409,35 @@ pub fn register(app: &str, principal_id: &str, session_token_id: &str, reg: &Reg
         let tx = immediate_tx(conn)?;
         let now = now_secs();
         let login = live_device_login_conn(&tx, session_token_id, now)?;
-        // CP5: one token, one guest (per App).
+        // CP5: one token, one guest (per App). Another guest's row holding
+        // it is first pruned if its sign-in ended; one still live refuses
+        // the register (review B-L4). This guest's own row under another
+        // device id moves.
+        let holders: Vec<String> = {
+            let mut stmt = tx
+                .prepare("SELECT DISTINCT principal_id FROM app_push_devices WHERE app_id = ?1 AND platform = ?2 AND push_token = ?3 AND principal_id != ?4")
+                .map_err(|e| format!("push token holders: {e}"))?;
+            let rows = stmt
+                .query_map(params![app, reg.platform, reg.push_token, principal_id], |r| r.get::<_, String>(0))
+                .map_err(|e| format!("push token holders: {e}"))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("push token holders: {e}"))?
+        };
+        for h in &holders {
+            prune_principal_conn(&tx, h)?;
+        }
+        let held: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM app_push_devices WHERE app_id = ?1 AND platform = ?2 AND push_token = ?3 AND principal_id != ?4",
+                params![app, reg.platform, reg.push_token, principal_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("push token holders: {e}"))?;
+        if held > 0 {
+            return Ok(Err(RegisterError::TokenInUse));
+        }
         tx.execute(
             "DELETE FROM app_push_devices WHERE app_id = ?1 AND platform = ?2 AND push_token = ?3
-               AND NOT (principal_id = ?4 AND device_id = ?5)",
+               AND principal_id = ?4 AND device_id != ?5",
             params![app, reg.platform, reg.push_token, principal_id, reg.device_id],
         )
         .map_err(|e| format!("push token move: {e}"))?;
@@ -677,16 +706,40 @@ pub fn targets(app: &str, principal_ids: &[String]) -> Result<Vec<PushDevice>, S
     let app = normalize_app_target(Some(app));
     with_conn(|conn| {
         let mut out = Vec::new();
+        let filter = format!("d.app_id = ?1 AND d.principal_id = ?2 AND d.channel = 'app' AND {LIVE_GRANT} AND {LIVE_SIGN_IN}");
         for pid in principal_ids {
-            out.extend(devices_where(
-                conn,
-                "d.app_id = ?1 AND d.principal_id = ?2 AND d.channel = 'app' AND EXISTS (
-                    SELECT 1 FROM grants g WHERE g.subject_kind = 'principal' AND g.subject_id = d.principal_id
-                       AND g.kind = 'app' AND g.target_id = d.app_id AND g.enabled != 0)",
-                &[&app, pid],
-            )?);
+            out.extend(devices_where(conn, &filter, &[&app, pid])?);
         }
         Ok(out)
+    })
+}
+
+/// The guest still holds a live, enabled grant on the row's App.
+const LIVE_GRANT: &str = "EXISTS (SELECT 1 FROM grants g WHERE g.subject_kind = 'principal' AND g.subject_id = d.principal_id
+       AND g.kind = 'app' AND g.target_id = d.app_id AND g.enabled != 0)";
+
+/// The row's device sign-in (or, without one, the pass that registered it)
+/// is still live right now: an expired pass never waits for the hourly
+/// sweep (review B-L2).
+const LIVE_SIGN_IN: &str = "((d.device_login_id IS NOT NULL AND EXISTS (SELECT 1 FROM device_logins dl
+         WHERE dl.id = d.device_login_id AND dl.revoked_at IS NULL AND dl.expires_at > CAST(strftime('%s', 'now') AS INTEGER)))
+   OR (d.device_login_id IS NULL AND EXISTS (SELECT 1 FROM tokens t
+         WHERE t.id = d.session_token_id AND t.revoked_at IS NULL
+           AND (t.expires_at IS NULL OR t.expires_at > CAST(strftime('%s', 'now') AS INTEGER)))))";
+
+/// At delivery (review B-L1): does the row still exist on this App with
+/// this exact token, its guest's grant still enabled and its sign-in still
+/// live? Revoke, disable, removal and a token change since the send was
+/// queued all answer `false`.
+pub fn still_deliverable(app: &str, id: &str, push_token: &str) -> Result<bool, String> {
+    let app = normalize_app_target(Some(app));
+    with_conn(|conn| {
+        let sql = format!(
+            "SELECT COUNT(*) FROM app_push_devices d WHERE d.app_id = ?1 AND d.id = ?2 AND d.push_token = ?3 AND d.channel = 'app'
+               AND {LIVE_GRANT} AND {LIVE_SIGN_IN}"
+        );
+        let n: i64 = conn.query_row(&sql, params![app, id, push_token], |r| r.get(0)).map_err(|e| format!("push delivery check: {e}"))?;
+        Ok(n > 0)
     })
 }
 

@@ -389,3 +389,47 @@ fn owner_and_agent_rules_for_send_test_set_and_log() {
 fn push_send_is_in_no_core_so_a_deploy_adding_it_is_held() {
     assert_eq!(k2_core::workspace::settings::app_core_of_cap(skin::CAP_PUSH_SEND), None);
 }
+
+/// Review B-L1: a queued send is checked again right before it goes out.
+#[test]
+fn a_queued_send_is_dropped_when_the_device_guest_or_app_changed() {
+    let f = fx("recheck");
+    register("dana", &f.app, "d1", 0xd1);
+    let target = |user: &str| {
+        let d = store::devices_for_app(&f.app, Some(&principal(user))).expect("list").remove(0);
+        Target::from(&d)
+    };
+    let t = target("dana");
+    assert!(worker::deliverable(&t));
+    let mut wrong = t.clone();
+    wrong.token = "ee".repeat(32);
+    assert!(!worker::deliverable(&wrong), "the row now holds another token");
+    // The App's push turned off after the send was queued.
+    store::set_switches(&f.app, store::Switches { enabled: Some(false), ..Default::default() }, "owner").expect("off");
+    assert!(!worker::deliverable(&t), "push off");
+    store::set_switches(&f.app, store::Switches { enabled: Some(true), ..Default::default() }, "owner").expect("on");
+    assert!(worker::deliverable(&t));
+    // The guest's grant disabled (their sessions end with it).
+    let g = skin::list_grants().expect("grants").into_iter().find(|g| g.subject_id == principal("dana") && g.target_id == f.app).expect("grant");
+    skin::set_grant_enabled(&g.id, false).expect("disable");
+    assert!(!worker::deliverable(&t), "grant disabled");
+    // A send queued for a device that changed answers dropped, not sent.
+    skin::set_grant_enabled(&g.id, true).expect("enable");
+    register("dana", &f.app, "d1", 0xd1);
+    let t = target("dana");
+    skin::revoke_sessions_for_app(&f.app).expect("sign everyone out");
+    assert!(!worker::deliverable(&t), "signed out");
+}
+
+/// Review B-L5: the App's device budget is taken before any guest's
+/// bucket, so a send the box refuses never spends a guest's allowance.
+#[test]
+fn the_app_budget_refuses_before_a_guest_bucket_is_spent() {
+    let f = fx("order");
+    register("dana", &f.app, "d1", 0xd1);
+    device_sends().take_n(&f.app, DEVICE_SENDS_PER_HOUR, DEVICE_SENDS_PER_HOUR).expect("fill the App's device budget");
+    let e = send(&f.app, &owner_caller(), &To::Guest("dana".into()), note(json!({}))).expect_err("over the App's budget");
+    assert_eq!((e.status, e.code), (429, "rate_limited"));
+    let key = format!("{}\0{}\0alert", f.app, principal("dana"));
+    per_guest().take_n(&key, ALERTS_PER_GUEST_HOUR, ALERTS_PER_GUEST_HOUR).expect("dana's whole hourly allowance is still there");
+}

@@ -157,6 +157,11 @@ pub fn handle_register(pass: &SkinPass, body: &[u8]) -> CliResponse {
                     extra,
                 ))
             }
+            Err(store::RegisterError::TokenInUse) => Err(refusal(
+                "409 Conflict",
+                "token_in_use",
+                "another person on this App is still signed in with this phone's token: sign them out first (push.unregister on sign-out)",
+            )),
             Err(store::RegisterError::Store(e)) => Err(CliResponse::internal_error(e)),
         }
     })())

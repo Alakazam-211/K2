@@ -151,7 +151,16 @@ fn one_token_belongs_to_one_guest_per_app() {
     let pd = session("dana", &f.app);
     let pe = session("eli", &f.app);
     register(&f.app, &f.dana, &pd, &reg("phone", "apns", APNS_A)).expect("dana");
-    // The same phone signs out of dana and into eli: dana's row goes.
+    // Eli can't take a token dana still holds on a live sign-in (review
+    // B-L4): no silent takeover.
+    assert_eq!(register(&f.app, &f.eli, &pe, &reg("phone", "apns", APNS_A)).expect_err("held"), RegisterError::TokenInUse);
+    assert_eq!(devices_for_app(&f.app, Some(&f.dana)).expect("list").len(), 1, "dana keeps it");
+    // Dana's own row moves when her same token comes under a new device id.
+    let moved = register(&f.app, &f.dana, &pd, &reg("phone-2", "apns", APNS_A)).expect("dana again");
+    assert_eq!(devices_for_app(&f.app, None).expect("list").len(), 1);
+    assert_eq!(moved.device_id, "phone-2");
+    // The phone signs out of dana (her sign-in ends): eli may take it.
+    assert!(revoke_token(&pd).expect("logout"));
     let e = register(&f.app, &f.eli, &pe, &reg("phone", "apns", APNS_A)).expect("eli");
     let all = devices_for_app(&f.app, None).expect("list");
     assert_eq!(all.len(), 1, "{all:?}");
@@ -172,6 +181,32 @@ fn one_token_belongs_to_one_guest_per_app() {
     register(&f.other_app, &f.dana, &po, &reg("phone", "apns", APNS_A)).expect("other app");
     assert_eq!(count(&f.app), 1);
     assert_eq!(count(&f.other_app), 1);
+}
+
+#[test]
+fn a_stale_holder_is_pruned_before_a_register_and_targets_skip_expired_passes() {
+    let f = fx("stale");
+    let pd = session("dana", &f.app);
+    let pe = session("eli", &f.app);
+    let d = register(&f.app, &f.dana, &pd, &reg("p1", "apns", APNS_A)).expect("dana");
+    assert_eq!(targets(&f.app, &[f.dana.clone()]).expect("targets").len(), 1);
+    assert!(still_deliverable(&f.app, &d.id, APNS_A).expect("check"));
+    assert!(!still_deliverable(&f.app, &d.id, APNS_B).expect("check"), "another token is not this row");
+    assert!(!still_deliverable(&f.other_app, &d.id, APNS_A).expect("check"), "another App never");
+    // Dana's pass expires with no revoke: targets skip her row at once
+    // (review B-L2), and so does the delivery check (B-L1).
+    with_skin_conn(|c| c.execute("UPDATE tokens SET expires_at = 1 WHERE id = ?1", params![pd]).map_err(|e| e.to_string())).expect("expire");
+    assert!(targets(&f.app, &[f.dana.clone()]).expect("targets").is_empty());
+    assert!(!still_deliverable(&f.app, &d.id, APNS_A).expect("check"));
+    // Eli's register prunes the stale holder instead of being refused.
+    register(&f.app, &f.eli, &pe, &reg("p9", "apns", APNS_A)).expect("eli takes a token whose holder's sign-in ended");
+    assert_eq!(devices_for_app(&f.app, Some(&f.dana)).expect("list").len(), 0);
+    // A disabled grant fails the delivery check.
+    let e = devices_for_app(&f.app, Some(&f.eli)).expect("list").remove(0);
+    let g = list_grants().expect("grants").into_iter().find(|g| g.subject_id == f.eli && g.target_id == f.app).expect("grant");
+    with_skin_conn(|c| c.execute("UPDATE grants SET enabled = 0 WHERE id = ?1", params![g.id]).map_err(|e| e.to_string())).expect("disable raw");
+    assert!(!still_deliverable(&f.app, &e.id, APNS_A).expect("check"), "a disabled grant");
+    assert!(targets(&f.app, &[f.eli.clone()]).expect("targets").is_empty());
 }
 
 #[test]

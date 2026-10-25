@@ -218,3 +218,22 @@ fn the_app_ceiling_answers_push_devices_full() {
     assert_eq!((st, code(&v)), (409, "push_devices_full"), "{v}");
     assert_eq!(v["error"]["limit"], 1);
 }
+
+/// Review B-L4: a token another guest still holds is never taken silently.
+#[test]
+fn a_token_another_guest_holds_is_refused_until_they_sign_out() {
+    let f = fx("steal");
+    turn_on(&f.app);
+    skin::add_principal_for_app("fay", None, &f.app, None, "test").expect("fay");
+    let pd = pass_for("dana", &f.app);
+    let pf = pass_for("fay", &f.app);
+    let (st, _, _) = call(REGISTER, &pd, true, reg_body("phone"), &[]);
+    assert_eq!(st, 200);
+    let (st, v, raw) = call(REGISTER, &pf, true, reg_body("phone"), &[]);
+    assert_eq!((st, code(&v)), (409, "token_in_use"), "{v}");
+    assert!(!raw.contains(APNS) && !raw.contains("dana"), "no oracle beyond in-use: {raw}");
+    let (st, _, _) = call(UNREGISTER, &pd, true, json!({"deviceId": "phone"}), &[]);
+    assert_eq!(st, 200);
+    let (st, v, _) = call(REGISTER, &pf, true, reg_body("phone"), &[]);
+    assert_eq!(st, 200, "after dana signs out: {v}");
+}

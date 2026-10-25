@@ -199,7 +199,8 @@ pub fn send(app: &str, caller: &Caller, to: &To, n: Notification) -> Result<J, S
     let send_id = payload::new_send_id();
     let guest_max = if notification.silent { SILENT_PER_GUEST_HOUR } else { ALERTS_PER_GUEST_HOUR };
     let bucket = if notification.silent { "silent" } else { "alert" };
-    let mut jobs: Vec<Job> = Vec::new();
+    // Each guest's sendable devices first, with no budget taken yet.
+    let mut plan: Vec<(&String, Vec<&store::PushDevice>)> = Vec::new();
     for pid in &guests {
         let mine: Vec<&store::PushDevice> = devices.iter().filter(|d| &d.principal_id == pid).collect();
         if mine.is_empty() {
@@ -216,9 +217,18 @@ pub fn send(app: &str, caller: &Caller, to: &To, n: Notification) -> Result<J, S
                 sendable.push(d);
             }
         }
-        if sendable.is_empty() {
-            continue;
+        if !sendable.is_empty() {
+            plan.push((pid, sendable));
         }
+    }
+    // The App's device budget before any guest's bucket (review B-L5): a
+    // send the box refuses never spends a guest's hourly allowance.
+    let candidates: usize = plan.iter().map(|(_, d)| d.len()).sum();
+    if candidates > 0 {
+        device_sends().take_n(app, candidates, DEVICE_SENDS_PER_HOUR).map_err(|w| rate_limited(w, DEVICE_SENDS_PER_HOUR, "device sends an hour"))?;
+    }
+    let mut jobs: Vec<Job> = Vec::new();
+    for (pid, sendable) in plan {
         if per_guest().take(&format!("{app}\0{pid}\0{bucket}"), guest_max).is_err() {
             skipped.rate_limited += 1;
             continue;
@@ -231,9 +241,6 @@ pub fn send(app: &str, caller: &Caller, to: &To, n: Notification) -> Result<J, S
                 stamps: Stamps { app: app.to_string(), send_id: send_id.clone(), kind: caller.kind, who: who.clone() },
             });
         }
-    }
-    if !jobs.is_empty() {
-        device_sends().take_n(app, jobs.len(), DEVICE_SENDS_PER_HOUR).map_err(|w| rate_limited(w, DEVICE_SENDS_PER_HOUR, "device sends an hour"))?;
     }
     let queued = jobs.len();
     let rec = SendRecord::new(&send_id, &caller.actor, to.kind(), guests.len() + not_a_guest, notification.topic.clone(), queued, skipped.clone());

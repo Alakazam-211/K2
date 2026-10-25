@@ -31,8 +31,9 @@ EXIT 3 — STOP LOOPING
                  a K2 terminal or an App's server never can, your own card
                  included: close it with `k2 thread void <addr> <id>`.
                  An App answers with the guest's own pass, never its own.
-                 A guest you added counts as you until a person resets
-                 its password or claims it. Known, by design for now: a
+                 A guest you added, or whose password or email you set,
+                 counts as you until the owner takes it over. Known, by
+                 design for now: a
                  Garden widget you made, once the person approves its
                  thread:post, can answer your ordinary choice cards (it
                  runs in the person's own Garden view).

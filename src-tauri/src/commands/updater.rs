@@ -362,28 +362,59 @@ fn app_update_has_trusted_signature(raw_json: &serde_json::Value, download_url: 
     }
 }
 
+/// Hosts an app update may be downloaded from (GitHub releases and the CDN
+/// it redirects to). Anything else, including a redirect elsewhere, is
+/// refused before any byte is read.
+const APP_UPDATE_HOSTS: &[&str] = &["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"];
+
+/// The largest app update K2 downloads (today's bundles are ~100-200 MB).
+const APP_UPDATE_MAX_BYTES: u64 = 768 * 1024 * 1024;
+
+fn app_update_url_allowed(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" && url.host_str().is_some_and(|h| APP_UPDATE_HOSTS.contains(&h)) && url.port().is_none()
+}
+
 fn download_app_update(app: &tauri::AppHandle, url: &str) -> Result<Vec<u8>, String> {
     use std::io::Read as _;
     use tauri::Emitter;
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("bad update URL {url}: {e}"))?;
+    if !app_update_url_allowed(&parsed) {
+        return Err(format!("refusing to download an update from {url}: not a K2 release host"));
+    }
     let client = reqwest::blocking::Client::builder()
         .user_agent("K2-Updater")
         .connect_timeout(std::time::Duration::from_secs(20))
         .timeout(std::time::Duration::from_secs(30 * 60))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 {
+                attempt.error("too many redirects")
+            } else if app_update_url_allowed(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.error("redirected off the K2 release hosts")
+            }
+        }))
         .build()
         .map_err(|e| e.to_string())?;
     let mut resp = client
-        .get(url)
+        .get(parsed)
         .send()
         .and_then(|r| r.error_for_status())
         .map_err(|e| format!("download {url}: {e}"))?;
     let total = resp.content_length();
-    let mut out = Vec::with_capacity(total.unwrap_or(0).min(512 * 1024 * 1024) as usize);
+    if total.is_some_and(|t| t > APP_UPDATE_MAX_BYTES) {
+        return Err(format!("refusing a {} byte update (the cap is {APP_UPDATE_MAX_BYTES})", total.unwrap_or(0)));
+    }
+    let mut out = Vec::with_capacity(total.unwrap_or(0) as usize);
     let mut chunk = vec![0u8; 256 * 1024];
     let mut last_emit = 0u64;
     loop {
         let n = resp.read(&mut chunk).map_err(|e| format!("download {url}: {e}"))?;
         if n == 0 {
             break;
+        }
+        if out.len() as u64 + n as u64 > APP_UPDATE_MAX_BYTES {
+            return Err(format!("refusing the update: larger than the {APP_UPDATE_MAX_BYTES} byte cap"));
         }
         out.extend_from_slice(&chunk[..n]);
         let done = out.len() as u64;
@@ -448,7 +479,7 @@ pub async fn app_update_download(app: tauri::AppHandle) -> Result<String, String
         .map_err(|e| format!("K2 refused this update: {e}"))?;
     let mut slot = staged_app_update().lock().map_err(|_| "update state poisoned".to_string())?;
     match slot.as_mut() {
-        Some(s) if s.update.version == version => s.verified_bytes = Some(bytes),
+        Some(s) if s.update.version == version && s.update.download_url.as_str() == url => s.verified_bytes = Some(bytes),
         _ => return Err("the update changed while downloading; check again".into()),
     }
     Ok(v.key_id)
@@ -463,9 +494,18 @@ pub async fn app_update_install() -> Result<(), String> {
         .take()
         .ok_or("no update to install (download it first)")?;
     let Some(bytes) = staged.verified_bytes else {
+        let _ = tokio::task::spawn_blocking(crate::restart_daemon_after_failed_update).await;
         return Err("the update isn't downloaded and verified yet".into());
     };
-    staged.update.install(&bytes).map_err(|e| e.to_string())
+    match staged.update.install(&bytes) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // The renderer stopped the bundled daemon for the installer
+            // (Windows file lock); nothing was installed, so bring it back.
+            let _ = tokio::task::spawn_blocking(crate::restart_daemon_after_failed_update).await;
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Broadcast an event from one window to all windows (used for tab sync etc.)
@@ -482,6 +522,18 @@ pub fn broadcast_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_update_downloads_only_from_k2_release_hosts() {
+        let ok = |u: &str| app_update_url_allowed(&reqwest::Url::parse(u).expect("url"));
+        assert!(ok("https://github.com/Alakazam-211/K2/releases/download/v0.46.4/K2.app.tar.gz"));
+        assert!(ok("https://objects.githubusercontent.com/x/y"));
+        assert!(ok("https://release-assets.githubusercontent.com/x/y"));
+        assert!(!ok("http://github.com/Alakazam-211/K2/releases/download/v0.46.4/K2.app.tar.gz"), "plain http");
+        assert!(!ok("https://github.com.evil.example/K2.app.tar.gz"));
+        assert!(!ok("https://evil.example/K2.app.tar.gz"));
+        assert!(!ok("https://github.com:8443/K2.app.tar.gz"), "odd port");
+    }
 
     const DARWIN_ONLY: &str = r#"{
         "version": "0.41.2",

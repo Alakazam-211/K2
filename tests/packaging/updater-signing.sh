@@ -101,6 +101,7 @@ echo "stub gh: unsupported: $*" >&2; exit 2
 EOF
 cat > "$bin/curl" <<'EOF'
 #!/usr/bin/env bash
+[ "${STUB_CURL_FAIL:-0}" = 1 ] && { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
 out="" url=""
 while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac; done
 cp "$STUB_CURL_FILE" "$out"
@@ -597,6 +598,20 @@ PY
 else
     fail "windows patch" "$(tail -10 "$tmp/w.out")"
 fi
+
+# The fallback to releases/latest and the version overwrite are gone.
+printf '{"version":"9.9.8","platforms":{"darwin-aarch64":{"signature":"x","url":"u"}}}' > "$tmp/latest-old.json"
+if STUB_CURL_FILE="$tmp/latest-old.json" bash "$wroot/scripts/windows-patch-latest-json.sh" "$V" "$tmp/K2_${V}_x64-setup.exe" >"$tmp/w.out" 2>&1; then
+    fail "windows: another release's latest.json" "patched it"
+else
+    grep -q "is for '9.9.8', not $V" "$tmp/w.out" && pass "windows: a latest.json for another version is refused, not re-stamped" || fail "windows version" "$(tail -3 "$tmp/w.out")"
+fi
+if STUB_CURL_FAIL=1 bash "$wroot/scripts/windows-patch-latest-json.sh" "$V" "$tmp/K2_${V}_x64-setup.exe" >"$tmp/w.out" 2>&1; then
+    fail "windows: no latest.json" "went on"
+else
+    grep -q "not falling back" "$tmp/w.out" && pass "windows: no latest.json on the tag is fatal (no releases/latest fallback)" || fail "windows fallback" "$(tail -3 "$tmp/w.out")"
+fi
+! grep -q 'releases/latest/download/latest.json' "$ROOT/scripts/windows-patch-latest-json.sh" && pass "windows-patch-latest-json.sh never reads the latest alias" || fail "windows alias" ""
 
 echo "== installers: a dual-signed release on old and new installs (SS4) =="
 case "$(uname -s)" in Darwin) pos=macos ;; Linux) pos=linux ;; *) pos=unknown ;; esac

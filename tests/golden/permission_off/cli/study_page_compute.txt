@@ -36,6 +36,42 @@ RUN
   dir per project keeps cargo incremental.
   Env starts empty: PATH, HOME, CARGO_*, TMPDIR, CI=1 and your --env
   NAME=value. No K2 token, socket or port ever reaches a job.
+  --env values are stored (the plan, the job row, the node's ledger):
+  never put a key in --env. Use --secret (SECRETS below).
+
+SECRETS (vault values as env, 0.46.4, Linux nodes)
+  k2 compute run <node> --secret GMAIL_CLIENT_SECRET -- make release
+  k2 compute run <node> --secret STRIPE_KEY=STRIPE_TEST_KEY -- cargo test
+    NAME is a secret in your workspace's vault (or k2v://server/NAME);
+    =ENVNAME picks the variable (default: the grant's, else NAME in
+    capitals). K2_*, the node's own names and loader names (LD_*, PATH…)
+    are refused (env_refused, exit 2), and so is a name also in --env
+    (env_secret_collision). At most 16 secrets, 8 KiB each, text.
+  A person grants it first, per node (it leaves this machine):
+    k2 vault grant NAME --scope ws:<you> --to compute:<you>/<node> --as env
+    (compute:<you>/* = every node this server owns, never one it shares
+    from another server). Agents can't: secret_not_granted (exit 3)
+    prints the owner's exact command.
+  What's stored: the names and the vault ids, never a value. Not in the
+  plan, the job row, the node's ledger or files, the receipt, events or
+  messages. The node asks for the value right before the command starts;
+  it comes sealed to a one-time key (the relay sees ciphertext) and goes
+  to the job on stdin, then memory only. Every release is a vault audit
+  row and a secret_release event on the job; a retry asks again.
+  If the job prints it, the logs K2 keeps show [k2v:ENVNAME] (raw,
+  base64, hex, percent and JSON forms; values under 8 bytes aren't
+  matched). Your kept artifacts are your bytes: never rewritten.
+  The job HAS the value: it can print it in a form K2 doesn't spot,
+  write it to a file or an artifact, or send it over the network. Child
+  processes inherit it. Only give a job what it needs.
+  The node must be Linux with the job wall, k2-node 0.46.4, and treat
+  this server as its own (trust own); --any skips nodes that aren't or
+  that no grant covers. A secret job never runs beside another
+  workspace's job under the same user (secret_isolation_wait).
+  Revoking a grant never stops a running job (it already has the value);
+  the next attempt is refused (secret_not_granted). k2 vault revoke lists
+  the running jobs that got it. --plan shows each secret's env name and
+  whether a grant covers the node; get/status/receipt show the env names.
 
 CANCEL
   k2 compute cancel <job> cancels a QUEUED job at once. A job that already
@@ -281,7 +317,13 @@ COMMON ERRORS
   too_many_pending       10 requests already wait for the owner; withdraw some
   approval_expired       the owner didn't decide in 24 h, or the node stayed offline
   verb_not_allowed       not an admin verb; a root script is the escape hatch
-  node_upgrade_required  --needs on an older k2-node: update it there (sudo k2-node setup)
+  node_upgrade_required  --needs on an older k2-node: update it there (sudo k2-node setup);
+                         --secret: the node isn't Linux + job wall + 0.46.4 + trust own
+  secret_not_granted     no compute: grant for that secret on that node; only a person
+                         grants it (the error prints the command); exit 3
+  secret_unavailable     the node got no answer for its secret in 60 s (link dropped);
+                         infrastructure, retried
+  secret_isolation_wait  another workspace's job runs as the same user; it waits
   tool_install_failed    a --needs tool didn't install, or installed without its
                          command (version wrong, no network); the job never started
   tool_unsupported       k2-node doesn't install that tool (exit 2, nothing runs):

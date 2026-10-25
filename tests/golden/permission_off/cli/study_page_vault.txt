@@ -87,6 +87,9 @@ WHO SETS WHAT
   Secrets your workspace created are yours to widen.
   "Allow managing server-wide secrets" (vault_manage) lets an IT agent
   share server secrets with OTHER workspaces — never its own.
+  compute:<ws>/<node> grants (a secret as env in compute jobs on another
+  machine) are people only, for every agent: ask your owner with the
+  exact line `k2 compute run --secret` prints (k2 study compute, SECRETS).
 
 PEOPLE ONLY
   The recovery key, the vault password, reveal and key rotation are for

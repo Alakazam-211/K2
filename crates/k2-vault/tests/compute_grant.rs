@@ -96,7 +96,7 @@ fn a_named_node_grant_reaches_that_node_only() {
     let ok2 = compute_rows(&v, &id).into_iter().filter(|r| r.outcome == "ok").count();
     assert_eq!(ok2, 2);
     // Denials are audited too.
-    assert!(compute_rows(&v, &id).iter().any(|r| r.outcome == "deny"));
+    assert!(compute_rows(&v, &id).iter().any(|r| r.outcome.starts_with("deny:")), "denials are audited");
     for r in compute_rows(&v, &id) {
         let all = format!("{r:?}");
         assert!(!all.contains(VALUE), "audit row carries the value: {all}");

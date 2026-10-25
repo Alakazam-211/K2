@@ -25,7 +25,10 @@ fn spec_dir(tag: &str) -> std::path::PathBuf {
 /// Run `k2-node job-exec <spec>` with `stdin` on its stdin.
 fn shim(spec: &k2_node::wall::ExecSpec, stdin: &[u8], tag: &str) -> (i32, String, String, std::path::PathBuf) {
     let d = spec_dir(tag);
-    let p = k2_node::wall::write_exec_spec(&d, spec).unwrap();
+    // Written by hand (write_exec_spec also hands the dir to the node group, which
+    // a test under the job wall may not do); the shim reads and deletes it.
+    let p = d.join("exec.json");
+    std::fs::write(&p, serde_json::to_vec(spec).unwrap()).unwrap();
     let body = std::fs::read_to_string(&p).unwrap();
     assert!(!body.contains(VALUE), "exec.json carries the value: {body}");
     let mut child = Command::new(env!("CARGO_BIN_EXE_k2-node"))
@@ -63,7 +66,7 @@ fn the_shim_takes_the_secret_env_from_stdin_and_closes_it() {
     let (code, out, err, dir) = shim(&s, &pipe_body(&format!(r#"{{"env":{{"K2T_SECRET":"{VALUE}"}}}}"#)), "ok");
     assert_eq!(code, 0, "{err}");
     assert_eq!(out, format!("v={VALUE}\nstdin-empty\n"));
-    assert!(!dir.join(k2_node::wall::EXEC_SPEC).exists(), "the spec is read once, then gone");
+    assert!(!dir.join("exec.json").exists(), "the spec is read once, then gone");
 }
 
 #[test]

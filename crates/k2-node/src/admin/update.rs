@@ -1019,6 +1019,12 @@ pub fn run_decided<F>(e: &Executor, (d, running): (Decision, usize), opts: Drain
 where
     F: FnOnce(&Executor) -> Result<Value, AdminRefusal> + Send + 'static,
 {
+    // An unfinished owner change holds control under its own drain record:
+    // no update, rollback or restart may drain (or act) beside it, whatever
+    // path asked (verification #3).
+    if what != k2_node_proto::share::VERB_OWNER && control_held(e) {
+        return Err(super::owner::in_progress_refusal(what));
+    }
     // Any update or rollback that acts (now, or a new drain) supersedes a
     // drain still waiting to act; a refused one changes nothing.
     let supersede = || e.drain_gen.fetch_add(1, Ordering::SeqCst) + 1;

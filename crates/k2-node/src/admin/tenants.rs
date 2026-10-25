@@ -134,6 +134,49 @@ fn kill_if_still(pid: i32, uid: u32) {
 #[cfg(not(target_os = "linux"))]
 fn kill_if_still(_pid: i32, _uid: u32) {}
 
+/// macOS: (ppid, uid) of a process, by `proc_pidinfo`.
+#[cfg(target_os = "macos")]
+fn bsd_info(pid: i32) -> Option<(u32, u32)> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: a zeroed out-struct of the size we pass.
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, &mut info as *mut _ as *mut libc::c_void, size) };
+    (n == size).then_some((info.pbi_ppid, info.pbi_uid))
+}
+
+/// macOS: every process of `uid` whose parent is launchd (pid 1): what a
+/// job left running after its process group ended.
+#[cfg(target_os = "macos")]
+fn mac_orphans_of(uid: u32) -> Vec<i32> {
+    let mut pids: Vec<libc::c_int> = vec![0; 8192];
+    let bytes = (pids.len() * std::mem::size_of::<libc::c_int>()) as libc::c_int;
+    // SAFETY: a buffer of `bytes` bytes.
+    let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr() as *mut libc::c_void, bytes) };
+    if n <= 0 {
+        return Vec::new();
+    }
+    pids.truncate(n as usize);
+    pids.into_iter().filter(|p| *p > 1 && bsd_info(*p) == Some((1, uid))).collect()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mac_orphans_of(_uid: u32) -> Vec<i32> {
+    Vec::new()
+}
+
+/// macOS: SIGKILL `pid` only while it's still an orphan of `uid` (checked
+/// again just before the signal).
+#[cfg(target_os = "macos")]
+fn kill_orphan_if_still(pid: i32, uid: u32) {
+    if bsd_info(pid) == Some((1, uid)) {
+        // SAFETY: a plain signal to a checked pid.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn kill_orphan_if_still(_pid: i32, _uid: u32) {}
+
 /// Every process of `uid` (from /proc; Linux).
 fn pids_of(uid: u32) -> Vec<i32> {
     let mut out = Vec::new();
@@ -384,11 +427,15 @@ impl Executor {
         r
     }
 
-    /// `servers.owner`'s first act (review F6): every unit and process of
-    /// slot `slot`'s user stops before its files move. Only `servers.owner`
+    /// `servers.owner`'s first act (review F6, verification #8): nothing of
+    /// either server's jobs runs while their files move. Linux: every unit
+    /// and process of slot `slot`'s user, and every process of the owner's
+    /// job user (`jobs.toml`). macOS (jobs run as the node user): every
+    /// orphaned process of the node user (reparented to launchd: what a
+    /// job left running), never the node itself. Only `servers.owner`
     /// calls it, after its drain; never reachable from the node's socket.
-    /// Linux only. Audited.
-    pub fn tenant_stop_processes(&self, slot: Slot) -> Result<Value, AdminRefusal> {
+    /// Audited.
+    pub fn stop_job_leftovers(&self, slot: Slot) -> Result<Value, AdminRefusal> {
         if slot == OWNER_SLOT || !share::valid_slot(slot) {
             return Err(refuse(code::BAD_ARGS, format!("slot {slot} isn't a tenant slot (1–7)")));
         }
@@ -396,10 +443,42 @@ impl Executor {
         let mut removed: Vec<String> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
         self.stop_slot_processes(slot, &mut removed, &mut errors);
+        if cfg!(target_os = "linux") {
+            let owner_uid = jobs::read_jobs_file(&self.paths.config_dir).ok().flatten().and_then(|f| super::server::user_ids(&f.job_user)).map(|(u, _)| u);
+            let node_uid = super::server::user_ids(&self.node_user()).map(|(u, _)| u);
+            if let Some(uid) = owner_uid.filter(|u| *u != 0 && Some(*u) != node_uid) {
+                for _ in 0..20 {
+                    let pids = pids_of(uid);
+                    if pids.is_empty() {
+                        break;
+                    }
+                    for p in pids {
+                        kill_if_still(p, uid);
+                        removed.push(format!("owner job pid {p}"));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        } else if let Some((node_uid, _)) = super::server::user_ids(&self.node_user()).filter(|(u, _)| *u != 0) {
+            // The node itself is the user's one other orphan: without its pid
+            // nothing is signalled (it must never be hit).
+            match self.platform.node_pid() {
+                Some(node_pid) => {
+                    for p in mac_orphans_of(node_uid) {
+                        if p as u32 == node_pid {
+                            continue;
+                        }
+                        kill_orphan_if_still(p, node_uid);
+                        removed.push(format!("orphan pid {p}"));
+                    }
+                }
+                None => errors.push("the node's pid is unknown, so its user's leftover processes weren't stopped".into()),
+            }
+        }
         let r = if errors.is_empty() {
             Ok(json!({"slot": slot, "removed": removed}))
         } else {
-            Err(failed(format!("slot {slot}'s processes only partly stopped: {}", errors.join("; "))))
+            Err(failed(format!("leftover job processes only partly stopped: {}", errors.join("; "))))
         };
         self.audit_tenant_op("tenant.stop", slot, &r);
         r

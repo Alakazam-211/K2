@@ -331,12 +331,16 @@ pub enum LocalRequest {
     Servers { servers: ServersOp },
     /// `sudo k2-node servers owner …` at the machine (unsigned; the socket
     /// accepts it from root only, never the node user): start an owner
-    /// change ([`super::owner`]), or `resume` one that stopped.
+    /// change ([`super::owner`]), `resume` one that stopped, or `abort` a
+    /// wedged one ([`super::owner::abort`]: rolls back before the node's
+    /// swap, refused after it).
     OwnerChange {
         #[serde(default)]
         args: Option<k2_node_proto::share::OwnerArgs>,
         #[serde(default)]
         resume: bool,
+        #[serde(default)]
+        abort: bool,
         by: String,
     },
 }
@@ -641,7 +645,7 @@ impl Executor {
     }
 
     /// The busy lock, waiting up to 5 s.
-    fn lock_briefly(&self) -> Option<std::sync::MutexGuard<'_, ()>> {
+    pub(crate) fn lock_briefly(&self) -> Option<std::sync::MutexGuard<'_, ()>> {
         for _ in 0..50 {
             match self.busy.try_lock() {
                 Ok(g) => return Some(g),
@@ -675,7 +679,18 @@ impl Executor {
     fn dispatch(&self, c: &Checked, payload: Option<(&str, &[u8])>) -> Result<Value, AdminRefusal> {
         let args = &c.opened.cmd.args;
         let by = format!("controller:{}", c.opened.cmd.proposed_by);
-        match c.opened.cmd.verb.as_str() {
+        // While an owner change is unfinished, nothing may change control,
+        // restart k2-node or touch servers.toml: control must stay
+        // `draining` under its own drain record (verification #2, #3, #7).
+        let verb = c.opened.cmd.verb.as_str();
+        let held = matches!(
+            verb,
+            "control.pause" | "control.drain" | "control.resume" | "unit.restart" | "node.update" | "node.rollback" | "wall.enable"
+        ) || (k2_node_proto::share::VERBS.contains(&verb) && verb != k2_node_proto::share::VERB_LIST);
+        if held && super::update::control_held(self) {
+            return Err(super::owner::in_progress_refusal(verb));
+        }
+        match verb {
             "admin.level.lower" => self.level_lower(c, args),
             "control.pause" | "control.drain" | "control.resume" => {
                 no_args(args)?;
@@ -838,12 +853,31 @@ impl Executor {
             LocalRequest::Job { job } => LocalResponse::Job(self.handle_job(job, Vec::new())),
             LocalRequest::Servers { servers } => LocalResponse::Result(self.handle_servers_op(*servers)),
             // Root only: `serve_conn` checks the peer before it gets here.
-            LocalRequest::OwnerChange { args, resume, by } => LocalResponse::Result(self.handle_owner_local(args.as_ref(), *resume, by)),
+            LocalRequest::OwnerChange { args, resume, abort: true, by } => LocalResponse::Result(self.handle_owner_abort(*resume || args.is_some(), by)),
+            LocalRequest::OwnerChange { args, resume, abort: false, by } => LocalResponse::Result(self.handle_owner_local(args.as_ref(), *resume, by)),
         }
     }
 
     /// `sudo k2-node servers owner …` (root at the machine; audited
     /// `local`, then `owner_change` when it's done).
+    /// `sudo k2-node servers owner --abort` (root at the machine only: the
+    /// socket's peer check). Audited as `local`, then `owner_change_aborted`.
+    pub fn handle_owner_abort(&self, mixed: bool, by: &str) -> AdminResult {
+        let name = k2_node_proto::share::VERB_OWNER;
+        if mixed {
+            return self.refuse_result((name.to_string(), String::new(), AdminRefusal::new(code::BAD_ARGS, "--abort takes no server and no --resume")));
+        }
+        let by = format!("local:{}", by.chars().filter(|c| c.is_ascii_alphanumeric() || "-_.".contains(*c)).take(64).collect::<String>());
+        let _ = self.audit().append(
+            AuditEntry { event: "local".into(), verb: Some(name.into()), proposed_by: Some(by), detail: json!({"abort": true}), ..Default::default() },
+            self.now(),
+        );
+        match super::owner::abort(self) {
+            Ok(v) => AdminResult::done(name, "", json!({"aborted": true, "result": v})),
+            Err(r) => self.refuse_result((name.to_string(), String::new(), r)),
+        }
+    }
+
     pub fn handle_owner_local(&self, args: Option<&k2_node_proto::share::OwnerArgs>, resume: bool, by: &str) -> AdminResult {
         let name = k2_node_proto::share::VERB_OWNER;
         if resume {
@@ -889,6 +923,9 @@ impl Executor {
             return AdminResult::refused(name, "", &AdminRefusal::new(code::BUSY, "busy; try again"));
         };
         let ctx = super::servers::Ctx::for_executor(self, "node:prune");
+        // Staging and trash an owner change left (a tree too deep to go at
+        // once) are removed again here while no change runs (verification #6).
+        super::owner::sweep_leftovers(self);
         match super::servers::prune(&ctx) {
             Ok(v) => {
                 let changed = v.get("changed").and_then(|c| c.as_array()).is_some_and(|c| !c.is_empty())

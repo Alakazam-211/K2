@@ -476,6 +476,12 @@ fn args<T: serde::de::DeserializeOwned>(verb: &str, v: &Value) -> Result<T, Admi
 /// Run one `servers.*` verb (the executor after its checks, or the machine
 /// owner's CLI).
 pub fn run(ctx: &Ctx, verb: &str, a: &Value) -> Result<Value, AdminRefusal> {
+    // An owner change is rewriting these lines: nothing else touches them
+    // until it's done or aborted (verification #7). The machine owner's
+    // tools without sudo see root's public marker, root sees its step file.
+    if verb != share::VERB_LIST && (ctx.state_dir.join(super::owner::STEP_FILE).exists() || super::owner::change_in_progress(&ctx.config_dir)) {
+        return Err(super::owner::in_progress_refusal(verb));
+    }
     let _g = if verb == share::VERB_LIST { None } else { Some(servers_lock(ctx)?) };
     match verb {
         share::VERB_ADD => add(ctx, &args(verb, a)?),

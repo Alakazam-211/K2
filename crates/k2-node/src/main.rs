@@ -65,6 +65,7 @@ More than one K2 server (0.46.3; the machine owner, at this machine):
                  slots, caches move with their server (or --caches wipe), root re-pins admin.toml.
                  The old owner stays as one of your servers (--old revoke: it leaves)
   sudo k2-node servers owner --resume                    finish an owner change that stopped
+  sudo k2-node servers owner --abort                     undo an owner change stuck before the node's swap (after it: --resume)
   sudo k2-node servers prune                             promote confirmed adds, drop stale ones, wipe due slots now
   (<server> is a label, e.g. baden.k2.dev, or slot:<n>; the new server mints CODE.FP
    with `k2 compute node add <this node>`; then read it the SAS that `servers` shows)
@@ -642,7 +643,11 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
                 return Err("servers owner changes who has root admin here: run it with sudo".into());
             }
             let resume = a.has("--resume");
-            let args = if resume {
+            let abort = a.has("--abort");
+            if abort && (resume || a.positional.len() > 2 || a.get("fp").is_some()) {
+                return Err("--abort takes no server, --fp or --resume".into());
+            }
+            let args = if resume || abort {
                 None
             } else {
                 let old = match a.get("old") {
@@ -663,7 +668,7 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
                 Some(o)
             };
             let socket = a.get("socket").map(PathBuf::from).unwrap_or_else(acfg::default_socket);
-            let req = k2_node::admin::exec::LocalRequest::OwnerChange { args, resume, by: who(a) };
+            let req = k2_node::admin::exec::LocalRequest::OwnerChange { args, resume, abort, by: who(a) };
             let r = match k2_node::admin::server::request(&socket, &req, None, std::time::Duration::from_secs(60)) {
                 Ok(k2_node::admin::exec::LocalResponse::Result(r)) => r,
                 Ok(other) => return Err(format!("unexpected answer from the executor: {other:?}")),
@@ -672,7 +677,15 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
             if r.state != "done" {
                 return Err(format!("{}: {}", r.code.as_deref().unwrap_or("refused"), r.message.as_deref().unwrap_or("")));
             }
-            if !resume {
+            if abort {
+                let v = &r.result["result"];
+                println!(
+                    "Owner change {} aborted at its {} step: {} doesn't become the owner and control is back to what it was.",
+                    v["id"].as_str().unwrap_or("?"),
+                    v["phase"].as_str().unwrap_or("?"),
+                    v["to"].as_str().unwrap_or("the new server"),
+                );
+            } else if !resume {
                 let v = &r.result;
                 println!(
                     "{} (key {}) becomes this node's owner after the drain ({} job(s) running; up to 30 min{}). The old owner {}: {}. Caches: {}.",
@@ -769,6 +782,13 @@ impl k2_node::ledger::Clock for OffsetClock {
 
 fn cmd_control(a: &Args, c: Control) -> Result<(), String> {
     let layout = a.layout();
+    // An owner change holds control at `draining` until it's done: nothing
+    // may start, and its drain record puts control back afterwards.
+    if k2_node::admin::owner::change_in_progress(&layout.config) {
+        return Err("an owner change is under way on this node (owner_change_in_progress): control stays draining until it finishes; \
+                    see sudo k2-node admin audit, or end it with sudo k2-node servers owner --resume / --abort"
+            .into());
+    }
     config::write_control(&layout.control(), c, &who(a), k2_node::util::now())?;
     println!("{} — k2-node picks it up within a few seconds{}", c.as_str(), if c == Control::Stopped { "; running jobs are stopped" } else { "" });
     Ok(())

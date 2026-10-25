@@ -656,6 +656,11 @@ pub fn ensure_child_dir(parent: &OwnedFd, name: &CStr, mode: u32) -> std::io::Re
     open_dir_at(parent.as_raw_fd(), name)
 }
 
+/// The owner uid and permission bits of an open file or directory.
+pub fn owner_and_mode(fd: &OwnedFd) -> std::io::Result<(u32, u32)> {
+    fstat(fd).map(|st| (st.st_uid, mode_of(&st) & 0o7777))
+}
+
 /// The device an open directory lives on (renames never cross one).
 pub fn device_of(dir: &OwnedFd) -> std::io::Result<u64> {
     fstat(dir).map(|st| st.st_dev as u64)

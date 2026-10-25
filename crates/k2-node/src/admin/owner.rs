@@ -47,7 +47,7 @@
 //! Control stays `draining` throughout and goes back once it's done.
 //! Audited: `owner_change` (and `tenant.unuser`, `tenant.prepare`).
 
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
@@ -65,8 +65,18 @@ pub const STEP_FILE: &str = "owner-change.json";
 /// In the update mark's directory (root-owned, node-readable): what the
 /// node swaps at its next start.
 pub const NODE_FILE: &str = "owner-change.json";
+/// In the mark directory (root-owned, readable by all): an owner change is
+/// under way. The machine owner's own tools (`k2-node pause|drain|resume`,
+/// `k2-node servers …` without sudo) can't see root's step file; they see
+/// this and refuse (verification #2, #7).
+pub const ACTIVE_FILE: &str = "owner-change-active";
 /// Root-only staging in `<home>-t` (root's own 0711 folder).
 pub const STAGE_DIR: &str = ".owner-change";
+/// A root-only trash on the node home's own volume (renames never cross a
+/// filesystem; verification #4).
+pub const HOME_TRASH: &str = ".k2-owner-change-trash";
+/// Refused while an owner change is under way.
+pub const IN_PROGRESS: &str = "owner_change_in_progress";
 /// The node acts on an instruction at most this old; root removes older
 /// ones when it starts.
 pub const NODE_FILE_MAX_AGE_SECS: i64 = 7 * 86_400;
@@ -170,8 +180,38 @@ pub fn read_step(e: &Executor) -> Result<Option<Step>, String> {
 
 fn write_step(e: &Executor, s: &Step) -> Result<(), AdminRefusal> {
     crate::util::mkdir_mode(&e.paths.state_dir, 0o700).map_err(failed)?;
+    let cfg = &e.paths.config_dir;
+    super::update::ensure_mark_dir(cfg).map_err(failed)?;
+    super::update::write_owned_in(&super::update::mark_dir(cfg), ACTIVE_FILE, s.id.as_bytes(), 0o644, super::update::mark_owner(cfg)).map_err(failed)?;
     let b = serde_json::to_vec_pretty(s).map_err(|x| failed(x.to_string()))?;
     crate::util::atomic_write(&step_path(e), &b, 0o600).map_err(failed)
+}
+
+/// The change is over (done or aborted): the step file goes, then the
+/// public marker.
+fn end_step(e: &Executor) -> Result<(), AdminRefusal> {
+    std::fs::remove_file(step_path(e)).map_err(|x| failed(format!("remove {STEP_FILE}: {x}")))?;
+    let cfg = &e.paths.config_dir;
+    if let Ok(dir) = open_dir(&super::update::mark_dir(cfg)) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: unlinkat a fixed name in our directory fd.
+        unsafe { libc::unlinkat(dir.as_raw_fd(), cname(ACTIVE_FILE).as_ptr(), 0) };
+    }
+    Ok(())
+}
+
+/// Is an owner change under way? (The machine owner's tools: the public
+/// marker, as root wrote it in its own directory.)
+pub fn change_in_progress(config_dir: &Path) -> bool {
+    super::update::read_owned_in(&super::update::mark_dir(config_dir), ACTIVE_FILE, super::update::mark_owner(config_dir), true).is_some()
+}
+
+/// The refusal for anything that would act under a change.
+pub fn in_progress_refusal(what: &str) -> AdminRefusal {
+    refuse(
+        IN_PROGRESS,
+        format!("{what} waits: an owner change is under way on this node (control stays draining until it finishes; sudo k2-node servers owner --resume or --abort)"),
+    )
 }
 
 /// The old owner's new line mark in slot N.
@@ -271,12 +311,28 @@ pub fn plan(e: &Executor, a: &OwnerArgs, need_fp: bool, check_online: bool) -> R
     if check_online && online != Some(true) {
         return Err(refuse(codes::OWNER_TARGET_NOT_READY, format!("{} isn't connected to this node now; it must be online to take over", to.label)));
     }
-    if a.caches == Caches::Move {
-        let troot = layout.tenants_root();
-        let (h, t) = (open_dir(&e.paths.home).map_err(failed)?, open_dir(&troot).map_err(failed)?);
-        if crate::wall::device_of(&h).map_err(|x| failed(x.to_string()))? != crate::wall::device_of(&t).map_err(|x| failed(x.to_string()))? {
-            return Err(refuse(code::BAD_ARGS, format!("{} and {} are on different volumes, so the caches can't move by rename; use caches wipe", e.paths.home.display(), troot.display())));
+    let troot = layout.tenants_root();
+    let (h, t) = (open_dir(&e.paths.home).map_err(failed)?, open_dir(&troot).map_err(failed)?);
+    let dev = |fd: &OwnedFd| crate::wall::device_of(fd).map_err(|x| failed(x.to_string()));
+    let (hd, td) = (dev(&h)?, dev(&t)?);
+    // Every tree goes by rename (moved, or into its side's trash on a
+    // wipe): a tree that's a volume of its own can't (verification #4).
+    let slot_dir = open_dir(&layout.tenant(to.slot).root()).ok();
+    let sides = [(Some(&h), hd, e.paths.home.clone()), (slot_dir.as_ref(), td, layout.tenant(to.slot).root())];
+    for (parent, want, at) in sides {
+        let Some(parent) = parent else { continue };
+        if dev(parent)? != want {
+            return Err(refuse(code::BAD_ARGS, format!("{} is a volume of its own; an owner change moves files only by rename, within one volume", at.display())));
         }
+        for name in TREES.iter().chain(&["tmp"]) {
+            let Ok(d) = crate::wall::open_child_dir(parent, &cname(name)) else { continue };
+            if dev(&d)? != want {
+                return Err(refuse(code::BAD_ARGS, format!("{}/{name} is a volume of its own; an owner change moves files only by rename, within one volume", at.display())));
+            }
+        }
+    }
+    if a.caches == Caches::Move && hd != td {
+        return Err(refuse(code::BAD_ARGS, format!("{} and {} are on different volumes, so the caches can't move by rename; use caches wipe", e.paths.home.display(), troot.display())));
     }
     Ok(Plan { from, to, to_fp, to_key: der })
 }
@@ -352,10 +408,12 @@ pub fn run_steps(e: &Executor, mut step: Step) -> Result<Value, AdminRefusal> {
     let ctx = Ctx::for_executor(e, &format!("owner-change:{}", step.id));
     let _g = servers::servers_lock(&ctx)?;
     if step.phase == Phase::Trees {
-        // Nothing of slot N's may still be running while its files move
-        // (a daemonized leftover of an ended job; review F6).
-        if ctx.root && cfg!(target_os = "linux") {
-            e.tenant_stop_processes(step.slot)?;
+        // Nothing of either server's jobs may still run while their files
+        // move (a daemonized leftover of an ended job): slot N's user and
+        // the owner's job user on Linux, orphans of the node user's jobs on
+        // macOS (review F6, verification #8).
+        if ctx.root {
+            e.stop_job_leftovers(step.slot)?;
         }
         move_trees(e, &ctx, &step)?;
         step.phase = Phase::Users;
@@ -392,18 +450,22 @@ pub fn run_steps(e: &Executor, mut step: Step) -> Result<Value, AdminRefusal> {
         }
     };
     let rehomed = rehome(e, &ctx, &step)?;
-    std::fs::remove_file(step_path(e)).map_err(|x| failed(format!("remove {STEP_FILE}: {x}")))?;
+    end_step(e)?;
     Ok(json!({"owner": step.to_label, "slot": step.slot, "old": step.old.as_str(), "caches": step.caches.as_str(), "old_uid": old_uid, "rehomed": rehomed}))
 }
 
-/// After the marked restart: the node's own owner pin must name the new
-/// owner (it swapped its files at start) before the Files step. Never
-/// arriving fails the step; it's retried on resume (review F3).
+/// After the marked restart: the node's swap must be complete (its applied
+/// record names this change, written last, after the pins, ledgers and
+/// queue rows) and its owner pin must name the new owner, before the
+/// Files step. Never arriving fails the step; it's retried on resume
+/// (review F3, verification #5).
 fn wait_for_swap(e: &Executor, step: &Step) -> Result<(), AdminRefusal> {
-    let pin = e.paths.layout().pin();
+    let layout = e.paths.layout();
+    let (pin, applied) = (layout.pin(), layout.state().join(crate::node::owner_swap::APPLIED));
     let deadline = std::time::Instant::now() + e.node_swap_wait;
     loop {
-        if crate::identity::read_pin_safely(&pin).ok().flatten().is_some_and(|p| p.controller_fp == step.to_fp) {
+        let done = crate::util::read_regular(&applied).is_ok_and(|s| s.trim() == step.id);
+        if done && crate::identity::read_pin_safely(&pin).ok().flatten().is_some_and(|p| p.controller_fp == step.to_fp) {
             return Ok(());
         }
         if std::time::Instant::now() >= deadline {
@@ -423,6 +485,11 @@ fn wait_for_swap(e: &Executor, step: &Step) -> Result<(), AdminRefusal> {
 /// went to `draining`) answers `busy` without counting an attempt (review
 /// F1). [`spawn_resume`] retries those.
 pub fn resume(e: &Executor, force: bool) -> Option<Result<Value, AdminRefusal>> {
+    // One resumer at a time, and the step read under the same lock that
+    // every step runs under: a second resumer (a `--resume` racing the
+    // background loop, or the drain's own act) waits, then sees where the
+    // first left it, never an old phase to replay (verification #1).
+    let _g = e.busy.lock().unwrap_or_else(|p| p.into_inner());
     retire_node_change(e);
     let mut step = match read_step(e) {
         Ok(Some(s)) => s,
@@ -436,7 +503,6 @@ pub fn resume(e: &Executor, force: bool) -> Option<Result<Value, AdminRefusal>> 
         crate::nlog!("admin: owner change {} failed {} times; it waits for sudo k2-node servers owner --resume", step.id, step.attempts);
         return Some(Err(failed(format!("owner change {} failed {} times; run sudo k2-node servers owner --resume", step.id, step.attempts))));
     }
-    let _g = e.busy.lock().unwrap_or_else(|p| p.into_inner());
     match super::update::hold_draining(e, share::VERB_OWNER, &step.id) {
         Err(x) => return Some(Err(failed(format!("control can't be held at draining: {x}")))),
         Ok(true) => {
@@ -454,6 +520,118 @@ pub fn resume(e: &Executor, force: bool) -> Option<Result<Value, AdminRefusal>> 
         return Some(Err(x));
     }
     Some(finish(e, step))
+}
+
+/// Has the node swapped (or begun swapping) its files for this change: its
+/// applied record, its owner pin already the new owner's, or its own
+/// staging folder for this id?
+fn node_swapped(e: &Executor, step: &Step) -> bool {
+    let layout = e.paths.layout();
+    crate::util::read_regular(&layout.state().join(crate::node::owner_swap::APPLIED)).is_ok_and(|s| s.trim() == step.id)
+        || crate::identity::read_pin_safely(&layout.pin()).ok().flatten().is_some_and(|p| p.controller_fp == step.to_fp)
+        || std::fs::symlink_metadata(layout.state().join(crate::node::owner_swap::STAGE).join(&step.id)).is_ok()
+}
+
+/// `sudo k2-node servers owner --abort` (the machine's owner, root only;
+/// verification #7): end a wedged change safely instead of deleting root's
+/// step file by hand. Before the node swapped its files it rolls back:
+///
+/// - the node's instruction goes first, so a node start never swaps later
+///   (in the `restart` phase, the node is given a settle to show a swap it
+///   began before that, and then the abort is refused);
+/// - moved trees go back: a half move is finished first (only while its
+///   staging is there; after the trees step they're whole), then traded
+///   back under the abort's own staging, so a re-run of an interrupted
+///   abort carries on rather than swapping twice;
+/// - the target gets a tenant user again (Linux; a new uid, recorded in its
+///   line) and its trees are re-owned for that user's group;
+/// - then the step file goes and control is put back. Audited
+///   `owner_change_aborted`.
+///
+/// Wiped caches can't come back. Once the node swapped (the `files` phase,
+/// or a swap seen in `restart`), only `--resume` (forward) is safe, and the
+/// instruction is put back for it.
+pub fn abort(e: &Executor) -> Result<Value, AdminRefusal> {
+    // Never beside a running step (a resume waiting for the node's swap
+    // holds this for minutes).
+    let _g = e.lock_briefly().ok_or_else(|| refuse(code::BUSY, "an owner change step is running right now; try again in a few minutes"))?;
+    let step = read_step(e).map_err(failed)?.ok_or_else(|| refuse(code::BAD_ARGS, "no owner change is under way"))?;
+    let forward_only = || refuse(IN_PROGRESS, format!("owner change {} is past the node's swap; only finishing it is safe: sudo k2-node servers owner --resume", step.id));
+    if step.phase == Phase::Files {
+        return Err(forward_only());
+    }
+    let running = super::update::running_jobs(e);
+    if running > 0 {
+        return Err(refuse(code::BUSY, format!("{running} job(s) still running; abort again once they end (control stays draining)")));
+    }
+    let ctx = Ctx::for_executor(e, &format!("owner-change-abort:{}", step.id));
+    let _s = servers::servers_lock(&ctx)?;
+    retire_node_change_now(e);
+    if step.phase == Phase::Restart {
+        // A node start that read the instruction just before it went
+        // shows its swap (staging, pin, record) within this settle.
+        std::thread::sleep(e.drain_settle.max(std::time::Duration::from_millis(if cfg!(test) { 10 } else { 2000 })));
+        if node_swapped(e, &step) {
+            write_node_change(e, &step)?;
+            return Err(forward_only());
+        }
+    }
+    let mut undone = Vec::new();
+    if step.caches == Caches::Move {
+        let half = step.phase == Phase::Trees && stage_started(e, &step);
+        if half || step.phase > Phase::Trees {
+            if ctx.root {
+                e.stop_job_leftovers(step.slot)?;
+            }
+            if half {
+                move_trees(e, &ctx, &step)?;
+            }
+            let back = Step { id: format!("abort-{}", step.id), ..step.clone() };
+            move_trees(e, &ctx, &back)?;
+            undone.push("trees");
+        }
+    }
+    // The users step removed the target's user on Linux only. Slot N's
+    // line still names the target (servers.toml changes only in the files
+    // step), so this gives the target a new user, recorded in its line.
+    if step.phase > Phase::Trees && ctx.root && cfg!(target_os = "linux") {
+        prepare_old_owner(&ctx, &step)?;
+        if step.caches == Caches::Move {
+            let group = super::jobs::tenant_group_name(step.slot);
+            let tgid = super::jobs::group_id(&group).ok_or_else(|| failed(format!("group {group} is missing")))?;
+            let (nuid, _) = super::server::user_ids(&ctx.node_user).ok_or_else(|| failed("the node user is missing"))?;
+            let slot = open_dir(&ctx.layout().tenant(step.slot).root()).map_err(failed)?;
+            for t in TREES {
+                let Ok(d) = crate::wall::open_child_dir(&slot, &cname(t)) else { continue };
+                for name in crate::wall::entry_names(&d).map_err(io(t))? {
+                    crate::wall::rehome_at(&d, &name, nuid, tgid, false).map_err(failed)?;
+                }
+            }
+        }
+        undone.push("user");
+    }
+    end_step(e)?;
+    remove_stage(e);
+    super::update::recover_drain(e);
+    let detail = json!({"id": step.id, "phase": step.phase, "to": step.to_label, "undone": undone, "caches": step.caches.as_str()});
+    let _ = e.audit().append(super::store::AuditEntry { event: "owner_change_aborted".into(), cmd_id: Some(step.id.clone()), detail: detail.clone(), ..Default::default() }, e.now());
+    crate::nlog!("admin: owner change {} aborted at {:?}", step.id, step.phase);
+    Ok(detail)
+}
+
+/// Did the trees step stage anything for this change?
+fn stage_started(e: &Executor, step: &Step) -> bool {
+    open_dir(&e.paths.layout().tenants_root().join(STAGE_DIR).join(work_name(step))).is_ok()
+}
+
+/// Remove the node's instruction now (`unlinkat` on the directory fd,
+/// never following a link).
+fn retire_node_change_now(e: &Executor) {
+    if let Ok(dir) = open_dir(&super::update::mark_dir(&e.paths.config_dir)) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: unlinkat a fixed name in our directory fd.
+        unsafe { libc::unlinkat(dir.as_raw_fd(), cname(NODE_FILE).as_ptr(), 0) };
+    }
 }
 
 /// On executor start: resume an unfinished owner change in the background,
@@ -600,10 +778,15 @@ fn move_trees(e: &Executor, ctx: &Ctx, step: &Step) -> Result<(), AdminRefusal> 
     let nu = node_ids(ctx);
     let slot = tree_dir(&troot, &step.slot.to_string(), nu, 0o700)?;
     let stage_root = crate::wall::ensure_child_dir(&troot, &cname(STAGE_DIR), 0o700).map_err(io(STAGE_DIR))?;
-    let trash = crate::wall::ensure_child_dir(&stage_root, &cname("trash"), 0o700).map_err(io("trash"))?;
-    trash_trees(&[("owner", &home), ("slot", &slot)], &["tmp"], &trash)?;
+    // One trash per volume: the slot's in `<home>-t`, the owner's in the
+    // node home, so a rename never crosses a filesystem (verification #4).
+    let slot_trash = crate::wall::ensure_child_dir(&stage_root, &cname("trash"), 0o700).map_err(io("trash"))?;
+    let home_trash = home_trash_dir(&home, ctx.root)?;
+    trash_trees(&[("owner", &home)], &["tmp"], &home_trash)?;
+    trash_trees(&[("slot", &slot)], &["tmp"], &slot_trash)?;
     if step.caches == Caches::Wipe {
-        trash_trees(&[("owner", &home), ("slot", &slot)], TREES, &trash)?;
+        trash_trees(&[("owner", &home)], TREES, &home_trash)?;
+        trash_trees(&[("slot", &slot)], TREES, &slot_trash)?;
         return Ok(());
     }
     if crate::wall::device_of(&home).map_err(io("home"))? != crate::wall::device_of(&troot).map_err(io("tenants root"))? {
@@ -640,14 +823,111 @@ fn move_trees(e: &Executor, ctx: &Ctx, step: &Step) -> Result<(), AdminRefusal> 
     Ok(())
 }
 
-/// Remove the staging folder (after the trees step, or a leftover).
-fn remove_stage(e: &Executor) {
-    let p = e.paths.layout().tenants_root();
-    let Ok(fd) = open_dir(&p) else { return };
-    if crate::wall::exists_at(&fd, &cname(STAGE_DIR)) {
-        if let Err(x) = crate::wall::remove_tree_at(&fd, &cname(STAGE_DIR)) {
-            crate::nlog!("admin: owner change: removing the staging folder: {x}");
+/// The owner side's trash in the node home: root's own (0700). One the
+/// node user made or changed (it owns the home) is moved aside, never
+/// used: root never moves trees into a folder another user controls.
+fn home_trash_dir(home: &OwnedFd, root: bool) -> Result<OwnedFd, AdminRefusal> {
+    let n = cname(HOME_TRASH);
+    if root && crate::wall::exists_at(home, &n) {
+        let ok = crate::wall::open_child_dir(home, &n).ok().and_then(|fd| crate::wall::owner_and_mode(&fd).ok()).is_some_and(|(uid, mode)| uid == 0 && mode & 0o077 == 0);
+        if !ok {
+            let r = crypto::random_id().map_err(failed)?;
+            let aside = CString::new(format!("{HOME_TRASH}.not-root.{}", &r[..12.min(r.len())])).map_err(|x| failed(x.to_string()))?;
+            crate::wall::rename_between(home, &n, home, &aside).map_err(io(HOME_TRASH))?;
+            crate::nlog!("admin: owner change: {HOME_TRASH} wasn't root's own; moved aside");
         }
+    }
+    crate::wall::ensure_child_dir(home, &n, 0o700).map_err(io(HOME_TRASH))
+}
+
+/// Remove `name` in `parent` best effort. A tree deeper than the remover
+/// goes (`MAX_DEPTH`) is flattened first: whatever sits 128 levels down
+/// is renamed up to the tree's top under a fresh name, again on each pass, so a
+/// planted tree goes in the end (verification #6). Returns whether it's gone.
+fn remove_deep(parent: &OwnedFd, name: &CStr) -> bool {
+    for _ in 0..64 {
+        if !crate::wall::exists_at(parent, name) {
+            return true;
+        }
+        match crate::wall::remove_tree_at(parent, name) {
+            Ok(()) => return true,
+            Err(x) => {
+                if !flatten_at(parent, name, 128) {
+                    crate::nlog!("admin: owner change: removing {}: {x} (retried on the next prune)", name.to_string_lossy());
+                    return false;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Move every entry `depth` levels below `name` up into `name` itself
+/// (so it stays inside the tree being removed). False when nothing that
+/// deep was found (the failure is something else).
+fn flatten_at(parent: &OwnedFd, name: &CStr, depth: u32) -> bool {
+    let Ok(top) = crate::wall::open_child_dir(parent, name) else { return false };
+    let Ok(first) = top.try_clone() else { return false };
+    let mut level = vec![first];
+    for _ in 1..depth {
+        let mut next = Vec::new();
+        for d in &level {
+            for n in crate::wall::entry_names(d).unwrap_or_default() {
+                if let Ok(c) = crate::wall::open_child_dir(d, &n) {
+                    next.push(c);
+                }
+            }
+        }
+        next.truncate(256);
+        if next.is_empty() {
+            return false;
+        }
+        level = next;
+    }
+    let mut moved = false;
+    for d in &level {
+        for n in crate::wall::entry_names(d).unwrap_or_default() {
+            let Ok(r) = crypto::random_id() else { return moved };
+            let Ok(to) = CString::new(format!(".flat-{}", &r[..16.min(r.len())])) else { continue };
+            if crate::wall::rename_between(d, &n, &top, &to).is_ok() {
+                moved = true;
+            }
+        }
+    }
+    moved
+}
+
+/// Remove the staging folder and the home trash (after the trees step, a
+/// leftover, and on every prune while no change runs). Best effort.
+pub(crate) fn remove_stage(e: &Executor) -> bool {
+    let mut clean = true;
+    if let Ok(fd) = open_dir(&e.paths.layout().tenants_root()) {
+        clean &= remove_deep(&fd, &cname(STAGE_DIR));
+    }
+    if let Ok(fd) = open_dir(&e.paths.home) {
+        let ok = crate::wall::open_child_dir(&fd, &cname(HOME_TRASH)).ok().and_then(|t| crate::wall::owner_and_mode(&t).ok()).is_some_and(|(uid, _)| uid == unsafe { libc::geteuid() });
+        if ok {
+            clean &= remove_deep(&fd, &cname(HOME_TRASH));
+        }
+    }
+    clean
+}
+
+/// The prune's sweep: leftover staging and trash go while no change runs.
+pub(crate) fn sweep_leftovers(e: &Executor) {
+    if !matches!(read_step(e), Ok(None)) {
+        return;
+    }
+    let stage = e.paths.layout().tenants_root().join(STAGE_DIR);
+    let trash = e.paths.home.join(HOME_TRASH);
+    let there = |p: &Path| std::fs::symlink_metadata(p).is_ok();
+    if !there(&stage) && !there(&trash) {
+        return;
+    }
+    if !remove_stage(e) {
+        crate::nlog!("admin: owner change leftovers (staging, trash) not all removed; retried on the next prune");
+    } else if !there(&stage) && !there(&trash) {
+        crate::nlog!("admin: owner change leftovers (staging, trash) removed");
     }
 }
 
@@ -691,13 +971,8 @@ pub fn read_node_change(config_dir: &std::path::Path) -> Option<NodeChange> {
 fn retire_node_change(e: &Executor) {
     let cfg = &e.paths.config_dir;
     let Some(n) = read_node_change(cfg) else { return };
-    if e.now() - n.at <= NODE_FILE_MAX_AGE_SECS {
-        return;
-    }
-    if let Ok(dir) = open_dir(&super::update::mark_dir(cfg)) {
-        use std::os::fd::AsRawFd;
-        // SAFETY: unlinkat a fixed name in our directory fd.
-        unsafe { libc::unlinkat(dir.as_raw_fd(), cname(NODE_FILE).as_ptr(), 0) };
+    if e.now() - n.at > NODE_FILE_MAX_AGE_SECS {
+        retire_node_change_now(e);
     }
 }
 

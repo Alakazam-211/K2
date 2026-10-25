@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use crate::admin::owner::{NodeChange, NODE_FILE_MAX_AGE_SECS};
 use crate::paths::Layout;
 
-const STAGE: &str = "owner-change";
-const APPLIED: &str = "owner-change-applied";
+pub const STAGE: &str = "owner-change";
+pub const APPLIED: &str = "owner-change-applied";
 
 /// What [`apply`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]

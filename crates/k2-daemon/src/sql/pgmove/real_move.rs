@@ -343,7 +343,7 @@ fn h1_checks(ops: &dyn ClusterOps, m: Major, db: &str) {
 /// function in schema `k2` came along as the owner's.
 fn k2_helper_checks(ops: &dyn ClusterOps, m: Major, db: &str) {
     let mig = format!("{db}_migrator");
-    let owners = "SELECT string_agg(p.oid::regprocedure::text || '=' || pg_get_userbyid(p.proowner), ',' ORDER BY 1) \
+    let owners = "SELECT string_agg(p.oid::regprocedure::text || '=' || pg_get_userbyid(p.proowner), ',' ORDER BY p.oid::regprocedure::text) \
                   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'k2';\n";
     want(
         ops.sql(m, db, owners),

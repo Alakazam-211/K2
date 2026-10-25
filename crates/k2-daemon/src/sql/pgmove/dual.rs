@@ -763,15 +763,19 @@ pub fn tick(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: 
     let lag_bytes = slot["lagBytes"].as_f64().map(|f| f.max(0.0) as u64);
     let confirmed = slot["confirmedFlushLsn"].as_str().map(str::to_string);
     let progressed = confirmed != run.lag.confirmed_lsn || lag_bytes == Some(0);
+    // An unreadable target (it is still starting after a restart, say)
+    // keeps the last sample's numbers rather than reading as 0/0 tables.
+    let prev = run.lag.clone();
+    let tgt_read = tgt.get("error").is_none();
     run.lag = Lag {
         at: now,
-        tables_ready: tgt["tablesReady"].as_u64().unwrap_or(0),
-        tables_total: tgt["tablesTotal"].as_u64().unwrap_or(0),
+        tables_ready: if tgt_read { tgt["tablesReady"].as_u64().unwrap_or(0) } else { prev.tables_ready },
+        tables_total: if tgt_read { tgt["tablesTotal"].as_u64().unwrap_or(0) } else { prev.tables_total },
         lag_bytes,
         wal_status: wal_status.clone(),
-        enabled: tgt["enabled"].as_bool(),
-        apply_errors: tgt["applyErrors"].as_u64().unwrap_or(0),
-        sync_errors: tgt["syncErrors"].as_u64().unwrap_or(0),
+        enabled: if tgt_read { tgt["enabled"].as_bool() } else { prev.enabled },
+        apply_errors: if tgt_read { tgt["applyErrors"].as_u64().unwrap_or(0) } else { prev.apply_errors },
+        sync_errors: if tgt_read { tgt["syncErrors"].as_u64().unwrap_or(0) } else { prev.sync_errors },
         confirmed_lsn: confirmed,
         last_progress_at: if progressed || run.lag.last_progress_at == 0 { now } else { run.lag.last_progress_at },
         errors,

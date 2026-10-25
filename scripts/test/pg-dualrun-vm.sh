@@ -74,6 +74,7 @@ wait_for() { # wait_for <secs> <what> <cmd...>
 live_state() { k2 db upgrade "$1" --status --json | python3 -c 'import json,sys; v=json.load(sys.stdin); r=(v.get("live") or [{}])[0]; print(r.get("state", "none"))'; }
 is_state() { [ "$(live_state "$1")" = "$2" ]; }
 not_state() { [ "$(live_state "$1")" != "$2" ]; }
+streaming_or_switched() { local s; s="$(live_state "$1")"; [ "$s" = streaming ] || [ "$s" = switched ]; }
 restart_daemon() { sudo systemctl restart "$UNIT"; sleep 3; wait_for 120 "the daemon answers" k2 db status --json; }
 journal_since() { sudo journalctl -u "$UNIT" --since "$1" --no-pager -o cat; }
 
@@ -306,7 +307,9 @@ security() {
     [ "$(pg_sql 16 "$db" "SELECT count(*) FROM pg_namespace WHERE nspname = '_k2_dual'")" = "1" ] || die "the freeze schema isn't there while streaming"
     # A migrator can't create a subscription.
     local m_out; m_out="$(pg_sql 16 "$db" "SET ROLE ${db}_migrator; CREATE SUBSCRIPTION evil CONNECTION 'host=127.0.0.1 dbname=$db' PUBLICATION x WITH (connect = false)" 2>&1 || true)"
-    grep -qi "permission denied\|must be superuser\|must have privileges" <<<"$m_out" || die "a migrator's CREATE SUBSCRIPTION wasn't refused: $m_out"
+    # Refused either way: the run's DDL freeze answers first while it
+    # streams; without it, Postgres's own privilege check does.
+    grep -qi "k2_dual_ddl_frozen\|permission denied\|must be superuser\|must have privileges" <<<"$m_out" || die "a migrator's CREATE SUBSCRIPTION wasn't refused: $m_out"
     # The password: in no log, argv or vault file.
     sudo journalctl -u "$UNIT" --since "-2h" --no-pager -o cat | grep -qF "$pw" && die "the replication password is in the daemon journal"
     sudo journalctl -u "postgresql@16-main" -u "postgresql@17-main" --since "-2h" --no-pager -o cat | grep -qF "$pw" && die "the replication password is in a Postgres log"
@@ -442,12 +445,22 @@ failures() {
         fi
         sleep 0.2
     done
-    wait_for 300 "the cut-over is undone after the walsender drop" is_state "$db" streaming
-    [ "$(db_major "$db")" = "16" ] || die "the record moved after a walsender drop"
-    k2 db upgrade "$db" --abort >/dev/null
+    # Two right outcomes: the drop lands before the drain caught up (the
+    # cut-over is undone, the run streams on, on 16), or the target had
+    # already caught up (the switch completes and passed its verify, on 17).
+    wait_for 300 "the cut-over settles after the walsender drop" streaming_or_switched "$db"
+    local outcome
+    if is_state "$db" switched; then
+        [ "$(db_major "$db")" = "17" ] || die "the run says switched but the record isn't on 17"
+        outcome="switched and verified (the target had caught up)"
+    else
+        [ "$(db_major "$db")" = "16" ] || die "the record moved after an undone cut-over"
+        k2 db upgrade "$db" --abort >/dev/null
+        outcome="undone, streamed on, aborted"
+    fi
     no_dual_objects
     drop_db "$db"
-    pass "failures/restarts: streams across a restart; a restart in the switch undoes it; a walsender drop in the write block undoes it"
+    pass "failures/restarts: streams across a restart; a restart in the switch undoes it; a walsender drop in the write block: $outcome"
 }
 
 # ── drill 7: rollback after a live switch ───────────────────────────────

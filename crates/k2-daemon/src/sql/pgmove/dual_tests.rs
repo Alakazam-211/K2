@@ -972,3 +972,21 @@ fn an_abort_without_the_helper_waits_for_it() {
     let r = tick(&ops, &dops, &env, &store, r);
     assert_eq!(r.state, RunState::Failed);
 }
+
+/// VM drill round 3: right after a daemon restart the target can't be
+/// read yet; the run keeps its last table counts (never "0/0") and stays
+/// streaming.
+#[test]
+fn an_unreadable_target_keeps_the_last_sample() {
+    let (ops, dops, store, env) = streaming();
+    let run = store.only();
+    assert_eq!((run.lag.tables_ready, run.lag.tables_total), (3, 3));
+    let mut st = streaming_status(0, "0/16B3748");
+    st["target"] = json!({"error": "cluster_down"});
+    dops.statuses(vec![st]);
+    let run = tick(&ops, &dops, &env, &store, run);
+    assert_eq!(run.state, RunState::Streaming);
+    assert_eq!((run.lag.tables_ready, run.lag.tables_total, run.lag.enabled), (3, 3, Some(true)));
+    assert!(run.lag.errors.iter().any(|e| e.contains("target: cluster_down")), "{:?}", run.lag.errors);
+    assert_eq!(run.json()["tables"], json!({"ready": 3, "total": 3}));
+}

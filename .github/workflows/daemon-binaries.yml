@@ -99,6 +99,13 @@ jobs:
   build-linux-daemon:
     name: Build k2-daemon (${{ matrix.target }})
     runs-on: [self-hosted, linux, k2-linux]
+    # id-token + attestations: the build-provenance attestation that
+    # sign-daemon.sh requires before z3mbpZ signs a daemon (security review
+    # of SS1). contents: the release upload.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -263,14 +270,29 @@ jobs:
       # daemon assets use the exact names that manifest references. The
       # helper assets are never listed in that manifest (root-owned file;
       # ops install it with install-mail-helper.sh).
+      # Signed provenance for the daemon bytes (Sigstore, this repo, this
+      # workflow, this commit). sign-daemon.sh runs `gh attestation verify`
+      # against exactly those and refuses to sign without it.
+      - name: Attest daemon build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ matrix.asset }}
+
+      # The daemon assets are uploaded WITHOUT --clobber: a daemon already
+      # on the release is never silently replaced (sign-daemon.sh also
+      # checks the uploader and the upload time). To redo a build, delete
+      # the two assets by hand first. The other assets are signed with the
+      # root-helper key and keep --clobber.
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           gh release upload "$TAG" \
             "${{ matrix.asset }}" \
-            "${{ matrix.asset }}.sha256" \
+            "${{ matrix.asset }}.sha256"
+          gh release upload "$TAG" \
             "${{ matrix.node_asset }}" \
             "${{ matrix.node_asset }}.sha256" \
             "${{ matrix.root_asset }}" \

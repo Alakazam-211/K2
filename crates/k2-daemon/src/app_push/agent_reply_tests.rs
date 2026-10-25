@@ -133,3 +133,28 @@ fn guests_with_thread_read_get_it_with_k2kind_agent_and_previews_per_device() {
     let seen = fake.seen.lock().expect("lock").clone();
     assert!(seen[2..].iter().all(|b| b["aps"]["alert"]["body"] == GENERIC), "{seen:?}");
 }
+
+/// Security review B-M1: every push preview (an App guest's and the owner's
+/// Companion push) is built from the Thread's stored, redacted text, never
+/// the request's raw text.
+#[test]
+fn previews_come_from_the_redacted_stored_text() {
+    use k2_core::overlay::OverlayDoc;
+    use k2_core::push::ThreadMsgKind;
+    use k2_vault::{Actor, Kind, Namespace, PutRequest, Scope, SecretBytes, SecretStore};
+    let v = crate::vault::ensure_test_vault();
+    const VAL: &str = "k2test_PUSHPREVIEW_77aa88bb99cc0011";
+    let mut r = PutRequest::new(Namespace::User, Scope::server(), "PUSH_PREVIEW_KEY", Kind::ApiKey);
+    r.hosts = vec!["https://api.example.com:443".to_string()];
+    v.put(r, SecretBytes::from_slice(VAL.as_bytes()), &Actor::Owner).expect("put");
+    let text = OverlayDoc::text("d1".into(), "sales".into(), "owner".into(), format!("the key is {VAL}"), "thread");
+    let stored = text.body.clone().expect("body");
+    assert!(!stored.contains(VAL), "the Thread stores it redacted: {stored}");
+    let p = crate::overlay_routes::push_preview_text(ThreadMsgKind::Text, &text);
+    assert!(!p.contains(VAL), "{p}");
+    assert!(p.contains("[k2v:PUSH_PREVIEW_KEY]"), "{p}");
+    let choice = OverlayDoc::choice("d2".into(), "sales".into(), "owner".into(), format!("Rotate {VAL}?"), vec!["yes".into(), "no".into()], false);
+    let p = crate::overlay_routes::push_preview_text(ThreadMsgKind::Choice, &choice);
+    assert!(!p.contains(VAL) && p.contains("[k2v:PUSH_PREVIEW_KEY]"), "a choice card's question too: {p}");
+    assert_eq!(crate::overlay_routes::push_preview_text(ThreadMsgKind::Secret, &text), "", "a secret card never previews");
+}

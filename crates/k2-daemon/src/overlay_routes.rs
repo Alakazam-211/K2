@@ -1626,7 +1626,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 crate::thread_activity::note_reply(&resolved.conversation_id);
                 // Thread push (§6.1): an agent reply may push; a human
                 // `from` (an owner-token shell post) never does (TP14).
-                push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Text, &text, n_files);
+                push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Text, n_files);
             }
             // thread-attachments-v1: the stored snapshots, so the sender
             // sees what landed (state `ok` at post time), with `canDownload`
@@ -1678,18 +1678,16 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
 
 /// Thread push trigger (prd-thread-push-notifications-v1 §6.1) for the
 /// three agent-reply sites. App guests are never a push source (TP13).
-/// `text` is the reply's text or a choice card's question (its push
-/// preview, 0.46.1); a secret card passes `""` and never previews.
-fn push_agent_post(
-    resolved: &ResolvedOverlay,
-    item: &overlay::OverlayItem,
-    kind: k2_core::push::ThreadMsgKind,
-    text: &str,
-    files: usize,
-) {
+/// The preview is built from what the Thread STORES, redacted
+/// ([`push_preview_text`]), never from the request's raw text (security
+/// review B-M1): a vault value an agent pasted never reaches a phone, the
+/// owner's Companion or an App guest's.
+fn push_agent_post(resolved: &ResolvedOverlay, item: &overlay::OverlayItem, kind: k2_core::push::ThreadMsgKind, files: usize) {
     if request_skin().is_some() {
         return;
     }
+    let text = push_preview_text(kind, &item.doc);
+    let text = text.as_str();
     crate::thread_push::on_agent_post(
         &resolved.conversation_id,
         &resolved.project_id,
@@ -1702,6 +1700,20 @@ fn push_agent_post(
         &item.id,
         item.doc.created_at,
     );
+}
+
+/// A push's preview source: a reply's stored body or a choice card's
+/// question, through the vault's redaction (the stored body already is;
+/// a second pass changes nothing). A secret card has none.
+pub(crate) fn push_preview_text(kind: k2_core::push::ThreadMsgKind, doc: &overlay::OverlayDoc) -> String {
+    use k2_core::push::ThreadMsgKind;
+    match kind {
+        ThreadMsgKind::Text => k2_core::redaction::redact(doc.body.as_deref().unwrap_or("")),
+        ThreadMsgKind::Choice => {
+            k2_core::redaction::redact(doc.choice.as_ref().map(|c| c.prompt.as_str()).or(doc.body.as_deref()).unwrap_or("").trim())
+        }
+        ThreadMsgKind::Secret => String::new(),
+    }
 }
 
 fn reject_wait(params: &HashMap<String, String>) -> Result<(), CliResponse> {
@@ -1788,7 +1800,7 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
             drop(conn);
             // TW4 (a): an agent's card is its Thread reply.
             crate::thread_activity::note_reply(&resolved.conversation_id);
-            push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Choice, prompt.trim(), 0);
+            push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Choice, 0);
             let choice = item.doc.choice.as_ref();
             let labels: Vec<String> = choice
                 .map(|c| c.options.iter().map(|o| o.label.clone()).collect())
@@ -1971,7 +1983,7 @@ fn create_secret_card(
     if !quiet {
         crate::thread_activity::note_reply(&resolved.conversation_id);
         // A secret card pushes name-only, never its name or prompt (§7).
-        push_agent_post(resolved, &item, k2_core::push::ThreadMsgKind::Secret, "", 0);
+        push_agent_post(resolved, &item, k2_core::push::ThreadMsgKind::Secret, 0);
     }
     Ok(item)
 }
@@ -1995,7 +2007,7 @@ pub(crate) fn post_handoff_card(
     crate::overlay_ws::emit_links(&links, &item.doc);
     drop(conn);
     // Name-only push, like a secret card (§7): never a preview.
-    push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Secret, "", 0);
+    push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Secret, 0);
     Ok(format!("{}/{}", resolved.conversation_id, item.id))
 }
 
@@ -2597,7 +2609,7 @@ pub(crate) fn present_action_card(
                 requested_addr: addr.clone(),
                 canonical_alias: true,
             };
-            push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Choice, prompt, 0);
+            push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Choice, 0);
         }
         CardAudience::Logins(logins) => {
             crate::permission::routing::push_card(&conversation_id, project_id, &addr, &item.id, item.seq, &logins);

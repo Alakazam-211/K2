@@ -744,7 +744,11 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
         }
     }
     let dual_ok = crate::sql::sysops::pgdual_gate().is_ok();
-    if matches!(req.act, Act::Live | Act::Switch | Act::Abort) && !dual_ok {
+    // Security review B7: `--abort` works with an old or unreachable
+    // helper (the run then waits as `needs_helper` for the teardown, and
+    // K2 keeps refusing `db_dual_running` until the slot and freeze are
+    // gone); starting and switching need the helper.
+    if matches!(req.act, Act::Live | Act::Switch) && !dual_ok {
         return err(
             409,
             "helper_old",
@@ -796,7 +800,7 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
                     return err(409, e.split(':').next().unwrap_or("refused"), e.clone());
                 }
             }
-            let so = super::dual::SwitchOpts { actor: label, now: req.now };
+            let so = super::dual::SwitchOpts { actor: label, now: req.now, refresh_timeout_secs: None };
             let db2 = db.clone();
             let spawned = std::thread::Builder::new().name("db-live-switch".into()).spawn(move || {
                 let _busy = busy;

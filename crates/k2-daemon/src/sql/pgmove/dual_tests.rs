@@ -4,6 +4,8 @@
 //! orphans and `--prepare-live`. No Postgres, no helper.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use serde_json::{json, Value};
 
@@ -22,6 +24,10 @@ struct DualState {
     fail: Vec<&'static str>,
     passwords: Vec<String>,
     forced: Vec<u32>,
+    /// The fake cluster's connection modes (linked to [`FakeOps`]): the
+    /// owner's refresh is refused unless the target is open, and a
+    /// teardown logs a closed source.
+    conn: Option<Rc<RefCell<HashMap<(Major, String), String>>>>,
 }
 
 struct FakeDual(RefCell<DualState>);
@@ -46,6 +52,12 @@ impl FakeDual {
     fn push(&self, s: String) {
         self.0.borrow_mut().log.push(s);
     }
+    fn link(&self, ops: &FakeOps) {
+        self.0.borrow_mut().conn = Some(ops.0.borrow().conn.clone());
+    }
+    fn mode(&self, m: Major, db: &str) -> Option<String> {
+        self.0.borrow().conn.as_ref().and_then(|c| c.borrow().get(&(m, db.to_string())).cloned())
+    }
     fn statuses(&self, v: Vec<Value>) {
         let mut s = self.0.borrow_mut();
         s.statuses = v;
@@ -54,6 +66,9 @@ impl FakeDual {
 }
 
 impl DualOps for FakeDual {
+    fn ready(&self) -> Result<(), String> {
+        self.gate("ready")
+    }
     fn logical_conf(&self, m: Major, wal_keep_mb: Option<u32>, if_logical: bool) -> Result<Value, String> {
         self.push(format!("logical_conf {m} {wal_keep_mb:?} if_logical={if_logical}"));
         self.gate("logical_conf")?;
@@ -76,7 +91,8 @@ impl DualOps for FakeDual {
     }
     fn dual(&self, op: DualOp, from: Major, to: Major, db: &str, id: &str, password: Option<&str>) -> Result<Value, String> {
         if op != DualOp::Status {
-            self.push(format!("dual {} {from} {to} {db} {id}", op.token()));
+            let closed = if op == DualOp::Teardown && self.mode(from, db).as_deref() == Some("off") { " (source closed)" } else { "" };
+            self.push(format!("dual {} {from} {to} {db} {id}{closed}", op.token()));
         }
         if let Some(pw) = password {
             self.0.borrow_mut().passwords.push(pw.to_string());
@@ -99,8 +115,11 @@ impl DualOps for FakeDual {
         self.push(format!("restart {m}"));
         self.gate("restart")
     }
-    fn refresh_matviews(&self, m: Major, port: u16, db: &str, role: &str, _pw: &str) -> Result<(), String> {
-        self.push(format!("refresh {m} {port} {db} as {role}"));
+    fn refresh_matviews(&self, m: Major, port: u16, db: &str, role: &str, _pw: &str, timeout_secs: u64) -> Result<(), String> {
+        self.push(format!("refresh {m} {port} {db} as {role} within {timeout_secs}s"));
+        if let Some(mode) = self.mode(m, db) {
+            return Err(format!("FATAL: {db} is not accepting connections from {role} ({mode})"));
+        }
         self.gate("refresh")
     }
 }
@@ -109,6 +128,9 @@ impl DualOps for FakeDual {
 struct StoreState {
     runs: Vec<DualRun>,
     moves: Vec<(String, MoveState)>,
+    /// The move worker is held elsewhere (a switch, an abort).
+    busy: bool,
+    holds: u32,
 }
 
 struct FakeStore(RefCell<StoreState>);
@@ -160,6 +182,14 @@ impl RunStore for FakeStore {
     fn move_state(&self, move_id: &str) -> Option<MoveState> {
         self.0.borrow().moves.iter().find(|(m, _)| m == move_id).map(|(_, s)| *s)
     }
+    fn hold_worker(&self, db: &str) -> Result<Box<dyn std::any::Any>, String> {
+        let mut s = self.0.borrow_mut();
+        if s.busy {
+            return Err(format!("busy: a move of {db} is running"));
+        }
+        s.holds += 1;
+        Ok(Box::new(()))
+    }
 }
 
 const LIVE_FACTS: &str = r#"{"noPk":[],"largeObjects":0,"unlogged":[],"foreign":0,"matviews":1,"partitioned":0,"generated":0}"#;
@@ -171,6 +201,7 @@ fn live_ops() -> FakeOps {
         s.answers.push(("SHOW wal_level".into(), "logical".into()));
         s.answers.push(("'noPk'".into(), LIVE_FACTS.into()));
         s.answers.push(("json_build_array(schemaname, sequencename".into(), r#"[["public","jobs_id_seq",42,1]]"#.into()));
+        s.answers.push(("pg_catalog.pg_largeobject_metadata".into(), "0".into()));
         s.installed.push(17);
     }
     ops
@@ -354,7 +385,7 @@ fn replica_identity_full_is_set_then_put_back_on_abort() {
 
 fn streaming_status(lag: u64, lsn: &str) -> Value {
     json!({
-        "source": {"walLevel": "logical", "currentLsn": lsn, "walsenders": 1, "publication": true,
+        "source": {"walLevel": "logical", "currentLsn": lsn, "insertLsn": lsn, "walsenders": 1, "publication": true,
                    "slot": {"active": true, "confirmedFlushLsn": lsn, "walStatus": "reserved", "lagBytes": lag}},
         "target": {"subscription": true, "enabled": true, "tablesTotal": 3, "tablesReady": 3, "applyErrors": 0, "syncErrors": 0}
     })
@@ -363,8 +394,10 @@ fn streaming_status(lag: u64, lsn: &str) -> Value {
 fn started() -> (FakeOps, FakeDual, FakeStore, FakeEnv, DualRun) {
     let ops = live_ops();
     let dops = FakeDual::new();
+    dops.link(&ops);
     let (store, env) = store_env();
     let run = start(&ops, &dops, &env, &store, "ws_jobs", &lo()).unwrap();
+    assert_eq!(dops.mode(17, "ws_jobs").as_deref(), Some("quiesce"), "the target stays quiesced while it streams");
     env.0.borrow_mut().inbox.clear();
     (ops, dops, store, env, run)
 }
@@ -479,7 +512,7 @@ fn streaming() -> (FakeOps, FakeDual, FakeStore, FakeEnv) {
 }
 
 fn so() -> SwitchOpts {
-    SwitchOpts { actor: "owner".into(), now: false }
+    SwitchOpts { actor: "owner".into(), now: false, refresh_timeout_secs: None }
 }
 
 #[test]
@@ -498,8 +531,21 @@ fn the_switch_runs_every_step_in_order() {
     let d = dops.log();
     let dpos = |w: &str| d.iter().position(|l| l.starts_with(w)).unwrap_or_else(|| panic!("{w}: {d:?}"));
     assert!(dpos("dual detach") < dpos("force_rls 17 ws_jobs [16500]"));
-    assert!(dpos("force_rls") < dpos("refresh 17 5433 ws_jobs as ws_jobs_migrator"));
+    assert!(dpos("force_rls") < dpos("refresh 17 5433 ws_jobs as ws_jobs_migrator within 600s"), "B4: bounded: {d:?}");
     assert!(dpos("refresh") < dpos("dual teardown"), "the role goes at the end (step 10)");
+    // B1: the target opens to K2's roles right after the detach (the
+    // fakes refuse the owner's refresh and the logins on a quiesced copy,
+    // so a success proves it), and only once.
+    assert!(pos("allow_conn 17 ws_jobs on") > pos("allow_conn 16 ws_jobs quiesce-repl"));
+    assert!(o.iter().any(|l| l.starts_with("login 17 5433")), "{o:?}");
+    // A-M1: the teardown runs while the source is still reachable, then it closes.
+    assert!(d.iter().any(|l| l == "dual teardown 16 17 ws_jobs 9f1c2b3a4d5e"), "{d:?}");
+    assert!(!d.iter().any(|l| l.ends_with("(source closed)")), "{d:?}");
+    assert_eq!(dops.mode(16, "ws_jobs").as_deref(), Some("off"), "the kept source ends closed");
+    assert!(!run.objects.source_setup, "the role is gone");
+    assert!(!p.warnings.iter().any(|w| w.contains("replication role")), "{:?}", p.warnings);
+    // B3: the large objects looked at under the write block, before the detach.
+    assert!(ops.0.borrow().full_sql.iter().any(|(m, _, s)| *m == 16 && s.contains("pg_catalog.pg_largeobject_metadata")));
     // Exact sequences on the target (L21).
     assert!(ops.0.borrow().full_sql.iter().any(|(m, _, s)| *m == 17 && s.contains("setval('\"public\".\"jobs_id_seq\"'::regclass, 42, true)")));
     let e = env.0.borrow();
@@ -721,4 +767,169 @@ fn prepare_live_restarts_once_and_only_when_needed() {
     ops2.0.borrow_mut().answers.push(("SHOW wal_level".into(), "replica".into()));
     let e = prepare_live(&ops2, &FakeDual::new(), &env, 16, true, &notice).unwrap_err();
     assert!(e.contains("still runs with wal_level = replica"), "{e}");
+}
+
+// ── security review fixes (B1–B8) ───────────────────────────────────────
+
+/// B2: the drain waits for the WAL INSERT position read after the write
+/// block (a `synchronous_commit = off` commit sits past the write
+/// position): a slot that only reached the write position never switches.
+#[test]
+fn the_drain_waits_for_the_insert_position() {
+    let at = |confirmed: &str| {
+        let mut s = streaming_status(0, "0/1000");
+        s["source"]["insertLsn"] = json!("0/2000");
+        s["source"]["slot"]["confirmedFlushLsn"] = json!(confirmed);
+        s
+    };
+    // Ready to switch (lag 0), the drain target, then two looks short of
+    // the insert position, then there.
+    let (ops, dops, store, env) = streaming();
+    dops.statuses(vec![at("0/1000"), at("0/1000"), at("0/1000"), at("0/1800"), at("0/2000")]);
+    let (p, run) = switch(&ops, &dops, &env, &store, "ws_jobs", &so()).unwrap();
+    assert_eq!(p.state, MoveState::Succeeded, "{:?}", p.last_error);
+    assert_eq!(run.state, RunState::Switched);
+    assert_eq!(env.0.borrow().sleeps.iter().filter(|s| **s == 1).count(), 2, "waited past the write position: {:?}", env.0.borrow().sleeps);
+    // Stuck at the write position: never switched, undone, streams on.
+    let (ops, dops, store, env) = streaming();
+    dops.statuses(vec![at("0/1000")]);
+    let (p, run) = switch(&ops, &dops, &env, &store, "ws_jobs", &so()).unwrap();
+    assert_eq!((p.state, run.state), (MoveState::Aborted, RunState::Streaming), "{:?}", p.last_error);
+    assert!(p.last_error.as_deref().unwrap_or_default().starts_with("drain"), "{:?}", p.last_error);
+    assert!(!dops.did("dual detach") && env.0.borrow().majors.is_empty());
+    // No insert position at all: refused loudly, never the write position.
+    let (ops, dops, store, env) = streaming();
+    let mut old = streaming_status(0, "0/1000");
+    old["source"].as_object_mut().unwrap().remove("insertLsn");
+    dops.statuses(vec![old]);
+    let (p, _) = switch(&ops, &dops, &env, &store, "ws_jobs", &so()).unwrap();
+    assert_eq!(p.state, MoveState::Aborted);
+    assert!(p.last_error.as_deref().unwrap_or_default().contains("insert position"), "{:?}", p.last_error);
+}
+
+/// B3: a large object made during the run (lo_create isn't DDL) undoes the
+/// cut-over before the detach; the run streams on and says why.
+#[test]
+fn a_large_object_made_during_the_run_undoes_the_switch() {
+    let (ops, dops, store, env) = streaming();
+    ops.0.borrow_mut().answers.insert(0, ("pg_catalog.pg_largeobject_metadata".into(), "2".into()));
+    dops.statuses(vec![streaming_status(0, "0/16B3748")]);
+    let (p, run) = switch(&ops, &dops, &env, &store, "ws_jobs", &so()).unwrap();
+    assert_eq!((p.state, run.state), (MoveState::Aborted, RunState::Streaming), "{:?}", p.last_error);
+    assert!(p.last_error.as_deref().unwrap_or_default().starts_with("large_objects: ws_jobs gained 2"), "{:?}", p.last_error);
+    assert!(!dops.did("dual detach") && !ops.did("drop_db"), "nothing dropped: {:?}", dops.log());
+    assert!(ops.did("allow_conn 16 ws_jobs on"), "the source re-opened");
+    assert!(env.0.borrow().majors.is_empty());
+    // An unreadable answer is an error too, never a pass.
+    let (ops, dops, store, env) = streaming();
+    ops.0.borrow_mut().answers.insert(0, ("pg_catalog.pg_largeobject_metadata".into(), "".into()));
+    dops.statuses(vec![streaming_status(0, "0/16B3748")]);
+    let (p, _) = switch(&ops, &dops, &env, &store, "ws_jobs", &so()).unwrap();
+    assert_eq!(p.state, MoveState::Aborted);
+    assert!(!dops.did("dual detach"));
+}
+
+/// B4: the refresh's bound comes from the switch (clamped), and a refresh
+/// that fails (its timeout) undoes the cut-over (the copy path's undo).
+#[test]
+fn the_refresh_is_bounded_and_its_timeout_undoes() {
+    assert_eq!(refresh_timeout_secs(None), REFRESH_TIMEOUT_SECS, "K2_DB_LIVE_REFRESH_TIMEOUT_SECS must be unset in tests");
+    assert_eq!((refresh_timeout_secs(Some(5)), refresh_timeout_secs(Some(1_000_000)), refresh_timeout_secs(Some(45))), (30, 86_400, 45));
+    let (ops, dops, store, env) = streaming();
+    dops.statuses(vec![streaming_status(0, "0/16B3748")]);
+    dops.0.borrow_mut().fail.push("refresh");
+    let o = SwitchOpts { refresh_timeout_secs: Some(45), ..so() };
+    let (p, run) = switch(&ops, &dops, &env, &store, "ws_jobs", &o).unwrap();
+    assert!(dops.did("refresh 17 5433 ws_jobs as ws_jobs_migrator within 45s"), "{:?}", dops.log());
+    assert_eq!((p.state, run.state), (MoveState::Aborted, RunState::Aborted), "{:?}", p.last_error);
+    assert!(ops.did("drop_db 17 ws_jobs") && ops.did("allow_conn 16 ws_jobs on"));
+}
+
+/// B5: a restart mid-cut-over, before the detach: a target that says its
+/// subscription is gone is dropped (the old order forgot it); a status that
+/// can't be read drops nothing and the run streams on.
+#[test]
+fn a_restart_before_the_detach_drops_only_what_it_knows_is_gone() {
+    let (ops, dops, store, env, p) = interrupted(Step::Copy, false, false);
+    let mut gone = streaming_status(0, "0/1");
+    gone["target"]["subscription"] = json!(false);
+    dops.statuses(vec![gone]);
+    let done = recover_switch(&ops, &dops, &env, &store, p);
+    assert_eq!(done.state, MoveState::Aborted);
+    assert_eq!(store.only().state, RunState::Aborted);
+    assert!(ops.did("drop_db 17 ws_jobs"), "the target copy is dropped: {:?}", ops.log());
+    assert!(dops.did("dual teardown") && ops.did("allow_conn 16 ws_jobs on"));
+    // Unknown: nothing dropped, the source re-opened, the run streams on.
+    let (ops, dops, store, env, p) = interrupted(Step::Copy, false, false);
+    dops.0.borrow_mut().fail.push("status");
+    let done = recover_switch(&ops, &dops, &env, &store, p);
+    assert_eq!(done.state, MoveState::Aborted);
+    let r = store.only();
+    assert_eq!(r.state, RunState::Streaming);
+    assert!(r.last_error.as_deref().unwrap_or_default().contains("can't be read"), "{:?}", r.last_error);
+    assert!(!ops.did("drop_db") && !dops.did("dual teardown"), "{:?} {:?}", ops.log(), dops.log());
+    assert!(ops.did("allow_conn 16 ws_jobs on"));
+}
+
+/// B6: the watch loop ends a run (a lost slot, day 7) only holding the
+/// move worker; busy, it changes nothing and tries again next tick.
+#[test]
+fn the_watch_loop_ends_a_run_only_holding_the_worker() {
+    let (ops, dops, store, env, run) = started();
+    let mut st = streaming_status(0, "0/1");
+    st["source"]["slot"]["walStatus"] = json!("lost");
+    dops.statuses(vec![st]);
+    store.0.borrow_mut().busy = true;
+    let run = tick(&ops, &dops, &env, &store, run);
+    assert_eq!(run.state, RunState::Syncing, "busy: untouched");
+    assert!(run.lag.errors.iter().any(|e| e.contains("move worker")), "{:?}", run.lag.errors);
+    assert!(!dops.did("dual teardown") && !ops.did("drop_db"));
+    assert_eq!(store.only().state, RunState::Syncing);
+    store.0.borrow_mut().busy = false;
+    let run = tick(&ops, &dops, &env, &store, run);
+    assert_eq!(run.state, RunState::Failed);
+    assert_eq!(store.0.borrow().holds, 1);
+    assert!(dops.did("dual teardown") && ops.did("drop_db 17 ws_jobs"));
+}
+
+/// B7: an old or unreachable helper: `--abort` parks the run as
+/// `needs_helper` (open, so K2 keeps refusing `db_dual_running`; the
+/// target kept, its subscription blocks the drop), told once; the watch
+/// loop finishes it once the helper speaks `pgdual` again.
+#[test]
+fn an_abort_without_the_helper_waits_for_it() {
+    let (ops, dops, store, env, run) = started();
+    dops.0.borrow_mut().fail.push("ready");
+    let r = abort_run(&ops, &dops, &env, &store, run, "aborted by owner", false);
+    assert_eq!(r.state, RunState::NeedsHelper);
+    assert!(r.state.open());
+    assert_eq!(r.objects.end_as, Some(RunState::Aborted));
+    assert!(r.objects.source_setup && r.objects.target_created, "{:?}", r.objects);
+    assert!(store.open_run("ws_jobs").is_some(), "still open: db_dual_running holds");
+    assert!(!dops.did("dual teardown") && !ops.did("drop_db"), "nothing half-done: {:?}", ops.log());
+    assert!(r.last_error.as_deref().unwrap_or_default().contains("waiting for the root helper"), "{:?}", r.last_error);
+    // The helper is still old: the loop waits, tells nothing new.
+    let r = tick(&ops, &dops, &env, &store, r);
+    let r = tick(&ops, &dops, &env, &store, r);
+    assert_eq!(r.state, RunState::NeedsHelper);
+    assert_eq!(env.0.borrow().inbox.iter().filter(|(t, _)| t.contains("needs the root helper")).count(), 1, "told once");
+    // Updated: the teardown runs, the run ends as it was going to.
+    dops.0.borrow_mut().fail.clear();
+    let r = tick(&ops, &dops, &env, &store, r);
+    assert_eq!(r.state, RunState::Aborted, "{:?}", r.last_error);
+    assert_eq!(r.last_error.as_deref(), Some("aborted by owner"));
+    assert!(dops.did("dual teardown") && ops.did("drop_db 17 ws_jobs"));
+    assert!(store.open_run("ws_jobs").is_none(), "db_dual_running clears only now");
+    // A lost slot whose teardown fails (helper unreachable): parked as
+    // needs_helper, ends failed.
+    let (ops, dops, store, env, run) = started();
+    let mut st = streaming_status(0, "0/1");
+    st["source"]["slot"]["walStatus"] = json!("lost");
+    dops.statuses(vec![st]);
+    dops.0.borrow_mut().fail.push("teardown");
+    let r = tick(&ops, &dops, &env, &store, run);
+    assert_eq!((r.state, r.objects.end_as), (RunState::NeedsHelper, Some(RunState::Failed)));
+    dops.0.borrow_mut().fail.clear();
+    let r = tick(&ops, &dops, &env, &store, r);
+    assert_eq!(r.state, RunState::Failed);
 }

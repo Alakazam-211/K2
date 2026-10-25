@@ -51,6 +51,17 @@ pub const DRAIN_WAIT_SECS: u64 = 60;
 pub const WATCH_EVERY_SECS: u64 = 30;
 /// PA22: the slot's WAL cap, at most 8 GB.
 pub const WAL_KEEP_MAX_MB: u32 = 8192;
+/// Security review B4: the cut-over's materialized-view refresh runs
+/// under the write block, so it is bounded (default 10 minutes; the
+/// daemon's `K2_DB_LIVE_REFRESH_TIMEOUT_SECS` overrides it, 30 s–24 h).
+/// Past it the cut-over is undone.
+pub const REFRESH_TIMEOUT_SECS: u64 = 600;
+
+pub fn refresh_timeout_secs(o: Option<u64>) -> u64 {
+    o.or_else(|| std::env::var("K2_DB_LIVE_REFRESH_TIMEOUT_SECS").ok().and_then(|v| v.trim().parse().ok()))
+        .unwrap_or(REFRESH_TIMEOUT_SECS)
+        .clamp(30, 86_400)
+}
 /// The refusal line ids of `--check --live`.
 pub const SOURCE_NOT_LOGICAL: &str = "source_not_logical";
 pub const DUAL_RUNNING: &str = "dual_running";
@@ -66,6 +77,12 @@ pub enum RunState {
     Switched,
     Aborted,
     Failed,
+    /// Security review B7: the run ended (aborted, failed) but the root
+    /// helper couldn't tear down the source's slot and DDL freeze (an old
+    /// or unreachable helper). It stays open, so K2 keeps refusing
+    /// `db_dual_running`, until the watch loop (or another `--abort`)
+    /// finishes the teardown.
+    NeedsHelper,
 }
 
 impl RunState {
@@ -79,6 +96,7 @@ impl RunState {
             Self::Switched => "switched",
             Self::Aborted => "aborted",
             Self::Failed => "failed",
+            Self::NeedsHelper => "needs_helper",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -111,6 +129,12 @@ pub struct Objects {
     pub detached: bool,
     /// Tables whose FORCE RLS stays off on the target until the switch.
     pub forced_oids: Vec<u32>,
+    /// A run waiting for the helper ([`RunState::NeedsHelper`]): how it
+    /// ends once the teardown runs, and why it ended.
+    #[serde(default)]
+    pub end_as: Option<RunState>,
+    #[serde(default)]
+    pub end_why: Option<String>,
 }
 
 /// The watch loop's last sample (PA29).
@@ -204,6 +228,9 @@ pub fn wal_keep_mb(free_bytes: u64) -> u32 {
 /// The root helper's protocol-10 `pgdual` verbs (and the owner's own
 /// login for the materialized views).
 pub trait DualOps {
+    /// The helper speaks protocol 10 with `namespaces.pgdual` now
+    /// (rechecked: a helper can be updated, or rolled back, under a run).
+    fn ready(&self) -> Result<(), String>;
     fn logical_conf(&self, m: Major, wal_keep_mb: Option<u32>, if_logical: bool) -> Result<Value, String>;
     fn dump_schema(&self, from: Major, to: Major, db: &str, tag: &str) -> Result<u64, String>;
     /// `move-restore --keep-force-off` as the owner: the tables that had FORCE.
@@ -213,8 +240,9 @@ pub trait DualOps {
     /// `pg systemctl restart postgresql@<M>-main` (the owner's `--prepare-live`).
     fn restart_cluster(&self, m: Major) -> Result<(), String>;
     /// `REFRESH MATERIALIZED VIEW` of every matview as the owner, over
-    /// loopback with its own password (never the superuser).
-    fn refresh_matviews(&self, m: Major, port: u16, db: &str, role: &str, password: &str) -> Result<(), String>;
+    /// loopback with its own password (never the superuser), stopped
+    /// after `timeout_secs` (B4).
+    fn refresh_matviews(&self, m: Major, port: u16, db: &str, role: &str, password: &str, timeout_secs: u64) -> Result<(), String>;
 }
 
 /// The run rows (`sql_dual_runs`) and the bits of K2 only a run needs.
@@ -242,6 +270,10 @@ pub trait RunStore {
     fn database_id(&self, db: &str) -> Result<String, String>;
     /// The state of a cut-over's `sql_moves` row.
     fn move_state(&self, move_id: &str) -> Option<MoveState>;
+    /// The move worker, held while the watch loop ends a run (security
+    /// review B6): a `--switch` or `--abort` holds it too, so the two never
+    /// undo one run at once. `Err` = busy; the loop tries again next tick.
+    fn hold_worker(&self, db: &str) -> Result<Box<dyn std::any::Any>, String>;
 }
 
 /// What the caller asked for.
@@ -528,12 +560,17 @@ fn undo_objects(ops: &dyn ClusterOps, dops: &dyn DualOps, run: &mut DualRun) -> 
     let mut errs = Vec::new();
     let (db, from, to, id) = (run.db.clone(), run.from, run.to, run.objects.object_id.clone());
     if run.objects.source_setup || run.objects.subscribed {
-        match dops.dual(DualOp::Teardown, from, to, &db, &id, None) {
+        match dops.ready().and_then(|_| dops.dual(DualOp::Teardown, from, to, &db, &id, None)) {
             Ok(_) => {
                 run.objects.source_setup = false;
                 run.objects.subscribed = false;
             }
-            Err(e) => errs.push(format!("teardown: {e}")),
+            Err(e) => {
+                // B7: the slot and freeze stay; so does the target (its
+                // subscription keeps DROP DATABASE out). Nothing else yet.
+                errs.push(format!("teardown: {e}"));
+                return errs;
+            }
         }
     }
     if !run.replica_identity_full.is_empty() && !run.objects.detached {
@@ -561,6 +598,9 @@ fn undo_objects(ops: &dyn ClusterOps, dops: &dyn DualOps, run: &mut DualRun) -> 
 /// `failed` (a lost slot) rather than `aborted`.
 pub fn abort_run(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: &dyn RunStore, mut run: DualRun, why: &str, failed: bool) -> DualRun {
     let errs = undo_objects(ops, dops, &mut run);
+    if !errs.is_empty() && (run.objects.source_setup || run.objects.subscribed) {
+        return park(env, store, run, why, if failed { RunState::Failed } else { RunState::Aborted }, &errs);
+    }
     run.finished_at = Some(env.now());
     if errs.is_empty() {
         run.state = if failed { RunState::Failed } else { RunState::Aborted };
@@ -588,6 +628,37 @@ pub fn abort_run(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, st
     run
 }
 
+/// B7: the run ended but the source's slot and freeze are still there
+/// (the helper can't tear them down): open as `needs_helper`, told once,
+/// retried by the watch loop. Never `failed` while they remain.
+fn park(env: &dyn MoveEnv, store: &dyn RunStore, mut run: DualRun, why: &str, end_as: RunState, errs: &[String]) -> DualRun {
+    run.state = RunState::NeedsHelper;
+    if run.objects.end_as.is_none() {
+        run.objects.end_as = Some(end_as);
+        run.objects.end_why = Some(why.to_string());
+    }
+    run.last_error = Some(format!("{why}; waiting for the root helper to drop the replication slot and the schema-change freeze: {}", errs.join("; ")));
+    let db = run.db.clone();
+    tell(
+        env,
+        "needs_helper",
+        &format!("Database {db} live move needs the root helper"),
+        &format!(
+            "The live move of {db} ended ({why}), but the root helper couldn't drop its replication slot and schema-change freeze ({}). \
+             {db} keeps serving on Postgres {}; schema changes stay refused and the slot holds WAL until then. Update the root helper \
+             (k2 doctor shows it); K2 finishes the cleanup by itself, or run k2 db upgrade {db} --abort again.",
+            errs.join("; "),
+            run.from
+        ),
+        &mut run,
+    );
+    if let Err(e) = store.save_run(&run) {
+        eprintln!("[db] live {db}: run row: {e}");
+    }
+    env.audit("db-upgrade-live-needs-helper", json!({"db": db, "run": run.id, "why": why, "errors": errs}));
+    run
+}
+
 // ── the watch loop (PA29, PA30) ─────────────────────────────────────────
 
 fn tell(env: &dyn MoveEnv, episode: &str, title: &str, body: &str, run: &mut DualRun) {
@@ -606,6 +677,9 @@ fn clear_episode(run: &mut DualRun, episode: &str) {
 /// source's data: a lost slot or the 7-day limit end the run, never the
 /// database.
 pub fn tick(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: &dyn RunStore, mut run: DualRun) -> DualRun {
+    if run.state == RunState::NeedsHelper {
+        return retry_teardown(ops, dops, env, store, run);
+    }
     if !run.state.watched() {
         return run;
     }
@@ -619,7 +693,7 @@ pub fn tick(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: 
         return fresh;
     }
     if age >= RUN_MAX_SECS {
-        return abort_run(ops, dops, env, store, run, "the 7-day limit for a live move passed", false);
+        return end_from_tick(ops, dops, env, store, run, loaded, "the 7-day limit for a live move passed", false);
     }
     for d in WARN_AT_DAYS {
         if age >= d * 86_400 {
@@ -662,15 +736,13 @@ pub fn tick(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: 
         told: std::mem::take(&mut run.lag.told),
     };
     if wal_status.as_deref() == Some("lost") {
-        if let Some(fresh) = moved(store, &run) {
-            return fresh;
-        }
-        return abort_run(
+        return end_from_tick(
             ops,
             dops,
             env,
             store,
             run,
+            loaded,
             "the replication slot passed its WAL cap and lost WAL it needed; the live database is untouched — re-run with more disk, or move by copy",
             true,
         );
@@ -713,6 +785,43 @@ pub fn tick(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: 
     }
 }
 
+/// B6: the watch loop ends a run only holding the move worker (a switch
+/// or an abort holds it too), and only if nobody moved the run meanwhile.
+/// Busy: nothing changes; the next tick tries again.
+#[allow(clippy::too_many_arguments)]
+fn end_from_tick(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: &dyn RunStore, mut run: DualRun, loaded: RunState, why: &str, failed: bool) -> DualRun {
+    let _held = match store.hold_worker(&run.db) {
+        Ok(h) => h,
+        Err(e) => {
+            run.lag.errors.push(format!("ending the run waits for the move worker: {e}"));
+            let _ = store.save_run_if(&run, loaded);
+            return run;
+        }
+    };
+    match store.last_run(&run.db).filter(|x| x.id == run.id) {
+        Some(fresh) if fresh.state != loaded => fresh,
+        _ => abort_run(ops, dops, env, store, run, why, failed),
+    }
+}
+
+/// B7: a `needs_helper` run, once the helper speaks `pgdual` again: the
+/// teardown and the rest of the undo, under the move worker; it ends as it
+/// was going to.
+fn retry_teardown(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: &dyn RunStore, run: DualRun) -> DualRun {
+    if dops.ready().is_err() {
+        return run;
+    }
+    let Ok(_held) = store.hold_worker(&run.db) else { return run };
+    match store.last_run(&run.db).filter(|x| x.id == run.id) {
+        Some(fresh) if fresh.state != RunState::NeedsHelper => fresh,
+        _ => {
+            let why = run.objects.end_why.clone().unwrap_or_else(|| "the live move ended".into());
+            let failed = run.objects.end_as == Some(RunState::Failed);
+            abort_run(ops, dops, env, store, run, &why, failed)
+        }
+    }
+}
+
 // ── the switch (PA31) ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default)]
@@ -720,6 +829,8 @@ pub struct SwitchOpts {
     pub actor: String,
     /// Owner only: skip the 60 s notice.
     pub now: bool,
+    /// B4: the refresh's bound ([`refresh_timeout_secs`]).
+    pub refresh_timeout_secs: Option<u64>,
 }
 
 fn status_now(dops: &dyn DualOps, run: &DualRun) -> Result<Value, String> {
@@ -780,7 +891,7 @@ pub fn switch(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store
         save(store, &dr)?;
         return Err(format!("the switch can't be recorded: {e}"));
     }
-    let res = switch_steps(&mut run, dops, store, &mut dr, o.now);
+    let res = switch_steps(&mut run, dops, store, &mut dr, o.now, refresh_timeout_secs(o.refresh_timeout_secs));
     let p = settle_switch(run, dops, store, &mut dr, res);
     Ok((p, dr))
 }
@@ -806,6 +917,10 @@ fn settle_switch(run: Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mut Du
             dr.objects.target_created = false;
             let mut left = dr.clone();
             let errs = undo_objects(ops, dops, &mut left);
+            if !errs.is_empty() && (left.objects.source_setup || left.objects.subscribed) {
+                *dr = park(env, store, left, &p.last_error.clone().unwrap_or_default(), RunState::Aborted, &errs);
+                return p;
+            }
             *dr = left;
             dr.state = if errs.is_empty() { RunState::Aborted } else { RunState::Failed };
             dr.finished_at = Some(env.now());
@@ -826,7 +941,7 @@ fn settle_switch(run: Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mut Du
     p
 }
 
-fn switch_steps(run: &mut Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mut DualRun, now: bool) -> Result<(), StepFail> {
+fn switch_steps(run: &mut Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mut DualRun, now: bool, refresh_secs: u64) -> Result<(), StepFail> {
     let (db, from, to) = (dr.db.clone(), dr.from, dr.to);
     let from_port = run.p.from_port.ok_or("the source cluster has no port on record")?;
     let to_port = run.p.to_port.ok_or("the target cluster has no port on record")?;
@@ -851,9 +966,13 @@ fn switch_steps(run: &mut Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mu
     run.ops.allow_conn(from, &db, ConnMode::QuiesceRepl).map_err(|e| format!("write block: {e}"))?;
     let blocked_at = run.env.now();
     // 3. drain: the slot catches up to the source's WAL position (≤ 60 s).
+    // Security review B2: the write block returned only once every other
+    // session had exited, so every commit is in WAL now; the target is the
+    // INSERT position (a `synchronous_commit = off` commit can sit past
+    // the write position), read after the block.
     run.at(Step::Copy, MoveState::Copying)?;
     let st = status_now(dops, dr).map_err(|e| format!("drain: {e}"))?;
-    let target = st["source"]["currentLsn"].as_str().and_then(catalog::lsn).ok_or("drain: the source answered no WAL position")?;
+    let target = st["source"]["insertLsn"].as_str().and_then(catalog::lsn).ok_or("drain: the source answered no WAL insert position")?;
     let mut drained = false;
     for _ in 0..=DRAIN_WAIT_SECS {
         let st = status_now(dops, dr).map_err(|e| format!("drain: {e}"))?;
@@ -870,6 +989,20 @@ fn switch_steps(run: &mut Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mu
     if !drained {
         return Err("drain: the copy didn't catch up within 60 s; the switch is undone and the run streams on (try --switch again)".into());
     }
+    // Security review B3: logical replication never copies large objects,
+    // and `lo_create` isn't DDL (the freeze lets it through). Looked at
+    // again under the write block: any at all, and the cut-over is undone.
+    let lobs = run.ops.sql(from, &db, LARGE_OBJECTS_SQL).map_err(|e| format!("large objects: {e}"))?;
+    match lobs.trim().parse::<u64>() {
+        Ok(0) => {}
+        Ok(n) => {
+            return Err(format!(
+                "large_objects: {db} gained {n} large object(s) during the live move; logical replication can't copy them. The switch is undone; abort (k2 db upgrade {db} --abort) and move by copy"
+            )
+            .into())
+        }
+        Err(_) => return Err(format!("large objects: unexpected answer {:?}", lobs.trim()).into()),
+    }
     // 4. detach (L24). From here an undo drops the target copy.
     dops.dual(DualOp::Detach, from, to, &db, &id, None).map_err(|e| format!("detach: {e}"))?;
     dr.objects.detached = true;
@@ -877,6 +1010,11 @@ fn switch_steps(run: &mut Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mu
     run.p.target_created = true;
     run.save()?;
     save(store, dr).map_err(StepFail)?;
+    // Security review B1: the target was quiesced (CONNECTION LIMIT 0)
+    // since setup; the owner's refresh (6) and the logins (7) need it open.
+    // No App reaches it before the re-point (8); an undo quiesces it again
+    // before the drop.
+    run.ops.allow_conn(to, &db, ConnMode::On).map_err(|e| format!("open the new copy to K2's roles: {e}"))?;
     // 5. sequences, exact (L21).
     let seqs = run.ops.sql(from, &db, catalog::sequences_sql())?;
     let script = catalog::setval_script(&seqs).ok_or("sequences: unexpected answer")?;
@@ -889,7 +1027,7 @@ fn switch_steps(run: &mut Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mu
     let owner = props["owner"].as_str().ok_or("the database has no owner")?.to_string();
     let logins = run.env.logins(&db)?;
     let owner_pw = logins.iter().find(|(r, _)| *r == owner).map(|(_, p)| p.clone()).ok_or("the database's owner is not K2's migrator")?;
-    dops.refresh_matviews(to, to_port, &db, &owner, &owner_pw).map_err(|e| format!("refresh materialized views: {e}"))?;
+    dops.refresh_matviews(to, to_port, &db, &owner, &owner_pw, refresh_secs).map_err(|e| format!("refresh materialized views: {e}"))?;
     // 7. verify: every row counted, the catalog fingerprint, sequences.
     run.at(Step::Verify, MoveState::Verifying)?;
     let counts_src = row_counts(run.ops, from, &db)?;
@@ -984,8 +1122,17 @@ fn finish_forward(run: &mut Run, dops: &dyn DualOps, dr: &mut DualRun, from: Maj
     if let Err(e) = run.env.verify_k2(to, &db) {
         run.p.warnings.push(format!("K2 check through the guest door: {e}"));
     }
-    // 10. record: the source stays, closed; the replication role goes.
+    // 10. record: the replication role goes while the source is still
+    // reachable by the helper (security review A-M1: closed first, the
+    // teardown couldn't get in and the role stayed), then the source
+    // stays, closed.
     run.at(Step::Record, MoveState::Switching)?;
+    match dops.dual(DualOp::Teardown, from, to, &db, &dr.objects.object_id, None) {
+        Ok(_) => {
+            dr.objects.source_setup = false;
+        }
+        Err(e) => run.p.warnings.push(format!("drop the replication role: {e} (the doctor lists it; k2 db doctor)")),
+    }
     if let Err(e) = run.ops.allow_conn(from, &db, ConnMode::Off) {
         run.p.warnings.push(format!("close the kept source: {e}"));
     }
@@ -993,12 +1140,6 @@ fn finish_forward(run: &mut Run, dops: &dyn DualOps, dr: &mut DualRun, from: Maj
     let now = run.env.now();
     let info = MovedInfo { from, at: now, until: now + ROLLBACK_WINDOW_SECS, tag: run.p.tag.clone(), source_state: SourceState::Kept };
     run.env.set_moved(&db, Some(&info)).map_err(|e| format!("record the move: {e}"))?;
-    match dops.dual(DualOp::Teardown, from, to, &db, &dr.objects.object_id, None) {
-        Ok(_) => {
-            dr.objects.source_setup = false;
-        }
-        Err(e) => run.p.warnings.push(format!("drop the replication role: {e} (the doctor lists it; k2 db doctor)")),
-    }
     run.env.audit(
         "db-upgrade-live-switch",
         json!({"db": db, "from": from, "to": to, "port": to_port, "actor": run.p.actor, "run": dr.id, "pausedSecs": paused, "warnings": run.p.warnings}),
@@ -1016,6 +1157,9 @@ fn finish_forward(run: &mut Run, dops: &dyn DualOps, dr: &mut DualRun, from: Maj
     run.finish(MoveState::Succeeded, None);
     Ok(())
 }
+
+/// B3: the large objects of the database (none may exist at the switch).
+pub const LARGE_OBJECTS_SQL: &str = "SELECT count(*) FROM pg_catalog.pg_largeobject_metadata;\n";
 
 // ── daemon restarts (PA36) and orphans (PA35) ───────────────────────────
 
@@ -1054,16 +1198,21 @@ pub fn recover_switch(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEn
         return settle_switch(run, dops, store, &mut dr, res);
     }
     // Before the switch: the target is dropped only once detached.
-    run.p.target_created = dr.objects.detached;
-    let why = format!("interrupted at {:?} by a daemon restart", run.p.step);
-    let res: Result<(), StepFail> = Err(StepFail(why));
+    let mut why = format!("interrupted at {:?} by a daemon restart", run.p.step);
     if !dr.objects.detached {
-        // Still subscribed? Then it streams on; else drop what is left.
-        let alive = status_now(dops, &dr).ok().is_some_and(|s| s["target"]["subscription"].as_bool() == Some(true));
-        if !alive {
-            dr.objects.detached = true;
+        // Still subscribed? Then it streams on. Gone (the target says so)?
+        // Drop what is left. Unknown (status unreadable)? Never a guess
+        // that drops anything (security review B5): it streams on, the
+        // watch loop looks again and stalls it if the stream is gone.
+        match status_now(dops, &dr) {
+            Ok(s) if s["target"]["subscription"].as_bool() == Some(false) => dr.objects.detached = true,
+            Ok(_) => {}
+            Err(e) => why = format!("{why}; the stream's state can't be read ({e}), so nothing was dropped"),
         }
     }
+    // After the look (B5): a detached run's undo drops the target copy.
+    run.p.target_created = dr.objects.detached;
+    let res: Result<(), StepFail> = Err(StepFail(why));
     settle_switch(run, dops, store, &mut dr, res)
 }
 

@@ -913,6 +913,11 @@ pub fn rollback(ops: &dyn ClusterOps, env: &dyn MoveEnv, db: &str, o: &RollbackO
     if !o.yes {
         return Err("rollback_needs_yes: writes made since the move are lost on a rollback; re-run with --yes".into());
     }
+    // Security review B8: a live run of this database owns it (its
+    // freeze, slot and target copy): no rollback under it.
+    if env.dual_running(db) {
+        return Err(format!("{}: a live move of {db} is open; switch or abort it first (k2 db upgrade {db} --abort)", dual::DUAL_RUNNING));
+    }
     let rec = env.record(db)?;
     let back_to = moved_cleanly(&rec)?;
     if rec.source_state != SourceState::Kept {

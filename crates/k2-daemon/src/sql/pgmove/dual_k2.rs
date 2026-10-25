@@ -163,6 +163,9 @@ impl RunStore for K2Store {
     fn database_id(&self, db: &str) -> Result<String, String> {
         crate::sql::ops::move_roles(db).map(|(id, _, _)| id).map_err(|e| e.hint().to_string())
     }
+    fn hold_worker(&self, db: &str) -> Result<Box<dyn std::any::Any>, String> {
+        super::worker::begin(db).map(|b| Box::new(b) as Box<dyn std::any::Any>)
+    }
     fn move_state(&self, move_id: &str) -> Option<MoveState> {
         let k2db = k2_core::db::shared();
         let conn = k2db.lock();
@@ -192,6 +195,9 @@ impl HelperDualOps<'_> {
 }
 
 impl DualOps for HelperDualOps<'_> {
+    fn ready(&self) -> Result<(), String> {
+        crate::sql::sysops::pgdual_gate()
+    }
     fn logical_conf(&self, m: Major, wal_keep_mb: Option<u32>, if_logical: bool) -> Result<Value, String> {
         let mut argv = vec!["pg".into(), "logical-conf".into(), tok(m)?];
         match wal_keep_mb {
@@ -233,7 +239,7 @@ impl DualOps for HelperDualOps<'_> {
     fn restart_cluster(&self, m: Major) -> Result<(), String> {
         call_with(self.door, &["pg".into(), "systemctl".into(), "restart".into(), format!("postgresql@{}-main", tok(m)?)], None).map(|_| ())
     }
-    fn refresh_matviews(&self, m: Major, port: u16, db: &str, role: &str, password: &str) -> Result<(), String> {
+    fn refresh_matviews(&self, m: Major, port: u16, db: &str, role: &str, password: &str, timeout_secs: u64) -> Result<(), String> {
         let psql = PgMajor::new(m).ok_or("unknown major")?.bin("psql");
         let pass = super::helper_ops::PassFile::new(port, db, role, password)?;
         let mut child = std::process::Command::new(&psql)
@@ -242,7 +248,8 @@ impl DualOps for HelperDualOps<'_> {
             .env("PATH", "/usr/bin:/bin")
             .env("PGPASSFILE", &pass.path)
             .env("PGCONNECT_TIMEOUT", "10")
-            .env("PGOPTIONS", "-c statement_timeout=0")
+            // B4: bounded (the whole refresh is one DO statement).
+            .env("PGOPTIONS", format!("-c statement_timeout={}", timeout_secs.saturating_mul(1000)))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -252,6 +259,21 @@ impl DualOps for HelperDualOps<'_> {
             use std::io::Write as _;
             let mut si = child.stdin.take().ok_or("psql: no stdin")?;
             si.write_all(REFRESH_SQL.as_bytes()).map_err(|e| format!("psql stdin: {e}"))?;
+        }
+        // And a wall clock behind the server's own timeout (a hung
+        // connection never holds the write block).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs + 30);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("stopped after {timeout_secs} s (K2_DB_LIVE_REFRESH_TIMEOUT_SECS)"));
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(200)),
+                Err(e) => return Err(format!("psql: {e}")),
+            }
         }
         let out = child.wait_with_output().map_err(|e| format!("psql: {e}"))?;
         if out.status.success() {
@@ -283,7 +305,15 @@ pub fn spawn_watch() {
         let ops = super::helper_ops::HelperOps { door: &door };
         let dops = HelperDualOps { door: &door };
         let env = super::k2::K2Env { actor: "system (live watch)".into() };
-        if crate::sql::sysops::pgdual_gate().is_ok() {
+        // Security review B7: the boot pass waits for a helper that speaks
+        // `pgdual` (rechecked every tick: it may be updated later), never
+        // skipped for good.
+        let mut booted = false;
+        let boot_pass = |booted: &mut bool| {
+            if *booted || crate::sql::sysops::pgdual_gate().is_err() {
+                return;
+            }
+            *booted = true;
             for line in dual::boot_runs(&ops, &dops, &env, &K2Store) {
                 eprintln!("[db] live: after the restart: {line}");
             }
@@ -291,12 +321,14 @@ pub fn spawn_watch() {
             if o["orphans"].as_array().is_some_and(|a| !a.is_empty()) {
                 eprintln!("[db] live: orphans: {o}");
             }
-        }
+        };
+        boot_pass(&mut booted);
         loop {
             std::thread::sleep(std::time::Duration::from_secs(dual::WATCH_EVERY_SECS));
             if crate::sql::supervisor::current_status().as_deref() != Some("running") {
                 continue;
             }
+            boot_pass(&mut booted);
             for run in K2Store.open_runs() {
                 let db = run.db.clone();
                 let before = run.state;
@@ -357,6 +389,16 @@ mod tests {
         assert!(s.open_run("ws_k2store").is_none());
         assert_eq!(s.last_run("ws_k2store").unwrap().state, RunState::Aborted);
         s.insert_run(&run("dr_b", RunState::SettingUp)).unwrap();
+        // B7: a run waiting for the helper is open (the CHECK takes it;
+        // db_dual_running holds) and keeps its end in objects_json.
+        let mut b = s.open_run("ws_k2store").expect("dr_b");
+        b.state = RunState::NeedsHelper;
+        b.objects.end_as = Some(RunState::Failed);
+        b.objects.end_why = Some("the slot lost WAL".into());
+        s.save_run(&b).unwrap();
+        assert!(running("ws_k2store"));
+        let back = s.open_run("ws_k2store").expect("still open");
+        assert_eq!((back.state, back.objects.end_as, back.objects.end_why.as_deref()), (RunState::NeedsHelper, Some(RunState::Failed), Some("the slot lost WAL")));
         let pw = s.new_password().unwrap();
         assert_eq!(pw.len(), 43);
         k2_root_proto::pg_dual::DualSecret { password: pw }.validate().unwrap();

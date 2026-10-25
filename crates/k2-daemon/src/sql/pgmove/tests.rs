@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use serde_json::{json, Value};
 
@@ -39,6 +40,11 @@ struct OpsState {
     answers: Vec<(String, String)>,
     /// Every SQL text, in full: (major, db, sql).
     full_sql: Vec<(Major, String, String)>,
+    /// (major, db) → the last `allow-conn` mode set (`on` when absent):
+    /// a role's login is refused unless `on`, as Postgres refuses a
+    /// non-superuser past `CONNECTION LIMIT 0` or `ALLOW_CONNECTIONS
+    /// false`. Shared with the live-run fake (the owner's refresh).
+    conn: Rc<RefCell<HashMap<(Major, String), String>>>,
 }
 
 struct FakeOps(RefCell<OpsState>);
@@ -216,7 +222,13 @@ impl ClusterOps for FakeOps {
             ConnMode::Quiesce => "allow_quiesce",
             ConnMode::Off => "allow_off",
             ConnMode::QuiesceRepl => "allow_quiesce_repl",
-        })
+        })?;
+        let conn = self.0.borrow().conn.clone();
+        match mode {
+            ConnMode::On => conn.borrow_mut().remove(&(m, db.to_string())),
+            other => conn.borrow_mut().insert((m, db.to_string()), other.token().to_string()),
+        };
+        Ok(())
     }
     fn dump(&self, from: Major, to: Major, db: &str, tag: &str) -> Result<u64, String> {
         self.push(format!("dump {from} {to} {db} {tag}"));
@@ -246,8 +258,11 @@ impl ClusterOps for FakeOps {
         }
         Some(!(m == 17 && s.ext_missing_on_17.contains(&ext)))
     }
-    fn login(&self, m: Major, port: u16, _db: &str, role: &str, _pw: &str) -> Result<(), String> {
+    fn login(&self, m: Major, port: u16, db: &str, role: &str, _pw: &str) -> Result<(), String> {
         self.push(format!("login {m} {port} {role}"));
+        if let Some(mode) = self.0.borrow().conn.borrow().get(&(m, db.to_string())) {
+            return Err(format!("FATAL: {db} is not accepting connections from {role} ({mode})"));
+        }
         self.gate("login")
     }
 }
@@ -293,6 +308,8 @@ struct EnvState {
     rehosted: Vec<(Vec<String>, String)>,
     /// PA12: an App on the database mid re-host.
     rehost_running: Option<String>,
+    /// A live run of the database is open.
+    dual_running: bool,
 }
 
 struct FakeEnv(RefCell<EnvState>);
@@ -449,6 +466,9 @@ impl MoveEnv for FakeEnv {
     }
     fn rehost_running(&self, _db: &str) -> Option<String> {
         self.0.borrow().rehost_running.clone()
+    }
+    fn dual_running(&self, _db: &str) -> bool {
+        self.0.borrow().dual_running
     }
     fn audit(&self, act: &str, line: Value) {
         self.0.borrow_mut().audits.push((act.into(), line));
@@ -1036,6 +1056,12 @@ fn rollback_refusals() {
     assert!(rollback(&ops, &env, "ws_jobs", &o).unwrap_err().starts_with("shared_database"));
     assert!(ops.log().is_empty());
     let owner = RollbackOpts { owner: true, ..o.clone() };
+    // Security review B8: never under an open live run, not even the owner's.
+    env.0.borrow_mut().dual_running = true;
+    let e = rollback(&ops, &env, "ws_jobs", &owner).unwrap_err();
+    assert!(e.starts_with("dual_running"), "{e}");
+    assert!(ops.log().is_empty() && env.0.borrow().rows.is_empty(), "nothing touched, nothing recorded");
+    env.0.borrow_mut().dual_running = false;
     assert_eq!(rollback(&ops, &env, "ws_jobs", &owner).unwrap().state, MoveState::Succeeded);
     // A re-point failure on the way back is reversed: still on 17.
     let (ops, env) = moved_env();

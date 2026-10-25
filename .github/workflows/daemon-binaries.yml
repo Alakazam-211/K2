@@ -279,10 +279,11 @@ jobs:
           subject-path: ${{ matrix.asset }}
 
       # The daemon assets are uploaded WITHOUT --clobber: a daemon already
-      # on the release is never silently replaced (sign-daemon.sh also
-      # checks the uploader and the upload time). To redo a build, delete
-      # the two assets by hand first. The other assets are signed with the
-      # root-helper key and keep --clobber.
+      # on the release is never silently replaced. What sign-daemon.sh
+      # really relies on is the attestation above plus the local tag
+      # commit. To redo a build: delete the two assets, then
+      # `gh workflow run daemon-binaries.yml --ref v<x> -f tag=v<x>`. The
+      # other assets are signed with the root-helper key and keep --clobber.
       - name: Upload to release
         env:
           IN_TAG: ${{ github.event.inputs.tag || github.ref_name }}

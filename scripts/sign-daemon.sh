@@ -18,12 +18,18 @@
 #      else wait for daemon-binaries.yml to upload them to the release;
 #   1b. provenance (security review of SS1): a daemon is signed only when
 #      we know where it came from.
-#      GitHub builds: (a) `gh attestation verify` passes for this repo, the
-#      daemon-binaries.yml workflow, the tag's ref and the tag's commit (the
-#      workflow attests each daemon with actions/attest-build-provenance);
-#      (b) the release asset and its .sha256 were uploaded exactly once, by
-#      github-actions[bot], after the release was created (the workflow
-#      uploads them without --clobber).
+#      The tag's commit is taken from THIS checkout (`refs/tags/v<x>`, the
+#      source the Mac build came from; release.sh made the tag here), and
+#      GitHub's copy of the tag must point at the same commit (tags can be
+#      moved; a ruleset also limits who can).
+#      GitHub builds: `gh attestation verify` must pass with the exact
+#      certificate identity of daemon-binaries.yml at refs/tags/v<x>, and
+#      the attestation's source commit must be that local tag commit (the
+#      workflow attests each daemon with actions/attest-build-provenance).
+#      These two are the real controls. As cheap belts only, the release
+#      asset must also be listed once, with github-actions[bot] as uploader,
+#      dated after the release: that proves little (any workflow token
+#      uploads as the bot, and GitHub never lists two assets with one name).
 #      K2 Compute builds (--from-dir): --compute-verdict names the state dir
 #      where compute_release.py wrote <label>.verdict.json after checking
 #      each job's signed receipt; the daemon's sha256 must be in a verdict
@@ -45,6 +51,11 @@
 # be the one it signed) and the .sig2 files, and checks them the way a
 # 0.46.4 install does.
 #
+# Re-running daemon-binaries.yml by hand: delete the release's
+# k2-daemon-linux-<arch> and .sha256 first (no --clobber), then
+# `gh workflow run daemon-binaries.yml --ref v<x> -f tag=v<x>`; the --ref
+# must be the tag, or the attestation's identity won't match.
+#
 # What this does NOT fix: a poisoned build. The attestation proves the bytes
 # came out of daemon-binaries.yml at the tag's commit, not that the runner
 # was clean: a compromised self-hosted runner can still build a bad daemon
@@ -57,6 +68,9 @@
 # Environment:
 #   K2_RELEASE_REPO           default Alakazam-211/K2
 #   K2_SIGN_WAIT_MIN          minutes to wait for CI assets (default 60)
+#   K2_SIGN_SOURCE_DIR        the checkout whose refs/tags/v<x> is the release
+#                             commit (default: this checkout; tests use a
+#                             fixture repo)
 #   K2_ALLOW_GH_SIGNING_SECRETS=1  preflight only warns while the old GitHub
 #                             secrets TAURI_SIGNING_* still exist (loud)
 #   K2_GMAIL_CLIENT_ID / _SECRET (+ K2_MICROSOFT_CLIENT_ID): the OAuth bake
@@ -67,6 +81,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SRC_DIR="${K2_SIGN_SOURCE_DIR:-$ROOT}"
 REPO="${K2_RELEASE_REPO:-Alakazam-211/K2}"
 WAIT_MIN="${K2_SIGN_WAIT_MIN:-60}"
 ARCHES=(x86_64 aarch64)
@@ -94,9 +109,21 @@ gh_secrets_check() {
     log "GitHub has no TAURI_SIGNING_* secrets."
 }
 
+# This machine's gh must be able to check provenance the way signing does.
+gh_attestation_probe() {
+    local help f
+    help="$(gh attestation verify --help 2>&1)" || die "this gh has no 'gh attestation verify' (brew upgrade gh); Linux daemons can't be signed without it"
+    for f in --cert-identity --source-ref --source-digest; do
+        printf '%s\n' "$help" | grep -q -- "$f" || die "this gh's 'attestation verify' has no $f (brew upgrade gh)"
+    done
+    git -C "$SRC_DIR" rev-parse --git-dir >/dev/null 2>&1 || die "$SRC_DIR is not a git checkout (the release tag is read from it)"
+    log "gh attestation verify supports --cert-identity, --source-ref, --source-digest"
+}
+
 preflight() {
     local version="$1"
     command -v gh >/dev/null 2>&1 || die "gh is not installed"
+    gh_attestation_probe
     k2u_preflight "$version" || die "update-key preflight failed (above)"
     python3 -I -c 'import sys' || die "python3 missing"
     gh_secrets_check
@@ -174,18 +201,26 @@ wait_for_github() {
 # Provenance.
 TAG_COMMIT=""
 if [ "$DRY" = 0 ]; then
-    TAG_COMMIT="$(gh api "repos/$REPO/commits/$TAG" --jq .sha)" || die "can't resolve the commit of $TAG"
-    [[ "$TAG_COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "$TAG resolves to '$TAG_COMMIT', not a commit"
+    # The release commit is the LOCAL tag (what the Mac build came from), not
+    # whatever GitHub's tag points at now; GitHub's must agree.
+    TAG_COMMIT="$(git -C "$SRC_DIR" rev-parse --verify --quiet "refs/tags/$TAG^{commit}")" \
+        || die "no local tag $TAG in $SRC_DIR: sign from the checkout release.sh tagged"
+    [[ "$TAG_COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "local $TAG resolves to '$TAG_COMMIT', not a commit"
+    gh_commit="$(gh api "repos/$REPO/commits/$TAG" --jq .sha)" || die "can't read GitHub's $TAG"
+    [ "$gh_commit" = "$TAG_COMMIT" ] \
+        || die "GitHub's $TAG is $gh_commit but the local tag is $TAG_COMMIT: the tag moved — not signing"
+    gh_attestation_probe
 fi
 
 check_github_provenance() { # <file> <asset>
     local f="$1" a="$2"
     if ! gh attestation verify "$f" -R "$REPO" \
-        --signer-workflow "$REPO/.github/workflows/daemon-binaries.yml" \
+        --cert-identity "https://github.com/$REPO/.github/workflows/daemon-binaries.yml@refs/tags/$TAG" \
         --source-ref "refs/tags/$TAG" --source-digest "$TAG_COMMIT" >"$WORK/attest-$a.out" 2>&1; then
         sed 's/^/    /' "$WORK/attest-$a.out" >&2
         die "$a: no valid build-provenance attestation from daemon-binaries.yml at $TAG ($TAG_COMMIT) — not signing"
     fi
+    # Belts only (see the header): cheap, and they catch a sloppy mistake.
     gh api "repos/$REPO/releases/tags/$TAG" > "$WORK/release.json" || die "can't read the $TAG release"
     python3 -I - "$WORK/release.json" "$a" <<'PY' || die "$a: the release asset's uploader or upload time is wrong — not signing"
 import json, sys

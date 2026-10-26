@@ -435,8 +435,16 @@ async fn s3_a_tied_user_stays_at_the_agents_workspace_until_their_own_reset() {
     let g1 = format!("g1{tag}");
     owner_post(port, "/cli/skin/users", json!({ "username": g1 })).await;
     owner_post(port, "/cli/skin/users/rooms", json!({ "username": g1, "rooms": [sales.handle] })).await;
+    // 0.46.4 review: an agent never manages a box login, its own room or
+    // not: refused before any write or tie.
     let r = post(port, "/cli/skin/users/password", &agent, json!({ "username": g1, "password": pw })).await;
-    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert!(r.body.contains("box login"), "{}", r.body);
+    assert!(tie_of(&g1).is_none(), "refused before any tie");
+    // A tie a password write made before 0.46.4 still holds the login to
+    // the ceiling below.
+    k2_core::skin::set_principal_password(&g1, Some(pw)).expect("owner sets it");
+    k2_core::skin::creators::tie(&principal_id(&g1), &sales.id, "agent:legacy", k2_core::skin::ties::REASON_PASSWORD).expect("tie");
     let t = tie_of(&g1).expect("tied by the password write");
     assert!(t.host_ok, "it held the box login then");
     assert_eq!(t.reasons, vec!["password".to_string()]);

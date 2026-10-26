@@ -377,7 +377,11 @@ fn switch_2_applies_its_own_widenings_and_switch_1_proposes_them() {
     assert_eq!((st, v["status"].as_str()), (200, Some("allowed")), "{v}");
     let (st, v) = grace("/cli/app/clean-mode", &a, json!({"app": "bff", "on": false}));
     assert_eq!((st, v["cleanMode"].as_bool()), (200, Some(false)), "{v}");
+    // A key that manages users needs the App-user switch too (review
+    // 0.46.4): held with switch 2 alone. Any other scope: switch 2 mints.
     let (st, v) = grace("/cli/app/key/mint", &a, json!({"app": "bff", "scopes": ["users"]}));
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "users scope without the users switch: {v}");
+    let (st, v) = grace("/cli/app/key/mint", &a, json!({"app": "bff", "scopes": ["fetch"]}));
     assert_ne!(st, 202, "switch 2 mints its own App's key, never held: {v}");
     if st != 200 {
         // The test process may have no open vault: the mint was attempted

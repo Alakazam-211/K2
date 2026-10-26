@@ -25,9 +25,9 @@
 //!   `POST /cli/app/grant/copy-host` lives here too (`agent_grants`).
 //! - **Guest rooms**: the owner acts with owner rights (any room on the
 //!   box). An agent acts only on its own workspace's Apps, with "Let this
-//!   agent manage its Apps' users" on, only on guests wholly in its
-//!   workspace (never a box login or an owner-made test guest), only while
-//!   the grant stands, and only within it (`k2 app guest rooms <app> <user>
+//!   agent manage its Apps' users" on, only on this App's guests (never a
+//!   box login or an owner-made test guest), only while the grant stands,
+//!   and only within it (`k2 app guest rooms <app> <user>
 //!   [set …]`, end to end). Admin and Member logins: never.
 //! - The rules themselves are `k2_core::skin::guest_rooms`.
 //! - **Ceiling and list** (prd-app-caps-0464-v1 AC4, 0.46.4): reads. The
@@ -275,15 +275,22 @@ fn guest_set(who: &Who, body: &[u8]) -> R<J> {
     let t = target(who, s(&v, "app"))?;
     let user = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the guest (username)"))?;
     // An agent changes its own App's guests' rooms only with "Let this
-    // agent manage its Apps' users", and only on a guest the roster door
-    // would let it touch: wholly its workspace's, never a box login, never
-    // an owner-made test guest (review 0.46.4: this path skipped them).
+    // agent manage its Apps' users", never on a box login and never on an
+    // owner-made test guest (review 0.46.4: this path skipped them).
     if let Some(ws) = super::routes::agent_ws(who) {
         if !super::agent_grants::may_self(who) {
             return Err(super::agent_grants::users_off("Setting your App guests' rooms"));
         }
-        let probe = json!({ "username": user }).to_string();
-        crate::skin_routes::agent_may_touch(ws, GUEST_ROOMS, probe.as_bytes()).map_err(|r| super::agent_grants::refusal_of(&r))?;
+        // The rules (`gr::set`) already keep it to THIS App's guests and the
+        // owner's grant (which may name other rooms on purpose); on top,
+        // never a box login and never an owner-made test guest.
+        let _ = ws;
+        let grants = k2_core::skin::list_grants().map_err(store)?;
+        if let Some(p) = k2_core::skin::list_principals().map_err(store)?.into_iter().find(|p| p.username == user.trim().to_ascii_lowercase()) {
+            if crate::skin_routes::has_box_login(&p.id, &grants) {
+                return Err(super::agent_grants::refusal_of(&crate::skin_routes::box_login_refused(&p.username)));
+            }
+        }
         if let Some(r) = crate::skin_routes::agent_test_guest_refused(&actor(who), user) {
             return Err(super::agent_grants::refusal_of(&r));
         }

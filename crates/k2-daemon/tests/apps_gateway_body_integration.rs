@@ -59,6 +59,21 @@ fn on_link(port: u16, path: &str, cred: &str, in_query: bool, ct: &str, body: &s
     parse(&String::from_utf8_lossy(&out))
 }
 
+/// [`on_link`] with extra header lines (each ends in `\r\n`), the App
+/// pass as Bearer.
+fn on_link_with(port: u16, path: &str, cred: &str, ct: &str, body: &str, extra: &str) -> (u16, String) {
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:8730\r\nAuthorization: Bearer {cred}\r\nContent-Type: {ct}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    s.write_all(req.as_bytes()).unwrap();
+    let mut out = Vec::new();
+    let _ = s.read_to_end(&mut out);
+    parse(&String::from_utf8_lossy(&out))
+}
+
 fn get_on_link(port: u16, pq: &str, cred: &str) -> (u16, String) {
     let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
@@ -124,6 +139,14 @@ async fn form_bodies_reach_the_handlers_that_read_them_and_query_passes_are_the_
     pin_chat(&ws);
     let svc = published(&ws, "formapp");
     install_row("formapp", &svc, &ws, &["thread:read", "thread:post"]);
+    // The App's own public origin (a custom hostname bound to it): what its
+    // K2_APP_ORIGINS carries.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::upsert_binding(&conn, "example.com", None, false).expect("apex");
+        k2_core::domains::upsert_name(&conn, "formapp.example.com", "example.com", "app:formapp").expect("name");
+    }
     k2_core::skin::add_principal_for_app("gina", None, &svc, None, "owner").unwrap();
     let guest = k2_core::skin::create_app_session_token("gina", &svc).unwrap();
     let pass = gateway::open(
@@ -155,6 +178,15 @@ async fn form_bodies_reach_the_handlers_that_read_them_and_query_passes_are_the_
         // Neither JSON nor a form: 415, the hint names both.
         let plain = on_link(port, "/cli/thread/post", &p, false, "text/plain", "hi");
         let read = get_on_link(port, &format!("/cli/thread?addr={}", enc(&handle)), &p);
+        // Security review: a reverse proxy forwarding the App's own page's
+        // form (Origin = its own origin) is allowed; another site's page
+        // (cross-site, or a foreign Origin) is refused.
+        let fwd = on_link_with(port, "/cli/thread/post", &p, FORM, &form, "Origin: https://formapp.example.com\r\nSec-Fetch-Site: same-origin\r\n");
+        assert_eq!(fwd.0, 200, "a forwarded same-origin form: {}", fwd.1);
+        for extra in ["Origin: https://formapp.example.com\r\nSec-Fetch-Site: cross-site\r\n", "Origin: https://evil.example\r\n"] {
+            let r = on_link_with(port, "/cli/thread/post", &p, FORM, &form, extra);
+            assert_eq!((r.0, err(&r.1)["code"].as_str().map(str::to_string)), (403, Some("browser_form_refused".to_string())), "{extra}: {}", r.1);
+        }
         (app_form, guest_form, guest_json_only, plain, read)
     })
     .await

@@ -595,7 +595,17 @@ pub fn link_login(limiter: &crate::login_throttle::LoginLimiter, body: &[u8], co
         // refused or dropped the same way as a form's).
         let named: Vec<String> = v
             .as_object()
-            .map(|m| m.iter().filter(|(k, _)| is_app_key(k)).map(|(_, x)| x.as_str().unwrap_or("?").trim().to_string()).collect())
+            .map(|m| {
+                m.iter()
+                    .filter(|(k, _)| is_app_key(k))
+                    .map(|(_, x)| match x {
+                        // null is "not named" (dropped below), like an empty string.
+                        Value::Null => String::new(),
+                        Value::String(s) => s.trim().to_string(),
+                        _ => "?".to_string(),
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         if named.iter().any(|a| !a.is_empty() && a != svc) {
             return Some(refuse("403 Forbidden", "app_mismatch", crate::skin_routes::LINK_APP_MISMATCH_HINT));
@@ -771,14 +781,38 @@ fn body_refusal(method: &str, path: &str, head: &str, bytes_in: u64) -> Option<k
     (!k2_core::app_body::admits(path, kind)).then_some(kind)
 }
 
-/// A form-encoded write with a browser's marks: an `Origin` header, or
-/// `Sec-Fetch-Site: cross-site|same-site`.
-fn form_from_browser(method: &str, head: &str, bytes_in: u64) -> bool {
+/// A form-encoded write a browser sent from someone else's page: marked
+/// `Sec-Fetch-Site: cross-site`, or carrying an `Origin` that is neither
+/// one of the App's own origins (`own_origin`: its `K2_APP_ORIGINS`) nor a
+/// loopback one. An App server that forwards its own browser's request
+/// (nginx/Caddy `reverse_proxy`, Next.js rewrites, http-proxy-middleware
+/// pass `Origin` and `Sec-Fetch-Site` on) is the App's own page: allowed.
+fn form_from_browser(method: &str, head: &str, bytes_in: u64, own_origin: impl Fn(&str) -> bool) -> bool {
     if method != "POST" || bytes_in == 0 || k2_core::app_body::body_kind(header(head, "content-type")) != k2_core::app_body::BodyKind::Form {
         return false;
     }
-    header(head, "origin").is_some()
-        || header(head, "sec-fetch-site").is_some_and(|v| v.eq_ignore_ascii_case("cross-site") || v.eq_ignore_ascii_case("same-site"))
+    if header(head, "sec-fetch-site").is_some_and(|v| v.trim().eq_ignore_ascii_case("cross-site")) {
+        return true;
+    }
+    match header(head, "origin") {
+        None => false,
+        Some(o) => {
+            let o = o.trim().trim_end_matches('/').to_ascii_lowercase();
+            !(loopback_origin(&o) || own_origin(&o))
+        }
+    }
+}
+
+/// `http(s)://localhost`, `127.0.0.1` or `[::1]`, any port (an App's own
+/// development front).
+fn loopback_origin(o: &str) -> bool {
+    let Some(rest) = o.strip_prefix("http://").or_else(|| o.strip_prefix("https://")) else { return false };
+    let host = if let Some(r) = rest.strip_prefix('[') {
+        r.split(']').next().unwrap_or("")
+    } else {
+        rest.split(':').next().unwrap_or("")
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
 // ── a pass in the query string (deprecated on the link) ──────────────
@@ -940,16 +974,19 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
         return deny(Some(c), 415, "json_required", &k2_core::app_body::refusal_hint(path, kind));
     }
     // Defence in depth (security review 0.46.4): a form is the one body a
-    // browser can send cross-site without a preflight. The link is the
-    // App server's door, never a browser's, so a form write that carries
-    // a browser's `Origin` or a cross/same-site `Sec-Fetch-Site` is refused
-    // (as the chat-pass mint refuses browser-shaped heads).
-    if form_from_browser(method, head, bytes_in) {
+    // browser can send cross-site without a preflight. A form write marked
+    // cross-site, or from an `Origin` that isn't one of this App's own
+    // (its K2_APP_ORIGINS) or loopback, is refused. An App server that
+    // forwards its own page's form (a reverse proxy passes Origin on) is
+    // fine.
+    if form_from_browser(method, head, bytes_in, |o| {
+        super::origins::for_service(&c.service_id, &c.app_id).iter().any(|x| x.trim_end_matches('/').eq_ignore_ascii_case(o))
+    }) {
         return deny(
             Some(c),
             403,
             "browser_form_refused",
-            "the gateway link takes a form body from your App's server, never a browser (no Origin, no cross-site Sec-Fetch-Site)",
+            "this form came from another site's page (Sec-Fetch-Site: cross-site, or an Origin that isn't one of this App's K2_APP_ORIGINS): the gateway link takes forms from your App's own pages and server only",
         );
     }
     if me {
@@ -1009,14 +1046,24 @@ mod tests {
     fn a_form_with_browser_marks_is_spotted() {
         let form = "Content-Type: application/x-www-form-urlencoded\r\n";
         let h = |extra: &str| format!("POST /cli/thread/post HTTP/1.1\r\nHost: 127.0.0.1\r\n{form}{extra}\r\n");
-        assert!(!form_from_browser("POST", &h(""), 10), "a server's form");
-        assert!(!form_from_browser("POST", &h("Sec-Fetch-Site: same-origin\r\n"), 10));
-        assert!(!form_from_browser("POST", &h("Sec-Fetch-Site: none\r\n"), 10));
-        assert!(form_from_browser("POST", &h("Origin: https://evil.example\r\n"), 10));
-        assert!(form_from_browser("POST", &h("Sec-Fetch-Site: cross-site\r\n"), 10));
-        assert!(form_from_browser("POST", &h("sec-fetch-site: Same-Site\r\n"), 10));
-        assert!(!form_from_browser("POST", "POST / HTTP/1.1\r\nContent-Type: application/json\r\nOrigin: x\r\n\r\n", 10), "JSON is preflighted");
-        assert!(!form_from_browser("POST", &h("Origin: x\r\n"), 0), "no body");
+        let own = |o: &str| o == "https://shop.example.com";
+        let f = |extra: &str| form_from_browser("POST", &h(extra), 10, own);
+        assert!(!f(""), "a server's form");
+        assert!(!f("Sec-Fetch-Site: same-origin\r\n"));
+        assert!(!f("Sec-Fetch-Site: none\r\n"));
+        assert!(!f("Sec-Fetch-Site: same-site\r\n"), "same-site is not cross-site");
+        // A reverse proxy forwarding the App's own page: allowed.
+        assert!(!f("Origin: https://Shop.Example.com/\r\nSec-Fetch-Site: same-origin\r\n"));
+        assert!(!f("Origin: http://localhost:3000\r\n"), "the App's own dev front");
+        assert!(!f("Origin: http://[::1]:8080\r\n"));
+        // Someone else's page.
+        assert!(f("Origin: https://evil.example\r\n"));
+        assert!(f("Origin: https://shop.example.com.evil.example\r\n"));
+        assert!(f("Origin: null\r\n"), "a sandboxed or file page");
+        assert!(f("Sec-Fetch-Site: cross-site\r\n"));
+        assert!(f("Origin: https://shop.example.com\r\nSec-Fetch-Site: cross-site\r\n"), "cross-site wins");
+        assert!(!form_from_browser("POST", "POST / HTTP/1.1\r\nContent-Type: application/json\r\nOrigin: x\r\n\r\n", 10, own), "JSON is preflighted");
+        assert!(!form_from_browser("POST", &h("Origin: x\r\n"), 0, own), "no body");
     }
 
     #[test]
@@ -1139,6 +1186,12 @@ mod tests {
         // JSON: any key spelling another App is refused; others dropped.
         assert_eq!(refused(login(&l, "svc-a", r#"{"username":"a","password":"x","APP":"host"}"#, "application/json")).1, "app_mismatch");
         assert_eq!(refused(login(&l, "svc-a", r#"{"username":"a","password":"x","app":7}"#, "application/json")).1, "app_mismatch");
+        // null is absent: dropped, this App named.
+        for body in [r#"{"username":"a","password":"x","app":null}"#, r#"{"username":"a","password":"x","appId":null}"#] {
+            let (b, _) = proceed(login(&l, "svc-a", body, "application/json"));
+            let v: Value = serde_json::from_slice(&b).unwrap();
+            assert_eq!((v["app"].as_str(), v.get("appId")), (Some("svc-a"), None), "{body}: {v}");
+        }
         // The throttle key is the username the handler reads: the first
         // any-case `username` in a form, JSON `name` when there is no `username`.
         let (_, k) = proceed(login(&l, "svc-a", "Username=Victim&username=decoy&password=x", FORM));

@@ -331,6 +331,12 @@ impl ProxyRegistration {
         self.run.load(Ordering::SeqCst) == run
     }
 
+    /// The current child's run number (the supervisor reads it right after
+    /// it spawned or adopted that child; nothing else begins runs).
+    pub(crate) fn current_run(&self) -> u64 {
+        self.run.load(Ordering::SeqCst)
+    }
+
     /// One frpc log line from the child of `run`.
     pub(crate) fn observe_line(&self, run: u64, line: &str) {
         if !self.is_current_run(run) {
@@ -378,10 +384,25 @@ impl ProxyRegistration {
 /// A failure is a run that ended before it was up (no `start proxy
 /// success` and under [`HEALTHY_UPTIME`]), a watchdog kill, or a spawn /
 /// config-render error. A run that comes up resets the count.
+///
+/// One lock over the count, the error and the run that last came up, so
+/// `status()` never reads a count of 0 next to the previous failure's
+/// error, and a dead run's error line that was already past its
+/// current-run check when the next run came up can't land on that healthy
+/// run (core-home-locks 193/200, soak 2026-10-25: a healthy tunnel still
+/// reporting the crash loop's `open …frpc.toml: no such file` line).
 pub(crate) struct FrpcHealth {
-    consecutive_failures: AtomicU64,
+    state: Mutex<HealthState>,
+}
+
+#[derive(Default)]
+struct HealthState {
+    consecutive_failures: u64,
     /// The last frpc error line, spawn error or render error.
-    last_error: Mutex<Option<String>>,
+    last_error: Option<String>,
+    /// The run that last came up (0 = none yet): an older run's line is
+    /// never this run's error.
+    up_run: u64,
 }
 
 /// frpc log fragments worth surfacing as the last error.
@@ -389,10 +410,14 @@ const ERROR_LINE_MARKERS: &[&str] = &[" [E] ", "[E] [", "no such file", "error",
 
 impl FrpcHealth {
     pub(crate) fn new() -> Self {
-        Self { consecutive_failures: AtomicU64::new(0), last_error: Mutex::new(None) }
+        Self { state: Mutex::new(HealthState::default()) }
     }
 
-    fn set_error(&self, why: impl Into<String>) {
+    fn state(&self) -> std::sync::MutexGuard<'_, HealthState> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn capped(why: impl Into<String>) -> String {
         let mut why: String = why.into();
         if why.len() > 400 {
             let mut cut = 400;
@@ -401,49 +426,64 @@ impl FrpcHealth {
             }
             why.truncate(cut);
         }
-        *self.last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(why);
+        why
     }
 
     /// One failed run / spawn / render.
     pub(crate) fn record_failure(&self, why: impl Into<String>) {
-        self.consecutive_failures.fetch_add(1, Ordering::SeqCst);
-        let why = why.into();
+        let mut st = self.state();
+        st.consecutive_failures += 1;
         // Keep frpc's own error line when the run already logged one; the
         // exit code alone says less.
-        let mut slot = self.last_error.lock().unwrap_or_else(|p| p.into_inner());
-        if slot.is_none() {
-            *slot = Some(why);
+        if st.last_error.is_none() {
+            st.last_error = Some(why.into());
         }
     }
 
     /// One failed spawn / render: `why` replaces the last error.
     pub(crate) fn fail_with(&self, why: impl Into<String>) {
-        self.consecutive_failures.fetch_add(1, Ordering::SeqCst);
-        self.set_error(why);
+        let why = Self::capped(why);
+        let mut st = self.state();
+        st.consecutive_failures += 1;
+        st.last_error = Some(why);
     }
 
-    /// The current run came up.
-    pub(crate) fn record_up(&self) {
-        if self.consecutive_failures.swap(0, Ordering::SeqCst) != 0 {
+    /// Run `run` came up.
+    pub(crate) fn record_up(&self, run: u64) {
+        let mut st = self.state();
+        if st.consecutive_failures != 0 {
             crate::log_debug!("[tunnel] frpc is up again");
         }
-        *self.last_error.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        st.consecutive_failures = 0;
+        st.last_error = None;
+        st.up_run = st.up_run.max(run);
     }
 
-    /// One frpc log line (from the pump threads).
-    pub(crate) fn observe_line(&self, line: &str) {
+    /// One frpc log line from the child of `run` (the pump threads). A
+    /// line from a run older than the one that last came up is dropped.
+    pub(crate) fn observe_line(&self, run: u64, line: &str) {
         let lower = line.to_ascii_lowercase();
         if ERROR_LINE_MARKERS.iter().any(|m| lower.contains(&m.to_ascii_lowercase())) {
-            self.set_error(line.trim().to_string());
+            let why = Self::capped(line.trim());
+            let mut st = self.state();
+            if run >= st.up_run {
+                st.last_error = Some(why);
+            }
         }
     }
 
     pub(crate) fn failures(&self) -> u64 {
-        self.consecutive_failures.load(Ordering::SeqCst)
+        self.state().consecutive_failures
     }
 
     pub(crate) fn last_error(&self) -> Option<String> {
-        self.last_error.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        self.state().last_error.clone()
+    }
+
+    /// (failures, last error), read together.
+    pub(crate) fn snapshot(&self) -> (u64, Option<String>) {
+        let st = self.state();
+        (st.consecutive_failures, st.last_error.clone())
     }
 }
 
@@ -913,13 +953,17 @@ impl TunnelStatus {
 /// Why a "running" connector is not actually serving (`None` = healthy):
 /// the rendered config is gone, or frpc runs keep failing.
 fn unhealthy_reason(st: &ConnectorState) -> Option<String> {
+    unhealthy_reason_of(st.health.snapshot())
+}
+
+/// [`unhealthy_reason`] for one [`FrpcHealth::snapshot`].
+fn unhealthy_reason_of((n, err): (u64, Option<String>)) -> Option<String> {
     let path = frpc_config_path();
     if !path.exists() {
         return Some(format!("frpc config missing at {}", path.display()));
     }
-    let n = st.health.failures();
     if n > 0 {
-        let err = st.health.last_error().unwrap_or_else(|| "no error line".to_string());
+        let err = err.unwrap_or_else(|| "no error line".to_string());
         return Some(format!("frpc failing ({n} consecutive failures): {err}"));
     }
     None
@@ -1461,7 +1505,8 @@ fn status_from(st: &ConnectorState) -> TunnelStatus {
     let relay_list =
         super::relay_list::status_for(&config::load().unwrap_or_else(|_| st.cfg.clone()));
     let cfg_path = frpc_config_path();
-    let unhealthy = unhealthy_reason(st);
+    let (failures, last_error) = st.health.snapshot();
+    let unhealthy = unhealthy_reason_of((failures, last_error.clone()));
     TunnelStatus {
         running: st.running.load(Ordering::SeqCst),
         public_url,
@@ -1473,8 +1518,8 @@ fn status_from(st: &ConnectorState) -> TunnelStatus {
         enabled: true,
         released: false,
         frpc_healthy: Some(unhealthy.is_none()),
-        frpc_consecutive_failures: Some(st.health.failures()),
-        frpc_last_error: st.health.last_error().or(unhealthy),
+        frpc_consecutive_failures: Some(failures),
+        frpc_last_error: last_error.or(unhealthy),
         frpc_config_present: Some(cfg_path.exists()),
         frpc_config: Some(cfg_path.display().to_string()),
         repaired: None,
@@ -1780,6 +1825,8 @@ impl SessionWatch {
 /// once deleted it) so the NEXT respawn never execs frpc against nothing.
 struct RunHealth<'a> {
     proxy: &'a ProxyRegistration,
+    /// This child's run number ([`ProxyRegistration::current_run`]).
+    run_id: u64,
     health: &'a FrpcHealth,
     /// Re-render the config if it is missing (closure over the current
     /// relay + frozen port).
@@ -1794,7 +1841,7 @@ impl RunHealth<'_> {
             && (self.proxy.is_registered() || spawned_at.elapsed() >= HEALTHY_UPTIME)
         {
             self.came_up = true;
-            self.health.record_up();
+            self.health.record_up(self.run_id);
         }
         self.ticks = self.ticks.wrapping_add(1);
         if self.ticks % LOCAL_TARGET_PROBE_EVERY == 0 {
@@ -2267,6 +2314,7 @@ fn spawn_supervised(
                 let spawned_at = Instant::now();
                 let mut run = RunHealth {
                     proxy: &proxy,
+                    run_id: proxy.current_run(),
                     health: &health,
                     ensure_config: &ensure_config,
                     came_up: false,
@@ -2891,7 +2939,7 @@ fn handle_line(
     proxy.0.observe_line(proxy.1, line);
     // A dead run's late error line must not land on a healthy new run.
     if proxy.0.is_current_run(proxy.1) {
-        health.observe_line(line);
+        health.observe_line(proxy.1, line);
     }
 }
 
@@ -4156,13 +4204,19 @@ mod tests {
         let health = FrpcHealth::new();
         let r1 = reg.begin_run();
         let r2 = reg.begin_run();
-        health.record_up();
+        health.record_up(r2);
         assert_eq!(health.last_error(), None);
         let err = "[E] [sub/root.go:142] open /tmp/x/.k2/frpc.toml: no such file or directory";
         handle_line(err, None, &(reg.clone(), r1), &health);
         assert_eq!(health.last_error(), None, "a dead run's late error must be ignored");
+        // Already past the current-run check when the next run came up:
+        // the health itself drops it.
+        health.observe_line(r1, err);
+        assert_eq!(health.last_error(), None, "an older run's line never lands on a run that came up");
+        assert_eq!(health.snapshot(), (0, None));
         handle_line(err, None, &(reg.clone(), r2), &health);
         assert_eq!(health.last_error().as_deref(), Some(err));
+        assert_eq!(health.failures(), 0, "an error line alone is not a failed run");
     }
 
     #[test]

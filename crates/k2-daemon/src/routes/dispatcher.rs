@@ -13957,9 +13957,15 @@ fn owner_or_skin_manage_hook_scoped(
         return Err(skin_dual_auth_failure(query, bearer));
     };
     let ws_path = crate::workspace_msg::resolve_workspace(&validated.principal.workspace_uuid);
-    let allowed = ws_path
-        .as_deref()
-        .is_some_and(k2_core::workspace::settings::agents_can_manage_skin_for_path);
+    // An agent's App-user management (`/cli/skin/users*`) has its own gate,
+    // in one place; everything else here rides the skin-manage switch.
+    let allowed = ws_path.as_deref().is_some_and(|p| {
+        if crate::skin_routes::is_app_user_route(path) {
+            crate::skin_routes::agent_may_manage_app_users(p)
+        } else {
+            k2_core::workspace::settings::agents_can_manage_skin_for_path(p)
+        }
+    });
     if allowed {
         return Ok((
             crate::skin_routes::skin_manage_actor_label(&validated.principal),

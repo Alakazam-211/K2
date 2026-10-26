@@ -2588,6 +2588,23 @@ pub fn owner_only_manage_response() -> CliResponse {
 /// Actor label for a scoped hook that passed the manage gate.
 /// `agent:<handle>` from [`workspace_address_name_shared`]. Never
 /// `"owner"` / `"owner-token"`.
+/// THE gate on an agent managing its own Apps' people (`/cli/skin/users*`:
+/// add, remove, password, email, rooms, unlock, invite), given the agent's
+/// workspace path. Today it is the workspace's skin-manage switch. Rosson
+/// 2026-10-26: App user management gets its own switch,
+/// `apps.manage-users`; the App-grants branch swaps it here, in this one
+/// place. Every agent App-user route reaches it through
+/// `owner_or_skin_manage_hook_scoped` ([`is_app_user_route`]).
+pub fn agent_may_manage_app_users(ws_path: &str) -> bool {
+    k2_core::workspace::settings::agents_can_manage_skin_for_path(ws_path)
+}
+
+/// Is `path` one of the App-user routes [`agent_may_manage_app_users`] gates?
+pub fn is_app_user_route(path: &str) -> bool {
+    let p = path.split('?').next().unwrap_or(path);
+    p == "/cli/skin/users" || p.starts_with("/cli/skin/users/")
+}
+
 pub fn skin_manage_actor_label(principal: &crate::session_token::HookPrincipal) -> String {
     let handle = k2_core::workspace_session_handles::workspace_address_name_shared(
         principal.workspace_uuid.trim(),

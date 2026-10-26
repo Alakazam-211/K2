@@ -18,7 +18,7 @@
 set -euo pipefail
 
 : "${K2_URL:?set K2_URL (the daemon main port)}"
-: "${K2_APP:?set K2_APP (the App's service id)}"
+: "${K2_APP:?set K2_APP (the service id of the App)}"
 : "${K2_PASS:?set K2_PASS (a guest web session pass)}"
 command -v curl >/dev/null || { echo "FAIL: curl is required" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "FAIL: python3 is required" >&2; exit 2; }

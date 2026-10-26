@@ -153,3 +153,49 @@ pub(super) fn workspace_of_conn(conn: &Connection, principal_id: &str) -> Result
 pub fn workspace_of(principal_id: &str) -> Result<Option<String>, String> {
     with_conn(|conn| workspace_of_conn(conn, principal_id))
 }
+
+/// The usernames of `app`'s guests (any `kind=app` grant on that published
+/// service id, enabled or not) tied to `workspace_id`: their [`agent_tie`]
+/// names it, or the owner marked them as that workspace's agent login
+/// (`principals.agent_workspace`). Sorted. The hand-over guard refuses
+/// while any exists: moving the App would leave them tied to a workspace
+/// that no longer maintains it (and, once ties are ceilings, sign them out).
+pub fn app_guests_tied_to(app: &str, workspace_id: &str) -> Result<Vec<String>, String> {
+    let (app, ws) = (app.trim().to_string(), workspace_id.trim().to_string());
+    if app.is_empty() || ws.is_empty() {
+        return Ok(vec![]);
+    }
+    with_conn(|conn| {
+        let rows: Vec<(String, String, Option<String>)> = {
+            let mut st = conn
+                .prepare(
+                    "SELECT DISTINCT p.id, p.username, p.agent_workspace FROM principals p JOIN grants g
+                       ON g.subject_kind = 'principal' AND g.subject_id = p.id AND g.kind = 'app' AND g.target_id = ?1
+                      ORDER BY p.username",
+                )
+                .map_err(|e| format!("tied guests: {e}"))?;
+            let it = st.query_map(params![app], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map_err(|e| format!("tied guests: {e}"))?;
+            it.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("tied guests: {e}"))?
+        };
+        let mut out = Vec::new();
+        for (pid, username, marked) in rows {
+            let marked_here = marked.as_deref().map(str::trim) == Some(ws.as_str());
+            let tie: Option<String> = if claimed(conn, &pid)? {
+                None
+            } else {
+                let tied: Option<String> = conn
+                    .query_row("SELECT tied_to FROM principal_agent_ties WHERE principal_id = ?1", params![pid], |r| r.get(0))
+                    .optional()
+                    .map_err(|e| format!("agent tie lookup: {e}"))?;
+                match tied {
+                    Some(t) => Some(t),
+                    None => workspace_of_conn(conn, &pid)?,
+                }
+            };
+            if marked_here || tie.as_deref() == Some(ws.as_str()) {
+                out.push(username);
+            }
+        }
+        Ok(out)
+    })
+}

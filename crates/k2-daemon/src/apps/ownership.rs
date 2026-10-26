@@ -7,10 +7,14 @@
 //!   (`/cli/workspace/remove`, `/cli/projects/delete`, `/cli/agent/retire`);
 //!   `k2_core` refuses under it as the floor.
 //! - **The ways out** (people only, never a passport):
-//!   - `POST /cli/app/handover {app, to}` — the owner gives an App to
-//!     another workspace (minimal S26: `apps.owner_workspace`, its service
-//!     row and its URL label move; admission re-checked; audited; both
-//!     agents get an inbox note). Owner only (owner token or Owner login).
+//!   - `POST /cli/app/handover {app, to, confirmToken}` — the owner gives an
+//!     App to another workspace (minimal S26: `apps.owner_workspace`, its
+//!     service row and its URL label move; admission re-checked; audited;
+//!     both agents get an inbox note). Owner only, in person: a fresh vault
+//!     confirm (`app-handover`), never the owner token alone. Refused
+//!     (`409 handoff_needs_v1`) while the App has anything the move
+//!     wouldn't carry ([`super::handover_guard`]); the same guard and
+//!     confirm hold for `unpark` and `release --apps handover:`.
 //!   - `POST /cli/app/uninstall {app}` — the existing path (no purge).
 //!   - `POST /cli/app/park {app}` — stop it and hold it for the owner
 //!     (`state = parked`, `owner_workspace = ''`): it doesn't serve or
@@ -31,6 +35,7 @@ use serde_json::{json, Value as J};
 
 use crate::cli_response::CliResponse;
 
+use super::handover_guard;
 use super::routes::{actor, app_for, db_err, json_body, need_credential, no, s, ws_by_token, Who, Ws, R};
 
 pub const WORKSPACE_HAS_APPS: &str = "workspace_has_apps";
@@ -282,18 +287,58 @@ fn assign(app: &AppRow, to: &Ws, by: &str) -> R<()> {
     Ok(())
 }
 
-/// POST `/cli/app/handover {app, to}` / `/cli/app/unpark {app, to}`.
+/// The workspace an App leaves: its row's, or for a parked App the one
+/// its last park recorded.
+fn leaving(app: &AppRow) -> String {
+    if app.state == store::STATE_PARKED {
+        handover_guard::parked_from(app)
+    } else {
+        app.owner_workspace.clone()
+    }
+}
+
+/// Refuse (`409 handoff_needs_v1`) when the move isn't safe yet.
+fn refuse_if_unsafe(app: &AppRow, to: &Ws) -> R<()> {
+    let b = handover_guard::blockers(app, &leaving(app), &to.id)?;
+    if b.is_empty() {
+        Ok(())
+    } else {
+        Err(handover_guard::refusal(app, &to.id, &b))
+    }
+}
+
+/// How the owner's presence was proven for one move.
+enum Confirm<'a> {
+    /// The request's own `confirmToken` (bound to the App id).
+    Token(Option<&'a str>),
+    /// A whole release, confirmed once by [`release_route`].
+    Taken,
+}
+
+/// POST `/cli/app/handover {app, to, confirmToken}` / `/cli/app/unpark
+/// {app, to, confirmToken}`.
 fn handover_route(who: &Who, body: &[u8], unpark: bool) -> R<J> {
-    need_owner(who, if unpark { "Unparking an App" } else { "Handing an App over" })?;
     let v = json_body(body)?;
-    let app = app_for(who, s(&v, "app"))?;
-    let to_raw = s(&v, "to").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the workspace that takes it (to)"))?;
+    give(who, &v, unpark, Confirm::Token(s(&v, "confirmToken")))
+}
+
+fn give(who: &Who, v: &J, unpark: bool, confirm: Confirm<'_>) -> R<J> {
+    let what = if unpark { "Unparking an App" } else { "Handing an App over" };
+    need_owner(who, what)?;
+    let app = app_for(who, s(v, "app"))?;
+    let to_raw = s(v, "to").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the workspace that takes it (to)"))?;
     let to = ws_by_token(to_raw).ok_or_else(|| no(codes::BAD_REQUEST, 404, format!("no workspace '{to_raw}'")))?;
     if unpark && app.state != store::STATE_PARKED {
         return Err(no(NOT_PARKED, 409, format!("{} isn't parked; hand it over instead (k2 app handover {} --to <workspace>)", app.app_id, app.app_id)));
     }
     if app.owner_workspace == to.id {
         return Ok(json!({ "ok": true, "app": app.app_id, "workspace": super::routes::ws_handle(&to.id), "already": true }));
+    }
+    // The blockers first (a refused move never asks for a confirm), then
+    // the owner in person.
+    refuse_if_unsafe(&app, &to)?;
+    if let Confirm::Token(t) = confirm {
+        handover_guard::take_confirm(who, &app.app_id, t, what)?;
     }
     let by = actor(who);
     assign(&app, &to, &by)?;
@@ -323,7 +368,7 @@ fn handover_route(who: &Who, body: &[u8], unpark: bool) -> R<J> {
         "app": app.app_id,
         "workspace": to_h,
         "state": after.state,
-        "note": "the App's own data, Seeds and settings moved with it; a running App keeps its link until its next restart",
+        "note": "the App's own data, Seeds and settings moved with it; it isn't running: its new agent starts it (k2 app start)",
     }))
 }
 
@@ -344,12 +389,40 @@ fn release_route(who: &Who, body: &[u8]) -> R<J> {
     let ws_raw = s(&v, "workspace").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the workspace (workspace)"))?;
     let ws = ws_by_token(ws_raw).ok_or_else(|| no(codes::BAD_REQUEST, 404, format!("no workspace '{ws_raw}'")))?;
     let apps = owned_apps(&ws.id).map_err(|e| no("db_error", 500, e))?;
+    if let Some(to_raw) = handover_to {
+        // Every App must be safe to move before any moves, then one owner
+        // confirm covers the release (bound to this workspace).
+        let to = ws_by_token(to_raw).ok_or_else(|| no(codes::BAD_REQUEST, 404, format!("no workspace '{to_raw}'")))?;
+        let mut unsafe_apps = Vec::new();
+        for app in apps.iter().filter(|a| a.owner_workspace != to.id) {
+            if let Err(e) = refuse_if_unsafe(app, &to) {
+                unsafe_apps.push(json!({ "app": app.app_id, "code": e.code, "hint": e.hint, "blockers": e.extra.as_ref().and_then(|x| x.get("blockers").cloned()) }));
+            }
+        }
+        if !unsafe_apps.is_empty() {
+            let mut r = no(
+                handover_guard::NEEDS_V1,
+                409,
+                format!(
+                    "{} of {} Apps can't be handed over safely yet, so none moved (each lists why). The full App hand-off arrives in 0.46.5; \
+                     until then, move them by hand or release them another way (--apps uninstall|park)",
+                    unsafe_apps.len(),
+                    apps.len()
+                ),
+            );
+            r.extra = Some(json!({ "results": unsafe_apps }));
+            return Err(r);
+        }
+        if !apps.is_empty() {
+            handover_guard::take_confirm(who, &handover_guard::release_confirm_id(&ws.id), s(&v, "confirmToken"), "Handing Apps over")?;
+        }
+    }
     let mut results = Vec::new();
     let mut failed = 0;
     for app in &apps {
         let one = json!({ "app": app.app_id }).to_string();
         let r = match handover_to {
-            Some(to) => handover_route(who, json!({ "app": app.app_id, "to": to }).to_string().as_bytes(), false),
+            Some(to) => give(who, &json!({ "app": app.app_id, "to": to }), false, Confirm::Taken),
             None if way == "uninstall" => super::routes::uninstall(who, one.as_bytes()),
             None => park_route(who, one.as_bytes()),
         };

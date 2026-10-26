@@ -10,8 +10,12 @@
 //   POST /cli/agent-access/set {workspace, toggle: app_review, value: false}
 //   GET  /cli/app/list?box=1            every App with its maintaining agent
 //   GET  /cli/app/list                  `accessReview` (Q4 review list)
-//   POST /cli/app/unpark {app, to}      a parked App to a workspace (owner)
-//   POST /cli/app/handover {app, to}    an App to another workspace (owner)
+//   POST /cli/app/unpark {app, to, confirmToken}    a parked App to a workspace (owner)
+//   POST /cli/app/handover {app, to, confirmToken}  an App to another workspace (owner)
+//     Both need the owner in person: without `confirmToken` the daemon
+//     answers vault_confirm_required (action `app-handover`, bound to the
+//     App id). Refused (handoff_needs_v1) while the App has what the move
+//     can't carry until the full hand-off (0.46.5).
 //   POST /cli/app/park {app}            stop and hold it (owner or admin)
 //   POST /cli/app/uninstall {app}       no purge (owner or admin)
 
@@ -259,12 +263,15 @@ export async function dismissReview(workspaceId: string): Promise<void> {
 
 // ── owner actions on a parked or orphaned App ────────────────────────
 
-export async function unparkApp(app: string, to: string): Promise<void> {
-  await daemonCliPost<unknown>(primaryScope(), 'app/unpark', { app, to })
+/** The vault confirm a hand-over or unpark needs (bound to the App id). */
+export const HANDOVER_CONFIRM_ACTION = 'app-handover'
+
+export async function unparkApp(app: string, to: string, confirmToken?: string): Promise<void> {
+  await daemonCliPost<unknown>(primaryScope(), 'app/unpark', { app, to, ...(confirmToken ? { confirmToken } : {}) })
 }
 
-export async function handOverApp(app: string, to: string): Promise<void> {
-  await daemonCliPost<unknown>(primaryScope(), 'app/handover', { app, to })
+export async function handOverApp(app: string, to: string, confirmToken?: string): Promise<void> {
+  await daemonCliPost<unknown>(primaryScope(), 'app/handover', { app, to, ...(confirmToken ? { confirmToken } : {}) })
 }
 
 export async function parkApp(app: string): Promise<void> {

@@ -1612,6 +1612,11 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // `k2 app uninstall --purge` deletes the App's data, so it needs the
     // person every time, owner token included (`secretId` = App id).
     crate::apps::access::PURGE_CONFIRM,
+    // App hand-over (prd-app-handoff-v1 H19): giving an App to another
+    // workspace (handover / unpark; `secretId` = App id, or
+    // `release:<workspace id>` for a whole release). Every caller, the
+    // owner token included (agents can read it).
+    crate::apps::handover_guard::CONFIRM_ACTION,
     // Sew on K2 (S29 K12, person-only steps): purging all Sew data,
     // revealing the master recovery key, dropping the retiring master key
     // after a rotation. `secretId` = the Sew install id (or `none`).

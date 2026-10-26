@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   review: [] as unknown[],
   off: false,
   role: 'owner' as 'owner' | 'admin' | 'member' | null,
+  /** Per route, refusals to answer before the call succeeds (in order). */
+  refuse: {} as Record<string, Array<{ code: string; hint: string }>>,
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn(async () => {}) }))
@@ -34,6 +36,10 @@ vi.mock('@/lib/daemon-cli', async () => {
     }),
     daemonCliPost: primaryOnly(async (route: string, body: Record<string, unknown>) => {
       h.posts.push({ route, body })
+      const refusal = h.refuse[route]?.shift()
+      if (refusal) throw new Error(JSON.stringify({ error: refusal }))
+      if (route === 'vault/confirm/start') return { methods: ['vault-password'] }
+      if (route === 'vault/confirm/finish') return { token: 'k2vc_test' }
       if (route === 'agent-access/set' && body.toggle === 'app_review') {
         h.review = h.review.filter((r) => (r as { workspace: string }).workspace !== body.workspace)
       }
@@ -86,6 +92,7 @@ beforeEach(() => {
   h.review = []
   h.off = false
   h.role = 'owner'
+  h.refuse = {}
   useProjectsStore.setState({
     projects: [
       project('ws-sales', 'sales', { agentsCanManageSkin: 1, agentsCanManageAppsFull: 0, appCores: '["db","thread"]' }),
@@ -219,6 +226,35 @@ describe('the Apps rows', () => {
     await screen.findByTestId('apps-row-lost')
     await act(async () => {})
     expect(screen.queryByTestId('apps-row-lost-actions')).toBeNull()
+  })
+
+  it('hand over needs the owner in person: the vault confirm runs inline, then the same call goes with its token', async () => {
+    h.refuse['app/unpark'] = [{ code: 'vault_confirm_required', hint: 'needs a fresh owner confirm' }]
+    render(<AppsBoxSection />)
+    const actions = await screen.findByTestId('apps-row-old-actions')
+    fireEvent.change(within(actions).getByLabelText('Agent for old'), { target: { value: 'ws-ops' } })
+    fireEvent.click(within(actions).getByRole('button', { name: 'Unpark' }))
+    const confirm = await screen.findByTestId('apps-row-old-confirm')
+    const pw = (await within(confirm).findByTestId('sources-confirm-password')) as HTMLInputElement
+    fireEvent.change(pw, { target: { value: 'hunter2' } })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Confirm' }))
+    await screen.findByText('old is unparked: it is stopped until its agent starts it.')
+    expect(h.posts.map((p) => p.route)).toEqual(['app/unpark', 'vault/confirm/start', 'vault/confirm/finish', 'app/unpark'])
+    expect(h.posts[1].body).toEqual({ action: 'app-handover', secretId: 'old' })
+    expect(h.posts[3].body).toEqual({ app: 'old', to: 'ws-ops', confirmToken: 'k2vc_test' })
+    expect(screen.queryByTestId('apps-row-old-confirm')).toBeNull()
+  })
+
+  it('a hand-over the daemon refuses (what it can’t carry until 0.46.5) shows the refusal and asks no confirm', async () => {
+    const hint = 'old can’t be handed over safely yet: 1 guest tied to sales. The full App hand-off arrives in 0.46.5; until then, move it by hand'
+    h.refuse['app/unpark'] = [{ code: 'handoff_needs_v1', hint }]
+    render(<AppsBoxSection />)
+    const actions = await screen.findByTestId('apps-row-old-actions')
+    fireEvent.change(within(actions).getByLabelText('Agent for old'), { target: { value: 'ws-ops' } })
+    fireEvent.click(within(actions).getByRole('button', { name: 'Unpark' }))
+    expect((await screen.findByTestId('apps-box-notice')).textContent).toContain(hint)
+    expect(h.posts.map((p) => p.route)).toEqual(['app/unpark'])
+    expect(screen.queryByTestId('apps-row-old-confirm')).toBeNull()
   })
 
   it('Apps off hides the list', async () => {

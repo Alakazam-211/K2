@@ -79,6 +79,9 @@ pub mod limits;
 pub mod open;
 /// The delete guard, hand over / park / unpark, the orphan sweep (Q8).
 pub mod ownership;
+/// What `handover` refuses until the full hand-off, and its owner confirm
+/// (prd-app-handoff-v1 S1, H19).
+pub mod handover_guard;
 pub mod podman_install;
 pub mod process_engine;
 pub mod process_exception;

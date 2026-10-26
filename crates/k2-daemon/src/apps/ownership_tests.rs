@@ -11,6 +11,7 @@ use k2_core::deploy::store;
 use rusqlite::params;
 use serde_json::{json, Value as J};
 
+use super::handover_guard as guard;
 use super::routes::Who;
 
 const M: i64 = 1 << 20;
@@ -111,6 +112,12 @@ fn get(path: &str, who: &Who, q: &[(&str, &str)]) -> (u16, J) {
     let r = super::routes::handle(path, who.clone(), b"", &p);
     let n: u16 = r.status.split_whitespace().next().unwrap().parse().unwrap();
     (n, serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{path}: not JSON ({e}): {}", r.body)))
+}
+
+/// A fresh hand-over confirm bound to `bound` (an App id or a release's
+/// `release:<ws>`), stamped like the vault stamps `stamp`.
+fn confirm(bound: &str, stamp: &str) -> String {
+    super::egress_routes::test_seams::vault_handle().confirm.mint(guard::CONFIRM_ACTION, Some(bound), stamp, "local-auth")
 }
 
 fn code(v: &J) -> &str {
@@ -257,7 +264,13 @@ fn the_owner_hands_an_app_over_and_unparks_a_parked_one() {
         let conn = h.lock();
         k2_core::db::schema::SubdomainWorkspace::self_stamp(&conn, &f.a1, &f.a, None).unwrap();
     }
+    // The owner in person: the owner token alone is refused, naming the
+    // confirm the CLI and Settings mint.
     let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.a1, "to": f.b }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
+    assert_eq!((v["error"]["action"].as_str(), v["error"]["secretId"].as_str()), (Some(guard::CONFIRM_ACTION), Some(f.a1.as_str())), "{v}");
+    assert_eq!(row(&f.a1).owner_workspace, f.a, "nothing moved");
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.a1, "to": f.b, "confirmToken": confirm(&f.a1, "owner") }));
     assert_eq!(st, 200, "{v}");
     assert_eq!(row(&f.a1).owner_workspace, f.b);
     assert_eq!(service_ws(&f.a1), f.b);
@@ -282,17 +295,31 @@ fn the_owner_hands_an_app_over_and_unparks_a_parked_one() {
     let (st, v) = call("/cli/app/unpark", &admin(), json!({ "app": f.a2, "to": f.b }));
     assert_eq!((st, code(&v)), (403, "owner_only"), "{v}");
     let (st, v) = call("/cli/app/unpark", &Who::Owner, json!({ "app": f.a2, "to": f.b }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "unpark needs the person too: {v}");
+    let (st, v) = call("/cli/app/unpark", &Who::Owner, json!({ "app": f.a2, "to": f.b, "confirmToken": confirm(&f.a2, "owner") }));
     assert_eq!(st, 200, "{v}");
     let r = row(&f.a2);
     assert_eq!((r.state.as_str(), r.owner_workspace.as_str()), (store::STATE_STOPPED, f.b.as_str()));
     assert!(audit_events(&f.a2).contains(&"unpark".to_string()));
 
-    // `release --apps handover:` is the owner's too.
+    // `release --apps handover:` is the owner's too, with one confirm
+    // bound to the workspace.
     add_app(&format!("oa3-{}", "hand"), &f.a, Some(64 * M), false);
     let (st, v) = call("/cli/app/release", &admin(), json!({ "workspace": f.a, "apps": format!("handover:{}", f.b) }));
     assert_eq!((st, code(&v)), (403, "owner_only"), "{v}");
     let (st, v) = call("/cli/app/release", &Who::Owner, json!({ "workspace": f.a, "apps": format!("handover:{}", f.b) }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
+    let bound = guard::release_confirm_id(&f.a);
+    assert_eq!(v["error"]["secretId"].as_str(), Some(bound.as_str()), "{v}");
+    let (st, v) = call(
+        "/cli/app/release",
+        &Who::Owner,
+        json!({ "workspace": f.a, "apps": format!("handover:{}", f.b), "confirmToken": confirm(&f.a1, "owner") }),
+    );
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "a confirm bound to an App isn't the release's: {v}");
+    let (st, v) = call("/cli/app/release", &Who::Owner, json!({ "workspace": f.a, "apps": format!("handover:{}", f.b), "confirmToken": confirm(&bound, "owner") }));
     assert_eq!(st, 200, "{v}");
+    assert_eq!(row(&format!("oa3-{}", "hand")).owner_workspace, f.b);
     let (st, v) = remove_ws(&f.a);
     assert!(st.starts_with("200"), "{st} {v}");
 }
@@ -563,4 +590,315 @@ fn a_default_install_is_walled_and_its_seal_key_reaches_the_wall_as_a_file() {
     assert_eq!(seal.len(), 1, "exactly one seal key file for the walled App");
     assert!(seal[0].env.is_none(), "a file, not an env variable");
     assert_eq!(seal[0].value_hex.len(), 86, "43 base64url characters, hex-encoded on the wire");
+}
+
+// ── the hand-over guard (prd-app-handoff-v1 S1, H19) ─────────────────
+
+/// What a hand-over could change, to prove a refusal changed nothing:
+/// (owner workspace, state, service row's workspace, own label's holder).
+fn snapshot(app: &str) -> (String, String, String, Option<String>) {
+    let r = row(app);
+    let svc_ws = service_ws(app);
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let label = k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, app).unwrap();
+    (r.owner_workspace, r.state, svc_ws, label)
+}
+
+fn svc(app: &str) -> String {
+    row(app).service_id
+}
+
+fn stamp_label(app: &str, ws: &str) {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    k2_core::db::schema::SubdomainWorkspace::self_stamp(&conn, app, ws, None).unwrap();
+}
+
+/// A fresh App of `ws` (its own label stamped), for one blocker.
+fn fresh(tag: &str, ws: &str) -> String {
+    let app = format!("og-{tag}");
+    add_app(&app, ws, Some(64 * M), false);
+    stamp_label(&app, ws);
+    app
+}
+
+/// The hand-over with a valid confirm is refused `409 handoff_needs_v1`
+/// naming `want`, the hint gives the 0.46.5 line and the manual path, and
+/// nothing changed (the confirm wasn't spent: it still works for this App).
+fn assert_refused(app: &str, to: &str, want: &str) -> J {
+    let before = snapshot(app);
+    let tok = confirm(app, "owner");
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": app, "to": to, "confirmToken": tok }));
+    assert_eq!((st, code(&v)), (409, guard::NEEDS_V1), "{app}: {v}");
+    let codes: Vec<&str> = v["error"]["blockers"].as_array().unwrap_or_else(|| panic!("no blockers: {v}")).iter().map(|b| b["code"].as_str().unwrap()).collect();
+    assert!(codes.contains(&want), "{app}: want {want} in {codes:?}: {v}");
+    let hint = v["error"]["hint"].as_str().unwrap();
+    for needle in ["the full App hand-off arrives in 0.46.5; until then", "new id", "k2 app data put", "label return", "label take", "domain"] {
+        assert!(hint.contains(needle), "{app}: the hint lacks {needle:?}: {hint}");
+    }
+    assert_eq!(v["error"]["manual"].as_array().map(Vec::len), Some(4), "{v}");
+    assert_eq!(snapshot(app), before, "{app}: a refusal changes nothing");
+    // The blockers come before the confirm: the token is still good.
+    let vault = super::egress_routes::test_seams::vault_handle();
+    let stamp = "owner".to_string();
+    vault.confirm.take(&tok, guard::CONFIRM_ACTION, Some(app), &stamp).expect("a refused move never spends the confirm");
+    v
+}
+
+/// The trivial case still moves (owner + confirm), and the Owner login
+/// passes its own confirm; the owner token alone, a confirm bound to
+/// another App, a spent confirm and anyone but the owner are refused.
+#[test]
+fn handover_needs_the_owner_in_person() {
+    let f = fx("person");
+    stamp_label(&f.a1, &f.a);
+    // An owner-added guest with no tie doesn't block.
+    k2_core::skin::add_principal_for_app("person-guest", None, &svc(&f.a1), None, "owner").unwrap();
+    for who in [admin(), agent(&f.a), Who::Shell { project_id: f.a.clone(), session_id: "sh".into() }] {
+        let (st, v) = call("/cli/app/handover", &who, json!({ "app": f.a1, "to": f.b, "confirmToken": confirm(&f.a1, "owner") }));
+        assert_eq!((st, code(&v)), (403, "owner_only"), "{who:?}: {v}");
+    }
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.a1, "to": f.b }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "the owner token alone: {v}");
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.a1, "to": f.b, "confirmToken": confirm(&f.a2, "owner") }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "bound to another App: {v}");
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.a1, "to": f.b, "confirmToken": confirm(&f.a1, "connect:rosson") }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "another person's confirm: {v}");
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.a1, "to": f.b, "confirmToken": "k2vc_made_up" }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
+    assert_eq!(snapshot(&f.a1).0, f.a, "nothing moved yet");
+
+    let tok = confirm(&f.a1, "owner");
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.a1, "to": f.b, "confirmToken": tok }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(snapshot(&f.a1), (f.b.clone(), store::STATE_STOPPED.to_string(), f.b.clone(), Some(f.b.clone())));
+    // Back again with the same token: a confirm works once.
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.a1, "to": f.a, "confirmToken": tok }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
+    // An Owner login with its own stamp.
+    let rosson = Who::Login { username: "rosson".into(), role: Role::Owner };
+    let (st, v) = call("/cli/app/handover", &rosson, json!({ "app": f.a1, "to": f.a, "confirmToken": confirm(&f.a1, "connect:rosson") }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(row(&f.a1).owner_workspace, f.a);
+}
+
+/// Each blocker refuses on its own, names itself, and changes nothing.
+#[test]
+fn handover_refuses_each_blocker_by_name() {
+    let f = fx("block");
+
+    // A running App: its link keeps the old room until it restarts.
+    let running = fresh("run", &f.a);
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::set_state(&conn, &running, store::STATE_RUNNING, None).unwrap();
+    }
+    assert_refused(&running, &f.b, "handoff_app_running");
+
+    // Guests tied to the old workspace: added by its agent (creator
+    // stamp), re-keyed by it (a tie), or marked as its agent login.
+    let tied = fresh("tied", &f.a);
+    let g = k2_core::skin::add_principal_for_app("tied-added", None, &svc(&tied), None, "agent").unwrap();
+    k2_core::skin::creators::stamp(&g.id, &f.a).unwrap();
+    let v = assert_refused(&tied, &f.b, "handoff_needs_tie_move");
+    let b = v["error"]["blockers"].as_array().unwrap().iter().find(|b| b["code"] == "handoff_needs_tie_move").unwrap().clone();
+    assert_eq!(b["items"], json!(["tied-added"]), "names the guest: {v}");
+    let rekeyed = fresh("rekey", &f.a);
+    let g = k2_core::skin::add_principal_for_app("tied-rekeyed", None, &svc(&rekeyed), None, "owner").unwrap();
+    k2_core::skin::creators::tie(&g.id, &f.a).unwrap();
+    assert_refused(&rekeyed, &f.b, "handoff_needs_tie_move");
+    // Once the owner takes the guest over, it no longer blocks.
+    k2_core::skin::creators::clear_agent_tie(&g.id, "owner-token").unwrap();
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": rekeyed, "to": f.b, "confirmToken": confirm(&rekeyed, "owner") }));
+    assert_eq!(st, 200, "a claimed guest is the owner's: {v}");
+    let marked = fresh("mark", &f.a);
+    let g = k2_core::skin::add_principal_for_app("agent-login", None, &svc(&marked), None, "owner").unwrap();
+    {
+        // The owner's `k2 app user agent` mark (skin.db, no API without a route).
+        let db = rusqlite::Connection::open(k2_core::paths::k2_home().join("skin.db")).unwrap();
+        assert_eq!(db.execute("UPDATE principals SET agent_workspace = ?2 WHERE id = ?1", params![g.id, f.a]).unwrap(), 1);
+    }
+    assert_refused(&marked, &f.b, "handoff_needs_tie_move");
+
+    // Labels and domains beyond its own label.
+    let labelled = fresh("lab", &f.a);
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let cfg = json!({
+            "labels": [{ "label": "shop", "serviceId": "legacy-svc", "legacyPort": 3000, "takenAt": 1, "takenBy": "agent" }],
+            "subdomains": [{ "label": "api", "addedAt": 1, "addedBy": "agent" }],
+        });
+        conn.execute("UPDATE apps SET config_json = ?2 WHERE app_id = ?1", params![labelled, cfg.to_string()]).unwrap();
+    }
+    let v = assert_refused(&labelled, &f.b, "handoff_needs_label_move");
+    let b = v["error"]["blockers"].as_array().unwrap().iter().find(|b| b["code"] == "handoff_needs_label_move").unwrap().clone();
+    assert_eq!(b["items"], json!(["shop (taken)", "api (attached)"]), "{v}");
+    let domained = fresh("dom", &f.a);
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute("INSERT INTO domain_bindings (apex) VALUES ('blockdom.example')", []).unwrap();
+        conn.execute(
+            "INSERT INTO domain_names (hostname, apex, role) VALUES ('shop.blockdom.example', 'blockdom.example', ?1)",
+            params![format!("app:{domained}")],
+        )
+        .unwrap();
+    }
+    assert_refused(&domained, &f.b, "handoff_needs_label_move");
+
+    // A secret the old workspace owns, granted to the App.
+    let secret = fresh("sec", &f.a);
+    {
+        use k2_vault::SecretStore;
+        let vault = super::egress_routes::test_seams::vault_handle();
+        let name = format!("HO_WS_{}", uuid::Uuid::new_v4().simple().to_string()[..8].to_uppercase());
+        let mut put = k2_vault::PutRequest::new(k2_vault::Namespace::User, k2_vault::Scope::workspace(f.a.clone()), &name, k2_vault::Kind::Generic);
+        put.origin = "test".into();
+        put.default_delivery = Some(k2_vault::Delivery::File);
+        put.delivery_ceiling = Some(k2_vault::Delivery::Env);
+        vault.put(put, k2_vault::SecretBytes::from_slice(b"v"), &k2_vault::Actor::Owner).unwrap();
+        vault
+            .grant(
+                k2_vault::GrantRequest {
+                    selector: k2_vault::Selector::user(k2_vault::Scope::workspace(f.a.clone()), &name),
+                    consumer: k2_vault::Consumer::published_service(svc(&secret)),
+                    delivery: k2_vault::Delivery::File,
+                    env_name: None,
+                    file_name: None,
+                    hosts_narrowed: None,
+                    expires_at: None,
+                    version: None,
+                },
+                &k2_vault::Actor::Owner,
+            )
+            .unwrap();
+        let v = assert_refused(&secret, &f.b, "handoff_needs_secret_move");
+        let b = v["error"]["blockers"].as_array().unwrap().iter().find(|b| b["code"] == "handoff_needs_secret_move").unwrap().clone();
+        assert_eq!(b["items"], json!([format!("{name} (granted)")]), "{v}");
+    }
+
+    // A `.env.k2` reference in its live Seed that resolves only through
+    // the old workspace (a server secret granted to that workspace).
+    let reffed = fresh("ref", &f.a);
+    {
+        use k2_vault::SecretStore;
+        let vault = super::egress_routes::test_seams::vault_handle();
+        let name = format!("HO_SRV_{}", uuid::Uuid::new_v4().simple().to_string()[..8].to_uppercase());
+        let mut put = k2_vault::PutRequest::new(k2_vault::Namespace::User, k2_vault::Scope::server(), &name, k2_vault::Kind::Generic);
+        put.origin = "test".into();
+        put.default_delivery = Some(k2_vault::Delivery::Env);
+        put.delivery_ceiling = Some(k2_vault::Delivery::Env);
+        vault.put(put, k2_vault::SecretBytes::from_slice(b"v"), &k2_vault::Actor::Owner).unwrap();
+        vault
+            .grant(
+                k2_vault::GrantRequest {
+                    selector: k2_vault::Selector::user(k2_vault::Scope::server(), &name),
+                    consumer: k2_vault::Consumer::workspace(f.a.clone()),
+                    delivery: k2_vault::Delivery::Env,
+                    env_name: None,
+                    file_name: None,
+                    hosts_narrowed: None,
+                    expires_at: None,
+                    version: None,
+                },
+                &k2_vault::Actor::Owner,
+            )
+            .unwrap();
+        let seed = format!("seed-ho-{}", uuid::Uuid::new_v4().simple());
+        let dir = k2_core::deploy::seed::seed_path(&seed);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".env.k2"), format!("API_TOKEN=k2v://server/{name}\nPLAIN=1\n")).unwrap();
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute("UPDATE apps SET live_seed = ?2 WHERE app_id = ?1", params![reffed, seed]).unwrap();
+    }
+    let v = assert_refused(&reffed, &f.b, "handoff_needs_secret_move");
+    let b = v["error"]["blockers"].as_array().unwrap().iter().find(|b| b["code"] == "handoff_needs_secret_move").unwrap().clone();
+    assert_eq!(b["items"], json!(["API_TOKEN (.env.k2)"]), "{v}");
+
+    // A live App key (its rooms name the old workspace); a revoked one
+    // doesn't block.
+    let keyed = fresh("key", &f.a);
+    let (kid, _raw) = k2_core::api_keys::create_app_key("ci", &svc(&keyed), "{}").unwrap();
+    assert_refused(&keyed, &f.b, "handoff_needs_key_move");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute("UPDATE api_keys SET revoked_at = 1 WHERE id = ?1", params![kid]).unwrap();
+    }
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": keyed, "to": f.b, "confirmToken": confirm(&keyed, "owner") }));
+    assert_eq!(st, 200, "a revoked key carries nothing: {v}");
+
+    // Push set up for it.
+    let pushed = fresh("push", &f.a);
+    k2_core::skin::app_push::set_switches(&svc(&pushed), k2_core::skin::app_push::Switches { owner_on: Some(true), ..Default::default() }, "owner").unwrap();
+    assert_refused(&pushed, &f.b, "handoff_needs_push_move");
+
+    // Every blocker at once is listed together.
+    let all = fresh("all", &f.a);
+    k2_core::skin::app_push::set_switches(&svc(&all), k2_core::skin::app_push::Switches { previews: Some(false), ..Default::default() }, "owner").unwrap();
+    k2_core::api_keys::create_app_key("ci", &svc(&all), "{}").unwrap();
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::set_state(&conn, &all, store::STATE_RUNNING, None).unwrap();
+    }
+    let v = assert_refused(&all, &f.b, "handoff_needs_push_move");
+    let codes: Vec<&str> = v["error"]["blockers"].as_array().unwrap().iter().map(|b| b["code"].as_str().unwrap()).collect();
+    assert_eq!(codes, vec!["handoff_app_running", "handoff_needs_key_move", "handoff_needs_push_move"], "{v}");
+}
+
+/// The old workspace's Postgres database (its default here) blocks: the
+/// App would quietly resolve to the new workspace's database instead.
+#[test]
+fn handover_refuses_an_app_on_the_old_workspaces_database() {
+    let f = fx("pgdb");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute(
+            "INSERT INTO sql_databases (id, project_id, name, status, created_at) VALUES ('ho-d1', ?1, 'ws_sales_db', 'active', 1)",
+            params![f.a],
+        )
+        .unwrap();
+    }
+    let v = assert_refused(&f.a1, &f.b, "handoff_needs_db_move");
+    let b = v["error"]["blockers"].as_array().unwrap().iter().find(|b| b["code"] == "handoff_needs_db_move").unwrap().clone();
+    assert_eq!(b["items"], json!(["ws_sales_db"]), "{v}");
+    // B has no database, so B's App has none to leave behind: it moves.
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.b1, "to": f.a, "confirmToken": confirm(&f.b1, "owner") }));
+    assert_eq!(st, 200, "an App with no database moves: {v}");
+    assert_eq!(row(&f.b1).owner_workspace, f.a);
+}
+
+/// Unpark checks the workspace the App was parked from; release checks
+/// every App before any moves and refuses the lot.
+#[test]
+fn unpark_and_release_use_the_same_guard() {
+    let f = fx("unrel");
+    stamp_label(&f.a1, &f.a);
+    stamp_label(&f.a2, &f.a);
+    let g = k2_core::skin::add_principal_for_app("parked-tied", None, &svc(&f.a2), None, "agent").unwrap();
+    k2_core::skin::creators::stamp(&g.id, &f.a).unwrap();
+
+    // Release to B: a2 is unsafe, so neither moves, and no confirm is asked.
+    let (st, v) = call("/cli/app/release", &Who::Owner, json!({ "workspace": f.a, "apps": format!("handover:{}", f.b) }));
+    assert_eq!((st, code(&v)), (409, guard::NEEDS_V1), "{v}");
+    let results = v["error"]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "only the unsafe App is listed: {v}");
+    assert_eq!(results[0]["app"], json!(f.a2));
+    assert!(v["error"]["hint"].as_str().unwrap().contains("0.46.5"), "{v}");
+    assert_eq!(row(&f.a1).owner_workspace, f.a, "the safe App didn't move either");
+    assert_eq!(row(&f.a2).owner_workspace, f.a);
+
+    // Parked, it still remembers A: unpark to B is refused the same way.
+    let (st, v) = call("/cli/app/park", &Who::Owner, json!({ "app": f.a2 }));
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = call("/cli/app/unpark", &Who::Owner, json!({ "app": f.a2, "to": f.b, "confirmToken": confirm(&f.a2, "owner") }));
+    assert_eq!((st, code(&v)), (409, guard::NEEDS_V1), "{v}");
+    assert!(v["error"]["blockers"].as_array().unwrap().iter().any(|b| b["code"] == "handoff_needs_tie_move"), "{v}");
+    assert_eq!(row(&f.a2).state, store::STATE_PARKED, "still parked");
 }

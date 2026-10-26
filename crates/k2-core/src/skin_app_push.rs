@@ -937,6 +937,19 @@ fn max_devices_conn(conn: &Connection, app: &str) -> Result<i64, String> {
     Ok(config_conn(conn, app)?.max_devices.unwrap_or(DEFAULT_MAX_DEVICES_PER_APP))
 }
 
+/// Has anyone set push up for this App (a stored settings row: switches, a
+/// device cap or Apple/Google keys)? The hand-over guard refuses while one
+/// exists.
+pub fn is_configured(app: &str) -> Result<bool, String> {
+    let app = normalize_app_target(Some(app));
+    with_conn(|conn| {
+        conn.query_row("SELECT 1 FROM app_push_config WHERE app_id = ?1", params![app], |_| Ok(()))
+            .optional()
+            .map(|o| o.is_some())
+            .map_err(|e| format!("push config: {e}"))
+    })
+}
+
 /// One App's push settings.
 pub fn config(app: &str) -> Result<PushConfig, String> {
     let app = normalize_app_target(Some(app));

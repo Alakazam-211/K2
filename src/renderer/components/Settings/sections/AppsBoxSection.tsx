@@ -10,7 +10,10 @@
 // - A parked or orphaned App shows the owner's ways out: Unpark (to an
 //   agent), Hand over, Park, Uninstall (no purge). The daemon checks who
 //   may (owner for hand over / unpark; owner or admin for park and
-//   uninstall).
+//   uninstall). Hand over and Unpark need the owner in person: the first
+//   try without a token comes back vault_confirm_required (or a refusal
+//   naming what the move can't carry yet), then the vault confirm runs
+//   inline and the same call goes again with its token.
 // - The review note: the agents that kept "Build and run Apps" from the
 //   old "Allow this agent to manage Apps" switch, each with Review (opens
 //   its card) and Dismiss (the daemon drops it from the list, so every
@@ -24,7 +27,9 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Callout } from '@/components/ui'
-import { daemonErrorText } from '@/lib/daemon-error'
+import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
+import { primaryScope } from '@/kessel/server-scope'
+import { ConfirmStep } from './DataSourceConfirm'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -37,6 +42,7 @@ import {
   fetchBoxApps,
   fetchReview,
   handOverApp,
+  HANDOVER_CONFIRM_ACTION,
   memoryLabel,
   needsOwner,
   parkApp,
@@ -82,6 +88,8 @@ export function AppsBoxSection(): React.JSX.Element | null {
   const [busy, setBusy] = useState<string | null>(null)
   const [target, setTarget] = useState<Record<string, string>>({})
   const [confirmUninstall, setConfirmUninstall] = useState<string | null>(null)
+  /** A hand-over or unpark waiting for the owner's vault confirm. */
+  const [giving, setGiving] = useState<{ app: string; to: string; parked: boolean } | null>(null)
   const mounted = useRef(true)
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -131,6 +139,39 @@ export function AppsBoxSection(): React.JSX.Element | null {
       setConfirmUninstall(null)
       await refresh()
     }
+  }
+
+  const giveOk = (app: string, parked: boolean): string =>
+    parked ? `${app} is unparked: it is stopped until its agent starts it.` : `${app} is handed over.`
+
+  const giveCall = (app: string, to: string, parked: boolean, token?: string): Promise<void> =>
+    parked ? unparkApp(app, to, token) : handOverApp(app, to, token)
+
+  /** First try without a token: a refusal (what the move can't carry yet)
+   *  shows as is; the owner-in-person answer opens the confirm. */
+  const give = async (app: string, to: string, parked: boolean): Promise<void> => {
+    setBusy(`give:${app}`)
+    setNotice(null)
+    try {
+      await giveCall(app, to, parked)
+      setNotice({ tone: 'ok', text: giveOk(app, parked) })
+      await refresh()
+    } catch (e) {
+      if (daemonErrorOf(e)?.code === 'vault_confirm_required') {
+        setGiving({ app, to, parked })
+      } else {
+        setNotice({ tone: 'error', text: daemonErrorText(e) })
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const giveWithToken = async (token: string): Promise<void> => {
+    const g = giving
+    setGiving(null)
+    if (!g) return
+    await act(`give:${g.app}`, giveOk(g.app, g.parked), () => giveCall(g.app, g.to, g.parked, token))
   }
 
   if (load.kind === 'off') return null
@@ -284,20 +325,24 @@ export function AppsBoxSection(): React.JSX.Element | null {
                               ))}
                             </select>
                             <Button
-                              disabled={!to || busy !== null}
-                              onClick={() =>
-                                void act(
-                                  `give:${app.appId}`,
-                                  app.parked
-                                    ? `${app.appId} is unparked: it is stopped until its agent starts it.`
-                                    : `${app.appId} is handed over.`,
-                                  () => (app.parked ? unparkApp(app.appId, to) : handOverApp(app.appId, to)),
-                                )
-                              }
+                              disabled={!to || busy !== null || giving !== null}
+                              onClick={() => void give(app.appId, to, app.parked)}
                             >
                               {app.parked ? 'Unpark' : 'Hand over'}
                             </Button>
                           </>
+                        ) : null}
+                        {giving?.app === app.appId ? (
+                          <div className="w-full" data-testid={`apps-row-${app.appId}-confirm`}>
+                            <ConfirmStep
+                              scope={primaryScope()}
+                              action={HANDOVER_CONFIRM_ACTION}
+                              secretId={app.appId}
+                              label={`${giving.parked ? 'unpark' : 'hand over'} App ${app.appId}`}
+                              onToken={(token) => void giveWithToken(token)}
+                              onCancel={() => setGiving(null)}
+                            />
+                          </div>
                         ) : null}
                         {!app.parked ? (
                           <Button

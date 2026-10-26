@@ -744,6 +744,9 @@ pub(crate) fn apply(r: &reqs::AppRequest, by: &str) -> R<J> {
 /// The commit point and the steps after it.
 fn run(id: &str, plan: &Plan, by: &str) -> R<J> {
     let _busy = Busy::enter(&plan.app.app_id, &plan.room_from, &plan.to.id);
+    // §4.4: between the commit and the skin transaction a tie to A or B
+    // counts as inside this App (no tied guest is refused in the gap).
+    let _gap = k2_core::skin::handover::begin_handing_over(&plan.app.service_id, &plan.room_from, &plan.to.id);
     // Step 1: B needs switch 1 to start, deploy or restart the App (the
     // card said "turns on"); the owner's approval is the raise.
     let raised = if !plan.to_build {
@@ -912,8 +915,16 @@ pub(crate) fn finish_steps(id: &str, by: &str) -> J {
         let _ = hov_db(|c| hs::set_steps(c, id, n, deploy::now()));
     };
     if row.steps_done < 3 {
-        // Step 3: skin.db (rooms; S3 adds ties and credentials).
-        match k2_core::skin::handover::move_rooms(&row.service_id, &room_from, &to) {
+        // Step 3: skin.db in one transaction: rooms, ties and credentials,
+        // A's agent logins, the journal. A's other Apps are read from the
+        // daemon DB first (lock order: never skin → daemon DB).
+        let others: Vec<String> = if room_from.is_empty() {
+            Vec::new()
+        } else {
+            hov_db(|c| store::list_apps(c, Some(&room_from))).unwrap_or_default().into_iter().filter(|a| a.app_id != row.app_id).map(|a| a.service_id).collect()
+        };
+        let reset_shared = row.options.get("resetShared").and_then(J::as_bool).unwrap_or(false);
+        match k2_core::skin::handover::apply_guests(&row.service_id, &room_from, &to, &others, &row.id, reset_shared) {
             Ok(rep) => {
                 out.insert("rooms".into(), json!(rep));
                 step(3);

@@ -757,3 +757,110 @@ fn an_offer_whose_plan_changed_is_stale_at_approval() {
     assert_eq!((st, v["error"]["code"].as_str()), (200, Some("handover_stale")), "{v}");
     assert_eq!(app_row(&f.app).owner_workspace, f.a);
 }
+
+// ── S3: guests, ties and credentials ─────────────────────────────────
+
+fn tie_of(pid: &str) -> Option<String> {
+    k2_core::skin::creators::agent_tie(pid).unwrap()
+}
+
+/// T3.1: a guest A added (and set the password of) stays signed in, is
+/// re-tied to B, and A's known password stops working.
+#[test]
+fn a_guest_a_set_up_is_retied_and_its_password_retired() {
+    let f = fx("t31");
+    let pid = guest("bea-t31", &f.svc, &[&f.a]);
+    k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
+    k2_core::skin::creators::tie(&pid, &f.a).unwrap();
+    k2_core::skin::set_principal_password("bea-t31", Some("a-knows-this-1")).unwrap();
+    let s = k2_core::skin::create_app_session_token("bea-t31", &f.svc).unwrap();
+    let (_, v) = ask(&f);
+    assert!(
+        v["plan"]["lines"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("passwords were set by")),
+        "the card says so: {v}"
+    );
+    let hid = v["handover"]["id"].as_str().unwrap().to_string();
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
+    let pass = k2_core::skin::resolve_skin_token(&s.raw).expect("the live session stays");
+    assert_eq!(pass.room_policy.keys().cloned().collect::<Vec<_>>(), vec![f.b.clone()]);
+    assert!(!k2_core::skin::verify_principal_password("bea-t31", "a-knows-this-1"), "A's known password no longer signs in");
+    assert_eq!(tie_of(&pid).as_deref(), Some(f.b.as_str()), "re-tied to B");
+    assert_eq!(k2_core::skin::creators::workspace_of(&pid).unwrap().as_deref(), Some(f.b.as_str()), "stamped B");
+    let j = sh::journal(&hid).unwrap();
+    assert_eq!(j.len(), 1, "{j:?}");
+    assert_eq!((j[0].tie_before.as_deref(), j[0].stamp_before.as_deref()), (Some(f.a.as_str()), Some(f.a.as_str())));
+    assert!(j[0].password_hash.as_deref().is_some_and(|h| !h.is_empty()), "the journal keeps the hash for undo");
+    // B manages it now: a new password from B (or the owner) signs in.
+    k2_core::skin::set_principal_password("bea-t31", Some("new-from-b-2")).unwrap();
+    assert!(k2_core::skin::verify_principal_password("bea-t31", "new-from-b-2"));
+}
+
+/// T3.2: a shared guest stays A's; the owner may take it over instead.
+#[test]
+fn a_shared_guest_stays_a_s_unless_the_owner_resets_it() {
+    let f = fx("t32");
+    let pid = guest("sam-t32", &f.svc, &[&f.a]);
+    k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
+    grant_more(&pid, &f.other_svc, &[&f.a]);
+    k2_core::skin::set_principal_password("sam-t32", Some("shared-pw-1")).unwrap();
+    let (st, v) = ask(&f);
+    assert_eq!(st, 202, "a shared guest doesn't block: {v}");
+    assert!(
+        v["plan"]["lines"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("sam-t32") && l.as_str().unwrap().contains("stay")),
+        "the card lists them: {v}"
+    );
+    let (st, _) = approve(&req_id(&v));
+    assert_eq!(st, 200);
+    assert_eq!(tie_of(&pid).as_deref(), Some(f.a.as_str()), "the shared guest stays A's");
+    assert!(k2_core::skin::verify_principal_password("sam-t32", "shared-pw-1"), "nothing of theirs changed");
+}
+
+/// T3.2 (b): with "take them over", the tie goes, the password A knew is
+/// retired, and the guest keeps the App.
+#[test]
+fn the_owner_may_take_a_shared_guest_over() {
+    let g = fx("t32b");
+    let pid = guest("tia-t32", &g.svc, &[&g.a]);
+    k2_core::skin::creators::stamp(&pid, &g.a).unwrap();
+    grant_more(&pid, &g.other_svc, &[&g.a]);
+    k2_core::skin::set_principal_password("tia-t32", Some("shared-pw-2")).unwrap();
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": g.app, "to": g.b, "resetShared": true }));
+    assert_eq!(st, 202, "{v}");
+    let (st, _) = approve(&req_id(&v));
+    assert_eq!(st, 200);
+    assert_eq!(tie_of(&pid), None, "the owner took them over");
+    assert!(!k2_core::skin::verify_principal_password("tia-t32", "shared-pw-2"), "A's known password is retired");
+    let s = k2_core::skin::create_app_session_token("tia-t32", &g.svc).unwrap();
+    assert_eq!(s.meta.rooms, vec![g.b.clone()], "they keep the App, now with B");
+}
+
+/// T3.3: A's own agent login loses this App.
+#[test]
+fn a_s_agent_login_loses_the_app() {
+    let f = fx("t33");
+    guest("bot-t33", &f.svc, &[&f.a]);
+    k2_core::skin::set_principal_agent("bot-t33", Some(&f.a)).unwrap();
+    let s = k2_core::skin::create_app_session_token("bot-t33", &f.svc).unwrap();
+    let (_, v) = ask(&f);
+    assert!(v["plan"]["lines"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("bot-t33")), "{v}");
+    let (st, _) = approve(&req_id(&v));
+    assert_eq!(st, 200);
+    assert!(k2_core::skin::resolve_skin_token(&s.raw).is_none(), "its session on the App ended");
+    assert!(k2_core::skin::create_app_session_token("bot-t33", &f.svc).is_err(), "its grant is off");
+}
+
+/// The gap between the two databases: a tie to A or B counts as inside
+/// the App while its handover runs, and only then.
+#[test]
+fn ties_to_either_side_are_inside_only_during_the_handover() {
+    assert!(!sh::tie_inside("ws-a", "svc-gap", "ws-b"));
+    {
+        let _g = sh::begin_handing_over("svc-gap", "ws-a", "ws-b");
+        assert!(sh::tie_inside("ws-a", "svc-gap", "ws-b"));
+        assert!(sh::tie_inside("ws-b", "svc-gap", "ws-a"));
+        assert!(!sh::tie_inside("ws-c", "svc-gap", "ws-b"), "a third workspace never");
+        assert!(!sh::tie_inside("ws-a", "svc-other", "ws-b"), "another App never");
+    }
+    assert!(!sh::tie_inside("ws-a", "svc-gap", "ws-b"), "over when the guard drops");
+}

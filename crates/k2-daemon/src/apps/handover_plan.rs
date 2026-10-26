@@ -27,7 +27,7 @@ use super::routes::{db_err, ws_handle, Ws, R};
 // part moves, a plan that needs it is refused naming what (S1: 0.46.4 never
 // breaks an App silently).
 /// S3: guests tied to the giving workspace (re-tie + credential retire).
-pub(crate) const TIES_MOVE: bool = false;
+pub(crate) const TIES_MOVE: bool = true;
 /// S4: workspace-scope secrets and `.env.k2` references.
 pub(crate) const SECRETS_MOVE: bool = false;
 /// S4: a database of the giving workspace.

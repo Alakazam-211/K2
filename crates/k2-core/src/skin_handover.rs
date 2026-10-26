@@ -460,3 +460,262 @@ mod tests {
         assert_eq!(swap_policy(&s, "a", "b"), s, "idempotent");
     }
 }
+
+// ── S3: ties and credentials (§4.4) ─────────────────────────────────
+//
+// An agent that set a guest's password must not keep control. So the
+// guests the giving workspace could know the password of (`giver_tied`,
+// and this App key's `app_key_tied`) are re-tied to the taker (their tie
+// row and creator stamp say B) and their password is **retired**: the hash
+// goes to the journal and is cleared, unused reset links are voided. Live
+// sessions are kept: a session token is the guest's own bearer. When it
+// ends the guest sets a new password (B's `k2 app user reset`, or the
+// owner's). Shared guests (also on A's other Apps) stay A's.
+//
+// Shape note: this is main's tie store (`principal_agent_ties.tied_to`,
+// creator stamps). When `k2/agent-app-users` lands (one tie table with a
+// ceiling, invites, unconfirmed emails), [`retie_conn`] and
+// [`retire_conn`] are the two functions to port; the ceiling's
+// `app_inside` consults [`handing_over`] so a tied guest's request between
+// the daemon-DB commit and this transaction is never refused.
+
+/// skin.db DDL (run by the idempotent open block): the undo journal of a
+/// handover, one row per guest it touched. Additive (an older K2 ignores
+/// it: it only matters to undo). Password hashes are deleted when the undo
+/// window ends.
+pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_handover_journal (
+            handover_id   TEXT NOT NULL,
+            principal_id  TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+            class         TEXT NOT NULL,
+            tie_before    TEXT,
+            stamp_before  TEXT,
+            password_hash TEXT,
+            claimed       INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (handover_id, principal_id)
+         );",
+    )
+    .map_err(|e| format!("skin.db app_handover_journal: {e}"))
+}
+
+fn handing() -> &'static std::sync::Mutex<std::collections::HashMap<String, (String, String)>> {
+    static H: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (String, String)>>> = std::sync::OnceLock::new();
+    H.get_or_init(Default::default)
+}
+
+/// While a handover of `service_id` runs from `from` to `to`, a tie to
+/// either counts as inside this App (the gap between the daemon-DB commit
+/// and the skin transaction, §4.4). Returns a guard that ends it.
+pub fn begin_handing_over(service_id: &str, from: &str, to: &str) -> HandingOver {
+    handing().lock().unwrap_or_else(|e| e.into_inner()).insert(service_id.to_string(), (from.to_string(), to.to_string()));
+    HandingOver(service_id.to_string())
+}
+
+pub struct HandingOver(String);
+
+impl Drop for HandingOver {
+    fn drop(&mut self) {
+        handing().lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
+/// `(from, to)` while `service_id` is being handed over.
+pub fn handing_over(service_id: &str) -> Option<(String, String)> {
+    handing().lock().unwrap_or_else(|e| e.into_inner()).get(service_id).cloned()
+}
+
+/// Is a tie to `tie_ws` inside the App `service_id` of workspace
+/// `app_ws`? Equal, or the two sides of a handover of it running now.
+pub fn tie_inside(tie_ws: &str, service_id: &str, app_ws: &str) -> bool {
+    if tie_ws == app_ws {
+        return true;
+    }
+    handing_over(service_id).is_some_and(|(a, b)| (tie_ws == a || tie_ws == b) && (app_ws == a || app_ws == b))
+}
+
+/// What [`apply_guests`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuestReport {
+    pub rooms: RoomReport,
+    pub retied: usize,
+    pub retired: usize,
+    pub reset_links_voided: usize,
+    pub shared_kept: usize,
+    pub shared_reset: usize,
+}
+
+/// The skin transaction of a handover (step 3): rooms (§4.3), ties and
+/// credentials (§4.4), A's agent logins (P9), the journal. One
+/// transaction; idempotent (a guest already re-tied is no longer
+/// `giver_tied`). `reset_shared`: the owner chose to take the shared
+/// guests over (their tie is dropped and their known password retired, so
+/// they keep the App and set a new password).
+pub fn apply_guests(service_id: &str, from: &str, to: &str, others_of_from: &[String], handover_id: &str, reset_shared: bool) -> Result<GuestReport, String> {
+    with_conn(|conn| {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("handover guests: {e}"))?;
+        let mut rep = GuestReport::default();
+        let guests = guests_conn(&tx, service_id, from, others_of_from)?;
+        for g in &guests {
+            match g.class {
+                CLASS_GIVER_TIED => {
+                    journal_conn(&tx, handover_id, g, false)?;
+                    retie_conn(&tx, &g.principal_id, from, to)?;
+                    rep.retied += 1;
+                    rep.reset_links_voided += retire_conn(&tx, &g.principal_id)?;
+                    rep.retired += usize::from(g.has_password);
+                }
+                CLASS_APP_KEY_TIED => {
+                    journal_conn(&tx, handover_id, g, false)?;
+                    rep.reset_links_voided += retire_conn(&tx, &g.principal_id)?;
+                    rep.retired += usize::from(g.has_password);
+                }
+                CLASS_SHARED if reset_shared => {
+                    journal_conn(&tx, handover_id, g, true)?;
+                    tx.execute(
+                        "INSERT INTO principal_person_claims (principal_id, claimed_by, claimed_at) VALUES (?1, 'owner-token', ?2)
+                         ON CONFLICT(principal_id) DO UPDATE SET claimed_by = excluded.claimed_by, claimed_at = excluded.claimed_at",
+                        params![g.principal_id, super::now_secs()],
+                    )
+                    .map_err(|e| format!("handover shared reset: {e}"))?;
+                    rep.reset_links_voided += retire_conn(&tx, &g.principal_id)?;
+                    rep.shared_reset += 1;
+                }
+                CLASS_SHARED => rep.shared_kept += 1,
+                _ => {}
+            }
+        }
+        rep.rooms = move_rooms_conn(&tx, service_id, from, to, true)?;
+        tx.commit().map_err(|e| format!("handover guests commit: {e}"))?;
+        Ok(rep)
+    })
+}
+
+/// Keep the before-values of one guest (first write wins: a roll-forward
+/// never overwrites what the first run saw).
+fn journal_conn(conn: &Connection, handover_id: &str, g: &HandoverGuest, claimed: bool) -> Result<(), String> {
+    let tie: Option<String> = conn
+        .query_row("SELECT tied_to FROM principal_agent_ties WHERE principal_id = ?1", params![g.principal_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| format!("handover journal: {e}"))?;
+    let stamp = super::creators::workspace_of_conn(conn, &g.principal_id)?;
+    let hash: Option<String> = conn
+        .query_row("SELECT password_hash FROM principals WHERE id = ?1", params![g.principal_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| format!("handover journal: {e}"))?
+        .flatten();
+    conn.execute(
+        "INSERT OR IGNORE INTO app_handover_journal (handover_id, principal_id, class, tie_before, stamp_before, password_hash, claimed) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![handover_id, g.principal_id, g.class, tie, stamp, hash, i64::from(claimed)],
+    )
+    .map_err(|e| format!("handover journal: {e}"))?;
+    Ok(())
+}
+
+/// The tie and the creator stamp say `to` instead of `from`.
+fn retie_conn(conn: &Connection, pid: &str, from: &str, to: &str) -> Result<(), String> {
+    conn.execute("UPDATE principal_agent_ties SET tied_to = ?3 WHERE principal_id = ?1 AND tied_to = ?2", params![pid, from, to])
+        .map_err(|e| format!("handover re-tie: {e}"))?;
+    conn.execute("UPDATE principal_agent_creators SET workspace_id = ?3 WHERE principal_id = ?1 AND workspace_id = ?2", params![pid, from, to])
+        .map_err(|e| format!("handover re-tie: {e}"))?;
+    Ok(())
+}
+
+/// Retire what the giver could know: the password (cleared; live sessions
+/// stay) and every unused reset link. Returns the links voided.
+fn retire_conn(conn: &Connection, pid: &str) -> Result<usize, String> {
+    conn.execute("UPDATE principals SET password_hash = NULL WHERE id = ?1", params![pid]).map_err(|e| format!("handover retire: {e}"))?;
+    conn.execute("UPDATE password_reset_tokens SET used_at = ?2 WHERE principal_id = ?1 AND used_at IS NULL", params![pid, super::now_secs()])
+        .map_err(|e| format!("handover retire: {e}"))
+}
+
+/// One journal row (undo, tests).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalRow {
+    pub principal_id: String,
+    pub class: String,
+    pub tie_before: Option<String>,
+    pub stamp_before: Option<String>,
+    #[serde(skip)]
+    pub password_hash: Option<String>,
+    pub claimed: bool,
+}
+
+pub fn journal(handover_id: &str) -> Result<Vec<JournalRow>, String> {
+    with_conn(|conn| {
+        let mut st = conn
+            .prepare("SELECT principal_id, class, tie_before, stamp_before, password_hash, claimed FROM app_handover_journal WHERE handover_id = ?1 ORDER BY principal_id")
+            .map_err(|e| format!("handover journal: {e}"))?;
+        let out = st
+            .query_map(params![handover_id], |r| {
+                Ok(JournalRow {
+                    principal_id: r.get(0)?,
+                    class: r.get(1)?,
+                    tie_before: r.get(2)?,
+                    stamp_before: r.get(3)?,
+                    password_hash: r.get(4)?,
+                    claimed: r.get::<_, i64>(5)? != 0,
+                })
+            })
+            .map_err(|e| format!("handover journal: {e}"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| format!("handover journal: {e}"));
+        out
+    })
+}
+
+/// The undo window ended: the journal's credential material goes (T5.3).
+/// Returns the rows cleared.
+pub fn forget_journal(handover_id: &str) -> Result<usize, String> {
+    with_conn(|conn| {
+        conn.execute("DELETE FROM app_handover_journal WHERE handover_id = ?1", params![handover_id]).map_err(|e| format!("handover journal: {e}"))
+    })
+}
+
+/// What [`undo_guests`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoReport {
+    pub rooms: RoomReport,
+    pub retied: usize,
+    pub passwords_restored: usize,
+    /// Guests who set a new password since: theirs is kept (CAS).
+    pub passwords_kept: usize,
+}
+
+/// Undo a handover's skin half (§4.9): rooms B → A, ties and stamps back,
+/// a retired hash restored only where the guest hasn't set a new password
+/// since (compare-and-set on NULL). One transaction.
+pub fn undo_guests(service_id: &str, from: &str, to: &str, handover_id: &str) -> Result<UndoReport, String> {
+    let rows = journal(handover_id)?;
+    with_conn(|conn| {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("handover undo: {e}"))?;
+        let mut rep = UndoReport::default();
+        for j in &rows {
+            if j.class == CLASS_GIVER_TIED {
+                retie_conn(&tx, &j.principal_id, to, from)?;
+                rep.retied += 1;
+            }
+            if j.claimed {
+                tx.execute("DELETE FROM principal_person_claims WHERE principal_id = ?1", params![j.principal_id])
+                    .map_err(|e| format!("handover undo: {e}"))?;
+            }
+            if let Some(h) = &j.password_hash {
+                let n = tx
+                    .execute("UPDATE principals SET password_hash = ?2 WHERE id = ?1 AND password_hash IS NULL", params![j.principal_id, h])
+                    .map_err(|e| format!("handover undo: {e}"))?;
+                if n == 1 {
+                    rep.passwords_restored += 1;
+                } else {
+                    rep.passwords_kept += 1;
+                }
+            }
+        }
+        rep.rooms = move_rooms_conn(&tx, service_id, to, from, false)?;
+        tx.commit().map_err(|e| format!("handover undo commit: {e}"))?;
+        Ok(rep)
+    })
+}

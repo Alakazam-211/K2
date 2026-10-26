@@ -1521,6 +1521,7 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     test_guests::ensure_schema(&conn)?;
     // 0.46.4: which workspace's agent added a guest. Additive, no step.
     creators::ensure_schema(&conn)?;
+    handover::ensure_schema(&conn)?;
     // prd-custom-app-push-v1 (0.46.4): push devices and per-App push
     // settings. Additive, no numbered step.
     app_push::ensure_schema(&conn)?;

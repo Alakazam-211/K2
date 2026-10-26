@@ -47,7 +47,7 @@ pub const ROUTES: &[&str] = &["/cli/app/handover", "/cli/app/park", "/cli/app/un
 
 /// The owner in person: the owner token or an Owner login (never a K2
 /// tab's passport, the shell included: an agent can type in one).
-fn owner(who: &Who) -> bool {
+pub(crate) fn owner(who: &Who) -> bool {
     matches!(who, Who::Owner | Who::Login { role: Role::Owner, .. })
 }
 
@@ -55,7 +55,7 @@ fn owner_or_admin(who: &Who) -> bool {
     matches!(who, Who::Owner | Who::Login { role: Role::Owner | Role::Admin, .. })
 }
 
-fn need_owner(who: &Who, what: &str) -> R<()> {
+pub(crate) fn need_owner(who: &Who, what: &str) -> R<()> {
     need_credential(who)?;
     if owner(who) {
         return Ok(());
@@ -72,9 +72,21 @@ fn need_owner_or_admin(who: &Who, what: &str) -> R<()> {
 }
 
 pub(crate) fn handle(path: &str, who: &Who, body: &[u8]) -> R<J> {
+    use super::handover::{mode, Mode};
+    match (path, mode()) {
+        // 0.46.5: the handover is a card the owner approves in person
+        // (prd-app-handoff-v1); K2_APP_HANDOVER=legacy keeps 0.46.3's.
+        ("/cli/app/handover" | "/cli/app/unpark", Mode::Off) => Err(super::handover::off_refusal()),
+        ("/cli/app/handover", Mode::On) => super::handover::request_route(who, body, false),
+        ("/cli/app/unpark", Mode::On) => super::handover::request_route(who, body, true),
+        ("/cli/app/handover", Mode::Legacy) => handover_route(who, body, false),
+        ("/cli/app/unpark", Mode::Legacy) => handover_route(who, body, true),
+        _ => handle_rest(path, who, body),
+    }
+}
+
+fn handle_rest(path: &str, who: &Who, body: &[u8]) -> R<J> {
     match path {
-        "/cli/app/handover" => handover_route(who, body, false),
-        "/cli/app/unpark" => handover_route(who, body, true),
         "/cli/app/park" => park_route(who, body),
         "/cli/app/release" => release_route(who, body),
         _ => Err(no("not_found", 404, "no such App route")),
@@ -99,7 +111,7 @@ pub(crate) fn refuse_if_parked(app: &AppRow) -> R<()> {
 pub(crate) static NOTES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
 /// An inbox note to a workspace's agent, never a wake (§5).
-fn note(ws_id: &str, title: &str, text: &str) {
+pub(crate) fn note(ws_id: &str, title: &str, text: &str) {
     #[cfg(test)]
     {
         NOTES.lock().unwrap_or_else(|e| e.into_inner()).push((ws_id.to_string(), format!("{title}\n{text}")));
@@ -121,7 +133,7 @@ fn audit(app_id: &str, event: &str, by: &str, payload: J) {
     }
 }
 
-fn changed(ws: &str) {
+pub(crate) fn changed(ws: &str) {
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: ws.to_string() });
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({ "apps": "ownership" }));
 }
@@ -390,9 +402,10 @@ fn release_route(who: &Who, body: &[u8]) -> R<J> {
     let ws_raw = s(&v, "workspace").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the workspace (workspace)"))?;
     let ws = ws_by_token(ws_raw).ok_or_else(|| no(codes::BAD_REQUEST, 404, format!("no workspace '{ws_raw}'")))?;
     let apps = owned_apps(&ws.id).map_err(|e| no("db_error", 500, e))?;
-    if let Some(to_raw) = handover_to {
-        // Every App must be safe to move before any moves, then one owner
-        // confirm covers the release (bound to this workspace).
+    if let Some(to_raw) = handover_to.filter(|_| super::handover::mode() == super::handover::Mode::Legacy) {
+        // K2_APP_HANDOVER=legacy (0.46.4's guard): every App must be safe
+        // to move before any moves, then one owner confirm covers the
+        // release (bound to this workspace).
         let to = ws_by_token(to_raw).ok_or_else(|| no(codes::BAD_REQUEST, 404, format!("no workspace '{to_raw}'")))?;
         let mut unsafe_apps = Vec::new();
         for app in apps.iter().filter(|a| a.owner_workspace != to.id) {
@@ -420,14 +433,26 @@ fn release_route(who: &Who, body: &[u8]) -> R<J> {
     }
     let mut results = Vec::new();
     let mut failed = 0;
+    let mut held = 0;
     for app in &apps {
         let one = json!({ "app": app.app_id }).to_string();
         let r = match handover_to {
-            Some(to) => give(who, &json!({ "app": app.app_id, "to": to }), false, Confirm::Taken),
+            Some(to) => match super::handover::mode() {
+                // K2_APP_HANDOVER=legacy: 0.46.4's guarded move (one confirm
+                // for the whole release, taken above).
+                super::handover::Mode::Legacy => give(who, &json!({ "app": app.app_id, "to": to }), false, Confirm::Taken),
+                super::handover::Mode::Off => Err(super::handover::off_refusal()),
+                // One card per App (A20); the removal waits for them.
+                super::handover::Mode::On => super::handover::request_route(who, json!({ "app": app.app_id, "to": to }).to_string().as_bytes(), false),
+            },
             None if way == "uninstall" => super::routes::uninstall(who, one.as_bytes()),
             None => park_route(who, one.as_bytes()),
         };
         match r {
+            Ok(v) if v["status"] == "held" => {
+                held += 1;
+                results.push(json!({ "app": app.app_id, "ok": true, "status": "held", "request": v["request"]["id"], "handover": v["handover"]["id"] }))
+            }
             Ok(_) => results.push(json!({ "app": app.app_id, "ok": true })),
             Err(e) => {
                 failed += 1;
@@ -443,6 +468,21 @@ fn release_route(who: &Who, body: &[u8]) -> R<J> {
         );
         r.extra = Some(json!({ "results": results }));
         return Err(r);
+    }
+    if held > 0 {
+        // The owner approves each card (k2 app approve, Settings → App
+        // Approvals); the workspace goes once its Apps have.
+        return Ok(json!({
+            "ok": true,
+            "status": "held",
+            "workspace": super::routes::ws_handle(&ws.id),
+            "way": way,
+            "results": results,
+            "hint": format!(
+                "{held} handover card(s) wait for the owner's approval (k2 app approve <request> from a terminal outside K2, or Settings → \
+                 App Approvals); the workspace keeps its Apps until then"
+            ),
+        }));
     }
     Ok(json!({ "ok": true, "workspace": super::routes::ws_handle(&ws.id), "way": way, "results": results }))
 }

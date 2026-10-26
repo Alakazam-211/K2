@@ -411,6 +411,10 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         if let Err(e) = super::access::member_read_only(&who) {
             return respond(Err(e));
         }
+        // 0.46.5: an App whose handover is applying takes no write.
+        if let Some(busy) = super::handover::refuse_if_busy(path, body) {
+            return respond(Err(busy));
+        }
     }
     // S42: an agent without "Build and run Apps" gets a held request for
     // the owner instead of a refusal.

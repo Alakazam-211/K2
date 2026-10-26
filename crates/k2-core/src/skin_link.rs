@@ -211,6 +211,23 @@ pub fn revoke_link_passes(app_service_id: &str) -> Result<usize, String> {
     })
 }
 
+/// Revoke every live link pass of an App but `keep` (an App handover: the
+/// pass naming the old room ends once the new one reached the App).
+pub fn revoke_link_passes_except(app_service_id: &str, keep: &str) -> Result<usize, String> {
+    let svc = app_service_id.trim();
+    if svc.is_empty() || keep.trim().is_empty() {
+        return Err("missing App or pass".into());
+    }
+    with_conn(|conn| {
+        conn.execute(
+            "UPDATE tokens SET revoked_at = ?1
+             WHERE link_id IS NOT NULL AND app_service_id = ?2 AND revoked_at IS NULL AND id != ?3",
+            params![now_secs(), svc, keep],
+        )
+        .map_err(|e| format!("link pass revoke: {e}"))
+    })
+}
+
 /// Revoke one link pass by id (a rotation that couldn't be delivered).
 pub fn revoke_link_pass(id: &str) -> Result<bool, String> {
     with_conn(|conn| {

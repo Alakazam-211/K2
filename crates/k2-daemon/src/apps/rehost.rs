@@ -561,7 +561,8 @@ impl WaveOps for LiveOps {
         super::supervisor::runs_unwalled(app)
     }
     fn busy(&self, app: &AppRow) -> bool {
-        super::supervisor::is_busy(&app.app_id)
+        // 0.46.5: an App whose handover is applying waits too.
+        super::supervisor::is_busy(&app.app_id) || super::handover::busy(&app.app_id)
     }
     fn active_connections(&self, app: &AppRow) -> usize {
         super::supervisor::active_connections(&app.app_id)

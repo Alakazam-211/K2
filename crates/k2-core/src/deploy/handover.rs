@@ -245,6 +245,13 @@ pub fn set_held(conn: &Connection, id: &str, request_id: &str, plan: &Value, pla
     Ok(n > 0)
 }
 
+/// The card's held request (an owner-started handover is `held` from the
+/// start).
+pub fn set_request_id(conn: &Connection, id: &str, request_id: &str, now: i64) -> rusqlite::Result<()> {
+    conn.execute("UPDATE app_handovers SET request_id = ?2, updated_at = ?3 WHERE id = ?1", params![id, request_id, now])?;
+    Ok(())
+}
+
 pub fn set_approved(conn: &Connection, id: &str, by: &str, now: i64) -> rusqlite::Result<bool> {
     let n = conn.execute(
         "UPDATE app_handovers SET state = 'applying', approved_by = ?2, approved_at = ?3, updated_at = ?3 WHERE id = ?1 AND state = 'held'",

@@ -123,7 +123,7 @@ pub fn begin(ctx: &LinkCtx, b: Begin<'_>) {
         bytes_out: 0,
         latency_ms: 0,
     };
-    let open = Open { call, hint: None, started: Instant::now(), ended: None, workspace_id: ctx.workspace_id.clone(), subscribed: b.subscribed };
+    let open = Open { call, hint: None, started: Instant::now(), ended: None, workspace_id: ctx.workspace_id(), subscribed: b.subscribed };
     if CONN.try_with(|c| *c.borrow_mut() = Some(open)).is_err() {
         // Off a scoped connection (a unit test): record at once.
         k2_core::log_debug!("[apps/audit] call outside a link connection scope");
@@ -449,6 +449,12 @@ fn alert_once(app_id: &str, ws: &str, kind: &str, text: &str) {
 }
 
 const QUOTA_CODES: &[&str] = &["rate_limited", "too_many_sockets", "too_large", "too_many_subscriptions"];
+
+/// An App moved to another workspace (a handover): its first-use and door
+/// alerts go to the new one from now on.
+pub(crate) fn set_app_workspace(app: &str, ws: &str) {
+    alerts().lock().unwrap_or_else(|e| e.into_inner()).ws.insert(app.to_string(), ws.to_string());
+}
 
 /// Watch each finished call for alert conditions.
 fn observe(ws: &str, call: &Call) {

@@ -293,6 +293,9 @@ fn decide_err(code: &'static str) -> Refusal {
 fn expire_and_tell() -> R<()> {
     let gone = db(|c| reqs::expire_due(c, deploy::now()))?;
     for r in &gone {
+        let mut closed = r.clone();
+        closed.status = reqs::STATUS_EXPIRED.to_string();
+        super::handover::request_closed(&closed);
         notify_requester(r, &format!("[k2 apps] request {} expired after 7 days without an answer: {}", r.id, r.summary));
         egress_changed(r);
     }
@@ -492,6 +495,7 @@ fn deny(who: &Who, body: &[u8]) -> R<J> {
     };
     let d = db(|c| Ok(reqs::decide(c, &r.id, status, &by, None, reason.as_deref(), deploy::now())))?.map_err(decide_err)?;
     changed(Some(&d.id));
+    super::handover::request_closed(&d);
     let event = if status == reqs::STATUS_DENIED { "widening_denied" } else { "widening_withdrawn" };
     app_audit(&d, event, &by, json!({ "request": d.id, "kind": d.kind, "reason": reason }));
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new("app-deny", &by, format!("{status} {}", d.id), "cli", "-", "apps"));
@@ -617,6 +621,11 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
             // approved them (never replayed as the requesting agent).
             if route == super::move_plan::APPLY_ROUTE {
                 return super::move_plan::apply(r, by);
+            }
+            // 0.46.5: an App handover card (prd-app-handoff-v1), run as
+            // the owner who approved it, never replayed as an agent.
+            if route == super::handover::APPLY_ROUTE {
+                return super::handover::apply(r, by);
             }
             // 0.46.4: an agent's App-grant owner steps (copy-host, the
             // guests-rooms grant, a label transfer), run as the owner with

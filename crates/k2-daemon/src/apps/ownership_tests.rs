@@ -156,6 +156,14 @@ fn audit_events(app: &str) -> Vec<String> {
         .collect()
 }
 
+/// 0.46.5: a handover is a card the owner approves in person (a fresh
+/// `app-approve` confirm bound to the request).
+fn approve_card(v: &J) -> (u16, J) {
+    let req = v["request"]["id"].as_str().unwrap_or_else(|| panic!("no held request: {v}")).to_string();
+    let tok = super::egress_routes::test_seams::vault_handle().confirm.mint(super::approvals::CONFIRM_ACTION, Some(&req), "owner", "local-auth");
+    call("/cli/app/approve", &Who::Owner, json!({ "request": req, "confirmToken": tok }))
+}
+
 fn remove_ws(ws: &str) -> (String, J) {
     let mut p = HashMap::new();
     p.insert("path".to_string(), ws_path(ws));
@@ -267,11 +275,10 @@ fn the_owner_hands_an_app_over_and_unparks_a_parked_one() {
     // The owner in person: the owner token alone is refused, naming the
     // confirm the CLI and Settings mint.
     let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.a1, "to": f.b }));
-    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
-    assert_eq!((v["error"]["action"].as_str(), v["error"]["secretId"].as_str()), (Some(guard::CONFIRM_ACTION), Some(f.a1.as_str())), "{v}");
-    assert_eq!(row(&f.a1).owner_workspace, f.a, "nothing moved");
-    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.a1, "to": f.b, "confirmToken": confirm(&f.a1, "owner") }));
-    assert_eq!(st, 200, "{v}");
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "a card for the owner, nothing moved yet: {v}");
+    assert_eq!(row(&f.a1).owner_workspace, f.a, "nothing moves before the approval");
+    let (st, v) = approve_card(&v);
+    assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
     assert_eq!(row(&f.a1).owner_workspace, f.b);
     assert_eq!(service_ws(&f.a1), f.b);
     {
@@ -295,9 +302,9 @@ fn the_owner_hands_an_app_over_and_unparks_a_parked_one() {
     let (st, v) = call("/cli/app/unpark", &admin(), json!({ "app": f.a2, "to": f.b }));
     assert_eq!((st, code(&v)), (403, "owner_only"), "{v}");
     let (st, v) = call("/cli/app/unpark", &Who::Owner, json!({ "app": f.a2, "to": f.b }));
-    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "unpark needs the person too: {v}");
-    let (st, v) = call("/cli/app/unpark", &Who::Owner, json!({ "app": f.a2, "to": f.b, "confirmToken": confirm(&f.a2, "owner") }));
-    assert_eq!(st, 200, "{v}");
+    assert_eq!(st, 202, "{v}");
+    let (st, v) = approve_card(&v);
+    assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
     let r = row(&f.a2);
     assert_eq!((r.state.as_str(), r.owner_workspace.as_str()), (store::STATE_STOPPED, f.b.as_str()));
     assert!(audit_events(&f.a2).contains(&"unpark".to_string()));
@@ -308,18 +315,13 @@ fn the_owner_hands_an_app_over_and_unparks_a_parked_one() {
     let (st, v) = call("/cli/app/release", &admin(), json!({ "workspace": f.a, "apps": format!("handover:{}", f.b) }));
     assert_eq!((st, code(&v)), (403, "owner_only"), "{v}");
     let (st, v) = call("/cli/app/release", &Who::Owner, json!({ "workspace": f.a, "apps": format!("handover:{}", f.b) }));
-    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
-    let bound = guard::release_confirm_id(&f.a);
-    assert_eq!(v["error"]["secretId"].as_str(), Some(bound.as_str()), "{v}");
-    let (st, v) = call(
-        "/cli/app/release",
-        &Who::Owner,
-        json!({ "workspace": f.a, "apps": format!("handover:{}", f.b), "confirmToken": confirm(&f.a1, "owner") }),
-    );
-    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "a confirm bound to an App isn't the release's: {v}");
-    let (st, v) = call("/cli/app/release", &Who::Owner, json!({ "workspace": f.a, "apps": format!("handover:{}", f.b), "confirmToken": confirm(&bound, "owner") }));
-    assert_eq!(st, 200, "{v}");
-    assert_eq!(row(&format!("oa3-{}", "hand")).owner_workspace, f.b);
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "one card per App: {v}");
+    let (st, _) = remove_ws(&f.a);
+    assert!(st.starts_with("409"), "the removal waits for the cards: {st}");
+    for r in v["results"].as_array().unwrap() {
+        let (st, a) = approve_card(&json!({ "request": { "id": r["request"] } }));
+        assert_eq!(st, 200, "{a}");
+    }
     let (st, v) = remove_ws(&f.a);
     assert!(st.starts_with("200"), "{st} {v}");
 }
@@ -651,6 +653,9 @@ fn assert_refused(app: &str, to: &str, want: &str) -> J {
 /// another App, a spent confirm and anyone but the owner are refused.
 #[test]
 fn handover_needs_the_owner_in_person() {
+    // 0.46.4's guard is the K2_APP_HANDOVER=legacy path from 0.46.5 on
+    // (the full handover: handover_tests).
+    super::handover::set_test_mode(Some(super::handover::Mode::Legacy));
     let f = fx("person");
     stamp_label(&f.a1, &f.a);
     // An owner-added guest with no tie doesn't block.
@@ -686,6 +691,9 @@ fn handover_needs_the_owner_in_person() {
 /// Each blocker refuses on its own, names itself, and changes nothing.
 #[test]
 fn handover_refuses_each_blocker_by_name() {
+    // 0.46.4's guard is the K2_APP_HANDOVER=legacy path from 0.46.5 on
+    // (the full handover: handover_tests).
+    super::handover::set_test_mode(Some(super::handover::Mode::Legacy));
     let f = fx("block");
 
     // A running App: its link keeps the old room until it restarts.
@@ -861,6 +869,9 @@ fn handover_refuses_each_blocker_by_name() {
 /// App would quietly resolve to the new workspace's database instead.
 #[test]
 fn handover_refuses_an_app_on_the_old_workspaces_database() {
+    // 0.46.4's guard is the K2_APP_HANDOVER=legacy path from 0.46.5 on
+    // (the full handover: handover_tests).
+    super::handover::set_test_mode(Some(super::handover::Mode::Legacy));
     let f = fx("pgdb");
     {
         let h = k2_core::db::shared();
@@ -884,6 +895,9 @@ fn handover_refuses_an_app_on_the_old_workspaces_database() {
 /// every App before any moves and refuses the lot.
 #[test]
 fn unpark_and_release_use_the_same_guard() {
+    // 0.46.4's guard is the K2_APP_HANDOVER=legacy path from 0.46.5 on
+    // (the full handover: handover_tests).
+    super::handover::set_test_mode(Some(super::handover::Mode::Legacy));
     let f = fx("unrel");
     stamp_label(&f.a1, &f.a);
     stamp_label(&f.a2, &f.a);

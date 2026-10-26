@@ -207,6 +207,12 @@ pub(super) fn live_seed_with_env(app: &str, lines: &[(&str, String)]) -> String 
     std::fs::write(dir.join(".env.k2"), body).unwrap();
     let h = k2_core::db::shared();
     let conn = h.lock();
+    conn.execute(
+        "INSERT OR IGNORE INTO seeds (hash, seed_id, version, host_mode, manifest_json, created_with, report_json, signer, size_bytes, created_at, last_used_at) \
+         VALUES (?1, ?2, '1.0.0', 'cmd', ?3, 'test', '{}', 'owner', 1, 1, 1)",
+        params![hash, app, json!({ "id": app, "version": "1.0.0" }).to_string()],
+    )
+    .unwrap();
     conn.execute("UPDATE apps SET live_seed = ?2 WHERE app_id = ?1", params![app, hash]).unwrap();
     hash
 }
@@ -340,4 +346,288 @@ fn a_member_is_refused_and_a_foreign_agent_sees_no_app() {
     assert_eq!((st, code(&v)), (409, "handover_same_workspace"), "{v}");
     let (st, v) = get("/cli/app/handover/plan", &Who::Owner, &[("app", &f.app), ("to", "no-such-ws")]);
     assert_eq!(st, 404, "{v}");
+}
+
+// ── S1: the owner's card and its apply ───────────────────────────────
+
+pub(super) fn approve(req: &str) -> (u16, J) {
+    let tok = super::egress_routes::test_seams::vault_handle().confirm.mint(super::approvals::CONFIRM_ACTION, Some(req), "owner", "local-auth");
+    call("/cli/app/approve", &Who::Owner, json!({ "request": req, "confirmToken": tok }))
+}
+
+pub(super) fn ask(f: &Fx) -> (u16, J) {
+    call("/cli/app/handover", &Who::Owner, json!({ "app": f.app, "to": f.b }))
+}
+
+pub(super) fn req_id(v: &J) -> String {
+    v["request"]["id"].as_str().unwrap_or_else(|| panic!("no request: {v}")).to_string()
+}
+
+pub(super) fn holder(label: &str) -> Option<String> {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, label).unwrap()
+}
+
+pub(super) fn app_row(app: &str) -> store::AppRow {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    store::get_app(&conn, app).unwrap().unwrap()
+}
+
+pub(super) fn handover_row(id: &str) -> k2_core::deploy::handover::Handover {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    k2_core::deploy::handover::get(&conn, id).unwrap().unwrap()
+}
+
+pub(super) fn notes_for(ws: &str) -> Vec<String> {
+    super::ownership::NOTES.lock().unwrap().iter().filter(|(w, _)| w == ws).map(|(_, t)| t.clone()).collect()
+}
+
+/// T1.1 + T1.7: every label moves; the engine is untouched.
+#[test]
+fn every_label_moves_and_nothing_restarts() {
+    let f = fx("t11");
+    add_labels(&f, "agent-t11", "dannon-t11");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute(
+            "UPDATE apps SET front_port = 41234, live_deployment = 'dep-t11', folder_path = '/tmp/k2-hov-test/src' WHERE app_id = ?1",
+            params![f.app],
+        )
+        .unwrap();
+    }
+    let before = app_row(&f.app);
+    let (st, v) = ask(&f);
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    assert_eq!(holder("agent-t11").as_deref(), Some(f.a.as_str()), "nothing moves before the approval");
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
+    for l in [f.app.as_str(), "agent-t11", "dannon-t11"] {
+        assert_eq!(holder(l).as_deref(), Some(f.b.as_str()), "{l} is B's");
+    }
+    let after = app_row(&f.app);
+    assert_eq!(after.owner_workspace, f.b);
+    assert_eq!(
+        (after.front_port, after.live_deployment.as_deref(), after.state.as_str()),
+        (before.front_port, before.live_deployment.as_deref(), before.state.as_str())
+    );
+    assert_eq!(after.folder_path, None, "A's folder is no longer the App's source (A24)");
+    // Taken labels are final: no way back to A's legacy service (Q5).
+    let cfg = super::labels::load_cfg(&f.app).unwrap();
+    assert_eq!(cfg.labels.len(), 1);
+    assert_eq!(cfg.labels[0].service_id, "", "{cfg:?}");
+    let svc_ws: String = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.query_row("SELECT project_id FROM published_services WHERE id = ?1", params![f.svc], |r| r.get(0)).unwrap()
+    };
+    assert_eq!(svc_ws, f.b);
+    // B maintains it; A no longer sees it.
+    let (st, _) = get("/cli/app/inspect", &agent(&f.b), &[("app", &f.app)]);
+    assert_eq!(st, 200);
+    let (st, _) = get("/cli/app/inspect", &agent(&f.a), &[("app", &f.app)]);
+    assert_eq!(st, 404);
+    assert!(
+        {
+            let h = k2_core::db::shared();
+            let conn = h.lock();
+            k2_core::deploy::audit::list_for(&conn, k2_core::deploy::audit::SUBJECT_APP, &f.app, 50).unwrap().iter().any(|r| r.event == "handover")
+        },
+        "audited"
+    );
+}
+
+/// T1.3: an untied guest's live session keeps resolving and talks to B.
+#[test]
+fn a_live_guest_session_keeps_working_and_reaches_b() {
+    let f = fx("t13");
+    let pid = guest("ann-t13", &f.svc, &[&f.a]);
+    let s = k2_core::skin::create_app_session_token("ann-t13", &f.svc).unwrap();
+    let pass = k2_core::skin::resolve_skin_token(&s.raw).expect("live");
+    assert_eq!(pass.room_policy.keys().cloned().collect::<Vec<_>>(), vec![f.a.clone()]);
+    let (_, v) = ask(&f);
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!(st, 200, "{v}");
+    let pass = k2_core::skin::resolve_skin_token(&s.raw).expect("the session survives the handover");
+    assert_eq!(pass.room_policy.keys().cloned().collect::<Vec<_>>(), vec![f.b.clone()], "it talks to B now");
+    assert_eq!(pass.rooms, vec![f.b.clone()]);
+    // A new sign-in lands in B's room too.
+    let s2 = k2_core::skin::create_app_session_token("ann-t13", &f.svc).unwrap();
+    assert_eq!(s2.meta.rooms, vec![f.b.clone()]);
+    // Room A on the guest's other App is A's: untouched.
+    grant_more(&pid, &f.other_svc, &[&f.a]);
+    let s3 = k2_core::skin::create_app_session_token("ann-t13", &f.other_svc).unwrap();
+    assert_eq!(s3.meta.rooms, vec![f.a.clone()], "A's other App still reaches A");
+}
+
+/// T1.4: A's waiting request for the App ends; A hears.
+#[test]
+fn a_waiting_request_of_a_is_withdrawn_and_a_hears() {
+    let f = fx("t14");
+    let rid = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let n = k2_core::app_grace::requests::NewRequest {
+            kind: k2_core::app_grace::requests::KIND_CONFIG,
+            app_id: Some(&f.app),
+            service_id: Some(&f.svc),
+            app_label: &f.app,
+            workspace_id: &f.a,
+            body: json!({ "ops": [] }),
+            diff: json!({ "lines": ["memory 1 GiB"] }),
+            summary: "memory 1 GiB".into(),
+            reasons: vec![],
+            reason: None,
+            deployment_id: None,
+            requested_by: "agent:a",
+            requester_workspace: Some(&f.a),
+            requester_session: None,
+        };
+        k2_core::app_grace::requests::create(&conn, &n, k2_core::deploy::now()).unwrap().id
+    };
+    super::ownership::NOTES.lock().unwrap().retain(|(w, _)| w != &f.a && w != &f.b);
+    let (_, v) = ask(&f);
+    assert_eq!(v["plan"]["requests"].as_array().unwrap().len(), 1, "the card lists it: {v}");
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!(st, 200, "{v}");
+    let r = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::app_grace::requests::get(&conn, &rid).unwrap().unwrap()
+    };
+    assert_eq!((r.status.as_str(), r.decision_reason.as_deref()), ("withdrawn", Some("handed_over")));
+    let a_notes = notes_for(&f.a);
+    assert_eq!(a_notes.len(), 1, "{a_notes:?}");
+    assert!(a_notes[0].contains("You no longer manage it"), "{a_notes:?}");
+    assert_eq!(notes_for(&f.b).len(), 1);
+}
+
+/// T1.5: the owner token alone holds; a reused or foreign confirm is
+/// refused; a fresh one applies. A passport never approves.
+#[test]
+fn the_card_needs_a_fresh_confirm_and_never_a_passport() {
+    let f = fx("t15");
+    let (st, v) = ask(&f);
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    let req = req_id(&v);
+    let hid = v["handover"]["id"].as_str().unwrap().to_string();
+    assert_eq!(handover_row(&hid).state, "held");
+    // Asking again answers the same card.
+    let (st, v2) = ask(&f);
+    assert_eq!((st, req_id(&v2), v2["already"].as_bool()), (202, req.clone(), Some(true)), "{v2}");
+    let (st, v) = call("/cli/app/approve", &Who::Owner, json!({ "request": req }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
+    for who in [agent(&f.a), agent(&f.b), Who::Login { username: "ad".into(), role: Role::Admin }] {
+        let tok = super::egress_routes::test_seams::vault_handle().confirm.mint(super::approvals::CONFIRM_ACTION, Some(&req), "owner", "local-auth");
+        let (st, v) = call("/cli/app/approve", &who, json!({ "request": req, "confirmToken": tok }));
+        assert_eq!((st, code(&v)), (403, "owner_only"), "{who:?}: {v}");
+    }
+    let tok = super::egress_routes::test_seams::vault_handle().confirm.mint(super::approvals::CONFIRM_ACTION, Some("w_other"), "owner", "local-auth");
+    let (st, v) = call("/cli/app/approve", &Who::Owner, json!({ "request": req, "confirmToken": tok }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "a confirm for another request: {v}");
+    assert_eq!(app_row(&f.app).owner_workspace, f.a, "nothing moved");
+    let tok = super::egress_routes::test_seams::vault_handle().confirm.mint(super::approvals::CONFIRM_ACTION, Some(&req), "owner", "local-auth");
+    let (st, v) = call("/cli/app/approve", &Who::Owner, json!({ "request": req, "confirmToken": tok }));
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = call("/cli/app/approve", &Who::Owner, json!({ "request": req, "confirmToken": tok }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "a confirm works once: {v}");
+    let h = handover_row(&hid);
+    assert_eq!((h.state.as_str(), h.steps_done), ("applied", 7), "{h:?}");
+    assert!(h.window_until.unwrap() > k2_core::deploy::now() + 71 * 3600, "a 72 h window");
+    assert!(h.journal.is_some());
+    // B's switch 1 was off: the approval turned it on.
+    assert!(super::access::level(&f.b) >= super::access::Level::Build);
+    // Only the owner asks for the card.
+    let (st, v) = call("/cli/app/handover", &Who::Login { username: "ad".into(), role: Role::Admin }, json!({ "app": f.other, "to": f.b }));
+    assert_eq!((st, code(&v)), (403, "owner_only"), "{v}");
+}
+
+/// T1.6: an App with a guest A tied is refused, naming it; nothing moves.
+#[test]
+fn a_tied_guest_stops_the_handover_and_nothing_changes() {
+    if super::handover_plan::TIES_MOVE {
+        return;
+    }
+    let f = fx("t16");
+    let pid = guest("tied-t16", &f.svc, &[&f.a]);
+    k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
+    let (st, v) = ask(&f);
+    assert_eq!((st, code(&v)), (409, "handover_needs_tie_move"), "{v}");
+    assert_eq!(v["error"]["blockers"][0]["names"], json!(["tied-t16"]), "{v}");
+    assert_eq!(app_row(&f.app).owner_workspace, f.a);
+    assert_eq!(holder(&f.app).as_deref(), Some(f.a.as_str()));
+    let s = k2_core::skin::create_app_session_token("tied-t16", &f.svc).unwrap();
+    assert_eq!(s.meta.rooms, vec![f.a.clone()], "rooms untouched");
+}
+
+/// T2.5 (owner path): the plan changed after the card → stale, nothing
+/// moves.
+#[test]
+fn a_guest_added_after_the_card_makes_it_stale() {
+    let f = fx("t25o");
+    let (_, v) = ask(&f);
+    let req = req_id(&v);
+    let hid = v["handover"]["id"].as_str().unwrap().to_string();
+    guest("late-t25o", &f.svc, &[&f.a]);
+    let (st, v) = approve(&req);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["status"], "failed", "{v}");
+    assert_eq!(v["error"]["code"], "handover_stale", "{v}");
+    assert_eq!(handover_row(&hid).state, "stale");
+    assert_eq!(app_row(&f.app).owner_workspace, f.a, "nothing moved");
+    // A new card for the new plan goes through.
+    let (st, v) = ask(&f);
+    assert_eq!(st, 202, "{v}");
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
+}
+
+/// The card is denied: the handover ends `denied`; a new one may start.
+#[test]
+fn a_denied_card_ends_the_handover() {
+    let f = fx("deny");
+    let (_, v) = ask(&f);
+    let hid = v["handover"]["id"].as_str().unwrap().to_string();
+    let (st, d) = call("/cli/app/deny", &Who::Login { username: "ad".into(), role: Role::Admin }, json!({ "request": req_id(&v) }));
+    assert_eq!(st, 200, "{d}");
+    assert_eq!(handover_row(&hid).state, "denied");
+    let (st, v) = ask(&f);
+    assert_eq!(st, 202, "{v}");
+}
+
+/// A write on an App whose handover is applying waits.
+#[test]
+fn a_write_during_the_apply_is_refused() {
+    let f = fx("busy");
+    assert!(super::handover::refuse_if_busy("/cli/app/config", json!({ "app": f.app }).to_string().as_bytes()).is_none(), "nothing applying");
+    {
+        let _b = super::handover::test_busy(&f.app);
+        let (st, v) = call("/cli/app/stop", &Who::Owner, json!({ "app": f.app }));
+        assert_eq!((st, code(&v)), (409, "handover_in_progress"), "{v}");
+        let (st, v) = call("/cli/app/stop", &Who::Owner, json!({ "app": f.other }));
+        assert_eq!(st, 200, "another App is fine: {v}");
+    }
+    let (st, v) = call("/cli/app/stop", &Who::Owner, json!({ "app": f.app }));
+    assert_eq!(st, 200, "{v}");
+}
+
+/// K2_APP_HANDOVER=off refuses; legacy keeps 0.46.3's direct move.
+#[test]
+fn the_switch_turns_the_handover_off_or_back_to_legacy() {
+    let f = fx("mode");
+    super::handover::set_test_mode(Some(super::handover::Mode::Off));
+    let (st, v) = ask(&f);
+    assert_eq!((st, code(&v)), (403, "handover_off"), "{v}");
+    let (st, v) = plan(&f, &Who::Owner);
+    assert_eq!((st, code(&v)), (403, "handover_off"), "{v}");
+    super::handover::set_test_mode(Some(super::handover::Mode::Legacy));
+    let (st, v) = plan(&f, &Who::Owner);
+    assert_eq!(st, 404, "{v}");
+    let (st, v) = ask(&f);
+    super::handover::set_test_mode(None);
+    assert_eq!(st, 200, "legacy: moved at once: {v}");
+    assert_eq!(app_row(&f.app).owner_workspace, f.b);
 }

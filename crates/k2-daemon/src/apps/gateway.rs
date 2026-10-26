@@ -108,10 +108,19 @@ pub struct LinkStats {
 pub struct LinkCtx {
     pub app_id: String,
     pub service_id: String,
-    pub workspace_id: String,
+    /// The App's workspace (its pass's room). A handover re-binds it in
+    /// place ([`rebind_workspace`]); read it with [`LinkCtx::workspace_id`].
+    pub workspace: std::sync::RwLock<String>,
     pub port: u16,
     pub link_id: String,
     pub stats: LinkStats,
+}
+
+impl LinkCtx {
+    /// The App's workspace now.
+    pub fn workspace_id(&self) -> String {
+        self.workspace.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
 }
 
 tokio::task_local! {
@@ -352,7 +361,7 @@ pub fn open(mut spec: LinkSpec, deliver: Option<Deliver>) -> Result<String, Stri
         let ctx = Arc::new(LinkCtx {
             app_id: spec.app_id.clone(),
             service_id: spec.service_id.clone(),
-            workspace_id: spec.workspace_id.clone(),
+            workspace: std::sync::RwLock::new(spec.workspace_id.clone()),
             port,
             link_id: link_id_for(port),
             stats: LinkStats::default(),
@@ -380,6 +389,43 @@ pub fn open(mut spec: LinkSpec, deliver: Option<Deliver>) -> Result<String, Stri
 /// Live connections on `app_id`'s link.
 pub fn connections(app_id: &str) -> usize {
     links().lock().unwrap_or_else(|e| e.into_inner()).get(app_id).map(|e| e.ctx.stats.live.load(Ordering::SeqCst)).unwrap_or(0)
+}
+
+/// What [`rebind_workspace`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rebind {
+    /// No open link (the App isn't running walled): its next start opens
+    /// one in the new room.
+    NoLink,
+    /// A new pass in the new room reached the App; `revoked` older passes
+    /// ended.
+    Delivered { revoked: usize },
+    /// The link has no way to hand the App a pass (a process-engine App):
+    /// it keeps its old pass until its re-key restart.
+    NeedsRestart,
+}
+
+/// An App handover (prd-app-handoff-v1 P13): the App's link now acts in
+/// `workspace_id`'s room. The link's spec and context move at once (audit
+/// and first-use alerts name the new workspace); a new pass with the new
+/// room is delivered, then every older pass of the App is revoked.
+pub fn rebind_workspace(app_id: &str, workspace_id: &str) -> Result<Rebind, String> {
+    let (svc, can_deliver) = {
+        let mut map = links().lock().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = map.get_mut(app_id) else { return Ok(Rebind::NoLink) };
+        e.spec.workspace_id = workspace_id.to_string();
+        e.spec.rooms = vec![workspace_id.to_string()];
+        *e.ctx.workspace.write().unwrap_or_else(|x| x.into_inner()) = workspace_id.to_string();
+        (e.ctx.service_id.clone(), e.deliver.is_some())
+    };
+    super::audit::set_app_workspace(app_id, workspace_id);
+    if !can_deliver {
+        return Ok(Rebind::NeedsRestart);
+    }
+    rotate(app_id)?;
+    let keep = links().lock().unwrap_or_else(|e| e.into_inner()).get(app_id).and_then(|e| e.pass_id.clone()).ok_or("the new pass vanished")?;
+    let revoked = passes::revoke_link_passes_except(&svc, &keep)?;
+    Ok(Rebind::Delivered { revoked })
 }
 
 /// An open link's rooms and whether it can hand the App a new pass
@@ -767,7 +813,7 @@ pub fn gate(head: &str, method: &str, path_and_query: &str) -> Gate {
             method,
             path,
             actor: seen.actor.as_deref().unwrap_or("app"),
-            room: Some(c.workspace_id.clone()),
+            room: Some(c.workspace_id()),
             bytes_in,
             refused: refused.as_ref().map(|(n, code)| (*n, code.as_str())),
             subscribed: seen.subscribed,
@@ -1000,7 +1046,7 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
             "ok": true,
             "app": c.app_id,
             "appServiceId": c.service_id,
-            "workspace": c.workspace_id,
+            "workspace": c.workspace_id(),
             "link": c.link_id,
             "caps": pass.caps,
             "rooms": pass.rooms,
@@ -1115,7 +1161,7 @@ mod tests {
         Arc::new(LinkCtx {
             app_id: app.into(),
             service_id: svc.into(),
-            workspace_id: "ws-1".into(),
+            workspace: std::sync::RwLock::new("ws-1".into()),
             port: 1,
             link_id: "gw:1".into(),
             stats: LinkStats::default(),

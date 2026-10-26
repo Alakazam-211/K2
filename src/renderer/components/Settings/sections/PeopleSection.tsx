@@ -629,8 +629,10 @@ function roleBits(role: RoleRow | null, fallbackHandles: string[]): React.JSX.El
 /**
  * agent-app-users §5.5: a person an agent set up is tied to that agent's
  * workspace. When you gave them more, the extra waits for their own reset:
- * send a reset link (to the stored email, another email, or show a
- * one-time link here). Nothing for an untied person.
+ * send a reset link to an email you give, or show a one-time link here.
+ * The stored email is never used: an agent could have chosen it (when it
+ * made them, invited them, set the email, or through an App key).
+ * Nothing for an untied person.
  */
 export function ResetPanel({ person }: { person: PersonRow }): React.JSX.Element | null {
   const [busy, setBusy] = useState(false)
@@ -640,8 +642,6 @@ export function ResetPanel({ person }: { person: PersonRow }): React.JSX.Element
   const [link, setLink] = useState<string | null>(null)
   const [from, setFrom] = useState('')
   if (!person.tiedTo) return null
-  // An agent set this email: a reset never goes there (security review).
-  const agentEmail = person.tiedReasons.includes('email')
   const send = async (body: Record<string, unknown>) => {
     setBusy(true)
     setNote(null)
@@ -670,23 +670,13 @@ export function ResetPanel({ person }: { person: PersonRow }): React.JSX.Element
         {person.pendingReset
           ? `${person.tiedTo}'s agent set ${person.username} up, so the extra access you gave starts only after ${person.username} resets their password. Until then they keep ${person.tiedTo}'s access.`
           : `${person.tiedTo}'s agent set ${person.username} up. More access you give waits for their password reset.`}
-        {person.email && !agentEmail ? ` Reset link goes to ${person.email}.` : ''}
-        {agentEmail ? ` ${person.tiedTo}'s agent set the email${person.email ? ` (${person.email})` : ''}, so a reset can't go there: send it to another email or show a one-time link.` : ''}
+        {` ${person.tiedTo}'s agent could have chosen the stored email${person.email ? ` (${person.email})` : ''}, so a reset never goes there: send it to an email you know is theirs, or show a one-time link.`}
         {' '}Mail leaves from an address no agent reads; links open K2's own page.
       </p>
       {person.pendingReset ? (
         <div className="flex flex-wrap items-center gap-3 pt-1">
-          <button
-            type="button"
-            className={btn}
-            disabled={busy || !person.email || agentEmail}
-            title={agentEmail ? 'An agent set this email: use another email or a one-time link' : undefined}
-            onClick={() => void send({})}
-          >
-            Send reset link
-          </button>
           <button type="button" className={btn} disabled={busy} onClick={() => setAskOther(true)}>
-            Send to another email…
+            Send to an email…
           </button>
           <button type="button" className={btn} disabled={busy} onClick={() => void send({ code: true })}>
             Show a one-time link

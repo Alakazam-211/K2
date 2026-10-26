@@ -216,15 +216,60 @@ pub fn invite_sender(app_ws: Option<&str>, by: &By, from: Option<&str>) -> Resul
 /// K2's own set-password page on this box's front door
 /// (`<front door>/cli/skin/password/set`): served by K2 from bundled bytes
 /// (the daemon, or the gateway, never a skin root, a UI port or an App).
-/// `None` when the box has no front door URL. Owner resets always land
+/// `Ok(None)` when the box has no front door URL. Owner resets always land
 /// here (security review 2026-10-25, item 1).
-pub fn k2_set_password_page() -> Option<String> {
-    skin::effective_front_door()
-        .ok()
-        .and_then(|d| d.url)
-        .map(|u| u.trim().trim_end_matches('/').to_string())
-        .filter(|u| invites::url_host(u).is_some())
-        .map(|u| format!("{u}{}", crate::skin_gateway::SET_PASSWORD_PATH))
+///
+/// `Err(why)`: the front door can't carry an owner reset (verification
+/// review 2026-10-26, item 2): not `https://` (only exact
+/// `http://localhost` / `http://127.0.0.1` may be plain), or its host is an
+/// App's (a public domain or label an App answers on: the box's router
+/// would hand `/cli/skin/password/set` to that App, whose agent reads it).
+pub fn k2_set_password_page() -> Result<Option<String>, String> {
+    let Some(door) = skin::effective_front_door().ok().and_then(|d| d.url) else { return Ok(None) };
+    front_door_page(&door, &app_hosts()).map(Some)
+}
+
+/// [`k2_set_password_page`] for front door `door` given every App host.
+fn front_door_page(door: &str, app_hosts: &[String]) -> Result<String, String> {
+    let door = door.trim().trim_end_matches('/').to_string();
+    let Some((_, host, _)) = invites::url_host(&door) else {
+        return Err(format!("the front door ({door}) is not an http(s) URL"));
+    };
+    invites::check_set_password_url(&door, std::slice::from_ref(&host))
+        .map_err(|_| format!("the front door ({door}) is not https:// (only http://localhost or http://127.0.0.1 may be plain)"))?;
+    if app_hosts.iter().any(|h| h.eq_ignore_ascii_case(&host)) {
+        return Err(format!("the front door's host {host} is an App's domain or label: that App would get K2's set-password page"));
+    }
+    Ok(format!("{door}{}", crate::skin_gateway::SET_PASSWORD_PATH))
+}
+
+/// Every host an App (or a labelled service) answers on or could: each
+/// published service's public origins (its label, the Meet bridge, custom
+/// domains), its label host `<name>.<box>.k2.dev` whether exposed now or
+/// not, and every nested label the tunnel routes away from the daemon.
+fn app_hosts() -> Vec<String> {
+    let services = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::list_all(&conn).unwrap_or_default()
+    };
+    let sub = crate::apps::origins::box_subdomain();
+    let label = |name: &str| format!("{}.{sub}.{}", name.trim().to_ascii_lowercase(), k2_core::tunnel::config::SUBDOMAIN_HOST);
+    let mut out = Vec::new();
+    for svc in services {
+        for o in crate::apps::origins::for_service(&svc.id, &svc.name) {
+            if let Some((_, h, _)) = invites::url_host(&o) {
+                out.push(h);
+            }
+        }
+        if !sub.is_empty() && !svc.name.trim().is_empty() {
+            out.push(label(&svc.name));
+        }
+    }
+    if !sub.is_empty() {
+        out.extend(k2_core::tunnel::subdomains::current().targets.keys().map(|l| label(l)));
+    }
+    out
 }
 
 /// Can any workspace's agent read hosted mailbox `address` (its own, or a
@@ -606,6 +651,13 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
         Err(invites::MintError::Throttled) => {
             return refusal("429 Too Many Requests", "throttled", "one invite per person a minute: wait, then send it again")
         }
+        Err(invites::MintError::TiedElsewhere) => {
+            return refusal(
+                "409 Conflict",
+                skin::ties::TIED_ELSEWHERE,
+                &format!("{} is tied to another workspace's agent; only the owner's reset lifts that", person.username),
+            )
+        }
         Err(invites::MintError::Store(e)) => return CliResponse::internal_error(e),
     };
     let Some(sender) = sender else {
@@ -730,8 +782,22 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
         Ok(s) => s,
         Err(e) => return CliResponse::internal_error(e),
     };
-    // K2's own page only, never the App's (its agent controls that one).
-    let page = k2_set_password_page();
+    // K2's own page only, never the App's (its agent controls that one),
+    // and only on a front door no App answers on.
+    let page = match k2_set_password_page() {
+        Ok(p) => p,
+        Err(why) if code => {
+            k2_core::log_debug!("[invites] owner reset for {}: code only ({why})", person.username);
+            None
+        }
+        Err(why) => {
+            return refusal(
+                "409 Conflict",
+                "front_door_unsafe",
+                &format!("{why}. Fix the front door (Settings → K2 Server → Domains), or use --code and give the person the code yourself"),
+            )
+        }
+    };
     if page.is_none() && !code {
         return refusal(
             "409 Conflict",
@@ -739,18 +805,27 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
             "this box has no front door, so K2 has no set-password page of its own to send: use --code and give the person the code yourself",
         );
     }
-    // An agent set this person's email: never send to it by default
-    // (security review item 3).
-    let tie = skin::ties::get(&person.id).ok().flatten();
-    if !code && to.is_none() && tie.as_ref().is_some_and(|t| t.reasons.iter().any(|r| r == skin::ties::REASON_EMAIL)) {
-        return refusal(
-            "409 Conflict",
-            "email_set_by_agent",
-            &format!(
-                "an agent set {}'s email, so a reset sent there could reach the agent: give another address (--to <email>) or get the link yourself (--code)",
-                person.username
-            ),
-        );
+    // The stored email is never the default for anyone an agent or App
+    // key touched (any tie: it could have chosen the address), nor for an
+    // email from before this release the owner hasn't confirmed
+    // (verification review 2026-10-26, item 1).
+    let refused = match skin::ties::stored_email_refused(&person.id) {
+        Ok(r) => r,
+        Err(e) => return CliResponse::internal_error(e),
+    };
+    if !code && to.is_none() {
+        if let Some(why) = refused {
+            let because = if why == skin::ties::EMAIL_TIED {
+                format!("an agent or App key set {} up and could have chosen the stored email", person.username)
+            } else {
+                format!("{}'s stored email is from before K2 recorded who sets emails (an agent could have set it)", person.username)
+            };
+            return refusal(
+                "409 Conflict",
+                "email_unconfirmed",
+                &format!("{because}, so a reset sent there could reach an agent: give an address you know is theirs (--to <email>) or get the link yourself (--code)"),
+            );
+        }
     }
     let recipient = to.clone().or_else(|| person.email.clone());
     if !code && recipient.is_none() {
@@ -777,9 +852,13 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
     };
     let by = By::Owner { actor: actor.to_string() };
     let sent_to = if code { None } else { recipient.as_deref() };
-    let minted = match invites::mint(&person.id, &app, invites::PURPOSE_OWNER_RESET, settings.reset_ttl_secs, sent_to.or(to.as_deref()), to.is_some(), None, actor) {
+    // An owner reset lives K2's default (24 h), never the App's setting
+    // (an App's agent sets that; verification review 2026-10-26, item 7).
+    let ttl = invites::DEFAULT_RESET_TTL_SECS;
+    let minted = match invites::mint(&person.id, &app, invites::PURPOSE_OWNER_RESET, ttl, sent_to.or(to.as_deref()), to.is_some(), None, actor) {
         Ok(m) => m,
         Err(invites::MintError::Throttled) => return refusal("429 Too Many Requests", "throttled", "wait a minute, then send it again"),
+        Err(invites::MintError::TiedElsewhere) => return CliResponse::internal_error("an owner reset never ties"),
         Err(invites::MintError::Store(e)) => return CliResponse::internal_error(e),
     };
     let Some(sender) = sender else {
@@ -850,10 +929,16 @@ pub fn app_key_reset(app: &str, username: &str, actor: &str) -> Result<Value, (u
         Ok(None) => return Err((409, "no_mail", "the App's workspace has no address it can send from (k2 hostmail create); the key never gets the link".to_string())),
         Err(r) => return Err((409, "no_mail", r.body)),
     };
+    // A person tied to another workspace is never reset through this
+    // App (its page would see the link; review item 5).
+    if skin::ties::get(&person.id).map_err(|e| (500, "store", e))?.is_some_and(|t| t.workspace_id != ws) {
+        return Err((409, skin::ties::TIED_ELSEWHERE, "this person is tied to another workspace; only the owner resets them".to_string()));
+    }
     skin::ties::set(&person.id, skin::ties::TieWrite { workspace_id: &ws, set_by: actor, reason: skin::ties::REASON_APP_KEY }).map_err(|e| (500, "store", e))?;
     let minted = match invites::mint(&person.id, app, invites::PURPOSE_RESET, settings.reset_ttl_secs, Some(&email), false, Some((&ws, skin::ties::REASON_APP_KEY)), actor) {
         Ok(m) => m,
         Err(invites::MintError::Throttled) => return Err((429, "throttled", "wait a minute".to_string())),
+        Err(invites::MintError::TiedElsewhere) => return Err((409, skin::ties::TIED_ELSEWHERE, "this person is tied to another workspace; only the owner resets them".to_string())),
         Err(invites::MintError::Store(e)) => return Err((500, "store", e)),
     };
     let mail = Mail { purpose: invites::PURPOSE_RESET, app, to: &email, person: &person, page: &page, sender: &sender, by: &by, settings: &settings };
@@ -1034,6 +1119,9 @@ fn page_hosts(app: &str) -> Vec<String> {
 
 /// The card's action id ([`crate::action_cards::run`]).
 pub const CARD_ACTION: &str = "app_user.reset";
+/// Retired (verification review 2026-10-26, items 1 and 8): a tied person's
+/// stored email is never a reset target. Answered like [`CARD_SHOW_LINK`]
+/// on cards posted before.
 pub const CARD_SEND: &str = "Send reset link";
 pub const CARD_OTHER_EMAIL: &str = "Send to another email…";
 pub const CARD_SHOW_LINK: &str = "Show a one-time link";
@@ -1162,9 +1250,8 @@ fn card_text(t: &crate::skin_routes::TieDisplay, p: &skin::SkinPrincipal, grants
     let parts = waiting_parts(&t.tie, grants, roles);
     let what = if parts.is_empty() { "more access".to_string() } else { parts.join(", ") };
     let to = match p.email.as_deref() {
-        Some(e) if t.tie.reasons.iter().any(|r| r == "email") => format!("{agent} set the email ({e}), so the reset link can't go there: send it to another email, or show a one-time link."),
-        Some(e) => format!("Reset link goes to {e}."),
-        None => format!("{u} has no email yet: send to another email, or show a one-time link."),
+        Some(e) => format!("{agent} could have chosen the stored email ({e}), so the reset never goes there: send it to an email you know is theirs, or get a one-time link to hand them."),
+        None => format!("{u} has no email: send it to an email you know is theirs, or get a one-time link to hand them."),
     };
     let title = format!("Extra access for {u} waits for a password reset");
     let body = format!(
@@ -1183,12 +1270,10 @@ fn post_card(t: &crate::skin_routes::TieDisplay, p: &skin::SkinPrincipal, grants
         result: None,
         view: None,
     };
-    // An agent set the email: never offer to send there (item 3).
-    let options: Vec<&str> = if t.tie.reasons.iter().any(|r| r == skin::ties::REASON_EMAIL) {
-        vec![CARD_OTHER_EMAIL, CARD_SHOW_LINK, CARD_NOT_NOW]
-    } else {
-        vec![CARD_SEND, CARD_OTHER_EMAIL, CARD_SHOW_LINK, CARD_NOT_NOW]
-    };
+    // A tied person's stored email is never offered (item 1), and nothing
+    // here fails for want of a sender: both ways go through the owner's
+    // terminal or Settings (item 8).
+    let options: Vec<&str> = vec![CARD_SHOW_LINK, CARD_OTHER_EMAIL, CARD_NOT_NOW];
     match crate::overlay_routes::present_action_card(
         None,
         &t.tie.workspace_id,
@@ -1202,7 +1287,7 @@ fn post_card(t: &crate::skin_routes::TieDisplay, p: &skin::SkinPrincipal, grants
         crate::overlay_routes::Presented::Card { .. } | crate::overlay_routes::Presented::Waiting { .. } => Ok(()),
         crate::overlay_routes::Presented::NoThread => {
             let body = format!(
-                "{prompt}\n\nSend the reset link: Settings → User Access → {u} → Send reset link, or k2 app user reset {u} (--to <email>, or --code for a one-time link) from a terminal outside K2.",
+                "{prompt}\n\nFrom a terminal outside K2: k2 app user reset {u} --code (a one-time link to hand them), or --to <email> --from <an address no agent reads>. Or Settings → User Access → {u}.",
                 u = p.username
             );
             crate::feedback_routes::file_owners_only_notice(&t.tie.workspace_id, &t.handle, &title, &body).map(|_| ())
@@ -1210,28 +1295,18 @@ fn post_card(t: &crate::skin_routes::TieDisplay, p: &skin::SkinPrincipal, grants
     }
 }
 
-/// A person tapped the card (`by`: `owner` or a login). The link itself is
-/// never shown on a Thread: the agent reads it.
-pub fn run_card(params: &Value, answer: &str, by: &str) -> Result<Value, String> {
+/// A person tapped the card (`by`: `owner` or a login). Nothing is sent
+/// or minted from a Thread, and the link is never shown on one (the agent
+/// reads it): each answer says where the owner gets it.
+pub fn run_card(params: &Value, answer: &str, _by: &str) -> Result<Value, String> {
     let u = params["username"].as_str().filter(|s| !s.is_empty()).ok_or("the card names nobody")?;
     match answer {
-        CARD_SEND => {
-            let actor = if by == "owner" { "owner".to_string() } else { format!("user:{by}") };
-            let r = handle_reset_link(json!({ "username": u }).to_string().as_bytes(), &actor, true);
-            let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
-            if !r.status.starts_with("200") {
-                return Err(format!("not sent: {}", v["error"]["hint"].as_str().unwrap_or(&r.body)));
-            }
-            let message = match v["delivered"].as_str() {
-                Some("sent") => format!("Reset link sent to {}.", v["sentTo"].as_str().unwrap_or("their email")),
-                Some("held") => format!("Reset link to {} is waiting for approval.", v["sentTo"].as_str().unwrap_or("their email")),
-                // No mail path: never put the link on a Thread.
-                _ => format!("This box can't mail it. Run k2 app user reset {u} --code from a terminal outside K2 for a one-time link."),
-            };
-            Ok(json!({ "sent": v["delivered"] == "sent", "message": message }))
-        }
-        CARD_OTHER_EMAIL => Ok(json!({ "message": format!("Send it elsewhere: k2 app user reset {u} --to <email> from a terminal outside K2, or Settings → User Access → {u}.") })),
-        CARD_SHOW_LINK => Ok(json!({ "message": format!("A one-time link is never shown on a Thread (the agent reads it): k2 app user reset {u} --code from a terminal outside K2, or Settings → User Access → {u}.") })),
+        CARD_SHOW_LINK | CARD_SEND => Ok(json!({
+            "message": format!("Get the one-time link where the agent can't see it: k2 app user reset {u} --code from a terminal outside K2, or Settings → User Access → {u} → Show a one-time link. Hand it to {u} yourself.")
+        })),
+        CARD_OTHER_EMAIL => Ok(json!({
+            "message": format!("Mail it to an address you know is theirs: k2 app user reset {u} --to <email> --from <an address no agent reads> from a terminal outside K2, or Settings → User Access → {u}.")
+        })),
         _ => Ok(json!({ "message": "Not now. Settings → User Access shows who waits for a reset." })),
     }
 }
@@ -1239,6 +1314,32 @@ pub fn run_card(params: &Value, answer: &str, by: &str) -> Result<Value, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verification review 2026-10-26, item 2: K2's own page only on an
+    /// https front door (or exact localhost) that no App answers on.
+    #[test]
+    fn the_owner_reset_page_needs_a_safe_front_door() {
+        let apps = vec!["shop.rosson.k2.dev".to_string(), "shop.example.com".to_string()];
+        assert_eq!(front_door_page("https://rosson.k2.dev/", &apps).unwrap(), "https://rosson.k2.dev/cli/skin/password/set");
+        assert_eq!(front_door_page("http://localhost:7001", &apps).unwrap(), "http://localhost:7001/cli/skin/password/set");
+        for bad in ["http://rosson.k2.dev", "https://shop.rosson.k2.dev", "https://SHOP.example.com/", "http://localhost.evil.example", "ftp://x", "https://u@rosson.k2.dev"] {
+            assert!(front_door_page(bad, &apps).is_err(), "{bad}");
+        }
+    }
+
+    /// Item 8: every card answer works without a sender and mints nothing
+    /// (an old card's Send reads as Show a one-time link).
+    #[test]
+    fn card_answers_point_to_the_owners_terminal() {
+        let params = json!({ "username": "tina" });
+        for answer in [CARD_SHOW_LINK, CARD_SEND] {
+            let v = run_card(&params, answer, "owner").expect(answer);
+            let m = v["message"].as_str().unwrap();
+            assert!(m.contains("k2 app user reset tina --code") && !m.contains("k2inv_"), "{m}");
+        }
+        let m = run_card(&params, CARD_OTHER_EMAIL, "owner").unwrap()["message"].as_str().unwrap().to_string();
+        assert!(m.contains("--to <email> --from"), "{m}");
+    }
 
     #[test]
     fn ttl_words_read_like_people_write() {

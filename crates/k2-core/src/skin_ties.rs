@@ -40,6 +40,15 @@ pub const REASON_AGENT_LOGIN: &str = "agent_login";
 /// Carried over from App caps' first tie table (step 6).
 pub const REASON_UPGRADE: &str = "upgrade";
 
+/// The start of [`set_conn`]'s refusal when a person is already tied to
+/// another workspace.
+pub const TIED_ELSEWHERE: &str = "tied_elsewhere";
+/// [`stored_email_refused`]: the person is tied.
+pub const EMAIL_TIED: &str = "tied";
+/// [`stored_email_refused`]: an email from before this release (or from a
+/// lifted tie) the owner hasn't confirmed.
+pub const EMAIL_UNCONFIRMED: &str = "unconfirmed";
+
 /// Step 6: the ties and the invite / owner-reset links. A file an earlier
 /// 0.46.4 build opened may already hold App caps' first `principal_agent_ties`
 /// (`principal_id, tied_to, tied_at`) and `principal_person_claims`: their
@@ -114,6 +123,55 @@ pub(super) fn step6_ties_and_invites(conn: &Connection) -> Result<(), String> {
     if claims {
         conn.execute_batch("DROP TABLE principal_person_claims;").map_err(|e| format!("skin.db step 6: {e}"))?;
     }
+    marks_and_emails(conn)
+}
+
+/// Step 6, the rest (verification review 2026-10-26, items 1 and 3):
+///
+/// - Every owner agent mark (`principals.agent_workspace`) is a tie
+///   (`agent_login`), so a marked login is held to its workspace from the
+///   first start; a mark that names another workspace than an older tie
+///   is set to the tie's (mark and tie never disagree).
+/// - Every email stored before this release is *unconfirmed*: an agent
+///   could set any guest's email then, and nothing recorded who did. An
+///   owner reset never mails an unconfirmed email ([`stored_email_refused`]);
+///   the owner setting the email (or a reset to an address the owner gave)
+///   confirms it.
+fn marks_and_emails(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS principal_email_unconfirmed (
+            principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
+            since        INTEGER NOT NULL
+         );",
+    )
+    .map_err(|e| format!("skin.db step 6 (emails): {e}"))?;
+    if super::column_exists(conn, "principals", "agent_workspace")? {
+        conn.execute(
+            &format!(
+                "INSERT OR IGNORE INTO principal_agent_ties (principal_id, workspace_id, host_ok, reasons, set_by, set_at)
+                 SELECT p.id, TRIM(p.agent_workspace),
+                        EXISTS (SELECT 1 FROM grants g WHERE g.subject_kind = 'principal' AND g.subject_id = p.id
+                                  AND g.kind = 'app' AND g.target_id = '{HOST_APP_ID}' AND g.enabled != 0),
+                        '[\"{REASON_AGENT_LOGIN}\"]', 'upgrade:0.46.4', ?1
+                   FROM principals p WHERE p.agent_workspace IS NOT NULL AND TRIM(p.agent_workspace) != ''"
+            ),
+            params![now_secs()],
+        )
+        .map_err(|e| format!("skin.db step 6 (marks): {e}"))?;
+        conn.execute(
+            "UPDATE principals SET agent_workspace = (SELECT t.workspace_id FROM principal_agent_ties t WHERE t.principal_id = principals.id)
+              WHERE agent_workspace IS NOT NULL AND TRIM(agent_workspace) != ''
+                AND EXISTS (SELECT 1 FROM principal_agent_ties t WHERE t.principal_id = principals.id AND t.workspace_id != TRIM(principals.agent_workspace))",
+            [],
+        )
+        .map_err(|e| format!("skin.db step 6 (marks agree): {e}"))?;
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO principal_email_unconfirmed (principal_id, since)
+         SELECT id, ?1 FROM principals WHERE email IS NOT NULL AND TRIM(email) != ''",
+        params![now_secs()],
+    )
+    .map_err(|e| format!("skin.db step 6 (emails): {e}"))?;
     Ok(())
 }
 
@@ -128,7 +186,7 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, String> {
 pub(super) fn owner_claim(principal_id: &str, by: &str) -> Result<(), String> {
     with_conn(|conn| {
         let tx = super::immediate_tx(conn)?;
-        drop_conn(&tx, principal_id)?;
+        release_conn(&tx, principal_id)?;
         tx.execute("UPDATE principals SET password_hash = NULL WHERE id = ?1", params![principal_id])
             .map_err(|e| format!("owner claim: {e}"))?;
         super::revoke_sessions_for_principal(&tx, principal_id)?;
@@ -209,6 +267,13 @@ pub(super) fn set_conn(conn: &Connection, principal_id: &str, w: TieWrite<'_>) -
         )?;
     }
     match existing {
+        // One workspace per tie: a second workspace (another App's forgot,
+        // another workspace's mark) is refused, never folded in, so the tie,
+        // the mark and every clamp name the same workspace (verification
+        // review 2026-10-26, items 3 and 5). An owner reset lifts it first.
+        Some(t) if t.workspace_id != ws => {
+            return Err(format!("{TIED_ELSEWHERE}: this person is tied to another workspace ({}); only an owner reset lifts it", t.workspace_id));
+        }
         None => {
             conn.execute(
                 "INSERT INTO principal_agent_ties (principal_id, workspace_id, host_ok, reasons, set_by, set_at)
@@ -266,6 +331,69 @@ pub(super) fn drop_conn(conn: &Connection, principal_id: &str) -> Result<bool, S
     conn.execute("DELETE FROM principal_agent_ties WHERE principal_id = ?1", params![principal_id])
         .map(|n| n > 0)
         .map_err(|e| format!("tie delete: {e}"))
+}
+
+/// The owner takes `principal_id` over (an owner reset used, or an owner
+/// claim), inside the caller's transaction: the tie goes, the owner's
+/// agent mark goes with it (mark and tie stay in step), and a stored
+/// email kept from the tied time stays unconfirmed (an agent could have
+/// chosen it), so the next owner reset still won't mail it.
+pub(super) fn release_conn(conn: &Connection, principal_id: &str) -> Result<(), String> {
+    if drop_conn(conn, principal_id)? {
+        conn.execute(
+            "INSERT OR IGNORE INTO principal_email_unconfirmed (principal_id, since)
+             SELECT id, ?2 FROM principals WHERE id = ?1 AND email IS NOT NULL AND TRIM(email) != ''",
+            params![principal_id, now_secs()],
+        )
+        .map_err(|e| format!("tie release (email): {e}"))?;
+    }
+    conn.execute("UPDATE principals SET agent_workspace = NULL WHERE id = ?1", params![principal_id])
+        .map_err(|e| format!("tie release (mark): {e}"))?;
+    Ok(())
+}
+
+/// The owner confirmed `principal_id`'s stored email (set it, or gave the
+/// address a used owner reset went to), inside the caller's transaction.
+pub(super) fn confirm_email_conn(conn: &Connection, principal_id: &str) -> Result<(), String> {
+    conn.execute("DELETE FROM principal_email_unconfirmed WHERE principal_id = ?1", params![principal_id])
+        .map(|_| ())
+        .map_err(|e| format!("email confirm: {e}"))
+}
+
+/// Why an owner reset must not go to `principal_id`'s stored email
+/// (verification review 2026-10-26, item 1), or `None` when it may:
+/// - [`EMAIL_TIED`]: any tie (an agent or App key made them, invited them,
+///   set their email or password; any of those could choose the email);
+/// - [`EMAIL_UNCONFIRMED`]: stored before this release, or kept from a
+///   tie the owner lifted, and not confirmed by the owner since.
+pub fn stored_email_refused(principal_id: &str) -> Result<Option<&'static str>, String> {
+    with_conn(|conn| stored_email_refused_conn(conn, principal_id))
+}
+
+pub(super) fn stored_email_refused_conn(conn: &Connection, principal_id: &str) -> Result<Option<&'static str>, String> {
+    if get_conn(conn, principal_id)?.is_some() {
+        return Ok(Some(EMAIL_TIED));
+    }
+    let unconfirmed: bool = conn
+        .query_row("SELECT EXISTS (SELECT 1 FROM principal_email_unconfirmed WHERE principal_id = ?1)", params![principal_id], |r| r.get(0))
+        .map_err(|e| format!("email confirm lookup: {e}"))?;
+    Ok(unconfirmed.then_some(EMAIL_UNCONFIRMED))
+}
+
+/// Every principal whose stored email an owner reset won't use, by id.
+pub fn stored_email_refusals() -> Result<std::collections::HashMap<String, &'static str>, String> {
+    with_conn(|conn| {
+        let mut out = std::collections::HashMap::new();
+        let mut st = conn.prepare("SELECT principal_id FROM principal_email_unconfirmed").map_err(|e| format!("email confirm list: {e}"))?;
+        for id in st.query_map([], |r| r.get::<_, String>(0)).map_err(|e| format!("email confirm list: {e}"))? {
+            out.insert(id.map_err(|e| format!("email confirm list: {e}"))?, EMAIL_UNCONFIRMED);
+        }
+        let mut st = conn.prepare("SELECT principal_id FROM principal_agent_ties").map_err(|e| format!("tie list: {e}"))?;
+        for id in st.query_map([], |r| r.get::<_, String>(0)).map_err(|e| format!("tie list: {e}"))? {
+            out.insert(id.map_err(|e| format!("tie list: {e}"))?, EMAIL_TIED);
+        }
+        Ok(out)
+    })
 }
 
 // ── the ceiling ──────────────────────────────────────────────────────

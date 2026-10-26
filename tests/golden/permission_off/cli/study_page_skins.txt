@@ -113,10 +113,18 @@ PER-APP LOGINS (0.45.5)
   files:download, chat), the extra waits until they reset their password:
   sign-in, refresh and live sessions stay at that workspace's access, no
   chat pass. Settings → User Access shows "Waiting for reset"; K2 also
-  posts one card. k2 app user reset <u> --code gives you a one-time link
-  on K2's own page (never the App's); using it starts the rest. Mail it
-  with --from <an address no agent reads> to the stored email or --to; an
-  email an agent set is never used (--to or --code).
+  posts one card (its answers point to your terminal or Settings: no
+  link is ever minted on, or shown in, a Thread). k2 app user reset <u>
+  --code gives you a one-time link on K2's own page (never the App's);
+  using it starts the rest. Mail it with --from <an address no agent
+  reads> and --to <an email you know is theirs>: a tied person's stored
+  email is never used (the agent could have chosen it), nor is an email
+  stored before 0.46.4 until you set it yourself (k2 app user email).
+  An owner reset link lives 24 hours whatever the App's setting. A person
+  is tied to one workspace: another workspace's App can't invite or
+  reset them until your reset lifts the tie. Your reset also clears an
+  agent mark (k2 app user agent); re-marking a login to another workspace
+  needs that reset first.
 
 INVITES (0.46.4)
   k2 app user invite <u> --app <app> [--email e] [--role R]
@@ -152,7 +160,9 @@ INVITES (0.46.4)
   the set-password link, its expiry and "If you weren't expecting this,
   ignore it. Nobody at <App> will ask for your password." after the body;
   a template carries no links at all ({link}, k2inv_, http(s):// and www.
-  are refused). An owner reset always uses K2's own text. No
+  are refused), and a value that reads as a link (an App or person name
+  like evil.example) is replaced. An owner reset always uses K2's own
+  text. A one-time-link mail is kept at rest with its link hidden. No
   template: K2's own ("You're invited to <App>").
   Isolation for a person only holds when they have no box login (User
   Access → host switch off). Box login off still ends ALL their sessions.

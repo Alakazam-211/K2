@@ -222,6 +222,12 @@ pub fn handle_users_get() -> CliResponse {
                 Ok(t) => t,
                 Err(e) => return CliResponse::internal_error(e),
             };
+            // Whose stored email an owner reset won't mail (any tie, or an
+            // email the owner hasn't confirmed; verification item 1).
+            let email_refused = match skin::ties::stored_email_refusals() {
+                Ok(m) => m,
+                Err(e) => return CliResponse::internal_error(e),
+            };
             let users: Vec<serde_json::Value> = users
                 .iter()
                 .map(|u| {
@@ -239,6 +245,10 @@ pub fn handle_users_get() -> CliResponse {
                             v["tiedTo"] = serde_json::Value::Null;
                         }
                     }
+                    v["storedEmailRefused"] = match email_refused.get(&u.id) {
+                        Some(why) => serde_json::json!(why),
+                        None => serde_json::Value::Null,
+                    };
                     if let Some(t) = tests.get(&u.id) {
                         let app_id = {
                             let db = k2_core::db::shared();
@@ -3223,7 +3233,13 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str, pass:
 /// ([`crate::app_user_invites::forgot_by_pass`]). The token never goes back
 /// to the caller: the answer is the bare `{ok:true}`.
 fn forgot_by_pass(pass: &skin::SkinPass, username: &str) -> CliResponse {
-    match skin::password_reset_throttled(&format!("pass:{}:{username}", pass.id)) {
+    // Per person, not per pass: minting passes never multiplies the mails
+    // one person gets (verification review 2026-10-26, item 6). Every App
+    // pass shares one clock per name (normalized; a name with no guest
+    // costs the same); the owner's own forgot keeps its own, so an App
+    // can't keep the owner from resetting someone.
+    let key = format!("app-forgot:{}", username.trim().to_ascii_lowercase());
+    match skin::password_reset_throttled(&key) {
         Ok(true) => {
             return CliResponse {
                 status: "429 Too Many Requests",

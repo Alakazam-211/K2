@@ -205,7 +205,8 @@ describe('PeopleSection', () => {
   })
 
   // agent-app-users T6.1: a tied, pending person shows the badge and the
-  // three reset actions; an untied person shows none.
+  // reset actions; an untied person shows none. A tied person's stored
+  // email is never offered (verification review 2026-10-26, item 1).
   it('shows Waiting for reset with its actions only for a tied, pending person', async () => {
     allowRoster([
       { username: 'tina', pendingReset: true, tiedTo: 'sales', email: 'tina@example.test' },
@@ -218,16 +219,18 @@ describe('PeopleSection', () => {
     expect(screen.getByLabelText('Open owen').textContent).not.toContain('Waiting for reset')
 
     fireEvent.click(screen.getByLabelText('Open owen'))
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Send reset link' })).toBeNull())
-    expect(screen.queryByRole('button', { name: 'Show a one-time link' })).toBeNull()
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Show a one-time link' })).toBeNull())
+    expect(screen.queryByRole('button', { name: 'Send to an email…' })).toBeNull()
 
     fireEvent.click(screen.getByLabelText('Open tina'))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send reset link' })).toBeTruthy())
-    expect(screen.getByRole('button', { name: 'Send to another email…' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Show a one-time link' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Send reset link' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Show a one-time link' })).toBeTruthy())
+    expect(screen.queryByRole('button', { name: 'Send reset link' })).toBeNull()
+    expect(screen.getByText(/so a reset never goes there/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Send to an email…' }))
+    fireEvent.change(screen.getByLabelText('Reset link email for tina'), { target: { value: 'tina@home.test' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => {
-      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/reset-link', { username: 'tina' })
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/reset-link', { username: 'tina', to: 'tina@home.test' })
     })
     await waitFor(() => expect(screen.getByText('Reset link sent to tina@example.test.')).toBeTruthy())
 
@@ -239,16 +242,19 @@ describe('PeopleSection', () => {
     await waitFor(() => expect(screen.getByText('https://x.example/cli/skin/password/set#k2inv_abc')).toBeTruthy())
   })
 
-  // Security review item 3: an email an agent set is never a reset target.
-  it('never offers the stored email when an agent set it', async () => {
-    allowRoster([{ username: 'tess', pendingReset: true, tiedTo: 'sales', tiedReasons: ['created', 'email'], email: 'tess@agent.test' }])
-    render(<PeopleSection />)
-    await waitFor(() => expect(screen.getByLabelText('Open tess')).toBeTruthy())
-    fireEvent.click(screen.getByLabelText('Open tess'))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send reset link' })).toBeTruthy())
-    expect((screen.getByRole('button', { name: 'Send reset link' }) as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByText(/so a reset can't go there/)).toBeTruthy()
-    expect((screen.getByRole('button', { name: 'Show a one-time link' }) as HTMLButtonElement).disabled).toBe(false)
+  // Security review item 3 + verification item 1: whatever the tie's
+  // reason, the stored email is never a reset target.
+  it('never offers the stored email for any tie reason', async () => {
+    for (const reasons of [['created'], ['invite'], ['app_key'], ['created', 'email']]) {
+      allowRoster([{ username: 'tess', pendingReset: true, tiedTo: 'sales', tiedReasons: reasons, email: 'tess@agent.test' }])
+      const view = render(<PeopleSection />)
+      await waitFor(() => expect(screen.getByLabelText('Open tess')).toBeTruthy())
+      fireEvent.click(screen.getByLabelText('Open tess'))
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Show a one-time link' })).toBeTruthy())
+      expect(screen.queryByRole('button', { name: 'Send reset link' })).toBeNull()
+      expect(screen.getByText(/so a reset never goes there/)).toBeTruthy()
+      view.unmount()
+    }
   })
 
   it('adds a person with password, full name, and optional email', async () => {

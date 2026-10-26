@@ -923,7 +923,7 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     owner_post(
         port,
         "/cli/skin/access/invites",
-        json!({ "app": shop, "setPasswordUrl": format!("{door}/apps/shop/set"), "resetSubject": "App reset {app}", "resetBody": "The App's own reset text." }),
+        json!({ "app": shop, "setPasswordUrl": format!("{door}/apps/shop/set"), "resetSubject": "App reset {app}", "resetBody": "The App's own reset text.", "resetTtl": "2h" }),
     )
     .await;
 
@@ -945,7 +945,9 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     assert_eq!(notes.len(), 1, "one card per newly pending person");
     let note = notes[0].body.clone().unwrap_or_default();
     assert!(note.contains("the box login"), "{note}");
-    assert!(note.contains("set the email") && note.contains("can't go there"), "{note}");
+    assert!(note.contains("could have chosen the stored email") && note.contains("never goes there"), "{note}");
+    assert!(note.contains("--code") && !note.contains("k2inv_"), "the note points to the owner's terminal: {note}");
+    assert_eq!(user_row(port, &u1).await["storedEmailRefused"], "tied");
 
     // T4.4: never an agent's (manage-Apps on).
     let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": u1 })).await;
@@ -954,7 +956,31 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     // Review items 2 and 3: the agent-set email is refused; mail needs a
     // sender no agent reads; the workspace mailbox is refused.
     let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u1, "from": system })).await;
-    assert_eq!((r.status, r.code()), (409, "email_set_by_agent".to_string()), "{}", r.body);
+    assert_eq!((r.status, r.code()), (409, "email_unconfirmed".to_string()), "{}", r.body);
+    // Verification item 1: any tie refuses the stored email, not just an
+    // email the agent set later: here the agent gave it at create.
+    let k = format!("k{tag}");
+    let ek = format!("{k}@agent-chosen.test");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": k, "app": shop, "email": ek })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(tie_of(&k).expect("tied").reasons, vec!["created".to_string()]);
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": k, "from": system })).await;
+    assert_eq!((r.status, r.code()), (409, "email_unconfirmed".to_string()), "{}", r.body);
+    assert!(mails_to(&rec, &ek).is_empty(), "nothing went to the address the agent chose");
+    // The owner's --code reset lifts the tie, but the agent's address stays
+    // unconfirmed until the owner sets it.
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": k, "code": true })).await;
+    let ktok = r.json()["link"].as_str().expect("link").split('#').nth(1).unwrap().to_string();
+    assert_eq!(reset_with(port, &ktok, "k-own-pass-123").await.status, 200);
+    assert!(tie_of(&k).is_none());
+    assert_eq!(user_row(port, &k).await["storedEmailRefused"], "unconfirmed");
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": k, "from": system })).await;
+    assert_eq!((r.status, r.code()), (409, "email_unconfirmed".to_string()), "{}", r.body);
+    owner_post(port, "/cli/skin/users/email", json!({ "username": k, "email": ek })).await;
+    assert_eq!(user_row(port, &k).await["storedEmailRefused"], Value::Null, "the owner set it: confirmed");
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": k, "from": system })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(mails_to(&rec, &ek).len(), 1);
     let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u1, "to": "real@example.test" })).await;
     assert_eq!((r.status, r.code()), (409, "owner_sender_required".to_string()), "{}", r.body);
     let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u1, "to": "real@example.test", "from": ws_mailbox })).await;
@@ -1012,7 +1038,7 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     assert_eq!((v["delivered"].clone(), v["sentTo"].clone(), v["from"].clone()), (json!("sent"), json!("real@example.test"), json!(system)), "{v}");
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
     let exp = v["expiresAt"].as_i64().expect("expiresAt");
-    assert!((now + 24 * 3600 - 30..=now + 24 * 3600 + 30).contains(&exp), "24 h: {exp}");
+    assert!((now + 24 * 3600 - 30..=now + 24 * 3600 + 30).contains(&exp), "24 h, never the App's 2 h (verification item 7): {exp}");
     let m = mails_to(&rec, "real@example.test");
     assert_eq!(m.len(), 1);
     assert!(m[0].ephemeral);
@@ -1035,9 +1061,12 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     assert_eq!(rooms(&policy_of(r.json()["token"].as_str().unwrap()).unwrap()), both, "the widened access is live");
     assert_eq!(user_row(port, &u1).await["tiedTo"], Value::Null);
 
-    // T4.2: the stored email when no agent set it (u2's came from the App
-    // key at creation): mailed there; the owner's earlier code still works.
+    // T4.2 (verification item 1): u2's email came from the App key, so
+    // the stored email is refused; the owner gives the same address
+    // (--to), which confirms it on use; then the stored email works.
     let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u2, "from": system })).await;
+    assert_eq!((r.status, r.code()), (409, "email_unconfirmed".to_string()), "{}", r.body);
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u2, "to": e2, "from": system })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let m = mails_to(&rec, &e2);
     assert_eq!(m.len(), 2);
@@ -1046,6 +1075,10 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     assert!(tie_of(&u2).is_none());
     let r = reset_with(port, &owner_tok, "late-pass-12345").await;
     assert_eq!((r.status, r.body.as_str()), (401, RESET_FAILED), "the newer owner reset voided the older one");
+    assert_eq!(user_row(port, &u2).await["storedEmailRefused"], Value::Null);
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u2, "from": system })).await;
+    assert_eq!(r.status, 200, "the owner confirmed it: {}", r.body);
+    assert_eq!(mails_to(&rec, &e2).len(), 3);
 
     // T4.3: --code: nothing mailed, K2's own page to the owner; it works.
     let g = format!("g{tag}");
@@ -1088,7 +1121,7 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
 }
 
 /// Review item 7: an App's forgot answers the same for everyone (one
-/// throttle per pass and name, taken first), never returns a token, and a
+/// throttle per person across every pass, taken first), never returns a token, and a
 /// used App reset link ties the person to the App's workspace.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s0_an_apps_forgot_is_uniform_and_its_link_ties() {
@@ -1110,11 +1143,16 @@ async fn s0_an_apps_forgot_is_uniform_and_its_link_ties() {
     owner_post(port, "/cli/skin/users/rooms", json!({ "username": g, "app": shop, "rooms": [sales.handle] })).await;
     let r = post(port, "/cli/skin-tokens", OWNER, json!({ "name": format!("p{tag}"), "caps": ["thread:read"], "rooms": [sales.handle] })).await;
     let pass = r.json()["token"].as_str().unwrap().to_string();
+    let r = post(port, "/cli/skin-tokens", OWNER, json!({ "name": format!("q{tag}"), "caps": ["thread:read"], "rooms": [sales.handle] })).await;
+    let pass2 = r.json()["token"].as_str().unwrap().to_string();
     for who in [g.clone(), format!("nobody{tag}")] {
         let r = post(port, "/cli/skin/password/forgot", &pass, json!({ "username": who })).await;
         assert_eq!((r.status, r.json()), (200, json!({ "ok": true })), "{who}: {}", r.body);
         let r = post(port, "/cli/skin/password/forgot", &pass, json!({ "username": who })).await;
         assert_eq!(r.status, 429, "every name is throttled the same way ({who}): {}", r.body);
+        // Verification item 6: per person, not per pass.
+        let r = post(port, "/cli/skin/password/forgot", &pass2, json!({ "username": who })).await;
+        assert_eq!(r.status, 429, "another pass shares the person's clock ({who}): {}", r.body);
     }
     // The owner's own forgot is not blocked by the pass's throttle.
     let r = post(port, "/cli/skin/password/forgot", OWNER, json!({ "username": g })).await;

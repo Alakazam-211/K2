@@ -2795,6 +2795,9 @@ pub fn set_principal_email_tied(
     actor: &str,
     tie: Option<ties::TieWrite<'_>>,
 ) -> Result<SkinPrincipal, String> {
+    // The owner (the owner token or an Owner login) setting it confirms the
+    // email (an owner reset may mail it again); read before the skin lock.
+    let owner_confirms = tie.is_none() && creators::person_may_claim(actor);
     let actor = hook_actor(Some(actor));
     let username = normalize_username(username)?;
     let email = match email {
@@ -2813,6 +2816,9 @@ pub fn set_principal_email_tied(
             .map_err(|e| format!("skin email begin: {e}"))?;
         if let Some(t) = tie {
             ties::set_conn(&tx, &p.id, t)?;
+        }
+        if owner_confirms {
+            ties::confirm_email_conn(&tx, &p.id)?;
         }
         tx.execute(
             "UPDATE principals SET email = ?1 WHERE id = ?2",
@@ -8240,6 +8246,73 @@ mod tests {
         });
     }
 
+    /// Verification review 2026-10-26, items 1 and 3: on upgrade every
+    /// owner agent mark becomes a tie (and agrees with an older tie), and
+    /// every stored email is unconfirmed until the owner sets it. An owner
+    /// reset clears the tie and the mark; an email kept from the tied time
+    /// stays unconfirmed unless the owner gave the address.
+    #[test]
+    fn step6_ties_marked_logins_and_holds_old_emails_until_the_owner_confirms() {
+        with_temp_home(|| {
+            let marked = add_principal("marked").unwrap();
+            let both = add_principal("both").unwrap();
+            let mailed = add_principal("mailed").unwrap();
+            let plain = add_principal("plain").unwrap();
+            set_principal_email("mailed", Some("mailed@example.test")).unwrap();
+            set_principal_email("marked", Some("marked@agent.test")).unwrap();
+            creators::stamp(&both.id, "ws-stamp").unwrap();
+            let path = store_path();
+            *db().lock() = None;
+            {
+                let conn = Connection::open(&path).unwrap();
+                conn.execute_batch(
+                    "DROP TABLE principal_agent_ties; DROP TABLE app_user_invites; DROP TABLE principal_email_unconfirmed;
+                     PRAGMA user_version = 5;",
+                )
+                .unwrap();
+                conn.execute("UPDATE principals SET agent_workspace = 'ws-mark' WHERE id = ?1", params![marked.id]).unwrap();
+                conn.execute("UPDATE principals SET agent_workspace = 'ws-other' WHERE id = ?1", params![both.id]).unwrap();
+            }
+            let _ = std::fs::remove_file(path.with_file_name("skin.db.pre-6.bak"));
+            assert!(principal_exists("marked").unwrap());
+            let t = ties::get(&marked.id).unwrap().expect("a marked login is tied");
+            assert_eq!((t.workspace_id.as_str(), t.reasons.clone()), ("ws-mark", vec![ties::REASON_AGENT_LOGIN.to_string()]));
+            let t = ties::get(&both.id).unwrap().expect("tied");
+            assert_eq!(
+                principal_agent_workspace(&both.id).unwrap().as_deref(),
+                Some(t.workspace_id.as_str()),
+                "the mark and the tie name one workspace"
+            );
+            assert_eq!(ties::stored_email_refused(&mailed.id).unwrap(), Some(ties::EMAIL_UNCONFIRMED), "an email from before the release");
+            assert_eq!(ties::stored_email_refused(&marked.id).unwrap(), Some(ties::EMAIL_TIED));
+            assert_eq!(ties::stored_email_refused(&plain.id).unwrap(), None, "no email, nothing to refuse");
+            // Not the owner: still unconfirmed. The owner: confirmed.
+            set_principal_email_as("mailed", Some("mailed@example.test"), "user:no-such-login").unwrap();
+            assert_eq!(ties::stored_email_refused(&mailed.id).unwrap(), Some(ties::EMAIL_UNCONFIRMED));
+            set_principal_email_as("mailed", Some("mailed@example.test"), "owner-token").unwrap();
+            assert_eq!(ties::stored_email_refused(&mailed.id).unwrap(), None);
+
+            // The owner's reset, shown to the owner (--code): tie and mark go;
+            // the email the agent may have chosen stays unconfirmed.
+            let m = invites::mint(&marked.id, HOST_APP_ID, invites::PURPOSE_OWNER_RESET, 3600, None, false, None, "owner-token").unwrap();
+            invites::activate(&m.id).unwrap();
+            assert_eq!(invites::consume(&m.token, "persons-own-pw-1").unwrap(), invites::Consume::Ok);
+            assert!(ties::get(&marked.id).unwrap().is_none());
+            assert_eq!(principal_agent_workspace(&marked.id).unwrap(), None, "the mark goes with the tie");
+            assert_eq!(ties::stored_email_refused(&marked.id).unwrap(), Some(ties::EMAIL_UNCONFIRMED));
+            // A reset to an address the owner gave confirms it.
+            ties::set(&marked.id, ties::TieWrite { workspace_id: "ws-mark", set_by: "agent:x", reason: ties::REASON_PASSWORD }).unwrap();
+            let m = invites::mint(&marked.id, HOST_APP_ID, invites::PURPOSE_OWNER_RESET, 3600, Some("real@example.test"), true, None, "owner-token").unwrap();
+            invites::activate(&m.id).unwrap();
+            assert_eq!(invites::consume(&m.token, "persons-own-pw-2").unwrap(), invites::Consume::Ok);
+            assert_eq!(ties::stored_email_refused(&marked.id).unwrap(), None);
+            // A link that would tie to another workspace is never minted.
+            ties::set(&both.id, ties::TieWrite { workspace_id: "ws-stamp", set_by: "agent:x", reason: ties::REASON_PASSWORD }).unwrap();
+            let err = invites::mint(&both.id, "svc-x", invites::PURPOSE_RESET, 3600, None, false, Some(("ws-elsewhere", ties::REASON_APP_RESET)), "pass:p").unwrap_err();
+            assert!(matches!(err, invites::MintError::TiedElsewhere), "{err:?}");
+        });
+    }
+
     /// agent-app-users T3.2/T3.7 (core): a tied guest's login is held to
     /// the ceiling at mint, and an agent's password write ties with
     /// `host_ok` = whether the guest holds the box login then.
@@ -8267,9 +8340,14 @@ mod tests {
             assert!(pass.has_cap_in_room(&ws, CAP_FILES_READ));
             assert!(!pass.has_cap_in_room(&ws, CAP_FILES_DOWNLOAD), "person-only caps are outside the ceiling");
             assert!(!pass.rooms.contains(&other));
-            // A second write keeps the first workspace and merges the reason.
+            // Another workspace is refused and writes nothing (verification
+            // review 2026-10-26, items 3 and 5); the same one merges the reason.
             let t2 = ties::TieWrite { workspace_id: &other, set_by: "agent:ops", reason: ties::REASON_EMAIL };
-            set_principal_email_tied("gina", Some("gina@example.test"), "agent:ops", Some(t2)).unwrap();
+            let err = set_principal_email_tied("gina", Some("gina@example.test"), "agent:ops", Some(t2)).unwrap_err();
+            assert!(err.starts_with(ties::TIED_ELSEWHERE), "{err}");
+            assert_eq!(list_principals().unwrap().into_iter().find(|p| p.username == "gina").unwrap().email, None, "nothing written");
+            let t2 = ties::TieWrite { workspace_id: &ws, set_by: "agent:sales", reason: ties::REASON_EMAIL };
+            set_principal_email_tied("gina", Some("gina@example.test"), "agent:sales", Some(t2)).unwrap();
             let tie = ties::get(&tie.principal_id).unwrap().unwrap();
             assert_eq!((tie.workspace_id.as_str(), tie.reasons.clone()), (ws.as_str(), vec!["password".to_string(), "email".to_string()]));
             // An App that isn't the workspace's (no published row here): denied.
@@ -8502,6 +8580,22 @@ mod tests {
             );
             let err = set_principal_agent("ghost", Some(&handle)).unwrap_err();
             assert!(err.contains("unknown skin user"), "{err}");
+            // Verification item 3: re-marking to another workspace while
+            // tied is refused; the mark and the tie keep naming one.
+            let id2 = uuid::Uuid::new_v4().to_string();
+            {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+                    params![id2, "Other ws", format!("/tmp/skin-agent-{id2}"), format!("otherws{}", &id2[..8])],
+                )
+                .expect("project");
+            }
+            let err = set_principal_agent("ada", Some(&id2)).unwrap_err();
+            assert!(err.starts_with(ties::TIED_ELSEWHERE), "{err}");
+            assert_eq!(principal_agent_workspace(&ada.id).unwrap().as_deref(), Some(id.as_str()));
+            assert_eq!(ties::get(&ada.id).unwrap().unwrap().workspace_id, id);
 
             let cleared = set_principal_agent("ada", None).expect("clear");
             assert!(cleared.agent_workspace.is_none() && cleared.agent_handle.is_none());

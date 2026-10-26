@@ -196,6 +196,31 @@ pub fn check_body(raw: &str) -> Result<String, String> {
 /// The set-password link is K2's to place, never the template's, and a
 /// template carries no other link either (security review 2026-10-25: a
 /// template link is a phishing surface).
+/// Does `s` read as a link a mail client would make clickable
+/// (`http(s)://`, `www.`, a K2 token, a `{link}` slot, or a bare
+/// `name.tld` such as `evil.example`)? Template values (`{app}`, `{name}`,
+/// `{username}`, `{sender}`) that do are replaced before rendering
+/// (verification review 2026-10-26, item 7).
+pub fn link_like(s: &str) -> bool {
+    if has_scheme_link(s) {
+        return true;
+    }
+    let lower = s.to_ascii_lowercase();
+    lower.split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '(' | ')' | '"' | '\'' | ',' | ';')).any(|word| {
+        let word = word.trim_matches(|c: char| matches!(c, '.' | '!' | '?' | ':'));
+        let labels: Vec<&str> = word.split('.').collect();
+        labels.len() >= 2
+            && labels.iter().all(|l| !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+            && labels.last().is_some_and(|tld| tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()))
+    })
+}
+
+/// `http(s)://` (any `://`), `www.`, a K2 token or a `{link}` slot.
+fn has_scheme_link(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    ["www.", "{link}", INVITE_PREFIX, "://"].iter().any(|n| lower.contains(n))
+}
+
 fn check_no_link(s: &str) -> Result<(), String> {
     let lower = s.to_ascii_lowercase();
     if lower.contains("{link}") || lower.contains(INVITE_PREFIX) {
@@ -357,6 +382,24 @@ pub struct Composed {
 
 /// Compose an invite (`purpose` = invite) or a reset (reset / owner_reset).
 pub fn compose(purpose: &str, tpl: &InviteTemplate, v: &MailVars<'_>, link: &str) -> Composed {
+    // A value an agent chose (an App's name, a person's name or username,
+    // an agent's name) never carries a link into the mail.
+    fn safe<'a>(value: &'a str, instead: &'static str) -> &'a str {
+        if link_like(value) {
+            instead
+        } else {
+            value
+        }
+    }
+    let v = &MailVars {
+        app: safe(v.app, "your App"),
+        name: safe(v.name, "there"),
+        // The username is how they sign in (often `first.last`): only a
+        // scheme, `www.` or a token replaces it.
+        username: if has_scheme_link(v.username) { "your account" } else { v.username },
+        sender: safe(v.sender, "K2"),
+        expires: v.expires,
+    };
     let invite = purpose == PURPOSE_INVITE;
     let (default_subject, default_body) = if invite {
         ("You're invited to {app}", "Hello {name},\n\n{sender} invited you to {app}. Set your password to sign in.")
@@ -394,6 +437,10 @@ pub struct Minted {
 pub enum MintError {
     /// One invite per person per [`INVITE_THROTTLE_SECS`].
     Throttled,
+    /// The link would tie the person to a workspace other than the one
+    /// they are tied to (verification review 2026-10-26, item 5): never
+    /// minted; only an owner reset lifts the first tie.
+    TiedElsewhere,
     Store(String),
 }
 
@@ -431,6 +478,11 @@ pub fn mint(
     let now = now_secs();
     with_conn(|conn| {
         let tx = immediate_tx(conn)?;
+        if let Some((ws, _)) = tie_on_use {
+            if ties::get_conn(&tx, principal_id)?.is_some_and(|t| t.workspace_id != ws) {
+                return Ok(Err(MintError::TiedElsewhere));
+            }
+        }
         if purpose == PURPOSE_INVITE {
             let last: Option<i64> = tx
                 .query_row(
@@ -624,14 +676,18 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
             ties::set_conn(&tx, &principal_id, ties::TieWrite { workspace_id: ws, set_by: &set_by, reason: tie_reason.as_deref().unwrap_or(ties::REASON_INVITE) })?;
         }
         if purpose == PURPOSE_OWNER_RESET {
+            // The tie and the owner's agent mark go; an email kept from the
+            // tied time stays unconfirmed, unless the owner gave the
+            // address this link went to (then it is theirs, confirmed).
+            ties::release_conn(&tx, &principal_id)?;
             if set_email != 0 {
                 if let Some(addr) = sent_to.as_deref() {
                     super::ensure_email_free(&tx, addr, Some(&principal_id))?;
                     tx.execute("UPDATE principals SET email = ?1 WHERE id = ?2", params![addr, principal_id])
                         .map_err(|e| format!("invite email: {e}"))?;
+                    ties::confirm_email_conn(&tx, &principal_id)?;
                 }
             }
-            ties::drop_conn(&tx, &principal_id)?;
         }
         tx.commit().map_err(|e| format!("invite commit: {e}"))?;
         Ok(Consume::Ok)
@@ -671,6 +727,28 @@ mod tests {
             assert!(check_subject(bad).is_err(), "{bad}");
         }
         assert!(check_body("Hi {name}, the {app} team saved you a seat.\nSee you soon.").is_ok());
+    }
+
+    #[test]
+    fn values_that_read_as_links_never_reach_the_mail() {
+        for bad in ["https://evil.example", "www.evil.example", "evil.example", "Visit evil.example now", "k2inv_x", "ftp://x", "a.b.co"] {
+            assert!(link_like(bad), "{bad}");
+        }
+        for ok in ["Ada Lovelace", "Dr. Ada", "J.R.R. Tolkien", "Meet", "ada", "ada-2", "in 1.5 hours"] {
+            assert!(!link_like(ok), "{ok}");
+        }
+        // A first.last username stays (they sign in with it); a scheme doesn't.
+        let v = MailVars { app: "Meet", name: "Ada", username: "ada.lovelace", sender: "the bot", expires: "in 1 hour" };
+        assert_eq!(render("{username}", &v), "ada.lovelace");
+        let tpl = InviteTemplate { subject: None, body: Some("Sign in as {username}.".into()) };
+        assert!(compose(PURPOSE_INVITE, &tpl, &v, "https://d.example/x").body.contains("Sign in as ada.lovelace."));
+        let v2 = MailVars { username: "https://evil.example", ..v };
+        assert!(compose(PURPOSE_INVITE, &tpl, &v2, "https://d.example/x").body.contains("Sign in as your account."));
+        let v = MailVars { app: "shop.evil.example", name: "click www.evil.example", username: "ada", sender: "the bot", expires: "in 1 hour" };
+        let c = compose(PURPOSE_INVITE, &InviteTemplate::default(), &v, "https://door.example/cli/skin/password/set#k2inv_t");
+        assert!(!c.subject.contains("evil") && !c.body.contains("evil"), "{} / {}", c.subject, c.body);
+        assert!(c.body.contains("Hello there,") && c.body.contains("your App"), "{}", c.body);
+        assert_eq!(c.body.matches("https://").count(), 1, "only K2's own link: {}", c.body);
     }
 
     #[test]

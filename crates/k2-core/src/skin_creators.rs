@@ -43,7 +43,8 @@ pub fn agent_tie(principal_id: &str) -> Result<Option<String>, String> {
 }
 
 /// Tie a guest an agent of `workspace_id` could now control (`reason`: one
-/// of [`super::ties`]'s reasons). The first workspace is kept.
+/// of [`super::ties`]'s reasons). A person tied to another workspace is
+/// refused (`tied_elsewhere`): one workspace per tie until an owner reset.
 pub fn tie(principal_id: &str, workspace_id: &str, set_by: &str, reason: &str) -> Result<(), String> {
     super::ties::set(principal_id, super::ties::TieWrite { workspace_id, set_by, reason })
 }
@@ -103,8 +104,9 @@ mod tie_tests {
         // A re-key ties it again; the first workspace is kept.
         tie(&bots.id, "ws-other", "agent:other", super::super::ties::REASON_PASSWORD).unwrap();
         assert_eq!(agent_tie(&bots.id).unwrap().as_deref(), Some("ws-other"), "re-keyed: tied again");
-        tie(&bots.id, "ws-third", "agent:third", super::super::ties::REASON_EMAIL).unwrap();
-        assert_eq!(agent_tie(&bots.id).unwrap().as_deref(), Some("ws-other"), "a second tie never overwrites the first");
+        let err = tie(&bots.id, "ws-third", "agent:third", super::super::ties::REASON_EMAIL).unwrap_err();
+        assert!(err.starts_with(super::super::ties::TIED_ELSEWHERE), "{err}");
+        assert_eq!(agent_tie(&bots.id).unwrap().as_deref(), Some("ws-other"), "a second workspace is refused, never folded in");
         // A tie never writes a creator stamp.
         tie(&owners.id, "ws-app", "app-key:k1", super::super::ties::REASON_APP_KEY).unwrap();
         assert_eq!(agent_tie(&owners.id).unwrap().as_deref(), Some("ws-app"));

@@ -7549,7 +7549,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Owner only. A one-time reset link on K2's own page: when used,
                                         extra access that waits for a reset (an agent set this person
                                         up) starts. --code: you get the link. Mailing it needs --from
-                                        <an address no agent reads>; never to an email an agent set
+                                        <an address no agent reads>; a tied person's stored email
+                                        (or one from before 0.46.4 you haven't set) needs --to
   k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] …
                                         The App's link lives, set-password page and own mail text
   k2 app user email <username> [--email e]
@@ -34923,7 +34924,7 @@ cmd_schema() {
     {
       "name": "app user reset",
       "usage": "k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>] [--json]",
-      "description": "Owner only. A one-time reset link. When it is used, the password is set, every session ends, and extra access that waited for a reset (an agent made or set up this person) starts. The link is always K2's own set-password page (the box front door's /cli/skin/password/set, never an App's) with K2's fixed text. --code shows the link to you (the code alone when the box has no front door). Mailing needs --from <an address no agent can read> (a workspace mailbox could be read by its agent); it goes to the stored email, or --to (stored as their email on use). When an agent set the email, the stored email is refused: use --to or --code. Reset links expire (24 h by default; k2 app login settings).",
+      "description": "Owner only. A one-time reset link. When it is used, the password is set, every session ends, and extra access that waited for a reset (an agent made or set up this person) starts. The link is always K2's own set-password page (the box front door's /cli/skin/password/set, never an App's) with K2's fixed text. --code shows the link to you (the code alone when the box has no front door). Mailing needs --from <an address no agent can read> (a workspace mailbox could be read by its agent); it goes to the stored email, or --to (stored as their email on use). The stored email is refused for anyone an agent or App key set up (any tie: it could have chosen the address) and for an email from before 0.46.4 you haven't set since: use --to or --code. The front door must be https and no App's domain. An owner reset link lives 24 h (K2's, never the App's setting).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--app", "arg": "app", "description": "Whose set-password page and link life to use (default: the App the person uses)."},
@@ -38648,10 +38649,18 @@ PER-APP LOGINS (0.45.5)
   files:download, chat), the extra waits until they reset their password:
   sign-in, refresh and live sessions stay at that workspace's access, no
   chat pass. Settings → User Access shows "Waiting for reset"; K2 also
-  posts one card. k2 app user reset <u> --code gives you a one-time link
-  on K2's own page (never the App's); using it starts the rest. Mail it
-  with --from <an address no agent reads> to the stored email or --to; an
-  email an agent set is never used (--to or --code).
+  posts one card (its answers point to your terminal or Settings: no
+  link is ever minted on, or shown in, a Thread). k2 app user reset <u>
+  --code gives you a one-time link on K2's own page (never the App's);
+  using it starts the rest. Mail it with --from <an address no agent
+  reads> and --to <an email you know is theirs>: a tied person's stored
+  email is never used (the agent could have chosen it), nor is an email
+  stored before 0.46.4 until you set it yourself (k2 app user email).
+  An owner reset link lives 24 hours whatever the App's setting. A person
+  is tied to one workspace: another workspace's App can't invite or
+  reset them until your reset lifts the tie. Your reset also clears an
+  agent mark (k2 app user agent); re-marking a login to another workspace
+  needs that reset first.
 
 INVITES (0.46.4)
   k2 app user invite <u> --app <app> [--email e] [--role R]
@@ -38687,7 +38696,9 @@ INVITES (0.46.4)
   the set-password link, its expiry and "If you weren't expecting this,
   ignore it. Nobody at <App> will ask for your password." after the body;
   a template carries no links at all ({link}, k2inv_, http(s):// and www.
-  are refused). An owner reset always uses K2's own text. No
+  are refused), and a value that reads as a link (an App or person name
+  like evil.example) is replaced. An owner reset always uses K2's own
+  text. A one-time-link mail is kept at rest with its link hidden. No
   template: K2's own ("You're invited to <App>").
   Isolation for a person only holds when they have no box login (User
   Access → host switch off). Box login off still ends ALL their sessions.

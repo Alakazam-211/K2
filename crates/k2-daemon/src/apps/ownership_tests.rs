@@ -813,6 +813,12 @@ fn handover_refuses_each_blocker_by_name() {
         std::fs::write(dir.join(".env.k2"), format!("API_TOKEN=k2v://server/{name}\nPLAIN=1\n")).unwrap();
         let h = k2_core::db::shared();
         let conn = h.lock();
+        conn.execute(
+            "INSERT INTO seeds (hash, seed_id, host_mode, manifest_json, created_with, report_json, signer, size_bytes, created_at, last_used_at) \
+             VALUES (?1, ?2, 'cmd', '{}', '{}', '{\"ok\":true}', 'owner', 1, 1, 1)",
+            params![seed, reffed],
+        )
+        .unwrap();
         conn.execute("UPDATE apps SET live_seed = ?2 WHERE app_id = ?1", params![reffed, seed]).unwrap();
     }
     let v = assert_refused(&reffed, &f.b, "handoff_needs_secret_move");

@@ -359,8 +359,9 @@ pub fn parse_etime(s: &str) -> Option<i64> {
 }
 
 /// Does process `pid`'s environment hold exactly `key=value`? `None` when
-/// K2 can't read it (another user's process, no `ps`, gone). Every buffer
-/// that held the value is zeroed before it's dropped.
+/// K2 can't read it (another user's process, gone, unsupported OS), never
+/// `Some(false)`. Every buffer that held the value is zeroed before it's
+/// dropped.
 pub fn process_env_has(pid: i64, key: &str, value: &[u8]) -> Option<bool> {
     use zeroize::Zeroizing;
     let mut want = Zeroizing::new(Vec::with_capacity(key.len() + 1 + value.len()));
@@ -369,31 +370,83 @@ pub fn process_env_has(pid: i64, key: &str, value: &[u8]) -> Option<bool> {
     want.extend_from_slice(value);
     #[cfg(target_os = "linux")]
     {
+        // Empty: a zombie, a kernel thread, or mid-exec (the env isn't set
+        // up yet), so "can't tell", not "lacks it".
         let env = Zeroizing::new(std::fs::read(format!("/proc/{pid}/environ")).ok()?);
+        if env.is_empty() {
+            return None;
+        }
         Some(env.split(|b| *b == 0).any(|kv| kv == want.as_slice()))
     }
     #[cfg(target_os = "macos")]
     {
-        let out = std::process::Command::new("/bin/ps").args(["-E", "-ww", "-o", "command=", "-p", &pid.to_string()]).output().ok()?;
-        let ok = out.status.success();
-        let stdout = Zeroizing::new(out.stdout);
-        if !ok || stdout.is_empty() {
-            return None;
-        }
-        let line = stdout.strip_suffix(b"\n").unwrap_or(&stdout);
-        let mut tok = Zeroizing::new(vec![b' ']);
-        tok.extend_from_slice(&want);
-        let hit = line
-            .windows(tok.len())
-            .enumerate()
-            .any(|(i, w)| w == tok.as_slice() && line.get(i + tok.len()).is_none_or(|c| *c == b' '));
-        Some(hit)
+        // Our own user's processes, by `KERN_PROCARGS2` (no `ps` spawn).
+        // macOS 27 leaves the env out for Apple platform binaries
+        // (`/bin/sleep`, `/bin/sh`, in `ps -E` too): no env strings at all
+        // means "hidden", so `None`, not "lacks it".
+        let args = Zeroizing::new(macos_procargs2(pid)?);
+        let mut env = procargs2_env(&args)?;
+        Some(env.any(|kv| kv == want.as_slice()))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (&want, pid);
         None
     }
+}
+
+/// The raw `KERN_PROCARGS2` block of `pid`; `None` when the sysctl refuses
+/// (another user's process, EPERM, gone). The caller zeroes it.
+#[cfg(target_os = "macos")]
+fn macos_procargs2(pid: i64) -> Option<Vec<u8>> {
+    use zeroize::Zeroize;
+    let pid = libc::c_int::try_from(pid).ok().filter(|p| *p > 0)?;
+    let mut argmax: libc::c_int = 0;
+    let mut size = std::mem::size_of::<libc::c_int>();
+    let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
+    // SAFETY: `mib` and `argmax` are valid for the call; `size` is its size.
+    let rc = unsafe {
+        libc::sysctl(mib.as_mut_ptr(), 2, (&mut argmax as *mut libc::c_int).cast(), &mut size, std::ptr::null_mut(), 0)
+    };
+    if rc != 0 || argmax <= 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; argmax as usize];
+    let mut size = buf.len();
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    // SAFETY: `buf` holds `size` writable bytes; the kernel writes at most that.
+    let rc = unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) };
+    if rc != 0 {
+        buf.zeroize();
+        return None;
+    }
+    // Zero the tail before shortening, so no byte is dropped unzeroed.
+    let len = size.min(buf.len());
+    buf[len..].zeroize();
+    buf.truncate(len);
+    Some(buf)
+}
+
+/// The env strings of a `KERN_PROCARGS2` block: `argc` (i32), the exec
+/// path, NUL padding, `argc` argv strings, then env strings up to an empty
+/// one. `None` when the block is malformed or holds no `key=value` env
+/// string (the OS hid the environment).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn procargs2_env(buf: &[u8]) -> Option<impl Iterator<Item = &[u8]>> {
+    let argc = usize::try_from(i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?)).ok()?;
+    let mut rest = &buf[4..];
+    // The exec path, then its NUL padding.
+    rest = &rest[rest.iter().position(|b| *b == 0)?..];
+    rest = &rest[rest.iter().position(|b| *b != 0)?..];
+    // argv: exactly `argc` strings (an argv entry may be empty).
+    for _ in 0..argc {
+        rest = &rest[rest.iter().position(|b| *b == 0)? + 1..];
+    }
+    let env = || rest.split(|b| *b == 0).take_while(|s| !s.is_empty());
+    if !env().any(|s| s.contains(&b'=')) {
+        return None;
+    }
+    Some(env())
 }
 
 /// A printable name an agent chose: letters, digits, `.`, `_`, `-`, at

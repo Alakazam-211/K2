@@ -312,6 +312,48 @@ fn the_upgrade_grants_only_with_per_service_evidence_and_time_boxes_it() {
     assert!(again.granted.is_empty(), "a second run grants nothing new: {again:#?}");
 }
 
+/// A child process to read the environment of: this test binary, running
+/// only [`env_read_child_sleeps`]. Not `/bin/sleep`: macOS 27 hides an
+/// Apple platform binary's environment (from `ps -E` and `KERN_PROCARGS2`).
+/// Spawn it through [`ready`].
+fn env_child() -> std::process::Command {
+    let mut c = std::process::Command::new(std::env::current_exe().expect("test binary path"));
+    c.args(["--exact", "vault::server_refs::tests::env_read_child_sleeps", "--ignored", "--test-threads=1", "--nocapture", "-q"])
+        .env("ENV_READ_CHILD", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    c
+}
+
+const ENV_CHILD_READY: &str = "env-read-child-ready";
+
+/// Waits until an [`env_child`] is running its own code, so its
+/// environment is set up (on Linux, `spawn` returns mid-exec, before it is).
+fn ready(mut child: std::process::Child) -> std::process::Child {
+    use std::io::BufRead;
+    let mut out = std::io::BufReader::new(child.stdout.take().expect("child stdout is piped"));
+    let mut line = String::new();
+    loop {
+        line.clear();
+        assert_ne!(out.read_line(&mut line).expect("read child stdout"), 0, "the env child exited before it was ready");
+        if line.trim() == ENV_CHILD_READY {
+            return child;
+        }
+    }
+}
+
+/// Not a check: the body of [`env_child`]. Sleeps only when spawned as one.
+#[test]
+#[ignore = "child process for the env-read tests"]
+fn env_read_child_sleeps() {
+    use std::io::Write;
+    if std::env::var_os("ENV_READ_CHILD").is_some() {
+        println!("{ENV_CHILD_READY}");
+        std::io::stdout().flush().expect("flush ready line");
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
 /// Review fix 5 + round 2 fix 2 (strong evidence): a running service whose
 /// process provably is that start (its start time matches) and whose
 /// environment holds the value is granted, even when other services name
@@ -331,9 +373,9 @@ fn a_running_service_is_judged_by_its_own_environment() {
         env_k2(d.path(), &[("LIVE_TOKEN", format!("k2v://server/{name}"))]);
     }
     let spawned_at = chrono::Utc::now().timestamp();
-    let mut has = std::process::Command::new("sleep").arg("60").env("LIVE_TOKEN", &value).spawn().expect("spawn child with env");
-    let mut hasnt = std::process::Command::new("sleep").arg("60").env_remove("LIVE_TOKEN").spawn().expect("spawn child without env");
-    let mut stale = std::process::Command::new("sleep").arg("60").env("LIVE_TOKEN", &value).spawn().expect("spawn stale child");
+    let mut has = ready(env_child().env("LIVE_TOKEN", &value).spawn().expect("spawn child with env"));
+    let mut hasnt = ready(env_child().env_remove("LIVE_TOKEN").spawn().expect("spawn child without env"));
+    let mut stale = ready(env_child().env("LIVE_TOKEN", &value).spawn().expect("spawn stale child"));
     let ws = "ws-r8-live";
     let s_has = insert_service(ws, "hassvc", d_has.path(), "running");
     let s_hasnt = insert_service(ws, "hasntsvc", d_hasnt.path(), "running");
@@ -357,6 +399,56 @@ fn a_running_service_is_judged_by_its_own_environment() {
         assert!(r.reason.contains("3 services name it"), "fell back to the audit path: {report:#?}");
     }
     assert!(!format!("{report:?}").contains(&value));
+}
+
+/// The env read itself: an exact `key=value` is `Some(true)`, a wrong
+/// value (or a prefix of the right one) is `Some(false)`, and a pid that
+/// doesn't exist is `None`, never `Some(false)`.
+#[test]
+fn process_env_has_reads_a_childs_own_environment() {
+    let key = uniq("ENVREAD_TEST");
+    let value = format!("k2test_envread_{}", rand_port());
+    let mut child = ready(env_child().env(&key, &value).spawn().expect("spawn child with env"));
+    let pid = child.id() as i64;
+    let exact = process_env_has(pid, &key, value.as_bytes());
+    let wrong = process_env_has(pid, &key, b"not-the-value");
+    let prefix = process_env_has(pid, &key, &value.as_bytes()[..value.len() - 1]);
+    let other_key = process_env_has(pid, &format!("{key}_X"), value.as_bytes());
+    child.kill().expect("kill child");
+    child.wait().expect("reap child");
+    assert_eq!(exact, Some(true), "the exact key=value is found");
+    assert_eq!(wrong, Some(false), "a wrong value is not");
+    assert_eq!(prefix, Some(false), "a prefix of the value is not a match");
+    assert_eq!(other_key, Some(false), "another key with the same value is not");
+    // Reaped: the pid is gone (pid_max on Linux and macOS is far below i32::MAX).
+    assert_eq!(process_env_has(i32::MAX as i64, &key, value.as_bytes()), None, "a missing pid can't be told");
+    assert_eq!(process_env_has(-1, &key, value.as_bytes()), None, "a bad pid can't be told");
+    // A process that holds the value is never judged to lack it: on macOS 27
+    // `/bin/sleep`'s environment is hidden, and on Linux a read mid-exec is
+    // empty: both `None`. Otherwise it's read: `Some(true)`.
+    let mut sleep = std::process::Command::new("sleep").arg("60").env(&key, &value).spawn().expect("spawn sleep");
+    let judged = process_env_has(sleep.id() as i64, &key, value.as_bytes());
+    sleep.kill().expect("kill sleep");
+    sleep.wait().expect("reap sleep");
+    assert_ne!(judged, Some(false), "a hidden environment is \"can't tell\", not \"lacks it\"");
+}
+
+/// The `KERN_PROCARGS2` layout: argc, exec path + NUL padding, exactly
+/// argc argv strings (an empty one counts), env strings up to an empty one.
+#[test]
+fn procargs2_env_skips_argv_by_count_and_stops_at_the_empty_string() {
+    let mut buf = 2i32.to_ne_bytes().to_vec();
+    buf.extend_from_slice(b"/bin/sleep\0\0\0\0sleep\0\0A=1\0B=2\0\0apple=junk\0");
+    let env: Vec<&[u8]> = procargs2_env(&buf).expect("well-formed").collect();
+    assert_eq!(env, vec![&b"A=1"[..], &b"B=2"[..]]);
+    assert!(procargs2_env(&[1, 0]).is_none(), "too short for argc");
+    let mut short = 3i32.to_ne_bytes().to_vec();
+    short.extend_from_slice(b"/bin/x\0x\0");
+    assert!(procargs2_env(&short).is_none(), "fewer argv strings than argc");
+    // What macOS 27 returns for `/bin/sleep 5`: argv and no env at all.
+    let mut hidden = 2i32.to_ne_bytes().to_vec();
+    hidden.extend_from_slice(b"/bin/sleep\0\0\0\0\0\0/bin/sleep\05\0");
+    assert!(procargs2_env(&hidden).is_none(), "no env strings is a hidden env, not an empty one");
 }
 
 #[test]

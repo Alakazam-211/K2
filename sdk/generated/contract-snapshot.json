@@ -2,11 +2,11 @@
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
   "catalogVersion": 23,
-  "catalogSha256": "a42cb5a139468cb612740af9c2f66f5fc98d975a0d85c11c3fc3515293fb2dbb",
+  "catalogSha256": "70b51680a65c4c174385160c72ee90a07bd184cbdf53dd81a76207d478c13625",
   "runtimeSha256": "e22fa32d0189148dca17880241a4dfec415841b4e38db9711f891f1b9774262c",
   "files": {
     "cli/k2": "6539178fa8650e2be54edc5f3b7425004084e62451f88bf9b3d53fab0ed9a983",
-    "cli/k2#study app-api": "5bc174f55ae22e9651788773c4b292a0a3f9b94117d287574fc5795680540015",
+    "cli/k2#study app-api": "332a79ace31f4701e249d11d564c4d938fc4a9e9b5931ae7a2aa6f3dd94edc7a",
     "crates/k2-core/src/app_surface.rs": "f409bc52a9836cec479b2e6684931771d47e50bb003dec2504455338d8938726",
     "sdk/generated/k2-frame.js": "736fbb6e7e3bf0ce784d6accb2310b837d6fbdf5efa3f2bb0af06547ec54939d",
     "sdk/generated/k2.d.ts": "4cef624e73228bef365f0e90c967a93639f6e1f093e36486ae3600089719fc54",

@@ -12,7 +12,7 @@
 //!   outside the workspace is refused; a switch-off agent is held;
 //! - new Apps default to a container even where the owner opted into the
 //!   process engine;
-//! - the cut-over is 0.46.4 and nothing in 0.46.3 enforces it.
+//! - no cut-over is set and nothing enforces one (Rosson 2026-10-26).
 //!
 //! ISOLATION: a temp `$HOME`, the in-memory test DB, a fake control plane
 //! on loopback (`K2_CONNECT_BASE`), no real agent CLI (alerts to a sink).
@@ -444,14 +444,14 @@ async fn new_apps_default_to_a_container_even_where_the_process_engine_is_on() {
     k2_daemon::apps::alerts::set_sink(None);
 }
 
-/// The cut-over is 0.46.4 and nothing in 0.46.3 enforces it: a legacy
-/// service keeps the daemon's environment, its owner-token calls work, it
-/// runs unwalled, and it shows the legacy label (publish list, app list,
-/// doctor) pointing at k2 study app-move.
+/// No cut-over is set (Rosson 2026-10-26) and nothing enforces one: a
+/// legacy service keeps the daemon's environment, its owner-token calls
+/// work, it runs unwalled, and it shows the legacy label (publish list, app
+/// list, doctor) pointing at k2 study app-move, with no release named.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_cutover_is_046_4_and_a_legacy_service_runs_untouched_in_046_3() {
+async fn no_cutover_is_set_and_a_legacy_service_runs_untouched() {
     require_python3();
-    assert_eq!(k2_core::app_grace::CUTOVER_RELEASE, "0.46.4");
+    assert_eq!(k2_core::app_grace::CUTOVER_RELEASE, None);
     let env = setup(&[]);
     let _mark = EnvVar::set("SELFMOVE_TEST_INHERITED", "1");
     quiet_alerts();
@@ -462,26 +462,27 @@ async fn the_cutover_is_046_4_and_a_legacy_service_runs_untouched_in_046_3() {
     std::fs::write(svc.folder.join("kport.txt"), d.port.to_string()).unwrap();
     let envs = aget(svc.port, "/env").await;
     assert!(envs.lines().any(|l| l == "SELFMOVE_TEST_INHERITED"), "it keeps the daemon's environment: {envs}");
-    assert_eq!(aget(svc.port, "/call").await, "200", "its owner-token calls still work in 0.46.3");
+    assert_eq!(aget(svc.port, "/call").await, "200", "its owner-token calls still work");
     assert_eq!(aget(svc.port, "/").await, "legacy o1", "unwalled: a plain process, not an App");
-    // "before 0.46.4" until the build is 0.46.4, then "now" (NSI #4).
+    // It keeps running; move it when ready. No release is named.
     let label = k2_core::app_grace::legacy_label();
-    assert!(label.starts_with("legacy (--cmd) — ") && label.contains("0.46.4"), "{label}");
+    assert_eq!(label, "legacy (--cmd): keeps running; move it to an App when ready (k2 study app-move)");
     let label = label.as_str();
     let s = listed(d.port, &ws, "oldbff").await;
     assert_eq!(
         (s["envMode"].clone(), s["envRemovedIn"].clone(), s["legacyLabel"].clone(), s["legacyHint"].clone(), s["status"].clone()),
-        (json!("legacy"), json!("0.46.4"), json!(label), json!("k2 study app-move"), json!("running")),
+        (json!("legacy"), json!(null), json!(label), json!("k2 study app-move"), json!("running")),
         "{s}"
     );
     assert!(s["envDeprecation"].as_str().unwrap().contains("k2 study app-move"), "{s}");
+    assert!(!s["envDeprecation"].as_str().unwrap().contains("0.46.4"), "no end release named: {s}");
     assert!(!s.to_string().contains("adopt"), "no adopt anywhere: {s}");
     let r = get(d.port, "/cli/app/list", OWNER, "").await;
     let l = r.json()["legacy"].as_array().unwrap().iter().find(|l| l["name"] == "oldbff").cloned().unwrap_or_else(|| panic!("{}", r.body));
     assert_eq!((l["label"].clone(), l["hint"].clone()), (json!(label), json!("k2 study app-move")));
     let r = get(d.port, "/cli/app/box", OWNER, "").await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(r.json()["cutover"], "0.46.4");
+    assert_eq!(r.json()["cutover"], json!(null), "no cut-over set (kept for compatibility)");
     assert!(r.json()["legacyServices"].as_array().unwrap().iter().any(|l| l["name"] == "oldbff"), "{}", r.body);
     assert_eq!(r.json()["autoPrepare"]["setting"], "appsAutoPrepare", "{}", r.body);
     // An agent sees only its own workspace's legacy services.

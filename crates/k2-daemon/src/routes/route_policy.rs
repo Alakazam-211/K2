@@ -383,7 +383,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/app/wallet/personal-agents", Admin),
     post("/cli/app/wallet/remove", Admin),
     split("/cli/app/wallet/settings", Admin, Admin),
-    // 0.46.0 grace: what breaks at the 0.46.4 cut-over, per service.
+    // 0.46.0 grace: what breaks when a service moves to an App.
     get("/cli/app/warnings", Member),
     post("/cli/auth/change-password", Member),
     // phone-web-off (2026-10-24): Companion pairing. The pair redeem is

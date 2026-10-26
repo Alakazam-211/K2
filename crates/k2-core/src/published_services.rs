@@ -226,13 +226,13 @@ pub struct ServiceJson {
     /// own). Added in 0.45.4 so agents and scripts can branch on it.
     #[serde(default)]
     pub env_mode: Option<String>,
-    /// The K2 version the `legacy` mode ends in (`0.46.1`) on a legacy
-    /// service; null otherwise. `env_deprecation` keeps the full notice.
+    /// The K2 version the `legacy` mode ends in. Null: no end is set
+    /// (`crate::app_grace::CUTOVER_RELEASE`, Rosson 2026-10-26); kept for
+    /// compatibility. `env_deprecation` keeps the full notice.
     #[serde(default)]
     pub env_removed_in: Option<String>,
-    /// This daemon IS that release (or later): say "ends now", never "ends
-    /// 0.46.4" on a box running 0.46.4 ([`crate::app_grace::cutover_now`]).
-    /// Only sent when true.
+    /// This daemon IS that release (or later); never true while no end is
+    /// set ([`crate::app_grace::cutover_now`]). Only sent when true.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cutover_now: bool,
     /// `--skin` Apps (S24-15): true while the running helper is an older one
@@ -266,9 +266,9 @@ pub struct ServiceJson {
     #[serde(default)]
     pub hostname_pending: bool,
     /// 0.46.3: a `--cmd` service the App runtime doesn't run (no wall) says
-    /// so everywhere it shows: `legacy (--cmd) — move it to an App before
-    /// 0.46.4` ([`crate::app_grace::legacy_label`]). Null for Apps and
-    /// `--skin`.
+    /// so everywhere it shows: `legacy (--cmd): keeps running; move it to an
+    /// App when ready (k2 study app-move)` ([`crate::app_grace::legacy_label`]).
+    /// Null for Apps and `--skin`.
     #[serde(default)]
     pub legacy_label: Option<String>,
     /// With `legacy_label`: where to read how (`k2 study app-move`). Null

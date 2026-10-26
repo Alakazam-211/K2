@@ -1,12 +1,12 @@
 //! 0.46.0 "grace" routes for existing Apps (Rosson's cross-over plan,
-//! 2026-10-14: 0.46.0 adds the new ways and removes nothing; 0.46.1 is the
-//! cut-over). They serve every published `--cmd` service (NSI's Jobs BFF,
-//! Hearth) and every runtime App, and are **not** behind the runtime
+//! 2026-10-14: 0.46.0 adds the new ways and removes nothing; no release is
+//! the cut-over, `k2_core::app_grace::CUTOVER_RELEASE`). They serve every
+//! published `--cmd` service (NSI's Jobs BFF, Hearth) and every runtime App, and are **not** behind the runtime
 //! preview flag.
 //!
 //! ```text
-//! GET  /cli/app/warnings   [app]           what breaks at the 0.46.4 cut-over, per service
-//! POST /cli/app/clean-mode {app, on, restart?}   opt into the 0.46.4 behaviour early
+//! GET  /cli/app/warnings   [app]           what breaks when it moves to an App, per service
+//! POST /cli/app/clean-mode {app, on, restart?}   opt into an App's environment early
 //! POST /cli/app/key/mint   {app, scopes, rooms?, roles?, label?, deliver?, confirmToken?}
 //! GET  /cli/app/keys       [app]           App-scoped keys (never the key)
 //! POST /cli/app/key/revoke {id}
@@ -325,7 +325,7 @@ pub(crate) fn hold(who: &Who, kind: &str, t: Option<&Target>, label: &str, works
 /// Variables K2 sets only for a runtime App (every engine: `process_engine`
 /// and `guarded` build the same set), on top of the names a
 /// `--cmd` service already gets ([`provided_names`]). Reading them is the
-/// App's own business, never a cut-over break.
+/// App's own business, never a break.
 pub const APP_ONLY_ENV: &[&str] = &["K2_PASS_FILE", "K2_APP_DATA", "K2_APP_CACHE", "K2_APP_DEPLOYMENT"];
 
 /// A warning that is fine inside an App (never counted in `breaks`).
@@ -460,12 +460,11 @@ pub(crate) fn report(t: &Target) -> J {
         se.inherited_names.iter().cloned().collect()
     };
     let name = &t.name;
-    let cut = app_grace::CUTOVER_RELEASE;
     if legacy {
         warnings.push(warning(
             "legacy_env",
             "breaks",
-            format!("{name} inherits the K2 daemon's whole environment ({} variables); that ends {}.", inherited.len(), app_grace::cutover_phrase()),
+            format!("{name} inherits the K2 daemon's whole environment ({} variables); it keeps it as a --cmd service, and an App (or clean mode) starts without it.", inherited.len()),
             format!("k2 publish env {name} clean (and grant what it needs: k2 publish secret add {name} NAME)"),
         ));
     }
@@ -490,28 +489,28 @@ pub(crate) fn report(t: &Target) -> J {
             warnings.push(warning(
                 "k2_internal_env",
                 "breaks",
-                format!("{at} reads {n}: a K2-internal variable no App gets from K2 {cut} (the owner token and the daemon's session variables stay out of reach)."),
+                format!("{at} reads {n}: a K2-internal variable no App gets (the owner token and the daemon's session variables stay out of reach)."),
                 format!("use the App key (k2 app key mint {name} …) and K2_HOST/K2_PORT/K2_GATEWAY_URL"),
             ));
         } else if n == "HOME" {
             warnings.push(warning(
                 "home_changes",
                 "check",
-                format!("{at} reads HOME: in clean mode and from {cut} it is the App's own folder, not the daemon user's home."),
+                format!("{at} reads HOME: in clean mode and in an App it is the App's own folder, not the daemon user's home."),
                 "keep App files in its folder or K2_SECRETS_DIR; try it with k2 app clean-mode".to_string(),
             ));
         } else if n == "PATH" {
             warnings.push(warning(
                 "path_changes",
                 "check",
-                format!("{at} reads PATH: from {cut} it holds the system folders only."),
+                format!("{at} reads PATH: in clean mode and in an App it holds the system folders only."),
                 "name programs by absolute path, or install them system-wide".to_string(),
             ));
         } else if !provided.contains(n) && inherited.contains(n) {
             warnings.push(warning(
                 "inherited_env_read",
                 "breaks",
-                format!("{at} reads {n}, which {name} gets only from the daemon's environment; from {cut} it is unset."),
+                format!("{at} reads {n}, which {name} gets only from the daemon's environment; in clean mode and in an App it is unset."),
                 format!("k2 publish secret add {name} {n} --as env (or a k2v:// reference in .env.k2)"),
             ));
         }
@@ -520,15 +519,15 @@ pub(crate) fn report(t: &Target) -> J {
         let at = format!("{}:{}", p.file, p.line);
         let (msg, fix) = match p.what.as_str() {
             "owner_token_file" => (
-                format!("{at} reads ~/.k2/daemon.token (the owner token): no App can reach it from {cut}."),
+                format!("{at} reads ~/.k2/daemon.token (the owner token): no App can reach it."),
                 format!("mint an App key (k2 app key mint {name} --scopes users,rooms …) and call /v1/apps/$K2_APP_ID/…"),
             ),
             "daemon_port_file" => (
-                format!("{at} reads ~/.k2/heartbeat.port: out of reach from {cut}."),
+                format!("{at} reads ~/.k2/heartbeat.port: out of reach from an App."),
                 "use K2_HOST and K2_PORT (or K2_GATEWAY_URL), set for every service".to_string(),
             ),
-            "k2_database" => (format!("{at} names a K2 database file: out of reach from {cut}."), "use k2 db or the App key routes".to_string()),
-            _ => (format!("{at} names a K2 socket: out of reach from {cut}."), "call K2 over K2_GATEWAY_URL with the App key".to_string()),
+            "k2_database" => (format!("{at} names a K2 database file: out of reach from an App."), "use k2 db or the App key routes".to_string()),
+            _ => (format!("{at} names a K2 socket: out of reach from an App."), "call K2 over K2_GATEWAY_URL with the App key".to_string()),
         };
         warnings.push(warning(&p.what, "breaks", msg, fix));
     }
@@ -569,7 +568,7 @@ pub(crate) fn report(t: &Target) -> J {
             "owner_token_use",
             "breaks",
             format!(
-                "{name} called {} with the owner token {} time(s){}; no App holds the owner token from {cut}.",
+                "{name} called {} with the owner token {} time(s){}; no App holds the owner token.",
                 u.route,
                 u.count,
                 if u.refused > 0 { format!(" ({} refused in clean mode)", u.refused) } else { String::new() }
@@ -580,7 +579,10 @@ pub(crate) fn report(t: &Target) -> J {
     let breaks = warnings.iter().filter(|w| w["severity"] == "breaks").count();
     let mut out = json!({
         "app": t.summary(),
-        "cutover": cut,
+        // No cut-over is set (k2_core::app_grace::CUTOVER_RELEASE): null,
+        // kept for compatibility. `readyForCutover` = nothing breaks when
+        // it moves to an App.
+        "cutover": app_grace::CUTOVER_RELEASE,
         "readyForCutover": breaks == 0,
         "breaks": breaks,
         "warnings": warnings,

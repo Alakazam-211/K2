@@ -1,7 +1,8 @@
 //! Legacy `k2 publish run --cmd` services (0.46.3): the ones no wall runs
-//! yet. They keep running exactly as before until 0.46.4
-//! (`k2_core::app_grace::CUTOVER_RELEASE`); every list says so, with where
-//! to read how an agent moves one to an App itself (`k2 study app-move`).
+//! yet. They keep running exactly as before (no cut-over is set:
+//! `k2_core::app_grace::CUTOVER_RELEASE`); every list says so, with where
+//! to read how an agent moves one to an App itself when ready
+//! (`k2 study app-move`).
 
 use serde_json::{json, Value as J};
 

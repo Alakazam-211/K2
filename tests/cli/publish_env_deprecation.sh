@@ -26,6 +26,9 @@ import http.server, json, sys
 NOTICE = sys.argv[2]
 # "now": the daemon IS the cut-over release (cutoverNow, NSI 0.46.4 #4).
 NOW = len(sys.argv) > 3 and sys.argv[3] == "now"
+# "noend": a daemon with no end set (Rosson 2026-10-26: --cmd services keep
+# running), so envRemovedIn is null.
+NOEND = len(sys.argv) > 3 and sys.argv[3] == "noend"
 def svc(name, mode):
     legacy = mode == "legacy"
     return {"id": name + "-id", "projectId": "p", "name": name, "cmd": "node s.js", "cwd": ".",
@@ -34,7 +37,7 @@ def svc(name, mode):
             "lastExitCode": None, "kind": "cmd", "skinRoot": "", "frameAncestors": "",
             "framePolicy": None, "frameWarning": None,
             "envDeprecation": NOTICE if legacy else None,
-            "envMode": mode, "envRemovedIn": "0.46.0" if legacy else None,
+            "envMode": mode, "envRemovedIn": "0.46.0" if legacy and not NOEND else None,
             "cutoverNow": bool(legacy and NOW)}
 MODES = {"shop": "legacy", "fresh": "clean"}
 class H(http.server.BaseHTTPRequestHandler):
@@ -111,9 +114,10 @@ if grep -q "inherits\|deprecated" "$WORK/out"; then fail "clean start stdout: $(
 ok "k2 publish start <clean>: no warning"
 
 out="$(k2s publish env shop 2>&1)" || fail "publish env: $out"
-printf '%s' "$out" | grep -q "deprecated: inheriting the daemon environment ends in K2 0.46.4 — switch with: k2 publish env shop clean" \
+printf '%s' "$out" | grep -Fq "inherits the daemon environment (it keeps it as a --cmd service) — start it clean with: k2 publish env shop clean" \
 	|| fail "publish env lacks the notice: $out"
-ok "k2 publish env names the 0.46.0 end and the switch"
+if printf '%s' "$out" | grep -q "0\.46\.4"; then fail "publish env names a release no daemon set: $out"; fi
+ok "k2 publish env: no end sent, none named; the switch"
 
 out="$(k2s study vault 2>&1)" || fail "study vault: $out"
 printf '%s' "$out" | grep -q "^PUBLISHED SERVICES" || fail "study vault lacks the section: $out"
@@ -137,5 +141,23 @@ grep -Fq "this ends with this release (K2 0.46.0)." "$WORK/err" || fail "now: st
 out="$(k2s publish env shop 2>&1)" || fail "publish env (now): $out"
 printf '%s' "$out" | grep -Fq "ends with this release (K2 0.46.0) — switch with: k2 publish env shop clean" || fail "now: publish env: $out"
 ok "on the cut-over release itself the notices say the end is now"
+
+
+# 2026-10-26: no end is set (envRemovedIn null): no release is named, the
+# services keep running.
+kill "$STUB_PID" 2>/dev/null || true
+wait "$STUB_PID" 2>/dev/null || true
+python3 "$WORK/stub.py" "$PORT" "$NOTICE" noend &
+STUB_PID=$!
+for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 0.05; done
+k2s publish ps >"$WORK/out" 2>"$WORK/err" || fail "ps (noend): $(cat "$WORK/out" "$WORK/err")"
+out="$(cat "$WORK/out")"
+printf '%s\n' "$out" | grep -E '^shop ' | grep -Fq "[legacy env]" || fail "noend: shop row tag: $out"
+printf '%s\n' "$out" | grep -Fq "warning: 1 service still inherits the daemon environment (shop). Switch each with" || fail "noend: summary line: $out"
+if printf '%s\n' "$out" | grep -q "ends\|0\.46\."; then fail "noend: names an end: $out"; fi
+k2s publish start shop >"$WORK/out" 2>"$WORK/err" || fail "start shop (noend): $(cat "$WORK/out" "$WORK/err")"
+[ "$(cat "$WORK/err")" = "warning: shop still inherits the daemon environment (it keeps it as a --cmd service). Start it clean with: k2 publish env shop clean (grant secrets with k2 publish secret add)." ] \
+	|| fail "noend: start warning: $(cat "$WORK/err")"
+ok "no end set: no release named; the switch is still offered"
 
 echo "PASS: publish env deprecation ($pass checks)"

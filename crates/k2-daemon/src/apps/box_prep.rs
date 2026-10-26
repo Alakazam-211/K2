@@ -982,10 +982,11 @@ pub(crate) fn parse_opts(body: &J) -> R<PrepareOpts> {
 pub(crate) fn box_route(who: &Who) -> R<J> {
     need_credential(who)?;
     let mut out = doctor(&gather());
-    // 0.46.3: legacy --cmd services (unwalled until moved to an App; the cut-over
-    // is 0.46.4). Reported, never part of `ready`.
+    // 0.46.3: legacy --cmd services (unwalled until moved to an App; no
+    // cut-over is set). Reported, never part of `ready`.
     out["legacyServices"] = json!(super::legacy::services(who));
     out["autoPrepare"] = super::auto_prepare::status_json();
+    // Kept for compatibility: null, no cut-over is set.
     out["cutover"] = json!(k2_core::app_grace::CUTOVER_RELEASE);
     // 0.46.4 (update continuity R9): the engine heal's view, for Settings.
     if let Some(e) = super::engine_heal::app_engine_json() {

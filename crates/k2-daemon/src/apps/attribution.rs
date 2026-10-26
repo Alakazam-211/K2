@@ -7,7 +7,7 @@
 //! the daemon's), then the process holding that socket inode among the
 //! processes whose session is a live service's. The hit is counted per
 //! (service, route) in `app_owner_token_uses`, and refused when the service
-//! runs in clean mode (the cut-over behaviour, 0.46.4, opted into early).
+//! runs in clean mode (how an App runs, opted into early).
 //!
 //! **Linux only.** On macOS nothing is attributed (Apps run walled on
 //! Linux only); the warnings there rely on the code scan.
@@ -149,10 +149,9 @@ pub fn refusal_body(service_id: &str, name: &str) -> String {
         "error": {
             "code": "owner_token_from_app",
             "hint": format!(
-                "{name} runs in clean mode (the K2 {} behaviour): Apps can't use the owner token. \
+                "{name} runs in clean mode (how an App runs): Apps can't use the owner token. \
                  Use the App key K2 granted it ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/…, \
-                 or turn clean mode off: k2 app clean-mode {name} off",
-                k2_core::app_grace::CUTOVER_RELEASE
+                 or turn clean mode off: k2 app clean-mode {name} off"
             ),
             "app": service_id,
         }

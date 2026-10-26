@@ -402,8 +402,8 @@ fn service_get(vault: &Arc<LocalVault>, c: &VaultCaller, params: &HashMap<String
         .collect();
     let mut out = json!({ "service": label, "id": id, "mode": se.mode, "envFile": se.env_file, "inheritedNames": se.inherited_names, "secrets": grants });
     if se.mode == "legacy" {
-        // The release the inherited environment ends in, and whether this
-        // daemon is it (NSI 0.46.4 #4: the CLI used to print a fixed one).
+        // The release the inherited environment ends in (null: none is set,
+        // Rosson 2026-10-26), and whether this daemon is it.
         out["envRemovedIn"] = json!(crate::vault::publish_env::LEGACY_ENV_REMOVED_IN);
         out["cutoverNow"] = json!(k2_core::app_grace::cutover_now());
     }

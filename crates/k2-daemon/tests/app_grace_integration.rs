@@ -1,6 +1,6 @@
 //! The 0.46.0 App grace release, end to end through the REAL dispatcher
 //! (Rosson's cross-over plan, 2026-10-14: 0.46.0 adds the new ways and
-//! removes nothing; the cut-over is now 0.46.4, k2_core::app_grace::CUTOVER_RELEASE).
+//! removes nothing; no cut-over is set, k2_core::app_grace::CUTOVER_RELEASE).
 //!
 //! - warnings per published `--cmd` service (env reads, K2 files, PATH);
 //! - clean mode: on narrows (an agent may), off is held for the owner;
@@ -101,7 +101,7 @@ async fn warnings_name_what_breaks_and_clean_mode_narrows_now_widens_later() {
     let r = get(d.port, "/cli/app/warnings", OWNER, "app=nsi/jobsw").await;
     assert_eq!(r.status, 200, "{}", r.body);
     let v = r.json();
-    assert_eq!(v["cutover"], "0.46.4");
+    assert_eq!(v["cutover"], json!(null), "no cut-over set (kept for compatibility)");
     assert_eq!(v["readyForCutover"], false);
     let codes: Vec<String> = v["warnings"].as_array().unwrap().iter().map(|w| w["code"].as_str().unwrap().to_string()).collect();
     for want in ["legacy_env", "inherited_env_read", "k2_internal_env", "daemon_port_file"] {

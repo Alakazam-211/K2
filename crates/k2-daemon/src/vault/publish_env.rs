@@ -33,7 +33,7 @@ pub struct ServiceEnv {
     /// Names (never values) a legacy service inherited at its last start.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inherited_names: Vec<String>,
-    /// 0.46.0 grace: the cut-over behaviour (0.46.4), opted into early (Rosson's
+    /// 0.46.0 grace: how an App runs, opted into early (Rosson's
     /// cross-over plan, 2026-10-14). Implies `clean`, plus: `PATH` is the
     /// system folders only, `HOME` is the service's own folder under
     /// `~/.k2/publish-homes/`, and an owner-token call the daemon traces
@@ -113,22 +113,21 @@ pub fn get(service_id: &str) -> ServiceEnv {
 /// (status, `k2 publish list`, the Published drawer, `k2 vault doctor`).
 /// New services start clean. The 2026-10-14 cross-over plan moved the end
 /// from 0.46.0 to 0.46.1, Rosson moved it to 0.46.2 (2026-10-18) and then to
-/// 0.46.4 (2026-10-20: in 0.46.3 each agent moves its service to an App itself): nothing before
-/// 0.46.4 removes it.
-pub const LEGACY_ENV_REMOVED_IN: &str = k2_core::app_grace::CUTOVER_RELEASE;
+/// 0.46.4 (2026-10-20), and on 2026-10-26 Rosson set no end at all ("leave
+/// the --cmd services since we're still patching up issues with the
+/// runtime"): nothing removes it. `None`; the `envRemovedIn` JSON fields
+/// stay, as null.
+pub const LEGACY_ENV_REMOVED_IN: Option<&str> = k2_core::app_grace::CUTOVER_RELEASE;
 
-/// The deprecation notice for one service (`name` = its publish name).
+/// The notice for one service (`name` = its publish name).
 pub fn legacy_env_notice(name: &str) -> String {
     format!(
         "This service still inherits the K2 daemon's whole environment because it existed \
-         before 0.45.4. That ends {ends}: it will then start with a \
-         clean environment plus only the secrets granted to it. Switch now with \
-         `k2 publish env {name} clean` (grant what it needs with `k2 publish secret add {name} …`), \
-         see what would break with `k2 app warnings {name}`, or try the whole \
-         {LEGACY_ENV_REMOVED_IN} behaviour first with `k2 app clean-mode {name} on`. \
-         Move it to an App {when}: `k2 study app-move`.",
-        ends = k2_core::app_grace::cutover_phrase(),
-        when = if k2_core::app_grace::cutover_now() { "now" } else { "before then" },
+         before 0.45.4. It keeps it while it runs as a --cmd service; nothing ends that. \
+         To start it clean (only the secrets granted to it): `k2 publish env {name} clean` \
+         (grant what it needs with `k2 publish secret add {name} …`); see what would break with \
+         `k2 app warnings {name}`, or try how an App runs first with `k2 app clean-mode {name} on`. \
+         Move it to an App when ready: `k2 study app-move`."
     )
 }
 
@@ -175,7 +174,7 @@ pub fn set(service_id: &str, mode: Option<&str>, env_file: Option<Option<String>
     Ok(out)
 }
 
-/// Turn clean mode (the cut-over behaviour, 0.46.4) on or off for one service. On
+/// Turn clean mode (how an App runs) on or off for one service. On
 /// also switches the env mode to `clean`; off keeps `clean` (it never
 /// gives the daemon's environment back: that is `set(.., "legacy")`,
 /// owner only). Names recorded while the service was legacy are kept, so

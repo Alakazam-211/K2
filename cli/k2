@@ -8166,7 +8166,8 @@ if isinstance(ap, dict) and linux:
 # 0.46.3: --cmd services no wall runs (not part of "ready").
 legacy = v.get("legacyServices") or []
 if legacy:
-    print("Legacy --cmd services (unwalled; the cut-over is %s):" % v.get("cutover", "?"))
+    # No cut-over is set (Rosson 2026-10-26): they keep running.
+    print("Legacy --cmd services (unwalled; they keep running, move each to an App when ready):")
     for l in legacy:
         print("  %-20s %-14s %s  -> %s" % (l.get("name"), l.get("workspaceHandle") or "", l.get("label", ""), l.get("hint", "")))
 '
@@ -9766,10 +9767,10 @@ k2 study app-move — Moving your --cmd service to an App
 
 WHY. A service you started with `k2 publish run <name> --cmd "…"` runs
 unwalled: as the daemon's user, with the daemon's whole environment and
-reach to the owner token. Lists show it as "legacy (--cmd) — move it to an
-App before 0.46.4". In 0.46.3 nothing stops it. In 0.46.4 --cmd goes. You
-move it yourself: you need "Build and run Apps" on your workspace (your
-owner turns it on). No terminal on the box, no sudo: the box is prepared
+reach to the owner token. Lists show it as "legacy (--cmd): keeps running;
+move it to an App when ready". Nothing stops it and no release removes it:
+move it when you're ready. You move it yourself: you need "Build and run
+Apps" on your workspace (your owner turns it on). No terminal on the box, no sudo: the box is prepared
 by K2 (k2 app doctor says whether it is ready).
 
 THE OLD SERVICE KEEPS RUNNING until YOU stop it (step 7): installing,
@@ -10383,14 +10384,14 @@ print(("revoked %s (shut at once)" % v["name"]) if v.get("revoked") else v.get("
 # Canonical family. Token is nested here; leftover mint is top-level k2 skin-token.
 # k2 app update is unknown (usage), not the desktop updater (k2 update --app).
 # ── 0.46.0 App grace (Rosson's cross-over plan, 2026-10-14) ─────────────
-# Nothing before 0.46.4 removes anything for existing services; 0.46.4 is the
-# cut-over (in 0.46.3 each agent moves its service to an App: k2 study app-move).
+# Nothing removes existing services: no cut-over is set (Rosson 2026-10-26);
+# each agent moves its service to an App when ready (k2 study app-move).
 # These verbs are not behind the Apps (beta) switch: they serve every
 # published --cmd service (and every runtime App).
 
 _app_grace_usage() {
     cat <<'EOF'
-k2 app — getting existing Apps ready for K2 0.46.4 (nothing before it removes anything)
+k2 app — moving existing --cmd services to Apps (nothing removes them)
 
 Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
   k2 app data put <app-id> <path> [--to <dir>]
@@ -10413,7 +10414,7 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        (--request) one owner approval for all
                                        the owner's steps.
 
-  k2 app warnings [<app>] [--json]     What breaks at the 0.46.4 cut-over: env
+  k2 app warnings [<app>] [--json]     What breaks when it moves to an App: env
                                        names the code reads that only the daemon
                                        gives it, K2 files it touches
                                        (daemon.token, heartbeat.port), programs
@@ -10425,7 +10426,7 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        (deprecated). No <app>: every --cmd
                                        service you can see.
   k2 app clean-mode <app> on|off [--restart]
-                                       Run it the 0.46.4 way now: clean env,
+                                       Run it the way an App runs: clean env,
                                        system PATH, its own HOME, owner-token
                                        calls refused (Linux). On narrows (agents
                                        may); off is the owner's (held otherwise).
@@ -11514,7 +11515,11 @@ for r in reports:
     mode = a.get("envMode") or "-"
     if a.get("cleanMode"):
         mode = "clean mode"
-    status = "ready for %s" % r.get("cutover") if r.get("readyForCutover") else "%d thing(s) break in %s" % (r.get("breaks", 0), r.get("cutover"))
+    # `cutover` is null: no release is set (Rosson 2026-10-26).
+    if r.get("readyForCutover"):
+        status = "ready to move to an App"
+    else:
+        status = "%d thing(s) break when it moves to an App" % r.get("breaks", 0)
     print("%s  [%s]  %s" % (a.get("handle") or a.get("name"), mode, status))
     for w in r.get("warnings", []):
         sev = w.get("severity")
@@ -25132,9 +25137,13 @@ for s in v.get("secrets") or []:
 if v.get("inheritedNames"):
     print("  inherits the daemon environment: %s" % ", ".join(v["inheritedNames"]))
 if v.get("mode") == "legacy":
-    ends = v.get("envRemovedIn") or "0.46.4"
-    when = ("with this release (K2 %s)" if v.get("cutoverNow") else "in K2 %s") % ends
-    print("  deprecated: inheriting the daemon environment ends %s — switch with: k2 publish env %s clean" % (when, v.get("service")))
+    ends = v.get("envRemovedIn")
+    if ends:
+        when = ("with this release (K2 %s)" if v.get("cutoverNow") else "in K2 %s") % ends
+        print("  deprecated: inheriting the daemon environment ends %s — switch with: k2 publish env %s clean" % (when, v.get("service")))
+    else:
+        # No end is set (Rosson 2026-10-26).
+        print("  inherits the daemon environment (it keeps it as a --cmd service) — start it clean with: k2 publish env %s clean" % v.get("service"))
 if v.get("restart"): print(v["restart"])'
             ;;
         reveal)
@@ -26867,9 +26876,9 @@ rm
   <name> on run is the subdomain label. It cannot differ.
 
 ps     hosted processes for THIS workspace (running/stopped, port, URL if any)
-       [legacy env (ends <release>)] = a service from before 0.45.4 that still
-       inherits the daemon's whole environment until the --cmd cut-over (the
-       tag names that release). Switch: k2 publish env <name> clean
+       [legacy env] = a service from before 0.45.4 that still inherits the
+       daemon's whole environment (it keeps it; no end is set). Start it
+       clean: k2 publish env <name> clean
 logs   that process's log file (--tail follows)
 status Connect plan + primary host. Not "is my app up" — use ps.
 
@@ -27030,21 +27039,32 @@ def env_legacy(s):
         return m == "legacy"
     return bool(s.get("envDeprecation"))
 
+# The release the inherited environment ends in, from the daemon. Null: no
+# end is set (Rosson 2026-10-26: --cmd services keep running), so no text
+# names one. An older daemon still sends one.
 def env_ends(s):
-    return str((s.get("envRemovedIn") if isinstance(s, dict) else None) or "0.46.4")
+    v = s.get("envRemovedIn") if isinstance(s, dict) else None
+    return str(v) if v else None
 
-# NSI 0.46.4 #4: a daemon that IS the cut-over release says so (cutoverNow),
-# never "ends in K2 0.46.4" on a box running 0.46.4.
+# NSI 0.46.4 #4: a daemon that IS that release says so (cutoverNow).
 def env_now(s):
     return bool(isinstance(s, dict) and s.get("cutoverNow"))
 
 def env_when(s):
-    return ("with this release (K2 %s)" if env_now(s) else "in K2 %s") % env_ends(s)
+    e = env_ends(s)
+    if not e:
+        return None
+    return ("with this release (K2 %s)" if env_now(s) else "in K2 %s") % e
 
 def env_warning(n, s):
+    w = env_when(s)
+    if not w:
+        return ("warning: %s still inherits the daemon environment (it keeps it as a --cmd service). "
+                "Start it clean with: k2 publish env %s clean (grant secrets with k2 publish secret add)."
+                % (n, n))
     return ("warning: %s still inherits the daemon environment; this ends %s. "
             "Switch with: k2 publish env %s clean (grant secrets with k2 publish secret add)."
-            % (n, env_when(s), n))
+            % (n, w, n))
 
 # 0.46.3: held for the owner (a new --cmd service from an agent, or a disk
 # override that waits for the owner): print the request and exit 2.
@@ -27145,7 +27165,7 @@ if mode == "list":
     legacy = []
     unwalled = []
     hint = "k2 study app-move"
-    ends = "in K2 0.46.4"
+    ends = None
     for s in services:
         if not isinstance(s, dict):
             continue
@@ -27155,7 +27175,10 @@ if mode == "list":
         if env_legacy(s):
             legacy.append(str(s.get("name") or "?"))
             ends = env_when(s)
-            u += "  [legacy env (ends %s)]" % (("now, " + env_ends(s)) if env_now(s) else env_ends(s))
+            if env_ends(s):
+                u += "  [legacy env (ends %s)]" % (("now, " + env_ends(s)) if env_now(s) else env_ends(s))
+            else:
+                u += "  [legacy env]"
         # 0.46.3: --cmd services no wall runs, and where a moved label went.
         if s.get("legacyLabel"):
             unwalled.append(str(s.get("name") or "?"))
@@ -27186,13 +27209,15 @@ if mode == "list":
     for n, w in warnings:
         print("warning: %s: %s" % (n, w))
     if legacy:
-        print("warning: %d service%s still inherit%s the daemon environment (%s); this ends %s. "
+        print("warning: %d service%s still inherit%s the daemon environment (%s)%s. "
               "Switch each with: k2 publish env <service> clean (grant secrets with k2 publish secret add <service> NAME)."
               % (len(legacy), "" if len(legacy) == 1 else "s", "s" if len(legacy) == 1 else "",
-                 ", ".join(legacy), ends))
+                 ", ".join(legacy), ("; this ends %s" % ends) if ends else ""))
     if unwalled:
-        print("legacy (--cmd): %s run%s unwalled; move %s to an App before K2 %s (%s)."
-              % (", ".join(unwalled), "s" if len(unwalled) == 1 else "", "it" if len(unwalled) == 1 else "them", ends, hint))
+        # No cut-over is set (Rosson 2026-10-26): they keep running.
+        print("legacy (--cmd): %s run%s unwalled and keep%s running; move %s to an App when ready (%s)."
+              % (", ".join(unwalled), "s" if len(unwalled) == 1 else "", "s" if len(unwalled) == 1 else "",
+                 "it" if len(unwalled) == 1 else "them", hint))
     sys.exit(0)
 
 svc = d.get("service") if isinstance(d.get("service"), dict) else d
@@ -27223,7 +27248,10 @@ if isinstance(svc, dict) and svc.get("error"):
     print("  error: %s" % svc.get("error"))
 if isinstance(svc, dict) and env_legacy(svc) and verb not in ("run", "start"):
     # run/start already warned on stderr; stop/rm still name the end.
-    print("  deprecated: inherits the daemon environment; ends %s (k2 publish env %s clean)" % (env_when(svc), name))
+    if env_when(svc):
+        print("  deprecated: inherits the daemon environment; ends %s (k2 publish env %s clean)" % (env_when(svc), name))
+    else:
+        print("  inherits the daemon environment (start it clean: k2 publish env %s clean)" % name)
 sys.exit(0)
 PY
 }
@@ -36274,7 +36302,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid
   app-deploys         Host a server App: Seeds, deploys, rollback (beta)
-  app-move            Move your --cmd service to an App before 0.46.4, step by step
+  app-move            Move your --cmd service to an App when ready, step by step
   app-api             An App's server calls: the SDK, every route, passes, refusals
   app-heartbeats      App heartbeats: routes, caps, wait reasons, contract
   app-tickets         App tickets: routes, live ticket_changed frames, contract

@@ -2,13 +2,13 @@
 //!
 //! 0.46.0 adds the new ways for existing Apps (`k2 publish run --cmd`
 //! services such as a customer's Jobs BFF) and removes nothing. The
-//! cut-over for EXISTING services (the inherited environment ends, the
-//! owner token is out of reach, the wall goes on) is 0.46.4 (Rosson
-//! 2026-10-20: in 0.46.3 each service's agent moves it to an App itself,
-//! with "Build and run Apps" on; it was 0.46.2, and 0.46.1 before that).
-//! Until then nothing enforces it: 0.46.1+ changes only NEW `--cmd`
-//! services (the open path and the agent gate). This module is the
-//! daemon-shared part:
+//! cut-over for EXISTING services is not set (Rosson 2026-10-26: "leave the
+//! --cmd services since we're still patching up issues with the runtime";
+//! it was planned for 0.46.4, 0.46.2 and 0.46.1 before that): they keep
+//! running, and each service's agent moves it to an App itself when ready,
+//! with "Build and run Apps" on. Nothing enforces a cut-over: 0.46.1+
+//! changes only NEW `--cmd` services (the open path and the agent gate).
+//! See [`CUTOVER_RELEASE`]. This module is the daemon-shared part:
 //!
 //! - [`keys`]: the App-scoped key (vs-live 2 §6, S45): one App, a fixed
 //!   scope vocabulary, a room/role ceiling.
@@ -25,10 +25,17 @@ pub mod requests;
 pub mod scan;
 pub mod token_uses;
 
-/// The release that removes the old ways for existing `--cmd` services
-/// (inherited env, owner token, unwalled). Warnings, notices and the legacy
-/// label name it. Nothing before it removes them.
-pub const CUTOVER_RELEASE: &str = "0.46.4";
+/// No release removes the old ways for existing `--cmd` services
+/// (inherited environment, owner token, unwalled). Rosson 2026-10-26:
+/// "leave the --cmd services since we're still patching up issues with the
+/// runtime". Nothing ever enforced a cut-over (0.46.1+ gates only NEW
+/// agent `--cmd` services), so no text names one: a legacy service keeps
+/// running and its agent moves it to an App when ready.
+///
+/// `None` = no cut-over set. JSON fields that used to carry the release
+/// (`cutover`, `envRemovedIn`) are kept for compatibility and are `null`;
+/// `cutoverNow` is `false`.
+pub const CUTOVER_RELEASE: Option<&str> = None;
 
 /// Is `running` (`major.minor.patch`, a `-pre` suffix ignored) at or past
 /// `release`? Unreadable versions count as not reached.
@@ -41,31 +48,20 @@ pub fn version_reached(running: &str, release: &str) -> bool {
     matches!((parts(running), parts(release)), (Some(a), Some(b)) if a >= b)
 }
 
-/// This build is the cut-over release (or later): text that names it says
-/// "now", never "before 0.46.4" while running 0.46.4 (NSI 0.46.4 #4: the
-/// notice said "ends 0.46.2" on a box running 0.46.2).
+/// This build is a set cut-over release (or later). Always `false` while
+/// [`CUTOVER_RELEASE`] is `None`.
 pub fn cutover_now() -> bool {
-    version_reached(env!("CARGO_PKG_VERSION"), CUTOVER_RELEASE)
-}
-
-/// When the old ways end, for a sentence: "in K2 0.46.4", or "with this
-/// release (K2 0.46.4)" once this build is it.
-pub fn cutover_phrase() -> String {
-    if cutover_now() {
-        format!("with this release (K2 {CUTOVER_RELEASE})")
-    } else {
-        format!("in K2 {CUTOVER_RELEASE}")
-    }
+    CUTOVER_RELEASE.is_some_and(|r| version_reached(env!("CARGO_PKG_VERSION"), r))
 }
 
 /// How every legacy `--cmd` service is labelled (status, `k2 publish
-/// list`, `k2 app list`, doctor) until its agent moves it to an App.
+/// list`, `k2 app list`, doctor): it keeps running; its agent moves it to
+/// an App when ready.
+pub const LEGACY_LABEL: &str = "legacy (--cmd): keeps running; move it to an App when ready (k2 study app-move)";
+
+/// [`LEGACY_LABEL`], for callers that want a `String`.
 pub fn legacy_label() -> String {
-    if cutover_now() {
-        format!("legacy (--cmd) — K2 {CUTOVER_RELEASE} is the cut-over: move it to an App now")
-    } else {
-        format!("legacy (--cmd) — move it to an App before {CUTOVER_RELEASE}")
-    }
+    LEGACY_LABEL.to_string()
 }
 
 /// Where an agent reads how to move a legacy service to an App.
@@ -74,17 +70,13 @@ pub const LEGACY_HINT: &str = "k2 study app-move";
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_cutover_is_0_46_4_and_the_label_names_it() {
-        assert_eq!(super::CUTOVER_RELEASE, "0.46.4");
-        // The label follows the build: "before" until this build is the
-        // cut-over, "now" from it on (never "before 0.46.4" on 0.46.4).
-        let want = if super::version_reached(env!("CARGO_PKG_VERSION"), "0.46.4") {
-            "legacy (--cmd) — K2 0.46.4 is the cut-over: move it to an App now"
-        } else {
-            "legacy (--cmd) — move it to an App before 0.46.4"
-        };
-        assert_eq!(super::legacy_label(), want);
-        assert_eq!(super::cutover_now(), super::version_reached(env!("CARGO_PKG_VERSION"), "0.46.4"));
+    fn no_cutover_is_set_and_the_label_says_it_keeps_running() {
+        // Rosson 2026-10-26: no release removes --cmd services; no text
+        // names one.
+        assert_eq!(super::CUTOVER_RELEASE, None);
+        assert!(!super::cutover_now());
+        assert_eq!(super::legacy_label(), "legacy (--cmd): keeps running; move it to an App when ready (k2 study app-move)");
+        assert!(!super::legacy_label().contains("0.46"), "no release in the label");
         assert!(!super::legacy_label().contains("adopt"));
     }
 

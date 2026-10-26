@@ -640,7 +640,7 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
                     if o.remove("password").is_some() {
                         o.insert(
                             "passwordNote".into(),
-                            json!("not kept: the agent sets it with k2 app user password <name> --password-stdin"),
+                            json!("not kept: the agent sets it once, k2 app user password <name> --test --password-stdin"),
                         );
                     }
                 }
@@ -704,10 +704,17 @@ thread_local! {
 /// check passes for the requesting agent (every other check still runs,
 /// the always-per-event holds included).
 fn with_manage_approved<T>(f: impl FnOnce() -> T) -> T {
-    MANAGE_APPROVED.with(|c| c.set(true));
-    let out = f();
-    MANAGE_APPROVED.with(|c| c.set(false));
-    out
+    // Restored on every exit, a panic included (review 0.46.4 B-4): the
+    // flag never outlives this replay on this worker thread.
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let before = self.0;
+            MANAGE_APPROVED.with(|c| c.set(before));
+        }
+    }
+    let _restore = Restore(MANAGE_APPROVED.with(|c| c.replace(true)));
+    f()
 }
 
 /// Inside the replay of an approved `manage` request?

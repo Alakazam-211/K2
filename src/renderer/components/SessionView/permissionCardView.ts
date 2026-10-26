@@ -55,8 +55,14 @@ export const PERMISSION_LABEL = {
   /** K2's App cards whose held request "Let this agent manage its Apps'
    *  users" covers: allow, then turn that switch on. Only when the daemon
    *  offers it (`choice.options`). */
-  always: 'Always allow',
+  always: "Allow, and let it manage its Apps' users from now on",
 } as const
+
+/** What "Let this agent manage its Apps' users" covers (the daemon's
+ *  `held_cards::SWITCH_COVERS`): said again in the confirm for
+ *  `PERMISSION_LABEL.always`. */
+export const APP_USERS_SWITCH_COVERS =
+  "On its own Apps only: add and remove App users and test guests, set their passwords, email and names, unlock them, give them roles and its own room, invite people, and give its Apps the guests-rooms grant in its own room. Never a box login or another workspace's guests."
 
 /** Deny reasons: one line, at most this many characters (§4.4). */
 export const DENY_REASON_MAX = 200

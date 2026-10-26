@@ -241,8 +241,8 @@ export function AgentAppsAccess({
           <div className={desc}>
             Adds and removes App users and test guests of its own Apps, sets their passwords, email and names, unlocks them,
             gives them roles and its own room, invites people, and gives its Apps the guests-rooms grant in its own room. The
-            users it makes are tied to it. Never a box login or another workspace&rsquo;s guests. Off: each one is a card for
-            you.
+            users it makes are tied to it. Never a box login or another workspace&rsquo;s guests. Off: adding a test guest or
+            the guests-rooms grant is a card for you; the rest is refused until you turn it on.
           </div>
         </div>
       </div>

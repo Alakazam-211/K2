@@ -150,17 +150,19 @@ describe('PermissionCard: a confirm action (§17.11.3, §17.4)', () => {
     await waitFor(() => expect(actions.answer).toHaveBeenCalledWith({ answer: 'Allow', confirmToken: 'tok_1' }))
   })
 
-  it('"Always allow" shows only when the daemon offers it, and answers with its own label after the confirm', async () => {
+  it('"Allow, and let it manage its Apps’ users" shows only when offered, says what the switch covers, and answers with its label', async () => {
+    const always = "Allow, and let it manage its Apps' users from now on"
     const actions = actionsMock()
     draw(permissionDoc({ view: CONFIRM_VIEW }), actions)
     expect(screen.queryByTestId('permission-always')).toBeNull()
     cleanup()
-    draw(permissionDoc({ view: CONFIRM_VIEW, options: ['Allow', 'Deny', 'Always allow'] }), actions)
-    expect(text('permission-always')).toBe('Always allow')
+    draw(permissionDoc({ view: CONFIRM_VIEW, options: ['Allow', 'Deny', always] }), actions)
+    expect(text('permission-always')).toBe(always)
     fireEvent.click(screen.getByTestId('permission-always'))
     expect(actions.answer).not.toHaveBeenCalled()
+    expect(text('permission-always-covers')).toContain('Never a box login')
     fireEvent.click(screen.getByTestId('mock-confirm-ok'))
-    await waitFor(() => expect(actions.answer).toHaveBeenCalledWith({ answer: 'Always allow', confirmToken: 'tok_1' }))
+    await waitFor(() => expect(actions.answer).toHaveBeenCalledWith({ answer: always, confirmToken: 'tok_1' }))
   })
 
   it('cancel goes back to the buttons; without a server to confirm on, it says where to', () => {

@@ -129,10 +129,10 @@ async fn an_app_sets_its_own_guests_rooms_without_the_owner_token() {
     gateway::close(&format!("jobs{tag}"), None, true);
 
     // An agent, end to end over the CLI routes, within the grant: with
-    // "Build and run Apps" (0.46.4: without it, refused).
+    // "Let this agent manage its Apps' users" (0.46.4: without it, refused).
     let r = post(port, "/cli/app/guest/rooms", &agent, json!({ "app": svc, "username": dana, "rooms": [acme.handle] })).await;
-    assert_eq!((r.status, r.code()), (403, "apps_manage_off".to_string()), "{}", r.body);
-    k2_core::workspace::settings::set_agents_can_manage_skin(&own.path.to_string_lossy(), true).unwrap();
+    assert_eq!((r.status, r.code()), (403, "app_users_off".to_string()), "{}", r.body);
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&own.id, true).unwrap();
     let r = post(port, "/cli/app/guest/rooms", &agent, json!({ "app": svc, "username": dana, "rooms": [acme.handle] })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["beforeHandles"], json!([own.handle]));

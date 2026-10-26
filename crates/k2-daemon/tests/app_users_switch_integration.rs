@@ -227,3 +227,114 @@ async fn copy_host_is_one_held_request_and_the_approval_copies_exactly_what_it_l
     assert_eq!(r.status, 200, "{}", r.body);
     k2_daemon::apps::alerts::set_sink(None);
 }
+
+/// Review 0.46.4: never a box login, the one password set after a plain
+/// Allow, the pending cap, App keys that manage users, owner-made test
+/// guests, and who resumes a suspension.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_review_lines_hold_box_logins_one_password_keys_and_suspensions() {
+    let env = setup(&[]);
+    quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
+    let ws = seed_ws(&env, "uswr");
+    let other = seed_ws(&env, "uswr2");
+    let agent = passport(&ws);
+    allow_build_only(&ws, true);
+    let r = post(d.port, "/cli/app/install", &agent, json!({"app": "uswrapp"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    // 1. An owner-made box login whose room is the agent's own is still a
+    // box login: refused for every user verb, with the switch on.
+    allow_manage(&ws, true);
+    k2_core::skin::add_principal("usw-boxed").expect("add");
+    k2_core::skin::set_host_login("usw-boxed", true).expect("box login");
+    k2_core::skin::set_principal_default_rooms("usw-boxed", &[ws.id.clone()], true).expect("its room");
+    for (path, body) in [
+        ("/cli/skin/users/password", json!({"username": "usw-boxed", "password": "agent-pw-12345"})),
+        ("/cli/skin/users/email", json!({"username": "usw-boxed", "email": "boxed@example.com"})),
+        ("/cli/skin/users/full-name", json!({"username": "usw-boxed", "fullName": "Boxed"})),
+        ("/cli/skin/users/unlock", json!({"username": "usw-boxed"})),
+        ("/cli/skin/users/rooms", json!({"username": "usw-boxed", "rooms": [ws.handle]})),
+        ("/cli/skin/users/remove", json!({"username": "usw-boxed"})),
+        ("/cli/skin/roles/unassign", json!({"username": "usw-boxed"})),
+        ("/cli/app/guest/rooms", json!({"app": "uswrapp", "username": "usw-boxed", "rooms": [ws.handle]})),
+    ] {
+        let r = post(d.port, path, &agent, body).await;
+        assert_eq!(r.status, 403, "{path}: {}", r.body);
+        assert!(r.body.contains("box login"), "{path}: {}", r.body);
+    }
+    assert!(k2_core::skin::list_principals().unwrap().iter().any(|p| p.username == "usw-boxed"), "untouched");
+
+    // 2. A plain Allow gives a usable test guest: the agent sets its
+    // password once, never twice, without the switch.
+    allow_build_only(&ws, true);
+    let r = post(d.port, "/cli/app/test-guest/add", &agent, json!({"app": "uswrapp", "username": "USW-Once"})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
+    assert!(r.json()["request"]["summary"].as_str().unwrap().contains("usw-once"), "the normalized name: {}", r.body);
+    assert!(r.json()["request"]["body"]["body"]["service"].as_str().is_some(), "the service id is kept: {}", r.body);
+    let held = r.json()["request"]["id"].as_str().expect("id").to_string();
+    let pw = |p: &'static str| json!({"username": "usw-once", "password": p});
+    let r = post(d.port, "/cli/app/test-guest/password", &agent, pw("before-approval-1")).await;
+    assert_eq!((r.status, r.code()), (404, "not_a_test_guest".to_string()), "nothing made yet: {}", r.body);
+    let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": held, "confirmToken": confirm("app-approve", &held)})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (200, json!("approved")), "{}", r.body);
+    let r = post(d.port, "/cli/app/test-guest/password", &agent, pw("first-set-pw-123")).await;
+    assert_eq!((r.status, r.json()["once"].clone()), (200, json!(true)), "{}", r.body);
+    let r = post(d.port, "/cli/app/test-guest/password", &agent, pw("second-set-pw-123")).await;
+    assert_eq!((r.status, r.code()), (403, "app_users_off".to_string()), "only once: {}", r.body);
+
+    // 3. At most 5 open held requests of one kind per agent.
+    for n in 0..5 {
+        let r = post(d.port, "/cli/app/test-guest/add", &agent, json!({"app": "uswrapp", "username": format!("usw-pend{n}")})).await;
+        assert_eq!(r.status, 202, "{n}: {}", r.body);
+    }
+    let r = post(d.port, "/cli/app/test-guest/add", &agent, json!({"app": "uswrapp", "username": "usw-pend5"})).await;
+    assert_eq!((r.status, r.code()), (429, "too_many_pending".to_string()), "{}", r.body);
+
+    // 4. An owner-made test guest is never the agent's to remove.
+    let r = post(d.port, "/cli/app/test-guest/add", OWNER, json!({"app": "uswrapp", "username": "usw-ownertg"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    allow_manage(&ws, true);
+    let r = post(d.port, "/cli/app/test-guest/rm", &agent, json!({"username": "usw-ownertg"})).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    let r = post(d.port, "/cli/app/test-guest/rm", &passport(&other), json!({"username": "usw-ownertg"})).await;
+    assert_eq!((r.status, r.code()), (404, "not_a_test_guest".to_string()), "{}", r.body);
+
+    // 5. An App key that manages users: with switch 2 alone it is held;
+    // with the users switch too, its own room only applies at once.
+    let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_manage_full", "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&ws.id, false).unwrap();
+    let r = post(d.port, "/cli/app/key/mint", &agent, json!({"app": "uswrapp", "scopes": ["users"], "rooms": [ws.handle]})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "users switch off: {}", r.body);
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&ws.id, true).unwrap();
+    let r = post(d.port, "/cli/app/key/mint", &agent, json!({"app": "uswrapp", "scopes": ["users"], "rooms": [ws.handle, other.handle]})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "another room: {}", r.body);
+    let r = post(d.port, "/cli/app/key/mint", &agent, json!({"app": "uswrapp", "scopes": ["users"], "rooms": [ws.handle]})).await;
+    assert_eq!(r.status, 200, "its own room, both switches: {}", r.body);
+    let r = post(d.port, "/cli/app/key/mint", &agent, json!({"app": "uswrapp", "scopes": ["fetch"]})).await;
+    assert_eq!(r.status, 200, "a key that manages no users: switch 2 as before: {}", r.body);
+
+    // 6. Suspensions: the agent resumes its own with switch 2; a person who
+    // suspends it again takes it over; the owner's stays the owner's.
+    let r = post(d.port, "/cli/app/suspend", &agent, json!({"app": "uswrapp"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/app/resume", &agent, json!({"app": "uswrapp"})).await;
+    assert_eq!(r.status, 200, "its own suspension: {}", r.body);
+    let r = post(d.port, "/cli/app/suspend", &agent, json!({"app": "uswrapp"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/app/suspend", OWNER, json!({"app": "uswrapp"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/app/resume", &agent, json!({"app": "uswrapp"})).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "the owner took it over: {}", r.body);
+    let r = post(d.port, "/cli/app/resume", OWNER, json!({"app": "uswrapp"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/app/suspend", OWNER, json!({"app": "uswrapp"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/app/suspend", &agent, json!({"app": "uswrapp"})).await;
+    assert_eq!(r.status, 200, "suspending again narrows: {}", r.body);
+    let r = post(d.port, "/cli/app/resume", &agent, json!({"app": "uswrapp"})).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "an agent never takes over the owner's: {}", r.body);
+    k2_daemon::apps::alerts::set_sink(None);
+}

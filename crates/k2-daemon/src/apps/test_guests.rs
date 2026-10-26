@@ -43,8 +43,12 @@ use serde_json::{json, Value as J};
 
 use super::routes::{actor, agent_ws, app_for, json_body, need_build, need_credential, no, s, ws_by_id, Who, R};
 
-pub const ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm", "/cli/app/test-guests"];
-pub const POST_ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm"];
+pub const ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm", "/cli/app/test-guests", PASSWORD];
+pub const POST_ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm", PASSWORD];
+
+/// `k2 app user password <name> --test --password-stdin`: set a test
+/// guest's password ([`password`]).
+pub const PASSWORD: &str = "/cli/app/test-guest/password";
 
 pub const TOO_MANY: &str = "too_many_test_guests";
 pub const ROLE_NOT_THIS_APPS: &str = "role_not_this_apps";
@@ -71,6 +75,7 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
     match path {
         "/cli/app/test-guest/add" => add(who, body),
         "/cli/app/test-guest/rm" => rm(who, body),
+        PASSWORD => password(who, body),
         "/cli/app/test-guests" => list(who, params),
         _ => Err(no("not_found", 404, "no such App route")),
     }
@@ -142,7 +147,17 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
     }
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
-    let username = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "username is required"))?.to_string();
+    // A held request's replay names the App's service id too: the same App
+    // id on a different App since is refused, never made.
+    if let Some(svc) = s(&v, "service") {
+        if svc != app.service_id {
+            return Err(no("app_changed", 409, format!("{} is a different App now than when this was asked: ask again", app.app_id)));
+        }
+    }
+    let raw = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "username is required"))?;
+    // Normalized first (no control characters, the length cap): this is
+    // the name every card, note and audit line shows.
+    let username = skin::normalize_username(raw).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
     let rooms = super::agent_grants::list_field(&v, "rooms").unwrap_or_default();
     let rooms = super::agent_grants::resolve_rooms(&rooms)?;
     if let Some(ws) = ws.as_deref() {
@@ -150,9 +165,11 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
         if !super::agent_grants::may_self(who) {
             // The test-guest rules first, so a request the owner approves
             // can't fail on them (they run again at the approval).
-            tg::parse_ttl(s(&v, "expires")).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
-            role_of(&app, s(&v, "role"), true)?;
-            return super::agent_grants::test_guest_held(who, ws, &app, &v);
+            let expires = s(&v, "expires");
+            tg::parse_ttl(expires).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+            let role_id = role_of(&app, s(&v, "role"), true)?;
+            let ask = super::agent_grants::TestGuestAsk { username: &username, role_id: role_id.as_deref(), rooms: &rooms, expires, reason: s(&v, "reason") };
+            return super::agent_grants::test_guest_held(who, ws, &app, &ask);
         }
     }
     let spec = NewTestGuest { username: &username, role: s(&v, "role"), expires: s(&v, "expires"), rooms: &rooms, password: s(&v, "password") };
@@ -296,14 +313,26 @@ fn rm(who: &Who, body: &[u8]) -> R<J> {
     let missing = || no(NOT_A_TEST_GUEST, 404, format!("'{username}' isn't a test guest you can remove (k2 app test-guests <app>)"));
     let p = principal(username)?.ok_or_else(missing)?;
     let t = tg::get(&p.id).map_err(store_err)?.ok_or_else(missing)?;
-    if agent_ws(who).is_some_and(|ws| ws != t.workspace_id) {
-        return Err(missing());
-    }
     let app = {
         let h = k2_core::db::shared();
         let conn = h.lock();
         deploy::store::get_app_by_service(&conn, &t.app).ok().flatten()
     };
+    if let Some(ws) = agent_ws(who) {
+        // The App's CURRENT workspace (an App handed over since is another
+        // workspace's), and only a test guest its own workspace's agent
+        // made: an owner-made one stays the owner's (review 0.46.4).
+        if app.as_ref().is_none_or(|a| a.owner_workspace != ws) {
+            return Err(missing());
+        }
+        if skin::creators::workspace_of(&p.id).map_err(store_err)?.as_deref() != Some(ws) {
+            return Err(no(
+                codes::OWNER_ONLY,
+                403,
+                format!("'{}' is a test guest the owner made: it stays the owner's (ask your human: k2 app user remove {} --test)", p.username, p.username),
+            ));
+        }
+    }
     let by = actor(who);
     let removed = skin::remove_principal_as(&p.username, &by).map_err(store_err)?;
     if let Some(a) = &app {
@@ -311,6 +340,98 @@ fn rm(who: &Who, body: &[u8]) -> R<J> {
     }
     access_audit("app-test-guest", &by, format!("removed {}", p.username));
     Ok(json!({ "ok": true, "username": p.username, "removed": removed }))
+}
+
+/// POST `/cli/app/test-guest/password {username, password}`.
+///
+/// - A person: any test guest.
+/// - The App's own agent, on a test guest its own workspace made (the App
+///   still its workspace's): with "Let this agent manage its Apps' users"
+///   any number of times; without it exactly ONCE per test guest the owner
+///   approved from its held request (review 0.46.4: a plain Allow must give
+///   a usable guest without turning the switch on). The once is a
+///   compare-and-set on that request's stored result (`passwordSet`), so
+///   two calls can't both win; the password itself is never stored there.
+fn password(who: &Who, body: &[u8]) -> R<J> {
+    need_credential(who)?;
+    let v = json_body(body)?;
+    let username = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "username is required"))?;
+    let pw = s(&v, "password").ok_or_else(|| no(codes::BAD_REQUEST, 400, "password is required (k2 app user password <name> --test --password-stdin)"))?;
+    let missing = || no(NOT_A_TEST_GUEST, 404, format!("'{username}' isn't a test guest you can set a password for (k2 app test-guests <app>)"));
+    let p = principal(username)?.ok_or_else(missing)?;
+    let t = tg::get(&p.id).map_err(store_err)?.ok_or_else(missing)?;
+    let app = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        deploy::store::get_app_by_service(&conn, &t.app).ok().flatten()
+    };
+    let by = actor(who);
+    let mut once: Option<String> = None;
+    if let Some(ws) = agent_ws(who) {
+        if app.as_ref().is_none_or(|a| a.owner_workspace != ws) {
+            return Err(missing());
+        }
+        if skin::creators::workspace_of(&p.id).map_err(store_err)?.as_deref() != Some(ws) {
+            return Err(no(codes::OWNER_ONLY, 403, format!("'{}' is a test guest the owner made: its password stays the owner's", p.username)));
+        }
+        if !super::agent_grants::may_self(who) {
+            let id = approved_request_for(ws, &p.username)?.ok_or_else(|| {
+                super::agent_grants::users_off(&format!(
+                    "Setting '{}''s password again (its one password set after the owner's approval is used)",
+                    p.username
+                ))
+            })?;
+            once = Some(id);
+        }
+    } else {
+        need_build(who)?;
+    }
+    if let Some(id) = once.as_deref() {
+        // Single use, before the write: a lost race sets nothing.
+        let won = {
+            let h = k2_core::db::shared();
+            let conn = h.lock();
+            conn.execute(
+                "UPDATE app_widenings SET result_json = json_set(COALESCE(result_json, '{}'), '$.passwordSet', json('true')) \
+                 WHERE id = ?1 AND COALESCE(json_extract(result_json, '$.passwordSet'), 0) = 0",
+                rusqlite::params![id],
+            )
+            .map_err(store_err_db)?
+        };
+        if won != 1 {
+            return Err(super::agent_grants::users_off(&format!("Setting '{}''s password again", p.username)));
+        }
+    }
+    skin::set_principal_password(&p.username, Some(pw)).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    if let Some(a) = &app {
+        app_audit(a, "test_guest_password", &by, json!({ "username": p.username, "approvedRequest": once }));
+    }
+    access_audit("app-test-guest", &by, format!("set the password of {}", p.username));
+    Ok(json!({ "ok": true, "username": p.username, "once": once.is_some() }))
+}
+
+fn store_err_db(e: rusqlite::Error) -> super::routes::Refusal {
+    no("db_error", 500, e.to_string())
+}
+
+/// The owner-approved held test-guest request of `ws` that made
+/// `username`, while its one password set is unused.
+fn approved_request_for(ws: &str, username: &str) -> R<Option<String>> {
+    let rows = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let f = k2_core::app_grace::requests::Filter { app_id: None, service_id: None, workspace: Some(ws), status: Some(k2_core::app_grace::requests::STATUS_APPROVED) };
+        k2_core::app_grace::requests::list(&conn, &f, 200).map_err(store_err_db)?
+    };
+    Ok(rows
+        .into_iter()
+        .find(|r| {
+            r.requester_workspace.as_deref() == Some(ws)
+                && r.body.get("route").and_then(J::as_str) == Some(super::agent_grants::TEST_GUEST_ADD)
+                && r.body.pointer("/body/username").and_then(J::as_str) == Some(username)
+                && r.result.as_ref().and_then(|x| x.get("passwordSet")).and_then(J::as_bool) != Some(true)
+        })
+        .map(|r| r.id))
 }
 
 /// GET `/cli/app/test-guests?app=`.

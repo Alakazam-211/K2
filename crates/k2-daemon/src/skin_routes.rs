@@ -428,7 +428,21 @@ fn outside_workspace(what: String) -> CliResponse {
     owner_only_with_hint(&format!("{what}: only the owner changes guests and roles outside your workspace (ask your human)"))
 }
 
-fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse> {
+/// Does principal `principal_id` hold an enabled box login (a `host` grant)?
+pub(crate) fn has_box_login(principal_id: &str, grants: &[skin::SkinGrant]) -> bool {
+    grants
+        .iter()
+        .any(|g| g.enabled && g.subject_kind == "principal" && g.subject_id == principal_id && g.kind == "app" && g.target_id == skin::HOST_APP_ID)
+}
+
+/// The refusal for an agent on a guest that holds a box login.
+pub(crate) fn box_login_refused(username: &str) -> CliResponse {
+    owner_only_with_hint(&format!(
+        "'{username}' has a box login: an agent never manages a box login, whatever its switches (ask your human; App users are App-only)"
+    ))
+}
+
+pub(crate) fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse> {
     // A body the handler can't read is its 400, not ours.
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else { return Ok(()) };
     let Some(username) = str_field(&v, &["username", "name"]) else { return Ok(()) };
@@ -447,6 +461,11 @@ fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse>
             "'{}' isn't your workspace's guest: it reaches outside your workspace (another workspace's App or room, a box-wide grant) or it is the owner's",
             p.username
         )));
+    }
+    // Rosson's rule (review 0.46.4): never a box login. A guest whose box
+    // login reaches only the agent's room is still a box login.
+    if has_box_login(&p.id, &grants) {
+        return Err(box_login_refused(&p.username));
     }
     match path {
         "/cli/skin/roles/assign" => {
@@ -682,7 +701,7 @@ pub(crate) fn principal_in_workspace(p: &skin::SkinPrincipal, roles: &[skin::Ski
 /// stamped and tied to the workspace, so the agent sets its password
 /// (`k2 app user password <name> --password-stdin`) and the rest. `None` =
 /// go on.
-fn agent_test_guest_refused(actor: &str, username: &str) -> Option<CliResponse> {
+pub(crate) fn agent_test_guest_refused(actor: &str, username: &str) -> Option<CliResponse> {
     if !actor_is_agent(actor) || crate::apps::test_guests::AGENTS_MAY_MANAGE {
         return None;
     }
@@ -1062,6 +1081,9 @@ pub fn handle_users_full_name(body: &[u8], actor: &str) -> CliResponse {
     let Some(username) = str_field(&v, &["username"]) else {
         return CliResponse::bad_request("missing username");
     };
+    if let Some(r) = agent_test_guest_refused(actor, username) {
+        return r;
+    }
     let full_name = match full_name_field(&v) {
         Ok(n) => n,
         Err(r) => return r,

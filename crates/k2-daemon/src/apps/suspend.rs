@@ -73,7 +73,10 @@ pub(crate) fn refuse_if_suspended(app_id: &str) -> R<()> {
         return Err(no(
             APP_SUSPENDED,
             409,
-            format!("{app_id} is suspended: deploys and starts are frozen until the owner resumes it (k2 app resume {app_id})"),
+            format!(
+                "{app_id} is suspended: deploys and starts are frozen until it is resumed (k2 app resume {app_id}: the owner; or \
+                 the App's own agent, with \"Manage its Apps end to end\", when it suspended it itself)"
+            ),
         ));
     }
     Ok(())
@@ -100,12 +103,24 @@ fn suspend(who: &Who, body: &[u8]) -> R<J> {
     let by = actor(who);
     let reason = s(&v, "reason").map(|r| r.chars().take(500).collect::<String>());
     let already = is_suspended(&app.app_id);
+    let agent = super::routes::agent_ws(who).is_some();
     if !already {
         let h = k2_core::db::shared();
         let conn = h.lock();
         conn.execute(
             "UPDATE apps SET suspended_at = ?2, suspended_by = ?3, suspended_reason = ?4, updated_at = ?2 WHERE app_id = ?1",
             params![app.app_id, deploy::now(), by, reason],
+        )
+        .map_err(db_err)?;
+    } else if !agent {
+        // A person suspending an App its agent suspended takes the
+        // suspension over (review 0.46.4 B-3): only the owner resumes it
+        // now. An agent never takes over anyone's suspension.
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute(
+            "UPDATE apps SET suspended_by = ?2, suspended_reason = COALESCE(?3, suspended_reason), updated_at = ?4 WHERE app_id = ?1",
+            params![app.app_id, by, reason, deploy::now()],
         )
         .map_err(db_err)?;
     }
@@ -136,7 +151,7 @@ fn suspend(who: &Who, body: &[u8]) -> R<J> {
     super::alerts::notify(
         &app.owner_workspace,
         &format!(
-            "[k2 apps] {} was suspended by {by}{}. Its passes are revoked and deploys are frozen until the owner resumes it.",
+            "[k2 apps] {} was suspended by {by}{}. Its passes are revoked and deploys are frozen until it is resumed (the owner; or its agent, with \"Manage its Apps end to end\", when the agent suspended it itself).",
             app.app_id,
             reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default()
         ),
@@ -149,7 +164,11 @@ fn suspend(who: &Who, body: &[u8]) -> R<J> {
         "passesRevoked": revoked,
         "stopped": stopped,
         "suspension": suspension(&app.app_id)?,
-        "hint": format!("only the owner resumes it: k2 app resume {}", app.app_id),
+        "hint": if agent && !already {
+            format!("you suspended it: you resume it with \"Manage its Apps end to end\" on (k2 app resume {}), else the owner does", app.app_id)
+        } else {
+            format!("only the owner resumes it: k2 app resume {}", app.app_id)
+        },
     }))
 }
 

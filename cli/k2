@@ -11277,9 +11277,11 @@ else:
 # Test guests (0.46.4): k2 app user add <app> <name> --test [--role R]
 # [--room H]... [--expires 24h] [--password-stdin] [--json]; k2 app user
 # remove <name> --test; k2 app test-guests <app>. A person adds and
-# removes; the App's own agent adds with "Manage its Apps end to end" (else
-# one held request with a card for the owner, exit 2) and removes with
-# "Build and run Apps".
+# removes; the App's own agent adds with "Let this agent manage its Apps'
+# users" (else one held request with a card for the owner, exit 2), removes
+# its own with that switch or "Build and run Apps", and sets its own test
+# guest's password (k2 app user password <name> --test --password-stdin:
+# with the switch, or once after the owner approved its request).
 _app_test_guest() {
     local action="$1"
     shift
@@ -11308,12 +11310,14 @@ k2 app test-guests <app-id> [--json]
   --room (without a role) only your own workspace's room. It ends on its
   own: 24 h by default, at most 7 days. At most 5 per App. Audited and
   noted on the workspace's Thread. K2 makes the password and shows it once
-  (or --password-stdin; later: k2 app user password <name> --password-stdin).
+  (or --password-stdin; later: k2 app user password <name> --test
+  --password-stdin).
 
-  Who: a person; or the App's own agent with "Manage its Apps end to end"
-  (its test guests are tied to it). Without that switch an agent's add is
-  one held request: the owner approves it from a card on your Thread or
-  Settings → App Approvals (exit 2), then you set its password.
+  Who: a person; or the App's own agent with "Let this agent manage its
+  Apps' users" (its test guests are tied to it). Without that switch an
+  agent's add is one held request: the owner approves it from a card on
+  your Thread or Settings → App Approvals (exit 2); then you set its
+  password once: k2 app user password <name> --test --password-stdin.
 EOF
                 return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -11332,6 +11336,20 @@ EOF
         fi
         _app_rt_post /cli/app/test-guest/add "$(_compute_json K2_CJ_app="$app" K2_CJ_username="$name" K2_CJ_role="$role" K2_CJ_expires="$expires" K2_CJ_password="$pw" K2_CJ_rooms_j="$rooms_j")"
         _app_grace_done "$json_out"
+    elif [ "$action" = password ]; then
+        [ -z "$name" ] && { echo "usage: k2 app user password <name> --test --password-stdin" >&2; exit 2; }
+        [ "$pw_stdin" = 1 ] || { echo "usage: k2 app user password <name> --test --password-stdin (the password on stdin)" >&2; exit 2; }
+        local pw=""
+        IFS= read -r pw || true
+        [ -n "$pw" ] || { echo "--password-stdin: no password on stdin" >&2; exit 2; }
+        _app_rt_post /cli/app/test-guest/password "$(_compute_json K2_CJ_username="$name" K2_CJ_password="$pw")"
+        [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("Test guest %s: password set%s." % (v.get("username"), " (the one set after the owner approved it)" if v.get("once") else ""))'
+        return 0
     else
         [ -z "$name" ] && { echo "usage: k2 app user remove <name> --test" >&2; exit 2; }
         _app_rt_post /cli/app/test-guest/rm "$(_compute_json K2_CJ_username="$name")"
@@ -13063,8 +13081,8 @@ print("%s: guests-rooms grant %s" % (a.get("handle") or a.get("serviceId"), "rev
     local rooms_j
     rooms_j="$(K2_GR_ROOMS="$rooms_csv" python3 -c 'import json,os; print(json.dumps([r.strip() for r in os.environ["K2_GR_ROOMS"].split(",") if r.strip()]))')"
     _app_rt_post /cli/app/grant "$(_compute_json K2_CJ_app="$app" K2_CJ_kind="$kind" K2_CJ_rooms_j="$rooms_j")"
-    # An agent without "Manage its Apps end to end", or naming another
-    # workspace's room: one held request with a card for the owner.
+    # An agent without "Let this agent manage its Apps' users", or naming
+    # another workspace's room: one held request with a card for the owner.
     _app_grace_done "$json_out"
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
@@ -13394,7 +13412,7 @@ cmd_skin() {
             shift || true
             # 0.46.4: test guests (--test) go through the App runtime.
             case "$action" in
-                add|remove|rm)
+                add|remove|rm|password)
                     for _a in "$@"; do
                         if [[ "$_a" == "--test" ]]; then
                             _app_test_guest "$action" "$@"

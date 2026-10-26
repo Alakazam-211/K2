@@ -122,8 +122,8 @@ pub(crate) fn audit(event: &str, user: &str, via: &str, req: &PermissionRequest)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Decision {
     Allow,
-    /// "Always allow" (K2's App cards whose held request "Manage its Apps
-    /// end to end" covers): Allow, then turn that switch on
+    /// [`label::ALWAYS`] (K2's App cards whose held request "Let this agent
+    /// manage its Apps' users" covers): Allow, then turn that switch on
     /// (`apps::held_cards::turn_on_always`).
     Always,
     Deny,

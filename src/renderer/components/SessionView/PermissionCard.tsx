@@ -23,6 +23,7 @@ import { ConfirmStep } from '@/components/Settings/sections/DataSourceConfirm'
 import { CHAMFER_CUT, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
 import { cardExpiryLabel } from './overlayThread'
 import {
+  APP_USERS_SWITCH_COVERS,
   approverWord,
   DENY_REASON_MAX,
   noteProblem,
@@ -280,7 +281,7 @@ function AnswerControls({
   item: PermissionItem
   actions: PermissionCardActions
   batchItem: boolean
-  /** The daemon offers "Always allow" on this card. */
+  /** The daemon offers `PERMISSION_LABEL.always` on this card. */
   always?: boolean
 }): JSX.Element {
   const [step, setStep] = useState<Step>({ kind: 'idle' })
@@ -305,6 +306,11 @@ function AnswerControls({
     return (
       <div data-testid="permission-confirm-sheet" className="flex flex-col gap-1">
         <div style={{ color: TEXT2 }}>Confirm it’s you to allow this. It’s the same confirm Settings asks for.</div>
+        {step.answer === PERMISSION_LABEL.always && (
+          <div data-testid="permission-always-covers" style={{ color: TEXT2 }}>
+            This also turns on “Let this agent manage its Apps’ users”: {APP_USERS_SWITCH_COVERS}
+          </div>
+        )}
         <ConfirmStep
           scope={actions.confirmScope}
           action={confirmAction}

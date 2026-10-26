@@ -160,7 +160,7 @@ pub(crate) const ROWS: &[Row] = &[
     // ── Apps ───────────────────────────────────────────────────────────
     row(ask("apps.build", Floor::Owner), code(403, "apps_manage_off"), "/cli/", ANY),
     // App users (0225): the skin-manage door's refusal on a user route.
-    row(ask("apps.manage-users", Floor::Owner), code(403, "app_users_off"), "/cli/skin/", ANY),
+    row(ask("apps.manage-users", Floor::Owner), code(403, "app_users_off"), "/cli/", ANY),
     // Every App hold (switch 2 off, a core not ticked, new caps, a --cmd
     // service…) already made a held request: asking attaches a card to that
     // same id (§3.2, the agent sheet's HELD rule).

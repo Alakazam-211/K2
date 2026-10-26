@@ -401,8 +401,8 @@ fn batch_labels() -> Vec<ChoiceOption> {
 /// Approver options for one request in `state` (§17.2.4): `Allow` /
 /// `Deny` (kept on a closed card, as §17.11.2 shows), `Close` when it is
 /// already on, none while applying. K2's App cards whose held request
-/// "Manage its Apps end to end" covers add `Always allow` (people on
-/// `cards=2` only; the §17.6 fallback keeps the two labels).
+/// "Let this agent manage its Apps' users" covers add [`label::ALWAYS`]
+/// (people on `cards=2` only; the §17.6 fallback keeps the two labels).
 fn approver_options(state: RequestState, answer: Option<&str>, item: &ItemView) -> Vec<ChoiceOption> {
     match state {
         RequestState::AlreadyDone => labels(&[label::CLOSE]),

@@ -63,6 +63,32 @@ pub const CARD_ROUTES: &[&str] = &[COPY_HOST_APPLY, GUEST_ROOMS_APPLY, LABEL_TRA
 /// The switch's name in hints.
 pub const SWITCH_NAME: &str = "Let this agent manage its Apps' users";
 
+/// 403 `app_users_off`: the App-user switch is off for this agent.
+pub(crate) fn users_off(what: &str) -> Refusal {
+    no(
+        crate::skin_routes::APP_USERS_OFF,
+        403,
+        format!(
+            "{what} needs \"{SWITCH_NAME}\" for this agent (off): ask your owner to turn it on (Settings → Workspaces → \
+             <this agent> → Agent → Apps, or k2 app access <ws> --users on from a terminal outside K2)"
+        ),
+    )
+}
+
+/// A roster-door refusal (`CliResponse`) as an App-route refusal.
+pub(crate) fn refusal_of(r: &crate::cli_response::CliResponse) -> Refusal {
+    let v: J = serde_json::from_str(&r.body).unwrap_or(J::Null);
+    let code = v.pointer("/error/code").and_then(J::as_str).or_else(|| v.get("error").and_then(J::as_str)).unwrap_or("forbidden");
+    let hint = v.pointer("/error/hint").and_then(J::as_str).or_else(|| v.get("hint").and_then(J::as_str)).unwrap_or("refused").to_string();
+    let status = r.status.split_whitespace().next().and_then(|s| s.parse().ok()).unwrap_or(403);
+    let code: &'static str = match code {
+        "owner_only" => codes::OWNER_ONLY,
+        "app_users_off" => crate::skin_routes::APP_USERS_OFF,
+        _ => codes::FORBIDDEN,
+    };
+    no(code, status, hint)
+}
+
 /// May this agent manage its own Apps' users itself: "Let this agent
 /// manage its Apps' users" on for its workspace, or the replay of a
 /// `manage` request the owner approved for this call.
@@ -146,7 +172,33 @@ pub(crate) struct Step<'a> {
 /// on the agent's Thread. The answer is 202 `held` (exit 2 in the CLI)
 /// and says where the owner sees it, and which switch would have let the
 /// agent do it itself.
+/// At most this many open held requests of one kind (route) per agent
+/// workspace; the next is 429 `too_many_pending` (review 0.46.4).
+pub const MAX_PENDING_PER_KIND: usize = 5;
+
+/// How many held requests of `route` the workspace has open now.
+fn pending_of(ws: &str, route: &str) -> R<usize> {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let f = reqs::Filter { app_id: None, service_id: None, workspace: None, status: Some(reqs::STATUS_PENDING) };
+    let rows = reqs::list(&conn, &f, 1000).map_err(|e| no("db_error", 500, e.to_string()))?;
+    Ok(rows
+        .iter()
+        .filter(|r| r.requester_workspace.as_deref() == Some(ws) && r.body.get("route").and_then(J::as_str) == Some(route))
+        .count())
+}
+
 pub(crate) fn hold(step: Step<'_>, switch_hint: bool) -> R<J> {
+    let open = pending_of(step.workspace, step.route)?;
+    if open >= MAX_PENDING_PER_KIND {
+        return Err(no(
+            "too_many_pending",
+            429,
+            format!(
+                "{open} requests like this already wait for the owner (at most {MAX_PENDING_PER_KIND}): withdraw one (k2 app deny <id>) or wait for the owner"
+            ),
+        ));
+    }
     let r = super::approvals::file(&super::approvals::Filing {
         who: step.who,
         kind: reqs::KIND_MANAGE,
@@ -251,6 +303,18 @@ pub(crate) fn copy_host(who: &Who, body: &[u8]) -> R<J> {
     let look = copy_to(&t, &by, true, None)?;
     let added = sorted(look["added"].as_array().map(|a| a.iter().filter_map(J::as_str).map(str::to_string).collect()).unwrap_or_default());
     if dry_run || added.is_empty() {
+        // Who has a box login is the owner's to know: without "Build and
+        // run Apps" a look says how many, not who (review 0.46.4).
+        if super::access::level(&ws) == super::access::Level::Off {
+            return Ok(json!({
+                "ok": true,
+                "app": look["app"],
+                "appInfo": look["appInfo"],
+                "dryRun": true,
+                "addedCount": added.len(),
+                "note": "names need \"Build and run Apps\"; the owner sees them on the card",
+            }));
+        }
         return Ok(look);
     }
     let handle = format!("{}/{}", ws_handle(&t.project_id), t.name);
@@ -297,7 +361,13 @@ pub(crate) fn guest_rooms_agent(who: &Who, ws: &str, t: &Target, rooms: &[String
             workspace: ws,
             route: GUEST_ROOMS_APPLY,
             body: json!({ "service": t.service_id, "app": handle, "workspace": ws, "rooms": rooms }),
-            lines: vec![format!("let {handle} set its own guests' rooms (guests-rooms): {shown}")],
+            lines: vec![
+                format!("let {handle} set its own guests' rooms (guests-rooms): {shown}"),
+                format!(
+                    "then any of {handle}'s guests, test guests {} holds included, can be given {shown}",
+                    ws_handle(ws)
+                ),
+            ],
             summary: format!("guests-rooms for {handle}: {shown}"),
             why: if own {
                 format!("\"{SWITCH_NAME}\" is off for this agent")
@@ -313,23 +383,38 @@ pub(crate) fn guest_rooms_agent(who: &Who, ws: &str, t: &Target, rooms: &[String
 
 // ── test guests ─────────────────────────────────────────────────────
 
-/// An agent's test guest without "Let this agent manage its Apps' users": one held request replaying
-/// its own call (never its password: the agent sets one afterwards).
-pub(crate) fn test_guest_held(who: &Who, ws: &str, app: &store::AppRow, v: &J) -> R<J> {
-    let mut body = v.clone();
-    if let Some(o) = body.as_object_mut() {
-        o.remove("password");
-        o.remove("reason");
+/// A test guest an agent asks for, checked: the normalized name, the
+/// App's own role (by id), its own room ids.
+pub(crate) struct TestGuestAsk<'a> {
+    pub username: &'a str,
+    pub role_id: Option<&'a str>,
+    pub rooms: &'a [String],
+    pub expires: Option<&'a str>,
+    pub reason: Option<&'a str>,
+}
+
+/// An agent's test guest without "Let this agent manage its Apps' users":
+/// one held request replaying its own call with the checked values (the
+/// App's service id, the role's id, room ids; never a password: the
+/// approval's one-time password set is the agent's,
+/// `test_guests::password`).
+pub(crate) fn test_guest_held(who: &Who, ws: &str, app: &store::AppRow, a: &TestGuestAsk<'_>) -> R<J> {
+    let mut body = json!({ "app": app.app_id, "service": app.service_id, "username": a.username, "rooms": a.rooms });
+    if let Some(r) = a.role_id {
+        body["role"] = json!(r);
     }
-    let user = s(v, "username").unwrap_or("?").trim().to_ascii_lowercase();
-    let mut what = format!("test guest {user} of {}", app.app_id);
-    if let Some(role) = s(v, "role") {
+    if let Some(e) = a.expires {
+        body["expires"] = json!(e);
+    }
+    let role_name = a.role_id.and_then(|id| k2_core::skin::list_roles().ok()?.into_iter().find(|r| r.id == id).map(|r| r.name));
+    let mut what = format!("test guest {} of {}", a.username, app.app_id);
+    if let Some(role) = role_name {
         what.push_str(&format!(", role {role}"));
     }
-    if let Some(rooms) = list_field(v, "rooms").filter(|r| !r.is_empty()) {
-        what.push_str(&format!(", rooms {}", rooms.join(", ")));
+    if !a.rooms.is_empty() {
+        what.push_str(&format!(", rooms {}", rooms_csv(a.rooms)));
     }
-    what.push_str(&format!(", for {}", s(v, "expires").unwrap_or("24h")));
+    what.push_str(&format!(", for {}", a.expires.unwrap_or("24h")));
     hold(
         Step {
             who,
@@ -344,10 +429,15 @@ pub(crate) fn test_guest_held(who: &Who, ws: &str, app: &store::AppRow, v: &J) -
             ],
             summary: format!("make the {what}"),
             why: format!("\"{SWITCH_NAME}\" is off for this agent"),
-            reason: s(v, "reason"),
+            reason: a.reason,
         },
         true,
     )
+}
+
+/// Room handles, comma-joined.
+pub(crate) fn rooms_csv(ids: &[String]) -> String {
+    ids.iter().map(|id| ws_handle(id)).collect::<Vec<_>>().join(", ")
 }
 
 // ── labels ──────────────────────────────────────────────────────────
@@ -363,8 +453,15 @@ pub(crate) fn label_transfer_held(
     holder: Option<&str>,
     reason: Option<&str>,
 ) -> R<J> {
+    // A label is a DNS label: never free text on a card.
+    let ok = !label.is_empty() && label.len() <= 63 && label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if !ok {
+        return Err(no(codes::BAD_REQUEST, 400, "a label is 1-63 of a-z, 0-9 and -"));
+    }
     let held_by = holder.map(ws_handle).unwrap_or_else(|| "nobody".to_string());
     let target = app.map(|a| a.app_id.clone()).unwrap_or_else(|| ws_handle(ws));
+    // What it serves now (the control plane's map), for the owner to see.
+    let serves = k2_core::tunnel::subdomains::current().targets.get(label).cloned();
     hold(
         Step {
             who,
@@ -375,7 +472,15 @@ pub(crate) fn label_transfer_held(
             body: json!({ "label": label, "move": move_, "workspace": ws, "app": app.map(|a| a.app_id.clone()), "holder": holder }),
             lines: vec![
                 format!("{move_} the label {label} for {target} (held by {held_by} now)"),
-                format!("the label becomes {}'s (an audited transfer); nothing moves if its holder changed", ws_handle(ws)),
+                match &serves {
+                    Some(s) => format!("{label} serves {s} now"),
+                    None => format!("{label} serves nothing on this box now"),
+                },
+                format!(
+                    "the label becomes {}'s (an audited transfer): its agent can then point it at its own services and Apps; nothing \
+                     moves if its holder changed",
+                    ws_handle(ws)
+                ),
             ],
             summary: format!("label transfer: {move_} {label} for {target} (held by {held_by})"),
             why: match holder {

@@ -561,6 +561,10 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
                 // Only a person this workspace's agent added (security
                 // review item 10): inviting the owner's people is the owner's.
                 let its_own = skin::creators::workspace_of(&p.id).ok().flatten().as_deref() == Some(ws.as_str());
+                // Never a box login (review 0.46.4).
+                if crate::skin_routes::has_box_login(&p.id, &grants) {
+                    return crate::skin_routes::box_login_refused(&p.username);
+                }
                 if test_guest || !in_ws || !on_app || !its_own {
                     return owner_only(&format!(
                         "'{}' isn't your workspace's App user on that App: only the owner invites them (ask your human).",

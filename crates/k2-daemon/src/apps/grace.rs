@@ -832,8 +832,16 @@ fn key_mint(who: &Who, body: &[u8]) -> R<J> {
     }
     // Switch 2 (prd-agent-app-permissions-v1 §2.1): the agent mints its
     // own App's key itself; it goes to the vault and the agent never sees
-    // it. Audited like any mint.
-    if super::access::self_widens(who) {
+    // it. Audited like any mint. A key that manages users (the `users` /
+    // `rooms` scopes: adds, rooms, resets) is the App-user switch's too
+    // (review 0.46.4 A-P1): only with "Let this agent manage its Apps'
+    // users" on and the agent's own room only; anything else is held.
+    let user_power = grant.scopes.iter().any(|s| s == keys::SCOPE_USERS || s == keys::SCOPE_ROOMS);
+    let users_ok = !user_power
+        || super::routes::agent_ws(who).is_some_and(|ws| {
+            k2_core::workspace::settings::agents_can_manage_app_users(ws) && grant.rooms.iter().all(|r| r == ws)
+        });
+    if super::access::self_widens(who) && users_ok {
         let mut out = mint_and_deliver(&t, &grant, &label, "vault", &actor(who))?;
         out["via"] = json!(super::access::SELF_VIA);
         return Ok(out);
@@ -848,7 +856,11 @@ fn key_mint(who: &Who, body: &[u8]) -> R<J> {
         &t.project_id.clone(),
         json!({ "grant": grant, "label": label }),
         diff,
-        vec!["an App key is a credential: the owner mints it (it goes to the vault; nobody sees it)".into()],
+        vec![if user_power && super::access::self_widens(who) {
+            "an App key that manages users needs \"Let this agent manage its Apps' users\" and the agent's own room only: the owner mints this one".into()
+        } else {
+            "an App key is a credential: the owner mints it (it goes to the vault; nobody sees it)".into()
+        }],
     )
 }
 

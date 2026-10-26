@@ -437,7 +437,7 @@ pub(crate) static SWITCHES: [Switch; 16] = [
             "Let this agent manage its Apps' users",
             "Let {ws} manage the users of its own Apps",
             "On its own Apps only: add and remove App users and test guests, set their passwords, email and names, unlock them, give them roles and its own room, invite people, and give its Apps the guests-rooms grant in its own room. The users it makes are tied to it. Never a box login, another workspace's guest or K2 logins.",
-            &[code_wall("app_users_off", "/cli/skin/")],
+            &[code_wall("app_users_off", "/cli/")],
             WallCoverage::Code,
         ),
         off: off_spec(

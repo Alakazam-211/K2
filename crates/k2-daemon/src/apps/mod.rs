@@ -5,7 +5,8 @@
 //! are `k2_core::deploy`.
 
 pub mod access;
-// Switch 2's App grants for agents and their one-time cards (0.46.4).
+// An agent's App grants (the App-user switch, copy-host and label
+// transfers) and their held requests (0.46.4).
 pub mod agent_grants;
 // K2 presents those held requests as Thread cards (0.46.4).
 pub mod held_cards;

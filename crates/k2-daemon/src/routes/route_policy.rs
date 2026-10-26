@@ -369,6 +369,7 @@ pub const ROUTES: &[Route] = &[
     // handler while agent test guests are parked).
     post("/cli/app/test-guest/add", Owner),
     post("/cli/app/test-guest/rm", Owner),
+    post("/cli/app/test-guest/password", Owner),
     get("/cli/app/test-guests", Member),
     // purge (deletes the App's data) is owner-only in the handler.
     post("/cli/app/uninstall", Admin),

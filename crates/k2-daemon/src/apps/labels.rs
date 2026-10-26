@@ -16,9 +16,10 @@
 //!   §4, Rosson 2026-10-26): a label counts as the workspace's when the
 //!   0074 row says so, or when no workspace holds it and the workspace's
 //!   own records name it (its `--cmd` service of that name for take, its
-//!   App's taken label for return). Then switch 1 moves it, and K2 first
-//!   stamps the label to the workspace (audited), so the hostname step
-//!   knows it's its own. A label another workspace holds is a held
+//!   App's taken label for return). Then switch 1 moves it: once the
+//!   move's own checks pass (the App healthy, the old service answering)
+//!   K2 stamps the label to the workspace (audited), then points it
+//!   ([`Claim`]). A label another workspace holds is a held
 //!   `label_transfer` request with a card for the owner
 //!   (`super::agent_grants`); the approval moves it as the owner (an
 //!   audited transfer), only while the holder is still the one the
@@ -147,15 +148,76 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8]) -> R<J> {
     };
     let lock = cfg_lock(&app.app_id);
     let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let mut claim = Claim::None;
     if super::routes::agent_ws(who).is_some() && !super::approvals::manage_approved_now() {
-        if let Some(held) = agent_scope(who, &app, &label, is_take)? {
-            return Ok(held);
+        match agent_scope(who, &app, &label, is_take)? {
+            Scope::Held(held) => return Ok(held),
+            Scope::Go(c) => claim = c,
         }
     }
     if is_take {
-        take(who, &app, &label, false)
+        take(who, &app, &label, claim)
     } else {
-        give_back(who, &app, &label, false)
+        give_back(who, &app, &label, claim)
+    }
+}
+
+/// What a move does to the label's 0074 row, AFTER its own checks pass
+/// (the App healthy, the old service answering) and right before the
+/// hostname moves (review 0.46.4: never claim before the checks).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Claim {
+    /// The workspace holds it already (or the owner's move decides).
+    None,
+    /// No workspace holds it and the workspace's own records name it:
+    /// stamp it to the workspace (audited).
+    Stamp,
+    /// The owner's approved transfer from exactly this workspace: a
+    /// compare-and-set on the holder; a holder that changed moves nothing.
+    Transfer { from: String },
+}
+
+/// [`agent_scope`]'s answer.
+enum Scope {
+    Go(Claim),
+    Held(J),
+}
+
+/// Do `claim` for `label` in workspace `ws` (see [`Claim`]).
+fn do_claim(claim: &Claim, label: &str, ws: &str, by: &str) -> R<()> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    match claim {
+        Claim::None => Ok(()),
+        Claim::Stamp => match k2_core::db::schema::SubdomainWorkspace::self_stamp(&conn, label, ws, None).map_err(db_err)? {
+            k2_core::db::schema::SelfStamp::Written => {
+                k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                    "label-claim",
+                    by,
+                    format!("ok label={label} to={ws} (no workspace held it; its own records name it)"),
+                    "-",
+                    "-",
+                    "cli",
+                ));
+                Ok(())
+            }
+            k2_core::db::schema::SelfStamp::Foreign { owner } => Err(foreign_refusal(label, &owner)),
+        },
+        Claim::Transfer { from } => {
+            let moved = k2_core::db::schema::SubdomainWorkspace::transfer(&conn, label, from, ws, None).map_err(db_err)?;
+            if !moved {
+                return Err(no("holder_changed", 409, format!("{label}'s holder changed since the request: nothing moved; ask again")));
+            }
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                "label-transfer",
+                by,
+                format!("ok label={label} from={from} to={ws} (an approved label_transfer)"),
+                "-",
+                "-",
+                "cli",
+            ));
+            Ok(())
+        }
     }
 }
 
@@ -185,53 +247,27 @@ pub(crate) fn holder_word(holder: Option<&str>) -> String {
     holder.map(super::routes::ws_handle).unwrap_or_else(|| "none".to_string())
 }
 
-/// An agent's label move (see the module doc). `Ok(None)` = go on (the
-/// move's own checks still run); `Ok(Some(held))` = a held transfer.
-fn agent_scope(who: &Who, app: &AppRow, label: &str, is_take: bool) -> R<Option<J>> {
+/// An agent's label move (see the module doc): go on (with what the move
+/// claims once its checks pass), or a held transfer.
+fn agent_scope(who: &Who, app: &AppRow, label: &str, is_take: bool) -> R<Scope> {
     let ws = app.owner_workspace.as_str();
     let holder = holder_of(label)?;
     if holder.as_deref() == Some(ws) || !ours(app, label, is_take)? {
         // Its own label, or nothing of its own to move: the move's own
         // answer (404, another workspace's service…).
-        return Ok(None);
+        return Ok(Scope::Go(Claim::None));
     }
     match holder {
-        Some(other) => super::agent_grants::label_transfer_held(who, ws, Some(app), label, move_word(is_take), Some(&other), None).map(Some),
-        None => {
-            // Its own records name it and no workspace holds it: stamp it
-            // to this workspace first (audit fix 2).
-            let stamped = {
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                k2_core::db::schema::SubdomainWorkspace::self_stamp(&conn, label, ws, None).map_err(db_err)?
-            };
-            match stamped {
-                k2_core::db::schema::SelfStamp::Written => {
-                    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
-                        "label-claim",
-                        &super::routes::actor(who),
-                        format!(
-                            "ok label={label} to={ws} (no workspace held it; its {} for App {})",
-                            if is_take { "--cmd service" } else { "taken label" },
-                            app.app_id
-                        ),
-                        "-",
-                        "-",
-                        "cli",
-                    ));
-                    Ok(None)
-                }
-                k2_core::db::schema::SelfStamp::Foreign { owner } => {
-                    super::agent_grants::label_transfer_held(who, ws, Some(app), label, move_word(is_take), Some(&owner), None).map(Some)
-                }
-            }
-        }
+        Some(other) => super::agent_grants::label_transfer_held(who, ws, Some(app), label, move_word(is_take), Some(&other), None).map(Scope::Held),
+        // Its own records name it and no workspace holds it: the move
+        // stamps it to this workspace after its checks (audit fix 2).
+        None => Ok(Scope::Go(Claim::Stamp)),
     }
 }
 
 /// An approved `label_transfer` (`agent_grants::apply`): only while the
-/// label's holder is still the one the request named, then the move as
-/// the owner who approved it (an audited transfer).
+/// label's holder is still the one the request named (a compare-and-set
+/// at the move), then the move as the owner who approved it (audited).
 pub(crate) fn apply_transfer(b: &J, ws: &str, by: &str) -> R<J> {
     let label = b["label"].as_str().ok_or_else(|| no(codes::BAD_REQUEST, 400, "unreadable label transfer"))?.to_string();
     let move_ = b["move"].as_str().unwrap_or_default();
@@ -244,20 +280,17 @@ pub(crate) fn apply_transfer(b: &J, ws: &str, by: &str) -> R<J> {
             format!("{label} is held by {} now, not {}: nothing moved; ask again", holder_word(now.as_deref()), holder_word(named.as_deref())),
         ));
     }
-    let transfer = now.as_deref().is_some_and(|h| h != ws);
-    let who = Who::Owner;
-    let caller = crate::label_owner::Caller::Manager { actor: by.to_string() };
+    let claim = match now.as_deref() {
+        Some(h) if h == ws => Claim::None,
+        Some(h) => Claim::Transfer { from: h.to_string() },
+        None => Claim::Stamp,
+    };
     if move_ == "claim" {
-        return crate::label_owner::with_caller(caller, || {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            let decision = crate::label_owner::decide(&conn, &label, ws, transfer, &crate::label_owner::current())
-                .map_err(|r| no(LABEL_FOREIGN, 409, r.message()))?;
-            crate::label_owner::apply(&conn, &label, ws, None, &decision, &crate::label_owner::current())
-                .map_err(|r| no(LABEL_FOREIGN, 409, r.message()))?;
-            Ok(json!({ "ok": true, "label": label, "workspace": ws, "transferred": transfer }))
-        });
+        do_claim(&claim, &label, ws, by)?;
+        crate::session_events::emit_tunnel_subdomains_changed();
+        return Ok(json!({ "ok": true, "label": label, "workspace": ws, "transferred": matches!(claim, Claim::Transfer { .. }) }));
     }
+    let who = Who::Owner;
     let app_id = b["app"].as_str().ok_or_else(|| no(codes::BAD_REQUEST, 400, "the label transfer names no App"))?;
     let app = super::routes::app_for(&who, Some(app_id))?;
     if app.owner_workspace != ws {
@@ -266,7 +299,8 @@ pub(crate) fn apply_transfer(b: &J, ws: &str, by: &str) -> R<J> {
     let is_take = move_ != "return";
     let lock = cfg_lock(&app.app_id);
     let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
-    crate::label_owner::with_caller(caller, || if is_take { take(&who, &app, &label, transfer) } else { give_back(&who, &app, &label, transfer) })
+    let caller = crate::label_owner::Caller::Manager { actor: by.to_string() };
+    crate::label_owner::with_caller(caller, || if is_take { take(&who, &app, &label, claim) } else { give_back(&who, &app, &label, claim) })
 }
 
 pub(super) fn accepts(port: u16) -> bool {
@@ -350,7 +384,7 @@ pub(super) fn foreign_refusal(label: &str, holder: &str) -> Refusal {
     r
 }
 
-fn take(who: &Who, app: &AppRow, label: &str, transfer: bool) -> R<J> {
+fn take(who: &Who, app: &AppRow, label: &str, claim: Claim) -> R<J> {
     let ws = app.owner_workspace.clone();
     let row = {
         let db = k2_core::db::shared();
@@ -394,14 +428,16 @@ fn take(who: &Who, app: &AppRow, label: &str, transfer: bool) -> R<J> {
             format!("{why}: deploy it and wait until it's live before it takes '{label}' (k2 app deployment {} ; k2 app logs {})", app.app_id, app.app_id),
         )
     })?;
-    crate::label_owner::check(label, &ws, transfer).map_err(|r| {
+    // The label becomes the workspace's only now, after the App answered.
+    do_claim(&claim, label, &ws, &actor(who))?;
+    crate::label_owner::check(label, &ws, false).map_err(|r| {
         let mut out = no(LABEL_FOREIGN, 403, r.message());
         if let Some(o) = r.body.get("owner") {
             out.extra = Some(json!({ "owner": o }));
         }
         out
     })?;
-    point_with(&ws, label, front, transfer).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves the legacy service: {e}")))?;
+    point(&ws, label, front).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves the legacy service: {e}")))?;
     // Unrouted: the legacy service runs on, and a restart of it never
     // points the label back.
     {
@@ -436,7 +472,7 @@ fn take(who: &Who, app: &AppRow, label: &str, transfer: bool) -> R<J> {
     }))
 }
 
-fn give_back(who: &Who, app: &AppRow, label: &str, transfer: bool) -> R<J> {
+fn give_back(who: &Who, app: &AppRow, label: &str, claim: Claim) -> R<J> {
     let mut cfg = load_cfg(&app.app_id)?;
     let Some(i) = cfg.labels.iter().position(|l| l.label == label) else {
         return Err(no(NOT_TAKEN, 404, format!("{} doesn't serve '{label}' (k2 app label take {} {label} moved one)", app.app_id, app.app_id)));
@@ -452,7 +488,8 @@ fn give_back(who: &Who, app: &AppRow, label: &str, transfer: bool) -> R<J> {
     if !accepts(port) {
         return Err(no(LEGACY_DOWN, 409, format!("'{label}' isn't answering on port {port}: start it first (k2 publish start {label}), then move the label back")));
     }
-    point_with(&app.owner_workspace, label, port, transfer).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves {}: {e}", app.app_id)))?;
+    do_claim(&claim, label, &app.owner_workspace, &actor(who))?;
+    point(&app.owner_workspace, label, port).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves {}: {e}", app.app_id)))?;
     {
         let db = k2_core::db::shared();
         let conn = db.lock();

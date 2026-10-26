@@ -13,11 +13,14 @@
 //! `k2 permission request apps.approve …`). Every held kind could take
 //! the same card: call [`present_for`] where it is filed.
 //!
-//! **Always allow.** A card whose request "Let this agent manage its
+//! **"Allow, and let it manage its Apps' users from now on"**
+//! (`label::ALWAYS`). A card whose request "Let this agent manage its
 //! Apps' users" would have covered (a test guest; the guests-rooms grant
-//! in the agent's own room) also offers `Always allow`: the approval, then
-//! that switch through the Settings route, as the person
-//! ([`offers_always`], [`turn_on_always`]).
+//! in the agent's own room) also offers it: the approval, then that
+//! switch through the Settings route, as the person ([`offers_always`],
+//! [`turn_on_always`]). The card states what the switch covers
+//! ([`SWITCH_COVERS`]). A plain Allow gives a usable test guest: the agent
+//! sets its password once (`test_guests::password`).
 
 use k2_core::app_grace::requests as reqs;
 use k2_core::permission::catalog::Floor;
@@ -26,6 +29,13 @@ use serde_json::{json, Map, Value as J};
 
 use crate::permission::actions::{Answerer, Applied, Ctx};
 use crate::permission::{answer, limits, present, store};
+
+/// What "Let this agent manage its Apps' users" covers, in one line (the
+/// card says it next to the option that turns it on; the desktop's
+/// confirm says it again).
+pub(crate) const SWITCH_COVERS: &str = "On its own Apps only: add and remove App users and test guests, set their passwords, \
+     email and names, unlock them, give them roles and its own room, invite people, and give its Apps the guests-rooms grant \
+     in its own room. Never a box login or another workspace's guests.";
 
 /// The catalog action K2's App cards carry.
 pub(crate) const ACTION: &str = "apps.approve";
@@ -90,7 +100,13 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
     let (prompt, options) = present::prompt_and_options(std::slice::from_ref(&req), false);
     let opts: Vec<&str> = options.iter().map(String::as_str).collect();
     let card_action = present::card_action(std::slice::from_ref(&req), false, present::single_dedupe(&req));
-    let text = format!("{prompt}\n{}", r.summary);
+    let mut text = format!("{prompt}\n{}", r.summary);
+    if options.iter().any(|o| o == k2_core::permission::label::ALWAYS) {
+        text.push_str(&format!(
+            "\n\"{}\" also turns on \"Let this agent manage its Apps' users\" for {handle}: {SWITCH_COVERS}",
+            k2_core::permission::label::ALWAYS
+        ));
+    }
     let posted = crate::overlay_routes::present_action_card(
         Some(&conversation_id),
         ws,

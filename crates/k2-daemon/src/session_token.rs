@@ -860,11 +860,15 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // 0.46.4: the move's steps; one owner request for the owner's.
         "/cli/app/move-plan",
         "/cli/app/move-plan/request",
-        // 0.46.4: test guests of its own Apps. The list and rm need switch
-        // 1; add needs switch 2 ("Manage its Apps end to end"), else it is
-        // one held request with a card for the owner (Rosson 2026-10-26).
+        // 0.46.4: test guests of its own Apps. The list needs switch 1; add
+        // and rm need "Let this agent manage its Apps' users" (add without
+        // it is one held request with a card for the owner; rm also with
+        // switch 1, it narrows), Rosson 2026-10-26.
         "/cli/app/test-guest/add",
         "/cli/app/test-guest/rm",
+        // Its own test guest's password: with the users switch, or once
+        // after the owner approved its held request (the handler).
+        "/cli/app/test-guest/password",
         "/cli/app/test-guests",
         "/cli/app/config",
         "/cli/app/deploy",

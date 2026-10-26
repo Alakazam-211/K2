@@ -72,11 +72,13 @@ pub mod label {
     pub const DENY_ALL: &str = "Deny all";
     pub const CLOSE: &str = "Close";
     pub const TURN_OFF_AGAIN: &str = "Turn off again";
-    /// The third option on a one-time App-grant card (`apps.grant-*`,
-    /// `apps.test-guest`, `apps.label`): allow this once AND turn on the
-    /// workspace's "Manage its Apps end to end" switch, so the agent does
-    /// it itself next time. Offered only on those cards, single only.
-    pub const ALWAYS: &str = "Always allow";
+    /// The third option on K2's App card (`apps.approve`) for a held
+    /// request "Let this agent manage its Apps' users" would have covered
+    /// (a test guest; the guests-rooms grant in the agent's own room):
+    /// approve it AND turn that switch on, so the agent manages its Apps'
+    /// users itself from then on. The card and the confirm say so. Single
+    /// cards only (`apps::held_cards`).
+    pub const ALWAYS: &str = "Allow, and let it manage its Apps' users from now on";
 }
 
 /// Access Audit events (PRD §6.5).

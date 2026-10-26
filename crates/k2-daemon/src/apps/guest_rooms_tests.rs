@@ -122,11 +122,11 @@ fn revoke_narrows_for_the_apps_own_agent() {
 fn agents_set_within_the_grant_and_the_owner_with_owner_rights() {
     let f = fx("set");
     let body = |rooms: &[&str]| json!({ "app": "jobs", "username": "dana", "rooms": rooms });
-    // An agent sets its guests' rooms only with "Build and run Apps"
-    // (0.46.4; there was no switch check here).
+    // An agent sets its guests' rooms only with "Let this agent manage its
+    // Apps' users" (0.46.4; there was no switch check here).
     let (st, v) = post(GUEST_ROOMS, &agent(&f.ws_a), body(&[&f.ws_a]));
-    assert_eq!((st, code(&v)), (403, "apps_manage_off"), "{v}");
-    k2_core::workspace::settings::set_agents_can_manage_skin("/tmp/grc-wsa-set", true).unwrap();
+    assert_eq!((st, code(&v)), (403, "app_users_off"), "{v}");
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&f.ws_a, true).unwrap();
     // No grant: the App's own agent is refused; the owner isn't.
     let (st, v) = post(GUEST_ROOMS, &agent(&f.ws_a), body(&[&f.ws_a]));
     assert_eq!((st, code(&v)), (403, "grant_required"), "{v}");

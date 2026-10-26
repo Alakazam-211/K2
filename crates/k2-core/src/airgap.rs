@@ -30,6 +30,13 @@ pub fn set_setting_enabled(on: bool) {
     SETTING_ENABLED.store(on, Ordering::Relaxed);
 }
 
+/// The in-process setting alone (no env force), for `test_env`'s per-test
+/// snapshot of process switches.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) fn setting_raw() -> bool {
+    SETTING_ENABLED.load(Ordering::Relaxed)
+}
+
 /// True iff this binary was compiled with the `airgap` cargo feature.
 ///
 /// Custom/enterprise `--features airgap` builds set this. Runtime

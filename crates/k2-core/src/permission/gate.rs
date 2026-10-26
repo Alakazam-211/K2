@@ -29,6 +29,13 @@ pub fn set_server_switch(on: bool) {
     SERVER_SETTING.store(on, Ordering::Relaxed);
 }
 
+/// The in-process setting alone (no env force), for `test_env`'s per-test
+/// snapshot of process switches.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) fn setting_raw() -> bool {
+    SERVER_SETTING.load(Ordering::Relaxed)
+}
+
 /// The env force-on: `K2_PERMISSION_CARDS` = `1`/`true`/`yes`/`on`.
 fn env_forced_on() -> bool {
     std::env::var(super::ENV_FORCE_ON)

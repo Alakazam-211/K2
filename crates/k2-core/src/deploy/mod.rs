@@ -55,9 +55,23 @@ pub fn set_enabled(on: bool) {
     SETTING_ENABLED.store(on, Ordering::Relaxed);
 }
 
+/// The in-process setting alone (no env force), for `test_env`'s per-test
+/// snapshot of process switches.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) fn setting_raw() -> bool {
+    SETTING_ENABLED.load(Ordering::Relaxed)
+}
+
 /// Sync the persisted `appsProcessEngine` setting into this process.
 pub fn set_process_engine(on: bool) {
     SETTING_PROCESS_ENGINE.store(on, Ordering::Relaxed);
+}
+
+/// The in-process setting alone (no env force), for `test_env`'s per-test
+/// snapshot of process switches.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) fn process_engine_setting_raw() -> bool {
+    SETTING_PROCESS_ENGINE.load(Ordering::Relaxed)
 }
 
 /// The env force-on for the unwalled process engine.
@@ -104,6 +118,13 @@ pub fn set_auto_prepare(on: bool) {
     SETTING_AUTO_PREPARE.store(on, Ordering::Relaxed);
 }
 
+/// The in-process setting alone (no env force), for `test_env`'s per-test
+/// snapshot of process switches.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) fn auto_prepare_setting_raw() -> bool {
+    SETTING_AUTO_PREPARE.load(Ordering::Relaxed)
+}
+
 /// May K2 prepare this box for Apps by itself? The env override wins,
 /// else the owner's `appsAutoPrepare` setting.
 pub fn auto_prepare_enabled() -> bool {
@@ -126,6 +147,13 @@ pub const ENGINE_HEAL_ENV: &str = "K2_APP_ENGINE_HEAL";
 /// Sync the persisted `appsEngineHeal` setting into this process.
 pub fn set_engine_heal(on: bool) {
     SETTING_ENGINE_HEAL.store(on, Ordering::Relaxed);
+}
+
+/// The in-process setting alone (no env force), for `test_env`'s per-test
+/// snapshot of process switches.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) fn engine_heal_setting_raw() -> bool {
+    SETTING_ENGINE_HEAL.load(Ordering::Relaxed)
 }
 
 /// May K2 heal the App engine at boot? The env opt-out wins, else the

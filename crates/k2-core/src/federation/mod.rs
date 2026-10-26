@@ -87,6 +87,13 @@ pub fn set_enabled(on: bool) {
     SETTING_ENABLED.store(on, Ordering::Relaxed);
 }
 
+/// The in-process setting alone (no env force), for `test_env`'s per-test
+/// snapshot of process switches.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) fn setting_raw() -> bool {
+    SETTING_ENABLED.load(Ordering::Relaxed)
+}
+
 /// True iff federation is enabled — via the `K2_FEDERATION` env var
 /// (`1`/`true`/`yes`/`on`, case-insensitive) OR the persisted app-level
 /// `federation_enabled` switch synced through [`set_enabled`]. **Default OFF.**

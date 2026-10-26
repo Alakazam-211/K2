@@ -37,12 +37,120 @@ use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 
 static ENV_LOCK: ReentrantMutex<()> = parking_lot::const_reentrant_mutex(());
 
-/// Guard for the crate-wide test env lock.
-pub type EnvLock = ReentrantMutexGuard<'static, ()>;
+thread_local! {
+    /// How deep this thread holds [`ENV_LOCK`] (it is re-entrant): the
+    /// process switches are reset on the outermost take and restored on the
+    /// outermost release only.
+    static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The process-wide feature switches the settings routes mirror into this
+/// process (`sync_permission_cards`, `sync_garden_access`,
+/// `federation::set_enabled`, …). They are atomics, not env vars, but just
+/// as global: a test that called `/cli/settings/update` left Garden access
+/// (default true) on for every later test, and a test that expects
+/// 0.46.3's retired path failed whenever it ran after one (nightly soak
+/// 2026-10-25, shuffled seeds 1–10). A holder of [`lock`] starts from the
+/// values a fresh test process has, and on release the values it found
+/// are put back, so no test sees another's switches.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Switches {
+    garden_access: bool,
+    permission_cards: bool,
+    federation: bool,
+    compute: bool,
+    apps: bool,
+    apps_process_engine: bool,
+    apps_auto_prepare: bool,
+    apps_engine_heal: bool,
+    api: bool,
+    airgap: bool,
+    listen_lan: bool,
+}
+
+impl Switches {
+    /// What a fresh process holds (each static's initializer).
+    const PRISTINE: Switches = Switches {
+        garden_access: false,
+        permission_cards: false,
+        federation: false,
+        compute: false,
+        apps: false,
+        apps_process_engine: false,
+        apps_auto_prepare: crate::deploy::AUTO_PREPARE_DEFAULT,
+        apps_engine_heal: true,
+        api: false,
+        airgap: false,
+        listen_lan: false,
+    };
+
+    fn read() -> Switches {
+        Switches {
+            garden_access: crate::zen::garden_access::enabled(),
+            permission_cards: crate::permission::gate::setting_raw(),
+            federation: crate::federation::setting_raw(),
+            compute: crate::compute::setting_raw(),
+            apps: crate::deploy::setting_raw(),
+            apps_process_engine: crate::deploy::process_engine_setting_raw(),
+            apps_auto_prepare: crate::deploy::auto_prepare_setting_raw(),
+            apps_engine_heal: crate::deploy::engine_heal_setting_raw(),
+            api: crate::app_settings::api_setting_raw(),
+            airgap: crate::airgap::setting_raw(),
+            listen_lan: crate::listen::setting_raw(),
+        }
+    }
+
+    fn write(self) {
+        crate::zen::garden_access::set_switch(self.garden_access);
+        crate::permission::gate::set_server_switch(self.permission_cards);
+        crate::federation::set_enabled(self.federation);
+        crate::compute::set_enabled(self.compute);
+        crate::deploy::set_enabled(self.apps);
+        crate::deploy::set_process_engine(self.apps_process_engine);
+        crate::deploy::set_auto_prepare(self.apps_auto_prepare);
+        crate::deploy::set_engine_heal(self.apps_engine_heal);
+        crate::app_settings::set_api_enabled(self.api);
+        crate::airgap::set_setting_enabled(self.airgap);
+        crate::listen::set_setting_lan(self.listen_lan);
+    }
+}
+
+/// Guard for the crate-wide test env lock. The outermost guard on a
+/// thread also owns the process switches (see [`Switches`]).
+#[must_use = "bind the guard for the test's duration"]
+pub struct EnvLock {
+    /// The switches found when the outermost guard was taken (restored on
+    /// its drop); `None` for a nested guard.
+    found: Option<Switches>,
+    _guard: ReentrantMutexGuard<'static, ()>,
+}
+
+impl Drop for EnvLock {
+    fn drop(&mut self) {
+        DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        if let Some(found) = self.found.take() {
+            // Still held: the mutex guard field drops after this body.
+            found.write();
+        }
+    }
+}
 
 /// Take the crate-wide (and, through `test-util`, cross-crate) env lock.
+/// The outermost take on a thread resets the process switches to a fresh
+/// process's values; its release puts back what it found.
 pub fn lock() -> EnvLock {
-    ENV_LOCK.lock()
+    let guard = ENV_LOCK.lock();
+    let outermost = DEPTH.with(|d| {
+        let n = d.get();
+        d.set(n + 1);
+        n == 0
+    });
+    let found = outermost.then(|| {
+        let found = Switches::read();
+        Switches::PRISTINE.write();
+        found
+    });
+    EnvLock { found, _guard: guard }
 }
 
 /// A module test lock taken AFTER the env lock: `_inner` is the module's
@@ -846,6 +954,42 @@ mod tests {
         assert!(t.join().is_err());
         // Not poisoned: the next taker proceeds.
         let _g = lock();
+    }
+
+    /// A holder starts from a fresh process's switches whatever an earlier
+    /// test left, a nested take changes nothing, and the release puts back
+    /// what the outermost take found (soak 2026-10-25: a settings test
+    /// left Garden access on for every later test).
+    #[test]
+    fn the_outermost_lock_owns_the_process_switches() {
+        // What a settings test used to leave behind.
+        let leaked = Switches {
+            garden_access: true,
+            permission_cards: true,
+            apps: true,
+            apps_engine_heal: false,
+            ..Switches::PRISTINE
+        };
+        let outer = lock();
+        let found = outer.found.expect("the outermost take records what it found");
+        assert_eq!(Switches::read(), Switches::PRISTINE, "a holder starts from a fresh process's switches");
+        leaked.write();
+        {
+            let nested = lock();
+            assert!(nested.found.is_none(), "a nested take owns nothing");
+            assert_eq!(Switches::read(), leaked, "a nested take resets nothing");
+        }
+        assert_eq!(Switches::read(), leaked, "a nested release restores nothing");
+        // The next holder (on another thread, waiting for this one) finds
+        // what this take found, not the leak, and starts pristine itself.
+        let next = std::thread::spawn(|| {
+            let g = lock();
+            (g.found.expect("outermost on its thread"), Switches::read())
+        });
+        drop(outer);
+        let (next_found, next_seen) = next.join().expect("next holder");
+        assert_eq!(next_found, found, "the outermost release put back what its take found");
+        assert_eq!(next_seen, Switches::PRISTINE);
     }
 
     #[cfg(unix)]

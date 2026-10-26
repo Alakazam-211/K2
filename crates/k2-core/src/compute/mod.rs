@@ -39,6 +39,13 @@ pub fn set_enabled(on: bool) {
     SETTING_ENABLED.store(on, Ordering::Relaxed);
 }
 
+/// The in-process setting alone (no env force), for `test_env`'s per-test
+/// snapshot of process switches.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) fn setting_raw() -> bool {
+    SETTING_ENABLED.load(Ordering::Relaxed)
+}
+
 /// True when compute is on: `K2_COMPUTE` (`1`/`true`/`yes`/`on`) or the
 /// persisted preview switch. Default OFF.
 pub fn enabled() -> bool {

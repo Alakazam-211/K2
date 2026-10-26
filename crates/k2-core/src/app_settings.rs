@@ -1255,6 +1255,13 @@ pub fn set_api_enabled(on: bool) {
     API_SETTING_ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// The in-process setting alone (no env force), for `test_env`'s per-test
+/// snapshot of process switches.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) fn api_setting_raw() -> bool {
+    API_SETTING_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The runtime mirror of the persisted `api_enabled` setting — one leg of
 /// the daemon's `misc_routes::api_enabled()` OR (the other legs are the
 /// `K2_API` env flag and the legacy `K2_SANDBOX_API` implication). Reads

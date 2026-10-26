@@ -80,8 +80,14 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 }
 
 /// Panic when this process inherited a variable that reaches a daemon.
+///
+/// Reads the environment under the ONE env lock: another test's
+/// `EnvVar::set("K2_CONNECT_BASE", …)` (restored on drop) is not an
+/// inherited variable, and without the lock a parallel test saw it
+/// (soak 2026-10-25, k2-core shuffle seed 9).
 #[track_caller]
 pub fn assert_no_prod_env() {
+    let _env = crate::test_env::lock();
     let env: Vec<(String, String)> = std::env::vars().collect();
     let leaked = leaked_vars(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     assert!(

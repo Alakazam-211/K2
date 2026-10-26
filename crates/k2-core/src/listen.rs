@@ -22,6 +22,13 @@ pub fn set_setting_lan(on: bool) {
     SETTING_LAN.store(on, Ordering::Relaxed);
 }
 
+/// The in-process setting alone (no env force), for `test_env`'s per-test
+/// snapshot of process switches.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) fn setting_raw() -> bool {
+    SETTING_LAN.load(Ordering::Relaxed)
+}
+
 /// Record the bind decision after a successful `claim_port_on`.
 pub fn set_lan_bound(on: bool) {
     LAN_BOUND.store(on, Ordering::Relaxed);

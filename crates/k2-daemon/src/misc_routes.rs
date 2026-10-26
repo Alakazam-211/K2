@@ -569,8 +569,17 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // `action=resolve&target=` (0.46.4): what an add would connect to,
         // read only and needing no source workspace (`k2 agent hire
         // --dry-run` checks its --connect targets before anything exists).
+        //
+        // Security review (0.46.4): another server's roster is read only for
+        // the owner, an admin or an agent (its scoped passport), the rule
+        // of `/cli/federation/peer-roster`; a Member gets 403 for a remote
+        // target and only found / not found for a local one (no path, no
+        // id). The stamp is the dispatcher's, never the caller's.
         "/cli/connections" if params.get("action").map(String::as_str) == Some("resolve") => {
-            crate::federation_routes::connections_resolve(opt_param(params, "target").as_deref().unwrap_or(""))
+            let target = opt_param(params, "target").unwrap_or_default();
+            let privileged = params.get("actor_privileged").is_some_and(|v| v == "1");
+            let agent = crate::caller_workspace::principal_from_params(params).is_some();
+            crate::federation_routes::connections_resolve(&target, privileged || agent)
         }
         "/cli/connections" => match need_project(params) {
             Ok(p) => {

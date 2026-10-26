@@ -1950,13 +1950,25 @@ pub(crate) fn bind_unbound_rows_now(
 ///   `not_found` (with the names it lists), two display-name matches are
 ///   `ambiguous`, and a peer that doesn't answer is found with
 ///   `onRoster: null` and a `warning` (the add would store it unbound).
-pub(crate) fn connections_resolve(target: &str) -> CliResponse {
+///
+/// `full` = the caller may see what the add would see (owner, admin, an
+/// agent). Otherwise (a Member): a remote target is 403 `owner_only`
+/// before anything is looked up, and a local one says found or not found
+/// without the workspace's path or id.
+pub(crate) fn connections_resolve(target: &str, full: bool) -> CliResponse {
     use k2_core::connections::{resolve_connect_target, ConnectTarget};
     let refuse = |status: &'static str, code: &str, hint: String| CliResponse {
         status,
         content_type: "application/json",
         body: serde_json::json!({ "ok": false, "error": { "code": code, "hint": hint } }).to_string(),
     };
+    if !full && k2_core::connections::is_remote_target(target) {
+        return refuse(
+            "403 Forbidden",
+            "owner_only",
+            "looking up an agent on another server reads that server's roster: the owner, an admin or an agent does it".into(),
+        );
+    }
     let found = match resolve_connect_target(target) {
         Ok(t) => t,
         Err(("bad_usage", hint)) => return refuse("400 Bad Request", "bad_usage", hint),
@@ -1965,10 +1977,12 @@ pub(crate) fn connections_resolve(target: &str) -> CliResponse {
     };
     let (address, agent, host, fp) = match found {
         ConnectTarget::Local { project_id, path, name } => {
-            return CliResponse::ok_json(
+            let v = if full {
                 serde_json::json!({ "ok": true, "kind": "local", "target": name, "path": path, "projectId": project_id })
-                    .to_string(),
-            )
+            } else {
+                serde_json::json!({ "ok": true, "kind": "local", "target": name })
+            };
+            return CliResponse::ok_json(v.to_string());
         }
         ConnectTarget::Remote { address, agent, host, peer_fingerprint } => (address, agent, host, peer_fingerprint),
     };
@@ -5116,7 +5130,8 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
             (r.status.to_string(), v["error"]["code"].as_str().unwrap_or("").to_string())
         };
-        let run = |t: String| async move { tokio::task::spawn_blocking(move || connections_resolve(&t)).await.unwrap() };
+        let run = |t: String| async move { tokio::task::spawn_blocking(move || connections_resolve(&t, true)).await.unwrap() };
+        let member = |t: String| async move { tokio::task::spawn_blocking(move || connections_resolve(&t, false)).await.unwrap() };
 
         // Federation off: a remote target can't be reached.
         let r = run(format!("quillify::{host}")).await;
@@ -5146,6 +5161,20 @@ mod tests {
         assert_eq!(code(&r), ("404 Not Found".into(), "not_found".into()), "{}", r.body);
         let r = run(String::new()).await;
         assert_eq!(code(&r), ("400 Bad Request".into(), "bad_usage".into()), "{}", r.body);
+
+        // Security review (0.46.4): a Member never reads another server's
+        // roster (403 before any lookup) and gets no path or id for a local
+        // workspace, only found / not found.
+        let r = member(format!("nobody::{host}")).await;
+        assert_eq!(code(&r), ("403 Forbidden".into(), "owner_only".into()), "{}", r.body);
+        assert!(!r.body.contains("quillify-website"), "no roster names: {}", r.body);
+        let r = member(src_path.clone()).await;
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(v["kind"], "local", "{v}");
+        assert!(v.get("path").is_none() && v.get("projectId").is_none(), "no path or id for a Member: {v}");
+        let r = member("no-such-workspace-xyz".into()).await;
+        assert_eq!(code(&r), ("404 Not Found".into(), "not_found".into()), "{}", r.body);
 
         // Offline peer: found, with a warning.
         drop(_base);

@@ -2593,7 +2593,7 @@ exit: 0
     {
       "name": "app grant copy-host",
       "usage": "k2 app grant copy-host <app> [--dry-run] [--json]",
-      "description": "Owner only. Give everyone who has the box login the same access on one App (their role when it is host-wide or that App's, else their rooms). A grant already on that App wins (even a disabled one); a role tagged for another App is skipped. Use after publishing an App (it starts with nobody) or before a BFF starts sending app on login.",
+      "description": "Give everyone who has the box login the same access on one App (their role when it is host-wide or that App's, else their rooms). A grant already on that App wins (even a disabled one); a role tagged for another App is skipped. Use after publishing an App (it starts with nobody) or before a BFF starts sending app on login. The owner copies at once; an agent's call (its own workspace's App) is one held request listing exactly the logins, approved by the owner from a card on its Thread or Settings → App Approvals (exit 2); the approval copies exactly those, or nothing if the list changed.",
       "args": [{"name": "app", "required": true}],
       "flags": [
         {"name": "--dry-run", "arg": null, "description": "Show who would be copied; write nothing."},
@@ -2603,7 +2603,7 @@ exit: 0
     {
       "name": "app grant guests-rooms",
       "usage": "k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke] [--json]",
-      "description": "Owner only (RS-A15, 0.46.1). Lets <app> read and set its OWN guests' rooms with its own App pass (GET|POST /cli/skin/guests/rooms; the server SDK's k2.asApp().guests.rooms / guests.setRooms), so its server never carries the owner token. It may hand out the --room rooms plus its own room, never a room above a guest's role, never the owner, Connect users or another App's guests. Granting again replaces the rooms. --revoke takes it back (an agent may revoke its own App's: it narrows). Audited (k2 app history).",
+      "description": "The owner; or the App's own agent in its own room with \"Let this agent manage its Apps' users\" (else, or another workspace's room, one held request with a card for the owner, exit 2) (RS-A15, 0.46.1; 0.46.4). Lets <app> read and set its OWN guests' rooms with its own App pass (GET|POST /cli/skin/guests/rooms; the server SDK's k2.asApp().guests.rooms / guests.setRooms), so its server never carries the owner token. It may hand out the --room rooms plus its own room, never a room above a guest's role, never the owner, Connect users or another App's guests. Granting again replaces the rooms. --revoke takes it back (an agent may revoke its own App's: it narrows). Audited (k2 app history).",
       "args": [{"name": "app", "required": true}],
       "flags": [
         {"name": "--kind", "arg": "guests-rooms", "description": "The grant kind."},

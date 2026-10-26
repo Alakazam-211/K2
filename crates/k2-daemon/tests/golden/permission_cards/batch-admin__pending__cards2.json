@@ -33,7 +33,7 @@
             },
             "askedFor": null,
             "askers": null,
-            "consequences": "Wider moves for its Apps (new caps, open services, budgets) still wait for the owner.",
+            "consequences": "It builds, installs, deploys, runs, stops and uninstalls its own Apps inside the default limits, moves its own --cmd services and labels in, and edits their roles and App passes. New caps, open services and bigger budgets still wait for the owner; their users are a separate switch.",
             "direction": "loosen",
             "duration": "until someone turns it off",
             "expiresAt": 1761319200,

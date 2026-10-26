@@ -643,7 +643,7 @@
     {
       "file": "batch-admin__done__cards2.json",
       "form": "cards2",
-      "sha256": "5793bb9f8ada96b7aa5a302e0df7427e251909d42c8fa5e24df446cf56d3de8a",
+      "sha256": "1353adcae06019fb542c4c469e6e8575eca695881868ee3559cbc4c414b77f8d",
       "state": "done",
       "transport": "doc",
       "view": "batch-admin"
@@ -659,7 +659,7 @@
     {
       "file": "batch-admin__partial__cards2.json",
       "form": "cards2",
-      "sha256": "3d2f43d4c442073f134b66674a57266e6ce4ed221f88e32bf650e2a4ace22e4c",
+      "sha256": "50b8608cac87fd32bbce766c294dbba6f87f05985636d7120399487e09e1db76",
       "state": "partial",
       "transport": "doc",
       "view": "batch-admin"
@@ -675,7 +675,7 @@
     {
       "file": "batch-admin__pending__cards2.json",
       "form": "cards2",
-      "sha256": "220cadbca060f5841f2e0dc01fefa532736d835fe84c303b71a5906cda7bee94",
+      "sha256": "9304d120d13b662df2d95e5e0c089bc3c5def2c1ce460d2474e32446c8eea6d9",
       "state": "pending",
       "transport": "doc",
       "view": "batch-admin"
@@ -691,7 +691,7 @@
     {
       "file": "batch-approver__done__cards2.json",
       "form": "cards2",
-      "sha256": "96d8acd105f838c5edab5bbcaa033166f579fe789aa59c6bc8934bd2d96a985b",
+      "sha256": "2c65e41df374cb69daa0aa6ddaa13d983e703f59f3f2eccbea9029a4e99d7803",
       "state": "done",
       "transport": "doc",
       "view": "batch-approver"
@@ -707,7 +707,7 @@
     {
       "file": "batch-approver__partial__cards2.json",
       "form": "cards2",
-      "sha256": "c85462ab636532613ccf874b1da2003ef9ef2b2fda6bbf82c94a9bfeef5c4db8",
+      "sha256": "34ad62361b5908c1a3098505acac26a5c7399579285fd16cc993efaaf16f6e0f",
       "state": "partial",
       "transport": "doc",
       "view": "batch-approver"
@@ -723,7 +723,7 @@
     {
       "file": "batch-approver__pending__cards2.json",
       "form": "cards2",
-      "sha256": "e76d7fbb882ba7923e5eb8dddefca1264be91814dbbfc3d9c871be9f0ef429e6",
+      "sha256": "06578e0a32dda94a43186e9d2374cdd305d6e29ad9f2cd7b88d770b7bd13ebe3",
       "state": "pending",
       "transport": "doc",
       "view": "batch-approver"

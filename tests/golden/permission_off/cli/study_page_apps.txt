@@ -93,13 +93,15 @@ PER-APP LOGINS (0.45.5)
     no public URL (k2 study app-deploys, PUBLIC ORIGINS).
   New Apps start with NOBODY. Owner adds people:
     k2 app grant copy-host <app>               everyone with the box login
+                                               (an agent's: a card for the owner)
     k2 app user add <u> --app <app> [--role R]  a guest of this App only
                                                (no box login)
     k2 app user rooms <u> --app <app> --agent sales   that App's rooms
     k2 app grant add … --kind app --target <app> --role R | --room sales
     k2 app role create R --app <app>           a role only that App can use
   <app> = a service id, or <workspace>/<publish name>. `host` = box login.
-  AGENT APP USERS (0.46.4): an agent with "manage Apps" adds people to its
+  AGENT APP USERS (0.46.4): an agent with "Let this agent manage its Apps'
+  users" (its own switch, the owner's both ways) adds people to its
   own workspace's Apps (k2 app user add <u> --app <app> [--role R], a role
   of its own workspace without files:download/files:agentconfig) and sets
   their rooms (k2 app user rooms <u> --app <app> --agent <its room>). Those
@@ -169,6 +171,8 @@ INVITES (0.46.4)
 GUESTS' ROOMS FROM THE APP (RS-A15, 0.46.1; no owner token)
   An App resets its OWN guests' rooms (say at login) with its own pass:
     owner, once:  k2 app grant <app> --kind guests-rooms [--room acme]...
+                  (or the App's own agent in its own room, with "Let this
+                  agent manage its Apps' users")
     the App:      GET  /cli/skin/guests/rooms?username=dana
                   POST /cli/skin/guests/rooms {"username":"dana","rooms":["acme"]}
                   Authorization: Bearer <its App pass: K2_PASS_FILE in the

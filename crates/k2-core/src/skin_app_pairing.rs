@@ -357,6 +357,8 @@ pub struct Checked {
     pub app: String,
     pub principal_id: String,
     pub pairing_id: String,
+    /// The web pass that minted it (the route re-checks it is live).
+    pub minted_from: String,
     /// Seconds left (at least 1).
     pub expires_in_secs: i64,
 }
@@ -377,6 +379,7 @@ pub fn check(raw: &str, app: &str) -> Result<Checked, Refused> {
         app: p.app.clone(),
         principal_id: p.principal_id.clone(),
         pairing_id: p.pairing_id.clone(),
+        minted_from: p.minted_from.clone(),
         expires_in_secs: (p.expires_at - now).max(1),
     })
 }
@@ -938,6 +941,34 @@ pub fn session_info(token_id: &str) -> Result<Option<PassInfo>, String> {
         .optional()
         .map_err(|e| format!("pairing pass lookup: {e}"))
     })
+}
+
+/// A person as `pairing.check` names them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Person {
+    pub username: String,
+    pub full_name: Option<String>,
+}
+
+/// The person `principal_id`, if they still exist.
+pub fn person(principal_id: &str) -> Result<Option<Person>, String> {
+    with_conn(|conn| {
+        conn.query_row("SELECT username, full_name FROM principals WHERE id = ?1", params![principal_id], |r| {
+            Ok(Person { username: r.get(0)?, full_name: r.get::<_, Option<String>>(1)?.filter(|n| !n.trim().is_empty()) })
+        })
+        .optional()
+        .map_err(|e| format!("pairing person: {e}"))
+    })
+}
+
+/// Test seam: make the session `token_id` look `secs` older (the start's
+/// fresh sign-in rule).
+#[cfg(any(test, feature = "test-util"))]
+pub fn age_session_for_test(token_id: &str, secs: i64) {
+    with_conn(|conn| {
+        conn.execute("UPDATE tokens SET created_at = created_at - ?2 WHERE id = ?1", params![token_id, secs]).map_err(|e| e.to_string())
+    })
+    .expect("age the session");
 }
 
 // ── the redeem's mint (CP17, CP18, V13) ──────────────────────────────

@@ -209,7 +209,7 @@
     {"code": "person_pass_required", "doc": "Wallet verbs need an App user's own login session pass. Connect logins, the owner token, agent passports and an App's own pass have no wallet."},
     {"code": "wallet_off", "doc": "This App doesn't use personal wallets; its owner turns them on."},
     {"code": "push_off", "doc": "This App doesn't send notifications: its owner turns them on (approving push:send, or k2 app push on)."},
-    {"code": "not_for_host", "doc": "Push is for a published App's own users, never the box login (host)."},
+    {"code": "not_for_host", "doc": "Push and phone pairing are for a published App's own users, never the box login (host)."},
     {"code": "channel_unavailable", "doc": "K2 Companion can't receive this App's notifications yet; register the App's own phone app (channel app)."},
     {"code": "push_devices_full", "doc": "This App holds as many push devices as its owner allows."},
     {"code": "push_not_configured", "doc": "This App has no Apple or Google push key yet; its owner runs k2 app push setup."},
@@ -218,6 +218,15 @@
     {"code": "airgap", "doc": "Air-gap is on: nothing leaves this server."},
     {"code": "vault_closed", "doc": "The vault isn't open yet (K2 is still starting); try again shortly."},
     {"code": "token_in_use", "doc": "Another person on this App is still signed in with this phone's push token; they sign out (push.unregister) first."},
+    {"code": "pairing_off", "doc": "This App doesn't pair phones (its owner turns it on: k2 app pairing setup)."},
+    {"code": "pairing_from_device", "doc": "A phone that is signed in can't pair another one: start from the person's web sign-in."},
+    {"code": "reauth_required", "doc": "The web sign-in is more than 15 minutes old: send the person's password with the start."},
+    {"code": "device_signin_off", "doc": "This App's Stay signed in is off, so a phone can't stay signed in."},
+    {"code": "host_not_paired", "doc": "That host isn't one this App pairs on; the error lists the ones it does."},
+    {"code": "no_public_host", "doc": "This App has no public k2.dev host to pair on."},
+    {"code": "pairing_not_served", "doc": "K2 can't serve this App's phone link files (a --cmd or --skin service, or host.clientIp: false)."},
+    {"code": "pair_code_invalid", "doc": "The pairing code is unknown, used, expired or for another App: start again from the web App."},
+    {"code": "pairing_not_from_browser", "doc": "A phone app redeems a pairing code, never a web page (the owner lists a webview's Origin with k2 app pairing setup --native-origin)."},
     {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."},
     {"code": "needs_editor", "doc": "Garden access lists on: this widget version isn't signed by the person, K2 or an agent on this Garden's list, so only its own store and save keyspace and widget.self answer. Someone who edits this Garden has to sign this version."},
     {"code": "retired", "doc": "K2 retired this verb: it answers this until a later release removes it (the message says which)."},
@@ -8172,6 +8181,13 @@
                 "current": {
                   "type": "boolean",
                   "description": "The device this pass belongs to."
+                },
+                "via": {
+                  "enum": [
+                    "pairing",
+                    "password"
+                  ],
+                  "description": "How it started: a QR pairing, or a device login with the password."
                 }
               },
               "required": [
@@ -8181,7 +8197,8 @@
                 "createdAt",
                 "lastUsedAt",
                 "expiresAt",
-                "current"
+                "current",
+                "via"
               ],
               "additionalProperties": false
             }
@@ -9986,6 +10003,668 @@
       ],
       "doc": "Which of this App's guests have phones registered, and on which platforms (never a token).",
       "example": "const {guests} = await k2.push.devices()"
+    },
+    {
+      "verb": "pairing.start",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-phone-pairing-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/pair/start",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "host": {
+              "type": "string",
+              "description": "One of this App's k2.dev hosts for the QR's link; default its own label.",
+              "default": ""
+            },
+            "password": {
+              "type": "string",
+              "description": "The guest's password, when their sign-in is more than 15 minutes old (reauth_required).",
+              "default": ""
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppPairingStart",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "pairingId": {
+            "type": "string",
+            "description": "Not a secret: what pairing.status and pairing.cancel take (apr_...)."
+          },
+          "code": {
+            "type": "string",
+            "description": "The one-time code (K2A-...), shown once: draw qr, never log it."
+          },
+          "pairUrl": {
+            "type": "string",
+            "description": "https://<host>/.well-known/k2-pair#<code>: what the QR holds; the code rides in the fragment."
+          },
+          "qr": {
+            "title": "AppQr",
+            "type": "object",
+            "properties": {
+              "size": {
+                "type": "integer",
+                "description": "Modules per side (not a time)."
+              },
+              "rows": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "One string of 1 (dark) and 0 (light) per row, no quiet zone."
+              }
+            },
+            "required": [
+              "size",
+              "rows"
+            ],
+            "additionalProperties": false
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "When the code stops working, seconds since the epoch."
+          },
+          "expiresInSecs": {
+            "type": "integer",
+            "description": "The code's life in seconds (start again when it runs out)."
+          },
+          "host": {
+            "type": "string",
+            "description": "The host the link names."
+          }
+        },
+        "required": [
+          "ok",
+          "pairingId",
+          "code",
+          "pairUrl",
+          "qr",
+          "expiresAt",
+          "expiresInSecs",
+          "host"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "not_for_host",
+        "pairing_off",
+        "pairing_from_device",
+        "device_signin_off",
+        "no_public_host",
+        "pairing_not_served",
+        "host_not_paired",
+        "reauth_required",
+        "bad_login",
+        "locked",
+        "rate_limited",
+        "usage",
+        "failed"
+      ],
+      "doc": "Start pairing this guest's phone: a one-time code and its QR, from their own web sign-in (at most 15 minutes old, or with their password).",
+      "example": "const p = await k2.asGuest(pass).pairing.start()"
+    },
+    {
+      "verb": "pairing.status",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-phone-pairing-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/pair/status",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "pairingId": {
+              "type": "string",
+              "description": "From pairing.start."
+            }
+          },
+          "required": [
+            "pairingId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPairingStatus",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "pairingId": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "paired",
+              "expired",
+              "cancelled"
+            ],
+            "description": "expired: it ran out or a redeem used it and was refused; start again."
+          },
+          "expiresInSecs": {
+            "type": "integer",
+            "description": "While pending: seconds left."
+          },
+          "device": {
+            "title": "AppPairedDevice",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "The name the phone gave; it proves nothing on its own."
+              },
+              "deviceLoginId": {
+                "type": "string",
+                "description": "What guests.revokeDevice takes (Not you? End it)."
+              },
+              "pairedAt": {
+                "type": "integer",
+                "description": "Seconds since the epoch."
+              }
+            },
+            "required": [
+              "name",
+              "deviceLoginId",
+              "pairedAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "pairingId",
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "not_found",
+        "usage",
+        "failed"
+      ],
+      "doc": "Is this guest's pairing done: pending, paired (with the device's name), expired or cancelled.",
+      "example": "const s = await k2.asGuest(pass).pairing.status({pairingId})"
+    },
+    {
+      "verb": "pairing.cancel",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-phone-pairing-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/pair/cancel",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "pairingId": {
+              "type": "string",
+              "description": "From pairing.start."
+            }
+          },
+          "required": [
+            "pairingId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPairingCancelled",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "cancelled": {
+            "type": "boolean",
+            "description": "false when nothing of this guest's was pending under that id."
+          }
+        },
+        "required": [
+          "ok",
+          "cancelled"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "usage",
+        "failed"
+      ],
+      "doc": "Drop one of this guest's pairing codes (the QR stops working).",
+      "example": "await k2.asGuest(pass).pairing.cancel({pairingId})"
+    },
+    {
+      "verb": "pairing.check",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-phone-pairing-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/pair/check",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "The code from the QR's link fragment, or pasted."
+            },
+            "app": {
+              "type": "string",
+              "description": "This App's service id (required off the App's link).",
+              "default": ""
+            }
+          },
+          "required": [
+            "code"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPairingCheck",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string"
+          },
+          "appName": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string",
+            "description": "Who the code signs in: show it before redeeming."
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "expiresInSecs": {
+            "type": "integer",
+            "description": "Seconds left."
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "appName",
+          "username",
+          "expiresInSecs"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "pair_code_invalid",
+        "pairing_not_from_browser",
+        "rate_limited",
+        "usage",
+        "failed"
+      ],
+      "doc": "Public: who a pairing code would sign in, without using it (ask 'Sign in as ...?' first).",
+      "example": "const who = await k2.pairing.check({code})"
+    },
+    {
+      "verb": "pairing.redeem",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-phone-pairing-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/pair",
+          "responseNames": {
+            "pass": "token"
+          },
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "The code from the QR's link fragment, or pasted; it works once."
+            },
+            "app": {
+              "type": "string",
+              "description": "This App's service id (required off the App's link).",
+              "default": ""
+            },
+            "device": {
+              "title": "AppDevice",
+              "type": "object",
+              "description": "Name a device to stay signed in: the answer adds a refresh token (when the owner left Stay signed in on).",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
+            },
+            "push": {
+              "title": "AppPairingPush",
+              "type": "object",
+              "properties": {
+                "platform": {
+                  "enum": [
+                    "apns",
+                    "fcm"
+                  ],
+                  "description": "apns: the iOS device token as hex. fcm: an FCM token (Android, or iOS through Firebase)."
+                },
+                "pushToken": {
+                  "type": "string",
+                  "description": "The native token from the OS (never an Expo push token)."
+                },
+                "environment": {
+                  "enum": [
+                    "production",
+                    "sandbox"
+                  ],
+                  "description": "APNs only: sandbox for Debug builds.",
+                  "default": "production"
+                },
+                "previews": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ],
+                  "description": "Show agent-reply text on this device; null = on."
+                },
+                "mutedTopics": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Topics to skip (at most 32, each a-z 0-9 . _ -)."
+                },
+                "deviceId": {
+                  "type": "string",
+                  "description": "Leave it out: it is device.id."
+                }
+              },
+              "required": [
+                "platform",
+                "pushToken"
+              ],
+              "additionalProperties": false,
+              "description": "Also register this phone for the App's notifications; a refusal never fails the pairing."
+            }
+          },
+          "required": [
+            "code",
+            "device"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPairedSession",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "pass": {
+            "type": "string",
+            "description": "The phone's session pass (k2skn_...): send it as Authorization: Bearer."
+          },
+          "refresh": {
+            "type": "string",
+            "description": "The refresh token (k2skr_...): store it; guests.refresh trades it."
+          },
+          "passExpiresAt": {
+            "type": "integer",
+            "description": "When the pass ends, seconds since the epoch."
+          },
+          "refreshExpiresAt": {
+            "type": "integer",
+            "description": "When the refresh token ends unless used, seconds since the epoch."
+          },
+          "username": {
+            "type": "string"
+          },
+          "principalId": {
+            "type": "string"
+          },
+          "app": {
+            "type": "string"
+          },
+          "device": {
+            "title": "AppDeviceRef",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Project ids."
+          },
+          "roomHandles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "caps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every cap in any room."
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roomAccess": {
+            "type": "array",
+            "items": {
+              "title": "AppRoomAccess",
+              "type": "object",
+              "properties": {
+                "handle": {
+                  "type": "string"
+                },
+                "caps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "handle",
+                "caps"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "via": {
+            "enum": [
+              "pairing"
+            ],
+            "description": "This device sign-in started from a pairing."
+          },
+          "push": {
+            "title": "AppPairingPushResult",
+            "type": "object",
+            "properties": {
+              "registered": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string",
+                "description": "The push registration's id (apd_...)."
+              },
+              "who": {
+                "type": "string",
+                "description": "This person's opaque key on this App (k2Who)."
+              },
+              "configured": {
+                "title": "AppPushConfigured",
+                "type": "object",
+                "properties": {
+                  "apns": {
+                    "type": "boolean",
+                    "description": "The owner set this App's Apple key."
+                  },
+                  "fcm": {
+                    "type": "boolean",
+                    "description": "The owner set this App's Firebase service account."
+                  }
+                },
+                "required": [
+                  "apns",
+                  "fcm"
+                ],
+                "additionalProperties": false
+              },
+              "code": {
+                "type": "string",
+                "description": "Why it didn't register (push's own refusal code)."
+              }
+            },
+            "required": [
+              "registered"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "pass",
+          "refresh",
+          "passExpiresAt",
+          "refreshExpiresAt",
+          "username",
+          "principalId",
+          "app",
+          "device",
+          "rooms",
+          "roomHandles",
+          "caps",
+          "role",
+          "roomAccess",
+          "via"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "pair_code_invalid",
+        "pairing_not_from_browser",
+        "rate_limited",
+        "usage",
+        "failed"
+      ],
+      "doc": "Public: trade a pairing code for this App's device sign-in (a pass and a refresh token), once; optionally register push in the same call.",
+      "example": "const {pass, refresh} = await k2.pairing.redeem({code, device: {id, name}})"
     },
     {
       "verb": "email.send",

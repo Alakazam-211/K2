@@ -48,6 +48,15 @@
 //! [`Mode::Local`]: K2's own hop keeps its address; any other local caller
 //! only loses `X-K2-Client-IP` (a local reverse proxy's `X-Forwarded-For`
 //! is its own business, as today).
+//!
+//! **K2's own answers on an App's host** (App phone pairing, 0.46.5):
+//! [`forward_with`] takes a [`LocalAnswer`]. A `GET`/`HEAD` with no body
+//! that it answers (the pairing link files, `app_pairing::links`) never
+//! reaches the App: K2's answer is written in order, after every earlier
+//! response on the connection, then the connection closes
+//! (`Connection: close`), at any position on a keep-alive connection.
+//! [`peek_head`] reads a connection's first request head before the App
+//! is dialed, so the files are served while the App is down.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -410,7 +419,16 @@ struct RequestHead {
     body: Body,
     is_head: bool,
     upgrade: bool,
+    method: String,
+    path: String,
+    /// The request's `Host` (the last one when sent twice).
+    host: Option<String>,
 }
+
+/// K2's own answer to a request on an App's connection: `(method,
+/// path and query, Host)` → the whole response (it must end the
+/// connection: `Connection: close`), or `None` for the App to answer.
+pub type LocalAnswer = std::sync::Arc<dyn Fn(&str, &str, Option<&str>) -> Option<Vec<u8>> + Send + Sync>;
 
 #[derive(Debug)]
 enum ReadRequest {
@@ -450,6 +468,7 @@ fn rewrite_request(req: &httparse::Request, rule: Rule) -> Result<RequestHead, &
     let mut cl: Vec<String> = Vec::new();
     let mut connection: Vec<String> = Vec::new();
     let mut has_upgrade = false;
+    let mut host: Option<String> = None;
     for h in req.headers.iter() {
         let norm = normalized(h.name);
         let underscored = h.name.contains('_');
@@ -466,6 +485,9 @@ fn rewrite_request(req: &httparse::Request, rule: Rule) -> Result<RequestHead, &
             n => {
                 if n == "upgrade" {
                     has_upgrade = true;
+                }
+                if n == "host" {
+                    host = Some(String::from_utf8_lossy(h.value).trim().to_string());
                 }
                 out.extend_from_slice(h.name.as_bytes());
                 out.extend_from_slice(b": ");
@@ -507,7 +529,15 @@ fn rewrite_request(req: &httparse::Request, rule: Rule) -> Result<RequestHead, &
         out.extend_from_slice(format!("{HEADER}: {ip}\r\nX-Forwarded-For: {ip}\r\nX-Real-IP: {ip}\r\n").as_bytes());
     }
     out.extend_from_slice(b"\r\n");
-    Ok(RequestHead { bytes: out, body, is_head: method.eq_ignore_ascii_case("HEAD"), upgrade })
+    Ok(RequestHead {
+        bytes: out,
+        body,
+        is_head: method.eq_ignore_ascii_case("HEAD"),
+        upgrade,
+        method: method.to_string(),
+        path: path.to_string(),
+        host,
+    })
 }
 
 async fn read_request<R: AsyncRead + Unpin>(rd: &mut Reader<R>, rule: Rule) -> io::Result<ReadRequest> {
@@ -550,9 +580,9 @@ async fn read_request<R: AsyncRead + Unpin>(rd: &mut Reader<R>, rule: Rule) -> i
 #[derive(Debug, Clone)]
 enum Expect {
     Response { head: bool, upgrade: bool },
-    /// K2's own refusal: written after the responses before it, then the
-    /// connection closes.
-    Refusal(Vec<u8>),
+    /// K2's own answer (a refusal, or a [`LocalAnswer`]): written after the
+    /// responses before it, then the connection closes.
+    Own(Vec<u8>),
 }
 
 struct Shared {
@@ -578,8 +608,16 @@ impl Shared {
 /// Upgrade decisions: `(upgrade requests decided so far, last one switched)`.
 type Decision = (u64, bool);
 
-/// Client → upstream: every request rewritten.
-async fn requests<R, W>(mut rd: Reader<R>, mut up: W, mode: Mode, shared: &Shared, mut decided: watch::Receiver<Decision>) -> io::Result<()>
+/// Client → upstream: every request rewritten; one K2 answers itself
+/// ([`LocalAnswer`]) ends the request side.
+async fn requests<R, W>(
+    mut rd: Reader<R>,
+    mut up: W,
+    mode: Mode,
+    shared: &Shared,
+    mut decided: watch::Receiver<Decision>,
+    local: Option<&LocalAnswer>,
+) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -600,11 +638,21 @@ where
                 return Ok(());
             }
             ReadRequest::Refuse(status) => {
-                shared.push(Expect::Refusal(refusal(status)));
+                shared.push(Expect::Own(refusal(status)));
                 return Ok(());
             }
             ReadRequest::Head(h) => h,
         };
+        // A body-less GET/HEAD K2 answers itself never reaches the App (a
+        // request with a body passes on unchanged).
+        if let Some(answer) = local {
+            if head.body == Body::None && !head.upgrade {
+                if let Some(bytes) = answer(&head.method, &head.path, head.host.as_deref()) {
+                    shared.push(Expect::Own(bytes));
+                    return Ok(());
+                }
+            }
+        }
         shared.push(Expect::Response { head: head.is_head, upgrade: head.upgrade });
         up.write_all(&head.bytes).await?;
         match head.body {
@@ -693,7 +741,7 @@ where
     let mut decided = 0u64;
     loop {
         let expect = match shared.front() {
-            Some(Expect::Refusal(bytes)) => {
+            Some(Expect::Own(bytes)) => {
                 cw.write_all(&bytes).await?;
                 let _ = cw.shutdown().await;
                 return Ok(());
@@ -786,11 +834,20 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
+    forward_with(client, upstream, mode, None).await
+}
+
+/// [`forward`] with K2's own answers for some requests ([`LocalAnswer`]).
+pub async fn forward_with<C, U>(client: C, upstream: U, mode: Mode, local: Option<LocalAnswer>) -> io::Result<()>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
     let (cr, cw) = tokio::io::split(client);
     let (ur, uw) = tokio::io::split(upstream);
     let shared = Shared { queue: Mutex::new(VecDeque::new()), pushed: Notify::new() };
     let (decide, decided) = watch::channel::<Decision>((0, false));
-    let req = requests(Reader::new(cr), uw, mode, &shared, decided);
+    let req = requests(Reader::new(cr), uw, mode, &shared, decided, local.as_ref());
     let resp = responses(Reader::new(ur), cw, &shared, decide);
     tokio::pin!(req, resp);
     tokio::select! {
@@ -799,6 +856,114 @@ where
             Ok(()) => resp.await,
             Err(e) => Err(e),
         },
+    }
+}
+
+// ── the first request, before the App is dialed ──────────────────────
+
+/// How long [`peek_head`] waits for a first request head.
+pub const PEEK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A connection's first request, read before the App is dialed.
+#[derive(Debug)]
+pub struct Peeked {
+    /// Every byte read so far (the head and whatever followed it): replay
+    /// them with [`Replay`] when the App is to answer.
+    pub bytes: Vec<u8>,
+    /// `(method, path and query, Host)` when the first head parsed and
+    /// carries no body; `None` otherwise (the App answers).
+    pub plain: Option<(String, String, Option<String>)>,
+}
+
+/// Read `client`'s first request head (at most [`MAX_HEAD`] bytes, by
+/// [`PEEK_TIMEOUT`]). Never fails: whatever was read is in `bytes`, and
+/// anything that isn't a body-less HTTP/1.x request head is `plain: None`.
+pub async fn peek_head<S: AsyncRead + Unpin>(client: &mut S) -> Peeked {
+    let mut bytes: Vec<u8> = Vec::new();
+    let read = async {
+        let mut tmp = [0u8; 4096];
+        loop {
+            {
+                let mut headers = [httparse::EMPTY_HEADER; MAX_REQ_HEADERS];
+                let mut req = httparse::Request::new(&mut headers);
+                match req.parse(&bytes) {
+                    Ok(httparse::Status::Complete(_)) => return,
+                    Ok(httparse::Status::Partial) if bytes.len() <= MAX_HEAD => {}
+                    _ => return,
+                }
+            }
+            match client.read(&mut tmp).await {
+                Ok(0) | Err(_) => return,
+                Ok(n) => bytes.extend_from_slice(&tmp[..n]),
+            }
+        }
+    };
+    let _ = tokio::time::timeout(PEEK_TIMEOUT, read).await;
+    let plain = {
+        let mut headers = [httparse::EMPTY_HEADER; MAX_REQ_HEADERS];
+        let mut req = httparse::Request::new(&mut headers);
+        match req.parse(&bytes) {
+            Ok(httparse::Status::Complete(_)) => {
+                let mut host = None;
+                let mut body = false;
+                for h in req.headers.iter() {
+                    match normalized(h.name).as_str() {
+                        "host" => host = Some(String::from_utf8_lossy(h.value).trim().to_string()),
+                        "transfer-encoding" => body = true,
+                        "content-length" => body |= String::from_utf8_lossy(h.value).trim() != "0",
+                        _ => {}
+                    }
+                }
+                match (req.method, req.path, body) {
+                    (Some(m), Some(p), false) => Some((m.to_string(), p.to_string(), host)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    };
+    Peeked { bytes, plain }
+}
+
+/// A stream that first yields bytes already read from it ([`peek_head`]).
+pub struct Replay<'a, S> {
+    pre: Vec<u8>,
+    pos: usize,
+    inner: &'a mut S,
+}
+
+impl<'a, S> Replay<'a, S> {
+    pub fn new(pre: Vec<u8>, inner: &'a mut S) -> Self {
+        Self { pre, pos: 0, inner }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Replay<'_, S> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        let me = self.get_mut();
+        if me.pos < me.pre.len() {
+            let n = (me.pre.len() - me.pos).min(buf.remaining());
+            buf.put_slice(&me.pre[me.pos..me.pos + n]);
+            me.pos += n;
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::pin::Pin::new(&mut *me.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Replay<'_, S> {
+    fn poll_write(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<io::Result<usize>> {
+        std::pin::Pin::new(&mut *self.get_mut().inner).poll_write(cx, buf)
+    }
+    fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut *self.get_mut().inner).poll_flush(cx)
+    }
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut *self.get_mut().inner).poll_shutdown(cx)
     }
 }
 

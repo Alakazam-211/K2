@@ -310,6 +310,15 @@ pub const ROUTES: &[Route] = &[
     // the owner's steps (handler: passports their own workspace's).
     get("/cli/app/move-plan", Member),
     post("/cli/app/move-plan/request", Admin),
+    // prd-app-phone-pairing-v1 (0.46.5): `k2 app pairing …`. Status, off
+    // and the log are Admin-floor (the App's agent by its passport; the
+    // log also needs its App-user switch); the phone app ids and the
+    // network check are the Owner's (set: in person + a fresh confirm).
+    get("/cli/app/pairing", Admin),
+    post("/cli/app/pairing/check", Owner),
+    get("/cli/app/pairing/log", Admin),
+    post("/cli/app/pairing/off", Admin),
+    post("/cli/app/pairing/set", Owner),
     // Q8: park stops an App and holds it for the owner (lowering: Admin).
     post("/cli/app/park", Admin),
     // app-user-profile (0.46.5): an App's profile settings. The owner or an
@@ -1353,6 +1362,15 @@ pub const ROUTES: &[Route] = &[
     // Room-scope R9/R16 (0.46.1): room.members, app.self, app.usage for a
     // pass (the handler checks rooms, caps and the link).
     get("/cli/skin/members", NoLogin),
+    // prd-app-phone-pairing-v1 (0.46.5): the phone redeems and checks a
+    // one-time code (Public: the code is the credential, throttled); a
+    // person's own web session starts, polls and cancels (the handler
+    // checks the pass).
+    post("/cli/skin/pair", Public),
+    post("/cli/skin/pair/cancel", NoLogin),
+    post("/cli/skin/pair/check", Public),
+    post("/cli/skin/pair/start", NoLogin),
+    get("/cli/skin/pair/status", NoLogin),
     post("/cli/skin/password/change", Public),
     post("/cli/skin/password/forgot", Public),
     post("/cli/skin/password/reset", Public),
@@ -2679,6 +2697,7 @@ mod tests {
         ("/cli/publish/logs", "reads service logs"),
         ("/cli/publish/validate", "parses an App folder's code; writes nothing"),
         ("/cli/skin/password/set", "serves K2's own fixed set-password page; the password is set by POST /cli/skin/password/reset"),
+        ("/cli/skin/pair/status", "reads a pairing's state for its own person; start, cancel and redeem are POST routes"),
     ];
 
     fn path_words(path: &str) -> Vec<String> {

@@ -1098,6 +1098,9 @@ fn go_live(app: &AppRow, dep: &str, inst: Instance, kind: &str, t: &Timings) {
     let fp = fingerprint(&inst.handle);
     let _ = db(|c| store::set_runtime_json(c, dep, &serde_json::to_string(&fp).unwrap_or_default()));
     let (_, prev_be) = router::switch_with(&app.app_id, inst.handle.port, inst.client_ip);
+    // App phone pairing (V6): a deploy may turn the client-IP front off
+    // (no link files) or change the App's labels: rebuild its snapshot.
+    crate::app_pairing::refresh_links(&app.service_id);
     let watch_secs = t.watch_secs;
     let (older_warm, prev_live, replace) = with_rt(&app.app_id, |rt| {
         let older = rt.warm.take();

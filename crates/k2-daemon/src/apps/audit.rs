@@ -143,7 +143,12 @@ pub fn note_response(status: &str, body: &str) {
                 }
                 // A guest login names who signed in (on behalf of): the
                 // digest knows the App's own test guests by it (NSI C).
-                if code == 200 && o.call.verb == "POST /cli/skin/login" && o.call.on_behalf_of.is_none() {
+                // A phone paired through the link names who it signed in too
+                // (app pairing: the audit records the redeem door).
+                if code == 200
+                    && (o.call.verb == "POST /cli/skin/login" || o.call.verb == "POST /cli/skin/pair")
+                    && o.call.on_behalf_of.is_none()
+                {
                     if let Some(p) = serde_json::from_str::<J>(body).ok().and_then(|v| v["principalId"].as_str().map(str::to_string)) {
                         o.call.on_behalf_of = Some(format!("guest:{p}"));
                     }

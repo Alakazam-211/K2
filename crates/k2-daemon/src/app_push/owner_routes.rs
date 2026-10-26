@@ -227,7 +227,7 @@ fn keys_confirm(who: &Who, t: &Target, v: &J) -> R<()> {
 /// A fresh vault confirm of `action`, bound to this App's service id, from
 /// the owner in person (the caller checked who). The owner token alone is
 /// never enough: agents can read it (review A-L2, B-M2).
-fn fresh_confirm(who: &Who, t: &Target, v: &J, action: &str, ask: &str, again: &str) -> R<()> {
+pub(crate) fn fresh_confirm(who: &Who, t: &Target, v: &J, action: &str, ask: &str, again: &str) -> R<()> {
     let stamp = match who {
         Who::Owner => "owner".to_string(),
         Who::Login { username, .. } => format!("connect:{username}"),

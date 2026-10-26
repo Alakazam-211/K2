@@ -648,6 +648,16 @@ mod tests {
                 "airgap",
                 "vault_closed",
                 "token_in_use",
+                // prd-app-phone-pairing-v1 (0.46.5): App phone pairing.
+                "pairing_off",
+                "pairing_from_device",
+                "reauth_required",
+                "device_signin_off",
+                "host_not_paired",
+                "no_public_host",
+                "pairing_not_served",
+                "pair_code_invalid",
+                "pairing_not_from_browser",
                 "duplicate_label",
                 // Garden access lists (prd-garden-access-v1 G22): the
                 // signer gate's refusal (switch on only).

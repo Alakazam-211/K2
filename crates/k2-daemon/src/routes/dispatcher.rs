@@ -305,6 +305,88 @@ async fn device_pair(
     reply.response
 }
 
+/// App phone pairing's redeems and checks per window through one App's
+/// link (a BFF redeems for its phones from one socket), V21.
+const APP_PAIR_LINK_PER_APP: usize = 60;
+/// Through every App's link together per window.
+const APP_PAIR_LINK_ALL_APPS: usize = 300;
+/// Per client address per window off a link (a check plus a redeem is 2).
+const APP_PAIR_PER_CLIENT: usize = 10;
+
+fn app_pair_rate_limited() -> crate::cli_response::CliResponse {
+    let mut extra = serde_json::Map::new();
+    extra.insert("retryAfterMs".into(), serde_json::json!(crate::login_throttle::WINDOW_SECS * 1000));
+    crate::app_pairing::refusal_with("429 Too Many Requests", "rate_limited", "too many pairing tries: wait a few minutes", extra)
+}
+
+/// `POST /cli/skin/pair` and `/cli/skin/pair/check` (App phone pairing,
+/// Public: the code is the credential). Throttles first (R4, V21): on an
+/// App's link its own per-App and link-wide keys; elsewhere a per-client
+/// bucket and pairing's own global ceiling for anonymous callers (never
+/// the App-login door, so bad codes never lock out App logins). Then the
+/// handler (browser shape, the code, the re-checks, the audit row) and a
+/// 200 ms delay on a 401.
+async fn app_pair_public(
+    limiter: &crate::login_throttle::LoginLimiter,
+    stream: &tokio::net::TcpStream,
+    ingress: Ingress,
+    headers_blob: &str,
+    body: Vec<u8>,
+    check: bool,
+) -> crate::cli_response::CliResponse {
+    use crate::login_throttle::{Door, Verdict, PAIR_KEY_PREFIX};
+    let link = crate::apps::gateway::current().map(|l| l.service_id.clone());
+    let now = limiter.now();
+    let mut anonymous = false;
+    match &link {
+        Some(svc) => {
+            if limiter.check_and_record_with_limit(&format!("{PAIR_KEY_PREFIX}link:{svc}"), APP_PAIR_LINK_PER_APP, now) == Verdict::Limited
+                || limiter.check_and_record_with_limit(&format!("{PAIR_KEY_PREFIX}link:*"), APP_PAIR_LINK_ALL_APPS, now) == Verdict::Limited
+            {
+                return app_pair_rate_limited();
+            }
+        }
+        None => {
+            let trusted = trusted_proxies_from_env();
+            let peer = peer_ip(stream);
+            let relay = relay_client_ip(ingress, stream);
+            if let ThrottleKey::Client(ip) = skin_login_throttle_key(ingress, peer, headers_blob, &trusted, relay) {
+                if limiter.check_and_record_with_limit(&format!("{PAIR_KEY_PREFIX}{ip}"), APP_PAIR_PER_CLIENT, now) == Verdict::Limited {
+                    return app_pair_rate_limited();
+                }
+            }
+            anonymous = skin_login_client_trust(ingress, peer, headers_blob, &trusted, relay).under_global_ceiling();
+            if anonymous && limiter.global_ceiling_reached(Door::AppPair, now) {
+                return app_pair_rate_limited();
+            }
+        }
+    }
+    let ctx = crate::app_pairing::guest_routes::Ctx {
+        link_app: link,
+        ip: client_ip_for(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string()),
+    };
+    let headers = super::http::request_head(headers_blob).to_string();
+    let reply = tokio::task::spawn_blocking(move || {
+        if check {
+            crate::app_pairing::guest_routes::handle_check(&body, &headers, &ctx)
+        } else {
+            crate::app_pairing::guest_routes::handle_redeem(&body, &headers, &ctx)
+        }
+    })
+    .await
+    .unwrap_or_else(|e| crate::app_pairing::guest_routes::Reply {
+        response: crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")),
+        outcome: "error".into(),
+    });
+    if reply.response.status.starts_with("401") {
+        if anonymous {
+            limiter.record_global_failure(Door::AppPair, limiter.now());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    reply.response
+}
+
 /// 0.45.7 — who drives a `/cli/tunnel/*` request, for the tunnel audit
 /// line and the stop reason: the actor kind (`owner-token`,
 /// `user:<name>` for a Connect login such as an ops or remote user,
@@ -1530,6 +1612,11 @@ async fn handle_one_request(
         && path != "/cli/skin/password/reset"
         && path != crate::connect_device_routes::PAIR
         && path != crate::connect_device_routes::PAIR_CHECK
+        // App phone pairing (V20): belt and braces. A phone app's native
+        // call never looks like the hosted web client; this keeps a first
+        // contact through the edge working too.
+        && path != crate::app_pairing::guest_routes::REDEEM
+        && path != crate::app_pairing::guest_routes::CHECK
         && super::http::is_web_client_request(&headers_blob)
         && !super::http::device_session_passes_web_wall(&query, cookie_only)
     {
@@ -10428,6 +10515,97 @@ async fn handle_one_request(
                 },
                 Some(_) => crate::email_notify::link_routes::not_a_pass(),
             };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // prd-app-phone-pairing-v1 (0.46.5): a person's own web session
+        // starts, polls and cancels a phone pairing (the handler checks the
+        // pass: a guest session of this App only). The answer carries the
+        // one-time code: never cached.
+        p if crate::app_pairing::guest_routes::PASS_ROUTES.contains(&p) => {
+            if crate::app_pairing::guest_routes::POST_ROUTES.contains(&p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::app_pairing::guest_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::app_pairing::guest_routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let presented = super::http::extract_token(&query);
+            let r = match presented {
+                None => crate::app_pairing::guest_routes::pass_required(),
+                Some(t) if k2_core::skin::is_skin_token(t) => match crate::apps::gateway::resolve_pass(t) {
+                    Some(pass) => {
+                        let route = p.to_string();
+                        let params = super::http::parse_params(&path, &query);
+                        let ctx = crate::app_pairing::guest_routes::Ctx {
+                            link_app: crate::apps::gateway::current().map(|l| l.service_id.clone()),
+                            ip: client_ip_for(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string()),
+                        };
+                        tokio::task::spawn_blocking(move || {
+                            crate::app_pairing::guest_routes::handle_pass(&route, &pass, is_post, &body, &params, &ctx)
+                        })
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                    None => crate::skin_routes::revoked_skin_response(),
+                },
+                Some(_) => crate::app_pairing::guest_routes::not_a_pass(),
+            };
+            super::http::send_response_with_headers(&mut *stream, r.status, r.content_type, &r.body, "Cache-Control: no-store\r\n").await;
+        }
+        // prd-app-phone-pairing-v1: the phone checks and redeems a code
+        // (Public: the one-time code is the credential). Open with web
+        // access off, like /cli/skin/login. The redeem's answer carries a
+        // pass and a refresh token: never cached.
+        p if crate::app_pairing::guest_routes::PUBLIC_ROUTES.contains(&p) => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::app_pairing::guest_routes::MAX_BODY).await {
+                Ok(b) => b,
+                Err(_) => {
+                    let r = crate::app_pairing::guest_routes::too_large();
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let check = p == crate::app_pairing::guest_routes::CHECK;
+            let r = app_pair_public(&state.login_limiter, &*stream, ingress, &headers_blob, body, check).await;
+            super::http::send_response_with_headers(&mut *stream, r.status, r.content_type, &r.body, "Cache-Control: no-store\r\n").await;
+        }
+        // prd-app-phone-pairing-v1: `k2 app pairing …` for the owner,
+        // Admins and the App's agent. Caller rules live in the handler.
+        p if crate::app_pairing::owner_routes::is_route(p) => {
+            if crate::app_pairing::owner_routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::app_pairing::owner_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::app_pairing::owner_routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || crate::app_pairing::owner_routes::handle(&p_owned, who, &body_bytes, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         crate::app_mobile_routes::ACCESS => {

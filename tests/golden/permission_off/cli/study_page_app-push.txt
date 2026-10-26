@@ -69,6 +69,7 @@ WHEN APPLE OR GOOGLE SAY NO
   nothing is deleted. A refused key pauses that platform 10 minutes and
   leaves the App's agent a note; k2 app push status shows the code.
   K2_APP_PUSH=off in the daemon's environment stops every App's push.
-  K2 Companion's own phones are k2 push, not this.
+  K2 Companion's own phones are k2 push, not this. A phone that pairs by
+  QR can register in the same call: k2 study app-pairing (push field).
 --- stderr
 --- requests

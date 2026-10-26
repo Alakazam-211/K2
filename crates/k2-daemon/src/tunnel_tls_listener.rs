@@ -955,7 +955,21 @@ async fn serve_one(
             {
                 log_debug!("[daemon/e2e] routing {sni} → App backend :{}", be.port);
                 let mode = crate::apps::router::rewrite_mode(&be, &label, crate::client_ip::Mode::Tunnel(client_ip));
-                if let Err(e) = crate::apps::router::splice(&mut tls, be, mode).await {
+                // App phone pairing (V5): while the App's pairing is on, K2
+                // answers its link files itself, the first request before
+                // the backend is dialed.
+                let local = mode.and_then(|_| crate::app_pairing::links::local_for(&label));
+                let spliced = match local {
+                    Some(l) => match crate::apps::router::answer_first(&mut tls, &l).await {
+                        crate::apps::router::FirstRequest::Answered => return Ok(()),
+                        crate::apps::router::FirstRequest::Pass(bytes) => {
+                            let mut r = crate::client_ip::Replay::new(bytes, &mut tls);
+                            crate::apps::router::splice_with(&mut r, be, mode, Some(l)).await
+                        }
+                    },
+                    None => crate::apps::router::splice(&mut tls, be, mode).await,
+                };
+                if let Err(e) = spliced {
                     log_debug!("[daemon/e2e] {sni}: {e} — answering 502");
                     write_unreachable_502(&mut tls).await;
                     return Ok(());

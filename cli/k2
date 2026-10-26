@@ -8287,6 +8287,8 @@ clean-mode, key mint|revoke, keys, approvals, approve, deny, access
 Phone notifications for a custom App's own phone app: k2 app push
 (k2 app push --help, k2 study app-push).
 
+Pairing a custom App's own phone app by QR from its web page: k2 app pairing
+(k2 app pairing --help, k2 study app-pairing).
 Email from the App's own sender: k2 app email (k2 app email --help,
 k2 study email-notifications).
 
@@ -11874,6 +11876,265 @@ for k in ks:
     print("%s  %-8s %-24s scopes=%s rooms=%s" % (k["id"], k["state"], (k.get("label") or "-")[:24], ",".join(k.get("scopes") or []), ",".join(k.get("rooms") or []) or "-"))'
 }
 
+# k2 app pairing … (prd-app-phone-pairing-v1, 0.46.5): a person signed in to
+# a custom App on the web pairs the App's own phone app by QR, no password
+# on the phone. The owner names the phone apps here; K2 serves their link
+# files on the App's own k2.dev labels and the App's web page shows the QR
+# (pairing.start). Nothing here prints a code.
+_app_pairing_usage() {
+    cat <<'EOF'
+k2 app pairing — let people pair a custom App's own phone app by QR from
+the App's web page (no password typed on the phone). K2 serves the App's
+iOS and Android link files on its own k2.dev labels while pairing is on.
+
+  k2 app pairing status <app> [--json]
+                                       On or off, the phone apps, the hosts K2
+                                       pairs on, paired phones, the last check.
+  k2 app pairing setup <app> [--ios TEAMID.com.you.app]…
+                 [--android com.you.app:AB:CD:…[,AB:CD:…]]…
+                 [--host <app label host>]… [--native-origin tauri://localhost]…
+                 [--link-path '/jobs/*']… [--app-store URL] [--play-store URL]
+                                       Name the phone apps that open the App's
+                                       sign-in codes and turn pairing on. The
+                                       owner, in person: Touch ID, your login
+                                       or the vault password confirms it (from
+                                       a terminal outside K2). Every setup
+                                       replaces the last one.
+  k2 app pairing off <app>             Turn it off (the owner, an Admin or the
+                                       App's agent). Codes stop at once; phones
+                                       already paired stay signed in (end them
+                                       in k2 app people).
+  k2 app pairing check <app> [--json]  Fetch the link files from each host over
+                                       the internet (and Apple's CDN copy) and
+                                       compare them with what K2 serves.
+  k2 app pairing log <app> [--json]    The App's paired phones: when, who, the
+                                       device's name, the host, live or ended.
+
+v1 pairs on the App's own k2.dev labels. A custom domain works only when you
+front it to the label yourself. In your app, list each host exactly
+(applinks:jobs.you.k2.dev), never a wildcard. While pairing is on, K2 answers
+/.well-known/apple-app-site-association and /.well-known/assetlinks.json on
+those hosts: list the App's other universal-link paths with --link-path.
+
+Who: status and off: an Admin or the App's own agent ("Build and run Apps");
+log: the App's agent only when it may manage the App's users; setup and
+check: the owner in person (an agent asks with a permission card).
+
+The web App calls pairing.start / pairing.status; the phone app calls
+pairing.check, then pairing.redeem: k2 study app-pairing for the whole guide.
+K2 Companion's own phones are k2 users pair-phone (k2 users --help).
+EOF
+}
+
+# Print one pairing status (stdin: the status JSON).
+_app_pairing_status_print() {
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+state = v.get("state")
+line = "%s: phone pairing %s" % (v.get("name") or v.get("app"), state)
+if state != "on":
+    why = {"owner_off": "turned off", "not_set_up": "not set up yet (k2 app pairing setup)", "box_off": "K2_APP_PAIRING=off on this server",
+           "no_app": "no such App"}.get(v.get("off"), v.get("off") or "")
+    if not v.get("served") and v.get("notServed"):
+        why = (why + "; " if why else "") + v["notServed"]
+    line += " (" + why + ")"
+print(line)
+for i in v.get("ios") or []:
+    print("  iOS:      " + i)
+for a in v.get("android") or []:
+    print("  Android:  %s (%d fingerprint%s)" % (a.get("package"), len(a.get("sha256") or []), "" if len(a.get("sha256") or []) == 1 else "s"))
+for h in v.get("hosts") or []:
+    print("  host:     %s%s" % (h.get("host"), "" if h.get("pairs") else " (not pairing)"))
+if not (v.get("hosts") or []):
+    print("  host:     none (the App needs K2 Connect and its own label)")
+for o in v.get("nativeOrigins") or []:
+    print("  webview:  " + o)
+for p in v.get("linkPaths") or []:
+    print("  link:     " + p)
+st = v.get("store") or {}
+for k, n in (("ios", "App Store"), ("android", "Google Play")):
+    if st.get(k):
+        print("  %-9s %s" % (n + ":", st[k]))
+print("  phones:   %s paired now, %s in the last day; stay signed in %s" % (v.get("pairedPhones", 0), v.get("pairingsLastDay", 0),
+      ("%s days" % v["staySignedInDays"]) if v.get("staySignedInDays") else "off (no pairing)"))
+lc = v.get("lastCheck")
+if lc:
+    for h in lc.get("hosts") or []:
+        print("  checked:  %s aasa %s, assetlinks %s, Apple CDN %s" % (h.get("host"), h.get("aasa"), h.get("assetlinks"), h.get("appleCdn")))
+for w in v.get("warnings") or []:
+    print("  note: " + w)'
+}
+
+cmd_app_pairing() {
+    local sub="${1:-}"
+    case "$sub" in
+        ""|-h|--help|help) _app_pairing_usage; return 0 ;;
+    esac
+    shift
+    case "$sub" in
+        status) cmd_app_pairing_status "$@" ;;
+        setup|set) cmd_app_pairing_setup "$@" ;;
+        off) cmd_app_pairing_off "$@" ;;
+        check) cmd_app_pairing_check "$@" ;;
+        log) cmd_app_pairing_log "$@" ;;
+        *) echo "usage: k2 app pairing status|setup|off|check|log (k2 app pairing --help)" >&2; exit 2 ;;
+    esac
+}
+
+cmd_app_pairing_status() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_pairing_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app pairing status <app> [--json]" >&2; exit 2; }
+    _compute_call GET /cli/app/pairing "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_pairing_status_print
+}
+
+cmd_app_pairing_setup() {
+    local app="" json_out=0 ios="" android="" hosts="" origins="" paths="" appstore="" playstore=""
+    local nl='
+'
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --ios) ios="$ios${2:-}$nl"; shift 2 ;;
+            --android) android="$android${2:-}$nl"; shift 2 ;;
+            --host) hosts="$hosts${2:-}$nl"; shift 2 ;;
+            --native-origin) origins="$origins${2:-}$nl"; shift 2 ;;
+            --link-path) paths="$paths${2:-}$nl"; shift 2 ;;
+            --app-store) appstore="${2:-}"; shift 2 ;;
+            --play-store) playstore="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_pairing_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    local usage="usage: k2 app pairing setup <app> [--ios TEAMID.com.you.app]… [--android com.you.app:AB:CD:…]… [--host h]… [--native-origin o]… [--link-path p]… [--app-store URL] [--play-store URL]"
+    [ -n "$app" ] || { echo "$usage" >&2; exit 2; }
+    { [ -z "$ios" ] && [ -z "$android" ]; } && { echo "$usage" >&2; echo "name at least one phone app: --ios and/or --android" >&2; exit 2; }
+    local body
+    body="$(K2_AP_APP="$app" K2_AP_IOS="$ios" K2_AP_ANDROID="$android" K2_AP_HOSTS="$hosts" K2_AP_ORIGINS="$origins" K2_AP_PATHS="$paths" \
+        K2_AP_APPSTORE="$appstore" K2_AP_PLAYSTORE="$playstore" python3 -c '
+import json, os, sys
+e = os.environ
+lines = lambda k: [x.strip() for x in e.get(k, "").split("\n") if x.strip()]
+b = {"app": e["K2_AP_APP"]}
+if lines("K2_AP_IOS"):
+    b["ios"] = lines("K2_AP_IOS")
+android = []
+for spec in lines("K2_AP_ANDROID"):
+    if ":" not in spec:
+        sys.stderr.write("--android is <package>:<SHA-256 fingerprint>[,<fingerprint>…]\n")
+        sys.exit(2)
+    pkg, fprs = spec.split(":", 1)
+    android.append({"package": pkg, "sha256": [f.strip() for f in fprs.split(",") if f.strip()]})
+if android:
+    b["android"] = android
+if lines("K2_AP_HOSTS"):
+    b["hosts"] = lines("K2_AP_HOSTS")
+if lines("K2_AP_ORIGINS"):
+    b["nativeOrigins"] = lines("K2_AP_ORIGINS")
+if lines("K2_AP_PATHS"):
+    b["linkPaths"] = lines("K2_AP_PATHS")
+store = {}
+if e.get("K2_AP_APPSTORE"):
+    store["ios"] = e["K2_AP_APPSTORE"]
+if e.get("K2_AP_PLAYSTORE"):
+    store["android"] = e["K2_AP_PLAYSTORE"]
+if store:
+    b["store"] = store
+print(json.dumps(b))')" || exit 2
+    _app_rt_post /cli/app/pairing/set "$body"
+    if [ "$_CP_STATUS" = "403" ] && [[ "$_CP_BODY" == *'"vault_confirm_required"'* ]] && ! _compute_in_session; then
+        local svc tok
+        svc="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or {}).get("serviceId") or "")')"
+        [ -n "$svc" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+        tok="$(_vault_confirm_token app-pairing-apps "$svc" "")" || exit 3
+        body="$(printf '%s' "$body" | K2_AP_TOK="$tok" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_AP_TOK"]; print(json.dumps(b))')"
+        tok=""
+        _app_rt_post /cli/app/pairing/set "$body"
+    fi
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_pairing_status_print
+    echo "Next: k2 app pairing check $app (Apple's CDN can take up to a day to fetch a new host)"
+}
+
+cmd_app_pairing_off() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app pairing off <app>" >&2; exit 2; }
+    _compute_call POST /cli/app/pairing/off "$(_compute_json K2_CJ_app="$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_pairing_status_print
+}
+
+cmd_app_pairing_check() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app pairing check <app> [--json]" >&2; exit 2; }
+    _compute_call POST /cli/app/pairing/check "$(_compute_json K2_CJ_app="$app")" tcp
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+bad = 0
+words = {"ok": "ok", "none": "not used", "stale": "another file is served there (DNS or a proxy elsewhere, or a cached copy)",
+         "not_served": "not served", "tls_error": "TLS error"}
+for h in v.get("hosts") or []:
+    print(h.get("host"))
+    for k, n in (("aasa", "iOS file"), ("assetlinks", "Android file"), ("appleCdn", "Apple CDN copy")):
+        s = h.get(k)
+        if s not in ("ok", "none") and k != "appleCdn":
+            bad = 1
+        print("  %-15s %s" % (n + ":", words.get(s, s)))
+sys.exit(1 if bad else 0)'
+}
+
+cmd_app_pairing_log() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app pairing log <app> [--json]" >&2; exit 2; }
+    _compute_call GET /cli/app/pairing/log "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+rows = v.get("pairings") or []
+if not rows:
+    print("%s: no phone has paired yet" % (v.get("name") or v.get("app")))
+for r in rows:
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.get("pairedAt") or 0))
+    state = "live" if r.get("live") else ("ended: " + (r.get("ended") or "expired"))
+    print("%s  %-16s %-24s %s  %s" % (when, r.get("username"), (r.get("deviceName") or "")[:24], r.get("host"), state))'
+}
+
 # k2 app push … (prd-custom-app-push-v1, 0.46.4): push notifications for a
 # custom App's own phone app. The daemon sends to Apple and Google with the
 # App owner's own keys, held in the vault. Keys are read from files here and
@@ -13414,7 +13675,7 @@ for p in people:
         folders = ", ".join(["read " + x for x in f.get("read") or []] + ["write " + x for x in f.get("write") or []])
         print("    %-20s %s%s" % (c.get("handle"), ", ".join(c.get("caps") or []), ("  [" + folders + "]") if folders else ""))
 for d in v.get("devices") or []:
-    print("  device %s: %s · %s" % (d.get("id"), d.get("username"), d.get("name")))'
+    print("  device %s: %s · %s%s" % (d.get("id"), d.get("username"), d.get("name"), " · paired by QR" if d.get("via") == "pairing" else ""))'
 }
 
 # k2 app discovery <app> on|off: list one App for sign-in discovery (only
@@ -14155,6 +14416,7 @@ cmd_app() {
         key) shift; cmd_app_key "$@" ;;
         keys) shift; cmd_app_keys "$@" ;;
         push) shift; cmd_app_push "$@" ;;
+        pairing) shift; cmd_app_pairing "$@" ;;
         email) shift; cmd_app_email "$@" ;;
         approvals) shift; cmd_app_approvals "$@" ;;
         approve) shift; cmd_app_approve "$@" ;;
@@ -30371,7 +30633,9 @@ USAGE
                                 linked to the owner (Settings → General →
                                 Your account); a login pairs as itself and
                                 types its password again. --invert for
-                                light-background terminals.
+                                light-background terminals. For a custom
+                                App's own phone app (its users, its QR on
+                                its web page): k2 app pairing --help.
   k2 users phones [--json]      Paired phones (the owner sees everyone's)
                                 and the login a new code pairs as.
   k2 users unpair-phone <id> [--json]
@@ -37224,7 +37488,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-push app-profile skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs folder-trust email-notifications"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-push app-pairing app-profile skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs folder-trust email-notifications"
 
 _study_usage() {
     cat <<'EOF'
@@ -37241,8 +37505,9 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
-  app-identity  app-surfaces  app-resources  app-runtime  app-push  app-profile  skins  feedback-loop
-  ticket-brief  zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute  compute-shared  vault
+  app-identity  app-surfaces  app-resources  app-runtime  app-push  app-pairing  app-profile  skins
+  feedback-loop  ticket-brief  zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute
+  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  db-upgrade  jobs
   folder-trust  email-notifications
@@ -37277,6 +37542,7 @@ _study_title() {
         app-resources) echo "Box usage, the disk guard, clean and trends" ;;
         app-runtime) echo "K2 updates and your App: the re-host" ;;
         app-push) echo "Notifications to a custom App's own phone app" ;;
+        app-pairing) echo "Pairing a custom App's own phone app by QR" ;;
         app-profile) echo "A person's own profile, picture and sessions in an App" ;;
         skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
@@ -37378,6 +37644,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends
   app-runtime         K2 updates move your App to the new runtime: re-host, setting, checks
   app-push            Your App's own phone app: keys in the vault, register, send, limits
+  app-pairing         Your App's own phone app signs in by QR: setup, start, check, redeem
   app-profile         A person's own profile, picture and sessions in an App; who decides
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
@@ -37436,6 +37703,7 @@ _study_page() {
         app-resources) _study_page_app_resources ;;
         app-runtime) _study_page_app_runtime ;;
         app-push) _study_page_app_push ;;
+        app-pairing) _study_page_app_pairing ;;
         app-profile) _study_page_app_profile ;;
         email-notifications) _study_page_email_notifications ;;
         skins)
@@ -37700,6 +37968,11 @@ no cap (your own rooms)
   push.unregister          POST /cli/skin/push/unregister                     Stop this App's notifications on one of this guest's own devices (signing out also removes it).
   push.device              GET  /cli/skin/push/device                         This guest's own push registration for one device (never the token).
   push.prefs               POST /cli/skin/push/prefs                          Change one device's notification choices (previews, muted topics) without its token.
+  pairing.start            POST /cli/skin/pair/start (server only)            Start pairing this guest's phone: a one-time code and its QR, from their own web sign-in (at most 15 minutes old, or with their password).
+  pairing.status           GET  /cli/skin/pair/status (server only)           Is this guest's pairing done: pending, paired (with the device's name), expired or cancelled.
+  pairing.cancel           POST /cli/skin/pair/cancel (server only)           Drop one of this guest's pairing codes (the QR stops working).
+  pairing.check            POST /cli/skin/pair/check (server only)            Public: who a pairing code would sign in, without using it (ask 'Sign in as ...?' first).
+  pairing.redeem           POST /cli/skin/pair (server only)                  Public: trade a pairing code for this App's device sign-in (a pass and a refresh token), once; optionally register push in the same call.
   app.info                 GET  /cli/skin/app-info (server only)              Public: this one App's name and how to sign in, only when the owner listed it; anything else answers like a route that doesn't exist.
   password.forgot          POST /cli/skin/password/forgot (server only)       Start a guest's password reset (a platform pass; the guest gets the reset link by email).
   password.reset           POST /cli/skin/password/reset (server only)        Public: finish a password reset with the emailed token (ends every session of that guest).
@@ -39655,6 +39928,72 @@ bars. A Garden can show it with the built-in card k2:box-disk@1.
 EOF
 }
 
+_study_page_app_pairing() {
+    cat <<'EOF'
+k2 study app-pairing — pair your App's own phone app by QR
+
+THE MODEL
+  A person signed in to your web App presses "Connect your phone". The web
+  App asks K2 for a one-time code and draws it as a QR. The phone's camera
+  opens YOUR phone app (a universal link / App Link on your App's own host);
+  it sends the code to K2 and gets a device sign-in: a pass plus a rotating
+  refresh token, for that App and that person. No password on the phone.
+  Codes: K2A-…, 5 minutes, one use, bound to the App, the person and the
+  web sign-in that made them (a logout or password change kills them).
+
+ONCE, AS THE OWNER (from a terminal outside K2; Touch ID confirms)
+  iOS: Associated Domains for your app id; add applinks:<host> for EACH
+  host exactly (applinks:jobs.you.k2.dev), never a wildcard (a wildcard
+  makes iOS read k2.dev's own file). Android: an autoVerify intent filter,
+  https, your hosts, path /.well-known/k2-pair; your signing SHA-256 (and
+  Play App Signing's).
+  k2 app pairing setup <app> --ios TEAMID.com.you.app \
+      --android com.you.app:AB:CD:… [--native-origin capacitor://localhost]
+  k2 app pairing check <app>   fetches both files from each host
+  v1 pairs on your App's own k2.dev labels. While pairing is on, K2 answers
+  /.well-known/apple-app-site-association and assetlinks.json there: list
+  your App's other link paths with --link-path. Apple's CDN can take a day;
+  phones re-check about weekly. Stay signed in must be on (k2 app people).
+
+IN THE WEB APP (the person's own session pass)
+  const p = await k2.asGuest(pass).pairing.start()     // {password} when
+    reauth_required: a sign-in older than 15 minutes needs it again
+  draw p.qr.rows (1 = dark), show "Expires in 5:00"; poll
+  pairing.status({pairingId}) every 2 s: paired → show device.name with
+  "Not you? End it" (guests.revokeDevice {id: device.deviceLoginId});
+  expired → start again. pairing.cancel({pairingId}) drops it.
+
+IN THE PHONE APP (plain HTTPS to your box; the link names no server)
+  1 Read the code from the link's fragment (#K2A-…), or let the person
+    paste it from the landing page.
+  2 POST /cli/skin/pair/check {code, app} → show "Sign in to <appName> as
+    <username>?". Required: a QR someone else made signs in someone else.
+  3 On yes: POST /cli/skin/pair {code, app, device: {id, name},
+    push: {platform, pushToken, environment}} → the device-login answer
+    (token, refresh, …, via: pairing) and push {registered, code?}. A push
+    refusal never fails the pairing.
+  4 Keep token and refresh in the Keychain / Keystore; POST
+    /cli/skin/refresh as after a device login; sign out with
+    POST /cli/skin/logout.
+  A webview app (Tauri, Capacitor) sends an Origin: the owner lists it
+  (--native-origin), else pairing_not_from_browser. A BFF redeems through
+  its link (its own limits), never for many phones on the main port.
+
+WHO
+  The App's agent: k2 app pairing status|off (Build and run Apps), log
+  (when it may manage the App's users). Never setup: it asks the owner.
+  A phone that is signed in can't pair another (pairing_from_device).
+
+REFUSALS
+  pairing_off  device_signin_off  reauth_required  bad_login  locked
+  host_not_paired  no_public_host  pairing_not_served  guest_required
+  pair_code_invalid (unknown, used, expired, another App)  rate_limited
+  pairing_not_from_browser  not_for_host  usage
+  K2_APP_PAIRING=off in the daemon's environment stops every App's
+  pairing. K2 Companion's own phones are k2 users pair-phone.
+EOF
+}
+
 _study_page_app_profile() {
     cat <<'EOF'
 k2 study app-profile — a person's own profile, picture and sessions in an App
@@ -39786,7 +40125,8 @@ WHEN APPLE OR GOOGLE SAY NO
   nothing is deleted. A refused key pauses that platform 10 minutes and
   leaves the App's agent a note; k2 app push status shows the code.
   K2_APP_PUSH=off in the daemon's environment stops every App's push.
-  K2 Companion's own phones are k2 push, not this.
+  K2 Companion's own phones are k2 push, not this. A phone that pairs by
+  QR can register in the same call: k2 study app-pairing (push field).
 EOF
 }
 

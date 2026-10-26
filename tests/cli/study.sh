@@ -54,7 +54,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity app-surfaces app-runtime app-push skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data garden-access garden-changes design"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity app-surfaces app-runtime app-push app-pairing skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data garden-access garden-changes design"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -740,6 +740,17 @@ done
 ap_lines="$(printf '%s\n' "$ap_out" | wc -l | tr -d ' ')"
 if [ "$ap_lines" -le 80 ]; then echo "  PASS: app-push is bounded ($ap_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-push is $ap_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: app-push row" "$("$K2" study)" "  app-push            Your App's own phone app"
+
+echo "== k2 study app-pairing (prd-app-phone-pairing-v1, 0.46.5) =="
+pp_out="$("$K2" study app-pairing)"
+assert_contains "title" "$pp_out" "k2 study app-pairing — pair your App's own phone app by QR"
+for needle in "pairing.start" "POST /cli/skin/pair/check" "POST /cli/skin/pair {code" "never a wildcard" "k2 app pairing setup" \
+    "pair_code_invalid" "K2_APP_PAIRING=off" "k2 users pair-phone"; do
+    assert_contains "app-pairing: $needle" "$pp_out" "$needle"
+done
+pp_lines="$(printf '%s\n' "$pp_out" | wc -l | tr -d ' ')"
+if [ "$pp_lines" -le 80 ]; then echo "  PASS: app-pairing is bounded ($pp_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-pairing is $pp_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: app-pairing row" "$("$K2" study)" "  app-pairing         Your App's own phone app signs in by QR"
 assert_contains "usage lists app-runtime" "$("$K2" study --help)" "app-resources  app-runtime"
 assert_contains "k2 app help points at the page" "$(grep -F 'Re-hosts explained: k2 study app-runtime.' "$K2_CLI" || true)" "k2 study app-runtime"
 

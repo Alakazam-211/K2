@@ -120,51 +120,63 @@ fn answer(r: Result<Value, CliResponse>) -> CliResponse {
 /// `POST /cli/skin/push/register`.
 pub fn handle_register(pass: &SkinPass, body: &[u8]) -> CliResponse {
     answer((|| {
-        let pid = guest(pass)?;
+        guest(pass)?;
         if pass.app.trim().is_empty() || pass.app == k2_core::skin::HOST_APP_ID {
             return Err(off_response(super::Off::Host));
         }
         let v = json_body(body)?;
         let reg = store::parse_registration(&v).map_err(|e| usage(&e))?;
-        if reg.channel == store::CHANNEL_COMPANION {
-            return Err(refusal(
-                "400 Bad Request",
-                "channel_unavailable",
-                "K2 Companion can't receive this App's notifications yet: register your own app (channel app)",
-            ));
-        }
-        super::state(&pass.app).map_err(off_response)?;
-        if let Err(wait) = registers().take(&pass.id, REGISTERS_PER_HOUR) {
-            let mut extra = serde_json::Map::new();
-            extra.insert("retryAfterMs".into(), json!(wait));
-            extra.insert("limit".into(), json!(REGISTERS_PER_HOUR));
-            return Err(refusal_with(
-                "429 Too Many Requests",
-                "rate_limited",
-                "too many registers from this pass this hour; register on launch and when the token changes",
-                extra,
-            ));
-        }
-        match store::register(&pass.app, pid, &pass.id, &reg) {
-            Ok(d) => device_json(&d),
-            Err(store::RegisterError::AppFull { limit }) => {
-                let mut extra = serde_json::Map::new();
-                extra.insert("limit".into(), json!(limit));
-                Err(refusal_with(
-                    "409 Conflict",
-                    "push_devices_full",
-                    "this App holds as many push devices as its owner allows (k2 app push limit)",
-                    extra,
-                ))
-            }
-            Err(store::RegisterError::TokenInUse) => Err(refusal(
-                "409 Conflict",
-                "token_in_use",
-                "another person on this App is still signed in with this phone's token: sign them out first (push.unregister on sign-out)",
-            )),
-            Err(store::RegisterError::Store(e)) => Err(CliResponse::internal_error(e)),
-        }
+        register_parsed(pass, &reg)
     })())
+}
+
+/// A checked registration for `pass` (a guest's own session pass): the
+/// channel, the App's push state, the per-pass limit, the store. Shared by
+/// `push.register` and app pairing's redeem (`pairing.redeem` with `push`,
+/// vs-live V15), so both get the same rules.
+pub fn register_parsed(pass: &SkinPass, reg: &store::Registration) -> Result<Value, CliResponse> {
+    let pid = guest(pass)?;
+    if pass.app.trim().is_empty() || pass.app == k2_core::skin::HOST_APP_ID {
+        return Err(off_response(super::Off::Host));
+    }
+    if reg.channel == store::CHANNEL_COMPANION {
+        return Err(refusal(
+            "400 Bad Request",
+            "channel_unavailable",
+            "K2 Companion can't receive this App's notifications yet: register your own app (channel app)",
+        ));
+    }
+    super::state(&pass.app).map_err(off_response)?;
+    if let Err(wait) = registers().take(&pass.id, REGISTERS_PER_HOUR) {
+        let mut extra = serde_json::Map::new();
+        extra.insert("retryAfterMs".into(), json!(wait));
+        extra.insert("limit".into(), json!(REGISTERS_PER_HOUR));
+        return Err(refusal_with(
+            "429 Too Many Requests",
+            "rate_limited",
+            "too many registers from this pass this hour; register on launch and when the token changes",
+            extra,
+        ));
+    }
+    match store::register(&pass.app, pid, &pass.id, reg) {
+        Ok(d) => device_json(&d),
+        Err(store::RegisterError::AppFull { limit }) => {
+            let mut extra = serde_json::Map::new();
+            extra.insert("limit".into(), json!(limit));
+            Err(refusal_with(
+                "409 Conflict",
+                "push_devices_full",
+                "this App holds as many push devices as its owner allows (k2 app push limit)",
+                extra,
+            ))
+        }
+        Err(store::RegisterError::TokenInUse) => Err(refusal(
+            "409 Conflict",
+            "token_in_use",
+            "another person on this App is still signed in with this phone's token: sign them out first (push.unregister on sign-out)",
+        )),
+        Err(store::RegisterError::Store(e)) => Err(CliResponse::internal_error(e)),
+    }
 }
 
 /// `POST /cli/skin/push/unregister {deviceId}`.

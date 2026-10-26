@@ -721,6 +721,11 @@ pub const FEATURE_APP_WALLET: &str = "app-wallet-v1";
 /// `/v1/apps/<id>/push/*` (App key scope `push`) and `/cli/app/push/*`.
 /// skin.db tables only, no SQL migration.
 pub const FEATURE_APP_PUSH: &str = "custom-app-push-v1";
+/// Phone pairing for custom Apps (prd-app-phone-pairing-v1, 0.46.5):
+/// `pairing.start|status|cancel` (a guest's own web session pass),
+/// `pairing.check|redeem` (Public), the link files on the App's own
+/// labels, `/cli/app/pairing*`. skin.db tables only, no SQL migration.
+pub const FEATURE_APP_PAIRING: &str = crate::app_pairing::FEATURE;
 /// App user profile (prd-app-user-profile-v1, 0.46.5): `profile.get|update|
 /// setImage|clearImage|sessions|revokeSession|signOutOthers` with a
 /// person's own session pass, `password.change {stay}` on both doors, and
@@ -967,6 +972,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_MOBILE_ACCESS);
     out.push(FEATURE_APP_WALLET);
     out.push(FEATURE_APP_PUSH);
+    out.push(FEATURE_APP_PAIRING);
     out.push(FEATURE_APP_USER_PROFILE);
     out.push(FEATURE_EMAIL_NOTIFICATIONS);
     out.push(FEATURE_ACTIVITY_LIVE_BUSY);
@@ -1078,6 +1084,7 @@ mod tests {
                 "app-mobile-access-v1",
                 "app-wallet-v1",
                 "custom-app-push-v1",
+                "app-phone-pairing-v1",
                 "app-user-profile-v1",
                 "email-notifications-v1",
                 "activity-live-busy",

@@ -819,6 +819,20 @@ mod unix_impl {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::app_push::owner_routes::handle(p, who, body, params))
             }
+            // prd-app-phone-pairing-v1 (0.46.5): `k2 app pairing …` for this
+            // cell's passport (its own workspace's Apps; the handler checks:
+            // status and off at "Build and run Apps", the log with its
+            // App-user switch, never set or check).
+            p if crate::app_pairing::owner_routes::is_route(p) => {
+                if crate::app_pairing::owner_routes::is_post_route(p) && !is_post {
+                    return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
+                }
+                if body.len() > crate::app_pairing::owner_routes::MAX_BODY {
+                    return from_cli(crate::app_pairing::owner_routes::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::app_pairing::owner_routes::handle(p, who, body, params))
+            }
             // Email Notifications (0.46.5): `k2 app email …` for this cell's
             // passport (its own workspace's Apps; on is the owner's; send
             // rides the agent's agentSend gate). `/cli/notifications/*` is

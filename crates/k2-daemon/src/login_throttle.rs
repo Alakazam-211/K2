@@ -50,6 +50,9 @@ pub const RESET_LIMIT: usize = 10;
 /// Reset POSTs through one App's link per [`WINDOW_SECS`] (the link
 /// carries no client address: one bucket per App).
 pub const RESET_LINK_LIMIT: usize = 30;
+/// App phone pairing's prefix (0.46.5, R4): its own table, so a flood of
+/// bad codes never evicts or fills an App-login or Connect bucket.
+pub const PAIR_KEY_PREFIX: &str = "apppair:";
 
 /// LM4 — failed logins per [`WINDOW_SECS`], per door, across every
 /// ANONYMOUS client: a login whose client address the daemon cannot vouch
@@ -72,6 +75,9 @@ pub enum Door {
     Skin,
     /// The public password-reset routes (their own budget).
     Reset,
+    /// App phone pairing's check and redeem (0.46.5, R4): bad codes never
+    /// lock out App logins.
+    AppPair,
 }
 
 /// Whether this attempt may proceed to argon2.
@@ -155,11 +161,13 @@ struct Store {
     connect: Table,
     skin: Table,
     reset: Table,
+    pair: Table,
     /// LM4 — timestamps of recent anonymous failures per door (oldest
     /// first), capped at [`GLOBAL_FAIL_LIMIT`] entries.
     connect_fails: VecDeque<i64>,
     skin_fails: VecDeque<i64>,
     reset_fails: VecDeque<i64>,
+    pair_fails: VecDeque<i64>,
 }
 
 impl Store {
@@ -168,14 +176,18 @@ impl Store {
             Door::Connect => &mut self.connect_fails,
             Door::Skin => &mut self.skin_fails,
             Door::Reset => &mut self.reset_fails,
+            Door::AppPair => &mut self.pair_fails,
         }
     }
 
+    /// The table a key counts in, by its prefix.
     fn table(&mut self, key: &str) -> &mut Table {
         if key.starts_with(SKIN_KEY_PREFIX) {
             &mut self.skin
         } else if key.starts_with(RESET_KEY_PREFIX) {
             &mut self.reset
+        } else if key.starts_with(PAIR_KEY_PREFIX) {
+            &mut self.pair
         } else {
             &mut self.connect
         }
@@ -301,9 +313,11 @@ impl LoginLimiter {
         g.connect.hits.clear();
         g.skin.hits.clear();
         g.reset.hits.clear();
+        g.pair.hits.clear();
         g.connect_fails.clear();
         g.skin_fails.clear();
         g.reset_fails.clear();
+        g.pair_fails.clear();
     }
 }
 

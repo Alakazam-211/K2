@@ -159,6 +159,20 @@ pub async fn splice<S>(client: &mut S, be: Arc<Backend>, mode: Option<crate::cli
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    splice_with(client, be, mode, None).await
+}
+
+/// [`splice`] with K2's own answers for some requests on the rewrite path
+/// (`local`, the App's pairing link files; ignored for a raw splice).
+pub async fn splice_with<S>(
+    client: &mut S,
+    be: Arc<Backend>,
+    mode: Option<crate::client_ip::Mode>,
+    local: Option<crate::client_ip::LocalAnswer>,
+) -> Result<(), String>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut upstream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(("127.0.0.1", be.port)))
         .await
         .map_err(|_| format!("App {} backend :{} did not accept within 5s", be.app_id, be.port))?
@@ -177,7 +191,7 @@ where
     }
     if let Some(mode) = mode {
         tokio::select! {
-            _ = crate::client_ip::forward(&mut *client, &mut upstream, mode) => {}
+            _ = crate::client_ip::forward_with(&mut *client, &mut upstream, mode, local) => {}
             _ = cut.changed() => {}
         }
     } else {
@@ -212,24 +226,79 @@ fn own_answer(status: &str, body: &str) -> String {
     )
 }
 
+/// What [`answer_first`] did with a connection's first request.
+pub enum FirstRequest {
+    /// K2 answered it (the connection is done).
+    Answered,
+    /// The App answers: these bytes were read and must be replayed.
+    Pass(Vec<u8>),
+}
+
+/// Read a connection's first request head **before** the App is dialed
+/// and answer it when `local` does (an App's pairing link files, so they
+/// work while the App is down: app pairing V5).
+pub async fn answer_first<S>(client: &mut S, local: &crate::client_ip::LocalAnswer) -> FirstRequest
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let p = crate::client_ip::peek_head(client).await;
+    if let Some((method, path, host)) = &p.plain {
+        if let Some(bytes) = local(method, path, host.as_deref()) {
+            let _ = client.write_all(&bytes).await;
+            let _ = client.shutdown().await;
+            return FirstRequest::Answered;
+        }
+    }
+    FirstRequest::Pass(p.bytes)
+}
+
 /// Serve one connection for `app_id`: splice to its live backend, 503
 /// when it has none, 502 when the backend doesn't answer. `peer` is the
 /// front port's caller (loopback): K2's own tunnel hop keeps its client
 /// IP; any other caller only loses `X-K2-Client-IP`.
+///
+/// While the App's pairing is on (`app_pairing::links`), the first
+/// request is read before the backend is dialed and K2 answers the link
+/// files itself, App up or down; later requests on the connection get the
+/// same answers in order (`client_ip::forward_with`).
 pub async fn serve_app_conn<S>(client: &mut S, app_id: &str, peer: Option<std::net::SocketAddr>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let local = crate::app_pairing::links::local_for(app_id);
     match live(app_id) {
         None => {
-            consume_request_head(client).await;
+            match &local {
+                Some(l) => {
+                    if let FirstRequest::Answered = answer_first(client, l).await {
+                        return;
+                    }
+                }
+                None => consume_request_head(client).await,
+            }
             let _ = client.write_all(own_answer("503 Service Unavailable", UNAVAILABLE_BODY).as_bytes()).await;
         }
         Some(be) => {
             let mode = rewrite_mode(&be, app_id, crate::client_ip::Mode::Local { peer });
-            if splice(client, be, mode).await.is_err() {
-                consume_request_head(client).await;
-                let _ = client.write_all(own_answer("502 Bad Gateway", BAD_GATEWAY_BODY).as_bytes()).await;
+            match (mode, local) {
+                (Some(mode), Some(l)) => match answer_first(client, &l).await {
+                    FirstRequest::Answered => return,
+                    FirstRequest::Pass(bytes) => {
+                        let failed = {
+                            let mut r = crate::client_ip::Replay::new(bytes, client);
+                            splice_with(&mut r, be, Some(mode), Some(l)).await.is_err()
+                        };
+                        if failed {
+                            let _ = client.write_all(own_answer("502 Bad Gateway", BAD_GATEWAY_BODY).as_bytes()).await;
+                        }
+                    }
+                },
+                (mode, _) => {
+                    if splice(client, be, mode).await.is_err() {
+                        consume_request_head(client).await;
+                        let _ = client.write_all(own_answer("502 Bad Gateway", BAD_GATEWAY_BODY).as_bytes()).await;
+                    }
+                }
             }
         }
     }

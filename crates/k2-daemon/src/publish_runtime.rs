@@ -1574,6 +1574,9 @@ pub fn rm(project_id: &str, name: &str, keep_hostname: bool) -> Result<(), Publi
         }
         // prd-custom-app-push-v1 CP17: its push devices, settings and keys go.
         crate::app_push::forget_app(&row.id);
+        // prd-app-phone-pairing-v1: its pairing config and codes go.
+        let runtime = crate::app_pairing::runtime_app(&row.id).map(|a| a.app_id);
+        crate::app_pairing::forget_app(&row.id, runtime.as_deref());
         crate::email_notify::forget_app(&row.id);
     }
     if !keep_hostname && label_is_ours {

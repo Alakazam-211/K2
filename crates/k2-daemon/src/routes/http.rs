@@ -313,6 +313,26 @@ pub(crate) fn pair_request_is_browser_shaped(headers_blob: &str) -> bool {
     origin_or_fetch_metadata_is_browser(head)
 }
 
+/// [`pair_request_is_browser_shaped`] that also lets one `Origin` from
+/// `allowed` through (lowercase): the webview origins an App's owner
+/// listed for its phone app (`tauri://localhost`, `capacitor://localhost`,
+/// app pairing CP20 / V11). The Tauri webview's are always allowed.
+pub(crate) fn pair_request_is_browser_shaped_allowing(headers_blob: &str, allowed: &[String]) -> bool {
+    let head = request_head(headers_blob);
+    let origins: Vec<String> = head
+        .lines()
+        .skip(1)
+        .filter_map(|l| {
+            let (n, v) = l.split_once(':')?;
+            n.trim().eq_ignore_ascii_case("origin").then(|| v.trim().to_ascii_lowercase())
+        })
+        .collect();
+    match origins.as_slice() {
+        [one] if allowed.iter().any(|a| a == one) => false,
+        _ => origin_or_fetch_metadata_is_browser(head),
+    }
+}
+
 fn origin_or_fetch_metadata_is_browser(head: &str) -> bool {
     let origins: Vec<&str> = head
         .lines()

@@ -345,6 +345,8 @@ pub mod app_mobile_routes;
 pub mod app_profile_routes;
 // Push notifications for custom Apps (prd-custom-app-push-v1, 0.46.4).
 pub mod app_push;
+// Phone pairing for custom Apps (prd-app-phone-pairing-v1, 0.46.5).
+pub mod app_pairing;
 // Email Notifications (prd-email-notifications-core-v1, 0.46.5): K2's
 // one-way mail from senders no agent can read, the App `email.send` door.
 pub mod email_notify;

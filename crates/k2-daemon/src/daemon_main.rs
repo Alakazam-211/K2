@@ -1553,6 +1553,12 @@ async fn async_main() {
         }
     });
 
+    // prd-app-phone-pairing-v1 (V5): the link files of every pairing App,
+    // from skin.db into memory, before any App connection is served.
+    if let Err(e) = tokio::task::spawn_blocking(crate::app_pairing::refresh_all_links).await {
+        log_debug!("[app-pairing] WARN: boot snapshot join: {e}");
+    }
+
     // Email Notifications (prd-email-notifications-core-v1 §5.2, E5, E22):
     // scheduled sends every 15 s; sender-mailbox sweep, log retention,
     // idempotency keys and retired addresses hourly. Headless.

@@ -2257,6 +2257,8 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     super::seal::forget(&app.app_id, &app.service_id, purge);
     // prd-custom-app-push-v1 CP17: its push devices, settings and keys go.
     crate::app_push::forget_app(&app.service_id);
+    // prd-app-phone-pairing-v1: its pairing config, codes and link files go.
+    crate::app_pairing::forget_app(&app.service_id, Some(&app.app_id));
     crate::email_notify::forget_app(&app.service_id);
     audit_human(&app.app_id, "uninstall", who, json!({ "purge": purge }));
     if purge {

@@ -142,6 +142,8 @@ pub fn handle_devices(pass: &SkinPass) -> CliResponse {
                         "lastUsedAt": d.last_used_at,
                         "expiresAt": d.expires_at,
                         "current": d.session_token_id.as_deref() == Some(pass.id.as_str()),
+                        // App phone pairing: how it started (pairing | password).
+                        "via": d.via,
                     })
                 })
                 .collect();

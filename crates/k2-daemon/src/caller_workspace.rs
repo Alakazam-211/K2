@@ -185,6 +185,21 @@ pub fn request_principal() -> Option<HookPrincipal> {
 /// (e.g. pure unit tests of param maps).
 pub const PRINCIPAL_BOUND_KEY: &str = "principal_bound";
 
+/// The params key the hook token's session id rides in (set by the
+/// dispatcher from a validated hook token, never by the caller).
+pub const CELL_SESSION_KEY: &str = "cell_session_id";
+
+/// Drop the server-set identity keys a client could send in its query or
+/// body ([`PRINCIPAL_BOUND_KEY`], [`CELL_SESSION_KEY`]). Every TCP arm
+/// that builds params from the request calls this BEFORE it stamps a
+/// validated passport (0.46.4 stamp-strip: a Member that sent
+/// `principal_bound=1&project_id=<ws>` was read as that workspace's agent;
+/// a `cell_session_id` it sent was taken as its own session).
+pub fn strip_request_stamps(params: &mut std::collections::HashMap<String, String>) {
+    params.remove(PRINCIPAL_BOUND_KEY);
+    params.remove(CELL_SESSION_KEY);
+}
+
 /// Stamp server-side caller identity into a params map.
 ///
 /// Overwrites `from`, `project_id`, and (when the principal's workspace

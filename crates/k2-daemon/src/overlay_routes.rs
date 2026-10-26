@@ -3727,8 +3727,13 @@ pub fn dispatch_post_as(
         .get(crate::caller_workspace::PRINCIPAL_BOUND_KEY)
         .cloned();
     let captured_project_id = params.get("project_id").cloned();
+    // The hook token's session id, set by the dispatcher (never a body
+    // value: a body `cell_session_id` would name the session a secret
+    // card's answer is scoped to).
+    let captured_session = params.get(crate::caller_workspace::CELL_SESSION_KEY).cloned();
     let stamped = captured_bound.as_deref() == Some("1");
     merge_body(&mut params, body);
+    restore_param(&mut params, crate::caller_workspace::CELL_SESSION_KEY, captured_session);
     if stamped {
         restore_param(&mut params, "from", captured_from);
         restore_param(

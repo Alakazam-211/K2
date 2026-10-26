@@ -8162,6 +8162,8 @@ async fn handle_one_request(
                 Vec::new()
             };
             let mut params = super::http::parse_params(&path, &query);
+            // 0.46.4 stamp-strip: identity keys come from the token only.
+            crate::caller_workspace::strip_request_stamps(&mut params);
             if let Some(v) = {
                 let presented = bearer_token
                     .as_deref()
@@ -8314,6 +8316,10 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let mut params = super::http::parse_params(&path, &query);
+            // 0.46.4 stamp-strip: identity keys come from the token only
+            // (a Member's `principal_bound=1&project_id=…&from=owner` posted
+            // as "owner"); `dispatch_post_as` keeps body values out too.
+            crate::caller_workspace::strip_request_stamps(&mut params);
             if let Some(v) = {
                 let presented = bearer_token
                     .as_deref()
@@ -9511,6 +9517,10 @@ async fn handle_one_request(
             for (k, v) in super::http::parse_form_body(&body_bytes) {
                 params.insert(k, v);
             }
+            // 0.46.4 stamp-strip: identity keys come from the token only,
+            // never the query or body (a Member forged the passport sender
+            // `k2 msg who` shows).
+            crate::caller_workspace::strip_request_stamps(&mut params);
             // Preserve recipient `workspace=` (routing); stamp identity.
             if let Some(v) = {
                 let presented = bearer_token

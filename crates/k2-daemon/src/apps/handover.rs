@@ -72,8 +72,14 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/handover/decline",
     "/cli/app/handover/cancel",
     "/cli/app/handover/rekey",
+    "/cli/app/handover/undo",
+    "/cli/app/handover/finish",
 ];
-pub const POST_ROUTES: &[&str] = &["/cli/app/handover/accept", "/cli/app/handover/decline", "/cli/app/handover/cancel", "/cli/app/handover/rekey"];
+pub const POST_ROUTES: &[&str] = &["/cli/app/handover/accept", "/cli/app/handover/decline", "/cli/app/handover/cancel", "/cli/app/handover/rekey", "/cli/app/handover/undo", "/cli/app/handover/finish"];
+
+/// The `route` an undo card carries (never an HTTP route).
+pub const UNDO_ROUTE: &str = "/cli/app/handover/undo/apply";
+pub const NOT_IN_WINDOW: &str = "handover_not_in_window";
 
 /// Reads B may make on an App it accepted (shadowing, §4.9).
 pub const SHADOW_READS: &[&str] = &[
@@ -108,6 +114,8 @@ pub enum Mode {
 #[cfg(test)]
 thread_local! {
     static TEST_MODE: std::cell::Cell<Option<Mode>> = const { std::cell::Cell::new(None) };
+    /// T5.2: stop right after the commit point, as a daemon kill would.
+    pub(crate) static CRASH_AFTER_COMMIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Tests: this thread's handover mode (`None` = the env), never a
@@ -212,6 +220,8 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
         "/cli/app/handover/decline" => decline_route(who, body),
         "/cli/app/handover/cancel" => cancel_route(who, body),
         "/cli/app/handover/rekey" => rekey_route(who, body),
+        "/cli/app/handover/undo" => undo_route(who, body),
+        "/cli/app/handover/finish" => finish_route(who, body),
         _ => Err(no("not_found", 404, "no such App route")),
     }
 }
@@ -770,6 +780,10 @@ fn run(id: &str, plan: &Plan, by: &str) -> R<J> {
         let _ = hov_db(|c| hs::transition(c, id, &[hs::APPLYING], hs::ABORTED, deploy::now()));
         return Err(e);
     }
+    #[cfg(test)]
+    if CRASH_AFTER_COMMIT.with(|c| c.get()) {
+        return Err(no("test_crash", 500, "test hook: the daemon died right after the commit point"));
+    }
     let summary = finish_steps(id, by);
     let row = hov_db(|c| hs::get(c, id))?.ok_or_else(|| no("db_error", 500, "the handover row vanished"))?;
     Ok(json!({
@@ -1157,8 +1171,27 @@ fn vault_step(row: &Handover, room_from: &str) -> Result<J, String> {
 /// live and the old one drained (a watcher), or at once when the App
 /// isn't running.
 fn rekey(id: &str, by: &str) -> J {
+    rekey_as(id, by, false)
+}
+
+/// The re-key mode now: the plan's, adjusted to whether the App runs.
+fn mode_now(plan_mode: &str, app: Option<&AppRow>) -> String {
+    let running = app.is_some_and(|a| a.state == store::STATE_RUNNING && a.live_seed.is_some());
+    match plan_mode {
+        "none" => "none".into(),
+        _ if !running => "next_start".into(),
+        "next_start" => "bluegreen".into(),
+        m => m.into(),
+    }
+}
+
+/// [`rekey`]; `undo`: after an undo the DSN secret is back in A under its
+/// own name, and the passwords change again (A gets new ones, never the
+/// old ones).
+fn rekey_as(id: &str, by: &str, undo: bool) -> J {
     let Ok(Some(row)) = hov_db(|c| hs::get(c, id)) else { return J::Null };
-    let mode = row.plan["rekey"]["mode"].as_str().unwrap_or("none").to_string();
+    let app_now = hov_db(|c| store::get_app(c, &row.app_id)).ok().flatten();
+    let mode = mode_now(row.plan["rekey"]["mode"].as_str().unwrap_or("none"), app_now.as_ref());
     if mode == "none" {
         let _ = hov_db(|c| hs::set_rekey(c, id, "none", deploy::now()));
         return json!({ "mode": "none" });
@@ -1172,7 +1205,12 @@ fn rekey(id: &str, by: &str) -> J {
         match crate::sql::routes::rotate_for_handover(&name) {
             Ok((lines, dsn)) => {
                 out["database"] = json!({ "rotated": lines });
-                if let Err(e) = put_dsn(&journal, &row.to_workspace, &dsn) {
+                let (ws, field) = if undo {
+                    (journal["roomFrom"].as_str().unwrap_or_default().to_string(), "name")
+                } else {
+                    (row.to_workspace.clone(), "toName")
+                };
+                if let Err(e) = put_dsn(&journal, &ws, field, &dsn) {
                     out["database"]["dsnError"] = json!(e);
                 }
             }
@@ -1243,7 +1281,7 @@ fn revoke_keys(ids: &[String]) {
 }
 
 /// The App's DSN secret (moved to B by step 4) gets the new password.
-fn put_dsn(journal: &J, to: &str, dsn: &str) -> Result<(), String> {
+fn put_dsn(journal: &J, to: &str, field: &str, dsn: &str) -> Result<(), String> {
     use k2_vault::{Actor, Scope, SecretBytes, SecretStore, Selector};
     let vault = crate::vault::get().map_err(|e| e.hint)?;
     let names: Vec<String> = journal["vault"]
@@ -1251,7 +1289,7 @@ fn put_dsn(journal: &J, to: &str, dsn: &str) -> Result<(), String> {
         .map(|a| {
             a.iter()
                 .filter(|v| v["key"] == crate::vault::publish_env::DATABASE_URL || v["name"] == crate::vault::publish_env::DATABASE_URL)
-                .filter_map(|v| v["toName"].as_str().map(str::to_string))
+                .filter_map(|v| v[field].as_str().map(str::to_string))
                 .collect()
         })
         .unwrap_or_default();
@@ -1319,4 +1357,320 @@ fn rekey_route(who: &Who, body: &[u8]) -> R<J> {
     let by = actor(who);
     let out = rekey(&row.id, &by);
     Ok(json!({ "ok": out["state"] != "failed", "app": app.app_id, "rekey": out }))
+}
+
+// ── S5: the undo window, finish, recovery ────────────────────────────
+
+/// The applied handover of `app_id` still inside its window.
+fn windowed(app_id: &str) -> R<Handover> {
+    let row = hov_db(|c| hs::latest_for_app(c, app_id))?;
+    match row {
+        Some(r) if r.in_window(deploy::now()) => Ok(r),
+        Some(r) if r.state == hs::APPLIED => Err(no(NOT_IN_WINDOW, 409, format!("the handover of {app_id} is past its undo window (it ended {})", r.window_until.unwrap_or(0)))),
+        _ => Err(no(NOT_IN_WINDOW, 409, format!("{app_id} has no handover in its undo window"))),
+    }
+}
+
+/// POST `/cli/app/handover/undo {app}`: the owner files the undo card (a
+/// fresh `app-approve` confirm approves it, as the handover's own card).
+fn undo_route(who: &Who, body: &[u8]) -> R<J> {
+    super::ownership::need_owner(who, "Undoing a handover")?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    let row = windowed(&app.app_id)?;
+    if app.owner_workspace != row.to_workspace {
+        return Err(no(STALE, 409, format!("{} moved again since the handover: undo isn't possible", app.app_id)));
+    }
+    let a = from_label(row.journal.as_ref().and_then(|j| j["roomFrom"].as_str()).unwrap_or(&row.from_workspace));
+    let b = ws_handle(&row.to_workspace);
+    let lines = vec![
+        format!("Undo the handover of {} : it goes back to {a}.", app.app_id),
+        format!("{a} maintains it again; guests talk to {a}; labels, secrets and the database go back."),
+        "Passwords guests set since stay theirs. Its keys and database passwords change again (nobody gets the old ones back).".to_string(),
+        format!("What {b} did meanwhile (deploys, new guests) stays with the App."),
+    ];
+    let req = super::approvals::file(&super::approvals::Filing {
+        who,
+        kind: reqs::KIND_MANAGE,
+        app: Some(&app),
+        label: &app.app_id,
+        workspace: &app.owner_workspace,
+        body: json!({ "route": UNDO_ROUTE, "body": { "handover": row.id, "app": app.app_id } }),
+        diff: json!({ "lines": lines, "route": UNDO_ROUTE, "handover": row.id }),
+        summary: format!("undo the handover of {} ({b} → {a})", app.app_id),
+        reasons: vec!["undoing a handover moves guests, secrets and keys back: the owner approves it in person".into()],
+        reason: s(&v, "reason"),
+    })?;
+    let mut out = super::approvals::held_answer(&req);
+    out["handover"] = row_json(&row);
+    Ok(out)
+}
+
+/// The approved undo card: the reverse handover, from the journal.
+pub(crate) fn apply_undo(r: &reqs::AppRequest, by: &str) -> R<J> {
+    let id = r.body.pointer("/body/handover").and_then(J::as_str).ok_or_else(|| no(codes::BAD_REQUEST, 400, "unreadable undo card"))?;
+    let row = hov_db(|c| hs::get(c, id))?.ok_or_else(|| no(NOT_HELD, 409, format!("no handover '{id}'")))?;
+    if !row.in_window(deploy::now()) {
+        return Err(no(NOT_IN_WINDOW, 409, "the handover is past its undo window"));
+    }
+    let app = hov_db(|c| store::get_app(c, &row.app_id))?.ok_or_else(|| no(codes::APP_NOT_FOUND, 409, "the App is gone"))?;
+    if app.owner_workspace != row.to_workspace {
+        return Err(no(STALE, 409, format!("{} moved again since the handover", app.app_id)));
+    }
+    let j = row.journal.clone().unwrap_or(J::Null);
+    let from = j["from"].as_str().unwrap_or(&row.from_workspace).to_string();
+    let room_from = j["roomFrom"].as_str().unwrap_or(&from).to_string();
+    let to = row.to_workspace.clone();
+    let _busy = Busy::enter(&app.app_id, &to, &room_from);
+    let _gap = k2_core::skin::handover::begin_handing_over(&app.service_id, &to, &room_from);
+    // The daemon DB, one transaction.
+    {
+        let now = deploy::now();
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let mut cfg = k2_core::app_grace::config::load(&conn, &app.app_id).map_err(db_err)?;
+        let before: Vec<k2_core::app_grace::config::TakenLabel> = serde_json::from_value(j["takenLabels"].clone()).unwrap_or_default();
+        for t in cfg.labels.iter_mut() {
+            if let Some(b) = before.iter().find(|b| b.label == t.label) {
+                t.service_id = b.service_id.clone();
+            }
+        }
+        let tx = conn.unchecked_transaction().map_err(db_err)?;
+        let parked = from.is_empty();
+        let (state, reason) = if parked {
+            (store::STATE_PARKED.to_string(), Some("the handover that unparked it was undone".to_string()))
+        } else {
+            (app.state.clone(), app.state_reason.clone())
+        };
+        tx.execute(
+            "UPDATE apps SET owner_workspace = ?2, state = ?3, state_reason = ?4, folder_path = ?5, config_json = ?6, updated_at = ?7 WHERE app_id = ?1",
+            rusqlite::params![app.app_id, from, state, reason, j["folderPath"].as_str(), serde_json::to_string(&cfg).unwrap_or_default(), now],
+        )
+        .map_err(db_err)?;
+        tx.execute("UPDATE published_services SET project_id = ?2 WHERE id = ?1", rusqlite::params![app.service_id, from]).map_err(db_err)?;
+        for l in j["labels"].as_array().cloned().unwrap_or_default() {
+            let (Some(label), before) = (l["label"].as_str(), l["before"].as_str()) else { continue };
+            match before {
+                Some(b) => {
+                    tx.execute("UPDATE subdomain_workspaces SET project_id = ?3 WHERE label = ?1 AND project_id = ?2", rusqlite::params![label, to, b])
+                        .map_err(db_err)?;
+                }
+                None => {
+                    tx.execute("DELETE FROM subdomain_workspaces WHERE label = ?1 AND project_id = ?2", rusqlite::params![label, to]).map_err(db_err)?;
+                }
+            }
+        }
+        // App keys (the successors too): their room ceilings name A again.
+        let keys: Vec<(String, Option<String>)> = {
+            let mut st = tx.prepare("SELECT id, app_key FROM api_keys WHERE app_service_id = ?1 AND revoked_at IS NULL").map_err(db_err)?;
+            let rows = st.query_map(rusqlite::params![app.service_id], |r| Ok((r.get(0)?, r.get(1)?))).map_err(db_err)?.flatten().collect();
+            rows
+        };
+        for (kid, raw) in keys {
+            let Some(mut g) = raw.as_deref().and_then(|s| serde_json::from_str::<J>(s).ok()) else { continue };
+            if let Some(rooms) = g.get("rooms").and_then(J::as_array).map(|a| a.iter().filter_map(J::as_str).map(str::to_string).collect::<Vec<_>>()) {
+                if rooms.iter().any(|r| r == &to) {
+                    g["rooms"] = json!(k2_core::skin::handover::swap_room(&rooms, &to, &room_from));
+                    tx.execute("UPDATE api_keys SET app_key = ?2 WHERE id = ?1", rusqlite::params![kid, g.to_string()]).map_err(db_err)?;
+                }
+            }
+        }
+        match j["db"]["case"].as_str() {
+            Some("sole") => {
+                tx.execute(
+                    "UPDATE sql_databases SET project_id = ?3 WHERE name = ?1 AND project_id = ?2 AND status = 'active'",
+                    rusqlite::params![j["db"]["name"].as_str(), to, room_from],
+                )
+                .map_err(db_err)?;
+            }
+            Some("shared") if j["db"]["grantAdded"] == true => {
+                tx.execute("DELETE FROM sql_grants WHERE database_id = ?1 AND project_id = ?2", rusqlite::params![j["db"]["databaseId"].as_str(), to]).map_err(db_err)?;
+            }
+            _ => {}
+        }
+        if !hs::transition(&tx, &row.id, &[hs::APPLIED], hs::UNDONE, now).map_err(db_err)? {
+            return Err(no(NOT_IN_WINDOW, 409, "the handover changed state"));
+        }
+        deploy::audit::append(&tx, deploy::audit::SUBJECT_APP, &app.app_id, "handover_undo", by, None, &json!({ "handover": row.id, "from": to, "to": room_from }))
+            .map_err(db_err)?;
+        tx.commit().map_err(db_err)?;
+    }
+    let mut out = serde_json::Map::new();
+    // skin.db: rooms back, ties back, retired passwords restored where the
+    // guest hasn't set a new one since (compare-and-set).
+    match k2_core::skin::handover::undo_guests(&app.service_id, &room_from, &to, &row.id) {
+        Ok(rep) => {
+            out.insert("guests".into(), json!(rep));
+        }
+        Err(e) => {
+            out.insert("guests".into(), json!({ "error": e }));
+        }
+    }
+    // The vault: secrets back where they were; copies and aliases go.
+    out.insert("secrets".into(), undo_vault(&row, &j, &room_from));
+    // The runtime.
+    let link = match super::gateway::rebind_workspace(&app.app_id, &room_from) {
+        Ok(super::gateway::Rebind::Delivered { revoked }) => json!({ "rebound": true, "oldPassesRevoked": revoked }),
+        Ok(other) => json!(format!("{other:?}")),
+        Err(e) => json!({ "error": e }),
+    };
+    out.insert("link".into(), link);
+    super::audit::set_app_workspace(&app.app_id, &room_from);
+    super::routes::mirror(&app.app_id);
+    let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: to.clone() });
+    super::ownership::changed(&room_from);
+    // New keys and database passwords again (B knew them now).
+    out.insert("rekey".into(), rekey_as(&row.id, by, true));
+    if !room_from.is_empty() {
+        super::ownership::note(&room_from, &format!("App {} is yours again", app.app_id), &format!("{by} undid the handover of {} to {}: you maintain it again.", app.app_id, ws_handle(&to)));
+    }
+    super::ownership::note(&to, &format!("App {} went back", app.app_id), &format!("{by} undid the handover of {}: it is {}'s again. Your work on it stays with the App.", app.app_id, from_label(&room_from)));
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new("app-handover-undo", by, format!("undone {} {}", row.id, app.app_id), "cli", "-", "apps"));
+    Ok(json!({ "applied": "handover_undo", "app": app.app_id, "to": from_label(&room_from), "steps": J::Object(out) }))
+}
+
+/// The vault half of an undo, from step 4's journal.
+fn undo_vault(row: &Handover, j: &J, room_from: &str) -> J {
+    use k2_vault::{Actor, Consumer, GrantRequest, Scope, SecretStore, Selector};
+    let Ok(vault) = crate::vault::get() else { return json!({ "error": "the vault isn't open" }) };
+    let me = Consumer::published_service(row.service_id.clone());
+    let mut out = Vec::new();
+    for v in j["vault"].as_array().cloned().unwrap_or_default() {
+        let (id, new_id, name) = (v["secretId"].as_str().unwrap_or_default(), v["newId"].as_str().unwrap_or_default(), v["name"].as_str().unwrap_or_default());
+        let r: Result<(), String> = (|| {
+            match v["how"].as_str() {
+                Some("moved") => {
+                    vault.rescope(&Selector::Id(id.to_string()), Scope::workspace(room_from), Some(name), &Actor::Owner).map_err(|e| e.hint)?;
+                }
+                Some("copied" | "use_b") => {
+                    for (g, _) in vault.grants_to(&me).map_err(|e| e.hint)? {
+                        if g.secret_id != new_id {
+                            continue;
+                        }
+                        let req = GrantRequest {
+                            selector: Selector::Id(id.to_string()),
+                            consumer: me.clone(),
+                            delivery: g.delivery,
+                            env_name: g.env_name.clone(),
+                            file_name: g.file_name.clone(),
+                            hosts_narrowed: g.hosts_narrowed.clone(),
+                            expires_at: g.expires_at.clone(),
+                            version: None,
+                        };
+                        vault.grant(req, &Actor::Owner).map_err(|e| e.hint)?;
+                        vault.revoke(&g.id, &Actor::Owner).map_err(|e| e.hint)?;
+                    }
+                    if v["how"] == "copied" {
+                        vault.destroy(&Selector::Id(new_id.to_string()), &Actor::Owner).map_err(|e| e.hint)?;
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        })();
+        out.push(json!({ "name": name, "ok": r.is_ok(), "error": r.err() }));
+    }
+    let dropped = hov_db(|c| hs::drop_aliases(c, &row.id)).unwrap_or(0);
+    json!({ "secrets": out, "aliasesDropped": dropped })
+}
+
+/// POST `/cli/app/handover/finish {app}`: end the undo window now. The
+/// owner; or B once it has deployed the App since the handover.
+fn finish_route(who: &Who, body: &[u8]) -> R<J> {
+    need_credential(who)?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    let row = windowed(&app.app_id)?;
+    if !super::ownership::owner(who) {
+        let mine = who.passport().is_some_and(|(ws, _)| ws == row.to_workspace);
+        let deployed = app.live_deployment.is_some() && row.journal.as_ref().map(|j| j["liveDeployment"].as_str() != app.live_deployment.as_deref()).unwrap_or(false);
+        if !mine {
+            return Err(no(codes::OWNER_ONLY, 403, "the owner, or the agent that took the App, ends the undo window"));
+        }
+        if !deployed {
+            return Err(no(NOT_IN_WINDOW, 409, format!("deploy {} once first (the undo window is the owner's until then)", app.app_id)));
+        }
+    }
+    finalize(&row)?;
+    let row = hov_db(|c| hs::get(c, &row.id))?.ok_or_else(|| no("db_error", 500, "the handover row vanished"))?;
+    Ok(json!({ "ok": true, "handover": row_json(&row) }))
+}
+
+/// The window ended (or was finished): `final`, and the journal's
+/// credential material goes (skin.db hashes, the k2.db before-values).
+fn finalize(row: &Handover) -> R<()> {
+    if !hov_db(|c| hs::transition(c, &row.id, &[hs::APPLIED], hs::FINAL, deploy::now()))? {
+        return Ok(());
+    }
+    let _ = hov_db(|c| hs::set_window(c, &row.id, None, deploy::now()));
+    k2_core::skin::handover::forget_journal(&row.id).map_err(|e| no("skin_error", 500, e))?;
+    // Keep what undo no longer needs out of the row: only the vault list
+    // (names, no values) stays for the record.
+    let keep = row.journal.as_ref().map(|j| json!({ "vault": j["vault"], "db": j["db"] }));
+    hov_db(|c| hs::set_journal(c, &row.id, keep.as_ref(), deploy::now()))?;
+    Ok(())
+}
+
+/// The periodic sweep: windows that ended → `final`; a deferred re-key
+/// whose App was deployed since → its old keys revoked; offers nobody
+/// answered in 7 days → `expired`.
+pub fn sweep() {
+    let now = deploy::now();
+    for row in hov_db(|c| hs::in_state(c, hs::APPLIED)).unwrap_or_default() {
+        if row.rekey_state.as_deref() == Some("deferred") {
+            let app = hov_db(|c| store::get_app(c, &row.app_id)).ok().flatten();
+            let at_apply = row.journal.as_ref().and_then(|j| j["liveDeployment"].as_str().map(str::to_string));
+            if app.is_some_and(|a| a.live_deployment.is_some() && a.live_deployment != at_apply) {
+                let old: Vec<String> = row.journal.as_ref().and_then(|j| j["oldKeys"].as_array().cloned()).unwrap_or_default().into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                revoke_keys(&old);
+                let _ = hov_db(|c| hs::set_rekey(c, &row.id, "done", now));
+            }
+        }
+        if row.window_until.is_some_and(|w| w <= now) {
+            if let Err(e) = finalize(&row) {
+                k2_core::log_debug!("[apps/handover] {}: window end: {}", row.id, e.hint);
+            }
+        }
+    }
+    for state in [hs::OFFERED, hs::ACCEPTED] {
+        for row in hov_db(|c| hs::in_state(c, state)).unwrap_or_default() {
+            if row.created_at + hs::TTL_SECS <= now {
+                let _ = hov_db(|c| hs::transition(c, &row.id, &[state], hs::EXPIRED, now));
+            }
+        }
+    }
+}
+
+/// Boot (§4.8), before the re-host wave: a handover the daemon died in
+/// the middle of. `applying` (the commit never happened: the commit sets
+/// `applied` in the same transaction) → `aborted`; `applied` with steps
+/// left → finished forward. Then the sweep runs every 10 minutes.
+pub fn boot_recover() -> Vec<String> {
+    let now = deploy::now();
+    let mut out = Vec::new();
+    for row in hov_db(|c| hs::in_state(c, hs::APPLYING)).unwrap_or_default() {
+        let _ = hov_db(|c| hs::transition(c, &row.id, &[hs::APPLYING], hs::ABORTED, now));
+        out.push(format!("{} aborted (before its commit)", row.id));
+    }
+    for row in hov_db(|c| hs::in_state(c, hs::APPLIED)).unwrap_or_default() {
+        if row.steps_done < hs::STEPS_ALL {
+            let _gap = k2_core::skin::handover::begin_handing_over(
+                &row.service_id,
+                row.journal.as_ref().and_then(|j| j["roomFrom"].as_str()).unwrap_or(&row.from_workspace),
+                &row.to_workspace,
+            );
+            finish_steps(&row.id, "system");
+            out.push(format!("{} finished after a restart", row.id));
+        }
+    }
+    sweep();
+    out
+}
+
+/// Start the sweep thread (daemon boot).
+pub fn spawn_sweeper() {
+    let _ = std::thread::Builder::new().name("app-handover-sweep".into()).spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(600));
+        sweep();
+    });
 }

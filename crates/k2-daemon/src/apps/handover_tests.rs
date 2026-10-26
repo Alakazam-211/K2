@@ -1043,3 +1043,128 @@ fn the_app_s_vault_key_is_rekeyed() {
     let h = handover_row(v["result"]["handover"]["id"].as_str().unwrap());
     assert_eq!(h.rekey_state.as_deref(), Some("done"));
 }
+
+// ── S5: the undo window, recovery ───────────────────────────────────
+
+/// T5.1: undo puts rooms, ties, labels and secrets back; a retired
+/// password comes back only for a guest who didn't set a new one.
+#[test]
+fn undo_puts_everything_back_with_compare_and_set_passwords() {
+    let f = fx("t51");
+    add_labels(&f, "agent-t51", "dannon-t51");
+    let kept = guest("kay-t51", &f.svc, &[&f.a]);
+    k2_core::skin::creators::stamp(&kept, &f.a).unwrap();
+    k2_core::skin::set_principal_password("kay-t51", Some("a-set-kay-1")).unwrap();
+    let changed = guest("cal-t51", &f.svc, &[&f.a]);
+    k2_core::skin::creators::stamp(&changed, &f.a).unwrap();
+    k2_core::skin::set_principal_password("cal-t51", Some("a-set-cal-1")).unwrap();
+    let sel = put_ws_secret(&f.a, "TOKEN_T51", "tok-t51");
+    grant_to_service(&sel, &f.svc, "TOKEN");
+    let id = meta_of(&sel).unwrap().id;
+    let (_, v) = ask(&f);
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!(st, 200, "{v}");
+    let hid = v["result"]["handover"]["id"].as_str().unwrap().to_string();
+    // Meanwhile cal sets a new password (B's reset link).
+    k2_core::skin::set_principal_password("cal-t51", Some("cal-own-new-2")).unwrap();
+    // An agent can't undo; the owner files the undo card.
+    let (st, v) = call("/cli/app/handover/undo", &agent(&f.b), json!({ "app": f.app }));
+    assert_eq!((st, code(&v)), (403, "owner_only"), "{v}");
+    let (st, v) = call("/cli/app/handover/undo", &Who::Owner, json!({ "app": f.app }));
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
+    assert_eq!(handover_row(&hid).state, "undone");
+    assert_eq!(app_row(&f.app).owner_workspace, f.a);
+    for l in [f.app.as_str(), "agent-t51", "dannon-t51"] {
+        assert_eq!(holder(l).as_deref(), Some(f.a.as_str()), "{l} is A's again");
+    }
+    assert_eq!(super::labels::load_cfg(&f.app).unwrap().labels[0].service_id, "svc-legacy", "the taken label points back");
+    assert_eq!(k2_core::skin::creators::agent_tie(&kept).unwrap().as_deref(), Some(f.a.as_str()), "re-tied to A");
+    assert!(k2_core::skin::verify_principal_password("kay-t51", "a-set-kay-1"), "kay's hash came back (unchanged since)");
+    assert!(k2_core::skin::verify_principal_password("cal-t51", "cal-own-new-2"), "cal keeps the password cal set (CAS)");
+    assert!(!k2_core::skin::verify_principal_password("cal-t51", "a-set-cal-1"));
+    let s = k2_core::skin::create_app_session_token("kay-t51", &f.svc).unwrap();
+    assert_eq!(s.meta.rooms, vec![f.a.clone()], "rooms back to A");
+    assert_eq!(meta_of(&Selector::Id(id)).unwrap().scope, Scope::workspace(&f.a), "the secret is A's again");
+    let aliases = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::deploy::handover::aliases_of(&conn, &f.svc).unwrap()
+    };
+    assert!(aliases.is_empty(), "{aliases:?}");
+    // No second undo.
+    let (st, v) = call("/cli/app/handover/undo", &Who::Owner, json!({ "app": f.app }));
+    assert_eq!((st, code(&v)), (409, "handover_not_in_window"), "{v}");
+}
+
+/// T5.2: the daemon dies right after the commit point: boot finishes the
+/// rest before anything else.
+#[test]
+fn boot_finishes_a_handover_cut_off_after_its_commit() {
+    let f = fx("t52");
+    guest("gil-t52", &f.svc, &[&f.a]);
+    let (_, v) = ask(&f);
+    let hid = v["handover"]["id"].as_str().unwrap().to_string();
+    super::handover::CRASH_AFTER_COMMIT.with(|c| c.set(true));
+    let (st, _) = approve(&req_id(&v));
+    super::handover::CRASH_AFTER_COMMIT.with(|c| c.set(false));
+    assert_eq!(st, 200);
+    let h = handover_row(&hid);
+    assert_eq!((h.state.as_str(), h.steps_done), ("applied", 2), "committed, nothing after: {h:?}");
+    assert_eq!(app_row(&f.app).owner_workspace, f.b, "the commit point moved the App");
+    let s = k2_core::skin::create_app_session_token("gil-t52", &f.svc).unwrap();
+    assert_eq!(s.meta.rooms, vec![f.a.clone()], "step 3 hasn't run");
+    let lines = super::handover::boot_recover();
+    assert!(lines.iter().any(|l| l.contains(&hid)), "{lines:?}");
+    assert_eq!(handover_row(&hid).steps_done, 7);
+    let s = k2_core::skin::create_app_session_token("gil-t52", &f.svc).unwrap();
+    assert_eq!(s.meta.rooms, vec![f.b.clone()], "boot finished it forward");
+    assert!(super::handover::boot_recover().iter().all(|l| !l.contains(&hid)), "once");
+}
+
+/// T5.3: the window ends: `final`, and the journal's hashes are gone.
+#[test]
+fn the_window_end_forgets_the_credential_journal() {
+    let f = fx("t53");
+    let pid = guest("hal-t53", &f.svc, &[&f.a]);
+    k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
+    k2_core::skin::set_principal_password("hal-t53", Some("a-set-hal-1")).unwrap();
+    let (_, v) = ask(&f);
+    let (_, v) = approve(&req_id(&v));
+    let hid = v["result"]["handover"]["id"].as_str().unwrap().to_string();
+    assert_eq!(sh::journal(&hid).unwrap().len(), 1);
+    super::handover::sweep();
+    assert_eq!(handover_row(&hid).state, "applied", "still in its window");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::deploy::handover::set_window(&conn, &hid, Some(k2_core::deploy::now() - 1), k2_core::deploy::now()).unwrap();
+    }
+    super::handover::sweep();
+    assert_eq!(handover_row(&hid).state, "final");
+    assert_eq!(sh::journal(&hid).unwrap().len(), 0, "no credential material left");
+    let (st, v) = call("/cli/app/handover/undo", &Who::Owner, json!({ "app": f.app }));
+    assert_eq!((st, code(&v)), (409, "handover_not_in_window"), "{v}");
+}
+
+/// Finish: the owner at any time; B only after it deployed the App.
+#[test]
+fn the_window_can_be_finished_early() {
+    let f = fx("fin");
+    let (_, v) = ask(&f);
+    let (_, v) = approve(&req_id(&v));
+    let hid = v["result"]["handover"]["id"].as_str().unwrap().to_string();
+    let (st, v) = call("/cli/app/handover/finish", &agent(&f.b), json!({ "app": f.app }));
+    assert_eq!((st, code(&v)), (409, "handover_not_in_window"), "B hasn't deployed yet: {v}");
+    let (st, v) = call("/cli/app/handover/finish", &agent(&f.a), json!({ "app": f.app }));
+    assert_eq!(st, 404, "A no longer sees the App: {v}");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute("UPDATE apps SET live_deployment = 'dep-b-fin' WHERE app_id = ?1", params![f.app]).unwrap();
+    }
+    let (st, v) = call("/cli/app/handover/finish", &agent(&f.b), json!({ "app": f.app }));
+    assert_eq!((st, v["handover"]["state"].as_str()), (200, Some("final")), "{v}");
+    assert_eq!(handover_row(&hid).state, "final");
+}

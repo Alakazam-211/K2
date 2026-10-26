@@ -717,7 +717,18 @@ pub fn spawn() {
     if STARTED.set(()).is_err() {
         return;
     }
-    let _ = std::thread::Builder::new().name("apps-rehost".into()).spawn(|| loop {
+    let _ = std::thread::Builder::new().name("apps-rehost".into()).spawn(|| {
+        // 0.46.5 (prd-app-handoff-v1 §4.8, pre-flight 0): a handover the
+        // last daemon died in the middle of is finished forward first.
+        for line in super::handover::boot_recover() {
+            k2_core::log_debug!("[apps] handover: {line}");
+        }
+        wave_loop()
+    });
+}
+
+fn wave_loop() -> ! {
+    loop {
         if k2_core::deploy::enabled() {
             let turns = run_wave(&LiveOps);
             let moved = turns.iter().filter(|(_, t)| matches!(t, Turn::Done(_))).count();
@@ -726,7 +737,7 @@ pub fn spawn() {
             }
         }
         sleep_or_wake(RETRY_EVERY);
-    });
+    }
 }
 
 // ── routes ───────────────────────────────────────────────────────────

@@ -946,6 +946,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/handover/accept",
         "/cli/app/handover/decline",
         "/cli/app/handover/cancel",
+        "/cli/app/handover/rekey",
+        "/cli/app/handover/finish",
         // Clone proposals (prd-clone-carries-threads-and-vault-v1 CL21):
         // an agent proposes a clone of its own workspace, lists and
         // withdraws its own. `/cli/clone/*` stays DENY (agents never clone)

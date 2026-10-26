@@ -295,6 +295,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/handover/cancel", Member),
     post("/cli/app/handover/decline", Member),
     get("/cli/app/handover/status", Member),
+    // S4/S5: retry a re-key (B or the owner); end the undo window (the
+    // owner, or B after a deploy); undo files a card for the owner.
+    post("/cli/app/handover/finish", Member),
+    post("/cli/app/handover/rekey", Member),
+    post("/cli/app/handover/undo", Owner),
     get("/cli/app/history", Member),
     get("/cli/app/inspect", Member),
     post("/cli/app/install", Admin),

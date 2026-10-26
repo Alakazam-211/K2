@@ -1635,6 +1635,9 @@ async fn async_main() {
         if !parked.is_empty() {
             k2_core::log_debug!("[apps] parked {} orphaned App(s): {}", parked.len(), parked.join(", "));
         }
+        // 0.46.5 (prd-app-handoff-v1 §4.9): the handover undo-window sweep
+        // (boot recovery runs first in the re-host wave's thread, §4.8).
+        crate::apps::handover::spawn_sweeper();
     }
     // S9 (AR23): Garden widget versions write deploy_audit rows.
     k2_core::deploy::widget_events::install_db_sink();

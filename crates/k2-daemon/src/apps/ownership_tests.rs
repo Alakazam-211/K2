@@ -634,7 +634,7 @@ fn assert_refused(app: &str, to: &str, want: &str) -> J {
     let codes: Vec<&str> = v["error"]["blockers"].as_array().unwrap_or_else(|| panic!("no blockers: {v}")).iter().map(|b| b["code"].as_str().unwrap()).collect();
     assert!(codes.contains(&want), "{app}: want {want} in {codes:?}: {v}");
     let hint = v["error"]["hint"].as_str().unwrap();
-    for needle in ["the full App hand-off arrives in 0.46.5; until then", "new id", "k2 app data put", "label return", "label take", "domain"] {
+    for needle in ["The full App hand-off arrives in 0.46.5; until then", "new id", "k2 app data put", "label return", "label take", "domain"] {
         assert!(hint.contains(needle), "{app}: the hint lacks {needle:?}: {hint}");
     }
     assert_eq!(v["error"]["manual"].as_array().map(Vec::len), Some(4), "{v}");

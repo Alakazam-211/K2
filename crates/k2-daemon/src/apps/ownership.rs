@@ -334,9 +334,10 @@ fn give(who: &Who, v: &J, unpark: bool, confirm: Confirm<'_>) -> R<J> {
     if app.owner_workspace == to.id {
         return Ok(json!({ "ok": true, "app": app.app_id, "workspace": super::routes::ws_handle(&to.id), "already": true }));
     }
-    // The blockers first (a refused move never asks for a confirm), then
-    // the owner in person.
+    // The blockers and the box's room first (a refused move never asks for
+    // a confirm), then the owner in person. `assign` checks the room again.
     refuse_if_unsafe(&app, &to)?;
+    super::admission::check_memory(&app.app_id, app.memory_limit_bytes)?;
     if let Confirm::Token(t) = confirm {
         handover_guard::take_confirm(who, &app.app_id, t, what)?;
     }

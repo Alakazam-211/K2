@@ -472,10 +472,12 @@ impl FrpcHealth {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn failures(&self) -> u64 {
         self.state().consecutive_failures
     }
 
+    #[cfg(test)]
     pub(crate) fn last_error(&self) -> Option<String> {
         self.state().last_error.clone()
     }

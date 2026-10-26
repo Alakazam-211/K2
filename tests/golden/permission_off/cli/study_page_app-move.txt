@@ -5,11 +5,12 @@ k2 study app-move — Moving your --cmd service to an App
 
 WHY. A service you started with `k2 publish run <name> --cmd "…"` runs
 unwalled: as the daemon's user, with the daemon's whole environment and
-reach to the owner token. Lists show it as "legacy (--cmd) — move it to an
-App before 0.46.4". In <K2_CLI_VERSION> nothing stops it. In 0.46.4 --cmd goes. You
-move it yourself: you need "Build and run Apps" on your workspace (your
-owner turns it on). No terminal on the box, no sudo: the box is prepared
-by K2 (k2 app doctor says whether it is ready).
+reach to the owner token. Lists show it as "legacy (--cmd): keeps running;
+move it to an App when ready". Nothing stops it and no release removes it:
+move it when you're ready. You move it yourself: you need "Build and run
+Apps" on your workspace (your owner turns it on). No terminal on the box,
+no sudo: the box is prepared by K2 (k2 app doctor says whether it is
+ready).
 
 THE OLD SERVICE KEEPS RUNNING until YOU stop it (step 7): installing,
 deploying and taking its label never stop it. Its URL serves it until step

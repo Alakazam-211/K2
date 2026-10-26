@@ -85,6 +85,16 @@ describe('GitToolsRow (Settings → General)', () => {
     expect(installGitTools).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('git-tools-state').textContent).toBe("Installing Apple's command line tools…")
     expect(screen.queryByTestId('git-tools-install')).toBeNull()
+    expect(screen.getByTestId('git-tools-installer-hint').textContent).toBe(
+      "Apple's installer is open (it can be behind the K2 window). Click Install, not Get Xcode (that opens the App Store for the full Xcode), agree to Apple's licence, then wait for the download (about 5–15 min).",
+    )
+  })
+
+  it('shows no installer hint before the click', async () => {
+    fetchGitTools.mockResolvedValue(status({}))
+    render(<GitToolsRow />)
+    await settle()
+    expect(screen.queryByTestId('git-tools-installer-hint')).toBeNull()
   })
 
   it('shows Ready with the version and no buttons once git works', async () => {
@@ -150,6 +160,18 @@ describe('GitToolsBanner (Add workspace)', () => {
     expect(banner.textContent).toContain("git isn't installed on this Mac yet. K2 adds the workspace now")
     expect(banner.textContent).toContain("Xcode isn't needed")
     expect(screen.getByTestId('git-tools-install')).toBeTruthy()
+  })
+
+  it('while installing: what to click in Apple’s dialog, and that it can be behind K2', async () => {
+    fetchGitTools.mockResolvedValue(status({ state: 'installing', installStartedAt: 1 }))
+    render(<GitToolsBanner />)
+    await settle()
+    const hint = screen.getByTestId('git-tools-installer-hint').textContent ?? ''
+    expect(hint).toContain('it can be behind the K2 window')
+    expect(hint).toContain('Click Install, not Get Xcode (that opens the App Store for the full Xcode)')
+    expect(hint).toContain("agree to Apple's licence")
+    expect(hint).toContain('about 5–15 min')
+    expect(screen.queryByTestId('git-tools-install')).toBeNull()
   })
 
   it('on Linux: no install button, the apt line to run yourself', async () => {

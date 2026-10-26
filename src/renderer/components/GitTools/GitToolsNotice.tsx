@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Callout } from '@/components/ui'
 import {
+  APPLE_INSTALLER_HINT,
   fetchGitTools,
   gitToolsStateLabel,
   installGitTools,
@@ -114,6 +115,16 @@ function Actions({ h }: { h: GitToolsHandle }): React.JSX.Element | null {
   )
 }
 
+/** While Apple's installer runs: what its dialog wants from the person. */
+function InstallerHint({ status }: { status: GitToolsStatus }): React.JSX.Element | null {
+  if (status.state !== 'installing') return null
+  return (
+    <p className="mt-1 text-[10px]" data-testid="git-tools-installer-hint">
+      {APPLE_INSTALLER_HINT}
+    </p>
+  )
+}
+
 function Waiting({ status }: { status: GitToolsStatus }): React.JSX.Element | null {
   if (status.waiting.length === 0) return null
   return (
@@ -158,6 +169,9 @@ export function GitToolsRow(): React.JSX.Element | null {
           are added anyway; K2 sets up their git when the tools are ready.
         </p>
       )}
+      <div className="text-[var(--color-text-secondary)]">
+        <InstallerHint status={s} />
+      </div>
       <Waiting status={s} />
       <HowTo status={s} />
       {h.error && <p className="mt-1 text-[10px] text-[var(--color-status-error-soft)]">{h.error}</p>}
@@ -184,6 +198,7 @@ export function GitToolsBanner(): React.JSX.Element | null {
         </span>
         <Actions h={h} />
       </div>
+      <InstallerHint status={s} />
       <HowTo status={s} />
       {h.error && <p className="mt-1 text-[10px]">{h.error}</p>}
     </Callout>

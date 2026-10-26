@@ -17944,7 +17944,9 @@ if code != "200":
     sys.exit(1)
 state = d.get("state")
 if d.get("started") == "started":
-    print("Apple'\''s installer is open on this Mac'\''s screen: click Install there (about 1-2 GB).")
+    print("Apple'\''s installer is open on this Mac'\''s screen (it can be behind the K2 window).")
+    print("Click Install, not Get Xcode (that opens the App Store for the full Xcode),")
+    print("agree to Apple'\''s licence, then wait for the download (about 5-15 min).")
 elif d.get("started") == "already_ready":
     print("git already works here; nothing to install.")
 if state == "ready":

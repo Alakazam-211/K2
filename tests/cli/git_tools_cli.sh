@@ -154,7 +154,9 @@ echo "== install / recheck =="
 run git-tools install
 assert_eq "install: exit 0" "$rc" "0"
 assert_eq "install: POST" "$(last_request)" 'POST /cli/git-tools/install {}'
-assert_contains "install: points at the dialog" "$out" "Apple's installer is open on this Mac's screen"
+assert_contains "install: points at the dialog" "$out" "Apple's installer is open on this Mac's screen (it can be behind the K2 window)."
+assert_contains "install: Install, not Get Xcode" "$out" "Click Install, not Get Xcode (that opens the App Store for the full Xcode),"
+assert_contains "install: licence and wait" "$out" "agree to Apple's licence, then wait for the download (about 5-15 min)."
 assert_contains "install: installing" "$out" "git        : installing Apple's command line tools"
 echo ready >"$MODE_FILE"
 run git-tools recheck

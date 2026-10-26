@@ -1233,3 +1233,36 @@ fn the_context_layer_follows_the_app() {
     assert!(!a.contains(&format!("| {} |", f.app)), "A doesn't:\n{a}");
     assert!(a.contains(&format!("| {} |", f.other)), "A still lists its other App:\n{a}");
 }
+
+// ── S7: the source copy (opt-in) ─────────────────────────────────────
+
+/// Copy the source: into B's folder, never `.k2/` or `.env*`;
+/// `folder_path` points at the copy.
+#[test]
+fn copy_source_lands_in_b_without_env_or_k2_files() {
+    let f = fx("s7");
+    let src = f._home.path().join("a-src-s7");
+    std::fs::create_dir_all(src.join("lib")).unwrap();
+    std::fs::create_dir_all(src.join(".k2")).unwrap();
+    std::fs::write(src.join("lib/app.js"), b"console.log('hi')").unwrap();
+    std::fs::write(src.join(".env.k2"), b"TOKEN=k2v://ws/a/TOKEN").unwrap();
+    std::fs::write(src.join(".k2/notes.md"), b"private").unwrap();
+    let b_dir = f._home.path().join("b-ws-s7");
+    std::fs::create_dir_all(&b_dir).unwrap();
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute("UPDATE apps SET folder_path = ?2 WHERE app_id = ?1", params![f.app, src.to_string_lossy()]).unwrap();
+        conn.execute("UPDATE projects SET path = ?2 WHERE id = ?1", params![f.b, b_dir.to_string_lossy()]).unwrap();
+    }
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.app, "to": f.b, "copySource": true }));
+    assert_eq!(st, 202, "{v}");
+    assert!(v["plan"]["lines"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("is copied into")), "{v}");
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!(st, 200, "{v}");
+    let dest = b_dir.join("apps").join(&f.app);
+    assert_eq!(std::fs::read(dest.join("lib/app.js")).unwrap(), b"console.log('hi')");
+    assert!(!dest.join(".env.k2").exists(), "env files stay behind");
+    assert!(!dest.join(".k2").exists(), "K2's folder stays behind");
+    assert_eq!(app_row(&f.app).folder_path.as_deref(), Some(dest.to_string_lossy().as_ref()));
+}

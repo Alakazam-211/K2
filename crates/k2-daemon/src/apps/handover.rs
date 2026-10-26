@@ -1058,6 +1058,9 @@ pub(crate) fn finish_steps(id: &str, by: &str) -> J {
             let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: room_from.clone() });
         }
         super::ownership::changed(&to);
+        if row.options.get("copySource").and_then(J::as_bool) == Some(true) {
+            out.insert("source".into(), copy_source(&row));
+        }
         step(5);
     }
     if row.steps_done < 6 {
@@ -1777,4 +1780,75 @@ fn context_layers(to: &str, from: &str) {
     }
     let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
     cl::refresh_roster_after_live_kind_change(&refs, cl::LiveKind::AppsMaintained);
+}
+
+// ── S7: the source copy (opt-in, Q6) ─────────────────────────────────
+
+/// What a source copy leaves out: K2's own folder, env files and anything
+/// that could hold a secret value.
+fn copy_skips(name: &str) -> bool {
+    name == ".k2" || name == ".git" || name == "node_modules" || name.starts_with(".env") || name.ends_with(".pem") || name.ends_with(".key")
+}
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path, budget: &mut u64) -> std::io::Result<u64> {
+    std::fs::create_dir_all(to)?;
+    let mut n = 0;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let name = e.file_name().to_string_lossy().to_string();
+        if copy_skips(&name) {
+            continue;
+        }
+        let ft = e.file_type()?;
+        if ft.is_symlink() {
+            continue;
+        }
+        let dest = to.join(&name);
+        if ft.is_dir() {
+            n += copy_tree(&e.path(), &dest, budget)?;
+        } else if ft.is_file() {
+            let len = e.metadata()?.len();
+            if len > *budget {
+                return Err(std::io::Error::other("the source is larger than 512 MiB: copy it yourself (git)"));
+            }
+            *budget -= len;
+            std::fs::copy(e.path(), &dest)?;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// S7 (§4.2 P21): copy the App's source folder from A into
+/// `<B>/apps/<app>/` (never `.k2/`, `.env*`, keys or `.git`), and point
+/// `apps.folder_path` at the copy. Folder trust scans it at B's next
+/// launch (it is new content). Best effort: a failure is reported, the
+/// handover stands.
+fn copy_source(row: &Handover) -> J {
+    let Some(src) = row.journal.as_ref().and_then(|j| j["folderPath"].as_str().map(str::to_string)) else {
+        return json!({ "skipped": "the App had no source folder on record" });
+    };
+    let Some(b) = ws_by_id(&row.to_workspace) else { return json!({ "error": "the workspace that took it is gone" }) };
+    let from = std::path::Path::new(&src);
+    if !from.is_dir() {
+        return json!({ "skipped": format!("{src} isn't there any more") });
+    }
+    let dest = std::path::Path::new(&b.path).join("apps").join(&row.app_id);
+    if dest.exists() {
+        return json!({ "skipped": format!("{} exists already: left as it is", dest.display()) });
+    }
+    let mut budget: u64 = 512 << 20;
+    match copy_tree(from, &dest, &mut budget) {
+        Ok(files) => {
+            let _ = hov_db(|c| {
+                c.execute("UPDATE apps SET folder_path = ?2 WHERE app_id = ?1", rusqlite::params![row.app_id, dest.to_string_lossy()])
+            });
+            super::routes::mirror(&row.app_id);
+            json!({ "copied": files, "to": dest.to_string_lossy() })
+        }
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dest);
+            json!({ "error": e.to_string() })
+        }
+    }
 }

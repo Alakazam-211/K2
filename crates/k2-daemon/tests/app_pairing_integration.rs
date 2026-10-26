@@ -66,14 +66,17 @@ async fn call(port: u16, method: &'static str, path: String, headers: Vec<String
     tokio::task::spawn_blocking(move || raw(port, method, &path, &headers, body.as_deref())).await.unwrap()
 }
 
-/// A runtime App `pjint` (tunnelled, box `box`) in workspace `ws`, guest
-/// `dana` (password `s3cret-horse`) with its grant, pairing on with one
-/// iOS app and one Android app. Returns (service id, App id).
-fn seed(env: &Env) -> (String, String) {
+/// A runtime App `pj<tag>` (tunnelled, box `box`) in workspace `pw<tag>`,
+/// guest `dana<tag>` (password `s3cret-horse`) with its grant, pairing on
+/// with one iOS app and one Android app. The daemon DB is one per test
+/// process, so every name carries the test's tag. Returns (service id,
+/// App id, username).
+fn seed(env: &Env, tag: &str) -> (String, String, String) {
     let cfg = k2_core::tunnel::config::TunnelConfig { subdomain: "box".into(), ..Default::default() };
     k2_core::tunnel::config::save(&cfg).expect("tunnel config");
-    let ws = seed_ws(env, "pairws");
-    let app_id = "pjint".to_string();
+    let ws = seed_ws(env, &format!("pw{tag}"));
+    let app_id = format!("pj{tag}");
+    let user = format!("dana{tag}");
     let svc = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -94,8 +97,8 @@ fn seed(env: &Env) -> (String, String) {
         .expect("runtime app");
         s.id
     };
-    skin::add_principal_for_app("dana", None, &svc, None, "test").expect("dana");
-    skin::set_principal_password("dana", Some("s3cret-horse")).expect("password");
+    skin::add_principal_for_app(&user, None, &svc, None, "test").expect("guest");
+    skin::set_principal_password(&user, Some("s3cret-horse")).expect("password");
     let input = store::ConfigInput {
         ios: vec!["ABCDE12345.com.jobs.app".into()],
         android: vec![store::AndroidApp {
@@ -106,11 +109,11 @@ fn seed(env: &Env) -> (String, String) {
     };
     store::set_config(&svc, &input, "owner").expect("pairing on");
     k2_daemon::app_pairing::refresh_links(&svc);
-    (svc, app_id)
+    (svc, app_id, user)
 }
 
-async fn web_pass(port: u16, svc: &str) -> String {
-    let r = call(port, "POST", "/cli/skin/login".into(), vec![], Some(json!({"username": "dana", "password": "s3cret-horse", "app": svc}).to_string())).await;
+async fn web_pass(port: u16, svc: &str, user: &str) -> String {
+    let r = call(port, "POST", "/cli/skin/login".into(), vec![], Some(json!({"username": user, "password": "s3cret-horse", "app": svc}).to_string())).await;
     assert_eq!(r.status, 200, "login: {}", r.body);
     r.json()["token"].as_str().expect("token").to_string()
 }
@@ -123,13 +126,13 @@ fn bearer(t: &str) -> String {
 async fn the_curl_smoke_pairs_a_phone_headless() {
     let env = setup(&[]);
     let d = k2_daemon::test_harness::start(OWNER).await;
-    let (svc, app_id) = seed(&env);
-    let pass = web_pass(d.port, &svc).await;
+    let (svc, app_id, user) = seed(&env, "smoke");
+    let pass = web_pass(d.port, &svc, &user).await;
     // The App is down: its front port still serves the link files (V5).
     let front = k2_daemon::apps::router::ensure_front(&tokio::runtime::Handle::current(), &app_id, 0, true).expect("front port");
     let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/app-pairing-smoke.sh");
     let out = tokio::task::spawn_blocking({
-        let (svc, pass) = (svc.clone(), pass.clone());
+        let (svc, pass, host) = (svc.clone(), pass.clone(), format!("{app_id}.box.k2.dev"));
         move || {
             std::process::Command::new("bash")
                 .arg(&script)
@@ -137,7 +140,7 @@ async fn the_curl_smoke_pairs_a_phone_headless() {
                 .env("K2_APP", &svc)
                 .env("K2_PASS", &pass)
                 .env("K2_FRONT", format!("http://127.0.0.1:{front}"))
-                .env("K2_APP_HOST", "pjint.box.k2.dev")
+                .env("K2_APP_HOST", &host)
                 .output()
                 .expect("run the smoke script")
         }
@@ -155,8 +158,8 @@ async fn the_curl_smoke_pairs_a_phone_headless() {
 async fn only_a_guest_starts_web_off_never_walls_the_phone_and_bad_codes_are_throttled_on_their_own() {
     let env = setup(&[]);
     let d = k2_daemon::test_harness::start(OWNER).await;
-    let (svc, _) = seed(&env);
-    let pass = web_pass(d.port, &svc).await;
+    let (svc, _, user) = seed(&env, "gate");
+    let pass = web_pass(d.port, &svc, &user).await;
     // The owner token is not a person's web sign-in.
     let r = call(d.port, "POST", format!("/cli/skin/pair/start?token={OWNER}"), vec![], Some("{}".into())).await;
     assert_eq!((r.status, r.code()), (403, "guest_required".to_string()), "{}", r.body);
@@ -199,7 +202,7 @@ async fn only_a_guest_starts_web_off_never_walls_the_phone_and_bad_codes_are_thr
     }
     assert!(statuses[..10].iter().all(|s| *s == 401), "{statuses:?}");
     assert!(statuses[10..].iter().all(|s| *s == 429), "{statuses:?}");
-    let r = call(d.port, "POST", "/cli/skin/login".into(), client, Some(json!({"username": "dana", "password": "s3cret-horse", "app": svc}).to_string())).await;
+    let r = call(d.port, "POST", "/cli/skin/login".into(), client, Some(json!({"username": user, "password": "s3cret-horse", "app": svc}).to_string())).await;
     assert_eq!(r.status, 200, "bad codes never lock out the App login: {}", r.body);
 }
 

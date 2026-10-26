@@ -150,6 +150,17 @@ static LAST_FINGERPRINT: Mutex<Option<String>> = Mutex::new(None);
 /// another route's handler.
 static ROUTE_WRITE: parking_lot::ReentrantMutex<()> = parking_lot::const_reentrant_mutex(());
 
+/// POST rows that never write the watched Zen sources: checks, a headless
+/// screenshot and a widget's run report don't take [`ROUTE_WRITE`], so a
+/// slow shot never holds up the watcher or a write.
+const NO_FOLDER_WRITE: &[&str] = &[
+    "/cli/zen/garden/check",
+    "/cli/zen/widget/check",
+    "/cli/zen/widget/folder/check",
+    "/cli/zen/widget/run",
+    "/cli/zen/widget/shot",
+];
+
 /// The runaway guard's pauses, by Garden and placement (R6). In memory: a
 /// daemon restart clears them, as a window reload clears the renderer's
 /// post counters.
@@ -1369,7 +1380,7 @@ pub fn handle(
         return resp("404 Not Found", json!({ "error": "unknown zen route", "path": path }));
     }
     // A write and its own announcement are one step to the watcher.
-    let _route = POST_ROUTES.contains(&path).then(|| ROUTE_WRITE.lock());
+    let _route = (POST_ROUTES.contains(&path) && !NO_FOLDER_WRITE.contains(&path)).then(|| ROUTE_WRITE.lock());
     let owner_token = owner && *caller == Caller::Owner;
     // The person's order and pins in the Agents widget (0.46.4): agents
     // read, only the owner token sets (its own module applies both rules).

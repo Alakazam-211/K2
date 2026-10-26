@@ -307,7 +307,10 @@ pub(crate) fn role_of(app: &AppRow, token: Option<&str>, agent: bool) -> R<Optio
 /// guest; an agent with "Build and run Apps" only its own workspace's
 /// Apps'.
 fn rm(who: &Who, body: &[u8]) -> R<J> {
-    need_remover(who)?;
+    need_credential(who)?;
+    if agent_ws(who).is_none() {
+        need_remover(who)?;
+    }
     let v = json_body(body)?;
     let username = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "username is required"))?;
     let missing = || no(NOT_A_TEST_GUEST, 404, format!("'{username}' isn't a test guest you can remove (k2 app test-guests <app>)"));
@@ -332,6 +335,9 @@ fn rm(who: &Who, body: &[u8]) -> R<J> {
                 format!("'{}' is a test guest the owner made: it stays the owner's (ask your human: k2 app user remove {} --test)", p.username, p.username),
             ));
         }
+        // Another workspace's App answered 404 above, switch or not (no
+        // oracle); its own: the switch.
+        need_remover(who)?;
     }
     let by = actor(who);
     let removed = skin::remove_principal_as(&p.username, &by).map_err(store_err)?;

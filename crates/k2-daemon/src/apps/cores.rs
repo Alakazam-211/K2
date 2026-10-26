@@ -100,6 +100,8 @@ pub fn access_json(ws: &str) -> J {
         "level": l.as_str(),
         "buildAndRun": l >= Level::Build,
         "manageEndToEnd": l == Level::Full,
+        // "Let this agent manage its Apps' users" (0225): its own switch.
+        "manageUsers": k2_core::workspace::settings::agents_can_manage_app_users(ws),
         "cores": ticked(ws),
         "coreList": cores_json(ws),
     })

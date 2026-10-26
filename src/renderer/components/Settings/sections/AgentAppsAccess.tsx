@@ -3,7 +3,9 @@
 // manage Apps" switch:
 //
 //   Switch 1  "Build and run Apps"
-//     Switch 2  "Manage its Apps end to end (caps, budgets, hosts, keys)"
+//     Switch 2  "Manage its Apps end to end"
+//   "Let this agent manage its Apps' users" (0225: its own switch, the
+//   owner's both ways; Rosson 2026-10-26: in this box with the others)
 //   "Loosening the wall always asks you."
 //   Cores     Database · Files and rooms · Thread · Mail · Sew
 //
@@ -25,6 +27,8 @@ import { useProjectsStore, noteOptimisticProjectsMutationSuccess, type ProjectWi
 import {
   APP_CORES,
   canSet,
+  canSetUsers,
+  lockedUsersReason,
   lockedReason,
   parseAppCores,
   setAppCore,
@@ -38,7 +42,9 @@ function emitProjectsChanged(): void {
   void emit('sync:projects').catch((e) => console.warn('[apps-access] sync:projects emit failed:', e))
 }
 
-type Patch =Partial<Pick<ProjectWithWorkspaces, 'agentsCanManageSkin' | 'agentsCanManageAppsFull' | 'appCores'>>
+type Patch = Partial<
+  Pick<ProjectWithWorkspaces, 'agentsCanManageSkin' | 'agentsCanManageAppsFull' | 'agentsCanManageAppUsers' | 'appCores'>
+>
 
 function patchProject(id: string, patch: Patch): void {
   useProjectsStore.setState((s) => ({
@@ -112,6 +118,7 @@ export function AgentAppsAccess({
 
   const build = (project.agentsCanManageSkin ?? 0) === 1
   const full = build && (project.agentsCanManageAppsFull ?? 0) === 1
+  const users = (project.agentsCanManageAppUsers ?? 0) === 1
   const cores = parseAppCores(project.appCores ?? '[]')
   const may = (cur: boolean, next: boolean): boolean => !readOnly && busy === null && canSet(role, cur, next)
 
@@ -119,6 +126,7 @@ export function AgentAppsAccess({
     const before: Patch = {
       agentsCanManageSkin: project.agentsCanManageSkin,
       agentsCanManageAppsFull: project.agentsCanManageAppsFull,
+      agentsCanManageAppUsers: project.agentsCanManageAppUsers,
       appCores: project.appCores,
     }
     setBusy(key)
@@ -148,6 +156,12 @@ export function AgentAppsAccess({
     const next = !full
     if (!build || !may(full, next)) return
     void run('full', { agentsCanManageAppsFull: next ? 1 : 0 }, () => setAppSwitch(project.path, 'apps_manage_full', next))
+  }
+
+  const flipUsers = (): void => {
+    const next = !users
+    if (readOnly || busy !== null || !canSetUsers(role, users, next)) return
+    void run('users', { agentsCanManageAppUsers: next ? 1 : 0 }, () => setAppSwitch(project.path, 'app_users', next))
   }
 
   const flipCore = (core: AppCoreId): void => {
@@ -182,8 +196,8 @@ export function AgentAppsAccess({
             <span className="text-[10px] font-normal text-[var(--color-text-muted)]">Apps (beta)</span>
           </div>
           <div className={desc}>
-            Builds, installs, deploys, runs and uninstalls its own Apps, inside default limits (512 MiB each, up to 3 Apps),
-            and manages their guests, roles and tokens. Off: every change waits for you.
+            Builds, installs, deploys, runs and uninstalls its own Apps inside default limits (512 MiB each, up to 3 Apps),
+            moves its own services and labels in, and edits their roles and App passes. Off: every change waits for you.
           </div>
         </div>
       </div>
@@ -203,11 +217,32 @@ export function AgentAppsAccess({
         />
         <div className="flex-1 min-w-0">
           <div className={`text-xs font-medium ${build ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]'}`}>
-            Manage its Apps end to end (caps, budgets, hosts, keys)
+            Manage its Apps end to end
           </div>
           <div className={desc}>
-            Raises its own Apps&rsquo; budgets and quotas, allows outbound hosts and box services, and mints App keys, with no
-            approval. Never adds a core.
+            Raises its own Apps&rsquo; budgets and quotas, allows outbound (egress) hosts and box services, mints App keys,
+            resumes an App it suspended and sends push, with no approval. Never adds a core; never its Apps&rsquo; users.
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-start gap-3" data-testid="apps-switch-users-row">
+        <Switch
+          on={users}
+          label="Let this agent manage its Apps’ users"
+          disabled={readOnly || busy !== null || !canSetUsers(role, users, !users)}
+          title={lockedUsersReason(role) ?? (users ? 'This agent manages its own Apps’ users' : 'Its Apps’ users wait for you')}
+          testId="apps-switch-users"
+          settingsId="projects.agents-can-manage-app-users"
+          onFlip={flipUsers}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">Let this agent manage its Apps&rsquo; users</div>
+          <div className={desc}>
+            Adds and removes App users and test guests of its own Apps, sets their passwords, email and names, unlocks them,
+            gives them roles and its own room, invites people, and gives its Apps the guests-rooms grant in its own room. The
+            users it makes are tied to it. Never a box login or another workspace&rsquo;s guests. Off: each one is a card for
+            you.
           </div>
         </div>
       </div>

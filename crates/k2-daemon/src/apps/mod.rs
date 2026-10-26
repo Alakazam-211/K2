@@ -5,6 +5,10 @@
 //! are `k2_core::deploy`.
 
 pub mod access;
+// Switch 2's App grants for agents and their one-time cards (0.46.4).
+pub mod agent_grants;
+// K2 presents those held requests as Thread cards (0.46.4).
+pub mod held_cards;
 /// Automatic App box prep through the owner's root helper (0.46.3).
 pub mod auto_prepare;
 /// `k2 app data put`: a workspace's files into an App's data folder.

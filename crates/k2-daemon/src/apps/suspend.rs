@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! POST /cli/app/suspend              {app, reason?}   any Member (an agent: its own workspace's Apps); narrows
-//! POST /cli/app/resume               {app, start?}    the owner (passports refused)
+//! POST /cli/app/resume               {app, start?}    the owner; the App's own agent for a suspension it made, with switch 2
 //! GET  /cli/app/remote-pass          ?app=            the App's remote passes (never the secret)
 //! POST /cli/app/remote-pass/rotate   {app, ttl?, keepOld?}   the owner: a new remote pass, shown once
 //! POST /cli/app/remote-pass/revoke   {app, id?}       any Member; narrows
@@ -156,11 +156,29 @@ fn suspend(who: &Who, body: &[u8]) -> R<J> {
 /// POST `/cli/app/resume {app, start?}`: the owner.
 fn resume(who: &Who, body: &[u8]) -> R<J> {
     need_credential(who)?;
-    if !is_owner(who) {
+    let agent = super::routes::agent_ws(who).is_some();
+    if !is_owner(who) && !agent {
         return Err(owner_only("resumes a suspended App"));
     }
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
+    if agent {
+        // audit-app-agent-access-0464 §4.4: the App's own agent resumes a
+        // suspension it made itself, with "Manage its Apps end to end";
+        // the owner's (or anyone else's) suspension stays the owner's.
+        let by_self = suspended_by(&app.app_id)?.is_some_and(|b| b == actor(who));
+        if !by_self {
+            return Err(owner_only("resumes an App someone else suspended"));
+        }
+        if super::access::agent_level(who) != Some(super::access::Level::Full) {
+            return Err(no(
+                super::egress_routes::codes::OWNER_ONLY,
+                403,
+                "resuming an App you suspended needs \"Manage its Apps end to end\" for this agent (Settings → Workspaces → \
+                 <this agent> → Agent → Apps); otherwise the owner resumes it",
+            ));
+        }
+    }
     if !is_suspended(&app.app_id) {
         return Ok(json!({ "ok": true, "app": app.app_id, "already": "not suspended" }));
     }
@@ -178,7 +196,8 @@ fn resume(who: &Who, body: &[u8]) -> R<J> {
     }
     super::quotas::invalidate(&app.app_id);
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new("app-resume", &by, format!("{} resumed", app.app_id), "cli", "-", "apps"));
-    super::alerts::notify(&app.owner_workspace, &format!("[k2 apps] the owner resumed {}.", app.app_id));
+    let who_resumed = if agent { "its agent" } else { "the owner" };
+    super::alerts::notify(&app.owner_workspace, &format!("[k2 apps] {who_resumed} resumed {}.", app.app_id));
     let mut out = json!({ "ok": true, "app": app.app_id, "suspension": suspension(&app.app_id)? });
     if v.get("start").and_then(J::as_bool) == Some(true) {
         let app = app_for(who, Some(&app.app_id))?;
@@ -193,6 +212,14 @@ fn resume(who: &Who, body: &[u8]) -> R<J> {
         out["hint"] = json!(format!("start it with k2 app start {}", app.app_id));
     }
     Ok(out)
+}
+
+/// Who suspended the App (`apps.suspended_by`: the actor, `agent:<ws>`…).
+fn suspended_by(app_id: &str) -> R<Option<String>> {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    conn.query_row("SELECT suspended_by FROM apps WHERE app_id = ?1", params![app_id], |r| r.get::<_, Option<String>>(0))
+        .map_err(db_err)
 }
 
 // ── remote passes (AR10) ─────────────────────────────────────────────

@@ -333,9 +333,31 @@ fn principal_named(username: &str) -> Result<Option<skin::SkinPrincipal>, CliRes
     skin::list_principals().map(|ps| ps.into_iter().find(|p| p.username == u)).map_err(CliResponse::internal_error)
 }
 
+/// The refusal code for an agent without "Let this agent manage its Apps'
+/// users" on an App-user route ([`is_app_user_route`]; the
+/// `apps.manage-users` wall).
+pub const APP_USERS_OFF: &str = "app_users_off";
+
+/// 403 [`APP_USERS_OFF`]: names the switch and where it lives.
+pub fn app_users_off_response() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": APP_USERS_OFF,
+                "hint": "managing your Apps' users needs \"Let this agent manage its Apps' users\" for this agent (off). Ask your owner to turn it on: Settings → Workspaces → <this agent> → Agent → Apps (or k2 app access <ws> --users on from a terminal outside K2); with permission cards on, run the Ask with: line below. A test guest (k2 app user add <app> <name> --test) is one held request the owner approves from a card on your Thread.",
+            }
+        })
+        .to_string(),
+    }
+}
+
 /// The routes [`agent_scoped`] guards: a guest's password, email, rooms,
 /// lockout, removal and role.
 pub const AGENT_SCOPED_ROUTES: &[&str] = &[
+    "/cli/skin/users/full-name",
     "/cli/skin/users/password",
     "/cli/skin/users/email",
     "/cli/skin/users/rooms",
@@ -651,22 +673,33 @@ pub(crate) fn principal_in_workspace(p: &skin::SkinPrincipal, roles: &[skin::Ski
     tied || skin::creators::workspace_of(&p.id).ok().flatten().as_deref() == Some(ws)
 }
 
-/// 0.46.4 security review: a test guest is the owner's while agent test
-/// guests are parked (`apps::test_guests::AGENTS_MAY_MANAGE`). An agent
-/// that passed the skin-manage gate may not reset its password, change
-/// its email, rooms or role, unlock it or remove it: otherwise it could
-/// sign in as an owner-made test guest through the App's link and use
-/// that guest's role. `None` = go on.
+/// 0.46.4 security review: an owner-made test guest is the owner's. An
+/// agent that passed the skin-manage gate may not reset its password,
+/// change its email, rooms or role, unlock it or remove it: otherwise it
+/// could sign in as that guest through the App's link and use its role.
+/// A test guest the App's own agent made (audit 0.46.4, Rosson 2026-10-26:
+/// "agents must be able to make test users") is that agent's: it is
+/// stamped and tied to the workspace, so the agent sets its password
+/// (`k2 app user password <name> --password-stdin`) and the rest. `None` =
+/// go on.
 fn agent_test_guest_refused(actor: &str, username: &str) -> Option<CliResponse> {
     if !actor_is_agent(actor) || crate::apps::test_guests::AGENTS_MAY_MANAGE {
         return None;
     }
     match principal_named(username) {
         Ok(Some(p)) => match skin::test_guests::get(&p.id) {
-            Ok(Some(_)) => Some(owner_only_with_hint(&format!(
-                "'{}' is a test guest: test guests are the owner's (ask your human: k2 app user … {} --test from a terminal outside K2)",
-                p.username, p.username
-            ))),
+            Ok(Some(t)) => {
+                let made_by = skin::creators::workspace_of(&p.id).ok().flatten();
+                let own = made_by.as_deref() == Some(t.workspace_id.as_str())
+                    && actor == format!("agent:{}", crate::apps::routes::ws_handle(&t.workspace_id));
+                if own {
+                    return None;
+                }
+                Some(owner_only_with_hint(&format!(
+                    "'{}' is a test guest the owner made: it stays the owner's (ask your human: k2 app user … {} --test from a terminal outside K2). Make your own: k2 app user add <app> <name> --test",
+                    p.username, p.username
+                )))
+            }
             Ok(None) => None,
             Err(e) => Some(CliResponse::internal_error(e)),
         },
@@ -2589,20 +2622,24 @@ pub fn owner_only_manage_response() -> CliResponse {
 /// `agent:<handle>` from [`workspace_address_name_shared`]. Never
 /// `"owner"` / `"owner-token"`.
 /// THE gate on an agent managing its own Apps' people (`/cli/skin/users*`:
-/// add, remove, password, email, rooms, unlock, invite), given the agent's
-/// workspace path. Today it is the workspace's skin-manage switch. Rosson
-/// 2026-10-26: App user management gets its own switch,
-/// `apps.manage-users`; the App-grants branch swaps it here, in this one
-/// place. Every agent App-user route reaches it through
-/// `owner_or_skin_manage_hook_scoped` ([`is_app_user_route`]).
+/// add, remove, password, email, full name, rooms, unlock, invite; and
+/// giving them a role), given the agent's workspace path: "Let this agent
+/// manage its Apps' users" (`apps.manage-users`, migration 0225; Rosson
+/// 2026-10-26), its own switch, the owner's both ways. "Build and run
+/// Apps" (the skin-manage switch) keeps roles and App passes. Every agent
+/// App-user route reaches it through `owner_or_skin_manage_hook_scoped`
+/// ([`is_app_user_route`]); without it the answer is
+/// [`app_users_off_response`]. Box (host) logins, other workspaces' guests
+/// and `/cli/users/*` are never an agent's ([`agent_scoped`], the handlers).
 pub fn agent_may_manage_app_users(ws_path: &str) -> bool {
-    k2_core::workspace::settings::agents_can_manage_skin_for_path(ws_path)
+    k2_core::workspace::settings::agents_can_manage_app_users_for_path(ws_path)
 }
 
-/// Is `path` one of the App-user routes [`agent_may_manage_app_users`] gates?
+/// Is `path` one of the App-user routes [`agent_may_manage_app_users`]
+/// gates? The guest routes, and giving a guest a role (0.46.4).
 pub fn is_app_user_route(path: &str) -> bool {
     let p = path.split('?').next().unwrap_or(path);
-    p == "/cli/skin/users" || p.starts_with("/cli/skin/users/")
+    p == "/cli/skin/users" || p.starts_with("/cli/skin/users/") || p == "/cli/skin/roles/assign" || p == "/cli/skin/roles/unassign"
 }
 
 pub fn skin_manage_actor_label(principal: &crate::session_token::HookPrincipal) -> String {

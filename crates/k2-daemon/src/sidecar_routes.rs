@@ -1384,15 +1384,26 @@ fn handle_access(
         && toggle != "app_review"
         && toggle != "db_upgrade"
         && toggle != "permission_cards"
+        && toggle != "app_users"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'gardens_manage', 'permission_cards', 'projects_manage' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'app_users', 'gardens_manage', 'permission_cards', 'projects_manage' or 'vault_manage'",
         ));
     }
     if toggle == "app_core" || toggle == "app_review" {
         return handle_app_core(caller, &v, toggle);
+    }
+    if toggle == "app_users" && !caller_is_owner(caller) {
+        // "Let this agent manage its Apps' users" (0225, Rosson
+        // 2026-10-26): the owner flips it, both ways (an Admin login
+        // can't, a passport never reaches here).
+        return Err(err(
+            "owner_only",
+            403,
+            "only the server's owner turns \"Let this agent manage its Apps' users\" on or off (Settings → Workspaces → <agent> → Agent → Apps)",
+        ));
     }
     if toggle == "compute_manage" && !caller_is_owner(caller) {
         // "Allow managing compute nodes" hands an agent owner verbs (node
@@ -1609,6 +1620,20 @@ fn handle_access(
         return Ok((
             serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "compute_manage", "agentsCanManageCompute": value }),
             format!("ok {} compute_manage={value}", ws.handle),
+        ));
+    }
+    if toggle == "app_users" {
+        // "Let this agent manage its Apps' users" (`apps.manage-users`,
+        // 0225). Default OFF. The single writer; the caller writes the
+        // `agent-access-set` Access Audit line. The agent hears it (a note,
+        // no wake), like the App switches.
+        k2_core::workspace::settings::set_agents_can_manage_app_users(&ws.id, value)
+            .map_err(|e| err("workspace_not_found", 404, e))?;
+        crate::apps::access::tell_agent(&ws.id, &ws.handle, &access_by(caller));
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "app_users", "agentsCanManageAppUsers": value }),
+            format!("ok {} app_users={value}", ws.handle),
         ));
     }
     if toggle == "gardens_manage" {

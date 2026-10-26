@@ -262,6 +262,9 @@ pub const ROUTES: &[Route] = &[
     // owner, or a passport within its own App's grant (handler refuses
     // Admin/Member logins).
     post("/cli/app/grant", Owner),
+    // 0.46.4: copy box logins onto an App (the owner at once; an agent's
+    // passport files one held request: the handler).
+    post("/cli/app/grant/copy-host", Owner),
     post("/cli/app/grant/revoke", Admin),
     get("/cli/app/grants", Member),
     // prd-app-caps-0464-v1 AC4 (0.46.4): reads (the owner, or a passport

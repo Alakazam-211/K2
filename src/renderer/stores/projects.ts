@@ -325,6 +325,11 @@ interface Project {
   // raises, an Admin lowers). Absent on older daemons → off / none.
   agentsCanManageAppsFull?: number
   appCores?: string
+  // "Let this agent manage its Apps' users" (0225, `app_users`; 0/1,
+  // default 0): App users and test guests of its own Apps. Its own switch,
+  // not under switch 1 or 2. Written only via POST /cli/agent-access/set
+  // (the owner, both ways). Absent on older daemons → off.
+  agentsCanManageAppUsers?: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

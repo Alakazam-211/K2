@@ -312,6 +312,8 @@ async fn guests_cannot_write_agent_config_unless_the_owner_opts_in() {
 
         // An agent with "manage Apps" can't set or spread the opt-in.
         k2_core::workspace::settings::set_agents_can_manage_skin(&a.path, true).expect("manage on");
+        // 0.46.4: its App users are their own switch.
+        k2_core::workspace::settings::set_agents_can_manage_app_users(&a.id, true).expect("app users on");
         let hook = mint_passport(&a);
         let owner_only = |r: &Resp, label: &str| {
             assert_eq!(r.status, 403, "{label}; {}", r.body);

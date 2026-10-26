@@ -5,7 +5,7 @@
 // this file reads that truth and sends the person's gestures to the
 // window's server (`primaryScope()`).
 //
-//   POST /cli/agent-access/set {workspace, toggle: apps_build|apps_manage_full, value}
+//   POST /cli/agent-access/set {workspace, toggle: apps_build|apps_manage_full|app_users, value}
 //   POST /cli/agent-access/set {workspace, toggle: app_core, core, value}
 //   POST /cli/agent-access/set {workspace, toggle: app_review, value: false}
 //   GET  /cli/app/list?box=1            every App with its maintaining agent
@@ -74,9 +74,22 @@ export function lockedReason(role: ViewerRole | null, on: boolean): string | nul
   return 'Only the server’s owner or an admin can change this'
 }
 
+/** "Let this agent manage its Apps' users" (0225): the owner both ways
+ *  (an Admin may not turn it off either). */
+export function canSetUsers(role: ViewerRole | null, current: boolean, next: boolean): boolean {
+  return current !== next && role === 'owner'
+}
+
+/** Why the users switch is shown but can't be used, or null. */
+export function lockedUsersReason(role: ViewerRole | null): string | null {
+  if (role === 'owner') return null
+  if (role === null) return 'Checking your role on this server'
+  return 'Only the server’s owner can change this'
+}
+
 export async function setAppSwitch(
   workspace: string,
-  toggle: 'apps_build' | 'apps_manage_full',
+  toggle: 'apps_build' | 'apps_manage_full' | 'app_users',
   value: boolean,
 ): Promise<unknown> {
   return daemonCliPost<unknown>(primaryScope(), 'agent-access/set', { workspace, toggle, value })

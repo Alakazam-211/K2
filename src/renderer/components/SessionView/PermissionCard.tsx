@@ -262,7 +262,7 @@ export function PermissionNoteBox({
   )
 }
 
-type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm' }
+type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string }
 
 /** The vault confirm actions a permission card may ask for (§17.4). */
 function confirmActionOf(action: string | undefined): 'app-approve' | 'node-admin' | null {
@@ -275,10 +275,13 @@ function AnswerControls({
   item,
   actions,
   batchItem,
+  always = false,
 }: {
   item: PermissionItem
   actions: PermissionCardActions
   batchItem: boolean
+  /** The daemon offers "Always allow" on this card. */
+  always?: boolean
 }): JSX.Element {
   const [step, setStep] = useState<Step>({ kind: 'idle' })
   const [reason, setReason] = useState('')
@@ -307,7 +310,7 @@ function AnswerControls({
           action={confirmAction}
           secretId={item.proof.secretId}
           label={item.setting || item.action}
-          onToken={(token) => void send({ answer: PERMISSION_LABEL.allow, confirmToken: token })}
+          onToken={(token) => void send({ answer: step.answer, confirmToken: token })}
           onCancel={() => setStep({ kind: 'idle' })}
         />
         <ErrorLine text={error} />
@@ -350,8 +353,20 @@ function AnswerControls({
           testId="permission-allow"
           primary
           disabled={busy || (confirm && !canConfirmHere)}
-          onClick={() => (confirm ? setStep({ kind: 'confirm' }) : void send({ answer: PERMISSION_LABEL.allow }))}
+          onClick={() =>
+            confirm ? setStep({ kind: 'confirm', answer: PERMISSION_LABEL.allow }) : void send({ answer: PERMISSION_LABEL.allow })
+          }
         />
+        {always && (
+          <CardButton
+            label={PERMISSION_LABEL.always}
+            testId="permission-always"
+            disabled={busy || (confirm && !canConfirmHere)}
+            onClick={() =>
+              confirm ? setStep({ kind: 'confirm', answer: PERMISSION_LABEL.always }) : void send({ answer: PERMISSION_LABEL.always })
+            }
+          />
+        )}
         <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
       </div>
       {confirm && !canConfirmHere && (
@@ -432,7 +447,9 @@ function ItemOutcome({
   nowSec,
   batchItem,
   offered = true,
+  always = false,
 }: {
+  always?: boolean
   item: PermissionItem
   viewer: PermissionViewer
   agent: string
@@ -463,7 +480,7 @@ function ItemOutcome({
     }
     if (!offered) return null
     return actions ? (
-      <AnswerControls item={item} actions={actions} batchItem={batchItem} />
+      <AnswerControls item={item} actions={actions} batchItem={batchItem} always={always} />
     ) : (
       <Muted testId="permission-answer-elsewhere">Answer this in the agent’s Thread.</Muted>
     )
@@ -559,6 +576,7 @@ export function PermissionCard({ view, resultMessage, from, actions, options, no
         nowSec={now}
         batchItem={false}
         offered={offered}
+        always={options?.some((o) => o.label === PERMISSION_LABEL.always) ?? false}
       />
       {expiry && <Muted testId="permission-expiry">{expiry}</Muted>}
       {approver && <SettingsLink item={view} actions={actions} />}

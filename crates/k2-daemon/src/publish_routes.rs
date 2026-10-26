@@ -528,6 +528,38 @@ fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
     let target = opt_param(params, "target");
     let transfer = boolish(params, &["transfer"]);
     let label_lc = label.trim().to_ascii_lowercase();
+    // audit-app-agent-access-0464 fix 3: an agent never claims a hostname
+    // that already serves something on this box while no workspace holds
+    // it and nothing of its own names it: that is a held `label_transfer`
+    // with a card for the owner (`apps::agent_grants`).
+    if !release_check && !transfer && agent_claim_needs_owner(&label_lc, &project_id) {
+        if boolish(params, &["check"]) {
+            return CliResponse {
+                status: "409 Conflict",
+                content_type: "application/json",
+                body: serde_json::json!({
+                    "code": "label_needs_owner",
+                    "error": format!("label_needs_owner: '{label_lc}' already serves something on this box and no workspace holds it."),
+                    "hint": format!("k2 publish subdomain claim {label_lc} files a request for the owner (a card on your Thread)."),
+                    "label": label_lc,
+                })
+                .to_string(),
+            };
+        }
+        let who = crate::apps::routes::Who::Agent {
+            project_id: project_id.clone(),
+            session_id: String::new(),
+        };
+        return crate::apps::routes::respond(crate::apps::agent_grants::label_transfer_held(
+            &who,
+            &project_id,
+            None,
+            &label_lc,
+            "claim",
+            None,
+            opt_param(params, "reason").as_deref(),
+        ));
+    }
     if boolish(params, &["check"]) {
         return match label_owner::check(&label, &project_id, transfer) {
             Ok(decision) => CliResponse::ok_json(
@@ -558,6 +590,24 @@ fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
         }
         Err(r) => r.into_response(),
     }
+}
+
+/// An agent's claim the owner decides (audit fix 3): the caller is an
+/// agent passport, no workspace holds `label`, the hostname already
+/// serves something on this box (the control plane's map), and no
+/// published service of `project_id` has that name.
+fn agent_claim_needs_owner(label: &str, project_id: &str) -> bool {
+    if label_owner::current() != label_owner::Caller::Agent {
+        return false;
+    }
+    if !k2_core::tunnel::subdomains::current().targets.contains_key(label) {
+        return false;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let held = k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, label).ok().flatten().is_some();
+    let ours = k2_core::published_services::get_by_project_name(&conn, project_id, label).ok().flatten().is_some();
+    !held && !ours
 }
 
 /// POST /cli/publish/subdomain/unclaim — drop THIS workspace's sticker.

@@ -356,13 +356,17 @@ pub(crate) fn tell_agent(ws_id: &str, handle: &str, by: &str) {
     let cores: Vec<String> = ticked.iter().map(|c| core_name(c).to_string()).collect();
     let later = ticked.iter().any(|c| !super::cores::enforced(c));
     let text = format!(
-        "Your App access changed: Build and run Apps {}, manage them end to end {}; cores: {} (by {by}).\n\n\
-         With Build and run Apps you build, install, deploy, run and uninstall your own Apps; with manage end to end you \
-         also raise their budgets, quotas, egress hosts, box services and keys yourself. A ticked core lets your Apps use \
-         that core inside their own slice without waiting for the owner. Anything that loosens an App's wall still waits \
-         for the owner in person.{} Check with k2 app access {handle}.",
+        "Your App access changed: Build and run Apps {}, manage them end to end {}, manage their users {}; cores: {} (by {by}).\n\n\
+         With Build and run Apps you build, install, deploy, run and uninstall your own Apps and edit their roles and App \
+         passes; with manage end to end you also raise their budgets, quotas, egress hosts, box services and keys, resume an \
+         App you suspended, send push and move your own labels yourself; with manage their users you add and remove their \
+         App users and test guests, set passwords, email and names, unlock them, give roles and your own room, invite \
+         people and give your App the guests-rooms grant in your own room. A ticked core lets your Apps use that core \
+         inside their own slice without waiting for the owner. Anything that loosens an App's wall still waits for the \
+         owner in person.{} Check with k2 app access {handle}.",
         on_off(now >= Level::Build),
         on_off(now == Level::Full),
+        on_off(k2_core::workspace::settings::agents_can_manage_app_users(ws_id)),
         if cores.is_empty() { "none".to_string() } else { cores.join(", ") },
         if later { " Mail and Sew take effect when App mail and Sew for Apps land." } else { "" },
     );

@@ -5517,6 +5517,47 @@ pub fn copy_host_grants_to_app_in(
     Ok(report)
 }
 
+/// Why [`copy_host_grants_to_app_expect`] wrote nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CopyHostExpectError {
+    /// The box logins it would copy now aren't the ones expected (sorted).
+    Changed { now: Vec<String> },
+    /// A store error.
+    Store(String),
+}
+
+/// [`copy_host_grants_to_app_in`], but only when the box logins it would
+/// copy are exactly `expected` (any order): the comparison and the write
+/// are one transaction, so a permission card approves exactly the logins
+/// it showed. Anything else writes nothing ([`CopyHostExpectError::Changed`]).
+pub fn copy_host_grants_to_app_expect(
+    app: &str,
+    app_workspace: Option<&str>,
+    created_by: &str,
+    expected: &[String],
+) -> Result<CopyHostReport, CopyHostExpectError> {
+    let app = app.trim().to_string();
+    let mut want: Vec<String> = expected.iter().map(|u| u.trim().to_ascii_lowercase()).filter(|u| !u.is_empty()).collect();
+    want.sort();
+    want.dedup();
+    let report = with_conn(|conn| {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("skin copy host begin: {e}"))?;
+        let mut now = copy_host_to_app_tx(&tx, &app, app_workspace, created_by, true)?.added;
+        now.sort();
+        if now != want {
+            return Ok(Err(now));
+        }
+        let report = copy_host_to_app_tx(&tx, &app, app_workspace, created_by, false)?;
+        tx.commit().map_err(|e| format!("skin copy host commit: {e}"))?;
+        Ok(Ok(report))
+    })
+    .map_err(CopyHostExpectError::Store)?
+    .map_err(|now| CopyHostExpectError::Changed { now })?;
+    audit_copy_host_report("app_grant_copy_host", created_by, &report);
+    members::changed(None);
+    Ok(report)
+}
+
 /// True until the one-time `--skin` App backfill (S24-10) has run.
 pub fn skin_app_backfill_pending() -> Result<bool, String> {
     with_conn(|conn| {

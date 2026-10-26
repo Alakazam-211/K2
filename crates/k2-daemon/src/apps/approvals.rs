@@ -608,8 +608,15 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
             if route == super::move_plan::APPLY_ROUTE {
                 return super::move_plan::apply(r, by);
             }
+            // 0.46.4: an agent's App-grant owner steps (copy-host, the
+            // guests-rooms grant, a label transfer), run as the owner with
+            // exactly the values the request showed.
+            if let Some(done) = super::agent_grants::apply(r, by) {
+                return done;
+            }
             let route = MANAGE_HELD
                 .iter()
+                .chain(std::iter::once(&super::agent_grants::TEST_GUEST_ADD))
                 .find(|p| **p == route)
                 .ok_or_else(|| no(dcodes::BAD_REQUEST, 400, format!("'{route}' is not a held App change")))?;
             // An agent's request replays as that agent. A person's (the
@@ -625,7 +632,19 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
             };
             let body = r.body.get("body").cloned().unwrap_or_else(|| json!({}));
             let resp = with_manage_approved(|| super::routes::handle(route, who, body.to_string().as_bytes(), &HashMap::new()));
-            let v: J = serde_json::from_str(&resp.body).unwrap_or(J::Null);
+            let mut v: J = serde_json::from_str(&resp.body).unwrap_or(J::Null);
+            if *route == super::agent_grants::TEST_GUEST_ADD {
+                // Never kept with the request (Settings and the audit show
+                // it): the agent sets the test guest's password itself.
+                if let Some(o) = v.as_object_mut() {
+                    if o.remove("password").is_some() {
+                        o.insert(
+                            "passwordNote".into(),
+                            json!("not kept: the agent sets it with k2 app user password <name> --password-stdin"),
+                        );
+                    }
+                }
+            }
             if resp.status.starts_with('2') {
                 Ok(json!({ "applied": route, "status": resp.status, "answer": v }))
             } else {

@@ -1553,6 +1553,10 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // `dual`). Empty until the owner starts a `k2 db upgrade --live`.
         // After 0217. The store is `k2-daemon` `sql::pgmove::dual`.
         ("0222_pg_dual_runs", include_str!("../../drizzle_sql/0222_pg_dual_runs.sql")),
+        // 0225 — "Let this agent manage its Apps' users" (`apps.manage-users`,
+        // Rosson 2026-10-26): `projects.agents_can_manage_app_users`, DEFAULT
+        // 0. Additive. 0224 is reserved for compute rollouts.
+        ("0225_app_users_switch", include_str!("../../drizzle_sql/0225_app_users_switch.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2216,7 +2220,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0222_pg_dual_runs",
+            last_name, "0225_app_users_switch",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2284,6 +2288,8 @@ mod tests {
                 "0223_folder_trust",
                 // 0.46.4: live dual-run of one database (after 0217).
                 "0222_pg_dual_runs",
+                // 0.46.4: "Let this agent manage its Apps' users".
+                "0225_app_users_switch",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2359,6 +2365,8 @@ mod tests {
                 "0223_folder_trust",
                 // 0.46.4: live dual-run of one database (after 0217).
                 "0222_pg_dual_runs",
+                // 0.46.4: "Let this agent manage its Apps' users".
+                "0225_app_users_switch",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2585,10 +2593,12 @@ mod tests {
         conn.execute("INSERT INTO projects (id, name, path) VALUES ('p-old', 'old', '/tmp/p-old')", []).unwrap();
 
         run_migrations(&conn).unwrap();
-        let last: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(last, "0222_pg_dual_runs", "0222 runs last on a 0.46.3 database");
+        let last: String = conn
+            .query_row("SELECT name FROM _migrations WHERE name != '0225_app_users_switch' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(last, "0222_pg_dual_runs", "0222 runs last of the 0.46.3 tail (then 0225)");
         let before_last: String = conn
-            .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1 OFFSET 1", [], |r| r.get(0))
+            .query_row("SELECT name FROM _migrations WHERE name != '0225_app_users_switch' ORDER BY id DESC LIMIT 1 OFFSET 1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(before_last, "0223_folder_trust", "0223 runs after 0217, before 0222");
         let tail: Vec<String> = {
@@ -2597,7 +2607,7 @@ mod tests {
         };
         assert_eq!(
             tail,
-            vec!["0220_jobs", "0221_app_rehost", "0217_app_resource_samples", "0223_folder_trust", "0222_pg_dual_runs"],
+            vec!["0220_jobs", "0221_app_rehost", "0217_app_resource_samples", "0223_folder_trust", "0222_pg_dual_runs", "0225_app_users_switch"],
             "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, then 0222)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
@@ -3335,7 +3345,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0222 (live dual-runs, 0.46.4) is the newest: its record goes
+            // 0225 (the App users switch, 0.46.4) is the newest: its column
+            // and record go.
+            conn.execute_batch("ALTER TABLE projects DROP COLUMN agents_can_manage_app_users;").unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0225_app_users_switch'", []).unwrap();
+            // 0222 (live dual-runs, 0.46.4) came before it: its record goes
             // (its table and index are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0222_pg_dual_runs'", []).unwrap();
             // 0223 (folder-trust decisions, 0.46.4) came before it: its record

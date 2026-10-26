@@ -745,11 +745,13 @@ async fn refused_gateway_calls_carry_their_code_and_reach_the_apps_log() {
     k2_daemon::apps::alerts::set_sink(None);
 }
 
-/// B: test guests are a person's to make (agent test guests are parked,
-/// Rosson 2026-10-24): one App's only, its own roles, a short life, at
-/// most 5, shown as test, audited; they sign in only through that App's
-/// link. An agent passport is refused `owner_only` on add and remove,
-/// with the not-requestable teaching line while permission cards are on.
+/// B: test guests: one App's only, its own roles, a short life, at most
+/// 5, shown as test, audited; they sign in only through that App's link.
+/// The App's own agent makes them with "Let this agent manage its Apps'
+/// users" (0225, Rosson 2026-10-26); without it, one held request the
+/// owner approves (the replay ties the guest, keeps no password). It
+/// never touches an owner-made test guest; another workspace's agent
+/// never sees the App.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     let env = setup(&[]);
@@ -796,23 +798,42 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     let r = add(OWNER.to_string(), json!({"app": "tgapp", "username": "qa6"})).await;
     assert_eq!((r.status, r.code()), (409, "too_many_test_guests".to_string()), "{}", r.body);
 
-    // Agents make no guests (parked): not the App's own agent with "Build
-    // and run Apps" on, not another workspace's; the same code either way
-    // (nothing said about whose App it is). Below the cap first, so the
-    // refusal is the agent's, not the cap's.
+    // The App's own agent with "Build and run Apps" only (its Apps' users
+    // are off): one held request for the owner, nothing made yet, and the
+    // password it sent is never kept with the request. Below the cap first.
     let r = post(d.port, "/cli/app/test-guest/rm", OWNER, json!({"username": "qa5"})).await;
     assert_eq!((r.status, r.json()["removed"].clone()), (200, json!(true)), "{}", r.body);
+    allow_build_only(&ws, true);
+    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa-agent", "password": "never-kept-pw-1"})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
+    assert!(!r.body.contains("never-kept-pw-1"), "the password is never kept with the request: {}", r.body);
+    assert!(r.json()["hint"].as_str().expect("hint").contains("Let this agent manage its Apps' users"), "{}", r.body);
+    let held = r.json()["request"]["id"].as_str().expect("request id").to_string();
+    assert!(k2_core::skin::list_principals().unwrap().iter().all(|p| p.username != "qa-agent"), "nothing before the owner says yes");
+    // Another workspace's agent never sees the App, whatever its switches.
     allow_manage(&other, true);
-    for (who, label) in [(agent.clone(), "the App's own agent"), (passport(&other), "another workspace's agent")] {
-        let r = add(who.clone(), json!({"app": "tgapp", "username": "qa-agent"})).await;
-        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{label} add: {}", r.body);
-        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("only a person makes or removes guests"), "{label}: {}", r.body);
-        let r = post(d.port, "/cli/app/test-guest/rm", &who, json!({"username": "qa1"})).await;
-        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{label} rm: {}", r.body);
-    }
-    // Nor through the guest roster (the skin-manage switch is on): the
-    // agent can't reset an owner-made test guest's password and sign in
-    // as it, or change its email, rooms or role, unlock or remove it.
+    let r = add(passport(&other), json!({"app": "tgapp", "username": "qa-other"})).await;
+    assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
+    let r = post(d.port, "/cli/app/test-guest/rm", &passport(&other), json!({"username": "qa1"})).await;
+    assert_eq!((r.status, r.code()), (404, "not_a_test_guest".to_string()), "{}", r.body);
+    // An agent never approves its own request; the owner does, in person:
+    // the agent's call runs as the agent (every rule again), tied, and no
+    // password is kept in the result.
+    let r = post(d.port, "/cli/app/approve", &agent, json!({"request": held, "confirmToken": confirm("app-approve", &held)})).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": held, "confirmToken": confirm("app-approve", &held)})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (200, json!("approved")), "{}", r.body);
+    assert!(r.json()["result"]["answer"].get("password").is_none(), "no password kept: {}", r.body);
+    let qa_agent = k2_core::skin::list_principals().unwrap().into_iter().find(|p| p.username == "qa-agent").expect("made on approval");
+    assert_eq!(k2_core::skin::creators::agent_tie(&qa_agent.id).unwrap().as_deref(), Some(ws.id.as_str()), "tied to the agent");
+    // Through the guest roster the agent needs its users switch; then it
+    // sets its own test guest's password, never an owner-made one's (it
+    // could sign in as that guest and use its role).
+    let r = post(d.port, "/cli/skin/users/password", &agent, json!({"username": "qa-agent", "password": "agent-chosen-pw-1"})).await;
+    assert_eq!((r.status, r.code()), (403, "app_users_off".to_string()), "{}", r.body);
+    allow_manage(&ws, true);
+    let r = post(d.port, "/cli/skin/users/password", &agent, json!({"username": "qa-agent", "password": "agent-chosen-pw-1"})).await;
+    assert_eq!(r.status, 200, "its own test guest: {}", r.body);
     let ws_handle = ws.handle.clone();
     for (path, body) in [
         ("/cli/skin/users/password", json!({"username": "qa1", "password": "agent-chosen-pw-1"})),
@@ -825,36 +846,24 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     ] {
         let r = post(d.port, path, &agent, body).await;
         assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{path}: {}", r.body);
-        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("is a test guest"), "{path}: {}", r.body);
+        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("is a test guest the owner made"), "{path}: {}", r.body);
     }
-    // With permission cards on for the agent, the refusal says it can't be
-    // requested (a person does it), and is otherwise the same.
-    k2_core::permission::gate::set_server_switch(true);
-    {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let n = conn.execute("UPDATE projects SET agents_can_request_permissions = 1 WHERE id = ?1", [&ws.id]).expect("agent switch");
-        assert_eq!(n, 1);
-    }
-    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa-agent"})).await;
-    k2_core::permission::gate::set_server_switch(false);
-    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
-    assert_eq!(r.json()["permission"]["requestable"], json!(false), "not requestable: {}", r.body);
-    assert!(r.json()["permission"].get("command").is_none(), "no Ask-with command: {}", r.body);
-    // Nothing was made by any of it.
+    // The cap holds for the agent too (qa1–qa4 and qa-agent).
+    let r = add(agent.clone(), json!({"app": "tgapp", "username": "qa-six"})).await;
+    assert_eq!((r.status, r.code()), (409, "too_many_test_guests".to_string()), "{}", r.body);
+    // The list: the owner's four and the agent's one.
     let r = get(d.port, "/cli/app/test-guests", OWNER, "app=tgapp").await;
     assert_eq!(r.status, 200, "{}", r.body);
     let mut names: Vec<String> =
         r.json()["testGuests"].as_array().expect("testGuests").iter().map(|t| t["username"].as_str().expect("username").to_string()).collect();
     // Listed oldest first; guests made in the same second tie on time.
     names.sort();
-    assert_eq!(names, ["qa1", "qa2", "qa3", "qa4"], "{}", r.body);
-    assert!(k2_core::skin::list_principals().unwrap().iter().all(|p| p.username != "qa-agent"), "no guest from an agent");
+    assert_eq!(names, ["qa-agent", "qa1", "qa2", "qa3", "qa4"], "{}", r.body);
     // The App's own agent may read the list; another workspace's agent
     // never sees the App.
     let r = get(d.port, "/cli/app/test-guests", &agent, "app=tgapp").await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(r.json()["testGuests"].as_array().expect("testGuests").len(), 4, "{}", r.body);
+    assert_eq!(r.json()["testGuests"].as_array().expect("testGuests").len(), 5, "{}", r.body);
     let r = get(d.port, "/cli/app/test-guests", &passport(&other), "app=tgapp").await;
     assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
 
@@ -892,7 +901,10 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     let r = post(d.port, "/cli/app/test-guest/rm", OWNER, json!({"username": "qa4"})).await;
     assert_eq!((r.status, r.json()["removed"].clone()), (200, json!(true)), "{}", r.body);
     let r = get(d.port, "/cli/app/test-guests", OWNER, "app=tgapp").await;
-    assert_eq!(r.json()["testGuests"].as_array().expect("testGuests").len(), 3, "{}", r.body);
+    assert_eq!(r.json()["testGuests"].as_array().expect("testGuests").len(), 4, "{}", r.body);
+    // The agent removes its own test guest (removing narrows).
+    let r = post(d.port, "/cli/app/test-guest/rm", &agent, json!({"username": "qa-agent"})).await;
+    assert_eq!((r.status, r.json()["removed"].clone()), (200, json!(true)), "{}", r.body);
     // A real guest is never "removed" as a test guest.
     k2_core::skin::add_principal_for_app("realguest", None, &svc, None, "owner").unwrap();
     let r = post(d.port, "/cli/app/test-guest/rm", OWNER, json!({"username": "realguest"})).await;
@@ -907,7 +919,7 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
             .filter(|a| a.event == "test_guest_add")
             .count()
     };
-    assert_eq!(adds, 5);
+    assert_eq!(adds, 6);
     gateway::close("tgapp", None, true);
     gateway::close("tgotherapp", None, true);
     k2_daemon::apps::alerts::set_sink(None);

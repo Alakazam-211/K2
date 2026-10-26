@@ -12,6 +12,17 @@
 //!   a held `manage` request). The legacy service must be the same
 //!   workspace's: a label another workspace holds is refused (that is the
 //!   owner's hand-over, `k2 app handover` / `--transfer`), never moved here.
+//! - **An agent's label** ([`agent_scope`], audit-app-agent-access-0464
+//!   §4, Rosson 2026-10-26): a label counts as the workspace's when the
+//!   0074 row says so, or when no workspace holds it and the workspace's
+//!   own records name it (its `--cmd` service of that name for take, its
+//!   App's taken label for return). Then switch 1 moves it, and K2 first
+//!   stamps the label to the workspace (audited), so the hostname step
+//!   knows it's its own. A label another workspace holds is a held
+//!   `label_transfer` request with a card for the owner
+//!   (`super::agent_grants`); the approval moves it as the owner (an
+//!   audited transfer), only while the holder is still the one the
+//!   request named ([`apply_transfer`]).
 //! - **Take:** refused unless the App is healthy (running, a live instance,
 //!   its front port answering). One control-plane write points the label
 //!   at the App's front port (the same hostname: no DNS change). The legacy
@@ -58,7 +69,7 @@ pub(super) fn cfg_lock(app_id: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
 }
 
 /// The workspace a nested label is attributed to (the 0074 row).
-pub(super) fn holder_of(label: &str) -> R<Option<String>> {
+pub(crate) fn holder_of(label: &str) -> R<Option<String>> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, label).map_err(db_err)
@@ -129,20 +140,140 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8]) -> R<J> {
     let label = s(&v, "label")
         .map(|l| l.to_ascii_lowercase())
         .ok_or_else(|| no(codes::BAD_REQUEST, 400, "label is required (the legacy service's publish name)"))?;
+    let is_take = match path {
+        "/cli/app/label/take" => true,
+        "/cli/app/label/return" => false,
+        _ => return Err(no("not_found", 404, "no such App route")),
+    };
     let lock = cfg_lock(&app.app_id);
     let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
-    match path {
-        "/cli/app/label/take" => take(who, &app, &label),
-        "/cli/app/label/return" => give_back(who, &app, &label),
-        _ => Err(no("not_found", 404, "no such App route")),
+    if super::routes::agent_ws(who).is_some() && !super::approvals::manage_approved_now() {
+        if let Some(held) = agent_scope(who, &app, &label, is_take)? {
+            return Ok(held);
+        }
     }
+    if is_take {
+        take(who, &app, &label, false)
+    } else {
+        give_back(who, &app, &label, false)
+    }
+}
+
+/// `take` / `return` for a card's words and values.
+pub(crate) fn move_word(is_take: bool) -> &'static str {
+    if is_take {
+        "take"
+    } else {
+        "return"
+    }
+}
+
+/// Do the App's workspace's own records name `label` for this move: its
+/// `--cmd` service of that name (take), or its App's taken label (return)?
+pub(crate) fn ours(app: &AppRow, label: &str, is_take: bool) -> R<bool> {
+    if is_take {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        return Ok(ps::get_by_project_name(&conn, &app.owner_workspace, label).map_err(db_err)?.is_some_and(|r| super::legacy::is_legacy(&r)));
+    }
+    Ok(load_cfg(&app.app_id)?.labels.iter().any(|l| l.label == label))
+}
+
+/// What the card's `holder=` says: the holding workspace's handle, or
+/// `none`.
+pub(crate) fn holder_word(holder: Option<&str>) -> String {
+    holder.map(super::routes::ws_handle).unwrap_or_else(|| "none".to_string())
+}
+
+/// An agent's label move (see the module doc). `Ok(None)` = go on (the
+/// move's own checks still run); `Ok(Some(held))` = a held transfer.
+fn agent_scope(who: &Who, app: &AppRow, label: &str, is_take: bool) -> R<Option<J>> {
+    let ws = app.owner_workspace.as_str();
+    let holder = holder_of(label)?;
+    if holder.as_deref() == Some(ws) || !ours(app, label, is_take)? {
+        // Its own label, or nothing of its own to move: the move's own
+        // answer (404, another workspace's service…).
+        return Ok(None);
+    }
+    match holder {
+        Some(other) => super::agent_grants::label_transfer_held(who, ws, Some(app), label, move_word(is_take), Some(&other), None).map(Some),
+        None => {
+            // Its own records name it and no workspace holds it: stamp it
+            // to this workspace first (audit fix 2).
+            let stamped = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::db::schema::SubdomainWorkspace::self_stamp(&conn, label, ws, None).map_err(db_err)?
+            };
+            match stamped {
+                k2_core::db::schema::SelfStamp::Written => {
+                    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                        "label-claim",
+                        &super::routes::actor(who),
+                        format!(
+                            "ok label={label} to={ws} (no workspace held it; its {} for App {})",
+                            if is_take { "--cmd service" } else { "taken label" },
+                            app.app_id
+                        ),
+                        "-",
+                        "-",
+                        "cli",
+                    ));
+                    Ok(None)
+                }
+                k2_core::db::schema::SelfStamp::Foreign { owner } => {
+                    super::agent_grants::label_transfer_held(who, ws, Some(app), label, move_word(is_take), Some(&owner), None).map(Some)
+                }
+            }
+        }
+    }
+}
+
+/// An approved `label_transfer` (`agent_grants::apply`): only while the
+/// label's holder is still the one the request named, then the move as
+/// the owner who approved it (an audited transfer).
+pub(crate) fn apply_transfer(b: &J, ws: &str, by: &str) -> R<J> {
+    let label = b["label"].as_str().ok_or_else(|| no(codes::BAD_REQUEST, 400, "unreadable label transfer"))?.to_string();
+    let move_ = b["move"].as_str().unwrap_or_default();
+    let named = b["holder"].as_str().map(str::to_string);
+    let now = holder_of(&label)?;
+    if now != named && now.as_deref() != Some(ws) {
+        return Err(no(
+            "holder_changed",
+            409,
+            format!("{label} is held by {} now, not {}: nothing moved; ask again", holder_word(now.as_deref()), holder_word(named.as_deref())),
+        ));
+    }
+    let transfer = now.as_deref().is_some_and(|h| h != ws);
+    let who = Who::Owner;
+    let caller = crate::label_owner::Caller::Manager { actor: by.to_string() };
+    if move_ == "claim" {
+        return crate::label_owner::with_caller(caller, || {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let decision = crate::label_owner::decide(&conn, &label, ws, transfer, &crate::label_owner::current())
+                .map_err(|r| no(LABEL_FOREIGN, 409, r.message()))?;
+            crate::label_owner::apply(&conn, &label, ws, None, &decision, &crate::label_owner::current())
+                .map_err(|r| no(LABEL_FOREIGN, 409, r.message()))?;
+            Ok(json!({ "ok": true, "label": label, "workspace": ws, "transferred": transfer }))
+        });
+    }
+    let app_id = b["app"].as_str().ok_or_else(|| no(codes::BAD_REQUEST, 400, "the label transfer names no App"))?;
+    let app = super::routes::app_for(&who, Some(app_id))?;
+    if app.owner_workspace != ws {
+        return Err(no(codes::FORBIDDEN, 409, format!("App {app_id} belongs to another workspace now: ask again")));
+    }
+    let is_take = move_ != "return";
+    let lock = cfg_lock(&app.app_id);
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    crate::label_owner::with_caller(caller, || if is_take { take(&who, &app, &label, transfer) } else { give_back(&who, &app, &label, transfer) })
 }
 
 pub(super) fn accepts(port: u16) -> bool {
     port != 0 && std::net::TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_millis(800)).is_ok()
 }
 
-pub(super) fn load_cfg(app_id: &str) -> R<appcfg::AppConfig> {
+pub(crate) fn load_cfg(app_id: &str) -> R<appcfg::AppConfig> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     appcfg::load(&conn, app_id).map_err(db_err)
@@ -170,11 +301,17 @@ pub(super) fn audit(app_id: &str, event: &str, by: &str, payload: J) {
 /// Point `label` at `port` (one control-plane write; the label's owner is
 /// checked first by `attach_hostname`).
 pub(super) fn point(project_id: &str, label: &str, port: u16) -> Result<(), String> {
+    point_with(project_id, label, port, false)
+}
+
+/// [`point`], as an owner/admin transfer when `transfer` (audited by
+/// `label_owner`; refused for anyone else).
+pub(super) fn point_with(project_id: &str, label: &str, port: u16, transfer: bool) -> Result<(), String> {
     let cfg = k2_core::tunnel::config::load().map_err(|e| format!("the tunnel config: {e}"))?;
     if cfg.token.trim().is_empty() {
         return Err("this server has no K2 Connect tunnel token".into());
     }
-    crate::publish_runtime::attach_hostname(project_id, label, port, &cfg.token, &cfg.subdomain, false)
+    crate::publish_runtime::attach_hostname(project_id, label, port, &cfg.token, &cfg.subdomain, transfer)
 }
 
 /// The App answers: running, a live instance, its front port accepting.
@@ -213,7 +350,7 @@ pub(super) fn foreign_refusal(label: &str, holder: &str) -> Refusal {
     r
 }
 
-fn take(who: &Who, app: &AppRow, label: &str) -> R<J> {
+fn take(who: &Who, app: &AppRow, label: &str, transfer: bool) -> R<J> {
     let ws = app.owner_workspace.clone();
     let row = {
         let db = k2_core::db::shared();
@@ -257,14 +394,14 @@ fn take(who: &Who, app: &AppRow, label: &str) -> R<J> {
             format!("{why}: deploy it and wait until it's live before it takes '{label}' (k2 app deployment {} ; k2 app logs {})", app.app_id, app.app_id),
         )
     })?;
-    crate::label_owner::check(label, &ws, false).map_err(|r| {
+    crate::label_owner::check(label, &ws, transfer).map_err(|r| {
         let mut out = no(LABEL_FOREIGN, 403, r.message());
         if let Some(o) = r.body.get("owner") {
             out.extra = Some(json!({ "owner": o }));
         }
         out
     })?;
-    point(&ws, label, front).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves the legacy service: {e}")))?;
+    point_with(&ws, label, front, transfer).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves the legacy service: {e}")))?;
     // Unrouted: the legacy service runs on, and a restart of it never
     // points the label back.
     {
@@ -299,7 +436,7 @@ fn take(who: &Who, app: &AppRow, label: &str) -> R<J> {
     }))
 }
 
-fn give_back(who: &Who, app: &AppRow, label: &str) -> R<J> {
+fn give_back(who: &Who, app: &AppRow, label: &str, transfer: bool) -> R<J> {
     let mut cfg = load_cfg(&app.app_id)?;
     let Some(i) = cfg.labels.iter().position(|l| l.label == label) else {
         return Err(no(NOT_TAKEN, 404, format!("{} doesn't serve '{label}' (k2 app label take {} {label} moved one)", app.app_id, app.app_id)));
@@ -315,7 +452,7 @@ fn give_back(who: &Who, app: &AppRow, label: &str) -> R<J> {
     if !accepts(port) {
         return Err(no(LEGACY_DOWN, 409, format!("'{label}' isn't answering on port {port}: start it first (k2 publish start {label}), then move the label back")));
     }
-    point(&app.owner_workspace, label, port).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves {}: {e}", app.app_id)))?;
+    point_with(&app.owner_workspace, label, port, transfer).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves {}: {e}", app.app_id)))?;
     {
         let db = k2_core::db::shared();
         let conn = db.lock();

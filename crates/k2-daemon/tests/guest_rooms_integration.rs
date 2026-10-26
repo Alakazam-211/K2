@@ -82,7 +82,7 @@ async fn an_app_sets_its_own_guests_rooms_without_the_owner_token() {
     // An agent can't grant its own App; the owner can.
     let agent = passport(&own);
     let r = post(port, "/cli/app/grant", &agent, json!({ "app": svc, "kind": "guests-rooms", "rooms": [acme.handle] })).await;
-    assert_ne!(r.status, 200, "an agent never grants: {}", r.body);
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "another workspace's room: a held request: {}", r.body);
     assert!(k2_core::skin::guest_rooms::get_grant(&svc).unwrap().is_none());
     let r = get(port, "/cli/app/grant", OWNER, "").await;
     assert_eq!(r.status, 405, "POST only: {}", r.body);
@@ -128,7 +128,11 @@ async fn an_app_sets_its_own_guests_rooms_without_the_owner_token() {
     assert_eq!((r.status, r.code()), (403, "app_pass_required".to_string()), "{}", r.body);
     gateway::close(&format!("jobs{tag}"), None, true);
 
-    // An agent, end to end over the CLI routes, within the grant.
+    // An agent, end to end over the CLI routes, within the grant: with
+    // "Build and run Apps" (0.46.4: without it, refused).
+    let r = post(port, "/cli/app/guest/rooms", &agent, json!({ "app": svc, "username": dana, "rooms": [acme.handle] })).await;
+    assert_eq!((r.status, r.code()), (403, "apps_manage_off".to_string()), "{}", r.body);
+    k2_core::workspace::settings::set_agents_can_manage_skin(&own.path.to_string_lossy(), true).unwrap();
     let r = post(port, "/cli/app/guest/rooms", &agent, json!({ "app": svc, "username": dana, "rooms": [acme.handle] })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["beforeHandles"], json!([own.handle]));

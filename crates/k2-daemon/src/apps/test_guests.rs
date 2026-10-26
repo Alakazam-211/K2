@@ -7,17 +7,23 @@
 //! GET  /cli/app/test-guests     ?app=
 //! ```
 //!
-//! **Who:** a person only, as for every guest: the owner token, an Owner
-//! login, or a human in a K2 shell tab (route floor Owner, like
-//! `/cli/skin/users`). Whether an App's own agent may make test guests is
-//! parked (Rosson 2026-10-24) for its own arc: until then an agent
-//! passport is refused `owner_only` on add and rm ([`AGENTS_MAY_MANAGE`]
-//! is off). The App's own agent (switch 1) may read the list; another
-//! workspace's agent never sees the App (`app_not_found`); a Member
-//! changes nothing.
+//! **Who:** a person (the owner token, an Owner login, or a human in a K2
+//! shell tab; route floor Owner, like `/cli/skin/users`), or the App's
+//! own agent while "Let this agent manage its Apps' users" is on for its
+//! workspace (`apps.manage-users`, 0225, Rosson 2026-10-26;
+//! `super::agent_grants`). An agent without
+//! it files one held request the owner approves from a card on its
+//! Thread (the replay runs every rule below again; the password is never
+//! kept with the request). Another workspace's agent never sees the App
+//! (`app_not_found`); a Member changes nothing. An agent removes its own
+//! workspace's test guests with "Build and run Apps" (removing narrows).
 //!
 //! **What K2 holds it to** (with `k2_core::skin::test_guests`):
 //! - an App-only guest of THIS App (one `kind=app` grant, no box login);
+//!   with no role it may get rooms (`rooms`), an agent's only its own
+//!   workspace's room;
+//! - one an agent makes (or a card it asked for) is stamped and tied to
+//!   the agent's workspace (`skin::creators`): it is never "a person";
 //!   it signs in only through this App's gateway link, never the box login,
 //!   another App, the browser helper or a device sign-in;
 //! - a role only when the App already defines it (`roles.app_id` = this
@@ -44,27 +50,19 @@ pub const TOO_MANY: &str = "too_many_test_guests";
 pub const ROLE_NOT_THIS_APPS: &str = "role_not_this_apps";
 pub const NOT_A_TEST_GUEST: &str = "not_a_test_guest";
 
-/// May an agent passport add or remove test guests? **Off**: parked
-/// (Rosson 2026-10-24) until the agent-test-guest arc decides it; only a
-/// person makes guests, as before 0.46.4. The agent-only checks below
-/// stay for that arc and are unreachable while this is off.
+/// May an agent passport manage test guests through the skin-manage
+/// routes (`/cli/skin/users/*`: password, email, rooms, unlock, remove)?
+/// **Off**: an agent makes and removes its test guests only here, under
+/// "Let this agent manage its Apps' users" (`super::agent_grants`).
 pub const AGENTS_MAY_MANAGE: bool = false;
 
-/// Add and remove: a person (or, once [`AGENTS_MAY_MANAGE`] is on, the
-/// App's own agent with switch 1). An agent passport is refused
-/// `owner_only` before the App is looked up, so it learns nothing about
-/// other workspaces' Apps.
-fn need_person(who: &Who, verb: &str) -> R<()> {
+/// Remove: a person, or the App's own agent with "Let this agent manage
+/// its Apps' users" or "Build and run Apps" (removing narrows; [`rm`]
+/// keeps it to its own workspace's guests).
+fn need_remover(who: &Who) -> R<()> {
     need_credential(who)?;
-    if agent_ws(who).is_some() && !AGENTS_MAY_MANAGE {
-        return Err(no(
-            codes::OWNER_ONLY,
-            403,
-            format!(
-                "only a person makes or removes guests, test guests too: ask your owner to run k2 app user {verb} … --test \
-                 from a terminal outside K2"
-            ),
-        ));
+    if super::agent_grants::may_self(who) {
+        return Ok(());
     }
     need_build(who)
 }
@@ -135,15 +133,50 @@ fn guest_json(app: &AppRow, username: &str, t: &tg::TestGuest) -> J {
     })
 }
 
-/// POST `/cli/app/test-guest/add`.
+/// POST `/cli/app/test-guest/add {app, username, role?, expires?, rooms?, password?}`.
 fn add(who: &Who, body: &[u8]) -> R<J> {
-    need_person(who, "add")?;
+    need_credential(who)?;
+    let ws = agent_ws(who).map(str::to_string);
+    if ws.is_none() {
+        need_build(who)?;
+    }
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
-    let by = actor(who);
     let username = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "username is required"))?.to_string();
-    let ttl = tg::parse_ttl(s(&v, "expires")).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
-    sweep(&app, &by);
+    let rooms = super::agent_grants::list_field(&v, "rooms").unwrap_or_default();
+    let rooms = super::agent_grants::resolve_rooms(&rooms)?;
+    if let Some(ws) = ws.as_deref() {
+        super::agent_grants::own_rooms_only(ws, &rooms)?;
+        if !super::agent_grants::may_self(who) {
+            // The test-guest rules first, so a request the owner approves
+            // can't fail on them (they run again at the approval).
+            tg::parse_ttl(s(&v, "expires")).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+            role_of(&app, s(&v, "role"), true)?;
+            return super::agent_grants::test_guest_held(who, ws, &app, &v);
+        }
+    }
+    let spec = NewTestGuest { username: &username, role: s(&v, "role"), expires: s(&v, "expires"), rooms: &rooms, password: s(&v, "password") };
+    add_checked(&app, &actor(who), ws.as_deref(), &spec)
+}
+
+/// What a test guest add asks for.
+pub(crate) struct NewTestGuest<'a> {
+    pub username: &'a str,
+    pub role: Option<&'a str>,
+    pub expires: Option<&'a str>,
+    /// Room ids (resolved), only without a role.
+    pub rooms: &'a [String],
+    pub password: Option<&'a str>,
+}
+
+/// Make the test guest: every test-guest rule, for every caller. `agent`:
+/// the workspace whose agent made it, or asked for it on a card (scope
+/// already checked by the caller): no `files:agentconfig` role, and the
+/// guest is stamped and tied to that workspace.
+pub(crate) fn add_checked(app: &AppRow, by: &str, agent: Option<&str>, n: &NewTestGuest<'_>) -> R<J> {
+    let by = by.to_string();
+    let ttl = tg::parse_ttl(n.expires).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    sweep(app, &by);
     let live = tg::live_count(&app.service_id).map_err(store_err)?;
     if live >= tg::MAX_PER_APP {
         return Err(no(
@@ -152,36 +185,17 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
             format!("{} already has {live} test guests (at most {}): remove one first (k2 app test-guests {})", app.app_id, tg::MAX_PER_APP, app.app_id),
         ));
     }
-    // Only a role this App already defines; never box-wide, never new.
-    let role = match s(&v, "role") {
-        None => None,
-        Some(token) => {
-            let roles = skin::list_roles().map_err(store_err)?;
-            let mine: Vec<&skin::SkinRole> = roles.iter().filter(|r| r.app_id.as_deref() == Some(app.service_id.as_str())).collect();
-            let Some(r) = mine.iter().find(|r| r.id == token || r.name.eq_ignore_ascii_case(token)) else {
-                let names: Vec<&str> = mine.iter().map(|r| r.name.as_str()).collect();
-                return Err(no(
-                    ROLE_NOT_THIS_APPS,
-                    400,
-                    if names.is_empty() {
-                        format!("{} defines no roles: a test guest gets one of the App's own roles or none (k2 app role create … --app {})", app.app_id, app.app_id)
-                    } else {
-                        format!("'{token}' isn't one of {}'s own roles ({}): a test guest gets only a role the App already defines", app.app_id, names.join(", "))
-                    },
-                ));
-            };
-            if agent_ws(who).is_some() && r.caps.iter().any(|c| c == skin::CAP_FILES_AGENT_CONFIG) {
-                return Err(no(
-                    codes::OWNER_ONLY,
-                    403,
-                    format!("role '{}' lets guests write the agent's .k2 folder (files:agentconfig): handing it out stays the owner's", r.name),
-                ));
-            }
-            Some(r.id.clone())
-        }
-    };
-    let password = s(&v, "password").map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
-    let p = skin::add_principal_for_app(&username, None, &app.service_id, role.as_deref(), &by).map_err(|e| no(codes::BAD_REQUEST, 409, e))?;
+    let role = role_of(app, n.role, agent.is_some())?;
+    if role.is_some() && !n.rooms.is_empty() {
+        return Err(no(codes::BAD_REQUEST, 400, "a test guest with a role gets its role's rooms: give rooms only without a role"));
+    }
+    let password = n.password.map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+    // An agent's guest (its own call, or its approved request) is stamped
+    // and tied to its workspace in the same transaction as the principal:
+    // it is never "a person" (`skin::ties`), never the owner's.
+    let added_by = skin::AddedBy { agent_workspace: agent, ..Default::default() };
+    let p = skin::add_principal_for_app_by(n.username, None, &app.service_id, role.as_deref(), &by, added_by)
+        .map_err(|e| no(codes::BAD_REQUEST, 409, e))?;
     let undo = |e: String| {
         let _ = skin::remove_principal_as(&p.username, &by);
         no("db_error", 500, e)
@@ -190,20 +204,30 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
         let _ = skin::remove_principal_as(&p.username, &by);
         no(codes::BAD_REQUEST, 400, e)
     })?;
+    if !n.rooms.is_empty() {
+        skin::set_app_grant_rooms(&p.username, &app.service_id, n.rooms, true, &by).map(|_| ()).map_err(undo)?;
+    }
     let expires_at = deploy::now() + ttl;
     let t = tg::record(&p.id, &app.service_id, &app.owner_workspace, &by, expires_at).map_err(undo)?;
     let role_name = role.as_deref().and_then(|id| skin::list_roles().ok()?.into_iter().find(|r| r.id == id).map(|r| r.name));
-    app_audit(&app, "test_guest_add", &by, json!({ "username": p.username, "role": role_name, "expiresAt": expires_at }));
+    let room_handles: Vec<String> = n.rooms.iter().map(|r| super::routes::ws_handle(r)).collect();
+    app_audit(
+        app,
+        "test_guest_add",
+        &by,
+        json!({ "username": p.username, "role": role_name, "rooms": room_handles, "expiresAt": expires_at, "agent": agent.map(super::routes::ws_handle) }),
+    );
     access_audit("app-test-guest", &by, format!("added {} to {} (role {}, until {expires_at})", p.username, app.app_id, role_name.as_deref().unwrap_or("none")));
     // A note on the workspace's Thread (no wake).
     let owner_note = ws_by_id(&app.owner_workspace)
         .map(|w| {
             let text = format!(
-                "K2: {by} added the test guest **{}** to App **{}** (role {}, for {}). It signs in only through the App's gateway link \
+                "K2: {by} added the test guest **{}** to App **{}** (role {}{}, for {}). It signs in only through the App's gateway link \
                  and ends on its own. `k2 app user remove {} --test` removes it now.",
                 p.username,
                 app.app_id,
                 role_name.as_deref().unwrap_or("none"),
+                if room_handles.is_empty() { String::new() } else { format!(", rooms {}", room_handles.join(", ")) },
                 human_ttl(ttl),
                 p.username
             );
@@ -216,11 +240,13 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
             }
         })
         .unwrap_or(false);
-    let mut out = guest_json(&app, &p.username, &t);
+    let mut out = guest_json(app, &p.username, &t);
     out["ok"] = json!(true);
     out["role"] = json!(role_name);
+    out["rooms"] = json!(room_handles);
     out["ownerNote"] = json!(owner_note);
-    if s(&v, "password").is_none() {
+    out["tied"] = json!(agent.is_some());
+    if n.password.is_none() {
         // Shown once: K2 keeps only its hash.
         out["password"] = json!(password);
     }
@@ -232,11 +258,39 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
     Ok(out)
 }
 
+/// Only a role this App already defines; never box-wide, never new; an
+/// agent's never one that writes the agent's `.k2` folder.
+pub(crate) fn role_of(app: &AppRow, token: Option<&str>, agent: bool) -> R<Option<String>> {
+    let Some(token) = token.map(str::trim).filter(|r| !r.is_empty()) else { return Ok(None) };
+    let roles = skin::list_roles().map_err(store_err)?;
+    let mine: Vec<&skin::SkinRole> = roles.iter().filter(|r| r.app_id.as_deref() == Some(app.service_id.as_str())).collect();
+    let Some(r) = mine.iter().find(|r| r.id == token || r.name.eq_ignore_ascii_case(token)) else {
+        let names: Vec<&str> = mine.iter().map(|r| r.name.as_str()).collect();
+        return Err(no(
+            ROLE_NOT_THIS_APPS,
+            400,
+            if names.is_empty() {
+                format!("{} defines no roles: a test guest gets one of the App's own roles or none (k2 app role create … --app {})", app.app_id, app.app_id)
+            } else {
+                format!("'{token}' isn't one of {}'s own roles ({}): a test guest gets only a role the App already defines", app.app_id, names.join(", "))
+            },
+        ));
+    };
+    if agent && r.caps.iter().any(|c| c == skin::CAP_FILES_AGENT_CONFIG) {
+        return Err(no(
+            codes::OWNER_ONLY,
+            403,
+            format!("role '{}' lets guests write the agent's .k2 folder (files:agentconfig): handing it out stays the owner's", r.name),
+        ));
+    }
+    Ok(Some(r.id.clone()))
+}
+
 /// POST `/cli/app/test-guest/rm {username}`: a person removes any test
-/// guest (an agent, once [`AGENTS_MAY_MANAGE`] is on, only its own
-/// workspace's Apps').
+/// guest; an agent with "Build and run Apps" only its own workspace's
+/// Apps'.
 fn rm(who: &Who, body: &[u8]) -> R<J> {
-    need_person(who, "remove")?;
+    need_remover(who)?;
     let v = json_body(body)?;
     let username = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "username is required"))?;
     let missing = || no(NOT_A_TEST_GUEST, 404, format!("'{username}' isn't a test guest you can remove (k2 app test-guests <app>)"));
@@ -264,7 +318,7 @@ fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
     need_credential(who)?;
     let app = app_for(who, params.get("app").map(String::as_str))?;
     // The sweep removes guests: only for a caller that may remove them.
-    if need_person(who, "remove").is_ok() {
+    if need_remover(who).is_ok() {
         sweep(&app, &actor(who));
     }
     let by_id: HashMap<String, String> = skin::list_principals().map_err(store_err)?.into_iter().map(|p| (p.id, p.username)).collect();

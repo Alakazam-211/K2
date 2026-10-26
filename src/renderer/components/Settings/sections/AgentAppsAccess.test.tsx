@@ -103,7 +103,10 @@ describe('the workspace card', () => {
     expect(sw('apps-switch-full').disabled).toBe(true)
     expect(sw('apps-switch-full').title).toBe('Turn on Build and run Apps first')
     expect(screen.getByTestId('apps-wall-line').textContent).toBe('Loosening the wall always asks you.')
-    expect(screen.getByText('Manage its Apps end to end (caps, budgets, hosts, keys)')).toBeTruthy()
+    expect(screen.getByText('Manage its Apps end to end')).toBeTruthy()
+    // Its users are their own switch, in the same box (0225).
+    expect(sw('apps-switch-users').getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByTestId('apps-switch-users-row').textContent).toContain('Never a box login')
     for (const c of ['db', 'files', 'thread', 'mail', 'sew']) expect(box(c).checked).toBe(false)
     expect(screen.getByTestId('apps-core-mail-later').textContent).toBe('Takes effect when App mail lands')
     expect(screen.getByTestId('apps-core-sew-later').textContent).toBe('Takes effect when Sew for Apps lands')
@@ -127,6 +130,20 @@ describe('the workspace card', () => {
       { route: 'agent-access/set', body: { workspace: '/ws/sales', toggle: 'apps_manage_full', value: true } },
       { route: 'agent-access/set', body: { workspace: '/ws/sales', toggle: 'app_core', core: 'db', value: true } },
     ])
+  })
+
+  it('only the owner flips "Let this agent manage its Apps’ users", both ways, on its own', async () => {
+    mount({ agentsCanManageAppUsers: 0 })
+    await waitFor(() => expect(sw('apps-switch-users').disabled).toBe(false))
+    fireEvent.click(sw('apps-switch-users'))
+    expect(stored().agentsCanManageAppUsers).toBe(1)
+    await waitFor(() => expect(h.posts).toHaveLength(1))
+    expect(h.posts[0]).toEqual({ route: 'agent-access/set', body: { workspace: '/ws/sales', toggle: 'app_users', value: true } })
+    cleanup()
+    h.role = 'admin'
+    mount({ agentsCanManageAppUsers: 1 })
+    await waitFor(() => expect(sw('apps-switch-users').title).toBe('Only the server’s owner can change this'))
+    expect(sw('apps-switch-users').disabled).toBe(true)
   })
 
   it('switch 1 off takes switch 2 with it', async () => {

@@ -403,7 +403,11 @@ pub(crate) fn prompt_and_options(reqs: &[PermissionRequest], batch: bool) -> (St
         let prompt = find_action(&first.action)
             .map(|r| words(r.spec, &ctx_of(first)).prompt)
             .unwrap_or_else(|| format!("{} asks for a permission.", workspace_handle(&first.workspace_id)));
-        return (prompt, vec![label::ALLOW.to_string(), label::DENY.to_string()]);
+        let mut options = vec![label::ALLOW.to_string(), label::DENY.to_string()];
+        if crate::apps::held_cards::offers_always(first) {
+            options.push(label::ALWAYS.to_string());
+        }
+        return (prompt, options);
     }
     let ws = workspace_handle(&reqs[0].workspace_id);
     (format!("{ws} asks for {} permissions.", reqs.len()), vec![label::ALLOW_ALL.to_string(), label::DENY_ALL.to_string()])

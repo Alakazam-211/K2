@@ -1496,6 +1496,59 @@ pub fn agents_permission_switches() -> Vec<(String, bool)> {
         .unwrap_or_default()
 }
 
+/// "Let this agent manage its Apps' users" (`apps.manage-users`, toggle
+/// `app_users`, migration 0225; Rosson 2026-10-26). DEFAULT OFF. With it,
+/// a local agent passport from the workspace manages the users of its own
+/// workspace's Apps (App users and test guests, their passwords, email,
+/// full name, unlock, roles and rooms inside its workspace, invites) and
+/// gives its own App the guests-rooms grant in its own room. Never a box
+/// login, another workspace's guest or `/cli/users/*`. Unknown workspace or
+/// a read error → `false` (fail closed).
+pub fn agents_can_manage_app_users(project_id: &str) -> bool {
+    let Some(db) = crate::db::try_shared() else { return false };
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT agents_can_manage_app_users FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// [`agents_can_manage_app_users`] for the workspace at `project_path`
+/// (the skin-manage door resolves a passport to its path). Unknown path,
+/// a database before 0225 or a read error → `false` (fail closed).
+pub fn agents_can_manage_app_users_for_path(project_path: &str) -> bool {
+    let Some(db) = crate::db::try_shared() else { return false };
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT agents_can_manage_app_users FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// Persist `projects.agents_can_manage_app_users` (0/1). Dedicated writer
+/// for `POST /cli/agent-access/set {toggle: "app_users"}` (the owner,
+/// both ways); not on `workspace/set`, so an agent can never turn it on.
+pub fn set_agents_can_manage_app_users(project_id: &str, enable: bool) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute(
+            "UPDATE projects SET agents_can_manage_app_users = ?1 WHERE id = ?2",
+            rusqlite::params![if enable { 1i64 } else { 0i64 }, project_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("Project not found: {project_id}"));
+    }
+    Ok(())
+}
+
 /// Persist `projects.agents_can_upgrade_postgres` (0/1). Dedicated writer
 /// for `POST /cli/agent-access/set {toggle: "db_upgrade"}` (the owner
 /// raises, the owner or an Admin lowers); not on `workspace/set`, so an

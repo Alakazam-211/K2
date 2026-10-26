@@ -166,6 +166,7 @@ fn state(w: Writer, ws: &Ws) -> bool {
         Writer::Access("gardens_manage") => k2_core::workspace::settings::agents_can_manage_gardens(&ws.id),
         Writer::Access("apps_build") => crate::apps::access::level(&ws.id) >= crate::apps::access::Level::Build,
         Writer::Access("apps_manage_full") => crate::apps::access::level(&ws.id) == crate::apps::access::Level::Full,
+        Writer::Access("app_users") => k2_core::workspace::settings::agents_can_manage_app_users(&ws.id),
         Writer::Access(other) => panic!("no state reader for {other}"),
         Writer::AppCore => crate::apps::cores::ticked(&ws.id).iter().any(|c| c == "db"),
         Writer::Dns => k2_core::workspace::settings::get_dns_manage_enabled(&ws.path),
@@ -184,7 +185,7 @@ fn prerequisite(w: Writer, ws: &Ws) {
 
 // ── the registry ────────────────────────────────────────────────────
 
-const SWITCH_IDS: [&str; 15] = [
+const SWITCH_IDS: [&str; 16] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -192,6 +193,7 @@ const SWITCH_IDS: [&str; 15] = [
     "projects.manage",
     "apps.build",
     "apps.manage-full",
+    "apps.manage-users",
     "apps.core",
     "chat.manage",
     "vault.manage",
@@ -216,10 +218,11 @@ fn e1_registers_17_switch_actions_their_off_twins_and_keep_as_mine() {
     for w in &want {
         assert!(ids.contains(&w.as_str()), "{w} is not registered: {ids:?}");
     }
-    // 17 card-able switch actions (PRD §5.2 with vault and DNS kept) + the
+    // 18 card-able switch actions (PRD §5.2 with vault and DNS kept, plus
+    // 0.46.4's apps.manage-users) + the
     // to=off twins (one per standing switch) + garden.keep-mine.
     let e1: Vec<&str> = ids.iter().copied().filter(|i| want.iter().any(|w| w == i)).collect();
-    assert_eq!(e1.len(), 17 + 16 + 1, "{e1:?}");
+    assert_eq!(e1.len(), 18 + 17 + 1, "{e1:?}");
     for r in &all {
         k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     }
@@ -407,7 +410,7 @@ fn the_entries_rerun_the_routes_own_checks() {
     let admin = as_login(&login("e1adm2", Role::Admin));
     let member = as_login(&login("e1mem2", Role::Member));
     let ws = seed("e1en");
-    for id in ["apps.build", "compute.manage", "compute.manage-off"] {
+    for id in ["apps.build", "compute.manage", "compute.manage-off", "apps.manage-users", "apps.manage-users-off"] {
         match apply(id, &ws, json!({}), &admin) {
             Applied::Refused { code, .. } => assert_eq!(code, "owner_only", "{id}"),
             other => panic!("{id}: an Admin must be refused by the writer: {other:?}"),

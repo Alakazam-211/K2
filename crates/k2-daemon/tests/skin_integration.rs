@@ -703,8 +703,9 @@ async fn skin_workspace_agent_hook_can_list_but_not_mint() {
             Some(r#"{"username":"intruder"}"#),
         );
         assert_eq!(add_denied.status, 403, "{}", add_denied.body);
+        // 0.46.4: App users are "Let this agent manage its Apps' users".
         assert!(
-            add_denied.body.contains("owner_only"),
+            add_denied.body.contains("app_users_off"),
             "{}",
             add_denied.body
         );
@@ -1993,7 +1994,7 @@ async fn skin_login_session_cookie_logout_and_host_fold() {
             Some(r#"{"username":"guest","password":"x"}"#),
         );
         assert_eq!(hook_pw.status, 403, "agent passport; {}", hook_pw.body);
-        assert!(hook_pw.body.contains("owner_only"), "{}", hook_pw.body);
+        assert!(hook_pw.body.contains("app_users_off"), "{}", hook_pw.body);
     });
 }
 
@@ -2780,13 +2781,26 @@ async fn skin_roles_http_assign_snapshot_rewrite_and_connect_names() {
     });
 }
 
+/// "Build and run Apps" over its old route, and (0.46.4) "Let this agent
+/// manage its Apps' users" with it: the user routes these tests drive
+/// follow the new switch (`skin_routes::APP_USER_ROUTES`).
 fn set_agents_manage_skin(port: u16, project: &str, enable: i64) -> Resp {
+    k2_core::workspace::settings::set_agents_can_manage_app_users(project, enable == 1).expect("app users switch");
     http(
         port,
         "POST",
         &format!("/cli/agents-manage-skin?token={OWNER_TOKEN}"),
         Some(&format!(r#"{{"project":"{project}","enable":{enable}}}"#)),
     )
+}
+
+/// An agent without "Let this agent manage its Apps' users" on a user
+/// route: `app_users_off`, naming the switch, never a broken passport.
+fn assert_app_users_off(r: &Resp, label: &str) {
+    assert_eq!(r.status, 403, "{label}; {}", r.body);
+    assert!(r.body.contains("app_users_off"), "{label}: {}", r.body);
+    assert!(r.body.contains("Let this agent manage its Apps' users"), "{label} names the switch: {}", r.body);
+    assert!(!r.body.contains("Invalid or missing auth token"), "{label}: {}", r.body);
 }
 
 fn assert_owner_only(r: &Resp, label: &str) {
@@ -2908,12 +2922,7 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
             &format!("/cli/skin/users?token={hook_a}"),
             Some(r#"{"username":"bob"}"#),
         );
-        assert_owner_only(&mutate_off, "default OFF agent mutate");
-        assert!(
-            mutate_off.body.contains("Allow this agent to manage Apps"),
-            "manage OFF hint must name the Agent-tab toggle: {}",
-            mutate_off.body
-        );
+        assert_app_users_off(&mutate_off, "default OFF agent mutate");
 
         let missing = http(port, "POST", "/cli/skin/users", Some(r#"{"username":"x"}"#));
         assert_classic_forbidden(&missing, "missing token mutate");
@@ -3092,7 +3101,7 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
             &format!("/cli/skin/users?token={hook_b}"),
             Some(r#"{"username":"fromb"}"#),
         );
-        assert_owner_only(&cross, "hook from B while A is ON");
+        assert_app_users_off(&cross, "hook from B while A is ON");
 
         let door = http(
             port,
@@ -3156,7 +3165,7 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
             &format!("/cli/skin/users?token={hook_a}"),
             Some(r#"{"username":"afteroff"}"#),
         );
-        assert_owner_only(&after_off, "toggle OFF again");
+        assert_app_users_off(&after_off, "toggle OFF again");
 
         let room_off = http(
             port,

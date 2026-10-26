@@ -72,6 +72,11 @@ pub mod label {
     pub const DENY_ALL: &str = "Deny all";
     pub const CLOSE: &str = "Close";
     pub const TURN_OFF_AGAIN: &str = "Turn off again";
+    /// The third option on a one-time App-grant card (`apps.grant-*`,
+    /// `apps.test-guest`, `apps.label`): allow this once AND turn on the
+    /// workspace's "Manage its Apps end to end" switch, so the agent does
+    /// it itself next time. Offered only on those cards, single only.
+    pub const ALWAYS: &str = "Always allow";
 }
 
 /// Access Audit events (PRD §6.5).

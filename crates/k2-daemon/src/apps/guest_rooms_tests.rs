@@ -63,11 +63,28 @@ fn code(v: &J) -> &str {
 fn only_the_owner_grants_and_the_grant_lists() {
     let f = fx("grant");
     let body = json!({ "app": f.jobs, "kind": "guests-rooms", "rooms": [f.acme] });
-    for who in [agent(&f.ws_a), login(Role::Admin), login(Role::Member), Who::Wrong, Who::Invalid] {
+    for who in [login(Role::Admin), login(Role::Member), Who::Wrong, Who::Invalid] {
         let (st, v) = post("/cli/app/grant", &who, body.clone());
         assert_eq!(st, 403, "{who:?}: {v}");
     }
+    // The App's own agent (0.46.4): without "Let this agent manage its
+    // Apps' users", or naming another workspace's room, one held request
+    // for the owner; nothing is granted until they approve.
+    let (st, v) = post("/cli/app/grant", &agent(&f.ws_a), body.clone());
+    assert_eq!((st, v["status"].clone()), (202, json!("held")), "{v}");
     assert_eq!(gr::get_grant(&f.jobs).unwrap(), None);
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&f.ws_a, true).unwrap();
+    let (st, v) = post("/cli/app/grant", &agent(&f.ws_a), body.clone());
+    assert_eq!((st, v["status"].clone()), (202, json!("held")), "another workspace's room is the owner's: {v}");
+    assert_eq!(gr::get_grant(&f.jobs).unwrap(), None);
+    // Its own room, with the switch: at once.
+    let (st, v) = post("/cli/app/grant", &agent(&f.ws_a), json!({ "app": "jobs", "kind": "guests-rooms", "rooms": [f.ws_a] }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(gr::get_grant(&f.jobs).unwrap().expect("granted").rooms, vec![f.ws_a.clone()]);
+    // Another workspace's agent never sees the App.
+    let (st, v) = post("/cli/app/grant", &agent(&f.ws_b), json!({ "app": f.jobs, "kind": "guests-rooms" }));
+    assert_eq!((st, code(&v)), (404, "app_not_found"), "{v}");
+    gr::revoke(&f.jobs, "test").unwrap();
     let (st, v) = post("/cli/app/grant", &Who::Owner, json!({ "app": f.jobs, "kind": "nope" }));
     assert_eq!(st, 400, "{v}");
     let (st, v) = post("/cli/app/grant", &Who::Owner, json!({ "app": f.jobs, "kind": "guests-rooms", "rooms": ["ghost-room"] }));
@@ -105,6 +122,11 @@ fn revoke_narrows_for_the_apps_own_agent() {
 fn agents_set_within_the_grant_and_the_owner_with_owner_rights() {
     let f = fx("set");
     let body = |rooms: &[&str]| json!({ "app": "jobs", "username": "dana", "rooms": rooms });
+    // An agent sets its guests' rooms only with "Build and run Apps"
+    // (0.46.4; there was no switch check here).
+    let (st, v) = post(GUEST_ROOMS, &agent(&f.ws_a), body(&[&f.ws_a]));
+    assert_eq!((st, code(&v)), (403, "apps_manage_off"), "{v}");
+    k2_core::workspace::settings::set_agents_can_manage_skin("/tmp/grc-wsa-set", true).unwrap();
     // No grant: the App's own agent is refused; the owner isn't.
     let (st, v) = post(GUEST_ROOMS, &agent(&f.ws_a), body(&[&f.ws_a]));
     assert_eq!((st, code(&v)), (403, "grant_required"), "{v}");

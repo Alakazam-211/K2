@@ -16,12 +16,18 @@
 //! - **The grant** is the owner's (owner token, an Owner login, or a human
 //!   in a plain K2 shell tab): `k2 app grant <app> --kind guests-rooms
 //!   [--room <handle>…]`. Its rooms (plus the App's own room) are what the
-//!   App may hand its guests. Revoking narrows, so an agent may revoke its
-//!   own workspace's App's grant.
+//!   App may hand its guests. An agent gives its own workspace's App the
+//!   grant in its own room with "Let this agent manage its Apps' users" on
+//!   (`apps.manage-users`, 0.46.4);
+//!   without it, or naming another workspace's room, the call is one held
+//!   request with a card for the owner (`super::agent_grants`). Revoking
+//!   narrows, so an agent may revoke its own workspace's App's grant.
+//!   `POST /cli/app/grant/copy-host` lives here too (`agent_grants`).
 //! - **Guest rooms**: the owner acts with owner rights (any room on the
-//!   box). An agent acts only on its own workspace's Apps, only while the
-//!   owner's grant stands, and only within it (`k2 app guest rooms <app>
-//!   <user> [set …]`, end to end). Admin and Member logins: never.
+//!   box). An agent acts only on its own workspace's Apps, with "Build and
+//!   run Apps" on, only while the grant stands, and only within it (`k2 app
+//!   guest rooms <app> <user> [set …]`, end to end). Admin and Member
+//!   logins: never.
 //! - The rules themselves are `k2_core::skin::guest_rooms`.
 //! - **Ceiling and list** (prd-app-caps-0464-v1 AC4, 0.46.4): reads. The
 //!   owner reads any App; an agent reads its own workspace's App's ceiling
@@ -40,9 +46,16 @@ use super::grace::{target, Target};
 use super::routes::{actor, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
 use crate::cli_response::CliResponse;
 
-pub const ROUTES: &[&str] =
-    &["/cli/app/grants", "/cli/app/grant", "/cli/app/grant/revoke", "/cli/app/guest/rooms", GUEST_CEILING, GUEST_LIST];
-pub const POST_ROUTES: &[&str] = &["/cli/app/grant", "/cli/app/grant/revoke"];
+pub const ROUTES: &[&str] = &[
+    "/cli/app/grants",
+    "/cli/app/grant",
+    "/cli/app/grant/revoke",
+    "/cli/app/guest/rooms",
+    GUEST_CEILING,
+    GUEST_LIST,
+    super::agent_grants::COPY_HOST,
+];
+pub const POST_ROUTES: &[&str] = &["/cli/app/grant", "/cli/app/grant/revoke", super::agent_grants::COPY_HOST];
 /// `/cli/app/guest/rooms` takes GET (read) and POST (set).
 pub const GUEST_ROOMS: &str = "/cli/app/guest/rooms";
 /// `k2 app guest ceiling <app>` (GET only).
@@ -55,6 +68,7 @@ pub fn handle(path: &str, who: &Who, is_post: bool, body: &[u8], params: &HashMa
         ("/cli/app/grants", _) => list(who, params),
         ("/cli/app/grant", _) => give(who, body),
         ("/cli/app/grant/revoke", _) => take_back(who, body),
+        (super::agent_grants::COPY_HOST, _) => super::agent_grants::copy_host(who, body),
         (GUEST_ROOMS, false) => guest_read(who, params),
         (GUEST_ROOMS, true) => guest_set(who, body),
         (GUEST_CEILING, false) => guest_ceiling(who, params),
@@ -62,10 +76,9 @@ pub fn handle(path: &str, who: &Who, is_post: bool, body: &[u8], params: &HashMa
         (GUEST_CEILING | GUEST_LIST, true) => Err(no("method_not_allowed", 405, format!("{path} is a GET"))),
         _ => Err(no("not_found", 404, "no such App route")),
     };
-    match r {
-        Ok(v) => CliResponse::ok_json(v.to_string()),
-        Err(e) => super::routes::refusal_response(&e),
-    }
+    // A held request (an agent's grant or copy-host for the owner) is
+    // `202` (exit 2 in the CLI); everything else as before.
+    super::routes::respond(r)
 }
 
 /// The owner in person, or a human in a plain K2 shell tab (NT5).
@@ -130,16 +143,27 @@ fn rooms_arg(v: &J) -> R<Vec<String>> {
     Ok(ids)
 }
 
-/// POST `/cli/app/grant {app, kind, rooms?}`: the owner's.
+/// POST `/cli/app/grant {app, kind, rooms?}`: the owner's; an agent's for
+/// its own workspace's App at once in its own room with "Let this agent
+/// manage its Apps' users" on, else one held request with a card
+/// (`agent_grants`).
 fn give(who: &Who, body: &[u8]) -> R<J> {
     need_credential(who)?;
     let v = json_body(body)?;
     kind_of(&v)?;
-    if !owner_rights(who) {
+    let agent = super::routes::agent_ws(who).map(str::to_string);
+    if agent.is_none() && !owner_rights(who) {
         return Err(owner_only("grants an App guests:rooms (k2 app grant <app> --kind guests-rooms)"));
     }
     let t = target(who, s(&v, "app"))?;
     let rooms = rooms_arg(&v)?;
+    if let Some(ws) = agent.as_deref() {
+        // Own room + "manage its Apps' users": at once. Otherwise one held request and a
+        // card for the owner (`agent_grants`).
+        if let Some(held) = super::agent_grants::guest_rooms_agent(who, ws, &t, &rooms, s(&v, "reason"))? {
+            return Ok(held);
+        }
+    }
     let (before, after) = gr::grant(&t.service_id, &rooms, &actor(who)).map_err(store)?;
     Ok(json!({
         "ok": true,
@@ -175,7 +199,8 @@ fn ceiling_for(who: &Who, t: &Target) -> R<Ceiling> {
                 "grant_required",
                 403,
                 format!(
-                    "{} has no guests:rooms grant; ask your owner: k2 app grant {} --kind guests-rooms",
+                    "{} has no guests:rooms grant: run k2 app grant {} --kind guests-rooms (with \"Let this agent manage its Apps' users\" \
+                     on it applies at once in your own room; otherwise the owner gets a card on your Thread)",
                     t.name, t.name
                 ),
             )),
@@ -247,6 +272,11 @@ fn guest_set(who: &Who, body: &[u8]) -> R<J> {
     need_credential(who)?;
     let v = json_body(body)?;
     let t = target(who, s(&v, "app"))?;
+    // An agent changes its own App's guests' rooms only with "Build and
+    // run Apps" (audit 0.46.4: there was no switch check here).
+    if super::routes::agent_ws(who).is_some() {
+        super::routes::need_build(who)?;
+    }
     let ceiling = ceiling_for(who, &t)?;
     let user = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the guest (username)"))?;
     let rooms = crate::guest_rooms_routes::rooms_of(&v)

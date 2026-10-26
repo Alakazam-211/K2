@@ -102,7 +102,7 @@ const IN_SETTINGS: &str = "a person with the owner role does this, in Settings o
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 26] = [
+pub(crate) const V1_ACTIONS: [&str; 27] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -129,6 +129,8 @@ pub(crate) const V1_ACTIONS: [&str; 26] = [
     "garden.access",
     "garden.access-off",
     "garden.delete",
+    // 0.46.4 (Rosson 2026-10-26): "Let this agent manage its Apps' users".
+    "apps.manage-users",
 ];
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
@@ -157,6 +159,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(ask("projects.manage", Floor::Admin), code(403, "agent_permission_off"), "/cli/", ANY),
     // ── Apps ───────────────────────────────────────────────────────────
     row(ask("apps.build", Floor::Owner), code(403, "apps_manage_off"), "/cli/", ANY),
+    // App users (0225): the skin-manage door's refusal on a user route.
+    row(ask("apps.manage-users", Floor::Owner), code(403, "app_users_off"), "/cli/skin/", ANY),
     // Every App hold (switch 2 off, a core not ticked, new caps, a --cmd
     // service…) already made a held request: asking attaches a card to that
     // same id (§3.2, the agent sheet's HELD rule).
@@ -652,6 +656,8 @@ mod tests {
             (403, "POST", "/cli/db/create", vec![], None, json!({"error":{"code":"forbidden"},"ok":false}), "db.agent-access"),
             (403, "POST", "/cli/app/approve", vec![], Some(json!({"request":"ar_22"})), json!({"error":{"code":"owner_only"}}), "apps.approve"),
             (403, "POST", "/cli/compute/admin/approve", vec![], Some(json!({"request":"nar_1"})), json!({"error":{"code":"owner_only"}}), "compute.admin-approve"),
+            // App users (0225): the skin-manage door's refusal on a user route.
+            (403, "POST", "/cli/skin/users/password", vec![], None, json!({"ok":false,"error":{"code":"app_users_off"}}), "apps.manage-users"),
             // Garden access (A2's refusals, prd-garden-access-v1 G11–G12).
             (403, "POST", "/cli/zen/garden/put", vec![], Some(json!({"garden":"garden-2"})), json!({"ok":false,"error":"garden_access_needed","garden":"garden-2","card":null}), "garden.access"),
             (403, "POST", "/cli/zen/widget/folder/put", vec![], None, json!({"ok":false,"error":"garden_access_needed","garden":"garden-3","card":null}), "garden.access"),
@@ -848,7 +854,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 26);
+        assert_eq!(V1_ACTIONS.len(), 27);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

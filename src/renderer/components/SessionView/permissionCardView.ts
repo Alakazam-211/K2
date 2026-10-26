@@ -52,6 +52,10 @@ export const PERMISSION_LABEL = {
   close: 'Close',
   allowAll: 'Allow all',
   denyAll: 'Deny all',
+  /** K2's App cards whose held request "Let this agent manage its Apps'
+   *  users" covers: allow, then turn that switch on. Only when the daemon
+   *  offers it (`choice.options`). */
+  always: 'Always allow',
 } as const
 
 /** Deny reasons: one line, at most this many characters (§4.4). */

@@ -860,9 +860,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // 0.46.4: the move's steps; one owner request for the owner's.
         "/cli/app/move-plan",
         "/cli/app/move-plan/request",
-        // 0.46.4: test guests. Here so the handler answers: the list is
-        // the App's own agent's (switch 1); add and rm refuse a passport
-        // `owner_only` while agent test guests are parked.
+        // 0.46.4: test guests of its own Apps. The list and rm need switch
+        // 1; add needs switch 2 ("Manage its Apps end to end"), else it is
+        // one held request with a card for the owner (Rosson 2026-10-26).
         "/cli/app/test-guest/add",
         "/cli/app/test-guest/rm",
         "/cli/app/test-guests",
@@ -898,21 +898,23 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/stop",
         "/cli/app/uninstall",
         "/cli/app/validate",
-        // 0.46.0 grace: warnings, clean mode (on narrows; off is held), App
-        // keys (a mint is held for the owner; revoke narrows).
+        // 0.46.0 grace: warnings, clean mode (on narrows; off needs switch
+        // 2, else held), App keys (a mint applies at once with switch 2,
+        // else held for the owner; revoke narrows).
         "/cli/app/warnings",
         "/cli/app/clean-mode",
         "/cli/app/key/mint",
         "/cli/app/keys",
         "/cli/app/key/revoke",
-        // Egress (S15): read, propose (always held for the owner), narrow.
+        // Egress (S15): read, add (applies at once with switch 2, else
+        // held; `broad` mode is always the person's), narrow.
         "/cli/app/egress",
         "/cli/app/egress/add",
         "/cli/app/egress/log",
         "/cli/app/egress/mode",
         "/cli/app/egress/rm",
-        // Box services (0.46.0): read, propose (always held for the owner),
-        // revoke (narrowing, at once).
+        // Box services (0.46.0): read, request (applies at once with switch
+        // 2, else held for the owner), revoke (narrowing, at once).
         "/cli/app/box-service",
         "/cli/app/box-service/request",
         "/cli/app/box-service/revoke",
@@ -933,19 +935,28 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/clone-proposal/list",
         "/cli/clone-proposal/withdraw",
         // The 0.46.1 door (S19, AR10): read the audit and quotas, lower a
-        // quota (a raise is held), suspend (narrows), list and revoke
-        // remote passes. `/cli/app/resume` and `/cli/app/remote-pass/rotate`
-        // are NOT here: the owner's.
+        // quota (a raise applies with switch 2, else held), suspend
+        // (narrows), list and revoke remote passes. Resume (0.46.4): only a
+        // suspension the agent made itself, with switch 2 (the handler);
+        // the owner's suspension stays the owner's.
+        // `/cli/app/remote-pass/rotate` is NOT here: the owner's.
         "/cli/app/audit",
         "/cli/app/quota",
         "/cli/app/quota/set",
         "/cli/app/suspend",
+        "/cli/app/resume",
         "/cli/app/remote-pass",
         "/cli/app/remote-pass/revoke",
         // RS-A15 (0.46.1): an agent reads its own App's grants, revokes
-        // one (narrows), and sets that App's guests' rooms within the
-        // grant. `/cli/app/grant` is NOT here: the owner's.
+        // one (narrows), and sets that App's guests' rooms within the grant
+        // (switch 1). 0.46.4 (audit-app-agent-access-0464): with switch 2 an
+        // agent gives its own App the guests-rooms grant in its own room at
+        // once; otherwise, and for copy-host always (it copies the box's
+        // people), the call is one held request with a card for the owner.
+        // The handlers check the switches and the scope.
         "/cli/app/grants",
+        "/cli/app/grant",
+        "/cli/app/grant/copy-host",
         "/cli/app/grant/revoke",
         "/cli/app/guest/rooms",
         // prd-app-caps-0464-v1 AC4 (0.46.4): its own App's ceiling, and its
@@ -958,6 +969,16 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/members",
         "/cli/app/self",
         "/cli/app/usage",
+        // prd-custom-app-push-v1 (audit 0.46.4 §4.5): the App's own agent's
+        // push controls, so a sealed cell matches TCP. The handler admits
+        // switch 1 (status, log, turning push off) and switch 2 (send,
+        // test, replies and previews). Keys, check and devices stay the
+        // owner's and Admins' (not here).
+        "/cli/app/push",
+        "/cli/app/push/set",
+        "/cli/app/push/send",
+        "/cli/app/push/test",
+        "/cli/app/push/log",
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",
@@ -980,6 +1001,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/skin/users/password",
         "/cli/skin/users/unlock",
         "/cli/skin/users/email",
+        // 0.46.4: an agent with "Let this agent manage its Apps' users"
+        // names its own Apps' users (the door and `agent_scoped`).
+        "/cli/skin/users/full-name",
         "/cli/skin/users/rooms",
         "/cli/skin/roles",
         "/cli/skin/roles/update",
@@ -1971,9 +1995,19 @@ mod tests {
         );
         assert!(is_agent_verb("/cli/skin/users/email"));
         assert!(
-            !is_agent_verb("/cli/skin/users/full-name"),
-            "full name write is owner-only, not an agent verb"
+            is_agent_verb("/cli/skin/users/full-name"),
+            "0.46.4: an agent with \"Let this agent manage its Apps' users\" names its own Apps' users"
         );
+        assert!(is_agent_verb("/cli/app/grant"));
+        assert!(is_agent_verb("/cli/app/grant/copy-host"));
+        assert!(is_agent_verb("/cli/app/resume"), "its own suspension, with switch 2 (the handler)");
+        for p in ["/cli/app/push", "/cli/app/push/set", "/cli/app/push/send", "/cli/app/push/test", "/cli/app/push/log"] {
+            assert!(is_agent_verb(p), "{p}: the cell socket matches TCP");
+        }
+        for p in ["/cli/app/push/credentials", "/cli/app/push/credentials/remove", "/cli/app/push/check", "/cli/app/push/devices", "/cli/app/push/devices/remove"] {
+            assert!(!is_agent_verb(p), "{p}: the owner's and Admins'");
+        }
+        assert!(!is_agent_verb("/cli/app/remote-pass/rotate"));
         assert!(
             !is_agent_verb("/cli/skin/users/agent"),
             "an agent must never mark or unmark a principal as an agent"

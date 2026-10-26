@@ -144,8 +144,19 @@ pub fn seed_ws(env: &Env, handle: &str) -> Ws {
     Ws { id, path, handle: handle.to_string() }
 }
 
+/// "Build and run Apps" AND "Let this agent manage its Apps' users"
+/// (0225): what an agent that sets up its own Apps and their users needs.
+/// [`allow_build_only`] leaves the users switch off.
 pub fn allow_manage(ws: &Ws, on: bool) {
     k2_core::workspace::settings::set_agents_can_manage_skin(&ws.path.to_string_lossy(), on).unwrap();
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&ws.id, on).unwrap();
+}
+
+/// "Build and run Apps" only: its Apps' users stay the owner's.
+#[allow(dead_code)]
+pub fn allow_build_only(ws: &Ws, on: bool) {
+    k2_core::workspace::settings::set_agents_can_manage_skin(&ws.path.to_string_lossy(), on).unwrap();
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&ws.id, false).unwrap();
 }
 
 /// A harness-session passport for `ws` (classified as an agent).

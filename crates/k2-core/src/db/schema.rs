@@ -233,6 +233,26 @@ pub struct Project {
     /// "db_upgrade"}` (the owner raises, the owner or an Admin lowers).
     #[serde(default)]
     pub agents_can_upgrade_postgres: i64,
+    /// "Let this agent manage its Apps' users" (`apps.manage-users`,
+    /// migration 0225). DEFAULT 0 (off). Read-only here (the Agent tab
+    /// shows it); written only by `POST /cli/agent-access/set {toggle:
+    /// "app_users"}` (the owner, both ways). Read by its own query
+    /// ([`app_users_switches`]), never in the main SELECT, so a database
+    /// before 0225 (the upgrade tests read one) still reads as off.
+    #[serde(default)]
+    pub agents_can_manage_app_users: i64,
+}
+
+/// Every workspace's "Let this agent manage its Apps' users" (0225), by id.
+/// A database before 0225 (no column) or a read error: empty, so every
+/// workspace reads as off (fail closed).
+fn app_users_switches(conn: &Connection) -> std::collections::HashMap<String, i64> {
+    let Ok(mut stmt) = conn.prepare("SELECT id, agents_can_manage_app_users FROM projects") else {
+        return std::collections::HashMap::new();
+    };
+    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map(|rows| rows.filter_map(std::result::Result::ok).collect())
+        .unwrap_or_default()
 }
 
 fn app_cores_default() -> String {
@@ -313,9 +333,15 @@ impl Project {
                 agents_can_manage_apps_full: row.get(41).unwrap_or(0),
                 app_cores: row.get::<_, Option<String>>(42).ok().flatten().unwrap_or_else(|| "[]".to_string()),
                 agents_can_upgrade_postgres: row.get(43).unwrap_or(0),
+                agents_can_manage_app_users: 0,
             })
         })?;
-        rows.collect()
+        let mut out: Vec<Project> = rows.collect::<Result<_>>()?;
+        let users = app_users_switches(conn);
+        for p in out.iter_mut() {
+            p.agents_can_manage_app_users = users.get(&p.id).copied().unwrap_or(0);
+        }
+        Ok(out)
     }
 
     pub fn get(conn: &Connection, id: &str) -> Result<Project> {
@@ -380,9 +406,17 @@ impl Project {
                 agents_can_manage_apps_full: row.get(41).unwrap_or(0),
                 app_cores: row.get::<_, Option<String>>(42).ok().flatten().unwrap_or_else(|| "[]".to_string()),
                 agents_can_upgrade_postgres: row.get(43).unwrap_or(0),
+                agents_can_manage_app_users: 0,
                 })
             },
         )
+        .map(|mut p| {
+            // Its own query: a database before 0225 reads as off.
+            p.agents_can_manage_app_users = conn
+                .query_row("SELECT agents_can_manage_app_users FROM projects WHERE id = ?1", params![p.id], |r| r.get(0))
+                .unwrap_or(0);
+            p
+        })
     }
 
     pub fn create(
@@ -5166,6 +5200,24 @@ mod unit_tests {
         assert_eq!(p.app_cores, "[]", "the column before it still reads");
         let json = serde_json::to_value(&p).unwrap();
         assert_eq!(json["agentsCanUpgradePostgres"], 1, "{json}");
+    }
+
+    #[test]
+    fn project_agents_can_manage_app_users_defaults_off_reads_on_its_own_and_serializes_camel_case() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-agents-app-users");
+        assert_eq!(Project::get(&conn, &id).unwrap().agents_can_manage_app_users, 0, "0225 default is OFF");
+        conn.execute("UPDATE projects SET agents_can_manage_app_users = 1 WHERE id = ?1", params![id]).unwrap();
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.agents_can_manage_app_users, 1);
+        assert_eq!(p.agents_can_upgrade_postgres, 0, "a neighbouring switch is untouched");
+        let listed = Project::list(&conn).unwrap();
+        assert_eq!(listed.iter().find(|x| x.id == id).expect("listed").agents_can_manage_app_users, 1);
+        assert_eq!(serde_json::to_value(&p).unwrap()["agentsCanManageAppUsers"], 1);
+        // A database before 0225 (no column) reads it as off, never fails.
+        conn.execute_batch("ALTER TABLE projects DROP COLUMN agents_can_manage_app_users").unwrap();
+        assert_eq!(Project::get(&conn, &id).unwrap().agents_can_manage_app_users, 0);
+        assert_eq!(Project::list(&conn).unwrap().iter().find(|x| x.id == id).expect("listed").agents_can_manage_app_users, 0);
     }
 
     #[test]

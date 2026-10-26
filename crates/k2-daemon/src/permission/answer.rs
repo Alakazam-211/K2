@@ -122,6 +122,10 @@ pub(crate) fn audit(event: &str, user: &str, via: &str, req: &PermissionRequest)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Decision {
     Allow,
+    /// "Always allow" (K2's App cards whose held request "Manage its Apps
+    /// end to end" covers): Allow, then turn that switch on
+    /// (`apps::held_cards::turn_on_always`).
+    Always,
     Deny,
     Close,
 }
@@ -129,6 +133,7 @@ enum Decision {
 fn decision_of(label_text: &str) -> Option<Decision> {
     match label_text {
         label::ALLOW => Some(Decision::Allow),
+        label::ALWAYS => Some(Decision::Always),
         label::DENY => Some(Decision::Deny),
         label::CLOSE => Some(Decision::Close),
         _ => None,
@@ -192,6 +197,9 @@ pub(crate) fn answer(
         let Some(d) = decision_of(&answer) else {
             return err(400, "usage", format!("'{answer}' is not an option on this card"));
         };
+        if d == Decision::Always && (batch || !crate::apps::held_cards::offers_always(&reqs[0])) {
+            return err(400, "usage", format!("'{answer}' is not an option on this card"));
+        }
         let target = if batch {
             let Some(id) = item.as_deref() else {
                 return err(400, "usage", format!("'{answer}' on a batch card names an item"));
@@ -292,7 +300,7 @@ fn decide_one(
 
     // A confirm action needs its Settings confirm before anything moves.
     let confirm = registered.as_ref().is_some_and(|r| matches!(r.spec.proof, Proof::SettingsConfirm { .. }));
-    if d == Decision::Allow && confirm && token.is_none() {
+    if matches!(d, Decision::Allow | Decision::Always) && confirm && token.is_none() {
         return Err(err(403, code::VAULT_CONFIRM_REQUIRED, "this action takes the same confirm as Settings: confirm, then answer with confirmToken"));
     }
 
@@ -303,7 +311,7 @@ fn decide_one(
     let Some(registered) = registered else {
         return record(RequestState::Stale, Some("K2 no longer offers this request"), None);
     };
-    if d == Decision::Allow {
+    if matches!(d, Decision::Allow | Decision::Always) {
         if let Some(card) = single {
             // "Applying…": the card still pending, same id and seq.
             if let Some(view) = store::get(req.id.as_str()).ok().flatten().and_then(|r| present::view_for(&[r], false, None)) {
@@ -339,7 +347,7 @@ fn decide_one(
     match (registered.apply)(&ctx, who, token) {
         Applied::Done { message } => {
             let w = present::words(registered.spec, &ctx);
-            let msg = if message.trim().is_empty() {
+            let mut msg = if message.trim().is_empty() {
                 match registered.spec.grant {
                     k2_core::permission::catalog::Grant::Standing => format!("Allowed. Turn it off again in {}.", w.settings_path),
                     k2_core::permission::catalog::Grant::OneTime => "Allowed.".to_string(),
@@ -347,6 +355,15 @@ fn decide_one(
             } else {
                 message
             };
+            if d == Decision::Always {
+                // The one-off is done; the switch is a second write through
+                // the Settings route, as this person. Its refusal never
+                // undoes the one-off: the card says what happened.
+                match crate::apps::held_cards::turn_on_always(&ctx, who) {
+                    Ok(line) => msg = format!("{msg} {line}"),
+                    Err(e) => msg = format!("{msg} The switch was not turned on: {e}"),
+                }
+            }
             record(RequestState::Approved, Some(&msg), None)
         }
         Applied::Refused { code: c, message } if c == code::VAULT_CONFIRM_REQUIRED || c == "rate_limited" => {

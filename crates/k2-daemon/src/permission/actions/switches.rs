@@ -267,7 +267,7 @@ const LEVEL: &[ParamSpec] =
 
 /// The Agent tab's switches, in Settings order. Index = the const generic
 /// of [`check_on`] / [`apply_on`] and their twins.
-pub(crate) static SWITCHES: [Switch; 15] = [
+pub(crate) static SWITCHES: [Switch; 16] = [
     Switch {
         on: on_spec(
             "compute.use",
@@ -386,7 +386,7 @@ pub(crate) static SWITCHES: [Switch; 15] = [
             &[],
             "Build and run Apps",
             "Let {ws} build and run Apps",
-            "Wider moves for its Apps (new caps, open services, budgets) still wait for the owner.",
+            "It builds, installs, deploys, runs, stops and uninstalls its own Apps inside the default limits, moves its own --cmd services and labels in, and edits their roles and App passes. New caps, open services and bigger budgets still wait for the owner; their users are a separate switch.",
             &[code_wall("apps_manage_off", "/cli/")],
             WallCoverage::Code,
         ),
@@ -410,7 +410,7 @@ pub(crate) static SWITCHES: [Switch; 15] = [
             &[],
             "Manage its Apps end to end",
             "Let {ws} manage its Apps end to end",
-            "Caps, budgets, hosts and keys on the Apps {ws} looks after stop waiting for the owner.",
+            "On its own Apps: budgets and quotas past the defaults, outbound (egress) hosts, box services, App keys and clean mode off apply without waiting for the owner; it resumes an App it suspended itself and sends push. Loosening an App's wall still waits for the owner; users are a separate switch.",
             &[],
             WallCoverage::None,
         ),
@@ -423,6 +423,32 @@ pub(crate) static SWITCHES: [Switch; 15] = [
             "Those changes are held for the owner again.",
         ),
         writer: Writer::Access("apps_manage_full"),
+    },
+    Switch {
+        // "Let this agent manage its Apps' users" (0225, Rosson 2026-10-26):
+        // the owner's both ways. Its wall is the skin-manage door's
+        // `app_users_off`; a test guest or the guests-rooms grant without
+        // it is a held request whose card offers "Always allow" (this).
+        on: on_spec(
+            "apps.manage-users",
+            "apps.manage-users-off",
+            Floor::Owner,
+            &[],
+            "Let this agent manage its Apps' users",
+            "Let {ws} manage the users of its own Apps",
+            "On its own Apps only: add and remove App users and test guests, set their passwords, email and names, unlock them, give them roles and its own room, invite people, and give its Apps the guests-rooms grant in its own room. The users it makes are tied to it. Never a box login, another workspace's guest or K2 logins.",
+            &[code_wall("app_users_off", "/cli/skin/")],
+            WallCoverage::Code,
+        ),
+        off: off_spec(
+            "apps.manage-users-off",
+            Floor::Owner,
+            &[],
+            "Let this agent manage its Apps' users",
+            "Stop {ws} managing its Apps' users",
+            "Its Apps' users stay as they are; new ones, passwords and rooms go back to the owner.",
+        ),
+        writer: Writer::Access("app_users"),
     },
     Switch {
         // A cap outside the ticked cores is a held request (apps.approve).
@@ -633,6 +659,7 @@ fn is_on(sw: &Switch, ctx: &Ctx, want_on: bool) -> Result<bool, String> {
             path()?;
             Ok(crate::apps::access::level(ws) >= crate::apps::access::Level::Build)
         }
+        Writer::Access("app_users") => path().map(|_| k2_core::workspace::settings::agents_can_manage_app_users(ws)),
         Writer::Access("apps_manage_full") => {
             path()?;
             let level = crate::apps::access::level(ws);
@@ -747,7 +774,7 @@ macro_rules! register {
 }
 
 pub(crate) fn actions() -> Vec<Registered> {
-    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
+    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
 }
 
 // ── not card-able (§5.4, §9) ────────────────────────────────────────

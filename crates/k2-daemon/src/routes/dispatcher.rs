@@ -10620,26 +10620,27 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    // Stricter than role edits: owner-role only. A scoped hook
-                    // is rejected even when agents_can_manage_skin is ON.
-                    let Some(actor) =
-                        super::http::owner_role_identity(&query, state.token.as_str())
-                    else {
-                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
-                        super::http::send_response(
-                            &mut *stream,
-                            f.status,
-                            f.content_type,
-                            &f.body,
-                        )
-                        .await;
-                        return DispatchOutcome::Done;
+                    // The owner, or (0.46.4) an agent with "Let this agent
+                    // manage its Apps' users", on its own workspace's guests
+                    // only (`agent_scoped`).
+                    let (actor, agent_ws) = match owner_or_skin_manage_hook_scoped(p, &query, bearer_token.as_deref(), state.token.as_str()) {
+                        Ok(a) => a,
+                        Err(f) => {
+                            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
+                            return DispatchOutcome::Done;
+                        }
                     };
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::handle_users_full_name(&body, &actor),
+                            crate::skin_routes::agent_scoped(
+                                agent_ws.as_deref(),
+                                "/cli/skin/users/full-name",
+                                &body,
+                                &actor,
+                                crate::skin_routes::handle_users_full_name,
+                            ),
                             &actor,
                         )
                     })
@@ -14012,10 +14013,13 @@ fn owner_or_skin_manage_hook_scoped(
         return Err(skin_dual_auth_failure(query, bearer));
     };
     let ws_path = crate::workspace_msg::resolve_workspace(&validated.principal.workspace_uuid);
-    // An agent's App-user management (`/cli/skin/users*`) has its own gate,
-    // in one place; everything else here rides the skin-manage switch.
+    // An agent's App-user management (`skin_routes::is_app_user_route`)
+    // has its own gate, in one place: "Let this agent manage its Apps'
+    // users" (`apps.manage-users`, 0225). Everything else here rides the
+    // skin-manage switch ("Build and run Apps").
+    let users = crate::skin_routes::is_app_user_route(path);
     let allowed = ws_path.as_deref().is_some_and(|p| {
-        if crate::skin_routes::is_app_user_route(path) {
+        if users {
             crate::skin_routes::agent_may_manage_app_users(p)
         } else {
             k2_core::workspace::settings::agents_can_manage_skin_for_path(p)
@@ -14026,6 +14030,9 @@ fn owner_or_skin_manage_hook_scoped(
             crate::skin_routes::skin_manage_actor_label(&validated.principal),
             Some(validated.principal.workspace_uuid.trim().to_string()),
         ));
+    }
+    if users {
+        return Err(crate::skin_routes::app_users_off_response());
     }
     Err(crate::skin_routes::owner_only_manage_response())
 }

@@ -233,7 +233,7 @@ fn current_state(stored: RequestState, request_id: &str, choice_status: &str, an
         "answered" if stored.is_open() || stored == RequestState::Applying => {
             return match answer {
                 Some(a) if a == label::CLOSE => RequestState::AlreadyDone,
-                Some(a) if a == label::ALLOW || a == label::ALLOW_ALL => RequestState::Approved,
+                Some(a) if a == label::ALLOW || a == label::ALWAYS || a == label::ALLOW_ALL => RequestState::Approved,
                 Some(a) if a == label::DENY || a == label::DENY_ALL => RequestState::Denied,
                 _ => stored,
             };
@@ -400,12 +400,17 @@ fn batch_labels() -> Vec<ChoiceOption> {
 
 /// Approver options for one request in `state` (§17.2.4): `Allow` /
 /// `Deny` (kept on a closed card, as §17.11.2 shows), `Close` when it is
-/// already on, none while applying.
-fn approver_options(state: RequestState, answer: Option<&str>) -> Vec<ChoiceOption> {
+/// already on, none while applying. K2's App cards whose held request
+/// "Manage its Apps end to end" covers add `Always allow` (people on
+/// `cards=2` only; the §17.6 fallback keeps the two labels).
+fn approver_options(state: RequestState, answer: Option<&str>, item: &ItemView) -> Vec<ChoiceOption> {
     match state {
         RequestState::AlreadyDone => labels(&[label::CLOSE]),
         RequestState::Applying => Vec::new(),
         _ if answer == Some(label::CLOSE) => labels(&[label::CLOSE]),
+        _ if crate::apps::held_cards::offers_always_for(&item.action, &item.request_id) => {
+            labels(&[label::ALLOW, label::DENY, label::ALWAYS])
+        }
         _ => answer_labels(),
     }
 }
@@ -435,7 +440,7 @@ fn project_one(doc: &OverlayDoc, view: PermissionView, viewer: &Viewer, cards: u
         let mut d = doc.clone();
         let c = d.choice.as_mut().expect("choice");
         let a = c.action.as_mut().expect("action");
-        c.options = if can { approver_options(state, choice.answer.as_deref()) } else { Vec::new() };
+        c.options = if can { approver_options(state, choice.answer.as_deref(), &view.item) } else { Vec::new() };
         if !can && state == RequestState::Approved {
             // The approver's result names the Settings path; the asker and
             // other people get who allowed it (§17.11.6).

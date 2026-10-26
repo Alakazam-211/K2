@@ -7570,11 +7570,14 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Owner only. Add an app principal (not a Connect user) with the box login
   k2 app user add <username> --app <app> [--role R] [--email e] [--password-stdin]
                                         A guest of ONE App: that App's grant, no box login. The owner,
-                                        or an agent with "manage Apps" for its own workspace's Apps
-  k2 app user add <app-id> <name> --test [--role R] [--expires 24h]
-                                        Owner only. A test guest of ONE App: signs in only through
-                                        that App's link, a role the App defines, ends on its own
-                                        (24 h, at most 7 d), at most 5 per App (k2 app test-guests)
+                                        or an agent with "Let this agent manage its Apps' users" for
+                                        its own workspace's Apps (it is tied to the agent)
+  k2 app user add <app-id> <name> --test [--role R] [--room H] [--expires 24h] [--password-stdin]
+                                        A test guest of ONE App: signs in only through that App's
+                                        link, a role the App defines, ends on its own (24 h, at most
+                                        7 d), at most 5 per App (k2 app test-guests). The owner, or
+                                        the App's own agent with "Let this agent manage its Apps'
+                                        users" (else one held request: a card for the owner, exit 2)
   k2 app user invite <username> --app <app> [--email e] [--role R] [--from <address>] [--json]
                                         Mail a one-time link to set their own password (new people
                                         need --email and are made App-only). The owner, or an agent
@@ -7655,11 +7658,16 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app grant hooks retry <outbox-id> | skip <outbox-id> | reconcile
   k2 app grant hooks target chat --on|--off [--socket <path>] [--token-file <path>]
   k2 app grant copy-host <app> [--dry-run] [--json]
-                                        Owner only. Everyone with the box login gets the same access on <app>
-                                        (an App published after 0.45.5 starts with nobody).
+                                        Everyone with the box login gets the same access on <app>
+                                        (an App published after 0.45.5 starts with nobody). The owner, at
+                                        once; an agent's (its own App) is one held request listing the
+                                        logins: a card for the owner (exit 2). --dry-run only looks.
   k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke]
-                                        Owner only. <app> sets its OWN guests' rooms with its own pass
-                                        (no owner token): its --room rooms plus its own, never above a role.
+                                        <app> sets its OWN guests' rooms with its own pass (no owner
+                                        token): its --room rooms plus its own, never above a role. The
+                                        owner; or the App's own agent in its own room with "Let this
+                                        agent manage its Apps' users" (else, or another workspace's
+                                        room, one held request: a card for the owner, exit 2).
   k2 app guest rooms <app> <user> [set <room,...>]
                                         Read/set one guest's rooms on <app> (owner; an agent within the grant).
                                         k2 app guest --help.
@@ -9852,13 +9860,17 @@ SIGN-INS. Your users sign in once after the move: sessions from the old
 service's box login don't carry over to the App, so each web and phone
 session asks for the password again (once).
 
-TESTING. A guest to test the App with is your owner's to make, as every
-guest: ask them for a test guest (k2 app user add <app-id> <name> --test,
-from a terminal outside K2). It signs in only through the App's link and
-ends on its own; k2 app test-guests <app-id> lists them.
+TESTING. Make a test guest of your App: k2 app user add <app-id> <name>
+--test [--room <your room>] [--password-stdin]. With "Let this agent manage
+its Apps' users" on it is made at once and tied to you; without it, it is one
+held request: your owner approves it from a card on your Thread (then set its
+password: k2 app user password <name> --password-stdin). It signs in only
+through the App's link and ends on its own; k2 app test-guests <app-id> lists
+them.
 
 GUESTS WITHOUT THE OWNER TOKEN (0.46.4). Your App calls with its own pass:
-  1. Your owner, once: k2 app grant <app> --kind guests-rooms [--room …]
+  1. Once: k2 app grant <app> --kind guests-rooms [--room <your room>] (at
+     once with "Let this agent manage its Apps' users", else a card)
   2. At boot: k2.asApp().app.rooms() (GET /cli/skin/app-rooms: its own room,
      granted, the ceiling), then k2.asApp().guests.list() to reconcile.
   3. At login: guests.login, then guests.setRooms if their rooms change.
@@ -10449,14 +10461,25 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        from a terminal outside K2.
   k2 app deny <request-id> [--reason R]
                                        Owner/Admin; an agent withdraws its own.
-  k2 app access <workspace> [--build on|off] [--manage on|off]
+  k2 app access <workspace> [--build on|off] [--manage on|off] [--users on|off]
                  [--core db|files|thread|mail|sew=on|off[,…]] [--json]
                                        No flags: show the agent's switches and
                                        cores. --build = "Build and run Apps"
-                                       (switch 1), --manage = the nested "…and
+                                       (switch 1: build, install, deploy, run
+                                       its own Apps, their roles and App
+                                       passes), --manage = the nested "…and
                                        manage them end to end" (switch 2: it
                                        raises its own budgets, quotas, egress,
-                                       box services and keys). --core ticks a
+                                       box services and keys, resumes an App it
+                                       suspended, sends push, moves its own
+                                       labels), --users = "Let this agent
+                                       manage its Apps' users" (App users and
+                                       test guests of its own Apps, their
+                                       passwords, email, names, unlock, roles
+                                       and its own room, invites, the
+                                       guests-rooms grant in its own room;
+                                       never a box login; the owner, both
+                                       ways). --core ticks a
                                        core: its Apps then use Database, Files
                                        and rooms, or Thread inside their own
                                        slice with no hold (Mail and Sew take
@@ -10493,6 +10516,8 @@ for h in helds:
     r = h.get("request") if isinstance(h.get("request"), dict) else {}
     print("held for the owner: %s  %s" % (r.get("id"), r.get("summary", "")))
     d = h.get("diff")
+    if isinstance(d, dict):
+        d = d.get("lines")
     for line in (d if isinstance(d, list) else []):
         print("  %s" % line)
     for why in h.get("reasons") or []:
@@ -11250,35 +11275,45 @@ else:
 }
 
 # Test guests (0.46.4): k2 app user add <app> <name> --test [--role R]
-# [--expires 24h] [--json]; k2 app user remove <name> --test; k2 app
-# test-guests <app>. A person adds and removes (an agent passport is
-# refused owner_only while agent test guests are parked); the App's own
-# agent may list.
+# [--room H]... [--expires 24h] [--password-stdin] [--json]; k2 app user
+# remove <name> --test; k2 app test-guests <app>. A person adds and
+# removes; the App's own agent adds with "Manage its Apps end to end" (else
+# one held request with a card for the owner, exit 2) and removes with
+# "Build and run Apps".
 _app_test_guest() {
     local action="$1"
     shift
-    local app="" name="" role="" expires="" json_out=0
+    local app="" name="" role="" expires="" json_out=0 rooms_csv="" pw_stdin=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --test) shift ;;
             --role) role="${2:-}"; shift 2 ;;
             --role=*) role="${1#--role=}"; shift ;;
+            --room) rooms_csv="${rooms_csv:+$rooms_csv,}${2:-}"; shift 2 ;;
+            --room=*) rooms_csv="${rooms_csv:+$rooms_csv,}${1#--room=}"; shift ;;
             --expires) expires="${2:-}"; shift 2 ;;
             --expires=*) expires="${1#--expires=}"; shift ;;
             --app) app="${2:-}"; shift 2 ;;
+            --password-stdin) pw_stdin=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help)
                 cat <<'EOF'
-k2 app user add <app-id> <name> --test [--role R] [--expires 24h] [--json]
+k2 app user add <app-id> <name> --test [--role R] [--room H]... [--expires 24h] [--password-stdin] [--json]
 k2 app user remove <name> --test
 k2 app test-guests <app-id> [--json]
 
   A test guest of ONE App, for testing it: it signs in only through that
   App's gateway link (POST /cli/skin/login with the App pass), never the
-  box login or another App. A role only when the App already defines it.
-  It ends on its own: 24 h by default, at most 7 days. At most 5 per App.
-  Owner only, as every guest. Each is audited and noted on the
-  workspace's Thread. K2 makes the password and shows it once.
+  box login or another App. A role only when the App already defines it;
+  --room (without a role) only your own workspace's room. It ends on its
+  own: 24 h by default, at most 7 days. At most 5 per App. Audited and
+  noted on the workspace's Thread. K2 makes the password and shows it once
+  (or --password-stdin; later: k2 app user password <name> --password-stdin).
+
+  Who: a person; or the App's own agent with "Manage its Apps end to end"
+  (its test guests are tied to it). Without that switch an agent's add is
+  one held request: the owner approves it from a card on your Thread or
+  Settings → App Approvals (exit 2), then you set its password.
 EOF
                 return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -11287,7 +11322,16 @@ EOF
     done
     if [ "$action" = add ]; then
         { [ -z "$app" ] || [ -z "$name" ]; } && { echo "usage: k2 app user add <app-id> <name> --test [--role R] [--expires 24h]" >&2; exit 2; }
-        _app_rt_post /cli/app/test-guest/add "$(_compute_json K2_CJ_app="$app" K2_CJ_username="$name" K2_CJ_role="$role" K2_CJ_expires="$expires")"
+        local pw="" rooms_j=""
+        if [ "$pw_stdin" = 1 ]; then
+            IFS= read -r pw || true
+            [ -n "$pw" ] || { echo "--password-stdin: no password on stdin" >&2; exit 2; }
+        fi
+        if [ -n "$rooms_csv" ]; then
+            rooms_j="$(K2_GR_ROOMS="$rooms_csv" python3 -c 'import json,os; print(json.dumps([r.strip() for r in os.environ["K2_GR_ROOMS"].split(",") if r.strip()]))')"
+        fi
+        _app_rt_post /cli/app/test-guest/add "$(_compute_json K2_CJ_app="$app" K2_CJ_username="$name" K2_CJ_role="$role" K2_CJ_expires="$expires" K2_CJ_password="$pw" K2_CJ_rooms_j="$rooms_j")"
+        _app_grace_done "$json_out"
     else
         [ -z "$name" ] && { echo "usage: k2 app user remove <name> --test" >&2; exit 2; }
         _app_rt_post /cli/app/test-guest/rm "$(_compute_json K2_CJ_username="$name")"
@@ -11300,10 +11344,13 @@ v = json.load(sys.stdin)
 if "removed" in v:
     print("Test guest %s %s." % (v.get("username"), "removed" if v.get("removed") else "was already gone"))
     sys.exit(0)
-print("Test guest %s of App %s (role %s), ends %s" % (v["username"], v["app"], v.get("role") or "none",
-      time.strftime("%Y-%m-%d %H:%M", time.localtime(v["expiresAt"]))))
+rooms = ", ".join(v.get("rooms") or [])
+print("Test guest %s of App %s (role %s%s), ends %s" % (v["username"], v["app"], v.get("role") or "none",
+      ", rooms " + rooms if rooms else "", time.strftime("%Y-%m-%d %H:%M", time.localtime(v["expiresAt"]))))
 if v.get("password"):
     print("password (shown once): %s" % v["password"])
+if v.get("tied"):
+    print("tied to your workspace: it never counts as a person for person-only cards")
 print(v.get("note", ""))'
 }
 
@@ -12211,18 +12258,19 @@ _app_access_print() {
     python3 -c '
 import json, sys
 v = json.load(sys.stdin).get("access") or {}
-print("%s: Build and run Apps %s, manage them end to end %s" % (v.get("workspace"), "on" if v.get("buildAndRun") else "off", "on" if v.get("manageEndToEnd") else "off"))
+print("%s: Build and run Apps %s, manage them end to end %s, manage their users %s" % (v.get("workspace"), "on" if v.get("buildAndRun") else "off", "on" if v.get("manageEndToEnd") else "off", "on" if v.get("manageUsers") else "off"))
 for c in v.get("coreList") or []:
     later = c.get("later")
     print("  [%s] %-16s %s%s" % ("x" if c.get("ticked") else " ", c.get("label", c.get("core")), c.get("core"), "  (" + later + ")" if later else ""))'
 }
 
 cmd_app_access() {
-    local ws="" build="" manage="" open="" json_out=0 cores=""
-    local _usage="usage: k2 app access <workspace> [--build on|off] [--manage on|off] [--core db|files|thread|mail|sew=on|off[,…]]… [--json]"
+    local ws="" build="" manage="" users="" open="" json_out=0 cores=""
+    local _usage="usage: k2 app access <workspace> [--build on|off] [--manage on|off] [--users on|off] [--core db|files|thread|mail|sew=on|off[,…]]… [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --build) build="${2:-}"; shift 2 ;;
+            --users) users="${2:-}"; shift 2 ;;
             --manage) manage="${2:-}"; shift 2 ;;
             --open) open="${2:-}"; shift 2 ;;
             --core|--cores) cores="${cores:+$cores,}${2:-}"; shift 2 ;;
@@ -12250,7 +12298,7 @@ for part in os.environ["K2_CORES"].split(","):
     out[k.strip()] = v == "on"
 print(json.dumps(out))')" || { echo "usage: --core <core>=on|off[,<core>=on|off…] (cores: db, files, thread, mail, sew)" >&2; exit 2; }
     fi
-    if [ -z "$build" ] && [ -z "$manage" ] && [ -z "$cores_j" ] && [ -z "$open" ]; then
+    if [ -z "$build" ] && [ -z "$manage" ] && [ -z "$users" ] && [ -z "$cores_j" ] && [ -z "$open" ]; then
         # No change asked: show the switches and cores.
         _compute_call GET /cli/app/list "workspace=$(urlencode "$ws")"
         if [ "$json_out" = 1 ]; then
@@ -12286,6 +12334,11 @@ print(json.dumps(out))')" || { echo "usage: --core <core>=on|off[,<core>=on|off�
         [ "$t" = manage ] && toggle="apps_manage_full"
         _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle="$toggle" K2_CJ_value_b="$([ "$v" = on ] && echo 1 || echo 0)")"
     done
+    if [ -n "$users" ]; then
+        # "Let this agent manage its Apps' users" (0225): the owner, both ways.
+        case "$users" in on|off) ;; *) echo "usage: --users on|off" >&2; exit 2 ;; esac
+        _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle=app_users K2_CJ_value_b="$([ "$users" = on ] && echo 1 || echo 0)")"
+    fi
     if [ -n "$cores_j" ]; then
         # The cores in one call (one note to the agent): the owner ticks, an
         # Admin may only untick.
@@ -12320,7 +12373,9 @@ k2 app — the App door (quotas, audit, suspend, remote passes)
                                        revoked (its next call is 401), deploys
                                        and starts are frozen. Anyone who can see
                                        the App may (it only narrows).
-  k2 app resume <app-id> [--start]     Owner only, from a terminal outside K2.
+  k2 app resume <app-id> [--start]     The owner; or the App's own agent for a
+                                       suspension it made itself, with "Manage
+                                       its Apps end to end".
   k2 app audit <app-id> [--since 1h] [--verb V] [--denied] [--limit N]
                  [--oldest-first] [--verify] [--json]
                                        Every call the App made through its
@@ -12870,13 +12925,18 @@ k2 app — guests' rooms (RS-A15, 0.46.1): an App sets its own guests' rooms
 without the owner token.
 
   k2 app grant <app> --kind guests-rooms [--room <handle>]... [--json]
-                                       Owner only. Lets <app> set its own
-                                       guests' rooms with its own pass
-                                       (GET|POST /cli/skin/guests/rooms, the
-                                       server SDK's k2.asApp().guests.*). It may
-                                       hand out the --room rooms plus its own
-                                       room, never above a guest's role.
-                                       Again = replace the rooms. Audited.
+                                       Lets <app> set its own guests' rooms
+                                       with its own pass (GET|POST
+                                       /cli/skin/guests/rooms, the server SDK's
+                                       k2.asApp().guests.*). It may hand out the
+                                       --room rooms plus its own room, never
+                                       above a guest's role. Again = replace
+                                       the rooms. Audited. The owner: at once.
+                                       An agent: its own workspace's App, at
+                                       once in its own room with "Manage its
+                                       Apps end to end"; otherwise (or another
+                                       workspace's room) one held request with
+                                       a card for the owner (exit 2).
   k2 app grant <app> --kind guests-rooms --revoke
                                        Take it back (an agent may, for its own
                                        App: it only narrows).
@@ -13002,7 +13062,11 @@ print("%s: guests-rooms grant %s" % (a.get("handle") or a.get("serviceId"), "rev
     fi
     local rooms_j
     rooms_j="$(K2_GR_ROOMS="$rooms_csv" python3 -c 'import json,os; print(json.dumps([r.strip() for r in os.environ["K2_GR_ROOMS"].split(",") if r.strip()]))')"
-    _compute_call POST /cli/app/grant "$(_compute_json K2_CJ_app="$app" K2_CJ_kind="$kind" K2_CJ_rooms_j="$rooms_j")"
+    _app_rt_post /cli/app/grant "$(_compute_json K2_CJ_app="$app" K2_CJ_kind="$kind" K2_CJ_rooms_j="$rooms_j")"
+    # An agent without "Manage its Apps end to end", or naming another
+    # workspace's room: one held request with a card for the owner.
+    _app_grace_done "$json_out"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
@@ -14239,36 +14303,40 @@ print("Grant %s scope %s" % (d.get("id") or "", d.get("scope") or ""))'
                             --dry-run) dry_run=1; shift ;;
                             --json) json_out=1; shift ;;
                             --help|-h)
-                                echo "Usage: k2 app grant copy-host <app> [--dry-run] [--json]   (<app> = service id or <workspace>/<name>)" >&2
+                                echo "Usage: k2 app grant copy-host <app> [--dry-run] [--json]   (<app> = App id, service id or <workspace>/<name>)" >&2
+                                echo "  The owner: any App, at once. An agent: its own workspace's App, as one held request listing the" >&2
+                                echo "  logins (exit 2); the owner approves it from a card on the agent's Thread or Settings → App Approvals." >&2
                                 exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$app" ]] && app="$1"; shift ;;
                         esac
                     done
                     [[ -z "$app" ]] && { echo "Usage: k2 app grant copy-host <app> [--dry-run] [--json]" >&2; exit 1; }
-                    local body raw
-                    body=$(K2_GRANT_APP="$app" K2_GRANT_DRY="$dry_run" python3 -c '
-import json,os
-b={"app": os.environ.get("K2_GRANT_APP","")}
-if os.environ.get("K2_GRANT_DRY","0") == "1":
-    b["dryRun"]=True
-print(json.dumps(b))')
-                    raw=$(cli_post_json "/cli/skin/grants/copy-host" "$body")
-                    printf '%s' "$raw" | _skin_die_if_err
+                    local dry_b=""
+                    [ "$dry_run" = 1 ] && dry_b=1
+                    # 0.46.4: the passport-aware door (the owner's older
+                    # /cli/skin/grants/copy-host stays for scripts).
+                    _app_rt_post /cli/app/grant/copy-host "$(_compute_json K2_CJ_app="$app" K2_CJ_dryRun_b="$dry_b")"
+                    # An agent's copy is one held request: a card for the owner.
+                    _app_grace_done "$json_out"
+                    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
                     if [ "$json_out" = 1 ]; then
-                        printf '%s\n' "$raw"
+                        printf '%s\n' "$_CP_BODY"
                         return 0
                     fi
-                    printf '%s' "$raw" | python3 -c '
+                    printf '%s' "$_CP_BODY" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
 verb="Would copy" if d.get("dryRun") else "Copied"
 added=d.get("added") or []
-print("%s the box login onto App %s for %d user(s)%s" % (verb, d.get("app",""), len(added), (": " + ", ".join(added)) if added else ""))
+a=d.get("appInfo") or {}
+print("%s the box login onto App %s for %d user(s)%s" % (verb, a.get("handle") or d.get("app",""), len(added), (": " + ", ".join(added)) if added else ""))
 for k in d.get("keptExisting") or []:
     print("  kept %s: an App grant already exists (%s)" % (k.get("username",""), "enabled" if k.get("enabled") else "disabled"))
 for u in d.get("skippedOtherAppRole") or []:
-    print("  skipped %s: the box-login role is tagged for another App" % u)'
+    print("  skipped %s: the box-login role is tagged for another App" % u)
+for u in d.get("skippedOtherWorkspaceAgent") or []:
+    print("  skipped %s: another workspace'"'"'s agent added it" % u)'
                     ;;
                 --help|-h)
                     echo "Usage: k2 app grant <list|add|set|rm|copy-host|hooks>" >&2
@@ -35376,7 +35444,7 @@ cmd_schema() {
     {
       "name": "app grant copy-host",
       "usage": "k2 app grant copy-host <app> [--dry-run] [--json]",
-      "description": "Owner only. Give everyone who has the box login the same access on one App (their role when it is host-wide or that App's, else their rooms). A grant already on that App wins (even a disabled one); a role tagged for another App is skipped. Use after publishing an App (it starts with nobody) or before a BFF starts sending app on login.",
+      "description": "Give everyone who has the box login the same access on one App (their role when it is host-wide or that App's, else their rooms). A grant already on that App wins (even a disabled one); a role tagged for another App is skipped. Use after publishing an App (it starts with nobody) or before a BFF starts sending app on login. The owner copies at once; an agent's call (its own workspace's App) is one held request listing exactly the logins, approved by the owner from a card on its Thread or Settings → App Approvals (exit 2); the approval copies exactly those, or nothing if the list changed.",
       "args": [{"name": "app", "required": true}],
       "flags": [
         {"name": "--dry-run", "arg": null, "description": "Show who would be copied; write nothing."},
@@ -35386,7 +35454,7 @@ cmd_schema() {
     {
       "name": "app grant guests-rooms",
       "usage": "k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke] [--json]",
-      "description": "Owner only (RS-A15, 0.46.1). Lets <app> read and set its OWN guests' rooms with its own App pass (GET|POST /cli/skin/guests/rooms; the server SDK's k2.asApp().guests.rooms / guests.setRooms), so its server never carries the owner token. It may hand out the --room rooms plus its own room, never a room above a guest's role, never the owner, Connect users or another App's guests. Granting again replaces the rooms. --revoke takes it back (an agent may revoke its own App's: it narrows). Audited (k2 app history).",
+      "description": "The owner; or the App's own agent in its own room with \"Let this agent manage its Apps' users\" (else, or another workspace's room, one held request with a card for the owner, exit 2) (RS-A15, 0.46.1; 0.46.4). Lets <app> read and set its OWN guests' rooms with its own App pass (GET|POST /cli/skin/guests/rooms; the server SDK's k2.asApp().guests.rooms / guests.setRooms), so its server never carries the owner token. It may hand out the --room rooms plus its own room, never a room above a guest's role, never the owner, Connect users or another App's guests. Granting again replaces the rooms. --revoke takes it back (an agent may revoke its own App's: it narrows). Audited (k2 app history).",
       "args": [{"name": "app", "required": true}],
       "flags": [
         {"name": "--kind", "arg": "guests-rooms", "description": "The grant kind."},
@@ -38835,13 +38903,15 @@ PER-APP LOGINS (0.45.5)
     no public URL (k2 study app-deploys, PUBLIC ORIGINS).
   New Apps start with NOBODY. Owner adds people:
     k2 app grant copy-host <app>               everyone with the box login
+                                               (an agent's: a card for the owner)
     k2 app user add <u> --app <app> [--role R]  a guest of this App only
                                                (no box login)
     k2 app user rooms <u> --app <app> --agent sales   that App's rooms
     k2 app grant add … --kind app --target <app> --role R | --room sales
     k2 app role create R --app <app>           a role only that App can use
   <app> = a service id, or <workspace>/<publish name>. `host` = box login.
-  AGENT APP USERS (0.46.4): an agent with "manage Apps" adds people to its
+  AGENT APP USERS (0.46.4): an agent with "Let this agent manage its Apps'
+  users" (its own switch, the owner's both ways) adds people to its
   own workspace's Apps (k2 app user add <u> --app <app> [--role R], a role
   of its own workspace without files:download/files:agentconfig) and sets
   their rooms (k2 app user rooms <u> --app <app> --agent <its room>). Those
@@ -38911,6 +38981,8 @@ INVITES (0.46.4)
 GUESTS' ROOMS FROM THE APP (RS-A15, 0.46.1; no owner token)
   An App resets its OWN guests' rooms (say at login) with its own pass:
     owner, once:  k2 app grant <app> --kind guests-rooms [--room acme]...
+                  (or the App's own agent in its own room, with "Let this
+                  agent manage its Apps' users")
     the App:      GET  /cli/skin/guests/rooms?username=dana
                   POST /cli/skin/guests/rooms {"username":"dana","rooms":["acme"]}
                   Authorization: Bearer <its App pass: K2_PASS_FILE in the
@@ -68842,6 +68914,7 @@ if verb == "request":
     else:
         exp = expires_in(v.get("expiresAt"))
         print("Asked: %s (%s%s). Shown to: %s." % (v.get("id", "?"), st or "pending", "; " + exp if exp else "", people(v.get("routedTo"))))
+        print("Card raised on your Thread%s: they answer it there (desktop, phone or web); you get one [permission:%s] turn with the answer." % (" (" + v["addr"] + ")" if v.get("addr") else "", v.get("id", "?")))
         if v.get("text"):
             print("Card: %s" % v["text"] + ("" if not v.get("duration") else " Lasts: %s." % v["duration"]))
 elif verb in ("update", "cancel", "approve", "deny", "beta", "agent"):

@@ -1,0 +1,14 @@
+-- 0225: "Let this agent manage its Apps' users" (0.46.4, Rosson 2026-10-26).
+--
+-- `projects.agents_can_manage_app_users` — the per-agent switch
+-- `apps.manage-users` (toggle `app_users`). Default 0 (off). With it on,
+-- the workspace's agent manages the users of its OWN workspace's Apps:
+-- App users and test guests (add, remove, password, email, full name,
+-- unlock, roles and rooms inside its workspace, invites) and the App's
+-- guests-rooms grant in its own room. Never a box (host) login, another
+-- workspace's guest, or /cli/users/*. Written only by
+-- POST /cli/agent-access/set {toggle: "app_users"} (the owner both ways),
+-- never by workspace/set, so an agent can never grant it to itself.
+-- "Build and run Apps" (`agents_can_manage_skin`) keeps App roles and
+-- App passes; App users moved here.
+ALTER TABLE projects ADD COLUMN agents_can_manage_app_users INTEGER NOT NULL DEFAULT 0;

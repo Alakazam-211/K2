@@ -6,6 +6,8 @@
 //! - RS-A1: a login whose home room is `desk` holds `docs: jobs/J1/,
 //!   jobs/J3/ (read)` and sees exactly those folders in `docs`.
 //! - RS-A2: an agent-marked login (`k2 app user agent`) gets the same walls.
+//!   A mark is a tie (agent-app-users, 0.46.4): the login is held to the
+//!   marked workspace's room, so here it is marked as `docs`'s agent.
 //! - RS-A3: an unlisted folder, existing or not, is the very same 403 as a
 //!   missing cap; a symlink inside a granted folder can't reach a sibling.
 //! - Writes need a write folder; copies read their sources; uploads with
@@ -133,12 +135,13 @@ async fn rs_a1_a2_a3_scoped_logins_see_only_their_folders_in_any_room() {
     assert_eq!(line["folders"], json!({ "read": ["jobs/J1", "jobs/J3"] }));
 
     let person = login_with_role(port, &format!("pat{tag}"), &role).await;
-    // RS-A2: an agent login of the same role, marked as the desk's agent.
-    let agent_user = format!("deskbot{tag}");
+    // RS-A2: an agent login of the same role, marked as the docs room's
+    // agent (a mark ties the login to that workspace: its ceiling is docs).
+    let agent_user = format!("docsbot{tag}");
     let agent = login_with_role(port, &agent_user, &role).await;
-    owner_ok(port, "/cli/skin/users/agent", json!({ "username": agent_user, "workspace": desk.handle })).await;
+    owner_ok(port, "/cli/skin/users/agent", json!({ "username": agent_user, "workspace": docs.handle })).await;
     let roster = get(port, "/cli/skin/users", OWNER, "").await;
-    assert!(roster.body.contains(&desk.id), "the agent mark is stored: {}", roster.body);
+    assert!(roster.body.contains(&docs.id), "the agent mark is stored: {}", roster.body);
 
     // The refusal a login gets for a room line WITHOUT files:read.
     let no_cap = guest_get(port, "/cli/fs/read-dir", &person, &desk, ".").await;
@@ -198,8 +201,12 @@ async fn rs_a1_a2_a3_scoped_logins_see_only_their_folders_in_any_room() {
         let rooms = me["rooms"].as_array().unwrap();
         let docs_room = rooms.iter().find(|r| r["room"] == docs.id.as_str()).expect("docs in me");
         assert_eq!(docs_room["folders"], json!({ "read": ["jobs/J1", "jobs/J3"] }), "{who}");
-        let desk_room = rooms.iter().find(|r| r["room"] == desk.id.as_str()).expect("desk in me");
-        assert!(desk_room.get("folders").is_none(), "{who}: the desk line is unscoped");
+        let desk_room = rooms.iter().find(|r| r["room"] == desk.id.as_str());
+        if who == "agent" {
+            assert!(desk_room.is_none(), "the agent login is held to its tie's room: {me}");
+        } else {
+            assert!(desk_room.expect("desk in me").get("folders").is_none(), "{who}: the desk line is unscoped");
+        }
     }
 
     // Live: widening the line reaches the live sessions at once…

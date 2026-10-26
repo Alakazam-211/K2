@@ -36259,15 +36259,14 @@ _study_topic_ids_all() {
 }
 
 _study_usage_all() {
-    # After the topics block's last line, wherever compute-shared's reflow
-    # put `agent-hire  garden-data` on it (0.46.3 r8).
-    _study_usage | {
-        if _permission_cli_enabled; then
-            awk '{ print } / agent-hire  garden-data/ { print "  permissions" }'
-        else
-            cat
-        fi
-    }
+    # After the topics block's last line. The block ends the usage text, so
+    # the line goes at the end: anchoring on one line's words broke when the
+    # block reflowed (`agent-hire  garden-data` no longer shares a line), and
+    # `k2 study --help` lost the topic while permission cards were on.
+    _study_usage
+    if _permission_cli_enabled; then
+        echo "  permissions"
+    fi
 }
 
 _study_catalog_all() {

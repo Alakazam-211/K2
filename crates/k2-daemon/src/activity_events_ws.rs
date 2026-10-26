@@ -1045,6 +1045,31 @@ mod tests {
         }
     }
 
+    /// [`take_text`] for an OWNER socket in a test that shares the process
+    /// with others: the next frame that is not a room-less
+    /// `room_members_changed`. k2-core's members listener sends
+    /// `RoomMembersChanged { room: None }` ("every room") whenever any test
+    /// in this binary changes a guest, and an owner socket hears it in its
+    /// own room by design, so it is other tests' traffic here (soak
+    /// 2026-10-25: "owner socket: own room only" failed on that frame).
+    async fn take_text_skipping_roomless_members(
+        ws: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        workspace: &str,
+        wait: Duration,
+    ) -> Option<String> {
+        let roomless = serde_json::json!({ "kind": "room_members_changed", "workspace": workspace });
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let text = take_text(ws, left).await?;
+            if serde_json::from_str::<serde_json::Value>(&text).ok().as_ref() != Some(&roomless) {
+                return Some(text);
+            }
+        }
+    }
+
 
     /// T-S8b (frame): exactly the documented keys, so a field added later
     /// fails here first.
@@ -1347,11 +1372,17 @@ mod tests {
         let text = take_text(&mut a_and_b, Duration::from_secs(2)).await.expect("B is on this pass");
         assert_eq!(text, ROOMS_CHANGED_FRAME);
         assert!(take_text(&mut a_only, Duration::from_millis(300)).await.is_none(), "B is not on this pass");
-        assert!(take_text(&mut owner_a, Duration::from_millis(300)).await.is_none(), "owner socket: own room only");
+        let stray = take_text_skipping_roomless_members(&mut owner_a, &handle_a, Duration::from_millis(300)).await;
+        assert!(stray.is_none(), "owner socket: own room only: {stray:?}");
 
         session_events::emit(identity_event(&id_a)).expect("subscribers are connected");
-        for sock in [&mut a_only, &mut a_and_b, &mut owner_a] {
-            let text = take_text(sock, Duration::from_secs(2)).await.expect("room A changed");
+        for (owner, sock) in [(false, &mut a_only), (false, &mut a_and_b), (true, &mut owner_a)] {
+            let text = if owner {
+                take_text_skipping_roomless_members(sock, &handle_a, Duration::from_secs(2)).await
+            } else {
+                take_text(sock, Duration::from_secs(2)).await
+            }
+            .expect("room A changed");
             let v: serde_json::Value = serde_json::from_str(&text).expect("json");
             assert_eq!(v, serde_json::json!({"kind": "rooms_changed"}), "no room, name or handle: {text}");
             for secret in ["Secret Name", "secret-handle", "/somewhere/secret", "#123456"] {

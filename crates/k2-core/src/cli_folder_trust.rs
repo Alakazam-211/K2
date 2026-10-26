@@ -1296,6 +1296,15 @@ pub(crate) fn gemini_trusted(home: &Path, key: &str) -> bool {
     gemini_value(home, key).as_deref() == Some("TRUST_FOLDER")
 }
 
+/// Tests (k2-daemon too): does any CLI store in `home` grant `key`? A
+/// "no grant" check is per folder: a test that adds a project without the
+/// env lock writes its own folder's grants into whichever temp HOME is
+/// current, so a store file can exist that never names the folder.
+#[cfg(any(test, feature = "test-util"))]
+pub fn granted_in_any_store(home: &Path, key: &str) -> bool {
+    claude_trusted(home, key) || codex_trusted(home, key) || grok_trusted(home, key) || gemini_trusted(home, key)
+}
+
 /// Gemini's `TRUST_PARENT` on a child of `dir` trusts `dir` (its dirname).
 fn gemini_parent_trusted(home: &Path, dir: &str) -> bool {
     let p = home.join(".gemini").join("trustedFolders.json");

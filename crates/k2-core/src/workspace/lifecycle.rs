@@ -368,6 +368,10 @@ mod tests {
 
     #[test]
     fn register_workspace_seeds_wiki_by_default() {
+        // Register runs the folder-trust gate in the process HOME: hold
+        // our own, or the grants land in whichever test's temp HOME is
+        // current (soak 2026-10-26).
+        let _home = crate::test_env::TempHome::new();
         crate::db::init_for_tests();
         let dir = unique_dir("seed-on");
         let path = dir.to_string_lossy().into_owned();
@@ -397,6 +401,10 @@ mod tests {
 
     #[test]
     fn register_workspace_ex_false_skips_wiki() {
+        // Register runs the folder-trust gate in the process HOME: hold
+        // our own, or the grants land in whichever test's temp HOME is
+        // current (soak 2026-10-26).
+        let _home = crate::test_env::TempHome::new();
         crate::db::init_for_tests();
         let dir = unique_dir("seed-off");
         let path = dir.to_string_lossy().into_owned();
@@ -443,6 +451,10 @@ mod tests {
 
     #[test]
     fn register_twice_is_c2_copy_one_row() {
+        // Register runs the folder-trust gate in the process HOME: hold
+        // our own, or the grants land in whichever test's temp HOME is
+        // current (soak 2026-10-26).
+        let _home = crate::test_env::TempHome::new();
         crate::db::init_for_tests();
         let dir = unique_dir("already-exists");
         let path = dir.to_string_lossy().into_owned();
@@ -460,6 +472,10 @@ mod tests {
 
     #[test]
     fn create_workspace_makes_missing_nested_parents() {
+        // Register runs the folder-trust gate in the process HOME: hold
+        // our own, or the grants land in whichever test's temp HOME is
+        // current (soak 2026-10-26).
+        let _home = crate::test_env::TempHome::new();
         crate::db::init_for_tests();
         let root = unique_dir("missing-parents");
         // Field report 2026-10-16: /home/k2/ai did not exist yet.
@@ -527,6 +543,10 @@ mod tests {
 
     #[test]
     fn open_twice_is_c2_copy_one_row() {
+        // Register runs the folder-trust gate in the process HOME: hold
+        // our own, or the grants land in whichever test's temp HOME is
+        // current (soak 2026-10-26).
+        let _home = crate::test_env::TempHome::new();
         crate::db::init_for_tests();
         let dir = unique_dir("open-twice");
         let path = dir.to_string_lossy().into_owned();

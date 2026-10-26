@@ -254,7 +254,7 @@ fn request_and_status_are_for_workspace_folders_only() {
     let r = dispatch(true, REQUEST_PATH, &passport(&mine_id, &[("path", &s(&mine)), ("why", "build")]), b"", "agent");
     assert_eq!(r.status, "200 OK", "{}", r.body);
     assert_eq!(json_of(&r)["state"], "clean");
-    assert!(!e.home.join(".claude.json").exists(), "request wrote no grant");
+    assert!(!k2_core::cli_folder_trust::granted_in_any_store(&e.home, &s(&mine)), "request wrote no grant");
 
     let list = dispatch(false, STATUS_PATH, &passport(&mine_id, &[]), b"", "agent");
     let v = json_of(&list);

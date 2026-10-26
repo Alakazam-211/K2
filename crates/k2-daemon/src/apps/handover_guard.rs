@@ -68,7 +68,7 @@ pub fn release_confirm_id(ws_id: &str) -> String {
 /// Take a fresh owner confirm bound to `bound` (`what` names the move in
 /// the hint). No token: `403 vault_confirm_required` with the action and
 /// the id the CLI and Settings mint it for.
-pub fn take_confirm(who: &Who, bound: &str, token: Option<&str>, what: &str) -> R<()> {
+pub(crate) fn take_confirm(who: &Who, bound: &str, token: Option<&str>, what: &str) -> R<()> {
     let Some(stamp) = confirm_stamp(who) else {
         return Err(no(codes::OWNER_ONLY, 403, format!("{what} is the server owner's, in person, from Settings or a terminal outside K2")));
     };
@@ -110,7 +110,7 @@ fn handle(ws: &str) -> String {
 
 /// Everything that makes handing `app` from `from` to `to` unsafe today.
 /// A lookup that fails is a blocker too (fail closed), never a pass.
-pub fn blockers(app: &AppRow, from: &str, to: &str) -> R<Vec<Blocker>> {
+pub(crate) fn blockers(app: &AppRow, from: &str, to: &str) -> R<Vec<Blocker>> {
     let mut out = Vec::new();
     let svc = app.service_id.as_str();
 
@@ -249,7 +249,7 @@ fn secrets_left_behind(app: &AppRow, from: &str, to: &str) -> R<Vec<String>> {
 
 /// `409 handoff_needs_v1`: every blocker, and the way to move the App by
 /// hand until 0.46.5.
-pub fn refusal(app: &AppRow, to: &str, blockers: &[Blocker]) -> Refusal {
+pub(crate) fn refusal(app: &AppRow, to: &str, blockers: &[Blocker]) -> Refusal {
     let to_h = handle(to);
     let id = &app.app_id;
     let manual = vec![

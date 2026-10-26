@@ -42,9 +42,13 @@ impl TestEngine {
     }
 }
 
-/// A loopback HTTP server answering 200 to everything (the App).
+/// A loopback HTTP server answering 200 to everything (the App), on the
+/// listener the pipeline's `free_port` kept bound for it.
 fn serve(port: u16) -> std::io::Result<()> {
-    let l = std::net::TcpListener::bind(("127.0.0.1", port))?;
+    let l = match super::test_hooks::take_held_port(port) {
+        Some(l) => l,
+        None => std::net::TcpListener::bind(("127.0.0.1", port))?,
+    };
     std::thread::spawn(move || {
         for s in l.incoming() {
             let Ok(mut s) = s else { continue };
@@ -87,6 +91,9 @@ impl RuntimeEngine for TestEngine {
         self.starts.fetch_add(1, Ordering::SeqCst);
         if self.mode.load(Ordering::SeqCst) != APP_BROKEN {
             serve(port).map_err(|e| EngineError::new(codes::ENGINE_UNAVAILABLE, e.to_string()))?;
+        } else {
+            // Broken: nothing answers on the port (the kept listener goes).
+            drop(super::test_hooks::take_held_port(port));
         }
         Ok(RunHandle { app_id: spec.app_id.clone(), deployment_id: spec.deployment_id.clone(), port, pid: None, engine_ref: "test:".into() })
     }

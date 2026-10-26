@@ -156,6 +156,25 @@ pub(crate) mod test_hooks {
     pub fn engine(app_id: &str) -> Option<&'static dyn RuntimeEngine> {
         engines().lock().unwrap_or_else(|e| e.into_inner()).get(app_id).copied()
     }
+
+    /// A test-engine App's port, still bound from [`super::free_port`] until
+    /// the test engine's start takes it. Released in between, another test
+    /// in this binary binding port 0 could be handed the same port first
+    /// (`Address already in use` at start: daemon shuffle seed 5, soak
+    /// 2026-10-26).
+    fn held() -> &'static Mutex<HashMap<u16, std::net::TcpListener>> {
+        static H: OnceLock<Mutex<HashMap<u16, std::net::TcpListener>>> = OnceLock::new();
+        H.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    pub fn hold_port(port: u16, l: std::net::TcpListener) {
+        held().lock().unwrap_or_else(|e| e.into_inner()).insert(port, l);
+    }
+
+    /// The listener [`super::free_port`] kept for `port`, if it kept one.
+    pub fn take_held_port(port: u16) -> Option<std::net::TcpListener> {
+        held().lock().unwrap_or_else(|e| e.into_inner()).remove(&port)
+    }
 }
 
 /// Is `app_id` this tick's (or boot's) business? `only` = a test driving
@@ -924,12 +943,20 @@ fn spec_for(app: &AppRow, m: &Manifest, dep: &str) -> AppSpec {
 
 /// A free loopback port for a new instance, never in K2's reserved App
 /// range (38600-38999: gateway links and the proxy; box prep also keeps it
-/// out of the ephemeral range).
-fn free_port() -> Result<u16, Fail> {
+/// out of the ephemeral range). `hold` (unit tests, a test-engine App
+/// only): the port stays bound for the test engine's start
+/// ([`test_hooks::take_held_port`]).
+fn free_port(hold: bool) -> Result<u16, Fail> {
     for _ in 0..32 {
         let l = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| fail(codes::ENGINE_UNAVAILABLE, 503, format!("no free port: {e}")))?;
         let p = l.local_addr().map_err(|e| fail(codes::ENGINE_UNAVAILABLE, 503, e.to_string()))?.port();
         if k2_root_proto::engine::app_port_ok(p) {
+            #[cfg(test)]
+            if hold {
+                test_hooks::hold_port(p, l);
+            }
+            #[cfg(not(test))]
+            let _ = hold;
             return Ok(p);
         }
     }
@@ -992,7 +1019,7 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         Ok(p) => p,
         Err(e) => return pipeline_fail(app_id, dep, e.code, &e.message),
     };
-    let port = match free_port() {
+    let port = match free_port(test_engine(app_id).is_some()) {
         Ok(p) => p,
         Err(e) => return pipeline_fail(app_id, dep, e.code, &e.message),
     };

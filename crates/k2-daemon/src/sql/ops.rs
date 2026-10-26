@@ -2311,6 +2311,47 @@ pub fn rotate_db_role_passwords(ops: &dyn SystemOps) -> Vec<String> {
     out
 }
 
+/// An App handover (prd-app-handoff-v1 §4.6): database `name` moved to
+/// another workspace, and the agent that left knew its passwords. Its agent
+/// and migrator roles get new ones on every cluster holding them (open
+/// connections keep working: `ALTER ROLE … PASSWORD` affects new logins),
+/// then the agent DSN with the new password is returned for the App's
+/// `DATABASE_URL`. `Err` when the database is moving or dual-running, or
+/// the agent role couldn't change.
+pub fn rotate_database_for_handover(ops: &dyn SystemOps, name: &str) -> Result<(Vec<String>, String), String> {
+    let vault = crate::vault::get().map_err(|e| format!("vault closed: {}", e.code))?;
+    let store = crate::vault::refstore::VaultRefStore::new(vault, "postgres", "db");
+    if super::pgmove::k2::moving(name) || super::pgmove::dual_k2::running(name) {
+        return Err(format!("{name} is moving to another Postgres major; rotate after the move"));
+    }
+    let (agent_ref, mig_ref): (Option<String>, Option<String>) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT agent_secret_ref, migrator_secret_ref FROM sql_databases WHERE name = ?1 AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+            rusqlite::params![name],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| format!("{name}: {e}"))?
+    };
+    let clusters = cluster::k2_clusters();
+    let mut lines = Vec::new();
+    let agent_role = format!("{name}_agent");
+    let agent_ref = agent_ref.filter(|s| !s.is_empty()).ok_or_else(|| format!("{name} has no agent login K2 keeps"))?;
+    match rotate_role_everywhere(ops, &clusters, &agent_role, &agent_ref, &store) {
+        Some(line) if line.ends_with(": rotated") => lines.push(line),
+        Some(line) => return Err(line),
+        None => return Err(format!("{agent_role}: no cluster holds it")),
+    }
+    if let Some(m) = mig_ref.filter(|s| !s.is_empty()) {
+        if let Some(line) = rotate_role_everywhere(ops, &clusters, &format!("{name}_migrator"), &m, &store) {
+            lines.push(line);
+        }
+    }
+    let pw = store.resolve(&agent_ref).map_err(|e| format!("{agent_role}: {e}"))?.ok_or_else(|| format!("{agent_role}: no password kept"))?;
+    Ok((lines, dsn_for(name, &agent_role, &pw).map_err(|e| format!("{name}: {e:?}"))?))
+}
+
 /// Rotate one role on every cluster holding it. `None` = no cluster holds
 /// it (nothing to do).
 fn rotate_role_everywhere(

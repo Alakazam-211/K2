@@ -71,8 +71,9 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/handover/accept",
     "/cli/app/handover/decline",
     "/cli/app/handover/cancel",
+    "/cli/app/handover/rekey",
 ];
-pub const POST_ROUTES: &[&str] = &["/cli/app/handover/accept", "/cli/app/handover/decline", "/cli/app/handover/cancel"];
+pub const POST_ROUTES: &[&str] = &["/cli/app/handover/accept", "/cli/app/handover/decline", "/cli/app/handover/cancel", "/cli/app/handover/rekey"];
 
 /// Reads B may make on an App it accepted (shadowing, §4.9).
 pub const SHADOW_READS: &[&str] = &[
@@ -210,6 +211,7 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
         "/cli/app/handover/accept" => accept_route(who, body),
         "/cli/app/handover/decline" => decline_route(who, body),
         "/cli/app/handover/cancel" => cancel_route(who, body),
+        "/cli/app/handover/rekey" => rekey_route(who, body),
         _ => Err(no("not_found", 404, "no such App route")),
     }
 }
@@ -845,6 +847,37 @@ fn commit(id: &str, plan: &Plan, by: &str, raised: bool) -> R<()> {
             }
         }
     }
+    // P5 (§4.6): the App's sole database moves to B; a shared one stays
+    // A's and B gets a grant when the owner chose "share".
+    let mut db_journal = J::Null;
+    if let Some(name) = plan.db.name.as_deref() {
+        match plan.db.case {
+            "sole" => {
+                let n = tx
+                    .execute(
+                        "UPDATE sql_databases SET project_id = ?3 WHERE name = ?1 AND project_id = ?2 AND status = 'active'",
+                        rusqlite::params![name, room_from, to],
+                    )
+                    .map_err(db_err)?;
+                db_journal = json!({ "case": "sole", "name": name, "moved": n });
+            }
+            "shared" if plan.options.db.as_deref() == Some("share") => {
+                let dbid: Option<String> = tx
+                    .query_row("SELECT id FROM sql_databases WHERE name = ?1 AND status = 'active' ORDER BY created_at DESC LIMIT 1", rusqlite::params![name], |r| r.get(0))
+                    .map_err(db_err)?;
+                if let Some(dbid) = dbid {
+                    let n = tx
+                        .execute(
+                            "INSERT OR IGNORE INTO sql_grants (database_id, project_id, level, can_manage, created_at, updated_at) VALUES (?1, ?2, 'write', 1, ?3, ?3)",
+                            rusqlite::params![dbid, to, now],
+                        )
+                        .map_err(db_err)?;
+                    db_journal = json!({ "case": "shared", "name": name, "databaseId": dbid, "grantAdded": n == 1 });
+                }
+            }
+            _ => {}
+        }
+    }
     // P17: A's waiting requests for the App end (`handed_over`).
     let mut withdrawn = Vec::new();
     for r in &plan.requests {
@@ -865,6 +898,8 @@ fn commit(id: &str, plan: &Plan, by: &str, raised: bool) -> R<()> {
         "keyRooms": key_rooms,
         "withdrawn": withdrawn,
         "switch1Raised": raised,
+        "db": db_journal,
+        "liveDeployment": app.live_deployment,
     });
     if !hs::transition(&tx, id, &[hs::APPLYING], hs::APPLIED, now).map_err(db_err)? {
         return Err(no(NOT_HELD, 409, "the handover changed state while applying"));
@@ -937,8 +972,21 @@ pub(crate) fn finish_steps(id: &str, by: &str) -> J {
         }
     }
     if row.steps_done < 4 {
-        // Step 4: the vault (S4).
-        step(4);
+        // Step 4: the vault (§4.5): A's secrets the App uses move to B (or
+        // are copied when A uses them too); the Seed's references resolve
+        // through a per-service alias.
+        match vault_step(&row, &room_from) {
+            Ok(v) => {
+                journal_put(id, "vault", v.clone());
+                out.insert("secrets".into(), v);
+                step(4);
+            }
+            Err(e) => {
+                k2_core::log_debug!("WARN [apps/handover] {id}: vault: {e} (boot recovery retries)");
+                out.insert("secrets".into(), json!({ "error": e }));
+                return J::Object(out);
+            }
+        }
     }
     if row.steps_done < 5 {
         // Step 5: the runtime.
@@ -958,8 +1006,9 @@ pub(crate) fn finish_steps(id: &str, by: &str) -> J {
         step(5);
     }
     if row.steps_done < 6 {
-        // Step 6: re-key (S4).
-        let _ = hov_db(|c| hs::set_rekey(c, id, "none", deploy::now()));
+        // Step 6: re-key (§4.10): new App keys, new database passwords, and
+        // the App on a fresh instance to pick them up.
+        out.insert("rekey".into(), rekey(id, by));
         step(6);
     }
     if row.steps_done < 7 {
@@ -1000,4 +1049,274 @@ fn notes(row: &Handover, room_from: &str, by: &str) {
             ),
         );
     }
+}
+
+// ── S4: the vault, the database, the re-key ──────────────────────────
+
+/// Merge `key` into the handover's journal.
+fn journal_put(id: &str, key: &str, v: J) {
+    let _ = hov_db(|c| {
+        let mut j = hs::get(c, id)?.and_then(|r| r.journal).unwrap_or_else(|| json!({}));
+        j[key] = v;
+        hs::set_journal(c, id, Some(&j), deploy::now())
+    });
+}
+
+/// Step 4 (§4.5). For each A-scope secret the plan listed:
+/// - `move`: re-scoped to B (same id, versions and grants); renamed
+///   `NAME__<app>` when B has that name (Q8, the default), or the App
+///   uses B's own value (`collisions: use_b`);
+/// - `copy` (A uses it too): a copy in B; the App's grant moves to it;
+/// and an alias so the Seed's `k2v://ws/<A>/NAME` resolves in B for this
+/// service only. Idempotent (a secret already in B, a copy already made).
+fn vault_step(row: &Handover, room_from: &str) -> Result<J, String> {
+    use k2_vault::{Actor, Consumer, GrantRequest, Scope, SecretStore, Selector};
+    let items: Vec<J> = row.plan["secrets"].as_array().cloned().unwrap_or_default().into_iter().filter(|s| s["case"] != "untouched").collect();
+    if items.is_empty() {
+        return Ok(json!([]));
+    }
+    let vault = crate::vault::get().map_err(|e| format!("the vault isn't open ({})", e.code))?;
+    let use_b = row.options.get("collisions").and_then(J::as_str) == Some("use_b");
+    let to = row.to_workspace.clone();
+    let me = Consumer::published_service(row.service_id.clone());
+    let mut done = Vec::new();
+    for s in items {
+        let (id, name) = (s["secretId"].as_str().unwrap_or_default().to_string(), s["name"].as_str().unwrap_or_default().to_string());
+        let collision = s["collision"].as_bool().unwrap_or(false);
+        let case = s["case"].as_str().unwrap_or_default();
+        let (new_id, to_name, how) = if collision && use_b {
+            let m = vault.meta(&Selector::user(Scope::workspace(&to), &name), &Actor::Owner).map_err(|e| format!("{name}: {}", e.hint))?;
+            (m.id, name.clone(), "use_b")
+        } else {
+            let target = if collision { format!("{name}__{}", row.app_id) } else { name.clone() };
+            match case {
+                "move" => {
+                    let m = vault.meta(&Selector::Id(id.clone()), &Actor::Owner).map_err(|e| format!("{name}: {}", e.hint))?;
+                    if m.scope == Scope::workspace(&to) {
+                        (m.id, m.name, "moved")
+                    } else {
+                        let m = vault
+                            .rescope(&Selector::Id(id.clone()), Scope::workspace(&to), collision.then_some(target.as_str()), &Actor::Owner)
+                            .map_err(|e| format!("{name}: {}", e.hint))?;
+                        (m.id, m.name, "moved")
+                    }
+                }
+                _ => match vault.meta(&Selector::user(Scope::workspace(&to), &target), &Actor::Owner) {
+                    Ok(m) if m.origin == "k2 app handover" => (m.id, target, "copied"),
+                    _ => {
+                        let m = vault.copy_to(&Selector::Id(id.clone()), Scope::workspace(&to), &target, &Actor::Owner).map_err(|e| format!("{name}: {}", e.hint))?;
+                        (m.id, target, "copied")
+                    }
+                },
+            }
+        };
+        // The App's grant follows a copy or B's own secret.
+        if new_id != id {
+            for (g, _) in vault.grants_to(&me).map_err(|e| e.hint)? {
+                if g.secret_id != id {
+                    continue;
+                }
+                let req = GrantRequest {
+                    selector: Selector::Id(new_id.clone()),
+                    consumer: me.clone(),
+                    delivery: g.delivery,
+                    env_name: g.env_name.clone(),
+                    file_name: g.file_name.clone(),
+                    hosts_narrowed: g.hosts_narrowed.clone(),
+                    expires_at: g.expires_at.clone(),
+                    version: None,
+                };
+                vault.grant(req, &Actor::Owner).map_err(|e| format!("{name}: {}", e.hint))?;
+                vault.revoke(&g.id, &Actor::Owner).map_err(|e| format!("{name}: {}", e.hint))?;
+            }
+        }
+        // The Seed's reference (harmless when no reference names it).
+        hov_db(|c| {
+            hs::put_alias(
+                c,
+                &hs::RefAlias {
+                    service_id: row.service_id.clone(),
+                    from_workspace: room_from.to_string(),
+                    to_workspace: to.clone(),
+                    name: name.clone(),
+                    to_name: to_name.clone(),
+                    handover_id: row.id.clone(),
+                },
+                deploy::now(),
+            )
+        })
+        .map_err(|e| e.hint)?;
+        done.push(json!({ "secretId": id, "name": name, "newId": new_id, "toName": to_name, "how": how, "key": s["key"] }));
+    }
+    Ok(J::Array(done))
+}
+
+/// Step 6 (§4.10): rotate what A knew and put the App on a fresh instance.
+/// Synchronous parts first (keys minted, database passwords changed, the
+/// DSN secret updated); the old keys are revoked once the new instance is
+/// live and the old one drained (a watcher), or at once when the App
+/// isn't running.
+fn rekey(id: &str, by: &str) -> J {
+    let Ok(Some(row)) = hov_db(|c| hs::get(c, id)) else { return J::Null };
+    let mode = row.plan["rekey"]["mode"].as_str().unwrap_or("none").to_string();
+    if mode == "none" {
+        let _ = hov_db(|c| hs::set_rekey(c, id, "none", deploy::now()));
+        return json!({ "mode": "none" });
+    }
+    let _ = hov_db(|c| hs::set_rekey(c, id, "running", deploy::now()));
+    let mut out = json!({ "mode": mode });
+    let journal = row.journal.clone().unwrap_or(J::Null);
+    // The database: new passwords, the App's DSN secret gets the new one.
+    if journal["db"]["case"] == "sole" {
+        let name = journal["db"]["name"].as_str().unwrap_or_default().to_string();
+        match crate::sql::routes::rotate_for_handover(&name) {
+            Ok((lines, dsn)) => {
+                out["database"] = json!({ "rotated": lines });
+                if let Err(e) = put_dsn(&journal, &row.to_workspace, &dsn) {
+                    out["database"]["dsnError"] = json!(e);
+                }
+            }
+            Err(e) => {
+                out["database"] = json!({ "error": e });
+                return rekey_failed(&row, out, &format!("the database passwords didn't change ({e})"));
+            }
+        }
+    }
+    // App keys: successors now, the old ones after the drain.
+    let pairs = match super::grace::rekey_app_keys(&row.service_id) {
+        Ok(p) => p,
+        Err(e) => {
+            out["keys"] = json!({ "error": e.hint });
+            return rekey_failed(&row, out, &format!("the App's keys didn't change ({})", e.hint));
+        }
+    };
+    let old_keys: Vec<String> = pairs.iter().map(|(o, _)| o.clone()).collect();
+    out["keys"] = json!(pairs.iter().map(|(o, n)| json!({ "old": o, "new": n })).collect::<Vec<_>>());
+    journal_put(id, "oldKeys", json!(old_keys));
+    let Ok(Some(app)) = hov_db(|c| store::get_app(c, &row.app_id)) else {
+        return rekey_failed(&row, out, "the App is gone");
+    };
+    match mode.as_str() {
+        "defer" => {
+            // Its keys change at B's first deploy (the window sweep sees
+            // the new live deployment and revokes the old keys).
+            let _ = hov_db(|c| hs::set_rekey(c, id, "deferred", deploy::now()));
+            out["state"] = json!("deferred");
+        }
+        "next_start" => {
+            revoke_keys(&old_keys);
+            let _ = hov_db(|c| hs::set_rekey(c, id, "done", deploy::now()));
+            out["state"] = json!("done");
+        }
+        _ => match super::supervisor::begin_handover_rekey(&app, by, id, mode == "pause") {
+            Ok(dep) => {
+                out["deployment"] = json!(dep);
+                out["state"] = json!("running");
+                watch_rekey(id.to_string(), row.app_id.clone(), dep, old_keys);
+            }
+            Err(f) => {
+                out["error"] = json!({ "code": f.code, "hint": f.message });
+                return rekey_failed(&row, out, &f.message);
+            }
+        },
+    }
+    out
+}
+
+fn rekey_failed(row: &Handover, mut out: J, why: &str) -> J {
+    let _ = hov_db(|c| hs::set_rekey(c, &row.id, "failed", deploy::now()));
+    out["state"] = json!("failed");
+    super::ownership::note(
+        &row.to_workspace,
+        &format!("App {}: its keys didn't change yet", row.app_id),
+        &format!("The handover moved {} to you, but {why}. It keeps running on its old instance. Try again: k2 app handover rekey {}.", row.app_id, row.app_id),
+    );
+    out
+}
+
+fn revoke_keys(ids: &[String]) {
+    for k in ids {
+        if let Err(e) = k2_core::api_keys::revoke_api_key(k) {
+            k2_core::log_debug!("[apps/handover] revoke old App key {k}: {e}");
+        }
+    }
+}
+
+/// The App's DSN secret (moved to B by step 4) gets the new password.
+fn put_dsn(journal: &J, to: &str, dsn: &str) -> Result<(), String> {
+    use k2_vault::{Actor, Scope, SecretBytes, SecretStore, Selector};
+    let vault = crate::vault::get().map_err(|e| e.hint)?;
+    let names: Vec<String> = journal["vault"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|v| v["key"] == crate::vault::publish_env::DATABASE_URL || v["name"] == crate::vault::publish_env::DATABASE_URL)
+                .filter_map(|v| v["toName"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    for n in names {
+        vault.rotate(&Selector::user(Scope::workspace(to), &n), SecretBytes::from_slice(dsn.as_bytes()), &Actor::System("db".into())).map_err(|e| e.hint)?;
+    }
+    Ok(())
+}
+
+/// Watch the re-key deployment: live → the old instance drains, then the
+/// old keys are revoked (`done`); failed or rolled back → the App keeps
+/// its old instance and keys (`failed`, B is told).
+fn watch_rekey(id: String, app_id: String, dep: String, old_keys: Vec<String>) {
+    let spawn = std::thread::Builder::new().name("app-handover-rekey".into()).spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30 * 60);
+        loop {
+            let d = hov_db(|c| store::get_deployment(c, &dep)).ok().flatten();
+            match d.as_ref().map(|d| d.result.as_str()) {
+                Some(store::RESULT_LIVE) => {
+                    let drain = std::env::var("K2_APPS_DRAIN_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(30u64);
+                    std::thread::sleep(std::time::Duration::from_secs(drain + 2));
+                    revoke_keys(&old_keys);
+                    let _ = hov_db(|c| hs::set_rekey(c, &id, "done", deploy::now()));
+                    return;
+                }
+                Some(store::RESULT_FAILED | store::RESULT_ROLLED_BACK | store::RESULT_STALLED | store::RESULT_EXITED | store::RESULT_STOPPED) | None => {
+                    if let Ok(Some(row)) = hov_db(|c| hs::get(c, &id)) {
+                        rekey_failed(&row, json!({}), &format!("its re-key restart didn't go live ({})", d.map(|d| d.result).unwrap_or_else(|| "gone".into())));
+                    }
+                    return;
+                }
+                _ => {}
+            }
+            if std::time::Instant::now() > deadline {
+                if let Ok(Some(row)) = hov_db(|c| hs::get(c, &id)) {
+                    rekey_failed(&row, json!({}), "its re-key restart didn't go live within 30 minutes");
+                }
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    });
+    if let Err(e) = spawn {
+        k2_core::log_debug!("[apps/handover] {app_id}: re-key watcher: {e}");
+    }
+}
+
+/// POST `/cli/app/handover/rekey {app}`: try a failed (or deferred) re-key
+/// again: B's passport (switch 1) or the owner.
+fn rekey_route(who: &Who, body: &[u8]) -> R<J> {
+    need_credential(who)?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    if who.passport().is_some() {
+        super::access::need_build(who)?;
+    } else if !super::ownership::owner(who) {
+        return Err(no(codes::OWNER_ONLY, 403, "the App's agent or the owner re-keys it"));
+    }
+    let row = hov_db(|c| hs::latest_for_app(c, &app.app_id))?
+        .filter(|r| r.state == hs::APPLIED && r.to_workspace == app.owner_workspace)
+        .ok_or_else(|| no(NOT_HELD, 409, format!("{} has no handover in its window to re-key", app.app_id)))?;
+    if !matches!(row.rekey_state.as_deref(), Some("failed" | "deferred")) {
+        return Err(no(NOT_HELD, 409, format!("the re-key of {} is {}", app.app_id, row.rekey_state.as_deref().unwrap_or("not started"))));
+    }
+    let by = actor(who);
+    let out = rekey(&row.id, &by);
+    Ok(json!({ "ok": out["state"] != "failed", "app": app.app_id, "rekey": out }))
 }

@@ -656,6 +656,18 @@ impl FakePg {
         if let Some(r) = self.exec_k2_helpers(trimmed) {
             return r;
         }
+        // `pg_role_exists` (role rotation, App handover).
+        if let Some(rest) = trimmed.strip_prefix("SELECT rolname FROM pg_roles WHERE rolname = ") {
+            let name = rest.trim_end_matches(';').trim().trim_matches('\'').replace("''", "'");
+            return Ok(if self.roles.iter().any(|r| r == &name) { name } else { String::new() });
+        }
+        if trimmed.to_ascii_uppercase().starts_with("ALTER ROLE")
+            && trimmed.to_ascii_uppercase().contains("PASSWORD")
+            && !trimmed.trim_end_matches(';').contains(';')
+        {
+            self.role_sql.push(trimmed.to_string());
+            return Ok(String::new());
+        }
         if let Some(name) = extract_quoted_after(trimmed, "CREATE DATABASE") {
             if !self.dbs.iter().any(|d| d == &name) {
                 self.dbs.push(name);

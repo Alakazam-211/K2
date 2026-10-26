@@ -757,6 +757,41 @@ pub(crate) fn mint_and_deliver(t: &Target, grant: &keys::AppKeyGrant, label: &st
     Ok(out)
 }
 
+/// An App handover (prd-app-handoff-v1 §4.10): every live App key of
+/// `service_id` that K2 delivered through the vault gets a successor with
+/// the same grant (its rooms already name the new workspace), delivered
+/// the same way (the App's `K2_APP_KEY` file now holds the new key). The
+/// old keys keep working until the caller revokes them, after the re-key
+/// restart drained. Returns `(old id, new id)` pairs. A key shown once to
+/// the owner is the owner's, and left alone.
+pub(crate) fn rekey_app_keys(service_id: &str) -> R<Vec<(String, String)>> {
+    let t = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let row = ps::get_by_id(&conn, service_id).map_err(|e| no("db_error", 500, e.to_string()))?.ok_or_else(|| no(codes::APP_NOT_FOUND, 404, "the App's service is gone"))?;
+        Target::from_row(row, None)
+    };
+    let rows = k2_core::api_keys::list_app_keys(Some(service_id)).map_err(|e| no("store", 500, e))?;
+    let mut out = Vec::new();
+    for k in rows.into_iter().filter(|k| k.revoked_at.is_none()) {
+        let mut grant = keys::AppKeyGrant::from_stored(k.grant_json.as_deref());
+        if grant.vault_secret.as_deref().is_none_or(str::is_empty) {
+            continue;
+        }
+        let secret_name = format!("{KEY_FILE}.{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
+        grant.vault_secret = Some(secret_name.clone());
+        let label = k.label.clone().unwrap_or_else(|| format!("{} App key", t.name));
+        let (id, raw) = k2_core::api_keys::create_app_key(&label, service_id, &grant.to_json()).map_err(|e| no("store", 500, e))?;
+        if let Err(e) = deliver_to_vault(&t, &secret_name, &raw) {
+            let _ = k2_core::api_keys::revoke_api_key(&id);
+            return Err(no("vault_error", 500, format!("the new App key was not delivered ({}: {}); the old one stays", e.code, e.hint)));
+        }
+        audit("app-key-rekey", "system:handover", &format!("ok {} -> {id} app={service_id}", k.id));
+        out.push((k.id, id));
+    }
+    Ok(out)
+}
+
 fn deliver_to_vault(t: &Target, secret: &str, raw: &str) -> Result<(), k2_vault::VaultError> {
     use k2_vault::{Actor, Consumer, Delivery, GrantRequest, Kind, Namespace, PutRequest, Scope, SecretBytes, SecretStore, Selector};
     let vault = crate::vault::get()?;

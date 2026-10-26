@@ -29,9 +29,9 @@ use super::routes::{db_err, ws_handle, Ws, R};
 /// S3: guests tied to the giving workspace (re-tie + credential retire).
 pub(crate) const TIES_MOVE: bool = true;
 /// S4: workspace-scope secrets and `.env.k2` references.
-pub(crate) const SECRETS_MOVE: bool = false;
+pub(crate) const SECRETS_MOVE: bool = true;
 /// S4: a database of the giving workspace.
-pub(crate) const DB_MOVE: bool = false;
+pub(crate) const DB_MOVE: bool = true;
 
 pub const NEEDS_TIE_MOVE: &str = "handover_needs_tie_move";
 pub const NEEDS_SECRET_MOVE: &str = "handover_needs_secret_move";
@@ -635,7 +635,25 @@ fn db_plan(app: &AppRow, room_from: &str, others_of_a: &[AppRow]) -> DbItem {
                 item.case = "busy";
                 return item;
             }
-            let users: BTreeSet<String> = super::pg_choice::apps_using(&r.name).into_iter().map(|u| u.app).filter(|a| a != &app.app_id).collect();
+            // Another App counts only when it really reaches the database:
+            // its DATABASE_URL names it, or its manifest asks for Postgres
+            // (the default fallback alone hands it no DSN).
+            let users: BTreeSet<String> = super::pg_choice::apps_using(&r.name)
+                .into_iter()
+                .filter(|u| u.app != app.app_id)
+                .filter(|u| {
+                    let row = {
+                        let h = k2_core::db::shared();
+                        let conn = h.lock();
+                        store::get_app(&conn, &u.app).ok().flatten()
+                    };
+                    row.is_some_and(|o| match super::pg_choice::db_of(&o) {
+                        DbOf::Known(k) => k.source == Source::Ref || u.requires.is_some(),
+                        _ => false,
+                    })
+                })
+                .map(|u| u.app)
+                .collect();
             let grantees: Vec<String> = {
                 let h = k2_core::db::shared();
                 let conn = h.lock();

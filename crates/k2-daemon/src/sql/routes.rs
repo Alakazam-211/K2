@@ -150,6 +150,12 @@ pub fn rotate_after_vault_adoption() -> Vec<String> {
     ops::rotate_db_role_passwords(ops())
 }
 
+/// An App handover: new passwords for database `name`'s roles; the new
+/// agent DSN (`ops::rotate_database_for_handover`).
+pub fn rotate_for_handover(name: &str) -> Result<(Vec<String>, String), String> {
+    ops::rotate_database_for_handover(ops(), name)
+}
+
 fn ops() -> &'static dyn SystemOps {
     current_ops()
 }

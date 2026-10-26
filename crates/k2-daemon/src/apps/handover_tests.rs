@@ -864,3 +864,182 @@ fn ties_to_either_side_are_inside_only_during_the_handover() {
     }
     assert!(!sh::tie_inside("ws-a", "svc-gap", "ws-b"), "over when the guard drops");
 }
+
+// ── S4: secrets, the database, the re-key ────────────────────────────
+
+fn meta_of(sel: &Selector) -> Option<k2_vault::SecretMeta> {
+    crate::vault::ensure_test_vault().meta(sel, &Actor::Owner).ok()
+}
+
+fn env_of(g: &crate::vault::publish_env::Granted, key: &str) -> Option<String> {
+    g.env.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+}
+
+/// T4.1: an A-scope secret granted only to the App moves to B (same id);
+/// the App still gets it.
+#[test]
+fn a_secret_only_the_app_uses_moves_to_b() {
+    let f = fx("t41");
+    let sel = put_ws_secret(&f.a, "MAILGUN_T41", "mg-value-t41");
+    grant_to_service(&sel, &f.svc, "MAILGUN");
+    let id = meta_of(&sel).unwrap().id;
+    let (_, v) = ask(&f);
+    let s = v["plan"]["secrets"].as_array().unwrap();
+    assert_eq!((s.len(), s[0]["case"].as_str()), (1, Some("move")), "{v}");
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
+    let m = meta_of(&Selector::Id(id.clone())).expect("same secret");
+    assert_eq!(m.scope, Scope::workspace(&f.b), "re-scoped to B");
+    assert!(meta_of(&sel).is_none(), "A no longer has it");
+    let g = crate::vault::publish_env::granted(&f.svc, &f.b, std::path::Path::new("/nonexistent-hov-cwd"));
+    assert_eq!(env_of(&g, "MAILGUN").as_deref(), Some("mg-value-t41"), "the App's next start still gets it");
+}
+
+/// T4.2: the Seed's `k2v://ws/A/X` resolves through the alias for this
+/// service only.
+#[test]
+fn the_seed_reference_resolves_for_this_service_only() {
+    let f = fx("t42");
+    put_ws_secret(&f.a, "API_TOKEN_T42", "tok-t42");
+    let seed = live_seed_with_env(&f.app, &[("API_TOKEN", format!("k2v://ws/{}/API_TOKEN_T42", handle_of(&f.a)))]);
+    let cwd = k2_core::deploy::seed::seed_path(&seed);
+    let (_, v) = ask(&f);
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!(st, 200, "{v}");
+    let g = crate::vault::publish_env::granted(&f.svc, &f.b, &cwd);
+    assert_eq!(env_of(&g, "API_TOKEN").as_deref(), Some("tok-t42"), "the alias resolves it in B: {:?}", g.refused);
+    // Another service of B reading the same .env.k2 is refused, as before.
+    let g2 = crate::vault::publish_env::granted("svc-other-of-b", &f.b, &cwd);
+    assert_eq!(env_of(&g2, "API_TOKEN"), None);
+    assert!(g2.refused.iter().any(|r| r.contains("not_this_workspace")), "{:?}", g2.refused);
+}
+
+/// T4.3: a secret A uses elsewhere is copied; A keeps the original; the
+/// card says to rotate it.
+#[test]
+fn a_secret_a_shares_is_copied_and_flagged() {
+    let f = fx("t43");
+    let sel = put_ws_secret(&f.a, "SHARED_T43", "shared-t43");
+    grant_to_service(&sel, &f.svc, "SHARED");
+    grant_to_service(&sel, &f.other_svc, "SHARED");
+    let orig = meta_of(&sel).unwrap().id;
+    let (_, v) = ask(&f);
+    assert_eq!(v["plan"]["secrets"][0]["case"], "copy", "{v}");
+    assert!(v["plan"]["lines"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("rotate them: SHARED_T43")), "{v}");
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(meta_of(&sel).unwrap().id, orig, "A keeps its own");
+    let copy = meta_of(&Selector::user(Scope::workspace(&f.b), "SHARED_T43")).expect("a copy in B");
+    assert_ne!(copy.id, orig);
+    let vault = crate::vault::ensure_test_vault();
+    let mine: Vec<String> = vault.grants_to(&Consumer::published_service(f.svc.clone())).unwrap().into_iter().map(|(g, _)| g.secret_id).collect();
+    assert_eq!(mine, vec![copy.id.clone()], "the App's grant moved to the copy");
+    let theirs: Vec<String> = vault.grants_to(&Consumer::published_service(f.other_svc.clone())).unwrap().into_iter().map(|(g, _)| g.secret_id).collect();
+    assert_eq!(theirs, vec![orig], "A's other App keeps the original");
+}
+
+/// Q8: a name B already has → the App's value as NAME__<app>.
+#[test]
+fn a_name_b_already_has_is_kept_under_the_app_s_name() {
+    let f = fx("q8");
+    let sel = put_ws_secret(&f.a, "STRIPE_Q8", "a-value");
+    grant_to_service(&sel, &f.svc, "STRIPE");
+    put_ws_secret(&f.b, "STRIPE_Q8", "b-value");
+    let (_, v) = ask(&f);
+    assert_eq!(v["plan"]["secrets"][0]["collision"], true, "{v}");
+    let (st, _) = approve(&req_id(&v));
+    assert_eq!(st, 200);
+    let renamed = meta_of(&Selector::user(Scope::workspace(&f.b), format!("STRIPE_Q8__{}", f.app))).expect("renamed in B");
+    assert_eq!(renamed.scope, Scope::workspace(&f.b));
+    let g = crate::vault::publish_env::granted(&f.svc, &f.b, std::path::Path::new("/nonexistent-hov-cwd"));
+    assert_eq!(env_of(&g, "STRIPE").as_deref(), Some("a-value"), "the App keeps its own value");
+}
+
+/// T4.4: the App's sole database moves to B; its role passwords change;
+/// the App's DSN secret holds the new password.
+#[test]
+fn a_sole_database_moves_and_its_passwords_change() {
+    let f = fx("t44");
+    let vault = crate::vault::ensure_test_vault();
+    let store = crate::vault::refstore::VaultRefStore::new(vault.clone(), "postgres", "db");
+    let (aref, mref) = (store.store_new("t44", "agent", "old-agent-pw").unwrap(), store.store_new("t44", "migrator", "old-mig-pw").unwrap());
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute(
+            "INSERT INTO sql_databases (id, project_id, name, status, created_at, agent_secret_ref, migrator_secret_ref) VALUES ('db-t44', ?1, 'ws_t44', 'active', 1, ?2, ?3)",
+            params![f.a, aref, mref],
+        )
+        .unwrap();
+    }
+    put_ws_secret(&f.a, "DATABASE_URL", "postgres://ws_t44_agent:old-agent-pw@127.0.0.1:5432/ws_t44");
+    live_seed_with_env(&f.app, &[("DATABASE_URL", format!("k2v://ws/{}/DATABASE_URL", handle_of(&f.a)))]);
+    let (_, v) = ask(&f);
+    assert_eq!(v["plan"]["database"]["case"], "sole", "{v}");
+    assert_eq!(v["plan"]["rekey"]["database"], true, "{v}");
+    let fake: &'static crate::sql::sysops::FakeSystemOps = Box::leak(Box::new(crate::sql::sysops::FakeSystemOps::baked()));
+    fake.pg.lock().unwrap().roles.extend(["ws_t44_agent".to_string(), "ws_t44_migrator".to_string()]);
+    let (st, v) = crate::sql::routes::with_test_ops(fake, || approve(&req_id(&v)));
+    assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
+    let owner: String = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.query_row("SELECT project_id FROM sql_databases WHERE id = 'db-t44'", [], |r| r.get(0)).unwrap()
+    };
+    assert_eq!(owner, f.b, "the database is B's");
+    let altered: Vec<String> = fake.pg.lock().unwrap().role_sql.iter().filter(|s| s.to_ascii_uppercase().starts_with("ALTER ROLE")).cloned().collect();
+    assert_eq!(altered.len(), 2, "both roles get new passwords: {altered:?}");
+    let new_pw = store.resolve(&aref).unwrap().unwrap();
+    assert_ne!(new_pw, "old-agent-pw", "the agent password changed");
+    let g = crate::vault::publish_env::granted(&f.svc, &f.b, &k2_core::deploy::seed::seed_path(&app_row(&f.app).live_seed.unwrap()));
+    let dsn = env_of(&g, "DATABASE_URL").expect("the App's DATABASE_URL resolves in B");
+    assert!(dsn.contains(&new_pw) && !dsn.contains("old-agent-pw"), "the DSN carries the new password: {dsn}");
+}
+
+/// T4.5: a database A's other App uses too is refused unless the owner
+/// shares it; sharing gives B a grant and the card says what A keeps.
+#[test]
+fn a_shared_database_needs_the_owner_s_share() {
+    let f = fx("t45");
+    add_db(&f.a, "ws_t45");
+    put_ws_secret(&f.a, "DATABASE_URL", "postgres://u:p@127.0.0.1:5432/ws_t45");
+    let r = format!("k2v://ws/{}/DATABASE_URL", handle_of(&f.a));
+    live_seed_with_env(&f.app, &[("DATABASE_URL", r.clone())]);
+    live_seed_with_env(&f.other, &[("DATABASE_URL", r)]);
+    let (st, v) = ask(&f);
+    assert_eq!((st, code(&v)), (409, "handover_db_shared"), "{v}");
+    let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": f.app, "to": f.b, "db": "share" }));
+    assert_eq!(st, 202, "{v}");
+    assert!(v["plan"]["lines"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("can still read")), "{v}");
+    let (st, _) = approve(&req_id(&v));
+    assert_eq!(st, 200);
+    let (level, manage): (String, i64) = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.query_row("SELECT level, can_manage FROM sql_grants WHERE database_id = 'db-ws_t45' AND project_id = ?1", params![f.b], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+    };
+    assert_eq!((level.as_str(), manage), ("write", 1));
+}
+
+/// T4.6 (keys): a vault-delivered App key gets a successor; the old one
+/// stops working (the App isn't running: at once).
+#[test]
+fn the_app_s_vault_key_is_rekeyed() {
+    let f = fx("t46");
+    let grant = k2_core::app_grace::keys::AppKeyGrant { scopes: vec!["users".into()], rooms: vec![f.a.clone()], roles: vec![], vault_secret: Some("K2_APP_KEY.t46".into()) };
+    let (old, raw) = k2_core::api_keys::create_app_key("jobs key", &f.svc, &grant.to_json()).unwrap();
+    assert!(k2_core::api_keys::resolve_app_key(&raw).is_some());
+    let (_, v) = ask(&f);
+    assert_eq!(v["plan"]["rekey"]["mode"], "next_start", "{v}");
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!(st, 200, "{v}");
+    assert!(k2_core::api_keys::resolve_app_key(&raw).is_none(), "the key A could read is revoked");
+    let live: Vec<_> = k2_core::api_keys::list_app_keys(Some(&f.svc)).unwrap().into_iter().filter(|k| k.revoked_at.is_none()).collect();
+    assert_eq!(live.len(), 1, "one successor");
+    assert_ne!(live[0].id, old);
+    let g = k2_core::app_grace::keys::AppKeyGrant::from_stored(live[0].grant_json.as_deref());
+    assert_eq!(g.rooms, vec![f.b.clone()], "its room ceiling names B");
+    let h = handover_row(v["result"]["handover"]["id"].as_str().unwrap());
+    assert_eq!(h.rekey_state.as_deref(), Some("done"));
+}

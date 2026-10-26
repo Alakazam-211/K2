@@ -1339,6 +1339,111 @@ impl LocalVault {
         Ok(())
     }
 
+    /// An App handover (prd-app-handoff-v1 §4.5): move a secret to another
+    /// scope (and, on a name clash there, another name), keeping its id,
+    /// versions and grants. Every version is sealed again: a value's AAD
+    /// names its scope. Only the owner or a K2 subsystem acting on the
+    /// owner's approved card; never an agent. A secret of that name in the
+    /// target scope is `name_taken`. Moving to where it already is changes
+    /// nothing.
+    pub fn rescope(&self, sel: &Selector, to: Scope, new_name: Option<&str>, actor: &Actor) -> Result<SecretMeta> {
+        if !matches!(actor, Actor::Owner | Actor::System(_)) {
+            return Err(VaultError::forbidden("rescope_owner_only", "only the owner moves a secret to another scope"));
+        }
+        let stamp = actor.stamp();
+        let row = {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            self.find_row(&conn, &keys, sel)?
+        };
+        let old = row.meta.clone();
+        if old.status == SecretStatus::Destroyed {
+            return Err(VaultError::conflict("secret_destroyed", "that secret was destroyed"));
+        }
+        let mut m = old.clone();
+        m.scope = to;
+        if let Some(n) = new_name.map(str::trim).filter(|n| !n.is_empty()) {
+            m.name = n.to_string();
+        }
+        if m.scope == old.scope && m.name == old.name {
+            return Ok(old);
+        }
+        m.updated_at = ts(now());
+        let ext = row.external_ref.clone();
+        let out = m.clone();
+        self.mutate(true, |tx, keys| {
+            let clash: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM secret WHERE namespace = ?1 AND scope_kind = ?2 AND scope_id = ?3 AND name = ?4",
+                    params![m.namespace.as_str(), m.scope.kind.as_str(), m.scope.id, m.name],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if clash.is_some() {
+                return Err(VaultError::conflict("name_taken", format!("{} already exists in that scope", m.name)));
+            }
+            #[allow(clippy::type_complexity)]
+            let versions: Vec<(u32, Vec<u8>, Vec<u8>, String, String, String, Option<String>, String, Vec<u8>)> = {
+                let mut st = tx.prepare(
+                    "SELECT version, nonce, ciphertext, created_at, created_by, state, revoked_at, fingerprint, row_mac FROM secret_version WHERE secret_id = ?1",
+                )?;
+                let it = st.query_map(params![m.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)))?;
+                it.collect::<std::result::Result<_, _>>()?
+            };
+            for (v, nonce, ct, cat, cby, state, rev, fp, vmac) in versions {
+                if !hmac_verify(&keys.row, &version_mac_input(&m.id, v, &nonce, &ct, &fp, &cat, &cby, &state, rev.as_deref()), &vmac) {
+                    return Err(VaultError::tamper(format!("secret {} v{v} failed its integrity check; nothing moved", m.id)));
+                }
+                if state == "destroyed" {
+                    continue;
+                }
+                let pt = SecretBytes::new(xopen(&keys.vdk, &nonce, &value_aad(&self.vid, &old, v), &ct)?);
+                let (n2, c2) = xseal(&keys.vdk, &value_aad(&self.vid, &m, v), pt.expose());
+                let vmac2 = hmac(&keys.row, &version_mac_input(&m.id, v, &n2, &c2, &fp, &cat, &cby, &state, rev.as_deref()));
+                tx.execute(
+                    "UPDATE secret_version SET nonce = ?3, ciphertext = ?4, row_mac = ?5 WHERE secret_id = ?1 AND version = ?2",
+                    params![m.id, v, n2.to_vec(), c2, vmac2.to_vec()],
+                )?;
+            }
+            let smac = hmac(&keys.row, &secret_mac_input(&m, &ext));
+            tx.execute(
+                "UPDATE secret SET scope_kind = ?2, scope_id = ?3, name = ?4, updated_at = ?5, row_mac = ?6 WHERE id = ?1",
+                params![m.id, m.scope.kind.as_str(), m.scope.id, m.name, m.updated_at, smac.to_vec()],
+            )?;
+            Ok(((), vec![Entry::new("rescope", &stamp, "ok").secret(&m.id, None)]))
+        })?;
+        Ok(out)
+    }
+
+    /// An App handover (§4.5): a copy of a secret's latest value, kind,
+    /// hosts and deliveries as a new secret in `to` named `name` (the
+    /// original stays where it is). Owner or a K2 subsystem only.
+    pub fn copy_to(&self, sel: &Selector, to: Scope, name: &str, actor: &Actor) -> Result<SecretMeta> {
+        if !matches!(actor, Actor::Owner | Actor::System(_)) {
+            return Err(VaultError::forbidden("copy_owner_only", "only the owner copies a secret to another scope"));
+        }
+        let (meta, value) = {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            let row = self.find_row(&conn, &keys, sel)?;
+            if row.meta.status == SecretStatus::Destroyed {
+                return Err(VaultError::conflict("secret_destroyed", "that secret was destroyed"));
+            }
+            let v = self.decrypt_version(&conn, &keys, &row.meta, row.meta.latest_version)?;
+            (row.meta, v)
+        };
+        let mut put = PutRequest::new(meta.namespace, to, name, meta.kind);
+        put.hosts = meta.hosts.clone();
+        put.inject = meta.inject.clone();
+        put.default_delivery = Some(meta.default_delivery);
+        put.delivery_ceiling = Some(meta.delivery_ceiling);
+        put.origin = "k2 app handover".into();
+        put.description = format!("copy of {} for an App handover", meta.name);
+        put.human_given_override = Some(meta.human_given);
+        put.landed_copy = true;
+        Ok(self.put_inner(put, value, actor)?.meta)
+    }
+
     /// Push WAL pages into the main file and truncate the WAL, so deleted
     /// ciphertext doesn't linger there (secure_delete zeroes the pages).
     pub fn checkpoint(&self) {

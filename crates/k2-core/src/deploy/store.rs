@@ -529,6 +529,16 @@ pub const KIND_START: &str = "start";
 /// 0.46.4 (update continuity D3): the same Seed on a fresh instance after
 /// a K2 update (no CHECK on `kind`).
 pub const KIND_REHOST: &str = "rehost";
+/// An App handover's re-key (prd-app-handoff-v1 §4.10): the live Seed on a
+/// fresh instance so it picks up new keys, a new DSN and a pass in the new
+/// workspace's room. K2's own move, as quiet as a re-host.
+pub const KIND_HANDOVER: &str = "handover";
+
+/// A re-start of the live Seed K2 runs on its own (a re-host, a handover's
+/// re-key): no agent wake on failure, its owner module tells.
+pub fn is_k2_move(kind: &str) -> bool {
+    kind == KIND_REHOST || kind == KIND_HANDOVER
+}
 
 pub const RESULT_PENDING: &str = "pending";
 pub const RESULT_STARTING: &str = "starting";

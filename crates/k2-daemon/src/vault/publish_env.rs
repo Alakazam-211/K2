@@ -535,6 +535,29 @@ pub fn apply_granted(cmd: &mut Command, service_id: &str, workspace_id: &str, cw
     dir
 }
 
+/// An App handover (prd-app-handoff-v1 §4.5, A3): the immutable Seed's
+/// `k2v://ws/<old>/NAME` names the workspace the App left. For this
+/// service only, and only while the service is the alias's new workspace,
+/// it resolves as `ws/<new>/<to_name>`. Any other service, or another
+/// workspace's reference, is untouched (and refused as before).
+pub fn aliased(sel: Selector, service_id: &str, workspace_id: &str) -> Selector {
+    let Selector::Name { namespace, scope, name } = &sel else { return sel };
+    if scope.kind != k2_vault::ScopeKind::Workspace || scope.id == workspace_id {
+        return sel;
+    }
+    let alias = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::deploy::handover::alias_for(&conn, service_id, &scope.id, name).ok().flatten()
+    };
+    match alias {
+        Some(a) if a.to_workspace == workspace_id => {
+            Selector::Name { namespace: *namespace, scope: k2_vault::Scope::workspace(a.to_workspace), name: a.to_name }
+        }
+        _ => sel,
+    }
+}
+
 /// One `k2v://` reference in a service's `.env.k2` → its value (R8,
 /// prd-env-to-vault-v1). The service is the requester, never the daemon:
 /// its own workspace's secrets resolve as before; a server secret needs a
@@ -543,7 +566,7 @@ pub fn apply_granted(cmd: &mut Command, service_id: &str, workspace_id: &str, cw
 /// workspace's or a chat's secret is refused as before. Refusals are
 /// audited under `published_service:<id>`.
 fn resolve_ref(vault: &k2_vault::LocalVault, r: &str, service_id: &str, workspace_id: &str) -> Result<String, k2_vault::VaultError> {
-    let sel = super::selector_for_ref(r)?;
+    let sel = aliased(super::selector_for_ref(r)?, service_id, workspace_id);
     let scope_ok = match &sel {
         Selector::Name { scope, .. } => match scope.kind {
             k2_vault::ScopeKind::Server => true,

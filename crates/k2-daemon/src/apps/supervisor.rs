@@ -430,8 +430,9 @@ fn mark_interrupted() {
     if let Ok(rows) = db(store::unfinished_deployments) {
         for d in rows.into_iter().filter(|d| in_scope(&d.app_id, None)) {
             let _ = db(|c| store::set_result(c, &d.id, store::RESULT_STALLED, Some("the K2 daemon restarted during this deploy")));
-            // A13: a re-host is K2's own move; `rehost.rs` owns its notices.
-            if d.kind != store::KIND_REHOST {
+            // A13: a re-host is K2's own move; `rehost.rs` owns its notices
+            // (a handover's re-key: `handover.rs`).
+            if !store::is_k2_move(&d.kind) {
                 stall_alert(&d, "the K2 daemon restarted during it");
             }
         }
@@ -889,8 +890,9 @@ fn pipeline_fail_exit(app_id: &str, dep: &str, code: &str, msg: &str, exit: Exit
             next: Next::NotScheduled,
         });
         // A13: a failed re-host wakes nobody; `rehost.rs` counts it for the
-        // breaker and owns the owner/agent notes (R17).
-        if d.kind == store::KIND_REHOST {
+        // breaker and owns the owner/agent notes (R17). A handover's re-key
+        // likewise (`handover.rs` watches it).
+        if store::is_k2_move(&d.kind) {
             return;
         }
         super::failures::deploy_failed(&super::failures::DeployFail {
@@ -1037,7 +1039,7 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
             rt.watch = None;
             let had = rt.live.is_some();
             // A failed start after this must bring the live Seed back.
-            rt.stopped_first = had && kind == store::KIND_REHOST;
+            rt.stopped_first = had && store::is_k2_move(kind);
             (rt.live.take(), rt.warm.take())
         });
         for inst in [live, warm].into_iter().flatten() {
@@ -1426,10 +1428,11 @@ fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &s
     audit(app_id, "auto_rollback", "system", json!({ "deployment": row.as_ref().ok(), "from": bad.seed, "to": prev.seed, "why": why }));
     // A13: an auto-rollback of a re-host wakes nobody; the wave's breaker
     // counts it and holds the App at `rehost_failed` (R17).
-    let rehost = db(|c| store::get_deployment(c, &w.deployment_id)).ok().flatten().is_some_and(|d| d.kind == store::KIND_REHOST);
-    if rehost {
+    let kind = db(|c| store::get_deployment(c, &w.deployment_id)).ok().flatten().map(|d| d.kind).unwrap_or_default();
+    let rehost = store::is_k2_move(&kind);
+    if kind == store::KIND_REHOST {
         super::rehost::on_auto_rollback(app_id, &w.deployment_id, why);
-    } else {
+    } else if kind != store::KIND_HANDOVER {
         super::failures::rolled_back(app_id, &w.deployment_id, exit.exited, exit.code, exit.signal);
     }
     super::surfaces::emit_deployed(app_id, store::KIND_AUTO_ROLLBACK);
@@ -1547,6 +1550,32 @@ pub fn live_db_switch(app: &AppRow) -> Option<String> {
 /// stops. Nothing stays warm (the old instance holds the closed source's
 /// DSN), so it is never an auto-rollback target; an older warm instance is
 /// retired too. `stop_first`: the App can't run two copies (PA10).
+/// An App handover's re-key (prd-app-handoff-v1 §4.10): the live Seed on
+/// a fresh instance (new App keys, a new DSN, a pass in the new room);
+/// health gate, switch, drain; the old instance retires once the new one
+/// is live (it holds the old keys). `stop_first`: the App can't run two
+/// copies (`pause`).
+pub fn begin_handover_rekey(app: &AppRow, actor: &str, handover: &str, stop_first: bool) -> Result<String, Fail> {
+    let Some(seed) = app.live_seed.clone() else {
+        return Err(fail(codes::SEED_NOT_FOUND, 409, format!("{} has no live Seed to re-key", app.app_id)));
+    };
+    with_rt(&app.app_id, |rt| {
+        rt.retire_on_live = true;
+        if stop_first {
+            rt.stop_first = true;
+        }
+    });
+    reset_backoff(&app.app_id);
+    let r = begin(app, &seed, store::KIND_HANDOVER, actor, Some(&format!("handover {handover}: new keys")));
+    if r.is_err() {
+        with_rt(&app.app_id, |rt| {
+            rt.retire_on_live = false;
+            rt.stop_first = false;
+        });
+    }
+    r
+}
+
 pub fn begin_db_switch(app: &AppRow, actor: &str, epoch: &str, stop_first: bool) -> Result<String, Fail> {
     let Some(seed) = app.live_seed.clone() else {
         return Err(fail(codes::SEED_NOT_FOUND, 409, format!("{} has no live Seed to re-host", app.app_id)));
@@ -1753,7 +1782,7 @@ fn stall_check(t: &Timings) {
     for d in rows {
         if now() - d.started_at >= t.stall_secs as i64 {
             let _ = db(|c| store::set_result(c, &d.id, store::RESULT_STALLED, Some(&format!("not live after {}s", t.stall_secs))));
-            if d.kind != store::KIND_REHOST {
+            if !store::is_k2_move(&d.kind) {
                 stall_alert(&d, &format!("not live after {} minutes", t.stall_secs / 60));
             }
         }

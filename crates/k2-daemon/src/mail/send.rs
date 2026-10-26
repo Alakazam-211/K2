@@ -224,6 +224,19 @@ pub struct OutboundMessage {
     pub ephemeral: bool,
 }
 
+/// The copy of `msg` kept at rest (`~/.k2/mail-outbound/out_*.json`): a
+/// one-time-link mail (`ephemeral`) keeps its text with every link hidden
+/// (verification review 2026-10-26, item 4); any other mail as is.
+pub fn at_rest(msg: &OutboundMessage) -> std::borrow::Cow<'_, OutboundMessage> {
+    if !msg.ephemeral {
+        return std::borrow::Cow::Borrowed(msg);
+    }
+    let mut m = msg.clone();
+    m.subject = hide_links(&m.subject);
+    m.text_body = hide_links(&m.text_body);
+    std::borrow::Cow::Owned(m)
+}
+
 /// `k2inv_…` tokens in `text` replaced by `k2inv_[hidden]` (previews of
 /// one-time-link mails).
 pub fn hide_links(text: &str) -> String {
@@ -540,6 +553,12 @@ pub trait OutboundStore {
     fn load_message(&self, id: &str) -> Result<OutboundMessage, String>;
     /// Append one line to the row's note (submit-failure details).
     fn append_note(&self, id: &str, extra: &str, now: i64) -> Result<(), String>;
+    /// Rewrite the stored body of a one-time-link mail with its links
+    /// hidden ([`at_rest`]) once it has been decided (sent, failed or
+    /// denied). No-op for a store that keeps no body.
+    fn scrub_body(&self, _id: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 const OUTBOUND_COLS: &str = "id, owner_project_id, agent_name, from_address, to_json, \
@@ -789,6 +808,18 @@ impl OutboundStore for DbOutboundStore {
         )
         .map(|_| ())
         .map_err(|e| format!("outbound note append: {e}"))
+    }
+
+    fn scrub_body(&self, id: &str) -> Result<(), String> {
+        let msg = self.load_message(id)?;
+        if !msg.ephemeral {
+            return Ok(());
+        }
+        let path = self.body_path(id);
+        let body = serde_json::to_string(&*at_rest(&msg)).map_err(|e| format!("outbound scrub serialize: {e}"))?;
+        std::fs::write(&path, body.as_bytes()).map_err(|e| format!("outbound scrub write: {e}"))?;
+        restrict_mode(&path);
+        Ok(())
     }
 }
 
@@ -1215,11 +1246,14 @@ pub fn gate_and_dispatch(
                     "no submit backend available — refusing to send (fail-closed)".to_string(),
                 )
             })?;
+            // A one-time-link mail is never read back after this send:
+            // only its link-hidden copy is written (review item 4).
+            let kept = at_rest(req.message);
             let id = store
                 .insert(&NewOutbound {
                     owner_project_id: req.project_id,
                     agent_name: req.agent_name,
-                    message: req.message,
+                    message: &kept,
                     status: "approved",
                     decided_by: Some("policy:agent-send-on"),
                     attachment_names: &[],
@@ -1329,6 +1363,7 @@ pub fn approve_and_submit_with<'r>(
     let fail = |store: &dyn OutboundStore, reason: &str| {
         let _ = store.transition(id, "approved", "failed", None, None, now);
         let _ = store.append_note(id, &format!("submit failed: {reason}"), now);
+        scrub(store, id);
         Ok(ApproveOutcome::FailedToSubmit(reason.to_string()))
     };
     let msg = match store.load_message(id) {
@@ -1355,9 +1390,17 @@ pub fn approve_and_submit_with<'r>(
             if let Err(e) = store.transition(id, "approved", "sent", None, None, now) {
                 k2_core::log_debug!("[mail/send] sent-mark failed for {id}: {e}");
             }
+            scrub(store, id);
             Ok(ApproveOutcome::Submitted)
         }
         Err(e) => fail(store, &e.to_string()),
+    }
+}
+
+/// [`OutboundStore::scrub_body`], logged on failure (the send itself is done).
+fn scrub(store: &dyn OutboundStore, id: &str) {
+    if let Err(e) = store.scrub_body(id) {
+        k2_core::log_debug!("[mail/send] scrub {id}: {e}");
     }
 }
 
@@ -1455,6 +1498,7 @@ pub fn deny(
             wire_status(&row.status)
         )));
     }
+    scrub(store, id);
     Ok(())
 }
 
@@ -2649,6 +2693,72 @@ mod tests {
             "DELETE FROM mail_outbound WHERE owner_project_id = ?1",
             rusqlite::params![project_id],
         );
+    }
+
+    /// Verification review 2026-10-26, item 4: a one-time-link mail never
+    /// keeps its link at rest. Sent at once: only the link-hidden copy is
+    /// written. Held for approval: the full body waits (the approver sends
+    /// it), then is rewritten link-hidden once sent or denied.
+    #[test]
+    fn a_one_time_link_mail_keeps_no_link_at_rest() {
+        struct Keep(Mutex<Vec<OutboundMessage>>);
+        impl SubmitBackend for Keep {
+            fn submit(&self, _account_id: &str, msg: &OutboundMessage) -> Result<(), String> {
+                self.0.lock().unwrap().push(msg.clone());
+                Ok(())
+            }
+        }
+        let (store, dir) = temp_store();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        let link = "https://box.example/cli/skin/password/set#k2inv_abcDEF123";
+        let mut m = msg();
+        m.from = format!("bot-{}@acme.dev", uuid::Uuid::new_v4().simple());
+        m.subject = "Your invite".to_string();
+        m.text_body = format!("Set your password: {link}\n");
+        m.ephemeral = true;
+        let body_of = |id: &str| std::fs::read_to_string(dir.join(format!("{id}.json"))).expect("body file");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+
+        // On: the person gets the link; the file never had it.
+        let keep = Keep(Mutex::new(Vec::new()));
+        let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &m, send_after: None };
+        let SendOutcome::Submitted { id } = gate_and_dispatch(&store, Some(&keep), Gate::On, &req, now).expect("send") else {
+            panic!("expected a submit")
+        };
+        assert!(keep.0.lock().unwrap()[0].text_body.contains("k2inv_abcDEF123"), "the mail itself carries the link");
+        let at_rest = body_of(&id);
+        assert!(!at_rest.contains("k2inv_abcDEF123"), "{at_rest}");
+        assert!(at_rest.contains("k2inv_[hidden]"), "{at_rest}");
+
+        // Approval: the waiting body keeps it until the decision, then not.
+        for approve in [true, false] {
+            let SendOutcome::Queued { id, .. } = gate_and_dispatch(&store, None, Gate::Approval, &req, now).expect("queue") else {
+                panic!("expected a queued mail")
+            };
+            assert!(body_of(&id).contains("k2inv_abcDEF123"), "the approver sends the real link");
+            if approve {
+                let keep = Keep(Mutex::new(Vec::new()));
+                let out = approve_and_submit(&store, Ok(&keep), &mut |_: &str| Ok::<String, String>("acct".to_string()), &id, "owner", None, now).expect("approve");
+                assert_eq!(out, ApproveOutcome::Submitted);
+                assert!(keep.0.lock().unwrap()[0].text_body.contains("k2inv_abcDEF123"));
+            } else {
+                deny(&store, &id, "owner", "no", now).expect("deny");
+            }
+            let at_rest = body_of(&id);
+            assert!(!at_rest.contains("k2inv_abcDEF123"), "approve={approve}: {at_rest}");
+        }
+
+        // A plain mail is kept as is.
+        let mut plain = m.clone();
+        plain.ephemeral = false;
+        let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &plain, send_after: None };
+        let keep = Keep(Mutex::new(Vec::new()));
+        let SendOutcome::Submitted { id } = gate_and_dispatch(&store, Some(&keep), Gate::On, &req, now).expect("send") else {
+            panic!("expected a submit")
+        };
+        assert!(body_of(&id).contains("k2inv_abcDEF123"), "only one-time-link mails are rewritten");
+        cleanup_rows(&project);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

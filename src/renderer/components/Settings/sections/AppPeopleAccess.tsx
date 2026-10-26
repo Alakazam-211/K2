@@ -213,6 +213,14 @@ export function AppPeopleAccess({
                   <div key={d.id} className="flex items-center justify-between gap-2 text-[10px]">
                     <span className="text-[var(--color-text-secondary)]">
                       {d.username} · {d.name}
+                      {d.via === 'pairing' ? (
+                        <span
+                          title="Signed in by QR from the App's web page"
+                          className="ml-1 px-1 border border-[var(--color-border)] text-[var(--color-text-muted)]"
+                        >
+                          Paired
+                        </span>
+                      ) : null}
                     </span>
                     <button
                       type="button"

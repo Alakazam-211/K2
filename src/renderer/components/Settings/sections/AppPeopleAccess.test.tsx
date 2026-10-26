@@ -52,7 +52,10 @@ const ACCESS = {
     },
     { principalId: 'p2', username: 'olga', fullName: null, kind: 'guest', enabled: false, grantId: 'g2', role: null, cells: [] },
   ],
-  devices: [{ id: 'dev-1', principalId: 'p1', username: 'cleo', app: 'svc-1', deviceId: 'iphone', name: 'Cleo iPhone', createdAt: 1, lastUsedAt: 2, expiresAt: 3 }],
+  devices: [
+    { id: 'dev-1', principalId: 'p1', username: 'cleo', app: 'svc-1', deviceId: 'iphone', name: 'Cleo iPhone', createdAt: 1, lastUsedAt: 2, expiresAt: 3, via: 'pairing' },
+    { id: 'dev-2', principalId: 'p1', username: 'cleo', app: 'svc-1', deviceId: 'ipad', name: 'Cleo iPad', createdAt: 1, lastUsedAt: 2, expiresAt: 3, via: 'password' },
+  ],
   settings: { app: 'svc-1', listed: false, staySignedInDays: 30 },
 }
 
@@ -90,6 +93,9 @@ describe('app-people-api', () => {
     expect(cellSummary(a.people[0].cells[0])).toBe('chat · files')
     expect(parseTemplates(TEMPLATES).map((t) => t.id)).toEqual(['owner', 'field'])
     expect(parseAccess({}).people).toEqual([])
+    // App phone pairing (0.46.5): how a device sign-in started.
+    expect(a.devices.map((d) => d.via)).toEqual(['pairing', 'password'])
+    expect(parseAccess({ devices: [{ id: 'x' }] }).devices[0].via).toBe('password')
   })
 })
 
@@ -105,6 +111,8 @@ describe('AppPeopleAccess', () => {
     expect(screen.getByText('Cleo Client')).toBeTruthy()
     expect(screen.getByText('olga')).toBeTruthy()
     expect(screen.getAllByText('off').length).toBe(1)
+    // A phone paired by QR carries a Paired badge; a password device doesn't.
+    expect(screen.getAllByText('Paired').length).toBe(1)
     // With roles, no suggestions are fetched or shown.
     expect(h.daemonCliGet).not.toHaveBeenCalledWith('skin/roles/suggest')
     expect(screen.queryByLabelText('Suggested roles')).toBeNull()

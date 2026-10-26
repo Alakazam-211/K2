@@ -45,6 +45,8 @@ export type DeviceRow = {
   name: string
   lastUsedAt: number
   expiresAt: number
+  /** How it started: a QR pairing (app pairing, 0.46.5) or a password login. */
+  via: 'pairing' | 'password'
 }
 
 export type AppAccess = {
@@ -123,6 +125,7 @@ export function parseAccess(raw: unknown): AppAccess {
         name: str(x.name),
         lastUsedAt: typeof x.lastUsedAt === 'number' ? x.lastUsedAt : 0,
         expiresAt: typeof x.expiresAt === 'number' ? x.expiresAt : 0,
+        via: x.via === 'pairing' ? 'pairing' : 'password',
       }
     }),
     listed: s.listed === true,

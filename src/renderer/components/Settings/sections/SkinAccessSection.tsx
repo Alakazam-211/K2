@@ -15,6 +15,7 @@ import { AppsServerSection } from './AppsServerSection'
 import { AppsBoxSection } from './AppsBoxSection'
 import { AppsResourcesSection } from './AppsResourcesSection'
 import { AppPeopleAccess } from './AppPeopleAccess'
+import { AppPhonePairing } from './AppPhonePairing'
 
 export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
@@ -610,6 +611,7 @@ export function SkinAccessSection(): React.JSX.Element {
   const agentIdentity = useServerSupports('agent-identity')
   const agentConfigOptIn = useServerSupports('agent-config-write')
   const fileDownload = useServerSupports('thread-download')
+  const phonePairing = useServerSupports('app-phone-pairing')
   const capChoices = useMemo(
     () => skinCapChoices(appHeartbeats, agentIdentity, fileDownload),
     [appHeartbeats, agentIdentity, fileDownload],
@@ -1591,6 +1593,10 @@ export function SkinAccessSection(): React.JSX.Element {
                 hasRoles={visibleRoles.length > 0}
                 onRolesChanged={() => void refresh()}
               />
+            ) : null}
+
+            {selectedApp && selectedApp !== 'host' && phonePairing ? (
+              <AppPhonePairing key={`phones-${selectedApp}`} app={selectedApp} />
             ) : null}
 
             {selectedApp === 'host' ? (

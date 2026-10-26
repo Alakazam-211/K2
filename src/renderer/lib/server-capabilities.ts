@@ -145,6 +145,9 @@ export const FEATURES = {
    *  offers the cap only at or above this (an older server refuses the
    *  unknown cap). Confirm at the release cut. */
   'thread-download': '0.46.3',
+  /** App phone pairing (prd-app-phone-pairing-v1, 0.46.5): `/cli/app/pairing*`
+   *  and the Settings → Apps → <App> → Phones card. Confirm at the release cut. */
+  'app-phone-pairing': '0.46.5',
   /** GET /cli/wiki/index + /cli/wiki/note — the Wiki page's routes (first
    *  shipped in 0.40.47, `c3153b1d5`). Gates the Workspace tab's View Wiki
    *  in a room on another server (0.46.0): it switches the window there,

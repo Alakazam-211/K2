@@ -191,16 +191,17 @@ pub fn create_bundle(root: &Path, commit: &str, have: &[String], job_id: &str, o
     let tmp = out.with_extension("tmp-repo");
     let _ = std::fs::remove_dir_all(&tmp);
     let result = (|| {
-        // git_safe: allow (a throwaway bare repo K2 just made; no work tree, own env)
-        let mut c = Command::new("git");
-        c.args(["init", "--bare", "-q"]).arg(&tmp).env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
+        // A throwaway bare repo K2 just made (no work tree): the resolved
+        // git without the `-c` hardening (`git_safe::plain`).
+        let mut c = crate::git_safe::plain();
+        c.args(["init", "--bare", "-q"]).arg(&tmp);
         run(c, "make the bundle repo")?;
         std::fs::write(tmp.join("objects/info/alternates"), format!("{}\n", objects.display()))
             .map_err(|e| format!("write alternates: {e}"))?;
         let gd = |args: &[&str]| {
-            // git_safe: allow (the same throwaway bare repo, by --git-dir)
-            let mut c = Command::new("git");
-            c.arg("--git-dir").arg(&tmp).args(args).env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
+            // The same throwaway bare repo, by --git-dir.
+            let mut c = crate::git_safe::plain();
+            c.arg("--git-dir").arg(&tmp).args(args);
             c
         };
         let r = bundle_ref(job_id);

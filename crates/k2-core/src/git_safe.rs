@@ -38,13 +38,27 @@
 //! Hooks are off only for K2's own calls. Agents' own `git` in their
 //! terminal is unchanged.
 //!
+//! **Which git** (0.46.4, Rosson 2026-10-26). Before building a command,
+//! [`availability`] checks that a git really runs here. On macOS
+//! `/usr/bin/git` is only Apple's shim: until the Command Line Tools are
+//! installed every call fails AND opens Apple's install dialog. So K2
+//! runs the shim only once `xcode-select -p` names a developer folder
+//! that holds a real git; a Homebrew (or any other) git on PATH counts
+//! too. While no git runs, [`command`] points at a path that doesn't
+//! exist on macOS, so a K2 git call fails quietly instead of opening the
+//! dialog. `crate::git_tools` owns what K2 does meanwhile (the deferred
+//! git steps, the install button, the agents' note).
+//!
 //! The grep test below fails on a bare `Command::new("git")` anywhere in
 //! `crates/k2-core/src` or `crates/k2-daemon/src` outside test code and
 //! this file. A line that must stay raw carries the marker
 //! `git_safe: allow (<reason>)` on the same line or the line above.
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 const NULL_HOOKS: &str = "core.hooksPath=NUL";
@@ -72,7 +86,7 @@ pub const NO_EXT_DIFF: [&str; 2] = ["--no-ext-diff", "--no-textconv"];
 /// A hardened `git` with no working directory set (global config, or a
 /// caller that passes `-C`/`--git-dir` itself).
 pub fn command() -> Command {
-    let mut c = Command::new("git"); // git_safe: allow (the one builder)
+    let mut c = Command::new(program());
     c.args(harden_args())
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -86,6 +100,184 @@ pub fn git(dir: impl AsRef<Path>) -> Command {
     let mut c = command();
     c.current_dir(dir.as_ref());
     c
+}
+
+/// The resolved git with none of the `-c` hardening: only for a throwaway
+/// bare repo K2 just made itself (compute bundles), never a workspace.
+pub fn plain() -> Command {
+    let mut c = Command::new(program());
+    c.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
+    c
+}
+
+// ── Is git usable here? ──────────────────────────────────────────────────
+
+/// What K2 found when it looked for a git it can run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitProbe {
+    /// A git that runs. `program` is what every K2 git call uses.
+    Ready { program: PathBuf, version: String },
+    /// macOS with no usable git: Apple's Command Line Tools aren't
+    /// installed, and no Homebrew or other git is on PATH.
+    NeedsAppleClt,
+    /// No git at all (Linux, Windows).
+    Missing,
+}
+
+impl GitProbe {
+    pub fn is_ready(&self) -> bool {
+        matches!(self, GitProbe::Ready { .. })
+    }
+}
+
+/// A program that runs nowhere: what [`command`] uses while git isn't
+/// usable on macOS, so a K2 git call fails with "not found" instead of
+/// running Apple's shim (which opens the install dialog).
+pub const UNAVAILABLE: &str = "/nonexistent/k2-git-not-installed-yet/git";
+
+/// The git program K2 runs: the probed one when git works; otherwise a
+/// path that can't run on macOS, and plain `git` elsewhere (a missing
+/// git there is only "not found"). Windows always runs plain `git`.
+pub fn program() -> OsString {
+    if cfg!(windows) {
+        return OsString::from("git");
+    }
+    match availability() {
+        GitProbe::Ready { program, .. } => program.into_os_string(),
+        _ if cfg!(target_os = "macos") => OsString::from(UNAVAILABLE),
+        _ => OsString::from("git"),
+    }
+}
+
+/// Overrides the folders K2 searches for git (PATH syntax). For tests and
+/// for checking a box by hand; unset in normal use.
+pub const PROBE_PATH_ENV: &str = "K2_GIT_PROBE_PATH";
+
+/// macOS folders searched after PATH: launchd hands the daemon a bare
+/// PATH, so a Homebrew git would otherwise go unseen.
+#[cfg(target_os = "macos")]
+const MAC_EXTRA_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
+
+fn split_dirs(v: &std::ffi::OsStr) -> Vec<PathBuf> {
+    std::env::split_paths(v).filter(|p| !p.as_os_str().is_empty()).collect()
+}
+
+/// The folders searched for git, in order.
+pub fn probe_dirs() -> Vec<PathBuf> {
+    if let Some(v) = std::env::var_os(PROBE_PATH_ENV) {
+        return split_dirs(&v);
+    }
+    #[allow(unused_mut)]
+    let mut dirs = std::env::var_os("PATH").map(|v| split_dirs(&v)).unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    dirs.extend(MAC_EXTRA_DIRS.iter().map(PathBuf::from));
+    dirs
+}
+
+pub(crate) fn is_exec_file(p: &Path) -> bool {
+    let Ok(md) = std::fs::metadata(p) else { return false };
+    if !md.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        md.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// `<git> --version`, when it runs and says so.
+fn version_of(git: &Path) -> Option<String> {
+    let out = Command::new(git)
+        .arg("--version")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && v.starts_with("git version")).then_some(v)
+}
+
+/// The developer folder `xcode-select -p` names, when it names one.
+/// (`xcode-select -p` never opens the install dialog.)
+pub fn apple_developer_dir(xcode_select: &Path) -> Option<PathBuf> {
+    let out = Command::new(xcode_select).arg("-p").stdin(Stdio::null()).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let d = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!d.is_empty()).then(|| PathBuf::from(d))
+}
+
+/// Is the `git` in `dir` Apple's shim? On macOS it is the one that sits
+/// beside `xcode-select` (that is, `/usr/bin`).
+pub fn is_apple_shim_dir(dir: &Path, mac: bool) -> bool {
+    mac && is_exec_file(&dir.join("xcode-select"))
+}
+
+/// Look for a git that runs in `dirs` (PATH order). With `mac` on, Apple's
+/// shim ([`is_apple_shim_dir`]) is run only once `xcode-select -p` names
+/// a developer folder that holds `usr/bin/git`; before that it is skipped
+/// without ever being run.
+pub fn probe_in(dirs: &[PathBuf], mac: bool) -> GitProbe {
+    let exe = if cfg!(windows) { "git.exe" } else { "git" };
+    let mut seen: Vec<&PathBuf> = Vec::new();
+    for d in dirs {
+        if seen.contains(&d) {
+            continue;
+        }
+        seen.push(d);
+        let git = d.join(exe);
+        if !is_exec_file(&git) {
+            continue;
+        }
+        if is_apple_shim_dir(d, mac) {
+            let tools_git = apple_developer_dir(&d.join("xcode-select")).map(|dev| dev.join("usr/bin/git"));
+            if !tools_git.is_some_and(|g| is_exec_file(&g)) {
+                continue;
+            }
+        }
+        if let Some(version) = version_of(&git) {
+            return GitProbe::Ready { program: git, version };
+        }
+    }
+    if mac {
+        GitProbe::NeedsAppleClt
+    } else {
+        GitProbe::Missing
+    }
+}
+
+/// Probe now with this machine's folders (no cache).
+pub fn probe_now() -> GitProbe {
+    probe_in(&probe_dirs(), cfg!(target_os = "macos"))
+}
+
+/// While git isn't usable, look again at most this often.
+const RECHECK_EVERY: Duration = Duration::from_secs(10);
+
+static CACHE: Mutex<Option<(GitProbe, Instant)>> = Mutex::new(None);
+
+/// Is git usable here? Cached: a working git stays cached; a missing one
+/// is probed again after [`RECHECK_EVERY`] (or at once by [`refresh`]).
+pub fn availability() -> GitProbe {
+    if let Some((p, at)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if p.is_ready() || at.elapsed() < RECHECK_EVERY {
+            return p.clone();
+        }
+    }
+    refresh()
+}
+
+/// Probe again now and cache the answer.
+pub fn refresh() -> GitProbe {
+    let p = probe_now();
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((p.clone(), Instant::now()));
+    p
 }
 
 #[cfg(test)]
@@ -216,6 +408,106 @@ mod tests {
         assert!(envs.contains(&("GIT_OPTIONAL_LOCKS".into(), Some("0".into()))), "{envs:?}");
         assert!(envs.contains(&("GIT_EXTERNAL_DIFF".into(), None)), "{envs:?}");
         assert!(!args.iter().any(|a| a.starts_with("safe.directory")), "never safe.directory: {args:?}");
+    }
+
+    // ── probe (0.46.4: first run on a Mac without developer tools) ───────
+
+    /// A stub `git` in `dir` that touches `mark` whenever it runs, so a
+    /// test can prove Apple's shim was never run. `works` = `--version`
+    /// answers like a real git; otherwise it fails like the shim does.
+    #[cfg(unix)]
+    fn stub_git(dir: &Path, mark: &Path, works: bool) {
+        std::fs::create_dir_all(dir).expect("mkdir stub dir");
+        let tail = if works {
+            "echo 'git version 9.9.9-stub'"
+        } else {
+            "echo 'xcode-select: note: No developer tools were found, requesting install.' >&2; exit 1"
+        };
+        // Written by a /bin/sh child: this process execs it (ETXTBSY).
+        crate::test_env::write_executable(&dir.join("git"), &format!("#!/bin/sh\n: > '{}'\n{tail}\n", mark.display()));
+    }
+
+    /// A stub `xcode-select` whose `-p` names `dev`, or fails the way it
+    /// does before the Command Line Tools are installed.
+    #[cfg(unix)]
+    fn stub_xcode_select(dir: &Path, dev: Option<&Path>) {
+        std::fs::create_dir_all(dir).expect("mkdir stub dir");
+        let body = match dev {
+            Some(d) => format!("#!/bin/sh\n[ \"$1\" = -p ] || exit 9\necho '{}'\n", d.display()),
+            None => "#!/bin/sh\necho 'xcode-select: error: unable to get active developer directory' >&2\nexit 2\n".to_string(),
+        };
+        crate::test_env::write_executable(&dir.join("xcode-select"), &body);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apple_shim_without_tools_is_never_run() {
+        let d = temp("probe-noclt");
+        let usr_bin = d.join("usr-bin");
+        let mark = d.join("shim-ran");
+        stub_git(&usr_bin, &mark, true);
+        stub_xcode_select(&usr_bin, None);
+        assert_eq!(probe_in(&[usr_bin.clone()], true), GitProbe::NeedsAppleClt);
+        assert!(!mark.exists(), "the probe ran Apple's shim (that opens the install dialog)");
+        // A developer folder without a git in it doesn't count either.
+        let dev = d.join("dev");
+        std::fs::create_dir_all(&dev).expect("mkdir dev");
+        stub_xcode_select(&usr_bin, Some(&dev));
+        assert_eq!(probe_in(&[usr_bin], true), GitProbe::NeedsAppleClt);
+        assert!(!mark.exists(), "the probe ran Apple's shim with no git in the developer folder");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apple_shim_runs_once_the_tools_are_installed() {
+        let d = temp("probe-clt");
+        let usr_bin = d.join("usr-bin");
+        let dev = d.join("CommandLineTools");
+        stub_git(&usr_bin, &d.join("shim-ran"), true);
+        stub_git(&dev.join("usr/bin"), &d.join("tools-git-ran"), true);
+        stub_xcode_select(&usr_bin, Some(&dev));
+        assert_eq!(
+            probe_in(&[usr_bin.clone()], true),
+            GitProbe::Ready { program: usr_bin.join("git"), version: "git version 9.9.9-stub".into() }
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn homebrew_git_is_used_while_the_tools_are_missing() {
+        let d = temp("probe-brew");
+        let usr_bin = d.join("usr-bin");
+        let brew = d.join("brew-bin");
+        let shim_mark = d.join("shim-ran");
+        stub_git(&usr_bin, &shim_mark, true);
+        stub_xcode_select(&usr_bin, None);
+        stub_git(&brew, &d.join("brew-ran"), true);
+        let p = probe_in(&[usr_bin, brew.clone()], true);
+        assert_eq!(p, GitProbe::Ready { program: brew.join("git"), version: "git version 9.9.9-stub".into() });
+        assert!(!shim_mark.exists(), "Apple's shim ran although Homebrew's git was there");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_or_broken_git_is_not_ready() {
+        let d = temp("probe-linux");
+        let empty = d.join("empty");
+        std::fs::create_dir_all(&empty).expect("mkdir empty");
+        assert_eq!(probe_in(&[empty.clone()], false), GitProbe::Missing);
+        assert_eq!(probe_in(&[], false), GitProbe::Missing);
+        // Not a Mac: an `xcode-select` beside git means nothing.
+        let bin = d.join("bin");
+        stub_git(&bin, &d.join("ran"), true);
+        stub_xcode_select(&bin, None);
+        assert!(probe_in(&[empty.clone(), bin], false).is_ready());
+        // A git that fails `--version` doesn't count.
+        let broken = d.join("broken");
+        stub_git(&broken, &d.join("broken-ran"), false);
+        assert_eq!(probe_in(&[broken], false), GitProbe::Missing);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     // ── grep test ────────────────────────────────────────────────────────
@@ -436,10 +728,10 @@ mod tests {
             "raw git commands outside crate::git_safe (use git_safe::git(dir) / git_safe::command(), or mark the line `git_safe: allow (<reason>)`):\n{}",
             bad.join("\n")
         );
-        // The allow-list stays small and known: the two temp-bare-repo calls
-        // in compute/sync.rs (SS15).
-        assert_eq!(allowed.len(), 2, "allow-listed raw git lines changed: {allowed:?}");
-        assert!(allowed.iter().all(|a| a.contains("compute/sync.rs")), "{allowed:?}");
+        // The allow-list is empty since 0.46.4: the two temp-bare-repo calls
+        // in compute/sync.rs moved to `git_safe::plain()`, so they too run
+        // the probed git and never Apple's shim.
+        assert!(allowed.is_empty(), "allow-listed raw git lines came back: {allowed:?}");
     }
 
     #[test]

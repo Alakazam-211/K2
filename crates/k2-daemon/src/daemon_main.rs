@@ -1567,6 +1567,10 @@ async fn async_main() {
     // warm, and the lifecycle (dormant after App access is lost, deleted
     // 30 days later). Headless: runs with no client attached.
     crate::person_wallet_runtime::spawn_loop();
+    // First run without git (0.46.4): once git runs (Apple's command line
+    // tools finished installing, or a package landed), do the git steps
+    // Add workspace left waiting. Headless: no client needed.
+    crate::git_tools_routes::spawn_loop();
 
     // Published services: boot reattach/respawn of desired=running
     // rows. Own process group / Job Object — stop_tunnel / Active

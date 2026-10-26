@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Callout, DialogScrim } from '@/components/ui'
 import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
+import { GitToolsBanner } from '@/components/GitTools/GitToolsNotice'
 
 // The Skip / Start-Fresh / Adopt consent picker was removed with the
 // canonical-agents PRD (§7 Removal Catalog): harness fan-out is now off by
@@ -73,6 +74,13 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
           <p className="text-[10px] text-[var(--color-text-muted)] mt-1 break-all font-mono">
             {path}
           </p>
+        </div>
+
+        {/* 0.46.4: no git on the server yet (a Mac without Apple's command
+            line tools). The workspace is still added; the daemon does its
+            git steps once git runs. Renders nothing while git works. */}
+        <div className="px-5 pb-3 empty:hidden">
+          <GitToolsBanner />
         </div>
 
         {/* Generate adds cwd AGENTS.md when missing; it will not replace a user file.

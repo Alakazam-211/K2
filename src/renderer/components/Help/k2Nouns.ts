@@ -206,6 +206,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         note: 'linux-sidecar',
       },
       { noun: 'root-helper', blurb: "K2's one root door on Linux: status and update.", example: 'k2 root-helper status' },
+      { noun: 'git-tools', blurb: "Is git usable here: install Apple's command line tools, or how to install git on Linux.", example: 'k2 git-tools' },
       { noun: 'onboarding', blurb: 'First launch: adopt or create workspaces.' },
     ],
   },

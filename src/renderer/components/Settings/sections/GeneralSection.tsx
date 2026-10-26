@@ -67,6 +67,7 @@ import { RemoteRoomsPreviewRow } from './RemoteRoomsPreviewRow'
 import { AppFontRows } from '../shared/AppFontRows'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
 import { YourAccountRow } from './YourAccountRow'
+import { GitToolsRow } from '@/components/GitTools/GitToolsNotice'
 import {
   parseSessionViewTab,
   parseSplitPaneView,
@@ -77,6 +78,7 @@ import {
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
   { id: 'general.cli-version', section: 'general', group: 'General', label: 'CLI Version', description: 'Installed k2so CLI version + install/update button', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
+  { id: 'general.git-tools', section: 'general', group: 'General', label: 'Git', description: "Whether git works on this server. On a Mac without Apple's command line tools: one click to install them (no Xcode needed)", keywords: ['git', 'xcode', 'xcode-select', 'command line tools', 'clt', 'developer tools', 'install', 'apple', 'homebrew', 'apt'] },
   { id: 'general.font-family', section: 'general', group: 'General', label: 'Font family', description: 'The app font; same setting as Editors / Fonts → Code', keywords: ['font', 'typeface', 'family', 'text', 'monospace'] },
   { id: 'general.font-size', section: 'general', group: 'General', label: 'Font size', description: 'Text size for code, the message box, chats and tickets; same setting as Editors / Fonts → Code', keywords: ['font', 'size', 'text size', 'zoom', 'bigger', 'smaller'] },
   { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the Chromium DevTools console for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
@@ -379,6 +381,10 @@ export function GeneralSection(): React.JSX.Element {
 
         {/* CLI Version — right under App Version so it feels like part of the app */}
         <CLIVersionRow />
+
+        {/* Git (0.46.4): the server's git, and on a Mac without Apple's
+            command line tools the one-click install. Daemon-owned state. */}
+        <GitToolsRow />
 
         {/* App font (0.45.7): the same setting as Editors / Fonts → Code.
             Sits below the app and CLI versions (Rosson 2026-10-16). */}

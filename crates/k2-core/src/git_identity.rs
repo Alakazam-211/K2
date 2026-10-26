@@ -14,6 +14,11 @@ use std::process::Command;
 /// Ensure `user.name` and `user.email` resolve for subsequent git commits.
 /// Idempotent and skip-safe when already configured.
 pub fn ensure_git_identity() -> Result<(), String> {
+    // No git yet (a Mac without Apple's Command Line Tools): say so plainly
+    // instead of passing on the shim's xcode-select note.
+    if !crate::git_safe::availability().is_ready() {
+        return Err(crate::git_tools::waiting_mark().to_string());
+    }
     let name = git_config_get("user.name");
     let email = git_config_get("user.email");
 

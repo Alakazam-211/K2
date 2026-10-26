@@ -213,6 +213,8 @@ pub mod git_notes;
 pub mod git_safe;
 /// Ensure global git user.name / user.email when missing (init-git path).
 pub mod git_identity;
+/// First run without git: deferred git steps, the CLT install, agents' note (0.46.4).
+pub mod git_tools;
 // Phase 2.5c: workspace heartbeat schedules + launchd + cron live here
 // post-refactor. Was [`agents::heartbeat`]; the `agents/` back-compat
 // alias remains for one release cycle.

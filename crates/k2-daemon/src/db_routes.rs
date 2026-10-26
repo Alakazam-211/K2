@@ -1239,7 +1239,19 @@ pub fn handle_projects_init_git_and_open(body: &[u8]) -> CliResponse {
     if result.is_ok() {
         emit_projects_changed();
     }
-    serialized(result)
+    // 0.46.4: git didn't run, so the workspace was added and its git steps
+    // wait (`k2_core::git_tools`). Say so on the response:
+    // `gitWaiting: "git: waiting for Apple's command line tools"`.
+    match result {
+        Ok(project) if k2_core::git_tools::read_deferred(std::path::Path::new(&b.path)).is_some() => {
+            let mut v = serde_json::to_value(&project).unwrap_or_default();
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("gitWaiting".into(), serde_json::json!(k2_core::git_tools::waiting_mark()));
+            }
+            ok_serialized(v)
+        }
+        other => serialized(other),
+    }
 }
 
 #[derive(Deserialize)]

@@ -997,6 +997,20 @@ impl DaemonPtySession {
             apply_browser_shim_env(&mut child_env, &shim);
         }
 
+        // 0.46.4 first run without git (`crate::git_tools`): when git runs,
+        // do any git steps this folder still waits for; while it doesn't
+        // (a Mac without Apple's Command Line Tools), put the git-wait
+        // shim first on PATH so the agent's `git` prints one clear line
+        // instead of Apple's install dialog and xcrun error.
+        if !matches!(cfg.sandbox, crate::terminal::SandboxSpec::Microvm) {
+            if let Some(dir) = crate::git_tools::before_spawn(cfg.cwd.as_deref()) {
+                let current = login_path::env_path_entry(&child_env).map(|(_, v)| v.to_string()).unwrap_or_default();
+                #[cfg(windows)]
+                child_env.retain(|k, _| !k.eq_ignore_ascii_case("PATH"));
+                child_env.insert("PATH".to_string(), crate::terminal::path_env::prepend(&current, &dir));
+            }
+        }
+
         // Capture spawn-failure diagnostics before `req` takes ownership
         // of `shell` / `child_env`. PATH entry count helps distinguish
         // bare-name ENOENT (PATH too thin) from other spawn errors.

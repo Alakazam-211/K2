@@ -3289,6 +3289,45 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // 0.46.4 first run without git (`git_tools_routes`). GET the state
+        // (any login: it only reads); POST install is OWNER-ONLY (it opens
+        // Apple's installer dialog on this machine); POST recheck looks for
+        // git again and does the waiting git steps (any login). Probes and
+        // git run on a blocking thread.
+        p @ ("/cli/git-tools" | "/cli/git-tools/install" | "/cli/git-tools/recheck") => {
+            let p = p.to_string();
+            if p != "/cli/git-tools" && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if p == "/cli/git-tools/install" {
+                if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                    return DispatchOutcome::Done;
+                }
+            } else if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            if is_post {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            }
+            let resp = tokio::task::spawn_blocking(move || match p.as_str() {
+                "/cli/git-tools/install" => crate::git_tools_routes::handle_install(is_post),
+                "/cli/git-tools/recheck" => crate::git_tools_routes::handle_recheck(is_post),
+                _ if is_post => crate::cli_response::CliResponse::method_not_allowed(),
+                _ => crate::git_tools_routes::handle_status(),
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // POST /cli/tunnel/switch — 0.45.2: move this device to another
         // subdomain in one step (Settings picker, `k2 tunnel switch`). JSON
         // body `{subdomain, token?, deviceId?, deviceLabel?, start?}`. Binds

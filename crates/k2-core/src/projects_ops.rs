@@ -742,9 +742,15 @@ pub fn projects_add_from_path_ex(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path.to_string());
 
+    // While git doesn't run (a Mac without the Command Line Tools), read
+    // the repo with libgit2 instead, so Add workspace never needs the git
+    // binary (0.46.4).
+    let git_ready = crate::git_safe::availability().is_ready();
     let git_dir = p.join(".git");
     let is_git_repo = if git_dir.exists() {
         true
+    } else if !git_ready {
+        crate::git_changes::repo_key_and_root(path).is_some()
     } else {
         crate::git_safe::git(path)
             .args(["rev-parse", "--show-toplevel"])
@@ -798,13 +804,17 @@ pub fn projects_add_from_path_ex(
     let workspace_id = Uuid::new_v4().to_string();
     let tab_order = next_tab_order(&conn);
 
-    let current_branch = crate::git_safe::git(path)
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| "main".to_string());
+    let current_branch = if git_ready {
+        crate::git_safe::git(path)
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    } else {
+        crate::git_tools::head_branch_without_cli(path)
+    }
+    .unwrap_or_else(|| "main".to_string());
 
     let result = with_transaction(&conn, || {
         Project::create(
@@ -963,34 +973,15 @@ pub fn projects_init_git_and_open_ex(
         .unwrap_or("main")
         .to_string();
 
-    // Before the empty initial commit: if this machine has no git author,
-    // seed global user.name / user.email from the OS account. Skips when
-    // already configured (Rosson 2026-08-11 — fresh Windows install pain).
-    crate::git_identity::ensure_git_identity()?;
-
-    let init_output = crate::git_safe::git(path)
-        .args(["init", &format!("--initial-branch={}", branch_name)])
-        .output()
-        .map_err(|e| format!("Failed to run git init: {}", e))?;
-    if !init_output.status.success() {
-        let stderr = String::from_utf8_lossy(&init_output.stderr);
-        return Err(format!("Failed to initialize git: {}", stderr));
-    }
-    let commit_output = crate::git_safe::git(path)
-        .args(["commit", "--allow-empty", "-m", "Initial commit"])
-        .output()
-        .map_err(|e| format!("Failed to run git commit: {}", e))?;
-    if !commit_output.status.success() {
-        let stderr = String::from_utf8_lossy(&commit_output.stderr);
-        if stderr.contains("user.email") || stderr.contains("user.name") {
-            // ensure_git_identity should have fixed this; surface a clearer
-            // message if git still rejects the author (rare policy/env case).
-            return Err(
-                "Git user still not configured after auto-setup. Run:\n  git config --global user.name \"Your Name\"\n  git config --global user.email \"you@example.com\""
-                    .to_string(),
-            );
-        }
-        return Err(format!("Failed to create initial commit: {}", stderr));
+    // git doesn't run yet (a Mac without Apple's Command Line Tools, a box
+    // with no git): add the workspace anyway and leave the identity seed,
+    // `git init` and the first commit for when it does (0.46.4,
+    // `crate::git_tools`). Otherwise do them now.
+    let deferred = !crate::git_safe::availability().is_ready();
+    if deferred {
+        crate::git_tools::defer_init(Path::new(path), &branch_name)?;
+    } else {
+        init_and_first_commit(path, &branch_name)?;
     }
 
     let name = Path::new(path)
@@ -1023,6 +1014,11 @@ pub fn projects_init_git_and_open_ex(
         )
         .map_err(|e| e.to_string())?;
         Project::get(&conn, &project_id).map_err(|e| e.to_string())
+    })
+    .inspect_err(|_| {
+        if deferred {
+            crate::git_tools::clear_deferred(Path::new(path));
+        }
     })?;
     if seed_wiki {
         crate::wiki::seed_wiki_on_add(path);
@@ -1034,6 +1030,42 @@ pub fn projects_init_git_and_open_ex(
     );
     crate::cli_folder_trust::trust_cli_folder(path);
     Ok(project)
+}
+
+/// Seed the git identity if missing, `git init` on `branch_name`, and the
+/// empty first commit. Add workspace runs it at once when git works; the
+/// deferred step (`crate::git_tools::run_deferred`) runs it later.
+pub(crate) fn init_and_first_commit(path: &str, branch_name: &str) -> Result<(), String> {
+    // Before the empty initial commit: if this machine has no git author,
+    // seed global user.name / user.email from the OS account. Skips when
+    // already configured (Rosson 2026-08-11 — fresh Windows install pain).
+    crate::git_identity::ensure_git_identity()?;
+
+    let init_output = crate::git_safe::git(path)
+        .args(["init", &format!("--initial-branch={}", branch_name)])
+        .output()
+        .map_err(|e| format!("Failed to run git init: {}", e))?;
+    if !init_output.status.success() {
+        let stderr = String::from_utf8_lossy(&init_output.stderr);
+        return Err(format!("Failed to initialize git: {}", stderr));
+    }
+    let commit_output = crate::git_safe::git(path)
+        .args(["commit", "--allow-empty", "-m", "Initial commit"])
+        .output()
+        .map_err(|e| format!("Failed to run git commit: {}", e))?;
+    if !commit_output.status.success() {
+        let stderr = String::from_utf8_lossy(&commit_output.stderr);
+        if stderr.contains("user.email") || stderr.contains("user.name") {
+            // ensure_git_identity should have fixed this; surface a clearer
+            // message if git still rejects the author (rare policy/env case).
+            return Err(
+                "Git user still not configured after auto-setup. Run:\n  git config --global user.name \"Your Name\"\n  git config --global user.email \"you@example.com\""
+                    .to_string(),
+            );
+        }
+        return Err(format!("Failed to create initial commit: {}", stderr));
+    }
+    Ok(())
 }
 
 // ── Worktree enablement ────────────────────────────────────────────────

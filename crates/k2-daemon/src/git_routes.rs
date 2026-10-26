@@ -104,17 +104,11 @@ pub fn handle_git_info(params: &HashMap<String, String>) -> CliResponse {
     ok_serialized(v)
 }
 
-/// Is the `git` binary runnable on this server (checked once per daemon)?
+/// Is the `git` binary runnable on this server? The one probe
+/// (`git_safe::availability`), which never runs Apple's shim before the
+/// Command Line Tools exist and notices when they arrive (0.46.4).
 pub fn git_cli_present() -> bool {
-    static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *PRESENT.get_or_init(|| {
-        k2_core::git_safe::command()
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-    })
+    k2_core::git_safe::availability().is_ready()
 }
 
 #[derive(Deserialize)]

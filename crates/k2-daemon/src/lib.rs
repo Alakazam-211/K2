@@ -78,6 +78,8 @@ pub mod zen_sync_routes;
 pub mod zen_watch;
 pub mod grid_emitter;
 pub mod git_routes;
+/// First run without git (0.46.4): `/cli/git-tools*` + the headless watch loop.
+pub mod git_tools_routes;
 /// Changes tab v1.1 (C5): review notes routes (store in k2_core::git_notes).
 pub mod git_notes_routes;
 /// Changes tab v1: debounced `git_changed` events (watcher + git routes).

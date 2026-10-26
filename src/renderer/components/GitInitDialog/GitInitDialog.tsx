@@ -10,6 +10,7 @@ import { emit } from '@tauri-apps/api/event'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { Callout, DialogScrim } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
+import { GitToolsBanner } from '@/components/GitTools/GitToolsNotice'
 
 export default function GitInitDialog(): React.JSX.Element | null {
   const isOpen = useGitInitDialogStore((s) => s.isOpen)
@@ -167,6 +168,13 @@ export default function GitInitDialog(): React.JSX.Element | null {
           <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5 break-all">
             {path}
           </p>
+        </div>
+
+        {/* 0.46.4: no git on the server yet (a Mac without Apple's command
+            line tools). Init still adds the workspace; the daemon does the
+            git steps once git runs. */}
+        <div className="px-5 pb-4 empty:hidden">
+          <GitToolsBanner />
         </div>
 
         {/* Branch name input */}

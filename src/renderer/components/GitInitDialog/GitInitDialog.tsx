@@ -102,7 +102,8 @@ export default function GitInitDialog(): React.JSX.Element | null {
     try {
       await daemonCliPost(primaryScope(), 'projects/init-git-and-open', {
         path,
-        branch: branchName,
+        // Trimmed here; the daemon trims and checks the name too (0.46.4).
+        branch: branchName.trim(),
         seedWiki,
         seedAgentsMd,
         fanout,

@@ -3,16 +3,21 @@
 //! `K2_GIT_PROBE_PATH` points the daemon's git probe at stub folders, so
 //! this test fakes a machine with no usable git and never runs a real
 //! install:
-//! - macOS: the stub folder holds Apple's pair, a `git` that leaves a
+//! - macOS: the stub folder stands in for Apple's `/usr/bin` pair
+//!   (`K2_TEST_APPLE_SHIM_DIR`, test builds only): a `git` that leaves a
 //!   mark when run and an `xcode-select` whose `-p` fails (no tools) and
-//!   whose `--install` only logs its arguments.
+//!   whose `--install` only logs its arguments (or, once told, refuses
+//!   with "already installed").
 //! - Linux: the stub folder is empty (no git at all).
 //!
-//! 1. `GET /cli/git-tools` says git isn't usable, with how to install.
+//! 1. `GET /cli/git-tools` says git isn't usable, with how to install;
+//!    `?format=text` gives the CLI's lines.
 //! 2. Init git on Add workspace adds the workspace anyway, marked
-//!    `gitWaiting`; nothing ran Apple's shim; nothing wrote ~/.gitconfig.
+//!    `gitWaiting`; a branch git would refuse is refused up front;
+//!    nothing ran Apple's shim; nothing wrote ~/.gitconfig.
 //! 3. Install: macOS runs `xcode-select --install` (the stub) and shows
-//!    `installing`; owner only, POST only. Linux refuses with how to.
+//!    `installing`; a quick refusal is a 409 with its words; owner token
+//!    only, POST only. Linux refuses with how to.
 //! 4. A spawn while git is missing gets `~/.k2/bin/git-wait` first on PATH.
 //! 5. git arrives (a real git linked into the probe path): the next spawn
 //!    in one waiting workspace and `POST /cli/git-tools/recheck` for the
@@ -89,14 +94,16 @@ fn wait_for(what: &str, secs: u64, mut ok: impl FnMut() -> bool) {
 /// Mac Apple's shim counts only when the tools are installed).
 fn real_git() -> PathBuf {
     let dirs: Vec<PathBuf> = std::env::split_paths(&std::env::var_os("PATH").expect("PATH")).collect();
-    match git_safe::probe_in(&dirs, cfg!(target_os = "macos")) {
+    let apple = git_safe::ApplePair { git: "/usr/bin/git".into(), xcode_select: "/usr/bin/xcode-select".into() };
+    let apple = cfg!(target_os = "macos").then_some(&apple);
+    match git_safe::probe_in(&dirs, apple) {
         git_safe::GitProbe::Ready { program, .. } => program,
         other => panic!("this test needs git on the test machine; the probe says {other:?}"),
     }
 }
 
-fn git_out(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new(real_git())
+fn git_out(git: &Path, dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new(git)
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -157,13 +164,15 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     std::fs::create_dir_all(&ready_bin).expect("mkdir ready-bin");
     let shim_ran = home.join("apple-shim-ran");
     let install_log = home.join("xcode-select-install.log");
+    let refuse_install = home.join("xcode-select-refuses");
     if mac {
         k2_core::test_env::write_executable(&usr_bin.join("git"), &format!("#!/bin/sh\n: > '{}'\nexit 1\n", shim_ran.display()));
         k2_core::test_env::write_executable(
             &usr_bin.join("xcode-select"),
             &format!(
-                "#!/bin/sh\nif [ \"$1\" = --install ]; then echo \"$@\" >> '{}'; exit 0; fi\necho 'xcode-select: error: unable to get active developer directory' >&2\nexit 2\n",
-                install_log.display()
+                "#!/bin/sh\nif [ \"$1\" = --install ]; then\n  if [ -e '{refuse}' ]; then echo 'xcode-select: error: command line tools are already installed, use \"Software Update\" in System Settings to install updates' >&2; exit 1; fi\n  echo \"$@\" >> '{log}'; exit 0\nfi\necho 'xcode-select: error: unable to get active developer directory' >&2\nexit 2\n",
+                refuse = refuse_install.display(),
+                log = install_log.display()
             ),
         );
     }
@@ -171,6 +180,8 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
         git_safe::PROBE_PATH_ENV,
         std::env::join_paths([&usr_bin, &ready_bin]).expect("join"),
     );
+    // macOS: the stub folder is Apple's /usr/bin pair (test builds only).
+    let _apple = k2_core::test_env::EnvVar::set(git_safe::TEST_APPLE_DIR_ENV, &usr_bin);
     assert!(!git_safe::refresh().is_ready(), "the stub machine has no usable git");
     let _agent = k2_core::test_env::AgentShim::with_body("printf '%s' \"$PATH\" > \"$PWD/.k2-test-path\"\nexec sleep 30");
     let claude = _agent.dir().join("claude");
@@ -187,6 +198,10 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     assert!(st.body["howTo"].as_array().is_some_and(|a| !a.is_empty()), "{}", st.raw);
     assert_eq!(st.body["waiting"], serde_json::json!([]), "{}", st.raw);
     assert_eq!(http(port, "GET", "/cli/git-tools", None).status, 403, "no token, no state");
+    let tx = http(port, "GET", &format!("/cli/git-tools?token={OWNER}&format=text"), None);
+    assert_eq!(tx.status, 200, "{}", tx.raw);
+    let first = if mac { "git        : not installed (needs Apple's command line tools)" } else { "git        : not installed (needs git)" };
+    assert_eq!(tx.raw.lines().next(), Some(first), "{}", tx.raw);
 
     // 2. Add workspace with "Initialize Git": added anyway, steps wait.
     let ws_a = home.join("site-a");
@@ -194,7 +209,12 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     for ws in [&ws_a, &ws_b] {
         std::fs::create_dir_all(ws).expect("mkdir workspace");
     }
-    let r = init_git_and_open(port, &ws_a, "trunk");
+    // A name git would refuse is refused now, not deferred forever.
+    let r = init_git_and_open(port, &ws_a, "-x");
+    assert_eq!(r.status, 400, "{}", r.raw);
+    assert!(r.raw.contains("can't start with -"), "{}", r.raw);
+    assert_eq!(git_tools::read_deferred(&ws_a), None, "no marker for a refused name");
+    let r = init_git_and_open(port, &ws_a, "  trunk ");
     assert_eq!(r.status, 200, "Add workspace must not fail for want of git: {}", r.raw);
     assert_eq!(r.body["gitWaiting"], git_tools::waiting_mark(), "{}", r.raw);
     let r = init_git_and_open(port, &ws_b, "main");
@@ -207,6 +227,7 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     let waiting: Vec<&str> = st.body["waiting"].as_array().expect("waiting").iter().map(|w| w["path"].as_str().expect("path")).collect();
     assert_eq!(waiting.len(), 2, "{}", st.raw);
     assert!(st.body["waiting"][0]["note"].as_str().is_some_and(|n| n == git_tools::waiting_mark()), "{}", st.raw);
+    assert_eq!(st.body["waiting"][0]["lastError"], serde_json::Value::Null, "not tried yet: {}", st.raw);
     assert!(!shim_ran.exists(), "K2 ran Apple's git shim (that opens the install dialog)");
     assert!(!home.join(".gitconfig").exists(), "no identity write while git is missing");
 
@@ -218,8 +239,17 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
         assert_eq!(r.status, 200, "{}", r.raw);
         assert_eq!(r.body["started"], "started", "{}", r.raw);
         assert_eq!(r.body["state"], "installing", "{}", r.raw);
-        wait_for("the stub xcode-select --install", 10, || install_log.exists());
-        assert_eq!(std::fs::read_to_string(&install_log).expect("log").trim(), "--install");
+        assert_eq!(std::fs::read_to_string(&install_log).expect("the stub xcode-select --install ran").trim(), "--install");
+        // A quick refusal ("already installed") is a 409 with its words,
+        // within the ~2 s watch.
+        std::fs::write(&refuse_install, "").expect("arm refusal");
+        let t0 = Instant::now();
+        let r = http(port, "POST", &format!("/cli/git-tools/install?token={OWNER}"), Some("{}"));
+        assert_eq!(r.status, 409, "{}", r.raw);
+        assert_eq!(r.body["code"], "install_refused", "{}", r.raw);
+        assert!(r.body["error"].as_str().is_some_and(|e| e.contains("already installed")), "{}", r.raw);
+        assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
+        std::fs::remove_file(&refuse_install).expect("disarm refusal");
     } else {
         assert_eq!(r.status, 409, "{}", r.raw);
         assert_eq!(r.body["code"], "not_macos", "{}", r.raw);
@@ -235,7 +265,7 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     let wait_dir = git_tools::wait_shim_dir_at(t.path());
     assert_eq!(child_path.split(':').next(), Some(wait_dir.to_str().expect("utf8")), "PATH: {child_path}");
     let shim_text = std::fs::read_to_string(wait_dir.join("git")).expect("shim staged");
-    assert_eq!(shim_text, git_tools::wait_shim_script(&git_tools::agent_note(), mac));
+    assert_eq!(shim_text, git_tools::wait_shim_script(&git_tools::agent_note(), git_safe::apple_pair().as_ref()));
     stop(&key_a);
     assert!(!ws_a.join(".git").exists(), "no git steps while git is missing");
 
@@ -247,8 +277,8 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     std::fs::remove_file(&path_file).expect("rm PATH file");
     let key_a = spawn_in(&ws_a, &claude, "a2");
     assert!(ws_a.join(".git").is_dir(), "spawn ran the deferred git init");
-    assert_eq!(git_out(&ws_a, &["rev-parse", "--abbrev-ref", "HEAD"]), "trunk");
-    assert_eq!(git_out(&ws_a, &["log", "--format=%s"]), "Initial commit");
+    assert_eq!(git_out(&git, &ws_a, &["rev-parse", "--abbrev-ref", "HEAD"]), "trunk");
+    assert_eq!(git_out(&git, &ws_a, &["log", "--format=%s"]), "Initial commit");
     assert_eq!(git_tools::read_deferred(&ws_a), None, "marker gone");
     wait_for("the agent's PATH (git ready)", 15, || path_file.exists() && std::fs::metadata(&path_file).is_ok_and(|m| m.len() > 0));
     let child_path = std::fs::read_to_string(&path_file).expect("read PATH");
@@ -260,8 +290,8 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     assert_eq!(r.body["state"], "ready", "{}", r.raw);
     assert_eq!(r.body["finished"], serde_json::json!([ws_b.to_string_lossy()]), "{}", r.raw);
     assert_eq!(r.body["waiting"], serde_json::json!([]), "{}", r.raw);
-    assert_eq!(git_out(&ws_b, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
-    assert_eq!(git_out(&ws_b, &["log", "--format=%s"]), "Initial commit");
+    assert_eq!(git_out(&git, &ws_b, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+    assert_eq!(git_out(&git, &ws_b, &["log", "--format=%s"]), "Initial commit");
     assert!(!shim_ran.exists(), "Apple's shim never ran");
     // Install once git runs: nothing to do.
     if mac {

@@ -7,7 +7,7 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
 
-export type GitToolsState = 'ready' | 'not_installed' | 'installing'
+export type GitToolsState = 'ready' | 'not_installed' | 'installing' | 'git_broken'
 
 export interface GitWaitingWorkspace {
   projectId: string
@@ -16,14 +16,18 @@ export interface GitWaitingWorkspace {
   branch: string
   /** "git: waiting for Apple's command line tools" */
   note: string
+  /** The last failed try of the waiting git steps, if any. */
+  lastError: string | null
 }
 
 export interface GitToolsStatus {
   os: string
   state: GitToolsState
-  needs: 'apple_clt' | 'git' | null
+  needs: 'apple_clt' | 'git' | 'fix_git' | null
   gitPath: string | null
   gitVersion: string | null
+  /** state `git_broken`: what the git that is there said. */
+  gitError: string | null
   /** macOS and git not running: the one-click install is offered. */
   canInstall: boolean
   installStartedAt: number | null
@@ -56,5 +60,6 @@ export const APPLE_INSTALLER_HINT =
 export function gitToolsStateLabel(s: GitToolsStatus): string {
   if (s.state === 'ready') return s.gitVersion ? `Ready (${s.gitVersion})` : 'Ready'
   if (s.state === 'installing') return "Installing Apple's command line tools…"
+  if (s.state === 'git_broken') return 'git is installed but fails'
   return s.needs === 'apple_clt' ? "Not installed (needs Apple's command line tools)" : 'git is not installed'
 }

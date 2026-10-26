@@ -968,10 +968,9 @@ pub fn projects_init_git_and_open_ex(
     seed_agents_md: bool,
     fanout: bool,
 ) -> Result<Project, String> {
-    let branch_name = branch
-        .filter(|b| !b.trim().is_empty())
-        .unwrap_or("main")
-        .to_string();
+    // Trimmed and checked up front (0.46.4): a name git refuses would
+    // otherwise sit deferred forever on a machine without git.
+    let branch_name = crate::git_tools::valid_branch(branch.filter(|b| !b.trim().is_empty()).unwrap_or("main"))?;
 
     // git doesn't run yet (a Mac without Apple's Command Line Tools, a box
     // with no git): add the workspace anyway and leave the identity seed,
@@ -981,7 +980,7 @@ pub fn projects_init_git_and_open_ex(
     if deferred {
         crate::git_tools::defer_init(Path::new(path), &branch_name)?;
     } else {
-        init_and_first_commit(path, &branch_name)?;
+        init_and_first_commit(path, &branch_name, false)?;
     }
 
     let name = Path::new(path)
@@ -1035,13 +1034,19 @@ pub fn projects_init_git_and_open_ex(
 /// Seed the git identity if missing, `git init` on `branch_name`, and the
 /// empty first commit. Add workspace runs it at once when git works; the
 /// deferred step (`crate::git_tools::run_deferred`) runs it later.
-pub(crate) fn init_and_first_commit(path: &str, branch_name: &str) -> Result<(), String> {
+///
+/// `unattended` (the deferred run: no one is watching): no commit signing,
+/// so a signing setup can't wait on a passphrase prompt. Hooks are already
+/// off for every K2 git call (`git_safe::harden_args`).
+pub(crate) fn init_and_first_commit(path: &str, branch_name: &str, unattended: bool) -> Result<(), String> {
     // Before the empty initial commit: if this machine has no git author,
     // seed global user.name / user.email from the OS account. Skips when
     // already configured (Rosson 2026-08-11 — fresh Windows install pain).
     crate::git_identity::ensure_git_identity()?;
+    let no_sign: &[&str] = if unattended { &["-c", "commit.gpgsign=false"] } else { &[] };
 
     let init_output = crate::git_safe::git(path)
+        .args(no_sign)
         .args(["init", &format!("--initial-branch={}", branch_name)])
         .output()
         .map_err(|e| format!("Failed to run git init: {}", e))?;
@@ -1050,6 +1055,7 @@ pub(crate) fn init_and_first_commit(path: &str, branch_name: &str) -> Result<(),
         return Err(format!("Failed to initialize git: {}", stderr));
     }
     let commit_output = crate::git_safe::git(path)
+        .args(no_sign)
         .args(["commit", "--allow-empty", "-m", "Initial commit"])
         .output()
         .map_err(|e| format!("Failed to run git commit: {}", e))?;

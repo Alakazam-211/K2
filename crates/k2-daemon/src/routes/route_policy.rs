@@ -692,10 +692,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/fs/upload-chunk", Member),
     post("/cli/fs/write-file", Member),
     get("/cli/fs/zip-list", Member),
-    // 0.46.4 first run without git: state (read), Apple's installer (owner:
-    // it opens a dialog on this machine), recheck + waiting git steps.
+    // 0.46.4 first run without git: state (read), Apple's installer (the
+    // handler's `require_owner` = owner token only, like tunnel/start: it
+    // opens a dialog on this machine), recheck + waiting git steps.
     get("/cli/git-tools", Member),
-    post("/cli/git-tools/install", Owner),
+    post("/cli/git-tools/install", NoLogin),
     post("/cli/git-tools/recheck", Member),
     post("/cli/git/abort-merge", Member),
     get("/cli/git/branches", Member),

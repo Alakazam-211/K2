@@ -71,8 +71,25 @@ export function useGitTools(): GitToolsHandle {
   }
 }
 
+/** A git that is there but fails (Xcode's licence not accepted, …). */
+function Broken({ status }: { status: GitToolsStatus }): React.JSX.Element | null {
+  if (status.state !== 'git_broken') return null
+  return (
+    <div className="mt-1 text-[10px]" data-testid="git-tools-broken">
+      <p className="break-all">
+        {status.gitPath}: {status.gitError}
+      </p>
+      {status.howTo.map((line) => (
+        <p key={line} className="mt-0.5 text-[var(--color-text-primary)]">
+          {line}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 function HowTo({ status }: { status: GitToolsStatus }): React.JSX.Element | null {
-  if (status.state === 'ready' || status.howTo.length === 0) return null
+  if (status.state === 'ready' || status.state === 'git_broken' || status.howTo.length === 0) return null
   const title = status.canInstall
     ? 'Only reaching this Mac over SSH? Run these yourself (admin password needed):'
     : 'Install git yourself:'
@@ -132,6 +149,11 @@ function Waiting({ status }: { status: GitToolsStatus }): React.JSX.Element | nu
       {status.waiting.map((w) => (
         <li key={w.projectId} className="text-[10px] text-[var(--color-text-muted)]">
           <span className="text-[var(--color-text-secondary)]">{w.name}</span> — {w.note}
+          {w.lastError && (
+            <span className="block text-[var(--color-status-error-soft)]" data-testid="git-tools-waiting-error">
+              Last try: {w.lastError}
+            </span>
+          )}
         </li>
       ))}
     </ul>
@@ -172,6 +194,9 @@ export function GitToolsRow(): React.JSX.Element | null {
       <div className="text-[var(--color-text-secondary)]">
         <InstallerHint status={s} />
       </div>
+      <div className="text-[var(--color-text-muted)]">
+        <Broken status={s} />
+      </div>
       <Waiting status={s} />
       <HowTo status={s} />
       {h.error && <p className="mt-1 text-[10px] text-[var(--color-status-error-soft)]">{h.error}</p>}
@@ -188,9 +213,11 @@ export function GitToolsBanner(): React.JSX.Element | null {
   return (
     <Callout tone="warn" data-testid="git-tools-banner">
       <p>
-        {mac
-          ? "git isn't installed on this Mac yet. K2 adds the workspace now and sets up git once Apple's command line tools are installed (about 1–2 GB; Xcode isn't needed)."
-          : "git isn't installed on this server yet. K2 adds the workspace now and sets up git once git is installed."}
+        {s.state === 'git_broken'
+          ? "git is installed on this server but fails. K2 adds the workspace now and sets up git once it works."
+          : mac
+            ? "git isn't installed on this Mac yet. K2 adds the workspace now and sets up git once Apple's command line tools are installed (about 1–2 GB; Xcode isn't needed)."
+            : "git isn't installed on this server yet. K2 adds the workspace now and sets up git once git is installed."}
       </p>
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="text-[10px]" data-testid="git-tools-state">
@@ -199,6 +226,7 @@ export function GitToolsBanner(): React.JSX.Element | null {
         <Actions h={h} />
       </div>
       <InstallerHint status={s} />
+      <Broken status={s} />
       <HowTo status={s} />
       {h.error && <p className="mt-1 text-[10px]">{h.error}</p>}
     </Callout>

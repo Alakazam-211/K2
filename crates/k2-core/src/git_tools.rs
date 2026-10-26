@@ -90,14 +90,16 @@ pub fn read_deferred(root: &Path) -> Option<Deferred> {
 }
 
 /// Leave the marker: `git init` on `branch` (and the identity seed) wait
-/// for git.
+/// for git. A name git would refuse is refused now (it would otherwise
+/// wait forever).
 pub fn defer_init(root: &Path, branch: &str) -> Result<(), String> {
+    let branch = valid_branch(branch)?;
     let path = marker_path(root);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     }
     let d = Deferred {
-        branch: branch.to_string(),
+        branch,
         deferred_at: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0),
     };
     let text = serde_json::to_string_pretty(&d).map_err(|e| e.to_string())?;
@@ -114,7 +116,47 @@ pub fn clear_deferred(root: &Path) {
 /// folder again (a spawn or a recheck still tries at once).
 const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(300);
 
-static LAST_FAILURE: Mutex<Vec<(PathBuf, Instant)>> = Mutex::new(Vec::new());
+/// The last failure per folder: when, and what git said. Kept until the
+/// steps succeed (the backoff only looks at the newest RETRY window).
+static LAST_FAILURE: Mutex<Vec<(PathBuf, Instant, String)>> = Mutex::new(Vec::new());
+
+/// One deferred run at a time (the loop, a spawn and a recheck could
+/// otherwise both `git init` and commit the same folder).
+static RUN_LOCK: Mutex<()> = Mutex::new(());
+
+fn last_failure(root: &Path) -> Option<(Instant, String)> {
+    LAST_FAILURE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(p, _, _)| p == root)
+        .map(|(_, at, e)| (*at, e.clone()))
+}
+
+fn set_failure(root: &Path, err: Option<String>) {
+    let mut g = LAST_FAILURE.lock().unwrap_or_else(|e| e.into_inner());
+    g.retain(|(p, _, _)| p != root);
+    if let Some(e) = err {
+        g.push((root.to_path_buf(), Instant::now(), e));
+    }
+}
+
+/// Check a branch name for `git init --initial-branch` before deferring
+/// it: trimmed, not empty, no leading `-`, and a valid `refs/heads/<b>`.
+/// Returns the trimmed name.
+pub fn valid_branch(branch: &str) -> Result<String, String> {
+    let b = branch.trim();
+    if b.is_empty() {
+        return Err("The branch name is empty".to_string());
+    }
+    if b.starts_with('-') {
+        return Err(format!("\"{b}\" isn't a valid branch name (it can't start with -)"));
+    }
+    if !git2::Reference::is_valid_name(&format!("refs/heads/{b}")) {
+        return Err(format!("\"{b}\" isn't a valid branch name"));
+    }
+    Ok(b.to_string())
+}
 
 /// What [`run_deferred`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,32 +176,36 @@ pub enum DeferredRun {
 /// Do the skipped git steps for `root` if git runs now. `force` skips the
 /// failure backoff.
 pub fn run_deferred(root: &Path, force: bool) -> Result<DeferredRun, String> {
-    let Some(d) = read_deferred(root) else {
+    if read_deferred(root).is_none() {
         return Ok(DeferredRun::NothingWaiting);
-    };
+    }
     if !git_safe::availability().is_ready() {
         return Ok(DeferredRun::GitNotReady);
     }
-    {
-        let mut fails = LAST_FAILURE.lock().unwrap_or_else(|e| e.into_inner());
-        fails.retain(|(_, at)| at.elapsed() < RETRY_AFTER_FAILURE);
-        if !force && fails.iter().any(|(p, _)| p == root) {
-            return Ok(DeferredRun::Backoff);
-        }
+    let _one_at_a_time = RUN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Re-read inside the lock: another caller may have just done it.
+    let Some(d) = read_deferred(root) else {
+        return Ok(DeferredRun::NothingWaiting);
+    };
+    if !force && last_failure(root).is_some_and(|(at, _)| at.elapsed() < RETRY_AFTER_FAILURE) {
+        return Ok(DeferredRun::Backoff);
     }
     if root.join(".git").exists() {
         clear_deferred(root);
+        set_failure(root, None);
         return Ok(DeferredRun::AlreadyARepo);
     }
     let root_str = root.to_string_lossy().to_string();
-    match crate::projects_ops::init_and_first_commit(&root_str, &d.branch) {
-        Ok(()) => {
+    let result = valid_branch(&d.branch).and_then(|b| crate::projects_ops::init_and_first_commit(&root_str, &b, true).map(|()| b));
+    match result {
+        Ok(branch) => {
             clear_deferred(root);
-            crate::log_debug!("[git-tools] {root_str}: deferred git init on {} done", d.branch);
-            Ok(DeferredRun::Done { branch: d.branch })
+            set_failure(root, None);
+            crate::log_debug!("[git-tools] {root_str}: deferred git init on {branch} done");
+            Ok(DeferredRun::Done { branch })
         }
         Err(e) => {
-            LAST_FAILURE.lock().unwrap_or_else(|e| e.into_inner()).push((root.to_path_buf(), Instant::now()));
+            set_failure(root, Some(e.clone()));
             crate::log_debug!("[git-tools] {root_str}: deferred git init failed: {e}");
             Err(e)
         }
@@ -175,6 +221,9 @@ pub struct WaitingWorkspace {
     pub path: String,
     pub branch: String,
     pub note: String,
+    /// The last time the waiting steps were tried and failed: what git
+    /// said. `None` until a try fails.
+    pub last_error: Option<String>,
 }
 
 /// Registered workspaces whose git steps wait.
@@ -187,13 +236,16 @@ pub fn waiting_workspaces() -> Vec<WaitingWorkspace> {
     projects
         .into_iter()
         .filter_map(|p| {
-            let d = read_deferred(Path::new(&p.path))?;
+            let root = Path::new(&p.path);
+            let d = read_deferred(root)?;
+            let last_error = last_failure(root).map(|(_, e)| e);
             Some(WaitingWorkspace {
                 project_id: p.id,
                 name: p.name,
-                path: p.path,
                 branch: d.branch,
                 note: waiting_mark().to_string(),
+                last_error,
+                path: p.path,
             })
         })
         .collect()
@@ -231,18 +283,25 @@ pub fn head_branch_without_cli(path: &str) -> Option<String> {
 
 /// The `git` that sits first on a spawned agent's PATH while git doesn't
 /// run. It hands over to the first real git it finds (the same rules as
-/// the daemon's probe: with `mac`, Apple's shim only once `xcode-select
-/// -p` names a developer folder with a git in it), else prints `note` and
-/// fails. Shell builtins only, so it works with any PATH.
-pub fn wait_shim_script(note: &str, mac: bool) -> String {
-    let note = note.replace('\'', "'\\''");
-    let mac = u8::from(mac);
+/// the daemon's probe: Apple's exact shim (`apple`, macOS) only once its
+/// `xcode-select -p` names a developer folder with a git in it), else
+/// prints `note` and fails. Shell builtins only, so it works with any PATH.
+/// `apple` paths are compared with each PATH folder's real path
+/// (`pwd -P`), so pass canonical ones.
+pub fn wait_shim_script(note: &str, apple: Option<&git_safe::ApplePair>) -> String {
+    let q = |s: &str| s.replace('\'', "'\\''");
+    let note = q(note);
+    let (apple_git, apple_xs) = match apple {
+        Some(p) => (q(&p.git.to_string_lossy()), q(&p.xcode_select.to_string_lossy())),
+        None => (String::new(), String::new()),
+    };
     format!(
         r#"#!/bin/sh
 # K2 git-wait shim (0.46.4). Staged by the K2 daemon while git isn't
 # installed; hands over to the real git once there is one.
 self_dir=$(cd "${{0%/*}}" && pwd -P)
-mac={mac}
+apple_git='{apple_git}'
+apple_xs='{apple_xs}'
 old_ifs=$IFS
 IFS=:
 for d in $PATH; do
@@ -251,11 +310,12 @@ for d in $PATH; do
   [ -x "$d/git" ] || continue
   real=$(cd "$d" 2>/dev/null && pwd -P) || continue
   [ "$real" = "$self_dir" ] && continue
-  if [ "$mac" = 1 ] && [ -x "$d/xcode-select" ]; then
-    dev=$("$d/xcode-select" -p 2>/dev/null) || continue
+  case "$real" in */.k2/bin/git-wait) continue ;; esac
+  if [ -n "$apple_git" ] && [ "$real/git" = "$apple_git" ]; then
+    dev=$("$apple_xs" -p 2>/dev/null) || continue
     [ -x "$dev/usr/bin/git" ] || continue
   fi
-  exec "$d/git" "$@"
+  exec "$real/git" "$@"
 done
 echo '{note}' >&2
 exit 1
@@ -297,7 +357,7 @@ pub fn before_spawn(cwd: Option<&Path>) -> Option<PathBuf> {
         return None;
     }
     let home = dirs::home_dir()?;
-    match stage_wait_shim_at(&home, &wait_shim_script(&agent_note(), cfg!(target_os = "macos"))) {
+    match stage_wait_shim_at(&home, &wait_shim_script(&agent_note(), git_safe::apple_pair().as_ref())) {
         Ok(dir) => Some(dir),
         Err(e) => {
             crate::log_debug!("[git-tools] git-wait shim not staged: {e}");
@@ -308,13 +368,15 @@ pub fn before_spawn(cwd: Option<&Path>) -> Option<PathBuf> {
 
 // ── Installing ──────────────────────────────────────────────────────────
 
-/// Where the install stands, for the UI.
+/// Where git stands, for the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallState {
     Ready,
     NotInstalled,
     Installing,
+    /// A git is there but fails (`gitError` says how; `howTo` the fix).
+    GitBroken,
 }
 
 /// After the click, count as installing for this long even before
@@ -324,9 +386,17 @@ const INSTALL_GRACE: Duration = Duration::from_secs(90);
 const INSTALL_MAX: Duration = Duration::from_secs(3 * 60 * 60);
 
 /// Pure: the state from what the daemon knows.
-pub fn install_state(ready: bool, mac: bool, started: Option<SystemTime>, now: SystemTime, installer_running: bool) -> InstallState {
-    if ready {
-        return InstallState::Ready;
+pub fn install_state(
+    probe: &GitProbe,
+    mac: bool,
+    started: Option<SystemTime>,
+    now: SystemTime,
+    installer_running: bool,
+) -> InstallState {
+    match probe {
+        GitProbe::Ready { .. } => return InstallState::Ready,
+        GitProbe::Broken { .. } => return InstallState::GitBroken,
+        GitProbe::NeedsAppleClt | GitProbe::Missing => {}
     }
     if !mac {
         return InstallState::NotInstalled;
@@ -342,6 +412,11 @@ pub fn install_state(ready: bool, mac: bool, started: Option<SystemTime>, now: S
 }
 
 static INSTALL_STARTED: Mutex<Option<SystemTime>> = Mutex::new(None);
+
+/// When the owner last started Apple's installer (this daemon run).
+pub fn install_started_at() -> Option<SystemTime> {
+    *INSTALL_STARTED.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// The process name of Apple's installer window.
 const APPLE_INSTALLER: &str = "Install Command Line Developer Tools";
@@ -369,38 +444,79 @@ pub enum InstallStart {
     AlreadyReady,
 }
 
-/// The `xcode-select` K2 runs: the one beside the probed folders' shim,
-/// else `/usr/bin/xcode-select`.
-fn xcode_select_path() -> PathBuf {
-    git_safe::probe_dirs()
-        .into_iter()
-        .map(|d| d.join("xcode-select"))
-        .find(|p| git_safe::is_exec_file(p))
-        .unwrap_or_else(|| PathBuf::from("/usr/bin/xcode-select"))
-}
+/// How long to watch `xcode-select --install` for a quick refusal.
+const INSTALL_WATCH: Duration = Duration::from_secs(2);
 
-/// Ask macOS to install the Command Line Tools: `xcode-select --install`,
-/// which opens Apple's own installer dialog in the owner's session. Never
-/// sudo. Not macOS → Err.
+/// Ask macOS to install the Command Line Tools: `/usr/bin/xcode-select
+/// --install`, which opens Apple's own installer dialog in the owner's
+/// session. Never sudo. Watches the child for about 2 s: a non-zero exit
+/// (for example "already installed") is an `Err` with what it said, and
+/// nothing counts as installing. Not macOS → Err.
 pub fn start_apple_install() -> Result<InstallStart, String> {
+    use std::io::Read;
     if !cfg!(target_os = "macos") {
         return Err("Apple's command line tools are macOS only".to_string());
     }
-    if git_safe::refresh().is_ready() {
-        return Ok(InstallStart::AlreadyReady);
+    match git_safe::refresh() {
+        GitProbe::Ready { .. } => return Ok(InstallStart::AlreadyReady),
+        GitProbe::Broken { program, error } => {
+            return Err(format!(
+                "git is installed but fails ({}: {error}). {}",
+                program.display(),
+                broken_git_fix(&program, &error, true, "")
+            ))
+        }
+        GitProbe::NeedsAppleClt | GitProbe::Missing => {}
     }
-    let xs = xcode_select_path();
+    let pair = git_safe::apple_pair().ok_or("Apple's command line tools are macOS only")?;
+    let xs = pair.xcode_select;
     let mut child = std::process::Command::new(&xs)
         .arg("--install")
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("couldn't run {} --install: {e}", xs.display()))?;
-    // `xcode-select --install` returns once the dialog is up; reap it.
-    let _ = std::thread::Builder::new().name("xcode-select-install".into()).spawn(move || {
-        let _ = child.wait();
-    });
+    let deadline = Instant::now() + INSTALL_WATCH;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    break;
+                }
+                let mut said = String::new();
+                if let Some(mut e) = child.stderr.take() {
+                    let _ = e.read_to_string(&mut said);
+                }
+                if let Some(mut o) = child.stdout.take() {
+                    let mut out = String::new();
+                    let _ = o.read_to_string(&mut out);
+                    if said.trim().is_empty() {
+                        said = out;
+                    }
+                }
+                let said = said.trim();
+                let code = status.code().map(|c| format!("exit {c}")).unwrap_or_else(|| "killed".into());
+                return Err(if said.to_ascii_lowercase().contains("already installed") {
+                    format!(
+                        "Apple's command line tools are already installed ({} says: {said}). If git still fails, `k2 git-tools` shows what it says.",
+                        xs.display()
+                    )
+                } else {
+                    format!("{} --install failed ({code}): {said}", xs.display())
+                });
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            Ok(None) => {
+                // Still running (the dialog is up): reap it later.
+                let _ = std::thread::Builder::new().name("xcode-select-install".into()).spawn(move || {
+                    let _ = child.wait_with_output();
+                });
+                break;
+            }
+            Err(e) => return Err(format!("{} --install: {e}", xs.display())),
+        }
+    }
     *INSTALL_STARTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(SystemTime::now());
     Ok(InstallStart::Started)
 }
@@ -442,6 +558,17 @@ pub fn linux_install_command(os_release: &str) -> String {
     }
 }
 
+/// How to fix a git that is there but fails. Pure.
+pub fn broken_git_fix(program: &Path, error: &str, mac: bool, os_release: &str) -> String {
+    if error.contains("xcodebuild -license") || (mac && error.to_ascii_lowercase().contains("license")) {
+        "Accept Apple's licence: run `sudo xcodebuild -license` in Terminal (or open Xcode once)".to_string()
+    } else if mac {
+        format!("Run `{} --version` in Terminal to see what it needs", program.display())
+    } else {
+        format!("Reinstall git: {}", linux_install_command(os_release))
+    }
+}
+
 // ── Status for the UI and `GET /cli/git-tools` ──────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -450,39 +577,45 @@ pub struct GitToolsStatus {
     /// `macos` | `linux` | `windows` | other.
     pub os: &'static str,
     pub state: InstallState,
-    /// `apple_clt` (macOS) or `git`; `None` when git runs.
+    /// `apple_clt` (macOS), `git`, or `fix_git` (a git that fails);
+    /// `None` when git runs.
     pub needs: Option<&'static str>,
     pub git_path: Option<String>,
     pub git_version: Option<String>,
-    /// The one-click install is offered (macOS, git not running).
+    /// What a git that is there but fails said (state `git_broken`).
+    pub git_error: Option<String>,
+    /// The one-click install is offered (macOS, the tools missing).
     pub can_install: bool,
     /// Unix ms of the last install click, if any.
     pub install_started_at: Option<i64>,
-    /// Commands for the owner to run themselves (headless Mac, Linux).
+    /// Commands for the owner to run themselves (headless Mac, Linux, a
+    /// broken git's fix).
     pub how_to: Vec<String>,
     /// Workspaces whose git steps wait.
     pub waiting: Vec<WaitingWorkspace>,
 }
 
-pub fn status(fresh: bool) -> GitToolsStatus {
-    let probe = if fresh { git_safe::refresh() } else { git_safe::availability() };
-    let mac = cfg!(target_os = "macos");
-    let started = *INSTALL_STARTED.lock().unwrap_or_else(|e| e.into_inner());
-    let ready = probe.is_ready();
-    let installer = !ready && mac && started.is_some() && apple_installer_running();
-    let state = install_state(ready, mac, started, SystemTime::now(), installer);
-    let (git_path, git_version) = match &probe {
-        GitProbe::Ready { program, version } => (Some(program.display().to_string()), Some(version.clone())),
-        _ => (None, None),
+/// Pure: the status from a probe and what the daemon knows.
+pub fn status_from(
+    probe: &GitProbe,
+    mac: bool,
+    started: Option<SystemTime>,
+    installer_running: bool,
+    os_release: &str,
+    waiting: Vec<WaitingWorkspace>,
+) -> GitToolsStatus {
+    let state = install_state(probe, mac, started, SystemTime::now(), installer_running);
+    let (git_path, git_version, git_error) = match probe {
+        GitProbe::Ready { program, version } => (Some(program.display().to_string()), Some(version.clone()), None),
+        GitProbe::Broken { program, error } => (Some(program.display().to_string()), None, Some(error.clone())),
+        _ => (None, None, None),
     };
-    let how_to = if ready {
-        Vec::new()
-    } else if mac {
-        apple_headless_steps()
-    } else if cfg!(target_os = "linux") {
-        vec![linux_install_command(&std::fs::read_to_string("/etc/os-release").unwrap_or_default())]
-    } else {
-        vec!["Install Git for Windows from git-scm.com".to_string()]
+    let how_to = match probe {
+        GitProbe::Ready { .. } => Vec::new(),
+        GitProbe::Broken { program, error } => vec![broken_git_fix(program, error, mac, os_release)],
+        _ if mac => apple_headless_steps(),
+        _ if cfg!(windows) => vec!["Install Git for Windows from git-scm.com".to_string()],
+        _ => vec![linux_install_command(os_release)],
     };
     GitToolsStatus {
         os: std::env::consts::OS,
@@ -491,14 +624,83 @@ pub fn status(fresh: bool) -> GitToolsStatus {
             GitProbe::Ready { .. } => None,
             GitProbe::NeedsAppleClt => Some("apple_clt"),
             GitProbe::Missing => Some("git"),
+            GitProbe::Broken { .. } => Some("fix_git"),
         },
         git_path,
         git_version,
-        can_install: mac && !ready,
+        git_error,
+        can_install: mac && matches!(probe, GitProbe::NeedsAppleClt),
         install_started_at: started.and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64),
         how_to,
-        waiting: waiting_workspaces(),
+        waiting,
     }
+}
+
+pub fn status(fresh: bool) -> GitToolsStatus {
+    let probe = if fresh { git_safe::refresh() } else { git_safe::availability() };
+    let mac = cfg!(target_os = "macos");
+    let started = install_started_at();
+    let installer = !probe.is_ready() && mac && started.is_some() && apple_installer_running();
+    let os_release = if cfg!(target_os = "linux") { std::fs::read_to_string("/etc/os-release").unwrap_or_default() } else { String::new() };
+    status_from(&probe, mac, started, installer, &os_release, waiting_workspaces())
+}
+
+/// What the CLI prints (`k2 git-tools`, `?format=text`): plain lines, so
+/// the CLI needs no python3 (on a fresh Mac `/usr/bin/python3` is another
+/// of Apple's shims). Pure.
+pub fn render_text(s: &GitToolsStatus, started: Option<InstallStart>, finished: &[String]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    match started {
+        Some(InstallStart::Started) => {
+            out.push("Apple's installer is open on this Mac's screen (it can be behind the K2 window).".into());
+            out.push("Click Install, not Get Xcode (that opens the App Store for the full Xcode),".into());
+            out.push("agree to Apple's licence, then wait for the download (about 5-15 min).".into());
+        }
+        Some(InstallStart::AlreadyReady) => out.push("git already works here; nothing to install.".into()),
+        None => {}
+    }
+    out.push(match s.state {
+        InstallState::Ready => format!(
+            "git        : ready ({}, {})",
+            s.git_version.as_deref().unwrap_or("?"),
+            s.git_path.as_deref().unwrap_or("?")
+        ),
+        InstallState::Installing => "git        : installing Apple's command line tools".into(),
+        InstallState::GitBroken => format!(
+            "git        : found but failing ({}): {}",
+            s.git_path.as_deref().unwrap_or("?"),
+            s.git_error.as_deref().unwrap_or("?")
+        ),
+        InstallState::NotInstalled if s.needs == Some("apple_clt") => {
+            "git        : not installed (needs Apple's command line tools)".into()
+        }
+        InstallState::NotInstalled => "git        : not installed (needs git)".into(),
+    });
+    for p in finished {
+        out.push(format!("finished   : {p}"));
+    }
+    for w in &s.waiting {
+        out.push(format!("waiting    : {} ({}) {}", w.name, w.path, w.note));
+        if let Some(e) = &w.last_error {
+            out.push(format!("  last try : {e}"));
+        }
+    }
+    if matches!(s.state, InstallState::NotInstalled | InstallState::GitBroken) && !s.how_to.is_empty() {
+        if s.state == InstallState::GitBroken {
+            out.push("fix        :".into());
+        } else if s.can_install {
+            out.push("install    : k2 git-tools install   (opens Apple's installer on this Mac)".into());
+            out.push("over SSH   : run these yourself (admin password needed):".into());
+        } else {
+            out.push("install    : run this yourself:".into());
+        }
+        for line in &s.how_to {
+            out.push(format!("  {line}"));
+        }
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    text
 }
 
 #[cfg(test)]

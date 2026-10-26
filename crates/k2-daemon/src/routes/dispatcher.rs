@@ -3317,11 +3317,13 @@ async fn handle_one_request(
             if is_post {
                 let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
             }
+            // `format=text`: plain lines for `k2 git-tools` (no python3).
+            let as_text = query.split('&').any(|kv| kv == "format=text");
             let resp = tokio::task::spawn_blocking(move || match p.as_str() {
-                "/cli/git-tools/install" => crate::git_tools_routes::handle_install(is_post),
-                "/cli/git-tools/recheck" => crate::git_tools_routes::handle_recheck(is_post),
+                "/cli/git-tools/install" => crate::git_tools_routes::handle_install(is_post, as_text),
+                "/cli/git-tools/recheck" => crate::git_tools_routes::handle_recheck(is_post, as_text),
                 _ if is_post => crate::cli_response::CliResponse::method_not_allowed(),
-                _ => crate::git_tools_routes::handle_status(),
+                _ => crate::git_tools_routes::handle_status(as_text),
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));

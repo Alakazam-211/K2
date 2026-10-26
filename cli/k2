@@ -175,6 +175,30 @@ _k2_home_db() {
     fi
 }
 
+# Can the CLI run `git` without side effects? On a fresh Mac `/usr/bin/git`
+# is Apple's shim: until the Command Line Tools are installed every call
+# fails AND opens Apple's install dialog, so `k2 <anything>` from a
+# non-K2 folder used to pop it (0.46.4). Run git only when the git on PATH
+# isn't that shim, or `xcode-select -p` names a developer folder with a
+# real git in it (`xcode-select -p` never opens the dialog). Cached.
+_K2_GIT_USABLE=""
+_k2_git_usable() {
+    if [ -z "$_K2_GIT_USABLE" ]; then
+        _K2_GIT_USABLE=no
+        local g dev
+        g="$(command -v git 2>/dev/null || true)"
+        if [ -n "$g" ]; then
+            if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ "$g" = /usr/bin/git ]; then
+                dev="$(/usr/bin/xcode-select -p 2>/dev/null || true)"
+                [ -n "$dev" ] && [ -x "$dev/usr/bin/git" ] && _K2_GIT_USABLE=yes
+            else
+                _K2_GIT_USABLE=yes
+            fi
+        fi
+    fi
+    [ "$_K2_GIT_USABLE" = yes ]
+}
+
 # Resolve project root: if K2_PROJECT_PATH is set, use it directly.
 # Otherwise walk up from CWD to find a .k2/ or .k2so/ directory, skipping $HOME.
 # Also handles git worktrees: if CWD is inside a worktree, resolve back to
@@ -197,7 +221,10 @@ if [ -z "${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}" ]; then
         # abort the entire script before it ever reads the daemon port — a
         # silent exit 128 (GH #16). Swallow it so a non-git CWD just leaves
         # _main_root empty and we fall back to $PWD as PROJECT.
-        _main_root=$(git -C "$(pwd)" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/.git$||' || true)
+        _main_root=""
+        if _k2_git_usable; then
+            _main_root=$(git -C "$(pwd)" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/.git$||' || true)
+        fi
         if [ -n "$_main_root" ] && { [ -d "$_main_root/.k2so" ] || [ -d "$_main_root/.k2" ]; }; then
             _found="$_main_root"
         fi
@@ -212,7 +239,7 @@ fi
 # returns nothing and this goes silent. `|| true` guards the git call from
 # aborting the script in a non-git CWD (GH#16). stderr only — never pollutes
 # command stdout / JSON.
-if [ -d "$PROJECT/.k2" ] && [ ! -d "$PROJECT/.k2so" ]; then
+if [ -d "$PROJECT/.k2" ] && [ ! -d "$PROJECT/.k2so" ] && _k2_git_usable; then
     _k2so_pending=$(git -C "$PROJECT" ls-files .k2so 2>/dev/null | head -1 || true)
     if [ -n "$_k2so_pending" ]; then
         echo "i  K2 0.40.4 renamed this workspace's .k2so/ -> .k2/ (harness symlinks + .gitignore updated). Commit the rename when ready — git tracks it as renames." >&2
@@ -17916,9 +17943,40 @@ steps; they need an admin password, so run them yourself.
 EOF
 }
 
+# Pure bash + curl: on a fresh Mac `/usr/bin/python3` is one of Apple's
+# shims, so these verbs never touch python3 (or `urlencode`, which uses
+# it). The daemon renders the text (`?format=text`).
+_git_tools_q() {
+    # Percent-encode $1 for a query value, byte by byte.
+    local LC_ALL=C s="$1" out="" c i
+    for ((i = 0; i < ${#s}; i++)); do
+        c="${s:i:1}"
+        case "$c" in
+            [A-Za-z0-9._~-]) out+="$c" ;;
+            *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
+_git_tools_send() {
+    # _git_tools_send <GET|POST> <path> <as_json>: the body, then the HTTP code.
+    local method="$1" path="$2" as_json="$3" q
+    q="token=$(_git_tools_q "$TOKEN")"
+    [ "$as_json" = "1" ] || q="${q}&format=text"
+    if [ "$method" = "GET" ]; then
+        curl -s "${BASE_URL}${path}?${q}" --connect-timeout 5 --max-time 120 \
+            -w $'\n%{http_code}' 2>/dev/null || true
+    else
+        curl -s -X POST "${BASE_URL}${path}?${q}" --connect-timeout 5 --max-time 120 \
+            -H "Content-Type: application/json" --data-raw '{}' \
+            -w $'\n%{http_code}' 2>/dev/null || true
+    fi
+}
+
 _git_tools_render() {
     # _git_tools_render <as_json> <raw "body\ncode">
-    local as_json="$1" raw="$2" code body
+    local as_json="$1" raw="$2" code body err
     code="${raw##*$'\n'}"
     body="${raw%$'\n'*}"
     if [ -z "$raw" ] || [ "$code" = "$raw" ] || [ "$code" = "000" ]; then
@@ -17930,46 +17988,23 @@ _git_tools_render() {
         [ "$code" = "200" ] || exit 1
         return 0
     fi
-    K2_GT_BODY="$body" K2_GT_CODE="$code" python3 -c '
-import json, os, sys
-raw, code = os.environ["K2_GT_BODY"], os.environ["K2_GT_CODE"]
-try:
-    d = json.loads(raw)
-except Exception:
-    print("k2 git-tools: error: HTTP " + code + ": " + raw.strip()[:200], file=sys.stderr); sys.exit(1)
-if code != "200":
-    print("k2 git-tools: error: " + str(d.get("error") or ("HTTP " + code)), file=sys.stderr)
-    for line in d.get("howTo") or []:
-        print("  " + line, file=sys.stderr)
-    sys.exit(1)
-state = d.get("state")
-if d.get("started") == "started":
-    print("Apple'\''s installer is open on this Mac'\''s screen (it can be behind the K2 window).")
-    print("Click Install, not Get Xcode (that opens the App Store for the full Xcode),")
-    print("agree to Apple'\''s licence, then wait for the download (about 5-15 min).")
-elif d.get("started") == "already_ready":
-    print("git already works here; nothing to install.")
-if state == "ready":
-    print("git        : ready (" + str(d.get("gitVersion")) + ", " + str(d.get("gitPath")) + ")")
-elif state == "installing":
-    print("git        : installing Apple'\''s command line tools")
-else:
-    need = "Apple'\''s command line tools" if d.get("needs") == "apple_clt" else "git"
-    print("git        : not installed (needs " + need + ")")
-for p in d.get("finished") or []:
-    print("finished   : " + p)
-for w in d.get("waiting") or []:
-    print("waiting    : " + str(w.get("name")) + " (" + str(w.get("path")) + ") " + str(w.get("note")))
-how = d.get("howTo") or []
-if how and state != "ready":
-    if d.get("canInstall"):
-        print("install    : k2 git-tools install   (opens Apple'\''s installer on this Mac)")
-        print("over SSH   : run these yourself (admin password needed):")
-    else:
-        print("install    : run this yourself:")
-    for line in how:
-        print("  " + line)
-'
+    if [ "$code" = "200" ]; then
+        printf '%s' "$body"
+        return 0
+    fi
+    case "$body" in
+        "k2 git-tools: "*) printf '%s' "$body" >&2 ;;
+        *)
+            # A JSON refusal from the router (no token, owner only, 405).
+            if [[ "$body" =~ \"error\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
+                err="${BASH_REMATCH[1]}"
+            else
+                err="HTTP $code"
+            fi
+            echo "k2 git-tools: error: $err" >&2
+            ;;
+    esac
+    exit 1
 }
 
 cmd_git_tools() {
@@ -17988,9 +18023,9 @@ cmd_git_tools() {
         esac
     done
     case "$sub" in
-        status)  raw="$(_sidecar_send GET /cli/git-tools "")" || true ;;
-        install) raw="$(_sidecar_send POST /cli/git-tools/install "{}")" || true ;;
-        recheck) raw="$(_sidecar_send POST /cli/git-tools/recheck "{}")" || true ;;
+        status)  raw="$(_git_tools_send GET /cli/git-tools "$as_json")" ;;
+        install) raw="$(_git_tools_send POST /cli/git-tools/install "$as_json")" ;;
+        recheck) raw="$(_git_tools_send POST /cli/git-tools/recheck "$as_json")" ;;
         *)
             echo "usage: unknown git-tools verb '$sub' (status|install|recheck)" >&2
             exit 2
@@ -18801,11 +18836,13 @@ cmd_compute_run() {
     # retry after an interruption, like --detach.
     [ "$wait" = "1" ] && [ -z "$retry" ] && retry=1
     local cwd="" repo_dir=""
-    cwd="$(git rev-parse --show-prefix 2>/dev/null || true)"
-    cwd="${cwd%/}"
-    # The checkout we're in: from a git worktree inside the workspace the
-    # daemon takes HEAD (and --dirty) from it, not the main checkout.
-    repo_dir="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    if _k2_git_usable; then
+        cwd="$(git rev-parse --show-prefix 2>/dev/null || true)"
+        cwd="${cwd%/}"
+        # The checkout we're in: from a git worktree inside the workspace the
+        # daemon takes HEAD (and --dirty) from it, not the main checkout.
+        repo_dir="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    fi
     local client
     client="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
     local argv_json labels_json env_json
@@ -67663,7 +67700,8 @@ print((d.get("path") or d.get("projectPath") or d.get("project_path") or "") if 
         return 0
     fi
     proj_p="$(cd "$PROJECT" 2>/dev/null && pwd -P || true)"
-    top="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
+    top=""
+    _k2_git_usable && top="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
     [ -n "$top" ] && top_p="$(cd "$top" 2>/dev/null && pwd -P || true)"
     # Inside a checkout under this workspace (e.g. .worktrees/<branch>): that checkout.
     if [ -n "$top_p" ] && [ -n "$proj_p" ] && [[ "$top_p" == "$proj_p"/* ]]; then

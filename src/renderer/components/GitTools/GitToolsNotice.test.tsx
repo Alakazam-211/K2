@@ -32,6 +32,7 @@ function status(over: Partial<GitToolsStatus>): GitToolsStatus {
     needs: 'apple_clt',
     gitPath: null,
     gitVersion: null,
+    gitError: null,
     canInstall: true,
     installStartedAt: null,
     howTo: MAC_HOW_TO,
@@ -71,7 +72,7 @@ afterEach(() => {
 describe('GitToolsRow (Settings → General)', () => {
   it('offers the one-click install on a Mac without the tools, then shows installing', async () => {
     fetchGitTools.mockResolvedValue(
-      status({ waiting: [{ projectId: 'p1', name: 'site', path: '/Users/me/site', branch: 'main', note: "git: waiting for Apple's command line tools" }] }),
+      status({ waiting: [{ projectId: 'p1', name: 'site', path: '/Users/me/site', branch: 'main', note: "git: waiting for Apple's command line tools", lastError: null }] }),
     )
     installGitTools.mockResolvedValue(status({ state: 'installing', started: 'started', installStartedAt: 1 }))
     render(<GitToolsRow />)
@@ -88,6 +89,41 @@ describe('GitToolsRow (Settings → General)', () => {
     expect(screen.getByTestId('git-tools-installer-hint').textContent).toBe(
       "Apple's installer is open (it can be behind the K2 window). Click Install, not Get Xcode (that opens the App Store for the full Xcode), agree to Apple's licence, then wait for the download (about 5–15 min).",
     )
+  })
+
+  it('shows the last failed try of a waiting workspace', async () => {
+    fetchGitTools.mockResolvedValue(
+      status({
+        waiting: [
+          { projectId: 'p1', name: 'site', path: '/Users/me/site', branch: 'main', note: "git: waiting for Apple's command line tools", lastError: 'Failed to create initial commit: gpg failed' },
+        ],
+      }),
+    )
+    render(<GitToolsRow />)
+    await settle()
+    expect(screen.getByTestId('git-tools-waiting-error').textContent).toBe('Last try: Failed to create initial commit: gpg failed')
+  })
+
+  it('a git that is there but fails: its words and the fix, no install button', async () => {
+    fetchGitTools.mockResolvedValue(
+      status({
+        state: 'git_broken',
+        needs: 'fix_git',
+        canInstall: false,
+        gitPath: '/usr/bin/git',
+        gitError: "You have not agreed to the Xcode license agreements. (exit 69)",
+        howTo: ["Accept Apple's licence: run `sudo xcodebuild -license` in Terminal (or open Xcode once)"],
+      }),
+    )
+    render(<GitToolsRow />)
+    await settle()
+    expect(screen.getByTestId('git-tools-state').textContent).toBe('git is installed but fails')
+    const b = screen.getByTestId('git-tools-broken').textContent ?? ''
+    expect(b).toContain('/usr/bin/git: You have not agreed to the Xcode license agreements. (exit 69)')
+    expect(b).toContain('sudo xcodebuild -license')
+    expect(screen.queryByTestId('git-tools-install')).toBeNull()
+    expect(screen.queryByTestId('git-tools-howto')).toBeNull()
+    expect(screen.getByTestId('git-tools-recheck')).toBeTruthy()
   })
 
   it('shows no installer hint before the click', async () => {

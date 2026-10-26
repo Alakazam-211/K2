@@ -111,6 +111,9 @@ fn http_host_ex(
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            // A signal landed on this thread mid-read (EINTR; the in-process
+            // daemon reaps children, soak load 2026-10-26): read again.
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e)
                 if matches!(
                     e.kind(),

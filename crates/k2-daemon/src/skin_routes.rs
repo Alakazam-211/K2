@@ -2779,7 +2779,7 @@ fn login_locked(form: bool, retry_after_secs: i64) -> SkinLoginReply {
     }
 }
 
-fn is_form_body(content_type: &str) -> bool {
+pub(crate) fn is_form_body(content_type: &str) -> bool {
     let ct = content_type.to_ascii_lowercase();
     ct.contains("application/x-www-form-urlencoded") || ct.contains("multipart/form-data")
 }
@@ -2837,6 +2837,37 @@ pub fn safe_next(raw: Option<&str>) -> String {
     }
 }
 
+/// The username a login body names, read exactly as the login handler
+/// reads it (a form: the first key matching `username` in any case; JSON:
+/// `username`, else `name`). The App gateway's per-guest throttle keys on
+/// it, so `Username=victim&username=decoy` can't dodge the count.
+pub(crate) fn login_username(body: &[u8], content_type: &str) -> String {
+    if is_form_body(content_type) {
+        let pairs = parse_form_pairs(body);
+        return form_field(&pairs, "username").unwrap_or("").to_string();
+    }
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| str_field(&v, &["username", "name"]).map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// The refusal for a link login whose body names another App (or the box).
+pub(crate) const LINK_APP_MISMATCH_HINT: &str = "a link logs guests in to its own App only";
+
+fn link_app_mismatch() -> SkinLoginReply {
+    SkinLoginReply {
+        response: CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({ "error": { "code": "app_mismatch", "hint": LINK_APP_MISMATCH_HINT } }).to_string(),
+        },
+        token: None,
+        location: None,
+        retry_after: None,
+    }
+}
+
 /// Public `POST /cli/skin/login`. Generic 401. Dummy argon2 + lockout live
 /// in core (`check_and_record_login`); caller adds the 500 ms 401 delay.
 pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
@@ -2847,10 +2878,10 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
 /// (`link_app` = that App's service id): only there may a test guest of
 /// that App sign in (`skin::test_guests`, 0.46.4).
 pub fn handle_login_on(body: &[u8], content_type: &str, link_app: Option<&str>) -> SkinLoginReply {
-    skin::test_guests::with_link_login(link_app, || login_inner(body, content_type))
+    skin::test_guests::with_link_login(link_app, || login_inner(body, content_type, link_app))
 }
 
-fn login_inner(body: &[u8], content_type: &str) -> SkinLoginReply {
+fn login_inner(body: &[u8], content_type: &str, link_app: Option<&str>) -> SkinLoginReply {
     let form = is_form_body(content_type);
     let parsed = if form {
         let pairs = parse_form_pairs(body);
@@ -2892,6 +2923,10 @@ fn login_inner(body: &[u8], content_type: &str) -> SkinLoginReply {
         }
     };
     let Some((username, password, next, app, device)) = parsed else {
+        if link_app.is_some() {
+            // Through a link the body must name that App: unreadable is not it.
+            return link_app_mismatch();
+        }
         return SkinLoginReply {
             response: if form {
                 login_failed_html()
@@ -2903,6 +2938,16 @@ fn login_inner(body: &[u8], content_type: &str) -> SkinLoginReply {
             retry_after: None,
         };
     };
+    // Security review (0.46.4): through an App's link the login is that
+    // App's, whatever the body says. The link rewrites the body to name it,
+    // and this is the one check: the target this handler reads (any-case
+    // `app`, the first match; empty or `host` = the box login) must be the
+    // link's App, before any password work.
+    if let Some(l) = link_app {
+        if skin::normalize_app_target(app.as_deref()) != l {
+            return link_app_mismatch();
+        }
+    }
     if username.trim().is_empty() || password.is_empty() {
         return SkinLoginReply {
             response: if form {
@@ -3363,6 +3408,35 @@ pub fn handle_password_change(body: &[u8], presented: Option<&str>) -> CliRespon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Security review (0.46.4): through an App's link the handler itself
+    /// refuses a login whose target (read its own way: any-case `app`, the
+    /// first match; empty or none = the box) isn't that App, before any
+    /// password work. The link's rewrite is not the only check.
+    #[test]
+    fn a_link_login_naming_another_target_is_refused_by_the_handler() {
+        const FORM: &str = "application/x-www-form-urlencoded";
+        for (body, ct) in [
+            (&b"username=a&password=x&APP=host&app=svc-a"[..], FORM),
+            (b"username=a&password=x&APP=&app=svc-a", FORM),
+            (b"username=a&password=x&App=svc-b&app=svc-a", FORM),
+            (b"username=a&password=x", FORM),
+            (b"not json", "application/json"),
+            (br#"{"username":"a","password":"x","app":"host"}"#, "application/json"),
+            (br#"{"username":"a","password":"x","appId":"svc-b"}"#, "application/json"),
+            (br#"{"username":"a","password":"x"}"#, "application/json"),
+        ] {
+            let r = handle_login_on(body, ct, Some("svc-a"));
+            assert!(r.response.status.starts_with("403"), "{}: {} {}", String::from_utf8_lossy(body), r.response.status, r.response.body);
+            let v: serde_json::Value = serde_json::from_str(&r.response.body).expect("json");
+            assert_eq!(v["error"]["code"], "app_mismatch", "{v}");
+            assert!(r.token.is_none());
+        }
+        // The throttle's username is the handler's.
+        assert_eq!(login_username(b"Username=victim&username=decoy", FORM), "victim");
+        assert_eq!(login_username(br#"{"name":"victim"}"#, "application/json"), "victim");
+        assert_eq!(login_username(br#"{"username":"u","name":"n"}"#, "application/json"), "u");
+    }
 
     /// agent-app-users S2: an agent actor that reaches the add without the
     /// scoped gate (no workspace) never names an App and never gets a box

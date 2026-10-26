@@ -548,15 +548,11 @@ pub enum LinkLogin {
     Refuse { status: &'static str, body: String },
 }
 
-fn form_field(body: &[u8], key: &str) -> Option<String> {
-    url::form_urlencoded::parse(body).find(|(k, _)| k == key).map(|(_, v)| v.into_owned())
-}
-
-fn body_username(body: &[u8], form: bool) -> String {
-    if form {
-        return form_field(body, "username").unwrap_or_default();
-    }
-    serde_json::from_slice::<Value>(body).ok().and_then(|v| v["username"].as_str().map(str::to_string)).unwrap_or_default()
+/// A form key that names the App: `app` or `appId` in any case (the login
+/// handler reads its form keys case-insensitively).
+fn is_app_key(k: &str) -> bool {
+    let k = k.trim();
+    k.eq_ignore_ascii_case("app") || k.eq_ignore_ascii_case("appid")
 }
 
 /// A guest login on the current link: bind it to the link's App (a body
@@ -566,46 +562,52 @@ fn body_username(body: &[u8], form: bool) -> String {
 pub fn link_login(limiter: &crate::login_throttle::LoginLimiter, body: &[u8], content_type: &str) -> Option<LinkLogin> {
     let l = current()?;
     let svc = l.service_id.as_str();
-    let form = content_type.to_ascii_lowercase().starts_with("application/x-www-form-urlencoded");
+    // The handler's own notion of a form body (it also reads multipart as
+    // one), so the two never disagree about which parser applies.
+    let form = crate::skin_routes::is_form_body(content_type);
     let refuse = |status: &'static str, code: &str, hint: &str| LinkLogin::Refuse {
         status,
         body: refusal(code, hint, Some(&l.app_id), None, None),
     };
     // Bind to this App.
     let body: Vec<u8> = if form {
-        match form_field(body, "app") {
-            Some(a) if !a.trim().is_empty() && a.trim() != svc => {
-                return Some(refuse("403 Forbidden", "app_mismatch", "a link logs guests in to its own App only"));
-            }
-            _ => {
-                let mut out = url::form_urlencoded::Serializer::new(String::new());
-                for (k, v) in url::form_urlencoded::parse(body).filter(|(k, _)| k != "app") {
-                    out.append_pair(&k, &v);
-                }
-                out.append_pair("app", svc);
-                out.finish().into_bytes()
-            }
+        // Every key that names an App, in any case (security review 0.46.4:
+        // `APP=host&app=<this>` used to reach the handler, which takes the
+        // first any-case match). One naming another App or the box is
+        // refused; the rest are dropped and this App's id appended. The
+        // login handler checks the target again (`handle_login_on`).
+        let pairs: Vec<(String, String)> = url::form_urlencoded::parse(body).into_owned().collect();
+        if pairs.iter().any(|(k, v)| is_app_key(k) && !v.trim().is_empty() && v.trim() != svc) {
+            return Some(refuse("403 Forbidden", "app_mismatch", crate::skin_routes::LINK_APP_MISMATCH_HINT));
         }
+        let mut out = url::form_urlencoded::Serializer::new(String::new());
+        for (k, v) in pairs.iter().filter(|(k, _)| !is_app_key(k)) {
+            out.append_pair(k, v);
+        }
+        out.append_pair("app", svc);
+        out.finish().into_bytes()
     } else {
         let mut v: Value = match serde_json::from_slice(body) {
             Ok(Value::Object(m)) => Value::Object(m),
             _ => return Some(refuse("400 Bad Request", "bad_request", "a login body is a JSON object")),
         };
-        let named = ["app", "appId"].iter().find_map(|k| v.get(*k).and_then(Value::as_str).map(|s| s.trim().to_string()));
-        match named {
-            Some(a) if !a.is_empty() && a != svc => {
-                return Some(refuse("403 Forbidden", "app_mismatch", "a link logs guests in to its own App only"));
-            }
-            _ => {
-                v["app"] = json!(svc);
-                if let Some(m) = v.as_object_mut() {
-                    m.remove("appId");
-                }
-            }
+        // Any key naming an App (JSON keys are exact, but any case is
+        // refused or dropped the same way as a form's).
+        let named: Vec<String> = v
+            .as_object()
+            .map(|m| m.iter().filter(|(k, _)| is_app_key(k)).map(|(_, x)| x.as_str().unwrap_or("?").trim().to_string()).collect())
+            .unwrap_or_default();
+        if named.iter().any(|a| !a.is_empty() && a != svc) {
+            return Some(refuse("403 Forbidden", "app_mismatch", crate::skin_routes::LINK_APP_MISMATCH_HINT));
+        }
+        if let Some(m) = v.as_object_mut() {
+            m.retain(|k, _| !is_app_key(k));
+            m.insert("app".into(), json!(svc));
         }
         v.to_string().into_bytes()
     };
-    let (per_app, per_user, all) = link_login_keys(svc, &body_username(&body, form));
+    // The username the handler will read (any case, JSON `name` too).
+    let (per_app, per_user, all) = link_login_keys(svc, &crate::skin_routes::login_username(&body, content_type));
     let now = limiter.now();
     if limiter.is_limited(&per_user, LINK_LOGIN_FAILS_PER_USER, now) {
         return Some(refuse("429 Too Many Requests", "rate_limited", "too many failed logins for this guest on this App; wait 5 minutes"));
@@ -769,6 +771,16 @@ fn body_refusal(method: &str, path: &str, head: &str, bytes_in: u64) -> Option<k
     (!k2_core::app_body::admits(path, kind)).then_some(kind)
 }
 
+/// A form-encoded write with a browser's marks: an `Origin` header, or
+/// `Sec-Fetch-Site: cross-site|same-site`.
+fn form_from_browser(method: &str, head: &str, bytes_in: u64) -> bool {
+    if method != "POST" || bytes_in == 0 || k2_core::app_body::body_kind(header(head, "content-type")) != k2_core::app_body::BodyKind::Form {
+        return false;
+    }
+    header(head, "origin").is_some()
+        || header(head, "sec-fetch-site").is_some_and(|v| v.eq_ignore_ascii_case("cross-site") || v.eq_ignore_ascii_case("same-site"))
+}
+
 // ── a pass in the query string (deprecated on the link) ──────────────
 
 /// An App's calls on its link that carried the credential in `?token=`
@@ -927,6 +939,19 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
     if let Some(kind) = body_refusal {
         return deny(Some(c), 415, "json_required", &k2_core::app_body::refusal_hint(path, kind));
     }
+    // Defence in depth (security review 0.46.4): a form is the one body a
+    // browser can send cross-site without a preflight. The link is the
+    // App server's door, never a browser's, so a form write that carries
+    // a browser's `Origin` or a cross/same-site `Sec-Fetch-Site` is refused
+    // (as the chat-pass mint refuses browser-shaped heads).
+    if form_from_browser(method, head, bytes_in) {
+        return deny(
+            Some(c),
+            403,
+            "browser_form_refused",
+            "the gateway link takes a form body from your App's server, never a browser (no Origin, no cross-site Sec-Fetch-Site)",
+        );
+    }
     if me {
         let body = json!({
             "ok": true,
@@ -978,6 +1003,20 @@ mod tests {
         assert!(!route_allowed("GET", "/cli/sessions/events", "x=1", true));
         assert_eq!(link_id_for(38601), "gw:38601");
         assert_eq!(in_wall_url(), "http://127.0.0.1:8730");
+    }
+
+    #[test]
+    fn a_form_with_browser_marks_is_spotted() {
+        let form = "Content-Type: application/x-www-form-urlencoded\r\n";
+        let h = |extra: &str| format!("POST /cli/thread/post HTTP/1.1\r\nHost: 127.0.0.1\r\n{form}{extra}\r\n");
+        assert!(!form_from_browser("POST", &h(""), 10), "a server's form");
+        assert!(!form_from_browser("POST", &h("Sec-Fetch-Site: same-origin\r\n"), 10));
+        assert!(!form_from_browser("POST", &h("Sec-Fetch-Site: none\r\n"), 10));
+        assert!(form_from_browser("POST", &h("Origin: https://evil.example\r\n"), 10));
+        assert!(form_from_browser("POST", &h("Sec-Fetch-Site: cross-site\r\n"), 10));
+        assert!(form_from_browser("POST", &h("sec-fetch-site: Same-Site\r\n"), 10));
+        assert!(!form_from_browser("POST", "POST / HTTP/1.1\r\nContent-Type: application/json\r\nOrigin: x\r\n\r\n", 10), "JSON is preflighted");
+        assert!(!form_from_browser("POST", &h("Origin: x\r\n"), 0), "no body");
     }
 
     #[test]
@@ -1069,6 +1108,43 @@ mod tests {
         assert!(pairs.contains(&("app".into(), "svc-a".into())) && pairs.contains(&("username".into(), "Ann B".into())), "{pairs:?}");
         assert!(k.ends_with(":user:ann b"), "{k}");
         assert_eq!(refused(login(&l, "svc-a", "username=a&password=x&app=svc-b", "application/x-www-form-urlencoded")).1, "app_mismatch");
+    }
+
+    /// Security review (0.46.4): the login handler reads form keys in any
+    /// case and takes the first match, so a key naming the box or another
+    /// App in another case (or `appId`) must never reach it beside the
+    /// link's own `app`. And the per-guest throttle keys on the username
+    /// the handler reads.
+    #[test]
+    fn a_link_login_drops_or_refuses_every_spelling_of_app() {
+        let l = crate::login_throttle::LoginLimiter::new();
+        const FORM: &str = "application/x-www-form-urlencoded";
+        for body in [
+            "username=a&password=x&APP=host",
+            "username=a&password=x&App=svc-b",
+            "username=a&password=x&appId=svc-b",
+            "username=a&password=x&APPID=host",
+            "APP=svc-b&username=a&password=x&app=svc-a",
+            "username=a&password=x&+app=host",
+        ] {
+            assert_eq!(refused(login(&l, "svc-a", body, FORM)), ("403 Forbidden", "app_mismatch".to_string()), "{body}");
+        }
+        // Empty, or this App, in any case: dropped; only `app=<this App>` reaches the handler.
+        for body in ["username=a&password=x&APP=", "username=a&password=x&App=svc-a&appId=", "username=a&password=x&app=+"] {
+            let (b, _) = proceed(login(&l, "svc-a", body, FORM));
+            let pairs: Vec<(String, String)> = url::form_urlencoded::parse(&b).into_owned().collect();
+            let apps: Vec<&(String, String)> = pairs.iter().filter(|(k, _)| is_app_key(k)).collect();
+            assert_eq!(apps, vec![&("app".to_string(), "svc-a".to_string())], "{body}: {pairs:?}");
+        }
+        // JSON: any key spelling another App is refused; others dropped.
+        assert_eq!(refused(login(&l, "svc-a", r#"{"username":"a","password":"x","APP":"host"}"#, "application/json")).1, "app_mismatch");
+        assert_eq!(refused(login(&l, "svc-a", r#"{"username":"a","password":"x","app":7}"#, "application/json")).1, "app_mismatch");
+        // The throttle key is the username the handler reads: the first
+        // any-case `username` in a form, JSON `name` when there is no `username`.
+        let (_, k) = proceed(login(&l, "svc-a", "Username=Victim&username=decoy&password=x", FORM));
+        assert!(k.ends_with(":user:victim"), "{k}");
+        let (_, k) = proceed(login(&l, "svc-a", r#"{"name":"Victim","password":"x"}"#, "application/json"));
+        assert!(k.ends_with(":user:victim"), "{k}");
     }
 
     /// Per App (not one bucket for every App), per (App, username)

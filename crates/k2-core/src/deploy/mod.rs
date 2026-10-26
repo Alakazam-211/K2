@@ -37,6 +37,7 @@ pub mod build;
 pub mod egress;
 pub mod engine;
 pub mod framing;
+pub mod handover;
 pub mod health;
 pub mod manifest;
 /// Re-host on a K2 update, the pure parts (update continuity S2, 0.46.4).

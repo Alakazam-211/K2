@@ -434,6 +434,17 @@ pub fn granted(service_id: &str, workspace_id: &str, cwd: &Path) -> Granted {
     out
 }
 
+/// The `k2v://` references in a service's `.env.k2` in `cwd` (KEY, ref),
+/// read the way a clean start reads them (an App handover's plan lists
+/// the ones naming the giving workspace).
+pub fn refs_in(service_id: &str, cwd: &Path) -> Vec<(String, String)> {
+    let se = get(service_id);
+    let env_file = se.env_file.clone().unwrap_or_else(|| ".env.k2".into());
+    let Ok(p) = crate::vault_use_routes::jailed_path(cwd, &env_file) else { return Vec::new() };
+    let Ok(text) = std::fs::read_to_string(&p) else { return Vec::new() };
+    parse_env_k2(&text).into_iter().filter(|(_, v)| k2_vault::refs::VaultRef::is_ref(v)).collect()
+}
+
 /// What a service's `DATABASE_URL` is at its next start
 /// (prd-app-pg-choice-dualrun-v1 PA1): the same sources a clean start
 /// reads (its `.env.k2` references, then its granted env secrets).

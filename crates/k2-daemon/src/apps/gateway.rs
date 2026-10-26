@@ -382,6 +382,12 @@ pub fn connections(app_id: &str) -> usize {
     links().lock().unwrap_or_else(|e| e.into_inner()).get(app_id).map(|e| e.ctx.stats.live.load(Ordering::SeqCst)).unwrap_or(0)
 }
 
+/// An open link's rooms and whether it can hand the App a new pass
+/// (`None`: no open link). The handover plan reads it.
+pub fn link_info(app_id: &str) -> Option<(Vec<String>, bool)> {
+    links().lock().unwrap_or_else(|e| e.into_inner()).get(app_id).map(|e| (e.spec.rooms.clone(), e.deliver.is_some()))
+}
+
 /// The port `app_id`'s link listens on, when open.
 pub fn port_of(app_id: &str) -> Option<u16> {
     links().lock().unwrap_or_else(|e| e.into_inner()).get(app_id).map(|e| e.ctx.port)

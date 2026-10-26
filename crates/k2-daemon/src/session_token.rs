@@ -935,6 +935,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // vault confirm.
         "/cli/app/approvals",
         "/cli/app/deny",
+        // 0.46.5 App handover: the plan of a handover of its own App.
+        "/cli/app/handover/plan",
         // Clone proposals (prd-clone-carries-threads-and-vault-v1 CL21):
         // an agent proposes a clone of its own workspace, lists and
         // withdraws its own. `/cli/clone/*` stays DENY (agents never clone)

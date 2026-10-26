@@ -285,6 +285,9 @@ pub const ROUTES: &[Route] = &[
     // Q8 (prd-agent-app-permissions-v1 §6): the owner hands an App to
     // another workspace (handler: owner token or Owner login only).
     post("/cli/app/handover", Owner),
+    // 0.46.5 (prd-app-handoff-v1): what a handover would move (handler:
+    // the App's own agent, the owner, an Owner/Admin login; never a Member).
+    get("/cli/app/handover/plan", Admin),
     get("/cli/app/history", Member),
     get("/cli/app/inspect", Member),
     post("/cli/app/install", Admin),

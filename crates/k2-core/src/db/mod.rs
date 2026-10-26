@@ -1557,13 +1557,21 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // Rosson 2026-10-26): `projects.agents_can_manage_app_users`, DEFAULT
         // 0. Additive. 0224 is reserved for compute rollouts.
         ("0225_app_users_switch", include_str!("../../drizzle_sql/0225_app_users_switch.sql")),
+        // 0226 — App handover (prd-app-handoff-v1 rev 2; 0.46.5): one
+        // additive table per handover (`app_handovers`: the plan the card
+        // showed, its state, the undo journal) and the per-service ref
+        // aliases (`app_ref_aliases`) that let an immutable Seed's
+        // `k2v://ws/<old>/NAME` resolve in the new workspace. Releases the
+        // never-created 0199 reservation. After 0225 (App grants). The store is
+        // `crate::deploy::handover`.
+        ("0226_app_handovers", include_str!("../../drizzle_sql/0226_app_handovers.sql")),
         // 0227 — Email Notifications (prd-email-notifications-core-v1 §5.1,
         // E6/E25; 0.46.5): senders (never `mail_addresses` rows, E1), SMTP
         // relays (passwords in the vault, E12), per-App state, the
         // metadata-only send log, idempotency keys and the one settings row.
         // Additive; empty until the owner adds a sender. 0224 (compute
-        // rollouts), 0225 (the App users switch) and 0226 (App handover) are
-        // held by other lanes; 0228/0229 are Routines'. The store is
+        // rollouts), 0225 (the App users switch) and 0226 (App handover, which
+        // runs before it) are held by other lanes; 0228/0229 are Routines'. The store is
         // `crate::email_notify`.
         ("0227_email_notifications", include_str!("../../drizzle_sql/0227_email_notifications.sql")),
         // 0231 — the manifest is part of a widget's version
@@ -2307,6 +2315,8 @@ mod tests {
                 "0222_pg_dual_runs",
                 // 0.46.4: "Let this agent manage its Apps' users".
                 "0225_app_users_switch",
+                // 0.46.5: App handover (after 0225).
+                "0226_app_handovers",
                 // 0.46.5: Email Notifications (senders, relays, log).
                 "0227_email_notifications",
                 // 0.46.5: the manifest is part of a widget's version (S0).
@@ -2388,6 +2398,8 @@ mod tests {
                 "0222_pg_dual_runs",
                 // 0.46.4: "Let this agent manage its Apps' users".
                 "0225_app_users_switch",
+                // 0.46.5: App handover (after 0225).
+                "0226_app_handovers",
                 // 0.46.5: Email Notifications (senders, relays, log).
                 "0227_email_notifications",
                 // 0.46.5: the manifest is part of a widget's version (S0).
@@ -2623,7 +2635,7 @@ mod tests {
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(last, "0222_pg_dual_runs", "0222 runs last of the 0.46.3 tail (then 0225, 0227 and 0231)");
+        assert_eq!(last, "0222_pg_dual_runs", "0222 runs last of the 0.46.3 tail (then 0225, 0226, 0227 and 0231)");
         let before_last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1 OFFSET 1", [], |r| r.get(0))
             .unwrap();
@@ -2641,10 +2653,11 @@ mod tests {
                 "0223_folder_trust",
                 "0222_pg_dual_runs",
                 "0225_app_users_switch",
+                "0226_app_handovers",
                 "0227_email_notifications",
                 "0231_zen_version_carry"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225 and 0.46.5's 0227 and 0231)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225 and 0.46.5's 0226, 0227 and 0231)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3388,6 +3401,9 @@ mod tests {
             // goes (its tables and indexes are IF NOT EXISTS and its
             // settings insert OR IGNORE).
             conn.execute("DELETE FROM _migrations WHERE name = '0227_email_notifications'", []).unwrap();
+            // 0226 (App handover, 0.46.5) came before it: its record goes
+            // (its tables and indexes are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0226_app_handovers'", []).unwrap();
             // 0225 (the App users switch, 0.46.4) came before it: its column
             // and record go.
             conn.execute_batch("ALTER TABLE projects DROP COLUMN agents_can_manage_app_users;").unwrap();

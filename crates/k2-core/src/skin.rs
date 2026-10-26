@@ -126,6 +126,9 @@ pub mod guard;
 /// session list (prd-app-user-profile-v1, 0.46.5).
 #[path = "skin_profile.rs"]
 pub mod profile;
+/// The skin.db half of an App handover (prd-app-handoff-v1, 0.46.5).
+#[path = "skin_handover.rs"]
+pub mod handover;
 pub use paths::{RoomPathScope, RoomPaths};
 
 /// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).

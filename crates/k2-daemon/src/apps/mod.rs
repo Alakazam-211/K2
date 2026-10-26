@@ -27,6 +27,8 @@ pub mod disk_watch;
 // 0.46.4 (disk guard Slice B): CPU and memory trends (migration 0217).
 pub mod trends;
 /// `k2 app label take|return`: a legacy service's label to its App.
+pub mod handover;
+pub mod handover_plan;
 pub mod labels;
 /// `k2 app domain add|rm`: any subdomain of the App's workspace (0.46.4).
 pub mod domains;
@@ -123,6 +125,8 @@ mod project_chat_tests;
 /// Slices D, F, G of prd-agent-app-permissions-v1 (0.46.3).
 #[cfg(test)]
 mod ownership_tests;
+#[cfg(test)]
+mod handover_tests;
 
 /// Slice B of prd-agent-app-permissions-v1: the App cores (0.46.3).
 #[cfg(test)]

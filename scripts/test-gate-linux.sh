@@ -5,6 +5,7 @@
 #
 # Exports <sha> with `git archive` into a FRESH dir (never a copied or mixed
 # tree), builds with its own CARGO_TARGET_DIR, and runs
+#   cargo build -p k2-ptyd --bins   (the ptyd suites exec its binaries)
 #   cargo test -p k2-core   --no-fail-fast
 #   cargo test -p k2-daemon --no-fail-fast
 # under a clean `env -i` (HOME and TMPDIR = fresh temp dirs, no SHELL, no
@@ -116,6 +117,14 @@ clean_cargo() {
 }
 
 STATUS=0
+# The ptyd suites (k2-core tests/ptyd_backend.rs, k2-daemon ptyd_* tests)
+# exec target/debug/k2-ptyd and k2-ptyd-test-agent; `cargo test -p k2-core`
+# / `-p k2-daemon` never builds another package's binaries.
+echo "gate: cargo build -p k2-ptyd --bins"
+if ! clean_cargo "$LOGS/build-ptyd.log" build -p k2-ptyd --bins; then
+  echo "gate: k2-ptyd bins failed to build (see $LOGS/build-ptyd.log)"
+  STATUS=1
+fi
 for pkg in k2-core k2-daemon; do
   echo "gate: cargo test -p $pkg --no-fail-fast"
   if ! clean_cargo "$LOGS/$pkg.log" test -p "$pkg" --no-fail-fast "${THREAD_ARGS[@]}"; then

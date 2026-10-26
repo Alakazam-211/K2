@@ -4,7 +4,7 @@
 #   scripts/test-soak-linux.sh <sha> [workdir]
 #
 # Exports <sha> with `git archive` into a fresh dir, builds the test
-# binaries once (own CARGO_TARGET_DIR), then runs, each test process under a
+# binaries and the k2-ptyd bins once (own CARGO_TARGET_DIR), then runs, each test process under a
 # clean `env -i` (temp HOME/TMPDIR, no SHELL, no K2_*):
 #   (a) 200x loops of the known-flaky groups, under CPU load
 #   (b) shuffled full runs of both unit-test binaries, seeds 1..10
@@ -65,6 +65,13 @@ trap load_off EXIT
 echo "soak: building $FULL_SHA"
 ( cd "$SRC" && clean "$CARGO_BIN" test -p k2-core --no-run ) > "$LOGS/build-core.log" 2>&1 || { echo "build failed (core)"; exit 1; }
 ( cd "$SRC" && clean "$CARGO_BIN" test -p k2-daemon --no-run ) > "$LOGS/build-daemon.log" 2>&1 || { echo "build failed (daemon)"; exit 1; }
+# The ptyd suites (k2-core tests/ptyd_backend.rs, k2-daemon ptyd_* tests)
+# exec target/debug/k2-ptyd and k2-ptyd-test-agent; `cargo test -p k2-core`
+# / `-p k2-daemon` never builds another package's binaries.
+( cd "$SRC" && clean "$CARGO_BIN" build -p k2-ptyd --bins ) > "$LOGS/build-ptyd.log" 2>&1 || { echo "build failed (k2-ptyd bins)"; exit 1; }
+for b in k2-ptyd k2-ptyd-test-agent; do
+  [ -x "$TARGET/debug/$b" ] || { echo "build failed: $TARGET/debug/$b missing"; exit 1; }
+done
 bin_of() { grep -h -oE "\(($TARGET/debug/deps/$1-[0-9a-f]+)\)" "$LOGS"/build-*.log | tr -d '()' | head -1; }
 CORE=$(grep -oE "unittests src/lib.rs \(($TARGET/debug/deps/k2_core-[0-9a-f]+)\)" "$LOGS/build-core.log" | grep -oE "$TARGET[^)]+")
 DAEMON=$(grep -oE "unittests src/lib.rs \(($TARGET/debug/deps/k2_daemon-[0-9a-f]+)\)" "$LOGS/build-daemon.log" | grep -oE "$TARGET[^)]+")

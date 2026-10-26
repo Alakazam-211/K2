@@ -198,10 +198,16 @@ async fn a_guest_its_agent_added_cant_answer_that_agents_cards() {
     // An owner's guest is a person.
     let r = post(port, "/cli/thread/answer", &person, json!({ "addr": ws.handle, "id": id, "answer": "Go" })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    // Round-2 B1: the agent resets the password of an OWNER-made guest that
-    // lives wholly in its workspace: that guest is tied from then on.
+    // Round-2 B1: a guest whose password an agent could know is tied. Since
+    // the 0.46.4 review an agent never re-keys a box login at all (this
+    // owner-made guest holds one), so the tie such a re-key left before is
+    // made directly; the rule it guards is the same.
     let r = post(port, "/cli/skin/users/password", &agent, json!({ "username": format!("pat{tag}"), "password": "agent-picked-pw" })).await;
-    assert_eq!(r.status, 200, "an agent resets its own workspace's guest: {}", r.body);
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "never a box login: {}", r.body);
+    assert!(r.body.contains("box login"), "{}", r.body);
+    let pat_id = k2_core::skin::list_principals().expect("principals").into_iter().find(|p| p.username == format!("pat{tag}")).expect("pat").id;
+    k2_core::skin::set_principal_password(&format!("pat{tag}"), Some("agent-picked-pw")).expect("re-key");
+    k2_core::skin::creators::tie(&pat_id, &ws.id, "agent:legacy", k2_core::skin::ties::REASON_PASSWORD).expect("tie");
     let body = json!({ "username": format!("pat{tag}"), "password": "agent-picked-pw" }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();
     assert_eq!(r.status, 200, "{}", r.body);

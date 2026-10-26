@@ -138,6 +138,18 @@ pub const GET_ROUTES: &[&str] = &[
 /// Fingerprint of the last state announced with `zen_changed`.
 static LAST_FINGERPRINT: Mutex<Option<String>> = Mutex::new(None);
 
+/// Held by a POST route for its whole run (its file writes AND its own
+/// [`refresh_and_emit`]) and by the folder watcher's refresh. Without it a
+/// route that writes a watched file, then more (a new Garden's page, then
+/// `gardens.json`), then refreshes could be overtaken by the watcher's
+/// debounced refresh (250 ms) when the route thread stalls: the watcher
+/// announced the half-written state and the route announced the rest (two
+/// `zen_changed` for one create), or the watcher announced the whole
+/// change and the route answered `changed:false` (zen_headless_integration
+/// 180/200 under load, soak 2026-10-25). Re-entrant: a route may call
+/// another route's handler.
+static ROUTE_WRITE: parking_lot::ReentrantMutex<()> = parking_lot::const_reentrant_mutex(());
+
 /// The runaway guard's pauses, by Garden and placement (R6). In memory: a
 /// daemon restart clears them, as a window reload clears the renderer's
 /// post counters.
@@ -285,6 +297,8 @@ pub fn refresh_and_emit() -> Result<bool, ZenError> {
 /// Garden page or widget folder that changed with no route write gets a
 /// `disk_edit` History line (G29, [`crate::zen_history`]).
 pub fn refresh_from_watcher() -> Result<bool, ZenError> {
+    // Never in the middle of a route's write (see [`ROUTE_WRITE`]).
+    let _route = ROUTE_WRITE.lock();
     refresh_and_emit_from(true)
 }
 
@@ -1354,6 +1368,8 @@ pub fn handle(
     if !GET_ROUTES.contains(&path) && !POST_ROUTES.contains(&path) {
         return resp("404 Not Found", json!({ "error": "unknown zen route", "path": path }));
     }
+    // A write and its own announcement are one step to the watcher.
+    let _route = POST_ROUTES.contains(&path).then(|| ROUTE_WRITE.lock());
     let owner_token = owner && *caller == Caller::Owner;
     // The person's order and pins in the Agents widget (0.46.4): agents
     // read, only the owner token sets (its own module applies both rules).

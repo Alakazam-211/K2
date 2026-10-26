@@ -393,6 +393,8 @@ export function ContextStackEditor({
       layer.source === 'catalog:heartbeats-roster' ||
       layer.source === 'catalog:skills-roster' ||
       layer.source === 'catalog:users-roster' ||
+      layer.source === 'catalog:apps-maintained' ||
+      layer.path.includes('apps-maintained.md') ||
       layer.path.includes('connections-roster.md') ||
       layer.path.includes('heartbeats-roster.md') ||
       layer.path.includes('skills-roster.md') ||

@@ -2,11 +2,13 @@
 // Settings → Apps → This server, below the box setup (prd-agent-app-
 // permissions-v1 rev 2, slice H): every App with its maintaining agent
 // (name, address, picture/colour), state, memory budget and hostname; the
-// agent's switches and cores read-only with a link to its card; parked or
-// orphaned Apps with the owner's ways out (Unpark / Hand over / Park /
-// Uninstall); and the one-time review note with Review and Dismiss per
-// agent. Reads GET /cli/app/list?box=1 and /cli/app/list on the window's
-// server; Apps off hides it.
+// agent's switches and cores read-only with a link to its card; every App's
+// "Hand over…" sheet for the owner (0.46.5: the plan's lines, the options
+// it asks for, then the card filed and approved with a fresh vault
+// confirm); Undo and Finish inside the window; parked or orphaned Apps'
+// Park / Uninstall; and the one-time review note with Review and Dismiss
+// per agent. Reads GET /cli/app/list?box=1 and /cli/app/list on the
+// window's server; Apps off hides it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -20,6 +22,9 @@ const h = vi.hoisted(() => ({
   role: 'owner' as 'owner' | 'admin' | 'member' | null,
   /** Per route, refusals to answer before the call succeeds (in order). */
   refuse: {} as Record<string, Array<{ code: string; hint: string }>>,
+  plan: null as unknown,
+  handovers: [] as unknown[],
+  confirmMethods: ['local-auth'] as string[],
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn(async () => {}) }))
@@ -29,6 +34,8 @@ vi.mock('@/lib/daemon-cli', async () => {
     daemonCliGet: primaryOnly(async (route: string, params?: Record<string, unknown>) => {
       h.gets.push({ route, params })
       if (route === 'projects/get-icon') return { found: false, dataUrl: null }
+      if (route === 'app/handover/plan') return h.plan
+      if (route === 'app/handover/status') return { ok: true, handovers: h.handovers }
       if (route !== 'app/list') throw new Error(`unexpected GET ${route}`)
       if (h.off) throw new Error(JSON.stringify({ error: { code: 'apps_disabled', hint: 'Apps (beta) are off' } }))
       if (params?.box === '1') return h.box
@@ -38,11 +45,15 @@ vi.mock('@/lib/daemon-cli', async () => {
       h.posts.push({ route, body })
       const refusal = h.refuse[route]?.shift()
       if (refusal) throw new Error(JSON.stringify({ error: refusal }))
-      if (route === 'vault/confirm/start') return { methods: ['vault-password'] }
-      if (route === 'vault/confirm/finish') return { token: 'k2vc_test' }
       if (route === 'agent-access/set' && body.toggle === 'app_review') {
         h.review = h.review.filter((r) => (r as { workspace: string }).workspace !== body.workspace)
       }
+      if (route === 'app/handover' || route === 'app/unpark' || route === 'app/handover/undo') {
+        return { ok: true, status: 'held', request: { id: 'w_card1' }, handover: { id: 'hov_1', state: 'held' } }
+      }
+      if (route === 'vault/confirm/start') return { methods: h.confirmMethods, expiresIn: 60 }
+      if (route === 'vault/confirm/finish') return { token: 'tok-1', expiresIn: 60 }
+      if (route === 'app/approve') return { ok: true, status: 'approved', request: { id: body.request } }
       return { ok: true }
     }),
     daemonCliPostQuery: vi.fn(),
@@ -85,6 +96,22 @@ const BOX = {
   ],
 }
 
+const PLAN = {
+  ok: true,
+  ready: true,
+  planHash: 'abc',
+  to: { handle: 'ops' },
+  guests: { total: 2, byClass: { owner: 1, shared: 1 } },
+  secrets: [{ secretId: 's1', name: 'STRIPE', case: 'move', collision: true }],
+  database: { case: 'shared' },
+  blockers: [],
+  lines: [
+    'Hand over shop from sales to ops: ops becomes the agent for shop; sales stops managing it the moment you approve.',
+    'Keeps running. Nothing restarts.',
+    'Guests: 2 guest(s) keep their access and stay signed in.',
+  ],
+}
+
 beforeEach(() => {
   h.gets = []
   h.posts = []
@@ -93,6 +120,9 @@ beforeEach(() => {
   h.off = false
   h.role = 'owner'
   h.refuse = {}
+  h.plan = PLAN
+  h.handovers = []
+  h.confirmMethods = ['local-auth']
   useProjectsStore.setState({
     projects: [
       project('ws-sales', 'sales', { agentsCanManageSkin: 1, agentsCanManageAppsFull: 0, appCores: '["db","thread"]' }),
@@ -143,7 +173,10 @@ describe('the Apps rows', () => {
     expect(within(row).getByTestId('apps-row-shop-postgres').textContent).toBe('Postgres 16 · 17 available')
     expect(screen.queryByTestId('apps-row-old-postgres')).toBeNull()
     expect(within(row).getByTestId('apps-row-shop-access').textContent).toContain('Build and run Apps · uses Database, Thread')
-    expect(within(row).queryByTestId('apps-row-shop-actions')).toBeNull()
+    // A healthy App: only "Hand over…" (no park or uninstall here).
+    const actions = within(row).getByTestId('apps-row-shop-actions')
+    expect(within(actions).getByRole('button', { name: 'Hand over…' })).toBeTruthy()
+    expect(within(actions).queryByRole('button', { name: 'Park' })).toBeNull()
     expect(h.gets.find((g) => g.route === 'app/list' && g.params?.box === '1')).toBeTruthy()
   })
 
@@ -175,18 +208,21 @@ describe('the Apps rows', () => {
     expect(row.textContent).toContain('Parked (held by the owner)')
     expect(row.textContent).toContain('No agent maintains it')
     const actions = await within(row).findByTestId('apps-row-old-actions')
-    const unpark = within(actions).getByRole('button', { name: 'Unpark' }) as HTMLButtonElement
-    expect(unpark.disabled).toBe(true)
     expect(within(actions).queryByRole('button', { name: 'Park' })).toBeNull()
-    fireEvent.change(within(actions).getByLabelText('Agent for old'), { target: { value: 'ws-ops' } })
-    fireEvent.click(unpark)
-    await waitFor(() => expect(h.posts).toEqual([{ route: 'app/unpark', body: { app: 'old', to: 'ws-ops' } }]))
-    await screen.findByText('old is unparked: it is stopped until its agent starts it.')
+    fireEvent.click(within(actions).getByRole('button', { name: 'Unpark…' }))
+    const sheet = await screen.findByTestId('apps-handover-old')
+    fireEvent.change(within(sheet).getByLabelText('Agent for old'), { target: { value: 'ws-ops' } })
+    await screen.findByTestId('apps-handover-old-plan')
+    expect(h.gets.find((g) => g.route === 'app/handover/plan')?.params).toEqual({ app: 'old', to: 'ws-ops' })
+    fireEvent.click(within(screen.getByTestId('apps-handover-old-plan')).getByRole('button', { name: 'Unpark' }))
+    await waitFor(() => expect(h.posts.map((p) => p.route)).toEqual(['app/unpark', 'vault/confirm/start', 'vault/confirm/finish', 'app/approve']))
+    expect(h.posts[0].body).toEqual({ app: 'old', to: 'ws-ops' })
+    await screen.findByText('old is handed over. You can undo it for 72 hours.')
 
     fireEvent.click(within(screen.getByTestId('apps-row-old-actions')).getByRole('button', { name: 'Uninstall' }))
-    expect(h.posts).toHaveLength(1)
+    expect(h.posts).toHaveLength(4)
     fireEvent.click(screen.getByRole('button', { name: 'Uninstall old (data stays)' }))
-    await waitFor(() => expect(h.posts[1]).toEqual({ route: 'app/uninstall', body: { app: 'old' } }))
+    await waitFor(() => expect(h.posts[4]).toEqual({ route: 'app/uninstall', body: { app: 'old' } }))
   })
 
   it('an orphan (its workspace removed): hand over and park; an admin gets park and uninstall only; a member nothing', async () => {
@@ -206,17 +242,14 @@ describe('the Apps rows', () => {
     render(<AppsBoxSection />)
     let actions = await screen.findByTestId('apps-row-lost-actions')
     expect(screen.getByTestId('apps-row-lost').textContent).toContain('Unassigned (its workspace was removed)')
-    fireEvent.change(within(actions).getByLabelText('Agent for lost'), { target: { value: 'ws-sales' } })
-    fireEvent.click(within(actions).getByRole('button', { name: 'Hand over' }))
-    await waitFor(() => expect(h.posts).toEqual([{ route: 'app/handover', body: { app: 'lost', to: 'ws-sales' } }]))
     fireEvent.click(within(screen.getByTestId('apps-row-lost-actions')).getByRole('button', { name: 'Park' }))
-    await waitFor(() => expect(h.posts[1]).toEqual({ route: 'app/park', body: { app: 'lost' } }))
+    await waitFor(() => expect(h.posts[0]).toEqual({ route: 'app/park', body: { app: 'lost' } }))
     cleanup()
 
     h.role = 'admin'
     render(<AppsBoxSection />)
     actions = await screen.findByTestId('apps-row-lost-actions')
-    await waitFor(() => expect(within(actions).queryByRole('button', { name: 'Hand over' })).toBeNull())
+    await waitFor(() => expect((within(actions).getByRole('button', { name: 'Hand over…' }) as HTMLButtonElement).disabled).toBe(true))
     expect(within(actions).getByRole('button', { name: 'Park' })).toBeTruthy()
     expect(within(actions).getByRole('button', { name: 'Uninstall' })).toBeTruthy()
     cleanup()
@@ -228,33 +261,15 @@ describe('the Apps rows', () => {
     expect(screen.queryByTestId('apps-row-lost-actions')).toBeNull()
   })
 
-  it('hand over needs the owner in person: the vault confirm runs inline, then the same call goes with its token', async () => {
-    h.refuse['app/unpark'] = [{ code: 'vault_confirm_required', hint: 'needs a fresh owner confirm' }]
+  it('a handover the daemon refuses at filing (what changed since the plan) shows why and asks no confirm', async () => {
+    const hint = 'what the handover would move changed since the card was asked for'
+    h.refuse['app/unpark'] = [{ code: 'handover_stale', hint }]
     render(<AppsBoxSection />)
-    const actions = await screen.findByTestId('apps-row-old-actions')
-    fireEvent.change(within(actions).getByLabelText('Agent for old'), { target: { value: 'ws-ops' } })
-    fireEvent.click(within(actions).getByRole('button', { name: 'Unpark' }))
-    const confirm = await screen.findByTestId('apps-row-old-confirm')
-    const pw = (await within(confirm).findByTestId('sources-confirm-password')) as HTMLInputElement
-    fireEvent.change(pw, { target: { value: 'hunter2' } })
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Confirm' }))
-    await screen.findByText('old is unparked: it is stopped until its agent starts it.')
-    expect(h.posts.map((p) => p.route)).toEqual(['app/unpark', 'vault/confirm/start', 'vault/confirm/finish', 'app/unpark'])
-    expect(h.posts[1].body).toEqual({ action: 'app-handover', secretId: 'old' })
-    expect(h.posts[3].body).toEqual({ app: 'old', to: 'ws-ops', confirmToken: 'k2vc_test' })
-    expect(screen.queryByTestId('apps-row-old-confirm')).toBeNull()
-  })
-
-  it('a hand-over the daemon refuses (what it can’t carry until 0.46.5) shows the refusal and asks no confirm', async () => {
-    const hint = 'old can’t be handed over safely yet: 1 guest tied to sales. The full App hand-off arrives in 0.46.5; until then, move it by hand'
-    h.refuse['app/unpark'] = [{ code: 'handoff_needs_v1', hint }]
-    render(<AppsBoxSection />)
-    const actions = await screen.findByTestId('apps-row-old-actions')
-    fireEvent.change(within(actions).getByLabelText('Agent for old'), { target: { value: 'ws-ops' } })
-    fireEvent.click(within(actions).getByRole('button', { name: 'Unpark' }))
-    expect((await screen.findByTestId('apps-box-notice')).textContent).toContain(hint)
+    fireEvent.click(within(await screen.findByTestId('apps-row-old-actions')).getByRole('button', { name: 'Unpark…' }))
+    fireEvent.change(within(await screen.findByTestId('apps-handover-old')).getByLabelText('Agent for old'), { target: { value: 'ws-ops' } })
+    fireEvent.click(within(await screen.findByTestId('apps-handover-old-plan')).getByRole('button', { name: 'Unpark' }))
+    expect((await screen.findByTestId('apps-handover-old-error')).textContent).toContain(hint)
     expect(h.posts.map((p) => p.route)).toEqual(['app/unpark'])
-    expect(screen.queryByTestId('apps-row-old-confirm')).toBeNull()
   })
 
   it('Apps off hides the list', async () => {
@@ -263,6 +278,68 @@ describe('the Apps rows', () => {
     await waitFor(() => expect(h.gets.length).toBeGreaterThan(0))
     await act(async () => {})
     expect(container.querySelector('[data-testid="apps-box"]')).toBeNull()
+  })
+})
+
+describe('the Hand over… sheet (0.46.5)', () => {
+  it('shows every line of the plan, asks for what the plan needs, then files the card and approves it with a confirm', async () => {
+    render(<AppsBoxSection />)
+    const row = await screen.findByTestId('apps-row-shop')
+    fireEvent.click(within(row).getByRole('button', { name: 'Hand over…' }))
+    const sheet = await screen.findByTestId('apps-handover-shop')
+    // The current agent isn't offered.
+    const options = Array.from((within(sheet).getByLabelText('Agent for shop') as HTMLSelectElement).options).map((o) => o.value)
+    expect(options).toEqual(['', 'ws-ops'])
+    fireEvent.change(within(sheet).getByLabelText('Agent for shop'), { target: { value: 'ws-ops' } })
+    const plan = await screen.findByTestId('apps-handover-shop-plan')
+    for (const line of PLAN.lines) expect(plan.textContent).toContain(line)
+    // The plan's choices: the shared database, a secret name clash, shared guests.
+    fireEvent.click(within(plan).getByLabelText(/Share the database/))
+    await waitFor(() => expect(h.gets.filter((g) => g.route === 'app/handover/plan').at(-1)?.params).toEqual({ app: 'shop', to: 'ws-ops', db: 'share' }))
+    expect(within(plan).getByLabelText(/Use the new agent’s own values/)).toBeTruthy()
+    expect(within(plan).getByLabelText(/Take over the guests/)).toBeTruthy()
+    fireEvent.click(within(screen.getByTestId('apps-handover-shop-plan')).getByRole('button', { name: 'Hand over' }))
+    await waitFor(() => expect(h.posts.map((p) => p.route)).toEqual(['app/handover', 'vault/confirm/start', 'vault/confirm/finish', 'app/approve']))
+    expect(h.posts[0].body).toEqual({ app: 'shop', to: 'ws-ops', db: 'share' })
+    expect(h.posts[1].body).toEqual({ action: 'app-approve', secretId: 'w_card1' })
+    expect(h.posts[3].body).toEqual({ request: 'w_card1', confirmToken: 'tok-1' })
+    await screen.findByText('shop is handed over. You can undo it for 72 hours.')
+  })
+
+  it('a blocked plan says why and can’t be handed over; a password box asks for the password', async () => {
+    h.plan = { ...PLAN, ready: false, blockers: [{ code: 'handover_db_busy', hint: 'its database is being upgraded', names: [] }] }
+    render(<AppsBoxSection />)
+    fireEvent.click(within(await screen.findByTestId('apps-row-shop')).getByRole('button', { name: 'Hand over…' }))
+    fireEvent.change(within(await screen.findByTestId('apps-handover-shop')).getByLabelText('Agent for shop'), { target: { value: 'ws-ops' } })
+    const plan = await screen.findByTestId('apps-handover-shop-plan')
+    expect(within(plan).getByTestId('apps-handover-shop-blocker').textContent).toBe('its database is being upgraded')
+    expect((within(plan).getByRole('button', { name: 'Hand over' }) as HTMLButtonElement).disabled).toBe(true)
+    cleanup()
+
+    h.plan = PLAN
+    h.confirmMethods = ['vault-password']
+    h.posts = []
+    render(<AppsBoxSection />)
+    fireEvent.click(within(await screen.findByTestId('apps-row-shop')).getByRole('button', { name: 'Hand over…' }))
+    fireEvent.change(within(await screen.findByTestId('apps-handover-shop')).getByLabelText('Agent for shop'), { target: { value: 'ws-ops' } })
+    fireEvent.click(within(await screen.findByTestId('apps-handover-shop-plan')).getByRole('button', { name: 'Hand over' }))
+    const pw = await screen.findByLabelText('Password to confirm')
+    fireEvent.change(pw, { target: { value: 'hunter2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(h.posts.map((p) => p.route)).toEqual(['app/handover', 'vault/confirm/start', 'vault/confirm/finish', 'app/approve']))
+    expect(h.posts[2].body).toMatchObject({ method: 'vault-password', password: 'hunter2', secretId: 'w_card1' })
+  })
+
+  it('inside the window: Undo files the undo card and approves it; Finish closes the window', async () => {
+    h.handovers = [{ id: 'hov_1', appId: 'shop', state: 'applied', fromHandle: 'ops', toHandle: 'sales', inWindow: true, windowUntil: 9e9 }]
+    render(<AppsBoxSection />)
+    const line = await screen.findByTestId('apps-row-shop-handover')
+    expect(line.textContent).toContain('Handed over from ops to sales')
+    fireEvent.click(within(line).getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(h.posts.map((p) => p.route)).toEqual(['app/handover/undo', 'vault/confirm/start', 'vault/confirm/finish', 'app/approve']))
+    await screen.findByText('shop went back to ops.')
+    fireEvent.click(within(screen.getByTestId('apps-row-shop-handover')).getByRole('button', { name: 'Finish' }))
+    await waitFor(() => expect(h.posts.at(-1)).toEqual({ route: 'app/handover/finish', body: { app: 'shop' } }))
   })
 })
 

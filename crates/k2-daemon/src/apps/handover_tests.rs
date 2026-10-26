@@ -104,15 +104,24 @@ pub(super) fn agent(ws: &str) -> Who {
     Who::Agent { project_id: ws.into(), session_id: format!("sess-{ws}") }
 }
 
+/// The held-request routes are served beside the App routes (the grace
+/// door), so they dispatch on their own here.
+fn route(path: &str, who: &Who, body: &[u8], q: &HashMap<String, String>) -> crate::cli_response::CliResponse {
+    if super::approvals::ROUTES.contains(&path) {
+        return super::routes::respond(super::approvals::handle(path, who, body, q));
+    }
+    super::routes::handle(path, who.clone(), body, q)
+}
+
 pub(super) fn call(path: &str, who: &Who, body: J) -> (u16, J) {
-    let r = super::routes::handle(path, who.clone(), body.to_string().as_bytes(), &HashMap::new());
+    let r = route(path, who, body.to_string().as_bytes(), &HashMap::new());
     let n: u16 = r.status.split_whitespace().next().unwrap().parse().unwrap();
     (n, serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{path}: not JSON ({e}): {}", r.body)))
 }
 
 pub(super) fn get(path: &str, who: &Who, q: &[(&str, &str)]) -> (u16, J) {
     let p: HashMap<String, String> = q.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-    let r = super::routes::handle(path, who.clone(), b"", &p);
+    let r = route(path, who, b"", &p);
     let n: u16 = r.status.split_whitespace().next().unwrap().parse().unwrap();
     (n, serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{path}: not JSON ({e}): {}", r.body)))
 }
@@ -628,8 +637,9 @@ fn the_switch_turns_the_handover_off_or_back_to_legacy() {
     assert_eq!(st, 404, "{v}");
     let (st, v) = ask(&f);
     super::handover::set_test_mode(None);
-    assert_eq!(st, 200, "legacy: moved at once: {v}");
-    assert_eq!(app_row(&f.app).owner_workspace, f.b);
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "legacy: 0.46.4's guarded move, the owner in person: {v}");
+    assert_eq!(v["error"]["action"], super::handover_guard::CONFIRM_ACTION, "{v}");
+    assert_eq!(app_row(&f.app).owner_workspace, f.a);
 }
 
 // ── S2: A offers, B accepts, the owner's card ────────────────────────
@@ -709,10 +719,13 @@ fn b_shadows_only_while_it_accepted() {
     let (st, _) = get("/cli/app/inspect", &agent(&f.b), &[("app", &f.app)]);
     assert_eq!(st, 404, "offered, not accepted yet");
     call("/cli/app/handover/accept", &agent(&f.b), json!({ "app": f.app }));
-    for path in ["/cli/app/inspect", "/cli/app/history", "/cli/app/logs"] {
+    for path in ["/cli/app/inspect", "/cli/app/history"] {
         let (st, v) = get(path, &agent(&f.b), &[("app", &f.app)]);
         assert_eq!(st, 200, "{path}: B shadows: {v}");
     }
+    // Logs: B reaches the App (no deployment yet is the App's own answer).
+    let (st, v) = get("/cli/app/logs", &agent(&f.b), &[("app", &f.app)]);
+    assert_eq!((st, code(&v)), (404, "not_found"), "B sees the App, it has no deployment: {v}");
     // Reads only: B changes nothing.
     switch1(&f.b, true);
     let (st, v) = call("/cli/app/stop", &agent(&f.b), json!({ "app": f.app }));
@@ -840,7 +853,7 @@ fn the_owner_may_take_a_shared_guest_over() {
 fn a_s_agent_login_loses_the_app() {
     let f = fx("t33");
     guest("bot-t33", &f.svc, &[&f.a]);
-    k2_core::skin::set_principal_agent("bot-t33", Some(&f.a)).unwrap();
+    k2_core::skin::set_principal_agent("bot-t33", Some(&handle_of(&f.a))).unwrap();
     let s = k2_core::skin::create_app_session_token("bot-t33", &f.svc).unwrap();
     let (_, v) = ask(&f);
     assert!(v["plan"]["lines"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("bot-t33")), "{v}");
@@ -1167,4 +1180,56 @@ fn the_window_can_be_finished_early() {
     let (st, v) = call("/cli/app/handover/finish", &agent(&f.b), json!({ "app": f.app }));
     assert_eq!((st, v["handover"]["state"].as_str()), (200, Some("final")), "{v}");
     assert_eq!(handover_row(&hid).state, "final");
+}
+
+// ── S6: hire --take-app, the context layer ───────────────────────────
+
+fn hire(who: &Who, body: J) -> (u16, J) {
+    let r = crate::hire_routes::handle_cli("/cli/agents/hire", who.clone(), true, body.to_string().as_bytes(), &HashMap::new(), None);
+    let n: u16 = r.status.split_whitespace().next().unwrap().parse().unwrap();
+    (n, serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("hire: not JSON ({e}): {}", r.body)))
+}
+
+fn handovers_of(app: &str) -> usize {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    k2_core::deploy::handover::list(&conn, None, Some(app), 50).unwrap().len()
+}
+
+/// T6.1: hire --take-app from A's passport: a new agent, and the App's
+/// handover to it auto-accepted (the card waits for the owner). A failed
+/// hire files nothing.
+#[test]
+fn hire_take_app_offers_the_app_to_the_new_agent_only_after_the_hire() {
+    let f = fx("t61");
+    switch1(&f.a, true);
+    let bad = f._home.path().join("not-a-dir-t61");
+    std::fs::write(&bad, b"a file, not a folder").unwrap();
+    let (st, v) = hire(&agent(&f.a), json!({ "path": bad.to_string_lossy(), "takeApp": f.app }));
+    assert!(st >= 400, "the hire fails: {st} {v}");
+    assert_eq!(handovers_of(&f.app), 0, "a failed hire files nothing");
+    let dir = f._home.path().join("hired-t61");
+    let (st, v) = hire(&agent(&f.a), json!({ "path": dir.to_string_lossy(), "takeApp": f.app, "brief": "# notes for you" }));
+    assert_eq!(st, 200, "{v}");
+    let new_ws = v["id"].as_str().unwrap().to_string();
+    assert_eq!(v["handover"]["state"], "held", "auto-accepted for the agent hired for it: {v}");
+    let req = v["handover"]["request"].as_str().expect("the owner's card").to_string();
+    let (st, a) = approve(&req);
+    assert_eq!(st, 200, "{a}");
+    assert_eq!(app_row(&f.app).owner_workspace, new_ws);
+}
+
+/// T6.2: "Apps you maintain" lists the App for B and not for A after.
+#[test]
+fn the_context_layer_follows_the_app() {
+    let f = fx("t62");
+    let (_, v) = ask(&f);
+    let (st, _) = approve(&req_id(&v));
+    assert_eq!(st, 200);
+    let b = k2_core::workspace::context_layers::render_apps_maintained_body(&ws_path(&f.b));
+    let a = k2_core::workspace::context_layers::render_apps_maintained_body(&ws_path(&f.a));
+    assert!(b.contains(&format!("| {} |", f.app)), "B lists it:\n{b}");
+    assert!(b.contains("Recent handovers") && b.contains(&format!("k2 app handover brief {}", f.app)), "with the handover note:\n{b}");
+    assert!(!a.contains(&format!("| {} |", f.app)), "A doesn't:\n{a}");
+    assert!(a.contains(&format!("| {} |", f.other)), "A still lists its other App:\n{a}");
 }

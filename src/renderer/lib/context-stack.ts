@@ -488,6 +488,18 @@ export const DEFAULT_CATALOG_ENTRIES: ContextCatalogEntry[] = [
     author: 'K2',
     tags: ['live', 'roster', 'app', 'skin'],
   },
+  {
+    id: 'apps:maintained',
+    path: '.k2/context/catalog/apps-maintained.md',
+    label: 'Apps you maintain',
+    source: 'catalog:apps-maintained',
+    kind: 'live',
+    recommended: false,
+    description:
+      "Live list of the Apps this agent maintains (hostnames, state, live Seed), with the previous agent's notes for 72 hours after a handover. Regenerates whenever AGENTS.md is rewritten.",
+    author: 'K2',
+    tags: ['live', 'apps'],
+  },
 ]
 
 /** Merge API catalog with known defaults (order + client metadata fill). */

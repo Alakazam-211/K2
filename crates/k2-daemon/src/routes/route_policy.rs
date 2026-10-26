@@ -285,20 +285,20 @@ pub const ROUTES: &[Route] = &[
     // Q8 (prd-agent-app-permissions-v1 §6): the owner hands an App to
     // another workspace (handler: owner token or Owner login only).
     post("/cli/app/handover", Owner),
-    // 0.46.5 (prd-app-handoff-v1): what a handover would move (handler:
-    // the App's own agent, the owner, an Owner/Admin login; never a Member).
-    get("/cli/app/handover/plan", Admin),
-    // S2: B accepts or declines an offer; A, the owner or an Admin cancels;
-    // status and the brief (handler: passports their own handovers).
-    post("/cli/app/handover/accept", Member),
+    // 0.46.5 (prd-app-handoff-v1, `k2 app handover`): B accepts or
+    // declines an offer; A, the owner or an Admin cancels; retry a re-key
+    // (B or the owner); end the undo window (the owner, or B after a
+    // deploy); the plan, status and brief (handlers: passports their own
+    // handovers; the plan never to a Member, it names guests). Undo files a
+    // card for the owner. Every write is above Member (Q7).
+    post("/cli/app/handover/accept", Admin),
     get("/cli/app/handover/brief", Member),
-    post("/cli/app/handover/cancel", Member),
-    post("/cli/app/handover/decline", Member),
+    post("/cli/app/handover/cancel", Admin),
+    post("/cli/app/handover/decline", Admin),
+    post("/cli/app/handover/finish", Admin),
+    get("/cli/app/handover/plan", Admin),
+    post("/cli/app/handover/rekey", Admin),
     get("/cli/app/handover/status", Member),
-    // S4/S5: retry a re-key (B or the owner); end the undo window (the
-    // owner, or B after a deploy); undo files a card for the owner.
-    post("/cli/app/handover/finish", Member),
-    post("/cli/app/handover/rekey", Member),
     post("/cli/app/handover/undo", Owner),
     get("/cli/app/history", Member),
     get("/cli/app/inspect", Member),

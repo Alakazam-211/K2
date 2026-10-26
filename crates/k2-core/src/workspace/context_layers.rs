@@ -184,6 +184,13 @@ pub const APPS_ROSTER_ID: &str = "apps:roster";
 /// Leftover alias of [`APPS_ROSTER_ID`]. Path stays `skin-roster.md`.
 pub const SKIN_ROSTER_ID: &str = "skin:roster";
 
+/// "Apps you maintain" (prd-app-handoff-v1 §4.11, 0.46.5): the Apps this
+/// workspace's agent maintains, with a recent handover's notes. Live. A
+/// handover stacks it on the agent that takes an App.
+pub const APPS_MAINTAINED_PATH: &str = ".k2/context/catalog/apps-maintained.md";
+pub const APPS_MAINTAINED_SOURCE: &str = "catalog:apps-maintained";
+pub const APPS_MAINTAINED_ID: &str = "apps:maintained";
+
 pub const WIKI_HYGIENE_PATH: &str = ".k2/context/catalog/wiki-hygiene.md";
 pub const WIKI_HYGIENE_SOURCE: &str = "catalog:wiki-hygiene";
 pub const WIKI_HYGIENE_ID: &str = "wiki:hygiene";
@@ -200,6 +207,7 @@ pub enum LiveKind {
     Skills,
     Users,
     Skin,
+    AppsMaintained,
 }
 
 fn builtin_catalog_entry(
@@ -356,6 +364,17 @@ pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
             false,
             &["live", "roster", "app", "skin"],
         ),
+        builtin_catalog_entry(
+            APPS_MAINTAINED_ID,
+            APPS_MAINTAINED_PATH,
+            "Apps you maintain",
+            APPS_MAINTAINED_SOURCE,
+            "live",
+            "Live list of the Apps this agent maintains (hostnames, state, live Seed), with the previous agent's notes for 72 hours after a handover. Regenerates whenever AGENTS.md is rewritten.",
+            None,
+            false,
+            &["live", "apps"],
+        ),
     ]
 }
 
@@ -422,6 +441,8 @@ const RESERVED_ALIASES: &[&str] = &[
     "skins-roster",
     "skin-users",
     "skin:roster",
+    "apps-maintained",
+    "apps:maintained",
     "wiki-hygiene",
     "always-use-subagents",
     "use-subagents",
@@ -442,6 +463,7 @@ const RESERVED_PATH_STEMS: &[&str] = &[
     "skills-roster",
     "users-roster",
     "skin-roster",
+    "apps-maintained",
 ];
 
 /// Host library root: `~/.k2/context/catalog/packs`.
@@ -895,6 +917,7 @@ fn live_kind_for_source(source: &str) -> Option<LiveKind> {
         SKILLS_ROSTER_SOURCE => Some(LiveKind::Skills),
         USERS_ROSTER_SOURCE => Some(LiveKind::Users),
         SKIN_ROSTER_SOURCE => Some(LiveKind::Skin),
+        APPS_MAINTAINED_SOURCE => Some(LiveKind::AppsMaintained),
         _ => None,
     }
 }
@@ -912,6 +935,8 @@ fn live_kind_for_path(path: &str) -> Option<LiveKind> {
         Some(LiveKind::Users)
     } else if path == SKIN_ROSTER_PATH || path.ends_with("skin-roster.md") {
         Some(LiveKind::Skin)
+    } else if path == APPS_MAINTAINED_PATH || path.ends_with("apps-maintained.md") {
+        Some(LiveKind::AppsMaintained)
     } else {
         None
     }
@@ -934,6 +959,7 @@ pub fn render_live_layer_body(project_path: &str, layer: &ContextLayer) -> Optio
         LiveKind::Skills => Some(render_skills_roster_body(project_path)),
         LiveKind::Users => Some(render_users_roster_body(project_path)),
         LiveKind::Skin => Some(render_skin_roster_body(project_path)),
+        LiveKind::AppsMaintained => Some(render_apps_maintained_body(project_path)),
     }
 }
 
@@ -1196,6 +1222,68 @@ pub fn render_skin_roster_body(_project_path: &str) -> String {
     out
 }
 
+/// "Apps you maintain" (§4.11): the Apps whose `owner_workspace` is this
+/// workspace, and for 72 hours after a handover who handed it over and
+/// where its brief is. Names and states only: never a guest, a secret or a
+/// path.
+pub fn render_apps_maintained_body(project_path: &str) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "The K2 Apps **this agent maintains** (`k2 app inspect <app>`). Another agent's Apps aren't listed. \
+         Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+    );
+    let Ok(ws) = resolve_project_id(project_path) else {
+        out.push_str("_This folder isn't a registered workspace._\n");
+        return out;
+    };
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let apps = crate::deploy::store::list_apps(&conn, Some(&ws)).unwrap_or_default();
+    if apps.is_empty() {
+        out.push_str("_No Apps yet._ `k2 app install <id>` makes one; `k2 study apps` explains Apps.\n");
+        return out;
+    }
+    let now = crate::deploy::now();
+    out.push_str("| APP | STATE | HOSTNAMES | LIVE SEED |\n| --- | --- | --- | --- |\n");
+    let mut notes = Vec::new();
+    for a in &apps {
+        let cfg = crate::app_grace::config::load(&conn, &a.app_id).unwrap_or_default();
+        let mut labels = vec![a.app_id.clone()];
+        labels.extend(cfg.labels.iter().map(|l| l.label.clone()));
+        labels.extend(cfg.subdomains.iter().map(|l| l.label.clone()));
+        let seed = a.live_seed.as_deref().map(|s| s.chars().take(12).collect::<String>()).unwrap_or_else(|| "—".into());
+        out.push_str(&format!("| {} | {} | {} | {seed} |\n", a.app_id, a.state, labels.join(", ")));
+        if let Ok(Some(h)) = crate::deploy::handover::latest_for_app(&conn, &a.app_id) {
+            let recent = h.to_workspace == ws && h.approved_at.is_some_and(|t| now - t < crate::deploy::handover::WINDOW_SECS);
+            if recent && matches!(h.state.as_str(), "applied" | "final") {
+                let from = crate::workspace_session_handles::workspace_address_name(&conn, &h.from_workspace).unwrap_or_else(|_| h.from_workspace.clone());
+                notes.push(format!(
+                    "- **{}** was handed over to you from {} ({} ago){}: `k2 app handover brief {}`. Their Thread history with guests stays with them.",
+                    a.app_id,
+                    if h.from_workspace.is_empty() { "the owner (parked)".to_string() } else { from },
+                    human_age(now - h.approved_at.unwrap_or(now)),
+                    if h.brief.is_some() { ", with a brief" } else { "" },
+                    a.app_id
+                ));
+            }
+        }
+    }
+    if !notes.is_empty() {
+        out.push_str("\n### Recent handovers\n\n");
+        out.push_str(&notes.join("\n"));
+        out.push('\n');
+    }
+    out
+}
+
+fn human_age(secs: i64) -> String {
+    if secs < 3600 {
+        format!("{} min", (secs / 60).max(1))
+    } else {
+        format!("{} h", secs / 3600)
+    }
+}
+
 struct RemoteConnSummary {
     agent: String,
     host: String,
@@ -1252,6 +1340,7 @@ fn live_kind_meta(kind: LiveKind) -> (&'static str, &'static str, &'static str) 
         LiveKind::Skills => (SKILLS_ROSTER_PATH, "Skills roster", SKILLS_ROSTER_SOURCE),
         LiveKind::Users => (USERS_ROSTER_PATH, "User roster", USERS_ROSTER_SOURCE),
         LiveKind::Skin => (SKIN_ROSTER_PATH, "App guest roster", SKIN_ROSTER_SOURCE),
+        LiveKind::AppsMaintained => (APPS_MAINTAINED_PATH, "Apps you maintain", APPS_MAINTAINED_SOURCE),
     }
 }
 
@@ -1263,6 +1352,7 @@ fn render_live_file(project_path: &str, kind: LiveKind) -> String {
         LiveKind::Skills => render_skills_roster_body(project_path),
         LiveKind::Users => render_users_roster_body(project_path),
         LiveKind::Skin => render_skin_roster_body(project_path),
+        LiveKind::AppsMaintained => render_apps_maintained_body(project_path),
     };
     format!("# {title}\n\n{body}")
 }
@@ -1304,7 +1394,7 @@ pub fn sync_live_generated_layers(project_path: &str) {
     let Ok(layers) = list_layers(project_path) else {
         return;
     };
-    let mut seen = [false; 5];
+    let mut seen = [false; 6];
     for layer in &layers {
         if let Some(kind) = live_kind_for_layer(layer) {
             let idx = match kind {
@@ -1313,6 +1403,7 @@ pub fn sync_live_generated_layers(project_path: &str) {
                 LiveKind::Skills => 2,
                 LiveKind::Users => 3,
                 LiveKind::Skin => 4,
+                LiveKind::AppsMaintained => 5,
             };
             if !seen[idx] {
                 seen[idx] = true;
@@ -1553,6 +1644,7 @@ fn resolve_catalog_id(catalog_id: &str) -> Result<ContextCatalogEntry, ContextEr
         | "skins-roster"
         | "skin-users"
         | "catalog:skin-roster" => APPS_ROSTER_ID,
+        "apps:maintained" | "apps-maintained" | "catalog:apps-maintained" => APPS_MAINTAINED_ID,
         "wiki-hygiene" | "hygiene" | "catalog:wiki-hygiene" => WIKI_HYGIENE_ID,
         "subagents"
         | "subagents:pack"
@@ -1597,6 +1689,7 @@ fn is_materializing_pack(entry: &ContextCatalogEntry) -> bool {
             | HEARTBEATS_ROSTER_SOURCE
             | SKILLS_ROSTER_SOURCE
             | USERS_ROSTER_SOURCE
+            | APPS_MAINTAINED_SOURCE
     )
 }
 
@@ -2722,8 +2815,8 @@ mod tests {
         let catalog = list_catalog();
         assert_eq!(
             catalog.len(),
-            11,
-            "eleven builtins only in an empty host catalog; got {:?}",
+            12,
+            "twelve builtins only in an empty host catalog; got {:?}",
             catalog.iter().map(|p| p.id.as_str()).collect::<Vec<_>>()
         );
         assert!(catalog.iter().any(|p| p.id == "wiki:index"));

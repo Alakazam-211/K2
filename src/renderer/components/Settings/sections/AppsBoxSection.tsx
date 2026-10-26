@@ -7,13 +7,14 @@
 //   colour), its state (parked / unassigned included), memory budget and
 //   hostname, and that agent's switches and cores, read-only, with a link
 //   to the agent's workspace card (where they are changed).
-// - A parked or orphaned App shows the owner's ways out: Unpark (to an
-//   agent), Hand over, Park, Uninstall (no purge). The daemon checks who
-//   may (owner for hand over / unpark; owner or admin for park and
-//   uninstall). Hand over and Unpark need the owner in person: the first
-//   try without a token comes back vault_confirm_required (or a refusal
-//   naming what the move can't carry yet), then the vault confirm runs
-//   inline and the same call goes again with its token.
+// - Every App has "Hand over…" for the owner (0.46.5, prd-app-handoff-v1
+//   §4.13; an admin sees it disabled): the sheet shows what moves and
+//   approves the handover card with a fresh vault confirm. A parked App's
+//   is "Unpark…" (the same card). Within the 72 h window a handed-over App
+//   shows Undo and Finish.
+// - A parked or orphaned App also shows Park and Uninstall (no purge). The
+//   daemon checks who may (owner for hand over / unpark / undo; owner or
+//   admin for park and uninstall).
 // - The review note: the agents that kept "Build and run Apps" from the
 //   old "Allow this agent to manage Apps" switch, each with Review (opens
 //   its card) and Dismiss (the daemon drops it from the list, so every
@@ -27,9 +28,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Callout } from '@/components/ui'
-import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
-import { primaryScope } from '@/kessel/server-scope'
-import { ConfirmStep } from './DataSourceConfirm'
+import { daemonErrorText } from '@/lib/daemon-error'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -40,21 +39,25 @@ import {
   APP_CORES,
   dismissReview,
   fetchBoxApps,
+  fetchHandovers,
   fetchReview,
-  handOverApp,
-  HANDOVER_CONFIRM_ACTION,
+  finishHandover,
   memoryLabel,
   needsOwner,
   parkApp,
   parseAppCores,
   postgresChip,
+  requestUndo,
   stateLabel,
   uninstallApp,
-  unparkApp,
   type BoxApp,
+  type HandoverRow,
   type ReviewRow,
   type ViewerRole,
 } from './app-access-api'
+import { AppHandoverSheet, approveWithConfirm } from './AppHandoverSheet'
+import { APP_APPROVE_CONFIRM_ACTION } from './app-approvals-api'
+import { vaultApi } from './vault-api'
 import { isAppsOff } from './apps-server-api'
 
 const muted = 'text-[var(--color-text-muted)]'
@@ -86,10 +89,9 @@ export function AppsBoxSection(): React.JSX.Element | null {
   const [review, setReview] = useState<ReviewRow[]>([])
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [target, setTarget] = useState<Record<string, string>>({})
+  const [sheet, setSheet] = useState<string | null>(null)
+  const [handovers, setHandovers] = useState<Map<string, HandoverRow>>(new Map())
   const [confirmUninstall, setConfirmUninstall] = useState<string | null>(null)
-  /** A hand-over or unpark waiting for the owner's vault confirm. */
-  const [giving, setGiving] = useState<{ app: string; to: string; parked: boolean } | null>(null)
   const mounted = useRef(true)
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -107,6 +109,16 @@ export function AppsBoxSection(): React.JSX.Element | null {
     } catch {
       // The review list is a nicety: a refusal leaves it empty.
       if (mounted.current) setReview([])
+    }
+    try {
+      // 0.46.5: handovers inside their undo window (newest per App).
+      const rows = await fetchHandovers()
+      const m = new Map<string, HandoverRow>()
+      for (const r of rows) if (r.inWindow && !m.has(r.appId)) m.set(r.appId, r)
+      if (mounted.current) setHandovers(m)
+    } catch {
+      // A Member (or an older daemon) sees no handovers: no Undo/Finish.
+      if (mounted.current) setHandovers(new Map())
     }
   }, [])
 
@@ -141,45 +153,21 @@ export function AppsBoxSection(): React.JSX.Element | null {
     }
   }
 
-  const giveOk = (app: string, parked: boolean): string =>
-    parked ? `${app} is unparked: it is stopped until its agent starts it.` : `${app} is handed over.`
-
-  const giveCall = (app: string, to: string, parked: boolean, token?: string): Promise<void> =>
-    parked ? unparkApp(app, to, token) : handOverApp(app, to, token)
-
-  /** First try without a token: a refusal (what the move can't carry yet)
-   *  shows as is; the owner-in-person answer opens the confirm. */
-  const give = async (app: string, to: string, parked: boolean): Promise<void> => {
-    setBusy(`give:${app}`)
-    setNotice(null)
-    try {
-      await giveCall(app, to, parked)
-      setNotice({ tone: 'ok', text: giveOk(app, parked) })
-      await refresh()
-    } catch (e) {
-      if (daemonErrorOf(e)?.code === 'vault_confirm_required') {
-        setGiving({ app, to, parked })
-      } else {
-        setNotice({ tone: 'error', text: daemonErrorText(e) })
-      }
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const giveWithToken = async (token: string): Promise<void> => {
-    const g = giving
-    setGiving(null)
-    if (!g) return
-    await act(`give:${g.app}`, giveOk(g.app, g.parked), () => giveCall(g.app, g.to, g.parked, token))
-  }
-
   if (load.kind === 'off') return null
 
   const isOwner = role === 'owner'
   const isStaff = role === 'owner' || role === 'admin'
   const byId = new Map(projects.map((p) => [p.id, p]))
   const agents = projects.filter((p) => p.path).sort((a, b) => a.name.localeCompare(b.name))
+
+  const undo = async (appId: string): Promise<void> => {
+    const { request } = await requestUndo(appId)
+    const { methods } = await vaultApi.confirmStart(APP_APPROVE_CONFIRM_ACTION, request)
+    if (!methods.includes('local-auth')) {
+      throw new Error(JSON.stringify({ error: { code: 'confirm_elsewhere', hint: 'The undo card waits in App Approvals: approve it there with your password.' } }))
+    }
+    await approveWithConfirm(request, `undo the handover of ${appId}`, 'local-auth')
+  }
 
   return (
     <div className="max-w-2xl space-y-4 mt-6" data-testid="apps-box">
@@ -241,7 +229,7 @@ export function AppsBoxSection(): React.JSX.Element | null {
                 const wsId = app.maintainer.workspaceId
                 const project = wsId ? byId.get(wsId) : undefined
                 const owner = needsOwner(app)
-                const to = target[app.appId] ?? ''
+                const recent = handovers.get(app.appId)
                 return (
                   <li key={app.appId} className="p-3 space-y-1.5" data-testid={`apps-row-${app.appId}`} data-state={app.state}>
                     <div className="flex items-start gap-3">
@@ -307,44 +295,43 @@ export function AppsBoxSection(): React.JSX.Element | null {
                         {/* 0.46.4 (slice I): a Thread with this App's agent beside its settings. */}
                       </div>
                     </div>
-                    {owner && isStaff ? (
-                      <div className="flex items-center gap-2 flex-wrap pl-9" data-testid={`apps-row-${app.appId}-actions`}>
+                    {recent && isStaff ? (
+                      <div className={`flex items-center gap-2 flex-wrap pl-9 text-[10px] ${muted}`} data-testid={`apps-row-${app.appId}-handover`}>
+                        <span>
+                          Handed over from {recent.fromHandle ?? 'the owner'} to {recent.toHandle}
+                          {recent.rekeyState === 'failed' ? ' · its keys didn’t change yet' : ''}
+                        </span>
                         {isOwner ? (
                           <>
-                            <select
-                              aria-label={`Agent for ${app.appId}`}
-                              className="px-2 py-1 text-[11px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] no-drag"
-                              value={to}
-                              onChange={(e) => setTarget((t) => ({ ...t, [app.appId]: e.target.value }))}
-                            >
-                              <option value="">Choose an agent…</option>
-                              {agents.map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.name}
-                                </option>
-                              ))}
-                            </select>
                             <Button
-                              disabled={!to || busy !== null || giving !== null}
-                              onClick={() => void give(app.appId, to, app.parked)}
+                              variant="ghost"
+                              disabled={busy !== null}
+                              onClick={() => void act(`undo:${app.appId}`, `${app.appId} went back to ${recent.fromHandle ?? 'the owner'}.`, () => undo(app.appId))}
                             >
-                              {app.parked ? 'Unpark' : 'Hand over'}
+                              Undo
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              disabled={busy !== null}
+                              onClick={() => void act(`finish:${app.appId}`, `${app.appId}: the undo window is closed.`, () => finishHandover(app.appId))}
+                            >
+                              Finish
                             </Button>
                           </>
                         ) : null}
-                        {giving?.app === app.appId ? (
-                          <div className="w-full" data-testid={`apps-row-${app.appId}-confirm`}>
-                            <ConfirmStep
-                              scope={primaryScope()}
-                              action={HANDOVER_CONFIRM_ACTION}
-                              secretId={app.appId}
-                              label={`${giving.parked ? 'unpark' : 'hand over'} App ${app.appId}`}
-                              onToken={(token) => void giveWithToken(token)}
-                              onCancel={() => setGiving(null)}
-                            />
-                          </div>
-                        ) : null}
-                        {!app.parked ? (
+                      </div>
+                    ) : null}
+                    {isStaff ? (
+                      <div className="flex items-center gap-2 flex-wrap pl-9" data-testid={`apps-row-${app.appId}-actions`}>
+                        <Button
+                          variant="ghost"
+                          disabled={!isOwner || busy !== null}
+                          title={isOwner ? undefined : 'Only the server’s owner hands an App over'}
+                          onClick={() => setSheet(sheet === app.appId ? null : app.appId)}
+                        >
+                          {app.parked ? 'Unpark…' : 'Hand over…'}
+                        </Button>
+                        {owner && !app.parked ? (
                           <Button
                             variant="ghost"
                             disabled={busy !== null}
@@ -353,7 +340,7 @@ export function AppsBoxSection(): React.JSX.Element | null {
                             Park
                           </Button>
                         ) : null}
-                        {confirmUninstall === app.appId ? (
+                        {owner && confirmUninstall === app.appId ? (
                           <>
                             <Button
                               variant="danger"
@@ -370,12 +357,26 @@ export function AppsBoxSection(): React.JSX.Element | null {
                               Cancel
                             </Button>
                           </>
-                        ) : (
+                        ) : owner ? (
                           <Button variant="ghost" disabled={busy !== null} onClick={() => setConfirmUninstall(app.appId)}>
                             Uninstall
                           </Button>
-                        )}
+                        ) : null}
                       </div>
+                    ) : null}
+                    {sheet === app.appId && isOwner ? (
+                      <AppHandoverSheet
+                        appId={app.appId}
+                        parked={app.parked}
+                        currentWorkspace={wsId ?? null}
+                        agents={agents}
+                        onClose={() => setSheet(null)}
+                        onDone={async (text) => {
+                          setSheet(null)
+                          setNotice({ tone: 'ok', text })
+                          await refresh()
+                        }}
+                      />
                     ) : null}
                   </li>
                 )

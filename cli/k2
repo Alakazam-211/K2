@@ -8158,15 +8158,16 @@ See and run it:
                                        agent logins); k2 app room-names <room>
                                        hide|show (owner). k2 app surfaces.
   k2 app uninstall <app-id> [--purge]  --purge also deletes its data (owner).
-  k2 app handover <app-id> --to WS     Owner, in person (a fresh confirm): give a
-                                       stopped App to another workspace. Refused
-                                       while it has tied guests, extra labels or
-                                       domains, the old workspace's secrets, App
-                                       keys, database or push (full hand-off: 0.46.5).
+  k2 app handover <app-id> --to WS [--brief FILE] [--dry-run]
+                                       Hand the App to another agent: its agent
+                                       offers, the other accepts, the owner
+                                       approves one card (addresses, guests,
+                                       secrets, database, keys move; undo 72 h).
+  k2 app handover accept|decline|cancel|status|brief|undo|finish|rekey <app>
   k2 app park <app-id> [--reason T]    Owner/admin: stop it and hold it for the
                                        owner (no agent maintains it).
-  k2 app unpark <app-id> --to WS       Owner, in person: give a parked App to a
-                                       workspace (the same checks as handover).
+  k2 app unpark <app-id> --to WS       Owner: give a parked App to a workspace
+                                       (the same handover card).
   k2 app release <workspace> --apps handover:<ws>|uninstall|park
                                        One way out for every App a workspace
                                        maintains (before k2 workspace remove).
@@ -9625,11 +9626,175 @@ if isinstance(e, dict) and e.get("code") == "vault_confirm_required" and e.get("
     _app_rt_post "$route" "$(_compute_json "$@" K2_CJ_confirmToken="$tok")"
 }
 
-# k2 app handover|unpark <app-id> --to WS [--json]; k2 app park <app-id> [--reason T] [--json]
-# (prd-agent-app-permissions-v1 Q8: people only, never a passport).
-# handover/unpark: the owner in person (a fresh vault confirm, app-handover),
-# refused (handoff_needs_v1) while the App has what the move can't carry
-# until the full hand-off in 0.46.5.
+# k2 app handover — one App's maintenance from one agent to another
+# (prd-app-handoff-v1; Rosson 2026-10-26: one verb, improved).
+#   k2 app handover <app> --to <ws> [--brief FILE] [--db share|wait]
+#        [--collisions keep|use_b] [--reset-shared] [--copy-source]
+#        [--reason T] [--dry-run] [--json]
+#   k2 app handover accept|decline|cancel|undo|finish|rekey <app> [--reason T] [--json]
+#   k2 app handover status [<app>] [--json]
+#   k2 app handover brief <app>
+#   k2 app unpark <app> --to <ws> [...]   (a parked App: the same card)
+# Exit: 0 done, 2 held (an offer, or a card for the owner), 3 refused, 1 failed.
+_app_handover_usage() {
+    cat >&2 <<'USAGE'
+usage: k2 app handover <app> --to <workspace> [--brief FILE] [--dry-run]
+         [--db share|wait] [--collisions keep|use_b] [--reset-shared] [--copy-source] [--reason TEXT]
+       k2 app handover accept|decline|cancel|undo|finish|rekey <app> [--reason TEXT]
+       k2 app handover status [<app>]
+       k2 app handover brief <app>
+  The App's own agent offers it (the agent that takes it accepts); the
+  owner approves one card in person. Run by the owner outside K2, it
+  files the card and asks for the confirm. --dry-run shows what would move.
+USAGE
+}
+
+_app_handover_print() {
+    # stdin: a handover answer (plan, held card, offer or row).
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+plan = v.get("plan") if isinstance(v.get("plan"), dict) else (v if "lines" in v else None)
+h = v.get("handover") or {}
+if v.get("already"):
+    print("Already: %s" % (v.get("workspace") or h.get("toHandle") or "this workspace"))
+if plan and v.get("status") != "held":
+    for b in plan.get("blockers") or []:
+        print("blocked (%s): %s" % (b.get("code"), b.get("hint")))
+if plan:
+    for l in plan.get("lines") or []:
+        print("  - " + l)
+if h:
+    print("handover %s: %s (%s -> %s)" % (h.get("id"), h.get("state"), h.get("fromHandle") or "parked", h.get("toHandle")))
+r = v.get("request")
+if isinstance(r, dict) and r.get("id"):
+    print("card: %s" % r["id"])
+if v.get("hint"):
+    print(v["hint"])
+'
+}
+
+cmd_app_handover() {
+    local verb="$1"; shift
+    local sub=""
+    if [ "$verb" = handover ]; then
+        case "${1:-}" in
+            accept|decline|cancel|status|brief|undo|finish|rekey|plan) sub="$1"; shift ;;
+            -h|--help|"") _app_handover_usage; [ -z "${1:-}" ] && exit 2; return 0 ;;
+        esac
+    fi
+    local app="" to="" brief_file="" db="" coll="" reset_shared="" copy_source="" reason="" dry=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --to) to="${2:-}"; shift 2 ;;
+            --brief) brief_file="${2:-}"; shift 2 ;;
+            --db) db="${2:-}"; shift 2 ;;
+            --collisions) coll="${2:-}"; shift 2 ;;
+            --reset-shared) reset_shared=1; shift ;;
+            --copy-source) copy_source=1; shift ;;
+            --reason) reason="${2:-}"; shift 2 ;;
+            --dry-run) dry=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_handover_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    local brief=""
+    if [ -n "$brief_file" ]; then
+        [ -f "$brief_file" ] || { echo "{\"error\":\"bad_request\",\"hint\":\"no brief file $brief_file\"}" >&2; exit 2; }
+        brief="$(cat "$brief_file")"
+    fi
+    case "$sub" in
+        status)
+            local q=""
+            [ -n "$app" ] && q="app=$(urlencode "$app")"
+            _compute_call GET /cli/app/handover/status "$q"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin).get("handovers") or []
+if not rows:
+    print("No handovers."); sys.exit(0)
+for h in rows:
+    extra = ""
+    if h.get("inWindow"):
+        extra = " (undo until %s)" % h.get("windowUntil")
+    if h.get("rekeyState"):
+        extra += " re-key: %s" % h["rekeyState"]
+    print("%s  %-9s %s  %s -> %s%s" % (h["id"], h["state"], h["appId"], h.get("fromHandle") or "parked", h.get("toHandle"), extra))'
+            return 0 ;;
+        brief)
+            [ -n "$app" ] || { _app_handover_usage; exit 2; }
+            _compute_call GET /cli/app/handover/brief "app=$(urlencode "$app")"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("brief") or "(no brief)")'
+            return 0 ;;
+        accept|decline|cancel|undo|finish|rekey)
+            [ -n "$app" ] || { _app_handover_usage; exit 2; }
+            _app_rt_post "/cli/app/handover/$sub" "$(_compute_json K2_CJ_app="$app" K2_CJ_reason="$reason")"
+            case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
+            if [ "$json_out" = 1 ]; then
+                printf '%s\n' "$_CP_BODY"
+                [ "$_CP_STATUS" = "202" ] && return 2
+                return 0
+            fi
+            printf '%s' "$_CP_BODY" | _app_handover_print
+            if [ "$_CP_STATUS" = "202" ]; then
+                if [ "$sub" = undo ] && ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+                    _app_approve "$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request"]["id"])')"
+                    return 0
+                fi
+                return 2
+            fi
+            return 0 ;;
+    esac
+    if [ -z "$app" ] || [ -z "$to" ]; then _app_handover_usage; exit 2; fi
+    if [ "$dry" = 1 ] || [ "$sub" = plan ]; then
+        local q="app=$(urlencode "$app")&to=$(urlencode "$to")"
+        [ -n "$db" ] && q="$q&db=$(urlencode "$db")"
+        [ -n "$coll" ] && q="$q&collisions=$(urlencode "$coll")"
+        [ -n "$reset_shared" ] && q="$q&resetShared=1"
+        [ -n "$copy_source" ] && q="$q&copySource=1"
+        _compute_call GET /cli/app/handover/plan "$q"
+        [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | _app_handover_print
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("ready" if v.get("ready") else "not ready: see blocked lines")'
+        return 0
+    fi
+    # K2_APP_HANDOVER=legacy answers 403 naming a confirm: asked once here.
+    _app_post_confirming "/cli/app/$verb" "Give App $app to $to" K2_CJ_app="$app" K2_CJ_to="$to" K2_CJ_brief="$brief" K2_CJ_db="$db" \
+        K2_CJ_collisions="$coll" K2_CJ_resetShared_b="$reset_shared" K2_CJ_copySource_b="$copy_source" K2_CJ_reason="$reason"
+    case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+        [ "$_CP_STATUS" = "202" ] && return 2
+        return 0
+    fi
+    if [ "$_CP_STATUS" = "200" ]; then
+        # K2_APP_HANDOVER=legacy (or already there).
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("App %s now belongs to %s." % (v.get("app"), v.get("workspace")))'
+        return 0
+    fi
+    printf '%s' "$_CP_BODY" | _app_handover_print
+    if [ -z "$brief_file" ] && _compute_in_session; then
+        echo "tip: give the next agent a brief: k2 app handover $app --to $to --brief NOTES.md (once this offer is cancelled)" >&2
+    fi
+    local card
+    card="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; r=json.load(sys.stdin).get("request"); print(r["id"] if isinstance(r, dict) else "")')"
+    if [ -n "$card" ] && ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+        # The owner at a terminal outside K2: approve the card right here.
+        _app_approve "$card"
+        return 0
+    fi
+    return 2
+}
+
+# k2 app park <app-id> [--reason T] [--json] (prd-agent-app-permissions-v1
+# Q8: people only, never a passport). handover/unpark: cmd_app_handover.
 cmd_app_ownership() {
     local verb="$1"; shift
     local app="" to="" reason="" json_out=0
@@ -9678,8 +9843,26 @@ cmd_app_release() {
         exit 2
     fi
     _app_post_confirming /cli/app/release "Give $ws's Apps to ${apps#handover:}" K2_CJ_workspace="$ws" K2_CJ_apps="$apps"
-    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
-    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; [ "$_CP_STATUS" = "202" ] && return 2; return 0; fi
+    if [ "$_CP_STATUS" = "202" ]; then
+        # One handover card per App; the owner at a terminal outside K2
+        # approves each here.
+        local cards
+        cards="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+for r in v.get("results", []):
+    if r.get("request"):
+        print(r["request"])')"
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("hint",""))'
+        if ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+            local c
+            for c in $cards; do _app_approve "$c"; done
+            return 0
+        fi
+        return 2
+    fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
@@ -9957,6 +10140,75 @@ if v.get("warning"):
     print(v["warning"])
 if v.get("next"):
     print(v["next"])'
+}
+
+_study_page_app_handover() {
+    cat <<'EOF'
+k2 study app-handover — Handing an App to another agent
+
+WHAT A HANDOVER IS
+  One App's maintenance moves from one agent (A) to another (B) on this
+  server. The App keeps its id, its running instance, its addresses and
+  certificates, its data, its database, its secrets, its guests and their
+  sign-ins, its keys and its history. From the switch on, B maintains it
+  and A keeps no control: no addresses, secrets, database passwords, keys
+  or guest passwords A set.
+
+HOW IT GOES
+  1. A offers:   k2 app handover <app> --to <agent> --brief NOTES.md
+                 (switch 1 "Build and run Apps"; the brief is your notes
+                 for the next agent, markdown, at most 64 KiB)
+  2. B accepts:  k2 app handover accept <app>   (or decline --reason T)
+                 Until the owner answers, B can read the App (inspect,
+                 logs, history, errors) but change nothing.
+  3. The owner approves one card that lists exactly what moves
+                 (k2 app approve <request>, or Settings → App Approvals;
+                 a fresh vault confirm, never an agent).
+  The owner can also start it (Settings → Apps → Hand over…, or the same
+  command from a terminal outside K2). k2 agent hire <dir> --take-app <app>
+  hires an agent and offers it the App in one step (accepted for it).
+
+  Look first: k2 app handover <app> --to <agent> --dry-run
+
+WHAT MOVES, AND HOW
+  addresses   every hostname the App answers on is B's (taken labels stay
+              with the App: they no longer go back to A's old service)
+  guests      keep their access and stay signed in; they talk to B now.
+              Their Thread history with A stays in A's room.
+  passwords   a guest whose password A set keeps its sign-in, but the
+              password is cleared; they set a new one when the sign-in
+              ends (B sends k2 app user reset). Guests who also use A's
+              other Apps stay A's unless the owner takes them over.
+  secrets     A's secrets only this App uses move to B; ones A uses too are
+              copied (rotate them: A knew them). A name B already has keeps
+              the App's value as NAME__<app>. The Seed's k2v://ws/<A>/NAME
+              keeps resolving, for this App only.
+  database    the App's own database moves to B and its passwords change;
+              one A's other Apps use is refused unless the owner shares it.
+  keys        the App's keys change; it restarts once on a fresh copy to
+              pick them up (no outage when two copies fit; a short pause
+              otherwise; or at B's first deploy when its setting is defer).
+  requests    A's waiting requests for the App are cancelled.
+  heartbeats  made in A's room stay A's: A archives them or tells B.
+
+REFUSED (409), and what to do
+  handover_open           another handover of the App is open (cancel it)
+  handover_db_shared      choose --db share, or wait for per-App databases
+  handover_db_busy        a database upgrade is running; hand over after
+  handover_vault_closed   open the vault, then ask again
+  handover_stale          what would move changed since the card: ask again
+  handover_in_progress    the App is switching right now; retry in a moment
+
+AFTERWARDS
+  k2 app handover status [<app>]   open and recent handovers
+  k2 app handover brief <app>      the previous agent's notes
+  k2 app handover rekey <app>      retry a re-key that didn't go live
+  k2 app handover finish <app>     end the undo window (B after a deploy)
+  k2 app handover undo <app>       the owner, within 72 hours
+  The agent that takes it gets "Apps you maintain" in its context.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
 }
 
 _study_page_app_move() {
@@ -14432,7 +14684,8 @@ cmd_app() {
         logs) shift; cmd_app_logs "$@" ;;
         errors) shift; cmd_app_errors "$@" ;;
         uninstall) shift; cmd_app_uninstall "$@" ;;
-        handover|park|unpark) cmd_app_ownership "$@" ;;
+        handover|unpark) cmd_app_handover "$@" ;;
+        park) cmd_app_ownership "$@" ;;
         release) shift; cmd_app_release "$@" ;;
         exec) shift; cmd_app_exec "$@" ;;
         shell) shift; cmd_app_shell "$@" ;;
@@ -37525,7 +37778,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-push app-pairing app-profile skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs folder-trust email-notifications"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs folder-trust email-notifications"
 
 _study_usage() {
     cat <<'EOF'
@@ -37542,8 +37795,8 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
-  app-identity  app-surfaces  app-resources  app-runtime  app-push  app-pairing  app-profile  skins
-  feedback-loop  ticket-brief  zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute
+  app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  app-profile
+  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute
   compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  db-upgrade  jobs
@@ -37578,6 +37831,7 @@ _study_title() {
         app-surfaces) echo "Room members, and an App's own self and usage" ;;
         app-resources) echo "Box usage, the disk guard, clean and trends" ;;
         app-runtime) echo "K2 updates and your App: the re-host" ;;
+        app-handover) echo "Handing an App to another agent" ;;
         app-push) echo "Notifications to a custom App's own phone app" ;;
         app-pairing) echo "Pairing a custom App's own phone app by QR" ;;
         app-profile) echo "A person's own profile, picture and sessions in an App" ;;
@@ -37680,6 +37934,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-surfaces        Room members (who holds a grant), an App's own self and usage
   app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends
   app-runtime         K2 updates move your App to the new runtime: re-host, setting, checks
+  app-handover        Hand an App to another agent: offer, accept, the owner's card, undo
   app-push            Your App's own phone app: keys in the vault, register, send, limits
   app-pairing         Your App's own phone app signs in by QR: setup, start, check, redeem
   app-profile         A person's own profile, picture and sessions in an App; who decides
@@ -37739,6 +37994,7 @@ _study_page() {
         app-surfaces) _study_page_app_surfaces ;;
         app-resources) _study_page_app_resources ;;
         app-runtime) _study_page_app_runtime ;;
+        app-handover) _study_page_app_handover ;;
         app-push) _study_page_app_push ;;
         app-pairing) _study_page_app_pairing ;;
         app-profile) _study_page_app_profile ;;
@@ -43867,6 +44123,7 @@ cmd_agent_hire() {
     local dir="" name="" template="" persona="" mode="" enabled="" onboard="" agent_preset=""
     local launch=false dry_run=false as_json=false no_wiki=false
     local no_agents_md=false fanout=false db_access="" color="" focus_group=""
+    local take_app="" take_brief_file=""
     local connects=() projects=() contexts=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -43903,6 +44160,12 @@ cmd_agent_hire() {
             --context)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--context requires a path or catalog id (see: k2 agent context catalog)"; exit 2; }
                 contexts+=("$2"); shift 2 ;;
+            --take-app)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--take-app requires an App id (k2 app list)"; exit 2; }
+                take_app="$2"; shift 2 ;;
+            --brief)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--brief requires a file (your notes for the new agent)"; exit 2; }
+                take_brief_file="$2"; shift 2 ;;
             --no-wiki) no_wiki=true; shift ;;
             --no-agents-md) no_agents_md=true; shift ;;
             --fanout) fanout=true; shift ;;
@@ -43971,6 +44234,13 @@ cmd_agent_hire() {
     fi
     # --onboard implies --launch (mockup contract).
     [ -n "$onboard" ] && launch=true
+    # 0.46.5 --take-app: after the hire, the App's handover to the new agent.
+    local take_brief=""
+    if [ -n "$take_brief_file" ]; then
+        [ -n "$take_app" ] || { _agent_err "bad_usage" "--brief goes with --take-app"; exit 2; }
+        [ -f "$take_brief_file" ] || { _agent_err "bad_usage" "brief file not found: $take_brief_file"; exit 2; }
+        take_brief="$(cat "$take_brief_file")"
+    fi
     # 0.45.6: inside a K2 cell the hire core call carries the session
     # passport, so the DAEMON refuses an agent raising DB access (the check
     # above is the fast path; the daemon is the authority).
@@ -43993,6 +44263,7 @@ cmd_agent_hire() {
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
     NO_WIKI="$no_wiki" NO_AGENTS_MD="$no_agents_md" FANOUT="$fanout" \
     DB_ACCESS="$db_access" COLOR="$color" FOCUS_GROUP="$focus_group" \
+    TAKE_APP="$take_app" TAKE_BRIEF="$take_brief" \
     APROJTOKEN="$(_k2_project_token)" \
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" PTOKEN="$core_token" python3 - <<'PYEOF'
 import json, os, re, sys
@@ -44019,6 +44290,8 @@ fanout = os.environ.get("FANOUT") == "true"
 db_access = os.environ.get("DB_ACCESS", "")
 color_arg = os.environ.get("COLOR", "")
 focus_group_arg = os.environ.get("FOCUS_GROUP", "")
+take_app = os.environ.get("TAKE_APP", "").strip()
+take_brief = os.environ.get("TAKE_BRIEF", "")
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
 core_token = os.environ.get("PTOKEN", "") or token
@@ -44528,6 +44801,11 @@ if onboard:
     # run that asks for it.
     actions.append({"step": "onboard", "status": "pending"})
 
+if take_app:
+    # 0.46.5: the App's handover to this agent, filed only after the hire
+    # succeeded (never inline; a failed hire files nothing).
+    actions.append({"step": "take-app", "status": "pending", "app": take_app})
+
 display_name = name or (conf.get("name") if registered else basename) or basename
 
 def emit(ok, changed):
@@ -44590,6 +44868,11 @@ def emit(ok, changed):
             line = "launch"
             if a.get("sessionId"):
                 line += " (session %s)" % str(a["sessionId"])[:8]
+        elif step == "take-app":
+            line = "take-app: hand %s to this agent" % a.get("app")
+            h = a.get("handover") or {}
+            if h.get("id"):
+                line += " (handover %s %s%s)" % (h["id"], h.get("state"), (", card " + h["request"]) if h.get("request") else "")
         else:
             line = "onboard: deliver first message"
         if status in ("skipped", "not-run") and a.get("reason"):
@@ -44676,6 +44959,10 @@ if pending_core:
     dba_core = one("set-db-access")
     if dba_core and dba_core["status"] == "pending":
         core_body["dbAccess"] = dba_core["access"]
+    if take_app:
+        core_body["takeApp"] = take_app
+        if take_brief:
+            core_body["brief"] = take_brief
     resp = http_post_json("/cli/agents/hire", core_body, tok=core_token)
     err = resp.get("error")
     if err or not resp.get("ok"):
@@ -44684,7 +44971,16 @@ if pending_core:
         bad = dba_core if (code == "owner_only" and dba_core and dba_core["status"] == "pending") else pending_core[0]
         # Fatal: every later step needs the workspace.
         step_failed(bad, code or "daemon_error", hint, 3 if code == "owner_only" else None, fatal=True)
-    by_core ={x.get("step"): x for x in resp.get("steps", [])}
+    by_core = {x.get("step"): x for x in resp.get("steps", [])}
+    ta = one("take-app")
+    if ta and isinstance(resp.get("handover"), dict):
+        ta["handover"] = resp["handover"]
+        herr = resp["handover"].get("error")
+        if isinstance(herr, dict):
+            # The hire itself succeeded; only the offer failed (reported, not fatal).
+            step_failed(ta, herr.get("code") or "daemon_error", herr.get("hint") or "the handover was not filed")
+        else:
+            ta["status"] = "done"
     for name in core_steps:
         a = one(name)
         if a and a["status"] == "pending":
@@ -44969,6 +45265,24 @@ elif a and a["status"] == "pending":
     else:
         a["status"] = "done"
         changed = True
+
+# 9. take-app on an agent that already existed (the core didn't run):
+#    an ordinary offer (that agent accepts) or, from the owner, the card.
+a = one("take-app")
+if a and a["status"] == "pending":
+    body = {"app": take_app, "to": path}
+    if take_brief:
+        body["brief"] = take_brief
+    resp = http_post_json("/cli/app/handover", body, tok=core_token)
+    if isinstance(resp.get("error"), dict):
+        a["handover"] = {"error": resp["error"]}
+        step_failed(a, resp["error"].get("code") or "daemon_error", resp["error"].get("hint") or "the handover was not filed")
+    else:
+        h = resp.get("handover") or {}
+        r = resp.get("request")
+        a["handover"] = {"id": h.get("id"), "state": h.get("state"), "request": r.get("id") if isinstance(r, dict) else None}
+        a["status"] = "done"
+    changed = True
 
 # Every step's result; non-zero when any failed.
 finish(changed)

@@ -321,8 +321,8 @@ impl Plan {
             out.push(format!("{b}'s folder isn't trusted yet: {b} can't act until you trust it."));
         }
         if self.options.copy_source {
-            if let Some(src) = &self.source {
-                out.push(format!("Its source ({src}) is copied into {b}'s folder."));
+            if self.source.is_some() {
+                out.push(format!("Its source is copied into {b}'s folder (apps/{app}; never .k2/ or .env files)."));
             }
         }
         out.push(format!("Undo: you can undo this for {} hours (Settings → Apps, or k2 app handover undo {app}).", k2_core::deploy::handover::WINDOW_SECS / 3600));
@@ -392,22 +392,12 @@ fn to_json(w: &Ws) -> J {
     json!({ "workspace": w.id, "handle": ws_handle(&w.id), "name": name, "color": color, "folder": w.path })
 }
 
-/// The workspace a parked App was parked from (its last `park` audit row's
-/// `from`), so its guests' rooms move from there (A21).
-pub(crate) fn parked_from(app_id: &str) -> String {
-    let h = k2_core::db::shared();
-    let conn = h.lock();
-    k2_core::deploy::audit::list_for(&conn, k2_core::deploy::audit::SUBJECT_APP, app_id, 500)
-        .ok()
-        .and_then(|rows| rows.into_iter().find(|r| r.event == "park"))
-        .and_then(|r| r.payload.get("from").and_then(J::as_str).map(str::to_string))
-        .unwrap_or_default()
-}
-
 /// Compute the plan for `app` → `to`.
 pub(crate) fn compute(app: &AppRow, to: &Ws, options: &Options, brief: Option<&str>) -> R<Plan> {
     let from = app.owner_workspace.clone();
-    let room_from = if from.is_empty() { parked_from(&app.app_id) } else { from.clone() };
+    // A21: a parked App's guests' rooms are the workspace it was parked
+    // from (the guard's record of it).
+    let room_from = if from.is_empty() { super::handover_guard::parked_from(app) } else { from.clone() };
     let cfg = super::labels::load_cfg(&app.app_id)?;
 
     // ── daemon DB first ──────────────────────────────────────────────

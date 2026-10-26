@@ -78,6 +78,9 @@ fn fx(tag: &str) -> Fx {
     let home = crate::test_support::TempHome::new();
     let db = k2_core::db::scoped_for_test();
     k2_core::deploy::set_enabled(true);
+    // 0.46.5: a handover's plan reads the App's secrets (a closed vault
+    // refuses it: handover_vault_closed), whatever test ran first.
+    let _ = crate::vault::ensure_test_vault();
     let (a, b) = (format!("own-a-{tag}"), format!("own-b-{tag}"));
     add_ws(&a, &format!("Sales {tag}"));
     add_ws(&b, &format!("Ops {tag}"));
@@ -161,7 +164,10 @@ fn audit_events(app: &str) -> Vec<String> {
 fn approve_card(v: &J) -> (u16, J) {
     let req = v["request"]["id"].as_str().unwrap_or_else(|| panic!("no held request: {v}")).to_string();
     let tok = super::egress_routes::test_seams::vault_handle().confirm.mint(super::approvals::CONFIRM_ACTION, Some(&req), "owner", "local-auth");
-    call("/cli/app/approve", &Who::Owner, json!({ "request": req, "confirmToken": tok }))
+    let body = json!({ "request": req, "confirmToken": tok }).to_string();
+    let r = super::routes::respond(super::approvals::handle("/cli/app/approve", &Who::Owner, body.as_bytes(), &HashMap::new()));
+    let n: u16 = r.status.split_whitespace().next().unwrap().parse().unwrap();
+    (n, serde_json::from_str(&r.body).unwrap())
 }
 
 fn remove_ws(ws: &str) -> (String, J) {

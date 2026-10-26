@@ -281,3 +281,123 @@ export async function parkApp(app: string): Promise<void> {
 export async function uninstallApp(app: string): Promise<void> {
   await daemonCliPost<unknown>(primaryScope(), 'app/uninstall', { app })
 }
+
+// ── App handover (prd-app-handoff-v1, `k2 app handover`, 0.46.5) ─────
+
+export interface HandoverBlocker {
+  code: string
+  hint: string
+  names: string[]
+}
+
+/** What a handover would move (GET /cli/app/handover/plan). The daemon
+ *  owns the rules; this is the card's view of them. */
+export interface HandoverPlan {
+  lines: string[]
+  blockers: HandoverBlocker[]
+  ready: boolean
+  planHash: string
+  databaseCase: string
+  collisions: boolean
+  sharedGuests: number
+  toHandle: string
+}
+
+export interface HandoverOptions {
+  db?: 'share'
+  collisions?: 'keep' | 'use_b'
+  resetShared?: boolean
+}
+
+export function parseHandoverPlan(raw: unknown): HandoverPlan {
+  const v = isObj(raw) ? raw : {}
+  const blockers = Array.isArray(v.blockers) ? v.blockers.filter(isObj) : []
+  const secrets = Array.isArray(v.secrets) ? v.secrets.filter(isObj) : []
+  const guests = isObj(v.guests) ? v.guests : {}
+  const byClass = isObj(guests.byClass) ? guests.byClass : {}
+  const db = isObj(v.database) ? v.database : {}
+  const to = isObj(v.to) ? v.to : {}
+  return {
+    lines: Array.isArray(v.lines) ? v.lines.filter((l): l is string => typeof l === 'string') : [],
+    blockers: blockers.map((b) => ({
+      code: typeof b.code === 'string' ? b.code : 'blocked',
+      hint: typeof b.hint === 'string' ? b.hint : '',
+      names: Array.isArray(b.names) ? b.names.filter((n): n is string => typeof n === 'string') : [],
+    })),
+    ready: v.ready === true,
+    planHash: typeof v.planHash === 'string' ? v.planHash : '',
+    databaseCase: typeof db.case === 'string' ? db.case : 'none',
+    collisions: secrets.some((s) => s.collision === true),
+    sharedGuests: typeof byClass.shared === 'number' ? byClass.shared : 0,
+    toHandle: typeof to.handle === 'string' ? to.handle : '',
+  }
+}
+
+function handoverParams(app: string, to: string, o: HandoverOptions): Record<string, string> {
+  const p: Record<string, string> = { app, to }
+  if (o.db) p.db = o.db
+  if (o.collisions) p.collisions = o.collisions
+  if (o.resetShared) p.resetShared = '1'
+  return p
+}
+
+export async function fetchHandoverPlan(app: string, to: string, o: HandoverOptions = {}): Promise<HandoverPlan> {
+  return parseHandoverPlan(await daemonCliGet<unknown>(primaryScope(), 'app/handover/plan', handoverParams(app, to, o)))
+}
+
+/** File the owner's card (`unpark` for a parked App). Returns the held
+ *  request the owner approves with a fresh vault confirm. */
+export async function requestHandover(app: string, to: string, o: HandoverOptions, unpark: boolean): Promise<{ request: string }> {
+  const body: Record<string, unknown> = { app, to }
+  if (o.db) body.db = o.db
+  if (o.collisions) body.collisions = o.collisions
+  if (o.resetShared) body.resetShared = true
+  const v = await daemonCliPost<unknown>(primaryScope(), unpark ? 'app/unpark' : 'app/handover', body)
+  const r = isObj(v) && isObj(v.request) ? v.request : null
+  if (!r || typeof r.id !== 'string') throw new Error(JSON.stringify({ error: { code: 'no_card', hint: 'the daemon filed no handover card' } }))
+  return { request: r.id }
+}
+
+export interface HandoverRow {
+  id: string
+  appId: string
+  state: string
+  fromHandle: string | null
+  toHandle: string
+  inWindow: boolean
+  windowUntil: number | null
+  rekeyState: string | null
+}
+
+export function parseHandovers(raw: unknown): HandoverRow[] {
+  const v = isObj(raw) ? raw : {}
+  const rows = Array.isArray(v.handovers) ? v.handovers.filter(isObj) : []
+  return rows
+    .filter((r) => typeof r.id === 'string' && typeof r.appId === 'string')
+    .map((r) => ({
+      id: r.id as string,
+      appId: r.appId as string,
+      state: typeof r.state === 'string' ? r.state : '',
+      fromHandle: typeof r.fromHandle === 'string' ? r.fromHandle : null,
+      toHandle: typeof r.toHandle === 'string' ? r.toHandle : '',
+      inWindow: r.inWindow === true,
+      windowUntil: typeof r.windowUntil === 'number' ? r.windowUntil : null,
+      rekeyState: typeof r.rekeyState === 'string' ? r.rekeyState : null,
+    }))
+}
+
+export async function fetchHandovers(): Promise<HandoverRow[]> {
+  return parseHandovers(await daemonCliGet<unknown>(primaryScope(), 'app/handover/status'))
+}
+
+/** The owner's undo card (approved like the handover's own). */
+export async function requestUndo(app: string): Promise<{ request: string }> {
+  const v = await daemonCliPost<unknown>(primaryScope(), 'app/handover/undo', { app })
+  const r = isObj(v) && isObj(v.request) ? v.request : null
+  if (!r || typeof r.id !== 'string') throw new Error(JSON.stringify({ error: { code: 'no_card', hint: 'the daemon filed no undo card' } }))
+  return { request: r.id }
+}
+
+export async function finishHandover(app: string): Promise<void> {
+  await daemonCliPost<unknown>(primaryScope(), 'app/handover/finish', { app })
+}

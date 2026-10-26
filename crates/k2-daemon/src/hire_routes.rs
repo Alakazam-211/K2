@@ -811,12 +811,19 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
         Ok(r) => r,
         Err(e) => return err(400, "usage", format!("invalid JSON body: {e}")),
     };
+    // 0.46.5 `--take-app` (prd-app-handoff-v1 §4.13, A14): never inline.
+    // The hire converges first; only a hire that succeeded files the App's
+    // handover to the new agent (auto-accepted, Q1). A failed hire files
+    // nothing.
+    let extra: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
+    let take_app = extra.get("takeApp").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let brief = extra.get("brief").and_then(|v| v.as_str()).map(str::to_string);
     match converge::converge(&req, &caller, &ConvergeAuthority::unrestricted()) {
         Ok(out) => {
             if out.changed || out.created {
                 crate::v1_hire::emit_hire_watches();
             }
-            ok(serde_json::json!({
+            let mut v = serde_json::json!({
                 "ok": true,
                 "path": out.path,
                 "id": out.id,
@@ -825,7 +832,14 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
                 "changed": out.changed,
                 "created": out.created,
                 "steps": out.steps,
-            }))
+            });
+            if let Some(app) = take_app {
+                v["handover"] = match crate::apps::handover::hire_take(who, &app, &out.id, brief.as_deref(), out.created) {
+                    Ok(h) => h,
+                    Err(e) => serde_json::json!({ "error": { "code": e.code, "hint": e.hint } }),
+                };
+            }
+            ok(v)
         }
         Err(e) => hire_error_response(&e),
     }

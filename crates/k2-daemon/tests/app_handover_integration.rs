@@ -87,6 +87,8 @@ async fn the_link_and_live_sessions_move_to_b_with_no_gap() {
     let env = setup(&[]);
     k2_daemon::apps::alerts::set_sink(Some(Box::new(|_: &str, _: &str| {})));
     let d = k2_daemon::test_harness::start(OWNER).await;
+    // A vault on a file key under the temp home (secrets and the confirms).
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
     let a = seed_ws(&env, "hova");
     let b = seed_ws(&env, "hovb");
     let svc = add_app("hovapp", &a);

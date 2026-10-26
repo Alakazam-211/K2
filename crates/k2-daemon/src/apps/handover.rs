@@ -268,7 +268,31 @@ fn plan_route(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let (app, to) = target(who, param(params, "app"), param(params, "to"))?;
     let opts = options_from(|k| param(params, k).map(str::to_string), |k| matches!(param(params, k), Some("1" | "true" | "yes")))?;
     let p = hp::compute(&app, &to, &opts, None)?;
-    Ok(plan_answer(&p))
+    let mut out = plan_answer(&p);
+    scrub(who, &mut out);
+    Ok(out)
+}
+
+/// A passport never sees a folder path (another workspace's, or the App's
+/// source): the owner's card does.
+pub(crate) fn scrub(who: &Who, v: &mut J) {
+    if who.passport().is_none() {
+        return;
+    }
+    fn one(plan: &mut J) {
+        if let Some(to) = plan.get_mut("to").and_then(J::as_object_mut) {
+            to.remove("folder");
+        }
+        if let Some(o) = plan.as_object_mut() {
+            if o.contains_key("planHash") {
+                o.remove("source");
+            }
+        }
+    }
+    if let Some(p) = v.get_mut("plan") {
+        one(p);
+    }
+    one(v);
 }
 
 fn plan_answer(p: &Plan) -> J {
@@ -313,12 +337,21 @@ pub(crate) fn request_route(who: &Who, body: &[u8], unpark: bool) -> R<J> {
     let opts = body_options(&v)?;
     let brief = brief_of(&v)?;
     if super::routes::b(&v, "dryRun") {
-        return Ok(plan_answer(&hp::compute(&app, &to, &opts, brief.as_deref())?));
+        let mut out = plan_answer(&hp::compute(&app, &to, &opts, brief.as_deref())?);
+        scrub(who, &mut out);
+        return Ok(out);
     }
     if owner {
         return file_card(who, &app, &to, &opts, brief.as_deref(), s(&v, "reason"), &actor(who));
     }
-    offer(who, &app, &to, &opts, brief.as_deref(), s(&v, "reason"), false)
+    let mut out = offer(who, &app, &to, &opts, brief.as_deref(), s(&v, "reason"), false).map_err(|mut e| {
+        if let Some(x) = e.extra.as_mut() {
+            scrub(who, x);
+        }
+        e
+    })?;
+    scrub(who, &mut out);
+    Ok(out)
 }
 
 fn hov_db<T>(f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> R<T> {
@@ -441,6 +474,10 @@ fn file_request(who: &Who, row: &Handover, app: &AppRow, p: &Plan) -> R<J> {
 /// the held request. Idempotent: the same App and B with a card already
 /// waiting answers that card.
 pub(crate) fn file_card(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief: Option<&str>, reason: Option<&str>, started_by: &str) -> R<J> {
+    // A parked App's budget joins the box's pool again: a §4.3 check point.
+    if app.state == store::STATE_PARKED {
+        super::admission::check_memory(&app.app_id, app.memory_limit_bytes)?;
+    }
     let p = hp::compute(app, to, opts, brief)?;
     if !p.blockers.is_empty() {
         return Err(blocked(&p));
@@ -575,7 +612,8 @@ fn accept_route(who: &Who, body: &[u8]) -> R<J> {
         // accept again to file it).
         return Err(blocked(&p));
     }
-    let out = file_request(who, &row, &app, &p)?;
+    let mut out = file_request(who, &row, &app, &p)?;
+    scrub(who, &mut out);
     super::ownership::note(
         &row.from_workspace,
         &format!("{} accepted App {}", ws_handle(&row.to_workspace), row.app_id),
@@ -746,6 +784,9 @@ pub(crate) fn apply(r: &reqs::AppRequest, by: &str) -> R<J> {
     let plan = hp::compute(&app, &to, &opts, row.brief.as_deref())?;
     if plan.hash() != row.plan_hash || !plan.blockers.is_empty() {
         return Err(stale(&row, "what the handover would move changed since the card was asked for (a guest, a secret, a label or a request)".into()));
+    }
+    if app.state == store::STATE_PARKED {
+        super::admission::check_memory(&app.app_id, app.memory_limit_bytes)?;
     }
     if !hov_db(|c| hs::set_approved(c, &row.id, by, deploy::now()))? {
         return Err(no(NOT_HELD, 409, format!("handover {} was answered already", row.id)));
@@ -1027,6 +1068,7 @@ pub(crate) fn finish_steps(id: &str, by: &str) -> J {
     }
     if row.steps_done < 7 {
         notes(&row, &room_from, by);
+        context_layers(&row.to_workspace, &room_from);
         step(7);
     }
     J::Object(out)
@@ -1673,4 +1715,66 @@ pub fn spawn_sweeper() {
         std::thread::sleep(std::time::Duration::from_secs(600));
         sweep();
     });
+}
+
+// ── S6: hire --take-app ──────────────────────────────────────────────
+
+/// `k2 agent hire … --take-app <app>` (§4.13): after the hire succeeded,
+/// the App's handover to the new agent. The caller maintains the App (its
+/// passport: an offer, auto-accepted since B was hired for it) or is the
+/// owner (the card at once). Only an agent this hire created accepts
+/// automatically (Q1); a workspace that already existed gets an ordinary
+/// offer. Answers `{id, state, request?}`.
+pub(crate) fn hire_take(who: &Who, app: &str, new_ws: &str, brief: Option<&str>, created: bool) -> R<J> {
+    match mode() {
+        Mode::On => {}
+        _ => return Err(off_refusal()),
+    }
+    need_credential(who)?;
+    let row = app_for(who, Some(app))?;
+    let to = ws_by_id(new_ws).ok_or_else(|| no(codes::BAD_REQUEST, 404, "the hired workspace isn't registered"))?;
+    if to.id == row.owner_workspace {
+        return Err(no(SAME_WORKSPACE, 409, format!("{} already belongs to {}", row.app_id, ws_handle(&to.id))));
+    }
+    if let Some(b) = brief {
+        if b.len() > hs::BRIEF_MAX {
+            return Err(no(codes::BAD_REQUEST, 413, format!("a brief is at most {} KiB of markdown", hs::BRIEF_MAX / 1024)));
+        }
+    }
+    let opts = Options::default();
+    let out = if super::ownership::owner(who) {
+        file_card(who, &row, &to, &opts, brief, Some("hired to take it over"), &format!("hire:{}", actor(who)))?
+    } else if who.passport().is_some() {
+        offer(who, &row, &to, &opts, brief, Some("hired to take it over"), created)?
+    } else {
+        return Err(no(codes::OWNER_ONLY, 403, "the App's own agent or the owner hires into an App"));
+    };
+    Ok(json!({
+        "id": out["handover"]["id"],
+        "state": out["handover"]["state"],
+        "status": out["status"],
+        "request": out["request"]["id"],
+        "hint": out["hint"],
+    }))
+}
+
+/// §4.11: "Apps you maintain" is stacked on the agent that took the App
+/// (once), and both agents' AGENTS.md are rewritten so the App leaves A's
+/// list and joins B's. AGENT.md (the persona) is never touched.
+fn context_layers(to: &str, from: &str) {
+    use k2_core::workspace::context_layers as cl;
+    let path_of = |ws: &str| ws_by_id(ws).map(|w| w.path).filter(|p| std::path::Path::new(p).is_dir());
+    let Some(b_path) = path_of(to) else { return };
+    let stacked = cl::list_layers(&b_path).map(|ls| ls.iter().any(|l| l.source == cl::APPS_MAINTAINED_SOURCE)).unwrap_or(true);
+    if !stacked {
+        if let Err(e) = cl::add_layer(&b_path, None, Some(cl::APPS_MAINTAINED_ID), None) {
+            k2_core::log_debug!("[apps/handover] stack \"Apps you maintain\" on {to}: {e:?}");
+        }
+    }
+    let mut paths = vec![b_path];
+    if let Some(a) = path_of(from) {
+        paths.push(a);
+    }
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    cl::refresh_roster_after_live_kind_change(&refs, cl::LiveKind::AppsMaintained);
 }

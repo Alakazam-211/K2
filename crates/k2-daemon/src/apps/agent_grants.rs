@@ -43,7 +43,7 @@ use k2_core::deploy::{codes, store};
 use serde_json::{json, Value as J};
 
 use super::grace::{target, Target};
-use super::routes::{actor, agent_ws, json_body, need_credential, no, s, ws_handle, Who, R};
+use super::routes::{actor, agent_ws, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
 
 /// `k2 app grant copy-host <app>`, the passport-aware door (the owner's
 /// older `POST /cli/skin/grants/copy-host` stays as it was).

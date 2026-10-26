@@ -3,6 +3,11 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.5
+
+### Apps
+- **Pair your App's own phone app by QR.** People signed in to your App on the web can sign your phone app in with one scan, no password on the phone. You name your iOS and Android apps once (`k2 app pairing setup`), K2 serves their link files on your App's own k2.dev address, and the phone gets the same "Stay signed in" sign-in as a device login, with notifications in the same step. `k2 study app-pairing` has the guide.
+
 ## 0.46.4 — App users in safe hands
 
 ### When you update

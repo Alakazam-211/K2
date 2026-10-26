@@ -22,6 +22,7 @@ export { coerceTurn, describe as describeTurn, reduceTurn } from '../../activity
 export type { AppKeyOk, AppKeyRoomsSet, AppKeyUser, AppKeyUserCreated, AppKeyUsers, AppKeyWhoami } from './client.ts'
 export { K2Error, fromResponse } from './errors.ts'
 export * from './generated/verbs.ts'
+export { qrSvg, type QrSvgOptions } from './pairing.ts'
 
 /** Where a wall mounts the App pass (runtime §5.2). */
 export const DEFAULT_PASS_FILE = '/run/k2/pass'

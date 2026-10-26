@@ -631,3 +631,129 @@ fn the_switch_turns_the_handover_off_or_back_to_legacy() {
     assert_eq!(st, 200, "legacy: moved at once: {v}");
     assert_eq!(app_row(&f.app).owner_workspace, f.b);
 }
+
+// ── S2: A offers, B accepts, the owner's card ────────────────────────
+
+pub(super) fn switch1(ws: &str, on: bool) {
+    k2_core::workspace::settings::set_agents_can_manage_skin(&ws_path(ws), on).unwrap();
+}
+
+pub(super) fn offer(f: &Fx) -> (u16, J) {
+    call("/cli/app/handover", &agent(&f.a), json!({ "app": f.app, "to": handle_of(&f.b), "brief": "# Jobs\nthe cron runs at 3am" }))
+}
+
+/// T2.1: A offers (`offered`); B accepts and the card is held with its
+/// lines; the owner approves.
+#[test]
+fn a_offers_b_accepts_and_the_owner_approves() {
+    let f = fx("t21");
+    // Without switch 1 an agent can't offer.
+    let (st, v) = offer(&f);
+    assert_eq!((st, code(&v)), (403, "apps_manage_off"), "{v}");
+    switch1(&f.a, true);
+    let (st, v) = offer(&f);
+    assert_eq!((st, v["handover"]["state"].as_str()), (202, Some("offered")), "{v}");
+    let hid = v["handover"]["id"].as_str().unwrap().to_string();
+    assert!(v["request"].is_null(), "no card before B accepts: {v}");
+    assert_eq!(notes_for(&f.b).len(), 1, "B hears about the offer");
+    assert!(notes_for(&f.b)[0].contains("the cron runs at 3am"), "the brief rides along");
+    // Only B (or the owner) accepts; a third agent sees nothing.
+    let (st, v) = call("/cli/app/handover/accept", &agent(&f.c), json!({ "app": f.app }));
+    assert_eq!((st, code(&v)), (404, "app_not_found"), "{v}");
+    let (st, v) = call("/cli/app/handover/accept", &agent(&f.a), json!({ "app": f.app }));
+    assert_eq!((st, code(&v)), (403, "owner_only"), "A can't accept its own offer: {v}");
+    let (st, v) = call("/cli/app/handover/accept", &agent(&f.b), json!({ "app": f.app }));
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    assert_eq!(handover_row(&hid).state, "held");
+    let lines = v["request"]["diff"]["lines"].as_array().unwrap();
+    assert!(lines.iter().any(|l| l.as_str().unwrap().starts_with("Hand over")), "{v}");
+    // The brief: A and B read it; a third agent doesn't.
+    let (st, v2) = get("/cli/app/handover/brief", &agent(&f.b), &[("app", &f.app)]);
+    assert_eq!((st, v2["brief"].as_str()), (200, Some("# Jobs\nthe cron runs at 3am")), "{v2}");
+    let (st, _) = get("/cli/app/handover/brief", &agent(&f.c), &[("app", &f.app)]);
+    assert_eq!(st, 404);
+    let (st, s) = get("/cli/app/handover/status", &agent(&f.b), &[]);
+    assert_eq!((st, s["handovers"].as_array().unwrap().len()), (200, 1), "{s}");
+    let (st, s) = get("/cli/app/handover/status", &agent(&f.c), &[]);
+    assert_eq!((st, s["handovers"].as_array().unwrap().len()), (200, 0), "{s}");
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
+    assert_eq!(app_row(&f.app).owner_workspace, f.b);
+    assert_eq!(handover_row(&hid).state, "applied");
+}
+
+/// T2.2: neither A's nor B's passport approves its card.
+#[test]
+fn neither_agent_approves_the_card() {
+    let f = fx("t22");
+    switch1(&f.a, true);
+    offer(&f);
+    let (_, v) = call("/cli/app/handover/accept", &agent(&f.b), json!({ "app": f.app }));
+    let req = req_id(&v);
+    for who in [agent(&f.a), agent(&f.b)] {
+        let tok = super::egress_routes::test_seams::vault_handle().confirm.mint(super::approvals::CONFIRM_ACTION, Some(&req), "owner", "local-auth");
+        let (st, v) = call("/cli/app/approve", &who, json!({ "request": req, "confirmToken": tok }));
+        assert_eq!((st, code(&v)), (403, "owner_only"), "{who:?}: {v}");
+    }
+    assert_eq!(app_row(&f.app).owner_workspace, f.a);
+}
+
+/// T2.3: B reads the App only while it accepted; after a cancel, no more.
+#[test]
+fn b_shadows_only_while_it_accepted() {
+    let f = fx("t23");
+    switch1(&f.a, true);
+    let (st, _) = get("/cli/app/inspect", &agent(&f.b), &[("app", &f.app)]);
+    assert_eq!(st, 404, "before the offer");
+    offer(&f);
+    let (st, _) = get("/cli/app/inspect", &agent(&f.b), &[("app", &f.app)]);
+    assert_eq!(st, 404, "offered, not accepted yet");
+    call("/cli/app/handover/accept", &agent(&f.b), json!({ "app": f.app }));
+    for path in ["/cli/app/inspect", "/cli/app/history", "/cli/app/logs"] {
+        let (st, v) = get(path, &agent(&f.b), &[("app", &f.app)]);
+        assert_eq!(st, 200, "{path}: B shadows: {v}");
+    }
+    // Reads only: B changes nothing.
+    switch1(&f.b, true);
+    let (st, v) = call("/cli/app/stop", &agent(&f.b), json!({ "app": f.app }));
+    assert_eq!((st, code(&v)), (404, "app_not_found"), "{v}");
+    // A cancels: B no longer sees it, and the card is withdrawn.
+    let (st, v) = call("/cli/app/handover/cancel", &agent(&f.a), json!({ "app": f.app }));
+    assert_eq!((st, v["handover"]["state"].as_str()), (200, Some("cancelled")), "{v}");
+    let (st, _) = get("/cli/app/inspect", &agent(&f.b), &[("app", &f.app)]);
+    assert_eq!(st, 404, "after the cancel");
+    let (st, a) = get("/cli/app/approvals", &Who::Owner, &[("state", "pending")]);
+    assert_eq!(st, 200);
+    assert!(a["requests"].as_array().unwrap().iter().all(|r| r["appLabel"] != f.app.as_str()), "the card went with it: {a}");
+}
+
+/// T2.4: one open handover per App; B can decline.
+#[test]
+fn one_open_handover_per_app_and_b_may_decline() {
+    let f = fx("t24");
+    switch1(&f.a, true);
+    let (st, _) = offer(&f);
+    assert_eq!(st, 202);
+    let (st, v) = call("/cli/app/handover", &agent(&f.a), json!({ "app": f.app, "to": f.c }));
+    assert_eq!((st, code(&v)), (409, "handover_open"), "{v}");
+    let (st, v) = ask(&f);
+    assert_eq!((st, code(&v)), (409, "handover_open"), "the owner too: an offer is open: {v}");
+    let (st, v) = call("/cli/app/handover/decline", &agent(&f.b), json!({ "app": f.app, "reason": "too busy" }));
+    assert_eq!((st, v["handover"]["state"].as_str()), (200, Some("declined")), "{v}");
+    assert!(notes_for(&f.a).iter().any(|n| n.contains("too busy")), "A hears why");
+    let (st, v) = call("/cli/app/handover", &agent(&f.a), json!({ "app": f.app, "to": f.c }));
+    assert_eq!(st, 202, "a new offer may start: {v}");
+}
+
+/// T2.5: a guest added after B accepted → the card is stale at approval.
+#[test]
+fn an_offer_whose_plan_changed_is_stale_at_approval() {
+    let f = fx("t25");
+    switch1(&f.a, true);
+    offer(&f);
+    let (_, v) = call("/cli/app/handover/accept", &agent(&f.b), json!({ "app": f.app }));
+    guest("late-t25", &f.svc, &[&f.a]);
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!((st, v["error"]["code"].as_str()), (200, Some("handover_stale")), "{v}");
+    assert_eq!(app_row(&f.app).owner_workspace, f.a);
+}

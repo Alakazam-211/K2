@@ -64,8 +64,26 @@ use serde_json::{json, Value as J};
 use super::handover_plan::{self as hp, Options, Plan};
 use super::routes::{actor, app_for, db_err, json_body, need_credential, no, s, ws_by_id, ws_by_token, ws_handle, Refusal, Who, Ws, R};
 
-pub const ROUTES: &[&str] = &["/cli/app/handover/plan"];
-pub const POST_ROUTES: &[&str] = &[];
+pub const ROUTES: &[&str] = &[
+    "/cli/app/handover/plan",
+    "/cli/app/handover/status",
+    "/cli/app/handover/brief",
+    "/cli/app/handover/accept",
+    "/cli/app/handover/decline",
+    "/cli/app/handover/cancel",
+];
+pub const POST_ROUTES: &[&str] = &["/cli/app/handover/accept", "/cli/app/handover/decline", "/cli/app/handover/cancel"];
+
+/// Reads B may make on an App it accepted (shadowing, §4.9).
+pub const SHADOW_READS: &[&str] = &[
+    "/cli/app/inspect",
+    "/cli/app/logs",
+    "/cli/app/history",
+    "/cli/app/errors",
+    "/cli/app/link",
+    "/cli/app/deployment",
+    "/cli/app/handover/plan",
+];
 
 /// The `route` the handover card's held request carries (never an HTTP
 /// route: the approval runs [`apply`]).
@@ -179,7 +197,7 @@ fn may_read(who: &Who) -> R<()> {
     }
 }
 
-pub(crate) fn handle(path: &str, who: &Who, _body: &[u8], params: &HashMap<String, String>) -> R<J> {
+pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> R<J> {
     match mode() {
         Mode::Legacy => return Err(no("not_found", 404, "no such App route (K2_APP_HANDOVER=legacy)")),
         Mode::Off => return Err(off_refusal()),
@@ -187,6 +205,11 @@ pub(crate) fn handle(path: &str, who: &Who, _body: &[u8], params: &HashMap<Strin
     }
     match path {
         "/cli/app/handover/plan" => plan_route(who, params),
+        "/cli/app/handover/status" => status_route(who, params),
+        "/cli/app/handover/brief" => brief_route(who, params),
+        "/cli/app/handover/accept" => accept_route(who, body),
+        "/cli/app/handover/decline" => decline_route(who, body),
+        "/cli/app/handover/cancel" => cancel_route(who, body),
         _ => Err(no("not_found", 404, "no such App route")),
     }
 }
@@ -253,9 +276,14 @@ fn brief_of(v: &J) -> R<Option<String>> {
 }
 
 /// POST `/cli/app/handover` / `/cli/app/unpark`: the owner asks for the
-/// card (or, with `dryRun`, sees the plan).
+/// card; the App's own agent (or a shell tab of its workspace) offers it
+/// to B (S2). With `dryRun`, the plan.
 pub(crate) fn request_route(who: &Who, body: &[u8], unpark: bool) -> R<J> {
-    super::ownership::need_owner(who, if unpark { "Unparking an App" } else { "Handing an App over" })?;
+    need_credential(who)?;
+    let owner = super::ownership::owner(who);
+    if unpark || who.passport().is_none() {
+        super::ownership::need_owner(who, if unpark { "Unparking an App" } else { "Handing an App over" })?;
+    }
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     if unpark && app.state != store::STATE_PARKED {
@@ -275,7 +303,10 @@ pub(crate) fn request_route(who: &Who, body: &[u8], unpark: bool) -> R<J> {
     if super::routes::b(&v, "dryRun") {
         return Ok(plan_answer(&hp::compute(&app, &to, &opts, brief.as_deref())?));
     }
-    file_card(who, &app, &to, &opts, brief.as_deref(), s(&v, "reason"), &actor(who))
+    if owner {
+        return file_card(who, &app, &to, &opts, brief.as_deref(), s(&v, "reason"), &actor(who));
+    }
+    offer(who, &app, &to, &opts, brief.as_deref(), s(&v, "reason"), false)
 }
 
 fn hov_db<T>(f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> R<T> {
@@ -301,14 +332,10 @@ fn blocked(p: &Plan) -> Refusal {
     r
 }
 
-/// File the owner's card for `app` → `to`: the plan, the row (`held`),
-/// the held request. Idempotent: the same App and B with a card already
-/// waiting answers that card.
-pub(crate) fn file_card(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief: Option<&str>, reason: Option<&str>, started_by: &str) -> R<J> {
-    let p = hp::compute(app, to, opts, brief)?;
-    if !p.blockers.is_empty() {
-        return Err(blocked(&p));
-    }
+/// Insert a new handover row. `Err` answers an App that already has an
+/// open one: the same waiting card (owner, same B), or `409 handover_open`.
+#[allow(clippy::too_many_arguments)]
+fn insert_row(app: &AppRow, to: &Ws, state: &str, started_by: &str, p: &Plan, opts: &Options, brief: Option<&str>, reason: Option<&str>) -> Result<Handover, R<J>> {
     let hash = p.hash();
     let plan_json = p.json(true);
     let options = serde_json::to_value(opts).unwrap_or(J::Null);
@@ -317,7 +344,7 @@ pub(crate) fn file_card(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief:
         service_id: &app.service_id,
         from: &app.owner_workspace,
         to: &to.id,
-        state: hs::HELD,
+        state,
         started_by,
         plan: &plan_json,
         plan_hash: &hash,
@@ -325,29 +352,41 @@ pub(crate) fn file_card(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief:
         brief,
         reason,
     };
-    let row = {
-        let h = k2_core::db::shared();
-        let conn = h.lock();
-        match hs::insert(&conn, &n, deploy::now()) {
-            Ok(r) => r,
-            Err(hs::InsertError::Conflict) => {
-                let open = hs::open_for_app(&conn, &app.app_id).map_err(db_err)?;
-                drop(conn);
-                return match open {
-                    Some(o) if o.state == hs::HELD && o.to_workspace == to.id => existing_card(&o),
-                    Some(o) => {
-                        let mut r = no(OPEN, 409, format!("{} already has an open handover ({}, {} to {}): cancel it first", app.app_id, o.id, o.state, ws_handle(&o.to_workspace)));
-                        r.extra = Some(json!({ "handover": row_json(&o) }));
-                        Err(r)
-                    }
-                    None => Err(no(OPEN, 409, "another handover of this App just started: try again")),
-                };
-            }
-            Err(hs::InsertError::Db(e)) => return Err(db_err(e)),
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    match hs::insert(&conn, &n, deploy::now()) {
+        Ok(r) => Ok(r),
+        Err(hs::InsertError::Conflict) => {
+            let open = match hs::open_for_app(&conn, &app.app_id) {
+                Ok(o) => o,
+                Err(e) => return Err(Err(db_err(e))),
+            };
+            drop(conn);
+            Err(match open {
+                Some(o) if o.state == hs::HELD && o.to_workspace == to.id && state == hs::HELD => existing_card(&o),
+                Some(o) => {
+                    let mut r = no(
+                        OPEN,
+                        409,
+                        format!("{} already has an open handover ({}, {} to {}): cancel it first (k2 app handover cancel {})", app.app_id, o.id, o.state, ws_handle(&o.to_workspace), app.app_id),
+                    );
+                    r.extra = Some(json!({ "handover": row_json(&o) }));
+                    Err(r)
+                }
+                None => Err(no(OPEN, 409, "another handover of this App just started: try again")),
+            })
         }
-    };
-    let lines = p.lines();
-    let summary = format!("hand over {} from {} to {}", app.app_id, from_label(&p.room_from), ws_handle(&to.id));
+        Err(hs::InsertError::Db(e)) => Err(Err(db_err(e))),
+    }
+}
+
+/// File the card (the held request) for `row` with plan `p`. `who` is the
+/// one asking (the owner, or B accepting an offer); the card is A's
+/// workspace's. The row becomes `held`.
+fn file_request(who: &Who, row: &Handover, app: &AppRow, p: &Plan) -> R<J> {
+    let hash = p.hash();
+    let plan_json = p.json(true);
+    let summary = format!("hand over {} from {} to {}", app.app_id, from_label(&p.room_from), ws_handle(&p.to.id));
     let req = super::approvals::file(&super::approvals::Filing {
         who,
         kind: reqs::KIND_MANAGE,
@@ -356,21 +395,24 @@ pub(crate) fn file_card(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief:
         workspace: if app.owner_workspace.is_empty() { &p.room_from } else { &app.owner_workspace },
         body: json!({
             "route": APPLY_ROUTE,
-            "body": { "handover": row.id, "app": app.app_id, "serviceId": app.service_id, "from": app.owner_workspace, "to": to.id, "planHash": hash },
+            "body": { "handover": row.id, "app": app.app_id, "serviceId": app.service_id, "from": app.owner_workspace, "to": p.to.id, "planHash": hash },
         }),
-        diff: json!({ "lines": lines, "route": APPLY_ROUTE, "handover": row.id }),
+        diff: json!({ "lines": p.lines(), "route": APPLY_ROUTE, "handover": row.id }),
         summary,
         reasons: vec!["an App handover moves guests, secrets and keys between agents: the owner approves it in person".into()],
-        reason,
-    });
-    let req = match req {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = hov_db(|c| hs::transition(c, &row.id, &[hs::HELD], hs::ABORTED, deploy::now()));
-            return Err(e);
+        reason: row.reason.as_deref(),
+    })?;
+    let ok = hov_db(|c| {
+        if row.state == hs::HELD {
+            hs::set_request_id(c, &row.id, &req.id, deploy::now()).map(|_| true)
+        } else {
+            hs::set_held(c, &row.id, &req.id, &plan_json, &hash, deploy::now())
         }
-    };
-    hov_db(|c| hs::set_request_id(c, &row.id, &req.id, deploy::now()))?;
+    });
+    if !matches!(ok, Ok(true)) {
+        let _ = hov_db(|c| Ok(reqs::decide(c, &req.id, reqs::STATUS_WITHDRAWN, "system:handover", None, Some("handover_changed"), deploy::now())));
+        return Err(no(NOT_HELD, 409, format!("handover {} changed state while its card was filed: ask again", row.id)));
+    }
     let row = hov_db(|c| hs::get(c, &row.id))?.ok_or_else(|| no("db_error", 500, "the handover row vanished"))?;
     let mut out = super::approvals::held_answer(&req);
     out["handover"] = row_json(&row);
@@ -381,6 +423,243 @@ pub(crate) fn file_card(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief:
         req.id
     ));
     Ok(out)
+}
+
+/// File the owner's card for `app` → `to`: the plan, the row (`held`),
+/// the held request. Idempotent: the same App and B with a card already
+/// waiting answers that card.
+pub(crate) fn file_card(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief: Option<&str>, reason: Option<&str>, started_by: &str) -> R<J> {
+    let p = hp::compute(app, to, opts, brief)?;
+    if !p.blockers.is_empty() {
+        return Err(blocked(&p));
+    }
+    let row = match insert_row(app, to, hs::HELD, started_by, &p, opts, brief, reason) {
+        Ok(r) => r,
+        Err(answer) => return answer,
+    };
+    match file_request(who, &row, app, &p) {
+        Ok(out) => Ok(out),
+        Err(e) => {
+            let _ = hov_db(|c| hs::transition(c, &row.id, &[hs::HELD], hs::ABORTED, deploy::now()));
+            Err(e)
+        }
+    }
+}
+
+// ── S2: an agent offers its App; B accepts; then the card ───────────
+
+/// A's offer of `app` to `to` (A's passport, switch 1). `auto_accept`: B
+/// was just hired for it (`hire --take-app`, Q1), so the card is filed at
+/// once.
+pub(crate) fn offer(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief: Option<&str>, reason: Option<&str>, auto_accept: bool) -> R<J> {
+    super::access::need_build(who)?;
+    let p = hp::compute(app, to, opts, brief)?;
+    if !p.blockers.is_empty() {
+        return Err(blocked(&p));
+    }
+    let started_by = if auto_accept { format!("hire:{}", ws_handle(&app.owner_workspace)) } else { actor(who) };
+    let row = match insert_row(app, to, hs::OFFERED, &started_by, &p, opts, brief, reason) {
+        Ok(r) => r,
+        Err(answer) => return answer,
+    };
+    let (a, b) = (ws_handle(&app.owner_workspace), ws_handle(&to.id));
+    if auto_accept {
+        hov_db(|c| hs::set_accepted(c, &row.id, &format!("hire:{b}"), deploy::now()))?;
+        let row = hov_db(|c| hs::get(c, &row.id))?.ok_or_else(|| no("db_error", 500, "the handover row vanished"))?;
+        let out = file_request(who, &row, app, &p);
+        if out.is_err() {
+            let _ = hov_db(|c| hs::transition(c, &row.id, &[hs::ACCEPTED], hs::ABORTED, deploy::now()));
+        }
+        super::ownership::note(&app.owner_workspace, &format!("You offered App {} to {b}", app.app_id), &format!(
+            "{b} was hired to take {} over, so the offer is accepted; your owner approves the handover card (k2 app approvals).",
+            app.app_id
+        ));
+        return out;
+    }
+    super::ownership::note(
+        &app.owner_workspace,
+        &format!("You offered App {} to {b}", app.app_id),
+        &format!(
+            "{b} must accept (k2 app handover accept {app_id}), then your owner approves one card that lists what moves. You maintain {app_id} until then. \
+             Cancel: k2 app handover cancel {app_id}.{}",
+            if brief.is_none() { " Give them a brief: k2 app handover <app> --to <agent> --brief FILE (your notes for the next agent)." } else { "" },
+            app_id = app.app_id
+        ),
+    );
+    let mut lines = vec![format!(
+        "{a} offers you its App {app_id}. Accept: k2 app handover accept {app_id}. Decline: k2 app handover decline {app_id} --reason \"…\". \
+         What would move: k2 app handover status {app_id}.",
+        app_id = app.app_id
+    )];
+    if let Some(bf) = brief {
+        lines.push(format!("{a}'s brief (their words):\n\n> {}", bf.replace('\n', "\n> ")));
+    }
+    lines.push(format!("Once you accept, you can look at it (k2 app inspect {0}, k2 app logs {0}) until the owner answers the card.", app.app_id));
+    super::ownership::note(&to.id, &format!("{a} offers you App {}", app.app_id), &lines.join("\n\n"));
+    Ok(json!({
+        "ok": true,
+        "status": "held",
+        "handover": row_json(&row),
+        "plan": p.json(true),
+        "app": app.app_id,
+        "hint": format!(
+            "offered to {b}: {b} accepts (k2 app handover accept {0}), then the owner approves the card. Nothing moves until then.{1}",
+            app.app_id,
+            if brief.is_none() { " Add a brief for the next agent with --brief FILE." } else { "" }
+        ),
+    }))
+}
+
+/// The open handover a call names (`handover` id, or `app`) that `who`
+/// is on: A (the giver), B (the taker), or a person.
+fn named_open(who: &Who, v: &J) -> R<Handover> {
+    let row = if let Some(id) = s(v, "handover") {
+        hov_db(|c| hs::get(c, id))?
+    } else {
+        let app = s(v, "app").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the App (or the handover id)"))?.to_ascii_lowercase();
+        let id = app.rsplit('/').next().unwrap_or(&app).to_string();
+        hov_db(|c| hs::open_for_app(c, &id))?
+    };
+    let row = row.ok_or_else(|| no(codes::APP_NOT_FOUND, 404, "no open handover by that name (k2 app handover status)"))?;
+    if let Some((ws, _)) = who.passport() {
+        if ws != row.from_workspace && ws != row.to_workspace {
+            return Err(no(codes::APP_NOT_FOUND, 404, "no open handover by that name (k2 app handover status)"));
+        }
+    }
+    Ok(row)
+}
+
+fn is_person(who: &Who) -> bool {
+    matches!(who, Who::Owner | Who::Login { role: Role::Owner | Role::Admin, .. })
+}
+
+/// POST `/cli/app/handover/accept {app|handover}`: B (or the owner) agrees;
+/// the owner's card is filed.
+fn accept_route(who: &Who, body: &[u8]) -> R<J> {
+    need_credential(who)?;
+    let v = json_body(body)?;
+    let row = named_open(who, &v)?;
+    let mine = who.passport().is_some_and(|(ws, _)| ws == row.to_workspace);
+    if !mine && !super::ownership::owner(who) {
+        return Err(no(codes::OWNER_ONLY, 403, "only the agent the App is offered to, or the owner, accepts"));
+    }
+    if row.state != hs::OFFERED && row.state != hs::ACCEPTED {
+        return Err(no(NOT_HELD, 409, format!("handover {} is {}: nothing to accept", row.id, row.state)));
+    }
+    let app = hov_db(|c| store::get_app(c, &row.app_id))?.ok_or_else(|| no(codes::APP_NOT_FOUND, 409, "the App is gone"))?;
+    let to = ws_by_id(&row.to_workspace).ok_or_else(|| no(codes::APP_NOT_FOUND, 409, "the workspace that takes it is gone"))?;
+    if app.owner_workspace != row.from_workspace {
+        let _ = hov_db(|c| hs::transition(c, &row.id, &[hs::OFFERED, hs::ACCEPTED], hs::STALE, deploy::now()));
+        return Err(no(STALE, 409, "the App changed hands since the offer"));
+    }
+    if row.state == hs::OFFERED {
+        hov_db(|c| hs::set_accepted(c, &row.id, &actor(who), deploy::now()))?;
+    }
+    let row = hov_db(|c| hs::get(c, &row.id))?.ok_or_else(|| no("db_error", 500, "the handover row vanished"))?;
+    let opts: Options = serde_json::from_value(row.options.clone()).unwrap_or_default();
+    let p = hp::compute(&app, &to, &opts, row.brief.as_deref())?;
+    if !p.blockers.is_empty() {
+        // Accepted, but the card waits until what blocks it is gone (B can
+        // accept again to file it).
+        return Err(blocked(&p));
+    }
+    let out = file_request(who, &row, &app, &p)?;
+    super::ownership::note(
+        &row.from_workspace,
+        &format!("{} accepted App {}", ws_handle(&row.to_workspace), row.app_id),
+        &format!("{} accepted your offer of {}; the owner's card is filed. You maintain it until the owner approves.", ws_handle(&row.to_workspace), row.app_id),
+    );
+    Ok(out)
+}
+
+/// POST `/cli/app/handover/decline {app|handover, reason?}`: B (or the
+/// owner) says no.
+fn decline_route(who: &Who, body: &[u8]) -> R<J> {
+    need_credential(who)?;
+    let v = json_body(body)?;
+    let row = named_open(who, &v)?;
+    let mine = who.passport().is_some_and(|(ws, _)| ws == row.to_workspace);
+    if !mine && !super::ownership::owner(who) {
+        return Err(no(codes::OWNER_ONLY, 403, "only the agent the App is offered to, or the owner, declines"));
+    }
+    end(&row, hs::DECLINED, who, s(&v, "reason"))
+}
+
+/// POST `/cli/app/handover/cancel {app|handover}`: A, the owner or an
+/// Admin login, before it applies.
+fn cancel_route(who: &Who, body: &[u8]) -> R<J> {
+    need_credential(who)?;
+    let v = json_body(body)?;
+    let row = named_open(who, &v)?;
+    let giver = who.passport().is_some_and(|(ws, _)| ws == row.from_workspace);
+    if !giver && !is_person(who) {
+        return Err(no(codes::OWNER_ONLY, 403, "only the giving agent, the owner or an admin cancels a handover"));
+    }
+    end(&row, hs::CANCELLED, who, s(&v, "reason"))
+}
+
+/// Close an open handover (and its card) without applying.
+fn end(row: &Handover, to: &str, who: &Who, reason: Option<&str>) -> R<J> {
+    if row.state == hs::APPLYING {
+        return Err(no(IN_PROGRESS, 409, "the handover is applying right now"));
+    }
+    if !hov_db(|c| hs::transition(c, &row.id, &[hs::OFFERED, hs::ACCEPTED, hs::HELD], to, deploy::now()))? {
+        return Err(no(NOT_HELD, 409, format!("handover {} is no longer open", row.id)));
+    }
+    if let Some(rid) = row.request_id.as_deref() {
+        let _ = hov_db(|c| Ok(reqs::decide(c, rid, reqs::STATUS_WITHDRAWN, &actor(who), None, Some(to), deploy::now())));
+    }
+    let why = reason.map(|r| format!(" ({})", r.chars().take(300).collect::<String>())).unwrap_or_default();
+    let by = actor(who);
+    if !row.from_workspace.is_empty() {
+        super::ownership::note(&row.from_workspace, &format!("Handover of {} {to}", row.app_id), &format!("{by} {to} the handover of {} to {}{why}. You still maintain it.", row.app_id, ws_handle(&row.to_workspace)));
+    }
+    super::ownership::note(&row.to_workspace, &format!("Handover of {} {to}", row.app_id), &format!("{by} {to} the handover of {} to you{why}.", row.app_id));
+    let row = hov_db(|c| hs::get(c, &row.id))?.ok_or_else(|| no("db_error", 500, "the handover row vanished"))?;
+    Ok(json!({ "ok": true, "handover": row_json(&row) }))
+}
+
+/// GET `/cli/app/handover/status?app=`: open and recent handovers (a
+/// passport sees those it gives or takes; a person sees all).
+fn status_route(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    may_read(who)?;
+    let ws = who.passport().map(|(w, _)| w.to_string());
+    let app = param(params, "app").map(|a| a.to_ascii_lowercase());
+    let rows = hov_db(|c| hs::list(c, ws.as_deref(), app.as_deref(), 50))?;
+    let now = deploy::now();
+    Ok(json!({
+        "ok": true,
+        "handovers": rows.iter().map(|r| {
+            let mut v = row_json(r);
+            v["inWindow"] = json!(r.in_window(now));
+            v
+        }).collect::<Vec<_>>(),
+    }))
+}
+
+/// GET `/cli/app/handover/brief?app=` (or `handover=`): A's notes for B.
+/// A and B while the handover is open or in its window; a person always.
+fn brief_route(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    may_read(who)?;
+    let row = match (param(params, "handover"), param(params, "app")) {
+        (Some(id), _) => hov_db(|c| hs::get(c, id))?,
+        (None, Some(app)) => hov_db(|c| hs::latest_for_app(c, &app.to_ascii_lowercase()))?,
+        _ => return Err(no(codes::BAD_REQUEST, 400, "name the App (or the handover id)")),
+    }
+    .ok_or_else(|| no(codes::APP_NOT_FOUND, 404, "no handover by that name"))?;
+    if let Some((ws, _)) = who.passport() {
+        let party = ws == row.from_workspace || ws == row.to_workspace;
+        if !party || !(row.is_open() || row.in_window(deploy::now())) {
+            return Err(no(codes::APP_NOT_FOUND, 404, "no handover by that name"));
+        }
+    }
+    Ok(json!({ "ok": true, "handover": row.id, "app": row.app_id, "from": ws_handle(&row.from_workspace), "to": ws_handle(&row.to_workspace), "brief": row.brief }))
+}
+
+/// B shadows the App it accepted (§4.9): reads only, until the card is
+/// answered. `true` when `ws` has an accepted (or held) handover of `app`.
+pub(crate) fn shadows(ws: &str, app_id: &str) -> bool {
+    hov_db(|c| hs::open_for_app(c, app_id)).ok().flatten().is_some_and(|h| h.to_workspace == ws && (h.state == hs::ACCEPTED || h.state == hs::HELD))
 }
 
 fn existing_card(o: &Handover) -> R<J> {

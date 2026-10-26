@@ -288,6 +288,13 @@ pub const ROUTES: &[Route] = &[
     // 0.46.5 (prd-app-handoff-v1): what a handover would move (handler:
     // the App's own agent, the owner, an Owner/Admin login; never a Member).
     get("/cli/app/handover/plan", Admin),
+    // S2: B accepts or declines an offer; A, the owner or an Admin cancels;
+    // status and the brief (handler: passports their own handovers).
+    post("/cli/app/handover/accept", Member),
+    get("/cli/app/handover/brief", Member),
+    post("/cli/app/handover/cancel", Member),
+    post("/cli/app/handover/decline", Member),
+    get("/cli/app/handover/status", Member),
     get("/cli/app/history", Member),
     get("/cli/app/inspect", Member),
     post("/cli/app/install", Admin),

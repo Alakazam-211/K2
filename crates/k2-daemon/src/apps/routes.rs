@@ -421,6 +421,9 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
     if let Some(held) = super::approvals::hold_without_switch(path, &who, body) {
         return respond(held);
     }
+    // 0.46.5 (handover §4.9): B reads an App it accepted until the card
+    // is answered.
+    let _shadow = (!is_post_route(path) && super::handover::SHADOW_READS.contains(&path)).then(ShadowRead::enter);
     let r = match path {
         // Box prep (S10): the doctor for anyone with a credential, prepare
         // for the owner only.
@@ -595,6 +598,27 @@ fn validate(who: &Who, body: &[u8]) -> R<J> {
 
 // ── S7: install, deploy, rollback, stop/start/restart, config ────────
 
+thread_local! {
+    static SHADOW_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While alive, [`app_for`] lets an agent read an App it accepted in a
+/// handover (§4.9 shadowing). Reads only.
+pub(crate) struct ShadowRead;
+
+impl ShadowRead {
+    pub(crate) fn enter() -> ShadowRead {
+        SHADOW_READ.with(|c| c.set(true));
+        ShadowRead
+    }
+}
+
+impl Drop for ShadowRead {
+    fn drop(&mut self) {
+        SHADOW_READ.with(|c| c.set(false));
+    }
+}
+
 /// The App a call names. A passport sees only its own workspace's Apps (a
 /// foreign App is `app_not_found`, never "forbidden": no existence leak).
 pub(crate) fn app_for(who: &Who, app_id: Option<&str>) -> R<AppRow> {
@@ -615,7 +639,7 @@ pub(crate) fn app_for(who: &Who, app_id: Option<&str>) -> R<AppRow> {
         .ok_or_else(|| no(codes::APP_NOT_FOUND, 404, format!("no App '{raw}' on this box (k2 app list)")))?;
     let id = raw;
     if let Some(ws) = agent_ws(who) {
-        if row.owner_workspace != ws {
+        if row.owner_workspace != ws && !(SHADOW_READ.with(|c| c.get()) && super::handover::shadows(ws, &row.app_id)) {
             return Err(no(codes::APP_NOT_FOUND, 404, format!("no App '{id}' in your workspace (k2 app list)")));
         }
     }

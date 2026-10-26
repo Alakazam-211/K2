@@ -18,8 +18,13 @@
 //!   (`k2_core::app_surface`, the browser helper's list minus
 //!   helper-only rows; sockets need their parameter; else 404
 //!   `not_on_link`);
-//! - JSON bodies on writes (415 `json_required`);
-//! - **this link's App pass** (`k2skn_`, header or `?token=`), or **a guest
+//! - write bodies the route's handler reads: JSON everywhere, a form
+//!   (`application/x-www-form-urlencoded`) where the handler parses one
+//!   (`k2_core::app_body`, 0.46.4); else 415 `json_required`, checked
+//!   after the pass so the refusal is audited as the caller;
+//! - **this link's App pass** (`k2skn_`, header or `?token=`; the query
+//!   form is attributed the same and named by `k2 app warnings`,
+//!   [`query_pass_use`]), or **a guest
 //!   session of this same App** (AR50: the guest's rooms and caps, audited
 //!   as `guest:<principal>`): a pass for another link or App, another App's
 //!   session, the box login, a remote pass or a platform token is
@@ -753,6 +758,64 @@ pub fn gate(head: &str, method: &str, path_and_query: &str) -> Gate {
     g
 }
 
+/// A write whose body the route's handler can't read: JSON on every write,
+/// a form too where the handler parses one (`k2_core::app_body`, field
+/// report 0.46.4). `Some(kind)` is a 415 `json_required`.
+fn body_refusal(method: &str, path: &str, head: &str, bytes_in: u64) -> Option<k2_core::app_body::BodyKind> {
+    if method != "POST" || bytes_in == 0 {
+        return None;
+    }
+    let kind = k2_core::app_body::body_kind(header(head, "content-type"));
+    (!k2_core::app_body::admits(path, kind)).then_some(kind)
+}
+
+// ── a pass in the query string (deprecated on the link) ──────────────
+
+/// An App's calls on its link that carried the credential in `?token=`
+/// instead of `Authorization: Bearer` (since the daemon started). Still
+/// admitted, and attributed exactly like a Bearer pass; `k2 app warnings`
+/// names it, because a pass in a URL ends up in the App's own access logs,
+/// HTTP-client traces and proxies. K2's own records never carry it: the
+/// audit stores the path without the query, and the App's refusal log
+/// line is redacted (`super::audit::log_safe`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryPassUse {
+    pub count: u64,
+    pub first_ms: i64,
+    pub last_ms: i64,
+    /// `METHOD /path` (never the query).
+    pub last_verb: String,
+    /// Who it was (`app`, `guest:<principal>`, `app-key`).
+    pub last_actor: String,
+}
+
+fn query_pass_uses() -> &'static Mutex<HashMap<String, QueryPassUse>> {
+    static Q: OnceLock<Mutex<HashMap<String, QueryPassUse>>> = OnceLock::new();
+    Q.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn note_query_pass(c: &LinkCtx, actor: &str, method: &str, path: &str) {
+    let now = chrono::Utc::now().timestamp_millis();
+    let Ok(mut m) = query_pass_uses().lock() else { return };
+    let e = m.entry(c.app_id.clone()).or_insert_with(|| QueryPassUse {
+        count: 0,
+        first_ms: now,
+        last_ms: now,
+        last_verb: String::new(),
+        last_actor: String::new(),
+    });
+    e.count += 1;
+    e.last_ms = now;
+    e.last_verb = format!("{method} {path}");
+    e.last_actor = actor.to_string();
+}
+
+/// This App's `?token=` calls on its link since the daemon started.
+pub fn query_pass_use(app_id: &str) -> Option<QueryPassUse> {
+    query_pass_uses().lock().ok()?.get(app_id).cloned()
+}
+
 fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in: u64, seen: &mut Seen) -> Gate {
     let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
     match header(head, "host") {
@@ -782,13 +845,9 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
             &format!("{method} {path} isn't open to Apps (the App-facing routes are in k2 study app-api; GET /gw/me names this link)"),
         );
     }
-    if method == "POST" {
-        let has_body = header(head, "content-length").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) > 0;
-        let json_ct = header(head, "content-type").is_some_and(|v| v.to_ascii_lowercase().starts_with("application/json"));
-        if has_body && !json_ct {
-            return deny(Some(c), 415, "json_required", "writes on the gateway link send Content-Type: application/json");
-        }
-    }
+    // The body's encoding is checked once the caller is known (below), so a
+    // refused write is audited as the guest who sent it, not as `app`.
+    let body_refusal = body_refusal(method, path, head, bytes_in);
     // The door: a suspended App is refused before its pass is even looked
     // at (suspend also revoked every pass).
     if super::suspend::is_suspended(&c.app_id) {
@@ -809,14 +868,22 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
             Some(wait),
         );
     }
-    let presented = bearer(head).or_else(|| query_token(query));
+    let from_header = bearer(head);
+    let presented = from_header.or_else(|| query_token(query));
+    let in_query = from_header.is_none() && presented.is_some();
     if v1.is_some() {
         // Only the App key (`k2sk_`) opens its door; the handler answers
         // its uniform 404 to a key for another App.
         return match presented {
             Some(k) if k2_core::skin::is_api_key_prefix(k) => {
                 seen.actor = Some("app-key".into());
-                Gate::Continue
+                if in_query {
+                    note_query_pass(c, "app-key", method, path);
+                }
+                match body_refusal {
+                    Some(kind) => deny(Some(c), 415, "json_required", &k2_core::app_body::refusal_hint(path, kind)),
+                    None => Gate::Continue,
+                }
             }
             Some(_) => deny(Some(c), 401, "wrong_credential", "/v1/apps/<id>/… on the link takes the App key ($K2_SECRETS_DIR/K2_APP_KEY)"),
             None => deny(Some(c), 401, "pass_required", "send the App key ($K2_SECRETS_DIR/K2_APP_KEY) as Authorization: Bearer"),
@@ -851,6 +918,15 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
             }
         };
     };
+    // A pass in `?token=` is the same caller as in a Bearer header (the
+    // actor above came from the pass, wherever it was), but a pass in a URL
+    // lands in the App's own logs: still admitted, named by `k2 app warnings`.
+    if in_query {
+        note_query_pass(c, seen.actor.as_deref().unwrap_or("app"), method, path);
+    }
+    if let Some(kind) = body_refusal {
+        return deny(Some(c), 415, "json_required", &k2_core::app_body::refusal_hint(path, kind));
+    }
     if me {
         let body = json!({
             "ok": true,

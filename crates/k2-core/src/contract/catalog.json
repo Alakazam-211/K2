@@ -177,7 +177,7 @@
     {"code": "pass_invalid", "doc": "The pass is unknown, expired or revoked: read K2_PASS_FILE again (K2 rotates it), or log the guest in again."},
     {"code": "pass_wrong_link", "doc": "A pass for another App or link was presented on this App's gateway link."},
     {"code": "not_on_link", "doc": "The route isn't open to Apps (no app row in the catalog)."},
-    {"code": "json_required", "doc": "An App's write sends Content-Type: application/json."},
+    {"code": "json_required", "doc": "An App's write sends Content-Type: application/json (a form body only on the writes whose route reads one)."},
     {"code": "skin_room", "fields": ["room"], "doc": "The pass doesn't hold that room: the same answer as a room that doesn't exist."},
     {"code": "usage", "doc": "A missing or bad argument; the hint says which."},
     {"code": "not_found", "doc": "Nothing by that name in a room the pass holds (ticket, note, row, heartbeat, pinned Chat)."},

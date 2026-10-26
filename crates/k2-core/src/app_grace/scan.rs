@@ -57,11 +57,28 @@ pub struct K2PathRef {
     pub line: u32,
 }
 
+/// A file that sends form-encoded bodies (`application/x-www-form-urlencoded`)
+/// and names K2's App-facing writes or K2's address (0.46.4 field report:
+/// the App gateway reads a form only where the route's handler does,
+/// `crate::app_body`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormPost {
+    pub file: String,
+    /// The line naming the form content type.
+    pub line: u32,
+    /// The App-facing `POST /cli/…` routes the same file names (may be
+    /// empty when it builds the route at run time).
+    pub routes: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanReport {
     pub env_reads: Vec<EnvRead>,
     pub k2_paths: Vec<K2PathRef>,
+    /// Files that post form-encoded bodies to K2 (or seem to).
+    pub form_posts: Vec<FormPost>,
     pub files_scanned: usize,
     /// More files or findings than the caps; the lists are partial.
     pub truncated: bool,
@@ -198,6 +215,9 @@ fn scan_text(rep: &mut ScanReport, rel: &str, ext: &str, is_pkg: bool, text: &st
             push_path(rep, what, rel, line_of(text, at));
         }
     }
+    if !is_pkg {
+        form_posts(rep, rel, text);
+    }
     if is_pkg {
         // npm scripts: `$X` / `${X}` in the "scripts" values.
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
@@ -256,6 +276,36 @@ fn scan_text(rep: &mut ScanReport, rel: &str, ext: &str, is_pkg: bool, text: &st
         }
         _ => {}
     }
+}
+
+/// The form content type, as code spells it.
+const FORM_CT: &str = "x-www-form-urlencoded";
+/// Words that say a file talks to K2 when it names no `/cli/` route.
+const K2_ADDRESS: &[&str] = &["K2_GATEWAY_URL", "K2_PORT", "K2_PASS_FILE"];
+
+/// A file that names the form content type and K2 (a `/cli/…` write the
+/// App gateway serves, or K2's address): one [`FormPost`] for it. Static
+/// and coarse: it can't tell which request the form goes to, so it lists
+/// the K2 writes the same file names.
+fn form_posts(rep: &mut ScanReport, rel: &str, text: &str) {
+    let lower = text.to_ascii_lowercase();
+    let Some(at) = lower.find(FORM_CT) else { return };
+    let mut routes: Vec<String> = Vec::new();
+    for (i, _) in text.match_indices("/cli/") {
+        let route: String = text[i..].chars().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_')).collect();
+        let route = route.trim_end_matches('/').to_string();
+        if crate::app_surface::link_allows_http("POST", &route) && !routes.contains(&route) {
+            routes.push(route);
+        }
+    }
+    if routes.is_empty() && !K2_ADDRESS.iter().any(|w| text.contains(w)) {
+        return;
+    }
+    if rep.form_posts.len() >= MAX_FINDINGS {
+        rep.truncated = true;
+        return;
+    }
+    rep.form_posts.push(FormPost { file: rel.to_string(), line: line_of(text, at), routes });
 }
 
 fn call_literals(rep: &mut ScanReport, rel: &str, text: &str, calls: &[&str]) {
@@ -571,6 +621,37 @@ mod tests {
         let t = r.env_reads.iter().find(|e| e.name == "K2_OWNER_TOKEN").unwrap();
         assert_eq!((t.file.as_str(), t.line), ("server.mjs", 2));
         assert_eq!(r.env_reads.iter().find(|e| e.name == "EXTRA_FLAG").unwrap().file, "<cmd>");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn finds_form_encoded_posts_to_k2() {
+        let d = tmp();
+        std::fs::write(
+            d.join("bff.ts"),
+            "const K = process.env.K2_GATEWAY_URL;\n\
+             // send to the room\n\
+             await fetch(`${K}/cli/thread/post?token=${p}`, { method: 'POST',\n\
+               headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });\n\
+             await fetch(`${K}/cli/feedback/create`, { method: 'POST', body });\n\
+             await fetch(`${K}/cli/thread?addr=x`);\n",
+        )
+        .unwrap();
+        // A form to someone else (an OAuth token endpoint) is not K2's business.
+        std::fs::write(d.join("oauth.py"), "requests.post(url, headers={'Content-Type': 'application/x-www-form-urlencoded'})\n").unwrap();
+        // K2's address and a form, no route literal: still named.
+        std::fs::write(d.join("k2.py"), "BASE = os.environ['K2_PORT']\nH = {'content-type': 'Application/X-WWW-Form-Urlencoded'}\n").unwrap();
+        let r = scan_folder(&d, "node bff.js");
+        let mut got: Vec<(String, u32, Vec<String>)> = r.form_posts.iter().map(|f| (f.file.clone(), f.line, f.routes.clone())).collect();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("bff.ts".to_string(), 4, vec!["/cli/thread/post".to_string(), "/cli/feedback/create".to_string()]),
+                ("k2.py".to_string(), 2, vec![]),
+            ],
+            "GET routes are not writes; a form to a non-K2 URL isn't listed"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

@@ -10405,8 +10405,12 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        gives it, K2 files it touches
                                        (daemon.token, heartbeat.port), programs
                                        it finds through PATH, owner-token calls
-                                       K2 saw it make (Linux). No <app>: every
-                                       --cmd service you can see.
+                                       K2 saw it make (Linux), form-encoded
+                                       calls to K2 routes that read JSON only.
+                                       An App: writes its gateway link refused
+                                       for their body, a pass sent in ?token=
+                                       (deprecated). No <app>: every --cmd
+                                       service you can see.
   k2 app clean-mode <app> on|off [--restart]
                                        Run it the 0.46.4 way now: clean env,
                                        system PATH, its own HOME, owner-token
@@ -36563,9 +36567,14 @@ REFUSALS are JSON {error:{code,hint}} (some routes: {ok:false,error}).
   wrong_credential; 403 pass_wrong_link, skin_room (a room you don't
   hold: the same answer as one that doesn't exist), missing cap;
   404 not_on_link (not an App route); 415 json_required (writes send
-  Content-Type: application/json); 423 locked on login (Retry-After).
+  Content-Type: application/json; guests.login, thread.send,
+  thread.answerCard, thread.voidCard and resources.add/remove also
+  take application/x-www-form-urlencoded); 423 locked on login
+  (Retry-After).
 
-RULES: one guest's pass per guest request; never log a pass; files are
+RULES: one guest's pass per guest request; send it as Authorization:
+  Bearer (a pass in ?token= still works but lands in your own logs, and
+  k2 app warnings names it); never log a pass; files are
   room-relative (relPath, never a host path); Apps never send Thread
   cards to people. Types: sdk/server/src/generated/verbs.ts. Deploying
   and walls: k2 study app-deploys. Guests and roles: k2 study apps.

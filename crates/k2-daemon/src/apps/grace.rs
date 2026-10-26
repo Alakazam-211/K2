@@ -354,6 +354,92 @@ fn provided_names(t: &Target) -> BTreeSet<String> {
     out
 }
 
+/// How far back the gateway audit is read for form-body refusals.
+pub const FORM_REFUSALS_WINDOW_MS: i64 = 7 * 24 * 3600 * 1000;
+
+/// The static half of "form-encoded calls to K2" (0.46.4 field report): a
+/// file that sends `application/x-www-form-urlencoded` and names K2. A
+/// route whose handler reads a form works on the App gateway too; any
+/// other write is `415 json_required` there.
+fn form_post_warnings(name: &str, posts: &[scan::FormPost]) -> Vec<J> {
+    let mut out = Vec::new();
+    for f in posts {
+        let at = format!("{}:{}", f.file, f.line);
+        let (json_only, form_ok): (Vec<&String>, Vec<&String>) = f.routes.iter().partition(|r| !k2_core::app_body::accepts_form(r));
+        if !json_only.is_empty() {
+            let list = json_only.iter().map(|r| r.as_str()).collect::<Vec<_>>().join(", ");
+            out.push(warning(
+                "form_body_json_only",
+                "breaks",
+                format!("{at} sends a form-encoded body, and this file calls {list}, which reads JSON only: on the App gateway that is 415 json_required."),
+                format!("send those calls as JSON (Content-Type: application/json), or use the server SDK; k2 study app-api lists what {name} may call"),
+            ));
+        }
+        if !form_ok.is_empty() {
+            let list = form_ok.iter().map(|r| r.as_str()).collect::<Vec<_>>().join(", ");
+            out.push(warning(
+                "form_body",
+                "check",
+                format!("{at} sends a form-encoded body to {list}: these read a form on the App gateway too, so they keep working after a move."),
+                "nothing to change; JSON (what the server SDK sends) works everywhere".to_string(),
+            ));
+        }
+        if f.routes.is_empty() {
+            out.push(warning(
+                "form_body",
+                "check",
+                format!("{at} sends a form-encoded body and talks to K2, but names no K2 route here; if the form goes to K2, only {} read one on the App gateway.", k2_core::app_body::FORM_POSTS.join(", ")),
+                "send K2 calls as JSON (Content-Type: application/json), or use the server SDK".to_string(),
+            ));
+        }
+    }
+    out
+}
+
+/// What the App's gateway link saw: writes refused for their body
+/// (`json_required`, last 7 days of the audit) and a pass sent in
+/// `?token=` (deprecated: still admitted, but a URL lands in logs).
+fn link_warnings(t: &Target) -> Vec<J> {
+    let Some(app_id) = t.app_id.as_deref() else { return Vec::new() };
+    let mut out = Vec::new();
+    let since = chrono::Utc::now().timestamp_millis() - FORM_REFUSALS_WINDOW_MS;
+    // Read only: no audit file yet means no calls (opening creates it).
+    let audit = k2_core::app_audit::db_path();
+    let refused = if audit.is_file() {
+        k2_core::app_audit::open(&audit)
+            .and_then(|c| k2_core::app_audit::code_counts(&c, app_id, "json_required", since))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    for v in refused {
+        let path = v.verb.split_once(' ').map(|(_, p)| p).unwrap_or(v.verb.as_str());
+        let reads_form = k2_core::app_body::accepts_form(path);
+        out.push(warning(
+            "body_refused",
+            if reads_form { "check" } else { "breaks" },
+            if reads_form {
+                format!("the App gateway refused {} {} time(s) in the last 7 days with 415 json_required; since 0.46.4 this route also reads a form body, so a form-encoded call works now (any other body still doesn't).", v.verb, v.calls)
+            } else {
+                format!("the App gateway refused {} {} time(s) in the last 7 days with 415 json_required: this route reads JSON only.", v.verb, v.calls)
+            },
+            format!("send the body as JSON with Content-Type: application/json (k2 app audit {app_id} --denied shows each call)"),
+        ));
+    }
+    if let Some(q) = super::gateway::query_pass_use(app_id) {
+        out.push(warning(
+            "pass_in_query",
+            "check",
+            format!(
+                "{} call(s) on the gateway link since K2 started sent the pass in ?token= (last: {} as {}). It still works and is attributed the same, but it is deprecated: a pass in a URL ends up in access logs, HTTP-client traces and proxies.",
+                q.count, q.last_verb, q.last_actor
+            ),
+            "send the pass as Authorization: Bearer <pass> (the server SDK does)".to_string(),
+        ));
+    }
+    out
+}
+
 /// One service's report.
 pub(crate) fn report(t: &Target) -> J {
     let se = crate::vault::publish_env::get(&t.service_id);
@@ -440,6 +526,8 @@ pub(crate) fn report(t: &Target) -> J {
         };
         warnings.push(warning(&p.what, "breaks", msg, fix));
     }
+    warnings.extend(form_post_warnings(name, &scan.form_posts));
+    warnings.extend(link_warnings(t));
     let now_path = k2_core::terminal::login_path::augmented_path(&std::env::var("PATH").unwrap_or_default());
     let lookups = if t.is_cmd() { scan::path_lookups(&t.cmd, &cwd, if se.clean_mode { scan::CLEAN_PATH } else { &now_path }, scan::CLEAN_PATH) } else { vec![] };
     for l in &lookups {
@@ -492,6 +580,7 @@ pub(crate) fn report(t: &Target) -> J {
         "warnings": warnings,
         "envReads": scan.env_reads,
         "k2Paths": scan.k2_paths,
+        "formPosts": scan.form_posts,
         "pathLookups": lookups,
         "ownerTokenUses": uses,
         "inheritedNames": if legacy { inherited.into_iter().collect::<Vec<_>>() } else { se.inherited_names.clone() },
@@ -512,8 +601,13 @@ fn warnings(who: &Who, params: &HashMap<String, String>) -> R<J> {
         Some(raw) => {
             let t = target(who, Some(raw))?;
             if !t.is_cmd() {
-                return Ok(json!({ "app": t.summary(), "cutover": app_grace::CUTOVER_RELEASE, "readyForCutover": true, "breaks": 0, "warnings": [],
-                    "note": "only server Apps (--cmd services) have an environment; this one has nothing to change" }));
+                // No environment to check; a runtime App's link still
+                // reports how it calls K2 (form bodies, a pass in ?token=).
+                let warnings = link_warnings(&t);
+                let breaks = warnings.iter().filter(|w| w["severity"] == "breaks").count();
+                return Ok(json!({ "app": t.summary(), "cutover": app_grace::CUTOVER_RELEASE, "readyForCutover": breaks == 0, "breaks": breaks,
+                    "warnings": warnings,
+                    "note": "only server Apps (--cmd services) have an environment; the warnings here are about how it calls K2" }));
             }
             Ok(report(&t))
         }

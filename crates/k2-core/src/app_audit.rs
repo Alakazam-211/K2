@@ -423,6 +423,20 @@ pub fn verb_counts(conn: &Connection, app_id: &str, since_ms: i64) -> rusqlite::
     rows.collect()
 }
 
+/// Per-verb counts of an App's calls refused with K2's error `code` since a
+/// time, most first (ties by verb). `calls` and `denied` are both that count.
+pub fn code_counts(conn: &Connection, app_id: &str, code: &str, since_ms: i64) -> rusqlite::Result<Vec<VerbCount>> {
+    let mut st = conn.prepare(
+        "SELECT verb, COUNT(*) FROM calls WHERE app_id = ?1 AND code = ?2 AND at_ms >= ?3 \
+         GROUP BY verb ORDER BY COUNT(*) DESC, verb",
+    )?;
+    let rows = st.query_map(params![app_id, code, since_ms], |r| {
+        let n: i64 = r.get(1)?;
+        Ok(VerbCount { verb: r.get(0)?, calls: n, denied: n })
+    })?;
+    rows.collect()
+}
+
 /// Daily summaries for an App, newest first.
 pub fn summaries(conn: &Connection, app_id: &str, limit: i64) -> rusqlite::Result<Vec<serde_json::Value>> {
     let mut st = conn.prepare(
@@ -686,5 +700,33 @@ mod tests {
         );
         assert_eq!(verb_counts(&c, "jobs", 0).unwrap().len(), 3);
         assert!(verb_counts(&c, "nobody", 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn code_counts_are_one_codes_refusals_per_verb() {
+        let c = mem();
+        let refused = |at: i64, app: &str, verb: &str, code: &str| Call { code: Some(code.into()), ..call(at, app, verb, 415) };
+        append(
+            &c,
+            &[
+                refused(DAY1, "jobs", "POST /cli/thread/post", "json_required"),
+                refused(DAY1 + 1, "jobs", "POST /cli/thread/post", "json_required"),
+                refused(DAY1 + 2, "jobs", "POST /cli/feedback/create", "json_required"),
+                refused(DAY1 + 3, "jobs", "POST /cli/thread/post", "rate_limited"),
+                refused(DAY1 + 4, "other", "POST /cli/thread/post", "json_required"),
+                refused(DAY1 - DAY, "jobs", "POST /cli/fs/create", "json_required"),
+                call(DAY1 + 5, "jobs", "POST /cli/thread/post", 200),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            code_counts(&c, "jobs", "json_required", DAY1).unwrap(),
+            vec![
+                VerbCount { verb: "POST /cli/thread/post".into(), calls: 2, denied: 2 },
+                VerbCount { verb: "POST /cli/feedback/create".into(), calls: 1, denied: 1 },
+            ],
+            "only this App's rows with that code, since the time, most first"
+        );
+        assert!(code_counts(&c, "jobs", "pass_invalid", 0).unwrap().is_empty());
     }
 }

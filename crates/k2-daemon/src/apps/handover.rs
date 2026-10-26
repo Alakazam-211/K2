@@ -1054,10 +1054,7 @@ pub(crate) fn finish_steps(id: &str, by: &str) -> J {
         out.insert("link".into(), link);
         super::audit::set_app_workspace(&row.app_id, &to);
         super::routes::mirror(&row.app_id);
-        if !room_from.is_empty() {
-            let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: room_from.clone() });
-        }
-        super::ownership::changed(&to);
+        refreshed(&room_from, &to);
         if row.options.get("copySource").and_then(J::as_bool) == Some(true) {
             out.insert("source".into(), copy_source(&row));
         }
@@ -1404,6 +1401,19 @@ fn rekey_route(who: &Who, body: &[u8]) -> R<J> {
     Ok(json!({ "ok": out["state"] != "failed", "app": app.app_id, "rekey": out }))
 }
 
+/// Both workspaces' clients re-read their services and settings (the App
+/// left `gone`, joined `now`). Unit tests skip the process-wide bus: dozens
+/// of handovers a second there would lag other tests' subscribers.
+fn refreshed(gone: &str, now: &str) {
+    if cfg!(test) {
+        return;
+    }
+    if !gone.is_empty() {
+        let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: gone.to_string() });
+    }
+    super::ownership::changed(now);
+}
+
 // ── S5: the undo window, finish, recovery ────────────────────────────
 
 /// The applied handover of `app_id` still inside its window.
@@ -1562,8 +1572,7 @@ pub(crate) fn apply_undo(r: &reqs::AppRequest, by: &str) -> R<J> {
     out.insert("link".into(), link);
     super::audit::set_app_workspace(&app.app_id, &room_from);
     super::routes::mirror(&app.app_id);
-    let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: to.clone() });
-    super::ownership::changed(&room_from);
+    refreshed(&to, &room_from);
     // New keys and database passwords again (B knew them now).
     out.insert("rekey".into(), rekey_as(&row.id, by, true));
     if !room_from.is_empty() {

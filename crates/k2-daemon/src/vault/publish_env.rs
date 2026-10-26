@@ -639,7 +639,9 @@ mod tests {
             assert!(!is_legacy(&new), "a service with no entry is not legacy");
             assert_eq!(legacy_ids(), vec![old.clone()]);
             let n = legacy_env_notice("shop");
-            assert!(n.contains("0.46.4") && n.contains("k2 publish env shop clean") && n.contains("k2 app clean-mode shop on"), "{n}");
+            assert!(n.contains("k2 publish env shop clean") && n.contains("k2 app clean-mode shop on"), "{n}");
+            // No end is set (Rosson 2026-10-26): the notice names no release.
+            assert!(!n.contains("0.46.4") && n.contains("nothing ends that") && n.contains("k2 study app-move"), "{n}");
             set(&old, Some("clean"), None).expect("clean");
             assert!(!is_legacy(&old));
             assert!(legacy_ids().is_empty());

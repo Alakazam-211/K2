@@ -387,7 +387,9 @@ fn request_never_writes_or_removes_grants() {
     let clean = folder(&e.home, "req-clean");
     let out = request(&s(&clean), &Actor::by("request"));
     assert!(matches!(out, Outcome::Granted { clean: true, .. }), "{out:?}");
-    assert!(!e.home.join(".claude.json").exists(), "request wrote no grant for a clean folder");
+    // Per folder: a test adding a project without the env lock may write
+    // its own folder's grants into this temp HOME (soak 2026-10-26).
+    assert!(none_trusted(&e.home, &s(&clean)), "request wrote no grant for a clean folder");
 
     let ws = folder(&e.home, "req-risky");
     put(&ws, ".claude/settings.json", HOOK);

@@ -1350,6 +1350,19 @@ mod tests {
         assert!(gemini_trusted(home, &k), "gemini missing {k}");
     }
 
+    /// No store in `home` grants `path`. Per folder, not "no store file":
+    /// a test that adds a project without holding the env lock writes its
+    /// own folder's grants into whichever temp HOME is current, so a file
+    /// can exist here that never names this test's folder (soak
+    /// 2026-10-26, k2-core shuffle seed 9).
+    fn assert_no_store(home: &Path, path: &Path, why: &str) {
+        let k = key(path);
+        assert!(!claude_trusted(home, &k), "{why}: claude grants {k}");
+        assert!(!codex_trusted(home, &k), "{why}: codex grants {k}");
+        assert!(!grok_trusted(home, &k), "{why}: grok grants {k}");
+        assert!(!gemini_trusted(home, &k), "{why}: gemini grants {k}");
+    }
+
     #[test]
     fn harness_detects_basenames_and_skips_shells() {
         assert!(is_folder_trust_harness(Some("claude")));
@@ -1503,7 +1516,7 @@ mod tests {
         assert!(gate_harness_spawn(Some(&login), &["-l".to_string()], &no_env, Some(&ws), None, &a).expect("login shell").is_none());
         let k2_env: HashMap<String, String> = [("K2_AGENT_NAME".to_string(), "x".to_string()), ("TERM".to_string(), "xterm".to_string())].into_iter().collect();
         assert!(!needs_gate(Some(&login), &none, &k2_env), "K2's own env keeps a shell plain");
-        assert!(!g.home.join(".claude.json").exists(), "a plain shell writes no grant");
+        assert_no_store(&g.home, &ws, "a plain shell writes no grant");
         let env1 = |k: &str| -> HashMap<String, String> { [(k.to_string(), "./x".to_string())].into_iter().collect() };
         for (prog, env) in [
             (Some(login.as_str()), env1("PROMPT_COMMAND")),
@@ -1571,7 +1584,7 @@ mod tests {
         )
         .expect("clean folder passes");
         assert!(matches!(out, Some(gate::Outcome::Granted { .. })), "{out:?}");
-        assert!(!g.home.join(".claude.json").exists());
+        assert_no_store(&g.home, &ws, "no host write for a guest HOME");
     }
 
     /// U0 finding 3: cursor-agent reads `~/.cursor/projects/<slug>/

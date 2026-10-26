@@ -2520,6 +2520,30 @@ mod tests {
         format!("test-v2-{}", NEXT_ID.fetch_add(1, Ordering::SeqCst))
     }
 
+    /// A temp HOME (held for the test) and a clean folder under it for a
+    /// spawn of a gated program (`sleep`). The folder-trust gate (SS11)
+    /// gates every program but a plain login shell, acts whenever HOME is
+    /// a temp HOME, and never trusts `/tmp` (a parent of one): a `sleep`
+    /// in `/tmp` passed or got 409 by whether another test held a
+    /// TempHome at that moment (soak 2026-10-26, daemon shuffle seed 1).
+    /// Under its own HOME the gate always runs and grants this clean
+    /// folder.
+    fn clean_spawn_dir() -> (crate::test_support::TempHome, String) {
+        let home = crate::test_support::TempHome::new();
+        let ws = home.path().join(format!("ws-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&ws).expect("spawn folder");
+        let ws = ws.canonicalize().expect("canonical spawn folder").to_string_lossy().into_owned();
+        (home, ws)
+    }
+
+    fn sleep_spawn_body(agent: &str, cwd: &str, sandbox: bool) -> Vec<u8> {
+        let mut v = serde_json::json!({ "agent_name": agent, "cwd": cwd, "command": "sleep", "args": ["30"] });
+        if sandbox {
+            v["sandbox"] = serde_json::Value::Bool(true);
+        }
+        v.to_string().into_bytes()
+    }
+
     #[test]
     fn spawn_request_rejects_empty_agent_name() {
         let body = br#"{"agent_name":""}"#;
@@ -2564,11 +2588,9 @@ mod tests {
         // carries the literal backend NAME "passthrough". (async test: the
         // spawn path's child-exit observer uses `tokio::spawn`.)
         let _ = k2_core::db::init_for_tests();
+        let (_home, ws) = clean_spawn_dir();
         let agent = uniq_agent_name();
-        let body = format!(
-            r#"{{"agent_name":"{agent}","cwd":"/tmp","command":"sleep","args":["30"],"sandbox":true}}"#
-        )
-        .into_bytes();
+        let body = sleep_spawn_body(&agent, &ws, true);
         let result = handle_v2_spawn(&body);
         // Clean up the spawned session before asserting so a failure can't
         // leak the child/io-thread.
@@ -2590,10 +2612,9 @@ mod tests {
         // the response must NOT carry a `sandbox` field (byte-identical to
         // pre-seam behavior). (async test: child-exit observer uses tokio.)
         let _ = k2_core::db::init_for_tests();
+        let (_home, ws) = clean_spawn_dir();
         let agent = uniq_agent_name();
-        let body =
-            format!(r#"{{"agent_name":"{agent}","cwd":"/tmp","command":"sleep","args":["30"]}}"#)
-                .into_bytes();
+        let body = sleep_spawn_body(&agent, &ws, false);
         let result = handle_v2_spawn(&body);
         let session = crate::v2_session_map::unregister(&agent);
         if let Some(ref s) = session {
@@ -3472,19 +3493,17 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn refresh_without_a_resumable_row_does_not_kill_or_mint() {
         k2_core::db::init_for_tests();
+        let (_home, ws) = clean_spawn_dir();
         let agent = format!("tab-no-row-{}", NEXT_ID.fetch_add(1, Ordering::SeqCst));
         let _reap = ReapAgent(agent.clone());
-        let spawned = handle_v2_spawn(
-            format!(r#"{{"agent_name":"{agent}","cwd":"/tmp","command":"sleep","args":["30"]}}"#)
-                .as_bytes(),
-        );
+        let spawned = handle_v2_spawn(&sleep_spawn_body(&agent, &ws, false));
         assert_eq!(spawned.status, "200 OK", "{}", spawned.body);
         let pty = json_body(&spawned.body)["sessionId"]
             .as_str()
             .unwrap()
             .to_string();
         let failed = handle_v2_refresh(
-            serde_json::json!({ "agent_name": agent, "cwd": "/tmp" })
+            serde_json::json!({ "agent_name": agent, "cwd": ws })
                 .to_string()
                 .as_bytes(),
         );
@@ -3536,12 +3555,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn child_exit_for_a_different_session_does_not_unregister_current() {
         k2_core::db::init_for_tests();
+        let (_home, ws) = clean_spawn_dir();
         let agent = uniq_agent_name();
         let _reap = ReapAgent(agent.clone());
-        let spawned = handle_v2_spawn(
-            format!(r#"{{"agent_name":"{agent}","cwd":"/tmp","command":"sleep","args":["30"]}}"#)
-                .as_bytes(),
-        );
+        let spawned = handle_v2_spawn(&sleep_spawn_body(&agent, &ws, false));
         assert_eq!(spawned.status, "200 OK", "{}", spawned.body);
         let current = crate::v2_session_map::lookup_by_agent_name(&agent).expect("live");
         let current_id = current.session_id;

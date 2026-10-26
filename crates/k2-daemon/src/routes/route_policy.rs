@@ -2603,6 +2603,7 @@ mod tests {
         ("/cli/publish/list", "lists published services"),
         ("/cli/publish/logs", "reads service logs"),
         ("/cli/publish/validate", "parses an App folder's code; writes nothing"),
+        ("/cli/skin/password/set", "serves K2's own fixed set-password page; the password is set by POST /cli/skin/password/reset"),
     ];
 
     fn path_words(path: &str) -> Vec<String> {

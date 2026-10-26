@@ -1930,8 +1930,8 @@ pub const FORMERLY_GET_WRITES: &[&str] = &[
 /// carries `param` with any value NOT in `read values` is a write and is
 /// refused (405); send it as POST. A GET without `param` stays a read.
 pub const GET_WRITE_PARAMS: &[(&str, &str, &[&str])] = &[
-    // `?action=add|remove` connects / disconnects; list is the read.
-    ("/cli/connections", "action", &["", "list"]),
+    // `?action=add|remove` connects / disconnects; list and resolve read.
+    ("/cli/connections", "action", &["", "list", "resolve"]),
     // `?set=<mode>` writes agent_mode (and may spawn the canonical session).
     ("/cli/mode", "set", &[]),
     // any `?enable=` writes the agentic-systems setting.
@@ -2565,6 +2565,7 @@ mod tests {
         assert!(get_refused("/cli/connections", "action=remove&target=x"));
         assert!(get_refused("/cli/connections", "action=bogus"));
         assert!(!get_refused("/cli/connections", "action=list"));
+        assert!(!get_refused("/cli/connections", "action=resolve&target=x"));
         assert!(!get_refused("/cli/connections", "action="));
         assert!(get_refused("/cli/mode", "set=manager"));
         assert!(get_refused("/cli/agentic", "enable=1"));

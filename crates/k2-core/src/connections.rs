@@ -126,6 +126,54 @@ fn edit_distance(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
+/// What `connections add` would connect a target to, found without
+/// writing anything (`/cli/connections?action=resolve`: `k2 agent hire
+/// --dry-run` and its connect step, 0.46.4 field report).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectTarget {
+    /// A workspace on this server.
+    Local { project_id: String, path: String, name: String },
+    /// `agent::host` on another server; `peer_fingerprint` is the Trusted
+    /// federation peer that routes to `host` (`None`: nothing paired does).
+    Remote { address: String, agent: String, host: String, peer_fingerprint: Option<String> },
+}
+
+/// Why [`resolve_connect_target`] found nothing: `(code, hint)` with code
+/// `not_found`, `ambiguous` or `bad_usage`.
+pub type ConnectTargetError = (&'static str, String);
+
+/// Resolve `target` the way `connections add` does, read only: a local
+/// workspace (name, handle or path, the same did-you-mean misses) or a
+/// remote `agent::host` (parsed and normalised; the routing peer looked
+/// up, a self-peer refused). Whether the remote agent is on its server's
+/// roster is the daemon's question (it needs the network).
+pub fn resolve_connect_target(target: &str) -> Result<ConnectTarget, ConnectTargetError> {
+    let t = target.trim();
+    if t.is_empty() {
+        return Err(("bad_usage", "missing target (a workspace name, path, or agent::host)".to_string()));
+    }
+    if is_remote_target(t) {
+        let address = normalize_remote_addr(t).map_err(|e| ("bad_usage", e))?;
+        let (agent, host) = parse_remote_addr(&address).map_err(|e| ("bad_usage", e))?;
+        let peer_fingerprint = trusted_peer_fingerprint_for_host(&host);
+        if let (Some(fp), Ok(local)) = (peer_fingerprint.as_deref(), crate::federation::local_fingerprint()) {
+            if fp == local {
+                return Err(("bad_usage", format!("{address} is this server (self-peer): name the workspace instead")));
+            }
+        }
+        return Ok(ConnectTarget::Remote { address, agent, host, peer_fingerprint });
+    }
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let project_id = resolve_target_project_id(&conn, t)
+        .map_err(|e| (if e.contains("is ambiguous") { "ambiguous" } else { "not_found" }, e))?;
+    let (path, name): (String, Option<String>) = conn
+        .query_row("SELECT path, name FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(|_| ("not_found", format!("Workspace '{t}' not found.")))?;
+    let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| t.to_string());
+    Ok(ConnectTarget::Local { project_id, path, name })
+}
+
 /// Resolve a connections target token to a project id: exact name or
 /// path first, then case-insensitive name (0.39.45, #33 — operators
 /// and LLM agents infer plausible casing and used to bounce on it).

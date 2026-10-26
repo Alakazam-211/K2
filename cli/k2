@@ -41709,8 +41709,11 @@ FLAGS
                           --agent codex would silently launch Claude.
   --enabled <bool>        true | false (default: true). false pauses the agent
                           without changing its configured mode.
-  --connect <name>        Wire a connection to another agent (repeatable).
-                          Connections are always mutual (bidirectional).
+  --connect <name>        Wire a connection to another agent (repeatable): a
+                          workspace here, or agent::host on a paired server.
+                          Connections are always mutual (bidirectional). The
+                          daemon resolves each one first (dry run too); one it
+                          can't find is not_found (exit 4).
   --project <p>           Add the new agent to a project (name or id; repeatable —
                           see `k2 project list`). Already a member = reported
                           no-op. The FIRST member of an empty project becomes
@@ -41739,8 +41742,14 @@ FLAGS
                           Create-only DB passport (default off). Gates k2 db
                           create, not list/dsn/store. Does not mint a
                           database — call k2 db create after hire.
-  --dry-run               Show the full plan; change nothing
+  --dry-run               Show the full plan; change nothing (steps that would
+                          fail are FAILED, and it exits non-zero)
   --json                  JSON output
+
+  A failed step (a connect, a project, a context…) doesn't stop the others:
+  every step's result is printed, then the exit is non-zero (the first
+  failure's: 4 not_found, 2 usage, 3 refused, 1 other). Only a failure to
+  make the workspace itself stops the rest (reported "not run").
 
 EXAMPLES
   k2 agent hire ~/agents/scout --template worker --connect "Appa" --launch
@@ -42574,9 +42583,29 @@ for peer in connects:
     if peer.lower() in existing_peers:
         actions.append({"step": "connect", "peer": peer, "status": "skipped",
                         "reason": "edge exists", "bidirectional": True})
+        continue
+    a = {"step": "connect", "peer": peer, "status": "pending", "bidirectional": True}
+    # 0.46.4 (field report): the DAEMON resolves the target now, dry run
+    # included — a local workspace, or agent::host on a paired server's
+    # roster. A miss is reported up front instead of "would apply".
+    r = http_get("/cli/connections", {"action": "resolve", "target": peer})
+    rerr = r.get("error") if isinstance(r, dict) else None
+    if rerr or not (isinstance(r, dict) and r.get("ok")):
+        if not isinstance(rerr, dict):
+            rerr = {"code": "daemon_error", "hint": str(rerr or json.dumps(r)[:200])}
+        a.update(status="failed", error={"code": rerr.get("code") or "daemon_error",
+                                         "hint": rerr.get("hint") or "cannot resolve '%s'" % peer})
+    elif r.get("kind") == "local" and r.get("path") == path:
+        a.update(status="failed", error={"code": "bad_usage",
+                                         "hint": "cannot connect %s to itself" % peer})
     else:
-        actions.append({"step": "connect", "peer": peer, "status": "pending",
-                        "bidirectional": True})
+        a["kind"] = r.get("kind")
+        a["resolved"] = r.get("path") if r.get("kind") == "local" else r.get("address")
+        if r.get("kind") == "remote" and (r.get("address") or "").lower() in existing_peers:
+            a.update(status="skipped", reason="edge exists")
+        if r.get("warning"):
+            a["warn"] = r["warning"]
+    actions.append(a)
 
 for p in resolved_projects:
     # Membership is idempotent daemon-side too (alreadyMember is an Ok
@@ -42748,6 +42777,8 @@ def emit(ok, changed):
             line = "db-access: %s" % a["access"]
         elif step == "connect":
             line = "connect: %s (bidirectional)" % a["peer"]
+            if a.get("warn"):
+                line += "  (warn: %s)" % a["warn"]
         elif step == "join-project":
             line = "join-project: %s" % a["project"]
             if a.get("becamePoc"):
@@ -42769,37 +42800,66 @@ def emit(ok, changed):
                 line += " (session %s)" % str(a["sessionId"])[:8]
         else:
             line = "onboard: deliver first message"
-        if status == "skipped" and a.get("reason"):
+        if status in ("skipped", "not-run") and a.get("reason"):
             line += "  (%s)" % a["reason"]
+        if status == "failed" and a.get("error"):
+            line += "  (%s: %s)" % (a["error"].get("code"), a["error"].get("hint"))
         marker = {"pending": "would apply", "done": "done", "skipped": "skipped",
-                  "failed": "FAILED"}[status]
+                  "failed": "FAILED", "not-run": "not run"}[status]
         print("  %-14s %s" % ("[" + marker + "]", line))
     if not dry_run:
         n = sum(1 for a in actions if a["status"] == "done")
         print("%s: %s" % (display_name,
                           ("%d change(s) applied." % n) if n else "no changes — already converged."))
+    nf = sum(1 for a in actions if a["status"] == "failed")
+    if nf:
+        print("%s: %d step(s) %s." % (display_name, nf, "would fail" if dry_run else "failed"))
+
+def exit_code_for(code):
+    # Align with agent-family exits when possible.
+    c = (code or "").lower()
+    if c in ("bad_usage", "path_escape", "catalog_unknown", "usage"):
+        return 2
+    if c in ("duplicate_layer", "refused", "precondition", "owner_only"):
+        return 3
+    if c in ("not_found", "ambiguous"):
+        return 4
+    return 1
+
+def finish(changed):
+    """Report every step, then exit non-zero when any step failed (the
+    first failure's code and exit; the hint names every failed step)."""
+    failed = [a for a in actions if a["status"] == "failed"]
+    emit(not failed, changed)
+    if failed:
+        first = failed[0]["error"]
+        what = "; ".join("%s %s: %s" % (a["step"], a.get("peer") or a.get("project") or a.get("context") or a.get("name") or "",
+                                        a["error"].get("hint")) for a in failed)
+        fail(first.get("code") or "daemon_error",
+             "%d step(s) %s: %s" % (len(failed), "would fail" if dry_run else "failed", what),
+             failed[0].get("exitCode") or exit_code_for(first.get("code")))
+    sys.exit(0)
 
 if dry_run:
-    emit(True, any(a["status"] == "pending" for a in actions))
-    sys.exit(0)
+    finish(any(a["status"] == "pending" for a in actions))
 
 changed = False
 
-def step_failed(action, code, hint, exit_code=None):
+def step_failed(action, code, hint, exit_code=None, fatal=False):
+    """Mark one step failed and go on with the independent steps (0.46.4:
+    a failed connect no longer stops --context, launch …). `fatal` (the
+    workspace itself couldn't be made) stops here: what's left is not run."""
     action["status"] = "failed"
-    emit(False, changed)
-    if exit_code is None:
-        # Align with agent-family exits when possible.
-        c = (code or "").lower()
-        if c in ("bad_usage", "path_escape", "catalog_unknown", "usage"):
-            exit_code = 2
-        elif c in ("duplicate_layer", "refused", "precondition"):
-            exit_code = 3
-        elif c == "not_found":
-            exit_code = 4
-        else:
-            exit_code = 1
-    fail(code, hint, exit_code)
+    action["error"] = {"code": code, "hint": hint}
+    if exit_code is not None:
+        action["exitCode"] = exit_code
+    if fatal:
+        for a in actions:
+            if a["status"] == "pending":
+                a["status"] = "not-run"
+                a["reason"] = "the workspace step failed"
+        emit(False, changed)
+        fail(code, hint, exit_code if exit_code is not None else exit_code_for(code))
 
 by_step = {}
 for a in actions:
@@ -42830,8 +42890,9 @@ if pending_core:
         code = err.get("code") if isinstance(err, dict) else "daemon_error"
         hint = err.get("hint") if isinstance(err, dict) else (err or json.dumps(resp)[:300])
         bad = dba_core if (code == "owner_only" and dba_core and dba_core["status"] == "pending") else pending_core[0]
-        step_failed(bad, code or "daemon_error", hint, 3 if code == "owner_only" else None)
-    by_core = {x.get("step"): x for x in resp.get("steps", [])}
+        # Fatal: every later step needs the workspace.
+        step_failed(bad, code or "daemon_error", hint, 3 if code == "owner_only" else None, fatal=True)
+    by_core ={x.get("step"): x for x in resp.get("steps", [])}
     for name in core_steps:
         a = one(name)
         if a and a["status"] == "pending":
@@ -42882,8 +42943,10 @@ if fields:
     if resp.get("error") or not resp.get("ok"):
         err = resp.get("error")
         hint = err if isinstance(err, str) else (err or {}).get("hint") or json.dumps(resp)[:300]
-        bad = ma if (ma and ma["status"] == "pending") else (ea if (ea and ea["status"] == "pending") else (da if (da and da["status"] == "pending") else dba))
-        step_failed(bad, "daemon_error", "settings write failed: %s" % hint)
+        # One batch: every field in it failed together.
+        for x in (ma, ea, da, dba):
+            if x and x["status"] == "pending":
+                step_failed(x, "daemon_error", "settings write failed: %s" % hint)
     by_field = {x.get("field"): x.get("status") for x in resp.get("actions", [])}
     if ma and ma["status"] == "pending":
         ma["status"] = by_field.get("agent_mode", "done")
@@ -42915,8 +42978,9 @@ if a and a["status"] == "pending":
     if resp.get("error") or not resp.get("success"):
         step_failed(a, "daemon_error",
                     "rename failed: %s" % resp.get("error", json.dumps(resp)[:300]))
-    a["status"] = "done"
-    changed = True
+    else:
+        a["status"] = "done"
+        changed = True
 
 # 5b. color + focus group (need workspace id after register).
 ca = one("set-color")
@@ -42936,8 +43000,9 @@ if need_id and not workspace_id:
             workspace_id = p.get("id")
             break
 if need_id and not workspace_id:
-    bad = ca if (ca and ca["status"] == "pending") else fa
-    step_failed(bad, "daemon_error", "cannot resolve workspace id after register")
+    for x in (ca, fa):
+        if x and x["status"] == "pending":
+            step_failed(x, "daemon_error", "cannot resolve workspace id after register")
 
 a = one("set-color")
 if a and a["status"] == "pending":
@@ -42946,8 +43011,9 @@ if a and a["status"] == "pending":
         err = resp.get("error")
         hint = err if isinstance(err, str) else (err or {}).get("hint") or json.dumps(resp)[:300]
         step_failed(a, "daemon_error", "color write failed: %s" % hint)
-    a["status"] = "done"
-    changed = True
+    else:
+        a["status"] = "done"
+        changed = True
 
 a = one("assign-focus-group")
 if a and a["status"] == "pending":
@@ -42957,8 +43023,9 @@ if a and a["status"] == "pending":
         err = resp.get("error")
         hint = err if isinstance(err, str) else (err or {}).get("hint") or json.dumps(resp)[:300]
         step_failed(a, "daemon_error", "focus-group assign failed: %s" % hint)
-    a["status"] = "done"
-    changed = True
+    else:
+        a["status"] = "done"
+        changed = True
 
 # 6. connect edges. ONE add per peer: the connections substrate stores
 #    a single row per pair and that row IS mutual awareness (migration
@@ -42967,21 +43034,25 @@ if a and a["status"] == "pending":
 for a in by_step.get("connect", []):
     if a["status"] != "pending":
         continue
+    # Resolved at plan time by the daemon (a local path or agent::host);
+    # an unresolvable target is already `failed` and never reaches here.
     peer = a["peer"]
-    pconf = http_get("/cli/agent/conf", {"q": peer})
-    if not pconf.get("ok"):
-        err = pconf.get("error")
-        hint = (err or {}).get("hint") if isinstance(err, dict) else err
-        step_failed(a, "not_found" if isinstance(err, dict) and err.get("code") == "not_found"
-                    else "daemon_error",
-                    hint or "cannot resolve peer '%s'" % peer)
-    peer_path = pconf["path"]
-    if peer_path == path:
-        step_failed(a, "bad_usage", "cannot connect %s to itself" % display_name)
     resp = http_post_query("/cli/connections",
-                    {"action": "add", "project": path, "target": peer_path})
-    if isinstance(resp.get("error"), str) and resp["error"]:
-        step_failed(a, "daemon_error", "connect %s failed: %s" % (peer, resp["error"]))
+                    {"action": "add", "project": path, "target": a.get("resolved") or peer})
+    err = resp.get("error")
+    if err:
+        code = err.get("code") if isinstance(err, dict) else None
+        hint = err.get("hint") if isinstance(err, dict) else str(err)
+        step_failed(a, code or "daemon_error", "connect %s failed: %s" % (peer, hint),
+                    3 if code == "agents_create_connections_disabled" else None)
+        continue
+    if resp.get("noop"):
+        a["status"] = "skipped"
+        a["reason"] = "edge exists"
+        continue
+    for k in ("bindWarning", "warning"):
+        if resp.get(k):
+            a["warn"] = resp[k]
     a["status"] = "done"
     changed = True
 
@@ -42996,6 +43067,7 @@ for a in by_step.get("join-project", []):
     if err or not resp.get("ok"):
         hint = err if isinstance(err, str) else (err or {}).get("hint") or json.dumps(resp)[:300]
         step_failed(a, "daemon_error", "join project %s failed: %s" % (a["project"], hint))
+        continue
     if resp.get("alreadyMember"):
         a["status"] = "skipped"
         a["reason"] = "already a member"
@@ -43034,9 +43106,11 @@ for a in by_step.get("seed-context", []):
             step_failed(a, "catalog_unknown",
                         "unknown context catalog id '%s': %s — see: k2 agent context catalog"
                         % (a.get("context"), hint))
+            continue
         if a.get("kind") == "path":
             step_failed(a, code if code in ("not_found", "path_escape", "bad_usage") else "daemon_error",
                         "context seed failed for %s: %s" % (a.get("context"), hint))
+            continue
         # Catalog soft-fail: warn + skip (do not abort hire).
         sys.stderr.write("warning: context seed skipped for catalog id '%s': %s\n"
                          % (a.get("context"), hint))
@@ -43048,6 +43122,7 @@ for a in by_step.get("seed-context", []):
         hint = json.dumps(resp)[:300]
         if a.get("kind") == "path":
             step_failed(a, "daemon_error", "context seed failed: %s" % hint)
+            continue
         sys.stderr.write("warning: context seed unexpected response for '%s': %s\n"
                          % (a.get("context"), hint))
         a["status"] = "skipped"
@@ -43073,30 +43148,38 @@ if a and a["status"] == "pending":
     if resp.get("error") or not resp.get("success"):
         step_failed(a, "daemon_error",
                     "launch failed: %s" % resp.get("error", json.dumps(resp)[:300]))
-    a["status"] = "done"
-    a["sessionId"] = resp.get("session_id")
-    if resp.get("reused"):
-        a["reused"] = True
     else:
-        changed = True
+        a["status"] = "done"
+        a["sessionId"] = resp.get("session_id")
+        if resp.get("reused"):
+            a["reused"] = True
+        else:
+            changed = True
 
 # 8. onboard (delivered via the same throat `k2 talk` uses —
-#    /cli/workspace/msg with wake, which waits for READY first).
+#    /cli/workspace/msg with wake, which waits for READY first). It needs
+#    the launch: a failed launch leaves it not run.
 a = one("onboard")
-if a and a["status"] == "pending":
+la = one("launch")
+if a and a["status"] == "pending" and la and la["status"] == "failed":
+    a["status"] = "not-run"
+    a["reason"] = "launch failed"
+elif a and a["status"] == "pending":
     resp = http_post_query("/cli/workspace/msg",
                     {"workspace": path, "text": onboard, "from": "owner",
                      "wake": "true", "wake_timeout": "120"},
                     timeout=180)
     if isinstance(resp.get("error"), str) and resp["error"]:
         step_failed(a, "daemon_error", "onboard delivery failed: %s" % resp["error"])
-    if not resp.get("success"):
+    elif not resp.get("success"):
         step_failed(a, "daemon_error",
                     "onboard delivery failed: %s" % (resp.get("message") or json.dumps(resp)[:300]))
-    a["status"] = "done"
-    changed = True
+    else:
+        a["status"] = "done"
+        changed = True
 
-emit(True, changed)
+# Every step's result; non-zero when any failed.
+finish(changed)
 PYEOF
 }
 

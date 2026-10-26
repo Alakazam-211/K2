@@ -565,6 +565,13 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // OR Owner/Admin connect-user). Scoped agent principals never
         // get the stamp (cell UDS / dual-auth arms leave it unset →
         // fail-closed unless the effective toggle is on).
+        //
+        // `action=resolve&target=` (0.46.4): what an add would connect to,
+        // read only and needing no source workspace (`k2 agent hire
+        // --dry-run` checks its --connect targets before anything exists).
+        "/cli/connections" if params.get("action").map(String::as_str) == Some("resolve") => {
+            crate::federation_routes::connections_resolve(opt_param(params, "target").as_deref().unwrap_or(""))
+        }
         "/cli/connections" => match need_project(params) {
             Ok(p) => {
                 let action = params

@@ -1937,6 +1937,117 @@ pub(crate) fn bind_unbound_rows_now(
     heal_rows_from_roster(peer, &parsed).ok_or_else(|| "peer roster has no agents list".to_string())
 }
 
+/// `GET /cli/connections?action=resolve&target=` (0.46.4 field report:
+/// `k2 agent hire --dry-run` showed `--connect agent::host` as "would
+/// apply", then the real run failed `not_found`). Read only, no source
+/// workspace needed. Answers `{ok, kind: local|remote, …}` or a refusal
+/// `{ok:false, error:{code, hint}}`:
+/// - a local workspace: found, or `not_found` / `ambiguous` (the add's
+///   did-you-mean words);
+/// - `agent::host`: `not_found` when no Trusted federation peer routes to
+///   the host (federation off included); else the peer's roster is read
+///   (5 s cap): the agent on it is found, a roster without it is
+///   `not_found` (with the names it lists), two display-name matches are
+///   `ambiguous`, and a peer that doesn't answer is found with
+///   `onRoster: null` and a `warning` (the add would store it unbound).
+pub(crate) fn connections_resolve(target: &str) -> CliResponse {
+    use k2_core::connections::{resolve_connect_target, ConnectTarget};
+    let refuse = |status: &'static str, code: &str, hint: String| CliResponse {
+        status,
+        content_type: "application/json",
+        body: serde_json::json!({ "ok": false, "error": { "code": code, "hint": hint } }).to_string(),
+    };
+    let found = match resolve_connect_target(target) {
+        Ok(t) => t,
+        Err(("bad_usage", hint)) => return refuse("400 Bad Request", "bad_usage", hint),
+        Err(("ambiguous", hint)) => return refuse("409 Conflict", "ambiguous", hint),
+        Err((code, hint)) => return refuse("404 Not Found", code, hint),
+    };
+    let (address, agent, host, fp) = match found {
+        ConnectTarget::Local { project_id, path, name } => {
+            return CliResponse::ok_json(
+                serde_json::json!({ "ok": true, "kind": "local", "target": name, "path": path, "projectId": project_id })
+                    .to_string(),
+            )
+        }
+        ConnectTarget::Remote { address, agent, host, peer_fingerprint } => (address, agent, host, peer_fingerprint),
+    };
+    let not_paired = |why: &str| {
+        refuse(
+            "404 Not Found",
+            "not_found",
+            format!(
+                "{address}: {why}, so nothing would reach {host}. Pair that server first (k2 fed pair-start on one \
+                 side, k2 fed pair-join on the other), then connect"
+            ),
+        )
+    };
+    if !k2_core::federation::enabled() {
+        return not_paired("federation is off on this server");
+    }
+    let Some(peer) = fp.as_deref().and_then(trusted_peer_by_fingerprint) else {
+        return not_paired("no paired server answers for that host");
+    };
+    let remote = |on_roster: serde_json::Value, extra: serde_json::Value| {
+        let mut v = serde_json::json!({
+            "ok": true, "kind": "remote", "target": address, "address": address, "agent": agent,
+            "host": host, "peerFingerprint": peer.fingerprint, "onRoster": on_roster,
+        });
+        if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+            for (k, x) in e {
+                o.insert(k.clone(), x.clone());
+            }
+        }
+        CliResponse::ok_json(v.to_string())
+    };
+    let roster = match fetch_peer_roster(&peer, GATE_ROSTER_TIMEOUT).map(|p| roster_entries_from_json(&p)) {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return remote(serde_json::Value::Null, serde_json::json!({ "warning": format!("{host} answered without a roster; couldn't check {agent}") }))
+        }
+        Err(e) => {
+            return remote(
+                serde_json::Value::Null,
+                serde_json::json!({ "warning": format!("couldn't reach {host} to check {agent} ({e}); a connection would be saved and bind when it answers") }),
+            )
+        }
+    };
+    if let Some(e) = roster
+        .iter()
+        .find(|e| k2_core::workspace::handle::roster_entry_matches(&agent, &e.handle, &e.aliases, ""))
+    {
+        return remote(serde_json::json!(true), serde_json::json!({ "handle": e.handle, "remoteWorkspaceId": e.workspace_id }));
+    }
+    let display = roster_display_matches(&agent, &roster);
+    match display.len() {
+        1 => remote(
+            serde_json::json!(true),
+            serde_json::json!({ "handle": display[0].handle, "remoteWorkspaceId": display[0].workspace_id }),
+        ),
+        0 => {
+            let names: Vec<&str> = roster.iter().map(|e| e.handle.as_str()).collect();
+            refuse(
+                "404 Not Found",
+                "not_found",
+                if names.is_empty() {
+                    format!("{host} lists no agents right now, so {agent} isn't there")
+                } else {
+                    format!("{agent} isn't on {host}'s roster (it lists: {})", names.join(", "))
+                },
+            )
+        }
+        _ => refuse(
+            "409 Conflict",
+            "ambiguous",
+            format!(
+                "{agent} matches {} workspaces on {host} ({}); name it by handle",
+                display.len(),
+                display.iter().map(|e| e.handle.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+        ),
+    }
+}
+
 /// CA8: after `k2 connections add <agent>::<host>` stored a row, try to
 /// bind it right away. Warn, never refuse: the row stays either way.
 /// Returns fields to merge into the add response.
@@ -4984,6 +5095,66 @@ mod tests {
             out["bindWarning"].as_str().unwrap().contains("couldn't reach"),
             "{out}"
         );
+    }
+
+    /// 0.46.4 field report: `action=resolve` says up front what an add
+    /// would reach (hire --dry-run): a local workspace, an `agent::host` on
+    /// a paired server's roster, and `not_found` for an unpaired host, a
+    /// name the roster lacks or a local miss; an offline peer is found with
+    /// a warning. Nothing is written.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn connections_resolve_checks_targets_without_writing() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (src_path, src_uuid) = register_src_workspace("resolve");
+        let w = uuid::Uuid::new_v4().to_string();
+        let stub = spawn_peer_stub(Some(roster_json(&[(&w, "quillify-website", "Seoca", &["quillify"])])), "{}", |_| {});
+        let host = format!("127.0.0.1:{}", stub.port);
+        let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
+        let _fp = pin_trusted_peer_for_send(&host);
+        let code = |r: &CliResponse| -> (String, String) {
+            let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+            (r.status.to_string(), v["error"]["code"].as_str().unwrap_or("").to_string())
+        };
+        let run = |t: String| async move { tokio::task::spawn_blocking(move || connections_resolve(&t)).await.unwrap() };
+
+        // Federation off: a remote target can't be reached.
+        let r = run(format!("quillify::{host}")).await;
+        assert_eq!(code(&r), ("404 Not Found".into(), "not_found".into()), "{}", r.body);
+        assert!(r.body.contains("federation is off"), "{}", r.body);
+
+        let _fed = k2_core::test_env::EnvVar::set("K2_FEDERATION", "1");
+        let r = run(format!("quillify::{host}")).await;
+        assert_eq!(r.status, "200 OK", "an alias on the roster: {}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!((v["kind"].as_str(), v["onRoster"].as_bool(), v["handle"].as_str()), (Some("remote"), Some(true), Some("quillify-website")), "{v}");
+        let r = run(format!("Seoca::{host}")).await;
+        assert_eq!(r.status, "200 OK", "the display name: {}", r.body);
+        let r = run(format!("nobody::{host}")).await;
+        assert_eq!(code(&r), ("404 Not Found".into(), "not_found".into()), "{}", r.body);
+        assert!(r.body.contains("quillify-website"), "names the roster: {}", r.body);
+        let r = run("k2::nowhere.k2.dev".into()).await;
+        assert_eq!(code(&r), ("404 Not Found".into(), "not_found".into()), "{}", r.body);
+        assert!(r.body.contains("no paired server"), "{}", r.body);
+
+        // Local: found by path; a miss is not_found.
+        let r = run(src_path.clone()).await;
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!((v["kind"].as_str(), v["path"].as_str(), v["projectId"].as_str()), (Some("local"), Some(src_path.as_str()), Some(src_uuid.as_str())), "{v}");
+        let r = run("no-such-workspace-xyz".into()).await;
+        assert_eq!(code(&r), ("404 Not Found".into(), "not_found".into()), "{}", r.body);
+        let r = run(String::new()).await;
+        assert_eq!(code(&r), ("400 Bad Request".into(), "bad_usage".into()), "{}", r.body);
+
+        // Offline peer: found, with a warning.
+        drop(_base);
+        let _offline = InboundBase::set("http://127.0.0.1:1");
+        let r = run(format!("quillify::{host}")).await;
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert!(v["onRoster"].is_null() && v["warning"].as_str().unwrap().contains("couldn't reach"), "{v}");
+        assert!(remote_rows(&src_uuid).is_empty(), "resolve writes nothing");
     }
 
     /// PRD test 7 + CA15: after a display-name bind, the row is removed by

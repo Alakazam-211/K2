@@ -31,6 +31,7 @@ use k2_core::deploy::{self, codes as dcodes};
 use serde_json::{json, Value as J};
 
 use super::egress_routes::codes;
+use crate::cli_response::CliResponse;
 use super::routes::{actor, db_err, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
 
 pub const ROUTES: &[&str] = &["/cli/app/approvals", "/cli/app/approve", "/cli/app/deny"];
@@ -107,6 +108,122 @@ pub(crate) fn held_answer(r: &reqs::AppRequest) -> J {
     })
 }
 
+/// Asked again within this many seconds is the same ask (not "reused").
+const REUSE_AFTER_SECS: i64 = 2;
+
+fn ago(secs: i64) -> String {
+    match secs.max(0) {
+        s if s < 90 => format!("{s} s"),
+        s if s < 3600 => format!("{} min", s / 60),
+        s if s < 36 * 3600 => format!("{} h", s / 3600),
+        s => format!("{} days", s / 86_400),
+    }
+}
+
+/// Where the owner sees one held request, and whether a permission card
+/// is up for it (0.46.4 field report, NSI #9/#11: a held `k2 app install`
+/// printed only "held for the owner: w_…", reused an old request without
+/// saying so, and never said whether the owner would see a card):
+/// - `reused` / `askedAgo`: this call found the same request pending from
+///   earlier (`requests::create` returns it) instead of filing a new one;
+/// - `card`: for an agent with permission cards on, the `apps.approve`
+///   card for this request is raised now (or the open one is found, so a
+///   repeat after the owner turned cards on raises it rather than staying
+///   silent); cards off, or a person: where the owner approves it.
+pub(crate) fn held_note(who: &Who, r: &reqs::AppRequest) -> J {
+    let age = deploy::now() - r.requested_at;
+    let reused = age > REUSE_AFTER_SECS;
+    let approvals = format!("Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve {})", r.id);
+    let card = match who {
+        Who::Agent { project_id, session_id } if k2_core::permission::gate::enabled_for(project_id) => {
+            let why: String = r
+                .reason
+                .as_deref()
+                .filter(|w| !w.trim().is_empty())
+                .unwrap_or(r.summary.as_str())
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .take(k2_core::permission::request::limits::WHY_MAX_CHARS)
+                .collect();
+            let (status, v) = crate::permission::routes::raise_held_card(project_id, session_id, &r.id, why.trim());
+            let st = v.get("status").and_then(J::as_str).unwrap_or("");
+            let id = v.get("id").and_then(J::as_str).unwrap_or("");
+            let thread = v.get("addr").and_then(J::as_str).unwrap_or("");
+            if status == 200 && (st == "pending" || st == "already_pending") {
+                let new = st == "pending";
+                let to: Vec<String> = v
+                    .get("routedTo")
+                    .and_then(J::as_array)
+                    .map(|a| a.iter().filter_map(|x| x.get("login").and_then(J::as_str).map(str::to_string)).collect())
+                    .unwrap_or_default();
+                json!({
+                    "raised": true,
+                    "new": new,
+                    "id": id,
+                    "thread": thread,
+                    "routedTo": to,
+                    "where": format!(
+                        "{} permission card {id} is on {thread}'s Thread{}: the owner approves it there, or in {approvals}",
+                        if new { "a" } else { "the" },
+                        if to.is_empty() { String::new() } else { format!(" for {}", to.join(", ")) },
+                    ),
+                })
+            } else {
+                // The card couldn't go up (no Thread yet, the ask limit…):
+                // the request still waits in App Approvals; the agent may ask.
+                let e = &v["error"];
+                json!({
+                    "raised": false,
+                    "error": { "code": e.get("code").and_then(J::as_str).unwrap_or(st), "hint": e.get("hint").and_then(J::as_str).unwrap_or("") },
+                    "ask": format!("k2 permission request apps.approve request={} --why \"<what you need it for>\"", r.id),
+                    "where": format!("no permission card went up; the request waits in {approvals}"),
+                })
+            }
+        }
+        Who::Agent { .. } => json!({
+            "raised": false,
+            "cardsOff": true,
+            "where": format!("permission cards are off for this agent, so no card went up: the request waits in {approvals}"),
+        }),
+        _ => json!({ "raised": false, "where": format!("it waits in {approvals}") }),
+    };
+    json!({ "reused": reused, "askedAgo": if reused { Some(ago(age)) } else { None }, "requestedAt": r.requested_at, "card": card })
+}
+
+/// Add [`held_note`] to every held request in a `202` answer from the App
+/// routes (one chokepoint for every hold: limits, disk, engine, caps,
+/// egress, box services, the switch, grace kinds).
+pub(crate) fn enrich_held(who: &Who, mut resp: CliResponse) -> CliResponse {
+    if !resp.status.starts_with("202") {
+        return resp;
+    }
+    let Ok(mut v) = serde_json::from_str::<J>(&resp.body) else { return resp };
+    let mut first: Option<J> = None;
+    for at in ["", "/held", "/egressHeld"] {
+        let id = v.pointer(&format!("{at}/request/id")).and_then(J::as_str).map(str::to_string);
+        let Some(id) = id else { continue };
+        let Some(r) = db(|c| reqs::get(c, &id)).ok().flatten() else { continue };
+        if r.status != reqs::STATUS_PENDING {
+            continue;
+        }
+        let note = held_note(who, &r);
+        let slot = if at.is_empty() { Some(&mut v) } else { v.pointer_mut(at) };
+        if let Some(J::Object(o)) = slot {
+            for (k, x) in note.as_object().into_iter().flatten() {
+                o.insert(k.clone(), x.clone());
+            }
+        }
+        first.get_or_insert(note);
+    }
+    if let (Some(note), Some(o)) = (first, v.as_object_mut()) {
+        for k in ["reused", "askedAgo", "card"] {
+            o.entry(k.to_string()).or_insert(note[k].clone());
+        }
+    }
+    resp.body = v.to_string();
+    resp
+}
+
 /// Tell the requesting workspace (a `k2 msg` wake of its agent).
 pub(crate) fn notify_requester(r: &reqs::AppRequest, text: &str) {
     if let Some(ws) = r.requester_workspace.as_deref() {
@@ -169,7 +286,31 @@ fn expire_and_tell() -> R<()> {
         notify_requester(r, &format!("[k2 apps] request {} expired after 7 days without an answer: {}", r.id, r.summary));
         egress_changed(r);
     }
+    if !gone.is_empty() {
+        changed(None);
+    }
     Ok(())
+}
+
+/// How many held App requests wait on this box (the owner's list).
+pub(crate) fn pending_count() -> u64 {
+    db(|c| reqs::list(c, &reqs::Filter { status: Some(reqs::STATUS_PENDING), ..Default::default() }, 1000))
+        .map(|v| v.len() as u64)
+        .unwrap_or(0)
+}
+
+/// The one chokepoint for "the held App requests changed" (filed or asked
+/// again, approved, denied, withdrawn, expired; 0.46.4 field report: the
+/// owner's App Approvals never refreshed). Local windows get
+/// `sync:settings` `{apps: approvals}`; every client, K2 Connect included,
+/// gets `app_approvals_changed` with the pending count (the badge).
+pub(crate) fn changed(request: Option<&str>) {
+    let pending = pending_count();
+    k2_core::agent_hooks::emit(
+        k2_core::agent_hooks::HookEvent::SyncSettings,
+        json!({ "apps": "approvals", "request": request, "pending": pending }),
+    );
+    let _ = crate::session_events::emit(crate::session_events::SessionEvent::AppApprovalsChanged { pending });
 }
 
 // ── list ─────────────────────────────────────────────────────────────
@@ -201,7 +342,14 @@ fn approvals(who: &Who, params: &HashMap<String, String>) -> R<J> {
     expire_and_tell()?;
     let f = reqs::Filter { app_id: app_id.as_deref(), service_id: service_id.as_deref(), workspace: own_ws(who), status: state };
     let rows = db(|c| reqs::list(c, &f, 200))?;
-    Ok(json!({ "ok": true, "requests": rows.iter().map(request_json).collect::<Vec<_>>(), "ownerConfirm": owner_confirm_status() }))
+    // The badge count for the caller's own view (the owner: the whole box).
+    let pending = if state == Some(reqs::STATUS_PENDING) {
+        rows.len()
+    } else {
+        rows.iter().filter(|r| r.status == reqs::STATUS_PENDING).count()
+    };
+    Ok(json!({ "ok": true, "requests": rows.iter().map(request_json).collect::<Vec<_>>(), "pendingCount": pending,
+        "ownerConfirm": owner_confirm_status() }))
 }
 
 // ── approve ──────────────────────────────────────────────────────────
@@ -246,6 +394,7 @@ pub(crate) fn apply_as(r: &reqs::AppRequest, by: &str, via: &str) -> R<J> {
     let by = by.to_string();
     let own = via == super::access::SELF_VIA;
     let decided = db(|c| Ok(reqs::decide(c, &r.id, reqs::STATUS_APPROVED, &by, Some(via), None, deploy::now())))?.map_err(decide_err)?;
+    changed(Some(&decided.id));
     // Egress kinds applied with the decision (the host list); the door
     // kinds (0.46.1) and the grace kinds are carried out now; a kind
     // another lane owns runs its registered applier.
@@ -332,6 +481,7 @@ fn deny(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(codes::OWNER_ONLY, 403, "only the owner or an admin denies a request (the requester withdraws it)"));
     };
     let d = db(|c| Ok(reqs::decide(c, &r.id, status, &by, None, reason.as_deref(), deploy::now())))?.map_err(decide_err)?;
+    changed(Some(&d.id));
     let event = if status == reqs::STATUS_DENIED { "widening_denied" } else { "widening_withdrawn" };
     app_audit(&d, event, &by, json!({ "request": d.id, "kind": d.kind, "reason": reason }));
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new("app-deny", &by, format!("{status} {}", d.id), "cli", "-", "apps"));
@@ -419,7 +569,7 @@ pub(crate) fn file(f: &Filing<'_>) -> R<reqs::AppRequest> {
     };
     let r = db(|c| reqs::create(c, &n, deploy::now()))?;
     app_audit(&r, "widening_held", &by, json!({ "request": r.id, "kind": r.kind, "diff": r.diff }));
-    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({ "apps": "approvals", "request": r.id }));
+    changed(Some(&r.id));
     Ok(r)
 }
 

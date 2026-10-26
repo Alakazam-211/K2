@@ -502,6 +502,7 @@ fn revoke(who: &Who, body: &[u8]) -> R<J> {
     if let Some(req) = row.request_id.as_deref() {
         if db(|c| bs::request_is_empty(c, &app.app_id, req))? {
             let _ = db(|c| Ok(k2_core::app_grace::requests::decide(c, req, k2_core::app_grace::requests::STATUS_WITHDRAWN, &by, None, Some("its services were revoked"), deploy::now())));
+            super::approvals::changed(Some(req));
         }
     }
     let nft = changed(&app.app_id);

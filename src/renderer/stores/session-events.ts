@@ -549,6 +549,14 @@ export interface FeedbackChangedEvent {
   reason: string
 }
 
+/** APP-LEVEL — the held App requests changed (0.46.4): one was filed or
+ *  asked again, approved, denied, withdrawn or expired. `pending` is how
+ *  many wait on that server (the Settings → App Approvals badge). */
+export interface AppApprovalsChangedEvent {
+  kind: 'app_approvals_changed'
+  pending: number
+}
+
 /** APP-LEVEL — one ticket changed (prd-app-tickets-websocket-v1, 0.43.3).
  *  The app gateway's activity socket maps it to the room-scoped
  *  `ticket_changed` guest frame. This client ignores it: the Tickets board
@@ -834,6 +842,7 @@ export type SessionEventMessage =
   | OpenUrlEvent
   | ProjectGroupsChangedEvent
   | FeedbackChangedEvent
+  | AppApprovalsChangedEvent
   | TicketChangedEvent
   | ChatHistoryChangedEvent
   | TokenUsageChangedEvent
@@ -1320,6 +1329,7 @@ type OpenUrlHandler = (url: string, source: OpenUrlEvent['source']) => void
 // idiom) — consumers never need the `kind` discriminant.
 type ProjectGroupsChangedHandler = (reason: string, groupId?: string) => void
 type FeedbackChangedHandler = (reason: string) => void
+type AppApprovalsChangedHandler = (pending: number) => void
 type ChatHistoryChangedHandler = () => void
 type TokenUsageChangedHandler = () => void
 type LlmAccountsChangedHandler = (tool: string | null) => void
@@ -1387,6 +1397,7 @@ interface AppBusHandlers {
   openUrl: Set<OpenUrlHandler>
   projectGroupsChanged: Set<ProjectGroupsChangedHandler>
   feedbackChanged: Set<FeedbackChangedHandler>
+  appApprovalsChanged: Set<AppApprovalsChangedHandler>
   chatHistoryChanged: Set<ChatHistoryChangedHandler>
   tokenUsageChanged: Set<TokenUsageChangedHandler>
   llmAccountsChanged: Set<LlmAccountsChangedHandler>
@@ -1441,6 +1452,7 @@ function createBusState(scopeId: string): BusState {
       openUrl: new Set(),
       projectGroupsChanged: new Set(),
       feedbackChanged: new Set(),
+      appApprovalsChanged: new Set(),
       chatHistoryChanged: new Set(),
       tokenUsageChanged: new Set(),
       llmAccountsChanged: new Set(),
@@ -1632,6 +1644,14 @@ export function onProjectGroupsChanged(
  *  bus survives host-switch WS teardown/reopen. */
 export function onFeedbackChanged(scope: ServerScope, fn: FeedbackChangedHandler): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.feedbackChanged, fn)
+}
+
+/** 0.46.4 — subscribe to APP-LEVEL `app_approvals_changed` (a held App
+ *  request was filed, asked again or decided). The callback gets the
+ *  server's pending count. The primary bus survives host-switch WS
+ *  teardown/reopen. */
+export function onAppApprovalsChanged(scope: ServerScope, fn: AppApprovalsChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.appApprovalsChanged, fn)
 }
 
 /** 0.40.38 remote live-update — subscribe to APP-LEVEL
@@ -1929,6 +1949,10 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   feedback_changed: (h, m) => {
     for (const fn of h.feedbackChanged) fn(m.reason)
+  },
+  app_approvals_changed: (h, m) => {
+    const pending = typeof m.pending === 'number' && m.pending >= 0 ? m.pending : 0
+    for (const fn of h.appApprovalsChanged) fn(pending)
   },
   chat_history_changed: (h) => {
     for (const fn of h.chatHistoryChanged) fn()

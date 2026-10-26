@@ -10,8 +10,9 @@
 //   - Deny = POST /cli/app/deny with an optional note the requester reads.
 // AR43: with no vault password and no Owner Connect login the daemon can't
 // take a confirm, so Approve is off and the daemon's hint shows.
-// Thin client: no polling; it reloads on open, after a gesture and when the
-// window regains focus.
+// Thin client: no polling; it reloads on open, after a gesture, when the
+// window regains focus, and on the daemon's `app_approvals_changed` push
+// (0.46.4: a request an agent files while this is open shows at once).
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Callout } from '@/components/ui'
@@ -19,6 +20,7 @@ import { formatRelativeTime } from '@/lib/format-relative-time'
 import { daemonErrorText } from '@/lib/daemon-error'
 import type { SettingEntry } from '../searchManifest'
 import { vaultApi } from './vault-api'
+import { useAppApprovalsStore } from '@/stores/app-approvals'
 import {
   APP_APPROVE_CONFIRM_ACTION,
   approveAppRequest,
@@ -77,6 +79,13 @@ export function AppApprovalsSection(): React.JSX.Element {
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [load])
+
+  // The daemon's push (a request filed, asked again or decided).
+  const revision = useAppApprovalsStore((s) => s.revision)
+  const firstRevision = useRef(revision)
+  useEffect(() => {
+    if (revision !== firstRevision.current) void load()
+  }, [revision, load])
 
   const pending = (rows ?? []).filter((r) => r.status === 'pending')
   const history = (rows ?? []).filter((r) => r.status !== 'pending')

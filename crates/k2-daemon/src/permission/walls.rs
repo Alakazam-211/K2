@@ -481,6 +481,11 @@ fn teach(
     if !response.is_object() || response.get("permission").is_some() {
         return None;
     }
+    // A held App answer whose card K2 already raised (0.46.4,
+    // `apps::approvals::held_note`): nothing to ask; the answer names it.
+    if response.pointer("/card/raised").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
     let req = Refused { status: code, method, path, params, body: req_body, response: &response };
     let p = permission_for(&req)?;
     add_permission(body, &p)

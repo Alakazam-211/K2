@@ -1263,13 +1263,21 @@ _permission_in_body() {
     [ -n "$(_permission_closing_lines "$1")" ]
 }
 
-# The EXIT trap (installed by the router): print the noted line, once.
-# Never fails, so the command's own exit code stands.
+# The EXIT trap (installed by the router): print the noted line, once,
+# and ONLY when the command itself failed: refused (exit 3), held (exit 2),
+# or a family that still maps a refusal to exit 1. Never on success: a
+# command that succeeded may still have met a refusal on the way (the cell
+# socket, then TCP; a probe), and its "Ask with …" / "It can't be
+# requested." line read like a failure under a success (0.46.4 field
+# report: `k2 thread`). `$1` is the exit status when the trap ran
+# something first. Never fails, so the command's own exit code stands.
 _permission_note_flush() {
-    local f
+    local rc="${1:-$?}" f
     f="$_K2_PERMISSION_NOTE"
     if [ -f "$f" ]; then
-        cat "$f" >&2 2>/dev/null || true
+        if [ "$rc" != 0 ]; then
+            cat "$f" >&2 2>/dev/null || true
+        fi
         rm -f "$f" 2>/dev/null || true
     fi
     return 0
@@ -10132,6 +10140,11 @@ print("held for the owner: %s" % r["id"])
 print("  %s" % r["summary"])
 if v.get("alreadyAllowed"):
     print("  already allowed: " + ", ".join(v["alreadyAllowed"]))
+if v.get("reused"):
+    print("  this is your earlier request %s (asked %s ago), still pending; nothing new was filed" % (r["id"], v.get("askedAgo") or "a while"))
+c = v.get("card") if isinstance(v.get("card"), dict) else {}
+if c.get("where"):
+    print("  owner: %s" % c["where"])
 print("  " + v.get("hint", ""))
 sys.exit(2)'
 }
@@ -10482,6 +10495,15 @@ for h in helds:
         print("  %s" % line)
     for why in h.get("reasons") or []:
         print("  why: %s" % why)
+    # 0.46.4: say when this is the earlier request again, and where the
+    # owner sees it (the permission card, or App Approvals).
+    if h.get("reused"):
+        print("  this is your earlier request %s (asked %s ago), still pending; nothing new was filed" % (r.get("id"), h.get("askedAgo") or "a while"))
+    c = h.get("card") if isinstance(h.get("card"), dict) else {}
+    if c.get("where"):
+        print("  owner: %s" % c["where"])
+    if c.get("error") and (c["error"].get("hint") or c["error"].get("code")):
+        print("  card not raised: %s" % (c["error"].get("hint") or c["error"].get("code")))
     print(h.get("hint", ""))'
         fi
         exit 2
@@ -11073,7 +11095,7 @@ _app_data_get() {
         # A refusal mid-way exits: drop the part file, keep the router's
         # permission-note flush.
         _K2_DG_TMP="$tmp"
-        trap 'rm -f "$_K2_DG_TMP"; _permission_note_flush' EXIT
+        trap '_k2_exit_rc=$?; rm -f "$_K2_DG_TMP"; _permission_note_flush "$_k2_exit_rc"' EXIT
     else
         exec 3>&1
     fi
@@ -18292,6 +18314,11 @@ _compute_split() {
     _CP_BODY="${raw%$'\n'*}"
     [ "$_CP_STATUS" = "$raw" ] && _CP_BODY=""
     [ -z "$_CP_STATUS" ] && _CP_STATUS="000"
+    # 0.46.4 (field report #11): the compute/App transport never noted the
+    # refusal's (or hold's) `permission` object, so an agent refused or held
+    # on `k2 app install` was never shown its "Ask with: k2 permission
+    # request …" line. The flush prints it only on exit 2 or 3.
+    _permission_note "$_CP_BODY"
     return 0
 }
 

@@ -77,6 +77,7 @@ import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { webFeatures } from '@/web/features'
 import { isAirgap } from '@/lib/airgap'
 import { escOwnedByDialog } from './settings-esc'
+import { useAppApprovalsStore } from '@/stores/app-approvals'
 
 // ── Section nav ──────────────────────────────────────────────────────
 // Top-level items, then titled groups with indented children.
@@ -273,6 +274,8 @@ export function settingsNav({
 // IDs here are the stable contract.
 export default function Settings(): React.JSX.Element {
   const activeSection = useSettingsStore((s) => s.activeSection)
+  // 0.46.4: held App requests waiting on this server (the nav badge).
+  const appApprovalsPending = useAppApprovalsStore((s) => s.pending)
   const setSection = useSettingsStore((s) => s.setSection)
   const closeSettings = useSettingsStore((s) => s.closeSettings)
   // General splits into a half/half pane (host controls on the right, full-
@@ -521,6 +524,7 @@ export default function Settings(): React.JSX.Element {
                       nested
                       beta={it.beta}
                       comingSoon={it.comingSoon}
+                      count={id === 'app-approvals' ? appApprovalsPending : undefined}
                       active={activeSection === id}
                       onClick={() => setSection(id)}
                     />
@@ -789,6 +793,7 @@ function SettingsNavButton({
   nested,
   beta,
   comingSoon,
+  count,
   onClick,
 }: {
   id: SettingsSection
@@ -797,6 +802,8 @@ function SettingsNavButton({
   nested?: boolean
   beta?: boolean
   comingSoon?: boolean
+  /** A right-side count badge; 0 or absent hides it. */
+  count?: number
   onClick: () => void
 }): React.JSX.Element {
   return (
@@ -816,6 +823,15 @@ function SettingsNavButton({
       ) : null}
       {comingSoon ? (
         <span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>
+      ) : null}
+      {count && count > 0 ? (
+        <span
+          data-settings-badge={id}
+          aria-label={`${count} waiting`}
+          className="ml-auto min-w-[16px] text-center text-[9px] font-semibold px-1 py-0.5 rounded-full bg-[var(--color-accent)] text-white"
+        >
+          {count > 99 ? '99+' : count}
+        </span>
       ) : null}
     </button>
   )

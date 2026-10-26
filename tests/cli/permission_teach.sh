@@ -86,6 +86,22 @@ class H(BaseHTTPRequestHandler):
             return self.reply(200, {"id": "pr_7f3a2c", "status": "pending", "expiresAt": 4102444800,
                                     "routedTo": [{"login": "rosson", "role": "owner"}, {"login": "maya", "role": "admin"}],
                                     "text": "Let billing run jobs on this server's compute nodes."})
+        if path == "/cli/thread/post":
+            # A success whose body still carries a `permission` object (what a
+            # transport notes when a first hop was refused and a fallback then
+            # succeeded, 0.46.4 field report): the command exits 0.
+            return self.reply(200, {"ok": True, "id": "t_1", "seq": 1,
+                                    "permission": {"requestable": False, "where": "a person does this"}})
+        if path == "/cli/app/install" and on:
+            # A held install that reused an earlier request; the card could
+            # not go up, so the hold carries the Ask object (0.46.4 #9/#11).
+            body = {"ok": True, "status": "held", "kind": "manage", "app": "heldapp",
+                    "request": {"id": "w_abc123def456", "summary": "k2 app install heldapp"},
+                    "hint": "held for the owner: they approve it in person.",
+                    "reused": True, "askedAgo": "2 h",
+                    "card": {"raised": False, "where": "no permission card went up; the request waits in Settings → App Approvals"},
+                    "permission": ask("apps.approve", " request=w_abc123def456")}
+            return self.reply(202, body)
         if path in ("/cli/settings/update", "/cli/workspace/open"):
             return self.reply(403, {"error": {"code": "owner_only", "hint": "owner only"}})
         err = {"error": {"code": "owner_only", "hint": "only the server's owner may do this"}}
@@ -182,6 +198,25 @@ run agent connections add billing
     || bad "connections add: last stderr line is '$(last_err_line)'"
 [ "$(printf '%s\n' "$ERR" | grep -c '^Ask with:')" = 1 ] && ok || bad "connections add: the closing line must print once"
 [ "$RC" = 3 ] && ok || bad "connections add: exit $RC, want 3"
+
+# A command that succeeds never ends with a closing line, even when a body
+# on the way carried a `permission` object (0.46.4 field report: a
+# successful `k2 thread` post printed "It can't be requested." at exit 0).
+run agent thread billing "the report is ready"
+[ "$RC" = 0 ] && ok || bad "thread post: exit $RC, want 0 ($ERR)"
+printf '%s\n%s' "$OUT" "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "thread post: a closing line on success: $ERR" || ok
+grep -q '^POST /cli/thread/post ' "$LOG" && ok || bad "thread post: never reached the stub: $(cat "$LOG")"
+
+# A held App install (exit 2) says it reused the earlier request, where the
+# owner sees it, and ends with the Ask-with line the compute/App transport
+# now notes (0.46.4 #9/#11).
+run agent app install heldapp
+[ "$RC" = 2 ] && ok || bad "app install held: exit $RC, want 2 ($ERR)"
+printf '%s\n' "$OUT" | grep -q '^held for the owner: w_abc123def456' && ok || bad "app install held: '$OUT'"
+printf '%s\n' "$OUT" | grep -q 'this is your earlier request w_abc123def456 (asked 2 h ago)' && ok || bad "app install held: no reuse line: '$OUT'"
+printf '%s\n' "$OUT" | grep -q '^  owner: no permission card went up; the request waits in Settings → App Approvals' && ok || bad "app install held: no owner line: '$OUT'"
+[ "$(last_err_line)" = 'Ask with: k2 permission request apps.approve request=w_abc123def456 --why "<what you need it for>"' ] && ok \
+    || bad "app install held: last stderr line is '$(last_err_line)'"
 
 # A machine-only refusal: the plain-text hint, then "It can't be requested."
 run agent connections remove billing

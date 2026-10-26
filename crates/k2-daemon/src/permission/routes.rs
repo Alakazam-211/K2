@@ -480,6 +480,23 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
     }))
 }
 
+/// Raise (or find) the `apps.approve` card for a held App request the
+/// agent's own call just held (0.46.4 field report: a held `k2 app
+/// install` never said whether a card went up; a repeat after the owner
+/// turned cards on stayed silent). The same path as `k2 permission request
+/// apps.approve request=<id>`: one card per request (an open one is found,
+/// `already_pending`), the ask limits, the agent's pinned Thread. The
+/// caller checks the gate. Answers `(http status, body)`.
+pub(crate) fn raise_held_card(workspace_id: &str, session_id: &str, request_id: &str, why: &str) -> (u16, Value) {
+    let mut body = Map::new();
+    body.insert("action".into(), json!("apps.approve"));
+    body.insert("params".into(), json!({ "request": request_id }));
+    body.insert("why".into(), json!(why));
+    let r = request(workspace_id, session_id, &body);
+    let status = r.status.split_whitespace().next().and_then(|c| c.parse().ok()).unwrap_or(500);
+    (status, serde_json::from_str(&r.body).unwrap_or(Value::Null))
+}
+
 /// The people a card is routed to: `[{login, role}]` (the eligible logins).
 fn routed_to(floor: k2_core::permission::catalog::Floor) -> Value {
     let roles: std::collections::HashMap<String, String> = k2_core::connect_users::list_users()

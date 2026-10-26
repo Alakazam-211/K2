@@ -455,6 +455,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // never cross the tunnel.
         SessionEvent::ProjectGroupsChanged { .. } => None,
         SessionEvent::FeedbackChanged { .. } => None,
+        // 0.46.4 — held App requests are box-global (the owner's list).
+        SessionEvent::AppApprovalsChanged { .. } => None,
         // prd-app-tickets-websocket-v1 — APP-LEVEL like FeedbackChanged.
         // The desktop board ignores it (it refetches on feedback_changed);
         // the app activity socket maps it per room on projectId.
@@ -872,6 +874,7 @@ mod tests {
             SessionEvent::OpenUrl { url: "https://example.com".into(), source: "shim".into() },
             SessionEvent::ProjectGroupsChanged { reason: "groups-changed".into(), group_id: None },
             SessionEvent::FeedbackChanged { reason: "created".into() },
+            SessionEvent::AppApprovalsChanged { pending: 1 },
             SessionEvent::TicketChanged {
                 project_id: "p".into(),
                 id: "t".into(),

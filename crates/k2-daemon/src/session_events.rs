@@ -717,6 +717,16 @@ pub enum SessionEvent {
     /// Refetch signal only, no item payload.
     FeedbackChanged { reason: String },
 
+    /// 0.46.4 (field report: a held `k2 app install` was in `k2 app
+    /// approvals` but the owner's App Approvals showed nothing) — the held
+    /// App requests changed: filed (or re-asked), approved, denied,
+    /// withdrawn or expired. `pending` is how many wait on this box (what
+    /// the owner's `k2 app approvals` lists): the Settings badge count.
+    /// APP-LEVEL so a client connected over K2 Connect gets it too.
+    ///
+    /// Wire: `{ "kind": "app_approvals_changed", "pending": number }`.
+    AppApprovalsChanged { pending: u64 },
+
     /// prd-app-tickets-websocket-v1 (0.43.3) — one ticket changed. Emitted
     /// once per stored ticket mutation from `feedback_routes.rs`, next to
     /// the legacy hook (which keeps driving [`SessionEvent::FeedbackChanged`]
@@ -1055,6 +1065,7 @@ impl SessionEvent {
             SessionEvent::OpenUrl { .. } => "open_url",
             SessionEvent::ProjectGroupsChanged { .. } => "project_groups_changed",
             SessionEvent::FeedbackChanged { .. } => "feedback_changed",
+            SessionEvent::AppApprovalsChanged { .. } => "app_approvals_changed",
             SessionEvent::TicketChanged { .. } => "ticket_changed",
             SessionEvent::MailChanged { .. } => "mail_changed",
             SessionEvent::SewChanged { .. } => "sew_changed",
@@ -2218,6 +2229,16 @@ mod tests {
         assert_eq!(json["kind"], "feedback_changed");
         assert_eq!(json["reason"], "created");
         assert_keys(&json, &["kind", "reason"]);
+    }
+
+    /// 0.46.4 FROZEN WIRE CONTRACT: `{ "kind": "app_approvals_changed",
+    /// "pending": number }` (the renderer's App Approvals badge).
+    #[test]
+    fn app_approvals_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::AppApprovalsChanged { pending: 3 });
+        assert_eq!(json["kind"], "app_approvals_changed");
+        assert_eq!(json["pending"], 3);
+        assert_keys(&json, &["kind", "pending"]);
     }
 
     /// K2 Mail FROZEN WIRE CONTRACT: `{ "kind": "mail_changed",

@@ -58,6 +58,7 @@ import ProjectsPage from './components/Projects/ProjectsPage'
 import WikiPage from './components/Wiki/WikiPage'
 import { usePageViewStore, isRoomPage, primaryRoomPageLive } from './stores/page-view'
 import { initFeedbackEvents } from './stores/feedback'
+import { initAppApprovalsEvents } from './stores/app-approvals'
 import { initProjectGroupEvents } from './stores/project-groups'
 import { startHomesSync } from './lib/homes-sync'
 import { PageLiveContext } from './contexts/TabVisibilityContext'
@@ -416,6 +417,8 @@ function AppRoot(): React.JSX.Element {
     }
     initFeedbackEvents(notify)
     initProjectGroupEvents()
+    // 0.46.4: held App requests — the App Approvals badge and live reload.
+    initAppApprovalsEvents()
   }, [])
 
   // homes-sync-v1 (0.46.1): sync this computer's Homes with its own daemon

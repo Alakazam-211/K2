@@ -79,6 +79,11 @@ pub fn too_large() -> CliResponse {
 }
 
 pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
+    let caller = who.clone();
+    super::approvals::enrich_held(&caller, handle_inner(path, who, body, params))
+}
+
+fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
     // Q7: a Member login sees Apps and changes nothing.
     if is_post_route(path) {
         if let Err(e) = super::access::member_read_only(&who) {
@@ -311,6 +316,7 @@ pub(crate) fn hold(who: &Who, kind: &str, t: Option<&Target>, label: &str, works
         .map_err(db_err)?
     };
     audit("app-request", &by, &format!("held {} {kind} {label}", req.id));
+    super::approvals::changed(Some(&req.id));
     Ok(super::approvals::held_answer(&req))
 }
 

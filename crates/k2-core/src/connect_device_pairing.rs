@@ -151,6 +151,12 @@ pub fn normalize(raw: &str) -> Option<String> {
 /// most [`MAX_NAME_CHARS`]; empty becomes `Phone` (security review F7).
 /// Display surfaces still escape it for their medium.
 pub fn clean_device_name(raw: &str) -> String {
+    clean_name(raw, MAX_NAME_CHARS, "Phone")
+}
+
+/// [`clean_device_name`]'s rules with the caller's cap and empty default
+/// (an App's device sign-in names default to `Device`, app pairing V12).
+pub fn clean_name(raw: &str, max_chars: usize, empty: &str) -> String {
     let mut out = String::new();
     let mut space = false;
     for c in raw.chars() {
@@ -172,10 +178,10 @@ pub fn clean_device_name(raw: &str) -> String {
         }
         out.push(c);
     }
-    let cut: String = out.chars().take(MAX_NAME_CHARS).collect();
+    let cut: String = out.chars().take(max_chars).collect();
     let cut = cut.trim().to_string();
     if cut.is_empty() {
-        "Phone".to_string()
+        empty.to_string()
     } else {
         cut
     }

@@ -113,6 +113,11 @@ pub mod access;
 /// settings (prd-custom-app-push-v1, 0.46.4).
 #[path = "skin_app_push.rs"]
 pub mod app_push;
+/// Phone pairing for custom Apps: one-time QR codes from a person's web
+/// session, the owner's phone-app config and the pairing rows
+/// (prd-app-phone-pairing-v1, 0.46.5).
+#[path = "skin_app_pairing.rs"]
+pub mod app_pairing;
 /// In-memory guards on the password doors: hash slots, wrong current
 /// passwords, forgot throttles, reset mail budgets (app-user-profile P0).
 #[path = "skin_guard.rs"]
@@ -1516,6 +1521,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // prd-custom-app-push-v1 (0.46.4): push devices and per-App push
     // settings. Additive, no numbered step.
     app_push::ensure_schema(&conn)?;
+    // prd-app-phone-pairing-v1 (0.46.5): the owner's phone-app config and
+    // the pairing rows. Additive, no numbered step.
+    app_pairing::ensure_schema(&conn)?;
     // app-user-profile (0.46.5): profile settings, profiles, session
     // meta. Additive, no numbered step (a 0.46.4 ignores them).
     profile::ensure_schema(&conn)?;

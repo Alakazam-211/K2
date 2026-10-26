@@ -111,7 +111,7 @@ pub struct AppLoginSettings {
     pub stay_signed_in_days: i64,
 }
 
-fn settings_conn(conn: &Connection, app: &str) -> Result<AppLoginSettings, String> {
+pub(super) fn settings_conn(conn: &Connection, app: &str) -> Result<AppLoginSettings, String> {
     let row: Option<(i64, i64)> = conn
         .query_row(
             "SELECT listed, stay_days FROM app_login_settings WHERE app_id = ?1",
@@ -165,7 +165,9 @@ pub struct Device {
 
 /// `device` from a login body: absent or `null` = `Ok(None)` (today's
 /// login). An id is 1..=[`MAX_DEVICE_ID_LEN`] of `[A-Za-z0-9._:-]`; the
-/// name is trimmed, control characters dropped, cut to
+/// name loses control, format and bidi characters (Companion's F7 rules,
+/// app pairing V12: a name is shown to the person and the owner), its
+/// whitespace runs fold to one space, it is cut to
 /// [`MAX_DEVICE_NAME_LEN`] (empty = "Device").
 pub fn parse_device(v: Option<&serde_json::Value>) -> Result<Option<Device>, String> {
     let Some(v) = v.filter(|v| !v.is_null()) else { return Ok(None) };
@@ -180,8 +182,8 @@ pub fn parse_device(v: Option<&serde_json::Value>) -> Result<Option<Device>, Str
         return Err("device.id may contain only letters, digits, '.', '_', ':' and '-'".to_string());
     }
     let raw_name = o.get("name").and_then(|x| x.as_str()).unwrap_or("");
-    let name: String = raw_name.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(MAX_DEVICE_NAME_LEN).collect();
-    Ok(Some(Device { id: id.to_string(), name: if name.is_empty() { "Device".to_string() } else { name } }))
+    let name = crate::connect_device_pairing::clean_name(raw_name, MAX_DEVICE_NAME_LEN, "Device");
+    Ok(Some(Device { id: id.to_string(), name }))
 }
 
 /// One device sign-in, for its person and the owner. Never a secret.
@@ -203,7 +205,15 @@ pub struct DeviceLogin {
     /// The session pass it last minted (to mark "this device").
     #[serde(skip)]
     pub session_token_id: Option<String>,
+    /// How it started: `pairing` (a QR from the person's web App, app
+    /// pairing v1) or `password` (a device login).
+    pub via: &'static str,
 }
+
+/// [`DeviceLogin::via`] for a phone paired by QR.
+pub const VIA_PAIRING: &str = "pairing";
+/// [`DeviceLogin::via`] for a device login with the password.
+pub const VIA_PASSWORD: &str = "password";
 
 /// A device login or refresh: the pass, and the next refresh token (both
 /// shown once).
@@ -314,7 +324,8 @@ pub(super) fn end_chains_where(conn: &Connection, filter: &str, args: &[&dyn rus
 }
 
 const DEVICE_SELECT: &str = "SELECT d.id, d.principal_id, COALESCE(p.username, ''), d.app_id, d.device_id, d.device_name,
-        d.created_at, d.last_used_at, d.expires_at, d.session_token_id
+        d.created_at, d.last_used_at, d.expires_at, d.session_token_id,
+        EXISTS (SELECT 1 FROM device_login_pairings x WHERE x.device_login_id = d.id)
    FROM device_logins d LEFT JOIN principals p ON p.id = d.principal_id";
 
 fn map_device(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceLogin> {
@@ -329,6 +340,7 @@ fn map_device(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceLogin> {
         last_used_at: r.get(7)?,
         expires_at: r.get(8)?,
         session_token_id: r.get(9)?,
+        via: if r.get::<_, bool>(10)? { VIA_PAIRING } else { VIA_PASSWORD },
     })
 }
 
@@ -393,7 +405,7 @@ pub fn device_for_session(token_id: &str) -> Result<Option<DeviceLogin>, String>
     with_conn(|conn| Ok(live_devices_where(conn, "d.session_token_id = ?2", &[&token_id])?.into_iter().next()))
 }
 
-fn new_chain_conn(
+pub(super) fn new_chain_conn(
     conn: &Connection,
     principal_id: &str,
     app: &str,
@@ -437,7 +449,7 @@ fn new_chain_conn(
 }
 
 /// A pass never outlives its device sign-in.
-fn cap_pass_expiry(conn: &Connection, token_id: &str, chain_expires: i64) -> Result<i64, String> {
+pub(super) fn cap_pass_expiry(conn: &Connection, token_id: &str, chain_expires: i64) -> Result<i64, String> {
     conn.execute(
         "UPDATE tokens SET expires_at = MIN(COALESCE(expires_at, ?1), ?1) WHERE id = ?2",
         params![chain_expires, token_id],
@@ -447,7 +459,7 @@ fn cap_pass_expiry(conn: &Connection, token_id: &str, chain_expires: i64) -> Res
         .map_err(|e| format!("device pass expiry: {e}"))
 }
 
-fn finish(session: SkinAppSession) -> SkinAppSession {
+pub(super) fn finish(session: SkinAppSession) -> SkinAppSession {
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
     SkinAppSession { meta: super::attach_token_handles(session.meta), ..session }
 }

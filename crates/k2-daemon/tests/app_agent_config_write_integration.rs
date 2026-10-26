@@ -312,8 +312,6 @@ async fn guests_cannot_write_agent_config_unless_the_owner_opts_in() {
 
         // An agent with "manage Apps" can't set or spread the opt-in.
         k2_core::workspace::settings::set_agents_can_manage_skin(&a.path, true).expect("manage on");
-        // 0.46.4: its App users are their own switch.
-        k2_core::workspace::settings::set_agents_can_manage_app_users(&a.id, true).expect("app users on");
         let hook = mint_passport(&a);
         let owner_only = |r: &Resp, label: &str| {
             assert_eq!(r.status, 403, "{label}; {}", r.body);
@@ -338,6 +336,12 @@ async fn guests_cannot_write_agent_config_unless_the_owner_opts_in() {
             let conn = db.lock();
             k2_core::published_services::insert(&conn, &a.id, "cfgapp", "node s.mjs", &app_dir.to_string_lossy(), 47_401, "local", "stopped", "cmd", "").expect("service").id
         };
+        // 0.46.4: its App users are their own switch, "Let this agent manage
+        // its Apps' users": off, the add is refused and nothing is made.
+        let r = post(port, &hook, "/cli/skin/users", serde_json::json!({"username": "agentguest", "app": app}));
+        assert_eq!((r.status, r.json()["error"]["code"].clone()), (403, serde_json::json!("app_users_off")), "{}", r.body);
+        assert!(k2_core::skin::list_principals().unwrap().iter().all(|p| p.username != "agentguest"), "nothing made");
+        k2_core::workspace::settings::set_agents_can_manage_app_users(&a.id, true).expect("app users on");
         let r = post(port, &hook, "/cli/skin/users", serde_json::json!({"username": "agentguest", "app": app}));
         assert_eq!(r.status, 200, "agent adds an App user; {}", r.body);
         let r = post(port, &hook, "/cli/skin/roles/assign", serde_json::json!({"username": "agentguest", "role": "r-gopt"}));

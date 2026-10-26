@@ -13218,6 +13218,10 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let mut params = request_params;
+            // Never trust a query/body stamp (verification 0.46.4: a Member
+            // sent `principal_bound=1&project_id=…` and was read as an
+            // agent): only a validated passport sets it, below.
+            params.remove(crate::caller_workspace::PRINCIPAL_BOUND_KEY);
             // Scoped agent principal is never privileged for mutate.
             let privileged = scoped_principal.is_none()
                 && super::http::token_is_owner_or_admin(&query, state.token.as_str());

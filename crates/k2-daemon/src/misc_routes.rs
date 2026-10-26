@@ -578,7 +578,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/connections" if params.get("action").map(String::as_str) == Some("resolve") => {
             let target = opt_param(params, "target").unwrap_or_default();
             let privileged = params.get("actor_privileged").is_some_and(|v| v == "1");
-            let agent = crate::caller_workspace::principal_from_params(params).is_some();
+            // The passport-validated principal (TCP and the cell socket both
+            // install it), never the params map: a `principal_bound` stamp in
+            // a request is the caller's word.
+            let agent = crate::caller_workspace::request_principal().is_some();
             crate::federation_routes::connections_resolve(&target, privileged || agent)
         }
         "/cli/connections" => match need_project(params) {

@@ -1971,6 +1971,10 @@ pub(crate) fn connections_resolve(target: &str, full: bool) -> CliResponse {
     }
     let found = match resolve_connect_target(target) {
         Ok(t) => t,
+        // A Member gets found / not found only: the did-you-mean and
+        // ambiguous answers name other workspaces' handles.
+        Err(("bad_usage", hint)) if !full => return refuse("400 Bad Request", "bad_usage", hint),
+        Err(_) if !full => return refuse("404 Not Found", "not_found", format!("no workspace '{}' here", target.trim())),
         Err(("bad_usage", hint)) => return refuse("400 Bad Request", "bad_usage", hint),
         Err(("ambiguous", hint)) => return refuse("409 Conflict", "ambiguous", hint),
         Err((code, hint)) => return refuse("404 Not Found", code, hint),

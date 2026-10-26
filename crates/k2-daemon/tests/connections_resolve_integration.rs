@@ -30,15 +30,25 @@ async fn resolve_reads_another_server_only_for_the_owner_an_admin_or_an_agent() 
     let local = format!("action=resolve&target={}", enc(&path));
 
     let member = session("resmember", k2_core::connect_users::Role::Member);
-    for q in [remote.clone(), format!("{remote}&actor_privileged=1")] {
+    // Neither a privilege stamp nor an agent stamp in the request counts:
+    // `principal_bound=1&project_id=<ws>` used to read as that workspace's
+    // agent (verification 0.46.4).
+    let spoof = format!("principal_bound=1&project_id={}", enc(&ws.id));
+    for q in [remote.clone(), format!("{remote}&actor_privileged=1"), format!("{remote}&{spoof}")] {
         let r = get(d.port, "/cli/connections", &member, &q).await;
         assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{q}: {}", r.body);
     }
-    let r = get(d.port, "/cli/connections", &member, &local).await;
-    assert_eq!(r.status, 200, "{}", r.body);
-    let v = r.json();
-    assert_eq!(v["kind"], "local", "{v}");
-    assert!(v.get("path").is_none() && v.get("projectId").is_none(), "a Member gets no path or id: {v}");
+    for q in [local.clone(), format!("{local}&{spoof}")] {
+        let r = get(d.port, "/cli/connections", &member, &q).await;
+        assert_eq!(r.status, 200, "{q}: {}", r.body);
+        let v = r.json();
+        assert_eq!(v["kind"], "local", "{v}");
+        assert!(v.get("path").is_none() && v.get("projectId").is_none(), "a Member gets no path or id: {v}");
+    }
+    // A miss is a bare not_found for a Member: no did-you-mean handles.
+    let r = get(d.port, "/cli/connections", &member, &format!("action=resolve&target={}", enc("resolvewz"))).await;
+    assert_eq!((r.status, r.code()), (404, "not_found".to_string()), "{}", r.body);
+    assert!(!r.body.contains("resolvews"), "no handles for a Member: {}", r.body);
 
     // The owner (and an admin) get the full answer; an agent's passport too.
     let admin = session("resadmin", k2_core::connect_users::Role::Admin);

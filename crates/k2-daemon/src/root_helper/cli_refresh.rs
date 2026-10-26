@@ -642,9 +642,32 @@ mod tests {
         std::os::unix::fs::symlink(dir.0.join("bin"), dir.0.join("linked")).unwrap();
         let f = inspect_path(&dir.0.join("linked/k2"), false);
         assert_eq!(f.dir_problem.as_deref(), Some("directory is a link"));
-        // A temp dir is not root's: with real owners on, it is named.
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let bin = dir.0.join("bin");
+        let chmod = |mode: u32| std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(mode)).expect("chmod bin");
+        // SAFETY: geteuid has no preconditions.
+        let root = unsafe { libc::geteuid() } == 0;
+        // Not root's: with real owners on, it is named. A non-root run owns
+        // the temp dir already; a root run (the soak box) hands it to
+        // nobody, so the uid rule is what answers either way.
+        chmod(0o755);
+        if root {
+            std::os::unix::fs::chown(&bin, Some(65534), Some(65534)).expect("chown bin to nobody");
+        }
+        assert_ne!(std::fs::metadata(&bin).expect("stat bin").uid(), 0, "the fixture is not root's");
         let f = inspect_path(&dir.0.join("bin/k2"), true);
         assert_eq!(f.dir_problem.as_deref(), Some("directory not root-owned"));
+        if root {
+            // Root's and 0755: nothing to name. Group- or world-writable
+            // root's dir: named all the same.
+            std::os::unix::fs::chown(&bin, Some(0), Some(0)).expect("chown bin back to root");
+            assert_eq!(inspect_path(&dir.0.join("bin/k2"), true).dir_problem, None, "a root-owned 0755 dir is fine");
+            for mode in [0o775, 0o757] {
+                chmod(mode);
+                let f = inspect_path(&dir.0.join("bin/k2"), true);
+                assert_eq!(f.dir_problem.as_deref(), Some("directory not root-owned"), "mode {mode:o}");
+            }
+        }
     }
 
     /// A FIFO at the path: `GET /cli/root-helper/status` (open to agents)

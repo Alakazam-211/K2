@@ -1170,6 +1170,10 @@ fn set(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultE
     } else {
         vec![]
     };
+    // Papercut 8: a new file secret reaches its live sessions now.
+    if out.created && out.meta.default_delivery == Delivery::File {
+        crate::vault::spawn::top_up_all(vault);
+    }
     let r = crate::vault::display_ref(&out.meta);
     Ok(json!({
         "ok": true,
@@ -1191,8 +1195,8 @@ pub fn use_hint(m: &SecretMeta) -> String {
         }
         Delivery::Fetch | Delivery::Proxy => "add a site first: ask the owner, or k2 vault hosts".into(),
         Delivery::Agent => format!("$SSH_AUTH_SOCK in new sessions: ssh and git sign with {}; nobody sees the key", m.name),
-        Delivery::File => format!("$K2_SECRETS_DIR/{} (new sessions; read the file)", m.name),
-        Delivery::Env => format!("${} in new sessions", m.name),
+        Delivery::File => format!("$K2_SECRETS_DIR/{} (read the file; a running session gets it within a minute, or now with k2 vault sync)", m.name),
+        Delivery::Env => format!("${} in new sessions ({})", m.name, crate::vault::spawn::RESTART_TO_RECEIVE),
         Delivery::Api => format!("k2 vault get {}", m.name),
         Delivery::None => "not delivered".into(),
     }
@@ -1375,11 +1379,40 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
         crate::vault::auth_audit("vault-api-grant", &c.actor.stamp(), &format!("ok {}", g.secret_id), "-");
     }
     let mut out = json!({ "ok": true, "grant": g });
+    // Papercut 8: what a running session gets from this grant. A file
+    // reaches the live sessions it covers now; env and ssh-agent items
+    // can't reach a running process.
+    if let Some(reach) = grant_reach(vault, &g.consumer, delivery) {
+        out["reach"] = reach.into();
+    }
     // A compute grant to a node another K2 server owns (review B-L3).
     if let Some(w) = crate::compute_secrets::grant_warning(&g.consumer) {
         out["warning"] = w.into();
     }
     Ok(out)
+}
+
+/// Papercut 8: what a grant to agent sessions means for the ones already
+/// running. A `file` grant is written into every live session it covers
+/// now ([`crate::vault::spawn::top_up_all`]); env and ssh-agent grants
+/// can't reach a running process. `None` for other consumers (services,
+/// jobs, compute) and other deliveries.
+pub(crate) fn grant_reach(vault: &LocalVault, consumer: &k2_vault::Consumer, delivery: Delivery) -> Option<String> {
+    if !matches!(consumer.kind, ConsumerKind::Workspace | ConsumerKind::Session) {
+        return None;
+    }
+    let restart = crate::vault::spawn::RESTART_TO_RECEIVE;
+    match delivery {
+        Delivery::File => {
+            let n = crate::vault::spawn::top_up_all(vault);
+            Some(format!(
+                "running sessions get the file in $K2_SECRETS_DIR now ({n} written); one started before 0.46.5 may have no $K2_SECRETS_DIR: {restart} (k2 vault sync says)"
+            ))
+        }
+        Delivery::Env => Some(format!("env arrives in new sessions only: {restart}")),
+        Delivery::Agent => Some(format!("ssh keys arrive on $SSH_AUTH_SOCK in new sessions: {restart}")),
+        _ => None,
+    }
 }
 
 /// The workspace a `session:<id>` consumer belongs to: a live passport's

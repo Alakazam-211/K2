@@ -250,6 +250,10 @@ pub fn handle_kill(body_bytes: &[u8]) -> CliResponse {
             // COMPAT-58: revoke any scoped passport minted for this terminal
             // id + drop its UDS. No-op when flag off / never minted.
             if let Some(sid) = k2_core::session::SessionId::parse(&body.id) {
+                // K2 vault: its secrets dir goes now (the minute sweep
+                // would take it too, now that a live legacy terminal
+                // counts as live: `session_liveness`).
+                crate::vault::spawn::session_ended(&sid.to_string());
                 if crate::session_token::scoped_hooks_enabled() {
                     crate::session_token::revoke_session(&sid);
                     #[cfg(unix)]

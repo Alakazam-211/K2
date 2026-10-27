@@ -34,15 +34,18 @@ pub const SERVICE: &str = "/cli/vault/service";
 pub const RECIPIENT: &str = "/cli/vault/recipient";
 pub const CARRY_EXPORT: &str = "/cli/vault/carry/export";
 pub const CARRY_IMPORT: &str = "/cli/vault/carry/import";
+/// Papercut 8 (0.46.5): write the file secrets the caller's own running
+/// session is now granted into its `$K2_SECRETS_DIR` (`k2 vault sync`).
+pub const SYNC: &str = "/cli/vault/sync";
 /// A ciphertext snapshot of vault.db for a backup (§13.1).
 pub const BACKUP: &str = "/cli/vault/backup";
 /// Wrap the data key to a backup's age recipient.
 pub const BACKUP_RECIPIENT: &str = "/cli/vault/backup/recipient";
 
 /// Routes this module serves.
-pub const ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT, SERVICE, RECIPIENT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT];
+pub const ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT, SERVICE, RECIPIENT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT, SYNC];
 /// POST-only routes among them (`service` serves both).
-pub const POST_ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT];
+pub const POST_ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT, SYNC];
 
 pub fn is_route(path: &str) -> bool {
     ROUTES.contains(&path)
@@ -63,6 +66,7 @@ pub fn handle(
     let r = match path {
         FETCH => fetch(vault, c, body),
         ENV_FILE => env_file(vault, c, body),
+        SYNC => sync(vault, c),
         IMPORT => import(vault, c, body),
         SERVICE if body.is_empty() => service_get(vault, c, params),
         SERVICE => service_set(c, body),
@@ -295,7 +299,7 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     let mut lines = String::new();
     for n in &b.secrets {
         let sel = selector(c, &Sel { name: Some(n.clone()), ..Default::default() })?;
-        let r = vault.resolve(&sel, Use::Env, &who)?;
+        let r = vault.resolve(&sel, Use::Env, &who).map_err(|e| env_file_refusal(vault, &who, n, e))?;
         k2_vault::delivery::validate_env_file_value(r.value.expose())?;
         let name = r.env_name.clone().unwrap_or_else(|| k2_vault::delivery::default_env_name(&r.meta.name));
         k2_vault::delivery::validate_env_name(&name)?;
@@ -314,6 +318,74 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
         let _ = crate::vault::adopt::remove_old_copy(&p2);
     });
     Ok(json!({ "ok": true, "path": p.display().to_string(), "ttlSecs": ttl }))
+}
+
+/// Papercut 8: an env-file refused because the secret reaches this session
+/// as a FILE (or an ssh key) says where it is instead of a bare
+/// `delivery_not_granted`.
+fn env_file_refusal(vault: &LocalVault, who: &Requester, name: &str, e: VaultError) -> VaultError {
+    if e.code != "delivery_not_granted" {
+        return e;
+    }
+    let Ok(items) = vault.spawn_items(who) else { return e };
+    let Some(it) = items.into_iter().find(|i| i.name == name) else { return e };
+    match it.delivery {
+        k2_vault::Delivery::File => {
+            let f = it.file_name.unwrap_or(it.name);
+            VaultError::forbidden(
+                "delivery_not_granted",
+                format!(
+                    "{name} is delivered to you as a file, not env: read $K2_SECRETS_DIR/{f}. Not there yet? k2 vault sync (a session with no $K2_SECRETS_DIR: {})",
+                    crate::vault::spawn::RESTART_TO_RECEIVE
+                ),
+            )
+        }
+        k2_vault::Delivery::Agent => VaultError::forbidden(
+            "delivery_not_granted",
+            format!("{name} is an ssh key served on $SSH_AUTH_SOCK (ssh and git sign with it), never as env"),
+        ),
+        _ => e,
+    }
+}
+
+/// `POST /cli/vault/sync` (`k2 vault sync`, papercut 8): the caller's own
+/// running session gets the files it is granted now and doesn't have yet,
+/// and hears which secrets need a restart (env, ssh keys, or no
+/// `$K2_SECRETS_DIR`). The same grant check and audit as at spawn.
+fn sync(vault: &Arc<LocalVault>, c: &VaultCaller) -> Result<Value, VaultError> {
+    let who = c.requester()?;
+    let (ws, sid) = match &who {
+        Requester::Session { workspace_id, session_id: Some(sid) } if !sid.is_empty() => (workspace_id.clone(), sid.clone()),
+        _ => {
+            return Err(VaultError::forbidden(
+                "sync_needs_session",
+                "k2 vault sync fills the secrets dir of the K2 session it runs in; run it there",
+            ))
+        }
+    };
+    let t = crate::vault::spawn::top_up(vault, &sid, &ws);
+    Ok(sync_json(&t))
+}
+
+/// The `k2 vault sync` answer.
+pub(crate) fn sync_json(t: &crate::vault::spawn::TopUp) -> Value {
+    let restart = crate::vault::spawn::RESTART_TO_RECEIVE;
+    let hint = if t.dir.is_none() {
+        format!("this session has no $K2_SECRETS_DIR (it started before 0.46.5, runs sandboxed, or this machine has no memory-backed folder): {restart}")
+    } else if !t.restart.is_empty() {
+        format!("the files are in $K2_SECRETS_DIR; the rest can't reach a running session: {restart}")
+    } else {
+        "every file you are granted is in $K2_SECRETS_DIR".to_string()
+    };
+    json!({
+        "ok": true,
+        "dir": t.dir.as_ref().map(|d| d.display().to_string()),
+        "delivered": t.delivered,
+        "present": t.present,
+        "restart": t.restart,
+        "skipped": t.skipped,
+        "hint": hint,
+    })
 }
 
 // ── import (§10.5) ─────────────────────────────────────────────────

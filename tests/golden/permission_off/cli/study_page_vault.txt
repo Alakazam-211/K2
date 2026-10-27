@@ -38,7 +38,8 @@ HOW YOU GET A SECRET (delivery)
           Some secrets are signers: K2 signs the request (OVH, HMAC, HMAC
           with a timestamp). Same command.
   file    $K2_SECRETS_DIR/<NAME>, memory-backed, removed at session end.
-          You CAN read it — so can anything you run. Opt-in.
+          You CAN read it — so can anything you run. Opt-in. Granted
+          while you run: it arrives within a minute (k2 vault sync: now).
   env     $NAME in new sessions. You can read it. Needs a respawn.
   api     k2 vault get NAME prints it into your transcript. Rare.
   agent   ssh keys: $SSH_AUTH_SOCK in new sessions; ssh and git sign with

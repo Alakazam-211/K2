@@ -1658,6 +1658,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/set", Member),
     get("/cli/vault/show", Member),
     get("/cli/vault/status", Member),
+    post("/cli/vault/sync", Member),
     // prd-vault-gaps-v1 item 4: a root unit's credential is Owner/Admin +
     // a vault confirm (passports refused in the handler, KV14 DENY);
     // (manual placement records, above, are bookkeeping: agents keep

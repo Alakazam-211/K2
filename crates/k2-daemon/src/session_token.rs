@@ -719,6 +719,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/vault/doctor",
         "/cli/vault/fetch",
         "/cli/vault/env-file",
+        // Papercut 8: the caller's own session's granted files, now.
+        "/cli/vault/sync",
         "/cli/vault/import",
         "/cli/vault/service",
         // Manual placement records (prd-vault-gaps-v1 item 4): bookkeeping

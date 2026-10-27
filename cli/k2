@@ -24732,6 +24732,7 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault requests                        Thread secret cards (pending / set / declined)
   k2 vault presets                         known key formats (Stripe, OpenAI, Anthropic, …)
   k2 vault env-file --secret NAME [--ttl 60]   a short-lived 0600 file for docker/podman --env-file
+  k2 vault sync                            files granted since this session started, into $K2_SECRETS_DIR now
   k2 vault import .env [--scope <s>] [--remove-original]   move a .env in; writes .env.k2 (references)
   k2 vault service <service> [clean|legacy] [--env-file .env.k2]   a published service's environment
   k2 publish secret add|remove|list <service> NAME [--as file|env]   secrets a service gets at start
@@ -24830,6 +24831,35 @@ _vault_call() {
 }
 
 _vault_sock() { echo "${K2_HOME}/vault.sock"; }
+
+# k2 vault sync [--json] (0.46.5, papercut 8): this running session's
+# granted files into its $K2_SECRETS_DIR now; says what needs a restart.
+_vault_sync() {
+    local as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            *) echo "usage: k2 vault sync [--json]" >&2; exit 2 ;;
+        esac
+    done
+    _vault_call POST sync '{}'
+    if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+    printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("dir"):
+    print("secrets dir: %s" % v["dir"])
+for f in v.get("delivered") or []:
+    print("delivered  %s" % f)
+for f in v.get("present") or []:
+    print("present    %s" % f)
+for r in v.get("restart") or []:
+    print("restart    %s" % r)
+for s in v.get("skipped") or []:
+    print("skipped    %s" % s)
+print(v.get("hint") or "")
+sys.exit(1 if v.get("skipped") else 0)'
+}
 
 # People-only routes: refuse inside a K2 terminal, then talk to vault.sock.
 _vault_person_guard() {
@@ -25625,7 +25655,10 @@ delivery; a new one replaces the old).
                      (PATH, LD_*, GIT_*, SSH_*, K2_*, *_BASE_URL…) are
                      refused.
   --file-name F      the file in $K2_SECRETS_DIR (default NAME)
-Env and file grants reach new sessions: restart the session.
+A file grant also reaches running sessions: K2 writes it into their
+$K2_SECRETS_DIR at once (or within a minute; k2 vault sync in a session
+does it now). Env and ssh-key grants reach new sessions only: restart
+your session to receive it.
 
 Example, a CLI tool that reads its token from the environment:
   k2 vault grant GITHUB_CLI --to ws:<you> --env-name GH_TOKEN
@@ -25732,6 +25765,19 @@ seconds (default 60, 5 to 3600) or with --done. Each secret needs env
 delivery for you; a value with a line break is refused (use file delivery).
 
 Example: docker run --env-file "$(k2 vault env-file --secret DATABASE_URL)" myapp
+EOF
+            ;;
+        sync) cat <<'EOF'
+k2 vault sync [--json]
+
+From a K2 terminal: write every file secret this session is granted and
+doesn't have yet into its $K2_SECRETS_DIR, now. K2 does the same by
+itself right after a grant and once a minute; sync is for "now" and says
+what's what: delivered, present, restart (env and ssh keys can't reach a
+running session, nor can a file when the session has no $K2_SECRETS_DIR:
+restart your session to receive it), skipped (exit 1).
+
+Example: k2 vault sync && cat "$K2_SECRETS_DIR/DEPLOY_TOKEN"
 EOF
             ;;
         import) cat <<'EOF'
@@ -26474,6 +26520,7 @@ cmd_vault() {
     case "$sub" in
         systemd-cred) _vault_systemd_cred "$@"; return ;;
         placement|placements) _vault_placement "$sub" "$@"; return ;;
+        sync) _vault_sync "$@"; return ;;
     esac
     local as_json=0 scope="" system=0 kind="" hosts="" preset="" delivery="" ceiling="" describe="" rotate_every="" ttl=""
     local inject_header="" inject_format="" inject_dst="" to="" from="" as_d="" env_name="" file_name="" grant_id="" yes=0 since="" to_version=""
@@ -39015,7 +39062,8 @@ HOW YOU GET A SECRET (delivery)
           Some secrets are signers: K2 signs the request (OVH, HMAC, HMAC
           with a timestamp). Same command.
   file    $K2_SECRETS_DIR/<NAME>, memory-backed, removed at session end.
-          You CAN read it — so can anything you run. Opt-in.
+          You CAN read it — so can anything you run. Opt-in. Granted
+          while you run: it arrives within a minute (k2 vault sync: now).
   env     $NAME in new sessions. You can read it. Needs a respawn.
   api     k2 vault get NAME prints it into your transcript. Rare.
   agent   ssh keys: $SSH_AUTH_SOCK in new sessions; ssh and git sign with

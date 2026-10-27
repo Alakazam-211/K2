@@ -21,9 +21,21 @@
 //! Directories are made 0700 and must not exist yet; files are created
 //! `O_CREAT|O_EXCL|O_NOFOLLOW` 0600. Removed when the session ends and
 //! swept at boot.
+//!
+//! Live delivery (0.46.5, field papercut 8): every agent session that can
+//! hold files gets its dir at spawn, even an empty one, so a `file` secret
+//! granted (or set) while it runs can still reach it: [`top_up_all`] writes
+//! the files a live session is now granted and doesn't have yet, right
+//! after a grant or a set and on the vault's minute tick; `k2 vault sync`
+//! runs [`top_up`] for the caller's own session at once. The same grant
+//! check and audit as at spawn (`spawn_items` + `resolve(Use::File)`). Env
+//! and ssh-agent items can't reach a running process: they are listed as
+//! "restart your session to receive it".
 
 use std::collections::HashMap;
 use std::fs::{DirBuilder, OpenOptions};
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -38,6 +50,28 @@ pub const SSH_AUTH_SOCK_ENV: &str = "SSH_AUTH_SOCK";
 
 /// Live session → its secrets dir (removed at session end).
 static DIRS: Mutex<Vec<(String, PathBuf)>> = Mutex::new(Vec::new());
+
+/// What live delivery needs to know about a session with a dir: its
+/// workspace, the env names it got at spawn (`None`: unknown, a session
+/// kept across a restart), and secrets whose live delivery failed (not
+/// retried for [`RETRY_AFTER`], so a refusal isn't audited every minute).
+struct LiveSession {
+    workspace_id: String,
+    env_names: Option<Vec<String>>,
+    failed: HashMap<String, Instant>,
+}
+
+static LIVE: LazyLock<Mutex<HashMap<String, LiveSession>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Live delivery and session end take turns: a session that ends while
+/// its files are topped up never gets its dir made again.
+static TOPUP: Mutex<()> = Mutex::new(());
+
+/// A failed live delivery is tried again after this long.
+const RETRY_AFTER: Duration = Duration::from_secs(600);
+
+/// The words an agent reads when a secret can't reach its running session.
+pub const RESTART_TO_RECEIVE: &str = "restart your session to receive it";
 
 /// The memory-backed root for secrets dirs, or `None` (`no_memory_fs`).
 pub fn secrets_root() -> Option<PathBuf> {
@@ -248,11 +282,29 @@ pub fn materialize(env: &mut HashMap<String, String>, workspace_id: &str, sessio
     if let (Some(via), false) = (refs_from.via.as_deref(), out.delivered.is_empty()) {
         vault.audit_carry("v1_cell_delivery", &k2_vault::Actor::System(via.to_string()), &who.label(), &out.delivered);
     }
+    // Papercut 8: a session with no file secrets yet still gets its (empty)
+    // dir, so a file granted while it runs can reach it ([`top_up`]).
+    // A sandboxed cell can't see a host dir: none.
+    if out.dir.is_none() && !sandboxed {
+        if let Some(root) = secrets_root() {
+            match make_session_dir(&root, session_id) {
+                Ok(d) => {
+                    env.insert(SECRETS_DIR_ENV.to_string(), d.display().to_string());
+                    out.dir = Some(d);
+                }
+                Err(e) => k2_core::log_debug!("[vault] spawn {session_id}: no secrets dir ({})", e.kind()),
+            }
+        }
+    }
     if let Some(d) = &out.dir {
         // The session registers only after its PTY is up (seconds when
         // k2-ptyd launches); the 60 s sweep must not take the dir first.
         crate::session_liveness::note_spawning(session_id);
         DIRS.lock().push((session_id.to_string(), d.clone()));
+        LIVE.lock().insert(
+            session_id.to_string(),
+            LiveSession { workspace_id: ws.to_string(), env_names: Some(out.env_names.clone()), failed: HashMap::new() },
+        );
     }
     out
 }
@@ -462,6 +514,8 @@ fn resolve_env_ref(vault: &k2_vault::LocalVault, r: &str, owner_set: bool, who: 
 
 /// Session ended: its secrets dir and placeholders go.
 pub fn session_ended(session_id: &str) {
+    let _turn = TOPUP.lock();
+    LIVE.lock().remove(session_id);
     let mine: Vec<PathBuf> = {
         let mut g = DIRS.lock();
         let (gone, keep): (Vec<_>, Vec<_>) = g.drain(..).partition(|(s, _)| s == session_id);
@@ -536,22 +590,34 @@ pub fn kept_dir(session_id: &str) -> Option<PathBuf> {
 /// only once k2-ptyd adoption has registered the session
 /// ([`super::ssh_agent::on_adopted`]), from the daemon's own record.
 pub fn sweep_at_boot() {
-    let keep: Vec<(String, PathBuf)> = surviving_dirs();
+    let survivors = surviving_dirs();
+    let keep: Vec<(String, PathBuf)> = survivors.iter().map(|(s, d, _)| (s.clone(), d.clone())).collect();
     let kept = sweep_at_boot_keeping(&keep);
+    // Live delivery for the survivors (papercut 8): their workspace from
+    // the ptyd meta; the env they got at spawn isn't known.
+    {
+        let mut live = LIVE.lock();
+        for (sid, _) in &kept {
+            if let Some((_, _, Some(ws))) = survivors.iter().find(|(s, _, _)| s == sid) {
+                live.insert(sid.clone(), LiveSession { workspace_id: ws.clone(), env_names: None, failed: HashMap::new() });
+            }
+        }
+    }
     if let Ok(v) = super::get() {
         super::ssh_agent::boot_sweep(&v, &kept);
     }
 }
 
-/// The `(session id, secrets dir)` pairs B0 found running in ptyd.
-fn surviving_dirs() -> Vec<(String, PathBuf)> {
+/// The `(session id, secrets dir, workspace)` B0 found running in ptyd.
+fn surviving_dirs() -> Vec<(String, PathBuf, Option<String>)> {
     #[cfg(unix)]
     {
         k2_core::terminal::ptyd::adopt::running()
             .into_iter()
             .filter_map(|s| {
                 let dir = s.meta.get("secrets_dir")?.as_str()?.to_string();
-                Some((s.sid, PathBuf::from(dir)))
+                let ws = s.meta.get("workspace_uuid").and_then(|v| v.as_str()).filter(|w| !w.is_empty()).map(str::to_string);
+                Some((s.sid, PathBuf::from(dir), ws))
             })
             .collect()
     }
@@ -603,6 +669,168 @@ fn sweep_root_keeping(root: &Path, keep: &[(String, PathBuf)]) -> Vec<(String, P
         }
     }
     out
+}
+
+/// What live delivery did for one session (names only).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TopUp {
+    /// The session's secrets dir (`None`: it has none: it started before
+    /// 0.46.5, runs sandboxed, or the machine has no memory filesystem).
+    pub dir: Option<PathBuf>,
+    /// Files written into the dir now.
+    pub delivered: Vec<String>,
+    /// Granted files already in the dir.
+    pub present: Vec<String>,
+    /// Granted, but they can't reach a running session: `NAME (how): why`.
+    pub restart: Vec<String>,
+    /// Granted, but delivery failed: `NAME: code`.
+    pub skipped: Vec<String>,
+}
+
+/// Live delivery for one session: the caller's own (`k2 vault sync`).
+/// `workspace_id` is the caller's: a session K2 recorded under another
+/// workspace gets nothing.
+pub fn top_up(vault: &k2_vault::LocalVault, session_id: &str, workspace_id: &str) -> TopUp {
+    let _turn = TOPUP.lock();
+    let dir = DIRS.lock().iter().find(|(s, _)| s == session_id).map(|(_, d)| d.clone());
+    let mut live = LIVE.lock();
+    match live.get_mut(session_id) {
+        Some(r) if r.workspace_id != workspace_id => TopUp::default(),
+        Some(r) => top_up_one(vault, session_id, workspace_id, dir.as_deref(), r.env_names.as_deref(), &mut r.failed, true),
+        None => top_up_one(vault, session_id, workspace_id, dir.as_deref(), None, &mut HashMap::new(), true),
+    }
+}
+
+/// Live delivery for every live session with a dir (after a grant or a
+/// set, and on the vault's minute tick). Returns how many files it wrote.
+pub fn top_up_all(vault: &k2_vault::LocalVault) -> usize {
+    let _turn = TOPUP.lock();
+    let dirs: Vec<(String, PathBuf)> = DIRS.lock().clone();
+    let mut n = 0;
+    for (sid, dir) in dirs {
+        let mut live = LIVE.lock();
+        let Some(r) = live.get_mut(&sid) else { continue };
+        let ws = r.workspace_id.clone();
+        let t = top_up_one(vault, &sid, &ws, Some(&dir), r.env_names.as_deref(), &mut r.failed, false);
+        drop(live);
+        if !t.delivered.is_empty() || !t.skipped.is_empty() {
+            k2_core::log_debug!("[vault] live delivery {sid}: files {:?} skipped {:?}", t.delivered, t.skipped);
+        }
+        n += t.delivered.len();
+    }
+    n
+}
+
+fn top_up_one(
+    vault: &k2_vault::LocalVault,
+    session_id: &str,
+    workspace_id: &str,
+    dir: Option<&Path>,
+    env_names: Option<&[String]>,
+    failed: &mut HashMap<String, Instant>,
+    retry_now: bool,
+) -> TopUp {
+    let mut out = TopUp { dir: dir.map(Path::to_path_buf), ..Default::default() };
+    let who = Requester::Session { workspace_id: workspace_id.to_string(), session_id: Some(session_id.to_string()) };
+    let items = match vault.spawn_items(&who) {
+        Ok(i) => i,
+        Err(e) => {
+            out.skipped.push(format!("*: {}", e.code));
+            return out;
+        }
+    };
+    let now = Instant::now();
+    failed.retain(|_, t| now.duration_since(*t) < RETRY_AFTER);
+    let mut dir_ok = false;
+    for it in items {
+        match it.delivery {
+            Delivery::Env => {
+                let Some(env) = it.env_name.as_deref() else { continue };
+                if env_names.is_some_and(|got| !got.iter().any(|g| g == env)) {
+                    out.restart.push(format!("{} (env ${env}): {RESTART_TO_RECEIVE}", it.name));
+                }
+            }
+            Delivery::Agent => {
+                if dir.and_then(super::ssh_agent::socket_for).is_none() {
+                    out.restart.push(format!("{} (ssh key, $SSH_AUTH_SOCK): {RESTART_TO_RECEIVE}", it.name));
+                }
+            }
+            _ => {
+                let fname = it.file_name.clone().unwrap_or_else(|| it.name.clone());
+                let Some(d) = dir else {
+                    out.restart.push(format!("{} (file; this session has no $K2_SECRETS_DIR): {RESTART_TO_RECEIVE}", it.name));
+                    continue;
+                };
+                if !dir_ok {
+                    if let Err(e) = ensure_session_dir(d) {
+                        out.skipped.push(format!("{}: secrets dir ({})", it.name, e.kind()));
+                        continue;
+                    }
+                    dir_ok = true;
+                }
+                if std::fs::symlink_metadata(d.join(&fname)).is_ok() {
+                    out.present.push(fname);
+                    continue;
+                }
+                if !retry_now && failed.contains_key(&it.secret_id) {
+                    continue;
+                }
+                let r = match vault.resolve(&Selector::Id(it.secret_id.clone()), Use::File, &who) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        failed.insert(it.secret_id.clone(), now);
+                        out.skipped.push(format!("{}: {}", it.name, e.code));
+                        continue;
+                    }
+                };
+                match write_secret_file(d, &fname, r.value.expose()) {
+                    Ok(()) => {
+                        failed.remove(&it.secret_id);
+                        out.delivered.push(fname);
+                    }
+                    // Made by someone else since the check: it's there.
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => out.present.push(fname),
+                    Err(e) => {
+                        failed.insert(it.secret_id.clone(), now);
+                        out.skipped.push(format!("{}: {}", it.name, e.kind()));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A live session's dir is there, private and ours. A dir that went
+/// missing under a live session (field report 10-24) is made again at the
+/// same path, which its `$K2_SECRETS_DIR` still names, but only directly
+/// under this machine's secrets root.
+fn ensure_session_dir(d: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(d) {
+        Ok(m) => {
+            let me = unsafe { libc::geteuid() };
+            if m.file_type().is_symlink() || !m.is_dir() || m.uid() != me || m.permissions().mode() & 0o077 != 0 {
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "secrets dir check failed"));
+            }
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let root = secrets_root().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no_memory_fs"))?;
+            if d.parent() != Some(root.as_path()) {
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "not under the secrets root"));
+            }
+            ensure_private(&root)?;
+            DirBuilder::new().mode(0o700).create(d)?;
+            k2_core::log_debug!("[vault] WARN: secrets dir {} was gone under a live session; made it again", d.display());
+            let m = std::fs::symlink_metadata(d)?;
+            let me = unsafe { libc::geteuid() };
+            if m.file_type().is_symlink() || !m.is_dir() || m.uid() != me {
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "secrets dir check failed"));
+            }
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Periodic: drop dirs whose session is gone. `live` is
@@ -989,10 +1217,17 @@ mod tests {
         } else {
             assert!(out.skipped.iter().any(|s| s.contains("no_memory_fs")), "{out:?}");
         }
-        // Another workspace gets nothing.
+        // Another workspace gets nothing: no value, only its own (empty)
+        // secrets dir for live delivery (papercut 8).
         let mut env2 = HashMap::new();
         let out2 = materialize(&mut env2, &uuid::Uuid::new_v4().to_string(), "s2", false, &SpawnRefs::default());
-        assert!(env2.is_empty() && out2.files.is_empty(), "{out2:?}");
+        assert!(out2.files.is_empty() && out2.env_names.is_empty(), "{out2:?}");
+        assert!(env2.keys().all(|k| k == SECRETS_DIR_ENV), "{env2:?}");
+        assert!(!env2.values().any(|x| x.contains("value-")), "{env2:?}");
+        if let Some(d2) = &out2.dir {
+            assert_eq!(std::fs::read_dir(d2).expect("dir").count(), 0, "an empty dir");
+        }
+        session_ended("s2");
         // A sandboxed cell gets env only.
         let mut env3 = HashMap::new();
         let out3 = materialize(&mut env3, &ws, "s3", true, &SpawnRefs::default());
@@ -1160,5 +1395,194 @@ mod tests {
         let link_root = t.path().join("linkroot");
         std::os::unix::fs::symlink(t.path(), &link_root).expect("symlink");
         assert!(make_session_dir(&link_root, "s").is_err());
+    }
+
+    /// Papercut 8 (0.46.5) test setup: a temp secrets root (Linux: the
+    /// `K2_RUNTIME_DIR` override; macOS uses `$TMPDIR`), the test vault, and
+    /// a secret of ANOTHER workspace (`other`) that `ws` doesn't get until
+    /// it is granted. Hold the returned guards for the whole test.
+    fn late_grant_setup(
+        tag: &str,
+        names: &[(&str, Delivery, &str)],
+    ) -> (k2_core::test_env::EnvLock, k2_vault::fsutil::TestDir, k2_core::test_env::EnvVar, std::sync::Arc<k2_vault::LocalVault>, String, String) {
+        use k2_vault::{Actor, Kind, Namespace, PutRequest, Scope, SecretBytes};
+        let env = k2_core::test_env::lock();
+        let t = k2_vault::fsutil::TestDir::new(tag);
+        let over = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, t.path().join("run"));
+        let v = super::super::ensure_test_vault();
+        let ws = uuid::Uuid::new_v4().to_string();
+        let other = uuid::Uuid::new_v4().to_string();
+        for (name, d, val) in names {
+            let mut r = PutRequest::new(Namespace::User, Scope::workspace(other.clone()), *name, Kind::Generic);
+            r.default_delivery = Some(*d);
+            r.delivery_ceiling = Some(Delivery::Env);
+            v.put(r, SecretBytes::from_slice(val.as_bytes()), &Actor::Owner).expect("put");
+        }
+        (env, t, over, v, ws, other)
+    }
+
+    fn grant_to_ws(v: &k2_vault::LocalVault, other: &str, ws: &str, name: &str, d: Delivery) {
+        use k2_vault::{Actor, Consumer, GrantRequest, Scope};
+        v.grant(
+            GrantRequest {
+                selector: k2_vault::Selector::user(Scope::workspace(other.to_string()), name),
+                consumer: Consumer::workspace(ws),
+                delivery: d,
+                env_name: None,
+                file_name: None,
+                hosts_narrowed: None,
+                expires_at: None,
+                version: None,
+            },
+            &Actor::Owner,
+        )
+        .expect("grant");
+    }
+
+    /// Papercut 8 (agent-nsi, agent-nsi-vanilla 10-26): a file secret
+    /// granted while a session runs never reached its `$K2_SECRETS_DIR`
+    /// (only a restart did). Now: every session gets its dir at spawn even
+    /// with nothing in it; after a grant, live delivery writes the file;
+    /// an env grant is listed as "restart your session to receive it"; a
+    /// vanished dir is made again at the same path; a session of another
+    /// workspace gets nothing; an ended session gets nothing and is told
+    /// to restart.
+    #[test]
+    fn a_file_granted_mid_session_reaches_the_live_session() {
+        let (_env, _t, _over, v, ws, other) =
+            late_grant_setup("spawn-late", &[("LATE_FILE", Delivery::File, "late-file-value-1"), ("LATE_ENV", Delivery::Env, "late-env-value-2")]);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let mut env = HashMap::new();
+        let out = materialize(&mut env, &ws, &sid, false, &SpawnRefs::default());
+        let dir = out.dir.clone().expect("a session with nothing to deliver still gets its secrets dir");
+        assert_eq!(env.get(SECRETS_DIR_ENV).map(String::as_str), Some(dir.display().to_string().as_str()));
+        assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0, "empty at spawn");
+        assert_eq!(std::fs::metadata(&dir).expect("m").permissions().mode() & 0o777, 0o700);
+        // A bystander session of a third workspace.
+        let by_ws = uuid::Uuid::new_v4().to_string();
+        let by_sid = uuid::Uuid::new_v4().to_string();
+        let by = materialize(&mut HashMap::new(), &by_ws, &by_sid, false, &SpawnRefs::default());
+        let by_dir = by.dir.clone().expect("bystander dir");
+
+        // Nothing granted yet: nothing to deliver.
+        let t0 = top_up(&v, &sid, &ws);
+        assert_eq!((t0.delivered.len(), t0.present.len(), t0.restart.len(), t0.skipped.len()), (0, 0, 0, 0), "{t0:?}");
+
+        grant_to_ws(&v, &other, &ws, "LATE_FILE", Delivery::File);
+        grant_to_ws(&v, &other, &ws, "LATE_ENV", Delivery::Env);
+        let n = top_up_all(&v);
+        assert!(n >= 1, "live delivery wrote the granted file (wrote {n})");
+        assert_eq!(std::fs::read(dir.join("LATE_FILE")).expect("the file arrived live"), b"late-file-value-1");
+        assert_eq!(std::fs::metadata(dir.join("LATE_FILE")).expect("m").permissions().mode() & 0o777, 0o600);
+        assert!(!by_dir.join("LATE_FILE").exists(), "another workspace's session gets nothing");
+
+        let t1 = top_up(&v, &sid, &ws);
+        assert_eq!(t1.present, vec!["LATE_FILE".to_string()], "{t1:?}");
+        assert!(t1.delivered.is_empty() && t1.skipped.is_empty(), "{t1:?}");
+        assert_eq!(t1.restart, vec![format!("LATE_ENV (env $LATE_ENV): {RESTART_TO_RECEIVE}")], "env can't reach a running session");
+
+        // The caller's workspace must match the session's.
+        assert_eq!(top_up(&v, &sid, &by_ws), TopUp::default(), "another workspace's caller tops up nothing");
+
+        // The dir vanished under the live session: made again, same path.
+        std::fs::remove_dir_all(&dir).expect("rm");
+        let t2 = top_up(&v, &sid, &ws);
+        assert_eq!(t2.delivered, vec!["LATE_FILE".to_string()], "{t2:?}");
+        assert_eq!(std::fs::metadata(&dir).expect("made again").permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::read(dir.join("LATE_FILE")).expect("file"), b"late-file-value-1");
+
+        // Ended: the dir goes and nothing is made again.
+        session_ended(&sid);
+        assert!(!dir.exists(), "removed at session end");
+        top_up_all(&v);
+        assert!(!dir.exists(), "an ended session's dir is never made again");
+        let t3 = top_up(&v, &sid, &ws);
+        assert!(t3.dir.is_none(), "{t3:?}");
+        assert!(
+            t3.restart.contains(&format!("LATE_FILE (file; this session has no $K2_SECRETS_DIR): {RESTART_TO_RECEIVE}")),
+            "{t3:?}"
+        );
+        assert!(!dir.exists());
+        session_ended(&by_sid);
+        assert!(!by_dir.exists());
+
+        // A sandboxed cell has no dir (a host dir isn't visible inside).
+        let mut env4 = HashMap::new();
+        let out4 = materialize(&mut env4, &ws, &uuid::Uuid::new_v4().to_string(), true, &SpawnRefs::default());
+        assert!(out4.dir.is_none() && !env4.contains_key(SECRETS_DIR_ENV), "{out4:?}");
+    }
+
+    /// Papercut 8, the routes: `POST /cli/vault/sync` (k2 vault sync)
+    /// writes the caller's own session's granted files now; env-file on a
+    /// file-delivered secret says where the file is instead of a bare
+    /// delivery_not_granted; a grant's answer says what running sessions
+    /// get; sync is POST-only and needs an agent session.
+    #[test]
+    fn vault_sync_route_and_copy_for_a_mid_session_grant() {
+        use crate::vault::actor::{Channel, VaultCaller};
+        use crate::vault_use_routes::{ENV_FILE, SYNC};
+        use k2_vault::{Actor, AgentActor, Consumer};
+        let (_env, _t, _over, v, ws, _other) = late_grant_setup("spawn-sync", &[]);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
+        let me = VaultCaller {
+            actor: Actor::Agent(AgentActor { workspace_id: ws.clone(), session_id: Some(sid.clone()), shell: false, vault_manage: false }),
+            channel: Channel::Plain,
+            session_id: Some(sid.clone()),
+        };
+        let call = |path: &str, c: &VaultCaller, body: serde_json::Value| -> (u16, serde_json::Value) {
+            let r = crate::vault_routes::handle_on(&v, path, Ok(c.clone()), body.to_string().as_bytes(), &HashMap::new(), "test", None);
+            let code: u16 = r.status[..3].parse().expect("status");
+            (code, serde_json::from_str(&r.body).unwrap_or_else(|_| panic!("json body for {path}: {}", r.body)))
+        };
+        assert!(crate::vault_routes::is_route(SYNC) && crate::vault_routes::is_post_route(SYNC), "sync is a POST-only vault route");
+
+        // The workspace's own file secret, set after the session started
+        // (straight into the vault, so nothing tops it up yet).
+        {
+            use k2_vault::{Kind, Namespace, PutRequest, Scope, SecretBytes};
+            let mut r = PutRequest::new(Namespace::User, Scope::workspace(ws.clone()), "SYNC_FILE", Kind::Generic);
+            r.default_delivery = Some(Delivery::File);
+            r.delivery_ceiling = Some(Delivery::Env);
+            v.put(r, SecretBytes::from_slice(b"sync-file-value-1"), &Actor::Owner).expect("put");
+        }
+        assert!(!dir.join("SYNC_FILE").exists());
+
+        // env-file on a file secret: where the file is, and how to get it.
+        let (st, e) = call(ENV_FILE, &me, serde_json::json!({ "secrets": ["SYNC_FILE"] }));
+        assert_eq!((st, e["error"]["code"].as_str()), (403, Some("delivery_not_granted")), "{e}");
+        let hint = e["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("$K2_SECRETS_DIR/SYNC_FILE") && hint.contains("k2 vault sync") && hint.contains(RESTART_TO_RECEIVE), "{hint}");
+
+        // sync: delivered now.
+        let (st, s1) = call(SYNC, &me, serde_json::json!({}));
+        assert_eq!(st, 200, "{s1}");
+        assert_eq!(s1["delivered"], serde_json::json!(["SYNC_FILE"]), "{s1}");
+        assert_eq!(s1["dir"].as_str(), Some(dir.display().to_string().as_str()), "{s1}");
+        assert_eq!(s1["hint"], "every file you are granted is in $K2_SECRETS_DIR", "{s1}");
+        assert_eq!(std::fs::read(dir.join("SYNC_FILE")).expect("file"), b"sync-file-value-1");
+        let (_, s2) = call(SYNC, &me, serde_json::json!({}));
+        assert_eq!((s2["delivered"].clone(), s2["present"].clone()), (serde_json::json!([]), serde_json::json!(["SYNC_FILE"])), "{s2}");
+
+        // Only an agent session can sync (the owner has no session dir).
+        let owner = VaultCaller { actor: Actor::Owner, channel: Channel::Plain, session_id: None };
+        let (st, e) = call(SYNC, &owner, serde_json::json!({}));
+        assert_eq!(st, 403, "{e}");
+
+        // The grant answer's words for running sessions.
+        let file_reach = crate::vault_routes::grant_reach(&v, &Consumer::workspace(ws.clone()), Delivery::File).expect("file reach");
+        assert!(file_reach.starts_with("running sessions get the file in $K2_SECRETS_DIR now"), "{file_reach}");
+        let env_reach = crate::vault_routes::grant_reach(&v, &Consumer::workspace(ws.clone()), Delivery::Env).expect("env reach");
+        assert_eq!(env_reach, format!("env arrives in new sessions only: {RESTART_TO_RECEIVE}"));
+        assert!(crate::vault_routes::grant_reach(&v, &Consumer::workspace(ws.clone()), Delivery::Fetch).is_none());
+
+        // A session that ended (or never had a dir): told to restart.
+        session_ended(&sid);
+        let (st, s3) = call(SYNC, &me, serde_json::json!({}));
+        assert_eq!(st, 200, "{s3}");
+        assert!(s3["dir"].is_null(), "{s3}");
+        assert!(s3["hint"].as_str().expect("hint").ends_with(RESTART_TO_RECEIVE), "{s3}");
+        assert_eq!(s3["restart"], serde_json::json!([format!("SYNC_FILE (file; this session has no $K2_SECRETS_DIR): {RESTART_TO_RECEIVE}")]), "{s3}");
+        assert!(!dir.exists(), "sync never makes an ended session's dir");
     }
 }

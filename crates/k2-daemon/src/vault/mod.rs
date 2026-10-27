@@ -225,6 +225,10 @@ fn start_ticker(v: Arc<LocalVault>) {
                 // fires before boot's B1), and sessions still spawning.
                 let live = crate::session_liveness::live_session_ids();
                 spawn::sweep_dead(&|s: &str| live.contains(s));
+                // Papercut 8: a file granted to a live session (by any path:
+                // a grant, a set, a card the owner approved) reaches its
+                // $K2_SECRETS_DIR within a minute.
+                spawn::top_up_all(&v2);
             })
             .await;
         }

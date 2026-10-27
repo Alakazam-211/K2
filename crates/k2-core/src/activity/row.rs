@@ -40,7 +40,7 @@ pub(crate) const IN_FLIGHT_CAP: usize = 32;
 pub(crate) const SEEN_TOOL_IDS_CAP: usize = 256;
 
 /// The lead agent's own state (DA19). Only lead envelopes write it (DA20).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LeadState {
     Idle,
     Working,
@@ -58,7 +58,7 @@ impl LeadState {
 }
 
 /// How the lead's last turn ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Outcome {
     None,
     Success,
@@ -80,7 +80,7 @@ impl Outcome {
 }
 
 /// A roster entry's kind (DA24).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChildKind {
     Subagent,
     Shell,
@@ -91,7 +91,7 @@ pub enum ChildKind {
 }
 
 /// A roster entry's state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChildState {
     Running,
     Waiting,
@@ -100,7 +100,7 @@ pub enum ChildState {
 }
 
 /// Where a roster entry came from: decides which ends apply to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChildOrigin {
     /// `SubagentStart` / an envelope carrying its `agent_id`.
     Hook,
@@ -112,7 +112,7 @@ pub enum ChildOrigin {
     Cron,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Child {
     pub kind: ChildKind,
     pub state: ChildState,
@@ -130,7 +130,7 @@ pub struct Child {
 }
 
 /// What the row folds to (DA21 + DA29).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Display {
     Working,
     Monitoring,
@@ -156,7 +156,7 @@ impl Display {
 }
 
 /// Where the last evidence came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EvidenceSource {
     Hook,
     Transcript,
@@ -190,7 +190,7 @@ macro_rules! reasons {
     ($($variant:ident => $s:literal,)*) => {
         /// DA31: the fixed reason vocabulary. A new value needs a PRD
         /// amendment; `fixtures/reasons.json` is the renderer's copy list.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
         pub enum Reason { $($variant,)* }
 
         impl Reason {
@@ -235,7 +235,7 @@ reasons! {
 }
 
 /// What the lead is waiting on (DA23).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Waiting {
     pub question: bool,
     /// The waited call's `tool_use_id`. `None` until a late async
@@ -244,7 +244,7 @@ pub struct Waiting {
     pub tool_name: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Lead {
     pub state: LeadState,
     pub outcome: Outcome,
@@ -256,7 +256,7 @@ pub struct Lead {
 }
 
 /// DA25: late lead envelopes for a finished prompt are evidence only.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Latch {
     pub prompt_id: Option<String>,
     /// A cancel latch lets later events through after this (15 s).
@@ -264,7 +264,7 @@ pub(crate) struct Latch {
 }
 
 /// A keystroke inference window (DA26, A16).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PendingCancel {
     pub dismiss: bool,
     pub evidence_seq: u64,
@@ -273,7 +273,7 @@ pub(crate) struct PendingCancel {
 }
 
 /// A turn end, for toasts (S5) and the Thread tracker (S6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TurnEnded {
     pub outcome: Outcome,
     pub reason: Reason,
@@ -281,7 +281,7 @@ pub struct TurnEnded {
 }
 
 /// Facts the daemon knows about a session when it registers.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct RowFacts {
     pub session_id: String,
     pub agent_name: String,
@@ -323,7 +323,7 @@ pub struct ChildCounts {
 
 /// This turn's lead tool calls (the `counts` on the row and the app
 /// frame). Numbers only: no tool names, arguments or text.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TurnCounts {
     /// Lead tool calls started this turn, each `tool_use_id` once.
     /// Subagents' own calls are not here; a subagent counts as one live
@@ -334,7 +334,7 @@ pub struct TurnCounts {
 }
 
 /// One live v2 session's activity (DA19).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Row {
     pub facts: RowFacts,
     pub lead: Lead,
@@ -378,7 +378,10 @@ pub struct Row {
     pub stale_since: Option<i64>,
     pub rev: u64,
     pub registered_at: i64,
+    /// Not carried across a restart (P37): re-derived on the next write.
+    #[serde(skip)]
     pub(crate) last_status_write: Option<&'static str>,
+    #[serde(skip)]
     pub(crate) last_compat: Option<&'static str>,
     pub(crate) pending_turn_end: Option<TurnEnded>,
 }

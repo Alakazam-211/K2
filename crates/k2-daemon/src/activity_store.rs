@@ -412,6 +412,133 @@ pub fn unregister(session_id: &str) {
     wake();
 }
 
+// ── k2-ptyd P37: a row carried across a daemon restart ─────────────────
+//
+// A restart that keeps agents (§7.6 `KeepAgents`, hand-off quiesce) writes
+// each ptyd session's row to `<K2 home>/run/activity/<sid>.json` (0600,
+// temp + rename) just before the session is detached. The next daemon's
+// B1 registers the adopted session (a fresh, unconfirmed row, DA30) and
+// then seeds it from that file when it is under [`CARRIED_ROW_MAX_AGE_MS`]
+// old, so a turn that was running is still `working` after the restart.
+// Older files, and every crash (nothing was written), start unconfirmed.
+// The file holds the row only (states, counts, times, tool names): no env
+// values, tokens or screen text (P72).
+
+/// P37: a carried row seeds the adopted row only when it is this fresh.
+pub const CARRIED_ROW_MAX_AGE_MS: i64 = 10 * 60 * 1000;
+
+/// `<K2 home>/run/activity` (P88: from the K2 home).
+pub fn carried_rows_dir() -> std::path::PathBuf {
+    k2_core::paths::k2_home().join("run").join("activity")
+}
+
+fn carried_row_path(session_id: &str) -> Option<std::path::PathBuf> {
+    // A session id is a UUID; never let one name a path outside the dir.
+    let ok = !session_id.is_empty() && session_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    ok.then(|| carried_rows_dir().join(format!("{session_id}.json")))
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CarriedRow {
+    v: u32,
+    saved_at: i64,
+    row: Row,
+}
+
+/// P37: write this session's row for the next daemon. `Ok(false)` when
+/// the session has no row.
+pub fn save_for_restart(session_id: &str) -> std::io::Result<bool> {
+    let Some(path) = carried_row_path(session_id) else {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a session id"));
+    };
+    let Some(row) = store().lock().rows.get(session_id).map(|e| e.row.clone()) else {
+        return Ok(false);
+    };
+    let body = serde_json::to_vec(&CarriedRow { v: 1, saved_at: now_ms(), row }).map_err(std::io::Error::other)?;
+    let dir = carried_rows_dir();
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    {
+        use std::io::Write;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+        let mut f = opts.open(&tmp)?;
+        f.write_all(&body)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(true)
+}
+
+/// Pure part of [`restore_after_adoption`]: the carried row when `raw`
+/// parses and is fresh at `now`.
+fn carried_row_if_fresh(raw: &[u8], now: i64) -> Option<Row> {
+    let c: CarriedRow = serde_json::from_slice(raw).ok()?;
+    let age = now - c.saved_at;
+    (c.v == 1 && (0..=CARRIED_ROW_MAX_AGE_MS).contains(&age)).then_some(c.row)
+}
+
+/// P37: B1 registered the adopted session; seed its row from the file the
+/// previous daemon wrote (always deleted). The new registration's facts
+/// win (workspace, harness); the rest — lead state, children, evidence,
+/// confirmation — comes back. Returns whether the row was seeded.
+pub fn restore_after_adoption(session_id: &str) -> bool {
+    let Some(path) = carried_row_path(session_id) else { return false };
+    let Ok(raw) = std::fs::read(&path) else { return false };
+    let _ = std::fs::remove_file(&path);
+    restore_from(session_id, &raw, now_ms())
+}
+
+/// [`restore_after_adoption`] without the file: seed the registered row
+/// of `session_id` from `raw` when it is fresh at `now`.
+fn restore_from(session_id: &str, raw: &[u8], now: i64) -> bool {
+    let Some(mut carried) = carried_row_if_fresh(raw, now) else {
+        log_debug!("[activity] carried row for {session_id} is stale or unreadable; starting unconfirmed");
+        return false;
+    };
+    let event = {
+        let mut st = store().lock();
+        let Some(entry) = st.rows.get_mut(session_id) else { return false };
+        carried.facts = entry.row.facts.clone();
+        entry.row = carried;
+        let row = &entry.row;
+        RowEvent {
+            session_id: session_id.to_string(),
+            agent_name: row.facts.agent_name.clone(),
+            workspace_path: row.facts.workspace_path.clone(),
+            row: Some(row.to_json()),
+            turn_ended: None,
+            holds_awake: fold::holds_awake(row, now, KEEP_AWAKE_STALE_MS),
+            evidence_at: row.evidence_at,
+        }
+    };
+    let _ = bus().send(event);
+    wake();
+    true
+}
+
+/// P37: drop carried rows no adopted session will claim (B1, with the set
+/// B0 found running). Returns how many were removed.
+pub fn sweep_carried_rows(keep: &std::collections::HashSet<String>) -> usize {
+    let Ok(rd) = std::fs::read_dir(carried_rows_dir()) else { return 0 };
+    let mut n = 0;
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let sid = name.strip_suffix(".json").unwrap_or(&name);
+        if !keep.contains(sid) && std::fs::remove_file(e.path()).is_ok() {
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Apply one input to a session's row at `now` and run its effects.
 /// Unknown sessions are ignored (the row is created at registration).
 pub fn apply_at(session_id: &str, ev: Evidence<'_>, now: i64) {
@@ -795,5 +922,62 @@ mod tests {
         // Input for a session with no row is ignored.
         apply_at(sid, Evidence::PtyExited, 2_000);
         assert!(row_json(sid).is_none());
+    }
+
+    /// k2-ptyd P37: a working row carried across a restart comes back
+    /// working (same lead, same evidence, confirmed); a stale, garbled or
+    /// future-dated carry leaves the fresh unconfirmed row (DA30).
+    #[test]
+    fn a_carried_row_seeds_the_adopted_row_only_while_fresh() {
+        let _g = LOCK.lock();
+        k2_core::test_isolation::assert_no_prod_env();
+        let _db = k2_core::db::init_for_tests();
+        let sid = "44444444-4444-4444-8444-444444444444";
+        let facts = || SessionFacts { session_id: sid.into(), agent_name: "tab-p37".into(), cwd: None, program: Some("claude".into()) };
+        register(facts());
+        let t0 = now_ms() - 5_000;
+        apply_at(sid, Evidence::Hook(&hook(sid, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p37"}"#)), t0);
+        let before = row_json(sid).expect("row");
+        assert_eq!(before["display"], "working");
+        assert_eq!(before["confirmed"], true);
+        let row = with_row(sid, |r| r.clone()).expect("row");
+        let saved_at = now_ms();
+        let raw = serde_json::to_vec(&CarriedRow { v: 1, saved_at, row }).expect("serialize");
+
+        // The next daemon registers the adopted session: fresh, unconfirmed.
+        unregister(sid);
+        register(facts());
+        assert_eq!(row_json(sid).expect("row")["reason"], "unconfirmed");
+        // Too old → not seeded.
+        assert!(!restore_from(sid, &raw, saved_at + CARRIED_ROW_MAX_AGE_MS + 1));
+        assert_eq!(row_json(sid).expect("row")["reason"], "unconfirmed");
+        // From the future (a clock jump) → not seeded.
+        assert!(!restore_from(sid, &raw, saved_at - 1));
+        // Garbage → not seeded.
+        assert!(!restore_from(sid, b"{not json", saved_at));
+        assert_eq!(row_json(sid).expect("row")["reason"], "unconfirmed");
+        // Fresh → the same row as before the restart.
+        let mut rx = subscribe();
+        assert!(restore_from(sid, &raw, saved_at + 1_000));
+        let after = row_json(sid).expect("row");
+        for k in ["display", "lead", "confirmed", "evidenceAt", "reason", "turnStartedAt", "rev"] {
+            assert_eq!(after[k], before[k], "{k} after the restart");
+        }
+        let ev = loop {
+            let ev = rx.try_recv().expect("an event for the seeded row");
+            if ev.session_id == sid {
+                break ev;
+            }
+        };
+        assert!(ev.holds_awake, "a carried working row holds Keep awake again");
+        unregister(sid);
+    }
+
+    #[test]
+    fn carried_row_paths_stay_in_their_dir() {
+        assert!(carried_row_path("44444444-4444-4444-8444-444444444444").is_some());
+        for bad in ["", "../x", "a/b", "x.json", "a b"] {
+            assert!(carried_row_path(bad).is_none(), "{bad:?}");
+        }
     }
 }

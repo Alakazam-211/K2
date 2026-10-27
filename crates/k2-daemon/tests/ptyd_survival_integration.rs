@@ -137,12 +137,12 @@ impl Drop for Harness {
 }
 
 impl Harness {
-    fn new() -> Harness {
+    fn new(tag: &str) -> Harness {
         for k in std::env::vars().map(|(k, _)| k).filter(|k| k.starts_with("K2_") || k.starts_with("K2SO_")).collect::<Vec<_>>() {
             std::env::remove_var(k);
         }
         // Short path: ptyd's control socket and the cell sockets live under it.
-        let home = PathBuf::from(format!("/tmp/k2sv-{}", std::process::id()));
+        let home = PathBuf::from(format!("/tmp/k2sv{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".k2")).unwrap();
         std::fs::create_dir_all(home.join("ws")).unwrap();
@@ -306,6 +306,23 @@ fn agent_thread_post(port: u16, token: &str, dir: &Path, text: &str) {
     });
 }
 
+/// The activity row of `sid` from `/cli/activity/snapshot` (searched
+/// anywhere in the reply, so the test doesn't pin the envelope).
+fn activity_row(port: u16, token: &str, sid: &str) -> serde_json::Value {
+    fn find(v: &serde_json::Value, sid: &str) -> Option<serde_json::Value> {
+        match v {
+            serde_json::Value::Object(m) if m.get("sessionId").and_then(|s| s.as_str()) == Some(sid) => Some(v.clone()),
+            serde_json::Value::Object(m) => m.values().find_map(|x| find(x, sid)),
+            serde_json::Value::Array(a) => a.iter().find_map(|x| find(x, sid)),
+            _ => None,
+        }
+    }
+    let (s, b) = http(port, "GET", &format!("/cli/activity/snapshot?token={token}"), "");
+    assert_eq!(s, 200, "activity snapshot: {b}");
+    let v: serde_json::Value = serde_json::from_str(&b).unwrap_or_else(|e| panic!("activity snapshot JSON {e}: {b}"));
+    find(&v, sid).unwrap_or_else(|| panic!("no activity row for session {sid}: {b}"))
+}
+
 fn now_ms() -> u128 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()
 }
@@ -319,7 +336,7 @@ enum Restart {
 
 #[test]
 fn agents_survive_daemon_restarts_and_end_on_stop() {
-    let mut h = Harness::new();
+    let mut h = Harness::new("");
     let port = h.start();
     let token = h.token();
     let dir = h.home.join("agent");
@@ -394,6 +411,8 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
     let mut port = port;
     for (i, mode) in [Restart::Sigterm, Restart::Kill9, Restart::Route, Restart::Sigterm, Restart::Kill9].into_iter().enumerate() {
         let what = format!("restart {} ({mode:?})", i + 1);
+        // P37: the row as the agent's last daemon saw it.
+        let row_before = activity_row(port, &h.token(), &sid);
         match mode {
             // SAFETY: the daemon this test started.
             Restart::Sigterm => unsafe {
@@ -446,10 +465,23 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
         let bs: serde_json::Value = serde_json::from_str(&b).unwrap_or_else(|e| panic!("{what}: boot-status JSON {e}: {b}"));
         assert_eq!(bs["ptyd"], "on", "{what}: {b}");
         assert_eq!(bs["adopted"], 1, "{what}: {b}");
-        // DA2: the adopted session has an activity row.
-        let (s, b) = http(port, "GET", &format!("/cli/activity/snapshot?token={token}"), "");
-        assert_eq!(s, 200, "{what}: activity snapshot: {b}");
-        assert!(b.contains(&sid), "{what}: no activity row for the adopted session: {b}");
+        // DA2: the adopted session has an activity row. P37: a restart
+        // that kept the agent (SIGTERM, the restart route) carried the row
+        // across (same lead clock); a crash wrote nothing, so the row
+        // starts fresh and unconfirmed.
+        let row_after = activity_row(port, &token, &sid);
+        match mode {
+            Restart::Sigterm | Restart::Route => {
+                assert!(log.contains(&format!("adopted session={sid}")) && log.contains("activity_row=carried"), "{what}: the row was not carried");
+                assert_eq!(row_after["lead"], row_before["lead"], "{what}: the carried row lost its lead state");
+                assert_eq!(row_after["rev"], row_before["rev"], "{what}: the carried row is not the saved one");
+                assert!(!h.k2.join(format!("run/activity/{sid}.json")).exists(), "{what}: the carried row file was not consumed");
+            }
+            Restart::Kill9 => {
+                assert!(log.contains("activity_row=fresh"), "{what}: a crash carried a row");
+                assert_eq!(row_after["reason"], "unconfirmed", "{what}: {row_after}");
+            }
+        }
         // The agent's own Thread write (its passport) lands after the restart.
         agent_thread_post(port, &token, &dir, &format!("after-restart-{}", i + 1));
     }
@@ -474,6 +506,196 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
     wait_for("the agent to end after a stop", Duration::from_secs(10), || (!alive(pid)).then_some(()));
     wait_for("ptyd to exit after a stop", Duration::from_secs(10), || (!alive(ptyd)).then_some(()));
     assert!(!secrets.exists(), "a stop removes the ended session's secrets dir");
+    h.agent_pid = None;
+    h.ptyd_pid = None;
+    let _ = std::fs::remove_dir_all(&h.home);
+}
+
+fn enc(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// The heartbeat's fire audit rows, oldest first: (decision, reason).
+fn hb_fires(db: &Path, project_id: &str, name: &str) -> Vec<(String, String)> {
+    let conn = rusqlite::Connection::open(db).expect("open the daemon DB");
+    let mut st = conn
+        .prepare("SELECT decision, COALESCE(reason, '') FROM heartbeat_fires WHERE project_id = ?1 AND schedule_name = ?2 ORDER BY id")
+        .expect("prepare");
+    let rows = st
+        .query_map(rusqlite::params![project_id, name], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .expect("query fires")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("fire rows");
+    rows
+}
+
+fn fired_count(fires: &[(String, String)]) -> usize {
+    fires.iter().filter(|(d, _)| d == "fired" || d == "fired_catchup").count()
+}
+
+/// Wake deliveries the agent received: each one is a bracketed paste.
+fn pastes(dir: &Path) -> usize {
+    let raw = std::fs::read(dir.join("stdin")).unwrap_or_default();
+    raw.windows(6).filter(|w| *w == b"\x1b[200~").count()
+}
+
+/// T1 (PRD §12 item 13, P29, P33, P79): a heartbeat agent survives daemon
+/// restarts and a restart never fires it twice.
+///
+/// The heartbeat uses the default delivery for new heartbeats: into the
+/// workspace's pinned session (`use_workspace_session`).
+///
+/// 1. A manual fire starts the workspace's agent under ptyd and wakes it.
+/// 2. SIGTERM restart: the agent is adopted, the workspace session's
+///    `active_terminal_id` still names it (P79), and the boot overdue scan
+///    fires nothing (the slot already fired): one fire, one wake.
+/// 3. The slot comes due while the daemon is down (`last_fired` moved back
+///    2 h): the next boot's overdue scan fires it INTO the adopted session
+///    (`active_terminal_id` → that session), spawning nothing (P29): same
+///    pid, two wakes.
+/// 4. kill -9 restart: still two fires and two wakes (no double fire).
+/// 5. Stop: the agent ends.
+#[test]
+fn a_restart_never_fires_a_heartbeat_twice_and_fires_land_in_the_adopted_agent() {
+    let mut h = Harness::new("hb");
+    let mut port = h.start();
+    let token = h.token();
+    const HB_WS: &str = "hbsurvive";
+    let ws = h.home.join(HB_WS);
+    let dir = h.home.join("hbagent");
+    std::fs::create_dir_all(&ws).unwrap();
+    let persona = k2_core::workspace::agent_identity::workspace_agent_md_path(&ws.to_string_lossy());
+    std::fs::create_dir_all(persona.parent().expect("persona dir")).unwrap();
+    std::fs::write(&persona, format!("---\nname: {HB_WS}\n---\n# {HB_WS}\n")).unwrap();
+    let (s, b) = http(port, "POST", &format!("/cli/projects/create?token={token}"), &serde_json::json!({"name": HB_WS, "path": ws.to_string_lossy()}).to_string());
+    assert_eq!(s, 200, "projects/create: {b}");
+    let project_id = serde_json::from_str::<serde_json::Value>(&b).unwrap()["id"].as_str().unwrap_or_else(|| panic!("project id in {b}")).to_string();
+    // The workspace's agent is the fake agent: slow output (the wake's
+    // quiescence check passes between lines) and bracketed paste on.
+    let preset = uuid::Uuid::new_v4().to_string();
+    let command = format!("k2-ptyd-test-agent survive {} 1000 paste", dir.display());
+    let (s, b) = http(port, "POST", &format!("/cli/presets/create?token={token}"), &serde_json::json!({"id": preset, "label": "hb-agent", "command": command}).to_string());
+    assert_eq!(s, 200, "presets/create: {b}");
+    let (s, b) = http(port, "POST", &format!("/cli/projects/update?token={token}"), &serde_json::json!({"id": project_id, "defaultAgent": preset}).to_string());
+    assert_eq!(s, 200, "projects/update: {b}");
+    let wsq = enc(&ws.to_string_lossy());
+    // A heartbeat wakes the workspace's agent: give it one (`k2 mode custom`).
+    let (s, b) = http(port, "POST", &format!("/cli/mode?token={token}&project={wsq}&set=custom"), "");
+    assert_eq!(s, 200, "mode custom: {b}");
+    let (s, b) = http(
+        port,
+        "POST",
+        &format!(
+            "/cli/heartbeat/add?token={token}&project={wsq}&name=hb1&frequency=hourly&spec={}&instructions={}",
+            enc(r#"{"every_seconds":3600}"#),
+            enc("Check the queue and report.")
+        ),
+        "",
+    );
+    assert_eq!(s, 200, "heartbeat/add: {b}");
+    let db = k2_core::db::resolve_home_db_path(&h.k2);
+    // New heartbeats deliver into the workspace's pinned session
+    // (use_workspace_session): its `workspace_sessions` row carries the
+    // live-session stamp the next fire injects through (P79's canonical
+    // stamp).
+    let stamp = |db: &Path| -> (Option<String>, Option<String>) {
+        let conn = rusqlite::Connection::open(db).expect("open the daemon DB");
+        let hb_last: Option<String> = conn
+            .query_row(
+                "SELECT last_fired FROM workspace_heartbeats WHERE project_id = ?1 AND name = 'hb1'",
+                rusqlite::params![project_id],
+                |r| r.get(0),
+            )
+            .expect("heartbeat row");
+        let active: Option<String> = conn
+            .query_row(
+                "SELECT active_terminal_id FROM workspace_sessions WHERE project_id = ?1 AND active_terminal_id IS NOT NULL LIMIT 1",
+                rusqlite::params![project_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(None);
+        (active, hb_last)
+    };
+
+    // 1. A manual fire: the workspace's agent spawns under ptyd and gets
+    // the wake.
+    let (s, b) = http(port, "POST", &format!("/cli/heartbeat/fire?token={token}&project={wsq}&name=hb1"), "");
+    assert_eq!(s, 200, "heartbeat/fire: {b}");
+    let fire: serde_json::Value = serde_json::from_str(&b).unwrap_or_else(|e| panic!("fire JSON {e}: {b}"));
+    assert_eq!(fire["success"], true, "first fire: {b}");
+    assert!(fire["branch"].as_str().is_some_and(|br| br.starts_with("workspace_session:")), "first fire: {b}");
+    let sid = fire["targetSessionId"].as_str().filter(|s| !s.is_empty()).unwrap_or_else(|| panic!("targetSessionId in {b}")).to_string();
+    let pid: i32 = wait_for("heartbeat agent pid", Duration::from_secs(15), || std::fs::read_to_string(dir.join("pid")).ok()?.trim().parse().ok());
+    h.agent_pid = Some(pid);
+    let ptyd = h.ptyd_pid.expect("ptyd launched");
+    assert_eq!(parent_pid(pid), ptyd, "the heartbeat agent runs under k2-ptyd");
+    wait_for("the first wake", Duration::from_secs(10), || (pastes(&dir) == 1).then_some(()));
+    assert_eq!(fired_count(&hb_fires(&db, &project_id, "hb1")), 1);
+    assert_eq!(stamp(&db).0.as_deref(), Some(sid.as_str()), "the fire stamped its session");
+
+    // 2. SIGTERM restart: adopted, stamp kept, nothing fires.
+    // SAFETY: the daemon this test started.
+    unsafe { libc::kill(h.daemon_pid(), libc::SIGTERM) };
+    h.wait_daemon_exit(Duration::from_secs(20));
+    assert!(alive(pid), "the heartbeat agent died with the daemon");
+    h.start();
+    let log = std::fs::read_to_string(h.home.join(format!("daemon-{}.log", h.boots))).unwrap_or_default();
+    assert!(log.contains(&format!("adopted session={sid}")), "the heartbeat session was not adopted");
+    assert_eq!(stamp(&db).0.as_deref(), Some(sid.as_str()), "P79: the boot sweep cleared the adopted heartbeat's stamp");
+    // The boot overdue scan runs 3 s after ready; give it time to (not) fire.
+    std::thread::sleep(Duration::from_secs(8));
+    let fires = hb_fires(&db, &project_id, "hb1");
+    assert_eq!(fired_count(&fires), 1, "a restart fired the heartbeat again: {fires:?}");
+    assert_eq!(pastes(&dir), 1, "a restart delivered the wake again");
+    assert_eq!(std::fs::read_to_string(dir.join("pid")).unwrap().trim(), pid.to_string(), "a second heartbeat agent started");
+    assert!(alive(pid));
+
+    // 3. The slot comes due while the daemon is down: the boot's overdue
+    // fire goes INTO the adopted agent.
+    unsafe { libc::kill(h.daemon_pid(), libc::SIGTERM) };
+    h.wait_daemon_exit(Duration::from_secs(20));
+    {
+        let conn = rusqlite::Connection::open(&db).expect("open the daemon DB");
+        let two_hours_ago = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        let n = conn
+            .execute("UPDATE workspace_heartbeats SET last_fired = ?1 WHERE project_id = ?2 AND name = 'hb1'", rusqlite::params![two_hours_ago, project_id])
+            .expect("move last_fired back");
+        assert_eq!(n, 1);
+    }
+    h.start();
+    let fires = wait_for("the boot overdue fire", Duration::from_secs(40), || {
+        let f = hb_fires(&db, &project_id, "hb1");
+        (fired_count(&f) >= 2).then_some(f)
+    });
+    assert_eq!(fired_count(&fires), 2, "{fires:?}");
+    let last = fires.iter().rev().find(|(d, _)| d.starts_with("fired")).expect("a fired row");
+    assert!(last.1.contains(&format!("active_terminal_id → {sid}")), "P29: the boot fire did not land in the adopted session: {last:?}");
+    wait_for("the second wake", Duration::from_secs(10), || (pastes(&dir) == 2).then_some(()));
+    assert_eq!(std::fs::read_to_string(dir.join("pid")).unwrap().trim(), pid.to_string(), "the boot fire spawned a new agent");
+    assert_eq!(parent_pid(pid), ptyd);
+
+    // 4. A crash restart right after: no double fire.
+    unsafe { libc::kill(h.daemon_pid(), libc::SIGKILL) };
+    h.wait_daemon_exit(Duration::from_secs(20));
+    port = h.start();
+    std::thread::sleep(Duration::from_secs(8));
+    let fires = hb_fires(&db, &project_id, "hb1");
+    assert_eq!(fired_count(&fires), 2, "a crash restart fired the heartbeat again: {fires:?}");
+    assert_eq!(pastes(&dir), 2, "a crash restart delivered the wake again");
+    assert!(alive(pid));
+    assert_eq!(stamp(&db).0.as_deref(), Some(sid.as_str()));
+
+    // 5. A stop ends it.
+    let (s, b) = http(port, "POST", &format!("/cli/daemon/stop?token={}", h.token()), "");
+    assert_eq!(s, 200, "stop: {b}");
+    h.wait_daemon_exit(Duration::from_secs(20));
+    wait_for("the heartbeat agent to end after a stop", Duration::from_secs(10), || (!alive(pid)).then_some(()));
+    wait_for("ptyd to exit after a stop", Duration::from_secs(10), || (!alive(ptyd)).then_some(()));
     h.agent_pid = None;
     h.ptyd_pid = None;
     let _ = std::fs::remove_dir_all(&h.home);

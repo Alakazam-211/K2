@@ -218,6 +218,11 @@ pub fn b1() {
             return;
         };
         cleanup_exited_while_down(&owner, &exited);
+        // P37: carried activity rows of sessions that are no longer running.
+        let swept = crate::activity_store::sweep_carried_rows(&adopt::running_sids());
+        if swept > 0 {
+            log_debug!("[ptyd] B1: dropped {swept} carried activity row(s) of ended sessions");
+        }
         if running.is_empty() {
             // Nothing survived. With the switch off this ptyd has no more
             // use: let it exit (it holds no session).
@@ -303,6 +308,9 @@ fn adopt_one(owner: &std::sync::Arc<k2_core::terminal::ptyd::client::Owner>, inf
     }
     // P34: register under the original key and SessionId.
     crate::v2_session_map::register(key.clone(), std::sync::Arc::clone(&session));
+    // P37: the row the previous daemon carried (a turn that was running
+    // is still `working`); none or stale → unconfirmed (DA30).
+    let carried = crate::activity_store::restore_after_adoption(&sid);
     // prd-vault-gaps-v1 item 3: its ssh-agent socket, from the daemon's own
     // record (bound to this ptyd instance and process), now that it is adopted.
     crate::vault::ssh_agent::on_adopted(info, &owner.boot_id);
@@ -330,12 +338,13 @@ fn adopt_one(owner: &std::sync::Arc<k2_core::terminal::ptyd::client::Owner>, inf
     adopt::mark_settled(&sid);
     update_report(|r| r.adopted += 1);
     log_debug!(
-        "[ptyd] B1: adopted session={} key={} pid={} conversation={} pending_drained={}",
+        "[ptyd] B1: adopted session={} key={} pid={} conversation={} pending_drained={} activity_row={}",
         sid,
         key,
         info.pid,
         conversation.as_deref().unwrap_or("-"),
-        pending.len()
+        pending.len(),
+        if carried { "carried" } else { "fresh" }
     );
 }
 

@@ -73,7 +73,11 @@ fn run() {
             out.flush().unwrap();
             sleep_forever();
         }
-        "survive" => survive(&args[1], args.get(2).and_then(|s| s.parse().ok()).unwrap_or(50)),
+        "survive" => survive(
+            &args[1],
+            args.get(2).and_then(|s| s.parse().ok()).unwrap_or(50),
+            args.get(3).is_some_and(|a| a == "paste"),
+        ),
         "vault-probe-child" => vault_probe_child(&args[1], &args[2]),
         "sleep" => {
             println!("READY");
@@ -107,7 +111,12 @@ extern "C" fn on_hup(_: libc::c_int) {
 ///   never sends a terminal query, so any byte here is unsolicited (P75)
 ///   unless the test typed it;
 /// - `sighup`: the number of SIGHUPs received (written when non-zero).
-fn survive(dir: &str, every_ms: u64) {
+///
+/// `paste` (4th arg): turn bracketed paste on at start (`ESC[?2004h`), as
+/// a TUI composer does, so K2's wake delivery (heartbeats, `k2 msg`) sees
+/// a ready agent and frames what it types as a paste; each delivery then
+/// shows in `stdin` as one `ESC[200~`.
+fn survive(dir: &str, every_ms: u64, paste: bool) {
     let dir = std::path::PathBuf::from(dir);
     std::fs::create_dir_all(&dir).unwrap();
     // SAFETY: plain libc calls on our own process / tty.
@@ -179,6 +188,9 @@ fn survive(dir: &str, every_ms: u64) {
         });
     }
     let mut out = std::io::stdout();
+    if paste {
+        out.write_all(b"\x1b[?2004h").and_then(|_| out.flush()).unwrap();
+    }
     let mut n = 0u64;
     loop {
         // CRLF: raw mode turned output post-processing off.

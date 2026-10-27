@@ -907,7 +907,7 @@ fn quiesce() {
     // the successor resumes it, as before. Kills run in parallel (each has
     // a 100 ms SIGHUP grace).
     let sessions = crate::v2_session_map::snapshot();
-    let detached = sessions.iter().filter(|(_, s)| s.detach()).count();
+    let detached = sessions.iter().filter(|(_, s)| crate::daemon_stop::keep_for_next_daemon(s)).count();
     let joins: Vec<_> = sessions
         .into_iter()
         .filter(|(_, s)| !s.is_detached())

@@ -55,6 +55,7 @@ Environment=K2_CERT_BROKER_URL=http://127.0.0.1:1
 Environment=K2_HANDOFF_DROPIN=off
 Environment=K2_LLM_ACCOUNTS_LOOP=0
 Environment=K2SO_WATCHDOG_DISABLED=1
+Environment=K2_HEARTBEAT_NO_SELF_HEAL=1
 StandardOutput=append:$SCRATCH/daemon.log
 StandardError=append:$SCRATCH/daemon.log
 EOF

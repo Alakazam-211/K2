@@ -42,6 +42,7 @@ cat > "$PLIST" <<EOF
     <key>K2_CERT_BROKER_URL</key><string>http://127.0.0.1:1</string>
     <key>K2_LLM_ACCOUNTS_LOOP</key><string>0</string>
     <key>K2SO_WATCHDOG_DISABLED</key><string>1</string>
+    <key>K2_HEARTBEAT_NO_SELF_HEAL</key><string>1</string>
   </dict>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>

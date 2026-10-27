@@ -164,7 +164,21 @@ pub fn on_shutdown() {
 /// `KeepAgents` / hand-off quiesce: detach every ptyd session. Returns how
 /// many.
 pub fn detach_all() -> usize {
-    crate::v2_session_map::snapshot().into_iter().filter(|(_, s)| s.detach()).count()
+    crate::v2_session_map::snapshot().into_iter().filter(|(_, s)| keep_for_next_daemon(s)).count()
+}
+
+/// Let go of one session for the next daemon: carry its activity row
+/// (P37), then detach it. `false` (nothing done) for an in-process
+/// session, which dies with this daemon.
+pub fn keep_for_next_daemon(s: &std::sync::Arc<k2_core::terminal::DaemonPtySession>) -> bool {
+    if s.backend_name() != "ptyd" || s.is_detached() {
+        return s.is_detached();
+    }
+    let sid = s.session_id.to_string();
+    if let Err(e) = crate::activity_store::save_for_restart(&sid) {
+        log_debug!("[daemon] activity row for {sid} not carried: {e}");
+    }
+    s.detach()
 }
 
 /// `EndAgents`: revoke, unregister (kills through ptyd, removes the vault

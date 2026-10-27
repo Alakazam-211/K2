@@ -965,6 +965,14 @@ pub const FEATURE_WIDGET_ACTIVITY: &str = "widget-activity-v1";
 /// poll (`liveSessionCwds`) only on a server that reports this key.
 pub const FEATURE_ACTIVITY_LIVE_BUSY: &str = "activity-live-busy";
 
+/// Markdown multiplayer v1 (vs-live MI18): `/cli/docs/*` serves live
+/// Markdown docs on the vendored multiplayer kit, and the kit writes them
+/// back to their files. Listed only while the docs store is open AND the
+/// kit has disk sync (`docs::live_ready`), so a client never switches a
+/// tab to live editing that wouldn't save. No SQL migration (a redb
+/// store, `~/.k2/docs.redb`).
+pub const FEATURE_DOCS_MD: &str = "docs-md-v1";
+
 /// Per-agent unread and ticket counts (0.46.4, Rosson 2026-10-24):
 /// `presence/summary` `agentActivity` entries carry the caller's `unread`,
 /// `waiting`, `muted` on that agent's Threads and the agent's
@@ -1089,6 +1097,9 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_ACTIVITY_LIVE_BUSY);
     out.push(FEATURE_PUBLISH_DEV);
     out.push(FEATURE_SITE_VISIBILITY);
+    if crate::docs::live_ready() {
+        out.push(FEATURE_DOCS_MD);
+    }
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
         // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.

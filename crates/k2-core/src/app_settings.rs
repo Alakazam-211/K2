@@ -99,6 +99,14 @@ fn default_mail_address_cap() -> u32 {
     5
 }
 
+/// Live docs (Markdown multiplayer v1, K1): the box-wide memory budget for
+/// loaded docs, in MiB. Idle docs unload, least recently used first, past it.
+pub const DEFAULT_DOCS_MEMORY_BUDGET_MIB: u64 = 256;
+
+fn default_docs_memory_budget_mib() -> u64 {
+    DEFAULT_DOCS_MEMORY_BUDGET_MIB
+}
+
 /// Fallback mailbox disk quota for new mints when the workspace has no
 /// override. **0 = unlimited.** Mail-manage sets a cap per inbox.
 /// Existing addresses are not retrofitted.
@@ -785,6 +793,11 @@ pub struct AppSettings {
     /// through to Stalwart `maxEmails`.
     #[serde(default = "default_mail_quota_messages")]
     pub mail_quota_messages: u64,
+    /// Live docs (Markdown multiplayer v1): memory budget for loaded docs on
+    /// this box, in MiB (default 256; 0 means the default). Read at daemon
+    /// boot; `K2_DOCS_MEMORY_MIB` overrides it. Shown by `GET /cli/docs/pool`.
+    #[serde(default = "default_docs_memory_budget_mib")]
+    pub docs_memory_budget_mib: u64,
     /// K2 Mail S2 (prd-email-server-v1 §11.1.2) — the GLOBAL default
     /// mail domain agents mint on when they don't name one. Stored in
     /// NORMALIZED form (lowercase punycode A-label; the write path
@@ -1254,6 +1267,7 @@ impl Default for AppSettings {
             mail_address_cap: default_mail_address_cap(),
             mail_quota_bytes: default_mail_quota_bytes(),
             mail_quota_messages: default_mail_quota_messages(),
+            docs_memory_budget_mib: default_docs_memory_budget_mib(),
             mail_default_domain: String::new(),
             mail_oauth_gmail_client_id: String::new(),
             mail_oauth_microsoft_client_id: String::new(),

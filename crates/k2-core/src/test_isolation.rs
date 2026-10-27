@@ -112,6 +112,26 @@ pub fn assert_isolated_from_prod() {
     );
 }
 
+/// Store files a test redirects with an env knob (`K2_THREADS_REDB`,
+/// `K2_DOCS_REDB`, ...) must never be the real home's: a test writing there
+/// would change the production daemon's data (docs.redb, MI14).
+pub fn store_in_real_home(path: &Path, real_home: Option<&Path>) -> bool {
+    let Some(real) = real_home else { return false };
+    let k2 = real.join(".k2");
+    let dir = path.parent().unwrap_or(path);
+    same_dir(dir, &k2) || path.starts_with(&k2)
+}
+
+/// Panic when `path` (a store a test redirected) is under the real home's
+/// `.k2`.
+#[track_caller]
+pub fn assert_store_not_in_real_home(path: &Path) {
+    assert!(
+        !store_in_real_home(path, real_home().as_deref()),
+        "prod-isolation guard: store path {path:?} is in the real home's .k2; point it at a temp dir"
+    );
+}
+
 /// The home the password database lists for this uid (never `$HOME`).
 #[cfg(unix)]
 pub fn real_home() -> Option<PathBuf> {
@@ -156,6 +176,18 @@ mod tests {
             ("PATH", "/bin"),
         ];
         assert_eq!(leaked_vars(vars), vec!["K2SO_PANE_ID".to_string(), "K2_HOOK_SOCK".to_string()]);
+    }
+
+    #[test]
+    fn a_redirected_store_in_the_real_home_is_caught() {
+        let real = std::env::temp_dir().join(format!("k2-guard-store-real-{}", std::process::id()));
+        let temp = std::env::temp_dir().join(format!("k2-guard-store-temp-{}", std::process::id()));
+        std::fs::create_dir_all(real.join(".k2")).expect("mkdir");
+        assert!(store_in_real_home(&real.join(".k2/docs.redb"), Some(&real)));
+        assert!(store_in_real_home(&real.join(".k2/sub/docs.redb"), Some(&real)));
+        assert!(!store_in_real_home(&temp.join("docs.redb"), Some(&real)));
+        assert!(!store_in_real_home(&real.join(".k2/docs.redb"), None));
+        std::fs::remove_dir_all(&real).expect("cleanup");
     }
 
     #[test]

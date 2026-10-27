@@ -999,6 +999,11 @@ fn quiesce() {
     }
     // frpc: the successor adopts it.
     let frpc = k2_core::tunnel::connector::detach_for_handoff();
+    // Live docs (MI14): before the DB goes read-only, close every session
+    // and release docs.redb (redb's exclusive lock) so the successor's
+    // open finds it free. When the kit's disk sync lands, its flush runs
+    // inside this release first.
+    let docs = if crate::docs::release("hand-off") { "docs store closed" } else { "docs store not open" };
     // The DB: the successor owns it now.
     {
         let db = k2_core::db::shared();
@@ -1018,7 +1023,7 @@ fn quiesce() {
     };
     log_debug!(
         "[daemon/handoff] quiesced: accept loops stopped, {n} agent PTY(s) killed, frpc {} left \
-         for the successor, DB read-only, {threads}",
+         for the successor, DB read-only, {threads}, {docs}",
         frpc.map(|p| format!("pid {p}")).unwrap_or_else(|| "(none)".into())
     );
 }

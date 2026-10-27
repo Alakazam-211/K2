@@ -61,7 +61,9 @@ case "$step" in
     # The job's checkout belongs to the node, not the job user: trust it for
     # this run only (the old-binary scenarios `git archive` a tag from it).
     export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$PWD"
-    git rev-parse -q --verify v0.46.2 >/dev/null || git fetch -q origin tag v0.46.2
+    # A job's mirror carries no tags: build the old binaries from v0.46.2's
+    # commit, an ancestor of this one.
+    git rev-parse -q --verify v0.46.2 >/dev/null || export K2X2_OLD_REF=037eb661b706cc8d63d19c986d88968f6f3c05c5
     bash scripts/test/compute-two-servers.sh "$@"
     ;;
   *)

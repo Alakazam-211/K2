@@ -212,8 +212,8 @@ generate() {
     CEREMONY_DONE=1
     say ""
     say "── 3/3  Send K2 these two PUBLIC key lines (safe to share) ──"
-    say "U2 (primary): $(sed -n 2p "$dir/k2-updater-u2.pub")   id $(sed -n 1p "$dir/k2-updater-u2.pub" | sed 's/.*: //')"
-    say "U3 (backup):  $(sed -n 2p "$dir/k2-updater-u3.pub")   id $(sed -n 1p "$dir/k2-updater-u3.pub" | sed 's/.*: //')"
+    say "U2 (primary): $(sed -n 2p "$dir/k2-updater-u2.pub")   id $(sed -n 1p "$dir/k2-updater-u2.pub" | awk '{print $NF}')"
+    say "U3 (backup):  $(sed -n 2p "$dir/k2-updater-u3.pub")   id $(sed -n 1p "$dir/k2-updater-u3.pub" | awk '{print $NF}')"
     say ""
     say "K2 runs: bash scripts/updater-key-ceremony.sh pubkeys <U2 line> <U3 line>"
     say "and lands it with the SS4/SS5 code. Then, here: bash scripts/sign-daemon.sh --preflight <next version>"

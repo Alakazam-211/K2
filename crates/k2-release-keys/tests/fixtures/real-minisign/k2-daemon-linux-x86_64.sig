@@ -1,0 +1,4 @@
+untrusted comment: signature from tauri secret key
+RUTJsHvhtvH2N9d2fFlD6Xww6nEGPaOGAJURzGeNfriXij4/KX6UHiAadz34QWnCD56uVSRlFKbBhZmQGmoYQRCqxHBJ8G7tuwA=
+trusted comment: timestamp:1793104218	file:k2-daemon-linux-x86_64
+f7nJ9QcIGFEM9WctHchvA/Ziix93QFTeBVbD2qu+Q25gkPZKfR0w0bdNNZ4L68jFwoQ8bwF0lPVu/ZtyXZeQCg==

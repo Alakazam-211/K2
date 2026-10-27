@@ -58,6 +58,13 @@ pub fn is_tenant_user(uid: u32) -> bool {
     (TENANT_UID_FIRST..=TENANT_UID_LAST).contains(&uid) && user_name(uid).is_none_or(|n| n.starts_with(TENANT_USER_PREFIX))
 }
 
+/// No uids, no tenant users on Windows (pending k2-node Windows port).
+#[cfg(not(unix))]
+fn user_name(_uid: u32) -> Option<String> {
+    None
+}
+
+#[cfg(unix)]
 fn user_name(uid: u32) -> Option<String> {
     let mut buf = vec![0 as libc::c_char; 4096];
     let mut pw: libc::passwd = unsafe { std::mem::zeroed() };
@@ -252,6 +259,8 @@ mod tests {
     #[test]
     fn only_k2job_users_in_the_range_are_tenants() {
         assert!(!super::is_tenant_user(0));
+        // pending k2-node Windows port: no uids on Windows.
+        #[cfg(unix)]
         assert!(!super::is_tenant_user(unsafe { libc::geteuid() }), "this test's own user never is");
         assert!(!super::is_tenant_user(super::TENANT_UID_LAST + 1));
     }

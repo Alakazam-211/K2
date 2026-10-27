@@ -13,6 +13,9 @@ include!(concat!(env!("OUT_DIR"), "/ptyd_embed.rs"));
 /// Hand the embedded ptyd (if this build carries one) to k2-core, which
 /// writes it to the versioned path on first use. Call once at boot.
 pub fn register_embedded() {
+    // k2-ptyd is Unix-only until its Windows port (0.47: ConPTY, named
+    // pipe, Job Objects); a Windows build embeds none.
+    #[cfg(unix)]
     if let Some((bytes, sha)) = PTYD_EMBED {
         k2_core::terminal::ptyd::client::set_embedded(bytes, sha);
     }

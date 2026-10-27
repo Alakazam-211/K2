@@ -338,13 +338,7 @@ impl SewOps for RealOps {
         parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
     }
     fn disk_free(&self, path: &str) -> Option<u64> {
-        let c = std::ffi::CString::new(path).ok()?;
-        // SAFETY: valid C string; statvfs fills the zeroed struct.
-        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-            return None;
-        }
-        Some(st.f_bavail as u64 * st.f_frsize as u64)
+        k2_core::fs_commands::free_disk_space(std::path::Path::new(path))
     }
     fn port_taken(&self, addr: &str, port: u16, udp: bool) -> bool {
         let sa = format!("{addr}:{port}");

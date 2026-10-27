@@ -1119,7 +1119,13 @@ pub fn local_interface_addrs() -> (Vec<Ipv4Addr>, Vec<Ipv6Addr>) {
     {
         return TEST_LOCAL_ADDRS.with(|c| c.borrow().clone()).unwrap_or_default();
     }
-    #[cfg(not(test))]
+    // Hosted mail is a server-only feature (Linux boxes); not shipped on
+    // personal Windows machines, so there is nothing to list there.
+    #[cfg(all(not(test), not(unix)))]
+    {
+        (Vec::new(), Vec::new())
+    }
+    #[cfg(all(not(test), unix))]
     {
         let mut v4 = Vec::new();
         let mut v6 = Vec::new();

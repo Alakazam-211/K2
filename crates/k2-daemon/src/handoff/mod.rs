@@ -387,6 +387,20 @@ pub fn capture_process_context() {
     let _ = HANDOFF_FD.set(fd);
 }
 
+/// The real uid, for systemd's `/run/user/<uid>` (systemd is Linux-only;
+/// elsewhere `under_systemd()` is false before this is reached).
+fn systemd_uid() -> u32 {
+    #[cfg(unix)]
+    {
+        // SAFETY: getuid has no preconditions.
+        unsafe { libc::getuid() }
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
 /// systemd's notify socket for this unit: the one the process started
 /// with, or — when the hand-off drop-in was installed after this process
 /// started (no `NOTIFY_SOCKET` in its env then) and the unit now reports
@@ -406,8 +420,7 @@ fn notify_socket() -> Option<std::ffi::OsString> {
     let path = if scope == "user" {
         let rt = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
-            // SAFETY: getuid has no preconditions.
-            .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() })));
+            .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", systemd_uid())));
         rt.join("systemd").join("notify")
     } else {
         PathBuf::from("/run/systemd/notify")

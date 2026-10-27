@@ -26,9 +26,21 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
 
 use k2_core::tool_hook::sew_wire::{self, ErrorBody};
+
+/// Sew's management API is a Unix socket on the Linux box Sew runs on.
+#[cfg(unix)]
+async fn connect_socket(p: &Path) -> std::io::Result<tokio::net::UnixStream> {
+    tokio::net::UnixStream::connect(p).await
+}
+
+/// Server-only feature (Linux boxes): no Sew management socket exists on a
+/// personal Windows machine.
+#[cfg(not(unix))]
+async fn connect_socket(_p: &Path) -> std::io::Result<tokio::io::DuplexStream> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Sew's management socket is on its Linux box"))
+}
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -232,7 +244,7 @@ impl MgmtClient {
         head.push_str("\r\n");
         let fut = async {
             let mut stream =
-                tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&self.socket))
+                tokio::time::timeout(CONNECT_TIMEOUT, connect_socket(&self.socket))
                     .await
                     .map_err(|_| {
                         TransportError(format!("connect {} timed out", self.socket.display()))

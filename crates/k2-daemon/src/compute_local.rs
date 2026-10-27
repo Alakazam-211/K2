@@ -58,9 +58,17 @@ pub struct Found {
     pub source: &'static str,
 }
 
+#[cfg(unix)]
 fn is_exec(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p).map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+}
+
+/// Windows has no exec bit: a regular `.exe` file (pending k2-node Windows
+/// port: no Windows k2-node ships yet, so nothing is found in practice).
+#[cfg(windows)]
+fn is_exec(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) && std::fs::metadata(p).is_ok_and(|m| m.is_file())
 }
 
 /// The k2-node this machine can install from, best source first.
@@ -209,6 +217,7 @@ pub fn download_binary() -> Result<PathBuf, String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let tmp = dir.join(format!(".k2-node.{}", std::process::id()));
     std::fs::write(&tmp, &bin).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
@@ -393,7 +402,14 @@ fn run_root(el: Elevation, bin: &Path, verb: &str, args: &[String]) -> Result<St
     }
 }
 
+/// The daemon user's name and home (Windows: `USERNAME` and the profile).
+#[cfg(windows)]
+pub fn current_user() -> (String, PathBuf) {
+    (std::env::var("USERNAME").unwrap_or_default(), dirs::home_dir().unwrap_or_default())
+}
+
 /// The daemon user's name and home.
+#[cfg(unix)]
 pub fn current_user() -> (String, PathBuf) {
     unsafe {
         let pw = libc::getpwuid(libc::geteuid());

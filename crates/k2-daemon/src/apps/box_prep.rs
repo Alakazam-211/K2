@@ -816,16 +816,7 @@ pub fn gather() -> Facts {
 pub fn disk_free_now() -> Vec<(String, u64)> {
     k2_root_proto::apps::FREE_CHECK_PATHS
         .iter()
-        .filter_map(|p| {
-            let c = std::ffi::CString::new(*p).ok()?;
-            // SAFETY: valid C string; statvfs fills the zeroed struct.
-            let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-            if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-                return None;
-            }
-            #[allow(clippy::unnecessary_cast)]
-            Some((p.to_string(), (st.f_bavail as u64).saturating_mul(st.f_frsize as u64)))
-        })
+        .filter_map(|p| Some((p.to_string(), k2_core::fs_commands::free_disk_space(std::path::Path::new(p))?)))
         .collect()
 }
 

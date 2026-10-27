@@ -511,6 +511,14 @@ fn check_types(root: &Path, opts: &Options, errors: &mut Vec<Issue>, warnings: &
             cmd.env(k, v);
         }
     }
+    // Windows programs (node's tsc among them) need the system's own
+    // variables: without SystemRoot many can't even start.
+    #[cfg(windows)]
+    for k in ["SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"] {
+        if let Some(v) = std::env::var_os(k) {
+            cmd.env(k, v);
+        }
+    }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {

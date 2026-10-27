@@ -33,10 +33,12 @@
 #   - GitHub Actions secrets (same names): R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
 #     R2_SECRET_ACCESS_KEY (optional R2_ENDPOINT, R2_BUCKET)
 #
-# Windows NSIS (Step 9.5) — sticky box via SSH alias (default k2-win):
-#   Near-term: home LAN PC. Later: retarget HostName to k2-dev-web cloud
-#   Windows; same script. Soft-fail if the box is down unless
-#   K2_REQUIRE_WINDOWS_NSIS=1. Skip with K2_SKIP_WINDOWS_NSIS=1.
+# Windows NSIS (Step 9.5), Alpha — built on K2-WIN-AX41 (ssh alias
+#   k2-win-ax41; code goes there as a git bundle of the tag), copied back
+#   here and minisigned here for latest.json. Never signed on the box.
+#   OFF by default for now: K2_SKIP_WINDOWS_NSIS defaults to 1; run with
+#   K2_SKIP_WINDOWS_NSIS=0 to include Windows. When on, a failed build
+#   soft-fails unless K2_REQUIRE_WINDOWS_NSIS=1.
 #   See scripts/windows-nsis-build.sh + wiki "Ops - Windows Build Box".
 #
 # Arch/Omarchy pacman (Step 9) — not built on this Mac. An Arch host runs
@@ -1125,30 +1127,50 @@ gh release create "$TAG" "${ASSETS[@]}" \
     --title "$TAG" \
     --notes-file "$NOTES_SRC"
 
-# ── Step 9.5: Windows NSIS on sticky box (home LAN now; cloud later) ──
+# ── Step 9.5: Windows NSIS (Alpha) on K2-WIN-AX41 ──
 #
-# Swap-ready: scripts/windows-nsis-build.sh SSHes only to
-# K2_WINDOWS_SSH_HOST (default k2-win). Retarget ~/.ssh/config HostName
-# when k2-dev-web provisions cloud Windows — no release.sh rewrite.
-# Soft-fail by default (home box asleep / offline); hard-fail with
-# K2_REQUIRE_WINDOWS_NSIS=1. Skip entirely: K2_SKIP_WINDOWS_NSIS=1.
+# scripts/windows-nsis-build.sh sends the tag to the box as a git bundle,
+# builds there, and copies the unsigned installer back to dist-windows/.
+# It is minisigned HERE for the updater (windows-patch-latest-json.sh);
+# no signing key ever goes to the box.
 #
-# Long-term optional: pure GHA windows-latest (app-windows.yml) can
-# replace this step; until then the sticky box is the ship host for Win.
+# OFF by default until Windows is switched on for releases: K2_SKIP_WINDOWS_NSIS
+# defaults to 1 (set K2_SKIP_WINDOWS_NSIS=0 to build it). When on, a failed
+# build soft-fails unless K2_REQUIRE_WINDOWS_NSIS=1 (which also turns it on).
+if [ "${K2_REQUIRE_WINDOWS_NSIS:-0}" = "1" ]; then
+    export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-0}"
+else
+    export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-1}"
+fi
 echo ""
-echo "Step 9.5: Windows NSIS installer (sticky box ${K2_WINDOWS_SSH_HOST:-k2-win})..."
+echo "Step 9.5: Windows NSIS installer, Alpha (${K2_WINDOWS_SSH_HOST:-k2-win-ax41})..."
 set +e
 "$PROJECT_DIR/scripts/windows-nsis-build.sh" "$VERSION"
 WIN_NSIS_RC=$?
 set -e
-if [ "$WIN_NSIS_RC" -eq 0 ] && [ "${K2_SKIP_WINDOWS_NSIS:-0}" != "1" ]; then
+if [ "$WIN_NSIS_RC" -eq 0 ] && [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
     WIN_SETUP="$PROJECT_DIR/dist-windows/K2_${VERSION}_x64-setup.exe"
     WIN_SUMS="$PROJECT_DIR/dist-windows/SHA256SUMS-windows-x86_64.txt"
     if [ -f "$WIN_SETUP" ]; then
-        gh release upload "$TAG" "$WIN_SETUP" \
+        # `file#label`: the release page shows the label, the download
+        # keeps the file name.
+        gh release upload "$TAG" "${WIN_SETUP}#Windows installer (Alpha, x64)" \
             ${WIN_SUMS:+"$WIN_SUMS"} \
             --repo "$RELEASE_REPO" --clobber
-        echo "  Uploaded Windows NSIS to ${TAG}."
+        echo "  Uploaded Windows NSIS (Alpha) to ${TAG}."
+        # Say it in the notes too: Windows is Alpha and the installer is
+        # not Authenticode-signed, so SmartScreen will warn.
+        WIN_NOTES="$(mktemp -t k2-relnotes-win)"
+        if gh release view "$TAG" --repo "$RELEASE_REPO" --json body --jq .body > "$WIN_NOTES"; then
+            if ! grep -q "Windows (Alpha)" "$WIN_NOTES"; then
+                printf '\n\n### Windows (Alpha)\n\n`K2_%s_x64-setup.exe` is an Alpha build for Windows 10/11 (x64). It is not code-signed yet, so Windows SmartScreen will ask before it runs.\n' "$VERSION" >> "$WIN_NOTES"
+                gh release edit "$TAG" --repo "$RELEASE_REPO" --notes-file "$WIN_NOTES" \
+                    || echo "  WARNING: could not add the Windows (Alpha) note to ${TAG}'s release notes." >&2
+            fi
+        else
+            echo "  WARNING: could not read ${TAG}'s release notes to add the Windows (Alpha) note." >&2
+        fi
+        rm -f "$WIN_NOTES"
         # Sign setup for Tauri auto-updater and merge windows-x86_64 into
         # latest.json (otherwise Windows Check for Updates fails: no
         # platforms.windows-x86_64 — 0.40.95).
@@ -1166,7 +1188,7 @@ if [ "$WIN_NSIS_RC" -eq 0 ] && [ "${K2_SKIP_WINDOWS_NSIS:-0}" != "1" ]; then
         WIN_NSIS_RC=1
     fi
 fi
-if [ "$WIN_NSIS_RC" -ne 0 ] && [ "${K2_SKIP_WINDOWS_NSIS:-0}" != "1" ]; then
+if [ "$WIN_NSIS_RC" -ne 0 ] && [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
     if [ "${K2_REQUIRE_WINDOWS_NSIS:-0}" = "1" ]; then
         echo "  FATAL: Windows NSIS failed (rc=$WIN_NSIS_RC) and K2_REQUIRE_WINDOWS_NSIS=1." >&2
         exit 1

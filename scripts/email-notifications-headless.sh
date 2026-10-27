@@ -72,12 +72,11 @@ fi
 ${LAUNCH[@]+"${LAUNCH[@]}"} "$BIN" >"$SANDBOX/daemon.log" 2>&1 &
 PID=$!
 
+# A fresh HOME: the daemon writes only the canonical ~/.k2.
 K2DIR=""
 for _ in $(seq 1 150); do
-    for d in "$HOME/.k2" "$HOME/.k2so"; do
-        if [ -s "$d/daemon.port" ] && { [ -s "$d/daemon.token" ] || [ -s "$d/heartbeat.token" ]; }; then K2DIR="$d"; fi
-    done
-    [ -n "$K2DIR" ] && break
+    d="$HOME/.k2"
+    if [ -s "$d/daemon.port" ] && { [ -s "$d/daemon.token" ] || [ -s "$d/heartbeat.token" ]; }; then K2DIR="$d"; break; fi
     sleep 0.2
 done
 [ -n "$K2DIR" ] || fail "the daemon never wrote its port and token"

@@ -97,6 +97,8 @@ struct HeldRec {
 }
 
 struct Prepared {
+    // Linux execs the verified fd (fexecve); only macOS execs by path.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     exe: CString,
     argv: Vec<CString>,
     envp: Vec<CString>,

@@ -1,3 +1,4 @@
+pub mod home_switch;
 pub mod schema;
 
 use parking_lot::ReentrantMutex;
@@ -246,18 +247,20 @@ pub fn init_for_tests() -> Arc<ReentrantMutex<Connection>> {
     }
 }
 
-/// Resolve the on-disk SQLite path under a K2 home dir (`~/.k2` in prod).
+/// Resolve the on-disk SQLite path under a K2 home dir (`~/.k2` in prod)
+/// WITHOUT changing anything on disk (backup sizing, tests, a deferred
+/// switch). The daemon itself goes through [`home_switch::switch_home_db`],
+/// which moves the home onto `k2.db` (Stage B, 0.46.6) and then uses this.
 ///
-/// Endgame Stage A (prd-k2so-endgame-v1): **prefer `k2.db` if it exists**,
-/// else use legacy `k2so.db` (create path for fresh installs until Stage B
-/// flips the writer).
+/// - **Both real files** (the Stage A stub `k2.db` beside a live
+///   `k2so.db`): the one with more non-sentinel `projects` rows; on a tie a
+///   file wins only if it is over 1 MB and more than twice the other's
+///   size, else `k2so.db`. Never deletes either file.
+/// - Otherwise `k2.db` if it exists (a symlink `k2so.db -> k2.db` is not a
+///   "both real" case), else `k2so.db` if it exists, else `k2.db` (fresh
+///   installs are created as `k2.db` from 0.46.6).
 ///
-/// **Both real files:** Stage A used to pick `k2.db` blindly. A stray
-/// stub `k2.db` (touch / `sqlite3 ~/.k2/k2.db` / a test) then hid the
-/// live `k2so.db` — workspaces and mail looked gone. If both exist as
-/// non-symlink files, pick the one with more non-sentinel `projects`
-/// rows (size as fallback). Never delete either file. Symlink
-/// `k2so.db` → `k2.db` (Stage B) still resolves to `k2.db`.
+/// `cli/k2` `_k2_home_db` applies the same rule.
 pub fn resolve_home_db_path(db_dir: &std::path::Path) -> std::path::PathBuf {
     let new = db_dir.join("k2.db");
     let old = db_dir.join("k2so.db");
@@ -277,7 +280,7 @@ pub fn resolve_home_db_path(db_dir: &std::path::Path) -> std::path::PathBuf {
         }
         return pick;
     }
-    if new.exists() {
+    if new.exists() || !old.exists() {
         new
     } else {
         old
@@ -339,19 +342,32 @@ fn pick_dual_real_db(new: &std::path::Path, old: &std::path::Path) -> std::path:
 /// Returns an `Arc` handle so the caller can store it in `AppState.db`
 /// AND the shared static points at the same physical connection.
 ///
-/// Filename: **endgame Stage A** prefers `k2.db` when it already exists;
-/// otherwise opens/creates legacy `k2so.db` so a Stage-A-only release does
-/// not rewrite on-disk data. Stage B flips the writer / renames (see
-/// `prd-k2so-endgame-v1.md`).
+/// Filename: endgame **Stage B** (0.46.6). [`home_switch::switch_home_db`]
+/// runs first, before anything opens the file: it renames `k2so.db` to
+/// `k2.db` (leaving a `k2so.db -> k2.db` link and `db-renamed.json`),
+/// quarantines a stale stub, or defers / refuses and keeps today's pick.
 ///
 /// Safe to call exactly once per process. A second call returns the
 /// already-initialized handle (tests that reuse the binary hit this).
 pub fn init_database() -> Result<Arc<ReentrantMutex<Connection>>> {
+    init_home_database(&home_switch::SwitchOpts {
+        defer: None,
+        by: format!("k2-core {}", env!("CARGO_PKG_VERSION")),
+    })
+    .map(|(h, _)| h)
+}
+
+/// [`init_database`] with the switch's options (the daemon passes a defer
+/// reason after a hand-off). Also returns what the switch did (`None` on
+/// the second call in a process).
+pub fn init_home_database(
+    opts: &home_switch::SwitchOpts,
+) -> Result<(Arc<ReentrantMutex<Connection>>, Option<home_switch::SwitchReport>)> {
     // Fast path for tests that re-invoke the init (or if somewhere in
     // startup accidentally re-initializes): just clone the existing
     // handle rather than opening another connection.
     if let Some(existing) = SHARED.get() {
-        return Ok(existing.clone());
+        return Ok((existing.clone(), None));
     }
 
     let db_dir = crate::paths::home_dir()
@@ -365,7 +381,15 @@ pub fn init_database() -> Result<Arc<ReentrantMutex<Connection>>> {
         crate::log_debug!("[db] WARN {e}");
     }
 
-    let db_path = resolve_home_db_path(&db_dir);
+    let report = home_switch::switch_home_db(&db_dir, opts);
+    crate::log_debug!("{}", report.log_line());
+    if let home_switch::Outcome::Blocked { k2_projects, k2so_projects } = &report.outcome {
+        eprintln!(
+            "[db] {}",
+            home_switch::blocked_message(&db_dir, &report.path, *k2_projects, *k2so_projects)
+        );
+    }
+    let db_path = report.path.clone();
     let conn = open_private_with_resilience(&db_path)?;
 
     // Self-heal: clean orphan rows whose parent `projects` row was
@@ -392,8 +416,8 @@ pub fn init_database() -> Result<Arc<ReentrantMutex<Connection>>> {
     // drop theirs and return the winner's. In practice only one thread
     // calls init_database during startup.
     match SHARED.set(handle.clone()) {
-        Ok(()) => Ok(handle),
-        Err(_) => Ok(SHARED.get().expect("SHARED just populated").clone()),
+        Ok(()) => Ok((handle, Some(report))),
+        Err(_) => Ok((SHARED.get().expect("SHARED just populated").clone(), Some(report))),
     }
 }
 
@@ -2017,11 +2041,11 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&base).unwrap();
-        // Neither → legacy create path (Stage A writer not flipped).
+        // Neither → fresh installs are created as k2.db (Stage B, 0.46.6).
         assert_eq!(
             resolve_home_db_path(&base),
-            base.join("k2so.db"),
-            "neither file: still create k2so.db until Stage B"
+            base.join("k2.db"),
+            "neither file: create k2.db"
         );
         std::fs::write(base.join("k2so.db"), b"old").unwrap();
         assert_eq!(

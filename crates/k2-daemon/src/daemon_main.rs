@@ -524,6 +524,9 @@ async fn async_main() {
             std::process::exit(1);
         }
     };
+    // Stage B (0.46.6): a hand-off successor must not rename the DB — the
+    // predecessor keeps its connection open (query_only) while it drains.
+    let handed_off = inherited_lock.is_some();
     if let Err(e) = acquire_daemon_singleton(&k2so_dir, inherited_lock) {
         eprintln!("[daemon] FATAL: {e}");
         std::process::exit(1);
@@ -537,15 +540,56 @@ async fn async_main() {
     // parse failure) so plaintext passwords never linger on disk.
     let _ = seed_users::consume_seed_file();
 
-    // Open (or create) ~/.k2so/k2so.db and populate k2_core's process-
-    // wide shared connection. Every migrated hook handler (e.g.
+    // Open (or create) ~/.k2/k2.db and populate k2_core's process-wide
+    // shared connection. Every migrated hook handler (e.g.
     // handle_hook_complete) reads via db::shared(), so this has to run
-    // before any route accepts traffic. Both the Tauri app and the
-    // daemon can hold their own handles to the same file — SQLite's WAL
-    // mode coordinates multi-writer access.
-    if let Err(e) = k2_core::db::init_database() {
-        log_debug!("[daemon] FATAL: db::init_database: {e}");
-        std::process::exit(2);
+    // before any route accepts traffic.
+    //
+    // Stage B (0.46.6): first, under the singleton lock and before any
+    // open, `k2so.db` becomes `k2.db` (+ a `k2so.db -> k2.db` link and
+    // `db-renamed.json`); a stale stub `k2.db` is quarantined, never
+    // deleted. Deferred after a hand-off or with K2_ALLOW_MULTI_DAEMON
+    // (another daemon may hold the file); refused when both files hold
+    // workspaces (k2_core::db::home_switch).
+    let switch_opts = k2_core::db::home_switch::SwitchOpts {
+        defer: if handed_off {
+            Some("hand-off successor: the previous daemon still holds the database open".into())
+        } else if std::env::var_os("K2_ALLOW_MULTI_DAEMON").is_some() {
+            Some("K2_ALLOW_MULTI_DAEMON is set: another daemon may hold the database open".into())
+        } else {
+            None
+        },
+        by: format!("k2-daemon {}", env!("CARGO_PKG_VERSION")),
+    };
+    match k2_core::db::init_home_database(&switch_opts) {
+        Ok((_, Some(report))) => {
+            if let k2_core::db::home_switch::Outcome::Blocked { k2_projects, k2so_projects } =
+                report.outcome
+            {
+                if k2_core::db::home_switch::blocked_notice_due(&k2so_dir) {
+                    let body = k2_core::db::home_switch::blocked_message(
+                        &k2so_dir,
+                        &report.path,
+                        k2_projects,
+                        k2so_projects,
+                    );
+                    match crate::feedback_routes::file_owner_notice(
+                        k2_core::db::AUDIT_SENTINEL_IDS[0],
+                        "K2",
+                        "K2 did not rename its database: two copies hold workspaces",
+                        &body,
+                    ) {
+                        Ok(_) => k2_core::db::home_switch::mark_blocked_notice_filed(&k2so_dir),
+                        Err(e) => log_debug!("[db] owner notice for the blocked rename: {e}"),
+                    }
+                }
+            }
+        }
+        Ok((_, None)) => {}
+        Err(e) => {
+            log_debug!("[daemon] FATAL: db::init_database: {e}");
+            std::process::exit(2);
+        }
     }
     // Folder trust (prd-security-sweep-0464-v1 SS10): the card presenter,
     // before anything can spawn a harness.

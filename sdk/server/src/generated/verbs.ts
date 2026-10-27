@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 30
+export const CATALOG_VERSION = 31
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -950,7 +950,18 @@ export const APP_VERBS = {
     http: { method: 'GET', route: '/cli/feedback/show', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"agentName":{"type":"string"},"answer":{"type":["string","null"]},"answeredAt":{"type":["integer","null"]},"assignees":{"items":{"type":"string"},"type":"array"},"body":{"type":["string","null"]},"brief":{"additionalProperties":false,"properties":{"bytes":{"type":"integer"},"createdAt":{"type":"integer"},"html":{"type":"string"},"sanitizer":{"type":"string"},"sha256":{"type":"string"},"text":{"type":"string"}},"type":["object","null"]},"briefBytes":{"type":["integer","null"]},"commentCount":{"type":"integer"},"comments":{"items":{"additionalProperties":false,"properties":{"at":{"type":"integer"},"author":{"type":"string"},"body":{"type":"string"}},"type":"object"},"type":"array"},"createdAt":{"type":"integer"},"hasBrief":{"type":"boolean"},"id":{"type":"string"},"kind":{"type":"string"},"ok":{"type":"boolean"},"options":{"items":{"type":"string"},"type":["array","null"]},"priority":{"type":"integer"},"projectId":{"type":"string"},"status":{"type":"string"},"title":{"type":"string"},"updatedAt":{"type":"integer"},"workspace":{"type":["string","null"]}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"agentName":{"type":"string"},"answer":{"type":["string","null"]},"answeredAt":{"type":["integer","null"]},"assignees":{"items":{"type":"string"},"type":"array"},"body":{"type":["string","null"]},"brief":{"additionalProperties":false,"properties":{"bytes":{"type":"integer"},"createdAt":{"type":"integer"},"html":{"type":"string"},"sanitizer":{"type":"string"},"sha256":{"type":"string"},"text":{"type":"string"}},"type":["object","null"]},"briefBytes":{"type":["integer","null"]},"commentCount":{"type":"integer"},"comments":{"items":{"additionalProperties":false,"properties":{"at":{"type":"integer"},"attachments":{"items":{"additionalProperties":false,"properties":{"canDownload":{"type":"boolean"},"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"author":{"type":"string"},"body":{"type":"string"},"id":{"type":"string"}},"type":"object"},"type":"array"},"createdAt":{"type":"integer"},"fileCount":{"type":"integer"},"hasBrief":{"type":"boolean"},"id":{"type":"string"},"kind":{"type":"string"},"ok":{"type":"boolean"},"options":{"items":{"type":"string"},"type":["array","null"]},"priority":{"type":"integer"},"projectId":{"type":"string"},"status":{"type":"string"},"title":{"type":"string"},"updatedAt":{"type":"integer"},"workspace":{"type":["string","null"]}},"type":"object"},
+  },
+  'tickets.attachment': {
+    cap: 'tickets:read',
+    effect: 'read',
+    kind: 'call',
+    feature: 'ticket-attachments-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/feedback/attachment', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"base64":{"type":"string"},"eof":{"type":"boolean"},"height":{"type":"integer"},"kind":{"type":"string"},"len":{"type":"integer"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"offset":{"type":"integer"},"ok":{"type":"boolean"},"sanitized":{"type":"boolean"},"size":{"type":"integer"},"state":{"type":"string"},"text":{"type":"string"},"truncated":{"type":"boolean"},"width":{"type":"integer"}},"type":"object"},
   },
   'tickets.create': {
     cap: 'tickets:post',
@@ -961,7 +972,7 @@ export const APP_VERBS = {
     http: { method: 'POST', route: '/cli/feedback/create', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"agentName":{"type":"string"},"answer":{"type":["string","null"]},"answeredAt":{"type":["integer","null"]},"assignees":{"items":{"type":"string"},"type":"array"},"body":{"type":["string","null"]},"briefBytes":{"type":["integer","null"]},"commentCount":{"type":"integer"},"createdAt":{"type":"integer"},"hasBrief":{"type":"boolean"},"id":{"type":"string"},"kind":{"type":"string"},"ok":{"type":"boolean"},"options":{"items":{"type":"string"},"type":["array","null"]},"priority":{"type":"integer"},"projectId":{"type":"string"},"status":{"type":"string"},"title":{"type":"string"},"updatedAt":{"type":"integer"},"warnings":{"items":{"additionalProperties":false,"properties":{"code":{"type":"string"},"hint":{"type":"string"}},"type":"object"},"type":"array"},"workspace":{"type":["string","null"]}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"agentName":{"type":"string"},"answer":{"type":["string","null"]},"answeredAt":{"type":["integer","null"]},"assignees":{"items":{"type":"string"},"type":"array"},"attachments":{"items":{"additionalProperties":false,"properties":{"canDownload":{"type":"boolean"},"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"body":{"type":["string","null"]},"briefBytes":{"type":["integer","null"]},"commentCount":{"type":"integer"},"createdAt":{"type":"integer"},"fileCount":{"type":"integer"},"hasBrief":{"type":"boolean"},"id":{"type":"string"},"kind":{"type":"string"},"ok":{"type":"boolean"},"options":{"items":{"type":"string"},"type":["array","null"]},"priority":{"type":"integer"},"projectId":{"type":"string"},"status":{"type":"string"},"title":{"type":"string"},"updatedAt":{"type":"integer"},"warnings":{"items":{"additionalProperties":false,"properties":{"code":{"type":"string"},"hint":{"type":"string"}},"type":"object"},"type":"array"},"workspace":{"type":["string","null"]}},"type":"object"},
   },
   'tickets.comment': {
     cap: 'tickets:post',
@@ -972,7 +983,7 @@ export const APP_VERBS = {
     http: { method: 'POST', route: '/cli/feedback/comment', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"answered":{"type":"boolean"},"author":{"type":"string"},"commentId":{"type":"string"},"delivered":{"type":"boolean"},"deliveryReason":{"type":["string","null"]},"id":{"type":"string"},"ok":{"type":"boolean"},"status":{"type":"string"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"answered":{"type":"boolean"},"attachments":{"items":{"additionalProperties":false,"properties":{"canDownload":{"type":"boolean"},"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"author":{"type":"string"},"commentId":{"type":"string"},"delivered":{"type":"boolean"},"deliveryReason":{"type":["string","null"]},"id":{"type":"string"},"ok":{"type":"boolean"},"status":{"type":"string"}},"type":"object"},
   },
   'tickets.answer': {
     cap: 'tickets:post',
@@ -983,7 +994,7 @@ export const APP_VERBS = {
     http: { method: 'POST', route: '/cli/feedback/answer', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"answer":{"type":["string","null"]},"answeredAt":{"type":["integer","null"]},"delivered":{"type":"boolean"},"deliveryReason":{"type":["string","null"]},"id":{"type":"string"},"ok":{"type":"boolean"},"status":{"type":"string"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"answer":{"type":["string","null"]},"answeredAt":{"type":["integer","null"]},"attachments":{"items":{"additionalProperties":false,"properties":{"canDownload":{"type":"boolean"},"kind":{"type":"string"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"size":{"type":"integer"},"state":{"type":"string"}},"type":"object"},"type":"array"},"commentId":{"type":"string"},"delivered":{"type":"boolean"},"deliveryReason":{"type":["string","null"]},"id":{"type":"string"},"ok":{"type":"boolean"},"status":{"type":"string"}},"type":"object"},
   },
   'tickets.resolve': {
     cap: 'tickets:post',
@@ -2760,8 +2771,12 @@ export interface AppTicketBrief {
 export interface AppTicketComment {
   /** Seconds since the epoch. */
   readonly at: number
+  /** The message's files as you see them; one your file rights don't cover is {kind, state: hidden}. Read one with tickets.attachment by the message id and its index. */
+  readonly attachments?: AppThreadFile[]
   readonly author: string
   readonly body: string
+  /** The message's id (tickets.attachment reads its files). */
+  readonly id: string
 }
 
 export interface AppTicketDetail {
@@ -2777,6 +2792,8 @@ export interface AppTicketDetail {
   readonly comments: AppTicketComment[]
   /** Seconds since the epoch. */
   readonly createdAt: number
+  /** Files across the ticket's messages. */
+  readonly fileCount?: number
   readonly hasBrief: boolean
   readonly id: string
   /** question, approval or fyi. */
@@ -2806,11 +2823,14 @@ export interface AppTicketCreated {
   /** Seconds since the epoch. */
   readonly answeredAt: number | null
   readonly assignees: string[]
+  /** The opening message's files as you see them (always present on a 0.46.6 daemon). */
+  readonly attachments?: AppThreadFile[]
   readonly body: string | null
   readonly briefBytes: number | null
   readonly commentCount: number
   /** Seconds since the epoch. */
   readonly createdAt: number
+  readonly fileCount?: number
   readonly hasBrief: boolean
   readonly id: string
   /** question, approval or fyi. */
@@ -2831,6 +2851,8 @@ export interface AppTicketCreated {
 
 export interface AppTicketCommented {
   readonly answered: boolean
+  /** This message's files as you see them. */
+  readonly attachments?: AppThreadFile[]
   readonly author: string
   readonly commentId: string
   readonly delivered: boolean
@@ -2844,6 +2866,9 @@ export interface AppTicketAnswered {
   readonly answer: string | null
   /** Seconds since the epoch. */
   readonly answeredAt: number | null
+  /** The answer's files as you see them. */
+  readonly attachments?: AppThreadFile[]
+  readonly commentId?: string
   readonly delivered: boolean
   readonly deliveryReason: string | null
   readonly id: string
@@ -3425,9 +3450,10 @@ export interface AppVerbs {
   'resources.remove': { args: { relPath: string; workspace: string }; value: AppResourceRemoved }
   'tickets.list': { args: { all?: boolean; project: string; status?: string }; value: AppTickets }
   'tickets.show': { args: { brief?: boolean; id: string }; value: AppTicketDetail }
-  'tickets.create': { args: { agentName?: string; assignees?: string[]; body?: string; briefHtml?: string; kind?: string; options?: string[]; priority?: number; project: string; title: string }; value: AppTicketCreated }
-  'tickets.comment': { args: { body: string; id: string; optionPick?: boolean }; value: AppTicketCommented }
-  'tickets.answer': { args: { answer: string; id: string }; value: AppTicketAnswered }
+  'tickets.attachment': { args: { commentId: string; id: string; len?: number; mode?: 'meta' | 'preview' | 'thumb' | 'range' | 'download'; n?: number; offset?: number; px?: number }; value: AppThreadFileData }
+  'tickets.create': { args: { agentName?: string; assignees?: string[]; attachments?: AppThreadAttach[]; body?: string; briefHtml?: string; kind?: string; options?: string[]; priority?: number; project: string; title: string }; value: AppTicketCreated }
+  'tickets.comment': { args: { attachments?: AppThreadAttach[]; body?: string; id: string; optionPick?: boolean }; value: AppTicketCommented }
+  'tickets.answer': { args: { answer: string; attachments?: AppThreadAttach[]; id: string }; value: AppTicketAnswered }
   'tickets.resolve': { args: { id: string; status?: string }; value: AppTicketStatus }
   'tickets.assign': { args: { id: string; usernames: string[] }; value: AppTicketAssigned }
   'wiki.index': { args: { project: string }; value: AppWikiIndex }
@@ -3467,7 +3493,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -3649,12 +3675,14 @@ export interface AppSurfaces {
     list(args: { all?: boolean; project: string; status?: string }): Promise<AppTickets>
     /** One ticket with its comments (and brief). cap tickets:read · GET /cli/feedback/show. e.g. `const t = await k2.tickets.show({id})` */
     show(args: { brief?: boolean; id: string }): Promise<AppTicketDetail>
+    /** One file of a ticket message: meta, preview, thumbnail or a byte range, only when your own file rights cover it; mode=download also needs files:download in the room; a file your files:read scope doesn't cover is hidden. cap tickets:read · GET /cli/feedback/attachment. e.g. `const t = await k2.tickets.attachment({id, commentId: c.id, n: 0, mode: 'thumb'})` */
+    attachment(args: { commentId: string; id: string; len?: number; mode?: 'meta' | 'preview' | 'thumb' | 'range' | 'download'; n?: number; offset?: number; px?: number }): Promise<AppThreadFileData>
     /** Open a ticket in a room for its agent. cap tickets:post · POST /cli/feedback/create. e.g. `await k2.tickets.create({project: 'sales', title: 'Quote for J1042?'})` */
-    create(args: { agentName?: string; assignees?: string[]; body?: string; briefHtml?: string; kind?: string; options?: string[]; priority?: number; project: string; title: string }): Promise<AppTicketCreated>
+    create(args: { agentName?: string; assignees?: string[]; attachments?: AppThreadAttach[]; body?: string; briefHtml?: string; kind?: string; options?: string[]; priority?: number; project: string; title: string }): Promise<AppTicketCreated>
     /** Comment on a ticket as the guest (free text moves it to needs_discussion). cap tickets:post · POST /cli/feedback/comment. e.g. `await k2.tickets.comment({id, body: 'Looks right'})` */
-    comment(args: { body: string; id: string; optionPick?: boolean }): Promise<AppTicketCommented>
+    comment(args: { attachments?: AppThreadAttach[]; body?: string; id: string; optionPick?: boolean }): Promise<AppTicketCommented>
     /** Answer a ticket as the guest. cap tickets:post · POST /cli/feedback/answer. e.g. `await k2.tickets.answer({id, answer: 'Approved'})` */
-    answer(args: { answer: string; id: string }): Promise<AppTicketAnswered>
+    answer(args: { answer: string; attachments?: AppThreadAttach[]; id: string }): Promise<AppTicketAnswered>
     /** Set a ticket's status (Apps can't set answered). cap tickets:post · POST /cli/feedback/resolve. e.g. `await k2.tickets.resolve({id})` */
     resolve(args: { id: string; status?: string }): Promise<AppTicketStatus>
     /** Set a ticket's assignees. cap tickets:post · POST /cli/feedback/assign. e.g. `await k2.tickets.assign({id, usernames: ['dana']})` */

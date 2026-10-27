@@ -45,7 +45,7 @@ use super::call::{resolve, CallBody, Placed};
 use crate::cli_response::CliResponse;
 
 /// The rows this file answers, in catalog order.
-pub const VERBS: [&str; 12] = [
+pub const VERBS: [&str; 13] = [
     "thread.catchup",
     "thread.unread",
     "thread.mute",
@@ -57,6 +57,8 @@ pub const VERBS: [&str; 12] = [
     "tickets.create",
     "tickets.comment",
     "tickets.resolve",
+    // 0.46.6: a ticket message's file (ticket-attachments-v1).
+    "tickets.attachment",
     "activity.snapshot",
 ];
 
@@ -274,13 +276,32 @@ fn ticket_room(reach: &RoomReach, id: &str) -> Result<String, CliResponse> {
 /// never stored, never on the wire: it only selects the App's
 /// room-relative projection (no host paths) for the person's own read.
 fn room_view(project_id: &str, cap: &str) -> SkinPass {
+    room_view_caps(project_id, vec![cap.to_string()])
+}
+
+/// The person's view for a ticket row (0.46.6, TA8): `cap` plus the file
+/// caps the widget's manifest holds (`files:read`, unscoped: the Garden is
+/// the person on their own computer; `files:download`). Without
+/// `files:read` in the manifest, ticket files read `hidden`: the manifest is
+/// the gate.
+fn ticket_room_view(project_id: &str, cap: &str, w: &Placed) -> SkinPass {
+    let mut caps = vec![cap.to_string()];
+    for file_cap in [k2_core::skin::CAP_FILES_READ, k2_core::skin::CAP_FILES_DOWNLOAD] {
+        if w.caps.iter().any(|c| c == file_cap) {
+            caps.push(file_cap.to_string());
+        }
+    }
+    room_view_caps(project_id, caps)
+}
+
+fn room_view_caps(project_id: &str, caps: Vec<String>) -> SkinPass {
     let mut room_policy = RoomPolicy::new();
-    room_policy.insert(project_id.to_string(), vec![cap.to_string()]);
+    room_policy.insert(project_id.to_string(), caps.clone());
     SkinPass {
         id: "garden-person".to_string(),
         principal_id: None,
         username: PERSON.to_string(),
-        caps: vec![cap.to_string()],
+        caps,
         rooms: vec![project_id.to_string()],
         session: true,
         room_policy,
@@ -381,13 +402,22 @@ fn answer(row: &VerbRow, w: &Placed, args: &Map<String, J>, wire: &Map<String, J
                 }
             }
         }
-        "tickets.show" | "tickets.comment" | "tickets.resolve" => {
+        "tickets.show" | "tickets.comment" | "tickets.resolve" | "tickets.attachment" => {
             let reach = room_reach(w)?;
             let room = ticket_room(&reach, str_arg(args, "id"))?;
             match row.verb.as_str() {
-                "tickets.show" => {
-                    crate::feedback_routes::handle_show_gated(&query_of(wire), Some(room_view(&room, row.cap.as_deref().unwrap_or_default())))
-                }
+                "tickets.show" => crate::feedback_routes::handle_show_gated(
+                    &query_of(wire),
+                    Some(ticket_room_view(&room, row.cap.as_deref().unwrap_or_default(), w)),
+                ),
+                "tickets.attachment" => crate::ticket_attachments::handle_get(
+                    &query_of(wire),
+                    &crate::ticket_attachments::DoorCaller::Pass(ticket_room_view(
+                        &room,
+                        row.cap.as_deref().unwrap_or_default(),
+                        w,
+                    )),
+                ),
                 path => crate::feedback_routes::dispatch_post_as_gated(
                     if path == "tickets.comment" { "/cli/feedback/comment" } else { "/cli/feedback/resolve" },
                     body.as_bytes(),

@@ -888,8 +888,12 @@ export interface AppTicketBrief {
 export interface AppTicketComment {
   /** Seconds since the epoch. */
   readonly at: number
+  /** The message's files as you see them; one your file rights don't cover is {kind, state: hidden}. Read one with tickets.attachment by the message id and its index. */
+  readonly attachments?: AppThreadFile[]
   readonly author: string
   readonly body: string
+  /** The message's id (tickets.attachment reads its files). */
+  readonly id: string
 }
 
 export interface AppTicketDetail {
@@ -905,6 +909,8 @@ export interface AppTicketDetail {
   readonly comments: AppTicketComment[]
   /** Seconds since the epoch. */
   readonly createdAt: number
+  /** Files across the ticket's messages. */
+  readonly fileCount?: number
   readonly hasBrief: boolean
   readonly id: string
   /** question, approval or fyi. */
@@ -923,6 +929,46 @@ export interface AppTicketDetail {
   readonly workspace?: string | null
 }
 
+export interface AppThreadFileData {
+  /** preview or thumb: the bytes. Show them as an image (an <img>, never inline markup). */
+  readonly base64?: string
+  readonly eof?: boolean
+  /** thumb: pixels. */
+  readonly height?: number
+  /** file (meta), text, image or pdf (preview, thumb). */
+  readonly kind: string
+  /** range: bytes in this chunk. */
+  readonly len?: number
+  readonly line?: number
+  readonly lineEnd?: number
+  /** The content type; a thumb is image/jpeg, image/png or a sanitized image/svg+xml. */
+  readonly mime?: string
+  /** Milliseconds since the epoch (meta). */
+  readonly modifiedAt?: number
+  readonly name?: string
+  /** range: the first byte. */
+  readonly offset?: number
+  readonly ok?: boolean
+  /** An SVG with scripts, event handlers and outside links removed. */
+  readonly sanitized?: boolean
+  /** Bytes now. */
+  readonly size?: number
+  /** ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size). */
+  readonly state?: string
+  /** preview of a text file: the first 512 KB, vault values redacted. */
+  readonly text?: string
+  readonly truncated?: boolean
+  /** thumb: pixels. */
+  readonly width?: number
+}
+
+export interface AppThreadAttach {
+  readonly line?: number
+  readonly lineEnd?: number
+  /** Room-relative path (never a host path). */
+  readonly relPath: string
+}
+
 export interface AppTicketWarning {
   readonly code: string
   readonly hint: string
@@ -934,11 +980,14 @@ export interface AppTicketCreated {
   /** Seconds since the epoch. */
   readonly answeredAt: number | null
   readonly assignees: string[]
+  /** The opening message's files as you see them (always present on a 0.46.6 daemon). */
+  readonly attachments?: AppThreadFile[]
   readonly body: string | null
   readonly briefBytes: number | null
   readonly commentCount: number
   /** Seconds since the epoch. */
   readonly createdAt: number
+  readonly fileCount?: number
   readonly hasBrief: boolean
   readonly id: string
   /** question, approval or fyi. */
@@ -959,6 +1008,8 @@ export interface AppTicketCreated {
 
 export interface AppTicketCommented {
   readonly answered: boolean
+  /** This message's files as you see them. */
+  readonly attachments?: AppThreadFile[]
   readonly author: string
   readonly commentId: string
   readonly delivered: boolean
@@ -1420,8 +1471,9 @@ export interface K2Verbs {
   'files.readBinary': { args: [args: { relPath: string; workspace: string }]; value: AppFileBase64 }
   'tickets.list': { args: [args: { all?: boolean; project: string; status?: string }]; value: AppTickets }
   'tickets.show': { args: [args: { brief?: boolean; id: string }]; value: AppTicketDetail }
-  'tickets.create': { args: [args: { agentName?: string; assignees?: string[]; body?: string; briefHtml?: string; kind?: string; options?: string[]; priority?: number; project: string; title: string }]; value: AppTicketCreated }
-  'tickets.comment': { args: [args: { body: string; id: string; optionPick?: boolean }]; value: AppTicketCommented }
+  'tickets.attachment': { args: [args: { commentId: string; id: string; len?: number; mode?: 'meta' | 'preview' | 'thumb' | 'range' | 'download'; n?: number; offset?: number; px?: number }]; value: AppThreadFileData }
+  'tickets.create': { args: [args: { agentName?: string; assignees?: string[]; attachments?: AppThreadAttach[]; body?: string; briefHtml?: string; kind?: string; options?: string[]; priority?: number; project: string; title: string }]; value: AppTicketCreated }
+  'tickets.comment': { args: [args: { attachments?: AppThreadAttach[]; body?: string; id: string; optionPick?: boolean }]; value: AppTicketCommented }
   'tickets.resolve': { args: [args: { id: string; status?: string }]; value: AppTicketStatus }
   'store.get': { args: [key: string, opts?: { from?: string }]; value: StoreEntry | null }
   'store.list': { args: [opts?: { after?: string; from?: string; limit?: number; prefix?: string }]; value: StorePage }
@@ -1447,7 +1499,7 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'blobs.put' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'blobs.put' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members'
 export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'thread.onActivity'
 
 export interface K2 {
@@ -1626,10 +1678,12 @@ export interface K2 {
     list(args: { all?: boolean; project: string; status?: string }): Promise<AppTickets>
     /** One ticket with its comments (and brief). This computer only. cap tickets:read · portable · app-api-v1. e.g. `const t = await k2.tickets.show({id})` */
     show(args: { brief?: boolean; id: string }): Promise<AppTicketDetail>
+    /** One file of a ticket message: meta, preview, thumbnail or a byte range, only when your own file rights cover it; mode=download also needs files:download in the room; a file your files:read scope doesn't cover is hidden. This computer only. cap tickets:read · portable · ticket-attachments-v1. e.g. `const t = await k2.tickets.attachment({id, commentId: c.id, n: 0, mode: 'thumb'})` */
+    attachment(args: { commentId: string; id: string; len?: number; mode?: 'meta' | 'preview' | 'thumb' | 'range' | 'download'; n?: number; offset?: number; px?: number }): Promise<AppThreadFileData>
     /** Open a ticket in a room for its agent. This computer only. cap tickets:post · portable · app-api-v1. e.g. `await k2.tickets.create({project: 'sales', title: 'Quote for J1042?'})` */
-    create(args: { agentName?: string; assignees?: string[]; body?: string; briefHtml?: string; kind?: string; options?: string[]; priority?: number; project: string; title: string }): Promise<AppTicketCreated>
+    create(args: { agentName?: string; assignees?: string[]; attachments?: AppThreadAttach[]; body?: string; briefHtml?: string; kind?: string; options?: string[]; priority?: number; project: string; title: string }): Promise<AppTicketCreated>
     /** Comment on a ticket as the guest (free text moves it to needs_discussion). This computer only. cap tickets:post · portable · app-api-v1. e.g. `await k2.tickets.comment({id, body: 'Looks right'})` */
-    comment(args: { body: string; id: string; optionPick?: boolean }): Promise<AppTicketCommented>
+    comment(args: { attachments?: AppThreadAttach[]; body?: string; id: string; optionPick?: boolean }): Promise<AppTicketCommented>
     /** Set a ticket's status (Apps can't set answered). This computer only. cap tickets:post · portable · app-api-v1. e.g. `await k2.tickets.resolve({id})` */
     resolve(args: { id: string; status?: string }): Promise<AppTicketStatus>
   }

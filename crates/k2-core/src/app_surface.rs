@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 30;
+pub const CATALOG_VERSION: u32 = 31;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -106,6 +106,8 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("HEAD", "/cli/feedback/list"),
     ("GET", "/cli/feedback/show"),
     ("HEAD", "/cli/feedback/show"),
+    ("GET", "/cli/feedback/attachment"),
+    ("HEAD", "/cli/feedback/attachment"),
     ("POST", "/cli/feedback/create"),
     ("POST", "/cli/feedback/comment"),
     ("POST", "/cli/feedback/answer"),
@@ -259,6 +261,8 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("HEAD", "/cli/feedback/list"),
     ("GET", "/cli/feedback/show"),
     ("HEAD", "/cli/feedback/show"),
+    ("GET", "/cli/feedback/attachment"),
+    ("HEAD", "/cli/feedback/attachment"),
     ("POST", "/cli/feedback/create"),
     ("POST", "/cli/feedback/comment"),
     ("POST", "/cli/feedback/answer"),
@@ -417,6 +421,7 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("POST", "/cli/workspace/resources/remove", "resources.remove", "both"),
     ("GET", "/cli/feedback/list", "tickets.list", "both"),
     ("GET", "/cli/feedback/show", "tickets.show", "both"),
+    ("GET", "/cli/feedback/attachment", "tickets.attachment", "both"),
     ("POST", "/cli/feedback/create", "tickets.create", "both"),
     ("POST", "/cli/feedback/comment", "tickets.comment", "both"),
     ("POST", "/cli/feedback/answer", "tickets.answer", "both"),

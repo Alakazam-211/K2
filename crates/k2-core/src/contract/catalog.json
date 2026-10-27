@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 30,
+  "catalogVersion": 31,
   "caps": [
     {
       "name": "agents:read",
@@ -17139,6 +17139,10 @@
               "title": "AppTicketComment",
               "type": "object",
               "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "The message's id (tickets.attachment reads its files)."
+                },
                 "author": {
                   "type": "string"
                 },
@@ -17148,9 +17152,58 @@
                 "at": {
                   "type": "integer",
                   "description": "Seconds since the epoch."
+                },
+                "attachments": {
+                  "type": "array",
+                  "description": "The message's files as you see them; one your file rights don't cover is {kind, state: hidden}. Read one with tickets.attachment by the message id and its index.",
+                  "items": {
+                    "title": "AppThreadFile",
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "description": "file."
+                      },
+                      "state": {
+                        "type": "string",
+                        "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "size": {
+                        "type": "integer",
+                        "description": "Bytes, when it was sent."
+                      },
+                      "mime": {
+                        "type": "string",
+                        "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                      },
+                      "modifiedAt": {
+                        "type": "integer",
+                        "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                      },
+                      "line": {
+                        "type": "integer"
+                      },
+                      "lineEnd": {
+                        "type": "integer"
+                      },
+                      "canDownload": {
+                        "type": "boolean",
+                        "description": "true when you may save this file (mode=download): people always; an App guest only with files:download in the room. Absent on a hidden file."
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "state"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [
+                "id",
                 "author",
                 "body",
                 "at"
@@ -17194,6 +17247,10 @@
               "createdAt"
             ],
             "additionalProperties": false
+          },
+          "fileCount": {
+            "type": "integer",
+            "description": "Files across the ticket's messages."
           }
         },
         "required": [
@@ -17233,6 +17290,162 @@
       ],
       "doc": "One ticket with its comments (and brief).",
       "example": "const t = await k2.tickets.show({id})"
+    },
+    {
+      "verb": "tickets.attachment",
+      "cap": "tickets:read",
+      "exposure": [
+        "app",
+        "garden-local"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "ticket-attachments-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/feedback/attachment"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "A ticket id (or a unique prefix)."
+            },
+            "commentId": {
+              "type": "string",
+              "description": "The message's id from tickets.show."
+            },
+            "n": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The file's index in the message's attachments."
+            },
+            "mode": {
+              "enum": [
+                "meta",
+                "preview",
+                "thumb",
+                "range",
+                "download"
+              ],
+              "description": "meta (a fresh stat), preview (text up to 512 KB; images and PDFs up to 20 MB) or thumb (an image's thumbnail: PNG, JPEG, GIF, WebP, HEIC, BMP, TIFF; SVG comes back sanitized). range: offset/len chunks up to 16 MB. download: the same chunks plus name and mime, for a save; a guest also needs files:download in the room (canDownload on the attachment says so)."
+            },
+            "px": {
+              "type": "integer",
+              "minimum": 64,
+              "maximum": 512,
+              "description": "thumb: the longest side in pixels, 256 (default) or 512."
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "len": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "id",
+            "commentId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppThreadFileData",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "file (meta), text, image or pdf (preview, thumb)."
+          },
+          "state": {
+            "type": "string",
+            "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string",
+            "description": "The content type; a thumb is image/jpeg, image/png or a sanitized image/svg+xml."
+          },
+          "size": {
+            "type": "integer",
+            "description": "Bytes now."
+          },
+          "modifiedAt": {
+            "type": "integer",
+            "description": "Milliseconds since the epoch (meta)."
+          },
+          "line": {
+            "type": "integer"
+          },
+          "lineEnd": {
+            "type": "integer"
+          },
+          "text": {
+            "type": "string",
+            "description": "preview of a text file: the first 512 KB, vault values redacted."
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "base64": {
+            "type": "string",
+            "description": "preview or thumb: the bytes. Show them as an image (an <img>, never inline markup)."
+          },
+          "width": {
+            "type": "integer",
+            "description": "thumb: pixels."
+          },
+          "height": {
+            "type": "integer",
+            "description": "thumb: pixels."
+          },
+          "sanitized": {
+            "type": "boolean",
+            "description": "An SVG with scripts, event handlers and outside links removed."
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "range: the first byte."
+          },
+          "len": {
+            "type": "integer",
+            "description": "range: bytes in this chunk."
+          },
+          "eof": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "One file of a ticket message: meta, preview, thumbnail or a byte range, only when your own file rights cover it; mode=download also needs files:download in the room; a file your files:read scope doesn't cover is hidden.",
+      "example": "const t = await k2.tickets.attachment({id, commentId: c.id, n: 0, mode: 'thumb'})"
     },
     {
       "verb": "tickets.create",
@@ -17294,6 +17507,32 @@
             "briefHtml": {
               "type": "string",
               "description": "An HTML brief (cleaned; at most 1 MiB)."
+            },
+            "attachments": {
+              "type": "array",
+              "description": "Files on the opening message. Up to 10 room files to ride the message; each must be one your own file rights (files:read and the folder scope) cover. Secrets are refused. A pointer, never a copy or a grant.",
+              "items": {
+                "title": "AppThreadAttach",
+                "type": "object",
+                "properties": {
+                  "relPath": {
+                    "type": "string",
+                    "description": "Room-relative path (never a host path)."
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "lineEnd": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "relPath"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
@@ -17413,6 +17652,57 @@
               ],
               "additionalProperties": false
             }
+          },
+          "attachments": {
+            "type": "array",
+            "description": "The opening message's files as you see them (always present on a 0.46.6 daemon).",
+            "items": {
+              "title": "AppThreadFile",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "file."
+                },
+                "state": {
+                  "type": "string",
+                  "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                },
+                "name": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "Bytes, when it was sent."
+                },
+                "mime": {
+                  "type": "string",
+                  "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                },
+                "modifiedAt": {
+                  "type": "integer",
+                  "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                },
+                "line": {
+                  "type": "integer"
+                },
+                "lineEnd": {
+                  "type": "integer"
+                },
+                "canDownload": {
+                  "type": "boolean",
+                  "description": "true when you may save this file (mode=download): people always; an App guest only with files:download in the room. Absent on a hidden file."
+                }
+              },
+              "required": [
+                "kind",
+                "state"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "fileCount": {
+            "type": "integer"
           }
         },
         "required": [
@@ -17480,16 +17770,42 @@
               "type": "string"
             },
             "body": {
-              "type": "string"
+              "type": "string",
+              "description": "The message; may be empty when files ride it (not on an option pick)."
             },
             "optionPick": {
               "type": "boolean",
               "description": "The body is one of the ticket's options (answers it)."
+            },
+            "attachments": {
+              "type": "array",
+              "description": "Up to 10 room files to ride the message; each must be one your own file rights (files:read and the folder scope) cover. Secrets are refused. A pointer, never a copy or a grant.",
+              "items": {
+                "title": "AppThreadAttach",
+                "type": "object",
+                "properties": {
+                  "relPath": {
+                    "type": "string",
+                    "description": "Room-relative path (never a host path)."
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "lineEnd": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "relPath"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
-            "id",
-            "body"
+            "id"
           ],
           "additionalProperties": false
         }
@@ -17524,6 +17840,54 @@
               "string",
               "null"
             ]
+          },
+          "attachments": {
+            "type": "array",
+            "description": "This message's files as you see them.",
+            "items": {
+              "title": "AppThreadFile",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "file."
+                },
+                "state": {
+                  "type": "string",
+                  "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                },
+                "name": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "Bytes, when it was sent."
+                },
+                "mime": {
+                  "type": "string",
+                  "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                },
+                "modifiedAt": {
+                  "type": "integer",
+                  "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                },
+                "line": {
+                  "type": "integer"
+                },
+                "lineEnd": {
+                  "type": "integer"
+                },
+                "canDownload": {
+                  "type": "boolean",
+                  "description": "true when you may save this file (mode=download): people always; an App guest only with files:download in the room. Absent on a hidden file."
+                }
+              },
+              "required": [
+                "kind",
+                "state"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -17580,6 +17944,32 @@
             },
             "answer": {
               "type": "string"
+            },
+            "attachments": {
+              "type": "array",
+              "description": "Files on the answer. Up to 10 room files to ride the message; each must be one your own file rights (files:read and the folder scope) cover. Secrets are refused. A pointer, never a copy or a grant.",
+              "items": {
+                "title": "AppThreadAttach",
+                "type": "object",
+                "properties": {
+                  "relPath": {
+                    "type": "string",
+                    "description": "Room-relative path (never a host path)."
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "lineEnd": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "relPath"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
@@ -17623,6 +18013,57 @@
               "string",
               "null"
             ]
+          },
+          "commentId": {
+            "type": "string"
+          },
+          "attachments": {
+            "type": "array",
+            "description": "The answer's files as you see them.",
+            "items": {
+              "title": "AppThreadFile",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "file."
+                },
+                "state": {
+                  "type": "string",
+                  "description": "ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size)."
+                },
+                "name": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "Bytes, when it was sent."
+                },
+                "mime": {
+                  "type": "string",
+                  "description": "Content type from the name (image/png, application/pdf, text/markdown, ...)."
+                },
+                "modifiedAt": {
+                  "type": "integer",
+                  "description": "Milliseconds since the epoch: the file's modified time when it was sent."
+                },
+                "line": {
+                  "type": "integer"
+                },
+                "lineEnd": {
+                  "type": "integer"
+                },
+                "canDownload": {
+                  "type": "boolean",
+                  "description": "true when you may save this file (mode=download): people always; an App guest only with files:download in the room. Absent on a hidden file."
+                }
+              },
+              "required": [
+                "kind",
+                "state"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [

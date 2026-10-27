@@ -17729,6 +17729,40 @@ print(json.dumps(out))
 PY
 }
 
+# ticket-attachments-v1 (0.46.6): the files a ticket write carried. A
+# daemon older than 0.46.6 drops an `attachments` field it doesn't know and
+# answers success; when this CLI sent files and the answer has no
+# `attachments` key, it fails loudly (exit 1, server_too_old), never a
+# silent drop (prd-ticket-attachments-v1 TA3).
+_ticket_files_check_py='
+def ticket_files_check(sent, d):
+    if sent and isinstance(d, dict) and "attachments" not in d:
+        sys.stderr.write(json.dumps({"error": {"code": "server_too_old",
+            "hint": "this server'"'"'s K2 doesn'"'"'t take ticket files (needs 0.46.6)"}}) + "\n")
+        sys.exit(1)
+
+def ticket_size(n):
+    if n < 1024: return "%d B" % n
+    if n < 1024 * 1024: return "%.1f KB" % (n / 1024.0)
+    return "%.1f MB" % (n / (1024.0 * 1024.0))
+
+def ticket_file_lines(atts, root, indent="  "):
+    out = []
+    for a in atts or []:
+        if not isinstance(a, dict):
+            continue
+        if a.get("state") == "hidden":
+            out.append("%s[file] (not shared with you)" % indent)
+            continue
+        rel = str(a.get("path", ""))
+        shown = os.path.join(root, rel) if root else rel
+        if a.get("line"):
+            shown += ":%s" % a["line"] + ("-%s" % a["lineEnd"] if a.get("lineEnd") else "")
+        extra = {"changed": " (changed since sent)", "gone": " (gone)"}.get(a.get("state"), "")
+        out.append("%s[file] %s (%s)%s" % (indent, shown, ticket_size(int(a.get("size") or 0)), extra))
+    return out
+'
+
 cmd_thread() {
     for arg in "$@"; do
         case "$arg" in
@@ -35333,7 +35367,7 @@ cmd_schema() {
     },
     {
       "name": "feedback ask",
-      "usage": "k2 tickets ask <title> [--html <f|->] [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--assign <users>] [--wait [--timeout <s>]] [--json]",
+      "usage": "k2 tickets ask <title> [--html <f|->] [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--assign <users>] [--file <path[:line]>]... [--wait [--timeout <s>]] [--json]",
       "description": "Ask a human for input as a DURABLE item on this server's Feedback page (not a dead terminal prompt). Workspace + session auto-detected. Assign every ticket with --assign <user> (a user on this server); without one this server warns (assignee_required) or refuses, per the owner's setting (k2 tickets settings). --wait blocks and prints the BARE answer (exit 0); errors are always JSON on stderr. Exit codes: 0 ok, 1 error, 2 bad usage, 4 not found.",
       "args": [{"name": "title", "required": true}],
       "flags": [
@@ -35346,7 +35380,8 @@ cmd_schema() {
         {"name": "--assign", "arg": "users", "description": "Comma-separated users on this server to assign at create (owner and/or Connect users: k2 connections list --users). Alias: --to. Assign every ticket: without one this server warns (assignee_required) or refuses, per the owner's setting (k2 tickets settings); a name that is not a user here is assignee_unknown. fyi is exempt."},
         {"name": "--wait", "arg": null, "description": "Block until answered; print the BARE answer to stdout (safe for $(...) capture). Closed without an answer -> exit 1 + {\"error\":{\"code\":\"closed_unanswered\"}} on stderr."},
         {"name": "--timeout", "arg": "seconds", "description": "With --wait: give up after N seconds (exit 1, {\"error\":{\"code\":\"timeout\"}} on stderr; the item stays waiting)."},
-        {"name": "--json", "arg": null, "description": "JSON output."}
+        {"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a workspace file to the ask (repeatable, at most 10). A pointer, not a copy; secrets refused. With --wait, files on the answer print one stderr line; stdout stays the bare answer."},
+        {"name": "--json", "arg": null, "description": "JSON output (with --wait: {answer, attachments} with absolute paths)."}
       ]
     },
     {
@@ -35367,7 +35402,7 @@ cmd_schema() {
       "args": [{"name": "id", "required": true}],
       "flags": [
         {"name": "--html", "arg": null, "description": "Print ONLY the cleaned HTML brief to stdout. No brief: exit 1 with code no_brief and empty stdout."},
-        {"name": "--json", "arg": null, "description": "JSON output (includes the comments array; the brief HTML only with --html)."}
+        {"name": "--json", "arg": null, "description": "JSON output (includes the comments array, each with its id and attachments; the brief HTML only with --html)."}
       ]
     },
     {
@@ -35379,10 +35414,10 @@ cmd_schema() {
     },
     {
       "name": "feedback comment",
-      "usage": "k2 tickets comment <id> \"<text>\" [--json]",
-      "description": "Add a message to a feedback item's discussion thread. Bumps the message count only; does not change status (only NEW items fire notifications).",
-      "args": [{"name": "id", "required": true}, {"name": "text", "required": true}],
-      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+      "usage": "k2 tickets comment <id> [\"<text>\"] [--file <path[:line]>]... [--json]",
+      "description": "Add a message to a feedback item's discussion thread. Bumps the message count only; does not change status (only NEW items fire notifications). The text is optional with --file.",
+      "args": [{"name": "id", "required": true}, {"name": "text", "required": false}],
+      "flags": [{"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a file from the ticket's workspace (repeatable, at most 10; relative paths resolve against the ticket's workspace). Secrets refused."}, {"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "feedback assign",
@@ -35397,10 +35432,10 @@ cmd_schema() {
     },
     {
       "name": "feedback resolve",
-      "usage": "k2 tickets resolve <id> [--answered <outcome>] [--json]",
+      "usage": "k2 tickets resolve <id> [--answered <outcome> [--file <path[:line]>]...] [--json]",
       "description": "Mark a feedback item resolved (you got what you needed). Drops out of the default list view; still visible with --all. With --answered, settle a discussion instead: a person's free-text message put the ticket in needs_discussion; once you replied and agreed, mark it answered with the outcome.",
       "args": [{"name": "id", "required": true}],
-      "flags": [{"name": "--answered", "arg": "outcome", "description": "Mark it answered with the agreed outcome (not resolved)."}, {"name": "--json", "arg": null, "description": "JSON output."}]
+      "flags": [{"name": "--answered", "arg": "outcome", "description": "Mark it answered with the agreed outcome (not resolved)."}, {"name": "--file", "arg": "path[:line[-end]]", "description": "With --answered: attach files to the outcome (repeatable, at most 10). Without --answered: a usage error (files ride a message)."}, {"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "feedback settings",
@@ -38675,7 +38710,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 30.
+From K2's verb catalog, version 31.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -38774,6 +38809,7 @@ email:send (Send email from this App's sender)
 tickets:read (Read tickets and get live ticket updates)
   tickets.list             GET  /cli/feedback/list                            A room's tickets, newest first.
   tickets.show             GET  /cli/feedback/show                            One ticket with its comments (and brief).
+  tickets.attachment       GET  /cli/feedback/attachment                      One file of a ticket message: meta, preview, thumbnail or a byte range, only when your own file rights cover it; mode=download also needs files:download in the room; a file your files:read scope doesn't cover is hidden.
 tickets:post (Open, answer, assign and set status on tickets)
   tickets.create           POST /cli/feedback/create                          Open a ticket in a room for its agent.
   tickets.comment          POST /cli/feedback/comment                         Comment on a ticket as the guest (free text moves it to needs_discussion).
@@ -40468,11 +40504,15 @@ ROUTES (project= is the room handle or uuid; never a path)
                 GET  /cli/feedback/show?id=<id>
                 GET  /cli/feedback/show?id=<id>&brief=1   adds brief {html,text,bytes,sha256,…}
   tickets:post  POST /cli/feedback/create   {"project":"<handle>","title":"…",
-                                             "body"?,"options"?,"briefHtml"?,"assignees"?}
-                POST /cli/feedback/comment  {"id":"<id>","body":"…","optionPick":true|false}
-                POST /cli/feedback/answer   {"id":"<id>","answer":"…"}
+                                             "body"?,"options"?,"briefHtml"?,"assignees"?,
+                                             "attachments"?}
+                POST /cli/feedback/comment  {"id":"<id>","body":"…","optionPick":true|false,
+                                             "attachments"?}
+                POST /cli/feedback/answer   {"id":"<id>","answer":"…","attachments"?}
                 POST /cli/feedback/resolve  {"id":"<id>","status":"<status>"}
                 POST /cli/feedback/assign   {"id":"<id>","usernames":["owner","ana"]}
+  tickets:read  GET  /cli/feedback/attachment?id=<id>&commentId=<comment id>&n=<i>
+                     &mode=meta|preview|thumb|range|download[&px=256|512][&offset=&len=]
   tickets:read  WS   /cli/activity/events?workspace=<handle>
                 ← {"kind":"ticket_changed","workspace":"<handle>","id":"<id>",
                    "change":"<change>","status":"<status after>",
@@ -40491,6 +40531,28 @@ ANSWERING (what a person's reply does)
                      agent replies and settles it later.
   Both wake the asking agent. Your username is the author, never "owner"
   (a body "author" is ignored for apps).
+
+FILES (0.46.6, feature ticket-attachments-v1 on /boot-status)
+  Each message in show carries its "id" and, when it has files,
+  "attachments": [{kind, state, name, size, mime, modifiedAt, line?,
+  lineEnd?, canDownload}]. A file your own file rights don't cover is
+  {"kind":"file","state":"hidden"} (no name, type or size). state is ok,
+  changed (since it was sent), gone or hidden.
+  Read one: GET /cli/feedback/attachment with the ticket id, the message's
+  id and the file's index. meta, preview (text 512 KB; images and PDFs up
+  to 20 MB), thumb (256 or 512 px; SVG comes back sanitized), range (16 MB
+  chunks), download (range plus name and mime). Show a thumb only as an
+  <img>.
+  Rights: tickets:read to see the ticket; files:read with a folder scope
+  covering the path to see the file; files:download to save it.
+  Attach: "attachments":[{"relPath":"docs/a.png","line"?,"lineEnd"?}], at
+  most 10, room-relative, inside your own files:read scope (else the
+  uniform 403 cap_not_granted files:read). A new photo: upload it first
+  (files.uploadBinary / files:upload), then attach that path. A comment's
+  body may be empty when files ride it (not an option pick). Secrets are
+  refused (attachment_secret). A file is a pointer, never a copy or a
+  grant. Every write echoes "attachments"; no key means an older server
+  that dropped them.
 
 STATUS (resolve "status")
   resolved | dismissed | planned | needs_discussion | waiting (reopen).
@@ -40539,8 +40601,10 @@ LIMITS
   Over the cap: 400 brief_too_large (413 when the body itself is too big).
 
 ERRORS
-  400 usage (bad JSON, empty body, bad status, answered from an app) |
-      brief_too_large | brief_empty | brief_invalid
+  400 usage (bad JSON, empty body, bad status, answered from an app,
+      attachments not an array, more than 10 files) |
+      brief_too_large | brief_empty | brief_invalid |
+      attachment_outside_workspace | attachment_not_a_file | attachment_secret
   403 skin_room (room not on the pass; also any id you cannot see, so there
       is no 404 oracle) | missing capability tickets:read | tickets:post
   404 a path that is not an app door (waiting-count, list-all, GET assign)
@@ -41783,10 +41847,17 @@ ASK
 
 FOLLOW
   k2 feedback list
-  k2 feedback show <id>
-  k2 feedback comment <id> "…"
+  k2 feedback show <id>                 each message's files print under it
+  k2 feedback comment <id> "…" [--file path]   text optional with --file
   k2 feedback resolve <id>     you got what you needed
-  k2 feedback resolve <id> --answered "<outcome>"   settled a discussion
+  k2 feedback resolve <id> --answered "<outcome>" [--file path]   settled a discussion
+
+FILES
+  --file path[:line[-end]] on ask, comment and resolve --answered (up to
+  10). A pointer to a file in the TICKET's workspace, never a copy: the
+  person sees it under your message (images as pictures). Secrets are
+  refused; use k2 vault. A person's files reach you as
+  "Attached: <abs path>" lines; read them from disk.
 
 HOW THE PERSON ANSWERS
   Picking one of your options answers the ticket (status answered).
@@ -41885,9 +41956,15 @@ LINKS
   under the brief with the full URL, opened in their system browser.
   Write the URL so it reads well in that list.
 
+FILES BESIDE THE BRIEF
+  The brief keeps its own inline data: images. To share a workspace file
+  (a screenshot, a report, a log), attach it: --file out/shot.png on ask
+  or comment. It shows under the opening message, right beside the brief,
+  and stays a pointer to the file (edits show as changed).
+
 AFTER FILING
   The brief can't be edited. Correct it in a comment, or file a new
-  ticket. Comments stay plain text.
+  ticket. Comments stay plain text (files ride them with --file).
   k2 tickets show <id>            body + brief text extract
   k2 tickets show <id> --html     the cleaned HTML only
 
@@ -49326,8 +49403,12 @@ cmd_feedback_ask() {
     if _wants_help "$@"; then cmd_help_feedback_ask; exit 0; fi
     local title="" body="" body_file="" html_file="" kind="" options="" priority="" assign=""
     local wait=false timeout="" as_json=false
+    local -a files=()
     while [ $# -gt 0 ]; do
         case "$1" in
+            --file)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--file requires a path (path[:line[-end]])"; exit 2; }
+                files+=("$2"); shift 2 ;;
             --html)
                 [ $# -ge 2 ] || { _feedback_err "usage" "--html requires a file path (or - for stdin). Start from \`k2 tickets template\`."; exit 2; }
                 html_file="$2"; shift 2 ;;
@@ -49355,7 +49436,7 @@ cmd_feedback_ask() {
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets ask <title> [--html f|-] [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--assign user[,user…]] [--wait [--timeout s]] [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets ask <title> [--html f|-] [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--assign user[,user…]] [--file path[:line]]… [--wait [--timeout s]] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$title" ]; then title="$1"; else
@@ -49429,6 +49510,14 @@ cmd_feedback_ask() {
                 exit 2 ;;
         esac
     fi
+    local files_json=""
+    if [ ${#files[@]} -gt 10 ]; then
+        _feedback_err "usage" "at most 10 files per message"
+        exit 2
+    fi
+    if [ ${#files[@]} -gt 0 ]; then
+        files_json="$(_thread_attachments_json "${files[@]}")" || { _feedback_err "usage" "--file: could not read the file list"; exit 2; }
+    fi
     _feedback_detect_session
     if [ "${K2_TEST_FEEDBACK_DETECT:-}" = "1" ]; then
         printf '%s\n' "${FB_SESSION_KIND:-}"
@@ -49438,10 +49527,12 @@ cmd_feedback_ask() {
     FB_KIND="$kind" FB_OPTIONS="$options" \
     FB_PRIORITY="$priority" FB_ASSIGN="$assign" FB_WAIT="$wait" FB_TIMEOUT="$timeout" FB_JSON="$as_json" \
     FB_PROJECT="$PROJECT" FB_AGENT="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \
-    FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" \
+    FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" FB_FILES="$files_json" \
+    FB_FILES_PY="$_ticket_files_check_py" \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys, time
 import urllib.error, urllib.parse, urllib.request
+exec(os.environ["FB_FILES_PY"])
 
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
@@ -49538,6 +49629,11 @@ if os.environ.get("FB_ASSIGN"):
         payload["assignees"] = assignees
 if os.environ.get("FB_AGENT"):
     payload["agentName"] = os.environ["FB_AGENT"]
+# 0.46.6: files on the opening message, as a JSON array (never a string).
+sent_files = False
+if os.environ.get("FB_FILES"):
+    payload["attachments"] = json.loads(os.environ["FB_FILES"])
+    sent_files = bool(payload["attachments"])
 # Session auto-detection result (may be absent — must not fail the ask).
 if os.environ.get("FB_SESSION_ID"):
     payload["sessionId"] = os.environ["FB_SESSION_ID"]
@@ -49551,6 +49647,7 @@ if d.get("error"):
     die(d["error"])
 if not d.get("ok"):
     die({"code": "error", "hint": "unexpected daemon response: %r" % json.dumps(d)[:200]})
+ticket_files_check(sent_files, d)
 
 for w in d.get("warnings") or []:
     if isinstance(w, dict):
@@ -49574,6 +49671,8 @@ if not wait:
         print('Filed feedback %s — "%s" (%s, priority %s, %s)%s'
               % (short, d.get("title", ""), d.get("kind", "?"),
                  d.get("priority", "?"), d.get("status", "?"), who))
+        for line in ticket_file_lines(d.get("attachments"), None):
+            print(line)
         print("A human will be notified. Check back with: k2 tickets show %s" % short)
     sys.exit(0)
 
@@ -49591,6 +49690,26 @@ while True:
         status = d.get("status")
         answer = d.get("answer")
         if status == "answered" and answer:
+            # 0.46.6: stdout stays the BARE answer (pinned). The files on
+            # the answering message get one stderr note; --json carries
+            # them with absolute paths. The agent also got `Attached:`
+            # lines in its session.
+            msg = None
+            for c in reversed(d.get("comments") or []):
+                if isinstance(c, dict) and str(c.get("body", "")).strip() == str(answer).strip():
+                    msg = c
+                    break
+            atts = [a for a in ((msg or {}).get("attachments") or []) if isinstance(a, dict)]
+            root = d.get("projectPath")
+            for a in atts:
+                if root and a.get("path"):
+                    a["absPath"] = os.path.join(root, a["path"])
+            if as_json:
+                print(json.dumps({"ok": True, "id": fid, "status": status, "answer": answer, "attachments": atts}))
+                sys.exit(0)
+            if atts:
+                sys.stderr.write("%d file%s attached: k2 tickets show %s\n"
+                                 % (len(atts), "" if len(atts) == 1 else "s", fid[:8]))
             print(answer)
             sys.exit(0)
         # Free text instead of an option pick: the person wants to talk.
@@ -49717,10 +49836,11 @@ cmd_feedback_show() {
     # The reply can carry a 1 MiB brief, so python fetches it itself (like
     # `ask`) instead of passing it through an env var, which Linux caps at
     # 128 KiB per string (prd-ticket-html-brief-v1 H20/H31).
-    FB_ID="$id" AS_JSON="$as_json" WANT_HTML="$want_html" \
+    FB_ID="$id" AS_JSON="$as_json" WANT_HTML="$want_html" FB_FILES_PY="$_ticket_files_check_py" \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, sys, time
 import urllib.error, urllib.parse, urllib.request
+exec(os.environ["FB_FILES_PY"])
 
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
@@ -49822,6 +49942,9 @@ for c in d.get("comments", []):
     print("  %-9s%-10s%s" % (c.get("author", "?"), "(%s)" % ago(c.get("at", 0)), lines[0]))
     for extra in lines[1:]:
         print(" " * 21 + extra)
+    # 0.46.6: the message's files, absolute for the owner (projectPath).
+    for line in ticket_file_lines(c.get("attachments"), d.get("projectPath"), " " * 21):
+        print(line)
 PYEOF
 }
 
@@ -49868,11 +49991,15 @@ EOF
 cmd_feedback_comment() {
     if _wants_help "$@"; then cmd_help_feedback_comment; exit 0; fi
     local id="" text="" as_json=false
+    local -a files=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
+            --file)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--file requires a path (path[:line[-end]])"; exit 2; }
+                files+=("$2"); shift 2 ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets comment <id> <text> [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets comment <id> [<text>] [--file path[:line]]… [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"
@@ -49884,9 +50011,17 @@ cmd_feedback_comment() {
                 shift ;;
         esac
     done
-    if [ -z "$id" ] || [ -z "$text" ]; then
-        _feedback_err "usage" "usage: k2 tickets comment <id> \"<text>\""
+    if [ -z "$id" ] || { [ -z "$text" ] && [ ${#files[@]} -eq 0 ]; }; then
+        _feedback_err "usage" "usage: k2 tickets comment <id> \"<text>\" (the text is optional with --file)"
         exit 2
+    fi
+    if [ ${#files[@]} -gt 10 ]; then
+        _feedback_err "usage" "at most 10 files per message"
+        exit 2
+    fi
+    local files_json=""
+    if [ ${#files[@]} -gt 0 ]; then
+        files_json="$(_thread_attachments_json "${files[@]}")" || { _feedback_err "usage" "--file: could not read the file list"; exit 2; }
     fi
     # Author attribution: the CLI is the AGENT interface, so default to
     # the agent identity (env override → workspace folder basename, the
@@ -49895,15 +50030,21 @@ cmd_feedback_comment() {
     local author="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
     [ -z "$author" ] && author="$(basename "$PROJECT")"
     local body resp
-    body=$(FB_ID="$id" FB_TEXT="$text" FB_AUTHOR="$author" python3 -c 'import json,os
-print(json.dumps({"id": os.environ["FB_ID"], "body": os.environ["FB_TEXT"], "author": os.environ["FB_AUTHOR"]}))')
+    # Files: an array embedded in the body (TA22); relative paths resolve
+    # against the TICKET's workspace on the daemon.
+    body=$(FB_ID="$id" FB_TEXT="$text" FB_AUTHOR="$author" FB_FILES="$files_json" python3 -c 'import json,os
+b = {"id": os.environ["FB_ID"], "body": os.environ["FB_TEXT"], "author": os.environ["FB_AUTHOR"]}
+if os.environ.get("FB_FILES"):
+    b["attachments"] = json.loads(os.environ["FB_FILES"])
+print(json.dumps(b))')
     resp=$(cli_post_json "/cli/feedback/comment" "$body") || resp=""
     if [ -z "$resp" ]; then
         _feedback_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
         exit 1
     fi
-    RESP="$resp" AS_JSON="$as_json" python3 - <<'PYEOF'
+    RESP="$resp" AS_JSON="$as_json" SENT_FILES="${#files[@]}" FB_FILES_PY="$_ticket_files_check_py" python3 - <<'PYEOF'
 import json, os, sys
+exec(os.environ["FB_FILES_PY"])
 d = json.loads(os.environ["RESP"])
 err = d.get("error")
 if err is not None:
@@ -49912,24 +50053,31 @@ if err is not None:
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
     sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+ticket_files_check(os.environ.get("SENT_FILES", "0") != "0", d)
 if os.environ.get("AS_JSON") == "true":
     print(json.dumps(d))
 else:
     print("Added comment to %s." % str(d.get("id", ""))[:8])
+    for line in ticket_file_lines(d.get("attachments"), None):
+        print(line)
 PYEOF
 }
 
 cmd_feedback_resolve() {
     if _wants_help "$@"; then cmd_help_feedback_resolve; exit 0; fi
     local id="" as_json=false answered="" has_answered=false
+    local -a files=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
+            --file)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--file requires a path (path[:line[-end]])"; exit 2; }
+                files+=("$2"); shift 2 ;;
             --answered)
                 [ $# -ge 2 ] || { _feedback_err "usage" "--answered requires the agreed outcome — k2 tickets resolve <id> --answered \"<outcome>\""; exit 2; }
                 answered="$2"; has_answered=true; shift 2 ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets resolve <id> [--answered \"<outcome>\"] [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets resolve <id> [--answered \"<outcome>\" [--file path[:line]]…] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; else
@@ -49947,25 +50095,41 @@ cmd_feedback_resolve() {
         _feedback_err "usage" "--answered requires the agreed outcome — k2 tickets resolve <id> --answered \"<outcome>\""
         exit 2
     fi
+    # 0.46.6: files ride a message; only --answered writes one.
+    if [ ${#files[@]} -gt 0 ] && [ "$has_answered" != true ]; then
+        _feedback_err "usage" "--file needs --answered (files ride a message; use k2 tickets comment <id> --file …)"
+        exit 2
+    fi
+    if [ ${#files[@]} -gt 10 ]; then
+        _feedback_err "usage" "at most 10 files per message"
+        exit 2
+    fi
+    local files_json=""
+    if [ ${#files[@]} -gt 0 ]; then
+        files_json="$(_thread_attachments_json "${files[@]}")" || { _feedback_err "usage" "--file: could not read the file list"; exit 2; }
+    fi
     # Settling a discussion records the outcome under the AGENT's name
     # (same identity rule as `comment`), never as a human answer.
     local author="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
     [ -z "$author" ] && author="$(basename "$PROJECT")"
     local body resp
-    body=$(FB_ID="$id" FB_ANSWERED="$answered" FB_HAS_ANSWERED="$has_answered" FB_AUTHOR="$author" python3 -c 'import json,os
+    body=$(FB_ID="$id" FB_ANSWERED="$answered" FB_HAS_ANSWERED="$has_answered" FB_AUTHOR="$author" FB_FILES="$files_json" python3 -c 'import json,os
 b = {"id": os.environ["FB_ID"]}
 if os.environ.get("FB_HAS_ANSWERED") == "true":
     b["status"] = "answered"
     b["answer"] = os.environ["FB_ANSWERED"]
     b["author"] = os.environ["FB_AUTHOR"]
+if os.environ.get("FB_FILES"):
+    b["attachments"] = json.loads(os.environ["FB_FILES"])
 print(json.dumps(b))')
     resp=$(cli_post_json "/cli/feedback/resolve" "$body") || resp=""
     if [ -z "$resp" ]; then
         _feedback_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
         exit 1
     fi
-    RESP="$resp" AS_JSON="$as_json" python3 - <<'PYEOF'
+    RESP="$resp" AS_JSON="$as_json" SENT_FILES="${#files[@]}" FB_FILES_PY="$_ticket_files_check_py" python3 - <<'PYEOF'
 import json, os, sys
+exec(os.environ["FB_FILES_PY"])
 d = json.loads(os.environ["RESP"])
 err = d.get("error")
 if err is not None:
@@ -49974,10 +50138,13 @@ if err is not None:
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
     sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+ticket_files_check(os.environ.get("SENT_FILES", "0") != "0", d)
 if os.environ.get("AS_JSON") == "true":
     print(json.dumps(d))
 elif d.get("status") == "answered":
     print("Marked %s answered." % str(d.get("id", ""))[:8])
+    for line in ticket_file_lines(d.get("attachments"), None):
+        print(line)
 else:
     print("Resolved %s." % str(d.get("id", ""))[:8])
 PYEOF
@@ -50298,7 +50465,20 @@ FLAGS
                          human can still answer and you can read it later with
                          `show`. Always check the exit code before trusting a
                          captured answer.
-  --json                 JSON output
+  --file <path[:line[-end]]>
+                         Attach a workspace file to the ask (repeatable, at
+                         most 10). A pointer, not a copy: the person sees it
+                         under your message (images as pictures) and opens
+                         it from there. A path that exists here is sent
+                         absolute; anything else resolves against the
+                         ticket's workspace. Secrets (.env, keys, tokens in
+                         the text) are refused; use k2 vault. With --wait,
+                         files on the answer print one stderr line
+                         ("1 file attached: k2 tickets show <id>"); stdout
+                         stays the bare answer, and your session got
+                         "Attached: <abs path>" lines.
+  --json                 JSON output (with --wait: {answer, attachments}
+                         with absolute paths)
 
 BRIEF ERRORS (exit 2, JSON on stderr)
   brief_required · brief_empty · brief_too_large · brief_invalid
@@ -50311,6 +50491,7 @@ EXAMPLES
   k2 tickets ask "Deploy to prod now?" --html brief.html --assign owner --kind approval --options "Yes,No,Wait for me" --priority 1
   k2 tickets ask "Which color for the CTA?" --html brief.html --body-file ./summary.md --assign owner
   k2 tickets ask "Review the sales pricing" --html brief.html --assign julie --priority 2
+  k2 tickets ask "Which logo?" --html brief.html --assign owner --options "A,B" --file out/a.png --file out/b.png
   ANSWER=$(k2 tickets ask "Proceed with the migration?" --options "Go,Stop" --wait)
 EOF
 }
@@ -50378,11 +50559,13 @@ FLAGS
   --html                 Print ONLY the ticket's cleaned HTML brief to stdout
                          (k2 tickets show <id> --html > brief.html). No brief:
                          exit 1, {"error":{"code":"no_brief"}}, empty stdout.
-  --json                 JSON output (includes the comments array; the brief
-                         HTML only with --html)
+  --json                 JSON output (includes the comments array, each with
+                         its id and attachments; the brief HTML only with
+                         --html)
 
 Without --html, show prints the body, a "brief : HTML, <size>" line, and the
-brief's plain-text extract (first 40 lines).
+brief's plain-text extract (first 40 lines). Each message's files print under
+it: "[file] <abs path> (240 KB)", plus "(changed since sent)" or "(gone)".
 EOF
 }
 
@@ -50420,13 +50603,24 @@ When you have settled it, mark it answered with
 
 USAGE
   k2 tickets comment <id> "<text>" [flags]
+  k2 tickets comment <id> --file <path> [--file <path>…]
 
 ARGUMENTS
   <id>                   A feedback id from `ask`/`list` (short unique prefix ok)
-  <text>                 The message (quote it)
+  <text>                 The message (quote it). Optional with --file.
 
 FLAGS
+  --file <path[:line[-end]]>
+                         Attach a file from the TICKET's workspace (repeatable,
+                         at most 10). A path that exists here is sent absolute;
+                         anything else resolves against the ticket's workspace
+                         root (which may not be yours). Secrets are refused
+                         (use k2 vault). Read them back with k2 tickets show.
   --json                 JSON output
+
+EXAMPLES
+  k2 tickets comment ab12cd34 "Here's the fixed build" --file out/report.pdf
+  k2 tickets comment ab12cd34 --file src/session.rs:120-140
 EOF
 }
 
@@ -50450,6 +50644,10 @@ ARGUMENTS
 
 FLAGS
   --answered <outcome>   Mark it answered with the agreed outcome (not resolved)
+  --file <path[:line[-end]]>
+                         With --answered: attach files to the outcome
+                         (repeatable, at most 10). Without --answered it is a
+                         usage error: files ride a message (use comment).
   --json                 JSON output
 EOF
 }
@@ -67021,7 +67219,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 30.
+for at once (no review). From K2's verb catalog, version 31.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -67038,102 +67236,103 @@ TEN EXAMPLES
 EVERY HELPER, BY CAP (portable: the same call works in an App later;
 local: Garden only). Each line: helper, reach, feature, example, [errors]
 no cap
-  k2.gardens.list()                                                                                   local    zen-gardens-v1         const gardens = await k2.gardens.list()
-  k2.gardens.current()                                                                                local    zen-gardens-v1         const here = await k2.gardens.current()
-  k2.gardens.switch(id)                                                                               local    zen-gardens-v1         await k2.gardens.switch(gardens[1].id)  [rate_limited]
-  k2.theme.get()                                                                                      local    zen-v1                 const {theme, motion} = await k2.theme.get()
-  k2.theme.changed(cb)                                                                                local    zen-widgets-v1         k2.theme.changed(({theme}) => paint(theme))
-  k2.canvas.setHitRegions(rects)                                                                      local    zen-widgets-v1         await k2.canvas.setHitRegions([bar.getBoundingClientRect()])  [too_large]
-  k2.window.startDrag()                                                                               local    zen-widgets-v1         grip.addEventListener('mousedown', () => k2.window.startDrag())
-  k2.layout.get()                                                                                     local    zen-widgets-v1         const {columns} = await k2.layout.get()  [rate_limited]
-  k2.layout.set({collapsed, column})                                                                  local    zen-widgets-v1         await k2.layout.set({column: 2, collapsed: false})  [bad_args rate_limited]
-  k2.layout.toggle(column)                                                                            local    zen-widgets-v1         chat.addEventListener('click', () => k2.layout.toggle(2))  [bad_args rate_limited]
-  k2.layout.subscribe(cb)                                                                             local    zen-widgets-v1         k2.layout.subscribe(({columns}) => drawTabs(columns))  [rate_limited]
-  k2.save.get(key)                                                                                    local    garden-data-v1         const best = await k2.save.get('high-score')  [bad_key rate_limited]
-  k2.save.set(key, value)                                                                             local    garden-data-v1         await k2.save.set('high-score', 42)  [bad_key value_too_large space_full store_full rate_limited]
-  k2.save.remove(key)                                                                                 local    garden-data-v1         await k2.save.remove('high-score')  [bad_key rate_limited]
-  k2.save.keys({prefix})                                                                              local    garden-data-v1         const keys = await k2.save.keys()  [rate_limited]
-  k2.viewer.get()                                                                                     local    garden-data-v1         const {name} = await k2.viewer()
-  k2.app.rooms({app})                                                                                 portable guests-rooms-v1        const {ceiling, granted} = await k2.asApp().app.rooms()  [app_pass_required pass_required pass_invalid pass_wrong_link usage not_found stale_widget author_unknown]
-  k2.app.self({app})                                                                                  portable app-self-v1            const me = await k2.asApp().app.self()  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
-  k2.app.usage({app, hours})                                                                          portable app-self-v1            const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
-  k2.widget.self()                                                                                    local    app-self-v1            const me = await k2.widget.self()  [stale_widget rate_limited]
-  k2.app.resources()                                                                                  local    app-resources-v1       const {disks, top} = await k2.app.resources()  [stale_widget rate_limited]
+  k2.gardens.list()                                                                                                local    zen-gardens-v1         const gardens = await k2.gardens.list()
+  k2.gardens.current()                                                                                             local    zen-gardens-v1         const here = await k2.gardens.current()
+  k2.gardens.switch(id)                                                                                            local    zen-gardens-v1         await k2.gardens.switch(gardens[1].id)  [rate_limited]
+  k2.theme.get()                                                                                                   local    zen-v1                 const {theme, motion} = await k2.theme.get()
+  k2.theme.changed(cb)                                                                                             local    zen-widgets-v1         k2.theme.changed(({theme}) => paint(theme))
+  k2.canvas.setHitRegions(rects)                                                                                   local    zen-widgets-v1         await k2.canvas.setHitRegions([bar.getBoundingClientRect()])  [too_large]
+  k2.window.startDrag()                                                                                            local    zen-widgets-v1         grip.addEventListener('mousedown', () => k2.window.startDrag())
+  k2.layout.get()                                                                                                  local    zen-widgets-v1         const {columns} = await k2.layout.get()  [rate_limited]
+  k2.layout.set({collapsed, column})                                                                               local    zen-widgets-v1         await k2.layout.set({column: 2, collapsed: false})  [bad_args rate_limited]
+  k2.layout.toggle(column)                                                                                         local    zen-widgets-v1         chat.addEventListener('click', () => k2.layout.toggle(2))  [bad_args rate_limited]
+  k2.layout.subscribe(cb)                                                                                          local    zen-widgets-v1         k2.layout.subscribe(({columns}) => drawTabs(columns))  [rate_limited]
+  k2.save.get(key)                                                                                                 local    garden-data-v1         const best = await k2.save.get('high-score')  [bad_key rate_limited]
+  k2.save.set(key, value)                                                                                          local    garden-data-v1         await k2.save.set('high-score', 42)  [bad_key value_too_large space_full store_full rate_limited]
+  k2.save.remove(key)                                                                                              local    garden-data-v1         await k2.save.remove('high-score')  [bad_key rate_limited]
+  k2.save.keys({prefix})                                                                                           local    garden-data-v1         const keys = await k2.save.keys()  [rate_limited]
+  k2.viewer.get()                                                                                                  local    garden-data-v1         const {name} = await k2.viewer()
+  k2.app.rooms({app})                                                                                              portable guests-rooms-v1        const {ceiling, granted} = await k2.asApp().app.rooms()  [app_pass_required pass_required pass_invalid pass_wrong_link usage not_found stale_widget author_unknown]
+  k2.app.self({app})                                                                                               portable app-self-v1            const me = await k2.asApp().app.self()  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
+  k2.app.usage({app, hours})                                                                                       portable app-self-v1            const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})  [pass_required pass_invalid pass_wrong_link not_exposed not_found usage]
+  k2.widget.self()                                                                                                 local    app-self-v1            const me = await k2.widget.self()  [stale_widget rate_limited]
+  k2.app.resources()                                                                                               local    app-resources-v1       const {disks, top} = await k2.app.resources()  [stale_widget rate_limited]
 agents:read (See agents)
-  k2.agents.list()                                                                                    portable zen-v1                 const rows = await k2.agents.list()
-  k2.agents.subscribe(cb)                                                                             portable zen-v1                 const off = k2.agents.subscribe((rows) => draw(rows))
-  k2.conversation.open(address)                                                                       local    zen-v1                 await k2.conversation.open(row.address)  [not_bound]
-  k2.conversation.close()                                                                             local    zen-v1                 await k2.conversation.close()
-  k2.agents.show(addresses)                                                                           local    zen-widgets-v1         await k2.agents.show(rows.filter(onBoard).map((r) => r.address))  [not_bound bad_args rate_limited]
+  k2.agents.list()                                                                                                 portable zen-v1                 const rows = await k2.agents.list()
+  k2.agents.subscribe(cb)                                                                                          portable zen-v1                 const off = k2.agents.subscribe((rows) => draw(rows))
+  k2.conversation.open(address)                                                                                    local    zen-v1                 await k2.conversation.open(row.address)  [not_bound]
+  k2.conversation.close()                                                                                          local    zen-v1                 await k2.conversation.close()
+  k2.agents.show(addresses)                                                                                        local    zen-widgets-v1         await k2.agents.show(rows.filter(onBoard).map((r) => r.address))  [not_bound bad_args rate_limited]
 presence:read (See who is looking)
-  k2.presence.get(address)                                                                            local    zen-v1                 const people = await k2.presence.get(row.address)  [not_bound]
-  k2.presence.subscribe(address, cb)                                                                  local    zen-v1                 const off = k2.presence.subscribe(row.address, (people) => draw(people))  [not_bound]
+  k2.presence.get(address)                                                                                         local    zen-v1                 const people = await k2.presence.get(row.address)  [not_bound]
+  k2.presence.subscribe(address, cb)                                                                               local    zen-v1                 const off = k2.presence.subscribe(row.address, (people) => draw(people))  [not_bound]
 thread:read (Read the Thread)
-  k2.thread.read(address, {afterSeq, beforeSeq, limit})                                               portable zen-v1                 const page = await k2.thread.read(row.address, {limit: 50})  [not_bound]
-  k2.thread.subscribe(address, cb)                                                                    portable zen-v1                 const off = k2.thread.subscribe(row.address, (view) => draw(view))  [not_bound rate_limited]
-  k2.thread.inbox(cb)                                                                                 portable thread-stream-v1       const off = k2.thread.inbox((m) => bump(m.address, m))  [rate_limited]
-  k2.thread.markRead(address, {seq})                                                                  local    thread-read-v1         await k2.thread.markRead(row.address, {seq: last.seq})  [not_bound]
-  k2.thread.attachment(address, docId, n, {mode, px})                                                 local    thread-images-v1       const t = await k2.thread.attachment(row.address, item.id, 0, {mode: 'thumb'})  [not_bound too_large]
-  k2.thread.open(address, {docId, line, n, rel})                                                      local    thread-attachments-v1  await k2.thread.open(row.address, {docId: item.id, n: 0})  [not_bound]
-  k2.thread.links(address, candidates)                                                                local    thread-attachments-v1  const {links} = await k2.thread.links(row.address, ['src/app.ts:12'])  [not_bound]
-  k2.thread.catchup({limit, threads})                                                                 portable inbox-catchup-v1       const {threads} = await k2.thread.catchup({threads: [{addr: 'sales', afterSeq: 41}]})  [pass_required pass_invalid pass_wrong_link skin_room usage not_found not_bound rate_limited]
-  k2.thread.unread()                                                                                  portable app-thread-parity-v1   const {total, byConversation} = await k2.thread.unread()  [pass_required pass_invalid pass_wrong_link skin_room usage not_found not_bound]
-  k2.thread.mute({addr, muted, until})                                                                portable app-read-state-v1      await k2.thread.mute({addr: 'sales', muted: true})  [pass_required pass_invalid pass_wrong_link skin_room not_bound usage not_found paused]
+  k2.thread.read(address, {afterSeq, beforeSeq, limit})                                                            portable zen-v1                 const page = await k2.thread.read(row.address, {limit: 50})  [not_bound]
+  k2.thread.subscribe(address, cb)                                                                                 portable zen-v1                 const off = k2.thread.subscribe(row.address, (view) => draw(view))  [not_bound rate_limited]
+  k2.thread.inbox(cb)                                                                                              portable thread-stream-v1       const off = k2.thread.inbox((m) => bump(m.address, m))  [rate_limited]
+  k2.thread.markRead(address, {seq})                                                                               local    thread-read-v1         await k2.thread.markRead(row.address, {seq: last.seq})  [not_bound]
+  k2.thread.attachment(address, docId, n, {mode, px})                                                              local    thread-images-v1       const t = await k2.thread.attachment(row.address, item.id, 0, {mode: 'thumb'})  [not_bound too_large]
+  k2.thread.open(address, {docId, line, n, rel})                                                                   local    thread-attachments-v1  await k2.thread.open(row.address, {docId: item.id, n: 0})  [not_bound]
+  k2.thread.links(address, candidates)                                                                             local    thread-attachments-v1  const {links} = await k2.thread.links(row.address, ['src/app.ts:12'])  [not_bound]
+  k2.thread.catchup({limit, threads})                                                                              portable inbox-catchup-v1       const {threads} = await k2.thread.catchup({threads: [{addr: 'sales', afterSeq: 41}]})  [pass_required pass_invalid pass_wrong_link skin_room usage not_found not_bound rate_limited]
+  k2.thread.unread()                                                                                               portable app-thread-parity-v1   const {total, byConversation} = await k2.thread.unread()  [pass_required pass_invalid pass_wrong_link skin_room usage not_found not_bound]
+  k2.thread.mute({addr, muted, until})                                                                             portable app-read-state-v1      await k2.thread.mute({addr: 'sales', muted: true})  [pass_required pass_invalid pass_wrong_link skin_room not_bound usage not_found paused]
 thread:post (Post to the Thread)
-  k2.thread.pickFiles(address)                                                                        local    thread-attachments-v1  const {files} = await k2.thread.pickFiles(row.address)  [not_bound]
-  k2.thread.post(address, text, {attachments})                                                        portable zen-v1                 await k2.thread.post(row.address, 'How is it going?')  [not_bound sending_off rate_limited too_large usage]
-  k2.thread.answer(address, cardId, choice)                                                           portable zen-v1                 await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited card_person_only]
-  k2.compose.draft(address, text)                                                                     local    zen-v1                 await k2.compose.draft(row.address, 'Ask for a status')  [not_bound]
-  k2.conversation.setContext(text)                                                                    local    thread-context-v1      await k2.conversation.setContext('Board: ' + board.name)  [needs_editor not_bound bad_args rate_limited]
+  k2.thread.pickFiles(address)                                                                                     local    thread-attachments-v1  const {files} = await k2.thread.pickFiles(row.address)  [not_bound]
+  k2.thread.post(address, text, {attachments})                                                                     portable zen-v1                 await k2.thread.post(row.address, 'How is it going?')  [not_bound sending_off rate_limited too_large usage]
+  k2.thread.answer(address, cardId, choice)                                                                        portable zen-v1                 await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited card_person_only]
+  k2.compose.draft(address, text)                                                                                  local    zen-v1                 await k2.compose.draft(row.address, 'Ask for a status')  [not_bound]
+  k2.conversation.setContext(text)                                                                                 local    thread-context-v1      await k2.conversation.setContext('Board: ' + board.name)  [needs_editor not_bound bad_args rate_limited]
 sources:read (Read data sources)
-  k2.sources.list()                                                                                   portable sources-v1             const rows = await k2.sources.list()
-  k2.sources.read(address)                                                                            portable sources-v1             const v = await k2.sources.read(k2.config.source)  [not_bound server_not_saved unreachable removed]
-  k2.sources.history(address, field, {fromAt, toAt})                                                  portable sources-v1             const h = await k2.sources.history(k2.config.source, 'count')  [not_bound server_not_saved unreachable removed no_history]
-  k2.sources.subscribe(address, cb)                                                                   portable sources-v1             const off = k2.sources.subscribe(k2.config.source, (v) => draw(v))  [not_bound server_not_saved unreachable removed rate_limited]
-  k2.sources.refresh(address)                                                                         portable sources-v1             await k2.sources.refresh(k2.config.source)  [not_bound server_not_saved unreachable removed rate_limited]
-  k2.sources.ask(address, itemKey?)                                                                   local    sources-v1             await k2.sources.ask(k2.config.source, tile.key)  [not_bound retired]
+  k2.sources.list()                                                                                                portable sources-v1             const rows = await k2.sources.list()
+  k2.sources.read(address)                                                                                         portable sources-v1             const v = await k2.sources.read(k2.config.source)  [not_bound server_not_saved unreachable removed]
+  k2.sources.history(address, field, {fromAt, toAt})                                                               portable sources-v1             const h = await k2.sources.history(k2.config.source, 'count')  [not_bound server_not_saved unreachable removed no_history]
+  k2.sources.subscribe(address, cb)                                                                                portable sources-v1             const off = k2.sources.subscribe(k2.config.source, (v) => draw(v))  [not_bound server_not_saved unreachable removed rate_limited]
+  k2.sources.refresh(address)                                                                                      portable sources-v1             await k2.sources.refresh(k2.config.source)  [not_bound server_not_saved unreachable removed rate_limited]
+  k2.sources.ask(address, itemKey?)                                                                                local    sources-v1             await k2.sources.ask(k2.config.source, tile.key)  [not_bound retired]
 links:open (Open links in your browser)
-  k2.links.open(url)                                                                                  local    zen-widgets-v1         const {ok} = await k2.open('https://example.com/report')  [bad_args rate_limited]
+  k2.links.open(url)                                                                                               local    zen-widgets-v1         const {ok} = await k2.open('https://example.com/report')  [bad_args rate_limited]
 downloads:save (Save files to your Downloads)
-  k2.downloads.begin(name, {mime})                                                                    local    zen-files-v1           k2.download('Board.png', async () => await drawPng())  [bad_args rate_limited]
-  k2.downloads.save(name, data, {mime, ticket})                                                       local    zen-files-v1           const {saved, name} = await k2.download('board.json', JSON.stringify(doc))  [not_granted bad_args too_large rate_limited blob_missing]
+  k2.downloads.begin(name, {mime})                                                                                 local    zen-files-v1           k2.download('Board.png', async () => await drawPng())  [bad_args rate_limited]
+  k2.downloads.save(name, data, {mime, ticket})                                                                    local    zen-files-v1           const {saved, name} = await k2.download('board.json', JSON.stringify(doc))  [not_granted bad_args too_large rate_limited blob_missing]
 files:read (Read files (also shows heartbeat instructions))
-  k2.files.list({relPath, showHidden, workspace})                                                     portable app-api-v1             const entries = await k2.files.list({workspace, relPath: '.'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
-  k2.files.read({relPath, workspace})                                                                 portable app-api-v1             const {content} = await k2.files.read({workspace, relPath: 'notes.md'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
-  k2.files.readBinary({relPath, workspace})                                                           portable app-api-v1             const {base64} = await k2.files.readBinary({workspace, relPath})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
+  k2.files.list({relPath, showHidden, workspace})                                                                  portable app-api-v1             const entries = await k2.files.list({workspace, relPath: '.'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
+  k2.files.read({relPath, workspace})                                                                              portable app-api-v1             const {content} = await k2.files.read({workspace, relPath: 'notes.md'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
+  k2.files.readBinary({relPath, workspace})                                                                        portable app-api-v1             const {base64} = await k2.files.readBinary({workspace, relPath})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
 tickets:read (Read tickets and get live ticket updates)
-  k2.tickets.list({all, project, status})                                                             portable app-api-v1             const {items} = await k2.tickets.list({project: 'sales'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
-  k2.tickets.show({brief, id})                                                                        portable app-api-v1             const t = await k2.tickets.show({id})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown not_found]
+  k2.tickets.list({all, project, status})                                                                          portable app-api-v1             const {items} = await k2.tickets.list({project: 'sales'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
+  k2.tickets.show({brief, id})                                                                                     portable app-api-v1             const t = await k2.tickets.show({id})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown not_found]
+  k2.tickets.attachment({commentId, id, len, mode, n, offset, px})                                                 portable ticket-attachments-v1  const t = await k2.tickets.attachment({id, commentId: c.id, n: 0, mode: 'thumb'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_found]
 tickets:post (Open, answer, assign and set status on tickets)
-  k2.tickets.create({agentName, assignees, body, briefHtml, kind, options, priority, project, title}) portable app-api-v1             await k2.tickets.create({project: 'sales', title: 'Quote for J1042?'})  [pass_required pass_invalid pass_wrong_link skin_room usage too_large not_bound author_unknown paused]
-  k2.tickets.comment({body, id, optionPick})                                                          portable app-api-v1             await k2.tickets.comment({id, body: 'Looks right'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown not_found paused]
-  k2.tickets.resolve({id, status})                                                                    portable app-api-v1             await k2.tickets.resolve({id})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown not_found paused]
+  k2.tickets.create({agentName, assignees, attachments, body, briefHtml, kind, options, priority, project, title}) portable app-api-v1             await k2.tickets.create({project: 'sales', title: 'Quote for J1042?'})  [pass_required pass_invalid pass_wrong_link skin_room usage too_large not_bound author_unknown paused]
+  k2.tickets.comment({attachments, body, id, optionPick})                                                          portable app-api-v1             await k2.tickets.comment({id, body: 'Looks right'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown not_found paused]
+  k2.tickets.resolve({id, status})                                                                                 portable app-api-v1             await k2.tickets.resolve({id})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown not_found paused]
 store:read (Read the workspace store)
-  k2.store.get(key, {from})                                                                           local    garden-data-v1         const e = await k2.store.get('obj/7')  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
-  k2.store.list({after, from, limit, prefix})                                                         local    garden-data-v1         const {items, next} = await k2.store.list({prefix: 'obj/'})  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
-  k2.store.changes({after, from, prefix, since})                                                      local    garden-data-v1         const page = await k2.store.changes({since: 41})  [not_bound not_granted author_unknown stale_widget rate_limited resync bad_key]
-  k2.blobs.get(ref, {from, px})                                                                       local    garden-blobs-v1        img.src = await k2.blobs.url(obj.src, {px: 256})  [not_granted author_unknown stale_widget rate_limited bad_args not_bound blob_missing]
-  k2.blobs.info(ref)                                                                                  local    garden-blobs-v1        const {size, refs} = await k2.blobs.info(ref)  [not_granted author_unknown stale_widget rate_limited blob_missing]
-  k2.blobs.list({after, limit})                                                                       local    garden-blobs-v1        const {items, bytes, quota} = await k2.blobs.list()  [not_granted author_unknown stale_widget rate_limited]
+  k2.store.get(key, {from})                                                                                        local    garden-data-v1         const e = await k2.store.get('obj/7')  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
+  k2.store.list({after, from, limit, prefix})                                                                      local    garden-data-v1         const {items, next} = await k2.store.list({prefix: 'obj/'})  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
+  k2.store.changes({after, from, prefix, since})                                                                   local    garden-data-v1         const page = await k2.store.changes({since: 41})  [not_bound not_granted author_unknown stale_widget rate_limited resync bad_key]
+  k2.blobs.get(ref, {from, px})                                                                                    local    garden-blobs-v1        img.src = await k2.blobs.url(obj.src, {px: 256})  [not_granted author_unknown stale_widget rate_limited bad_args not_bound blob_missing]
+  k2.blobs.info(ref)                                                                                               local    garden-blobs-v1        const {size, refs} = await k2.blobs.info(ref)  [not_granted author_unknown stale_widget rate_limited blob_missing]
+  k2.blobs.list({after, limit})                                                                                    local    garden-blobs-v1        const {items, bytes, quota} = await k2.blobs.list()  [not_granted author_unknown stale_widget rate_limited]
 store:write (Change dump-table rows)
-  k2.store.put(key, value, {ifRev})                                                                   local    garden-data-v1         const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
-  k2.store.patch(key, partial, {ifRev})                                                               local    garden-data-v1         const {rev} = await k2.store.patch('obj/7', {done: true}, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
-  k2.store.delete(key, {ifRev})                                                                       local    garden-data-v1         await k2.store.delete('obj/7')  [not_granted author_unknown stale_widget rate_limited bad_key conflict paused]
-  k2.store.batch(ops)                                                                                 local    garden-data-v1         await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'patch', key: 'obj/3', value: {x: 4}}, {op: 'delete', key: 'obj/2'}])  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large too_large space_full store_full paused]
-  k2.store.txBegin()                                                                                  local    garden-data-v1         const tx = k2.store.tx()  [not_granted author_unknown stale_widget rate_limited busy]
-  k2.store.txAdd(txId, ops)                                                                           local    garden-data-v1         await tx.add(ops)  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired bad_key value_too_large too_large]
-  k2.store.txCommit(txId)                                                                             local    garden-data-v1         const {rev} = await tx.commit()  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired conflict value_too_large space_full store_full paused]
-  k2.store.txAbort(txId)                                                                              local    garden-data-v1         await tx.abort()
-  k2.blobs.put(data, {mime, name})                                                                    local    garden-blobs-v1        const {ref} = await k2.blobs.put(file); await k2.store.patch('obj/7', {src: ref})  [not_granted author_unknown stale_widget rate_limited bad_args too_large space_full store_full paused busy]
+  k2.store.put(key, value, {ifRev})                                                                                local    garden-data-v1         const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
+  k2.store.patch(key, partial, {ifRev})                                                                            local    garden-data-v1         const {rev} = await k2.store.patch('obj/7', {done: true}, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
+  k2.store.delete(key, {ifRev})                                                                                    local    garden-data-v1         await k2.store.delete('obj/7')  [not_granted author_unknown stale_widget rate_limited bad_key conflict paused]
+  k2.store.batch(ops)                                                                                              local    garden-data-v1         await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'patch', key: 'obj/3', value: {x: 4}}, {op: 'delete', key: 'obj/2'}])  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large too_large space_full store_full paused]
+  k2.store.txBegin()                                                                                               local    garden-data-v1         const tx = k2.store.tx()  [not_granted author_unknown stale_widget rate_limited busy]
+  k2.store.txAdd(txId, ops)                                                                                        local    garden-data-v1         await tx.add(ops)  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired bad_key value_too_large too_large]
+  k2.store.txCommit(txId)                                                                                          local    garden-data-v1         const {rev} = await tx.commit()  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired conflict value_too_large space_full store_full paused]
+  k2.store.txAbort(txId)                                                                                           local    garden-data-v1         await tx.abort()
+  k2.blobs.put(data, {mime, name})                                                                                 local    garden-blobs-v1        const {ref} = await k2.blobs.put(file); await k2.store.patch('obj/7', {src: ref})  [not_granted author_unknown stale_widget rate_limited bad_args too_large space_full store_full paused busy]
 guests:rooms (Set its own guests' rooms (an owner grant per App, never a guest's))
-  k2.guests.rooms({app, username})                                                                    portable guests-rooms-v1        const g = await k2.asApp().guests.rooms({username: 'dana'})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found rate_limited stale_widget author_unknown]
-  k2.guests.setRooms({app, rooms, username})                                                          portable guests-rooms-v1        await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found outside_app_rooms above_role has_role rate_limited stale_widget author_unknown confirm_required declined paused]
-  k2.guests.list({app, cursor, limit})                                                                portable guests-rooms-v1        const {guests, nextCursor} = await k2.asApp().guests.list({limit: 200})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found rate_limited stale_widget author_unknown]
+  k2.guests.rooms({app, username})                                                                                 portable guests-rooms-v1        const g = await k2.asApp().guests.rooms({username: 'dana'})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found rate_limited stale_widget author_unknown]
+  k2.guests.setRooms({app, rooms, username})                                                                       portable guests-rooms-v1        await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found outside_app_rooms above_role has_role rate_limited stale_widget author_unknown confirm_required declined paused]
+  k2.guests.list({app, cursor, limit})                                                                             portable guests-rooms-v1        const {guests, nextCursor} = await k2.asApp().guests.list({limit: 200})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found rate_limited stale_widget author_unknown]
 activity:read (See when the agent is working)
-  k2.thread.onActivity(address, cb)                                                                   portable widget-activity-v1     const off = k2.thread.onActivity(row.address, ({turn}) => turn ? drawWorking(turn) : hideWorking())  +thread:read  [not_bound rate_limited]
-  k2.activity.snapshot({workspace})                                                                   portable app-api-v1             const {status} = await k2.activity.snapshot({workspace})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
+  k2.thread.onActivity(address, cb)                                                                                portable widget-activity-v1     const off = k2.thread.onActivity(row.address, ({turn}) => turn ? drawWorking(turn) : hideWorking())  +thread:read  [not_bound rate_limited]
+  k2.activity.snapshot({workspace})                                                                                portable app-api-v1             const {status} = await k2.activity.snapshot({workspace})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
 room:members (See who has access to the room)
-  k2.room.members({app, workspace})                                                                   portable room-members-v1        const {members} = await k2.room.members({workspace})  [pass_required pass_invalid pass_wrong_link skin_room not_bound not_found usage]
+  k2.room.members({app, workspace})                                                                                portable room-members-v1        const {members} = await k2.room.members({workspace})  [pass_required pass_invalid pass_wrong_link skin_room not_bound not_found usage]
 
 Every call may also fail with cap_not_granted, verb_unavailable, failed.
 

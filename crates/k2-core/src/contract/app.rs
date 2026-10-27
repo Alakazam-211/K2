@@ -814,6 +814,9 @@ mod tests {
                 "thread.catchup",
                 "thread.mute",
                 "thread.unread",
+                // Catalog v31 (prd-ticket-attachments-v1 TK15): a ticket
+                // message's file, both doors.
+                "tickets.attachment",
                 "tickets.comment",
                 "tickets.create",
                 "tickets.list",

@@ -180,6 +180,41 @@ fn files_answer_the_apps_room_relative_shape() {
     assert!(!v.to_string().contains(&*d.files_root.to_string_lossy()), "no host path in a refusal: {v}");
 }
 
+/// 0.46.6 (prd-ticket-attachments-v1 TK16/TA8): a widget files and reads
+/// ticket files as the person; the manifest's `files:read` is the gate
+/// (without it every file is `hidden`), `tickets.attachment` opens one, and
+/// an unknown key is still refused.
+#[test]
+fn ticket_files_follow_the_widgets_file_caps() {
+    let d = door(&["tickets:read", "tickets:post", "files:read", "files:download"]);
+    let made = d.call(
+        "tickets.create",
+        json!([{ "project": "garden-files", "title": "Notes ok?", "attachments": [{ "relPath": "docs/notes.md" }] }]),
+    );
+    let id = made["id"].as_str().unwrap_or_else(|| panic!("an id: {made}")).to_string();
+    assert_eq!(made["attachments"][0]["name"], "notes.md", "the echo survives the projection: {made}");
+    no_banned_fields(&made, "tickets.create");
+    let said = d.call("tickets.comment", json!([{ "id": id, "body": "", "attachments": [{ "relPath": "docs/pixel.bin" }] }]));
+    assert_eq!(said["attachments"][0]["name"], "pixel.bin", "{said}");
+    let shown = d.call("tickets.show", json!([{ "id": id }]));
+    no_banned_fields(&shown, "tickets.show");
+    let seed = &shown["comments"][0];
+    let comment_id = seed["id"].as_str().unwrap_or_else(|| panic!("comment ids survive the projection: {shown}")).to_string();
+    assert_eq!((seed["attachments"][0]["state"].as_str(), seed["attachments"][0]["canDownload"].as_bool()), (Some("ok"), Some(true)), "{shown}");
+    let meta = d.call("tickets.attachment", json!([{ "id": id, "commentId": comment_id, "n": 0, "mode": "preview" }]));
+    assert_eq!(meta["text"], "# Notes\n", "{meta}");
+    assert_eq!(d.refuse("tickets.comment", json!([{ "id": id, "body": "x", "grant": true }])), "bad_request", "unknown keys are still refused");
+
+    // Without files:read in the manifest, files are hidden and don't open.
+    d.set(&["tickets:read", "tickets:post"], MadeBy::Owner);
+    let shown = d.call("tickets.show", json!([{ "id": id }]));
+    assert_eq!(shown["comments"][0]["attachments"][0], json!({ "kind": "file", "state": "hidden" }), "{shown}");
+    let meta = d.call("tickets.attachment", json!([{ "id": id, "commentId": comment_id, "n": 0 }]));
+    assert_eq!(meta["state"], "hidden", "{meta}");
+    let (code, v) = d.raw("tickets.attachment", json!([{ "id": id, "commentId": comment_id, "n": 0, "mode": "preview" }]));
+    assert_eq!((code, v["error"]["code"].as_str()), (403, Some("cap_not_granted")), "{v}");
+}
+
 #[test]
 fn tickets_read_and_write_as_the_person() {
     let d = door(&ALL);

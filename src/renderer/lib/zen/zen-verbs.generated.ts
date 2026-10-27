@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 30
+export const ZEN_CATALOG_VERSION = 31
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -131,6 +131,7 @@ export const ZEN_CUSTOM_VERBS = {
   'files.readBinary': { cap: 'files:read', reach: 'portable', kind: 'call' },
   'tickets.list': { cap: 'tickets:read', reach: 'portable', kind: 'call' },
   'tickets.show': { cap: 'tickets:read', reach: 'portable', kind: 'call' },
+  'tickets.attachment': { cap: 'tickets:read', reach: 'portable', kind: 'call' },
   'tickets.create': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
   'tickets.comment': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
   'tickets.resolve': { cap: 'tickets:post', reach: 'portable', kind: 'call' },

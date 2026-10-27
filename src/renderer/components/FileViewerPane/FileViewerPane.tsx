@@ -37,11 +37,18 @@ import { BinaryEmptyState } from './BinaryEmptyState'
 import { ViewerNote } from './ViewerNote'
 import { dxfReadErrorNote, dxfReadsAsBytes } from './dxfReadError'
 import {
+  REREAD_DELETED_MESSAGE,
+  REREAD_FAILED_MESSAGE,
+  REREAD_KEPT_MESSAGE,
+  TEXT_LOCK_KEPT_MESSAGE,
   TEXT_LOCK_MESSAGES,
+  isContentTypeReadError,
+  isNotFoundReadError,
   textLockForBinaryContent,
   textLockForReadError,
   type TextLock,
 } from './textLock'
+import { errorMessage } from '@/lib/daemon-http-error'
 import { looksLikeBinaryText } from '@/lib/load-host-binary'
 import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
 import { PinIcon } from '@/components/icons/K2Icons'
@@ -241,12 +248,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   // file; any other refusal also sets `textLock`. The DXF preview names
   // it (binary DXF, too large).
   const [readError, setReadError] = useState<string | null>(null)
-  // Set when the last load failed for any reason but "no such file", or
-  // returned binary-looking text: the file may be real and K2 couldn't
-  // show it, so the pane is read-only and NOTHING writes it (Save,
-  // Cmd+S, the parent's save handle, autosave-on-leave). Data-loss fix:
-  // an .xlsx / Latin-1 / >10 MB file used to open as an empty editable
-  // buffer, and one keystroke + leaving the tab overwrote the real file.
+  // Set when the FIRST load failed for any reason but "no such file", or
+  // any read (first or later) says the file isn't text (binary, not
+  // UTF-8, too large, NUL bytes): K2 couldn't show the real file, so the
+  // pane is read-only and NOTHING writes it (Save, Cmd+S, the parent's
+  // save handle, autosave-on-leave). Data-loss fix: an .xlsx / Latin-1 /
+  // >10 MB file used to open as an empty editable buffer, and one
+  // keystroke + leaving the tab overwrote the real file.
   const [textLock, setTextLockState] = useState<TextLock | null>(null)
   // Mirrors `textLock` synchronously, so a save or an unmount that runs
   // before the next render still sees the lock the last load set.
@@ -255,13 +263,32 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     textLockRef.current = lock
     setTextLockState(lock)
   }, [])
+  // The path this pane last read as text. A failure after that is a
+  // RE-read failure: transient ones keep the buffer (see `rereadIssue`).
+  const readOkPathRef = useRef<string | null>(null)
+  // A re-read failed but the buffer (and any edits) stays: `transient`
+  // (permission, I/O, network, 5xx) or `deleted` (not found any more).
+  const [rereadIssue, setRereadIssue] = useState<'transient' | 'deleted' | null>(null)
+  // The file vanished after it was read: autosave-on-leave must not
+  // recreate it on its own (only an explicit save, or Save in the leave
+  // guard, writes it back).
+  const deletedRef = useRef(false)
   const [saving, setSaving] = useState(false)
   const [cursorInfo, setCursorInfo] = useState({ line: 1, col: 1, selections: 1 })
+  // Latest buffer values for callbacks that outlive a render (the
+  // autosave-on-leave cleanup, the read-failure handler).
+  const flushRef = useRef({ filePath, editedContent, content })
+  flushRef.current = { filePath, editedContent, content }
 
   const category = getFileCategory(filePath)
   const [viewMode, setViewMode] = useState<ViewMode>(getDefaultViewMode(category))
-  // A locked pane can't save, so it never reports unsaved changes.
-  const isDirty = textLock === null && editedContent !== null && editedContent !== content
+  // A locked pane can't save. It reports unsaved changes only when it
+  // holds edits made before the file stopped being text (`keptText`), so
+  // the leave guard still asks.
+  const isDirty =
+    textLock !== null
+      ? textLock.keptText !== null
+      : editedContent !== null && editedContent !== content
   const setTabDirty = useRoomTabs((s) => s.setTabDirty)
   const setFileViewerState = useRoomTabs((s) => s.setFileViewerState)
 
@@ -299,6 +326,74 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
 
   const loadGenRef = useRef(0)
 
+  /** Unsaved edits right now (the buffer differs from what was read). */
+  const pendingEdits = (): string | null => {
+    const { editedContent: edited, content: onDisk } = flushRef.current
+    return edited !== null && edited !== onDisk ? edited : null
+  }
+
+  /** The file on disk is not text (any read, first or later): lock. Edits
+   *  made before keep showing, read-only, so they can be copied out. */
+  const lockUnreadable = useCallback((lock: TextLock) => {
+    setTextLock({ ...lock, keptText: pendingEdits() })
+    setContent('')
+    setRereadIssue(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setTextLock])
+
+  /** A read returned text (load, Refresh or the poll). */
+  const textReadOk = useCallback(
+    (text: string, fromPoll: boolean): void => {
+      if (looksLikeBinaryText(text, text.length)) {
+        // Read as "text" but holds NUL bytes: show nothing, write nothing.
+        lockUnreadable(textLockForBinaryContent())
+        return
+      }
+      readOkPathRef.current = filePath
+      deletedRef.current = false
+      setRereadIssue(null)
+      setReadError(null)
+      setTextLock(null)
+      if (fromPoll) setContent((prev) => (text !== prev ? text : prev))
+      else setContent(text)
+    },
+    [filePath, lockUnreadable, setTextLock],
+  )
+
+  /** A read failed (load, Refresh or the poll). */
+  const textReadFailed = useCallback(
+    (err: unknown, fromPoll: boolean): void => {
+      if (isContentTypeReadError(err)) {
+        // The file is (now) binary, not UTF-8 or too large: never write it.
+        setReadError(errorMessage(err))
+        lockUnreadable({ reason: 'unreadable', detail: errorMessage(err), keptText: null })
+        return
+      }
+      if (readOkPathRef.current !== filePath) {
+        // Never read as text: the first-load rules. The poll stays quiet.
+        if (fromPoll) return
+        setContent('')
+        setReadError(errorMessage(err))
+        // Only "no such file" opens as an empty, editable new file. Anything
+        // else (permission, network, …) locks the pane so an edit can't
+        // overwrite a file K2 couldn't show.
+        setTextLock(textLockForReadError(err))
+        return
+      }
+      // Read as text before: keep the buffer and any edits.
+      if (isNotFoundReadError(err)) {
+        // Deleted or moved outside K2: the autosave won't recreate it.
+        deletedRef.current = true
+        setRereadIssue('deleted')
+        return
+      }
+      // Transient (permission, I/O, network, 5xx): the poll retries
+      // quietly; a load or Refresh says so.
+      if (!fromPoll) setRereadIssue('transient')
+    },
+    [filePath, lockUnreadable, setTextLock],
+  )
+
   const loadFile = useCallback(async () => {
     // Binary preview categories (image/pdf/docx/audio/video) load their
     // own bytes via host-aware helpers — skip the text path.
@@ -324,28 +419,15 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       const result = await daemonCliGet<{ content: string }>(room.scope, 'fs/read-file', { path: filePath })
       if (gen !== loadGenRef.current) return
       if (room.scope.connectionKey !== startedKey) return
-      setReadError(null)
-      if (looksLikeBinaryText(result.content, result.content.length)) {
-        // Read as "text" but holds NUL bytes: show nothing, write nothing.
-        setContent('')
-        setTextLock(textLockForBinaryContent())
-        return
-      }
-      setContent(result.content)
-      setTextLock(null)
+      textReadOk(result.content, false)
     } catch (err) {
       if (gen !== loadGenRef.current) return
       if (isHostSwitchedError(err)) return
-      setContent('')
-      setReadError(err instanceof Error ? err.message : String(err))
-      // Only "no such file" opens as an empty, editable new file. Anything
-      // else (binary, not UTF-8, too large, permission, network) locks the
-      // pane so an edit can't overwrite a file K2 couldn't show.
-      setTextLock(textLockForReadError(err))
+      textReadFailed(err, false)
     } finally {
       if (gen === loadGenRef.current) setLoading(false)
     }
-  }, [filePath, setTextLock])
+  }, [filePath, textReadOk, textReadFailed])
 
   useEffect(() => {
     void loadFile()
@@ -370,20 +452,25 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   // `getState()` inside the cleanup so it sees current state, not a stale
   // closure. Latest filePath / edited buffer / on-disk content are tracked in
   // refs so the unmount cleanup writes the freshest values.
-  const flushRef = useRef({ filePath, editedContent, content })
-  flushRef.current = { filePath, editedContent, content }
   const mountHostKeyRef = useRef(room.scope.connectionKey)
   useEffect(() => {
     mountHostKeyRef.current = room.scope.connectionKey
     return () => {
       const { filePath: fp, editedContent: edited, content: onDisk } = flushRef.current
-      // The last load failed (not "no such file") or looked binary: the
-      // buffer is not the file, so writing it would destroy the file.
+      // Drain the leave guard's per-tab flags whatever happens below.
+      const tabsState = room.tabs.getState()
+      const discarded = tabsState.consumeDiscardPending(tabId)
+      const saveConfirmed = tabsState.consumeSaveConfirmed(tabId)
+      // Locked: the first load failed (not "no such file") or the file is
+      // not text. The buffer is not the file; writing it would destroy it.
       if (textLockRef.current !== null) return
       // Nothing edited, or buffer matches disk — nothing to flush.
       if (edited === null || edited === undefined || edited === onDisk) return
       // User chose Discard for this tab — drop the edit, don't write.
-      if (room.tabs.getState().consumeDiscardPending(tabId)) return
+      if (discarded) return
+      // The file was deleted or moved outside K2 after it was read: don't
+      // recreate it on our own. Save in the leave guard says to.
+      if (deletedRef.current && !saveConfirmed) return
       // Host switch unmount: do not POST the old machine's path to the new daemon.
       if (room.scope.connectionKey !== mountHostKeyRef.current) return
       void daemonCliPost(room.scope, 'fs/write-file', { path: fp, content: edited }).catch((err) => {
@@ -459,17 +546,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         const result = await daemonCliGet<{ content: string }>(room.scope, 'fs/read-file', { path: filePath })
         return result.content
       },
-      apply: (next) => {
-        if (looksLikeBinaryText(next, next.length)) {
-          setContent('')
-          setTextLock(textLockForBinaryContent())
-          return
-        }
-        setContent((prev) => (next !== prev ? next : prev))
-      },
+      apply: (next) => textReadOk(next, true),
+      // A file that turned binary locks; one that vanished is marked
+      // deleted (no silent recreate); transient failures stay quiet.
+      onError: (err) => textReadFailed(err, true),
       shouldSkip: () => hasSelectionWithin(rootRef.current),
     })
-  }, [filePath, isDirty, textLock, setTextLock])
+  }, [filePath, isDirty, textLock, textReadOk, textReadFailed])
 
   // Save file (Cmd+S) — called directly by CodeEditor with current content
   const saveFile = useCallback(async (contentToSave?: string) => {
@@ -483,6 +566,11 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       await daemonCliPost(room.scope, 'fs/write-file', { path: filePath, content: toSave })
       setContent(toSave)
       setEditedContent(null)
+      // An explicit save is the person choosing to write (even a file that
+      // was deleted outside K2): the file is text on disk again.
+      readOkPathRef.current = filePath
+      deletedRef.current = false
+      setRereadIssue(null)
     } catch (err) {
       console.error('[file-viewer] Save failed:', err)
     } finally {
@@ -820,6 +908,24 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       )}
 
+      {/* Re-read failed, buffer kept (non-blocking) */}
+      {rereadIssue !== null && textLock === null && (
+        <div
+          role="status"
+          data-testid="file-viewer-reread-banner"
+          data-issue={rereadIssue}
+          className="border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1 text-[11px] text-[var(--color-text-secondary)] flex-shrink-0"
+        >
+          {[
+            REREAD_FAILED_MESSAGE,
+            isDirty ? REREAD_KEPT_MESSAGE : null,
+            rereadIssue === 'deleted' ? REREAD_DELETED_MESSAGE : null,
+          ]
+            .filter(Boolean)
+            .join(' ')}
+        </div>
+      )}
+
       {/* Content */}
       {category === 'pdf' ? (
         <div className="flex-1 overflow-hidden">
@@ -844,6 +950,27 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading video…</div>}>
             <MediaViewer filePath={filePath} kind="video" />
           </Suspense>
+        </div>
+      ) : showTextLock && textLock && textLock.keptText !== null ? (
+        // The file turned non-text while the person had unsaved edits:
+        // show them read-only (selectable, copyable); nothing writes.
+        <div
+          className="flex flex-1 flex-col gap-2 overflow-hidden p-3"
+          ref={contentRef}
+          data-testid="file-viewer-text-lock"
+          data-reason={textLock.reason}
+        >
+          <p className="text-sm text-[var(--color-text-primary)]">{TEXT_LOCK_KEPT_MESSAGE}</p>
+          <p className="text-xs text-[var(--color-text-muted)]">{textLock.detail}</p>
+          <textarea
+            readOnly
+            data-testid="file-viewer-kept-text"
+            aria-label="Your unsaved text"
+            value={textLock.keptText}
+            onFocus={(e) => e.currentTarget.select()}
+            className="flex-1 resize-none border border-[var(--color-border)] bg-[var(--color-bg-stripe)] p-2 font-mono text-xs text-[var(--color-text-primary)] focus:outline-none"
+            style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+          />
         </div>
       ) : showTextLock && textLock ? (
         // K2 couldn't show this file as text: no editor, nothing to type

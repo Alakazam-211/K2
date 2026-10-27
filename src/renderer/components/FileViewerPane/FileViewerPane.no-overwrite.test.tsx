@@ -53,7 +53,17 @@ vi.mock('./CodeEditor', () => ({
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { useTabsStore } from '@/stores/tabs'
 import { FileViewerPane, type FileViewerHandle } from './FileViewerPane'
-import { TEXT_LOCK_MESSAGES, isNotFoundReadError, textLockForReadError } from './textLock'
+import {
+  REREAD_DELETED_MESSAGE,
+  REREAD_FAILED_MESSAGE,
+  REREAD_KEPT_MESSAGE,
+  TEXT_LOCK_KEPT_MESSAGE,
+  TEXT_LOCK_MESSAGES,
+  isContentTypeReadError,
+  isNotFoundReadError,
+  textLockForReadError,
+} from './textLock'
+import type { Item, PaneGroup, Tab } from '@/stores/tabs'
 
 const refused = (message: string, code: string): DaemonHttpError => new DaemonHttpError(message, 400, code)
 
@@ -243,10 +253,203 @@ describe('textLock classification', () => {
     expect(textLockForReadError(refused('Cannot read binary file', 'not_utf8'))).toEqual({
       reason: 'unreadable',
       detail: 'Cannot read binary file',
+      keptText: null,
     })
     expect(textLockForReadError(refused('File too large (>10MB)', 'too_large'))!.reason).toBe('unreadable')
     expect(textLockForReadError(refused('Is a directory (os error 21)', 'read_failed'))!.reason).toBe('failed')
     expect(textLockForReadError(new Error('File too large (>10MB)'))!.reason).toBe('unreadable')
     expect(textLockForReadError(new Error('boom'))!.reason).toBe('failed')
+  })
+})
+
+// ── After a successful read: a re-read failure must not lose edits ──────
+//
+// Someone edits a file K2 read as text, then a Refresh fails. A transient
+// failure keeps the buffer, the dirty tab and the autosave. A file that
+// vanished keeps the edits but is not silently recreated. A file that is
+// no longer text locks, keeps the edits copyable, and is never written.
+
+const FILE = '/ws/notes.txt'
+
+function seedTab(filePath: string): void {
+  const item: Item = { id: 'p', type: 'file-viewer', data: { filePath }, pinned: false }
+  const pg: PaneGroup = { id: 'pg', items: [item], activeItemIndex: 0 }
+  const tab: Tab = { id: 't', title: 't', mosaicTree: pg.id, paneGroups: new Map([[pg.id, pg]]) }
+  useTabsStore.setState({ tabs: [tab], activeTabId: 't', splitCount: 1, extraGroups: [], activeGroupIndex: 0 })
+}
+
+function tabDirty(): boolean {
+  const tab = useTabsStore.getState().tabs.find((t) => t.id === 't')
+  if (!tab) throw new Error('tab t missing from the store')
+  return tab.isDirty === true
+}
+
+/** Read FILE as text, type an edit, then make the next read fail with
+ *  `err` (or return `content`) and press Refresh. */
+async function editThenRefresh(next: { err: unknown } | { content: string }) {
+  seedTab(FILE)
+  readReturns('line one\n')
+  const view = renderPane(FILE)
+  const editor = (await screen.findByTestId('fake-editor')) as HTMLTextAreaElement
+  expect(editor.value).toBe('line one\n')
+  fireEvent.change(editor, { target: { value: 'line one\nmy unsaved line\n' } })
+  await screen.findByText('Modified')
+  await waitFor(() => expect(tabDirty()).toBe(true))
+
+  if ('err' in next) readFails(next.err)
+  else readReturns(next.content)
+  fireEvent.click(screen.getByTitle('Refresh'))
+  await waitFor(() => expect(daemonCliGet.mock.calls.filter(([, r]) => r === 'fs/read-file')).toHaveLength(2))
+  await waitFor(() => expect(screen.queryByText('Loading...')).toBeNull())
+  return view
+}
+
+describe('file viewer: a re-read failure after edits keeps the edits', () => {
+  it.each([
+    ['permission_denied', refused('Permission denied', 'permission_denied')],
+    ['read_failed', refused('Resource busy (os error 16)', 'read_failed')],
+    ['a network failure', new TypeError('Failed to fetch')],
+    ['a 5xx with no code', new DaemonHttpError('worker join: panicked', 500, null)],
+  ])('%s: buffer stays editable and dirty, banner shows, unmount autosaves', async (_label, err) => {
+    const view = await editThenRefresh({ err })
+
+    const editor = (await screen.findByTestId('fake-editor')) as HTMLTextAreaElement
+    expect(editor.value).toBe('line one\nmy unsaved line\n')
+    expect(screen.queryByTestId('file-viewer-text-lock')).toBeNull()
+    const banner = screen.getByTestId('file-viewer-reread-banner')
+    expect(banner.dataset.issue).toBe('transient')
+    expect(banner.textContent).toBe(`${REREAD_FAILED_MESSAGE} ${REREAD_KEPT_MESSAGE}`)
+    expect(screen.getByText('Modified')).toBeTruthy()
+    expect(tabDirty()).toBe(true)
+
+    // Still editable after the failure.
+    fireEvent.change(editor, { target: { value: 'line one\nmy unsaved line\nand more\n' } })
+
+    expect(writes()).toEqual([])
+    view.unmount()
+    expect(writes()).toHaveLength(1)
+    expect(writes()[0][2]).toEqual({ path: FILE, content: 'line one\nmy unsaved line\nand more\n' })
+  })
+
+  it('a later good read clears the banner and keeps the edits', async () => {
+    await editThenRefresh({ err: refused('Permission denied', 'permission_denied') })
+    expect(screen.getByTestId('file-viewer-reread-banner')).toBeTruthy()
+    readReturns('line one\n')
+    fireEvent.click(screen.getByTitle('Refresh'))
+    await waitFor(() => expect(screen.queryByTestId('file-viewer-reread-banner')).toBeNull())
+    const editor = (await screen.findByTestId('fake-editor')) as HTMLTextAreaElement
+    expect(editor.value).toBe('line one\nmy unsaved line\n')
+  })
+})
+
+describe('file viewer: a file deleted or moved after it was read', () => {
+  it('keeps the edits and the dirty tab, and leaving does NOT recreate it', async () => {
+    const view = await editThenRefresh({ err: refused('File not found', 'not_found') })
+
+    const editor = (await screen.findByTestId('fake-editor')) as HTMLTextAreaElement
+    expect(editor.value).toBe('line one\nmy unsaved line\n')
+    const banner = screen.getByTestId('file-viewer-reread-banner')
+    expect(banner.dataset.issue).toBe('deleted')
+    expect(banner.textContent).toBe(
+      `${REREAD_FAILED_MESSAGE} ${REREAD_KEPT_MESSAGE} ${REREAD_DELETED_MESSAGE}`,
+    )
+    expect(tabDirty()).toBe(true)
+    expect(screen.queryByTestId('file-viewer-text-lock')).toBeNull()
+
+    view.unmount()
+    expect(writes()).toEqual([])
+  })
+
+  it('an older daemon’s plain "File not found" is treated the same', async () => {
+    const view = await editThenRefresh({ err: new Error('File not found') })
+    expect(screen.getByTestId('file-viewer-reread-banner').dataset.issue).toBe('deleted')
+    view.unmount()
+    expect(writes()).toEqual([])
+  })
+
+  it('Save in the leave guard writes it back on unmount', async () => {
+    const view = await editThenRefresh({ err: refused('File not found', 'not_found') })
+    useTabsStore.getState().markTabsSaveConfirmed(['t'])
+    view.unmount()
+    expect(writes()).toHaveLength(1)
+    expect(writes()[0][2]).toEqual({ path: FILE, content: 'line one\nmy unsaved line\n' })
+  })
+
+  it('an explicit save writes it back and clears the banner', async () => {
+    const view = await editThenRefresh({ err: refused('File not found', 'not_found') })
+    await act(async () => {
+      await view.ref.current!.save()
+    })
+    expect(writes()).toHaveLength(1)
+    expect(writes()[0][2]).toEqual({ path: FILE, content: 'line one\nmy unsaved line\n' })
+    await waitFor(() => expect(screen.queryByTestId('file-viewer-reread-banner')).toBeNull())
+    await waitFor(() => expect(tabDirty()).toBe(false))
+  })
+
+  it('Discard in the leave guard still drops the edit, and both flags drain', async () => {
+    const view = await editThenRefresh({ err: refused('File not found', 'not_found') })
+    useTabsStore.getState().markTabsDiscardPending(['t'])
+    useTabsStore.getState().markTabsSaveConfirmed(['t'])
+    view.unmount()
+    expect(writes()).toEqual([])
+    expect(useTabsStore.getState().consumeDiscardPending('t')).toBe(false)
+    expect(useTabsStore.getState().consumeSaveConfirmed('t')).toBe(false)
+  })
+})
+
+describe('file viewer: the file turned non-text after edits', () => {
+  it.each([
+    ['code binary', { err: refused('Cannot read binary file', 'binary') }],
+    ['code not_utf8', { err: refused('Cannot read binary file', 'not_utf8') }],
+    ['code too_large', { err: refused('File too large (>10MB)', 'too_large') }],
+    ['NUL bytes in a good read', { content: 'PK\u0003\u0004\u0000\u0000zip' }],
+  ] as const)('%s: locks, keeps the text copyable, never writes', async (_label, next) => {
+    const view = await editThenRefresh(next)
+
+    const lock = await screen.findByTestId('file-viewer-text-lock')
+    expect(lock.dataset.reason).toBe('unreadable')
+    expect(lock.textContent).toContain(TEXT_LOCK_KEPT_MESSAGE)
+    expect(screen.queryByTestId('fake-editor')).toBeNull()
+    expect(screen.queryByTestId('file-viewer-reread-banner')).toBeNull()
+
+    const kept = screen.getByTestId('file-viewer-kept-text') as HTMLTextAreaElement
+    expect(kept.value).toBe('line one\nmy unsaved line\n')
+    expect(kept.readOnly).toBe(true)
+    expect(kept.disabled).toBe(false)
+    // Selectable for copying.
+    kept.focus()
+    kept.setSelectionRange(0, kept.value.length)
+    expect(kept.value.slice(kept.selectionStart!, kept.selectionEnd!)).toBe('line one\nmy unsaved line\n')
+    // Typing into it changes nothing.
+    fireEvent.change(kept, { target: { value: 'typed over' } })
+    expect((screen.getByTestId('file-viewer-kept-text') as HTMLTextAreaElement).value).toBe(
+      'line one\nmy unsaved line\n',
+    )
+
+    expect(tabDirty()).toBe(true)
+
+    await tryEveryWrite(view)
+    expect(writes()).toEqual([])
+  })
+
+  it('even Save in the leave guard does not write a file that is no longer text', async () => {
+    const view = await editThenRefresh({ err: refused('Cannot read binary file', 'binary') })
+    useTabsStore.getState().markTabsSaveConfirmed(['t'])
+    view.unmount()
+    expect(writes()).toEqual([])
+  })
+})
+
+describe('textLock: content-type refusals', () => {
+  it('binary, not_utf8, too_large (and old-daemon text) are content-type; others are not', () => {
+    for (const code of ['binary', 'not_utf8', 'too_large']) {
+      expect(isContentTypeReadError(refused('x', code))).toBe(true)
+    }
+    for (const code of ['not_found', 'permission_denied', 'read_failed', 'invalid_path']) {
+      expect(isContentTypeReadError(refused('Cannot read binary file', code))).toBe(false)
+    }
+    expect(isContentTypeReadError(new Error('Cannot read binary file'))).toBe(true)
+    expect(isContentTypeReadError(new Error('File too large (>10MB)'))).toBe(true)
+    expect(isContentTypeReadError(new TypeError('Failed to fetch'))).toBe(false)
   })
 })

@@ -1022,6 +1022,12 @@ export interface TabsState {
   /** Returns true (and clears the flag) if this tab was marked discard-pending.
    *  Called from the FileViewerPane unmount-flush right before it would write. */
   consumeDiscardPending: (tabId: string) => boolean
+  /** Mark tabs whose person chose Save in the leave guard. The unmount-flush
+   *  needs this to write a file that was deleted or moved outside K2 after
+   *  it was opened (it never recreates one on its own). In-memory only. */
+  markTabsSaveConfirmed: (tabIds: string[]) => void
+  /** Returns true (and clears the flag) if this tab was marked save-confirmed. */
+  consumeSaveConfirmed: (tabId: string) => boolean
   setFileViewerState: (tabId: string, paneId: string, itemId: string, state: { scrollTop?: number; cursorPos?: number }) => void
   /** @deprecated Use openFileInPane instead */
   openMarkdownPane: (tabId: string, filePath: string, splitDirection?: 'row' | 'column') => void
@@ -2608,6 +2614,9 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
   // state so it is never serialized into a saved layout. Drained by the pane's
   // unmount cleanup via `consumeDiscardPending`.
   const _discardPendingTabs = new Set<string>()
+  // Tabs whose person chose Save in the leave guard (same lifetime rules).
+  // Drained by the pane's unmount cleanup via `consumeSaveConfirmed`.
+  const _saveConfirmedTabs = new Set<string>()
 
   // ── Daemon-authoritative session events (0.38.0 Commit 4) ────────────────
   //
@@ -5232,6 +5241,12 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       }
       return false
     },
+
+    markTabsSaveConfirmed: (tabIds: string[]) => {
+      for (const id of tabIds) _saveConfirmedTabs.add(id)
+    },
+
+    consumeSaveConfirmed: (tabId: string) => _saveConfirmedTabs.delete(tabId),
 
     setFileViewerState: (tabId: string, paneId: string, itemId: string, viewerState: { scrollTop?: number; cursorPos?: number }) => {
       set((state) => {

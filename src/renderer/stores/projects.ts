@@ -744,6 +744,8 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         void runLeaveGuard(leavingProjectId).then((choice) => {
           if (choice === 'cancel') return // stay put
           if (choice === 'discard') tabsStore.markTabsDiscardPending(dirtyIds)
+          // Save lets the unmount-flush write even a file deleted outside K2.
+          if (choice === 'save') tabsStore.markTabsSaveConfirmed(dirtyIds)
           // 'save' / 'discard' → proceed with the switch.
           get()._doSetActiveProject(id, afterShown)
         })
@@ -845,6 +847,8 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         void runLeaveGuard(leavingProjectId).then((choice) => {
           if (choice === 'cancel') return // stay put
           if (choice === 'discard') tabsStore.markTabsDiscardPending(dirtyIds)
+          // Save lets the unmount-flush write even a file deleted outside K2.
+          if (choice === 'save') tabsStore.markTabsSaveConfirmed(dirtyIds)
           get()._doSetActiveWorkspace(projectId, workspaceId)
         })
         return

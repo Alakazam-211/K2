@@ -10,8 +10,6 @@ import {
   ZEN_BLOB_CHUNK_BYTES,
   ZEN_BLOB_MAX_BYTES,
   ZEN_DOWNLOADS,
-  ZEN_DOWNLOAD_HOURLY,
-  __resetZenDownloadBudgetForTests,
   base64ToBytes,
   bytesToBase64,
   createZenCustomBlobs,
@@ -71,7 +69,13 @@ class FakeBlobs implements ZenCustomBlobs {
   }
 }
 
+/** The daemon's hourly budget, faked as one ledger every client shares
+ *  (`POST /cli/zen/downloads/spend`): 30 files an hour per widget. */
+const HOURLY_FILES = 30
+const daemonLedger = new Map<string, number[]>()
+
 class FakeDownloads implements ZenCustomDownloads {
+  constructor(private readonly clock: { t: number }) {}
   press = true
   saved: Array<{ name: string; bytes: number[] }> = []
   answer: string | null = '/Users/x/Downloads/Board (1).png'
@@ -83,6 +87,14 @@ class FakeDownloads implements ZenCustomDownloads {
   async consent(ask: { name: string; size: number }): Promise<boolean> {
     this.asked.push(ask)
     return this.consentAnswer
+  }
+  async spend(_size: number): Promise<string | null> {
+    const key = 'g-test0001/board-lite'
+    const recent = (daemonLedger.get(key) ?? []).filter((at) => this.clock.t - at < 3_600_000)
+    if (recent.length >= HOURLY_FILES) return 'at most 30 downloads an hour from one widget'
+    recent.push(this.clock.t)
+    daemonLedger.set(key, recent)
+    return null
   }
   async save(name: string, read: DownloadSliceReader): Promise<string | null> {
     const out: number[] = []
@@ -101,7 +113,7 @@ class FakeDownloads implements ZenCustomDownloads {
 function harness(caps = ['store:read', 'store:write', 'downloads:save']) {
   const clock = { t: 1_000_000 }
   const blobs = new FakeBlobs()
-  const downloads = new FakeDownloads()
+  const downloads = new FakeDownloads(clock)
   const inner = { widgetId: 'board', caps: new Set<string>(), call: () => null } as unknown as ZenWidgetBridge
   const deps: ZenCustomLayerDeps = {
     widget: () => payload(caps),
@@ -229,7 +241,7 @@ const PNG = (): ArrayBuffer => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0
 const TXT = (s = 'hello'): ArrayBuffer => new TextEncoder().encode(s).buffer as ArrayBuffer
 
 describe('k2.download: a press, the rate, the name and the 60 s ticket (GS2, GS3, GS7)', () => {
-  beforeEach(() => __resetZenDownloadBudgetForTests())
+  beforeEach(() => daemonLedger.clear())
 
   it('saves bytes after a press and answers the name it landed as, never a path', async () => {
     const h = harness()
@@ -290,13 +302,14 @@ describe('k2.download: a press, the rate, the name and the 60 s ticket (GS2, GS3
     expect(code(await h.send('downloads.save', ['over.txt', null, {}], TXT()))).toBe('rate_limited')
   })
 
-  it('has an hourly budget per widget that a reload doesn’t reset (review #1)', async () => {
+  it('two clients share the daemon’s hourly budget for a widget (review #1)', async () => {
     const h = harness()
-    for (let i = 0; i < ZEN_DOWNLOAD_HOURLY.files; i++) {
+    for (let i = 0; i < HOURLY_FILES; i++) {
       h.clock.t += 7_000
       ok(await h.send('downloads.save', [`n${i}.txt`, null, {}], TXT()))
     }
-    // A new layer (the frame reloaded) for the same widget: still spent.
+    // Another client (a second window, the web client, after a restart):
+    // the daemon's budget is already spent for this widget.
     const again = harness()
     again.clock.t = h.clock.t + 7_000
     expect(code(await again.send('downloads.save', ['more.txt', null, {}], TXT()))).toBe('rate_limited')

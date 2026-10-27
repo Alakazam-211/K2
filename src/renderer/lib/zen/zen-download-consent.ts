@@ -46,6 +46,20 @@ export async function allowZenDownloadWidget(gardenId: string, widget: string): 
   await daemonCliPost(zenLocalScope(), 'zen/downloads/allow', { garden: gardenId, widget })
 }
 
+/** `POST /cli/zen/downloads/spend`: the daemon's hourly budget for this
+ *  Garden's widget, shared by every client. Null when the save fits (and is
+ *  counted), else the reason. */
+export async function spendZenDownload(gardenId: string, widget: string, bytes: number): Promise<string | null> {
+  const r = await daemonCliPost<{ allowed?: unknown; reason?: unknown }>(zenLocalScope(), 'zen/downloads/spend', {
+    garden: gardenId,
+    widget,
+    bytes,
+  })
+  if (r.allowed === true) return null
+  if (r.allowed === false) return typeof r.reason === 'string' && r.reason ? r.reason : 'the hour’s download budget is spent'
+  throw new Error('zen/downloads/spend answered without allowed')
+}
+
 export const daemonZenDownloadConsent: ZenDownloadConsentStore = {
   widgets: fetchZenDownloadWidgets,
   allow: allowZenDownloadWidget,

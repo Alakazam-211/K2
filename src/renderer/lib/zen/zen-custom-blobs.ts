@@ -29,29 +29,6 @@ export const ZEN_BYTE_VERBS: Readonly<Record<string, number>> = {
  *  no SVG either: it runs script when opened in a browser, security review #4). */
 export const ZEN_DOWNLOAD_EXTENSIONS: readonly string[] = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'json', 'csv', 'tsv', 'txt', 'md']
 
-/** Review #1 (belt and braces): per widget, per hour, however the frame
- *  reloads (this window's memory). */
-export const ZEN_DOWNLOAD_HOURLY = { bytes: 200 * 1024 * 1024, files: 30 } as const
-
-const downloadLedger = new Map<string, Array<{ at: number; bytes: number }>>()
-
-/** Spend one download of `bytes` for `widgetKey` at `now`, or a sentence
- *  why not (the hour's budget is spent). */
-export function zenDownloadBudget(widgetKey: string, bytes: number, now: number): string | null {
-  const recent = (downloadLedger.get(widgetKey) ?? []).filter((d) => now - d.at < 3_600_000)
-  const used = recent.reduce((n, d) => n + d.bytes, 0)
-  if (recent.length >= ZEN_DOWNLOAD_HOURLY.files) return `at most ${ZEN_DOWNLOAD_HOURLY.files} downloads an hour from one widget`
-  if (used + bytes > ZEN_DOWNLOAD_HOURLY.bytes) return `at most ${ZEN_DOWNLOAD_HOURLY.bytes / (1024 * 1024)} MiB of downloads an hour from one widget`
-  recent.push({ at: now, bytes })
-  downloadLedger.set(widgetKey, recent)
-  return null
-}
-
-/** Tests only. */
-export function __resetZenDownloadBudgetForTests(): void {
-  downloadLedger.clear()
-}
-
 /** What the bytes are, as far as a download needs to know (review #4: the
  *  name's extension must match). Null: none of the saved kinds. */
 export function zenSniffDownload(head: Uint8Array): 'png' | 'jpeg' | 'gif' | 'webp' | 'pdf' | 'text' | null {

@@ -99,7 +99,6 @@ import {
   ZEN_DOWNLOADS,
   isArrayBuffer,
   zenBytesReader,
-  zenDownloadBudget,
   zenDownloadMatches,
   zenDownloadName,
   type ZenCustomBlobs,
@@ -231,6 +230,9 @@ export interface ZenCustomDownloads {
   /** Security review #1 (belt and braces): K2's card the first time this
    *  widget saves a file in this Garden; true to go on. */
   consent(ask: { name: string; size: number }): Promise<boolean>
+  /** The daemon's hourly budget per Garden and widget (every client shares
+   *  it): null when this save fits and is counted, else why not. */
+  spend(size: number): Promise<string | null>
   /** K2's download lifecycle (`downloadChunks`): the path or file name it
    *  landed as, or null when the person cancelled or it failed (K2 said so). */
   save(name: string, read: DownloadSliceReader): Promise<string | null>
@@ -732,11 +734,12 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       }
       // Review #4: the name's extension must match the bytes.
       if (mismatch!) refuse('bad_args', `downloads.save: ${mismatch}`)
-      // Review #1: a per-widget budget per hour, whatever the frame says.
-      const over = zenDownloadBudget(`${deps.gardenId()}/${deps.widget().widget}`, size!, deps.now())
-      if (over) refuse('rate_limited', `downloads.save: ${over}.`)
       // Review #1: K2's own card the first time this widget saves a file.
       if (!(await d.consent({ name, size: size! }))) return { saved: false }
+      // Review #1: the daemon's budget per Garden and widget per hour,
+      // counted now that the save is authorised, shared by every client.
+      const over = await d.spend(size!)
+      if (over) refuse('rate_limited', `downloads.save: ${over}.`)
       const landed = await d.save(name, read!)
       if (landed === null) return { saved: false }
       return { saved: true, name: landed.split(/[\\/]/).pop() || name }

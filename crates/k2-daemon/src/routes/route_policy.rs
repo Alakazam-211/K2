@@ -1767,6 +1767,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/zen/downloads", Member),
     post("/cli/zen/downloads/allow", Member),
     post("/cli/zen/downloads/forget", Member),
+    post("/cli/zen/downloads/spend", Member),
     // Garden access (prd-garden-access-v1 G14), live only with the
     // `gardenAccess` switch on (`live_row`): GET the list (the person; a
     // passport learns whether it is listed), POST a change (the person);

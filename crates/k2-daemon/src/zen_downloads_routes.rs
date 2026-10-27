@@ -8,7 +8,13 @@
 //!                                                   (with garden: {ok, garden, widgets})
 //! POST /cli/zen/downloads/allow  {garden, widget} → {ok, garden, widget, added}
 //! POST /cli/zen/downloads/forget {garden, widget} → {ok, garden, widget, removed}
+//! POST /cli/zen/downloads/spend {garden, widget, bytes}
+//!                                                 → {ok, allowed, reason?}
 //! ```
+//!
+//! `spend` is the hourly budget per (Garden, widget), counted when the app
+//! authorises a save, whichever window or client asks (`k2_core::zen::
+//! downloads::spend`).
 //!
 //! Every route takes this computer's owner token only (the app, a terminal
 //! outside K2): "Always" is the person's answer on K2's own card, and only
@@ -28,7 +34,7 @@ use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
 
 pub const GET_ROUTES: &[&str] = &["/cli/zen/downloads"];
-pub const POST_ROUTES: &[&str] = &["/cli/zen/downloads/allow", "/cli/zen/downloads/forget"];
+pub const POST_ROUTES: &[&str] = &["/cli/zen/downloads/allow", "/cli/zen/downloads/forget", "/cli/zen/downloads/spend"];
 
 pub const OWNER_ONLY: &str = "Only the person decides which widgets save files to Downloads without asking (K2's card, the first time). Agents can't read or change that list.";
 
@@ -41,6 +47,18 @@ pub fn is_route(path: &str) -> bool {
 struct WidgetBody {
     garden: String,
     widget: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpendBody {
+    garden: String,
+    widget: String,
+    bytes: u64,
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 fn resp(status: &'static str, body: J) -> CliResponse {
@@ -83,6 +101,17 @@ pub fn run(zen_dir: &Path, path: &str, owner: bool, caller: &Caller, params: &Ha
             },
             None => resp("200 OK", json!({ "ok": true, "gardens": downloads::read(zen_dir).gardens })),
         },
+        "/cli/zen/downloads/spend" => {
+            let b: SpendBody = match serde_json::from_slice(body) {
+                Ok(b) => b,
+                Err(e) => return refuse("400 Bad Request", "bad_request", &format!("takes {{garden, widget, bytes}}: {e}")),
+            };
+            match downloads::spend(zen_dir, b.garden.trim(), b.widget.trim(), b.bytes, now_secs()) {
+                Ok(None) => resp("200 OK", json!({ "ok": true, "allowed": true })),
+                Ok(Some(why)) => resp("200 OK", json!({ "ok": true, "allowed": false, "reason": why })),
+                Err(e) => zen_err(e),
+            }
+        }
         "/cli/zen/downloads/allow" | "/cli/zen/downloads/forget" => {
             let b: WidgetBody = match serde_json::from_slice(body) {
                 Ok(b) => b,
@@ -118,7 +147,7 @@ mod tests {
 
     #[test]
     fn one_answer_for_every_client_owner_only_and_revocable() {
-        let d = std::env::temp_dir().join(format!("k2-zen-downloads-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("k2-zen-downloads-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos()));
         std::fs::create_dir_all(&d).expect("mkdir");
         let w = json!({"garden": "g-1", "widget": "board"});
         // Client A (one window) answers Always.
@@ -129,7 +158,12 @@ mod tests {
         assert_eq!(v["widgets"], json!(["board"]));
         // Agents can neither read nor change it; logins never reach it.
         let agent = Caller::Agent(AgentCaller { project_id: "w-1".into(), map_key: None, args: vec![], sandboxed: false });
-        for (p, body) in [("/cli/zen/downloads", J::Null), ("/cli/zen/downloads/allow", w.clone()), ("/cli/zen/downloads/forget", w.clone())] {
+        for (p, body) in [
+            ("/cli/zen/downloads", J::Null),
+            ("/cli/zen/downloads/allow", w.clone()),
+            ("/cli/zen/downloads/forget", w.clone()),
+            ("/cli/zen/downloads/spend", json!({"garden": "g-1", "widget": "board", "bytes": 1})),
+        ] {
             let (s, v) = call(&d, p, false, &agent, &[("garden", "g-1")], body);
             assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("owner_only")), "{p}: {v}");
         }
@@ -142,6 +176,16 @@ mod tests {
         assert_eq!(v["widgets"], json!([]));
         let (s, _) = call(&d, "/cli/zen/downloads/allow", true, &Caller::Owner, &[], json!({"garden": "g-1", "widget": "../x"}));
         assert_eq!(s, "400 Bad Request");
+        // Two clients (two windows, the web client) share one hourly budget:
+        // the daemon counts every save of the widget, whoever asks.
+        let spend = json!({"garden": "g-1", "widget": "board", "bytes": 10});
+        for i in 0..downloads::HOURLY_FILES {
+            let (s, v) = call(&d, "/cli/zen/downloads/spend", true, &Caller::Owner, &[], spend.clone());
+            assert_eq!((s.as_str(), v["allowed"].as_bool()), ("200 OK", Some(true)), "save {i} from client {}: {v}", i % 2);
+        }
+        let (_, v) = call(&d, "/cli/zen/downloads/spend", true, &Caller::Owner, &[], spend);
+        assert_eq!(v["allowed"].as_bool(), Some(false), "the hour's budget is spent for every client: {v}");
+        assert!(v["reason"].as_str().is_some_and(|r| r.contains("an hour")), "{v}");
         for p in POST_ROUTES {
             assert!(crate::zen_routes::POST_ROUTES.contains(p), "{p} is a zen POST row (405 on GET)");
             assert!(crate::routes::route_policy::lookup(p).is_some_and(|r| r.post.is_some()), "{p}: policy POST row");

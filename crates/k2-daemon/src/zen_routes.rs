@@ -77,6 +77,7 @@ pub const POST_ROUTES: &[&str] = &[
     // `k2.download` consent (0.46.5): owner token only (zen_downloads_routes).
     "/cli/zen/downloads/allow",
     "/cli/zen/downloads/forget",
+    "/cli/zen/downloads/spend",
     "/cli/zen/garden/check",
     "/cli/zen/garden/delete",
     "/cli/zen/garden/lock",

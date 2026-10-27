@@ -37,7 +37,7 @@ import { ZenPermissionSheet } from './ZenPermissionSheet'
 import { allowZenLinkSite, createZenLinks, fetchZenLinkSites, type ZenLinkAnswer, type ZenLinkAsk } from '@/lib/zen/zen-links'
 import { ZenLinkSheet } from './ZenLinkSheet'
 import { ZenDownloadSheet } from './ZenDownloadSheet'
-import { daemonZenDownloadConsent, zenDownloadConsent, type ZenDownloadAnswer, type ZenDownloadAsk } from '@/lib/zen/zen-download-consent'
+import { daemonZenDownloadConsent, spendZenDownload, zenDownloadConsent, type ZenDownloadAnswer, type ZenDownloadAsk } from '@/lib/zen/zen-download-consent'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { gardenBlobGet, gardenBlobPut, gardenCall, type GardenBlobPlace } from '@/lib/garden-data/garden-data-api'
 import { createZenCustomBlobs } from '@/lib/zen/zen-custom-blobs'
@@ -341,6 +341,8 @@ export function ZenCustomFrame({
                 },
                 (ask) => new Promise<ZenDownloadAnswer>((resolve) => setDownloadAsk({ ask, resolve })),
               ),
+            // Review #1: the daemon's hourly budget, shared by every client.
+            spend: (size) => spendZenDownload(gardenId, widgetRef.current.widget, size),
             // Review #4: a file a widget made is quarantined on macOS.
             save: (name, read) => downloadChunks(name, read, { quarantine: true }),
           },

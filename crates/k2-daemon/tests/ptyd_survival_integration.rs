@@ -110,6 +110,8 @@ struct Harness {
     ptyd_pid: Option<i32>,
     /// `K2_PTYD` for the daemon (`None`: unset, the default switch).
     ptyd_env: Option<&'static str>,
+    /// Extra env for the next `start` (S7 test knobs).
+    extra_env: Vec<(String, String)>,
 }
 
 impl Drop for Harness {
@@ -151,7 +153,7 @@ impl Harness {
         std::fs::create_dir_all(home.join("xdg")).unwrap();
         std::fs::create_dir_all(home.join("tmp")).unwrap();
         let k2 = home.join(".k2");
-        Harness { home, k2, daemon: None, boots: 0, agent_pid: None, ptyd_pid: None, ptyd_env: Some("1") }
+        Harness { home, k2, daemon: None, boots: 0, agent_pid: None, ptyd_pid: None, ptyd_env: Some("1"), extra_env: Vec::new() }
     }
 
     fn start(&mut self) -> u16 {
@@ -172,6 +174,7 @@ impl Harness {
             .env("HOME", &self.home)
             .env("XDG_RUNTIME_DIR", self.home.join("xdg"))
             .env("TMPDIR", self.home.join("tmp"))
+            .envs(self.extra_env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .env("K2_TEST_AGENT_SHIM_DIR", agent.parent().unwrap())
             .env("K2_TUNNEL_LEASE", "off")
             .env("K2_CONNECT_BASE", "http://127.0.0.1:1")
@@ -932,6 +935,125 @@ fn a_restart_never_fires_a_heartbeat_twice_and_fires_land_in_the_adopted_agent()
     assert_eq!(s, 200, "stop: {b}");
     h.wait_daemon_exit(Duration::from_secs(20));
     wait_for("the heartbeat agent to end after a stop", Duration::from_secs(10), || (!alive(pid)).then_some(()));
+    wait_for("ptyd to exit after a stop", Duration::from_secs(10), || (!alive(ptyd)).then_some(()));
+    h.agent_pid = None;
+    h.ptyd_pid = None;
+    let _ = std::fs::remove_dir_all(&h.home);
+}
+
+/// S7 (PRD §7.10, P63–P65): a restarted daemon that finds an OLDER ptyd
+/// below its minimum upgrades it in place (exec) at B0, then adopts. The
+/// agent keeps running under the same ptyd pid, no `seq` line is lost or
+/// doubled, unattended stdin stays empty (P75), and the next restart does
+/// not upgrade again.
+///
+/// The "old" ptyd is pre-launched before the first daemon boot:
+/// `K2_PTYD_PRELAUNCH_BIN` (the compatibility run sets a 0.46.3/0.46.4
+/// k2-ptyd), else this tree's debug k2-ptyd reporting 0.0.1
+/// (`K2_PTYD_TEST_VERSION`). A 0.1.x ptyd can't exec-upgrade: it answers
+/// `unsupported`, and the daemon must keep it and adopt as before (P66).
+#[test]
+fn a_restart_upgrades_an_old_ptyd_in_place_or_keeps_one_that_cannot() {
+    let mut h = Harness::new("up");
+    let pre = std::env::var_os("K2_PTYD_PRELAUNCH_BIN").map(PathBuf::from).unwrap_or_else(|| bin("K2_PTYD_BIN", "k2-ptyd"));
+    assert!(pre.is_file(), "K2_PTYD_PRELAUNCH_BIN {} is not a file", pre.display());
+    let out = Command::new(&pre).arg("--version").output().expect("prelaunch --version");
+    let real = k2_core::terminal::ptyd::client::parse_version_line(&String::from_utf8_lossy(&out.stdout))
+        .unwrap_or_else(|| panic!("{} is not a k2-ptyd: {out:?}", pre.display()));
+    let can_upgrade = k2_ptyd::proto::parse_version(&real) >= Some((0, 2, 0));
+    // A ptyd that can upgrade is told to look old; an old one IS old.
+    let running = if can_upgrade { "0.0.1".to_string() } else { real.clone() };
+    let head = k2_ptyd::proto::PTYD_VERSION;
+    let st = Command::new(&pre)
+        .arg("--launch")
+        .env_clear()
+        .env("K2_HOME", &h.k2)
+        .env("HOME", &h.home)
+        .env("PATH", "/usr/bin:/bin")
+        .env("TMPDIR", h.home.join("tmp"))
+        .env("K2_PTYD_TEST_VERSION", "0.0.1")
+        .status()
+        .expect("launch the old ptyd");
+    assert!(st.success(), "prelaunch: {st}");
+    let ptyd: i32 = wait_for("the old ptyd's lock", Duration::from_secs(10), || {
+        std::fs::read_to_string(h.k2.join("run/ptyd/lock")).ok()?.trim().parse().ok()
+    });
+    h.ptyd_pid = Some(ptyd);
+
+    // Boot 1: the minimum is the running version: no upgrade.
+    h.extra_env = vec![("K2_PTYD_TEST_MIN_VERSION".into(), running.clone())];
+    let port = h.start();
+    let token = h.token();
+    let log1 = std::fs::read_to_string(h.home.join("daemon-1.log")).unwrap_or_default();
+    assert!(log1.contains(&format!("owner connected (ptyd v{running}")), "boot 1 did not use the prelaunched ptyd");
+    assert!(!log1.contains("upgrading k2-ptyd"), "boot 1 upgraded although the ptyd was at the minimum");
+    let dir = h.home.join("agent-up");
+    let body = serde_json::json!({
+        "agent_name": "tab-upgrade",
+        "cwd": h.home.join("ws").to_string_lossy(),
+        "command": "k2-ptyd-test-agent",
+        "args": ["survive", dir.to_string_lossy(), "50"],
+        "cols": 100,
+        "rows": 30,
+    })
+    .to_string();
+    let (s, resp) = http(port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &body);
+    assert_eq!(s, 200, "v2 spawn: {resp}");
+    let sid = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["sessionId"].as_str().expect("sessionId").to_string();
+    let pid: i32 = wait_for("agent pid file", Duration::from_secs(15), || std::fs::read_to_string(dir.join("pid")).ok()?.trim().parse().ok());
+    h.agent_pid = Some(pid);
+    assert_eq!(parent_pid(pid), ptyd, "the agent runs under the prelaunched ptyd");
+    let mut past = assert_no_gap(port, &token, &sid, 0, "spawn");
+
+    // Boot 2: the minimum is now this tree's version: B0 upgrades (or, for
+    // a 0.1.x ptyd, tries and keeps it), then B1 adopts.
+    unsafe { libc::kill(h.daemon_pid(), libc::SIGTERM) };
+    h.wait_daemon_exit(Duration::from_secs(20));
+    assert!(alive(pid) && alive(ptyd), "agent and ptyd outlive the daemon");
+    std::thread::sleep(Duration::from_millis(500));
+    h.extra_env = vec![("K2_PTYD_TEST_MIN_VERSION".into(), head.to_string())];
+    let port = h.start();
+    let token = h.token();
+    let log2 = std::fs::read_to_string(h.home.join("daemon-2.log")).unwrap_or_default();
+    let ptyd_log = std::fs::read_to_string(h.k2.join("logs/ptyd.log")).unwrap_or_default();
+    if can_upgrade {
+        assert!(log2.contains(&format!("upgraded k2-ptyd in place: v{running} -> v{head}")), "boot 2 did not upgrade ptyd:\n{log2}");
+        assert!(ptyd_log.contains(&format!("upgrade: v{head} -> v{head}")) && ptyd_log.contains("resumed v"), "{ptyd_log}");
+    } else {
+        assert!(log2.contains("k2-ptyd upgrade not done (unsupported"), "boot 2 should try, be refused and keep the old ptyd:\n{log2}");
+    }
+    assert_eq!(std::fs::read_to_string(h.k2.join("run/ptyd/lock")).unwrap().trim(), ptyd.to_string(), "same ptyd process");
+    assert!(alive(pid), "the agent died in the upgrade");
+    assert_eq!(parent_pid(pid), ptyd, "still the same ptyd's child (waitpid parent kept)");
+    assert!(!dir.join("sighup").exists(), "the agent got a SIGHUP");
+    assert!(log2.contains(&format!("adopted session={sid}")), "boot 2 did not adopt the session:\n{log2}");
+    past = assert_no_gap(port, &token, &sid, past, "the upgrade restart");
+    let stdin = std::fs::read(dir.join("stdin")).unwrap_or_default();
+    assert!(stdin.is_empty(), "unsolicited bytes reached the agent across the upgrade: {stdin:?}");
+    let (s, b) = http(port, "GET", &format!("/boot-status?token={token}"), "");
+    assert_eq!(s, 200, "boot-status: {b}");
+    let bs: serde_json::Value = serde_json::from_str(&b).unwrap();
+    assert_eq!((bs["ptyd"].as_str(), bs["adopted"].as_u64()), (Some("on"), Some(1)), "{b}");
+
+    // Boot 3: a plain restart. An upgraded ptyd is current now: no second
+    // upgrade; an old one is tried again and kept again.
+    unsafe { libc::kill(h.daemon_pid(), libc::SIGTERM) };
+    h.wait_daemon_exit(Duration::from_secs(20));
+    let port = h.start();
+    let token = h.token();
+    let log3 = std::fs::read_to_string(h.home.join("daemon-3.log")).unwrap_or_default();
+    if can_upgrade {
+        assert!(!log3.contains("upgrading k2-ptyd"), "boot 3 upgraded an already-current ptyd:\n{log3}");
+        assert!(log3.contains(&format!("owner connected (ptyd v{head}")), "{log3}");
+    }
+    assert!(alive(pid));
+    assert_no_gap(port, &token, &sid, past, "the restart after the upgrade");
+    assert!(std::fs::read(dir.join("stdin")).unwrap_or_default().is_empty(), "unsolicited stdin after boot 3");
+
+    let (s, b) = http(port, "POST", &format!("/cli/daemon/stop?token={token}"), "");
+    assert_eq!(s, 200, "stop: {b}");
+    h.wait_daemon_exit(Duration::from_secs(20));
+    wait_for("the agent to end after a stop", Duration::from_secs(10), || (!alive(pid)).then_some(()));
     wait_for("ptyd to exit after a stop", Duration::from_secs(10), || (!alive(ptyd)).then_some(()));
     h.agent_pid = None;
     h.ptyd_pid = None;

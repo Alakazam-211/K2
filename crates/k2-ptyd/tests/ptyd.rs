@@ -709,3 +709,301 @@ fn check_live_env(c: &mut Client, pid: i32, home: &Path) {
         assert!(!env.contains("leak-me-not") && !env.contains("NOTIFY_SOCKET"), "{env}");
     }
 }
+
+// ------------------------------------------------------------------ 6 (S7)
+
+/// `seq=<n> ` tokens of a stream, in order.
+fn seq_numbers(bytes: &[u8]) -> Vec<u64> {
+    String::from_utf8_lossy(bytes).split_whitespace().filter_map(|t| t.strip_prefix("seq=")?.parse().ok()).collect()
+}
+
+fn assert_consecutive(seqs: &[u64], what: &str) {
+    assert!(seqs.len() > 10, "{what}: too few seq lines: {seqs:?}");
+    let bad: Vec<_> = seqs.windows(2).filter(|w| w[1] != w[0] + 1).collect();
+    assert!(bad.is_empty(), "{what}: seq not consecutive at {bad:?}");
+}
+
+/// Read a data stream until `acc` holds at least `n` more bytes.
+fn read_more(r: &mut impl Read, acc: &mut Vec<u8>, n: usize, within: Duration) {
+    let want = acc.len() + n;
+    let t = Instant::now();
+    let mut buf = [0u8; 4096];
+    while acc.len() < want {
+        assert!(t.elapsed() < within, "stream stalled at {} bytes (wanted {want})", acc.len());
+        match r.read(&mut buf) {
+            Ok(0) => panic!("stream closed at {} bytes (wanted {want})", acc.len()),
+            Ok(k) => acc.extend_from_slice(&buf[..k]),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => continue,
+            Err(e) => panic!("read: {e}"),
+        }
+    }
+}
+
+fn session<'a>(list: &'a [k2_ptyd::proto::SessionInfo], sid: &str) -> &'a k2_ptyd::proto::SessionInfo {
+    list.iter().find(|s| s.sid == sid).unwrap_or_else(|| panic!("no session {sid} in {list:?}"))
+}
+
+fn list(c: &mut Client) -> Vec<k2_ptyd::proto::SessionInfo> {
+    match c.request(Request::List).unwrap() {
+        Reply::Sessions { sessions } => sessions,
+        other => panic!("list: {other:?}"),
+    }
+}
+
+fn sh(c: &mut Client, home: &Home, sid: &str, script: &str) -> i32 {
+    match c
+        .request(Request::Spawn {
+            sid: sid.into(),
+            argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
+            env: agent_env(home),
+            cwd: None,
+            cols: 80,
+            rows: 24,
+            ring_bytes: None,
+            meta: serde_json::json!({"label": sid}),
+        })
+        .unwrap()
+    {
+        Reply::Spawned { pid, .. } => pid,
+        other => panic!("spawn {sid}: {other:?}"),
+    }
+}
+
+/// The owner connection ends right after `ok` (the exec closes it).
+fn assert_dropped(c: &mut Client) {
+    // macOS refuses setsockopt on a socket the peer already closed (EINVAL):
+    // that is the drop this asserts.
+    match c.conn.set_timeout(Some(Duration::from_secs(10))) {
+        Ok(()) => {}
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {}
+        Err(e) => panic!("set_timeout: {e}"),
+    }
+    loop {
+        match c.next_event() {
+            Ok(Reply::OrphanWarning { .. }) | Ok(Reply::Exited { .. }) => continue,
+            Ok(other) => panic!("expected the connection to drop after the upgrade, got {other:?}"),
+            Err(_) => return,
+        }
+    }
+}
+
+fn probe_fds_after(c: &mut Client, home: &Home, sid: &str) -> serde_json::Value {
+    let out = home.root.join(format!("{sid}.json"));
+    spawn_agent(c, home, sid, &["probe", out.to_str().unwrap()], None);
+    let mut pr = c.attach(sid, 0).unwrap();
+    read_until(&mut pr, "PROBE_DONE", Duration::from_secs(10));
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    v["fds"].clone()
+}
+
+/// P63 (§7.10): `upgrade` execs the new image in place. Same ptyd pid, same
+/// children, same boot id and key; rings carry over byte-exact (a stream
+/// reattached at its offset continues with no gap and no duplicate); held
+/// fds are still held; an exited-unacked record keeps its code; a child
+/// that exits after the upgrade gets its exit code delivered; the new image
+/// is non-dumpable again and leaks no inherited fd to a new child.
+#[test]
+fn upgrade_execs_in_place_keeping_pid_children_rings_and_fds() {
+    let home = Home::new(false);
+    let mut p = Ptyd::start(&home, &[("K2_PTYD_TEST_VERSION", "0.0.1")]);
+    let ptyd_pid = p.pid();
+    let mut c = owner(&home);
+    assert_eq!(c.hello.ptyd_version, "0.0.1", "the test knob makes this ptyd look old");
+    let boot = c.hello.boot_id.clone();
+    let key_before = std::fs::read(&home.paths().key).unwrap();
+
+    // An exited-unacked record with a known ring.
+    spawn_agent(&mut c, &home, "burst", &["burst", "5"], None);
+    assert_eq!(wait_exited(&mut c, "burst", Duration::from_secs(10)), (Some(0), None));
+    // A live stream, read up to an exact offset.
+    let seq_pid = spawn_agent(&mut c, &home, "seq", &["seq"], None);
+    let mut s = c.attach("seq", 0).unwrap();
+    assert_eq!(s.start, 0);
+    let mut before = Vec::new();
+    read_more(&mut s, &mut before, 400, Duration::from_secs(10));
+    // Children that exit after the upgrade: on input, and on their own.
+    let sh42 = sh(&mut c, &home, "sh42", "read x; exit 42");
+    let sh9 = sh(&mut c, &home, "sh9", "sleep 2; exit 9");
+    // Held fds: a unix listener with a queued connection, and a TCP listener.
+    let path = home.root.join("cell.sock");
+    assert_eq!(
+        c.request(Request::HoldUnixListener { name: "cell:a".into(), path: path.to_string_lossy().into(), mode: 0o600, owner_uid: None }).unwrap(),
+        Reply::Ok
+    );
+    drop(c.take_fd().expect("listener fd"));
+    let mut early = std::os::unix::net::UnixStream::connect(&path).unwrap();
+    early.write_all(b"queued").unwrap();
+    let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let tcp_addr = tcp.local_addr().unwrap();
+    assert_eq!(c.request_with_fd(Request::HoldFd { name: "main".into() }, &tcp).unwrap(), Reply::Ok);
+    drop(tcp);
+    let pids_before: Vec<(String, i32)> = list(&mut c).into_iter().map(|s| (s.sid, s.pid)).collect();
+    let burst_before = session(&list(&mut c), "burst").clone();
+
+    assert_eq!(c.request(Request::Upgrade { exe: PTYD.into() }).unwrap(), Reply::Ok);
+    assert_dropped(&mut c);
+    let mut rest = Vec::new();
+    s.read_to_end(&mut rest).unwrap(); // the stream closed too
+    before.extend_from_slice(&rest);
+    let offset = before.len() as u64;
+
+    // Same process: our Child handle still runs, the lock names it.
+    assert!(p.child.try_wait().unwrap().is_none(), "ptyd exited during the upgrade");
+    wait_listening(&home.paths());
+    let mut c = owner(&home);
+    assert_eq!(c.hello.ptyd_version, k2_ptyd::proto::PTYD_VERSION, "the new image runs (the exec env drops the test knob)");
+    assert_eq!(c.hello.boot_id, boot, "the boot id is kept across the upgrade");
+    assert_eq!(std::fs::read(&home.paths().key).unwrap(), key_before, "the key file is unchanged");
+    assert_eq!(std::fs::read_to_string(&home.paths().lock).unwrap().trim(), ptyd_pid.to_string());
+    let after_list = list(&mut c);
+    let pids_after: Vec<(String, i32)> = after_list.iter().map(|s| (s.sid.clone(), s.pid)).collect();
+    assert_eq!(pids_after, pids_before, "same sessions, same child pids");
+    assert!(alive(seq_pid) && alive(sh42), "children kept running");
+    let burst = session(&after_list, "burst");
+    assert_eq!((burst.ring_start, burst.ring_end, &burst.state), (burst_before.ring_start, burst_before.ring_end, &burst_before.state));
+
+    // Reattach at the exact offset: no gap, no duplicate.
+    let mut s = c.attach("seq", offset).unwrap();
+    assert_eq!(s.start, offset, "the ring still covers the offset");
+    let mut after = Vec::new();
+    read_more(&mut s, &mut after, 400, Duration::from_secs(10));
+    let mut all = before.clone();
+    all.extend_from_slice(&after);
+    assert_consecutive(&seq_numbers(&all), "seq across the upgrade");
+    // And the ring from 0 is byte-identical to what the stream delivered.
+    let mut again = c.attach("seq", 0).unwrap();
+    let mut from0 = Vec::new();
+    read_more(&mut again, &mut from0, all.len(), Duration::from_secs(10));
+    assert!(from0[..all.len()] == all[..], "ring bytes differ from the live stream across the upgrade");
+    // The exited record's ring.
+    let mut b = c.attach("burst", 0).unwrap();
+    let mut got = Vec::new();
+    b.read_to_end(&mut got).unwrap();
+    assert_eq!(got.len() as u64, burst.ring_end - burst.ring_start);
+    assert!(got == pattern_at(burst.ring_start, got.len()), "exited ring byte-exact");
+
+    // Held fds survived.
+    assert_eq!(c.request(Request::TakeFd { name: "cell:a".into() }).unwrap(), Reply::Ok);
+    let l = std::os::unix::net::UnixListener::from(c.take_fd().unwrap());
+    let (mut acc, _) = l.accept().unwrap();
+    let mut q = [0u8; 6];
+    acc.read_exact(&mut q).unwrap();
+    assert_eq!(&q, b"queued");
+    assert_eq!(c.request(Request::TakeFd { name: "main".into() }).unwrap(), Reply::Ok);
+    assert_eq!(std::net::TcpListener::from(c.take_fd().unwrap()).local_addr().unwrap(), tcp_addr);
+
+    // Exit codes after the upgrade (waitpid still works: same parent).
+    let mut w = c.attach("sh42", 0).unwrap();
+    w.write_all(b"go\n").unwrap();
+    assert_eq!(wait_exited(&mut c, "sh42", Duration::from_secs(10)), (Some(42), None));
+    let t = Instant::now();
+    loop {
+        let l = list(&mut c);
+        if let SessionState::Exited { code, signal, .. } = &session(&l, "sh9").state {
+            assert_eq!((*code, *signal), (Some(9), None));
+            break;
+        }
+        assert!(t.elapsed() < Duration::from_secs(10), "sh9 never exited");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!alive(sh9) && !alive(sh42), "reaped, no zombies");
+
+    // The new image is hardened again and its env is the allowlist (P5).
+    let Reply::Pong { dumpable, env_keys, .. } = c.request(Request::Ping).unwrap() else { panic!("ping") };
+    if cfg!(target_os = "linux") {
+        assert_eq!(dumpable, Some(false), "exec resets dumpability; the new image must clear it again");
+    }
+    for k in &env_keys {
+        assert!(k2_ptyd::env_allowed(k), "{k} in the upgraded ptyd's env");
+    }
+    // S-2: a child spawned by the new image sees no inherited ptyd fd.
+    assert_eq!(probe_fds_after(&mut c, &home, "probe"), serde_json::json!([0, 1, 2]), "an fd the upgrade inherited leaked into a new child");
+
+    let log = std::fs::read_to_string(home.home.join("logs/ptyd.log")).unwrap();
+    assert!(log.contains(&format!("upgrade: v{0} -> v{0}", k2_ptyd::proto::PTYD_VERSION)), "{log}");
+    assert!(log.contains("resumed v"), "{log}");
+    assert_eq!(c.request(Request::Shutdown { end_sessions: true }).unwrap(), Reply::Ok);
+    assert!(p.wait_exit(Duration::from_secs(10)).success());
+    assert!(!alive(seq_pid));
+}
+
+fn script(home: &Home, name: &str, body: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let p = home.root.join(name);
+    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    p.to_string_lossy().into_owned()
+}
+
+/// P64: a selftest that fails, lies, hangs, asks for a downgrade or can't
+/// run (missing or relative path) is refused with `upgrade_failed`; the old
+/// image keeps serving on the same connection and the stream keeps flowing.
+#[test]
+fn a_bad_upgrade_is_refused_and_the_old_image_keeps_serving() {
+    let home = Home::new(false);
+    let _p = Ptyd::start(&home, &[("K2_PTYD_TEST_VERSION", "0.0.1")]);
+    let mut c = owner(&home);
+    let seq_pid = spawn_agent(&mut c, &home, "seq", &["seq"], None);
+    let mut s = c.attach("seq", 0).unwrap();
+    let mut seen = Vec::new();
+    read_more(&mut s, &mut seen, 100, Duration::from_secs(10));
+    c.conn.set_timeout(Some(Duration::from_secs(20))).unwrap();
+    let cases = [
+        ("relative", "k2-ptyd".to_string(), "absolute"),
+        ("missing", "/nonexistent/k2-ptyd".to_string(), "did not start"),
+        ("exit 1", script(&home, "fails.sh", "exit 1"), "exited"),
+        ("wrong format", script(&home, "fmt.sh", "echo ok 9.9.9 2"), "unexpected answer"),
+        ("downgrade", script(&home, "old.sh", "echo ok 0.0.0 1"), "downgrade"),
+        ("hangs", script(&home, "hang.sh", "sleep 30"), "timed out after 10 s"),
+    ];
+    for (what, exe, want) in cases {
+        let t = Instant::now();
+        match c.request(Request::Upgrade { exe }).unwrap() {
+            Reply::Error { code, detail } => {
+                assert_eq!(code, "upgrade_failed", "{what}");
+                assert!(detail.contains(want), "{what}: {detail}");
+            }
+            other => panic!("{what}: expected upgrade_failed, got {other:?}"),
+        }
+        if what == "hangs" {
+            assert!(t.elapsed() >= Duration::from_secs(9), "the selftest bound is 10 s");
+        }
+        assert!(matches!(c.request(Request::Ping).unwrap(), Reply::Pong { .. }), "{what}: the owner connection survives");
+        read_more(&mut s, &mut seen, 50, Duration::from_secs(10));
+    }
+    assert_consecutive(&seq_numbers(&seen), "seq through refused upgrades");
+    assert!(alive(seq_pid));
+    drop(c);
+    let again = Client::connect_owner(&home.paths(), "x", true).expect("reconnect");
+    assert_eq!(again.hello.ptyd_version, "0.0.1", "still the old image");
+}
+
+/// P64: an `execve` that fails after `ok` restores CLOEXEC and keeps the
+/// old image serving: the daemon reconnects (same boot id, old version),
+/// reattaches at its offset and nothing is lost.
+#[test]
+fn a_failed_exec_keeps_the_old_image_serving() {
+    let home = Home::new(false);
+    let _p = Ptyd::start(&home, &[("K2_PTYD_TEST_VERSION", "0.0.1"), ("K2_PTYD_TEST_FAIL_EXEC", "1")]);
+    let mut c = owner(&home);
+    let boot = c.hello.boot_id.clone();
+    let seq_pid = spawn_agent(&mut c, &home, "seq", &["seq"], None);
+    let mut s = c.attach("seq", 0).unwrap();
+    let mut seen = Vec::new();
+    read_more(&mut s, &mut seen, 200, Duration::from_secs(10));
+    assert_eq!(c.request(Request::Upgrade { exe: PTYD.into() }).unwrap(), Reply::Ok);
+    assert_dropped(&mut c);
+    let mut rest = Vec::new();
+    s.read_to_end(&mut rest).unwrap();
+    seen.extend_from_slice(&rest);
+    let mut c = owner(&home);
+    assert_eq!((c.hello.ptyd_version.as_str(), c.hello.boot_id.as_str()), ("0.0.1", boot.as_str()), "the old image, same instance");
+    let mut s = c.attach("seq", seen.len() as u64).unwrap();
+    read_more(&mut s, &mut seen, 200, Duration::from_secs(10));
+    assert_consecutive(&seq_numbers(&seen), "seq across a failed exec");
+    assert!(alive(seq_pid));
+    // S-2: the fds whose CLOEXEC the failed attempt cleared are CLOEXEC again.
+    assert_eq!(probe_fds_after(&mut c, &home, "probe"), serde_json::json!([0, 1, 2]));
+    let log = std::fs::read_to_string(home.home.join("logs/ptyd.log")).unwrap();
+    assert!(log.contains("upgrade_failed: exec"), "{log}");
+}

@@ -127,15 +127,38 @@ fn human_ttl(secs: i64) -> String {
 
 /// One test guest for the answers and the list.
 fn guest_json(app: &AppRow, username: &str, t: &tg::TestGuest) -> J {
+    let (role, rooms) = grant_view(&t.principal_id, &t.app);
     json!({
         "username": username,
         "app": app.app_id,
         "appServiceId": t.app,
+        "role": role,
+        "rooms": rooms,
         "expiresAt": t.expires_at,
         "expired": t.expired_at(deploy::now()),
         "createdBy": t.created_by,
         "createdAt": t.created_at,
     })
+}
+
+/// A principal's role name and room handles on ONE App's grant (where a
+/// test guest's role and rooms live; 0.46.5 item 15: `k2 app user list`
+/// showed "—" for both because it read only the box-level fields).
+pub(crate) fn grant_view(principal_id: &str, service_id: &str) -> (Option<String>, Vec<String>) {
+    let grants = skin::list_grants().unwrap_or_default();
+    let Some(g) = grants
+        .iter()
+        .find(|g| g.enabled && g.kind == "app" && g.subject_kind == "principal" && g.subject_id == principal_id && g.target_id == service_id)
+    else {
+        return (None, Vec::new());
+    };
+    let roles = skin::list_roles().unwrap_or_default();
+    let role = g.role_id.as_deref().and_then(|id| roles.iter().find(|r| r.id == id));
+    let room_ids: Vec<String> = match role {
+        Some(r) => r.rooms.clone(),
+        None => g.scope.as_deref().and_then(|s| serde_json::from_str::<Vec<String>>(s).ok()).unwrap_or_default(),
+    };
+    (role.map(|r| r.name.clone()), room_ids.iter().map(|id| super::routes::ws_handle(id)).collect())
 }
 
 /// POST `/cli/app/test-guest/add {app, username, role?, expires?, rooms?, password?}`.
@@ -168,7 +191,14 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
             let expires = s(&v, "expires");
             tg::parse_ttl(expires).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
             let role_id = role_of(&app, s(&v, "role"), true)?;
-            let ask = super::agent_grants::TestGuestAsk { username: &username, role_id: role_id.as_deref(), rooms: &rooms, expires, reason: s(&v, "reason") };
+            let ask = super::agent_grants::TestGuestAsk {
+                username: &username,
+                role_id: role_id.as_deref(),
+                rooms: &rooms,
+                expires,
+                reason: s(&v, "reason"),
+                password_given: s(&v, "password").is_some_and(|p| !p.is_empty()),
+            };
             return super::agent_grants::test_guest_held(who, ws, &app, &ask);
         }
     }

@@ -10978,7 +10978,12 @@ for h in helds:
         print("  owner: %s" % c["where"])
     if c.get("error") and (c["error"].get("hint") or c["error"].get("code")):
         print("  card not raised: %s" % (c["error"].get("hint") or c["error"].get("code")))
-    print(h.get("hint", ""))'
+    print(h.get("hint", ""))
+    # 0.46.5: a held test guest (no password is kept with the request).
+    if h.get("afterApproval"):
+        print(h["afterApproval"])
+    if h.get("passwordNotUsed"):
+        sys.stderr.write("note: %s\n" % (h.get("passwordNote") or "the password you sent was not used"))'
         fi
         exit 2
     fi
@@ -15180,6 +15185,17 @@ for u in users:
     else:
         handles=u.get("defaultRoomHandles") or u.get("default_room_handles") or []
     rooms=", ".join(handles) if handles else "—"
+    # 0.46.5: an App login keeps its role and rooms on its App grant.
+    if role == "—" and rooms == "—":
+        gs=[g for g in (u.get("appGrants") or []) if g.get("role") or g.get("rooms")]
+        if gs:
+            role=", ".join("%s (App %s)" % (g.get("role"), g.get("app") or g.get("appServiceId")) for g in gs if g.get("role")) or "—"
+            rh=[]
+            for g in gs:
+                for h in g.get("rooms") or []:
+                    if h not in rh:
+                        rh.append(h)
+            rooms=", ".join(rh) if rh else "—"
     email=u.get("email") or "—"
     full=u.get("fullName") or u.get("full_name") or "—"
     if u.get("nameSetBySelf") and full != "—":

@@ -211,6 +211,34 @@ fn status_json() -> CliResponse {
     }
 }
 
+/// Each principal's enabled App grants as the roster shows them:
+/// `{app, appServiceId, role, rooms}` (role name or null; room handles from
+/// the role, else the grant's own rooms scope).
+fn app_grants_by_principal() -> Result<HashMap<String, Vec<serde_json::Value>>, String> {
+    let grants = skin::list_grants()?;
+    let roles = skin::list_roles()?;
+    let mut out: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    for g in grants.iter().filter(|g| g.enabled && g.kind == "app" && g.subject_kind == "principal") {
+        let role = g.role_id.as_deref().and_then(|id| roles.iter().find(|r| r.id == id));
+        let room_ids: Vec<String> = match role {
+            Some(r) => r.rooms.clone(),
+            None => g.scope.as_deref().and_then(|s| serde_json::from_str::<Vec<String>>(s).ok()).unwrap_or_default(),
+        };
+        let app_id = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::deploy::store::get_app_by_service(&conn, &g.target_id).ok().flatten().map(|a| a.app_id)
+        };
+        out.entry(g.subject_id.clone()).or_default().push(serde_json::json!({
+            "app": app_id,
+            "appServiceId": g.target_id,
+            "role": role.map(|r| r.name.clone()),
+            "rooms": room_ids.iter().map(|id| crate::apps::routes::ws_handle(id)).collect::<Vec<_>>(),
+        }));
+    }
+    Ok(out)
+}
+
 pub fn handle_users_get() -> CliResponse {
     match skin::list_principals() {
         Ok(users) => {
@@ -234,6 +262,12 @@ pub fn handle_users_get() -> CliResponse {
                 Ok(m) => m,
                 Err(e) => return CliResponse::internal_error(e),
             };
+            // 0.46.5 (item 15): an App login's role and rooms live on its App
+            // grant, not the user row; the roster shows them per App.
+            let app_grants = match app_grants_by_principal() {
+                Ok(m) => m,
+                Err(e) => return CliResponse::internal_error(e),
+            };
             let users: Vec<serde_json::Value> = users
                 .iter()
                 .map(|u| {
@@ -254,6 +288,7 @@ pub fn handle_users_get() -> CliResponse {
                             v["tiedTo"] = serde_json::Value::Null;
                         }
                     }
+                    v["appGrants"] = serde_json::json!(app_grants.get(&u.id).cloned().unwrap_or_default());
                     v["storedEmailRefused"] = match email_refused.get(&u.id) {
                         Some(why) => serde_json::json!(why),
                         None => serde_json::Value::Null,

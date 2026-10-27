@@ -210,6 +210,16 @@ class H(BaseHTTPRequestHandler):
                              "subjectId": "w-1", "scope": "assistant:p-ann"}]
             self._send(200, json.dumps({"success": True, "cascaded": cascaded}))
             return
+        if path == "/cli/app/test-guest/add" and body.get("username") == "zz-held":
+            # 0.46.5 item 15: a held test guest; the CLI sent a password.
+            out = {"status": "held", "request": {"id": "w_held1", "summary": "make the test guest zz-held of rocore"},
+                   "hint": "held for the owner",
+                   "afterApproval": "Held for the owner. After approval, set its password once: k2 app user password zz-held --test --password-stdin."}
+            if body.get("password"):
+                out["passwordNotUsed"] = True
+                out["passwordNote"] = "the password you sent was not used or kept (a held request never stores one): set it once after the owner approves"
+            self._send(202, json.dumps(out))
+            return
         if path == "/cli/app/test-guest/add":
             self._send(200, json.dumps({"username": body.get("username"), "app": body.get("app"),
                                         "role": body.get("role") or None, "rooms": [], "expiresAt": 2000000000,
@@ -319,6 +329,9 @@ role_missing="$(run_k2 app grant role g-app 2>&1)"
 role_missing_rc=$?
 tg_role_out="$(run_k2 app user add rocore zz-rtest --test --role rtest-files 2>&1)"
 tg_role_rc=$?
+tg_held_out="$(printf 'piped-pw-1\n' | run_k2 app user add rocore zz-held --test --room r1 --password-stdin 2>/dev/null)"
+tg_held_rc=$?
+tg_held_err="$(printf 'piped-pw-1\n' | run_k2 app user add rocore zz-held --test --room r1 --password-stdin 2>&1 >/dev/null)"
 set -e
 assert_eq "grant list exit 0" "$list_rc" "0"
 assert_contains "list prints grant" "$list_out" "g1"
@@ -400,6 +413,9 @@ assert_eq "grant role without --role exit 1" "$role_missing_rc" "1"
 assert_eq "test guest add --role with a positional app: exit 0 (0.46.5 item 13)" "$tg_role_rc" "0"
 assert_not_contains "  no Connect --role refusal" "$tg_role_out" "Connect --role is not a skin command"
 assert_contains "  says it" "$tg_role_out" "Test guest zz-rtest of App rocore (role rtest-files"
+assert_eq "held test guest: exit 2 (0.46.5 item 15)" "$tg_held_rc" "2"
+assert_contains "  says the one password set after approval" "$tg_held_out" "Held for the owner. After approval, set its password once: k2 app user password zz-held --test --password-stdin."
+assert_contains "  the piped password is said to be unused" "$tg_held_err" "note: the password you sent was not used or kept"
 assert_contains "grant role usage" "$role_missing" "Usage: k2 app grant role <grant-id> --role <role>"
 seen="$(cat "$SEEN")"
 assert_contains "chat add body kind" "$seen" '"kind": "chat"'

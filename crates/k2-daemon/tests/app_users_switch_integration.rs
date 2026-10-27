@@ -412,3 +412,131 @@ async fn the_review_lines_hold_box_logins_one_password_keys_and_suspensions() {
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "an agent never takes over the owner's: {}", r.body);
     k2_daemon::apps::alerts::set_sink(None);
 }
+
+/// 0.46.5 item 15 (Agent NSI, 0.46.4): `k2 app user add <app> <name> --test
+/// --room R --expires 24h --password-stdin` held for the owner, approved;
+/// afterwards the roster showed role and rooms as "—" and login was 401.
+/// The approval carries every non-secret field (room scope, role,
+/// expiry) through the same add the direct path uses; the password is
+/// never kept, the answer and the card say so, and the agent's one
+/// password set then gives a login with the room's / role's caps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_test_guest_keeps_its_room_role_and_expiry_and_signs_in_after_the_one_password_set() {
+    let env = setup(&[]);
+    quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
+    let ws = seed_ws(&env, "uswh");
+    let agent = passport(&ws);
+    allow_build_only(&ws, true);
+    assert!(!k2_core::workspace::settings::agents_can_manage_app_users(&ws.id), "the switch is off: held");
+    let r = post(d.port, "/cli/app/install", &agent, json!({"app": "uswhapp"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let svc = r.json()["app"]["serviceId"].as_str().expect("serviceId").to_string();
+    // One of the App's own roles, with files in the agent's room.
+    let role_name = "uswh-files";
+    k2_core::skin::create_role_for_app(role_name, &Default::default(), Some(&svc)).expect("App role");
+    let caps = vec!["thread:read".to_string(), "thread:post".to_string(), "files:read".to_string()];
+    k2_core::skin::set_role_room(role_name, &ws.id, Some(&caps)).expect("role room");
+
+    let held_of = |r: &Resp| -> String {
+        assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
+        r.json()["request"]["id"].as_str().expect("id").to_string()
+    };
+    let stored_body = |id: &str| -> Value {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::app_grace::requests::get(&conn, id).expect("db").expect("stored").body
+    };
+    let grant_of = |user: &str| -> k2_core::skin::SkinGrant {
+        let p = k2_core::skin::list_principals().unwrap().into_iter().find(|p| p.username == user).unwrap_or_else(|| panic!("{user} made"));
+        k2_core::skin::list_grants()
+            .unwrap()
+            .into_iter()
+            .find(|g| g.kind == "app" && g.subject_id == p.id && g.target_id == svc)
+            .unwrap_or_else(|| panic!("{user}'s App grant"))
+    };
+
+    // ── 1. --room + --expires + a password on stdin: held, password unused ──
+    let before = k2_core::deploy::now();
+    let r = post(
+        d.port,
+        "/cli/app/test-guest/add",
+        &agent,
+        json!({"app": "uswhapp", "username": "zz-attach", "rooms": [ws.handle], "expires": "24h", "password": "piped-pw-should-not-stay-1"}),
+    )
+    .await;
+    let held = held_of(&r);
+    let v = r.json();
+    assert_eq!(
+        v["afterApproval"],
+        "Held for the owner. After approval, set its password once: k2 app user password zz-attach --test --password-stdin.",
+        "{v}"
+    );
+    assert_eq!(v["passwordNotUsed"], true, "the piped password is said to be unused: {v}");
+    let lines = v["request"]["diff"]["lines"].as_array().expect("card lines").iter().map(|l| l.as_str().unwrap_or("").to_string()).collect::<Vec<_>>();
+    assert!(lines.iter().any(|l| l.contains("k2 app user password zz-attach --test --password-stdin")), "the card says it: {lines:?}");
+    let body = stored_body(&held);
+    assert!(!body.to_string().contains("piped-pw-should-not-stay-1"), "never stored: {body}");
+    assert!(body["body"].get("password").is_none(), "{body}");
+    assert_eq!(body["body"]["expires"], "24h", "{body}");
+    assert_eq!(body["body"]["rooms"], json!([ws.id]), "{body}");
+
+    let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": held, "confirmToken": confirm("app-approve", &held)})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (200, json!("approved")), "{}", r.body);
+    let g = grant_of("zz-attach");
+    assert!(g.role_id.is_none(), "rooms, no role: {g:?}");
+    assert_eq!(g.scope.as_deref().map(|s| serde_json::from_str::<Vec<String>>(s).unwrap()), Some(vec![ws.id.clone()]), "the room scope: {g:?}");
+    let t = k2_core::skin::test_guests::list(Some(&svc)).unwrap();
+    let p = k2_core::skin::list_principals().unwrap().into_iter().find(|p| p.username == "zz-attach").unwrap();
+    let tg = t.iter().find(|t| t.principal_id == p.id).expect("a test guest");
+    assert!((tg.expires_at - (before + 24 * 3600)).abs() < 300, "24 h from the ask: {}", tg.expires_at - before);
+    // The roster and the test-guest list show the App grant's rooms.
+    let r = get(d.port, "/cli/skin/users", OWNER, "").await;
+    let row = r.json()["users"].as_array().unwrap().iter().find(|u| u["username"] == "zz-attach").cloned().expect("listed");
+    assert_eq!(row["appGrants"][0]["rooms"], json!([ws.handle]), "{row}");
+    let r = get(d.port, "/cli/app/test-guests", OWNER, "app=uswhapp").await;
+    let tgl = r.json()["testGuests"].as_array().unwrap().iter().find(|u| u["username"] == "zz-attach").cloned().expect("listed");
+    assert_eq!(tgl["rooms"], json!([ws.handle]), "{tgl}");
+
+    // No password yet: login refused; the one set; login gets the room.
+    let (pass, port) = open_link("uswhapp", &svc, &ws);
+    let login = |pw: &'static str, user: &'static str| {
+        let pass = pass.clone();
+        tokio::task::spawn_blocking(move || on_link(port, "/cli/skin/login", &pass, &json!({"username": user, "password": pw})))
+    };
+    let (status, body) = login("piped-pw-should-not-stay-1", "zz-attach").await.unwrap();
+    assert_eq!(status, 401, "the held password was never set: {body}");
+    let r = post(d.port, "/cli/app/test-guest/password", &agent, json!({"username": "zz-attach", "password": "attach-set-pw-123"})).await;
+    assert_eq!((r.status, r.json()["once"].clone()), (200, json!(true)), "{}", r.body);
+    let (status, body) = login("attach-set-pw-123", "zz-attach").await.unwrap();
+    assert_eq!(status, 200, "{body}");
+    let lv: Value = serde_json::from_str(&body).unwrap();
+    let access = lv["roomAccess"].as_array().unwrap_or_else(|| panic!("roomAccess: {lv}"));
+    assert!(access.iter().any(|a| a["handle"] == ws.handle.as_str()), "the room: {lv}");
+
+    // ── 2. --role + --expires: the role rides the approval ──
+    let r = post(d.port, "/cli/app/test-guest/add", &agent, json!({"app": "uswhapp", "username": "zz-roled", "role": role_name, "expires": "2h"})).await;
+    let held = held_of(&r);
+    assert!(r.json().get("passwordNotUsed").is_none(), "no password sent, no note: {}", r.body);
+    let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": held, "confirmToken": confirm("app-approve", &held)})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (200, json!("approved")), "{}", r.body);
+    let g = grant_of("zz-roled");
+    let role = k2_core::skin::list_roles().unwrap().into_iter().find(|r| r.name == role_name).expect("role");
+    assert_eq!(g.role_id.as_deref(), Some(role.id.as_str()), "the role: {g:?}");
+    let r = get(d.port, "/cli/skin/users", OWNER, "").await;
+    let row = r.json()["users"].as_array().unwrap().iter().find(|u| u["username"] == "zz-roled").cloned().expect("listed");
+    assert_eq!(row["appGrants"][0]["role"], role_name, "{row}");
+    let r = post(d.port, "/cli/app/test-guest/password", &agent, json!({"username": "zz-roled", "password": "roled-set-pw-123"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let (status, body) = login("roled-set-pw-123", "zz-roled").await.unwrap();
+    assert_eq!(status, 200, "{body}");
+    let lv: Value = serde_json::from_str(&body).unwrap();
+    let access = lv["roomAccess"].as_array().unwrap_or_else(|| panic!("roomAccess: {lv}"));
+    assert!(
+        access.iter().any(|a| a["handle"] == ws.handle.as_str() && a["caps"].as_array().is_some_and(|c| c.iter().any(|x| x == "files:read"))),
+        "the role's caps: {lv}"
+    );
+    gateway::close("uswhapp", None, true);
+    k2_daemon::apps::alerts::set_sink(None);
+}

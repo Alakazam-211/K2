@@ -455,6 +455,16 @@ pub(crate) struct TestGuestAsk<'a> {
     pub rooms: &'a [String],
     pub expires: Option<&'a str>,
     pub reason: Option<&'a str>,
+    /// The call carried a password: a held request never keeps one, so
+    /// the answer says it wasn't used (0.46.5, item 15).
+    pub password_given: bool,
+}
+
+/// What a held test guest's agent does after the approval (the answer and
+/// the owner's card say it; 0.46.5, item 15): the request never keeps a
+/// password, so the agent sets it once.
+pub(crate) fn test_guest_after_approval(username: &str) -> String {
+    format!("Held for the owner. After approval, set its password once: k2 app user password {username} --test --password-stdin.")
 }
 
 /// An agent's test guest without "Let this agent manage its Apps' users":
@@ -490,6 +500,10 @@ pub(crate) fn test_guest_held(who: &Who, ws: &str, app: &store::AppRow, a: &Test
             lines: vec![
                 format!("make the {what}"),
                 "it signs in only through the App's link, ends on its own and is tied to the agent".into(),
+                format!(
+                    "no password is kept with this request: after approval the agent sets it once (k2 app user password {} --test --password-stdin)",
+                    a.username
+                ),
             ],
             summary: format!("make the {what}"),
             why: format!("\"{SWITCH_NAME}\" is off for this agent"),
@@ -497,6 +511,16 @@ pub(crate) fn test_guest_held(who: &Who, ws: &str, app: &store::AppRow, a: &Test
         },
         true,
     )
+    .map(|mut out| {
+        out["afterApproval"] = json!(test_guest_after_approval(a.username));
+        if a.password_given {
+            out["passwordNotUsed"] = json!(true);
+            out["passwordNote"] = json!(
+                "the password you sent was not used or kept (a held request never stores one): set it once after the owner approves"
+            );
+        }
+        out
+    })
 }
 
 /// Room handles, comma-joined.

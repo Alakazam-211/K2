@@ -12231,15 +12231,39 @@ cmd_app_domain() {
     shift || true
     case "$verb" in
         add|rm) ;;
+        check|primary) cmd_app_domain_custom "$verb" "$@"; return ;;
         list) cmd_app_domains "$@"; return ;;
         -h|--help|"")
             cat <<'EOF'
-k2 app domain — more hostnames for an App (0.46.4)
+k2 app domain — more hostnames for an App (0.46.4; custom domains 0.46.6)
 
   k2 app domain add <app-id> <subdomain> [--transfer]
                                            <subdomain>.<box>.k2.dev serves the App
   k2 app domain rm <app-id> <subdomain>    back to what it served before (or removed)
-  k2 app domains <app-id>                  its own label, taken labels, attached ones
+  k2 app domains <app-id>                  its own label, taken labels, attached ones,
+                                           custom domains (state + the DNS to set)
+
+CUSTOM DOMAINS (a dotted name outside k2.dev)
+  k2 app domain add <app-id> app.customer.com
+                                           bind it; K2 shows the DNS records to set
+  k2 app domain check <app-id> app.customer.com
+                                           re-run the DNS + TXT checks now
+  k2 app domain primary <app-id> app.customer.com
+                                           K2_APP_ORIGIN once it is live
+  k2 app domain rm <app-id> app.customer.com
+                                           no longer served (cert files stay)
+
+  States: waiting_dns -> verifying -> issuing -> live (+ failing). Set, at
+  your DNS host, DNS-only (no proxy / Cloudflare grey cloud):
+    A      app.customer.com              <this box's public IP>
+    TXT    _k2-domain.app.customer.com   "k2-verify=<token>"
+  (K2 sets the TXT itself when k2.dev hosts the zone.) Once both show,
+  K2 gets the certificate itself (TLS-ALPN-01 through the box's :443
+  front, or DNS-01 on a k2.dev zone) and the name is live. Needs the :443
+  front on this box (the owner runs k2 front enable; Linux). The zone must
+  be attached first (k2 domain add <apex>, owner). K2 re-checks daily; DNS
+  pointing elsewhere for 7 days stops serving the name. A bound name is in
+  K2_APP_ORIGINS only once it is live; the App's k2.dev names stay.
 
   Any nested label your workspace holds, or one nobody holds yet (a label
   you pointed at a port with k2 publish subdomain create, say). K2 points
@@ -12267,6 +12291,10 @@ EOF
     _app_rt_post "/cli/app/domain/$verb" "$(_compute_json K2_CJ_app="$app" K2_CJ_label="$label" K2_CJ_transfer_b="$transfer")"
     _app_grace_done "$json_out"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    if printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; d = json.load(sys.stdin); sys.exit(0 if ("custom" in d or "removed" in d) else 1)'; then
+        printf '%s' "$_CP_BODY" | _app_custom_print
+        return 0
+    fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
@@ -12302,7 +12330,67 @@ print("%s  (its own label)" % host(v["own"]))
 for t in v.get("taken") or []:
     print("%s  (taken from --cmd service %s; k2 app label return to undo)" % (host(t), t.get("from")))
 for a in v.get("attached") or []:
-    print("%s  (attached by %s%s)" % (host(a), a.get("addedBy"), ("; was " + a["previousTarget"]) if a.get("previousTarget") else ""))'
+    print("%s  (attached by %s%s)" % (host(a), a.get("addedBy"), ("; was " + a["previousTarget"]) if a.get("previousTarget") else ""))
+for c in v.get("custom") or []:
+    print("%s   %s%s" % (c.get("hostname"), c.get("state"), "  primary" if c.get("primary") else ""))
+    print("  %s" % c.get("words"))
+    if c.get("lastError"):
+        print("  last check: %s" % c["lastError"])
+    if c.get("state") != "live":
+        for r in c.get("records") or []:
+            print("    %-5s %-40s %s" % (r.get("type"), r.get("name"), r.get("value")))
+    if c.get("next"):
+        print("  %s" % c["next"])'
+}
+
+# k2 app domain check|primary <app-id> <host> (0.46.6): re-run a custom
+# domain's DNS + TXT checks now; make it the App's primary origin.
+cmd_app_domain_custom() {
+    local verb="$1"
+    shift
+    local app="" host="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) cmd_app_domain --help; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; else host="$1"; fi; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$host" ]; } && { echo "usage: k2 app domain $verb <app-id> <host>" >&2; exit 2; }
+    _app_rt_post "/cli/app/domain/$verb" "$(_compute_json K2_CJ_app="$app" K2_CJ_host="$host")"
+    _app_grace_done "$json_out"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_custom_print
+}
+
+# Print one custom domain answer (add / check / primary).
+_app_custom_print() {
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("removed"):
+    print("%s no longer serves %s (%s)" % (v.get("app"), v["removed"], v.get("note") or ""))
+    sys.exit(0)
+if v.get("primary"):
+    print("primary: %s" % v["primary"])
+    print(v.get("note") or "")
+    sys.exit(0)
+c = v.get("custom") or {}
+print("%s   %s%s" % (c.get("hostname"), c.get("state"), "  (already bound)" if v.get("already") else ""))
+print("  %s" % c.get("words"))
+if c.get("lastError"):
+    print("  last check: %s" % c["lastError"])
+t = v.get("txt")
+if isinstance(t, dict) and t.get("planted"):
+    print("  K2 set the TXT record in your k2.dev zone")
+elif isinstance(t, dict) and t.get("why"):
+    print("  TXT not set by K2: %s" % t["why"])
+if c.get("state") != "live":
+    for r in c.get("records") or []:
+        print("    %-5s %-40s %s" % (r.get("type"), r.get("name"), r.get("value")))
+if c.get("next"):
+    print("  %s" % c["next"])'
 }
 
 cmd_app_warnings() {

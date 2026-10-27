@@ -228,3 +228,63 @@ describe('DomainsSection — the daemon re-checks pending domains (prd-dns-pendi
     expect(screen.queryByTestId('zone-missing-pending.example')).toBeNull()
   })
 })
+
+// 0.46.6 (prd-app-custom-domains-v1 §9.2, vs-live CD-A5): an App name says
+// "not served yet" until it is live, shows the TXT to set, and Check now
+// re-runs the daemon's DNS check.
+describe('DomainsSection — custom App names', () => {
+  const WAITING: DomainRow = {
+    ...ACTIVE,
+    apex: 'agentnsi.com',
+    names: [
+      {
+        hostname: 'nsi.agentnsi.com',
+        role: 'app:agentnsi',
+        cert: { state: 'issued', issuer: "Let's Encrypt" },
+        app: {
+          app: 'agentnsi',
+          state: 'waiting_dns',
+          live: false,
+          notServedYet: true,
+          words: 'not served yet: waiting for the DNS records',
+          lastError: 'TXT _k2-domain.nsi.agentnsi.com "k2-verify=ab12" is not visible yet',
+          txt: { type: 'TXT', name: '_k2-domain.nsi.agentnsi.com', value: 'k2-verify=ab12' },
+          served: 'elsewhere',
+        },
+      },
+    ],
+  }
+
+  it('a bound App name that nothing serves reads "not served yet", never just its cert', async () => {
+    listRows = [WAITING]
+    render(<DomainsSection />)
+    const chip = await screen.findByTestId('app-state-nsi.agentnsi.com')
+    expect(chip.textContent).toBe('not served yet · waiting dns')
+    expect(screen.getByText(/TXT _k2-domain\.nsi\.agentnsi\.com "k2-verify=ab12" \(DNS-only\)/)).toBeTruthy()
+  })
+
+  it('Check now POSTs /cli/app/domain/check with the App and host', async () => {
+    listRows = [WAITING]
+    postHandler = (path, body) => {
+      if (path === '/cli/app/domain/check') return { status: 200, body: { ok: true, app: body.app } }
+      throw new Error(`unexpected POST ${path}`)
+    }
+    render(<DomainsSection />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Check now' }))
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === '/cli/app/domain/check')?.body).toEqual({
+        app: 'agentnsi',
+        host: 'nsi.agentnsi.com',
+      }),
+    )
+  })
+
+  it('a live primary name reads live · primary', async () => {
+    const live = structuredClone(WAITING)
+    live.names[0].app = { ...live.names[0].app!, state: 'live', live: true, notServedYet: false, primary: true }
+    listRows = [live]
+    render(<DomainsSection />)
+    const chip = await screen.findByTestId('app-state-nsi.agentnsi.com')
+    expect(chip.textContent).toBe('live · primary')
+  })
+})

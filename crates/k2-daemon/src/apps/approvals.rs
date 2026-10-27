@@ -779,6 +779,9 @@ pub(crate) const MANAGE_HELD: &[&str] = &[
     // 0.46.4: extra subdomains onto an App.
     "/cli/app/domain/add",
     "/cli/app/domain/rm",
+    // 0.46.6: custom domains (check, primary).
+    "/cli/app/domain/check",
+    "/cli/app/domain/primary",
 ];
 
 thread_local! {
@@ -830,10 +833,15 @@ pub(crate) fn hold_without_switch(path: &str, who: &Who, body: &[u8]) -> Option<
         // The hostname a domain or label change is about (security review):
         // in the summary and the diff, so the owner sees what they approve.
         let host = (path.starts_with("/cli/app/domain/") || path.starts_with("/cli/app/label/"))
-            .then(|| s(&v, "label"))
+            .then(|| s(&v, "label").or_else(|| s(&v, "host")))
             .flatten()
             .map(|raw| match super::domains::label_of(raw) {
                 Ok(l) => l,
+                // 0.46.6: a custom domain is shown as the name it is.
+                Err(_) if super::domains::is_custom_host(raw) => match k2_core::domains::normalize_hostname(raw) {
+                    Ok(h) => h,
+                    Err(_) => format!("{:?}", raw.chars().take(80).collect::<String>()),
+                },
                 Err(_) => format!("{:?}", raw.chars().take(80).collect::<String>()),
             });
         let summary = match &host {

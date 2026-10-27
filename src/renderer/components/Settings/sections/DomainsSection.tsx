@@ -10,10 +10,33 @@ import { onDomainsChanged } from '@/stores/session-events'
 
 type CertState = { state: string; issuer?: string; expiresAt?: string | null }
 
+/** 0.46.6: a custom App name's serving state (daemon `custom_domains::status_json`). */
+export type AppNameStatus = {
+  app: string
+  state: string
+  live: boolean
+  notServedYet: boolean
+  words: string
+  primary?: boolean
+  served?: 'this_box' | 'elsewhere' | 'nothing'
+  lastError?: string | null
+  warning?: string
+  error?: string
+  txt?: { type: string; name: string; value: string }
+}
+
 type DomainNameRow = {
   hostname: string
   role: string
   cert?: CertState
+  app?: AppNameStatus
+}
+
+/** The chip for an App name: never "issued" for a name nothing serves. */
+export function appStateLabel(a: AppNameStatus): string {
+  if (a.error === 'unknown_app') return `not served · no App ${a.app}`
+  if (a.notServedYet) return `not served yet · ${a.state.replace('_', ' ')}`
+  return a.primary ? 'live · primary' : 'live'
 }
 
 export type DomainRow = {
@@ -193,6 +216,8 @@ export function DomainsSection(): React.JSX.Element {
   const [apex, setApex] = useState('')
   const [hostname, setHostname] = useState('')
   const [role, setRole] = useState('other')
+  const [appId, setAppId] = useState('')
+  const [apps, setApps] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [acmeEmail, setAcmeEmail] = useState('')
   const [acmeDir, setAcmeDir] = useState('')
@@ -269,12 +294,45 @@ export function DomainsSection(): React.JSX.Element {
     }
   }
 
+  // 0.46.6: the role picker's "App…" lists this server's Apps.
+  useEffect(() => {
+    if (role !== 'app' || apps.length > 0) return
+    void (async () => {
+      try {
+        const body = (await cliGet('/cli/app/list')) as {
+          apps?: { app?: string; appId?: string; id?: string }[]
+        }
+        const ids = (body.apps ?? [])
+          .map((a) => a.app ?? a.appId ?? a.id ?? '')
+          .filter((s) => s.length > 0)
+        setApps(ids)
+        if (ids.length > 0 && !appId) setAppId(ids[0])
+      } catch (e) {
+        setError(domainErrorText(e))
+      }
+    })()
+  }, [role, apps.length, appId])
+
+  const checkAppName = async (app: string, host: string) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await cliPost('/cli/app/domain/check', { app, host })
+      await refresh()
+    } catch (e) {
+      setError(domainErrorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const addName = async () => {
     const v = hostname.trim()
     if (!v || busy) return
+    if (role === 'app' && !appId) return
     setBusy(true)
     try {
-      await cliPost('/cli/domains/names', { hostname: v, role })
+      await cliPost('/cli/domains/names', { hostname: v, role: role === 'app' ? `app:${appId}` : role })
       setHostname('')
       await refresh()
     } catch (e) {
@@ -464,8 +522,45 @@ export function DomainsSection(): React.JSX.Element {
                     <span className="ml-2 text-[10px] text-[var(--color-text-muted)]">
                       {n.role} · cert {certLabel(n.cert)}
                     </span>
+                    {n.app && (
+                      <span
+                        data-testid={`app-state-${n.hostname}`}
+                        className={`ml-2 px-1 text-[10px] border border-[var(--color-border)] ${
+                          n.app.notServedYet
+                            ? 'text-[var(--color-text-muted)]'
+                            : 'text-[var(--color-accent)]'
+                        }`}
+                      >
+                        {appStateLabel(n.app)}
+                      </span>
+                    )}
+                    {n.app && n.app.notServedYet && (
+                      <span className="block mt-0.5 text-[10px] text-[var(--color-text-muted)] whitespace-normal">
+                        {n.app.words}
+                        {n.app.lastError ? ` — ${n.app.lastError}` : ''}
+                        {n.app.txt && (
+                          <span className="block font-mono">
+                            TXT {n.app.txt.name} &quot;{n.app.txt.value}&quot; (DNS-only)
+                          </span>
+                        )}
+                      </span>
+                    )}
+                    {n.app?.warning && (
+                      <span className="block mt-0.5 text-[10px] text-[var(--color-status-error)]">
+                        {n.app.warning}
+                      </span>
+                    )}
                   </span>
                   <span className="flex gap-2">
+                    {n.app && !n.app.error && (
+                      <button
+                        type="button"
+                        onClick={() => void checkAppName(n.app!.app, n.hostname)}
+                        className="text-[10px] text-[var(--color-accent)] no-drag cursor-pointer"
+                      >
+                        Check now
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => void issue(n.hostname)}
@@ -519,8 +614,17 @@ export function DomainsSection(): React.JSX.Element {
               { value: 'mail', label: 'mail' },
               { value: 'publish', label: 'publish' },
               { value: 'direct', label: 'direct' },
+              { value: 'app', label: 'App…' },
             ]}
           />
+          {role === 'app' && (
+            <SettingDropdown
+              value={appId}
+              onChange={setAppId}
+              ariaLabel="App"
+              options={apps.map((a) => ({ value: a, label: a }))}
+            />
+          )}
           <button
             type="button"
             onClick={() => void addName()}

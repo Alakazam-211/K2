@@ -1537,6 +1537,11 @@ async fn async_main() {
     // Skips under air-gap. Never Stalwart's or Caddy's own certificates.
     domains::renew::spawn();
 
+    // 0.46.6: custom App names (prd-app-custom-domains-v1 §6): the TXT +
+    // DNS re-checks (waiting every 10 min, served names daily) and the
+    // first certificate of a proven name. Nothing under air-gap.
+    crate::apps::custom_domain_flow::spawn_loop();
+
     // Hosted-mail backup B1: the churn observer (Linux, hostmail installed
     // only). One detached thread, first tick ~10 min after boot, then
     // hourly; lists the Stalwart store once a day. Never stops Stalwart,

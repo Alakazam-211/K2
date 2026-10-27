@@ -901,6 +901,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/domains",
         "/cli/app/domain/add",
         "/cli/app/domain/rm",
+        "/cli/app/domain/check",
+        "/cli/app/domain/primary",
         // 0.46.4: the move's steps; one owner request for the owner's.
         "/cli/app/move-plan",
         "/cli/app/move-plan/request",

@@ -243,6 +243,8 @@ pub const ROUTES: &[Route] = &[
     // as label take; passports their own workspace's Apps and labels).
     post("/cli/app/domain/add", Admin),
     post("/cli/app/domain/rm", Admin),
+    post("/cli/app/domain/check", Admin),
+    post("/cli/app/domain/primary", Admin),
     get("/cli/app/domains", Member),
     // Egress (S15): read and propose are Member (a passport sees its own
     // workspace's Apps); every new host is a held request; narrowing is

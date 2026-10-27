@@ -55669,6 +55669,10 @@ Server:
   k2 hostchat upgrade [--tarball FILE] [--media-tarball FILE] [--dry-run] [--no-wait] [--json]
                                             (--media-tarball: the sew-media release, needed when voice is on;
                                              waits for the result; exit 3 unless it is done)
+  k2 hostchat upgrade --accept-binary SHA256 [--tarball FILE] [...]
+                                            (the owner, from a terminal outside K2, with a confirm: upgrade
+                                             FROM a /usr/local/bin/sew K2 doesn't know, only if its sha256 is
+                                             exactly SHA256; the target is the pin; K2 never rolls back onto it)
   k2 hostchat restore <bundle-id> --confirm [--json]
   k2 hostchat rotate-master [--json]
   k2 hostchat config --public-url https://HOST [--json]
@@ -55942,7 +55946,7 @@ cmd_hostchat() {
         meet) _hostchat_meet "$@"; return ;;
     esac
     local as_json=0 tarball="" recovery="" identity="" voice=0 voice_flag=0 voice_url="" media_tarball="" node_ip="" wait=1
-    local health=0 dry=0 confirm=0 drop_grants=0 drop_prev=0 keep_backups=0 host="" public_url="" pos=()
+    local health=0 dry=0 confirm=0 drop_grants=0 drop_prev=0 keep_backups=0 host="" public_url="" accept_binary="" pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
@@ -55959,6 +55963,7 @@ cmd_hostchat() {
             --confirm) confirm=1; shift ;;
             --drop-grants) drop_grants=1; shift ;;
             --drop-prev) drop_prev=1; shift ;;
+            --accept-binary) accept_binary="${2:?--accept-binary SHA256}"; shift 2 ;;
             --keep-backups) keep_backups=1; shift ;;
             --confirm-hostname) host="${2:?--confirm-hostname HOST}"; shift 2 ;;
             --public-url) public_url="${2:?--public-url https://HOST}"; shift 2 ;;
@@ -56031,7 +56036,23 @@ if v.get("ok") is False:
             _hostchat_call GET /cli/sew/job "id=$(urlencode "${pos[0]}")"; _hostchat_print job "$as_json" ;;
         upgrade)
             local b; b="$(_compute_json K2_CJ_tarballPath="$(abs "$tarball")" K2_CJ_mediaTarballPath="$(abs "$media_tarball")" K2_CJ_dryRun_b="$dry")"
-            _hostchat_call POST /cli/sew/server/upgrade "$b"
+            if [ -n "$accept_binary" ]; then
+                # 0.46.5 item 12: the owner accepts exactly this binary,
+                # with a confirm bound to this install and that sha256.
+                accept_binary="$(printf '%s' "$accept_binary" | tr 'A-F' 'a-f')"
+                case "$accept_binary" in
+                    *[!0-9a-f]*) echo '{"error":"usage","hint":"--accept-binary is the binary'"'"'s sha256: 64 hex characters (k2 hostchat upgrade names it when it refuses)"}' >&2; exit 2 ;;
+                esac
+                [ "${#accept_binary}" -eq 64 ] || { echo '{"error":"usage","hint":"--accept-binary is the binary'"'"'s sha256: 64 hex characters"}' >&2; exit 2; }
+                _hostchat_person
+                local id tok; id="$(_hostchat_install_id)"
+                tok="$(_vault_confirm_token sew-accept-binary "$id:$accept_binary" "Upgrade Sew from a binary K2 doesn't know (sha256 $accept_binary)")" || exit 3
+                b="$(_compute_json K2_CJ_tarballPath="$(abs "$tarball")" K2_CJ_mediaTarballPath="$(abs "$media_tarball")" K2_CJ_dryRun_b="$dry" \
+                    K2_CJ_acceptBinary="$accept_binary" K2_CJ_confirmToken="$tok")"
+                _hostchat_call POST /cli/sew/server/upgrade "$b" tcp
+            else
+                _hostchat_call POST /cli/sew/server/upgrade "$b"
+            fi
             if [ "$wait" = "1" ] && [ "$(_hostchat_field state)" = "upgrading" ]; then
                 _hostchat_upgrade_wait "$as_json"
                 return $?

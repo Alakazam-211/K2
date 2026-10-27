@@ -139,6 +139,7 @@ fn unreleased_pin_refuses_every_install_verb_before_any_effect() {
         (vec!["engine", "sew", "install-bin"], vec![]),
         (vec!["engine", "sew", "install"], install_body().into_bytes()),
         (vec!["engine", "sew", "upgrade"], vec![]),
+        (vec!["engine", "sew", "upgrade", "accept-binary", "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385"], vec![]),
         (vec!["engine", "sew", "media", "install"], br#"{"public_url":"wss://voice.box.k2.dev"}"#.to_vec()),
         (vec!["engine", "sew", "media", "upgrade"], vec![]),
     ];
@@ -1754,4 +1755,125 @@ fn media_status_enable_disable_and_probe_record_argv_are_fixed() {
     ];
     assert_eq!(argv, want);
     assert_eq!(t.call(&["engine", "sew", "media", "probe-record", "yes", "ok", "ok"]).code, exit::ARGV);
+}
+
+
+// ── item 12 (0.46.5): an upgrade-only test build, an accepted binary ─────
+
+const UNKNOWN: &[u8] = b"#!/bin/sh\n# a Sew no pin vouches for\nexit 0\n";
+
+fn sha(bytes: &[u8]) -> String {
+    crate::sew::sha256_hex(bytes)
+}
+
+/// sewlab's case: the installed binary is an upgrade-only build (the
+/// fixture of [`TEST_UPGRADE_ONLY`]). Status says so (still not `known`),
+/// upgrade runs IT on the pin like any older release, and every other verb
+/// that runs Sew still refuses it.
+#[test]
+fn an_upgrade_only_test_build_upgrades_and_nothing_else_runs_it() {
+    let t = box_root();
+    install_binary(&t, TEST_UPGRADE_ONLY_STUB);
+    let v = json(&t.call(&["engine", "sew", "status"]));
+    assert_eq!(v["binary"]["known"], false, "not a release");
+    assert!(v["binary"]["version"].is_null(), "{v}");
+    assert_eq!(v["binary"]["upgradeOnly"]["version"], TEST_UPGRADE_ONLY[0].version);
+    assert_eq!(v["binary"]["upgradeOnly"]["label"], TEST_UPGRADE_ONLY[0].label);
+    assert_eq!(v["binary"]["upgradeOnly"]["schema"], TEST_UPGRADE_ONLY[0].schema);
+    assert_eq!(v["upgrade"]["acceptBinary"], true);
+    // Every other verb that runs Sew: refused, nothing ran.
+    for argv in [&["engine", "sew", "rollback"][..], &["engine", "sew", "doctor"], &["engine", "sew", "uninstall"], &["engine", "sew", "systemctl", "start"]] {
+        let o = t.call(argv);
+        assert_eq!(o.code, exit::STATE, "{argv:?}: {}", o.stderr);
+        assert!(o.stderr.contains("unknown sew binary"), "{argv:?}: {}", o.stderr);
+    }
+    assert!(sew_calls(&t).is_empty());
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    sew_answers(&t, 0, r#"{"state":"upgraded"}"#);
+    let o = t.call(&["engine", "sew", "upgrade"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["sewExit"], 0, "{v}");
+    assert_eq!((v["from"].as_str(), v["to"].as_str()), (Some(TEST_UPGRADE_ONLY[0].version), Some(pinned().version)));
+    assert_eq!(v["source"], "upgrade-only");
+    assert_eq!(v["sourceBinary"]["sha256"], sha(TEST_UPGRADE_ONLY_STUB));
+    let staged = t.p(SEW_STAGE_UPGRADE_BIN).display().to_string();
+    let pin = pinned_artifact("x86_64").unwrap().binary_sha256;
+    assert_eq!(sew_calls(&t)[0].0, vec!["upgrade", "--binary", staged.as_str(), "--sha256", pin, "--json"]);
+}
+
+/// An unknown binary: refused without the accept; with it, only on an
+/// exact sha match; never the flag on a release.
+#[test]
+fn accept_binary_runs_only_the_exact_accepted_unknown_binary() {
+    let t = box_root();
+    install_binary(&t, UNKNOWN);
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    let o = t.call(&["engine", "sew", "upgrade"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("unknown sew binary"), "{}", o.stderr);
+    let wrong = sha(b"another binary");
+    let o = t.call(&["engine", "sew", "upgrade", "accept-binary", &wrong]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains(&format!("not the {wrong} you accepted")) && o.stderr.contains(&sha(UNKNOWN)), "{}", o.stderr);
+    // The argv refuses an upper-case sha (exactly what the daemon sends).
+    let o = t.call(&["engine", "sew", "upgrade", "accept-binary", &sha(UNKNOWN).to_uppercase()]);
+    assert_eq!(o.code, exit::ARGV, "{}", o.stderr);
+    assert!(sew_calls(&t).is_empty(), "nothing ran as root");
+    sew_answers(&t, 0, r#"{"state":"upgraded"}"#);
+    let o = t.call(&["engine", "sew", "upgrade", "accept-binary", &sha(UNKNOWN)]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["sewExit"], 0, "{v}");
+    assert_eq!(v["source"], "accepted");
+    assert!(v["from"].is_null(), "{v}");
+    assert_eq!(v["to"], pinned().version);
+    assert_eq!(v["sourceBinary"]["sha256"], sha(UNKNOWN));
+    assert_eq!(sew_calls(&t).len(), 1);
+
+    // A release on disk: the flag is refused (it accepts only what K2
+    // doesn't know).
+    let t = box_root();
+    install_binary(&t, &member(&old_tarball(), "sew"));
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    let rel = sha(&member(&old_tarball(), "sew"));
+    let o = t.call(&["engine", "sew", "upgrade", "accept-binary", &rel]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("a release K2 knows"), "{}", o.stderr);
+    assert!(sew_calls(&t).is_empty());
+}
+
+/// After such an upgrade Sew keeps the old binary as `sew.prev`: K2 never
+/// rolls back onto it (a restore is the way back). A release `sew.prev`,
+/// or none (Sew answers that), still rolls back.
+#[test]
+fn rollback_never_lands_on_a_test_build_or_an_accepted_binary() {
+    for (prev, refused) in [
+        (Some(TEST_UPGRADE_ONLY_STUB.to_vec()), Some("test build")),
+        (Some(UNKNOWN.to_vec()), Some("an unknown binary")),
+        (Some(member(&old_tarball(), "sew")), None),
+        (None, None),
+    ] {
+        let t = box_root();
+        with_pin_installed(&t);
+        if let Some(b) = &prev {
+            let p = t.p(crate::sew::SEW_PREV_BIN);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b).unwrap();
+        }
+        sew_answers(&t, 0, r#"{"state":"rolled_back"}"#);
+        let o = t.call(&["engine", "sew", "rollback"]);
+        match refused {
+            Some(what) => {
+                assert_eq!(o.code, exit::STATE, "{what}: {}", o.stderr);
+                assert!(o.stderr.contains("rollback refused") && o.stderr.contains(what), "{}", o.stderr);
+                assert!(sew_calls(&t).is_empty(), "{what}: nothing ran");
+                assert!(systemctl_calls(&t).is_empty(), "{what}: not even reset-failed");
+            }
+            None => {
+                ok(&o);
+                assert_eq!(sew_calls(&t)[0].0, vec!["upgrade", "--rollback", "--json"]);
+            }
+        }
+    }
 }

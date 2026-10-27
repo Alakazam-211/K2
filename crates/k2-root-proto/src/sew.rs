@@ -705,6 +705,74 @@ pub fn releases() -> &'static [SewRelease] {
     }
 }
 
+/// A Sew build K2 never pinned, recognised ONLY as an upgrade source
+/// (0.46.5, item 12). It is not a release: it is never installed, staged,
+/// kept, health-checked as a target or rolled back to, and it never makes
+/// `known_binary` true (that stays "a release K2 pinned"). The helper's
+/// `engine sew upgrade` accepts it as the installed binary and runs ITS
+/// `sew upgrade --binary <pin>` like any older release (Sew confirmed its
+/// schema migrates forward), and K2 then refuses a rollback onto it.
+#[derive(Debug)]
+pub struct SewUpgradeOnly {
+    /// What the binary says (`sew version`); for the version compare only.
+    pub version: &'static str,
+    /// What K2 shows a person.
+    pub label: &'static str,
+    /// Sew's schema max at that build.
+    pub schema: u32,
+    pub arch: &'static str,
+    /// sha256 of the `/usr/local/bin/sew` file itself.
+    pub binary_sha256: &'static str,
+}
+
+/// sewlab's Sew 0.1.2 test build (`sew 0.1.2 (d73b0dd, schema 920002,
+/// x86_64)`), never published. Sew confirmed 0.3.0 migrates schema 920002
+/// forward (2026-10-27); sewlab has a backup.
+pub const SEW_UPGRADE_ONLY: &[SewUpgradeOnly] = &[SewUpgradeOnly {
+    version: "0.1.2",
+    label: "0.1.2 (test build, schema 920002)",
+    schema: 920002,
+    arch: "x86_64",
+    binary_sha256: "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385",
+}];
+
+/// The fixture for `test-signer` builds: [`TEST_UPGRADE_ONLY_STUB`]'s sha.
+pub const TEST_UPGRADE_ONLY: &[SewUpgradeOnly] = &[SewUpgradeOnly {
+    version: "0.0.0",
+    label: "0.0.0 (test build, fixture)",
+    schema: 1,
+    arch: "x86_64",
+    binary_sha256: "4c7831975275c7ac24f04cd92a5115001875c73a39d2938ef5e803a1a822c6a4",
+}];
+
+/// The bytes of [`TEST_UPGRADE_ONLY`]'s binary (helper tests write it to
+/// `/usr/local/bin/sew`; never executed, exec is faked).
+pub const TEST_UPGRADE_ONLY_STUB: &[u8] = b"#!/bin/sh\n# K2 fixture: an unpublished Sew test build (never executed)\n";
+
+/// The upgrade-only table this build uses (fixtures under `test-signer`).
+pub fn upgrade_only_builds() -> &'static [SewUpgradeOnly] {
+    if cfg!(feature = "test-signer") {
+        TEST_UPGRADE_ONLY
+    } else {
+        SEW_UPGRADE_ONLY
+    }
+}
+
+/// The upgrade-only build `sha256_hex` is, on `arch`. Never a release
+/// (a release's sha answers `None` here).
+pub fn upgrade_only_binary(sha256_hex: &str, arch: &str) -> Option<&'static SewUpgradeOnly> {
+    if !hex64(sha256_hex) || known_binary(sha256_hex, arch).is_some() {
+        return None;
+    }
+    upgrade_only_builds().iter().find(|b| b.arch == arch && hex64(b.binary_sha256) && b.binary_sha256.eq_ignore_ascii_case(sha256_hex))
+}
+
+/// `engine sew upgrade accept-binary <sha>`'s token: exactly 64 lowercase
+/// hex (the helper compares it to the file's own sha256, byte for byte).
+pub fn accept_sha_ok(s: &str) -> bool {
+    hex64(s) && !s.bytes().any(|b| b.is_ascii_uppercase())
+}
+
 /// The pin: the last release.
 pub fn pinned() -> &'static SewRelease {
     releases().last().expect("the Sew pin table is never empty")
@@ -1315,6 +1383,50 @@ mod tests {
     fn all_artifacts(r: &SewRelease) -> Vec<&SewArtifact> {
         let side = [&r.media, &r.transcriber, &r.recorder];
         r.artifacts.iter().chain(side.into_iter().flatten().flat_map(|s| s.artifacts)).collect()
+    }
+
+    /// item 12: sewlab's 0.1.2 test build is an upgrade source only. It is
+    /// in no release table (so never installed, staged, kept or a rollback
+    /// target), `known_binary` stays false for it, and it is older than the
+    /// pin. The fixture entry is the stub's real sha.
+    #[test]
+    fn the_sewlab_test_build_is_upgrade_only() {
+        let b = &SEW_UPGRADE_ONLY[0];
+        assert_eq!(b.binary_sha256, "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385");
+        assert_eq!((b.version, b.label, b.schema, b.arch), ("0.1.2", "0.1.2 (test build, schema 920002)", 920002, "x86_64"));
+        assert_eq!(version_cmp(b.version, SEW_RELEASES.last().unwrap().version), Some(std::cmp::Ordering::Less));
+        for r in SEW_RELEASES.iter().chain(TEST_RELEASES) {
+            assert_ne!(r.version, b.version, "0.1.2 is not a release");
+            for a in all_artifacts(r) {
+                assert!(!a.binary_sha256.eq_ignore_ascii_case(b.binary_sha256) && !a.tarball_sha256.eq_ignore_ascii_case(b.binary_sha256));
+            }
+        }
+        if !cfg!(feature = "test-signer") && !cfg!(feature = "sew-test-pins") {
+            assert_eq!(known_binary(b.binary_sha256, "x86_64"), None, "never 'known' (a release)");
+            assert_eq!(upgrade_only_binary(b.binary_sha256, "x86_64").map(|x| x.version), Some("0.1.2"));
+            assert_eq!(upgrade_only_binary(&b.binary_sha256.to_uppercase(), "x86_64").map(|x| x.version), Some("0.1.2"));
+            assert!(upgrade_only_binary(b.binary_sha256, "aarch64").is_none(), "x86_64 only");
+            let pin = pinned_artifact("x86_64").unwrap();
+            assert!(upgrade_only_binary(pin.binary_sha256, "x86_64").is_none(), "a release is never upgrade-only");
+        }
+        let f = &TEST_UPGRADE_ONLY[0];
+        assert_eq!(f.binary_sha256, sha256_hex(TEST_UPGRADE_ONLY_STUB));
+        assert_eq!(version_cmp(f.version, TEST_RELEASES[0].version), Some(std::cmp::Ordering::Less));
+        assert!(upgrade_only_binary("not-hex", "x86_64").is_none());
+    }
+
+    #[test]
+    fn accept_sha_is_exactly_64_lowercase_hex() {
+        assert!(accept_sha_ok("7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385"));
+        for bad in [
+            "",
+            "7ED8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385",
+            "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c6395238",
+            "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385a",
+            "g ed8031efba4497131f09609b33a386401e910f992672499bd0d410c6395238",
+        ] {
+            assert!(!accept_sha_ok(bad), "{bad:?}");
+        }
     }
 
     /// The real table: the old 0.1.0 placeholder stays and refuses, 0.2.0

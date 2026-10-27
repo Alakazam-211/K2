@@ -258,6 +258,26 @@ fn box_status(env: &Env) -> Option<Value> {
     helper(env, &["status"], None).ok()
 }
 
+/// The upgrade-only build (item 12) the helper says is on disk: its
+/// version and label (`known` stays false: not a release).
+fn on_disk_upgrade_only(st: &Value) -> Option<(String, String)> {
+    let u = st.pointer("/binary/upgradeOnly")?;
+    Some((u.get("version")?.as_str()?.to_string(), u.get("label")?.as_str()?.to_string()))
+}
+
+/// Is `v` a Sew release this build pins (or ever pinned)? An upgrade-only
+/// build's version or an accepted binary's label is not: K2 never rolls
+/// back onto one, never health-checks for its version as a target.
+pub fn is_release(v: &str) -> bool {
+    k2_root_proto::sew::releases().iter().any(|r| r.version == v)
+}
+
+/// The `from` an owner-accepted unknown binary upgrades from (no version
+/// K2 can vouch for): `accepted-<first 12 hex of its sha256>`.
+fn accepted_label(sha: &str) -> String {
+    format!("accepted-{}", &sha[..12.min(sha.len())])
+}
+
 /// (present, known version) of `/usr/local/bin/sew`.
 fn on_disk(st: &Value) -> (bool, Option<String>, bool) {
     let present = st.pointer("/binary/present").and_then(Value::as_bool).unwrap_or(false);
@@ -1191,6 +1211,9 @@ fn status_body(env: &Env, with_health: bool) -> Value {
     if with_health {
         let disk = box_status(env);
         body["onDiskVersion"] = disk.as_ref().and_then(|s| on_disk(s).1).map(Value::from).unwrap_or(Value::Null);
+        if let Some((_, label)) = disk.as_ref().and_then(on_disk_upgrade_only) {
+            body["onDiskUpgradeOnly"] = json!(label);
+        }
         body["health"] = json!({
             "state": rec.state,
             "mgmt": if health_ok { "ok" } else if up { "unreachable" } else { "down" },
@@ -1750,6 +1773,67 @@ pub struct UpgradeRequest {
     /// NEW core upgrades the engine right after the core, Sew 2026-10-17).
     pub media_tarball_path: Option<std::path::PathBuf>,
     pub dry_run: bool,
+    /// item 12 (0.46.5): the owner accepted the installed binary by its
+    /// exact sha256 (64 lowercase hex; the route asked the owner and a
+    /// fresh vault confirm bound to this sha). Only for a binary K2 does
+    /// not know; the target is always the pin.
+    pub accept_binary: Option<String>,
+}
+
+/// Where an upgrade starts (item 12): a release K2 knows (its version), an
+/// upgrade-only test build (its version; never a rollback target), or,
+/// with the owner's accept, exactly that unknown binary
+/// ([`accepted_label`]). Anything else refuses `unknown_sew_binary`.
+fn upgrade_source(st: &Value, accept: Option<&str>) -> R<String> {
+    let (present, version, known) = on_disk(st);
+    let sha = st.pointer("/binary/sha256").and_then(Value::as_str).map(str::to_ascii_lowercase);
+    let upgrade_only = on_disk_upgrade_only(st);
+    let Some(accept) = accept else {
+        if present && known {
+            return Ok(version.unwrap_or_default());
+        }
+        if let (true, Some((v, _))) = (present, upgrade_only) {
+            return Ok(v);
+        }
+        let hint = match (present, sha.as_deref()) {
+            (true, Some(sha)) => format!(
+                "/usr/local/bin/sew (sha256 {sha}) is not a Sew release this K2 knows; nothing was changed. If you trust \
+                 exactly this binary, the owner can accept it: k2 hostchat upgrade --accept-binary {sha}"
+            ),
+            _ => "/usr/local/bin/sew is not a Sew release this K2 knows; nothing was changed".to_string(),
+        };
+        return Err(no("unknown_sew_binary", 409, hint));
+    };
+    if st.pointer("/upgrade/acceptBinary").and_then(Value::as_bool) != Some(true) {
+        return Err(no(
+            "helper_outdated",
+            409,
+            "this root helper can't accept a binary (it predates 0.46.5): update it first (k2 root-helper update); nothing was changed",
+        ));
+    }
+    if !present {
+        return Err(no("unknown_sew_binary", 409, "Sew is not installed (/usr/local/bin/sew is missing); nothing was changed"));
+    }
+    if known {
+        return Err(no(
+            "accept_binary_not_needed",
+            409,
+            format!("/usr/local/bin/sew is Sew {}, a release K2 knows: upgrade without --accept-binary", version.unwrap_or_default()),
+        ));
+    }
+    match sha.as_deref() {
+        Some(s) if s == accept => Ok(upgrade_only.map(|(v, _)| v).unwrap_or_else(|| accepted_label(s))),
+        Some(s) => Err(no(
+            "accept_binary_mismatch",
+            409,
+            format!("/usr/local/bin/sew is sha256 {s}, not the {accept} you accepted; nothing was changed"),
+        )),
+        None => Err(no(
+            "accept_binary_mismatch",
+            409,
+            "the root helper could not hash /usr/local/bin/sew (not root-owned, writable by others, or not a file); nothing was changed",
+        )),
+    }
 }
 
 /// Preconditions + latch. `Ok(Err(body))` = answered without a machine
@@ -1765,11 +1849,7 @@ pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch
     }
     helper_check(env)?;
     let st = box_status(env).ok_or_else(|| no("helper_error", 500, "engine sew status failed"))?;
-    let (present, version, known) = on_disk(&st);
-    if !present || !known {
-        return Err(no("unknown_sew_binary", 409, "/usr/local/bin/sew is not a Sew release this K2 knows; nothing was changed"));
-    }
-    let from = version.unwrap_or_default();
+    let from = upgrade_source(&st, req.accept_binary.as_deref())?;
     let to = pinned().version;
     match version_cmp(&from, to) {
         Some(std::cmp::Ordering::Equal) => {
@@ -1817,6 +1897,9 @@ pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch
         if voice {
             steps.insert(1, "stage the pinned sew-media tarball");
             steps.push("voice: the NEW sew runs sew media upgrade --now (Sew rolls the engine back itself on failure)");
+        }
+        if !is_release(&from) {
+            steps.push("rollback: never onto the binary on disk now (not a release K2 pinned); a failed upgrade waits for a person");
         }
         return Ok(Err(json!({"ok": true, "dryRun": true, "from": from, "to": to, "voice": voice, "steps": steps})));
     }
@@ -1933,7 +2016,10 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
         return store::load().and_then(|r| r.upgrade_progress).unwrap_or_default();
     }
     upgrade_note(env, Some("upgrade"), None);
-    let out = helper(env, &["upgrade"], None);
+    let out = match req.accept_binary.as_deref() {
+        Some(sha) => helper(env, &["upgrade", "accept-binary", sha], None),
+        None => helper(env, &["upgrade"], None),
+    };
     let result = match out {
         Err(e) => {
             // The helper never ran Sew (a refusal): nothing changed.
@@ -1991,7 +2077,7 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
             }
             Some(1) => {
                 let m = format!("upgrade to {to} failed; Sew rolled back to {from}: {}", sew_message(&v));
-                let healthy = health_check(env, from).is_ok();
+                let healthy = health_of(env, from).is_ok();
                 save_enable(env, |r| {
                     r.status = if healthy { "running".into() } else { "error".into() };
                     r.last_error = Some(m);
@@ -2025,7 +2111,33 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
     store::load().and_then(|r| r.upgrade_progress).unwrap_or_default()
 }
 
+/// K2's health check for `from`: its version when it is a release, else
+/// (an upgrade-only build, an accepted binary) units up + mgmt healthy.
+fn health_of(env: &Env, from: &str) -> Result<Value, String> {
+    if is_release(from) {
+        return health_check(env, from);
+    }
+    poll_active(env, &[UNIT_DB, UNIT_SEW], 60)?;
+    *env.token.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    wait_health(env, 30)?;
+    mgmt(env, "GET", "/mgmt/v1/status", None).map_err(|e| e.to_string())
+}
+
 fn auto_rollback(env: &Env, from: &str, to: &str, why: &str) -> &'static str {
+    // item 12: never back onto a binary that is not a release K2 pinned
+    // (Sew's own rollback inside `sew upgrade` is Sew's). A person decides.
+    if !is_release(from) {
+        let m = format!(
+            "upgrade to {to} failed K2's health check ({why}). K2 does not roll back onto {from} (not a release K2 \
+             pinned). A person must act: read {SEW_UPGRADE_STATE} and k2 hostchat doctor; a restore \
+             (k2 hostchat backups) is the way back"
+        );
+        save_enable(env, |r| {
+            r.status = "error".into();
+            r.last_error = Some(m);
+        });
+        return "rollback_skipped";
+    }
     let rb = sew_ok(env, &["rollback"], None);
     let healthy = rb.is_ok() && health_check(env, from).is_ok();
     if healthy {
@@ -2069,7 +2181,7 @@ pub fn recover_interrupted_upgrade(env: &Env) -> Value {
             r.last_error = None;
         });
         "done"
-    } else if !from.is_empty() && health_check(env, &from).is_ok() {
+    } else if !from.is_empty() && health_of(env, &from).is_ok() {
         save_enable(env, |r| {
             r.status = "running".into();
             r.last_error = Some(format!("the upgrade to {to} was interrupted by a daemon restart; Sew {from} is serving"));
@@ -2172,6 +2284,18 @@ pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
         return Err(no("not_running", 409, format!("Sew is '{}'", row.status)));
     }
     helper_check(env)?;
+    // item 12: the previous binary is an upgrade-only test build or an
+    // owner-accepted one: never a rollback target (the helper refuses too).
+    if let Some(p) = row.previous_version.as_deref().filter(|p| !is_release(p)) {
+        return Err(no(
+            "rollback_refused",
+            409,
+            format!(
+                "Sew's previous binary ({p}) is not a release K2 pinned, so K2 never rolls back onto it. A restore is the way \
+                 back: list the backups with k2 hostchat backups, then k2 hostchat restore <bundle-id> --confirm"
+            ),
+        ));
+    }
     let _l = begin(env)?;
     let voice = super::voice::load(env).installed;
     let media_to = if voice { rollback_media_source(env, row.previous_version.as_deref(), req)? } else { None };

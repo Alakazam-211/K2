@@ -1623,6 +1623,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     "sew-purge",
     "sew-recovery-key",
     "sew-drop-prev",
+    // item 12 (0.46.5): upgrading Sew FROM a binary K2 doesn't know,
+    // accepted by its sha256 (`secretId` = `<install id>:<sha256>`).
+    crate::sew::routes::CONFIRM_ACCEPT_BINARY,
     // Clone carries vault secrets (prd-clone-carries-threads-and-vault-v1
     // §6.4, CL14): copying secrets (or sending .env files) to a clone;
     // `secretId` = `clone:<sha256(plan)>`, reason written by the daemon.

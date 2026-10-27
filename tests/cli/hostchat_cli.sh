@@ -461,6 +461,18 @@ run owner hostchat rollback
 assert_eq "rollback not ok → exit 3" "$rc" "3"
 assert_contains "rollback not ok: the reason on stderr" "$err" "voice engine was not put back"
 
+echo "== upgrade --accept-binary (0.46.5 item 12): checked here, a person's =="
+before="$(nreq)"
+run owner hostchat upgrade --tarball sew.tar.gz --accept-binary 7ed8
+assert_eq "accept-binary: short sha → exit 2" "$rc" "2"
+assert_contains "accept-binary: short sha says why" "$err" "64 hex characters"
+run owner hostchat upgrade --tarball sew.tar.gz --accept-binary zz8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385
+assert_eq "accept-binary: not hex → exit 2" "$rc" "2"
+run cell hostchat upgrade --tarball sew.tar.gz --accept-binary 7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385
+assert_eq "accept-binary from a K2 terminal → exit 3" "$rc" "3"
+assert_contains "accept-binary from a K2 terminal: person only" "$err" '"error":"person_only"'
+assert_eq "accept-binary refusals sent nothing to /cli/sew" "$(nreq)" "$before"
+
 echo
 echo "hostchat CLI: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

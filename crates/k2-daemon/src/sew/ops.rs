@@ -623,7 +623,12 @@ pub mod fake {
         pub units: Mutex<HashMap<String, UnitInfo>>,
         pub helper: Mutex<RootHelperState>,
         /// Version on disk (`engine sew status` → binary.version).
+        /// `unknown` = a binary no table knows (sha [`UNKNOWN_SHA`]);
+        /// `testbuild` = the upgrade-only fixture (item 12).
         pub on_disk: Mutex<Option<String>>,
+        /// item 12: a pre-0.46.5 helper (no `upgrade.acceptBinary` in its
+        /// status; it refuses the `upgrade accept-binary` argv).
+        pub helper_no_accept: Mutex<bool>,
         pub mgmt_health_ok: Mutex<bool>,
         pub mgmt_status: Mutex<Value>,
         pub mgmt_calls: Mutex<Vec<String>>,
@@ -696,6 +701,10 @@ pub mod fake {
     pub const GIB: u64 = 1024 * 1024 * 1024;
     pub const INSTALL_ID: &str = "48831765147549701";
     pub const TOKEN: &str = "sewsvc_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE";
+    /// item 12: the sha256 of the fake's `unknown` binary.
+    pub const UNKNOWN_SHA: &str = "0f0e0d0c0b0a09080706050403020100f0e0d0c0b0a09080706050403020100f";
+    /// item 12: `on_disk` for the upgrade-only fixture build.
+    pub const TESTBUILD: &str = "testbuild";
 
     pub fn helper_ok(protocol: u32, sew_ns: bool, pin: &str) -> RootHelperState {
         RootHelperState {
@@ -720,6 +729,7 @@ pub mod fake {
                 units: Mutex::new(HashMap::new()),
                 helper: Mutex::new(helper_ok(7, true, pin)),
                 on_disk: Mutex::new(None),
+                helper_no_accept: Mutex::new(false),
                 mgmt_health_ok: Mutex::new(true),
                 mgmt_status: Mutex::new(json!({
                     "provider": "k2",
@@ -879,9 +889,15 @@ pub mod fake {
                     let v = self.on_disk.lock().unwrap().clone();
                     json!({
                         "pin": {"version": pin, "placeholder": false},
+                        "upgrade": if *self.helper_no_accept.lock().unwrap() { Value::Null } else { json!({"upgradeOnly": true, "acceptBinary": true}) },
                         "binary": match &v {
                             None => json!({"present": false}),
-                            Some(v) if v == "unknown" => json!({"present": true, "known": false, "version": null}),
+                            Some(v) if v == "unknown" => json!({"present": true, "known": false, "version": null, "sha256": UNKNOWN_SHA}),
+                            Some(v) if v == TESTBUILD => {
+                                let b = &upgrade_only_builds()[0];
+                                json!({"present": true, "known": false, "version": null, "sha256": b.binary_sha256,
+                                    "upgradeOnly": {"version": b.version, "label": b.label, "schema": b.schema}})
+                            }
                             // What the real helper answers for a binary it
                             // refuses to hash (owner / mode).
                             Some(v) if v == "not-root" => json!({"present": true, "known": false,
@@ -984,8 +1000,33 @@ pub mod fake {
                 "engine sew token" => json!({"token": TOKEN}),
                 "engine sew upgrade" => {
                     let from = self.on_disk.lock().unwrap().clone();
+                    // The real helper never runs a binary it doesn't know.
+                    if from.as_deref() == Some("unknown") {
+                        return Err("root helper engine sew upgrade: exit 3: sew helper: unknown sew binary".into());
+                    }
+                    if from.as_deref() == Some(TESTBUILD) {
+                        *self.on_disk.lock().unwrap() = Some(pin.into());
+                        return Ok(Self::sew_exit(0, json!({"state": "upgraded", "from": upgrade_only_builds()[0].version, "to": pin})));
+                    }
                     *self.on_disk.lock().unwrap() = Some(pin.into());
                     Self::sew_exit(0, json!({"state": "upgraded", "from": from, "to": pin}))
+                }
+                a if a.starts_with("engine sew upgrade accept-binary ") => {
+                    if *self.helper_no_accept.lock().unwrap() {
+                        return Err(format!("root helper {a}: exit 2: refused argv"));
+                    }
+                    let sha = a.rsplit(' ').next().unwrap_or("");
+                    let disk = self.on_disk.lock().unwrap().clone();
+                    let disk_sha = match disk.as_deref() {
+                        Some("unknown") => UNKNOWN_SHA,
+                        Some(TESTBUILD) => upgrade_only_builds()[0].binary_sha256,
+                        _ => return Err(format!("root helper {a}: exit 3: accept-binary refused: a release K2 knows")),
+                    };
+                    if sha != disk_sha {
+                        return Err(format!("root helper {a}: exit 3: accept-binary refused: /usr/local/bin/sew is sha256 {disk_sha}, not the {sha} you accepted"));
+                    }
+                    *self.on_disk.lock().unwrap() = Some(pin.into());
+                    Self::sew_exit(0, json!({"state": "upgraded", "to": pin}))
                 }
                 "engine sew rollback" => Self::sew_exit(0, json!({"state": "rolled_back", "from": pin, "to": "0.0.1"})),
                 "engine sew uninstall" => {

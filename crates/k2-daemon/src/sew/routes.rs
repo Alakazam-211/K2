@@ -103,6 +103,14 @@ pub const POST_ROUTES: &[&str] = &[
 pub const CONFIRM_PURGE: &str = "sew-purge";
 pub const CONFIRM_RECOVERY: &str = "sew-recovery-key";
 pub const CONFIRM_DROP_PREV: &str = "sew-drop-prev";
+/// item 12 (0.46.5): upgrading FROM a binary K2 doesn't know, accepted by
+/// its exact sha256 (`secretId` = `<install id>:<sha256>`).
+pub const CONFIRM_ACCEPT_BINARY: &str = "sew-accept-binary";
+
+/// The id an accept-binary confirm is bound to: this install and that sha.
+pub fn accept_binary_secret_id(sha: &str) -> String {
+    format!("{}:{sha}", confirm_secret_id())
+}
 
 pub fn is_route(p: &str) -> bool {
     ROUTES.contains(&p)
@@ -553,15 +561,44 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
             }
         }
         "/cli/sew/server/upgrade" => {
-            need_manage(who)?;
-            sup::need_released(&env)?;
             let v = json_body(body)?;
+            // item 12: accepting a binary K2 doesn't know is the owner's,
+            // with a fresh vault confirm bound to that exact sha; never an
+            // agent (Manage Sew does not cover it). Audited either way.
+            let accept_binary = match v.get("acceptBinary") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(sha)) if k2_root_proto::sew::accept_sha_ok(sha) => Some(sha.clone()),
+                Some(_) => {
+                    return Err(no("bad_request", 400, "acceptBinary is the binary's sha256: 64 lowercase hex characters"));
+                }
+            };
+            match &accept_binary {
+                Some(sha) => {
+                    let audit = |outcome: &str| {
+                        crate::vault::auth_audit(CONFIRM_ACCEPT_BINARY, &who.label(), &format!("{outcome} sha256={sha}"), "cli")
+                    };
+                    match need_person(who, &v, CONFIRM_ACCEPT_BINARY, &accept_binary_secret_id(sha), PersonFloor::Owner) {
+                        Ok(method) => audit(&format!("confirmed via {method}")),
+                        Err(f) => {
+                            audit(&format!("refused {}", f.code));
+                            return Err(f);
+                        }
+                    }
+                }
+                None => need_manage(who)?,
+            }
+            sup::need_released(&env)?;
             let req = sup::UpgradeRequest {
                 tarball_path: abs_path(&v, "tarballPath")?,
                 media_tarball_path: abs_path(&v, "mediaTarballPath")?,
                 dry_run: b(&v, "dryRun"),
+                accept_binary: accept_binary.clone(),
             };
-            match sup::upgrade_begin(&env, &req)? {
+            let begun = sup::upgrade_begin(&env, &req);
+            if let (Some(sha), Err(f)) = (&accept_binary, &begun) {
+                crate::vault::auth_audit(CONFIRM_ACCEPT_BINARY, &who.label(), &format!("refused {} sha256={sha}", f.code), "cli");
+            }
+            match begun? {
                 Err(done) => Ok(done),
                 Ok((latch, from)) if background => {
                     std::thread::Builder::new()

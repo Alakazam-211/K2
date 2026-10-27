@@ -1326,7 +1326,7 @@ fn with_voice(t: &T) {
 }
 
 fn voice_upgrade(t: &T) -> Value {
-    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), media_tarball_path: Some(MEDIA_TARBALL.into()), dry_run: false };
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), media_tarball_path: Some(MEDIA_TARBALL.into()), dry_run: false, accept_binary: None };
     let env = t.env();
     let (l, from) = upgrade_begin(&env, &req).unwrap().unwrap();
     let p = upgrade_machine(&env, &req, &from);
@@ -1393,7 +1393,7 @@ fn upgrade_with_voice_keeps_the_core_and_records_why_when_the_engine_upgrade_fai
     let t = t2_old();
     with_voice(&t);
     *t.ops.mgmt_health_ok.lock().unwrap() = false;
-    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), media_tarball_path: Some(MEDIA_TARBALL.into()), dry_run: false };
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), media_tarball_path: Some(MEDIA_TARBALL.into()), dry_run: false, accept_binary: None };
     let env = t.env();
     let (l, from) = upgrade_begin(&env, &req).unwrap().unwrap();
     let p = upgrade_machine_with_flip(&env, &req, &from, &t.ops);
@@ -1702,4 +1702,107 @@ fn preflight_needs_exactly_sews_pg_major_not_any_newer() {
     assert_eq!(pg_check(&t)["status"], "ok");
     *t.ops.pg.lock().unwrap() = vec![];
     assert!(pg_check(&t)["detail"].as_str().unwrap().contains("no PostgreSQL server binaries"));
+}
+
+// ── item 12 (0.46.5): upgrade-only test builds and accepted binaries ─────
+
+fn on_test_build(t: &T) {
+    t.enabled();
+    *t.ops.on_disk.lock().unwrap() = Some(crate::sew::ops::fake::TESTBUILD.into());
+    let v = k2_root_proto::sew::upgrade_only_builds()[0].version;
+    store::update(1, |r| r.installed_version = Some(v.into())).unwrap();
+    t.ops.clear();
+}
+
+/// sewlab's case: the helper reports an upgrade-only build (not `known`).
+/// It upgrades to the pin; the row's previous version is that build, which
+/// is not a release, so `k2 hostchat rollback` refuses (a restore is the way
+/// back) and the helper's rollback never runs.
+#[test]
+fn an_upgrade_only_test_build_upgrades_and_is_never_rolled_back_to() {
+    let t = t();
+    on_test_build(&t);
+    let build = &k2_root_proto::sew::upgrade_only_builds()[0];
+    assert!(!is_release(build.version));
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
+    let dry = upgrade_begin(&t.env(), &UpgradeRequest { dry_run: true, ..req.clone() }).unwrap().err().unwrap();
+    assert_eq!(dry["from"], build.version, "{dry}");
+    assert!(dry["steps"].to_string().contains("never onto the binary on disk now"), "{dry}");
+    let p = upgrade(&t);
+    assert_eq!(p["result"], "done", "{p}");
+    assert!(t.ops.effects().iter().any(|e| e == "engine sew upgrade"), "{:?}", t.ops.effects());
+    let row = t.row();
+    assert_eq!((row.status.as_str(), row.installed_version.as_deref(), row.previous_version.as_deref()), ("running", Some(pinned().version), Some(build.version)));
+    t.ops.clear();
+    let e = rollback(&t.env()).err().expect("refused");
+    assert_eq!(e.code, "rollback_refused", "{}", e.hint);
+    assert!(e.hint.contains("not a release K2 pinned") && e.hint.contains("k2 hostchat backups"), "{}", e.hint);
+    assert!(!t.ops.effects().iter().any(|e| e.contains("rollback")), "{:?}", t.ops.effects());
+    assert_eq!(t.row().installed_version.as_deref(), Some(pinned().version), "nothing moved");
+}
+
+/// A failed K2 health check after upgrading FROM a non-release never rolls
+/// back onto it: the row says why and a person decides.
+#[test]
+fn a_failed_health_check_never_rolls_back_onto_a_test_build() {
+    let t = t();
+    on_test_build(&t);
+    *t.ops.mgmt_health_ok.lock().unwrap() = false;
+    let p = upgrade(&t);
+    assert_eq!(p["result"], "rollback_skipped", "{p}");
+    assert!(!t.ops.effects().iter().any(|e| e == "engine sew rollback"), "{:?}", t.ops.effects());
+    let row = t.row();
+    assert_eq!(row.status, "error");
+    let m = row.last_error.expect("why");
+    assert!(m.contains("does not roll back onto") && m.contains("restore"), "{m}");
+}
+
+/// An unknown binary: refused without the accept (the hint names its sha
+/// and the flag); with it, only on the exact sha, only with a helper that
+/// knows the argv, never on a release; then never a rollback target.
+#[test]
+fn accept_binary_upgrades_only_the_exact_unknown_binary() {
+    use crate::sew::ops::fake::UNKNOWN_SHA;
+    let t = t();
+    t.enabled();
+    *t.ops.on_disk.lock().unwrap() = Some("unknown".into());
+    t.ops.clear();
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
+    let e = upgrade_begin(&t.env(), &req).err().unwrap();
+    assert_eq!(e.code, "unknown_sew_binary");
+    assert!(e.hint.contains(UNKNOWN_SHA) && e.hint.contains("--accept-binary"), "{}", e.hint);
+    let wrong = "1".repeat(64);
+    let e = upgrade_begin(&t.env(), &UpgradeRequest { accept_binary: Some(wrong.clone()), ..req.clone() }).err().unwrap();
+    assert_eq!(e.code, "accept_binary_mismatch", "{}", e.hint);
+    assert!(e.hint.contains(UNKNOWN_SHA) && e.hint.contains(&wrong), "{}", e.hint);
+    // An old helper: refused before anything, with the way out.
+    *t.ops.helper_no_accept.lock().unwrap() = true;
+    let accept = UpgradeRequest { accept_binary: Some(UNKNOWN_SHA.into()), ..req.clone() };
+    let e = upgrade_begin(&t.env(), &accept).err().unwrap();
+    assert_eq!(e.code, "helper_outdated", "{}", e.hint);
+    assert!(e.hint.contains("k2 root-helper update"), "{}", e.hint);
+    *t.ops.helper_no_accept.lock().unwrap() = false;
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
+    assert_eq!(t.row().status, "running");
+    // A release on disk: the flag is not for it.
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    let e = upgrade_begin(&t.env(), &UpgradeRequest { accept_binary: Some(UNKNOWN_SHA.into()), ..req.clone() }).err().unwrap();
+    assert_eq!(e.code, "accept_binary_not_needed", "{}", e.hint);
+    // The exact sha: upgraded through the accept argv.
+    *t.ops.on_disk.lock().unwrap() = Some("unknown".into());
+    let env = t.env();
+    let (l, from) = upgrade_begin(&env, &accept).unwrap().unwrap();
+    assert_eq!(from, format!("accepted-{}", &UNKNOWN_SHA[..12]));
+    let p = upgrade_machine(&env, &accept, &from);
+    drop(l);
+    assert_eq!(p["result"], "done", "{p}");
+    let eff = t.ops.effects();
+    assert!(eff.iter().any(|e| *e == format!("engine sew upgrade accept-binary {UNKNOWN_SHA}")), "{eff:?}");
+    assert!(!eff.iter().any(|e| e == "engine sew upgrade"), "{eff:?}");
+    let row = t.row();
+    assert_eq!(row.installed_version.as_deref(), Some(pinned().version));
+    assert_eq!(row.previous_version.as_deref(), Some(from.as_str()));
+    t.ops.clear();
+    assert_eq!(rollback(&t.env()).err().unwrap().code, "rollback_refused");
+    assert!(!t.ops.effects().iter().any(|e| e.contains("rollback")), "{:?}", t.ops.effects());
 }

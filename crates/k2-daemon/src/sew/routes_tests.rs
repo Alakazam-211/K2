@@ -593,3 +593,76 @@ fn the_new_sew_routes_are_classified() {
         assert!(crate::session_token::is_agent_verb(p), "{p}");
     }
 }
+
+/// item 12 (0.46.5): `k2 hostchat upgrade --accept-binary <sha>` is the
+/// owner's, with a fresh vault confirm bound to this install AND that sha.
+/// Agents (even with Manage Sew), K2 terminals and admin logins are
+/// refused; a confirm for another sha, or none, is refused; a malformed sha
+/// is a 400. Nothing reaches the helper's upgrade until all of that holds.
+#[test]
+fn accept_binary_is_the_owners_with_a_confirm_bound_to_that_sha() {
+    use crate::sew::ops::fake::UNKNOWN_SHA;
+    let t = t();
+    t.enable();
+    *t.ops.on_disk.lock().unwrap() = Some("unknown".into());
+    t.ops.clear();
+    let vault = crate::vault::ensure_test_vault();
+    let up = |who: &Who, accept: Option<&str>, tok: Option<String>| {
+        let mut b = json!({"tarballPath": TARBALL});
+        if let Some(a) = accept {
+            b["acceptBinary"] = json!(a);
+        }
+        if let Some(tok) = tok {
+            b["confirmToken"] = json!(tok);
+        }
+        t.call(who, "/cli/sew/server/upgrade", b)
+    };
+    let owner_tok = |sha: &str| vault.confirm.mint(CONFIRM_ACCEPT_BINARY, Some(&accept_binary_secret_id(sha)), "owner", "vault-password");
+    let upgraded = || t.ops.effects().iter().any(|e| e.starts_with("engine sew upgrade"));
+
+    // Without the flag, even the owner: refused, the hint names the way.
+    let (st, v) = up(&Who::Owner, None, None);
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "unknown_sew_binary"), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains(&format!("--accept-binary {UNKNOWN_SHA}")), "{v}");
+    // A passport (Manage Sew on), a K2 terminal: never, confirm or not.
+    for who in [agent("w-it"), shell("w-it")] {
+        let (st, v) = up(&who, Some(UNKNOWN_SHA), Some(owner_tok(UNKNOWN_SHA)));
+        assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "person_only"), "{who:?}: {v}");
+    }
+    // An admin login with its own confirm: the owner's alone.
+    let admins = vault.confirm.mint(CONFIRM_ACCEPT_BINARY, Some(&accept_binary_secret_id(UNKNOWN_SHA)), "connect:ana", "connect-password");
+    let (st, v) = up(&login(Role::Admin), Some(UNKNOWN_SHA), Some(admins));
+    assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "owner_only"), "{v}");
+    // The owner without a confirm, or with one for another sha.
+    assert_eq!(code(&up(&Who::Owner, Some(UNKNOWN_SHA), None).1), "owner_confirm_required");
+    let other = "a".repeat(64);
+    assert_eq!(code(&up(&Who::Owner, Some(UNKNOWN_SHA), Some(owner_tok(&other))).1), "owner_confirm_required");
+    // A confirm for another action doesn't do either.
+    let purge = vault.confirm.mint(CONFIRM_PURGE, Some(INSTALL_ID), "owner", "vault-password");
+    assert_eq!(code(&up(&Who::Owner, Some(UNKNOWN_SHA), Some(purge)).1), "owner_confirm_required");
+    // Malformed: 400 before any gate.
+    for bad in [json!("7ED8"), json!(UNKNOWN_SHA.to_uppercase()), json!(5)] {
+        let (st, v) = t.call(&Who::Owner, "/cli/sew/server/upgrade", json!({"tarballPath": TARBALL, "acceptBinary": bad}));
+        assert_eq!((st.as_str(), code(&v)), ("400 Bad Request", "bad_request"), "{v}");
+    }
+    // The owner, confirmed, but for a sha that isn't the binary's.
+    let (st, v) = up(&Who::Owner, Some(&other), Some(owner_tok(&other)));
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "accept_binary_mismatch"), "{v}");
+    assert!(!upgraded(), "{:?}", t.ops.effects());
+    assert_eq!(crate::sew::store::load().unwrap().status, "running");
+    // The owner, confirmed for exactly that sha: upgraded to the pin.
+    let (st, v) = up(&Who::Owner, Some(UNKNOWN_SHA), Some(owner_tok(UNKNOWN_SHA)));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["upgrade"]["result"], "done", "{v}");
+    assert!(t.ops.effects().iter().any(|e| *e == format!("engine sew upgrade accept-binary {UNKNOWN_SHA}")), "{:?}", t.ops.effects());
+    let row = crate::sew::store::load().unwrap();
+    assert_eq!(row.installed_version.as_deref(), Some(k2_root_proto::sew::pinned().version));
+    // ...and K2 never rolls back onto it.
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/server/rollback", json!({}));
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "rollback_refused"), "{v}");
+    // A confirm works once.
+    let tok = owner_tok(UNKNOWN_SHA);
+    *t.ops.on_disk.lock().unwrap() = Some("unknown".into());
+    let _ = up(&Who::Owner, Some(UNKNOWN_SHA), Some(tok.clone()));
+    assert_eq!(code(&up(&Who::Owner, Some(UNKNOWN_SHA), Some(tok)).1), "owner_confirm_required");
+}

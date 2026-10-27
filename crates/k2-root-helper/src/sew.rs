@@ -92,9 +92,11 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
         SewVerb::Install => install(ctx, stdin, who),
         SewVerb::Config => config(ctx, stdin),
         SewVerb::Systemctl(op) => systemctl(ctx, *op),
-        SewVerb::Upgrade => upgrade(ctx),
+        SewVerb::Upgrade => upgrade(ctx, None),
+        SewVerb::UpgradeAcceptBinary(sha) => upgrade(ctx, Some(sha)),
         SewVerb::Rollback => {
             require_known(ctx)?;
+            refuse_rollback_onto_a_non_release(ctx)?;
             let reset = reset_start_limits(ctx)?;
             let mut out = run_sew(ctx, &["upgrade", "--rollback"], None)?;
             out["resetFailed"] = reset;
@@ -194,6 +196,7 @@ fn installs(verb: &SewVerb) -> bool {
             | SewVerb::InstallBin
             | SewVerb::Install
             | SewVerb::Upgrade
+            | SewVerb::UpgradeAcceptBinary(_)
             | SewVerb::MediaInstall
             | SewVerb::MediaUpgrade
             | SewVerb::MediaRollback
@@ -497,22 +500,80 @@ pub(crate) fn remove_all_notices(ctx: &Ctx) -> HResult<J> {
 /// A link, a non-file, or (on a real box) a non-root or writable file is a
 /// refusal.
 fn on_disk(ctx: &Ctx) -> HResult<Option<(String, Option<&'static str>)>> {
-    let Some((d, n)) = open_parent(ctx, SEW_BIN)? else { return Ok(None) };
+    let Some(sha) = binary_sha(ctx, SEW_BIN)? else { return Ok(None) };
+    let known = known_binary(&sha, ctx.arch);
+    Ok(Some((sha, known)))
+}
+
+/// The sha256 of a root-owned regular file at `abs` (`None` = absent);
+/// a link, another kind, or a file others may write is refused.
+fn binary_sha(ctx: &Ctx, abs: &str) -> HResult<Option<String>> {
+    let Some((d, n)) = open_parent(ctx, abs)? else { return Ok(None) };
     let name = OsStr::new(&n);
     let Some(st) = d.lstat(name).map_err(|e| Fail::io_err("stat sew", e))? else { return Ok(None) };
     if crate::fsx::kind_of(st.st_mode as u32) != Kind::File {
-        return Err(Fail::state("sew helper: /usr/local/bin/sew is not a regular file"));
+        return Err(Fail::state(format!("sew helper: {abs} is not a regular file")));
     }
     if ctx.real_owners && (st.st_uid != 0 || (st.st_mode as u32) & 0o022 != 0) {
-        return Err(Fail::state("sew helper: /usr/local/bin/sew is not root-owned or is writable by others"));
+        return Err(Fail::state(format!("sew helper: {abs} is not root-owned or is writable by others")));
     }
     let bytes = d
         .read_file(name, MAX_MEMBER as usize)
         .map_err(|e| Fail::io_err("read sew", e))?
         .unwrap_or_default();
-    let sha = sha256_hex(&bytes);
-    let known = known_binary(&sha, ctx.arch);
-    Ok(Some((sha, known)))
+    Ok(Some(sha256_hex(&bytes)))
+}
+
+/// Sew's kept previous binary (`sew upgrade --rollback` swaps it in).
+pub(crate) const SEW_PREV_BIN: &str = "/usr/local/lib/sew/sew.prev";
+
+/// item 12 (0.46.5): K2 never rolls Sew back onto a binary that is not a
+/// release it pinned: an upgrade-only test build or an owner-accepted
+/// unknown binary stays behind as Sew's `sew.prev` after the upgrade.
+/// Refused before Sew runs; no `sew.prev` (Sew answers that itself) or a
+/// release passes.
+fn refuse_rollback_onto_a_non_release(ctx: &Ctx) -> HResult<()> {
+    let Some(sha) = binary_sha(ctx, SEW_PREV_BIN)? else { return Ok(()) };
+    if known_binary(&sha, ctx.arch).is_some() {
+        return Ok(());
+    }
+    let what = match upgrade_only_binary(&sha, ctx.arch) {
+        Some(b) => format!("Sew {}", b.label),
+        None => format!("an unknown binary (sha256 {sha})"),
+    };
+    Err(Fail::state(format!(
+        "rollback refused: Sew's previous binary is {what}, not a release K2 pinned; nothing ran. A restore is the way back (k2 hostchat backups)"
+    )))
+}
+
+/// Where an upgrade starts: the installed binary's version for the compare
+/// (`None` for an owner-accepted unknown binary) and what kind it is.
+fn upgrade_source(ctx: &Ctx, accept: Option<&str>) -> HResult<(Option<&'static str>, &'static str, J)> {
+    let Some((sha, known)) = on_disk(ctx)? else { return Err(Fail::state("sew is not installed")) };
+    if let Some(v) = known {
+        if accept.is_some() {
+            return Err(Fail::state(format!(
+                "accept-binary refused: /usr/local/bin/sew is Sew {v}, a release K2 knows; upgrade without accepting it"
+            )));
+        }
+        return Ok((Some(v), "release", json!(v)));
+    }
+    if let Some(a) = accept {
+        // Exactly the sha the owner accepted, byte for byte (the argv is
+        // 64 lowercase hex; ours is lowercase).
+        if a != sha {
+            return Err(Fail::state(format!(
+                "accept-binary refused: /usr/local/bin/sew is sha256 {sha}, not the {a} you accepted; nothing ran"
+            )));
+        }
+    }
+    if let Some(b) = upgrade_only_binary(&sha, ctx.arch) {
+        return Ok((Some(b.version), "upgrade-only", json!({"version": b.version, "label": b.label, "schema": b.schema, "sha256": sha})));
+    }
+    match accept {
+        Some(_) => Ok((None, "accepted", json!({"sha256": sha}))),
+        None => Err(Fail::state("sew helper: unknown sew binary")),
+    }
 }
 
 /// The installed binary's version; refuses absent or unknown binaries
@@ -602,7 +663,15 @@ pub fn status(ctx: &Ctx) -> J {
     let media = pinned_media_artifact(ctx.arch);
     let binary = match on_disk(ctx) {
         Ok(None) => json!({"present": false}),
-        Ok(Some((sha, v))) => json!({"present": true, "sha256": sha, "version": v, "known": v.is_some()}),
+        Ok(Some((sha, v))) => {
+            let mut b = json!({"present": true, "sha256": sha, "version": v, "known": v.is_some()});
+            // item 12: a build K2 upgrades FROM but never installs or rolls
+            // back to. `known` stays "a release".
+            if let Some(u) = upgrade_only_binary(&sha, ctx.arch) {
+                b["upgradeOnly"] = json!({"version": u.version, "label": u.label, "schema": u.schema});
+            }
+            b
+        }
         Err(f) => json!({"present": true, "known": false, "error": f.msg}),
     };
     json!({
@@ -615,6 +684,10 @@ pub fn status(ctx: &Ctx) -> J {
             "media": media.as_ref().ok().map(|(v, a)| json!({"version": v, "tarballSha256": a.tarball_sha256})),
         },
         "binary": binary,
+        // What this helper's upgrade takes (0.46.5): an upgrade-only build
+        // as the source, and `upgrade accept-binary <sha>`. An older helper
+        // has no such field and refuses that argv.
+        "upgrade": {"upgradeOnly": true, "acceptBinary": true},
         "staged": {
             "core": staged_version(ctx, SEW_STAGE_TARBALL, false),
             "media": staged_version(ctx, SEW_STAGE_MEDIA_TARBALL, true),
@@ -867,14 +940,20 @@ fn systemctl(ctx: &Ctx, op: SewSystemctl) -> HResult<J> {
     Ok(json!({"op": op.token(), "ok": true}))
 }
 
-fn upgrade(ctx: &Ctx) -> HResult<J> {
-    let from = require_known(ctx)?;
+/// `accept`: the owner-accepted sha256 of an unknown installed binary
+/// (`engine sew upgrade accept-binary <sha>`, item 12). The source may be a
+/// release, an upgrade-only build ([`upgrade_only_binary`]) or, accepted,
+/// that exact unknown binary; the target is always the pin.
+fn upgrade(ctx: &Ctx, accept: Option<&str>) -> HResult<J> {
+    let (from, source, source_json) = upgrade_source(ctx, accept)?;
     let (bytes, art) = staged_core(ctx)?;
-    if from == pinned().version {
-        return Ok(json!({"sewExit": 0, "sew": {"state": "unchanged", "message": "already the pin"}, "stderrTail": ""}));
-    }
-    if version_cmp(from, pinned().version) != Some(std::cmp::Ordering::Less) {
-        return Err(Fail::state("upgrade refused: the installed Sew is newer than the pin (a downgrade is a restore)"));
+    if let Some(from) = from {
+        if from == pinned().version {
+            return Ok(json!({"sewExit": 0, "sew": {"state": "unchanged", "message": "already the pin"}, "stderrTail": ""}));
+        }
+        if version_cmp(from, pinned().version) != Some(std::cmp::Ordering::Less) {
+            return Err(Fail::state("upgrade refused: the installed Sew is newer than the pin (a downgrade is a restore)"));
+        }
     }
     // Sew's contract: the installed (older) Sew gets the bare binary, and
     // `--sha256` is the sha256 of THAT file (the pin's binary_sha256).
@@ -891,6 +970,10 @@ fn upgrade(ctx: &Ctx) -> HResult<J> {
     out["resetFailed"] = reset;
     out["from"] = json!(from);
     out["to"] = json!(pinned().version);
+    out["source"] = json!(source);
+    if source != "release" {
+        out["sourceBinary"] = source_json;
+    }
     // The new binary is in place: its notices follow it. Sew's upgrade
     // already happened, so a notice failure is reported, not an exit.
     if out["sewExit"] == 0 {

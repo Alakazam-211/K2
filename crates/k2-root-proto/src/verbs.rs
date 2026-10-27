@@ -269,6 +269,13 @@ pub enum SewVerb {
     /// Sew backs up, swaps, migrates, checks health and rolls back by
     /// itself; its exit code comes back as data, a refusal with its reason.
     Upgrade,
+    /// `engine sew upgrade accept-binary <sha256>` (0.46.5, item 12): the
+    /// owner accepted the installed binary by its exact sha256 (the daemon
+    /// asks the owner AND a fresh vault confirm). The helper re-hashes
+    /// `/usr/local/bin/sew` and runs it ONLY when it is exactly that sha and
+    /// not a release K2 knows; the target is always the pin. Additive argv:
+    /// an older helper refuses it (exit 2) before anything runs.
+    UpgradeAcceptBinary(String),
     /// `sew upgrade --rollback` (never `--accept-data-loss-since`).
     Rollback,
     /// `sew uninstall` (data, config and secrets kept).
@@ -342,6 +349,7 @@ impl SewVerb {
             ["config"] => Self::Config,
             ["systemctl", op] => Self::Systemctl(SewSystemctl::parse(op)?),
             ["upgrade"] => Self::Upgrade,
+            ["upgrade", "accept-binary", sha] if crate::sew::accept_sha_ok(sha) => Self::UpgradeAcceptBinary(sha.to_string()),
             ["rollback"] => Self::Rollback,
             ["uninstall"] => Self::Uninstall,
             ["purge", id] if crate::sew::install_id_ok(id) => {
@@ -386,6 +394,7 @@ impl SewVerb {
             Self::Config => s(&["config"]),
             Self::Systemctl(op) => s(&["systemctl", op.token()]),
             Self::Upgrade => s(&["upgrade"]),
+            Self::UpgradeAcceptBinary(sha) => s(&["upgrade", "accept-binary", sha]),
             Self::Rollback => s(&["rollback"]),
             Self::Uninstall => s(&["uninstall"]),
             Self::Purge { install_id, keep_backups: false } => s(&["purge", install_id]),
@@ -431,6 +440,7 @@ impl SewVerb {
             | Self::Config
             | Self::Systemctl(S::Migrate | S::Stop | S::DisableNow)
             | Self::Upgrade
+            | Self::UpgradeAcceptBinary(_)
             | Self::Rollback
             | Self::Uninstall
             | Self::Purge { .. }
@@ -476,6 +486,7 @@ impl SewVerb {
             Self::Install,
             Self::Config,
             Self::Upgrade,
+            Self::UpgradeAcceptBinary("7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385".into()),
             Self::Rollback,
             Self::Uninstall,
             Self::Purge { install_id: "48831765147549701".into(), keep_backups: false },
@@ -2737,6 +2748,7 @@ mod tests {
             &["engine", "sew", "systemctl", "stop"],
             &["engine", "sew", "systemctl", "disable-now"],
             &["engine", "sew", "upgrade"],
+            &["engine", "sew", "upgrade", "accept-binary", "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385"],
             &["engine", "sew", "rollback"],
             &["engine", "sew", "uninstall"],
             &["engine", "sew", "purge", "48831765147549701"],
@@ -2796,6 +2808,16 @@ mod tests {
             &["engine", "sew", "systemctl", "start", "postgresql@16-main"],
             &["engine", "sew", "systemctl"],
             &["engine", "sew", "upgrade", "--accept-data-loss-since=x"],
+            // item 12: the accept form takes exactly 64 lowercase hex, once.
+            &["engine", "sew", "upgrade", "accept-binary"],
+            &["engine", "sew", "upgrade", "accept-binary", "7ED8031EFBA4497131F09609B33A386401E910F992672499BD0D410C63952385"],
+            &["engine", "sew", "upgrade", "accept-binary", "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c6395238"],
+            &["engine", "sew", "upgrade", "accept-binary", "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385a"],
+            &["engine", "sew", "upgrade", "accept-binary", "zed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385"],
+            &["engine", "sew", "upgrade", "--accept-binary", "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385"],
+            &["engine", "sew", "upgrade", "accept-binary", "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385", "x"],
+            &["engine", "sew", "upgrade", "accept-binary", "/usr/local/bin/sew"],
+            &["engine", "sew", "rollback", "accept-binary", "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385"],
             &["engine", "sew", "rollback", "--accept-data-loss-since=20260927T031512Z"],
             &["engine", "sew", "uninstall", "--purge"],
             &["engine", "sew", "purge"],

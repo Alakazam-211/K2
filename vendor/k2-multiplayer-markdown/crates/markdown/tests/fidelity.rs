@@ -44,7 +44,7 @@ fn every_file_round_trips_byte_exact() {
         let (text, fmt) = codec::decode(&bytes).unwrap_or_else(|d| panic!("{name}: declined: {d}"));
         let mut doc = Doc::new(SCHEMA).unwrap();
         doc.replace_text_as(IMPORT, ROOT, &text).unwrap();
-        let reloaded = Doc::load(SCHEMA, &doc.encode_state()).unwrap();
+        let reloaded = Doc::load(SCHEMA, &doc.encode_state().expect("encode state")).unwrap();
         let out = codec::encode(&reloaded.text(ROOT).unwrap(), fmt);
         assert_eq!(out, bytes, "{name}: bytes changed through doc + store");
     }

@@ -4,6 +4,9 @@
 //! out to one controller, and runs that controller's jobs within the
 //! limits the machine's owner set. It never links `k2-core`; the wire is
 //! `k2-node-proto`.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 pub mod admin;
 pub mod artifacts;

@@ -19,6 +19,9 @@
 //! first: the slot's own job (or root, outside any unit) reaches the thing,
 //! so a pass means the wall made the difference. Any byte of another
 //! server's secret in a job's output fails the test.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 #![cfg(target_os = "linux")]
 

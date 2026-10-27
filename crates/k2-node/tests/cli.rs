@@ -1,5 +1,8 @@
 //! The `k2-node` binary and the installer scripts. Temp dirs only; no real
 //! dscl/useradd/systemctl/launchctl ever runs here.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -9,6 +9,9 @@
 //!   config, `/Users`, and (network none) every non-loopback address.
 //!
 //! The Linux `k2job` unit needs root and systemd: `job_wall_linux.rs`.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 mod common;
 

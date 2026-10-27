@@ -5,6 +5,9 @@
 //! 0.46.3 and older created `.new` with `.mode(0o755)` and got 0700 under
 //! that umask, so the node user couldn't exec it (203/EXEC) and every
 //! update rolled back. `stage_build` must give 0755 whatever the umask.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 

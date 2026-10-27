@@ -1,5 +1,8 @@
 //! k2-node against a loopback fake controller (§17 Handshake, Enroll,
 //! Runner, Ledger, Sync). Temp dirs only; no real network or users.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 mod common;
 

@@ -4,6 +4,9 @@
 //! refuses a secret plan at assign with no ledger row (SE16, SE17).
 //! The walled path (executor, unit, redaction, SE26) is in
 //! `job_wall_linux.rs` (root). Fake secrets only.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 mod common;
 

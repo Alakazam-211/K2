@@ -10,6 +10,9 @@
 //! server's secret in a job's output fails the test.
 //!
 //!   cargo test -p k2-node --test tenant_wall_macos
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 #![cfg(target_os = "macos")]
 

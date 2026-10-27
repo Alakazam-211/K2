@@ -13,6 +13,9 @@
 //!
 //! Jobs run behind the Seatbelt wall, so those parts are macOS (the minis);
 //! the rest runs anywhere.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 mod common;
 

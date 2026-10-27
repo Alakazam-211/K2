@@ -1,6 +1,9 @@
 //! Node admin over the loopback fake controller: the node as courier to
 //! an in-process root executor (same uid here; peer rule = us), and the
 //! verbs the node answers itself (S1/S3/S9). Temp dirs only.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 mod common;
 

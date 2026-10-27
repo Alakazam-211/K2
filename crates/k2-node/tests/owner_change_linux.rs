@@ -24,6 +24,9 @@
 //! files it makes carry it, as a real node's carry `k2node`'s); the
 //! owner's job user is `k2ojt`; slot 1 is the target (one of the owner's
 //! own servers), slot 2 another server that must stay untouched.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 #![cfg(target_os = "linux")]
 

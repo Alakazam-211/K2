@@ -2,6 +2,9 @@
 //! `--artifact` globs are kept and hashed after the command exits, JUnit
 //! among them becomes a test summary in the terminal `state`, the signed
 //! receipt lists the files, and `artifact_get` streams one back.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 mod common;
 

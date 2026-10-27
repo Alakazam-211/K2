@@ -1,6 +1,9 @@
 //! `k2-node servers …` at the machine (prd-compute-shared-queue-v1 §9).
 //! Temp dirs only; the root-only verbs are checked to refuse without sudo
 //! (the tests never run as root).
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 use std::process::Command;
 

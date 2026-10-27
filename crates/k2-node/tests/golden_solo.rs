@@ -21,6 +21,9 @@
 //!
 //! Re-record (only ever from the v0.46.2 sources, never from a newer tree):
 //! `GOLDEN_RECORD=/abs/path/solo-frames-v0.46.2.json cargo test -p k2-node --test golden_solo`.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};

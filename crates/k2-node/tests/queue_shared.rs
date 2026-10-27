@@ -7,6 +7,9 @@
 //! servers loop opens B's session; each attach sets the server's protocol
 //! and runs `queue_attach` with its `Welcome.resume`. Tests that change a
 //! share mid-run (weights, an end date) set it on the queue directly.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 mod common;
 

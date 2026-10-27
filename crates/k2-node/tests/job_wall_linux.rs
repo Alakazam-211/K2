@@ -15,6 +15,9 @@
 //! /tmp, /home and /root, so a temp dir there would vanish inside it) and
 //! removes it; the units are transient. Every wall check runs a control
 //! first (the same probe without the wall reaches the thing).
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 #![cfg(target_os = "linux")]
 

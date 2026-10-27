@@ -75,6 +75,8 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "thread-context-v1",
     // 0.46.5 (prd-garden-board-needs-v1): k2.download, k2.pick, k2.onDrop.
     "zen-files-v1",
+    // 0.46.5 Mark all as read (thread-read-all-v1, catalog v27).
+    "thread-read-all-v1",
 ];
 
 /// A widget's manifest after checking (UW5, UWA7, UWB13).

@@ -366,11 +366,11 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
         let want = if role == "owner" { (400, Some("bad_request")) } else { (403, Some("owner_only")) };
         assert_eq!((s, v["error"].as_str()), want, "{role}: {v}");
     }
-    // A body past the Zen cap (zen_routes::MAX_BODY, 640 KiB), sent in full
+    // A body past the Zen cap (zen_routes::MAX_BODY, 1,280 KiB), sent in full
     // → 413. The daemon answers from the declared length, then drains the
     // rest of the body before closing, so the whole write succeeds and the
     // 413 is read (no reset).
-    let big = format!("{{\"name\":\"{}\"}}", "x".repeat(650 * 1024));
+    let big = format!("{{\"name\":\"{}\"}}", "x".repeat(k2_daemon::zen_routes::MAX_BODY + 10 * 1024));
     let (s, _) = Conn::try_open(port).expect("connect").request("POST", &format!("/cli/zen/widget/new?token={tok}"), Some(&big));
     assert_eq!(s, 413);
     task.abort();
@@ -619,9 +619,9 @@ async fn oversized_full_body_reads_413_not_a_reset() {
     let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_temp_home(|_home| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
-        // Past the Zen cap (zen_routes::MAX_BODY, 640 KiB since one 512 KiB widget
-        // file must fit).
-        let zen = format!("{{\"name\":\"{}\"}}", "x".repeat(650 * 1024));
+        // Past the Zen cap (zen_routes::MAX_BODY, 1,280 KiB since one 1 MB widget
+        // file, JSON-escaped, must fit).
+        let zen = format!("{{\"name\":\"{}\"}}", "x".repeat(k2_daemon::zen_routes::MAX_BODY + 10 * 1024));
         let brief = format!("{{\"title\":\"t\",\"briefHtml\":\"{}\"}}", "y".repeat(3 * 1024 * 1024));
         for (path, body) in [
             (format!("/cli/zen/widget/new?token={OWNER_TOKEN}"), &zen),

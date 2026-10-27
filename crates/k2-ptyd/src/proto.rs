@@ -149,6 +149,11 @@ pub enum Request {
     },
     Upgrade {
         exe: String,
+        /// Security review F6: the sha256 (hex) the exe must have; ptyd
+        /// verifies the file it opens, then selftests and execs that file.
+        /// Required: an upgrade without it is refused.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha256: Option<String>,
     },
     Shutdown {
         end_sessions: bool,

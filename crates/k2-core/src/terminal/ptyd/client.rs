@@ -167,8 +167,10 @@ impl Owner {
     pub fn upgrade(&self, exe: &Path) -> Result<String, String> {
         let since = self.generation();
         let from = self.version();
+        // Security review F6: ptyd execs only a file with this hash.
+        let sha256 = std::fs::read(exe).map(|b| auth::sha256_hex(&b)).map_err(|e| format!("read {}: {e}", exe.display()))?;
         self.reconnecting.store(true, Ordering::Release);
-        let r = self.request_timeout(Request::Upgrade { exe: exe.to_string_lossy().into_owned() }, UPGRADE_TIMEOUT);
+        let r = self.request_timeout(Request::Upgrade { exe: exe.to_string_lossy().into_owned(), sha256: Some(sha256) }, UPGRADE_TIMEOUT);
         match r {
             Ok(Reply::Ok) => {}
             Ok(Reply::Error { code, detail }) => {
@@ -742,8 +744,18 @@ pub const PTYD_BINARY_NAME: &str = "k2-ptyd";
 /// daemon executable (the macOS bundle nests it beside `k2-daemon` in
 /// `K2 Daemon.app/Contents/MacOS`; the Linux packages install it beside
 /// `/usr/bin/k2-daemon`). Linux release daemons also embed it (P84).
+/// `K2_PTYD_BIN` — dev/test builds only (security review F6: in a release
+/// build an env var must not be able to pick the binary that becomes the
+/// parent of every agent).
+fn ptyd_bin_env() -> Option<std::ffi::OsString> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var_os("K2_PTYD_BIN").filter(|p| !p.is_empty())
+}
+
 pub fn shipped_binary() -> Result<PathBuf, String> {
-    if let Some(p) = std::env::var_os("K2_PTYD_BIN").filter(|p| !p.is_empty()) {
+    if let Some(p) = ptyd_bin_env() {
         let p = PathBuf::from(p);
         return if p.is_file() { Ok(p) } else { Err("bin_env_missing".into()) };
     }
@@ -772,7 +784,7 @@ pub fn set_embedded(bytes: &'static [u8], sha256: &'static str) {
 /// authoritative when present, hash-checked), then the binary beside the
 /// daemon (macOS bundle, packages).
 pub fn run_location(home: &Path) -> Result<PathBuf, String> {
-    let from_env = std::env::var_os("K2_PTYD_BIN").filter(|p| !p.is_empty()).is_some();
+    let from_env = ptyd_bin_env().is_some();
     place_binary(home, from_env, EMBEDDED.get().copied())
 }
 

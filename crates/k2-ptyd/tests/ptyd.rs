@@ -840,7 +840,7 @@ fn upgrade_execs_in_place_keeping_pid_children_rings_and_fds() {
     let pids_before: Vec<(String, i32)> = list(&mut c).into_iter().map(|s| (s.sid, s.pid)).collect();
     let burst_before = session(&list(&mut c), "burst").clone();
 
-    assert_eq!(c.request(Request::Upgrade { exe: PTYD.into() }).unwrap(), Reply::Ok);
+    assert_eq!(c.request(upgrade_req(PTYD)).unwrap(), Reply::Ok);
     assert_dropped(&mut c);
     let mut rest = Vec::new();
     s.read_to_end(&mut rest).unwrap(); // the stream closed too
@@ -927,6 +927,49 @@ fn upgrade_execs_in_place_keeping_pid_children_rings_and_fds() {
     assert!(!alive(seq_pid));
 }
 
+/// An `upgrade` request carrying the file's sha256 (F6), or a hash that
+/// can't match when the file can't be read.
+fn upgrade_req(exe: &str) -> Request {
+    let sha256 = std::fs::read(exe).map(|b| k2_ptyd::auth::sha256_hex(&b)).unwrap_or_else(|_| "0".repeat(64));
+    Request::Upgrade { exe: exe.to_string(), sha256: Some(sha256) }
+}
+
+/// Security review F6: the exe is checked as opened — with the expected
+/// sha256 (required), ours, not group/other-writable, not a symlink —
+/// before any selftest or exec; every refusal leaves the old image serving.
+#[test]
+fn f6_upgrade_refuses_an_exe_that_is_not_the_verified_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = Home::new(false);
+    let _p = Ptyd::start(&home, &[("K2_PTYD_TEST_VERSION", "0.0.1")]);
+    let mut c = owner(&home);
+    c.conn.set_timeout(Some(Duration::from_secs(20))).unwrap();
+    let good = script(&home, "good.sh", "echo ok 9.9.9 1");
+    let writable = script(&home, "gw.sh", "echo ok 9.9.9 1");
+    std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o775)).unwrap();
+    let link = home.root.join("link.sh");
+    std::os::unix::fs::symlink(&good, &link).unwrap();
+    let link = link.to_string_lossy().into_owned();
+    let cases: Vec<(&str, Request, &str)> = vec![
+        ("no hash", Request::Upgrade { exe: good.clone(), sha256: None }, "sha256 required"),
+        ("wrong hash", Request::Upgrade { exe: good.clone(), sha256: Some("ab".repeat(32)) }, "sha256 mismatch"),
+        ("group-writable", upgrade_req(&writable), "group/other-writable"),
+        ("symlink", upgrade_req(&link), "exe: open"),
+    ];
+    for (what, req, want) in cases {
+        match c.request(req).unwrap() {
+            Reply::Error { code, detail } => {
+                assert_eq!(code, "upgrade_failed", "{what}");
+                assert!(detail.contains(want), "{what}: {detail}");
+            }
+            other => panic!("{what}: expected upgrade_failed, got {other:?}"),
+        }
+        assert!(matches!(c.request(Request::Ping).unwrap(), Reply::Pong { .. }), "{what}: still serving");
+    }
+    let log = std::fs::read_to_string(home.home.join("logs/ptyd.log")).unwrap();
+    assert!(log.contains("upgrade_failed: exe: sha256 mismatch"), "{log}");
+}
+
 fn script(home: &Home, name: &str, body: &str) -> String {
     use std::os::unix::fs::PermissionsExt;
     let p = home.root.join(name);
@@ -950,7 +993,7 @@ fn a_bad_upgrade_is_refused_and_the_old_image_keeps_serving() {
     c.conn.set_timeout(Some(Duration::from_secs(20))).unwrap();
     let cases = [
         ("relative", "k2-ptyd".to_string(), "absolute"),
-        ("missing", "/nonexistent/k2-ptyd".to_string(), "did not start"),
+        ("missing", "/nonexistent/k2-ptyd".to_string(), "exe: open"),
         ("exit 1", script(&home, "fails.sh", "exit 1"), "exited"),
         ("wrong format", script(&home, "fmt.sh", "echo ok 9.9.9 2"), "unexpected answer"),
         ("downgrade", script(&home, "old.sh", "echo ok 0.0.0 1"), "downgrade"),
@@ -958,7 +1001,7 @@ fn a_bad_upgrade_is_refused_and_the_old_image_keeps_serving() {
     ];
     for (what, exe, want) in cases {
         let t = Instant::now();
-        match c.request(Request::Upgrade { exe }).unwrap() {
+        match c.request(upgrade_req(&exe)).unwrap() {
             Reply::Error { code, detail } => {
                 assert_eq!(code, "upgrade_failed", "{what}");
                 assert!(detail.contains(want), "{what}: {detail}");
@@ -991,7 +1034,7 @@ fn a_failed_exec_keeps_the_old_image_serving() {
     let mut s = c.attach("seq", 0).unwrap();
     let mut seen = Vec::new();
     read_more(&mut s, &mut seen, 200, Duration::from_secs(10));
-    assert_eq!(c.request(Request::Upgrade { exe: PTYD.into() }).unwrap(), Reply::Ok);
+    assert_eq!(c.request(upgrade_req(PTYD)).unwrap(), Reply::Ok);
     assert_dropped(&mut c);
     let mut rest = Vec::new();
     s.read_to_end(&mut rest).unwrap();

@@ -1063,7 +1063,7 @@ impl Server {
                 }
                 self.reply(id, rid, Reply::Ok);
             }
-            Request::Upgrade { exe } => self.do_upgrade(id, rid, exe),
+            Request::Upgrade { exe, sha256 } => self.do_upgrade(id, rid, exe, sha256),
             Request::Shutdown { end_sessions } => {
                 let running = self.sessions.values().filter(|s| s.running()).count();
                 if !end_sessions && running > 0 {

@@ -102,10 +102,83 @@ struct Prepared {
     envp: Vec<CString>,
     state: OwnedFd,
     to_version: String,
+    verified: Verified,
+}
+
+/// The upgrade candidate, opened once and checked (security review F6).
+struct Verified {
+    fd: OwnedFd,
+    dev: u64,
+    ino: u64,
+    sha256: String,
+}
+
+/// Largest exe ptyd will hash (a k2-ptyd is ~1–2 MiB).
+const MAX_EXE: u64 = 256 << 20;
+
+impl Verified {
+    /// What the selftest runs: on Linux the opened file itself (the child
+    /// gets it at [`SELFTEST_FD`] and execs `/proc/self/fd/<that>`; ptyd is
+    /// non-dumpable, so `/proc/<ptyd>/fd` isn't reachable from a child);
+    /// on macOS the path, re-checked to still be the same file.
+    fn selftest_target(&self, path: &Path) -> Result<(PathBuf, Option<RawFd>), String> {
+        if cfg!(target_os = "linux") {
+            Ok((PathBuf::from(format!("/proc/self/fd/{SELFTEST_FD}")), Some(self.fd.as_raw_fd())))
+        } else {
+            self.path_still_matches(path)?;
+            Ok((path.to_path_buf(), None))
+        }
+    }
+
+    /// The path still names the opened file (same device + inode, not a
+    /// symlink) and still hashes to the expected value.
+    fn path_still_matches(&self, path: &Path) -> Result<(), String> {
+        use std::os::unix::fs::MetadataExt;
+        let md = std::fs::symlink_metadata(path).map_err(|e| format!("lstat: {}", e.kind()))?;
+        if md.file_type().is_symlink() || md.dev() != self.dev || md.ino() != self.ino {
+            return Err("the exe path no longer names the verified file".into());
+        }
+        let again = open_verified(path, &self.sha256)?;
+        if again.dev != self.dev || again.ino != self.ino {
+            return Err("the exe path no longer names the verified file".into());
+        }
+        Ok(())
+    }
+}
+
+/// Open `path` with O_NOFOLLOW and check the opened file: regular, owned
+/// by our euid, not group/other-writable, sha256 == `want` (hex).
+fn open_verified(path: &Path, want: &str) -> Result<Verified, String> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|e| format!("open: {}", e.kind()))?;
+    let md = f.metadata().map_err(|e| format!("fstat: {}", e.kind()))?;
+    if !md.is_file() {
+        return Err("not a regular file".into());
+    }
+    if md.uid() != crate::sys::euid() {
+        return Err(format!("owned by uid {}, not ours", md.uid()));
+    }
+    if md.mode() & 0o022 != 0 {
+        return Err(format!("mode {:o} is group/other-writable", md.mode() & 0o777));
+    }
+    if md.len() > MAX_EXE {
+        return Err("too large".into());
+    }
+    let mut bytes = Vec::with_capacity(md.len() as usize);
+    (&f).take(MAX_EXE).read_to_end(&mut bytes).map_err(|e| format!("read: {}", e.kind()))?;
+    let got = crate::auth::sha256_hex(&bytes);
+    if !got.eq_ignore_ascii_case(want.trim()) {
+        return Err(format!("sha256 mismatch (got {}…)", &got[..12]));
+    }
+    Ok(Verified { fd: OwnedFd::from(f), dev: md.dev(), ino: md.ino(), sha256: want.trim().to_ascii_lowercase() })
 }
 
 impl Server {
-    pub(super) fn do_upgrade(&mut self, id: u64, rid: Option<u64>, exe: String) {
+    pub(super) fn do_upgrade(&mut self, id: u64, rid: Option<u64>, exe: String, sha256: Option<String>) {
         let fail = |s: &mut Server, why: String| {
             s.log.line(&format!("upgrade_failed: {why}"));
             s.reply(id, rid, err("upgrade_failed", &why));
@@ -120,7 +193,21 @@ impl Server {
         if self.sessions.values().any(|s| s.kill_deadline.is_some()) {
             return fail(self, "busy: a kill is in progress".into());
         }
-        let to_version = match selftest(path, SELFTEST_TIMEOUT) {
+        // Security review F6: open the candidate ONCE and check what was
+        // opened (ours, not group/other-writable, the expected sha256);
+        // the selftest and the exec then use that very file.
+        let Some(want) = sha256.filter(|h| !h.is_empty()) else {
+            return fail(self, "sha256 required".into());
+        };
+        let verified = match open_verified(path, &want) {
+            Ok(v) => v,
+            Err(e) => return fail(self, format!("exe: {e}")),
+        };
+        let (target, target_fd) = match verified.selftest_target(path) {
+            Ok(t) => t,
+            Err(e) => return fail(self, format!("exe: {e}")),
+        };
+        let to_version = match selftest(&target, target_fd, SELFTEST_TIMEOUT) {
             Ok(v) => v,
             Err(e) => return fail(self, format!("selftest: {e}")),
         };
@@ -135,7 +222,7 @@ impl Server {
         for c in data {
             self.conn_readable(c);
         }
-        let prep = match self.prepare_exec(&exe, to_version) {
+        let prep = match self.prepare_exec(&exe, to_version, verified) {
             Ok(p) => p,
             Err(e) => return fail(self, e),
         };
@@ -159,7 +246,7 @@ impl Server {
         self.log.line(&format!("upgrade_failed: exec: {}; still serving v{}", e.kind(), PTYD_VERSION));
     }
 
-    fn prepare_exec(&mut self, exe: &str, to_version: String) -> Result<Prepared, String> {
+    fn prepare_exec(&mut self, exe: &str, to_version: String, verified: Verified) -> Result<Prepared, String> {
         use std::os::unix::ffi::OsStrExt;
         let state = self.write_state().map_err(|e| format!("state: {e}"))?;
         let c = |s: &str| CString::new(s).map_err(|_| "NUL byte in the exe path".to_string());
@@ -180,7 +267,7 @@ impl Server {
                 CString::new(b).ok()
             })
             .collect();
-        Ok(Prepared { exe: c(exe)?, argv, envp, state, to_version })
+        Ok(Prepared { exe: c(exe)?, argv, envp, state, to_version, verified })
     }
 
     /// Every fd the new image takes over.
@@ -303,14 +390,55 @@ fn exec(p: &Prepared) -> io::Error {
     argv.push(std::ptr::null());
     let mut envp: Vec<*const libc::c_char> = p.envp.iter().map(|c| c.as_ptr()).collect();
     envp.push(std::ptr::null());
-    // SAFETY: NUL-terminated arrays of valid C strings that outlive the call.
-    unsafe { libc::execve(p.exe.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
+    // Security review F6: exec the file that was verified, not whatever the
+    // path names now. Linux: `fexecve` on the opened fd (an ELF image; the
+    // fd's CLOEXEC is fine for that). macOS has no fexecve: the path must
+    // still be the same, unchanged file right before `execve`.
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: NUL-terminated arrays of valid C strings that outlive the call.
+        unsafe { libc::fexecve(p.verified.fd.as_raw_fd(), argv.as_ptr(), envp.as_ptr()) };
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let path = Path::new(std::ffi::OsStr::from_bytes(p.exe.as_bytes()));
+        if let Err(e) = p.verified.path_still_matches(path) {
+            return io::Error::new(io::ErrorKind::PermissionDenied, e);
+        }
+        // SAFETY: NUL-terminated arrays of valid C strings that outlive the call.
+        unsafe { libc::execve(p.exe.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
+    }
     io::Error::last_os_error()
 }
 
+/// The fd the verified exe sits at in the selftest child (Linux).
+const SELFTEST_FD: RawFd = 100;
+
 /// Run `exe --selftest --state-format 1` with a bound. `Ok(version)`.
-fn selftest(exe: &Path, within: Duration) -> Result<String, String> {
-    let mut child = Command::new(exe)
+/// `fd`: the verified exe, put at [`SELFTEST_FD`] in the child (without
+/// CLOEXEC, so a script's interpreter can open it too); `exe` is then
+/// `/proc/self/fd/<SELFTEST_FD>`.
+fn selftest(exe: &Path, fd: Option<RawFd>, within: Duration) -> Result<String, String> {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = Command::new(exe);
+    if let Some(src) = fd {
+        // SAFETY: dup2 is async-signal-safe; runs in the forked child.
+        unsafe {
+            cmd.pre_exec(move || {
+                if src == SELFTEST_FD {
+                    // dup2 onto itself keeps CLOEXEC: clear it instead.
+                    if libc::fcntl(src, libc::F_SETFD, 0) == -1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                } else if libc::dup2(src, SELFTEST_FD) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let mut child = cmd
         .args(["--selftest", "--state-format", &STATE_FORMAT.to_string()])
         .env_clear()
         .envs(std::env::vars_os().filter(|(k, _)| k.to_str().is_some_and(crate::env_allowed)))

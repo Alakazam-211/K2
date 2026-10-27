@@ -127,6 +127,9 @@ mod tests {
 
     #[test]
     fn the_person_k2_and_a_listed_agent_pass_and_nothing_else_does() {
+        // `ga::add` writes Access Audit lines under $HOME: a temp HOME (and its
+        // env lock) keeps them out of a parallel test's audit file.
+        let _home = crate::test_env::TempHome::new();
         let conn = db();
         let owner = Actor::Owner;
         ga::add(&conn, G, "w-listed", &Change::new(Via::Settings, &owner, 1)).expect("list");

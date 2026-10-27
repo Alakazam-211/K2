@@ -255,9 +255,18 @@ fn chat_rejects_role_other_target_non_uuid_and_long_username() {
         grant("principal", "legacy", None).unwrap_err(),
         "id 'p1' is not a UUID; chat needs one"
     );
-    // A 65-char username (skin usernames have no max).
+    // A 65-char username: new ones are refused at creation (max 64, 0.46.4),
+    // so this is an older row, stored directly like 'p1' above.
     let long = "a".repeat(65);
-    person(&long);
+    let long_id = uuid::Uuid::new_v4().to_string();
+    skin::with_skin_conn(|c| {
+        c.execute(
+            "INSERT INTO principals (id, username, created_at) VALUES (?1, ?2, 0)",
+            rusqlite::params![long_id, long],
+        )
+        .map_err(|e| e.to_string())
+    })
+    .unwrap();
     assert_eq!(
         grant("principal", &long, None).unwrap_err(),
         format!("username '{long}' is longer than 64 characters; chat cannot use it")

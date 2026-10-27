@@ -303,7 +303,7 @@ mod tests {
         if let Some(parent) = link.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        std::os::unix::fs::symlink(target, link).unwrap();
+        crate::test_env::symlink(target, link).unwrap();
     }
 
     #[test]

@@ -719,7 +719,7 @@ mod tests {
         let real = proj.join(".k2so/skills/k2so/SKILL.md");
         fs::create_dir_all(real.parent().unwrap()).unwrap();
         fs::write(&real, "canonical body").unwrap();
-        std::os::unix::fs::symlink(&real, proj.join(".goosehints")).unwrap();
+        crate::test_env::symlink(&real, proj.join(".goosehints")).unwrap();
 
         let probes = detect_canonical_state(path);
         let by_path: std::collections::HashMap<_, _> = probes

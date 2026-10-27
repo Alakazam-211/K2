@@ -335,7 +335,7 @@ fn codex_shadow_home_layout() {
     assert!(is_link_to(&slot.join("new_file.json"), &shared.join("new_file.json")));
     // A symlinked auth.json is refused.
     fs::remove_file(slot.join("auth.json")).unwrap();
-    std::os::unix::fs::symlink(shared.join("auth.json"), slot.join("auth.json")).unwrap();
+    crate::test_env::symlink(shared.join("auth.json"), slot.join("auth.json")).unwrap();
     let err = pins::materialize_codex_shadow(&slot, &shared).unwrap_err();
     assert!(err.contains("symlinked auth.json"), "{err}");
 }

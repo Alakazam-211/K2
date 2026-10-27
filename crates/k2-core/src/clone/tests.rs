@@ -168,6 +168,16 @@ fn set_file_mtime(path: &Path, secs: u64) {
 fn filetime_secs(secs: u64) -> u64 {
     secs
 }
+#[cfg(windows)]
+fn set_file_mtime(path: &Path, secs: u64) {
+    let f = std::fs::OpenOptions::new().write(true).open(path).unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
+    f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+        .unwrap_or_else(|e| panic!("set_modified failed for {}: {e}", path.display()));
+}
+#[cfg(windows)]
+fn filetime_secs(secs: u64) -> u64 {
+    secs
+}
 
 fn opts(home: &Path) -> CloneOptions {
     CloneOptions {

@@ -1949,8 +1949,8 @@ mod tests {
         std::fs::create_dir_all(&by).unwrap();
         std::fs::write(dev.join("sda1"), b"").unwrap();
         std::fs::write(dev.join("sdb1"), b"").unwrap();
-        std::os::unix::fs::symlink(dev.join("sda1"), by.join("1111-aaaa")).unwrap();
-        std::os::unix::fs::symlink("../dev/sdb1", by.join("2222-bbbb")).unwrap();
+        crate::test_env::symlink(dev.join("sda1"), by.join("1111-aaaa")).unwrap();
+        crate::test_env::symlink("../dev/sdb1", by.join("2222-bbbb")).unwrap();
         let sda = dev.join("sda1").to_string_lossy().into_owned();
         let sdb = dev.join("sdb1").to_string_lossy().into_owned();
         assert_eq!(uuid_for_source(&by, &sda).as_deref(), Some("1111-aaaa"));

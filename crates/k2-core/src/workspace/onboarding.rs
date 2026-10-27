@@ -896,7 +896,7 @@ mod tests {
         fs::write(&real, "real body\n").unwrap();
         // CLAUDE.md is a symlink — should be ignored.
         let claude = p.join("CLAUDE.md");
-        std::os::unix::fs::symlink(&real, &claude).unwrap();
+        crate::test_env::symlink(&real, &claude).unwrap();
         let found = scan_harness_files(&path);
         assert!(found.is_empty(), "expected no detections, got {:?}", found);
         fs::remove_dir_all(&p).ok();
@@ -1061,7 +1061,7 @@ mod tests {
             format!("{AGENTS_MD_COMPOSE_BANNER} -->\ncanon\n"),
         )
         .unwrap();
-        std::os::unix::fs::symlink(&canonical, p.join("AGENTS.md")).unwrap();
+        crate::test_env::symlink(&canonical, p.join("AGENTS.md")).unwrap();
         let result = plant_root_agents_md(&path, "ignored");
         assert_eq!(result, PlantResult::LeftSymlink);
         let meta = fs::symlink_metadata(p.join("AGENTS.md")).expect("symlink remains");
@@ -1078,7 +1078,7 @@ mod tests {
         let path = p.to_string_lossy().to_string();
         let other = p.join("elsewhere.md");
         fs::write(&other, "not ours\n").unwrap();
-        std::os::unix::fs::symlink(&other, p.join("AGENTS.md")).unwrap();
+        crate::test_env::symlink(&other, p.join("AGENTS.md")).unwrap();
         let result = plant_root_agents_md(&path, "new");
         match result {
             PlantResult::Skipped { reason } => {

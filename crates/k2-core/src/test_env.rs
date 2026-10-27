@@ -714,8 +714,79 @@ impl ClosedPort {
 /// Where [`ClosedPort`] takes its ports: a range no K2 product or test port
 /// uses (those are 5432, 8443, 8470, 8730, 384xx, 38600-38999), below
 /// every default ephemeral range.
-#[cfg(unix)]
 pub const RESERVED_PORTS: std::ops::Range<u16> = 21000..32000;
+
+/// Windows [`ClosedPort`]: a socket bound to the port and never listening.
+/// Windows answers a SYN to a bound, non-listening port with a reset (the
+/// connect fails `ConnectionRefused`), and a second plain bind of it fails
+/// (`WSAEADDRINUSE`; Rust's `TcpListener::bind` sets no `SO_REUSEADDR`
+/// there). Hyper-V/WSL excluded port ranges answer `WSAEACCES`: skipped.
+#[cfg(windows)]
+pub struct ClosedPort {
+    port: u16,
+    _socks: Vec<socket2::Socket>,
+}
+
+#[cfg(windows)]
+impl ClosedPort {
+    /// Reserve a closed `127.0.0.1` port.
+    pub fn new() -> Self {
+        let (s, port) = reserve_win(false, 0).unwrap_or_else(|e| panic!("reserve 127.0.0.1:0: {e}"));
+        Self { port, _socks: vec![s] }
+    }
+
+    /// Reserve the same closed port on `127.0.0.1` and (when IPv6
+    /// loopback exists) `::1`.
+    pub fn dual() -> Self {
+        for _ in 0..64 {
+            let (v4, port) = reserve_win(false, 0).unwrap_or_else(|e| panic!("reserve 127.0.0.1:0: {e}"));
+            match reserve_win(true, port) {
+                Ok((v6, _)) => return Self { port, _socks: vec![v4, v6] },
+                Err(e) if e.kind() == std::io::ErrorKind::AddrNotAvailable => return Self { port, _socks: vec![v4] },
+                Err(_) => continue,
+            }
+        }
+        panic!("could not reserve one closed port on both loopbacks");
+    }
+
+    /// The reserved port.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+/// A loopback socket bound to `port` (0 = the next free one in
+/// [`RESERVED_PORTS`]), not listening.
+#[cfg(windows)]
+fn reserve_win(v6: bool, port: u16) -> std::io::Result<(socket2::Socket, u16)> {
+    let bind_at = |p: u16| -> std::io::Result<socket2::Socket> {
+        let (domain, addr) = if v6 {
+            (socket2::Domain::IPV6, std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, p)))
+        } else {
+            (socket2::Domain::IPV4, std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, p)))
+        };
+        let s = socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
+        s.bind(&addr.into())?;
+        Ok(s)
+    };
+    if port != 0 {
+        return bind_at(port).map(|s| (s, port));
+    }
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let span = (RESERVED_PORTS.end - RESERVED_PORTS.start) as u32;
+    let base = std::process::id().wrapping_mul(2654435761) % span;
+    let mut last = None;
+    for _ in 0..512 {
+        let p = RESERVED_PORTS.start + ((base + NEXT.fetch_add(1, Ordering::Relaxed)) % span) as u16;
+        match bind_at(p) {
+            Ok(s) => return Ok((s, p)),
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied) => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free port in the reserved range")))
+}
 
 /// A TCP socket bound to loopback `port` (0 = the next free one in
 /// [`RESERVED_PORTS`]) and connected to a private loopback listener, plus
@@ -893,6 +964,45 @@ pub fn reap_frpc_under(root: &Path) {
     }
 }
 
+/// Make a symlink in a test, on any OS. On Windows the link is a directory
+/// link when `target` (resolved against the link's folder when relative)
+/// is a directory, else a file link; creating one needs the symlink
+/// privilege (an administrator, or Developer Mode), and without it this
+/// fails loudly rather than letting the test skip.
+pub fn symlink(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        let (target, link) = (target.as_ref(), link.as_ref());
+        // A relative target keeps its '/' verbatim in the reparse data, and
+        // Windows resolves only '\' there.
+        let target_buf = if target.is_relative() {
+            PathBuf::from(target.to_string_lossy().replace('/', "\\"))
+        } else {
+            target.to_path_buf()
+        };
+        let target = target_buf.as_path();
+        let resolved = match link.parent() {
+            Some(dir) if target.is_relative() => dir.join(target),
+            _ => target.to_path_buf(),
+        };
+        let r = if resolved.is_dir() {
+            std::os::windows::fs::symlink_dir(target, link)
+        } else {
+            std::os::windows::fs::symlink_file(target, link)
+        };
+        r.map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("symlink {} -> {}: {e} (Windows needs an administrator or Developer Mode)", link.display(), target.display()),
+            )
+        })
+    }
+}
+
 /// Run `f` with a fresh temp `$HOME` (see [`TempHome`]).
 pub fn with_temp_home<R>(f: impl FnOnce(&Path) -> R) -> R {
     let home = TempHome::new();
@@ -1010,6 +1120,23 @@ mod tests {
         }
         assert_eq!(std::env::var_os(SHIM_DIR_ENV), before);
         assert!(!dir.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn closed_port_refuses_and_stays_reserved_on_windows() {
+        for closed in [ClosedPort::new(), ClosedPort::dual()] {
+            for _ in 0..3 {
+                let err = std::net::TcpStream::connect_timeout(
+                    &std::net::SocketAddr::from(([127, 0, 0, 1], closed.port())),
+                    std::time::Duration::from_secs(5),
+                )
+                .expect_err("nothing listens on a reserved port");
+                assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused, "{err:?}");
+            }
+            assert!(std::net::TcpListener::bind(("127.0.0.1", closed.port())).is_err(), "port {} is held", closed.port());
+            assert!(RESERVED_PORTS.contains(&closed.port()), "{}", closed.port());
+        }
     }
 
     #[cfg(unix)]

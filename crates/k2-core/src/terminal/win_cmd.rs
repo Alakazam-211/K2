@@ -101,23 +101,16 @@ fn find_on_path(
     exists: &impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
     let raw = Path::new(name);
-    if raw.components().count() > 1 || raw.is_absolute() {
-        return if exists(raw) { Some(raw.to_path_buf()) } else { None };
-    }
-
     let has_ext = raw.extension().is_some();
     let exts = parse_pathext(pathext);
-
-    for dir in dirs {
-        if dir.as_os_str().is_empty() {
-            continue;
-        }
-        let exact = dir.join(name);
-        if exists(&exact) {
-            return Some(exact);
-        }
+    // cmd.exe's rule: a name with an extension runs as given; one without
+    // runs only as <name><PATHEXT>. An extensionless file is never a
+    // Windows program: npm puts a `codex` sh script (for Git Bash) beside
+    // `codex.cmd`, and handing that script to CreateProcess fails with
+    // "%1 is not a valid Win32 application".
+    let in_dir = |base: &Path| -> Option<PathBuf> {
         if has_ext {
-            continue;
+            return exists(base).then(|| base.to_path_buf());
         }
         for ext in &exts {
             // PATHEXT is usually uppercase (.EXE); npm files are
@@ -125,11 +118,25 @@ fn find_on_path(
             // try both so tests and case-sensitive mounts work.
             let lower = ext.to_ascii_lowercase();
             for e in [ext.as_str(), lower.as_str()] {
-                let cand = dir.join(format!("{name}{e}"));
+                let mut cand = base.as_os_str().to_os_string();
+                cand.push(e);
+                let cand = PathBuf::from(cand);
                 if exists(&cand) {
                     return Some(cand);
                 }
             }
+        }
+        None
+    };
+    if raw.components().count() > 1 || raw.is_absolute() {
+        return in_dir(raw);
+    }
+    for dir in dirs {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        if let Some(found) = in_dir(&dir.join(name)) {
+            return Some(found);
         }
     }
     None
@@ -223,6 +230,33 @@ mod tests {
         );
         assert_eq!(prog, dir.join("foo.exe").to_string_lossy());
         assert!(args.is_empty());
+    }
+
+    /// npm's global dir holds `codex` (an sh script for Git Bash), `codex.cmd`
+    /// and `codex.ps1`: the .cmd is the Windows program, never the script.
+    #[test]
+    fn an_extensionless_npm_script_is_never_the_program() {
+        let dir = PathBuf::from(r"C:\Users\x\AppData\Roaming\npm");
+        let files: HashSet<_> = [dir.join("codex"), dir.join("codex.cmd"), dir.join("codex.ps1")].into_iter().collect();
+        let (prog, args) = resolve_for_pty(
+            "codex",
+            &[],
+            &dir.to_string_lossy(),
+            ".COM;.EXE;.BAT;.CMD;.PS1",
+            r"C:\Windows\System32\cmd.exe",
+            exists_in(&files),
+        );
+        assert_eq!(prog, r"C:\Windows\System32\cmd.exe");
+        assert!(args[3].contains("codex.cmd"), "{args:?}");
+        // The same through an absolute path without an extension.
+        let full = dir.join("codex").to_string_lossy().into_owned();
+        let (prog, args) = resolve_for_pty(&full, &[], "", ".EXE;.CMD", "cmd.exe", exists_in(&files));
+        assert_eq!(prog, "cmd.exe");
+        assert!(args[3].contains("codex.cmd"), "{args:?}");
+        // An extensionless file alone resolves to nothing (left as given).
+        let only: HashSet<_> = [dir.join("lonely")].into_iter().collect();
+        let (prog, _) = resolve_for_pty("lonely", &[], &dir.to_string_lossy(), ".EXE;.CMD", "cmd.exe", exists_in(&only));
+        assert_eq!(prog, "lonely");
     }
 
     #[test]

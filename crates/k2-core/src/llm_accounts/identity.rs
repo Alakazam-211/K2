@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::store;
+use super::{slots, store};
 use super::{Entry, Tool, WalletError};
 
 /// The account a credential or profile names. Never a secret.
@@ -473,7 +473,7 @@ pub fn expected_identity(tool: Tool, e: &Entry) -> Option<(AccountIdentity, Sour
             }
         }
         Tool::Codex => {
-            if let Ok(Some(bytes)) = store::read_slot(tool, &e.id) {
+            if let Ok(Some(bytes)) = slots::read_slot(tool, &e.id) {
                 if let Some(id) = cred_identity(tool, &bytes) {
                     return Some((id, Source::Credential));
                 }

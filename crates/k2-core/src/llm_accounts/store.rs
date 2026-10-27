@@ -469,6 +469,18 @@ pub(crate) fn read_live(tool: Tool) -> Result<Option<Vec<u8>>, WalletError> {
 /// live value back exactly (or remove the new one when the tool was
 /// signed out). The swap is committed only when the read-back matches.
 pub(crate) fn write_live(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
+    write_live_expecting(tool, bytes, None)
+}
+
+/// [`write_live`] with a compare-and-swap (prd-llm-logins-in-vault-v1
+/// A3): with `expect = Some(fp)` it refuses (`live_changed`, nothing
+/// written) when the live store no longer holds the bytes whose sha256 is
+/// `fp` (`Some(None)`: the tool was signed out). This catches a CLI that
+/// refreshed its token after the switch saved the outgoing login. Grok:
+/// K2 holds Grok's own `auth.json.lock` from this read to the write.
+/// Claude and Codex take no lock K2 can share, so a gap of a few
+/// milliseconds remains between the read and the write.
+pub(crate) fn write_live_expecting(tool: Tool, bytes: &[u8], expect: Option<Option<[u8; 32]>>) -> Result<(), WalletError> {
     validate_cred(tool, bytes).map_err(|why| invalid_cred(tool, "login to make live", why))?;
     if tool == Tool::Gemini {
         return Err(WalletError::LiveStoreUnavailable(
@@ -484,16 +496,40 @@ pub(crate) fn write_live(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
             WalletError::LiveStoreUnavailable(format!("could not make this Claude login live ({e}); nothing changed"))
         })?;
     }
+    // Grok: hold Grok's own lock across the read, the check and the
+    // write (and any restore).
+    let _grok_lock = if tool == Tool::Grok {
+        let (home, _) = live_home(tool);
+        Some(
+            FileLock::acquire(&home.join("auth.json.lock"), Duration::from_secs(10))
+                .map_err(|_| WalletError::LockBusy("Grok (auth.json.lock)".into()))?,
+        )
+    } else {
+        None
+    };
     // Can't read what's live → can't restore it → don't write.
     let prev = read_live(tool)?;
+    if let Some(want) = expect {
+        if prev.as_deref().map(sha256) != want {
+            return Err(WalletError::Conflict(
+                "live_changed",
+                format!("{}'s own store changed during the switch (the CLI renewed its token); nothing was switched, try again", tool.display()),
+            ));
+        }
+    }
     commit_verified(
         tool,
         bytes,
         prev.as_deref(),
-        |b| write_live_raw(tool, b),
+        |b| write_live_raw_locked(tool, b),
         || read_live(tool),
         || clear_live(tool),
     )
+}
+
+fn sha256(b: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(b).into()
 }
 
 /// The write → read back → compare → restore sequence behind
@@ -557,6 +593,16 @@ fn clear_live(tool: Tool) -> Result<(), WalletError> {
 /// on macOS: keychain item, plus the fallback file when one already
 /// exists (so the two never disagree). Grok: under Grok's own
 /// `auth.json.lock`.
+/// [`write_live_raw`] for a caller that already holds Grok's
+/// `auth.json.lock` ([`write_live_expecting`]): flock is per open file,
+/// so taking it again here would wait on ourselves.
+fn write_live_raw_locked(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
+    match tool {
+        Tool::Grok => write_private(&live_cred_path(tool), bytes).map_err(|e| WalletError::Io(e.to_string())),
+        _ => write_live_raw(tool, bytes),
+    }
+}
+
 fn write_live_raw(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
     match tool {
         Tool::Claude => {
@@ -830,9 +876,15 @@ pub fn claude_account_labels(global_config: &Path) -> (Option<String>, Option<St
 
 /// Metadata of a slot (plus Claude's slot `.claude.json` labels).
 pub fn slot_meta(tool: Tool, id: &str) -> CredMeta {
-    let mut m = match read_slot(tool, id) {
-        Ok(Some(b)) => parse_meta(tool, &b),
-        _ => CredMeta::default(),
+    slot_meta_from(tool, id, read_slot(tool, id).ok().flatten().as_deref())
+}
+
+/// [`slot_meta`] from a credential the caller already read (the server
+/// wallet reads through `slots`, which may answer from the vault).
+pub(crate) fn slot_meta_from(tool: Tool, id: &str, cred: Option<&[u8]>) -> CredMeta {
+    let mut m = match cred {
+        Some(b) => parse_meta(tool, b),
+        None => CredMeta::default(),
     };
     if tool == Tool::Claude {
         let (e, o) = claude_account_labels(&slot_dir(tool, id).join(".claude.json"));

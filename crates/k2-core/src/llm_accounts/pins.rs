@@ -49,7 +49,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
-use super::store;
+use super::{slots, store};
 use super::{active_id, get, kind, live_owner, lookup, now, state, update_meta, Entry, MetaUpdate, Tool, WalletError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -148,7 +148,7 @@ pub fn pin(
                 ),
             ));
         }
-        if !store::slot_has_cred(t, &e.id) {
+        if !slots::has_cred(t, &e.id) {
             return Err(WalletError::NotSignedIn(e.id));
         }
     }
@@ -363,7 +363,7 @@ fn validate_api_key(key: &str) -> Result<String, WalletError> {
 pub fn add_api_key(conn: &Connection, tool: Tool, label: &str, key: &str, by: Option<&str>) -> Result<Entry, WalletError> {
     let key = validate_api_key(key)?;
     let e = super::create_kind(conn, tool, label, kind::API_KEY, by)?;
-    if let Err(err) = store::write_api_key(tool, &e.id, &key) {
+    if let Err(err) = slots::write_api_key(tool, &e.id, &key) {
         let _ = conn.execute("DELETE FROM llm_accounts WHERE id = ?1", params![e.id]);
         return Err(err);
     }
@@ -386,12 +386,12 @@ pub fn replace_api_key(conn: &Connection, id: &str, key: &str) -> Result<Entry, 
         return Err(WalletError::Conflict("not_api_key", "that token is a subscription, not an API token".into()));
     }
     let t = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
-    store::write_api_key(t, &e.id, &validate_api_key(key)?)?;
+    slots::write_api_key(t, &e.id, &validate_api_key(key)?)?;
     get(conn, &e.id)?.ok_or(WalletError::NotFound(e.id))
 }
 
 fn api_key_env(tool: Tool, id: &str) -> Result<Vec<(String, String)>, WalletError> {
-    let key = store::read_api_key(tool, id).ok_or_else(|| WalletError::NotSignedIn(id.to_string()))?;
+    let key = slots::read_api_key(tool, id)?.ok_or_else(|| WalletError::NotSignedIn(id.to_string()))?;
     Ok(tool.api_key_env().iter().map(|v| (v.to_string(), key.clone())).collect())
 }
 

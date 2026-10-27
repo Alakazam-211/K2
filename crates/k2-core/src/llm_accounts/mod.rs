@@ -26,6 +26,7 @@
 
 pub mod identity;
 pub mod pins;
+pub mod slots;
 pub mod store;
 pub mod wallet;
 
@@ -207,6 +208,10 @@ pub enum WalletError {
     /// A rule refusal with its own code (409): `login_pinned`,
     /// `pinned_active`, `api_key_login`, …
     Conflict(&'static str, String),
+    /// The K2 vault holds this login and isn't open (locked keychain,
+    /// missing key): 503 with a one-line hint. The server default keeps
+    /// working (it is in the CLI's own store).
+    VaultUnavailable(String),
     Io(String),
     Db(rusqlite::Error),
 }
@@ -236,6 +241,7 @@ impl std::fmt::Display for WalletError {
                 write!(f, "another change to the {t} tokens is in progress; try again")
             }
             WalletError::Conflict(_, hint) => write!(f, "{hint}"),
+            WalletError::VaultUnavailable(why) => write!(f, "{why}"),
             WalletError::Io(e) => write!(f, "io: {e}"),
             WalletError::Db(e) => write!(f, "db: {e}"),
         }
@@ -261,6 +267,7 @@ impl WalletError {
             WalletError::AirGap => "airgap",
             WalletError::LockBusy(_) => "busy",
             WalletError::Conflict(code, _) => code,
+            WalletError::VaultUnavailable(_) => "vault_unavailable",
             WalletError::Io(_) => "io",
             WalletError::Db(_) => "db",
         }
@@ -275,6 +282,7 @@ impl WalletError {
             WalletError::NotFound(_) => "404 Not Found",
             WalletError::AirGap => "403 Forbidden",
             WalletError::LiveStoreUnavailable(_) => "422 Unprocessable Entity",
+            WalletError::VaultUnavailable(_) => "503 Service Unavailable",
             WalletError::Io(_) | WalletError::Db(_) => "500 Internal Server Error",
             _ => "400 Bad Request",
         }
@@ -320,6 +328,15 @@ pub fn list(conn: &Connection) -> Result<Vec<Entry>, WalletError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLS} FROM llm_accounts WHERE removed_at IS NULL \
          ORDER BY tool, position, label COLLATE NOCASE"
+    ))?;
+    let rows = stmt.query_map([], map_row)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Removed entries (Trash), newest first.
+pub fn list_removed(conn: &Connection) -> Result<Vec<Entry>, WalletError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {COLS} FROM llm_accounts WHERE removed_at IS NOT NULL ORDER BY removed_at DESC"
     ))?;
     let rows = stmt.query_map([], map_row)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -692,7 +709,7 @@ pub fn next_signed_in(conn: &Connection, tool: Tool) -> Result<Option<Entry>, Wa
         if Some(e.id.as_str()) != active.as_deref()
             && !e.is_api_key()
             && e.state != state::SIGNING_IN
-            && store::slot_has_cred(tool, &e.id)
+            && slots::has_cred(tool, &e.id)
             && !pins::is_pinned(conn, &e.id)?
         {
             return Ok(Some(e.clone()));

@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use super::identity::{self, AccountIdentity, Source};
-use super::pins;
+use super::{pins, slots};
 use super::store::{self, CredMeta};
 use super::{
     active_id, get, list_for, live_owner, lookup, now, set_active, set_active_with_live, state,
@@ -30,7 +30,7 @@ fn pinned_conflict(e: &Entry) -> WalletError {
 fn save_unknown_live(conn: &Connection, tool: Tool, bytes: &[u8], by: Option<&str>) -> Result<(), WalletError> {
     let label = unique_label(conn, tool, "Previous subscription")?;
     let e = super::create(conn, tool, &label, by)?;
-    store::write_slot(tool, &e.id, bytes)?;
+    slots::write_slot(tool, &e.id, bytes)?;
     let m = store::parse_meta(tool, bytes);
     update_meta(conn, &e.id, &meta_update_from(&m, state::SIGNED_IN))
 }
@@ -173,7 +173,7 @@ fn import_live_locked(conn: &Connection, tool: Tool, by: Option<&str>, label: &s
     }
     let label = unique_label(conn, tool, label)?;
     let e = super::create(conn, tool, &label, by)?;
-    store::write_slot(tool, &e.id, &bytes)?;
+    slots::write_slot(tool, &e.id, &bytes)?;
     if tool == Tool::Claude {
         // The live profile names the account at import (the moment K2
         // first sees this login); later switches compare against it.
@@ -235,12 +235,12 @@ pub fn finalize_login(conn: &Connection, id: &str, by: Option<&str>) -> Result<E
         let svc = store::claude_keychain_service(Some(&dir));
         let acct = store::claude_keychain_account();
         if let Ok(Some(bytes)) = store::keychain::read(&svc, &acct) {
-            store::write_slot(tool, &e.id, &bytes)?;
+            slots::write_slot(tool, &e.id, &bytes)?;
             store::keychain::delete(&svc, &acct).map_err(WalletError::Io)?;
         }
     }
     let cred = store::slot_cred_path(tool, &e.id);
-    if !store::slot_has_cred(tool, &e.id) {
+    if !slots::has_cred(tool, &e.id) {
         update_meta(conn, &e.id, &MetaUpdate {
             state: Some(state::NOT_SET_UP.into()),
             detail: Some(Some("sign-in did not finish".into())),
@@ -272,13 +272,13 @@ pub fn finalize_login(conn: &Connection, id: &str, by: Option<&str>) -> Result<E
             let _ = std::fs::remove_file(&record);
         }
     }
-    let m = store::slot_meta(tool, &e.id);
+    let m = slots::slot_meta(tool, &e.id);
     let mut u = meta_update_from(&m, state::SIGNED_IN);
     u.detail = Some(None);
     u.refreshed_at = Some(now());
     update_meta(conn, &e.id, &u)?;
     if active_id(conn, tool)?.is_none() && store::read_live(tool)?.is_none() {
-        let bytes = store::read_slot(tool, &e.id)?.ok_or_else(|| WalletError::NotSignedIn(e.id.clone()))?;
+        let bytes = slots::read_slot(tool, &e.id)?.ok_or_else(|| WalletError::NotSignedIn(e.id.clone()))?;
         store::write_live(tool, &bytes)?;
         set_active(conn, tool, &e.id, by)?;
         swap_in_profile(tool, &e.id, None);
@@ -370,7 +370,7 @@ pub fn precheck(tool: Tool, target: &Entry, gen: Generation, refresher: Option<&
         && pre.generation.active.as_deref() != Some(target.id.as_str())
         && pre.generation.live_owner.as_deref() != Some(target.id.as_str())
         && target.state != state::SIGNING_IN
-        && store::slot_has_cred(tool, &target.id);
+        && slots::has_cred(tool, &target.id);
     if !swaps {
         // Phase 2 answers (already active, API key, refusals) without
         // the network.
@@ -378,7 +378,7 @@ pub fn precheck(tool: Tool, target: &Entry, gen: Generation, refresher: Option<&
     }
     {
         let _slot = store::lock_slot(tool, &target.id, LOCK_WAIT)?;
-        let meta = store::slot_meta(tool, &target.id);
+        let meta = slots::slot_meta(tool, &target.id);
         let expiring = meta.expires_at.map(|x| x <= now() + 300).unwrap_or(false);
         if expiring && meta.has_refresh && !crate::airgap::enabled() {
             if let Some(r) = refresher {
@@ -386,7 +386,7 @@ pub fn precheck(tool: Tool, target: &Entry, gen: Generation, refresher: Option<&
             }
         }
     }
-    let Some(incoming) = store::read_slot(tool, &target.id)? else {
+    let Some(incoming) = slots::read_slot(tool, &target.id)? else {
         return Ok(pre);
     };
     let live = store::read_live(tool)?.filter(|b| store::validate_cred(tool, b).is_ok());
@@ -474,7 +474,14 @@ fn switch_inner(
             format!("\"{}\" is signing in right now; finish or cancel that sign-in first", target.label),
         ));
     }
-    if !store::slot_has_cred(tool, &target.id) {
+    if !slots::has_cred(tool, &target.id) {
+        // Vault storage with the vault closed: say so (503), not "no
+        // sign-in" (the read answers `vault_unavailable`).
+        if target.is_api_key() {
+            slots::read_api_key(tool, &target.id)?;
+        } else {
+            slots::read_slot(tool, &target.id)?;
+        }
         return Err(WalletError::NotSignedIn(target.id));
     }
     if !target.is_api_key() && pins::is_pinned(conn, &target.id)? {
@@ -515,14 +522,19 @@ fn switch_inner(
     let ident: &dyn Fn(Tool, &[u8]) -> Option<AccountIdentity> = &ident;
     let _target_slot = store::lock_slot(tool, &target.id, LOCK_WAIT)?;
     // 0. The incoming login must be whole before anything moves.
-    let incoming = store::read_slot(tool, &target.id)?.ok_or_else(|| WalletError::NotSignedIn(target.id.clone()))?;
+    let incoming = slots::read_slot(tool, &target.id)?.ok_or_else(|| WalletError::NotSignedIn(target.id.clone()))?;
     store::validate_cred(tool, &incoming).map_err(|why| store::invalid_cred(tool, "saved sign-in", why))?;
     // 1. Save the outgoing live login (the CLI may have refreshed it).
     //    A live login K2 doesn't know is kept as "Previous subscription".
     //    A live store that isn't a whole credential (e.g. a write cut off
     //    part way) is NEVER mirrored: it would overwrite the outgoing
     //    login's only good copy. It is replaced by the swap below.
-    let live = store::read_live(tool)?.filter(|bytes| match store::validate_cred(tool, bytes) {
+    let live_raw = store::read_live(tool)?;
+    // What the swap below expects to replace (A3): if the CLI rewrites
+    // its store after this read, `write_live_expecting` refuses with
+    // `changed` instead of overwriting the refreshed token.
+    let live_fp = live_raw.as_deref().map(fingerprint);
+    let live = live_raw.filter(|bytes| match store::validate_cred(tool, bytes) {
         Ok(()) => true,
         Err(why) => {
             crate::log_debug!("[llm-accounts] {}: live login not saved back ({why})", tool.as_str());
@@ -550,7 +562,7 @@ fn switch_inner(
     match (&owner, &live) {
         (Some(o), Some(bytes)) => {
             let _owner_slot = store::lock_slot(tool, o, LOCK_WAIT)?;
-            store::write_slot(tool, o, bytes)?;
+            slots::write_slot(tool, o, bytes)?;
             let m = store::parse_meta(tool, bytes);
             update_meta(conn, o, &MetaUpdate { expires_at: Some(m.expires_at), state: Some(state::SIGNED_IN.into()), ..Default::default() })?;
             saved = true;
@@ -566,7 +578,7 @@ fn switch_inner(
     let refresh_result = match pre {
         Some(p) => p.refresh.clone(),
         None => {
-            let meta = store::slot_meta(tool, &target.id);
+            let meta = slots::slot_meta(tool, &target.id);
             let expiring = meta.expires_at.map(|x| x <= now() + 300).unwrap_or(false);
             match refresher {
                 Some(r) if expiring && meta.has_refresh && !crate::airgap::enabled() => Some(r.refresh(tool, &target.id)),
@@ -578,7 +590,7 @@ fn switch_inner(
     match refresh_result {
         Some(Ok(())) => {
             refreshed = true;
-            let m = store::slot_meta(tool, &target.id);
+            let m = slots::slot_meta(tool, &target.id);
             update_meta(conn, &target.id, &MetaUpdate { expires_at: Some(m.expires_at), refreshed_at: Some(now()), ..Default::default() })?;
         }
         Some(Err(e)) => {
@@ -591,7 +603,7 @@ fn switch_inner(
         None => {}
     }
     // 3. The incoming sign-in must be the account K2 has on record for it.
-    let bytes = store::read_slot(tool, &target.id)?.ok_or_else(|| WalletError::NotSignedIn(target.id.clone()))?;
+    let bytes = slots::read_slot(tool, &target.id)?.ok_or_else(|| WalletError::NotSignedIn(target.id.clone()))?;
     if let Some(c) = pre_creds {
         if fingerprint(&bytes) != c.incoming {
             return Err(changed(tool));
@@ -600,8 +612,11 @@ fn switch_inner(
     let target_expected = identity::expected_identity(tool, &target);
     let incoming_actual = identity::actual_identity(tool, &bytes, Some(ident), false);
     check_same("restore", &target.label, &target_expected, &incoming_actual)?;
-    // 4. Swap in.
-    store::write_live(tool, &bytes)?;
+    // 4. Swap in, only over the live login step 1 saved.
+    store::write_live_expecting(tool, &bytes, Some(live_fp)).map_err(|e| match e {
+        WalletError::Conflict("live_changed", _) => changed(tool),
+        other => other,
+    })?;
     set_active(conn, tool, &target.id, by)?;
     update_meta(conn, &target.id, &MetaUpdate { state: Some(state::SIGNED_IN.into()), ..Default::default() })?;
     // 5. Claude's profile follows the token (`/status` reads it).
@@ -675,7 +690,7 @@ pub fn login_method(tool: Tool) -> LoginMethod {
 pub fn discard_unfinished(conn: &Connection, id: &str) -> Result<(), WalletError> {
     let e = lookup(conn, None, id)?;
     let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
-    if store::slot_has_cred(tool, &e.id) || e.last_used_at.is_some() {
+    if slots::has_cred(tool, &e.id) || e.last_used_at.is_some() {
         return Ok(());
     }
     let dir = store::slot_dir(tool, &e.id);
@@ -720,7 +735,7 @@ pub fn begin_live_swap(conn: &Connection, tool: Tool, new_id: &str, by: Option<&
                     let actual = identity::actual_identity(tool, bytes, None, true);
                     check_same("capture", &e.label, &expected, &actual)?;
                 }
-                store::write_slot(tool, &cur, bytes)?
+                slots::write_slot(tool, &cur, bytes)?
             }
             None => {
                 import_live_locked(conn, tool, by, "Default")?;
@@ -754,7 +769,7 @@ pub fn live_swap_poll(ticket: &LiveSwapTicket) -> Result<Option<Vec<u8>>, Wallet
 pub fn live_swap_complete(conn: &Connection, ticket: &LiveSwapTicket, new_bytes: &[u8], by: Option<&str>) -> Result<Entry, WalletError> {
     let tool = ticket.tool;
     let _lock = store::lock_tool(tool, LOCK_WAIT)?;
-    store::write_slot(tool, &ticket.new_id, new_bytes)?;
+    slots::write_slot(tool, &ticket.new_id, new_bytes)?;
     if tool == Tool::Claude {
         // The tool's own login just wrote the new account's profile.
         if let Some(p) = identity::live_profile() {
@@ -775,7 +790,7 @@ pub fn live_swap_complete(conn: &Connection, ticket: &LiveSwapTicket, new_bytes:
     update_meta(conn, &ticket.new_id, &u)?;
     match &ticket.previous_id {
         Some(prev) => {
-            let bytes = store::read_slot(tool, prev)?.ok_or_else(|| WalletError::NotSignedIn(prev.clone()))?;
+            let bytes = slots::read_slot(tool, prev)?.ok_or_else(|| WalletError::NotSignedIn(prev.clone()))?;
             store::write_live(tool, &bytes)?;
             swap_in_profile(tool, prev, None);
         }
@@ -791,7 +806,7 @@ pub fn live_swap_abort(conn: &Connection, ticket: &LiveSwapTicket) -> Result<(),
     {
         let _lock = store::lock_tool(tool, LOCK_WAIT)?;
         if let Some(prev) = &ticket.previous_id {
-            if let Some(bytes) = store::read_slot(tool, prev)? {
+            if let Some(bytes) = slots::read_slot(tool, prev)? {
                 store::write_live(tool, &bytes)?;
                 swap_in_profile(tool, prev, None);
             }
@@ -943,6 +958,8 @@ fn remove_inner(conn: &Connection, id: &str, clear: bool, by: Option<&str>) -> R
         moved_to = Some(dest.to_string_lossy().into_owned());
     }
     super::mark_removed(conn, &e.id)?;
+    // Vault storage: the sealed copy is kept, disabled (can be undone).
+    slots::removed(tool, &e.id);
     Ok(RemoveOutcome { id: e.id, moved_to })
 }
 
@@ -952,12 +969,12 @@ pub fn recheck(conn: &Connection, id: &str) -> Result<Entry, WalletError> {
     let e = lookup(conn, None, id)?;
     let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
     if e.is_api_key() {
-        let st = if store::has_api_key(tool, &e.id) { state::SIGNED_IN } else { state::NOT_SET_UP };
+        let st = if slots::has_api_key(tool, &e.id) { state::SIGNED_IN } else { state::NOT_SET_UP };
         update_meta(conn, &e.id, &MetaUpdate { state: Some(st.into()), ..Default::default() })?;
         return get(conn, &e.id)?.ok_or(WalletError::NotFound(e.id));
     }
     let is_active = live_owner(conn, tool)?.as_deref() == Some(e.id.as_str());
-    let m = if is_active { store::live_meta(tool)? } else { store::slot_meta(tool, &e.id) };
+    let m = if is_active { store::live_meta(tool)? } else { slots::slot_meta(tool, &e.id) };
     let st = if e.state == state::SIGNING_IN {
         state::SIGNING_IN
     } else if !m.present {
@@ -1040,7 +1057,7 @@ pub fn keep_warm(
             {
                 continue;
             }
-            let meta = store::slot_meta(tool, &e.id);
+            let meta = slots::slot_meta(tool, &e.id);
             if !warm_due(tool, &meta, &e, now_secs) {
                 continue;
             }
@@ -1061,7 +1078,7 @@ pub fn keep_warm(
             }
             match refresher.refresh(tool, &e.id) {
                 Ok(()) => {
-                    let m = store::slot_meta(tool, &e.id);
+                    let m = slots::slot_meta(tool, &e.id);
                     let mut u = meta_update_from(&m, state::SIGNED_IN);
                     u.refreshed_at = Some(now_secs);
                     u.detail = Some(None);
@@ -1144,12 +1161,12 @@ pub fn claude_refresh_slot(
     id: &str,
     post: &dyn Fn(&str, &serde_json::Value) -> Result<serde_json::Value, String>,
 ) -> Result<(), String> {
-    let bytes = store::read_slot(Tool::Claude, id).map_err(|e| e.to_string())?.ok_or("no saved sign-in")?;
+    let bytes = slots::read_slot(Tool::Claude, id).map_err(|e| e.to_string())?.ok_or("no saved sign-in")?;
     let body = claude_refresh_body(&bytes)?;
     let resp = post(CLAUDE_TOKEN_URL, &body)?;
     let now_ms = now() * 1000;
     let updated = claude_apply_refresh(&bytes, &resp, now_ms)?;
-    store::write_slot(Tool::Claude, id, &updated).map_err(|e| e.to_string())
+    slots::write_slot(Tool::Claude, id, &updated).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

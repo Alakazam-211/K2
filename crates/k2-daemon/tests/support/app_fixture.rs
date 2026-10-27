@@ -91,6 +91,8 @@ pub fn req_blocking(port: u16, method: &str, pq: &str, body: Option<String>) -> 
             Ok(0) => break,
             Ok(n) => out.extend_from_slice(&chunk[..n]),
             Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => break,
+            // A signal (a test's child exiting) interrupted the read: read on.
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => panic!("{method} {pq}: {e}"),
         }
     }

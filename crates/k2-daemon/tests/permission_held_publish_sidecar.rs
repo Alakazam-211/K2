@@ -66,6 +66,22 @@ fn sidecar(ws: &Ws, conv: &str, slug: &str) {
 /// The sidecar's live PTY (`claude`, resolved to the `exec cat` test shim
 /// the caller installed) under its tab's agent name, and a passport bound
 /// to that PTY's daemon session id (what a real sidecar's `k2` carries).
+/// Ends the sidecar's PTY and turns the server switch off, even when the
+/// test fails (no PTY or switch leaks into the next test).
+struct Cleanup {
+    agent_name: String,
+    session: Arc<DaemonPtySession>,
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        k2_core::permission::gate::set_server_switch(false);
+        k2_daemon::v2_session_map::unregister(&self.agent_name);
+        self.session.kill();
+        k2_daemon::apps::alerts::set_sink(None);
+    }
+}
+
 fn live_sidecar(ws: &Ws, conv: &str) -> (String, Arc<DaemonPtySession>, String) {
     let sid = SessionId::new();
     let session = DaemonPtySession::spawn(DaemonPtyConfig {
@@ -254,6 +270,7 @@ async fn a_sidecars_held_publish_run_gets_its_card_on_the_sidecar_and_allow_runs
         let _agents = k2_core::test_env::AgentShim::install();
         live_sidecar(&ws, &conv)
     };
+    let _cleanup = Cleanup { agent_name, session };
     k2_core::permission::gate::set_server_switch(true);
     cards_on(&ws);
 
@@ -267,12 +284,13 @@ async fn a_sidecars_held_publish_run_gets_its_card_on_the_sidecar_and_allow_runs
     let held = v["request"]["id"].as_str().expect("held id").to_string();
     assert_eq!((v["card"]["raised"].as_bool(), v["card"]["new"].as_bool()), (Some(true), Some(true)), "the hold raises its card: {v}");
     assert_eq!(v["card"]["thread"], side.as_str(), "on the sidecar's Thread: {v}");
-    let card = v["card"]["id"].as_str().expect("card id").to_string();
-    let (state, on_conv, addr, card_row, by) = permission_row(&held);
+    // The note's `id` is the request's own (the held w_… id, §3.2).
+    assert_eq!(v["card"]["id"], held.as_str(), "{v}");
+    let (state, on_conv, addr, card, by) = permission_row(&held);
     assert_eq!(state, "pending");
     assert_eq!(on_conv.as_deref(), Some(conv.as_str()), "the sidecar's conversation, not the main one ({main})");
     assert_eq!(addr.as_deref(), Some(side.as_str()));
-    assert_eq!(card_row, card);
+    assert!(!card.is_empty(), "the request carries its card");
     assert_eq!(by, None);
 
     // 2. The agent's own ask finds that card.
@@ -316,10 +334,6 @@ async fn a_sidecars_held_publish_run_gets_its_card_on_the_sidecar_and_allow_runs
     let lone_agent = passport(&lone);
     let run = json!({"name": "lone-svc", "cmd": "exec python3 -m http.server $PORT --bind 127.0.0.1", "port": k2_core::test_env::loopback_test_port(), "noTunnel": true});
     let r = post(d.port, "/cli/publish/run", &lone_agent, run).await;
-    k2_core::permission::gate::set_server_switch(false);
-    k2_daemon::v2_session_map::unregister(&agent_name);
-    session.kill();
-    k2_daemon::apps::alerts::set_sink(None);
     assert_eq!(r.status, 202, "{}", r.body);
     let v = r.json();
     let lone_held = v["request"]["id"].as_str().expect("held id");

@@ -89,6 +89,13 @@ k2-release-keys = { path = "../k2-release-keys" }
 # K2 vault (prd-k2-vault-v1): the store and its pure fetch policy; the daemon
 # does the I/O (`egress`, `vault_fetch`).
 k2-vault = { path = "../k2-vault" }
+# Markdown multiplayer v1 (K1): the multiplayer kit and its Markdown pack,
+# vendored side by side with `git subtree` (vendor/, pinned shas until they
+# tag). Their own workspaces are excluded from ours; they resolve into our
+# Cargo.lock. Licences in NOTICE.md (yrs MIT, similar Apache-2.0, thiserror
+# MIT/Apache-2.0; redb is the copy k2-core already links).
+k2-multiplayer-base = { path = "../../vendor/k2-multiplayer-base/crates/base" }
+k2-multiplayer-markdown = { path = "../../vendor/k2-multiplayer-markdown/crates/markdown" }
 # URL hosts for the egress gate; the same `url` 2 k2-vault and reqwest use.
 url = "2"
 

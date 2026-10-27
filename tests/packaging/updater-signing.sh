@@ -307,9 +307,11 @@ u1_refuses "a U2 signature in the U1 slot" "does not verify with LEGACY" "$tmp/k
 u1_refuses "another file's name" "does not name exactly file:" "$tmp/k2-daemon-macos-aarch64" "$tmp/raw.sig" k2-daemon-linux-x86_64
 cp "$tmp/k2-daemon-macos-aarch64" "$tmp/changed-daemon"; printf 'x' >> "$tmp/changed-daemon"
 u1_refuses "changed bytes" "does not verify with LEGACY" "$tmp/changed-daemon" "$tmp/raw.sig" k2-daemon-macos-aarch64
-printf '%s\n' "$PW" | minisign -S -l -s "$tmp/gen/u1.key" -m "$tmp/k2-daemon-macos-aarch64" -x "$tmp/legacy-u1.sig" -t "timestamp:1"$'\t'"file:k2-daemon-macos-aarch64" >/dev/null
+# The test's own signing calls read the key file directly, so they log apart
+# from the leak check below (which audits only the helper's calls).
+printf '%s\n' "$PW" | STUB_MINISIGN_LOG="$tmp/test-own-minisign.log" minisign -S -l -s "$tmp/gen/u1.key" -m "$tmp/k2-daemon-macos-aarch64" -x "$tmp/legacy-u1.sig" -t "timestamp:1"$'\t'"file:k2-daemon-macos-aarch64" >/dev/null
 u1_refuses "a legacy (non-prehashed) U1 signature (0.46.4 daemons refuse it)" "not prehashed" "$tmp/k2-daemon-macos-aarch64" "$tmp/legacy-u1.sig" k2-daemon-macos-aarch64
-printf '%s\n' "$PW" | minisign -S -s "$tmp/gen/u1.key" -m "$tmp/k2-daemon-macos-aarch64" -x "$tmp/ver-u1.sig" -t "timestamp:1"$'\t'"file:k2-daemon-macos-aarch64"$'\t'"version:9.9.1" >/dev/null
+printf '%s\n' "$PW" | STUB_MINISIGN_LOG="$tmp/test-own-minisign.log" minisign -S -s "$tmp/gen/u1.key" -m "$tmp/k2-daemon-macos-aarch64" -x "$tmp/ver-u1.sig" -t "timestamp:1"$'\t'"file:k2-daemon-macos-aarch64"$'\t'"version:9.9.1" >/dev/null
 u1_refuses "a U1 comment with a version: field (old Tauri apps compare it)" "and no version:" "$tmp/k2-daemon-macos-aarch64" "$tmp/ver-u1.sig" k2-daemon-macos-aarch64
 
 echo "== the audit log has one line per signature =="

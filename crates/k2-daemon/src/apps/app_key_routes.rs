@@ -55,7 +55,7 @@ pub fn is_route(path: &str) -> bool {
 /// (Email Notifications E19); everything else [`MAX_BODY`].
 pub fn body_cap(path: &str) -> usize {
     match split(path) {
-        Some((_, "email/send")) => crate::email_notify::MAX_BODY,
+        Some((_, "email/send")) if crate::email_notify::box_enabled() => crate::email_notify::MAX_BODY,
         _ => MAX_BODY,
     }
 }
@@ -118,8 +118,9 @@ fn scope_for(method_post: bool, verb: &str) -> Option<&'static str> {
         (true, "users/disable" | "users/enable" | "users/remove" | "users/unlock" | "users/password-reset") => Some(keys::SCOPE_USERS),
         (true, "fetch") => Some(keys::SCOPE_FETCH),
         (true, "push/send") | (false, "push/status") => Some(keys::SCOPE_PUSH),
-        // Email Notifications (0.46.5): the App's own sender.
-        (true, "email/send") | (false, "email/status" | "email/log") => Some(keys::SCOPE_EMAIL),
+        // Email Notifications (0.46.5): the App's own sender; with the box
+        // switch off, unknown verbs as before (security review L9).
+        (true, "email/send") | (false, "email/status" | "email/log") if crate::email_notify::box_enabled() => Some(keys::SCOPE_EMAIL),
         _ => None,
     }
 }
@@ -210,7 +211,7 @@ pub fn handle(path: &str, is_post: bool, presented: Option<&str>, body: &[u8], p
     }
     // Email Notifications keeps its own answers (202, the email.* codes).
     if verb.starts_with("email/") {
-        let r = crate::email_notify::link_routes::handle_key(&c.app, &c.actor(), verb, is_post, body, params);
+        let r = crate::email_notify::link_routes::handle_key(&c.app, &c.actor(), c.grant.minted_by_agent.as_deref(), verb, is_post, body, params);
         if verb == "email/send" {
             audit(&c, verb, if r.status.starts_with('2') { "ok" } else { r.status });
         }

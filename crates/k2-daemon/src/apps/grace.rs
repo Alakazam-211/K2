@@ -841,7 +841,12 @@ fn key_mint(who: &Who, body: &[u8]) -> R<J> {
         || super::routes::agent_ws(who).is_some_and(|ws| {
             k2_core::workspace::settings::agents_can_manage_app_users(ws) && grant.rooms.iter().all(|r| r == ws)
         });
-    if super::access::self_widens(who) && users_ok {
+    // Email Notifications security review M2: a key that sends the App's
+    // email is the owner's to mint (§5.2 step 3, "cap approved"): an agent
+    // minting one itself would send as the App around its own email
+    // sending setting. Always held.
+    let mail_power = grant.scopes.iter().any(|s| s == keys::SCOPE_EMAIL);
+    if super::access::self_widens(who) && users_ok && !mail_power {
         // Stamped: a key that manages users stops at the /v1 door once the
         // owner turns the users switch off (review 0.46.4).
         let mut grant = grant.clone();
@@ -862,7 +867,9 @@ fn key_mint(who: &Who, body: &[u8]) -> R<J> {
         &t.project_id.clone(),
         json!({ "grant": grant, "label": label }),
         diff,
-        vec![if user_power && super::access::self_widens(who) {
+        vec![if mail_power {
+            "an App key that sends email is the owner's to mint: it sends as the App, outside your email sending setting".into()
+        } else if user_power && super::access::self_widens(who) {
             "an App key that manages users needs \"Let this agent manage its Apps' users\" and the agent's own room only: the owner mints this one".into()
         } else {
             "an App key is a credential: the owner mints it (it goes to the vault; nobody sees it)".into()

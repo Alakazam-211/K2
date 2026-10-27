@@ -60,7 +60,7 @@ fn email_notify_live() {
     let subject = format!("K2 live check {local}");
     let mid = format!("{local}@{domain}");
     let to = vec!["user@sink.example.net".to_string()];
-    let headers: BTreeMap<String, String> = [("X-Live-Check".to_string(), "1".to_string())].into_iter().collect();
+    let headers: BTreeMap<String, String> = [("X-App-Live-Check".to_string(), "1".to_string())].into_iter().collect();
     let email = compose::email_json(&compose::Message {
         from_name: "K2 Live",
         from: &address,

@@ -823,7 +823,7 @@ mod unix_impl {
             // passport (its own workspace's Apps; on is the owner's; send
             // rides the agent's agentSend gate). `/cli/notifications/*` is
             // never served here (owner and Admins only).
-            p if crate::email_notify::app_routes::is_route(p) => {
+            p if crate::email_notify::box_enabled() && crate::email_notify::app_routes::is_route(p) => {
                 if crate::email_notify::app_routes::is_post_route(p) && !is_post {
                     return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
                 }

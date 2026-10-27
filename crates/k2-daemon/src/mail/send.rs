@@ -839,7 +839,16 @@ impl OutboundStore for DbOutboundStore {
             return Ok(());
         }
         let path = self.body_path(id);
-        let body = serde_json::to_string(&*at_rest(&msg)).map_err(|e| format!("outbound scrub serialize: {e}"))?;
+        let mut kept = at_rest(&msg).into_owned();
+        // Email Notifications (security review M3): a decided notification
+        // keeps no body at all (its text, html and headers), only what the
+        // outbox lists.
+        if let Some(n) = kept.notify.as_mut() {
+            kept.text_body = String::new();
+            n.html = None;
+            n.headers.clear();
+        }
+        let body = serde_json::to_string(&kept).map_err(|e| format!("outbound scrub serialize: {e}"))?;
         std::fs::write(&path, body.as_bytes()).map_err(|e| format!("outbound scrub write: {e}"))?;
         restrict_mode(&path);
         Ok(())
@@ -945,6 +954,9 @@ pub fn auto_deny_expired(now: i64) -> usize {
             .unwrap_or(false);
         if flipped {
             n += 1;
+            // An expired one-time-link mail or notification keeps no live
+            // link or body either (Email Notifications review M3).
+            scrub(&store, &id);
             k2_core::agent_hooks::emit(
                 k2_core::agent_hooks::HookEvent::MailSendDecided,
                 serde_json::json!({ "outboundId": id, "status": "rejected", "expired": true }),

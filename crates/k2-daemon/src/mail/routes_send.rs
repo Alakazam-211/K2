@@ -1442,8 +1442,17 @@ pub fn handle_approvals_list(_params: &HashMap<String, String>) -> CliResponse {
     send::auto_deny_expired(now);
     let store = DbOutboundStore::default();
     let rows = send::list_pending();
+    // Email Notifications (security review L4): a held App email is the
+    // owner's to decide, so a mail-manage agent's queue doesn't list it
+    // (nor preview its body): its From is a notification sender.
+    let agent = crate::mail::agent_creds::mail_caller().is_agent();
     let list: Vec<serde_json::Value> = rows
         .iter()
+        .filter(|row| {
+            !agent
+                || !(crate::email_notify::send::is_sender_address(&row.from_address)
+                    || store.load_message(&row.id).map(|m| m.notify.is_some()).unwrap_or(false))
+        })
         .map(|row| {
             let mut v = send::outbound_json(row);
             // Body preview from the stored composed message; a

@@ -174,6 +174,11 @@ pub fn handle_dkim_rotate(body: &[u8]) -> CliResponse {
         Ok(r) => r,
         Err(resp) => return resp,
     };
+    // Email Notifications (security review L4): a rotation on a domain
+    // carrying a notification sender can break its signing; the owner's.
+    if let Err(resp) = crate::email_notify::fence::domain_gate(&row.domain, "rotate a DKIM key") {
+        return resp;
+    }
     let domain_id = row.stalwart_domain_id.clone().unwrap_or_default();
     let engine = match engine() {
         Ok(e) => e,
@@ -424,10 +429,23 @@ fn poll_zone_for_selectors(
 fn apex_writable(domain: &str) -> bool {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    match k2_core::domains::binding_for_name(&conn, domain) {
+    if !crate::email_notify::box_enabled() {
+        return k2_core::domains::apex_attached_for_write(&conn, domain).unwrap_or(false);
+    }
+    match binding_for(&conn, domain) {
         Ok(Some((b, _))) => k2_core::domains::apex_attached_for_write(&conn, &b.apex).unwrap_or(false),
         _ => false,
     }
+}
+
+/// `domain`'s binding: with Email Notifications on, the longest bound
+/// zone it sits in (E11); off, only its own (exact) binding, as before
+/// the feature (security review L9).
+fn binding_for(conn: &rusqlite::Connection, domain: &str) -> rusqlite::Result<Option<(k2_core::domains::DomainBinding, String)>> {
+    if crate::email_notify::box_enabled() {
+        return k2_core::domains::binding_for_name(conn, domain);
+    }
+    Ok(k2_core::domains::get_binding(conn, domain)?.map(|b| (b, String::new())))
 }
 
 fn plant_relative_name(selector: &str) -> String {
@@ -448,7 +466,7 @@ pub(crate) fn dkim_record_name(selector: &str, sub_labels: &str) -> String {
 fn dkim_zone(domain: &str, selector: &str) -> Result<(Option<String>, bool, String, String), String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let (b, sub) = k2_core::domains::binding_for_name(&conn, domain)
+    let (b, sub) = binding_for(&conn, domain)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "no domain binding".to_string())?;
     Ok((b.zone_id.clone(), b.dns_write, dkim_record_name(selector, &sub), b.apex.clone()))
@@ -622,6 +640,11 @@ mod tests {
         let (_, _, apex_name, _) = dkim_zone("brand.com", "s1").expect("bound");
         assert_eq!(apex_name, "s1._domainkey", "the apex itself is unchanged");
         assert!(dkim_zone("notify.other.org", "s1").is_err(), "no zone, no plant");
+        // Security review L9: with the switch off, only the exact binding.
+        crate::email_notify::set_test_switch(Some(false));
+        assert!(dkim_zone("notify.brand.com", "s1").is_err(), "off: no parent-zone planting");
+        assert_eq!(dkim_zone("brand.com", "s1").expect("exact").2, "s1._domainkey");
+        crate::email_notify::set_test_switch(None);
     }
 
     #[test]

@@ -76,8 +76,43 @@ pub const CONFIRM_APP_ANY: &str = "app-email-any"; // the App's service id
 pub const CONFIRM_ACTIONS: &[&str] = &[CONFIRM_SENDER, CONFIRM_SYSTEM_SENDER, CONFIRM_RELAY, CONFIRM_TEST, CONFIRM_APP_ON, CONFIRM_APP_ANY];
 
 /// Is Email Notifications allowed on this box at all (default yes)?
+///
+/// Off, the box behaves as it did before this feature (security review
+/// L9): the new routes aren't served (they answer as unknown routes do),
+/// K2's resets keep today's answer, DNS planting matches exact zones only,
+/// and nothing here sends.
 pub fn box_enabled() -> bool {
+    if let Some(on) = test_switch() {
+        return on;
+    }
     !crate::app_push::switch_off(std::env::var(SWITCH_ENV).ok().as_deref())
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SWITCH: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn test_switch() -> Option<bool> {
+    TEST_SWITCH.with(|c| c.get())
+}
+
+#[cfg(not(test))]
+fn test_switch() -> Option<bool> {
+    None
+}
+
+/// Tests: the box switch for this thread (`None` = the environment).
+#[cfg(test)]
+pub fn set_test_switch(on: Option<bool>) {
+    TEST_SWITCH.with(|c| c.set(on));
+}
+
+/// Is `path` one of this feature's `/cli` routes, served only while the
+/// box switch is on?
+pub fn serves(path: &str) -> bool {
+    box_enabled() && (owner_routes::is_route(path) || app_routes::is_route(path) || link_routes::PASS_ROUTES.contains(&path))
 }
 
 /// The text on the confirm sheet, built from the daemon's own records,
@@ -287,16 +322,5 @@ pub fn forget_app(service_id: &str) {
     let conn = db.lock();
     if let Err(e) = k2_core::email_notify::forget_app(&conn, service_id, now()) {
         k2_core::log_debug!("[email-notify] forget App {service_id}: WARN {e}");
-    }
-}
-
-/// An App user was removed: their log rows go (E22).
-pub fn forget_recipient(address: &str) {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    match k2_core::email_notify::purge_recipient(&conn, address) {
-        Ok(n) if n > 0 => k2_core::log_debug!("[email-notify] purged {n} log row(s) for a removed App user"),
-        Ok(_) => {}
-        Err(e) => k2_core::log_debug!("[email-notify] WARN purge for a removed App user: {e}"),
     }
 }

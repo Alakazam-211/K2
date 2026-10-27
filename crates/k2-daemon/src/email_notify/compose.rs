@@ -5,12 +5,19 @@
 //! Limits: at most [`MAX_RECIPIENTS`] envelope recipients (to + cc + bcc);
 //! subject ≤ 998 bytes with no control characters; text ≤ 256 KB, html ≤
 //! 512 KB, the whole message ≤ 1 MB; at most [`MAX_HEADERS`] custom
-//! headers, each `X-…` (`^X-[A-Za-z0-9-]{1,64}$`, never `X-K2-…`) with a
+//! headers from a short named set (the App's own `X-App-<name>` namespace
+//! and `X-Entity-Ref-ID`, see [`header_name_allowed`]) with a
 //! printable-ASCII value ≤ 998 bytes; `replyTo` ≤ 3 (a structured field,
 //! never a header); tags ≤ 10 × `[A-Za-z0-9_-]{1,64}`; an idempotency key
-//! ≤ 256 characters. `Bcc`, `From`, `Sender`, `Reply-To`, `Return-Path`,
-//! `DKIM-*`, `Received`, `Content-*` and `List-Unsubscribe*` are refused
-//! as headers (`header_not_allowed`).
+//! ≤ 256 characters; `sendAt` ≤ 7 days ahead. Every other header is
+//! refused (`header_not_allowed`): K2's own (`From`, `Bcc`, `Reply-To`,
+//! `DKIM-*`, `Content-*`…) and every relay provider's control header
+//! (`X-SMTPAPI`, `X-MC-*`, `X-Mailgun-*`, `X-SES-*`, `X-PM-*`…, security
+//! review H2), on both the hosted and the relay path.
+//!
+//! Every address (to, cc, bcc, replyTo) is a plain `dot-atom@domain`
+//! (security review M4): no control characters, spaces, quotes or `<>`,
+//! local part ≤ 64, address ≤ 254. Refused, never cleaned up.
 
 use std::collections::BTreeMap;
 
@@ -28,8 +35,8 @@ pub const MAX_HEADER_VALUE_BYTES: usize = 998;
 pub const MAX_REPLY_TO: usize = 3;
 pub const MAX_TAGS: usize = 10;
 pub const MAX_IDEMPOTENCY_KEY: usize = 256;
-/// The furthest `sendAt` may be (30 days, like `k2 mail send --at`).
-pub const MAX_SCHEDULE_SECS: i64 = crate::mail::send::MAX_SCHEDULE_SECS;
+/// The furthest `sendAt` may be (7 days; security review M1).
+pub const MAX_SCHEDULE_SECS: i64 = 7 * 86_400;
 
 /// The request keys `email.send` takes (the catalog's
 /// `additionalProperties: false`).
@@ -93,6 +100,15 @@ fn header_refused(hint: impl Into<String>) -> super::Fail {
 
 /// A list field: one string or an array of strings.
 fn list(v: &J, key: &str) -> R<Vec<String>> {
+    // M4: a control character is refused, never trimmed away.
+    let bad = |s: &str| s.chars().any(char::is_control);
+    match v.get(key) {
+        Some(J::String(s)) if bad(s) => return Err(usage(format!("{key} can't hold line breaks or other control characters"))),
+        Some(J::Array(a)) if a.iter().any(|x| x.as_str().is_some_and(bad)) => {
+            return Err(usage(format!("{key} can't hold line breaks or other control characters")))
+        }
+        _ => {}
+    }
     match v.get(key) {
         None | Some(J::Null) => Ok(Vec::new()),
         Some(J::String(s)) => Ok(if s.trim().is_empty() { Vec::new() } else { vec![s.trim().to_string()] }),
@@ -113,19 +129,104 @@ fn opt_str(v: &J, key: &str) -> R<Option<String>> {
 }
 
 fn addresses(raw: &[String], key: &str) -> R<Vec<String>> {
-    crate::mail::send::normalize_recipients(raw).map_err(|e| match e {
+    let list = crate::mail::send::normalize_recipients(raw).map_err(|e| match e {
         crate::mail::send::SendError::Usage(h) => usage(format!("{key}: {h}")),
         _ => usage(format!("{key}: an address isn't valid")),
-    })
+    })?;
+    for a in &list {
+        if let Some(why) = mailbox_problem(a) {
+            return Err(usage(format!("{key}: {why}")));
+        }
+    }
+    Ok(list)
 }
 
-/// Is `name` an allowed custom header name (E19, §3.8)?
+/// RFC 5322 `atext` (a dot-atom's characters, besides `.`).
+fn atext(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "!#$%&'*+-/=?^_`{|}~".contains(c)
+}
+
+/// Why a (normalized) address isn't a plain `dot-atom@domain` a
+/// notification may name (security review M4), if it isn't.
+pub fn mailbox_problem(address: &str) -> Option<String> {
+    if address.len() > crate::mail::addresses::MAX_ADDRESS_BYTES {
+        return Some("an address is at most 254 characters".into());
+    }
+    let Some((local, domain)) = address.rsplit_once('@') else { return Some("an address is local@domain".into()) };
+    if local.is_empty() || local.len() > crate::mail::addresses::MAX_LOCAL_PART_BYTES {
+        return Some("an address's local part is 1–64 characters".into());
+    }
+    if !local.chars().all(|c| c == '.' || atext(c)) || local.starts_with('.') || local.ends_with('.') || local.contains("..") {
+        return Some(
+            "an address's local part is plain letters, digits and !#$%&'*+-/=?^_`{|}~ with single dots between \
+             (no spaces, quotes, < >, line breaks or other control characters)"
+                .into(),
+        );
+    }
+    if domain.is_empty() || !domain.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Some("an address's domain isn't valid".into());
+    }
+    None
+}
+
+/// One address for K2's own mail (`send_fixed`, the owner's address,
+/// a sender's default Reply-To): normalized, then the same strict check.
+pub fn strict_address(raw: &str) -> R<String> {
+    let a = crate::mail::addresses::normalize_address(raw).map_err(|_| usage("the address isn't valid"))?;
+    match mailbox_problem(&a) {
+        Some(why) => Err(usage(why)),
+        None => Ok(a),
+    }
+}
+
+/// The App's own header namespace (security review H2).
+pub const APP_HEADER_PREFIX: &str = "X-App-";
+
+/// The few named headers outside the namespace an App may set.
+pub const NAMED_HEADERS: &[&str] = &["X-Entity-Ref-ID"];
+
+/// Is `name` an allowed custom header name (E19, §3.8, review H2)? Only
+/// `X-App-<letters, digits, ->` (at most 64 after the prefix) or one of
+/// [`NAMED_HEADERS`]. No relay provider acts on either, so an App can
+/// never reach `X-SMTPAPI`, `X-MC-BccAddress`, `X-Mailgun-*`, `X-SES-*`,
+/// `X-PM-*` and the like, on either path.
 pub fn header_name_allowed(name: &str) -> bool {
-    let Some(rest) = name.strip_prefix("X-").or_else(|| name.strip_prefix("x-")) else { return false };
-    !rest.is_empty()
-        && rest.len() <= 64
-        && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        && !name.to_ascii_lowercase().starts_with("x-k2-")
+    if NAMED_HEADERS.iter().any(|h| h.eq_ignore_ascii_case(name)) {
+        return true;
+    }
+    if name.len() <= APP_HEADER_PREFIX.len() || !name[..APP_HEADER_PREFIX.len()].eq_ignore_ascii_case(APP_HEADER_PREFIX) {
+        return false;
+    }
+    let rest = &name[APP_HEADER_PREFIX.len()..];
+    rest.len() <= 64 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// A display name may not carry an RFC 2047 encoded word (`=?…?=`): a
+/// client decodes it after K2's checks (security review L6).
+pub fn encoded_word(name: &str) -> bool {
+    name.contains("=?")
+}
+
+/// A display name folded for comparison: lowercase, no whitespace.
+pub fn fold_name(name: &str) -> String {
+    name.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect()
+}
+
+/// Re-check a kept request (the scheduled flusher, security review L12):
+/// it must still parse to itself under today's rules.
+pub fn recheck(req: &Request, now: i64) -> R<()> {
+    let mut v = serde_json::to_value(req).map_err(|e| usage(format!("the kept email doesn't read back: {e}")))?;
+    if let Some(o) = v.as_object_mut() {
+        o.remove("sendAt");
+        o.retain(|_, x| !x.is_null());
+    }
+    let mut again = parse(&v, now)?;
+    again.send_at = req.send_at;
+    again.idempotency_key = req.idempotency_key.clone();
+    if &again != req {
+        return Err(usage("the kept email changed since it was accepted"));
+    }
+    Ok(())
 }
 
 fn header_value_ok(value: &str) -> bool {
@@ -137,7 +238,7 @@ fn tag_ok(t: &str) -> bool {
 }
 
 /// `sendAt`: unix seconds or an RFC 3339 time. `None` = now. A time in
-/// the past (beyond a minute of skew) or past 30 days is refused.
+/// the past (beyond a minute of skew) or past 7 days is refused.
 fn send_at(v: &J, now: i64) -> R<Option<i64>> {
     let t = match v.get("sendAt") {
         None | Some(J::Null) => return Ok(None),
@@ -151,7 +252,7 @@ fn send_at(v: &J, now: i64) -> R<Option<i64>> {
         return Err(usage("sendAt is in the past"));
     }
     if t > now + MAX_SCHEDULE_SECS {
-        return Err(usage("sendAt is at most 30 days ahead"));
+        return Err(usage("sendAt is at most 7 days ahead"));
     }
     Ok((t > now).then_some(t))
 }
@@ -214,6 +315,9 @@ pub fn parse(v: &J, now: i64) -> R<Request> {
     }
     // fromName (E20 adds the system-name rule in the pipeline).
     if let Some(n) = opt_str(v, "fromName")? {
+        if encoded_word(&n) {
+            return Err(usage("fromName can't hold an encoded word (=?…?=): send the name as plain text"));
+        }
         req.from_name = Some(crate::mail::send::validate_from_name(&n).map_err(|e| match e {
             crate::mail::send::SendError::Usage(h) => usage(h),
             _ => usage("fromName isn't valid"),
@@ -236,9 +340,9 @@ pub fn parse(v: &J, now: i64) -> R<Request> {
                 let name = k.trim();
                 if !header_name_allowed(name) {
                     return Err(header_refused(format!(
-                        "header {} isn't allowed: only X-… headers (letters, digits and -, not X-K2-…). From, To, Reply-To \
-                         (use replyTo), Bcc (use bcc), Sender, Return-Path, DKIM, Received, Content-* and List-Unsubscribe \
-                         are K2's",
+                        "header {} isn't allowed: only your App's own X-App-… headers (letters, digits and -) and \
+                         X-Entity-Ref-ID. From, To, Reply-To (use replyTo), Bcc (use bcc), DKIM, Content-* and the like \
+                         are K2's, and mail providers' control headers (X-SMTPAPI, X-Mailgun-…) are never passed on",
                         name.chars().filter(|c| !c.is_control()).take(80).collect::<String>()
                     )));
                 }
@@ -403,7 +507,7 @@ mod tests {
         let r = ok(json!({
             "from": "noreply@brand.test", "fromName": "Brand", "to": ["A@Example.test", "a@example.test"], "cc": "c@example.test",
             "bcc": ["b@example.test", "c@example.test"], "subject": "Hello", "text": "hi", "html": "<p>hi</p>",
-            "replyTo": "help@brand.test", "headers": {"X-Order": "123"}, "tags": ["welcome"], "idempotencyKey": "k1",
+            "replyTo": "help@brand.test", "headers": {"X-App-Order": "123"}, "tags": ["welcome"], "idempotencyKey": "k1",
             "sendAt": 1_000_600,
         }));
         assert_eq!(r.to, vec!["a@example.test"], "normalized and de-duplicated");
@@ -424,7 +528,7 @@ mod tests {
             message_id: &mid,
         });
         assert_eq!(e["replyTo"], json!([{"email": "help@brand.test"}]));
-        assert_eq!(e["header:X-Order:asText"], "123");
+        assert_eq!(e["header:X-App-Order:asText"], "123");
         assert_eq!(e["textBody"][0]["type"], "text/plain");
         assert_eq!(e["htmlBody"][0]["type"], "text/html");
         assert_eq!(e["bodyValues"]["k2html"]["value"], "<p>hi</p>");
@@ -443,12 +547,12 @@ mod tests {
             assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "headers": one(h, "v")})), "header_not_allowed", "{h}");
         }
         for v in ["a\r\nBcc: evil@x.test", "a\nb", "tab\there", "é"] {
-            assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "headers": one("X-Ok", v)})), "header_not_allowed", "{v:?}");
+            assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "headers": one("X-App-Ok", v)})), "header_not_allowed", "{v:?}");
         }
-        let many: serde_json::Map<String, J> = (0..11).map(|i| (format!("X-H{i}"), json!("v"))).collect();
+        let many: serde_json::Map<String, J> = (0..11).map(|i| (format!("X-App-H{i}"), json!("v"))).collect();
         assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "headers": many})), "header_not_allowed");
-        assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "headers": {"X-A": "1", "x-a": "2"}})), "header_not_allowed");
-        assert!(header_name_allowed("X-Order-Id") && !header_name_allowed(&format!("X-{}", "a".repeat(65))));
+        assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "headers": {"X-App-A": "1", "x-app-a": "2"}})), "header_not_allowed");
+        assert!(header_name_allowed("X-App-Order-Id") && !header_name_allowed(&format!("X-App-{}", "a".repeat(65))));
     }
 
     #[test]
@@ -465,7 +569,7 @@ mod tests {
         assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "html": "x".repeat(MAX_HTML_BYTES + 1)})), "message_too_large");
         // The largest parts together still fit the 1 MB total.
         let big = parse(
-            &json!({"to": "a@x.test", "subject": "s", "text": "x".repeat(MAX_TEXT_BYTES), "html": "y".repeat(MAX_HTML_BYTES), "headers": (0..10).map(|i| (format!("X-H{i}"), json!("z".repeat(998)))).collect::<serde_json::Map<String, J>>()}),
+            &json!({"to": "a@x.test", "subject": "s", "text": "x".repeat(MAX_TEXT_BYTES), "html": "y".repeat(MAX_HTML_BYTES), "headers": (0..10).map(|i| (format!("X-App-H{i}"), json!("z".repeat(998)))).collect::<serde_json::Map<String, J>>()}),
             1_000_000,
         )
         .expect("at the limits");
@@ -476,13 +580,106 @@ mod tests {
         assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "fromName": "ceo@bank.test"})), "usage");
         assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "attachments": []})), "usage");
         assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "sendAt": 900_000})), "usage", "the past");
-        assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "sendAt": 1_000_000 + 31 * 86_400})), "usage");
+        assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "sendAt": 1_000_000 + 8 * 86_400})), "usage");
         assert_eq!(code(json!({"to": "not-an-address", "subject": "s", "text": "t"})), "usage");
+        assert!(parse(&json!({"to": "a@x.test", "subject": "s", "text": "t", "sendAt": 1_000_000 + 7 * 86_400}), 1_000_000).is_ok(), "7 days is the edge");
+    }
+
+    #[test]
+    fn relay_provider_control_headers_are_refused() {
+        // Security review H2: every provider keyword, any case, on both paths
+        // (parse refuses; rfc822 re-checks before writing the relay message).
+        let one = |name: &str| -> J {
+            let mut m = serde_json::Map::new();
+            m.insert(name.to_string(), json!("{\"to\":[\"victim@x.test\"]}"));
+            json!({"to": "a@x.test", "subject": "s", "text": "t", "headers": J::Object(m)})
+        };
+        for h in [
+            "X-SMTPAPI", "x-smtpapi", "X-MC-BccAddress", "X-MC-Tags", "X-Mailgun-Dkim", "X-Mailgun-Sending-Ip", "X-Mailgun-Drop-Message",
+            "X-SES-CONFIGURATION-SET", "X-SES-SOURCE-ARN", "X-SES-FROM-ARN", "X-PM-Message-Stream", "X-Postmark-Server-Token",
+            "X-SG-EID", "X-MSYS-API", "X-MJ-CustomID", "X-Mailjet-Campaign", "X-Mailin-custom", "X-Order", "X-Priority", "X-App-",
+        ] {
+            assert_eq!(code(one(h)), "header_not_allowed", "{h}");
+            assert!(!header_name_allowed(h), "{h}");
+            let headers: BTreeMap<String, String> = [(h.to_string(), "1".to_string())].into();
+            let raw = rfc822(
+                &Message {
+                    from_name: "B",
+                    from: "noreply@brand.test",
+                    to: &["a@x.test".to_string()],
+                    cc: &[],
+                    subject: "s",
+                    text: Some("t"),
+                    html: None,
+                    reply_to: &[],
+                    headers: &headers,
+                    message_id: "m@brand.test",
+                },
+                std::time::SystemTime::UNIX_EPOCH,
+            );
+            assert!(raw.is_err(), "the relay path refuses {h} too");
+        }
+        for ok in ["X-App-Order", "x-app-order-id", "X-Entity-Ref-ID", "x-entity-ref-id"] {
+            assert!(header_name_allowed(ok), "{ok}");
+        }
+    }
+
+    #[test]
+    fn every_address_is_a_plain_dot_atom() {
+        // Security review M4: refused, never cleaned up.
+        for bad in [
+            "a\r\nX-Injected: y@victim.test",
+            "a\n@victim.test",
+            "a\u{0}b@victim.test",
+            "a b@victim.test",
+            "\"a b\"@victim.test",
+            "<a>@victim.test",
+            "a<b@victim.test",
+            "a(b)@victim.test",
+            "a,b@victim.test",
+            ".a@victim.test",
+            "a.@victim.test",
+            "a..b@victim.test",
+            "a@victim.test\r\n",
+            "é@victim.test",
+        ] {
+            for key in ["to", "cc", "bcc", "replyTo"] {
+                let mut v = json!({"to": "ok@x.test", "subject": "s", "text": "t"});
+                v[key] = json!(bad);
+                assert_eq!(code(v), "usage", "{key}: {bad:?}");
+            }
+            assert!(strict_address(bad).is_err(), "{bad:?}");
+        }
+        let long_local = format!("{}@x.test", "a".repeat(65));
+        assert_eq!(code(json!({"to": long_local, "subject": "s", "text": "t"})), "usage", "local part ≤ 64");
+        let long = format!("a@{}.test", "b".repeat(250));
+        assert_eq!(code(json!({"to": long, "subject": "s", "text": "t"})), "usage", "address ≤ 254");
+        assert_eq!(strict_address(" Dana.O'Neil+news@X.test ").expect("plain"), "dana.o'neil+news@x.test");
+    }
+
+    #[test]
+    fn display_names_refuse_encoded_words_and_fold_for_comparison() {
+        // Security review L6.
+        assert_eq!(code(json!({"to": "a@x.test", "subject": "s", "text": "t", "fromName": "=?utf-8?B?c2VjdXJpdHlAYmFuay5jb20=?="})), "usage");
+        assert_eq!(fold_name(" K 2  Team "), fold_name("k2team"));
+        assert_ne!(fold_name("K2"), fold_name("K3"));
+    }
+
+    #[test]
+    fn a_kept_request_rechecks_to_itself() {
+        let r = ok(json!({"to": ["a@x.test"], "bcc": "b@x.test", "subject": "s", "html": "<p>h</p>", "headers": {"X-App-Id": "1"}, "tags": ["t"], "sendAt": 1_000_600}));
+        recheck(&r, 1_000_700).expect("still valid at flush time");
+        let mut tampered = r.clone();
+        tampered.headers.insert("X-SMTPAPI".into(), "{}".into());
+        assert_eq!(recheck(&tampered, 1_000_700).expect_err("refused").code, "header_not_allowed");
+        let mut tampered = r;
+        tampered.to = vec!["a\r\nb@x.test".into()];
+        assert_eq!(recheck(&tampered, 1_000_700).expect_err("refused").code, "usage");
     }
 
     #[test]
     fn the_relay_message_is_alternative_with_reply_to_and_k2s_message_id() {
-        let headers: BTreeMap<String, String> = [("X-Order".to_string(), "123".to_string())].into();
+        let headers: BTreeMap<String, String> = [("X-App-Order".to_string(), "123".to_string())].into();
         let raw = rfc822(
             &Message {
                 from_name: "Brand",
@@ -500,7 +697,7 @@ mod tests {
         )
         .expect("compose");
         let s = String::from_utf8_lossy(&raw);
-        assert!(s.starts_with("X-Order: 123\r\n"), "{s}");
+        assert!(s.starts_with("X-App-Order: 123\r\n"), "{s}");
         assert!(s.contains("multipart/alternative"), "{s}");
         assert!(s.contains("Reply-To: help@brand.test"), "{s}");
         assert!(s.contains("Message-ID: <mid-1@brand.test>"), "{s}");

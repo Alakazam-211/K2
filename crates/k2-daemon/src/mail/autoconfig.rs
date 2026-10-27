@@ -201,6 +201,12 @@ fn zone_for(v: &serde_json::Value, domain: &str) -> Option<(String, String)> {
             (!d.is_empty()).then(|| (d, id.to_string()))
         })
         .collect();
+    // With Email Notifications off: the exact zone only, as before the
+    // feature (security review L9).
+    if !crate::email_notify::box_enabled() {
+        let want = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+        return zones.into_iter().find(|(d, _)| *d == want).map(|(d, id)| (id, d));
+    }
     let (apex, _) = k2_core::domains::zone_for_name(domain, zones.iter().map(|(d, _)| d.as_str()))?;
     let apex = apex.to_string();
     zones.into_iter().find(|(d, _)| *d == apex).map(|(d, id)| (id, d))
@@ -349,6 +355,17 @@ pub fn handle_autoconfig_apply(body: &[u8]) -> CliResponse {
 mod tests {
     use super::*;
     use crate::mail::domains::tests::ZONE_FIXTURE;
+
+    #[test]
+    fn with_email_notifications_off_only_the_exact_zone_matches() {
+        // Security review L9: off is exactly the behaviour before E11.
+        let v = serde_json::json!({ "zones": [{ "id": "z-brand", "domain": "brand.com." }]});
+        crate::email_notify::set_test_switch(Some(false));
+        assert_eq!(zone_for(&v, "notify.brand.com"), None);
+        assert_eq!(zone_for(&v, "Brand.com."), Some(("z-brand".to_string(), "brand.com".to_string())));
+        crate::email_notify::set_test_switch(None);
+        assert!(zone_for(&v, "notify.brand.com").is_some());
+    }
 
     #[test]
     fn a_sending_subdomain_uses_its_longest_parent_zone() {

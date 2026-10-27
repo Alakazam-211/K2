@@ -202,28 +202,43 @@ fn sender_add(who: &Who, v: &J) -> Result<J, CliResponse> {
     super::senders::add(&args, &actor(who), super::now()).map_err(|f| super::fail_response(&f))
 }
 
-fn sender_set(who: &Who, v: &J) -> R<J> {
-    admin(who)?;
-    let sender = super::senders::find_live(s(v, "sender").ok_or_else(|| fail(400, "usage", "send {sender, name?, nameLocked?, replyTo?}"))?)?;
+/// `sender set`: the From name, its lock and the default Reply-To. Any
+/// change needs a fresh owner confirm bound to the sender's address
+/// (security review L5: agents can read the owner token, and these decide
+/// what K2's resets say and where replies to an App's mail go).
+fn sender_set(who: &Who, v: &J) -> Result<J, CliResponse> {
+    let r = |f: Fail| super::fail_response(&f);
+    admin(who).map_err(r)?;
+    let sender = super::senders::find_live(s(v, "sender").ok_or_else(|| r(fail(400, "usage", "send {sender, name?, nameLocked?, replyTo?}")))?).map_err(r)?;
     let name = match s(v, "name") {
-        Some(n) => crate::mail::send::validate_from_name(n).map_err(|_| fail(400, "usage", "the name isn't valid (no @, no control characters, at most 128)"))?,
+        Some(n) if super::compose::encoded_word(n) => return Err(r(fail(400, "usage", "the name can't hold an encoded word (=?…?=)"))),
+        Some(n) => crate::mail::send::validate_from_name(n).map_err(|_| r(fail(400, "usage", "the name isn't valid (no @, no control characters, at most 128)")))?,
         None => sender.from_name.clone(),
     };
     let locked = v.get("nameLocked").and_then(J::as_bool).unwrap_or(sender.from_name_locked);
     let reply_to = if v.get("replyTo").is_some() {
-        let raw = str_list(v, "replyTo")?;
-        let l = crate::mail::send::normalize_recipients(&raw).map_err(|_| fail(400, "usage", "replyTo has an address that isn't valid"))?;
+        let raw = str_list(v, "replyTo").map_err(r)?;
+        let mut l: Vec<String> = Vec::new();
+        for a in &raw {
+            let a = super::compose::strict_address(a).map_err(|_| r(fail(400, "usage", "replyTo has an address that isn't valid")))?;
+            if !l.contains(&a) {
+                l.push(a);
+            }
+        }
         if l.len() > super::compose::MAX_REPLY_TO {
-            return Err(fail(400, "usage", "at most 3 reply-to addresses"));
+            return Err(r(fail(400, "usage", "at most 3 reply-to addresses")));
         }
         l
     } else {
         sender.reply_to.clone()
     };
+    if name != sender.from_name || locked != sender.from_name_locked || reply_to != sender.reply_to {
+        confirm(who, v, super::CONFIRM_SENDER, &sender.address).map_err(|f| confirm_needed(f, super::CONFIRM_SENDER, &sender.address))?;
+    }
     let db = k2_core::db::shared();
     let conn = db.lock();
-    store::set_sender_name(&conn, &sender.id, &name, locked, &reply_to, super::now()).map_err(db_fail)?;
-    let after = store::get_sender(&conn, &sender.id).map_err(db_fail)?.ok_or_else(|| db_fail("the sender vanished"))?;
+    store::set_sender_name(&conn, &sender.id, &name, locked, &reply_to, super::now()).map_err(|e| r(db_fail(e)))?;
+    let after = store::get_sender(&conn, &sender.id).map_err(|e| r(db_fail(e)))?.ok_or_else(|| r(db_fail("the sender vanished")))?;
     drop(conn);
     super::audit_line("email-sender-set", &actor(who), &format!("sender={}", sender.id));
     Ok(json!({ "ok": true, "sender": sender_json(&after) }))
@@ -333,7 +348,7 @@ fn log(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let rows = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::list_log(&conn, &store::LogFilter { app, status, tag: None, before: None, limit }).map_err(db_fail)?
+        store::list_log(&conn, &store::LogFilter { app, status, tag: None, before: None, limit, without_system: false }).map_err(db_fail)?
     };
     let items: Vec<J> = rows
         .iter()
@@ -406,7 +421,7 @@ pub fn handle(path: &str, who: Who, is_post: bool, body_bytes: &[u8], params: &H
         STATUS => respond(status()),
         SENDERS => respond(super::senders::list(params.get("all").is_some_and(|a| a == "1" || a == "true")).map(|l| json!({ "ok": true, "senders": l.iter().map(sender_json).collect::<Vec<_>>() }))),
         SENDER_ADD => either(sender_add(&who, &v)),
-        SENDER_SET => respond(sender_set(&who, &v)),
+        SENDER_SET => either(sender_set(&who, &v)),
         SENDER_CHECK => respond(id_of("sender").and_then(|id| super::senders::recheck(&id, super::now()))),
         SENDER_RM => respond(id_of("sender").and_then(|id| super::senders::remove(&id, &actor(&who), super::now()))),
         SYSTEM => respond(super::senders::system().map(|s| json!({ "ok": true, "systemSender": s.as_ref().map(sender_json) }))),

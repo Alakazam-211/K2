@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS email_notify_log (
   recipient_count INTEGER NOT NULL,
   subject         TEXT NOT NULL DEFAULT '',
   tags_json       TEXT NOT NULL DEFAULT '[]',
-  status          TEXT NOT NULL CHECK (status IN ('queued', 'scheduled', 'held', 'submitted', 'failed', 'refused')),
+  status          TEXT NOT NULL CHECK (status IN ('queued', 'scheduled', 'held', 'submitted', 'failed', 'refused', 'cancelled')),
   error_code      TEXT,
   message_id      TEXT,
   send_after      INTEGER,

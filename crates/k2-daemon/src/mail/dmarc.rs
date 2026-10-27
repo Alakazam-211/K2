@@ -142,6 +142,11 @@ pub fn handle_dmarc_report_to(body: &[u8]) -> CliResponse {
         Ok(r) => r,
         Err(resp) => return resp,
     };
+    // Email Notifications (security review L4): reports on a domain
+    // carrying a notification sender show its volume and IPs; the owner's.
+    if let Err(resp) = crate::email_notify::fence::domain_gate(&row.domain, "redirect DMARC reports") {
+        return resp;
+    }
     let address = match addresses::normalize_address(raw_addr) {
         Ok(a) => a,
         Err(AddrError::Usage(h)) => return err_json("400 Bad Request", "usage", h),

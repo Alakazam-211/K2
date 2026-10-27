@@ -49,6 +49,9 @@ pub const ST_HELD: &str = "held";
 pub const ST_SUBMITTED: &str = "submitted";
 pub const ST_FAILED: &str = "failed";
 pub const ST_REFUSED: &str = "refused";
+/// A scheduled or held send whose recipient was removed (E22): never
+/// sent, still counted against the budgets it was made under (H1).
+pub const ST_CANCELLED: &str = "cancelled";
 
 pub const SCOPE_USERS: &str = "users";
 pub const SCOPE_ANY: &str = "any";
@@ -678,6 +681,9 @@ pub struct LogFilter<'a> {
     /// Rows created before this (the `before` cursor).
     pub before: Option<i64>,
     pub limit: usize,
+    /// Leave out K2's own mail (`origin = system`): the App-facing log
+    /// never shows the owner's resets of its users (review L8).
+    pub without_system: bool,
 }
 
 /// Newest first.
@@ -687,10 +693,11 @@ pub fn list_log(conn: &Connection, f: &LogFilter<'_>) -> Result<Vec<LogRow>, Str
         .prepare(&format!(
             "SELECT {LOG_COLS} FROM email_notify_log \
              WHERE (?1 IS NULL OR app_service_id = ?1) AND (?2 IS NULL OR status = ?2) AND (?3 IS NULL OR created_at < ?3) \
+               AND (?5 = 0 OR origin <> 'system') \
              ORDER BY created_at DESC, id DESC LIMIT ?4"
         ))
         .map_err(err("log list"))?;
-    let rows = st.query_map(params![f.app, f.status, f.before, limit * 4], map_log).map_err(err("log list"))?;
+    let rows = st.query_map(params![f.app, f.status, f.before, limit * 4, f.without_system], map_log).map_err(err("log list"))?;
     let mut out = Vec::new();
     for r in rows {
         let r = r.map_err(err("log list"))?;
@@ -719,18 +726,89 @@ pub fn due_scheduled(conn: &Connection, now: i64, limit: usize) -> Result<Vec<Lo
 
 /// Rows older than `before` go (the retention sweep, E22).
 pub fn purge_log_before(conn: &Connection, before: i64) -> Result<usize, String> {
-    conn.execute("DELETE FROM email_notify_log WHERE created_at < ?1 AND status NOT IN ('scheduled', 'held')", params![before])
-        .map_err(err("log purge"))
+    // By the effective send time (M1): a row scheduled days ahead stays
+    // for the budget window it was sent in.
+    conn.execute(
+        &format!("DELETE FROM email_notify_log WHERE {AT} < ?1 AND created_at < ?1 AND status NOT IN ('scheduled', 'held')"),
+        params![before],
+    )
+    .map_err(err("log purge"))
 }
 
-/// Every log row naming `address` goes (an App user was removed, E22).
+/// What an address becomes in the log once its App user is removed.
+pub const REMOVED_ADDRESS: &str = "[removed]";
+
+/// An App user was removed (E22): their address is blanked in every log
+/// row that names it. The rows and their recipient counts stay, so the
+/// budgets they were made under still count them (security review H1:
+/// deleting them reset the budget). A `scheduled` or `held` row naming
+/// them is `cancelled` (never sent, still counted); the flusher deletes
+/// its body file and its approvals entry. Returns the rows changed.
 pub fn purge_recipient(conn: &Connection, address: &str) -> Result<usize, String> {
     let a = address.trim().to_ascii_lowercase();
     if a.is_empty() || !a.contains('@') {
         return Ok(0);
     }
-    let needle = serde_json::to_string(&a).unwrap_or_default();
-    conn.execute("DELETE FROM email_notify_log WHERE instr(to_json, ?1) > 0", params![needle]).map_err(err("log purge"))
+    let needle = serde_json::to_string(&a).map_err(|e| format!("log purge: {e}"))?;
+    let rows: Vec<(String, String, String)> = {
+        let mut st = conn
+            .prepare("SELECT id, to_json, status FROM email_notify_log WHERE instr(lower(to_json), ?1) > 0")
+            .map_err(err("log purge"))?;
+        let it = st.query_map(params![needle], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map_err(err("log purge"))?;
+        it.collect::<rusqlite::Result<Vec<_>>>().map_err(err("log purge"))?
+    };
+    let mut changed = 0;
+    for (id, to_json, status) in rows {
+        let list: Vec<String> = serde_json::from_str(&to_json).map_err(|e| format!("log purge: row {id}: {e}"))?;
+        let kept: Vec<String> =
+            list.into_iter().map(|x| if x.trim().eq_ignore_ascii_case(&a) { REMOVED_ADDRESS.to_string() } else { x }).collect();
+        let cancel = status == ST_SCHEDULED || status == ST_HELD;
+        conn.execute(
+            "UPDATE email_notify_log SET to_json = ?2, \
+               status = CASE WHEN ?3 THEN 'cancelled' ELSE status END, \
+               error_code = CASE WHEN ?3 THEN 'recipient_removed' ELSE error_code END \
+             WHERE id = ?1",
+            params![id, json_list(&kept), cancel],
+        )
+        .map_err(err("log purge"))?;
+        changed += 1;
+    }
+    Ok(changed)
+}
+
+/// `cancelled` rows that were held for approval (`(log id, mail_outbound
+/// id)`): the daemon withdraws their approvals entry.
+pub fn cancelled_held(conn: &Connection, limit: usize) -> Result<Vec<(String, String)>, String> {
+    let mut st = conn
+        .prepare(
+            "SELECT id, outbound_id FROM email_notify_log WHERE status = 'cancelled' AND outbound_id IS NOT NULL \
+             ORDER BY updated_at DESC LIMIT ?1",
+        )
+        .map_err(err("cancelled list"))?;
+    let it = st.query_map(params![limit as i64], |r| Ok((r.get(0)?, r.get(1)?))).map_err(err("cancelled list"))?;
+    it.collect::<rusqlite::Result<Vec<_>>>().map_err(err("cancelled list"))
+}
+
+/// Move a deferred scheduled row's send time (the flusher, M1).
+/// `Ok(false)`: it isn't scheduled any more.
+pub fn reschedule(conn: &Connection, id: &str, send_after: i64, now: i64) -> Result<bool, String> {
+    conn.execute(
+        "UPDATE email_notify_log SET send_after = ?2, updated_at = ?3 WHERE id = ?1 AND status = 'scheduled'",
+        params![id, send_after, now],
+    )
+    .map(|n| n == 1)
+    .map_err(err("reschedule"))
+}
+
+/// Recipients an App has waiting in `scheduled` rows (M1's cap on how
+/// much may wait at once).
+pub fn scheduled_pending(conn: &Connection, app: &str) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(recipient_count), 0) FROM email_notify_log WHERE app_service_id = ?1 AND status = 'scheduled'",
+        params![app],
+        |r| r.get(0),
+    )
+    .map_err(err("scheduled count"))
 }
 
 /// What a budget counts (E17): envelope recipients over log rows that
@@ -749,23 +827,31 @@ pub enum Bucket<'a> {
     Box,
 }
 
-/// `(recipients counted since `since`, the oldest counted row's time)`.
-pub fn sum_recipients(conn: &Connection, bucket: &Bucket<'_>, since: i64) -> Result<(i64, Option<i64>), String> {
-    let live = "status IN ('queued', 'scheduled', 'held', 'submitted')";
+/// Rows a budget counts: everything handed off or still to be, plus
+/// `cancelled` (H1: removing a recipient never gives budget back).
+const LIVE: &str = "status IN ('queued', 'scheduled', 'held', 'submitted', 'cancelled')";
+
+/// A row's effective send time (M1): a scheduled send counts in the
+/// window it is sent in, not the one it was made in.
+const AT: &str = "COALESCE(send_after, created_at)";
+
+/// `(recipients counted with an effective send time in [from, until], the
+/// earliest such time)`.
+pub fn sum_recipients(conn: &Connection, bucket: &Bucket<'_>, from: i64, until: i64) -> Result<(i64, Option<i64>), String> {
     let (sql, arg): (String, Option<&str>) = match bucket {
-        Bucket::App(a) => (format!("app_service_id = ?2 AND origin IN ('app', 'agent') AND {live}"), Some(a)),
-        Bucket::AppAny(a) => (format!("app_service_id = ?2 AND origin IN ('app', 'agent') AND scope_any = 1 AND {live}"), Some(a)),
+        Bucket::App(a) => (format!("app_service_id = ?3 AND origin IN ('app', 'agent') AND {LIVE}"), Some(a)),
+        Bucket::AppAny(a) => (format!("app_service_id = ?3 AND origin IN ('app', 'agent') AND scope_any = 1 AND {LIVE}"), Some(a)),
         Bucket::Domain(d) => (
-            format!("origin IN ('app', 'agent') AND {live} AND sender_id IN (SELECT id FROM email_senders WHERE domain = ?2)"),
+            format!("origin IN ('app', 'agent') AND {LIVE} AND sender_id IN (SELECT id FROM email_senders WHERE domain = ?3)"),
             Some(d),
         ),
-        Bucket::System => (format!("origin = 'system' AND {live}"), None),
-        Bucket::Box => (live.to_string(), None),
+        Bucket::System => (format!("origin = 'system' AND {LIVE}"), None),
+        Bucket::Box => (LIVE.to_string(), None),
     };
-    let q = format!("SELECT COALESCE(SUM(recipient_count), 0), MIN(created_at) FROM email_notify_log WHERE created_at >= ?1 AND {sql}");
+    let q = format!("SELECT COALESCE(SUM(recipient_count), 0), MIN({AT}) FROM email_notify_log WHERE {AT} >= ?1 AND {AT} <= ?2 AND {sql}");
     let r = match arg {
-        Some(a) => conn.query_row(&q, params![since, a], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?))),
-        None => conn.query_row(&q, params![since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?))),
+        Some(a) => conn.query_row(&q, params![from, until, a], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?))),
+        None => conn.query_row(&q, params![from, until], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?))),
     };
     r.map_err(err("budget count"))
 }
@@ -942,12 +1028,51 @@ mod tests {
         mk(&to1, ST_FAILED, ORIGIN_AGENT, false, 1002);
         mk(&to1, ST_HELD, ORIGIN_AGENT, true, 1003);
         mk(&to1, ST_SUBMITTED, ORIGIN_SYSTEM, false, 1004);
-        assert_eq!(sum_recipients(&conn, &Bucket::App("svc_a"), 0).expect("n"), (4, Some(1000)));
-        assert_eq!(sum_recipients(&conn, &Bucket::AppAny("svc_a"), 0).expect("n").0, 1);
-        assert_eq!(sum_recipients(&conn, &Bucket::Domain("brand.test"), 0).expect("n").0, 4);
-        assert_eq!(sum_recipients(&conn, &Bucket::System, 0).expect("n").0, 1);
-        assert_eq!(sum_recipients(&conn, &Bucket::Box, 0).expect("n").0, 5);
-        assert_eq!(sum_recipients(&conn, &Bucket::Box, 1002).expect("n"), (2, Some(1003)));
+        let all = |b: &Bucket<'_>| sum_recipients(&conn, b, 0, i64::MAX).expect("n");
+        assert_eq!(all(&Bucket::App("svc_a")), (4, Some(1000)));
+        assert_eq!(all(&Bucket::AppAny("svc_a")).0, 1);
+        assert_eq!(all(&Bucket::Domain("brand.test")).0, 4);
+        assert_eq!(all(&Bucket::System).0, 1);
+        assert_eq!(all(&Bucket::Box).0, 5);
+        assert_eq!(sum_recipients(&conn, &Bucket::Box, 1002, i64::MAX).expect("n"), (2, Some(1003)));
+        assert_eq!(sum_recipients(&conn, &Bucket::Box, 1000, 1001).expect("n"), (3, Some(1000)), "the window has an end too");
+        // H1: removing a recipient blanks the address and keeps the count.
         assert_eq!(purge_recipient(&conn, "B@x.test").expect("purge"), 1, "only the row naming b");
+        assert_eq!(all(&Bucket::Box).0, 5, "the budget is unchanged");
+        let rows = list_log(&conn, &LogFilter { limit: 50, ..Default::default() }).expect("list");
+        assert!(rows.iter().all(|r| !r.to.iter().any(|t| t == "b@x.test")), "{rows:?}");
+        assert!(rows.iter().any(|r| r.to == vec!["a@x.test", REMOVED_ADDRESS, "c@x.test"]), "{rows:?}");
+        // A held row naming the removed user is cancelled and still counted.
+        assert_eq!(purge_recipient(&conn, "a@x.test").expect("purge"), 5);
+        let gone = list_log(&conn, &LogFilter { status: Some(ST_CANCELLED), limit: 50, ..Default::default() }).expect("list");
+        assert_eq!(gone.len(), 1, "{gone:?}");
+        assert_eq!(gone[0].error_code.as_deref(), Some("recipient_removed"));
+        assert_eq!(all(&Bucket::Box).0, 5, "still unchanged");
+        assert_eq!(all(&Bucket::AppAny("svc_a")).0, 1, "the cancelled any-scope row still counts");
+        // M1: a scheduled row counts at its send time.
+        let later = insert_log(
+            &conn,
+            &NewLog {
+                sender_id: &s.id,
+                origin: ORIGIN_APP,
+                app_service_id: Some("svc_a"),
+                purpose: None,
+                to: &to3,
+                subject: "",
+                tags: &[],
+                status: ST_SCHEDULED,
+                error_code: None,
+                message_id: None,
+                send_after: Some(90_000),
+                scope_any: false,
+                now: 1005,
+            },
+        )
+        .expect("log");
+        assert_eq!(sum_recipients(&conn, &Bucket::App("svc_a"), 0, 2000).expect("n").0, 4, "not in the hour it was made");
+        assert_eq!(sum_recipients(&conn, &Bucket::App("svc_a"), 89_000, 91_000).expect("n"), (3, Some(90_000)));
+        assert_eq!(scheduled_pending(&conn, "svc_a").expect("n"), 3);
+        assert!(reschedule(&conn, &later, 95_000, 2000).expect("re"));
+        assert_eq!(sum_recipients(&conn, &Bucket::App("svc_a"), 94_000, 96_000).expect("n").0, 3);
     }
 }

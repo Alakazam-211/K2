@@ -21,7 +21,8 @@
 //!    `gated`, `approval` → held for the owner, E15);
 //! 9. the log row first (no row, no send), then the hand-off (hosted: E8,
 //!    the stored copy destroyed; relay: E12), then `submitted`/`failed`. A
-//!    future `sendAt` is `scheduled`; the flusher re-runs steps 4 and 7.
+//!    future `sendAt` is `scheduled` (at most 7 days ahead, counted in the
+//!    budget window it leaves in); the flusher re-runs steps 3–7 then.
 //!
 //! Every refusal after the App is known writes a `refused` row with its
 //! code (at most [`MAX_REFUSED_ROWS_PER_HOUR`] an App an hour). Nothing
@@ -124,6 +125,26 @@ fn app_sender(app: &str) -> R<(store::AppState, Sender)> {
     }
 }
 
+/// §5.2 step 3, "cap approved" (security review M2): an App with a runtime
+/// row sends only once the owner approved `email:send` for it. A `--cmd`
+/// service has no runtime row; `k2 app email on` (with its confirm) is the
+/// owner's approval there. An unreadable store refuses.
+pub fn cap_ok(app: &str) -> R<()> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let row = k2_core::deploy::store::get_app_by_service(&conn, app).map_err(db_fail)?;
+    let Some(row) = row else { return Ok(()) };
+    let set = crate::apps::grants::recorded(&conn, &row.app_id).map_err(db_fail)?;
+    if set.is_some_and(|s| s.iter().any(|c| c == k2_core::skin::CAP_EMAIL_SEND)) {
+        return Ok(());
+    }
+    Err(fail(
+        403,
+        "cap_not_granted",
+        "this App's email:send isn't approved: add it to the manifest and deploy; the owner approves it once",
+    ))
+}
+
 /// A request's `from` must be the App's own sender.
 fn check_from(req_from: Option<&str>, s: &Sender) -> R<()> {
     let Some(f) = req_from else { return Ok(()) };
@@ -145,24 +166,43 @@ fn from_name(req: &Request, s: &Sender) -> R<String> {
     if s.from_name_locked && asked != s.from_name {
         return Err(fail(400, "usage", "the owner locked this sender's From name; omit fromName"));
     }
-    if let Ok(Some(sys)) = super::senders::system() {
-        if asked.trim().eq_ignore_ascii_case(sys.from_name.trim()) && sys.id != s.id {
+    if compose::encoded_word(asked) {
+        return Err(fail(400, "usage", "fromName can't hold an encoded word (=?…?=)"));
+    }
+    // E20, review L6: compared case- and whitespace-insensitively ("K 2 "
+    // is "k2"); an unreadable system sender refuses.
+    if let Some(sys) = super::senders::system()? {
+        if compose::fold_name(asked) == compose::fold_name(&sys.from_name) && sys.id != s.id {
             return Err(fail(400, "usage", "fromName can't be the system sender's name"));
         }
     }
     Ok(asked.to_string())
 }
 
-/// Reply-To: the sender's defaults, addresses on the sender's own domain
-/// (or its organization), or anything when the App's scope is `any`.
+/// The registrable domain of `domain` by the Public Suffix List (k2-vault's
+/// copy, plus K2's own shared suffixes): `shop.github.io` stays
+/// `shop.github.io`, `a.brand.co.kr` is `brand.co.kr` (review L13).
+/// `None`: `domain` is itself a public suffix.
+pub fn registrable(domain: &str) -> Option<String> {
+    let d = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    let labels: Vec<&str> = d.split('.').collect();
+    let suffix = k2_vault::hosts::public_suffix_labels(&d);
+    if labels.len() <= suffix {
+        return None;
+    }
+    Some(labels[labels.len() - suffix - 1..].join("."))
+}
+
+/// Reply-To: the sender's defaults, addresses on the sender's own
+/// registrable domain, or anything when the App's scope is `any`.
 fn reply_to(req: &Request, s: &Sender, scope_any: bool) -> R<Vec<String>> {
     if req.reply_to.is_empty() {
         return Ok(s.reply_to.clone());
     }
-    let org = super::dmarc::org_domain(&s.domain);
+    let org = registrable(&s.domain);
     for a in &req.reply_to {
         let d = a.rsplit_once('@').map(|(_, d)| d).unwrap_or("");
-        let own = s.reply_to.contains(a) || d == s.domain || d == org || d.ends_with(&format!(".{org}"));
+        let own = s.reply_to.contains(a) || d == s.domain || (org.is_some() && registrable(d) == org);
         if !own && !scope_any {
             return Err(fail(
                 403,
@@ -255,7 +295,7 @@ pub fn deliver(
         };
         let relay = relay.ok_or_else(|| fail(409, "relay_not_ready", "the sender's relay was removed"))?;
         let raw = compose::rfc822(&m, std::time::SystemTime::now()).map_err(|e| fail(500, "failed", e))?;
-        super::relay::submit(&relay, &s.address, envelope, &raw)?;
+        super::relay::submit(&relay, &s.address, envelope, &raw).map_err(|f| upstream(log_id, f))?;
         return Ok(mid);
     }
     let account = s.stalwart_account_id.as_deref().filter(|a| !a.is_empty()).ok_or_else(|| fail(409, "domain_not_ready", "the sender has no mail-server account"))?;
@@ -269,8 +309,31 @@ pub fn deliver(
             params: compose::envelope_params(log_id),
             destroy_copy: true,
         })
-        .map_err(|e| fail(502, "failed", format!("the mail server didn't take the message: {e}")))?;
+        .map_err(|e| upstream(log_id, fail(502, "failed", e)))?;
     Ok(mid)
+}
+
+/// The words every caller sees when the relay or the mail server refuses
+/// a hand-off (security review L7).
+pub const UPSTREAM_HINT: &str = "the mail server didn't take the message; the owner sees why in the daemon log";
+
+/// A relay's or the mail server's refusal: callers get the code and
+/// [`UPSTREAM_HINT`], never the upstream text (it can name an account, a
+/// quota or an internal host); the owner-side daemon log keeps it, with
+/// anything address-shaped masked (E22).
+fn upstream(log_id: &str, f: Fail) -> Fail {
+    if f.status != 502 {
+        return f;
+    }
+    let detail = mask_addresses(&f.hint);
+    k2_core::log_debug!("[email-notify] hand-off of log={log_id} refused upstream: {detail}");
+    fail(502, f.code, UPSTREAM_HINT)
+}
+
+/// Every whitespace-separated word holding an `@` becomes `[addr]`.
+pub fn mask_addresses(s: &str) -> String {
+    let words: Vec<&str> = s.split_whitespace().map(|w| if w.contains('@') { "[addr]" } else { w }).collect();
+    words.join(" ").chars().take(500).collect()
 }
 
 /// Mark a handed-off (or failed) row; the answer row.
@@ -293,46 +356,154 @@ fn finish(log_id: &str, from_status: &str, outcome: &R<String>, now: i64) -> R<L
 fn scheduled_dir() -> std::path::PathBuf {
     // House rule: tests never touch the real `~/.k2`.
     if cfg!(test) {
-        return std::env::temp_dir().join(format!("k2-email-notify-test-{}", std::process::id())).join("scheduled");
+        // One per test thread: the orphan sweep never sees another test's files.
+        let t = format!("{:?}", std::thread::current().id()).replace(|c: char| !c.is_ascii_alphanumeric(), "");
+        return std::env::temp_dir().join(format!("k2-email-notify-test-{}-{t}", std::process::id())).join("scheduled");
     }
     dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".k2").join("email-notify").join("scheduled")
 }
 
-fn scheduled_path(log_id: &str) -> std::path::PathBuf {
-    scheduled_dir().join(format!("{log_id}.json"))
+/// A server-made log id (`enl_` + lowercase hex): the only names the
+/// scheduled directory holds.
+fn log_id_ok(log_id: &str) -> bool {
+    log_id.strip_prefix("enl_").is_some_and(|h| !h.is_empty() && h.len() <= 64 && h.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'))
 }
 
-fn write_scheduled(log_id: &str, req: &Request, from_name: &str, reply_to: &[String]) -> Result<(), String> {
+pub(crate) fn scheduled_path(log_id: &str) -> Option<std::path::PathBuf> {
+    log_id_ok(log_id).then(|| scheduled_dir().join(format!("{log_id}.json")))
+}
+
+/// The scheduled directory, made 0700 (and narrowed to 0700 if it exists
+/// wider; review L12).
+fn scheduled_dir_ready() -> Result<std::path::PathBuf, String> {
     let dir = scheduled_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("scheduled dir: {e}"))?;
-    let body = json!({ "request": req, "fromName": from_name, "replyTo": reply_to });
-    let path = scheduled_path(log_id);
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, body.to_string()).map_err(|e| format!("scheduled write: {e}"))?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).map_err(|e| format!("scheduled chmod: {e}"))?;
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).map_err(|e| format!("scheduled dir: {e}"))?;
+        let meta = std::fs::symlink_metadata(&dir).map_err(|e| format!("scheduled dir: {e}"))?;
+        if !meta.is_dir() {
+            return Err("scheduled dir isn't a directory".into());
+        }
+        if meta.permissions().mode() & 0o077 != 0 {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("scheduled dir chmod: {e}"))?;
+        }
     }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(&dir).map_err(|e| format!("scheduled dir: {e}"))?;
+    Ok(dir)
+}
+
+/// The body waits in a file created 0600 from the start (never a wider
+/// moment, review L12), renamed into place.
+fn write_scheduled(log_id: &str, req: &Request, from_name: &str, reply_to: &[String]) -> Result<(), String> {
+    use std::io::Write;
+    scheduled_dir_ready()?;
+    let path = scheduled_path(log_id).ok_or("scheduled: not a log id")?;
+    let body = json!({ "request": req, "fromName": from_name, "replyTo": reply_to });
+    let tmp = path.with_extension("tmp");
+    let _ = std::fs::remove_file(&tmp);
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    let mut f = o.open(&tmp).map_err(|e| format!("scheduled write: {e}"))?;
+    f.write_all(body.to_string().as_bytes()).map_err(|e| format!("scheduled write: {e}"))?;
+    f.sync_all().map_err(|e| format!("scheduled write: {e}"))?;
+    drop(f);
     std::fs::rename(&tmp, &path).map_err(|e| format!("scheduled write: {e}"))
 }
 
+/// Is the kept file one K2 wrote: a regular file (not a link), owned by
+/// this process's user, readable by nobody else (review L12)?
+fn trusted_file(path: &std::path::Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else { return false };
+    if !meta.file_type().is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        // SAFETY: geteuid has no preconditions and can't fail.
+        let me = unsafe { libc::geteuid() };
+        if meta.uid() != me || meta.permissions().mode() & 0o077 != 0 {
+            return false;
+        }
+    }
+    true
+}
+
 fn read_scheduled(log_id: &str) -> Option<(Request, String, Vec<String>)> {
-    let raw = std::fs::read_to_string(scheduled_path(log_id)).ok()?;
+    let path = scheduled_path(log_id)?;
+    if !trusted_file(&path) {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&path).ok()?;
     let v: J = serde_json::from_str(&raw).ok()?;
     let req: Request = serde_json::from_value(v.get("request")?.clone()).ok()?;
     let name = v.get("fromName")?.as_str()?.to_string();
-    let rt: Vec<String> = serde_json::from_value(v.get("replyTo").cloned().unwrap_or(J::Null)).unwrap_or_default();
+    let rt: Vec<String> = serde_json::from_value(v.get("replyTo").cloned()?).ok()?;
     Some((req, name, rt))
 }
 
 pub fn drop_scheduled(log_id: &str) {
-    let p = scheduled_path(log_id);
-    if p.exists() {
+    let Some(p) = scheduled_path(log_id) else { return };
+    if std::fs::symlink_metadata(&p).is_ok() {
         if let Err(e) = std::fs::remove_file(&p) {
             k2_core::log_debug!("[email-notify] WARN couldn't delete scheduled body {log_id}: {e}");
         }
     }
+}
+
+/// Scheduled bodies whose row is no longer `scheduled` (or is gone: a
+/// removed App user's send was cancelled, review L2) are deleted. Returns
+/// how many.
+pub fn sweep_scheduled_orphans() -> usize {
+    let Ok(rd) = std::fs::read_dir(scheduled_dir()) else { return 0 };
+    let mut n = 0;
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(id) = name.strip_suffix(".json").or_else(|| name.strip_suffix(".tmp")) else { continue };
+        if !log_id_ok(id) {
+            continue;
+        }
+        let live = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            match store::get_log(&conn, id) {
+                Ok(r) => r.is_some_and(|r| r.status == store::ST_SCHEDULED),
+                // Unreadable: keep it (the next tick decides).
+                Err(_) => true,
+            }
+        };
+        if !live && std::fs::remove_file(e.path()).is_ok() {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// A cancelled held send (its recipient was removed, H1) leaves the
+/// owner's approvals queue: denied, its kept body scrubbed. Returns how
+/// many were withdrawn.
+pub fn withdraw_cancelled_held(now: i64) -> usize {
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::cancelled_held(&conn, 100).unwrap_or_default()
+    };
+    let ob_store = crate::mail::send::DbOutboundStore::default();
+    let mut n = 0;
+    for (_, ob) in rows {
+        let pending = matches!(crate::mail::send::OutboundStore::load(&ob_store, &ob), Ok(Some(r)) if r.status == "pending");
+        if pending && crate::mail::send::deny(&ob_store, &ob, "system:recipient-removed", "the recipient is no longer one of the App's users", now).is_ok() {
+            n += 1;
+        }
+    }
+    n
 }
 
 // ── the App door ─────────────────────────────────────────────────────
@@ -367,6 +538,10 @@ pub fn send(caller: &Caller, v: &J, now: i64) -> R<J> {
     };
     // 3. On, with a granted sender.
     let (st, s) = app_sender(&app).map_err(|f| refuse("", f))?;
+    // ... and the cap approved (§5.2 step 3, review M2).
+    if let Caller::App { .. } = caller {
+        cap_ok(&app).map_err(|f| refuse(&s.id, f))?;
+    }
     check_from(req.from.as_deref(), &s).map_err(|f| refuse(&s.id, f))?;
     // 4. The sender may send.
     super::senders::ready(&s, now).map_err(|f| refuse(&s.id, f))?;
@@ -415,8 +590,13 @@ pub fn send(caller: &Caller, v: &J, now: i64) -> R<J> {
                 }
             }
         }
-        super::budget::check(&super::budget::Kind::App { app: &app, scope_any, warmup_domain: warmup }, envelope.len(), now)
-            .map_err(|f| refuse(&s.id, f))?;
+        // M1: counted in the window it is sent in; a scheduled send also
+        // fits what the App may keep waiting.
+        let kind = super::budget::Kind::App { app: &app, scope_any, warmup_domain: warmup };
+        super::budget::check(&kind, envelope.len(), req.send_at.unwrap_or(now)).map_err(|f| refuse(&s.id, f))?;
+        if status == store::ST_SCHEDULED {
+            super::budget::check_pending(&kind, envelope.len()).map_err(|f| refuse(&s.id, f))?;
+        }
         let tx = conn.unchecked_transaction().map_err(db_fail)?;
         let id = store::insert_log(
             &tx,
@@ -487,7 +667,9 @@ fn hold(row: &LogRow, s: &Sender, req: &Request, name: &str, rt: &[String], proj
         references: None,
         reply_source: None,
         attachments: Vec::new(),
-        ephemeral: false,
+        // Review M3: the kept copy is scrubbed once decided (links hidden,
+        // bodies blanked), so no live one-time link stays at rest.
+        ephemeral: true,
         notify: Some(NotifyHeld {
             log_id: row.id.clone(),
             app: row.app_service_id.clone().unwrap_or_default(),
@@ -556,13 +738,17 @@ impl crate::mail::submit::MailSubmit for HeldSubmit {
             return Err(SubmitError::Usage { code: "usage", hint: "notifications carry no attachments".into() });
         }
         let now = super::now();
-        let s = {
+        let (s, row) = {
             let db = k2_core::db::shared();
             let conn = db.lock();
             let row = store::get_log(&conn, &self.held.log_id).map_err(SubmitError::Engine)?.ok_or_else(|| SubmitError::Engine("its log row is gone".into()))?;
+            // A cancelled row (its recipient was removed, H1) never leaves.
+            if row.status != store::ST_HELD {
+                return Err(SubmitError::Engine(format!("this email is {} now; it won't be sent", row.status)));
+            }
             let s = store::get_sender(&conn, &row.sender_id).map_err(SubmitError::Engine)?;
             match s {
-                Some(s) if s.is_live() && s.address.eq_ignore_ascii_case(&msg.from) && s.app() == Some(self.held.app.as_str()) => s,
+                Some(s) if s.is_live() && s.address.eq_ignore_ascii_case(&msg.from) && s.app() == Some(self.held.app.as_str()) => (s, row),
                 _ => return Err(SubmitError::Engine("the App's sender changed since it was held".into())),
             }
         };
@@ -571,6 +757,12 @@ impl crate::mail::submit::MailSubmit for HeldSubmit {
         }
         super::senders::ready(&s, now).map_err(|f| SubmitError::Engine(f.hint))?;
         let envelope = msg.all_recipients();
+        // An App's email.send (not K2's invite text) re-checks the scope the
+        // App has now: narrowed to users after it was held, it doesn't leave.
+        if row.purpose.is_none() {
+            let (st, _) = app_sender(&self.held.app).map_err(|f| SubmitError::Engine(f.hint))?;
+            check_scope(&self.held.app, st.recipient_scope == store::SCOPE_ANY, &envelope).map_err(|f| SubmitError::Engine(f.hint))?;
+        }
         let text = (!msg.text_body.is_empty()).then_some(msg.text_body.as_str());
         let out = deliver(
             &s,
@@ -604,8 +796,29 @@ impl crate::mail::submit::MailSubmit for HeldSubmit {
 
 // ── the scheduled flusher ────────────────────────────────────────────
 
-/// Send what's due (steps 4 and 7 again: the sender must still be ready
-/// and the App on with it). Returns how many were handed off.
+/// How long a due send waits when it doesn't fit its budget yet (M1).
+pub const DEFER_SECS: i64 = 300;
+
+/// The flusher's tick: due sends, then the clean-up of bodies and
+/// approvals entries a removed App user left (H1, L2).
+pub fn tick(now: i64) -> usize {
+    let sent = flush_due(now, 50);
+    let orphans = sweep_scheduled_orphans();
+    let withdrawn = withdraw_cancelled_held(now);
+    if orphans > 0 || withdrawn > 0 {
+        k2_core::log_debug!("[email-notify] removed {orphans} kept scheduled body file(s), withdrew {withdrawn} held approval(s)");
+    }
+    sent
+}
+
+/// Send what's due. Every check runs again at the time it is sent
+/// (§5.2 step 9; security review M1 and L12): the kept file must be K2's
+/// (0600, this user, no link) and still pass the composition rules; the
+/// App on with the same sender and its cap approved; the sender ready;
+/// the From name, Reply-To and recipients under the App's scope *now*;
+/// and the budget of the window it actually leaves in. A send that
+/// doesn't fit its budget waits ([`DEFER_SECS`]) and fails `rate_limited`
+/// a day past the furthest `sendAt`. Returns how many were handed off.
 pub fn flush_due(now: i64, limit: usize) -> usize {
     let due = {
         let db = k2_core::db::shared();
@@ -627,13 +840,17 @@ pub fn flush_due(now: i64, limit: usize) -> usize {
             drop(conn);
             drop_scheduled(&row.id);
         };
-        let Some((req, name, rt)) = read_scheduled(&row.id) else {
+        let Some((req, _kept_name, _kept_rt)) = read_scheduled(&row.id) else {
             fail_row("lost");
             continue;
         };
+        if let Err(f) = compose::recheck(&req, now) {
+            fail_row(f.code);
+            continue;
+        }
         let app = row.app_service_id.clone().unwrap_or_default();
-        let s = match app_sender(&app) {
-            Ok((_, s)) if s.id == row.sender_id => s,
+        let (st, s) = match app_sender(&app) {
+            Ok((st, s)) if s.id == row.sender_id => (st, s),
             Ok(_) => {
                 fail_row("sender_not_granted");
                 continue;
@@ -647,11 +864,47 @@ pub fn flush_due(now: i64, limit: usize) -> usize {
             fail_row("email_off");
             continue;
         }
+        if row.origin == store::ORIGIN_APP {
+            if let Err(f) = cap_ok(&app) {
+                fail_row(f.code);
+                continue;
+            }
+        }
         if let Err(f) = super::senders::ready(&s, now) {
             fail_row(f.code);
             continue;
         }
+        let scope_any = st.recipient_scope == store::SCOPE_ANY;
         let envelope = req.envelope();
+        let checked = from_name(&req, &s).and_then(|n| reply_to(&req, &s, scope_any).map(|rt| (n, rt))).and_then(|nr| check_scope(&app, scope_any, &envelope).map(|_| nr));
+        let (name, rt) = match checked {
+            Ok(nr) => nr,
+            Err(f) => {
+                fail_row(f.code);
+                continue;
+            }
+        };
+        // The budget of the window it leaves in: an overdue row moves to
+        // now first, then is re-counted (it's already in the sum: n = 0).
+        if row.send_after.is_some_and(|t| t < now) {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            if !matches!(store::reschedule(&conn, &row.id, now, now), Ok(true)) {
+                continue;
+            }
+        }
+        let warmup = super::budget::warming_up(&s, now).then_some(s.domain.as_str());
+        let kind = super::budget::Kind::App { app: &app, scope_any: row.scope_any || scope_any, warmup_domain: warmup };
+        if let Err(f) = super::budget::check(&kind, 0, now) {
+            if f.code == "rate_limited" && now - row.created_at <= compose::MAX_SCHEDULE_SECS + super::budget::DAY {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let _ = store::reschedule(&conn, &row.id, now + DEFER_SECS, now);
+            } else {
+                fail_row(f.code);
+            }
+            continue;
+        }
         let out = deliver(&s, &row.id, &name, &req.to, &req.cc, &envelope, &req.subject, req.text.as_deref(), req.html.as_deref(), &rt, &req.headers);
         if out.is_ok() {
             sent += 1;
@@ -675,8 +928,13 @@ pub struct Composed {
 
 /// Which sender K2's mail for `app` (or the box) uses (Q2): the App's
 /// granted sender when its email is on, else the system sender. `None`:
-/// no notification path (the caller keeps today's answer).
+/// no notification path (the caller keeps today's answer). With the box
+/// switch off it is always `None`, so every caller answers exactly as
+/// before this feature (security review L9).
 pub fn sender_for(app: Option<&str>) -> R<Option<Sender>> {
+    if !super::box_enabled() {
+        return Ok(None);
+    }
     if let Some(a) = app.filter(|a| !a.is_empty() && *a != k2_core::skin::HOST_APP_ID) {
         if let Ok((_, s)) = app_sender(a) {
             return Ok(Some(s));
@@ -719,7 +977,7 @@ pub fn send_fixed(s: &Sender, origin: &str, purpose: &str, app: Option<&str>, to
     if super::airgap_blocks() {
         return Err(fail(503, "airgap", "air-gap is on: nothing leaves this server"));
     }
-    let to = crate::mail::send::normalize_recipients(&[to.to_string()]).map_err(|_| fail(400, "usage", "the recipient isn't a valid address"))?;
+    let to = vec![compose::strict_address(to).map_err(|_| fail(400, "usage", "the recipient isn't a valid address"))?];
     if c.subject.chars().any(char::is_control) || c.subject.len() > compose::MAX_SUBJECT_BYTES || c.text.len() > compose::MAX_TEXT_BYTES {
         return Err(fail(400, "usage", "the message doesn't fit the composition limits"));
     }
@@ -780,7 +1038,7 @@ pub fn app_link_mail(
                 return Err(fail(403, "email_off", "email notifications are off on this server"));
             }
             super::senders::ready(s, now)?;
-            let to_list = crate::mail::send::normalize_recipients(&[to.to_string()]).map_err(|_| fail(400, "usage", "the recipient isn't a valid address"))?;
+            let to_list = vec![compose::strict_address(to).map_err(|_| fail(400, "usage", "the recipient isn't a valid address"))?];
             let row = {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
@@ -835,7 +1093,9 @@ pub fn status(app: &str, id: &str) -> R<J> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     match store::get_log(&conn, id.trim()).map_err(db_fail)? {
-        Some(r) if r.app_service_id.as_deref() == Some(app) => {
+        // Review L8: K2's own mail about the App's users (the owner's resets)
+        // isn't the App's to see.
+        Some(r) if r.app_service_id.as_deref() == Some(app) && r.origin != store::ORIGIN_SYSTEM => {
             let mut v = row_json(&r);
             v["ok"] = json!(true);
             Ok(v)
@@ -850,7 +1110,7 @@ pub fn log(app: &str, limit: Option<usize>, before: Option<i64>, status: Option<
     let rows = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::list_log(&conn, &store::LogFilter { app: Some(app), status, tag, before, limit: limit + 1 }).map_err(db_fail)?
+        store::list_log(&conn, &store::LogFilter { app: Some(app), status, tag, before, limit: limit + 1, without_system: true }).map_err(db_fail)?
     };
     let more = rows.len() > limit;
     let items: Vec<J> = rows

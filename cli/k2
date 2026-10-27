@@ -37836,7 +37836,7 @@ THE OWNER SETS IT UP (from a terminal outside K2; Touch ID confirms)
 AN APP SENDS (its own pass on its link, cap email:send; or an App key
 with scope email at /v1/apps/<id>/email/send)
   const {id} = await k2.email.send({to: [user.email], subject, html, text,
-    replyTo, headers: {'X-Order': id}, tags: ['orders'], idempotencyKey})
+    replyTo, headers: {'X-App-Order': id}, tags: ['orders'], idempotencyKey})
   k2.email.status({id})  ·  k2.email.log({tag, limit})
   email:send is in no App core: a deploy adding it waits for the owner once,
   and approving it grants no sender (k2 app email on does).
@@ -37858,14 +37858,14 @@ WHO IT MAY REACH
 REFUSALS (HTTP code, then what to do)
   email_off 403 (owner turns it on) · no_sender 409 · sender_not_granted 403
   system_sender 409 · recipient_out_of_scope 403 · header_not_allowed 400
-  (X-… only, never X-K2-…) · too_many_recipients 400 · message_too_large 413
+  (X-App-… or X-Entity-Ref-ID) · too_many_recipients 400 · message_too_large 413
   domain_not_ready / dmarc_missing / relay_not_ready 409 (the owner's setup)
   idempotency_conflict 409 · airgap 503 · vault_closed 503 (retry shortly)
 
 WHAT K2 KEEPS
   A log of metadata only (who, subject, tags, status), 30 days by default;
   never a body. submitted means the mail server accepted it; delivery and
-  bounce events come later. A removed App user's rows go with them.
+  bounce events come later. A removed App user's address is blanked in it.
 
 LICENSE
   Hosted mail runs Stalwart (AGPL-3.0-only), unmodified, as its own program;

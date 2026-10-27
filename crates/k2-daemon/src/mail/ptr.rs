@@ -427,6 +427,11 @@ fn merge_set_alignment(v: &mut serde_json::Value, show: &serde_json::Value, host
 
 /// POST `/cli/mail/ptr/set` `{hostname}`.
 pub fn handle_ptr_set(body: &[u8]) -> CliResponse {
+    // Email Notifications (security review L4): the PTR/HELO name decides
+    // how K2's own mail lands; with a hosted sender it's the owner's.
+    if let Err(resp) = crate::email_notify::fence::server_gate("set the mail server's PTR/HELO name") {
+        return resp;
+    }
     let env = RealPreflightEnv;
     let resolver = match SystemResolver::public().or_else(|_| SystemResolver::new()) {
         Ok(r) => r,

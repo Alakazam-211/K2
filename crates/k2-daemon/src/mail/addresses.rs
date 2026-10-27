@@ -170,19 +170,58 @@ pub fn validate_local_part(raw: &str) -> Result<String, String> {
 /// Normalize a FULL address for lookups: lowercase local part +
 /// punycode-normalized domain (pre-mortem #14 at every boundary).
 pub fn normalize_address(raw: &str) -> Result<String, AddrError> {
+    // Email Notifications security review M4: a line break, NUL or any
+    // other control character anywhere (even trailing) is refused, never
+    // trimmed away; so are whitespace and the characters that would end
+    // or restructure an address inside a header or an SMTP command.
+    if raw.chars().any(char::is_control) {
+        return Err(AddrError::Usage(
+            "an address can't hold a line break or another control character".to_string(),
+        ));
+    }
     let raw = raw.trim();
     let Some((local, domain)) = raw.split_once('@') else {
         return Err(AddrError::Usage(format!(
             "'{raw}' is not a full address — pass local@domain, e.g. bot@acme.dev"
         )));
     };
-    let local = local.trim().to_ascii_lowercase();
+    let local = local.to_ascii_lowercase();
     if local.is_empty() {
         return Err(AddrError::Usage(format!("'{raw}' has an empty local part")));
     }
+    if let Some(why) = local_part_problem(&local) {
+        return Err(AddrError::Usage(format!("the address's local part {why}")));
+    }
     let domain =
         k2_core::mail_domain::normalize_mail_domain(domain).map_err(AddrError::Usage)?;
-    Ok(format!("{local}@{domain}"))
+    let full = format!("{local}@{domain}");
+    if full.len() > MAX_ADDRESS_BYTES {
+        return Err(AddrError::Usage(format!(
+            "an address is at most {MAX_ADDRESS_BYTES} characters (RFC 5321)"
+        )));
+    }
+    Ok(full)
+}
+
+/// RFC 5321 §4.5.3.1: a local part is at most 64 octets.
+pub const MAX_LOCAL_PART_BYTES: usize = 64;
+/// RFC 5321 path limit (256 with the angle brackets) less `<` and `>`.
+pub const MAX_ADDRESS_BYTES: usize = 254;
+
+/// Why `local` can't be an address's local part, if it can't: too long,
+/// whitespace, or a character that would end or restructure the address
+/// in a header or an SMTP command (`<>()[]\,;:"` and a second `@`).
+pub fn local_part_problem(local: &str) -> Option<&'static str> {
+    if local.len() > MAX_LOCAL_PART_BYTES {
+        return Some("is at most 64 characters (RFC 5321)");
+    }
+    if local.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Some("can't hold spaces, line breaks or other control characters");
+    }
+    if local.chars().any(|c| matches!(c, '<' | '>' | '(' | ')' | '[' | ']' | '\\' | ',' | ';' | ':' | '"' | '@')) {
+        return Some("can't hold < > ( ) [ ] \\ , ; : \" or a second @");
+    }
+    None
 }
 
 // ── Engine seam (Stalwart behind a trait — testable without network) ────

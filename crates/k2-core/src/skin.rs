@@ -2362,8 +2362,9 @@ pub fn remove_principal_as(username: &str, actor: &str) -> Result<bool, String> 
         crate::workspace::context_layers::refresh_skin_roster_after_people_change();
         // App user change (rev 147 / K31 seam).
         crate::tool_hook::kick_reconcile();
-        // Email Notifications E22: the removed person's rows leave the send
-        // log (k2.db; metadata only, but it names them).
+        // Email Notifications E22: the removed person's address is blanked
+        // in the send log (k2.db). The rows and counts stay, so removing a
+        // user never gives an App budget back (security review H1).
         if let Some(email) = removed_email.as_deref().filter(|e| !e.trim().is_empty()) {
             let db = crate::db::shared();
             let conn = db.lock();

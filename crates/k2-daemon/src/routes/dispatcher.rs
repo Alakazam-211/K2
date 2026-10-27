@@ -7314,7 +7314,9 @@ async fn handle_one_request(
         // `k2 notifications email …` (owner/Admins) and `k2 app email …`
         // (owner, Admins, the App's agent). Caller rules live in the
         // handlers; every mutation is POST-only.
-        p if crate::email_notify::owner_routes::is_route(p) || crate::email_notify::app_routes::is_route(p) => {
+        // Off (K2_EMAIL_NOTIFICATIONS=off), these fall through to the unknown-route
+        // answer, as before the feature (security review L9).
+        p if crate::email_notify::box_enabled() && (crate::email_notify::owner_routes::is_route(p) || crate::email_notify::app_routes::is_route(p)) => {
             let post_route = crate::email_notify::owner_routes::is_post_route(p) || crate::email_notify::app_routes::is_post_route(p);
             if post_route && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -10178,7 +10180,7 @@ async fn handle_one_request(
         }
         // Email Notifications (0.46.5): the App's own `email.send/status/log`
         // on its link (its pass with email:send; the handler checks).
-        p if crate::email_notify::link_routes::PASS_ROUTES.contains(&p) => {
+        p if crate::email_notify::box_enabled() && crate::email_notify::link_routes::PASS_ROUTES.contains(&p) => {
             if crate::email_notify::link_routes::POST_ROUTES.contains(&p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }

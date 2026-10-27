@@ -1,14 +1,17 @@
 //! The daemon's Email Notifications loops (headless: no client needed).
 //!
-//! - Every [`TICK_SECS`]: scheduled sends that are due ([`super::send::flush_due`]).
+//! - Every [`TICK_SECS`]: scheduled sends that are due, then kept bodies and
+//!   approvals a removed App user left ([`super::send::tick`]).
 //! - Hourly:
 //!   - E5: destroy everything older than 24 h in each hosted sender's
 //!     mailbox (DSNs, ARF reports, replies to a no-reply address, a draft a
 //!     refused submission left) and count delivery reports as a bounce hint;
+//!     a retired sender's mailbox is emptied completely until its row goes
+//!     (security review L3);
 //!   - E22: log rows past the owner's retention (30 days by default);
 //!   - E19: idempotency keys past 24 h;
 //!   - E26: retired senders whose 30-day reservation ended;
-//!   - E15: held rows whose approval was denied or expired become `refused`.
+//!   - E15: held rows whose approval was denied, expired or failed become `refused`.
 
 use k2_core::email_notify as store;
 
@@ -24,7 +27,7 @@ pub fn hourly(now: i64) -> (u64, usize) {
     let senders = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::list_senders(&conn, false).unwrap_or_default()
+        store::list_senders(&conn, true).unwrap_or_default()
     };
     let hosted: Vec<_> = senders.into_iter().filter(|s| s.path == store::PATH_HOSTED && s.stalwart_account_id.is_some()).collect();
     if !hosted.is_empty() && super::hosted_supported() {
@@ -32,7 +35,9 @@ pub fn hourly(now: i64) -> (u64, usize) {
             Ok(engine) => {
                 for s in &hosted {
                     let acct = s.stalwart_account_id.as_deref().unwrap_or_default();
-                    match engine.sweep_account(acct, now - MAILBOX_KEEP_SECS) {
+                    // L3: a retired sender's mailbox is emptied completely until its row is purged.
+                    let before = if s.is_live() { now - MAILBOX_KEEP_SECS } else { now };
+                    match engine.sweep_account(acct, before) {
                         Ok((gone, dsns)) => {
                             destroyed += gone;
                             let db = k2_core::db::shared();
@@ -76,6 +81,7 @@ pub fn hourly(now: i64) -> (u64, usize) {
                 None => Some("lost"),
                 Some("denied") => Some("denied"),
                 Some("expired") => Some("expired"),
+                Some("failed") => Some("failed"),
                 _ => None,
             };
             if let Some(code) = end {
@@ -94,7 +100,7 @@ pub fn hourly(now: i64) -> (u64, usize) {
 pub fn spawn() {
     tokio::spawn(async move {
         loop {
-            let _ = tokio::task::spawn_blocking(|| super::send::flush_due(super::now(), 50)).await;
+            let _ = tokio::task::spawn_blocking(|| super::send::tick(super::now())).await;
             tokio::time::sleep(std::time::Duration::from_secs(TICK_SECS)).await;
         }
     });

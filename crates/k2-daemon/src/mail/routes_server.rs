@@ -996,6 +996,13 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
                 }
             }
         }
+        // Email Notifications (security review L4): never loosened by an
+        // agent on a workspace whose App sends email.
+        if let (Some(v), Some(path)) = (b.agent_send.as_deref(), workspace_path.as_deref()) {
+            if let Err(resp) = crate::email_notify::fence::agent_send_gate(path, v) {
+                return resp;
+            }
+        }
     }
     // Email Notifications (E4, Rosson R1): a domain carrying a notification
     // sender keeps its send mode unless the owner (or an Admin) changes it.

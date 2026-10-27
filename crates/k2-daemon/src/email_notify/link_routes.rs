@@ -104,14 +104,25 @@ pub fn handle_pass(path: &str, pass: &SkinPass, link_app: Option<&str>, is_post:
     respond(r)
 }
 
+/// The caller a key's send is: the App, or (a key the App's agent minted
+/// itself, review M2) that agent, under its own email sending setting.
+fn key_caller(app: &str, actor: &str, minted_by_agent: Option<&str>) -> R<super::send::Caller> {
+    let Some(ws) = minted_by_agent else {
+        return Ok(super::send::Caller::App { app: app.to_string(), actor: actor.to_string() });
+    };
+    let path = crate::workspace_msg::resolve_workspace(ws).ok_or_else(|| fail(403, "gated", "the agent that minted this key is gone"))?;
+    Ok(super::send::Caller::Agent { app: app.to_string(), actor: actor.to_string(), project_id: ws.to_string(), project_path: path })
+}
+
 /// `/v1/apps/<id>/email/*` with an App key of scope `email` (the key
-/// route checked the key, its App and the scope; `actor` names the key).
-pub fn handle_key(app: &str, actor: &str, verb: &str, is_post: bool, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
+/// route checked the key, its App and the scope; `actor` names the key;
+/// `minted_by_agent` is the key's stamp).
+pub fn handle_key(app: &str, actor: &str, minted_by_agent: Option<&str>, verb: &str, is_post: bool, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
     let r = (|| -> R<J> {
         match (verb, is_post) {
             ("email/send", true) => {
                 let v = json_body(body)?;
-                let caller = super::send::Caller::App { app: app.to_string(), actor: actor.to_string() };
+                let caller = key_caller(app, actor, minted_by_agent)?;
                 super::send::send(&caller, &v, super::now())
             }
             ("email/status", false) => {

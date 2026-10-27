@@ -12,10 +12,14 @@
 //!   30 days after removal) with `409 reserved`.
 //! - **E4** (Rosson R1, [`domain_gate`], [`server_gate`],
 //!   [`is_notification`]): on a domain carrying a sender, a mail-manage
-//!   agent can't change the send mode, retire a DKIM key, or drop/retry a
-//!   queued notification, and can't stop the mail server while any hosted
-//!   sender exists; the queue list shows it a notification's recipient
-//!   count, never the addresses. The owner and Admins keep every power.
+//!   agent can't change the send mode, retire or rotate a DKIM key,
+//!   redirect DMARC reports, or drop/retry a queued notification, and can't
+//!   stop the mail server or set its PTR/HELO name while any hosted sender
+//!   exists; the queue list shows it a notification's recipient count,
+//!   never the addresses, and its approvals list leaves held App email out.
+//!   No agent loosens `agentSend` on a workspace whose App sends email
+//!   ([`agent_send_gate`]; security review L4). The owner and Admins keep
+//!   every power.
 //!
 //! Every check here fails closed: an unreadable store answers "fenced".
 
@@ -115,6 +119,53 @@ pub fn server_gate(what: &str) -> Result<(), CliResponse> {
         return Err(owner_only(what));
     }
     Ok(())
+}
+
+/// Does the workspace at `path` own a published App whose email is on?
+/// Fail-closed.
+pub fn workspace_sends_app_email(path: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT COUNT(*) FROM email_app_state e \
+         JOIN published_services p ON p.id = e.app_service_id \
+         JOIN projects w ON w.id = p.project_id \
+         WHERE w.path = ?1 AND e.enabled = 1",
+        rusqlite::params![path],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .unwrap_or(true)
+}
+
+/// How open an `agentSend` value is (`off` < `approval` < `on`); `None`
+/// for anything else.
+fn send_rank(v: &str) -> Option<u8> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "off" => Some(0),
+        "approval" => Some(1),
+        "on" => Some(2),
+        _ => None,
+    }
+}
+
+/// Security review L4: an agent (a mail-manage IT agent included) can't
+/// loosen `agentSend` on a workspace whose App sends email: that setting
+/// is the gate on the App agent's sends (E15). Narrowing stays open.
+pub fn agent_send_gate(workspace_path: &str, new_value: &str) -> Result<(), CliResponse> {
+    if !crate::mail::agent_creds::mail_caller().is_agent() || !workspace_sends_app_email(workspace_path) {
+        return Ok(());
+    }
+    let now = match crate::mail::send::gate_for_path(workspace_path) {
+        Ok(crate::mail::send::Gate::Off) => 0,
+        Ok(crate::mail::send::Gate::Approval) => 1,
+        Ok(crate::mail::send::Gate::On) => 2,
+        Err(_) => 0,
+    };
+    match send_rank(new_value) {
+        Some(r) if r <= now => Ok(()),
+        _ => Err(owner_only("loosen the email sending setting of a workspace whose App sends email")),
+    }
 }
 
 /// Is a queued message (by its return path, E9: a notification's is its

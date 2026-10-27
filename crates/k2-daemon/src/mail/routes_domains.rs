@@ -94,7 +94,10 @@ pub fn handle_domain_add(body: &[u8]) -> CliResponse {
             // Email Notifications E11: a domain (or a sending subdomain)
             // whose zone is on K2 gets the exact `k2 dns` lines. Nothing
             // is planted here: MX/SPF change live mail routing.
-            let zone = {
+            // Off: the answer is exactly today's (security review L9).
+            let zone = if !crate::email_notify::box_enabled() {
+                None
+            } else {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 k2_core::domains::binding_for_name(&conn, v["domain"].as_str().unwrap_or("")).ok().flatten()

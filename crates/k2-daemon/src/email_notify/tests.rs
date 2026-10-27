@@ -466,7 +466,7 @@ fn a_send_writes_its_row_then_hands_off_html_text_reply_to_and_headers() {
     let s = on_app(&f, store::SCOPE_USERS);
     proven_user(&f.app, "dana", "dana@x.test");
     let v = json!({"to": "dana@x.test", "subject": "Order k2inv_abc shipped", "text": "plain BODYTOKEN", "html": "<p>BODYTOKEN</p>",
-        "replyTo": "help@brand.test", "headers": {"X-Order": "42"}, "tags": ["orders"]});
+        "replyTo": "help@brand.test", "headers": {"X-App-Order": "42"}, "tags": ["orders"]});
     let out = send::send(&app_caller(&f.app), &v, now()).expect("sent");
     assert_eq!((out["status"].clone(), out["recipients"].clone(), out["accepted"].clone()), (json!("submitted"), json!(1), json!(true)));
     let sent = f.engine.sent.lock().unwrap().clone();
@@ -476,7 +476,7 @@ fn a_send_writes_its_row_then_hands_off_html_text_reply_to_and_headers() {
     assert_eq!(m.rcpt, vec!["dana@x.test".to_string()]);
     assert_eq!(m.email["from"][0]["email"], s.address, "From is server-stamped");
     assert_eq!(m.email["replyTo"], json!([{"email": "help@brand.test"}]));
-    assert_eq!(m.email["header:X-Order:asText"], "42");
+    assert_eq!(m.email["header:X-App-Order:asText"], "42");
     assert_eq!(m.email["htmlBody"][0]["type"], "text/html");
     assert_eq!(m.email["textBody"][0]["type"], "text/plain");
     let id = out["id"].as_str().expect("id");
@@ -550,7 +550,7 @@ fn refusals_name_their_code_and_are_logged() {
     for (bad, want) in [
         (json!({"to": "dana@x.test", "subject": "s", "text": "t", "headers": {"Bcc": "x@y.test"}}), "header_not_allowed"),
         (json!({"to": "dana@x.test", "subject": "s", "text": "t", "headers": {"X-K2-x": "1"}}), "header_not_allowed"),
-        (json!({"to": "dana@x.test", "subject": "s", "text": "t", "headers": {"X-A": "1\r\nBcc: e@x.test"}}), "header_not_allowed"),
+        (json!({"to": "dana@x.test", "subject": "s", "text": "t", "headers": {"X-App-A": "1\r\nBcc: e@x.test"}}), "header_not_allowed"),
         (json!({"to": "dana@x.test", "subject": "s", "text": "t", "from": "other@notify.brand.test"}), "sender_not_granted"),
         (json!({"to": "dana@x.test", "subject": "s", "text": "t", "replyTo": "evil@phish.test"}), "recipient_out_of_scope"),
     ] {
@@ -1155,4 +1155,441 @@ fn the_box_switch_and_confirm_texts() {
     let r = confirm_reason(CONFIRM_SENDER, Some("noreply@brand.test")).expect("ours").expect("text");
     assert!(r.contains("noreply@brand.test") && r.contains("no agent can read"), "{r}");
     assert!(CONFIRM_ACTIONS.iter().all(|a| confirm_reason(a, Some("x@y.test")).is_some()));
+}
+
+// ── security review (review-email-notifications-core-security-v1) ─────
+
+fn log_row(id: &str) -> store::LogRow {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    store::get_log(&conn, id).expect("read").expect("row")
+}
+
+fn key_for(app: &str, scopes: &[&str], minted_by_agent: Option<&str>) -> String {
+    let scopes: Vec<String> = scopes.iter().map(|s| s.to_string()).collect();
+    let mut g = k2_core::app_grace::keys::grant_for_app(app, &scopes, &[], &[]).expect("grant");
+    g.minted_by_agent = minted_by_agent.map(str::to_string);
+    k2_core::api_keys::create_app_key("test", app, &g.to_json()).expect("key").1
+}
+
+fn key_send(app: &str, key: &str, body: &J) -> (u16, J) {
+    let r = crate::apps::app_key_routes::handle(&format!("/v1/apps/{app}/email/send"), true, Some(key), body.to_string().as_bytes(), &HashMap::new());
+    (status_of(&r), body_of(&r))
+}
+
+fn approval_gate(ws: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute("UPDATE projects SET mail_agent_send = 'approval' WHERE id = ?1", params![ws]).expect("approval");
+}
+
+#[test]
+fn h1_removing_an_app_user_never_gives_budget_back() {
+    let f = fx("h1budget");
+    on_app(&f, store::SCOPE_ANY);
+    skin::add_principal_for_app("sink", Some("sink@attacker.test"), &f.app, None, "test").expect("sink");
+    let bcc: Vec<String> = (0..29).map(|i| format!("t{i}@victim.test")).collect();
+    let out = send::send(&app_caller(&f.app), &json!({"to": "sink@attacker.test", "bcc": bcc, "subject": "s", "text": "t"}), now()).expect("30 recipients");
+    let id = out["id"].as_str().expect("id").to_string();
+    assert!(skin::remove_principal("sink").expect("remove"), "removed");
+    let row = log_row(&id);
+    assert_eq!(row.recipient_count, 30, "the count stays");
+    assert!(!row.to.iter().any(|a| a.contains("sink@")), "the address is blanked: {:?}", row.to);
+    assert_eq!(row.to[0], store::REMOVED_ADDRESS);
+    // The App's any-scope budget (30/h) is still spent.
+    skin::add_principal_for_app("sink", Some("sink@attacker.test"), &f.app, None, "test").expect("sink again");
+    let e = send::send(&app_caller(&f.app), &json!({"to": "sink@attacker.test", "subject": "s", "text": "t"}), now()).expect_err("budget unchanged");
+    assert_eq!(e.code, "rate_limited", "{e:?}");
+    assert_eq!(f.engine.sent.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn h1_l2_a_removed_users_scheduled_send_is_cancelled_and_its_body_goes() {
+    let f = fx("h1sched");
+    on_app(&f, store::SCOPE_ANY);
+    skin::add_principal_for_app("dana", Some("dana@x.test"), &f.app, None, "test").expect("dana");
+    let now = now();
+    let out = send::send(&app_caller(&f.app), &json!({"to": "dana@x.test", "subject": "s", "text": "later", "sendAt": now + 600}), now).expect("scheduled");
+    let id = out["id"].as_str().expect("id").to_string();
+    let file = send::scheduled_path(&id).expect("path");
+    assert!(file.exists());
+    assert!(skin::remove_principal("dana").expect("remove"));
+    let row = log_row(&id);
+    assert_eq!((row.status.as_str(), row.error_code.as_deref(), row.recipient_count), (store::ST_CANCELLED, Some("recipient_removed"), 1));
+    send::tick(now + 601);
+    assert!(!file.exists(), "the orphaned body is deleted");
+    assert!(f.engine.sent.lock().unwrap().is_empty(), "a cancelled send never leaves");
+}
+
+#[test]
+fn h2_provider_headers_never_reach_either_path() {
+    let f = fx("h2");
+    on_app(&f, store::SCOPE_ANY);
+    for h in ["X-SMTPAPI", "X-MC-BccAddress", "X-Mailgun-Drop-Message", "X-SES-CONFIGURATION-SET", "X-PM-Message-Stream", "X-Order"] {
+        let mut headers = serde_json::Map::new();
+        headers.insert(h.to_string(), json!("{\"to\":[\"victim@x.test\"]}"));
+        let v = json!({"to": "a@x.test", "subject": "s", "text": "t", "headers": J::Object(headers)});
+        assert_eq!(code(&send::send(&app_caller(&f.app), &v, now())), "header_not_allowed", "{h}");
+    }
+    assert!(f.engine.sent.lock().unwrap().is_empty());
+    send::send(&app_caller(&f.app), &json!({"to": "a@x.test", "subject": "s", "text": "t", "headers": {"X-App-Order": "1", "X-Entity-Ref-ID": "2"}}), now())
+        .expect("the App's own headers pass");
+}
+
+#[test]
+fn m1_piling_scheduled_sends_onto_one_time_cant_burst() {
+    let f = fx("m1pile");
+    let s = on_app(&f, store::SCOPE_ANY);
+    let now = now();
+    let t = now + 3 * 3600;
+    let to: Vec<String> = (0..30).map(|i| format!("p{i}@x.test")).collect();
+    let first = send::send(&app_caller(&f.app), &json!({"to": to, "subject": "s", "text": "t", "sendAt": t}), now).expect("30 at t");
+    for at in [t, t - 1800, t + 1800, t + 3599] {
+        let e = send::send(&app_caller(&f.app), &json!({"to": "one@x.test", "subject": "s", "text": "t", "sendAt": at}), now).expect_err("same hour");
+        assert_eq!(e.code, "rate_limited", "sendAt {at}: {e:?}");
+    }
+    // Nor an immediate send within an hour of it.
+    let e = send::send(&app_caller(&f.app), &json!({"to": "one@x.test", "subject": "s", "text": "t"}), t - 600).expect_err("now, near t");
+    assert_eq!(e.code, "rate_limited");
+    // Clear of it is fine; the hour it was made in isn't spent.
+    send::send(&app_caller(&f.app), &json!({"to": "one@x.test", "subject": "s", "text": "t"}), now).expect("now is 3 h away");
+    send::send(&app_caller(&f.app), &json!({"to": "two@x.test", "subject": "s", "text": "t", "sendAt": t + 3600}), now).expect("the next hour");
+    // At flush time: a send that no longer fits (a row landed in its hour
+    // meanwhile) waits instead of bursting.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let extra = vec!["late@x.test".to_string()];
+        store::insert_log(
+            &conn,
+            &store::NewLog {
+                sender_id: &s.id,
+                origin: store::ORIGIN_APP,
+                app_service_id: Some(&f.app),
+                purpose: None,
+                to: &extra,
+                subject: "",
+                tags: &[],
+                status: store::ST_SUBMITTED,
+                error_code: None,
+                message_id: None,
+                send_after: None,
+                scope_any: true,
+                now: t,
+            },
+        )
+        .expect("a row in that hour");
+    }
+    assert_eq!(send::flush_due(t + 1, 10), 0, "deferred, not sent");
+    let id = first["id"].as_str().expect("id");
+    let row = log_row(id);
+    assert_eq!((row.status.as_str(), row.send_after), (store::ST_SCHEDULED, Some(t + 1 + send::DEFER_SECS)));
+    assert!(f.engine.sent.lock().unwrap().iter().all(|m| m.rcpt.len() == 1), "the 30 didn't leave yet");
+    // Two hours on, its own hour is clear: it leaves then, and the next
+    // due one (whose hour it now fills) waits in turn.
+    assert_eq!(send::flush_due(t + 7201, 10), 1);
+    assert_eq!(log_row(id).status, store::ST_SUBMITTED);
+    assert!(f.engine.sent.lock().unwrap().iter().any(|m| m.rcpt.len() == 30));
+}
+
+#[test]
+fn m1_an_app_keeps_at_most_a_days_budget_waiting() {
+    let f = fx("m1pending");
+    let s = on_app(&f, store::SCOPE_ANY);
+    let now = now();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for d in 0..10i64 {
+            let to: Vec<String> = (0..30).map(|i| format!("w{d}x{i}@x.test")).collect();
+            store::insert_log(
+                &conn,
+                &store::NewLog {
+                    sender_id: &s.id,
+                    origin: store::ORIGIN_APP,
+                    app_service_id: Some(&f.app),
+                    purpose: None,
+                    to: &to,
+                    subject: "",
+                    tags: &[],
+                    status: store::ST_SCHEDULED,
+                    error_code: None,
+                    message_id: None,
+                    send_after: Some(now + 400 * 86_400 + d * 3 * 86_400),
+                    scope_any: true,
+                    now,
+                },
+            )
+            .expect("waiting");
+        }
+    }
+    let e = send::send(&app_caller(&f.app), &json!({"to": "a@x.test", "subject": "s", "text": "t", "sendAt": now + 600}), now).expect_err("300 waiting");
+    assert_eq!(e.code, "rate_limited");
+    assert!(e.hint.contains("waiting"), "{}", e.hint);
+}
+
+#[test]
+fn m2_an_agent_cant_mint_itself_an_email_key() {
+    let f = fx("m2mint");
+    on_app(&f, store::SCOPE_ANY);
+    agent_switches(&f.ws, true, true);
+    let agent = Who::Agent { project_id: f.ws.clone(), session_id: "s".into() };
+    let r = crate::apps::grace::handle("/cli/app/key/mint", agent, json!({"app": f.app, "scopes": ["email"]}).to_string().as_bytes(), &HashMap::new());
+    let v = body_of(&r);
+    assert_eq!(v["status"], "held", "{v}");
+    assert!(v["reasons"].to_string().contains("sends email"), "{v}");
+    let keys: i64 = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT COUNT(*) FROM api_keys WHERE app_service_id = ?1", params![f.app], |r| r.get(0)).expect("count")
+    };
+    assert_eq!(keys, 0, "no key was minted");
+}
+
+#[test]
+fn m2_a_runtime_app_sends_only_with_its_cap_approved() {
+    let f = fx("m2cap");
+    on_app(&f, store::SCOPE_ANY);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::store::insert_app(
+            &conn,
+            &k2_core::deploy::store::NewApp {
+                app_id: "app_m2",
+                service_id: &f.app,
+                seed_id: None,
+                owner_workspace: &f.ws,
+                isolation: "process",
+                memory_limit_bytes: None,
+                front_port: 4350,
+                created_by: "test",
+            },
+        )
+        .expect("runtime row");
+    }
+    let key = key_for(&f.app, &["email"], None);
+    let body = json!({"to": "a@x.test", "subject": "s", "text": "t"});
+    let (st, v) = key_send(&f.app, &key, &body);
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("cap_not_granted")), "{v}");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        crate::apps::grants::record(&conn, "app_m2", &[skin::CAP_EMAIL_SEND.to_string()]).expect("approve");
+    }
+    let (st, v) = key_send(&f.app, &key, &body);
+    assert_eq!(st, 202, "{v}");
+}
+
+#[test]
+fn m2_a_key_the_agent_minted_follows_its_send_setting() {
+    let f = fx("m2gate");
+    on_app(&f, store::SCOPE_ANY);
+    let key = key_for(&f.app, &["email"], Some(&f.ws));
+    let body = json!({"to": "a@x.test", "subject": "s", "text": "t"});
+    let (st, v) = key_send(&f.app, &key, &body);
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("gated")), "agentSend off: {v}");
+    approval_gate(&f.ws);
+    let (st, v) = key_send(&f.app, &key, &body);
+    assert_eq!((st, v["status"].clone()), (202, json!("held")), "{v}");
+    assert!(f.engine.sent.lock().unwrap().is_empty(), "held for the owner");
+}
+
+#[test]
+fn m3_a_decided_held_email_keeps_no_body_or_live_link() {
+    use crate::mail::send::OutboundStore;
+    let f = fx("m3");
+    let s = on_app(&f, store::SCOPE_ANY);
+    approval_gate(&f.ws);
+    agent_switches(&f.ws, true, true);
+    let agent = Who::Agent { project_id: f.ws.clone(), session_id: "s".into() };
+    let (_, v) = app_post(app_routes::SEND, &agent, json!({"app": f.app, "to": "a@x.test", "subject": "Held", "text": "BODY k2inv_live123", "html": "<b>HTML</b>"}));
+    let approved = v["outboundId"].as_str().expect("held").to_string();
+    let r = crate::mail::routes_send::handle_approvals_approve(json!({"id": approved}).to_string().as_bytes());
+    assert_eq!(status_of(&r), 200, "{}", r.body);
+    let store_ob = crate::mail::send::DbOutboundStore::default();
+    let kept = store_ob.load_message(&approved).expect("kept");
+    assert!(kept.text_body.is_empty() && kept.notify.as_ref().expect("notify").html.is_none(), "{kept:?}");
+    assert!(!format!("{kept:?}").contains("k2inv_live123"));
+    // An invite held, then denied: no live link at rest either.
+    let c = send::Composed { subject: "Join".into(), text: "https://x.test/join?t=k2inv_deny456".into(), html: None };
+    let held = send::app_link_mail(&s, &f.app, "invite", "new@x.test", &c, crate::mail::send::Gate::Approval, &f.ws, "agent:x")
+        .expect("ok")
+        .expect_err("held");
+    crate::mail::send::deny(&store_ob, &held, "owner", "no", now()).expect("deny");
+    let kept = store_ob.load_message(&held).expect("kept");
+    assert!(!format!("{kept:?}").contains("k2inv_deny456"), "{kept:?}");
+}
+
+#[test]
+fn m4_a_line_break_in_an_address_is_refused_everywhere() {
+    let f = fx("m4");
+    on_app(&f, store::SCOPE_ANY);
+    for bad in ["a\r\nX-Injected: y@victim.test", "a b@victim.test", "<a>@victim.test", "\"a\"@victim.test"] {
+        assert_eq!(code(&send::send(&app_caller(&f.app), &json!({"to": bad, "subject": "s", "text": "t"}), now())), "usage", "{bad:?}");
+        assert_eq!(code(&send::send(&app_caller(&f.app), &json!({"to": "ok@x.test", "bcc": [bad], "subject": "s", "text": "t"}), now())), "usage", "{bad:?}");
+    }
+    let sys = add_hosted("system@notify.brand.test");
+    senders::set_system(&sys.id, "owner", now()).expect("system");
+    let c = send::Composed { subject: "Your code".into(), text: "1".into(), html: None };
+    assert_eq!(send::system_send("email_code", "a\r\nb@x.test", &c, None).expect_err("refused").code, "usage");
+    assert!(f.engine.sent.lock().unwrap().is_empty());
+}
+
+#[test]
+fn l3_a_retired_senders_mailbox_is_emptied() {
+    let f = fx("l3");
+    let s = add_hosted("noreply@notify.brand.test");
+    senders::remove(&s.id, "owner", now()).expect("rm");
+    let now = now();
+    sweep::hourly(now);
+    let swept = f.engine.swept.lock().unwrap().clone();
+    assert!(swept.contains(&(s.stalwart_account_id.clone().expect("acct"), now)), "{swept:?}");
+}
+
+#[test]
+fn l4_mail_manage_agents_cant_reach_a_senders_domain_or_its_apps_gate() {
+    let f = fx("l4");
+    on_app(&f, store::SCOPE_ANY);
+    let owner_only = |r: &crate::cli_response::CliResponse| (status_of(r), body_of(r)["error"]["code"].clone()) == (403, json!("owner_only"));
+    let r = as_it_agent(&f, || crate::mail::dkim::handle_dkim_rotate(json!({"domain": DOMAIN}).to_string().as_bytes()));
+    assert!(owner_only(&r), "{}", r.body);
+    let r = as_it_agent(&f, || crate::mail::dmarc::handle_dmarc_report_to(json!({"domain": DOMAIN, "address": "x@notify.brand.test"}).to_string().as_bytes()));
+    assert!(owner_only(&r), "{}", r.body);
+    let r = as_it_agent(&f, || crate::mail::ptr::handle_ptr_set(json!({"hostname": "mail.brand.test"}).to_string().as_bytes()));
+    assert!(owner_only(&r), "{}", r.body);
+    // The App workspace's agentSend: never loosened by an agent; narrowing is fine.
+    let r = as_it_agent(&f, || crate::mail::routes_server::handle_config_set(json!({"workspace": f.ws, "agentSend": "on"}).to_string().as_bytes()));
+    assert!(owner_only(&r), "{}", r.body);
+    let r = as_it_agent(&f, || crate::mail::routes_server::handle_config_set(json!({"workspace": f.ws, "agentSend": "off"}).to_string().as_bytes()));
+    assert!(!owner_only(&r), "{}", r.body);
+    // A held App email isn't in an IT agent's approvals queue.
+    approval_gate(&f.ws);
+    agent_switches(&f.ws, true, true);
+    let agent = Who::Agent { project_id: f.ws.clone(), session_id: "s".into() };
+    let (_, v) = app_post(app_routes::SEND, &agent, json!({"app": f.app, "to": "a@x.test", "subject": "Private", "text": "PREVIEWME"}));
+    let ob = v["outboundId"].as_str().expect("held").to_string();
+    let r = as_it_agent(&f, || crate::mail::routes_send::handle_approvals_list(&HashMap::new()));
+    assert!(!r.body.contains(&ob) && !r.body.contains("PREVIEWME"), "{}", r.body);
+    let r = crate::mail::routes_send::handle_approvals_list(&HashMap::new());
+    assert!(r.body.contains(&ob), "the owner still sees it: {}", r.body);
+}
+
+#[test]
+fn l5_sender_set_needs_a_fresh_confirm() {
+    let _f = fx("l5");
+    let s = add_hosted("noreply@notify.brand.test");
+    let post = |b: J| owner_routes::handle(owner_routes::SENDER_SET, Who::Owner, true, b.to_string().as_bytes(), &HashMap::new());
+    let r = post(json!({"sender": s.id, "replyTo": "attacker@evil.test"}));
+    let v = body_of(&r);
+    assert_eq!((status_of(&r), v["error"]["code"].clone(), v["error"]["action"].clone()), (403, json!("vault_confirm_required"), json!(CONFIRM_SENDER)), "{v}");
+    assert!(senders::find_live(&s.id).expect("s").reply_to.is_empty(), "nothing changed");
+    let vault = crate::vault::ensure_test_vault();
+    let tok = vault.confirm.mint(CONFIRM_SENDER, Some(&s.address), "owner", "local-auth");
+    let r = post(json!({"sender": s.id, "replyTo": "help@brand.test", "confirmToken": tok}));
+    assert_eq!(status_of(&r), 200, "{}", r.body);
+    assert_eq!(status_of(&post(json!({"sender": s.id}))), 200, "no change, no confirm");
+    assert_eq!(body_of(&post(json!({"sender": s.id, "name": "=?utf-8?B?eA==?="})))["error"]["code"], "usage");
+}
+
+#[test]
+fn l6_from_name_spoofing_is_refused() {
+    let f = fx("l6");
+    on_app(&f, store::SCOPE_ANY);
+    let sys = add_hosted("system@notify.brand.test");
+    senders::set_system(&sys.id, "owner", now()).expect("system");
+    for name in [" B r a n d ", "bRaNd", "=?utf-8?B?c2VjdXJpdHlAYmFuay5jb20=?="] {
+        let v = json!({"to": "a@x.test", "subject": "s", "text": "t", "fromName": name});
+        assert_eq!(code(&send::send(&app_caller(&f.app), &v, now())), "usage", "{name:?}");
+    }
+}
+
+#[test]
+fn l7_upstream_error_text_never_reaches_the_app() {
+    let f = fx("l7");
+    on_app(&f, store::SCOPE_ANY);
+    *f.engine.fail_submit.lock().unwrap() = Some("550 quota for AKIASECRET at internal.host user@x.test".into());
+    let e = send::send(&app_caller(&f.app), &json!({"to": "a@x.test", "subject": "s", "text": "t"}), now()).expect_err("refused");
+    assert_eq!((e.status, e.code, e.hint.as_str()), (502, "failed", send::UPSTREAM_HINT));
+    assert_eq!(send::mask_addresses("550 no user@x.test here"), "550 no [addr] here");
+}
+
+#[test]
+fn l8_the_apps_log_never_shows_k2s_own_mail_about_its_users() {
+    let f = fx("l8");
+    let sys = add_hosted("system@notify.brand.test");
+    senders::set_system(&sys.id, "owner", now()).expect("system");
+    let c = send::Composed { subject: "Reset".into(), text: "link".into(), html: None };
+    let id = send::system_send("owner_reset", "newaddr@x.test", &c, Some(&f.app)).expect("sent");
+    assert_eq!(code(&send::status(&f.app, &id)), "not_found");
+    let log = send::log(&f.app, None, None, None, None).expect("log");
+    assert!(!log.to_string().contains("newaddr@x.test"), "{log}");
+    let q: HashMap<String, String> = [("app".to_string(), f.app.clone())].into_iter().collect();
+    let r = owner_routes::handle(owner_routes::LOG, Who::Owner, false, b"", &q);
+    assert!(r.body.contains("owner_reset"), "the owner's log keeps it: {}", r.body);
+}
+
+#[test]
+fn l9_off_is_exactly_today() {
+    let f = fx("l9");
+    let sys = add_hosted("system@notify.brand.test");
+    senders::set_system(&sys.id, "owner", now()).expect("system");
+    on_app(&f, store::SCOPE_ANY);
+    set_test_switch(Some(false));
+    // The owner's reset keeps today's answer (no notification path).
+    assert!(crate::app_user_invites::owner_reset_sender(&f.app, None).map_err(|r| r.body).expect("ok").is_none());
+    // The routes aren't served: the dispatcher falls through to its unknown-route answer.
+    for p in [owner_routes::STATUS, owner_routes::SENDER_ADD, app_routes::SEND, link_routes::SEND] {
+        assert!(!serves(p), "{p}");
+    }
+    // The key door answers an email verb exactly as it answers an unknown verb.
+    let key = key_for(&f.app, &["email"], None);
+    let body = json!({"to": "a@x.test", "subject": "s", "text": "t"}).to_string();
+    let email = crate::apps::app_key_routes::handle(&format!("/v1/apps/{}/email/send", f.app), true, Some(&key), body.as_bytes(), &HashMap::new());
+    let unknown = crate::apps::app_key_routes::handle(&format!("/v1/apps/{}/nope/send", f.app), true, Some(&key), body.as_bytes(), &HashMap::new());
+    assert_eq!((email.status, email.content_type, email.body.clone()), (unknown.status, unknown.content_type, unknown.body.clone()));
+    assert!(!crate::apps::app_key_routes::post_allowed(&format!("/v1/apps/{}/email/send", f.app)));
+    assert_ne!(crate::apps::app_key_routes::body_cap(&format!("/v1/apps/{}/email/send", f.app)), MAX_BODY);
+    assert!(f.engine.sent.lock().unwrap().is_empty());
+    set_test_switch(None);
+    assert!(serves(app_routes::SEND), "back on");
+}
+
+#[test]
+fn l12_the_scheduled_body_is_0600_and_checked_before_it_is_read() {
+    let f = fx("l12");
+    on_app(&f, store::SCOPE_ANY);
+    let now = now();
+    let later = json!({"to": "a@x.test", "subject": "s", "text": "later", "sendAt": now + 600});
+    let out = send::send(&app_caller(&f.app), &later, now).expect("scheduled");
+    let id = out["id"].as_str().expect("id").to_string();
+    let file = send::scheduled_path(&id).expect("path");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&file).expect("meta").permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(file.parent().expect("dir")).expect("meta").permissions().mode() & 0o777, 0o700);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).expect("widen");
+        send::flush_due(now + 601, 10);
+        assert!(f.engine.sent.lock().unwrap().is_empty(), "a widened file isn't trusted");
+        assert_eq!(log_row(&id).error_code.as_deref(), Some("lost"));
+    }
+    // A tampered body (a provider header written in) is refused at flush.
+    let out = send::send(&app_caller(&f.app), &later, now).expect("scheduled");
+    let id = out["id"].as_str().expect("id").to_string();
+    let file = send::scheduled_path(&id).expect("path");
+    let raw = std::fs::read_to_string(&file).expect("read");
+    assert!(raw.contains("\"headers\":{}"), "{raw}");
+    std::fs::write(&file, raw.replace("\"headers\":{}", "\"headers\":{\"X-SMTPAPI\":\"{}\"}")).expect("tamper");
+    send::flush_due(now + 601, 10);
+    assert!(f.engine.sent.lock().unwrap().is_empty());
+    assert_eq!(log_row(&id).error_code.as_deref(), Some("header_not_allowed"));
+}
+
+#[test]
+fn l13_reply_to_uses_the_public_suffix_list() {
+    assert_eq!(send::registrable("shop.github.io").as_deref(), Some("shop.github.io"));
+    assert_eq!(send::registrable("a.brand.co.kr").as_deref(), Some("brand.co.kr"));
+    assert_eq!(send::registrable("notify.brand.test").as_deref(), Some("brand.test"));
+    assert_eq!(send::registrable("github.io"), None, "a public suffix has no registrable part");
 }

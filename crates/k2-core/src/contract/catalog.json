@@ -9245,7 +9245,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "At most 10 X-… headers (not X-K2-…), printable ASCII values."
+              "description": "At most 10: the App's own X-App-… headers and X-Entity-Ref-ID, printable ASCII values."
             },
             "tags": {
               "type": "array",
@@ -9260,7 +9260,7 @@
             },
             "sendAt": {
               "type": "integer",
-              "description": "Seconds since the epoch, at most 30 days ahead."
+              "description": "Seconds since the epoch, at most 7 days ahead; it counts against the budget of the hour it is sent in."
             }
           },
           "required": [
@@ -9379,7 +9379,8 @@
               "held",
               "submitted",
               "failed",
-              "refused"
+              "refused",
+              "cancelled"
             ]
           },
           "recipients": {

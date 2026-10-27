@@ -49,6 +49,12 @@ fn write(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write file");
 }
 
+/// `s` as it appears inside a JSON string (no quotes).
+fn json_body(s: &str) -> String {
+    let q = serde_json::to_string(s).expect("serialize str");
+    q[1..q.len() - 1].to_string()
+}
+
 /// A fully-wired synthetic agent: a workspace tree + a hermetic
 /// `<home>/.claude/projects/<slug>/`.
 struct Fixture {
@@ -1466,12 +1472,14 @@ fn session_ids_from_entries_takes_file_stems() {
 /// up as Provider entries, never auth/credentials, and a full bundle →
 /// unpack rewrites paths and re-keys Cursor MD5 / Grok encode.
 fn seed_provider_fixtures(home: &Path, project: &str) {
+    // The path as a CLI's JSON spells it (`\` doubled on Windows).
+    let pj = json_body(project);
     // Gemini: projects.json + tmp/<slug>/chats/*.jsonl
     let gemini_slug = "ws-slug-abc";
     write(
         &home.join(".gemini/projects.json"),
         &format!(
-            r#"{{"projects":{{"{project}":"{gemini_slug}","/other/proj":"other-slug"}}}}"#
+            r#"{{"projects":{{"{pj}":"{gemini_slug}","/other/proj":"other-slug"}}}}"#
         ),
     );
     write(
@@ -1481,8 +1489,8 @@ fn seed_provider_fixtures(home: &Path, project: &str) {
             .join("chats")
             .join("session-1.jsonl"),
         &format!(
-            r#"{{"sessionId":"gem-uuid-1","cwd":"{project}","startTime":"2026-07-01T00:00:00Z"}}
-{{"type":"user","content":"hello from {project}"}}
+            r#"{{"sessionId":"gem-uuid-1","cwd":"{pj}","startTime":"2026-07-01T00:00:00Z"}}
+{{"type":"user","content":"hello from {pj}"}}
 "#
         ),
     );
@@ -1500,7 +1508,7 @@ fn seed_provider_fixtures(home: &Path, project: &str) {
             .join(".pi/agent/sessions/some-slug")
             .join("2026-07-01T00-00-00_pi-uuid-1.jsonl"),
         &format!(
-            r#"{{"type":"session","id":"pi-uuid-1","cwd":"{project}","timestamp":"2026-07-01T00:00:00Z"}}
+            r#"{{"type":"session","id":"pi-uuid-1","cwd":"{pj}","timestamp":"2026-07-01T00:00:00Z"}}
 {{"type":"message","message":{{"role":"user","content":[{{"type":"text","text":"hi"}}]}}}}
 "#
         ),
@@ -1519,7 +1527,7 @@ fn seed_provider_fixtures(home: &Path, project: &str) {
             .join(".codex/sessions/2026/07/01")
             .join("rollout-2026-07-01T00-00-00-codex-uuid-1.jsonl"),
         &format!(
-            r#"{{"type":"session_meta","payload":{{"id":"codex-uuid-1","cwd":"{project}","timestamp":"2026-07-01T00:00:00Z"}}}}
+            r#"{{"type":"session_meta","payload":{{"id":"codex-uuid-1","cwd":"{pj}","timestamp":"2026-07-01T00:00:00Z"}}}}
 {{"type":"event","payload":{{"text":"hi"}}}}
 "#
         ),
@@ -1541,7 +1549,7 @@ fn seed_provider_fixtures(home: &Path, project: &str) {
             .join(grok_sid)
             .join("summary.json"),
         &format!(
-            r#"{{"info":{{"id":"{grok_sid}","cwd":"{project}"}},"generated_title":"Grok chat","last_active_at":"2026-07-03T10:00:00Z"}}"#
+            r#"{{"info":{{"id":"{grok_sid}","cwd":"{pj}"}},"generated_title":"Grok chat","last_active_at":"2026-07-03T10:00:00Z"}}"#
         ),
     );
     write(
@@ -1550,7 +1558,7 @@ fn seed_provider_fixtures(home: &Path, project: &str) {
             .join(&encoded)
             .join(grok_sid)
             .join("chat_history.jsonl"),
-        &format!(r#"{{"type":"user","content":"path was {project}"}}"#),
+        &format!(r#"{{"type":"user","content":"path was {pj}"}}"#),
     );
     // auth.json at grok root — NEVER inventory
     write(
@@ -1566,7 +1574,7 @@ fn seed_provider_fixtures(home: &Path, project: &str) {
             .join(sub_sid)
             .join("summary.json"),
         &format!(
-            r#"{{"info":{{"id":"{sub_sid}","cwd":"{project}"}},"session_kind":"subagent","last_active_at":"2026-07-03T12:00:00Z"}}"#
+            r#"{{"info":{{"id":"{sub_sid}","cwd":"{pj}"}},"session_kind":"subagent","last_active_at":"2026-07-03T12:00:00Z"}}"#
         ),
     );
 
@@ -1750,6 +1758,8 @@ fn multi_provider_bundle_unpack_round_trip() {
 
     let (res, _m) = unpack_bundle(&bundle, &dest_parent, &dest_home).unwrap();
     let dest = res.dest_path.to_string_lossy().to_string();
+    // JSON bodies hold the paths escaped (`\` doubled on Windows).
+    let (project_j, dest_j) = (json_body(&project), json_body(&dest));
 
     // Gemini: session file under dest home with rewritten path + projects.json merge
     let gemini_files: Vec<_> = walk_files(&dest_home.join(".gemini"))
@@ -1763,17 +1773,17 @@ fn multi_provider_bundle_unpack_round_trip() {
     for f in &gemini_files {
         let body = fs::read_to_string(f).unwrap();
         assert!(
-            !body.contains(&project) || project == dest,
+            !body.contains(&project_j) || project == dest,
             "gemini jsonl must rewrite SOURCE path, body={body}"
         );
         assert!(
-            body.contains(&dest) || project == dest,
+            body.contains(&dest_j) || project == dest,
             "gemini jsonl must contain DEST path"
         );
     }
     let projects_json = fs::read_to_string(dest_home.join(".gemini/projects.json")).unwrap();
     assert!(
-        projects_json.contains(&dest),
+        projects_json.contains(&dest_j),
         "gemini projects.json must map dest path, got {projects_json}"
     );
 
@@ -1790,8 +1800,8 @@ fn multi_provider_bundle_unpack_round_trip() {
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl"))
     {
         let body = fs::read_to_string(f).unwrap();
-        assert!(!body.contains(&project) || project == dest, "pi cwd rewritten");
-        assert!(body.contains(&dest) || project == dest);
+        assert!(!body.contains(&project_j) || project == dest, "pi cwd rewritten");
+        assert!(body.contains(&dest_j) || project == dest);
     }
 
     // Codex
@@ -1823,10 +1833,10 @@ fn multi_provider_bundle_unpack_round_trip() {
     );
     let summary = fs::read_to_string(&grok_summary).unwrap();
     assert!(
-        !summary.contains(&project) || project == dest,
+        !summary.contains(&project_j) || project == dest,
         "grok summary cwd rewritten"
     );
-    assert!(summary.contains(&dest) || project == dest);
+    assert!(summary.contains(&dest_j) || project == dest);
     assert!(
         !dest_home.join(".grok/auth.json").exists(),
         "grok auth must not land on dest"
@@ -1910,6 +1920,22 @@ fn walk_files(root: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+#[test]
+fn a_windows_path_is_rewritten_in_its_json_spelling_too() {
+    let from = r"D:\src\my app";
+    let to = r"C:\Users\ann\my app";
+    let (from_q, to_q) = (serde_json::to_string(from).unwrap(), serde_json::to_string(to).unwrap());
+    let body = format!("{{\"cwd\":{from_q}}}\nraw {from} line\n");
+    let out = super::unpack::replace_path_bytes(body.as_bytes(), from, to).expect("matched");
+    let out = String::from_utf8(out).unwrap();
+    assert_eq!(out, format!("{{\"cwd\":{to_q}}}\nraw {to} line\n"));
+    let v: serde_json::Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
+    assert_eq!(v["cwd"], to, "still valid JSON holding the new path");
+    assert!(super::unpack::replace_path_bytes(b"nothing here", from, to).is_none());
+    assert!(super::unpack::replace_path_bytes(body.as_bytes(), from, from).is_none());
+    assert!(super::unpack::replace_path_bytes(body.as_bytes(), "", to).is_none());
 }
 
 /// The LLM login wallet never travels in a clone bundle, even with

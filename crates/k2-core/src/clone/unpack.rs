@@ -383,31 +383,61 @@ fn is_providers_entry(archive_path: &Path) -> bool {
 /// characters are handled verbatim, exactly like the manual `sed` users
 /// run today.
 struct SessionPathRewrite {
-    from: Vec<u8>,
-    to: Vec<u8>,
-    enabled: bool,
+    from: String,
+    to: String,
 }
 
 impl SessionPathRewrite {
     fn new(from: &str, to: &str) -> Self {
-        let enabled = !from.is_empty() && from != to;
-        Self {
-            from: from.as_bytes().to_vec(),
-            to: to.as_bytes().to_vec(),
-            enabled,
-        }
+        Self { from: from.to_string(), to: to.to_string() }
     }
 
     /// Replace every occurrence of `from` with `to` in `buf`, in place.
     /// No-op when disabled or when `from` doesn't appear.
     fn apply_in_place(&self, buf: &mut Vec<u8>) {
-        if !self.enabled || self.from.is_empty() {
-            return;
-        }
-        if let Some(rewritten) = replace_bytes(buf, &self.from, &self.to) {
+        if let Some(rewritten) = replace_path_bytes(buf, &self.from, &self.to) {
             *buf = rewritten;
         }
     }
+}
+
+/// Rewrite the workspace path `from` → `to` in session bytes, both as
+/// written raw and as a JSON string body spells it. The two differ when the
+/// path holds a `\` or `"`: every Windows path (`D:\\src\\app` inside a
+/// `.jsonl`). `None` when nothing matched, or `from` is empty or equals `to`.
+pub(super) fn replace_path_bytes(haystack: &[u8], from: &str, to: &str) -> Option<Vec<u8>> {
+    if from.is_empty() || from == to {
+        return None;
+    }
+    let json_body = |s: &str| {
+        let q = serde_json::to_string(s).expect("a str always serializes");
+        q[1..q.len() - 1].to_string()
+    };
+    let (esc_from, esc_to) = (json_body(from), json_body(to));
+    // Longest first, so the escaped spelling wins where both could start.
+    let mut pairs: Vec<(&[u8], &[u8])> = Vec::with_capacity(2);
+    if esc_from != from {
+        pairs.push((esc_from.as_bytes(), esc_to.as_bytes()));
+    }
+    pairs.push((from.as_bytes(), to.as_bytes()));
+    if pairs.len() == 1 {
+        return replace_bytes(haystack, from.as_bytes(), to.as_bytes());
+    }
+    let mut out = Vec::with_capacity(haystack.len());
+    let (mut i, mut hit) = (0, false);
+    'scan: while i < haystack.len() {
+        for (needle, repl) in &pairs {
+            if haystack[i..].starts_with(needle) {
+                out.extend_from_slice(repl);
+                i += needle.len();
+                hit = true;
+                continue 'scan;
+            }
+        }
+        out.push(haystack[i]);
+        i += 1;
+    }
+    hit.then_some(out)
 }
 
 /// Replace every non-overlapping occurrence of `needle` in `haystack`

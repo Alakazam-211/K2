@@ -279,21 +279,19 @@ fn first_embedded_cwd(slug_dir: &Path) -> Option<String> {
 }
 
 /// Rewrite every `.jsonl` file directly under `slug_dir`, replacing `from`
-/// with `to` (raw byte substring). Returns the count of files that
+/// with `to` (raw and JSON-escaped). Returns the count of files that
 /// actually changed. A read/write error on one file skips it (non-fatal).
 fn rewrite_slug_dir(slug_dir: &Path, from: &str, to: &str) -> usize {
     if from.is_empty() || from == to {
         return 0;
     }
-    let from_b = from.as_bytes();
-    let to_b = to.as_bytes();
     let mut rewritten = 0usize;
 
     for path in jsonl_files(slug_dir) {
         let Ok(buf) = std::fs::read(&path) else {
             continue;
         };
-        if let Some(new_buf) = super::unpack::replace_bytes(&buf, from_b, to_b) {
+        if let Some(new_buf) = super::unpack::replace_path_bytes(&buf, from, to) {
             if std::fs::write(&path, &new_buf).is_ok() {
                 rewritten += 1;
             }

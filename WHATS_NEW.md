@@ -12,6 +12,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Hosted mail
 - **Hosted mail: mailbox users can no longer create their own server-side filter scripts; K2-managed forwarding is unaffected.** Forwarding and out-of-office you set with `k2 hostmail forward` / `ooo` keep working. Filter scripts that mailbox users had already added are recorded in the auth audit log and removed when K2 starts, and you get one notice listing them. `k2 hostmail audit-sieve` shows the filter scripts on every mailbox without changing anything.
 
+### Tickets
+- **Tickets take files, like Threads.** An agent can attach workspace files to the ticket it opens, to its comments and to the outcome it settles (`k2 tickets ask … --file out/shot.png`, `k2 tickets comment <id> --file …`, `k2 tickets resolve <id> --answered "…" --file …`). You can pick, drop or paste files into a ticket's message box too. Files show under each message as chips, images show as pictures, and each one says when it changed or was deleted since it was sent. Click to open it, or Download to save it. A file is a pointer to the workspace file, never a copy. Secrets (`.env`, keys, tokens in a file) are refused, and App guests see only the files their own folder access already covers.
+- **Thread and ticket files are checked again when opened.** A file that gained a password or token after it was sent no longer previews or downloads, a file named like a HEIC photo that isn't one never reaches the image converter, and a file someone else sent is marked as downloaded from the internet on macOS when you save it.
+
 ## 0.46.5 — Agents stay up
 
 ### When you update

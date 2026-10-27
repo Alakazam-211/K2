@@ -206,8 +206,21 @@ async fn a_person_reads_and_edits_their_own_profile_and_sessions_in_one_app() {
     assert_eq!(r.status, 200, "another App keeps its own setting: {}", r.body);
     // An agent without "manage its Apps' users" can't touch the settings.
     let agent = passport(&shop);
+    allow_build_only(&shop, true);
     let r = post(port, "/cli/app/profile-settings", &agent, json!({ "app": jobs, "editImage": false })).await;
-    assert_eq!(r.status, 403, "{}", r.body);
+    assert_eq!((r.status, r.json()["error"]["code"].as_str()), (403, Some("app_users_off")), "{}", r.body);
+    // With "Let this agent manage its Apps' users" (apps.manage-users,
+    // 0225): lower only (U16), its own workspace's Apps, never host.
+    allow_manage(&shop, true);
+    let r = post(port, "/cli/app/profile-settings", &agent, json!({ "app": jobs, "editImage": false })).await;
+    assert_eq!((r.status, r.json()["settings"]["editImage"].as_bool()), (200, Some(false)), "an agent may turn it off: {}", r.body);
+    let r = post(port, "/cli/app/profile-settings", &agent, json!({ "app": jobs, "editNames": true })).await;
+    assert_eq!((r.status, r.json()["error"]["code"].as_str()), (403, Some("owner_only")), "never on: {}", r.body);
+    let r = post(port, "/cli/app/profile-settings", &agent, json!({ "app": crm, "editImage": false })).await;
+    assert_eq!(r.status, 403, "another workspace's App: {}", r.body);
+    let r = post(port, "/cli/app/profile-settings", &agent, json!({ "app": "host", "editImage": false })).await;
+    assert_eq!(r.status, 403, "never the box login: {}", r.body);
+    owner_post(port, "/cli/app/profile-settings", json!({ "app": jobs, "editImage": true })).await;
 
     // Sessions: this App's only, opaque ids, the caller first.
     let r = call(port, "GET", "/cli/skin/sessions", Some(&a), None, "").await;

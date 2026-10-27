@@ -57,9 +57,6 @@ pub const POST_ROUTES: &[&str] = &[PROFILE_IMAGE, PROFILE_IMAGE_CLEAR, SESSIONS_
 pub const MAX_BODY: usize = 3 * 1024 * 1024;
 /// The handle prefix of a browser session (U18: never the token id).
 pub const SESSION_HANDLE_PREFIX: &str = "ses_";
-/// The refusal code for an agent without "manage its Apps' users" (the
-/// code the App-grants `apps.manage-users` wall teaches).
-pub const APP_USERS_OFF: &str = "app_users_off";
 
 // ── answers ──────────────────────────────────────────────────────────
 
@@ -658,14 +655,6 @@ fn app_of_workspace(app: &str, ws: &str) -> bool {
     matches!(k2_core::published_services::get_by_id(&conn, app), Ok(Some(svc)) if svc.project_id == ws)
 }
 
-fn app_users_off() -> CliResponse {
-    refusal(
-        "403 Forbidden",
-        APP_USERS_OFF,
-        "changing your Apps' profile settings needs \"manage its Apps' users\" for this agent (off). Ask your owner to turn it on; with permission cards on, run the Ask with: line below.",
-    )
-}
-
 /// Who may write: `Ok(true)` = an agent (lower only), `Ok(false)` = a
 /// person (owner, Admin, a K2 shell tab), `Err` = refused. U16: an agent
 /// only for an App of its own workspace, never `host`, and only with the
@@ -681,7 +670,10 @@ fn settings_writer(who: &crate::compute_routes::Who, app: &str) -> Result<bool, 
             }
             let path = workspace_path(project_id).unwrap_or_default();
             if path.is_empty() || !crate::skin_routes::agent_may_manage_app_users(&path) {
-                return Err(app_users_off());
+                // "Let this agent manage its Apps' users" (apps.manage-users,
+                // 0225): App grants' own refusal, so permission cards teach
+                // the same Ask with: line.
+                return Err(crate::skin_routes::app_users_off_response());
             }
             Ok(true)
         }

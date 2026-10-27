@@ -876,6 +876,14 @@ async fn a_flood_of_activity_frames_closes_no_thread_socket() {
                     if f["collection"] == "thread" && f["id"] == posted["id"] {
                         break;
                     }
+                    if f["collection"] == "activity_reset" {
+                        // 0.46.5 (review B1): a socket the flood made lag
+                        // gets its own conversation's turn as it is now
+                        // (none: the flood never went through the tracker),
+                        // never another conversation's.
+                        assert_eq!(f["activity"], serde_json::Value::Null, "a reset carries this conversation's turn: {f}");
+                        continue;
+                    }
                     assert_eq!(f["collection"], "activity", "only the flood comes first: {f}");
                     assert_eq!(conv, &busy_conv, "the quiet conversation never sees the busy one's strip: {f}");
                 }

@@ -679,6 +679,8 @@ pub const ROUTES: &[Route] = &[
     get("/cli/feed", Member),
     both("/cli/feedback/answer", Member),
     post("/cli/feedback/assign", Member),
+    // 0.46.6: the ticket attachment door (ticket-attachments-v1); GET only.
+    get("/cli/feedback/attachment", Member),
     both("/cli/feedback/comment", Member),
     post("/cli/feedback/create", Member),
     get("/cli/feedback/list", Member),

@@ -341,6 +341,7 @@ mod tests {
             ("crate::fs_events_ws::FS_EVENTS_WS_PATH", vec![crate::fs_events_ws::FS_EVENTS_WS_PATH]),
             ("crate::activity_events_ws::ACTIVITY_EVENTS_WS_PATH", vec![crate::activity_events_ws::ACTIVITY_EVENTS_WS_PATH]),
             ("crate::thread_attachments::ROUTE", vec![crate::thread_attachments::ROUTE]),
+            ("crate::ticket_attachments::ROUTE", vec![crate::ticket_attachments::ROUTE]),
             ("crate::skin_me_routes::ROUTE", vec![crate::skin_me_routes::ROUTE]),
             ("crate::guest_rooms_routes::ROUTE", vec![crate::guest_rooms_routes::ROUTE]),
             ("crate::guest_rooms_routes::APP_ROOMS_ROUTE", vec![crate::guest_rooms_routes::APP_ROOMS_ROUTE]),

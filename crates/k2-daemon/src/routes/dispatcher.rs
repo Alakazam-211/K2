@@ -13997,8 +13997,15 @@ async fn handle_one_request(
         }
         // Skin tickets GET — dedicated arms before the catchall. Do not
         // fall through to owner 404 `not_found`. waiting-count stays off
-        // this door (its own `token_ok` arm above).
-        p if p == "/cli/feedback/list" || p == "/cli/feedback/show" => {
+        // this door (its own `token_ok` arm above). 0.46.6: the ticket
+        // attachment door (`ticket-attachments-v1`) shares the gate: an App
+        // pass needs tickets:read (the handler checks the ticket's room and
+        // then the pass's own file rights); a Member login never reaches
+        // K2's own notices. POST is 405 (route policy `get` row).
+        p if p == "/cli/feedback/list"
+            || p == "/cli/feedback/show"
+            || p == crate::ticket_attachments::ROUTE =>
+        {
             let _ = stream.read(&mut buf).await;
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
@@ -14044,10 +14051,17 @@ async fn handle_one_request(
             };
             let params = super::http::parse_params(&path, &query);
             let is_list = p == "/cli/feedback/list";
+            let is_attachment = p == crate::ticket_attachments::ROUTE;
             // K2's own notices are the Owner's and Admins' (smoke r6).
             let sees_notices = super::http::token_is_owner_or_admin(&query, state.token.as_str());
             let resp = tokio::task::spawn_blocking(move || {
-                if is_list {
+                if is_attachment {
+                    let caller = match skin_pass {
+                        Some(pass) => crate::ticket_attachments::DoorCaller::Pass(pass),
+                        None => crate::ticket_attachments::DoorCaller::Person { sees_notices },
+                    };
+                    crate::ticket_attachments::handle_get(&params, &caller)
+                } else if is_list {
                     crate::feedback_routes::handle_list_gated_as(&params, skin_pass, sees_notices)
                 } else {
                     crate::feedback_routes::handle_show_gated_as(&params, skin_pass, sees_notices)

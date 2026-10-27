@@ -426,6 +426,11 @@ pub fn read_file_coded(path: &str) -> Result<FileContent, ReadFileError> {
         .to_string();
     let p = Path::new(&path);
     let meta = fs::metadata(&path).map_err(ReadFileError::io)?;
+    // A folder is read_failed on every OS (Windows answers "access denied"
+    // to reading one, which would read as a permissions problem).
+    if meta.is_dir() {
+        return Err(ReadFileError::new("read_failed", "Is a directory"));
+    }
     if meta.len() > MAX_FILE_SIZE {
         return Err(ReadFileError::new("too_large", "File too large (>10MB)"));
     }

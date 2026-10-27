@@ -4234,12 +4234,7 @@ mod tests {
         // Symlink whose name differs from its target.
         let link = std::env::temp_dir().join(format!("{unique}_link"));
         let _ = std::fs::remove_file(&link);
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(
-            std::env::temp_dir().join(&unique),
-            &link,
-        )
-        .expect("create symlink");
+        crate::test_env::symlink(std::env::temp_dir().join(&unique), &link).expect("create symlink");
 
         let via_real = claude_project_hash(&real.to_string_lossy());
         // Through the symlink to the SAME dotted child.
@@ -5037,7 +5032,7 @@ mod tests {
             paths
                 .hermes_state_db
                 .as_ref()
-                .is_some_and(|p| p.ends_with(".hermes/state.db")),
+                .is_some_and(|p| p.replace('\\', "/").ends_with(".hermes/state.db")),
             "got: {paths:?}"
         );
     }

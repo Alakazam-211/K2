@@ -2940,18 +2940,20 @@ mod tests {
 
     // ── 0.40.34 browser-open shim env injection ─────────────────────
 
+    /// A PATH value with the host separator (`:` Unix, `;` Windows).
+    fn j(parts: &[&str]) -> String {
+        parts.join(if cfg!(windows) { ";" } else { ":" })
+    }
+
     #[test]
     fn browser_shim_env_prepends_bin_dir_and_sets_browser() {
         let shim = std::path::Path::new("/home/u/.k2/bin/k2-open");
         let mut env = HashMap::new();
-        env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+        env.insert("PATH".to_string(), j(&["/usr/bin", "/bin"]));
         apply_browser_shim_env(&mut env, shim);
         // PREPEND = the shim dir is the FIRST segment, so execvp finds
         // our staged xdg-open before any system one.
-        assert_eq!(
-            env.get("PATH").map(String::as_str),
-            Some("/home/u/.k2/bin:/usr/bin:/bin")
-        );
+        assert_eq!(env.get("PATH"), Some(&j(&["/home/u/.k2/bin", "/usr/bin", "/bin"])));
         assert_eq!(
             env.get("BROWSER").map(String::as_str),
             Some("/home/u/.k2/bin/k2-open")
@@ -2962,16 +2964,13 @@ mod tests {
     fn browser_shim_env_respects_caller_browser_and_is_path_idempotent() {
         let shim = std::path::Path::new("/home/u/.k2/bin/k2-open");
         let mut env = HashMap::new();
-        env.insert("PATH".to_string(), "/home/u/.k2/bin:/usr/bin".to_string());
+        env.insert("PATH".to_string(), j(&["/home/u/.k2/bin", "/usr/bin"]));
         env.insert("BROWSER".to_string(), "firefox".to_string());
         apply_browser_shim_env(&mut env, shim);
         // Caller-supplied BROWSER wins (or_insert semantics)…
         assert_eq!(env.get("BROWSER").map(String::as_str), Some("firefox"));
         // …and an already-present bin dir is not duplicated.
-        assert_eq!(
-            env.get("PATH").map(String::as_str),
-            Some("/home/u/.k2/bin:/usr/bin")
-        );
+        assert_eq!(env.get("PATH"), Some(&j(&["/home/u/.k2/bin", "/usr/bin"])));
     }
 
     #[test]

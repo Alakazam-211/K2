@@ -208,6 +208,9 @@ mod tests {
         assert_eq!(mem_total("MemTotal:        8040532 kB\nMemFree: 1 kB\n"), Some(8040532 * 1024));
     }
 
+    // Server-only feature (Linux boxes): systemd cgroup delegation, checked
+    // by uid; not shipped on personal Windows machines.
+    #[cfg(unix)]
     #[test]
     fn a_delegated_unit_is_split_into_daemon_and_agents() {
         let d = std::env::temp_dir().join(format!("k2-agents-leaf-{}", uuid::Uuid::new_v4().simple()));

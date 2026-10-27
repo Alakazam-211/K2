@@ -918,7 +918,9 @@ fn unpack_no_rewrite_when_source_equals_dest() {
         .join(&res.remote_slug)
         .join("s.jsonl");
     let body = fs::read_to_string(&f).unwrap();
-    assert!(body.contains(&source), "same path retained, got {body}");
+    // The line holds the path JSON-encoded (a Windows path's '\' escaped).
+    let encoded = serde_json::to_string(&source).unwrap();
+    assert!(body.contains(&encoded), "same path retained, got {body}");
 }
 
 #[test]

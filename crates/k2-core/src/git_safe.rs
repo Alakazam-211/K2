@@ -579,7 +579,9 @@ mod tests {
 
     #[test]
     fn the_agents_wrapper_folder_is_never_searched() {
-        let dirs = split_dirs(std::ffi::OsStr::new("/home/me/.k2/bin/git-wait:/usr/bin:/home/me/.k2/bin"));
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let path = ["/home/me/.k2/bin/git-wait", "/usr/bin", "/home/me/.k2/bin"].join(sep);
+        let dirs = split_dirs(std::ffi::OsStr::new(&path));
         assert_eq!(dirs, vec![PathBuf::from("/usr/bin"), PathBuf::from("/home/me/.k2/bin")]);
         assert!(is_git_wait_dir(Path::new("/Users/x/.k2/bin/git-wait")));
         assert!(!is_git_wait_dir(Path::new("/Users/x/.k2/bin")));

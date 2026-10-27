@@ -252,18 +252,23 @@ mod tests {
         std::fs::remove_dir_all(&home2).unwrap();
     }
 
+    /// A PATH value with the host separator (`:` Unix, `;` Windows).
+    fn j(parts: &[&str]) -> String {
+        parts.join(if cfg!(windows) { ";" } else { ":" })
+    }
+
     #[test]
     fn prepend_bin_dir_puts_bin_first_and_is_idempotent() {
         let bin = Path::new("/home/u/.k2/bin");
         // Prepend = FIRST segment = wins execvp lookup order.
         assert_eq!(
-            prepend_bin_dir("/usr/bin:/bin", bin),
-            "/home/u/.k2/bin:/usr/bin:/bin"
+            prepend_bin_dir(&j(&["/usr/bin", "/bin"]), bin),
+            j(&["/home/u/.k2/bin", "/usr/bin", "/bin"])
         );
         // Already present (anywhere) → unchanged, no duplicate.
         assert_eq!(
-            prepend_bin_dir("/usr/bin:/home/u/.k2/bin:/bin", bin),
-            "/usr/bin:/home/u/.k2/bin:/bin"
+            prepend_bin_dir(&j(&["/usr/bin", "/home/u/.k2/bin", "/bin"]), bin),
+            j(&["/usr/bin", "/home/u/.k2/bin", "/bin"])
         );
         // Empty PATH → just the bin dir (never a leading `:` which the
         // shell reads as CWD).

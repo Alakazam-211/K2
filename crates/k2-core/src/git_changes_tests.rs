@@ -560,6 +560,9 @@ fn discard_refuses_bad_paths_and_conflicts_without_touching_anything() {
     assert_eq!(row(&sn, "conflicted", "conf.txt").status, "C");
 }
 
+// Windows file names can't contain '*' (NTFS forbids it), so this file
+// can't exist there.
+#[cfg(unix)]
 #[test]
 fn discard_restores_a_glob_named_file_literally() {
     let d = tmp("discard-glob");
@@ -727,6 +730,8 @@ fn stage_file_adds_an_untracked_folder_recursively_respecting_gitignore() {
     write(&d, "x/deep/two.txt", "2\n");
     write(&d, "x/deep/noise.log", "ignored\n");
     write(&d, "x-other/three.txt", "3\n");
+    // Windows file names can't contain '*'.
+    #[cfg(unix)]
     write(&d, "x*/star.txt", "*\n");
 
     let sn = snap(&d, None);
@@ -739,6 +744,7 @@ fn stage_file_adds_an_untracked_folder_recursively_respecting_gitignore() {
     let staged: Vec<&str> = sn.files.iter().filter(|f| f.group == "staged").map(|f| f.path.as_str()).collect();
     assert_eq!(staged, vec!["x/deep/two.txt", "x/one.txt"], "{:?}", sn.files);
     assert!(sn.files.iter().any(|f| f.group == "untracked" && f.path == "x-other/"));
+    #[cfg(unix)]
     assert!(sn.files.iter().any(|f| f.group == "untracked" && f.path == "x*/"));
     let mut idx = repo.index().expect("index");
     idx.read(true).expect("reload index");

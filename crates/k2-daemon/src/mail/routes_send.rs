@@ -3201,6 +3201,23 @@ mod tests {
 
     // ── BCC: agent --bcc + the owner's always-BCC policy ──
 
+    /// Whether a JMAP Email object carries a Bcc anywhere a recipient could
+    /// see it: the `bcc` property, a `headers` entry named Bcc, or a raw
+    /// `header:Bcc…` property, at any depth (any case).
+    fn jmap_has_bcc(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::Object(o) => o.iter().any(|(k, val)| {
+                let k = k.to_ascii_lowercase();
+                k == "bcc"
+                    || k.starts_with("header:bcc")
+                    || (k == "name" && val.as_str().is_some_and(|n| n.eq_ignore_ascii_case("bcc")))
+                    || jmap_has_bcc(val)
+            }),
+            serde_json::Value::Array(a) => a.iter().any(jmap_has_bcc),
+            _ => false,
+        }
+    }
+
     /// Records exactly what the production `StalwartClient` submit hands
     /// the JMAP layer: the envelope rcptTo (`all_recipients`) and the
     /// Email object (`submission_email_json` — the headers recipients see).
@@ -3291,7 +3308,14 @@ mod tests {
         let wire = email.to_string();
         assert!(!wire.contains("boss@shop.example"), "bcc in headers: {wire}");
         assert!(!wire.contains("qa@shop.example"), "bcc in headers: {wire}");
-        assert!(!wire.to_ascii_lowercase().contains("bcc"), "Bcc header present: {wire}");
+        // Structural, not a substring: a random Message-ID such as
+        // `…949fbccd06@…` contains "bcc" about 1 run in 140 (seen on k2n5,
+        // 0.46.5 integration), while a real leak is a key or a header.
+        assert!(!jmap_has_bcc(email), "Bcc in the Email object: {wire}");
+        assert!(jmap_has_bcc(&serde_json::json!({"headers": [{"name": "BCC", "value": "x"}]})), "the check sees a Bcc header");
+        assert!(jmap_has_bcc(&serde_json::json!({"bcc": [{"email": "x@y.example"}]})), "the check sees the bcc property");
+        assert!(jmap_has_bcc(&serde_json::json!({"header:Bcc:asAddresses": []})), "the check sees a raw header property");
+        assert!(!jmap_has_bcc(&serde_json::json!({"messageId": ["55046ce76ec3430aa062ce949fbccd06@x.example"]})), "a Message-ID with bcc in its hex is fine");
         drop(seen);
 
         cleanup(&project_id, Some(&domain));

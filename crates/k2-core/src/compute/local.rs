@@ -190,6 +190,7 @@ pub const HOME_SPOTS: &[&str] = &[".ssh", ".k2", ".env", ".config", ".aws", ".gn
 
 /// The home-folder check the enable sheet shows (§5.1 step 3): is the
 /// human's home readable by other users (and so by jobs), and what's in it.
+#[cfg(unix)]
 pub fn home_check(home: &Path) -> Option<serde_json::Value> {
     use std::os::unix::fs::PermissionsExt;
     let mode = std::fs::metadata(home).ok()?.permissions().mode() & 0o7777;
@@ -205,6 +206,13 @@ pub fn home_check(home: &Path) -> Option<serde_json::Value> {
         "private": private,
         "readable": readable,
     }))
+}
+
+/// No home check yet on Windows: the sheet has nothing to show until
+/// k2-node runs there (pending k2-node Windows port).
+#[cfg(not(unix))]
+pub fn home_check(_home: &Path) -> Option<serde_json::Value> {
+    None
 }
 
 /// Ask the running node to enroll itself (`enroll-request.toml` in the
@@ -245,8 +253,11 @@ pub fn write_enroll_request(
     // single-use and removed once the node answers.
     let p = config_dir().join("enroll-request.toml");
     write_atomic(&p, &body)?;
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644));
+    }
     Ok(id)
 }
 
@@ -341,10 +352,13 @@ mod tests {
 
     #[test]
     fn enroll_requests_round_trip_and_home_check_reports_open_homes() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         with_dirs(|home, cfg| {
             let id = write_enroll_request("https://rosson.k2.dev/", Some("ABCDE-FGHJK.0123456789abcdef"), None, "mini-1", "rosson").unwrap();
             let p = cfg.join("enroll-request.toml");
+            // 0644 so the node user reads it: Unix file modes.
+            #[cfg(unix)]
             assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o644);
             let t: toml::Table = std::fs::read_to_string(&p).unwrap().parse().unwrap();
             assert_eq!(t["id"].as_str(), Some(id.as_str()));
@@ -364,15 +378,21 @@ mod tests {
 
             let h = home.join("human");
             std::fs::create_dir_all(h.join(".ssh")).unwrap();
-            std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let c = home_check(&h).unwrap();
-            assert_eq!(c["private"], false);
-            assert_eq!(c["mode"], "755");
-            assert_eq!(c["readable"][0], h.join(".ssh").display().to_string());
-            std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let c = home_check(&h).unwrap();
-            assert_eq!(c["private"], true);
-            assert_eq!(c["readable"].as_array().unwrap().len(), 0);
+            #[cfg(unix)]
+            {
+                std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let c = home_check(&h).unwrap();
+                assert_eq!(c["private"], false);
+                assert_eq!(c["mode"], "755");
+                assert_eq!(c["readable"][0], h.join(".ssh").display().to_string());
+                std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o700)).unwrap();
+                let c = home_check(&h).unwrap();
+                assert_eq!(c["private"], true);
+                assert_eq!(c["readable"].as_array().unwrap().len(), 0);
+            }
+            // pending k2-node Windows port: no home check to show yet.
+            #[cfg(windows)]
+            assert!(home_check(&h).is_none());
         });
     }
 

@@ -34,6 +34,7 @@
 //! A process that looks like a test ([`looks_like_test_process`]) is now
 //! refused the real user runtime dir, loudly.
 
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -45,6 +46,7 @@ pub const RUNTIME_DIR_ENV: &str = "K2_RUNTIME_DIR";
 /// shim dir; see `terminal::agent_spawn_guard::SHIM_DIR_ENV`).
 const TEST_MARKER_ENV: &str = "K2_TEST_AGENT_SHIM_DIR";
 
+#[cfg(unix)]
 fn ensure_private(dir: &Path) -> bool {
     // SAFETY: geteuid has no preconditions.
     let me = unsafe { libc::geteuid() };
@@ -60,6 +62,27 @@ fn ensure_private(dir: &Path) -> bool {
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             std::fs::DirBuilder::new().mode(0o700).create(dir).is_ok()
+        }
+        Err(_) => false,
+    }
+}
+
+/// Windows: a real directory we own whose DACL is owner-only (the 0700 of
+/// `k2_winsec`); a missing leaf is created that way.
+#[cfg(windows)]
+fn ensure_private(dir: &Path) -> bool {
+    match std::fs::symlink_metadata(dir) {
+        Ok(m) => {
+            if m.file_type().is_symlink() || !m.is_dir() || !k2_winsec::owned_by_current_user(dir).unwrap_or(false) {
+                return false;
+            }
+            if !k2_winsec::is_owner_only(dir).unwrap_or(false) {
+                return k2_winsec::set_owner_only(dir).is_ok();
+            }
+            true
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(dir).is_ok() && k2_winsec::set_owner_only(dir).is_ok()
         }
         Err(_) => false,
     }
@@ -150,6 +173,10 @@ fn candidates(is_test: bool) -> Vec<PathBuf> {
                 candidates.push(t.join("k2-runtime"));
             }
         }
+        // Windows: the per-user temp dir (TMP / TEMP, under the profile's
+        // AppData\Local), owner-only like macOS's $TMPDIR/k2-runtime.
+        #[cfg(windows)]
+        candidates.push(std::env::temp_dir().join("k2-runtime"));
         candidates
     }
 }
@@ -163,9 +190,17 @@ pub fn superseded_runtime_dirs(current: &Path) -> Vec<PathBuf> {
     if !cfg!(target_os = "linux") || env_path(RUNTIME_DIR_ENV).is_some() || looks_like_test_process() {
         return Vec::new();
     }
-    // SAFETY: geteuid has no preconditions.
-    let uid = unsafe { libc::geteuid() };
-    superseded_in(current, &linux_fallback_chain(env_path("XDG_RUNTIME_DIR").as_deref(), uid))
+    #[cfg(unix)]
+    {
+        // SAFETY: geteuid has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        superseded_in(current, &linux_fallback_chain(env_path("XDG_RUNTIME_DIR").as_deref(), uid))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = current;
+        Vec::new()
+    }
 }
 
 /// Pure: `chain` minus `current`, de-duplicated, in order.
@@ -187,11 +222,9 @@ pub fn superseded_in(current: &Path, chain: &[PathBuf]) -> Vec<PathBuf> {
 /// (`rmdir`, never recursive: a `secrets/` subdir keeps it). Returns what
 /// was removed.
 pub fn clean_superseded_dir(dir: &Path, files: &[&str]) -> Vec<PathBuf> {
-    // SAFETY: geteuid has no preconditions.
-    let me = unsafe { libc::geteuid() };
     let mut removed = Vec::new();
     match std::fs::symlink_metadata(dir) {
-        Ok(m) if m.is_dir() && !m.file_type().is_symlink() && m.uid() == me => {}
+        Ok(m) if m.is_dir() && !m.file_type().is_symlink() && owned_by_me(dir, &m) => {}
         _ => return removed,
     }
     let Ok(rd) = std::fs::read_dir(dir) else { return removed };
@@ -201,7 +234,7 @@ pub fn clean_superseded_dir(dir: &Path, files: &[&str]) -> Vec<PathBuf> {
             continue;
         }
         let p = e.path();
-        let regular = std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_file() && m.uid() == me);
+        let regular = std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_file() && owned_by_me(&p, &m));
         if regular && std::fs::remove_file(&p).is_ok() {
             removed.push(p);
         }
@@ -210,6 +243,18 @@ pub fn clean_superseded_dir(dir: &Path, files: &[&str]) -> Vec<PathBuf> {
         removed.push(dir.to_path_buf());
     }
     removed
+}
+
+/// `m` (the metadata of `p`) belongs to this process's user.
+#[cfg(unix)]
+fn owned_by_me(_p: &Path, m: &std::fs::Metadata) -> bool {
+    // SAFETY: geteuid has no preconditions.
+    m.uid() == unsafe { libc::geteuid() }
+}
+
+#[cfg(windows)]
+fn owned_by_me(p: &Path, _m: &std::fs::Metadata) -> bool {
+    k2_winsec::owned_by_current_user(p).unwrap_or(false)
 }
 
 /// `frpc.toml.tmp.123` for `frpc.toml` (and `frpc.pid.tmp.123`).
@@ -306,7 +351,20 @@ pub fn real_runtime_dirs() -> Vec<PathBuf> {
             v.push(t.join("k2-runtime"));
         }
     }
+    #[cfg(windows)]
+    {
+        if let Some(t) = windows_user_temp_dir() {
+            v.push(t.join("k2-runtime"));
+        }
+    }
     v
+}
+
+/// Windows per-user temp dir from the profile's Local AppData known folder
+/// (`…\AppData\Local\Temp`) — the real one, whatever `TMP`/`TEMP` say.
+#[cfg(windows)]
+pub fn windows_user_temp_dir() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("Temp"))
 }
 
 /// macOS per-user temp dir from `confstr(_CS_DARWIN_USER_TEMP_DIR)` — the
@@ -470,15 +528,30 @@ pub fn logind_risk(extra: &[PathBuf]) -> Option<LogindRisk> {
     if !cfg!(target_os = "linux") {
         return None;
     }
-    let mut dirs: Vec<PathBuf> = resolve_private_runtime_dir().ok().flatten().into_iter().collect();
-    dirs.extend(extra.iter().cloned());
-    // SAFETY: geteuid has no preconditions.
-    let uid = unsafe { libc::geteuid() };
-    let user = passwd_entry(uid).map(|(name, _)| name).filter(|n| !n.is_empty()).unwrap_or_else(|| uid.to_string());
-    logind_risk_at(Path::new("/"), &dirs, uid, &user, std::env::var_os("INVOCATION_ID").is_some())
+    #[cfg(unix)]
+    {
+        let mut dirs: Vec<PathBuf> = resolve_private_runtime_dir().ok().flatten().into_iter().collect();
+        dirs.extend(extra.iter().cloned());
+        // SAFETY: geteuid has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        let user = passwd_entry(uid).map(|(name, _)| name).filter(|n| !n.is_empty()).unwrap_or_else(|| uid.to_string());
+        logind_risk_at(Path::new("/"), &dirs, uid, &user, std::env::var_os("INVOCATION_ID").is_some())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = extra;
+        None
+    }
+}
+
+/// Windows: the profile folder the shell reports (never `HOME`).
+#[cfg(windows)]
+fn passwd_home() -> Option<PathBuf> {
+    dirs::home_dir()
 }
 
 /// The home the password database lists for this uid (never `$HOME`).
+#[cfg(unix)]
 fn passwd_home() -> Option<PathBuf> {
     // SAFETY: getuid has no preconditions.
     let uid = unsafe { libc::getuid() };
@@ -486,6 +559,7 @@ fn passwd_home() -> Option<PathBuf> {
 }
 
 /// `(name, home)` from the password database for `uid`.
+#[cfg(unix)]
 fn passwd_entry(uid: libc::uid_t) -> Option<(String, PathBuf)> {
     use std::ffi::CStr;
     let mut size = 4096usize;
@@ -524,6 +598,18 @@ fn temp_roots() -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     if let Some(t) = darwin_user_temp_dir() {
         v.push(t);
+    }
+    #[cfg(windows)]
+    {
+        for k in ["TMP", "TEMP"] {
+            if let Some(t) = env_path(k) {
+                v.push(t);
+            }
+        }
+        v.push(std::env::temp_dir());
+        if let Some(t) = windows_user_temp_dir() {
+            v.push(t);
+        }
     }
     v
 }
@@ -667,7 +753,7 @@ mod tests {
         std::fs::write(old.join("frpc.toml.tmp.42"), b"token").expect("write");
         std::fs::write(old.join("frpc.toml.tmp.x"), b"not ours").expect("write");
         std::fs::write(old.join("notes.txt"), b"not ours").expect("write");
-        std::os::unix::fs::symlink(&outside, old.join("frpc.pid")).expect("symlink");
+        crate::test_env::symlink(&outside, old.join("frpc.pid")).expect("symlink");
         let removed = clean_superseded_dir(&old, &["frpc.toml", "frpc.pid"]);
         assert_eq!(removed.len(), 2, "{removed:?}");
         assert!(!old.join("frpc.toml").exists() && !old.join("frpc.toml.tmp.42").exists());
@@ -689,7 +775,7 @@ mod tests {
         std::fs::create_dir_all(&real).expect("mkdir");
         std::fs::write(real.join("frpc.toml"), b"token").expect("write");
         let link = root.join("link");
-        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        crate::test_env::symlink(&real, &link).expect("symlink");
         assert!(clean_superseded_dir(&link, &["frpc.toml"]).is_empty());
         assert!(real.join("frpc.toml").exists());
         assert!(clean_superseded_dir(&root.join("missing"), &["frpc.toml"]).is_empty());

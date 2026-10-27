@@ -306,6 +306,14 @@ mio = { version = "1", features = ["os-poll", "os-ext"] }
 signal-hook = "0.3"
 signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
 
+# Windows: owner-only DACLs stand in for 0700/0600 (k2-winsec). socket2
+# (already in Cargo.lock via tokio/hyper) holds test_env::ClosedPort's
+# bound, non-listening socket there.
+[target.'cfg(windows)'.dependencies]
+k2-winsec = { path = "../k2-winsec" }
+socket2 = "0.6"
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 # macOS-only deps.
 #
 # - cocoa + objc: Cocoa + Objective-C runtime bindings used by

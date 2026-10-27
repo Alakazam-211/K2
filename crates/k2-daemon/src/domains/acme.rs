@@ -172,14 +172,80 @@ pub(crate) fn issue_attached_core(hostname: &str) -> Result<renew::Issued, renew
     use renew::IssueError;
     reject_k2_dev(hostname).map_err(IssueError::NotQualified)?;
     let (binding, name) = lookup_attached(hostname).map_err(IssueError::NotQualified)?;
+    // 0.46.6 (PRD §6, test 4): a custom App name gets no ACME order before
+    // its TXT proof and DNS check passed (state `issuing` or `live`).
+    let app_name = k2_core::domains::app_of_role(&name.role).is_some();
+    if app_name {
+        app_name_may_issue(hostname).map_err(IssueError::NotQualified)?;
+    }
     let _lock = renew::NameLock::try_acquire(hostname)
         .ok_or_else(|| IssueError::Busy(hostname.to_string()))?;
     if let Some(pem) = reusable_inventory(hostname, chrono::Utc::now().timestamp()) {
         plant_mail_if_needed(hostname, &name, &pem).map_err(IssueError::Plant)?;
         return Ok(renew::Issued { pem, ordered: false });
     }
-    let kind = select_challenge(&binding, hostname).map_err(IssueError::Order)?;
+    let kind = if app_name {
+        select_app_challenge(&binding, hostname)
+    } else {
+        select_challenge(&binding, hostname)
+    }
+    .map_err(IssueError::Order)?;
     issue_with_challenge(hostname, &binding, &name, kind)
+}
+
+/// May K2 order a certificate for the custom App name `hostname` now?
+/// Only once it is proven (`issuing`, or `live` for a renewal).
+pub(crate) fn app_name_may_issue(hostname: &str) -> Result<(), String> {
+    let d = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::app_domain(&conn, hostname).map_err(|e| e.to_string())?
+    }
+    .ok_or_else(|| format!("{hostname} is not a custom App name"))?;
+    match d.state.as_str() {
+        k2_core::domains::STATE_ISSUING | k2_core::domains::STATE_LIVE => Ok(()),
+        s => Err(format!(
+            "{hostname} is not proven yet (state {s}): K2 orders no certificate before its TXT record and DNS check pass \
+             (k2 app domain check {} {hostname})",
+            d.app
+        )),
+    }
+}
+
+/// The proof for a custom App name (prd-app-custom-domains-v1 §7, vs-live
+/// CD-A10), in order: DNS-01 when k2.dev hosts the zone (`dns_write`, not
+/// pending); else TLS-ALPN-01 answered by the App TLS door (front443
+/// passes the CA's `acme-tls/1` hello to it untouched; no :80 needed);
+/// else HTTP-01 where :80 reaches this box.
+pub fn select_app_challenge(binding: &DomainBinding, hostname: &str) -> Result<ChallengeKind, String> {
+    if binding.dns_write && !binding.is_pending_ns() && crate::dns::proxy::tunnel_bearer_token().is_ok() {
+        return Ok(ChallengeKind::Dns01);
+    }
+    if crate::apps::tls_door::serving() && crate::front443::serving() {
+        return Ok(ChallengeKind::TlsAlpn01);
+    }
+    if std::env::var("K2_ACME_HTTP01")
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+        || port_seems_free(80)
+    {
+        return Ok(ChallengeKind::Http01);
+    }
+    Err(format!(
+        "no ACME proof for {hostname}: its zone is not K2-hosted (DNS-01), the :443 front is not serving \
+         (TLS-ALPN-01 through the App door: the owner runs k2 front enable), and :80 is closed (HTTP-01)"
+    ))
+}
+
+/// The RFC 8737 TLS-ALPN-01 certificate for `hostname`: self-signed, the
+/// name as its only SAN, and the critical `id-pe-acmeIdentifier`
+/// extension carrying the SHA-256 of the key authorization.
+pub(crate) fn alpn_challenge_pem(hostname: &str, key_auth_sha256: &[u8]) -> Result<(String, String), String> {
+    let mut p = CertificateParams::new(vec![hostname.to_string()]).map_err(|e| e.to_string())?;
+    p.custom_extensions = vec![rcgen::CustomExtension::new_acme_identifier(key_auth_sha256)];
+    let key = KeyPair::generate().map_err(|e| e.to_string())?;
+    let cert = p.self_signed(&key).map_err(|e| format!("challenge certificate: {e}"))?;
+    Ok((cert.pem(), key.serialize_pem()))
 }
 
 /// CAL44: a certificate for exactly ONE extra mail-family name
@@ -321,6 +387,7 @@ fn issue_with_challenge(
     kind: ChallengeKind,
 ) -> Result<renew::Issued, renew::IssueError> {
     use renew::IssueError;
+    ORDERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let pem = if fake_enabled() {
         fake_issue(hostname, binding, kind)
     } else {
@@ -329,7 +396,23 @@ fn issue_with_challenge(
     .map_err(IssueError::Order)?;
     store::install(hostname, &pem.chain_pem, &pem.key_pem).map_err(IssueError::Order)?;
     plant_mail_if_needed(hostname, name, &pem).map_err(IssueError::Plant)?;
+    if k2_core::domains::app_of_role(&name.role).is_some() {
+        // A custom App name's new certificate is served from now on.
+        crate::front443::rebuild_now();
+    }
     Ok(renew::Issued { pem, ordered: true })
+}
+
+/// Every ACME order this process started (fake or live): the test spy for
+/// "no order before the proof" (PRD test 4).
+pub(crate) static ORDERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Where an order goes. Production: the configured directory and the
+/// public roots. Tests: a Pebble instance and its CA (`root_pem`).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AcmeEnv {
+    pub directory: Option<String>,
+    pub root_pem: Option<std::path::PathBuf>,
 }
 
 fn fake_enabled() -> bool {
@@ -386,16 +469,21 @@ fn live_issue(
         .enable_all()
         .build()
         .map_err(|e| format!("acme runtime: {e}"))?;
-    rt.block_on(live_issue_async(hostname, binding, kind))
+    rt.block_on(live_issue_async(hostname, binding, kind, &AcmeEnv::default()))
 }
 
-async fn live_issue_async(
+pub(crate) async fn live_issue_async(
     hostname: &str,
     binding: &DomainBinding,
     kind: ChallengeKind,
+    env: &AcmeEnv,
 ) -> Result<InstalledPem, String> {
     let cfg = store::load_acme_config();
-    let directory = acme_directory(&cfg);
+    let directory = env.directory.clone().unwrap_or_else(|| acme_directory(&cfg));
+    let builder = || match &env.root_pem {
+        Some(p) => Account::builder_with_root(p),
+        None => Account::builder(),
+    };
     let contacts: Vec<String> = cfg
         .email
         .as_deref()
@@ -415,14 +503,14 @@ async fn live_issue_async(
     let (account, creds) = if let Ok(raw) = std::fs::read_to_string(store::acme_account_path()) {
         let creds: instant_acme::AccountCredentials =
             serde_json::from_str(&raw).map_err(|e| format!("acme account: {e}"))?;
-        let account = Account::builder()
+        let account = builder()
             .map_err(|e| format!("acme account builder: {e}"))?
             .from_credentials(creds)
             .await
             .map_err(|e| format!("acme restore account: {e}"))?;
         (account, None)
     } else {
-        Account::builder()
+        builder()
             .map_err(|e| format!("acme account builder: {e}"))?
             .create(
                 &NewAccount {
@@ -462,6 +550,7 @@ async fn live_issue_async(
 
     let mut planted: Option<String> = None;
     let mut http_guard: Option<Http01Guard> = None;
+    let mut alpn_guard: Option<crate::apps::tls_door::Challenge> = None;
     let mut authorizations = order.authorizations();
     while let Some(result) = authorizations.next().await {
         let mut authz = result.map_err(|e| format!("acme authz: {e}"))?;
@@ -502,11 +591,14 @@ async fn live_issue_async(
                 http_guard = Some(Http01Guard::spawn(&token, &body)?);
             }
             ChallengeKind::TlsAlpn01 => {
-                return Err(
-                    "TLS-ALPN-01 needs this box to own :443 for the ACME handshake — \
-use DNS-01 (attach a K2-hosted zone) or HTTP-01 on :80"
-                        .into(),
-                );
+                // 0.46.6 (CD-A10): the App TLS door answers the CA's
+                // `acme-tls/1` hello for this name with the RFC 8737
+                // certificate while the guard lives; front443 routes the
+                // name (state `issuing`) to the door untouched.
+                let digest = challenge.key_authorization().digest();
+                let (chain, key) = alpn_challenge_pem(hostname, digest.as_ref())?;
+                let ck = crate::apps::tls_door::certified_key(&chain, &key)?;
+                alpn_guard = Some(crate::apps::tls_door::Challenge::register(hostname, ck));
             }
         }
         challenge
@@ -524,6 +616,7 @@ use DNS-01 (attach a K2-hosted zone) or HTTP-01 on :80"
         let _ = delete_txt(&id);
     }
     drop(http_guard);
+    drop(alpn_guard);
 
     let mut params =
         CertificateParams::new(vec![hostname.to_string()]).map_err(|e| e.to_string())?;
@@ -1352,6 +1445,14 @@ mod tests {
             assert!(acme_fns.iter().any(|(n, _)| n == want), "scan must see fn {want}");
         }
         for (name, body) in acme_fns {
+            if name == "alpn_challenge_pem" {
+                // 0.46.6: the RFC 8737 challenge cert. It is never stored and
+                // never a name's served cert: the App TLS door hands it only
+                // to the CA's `acme-tls/1` hello while the order runs.
+                assert!(!body.contains("store::"), "the TLS-ALPN-01 challenge cert never reaches the store");
+                assert!(body.contains("new_acme_identifier"), "only ever the acmeIdentifier challenge cert");
+                continue;
+            }
             if mint.iter().any(|m| body.contains(m)) {
                 assert!(
                     name == "mint_fake_le" || name == "test_le_pem",
@@ -1369,5 +1470,133 @@ mod tests {
             acme.contains("#[cfg(test)]\npub(crate) fn test_le_pem"),
             "test_le_pem stays test-only"
         );
+        let alpn_uses = acme.matches("alpn_challenge_pem(").count();
+        assert_eq!(alpn_uses, 2, "alpn_challenge_pem: its definition and the one TLS-ALPN-01 arm");
+        assert!(acme.contains("alpn_guard = Some(crate::apps::tls_door::Challenge::register(hostname, ck));"));
+    }
+}
+
+#[cfg(test)]
+#[path = "acme_pebble_tests.rs"]
+mod pebble_tests;
+
+/// 0.46.6: custom App names (prd-app-custom-domains-v1 §6/§7, CD-A10).
+#[cfg(test)]
+mod app_name_tests {
+    use super::*;
+    use crate::apps::custom_domains::test_util::runtime_app;
+
+    fn bind(host: &str, state: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::upsert_binding(&conn, "example.com", None, false).unwrap();
+        k2_core::domains::upsert_name(&conn, host, "example.com", "app:jobs").unwrap();
+        k2_core::domains::set_app_state(&conn, host, state, None).unwrap();
+    }
+
+    /// RFC 8737: the challenge cert names the host only and carries the
+    /// critical id-pe-acmeIdentifier (1.3.6.1.5.5.7.1.31) = OCTET STRING of
+    /// the key authorization's SHA-256.
+    #[test]
+    fn the_alpn_challenge_cert_carries_the_acme_identifier() {
+        let digest = [7u8; 32];
+        let (chain, key) = alpn_challenge_pem("app.example.com", &digest).unwrap();
+        assert!(key.contains("PRIVATE KEY"));
+        let der = rustls_pemfile::certs(&mut chain.as_bytes()).next().unwrap().unwrap();
+        let (_, cert) = x509_parser::parse_x509_certificate(der.as_ref()).unwrap();
+        let ext = cert
+            .extensions()
+            .iter()
+            .find(|e| e.oid.to_id_string() == "1.3.6.1.5.5.7.1.31")
+            .expect("acmeIdentifier extension");
+        assert!(ext.critical, "RFC 8737 §3: critical");
+        assert_eq!(ext.value, &[&[0x04u8, 32][..], &digest[..]].concat()[..], "OCTET STRING of the digest");
+        let sans: Vec<String> = cert
+            .subject_alternative_name()
+            .unwrap()
+            .unwrap()
+            .value
+            .general_names
+            .iter()
+            .map(|n| format!("{n:?}"))
+            .collect();
+        assert_eq!(sans.len(), 1);
+        assert!(sans[0].contains("app.example.com"));
+        // The door can serve it.
+        crate::apps::tls_door::certified_key(&chain, &key).unwrap();
+    }
+
+    /// PRD test 4: TXT missing (`waiting_dns`, `verifying`, `failing`) →
+    /// no ACME order is ever made (the order spy doesn't move).
+    #[test]
+    fn no_order_before_the_proof() {
+        let _db = k2_core::db::scoped_for_test();
+        let _home = crate::test_support::TempHome::new();
+        runtime_app("ws-a", "jobs");
+        for state in [k2_core::domains::STATE_WAITING_DNS, k2_core::domains::STATE_VERIFYING, k2_core::domains::STATE_FAILING] {
+            bind("app.example.com", state);
+            let before = ORDERS.load(std::sync::atomic::Ordering::SeqCst);
+            match issue_attached_core("app.example.com") {
+                Err(renew::IssueError::NotQualified(why)) => assert!(why.contains("not proven yet"), "{why}"),
+                other => panic!("{state}: expected NotQualified, got {other:?}"),
+            }
+            assert_eq!(ORDERS.load(std::sync::atomic::Ordering::SeqCst), before, "{state}: no order");
+        }
+        // Proven: the order is made (fake CA under test) and the cert stored.
+        bind("app.example.com", k2_core::domains::STATE_ISSUING);
+        let _http = k2_core::test_env::EnvVar::set("K2_ACME_HTTP01", "1");
+        let before = ORDERS.load(std::sync::atomic::Ordering::SeqCst);
+        let issued = issue_attached_core("app.example.com").expect("issuing → ordered");
+        assert!(issued.ordered);
+        assert_eq!(ORDERS.load(std::sync::atomic::Ordering::SeqCst), before + 1);
+        assert!(crate::domains::store::load("app.example.com").is_some());
+    }
+
+    /// The renewer (CD-A18) never renews a failing or unproven App name.
+    #[test]
+    fn the_renewer_skips_unproven_and_failing_app_names() {
+        let _db = k2_core::db::scoped_for_test();
+        runtime_app("ws-a", "jobs");
+        let binding = {
+            bind("app.example.com", k2_core::domains::STATE_FAILING);
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::get_binding(&conn, "example.com").unwrap()
+        };
+        let row = renew::AttachedRow { hostname: "app.example.com".into(), role: "app:jobs".into(), binding };
+        assert!(renew::qualifies(&row).unwrap_err().contains("not proven yet"));
+        bind("app.example.com", k2_core::domains::STATE_LIVE);
+        assert_eq!(renew::qualifies(&row), Ok(()));
+        // Other roles are unchanged.
+        let mail = renew::AttachedRow { hostname: "mail.example.com".into(), role: "mail".into(), binding: row.binding.clone() };
+        assert_eq!(renew::qualifies(&mail), Ok(()));
+    }
+
+    /// §7's order for App names: DNS-01 on a K2-hosted zone, else
+    /// TLS-ALPN-01 through the door (only while front443 + door serve),
+    /// else HTTP-01 on :80.
+    #[test]
+    fn app_names_pick_dns01_then_the_door_then_http01() {
+        let byo = DomainBinding {
+            apex: "example.com".into(),
+            zone_id: None,
+            dns_write: false,
+            created_at: 0,
+            status: None,
+            nameservers: vec![],
+            auto_created: false,
+        };
+        // No front443 in tests: TLS-ALPN isn't offered; HTTP-01 when forced.
+        let _http = k2_core::test_env::EnvVar::set("K2_ACME_HTTP01", "1");
+        assert_eq!(select_app_challenge(&byo, "app.example.com"), Ok(ChallengeKind::Http01));
+        drop(_http);
+        let _no = k2_core::test_env::EnvVar::set("K2_ACME_HTTP01", "0");
+        if !port_seems_free(80) {
+            let e = select_app_challenge(&byo, "app.example.com").unwrap_err();
+            assert!(e.contains("k2 front enable"), "{e}");
+        }
+        // A K2-hosted zone that is still pending_ns never uses DNS-01.
+        let pending = DomainBinding { dns_write: true, zone_id: Some("z".into()), status: Some("pending_ns".into()), ..byo.clone() };
+        assert_ne!(select_app_challenge(&pending, "app.example.com"), Ok(ChallengeKind::Dns01));
     }
 }

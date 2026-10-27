@@ -396,6 +396,12 @@ pub fn qualifies(row: &AttachedRow) -> Result<(), String> {
             b.apex
         ));
     }
+    // 0.46.6 (vs-live CD-A18): a custom App name renews only while it is
+    // `issuing` or `live`; a `failing` (DNS moved away) or unproven name
+    // is never renewed. Its first issue comes from verification, not here.
+    if k2_core::domains::app_of_role(&row.role).is_some() {
+        crate::domains::acme::app_name_may_issue(&host)?;
+    }
     Ok(())
 }
 

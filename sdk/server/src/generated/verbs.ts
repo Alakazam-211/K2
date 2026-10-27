@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 26
+export const CATALOG_VERSION = 27
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -673,6 +673,17 @@ export const APP_VERBS = {
     feature: 'app-thread-parity-v1',
     door: 'both',
     http: { method: 'POST', route: '/cli/thread/read', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"addr":{"type":"string"},"changed":{"type":"boolean"},"id":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"muted":{"type":"boolean"},"mutedUntil":{"type":"integer"},"ok":{"type":"boolean"},"total":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"},"waitingTotal":{"type":"integer"}},"type":"object"},
+  },
+  'thread.markAllRead': {
+    cap: 'thread:read',
+    effect: 'write',
+    kind: 'call',
+    feature: 'thread-read-all-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/thread/read-all', params: {}, query: [] },
     socket: null,
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"addr":{"type":"string"},"changed":{"type":"boolean"},"id":{"type":"string"},"lastReadSeq":{"type":"integer"},"lastSeq":{"type":"integer"},"muted":{"type":"boolean"},"mutedUntil":{"type":"integer"},"ok":{"type":"boolean"},"total":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"},"waitingTotal":{"type":"integer"}},"type":"object"},
@@ -3389,6 +3400,7 @@ export interface AppVerbs {
   'thread.attachmentGet': { args: { addr: string; id: string; len?: number; mode?: 'meta' | 'preview' | 'thumb' | 'range' | 'download'; n?: number; offset?: number; px?: number }; value: AppThreadFileData }
   'thread.catchup': { args: { limit?: number; threads: AppCatchupAsk[] }; value: AppCatchup }
   'thread.setRead': { args: { addr: string; seq?: number }; value: AppReadState }
+  'thread.markAllRead': { args: { addr: string }; value: AppReadState }
   'thread.unread': { args: Record<string, never>; value: AppUnread }
   'thread.mute': { args: { addr: string; muted: boolean; until?: number }; value: AppReadState }
   'files.resolveLinks': { args: { paths: string[]; workspace: string }; value: AppLinks }
@@ -3455,7 +3467,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -3581,6 +3593,8 @@ export interface AppSurfaces {
     catchup(args: { limit?: number; threads: AppCatchupAsk[] }): Promise<AppCatchup>
     /** Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use. cap thread:read · POST /cli/thread/read. e.g. `await k2.thread.setRead({addr: 'sales', seq: last.seq})` */
     setRead(args: { addr: string; seq?: number }): Promise<AppReadState>
+    /** Mark everything in a room's Thread read for the signed-in person (an App's own pass: its bookmark), so the agent's unread goes to 0; waiting cards stay waiting. Their own state only, on every surface they use. cap thread:read · POST /cli/thread/read-all. e.g. `await k2.thread.markAllRead({addr: 'sales'})` */
+    markAllRead(args: { addr: string }): Promise<AppReadState>
     /** The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads. cap thread:read · GET /cli/thread/unread. e.g. `const {total, byConversation} = await k2.thread.unread()` */
     unread(args?: Record<string, never>): Promise<AppUnread>
     /** Mute or unmute a room's Thread for the signed-in person (their own state, on every surface); an App's own pass has no mutes. cap thread:read · POST /cli/thread/mute. e.g. `await k2.thread.mute({addr: 'sales', muted: true})` */

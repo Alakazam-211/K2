@@ -1,19 +1,19 @@
 {
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
-  "catalogVersion": 26,
-  "catalogSha256": "c2b93f3a095941cf697cfffd3aed64b8d7f70ef753f6c5586efe88eab6feec90",
+  "catalogVersion": 27,
+  "catalogSha256": "e76275311d4c7fd79360414bd21523c1fc1ddba1dcd6c8eeb6f3a4111ff2bde6",
   "runtimeSha256": "a78ae1d3663e0f6edbd3e755a8c76770396e1964173d7ce17573bb935bf43a6e",
   "files": {
-    "cli/k2": "19d6396b1b3e0b1695a811289f0fed04b6774d80e74dba32b031f3186256e8d6",
-    "cli/k2#study app-api": "cf093f9d46c96c5afcefc0b61bb45272f2e71156bc02950c54793a5fee54241f",
+    "cli/k2": "9a274f35c0205e19a316b327c7e7a0431cdaf69e0abd8b7f921b7e6d2284e9d0",
+    "cli/k2#study app-api": "69acb2d19a400aa6f1e2d8c6e881c68ed9f48877e0c6fa396bf4ca0f683eeb1d",
     "cli/k2#study live": "9d8f1fbe777a2686adb42d1a3a762a0c9457d1da6236222db7e3d0aa0084f572",
     "cli/k2#zen guide libs": "63056b26d9270ae9ed49a301dcd9ce004485d7c4e8f35f6ea62a08dc6e1bc0b3",
-    "crates/k2-core/src/app_surface.rs": "25f19948e2b5c661abcfaba6a49c52037b0785e165ac3418929c714c848ba88e",
-    "sdk/generated/k2-frame.js": "8320fff8dfd98e8cacf89452b924e43e72ce003988f2272d36fb73277bd12afc",
+    "crates/k2-core/src/app_surface.rs": "ca88be8473b463ed018858c2ed170e06eb8e1c5fbd9c46c520af81ee70c63795",
+    "sdk/generated/k2-frame.js": "e85ffaca8f13f24a2a467df81a02d3ca094d6a9e9a3fd8adfd82042e339037e7",
     "sdk/generated/k2.d.ts": "4e449f82e6f7284867f5171ebda5f6f6b4943619e14d9561a6e0fbde5e062d71",
-    "sdk/server/src/generated/verbs.ts": "458acb2b81abda36ee3b172db4245620d53d1bb16c8ba7cb3192fb9ab162ec3a",
+    "sdk/server/src/generated/verbs.ts": "e457a341fb298f679af3b37ba1ea03c398c241740dc787c2a2cafcf1b44724da",
     "src/renderer/lib/k2-caps.generated.ts": "8b9bc958a043eb791d675f313055a5ea652971be37824387c4058082c222274b",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "3ff7fd899c7888888aade21ec79914347cca577a01672df97ff45908bb3e7a8c"
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "79bd62572e5f112decb9cfe6846479f81ccafeda217ad669e0e6e2cd5841bcdf"
   }
 }

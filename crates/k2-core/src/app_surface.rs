@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 26;
+pub const CATALOG_VERSION: u32 = 27;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -72,6 +72,7 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("HEAD", "/cli/thread/attachment"),
     ("POST", "/cli/thread/catchup"),
     ("POST", "/cli/thread/read"),
+    ("POST", "/cli/thread/read-all"),
     ("GET", "/cli/thread/unread"),
     ("HEAD", "/cli/thread/unread"),
     ("POST", "/cli/thread/mute"),
@@ -224,6 +225,7 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("HEAD", "/cli/thread/attachment"),
     ("POST", "/cli/thread/catchup"),
     ("POST", "/cli/thread/read"),
+    ("POST", "/cli/thread/read-all"),
     ("GET", "/cli/thread/unread"),
     ("HEAD", "/cli/thread/unread"),
     ("POST", "/cli/thread/mute"),
@@ -391,6 +393,7 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/thread/attachment", "thread.attachmentGet", "both"),
     ("POST", "/cli/thread/catchup", "thread.catchup", "both"),
     ("POST", "/cli/thread/read", "thread.setRead", "both"),
+    ("POST", "/cli/thread/read-all", "thread.markAllRead", "both"),
     ("GET", "/cli/thread/unread", "thread.unread", "both"),
     ("POST", "/cli/thread/mute", "thread.mute", "both"),
     ("POST", "/cli/fs/resolve-links", "files.resolveLinks", "both"),

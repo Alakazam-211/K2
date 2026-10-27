@@ -532,8 +532,8 @@ mod phantom_tests {
                 ],"session_crons":[]}"#,
             400,
         );
-        let named: Vec<(&str, &str, Option<&str>)> =
-            r.thread_children().iter().map(|c| (c.kind, c.state, c.label.as_deref())).collect();
+        let kids = r.thread_children();
+        let named: Vec<(&str, &str, Option<&str>)> = kids.iter().map(|c| (c.kind, c.state, c.label.as_deref())).collect();
         assert_eq!(
             named,
             vec![

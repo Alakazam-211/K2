@@ -91,6 +91,14 @@
 //!   counts), each `{kind, state, label, since}`, oldest first, at most
 //!   eight. The label is short and never free text: a subagent's type, a
 //!   shell's redacted TW8 line, a task type. Guests still get counts only.
+//! - **Frame schema 2 (0.46.5, additive).** Owner and guest frames also
+//!   carry `schema: 2`, `stepKind` (the tool step's kind while `phase` is
+//!   `tool`: `read` | `search` | `cmd` | `edit` | `web` | `subagent` |
+//!   `tool`, else `null`), `childCounts` (`{subagent, shell, monitor,
+//!   task}`), `openBecause` (`lead` | `children` | `waiting` | `stale`, or
+//!   `null` while delivering and on an end) and `evidenceAt` (the row's
+//!   last evidence, ms; a guest's is floored to 10 s). Guests get closed
+//!   vocabularies and numbers only, never a label.
 //! - **Phases (TW6).** `delivering` → `working` → `tool` (a lead
 //!   `PreToolUse` until its Post; a transcript tool call for hookless
 //!   Codex / Grok) → `thinking` (lead working, no tool, 1.5 s since the
@@ -152,7 +160,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 
-use k2_core::activity::row::{ChildState, ThreadChild, STALE_AFTER_MS};
+use k2_core::activity::row::{ChildState, ThreadChild, ThreadChildCounts, STALE_AFTER_MS};
 use k2_core::activity::{ChildKind, Display, LeadState, Reason, Row, TranscriptSignal};
 use k2_core::agent_hooks::envelope::HookEnvelope;
 use k2_core::log_debug;
@@ -206,6 +214,8 @@ pub struct RowSnap {
     /// The same children by name (0.46.5, Rosson: show what's actually
     /// going on), oldest first: kind, state, short label, since.
     pub children: Vec<ThreadChild>,
+    /// The live children by kind (`childCounts`).
+    pub child_counts: ThreadChildCounts,
     /// What starts and ends this session's turns.
     pub lifecycle: Lifecycle,
 }
@@ -279,6 +289,7 @@ impl RowSnap {
             owed_subagents,
             background,
             children: row.thread_children(),
+            child_counts: row.thread_child_counts(),
             lifecycle: Lifecycle::of(row),
         }
     }
@@ -584,7 +595,12 @@ pub struct Out {
 }
 
 /// The exact keys of a guest turn frame ([`guest_turn_body`]).
-pub const GUEST_TURN_KEYS: [&str; 14] = [
+pub const GUEST_TURN_KEYS: [&str; 19] = [
+    "schema",
+    "stepKind",
+    "childCounts",
+    "openBecause",
+    "evidenceAt",
     "turnId",
     "rev",
     "state",
@@ -606,6 +622,41 @@ pub const GUEST_TALLY_KEYS: [&str; 4] = ["read", "search", "cmd", "edit"];
 
 const GUEST_STATES: [&str; 6] = ["working", "monitoring", "needs-you", "unverifiable", "stopped", "idle"];
 const GUEST_PHASES: [&str; 7] = ["delivering", "working", "tool", "thinking", "waiting", "stale", "children"];
+
+/// The frame schema (0.46.5): 2 adds `stepKind`, `childCounts`,
+/// `openBecause`, `evidenceAt` and, for owners, `children` / `replied`.
+pub const TURN_SCHEMA: u64 = 2;
+
+/// `stepKind`'s closed vocabulary.
+pub const STEP_KINDS: [&str; 7] = ["read", "search", "cmd", "edit", "web", "subagent", "tool"];
+
+/// `openBecause`'s closed vocabulary.
+pub const OPEN_BECAUSE: [&str; 4] = ["lead", "children", "waiting", "stale"];
+
+/// The exact keys of `childCounts`.
+pub const CHILD_COUNT_KEYS: [&str; 4] = ["subagent", "shell", "monitor", "task"];
+
+/// A guest's `evidenceAt` is floored to this (ms).
+pub const GUEST_EVIDENCE_GRAIN_MS: i64 = 10_000;
+
+/// The kind of a TW8 tool line (`stepKind`), from its fixed opening words.
+pub fn step_kind(line: &str) -> &'static str {
+    if line.starts_with("Running ") {
+        "cmd"
+    } else if line.starts_with("Reading ") {
+        "read"
+    } else if line.starts_with("Editing ") {
+        "edit"
+    } else if line.starts_with("Fetching ") || line == "Searching the web" {
+        "web"
+    } else if line.starts_with("Searching ") {
+        "search"
+    } else if line == "Starting a subagent" {
+        "subagent"
+    } else {
+        "tool"
+    }
+}
 
 /// An end reason as a guest reads it: `done` (the agent finished or
 /// replied), `stopped` (interrupted, superseded by a newer message, or no
@@ -639,7 +690,26 @@ pub fn guest_turn_body(owner: &Value) -> Value {
         _ => Value::Null,
     };
     let waiting = owner.get("waitingOn").is_some_and(|w| !w.is_null());
+    let closed = |k: &str, allowed: &[&'static str]| -> Value {
+        let got = owner.get(k).and_then(Value::as_str);
+        allowed.iter().copied().find(|a| Some(*a) == got).map_or(Value::Null, |w| json!(w))
+    };
+    let counts = owner.get("childCounts");
+    let evidence = owner
+        .get("evidenceAt")
+        .and_then(Value::as_i64)
+        .map_or(Value::Null, |t| json!(t - t.rem_euclid(GUEST_EVIDENCE_GRAIN_MS)));
     json!({
+        "schema": TURN_SCHEMA,
+        "stepKind": closed("stepKind", &STEP_KINDS),
+        "childCounts": {
+            "subagent": count(counts.and_then(|c| c.get("subagent"))),
+            "shell": count(counts.and_then(|c| c.get("shell"))),
+            "monitor": count(counts.and_then(|c| c.get("monitor"))),
+            "task": count(counts.and_then(|c| c.get("task"))),
+        },
+        "openBecause": closed("openBecause", &OPEN_BECAUSE),
+        "evidenceAt": evidence,
         "turnId": owner.get("turnId").and_then(Value::as_str).map_or(Value::Null, |s| json!(s)),
         "rev": int("rev"),
         "state": word("state", &GUEST_STATES, "working"),
@@ -1242,6 +1312,7 @@ impl Tracker {
         }
         let mut body = self.body(turn, snap, now);
         body["state"] = json!(reason.final_state(snap.map(|s| s.display)));
+        body["openBecause"] = Value::Null;
         body["end"] = json!({ "reason": reason.as_str(), "detail": detail, "at": now });
         let mut out = Vec::new();
         send(turn, body, now, &mut out);
@@ -1291,6 +1362,7 @@ impl Tracker {
             && (phase != "tool" || turn.last_body.as_ref().and_then(|b| b["line"].as_str()) == line.as_deref());
         turn.phase_since = natural_since.unwrap_or(if same_phase { turn.phase_since } else { now });
         turn.phase = phase;
+        let tool_kind = (phase == "tool").then(|| line.as_deref().map_or("tool", step_kind));
         json!({
             "turnId": turn.id,
             "state": state,
@@ -1302,6 +1374,17 @@ impl Tracker {
             "messages": turn.messages,
             // The agent posted in Thread during this turn (owner frames).
             "replied": turn.replied,
+            "schema": TURN_SCHEMA,
+            "stepKind": tool_kind,
+            "childCounts": child_counts_json(snap.map(|s| s.child_counts).unwrap_or_default()),
+            "openBecause": match phase {
+                "delivering" => None,
+                "waiting" => Some("waiting"),
+                "stale" => Some("stale"),
+                "children" => Some("children"),
+                _ => Some("lead"),
+            },
+            "evidenceAt": snap.and_then(|s| s.evidence_at),
             "lastComposeAt": turn.composed_at,
             "subagents": snap.map_or(0, |s| s.subagents),
             "subagentsDone": turn.subagents_done.len(),
@@ -1317,6 +1400,11 @@ impl Tracker {
             "end": Value::Null,
         })
     }
+}
+
+/// `childCounts`: exactly [`CHILD_COUNT_KEYS`].
+fn child_counts_json(c: ThreadChildCounts) -> Value {
+    json!({ "subagent": c.subagent, "shell": c.shell, "monitor": c.monitor, "task": c.task })
 }
 
 /// One child of the turn's session as the strip names it.
@@ -1614,6 +1702,7 @@ mod tests {
             owed_subagents: 0,
             background: 0,
             children: Vec::new(),
+            child_counts: ThreadChildCounts::default(),
             lifecycle: Lifecycle::Agent,
         }
     }
@@ -2564,6 +2653,28 @@ mod tests {
         assert_eq!((g["subagents"].as_u64(), g["background"].as_u64()), (Some(1), Some(1)));
         assert_eq!(b["replied"], true);
         assert!(g.get("replied").is_none(), "guests never hear whether the agent replied: {g}");
+        assert!(g.get("children").is_none(), "guests never get labels: {g}");
+
+        // Schema 2 (additive): both bodies say why the turn is open and
+        // what holds it by kind; a guest's evidence time is coarse.
+        row.set(RowSnap {
+            children: children.clone(),
+            child_counts: ThreadChildCounts { subagent: 1, shell: 1, monitor: 0, task: 2 },
+            evidence_at: Some(3_456_789),
+            ..idle_with(1, 1, 0, Display::Working)
+        });
+        let out = t.row_changed(SID, &row.lookup(), 3_800);
+        let b = only(&out).clone();
+        assert_eq!(b["schema"], 2);
+        assert_eq!(b["openBecause"], "children");
+        assert_eq!(b["stepKind"], Value::Null);
+        assert_eq!(b["childCounts"], json!({ "subagent": 1, "shell": 1, "monitor": 0, "task": 2 }));
+        assert_eq!(b["evidenceAt"], 3_456_789);
+        let g = out[0].guest.as_ref().expect("a guest frame");
+        assert_guest_turn_keys(g);
+        assert_eq!((g["schema"].as_u64(), g["openBecause"].as_str()), (Some(2), Some("children")));
+        assert_eq!(g["childCounts"], b["childCounts"]);
+        assert_eq!(g["evidenceAt"], 3_450_000, "floored to 10 s for guests");
 
         // No reply yet: the lead is done and a subagent holds the turn.
         // The frame says `children` (the subagent by name), not a bare
@@ -2578,6 +2689,38 @@ mod tests {
         assert_eq!((b["phase"].as_str(), b["state"].as_str(), b["replied"].as_bool()), (Some("children"), Some("working"), Some(false)));
         assert_eq!(b["children"][0]["label"], "Explore");
         assert!(b["end"].is_null(), "still open while the subagent runs");
+    }
+
+    /// Schema 2: a tool step's kind reaches owners and guests as a word
+    /// from a closed list; the line itself stays the owner's.
+    #[test]
+    fn step_kind_is_a_closed_word_for_owners_and_guests() {
+        for (line, kind) in [
+            ("Running `cargo test`", "cmd"),
+            ("Reading `a.rs`", "read"),
+            ("Editing `b.rs`", "edit"),
+            ("Searching `fn x`", "search"),
+            ("Searching the web", "web"),
+            ("Fetching example.com", "web"),
+            ("Starting a subagent", "subagent"),
+            ("Using github / create_issue", "tool"),
+        ] {
+            assert_eq!(step_kind(line), kind, "{line}");
+        }
+        let mut t = Tracker::default();
+        let row = Fake::new(snap(LeadState::Working, Display::Working, 1_050));
+        live(&mut t, &row);
+        let out = t.envelope(
+            &hook(r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"cargo test --token s3cr3t"}}"#),
+            1_700,
+            &row.lookup(),
+            1_700,
+        );
+        let b = only(&out).clone();
+        assert_eq!((b["phase"].as_str(), b["stepKind"].as_str(), b["openBecause"].as_str()), (Some("tool"), Some("cmd"), Some("lead")));
+        let g = out[0].guest.as_ref().expect("a guest frame");
+        assert_eq!(g["stepKind"], "cmd");
+        assert_guest_text_clean(g, &["cargo", "s3cr3t"]);
     }
 
     /// A new compose supersedes the children's strip: the lead was done
@@ -2662,6 +2805,22 @@ mod tests {
             other => panic!("end is null or an object: {other}"),
         }
         assert!(g["waitingOn"].is_null() || g["waitingOn"] == "owner", "{g}");
+        // Schema 2: closed words and numbers only.
+        assert_eq!(g["schema"], TURN_SCHEMA, "{g}");
+        assert!(g["stepKind"].is_null() || STEP_KINDS.contains(&g["stepKind"].as_str().expect("word")), "{g}");
+        assert!(g["openBecause"].is_null() || OPEN_BECAUSE.contains(&g["openBecause"].as_str().expect("word")), "{g}");
+        let mut ck: Vec<&str> = g["childCounts"].as_object().expect("childCounts").keys().map(String::as_str).collect();
+        ck.sort_unstable();
+        let mut want = CHILD_COUNT_KEYS.to_vec();
+        want.sort_unstable();
+        assert_eq!(ck, want, "{g}");
+        for k in CHILD_COUNT_KEYS {
+            assert!(g["childCounts"][k].is_u64(), "childCounts.{k} is a number: {g}");
+        }
+        assert!(
+            g["evidenceAt"].is_null() || g["evidenceAt"].as_i64().is_some_and(|t| t % GUEST_EVIDENCE_GRAIN_MS == 0),
+            "evidenceAt is coarse: {g}"
+        );
     }
 
     /// No path, command, backtick, tool word or free-text key in a guest
@@ -2687,10 +2846,17 @@ mod tests {
             "tally": { "read": 1, "search": 2, "cmd": 3, "edit": 4, "path": "/Users/z3thon/x" },
             "waitingOn": "question", "end": { "reason": "done", "detail": "unbound_turn_end", "at": 21 },
             "cwd": "/Users/z3thon/secret", "prompt": "the owner's question",
+            "stepKind": "cat ~/.ssh", "openBecause": "the owner's question", "evidenceAt": 123_456,
+            "childCounts": { "subagent": 1, "shell": 2, "monitor": 0, "task": 1, "label": "z3thon's dev server" },
+            "children": [{ "kind": "shell", "state": "running", "label": "Running `npm run dev`", "since": 1 }],
+            "replied": true,
         });
         let g = guest_turn_body(&owner);
         assert_guest_turn_keys(&g);
-        assert_guest_text_clean(&g, &["id_ed25519", "z3thon", "unbound_turn_end", "question", "rm -rf"]);
+        assert_guest_text_clean(&g, &["id_ed25519", "z3thon", "unbound_turn_end", "question", "rm -rf", "npm run dev", "ssh"]);
+        assert_eq!((g["stepKind"].clone(), g["openBecause"].clone()), (Value::Null, Value::Null), "unknown words drop to null: {g}");
+        assert_eq!(g["childCounts"], json!({ "subagent": 1, "shell": 2, "monitor": 0, "task": 1 }));
+        assert_eq!(g["evidenceAt"], 120_000);
         assert_eq!(g["state"], "working", "an unknown state falls back to working: {g}");
         assert_eq!(g["phase"], "tool", "a tool phase, with no line: {g}");
         assert_eq!(g["waitingOn"], "owner");

@@ -150,3 +150,17 @@ fn the_stream_is_not_an_agent_verb() {
     assert!(crate::session_token::is_agent_verb("/cli/thread"), "Thread reads stay agent verbs");
     assert!(crate::session_token::is_agent_verb("/cli/thread/catchup"), "the catch-up stays an agent verb");
 }
+
+/// 0.46.5 (review B1): a lagged socket gets every room it hears with its
+/// turn now, `null` for none, never a silent skip.
+#[test]
+fn the_activity_reset_lists_each_room_with_its_turn_or_null() {
+    let mut turns = BTreeMap::new();
+    turns.insert("p-1".to_string(), Some(json!({ "turnId": "t1", "state": "monitoring" })));
+    turns.insert("p-2".to_string(), None);
+    let v: Value = serde_json::from_str(&activity_reset_message(&turns)).expect("json");
+    assert_eq!(
+        v,
+        json!({ "kind": "activity_reset", "turns": { "p-1": { "turnId": "t1", "state": "monitoring" }, "p-2": null } })
+    );
+}

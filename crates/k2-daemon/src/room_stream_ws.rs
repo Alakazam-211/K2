@@ -73,6 +73,20 @@ pub const ACTIVITY_KIND: &str = "thread_activity";
 
 /// One `thread_activity` frame: `activity` is the guest projection for a
 /// guest, the owner body for a login.
+/// The reset frame's kind on this socket (0.46.5).
+pub const ACTIVITY_RESET_KIND: &str = "activity_reset";
+
+/// 0.46.5 (review B1): the socket fell behind on an activity bus and
+/// frames were dropped. Instead of skipping silently (a lost end frame
+/// left a bar stuck), it gets every room it hears with that room's turn as
+/// it is NOW (the owner body or a guest's projection), `null` for a room
+/// with none. A client replaces its turns with it.
+pub fn activity_reset_message(turns: &BTreeMap<String, Option<Value>>) -> String {
+    let turns: serde_json::Map<String, Value> =
+        turns.iter().map(|(room, t)| (room.clone(), t.clone().unwrap_or(Value::Null))).collect();
+    json!({ "kind": ACTIVITY_RESET_KIND, "turns": turns }).to_string()
+}
+
 pub fn activity_message(conversation: &str, room: &str, turn_id: &str, activity: &Value) -> String {
     json!({
         "kind": ACTIVITY_KIND,
@@ -689,8 +703,45 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                 let frame = match event {
                     Ok(f) => f,
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        // Ephemeral: `thread.activity` is the catch-up.
-                        log_debug!("[daemon/room_stream] guest activity lagged {n}; skipped");
+                        // 0.46.5 (review B1): never skip silently; send the
+                        // rooms this pass hears with their turns now.
+                        log_debug!("[daemon/room_stream] guest activity lagged {n}; sending a reset");
+                        let Viewer::Guest { raw } = &viewer else { continue };
+                        if !ear {
+                            continue;
+                        }
+                        let rooms: Vec<(String, String)> =
+                            view.rooms.iter().filter(|(r, _)| ear_set.contains(*r)).map(|(r, c)| (r.clone(), c.clone())).collect();
+                        let (raw2, link2) = (raw.clone(), link.clone());
+                        let built = tokio::task::spawn_blocking(move || {
+                            let mut turns = BTreeMap::new();
+                            for (room, conv) in rooms {
+                                match overlay_ws::guest_ear_check(link2.as_deref(), &raw2, &room, &conv) {
+                                    overlay_ws::EarCheck::Send => {
+                                        turns.insert(room, crate::thread_activity::current_turn_guest(&conv));
+                                    }
+                                    overlay_ws::EarCheck::Skip => {}
+                                    overlay_ws::EarCheck::PassGone => return Err(()),
+                                }
+                            }
+                            Ok(turns)
+                        })
+                        .await;
+                        match built {
+                            Ok(Ok(turns)) => {
+                                if !turns.is_empty() && write.send(Message::Text(activity_reset_message(&turns))).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Ok(Err(())) => {
+                                let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                                break;
+                            }
+                            Err(e) => {
+                                log_debug!("[daemon/room_stream] guest reset panicked: {e}");
+                                break;
+                            }
+                        }
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -733,7 +784,31 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                 let frame = match event {
                     Ok(f) => f,
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        log_debug!("[daemon/room_stream] activity lagged {n}; skipped");
+                        // 0.46.5 (review B1): never skip silently; send the
+                        // rooms with their turns now.
+                        log_debug!("[daemon/room_stream] activity lagged {n}; sending a reset");
+                        if !ear || !matches!(viewer, Viewer::Login { .. }) {
+                            continue;
+                        }
+                        let rooms: Vec<(String, String)> = view.rooms.iter().map(|(r, c)| (r.clone(), c.clone())).collect();
+                        let built = tokio::task::spawn_blocking(move || {
+                            rooms
+                                .into_iter()
+                                .map(|(room, conv)| (room, crate::thread_activity::current_turn(&conv)))
+                                .collect::<BTreeMap<String, Option<Value>>>()
+                        })
+                        .await;
+                        match built {
+                            Ok(turns) => {
+                                if !turns.is_empty() && write.send(Message::Text(activity_reset_message(&turns))).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                log_debug!("[daemon/room_stream] activity reset panicked: {e}");
+                                break;
+                            }
+                        }
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,

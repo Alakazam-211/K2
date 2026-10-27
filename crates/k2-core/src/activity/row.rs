@@ -45,6 +45,19 @@ pub(crate) const TOMBSTONE_CAP: usize = 64;
 /// Children the Thread strip lists by name, at most.
 pub const THREAD_CHILDREN_CAP: usize = 8;
 
+/// The live children by kind (`childCounts` on a Thread frame): the
+/// subagents and background work [`Row::thread_counts`] counts, split by
+/// kind, plus other running inventory tasks (`task`), which never hold a
+/// Thread turn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ThreadChildCounts {
+    /// Running or waiting (not owed): the frame's `subagents`.
+    pub subagent: usize,
+    pub shell: usize,
+    pub monitor: usize,
+    pub task: usize,
+}
+
 /// Lead tools remembered in flight (for `waitingFor` binding).
 pub(crate) const IN_FLIGHT_CAP: usize = 32;
 
@@ -150,10 +163,12 @@ pub struct Child {
 /// One child as the Thread strip names it ([`Row::thread_children`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadChild {
-    /// `subagent` | `shell` | `monitor`.
+    /// Closed vocabulary: `subagent` | `shell` | `monitor` | `task` (any
+    /// other inventory type: Claude 2.1.311's `workflow`, `dream`,
+    /// `auto-mode scan`, `MCP task`, …).
     pub kind: &'static str,
-    /// `running` | `waiting` | `done` (a subagent whose notification the
-    /// lead hasn't taken yet).
+    /// Closed vocabulary: `running` | `waiting` | `owed` (a subagent that
+    /// finished and whose notification the lead hasn't taken yet).
     pub state: &'static str,
     pub label: Option<String>,
     pub since: i64,
@@ -586,7 +601,8 @@ impl Row {
     }
 
     /// TW7 by name (0.46.5): the children [`Row::thread_counts`] counts,
-    /// oldest first, at most [`THREAD_CHILDREN_CAP`].
+    /// plus other running inventory tasks (kind `task`, shown, never
+    /// holding a turn), oldest first, at most [`THREAD_CHILDREN_CAP`].
     pub fn thread_children(&self) -> Vec<ThreadChild> {
         let mut out: Vec<(&String, ThreadChild)> = self
             .children
@@ -596,18 +612,37 @@ impl Row {
                     ChildKind::Subagent => "subagent",
                     ChildKind::Shell if c.state != ChildState::Owed => "shell",
                     ChildKind::Monitor if c.state != ChildState::Owed => "monitor",
+                    ChildKind::Unknown if c.state != ChildState::Owed => "task",
                     _ => return None,
                 };
                 let state = match c.state {
                     ChildState::Running => "running",
                     ChildState::Waiting => "waiting",
-                    ChildState::Owed => "done",
+                    ChildState::Owed => "owed",
                 };
                 Some((id, ThreadChild { kind, state, label: c.label.clone(), since: c.since }))
             })
             .collect();
         out.sort_by(|a, b| a.1.since.cmp(&b.1.since).then_with(|| a.0.cmp(b.0)));
         out.into_iter().take(THREAD_CHILDREN_CAP).map(|(_, c)| c).collect()
+    }
+
+    /// [`Row::thread_children`] by kind, uncapped (`childCounts`).
+    pub fn thread_child_counts(&self) -> ThreadChildCounts {
+        let mut c = ThreadChildCounts::default();
+        for child in self.children.values() {
+            if child.state == ChildState::Owed {
+                continue;
+            }
+            match child.kind {
+                ChildKind::Subagent => c.subagent += 1,
+                ChildKind::Shell => c.shell += 1,
+                ChildKind::Monitor => c.monitor += 1,
+                ChildKind::Unknown => c.task += 1,
+                ChildKind::Cron => {}
+            }
+        }
+        c
     }
 
     /// A subagent stopped at `now`: late child events for it are ignored
@@ -800,18 +835,26 @@ mod tests {
         row.children.insert("f".into(), child(ChildKind::Monitor, ChildState::Running));
         row.children.insert("g".into(), child(ChildKind::Cron, ChildState::Running));
         assert_eq!(row.thread_counts(), (3, 2));
+        row.children.insert("h".into(), child(ChildKind::Unknown, ChildState::Running));
+        assert_eq!(row.thread_counts(), (3, 2), "an unknown task never holds a Thread turn");
         // The same children by name: the owed shell and the cron are not
-        // listed; an owed subagent reads `done`.
-        let named: Vec<(&str, &str)> = row.thread_children().iter().map(|c| (c.kind, c.state)).collect();
+        // listed; an owed subagent reads `owed`; an unknown task is `task`.
+        let kids = row.thread_children();
+        let named: Vec<(&str, &str)> = kids.iter().map(|c| (c.kind, c.state)).collect();
         assert_eq!(
             named,
             vec![
                 ("subagent", "running"),
-                ("subagent", "done"),
+                ("subagent", "owed"),
                 ("subagent", "waiting"),
                 ("shell", "running"),
                 ("monitor", "running"),
+                ("task", "running"),
             ]
+        );
+        assert_eq!(
+            row.thread_child_counts(),
+            ThreadChildCounts { subagent: 2, shell: 1, monitor: 1, task: 1 }
         );
     }
 

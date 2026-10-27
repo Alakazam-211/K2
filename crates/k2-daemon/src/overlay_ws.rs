@@ -245,6 +245,24 @@ pub fn guest_activity_wire(frame: &GuestTurnFrame) -> String {
     .to_string()
 }
 
+/// The reset frame's collection on the per-room socket (0.46.5).
+pub const ACTIVITY_RESET_COLLECTION: &str = "activity_reset";
+
+/// 0.46.5 (review B1): the socket fell behind on an activity bus and
+/// frames were dropped. Instead of skipping silently (a lost end frame
+/// left the bar stuck), the socket gets this: the conversation's turn as
+/// it is NOW (`activity`: the owner body, or a guest's projection), or
+/// `null` when none is running. A client replaces its turn with it.
+pub fn activity_reset_wire(snapshot: Option<&serde_json::Value>) -> String {
+    serde_json::json!({
+        "collection": ACTIVITY_RESET_COLLECTION,
+        "seq": 0,
+        "id": snapshot.and_then(|s| s.get("turnId")).cloned().unwrap_or(serde_json::Value::Null),
+        "activity": snapshot.cloned().unwrap_or(serde_json::Value::Null),
+    })
+    .to_string()
+}
+
 /// 0.46.3: may `pass` hear the counts-only ear of `conversation` in
 /// `room`, NOW? The room on the pass, `thread:read` AND `activity:read` in
 /// that room, and `conversation` is the room's pinned Chat. Every guest
@@ -748,9 +766,34 @@ pub async fn serve_overlay_events_connection(
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        // Ephemeral, as the owner strip: the catch-up GET
-                        // re-reads the current turn.
-                        log_debug!("[daemon/overlay_ws] guest activity subscriber lagged {n} frames; skipped");
+                        // 0.46.5 (review B1): never skip silently; a lost
+                        // end would leave the guest's bar stuck. Send the
+                        // turn as it is now, if the pass may still hear it.
+                        log_debug!("[daemon/overlay_ws] guest activity subscriber lagged {n} frames; sending a reset");
+                        let (Some(raw), Some(room)) = (skin_raw.clone(), ear_room.clone()) else { continue };
+                        let (link2, conv) = (link.clone(), conversation.clone());
+                        let snap = tokio::task::spawn_blocking(move || match guest_ear_check(link2.as_deref(), &raw, &room, &conv) {
+                            EarCheck::Send => Ok(Some(crate::thread_activity::current_turn_guest(&conv))),
+                            EarCheck::Skip => Ok(None),
+                            EarCheck::PassGone => Err(()),
+                        })
+                        .await;
+                        match snap {
+                            Ok(Ok(Some(turn))) => {
+                                if write.send(Message::Text(activity_reset_wire(turn.as_ref()))).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Ok(Ok(None)) => {}
+                            Ok(Err(())) => {
+                                let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                                break;
+                            }
+                            Err(e) => {
+                                log_debug!("[daemon/overlay_ws] guest reset panicked: {e}");
+                                break;
+                            }
+                        }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -772,11 +815,27 @@ pub async fn serve_overlay_events_connection(
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        // A25: strip frames are ephemeral and the client
-                        // re-reads the current turn with GET
-                        // /cli/thread/activity; skipping is safe, closing
-                        // would force a Thread resync for nothing.
-                        log_debug!("[daemon/overlay_ws] activity subscriber lagged {n} frames; skipped");
+                        // A25: strip frames are ephemeral; closing would
+                        // force a Thread resync for nothing. But skipping
+                        // silently left the bar stuck when the lost frame
+                        // was the end (0.46.5, review B1): send the turn as
+                        // it is now instead. A guest's ear is the guest bus.
+                        log_debug!("[daemon/overlay_ws] activity subscriber lagged {n} frames; sending a reset");
+                        if skin {
+                            continue;
+                        }
+                        let conv = conversation.clone();
+                        match tokio::task::spawn_blocking(move || crate::thread_activity::current_turn(&conv)).await {
+                            Ok(turn) => {
+                                if write.send(Message::Text(activity_reset_wire(turn.as_ref()))).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                log_debug!("[daemon/overlay_ws] activity reset panicked: {e}");
+                                break;
+                            }
+                        }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -804,6 +863,46 @@ pub fn emit_links(links: &[k2_core::overlay::OverlayLink], doc: &OverlayDoc) {
 mod tests {
     use super::*;
     use crate::session_events;
+
+    /// 0.46.5 (review B1): the reset carries the turn as it is now, or
+    /// `null` (none running), so a lost end frame can't leave a bar stuck.
+    #[test]
+    fn the_activity_reset_carries_the_current_turn_or_null() {
+        let body = serde_json::json!({ "turnId": "t1", "state": "working", "rev": 7 });
+        let v: serde_json::Value = serde_json::from_str(&activity_reset_wire(Some(&body))).expect("json");
+        assert_eq!(v, serde_json::json!({ "collection": "activity_reset", "seq": 0, "id": "t1", "activity": body }));
+        let v: serde_json::Value = serde_json::from_str(&activity_reset_wire(None)).expect("json");
+        assert_eq!(v, serde_json::json!({ "collection": "activity_reset", "seq": 0, "id": null, "activity": null }));
+    }
+
+    /// A tokio broadcast receiver that falls behind gets `Lagged` and the
+    /// lost frames are gone (the end among them). Every activity bus's
+    /// lag arm, on both sockets, answers with a reset, never a bare skip.
+    #[tokio::test]
+    async fn every_activity_lag_sends_a_reset_never_a_silent_skip() {
+        let (tx, mut rx) = broadcast::channel::<u32>(2);
+        for i in 0..5 {
+            tx.send(i).expect("send");
+        }
+        assert!(matches!(rx.recv().await, Err(broadcast::error::RecvError::Lagged(3))), "the end frame can be among the lost");
+        for (file, src, arms, reset) in [
+            ("overlay_ws.rs", include_str!("overlay_ws.rs"), 2, "activity_reset_wire("),
+            ("room_stream_ws.rs", include_str!("room_stream_ws.rs"), 2, "activity_reset_message("),
+        ] {
+            let prod = src.split("\n#[cfg(test)]\nmod tests").next().expect("prod part");
+            let lag_arms: Vec<&str> = prod
+                .split("RecvError::Lagged(n)) =>")
+                .skip(1)
+                .map(|rest| &rest[..rest.find("RecvError::Closed").expect("each lag arm ends before Closed")])
+                .filter(|arm| arm.contains("activity"))
+                .collect();
+            assert_eq!(lag_arms.len(), arms, "{file}: the activity lag arms");
+            for arm in lag_arms {
+                assert!(arm.contains(reset), "{file}: an activity lag arm must send a reset: {arm}");
+                assert!(!arm.contains("; skipped"), "{file}: never a silent skip: {arm}");
+            }
+        }
+    }
 
     #[test]
     fn overlay_ws_path_is_not_session_events() {

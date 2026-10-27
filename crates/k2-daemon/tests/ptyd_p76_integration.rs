@@ -2,9 +2,10 @@
 //! is set at the daemon's spawn sites and backend selection happens inside
 //! `DaemonPtySession::spawn`. A canonical pinned chat and a heartbeat
 //! session, both spawned through `spawn.rs`
-//! (`spawn_agent_session_v2_blocking`), land on ptyd when the dev switch
-//! `K2_PTYD=1` is on — and stay in-process (ptyd never launched) when it
-//! is off.
+//! (`spawn_agent_session_v2_blocking`), land on ptyd with the default
+//! switch (on since 0.46.5: no `K2_PTYD`, no `terminal.ptyd`) — and stay
+//! in-process (ptyd never launched) when the owner sets `terminal.ptyd =
+//! off`.
 //!
 //! Needs the `k2-ptyd` binary: run as
 //! `cargo build -p k2-ptyd --bin k2-ptyd && cargo test -p k2-daemon --test ptyd_p76_integration`
@@ -72,9 +73,11 @@ fn session_for(key: &str) -> std::sync::Arc<k2_core::terminal::daemon_pty::Daemo
 }
 
 /// One sequential test so the switch-off half provably runs before ptyd
-/// was ever launched in this process.
+/// was ever launched in this process. 0.46.5: the switch is ON by default
+/// (no `K2_PTYD`, no `terminal.ptyd`); only the owner's `off` keeps new
+/// sessions in-process.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn canonical_chat_and_heartbeat_spawns_land_on_ptyd_only_with_the_switch_on() {
+async fn canonical_chat_and_heartbeat_spawns_land_on_ptyd_unless_the_owner_turned_it_off() {
     let bin = ptyd_bin();
     assert!(
         bin.is_file(),
@@ -98,8 +101,11 @@ async fn canonical_chat_and_heartbeat_spawns_land_on_ptyd_only_with_the_switch_o
     v2_session_map::clear_for_tests();
     let ptyd = k2_core::terminal::ptyd::client::global();
 
-    // ── switch off (the default): both lanes in-process, ptyd untouched ──
+    // ── the owner turned it off (terminal.ptyd = off): both lanes
+    // in-process, ptyd untouched ──
     assert!(std::env::var_os("K2_PTYD").is_none());
+    k2_core::app_settings::update(serde_json::json!({"terminal": {"ptyd": "off"}})).expect("terminal.ptyd = off");
+    assert_eq!(k2_core::terminal::ptyd::Switch::resolve(), k2_core::terminal::ptyd::Switch::Off);
     let off = register_project("p76-off", &home);
     write_agent_md(&off, "offbot");
     let off_path = off.to_string_lossy().into_owned();
@@ -118,8 +124,12 @@ async fn canonical_chat_and_heartbeat_spawns_land_on_ptyd_only_with_the_switch_o
     s.kill();
     h.kill();
 
-    // ── switch on: the same two spawn.rs lanes land on ptyd ──
-    std::env::set_var("K2_PTYD", "1");
+    // ── the default (setting unset, no K2_PTYD): the same two spawn.rs
+    // lanes land on ptyd ──
+    k2_core::app_settings::update(serde_json::json!({"terminal": {"ptyd": ""}})).expect("clear terminal.ptyd");
+    assert!(k2_core::app_settings::load().terminal.ptyd.is_empty(), "the setting is unset again");
+    assert!(std::env::var_os("K2_PTYD").is_none());
+    assert_eq!(k2_core::terminal::ptyd::Switch::resolve(), k2_core::terminal::ptyd::Switch::On, "on by default");
     let on = register_project("p76-on", &home);
     write_agent_md(&on, "onbot");
     let on_path = on.to_string_lossy().into_owned();

@@ -172,6 +172,7 @@ pub use k2_client::paths;
 /// Permission cards (prd-agent-settings-cards-v1, 0.46.3 Beta): catalog,
 /// request and card-view types plus the two switches. Off by default.
 pub mod permission;
+pub mod private_fs;
 pub mod private_home;
 pub mod session_archive;
 pub use k2_client::migration_launchd;

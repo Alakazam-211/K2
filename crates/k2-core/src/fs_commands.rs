@@ -712,7 +712,22 @@ pub fn free_disk_space(path: &Path) -> Option<u64> {
         }
         Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
     }
-    #[cfg(not(unix))]
+    // Windows: GetDiskFreeSpaceExW's bytes free to this user (quotas
+    // count), for the volume holding `path` (a directory path works, so
+    // does a file's).
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+        let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+        let w: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let mut avail = 0u64;
+        // SAFETY: NUL-terminated wide path; out-params are ours, the
+        // other two may be null.
+        let ok = unsafe { GetDiskFreeSpaceExW(w.as_ptr(), &mut avail, std::ptr::null_mut(), std::ptr::null_mut()) };
+        (ok != 0).then_some(avail)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         None
@@ -1933,9 +1948,9 @@ mod tests {
 
     #[test]
     fn free_disk_space_reports_nonzero_on_a_real_volume() {
-        // The probe must work on the platform the daemon ships on (unix) —
+        // The probe must work on every platform the daemon ships on —
         // a silent None there would disable the disk-viability gate.
-        let free = free_disk_space(Path::new("/")).expect("statvfs on / must succeed on unix");
+        let free = free_disk_space(Path::new("/")).expect("the free-space probe of / (the current drive on Windows) must succeed");
         assert!(free > 0, "free space on / reported as 0");
     }
 

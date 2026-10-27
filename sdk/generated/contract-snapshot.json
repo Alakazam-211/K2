@@ -2,17 +2,17 @@
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
   "catalogVersion": 26,
-  "catalogSha256": "167648ab94bd40762cd5f8937faae337ca1c1e6626b9241beb9c992f1b732487",
+  "catalogSha256": "c2b93f3a095941cf697cfffd3aed64b8d7f70ef753f6c5586efe88eab6feec90",
   "runtimeSha256": "a78ae1d3663e0f6edbd3e755a8c76770396e1964173d7ce17573bb935bf43a6e",
   "files": {
     "cli/k2": "19d6396b1b3e0b1695a811289f0fed04b6774d80e74dba32b031f3186256e8d6",
-    "cli/k2#study app-api": "5a4eb535488b660afd84074075ec41689d00c9f4a10afa7bca37f07b634c1371",
+    "cli/k2#study app-api": "cf093f9d46c96c5afcefc0b61bb45272f2e71156bc02950c54793a5fee54241f",
     "cli/k2#study live": "9d8f1fbe777a2686adb42d1a3a762a0c9457d1da6236222db7e3d0aa0084f572",
     "cli/k2#zen guide libs": "63056b26d9270ae9ed49a301dcd9ce004485d7c4e8f35f6ea62a08dc6e1bc0b3",
-    "crates/k2-core/src/app_surface.rs": "bba0b43bd2f1dcf21be1a3482bed8e968c80c7d1a6b30a8a71f13710af4fee9f",
-    "sdk/generated/k2-frame.js": "20a912e692ae1cc1148cf4ba5b3b55a48b8bc4749d5a3a034b5db290df1e87e2",
-    "sdk/generated/k2.d.ts": "455b6c7de860cac09e9413a91f5da55c2af9055fcaabcf8742f1d199119fd144",
-    "sdk/server/src/generated/verbs.ts": "8ab6cac3827197957cded58aadc3775be91848a165d1285b0549417eeea88949",
+    "crates/k2-core/src/app_surface.rs": "25f19948e2b5c661abcfaba6a49c52037b0785e165ac3418929c714c848ba88e",
+    "sdk/generated/k2-frame.js": "8320fff8dfd98e8cacf89452b924e43e72ce003988f2272d36fb73277bd12afc",
+    "sdk/generated/k2.d.ts": "4e449f82e6f7284867f5171ebda5f6f6b4943619e14d9561a6e0fbde5e062d71",
+    "sdk/server/src/generated/verbs.ts": "458acb2b81abda36ee3b172db4245620d53d1bb16c8ba7cb3192fb9ab162ec3a",
     "src/renderer/lib/k2-caps.generated.ts": "8b9bc958a043eb791d675f313055a5ea652971be37824387c4058082c222274b",
     "src/renderer/lib/zen/zen-verbs.generated.ts": "3ff7fd899c7888888aade21ec79914347cca577a01672df97ff45908bb3e7a8c"
   }

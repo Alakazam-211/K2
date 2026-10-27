@@ -194,6 +194,12 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("HEAD", "/cli/skin/push/status"),
     ("GET", "/cli/skin/push/devices"),
     ("HEAD", "/cli/skin/push/devices"),
+    ("POST", "/cli/skin/pair/start"),
+    ("GET", "/cli/skin/pair/status"),
+    ("HEAD", "/cli/skin/pair/status"),
+    ("POST", "/cli/skin/pair/cancel"),
+    ("POST", "/cli/skin/pair/check"),
+    ("POST", "/cli/skin/pair"),
     ("POST", "/cli/skin/email/send"),
     ("GET", "/cli/skin/email/status"),
     ("HEAD", "/cli/skin/email/status"),
@@ -323,7 +329,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
 pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/wallet/list", "/cli/skin/wallet/status", "/cli/skin/wallet/add", "/cli/skin/wallet/login", "/cli/skin/wallet/login/status", "/cli/skin/wallet/login/input", "/cli/skin/wallet/login/cancel", "/cli/skin/wallet/use", "/cli/skin/wallet/remove"];
 
 /// Routes only an App's gateway link serves: a BFF's server-side calls.
-pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/skin/app-rooms", "/cli/skin/guests/list", "/cli/skin/logout", "/cli/skin/refresh", "/cli/skin/push/send", "/cli/skin/push/status", "/cli/skin/push/devices", "/cli/skin/email/send", "/cli/skin/email/status", "/cli/skin/email/log", "/cli/skin/app-info", "/cli/skin/password/forgot", "/cli/skin/password/reset", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass"];
+pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/skin/app-rooms", "/cli/skin/guests/list", "/cli/skin/logout", "/cli/skin/refresh", "/cli/skin/push/send", "/cli/skin/push/status", "/cli/skin/push/devices", "/cli/skin/pair/start", "/cli/skin/pair/status", "/cli/skin/pair/cancel", "/cli/skin/pair/check", "/cli/skin/pair", "/cli/skin/email/send", "/cli/skin/email/status", "/cli/skin/email/log", "/cli/skin/app-info", "/cli/skin/password/forgot", "/cli/skin/password/reset", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass"];
 
 /// The catalog verb behind each App-facing pair and socket
 /// (`(method, path, verb, door)`; sockets are `WS`), for refusals, the
@@ -364,6 +370,11 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("POST", "/cli/skin/push/send", "push.send", "link"),
     ("GET", "/cli/skin/push/status", "push.status", "link"),
     ("GET", "/cli/skin/push/devices", "push.devices", "link"),
+    ("POST", "/cli/skin/pair/start", "pairing.start", "link"),
+    ("GET", "/cli/skin/pair/status", "pairing.status", "link"),
+    ("POST", "/cli/skin/pair/cancel", "pairing.cancel", "link"),
+    ("POST", "/cli/skin/pair/check", "pairing.check", "link"),
+    ("POST", "/cli/skin/pair", "pairing.redeem", "link"),
     ("POST", "/cli/skin/email/send", "email.send", "link"),
     ("GET", "/cli/skin/email/status", "email.status", "link"),
     ("GET", "/cli/skin/email/log", "email.log", "link"),

@@ -257,7 +257,7 @@ export const APP_VERBS = {
     http: { method: 'GET', route: '/cli/skin/devices', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"devices":{"items":{"additionalProperties":false,"properties":{"createdAt":{"type":"integer"},"current":{"type":"boolean"},"deviceId":{"type":"string"},"expiresAt":{"type":"integer"},"id":{"type":"string"},"lastUsedAt":{"type":"integer"},"name":{"type":"string"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"devices":{"items":{"additionalProperties":false,"properties":{"createdAt":{"type":"integer"},"current":{"type":"boolean"},"deviceId":{"type":"string"},"expiresAt":{"type":"integer"},"id":{"type":"string"},"lastUsedAt":{"type":"integer"},"name":{"type":"string"},"via":{"enum":["pairing","password"]}},"type":"object"},"type":"array"},"ok":{"type":"boolean"}},"type":"object"},
   },
   'guests.revokeDevice': {
     cap: null,
@@ -423,6 +423,61 @@ export const APP_VERBS = {
     socket: null,
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"guests":{"items":{"additionalProperties":false,"properties":{"devices":{"type":"integer"},"guest":{"type":"string"},"platforms":{"items":{"type":"string"},"type":"array"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'pairing.start': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-phone-pairing-v1',
+    door: 'link',
+    http: { method: 'POST', route: '/cli/skin/pair/start', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"code":{"type":"string"},"expiresAt":{"type":"integer"},"expiresInSecs":{"type":"integer"},"host":{"type":"string"},"ok":{"type":"boolean"},"pairUrl":{"type":"string"},"pairingId":{"type":"string"},"qr":{"additionalProperties":false,"properties":{"rows":{"items":{"type":"string"},"type":"array"},"size":{"type":"integer"}},"type":"object"}},"type":"object"},
+  },
+  'pairing.status': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-phone-pairing-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/skin/pair/status', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"device":{"additionalProperties":false,"properties":{"deviceLoginId":{"type":"string"},"name":{"type":"string"},"pairedAt":{"type":"integer"}},"type":"object"},"expiresInSecs":{"type":"integer"},"ok":{"type":"boolean"},"pairingId":{"type":"string"},"state":{"enum":["pending","paired","expired","cancelled"]}},"type":"object"},
+  },
+  'pairing.cancel': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-phone-pairing-v1',
+    door: 'link',
+    http: { method: 'POST', route: '/cli/skin/pair/cancel', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"cancelled":{"type":"boolean"},"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'pairing.check': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-phone-pairing-v1',
+    door: 'link',
+    http: { method: 'POST', route: '/cli/skin/pair/check', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"appName":{"type":"string"},"expiresInSecs":{"type":"integer"},"fullName":{"type":"string"},"ok":{"type":"boolean"},"username":{"type":"string"}},"type":"object"},
+  },
+  'pairing.redeem': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-phone-pairing-v1',
+    door: 'link',
+    http: { method: 'POST', route: '/cli/skin/pair', params: {}, query: [] },
+    socket: null,
+    responseNames: { 'pass': 'token' },
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"caps":{"items":{"type":"string"},"type":"array"},"device":{"additionalProperties":false,"properties":{"id":{"type":"string"},"name":{"type":"string"}},"type":"object"},"ok":{"type":"boolean"},"pass":{"type":"string"},"passExpiresAt":{"type":"integer"},"principalId":{"type":"string"},"push":{"additionalProperties":false,"properties":{"code":{"type":"string"},"configured":{"additionalProperties":false,"properties":{"apns":{"type":"boolean"},"fcm":{"type":"boolean"}},"type":"object"},"id":{"type":"string"},"registered":{"type":"boolean"},"who":{"type":"string"}},"type":"object"},"refresh":{"type":"string"},"refreshExpiresAt":{"type":"integer"},"role":{"type":["string","null"]},"roomAccess":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"handle":{"type":"string"}},"type":"object"},"type":"array"},"roomHandles":{"items":{"type":"string"},"type":"array"},"rooms":{"items":{"type":"string"},"type":"array"},"username":{"type":"string"},"via":{"enum":["pairing"]}},"type":"object"},
   },
   'email.send': {
     cap: 'email:send',
@@ -1686,6 +1741,8 @@ export interface AppDeviceLogin {
   /** Last refresh, seconds since the epoch. */
   readonly lastUsedAt: number
   readonly name: string
+  /** How it started: a QR pairing, or a device login with the password. */
+  readonly via: 'pairing' | 'password'
 }
 
 export interface AppDevices {
@@ -1878,6 +1935,118 @@ export interface AppPushGuestDevices {
 export interface AppPushDevices {
   readonly guests: AppPushGuestDevices[]
   readonly ok: boolean
+}
+
+export interface AppQr {
+  /** One string of 1 (dark) and 0 (light) per row, no quiet zone. */
+  readonly rows: string[]
+  /** Modules per side (not a time). */
+  readonly size: number
+}
+
+export interface AppPairingStart {
+  /** The one-time code (K2A-...), shown once: draw qr, never log it. */
+  readonly code: string
+  /** When the code stops working, seconds since the epoch. */
+  readonly expiresAt: number
+  /** The code's life in seconds (start again when it runs out). */
+  readonly expiresInSecs: number
+  /** The host the link names. */
+  readonly host: string
+  readonly ok: boolean
+  /** https://<host>/.well-known/k2-pair#<code>: what the QR holds; the code rides in the fragment. */
+  readonly pairUrl: string
+  /** Not a secret: what pairing.status and pairing.cancel take (apr_...). */
+  readonly pairingId: string
+  readonly qr: AppQr
+}
+
+export interface AppPairedDevice {
+  /** What guests.revokeDevice takes (Not you? End it). */
+  readonly deviceLoginId: string
+  /** The name the phone gave; it proves nothing on its own. */
+  readonly name: string
+  /** Seconds since the epoch. */
+  readonly pairedAt: number
+}
+
+export interface AppPairingStatus {
+  readonly device?: AppPairedDevice
+  /** While pending: seconds left. */
+  readonly expiresInSecs?: number
+  readonly ok: boolean
+  readonly pairingId: string
+  /** expired: it ran out or a redeem used it and was refused; start again. */
+  readonly state: 'pending' | 'paired' | 'expired' | 'cancelled'
+}
+
+export interface AppPairingCancelled {
+  /** false when nothing of this guest's was pending under that id. */
+  readonly cancelled: boolean
+  readonly ok: boolean
+}
+
+export interface AppPairingCheck {
+  readonly app: string
+  readonly appName: string
+  /** Seconds left. */
+  readonly expiresInSecs: number
+  readonly fullName?: string
+  readonly ok: boolean
+  /** Who the code signs in: show it before redeeming. */
+  readonly username: string
+}
+
+export interface AppPairingPush {
+  /** Leave it out: it is device.id. */
+  readonly deviceId?: string
+  /** APNs only: sandbox for Debug builds. */
+  readonly environment?: 'production' | 'sandbox'
+  /** Topics to skip (at most 32, each a-z 0-9 . _ -). */
+  readonly mutedTopics?: string[]
+  /** apns: the iOS device token as hex. fcm: an FCM token (Android, or iOS through Firebase). */
+  readonly platform: 'apns' | 'fcm'
+  /** Show agent-reply text on this device; null = on. */
+  readonly previews?: boolean | null
+  /** The native token from the OS (never an Expo push token). */
+  readonly pushToken: string
+}
+
+export interface AppPairingPushResult {
+  /** Why it didn't register (push's own refusal code). */
+  readonly code?: string
+  readonly configured?: AppPushConfigured
+  /** The push registration's id (apd_...). */
+  readonly id?: string
+  readonly registered: boolean
+  /** This person's opaque key on this App (k2Who). */
+  readonly who?: string
+}
+
+export interface AppPairedSession {
+  readonly app: string
+  /** Every cap in any room. */
+  readonly caps: string[]
+  readonly device: AppDeviceRef
+  readonly ok: boolean
+  /** The phone's session pass (k2skn_...): send it as Authorization: Bearer. */
+  readonly pass: string
+  /** When the pass ends, seconds since the epoch. */
+  readonly passExpiresAt: number
+  readonly principalId: string
+  readonly push?: AppPairingPushResult
+  /** The refresh token (k2skr_...): store it; guests.refresh trades it. */
+  readonly refresh: string
+  /** When the refresh token ends unless used, seconds since the epoch. */
+  readonly refreshExpiresAt: number
+  readonly role: string | null
+  readonly roomAccess: AppRoomAccess[]
+  readonly roomHandles: string[]
+  /** Project ids. */
+  readonly rooms: string[]
+  readonly username: string
+  /** This device sign-in started from a pairing. */
+  readonly via: 'pairing'
 }
 
 export interface AppEmailAccepted {
@@ -3156,7 +3325,7 @@ export interface AppProjectFrame {
 }
 
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -3197,6 +3366,11 @@ export interface AppVerbs {
   'push.send': { args: { androidChannel?: string; badge?: number; body?: string; collapseId?: string; data?: Record<string, string>; mutable?: boolean; priority?: 'high' | 'normal'; silent?: boolean; sound?: string; threadId?: string; title?: string; to: AppPushTo; topic?: string; ttlSecs?: number }; value: AppPushQueued }
   'push.status': { args: { sendId: string }; value: AppPushStatus }
   'push.devices': { args: {  }; value: AppPushDevices }
+  'pairing.start': { args: { host?: string; password?: string }; value: AppPairingStart }
+  'pairing.status': { args: { pairingId: string }; value: AppPairingStatus }
+  'pairing.cancel': { args: { pairingId: string }; value: AppPairingCancelled }
+  'pairing.check': { args: { app?: string; code: string }; value: AppPairingCheck }
+  'pairing.redeem': { args: { app?: string; code: string; device: AppDevice; push?: AppPairingPush }; value: AppPairedSession }
   'email.send': { args: { bcc?: string[]; cc?: string[]; from?: string; fromName?: string; headers?: Record<string, string>; html?: string; idempotencyKey?: string; replyTo?: string[]; sendAt?: number; subject: string; tags?: string[]; text?: string; to: string[] }; value: AppEmailAccepted }
   'email.status': { args: { id: string }; value: AppEmailStatus }
   'email.log': { args: { before?: number; limit?: number; status?: string; tag?: string }; value: AppEmailLog }
@@ -3281,7 +3455,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.send' | 'push.status' | 'push.devices' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -3361,6 +3535,18 @@ export interface AppSurfaces {
     status(args: { sendId: string }): Promise<AppPushStatus>
     /** Which of this App's guests have phones registered, and on which platforms (never a token). cap push:send · GET /cli/skin/push/devices. e.g. `const {guests} = await k2.push.devices()` */
     devices(args?: {  }): Promise<AppPushDevices>
+  }
+  readonly pairing: {
+    /** Start pairing this guest's phone: a one-time code and its QR, from their own web sign-in (at most 15 minutes old, or with their password). no cap · POST /cli/skin/pair/start. e.g. `const p = await k2.asGuest(pass).pairing.start()` */
+    start(args?: { host?: string; password?: string }): Promise<AppPairingStart>
+    /** Is this guest's pairing done: pending, paired (with the device's name), expired or cancelled. no cap · GET /cli/skin/pair/status. e.g. `const s = await k2.asGuest(pass).pairing.status({pairingId})` */
+    status(args: { pairingId: string }): Promise<AppPairingStatus>
+    /** Drop one of this guest's pairing codes (the QR stops working). no cap · POST /cli/skin/pair/cancel. e.g. `await k2.asGuest(pass).pairing.cancel({pairingId})` */
+    cancel(args: { pairingId: string }): Promise<AppPairingCancelled>
+    /** Public: who a pairing code would sign in, without using it (ask 'Sign in as ...?' first). no cap · POST /cli/skin/pair/check. e.g. `const who = await k2.pairing.check({code})` */
+    check(args: { app?: string; code: string }): Promise<AppPairingCheck>
+    /** Public: trade a pairing code for this App's device sign-in (a pass and a refresh token), once; optionally register push in the same call. no cap · POST /cli/skin/pair. e.g. `const {pass, refresh} = await k2.pairing.redeem({code, device: {id, name}})` */
+    redeem(args: { app?: string; code: string; device: AppDevice; push?: AppPairingPush }): Promise<AppPairedSession>
   }
   readonly email: {
     /** Email from this App's own sender (granted by the owner) to its own users, or anyone with the owner's any scope. Answers 202 with an id. cap email:send · POST /cli/skin/email/send. e.g. `const {id} = await k2.email.send({to: [user.email], subject: 'Your order shipped', html, text, tags: ['orders'], idempotencyKey: orderId})` */
@@ -3547,4 +3733,4 @@ export interface AppSurfaces {
 }
 
 /** The surface names, in catalog order (the client builds one object each). */
-export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'app', 'password', 'profile', 'push', 'email', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'project'] as const
+export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'app', 'password', 'profile', 'push', 'pairing', 'email', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'project'] as const

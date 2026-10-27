@@ -1,0 +1,32 @@
+[package]
+name = "k2-mpc-base"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Multiplayer kit for file-type packs: docs on K2-defined primitives (engine hidden), text diff and three-way merge, file codecs; sessions, presence, persistence, history and the parity framework to follow."
+
+[features]
+# Decoding bytes from remote clients (sync step 1/2, updates). Off by default, and a host must
+# not enable it until the strict decoder lands: yrs 0.28 has open decode bugs, including a
+# use-after-free reachable from a crafted update, which catch_unwind cannot contain.
+# The kit's own tests enable it (self dev-dependency below).
+untrusted-wire = []
+
+[dependencies]
+# The engine is private to this crate. Pinned exactly: its encoding is part of the stored format.
+yrs = "=0.28.0"
+thiserror = "2"
+# Same major as the host already uses, so vendoring adds no second copy.
+redb = "2"
+# Regexes for the text tools (grep, sed): linear-time engines only, size-limited per pattern.
+# The meta engine for leftmost-first search and captures, the lazy DFA for POSIX
+# leftmost-longest match ends.
+regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "perf", "unicode", "meta", "hybrid", "nfa-pikevm", "nfa-backtrack", "dfa-onepass"] }
+
+[dev-dependencies]
+k2-mpc-base = { path = ".", features = ["untrusted-wire"] }
+proptest = "1"
+rand = { version = "0.8", features = ["small_rng"] }
+# Tests stand in for remote clients with raw Yrs docs (Yjs wire-compatible).
+yrs = "=0.28.0"

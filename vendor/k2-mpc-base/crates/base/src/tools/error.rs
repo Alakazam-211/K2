@@ -1,0 +1,107 @@
+//! Tool errors and the exit codes every verb maps to, in one place.
+
+use crate::session::SessionError;
+
+/// Exit codes (the PRD's §9.1 table).
+pub mod exit {
+    /// Success. For `diff`: no differences.
+    pub const OK: u8 = 0;
+    /// The tool's own "no": grep found nothing, a patch didn't apply, diff found
+    /// differences, a write conflicted.
+    pub const NO: u8 = 1;
+    /// Bad usage, an unsupported flag, a refused command (`sed e/w/r/R/W`, a backup
+    /// suffix, a backreference in a pattern).
+    pub const USAGE: u8 = 2;
+    /// Refused: the caller lacks the right.
+    pub const REFUSED: u8 = 3;
+    /// Not found: no such doc, or live editing is off for it.
+    pub const NOT_FOUND: u8 = 4;
+}
+
+/// Why a tool call was refused before it changed anything. Every variant exits 2
+/// ([`ToolError::exit`]); nothing is ever applied.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ToolError {
+    /// A flag, command or syntax outside the supported subset. `hint` says what to use.
+    #[error("{flag}: not supported ({hint})")]
+    Unsupported { flag: String, hint: String },
+    /// Supported syntax the tools refuse on purpose: `sed` commands that touch other files
+    /// or run commands (`e`, `w`, `r`, `R`, `W`), backup suffixes (`-i.bak`: versions replace
+    /// backups), backreferences in a pattern.
+    #[error("{what}: refused ({reason})")]
+    Refused { what: String, reason: String },
+    /// Bad usage: a missing operand, a bad number, a malformed script, pattern or patch.
+    #[error("{0}")]
+    Usage(String),
+    /// The call would exceed a bound (output size, regex size, work).
+    #[error("limit: {0}")]
+    Limit(String),
+}
+
+impl ToolError {
+    /// The exit code: always [`exit::USAGE`] (2).
+    pub fn exit(&self) -> u8 {
+        exit::USAGE
+    }
+
+    pub(crate) fn unsupported(flag: impl Into<String>, hint: impl Into<String>) -> Self {
+        ToolError::Unsupported {
+            flag: flag.into(),
+            hint: hint.into(),
+        }
+    }
+
+    pub(crate) fn refused(what: impl Into<String>, reason: impl Into<String>) -> Self {
+        ToolError::Refused {
+            what: what.into(),
+            reason: reason.into(),
+        }
+    }
+
+    pub(crate) fn usage(msg: impl Into<String>) -> Self {
+        ToolError::Usage(msg.into())
+    }
+}
+
+/// Error from [`crate::session::Session::run_tool`]: the tool refused the call, or the
+/// session did. Nothing was applied either way.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ToolRunError {
+    #[error(transparent)]
+    Tool(#[from] ToolError),
+    #[error(transparent)]
+    Session(#[from] SessionError),
+}
+
+impl ToolRunError {
+    /// The exit code for this error (see [`session_exit`]).
+    pub fn exit(&self) -> u8 {
+        match self {
+            ToolRunError::Tool(e) => e.exit(),
+            ToolRunError::Session(e) => session_exit(e),
+        }
+    }
+}
+
+/// The exit code for a session error, per `docs/SESSIONS.md`:
+/// 3 refused (no right), 4 not found or live editing off, 2 bad input or rate limited,
+/// 1 a failure the caller can retry (stale, disk, store, a stale handle).
+pub fn session_exit(e: &SessionError) -> u8 {
+    match e {
+        SessionError::Forbidden { .. } => exit::REFUSED,
+        SessionError::NotFound(_)
+        | SessionError::Declined(_)
+        | SessionError::PackMismatch { .. } => exit::NOT_FOUND,
+        SessionError::NotJoined { .. }
+        | SessionError::RateLimited { .. }
+        | SessionError::BadParticipant(_)
+        | SessionError::BadPosition(_)
+        | SessionError::BadEdit(_)
+        | SessionError::NoApproval { .. }
+        | SessionError::BadApproval(_)
+        | SessionError::BadPath(_)
+        | SessionError::Doc(_) => exit::USAGE,
+        _ => exit::NO,
+    }
+}

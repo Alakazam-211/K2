@@ -107,6 +107,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/GitInitDialog/GitInitDialog.tsx',
   'components/GrokBots/GrokBotRows.tsx',
   'components/HeartbeatScheduleDialog/HeartbeatScheduleDialog.tsx',
+  // 0.46.5 Mark all as read: a Home row on the window's own server reads and
+  // marks through it (a row on another server goes through a room scope).
+  'components/Home/HomeSidebar.tsx',
   'components/MergeDialog/MergeDialog.tsx',
   // 0.46.0: the "Your account" setup prompt is about the window's own server.
   'components/OwnerAccountPrompt/OwnerAccountPrompt.tsx',
@@ -127,6 +130,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/AgentsSection.tsx',
   'components/Settings/sections/ApiTokensSection.tsx',
   'components/Settings/sections/api-keys-api.ts',
+  // 0.46.5 App phone pairing: an App's phone-app config is about the
+  // window's own server (Settings), like app-people-api below.
+  'components/Settings/sections/app-pairing-api.ts',
   // 0.46.3 App mobile access: the App's access list, role templates and
   // device sign-in settings are about the window's own server (Settings).
   'components/Settings/sections/app-people-api.ts',

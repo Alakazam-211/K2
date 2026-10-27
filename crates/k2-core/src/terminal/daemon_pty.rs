@@ -4046,7 +4046,13 @@ mod tests {
         // enrichment), taken under the crate-wide env lock. A parallel
         // test's HOME/env guard can't change what either child sees (a
         // mini and a Linux node saw HOME swapped between the two spawns).
-        let _env = crate::test_env::lock();
+        //
+        // 0.46.5 flipped the default to on (P67), so "switch off" is now the
+        // explicit `terminal.ptyd = "off"` setting, written under a temp
+        // HOME (the guard holds the crate-wide env lock).
+        let _home = crate::test_env::TempHome::new();
+        crate::app_settings::update(serde_json::json!({ "terminal": { "ptyd": "off" } })).expect("terminal.ptyd off");
+        assert_eq!(crate::terminal::ptyd::Switch::resolve(), crate::terminal::ptyd::Switch::Off, "the setting turns the switch off");
         let explicit: HashMap<String, String> = std::env::vars().collect();
         let dir = std::env::temp_dir().join(format!("k2-survive-off-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -4077,7 +4083,14 @@ mod tests {
             s.kill();
         }
         assert_eq!(dumps[0], dumps[1], "survive=true with the switch off changes nothing the child sees");
-        assert_eq!(crate::terminal::ptyd::status_line(), "off (switch_off)");
+        // The selection itself (status_line() reads a process-wide last
+        // reason that another test's survive spawn may have set first, and a
+        // switch-off spawn never logs one, P27).
+        assert_eq!(
+            crate::terminal::ptyd::select_backend(true, crate::terminal::ptyd::Switch::resolve(), true, || None, || Ok(())),
+            crate::terminal::ptyd::Backend::InProcess(crate::terminal::ptyd::Reason::SwitchOff),
+            "switch off: survive sessions stay in-process"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

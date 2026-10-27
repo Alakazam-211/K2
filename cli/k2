@@ -14348,7 +14348,13 @@ d=json.load(sys.stdin)
 verb="Would copy" if d.get("dryRun") else "Copied"
 added=d.get("added") or []
 a=d.get("appInfo") or {}
-print("%s the box login onto App %s for %d user(s)%s" % (verb, a.get("handle") or d.get("app",""), len(added), (": " + ", ".join(added)) if added else ""))
+n=len(added) if "added" in d else int(d.get("addedCount") or 0)
+print("%s the box login onto App %s for %d user(s)%s" % (verb, a.get("handle") or d.get("app",""), n, (": " + ", ".join(added)) if added else ""))
+for k in ("keptExistingCount","skippedOtherAppRoleCount","skippedOtherWorkspaceAgentCount"):
+    if d.get(k):
+        print("  %s: %d" % ({"keptExistingCount":"kept (an App grant already exists)","skippedOtherAppRoleCount":"skipped (role tagged for another App)","skippedOtherWorkspaceAgentCount":"skipped (another workspace'"'"'s agent added it)"}[k], d[k]))
+if d.get("note"):
+    print("  " + d["note"])
 for k in d.get("keptExisting") or []:
     print("  kept %s: an App grant already exists (%s)" % (k.get("username",""), "enabled" if k.get("enabled") else "disabled"))
 for u in d.get("skippedOtherAppRole") or []:

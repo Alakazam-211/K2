@@ -110,7 +110,7 @@ describe('threadDrawerLine', () => {
         children: [
           { kind: 'subagent', state: 'running', label: 'Explore', since: NOW - 30_000 },
           { kind: 'subagent', state: 'waiting', label: 'code-reviewer', since: NOW - 20_000 },
-          { kind: 'subagent', state: 'done', label: null, since: NOW - 10_000 },
+          { kind: 'subagent', state: 'owed', label: null, since: NOW - 10_000 },
         ],
       }),
       NOW,

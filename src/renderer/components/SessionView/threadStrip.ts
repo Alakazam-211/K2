@@ -107,10 +107,10 @@ export function tallyBits(t: ThreadTurnTally): string[] {
 export function childText(c: ThreadTurnChild): string {
   if (c.kind === 'subagent') {
     const name = c.label ? `${c.label} subagent` : 'A subagent'
-    const state = c.state === 'waiting' ? 'waiting on a prompt' : c.state === 'done' ? 'done' : 'running'
+    const state = c.state === 'waiting' ? 'waiting on a prompt' : c.state === 'owed' ? 'done' : 'running'
     return `${name} ${state}`
   }
-  const name = c.label ?? (c.kind === 'monitor' ? 'A monitor' : 'A background task')
+  const name = c.label ?? (c.kind === 'monitor' ? 'A monitor' : c.kind === 'task' ? 'A task' : 'A background task')
   return `${name} in the background`
 }
 
@@ -123,7 +123,7 @@ export function childItems(turn: ThreadTurn): StripDetailItem[] {
       key: c.kind === 'subagent' ? 'subagents' : 'background',
       text: childText(c),
     }))
-    const listedDone = turn.children.filter((c) => c.kind === 'subagent' && c.state === 'done').length
+    const listedDone = turn.children.filter((c) => c.kind === 'subagent' && c.state === 'owed').length
     const done = turn.subagentsDone - listedDone
     if (done > 0) named.push({ key: 'subagents', text: `${plural(done, 'subagent', 'subagents')} done` })
     return named

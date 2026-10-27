@@ -398,6 +398,15 @@ export function useOverlayThread(opts: {
             }
             return
           }
+          if (frame.collection === 'activity_reset') {
+            // 0.46.5 (review B1): the socket fell behind and activity
+            // frames were dropped (an end among them, maybe). The daemon
+            // sends the turn as it is now, or null: replace ours with it.
+            activityFrames += 1
+            const receivedAt = Date.now()
+            setTurn((prev) => applyActivityCatchUp(prev, { turn: frame.activity ?? null }, receivedAt))
+            return
+          }
           if (frame.collection === 'activity') {
             activityFrames += 1
             const receivedAt = Date.now()

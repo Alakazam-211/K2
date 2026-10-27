@@ -765,10 +765,12 @@ export interface ThreadTurnEnd {
  *  monitor. The daemon picks the label (a subagent's type, a shell's
  *  redacted command line, a task type); the renderer only says it. */
 export interface ThreadTurnChild {
-  kind: 'subagent' | 'shell' | 'monitor'
-  /** `done`: a subagent that finished and whose result the agent hasn't
+  /** `task`: any other background task the CLI reports (shown, never
+   *  holding the turn). */
+  kind: 'subagent' | 'shell' | 'monitor' | 'task'
+  /** `owed`: a subagent that finished and whose result the agent hasn't
    *  taken yet. */
-  state: 'running' | 'waiting' | 'done'
+  state: 'running' | 'waiting' | 'owed'
   label: string | null
   /** Server ms. */
   since: number
@@ -800,6 +802,16 @@ export interface ThreadTurn {
    *  from an older server, whose `children` phase only ever followed a
    *  reply. */
   replied?: boolean
+  /** Frame schema 2 (0.46.5, additive; absent from an older server). */
+  schema?: number
+  /** The tool step's kind while `phase` is `tool`, else null. */
+  stepKind?: 'read' | 'search' | 'cmd' | 'edit' | 'web' | 'subagent' | 'tool' | null
+  /** The live children by kind. */
+  childCounts?: { subagent: number; shell: number; monitor: number; task: number }
+  /** Why the turn is still open; null while delivering. */
+  openBecause?: 'lead' | 'children' | 'waiting' | 'stale' | null
+  /** Server ms: the agent's last evidence of any kind. */
+  evidenceAt?: number | null
   tally: ThreadTurnTally
   /** Phase `waiting`: what the agent is stuck on. Null otherwise (and from
    *  a server that doesn't say). */
@@ -823,8 +835,10 @@ function count(v: unknown): number {
   return n !== null && n > 0 ? Math.floor(n) : 0
 }
 
-const CHILD_KINDS: readonly ThreadTurnChild['kind'][] = ['subagent', 'shell', 'monitor']
-const CHILD_STATES: readonly ThreadTurnChild['state'][] = ['running', 'waiting', 'done']
+const CHILD_KINDS: readonly ThreadTurnChild['kind'][] = ['subagent', 'shell', 'monitor', 'task']
+const CHILD_STATES: readonly ThreadTurnChild['state'][] = ['running', 'waiting', 'owed']
+const STEP_KINDS: readonly NonNullable<ThreadTurn['stepKind']>[] = ['read', 'search', 'cmd', 'edit', 'web', 'subagent', 'tool']
+const OPEN_BECAUSE: readonly NonNullable<ThreadTurn['openBecause']>[] = ['lead', 'children', 'waiting', 'stale']
 
 /** The frame's `children`, or undefined when it has none (an older
  *  server). Unknown kinds and states are dropped, never guessed. */
@@ -879,6 +893,16 @@ export function coerceThreadTurn(raw: unknown, receivedAt: number): ThreadTurn |
     background: count(a.background),
     ...(Array.isArray(a.children) ? { children: coerceChildren(a.children, startedAt) } : {}),
     ...(typeof a.replied === 'boolean' ? { replied: a.replied } : {}),
+    ...(finite(a.schema) !== null ? { schema: finite(a.schema) as number } : {}),
+    ...('stepKind' in a ? { stepKind: STEP_KINDS.find((k) => k === a.stepKind) ?? null } : {}),
+    ...(a.childCounts && typeof a.childCounts === 'object'
+      ? (() => {
+          const c = a.childCounts as Record<string, unknown>
+          return { childCounts: { subagent: count(c.subagent), shell: count(c.shell), monitor: count(c.monitor), task: count(c.task) } }
+        })()
+      : {}),
+    ...('openBecause' in a ? { openBecause: OPEN_BECAUSE.find((k) => k === a.openBecause) ?? null } : {}),
+    ...('evidenceAt' in a ? { evidenceAt: finite(a.evidenceAt) } : {}),
     tally: { read: count(t.read), search: count(t.search), cmd: count(t.cmd), edit: count(t.edit) },
     waitingOn: a.waitingOn === 'permission' || a.waitingOn === 'question' ? a.waitingOn : null,
     end,

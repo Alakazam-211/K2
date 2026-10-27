@@ -471,6 +471,24 @@ describe('Thread sync: the working strip turn (S7)', () => {
     expect(ids(view.result.current.items)).toEqual(['a1', 'a2'])
   })
 
+  // 0.46.5 (review B1): the daemon dropped frames on a lagging socket,
+  // the end among them, and the bar stuck on "working". Now it sends an
+  // `activity_reset` with the turn as it is now (or null).
+  it('an activity_reset replaces a stuck turn: null clears it, a body replaces it', async () => {
+    write('a1', 'rosson', 'run the tests', 'compose')
+    const { view, sock } = await mountLive('conv-1')
+    await waitFor(() => expect(server.turnAsks).toHaveLength(1))
+    act(() => sock.activity(body({ rev: 4, state: 'monitoring', phase: 'children', line: null })))
+    expect(view.result.current.turn?.state).toBe('monitoring')
+    // The end frame was lost; the reset says none is running.
+    act(() => sock.onmessage?.({ data: JSON.stringify({ collection: 'activity_reset', seq: 0, id: null, activity: null }) }))
+    expect(view.result.current.turn).toBeNull()
+    // A reset with a live turn puts it back as it is now.
+    const now = body({ turnId: 'turn-2', rev: 1, phase: 'thinking', line: null })
+    act(() => sock.onmessage?.({ data: JSON.stringify({ collection: 'activity_reset', seq: 0, id: 'turn-2', activity: now }) }))
+    expect([view.result.current.turn?.turnId, view.result.current.turn?.phase]).toEqual(['turn-2', 'thinking'])
+  })
+
   it('a catch-up answer older than a frame that arrived meanwhile is dropped', async () => {
     write('a1', 'rosson', 'run the tests', 'compose')
     let release!: () => void

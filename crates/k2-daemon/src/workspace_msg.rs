@@ -897,6 +897,7 @@ pub fn deliver_live(
 }
 
 /// Same as [`deliver_live`] but stamps chatter `via` (`msg` | `talk` | `inbox` | `v1`).
+/// `compose`, `thread` and `chat` (the Sew delivery hub) record no Chatter line.
 pub fn deliver_live_with_via(
     workspace_token: &str,
     text: &str,
@@ -1052,7 +1053,9 @@ fn deliver_live_inner(
         if result.success {
             // Human Thread compose / card inject already stored on the
             // Thread collection — do not also stamp Chatter (that's k2 msg).
-            if via != "compose" && via != "thread" {
+            // S31 `via = chat` (the Sew delivery hub): chat text never goes
+            // on disk, so no Chatter line either.
+            if via != "compose" && via != "thread" && via != "chat" {
                 let (chatter_from, delivery_id, summary) = match receipt {
                     Some(r) => (r.from, Some(r.delivery_id), r.summary),
                     None => (from, None, None),

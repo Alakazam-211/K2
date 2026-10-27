@@ -15,11 +15,19 @@
 //! - [`routes_manage`]: `/cli/sew/chat/manage/*`, community management
 //!   through act-as (Manage Sew + level manage, then Sew S12). K20.
 //!
+//! - [`hub`]: the delivery hub (S31 K22/K23): one poller per agent
+//!   workspace with chat access, Sew's deliveries typed into its terminal
+//!   (`via = chat`).
+//! - [`routes_hub`]: the hub's agent verbs (`unread`, `mark-read`,
+//!   `follow`, `prefs`, `wait` without an address) and the admin
+//!   `/cli/sew/admin/deliveries*` (K24).
+//!
 //! The data model (levels, approval modes, limits, the store) is
 //! `k2_core::sew_chat` (migration 0234).
 
 #[cfg(unix)]
 pub mod client;
+pub mod hub;
 pub mod routes;
 pub mod routes_admin;
 pub mod routes_approvals;

@@ -21,6 +21,8 @@
 
 use std::sync::{Arc, RwLock};
 
+use k2_core::sew_chat::hub;
+
 /// Who Sew acts as, and on whose request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActAs {
@@ -231,6 +233,19 @@ pub struct NewSpace {
     pub idempotency_key: String,
 }
 
+/// One channel's read state as the agent sees it (Sew S14).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadState {
+    pub channel_id: String,
+    /// A message by someone else is past the agent's read cursor.
+    pub unread: bool,
+    /// Unread mentions of the agent.
+    pub mentions: u32,
+    pub last_read_id: Option<String>,
+    pub last_message_id: Option<String>,
+    pub muted: bool,
+}
+
 /// Every Sew call `k2 chat` makes. All act as `a`, except
 /// [`SewChat::space_create`] (a mgmt call that names `a` as a manager and
 /// carries `a.actor` as `Sew-Actor`).
@@ -292,6 +307,22 @@ pub trait SewChat: Send + Sync {
     /// Sew mgmt `POST /mgmt/v1/spaces/create` (SW11) with the acting agent
     /// as a manager. Sew refuses an agent owner (400).
     fn space_create(&self, a: &ActAs, s: &NewSpace) -> Result<Space, SewError>;
+
+    // ── the delivery hub and its verbs (S31 K22–K24) ─────────────────
+    /// One long-poll of the agent's delivery feed (`GET /mgmt/v1/agents/
+    /// {member_id}/deliveries`, a mgmt call; `a` names whose feed it is).
+    /// A 410 `resync_required` is [`hub::Step::Resync`], never an error.
+    fn deliveries(&self, a: &ActAs, member_id: &str, after: u64, timeout_ms: u64) -> Result<hub::Step, SewError>;
+    /// The agent's read states (`GET /api/v1/me/read_states`).
+    fn read_states(&self, a: &ActAs) -> Result<Vec<ReadState>, SewError>;
+    /// Mark these channels read up to their newest message (one channel:
+    /// `channels/{id}/ack`; several: the bulk ack).
+    fn mark_read(&self, a: &ActAs, channel_ids: &[String]) -> Result<(), SewError>;
+    /// Follow a channel (Sew notify level `all`: its new messages become
+    /// deliveries) or stop (`level` back to inherit).
+    fn follow_channel(&self, a: &ActAs, channel_id: &str, on: bool) -> Result<(), SewError>;
+    /// Follow or unfollow a thread (`threads/{root}/follow|unfollow`).
+    fn follow_thread(&self, a: &ActAs, root_id: &str, on: bool) -> Result<(), SewError>;
 }
 
 /// `msg_<sew id>` (the CLI's id form).

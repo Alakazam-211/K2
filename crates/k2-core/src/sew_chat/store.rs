@@ -84,6 +84,8 @@ pub fn set_access(conn: &Connection, a: &Access) -> Result<(), String> {
         params![a.project_id, a.space_id, a.space_slug, a.level.as_str(), a.approval.as_str(), a.updated_by, a.updated_at],
     )
     .map_err(db)?;
+    // S31: a first grant starts the workspace's delivery hub.
+    super::hub::kick();
     Ok(())
 }
 
@@ -105,6 +107,8 @@ pub fn revoke_access(conn: &Connection, project_id: &str, space_id: &str, by: &s
         decide_in(&tx, id, &d, now).map_err(|e| format!("{e:?}"))?;
     }
     tx.commit().map_err(db)?;
+    // S31: the last revoke stops the workspace's delivery hub.
+    super::hub::kick();
     Ok(ids.len())
 }
 

@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use super::sew::*;
+use k2_core::sew_chat::hub;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Call {
@@ -71,6 +72,16 @@ struct State {
     timeouts: HashMap<(String, String), i64>,
     /// Space creates: (slug, owner, manager external id, Sew-Actor).
     space_creates: Vec<(String, String, String, Option<String>)>,
+    /// S31: member id → its delivery log (seq, entry JSON), oldest first.
+    feed: HashMap<String, Vec<(u64, serde_json::Value)>>,
+    /// Member id → the log's floor (entries at or below are trimmed).
+    feed_floor: HashMap<String, u64>,
+    /// The install's sync epoch.
+    epoch: Option<String>,
+    /// (member, channel) → the last message read.
+    last_read: HashMap<(String, String), u64>,
+    /// (member, channel): notify level `all` (a channel follow).
+    channel_follows: HashSet<(String, String)>,
 }
 
 #[derive(Default)]
@@ -265,6 +276,69 @@ impl FakeSew {
     pub fn follow(&self, member: &str, root: &str) {
         let mut s = self.s.lock().unwrap();
         s.messages.iter_mut().find(|m| m.m.id == root).expect("root").followers.insert(member.into());
+    }
+
+    // ── S31 delivery feed ────────────────────────────────────────────
+
+    /// Append a delivery of message `msg_id` to `member`'s feed (Sew writes
+    /// these itself). `place` None = an older Sew that sends no place;
+    /// `extra` overrides or adds message fields (KM1, on behalf…). Returns
+    /// the entry's seq.
+    pub fn deliver(&self, member: &str, reason: &str, msg_id: &str, place: Option<&str>, extra: serde_json::Value) -> u64 {
+        let mut s = self.s.lock().unwrap();
+        let f = s.messages.iter().find(|m| m.m.id == msg_id).expect("known message");
+        let m = f.m.clone();
+        let ch = s.channels.iter().find(|c| c.c.id == m.channel_id).expect("known channel").c.clone();
+        let addr = match (&ch.space_slug, ch.kind.is_dm()) {
+            (Some(sp), false) => format!("{sp}/#{}", ch.slug),
+            _ => format!("dm/@{}", m.author_username),
+        };
+        let mut msg = serde_json::json!({
+            "id": m.id, "channel_id": m.channel_id, "author_id": m.author_id,
+            "author_display_name": m.author_username.to_uppercase(), "author_username": m.author_username,
+            "author_kind": if m.author_is_agent { "agent" } else { "person" },
+            "addr": addr, "kind": "text", "body": m.body, "created_at": "2026-10-27T10:00:00.000Z",
+        });
+        if let Some(sp) = &ch.space_id {
+            msg["space_id"] = sp.clone().into();
+        }
+        if let Some(r) = &m.reply_to {
+            msg["thread_root_id"] = r.clone().into();
+        }
+        if let Some(p) = place {
+            msg["place"] = p.into();
+        }
+        for (k, v) in extra.as_object().expect("extra is an object") {
+            msg[k] = v.clone();
+        }
+        let log = s.feed.entry(member.to_string()).or_default();
+        let seq = log.last().map(|(q, _)| q + 1).unwrap_or(1);
+        log.push((seq, serde_json::json!({"seq": seq, "at": "2026-10-27T10:00:00.000Z", "reason": reason, "message": msg})));
+        seq
+    }
+
+    /// The feed head of `member` (0 = empty).
+    pub fn feed_head(&self, member: &str) -> u64 {
+        self.s.lock().unwrap().feed.get(member).and_then(|l| l.last()).map(|(q, _)| *q).unwrap_or(0)
+    }
+
+    /// Trim `member`'s feed up to `floor` (a cursor below it gets 410
+    /// behind_floor).
+    pub fn trim_feed(&self, member: &str, floor: u64) {
+        self.s.lock().unwrap().feed_floor.insert(member.to_string(), floor);
+    }
+
+    /// Change the install's sync epoch (a restore).
+    pub fn set_epoch(&self, e: &str) {
+        self.s.lock().unwrap().epoch = Some(e.to_string());
+    }
+
+    pub fn follows_channel(&self, member: &str, channel_id: &str) -> bool {
+        self.s.lock().unwrap().channel_follows.contains(&(member.to_string(), channel_id.to_string()))
+    }
+
+    pub fn follows_thread(&self, member: &str, root: &str) -> bool {
+        self.s.lock().unwrap().messages.iter().any(|m| m.m.id == root && m.followers.contains(member))
     }
 
     pub fn calls(&self) -> Vec<Call> {
@@ -679,5 +753,87 @@ impl SewChat for FakeSew {
         s.managers.insert(id, [me].into_iter().collect());
         s.space_creates.push((n.slug.clone(), n.owner_external_id.clone(), a.external_id(), a.actor.clone()));
         Ok(sp)
+    }
+
+    fn deliveries(&self, a: &ActAs, member_id: &str, after: u64, timeout_ms: u64) -> Result<hub::Step, SewError> {
+        assert!(timeout_ms <= k2_core::sew_chat::SEW_WAIT_MS_MAX, "timeout_ms over Sew's cap: {timeout_ms}");
+        let mut s = self.s.lock().unwrap();
+        let me = self.enter(&mut s, "deliveries", a, None, &format!("{member_id}>{after}"))?;
+        assert_eq!(me, member_id, "the hub reads its own agent's feed only");
+        let log = s.feed.get(member_id).cloned().unwrap_or_default();
+        let head = log.last().map(|(q, _)| *q).unwrap_or(0);
+        let floor = s.feed_floor.get(member_id).copied().unwrap_or(0);
+        if after < floor {
+            return Ok(hub::Step::Resync { reason: "behind_floor".into(), head, sync_epoch: s.epoch.clone() });
+        }
+        if after > head {
+            return Ok(hub::Step::Resync { reason: "ahead_of_head".into(), head, sync_epoch: s.epoch.clone() });
+        }
+        let entries: Vec<serde_json::Value> = log.iter().filter(|(q, _)| *q > after).take(100).map(|(_, e)| e.clone()).collect();
+        let next = entries.last().and_then(|e| e["seq"].as_u64()).unwrap_or(head.max(after));
+        let mut page = serde_json::json!({
+            "entries": entries, "head": head, "next_after": next, "has_more": next < head,
+        });
+        if let Some(e) = &s.epoch {
+            page["sync_epoch"] = e.clone().into();
+        }
+        hub::decode_page(&page).map_err(|e| SewError::new(502, "bad_response", &e))
+    }
+
+    fn read_states(&self, a: &ActAs) -> Result<Vec<ReadState>, SewError> {
+        let mut s = self.s.lock().unwrap();
+        let me = self.enter(&mut s, "read_states", a, None, "")?;
+        let mut out = Vec::new();
+        for c in s.channels.iter().filter(|c| c.visible_to.as_ref().is_none_or(|v| v.contains(&me))) {
+            let read = s.last_read.get(&(me.clone(), c.c.id.clone())).copied().unwrap_or(0);
+            let msgs: Vec<&FMessage> = s.messages.iter().filter(|m| m.m.channel_id == c.c.id).collect();
+            let newer: Vec<&&FMessage> =
+                msgs.iter().filter(|m| m.m.author_id != me && m.m.id.parse::<u64>().unwrap() > read).collect();
+            out.push(ReadState {
+                channel_id: c.c.id.clone(),
+                unread: !newer.is_empty(),
+                mentions: newer.iter().filter(|m| m.mentions.contains(&me)).count() as u32,
+                last_read_id: (read > 0).then(|| read.to_string()),
+                last_message_id: msgs.last().map(|m| m.m.id.clone()),
+                muted: false,
+            });
+        }
+        Ok(out)
+    }
+
+    fn mark_read(&self, a: &ActAs, channel_ids: &[String]) -> Result<(), SewError> {
+        let mut s = self.s.lock().unwrap();
+        let me = self.enter(&mut s, "mark_read", a, None, &channel_ids.join(","))?;
+        for c in channel_ids {
+            Self::visible(&s, &me, c)?;
+            let newest = s.messages.iter().filter(|m| &m.m.channel_id == c).filter_map(|m| m.m.id.parse::<u64>().ok()).max();
+            s.last_read.insert((me.clone(), c.clone()), newest.unwrap_or(0));
+        }
+        Ok(())
+    }
+
+    fn follow_channel(&self, a: &ActAs, channel_id: &str, on: bool) -> Result<(), SewError> {
+        let mut s = self.s.lock().unwrap();
+        let me = self.enter(&mut s, if on { "follow_channel" } else { "unfollow_channel" }, a, None, channel_id)?;
+        Self::visible(&s, &me, channel_id)?;
+        if on {
+            s.channel_follows.insert((me, channel_id.into()));
+        } else {
+            s.channel_follows.remove(&(me, channel_id.to_string()));
+        }
+        Ok(())
+    }
+
+    fn follow_thread(&self, a: &ActAs, root_id: &str, on: bool) -> Result<(), SewError> {
+        let mut s = self.s.lock().unwrap();
+        let me = self.enter(&mut s, if on { "follow_thread" } else { "unfollow_thread" }, a, None, root_id)?;
+        Self::find_msg(&s, &me, root_id)?;
+        let f = s.messages.iter_mut().find(|m| m.m.id == root_id).expect("found above");
+        if on {
+            f.followers.insert(me);
+        } else {
+            f.followers.remove(&me);
+        }
+        Ok(())
     }
 }

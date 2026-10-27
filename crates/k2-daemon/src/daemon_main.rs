@@ -1741,6 +1741,12 @@ async fn async_main() {
     // federation is off or every queue is empty.
     let _federation_drain_handle = federation_drain::spawn();
 
+    // Sew S31 delivery hub: one poller per agent workspace with chat
+    // access types its Sew deliveries into its terminal (`via = chat`).
+    // Idle while Sew chat is off (always on a Mac); kicked by chat grant
+    // and access changes.
+    let _sew_hub_handle = crate::sew_chat::hub::spawn();
+
     // Sew S27 grant hook: delivers `tool_outbox` rows (written in the same
     // skin.db transaction as each chat grant change) to Sew's mgmt socket,
     // and runs the reconcile sweep. Its FIRST pass is the boot pass, so

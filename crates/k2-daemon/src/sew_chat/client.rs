@@ -69,8 +69,10 @@ use sew_client::{Client, ClientError, MgmtClient, RequestOptions};
 
 use super::sew::{
     ActAs, Channel, ChannelKind, ChannelPerm, Me, MemberLookup, MemberRef, Message, NewMessage, NewSpace, Overwrite,
-    Page, Role, SewChat, SewError, Space,
+    Page, ReadState, Role, SewChat, SewError, Space,
 };
+use k2_core::sew_chat::hub;
+use sew_client::proto::api::read_state::ReadState as PReadState;
 
 /// `sew_chat_settings` key naming K2's default Space (a Space slug). Sew
 /// 0.3.0 has no such notion; DMs outside every Space are governed by it.
@@ -707,6 +709,81 @@ impl SewChat for SewClientChat {
         })?;
         self.spaces.lock().unwrap_or_else(|p| p.into_inner()).remove(&a.external_id());
         Ok(Space { id: resp.space_id.to_string(), slug: resp.slug.as_str().to_string(), name: resp.name })
+    }
+
+    // ── the delivery hub (S31) ───────────────────────────────────────
+
+    fn deliveries(&self, _a: &ActAs, member_id: &str, after: u64, timeout_ms: u64) -> R<hub::Step> {
+        let id = parse_id(member_id)?;
+        let timeout_ms = timeout_ms.min(WAIT_MS_MAX);
+        self.run(move |m| async move {
+            let path = r::MGMT_AGENT_DELIVERIES.replace("{member_id}", &id.to_string());
+            let q = [("after", after.to_string()), ("timeout_ms", timeout_ms.to_string())];
+            let opts = RequestOptions::new().timeout(Duration::from_millis(timeout_ms) + Duration::from_secs(10));
+            match m.client().call::<_, (), Value>(reqwest::Method::GET, &path, Some(&q[..]), None, opts).await {
+                Ok(resp) => hub::decode_page(&resp.value).map_err(|e| SewError::new(502, "bad_response", &e)),
+                Err(e) => match e.api().and_then(|f| f.resync()) {
+                    // Sew G2: jump to the head it names (the floor when it
+                    // sends none); never re-deliver.
+                    Some(info) => Ok(hub::Step::Resync {
+                        reason: info.reason.unwrap_or_else(|| "behind_floor".into()),
+                        head: info.head.unwrap_or(info.floor),
+                        sync_epoch: info.sync_epoch,
+                    }),
+                    None => Err(sew_error(e)),
+                },
+            }
+        })
+    }
+
+    fn read_states(&self, a: &ActAs) -> R<Vec<ReadState>> {
+        let p: PPage<PReadState> = self.get_as(a, r::ME_READ_STATES.to_string(), vec![])?;
+        Ok(p.items
+            .iter()
+            .map(|x| ReadState {
+                channel_id: x.channel_id.to_string(),
+                unread: x.unread,
+                mentions: x.mention_count,
+                last_read_id: x.last_read_id.map(|i| i.to_string()),
+                last_message_id: x.last_message_id.map(|i| i.to_string()),
+                muted: x.muted,
+            })
+            .collect())
+    }
+
+    fn mark_read(&self, a: &ActAs, channel_ids: &[String]) -> R<()> {
+        match channel_ids {
+            [] => Ok(()),
+            [one] => {
+                let id = parse_id(one)?;
+                let _: Value = self.post_plain(a, r::with_id(r::CHANNEL_ACK, id), json!({}))?;
+                Ok(())
+            }
+            many => {
+                for chunk in many.chunks(500) {
+                    let items: Vec<Value> = chunk
+                        .iter()
+                        .map(|c| parse_id(c).map(|i| json!({ "channel_id": i.to_string() })))
+                        .collect::<R<_>>()?;
+                    let _: Value = self.post_plain(a, r::ME_READ_STATES_ACK.to_string(), json!({ "channels": items }))?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn follow_channel(&self, a: &ActAs, channel_id: &str, on: bool) -> R<()> {
+        let id = parse_id(channel_id)?;
+        let level = if on { json!("all") } else { Value::Null };
+        let _: Value = self.post_plain(a, r::with_id(r::CHANNEL_NOTIFY_SET, id), json!({ "level": level }))?;
+        Ok(())
+    }
+
+    fn follow_thread(&self, a: &ActAs, root_id: &str, on: bool) -> R<()> {
+        let id = parse_id(root_id)?;
+        let path = if on { r::THREAD_FOLLOW } else { r::THREAD_UNFOLLOW };
+        let _: Value = self.post_plain(a, r::with_id(path, id), json!({}))?;
+        Ok(())
     }
 }
 

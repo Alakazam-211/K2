@@ -301,7 +301,39 @@ pub fn approved_same(
         )
         .optional()?;
     let same = |r: &AppRequest| !keys.is_empty() && keys.iter().all(|k| r.body.get(*k).is_some() && r.body.get(*k) == body.get(*k));
-    Ok(latest.filter(same))
+    Ok(latest.filter(|r| same(r) && standing_revoked(r).is_none()))
+}
+
+/// How long an approved run stands for identical re-runs (NSI papercut
+/// 13, Rosson's rule via K2 2026-10-27): 30 days from the decision.
+pub const STANDING_RUN_SECS: i64 = 30 * 86_400;
+
+/// `{by, at}` when the owner revoked this approval's standing for
+/// identical re-runs (`result.standingRevoked`). The decision itself stays
+/// `approved`: it was approved and it applied.
+pub fn standing_revoked(r: &AppRequest) -> Option<&Value> {
+    r.result.as_ref().and_then(|v| v.get("standingRevoked")).filter(|v| !v.is_null())
+}
+
+/// Revoke an approved request's standing for identical re-runs: the next
+/// identical run asks the owner again. Only an approved `publish_run`
+/// stands, so only that kind revokes. Errors: `request_not_found`,
+/// `not_standing` (another kind, not approved), `already_revoked`.
+pub fn revoke_standing(conn: &Connection, id: &str, by: &str, now: i64) -> Result<AppRequest, &'static str> {
+    let r = get(conn, id).map_err(|_| "request_not_found")?.ok_or("request_not_found")?;
+    if r.kind != KIND_PUBLISH_RUN || r.status != STATUS_APPROVED {
+        return Err("not_standing");
+    }
+    if standing_revoked(&r).is_some() {
+        return Err("already_revoked");
+    }
+    conn.execute(
+        "UPDATE app_widenings SET result_json = json_set(COALESCE(result_json, '{}'), '$.standingRevoked', \
+         json_object('by', ?2, 'at', ?3)) WHERE id = ?1 AND status = 'approved'",
+        params![r.id, by, now],
+    )
+    .map_err(|_| "request_not_found")?;
+    get(conn, &r.id).ok().flatten().ok_or("request_not_found")
 }
 
 /// The newest pending request of `kind` on a runtime App.
@@ -517,5 +549,38 @@ pub(crate) mod tests {
         assert_eq!(gone.iter().map(|r| r.id.clone()).collect::<Vec<_>>(), vec![g.id.clone()]);
         assert!(expire_due(&c, 300 + TTL_SECS).unwrap().is_empty());
         assert_eq!(decide(&c, &g.id, STATUS_WITHDRAWN, "agent:nsi", None, None, 300 + TTL_SECS + 1).unwrap_err(), "not_pending");
+    }
+
+    /// NSI papercut 13: the latest approved run with the same fingerprint
+    /// stands; a different value, a later different approval, or a revoke
+    /// ends it.
+    #[test]
+    fn the_latest_approved_run_stands_for_its_exact_fingerprint_until_revoked() {
+        let c = conn();
+        let keys = ["cmd", "port"];
+        let a = serde_json::json!({"cmd": "serve", "port": 8080, "probeTimeout": null});
+        let r = create(&c, &new(KIND_PUBLISH_RUN, "sales", &a, "agent:nsi"), 100).unwrap();
+        assert!(approved_same(&c, KIND_PUBLISH_RUN, "ws-1", "sales", &a, &keys).unwrap().is_none(), "pending stands for nothing");
+        decide(&c, &r.id, STATUS_APPROVED, "owner", Some("local-auth"), None, 110).unwrap();
+        set_result(&c, &r.id, STATUS_APPROVED, &serde_json::json!({"name": "sales"})).unwrap();
+        let same = serde_json::json!({"cmd": "serve", "port": 8080, "probeTimeout": "5000ms"});
+        assert_eq!(approved_same(&c, KIND_PUBLISH_RUN, "ws-1", "sales", &same, &keys).unwrap().map(|x| x.id), Some(r.id.clone()));
+        for other in [serde_json::json!({"cmd": "serve", "port": 9090}), serde_json::json!({"cmd": "serve --all", "port": 8080})] {
+            assert!(approved_same(&c, KIND_PUBLISH_RUN, "ws-1", "sales", &other, &keys).unwrap().is_none(), "{other}");
+        }
+        assert!(approved_same(&c, KIND_PUBLISH_RUN, "ws-1", "billing", &a, &keys).unwrap().is_none(), "another App");
+        assert!(approved_same(&c, KIND_PUBLISH_RUN, "ws-2", "sales", &a, &keys).unwrap().is_none(), "another workspace");
+        assert!(approved_same(&c, KIND_PUBLISH_RUN, "ws-1", "sales", &a, &[]).unwrap().is_none(), "no fingerprint, no standing");
+
+        // Revoked: the decision stays approved; the standing ends, once.
+        let rv = revoke_standing(&c, &r.id, "owner", 200).unwrap();
+        assert_eq!(rv.status, STATUS_APPROVED);
+        assert_eq!(standing_revoked(&rv).cloned(), Some(serde_json::json!({"by": "owner", "at": 200})));
+        assert_eq!(rv.result.as_ref().and_then(|v| v.get("name")).cloned(), Some(serde_json::json!("sales")), "the result is kept");
+        assert!(approved_same(&c, KIND_PUBLISH_RUN, "ws-1", "sales", &a, &keys).unwrap().is_none());
+        assert_eq!(revoke_standing(&c, &r.id, "owner", 201).unwrap_err(), "already_revoked");
+        let cfg = create(&c, &new(KIND_CONFIG, "sales", &a, "agent:nsi"), 100).unwrap();
+        assert_eq!(revoke_standing(&c, &cfg.id, "owner", 202).unwrap_err(), "not_standing");
+        assert_eq!(revoke_standing(&c, "w_nope", "owner", 202).unwrap_err(), "request_not_found");
     }
 }

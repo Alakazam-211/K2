@@ -195,6 +195,9 @@ pub const ROUTES: &[Route] = &[
     // in person (handler: owner token or Owner login + a vault confirm
     // bound to the request, never a passport).
     get("/cli/app/approvals", Member),
+    // 0.46.6 (NSI papercut 13): the owner withdraws an approved run's
+    // standing for identical re-runs.
+    post("/cli/app/approvals/revoke", Owner),
     post("/cli/app/approve", Owner),
     // S19 (0.46.1 door): the per-call audit of an App (a passport: its own
     // workspace's Apps).

@@ -174,8 +174,62 @@ async fn three_identical_publish_runs_take_one_approval_and_a_change_asks_again(
     assert_eq!((r.status, r.json()["kind"].clone()), (202, json!("publish_run")), "a new command is held: {}", r.body);
     assert_eq!(publish_run_requests(&ws, "rerun-sales").len(), 3, "each change is its own request");
 
+    // The owner revokes the standing approval (an agent can't): the next
+    // identical run is held again.
+    let r = post(d.port, "/cli/app/approvals/revoke", &agent, json!({"request": first})).await;
+    assert_eq!(r.status, 403, "an agent never revokes: {}", r.body);
+    assert_eq!(publish_run_requests(&ws, "rerun-sales").len(), 3);
+    let r = post(d.port, "/cli/app/approvals/revoke", OWNER, json!({"request": first})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["revoked"][0]["id"], first.as_str(), "{}", r.body);
+    let r = post(d.port, "/cli/app/approvals/revoke", OWNER, json!({"request": first})).await;
+    assert_eq!(r.status, 409, "once: {}", r.body);
+    let r = post(d.port, "/cli/publish/run", &agent, run(port)).await;
+    assert_eq!((r.status, r.json()["kind"].clone()), (202, json!("publish_run")), "revoked: asks again: {}", r.body);
+    let again = r.json()["request"]["id"].as_str().expect("held id").to_string();
+    assert_ne!(again, first);
+
+    // Approved again, it stands, with its lapse date (30 days)…
+    let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": again, "confirmToken": confirm(&again)})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (200, json!("approved")), "{}", r.body);
+    let r = post(d.port, "/cli/publish/stop", &agent, json!({"name": "rerun-sales"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/publish/run", &agent, run(port)).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    assert_eq!(v["approvedRun"]["request"], again.as_str(), "{v}");
+    let decided: i64 = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT decided_at FROM app_widenings WHERE id = ?1", [&again], |r| r.get(0)).expect("decided_at")
+    };
+    assert_eq!(v["approvedRun"]["expiresAt"].as_i64(), Some(decided + 30 * 86_400), "{v}");
+
+    // … and lapses after 30 days.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let n = conn.execute("UPDATE app_widenings SET decided_at = decided_at - 31 * 86400 WHERE id = ?1", [&again]).expect("backdate");
+        assert_eq!(n, 1);
+        // The service is older still, so only the 30 days can end it.
+        let n = conn
+            .execute(
+                "UPDATE published_services SET created_at = created_at - 32 * 86400 WHERE project_id = ?1 AND name = 'rerun-sales'",
+                [&ws.id],
+            )
+            .expect("backdate the service");
+        assert_eq!(n, 1);
+    }
+    let r = post(d.port, "/cli/publish/stop", &agent, json!({"name": "rerun-sales"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/publish/run", &agent, run(port)).await;
+    assert_eq!((r.status, r.json()["kind"].clone()), (202, json!("publish_run")), "lapsed: asks again: {}", r.body);
+
     let r = post(d.port, "/cli/publish/rm", OWNER, json!({"name": "rerun-sales", "project": ws.id})).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    // Removed, the App's approvals stand for nothing: the same run is new.
+    let r = post(d.port, "/cli/publish/run", &agent, run(port)).await;
+    assert_eq!((r.status, r.json()["kind"].clone()), (202, json!("publish_run")), "after rm: asks again: {}", r.body);
     k2_daemon::apps::alerts::set_sink(None);
 }
 

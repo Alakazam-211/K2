@@ -48,6 +48,7 @@ pub const MAX_BODY: usize = 64 * 1024;
 
 pub const ROUTES: &[&str] = &[
     "/cli/app/approvals",
+    "/cli/app/approvals/revoke",
     "/cli/app/approve",
     "/cli/app/clean-mode",
     "/cli/app/deny",
@@ -57,8 +58,14 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/warnings",
 ];
 
-pub const POST_ROUTES: &[&str] =
-    &["/cli/app/approve", "/cli/app/clean-mode", "/cli/app/deny", "/cli/app/key/mint", "/cli/app/key/revoke"];
+pub const POST_ROUTES: &[&str] = &[
+    "/cli/app/approvals/revoke",
+    "/cli/app/approve",
+    "/cli/app/clean-mode",
+    "/cli/app/deny",
+    "/cli/app/key/mint",
+    "/cli/app/key/revoke",
+];
 
 /// Vault confirm actions this module takes (`vault_routes::CONFIRM_ACTIONS`;
 /// approving is `super::approvals::CONFIRM_ACTION`, `app-approve`).

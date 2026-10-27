@@ -267,32 +267,37 @@ fn publish_run_gate(project_id: &str, name: &str, skin: bool) -> Option<Gate> {
 /// `probeTimeout` and `cwdExplicit` change nothing the owner approved.
 const APPROVED_RUN_KEYS: &[&str] = &["projectId", "name", "cmd", "cwd", "port", "noTunnel"];
 
-/// The owner's approved request this re-run repeats exactly (NSI
-/// papercut 13): the App or service is still this workspace's under the
-/// name, and its latest approved `publish_run` has this run's fingerprint
-/// ([`APPROVED_RUN_KEYS`]). `None`: ask (a new App, or anything changed).
-fn approved_run(project_id: &str, name: &str, body: &serde_json::Value) -> Option<String> {
+/// A service or App made within this long after an approval was made by
+/// that approval (`run_approved` creates it right after the decision);
+/// one made later is a new one, which the old approval never covered.
+const MADE_BY_APPROVAL_SECS: i64 = 600;
+
+/// The owner's approval this re-run repeats exactly (NSI papercut 13):
+/// `(request id, when it lapses)`. It stands while
+/// - the service or App is still this workspace's under the name, and was
+///   not removed and made again after the approval;
+/// - it is the name's latest approved `publish_run`, not revoked
+///   (`k2 app approvals revoke`), with this run's fingerprint
+///   ([`APPROVED_RUN_KEYS`]);
+/// - it was decided within [`k2_core::app_grace::requests::STANDING_RUN_SECS`].
+///
+/// `None`: ask (a new App, anything changed, revoked, or lapsed).
+fn approved_run(project_id: &str, name: &str, body: &serde_json::Value) -> Option<(String, i64)> {
+    use k2_core::app_grace::requests as reqs;
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let still_ours = k2_core::published_services::get_by_project_name(&conn, project_id, name).ok().flatten().is_some()
-        || k2_core::deploy::store::get_app(&conn, &name.to_ascii_lowercase())
-            .ok()
-            .flatten()
-            .is_some_and(|a| a.owner_workspace == project_id && a.source == "folder" && a.path == "open");
-    if !still_ours {
-        return None;
-    }
-    k2_core::app_grace::requests::approved_same(
-        &conn,
-        k2_core::app_grace::requests::KIND_PUBLISH_RUN,
-        project_id,
-        name,
-        body,
-        APPROVED_RUN_KEYS,
-    )
-    .ok()
-    .flatten()
-    .map(|r| r.id)
+    let service = k2_core::published_services::get_by_project_name(&conn, project_id, name).ok().flatten().map(|s| s.created_at);
+    let app = k2_core::deploy::store::get_app(&conn, &name.to_ascii_lowercase())
+        .ok()
+        .flatten()
+        .filter(|a| a.owner_workspace == project_id && a.source == "folder" && a.path == "open")
+        .map(|a| a.created_at);
+    let made_at = service.into_iter().chain(app).max()?;
+    let r = reqs::approved_same(&conn, reqs::KIND_PUBLISH_RUN, project_id, name, body, APPROVED_RUN_KEYS).ok().flatten()?;
+    let decided = r.decided_at.unwrap_or(r.requested_at);
+    let lapses = decided + reqs::STANDING_RUN_SECS;
+    let now = k2_core::deploy::now();
+    (now < lapses && made_at <= decided + MADE_BY_APPROVAL_SECS).then_some((r.id, lapses))
 }
 
 /// The gate for an agent's run: `legacy` = an existing `--cmd` service.
@@ -888,12 +893,14 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
     // change asks again.
     let approved_run = gate.as_ref().and_then(|_| approved_run(&project_id, &name, &run_body));
     let gate = if approved_run.is_some() { None } else { gate };
-    let approved_note = approved_run.as_ref().map(|id| {
+    let approved_note = approved_run.as_ref().map(|(id, lapses)| {
         serde_json::json!({
             "request": id,
+            "expiresAt": lapses,
             "note": format!(
                 "the owner approved this exact run of {name} ({id}): the same command, folder, port and tunnel run again \
-                 without asking; any change asks the owner again"
+                 without asking until it lapses (30 days after the approval, or when {name} is removed) or the owner \
+                 revokes it (k2 app approvals revoke {id}); any change asks the owner again"
             ),
         })
     });

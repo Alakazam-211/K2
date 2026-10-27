@@ -34,8 +34,8 @@ use super::egress_routes::codes;
 use crate::cli_response::CliResponse;
 use super::routes::{actor, db_err, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
 
-pub const ROUTES: &[&str] = &["/cli/app/approvals", "/cli/app/approve", "/cli/app/deny"];
-pub const POST_ROUTES: &[&str] = &["/cli/app/approve", "/cli/app/deny"];
+pub const ROUTES: &[&str] = &["/cli/app/approvals", "/cli/app/approvals/revoke", "/cli/app/approve", "/cli/app/deny"];
+pub const POST_ROUTES: &[&str] = &["/cli/app/approvals/revoke", "/cli/app/approve", "/cli/app/deny"];
 
 /// The vault confirm action for approving any held App request.
 pub const CONFIRM_ACTION: &str = "app-approve";
@@ -43,6 +43,7 @@ pub const CONFIRM_ACTION: &str = "app-approve";
 pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> R<J> {
     match path {
         "/cli/app/approvals" => approvals(who, params),
+        "/cli/app/approvals/revoke" => revoke(who, body),
         "/cli/app/approve" => approve(who, body),
         "/cli/app/deny" => deny(who, body),
         _ => Err(no("not_found", 404, "no such App route")),
@@ -467,6 +468,68 @@ pub(crate) fn apply_as(r: &reqs::AppRequest, by: &str, via: &str) -> R<J> {
         out["note"] = json!("approved, but applying it failed");
     }
     Ok(out)
+}
+
+// ── revoke a standing run approval ───────────────────────────────────
+
+/// POST `/cli/app/approvals/revoke {request}` or `{app}` (0.46.6, NSI
+/// papercut 13): the owner withdraws an approved `k2 publish run`'s
+/// standing, so the next identical re-run is held again. `app` revokes
+/// every standing approval of that App label. The owner only (the owner
+/// token or an Owner login), never a passport. Each revoke is audited
+/// (who, when, which). The decisions stay `approved`: they applied.
+fn revoke(who: &Who, body: &[u8]) -> R<J> {
+    need_credential(who)?;
+    if confirm_stamp(who).is_none() {
+        return Err(no(
+            codes::OWNER_ONLY,
+            403,
+            "only the server's owner revokes an approval (k2 app approvals revoke <id> from a terminal outside K2)",
+        ));
+    }
+    let v = json_body(body)?;
+    let by = actor(who);
+    let now = deploy::now();
+    let targets: Vec<reqs::AppRequest> = match (s(&v, "request"), s(&v, "app")) {
+        (Some(id), _) => vec![find(Some(id))?],
+        (None, Some(app)) => db(|c| {
+            let mut st = c.prepare(
+                "SELECT id FROM app_widenings WHERE kind = ?1 AND app_label = ?2 AND status = 'approved' \
+                 AND json_extract(result_json, '$.standingRevoked') IS NULL ORDER BY requested_at",
+            )?;
+            let ids = st.query_map(rusqlite::params![reqs::KIND_PUBLISH_RUN, app], |r| r.get::<_, String>(0))?;
+            let ids = ids.collect::<rusqlite::Result<Vec<_>>>()?;
+            ids.iter().map(|id| reqs::get(c, id).map(|o| o.expect("row just listed"))).collect()
+        })?,
+        (None, None) => return Err(no(dcodes::BAD_REQUEST, 400, "name the approval (request: its w_… id) or the App (app)")),
+    };
+    if targets.is_empty() {
+        return Err(no(codes::REQUEST_NOT_FOUND, 404, "no standing run approval for that App (k2 app approvals --state approved)"));
+    }
+    let mut revoked = Vec::new();
+    for r in &targets {
+        let done = db(|c| Ok(reqs::revoke_standing(c, &r.id, &by, now)))?.map_err(|e| match e {
+            "not_standing" => no(codes::NOT_PENDING, 409, format!("{} is not an approved k2 publish run: only those stand for re-runs", r.id)),
+            "already_revoked" => no(codes::NOT_PENDING, 409, format!("{} was revoked already", r.id)),
+            _ => no(codes::REQUEST_NOT_FOUND, 404, format!("no App request '{}'", r.id)),
+        })?;
+        app_audit(&done, "run_approval_revoked", &by, json!({ "request": done.id, "kind": done.kind, "at": now }));
+        k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+            "app-approval-revoke",
+            &by,
+            format!("revoked {} {} ({})", done.id, done.kind, done.summary),
+            "cli",
+            "-",
+            "apps",
+        ));
+        changed(Some(&done.id));
+        revoked.push(request_json(&done));
+    }
+    Ok(json!({
+        "ok": true,
+        "revoked": revoked,
+        "note": "the next identical k2 publish run of this App asks the owner again",
+    }))
 }
 
 // ── deny / withdraw ──────────────────────────────────────────────────

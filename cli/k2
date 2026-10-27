@@ -10930,6 +10930,10 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
   k2 app approvals [--app A] [--all] [--json]
                                        Held requests (an agent's widening, key
                                        mint, clean mode off, new --cmd service).
+  k2 app approvals revoke <request-id> | --app <name>
+                                       Owner: an approved k2 publish run stops
+                                       covering identical re-runs (they ask
+                                       again; it lapses by itself after 30 days).
   k2 app approve <request-id>          Owner, in person (Touch ID / password),
                                        from a terminal outside K2.
   k2 app deny <request-id> [--reason R]
@@ -13526,6 +13530,11 @@ for r in rows:
 # mode off, a new --cmd service, new egress hosts, broad egress): one list,
 # one approve (the owner, in person), one deny.
 cmd_app_approvals() {
+    if [ "${1:-}" = "revoke" ]; then
+        shift
+        _app_approvals_revoke "$@"
+        return
+    fi
     local app="" all=0 json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -13607,6 +13616,34 @@ cmd_app_approve() {
         ""|-h|--help) echo "usage: k2 app approve <request-id>   (the owner, in person, from a terminal outside K2)" >&2; exit 2 ;;
     esac
     _app_approve "$1"
+}
+
+# `k2 app approvals revoke <w_id> | --app <name>` (0.46.6, NSI papercut 13):
+# the owner withdraws an approved `k2 publish run`'s standing, so the next
+# identical re-run asks again. Owner only (the daemon refuses a passport).
+_app_approvals_revoke() {
+    local id="" app="" json_out=0
+    local usage="usage: k2 app approvals revoke <request-id> | --app <name> [--json]   (the owner)"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --app) [ $# -ge 2 ] || { echo "$usage" >&2; exit 2; }; app="$2"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) echo "$usage"; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; echo "$usage" >&2; exit 2 ;;
+            *) [ -z "$id" ] || { echo "$usage" >&2; exit 2; }; id="$1"; shift ;;
+        esac
+    done
+    if { [ -z "$id" ] && [ -z "$app" ]; } || { [ -n "$id" ] && [ -n "$app" ]; }; then
+        echo "$usage" >&2; exit 2
+    fi
+    _compute_call POST /cli/app/approvals/revoke "$(_compute_json K2_CJ_request="$id" K2_CJ_app="$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+for r in v.get("revoked") or []:
+    print("%s revoked: %s" % (r["id"], r["summary"]))
+print(v.get("note") or "")'
 }
 
 cmd_app_deny() {

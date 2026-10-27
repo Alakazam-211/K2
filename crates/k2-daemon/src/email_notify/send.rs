@@ -356,9 +356,12 @@ fn finish(log_id: &str, from_status: &str, outcome: &R<String>, now: i64) -> R<L
 fn scheduled_dir() -> std::path::PathBuf {
     // House rule: tests never touch the real `~/.k2`.
     if cfg!(test) {
-        // One per test thread: the orphan sweep never sees another test's files.
-        let t = format!("{:?}", std::thread::current().id()).replace(|c: char| !c.is_ascii_alphanumeric(), "");
-        return std::env::temp_dir().join(format!("k2-email-notify-test-{}-{t}", std::process::id())).join("scheduled");
+        // One per test thread: the orphan sweep never sees another test's
+        // files (a uuid name, never a ThreadId: test_env::unique_temp_path).
+        thread_local! {
+            static DIR: std::path::PathBuf = k2_core::test_env::unique_temp_path("email-notify-test").join("scheduled");
+        }
+        return DIR.with(|d| d.clone());
     }
     dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".k2").join("email-notify").join("scheduled")
 }

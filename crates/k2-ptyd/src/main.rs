@@ -37,6 +37,11 @@ fn main() {
             }
         }
     }
+    // Security review F5: harden before anything else — before the env,
+    // the config, the log and, for `--resume-state-fd` after an exec
+    // self-upgrade, before the state fd (key, rings) and the inherited
+    // master fds are touched. `execve` made this image dumpable again.
+    server::harden_process();
     let Some(home) = std::env::var_os("K2_HOME").filter(|h| !h.is_empty()) else {
         eprintln!("k2-ptyd: K2_HOME is required");
         std::process::exit(launch::EXIT_FAILED);

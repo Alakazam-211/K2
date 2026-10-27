@@ -359,7 +359,13 @@ pub fn listen_unix(path: &Path, mode: u32, backlog: i32) -> io::Result<OwnedFd> 
     Ok(sock)
 }
 
-fn harden_process() {
+/// S-3: not dumpable (Linux `PR_SET_DUMPABLE 0`: no `/proc/<pid>/fd`,
+/// `mem` or core for other processes of the uid), no debugger attach
+/// (macOS `PT_DENY_ATTACH`, release builds). `main` calls it first thing
+/// (security review F5: `execve` resets dumpability, so a self-upgraded
+/// image must harden before it reads the state fd, key and rings); the
+/// server calls it again. Idempotent.
+pub fn harden_process() {
     #[cfg(target_os = "linux")]
     // SAFETY: prctl with constant args.
     unsafe {

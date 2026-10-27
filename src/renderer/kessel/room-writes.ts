@@ -123,6 +123,15 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'thread/permission-note': 'leave a note for the owner or admin on a permission card waiting on B',
   'thread/permission-undo':
     'Turn off again on a permission card B approved; Admin floor on B, so a Member’s room never sends it',
+  // A confirm card's Allow (apps.approve `app-approve`, compute
+  // `node-admin`) runs the same confirm Settings does, on B, before
+  // `thread/answer` (0.46.6, NSI papercut 12: refused here, so a room's
+  // Allow never reached B). The token is bound to the action, the request
+  // id and this login on B, works once within 60 s, and only a route on
+  // this list can spend it. Admin floor on B (the card's floor is Owner).
+  'vault/confirm/start': 'a permission card’s Allow asks B how this login confirms (Admin floor on B)',
+  'vault/confirm/finish':
+    'a permission card’s Allow confirms on B (password or the Mac’s sheet), bound to the card’s request; Admin floor on B',
   'thread/read':
     'reading the room’s Thread marks it read for your login on B (thread-read-v1), so B’s own clients and phone stop counting it',
   'thread/read-all':

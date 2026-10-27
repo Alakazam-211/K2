@@ -76,6 +76,9 @@ const ABOVE_MEMBER_ROOM_WRITES = new Map([
   ['power/keep-awake', 'Admin'],
   // Permission cards: Turn off again is at the card's floor (Admin and up).
   ['thread/permission-undo', 'Admin'],
+  // A confirm card's Allow: the confirm Settings takes, on B (0.46.6).
+  ['vault/confirm/start', 'Admin'],
+  ['vault/confirm/finish', 'Admin'],
 ])
 
 describe('the room write allowlist', () => {
@@ -180,6 +183,47 @@ describe('the usable remote-room scope', () => {
       await daemonCliPost(room, 'thread/permission-note', { addr: 'billing', id: 'c1', text: 'for payroll' })
       await daemonCliPost(room, 'thread/permission-undo', { addr: 'billing', id: 'c1' })
       expect(calls.map((c) => new URL(c).pathname)).toEqual(['/cli/thread/permission-note', '/cli/thread/permission-undo'])
+      for (const c of calls) {
+        const url = new URL(c)
+        expect(url.port).toBe(String(B.port))
+        expect(url.searchParams.get('token')).toBe('tok-b')
+      }
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  // 0.46.6 (NSI papercut 12): a confirm card's Allow in a Home remote room
+  // was refused before any request (vault/confirm/start not on the list),
+  // so B never saw the confirm or the answer and the hold stayed pending.
+  it('a remote room runs a confirm card’s Allow on its own server: confirm start, finish, then the answer', async () => {
+    const room = remoteRoomScope(scopeForHost(B))
+    const calls: string[] = []
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      calls.push(String(input))
+      const path = new URL(String(input)).pathname
+      const body =
+        path === '/cli/vault/confirm/start'
+          ? { methods: ['connect-password'], expiresIn: 60 }
+          : path === '/cli/vault/confirm/finish'
+            ? { token: 'ct-1', expiresIn: 60 }
+            : { ok: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    try {
+      const secret = { action: 'app-approve', secretId: 'w_a8d98a90be27' }
+      await daemonCliPost(room, 'vault/confirm/start', secret)
+      const t = await daemonCliPost<{ token: string }>(room, 'vault/confirm/finish', {
+        ...secret,
+        method: 'connect-password',
+        password: 'pw',
+      })
+      await daemonCliPost(room, 'thread/answer', { addr: 'agent-nsi', id: 'c1', answer: 'Allow', confirmToken: t.token })
+      expect(calls.map((c) => new URL(c).pathname)).toEqual([
+        '/cli/vault/confirm/start',
+        '/cli/vault/confirm/finish',
+        '/cli/thread/answer',
+      ])
       for (const c of calls) {
         const url = new URL(c)
         expect(url.port).toBe(String(B.port))

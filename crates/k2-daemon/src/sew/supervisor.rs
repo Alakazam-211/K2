@@ -30,7 +30,7 @@ use serde_json::{json, Value};
 use k2_root_proto::sew::{
     self as pin, pinned, pinned_artifact, version_cmp, MAX_TARBALL, SEW_CLIENT_PORT, SEW_CONFIG_DIR, SEW_DATA_DIR,
     SEW_MEDIA_LOOPBACK_PORT, SEW_MEDIA_TCP_PORT, SEW_MEDIA_UDP_PORT, SEW_TURN_TLS_PORT, SEW_UPGRADE_STATE, UNIT_DB,
-    UNIT_MIGRATE, UNIT_SEW,
+    UNIT_MEDIA, UNIT_MIGRATE, UNIT_SEW,
 };
 use k2_root_proto::version::SEW_MIN_PROTOCOL;
 
@@ -979,6 +979,48 @@ pub fn reconfigure_step(env: &Env) -> Result<Value, String> {
     helper(env, &["systemctl", "restart"], None)?;
     health_check(env, pinned().version)?;
     Ok(out)
+}
+
+/// `k2 hostchat restart` (S32 Q2, Sew's design; provisional until
+/// Rosson's answer): bring Sew back in order — clear systemd's start limit
+/// (protocol 11; skipped on an older helper), `sew-db`, then `sew`, then
+/// wait for readiness (through an upgrade), then voice if installed. A
+/// person or a Manage-Sew agent runs it; nothing calls it on its own.
+pub fn restart(env: &Env) -> R<Value> {
+    if !env.ops.linux() {
+        return Err(unsupported());
+    }
+    let row = need_row(false)?;
+    if matches!(row.status.as_str(), "disabled" | "installing" | "upgrading") {
+        return Err(no(
+            "not_restartable",
+            409,
+            format!("Sew is {}: k2 hostchat enable (or wait for the running step)", row.status),
+        ));
+    }
+    helper_check(env)?;
+    let _l = begin(env)?;
+    let mut steps = Vec::new();
+    if helper_reconfigures(env) {
+        helper(env, &["systemctl", "reset-failed"], None).map_err(|e| no("restart_failed", 500, e))?;
+        steps.push("reset-failed");
+    }
+    helper(env, &["systemctl", "start-db"], None).map_err(|e| no("restart_failed", 500, e))?;
+    poll_active(env, &[UNIT_DB], 120).map_err(|e| no("restart_failed", 500, e))?;
+    steps.push("sew-db");
+    helper(env, &["systemctl", "restart"], None).map_err(|e| no("restart_failed", 500, e))?;
+    poll_active(env, &[UNIT_SEW], 60).map_err(|e| no("restart_failed", 500, e))?;
+    steps.push("sew");
+    let h = super::health::wait_ready(env, 60_000);
+    if !h.ready {
+        return Err(super::health::unavailable(&h));
+    }
+    if super::voice::load(env).installed && !env.ops.unit(UNIT_MEDIA).is_active() {
+        helper(env, &["media", "enable"], None).map_err(|e| no("restart_failed", 500, format!("sew-media: {e}")))?;
+        steps.push("sew-media");
+    }
+    changed("state");
+    Ok(json!({"ok": true, "steps": steps, "apiHealth": h.json()}))
 }
 
 /// `POST /cli/sew/server/reconfigure` (Manage Sew): the same step by hand

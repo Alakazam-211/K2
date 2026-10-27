@@ -621,6 +621,22 @@ fn install_reconfigure_runs_sews_installer_over_the_install_without_a_key() {
     assert!(sew_calls(&t).is_empty());
 }
 
+/// Protocol 11: `k2 hostchat restart` first clears systemd's start limit
+/// on Sew's units (the same reset `upgrade` does), and nothing else.
+#[test]
+fn systemctl_reset_failed_clears_the_start_limit_only() {
+    let t = box_root();
+    with_pin_installed(&t);
+    let o = t.call(&["engine", "sew", "systemctl", "reset-failed"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!((v["op"].clone(), v["ok"].clone()), (serde_json::json!("reset-failed"), serde_json::json!(true)), "{v}");
+    let calls = systemctl_calls(&t);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert!(calls[0].starts_with("reset-failed "), "{calls:?}");
+    assert!(sew_calls(&t).is_empty(), "Sew itself never runs");
+}
+
 #[test]
 fn install_input_is_validated_before_anything_runs() {
     let t = box_root();

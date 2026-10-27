@@ -1046,6 +1046,7 @@ pub mod fake {
                 }
                 "engine sew install reconfigure" => Self::sew_exit(0, json!({"changed": ["sew.toml"], "versions": {"sew": pin}})),
                 "engine sew systemctl enable" => json!({"ok": true}),
+                "engine sew systemctl reset-failed" => json!({"op": "reset-failed", "ok": true}),
                 "engine sew systemctl start-db" => {
                     active(UNIT_DB);
                     json!({"ok": true})

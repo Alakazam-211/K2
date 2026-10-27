@@ -944,6 +944,10 @@ fn token(ctx: &Ctx) -> HResult<J> {
 // ── units, upgrade, restore, media ──────────────────────────────────────
 
 fn systemctl(ctx: &Ctx, op: SewSystemctl) -> HResult<J> {
+    if op == SewSystemctl::ResetFailed {
+        let r = reset_start_limits(ctx)?;
+        return Ok(json!({"op": op.token(), "ok": true, "reset": r}));
+    }
     let runs: Vec<Vec<&str>> = match op {
         SewSystemctl::Enable => vec![vec!["enable", UNIT_DB, UNIT_SEW, UNIT_BACKUP_TIMER, UNIT_DRILL_TIMER]],
         SewSystemctl::StartDb => vec![vec!["start", UNIT_DB]],
@@ -952,6 +956,7 @@ fn systemctl(ctx: &Ctx, op: SewSystemctl) -> HResult<J> {
         SewSystemctl::Restart => vec![vec!["restart", UNIT_SEW]],
         SewSystemctl::Stop => vec![vec!["stop", UNIT_SEW]],
         SewSystemctl::DisableNow => vec![vec!["disable", "--now", UNIT_SEW, UNIT_DB, UNIT_BACKUP_TIMER, UNIT_DRILL_TIMER]],
+        SewSystemctl::ResetFailed => unreachable!("handled above"),
     };
     // Every op past `enable` runs units `sew install` wrote: refuse an
     // unknown binary first (S29 §7.3 applies to what systemd will exec).

@@ -56,6 +56,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/sew/server/disable",
     "/cli/sew/server/doctor",
     "/cli/sew/server/reconfigure",
+    "/cli/sew/server/restart",
     "/cli/sew/server/enable",
     "/cli/sew/server/recovery-key",
     "/cli/sew/server/restore",
@@ -86,6 +87,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/sew/server/disable",
     "/cli/sew/server/doctor",
     "/cli/sew/server/reconfigure",
+    "/cli/sew/server/restart",
     "/cli/sew/server/enable",
     "/cli/sew/server/recovery-key",
     "/cli/sew/server/restore",
@@ -653,6 +655,10 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         "/cli/sew/server/reconfigure" => {
             need_manage(who)?;
             sup::reconfigure(&env)
+        }
+        "/cli/sew/server/restart" => {
+            need_manage(who)?;
+            sup::restart(&env)
         }
         "/cli/sew/server/rotate-master" => {
             let v = json_body(body)?;

@@ -840,6 +840,33 @@ fn reconfigure_step_needs_protocol_11_and_sends_installs_inputs_without_a_key() 
     assert_eq!(eff[i + 1], "engine sew systemctl restart", "{eff:?}");
 }
 
+/// `k2 hostchat restart` (S32 Q2): sew-db, then sew, then readiness;
+/// reset-failed only on a protocol-11 helper; refused mid-step.
+#[test]
+fn restart_brings_the_units_back_in_order() {
+    let t = t();
+    t.enabled();
+    t.ops.clear();
+    let v = restart(&t.env()).expect("restart");
+    assert_eq!(v["steps"], json!(["sew-db", "sew"]), "{v}");
+    assert_eq!(t.ops.effects(), vec!["engine sew systemctl start-db", "engine sew systemctl restart"]);
+    let mut st = helper_ok(11, true, pinned().version);
+    st.version_json.as_mut().unwrap()["namespaces"]["sewreconf"] = json!(true);
+    *t.ops.helper.lock().unwrap() = st;
+    t.ops.clear();
+    let v = restart(&t.env()).expect("restart");
+    assert_eq!(v["steps"][0], "reset-failed", "{v}");
+    assert_eq!(t.ops.effects()[0], "engine sew systemctl reset-failed");
+    // Not ready afterwards (stopping): refused with the state.
+    t.ops.queue_api_health(vec![Ok((503, json!({"ready": false, "reason": "stopping"})))]);
+    let e = restart(&t.env()).unwrap_err();
+    assert_eq!((e.code, e.extra.unwrap()["state"].clone()), ("sew_unavailable", json!("stopping")));
+    // Never over a running lifecycle step.
+    let env = t.env();
+    let _l = begin(&env).unwrap();
+    assert_eq!(restart(&env).unwrap_err().code, "lifecycle_in_progress");
+}
+
 #[test]
 fn upgrade_preconditions_refuse_without_effects() {
     let t = t();

@@ -203,6 +203,9 @@ pub enum SewSystemctl {
     Stop,
     /// `disable --now sew.service sew-db.service sew-backup.timer sew-drill.timer`
     DisableNow,
+    /// `reset-failed` on Sew's units (protocol 11, 0.46.6: the first step of
+    /// `k2 hostchat restart`, S32 Q2): clears a hit start limit.
+    ResetFailed,
 }
 
 impl SewSystemctl {
@@ -215,6 +218,7 @@ impl SewSystemctl {
             Self::Restart => "restart",
             Self::Stop => "stop",
             Self::DisableNow => "disable-now",
+            Self::ResetFailed => "reset-failed",
         }
     }
     fn parse(t: &str) -> Option<Self> {
@@ -226,11 +230,12 @@ impl SewSystemctl {
             "restart" => Self::Restart,
             "stop" => Self::Stop,
             "disable-now" => Self::DisableNow,
+            "reset-failed" => Self::ResetFailed,
             _ => return None,
         })
     }
-    pub const ALL: [SewSystemctl; 7] =
-        [Self::Enable, Self::StartDb, Self::Migrate, Self::Start, Self::Restart, Self::Stop, Self::DisableNow];
+    pub const ALL: [SewSystemctl; 8] =
+        [Self::Enable, Self::StartDb, Self::Migrate, Self::Start, Self::Restart, Self::Stop, Self::DisableNow, Self::ResetFailed];
 }
 
 /// The `engine sew` namespace (protocol 7, Sew S29 K11). Argv is enum
@@ -445,7 +450,7 @@ impl SewVerb {
             | Self::InstallBin
             | Self::Doctor
             | Self::MediaStatus
-            | Self::Systemctl(S::Enable | S::StartDb | S::Start | S::Restart) => Class::Open,
+            | Self::Systemctl(S::Enable | S::StartDb | S::Start | S::Restart | S::ResetFailed) => Class::Open,
             Self::Install
             | Self::InstallReconfigure
             | Self::Config

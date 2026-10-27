@@ -1,6 +1,6 @@
 //! Markdown file codec: the kit's plain-text codec with Markdown's limits.
 
-use k2_multiplayer_base::codec::text_file::{self, Decline, FileFormat};
+use k2_mpc_base::codec::text_file::{self, Decline, FileFormat};
 
 use crate::MAX_FILE_BYTES;
 

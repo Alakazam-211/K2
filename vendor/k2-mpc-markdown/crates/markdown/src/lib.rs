@@ -7,7 +7,7 @@
 //!   Markdown limits and decline rules.
 //! - Verb map and parity list: `docs/PARITY.md`.
 
-use k2_multiplayer_base::{Kind, Schema};
+use k2_mpc_base::{Kind, Schema};
 
 pub mod codec;
 
@@ -51,7 +51,7 @@ mod tests {
 
     #[test]
     fn schema_builds_a_doc() {
-        let d = k2_multiplayer_base::Doc::new(super::SCHEMA).unwrap();
+        let d = k2_mpc_base::Doc::new(super::SCHEMA).unwrap();
         assert_eq!(d.text(super::ROOT).unwrap(), "");
     }
 }

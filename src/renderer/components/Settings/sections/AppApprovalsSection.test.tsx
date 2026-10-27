@@ -22,6 +22,12 @@ vi.mock('@/lib/daemon-cli', async () => {
   }
 })
 
+// 0.46.5: the section also reads every other server the window owns (the
+// Home pool). None here: only the window's server, as before.
+vi.mock('@/lib/host-pool-instance', () => ({
+  hostPool: { store: { getState: () => ({ entries: {} }), subscribe: () => () => {} } },
+}))
+
 import type { AppRequest } from './app-approvals-api'
 import { diffLines, expiryText } from './app-approvals-api'
 import { AppApprovalsSection, APP_APPROVALS_MANIFEST } from './AppApprovalsSection'

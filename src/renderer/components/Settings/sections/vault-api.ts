@@ -3,7 +3,7 @@
 // bodies (`valueB64`); nothing here keeps one.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 
 export interface VaultCounts {
   user: number
@@ -146,6 +146,30 @@ export function fromBase64(b64: string): string {
 
 const scope = () => primaryScope()
 
+export interface VaultConfirmFinishBody {
+  action: string
+  secretId?: string
+  method: string
+  password?: string
+  label?: string
+}
+
+/** A fresh owner confirm on one server's vault (0.46.5: App Approvals
+ *  approves another server's request with THAT server's confirm). The
+ *  token only works on the server that minted it. */
+export function vaultConfirmOn(s: ServerScope) {
+  return {
+    start: (action: string, secretId?: string) =>
+      daemonCliPost<{ methods: string[]; expiresIn: number }>(
+        s,
+        'vault/confirm/start',
+        secretId !== undefined ? { action, secretId } : { action },
+      ),
+    finish: (body: VaultConfirmFinishBody) =>
+      daemonCliPost<{ token: string; expiresIn: number }>(s, 'vault/confirm/finish', body),
+  }
+}
+
 export const vaultApi = {
   status: () => daemonCliGet<VaultStatus>(scope(), 'vault/status'),
   list: async (opts: { system?: boolean } = {}): Promise<VaultSecret[]> => {
@@ -186,14 +210,8 @@ export const vaultApi = {
   disable: (id: string) => daemonCliPost<{ ok: boolean }>(scope(), 'vault/disable', { id }),
   enable: (id: string) => daemonCliPost<{ ok: boolean }>(scope(), 'vault/enable', { id }),
   destroy: (id: string) => daemonCliPost<{ ok: boolean }>(scope(), 'vault/destroy', { id, yes: true }),
-  confirmStart: (action: string, secretId?: string) =>
-    daemonCliPost<{ methods: string[]; expiresIn: number }>(
-      scope(),
-      'vault/confirm/start',
-      secretId !== undefined ? { action, secretId } : { action },
-    ),
-  confirmFinish: (body: { action: string; secretId?: string; method: string; password?: string; label?: string }) =>
-    daemonCliPost<{ token: string; expiresIn: number }>(scope(), 'vault/confirm/finish', body),
+  confirmStart: (action: string, secretId?: string) => vaultConfirmOn(scope()).start(action, secretId),
+  confirmFinish: (body: VaultConfirmFinishBody) => vaultConfirmOn(scope()).finish(body),
   /** Make a recovery key and show it once (needs a `recovery-setup` confirm from the app). */
   recoveryShowOnce: (confirmToken: string) =>
     daemonCliPost<VaultRecoveryChallenge>(scope(), 'vault/recovery/show-once', { confirmToken }),

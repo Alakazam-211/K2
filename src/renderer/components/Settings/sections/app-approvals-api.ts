@@ -7,7 +7,7 @@
 // `vaultApi.confirmStart/confirmFinish`, the same flow Vault and node admin use.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 
 /** The vault confirm action the daemon checks on approve. */
 export const APP_APPROVE_CONFIRM_ACTION = 'app-approve'
@@ -80,8 +80,14 @@ export interface AppApproveResult {
   error?: { code: string; hint: string }
 }
 
-export async function fetchAppApprovals(state: 'pending' | 'all'): Promise<AppApprovalsList> {
-  const res = await daemonCliGet<Partial<AppApprovalsList>>(primaryScope(), 'app/approvals', { state })
+/** Every call takes the server it goes to (0.46.5: App Approvals lists the
+ *  held requests of each server the person is the owner of, not only the
+ *  window's); the default is the window's own server. */
+export async function fetchAppApprovals(
+  state: 'pending' | 'all',
+  scope: ServerScope = primaryScope(),
+): Promise<AppApprovalsList> {
+  const res = await daemonCliGet<Partial<AppApprovalsList>>(scope, 'app/approvals', { state })
   const oc = res?.ownerConfirm
   return {
     requests: Array.isArray(res?.requests) ? res.requests : [],
@@ -93,12 +99,20 @@ export async function fetchAppApprovals(state: 'pending' | 'all'): Promise<AppAp
   }
 }
 
-export async function approveAppRequest(request: string, confirmToken: string): Promise<AppApproveResult> {
-  return daemonCliPost<AppApproveResult>(primaryScope(), 'app/approve', { request, confirmToken })
+export async function approveAppRequest(
+  request: string,
+  confirmToken: string,
+  scope: ServerScope = primaryScope(),
+): Promise<AppApproveResult> {
+  return daemonCliPost<AppApproveResult>(scope, 'app/approve', { request, confirmToken })
 }
 
-export async function denyAppRequest(request: string, reason?: string): Promise<{ ok: boolean; status: string }> {
-  return daemonCliPost(primaryScope(), 'app/deny', reason ? { request, reason } : { request })
+export async function denyAppRequest(
+  request: string,
+  reason?: string,
+  scope: ServerScope = primaryScope(),
+): Promise<{ ok: boolean; status: string }> {
+  return daemonCliPost(scope, 'app/deny', reason ? { request, reason } : { request })
 }
 
 // ── plain words ──────────────────────────────────────────────────────

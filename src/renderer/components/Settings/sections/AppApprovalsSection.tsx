@@ -13,14 +13,20 @@
 // Thin client: no polling; it reloads on open, after a gesture, when the
 // window regains focus, and on the daemon's `app_approvals_changed` push
 // (0.46.4: a request an agent files while this is open shows at once).
+// 0.46.5: every server the person owns, not only the window's
+// (`lib/app-approvals-servers.ts`): one block per server, each read,
+// approved (with THAT server's owner confirm) and denied on its own server.
+// With only the window's server it looks exactly as before.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Callout } from '@/components/ui'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { daemonErrorText } from '@/lib/daemon-error'
 import type { SettingEntry } from '../searchManifest'
-import { vaultApi } from './vault-api'
-import { useAppApprovalsStore } from '@/stores/app-approvals'
+import { vaultConfirmOn } from './vault-api'
+import { currentApprovalServers, useAppApprovalsStore } from '@/stores/app-approvals'
+import { fetchApprovalsAcross, type ServerApprovals } from '@/lib/app-approvals-servers'
+import type { ServerScope } from '@/kessel/server-scope'
 import {
   APP_APPROVE_CONFIRM_ACTION,
   approveAppRequest,
@@ -32,7 +38,6 @@ import {
   kindLabel,
   resultError,
   type AppRequest,
-  type OwnerConfirmStatus,
 } from './app-approvals-api'
 
 export const APP_APPROVALS_MANIFEST: SettingEntry[] = [
@@ -56,21 +61,18 @@ function nowSec(): number {
 }
 
 export function AppApprovalsSection(): React.JSX.Element {
-  const [rows, setRows] = useState<AppRequest[] | null>(null)
-  const [ownerConfirm, setOwnerConfirm] = useState<OwnerConfirmStatus | null>(null)
+  const [groups, setGroups] = useState<ServerApprovals[] | null>(null)
   const [showHistory, setShowHistory] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
 
   const load = useCallback(async () => {
-    try {
-      const r = await fetchAppApprovals(showHistory ? 'all' : 'pending')
-      setRows(r.requests)
-      setOwnerConfirm(r.ownerConfirm)
-      setError(null)
-    } catch (e) {
-      setError(daemonErrorText(e))
-    }
+    const r = await fetchApprovalsAcross(
+      currentApprovalServers(),
+      showHistory ? 'all' : 'pending',
+      (state, scope) => fetchAppApprovals(state, scope),
+      daemonErrorText,
+    )
+    setGroups(r)
   }, [showHistory])
 
   useEffect(() => {
@@ -80,46 +82,43 @@ export function AppApprovalsSection(): React.JSX.Element {
     return () => window.removeEventListener('focus', onFocus)
   }, [load])
 
-  // The daemon's push (a request filed, asked again or decided).
+  // The daemon's push (a request filed, asked again or decided), or the
+  // set of owned servers changed.
   const revision = useAppApprovalsStore((s) => s.revision)
   const firstRevision = useRef(revision)
   useEffect(() => {
     if (revision !== firstRevision.current) void load()
   }, [revision, load])
 
-  const pending = (rows ?? []).filter((r) => r.status === 'pending')
-  const history = (rows ?? []).filter((r) => r.status !== 'pending')
-  const canConfirm = ownerConfirm?.available === true
+  const multi = (groups?.length ?? 0) > 1
+  const pendingOf = (g: ServerApprovals): AppRequest[] => (g.list?.requests ?? []).filter((r) => r.status === 'pending')
+  const total = (groups ?? []).reduce((n, g) => n + pendingOf(g).length, 0)
+  const anyRead = (groups ?? []).some((g) => g.list)
 
   return (
     <div className="max-w-3xl space-y-4" data-testid="app-approvals" data-settings-id="app-approvals.list">
       <div>
         <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
-          App Approvals{pending.length > 0 ? ` (${pending.length})` : ''}
+          App Approvals{total > 0 ? ` (${total})` : ''}
         </h2>
         <p className={`text-[11px] ${muted} mt-1 leading-relaxed`}>
           Changes to an App that only the server&apos;s owner may allow wait here: new caps on a deploy or install, outside
           hosts, raised quotas, keys and more. Agents can only ask. You approve each one in person, with Touch ID or your
           password. Requests expire after 7 days.
+          {multi ? ' Every server you own is listed; each one is approved on its own server.' : ''}
         </p>
       </div>
-      {ownerConfirm && !canConfirm ? (
-        <Callout tone="warn" data-testid="app-approvals-no-confirm">
-          {ownerConfirm.hint || NO_CONFIRM_HINT}
-        </Callout>
-      ) : null}
-      {error ? <Callout tone="error">{error}</Callout> : null}
       {notice ? (
         <Callout tone={notice.tone} data-testid="app-approvals-notice">
           {notice.text}
         </Callout>
       ) : null}
-      {rows && pending.length === 0 ? <p className={`text-[11px] ${muted}`}>Nothing is waiting.</p> : null}
-      {pending.map((r) => (
-        <RequestCard
-          key={r.id}
-          request={r}
-          canConfirm={canConfirm}
+      {groups && anyRead && total === 0 && !multi ? <p className={`text-[11px] ${muted}`}>Nothing is waiting.</p> : null}
+      {(groups ?? []).map((g) => (
+        <ServerBlock
+          key={g.server.hostKey}
+          group={g}
+          multi={multi}
           onDone={async (note) => {
             setNotice(note)
             await load()
@@ -135,18 +134,68 @@ export function AppApprovalsSection(): React.JSX.Element {
         >
           {showHistory ? 'Hide history' : 'Show history'}
         </button>
-        {showHistory && rows ? (
-          history.length === 0 ? (
-            <p className={`text-[11px] ${muted}`}>No decided requests yet.</p>
-          ) : (
-            <div className="space-y-2" data-testid="app-approvals-history">
-              {history.map((r) => (
-                <HistoryRow key={r.id} request={r} />
-              ))}
-            </div>
-          )
-        ) : null}
+        {showHistory && groups
+          ? groups.map((g) => <HistoryBlock key={g.server.hostKey} group={g} multi={multi} />)
+          : null}
       </div>
+    </div>
+  )
+}
+
+/** One server's pending requests (with its own confirm hint and error). */
+function ServerBlock({
+  group: g,
+  multi,
+  onDone,
+}: {
+  group: ServerApprovals
+  multi: boolean
+  onDone: (notice: Notice) => Promise<void>
+}): React.JSX.Element {
+  const ownerConfirm = g.list?.ownerConfirm ?? null
+  const canConfirm = ownerConfirm?.available === true
+  const pending = (g.list?.requests ?? []).filter((r) => r.status === 'pending')
+  // Multi-server: a server with nothing waiting and nothing wrong stays a
+  // one-line heading, so the page is about what waits.
+  return (
+    <div className="space-y-2" data-testid={`app-approvals-server-${g.server.hostKey}`}>
+      {multi ? (
+        <h3 className="text-xs font-medium text-[var(--color-text-primary)]">
+          {g.server.label}
+          {g.server.isWindow ? <span className={`ml-2 text-[10px] ${muted}`}>this window&apos;s server</span> : null}
+          {g.list && pending.length === 0 ? <span className={`ml-2 text-[10px] ${muted}`}>nothing waiting</span> : null}
+        </h3>
+      ) : null}
+      {ownerConfirm && !canConfirm && (pending.length > 0 || !multi) ? (
+        <Callout tone="warn" data-testid="app-approvals-no-confirm">
+          {ownerConfirm.hint || NO_CONFIRM_HINT}
+        </Callout>
+      ) : null}
+      {g.error ? (
+        <Callout tone="error" data-testid={`app-approvals-error-${g.server.hostKey}`}>
+          {multi ? `${g.server.label}: ` : ''}
+          {g.error}
+        </Callout>
+      ) : null}
+      {pending.map((r) => (
+        <RequestCard key={r.id} request={r} scope={g.server.scope} canConfirm={canConfirm} onDone={onDone} />
+      ))}
+    </div>
+  )
+}
+
+/** One server's decided requests. */
+function HistoryBlock({ group: g, multi }: { group: ServerApprovals; multi: boolean }): React.JSX.Element | null {
+  if (!g.list) return null
+  const history = g.list.requests.filter((r) => r.status !== 'pending')
+  return (
+    <div className="space-y-2" data-testid={multi ? `app-approvals-history-${g.server.hostKey}` : 'app-approvals-history'}>
+      {multi ? <h3 className={`text-[11px] ${secondary}`}>{g.server.label}</h3> : null}
+      {history.length === 0 ? (
+        <p className={`text-[11px] ${muted}`}>No decided requests yet.</p>
+      ) : (
+        history.map((r) => <HistoryRow key={r.id} request={r} />)
+      )}
     </div>
   )
 }
@@ -177,10 +226,14 @@ type ConfirmStep = { step: 'idle' } | { step: 'starting' } | { step: 'mac' } | {
 
 function RequestCard({
   request: r,
+  scope,
   canConfirm,
   onDone,
 }: {
   request: AppRequest
+  /** The server this request is held on: read, confirmed, approved and
+   *  denied there. */
+  scope: ServerScope
   canConfirm: boolean
   onDone: (notice: Notice) => Promise<void>
 }): React.JSX.Element {
@@ -196,14 +249,14 @@ function RequestCard({
   const now = nowSec()
 
   const finish = async (method: string, password?: string): Promise<void> => {
-    const { token } = await vaultApi.confirmFinish({
+    const { token } = await vaultConfirmOn(scope).finish({
       action: APP_APPROVE_CONFIRM_ACTION,
       secretId: r.id,
       method,
       label: `${r.appLabel}: ${r.summary}`.slice(0, 64),
       ...(password !== undefined ? { password } : {}),
     })
-    const out = await approveAppRequest(r.id, token)
+    const out = await approveAppRequest(r.id, token, scope)
     setConfirm({ step: 'idle' })
     if (out.error) {
       // Recorded as approved, but applying it failed: the daemon says why.
@@ -220,7 +273,7 @@ function RequestCard({
     setError(null)
     setConfirm({ step: 'starting' })
     try {
-      const { methods } = await vaultApi.confirmStart(APP_APPROVE_CONFIRM_ACTION, r.id)
+      const { methods } = await vaultConfirmOn(scope).start(APP_APPROVE_CONFIRM_ACTION, r.id)
       if (methods.includes('local-auth')) {
         setConfirm({ step: 'mac' })
         await finish('local-auth')
@@ -258,7 +311,7 @@ function RequestCard({
     setBusy(true)
     setError(null)
     try {
-      await denyAppRequest(r.id, note.trim() || undefined)
+      await denyAppRequest(r.id, note.trim() || undefined, scope)
       setDenying(false)
       await onDone({ tone: 'ok', text: `Denied ${kindLabel(r.kind).toLowerCase()} for ${r.appLabel}.` })
     } catch (e) {

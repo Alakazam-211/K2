@@ -112,13 +112,17 @@ pub enum Role {
     /// binary can't parse it; systemd keeps its own copy of the socket, so
     /// :443 stays bound and queues until a daemon that knows it starts).
     Front443,
+    /// The App TLS door (0.46.6, vs-live CD-A7): loopback `127.0.0.1:38474`,
+    /// where front443 routes custom App names. Only sent to a successor
+    /// that names it in its HELLO.
+    AppDoor,
 }
 
 impl Role {
     /// The roles every hand-off-capable daemon understands (0.46.0).
     pub const LEGACY: [Role; 3] = [Role::Main, Role::TunnelIngress, Role::TunnelTls];
     /// Every role this build understands.
-    pub const ALL: [Role; 4] = [Role::Main, Role::TunnelIngress, Role::TunnelTls, Role::Front443];
+    pub const ALL: [Role; 5] = [Role::Main, Role::TunnelIngress, Role::TunnelTls, Role::Front443, Role::AppDoor];
 }
 
 /// The roles to send a successor that announced `accepts` (`None`: a
@@ -894,9 +898,16 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
     let roles: Vec<Role> = held.iter().map(|(r, _)| *r).collect();
     let mut fds = vec![lock_fd];
     fds.extend(held.iter().map(|(_, l)| l.as_raw_fd()));
-    let front_routes = roles
-        .contains(&Role::Front443)
-        .then(|| (*crate::front443::routes::current()).clone());
+    // A successor without the App door (an older build) can't parse an
+    // `App` route kind: it gets the table without them (CD-A7).
+    let front_routes = roles.contains(&Role::Front443).then(|| {
+        let t = (*crate::front443::routes::current()).clone();
+        if !roles_for_successor(&[Role::AppDoor], accepts.as_deref()).is_empty() {
+            t
+        } else {
+            t.without_kind(crate::front443::routes::Kind::App)
+        }
+    });
     let take = serde_json::to_vec(&Msg::Take { roles: roles.clone(), front_routes, apps_follow: takes_apps }).expect("serialize take");
     if let Err(e) = fdpass::send_msg(&ours, &take, &fds) {
         let _ = child.kill();

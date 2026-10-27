@@ -100,6 +100,9 @@ pub async fn start() {
         }
     };
     crate::handoff::register(crate::handoff::Role::Front443, &l);
+    // 0.46.6: the App TLS door (custom App names) serves while the front
+    // does; a hand-off successor takes its socket over (Role::AppDoor).
+    crate::apps::tls_door::start();
     let local = l.local_addr().ok();
     // A hand-off successor routes from its first connection with the
     // table its predecessor passed (fixed backends only). A cold start
@@ -185,9 +188,62 @@ pub fn rebuild() -> (Arc<RouteTable>, Vec<String>) {
         turn_routes(&mut add);
         stalwart_routes(&cfg, &mut add);
         caddy_routes(&mut add);
+        // Last: a custom App name never takes a name TURN, mail or Skin
+        // Direct already routes (first route wins; refused at bind too).
+        app_routes(&mut add);
     }
     routes::install(t);
     (routes::current(), warnings)
+}
+
+/// 0.46.6: every custom App name the door serves (`live`) or is getting a
+/// certificate for (`issuing`, so the CA's TLS-ALPN-01 hello reaches it)
+/// → the App TLS door on 127.0.0.1:38474, PROXY v2 on.
+fn app_routes(add: &mut Add) {
+    for h in crate::apps::tls_door::reload().routed {
+        add(&h, routes::fixed_backend(Kind::App));
+    }
+}
+
+/// What `host` is already used for at :443 on this box (the mail host and
+/// its extra names, Skin Direct's host, the TURN name), `None` = free. A
+/// custom App name equal to one of them is refused at bind (PRD §8.4).
+pub fn current_use(host: &str) -> Option<String> {
+    let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if mail_names().iter().any(|m| m.eq_ignore_ascii_case(&h)) {
+        return Some(format!("{h} is this box's mail host (hosted mail)"));
+    }
+    if let Some(c) = k2_core::skin_door::front_routes() {
+        if c.hosts.iter().any(|x| x.eq_ignore_ascii_case(&h)) {
+            return Some(format!("{h} is Skin Direct's host on this box"));
+        }
+    }
+    if k2_core::skin::front_door_is_stored() {
+        let stored = k2_core::skin::get_front_door().ok().and_then(|fd| fd.url).map(|u| {
+            let rest = u.split_once("://").map(|(_, r)| r.to_string()).unwrap_or(u);
+            rest.split(['/', ':']).next().unwrap_or("").trim_end_matches('.').to_ascii_lowercase()
+        });
+        if stored.as_deref() == Some(h.as_str()) {
+            return Some(format!("{h} is Skin Direct's host on this box"));
+        }
+    }
+    for (rh, b) in routes::current().entries() {
+        if rh == &h && b.kind != Kind::App {
+            return Some(format!("{h} already routes to {} on :443", b.kind.as_str()));
+        }
+    }
+    None
+}
+
+/// Rebuild now (a custom name was bound, unbound or changed state). With
+/// the front off only the door's own table is refreshed (the route table
+/// is already empty; `disable` cleared it).
+pub fn rebuild_now() {
+    if !k2_core::front443::load().enabled {
+        crate::apps::tls_door::reload();
+        return;
+    }
+    rebuild_logged();
 }
 
 type Add<'a> = dyn FnMut(&str, Backend) + 'a;

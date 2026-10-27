@@ -98,6 +98,40 @@ pub fn may_bind(caller_ws: Option<&str>, name: &str) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// A `k2.dev` name can never be a custom App name (PRD §6).
+pub const K2_DEV_NAME: &str = "k2_dev_name";
+/// The name is already used at :443 on this box (mail, Skin Direct, TURN).
+pub const NAME_IN_USE: &str = "hostname_in_use";
+
+/// Names a custom App domain can never be, and names this box already
+/// serves something else on (PRD §6 "never claimable", §8.4 "a name
+/// already routed to mail, TURN or Skin Direct is refused at bind time
+/// with the name's current use"). `existing_role` is the row's role when
+/// the hostname is already bound (a `mail` / `direct` row is that use).
+pub fn bind_conflict(hostname: &str, existing_role: Option<&str>) -> Result<(), Refusal> {
+    let h = hostname.trim().trim_end_matches('.').to_ascii_lowercase();
+    if h == "k2.dev" || h.ends_with(".k2.dev") {
+        return Err(refuse(
+            400,
+            K2_DEV_NAME,
+            format!("{h} is a k2.dev name: an App's k2.dev names are `k2 app domain add <app> <label>` (never a custom domain)"),
+        ));
+    }
+    match existing_role {
+        Some(domains::ROLE_MAIL) => {
+            return Err(refuse(409, NAME_IN_USE, format!("{h} is bound as this box's mail name (role mail): unbind it first")))
+        }
+        Some(domains::ROLE_DIRECT) => {
+            return Err(refuse(409, NAME_IN_USE, format!("{h} is bound to Skin Direct (role direct): unbind it first")))
+        }
+        _ => {}
+    }
+    if let Some(why) = crate::front443::current_use(&h) {
+        return Err(refuse(409, NAME_IN_USE, format!("{why}: a custom App name can't share it")));
+    }
+    Ok(())
+}
+
 /// May this caller re-role or remove a hostname whose current role is
 /// `existing_role`? The owner may; an agent may not touch a name bound to
 /// another workspace's App (or to an App that no longer exists and that

@@ -15,6 +15,12 @@ use serde::{Deserialize, Serialize};
 /// Skin Direct's Caddy HTTPS port behind the front (loopback only).
 pub const CADDY_FRONT_PORT: u16 = 38473;
 
+/// The daemon's App TLS door behind the front (0.46.6,
+/// prd-app-custom-domains-v1 D1, vs-live CD-A7): loopback only, a FIXED
+/// port so a hand-off successor's table (fixed backends only) keeps the
+/// custom App names routed from its first connection.
+pub const APP_DOOR_PORT: u16 = 38474;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FrontConfig {

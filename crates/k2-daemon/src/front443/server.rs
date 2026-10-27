@@ -52,6 +52,8 @@ pub struct Counters {
     pub turn: AtomicU64,
     pub caddy: AtomicU64,
     pub stalwart: AtomicU64,
+    /// Custom App names routed to the App TLS door (0.46.6).
+    pub app: AtomicU64,
     pub unknown_sni: AtomicU64,
     pub no_sni: AtomicU64,
     pub not_tls: AtomicU64,
@@ -74,7 +76,7 @@ impl Counters {
             "overCap": g(&self.over_cap),
             "perIpRefused": g(&self.per_ip_refused),
             "live": g(&self.live),
-            "routed": {"turn": g(&self.turn), "caddy": g(&self.caddy), "stalwart": g(&self.stalwart)},
+            "routed": {"turn": g(&self.turn), "caddy": g(&self.caddy), "stalwart": g(&self.stalwart), "app": g(&self.app)},
             "closed": {
                 "unknownSni": g(&self.unknown_sni),
                 "noSni": g(&self.no_sni),
@@ -344,6 +346,7 @@ async fn serve(f: &Front, mut tcp: TcpStream, peer: SocketAddr, slot: HelloSlot)
         Kind::Turn => Counters::bump(&f.counters.turn),
         Kind::Caddy => Counters::bump(&f.counters.caddy),
         Kind::Stalwart => Counters::bump(&f.counters.stalwart),
+        Kind::App => Counters::bump(&f.counters.app),
     }
     let _ = tokio::io::copy_bidirectional(&mut tcp, &mut up).await;
 }

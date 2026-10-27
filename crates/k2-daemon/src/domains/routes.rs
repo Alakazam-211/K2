@@ -485,6 +485,13 @@ pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
             return custom_refusal(r);
         }
     }
+    // A custom App name is never a k2.dev name, nor a name mail, Skin
+    // Direct or TURN already uses at :443 (PRD §6, §8.4).
+    if k2_core::domains::app_of_role(&role).is_some() {
+        if let Err(r) = crate::apps::custom_domains::bind_conflict(&hostname, existing.as_ref().map(|c| c.role.as_str())) {
+            return custom_refusal(r);
+        }
+    }
 
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -519,6 +526,13 @@ pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
     match upsert_name(&conn, &hostname, &apex, &role) {
         Ok(n) => {
             drop(conn);
+            if k2_core::domains::app_of_role(&n.role).is_some()
+                || existing.as_ref().is_some_and(|c| k2_core::domains::app_of_role(&c.role).is_some())
+            {
+                // The door and front443 follow the binding now, not at the
+                // next 30 s tick.
+                crate::front443::rebuild_now();
+            }
             let mut name = serde_json::json!({
                 "hostname": n.hostname,
                 "apex": n.apex,
@@ -575,9 +589,12 @@ pub fn handle_names_remove(params: &HashMap<String, String>) -> CliResponse {
         }
     }
     match remove_name(&conn, &hostname) {
-        Ok(true) => CliResponse::ok_json(
-            serde_json::json!({ "ok": true, "removed": hostname }).to_string(),
-        ),
+        Ok(true) => {
+            drop(conn);
+            // A removed App name stops routing now (the cert files stay).
+            crate::front443::rebuild_now();
+            CliResponse::ok_json(serde_json::json!({ "ok": true, "removed": hostname }).to_string())
+        }
         Ok(false) => error_response(
             "404 Not Found",
             "not_found",

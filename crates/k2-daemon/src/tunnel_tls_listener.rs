@@ -1025,25 +1025,18 @@ async fn serve_one(
                 label.and_then(|l| crate::apps::router::live(&l).map(|be| (l, be)))
             {
                 log_debug!("[daemon/e2e] routing {sni} → App backend :{}", be.port);
-                let mode = crate::apps::router::rewrite_mode(&be, &label, crate::client_ip::Mode::Tunnel(client_ip));
-                // App phone pairing (V5): while the App's pairing is on, K2
-                // answers its link files itself, the first request before
-                // the backend is dialed.
-                let local = mode.and_then(|_| crate::app_pairing::links::local_for(&label));
-                let spliced = match local {
-                    Some(l) => match crate::apps::router::answer_first(&mut tls, &l).await {
-                        crate::apps::router::FirstRequest::Answered => return Ok(()),
-                        crate::apps::router::FirstRequest::Pass(bytes) => {
-                            let mut r = crate::client_ip::Replay::new(bytes, &mut tls);
-                            crate::apps::router::splice_with(&mut r, be, mode, Some(l)).await
-                        }
-                    },
-                    None => crate::apps::router::splice(&mut tls, be, mode).await,
-                };
-                if let Err(e) = spliced {
-                    log_debug!("[daemon/e2e] {sni}: {e} — answering 502");
-                    write_unreachable_502(&mut tls).await;
-                    return Ok(());
+                // The one App path (vs-live CD-A8), shared with the App TLS
+                // door: client-IP rewrite, K2's own pairing link-file
+                // answers (App phone pairing V5), then the splice.
+                let mode = crate::client_ip::Mode::Tunnel(client_ip);
+                match crate::apps::router::serve_tls_app(&mut tls, be, &label, mode).await {
+                    crate::apps::router::TlsAppOutcome::Answered => return Ok(()),
+                    crate::apps::router::TlsAppOutcome::Spliced => {}
+                    crate::apps::router::TlsAppOutcome::Failed { why, .. } => {
+                        log_debug!("[daemon/e2e] {sni}: {why} — answering 502");
+                        write_unreachable_502(&mut tls).await;
+                        return Ok(());
+                    }
                 }
                 let _ = tls.shutdown().await;
                 return Ok(());

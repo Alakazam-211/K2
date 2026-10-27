@@ -265,12 +265,22 @@ pub async fn serve_app_conn<S>(client: &mut S, app_id: &str, peer: Option<std::n
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let local = crate::app_pairing::links::local_for(app_id);
+    serve_app_conn_with(client, app_id, crate::client_ip::Mode::Local { peer }).await
+}
+
+/// [`serve_app_conn`] for a given client-IP mode: the App TLS door
+/// (0.46.6) serves a custom name's connection with
+/// `Mode::Tunnel(<the client front443 saw>)`, the front port with
+/// `Mode::Local`.
+pub async fn serve_app_conn_with<S>(client: &mut S, app_id: &str, mode: crate::client_ip::Mode)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     match live(app_id) {
         None => {
-            match &local {
+            match crate::app_pairing::links::local_for(app_id) {
                 Some(l) => {
-                    if let FirstRequest::Answered = answer_first(client, l).await {
+                    if let FirstRequest::Answered = answer_first(client, &l).await {
                         return;
                     }
                 }
@@ -278,31 +288,63 @@ where
             }
             let _ = client.write_all(own_answer("503 Service Unavailable", UNAVAILABLE_BODY).as_bytes()).await;
         }
-        Some(be) => {
-            let mode = rewrite_mode(&be, app_id, crate::client_ip::Mode::Local { peer });
-            match (mode, local) {
-                (Some(mode), Some(l)) => match answer_first(client, &l).await {
-                    FirstRequest::Answered => return,
-                    FirstRequest::Pass(bytes) => {
-                        let failed = {
-                            let mut r = crate::client_ip::Replay::new(bytes, client);
-                            splice_with(&mut r, be, Some(mode), Some(l)).await.is_err()
-                        };
-                        if failed {
-                            let _ = client.write_all(own_answer("502 Bad Gateway", BAD_GATEWAY_BODY).as_bytes()).await;
-                        }
-                    }
-                },
-                (mode, _) => {
-                    if splice(client, be, mode).await.is_err() {
-                        consume_request_head(client).await;
-                        let _ = client.write_all(own_answer("502 Bad Gateway", BAD_GATEWAY_BODY).as_bytes()).await;
-                    }
+        Some(be) => match serve_tls_app(client, be, app_id, mode).await {
+            TlsAppOutcome::Answered => return,
+            TlsAppOutcome::Spliced => {}
+            TlsAppOutcome::Failed { head_read, .. } => {
+                if !head_read {
+                    consume_request_head(client).await;
                 }
+                let _ = client.write_all(own_answer("502 Bad Gateway", BAD_GATEWAY_BODY).as_bytes()).await;
             }
-        }
+        },
     }
     let _ = client.shutdown().await;
+}
+
+/// What [`serve_tls_app`] did with a connection.
+#[derive(Debug)]
+pub enum TlsAppOutcome {
+    /// K2 answered (an App pairing link file) and closed the connection.
+    Answered,
+    /// Spliced to the App until either side closed (or the drain cut it).
+    Spliced,
+    /// The backend could not be dialed. `head_read`: the first request
+    /// head was already read (the caller answers its error at once).
+    Failed { head_read: bool, why: String },
+}
+
+/// The one App path behind a terminated TLS stream (vs-live CD-A8),
+/// shared by the K2 Connect E2E listener (`*.<sub>.k2.dev`), the App TLS
+/// door (custom names, 0.46.6) and the App's front port: the client-IP
+/// rewrite when the App allows it ([`rewrite_mode`] for `label`), K2's own
+/// answers for the App's pairing link files (read before the backend is
+/// dialed), then the counted splice to `be`. The caller answers a failure.
+pub async fn serve_tls_app<S>(client: &mut S, be: Arc<Backend>, label: &str, mode: crate::client_ip::Mode) -> TlsAppOutcome
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mode = rewrite_mode(&be, label, mode);
+    let local = mode.and_then(|_| crate::app_pairing::links::local_for(label));
+    match (mode, local) {
+        (Some(mode), Some(l)) => match answer_first(client, &l).await {
+            FirstRequest::Answered => TlsAppOutcome::Answered,
+            FirstRequest::Pass(bytes) => {
+                let r = {
+                    let mut r = crate::client_ip::Replay::new(bytes, client);
+                    splice_with(&mut r, be, Some(mode), Some(l)).await
+                };
+                match r {
+                    Ok(()) => TlsAppOutcome::Spliced,
+                    Err(why) => TlsAppOutcome::Failed { head_read: true, why },
+                }
+            }
+        },
+        (mode, _) => match splice(client, be, mode).await {
+            Ok(()) => TlsAppOutcome::Spliced,
+            Err(why) => TlsAppOutcome::Failed { head_read: false, why },
+        },
+    }
 }
 
 /// Read the request head before answering an error ourselves: closing a

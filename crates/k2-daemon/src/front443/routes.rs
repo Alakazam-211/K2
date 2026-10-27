@@ -20,6 +20,9 @@ pub enum Kind {
     Caddy,
     /// Stalwart's HTTPS listener on 127.0.0.1:8443 (opt-in).
     Stalwart,
+    /// The daemon's App TLS door on 127.0.0.1:38474 (0.46.6): custom
+    /// App names (`app.customer.com`), PROXY v2 always.
+    App,
 }
 
 impl Kind {
@@ -28,6 +31,7 @@ impl Kind {
             Kind::Turn => "turn",
             Kind::Caddy => "caddy",
             Kind::Stalwart => "stalwart",
+            Kind::App => "app",
         }
     }
 }
@@ -129,6 +133,16 @@ pub fn fixed_backend(kind: Kind) -> Backend {
         Kind::Stalwart => Backend { kind, addr: lo(8443), proxy: true, refuse_loopback_clients: true },
         // PROXY only when that Caddy reads it: the one free field.
         Kind::Caddy => Backend { kind, addr: lo(k2_core::front443::CADDY_FRONT_PORT), proxy: false, refuse_loopback_clients: false },
+        // The door reads PROXY v2 for the client address (CD-A9).
+        Kind::App => Backend { kind, addr: lo(k2_core::front443::APP_DOOR_PORT), proxy: true, refuse_loopback_clients: false },
+    }
+}
+
+impl RouteTable {
+    /// The table without `kind`'s routes (a hand-off to a successor that
+    /// doesn't know that kind).
+    pub fn without_kind(&self, kind: Kind) -> RouteTable {
+        RouteTable { hosts: self.hosts.iter().filter(|(_, b)| b.kind != kind).map(|(h, b)| (h.clone(), b.clone())).collect() }
     }
 }
 

@@ -35,6 +35,8 @@ pub mod domains;
 /// Custom domains that actually serve an App (0.46.6,
 /// prd-app-custom-domains-v1): who may bind, state, checks, the TLS door.
 pub mod custom_domains;
+/// The App TLS door: front443 routes custom App names here (0.46.6).
+pub mod tls_door;
 /// `k2 app move-plan`: every step of a move, one owner approval (0.46.4).
 pub mod move_plan;
 /// Test guests of one App, made by a person (0.46.4).

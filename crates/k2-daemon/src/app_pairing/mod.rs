@@ -119,9 +119,12 @@ pub fn state(app: &str) -> Result<store::Config, Off> {
     }
 }
 
-/// The k2.dev hosts an App answers on (V2: its own label, its taken and
-/// attached labels; the supervisor's union), lowercase, no scheme. R1:
-/// v1 pairs on these only, never a custom domain.
+/// The hosts an App answers on (V2: its own label, its taken and attached
+/// labels; the supervisor's union), lowercase, no scheme. 0.46.6 (vs-live
+/// CD-A16, closing pairing vs-live V1): plus its custom domains once they
+/// are `live` (the App TLS door serves them on the same App path, so the
+/// link files answer there too). A bound name that isn't served yet never
+/// pairs.
 pub fn pairing_hosts(service_id: &str) -> Vec<String> {
     let app = runtime_app(service_id);
     let name = match &app {
@@ -136,14 +139,18 @@ pub fn pairing_hosts(service_id: &str) -> Vec<String> {
         origins = crate::apps::origins::with_taken_labels(origins, &crate::apps::labels::taken(&a.app_id));
     }
     let sub = crate::apps::origins::box_subdomain();
-    if sub.is_empty() {
-        return Vec::new();
-    }
-    let suffix = format!(".{sub}.{}", k2_core::tunnel::config::SUBDOMAIN_HOST);
+    let suffix = (!sub.is_empty()).then(|| format!(".{sub}.{}", k2_core::tunnel::config::SUBDOMAIN_HOST));
+    // `for_service` lists only LIVE custom names (CD-A4).
+    let live_custom: Vec<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::live_hostnames_for_app(&conn, &name).unwrap_or_default()
+    };
     let mut out: Vec<String> = Vec::new();
     for o in origins {
         if let Some(h) = o.strip_prefix("https://").map(|h| h.trim_end_matches('/').to_ascii_lowercase()) {
-            if h.ends_with(&suffix) && !out.contains(&h) {
+            let k2_label = suffix.as_deref().is_some_and(|s| h.ends_with(s));
+            if (k2_label || live_custom.contains(&h)) && !out.contains(&h) {
                 out.push(h);
             }
         }

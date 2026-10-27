@@ -134,8 +134,25 @@ fn the_front_socket_goes_only_to_a_successor_that_names_it() {
     // A 0.46.1 HELLO carries its roles, and an old parser would ignore the
     // extra field (no deny_unknown_fields on Msg).
     let new = serde_json::to_string(&Msg::Hello { pid: 7, version: "0.46.1".into(), roles: Some(Role::ALL.to_vec()), app_listeners: false }).unwrap();
-    assert!(new.contains(r#""roles":["main","tunnelIngress","tunnelTls","front443"]"#), "{new}");
+    assert!(new.contains(r#""roles":["main","tunnelIngress","tunnelTls","front443","appDoor"]"#), "{new}");
     assert!(!new.contains("app_listeners"), "a successor without App listeners says nothing new: {new}");
+}
+
+/// 0.46.6 (CD-A7): the App door socket goes only to a successor that names
+/// it; a 0.46.1–0.46.5 successor (front443 but no door) gets the rest.
+#[test]
+fn the_app_door_goes_only_to_a_successor_that_names_it() {
+    let held = [Role::Main, Role::TunnelIngress, Role::TunnelTls, Role::Front443, Role::AppDoor];
+    let pre_door = [Role::Main, Role::TunnelIngress, Role::TunnelTls, Role::Front443];
+    assert_eq!(roles_for_successor(&held, Some(&pre_door)), pre_door.to_vec());
+    assert_eq!(roles_for_successor(&held, Some(&Role::ALL)), held.to_vec());
+    assert_eq!(roles_for_successor(&held, None), Role::LEGACY.to_vec());
+    // A pre-door successor's HELLO (no "appDoor") still parses.
+    let hello = br#"{"t":"hello","pid":7,"version":"0.46.5","roles":["main","tunnelIngress","tunnelTls","front443"]}"#;
+    match serde_json::from_slice::<Msg>(hello).expect("0.46.5 hello") {
+        Msg::Hello { roles, .. } => assert_eq!(roles, Some(pre_door.to_vec())),
+        other => panic!("{other:?}"),
+    }
 }
 
 /// R19 (update continuity, 0.46.4), the wire: a 0.46.3 HELLO and TAKE parse

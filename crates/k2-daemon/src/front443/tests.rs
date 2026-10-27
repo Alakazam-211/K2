@@ -366,6 +366,36 @@ fn the_table_takes_only_loopback_backends_and_valid_names() {
     assert_eq!(back, handed);
 }
 
+/// 0.46.6 (CD-A7): a custom App name's route is a FIXED backend (the App
+/// TLS door, 127.0.0.1:38474, PROXY v2), so a hand-off successor keeps it
+/// from its first connection; one pointing anywhere else, or without
+/// PROXY, is dropped. A successor without the door gets the table without
+/// App routes. App routes never take a name TURN, mail or Caddy routes.
+#[test]
+fn app_routes_are_fixed_and_survive_a_hand_off() {
+    use super::routes::fixed_backend;
+    let door = fixed_backend(Kind::App);
+    assert_eq!(door.addr, SocketAddr::from(([127, 0, 0, 1], k2_core::front443::APP_DOOR_PORT)));
+    assert!(door.proxy && !door.refuse_loopback_clients);
+    let mut handed = RouteTable::default();
+    handed.insert("mail.acme.dev", fixed_backend(Kind::Stalwart)).unwrap();
+    handed.insert("app.customer.com", door.clone()).unwrap();
+    let mut evil = handed.clone();
+    evil.insert("shop.customer.com", be(Kind::App, "127.0.0.1:40001".parse().unwrap(), true)).unwrap();
+    evil.insert("raw.customer.com", Backend { proxy: false, ..door.clone() }).unwrap();
+    assert_eq!(evil.fixed_backends_only(), handed);
+    let pre_door = handed.without_kind(Kind::App);
+    assert!(pre_door.lookup("app.customer.com").is_none());
+    assert!(pre_door.lookup("mail.acme.dev").is_some());
+    // First route wins: the mail host stays Stalwart's.
+    let mut t = RouteTable::default();
+    t.insert("mail.acme.dev", fixed_backend(Kind::Stalwart)).unwrap();
+    let e = t.insert("mail.acme.dev", door).unwrap_err();
+    assert!(e.contains("stalwart"), "{e}");
+    let v: serde_json::Value = serde_json::to_value(&handed).unwrap();
+    assert!(v.to_string().contains("\"app\""), "kind app on the wire: {v}");
+}
+
 // ── the front on loopback ───────────────────────────────────────────────
 
 struct Rig {

@@ -3822,6 +3822,11 @@ pub fn dispatch_post_as(
     // card's answer is scoped to).
     let captured_session = params.get(crate::caller_workspace::CELL_SESSION_KEY).cloned();
     let stamped = captured_bound.as_deref() == Some("1");
+    if path == "/cli/thread/post" {
+        if let Some(r) = thread_post_body_type_error(body) {
+            return r;
+        }
+    }
     merge_body(&mut params, body);
     restore_param(&mut params, crate::caller_workspace::CELL_SESSION_KEY, captured_session);
     if stamped {
@@ -3852,6 +3857,42 @@ pub fn dispatch_post_as(
         }
         _ => CliResponse::not_found(),
     }
+}
+
+fn json_type_name(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
+/// `POST /cli/thread/post`: a known JSON body field of the wrong type is a
+/// 400 (0.46.5 papercut). Before, `attachments` sent as an object was
+/// silently dropped (the post went out with no files), and an array or
+/// object under `text` was posted as its JSON text. `attachments` takes a
+/// JSON array of `{path|relPath, line?, lineEnd?}`, or a string holding
+/// that array (the form-body shape `k2 thread --file` sends); `null` is
+/// "none". The text fields take strings (a number or boolean still reads
+/// as its text, as before). Form bodies are unaffected.
+fn thread_post_body_type_error(body: &[u8]) -> Option<CliResponse> {
+    let Ok(serde_json::Value::Object(obj)) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return None;
+    };
+    for (k, v) in &obj {
+        let want = match k.as_str() {
+            "attachments" if !(v.is_array() || v.is_string() || v.is_null()) => {
+                "a JSON array of {path, line?, lineEnd?}"
+            }
+            "addr" | "text" | "from" | "via" | "command" if v.is_array() || v.is_object() => "a string",
+            _ => continue,
+        };
+        return Some(usage(format!("{k} must be {want}, not {}", json_type_name(v))));
+    }
+    None
 }
 
 fn restore_param(params: &mut HashMap<String, String>, key: &str, captured: Option<String>) {
@@ -4456,6 +4497,79 @@ mod tests {
             present_keep(&project_id, "Keep it?", &KEEP_OPTIONS, keep_action("kwy", &"c".repeat(64)), false).expect("present"),
             Presented::Card { .. }
         ));
+    }
+
+    /// 0.46.5 papercut: `attachments` as a JSON array rides the post (the
+    /// in-process door, the same merge the TCP and cell doors call); a
+    /// known field of the wrong type is a 400, never dropped.
+    #[test]
+    fn thread_post_json_attachments_array_rides_and_wrong_types_are_400() {
+        let handle = format!("ovlatt{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let root = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let p: String = conn
+                .query_row("SELECT path FROM projects WHERE id = ?1", params![project_id], |r| r.get(0))
+                .expect("seeded path");
+            std::path::PathBuf::from(p)
+        };
+        std::fs::create_dir_all(root.join("out")).expect("workspace dir");
+        std::fs::write(root.join("out/report.txt"), b"line one\nline two\n").expect("file");
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
+        let post = |body: serde_json::Value| dispatch_post("/cli/thread/post", &HashMap::new(), body.to_string().as_bytes());
+
+        // A real JSON array (path and the catalog's relPath spelling).
+        let ok = post(serde_json::json!({
+            "addr": handle, "text": "", "from": "k2",
+            "attachments": [{"path": "out/report.txt", "line": 2}, {"relPath": "out/report.txt"}],
+        }));
+        assert_eq!(ok.status, "200 OK", "{}", ok.body);
+        let posted = json_body(&ok);
+        let atts = posted["attachments"].as_array().unwrap_or_else(|| panic!("attachments in the reply: {posted}"));
+        assert_eq!(atts.len(), 2, "{posted}");
+        assert_eq!(atts[0]["path"], "out/report.txt", "{posted}");
+        assert_eq!(atts[0]["line"], 2, "{posted}");
+        let get = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET thread");
+        let snap = json_body(&get);
+        let items = snap["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1, "{snap}");
+        assert_eq!(items[0]["doc"]["attachments"].as_array().map(Vec::len), Some(2), "stored with the post: {snap}");
+
+        // Wrong types: 400, nothing stored.
+        for (body, field, got) in [
+            (serde_json::json!({"addr": handle, "text": "x", "attachments": {"path": "out/report.txt"}}), "attachments", "an object"),
+            (serde_json::json!({"addr": handle, "text": "x", "attachments": 3}), "attachments", "a number"),
+            (serde_json::json!({"addr": handle, "text": "x", "attachments": true}), "attachments", "a boolean"),
+            (serde_json::json!({"addr": handle, "text": ["x"]}), "text", "an array"),
+            (serde_json::json!({"addr": {"h": handle}, "text": "x"}), "addr", "an object"),
+        ] {
+            let r = post(body.clone());
+            assert_eq!(r.status, "400 Bad Request", "{body}: {}", r.body);
+            let v = json_body(&r);
+            assert_eq!(v["error"]["code"], "usage", "{body}: {v}");
+            let hint = v["error"]["hint"].as_str().expect("hint");
+            assert!(hint.starts_with(&format!("{field} must be ")) && hint.ends_with(&format!("not {got}")), "{body}: {hint}");
+        }
+        // A string holding the array (the form shape) and null still work.
+        let as_text = post(serde_json::json!({
+            "addr": handle, "text": "t", "from": "k2",
+            "attachments": serde_json::json!([{"path": "out/report.txt"}]).to_string(),
+        }));
+        assert_eq!(as_text.status, "200 OK", "{}", as_text.body);
+        assert_eq!(json_body(&as_text)["attachments"].as_array().map(Vec::len), Some(1), "{}", as_text.body);
+        let null = post(serde_json::json!({"addr": handle, "text": "n", "from": "k2", "attachments": null}));
+        assert_eq!(null.status, "200 OK", "{}", null.body);
+        let get = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET thread");
+        assert_eq!(json_body(&get)["items"].as_array().map(Vec::len), Some(3), "only the three good posts stored");
     }
 
     #[test]

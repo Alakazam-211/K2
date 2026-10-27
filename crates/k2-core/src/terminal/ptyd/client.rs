@@ -6,8 +6,15 @@
 //! listening (P6), and connects as the **owner** with `takeover:true`.
 //! A reader thread routes responses to waiting callers and `exited` /
 //! `overrun` events to the session that registered for them.
+//!
+//! S7 (PRD §7.10, P65): on its first owner connection the daemon may ask
+//! an older ptyd to exec itself into the current binary ([`decide_upgrade`]
+//! in `super`). The owner connection then drops and the reader thread
+//! reconnects IN PLACE (same [`Owner`], same boot id), so attached sessions
+//! keep their handle, reattach at their byte offset and hear the exits that
+//! happened while no owner was connected.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
@@ -18,7 +25,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use k2_ptyd::auth;
-use k2_ptyd::client::{Conn, DataStream};
+use k2_ptyd::client::{ConnectError, Conn, DataStream};
 use k2_ptyd::paths::Paths;
 use k2_ptyd::proto::{self, Frame, Reply, Request, Role};
 
@@ -33,6 +40,21 @@ pub enum SessionEvent {
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_WAIT: Duration = Duration::from_secs(5);
+/// `upgrade` runs ptyd's 10 s-bounded selftest before it answers.
+const UPGRADE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long the reader keeps reconnecting after an upgrade drop.
+const RECONNECT_WAIT: Duration = Duration::from_secs(20);
+
+/// What [`Owner::wait_reconnected`] saw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reconnect {
+    /// The owner reconnected (generation `g`): reattach at your offset.
+    Changed(u64),
+    /// No reconnect happened (no upgrade, or it was refused).
+    Unchanged,
+    /// ptyd did not come back.
+    Dead,
+}
 
 /// A request waiting for its response. `wants_fd`: the reply carries an
 /// fd (SCM_RIGHTS) that the reader thread hands over with it.
@@ -51,8 +73,18 @@ pub struct Owner {
     key: [u8; auth::KEY_LEN],
     sock: PathBuf,
     client_version: String,
+    /// The version ptyd reported when this owner first connected (see
+    /// [`Owner::version`] for the current one after an upgrade).
     pub ptyd_version: String,
+    /// Kept identical across a self-upgrade (§7.10).
     pub boot_id: String,
+    /// The running ptyd's protocol range (its challenge).
+    pub proto_range: (u32, u32),
+    version: Mutex<String>,
+    /// Bumped on every in-place reconnect.
+    generation: AtomicU64,
+    /// An upgrade was requested: a dropped connection is reconnected.
+    reconnecting: AtomicBool,
 }
 
 impl Owner {
@@ -73,8 +105,12 @@ impl Owner {
             key,
             sock,
             client_version: client_version.to_string(),
+            version: Mutex::new(hello.ptyd_version.clone()),
             ptyd_version: hello.ptyd_version,
             boot_id: hello.boot_id,
+            proto_range: (hello.proto_min, hello.proto_max),
+            generation: AtomicU64::new(0),
+            reconnecting: AtomicBool::new(false),
         });
         let weak = Arc::downgrade(&owner);
         std::thread::Builder::new()
@@ -88,9 +124,192 @@ impl Owner {
         self.dead.load(Ordering::Acquire)
     }
 
+    /// The running ptyd's version (changes after an in-place upgrade).
+    pub fn version(&self) -> String {
+        lock(&self.version).clone()
+    }
+
+    /// Bumped on every in-place reconnect (an upgrade).
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    /// An upgrade is in flight, or one completed since generation `since`:
+    /// a data stream that just hit EOF should wait and reattach.
+    pub fn upgrade_in_flight(&self, since: u64) -> bool {
+        self.reconnecting.load(Ordering::Acquire) || self.generation() != since
+    }
+
+    /// Wait (bounded) until the owner reconnected past generation `since`,
+    /// gave up, or no reconnect is pending any more.
+    pub fn wait_reconnected(&self, since: u64, within: Duration) -> Reconnect {
+        let t = Instant::now();
+        loop {
+            if self.is_dead() {
+                return Reconnect::Dead;
+            }
+            let g = self.generation();
+            if g != since {
+                return Reconnect::Changed(g);
+            }
+            if !self.reconnecting.load(Ordering::Acquire) || t.elapsed() >= within {
+                return Reconnect::Unchanged;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// §7.10: ask ptyd to exec `exe` in place. `Ok(new_version)` once the
+    /// owner reconnected to the new image (same boot id). `Err` when ptyd
+    /// refused (`upgrade_failed`/`unsupported`: this connection is
+    /// untouched), when its exec failed (it reconnected on the old image),
+    /// or when it did not come back (this owner is then dead).
+    pub fn upgrade(&self, exe: &Path) -> Result<String, String> {
+        let since = self.generation();
+        let from = self.version();
+        self.reconnecting.store(true, Ordering::Release);
+        let r = self.request_timeout(Request::Upgrade { exe: exe.to_string_lossy().into_owned() }, UPGRADE_TIMEOUT);
+        match r {
+            Ok(Reply::Ok) => {}
+            Ok(Reply::Error { code, detail }) => {
+                self.reconnecting.store(false, Ordering::Release);
+                return Err(format!("{code}: {detail}"));
+            }
+            Ok(other) => {
+                self.reconnecting.store(false, Ordering::Release);
+                return Err(format!("unexpected {other:?}"));
+            }
+            // The connection dropped before the answer: ptyd may still be
+            // exec'ing (the reader is reconnecting) — wait and see.
+            Err(_) if self.is_dead() || self.generation() != since || self.reconnecting.load(Ordering::Acquire) => {}
+            Err(e) => {
+                self.reconnecting.store(false, Ordering::Release);
+                return Err(format!("no answer: {e}"));
+            }
+        }
+        match self.wait_reconnected(since, RECONNECT_WAIT + Duration::from_secs(5)) {
+            Reconnect::Changed(_) => {
+                let now = self.version();
+                if now == from {
+                    Err(format!("exec failed: ptyd is still v{from}"))
+                } else {
+                    Ok(now)
+                }
+            }
+            Reconnect::Dead => Err("ptyd did not come back after the upgrade".into()),
+            Reconnect::Unchanged => {
+                self.reconnecting.store(false, Ordering::Release);
+                Err("ptyd answered ok but the connection never dropped".into())
+            }
+        }
+    }
+
+    /// Reader thread: reconnect after an upgrade drop. Retries until
+    /// [`RECONNECT_WAIT`]; a refused connect (no listener: ptyd is gone), a
+    /// bad mac or another boot id (another ptyd instance) is final.
+    fn reconnect(&self) -> Result<Conn, String> {
+        let t = Instant::now();
+        loop {
+            match self.try_reconnect() {
+                Ok(c) => return Ok(c),
+                Err((fatal, e)) if fatal || t.elapsed() >= RECONNECT_WAIT => {
+                    self.reconnecting.store(false, Ordering::Release);
+                    return Err(e);
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(25)),
+            }
+        }
+    }
+
+    fn try_reconnect(&self) -> Result<Conn, (bool, String)> {
+        let mut conn = Conn::connect(&self.sock).map_err(|e| {
+            let fatal = matches!(e.kind(), io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound);
+            (fatal, format!("connect:{}", e.kind()))
+        })?;
+        conn.set_timeout(Some(REQUEST_TIMEOUT)).map_err(|e| (false, format!("timeout:{}", e.kind())))?;
+        let hello = conn.handshake(&self.key, &self.client_version, Role::Owner, true).map_err(|e| match e {
+            ConnectError::Refused { code, detail } => (code == "bad_mac" || code == "proto", format!("refused:{code} {detail}")),
+            other => (false, format!("handshake:{other}")),
+        })?;
+        if hello.boot_id != self.boot_id {
+            return Err((true, "a different ptyd instance answered".into()));
+        }
+        // Exits that happened while no owner was connected were never sent
+        // as events: learn them from `list` (id 0 is never a request id).
+        conn.send(&Frame::new(Some(0), Request::List)).map_err(|e| (false, format!("list:{}", e.kind())))?;
+        let mut notified = HashSet::new();
+        let sessions = loop {
+            let f = conn.recv().map_err(|e| (false, format!("list:{}", e.kind())))?;
+            match (f.id, f.body) {
+                (Some(0), Reply::Sessions { sessions }) => break sessions,
+                (Some(0), other) => return Err((false, format!("list: {other:?}"))),
+                (None, ev) => {
+                    if let Reply::Exited { sid, .. } = &ev {
+                        notified.insert(sid.clone());
+                    }
+                    self.on_event(ev);
+                }
+                (Some(_), _) => {}
+            }
+        };
+        conn.set_timeout(None).map_err(|e| (false, format!("timeout:{}", e.kind())))?;
+        let writer = conn.stream.try_clone().map_err(|e| (false, format!("clone:{}", e.kind())))?;
+        *lock(&self.writer) = writer;
+        *lock(&self.version) = hello.ptyd_version;
+        for (sid, w) in lock(&self.watchers).iter() {
+            if notified.contains(sid) {
+                continue;
+            }
+            match sessions.iter().find(|s| &s.sid == sid).map(|s| &s.state) {
+                Some(k2_ptyd::proto::SessionState::Exited { code, signal, .. }) => {
+                    let _ = w.send(SessionEvent::Exited { code: *code, signal: *signal });
+                }
+                Some(k2_ptyd::proto::SessionState::Running) => {}
+                None => {
+                    let _ = w.send(SessionEvent::OwnerLost);
+                }
+            }
+        }
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.reconnecting.store(false, Ordering::Release);
+        Ok(conn)
+    }
+
+    /// Route an event to its session. `false`: stop reading (evicted).
+    fn on_event(&self, body: Reply) -> bool {
+        match body {
+            Reply::Exited { sid, code, signal, .. } => {
+                if let Some(w) = lock(&self.watchers).get(&sid) {
+                    let _ = w.send(SessionEvent::Exited { code, signal });
+                }
+            }
+            Reply::Overrun { sid, lost_bytes } => {
+                crate::log_debug!("[ptyd] overrun session={} lost={}", sid, lost_bytes);
+                if let Some(w) = lock(&self.watchers).get(&sid) {
+                    let _ = w.send(SessionEvent::Overrun { lost_bytes });
+                }
+            }
+            Reply::Evicted => {
+                crate::log_debug!("[ptyd] evicted by a newer owner");
+                self.mark_dead();
+                return false;
+            }
+            Reply::OrphanWarning { seconds_left } => {
+                crate::log_debug!("[ptyd] orphan warning: {}s left", seconds_left);
+            }
+            _ => {}
+        }
+        true
+    }
+
     /// Send a request and wait for its response.
     pub fn request(&self, body: Request) -> io::Result<Reply> {
         self.request_inner(body, None, false).map(|(r, _)| r)
+    }
+
+    /// [`Self::request`] with its own response timeout.
+    pub fn request_timeout(&self, body: Request, timeout: Duration) -> io::Result<Reply> {
+        self.request_inner_t(body, None, false, timeout).map(|(r, _)| r)
     }
 
     /// Send a request whose reply carries an fd (`take_fd`,
@@ -106,6 +325,16 @@ impl Owner {
     }
 
     fn request_inner(&self, body: Request, pass: Option<std::os::fd::RawFd>, wants_fd: bool) -> io::Result<(Reply, Option<OwnedFd>)> {
+        self.request_inner_t(body, pass, wants_fd, REQUEST_TIMEOUT)
+    }
+
+    fn request_inner_t(
+        &self,
+        body: Request,
+        pass: Option<std::os::fd::RawFd>,
+        wants_fd: bool,
+        timeout: Duration,
+    ) -> io::Result<(Reply, Option<OwnedFd>)> {
         if self.is_dead() {
             return Err(io::Error::new(io::ErrorKind::NotConnected, "ptyd owner connection lost"));
         }
@@ -125,7 +354,7 @@ impl Owner {
                 return Err(e);
             }
         }
-        match rx.recv_timeout(REQUEST_TIMEOUT) {
+        match rx.recv_timeout(timeout) {
             Ok(r) => Ok(r),
             Err(_) => {
                 lock(&self.pending).remove(&id);
@@ -232,40 +461,39 @@ fn reader_loop(mut conn: Conn, owner: std::sync::Weak<Owner>) {
         let frame = match frame {
             Ok(f) => f,
             Err(_) => {
+                if o.reconnecting.load(Ordering::Acquire) {
+                    // §7.10: ptyd is exec'ing its new image. Its listener
+                    // never closed: reconnect in place. Requests in flight
+                    // on the old connection will never be answered.
+                    lock(&o.pending).clear();
+                    match o.reconnect() {
+                        Ok(c) => {
+                            crate::log_debug!("[ptyd] owner reconnected after an upgrade (ptyd v{})", o.version());
+                            conn = c;
+                            continue;
+                        }
+                        Err(e) => crate::log_debug!("[ptyd] reconnect after an upgrade failed: {}", e),
+                    }
+                }
                 crate::log_debug!("[ptyd] owner connection closed");
                 o.mark_dead();
                 return;
             }
         };
-        match (frame.id, frame.body) {
-            (Some(id), body) => {
+        match frame.id {
+            Some(id) => {
                 if let Some(p) = lock(&o.pending).remove(&id) {
                     // An fd rides the same sendmsg as its reply, so it is
                     // queued by the time the reply decodes.
-                    let fd = if p.wants_fd && matches!(body, Reply::Ok) { conn.take_fd() } else { None };
-                    let _ = p.tx.send((body, fd));
+                    let fd = if p.wants_fd && matches!(frame.body, Reply::Ok) { conn.take_fd() } else { None };
+                    let _ = p.tx.send((frame.body, fd));
                 }
             }
-            (None, Reply::Exited { sid, code, signal, .. }) => {
-                if let Some(w) = lock(&o.watchers).get(&sid) {
-                    let _ = w.send(SessionEvent::Exited { code, signal });
+            None => {
+                if !o.on_event(frame.body) {
+                    return;
                 }
             }
-            (None, Reply::Overrun { sid, lost_bytes }) => {
-                crate::log_debug!("[ptyd] overrun session={} lost={}", sid, lost_bytes);
-                if let Some(w) = lock(&o.watchers).get(&sid) {
-                    let _ = w.send(SessionEvent::Overrun { lost_bytes });
-                }
-            }
-            (None, Reply::Evicted) => {
-                crate::log_debug!("[ptyd] evicted by a newer owner");
-                o.mark_dead();
-                return;
-            }
-            (None, Reply::OrphanWarning { seconds_left }) => {
-                crate::log_debug!("[ptyd] orphan warning: {}s left", seconds_left);
-            }
-            (None, _) => {}
         }
     }
 }
@@ -284,6 +512,9 @@ pub struct Ptyd {
     /// The leftover sweep runs once, on this process's first owner
     /// connection.
     swept: AtomicBool,
+    /// P65: the self-upgrade decision runs once, on this process's first
+    /// owner connection (B0 for a restarted daemon).
+    upgrade_checked: AtomicBool,
 }
 
 /// Kill (and ack) every session in `sids`. For sessions that can't be
@@ -325,7 +556,7 @@ pub fn client_version() -> &'static str {
 impl Ptyd {
     /// A handle for an explicit K2 home (the global one uses the daemon's).
     pub fn for_home(home: &Path) -> Ptyd {
-        Ptyd { paths: Paths::from_home(home), owner: Mutex::new(None), swept: AtomicBool::new(false) }
+        Ptyd { paths: Paths::from_home(home), owner: Mutex::new(None), swept: AtomicBool::new(false), upgrade_checked: AtomicBool::new(false) }
     }
 
     pub fn paths(&self) -> &Paths {
@@ -380,6 +611,12 @@ impl Ptyd {
             }
         };
         crate::log_debug!("[ptyd] owner connected (ptyd v{}, boot {})", o.ptyd_version, &o.boot_id[..8.min(o.boot_id.len())]);
+        if !self.upgrade_checked.swap(true, Ordering::AcqRel) {
+            self.maybe_upgrade(&o);
+            if o.is_dead() {
+                return Err("ptyd_lost_in_upgrade".into());
+            }
+        }
         if !self.swept.swap(true, Ordering::AcqRel) {
             // Sessions a previous daemon left in ptyd are NOT touched here:
             // boot's B0/B1 (`terminal::ptyd::adopt`) lists and adopts them.
@@ -404,6 +641,48 @@ impl Ptyd {
     }
 
     /// `Ok(())` when ptyd can host sessions now (connects/launches).
+    /// P65 (§7.10): upgrade the running ptyd in place when the decision
+    /// says so. Never fails the connection: a refused or failed upgrade
+    /// keeps the running ptyd (logged).
+    fn maybe_upgrade(&self, o: &Owner) {
+        let from = o.version();
+        let mut exe = None;
+        let decision = super::decide_upgrade(&from, o.proto_range, (proto::PROTO_MIN, proto::PROTO_MAX), &super::min_ptyd_version(), || {
+            let e = run_location(&self.paths.home).ok()?;
+            let v = probe_version(&e);
+            exe = Some(e);
+            v
+        });
+        match decision {
+            super::UpgradeDecision::Keep(why) => {
+                if why != "current" {
+                    crate::log_debug!("[ptyd] keeping k2-ptyd v{} ({})", from, why);
+                }
+            }
+            super::UpgradeDecision::Upgrade { reason, to } => {
+                let Some(exe) = exe else { return };
+                crate::log_debug!("[ptyd] upgrading k2-ptyd in place: v{} -> v{} ({})", from, to, reason);
+                match o.upgrade(&exe) {
+                    Ok(now) => crate::log_debug!(
+                        "[ptyd] upgraded k2-ptyd in place: v{} -> v{} (pid {}, boot {} kept)",
+                        from,
+                        now,
+                        self.ptyd_pid().map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
+                        &o.boot_id[..8.min(o.boot_id.len())]
+                    ),
+                    Err(e) => crate::log_debug!("[ptyd] k2-ptyd upgrade not done ({}); running v{}", e, o.version()),
+                }
+            }
+        }
+    }
+
+    /// §7.10: upgrade the running ptyd to `exe` now, regardless of P65
+    /// (tests, diagnostics). `Ok(new_version)`.
+    pub fn upgrade_now(&self, exe: &Path) -> Result<String, String> {
+        let o = self.current_owner().ok_or("no_owner")?;
+        o.upgrade(exe)
+    }
+
     pub fn is_available(&self) -> Result<(), String> {
         self.owner().map(|_| ())
     }
@@ -411,6 +690,46 @@ impl Ptyd {
     /// ptyd's pid from its lock file (P74's vault ancestry check, later).
     pub fn ptyd_pid(&self) -> Option<i32> {
         std::fs::read_to_string(&self.paths.lock).ok()?.trim().parse().ok()
+    }
+}
+
+/// The version a k2-ptyd binary reports (`<exe> --version` →
+/// `k2-ptyd <version> proto <n>`), bounded to 5 s. `None` if it doesn't
+/// answer like a k2-ptyd.
+pub fn probe_version(exe: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut child = std::process::Command::new(exe)
+        .arg("--version")
+        .env_clear()
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let t = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(st)) if st.success() => break,
+            Ok(Some(_)) | Err(_) => return None,
+            Ok(None) if t.elapsed() > Duration::from_secs(5) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    parse_version_line(&out)
+}
+
+/// `k2-ptyd 0.2.0 proto 1` → `0.2.0`.
+pub fn parse_version_line(out: &str) -> Option<String> {
+    let mut w = out.split_whitespace();
+    match (w.next(), w.next()) {
+        (Some("k2-ptyd"), Some(v)) if proto::parse_version(v).is_some() => Some(v.to_string()),
+        _ => None,
     }
 }
 
@@ -576,6 +895,15 @@ mod tests {
         versioned_copy(&home, &a, &ha).unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), a, "a hash mismatch is rewritten");
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn version_line_parses_only_a_k2_ptyd_answer() {
+        assert_eq!(parse_version_line("k2-ptyd 0.2.0 proto 1\n").as_deref(), Some("0.2.0"));
+        assert_eq!(parse_version_line("k2-ptyd 0.1.0 proto 1").as_deref(), Some("0.1.0"));
+        assert_eq!(parse_version_line("bash 5.2.0"), None);
+        assert_eq!(parse_version_line("k2-ptyd nope"), None);
+        assert_eq!(parse_version_line(""), None);
     }
 
     #[test]

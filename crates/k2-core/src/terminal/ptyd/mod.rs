@@ -60,6 +60,74 @@ pub fn cell_listener_name(sid: &str) -> String {
 /// The name ptyd holds the daemon's main TCP listener under (P50).
 pub const MAIN_LISTENER_NAME: &str = "main";
 
+/// PRD §7.10 / P65: the oldest k2-ptyd this daemon leaves running. Raise it
+/// for a ptyd security fix: a running ptyd below it is exec-upgraded in
+/// place to the daemon's own binary on the first owner connection (B0).
+/// A 0.1.x ptyd (K2 0.46.2–0.46.4) can't exec-upgrade (`unsupported`), so
+/// raising this above 0.1.0 only reaches ptyds from 0.46.5 on.
+pub const MIN_PTYD_VERSION: &str = "0.1.0";
+
+/// [`MIN_PTYD_VERSION`], or (debug builds only) `K2_PTYD_TEST_MIN_VERSION`
+/// so tests can make the daemon upgrade a ptyd.
+pub fn min_ptyd_version() -> String {
+    if cfg!(debug_assertions) {
+        if let Some(v) = std::env::var("K2_PTYD_TEST_MIN_VERSION").ok().filter(|v| !v.is_empty()) {
+            return v;
+        }
+    }
+    MIN_PTYD_VERSION.to_string()
+}
+
+/// The P65 decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpgradeDecision {
+    /// Leave the running ptyd as it is (why: `current`,
+    /// `running_version_unparsable`, `candidate_unknown`,
+    /// `candidate_not_newer`).
+    Keep(&'static str),
+    /// Send `upgrade{exe}` (why: `proto` or `min_version`).
+    Upgrade { reason: &'static str, to: String },
+}
+
+/// P65 (§7.10): upgrade only when the daemon's own ptyd binary is NEWER
+/// than the running one (never a downgrade, never a no-op) AND either the
+/// running protocol range is outside the daemon's, or `min_version` is
+/// above the running version. `candidate` (the daemon binary's version, a
+/// process spawn) runs only when an upgrade is otherwise warranted.
+///
+/// The `proto` branch is defensive: today's handshake refuses a ptyd with
+/// no common protocol before this runs, and the daemon keeps N-1 support
+/// (§7.2), so in practice `min_version` is the trigger.
+pub fn decide_upgrade(
+    running_version: &str,
+    running_proto: (u32, u32),
+    daemon_proto: (u32, u32),
+    min_version: &str,
+    candidate: impl FnOnce() -> Option<String>,
+) -> UpgradeDecision {
+    use k2_ptyd::proto::parse_version;
+    let Some(running) = parse_version(running_version) else {
+        return UpgradeDecision::Keep("running_version_unparsable");
+    };
+    let proto_outside = running_proto.1 < daemon_proto.0 || running_proto.0 > daemon_proto.1;
+    let below_min = parse_version(min_version).is_some_and(|m| running < m);
+    let reason = if proto_outside {
+        "proto"
+    } else if below_min {
+        "min_version"
+    } else {
+        return UpgradeDecision::Keep("current");
+    };
+    let Some(to) = candidate() else {
+        return UpgradeDecision::Keep("candidate_unknown");
+    };
+    match parse_version(&to) {
+        Some(c) if c > running => UpgradeDecision::Upgrade { reason, to },
+        Some(_) => UpgradeDecision::Keep("candidate_not_newer"),
+        None => UpgradeDecision::Keep("candidate_unknown"),
+    }
+}
+
 /// The switch (PRD P67). 0.46.5: on by default on macOS and Linux; an
 /// owner turns it off with `terminal.ptyd = off` (Settings → General →
 /// Server, `k2 daemon survive off`). `K2_PTYD` in the daemon's env wins.
@@ -282,6 +350,37 @@ mod tests {
             }
         }
         assert_eq!(touched.get(), 0, "a switched-off daemon must not look for ptyd at all");
+    }
+
+    #[test]
+    fn upgrade_only_when_needed_and_newer_and_never_down() {
+        let d = (1, 1);
+        let never = || -> Option<String> { panic!("the candidate binary must not be probed") };
+        // Current and in range: no probe at all.
+        assert_eq!(decide_upgrade("0.2.0", (1, 1), d, "0.1.0", never), UpgradeDecision::Keep("current"));
+        assert_eq!(decide_upgrade("0.1.0", (1, 1), d, "0.1.0", never), UpgradeDecision::Keep("current"), "equal to the minimum is fine");
+        // Below the minimum: upgrade to a newer binary.
+        assert_eq!(
+            decide_upgrade("0.1.0", (1, 1), d, "0.2.0", || Some("0.2.0".into())),
+            UpgradeDecision::Upgrade { reason: "min_version", to: "0.2.0".into() }
+        );
+        // ...but never to the same or an older one (a downgrade).
+        assert_eq!(decide_upgrade("0.1.0", (1, 1), d, "0.2.0", || Some("0.1.0".into())), UpgradeDecision::Keep("candidate_not_newer"));
+        assert_eq!(decide_upgrade("0.1.5", (1, 1), d, "0.2.0", || Some("0.1.4".into())), UpgradeDecision::Keep("candidate_not_newer"));
+        assert_eq!(decide_upgrade("0.1.0", (1, 1), d, "0.2.0", || None), UpgradeDecision::Keep("candidate_unknown"));
+        assert_eq!(decide_upgrade("0.1.0", (1, 1), d, "0.2.0", || Some("garbage".into())), UpgradeDecision::Keep("candidate_unknown"));
+        // Protocol outside the daemon's range (either side).
+        assert_eq!(
+            decide_upgrade("0.3.0", (2, 3), (4, 5), "0.1.0", || Some("0.4.0".into())),
+            UpgradeDecision::Upgrade { reason: "proto", to: "0.4.0".into() }
+        );
+        assert_eq!(decide_upgrade("0.3.0", (2, 3), (3, 5), "0.1.0", never), UpgradeDecision::Keep("current"), "overlap: in range");
+        assert_eq!(decide_upgrade("0.3.0", (6, 6), (4, 5), "0.1.0", || Some("0.2.0".into())), UpgradeDecision::Keep("candidate_not_newer"));
+        // A ptyd that reports nonsense is left alone.
+        assert_eq!(decide_upgrade("x", (1, 1), d, "9.9.9", never), UpgradeDecision::Keep("running_version_unparsable"));
+        // The shipped minimum never upgrades the 0.46.3/0.46.4 ptyd (0.1.0),
+        // which can't exec-upgrade anyway.
+        assert_eq!(decide_upgrade("0.1.0", (1, 1), d, MIN_PTYD_VERSION, never), UpgradeDecision::Keep("current"));
     }
 
     #[test]

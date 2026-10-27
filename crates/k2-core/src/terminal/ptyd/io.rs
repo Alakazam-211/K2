@@ -30,8 +30,12 @@ use alacritty_terminal::Term;
 use k2_ptyd::client::DataStream;
 use k2_ptyd::proto::Request;
 
-use super::client::{Owner, SessionEvent};
+use super::client::{Owner, Reconnect, SessionEvent};
 use super::shadow::Shadow;
+
+/// How long a stream that hit EOF during a ptyd self-upgrade waits for the
+/// owner to reconnect (the reader retries for 20 s).
+const UPGRADE_WAIT: Duration = Duration::from_secs(25);
 
 pub enum IoMsg {
     Input(Cow<'static, [u8]>),
@@ -187,11 +191,13 @@ where
     let reader_pos = Arc::new(AtomicU64::new(stream.start));
     let pos = Arc::clone(&reader_pos);
     let replay_until = replay.as_ref().map(|r| r.until).unwrap_or(0);
+    let gen = owner.generation();
     let join = std::thread::Builder::new().name(format!("ptyd-io {sid}")).spawn(move || {
         let mut l = Loop {
             sid,
             term,
             listener,
+            gen,
             owner,
             events,
             rx,
@@ -214,6 +220,9 @@ struct Loop<L: EventListener> {
     term: Arc<FairMutex<Term<L>>>,
     listener: L,
     owner: Arc<Owner>,
+    /// The owner generation this stream was attached under (S7: a newer one
+    /// means ptyd upgraded in place and the stream must be reattached).
+    gen: u64,
     events: mpsc::Receiver<SessionEvent>,
     rx: mpsc::Receiver<IoMsg>,
     wake_r: OwnedFd,
@@ -258,27 +267,30 @@ impl<L: EventListener> Loop<L> {
                 Step::Continue => {}
                 Step::Stopped => return self.finish_stop(),
                 Step::Eof => {
+                    // §7.10 (S7): ptyd is exec'ing a new image. The agent
+                    // keeps running; once the owner reconnected (same boot
+                    // id), reattach at the exact next unread byte — no
+                    // loss, no duplicate. Anything else falls through.
+                    if self.owner.upgrade_in_flight(self.gen) {
+                        match self.owner.wait_reconnected(self.gen, UPGRADE_WAIT) {
+                            Reconnect::Changed(g) => {
+                                self.gen = g;
+                                if self.reattach(&mut sock) {
+                                    continue;
+                                }
+                            }
+                            Reconnect::Unchanged => {}
+                            Reconnect::Dead => return self.finish_exit(SessionEvent::OwnerLost),
+                        }
+                    }
                     // Stream EOF: the child exited (ptyd drains, then closes),
                     // an overrun closed it, or ptyd is gone. Ask the event
                     // channel which.
                     match self.events.recv_timeout(Duration::from_secs(2)) {
                         Ok(SessionEvent::Overrun { lost_bytes }) => {
                             crate::log_debug!("[ptyd] session={} overrun lost={} — reattaching", self.sid, lost_bytes);
-                            match self.owner.attach(&self.sid, self.shadow.pos()) {
-                                Ok(s) => {
-                                    // Bytes were lost; restart the scanner at the new start.
-                                    self.shadow = Shadow::at(s.start);
-                                    self.pos.store(s.start, Ordering::Release);
-                                    let (p, ns) = s.into_parts();
-                                    sock = ns;
-                                    if sock.set_nonblocking(true).is_err() {
-                                        return self.finish_exit(SessionEvent::OwnerLost);
-                                    }
-                                    if !p.is_empty() {
-                                        self.process(&p);
-                                    }
-                                }
-                                Err(_) => return self.finish_exit(SessionEvent::OwnerLost),
+                            if !self.reattach(&mut sock) {
+                                return self.finish_exit(SessionEvent::OwnerLost);
                             }
                         }
                         Ok(ev) => return self.finish_exit(ev),
@@ -287,6 +299,35 @@ impl<L: EventListener> Loop<L> {
                 }
             }
         }
+    }
+
+    /// Attach a new stream at the next unread offset and swap it in.
+    /// `false` when ptyd refused (the session is gone). If the ring has
+    /// already moved past that offset (an overrun), bytes were lost and the
+    /// scanner restarts at the new start.
+    fn reattach(&mut self, sock: &mut UnixStream) -> bool {
+        let from = self.shadow.pos();
+        let s = match self.owner.attach(&self.sid, from) {
+            Ok(s) => s,
+            Err(e) => {
+                crate::log_debug!("[ptyd] session={} reattach at {} failed: {}", self.sid, from, e);
+                return false;
+            }
+        };
+        if s.start != from {
+            crate::log_debug!("[ptyd] session={} reattached at {} (wanted {}): {} byte(s) lost", self.sid, s.start, from, s.start.saturating_sub(from));
+            self.shadow = Shadow::at(s.start);
+            self.pos.store(s.start, Ordering::Release);
+        }
+        let (p, ns) = s.into_parts();
+        if ns.set_nonblocking(true).is_err() {
+            return false;
+        }
+        *sock = ns;
+        if !p.is_empty() {
+            self.process(&p);
+        }
+        true
     }
 
     fn turn(&mut self, sock: &mut UnixStream) -> Step {
@@ -377,7 +418,11 @@ impl<L: EventListener> Loop<L> {
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                     Err(_) => {
-                        self.wq.clear();
+                        // S7: input typed while ptyd upgrades goes to the
+                        // reattached stream.
+                        if !self.owner.upgrade_in_flight(self.gen) {
+                            self.wq.clear();
+                        }
                         break;
                     }
                 }

@@ -158,9 +158,48 @@ pub fn atomic_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
     })
 }
 
-/// Non-unix fallback. K2SO is macOS-only today; this path exists so the
-/// crate still compiles under `cargo check` on other hosts.
-#[cfg(not(unix))]
+/// Windows: a real symlink (a directory link when `source` is a
+/// directory) made at a temp name and renamed over `target`, as on Unix.
+/// Windows lets a user make symlinks only with Developer Mode on (or as an
+/// administrator); without that privilege (`ERROR_PRIVILEGE_NOT_HELD`) the
+/// file is copied instead, so the harness file still has the content, just
+/// not live.
+#[cfg(windows)]
+pub fn atomic_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
+    /// winerror.h: the caller may not create symbolic links.
+    const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let tmp = tempfile_path(target);
+    let _ = fs::remove_file(&tmp);
+    let resolved = if source.is_relative() { parent.join(source) } else { source.to_path_buf() };
+    let made = if resolved.is_dir() {
+        std::os::windows::fs::symlink_dir(source, &tmp)
+    } else {
+        std::os::windows::fs::symlink_file(source, &tmp)
+    };
+    match made {
+        Ok(()) => fs::rename(&tmp, target).map_err(|e| {
+            let _ = fs::remove_file(&tmp);
+            e
+        }),
+        Err(e) if e.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
+            crate::log_debug!(
+                "[fs_atomic] no symlink privilege (Developer Mode off): copying {} to {}",
+                resolved.display(),
+                target.display()
+            );
+            if fs::symlink_metadata(target).is_ok_and(|m| m.file_type().is_symlink()) {
+                fs::remove_file(target)?;
+            }
+            fs::copy(&resolved, target).map(|_| ())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Other non-Unix hosts: a copy (the content, not a live link).
+#[cfg(not(any(unix, windows)))]
 pub fn atomic_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
     if let Some(parent) = target.parent() { fs::create_dir_all(parent)?; }
     fs::copy(source, target).map(|_| ())

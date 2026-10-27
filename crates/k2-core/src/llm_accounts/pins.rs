@@ -408,7 +408,34 @@ const K2_SLOT_FILES: &[&str] = &[".lock", "api-key", "config.toml", "leader-logi
 fn symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(src, dst)
 }
-#[cfg(not(unix))]
+/// Windows: a file or directory symlink when this user may make one
+/// (Developer Mode on, or an administrator). Without that privilege a file
+/// gets a hard link (same volume, no privilege needed) and a directory is
+/// refused with what to turn on.
+#[cfg(windows)]
+fn symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+    let made = if src.is_dir() {
+        std::os::windows::fs::symlink_dir(src, dst)
+    } else {
+        std::os::windows::fs::symlink_file(src, dst)
+    };
+    match made {
+        Err(e) if e.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
+            if src.is_dir() {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Windows needs Developer Mode on to link a login's folders (Settings > System > For developers)",
+                ))
+            } else {
+                std::fs::hard_link(src, dst)
+            }
+        }
+        other => other,
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn symlink(_src: &Path, _dst: &Path) -> std::io::Result<()> {
     Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "symlinks"))
 }

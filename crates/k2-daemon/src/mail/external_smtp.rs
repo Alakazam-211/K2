@@ -230,6 +230,25 @@ fn submit_with_builder(
         .map_err(|e| smtp_err("SMTP submit", e))
 }
 
+/// Test-only: the production `send_raw` wiring over a PLAINTEXT loopback
+/// transport (a scripted mock can't terminate TLS). Email Notifications'
+/// relay tests (E12) drive their loopback SMTP mock through this; nothing
+/// in a non-test build can reach it.
+#[cfg(test)]
+pub(crate) fn submit_plaintext_for_test(
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    from: &str,
+    recipients: &[String],
+    rfc822: &[u8],
+) -> Result<(), String> {
+    let envelope = build_envelope(from, recipients)?;
+    let builder = SmtpTransport::builder_dangerous(host);
+    submit_with_builder(builder, port, username, &SmtpAuth::Password(password.to_string()), &envelope, rfc822)
+}
+
 /// Production [`SmtpOps`] — lettre over rustls. TLS verification is
 /// ALWAYS on: `relay`/`starttls_relay` build a rustls-backed transport
 /// against the platform root store; there is no code path that relaxes

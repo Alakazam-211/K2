@@ -4836,6 +4836,82 @@ async fn skin_grant_role_rewrites_live_session_in_place() {
     });
 }
 
+/// 0.46.5 item 13 (Agent NSI Vanilla): an App-only guest on a rooms scope
+/// (the shape `k2 app user add <app> <name> --test --room <h>` makes) given
+/// a role with `k2 app user role` (POST /cli/skin/roles/assign) gets the
+/// role's caps at login: the role goes on its App login's grant, not only
+/// on the user row (before: `user list` named the role, roomAccess stayed
+/// thread:read/thread:post).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_user_role_on_app_rooms_guest_gives_the_roles_caps() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let sales = format!("sales{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (sales_id, _dir) = seed_files_workspace(&sales);
+        let app = seed_app(&sales_id, "rocore");
+        let add = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+            Some(&serde_json::json!({"username": "zz-rtest", "app": app}).to_string()),
+        );
+        assert_eq!(add.status, 200, "App-only guest; {}", add.body);
+        set_password(port, "zz-rtest", "s3cret-horse");
+        let rooms = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/rooms?token={OWNER_TOKEN}"),
+            Some(&serde_json::json!({"username": "zz-rtest", "app": app, "rooms": [sales]}).to_string()),
+        );
+        assert_eq!(rooms.status, 200, "{}", rooms.body);
+        let role = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"name":"rtest-files","appId":"{app}","roomAccess":[{{"handle":"{sales}","caps":["thread:read","thread:post","files:read"]}}]}}"#)),
+        );
+        assert_eq!(role.status, 200, "{}", role.body);
+        let login_caps = |label: &str| -> Vec<String> {
+            let r = http(
+                port,
+                "POST",
+                "/cli/skin/login",
+                Some(&serde_json::json!({"username": "zz-rtest", "password": "s3cret-horse", "app": app}).to_string()),
+            );
+            assert_eq!(r.status, 200, "{label}: {}", r.body);
+            json(&r.body)["roomAccess"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|row| row["handle"] == sales.as_str()))
+                .and_then(|row| row["caps"].as_array())
+                .map(|c| c.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_else(|| panic!("{label}: no roomAccess row for {sales}: {}", r.body))
+        };
+        let before = login_caps("rooms scope");
+        assert!(!before.contains(&"files:read".to_string()), "Thread-only before: {before:?}");
+
+        let assign = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"zz-rtest","role":"rtest-files"}"#),
+        );
+        assert_eq!(assign.status, 200, "{}", assign.body);
+        assert_eq!(json(&assign.body)["roleName"], "rtest-files", "{}", assign.body);
+        let after = login_caps("after k2 app user role");
+        assert!(after.contains(&"files:read".to_string()), "the role's caps at login: {after:?}");
+
+        let grants = json(&http(port, "GET", &format!("/cli/skin/grants?token={OWNER_TOKEN}"), None).body);
+        let g = grants["grants"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|g| g["targetId"] == app.as_str()))
+            .cloned()
+            .expect("the App login grant");
+        assert!(g["roleId"].as_str().is_some() && g["scope"].is_null(), "a role, not rooms: {g}");
+    });
+}
+
 fn assert_skin_rate_limited(r: &Resp, what: &str) {
     assert_eq!(
         r.status, 429,

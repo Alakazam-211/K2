@@ -14779,7 +14779,9 @@ cmd_skin() {
         user|users)
             local _a _has_app=0
             for _a in "$@"; do
-                case "$_a" in --app|--app=*) _has_app=1 ;; esac
+                # A test guest names its App as the positional <app-id>
+                # (k2 app user add <app-id> <name> --test --role R), 0.46.5.
+                case "$_a" in --app|--app=*|--test) _has_app=1 ;; esac
             done
             for _a in "$@"; do
                 if [[ "$_a" == "--role" && "$_has_app" -eq 0 ]]; then

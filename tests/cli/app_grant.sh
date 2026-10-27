@@ -210,6 +210,11 @@ class H(BaseHTTPRequestHandler):
                              "subjectId": "w-1", "scope": "assistant:p-ann"}]
             self._send(200, json.dumps({"success": True, "cascaded": cascaded}))
             return
+        if path == "/cli/app/test-guest/add":
+            self._send(200, json.dumps({"username": body.get("username"), "app": body.get("app"),
+                                        "role": body.get("role") or None, "rooms": [], "expiresAt": 2000000000,
+                                        "password": "pw-once", "note": ""}))
+            return
         if path == "/cli/skin/grants/role":
             same = body.get("role") == "desk"
             self._send(200, json.dumps({"id": body.get("id"), "kind": "app", "subjectKind": "principal",
@@ -312,6 +317,8 @@ role_same_out="$(run_k2 app grant role --id g-app --role desk 2>/dev/null)"
 role_same_rc=$?
 role_missing="$(run_k2 app grant role g-app 2>&1)"
 role_missing_rc=$?
+tg_role_out="$(run_k2 app user add rocore zz-rtest --test --role rtest-files 2>&1)"
+tg_role_rc=$?
 set -e
 assert_eq "grant list exit 0" "$list_rc" "0"
 assert_contains "list prints grant" "$list_out" "g1"
@@ -390,6 +397,9 @@ assert_contains "grant role keeps logins" "$role_out" "Grant g-app  now role rea
 assert_eq "grant role same exit 0" "$role_same_rc" "0"
 assert_contains "grant role same role" "$role_same_out" "Grant g-app already has role desk. Nothing changed."
 assert_eq "grant role without --role exit 1" "$role_missing_rc" "1"
+assert_eq "test guest add --role with a positional app: exit 0 (0.46.5 item 13)" "$tg_role_rc" "0"
+assert_not_contains "  no Connect --role refusal" "$tg_role_out" "Connect --role is not a skin command"
+assert_contains "  says it" "$tg_role_out" "Test guest zz-rtest of App rocore (role rtest-files"
 assert_contains "grant role usage" "$role_missing" "Usage: k2 app grant role <grant-id> --role <role>"
 seen="$(cat "$SEEN")"
 assert_contains "chat add body kind" "$seen" '"kind": "chat"'
@@ -398,6 +408,7 @@ assert_contains "chat ws body scope" "$seen" '"scope": "assistant:ann"'
 assert_contains "set posts update" "$seen" '/cli/skin/grants/update'
 assert_contains "set body" "$seen" '{"id": "g-chat", "scope": "guest"}'
 assert_contains "role posts /cli/skin/grants/role" "$seen" '/cli/skin/grants/role'
+assert_contains "test guest add posts its role" "$seen" '"role": "rtest-files"'
 assert_contains "role body (positional id)" "$seen" '{"id": "g-app", "role": "reader"}'
 assert_contains "role body (--id)" "$seen" '{"id": "g-app", "role": "desk"}'
 assert_contains "schema grant role" "$schema" '"name": "app grant role"'

@@ -2361,7 +2361,10 @@ pub fn handle_roles_assign(body: &[u8], actor: &str) -> CliResponse {
             Err(e) => return e,
         }
     }
-    match skin::assign_role(username, role) {
+    // 0.46.5 item 13: an App-only guest's role goes on its App login's
+    // grant (one in-place path with `k2 app grant role`); a box login
+    // keeps the host-grant path.
+    match skin::assign_login_role(username, role) {
         Ok(p) => {
             k2_core::log_debug!(
                 "[skin] actor={actor} assigned role {} to {}",

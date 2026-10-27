@@ -6115,8 +6115,18 @@ pub fn set_app_grant_role(id: &str, role_token: &str) -> Result<(SkinGrant, bool
             return Err("the grant changed while it was read; try again".to_string());
         }
         if old.subject_kind == "principal" {
-            if old.target_id == HOST_APP_ID {
-                // Shadow column (AM1), as `assign_role` writes it.
+            // Shadow column (AM1), as `assign_role` writes it: the box
+            // login's role; for an App-only guest (no box login) its App
+            // login's role, so `k2 app user list` names the role it has.
+            let box_login: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM grants
+                     WHERE subject_kind = 'principal' AND subject_id = ?1 AND kind = 'app' AND target_id = ?2",
+                    params![old.subject_id, HOST_APP_ID],
+                    |r| r.get(0),
+                )
+                .map_err(|e| format!("skin grant shadow: {e}"))?;
+            if old.target_id == HOST_APP_ID || box_login == 0 {
                 tx.execute(
                     "UPDATE principals SET role_id = ?1 WHERE id = ?2",
                     params![role.id, old.subject_id],
@@ -6145,6 +6155,72 @@ pub fn set_app_grant_role(id: &str, role_token: &str) -> Result<(SkinGrant, bool
         crate::tool_hook::kick_reconcile();
     }
     Ok((grant, changed))
+}
+
+/// `POST /cli/skin/roles/assign` (`k2 app user role <user> <role>`),
+/// 0.46.5 (item 13, Agent NSI Vanilla): for an App-only guest (App
+/// logins, no box login) the role lives on its App login's grant, so the
+/// role goes THERE, through the one in-place path [`set_app_grant_role`]
+/// (`k2 app grant role`): a rooms-only grant (a test guest added with
+/// --room) becomes role-backed and its live sessions get the role's caps;
+/// before, only `principals.role_id` moved, `user list` showed the role
+/// and a login still got Thread-only rooms. The role must fit one of its
+/// App logins (box-wide, or that App's); more than one that fits is
+/// ambiguous and names `k2 app grant role`. A box login, or a guest with no
+/// login grant at all, keeps [`assign_role`].
+pub fn assign_login_role(username: &str, role: &str) -> Result<SkinPrincipal, String> {
+    let username = normalize_username(username)?;
+    let role_token = role.trim();
+    if role_token.is_empty() {
+        return Err("missing role id or name".to_string());
+    }
+    let app_grant = with_conn(|conn| {
+        let Some(p) = principal_by_username(conn, &username)? else {
+            return Err(format!("unknown skin user '{username}'"));
+        };
+        let Some(role) = role_by_id_or_name(conn, role_token)? else {
+            return Err(format!("unknown skin role '{role_token}'"));
+        };
+        let grants: Vec<SkinGrant> = {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "{GRANT_SELECT} WHERE subject_kind = 'principal' AND subject_id = ?1 AND kind = 'app' ORDER BY created_at, id"
+                ))
+                .map_err(|e| format!("skin grant list: {e}"))?;
+            let rows = stmt
+                .query_map(params![p.id], map_grant_row)
+                .map_err(|e| format!("skin grant list: {e}"))?;
+            rows.collect::<Result<_, _>>().map_err(|e| format!("skin grant row: {e}"))?
+        };
+        if grants.is_empty() || grants.iter().any(|g| g.target_id == HOST_APP_ID) {
+            return Ok(None);
+        }
+        let fits: Vec<&SkinGrant> = grants
+            .iter()
+            .filter(|g| role.app_id.as_deref().is_none_or(|a| a == g.target_id))
+            .collect();
+        match fits.as_slice() {
+            [one] => Ok(Some(one.id.clone())),
+            [] => Err(format!(
+                "role '{}' is for another App: '{username}' signs in only to {} (k2 app role list)",
+                role.name,
+                grants.iter().map(|g| g.target_id.as_str()).collect::<Vec<_>>().join(", ")
+            )),
+            many => Err(format!(
+                "'{username}' signs in to {} Apps: give one login the role with k2 app grant role <grant-id> --role {} (ids: k2 app grant list)",
+                many.len(),
+                role.name
+            )),
+        }
+    })?;
+    let Some(grant_id) = app_grant else {
+        return assign_role(&username, role_token);
+    };
+    set_app_grant_role(&grant_id, role_token)?;
+    let p = with_conn(|conn| {
+        principal_by_username(conn, &username)?.ok_or_else(|| format!("unknown skin user '{username}'"))
+    })?;
+    Ok(attach_principal_handles(p))
 }
 
 // S24-19 (agent hire S5, 0.45.6): an App login a hire makes calls
@@ -11505,6 +11581,56 @@ mod tests {
             .unwrap();
             let err = set_app_grant_role(&mail.id, "editor").unwrap_err();
             assert!(err.contains("only an App login"), "{err}");
+        });
+    }
+
+    /// 0.46.5 item 13: `k2 app user role` on an App-only guest whose App
+    /// login is a rooms scope (a test guest added with --room) puts the
+    /// role on that grant, in place: the live session and a fresh sign-in
+    /// get the role's caps. A box login keeps the old path.
+    #[test]
+    fn assign_login_role_moves_an_app_only_rooms_grant_to_the_role() {
+        with_temp_home(|| {
+            let room = uuid::Uuid::new_v4().to_string();
+            create_role_for_app("rtest-files", &one_room_policy(&room, &[CAP_THREAD_READ, CAP_FILES_READ]), Some(APP_A))
+                .unwrap();
+            create_role_for_app("b-role", &one_room_policy(&room, &[CAP_THREAD_READ]), Some(APP_B)).unwrap();
+            // An App-only guest (no box login) on a rooms scope, the shape
+            // `k2 app user add <app> <name> --test --room <h>` makes.
+            let zz = add_principal_for_app("zz-rtest", None, APP_A, None, "owner-token").unwrap();
+            let g = set_app_grant_rooms("zz-rtest", APP_A, &[room.clone()], true, "owner-token").unwrap();
+            assert!(list_grants().unwrap().iter().all(|x| !(x.subject_id == zz.id && x.target_id == HOST_APP_ID)), "no box login");
+            let live = create_app_session_token("zz-rtest", APP_A).unwrap().raw;
+            let before = resolve_skin_token(&live).unwrap();
+            assert!(before.has_cap_in_room(&room, CAP_THREAD_POST) && !before.has_cap_in_room(&room, CAP_FILES_READ), "{before:?}");
+
+            let err = assign_login_role("zz-rtest", "b-role").unwrap_err();
+            assert!(err.contains("another App"), "{err}");
+
+            let p = assign_login_role("zz-rtest", "rtest-files").expect("role on the App login");
+            assert_eq!(p.role_name.as_deref(), Some("rtest-files"), "user list names it");
+            let stored = list_grants().unwrap().into_iter().find(|x| x.id == g.id).expect("same grant row");
+            assert!(stored.scope.is_none() && stored.role_id.is_some(), "a role, not rooms: {stored:?}");
+            assert!(session_revoked_at(&live).is_none(), "the live session is kept");
+            let after = resolve_skin_token(&live).expect("still signed in");
+            assert!(after.has_cap_in_room(&room, CAP_FILES_READ), "the role's caps reach it: {after:?}");
+            let fresh = create_app_session_token("zz-rtest", APP_A).unwrap();
+            assert_eq!(fresh.role_name.as_deref(), Some("rtest-files"));
+            assert!(resolve_skin_token(&fresh.raw).unwrap().has_cap_in_room(&room, CAP_FILES_READ));
+
+            // Two App logins the role fits: ambiguous, nothing changed.
+            create_role("wide", &one_room_policy(&room, &[CAP_THREAD_READ])).unwrap();
+            create_grant(&app_write(&zz.id, APP_B, None, Some(&rooms_json(&[room.clone()])))).unwrap();
+            let err = assign_login_role("zz-rtest", "wide").unwrap_err();
+            assert!(err.contains("k2 app grant role"), "{err}");
+            let stored = list_grants().unwrap().into_iter().find(|x| x.id == g.id).unwrap();
+            assert_eq!(stored.role_id, list_roles().unwrap().into_iter().find(|r| r.name == "rtest-files").map(|r| r.id));
+
+            // A box login keeps the old path (its host grant).
+            add_principal("boxy").unwrap();
+            create_role("host-r", &one_room_policy(&room, &[CAP_THREAD_READ])).unwrap();
+            let p = assign_login_role("boxy", "host-r").unwrap();
+            assert_eq!(p.role_name.as_deref(), Some("host-r"));
         });
     }
 

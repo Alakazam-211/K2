@@ -1205,6 +1205,23 @@ pub struct RepoDirs {
 /// the canonical `alias.0` — re-rooted at `alias.1` (the workspace path as
 /// the caller spells it; git2 may report `/private/var/…` for `/var/…`).
 fn forms(p: &Path, alias: Option<&(String, String)>) -> Vec<String> {
+    let mut v = forms_raw(p, alias);
+    // Windows: one '/' spelling (classify_git_path and worktree_rel fold
+    // the path they are given the same way).
+    if cfg!(windows) {
+        let mut out: Vec<String> = Vec::new();
+        for f in v.drain(..) {
+            let f = f.replace('\\', "/");
+            if !out.contains(&f) {
+                out.push(f);
+            }
+        }
+        v = out;
+    }
+    v
+}
+
+fn forms_raw(p: &Path, alias: Option<&(String, String)>) -> Vec<String> {
     let mut v = vec![trim_slash(&p.to_string_lossy())];
     let mut push = |s: String| {
         if !v.contains(&s) {
@@ -1321,8 +1338,22 @@ pub fn is_git_internal(path: &str) -> bool {
 }
 
 /// The working-tree path relative to `dirs.workdir`, when inside it.
-pub fn worktree_rel<'a>(path: &'a str, dirs: &RepoDirs) -> Option<&'a str> {
-    strip_under(path, &dirs.workdir_forms).filter(|r| !r.is_empty())
+pub fn worktree_rel<'a>(path: &'a str, dirs: &RepoDirs) -> Option<std::borrow::Cow<'a, str>> {
+    use std::borrow::Cow;
+    match fold_slashes(path) {
+        Cow::Borrowed(p) => strip_under(p, &dirs.workdir_forms).filter(|r| !r.is_empty()).map(Cow::Borrowed),
+        Cow::Owned(p) => strip_under(&p, &dirs.workdir_forms).filter(|r| !r.is_empty()).map(|r| Cow::Owned(r.to_string())),
+    }
+}
+
+/// `path` with Windows' '\' folded to '/' (libgit2 and the dir forms use
+/// '/' there; a file watcher reports '\'). Unchanged elsewhere.
+fn fold_slashes(path: &str) -> std::borrow::Cow<'_, str> {
+    if cfg!(windows) && path.contains('\\') {
+        std::borrow::Cow::Owned(path.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(path)
+    }
 }
 
 #[cfg(test)]

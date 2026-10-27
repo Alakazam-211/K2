@@ -256,7 +256,7 @@ impl GitWatchSet {
             }
             let checker =
                 ignore_repos.entry(i).or_insert_with(|| git_changes::IgnoreChecker::open(&self.repos[i].dirs.workdir));
-            let ignored = checker.as_ref().is_some_and(|c| c.is_ignored(rel));
+            let ignored = checker.as_ref().is_some_and(|c| c.is_ignored(&rel));
             if !ignored {
                 hit[i] = true;
             }

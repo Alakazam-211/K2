@@ -653,7 +653,7 @@ fn classify_git_paths_for_main_and_linked_worktree() {
     assert_eq!(classify_git_path(&format!("{}/index", canon.to_string_lossy().trim_end_matches('/')), &dirs), Some(GitSignal::Local));
     assert!(is_git_internal(&format!("{g}/index")));
     assert!(!is_git_internal(s(&d.join("a.txt"))));
-    assert_eq!(worktree_rel(s(&d.join("src/x.rs")), &dirs), Some("src/x.rs"));
+    assert_eq!(worktree_rel(s(&d.join("src/x.rs")), &dirs).as_deref(), Some("src/x.rs"));
     assert_eq!(worktree_rel("/elsewhere/x.rs", &dirs), None);
 
     // Linked worktree: its own index/HEAD under .git/worktrees/<name>,

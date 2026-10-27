@@ -45,10 +45,43 @@ fn target_dir_bin(name: &str) -> PathBuf {
     exe.parent().and_then(|d| d.parent()).map(|d| d.join(name)).expect("target dir")
 }
 
+/// The harness inputs from the environment (`K2_PTYD_BIN`,
+/// `K2_PTYD_TEST_AGENT`, `K2_PTYD_PRELAUNCH_BIN`), read ONCE before the
+/// first `Harness::new` clears every `K2_*` variable of this process.
+/// (Reading them after the clear silently fell back to the target dir —
+/// found by the S7 compatibility run.)
+fn input(env: &str) -> Option<PathBuf> {
+    static INPUTS: std::sync::OnceLock<std::collections::HashMap<&'static str, PathBuf>> = std::sync::OnceLock::new();
+    INPUTS
+        .get_or_init(|| {
+            ["K2_PTYD_BIN", "K2_PTYD_TEST_AGENT", "K2_PTYD_PRELAUNCH_BIN"]
+                .into_iter()
+                .filter_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()).map(|v| (k, PathBuf::from(v))))
+                .collect()
+        })
+        .get(env)
+        .cloned()
+}
+
 fn bin(env: &str, name: &str) -> PathBuf {
-    let p = std::env::var_os(env).map(PathBuf::from).unwrap_or_else(|| target_dir_bin(name));
+    let p = input(env).unwrap_or_else(|| target_dir_bin(name));
     assert!(p.is_file(), "{name} not found at {} — run `cargo build -p k2-ptyd --bins` first or set {env}", p.display());
     p
+}
+
+/// The k2-ptyd that runs is the binary under test (`K2_PTYD_BIN`, the
+/// embedded one, or the target dir's), by its own `start v<version>` log
+/// line — so the compatibility run (P66) provably ran the old release's.
+fn assert_ptyd_binary(k2: &Path) {
+    let exe = match option_env!("K2_PTYD_EMBED") {
+        Some(p) => PathBuf::from(p),
+        None => bin("K2_PTYD_BIN", "k2-ptyd"),
+    };
+    let out = Command::new(&exe).arg("--version").output().expect("k2-ptyd --version");
+    let v = k2_core::terminal::ptyd::client::parse_version_line(&String::from_utf8_lossy(&out.stdout))
+        .unwrap_or_else(|| panic!("{} is not a k2-ptyd: {out:?}", exe.display()));
+    let log = std::fs::read_to_string(k2.join("logs/ptyd.log")).unwrap_or_default();
+    assert!(log.contains(&format!("start v{v} ")), "the k2-ptyd that ran is not {} (v{v}):\n{log}", exe.display());
 }
 
 fn alive(pid: i32) -> bool {
@@ -142,6 +175,7 @@ impl Drop for Harness {
 
 impl Harness {
     fn new(tag: &str) -> Harness {
+        let _ = input("K2_PTYD_BIN"); // capture the inputs before the clear
         for k in std::env::vars().map(|(k, _)| k).filter(|k| k.starts_with("K2_") || k.starts_with("K2SO_")).collect::<Vec<_>>() {
             std::env::remove_var(k);
         }
@@ -415,6 +449,7 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
     let pid: i32 = wait_for("agent pid file", Duration::from_secs(15), || std::fs::read_to_string(dir.join("pid")).ok()?.trim().parse().ok());
     h.agent_pid = Some(pid);
     let ptyd = h.ptyd_pid.expect("ptyd launched (the switch is on)");
+    assert_ptyd_binary(&h.k2);
     if let Some(embedded) = option_env!("K2_PTYD_EMBED") {
         // P84: the daemon wrote the k2-ptyd it carries to its versioned path
         // (and runs that copy): byte-identical to what the build embedded.
@@ -873,6 +908,7 @@ fn a_restart_never_fires_a_heartbeat_twice_and_fires_land_in_the_adopted_agent()
     let pid: i32 = wait_for("heartbeat agent pid", Duration::from_secs(15), || std::fs::read_to_string(dir.join("pid")).ok()?.trim().parse().ok());
     h.agent_pid = Some(pid);
     let ptyd = h.ptyd_pid.expect("ptyd launched");
+    assert_ptyd_binary(&h.k2);
     assert_eq!(parent_pid(pid), ptyd, "the heartbeat agent runs under k2-ptyd");
     wait_for_pastes(&dir, 1, "the first wake");
     assert_eq!(fired_count(&hb_fires(&db, &project_id, "hb1")), 1);
@@ -955,7 +991,7 @@ fn a_restart_never_fires_a_heartbeat_twice_and_fires_land_in_the_adopted_agent()
 #[test]
 fn a_restart_upgrades_an_old_ptyd_in_place_or_keeps_one_that_cannot() {
     let mut h = Harness::new("up");
-    let pre = std::env::var_os("K2_PTYD_PRELAUNCH_BIN").map(PathBuf::from).unwrap_or_else(|| bin("K2_PTYD_BIN", "k2-ptyd"));
+    let pre = input("K2_PTYD_PRELAUNCH_BIN").unwrap_or_else(|| bin("K2_PTYD_BIN", "k2-ptyd"));
     assert!(pre.is_file(), "K2_PTYD_PRELAUNCH_BIN {} is not a file", pre.display());
     let out = Command::new(&pre).arg("--version").output().expect("prelaunch --version");
     let real = k2_core::terminal::ptyd::client::parse_version_line(&String::from_utf8_lossy(&out.stdout))
@@ -987,6 +1023,8 @@ fn a_restart_upgrades_an_old_ptyd_in_place_or_keeps_one_that_cannot() {
     let log1 = std::fs::read_to_string(h.home.join("daemon-1.log")).unwrap_or_default();
     assert!(log1.contains(&format!("owner connected (ptyd v{running}")), "boot 1 did not use the prelaunched ptyd");
     assert!(!log1.contains("upgrading k2-ptyd"), "boot 1 upgraded although the ptyd was at the minimum");
+    let ptyd_log1 = std::fs::read_to_string(h.k2.join("logs/ptyd.log")).unwrap_or_default();
+    assert!(ptyd_log1.contains(&format!("start v{real} ")), "the prelaunched k2-ptyd {} (v{real}) is not the one running:\n{ptyd_log1}", pre.display());
     let dir = h.home.join("agent-up");
     let body = serde_json::json!({
         "agent_name": "tab-upgrade",

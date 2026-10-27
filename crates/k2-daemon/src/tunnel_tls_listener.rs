@@ -927,6 +927,13 @@ where
     let _ = tls.shutdown().await;
 }
 
+/// A non-empty SNI that is neither `k2.dev` nor under it (CD-A12).
+pub(crate) fn outside_k2_dev(sni: &str) -> bool {
+    let h = sni.trim().trim_end_matches('.').to_ascii_lowercase();
+    let k2 = k2_core::tunnel::config::SUBDOMAIN_HOST;
+    !h.is_empty() && h != k2 && !h.ends_with(&format!(".{k2}"))
+}
+
 async fn serve_one(
     mut tcp: TcpStream,
     acceptor: TlsAcceptor,
@@ -980,6 +987,19 @@ async fn serve_one(
         .server_name()
         .map(|s| s.to_string())
         .unwrap_or_default();
+
+    // 0.46.6 (vs-live CD-A12): a name outside k2.dev never reaches the
+    // daemon here. `route_for_host` falls back to `Route::Daemon` for any
+    // host outside `*.<sub>.k2.dev`; once the relay passes customer names
+    // that fallback would put K2's own login surface on a customer's
+    // domain. Closed instead (custom App names are served by the App TLS
+    // door; on this listener they come with path (b)). An empty SNI keeps
+    // today's route.
+    if outside_k2_dev(&sni) {
+        log_debug!("[daemon/e2e] closing a connection for {sni:?}: not a k2.dev name (never the daemon)");
+        let _ = tls.shutdown().await;
+        return Ok(());
+    }
 
     match subdomains::current().route_for_host(&sni) {
         Route::Daemon => {
@@ -1431,6 +1451,83 @@ mod tests {
         );
 
         // Reset the global cache so we don't bleed into sibling tests.
+        subdomains::store(SubdomainMap::default());
+    }
+
+    /// PRD test 7 / vs-live CD-A12: a customer name on the E2E listener
+    /// (`evil.example`, not a k2.dev name) is closed without a byte, never
+    /// spliced to the daemon's login surface; `*.k2.dev` routing is
+    /// unchanged.
+    #[tokio::test]
+    async fn a_name_outside_k2_dev_is_closed_never_the_daemon() {
+        use k2_core::tunnel::subdomains::{self, SubdomainMap};
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _home = crate::test_support::TempHome::new();
+        let daemon_port = install_test_ingress_state();
+        subdomains::store(SubdomainMap { primary: "rosson".to_string(), targets: Default::default() });
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert("rosson").expect("cert");
+        let shared = Arc::new(ArcSwap::from_pointee(k2_core::tunnel::tls::server_config(&cert_pem, &key_pem).expect("config")));
+        let l = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind tls");
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move { accept_loop(Arc::new(l), shared, daemon_port).await });
+
+        // A client that accepts any certificate (it wants to reach the
+        // daemon through the wrong name).
+        #[derive(Debug)]
+        struct Any;
+        impl rustls::client::danger::ServerCertVerifier for Any {
+            fn verify_server_cert(
+                &self,
+                _: &rustls::pki_types::CertificateDer<'_>,
+                _: &[rustls::pki_types::CertificateDer<'_>],
+                _: &rustls::pki_types::ServerName<'_>,
+                _: &[u8],
+                _: rustls::pki_types::UnixTime,
+            ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+            fn verify_tls12_signature(
+                &self,
+                _: &[u8],
+                _: &rustls::pki_types::CertificateDer<'_>,
+                _: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+            fn verify_tls13_signature(
+                &self,
+                _: &[u8],
+                _: &rustls::pki_types::CertificateDer<'_>,
+                _: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+            fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+                rustls::crypto::aws_lc_rs::default_provider().signature_verification_algorithms.supported_schemes()
+            }
+        }
+        let cfg = rustls::ClientConfig::builder().dangerous().with_custom_certificate_verifier(Arc::new(Any)).with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
+        for sni in ["evil.example", "app.customer.com", "k2.dev.evil.example"] {
+            let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let name = rustls::pki_types::ServerName::try_from(sni.to_string()).unwrap();
+            let got = match connector.connect(name, tcp).await {
+                Err(_) => String::new(),
+                Ok(mut tls) => {
+                    let _ = tls.write_all(b"GET /ping HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await;
+                    let mut buf = Vec::new();
+                    let _ = tokio::time::timeout(Duration::from_secs(5), tls.read_to_end(&mut buf)).await.expect("closed, not hung");
+                    String::from_utf8_lossy(&buf).into_owned()
+                }
+            };
+            assert!(got.is_empty(), "{sni}: must be closed without a byte, got:\n{got}");
+        }
+        // The primary still reaches the daemon.
+        let primary = tls_client_get(&cert_pem, port, "rosson.k2.dev", "/ping").await;
+        assert!(primary.contains(crate::BANNER), "primary unchanged, got:\n{primary}");
+        assert!(outside_k2_dev("evil.example") && outside_k2_dev("k2.dev.evil.example"));
+        assert!(!outside_k2_dev("") && !outside_k2_dev("K2.DEV.") && !outside_k2_dev("x.rosson.k2.dev"));
         subdomains::store(SubdomainMap::default());
     }
 

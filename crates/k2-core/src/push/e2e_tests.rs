@@ -104,6 +104,7 @@ const CANARIES: &[&str] = &[
     // A permission card's push (prd-agent-settings-cards-v1 rev 3.1 §17.7).
     "pr_c4a2f00d",
     "CanarySettingWv",
+    "out_canary7q",
 ];
 
 fn canary_events() -> Vec<PushEvent> {
@@ -159,6 +160,12 @@ fn canary_events() -> Vec<PushEvent> {
             unread_total: "3".into(),
             waiting_total: "1".into(),
         }),
+        // Sew S30: an agent's chat post waits for approval (no body ever).
+        PushEvent::ChatApprovalRequested {
+            agent_name: "CanaryAgentZx".into(),
+            outbox_id: "out_canary7q".into(),
+            approvers: vec!["owner".into()],
+        },
     ]
 }
 

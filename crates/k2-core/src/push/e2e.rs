@@ -254,7 +254,8 @@ fn head(kind: &str, ctx: &SealCtx) -> serde_json::Map<String, serde_json::Value>
     m
 }
 
-/// The sealed `kind` of an alert event: `thread`, `ticket` or `project`.
+/// The sealed `kind` of an alert event: `thread`, `ticket`, `project` or
+/// `chat_approval`.
 /// `None` for the kinds that are never sealed (badge → nudge; the
 /// desktop-era kinds).
 pub fn alert_kind(event: &PushEvent) -> Option<&'static str> {
@@ -262,6 +263,9 @@ pub fn alert_kind(event: &PushEvent) -> Option<&'static str> {
         PushEvent::ThreadPost(_) => Some(super::PUSH_KIND_THREAD),
         PushEvent::FeedbackCreated { .. } | PushEvent::FeedbackCommented { .. } => Some(super::PUSH_KIND_TICKET),
         PushEvent::ProjectMessageCreated { .. } | PushEvent::ProjectPost(_) => Some(super::PUSH_KIND_PROJECT),
+        // Sew S30: an agent's chat post waits for approval. Sealed like the
+        // other alerts (it names the agent; it never carries the body).
+        PushEvent::ChatApprovalRequested { .. } => Some(super::PUSH_KIND_CHAT_APPROVAL),
         PushEvent::Badge(_) | PushEvent::AgentNeedsAttention { .. } | PushEvent::HeartbeatFailed { .. } => None,
     }
 }
@@ -280,6 +284,7 @@ pub fn alert_group(event: &PushEvent) -> String {
         }
         PushEvent::ProjectMessageCreated { group_id, .. } => format!("project:{group_id}"),
         PushEvent::ProjectPost(p) => format!("project:{}", p.group_id),
+        PushEvent::ChatApprovalRequested { outbox_id, .. } => format!("chat_approval:{outbox_id}"),
         _ => String::new(),
     }
 }

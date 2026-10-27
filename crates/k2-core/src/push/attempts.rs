@@ -131,6 +131,7 @@ pub fn kind_label(event: &PushEvent, lane: Lane) -> &'static str {
         PushEvent::ProjectMessageCreated { .. } | PushEvent::ProjectPost(_) => "project",
         PushEvent::AgentNeedsAttention { .. } => "attention",
         PushEvent::HeartbeatFailed { .. } => "heartbeat_failed",
+        PushEvent::ChatApprovalRequested { .. } => "chat_approval",
     }
 }
 

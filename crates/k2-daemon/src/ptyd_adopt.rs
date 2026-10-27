@@ -237,6 +237,11 @@ pub fn b1() {
         if swept > 0 {
             log_debug!("[ptyd] B1: dropped {swept} carried activity row(s) of ended sessions");
         }
+        // S4: saved screens of sessions that no longer run (S-5).
+        let swept = k2_core::terminal::ptyd::snapshot::sweep(&adopt::running_sids());
+        if swept > 0 {
+            log_debug!("[ptyd] B1: dropped {swept} saved screen(s) of ended sessions");
+        }
         if running.is_empty() {
             // Nothing survived. With the switch off this ptyd has no more
             // use: let it exit (it holds no session).
@@ -291,6 +296,7 @@ fn adopt_one(owner: &std::sync::Arc<k2_core::terminal::ptyd::client::Owner>, inf
         if let Some(id) = k2_core::session::SessionId::parse(&sid) {
             crate::session_token::revoke_session(&id);
         }
+        k2_core::terminal::ptyd::snapshot::remove(&sid);
         adopt::mark_settled(&sid);
         update_report(|r| r.ended += 1);
     };
@@ -375,6 +381,7 @@ fn cleanup_exited_while_down(owner: &k2_core::terminal::ptyd::client::Owner, exi
         }
         owner.release_fd(&k2_core::terminal::ptyd::cell_listener_name(&info.sid));
         let _ = owner.request(k2_ptyd::proto::Request::AckExit { sid: info.sid.clone() });
+        k2_core::terminal::ptyd::snapshot::remove(&info.sid);
         log_debug!("[ptyd] B1: session={} exited while the daemon was down ({:?})", info.sid, info.state);
     }
 }

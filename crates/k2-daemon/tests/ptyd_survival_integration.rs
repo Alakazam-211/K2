@@ -550,6 +550,105 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
     let _ = std::fs::remove_dir_all(&h.home);
 }
 
+/// `ring=<start>..<end>` start from this boot's adoption line for `sid`.
+fn adopted_ring_start(log: &str, sid: &str) -> u64 {
+    let line = log
+        .lines()
+        .find(|l| l.contains(&format!("adopted session={sid} ")) && l.contains("ring="))
+        .unwrap_or_else(|| panic!("no adoption line for {sid}"));
+    let ring = line.split_whitespace().find_map(|w| w.strip_prefix("ring=")).expect("ring=");
+    ring.split("..").next().and_then(|s| s.parse().ok()).unwrap_or_else(|| panic!("ring start in {line}"))
+}
+
+/// T2 for S4 (PRD §7.7, P41, P42, P78): the screen a restart hands over is
+/// the screen that was there, even when the ring no longer holds it.
+///
+/// The agent prints `hist=0..99`, then repaints one line in place for
+/// 6 MiB, so those lines fall out of ptyd's 4 MiB ring. A replay of the
+/// ring alone can't bring them back; the screen saved at detach can.
+/// 1. SIGTERM restart: adopted with `screen=restored`, the ring start is
+///    past 0, and the whole screen + scrollback reads back identical.
+/// 2. kill -9 restart: the saved screen is still valid (the agent is
+///    idle), restored again, identical.
+/// 3. Control: the saved screen is deleted before the next boot → the
+///    session is `replayed` and the `hist=` lines are gone, which proves
+///    steps 1–2 came from the snapshot.
+/// 4. Stop: the session's saved screen is removed (S-5).
+#[test]
+fn the_screen_comes_back_whole_after_a_restart_even_past_the_ring() {
+    let mut h = Harness::new("s4");
+    let port = h.start();
+    let token = h.token();
+    let dir = h.home.join("tui");
+    let ws = h.home.join("ws");
+    let body = serde_json::json!({
+        "agent_name": "tab-tui",
+        "cwd": ws.to_string_lossy(),
+        "command": "k2-ptyd-test-agent",
+        "args": ["repaint", dir.to_string_lossy(), "6"],
+        "cols": 100,
+        "rows": 30,
+    })
+    .to_string();
+    let (s, resp) = http(port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &body);
+    assert_eq!(s, 200, "v2 spawn: {resp}");
+    let sid = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["sessionId"].as_str().expect("sessionId").to_string();
+    let pid: i32 = wait_for("tui agent pid", Duration::from_secs(15), || std::fs::read_to_string(dir.join("pid")).ok()?.trim().parse().ok());
+    h.agent_pid = Some(pid);
+    let ptyd = h.ptyd_pid.expect("ptyd launched");
+    let before = wait_for("the repaint to finish", Duration::from_secs(60), || {
+        let l = read_screen(port, &token, &sid);
+        l.iter().any(|x| x.starts_with("repaint-done")).then_some(l)
+    });
+    let has_hist = |l: &[String]| (0..100).all(|i| l.iter().any(|x| x.trim_end() == format!("hist={i}")));
+    assert!(has_hist(&before), "the live screen lost its scrollback before any restart");
+    let snap = h.k2.join(format!("run/term/{sid}.snap"));
+
+    for (step, kill) in [("SIGTERM", libc::SIGTERM), ("kill -9", libc::SIGKILL)] {
+        // SAFETY: the daemon this test started.
+        unsafe { libc::kill(h.daemon_pid(), kill) };
+        h.wait_daemon_exit(Duration::from_secs(20));
+        assert!(alive(pid) && alive(ptyd), "{step}: the agent or ptyd died");
+        assert!(snap.is_file(), "{step}: no saved screen at {}", snap.display());
+        let port = h.start();
+        let token = h.token();
+        let log = std::fs::read_to_string(h.home.join(format!("daemon-{}.log", h.boots))).unwrap_or_default();
+        assert!(log.contains(&format!("adopted session={sid} ")) && log.contains("screen=restored"), "{step}: the screen was not restored");
+        assert!(adopted_ring_start(&log, &sid) > 0, "{step}: the ring never wrapped; the test proves nothing");
+        let after = read_screen(port, &token, &sid);
+        assert_eq!(after, before, "{step}: the restored screen differs from the one before the restart");
+    }
+
+    // 3. Control: without the saved screen only the ring replays.
+    // SAFETY: the daemon this test started.
+    unsafe { libc::kill(h.daemon_pid(), libc::SIGTERM) };
+    h.wait_daemon_exit(Duration::from_secs(20));
+    std::fs::remove_file(&snap).expect("remove the saved screen");
+    let port = h.start();
+    let token = h.token();
+    let log = std::fs::read_to_string(h.home.join(format!("daemon-{}.log", h.boots))).unwrap_or_default();
+    assert!(log.contains("screen=replayed"), "control: expected a ring replay");
+    let replayed = read_screen(port, &token, &sid);
+    assert!(replayed.iter().any(|x| x.starts_with("repaint-done")), "control: the replay lost the tail too");
+    assert!(!has_hist(&replayed), "control: the ring alone still held hist=0..99; the restore steps prove nothing");
+
+    // 4. Stop: the session ends and its saved screen goes. (One more
+    // restart first, so there is a saved screen to remove.)
+    unsafe { libc::kill(h.daemon_pid(), libc::SIGTERM) };
+    h.wait_daemon_exit(Duration::from_secs(20));
+    assert!(snap.is_file(), "detach saved no screen");
+    let port = h.start();
+    let (s, b) = http(port, "POST", &format!("/cli/daemon/stop?token={}", h.token()), "");
+    assert_eq!(s, 200, "stop: {b}");
+    h.wait_daemon_exit(Duration::from_secs(20));
+    wait_for("the tui agent to end", Duration::from_secs(10), || (!alive(pid)).then_some(()));
+    wait_for("ptyd to exit", Duration::from_secs(10), || (!alive(ptyd)).then_some(()));
+    assert!(!snap.exists(), "a stopped session's saved screen was left behind");
+    h.agent_pid = None;
+    h.ptyd_pid = None;
+    let _ = std::fs::remove_dir_all(&h.home);
+}
+
 fn enc(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -589,10 +688,13 @@ fn fired_count(fires: &[(String, String)]) -> usize {
     fires.iter().filter(|(d, _)| d == "fired" || d == "fired_catchup").count()
 }
 
-/// Wake deliveries the agent received: each one is a bracketed paste.
+/// Wake deliveries the agent received: the WAKEUP.md text, once per wake
+/// (framed as a paste or not, depending on whether the agent had turned
+/// bracketed paste on yet).
 fn pastes(dir: &Path) -> usize {
     let raw = std::fs::read(dir.join("stdin")).unwrap_or_default();
-    raw.windows(6).filter(|w| *w == b"\x1b[200~").count()
+    let m = b"Check the queue and report.";
+    raw.windows(m.len()).filter(|w| *w == m).count()
 }
 
 /// T1 (PRD §12 item 13, P29, P33, P79): a heartbeat agent survives daemon

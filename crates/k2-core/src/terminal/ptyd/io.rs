@@ -201,6 +201,8 @@ where
             wq: VecDeque::new(),
             pos,
             replay,
+            ckpt_at: Instant::now(),
+            ckpt_pos: stream.start,
         };
         l.run(stream)
     })?;
@@ -220,7 +222,14 @@ struct Loop<L: EventListener> {
     wq: VecDeque<u8>,
     pos: Arc<AtomicU64>,
     replay: Option<Replay>,
+    /// S4: the last screen checkpoint (time, stream offset).
+    ckpt_at: Instant,
+    ckpt_pos: u64,
 }
+
+/// S4: while output keeps changing, save the screen this often, so a
+/// daemon crash (no detach) still restores it.
+pub const CHECKPOINT_EVERY: Duration = Duration::from_secs(30);
 
 enum Step {
     Continue,
@@ -281,11 +290,17 @@ impl<L: EventListener> Loop<L> {
     }
 
     fn turn(&mut self, sock: &mut UnixStream) -> Step {
+        self.maybe_checkpoint();
         let sync_deadline = self.parser.sync_timeout().sync_timeout();
-        let timeout_ms: i32 = match sync_deadline {
+        let mut timeout_ms: i32 = match sync_deadline {
             Some(d) => d.saturating_duration_since(Instant::now()).as_millis().min(i32::MAX as u128) as i32,
             None => -1,
         };
+        // Wake for a due checkpoint when output changed since the last one.
+        if self.shadow.pos() != self.ckpt_pos {
+            let due = (self.ckpt_at + CHECKPOINT_EVERY).saturating_duration_since(Instant::now()).as_millis().min(i32::MAX as u128) as i32;
+            timeout_ms = if timeout_ms < 0 { due } else { timeout_ms.min(due) };
+        }
         let mut fds = [
             libc::pollfd { fd: sock.as_raw_fd(), events: libc::POLLIN | if self.wq.is_empty() { 0 } else { libc::POLLOUT }, revents: 0 },
             libc::pollfd { fd: self.wake_r.as_raw_fd(), events: libc::POLLIN, revents: 0 },
@@ -402,6 +417,31 @@ impl<L: EventListener> Loop<L> {
         self.pos.store(self.shadow.pos(), Ordering::Release);
     }
 
+    /// S4 checkpoint: every [`CHECKPOINT_EVERY`] while output changed, and
+    /// only outside a synchronized update (then every byte before
+    /// `partial_start` is on the grid and none after, exactly as at
+    /// detach). Never during the adoption replay. The grid is cloned under
+    /// the Term lock; encoding and the file write run on another thread.
+    fn maybe_checkpoint(&mut self) {
+        if self.replay.is_some()
+            || self.shadow.pos() == self.ckpt_pos
+            || self.ckpt_at.elapsed() < CHECKPOINT_EVERY
+            || self.parser.sync_timeout().sync_timeout().is_some()
+        {
+            return;
+        }
+        let offset = self.shadow.partial_start();
+        let snap = super::snapshot::Snapshot::capture(&*self.term.lock(), offset);
+        self.ckpt_at = Instant::now();
+        self.ckpt_pos = self.shadow.pos();
+        let sid = self.sid.clone();
+        let _ = std::thread::Builder::new().name("ptyd-ckpt".into()).spawn(move || {
+            if let Err(e) = super::snapshot::write(&sid, &snap) {
+                crate::log_debug!("[ptyd] session={sid}: screen checkpoint not saved: {e}");
+            }
+        });
+    }
+
     fn go_live(&mut self) {
         if let Some(r) = self.replay.take() {
             (r.on_live)();
@@ -454,6 +494,8 @@ impl<L: EventListener> Loop<L> {
         self.owner.release_fd(&super::cell_listener_name(&self.sid));
         self.owner.unwatch(&self.sid);
         super::adopt::release_conversations_of(&self.sid);
+        // S-5: the session ended; its saved screen goes.
+        super::snapshot::remove(&self.sid);
         IoEnd { reader_pos: self.shadow.pos(), safe_offset: self.shadow.partial_start(), exited: true }
     }
 }

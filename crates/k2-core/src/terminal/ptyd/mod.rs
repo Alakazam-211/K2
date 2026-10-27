@@ -25,6 +25,8 @@ pub mod client;
 pub mod env;
 #[cfg(unix)]
 pub mod io;
+#[cfg(unix)]
+pub mod snapshot;
 
 use std::sync::Mutex;
 

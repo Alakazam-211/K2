@@ -1377,14 +1377,40 @@ impl DaemonPtySession {
         stream: k2_ptyd::client::DataStream,
         replay: bool,
     ) -> Result<Arc<Self>, io::Error> {
+        Self::from_ptyd_stream_restoring(parts, owner, events, stream, replay, None)
+    }
+
+    /// [`Self::from_ptyd_stream`] that first rebuilds the Term from a saved
+    /// screen (S4, P42; `stream` then starts at its offset). The prelude
+    /// runs with query replies muted (P75), like the replay after it.
+    #[cfg(unix)]
+    fn from_ptyd_stream_restoring(
+        parts: PtydParts,
+        owner: Arc<crate::terminal::ptyd::client::Owner>,
+        events: std::sync::mpsc::Receiver<crate::terminal::ptyd::client::SessionEvent>,
+        stream: k2_ptyd::client::DataStream,
+        replay: bool,
+        restore: Option<crate::terminal::ptyd::snapshot::Snapshot>,
+    ) -> Result<Arc<Self>, io::Error> {
         use crate::terminal::ptyd::io as pio;
         let (events_tx, _initial_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         drop(_initial_rx);
         let query_reply = Arc::new(std::sync::OnceLock::new());
         let listener = DaemonEventListener { tx: events_tx.clone(), reply_tx: Arc::clone(&query_reply), muted: Default::default() };
         let term_config = TermConfig { scrolling_history: SCROLLBACK_CAP, ..TermConfig::default() };
-        let term_size = TermSize { cols: parts.cols.max(1) as usize, rows: parts.rows.max(1) as usize };
-        let term = Arc::new(FairMutex::new(Term::new(term_config, &term_size, listener.clone())));
+        let live_cols = parts.cols.max(1) as usize;
+        let live_rows = parts.rows.max(1) as usize;
+        let term = match &restore {
+            Some(snap) => {
+                // Amendment A: the snapshot's size first, then resize.
+                listener.set_replies_muted(true);
+                let mut t = Term::new(term_config, &TermSize { cols: snap.cols.max(1), rows: snap.rows.max(1) }, listener.clone());
+                snap.restore_into(&mut t, live_cols, live_rows);
+                t
+            }
+            None => Term::new(term_config, &TermSize { cols: live_cols, rows: live_rows }, listener.clone()),
+        };
+        let term = Arc::new(FairMutex::new(term));
 
         let replay = if replay {
             listener.set_replies_muted(true);
@@ -1492,14 +1518,33 @@ impl DaemonPtySession {
             _ => LabelSource::Pty,
         };
         let events = owner.watch(&info.sid);
-        let stream = match owner.attach(&info.sid, 0) {
-            Ok(s) => s,
+        // S4 (P42): a saved screen whose offset the ring still holds →
+        // restore it and replay only the tail; otherwise replay the ring.
+        let snap = crate::terminal::ptyd::snapshot::read(&info.sid).filter(|s| s.ring_offset >= info.ring_start && s.ring_offset <= info.ring_end);
+        let attach = |from: u64| match owner.attach(&info.sid, from) {
+            Ok(s) => Ok(s),
             Err(e) => {
                 owner.unwatch(&info.sid);
-                return Err(e);
+                Err(e)
             }
         };
-        let session = Self::from_ptyd_stream(
+        let (stream, snap) = match snap {
+            Some(s) => {
+                let stream = attach(s.ring_offset)?;
+                if stream.start == s.ring_offset {
+                    (stream, Some(s))
+                } else {
+                    // The ring moved past the snapshot between list and
+                    // attach: replay what it holds instead.
+                    log_debug!("[ptyd] adopt session={}: ring passed the saved screen ({} > {}); replaying", info.sid, stream.start, s.ring_offset);
+                    drop(stream);
+                    (attach(0)?, None)
+                }
+            }
+            None => (attach(0)?, None),
+        };
+        let restored = snap.is_some();
+        let session = Self::from_ptyd_stream_restoring(
             PtydParts {
                 session_id,
                 sid: info.sid.clone(),
@@ -1517,6 +1562,7 @@ impl DaemonPtySession {
             events,
             stream,
             true,
+            snap,
         )?;
         // P38: the grid-size pin comes back from meta.
         if let Some(pin) = m.get("pin").filter(|p| !p.is_null()) {
@@ -1536,7 +1582,14 @@ impl DaemonPtySession {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
         }
-        log_debug!("[ptyd] adopted session={} pid={} ring={}..{}", info.sid, info.pid, info.ring_start, info.ring_end);
+        log_debug!(
+            "[ptyd] adopted session={} pid={} ring={}..{} screen={}",
+            info.sid,
+            info.pid,
+            info.ring_start,
+            info.ring_end,
+            if restored { "restored" } else { "replayed" }
+        );
         Ok(session)
     }
 
@@ -1552,7 +1605,16 @@ impl DaemonPtySession {
                 return true;
             }
             p.owner.unwatch(&p.sid);
-            p.io.stop();
+            // S4 (P41, P78): the loop is stopped and joined and its sync
+            // flushed; `safe_offset` is the first byte the grid hasn't seen.
+            // The next daemon restores this Term and replays from there.
+            if let Some(end) = p.io.stop().filter(|e| !e.exited) {
+                let snap = crate::terminal::ptyd::snapshot::Snapshot::capture(&*self.term.lock(), end.safe_offset);
+                match crate::terminal::ptyd::snapshot::write(&p.sid, &snap) {
+                    Ok(()) => log_debug!("[ptyd] detach session={}: screen saved at offset {}", p.sid, end.safe_offset),
+                    Err(e) => log_debug!("[ptyd] detach session={}: screen not saved: {e}", p.sid),
+                }
+            }
             return true;
         }
         false

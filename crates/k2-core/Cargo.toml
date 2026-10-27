@@ -155,6 +155,11 @@ flate2 = "1"
 # time/aes/etc. extras.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# k2-ptyd S4 terminal snapshots (prd-k2-ptyd-v1 §7.7, P41): the Term grid
+# via serde, bincode then gzip (flate2). S0 measured a 5,000 × 200 grid at
+# 601 KiB / ~110 ms; JSON is 85 MiB / 251 ms.
+bincode = "1.3"
+
 # Terminal backend — VT-compliant parser + PTY management + reflow.
 alacritty_terminal = "0.26.0-rc1"
 portable-pty = "0.8"

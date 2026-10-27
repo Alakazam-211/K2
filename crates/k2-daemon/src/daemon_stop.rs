@@ -202,6 +202,9 @@ pub fn end_all_ptyd_sessions(owner: &k2_core::terminal::ptyd::client::Owner) -> 
         Ok(k2_ptyd::proto::Reply::Ok) => {}
         other => log_debug!("[daemon] ptyd shutdown: {other:?}"),
     }
+    // S4 / S-5: every ptyd session just ended, so no saved screen is
+    // needed (the IO loops may not see their exit before this daemon does).
+    k2_core::terminal::ptyd::snapshot::sweep(&std::collections::HashSet::new());
     n
 }
 
@@ -262,6 +265,7 @@ pub fn end_ptyd_sessions_for_downgrade() -> usize {
             Ok(k2_ptyd::proto::Reply::Ok) => {}
             other => log_debug!("[daemon] downgrade guard: ptyd shutdown: {other:?}"),
         }
+        k2_core::terminal::ptyd::snapshot::sweep(&std::collections::HashSet::new());
         n
     }
     #[cfg(not(unix))]

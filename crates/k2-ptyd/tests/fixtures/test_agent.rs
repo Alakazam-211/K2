@@ -79,6 +79,7 @@ fn run() {
             args.get(3).is_some_and(|a| a == "paste"),
         ),
         "vault-probe-child" => vault_probe_child(&args[1], &args[2]),
+        "repaint" => repaint(&args[1], args[2].parse().unwrap()),
         "sleep" => {
             println!("READY");
             out.flush().unwrap();
@@ -207,6 +208,38 @@ fn survive(dir: &str, every_ms: u64, paste: bool) {
         n += 1;
         std::thread::sleep(std::time::Duration::from_millis(every_ms));
     }
+}
+
+/// S4 test agent (a TUI-like screen): writes its pid to `<dir>/pid`, prints
+/// `hist=0` … `hist=99` lines (scrollback), turns bracketed paste on, then
+/// repaints one status line in place (`\r ESC[2K frame=<n>`) until `<mib>`
+/// MiB were written — so the early lines fall out of ptyd's ring while the
+/// screen still shows them — prints `repaint-done`, and idles.
+fn repaint(dir: &str, mib: usize) {
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pid"), std::process::id().to_string()).unwrap();
+    let mut out = std::io::stdout();
+    for i in 0..100 {
+        write!(out, "hist={i}\r\n").unwrap();
+    }
+    out.write_all(b"\x1b[?2004h").unwrap();
+    let total = mib << 20;
+    let mut written = 0usize;
+    let mut n = 0u64;
+    let mut buf = Vec::with_capacity(1 << 16);
+    while written < total {
+        buf.clear();
+        while buf.len() < (1 << 16) - 64 {
+            write!(buf, "\r\x1b[2Kframe={n}").unwrap();
+            n += 1;
+        }
+        out.write_all(&buf).unwrap();
+        written += buf.len();
+    }
+    write!(out, "\r\nrepaint-done frames={n}\r\n").unwrap();
+    out.flush().unwrap();
+    sleep_forever();
 }
 
 /// `GET /cli/whoami` over the per-cell socket; the status code or `ERR:…`.

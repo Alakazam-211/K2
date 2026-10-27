@@ -538,3 +538,75 @@ async fn the_app_link_serves_every_new_thread_row() {
     let seen = alerts.lock().unwrap().clone();
     assert!(seen.iter().all(|(w, _)| *w == ws.id), "alerts go to the App's own workspace: {seen:?}");
 }
+
+/// Vanilla's field report (0.46.3, nsi, 2026-10-26), exactly: an App
+/// GUEST's pass (`k2skn_`, from the App's own login) sent as Bearer through
+/// the App's gateway link by Node `fetch`, `Content-Type: application/json`,
+/// `POST /cli/thread/post` with `from`, `via: "thread"` and `attachments`
+/// as an ARRAY OF OBJECTS `[{path}]`. Reported: the post landed text-only
+/// with no error, while the same list as a JSON string attached. Now: the
+/// file rides the post (or the post is a clear 400), never text-only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guest_pass_on_the_app_link_attaches_a_json_array_of_objects() {
+    let _serial = serial();
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().simple().to_string()[..6];
+    let ws = seed_ws(&env, &format!("gal{tag}"));
+    let _conv = pin_chat(&ws);
+    let addr = ws.handle.clone();
+    let login = format!("vgu{tag}");
+    let rel = format!("uploads/{login}/file.png");
+    write(&ws.path, &rel, &encode(32, 32, ImageFormat::Png));
+    let rn = format!("up{tag}");
+    role(port, &rn, &ws, &["thread:read", "thread:post", "files:read"], Some(&["uploads/"])).await;
+
+    // The guest is the App's own (an App login), its pass minted for the App.
+    let app = format!("gal{tag}");
+    let svc = format!("svc-{tag}");
+    k2_core::skin::add_principal_for_app(&login, None, &svc, Some(&rn), "owner").expect("App guest");
+    let guest = k2_core::skin::create_app_session_token(&login, &svc).expect("guest pass").raw;
+    assert!(k2_core::skin::is_skin_token(&guest), "a skin pass");
+    let alerts = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+    let a2 = alerts.clone();
+    k2_daemon::apps::alerts::set_sink(Some(Box::new(move |w, t| a2.lock().unwrap().push((w.to_string(), t.to_string())))));
+    let _app_pass = gateway::open(
+        LinkSpec {
+            app_id: app.clone(),
+            service_id: svc.clone(),
+            workspace_id: ws.id.clone(),
+            port: 0,
+            caps: vec!["thread:read".into(), "thread:post".into(), "files:read".into()],
+            rooms: vec![ws.id.clone()],
+        },
+        None,
+    )
+    .expect("open link");
+    let lport = gateway::port_of(&app).expect("listening");
+
+    // The report's body, in shape.
+    let body = json!({ "addr": addr, "text": "see attached", "from": login, "via": "thread", "attachments": [{ "path": rel }] });
+    let r = link(lport, "POST", "/cli/thread/post".into(), guest.clone(), Some(body)).await;
+    assert_eq!(r.status, 200, "the guest's post with an array of objects on the link: {}", r.body);
+    let atts = r.json()["attachments"].clone();
+    assert_eq!(atts.as_array().map(Vec::len), Some(1), "the file rode the post (never text-only): {}", r.body);
+    assert_eq!(atts[0]["path"], rel.as_str(), "{}", r.body);
+    assert_eq!(atts[0]["state"], "ok", "{}", r.body);
+    assert_eq!(r.json()["author"]["kind"], "guest", "{}", r.body);
+
+    // The workaround the report found (the list as a JSON string) agrees.
+    let body = json!({ "addr": addr, "text": "as text", "from": login, "via": "thread", "attachments": json!([{ "path": rel }]).to_string() });
+    let r = link(lport, "POST", "/cli/thread/post".into(), guest.clone(), Some(body)).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["attachments"].as_array().map(Vec::len), Some(1), "{}", r.body);
+
+    // A wrong shape is a clear 400 on the link too, never a text-only post.
+    let body = json!({ "addr": addr, "text": "wrong", "attachments": { "path": rel } });
+    let r = link(lport, "POST", "/cli/thread/post".into(), guest.clone(), Some(body)).await;
+    assert_eq!(r.status, 400, "an object, not an array: {}", r.body);
+    assert!(r.json()["error"]["hint"].as_str().unwrap_or("").starts_with("attachments must be"), "{}", r.body);
+
+    gateway::close(&app, None, true);
+    k2_daemon::apps::alerts::set_sink(None);
+}

@@ -176,9 +176,17 @@ fn the_log_names_people_so_the_agent_needs_its_app_user_switch() {
     assert!(!v.to_string().contains(&code_raw), "never the code");
     let (st, v) = get(LOG, &agent(&f.ws), &[("app", &f.app)]);
     assert_eq!((st, code(&v)), (403, "forbidden"), "{v}");
-    // Today the App-user gate is the workspace's skin-manage switch
-    // (`skin_routes::agent_may_manage_app_users`; apps.manage-users swaps in there).
+    // The App-user gate (`skin_routes::agent_may_manage_app_users`) is the
+    // agent's own "Let this agent manage its Apps' users" switch since 0.46.4
+    // (apps.manage-users, migration 0225): Build and run Apps alone is not it.
     switches(&f.ws, true, false);
+    let (st, v) = get(LOG, &agent(&f.ws), &[("app", &f.app)]);
+    assert_eq!((st, code(&v)), (403, "forbidden"), "Build and run Apps alone: {v}");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute("UPDATE projects SET agents_can_manage_app_users = 1 WHERE id = ?1", params![f.ws]).expect("users switch");
+    }
     let (st, v) = get(LOG, &agent(&f.ws), &[("app", &f.app)]);
     assert_eq!(st, 200, "{v}");
     let (st, v) = get(STATUS, &Who::Owner, &[("app", &f.app)]);

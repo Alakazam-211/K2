@@ -70,7 +70,7 @@ pub fn file_key_dir(home: &Path) -> PathBuf {
 
 /// True when `k2_home` is the account's own `~/.k2` (password-database
 /// home, not `$HOME`) and no test harness marker is set.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 fn keychain_home(k2_home: &Path, real_home: Option<&Path>) -> bool {
     if std::env::var_os("K2_TEST_AGENT_SHIM_DIR").is_some() {
         return false;
@@ -96,7 +96,18 @@ pub fn select_key_store(home: &Path) -> Arc<dyn KeyStore> {
         }
         Arc::new(FileKeyStore::new(file_key_dir(home)))
     }
-    #[cfg(not(target_os = "macos"))]
+    // Windows: the account's own K2 home seals its box key with DPAPI (the
+    // Keychain's role on macOS); any other home keeps a file there. A vault
+    // made on the file key moves onto DPAPI at the next boot
+    // (open_with_upgrade re-wraps it).
+    #[cfg(windows)]
+    {
+        if keychain_home(home, dirs::home_dir().as_deref()) {
+            return Arc::new(k2_vault::keystore::dpapi::DpapiKeyStore::new(file_key_dir(home)));
+        }
+        Arc::new(FileKeyStore::new(file_key_dir(home)))
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let t = keeper_client::SudoHelper::detect();
         if let Some(t) = t {

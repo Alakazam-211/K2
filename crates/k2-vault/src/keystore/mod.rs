@@ -3,6 +3,7 @@
 //! | Mode | KeyStore | Anchor (rollback guard) |
 //! |---|---|---|
 //! | macOS desktop | Keychain via Security.framework (daemon side) | yes |
+//! | Windows desktop | DPAPI-sealed file (`dpapi`) | no |
 //! | Linux box with the root helper (protocol ≥ 4) | keeper | gen only |
 //! | Linux, no helper (0.45.2 default) | file `~/.k2/vault/key/kek` | no |
 //! | tests | fake | yes |
@@ -10,6 +11,8 @@
 //! The anchor is `{vault_id, gen, audit_head}` (VS7/VS8): a vault.db older
 //! than the anchor, or with another vault id, fails closed.
 
+#[cfg(windows)]
+pub mod dpapi;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fake;
 pub mod file;
@@ -30,6 +33,8 @@ pub enum KeyHome {
     SystemdCreds,
     File,
     Fake,
+    /// Windows: the key sealed by the user's DPAPI key.
+    Dpapi,
 }
 
 impl KeyHome {
@@ -42,6 +47,7 @@ impl KeyHome {
             KeyHome::SystemdCreds => "systemd-creds",
             KeyHome::File => "file",
             KeyHome::Fake => "fake",
+            KeyHome::Dpapi => "dpapi",
         }
     }
 
@@ -54,6 +60,7 @@ impl KeyHome {
             KeyHome::SystemdCreds => "This server's system credential store",
             KeyHome::File => "A file on this server",
             KeyHome::Fake => "Test key store",
+            KeyHome::Dpapi => "Your Windows account's protected storage",
         }
     }
 }

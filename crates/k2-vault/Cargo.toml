@@ -54,7 +54,7 @@ signature = "2"
 # opens. windows-sys 0.61 is the copy already in Cargo.lock.
 [target.'cfg(windows)'.dependencies]
 k2-winsec = { path = "../k2-winsec" }
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_Memory", "Win32_System_SystemInformation"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Memory", "Win32_System_SystemInformation"] }
 
 [features]
 # Test fakes (FakeKeyStore, fake root helper, cheap KDF). Never in release

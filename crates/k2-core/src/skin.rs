@@ -3711,6 +3711,22 @@ pub fn clear_login_lockout(username: &str) -> Result<(String, bool), String> {
     Ok((key, deleted > 0))
 }
 
+/// Who a login name counts against, for a throttle in front of
+/// [`check_and_record_login`]: the principal it signs in as (its
+/// username, whether the name was the username or the email, in any case),
+/// else the presented name as the lockout keys it. 0.46.5 (papercuts
+/// review): the App link's per-guest failure count keyed on the raw name,
+/// so `ada` and `ada@example.com` (and the JSON `name` key) were two
+/// budgets for one guest while the lockout counted them as one.
+pub fn login_throttle_subject(presented: &str) -> String {
+    let key = login_lockout_key(presented);
+    let lowered = presented.trim().to_ascii_lowercase();
+    match with_conn(|conn| lookup_login_principal(conn, &lowered)) {
+        Ok(Some(p)) => p.username,
+        _ => key,
+    }
+}
+
 pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcome {
     // Lockout 3/15. `@` → email lookup; else username. Invalid email is a
     // miss, not 400. A name that resolves to a principal is counted on

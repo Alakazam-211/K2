@@ -680,8 +680,11 @@ pub fn link_login(limiter: &crate::login_throttle::LoginLimiter, body: &[u8], co
         }
         v.to_string().into_bytes()
     };
-    // The username the handler will read (any case, JSON `name` too).
-    let (per_app, per_user, all) = link_login_keys(svc, &crate::skin_routes::login_username(&body, content_type));
+    // The username the handler will read (any case, JSON `name` too),
+    // counted against the guest it signs in as: `ada`, `ADA` and ada's
+    // email are one budget, as they are one lockout (0.46.5 review nit).
+    let subject = k2_core::skin::login_throttle_subject(&crate::skin_routes::login_username(&body, content_type));
+    let (per_app, per_user, all) = link_login_keys(svc, &subject);
     let now = limiter.now();
     if limiter.is_limited(&per_user, LINK_LOGIN_FAILS_PER_USER, now) {
         return Some(refuse("429 Too Many Requests", "rate_limited", "too many failed logins for this guest on this App; wait 5 minutes"));
@@ -1202,6 +1205,8 @@ mod tests {
     /// the body says (another App is refused), JSON or form.
     #[test]
     fn a_link_login_is_bound_to_the_links_app() {
+        // The per-guest key reads skin.db (who the name signs in as).
+        let _home = k2_core::test_env::TempHome::new();
         let l = crate::login_throttle::LoginLimiter::new();
         assert!(link_login(&l, b"{}", "application/json").is_none(), "off a link: nothing to do");
         let (b, _) = proceed(login(&l, "svc-a", r#"{"username":"ann","password":"x"}"#, "application/json"));
@@ -1228,6 +1233,8 @@ mod tests {
     /// the handler reads.
     #[test]
     fn a_link_login_drops_or_refuses_every_spelling_of_app() {
+        // The per-guest key reads skin.db (who the name signs in as).
+        let _home = k2_core::test_env::TempHome::new();
         let l = crate::login_throttle::LoginLimiter::new();
         const FORM: &str = "application/x-www-form-urlencoded";
         for body in [
@@ -1264,10 +1271,55 @@ mod tests {
         assert!(k.ends_with(":user:victim"), "{k}");
     }
 
+    /// 0.46.5 (papercuts review nit): the per-guest failure count is the
+    /// guest the name signs in as, like the lockout: the username in any
+    /// case, the JSON `name` key and the guest's email are one budget; a
+    /// name that is nobody stays its own (lowercased) key.
+    #[test]
+    fn link_login_failures_count_per_guest_not_per_spelling() {
+        let _home = k2_core::test_env::TempHome::new();
+        k2_core::skin::add_principal_with_email("ada", Some("Ada@Example.test")).expect("ada");
+        let l = crate::login_throttle::LoginLimiter::new();
+        let keys: Vec<String> = [
+            r#"{"username":"ada","password":"x"}"#,
+            r#"{"username":" ADA ","password":"x"}"#,
+            r#"{"name":"Ada","password":"x"}"#,
+            r#"{"username":"ada@example.test","password":"x"}"#,
+            r#"{"username":"ADA@EXAMPLE.TEST","password":"x"}"#,
+        ]
+        .iter()
+        .map(|b| proceed(login(&l, "svc-a", b, "application/json")).1)
+        .collect();
+        for k in &keys {
+            assert!(k.ends_with(":user:ada"), "every spelling is ada: {keys:?}");
+        }
+        let (_, k) = proceed(login(&l, "svc-a", "Username=ada%40example.test&password=x", "application/x-www-form-urlencoded"));
+        assert!(k.ends_with(":user:ada"), "form email too: {k}");
+        let (_, k) = proceed(login(&l, "svc-a", r#"{"username":"Nobody@Else.test","password":"x"}"#, "application/json"));
+        assert!(k.ends_with(":user:nobody@else.test"), "{k}");
+        // So the 6th failure in any spelling waits.
+        for (i, b) in [r#"{"username":"ada","password":"x"}"#, r#"{"name":"ADA","password":"x"}"#, r#"{"username":"ada@example.test","password":"x"}"#]
+            .iter()
+            .cycle()
+            .take(LINK_LOGIN_FAILS_PER_USER)
+            .enumerate()
+        {
+            let (_, k) = proceed(login(&l, "svc-b", b, "application/json"));
+            assert!(k.ends_with(":user:ada"), "try {i}: {k}");
+            link_login_refused(&l, &k);
+        }
+        assert_eq!(
+            refused(login(&l, "svc-b", r#"{"username":"Ada@Example.test","password":"x"}"#, "application/json")),
+            ("429 Too Many Requests", "rate_limited".to_string())
+        );
+    }
+
     /// Per App (not one bucket for every App), per (App, username)
     /// failures, and a link-wide cap.
     #[test]
     fn link_logins_are_throttled_per_app_per_user_and_overall() {
+        // The per-guest key reads skin.db (who the name signs in as).
+        let _home = k2_core::test_env::TempHome::new();
         let l = crate::login_throttle::LoginLimiter::new();
         let body = |u: &str| format!(r#"{{"username":"{u}","password":"x"}}"#);
         // Lane 4's in-wall suite: six logins through one App are fine.

@@ -122,15 +122,43 @@ pub fn scan_folder(root: &Path, cmd: &str) -> ScanReport {
             rep.truncated = true;
             break;
         }
-        if std::fs::metadata(p).map(|m| m.len() > MAX_FILE_BYTES).unwrap_or(true) {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(p) else { continue };
+        let Some(text) = read_bounded_no_follow(p) else { continue };
         rep.files_scanned += 1;
         let rel = p.strip_prefix(root).unwrap_or(p).to_string_lossy().to_string();
         scan_text(&mut rep, &rel, &ext, is_pkg, &text);
     }
     rep
+}
+
+/// One file's text for the scan, or `None` (skip it). The service's folder
+/// can change while it is scanned (0.46.5, papercuts review: the scan
+/// race). Before, the size came from a `metadata()` that follows links and
+/// the text from a second, unbounded `read_to_string()` by path: a file
+/// grown or swapped for a symlink in between was read whole, or read from
+/// outside the folder. Now the one handle that is read is opened without
+/// following a final symlink, must be a regular file by its own `fstat`,
+/// and is read through a [`MAX_FILE_BYTES`] + 1 cap (over it: skipped).
+fn read_bounded_no_follow(p: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // O_NONBLOCK: a FIFO swapped in never blocks the open.
+        opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let f = opts.open(p).ok()?;
+    let meta = f.metadata().ok()?;
+    if !meta.is_file() || meta.len() > MAX_FILE_BYTES {
+        return None;
+    }
+    let mut buf = Vec::with_capacity(meta.len() as usize);
+    f.take(MAX_FILE_BYTES + 1).read_to_end(&mut buf).ok()?;
+    if buf.len() as u64 > MAX_FILE_BYTES {
+        return None;
+    }
+    String::from_utf8(buf).ok()
 }
 
 fn push_env(rep: &mut ScanReport, name: String, file: &str, line: u32) {
@@ -596,6 +624,36 @@ mod tests {
         let d = std::env::temp_dir().join(format!("k2-grace-scan-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// 0.46.5 (the scan race): the one read is bounded and never follows a
+    /// symlink or opens anything but a regular file, whatever the folder
+    /// turned into after the walk listed it.
+    #[cfg(unix)]
+    #[test]
+    fn bounded_read_refuses_links_fifos_and_oversize() {
+        let d = tmp();
+        let outside = tmp();
+        std::fs::write(outside.join("secret.js"), "process.env.OUTSIDE_SECRET_NAME").unwrap();
+        std::fs::write(d.join("ok.js"), "process.env.INSIDE").unwrap();
+        assert_eq!(read_bounded_no_follow(&d.join("ok.js")).as_deref(), Some("process.env.INSIDE"));
+        std::os::unix::fs::symlink(outside.join("secret.js"), d.join("swapped.js")).unwrap();
+        assert_eq!(read_bounded_no_follow(&d.join("swapped.js")), None, "a symlink is never followed");
+        let fifo = d.join("pipe.js");
+        let c = std::ffi::CString::new(fifo.to_string_lossy().as_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path; mkfifo has no other effect.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "mkfifo");
+        assert_eq!(read_bounded_no_follow(&fifo), None, "a FIFO is skipped without blocking");
+        let big = d.join("big.js");
+        std::fs::write(&big, vec![b'a'; MAX_FILE_BYTES as usize + 1]).unwrap();
+        assert_eq!(read_bounded_no_follow(&big), None, "over the cap: skipped");
+        std::fs::write(&big, vec![b'a'; MAX_FILE_BYTES as usize]).unwrap();
+        assert_eq!(read_bounded_no_follow(&big).map(|t| t.len()), Some(MAX_FILE_BYTES as usize), "at the cap: read");
+        let r = scan_folder(&d, "node ok.js");
+        assert!(r.env_names().contains("INSIDE"), "{r:?}");
+        assert!(!r.env_names().contains("OUTSIDE_SECRET_NAME"), "nothing from outside the folder: {r:?}");
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]

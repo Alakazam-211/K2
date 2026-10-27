@@ -229,7 +229,7 @@ class H(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"kind": body.get("kind"), "enabled": body.get("enabled"),
                                         "socket": body.get("socket") or "/run/sew/mgmt.sock"}))
             return
-        if path == "/cli/skin/grants/copy-host":
+        if path in ("/cli/skin/grants/copy-host", "/cli/app/grant/copy-host"):
             self._send(200, json.dumps({
                 "ok": True,
                 "app": "svc-1",
@@ -345,7 +345,7 @@ assert_contains "rm body kind" "$seen" '"kind": "mailbox"'
 assert_contains "rm body target" "$seen" '"targetId": "inbox"'
 assert_contains "add --room body" "$seen" '"rooms": ["sales", "docs"]'
 assert_contains "add --room target" "$seen" '"targetId": "docs/portal"'
-assert_contains "copy-host posts" "$seen" "/cli/skin/grants/copy-host"
+assert_contains "copy-host posts (the App route since 0.46.4)" "$seen" "/cli/app/grant/copy-host"
 assert_contains "copy-host body" "$seen" '{"app": "docs/portal", "dryRun": true}'
 assert_contains "user add --app body" "$seen" '{"username": "eve", "app": "docs/portal", "role": "desk"}'
 

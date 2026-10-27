@@ -442,6 +442,30 @@ fn status_is_never_running_unless_both_units_are_active() {
     }
 }
 
+/// Sew 0.3.1 readiness (`/api/v1/health`) shows as `apiHealth`; not
+/// ready is a `sew_not_ready_<reason>` alarm (degraded), ready adds none.
+#[test]
+fn status_shows_sews_readiness_and_alarms_when_not_ready() {
+    let t = t();
+    t.enabled();
+    store::update(1, |r| {
+        r.ship_kind = "dir".into();
+        r.recovery_shown_at = Some(1);
+    })
+    .unwrap();
+    let s = status(&t.env(), false);
+    assert_eq!((s["state"].clone(), s["apiHealth"]["ready"].clone()), (json!("running"), json!(true)), "{s}");
+    t.ops.queue_api_health(vec![Ok((503, json!({"ok": false, "ready": false, "reason": "upgrading", "since": 7})))]);
+    let s = status(&t.env(), false);
+    assert_eq!(s["state"], "degraded", "{s}");
+    assert_eq!((s["apiHealth"]["reason"].clone(), s["apiHealth"]["since"].clone()), (json!("upgrading"), json!(7)));
+    assert!(s["alarms"].as_array().unwrap().iter().any(|a| a == "sew_not_ready_upgrading"), "{s}");
+    t.ops.queue_api_health(vec![Err("connection refused".into())]);
+    let s = status(&t.env(), false);
+    assert!(s["alarms"].as_array().unwrap().iter().any(|a| a == "sew_not_ready_down"), "{s}");
+    assert_eq!(status(&t.env(), false)["state"], "running", "back to ready");
+}
+
 #[test]
 fn status_envelope_alarms_and_degraded_verdict() {
     let t = t();

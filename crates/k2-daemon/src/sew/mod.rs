@@ -39,6 +39,7 @@
 //!   app-url / ship / mirror routes, the off-box shipper, K31's App Space
 //!   routes).
 
+pub mod health;
 pub mod meet;
 pub mod ops;
 pub mod routes;

@@ -56754,6 +56754,10 @@ vo = v.get("voice") or {}
 p = vo.get("progress") or {}
 busy = st == "installing" or (os.environ["K2_HC_VOICE"] == "1" and p.get("result") == "running")
 step = ((v.get("enableProgress") or {}).get("current")) if st == "installing" else p.get("step")
+# Sew 0.3.1 health: wait through "upgrading"; never wait on "stopping".
+h = v.get("apiHealth") or {}
+if not busy and h.get("reason") == "upgrading":
+    busy, step = True, "sew-upgrading"
 print(("busy " if busy else "done ") + "%s/%s" % (st, step or "-"))
 ')"
         case "$now" in
@@ -56764,7 +56768,11 @@ print(("busy " if busy else "done ") + "%s/%s" % (st, step or "-"))
 import json, sys
 v = json.load(sys.stdin)
 vo = v.get("voice") or {}
+h = v.get("apiHealth") or {}
 bad = v.get("state") == "error" or (vo.get("progress") or {}).get("result") == "error"
+if h.get("reason") == "stopping":
+    print("Sew is stopping (a stop, disable or restart is under way); not waiting. Check k2 hostchat status, or k2 hostchat restart.", file=sys.stderr)
+    bad = True
 sys.exit(3 if bad else 0)
 '
                 return $?

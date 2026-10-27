@@ -427,6 +427,13 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
             return error(503, "chat_unavailable", "Sew is not enabled or not reachable", None).into();
         }
     };
+    // Sew 0.3.1 readiness: wait through an upgrade (≤10 s), never through a
+    // stop; never start Sew from here.
+    if let Err(details) = d.status.ready_gate() {
+        audit(event, &ident.actor, "sew_unavailable", req.ingress, req.ip);
+        let hint = details["hint"].as_str().unwrap_or("Sew is not ready").to_string();
+        return error(503, "sew_unavailable", &hint, Some(details)).into();
+    }
     let app = app_claim(&ident);
     let claims = match ChatPassClaims::new(&install_id, &ident.sub, &ident.sid, d.now)
         .and_then(|c| c.with_caps(ident.caps.clone()))
@@ -507,7 +514,16 @@ fn owner_gate(caller: &Result<VaultCaller, VaultError>) -> Result<Actor, CliResp
 }
 
 /// `POST /cli/sew/owner-handoff` with the live vault confirm broker.
+/// Sew must be ready first (S32 Q2, Sew's design): a code for a Sew that
+/// is upgrading waits ≤10 s; stopping or down refuses before the person's
+/// confirm is spent.
 pub fn handle_owner_handoff(ingress: &str, caller: Result<VaultCaller, VaultError>, body: &[u8]) -> Reply {
+    if crate::sew::health::GATE_HANDOFF {
+        if let Err(details) = crate::sew::health::mint_gate(&crate::sew::supervisor::live()) {
+            let hint = details["hint"].as_str().unwrap_or("Sew is not ready").to_string();
+            return error(503, "sew_unavailable", &hint, Some(details)).into();
+        }
+    }
     let take = |token: &str, stamp: &str| -> Result<String, VaultError> {
         let v = crate::vault::get()?;
         match v.confirm.take(token, handoff::CONFIRM_ACTION, None, stamp)? {

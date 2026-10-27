@@ -1152,6 +1152,9 @@ fn status_body(env: &Env, with_health: bool) -> Value {
         (None, None)
     };
     let health_ok = up && health_err.is_none() && mgmt(env, "GET", "/mgmt/v1/health", None).is_ok_and(|v| v["ok"] == true);
+    // Sew 0.3.1 readiness on the client listener (`upgrading`, `stopping`,
+    // `db`, `migrations`, …): shown as `apiHealth`; not ready = an alarm.
+    let api_health = up.then(|| super::health::read(env));
     let mut alarms: Vec<String> = sew_status
         .as_ref()
         .and_then(|s| s.get("alarms"))
@@ -1161,6 +1164,9 @@ fn status_body(env: &Env, with_health: bool) -> Value {
     let warnings = split_setup_warnings(&mut alarms, sew_status.as_ref());
     if up && (health_err.is_some() || !health_ok) {
         alarms.push("k2_mgmt_unreachable".into());
+    }
+    if let Some(h) = api_health.as_ref().filter(|h| !h.ready) {
+        alarms.push(format!("sew_not_ready_{}", h.reason.as_deref().unwrap_or("unknown")));
     }
     alarms.extend(k2_alarms(env, &row, sew_status.as_ref(), now));
     let mut warnings = warnings;
@@ -1191,6 +1197,7 @@ fn status_body(env: &Env, with_health: bool) -> Value {
         "identityProvider": row_provider(&row),
         "voice": voice,
         "units": {"sewDb": db.json(), "sew": sew.json()},
+        "apiHealth": api_health.as_ref().map(super::health::Health::json),
         "alarms": alarms,
         "warnings": warnings,
         "recoveryKeySaved": row.recovery_shown_at.is_some(),
@@ -2724,6 +2731,9 @@ pub fn doctor(env: &Env) -> R<Value> {
     let now = env.ops.now();
     let report = v["sew"].clone();
     let exit = sew_exit(&v).unwrap_or(0);
+    // Sew 0.3.1: warn (media.reachability) = degraded, unknown (non-root
+    // creds, sysctl) = listed only, upgrade.state lifted.
+    let verdict = super::health::doctor_verdict(&report);
     store::update(now, |r| {
         r.doctor = Some(report.clone());
         r.doctor_at = Some(now);
@@ -2732,7 +2742,7 @@ pub fn doctor(env: &Env) -> R<Value> {
     // A person (or a Manage-Sew agent) re-runs the S29 §19 JWKS check here
     // after a `k2_jwks_url_drift` alarm.
     let jwks = jwks_drift_check(env);
-    Ok(json!({"ok": true, "exit": exit, "report": report, "at": now, "jwks": jwks}))
+    Ok(json!({"ok": true, "exit": exit, "report": report, "verdict": verdict, "at": now, "jwks": jwks}))
 }
 
 pub fn job(env: &Env, id: &str) -> R<Value> {

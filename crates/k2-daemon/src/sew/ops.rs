@@ -90,6 +90,12 @@ pub trait SewOps: Send + Sync {
     fn mgmt(&self, method: &str, path: &str, token: &str, body: Option<&Value>) -> Result<Value, MgmtError>;
     fn now(&self) -> i64;
     fn sleep_ms(&self, ms: u64);
+    /// `GET /api/v1/health` on Sew's loopback client listener (Sew 0.3.1
+    /// readiness, [`super::health`]): `(status, body)`, or why nothing
+    /// answered.
+    fn api_health(&self) -> Result<(u16, Value), String> {
+        Err("this build has no client-listener probe".into())
+    }
 
     // ── voice (K13) ──────────────────────────────────────────────────────
     /// This box's k2.dev label (the tunnel's primary label), `None` without
@@ -368,6 +374,9 @@ impl SewOps for RealOps {
     fn mgmt(&self, method: &str, path: &str, token: &str, body: Option<&Value>) -> Result<Value, MgmtError> {
         mgmt_call(Path::new(k2_root_proto::sew::SEW_MGMT_SOCKET), method, path, token, body)
     }
+    fn api_health(&self) -> Result<(u16, Value), String> {
+        api_health_call(&client_addr())
+    }
     fn now(&self) -> i64 {
         chrono::Utc::now().timestamp()
     }
@@ -506,6 +515,65 @@ pub fn parse_meminfo(text: &str) -> Option<u64> {
 }
 
 /// One HTTP/1.1 request on Sew's mgmt socket (`Connection: close`).
+/// Sew's client listener as `host:port`: the loopback URL S29 recorded
+/// after enable, else `[server] listen` in `/etc/sew/sew.toml`, else the
+/// default 127.0.0.1:8470.
+pub fn client_addr() -> String {
+    if let Some(u) = crate::chat_pass::link::client_url() {
+        return u.trim().trim_start_matches("http://").trim_end_matches('/').to_string();
+    }
+    use k2_core::deploy::box_service as bs;
+    let toml = std::fs::read_to_string(bs::SEW_CONFIG).ok();
+    let port = bs::preset("sew-api").and_then(|p| bs::resolve_preset(p, toml.as_deref()).ok()).map(|r| r.port).unwrap_or(8470);
+    format!("127.0.0.1:{port}")
+}
+
+/// One plain `GET /api/v1/health` to `addr` (loopback, 2 s timeouts): the
+/// status and JSON body whatever the status (a 503 carries the reason).
+pub fn api_health_call(addr: &str) -> Result<(u16, Value), String> {
+    use std::io::{Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+    let t = std::time::Duration::from_secs(2);
+    let sa = addr
+        .to_socket_addrs()
+        .map_err(|e| format!("{addr}: {e}"))?
+        .next()
+        .ok_or_else(|| format!("{addr}: no address"))?;
+    if !sa.ip().is_loopback() {
+        return Err(format!("{addr} is not loopback; K2 probes Sew on this box only"));
+    }
+    let mut s = TcpStream::connect_timeout(&sa, t).map_err(|e| e.to_string())?;
+    s.set_read_timeout(Some(t)).map_err(|e| e.to_string())?;
+    s.set_write_timeout(Some(t)).map_err(|e| e.to_string())?;
+    s.write_all(b"GET /api/v1/health HTTP/1.1\r\nHost: sew\r\nAccept: application/json\r\nConnection: close\r\n\r\n")
+        .map_err(|e| e.to_string())?;
+    let mut raw = Vec::new();
+    s.take(64 * 1024).read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    parse_status_and_body(&raw)
+}
+
+/// `(status, JSON body)` of a raw HTTP answer (any status; an empty or
+/// non-JSON body reads as `{}`).
+pub fn parse_status_and_body(raw: &[u8]) -> Result<(u16, Value), String> {
+    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or("truncated HTTP answer")?;
+    let head = String::from_utf8_lossy(&raw[..split]);
+    let mut lines = head.lines();
+    let code: u16 = lines
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|c| c.parse().ok())
+        .ok_or("bad HTTP status line")?;
+    let chunked = lines.any(|l| {
+        let l = l.to_ascii_lowercase();
+        l.starts_with("transfer-encoding:") && l.contains("chunked")
+    });
+    let mut body = raw[split + 4..].to_vec();
+    if chunked {
+        body = dechunk(&body).ok_or("bad chunked body")?;
+    }
+    Ok((code, serde_json::from_slice(&body).unwrap_or_else(|_| json!({}))))
+}
+
 pub fn mgmt_call(sock: &Path, method: &str, path: &str, token: &str, body: Option<&Value>) -> Result<Value, MgmtError> {
     #[cfg(unix)]
     use std::io::{Read, Write};
@@ -692,6 +760,9 @@ pub mod fake {
         pub served_ports: Mutex<Vec<u16>>,
         /// [`SewOps::front_routes_changed`] calls (front443 table rebuilds).
         pub front_rebuilds: Mutex<u32>,
+        /// Queued `/api/v1/health` answers (default: 200 ready).
+        pub api_health_q: Mutex<VecDeque<Result<(u16, Value), String>>>,
+        pub api_health_n: Mutex<usize>,
     }
 
     pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -727,6 +798,8 @@ pub mod fake {
                 on_disk: Mutex::new(None),
                 helper_no_accept: Mutex::new(false),
                 mgmt_health_ok: Mutex::new(true),
+                api_health_q: Mutex::new(VecDeque::new()),
+                api_health_n: Mutex::new(0),
                 mgmt_status: Mutex::new(json!({
                     "provider": "k2",
                     "version": format!("{pin}+g1234567"),
@@ -1092,6 +1165,16 @@ pub mod fake {
         }
     }
 
+    impl FakeOps {
+        /// Queue `/api/v1/health` answers (then the default: ready).
+        pub fn queue_api_health(&self, v: Vec<Result<(u16, Value), String>>) {
+            self.api_health_q.lock().unwrap().extend(v);
+        }
+        pub fn api_health_calls(&self) -> usize {
+            *self.api_health_n.lock().unwrap()
+        }
+    }
+
     impl SewOps for FakeOps {
         fn sew_released(&self) -> bool {
             *self.released.lock().unwrap()
@@ -1197,6 +1280,10 @@ pub mod fake {
         }
         fn hostname(&self) -> String {
             "lztek".into()
+        }
+        fn api_health(&self) -> Result<(u16, Value), String> {
+            *self.api_health_n.lock().unwrap() += 1;
+            self.api_health_q.lock().unwrap().pop_front().unwrap_or_else(|| Ok((200, json!({"ok": true, "ready": true}))))
         }
         fn mgmt(&self, method: &str, path: &str, token: &str, body: Option<&Value>) -> Result<Value, MgmtError> {
             self.mgmt_calls.lock().unwrap().push(format!("{method} {path}"));

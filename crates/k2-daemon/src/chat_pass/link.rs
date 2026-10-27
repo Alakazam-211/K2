@@ -26,6 +26,12 @@ use serde::{Deserialize, Serialize};
 /// Where a mint gets the install id (tests inject fixed answers).
 pub trait SewStatus: Send + Sync {
     fn install_id(&self) -> Result<String, String>;
+    /// Sew 0.3.1 readiness before a mint ([`crate::sew::health::mint_gate`]):
+    /// `Err(details)` = refuse with 503 `sew_unavailable`. Test doubles keep
+    /// the default (ready).
+    fn ready_gate(&self) -> Result<(), serde_json::Value> {
+        Ok(())
+    }
 }
 
 /// Production: the supervisor's `sew_server` row, read on every call.
@@ -34,6 +40,12 @@ pub struct SewRow;
 impl SewStatus for SewRow {
     fn install_id(&self) -> Result<String, String> {
         install_id_from_row(crate::sew::store::load().as_ref())
+    }
+    fn ready_gate(&self) -> Result<(), serde_json::Value> {
+        if !crate::sew::health::GATE_PASS {
+            return Ok(());
+        }
+        crate::sew::health::mint_gate(&crate::sew::supervisor::live())
     }
 }
 

@@ -254,6 +254,42 @@ fn rate_limit_per_sid_and_per_daemon() {
     assert!(audit_text().contains("rate_limited"));
 }
 
+/// Sew not ready (S32 Q2 / Sew 0.3.1 health): the gate's refusal.
+struct NotReady(serde_json::Value);
+impl SewStatus for NotReady {
+    fn install_id(&self) -> Result<String, String> {
+        Ok(INSTALL.into())
+    }
+    fn ready_gate(&self) -> Result<(), Value> {
+        Err(self.0.clone())
+    }
+}
+
+#[test]
+fn a_sew_that_is_not_ready_refuses_the_mint_with_its_state() {
+    let _home = TempHome::new();
+    let r = ring("k7-ready");
+    let limiter = Limiter::new(PER_SID, PER_DAEMON);
+    let codes = handoff::Store::default();
+    let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
+    let stopping = NotReady(serde_json::json!({
+        "state": "stopping", "since": null, "retryAfterMs": 15000,
+        "hint": crate::sew::health::hint("stopping"),
+    }));
+    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &stopping, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate };
+    let x = mint::handle_pass_with(&req(Some(OWNER), b""), &d);
+    assert_eq!((x.response.status, code(&x).as_str()), ("503 Service Unavailable", "sew_unavailable"));
+    let b = body(&x);
+    assert_eq!(b["error"]["details"]["state"], "stopping", "{b}");
+    assert_eq!(b["error"]["details"]["retryAfterMs"], 15000, "{b}");
+    assert!(b["error"]["hint"].as_str().expect("hint").contains("won't wait"), "{b}");
+    // Ready (the default gate): the same request mints.
+    let live = FixedStatus(Ok(INSTALL.into()));
+    let d = Deps { status: &live, ..d };
+    let x = mint::handle_pass_with(&req(Some(OWNER), b""), &d);
+    assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
+}
+
 #[test]
 fn install_id_is_asked_every_mint_validated_and_missing_is_503() {
     let _home = TempHome::new();

@@ -1175,6 +1175,8 @@ pub fn status(env: &Env, live: bool) -> (Value, Vec<String>, Vec<Value>) {
         "probe": st.probe,
         "probeVerdict": probe_verdict(&st, now),
         "unit": unit.json(),
+        // Sew 0.3.1 `sew media status --json` turn {tier, ice_urls, source}.
+        "turnEngine": super::health::media_turn(engine.as_ref()),
         "engine": engine,
         "alarms": alarms,
         "renewal": {"lastError": st.last_error, "nextTryAt": st.next_try_at, "failures": st.failures,

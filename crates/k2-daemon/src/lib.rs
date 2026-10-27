@@ -162,6 +162,7 @@ pub mod homes_routes;
 // Thread push trigger + per-(Thread, person) coalescer (S3).
 pub mod thread_push;
 pub mod thread_attachments;
+pub mod ticket_attachments;
 pub mod guest_paths;
 // `viewing` frames from the overlay WS: who looks at which Thread (S4).
 pub mod thread_viewers;

@@ -118,6 +118,12 @@ impl GuestScrub {
         self.walk(doc);
     }
 
+    /// Any guest-facing JSON body (a ticket `show`, 0.46.6 TA17): the
+    /// room's folder in any string becomes the room's name.
+    pub(crate) fn json(&self, v: &mut Value) {
+        self.walk(v);
+    }
+
     /// Thread page items (`[{…, doc}]`).
     pub(crate) fn items(&self, items: &mut Value) {
         if let Some(arr) = items.as_array_mut() {

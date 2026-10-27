@@ -1,0 +1,12 @@
+-- 0232_ticket_attachments — files on ticket messages
+-- (prd-ticket-attachments-v1 TK1, 0.46.6). One nullable JSON column on the
+-- ticket thread: an array of Thread attachments (the same
+-- `k2_core::overlay::attachments::ThreadAttachment` shape: workspace-
+-- relative path plus a snapshot; a pointer, never a copy). NULL = none, so
+-- every row stored before this reads as no attachments.
+--
+-- ADD COLUMN only: `feedback` itself is never rebuilt (0090 and 0098 rebuilt
+-- it with foreign keys on, which cascaded into its child tables; see
+-- 0126_feedback_briefs.sql). 0233 (mobile), 0234 (Sew S30), 0235 (Garden
+-- Board) and 0236 (App custom domains) are other lanes'.
+ALTER TABLE feedback_comments ADD COLUMN attachments_json TEXT;

@@ -24,8 +24,20 @@
 //! Addressing: items are UUIDs, resolvable by a SHORT UNIQUE PREFIX
 //! (see [`resolve_id_prefix`]) — ambiguity is an error carrying the
 //! matching candidates so the CLI can print a did-you-mean hint.
+//!
+//! Files (0.46.6, prd-ticket-attachments-v1 TK1/TK2): every message in a
+//! ticket (the seed comment that is the ask, a comment, an answer, the
+//! settled outcome) may carry Thread attachments in
+//! `feedback_comments.attachments_json` (migration 0232). The model, the
+//! limits and the send-time checks are Thread's
+//! ([`crate::overlay::attachments`]); the routes check and snapshot before
+//! anything here is called, so this layer only stores what it is given.
+//! A column that doesn't parse reads as no attachments, never as a failed
+//! read (TA29).
 
 use rusqlite::params;
+
+use crate::overlay::attachments::ThreadAttachment;
 
 /// The valid `feedback.kind` values.
 pub const KINDS: [&str; 3] = ["question", "approval", "fyi"];
@@ -74,6 +86,9 @@ pub struct FeedbackItem {
     pub has_brief: bool,
     /// Byte length of the stored (cleaned) brief; `None` without one.
     pub brief_bytes: Option<i64>,
+    /// Files across the ticket's messages (0.46.6, TK21: the board card's
+    /// paperclip). A count only; the files ride `show`.
+    pub file_count: i64,
 }
 
 /// One `feedback_comments` row. camelCase for the same wire reason;
@@ -86,6 +101,41 @@ pub struct FeedbackComment {
     pub author: String,
     pub body: String,
     pub created_at: i64,
+    /// Files on this message (0.46.6), as stored: workspace-relative
+    /// pointers with their send-time snapshot. Views add live state per
+    /// viewer route-side.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ThreadAttachment>,
+}
+
+/// The stored column for a message's files: `None` (SQL NULL) when there
+/// are none.
+fn attachments_column(atts: &[ThreadAttachment]) -> Result<Option<String>, String> {
+    if atts.is_empty() {
+        return Ok(None);
+    }
+    if atts.len() > crate::overlay::attachments::MAX_PER_MESSAGE {
+        return Err(format!(
+            "at most {} files per message",
+            crate::overlay::attachments::MAX_PER_MESSAGE
+        ));
+    }
+    serde_json::to_string(atts).map(Some).map_err(|e| format!("attachments serialize: {e}"))
+}
+
+/// Read the column leniently (TA29): NULL, empty or unreadable JSON is no
+/// attachments (logged), never an error that would hide the ticket.
+pub fn parse_attachments_column(comment_id: &str, raw: Option<&str>) -> Vec<ThreadAttachment> {
+    let Some(raw) = raw.map(str::trim).filter(|r| !r.is_empty()) else {
+        return Vec::new();
+    };
+    match serde_json::from_str::<Vec<ThreadAttachment>>(raw) {
+        Ok(v) => v,
+        Err(e) => {
+            crate::log_debug!("[feedback] comment {comment_id}: unreadable attachments dropped ({e})");
+            Vec::new()
+        }
+    }
 }
 
 /// Input for [`create`]. `project_id` must be an existing
@@ -142,6 +192,18 @@ pub fn create_with_brief(
     new: NewFeedback,
     brief: Option<crate::feedback_brief::CleanBrief>,
 ) -> Result<FeedbackItem, String> {
+    create_with_brief_and_files(new, brief, &[])
+}
+
+/// [`create_with_brief`] plus files on the opening message (0.46.6, TK2):
+/// they ride the seed comment, inside the same transaction, so a failed
+/// brief insert leaves neither the ticket nor its files.
+pub fn create_with_brief_and_files(
+    new: NewFeedback,
+    brief: Option<crate::feedback_brief::CleanBrief>,
+    seed_attachments: &[ThreadAttachment],
+) -> Result<FeedbackItem, String> {
+    let seed_files = attachments_column(seed_attachments)?;
     let title = new.title.trim().to_string();
     if title.is_empty() {
         return Err("title must not be empty".to_string());
@@ -205,9 +267,16 @@ pub fn create_with_brief(
     )
     .map_err(|e| format!("feedback insert failed: {e}"))?;
     tx.execute(
-        "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![uuid::Uuid::new_v4().to_string(), id, new.agent_name.trim(), crate::redaction::redact(&seed), now],
+        "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at, attachments_json) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            uuid::Uuid::new_v4().to_string(),
+            id,
+            new.agent_name.trim(),
+            crate::redaction::redact(&seed),
+            now,
+            seed_files
+        ],
     )
     .map_err(|e| format!("feedback seed comment insert failed: {e}"))?;
     if let Some(brief) = &brief {
@@ -233,7 +302,9 @@ const ITEM_SELECT: &str = "SELECT f.id, f.project_id, f.session_id, f.session_ki
     f.agent_name, f.kind, f.title, f.body, f.options_json, f.priority, f.status, \
     f.answer, f.created_at, f.updated_at, f.answered_at, \
     (SELECT COUNT(*) FROM feedback_comments c WHERE c.feedback_id = f.id), \
-    (SELECT b.bytes FROM feedback_briefs b WHERE b.feedback_id = f.id) \
+    (SELECT b.bytes FROM feedback_briefs b WHERE b.feedback_id = f.id), \
+    (SELECT COALESCE(SUM(CASE WHEN json_valid(c.attachments_json) THEN json_array_length(c.attachments_json) ELSE 0 END), 0) \
+    FROM feedback_comments c WHERE c.feedback_id = f.id AND c.attachments_json IS NOT NULL) \
     FROM feedback f";
 
 fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<FeedbackItem> {
@@ -262,6 +333,7 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<FeedbackItem> {
         assignees: Vec::new(),
         has_brief: brief_bytes.is_some(),
         brief_bytes,
+        file_count: row.get(17)?,
     })
 }
 
@@ -579,13 +651,15 @@ pub fn list_host_with(
         ListFilter::All => ("", None),
         ListFilter::Status(s) => (" WHERE f.status = ?1", Some(s.as_str())),
     };
-    // Same first 17 columns as ITEM_SELECT, so row_to_item reads them.
+    // Same first 18 columns as ITEM_SELECT, so row_to_item reads them.
     let sql = format!(
         "SELECT f.id, f.project_id, f.session_id, f.session_kind, \
          f.agent_name, f.kind, f.title, f.body, f.options_json, f.priority, f.status, \
          f.answer, f.created_at, f.updated_at, f.answered_at, \
          (SELECT COUNT(*) FROM feedback_comments c WHERE c.feedback_id = f.id), \
          (SELECT b.bytes FROM feedback_briefs b WHERE b.feedback_id = f.id), \
+         (SELECT COALESCE(SUM(CASE WHEN json_valid(c.attachments_json) THEN json_array_length(c.attachments_json) ELSE 0 END), 0) \
+          FROM feedback_comments c WHERE c.feedback_id = f.id AND c.attachments_json IS NOT NULL), \
          p.name, p.path, \
          (p.id IS NOT NULL AND p.id NOT IN ({sentinels})) \
          FROM feedback f LEFT JOIN projects p ON p.id = f.project_id\
@@ -595,9 +669,9 @@ pub fn list_host_with(
     let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
     let map = |row: &rusqlite::Row| -> rusqlite::Result<HostFeedbackItem> {
         let item = row_to_item(row)?;
-        let linked: bool = row.get(19)?;
+        let linked: bool = row.get(20)?;
         let (project_name, project_path) = if linked {
-            (row.get::<_, Option<String>>(17)?, row.get::<_, Option<String>>(18)?)
+            (row.get::<_, Option<String>>(18)?, row.get::<_, Option<String>>(19)?)
         } else {
             (None, None)
         };
@@ -645,14 +719,19 @@ pub fn get_with_comments(id: &str) -> Option<(FeedbackItem, Vec<FeedbackComment>
         .prepare(
             // rowid tiebreak: comments created within the same second
             // must render in INSERTION order (uuid ordering is random).
-            "SELECT id, feedback_id, author, body, created_at FROM feedback_comments \
+            "SELECT id, feedback_id, author, body, created_at, attachments_json FROM feedback_comments \
              WHERE feedback_id = ?1 ORDER BY created_at ASC, rowid ASC",
         )
         .ok()?;
     let comments = stmt
         .query_map(params![id], |row| {
+            let comment_id: String = row.get(0)?;
+            // TA29: read as text whatever the column holds; a bad value
+            // drops the files, never the ticket.
+            let raw: Option<String> = row.get::<_, Option<String>>(5).unwrap_or(None);
             Ok(FeedbackComment {
-                id: row.get(0)?,
+                attachments: parse_attachments_column(&comment_id, raw.as_deref()),
+                id: comment_id,
                 feedback_id: row.get(1)?,
                 author: row.get(2)?,
                 body: row.get(3)?,
@@ -663,6 +742,32 @@ pub fn get_with_comments(id: &str) -> Option<(FeedbackItem, Vec<FeedbackComment>
         .collect::<Result<Vec<_>, _>>()
         .ok()?;
     Some((item, comments))
+}
+
+/// One message of a ticket by its id (0.46.6, the attachment door): only
+/// when it belongs to ticket `feedback_id` (FULL id). Its files are read
+/// leniently (TA29).
+pub fn get_comment(feedback_id: &str, comment_id: &str) -> Option<FeedbackComment> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT id, feedback_id, author, body, created_at, attachments_json FROM feedback_comments \
+         WHERE feedback_id = ?1 AND id = ?2",
+        params![feedback_id, comment_id],
+        |row| {
+            let id: String = row.get(0)?;
+            let raw: Option<String> = row.get::<_, Option<String>>(5).unwrap_or(None);
+            Ok(FeedbackComment {
+                attachments: parse_attachments_column(&id, raw.as_deref()),
+                id,
+                feedback_id: row.get(1)?,
+                author: row.get(2)?,
+                body: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        },
+    )
+    .ok()
 }
 
 /// Resolve a (possibly short) id prefix to the FULL feedback id.
@@ -708,14 +813,26 @@ pub fn resolve_id_prefix(prefix: &str) -> Result<String, PrefixError> {
 /// first). Comments do NOT change status — a comment on a `waiting`
 /// item leaves it waiting (the answer flow is [`set_answer`]).
 pub fn add_comment(id: &str, author: &str, body: &str) -> Result<FeedbackComment, String> {
+    add_comment_with_files(id, author, body, &[])
+}
+
+/// [`add_comment`] with files (0.46.6, TK2/TK5): the files ride the same
+/// INSERT as their row. The text may be empty only when files ride it.
+pub fn add_comment_with_files(
+    id: &str,
+    author: &str,
+    body: &str,
+    attachments: &[ThreadAttachment],
+) -> Result<FeedbackComment, String> {
     let author = author.trim();
     let body_t = body.trim();
     if author.is_empty() {
         return Err("author must not be empty".to_string());
     }
-    if body_t.is_empty() {
+    if body_t.is_empty() && attachments.is_empty() {
         return Err("comment body must not be empty".to_string());
     }
+    let files = attachments_column(attachments)?;
     let now = now_secs();
     let comment_id = uuid::Uuid::new_v4().to_string();
     let db = crate::db::shared();
@@ -732,9 +849,9 @@ pub fn add_comment(id: &str, author: &str, body: &str) -> Result<FeedbackComment
         return Err(format!("no feedback item with id {id}"));
     }
     conn.execute(
-        "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![comment_id, id, author, crate::redaction::redact(body_t), now],
+        "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at, attachments_json) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![comment_id, id, author, crate::redaction::redact(body_t), now, files],
     )
     .map_err(|e| format!("comment insert failed: {e}"))?;
     Ok(FeedbackComment {
@@ -743,6 +860,7 @@ pub fn add_comment(id: &str, author: &str, body: &str) -> Result<FeedbackComment
         author: author.to_string(),
         body: body_t.to_string(),
         created_at: now,
+        attachments: attachments.to_vec(),
     })
 }
 
@@ -763,11 +881,23 @@ pub fn set_answer(
     author: &str,
     answer: &str,
 ) -> Result<(FeedbackItem, FeedbackComment), String> {
+    set_answer_with_files(id, author, answer, &[])
+}
+
+/// [`set_answer`] with files on the answer's thread entry (0.46.6, TK2).
+/// The answer text stays required; the files ride its comment row (TA5:
+/// no third write).
+pub fn set_answer_with_files(
+    id: &str,
+    author: &str,
+    answer: &str,
+    attachments: &[ThreadAttachment],
+) -> Result<(FeedbackItem, FeedbackComment), String> {
     let answer_t = answer.trim();
     if answer_t.is_empty() {
         return Err("answer must not be empty".to_string());
     }
-    let comment = add_comment(id, author, answer_t)?;
+    let comment = add_comment_with_files(id, author, answer_t, attachments)?;
     let now = now_secs();
     let db = crate::db::shared();
     let conn = db.lock();
@@ -872,6 +1002,107 @@ mod tests {
         assert_eq!(d.priority, 3);
         assert!(d.options.is_none());
         assert!(d.session_id.is_none(), "null session must not fail the ask");
+    }
+
+    fn file(path: &str) -> ThreadAttachment {
+        ThreadAttachment {
+            kind: "file".into(),
+            path: path.into(),
+            name: path.rsplit('/').next().unwrap().into(),
+            size: 3,
+            mime: "text/plain".into(),
+            modified_at: 1,
+            sha256: None,
+            line: None,
+            line_end: None,
+        }
+    }
+
+    /// 0.46.6 (prd-ticket-attachments-v1 TK2): files ride the seed comment,
+    /// a comment (text optional with files) and an answer, stored on their
+    /// own row; the item counts them.
+    #[test]
+    fn files_ride_their_messages() {
+        let p = pid("files");
+        let item = create_with_brief_and_files(
+            NewFeedback {
+                project_id: p.clone(),
+                agent_name: "scout".into(),
+                title: "Which logo?".into(),
+                ..Default::default()
+            },
+            None,
+            &[file("out/a.png"), file("out/b.png")],
+        )
+        .expect("create with files");
+        assert_eq!(item.file_count, 2);
+        let c = add_comment_with_files(&item.id, "rosson", "", &[file("shot.png")]).expect("file-only comment");
+        assert_eq!((c.body.as_str(), c.attachments.len()), ("", 1));
+        assert!(add_comment_with_files(&item.id, "rosson", "  ", &[]).is_err(), "no text and no files");
+        let (answered, ac) = set_answer_with_files(&item.id, "rosson", "B", &[file("why.md")]).expect("answer with files");
+        assert_eq!(answered.status, "answered");
+        assert_eq!(ac.attachments[0].path, "why.md");
+        assert!(set_answer_with_files(&item.id, "rosson", " ", &[file("x.md")]).is_err(), "an answer needs its text");
+        let eleven: Vec<_> = (0..11).map(|i| file(&format!("f{i}.md"))).collect();
+        assert!(add_comment_with_files(&item.id, "rosson", "x", &eleven).is_err(), "at most 10 per message");
+
+        let (item, comments) = get_with_comments(&item.id).expect("show");
+        assert_eq!(item.file_count, 4);
+        assert_eq!(comments.len(), 3);
+        assert_eq!(comments[0].attachments, vec![file("out/a.png"), file("out/b.png")], "the seed carries the ask's files");
+        assert_eq!(comments[1].attachments, vec![file("shot.png")]);
+        assert_eq!(comments[2].attachments, vec![file("why.md")]);
+        // A plain comment has none and doesn't serialize the key.
+        let plain = add_comment(&item.id, "scout", "thanks").expect("plain");
+        let v = serde_json::to_value(&plain).unwrap();
+        assert!(v.get("attachments").is_none(), "{v}");
+    }
+
+    /// TK2: the seed's files are inside the create transaction: a failed
+    /// brief insert leaves no ticket and no files.
+    #[test]
+    fn a_failed_brief_insert_leaves_no_ticket_and_no_files() {
+        let p = pid("filesrollback");
+        let brief = crate::feedback_brief::clean("<p>Pick one</p>").expect("brief");
+        crate::feedback_brief::fail_next_insert_for_test();
+        let r = create_with_brief_and_files(
+            NewFeedback { project_id: p.clone(), agent_name: "scout".into(), title: "t".into(), ..Default::default() },
+            Some(brief),
+            &[file("out/a.png")],
+        );
+        assert!(r.is_err(), "the forced brief failure fails the create");
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let tickets: i64 = conn.query_row("SELECT COUNT(*) FROM feedback WHERE project_id = ?1", params![p], |r| r.get(0)).unwrap();
+        let files: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM feedback_comments c JOIN feedback f ON f.id = c.feedback_id WHERE f.project_id = ?1",
+                params![p],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!((tickets, files), (0, 0));
+    }
+
+    /// TA29: a column that doesn't parse drops the files, never the ticket;
+    /// old rows (NULL) read as none.
+    #[test]
+    fn unreadable_files_never_hide_the_ticket() {
+        let p = pid("filescorrupt");
+        let item = ask(&p, "old");
+        let c = add_comment_with_files(&item.id, "rosson", "see", &[file("a.md")]).unwrap();
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE feedback_comments SET attachments_json = '{not json' WHERE id = ?1", params![c.id]).unwrap();
+        }
+        let (item, comments) = get_with_comments(&item.id).expect("the ticket still reads");
+        assert_eq!(comments.len(), 2);
+        assert!(comments.iter().all(|c| c.attachments.is_empty()), "NULL and corrupt both read as none");
+        assert_eq!(item.file_count, 0, "a corrupt column counts nothing");
+        assert!(list_for_project(&p, &ListFilter::All).is_ok(), "the list still reads");
+        assert_eq!(parse_attachments_column("x", Some("[]")), Vec::<ThreadAttachment>::new());
+        assert_eq!(parse_attachments_column("x", None), Vec::<ThreadAttachment>::new());
     }
 
     #[test]

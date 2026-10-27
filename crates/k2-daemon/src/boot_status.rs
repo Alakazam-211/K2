@@ -555,6 +555,14 @@ pub const FEATURE_TICKETS_LIST_ALL: &str = "tickets-list-all";
 /// the key keeps the host-wide count and never sends `me=1`.
 pub const FEATURE_TICKETS_BADGE_ME: &str = "tickets-badge-me";
 
+/// Files on ticket messages (0.46.6, prd-ticket-attachments-v1 TK10):
+/// `attachments` on `create` / `comment` / `answer` / `resolve` (answered),
+/// comment `id`s and per-viewer `attachments` on `show`, and the read door
+/// `GET /cli/feedback/attachment` (meta, preview, thumb, range, download).
+/// One key, because they ship together. A client without it shows no ticket
+/// files and sends none (an older daemon drops `attachments` silently).
+pub const FEATURE_TICKET_ATTACHMENTS: &str = crate::ticket_attachments::FEATURE;
+
 /// Zen Mode v1 (prd-zen-mode-v1 Z16): this daemon serves `/cli/zen/*`
 /// for the person on this computer (owner token only).
 pub const FEATURE_ZEN_V1: &str = "zen-v1";
@@ -950,6 +958,7 @@ pub fn features() -> Vec<&'static str> {
     }
     out.push(FEATURE_TICKETS_LIST_ALL);
     out.push(FEATURE_TICKETS_BADGE_ME);
+    out.push(FEATURE_TICKET_ATTACHMENTS);
     out.push(FEATURE_ZEN_V1);
     out.push(FEATURE_ZEN_GARDENS);
     out.push(FEATURE_ZEN_CHROME);
@@ -1070,6 +1079,7 @@ mod tests {
                 "spawn-attach-only",
                 "tickets-list-all",
                 "tickets-badge-me",
+                "ticket-attachments-v1",
                 "zen-v1",
                 "zen-gardens-v1",
                 "zen-chrome-v1",

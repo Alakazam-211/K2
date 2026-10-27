@@ -470,7 +470,7 @@ fn handle_show(params: &HashMap<String, String>) -> CliResponse {
     };
     match feedback::get_with_comments(&full_id) {
         Some((item, comments)) => {
-            CliResponse::ok_json(show_json(&item, &comments, wants_brief(params)))
+            CliResponse::ok_json(show_json(&item, &comments, wants_brief(params), None))
         }
         None => prefix_error_response(&id, PrefixError::NotFound),
     }
@@ -517,7 +517,7 @@ fn skin_require_cap(pass: &SkinPass, project_id: &str, cap: &str) -> Result<(), 
 }
 
 /// Load by id. Missing / other room → 403 `skin_room` (no 404 oracle).
-fn skin_load_item(
+pub(crate) fn skin_load_item(
     pass: &SkinPass,
     id: &str,
     cap: &str,
@@ -564,11 +564,10 @@ fn handle_skin_show(params: &HashMap<String, String>, pass: &SkinPass) -> CliRes
         Err(e) => return e,
     };
     match feedback::get_with_comments(&item.id) {
-        Some((item, comments)) => guest_projection(CliResponse::ok_json(show_json(
-            &item,
-            &comments,
-            wants_brief(params),
-        ))),
+        Some((item, comments)) => {
+            let shown = guest_projection(CliResponse::ok_json(show_json(&item, &comments, wants_brief(params), Some(pass))));
+            guest_scrub(shown, &item.project_id)
+        }
         None => crate::skin_routes::skin_room_response(),
     }
 }
@@ -864,16 +863,36 @@ fn guest_projection(resp: CliResponse) -> CliResponse {
     CliResponse::ok_json(v.to_string())
 }
 
+/// A guest `show` with the room's folder scrubbed out of every string
+/// (0.46.6, TA17): an agent that typed its workspace path into a title or
+/// a message never shows a guest the host path.
+fn guest_scrub(resp: CliResponse, project_id: &str) -> CliResponse {
+    if resp.status != "200 OK" {
+        return resp;
+    }
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&resp.body) else {
+        return resp;
+    };
+    crate::guest_paths::GuestScrub::for_room(project_id).json(&mut v);
+    CliResponse::ok_json(v.to_string())
+}
+
 /// The `show` wire shape (mockup contract): the item's fields flat at
 /// the top level + `workspace` (project name) + `comments` (each with
-/// the mockup's `at` alias alongside `createdAt`).
+/// its `id` and the mockup's `at` alias alongside `createdAt`).
 ///
 /// `with_brief` adds `brief` (the stored brief only: no path or session
 /// fields ride inside it, H40).
+///
+/// 0.46.6 (prd-ticket-attachments-v1 TA1/TK8): each comment carries its
+/// `id` (an attachment's address is ticket + comment + index) and, when
+/// it has files, `attachments` as THIS caller sees them (`pass`: an App
+/// guest's own file rights; `None`: a person).
 fn show_json(
     item: &feedback::FeedbackItem,
     comments: &[feedback::FeedbackComment],
     with_brief: bool,
+    pass: Option<&SkinPass>,
 ) -> String {
     let (name, path) = project_name_path(&item.project_id);
     let mut v = serde_json::to_value(item).unwrap_or_else(|_| serde_json::json!({}));
@@ -889,11 +908,23 @@ fn show_json(
             "comments".to_string(),
             serde_json::json!(comments
                 .iter()
-                .map(|c| serde_json::json!({
-                    "author": c.author,
-                    "body": c.body,
-                    "at": c.created_at,
-                }))
+                .map(|c| {
+                    let mut row = serde_json::json!({
+                        "id": c.id,
+                        "author": c.author,
+                        "body": c.body,
+                        "at": c.created_at,
+                    });
+                    if !c.attachments.is_empty() {
+                        row["attachments"] = serde_json::Value::Array(crate::ticket_attachments::views(
+                            &item.project_id,
+                            &c.attachments,
+                            pass,
+                            true,
+                        ));
+                    }
+                    row
+                })
                 .collect::<Vec<_>>()),
         );
         if with_brief {
@@ -950,6 +981,8 @@ fn deliver_to_asker(
     body: &str,
 ) -> (bool, Option<String>, Option<String>) {
     let payload = feedback_payload(&item.id, body);
+    #[cfg(debug_assertions)]
+    crate::ticket_attachments::note_last_inject(&item.id, &payload);
     // D5: v1 always WorkspaceAgent. Classifier is kept + called so the
     // unit matrix stays honest; the SandboxSession arm is never taken.
     let _ = injection_target(item.session_id.as_deref(), item.session_kind.as_deref());
@@ -995,6 +1028,10 @@ struct CreateBody {
     /// Ticket brief (prd-ticket-html-brief-v1): raw HTML. Cleaned and
     /// capped here; required on the owner door per the brief policy.
     brief_html: Option<String>,
+    /// Files on the opening message (0.46.6, TK4): `[{path|relPath,
+    /// line?, lineEnd?}]`, at most 10, checked against the ticket's
+    /// workspace. Kept as JSON so a wrong type is a 400 naming the field.
+    attachments: Option<serde_json::Value>,
 }
 
 /// Handler for `POST /cli/feedback/create`. Validates, inserts, and
@@ -1057,6 +1094,10 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -
     if b.title.trim().is_empty() {
         return usage_error("ask requires a <title>");
     }
+    let attach_reqs = match crate::ticket_attachments::parse_field(b.attachments.as_ref()) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
     if let Some(p) = b.priority {
         if !(1..=5).contains(&p) {
             return usage_error("--priority must be 1-5");
@@ -1175,7 +1216,17 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -
         _ => None,
     };
 
-    let mut item = match feedback::create_with_brief(
+    // Files on the opening message: checked and snapshotted against the
+    // ticket's workspace before anything is stored (TK3/TK4).
+    let who = match skin {
+        Some(p) => format!("guest:{}", p.username.trim()),
+        None => agent_name.clone(),
+    };
+    let seed_files = match crate::ticket_attachments::check_and_snapshot("new", &project_id, skin, &attach_reqs, &who) {
+        Ok((a, _)) => a,
+        Err(e) => return e,
+    };
+    let mut item = match feedback::create_with_brief_and_files(
         feedback::NewFeedback {
             project_id,
             session_id,
@@ -1188,10 +1239,17 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -
             priority: b.priority.unwrap_or(0),
         },
         brief,
+        &seed_files,
     ) {
         Ok(item) => item,
         Err(e) => return usage_error(e),
     };
+    if !seed_files.is_empty() {
+        let seed_id = feedback::get_with_comments(&item.id)
+            .and_then(|(_, c)| c.into_iter().next().map(|c| c.id))
+            .unwrap_or_default();
+        crate::ticket_attachments::audit_post(&item.id, &seed_id, &who, &seed_files);
+    }
 
     // Optional assignees at create — set before push so mobile targeting
     // and the create response include them. Snapshots only (no FK).
@@ -1240,6 +1298,12 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -
         if let Some(who) = default_assigned {
             map.insert("defaultAssignee".to_string(), serde_json::json!(who));
         }
+        // TA3: the stored files as this caller sees them; the key is
+        // always there so a client can tell this daemon from an older one.
+        map.insert(
+            "attachments".to_string(),
+            serde_json::Value::Array(crate::ticket_attachments::views(&item.project_id, &seed_files, skin, true)),
+        );
     }
     CliResponse::ok_json(v.to_string())
 }
@@ -1308,6 +1372,9 @@ struct CommentBody {
     /// ANSWERS the ticket; free text (false / absent) opens a discussion.
     /// Ignored on agent-authored comments.
     option_pick: bool,
+    /// Files on this message (0.46.6, TK4/TK5). With files, `body` may be
+    /// empty (not on an option pick, which needs the option's text).
+    attachments: Option<serde_json::Value>,
 }
 
 /// The status a HUMAN comment moves a ticket to. An option pick is the
@@ -1363,7 +1430,12 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
     if b.id.is_empty() {
         return usage_error("missing 'id' (a feedback id or unique prefix)");
     }
-    if b.body.trim().is_empty() {
+    let attach_reqs = match crate::ticket_attachments::parse_field(b.attachments.as_ref()) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    // TK5: files may stand in for the text, except on an option pick.
+    if b.body.trim().is_empty() && (attach_reqs.is_empty() || b.option_pick) {
         return usage_error("comment requires non-empty <text>");
     }
     let (full_id, author, is_human) = if let Some(pass) = skin {
@@ -1396,10 +1468,29 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
     };
     let author = author.as_str();
 
+    // Files: checked and snapshotted against the TICKET's workspace (not
+    // the caller's) before anything is stored (TK3/TK4).
+    let Some(ticket) = feedback::get_item(&full_id) else {
+        return prefix_error_response(&b.id, PrefixError::NotFound);
+    };
+    let who = match skin {
+        Some(p) => format!("guest:{}", p.username.trim()),
+        None => author.to_string(),
+    };
+    let (files, files_root) =
+        match crate::ticket_attachments::check_and_snapshot(&full_id, &ticket.project_id, skin, &attach_reqs, &who) {
+            Ok(pair) => pair,
+            Err(e) => return e,
+        };
+    let files_view = |atts: &[k2_core::overlay::attachments::ThreadAttachment]| {
+        serde_json::Value::Array(crate::ticket_attachments::views(&ticket.project_id, atts, skin, true))
+    };
+
     // Agent comment — store only, current shape (no delivery fields).
     if !is_human {
-        return match feedback::add_comment(&full_id, author, &b.body) {
+        return match feedback::add_comment_with_files(&full_id, author, &b.body, &files) {
             Ok(c) => {
+                crate::ticket_attachments::audit_post(&full_id, &c.id, &who, &c.attachments);
                 emit_commented(&full_id, &c.author);
                 // Push assignees (or all devices if unassigned) on thread
                 // activity — not just create.
@@ -1413,6 +1504,7 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
                         "id": full_id,
                         "commentId": c.id,
                         "author": c.author,
+                        "attachments": files_view(&c.attachments),
                     })
                     .to_string(),
                 )
@@ -1432,12 +1524,12 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
     let target_status = human_comment_status(b.option_pick);
 
     let (item, comment) = if answers {
-        match feedback::set_answer(&full_id, author, &b.body) {
+        match feedback::set_answer_with_files(&full_id, author, &b.body, &files) {
             Ok(pair) => pair,
             Err(e) => return usage_error(e),
         }
     } else {
-        let c = match feedback::add_comment(&full_id, author, &b.body) {
+        let c = match feedback::add_comment_with_files(&full_id, author, &b.body, &files) {
             Ok(c) => c,
             Err(e) => return usage_error(e),
         };
@@ -1493,11 +1585,14 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
     }
     crate::push_routes::notify_feedback_commented(&item.id, &item.assignees);
 
+    crate::ticket_attachments::audit_post(&item.id, &comment.id, &who, &comment.attachments);
+
     // Shared F3 delivery: the stored author IS the stamp (0.46.0 rule,
-    // resolved above). Matches project-group/msg framing.
+    // resolved above). Matches project-group/msg framing. Files reach the
+    // agent as `Attached: <abs path>` lines, never stored (TK6).
     let from = author.to_string();
-    let (delivered, delivery_reason, delivered_session) =
-        deliver_to_asker(&item, &from, &comment.body);
+    let inject = crate::ticket_attachments::with_attached_lines(&comment.body, files_root.as_deref(), &comment.attachments);
+    let (delivered, delivery_reason, delivered_session) = deliver_to_asker(&item, &from, &inject);
 
     CliResponse::ok_json(
         serde_json::json!({
@@ -1510,6 +1605,7 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
             "delivered": delivered,
             "deliveryReason": delivery_reason,
             "deliveredSessionId": delivered_session,
+            "attachments": files_view(&comment.attachments),
         })
         .to_string(),
     )
@@ -1527,6 +1623,8 @@ struct AnswerBody {
     id: String,
     answer: String,
     author: Option<String>,
+    /// Files on the answer's message (0.46.6, TK4). The text stays required.
+    attachments: Option<serde_json::Value>,
 }
 
 /// Handler for `POST /cli/feedback/answer`.
@@ -1546,6 +1644,10 @@ fn handle_answer_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass
     if b.answer.trim().is_empty() {
         return usage_error("answer requires non-empty text");
     }
+    let attach_reqs = match crate::ticket_attachments::parse_field(b.attachments.as_ref()) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
     let (full_id, author_owned, from_owned) = if let Some(pass) = skin {
         let item = match skin_load_item(pass, &b.id, crate::skin_routes::TICKETS_POST) {
             Ok(item) => item,
@@ -1569,10 +1671,23 @@ fn handle_answer_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass
         let from = stored.clone();
         (full_id, stored, from)
     };
-    let (item, comment) = match feedback::set_answer(&full_id, &author_owned, &b.answer) {
+    let Some(ticket) = feedback::get_item(&full_id) else {
+        return prefix_error_response(&b.id, PrefixError::NotFound);
+    };
+    let who = match skin {
+        Some(p) => format!("guest:{}", p.username.trim()),
+        None => author_owned.clone(),
+    };
+    let (files, files_root) =
+        match crate::ticket_attachments::check_and_snapshot(&full_id, &ticket.project_id, skin, &attach_reqs, &who) {
+            Ok(pair) => pair,
+            Err(e) => return e,
+        };
+    let (item, comment) = match feedback::set_answer_with_files(&full_id, &author_owned, &b.answer, &files) {
         Ok(pair) => pair,
         Err(e) => return usage_error(e),
     };
+    crate::ticket_attachments::audit_post(&item.id, &comment.id, &who, &comment.attachments);
 
     // FeedbackAnswered on the /events broadcast ({id, projectPath}).
     // Emitted BEFORE the injection so `ask --wait` pollers unblock even
@@ -1596,11 +1711,12 @@ fn handle_answer_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass
     // failure never fails the answer. An unnamed answerer is framed
     // with the owner's display name (same server-side resolution as
     // the composer, D3), so the line reads natively in-session.
-    let (delivered, delivery_reason, delivered_session) = deliver_to_asker(
-        &item,
-        &from_owned,
+    let inject = crate::ticket_attachments::with_attached_lines(
         item.answer.as_deref().unwrap_or_default(),
+        files_root.as_deref(),
+        &comment.attachments,
     );
+    let (delivered, delivery_reason, delivered_session) = deliver_to_asker(&item, &from_owned, &inject);
 
     CliResponse::ok_json(
         serde_json::json!({
@@ -1612,6 +1728,13 @@ fn handle_answer_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass
             "delivered": delivered,
             "deliveryReason": delivery_reason,
             "deliveredSessionId": delivered_session,
+            "commentId": comment.id,
+            "attachments": serde_json::Value::Array(crate::ticket_attachments::views(
+                &item.project_id,
+                &comment.attachments,
+                skin,
+                true,
+            )),
         })
         .to_string(),
     )
@@ -1637,6 +1760,9 @@ struct ResolveBody {
     answer: Option<String>,
     /// Who settled it (the agent's name from the CLI). Defaults to owner.
     author: Option<String>,
+    /// Files on the settled outcome (0.46.6, TK7): `answered` only, since
+    /// only it writes a message; any other status refuses them.
+    attachments: Option<serde_json::Value>,
 }
 
 /// Handler for `POST /cli/feedback/resolve`.
@@ -1654,8 +1780,15 @@ fn handle_resolve_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
         return usage_error("missing 'id' (a feedback id or unique prefix)");
     }
     let status = b.status.clone().unwrap_or_else(|| "resolved".to_string());
+    let attach_reqs = match crate::ticket_attachments::parse_field(b.attachments.as_ref()) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
     if status == "answered" {
-        return settle_answered(&b, skin);
+        return settle_answered(&b, skin, &attach_reqs);
+    }
+    if !attach_reqs.is_empty() {
+        return usage_error("files ride a message; use comment (or resolve --answered with the outcome)");
     }
     if !matches!(
         status.as_str(),
@@ -1709,7 +1842,11 @@ fn handle_resolve_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
 /// the answer + a thread entry, fires `FeedbackAnswered` +
 /// `FeedbackCommented` (so `ask --wait` and open boards see it), and never
 /// injects — the agent is the one writing it.
-fn settle_answered(b: &ResolveBody, skin: Option<&SkinPass>) -> CliResponse {
+fn settle_answered(
+    b: &ResolveBody,
+    skin: Option<&SkinPass>,
+    attach_reqs: &[k2_core::overlay::attachments::AttachmentRequest],
+) -> CliResponse {
     if skin.is_some() {
         return usage_error(
             "apps cannot set answered — a person answers by picking one of the ticket's options",
@@ -1731,10 +1868,18 @@ fn settle_answered(b: &ResolveBody, skin: Option<&SkinPass>) -> CliResponse {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("owner");
-    let (item, comment) = match feedback::set_answer(&full_id, author, answer) {
+    let Some(ticket) = feedback::get_item(&full_id) else {
+        return prefix_error_response(&b.id, PrefixError::NotFound);
+    };
+    let (files, _) = match crate::ticket_attachments::check_and_snapshot(&full_id, &ticket.project_id, None, attach_reqs, author) {
+        Ok(pair) => pair,
+        Err(e) => return e,
+    };
+    let (item, comment) = match feedback::set_answer_with_files(&full_id, author, answer, &files) {
         Ok(pair) => pair,
         Err(e) => return usage_error(e),
     };
+    crate::ticket_attachments::audit_post(&item.id, &comment.id, author, &comment.attachments);
     let (_, path) = project_name_path(&item.project_id);
     k2_core::agent_hooks::emit(
         k2_core::agent_hooks::HookEvent::FeedbackAnswered,
@@ -1751,6 +1896,13 @@ fn settle_answered(b: &ResolveBody, skin: Option<&SkinPass>) -> CliResponse {
             "id": item.id,
             "status": item.status,
             "answer": item.answer,
+            "commentId": comment.id,
+            "attachments": serde_json::Value::Array(crate::ticket_attachments::views(
+                &item.project_id,
+                &comment.attachments,
+                None,
+                true,
+            )),
         })
         .to_string(),
     )

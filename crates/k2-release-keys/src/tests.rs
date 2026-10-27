@@ -265,3 +265,81 @@ fn key_copies_are_equal_and_u1_is_in_no_verifier() {
         assert!(!t.contains(LEGACY_UPDATER_KEY_B64) && !t.contains(&u1_wrapped), "{f} still carries U1");
     }
 }
+
+// ── Interop with the REAL signers (fixtures) ────────────────────────
+//
+// tests/fixtures/real-minisign was written by
+// tests/packaging/updater-signing-real-minisign.sh: U1 made by the real Tauri
+// signer (tauri-cli 2.12), every signature made by real minisign 0.12 through
+// scripts/lib/sign-updater.sh (k2u_sign), exactly as release.sh signs.
+// Throwaway keys; only public keys, data and signatures are in the folder.
+
+fn fixture(name: &str) -> Vec<u8> {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/real-minisign").join(name);
+    std::fs::read(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
+}
+
+fn fixture_text(name: &str) -> String {
+    String::from_utf8(fixture(name)).expect("utf8 fixture").trim().to_string()
+}
+
+/// What a 0.46.4 daemon does (frozen): the one embedded U1 key in Tauri's
+/// wrapped form, prehashed only, then RH24 (`file:k2-daemon-…`).
+fn old_daemon_accepts(u1_tauri_pubkey: &str, sig: &str, data: &[u8]) -> bool {
+    let b = base64::engine::general_purpose::STANDARD;
+    let pk_text = String::from_utf8(b.decode(u1_tauri_pubkey).expect("pk b64")).expect("pk utf8");
+    let pk = minisign_verify::PublicKey::decode(pk_text.trim()).expect("pk");
+    let Ok(sig) = minisign_verify::Signature::decode(sig.trim()) else { return false };
+    if pk.verify(data, &sig, false).is_err() {
+        return false;
+    }
+    sig.trusted_comment().split(['\t', ' ']).find_map(|f| f.strip_prefix("file:")).is_some_and(|f| f.starts_with("k2-daemon-"))
+}
+
+fn fixture_keys() -> [TrustedKey; 2] {
+    let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+    let (u2, u3) = (fixture_text("u2.pub.line"), fixture_text("u3.pub.line"));
+    [
+        TrustedKey { role: "primary", key_id: leak(key_id_of(&u2).expect("u2 id")), public_key_b64: leak(u2) },
+        TrustedKey { role: "backup", key_id: leak(key_id_of(&u3).expect("u3 id")), public_key_b64: leak(u3) },
+    ]
+}
+
+#[test]
+fn real_minisign_daemon_signatures_satisfy_old_and_new_daemons() {
+    let keys = fixture_keys();
+    let a = "k2-daemon-linux-x86_64";
+    let bin = fixture(a);
+    let (sig1, sig2) = (fixture_text(&format!("{a}.sig")), fixture_text(&format!("{a}.sig2")));
+    let v = verify_updater_sig_with(&keys, &bin, &sig2, a, "9.9.9").expect("a 0.46.5 daemon accepts the real U2 .sig2");
+    assert_eq!(v.role, "primary");
+    assert_eq!(v.key_id, fixture_text("u2.id"));
+    assert!(old_daemon_accepts(&fixture_text("u1.tauri.pub"), &sig1, &bin), "a 0.46.4 daemon accepts the real U1 .sig (Tauri-signer key, minisign 0.12)");
+    // Each half only works where it should.
+    assert!(verify_updater_sig_with(&keys, &bin, &sig1, a, "9.9.9").is_err(), "U1 is not trusted by 0.46.5");
+    assert!(!old_daemon_accepts(&fixture_text("u1.tauri.pub"), &sig2, &bin), "U2 means nothing to 0.46.4");
+    assert!(verify_updater_sig_with(&keys, &bin, &sig2, a, "9.9.8").is_err(), "version is bound");
+    let mut changed = bin.clone();
+    changed[0] ^= 1;
+    assert!(verify_updater_sig_with(&keys, &changed, &sig2, a, "9.9.9").is_err());
+    assert!(!old_daemon_accepts(&fixture_text("u1.tauri.pub"), &sig1, &changed));
+}
+
+#[test]
+fn real_minisign_app_signatures_satisfy_old_and_new_apps() {
+    let keys = fixture_keys();
+    let bundle = fixture("K2.app.tar.gz");
+    let url = "https://github.com/Alakazam-211/K2/releases/download/v9.9.9/K2.app.tar.gz";
+    // latest.json exactly as release.sh Step 8 writes it: `signature` = the
+    // b64 .sig file's text; k2_signatures[U2 id] = base64 of the raw .sig2.
+    let raw = serde_json::json!({ "version": "9.9.9", "platforms": { "darwin-aarch64": {
+        "signature": fixture_text("K2.app.tar.gz.sig"),
+        "url": url,
+        "k2_signatures": { fixture_text("u2.id"): b64(&String::from_utf8(fixture("K2.app.tar.gz.sig2")).expect("utf8")) },
+    } } });
+    let v = verify_app_update_with(&keys, &raw, url, "9.9.9", &bundle).expect("a 0.46.5 app accepts the real U2 signature");
+    assert_eq!(v.role, "primary");
+    assert!(old_app_accepts(&fixture_text("u1.tauri.pub"), &raw, &bundle), "a 0.46.4 app (plugin, U1) accepts the real bridge signature");
+    assert!(verify_app_update_with(&keys, &raw, url, "9.9.10", &bundle).is_err(), "version is bound");
+    assert!(verify_app_update_with(&keys, &raw, url, "9.9.9", b"other bytes").is_err());
+}

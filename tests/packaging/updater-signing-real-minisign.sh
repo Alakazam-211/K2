@@ -74,7 +74,11 @@ U1_LINE="$(python3 -I -c 'import base64,sys; print(base64.b64decode(sys.argv[1])
 printf '%s\n%s\n' "$PW2" "$PW2" | minisign -G -p "$tmp/u2.pub" -s "$tmp/u2.key" >/dev/null 2>&1 || { echo "FAIL: minisign -G U2" >&2; exit 1; }
 printf '%s\n%s\n' "$PW3" "$PW3" | minisign -G -p "$tmp/u3.pub" -s "$tmp/u3.key" >/dev/null 2>&1 || { echo "FAIL: minisign -G U3" >&2; exit 1; }
 U2_LINE="$(sed -n 2p "$tmp/u2.pub")" U3_LINE="$(sed -n 2p "$tmp/u3.pub")"
-U2_ID="$(sed -n 1p "$tmp/u2.pub" | sed 's/.*: //')"
+U2_ID="$(sed -n 1p "$tmp/u2.pub" | awk '{print $NF}')"
+# The ceremony prints the id this way; it must be the key line's own id
+# (minisign 0.12 writes "minisign public key <ID>", no colon).
+want_id="$(python3 -I -c 'import base64,sys; print(base64.b64decode(sys.argv[1])[2:10][::-1].hex().upper())' "$U2_LINE")"
+[ "$U2_ID" = "$want_id" ] && pass "the .pub comment's last field is the key id ($U2_ID), as the ceremony prints it" || fail "key id" "'$U2_ID' vs $want_id"
 
 mkdir -p "$HOME/.k2-updater"; chmod 700 "$HOME/.k2-updater"
 cp "$tmp/u1.tauri.key" "$HOME/.k2-updater/k2-updater-u1.key"   # Tauri format, as on z3mbpZ

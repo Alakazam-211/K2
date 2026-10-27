@@ -13,6 +13,27 @@ K2_CLI_VERSION="0.46.5"
 
 set -euo pipefail
 
+# Windows (Git Bash): `python3` is usually the Microsoft Store stub, and
+# Python there writes CRLF to pipes. Use whichever real Python 3 answers
+# (`python3`, `py -3`, `python`) and drop the CRs from its stdout, so every
+# `$(python3 …)` below reads what it reads on macOS and Linux. Unix shells
+# never enter this branch.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+        _k2_py=""
+        for _k2_c in "command python3" "py -3" "python"; do
+            if $_k2_c -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+                _k2_py="$_k2_c"
+                break
+            fi
+        done
+        if [ -n "$_k2_py" ]; then
+            eval "python3() { $_k2_py \"\$@\" | tr -d '\\r'; }"
+        fi
+        unset _k2_c
+        ;;
+esac
+
 # Connection details (set by K2 when creating terminal sessions)
 # Falls back to ~/.k2/heartbeat.{port,token} for external terminals
 PORT="${K2_PORT:-${K2SO_PORT:-}}"

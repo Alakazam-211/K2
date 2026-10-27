@@ -454,6 +454,7 @@ impl Node {
             tool_paths: &resolved.path_prepend,
             tool_env: &resolved.env,
             sccache_socket: (secret_job || slot_tmp.is_dir()).then_some(sccache_socket.as_path()),
+            src_dir: a.plan.src.is_some().then_some(dirs.src.as_path()),
         }) {
             Ok(e) => e,
             Err((code, name)) => {

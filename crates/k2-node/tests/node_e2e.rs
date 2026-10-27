@@ -668,3 +668,33 @@ async fn rss_over_the_cap_kills_the_job() {
     let s = states_of(&fr, "m1").pop().unwrap();
     assert_eq!((s.state, s.reason.as_deref()), (JobState::Failed, Some("mem_cap")));
 }
+
+/// git works in the job's own checkout even though the job user doesn't
+/// own it (it's the node's mirror worktree; k2n4, 2026-10-27): the node
+/// lists it as a safe directory in the job's env only. Git's own test knob
+/// makes it treat every folder as someone else's, as on a walled node; the
+/// same command without the node's entries is refused "dubious ownership".
+#[tokio::test(flavor = "multi_thread")]
+async fn git_works_in_the_jobs_own_checkout_it_does_not_own() {
+    let mut fake = Fake::start().await;
+    let n = start_node(&fake, "e2e-gitsafe", "", |_| {}).await;
+    let (repo, _first, second) = temp_repo();
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let script = "export GIT_TEST_ASSUME_DIFFERENT_OWNER=1; \
+                  git -C \"$PWD\" rev-parse HEAD; \
+                  env -u GIT_CONFIG_COUNT git -C \"$PWD\" rev-parse HEAD 2>&1 || echo REFUSED";
+    let mut p = plan("g1", &["/bin/sh", "-c", script]);
+    p.src = Some(Src { project_key: "pk-git".into(), remote_url: None, commit: second.clone(), dirty: None, slots: 1 });
+    c.send(Frame::Assign(assign(p, 1)));
+    c.until(|f| matches!(f, Frame::Need(_))).await;
+    let bundle = bundle_for(&repo, "g1", &second, &n.dir.join("g1.bundle"));
+    send_blob(&c, "g1", TransferKind::Bundle, &bundle, 1000);
+    let fr = run_to_receipt(&mut c, "g1").await;
+    let out = text(&logs_of(&fr, "g1"), LogStream::Out);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.first().copied(), Some(second.as_str()), "git reads the job's checkout: {out}");
+    assert!(out.contains("dubious ownership") && out.trim_end().ends_with("REFUSED"), "without the node's entries git refuses it (the test knob works): {out}");
+    let (state, exit, _) = job_done_exit(&fr, "g1");
+    assert_eq!((state, exit), (JobState::Done, Some(0)));
+}

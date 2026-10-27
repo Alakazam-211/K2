@@ -41,6 +41,10 @@ pub struct EnvInputs<'a> {
     /// slot's `tmp/sccache.sock`, so a build never attaches to another
     /// server's sccache on `127.0.0.1:4226`.
     pub sccache_socket: Option<&'a Path>,
+    /// The job's own code checkout (`jobs/<id>/src`), when it has one: git
+    /// may read it although the job user doesn't own it (see
+    /// [`git_safe_directory`]).
+    pub src_dir: Option<&'a Path>,
 }
 
 /// Names only the node sets, beyond the proto's list: the sccache server
@@ -85,7 +89,50 @@ pub fn job_env(i: &EnvInputs<'_>) -> Result<Vec<(String, String)>, (String, Stri
     for (k, v) in i.extra {
         env.push((k.clone(), v.clone()));
     }
+    if let Some(src) = i.src_dir {
+        git_safe_directory(&mut env, src);
+    }
     Ok(env)
+}
+
+/// Let git work in the job's own checkout. The checkout belongs to the
+/// node (its mirror's worktree), the job runs as the job user, so git
+/// refuses it as "dubious ownership" (k2n4, 2026-10-27). Trusted for this
+/// job only, through git's own `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` /
+/// `GIT_CONFIG_VALUE_n`, never a global config: appended after any entries
+/// the job already sets (its `--env`, a toolchain), never over one. Both the
+/// path as given and its real path are listed (git compares the real one;
+/// macOS `/var` is `/private/var`). A `GIT_CONFIG_COUNT` that isn't a number
+/// is the submitter's own (git refuses it anyway): left as it is.
+pub fn git_safe_directory(env: &mut Vec<(String, String)>, src: &Path) {
+    let get = |env: &[(String, String)], k: &str| env.iter().rev().find(|(ek, _)| ek == k).map(|(_, v)| v.clone());
+    let count = match get(env, "GIT_CONFIG_COUNT") {
+        None => 0usize,
+        Some(c) => match c.trim().parse::<usize>() {
+            Ok(n) => n,
+            Err(_) => return,
+        },
+    };
+    // Never reuse an index the job already names, inside its count or not.
+    let used = |n: usize, env: &[(String, String)]| get(env, &format!("GIT_CONFIG_KEY_{n}")).is_some() || get(env, &format!("GIT_CONFIG_VALUE_{n}")).is_some();
+    let mut paths = vec![src.display().to_string()];
+    if let Ok(real) = std::fs::canonicalize(src) {
+        let real = real.display().to_string();
+        if !paths.contains(&real) {
+            paths.push(real);
+        }
+    }
+    let mut n = count;
+    for p in paths {
+        while used(n, env) {
+            n += 1;
+        }
+        env.push((format!("GIT_CONFIG_KEY_{n}"), "safe.directory".into()));
+        env.push((format!("GIT_CONFIG_VALUE_{n}"), p));
+        n += 1;
+    }
+    env.retain(|(k, _)| k != "GIT_CONFIG_COUNT");
+    env.push(("GIT_CONFIG_COUNT".into(), n.to_string()));
 }
 
 /// `(SCCACHE_DIR, CARGO_HOME)` inside a cache dir.
@@ -271,7 +318,7 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     fn inputs<'a>(d: &'a Path, extra: &'a BTreeMap<String, String>) -> EnvInputs<'a> {
-        EnvInputs { node_home: d, job_home: d, job_tmp: d, target_dir: d, cache_dir: d, job_id: "j1", user: "k2node", extra, tool_paths: &[], tool_env: &[], sccache_socket: None }
+        EnvInputs { node_home: d, job_home: d, job_tmp: d, target_dir: d, cache_dir: d, job_id: "j1", user: "k2node", extra, tool_paths: &[], tool_env: &[], sccache_socket: None, src_dir: None }
     }
 
     /// V28/V29: warm caches come from the cache dir the node picked (the
@@ -366,5 +413,60 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         let alive = unsafe { libc::kill(gc, 0) } == 0;
         assert!(!alive, "grandchild {gc} survived the job");
+    }
+
+    /// The job's own checkout is a git safe directory in the job's env
+    /// only, appended after any `GIT_CONFIG_*` the job set, never over one.
+    #[test]
+    fn the_jobs_checkout_is_a_git_safe_directory_appended_never_over_the_jobs_own() {
+        let d = crate::util::temp_dir("gitsafe");
+        let src = d.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let real = std::fs::canonicalize(&src).unwrap().display().to_string();
+        let given = src.display().to_string();
+        let val = |env: &[(String, String)], k: &str| env.iter().rev().find(|(ek, _)| ek == k).map(|(_, v)| v.clone());
+        let mut paths = vec![given.clone()];
+        if real != given {
+            paths.push(real.clone());
+        }
+        // Nothing set by the job: entries from 0.
+        let mut env = vec![("HOME".to_string(), "/h".to_string())];
+        git_safe_directory(&mut env, &src);
+        assert_eq!(val(&env, "GIT_CONFIG_COUNT"), Some(paths.len().to_string()));
+        for (n, p) in paths.iter().enumerate() {
+            assert_eq!(val(&env, &format!("GIT_CONFIG_KEY_{n}")).as_deref(), Some("safe.directory"));
+            assert_eq!(val(&env, &format!("GIT_CONFIG_VALUE_{n}")).as_ref(), Some(p));
+        }
+        assert_eq!(env.iter().filter(|(k, _)| k == "GIT_CONFIG_COUNT").count(), 1);
+        // The job set two of its own (and a stray at 3): kept, ours after them.
+        let mut env: Vec<(String, String)> = [
+            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_KEY_0", "user.name"),
+            ("GIT_CONFIG_VALUE_0", "ci"),
+            ("GIT_CONFIG_KEY_1", "core.autocrlf"),
+            ("GIT_CONFIG_VALUE_1", "false"),
+            ("GIT_CONFIG_KEY_3", "user.email"),
+            ("GIT_CONFIG_VALUE_3", "ci@x"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        git_safe_directory(&mut env, &src);
+        assert_eq!((val(&env, "GIT_CONFIG_KEY_0").as_deref(), val(&env, "GIT_CONFIG_VALUE_0").as_deref()), (Some("user.name"), Some("ci")));
+        assert_eq!((val(&env, "GIT_CONFIG_KEY_1").as_deref(), val(&env, "GIT_CONFIG_VALUE_1").as_deref()), (Some("core.autocrlf"), Some("false")));
+        assert_eq!((val(&env, "GIT_CONFIG_KEY_3").as_deref(), val(&env, "GIT_CONFIG_VALUE_3").as_deref()), (Some("user.email"), Some("ci@x")), "never over the job's own");
+        assert_eq!(val(&env, "GIT_CONFIG_KEY_2").as_deref(), Some("safe.directory"));
+        assert_eq!(val(&env, "GIT_CONFIG_VALUE_2").as_ref(), Some(&paths[0]));
+        // A second path (macOS real path) skips the job's 3 and lands on 4.
+        let count = if paths.len() == 2 { 5 } else { 3 };
+        if paths.len() == 2 {
+            assert_eq!(val(&env, "GIT_CONFIG_KEY_4").as_deref(), Some("safe.directory"));
+            assert_eq!(val(&env, "GIT_CONFIG_VALUE_4").as_ref(), Some(&paths[1]));
+        }
+        assert_eq!(val(&env, "GIT_CONFIG_COUNT"), Some(count.to_string()));
+        // A count that isn't a number is the job's own business: untouched.
+        let mut env = vec![("GIT_CONFIG_COUNT".to_string(), "x".to_string())];
+        git_safe_directory(&mut env, &src);
+        assert_eq!(env, vec![("GIT_CONFIG_COUNT".to_string(), "x".to_string())]);
     }
 }

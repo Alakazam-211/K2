@@ -1571,6 +1571,20 @@ async fn async_main() {
         }
     });
 
+    // app-user-profile §3.7 (0.46.5): write the sessions' remembered
+    // last-used times to skin.db and drop the rows of ended sessions,
+    // every 5 minutes (a pass resolve never writes).
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            match tokio::task::spawn_blocking(k2_core::skin::profile::flush_last_seen).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => log_debug!("[app-profile] WARN: last-seen flush: {e}"),
+                Err(e) => log_debug!("[app-profile] WARN: last-seen flush join: {e}"),
+            }
+        }
+    });
+
     // task #672 — canonical daemon-owned Active reaper. A single
     // long-lived task that owns the grace-reap of dormant workspace
     // chat PTYs, keyed on the canonical Active set (replaces the

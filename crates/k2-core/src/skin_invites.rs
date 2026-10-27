@@ -25,7 +25,10 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::{hash_password, immediate_tx, normalize_app_target, now_secs, revoke_sessions_for_principal, sha256_hex, with_conn, ties};
+use super::{
+    clear_lockouts_for_principal_conn, hash_password, immediate_tx, normalize_app_target, now_secs, password_too_long,
+    revoke_sessions_for_principal, sha256_hex, with_conn, ties, PASSWORD_TOO_LONG,
+};
 
 /// Token prefix: never a pass (`k2skn_`), a key (`k2sk_`) or a refresh token.
 pub const INVITE_PREFIX: &str = "k2inv_";
@@ -487,7 +490,57 @@ pub enum MintError {
     /// they are tied to (verification review 2026-10-26, item 5): never
     /// minted; only an owner reset lifts the first tie.
     TiedElsewhere,
+    /// The owner's reset for this person is live (app-user-profile §5.4):
+    /// an App's reset (forgot through a pass, an App key) mints nothing
+    /// until it is used or runs out.
+    OwnerResetPending,
     Store(String),
+}
+
+/// Which unused links [`void_unused_conn`] removes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Void {
+    /// Every unused `invite` and `reset` link; a live owner reset stays
+    /// (a password change, an App's reset used).
+    KeepOwnerReset,
+    /// Every unused link, the owner's too (an owner reset was used).
+    All,
+}
+
+/// Remove `principal_id`'s unused links (and the older store's unused
+/// reset tokens) on the caller's connection, inside the caller's
+/// transaction: a new password makes them stale (vs-live U4), and an
+/// owner reset must leave nothing behind that an App page may have seen
+/// (U6). `except_id`: the link being used right now.
+pub(crate) fn void_unused_conn(conn: &Connection, principal_id: &str, which: Void, except_id: Option<&str>) -> Result<usize, String> {
+    let n = conn
+        .execute(
+            "DELETE FROM app_user_invites WHERE principal_id = ?1 AND used_at IS NULL AND id != ?2
+               AND (?3 = 1 OR purpose != 'owner_reset')",
+            params![principal_id, except_id.unwrap_or(""), (which == Void::All) as i64],
+        )
+        .map_err(|e| format!("invite void: {e}"))?;
+    let m = conn
+        .execute("DELETE FROM password_reset_tokens WHERE principal_id = ?1 AND used_at IS NULL", params![principal_id])
+        .map_err(|e| format!("reset token void: {e}"))?;
+    Ok(n + m)
+}
+
+fn owner_reset_live_conn(conn: &Connection, principal_id: &str, now: i64) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM app_user_invites WHERE principal_id = ?1 AND purpose = 'owner_reset'
+            AND used_at IS NULL AND (expires_at IS NULL OR expires_at > ?2))",
+        params![principal_id, now],
+        |r| r.get(0),
+    )
+    .map_err(|e| format!("owner reset lookup: {e}"))
+}
+
+/// Is the owner's reset for this person live (sent or held, unused,
+/// unexpired)? An App's reset waits for it (app-user-profile §5.4).
+pub fn owner_reset_pending(principal_id: &str) -> Result<bool, String> {
+    let now = now_secs();
+    with_conn(|conn| owner_reset_live_conn(conn, principal_id, now))
 }
 
 fn generate_token() -> String {
@@ -516,6 +569,38 @@ pub fn mint(
     tie_on_use: Option<(&str, &str)>,
     created_by: &str,
 ) -> Result<Minted, MintError> {
+    mint_inner(principal_id, app, purpose, ttl_secs, sent_to, set_email, tie_on_use, created_by, false)
+}
+
+/// [`mint`] for a reset anyone outside may ask for (an App's forgot
+/// through its pass; vs-live U10): it never voids the person's newest
+/// still-live App reset link, so a stranger requesting again and again
+/// can't keep killing the link the person is about to use. At most two
+/// live App reset links per (person, App); using either voids the rest.
+#[allow(clippy::too_many_arguments)]
+pub fn mint_requested(
+    principal_id: &str,
+    app: &str,
+    ttl_secs: i64,
+    sent_to: Option<&str>,
+    tie_on_use: Option<(&str, &str)>,
+    created_by: &str,
+) -> Result<Minted, MintError> {
+    mint_inner(principal_id, app, PURPOSE_RESET, ttl_secs, sent_to, false, tie_on_use, created_by, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mint_inner(
+    principal_id: &str,
+    app: &str,
+    purpose: &str,
+    ttl_secs: i64,
+    sent_to: Option<&str>,
+    set_email: bool,
+    tie_on_use: Option<(&str, &str)>,
+    created_by: &str,
+    keep_live: bool,
+) -> Result<Minted, MintError> {
     if ![PURPOSE_INVITE, PURPOSE_RESET, PURPOSE_OWNER_RESET].contains(&purpose) {
         return Err(MintError::Store(format!("unknown purpose {purpose}")));
     }
@@ -528,6 +613,9 @@ pub fn mint(
             if ties::get_conn(&tx, principal_id)?.is_some_and(|t| t.workspace_id != ws) {
                 return Ok(Err(MintError::TiedElsewhere));
             }
+        }
+        if purpose == PURPOSE_RESET && owner_reset_live_conn(&tx, principal_id, now)? {
+            return Ok(Err(MintError::OwnerResetPending));
         }
         if purpose == PURPOSE_INVITE {
             let last: Option<i64> = tx
@@ -544,10 +632,15 @@ pub fn mint(
         // A new link voids the older unused ones for this (person, App),
         // but an invite or an App's forgot (reachable from outside) never
         // voids the owner's pending reset.
+        // A request from outside (U10) keeps the newest live App reset.
         tx.execute(
             "DELETE FROM app_user_invites WHERE principal_id = ?1 AND app = ?2 AND used_at IS NULL
-               AND (purpose != 'owner_reset' OR ?3 = 'owner_reset')",
-            params![principal_id, app, purpose],
+               AND (purpose != 'owner_reset' OR ?3 = 'owner_reset')
+               AND (?5 = 0 OR id NOT IN (
+                    SELECT id FROM app_user_invites WHERE principal_id = ?1 AND app = ?2 AND purpose = 'reset'
+                      AND used_at IS NULL AND expires_at IS NOT NULL AND expires_at > ?4
+                    ORDER BY created_at DESC, rowid DESC LIMIT 1))",
+            params![principal_id, app, purpose, now, keep_live as i64],
         )
         .map_err(|e| format!("invite void: {e}"))?;
         let (tie_ws, tie_reason) = match tie_on_use {
@@ -682,13 +775,32 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
     if password.trim().is_empty() {
         return Err("password must not be empty".to_string());
     }
-    // argon2 before the skin mutex (it also stands in for the dummy verify).
-    let pw_hash = hash_password(password.trim())?;
+    if password_too_long(password.trim()) {
+        return Err(PASSWORD_TOO_LONG.to_string());
+    }
     if !token.starts_with(INVITE_PREFIX) {
         return Ok(Consume::BadToken);
     }
     let token_hash = sha256_hex(token);
     let now = now_secs();
+    // U5 (b): the token first, the hash only for a live one. A 256-bit
+    // token needs no timing cover; a junk request never costs an argon2
+    // run (the route adds 500 ms to every miss). The compare-and-set
+    // below decides.
+    let live: bool = with_conn(|conn| {
+        conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM app_user_invites WHERE token_hash = ?1 AND used_at IS NULL
+                AND expires_at IS NOT NULL AND expires_at > ?2)",
+            params![token_hash, now],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("invite lookup: {e}"))
+    })?;
+    if !live {
+        return Ok(Consume::BadToken);
+    }
+    // argon2 before the skin mutex.
+    let pw_hash = hash_password(password.trim())?;
     with_conn(|conn| {
         let tx = immediate_tx(conn)?;
         type Row = (String, String, String, Option<String>, i64, Option<String>, Option<String>);
@@ -715,6 +827,14 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
         tx.execute("UPDATE principals SET password_hash = ?1 WHERE id = ?2", params![pw_hash, principal_id])
             .map_err(|e| format!("invite password: {e}"))?;
         revoke_sessions_for_principal(&tx, &principal_id)?;
+        // U6 / U4: using a link voids the person's other unused links (an
+        // owner reset: every one, on every App, the older store's too, so
+        // nothing an App page may have seen outlives the owner's remedy).
+        let which = if purpose == PURPOSE_OWNER_RESET { Void::All } else { Void::KeepOwnerReset };
+        void_unused_conn(&tx, &principal_id, which, Some(&id))?;
+        // U7 (Q4, Rosson yes): the person proved their mailbox, so their
+        // login lockout ends, in this transaction (no second lock).
+        clear_lockouts_for_principal_conn(&tx, &principal_id)?;
         // Email Notifications E16: whoever used a link mailed to an
         // address reads that address.
         if let Some(addr) = sent_to.as_deref() {

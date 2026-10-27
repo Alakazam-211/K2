@@ -210,6 +210,92 @@ pub fn normalize_image_data_url(raw: &str) -> Result<String, LookError> {
     Ok(format!("data:{out_mime};base64,{}", b64(&out.into_inner())))
 }
 
+/// Largest side a profile picture's decoder accepts (vs-live U17 a).
+pub const PROFILE_SOURCE_SIDE: u32 = 4096;
+/// The decoder's allocation cap for a profile picture.
+pub const PROFILE_MAX_ALLOC: u64 = 64 * 1024 * 1024;
+/// A stored profile picture is at most this many bytes (always JPEG).
+pub const PROFILE_MAX_BYTES: usize = 64 * 1024;
+
+/// Check, decode, turn upright, shrink and re-encode an App user's own
+/// picture (app-user-profile §3.4, vs-live U17). Like
+/// [`normalize_image_data_url`] (declared type must match the bytes;
+/// PNG/JPEG/WebP only; ≤ [`MAX_INPUT_IMAGE_BYTES`] in), plus:
+/// - a smaller decoder budget ([`PROFILE_SOURCE_SIDE`],
+///   [`PROFILE_MAX_ALLOC`]) and at most two decodes at once box-wide
+///   ([`crate::skin::guard::decode_slot`]);
+/// - the EXIF orientation is applied before the EXIF goes, so a phone
+///   selfie comes out upright;
+/// - always JPEG out (alpha flattened onto white), quality and size
+///   stepped down until it is ≤ [`PROFILE_MAX_BYTES`].
+///
+/// Returns the JPEG bytes (K2's own encoding; nothing the person sent).
+pub fn normalize_profile_image(raw: &str) -> Result<Vec<u8>, LookError> {
+    use image::ImageDecoder as _;
+    let (mime, payload) = split_data_url(raw).ok_or(LookError::NotDataUrl)?;
+    let (want, format) = match mime.as_str() {
+        "image/png" => (Sniffed::Png, image::ImageFormat::Png),
+        "image/jpeg" | "image/jpg" => (Sniffed::Jpeg, image::ImageFormat::Jpeg),
+        "image/webp" => (Sniffed::Webp, image::ImageFormat::WebP),
+        other => return Err(LookError::TypeRefused(other.chars().take(64).collect())),
+    };
+    if payload.len() > MAX_INPUT_IMAGE_BYTES / 3 * 4 + 8 {
+        return Err(LookError::TooLarge(payload.len() / 4 * 3));
+    }
+    let bytes = decode_b64(payload).ok_or(LookError::NotDataUrl)?;
+    if bytes.len() > MAX_INPUT_IMAGE_BYTES {
+        return Err(LookError::TooLarge(bytes.len()));
+    }
+    if sniff(&bytes) != Some(want) {
+        return Err(LookError::TypeMismatch(mime));
+    }
+    let _slot = crate::skin::guard::decode_slot();
+    let mut reader = image::ImageReader::with_format(Cursor::new(&bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(PROFILE_SOURCE_SIDE);
+    limits.max_image_height = Some(PROFILE_SOURCE_SIDE);
+    limits.max_alloc = Some(PROFILE_MAX_ALLOC);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().map_err(|e| LookError::BadImage(e.to_string()))?;
+    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = image::DynamicImage::from_decoder(decoder).map_err(|e| LookError::BadImage(e.to_string()))?;
+    if img.width() == 0 || img.height() == 0 {
+        return Err(LookError::BadImage("empty picture".into()));
+    }
+    img.apply_orientation(orientation);
+    for side in [MAX_IMAGE_SIDE, 192, 128, 96] {
+        let sized = if img.width() > side || img.height() > side {
+            img.resize(side, side, image::imageops::FilterType::Lanczos3)
+        } else {
+            img.clone()
+        };
+        let rgb = flatten_on_white(&sized);
+        for quality in [85u8, 75, 65, 55, 45] {
+            let mut out = Cursor::new(Vec::new());
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
+                .encode_image(&rgb)
+                .map_err(|e| LookError::BadImage(e.to_string()))?;
+            let out = out.into_inner();
+            if out.len() <= PROFILE_MAX_BYTES {
+                return Ok(out);
+            }
+        }
+    }
+    Err(LookError::BadImage("the picture would not fit in 64 KiB".into()))
+}
+
+/// Alpha composited onto white (JPEG has no alpha).
+fn flatten_on_white(img: &image::DynamicImage) -> image::RgbImage {
+    let rgba = img.to_rgba8();
+    let mut rgb = image::RgbImage::new(rgba.width(), rgba.height());
+    for (x, y, p) in rgba.enumerate_pixels() {
+        let a = u32::from(p[3]);
+        let mix = |v: u8| ((u32::from(v) * a + 255 * (255 - a)) / 255) as u8;
+        rgb.put_pixel(x, y, image::Rgb([mix(p[0]), mix(p[1]), mix(p[2])]));
+    }
+    rgb
+}
+
 /// The stored picture as an App may see it, or `None` (no picture, an SVG
 /// or other type, bytes that don't match, or over [`MAX_WIRE_IMAGE_BYTES`]).
 pub fn guest_image_view(stored: Option<&str>) -> Option<String> {

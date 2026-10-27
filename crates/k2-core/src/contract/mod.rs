@@ -658,6 +658,13 @@ mod tests {
                 // 0.46.4 (prd-app-caps-0464-v1 AC24/AC28): only a person
                 // answers a card.
                 "card_person_only",
+                // 0.46.5 (prd-app-user-profile-v1, U19): a person's own
+                // profile edits and pictures.
+                "edit_off",
+                "type_refused",
+                "type_mismatch",
+                "bad_image",
+                "agent_login",
                 // Email Notifications (0.46.5, catalog v26).
                 "email_off",
                 "no_sender",

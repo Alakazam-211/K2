@@ -7730,6 +7730,15 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         (or one from before 0.46.4 you haven't set) needs --to
   k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] …
                                         The App's link lives, set-password page and own mail text
+  k2 app profile settings <app> [--names on|off] [--image on|off]
+                                        May the App's people change their own names and picture
+                                        (default on; the App's agent may only turn them off)
+  k2 app user show <username> --app <app> [--json]
+                                        Owner only. Their profile in that App: names (a self-set one
+                                        names its username), email, picture, role, sign-ins, sessions
+  k2 app user image <username> --clear  Owner only. Remove their picture
+  k2 app user sessions <username> --app <app> [--revoke <id> | --revoke-all]
+                                        Owner only. Their browsers and devices in that App; end one or all
   k2 app user email <username> [--email e]
                                         Set/clear guest email (omit/empty clears)
   k2 app user full-name <username> [--name <text>]
@@ -13513,6 +13522,49 @@ for k, label in [("invite", "invite"), ("reset", "reset")]:
     print("  %s mail: %s" % (label, "the App template" if (t.get("subject") or t.get("body")) else "K2 template"))'
 }
 
+# k2 app profile settings <app> [--names on|off] [--image on|off] (0.46.5,
+# app-user-profile): may the App's people change their own names and
+# picture. The owner or an Admin; the App's own agent with "manage its Apps'
+# users" may only turn them off (never on, never the box login).
+cmd_app_profile_settings() {
+    local app="" names="" image="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --names) names="${2:-}"; shift 2 ;;
+            --image|--picture) image="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help)
+                cat <<'EOF'
+usage: k2 app profile settings <app> [--names on|off] [--image on|off] [--json]
+  --names on|off   people may change their own full and display names (default on)
+  --image on|off   people may set and clear their own picture (default on)
+No flags: show the settings. The owner or an Admin; the App's own agent with
+"manage its Apps' users" may only turn a setting off.
+EOF
+                return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { echo "usage: k2 app profile settings <app> [--names on|off] [--image on|off]   (k2 app profile settings --help)" >&2; exit 2; }
+    for v in "$names" "$image"; do
+        case "$v" in ""|on|off) ;; *) echo "usage: --names and --image take on or off" >&2; exit 2 ;; esac
+    done
+    if [ -z "$names" ] && [ -z "$image" ]; then
+        _compute_call GET /cli/app/profile-settings "app=$(urlencode "$app")"
+    else
+        local nb="" ib=""
+        [ -n "$names" ] && nb=$([ "$names" = on ] && echo 1 || echo 0)
+        [ -n "$image" ] && ib=$([ "$image" = on ] && echo 1 || echo 0)
+        _compute_call POST /cli/app/profile-settings "$(_compute_json K2_CJ_app="$app" K2_CJ_editNames_b="$nb" K2_CJ_editImage_b="$ib")"
+    fi
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+s = json.load(sys.stdin).get("settings") or {}
+print("App %s: people may change their names %s, their picture %s" % (s.get("app"), "on" if s.get("editNames") else "off", "on" if s.get("editImage") else "off"))'
+}
+
 cmd_app_members() {
     local room="" app="" json_out=0
     while [ $# -gt 0 ]; do
@@ -14131,6 +14183,13 @@ cmd_app() {
         discovery) shift; cmd_app_discovery "$@" ;;
         stay-signed-in) shift; cmd_app_stay "$@" ;;
         invite-settings) shift; cmd_app_invite_settings "$@" ;;
+        profile)
+            shift
+            case "${1:-}" in
+                settings) shift; cmd_app_profile_settings "$@" ;;
+                *) echo "usage: k2 app profile settings <app> [--names on|off] [--image on|off] [--json]" >&2; exit 2 ;;
+            esac
+            ;;
         login)
             shift
             case "${1:-}" in
@@ -14231,6 +14290,109 @@ if app:
     print("App user added: %s (App %s only; no box login)" % (d.get("username",""), app))
 else:
     print("Skin user added: %s" % d.get("username",""))'
+                    ;;
+                show)
+                    # app-user-profile P6 (0.46.5): a person's profile in one
+                    # App as the owner sees it (owner only).
+                    local username="" app="" json_out=0
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --app) app="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --app=*) app="${1#--app=}"; shift ;;
+                            --json) json_out=1; shift ;;
+                            --help|-h) echo "Usage: k2 app user show <username> --app <app> [--json]   (owner only)" >&2; exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) [[ -z "$username" ]] && username="$1"; shift ;;
+                        esac
+                    done
+                    [[ -z "$username" || -z "$app" ]] && { echo "Usage: k2 app user show <username> --app <app> [--json]" >&2; exit 1; }
+                    local raw
+                    raw=$(cli_request "/cli/skin/access/profile" "app=$(urlencode "$app")" "user=$(urlencode "$username")")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    if [[ "$json_out" -eq 1 ]]; then printf '%s\n' "$raw"; return 0; fi
+                    printf '%s' "$raw" | python3 -c '
+import json,sys,time
+d=json.load(sys.stdin)
+def t(x): return time.strftime("%Y-%m-%d %H:%M", time.localtime(x)) if x else "—"
+full=d.get("fullName") or "—"
+if d.get("nameSetBySelf") and d.get("fullName"):
+    full="%s (set by %s)" % (full, d.get("username"))
+print("%s in App %s" % (d.get("username"), d.get("app")))
+print("  full name     %s" % full)
+print("  display name  %s" % (d.get("displayName") or "—"))
+print("  email         %s" % (d.get("email") or "—"))
+print("  picture       %s" % ("yes (%s…)" % d["imageHash"][:12] if d.get("imageHash") else "—"))
+print("  role here     %s" % (d.get("role") or "—"))
+print("  made          %s    last sign-in %s" % (t(d.get("createdAt")), t(d.get("lastSignInAt"))))
+s=d.get("settings") or {}
+print("  may edit      names %s, picture %s" % ("on" if s.get("editNames") else "off", "on" if s.get("editImage") else "off"))
+rows=d.get("sessions") or []
+print("  sessions      %d" % len(rows))
+for r in rows:
+    print("    %-38s %-7s %-24s last %s%s" % (r.get("id"), r.get("kind"), (r.get("client") or "—")[:24], t(r.get("lastSeenAt") or r.get("createdAt")), "  push:%s" % r.get("pushPlatform") if r.get("push") else ""))'
+                    ;;
+                image)
+                    # app-user-profile P6: the owner clears a person's picture.
+                    local username="" clear=0
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --clear) clear=1; shift ;;
+                            --help|-h) echo "Usage: k2 app user image <username> --clear   (owner only)" >&2; exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) [[ -z "$username" ]] && username="$1"; shift ;;
+                        esac
+                    done
+                    [[ -z "$username" || "$clear" -ne 1 ]] && { echo "Usage: k2 app user image <username> --clear" >&2; exit 1; }
+                    local body raw
+                    body=$(_compute_json K2_CJ_user="$username")
+                    raw=$(cli_post_json "/cli/skin/access/profile/image/clear" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+print(("Picture cleared for %s" if d.get("cleared") else "%s had no picture") % d.get("username"))'
+                    ;;
+                sessions)
+                    # app-user-profile P6: a person's browsers and devices in
+                    # one App; --revoke <id> ends one, --revoke-all every one.
+                    local username="" app="" revoke="" all=0 json_out=0
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --app) app="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --app=*) app="${1#--app=}"; shift ;;
+                            --revoke) revoke="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --revoke-all) all=1; shift ;;
+                            --json) json_out=1; shift ;;
+                            --help|-h) echo "Usage: k2 app user sessions <username> --app <app> [--revoke <id> | --revoke-all] [--json]   (owner only)" >&2; exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) [[ -z "$username" ]] && username="$1"; shift ;;
+                        esac
+                    done
+                    [[ -z "$username" || -z "$app" ]] && { echo "Usage: k2 app user sessions <username> --app <app> [--revoke <id> | --revoke-all]" >&2; exit 1; }
+                    local body raw
+                    if [[ -n "$revoke" || "$all" -eq 1 ]]; then
+                        body=$(_compute_json K2_CJ_user="$username" K2_CJ_app="$app" K2_CJ_id="$revoke" K2_CJ_all_b="$all")
+                        raw=$(cli_post_json "/cli/skin/access/sessions/revoke" "$body")
+                        printf '%s' "$raw" | _skin_die_if_err
+                        if [[ "$json_out" -eq 1 ]]; then printf '%s\n' "$raw"; return 0; fi
+                        printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+print("Ended %d session(s) of %s in App %s" % (d.get("ended",0), d.get("username"), d.get("app")))'
+                        return 0
+                    fi
+                    raw=$(cli_request "/cli/skin/access/profile" "app=$(urlencode "$app")" "user=$(urlencode "$username")")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    if [[ "$json_out" -eq 1 ]]; then printf '%s' "$raw" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({"ok": True, "sessions": d.get("sessions") or []}))'; return 0; fi
+                    printf '%s' "$raw" | python3 -c '
+import json,sys,time
+d=json.load(sys.stdin)
+def t(x): return time.strftime("%Y-%m-%d %H:%M", time.localtime(x)) if x else "—"
+rows=d.get("sessions") or []
+if not rows:
+    print("%s has no live sessions in App %s" % (d.get("username"), d.get("app"))); sys.exit(0)
+for r in rows:
+    print("%-38s %-7s %-24s since %s  last %s%s" % (r.get("id"), r.get("kind"), (r.get("client") or "—")[:24], t(r.get("createdAt")), t(r.get("lastSeenAt")), "  push:%s" % r.get("pushPlatform") if r.get("push") else ""))'
                     ;;
                 invite)
                     local username="" app="" email="" role="" from="" json_out=0
@@ -14461,6 +14623,8 @@ for u in users:
     rooms=", ".join(handles) if handles else "—"
     email=u.get("email") or "—"
     full=u.get("fullName") or u.get("full_name") or "—"
+    if u.get("nameSetBySelf") and full != "—":
+        full="%s (set by %s)" % (full, name)
     agent=u.get("agentHandle") or u.get("agentWorkspace") or ""
     tail=("  agent:%s" % agent) if agent else ""
     t=u.get("test")
@@ -36008,6 +36172,48 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app profile settings",
+      "usage": "k2 app profile settings <app> [--names on|off] [--image on|off] [--json]",
+      "description": "May an App's people change their own full and display names and their picture (both on by default). The owner or an Admin; the App's own agent with \"manage its Apps' users\" may only turn them off, for its own workspace's Apps. No flags: show them. See k2 study app-profile.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--names", "arg": "on|off", "description": "People may change their names."},
+        {"name": "--image", "arg": "on|off", "description": "People may set and clear their picture."},
+        {"name": "--json", "arg": null, "description": "{ok, settings}."}
+      ]
+    },
+    {
+      "name": "app user show",
+      "usage": "k2 app user show <username> --app <app> [--json]",
+      "description": "Owner only. A person's profile in one App: full name (a self-set one shows the username beside it), display name, email, picture hash, role there, last sign-in, sessions and the App's profile settings.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "The App (required)."},
+        {"name": "--json", "arg": null, "description": "The raw profile JSON."}
+      ]
+    },
+    {
+      "name": "app user image",
+      "usage": "k2 app user image <username> --clear",
+      "description": "Owner only. Remove a person's profile picture (every App shows the same one).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--clear", "arg": null, "description": "Remove it (required)."}
+      ]
+    },
+    {
+      "name": "app user sessions",
+      "usage": "k2 app user sessions <username> --app <app> [--revoke <id> | --revoke-all] [--json]",
+      "description": "Owner only. A person's signed-in browsers and devices in one App (coarse client label, never an IP); --revoke ends one (an id from the list), --revoke-all every one in that App.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "The App (required)."},
+        {"name": "--revoke", "arg": "id", "description": "End one session or device sign-in."},
+        {"name": "--revoke-all", "arg": null, "description": "End every one in that App."},
+        {"name": "--json", "arg": null, "description": "{ok, sessions} or {ok, ended}."}
+      ]
+    },
+    {
       "name": "app user email",
       "usage": "k2 app user email <username> [--email e]",
       "description": "Set or clear an app guest email. Omit or empty --email clears. Needed to mint a password-reset token.",
@@ -37018,7 +37224,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-push skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs folder-trust email-notifications"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-push app-profile skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs folder-trust email-notifications"
 
 _study_usage() {
     cat <<'EOF'
@@ -37035,8 +37241,8 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
-  app-identity  app-surfaces  app-resources  app-runtime  app-push  skins  feedback-loop  ticket-brief
-  zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute  compute-shared  vault
+  app-identity  app-surfaces  app-resources  app-runtime  app-push  app-profile  skins  feedback-loop
+  ticket-brief  zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  db-upgrade  jobs
   folder-trust  email-notifications
@@ -37071,6 +37277,7 @@ _study_title() {
         app-resources) echo "Box usage, the disk guard, clean and trends" ;;
         app-runtime) echo "K2 updates and your App: the re-host" ;;
         app-push) echo "Notifications to a custom App's own phone app" ;;
+        app-profile) echo "A person's own profile, picture and sessions in an App" ;;
         skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
         ticket-brief) echo "Ticket HTML brief" ;;
@@ -37171,6 +37378,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends
   app-runtime         K2 updates move your App to the new runtime: re-host, setting, checks
   app-push            Your App's own phone app: keys in the vault, register, send, limits
+  app-profile         A person's own profile, picture and sessions in an App; who decides
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries
@@ -37228,6 +37436,7 @@ _study_page() {
         app-resources) _study_page_app_resources ;;
         app-runtime) _study_page_app_runtime ;;
         app-push) _study_page_app_push ;;
+        app-profile) _study_page_app_profile ;;
         email-notifications) _study_page_email_notifications ;;
         skins)
             echo "k2 study skins is now k2 study apps — this page still works."
@@ -37475,11 +37684,18 @@ no cap (your own rooms)
   roomAgents.list          GET  /cli/skin/agents                              The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.
   guests.login             POST /cli/skin/login (server only)                 Log a guest in through this App; the answer carries the guest's session pass.
   app.rooms                GET  /cli/skin/app-rooms (server only)             This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it).
-  password.change          POST /cli/skin/password/change (browser only)      A guest changes their own password (browser only: it ends every session of theirs).
+  password.change          POST /cli/skin/password/change                     A guest changes their own password (5 wrong current passwords per 15 minutes, then rate_limited); stay: true keeps this pass signed in.
   guests.logout            POST /cli/skin/logout (server only)                Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).
   guests.refresh           POST /cli/skin/refresh (server only)               Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in).
   guests.devices           GET  /cli/skin/devices                             This guest's devices that stay signed in to this App.
   guests.revokeDevice      POST /cli/skin/devices/revoke                      Sign one of this guest's own devices out (its pass and refresh token end).
+  profile.get              GET  /cli/skin/profile                             This person's own profile in this App: names, email, picture hash, role and rooms here, sessions count, and what they may change.
+  profile.update           POST /cli/skin/profile                             This person changes their own full name and display name, where the App allows it (20 changes per 10 minutes).
+  profile.setImage         POST /cli/skin/profile/image                       This person sets their own picture, where the App allows it.
+  profile.clearImage       POST /cli/skin/profile/image/clear                 This person removes their own picture, where the App allows it.
+  profile.sessions         GET  /cli/skin/sessions                            The browsers and devices signed in to this App as this person, this one first (never another App's).
+  profile.revokeSession    POST /cli/skin/sessions/revoke                     Sign one of this person's own browsers or devices out of this App.
+  profile.signOutOthers    POST /cli/skin/sessions/revoke-others              Sign this person out of this App everywhere else (their notification devices there go too); this pass stays.
   push.register            POST /cli/skin/push/register                       Register this guest's phone for this App's notifications; call it on every launch and whenever the token changes.
   push.unregister          POST /cli/skin/push/unregister                     Stop this App's notifications on one of this guest's own devices (signing out also removes it).
   push.device              GET  /cli/skin/push/device                         This guest's own push registration for one device (never the token).
@@ -39439,6 +39655,67 @@ bars. A Garden can show it with the built-in card k2:box-disk@1.
 EOF
 }
 
+_study_page_app_profile() {
+    cat <<'EOF'
+k2 study app-profile — a person's own profile, picture and sessions in an App
+
+THE MODEL (0.46.5, feature app-user-profile-v1)
+  A person signed in to an App (their own session pass, k2skn_, from
+  guests.login) reads and changes their own account from inside the App:
+  the App's web page (the helper, same origin), its server for them (the
+  App's link with the person's pass: AR50) or its phone app (the main port,
+  Authorization: Bearer). The App and the person come from the pass, never
+  the body. An App's own pass, an App key, the owner token: guest_required.
+  One person is one account on this box: the name and picture are theirs
+  in every App; the role, rooms and sessions shown are this App's only.
+
+THE VERBS (k2.asGuest(pass).profile.* in the server SDK)
+  profile.get            GET  /cli/skin/profile[?image=1|?ifImageHash=<h>]
+    username (fixed), fullName, displayName, email, imageHash, role and
+    rooms here, createdAt, lastSignInAt, test, agentLogin, can {editNames,
+    editImage}, counts. The picture (image) only when asked: cache by hash.
+  profile.update         POST /cli/skin/profile {fullName?, displayName?}
+    64 / 32 characters; controls, bidi and zero-width are dropped; null or
+    "" clears. K2's own views show the username beside a self-set name.
+  profile.setImage       POST /cli/skin/profile/image {image: data URL}
+    PNG, JPEG or WebP, at most 2 MiB; K2 turns it upright (EXIF), shrinks
+    it to 256 px and stores its own JPEG (≤ 64 KiB, no EXIF, nothing you
+    sent). SVG/GIF: type_refused; wrong bytes: type_mismatch.
+  profile.clearImage     POST /cli/skin/profile/image/clear
+  profile.sessions       GET  /cli/skin/sessions
+    browsers and devices signed in to this App: id, kind, client (a coarse
+    label, never an IP), via, createdAt, lastSeenAt, current, push.
+  profile.revokeSession  POST /cli/skin/sessions/revoke {id}
+  profile.signOutOthers  POST /cli/skin/sessions/revoke-others  → {ended}
+    this pass stays; the others and their notification devices go.
+  password.change        POST /cli/skin/password/change
+    {oldPassword, password, stay: true} keeps this pass signed in.
+  A server signing someone in may pass clientLabel ("Chrome on Windows")
+  in the guests.login body on the link; the main port reads User-Agent.
+
+WHO DECIDES (per App; both on by default)
+  k2 app profile settings <app> [--names on|off] [--image on|off]
+  The owner or an Admin. The App's own agent with "manage its Apps'
+  users" may only turn them off, for its own workspace's Apps. Off:
+  edit_off (nothing written). K2_APP_PROFILE=off in the daemon's
+  environment turns every person's edits off (reads stay).
+
+PER PERSON
+  Test guests change their names and picture. An agent's own login reads
+  only (agent_login). 20 changes per person per 10 minutes (rate_limited).
+
+THE OWNER
+  k2 app user show <u> --app <app>          profile, picture hash, sessions
+  k2 app user image <u> --clear
+  k2 app user sessions <u> --app <app> [--revoke <id> | --revoke-all]
+
+NOT YET
+  Email change, a self-service forgot door, and K2's own account page come
+  with K2's own sender (0.46.6). Usernames never change. Password reset
+  today: k2 study apps (PASSWORD RESET).
+EOF
+}
+
 _study_page_app_push() {
     cat <<'EOF'
 k2 study app-push — notifications to a custom App's own phone app
@@ -40012,24 +40289,33 @@ BYO BFF (not --skin)
 PASSWORD RESET
   Three exact POST paths (never a /cli/skin/password glob):
     POST /cli/skin/password/forgot  {"username":"…"}
-      username field matches username OR email.
-      Mint = platform --name or owner. Guest session / agent hook /
-      Connect member → 403. 200 {ok:true, token, expiresAt, email}
-      once when the guest has a password AND an email; unknown /
-      invalid username / invalid email string / no password / no
-      email → 200 {ok:true} no extra keys. 60s per presented string
-      (even when no user). Delivery is the operator BYO BFF. BFF
-      uses forgot JSON email. K2 never emails guests. Never k2 mail.
-      BFF must not return forgot JSON token to the browser.
+      username field matches username OR email. Guest session / agent
+      hook / Connect member → 403.
+      An App's pass (its link pass, or a platform pass): K2 MAILS the
+      person a one-time reset link (from the App workspace's hosted
+      address, under its email sending mode) and answers {ok:true},
+      whoever the name is; the token never comes back to the App. Only
+      people of the App's own workspace (and App); 60 s per name (429);
+      at most 3 App reset mails per person a day and 10 per App an hour;
+      nothing while the owner's reset is live. A new request never kills
+      the person's live link.
+      The owner (owner token): 200 {ok:true, token, expiresAt, email}
+      once when the guest has a password AND an email; else {ok:true}.
       Official --skin: this path 404s.
     POST /cli/skin/password/reset   {"token":"…","password":"…"}
-      PUBLIC consume. Body only — never token= on the consume POST.
-      Mail link may be /reset?token= (page query). Does not mint a
-      session. Password min length 8. Official consume POST on this
-      origin. GET /reset serves the bundled page (never 404).
-    POST /cli/skin/password/change  {"oldPassword":"…","password":"…"}
-      session k2skn_ only (session=1). No username field. Platform
-      403. Success revokes every session=1; caller logs in again.
+      PUBLIC consume ("token" on the wire; resetToken in the SDK). Body
+      only. Links are <page>#k2inv_… (the token rides the fragment; the
+      bundled /reset page also reads an old ?token=). Does not mint a
+      session. Password 8 to 256 bytes. Per-client limit (429). A used
+      link ends every session, clears the login lock and voids the
+      person's other unused links (an owner reset: every one).
+    POST /cli/skin/password/change  {"oldPassword":"…","password":"…","stay":true?}
+      session k2skn_ only (session=1), browser or the App's link (its
+      server, for the person) or the main port. No username field.
+      Platform 403. 5 wrong current passwords per 15 minutes → 429
+      rate_limited (never the login lock). Success ends every session;
+      stay: true keeps this one ({ok, stayed:true}). Unused reset links go.
+  Profiles, pictures and sessions: k2 study app-profile.
   Never put an owner or platform token in the browser.
   OIDC issuer still this password file. RP/Google reset at the IdP.
 

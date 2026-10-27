@@ -218,24 +218,33 @@ BYO BFF (not --skin)
 PASSWORD RESET
   Three exact POST paths (never a /cli/skin/password glob):
     POST /cli/skin/password/forgot  {"username":"…"}
-      username field matches username OR email.
-      Mint = platform --name or owner. Guest session / agent hook /
-      Connect member → 403. 200 {ok:true, token, expiresAt, email}
-      once when the guest has a password AND an email; unknown /
-      invalid username / invalid email string / no password / no
-      email → 200 {ok:true} no extra keys. 60s per presented string
-      (even when no user). Delivery is the operator BYO BFF. BFF
-      uses forgot JSON email. K2 never emails guests. Never k2 mail.
-      BFF must not return forgot JSON token to the browser.
+      username field matches username OR email. Guest session / agent
+      hook / Connect member → 403.
+      An App's pass (its link pass, or a platform pass): K2 MAILS the
+      person a one-time reset link (from the App workspace's hosted
+      address, under its email sending mode) and answers {ok:true},
+      whoever the name is; the token never comes back to the App. Only
+      people of the App's own workspace (and App); 60 s per name (429);
+      at most 3 App reset mails per person a day and 10 per App an hour;
+      nothing while the owner's reset is live. A new request never kills
+      the person's live link.
+      The owner (owner token): 200 {ok:true, token, expiresAt, email}
+      once when the guest has a password AND an email; else {ok:true}.
       Official --skin: this path 404s.
     POST /cli/skin/password/reset   {"token":"…","password":"…"}
-      PUBLIC consume. Body only — never token= on the consume POST.
-      Mail link may be /reset?token= (page query). Does not mint a
-      session. Password min length 8. Official consume POST on this
-      origin. GET /reset serves the bundled page (never 404).
-    POST /cli/skin/password/change  {"oldPassword":"…","password":"…"}
-      session k2skn_ only (session=1). No username field. Platform
-      403. Success revokes every session=1; caller logs in again.
+      PUBLIC consume ("token" on the wire; resetToken in the SDK). Body
+      only. Links are <page>#k2inv_… (the token rides the fragment; the
+      bundled /reset page also reads an old ?token=). Does not mint a
+      session. Password 8 to 256 bytes. Per-client limit (429). A used
+      link ends every session, clears the login lock and voids the
+      person's other unused links (an owner reset: every one).
+    POST /cli/skin/password/change  {"oldPassword":"…","password":"…","stay":true?}
+      session k2skn_ only (session=1), browser or the App's link (its
+      server, for the person) or the main port. No username field.
+      Platform 403. 5 wrong current passwords per 15 minutes → 429
+      rate_limited (never the login lock). Success ends every session;
+      stay: true keeps this one ({ok, stayed:true}). Unused reset links go.
+  Profiles, pictures and sessions: k2 study app-profile.
   Never put an owner or platform token in the browser.
   OIDC issuer still this password file. RP/Google reset at the IdP.
 

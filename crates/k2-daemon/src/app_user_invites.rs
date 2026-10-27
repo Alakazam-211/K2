@@ -30,6 +30,9 @@ use k2_core::skin::{self, invites};
 use crate::cli_response::CliResponse;
 use crate::mail::send::{self, DbOutboundStore, Gate, OutboundMessage, OutboundRequest, SendError, SendOutcome, SubmitBackend};
 
+/// An App's reset refused while the owner's reset is live (§5.4).
+pub const OWNER_RESET_PENDING: &str = "owner_reset_pending";
+
 pub const INVITE_ROUTE: &str = "/cli/skin/users/invite";
 pub const RESET_LINK_ROUTE: &str = "/cli/skin/users/reset-link";
 pub const SETTINGS_ROUTE: &str = "/cli/skin/access/invites";
@@ -750,6 +753,7 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
                 &format!("{} is tied to another workspace's agent; only the owner's reset lifts that", person.username),
             )
         }
+        Err(invites::MintError::OwnerResetPending) => return CliResponse::internal_error("an invite never waits for a reset"),
         Err(invites::MintError::Store(e)) => return CliResponse::internal_error(e),
     };
     let Some(sender) = sender else {
@@ -951,6 +955,7 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
         Ok(m) => m,
         Err(invites::MintError::Throttled) => return refusal("429 Too Many Requests", "throttled", "wait a minute, then send it again"),
         Err(invites::MintError::TiedElsewhere) => return CliResponse::internal_error("an owner reset never ties"),
+        Err(invites::MintError::OwnerResetPending) => return CliResponse::internal_error("an owner reset never waits for itself"),
         Err(invites::MintError::Store(e)) => return CliResponse::internal_error(e),
     };
     let Some(sender) = sender else {
@@ -1026,14 +1031,45 @@ pub fn app_key_reset(app: &str, username: &str, actor: &str) -> Result<Value, (u
     if skin::ties::get(&person.id).map_err(|e| (500, "store", e))?.is_some_and(|t| t.workspace_id != ws) {
         return Err((409, skin::ties::TIED_ELSEWHERE, "this person is tied to another workspace; only the owner resets them".to_string()));
     }
+    // The owner's reset is live: the App waits for it (app-user-profile
+    // §5.4), and nothing is tied or minted.
+    if invites::owner_reset_pending(&person.id).map_err(|e| (500, "store", e))? {
+        audit("blocked_by_owner_reset", actor, &format!("{} app={app} (App key reset)", person.username));
+        return Err((409, OWNER_RESET_PENDING, "the owner sent this person a reset; it stays the only one until it is used or runs out".to_string()));
+    }
+    // At most 3 App reset mails per person a day, 10 per App an hour (U9).
+    if !skin::guard::take_reset_mail(&person.id, app) {
+        return Err((429, "rate_limited", "too many reset mails for this person or this App lately; try again later".to_string()));
+    }
+    let r = app_key_reset_send(app, &person, &ws, &email, &settings, &page, &sender, &by, actor);
+    if !matches!(r, Ok(ref v) if v["delivered"] == "sent") {
+        skin::guard::return_reset_mail(&person.id, app);
+    }
+    r
+}
+
+#[allow(clippy::too_many_arguments)]
+fn app_key_reset_send(
+    app: &str,
+    person: &skin::SkinPrincipal,
+    ws: &str,
+    email: &str,
+    settings: &invites::InviteSettings,
+    page: &str,
+    sender: &Sender,
+    by: &By,
+    actor: &str,
+) -> Result<Value, (u16, &'static str, String)> {
+    let (ws, email) = (ws.to_string(), email.to_string());
     skin::ties::set(&person.id, skin::ties::TieWrite { workspace_id: &ws, set_by: actor, reason: skin::ties::REASON_APP_KEY }).map_err(|e| (500, "store", e))?;
     let minted = match invites::mint(&person.id, app, invites::PURPOSE_RESET, settings.reset_ttl_secs, Some(&email), false, Some((&ws, skin::ties::REASON_APP_KEY)), actor) {
         Ok(m) => m,
         Err(invites::MintError::Throttled) => return Err((429, "throttled", "wait a minute".to_string())),
         Err(invites::MintError::TiedElsewhere) => return Err((409, skin::ties::TIED_ELSEWHERE, "this person is tied to another workspace; only the owner resets them".to_string())),
+        Err(invites::MintError::OwnerResetPending) => return Err((409, OWNER_RESET_PENDING, "the owner sent this person a reset; it stays the only one until it is used or runs out".to_string())),
         Err(invites::MintError::Store(e)) => return Err((500, "store", e)),
     };
-    let mail = Mail { purpose: invites::PURPOSE_RESET, app, to: &email, person: &person, page: &page, sender: &sender, by: &by, settings: &settings };
+    let mail = Mail { purpose: invites::PURPOSE_RESET, app, to: &email, person, page, sender, by, settings };
     match dispatch(&mail, &minted) {
         Ok(Delivered::Sent { expires_at, .. }) => Ok(json!({ "ok": true, "username": person.username, "delivered": "sent", "sentTo": email, "expiresAt": expires_at })),
         Ok(Delivered::Held { .. }) => Ok(json!({ "ok": true, "username": person.username, "delivered": "held", "sentTo": email })),
@@ -1048,23 +1084,29 @@ pub fn app_key_reset(app: &str, username: &str, actor: &str) -> Result<Value, (u
 /// from that workspace's address, under its governance. The caller always
 /// answers the bare `{ok:true}`; a guest with no password or email, no
 /// set-password page, no mail path or mail off sends nothing (logged).
-pub fn forgot_by_pass(pass: &skin::SkinPass, ws: &str, username: &str) {
-    // Off the request thread: the forgot answer takes the same time whether
-    // or not a mail goes out (security review item 7).
-    let (pass, ws, username) = (pass.clone(), ws.to_string(), username.to_string());
-    let spawned = std::thread::Builder::new().name("k2-app-forgot".into()).spawn(move || forgot_by_pass_now(&pass, &ws, &username));
+pub fn forgot_by_pass(pass: &skin::SkinPass, username: &str) {
+    // Off the request thread (vs-live U22): who the name is, whether the
+    // pass may reset them, the settings, the mint and the mail all happen
+    // here, so the answer takes the same time for every name.
+    let (pass, username) = (pass.clone(), username.to_string());
+    let spawned = std::thread::Builder::new().name("k2-app-forgot".into()).spawn(move || forgot_by_pass_now(&pass, &username));
     if let Err(e) = spawned {
         k2_core::log_debug!("[invites] forgot thread: {e}");
     }
 }
 
 /// [`forgot_by_pass`] on the calling thread.
-pub fn forgot_by_pass_now(pass: &skin::SkinPass, ws: &str, username: &str) {
+pub fn forgot_by_pass_now(pass: &skin::SkinPass, username: &str) {
     let skip = |why: &str| k2_core::log_debug!("[invites] forgot via pass {} for {username}: nothing sent ({why})", pass.id);
     let person = match principal(username) {
         Ok(Some(p)) => p,
         _ => return skip("no such guest"),
     };
+    let ws = match crate::skin_routes::pass_may_reset(pass, &person) {
+        Ok(Some(ws)) => ws,
+        _ => return skip("not a guest this pass may reset"),
+    };
+    let ws = ws.as_str();
     let (Some(email), true) = (person.email.clone(), person.has_password) else {
         return skip("no password or no email");
     };
@@ -1081,14 +1123,40 @@ pub fn forgot_by_pass_now(pass: &skin::SkinPass, ws: &str, username: &str) {
         Ok(None) => return skip("no address to send from"),
         Err(r) => return skip(&r.body),
     };
-    let minted = match invites::mint(&person.id, &app, invites::PURPOSE_RESET, settings.reset_ttl_secs, Some(&email), false, Some((ws, skin::ties::REASON_APP_RESET)), by.actor()) {
+    // A person tied to another workspace gets nothing (the mint refuses
+    // too); checked before a mail budget is spent.
+    match skin::ties::get(&person.id) {
+        Ok(Some(t)) if t.workspace_id != ws => return skip("tied to another workspace"),
+        Ok(_) => {}
+        Err(e) => return skip(&e),
+    }
+    match invites::owner_reset_pending(&person.id) {
+        Ok(false) => {}
+        Ok(true) => {
+            audit("blocked_by_owner_reset", by.actor(), &format!("{} app={app} (forgot)", person.username));
+            return skip("the owner's reset is live");
+        }
+        Err(e) => return skip(&e),
+    }
+    // U9: per person and per App mail budgets, before the mint.
+    if !skin::guard::take_reset_mail(&person.id, &app) {
+        return skip("over a reset mail budget");
+    }
+    // U10: a request from outside never voids the person's live link.
+    let minted = match invites::mint_requested(&person.id, &app, settings.reset_ttl_secs, Some(&email), Some((ws, skin::ties::REASON_APP_RESET)), by.actor()) {
         Ok(m) => m,
-        Err(e) => return skip(&format!("{e:?}")),
+        Err(e) => {
+            skin::guard::return_reset_mail(&person.id, &app);
+            return skip(&format!("{e:?}"));
+        }
     };
     let mail = Mail { purpose: invites::PURPOSE_RESET, app: &app, to: &email, person: &person, page: &page, sender: &sender, by: &by, settings: &settings };
     match dispatch(&mail, &minted) {
         Ok(_) => audit("app_user_forgot", by.actor(), &format!("{} app={app}", person.username)),
-        Err(r) => skip(&r.body),
+        Err(r) => {
+            skin::guard::return_reset_mail(&person.id, &app);
+            skip(&r.body)
+        }
     }
 }
 

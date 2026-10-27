@@ -721,6 +721,12 @@ pub const FEATURE_APP_WALLET: &str = "app-wallet-v1";
 /// `/v1/apps/<id>/push/*` (App key scope `push`) and `/cli/app/push/*`.
 /// skin.db tables only, no SQL migration.
 pub const FEATURE_APP_PUSH: &str = "custom-app-push-v1";
+/// App user profile (prd-app-user-profile-v1, 0.46.5): `profile.get|update|
+/// setImage|clearImage|sessions|revokeSession|signOutOthers` with a
+/// person's own session pass, `password.change {stay}` on both doors, and
+/// the owner's `/cli/skin/access/profile*`, `/cli/app/profile-settings`.
+/// skin.db tables only, no SQL migration.
+pub const FEATURE_APP_USER_PROFILE: &str = "app-user-profile-v1";
 /// Email Notifications (prd-email-notifications-core-v1, 0.46.5):
 /// `email.send|status|log` on the App's link (cap `email:send`),
 /// `/v1/apps/<id>/email/*` (App key scope `email`), `/cli/app/email/*` and
@@ -961,6 +967,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_MOBILE_ACCESS);
     out.push(FEATURE_APP_WALLET);
     out.push(FEATURE_APP_PUSH);
+    out.push(FEATURE_APP_USER_PROFILE);
     out.push(FEATURE_EMAIL_NOTIFICATIONS);
     out.push(FEATURE_ACTIVITY_LIVE_BUSY);
     if thread_push_ready() {
@@ -1071,6 +1078,7 @@ mod tests {
                 "app-mobile-access-v1",
                 "app-wallet-v1",
                 "custom-app-push-v1",
+                "app-user-profile-v1",
                 "email-notifications-v1",
                 "activity-live-busy",
                 "thread-push-v1",

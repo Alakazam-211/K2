@@ -362,14 +362,27 @@ pub const GATEWAY_POST_ROUTES: &[&str] = &[
 /// plus slack can never be valid. Not a file-size limit (a file is any
 /// number of chunks); other routes have none (each app decides).
 pub fn request_body_cap(method: &str, path: &str) -> Option<usize> {
-    if method.eq_ignore_ascii_case("POST") && path_only(path) == "/cli/fs/upload-chunk" {
-        Some(k2_core::fs_guest_upload::MAX_UPLOAD_CHUNK_BODY)
-    } else {
-        None
+    if !method.eq_ignore_ascii_case("POST") {
+        return None;
+    }
+    match path_only(path) {
+        "/cli/fs/upload-chunk" => Some(k2_core::fs_guest_upload::MAX_UPLOAD_CHUNK_BODY),
+        // app-user-profile §3.4: a picture (2 MiB in base64, plus slack);
+        // the other profile and session writes are small.
+        p if p == crate::app_profile_routes::PROFILE_IMAGE => Some(crate::app_profile_routes::MAX_BODY),
+        p if crate::app_profile_routes::PASS_ROUTES.contains(&p) => Some(64 * 1024),
+        _ => None,
     }
 }
 
-fn body_cap_json(cap: usize) -> String {
+fn body_cap_json(cap: usize, path: &str) -> String {
+    if path_only(path) != "/cli/fs/upload-chunk" {
+        return serde_json::json!({
+            "ok": false,
+            "error": { "code": "too_large", "hint": format!("this request carries at most {cap} bytes") },
+        })
+        .to_string();
+    }
     serde_json::json!({
         "error": "too_large",
         "message": format!(
@@ -495,7 +508,7 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
     // Content-Length before reading or allocating anything for it.
     if let Some(cap) = request_body_cap(&method, &path) {
         if content_length > cap {
-            write_json(&gw, &mut stream, "413 Payload Too Large", &body_cap_json(cap)).await;
+            write_json(&gw, &mut stream, "413 Payload Too Large", &body_cap_json(cap, &path)).await;
             let _ = stream.shutdown().await;
             let remaining = content_length.saturating_sub(body.len());
             crate::routes::http::drain_refused_body(&mut stream, Some(remaining)).await;
@@ -1075,7 +1088,14 @@ async fn handle_password_change(
             } else {
                 resp_body
             };
-            if status == 200 {
+            // `{stay: true}` (app-user-profile §3.6.1, vs-live U3): the
+            // daemon kept this pass, so the helper keeps its cookie too.
+            let stayed = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .is_some_and(|v| v.get("stayed").and_then(serde_json::Value::as_bool) == Some(true));
+            if status == 200 && stayed {
+                write_json(gw, stream, "200 OK", &body).await;
+            } else if status == 200 {
                 gw.sessions.lock().await.remove(sid);
                 write_json_cookie(gw, stream, "200 OK", &body, &clear_cookie_value(secure)).await;
             } else {
@@ -3089,6 +3109,9 @@ mod tests {
         assert_eq!(request_body_cap("POST", "/cli/fs/upload-binary"), None);
         assert_eq!(request_body_cap("POST", "/cli/fs/write-file"), None);
         assert_eq!(request_body_cap("GET", "/cli/fs/upload-chunk"), None);
+        assert_eq!(request_body_cap("POST", "/cli/skin/profile/image"), Some(crate::app_profile_routes::MAX_BODY));
+        assert_eq!(request_body_cap("POST", "/cli/skin/profile"), Some(64 * 1024));
+        assert_eq!(request_body_cap("GET", "/cli/skin/profile"), None);
         // A final chunk may fsync a large file: longer upstream wait.
         assert!(upstream_wait("/cli/fs/upload-chunk") >= Duration::from_secs(60));
         assert_eq!(upstream_wait("/cli/thread/post"), Duration::from_secs(10));

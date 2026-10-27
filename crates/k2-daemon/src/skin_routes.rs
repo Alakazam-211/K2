@@ -228,10 +228,19 @@ pub fn handle_users_get() -> CliResponse {
                 Ok(m) => m,
                 Err(e) => return CliResponse::internal_error(e),
             };
+            // app-user-profile U24: a name the person set themselves is
+            // shown with their username beside it; the picture's hash.
+            let marks = match skin::profile::marks() {
+                Ok(m) => m,
+                Err(e) => return CliResponse::internal_error(e),
+            };
             let users: Vec<serde_json::Value> = users
                 .iter()
                 .map(|u| {
                     let mut v = serde_json::to_value(u).unwrap_or(serde_json::Value::Null);
+                    let (self_set, image_hash) = marks.get(&u.id).cloned().unwrap_or((false, None));
+                    v["nameSetBySelf"] = serde_json::json!(self_set);
+                    v["imageHash"] = serde_json::json!(image_hash);
                     match tied.get(&u.id) {
                         Some(t) => {
                             v["pendingReset"] = serde_json::json!(t.pending);
@@ -2930,17 +2939,29 @@ fn link_app_mismatch() -> SkinLoginReply {
 /// Public `POST /cli/skin/login`. Generic 401. Dummy argon2 + lockout live
 /// in core (`check_and_record_login`); caller adds the 500 ms 401 delay.
 pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
-    handle_login_on(body, content_type, None)
+    handle_login_on(body, content_type, None, None)
 }
 
 /// [`handle_login`] for a login that came through an App's gateway link
 /// (`link_app` = that App's service id): only there may a test guest of
 /// that App sign in (`skin::test_guests`, 0.46.4).
-pub fn handle_login_on(body: &[u8], content_type: &str, link_app: Option<&str>) -> SkinLoginReply {
-    skin::test_guests::with_link_login(link_app, || login_inner(body, content_type, link_app))
+/// `user_agent`: the request's `User-Agent` (main port only). The session
+/// list's client label (app-user-profile §3.7, U18) comes from it, from
+/// `clientLabel` in the body of a login through an App's link (the App's
+/// server names the person's browser; the link's own User-Agent is the
+/// server's), or from a device's name. Never stored raw; no IP.
+pub fn handle_login_on(body: &[u8], content_type: &str, link_app: Option<&str>, user_agent: Option<&str>) -> SkinLoginReply {
+    let label = if link_app.is_some() {
+        serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v.get("clientLabel").and_then(|x| x.as_str()).and_then(skin::profile::clean_label))
+    } else {
+        user_agent.and_then(skin::profile::label_from_user_agent)
+    };
+    skin::test_guests::with_link_login(link_app, || login_inner(body, content_type, link_app, label.as_deref()))
 }
 
-fn login_inner(body: &[u8], content_type: &str, link_app: Option<&str>) -> SkinLoginReply {
+fn login_inner(body: &[u8], content_type: &str, link_app: Option<&str>, label: Option<&str>) -> SkinLoginReply {
     let form = is_form_body(content_type);
     let parsed = if form {
         let pairs = parse_form_pairs(body);
@@ -3057,6 +3078,7 @@ fn login_inner(body: &[u8], content_type: &str, link_app: Option<&str>) -> SkinL
                 body["caps"] = serde_json::json!(d.session.meta.caps);
                 body["role"] = serde_json::json!(d.session.role_name);
                 body["roomAccess"] = serde_json::json!(d.session.meta.room_access);
+                skin::profile::record_session(&d.session.meta.id, skin::profile::VIA_DEVICE, Some(&d.device.name));
                 let raw = d.session.raw.clone();
                 return SkinLoginReply {
                     response: CliResponse::ok_json(body.to_string()),
@@ -3108,6 +3130,7 @@ fn login_inner(body: &[u8], content_type: &str, link_app: Option<&str>) -> SkinL
         app,
         role_name,
     } = session;
+    skin::profile::record_session(&meta.id, skin::profile::VIA_PASSWORD, label);
     if form {
         let location = safe_next(next.as_deref());
         return SkinLoginReply {
@@ -3371,16 +3394,19 @@ fn forgot_by_pass(pass: &skin::SkinPass, username: &str) -> CliResponse {
         Ok(false) => {}
         Err(e) => return CliResponse::internal_error(e),
     }
-    let reachable = match principal_named(username) {
-        Ok(Some(p)) => pass_may_reset(pass, &p).ok().flatten(),
-        _ => None,
-    };
+    // vs-live U22: this thread does only the throttle above, one dummy
+    // argon2 and a spawn. Who the name is, whether this pass may reset
+    // them, the settings, the mint and the mail all run on the spawned
+    // thread, so a hit and a miss cost the request the same.
     skin::reset_miss_dummy();
-    match reachable {
-        Some(ws) => crate::app_user_invites::forgot_by_pass(pass, &ws, username),
-        None => k2_core::log_debug!("[skin] forgot via pass {}: no guest it may reset", pass.id),
-    }
+    crate::app_user_invites::forgot_by_pass(pass, username);
     CliResponse::ok_json(FORGOT_OK_JSON.to_string())
+}
+
+/// `400` for a password over [`skin::MAX_PASSWORD_BYTES`] (app-user-profile
+/// §6.1), on every password route.
+pub fn password_too_long_response() -> CliResponse {
+    CliResponse::bad_request(skin::PASSWORD_TOO_LONG)
 }
 
 /// Public `POST /cli/skin/password/reset` `{token, password}`. Ignore
@@ -3397,6 +3423,9 @@ pub fn handle_password_reset(body: &[u8]) -> CliResponse {
     let password = v.get("password").and_then(|x| x.as_str()).unwrap_or("");
     if password.is_empty() || password.len() < skin::PUBLIC_PASSWORD_MIN_LEN {
         return CliResponse::bad_request("password must be at least 8 characters");
+    }
+    if skin::password_too_long(password.trim()) {
+        return password_too_long_response();
     }
     // agent-app-users §5.4: an invite / owner-reset / App reset link.
     if token.trim().starts_with(skin::invites::INVITE_PREFIX) {
@@ -3420,17 +3449,27 @@ pub fn handle_password_reset(body: &[u8]) -> CliResponse {
     }
 }
 
-/// Session `k2skn_` only. Body `{oldPassword, password}` — no username.
-/// Platform 403. Success revokes all session=1 including caller.
-pub fn handle_password_change(body: &[u8], presented: Option<&str>) -> CliResponse {
-    let Some(raw) = presented.map(str::trim).filter(|s| !s.is_empty()) else {
+/// Session `k2skn_` only. Body `{oldPassword, password, stay?}` — no
+/// username. Platform 403. Success revokes all session=1 including the
+/// caller's; with `stay: true` (app-user-profile §3.6.1) every other
+/// session and device sign-in of the person ends and the caller's pass and
+/// its device sign-in stay (`{ok, stayed: true}`, which the browser helper
+/// reads to keep its cookie, vs-live U3).
+///
+/// `pass`: the presented pass as the dispatcher resolved it on the
+/// request's own task (an App's link admits only a guest session of that
+/// App, AR50). Wrong current passwords count per person (5 per 15 min,
+/// then `429 rate_limited` + `retryAfterSecs` before any argon2; the
+/// route adds 500 ms to a 401), never toward the login lockout.
+pub fn handle_password_change(body: &[u8], presented: Option<&str>, pass: Option<skin::SkinPass>) -> CliResponse {
+    if presented.map(str::trim).filter(|s| !s.is_empty()).is_none() {
         return CliResponse {
             status: "401 Unauthorized",
             content_type: "application/json",
             body: r#"{"error":"invalid or revoked skin token"}"#.to_string(),
         };
-    };
-    let Some(pass) = skin::resolve_skin_token(raw) else {
+    }
+    let Some(pass) = pass else {
         return CliResponse {
             status: "401 Unauthorized",
             content_type: "application/json",
@@ -3455,12 +3494,48 @@ pub fn handle_password_change(body: &[u8], presented: Option<&str>) -> CliRespon
     if password.is_empty() || password.len() < skin::PUBLIC_PASSWORD_MIN_LEN {
         return CliResponse::bad_request("password must be at least 8 characters");
     }
-    if !skin::verify_principal_password(&pass.username, old) {
-        return change_failed();
+    if skin::password_too_long(password.trim()) {
+        return password_too_long_response();
+    }
+    let stay = match v.get("stay") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(_) => return CliResponse::bad_request("stay must be true or false"),
+    };
+    let principal_id = pass.principal_id.clone().unwrap_or_default();
+    match skin::check_current_password(&principal_id, &pass.username, old) {
+        skin::CurrentPassword::Ok => {}
+        skin::CurrentPassword::Wrong => return change_failed(),
+        skin::CurrentPassword::Throttled { retry_after_secs } => return current_password_throttled(retry_after_secs),
+    }
+    if stay {
+        return match skin::set_principal_password_staying(&pass.username, password, &pass.id) {
+            Ok(_) => CliResponse::ok_json(r#"{"ok":true,"stayed":true}"#.to_string()),
+            Err(e) => CliResponse::internal_error(e),
+        };
     }
     match skin::set_principal_password(&pass.username, Some(password)) {
         Ok(_) => CliResponse::ok_json(r#"{"ok":true}"#.to_string()),
         Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+/// `429 rate_limited` for too many wrong current passwords (vs-live U5 a,
+/// U19: the catalog's own `rate_limited` code). The body carries
+/// `retryAfterSecs`; the route also sends `Retry-After`.
+pub fn current_password_throttled(retry_after_secs: i64) -> CliResponse {
+    CliResponse {
+        status: "429 Too Many Requests",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "rate_limited",
+                "hint": "too many wrong current passwords: wait, then try again",
+                "retryAfterSecs": retry_after_secs,
+            },
+        })
+        .to_string(),
     }
 }
 
@@ -3485,7 +3560,7 @@ mod tests {
             (br#"{"username":"a","password":"x","appId":"svc-b"}"#, "application/json"),
             (br#"{"username":"a","password":"x"}"#, "application/json"),
         ] {
-            let r = handle_login_on(body, ct, Some("svc-a"));
+            let r = handle_login_on(body, ct, Some("svc-a"), None);
             assert!(r.response.status.starts_with("403"), "{}: {} {}", String::from_utf8_lossy(body), r.response.status, r.response.body);
             let v: serde_json::Value = serde_json::from_str(&r.response.body).expect("json");
             assert_eq!(v["error"]["code"], "app_mismatch", "{v}");

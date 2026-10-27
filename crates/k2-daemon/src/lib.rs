@@ -342,6 +342,7 @@ pub mod skin_routes;
 // Room-scope R6: `GET /cli/skin/me` (lane 4, 0.46.1).
 pub mod skin_me_routes;
 pub mod app_mobile_routes;
+pub mod app_profile_routes;
 // Push notifications for custom Apps (prd-custom-app-push-v1, 0.46.4).
 pub mod app_push;
 // Email Notifications (prd-email-notifications-core-v1, 0.46.5): K2's

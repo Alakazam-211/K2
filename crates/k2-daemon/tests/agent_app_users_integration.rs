@@ -1018,10 +1018,19 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     let t2 = tie_of(&u2).expect("an App key's person is tied (Q3)");
     assert_eq!((t2.workspace_id.as_str(), t2.reasons.clone()), (sales.id.as_str(), vec!["app_key".to_string()]));
     assert!(t2.set_by.starts_with("app-key:"), "{t2:?}");
-    // An owner reset waiting for u2 is never voided by the App's own reset.
+    // An owner reset waiting for u2 is never voided by the App's own reset;
+    // while it is live the App's reset waits for it (app-user-profile
+    // §5.4): nothing tied anew, minted or mailed.
     let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u2, "code": true })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let owner_tok = r.json()["link"].as_str().unwrap().split('#').nth(1).unwrap().to_string();
+    let r = bearer_post(port, &format!("/v1/apps/{shop}/users/password-reset"), &key, json!({ "username": u2 })).await;
+    assert_eq!((r.status, r.json()["error"]["code"].as_str()), (409, Some("owner_reset_pending")), "{}", r.body);
+    assert!(mails_to(&rec, &e2).is_empty(), "nothing mailed while the owner's reset is live");
+    // Once the owner's link has run out, the App's own reset goes again.
+    skin_db()
+        .execute("UPDATE app_user_invites SET expires_at = 1 WHERE principal_id = ?1 AND purpose = 'owner_reset'", [principal_id(&u2)])
+        .unwrap();
     let r = bearer_post(port, &format!("/v1/apps/{shop}/users/password-reset"), &key, json!({ "username": u2 })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["delivered"], "sent", "{}", r.body);

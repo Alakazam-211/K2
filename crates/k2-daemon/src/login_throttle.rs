@@ -41,6 +41,15 @@ pub const CAPACITY: usize = 4096;
 /// Skin door prefix — Connect and skin guesses must not share a bucket
 /// (and live in separate tables).
 pub const SKIN_KEY_PREFIX: &str = "skin:";
+/// Password-reset door prefix (app-user-profile P0, vs-live U5 d / U21):
+/// its own table and ceiling, so a reset spray never closes logins and a
+/// login spray never closes resets.
+pub const RESET_KEY_PREFIX: &str = "reset:";
+/// Reset POSTs per client address per [`WINDOW_SECS`].
+pub const RESET_LIMIT: usize = 10;
+/// Reset POSTs through one App's link per [`WINDOW_SECS`] (the link
+/// carries no client address: one bucket per App).
+pub const RESET_LINK_LIMIT: usize = 30;
 
 /// LM4 — failed logins per [`WINDOW_SECS`], per door, across every
 /// ANONYMOUS client: a login whose client address the daemon cannot vouch
@@ -61,6 +70,8 @@ pub const GLOBAL_FAIL_LIMIT: usize = 60;
 pub enum Door {
     Connect,
     Skin,
+    /// The public password-reset routes (their own budget).
+    Reset,
 }
 
 /// Whether this attempt may proceed to argon2.
@@ -143,10 +154,12 @@ fn prune_queue(q: &mut VecDeque<i64>, now: i64) {
 struct Store {
     connect: Table,
     skin: Table,
+    reset: Table,
     /// LM4 — timestamps of recent anonymous failures per door (oldest
     /// first), capped at [`GLOBAL_FAIL_LIMIT`] entries.
     connect_fails: VecDeque<i64>,
     skin_fails: VecDeque<i64>,
+    reset_fails: VecDeque<i64>,
 }
 
 impl Store {
@@ -154,6 +167,17 @@ impl Store {
         match door {
             Door::Connect => &mut self.connect_fails,
             Door::Skin => &mut self.skin_fails,
+            Door::Reset => &mut self.reset_fails,
+        }
+    }
+
+    fn table(&mut self, key: &str) -> &mut Table {
+        if key.starts_with(SKIN_KEY_PREFIX) {
+            &mut self.skin
+        } else if key.starts_with(RESET_KEY_PREFIX) {
+            &mut self.reset
+        } else {
+            &mut self.connect
         }
     }
 }
@@ -213,12 +237,7 @@ impl LoginLimiter {
     pub fn check_and_record_with_limit(&self, key: &str, limit: usize, now: i64) -> Verdict {
         let key = if key.is_empty() { "-" } else { key };
         let mut g = self.locked();
-        let table = if key.starts_with(SKIN_KEY_PREFIX) {
-            &mut g.skin
-        } else {
-            &mut g.connect
-        };
-        table.check_and_record(key, limit, now)
+        g.table(key).check_and_record(key, limit, now)
     }
 
     /// Is `key` at or over `limit` hits in the window ending at `now`?
@@ -226,7 +245,7 @@ impl LoginLimiter {
     pub fn is_limited(&self, key: &str, limit: usize, now: i64) -> bool {
         let key = if key.is_empty() { "-" } else { key };
         let mut g = self.locked();
-        let table = if key.starts_with(SKIN_KEY_PREFIX) { &mut g.skin } else { &mut g.connect };
+        let table = g.table(key);
         table.prune_key(key, now);
         table.hits.get(key).is_some_and(|q| q.len() >= limit)
     }
@@ -268,6 +287,12 @@ impl LoginLimiter {
         (g.connect.hits.len(), g.skin.hits.len())
     }
 
+    /// Reset-door keys currently tracked (tests).
+    #[allow(dead_code)]
+    pub fn tracked_reset_keys(&self) -> usize {
+        self.locked().reset.hits.len()
+    }
+
     /// Drop all throttle state (tests only; a test that wants a clean
     /// limiter mid-test).
     #[allow(dead_code)]
@@ -275,9 +300,22 @@ impl LoginLimiter {
         let mut g = self.locked();
         g.connect.hits.clear();
         g.skin.hits.clear();
+        g.reset.hits.clear();
         g.connect_fails.clear();
         g.skin_fails.clear();
+        g.reset_fails.clear();
     }
+}
+
+/// Reset-door key for one client address: `"reset:" + ip`.
+pub fn reset_ip_key(ip: &str) -> String {
+    let ip = if ip.is_empty() { "-" } else { ip };
+    format!("{RESET_KEY_PREFIX}{ip}")
+}
+
+/// Reset-door key for one App's link: `"reset:app:" + service id`.
+pub fn reset_link_key(service_id: &str) -> String {
+    format!("{RESET_KEY_PREFIX}app:{service_id}")
 }
 
 /// Skin login map key: `"skin:" + ip`. Empty aliases `-` like Connect.

@@ -113,6 +113,14 @@ pub mod access;
 /// settings (prd-custom-app-push-v1, 0.46.4).
 #[path = "skin_app_push.rs"]
 pub mod app_push;
+/// In-memory guards on the password doors: hash slots, wrong current
+/// passwords, forgot throttles, reset mail budgets (app-user-profile P0).
+#[path = "skin_guard.rs"]
+pub mod guard;
+/// App user profile: per-App profile settings, names and picture, the
+/// session list (prd-app-user-profile-v1, 0.46.5).
+#[path = "skin_profile.rs"]
+pub mod profile;
 pub use paths::{RoomPathScope, RoomPaths};
 
 /// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).
@@ -295,6 +303,17 @@ const LOCKOUT_DURATION_SECS: i64 = 15 * 60;
 /// Public consume/change min length (Connect default). Owner `users/password`
 /// empty still clears via [`set_principal_password`].
 pub const PUBLIC_PASSWORD_MIN_LEN: usize = 8;
+/// Longest password any door takes, in bytes (an argon2 input bound;
+/// app-user-profile §6.1). Login is not capped (a longer password the
+/// owner set before this still signs in).
+pub const MAX_PASSWORD_BYTES: usize = 256;
+/// The refusal text for a password over [`MAX_PASSWORD_BYTES`].
+pub const PASSWORD_TOO_LONG: &str = "password must be at most 256 bytes";
+
+/// True when `password` is over [`MAX_PASSWORD_BYTES`].
+pub fn password_too_long(password: &str) -> bool {
+    password.len() > MAX_PASSWORD_BYTES
+}
 const RESET_TTL_SECS: i64 = 60 * 60;
 const RESET_THROTTLE_SECS: i64 = 60;
 
@@ -714,6 +733,7 @@ fn password_is_set(hash: Option<&str>) -> bool {
 }
 
 fn hash_password(password: &str) -> Result<String, String> {
+    let _slot = guard::hash_slot();
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
@@ -726,12 +746,14 @@ fn verify_hash(password: &str, hash: &str) -> bool {
         Ok(h) => h,
         Err(_) => return false,
     };
+    let _slot = guard::hash_slot();
     Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .is_ok()
 }
 
 fn build_dummy_hash() -> String {
+    let _slot = guard::hash_slot();
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
         .hash_password(b"k2-skin-dummy-verify-target", &salt)
@@ -1494,6 +1516,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // prd-custom-app-push-v1 (0.46.4): push devices and per-App push
     // settings. Additive, no numbered step.
     app_push::ensure_schema(&conn)?;
+    // app-user-profile (0.46.5): profile settings, profiles, session
+    // meta. Additive, no numbered step (a 0.46.4 ignores them).
+    profile::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;
@@ -2762,7 +2787,27 @@ pub fn set_principal_password_tied(
     password: Option<&str>,
     tie: Option<ties::TieWrite<'_>>,
 ) -> Result<SkinPrincipal, String> {
+    set_principal_password_inner(username, password, tie, None)
+}
+
+/// A person changes their own password and stays signed in where they
+/// are (`password.change {stay: true}`, app-user-profile §3.6.1): every
+/// other login session and device sign-in of theirs ends, on every App;
+/// the pass `keep_token_id` and the device sign-in it belongs to stay.
+pub fn set_principal_password_staying(username: &str, password: &str, keep_token_id: &str) -> Result<SkinPrincipal, String> {
+    set_principal_password_inner(username, Some(password), None, Some(keep_token_id))
+}
+
+fn set_principal_password_inner(
+    username: &str,
+    password: Option<&str>,
+    tie: Option<ties::TieWrite<'_>>,
+    keep_token_id: Option<&str>,
+) -> Result<SkinPrincipal, String> {
     let username = normalize_username(username)?;
+    if password.is_some_and(|pw| password_too_long(pw.trim())) {
+        return Err(PASSWORD_TOO_LONG.to_string());
+    }
     let hash = match password.map(str::trim).filter(|s| !s.is_empty()) {
         Some(pw) => Some(hash_password(pw)?),
         None => None,
@@ -2781,7 +2826,18 @@ pub fn set_principal_password_tied(
             params![hash, p.id],
         )
         .map_err(|e| format!("skin password update: {e}"))?;
-        revoke_sessions_for_principal(&tx, &p.id)?;
+        match keep_token_id {
+            Some(keep) => {
+                revoke_sessions_for_principal_except(&tx, &p.id, keep, None)?;
+            }
+            None => {
+                revoke_sessions_for_principal(&tx, &p.id)?;
+            }
+        }
+        // U4: a new password voids the person's unused reset and invite
+        // links (they went out for the old one); the owner's live reset
+        // stays (only its own use, or the owner, ends it).
+        invites::void_unused_conn(&tx, &p.id, invites::Void::KeepOwnerReset, None)?;
         tx.commit().map_err(|e| format!("skin password commit: {e}"))?;
         Ok(SkinPrincipal {
             id: p.id,
@@ -2896,6 +2952,7 @@ pub fn set_principal_full_name_as(
     full_name: Option<&str>,
     actor: &str,
 ) -> Result<SkinPrincipal, String> {
+    let by_self = actor.trim().starts_with(profile::SELF_ACTOR_PREFIX);
     let actor = hook_actor(Some(actor));
     let username = normalize_username(username)?;
     let full_name = full_name
@@ -2914,6 +2971,8 @@ pub fn set_principal_full_name_as(
             params![full_name, p.id],
         )
         .map_err(|e| format!("skin full name update: {e}"))?;
+        // U24: who set it (the person themselves, or the owner / an agent).
+        profile::mark_name_conn(&tx, &p.id, by_self)?;
         let out = SkinPrincipal {
             id: p.id,
             username: p.username,
@@ -3182,6 +3241,53 @@ fn revoke_sessions_for_principal(conn: &Connection, principal_id: &str) -> Resul
     Ok(n)
 }
 
+/// End every live login session and device sign-in of one principal but
+/// the pass `keep_token_id` and the device sign-in it belongs to:
+/// `app = None` on every App (password change with `stay`), `Some(app)`
+/// on that App only (`profile.signOutOthers`). Sew ends exactly the
+/// sessions that ended (`skn_<id>` each), never the kept one; push devices
+/// of the ended passes and sign-ins go too. Returns how many ended
+/// (sessions + device sign-ins).
+pub(crate) fn revoke_sessions_for_principal_except(
+    conn: &Connection,
+    principal_id: &str,
+    keep_token_id: &str,
+    app: Option<&str>,
+) -> Result<usize, String> {
+    let keep_chain: String = conn
+        .query_row(
+            "SELECT id FROM device_logins WHERE session_token_id = ?1 AND principal_id = ?2 AND revoked_at IS NULL",
+            params![keep_token_id, principal_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("skin session keep: {e}"))?
+        .unwrap_or_default();
+    let app = app.unwrap_or("");
+    let ended = live_session_rows(
+        conn,
+        "principal_id = ?1 AND id != ?2 AND (?3 = '' OR COALESCE(app_service_id, ?4) = ?3)",
+        &[&principal_id, &keep_token_id, &app, &HOST_APP_ID],
+    )?;
+    let n = conn
+        .execute(
+            "UPDATE tokens SET revoked_at = ?1
+             WHERE principal_id = ?2 AND session = 1 AND revoked_at IS NULL AND id != ?3
+               AND (?4 = '' OR COALESCE(app_service_id, ?5) = ?4)",
+            params![now_secs(), principal_id, keep_token_id, app, HOST_APP_ID],
+        )
+        .map_err(|e| format!("skin session revoke: {e}"))?;
+    let chains = app_login::end_chains_where(
+        conn,
+        "principal_id = ?3 AND id != ?4 AND (?5 = '' OR app_id = ?5)",
+        &[&principal_id, &keep_chain, &app],
+        app_login::REASON_SESSIONS_ENDED,
+    )?;
+    enqueue_session_revokes(conn, &ended)?;
+    app_push::prune_principal_conn(conn, principal_id)?;
+    Ok(n + chains)
+}
+
 /// End one principal's live login sessions bound to one App (S24-6). An old
 /// session row with no App is a `host` session. Sew ends the chat
 /// sessions minted from exactly those (`skn_<id>` each).
@@ -3235,32 +3341,13 @@ pub fn revoke_sessions_for_app(service_id: &str) -> Result<usize, String> {
 
 /// 60s per lowercase/trim username string (even when no user). True = 429.
 /// Does not look up principals. Call after auth 403, before mint lookup.
+///
+/// Memory only (vs-live U9): an unauthenticated request never writes a
+/// skin.db row for the name it typed (`password_reset_throttle` stays for
+/// an older K2 and is no longer written). Restart-resets, bounded.
 pub fn password_reset_throttled(username: &str) -> Result<bool, String> {
     let key = username.trim().to_ascii_lowercase();
-    let now = now_secs();
-    with_conn(|conn| {
-        let last: Option<i64> = conn
-            .query_row(
-                "SELECT last_attempt FROM password_reset_throttle WHERE username = ?1",
-                params![key],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| format!("skin reset throttle lookup: {e}"))?;
-        if let Some(last) = last {
-            if now.saturating_sub(last) < RESET_THROTTLE_SECS {
-                return Ok(true);
-            }
-        }
-        conn.execute(
-            "INSERT INTO password_reset_throttle (username, last_attempt)
-             VALUES (?1, ?2)
-             ON CONFLICT(username) DO UPDATE SET last_attempt = excluded.last_attempt",
-            params![key, now],
-        )
-        .map_err(|e| format!("skin reset throttle set: {e}"))?;
-        Ok(false)
-    })
+    Ok(guard::forgot_throttled(&key, RESET_THROTTLE_SECS))
 }
 
 /// Privileged forgot hit. Miss is `Ok(None)` (HTTP `{ok:true}` no extra keys).
@@ -3371,11 +3458,28 @@ pub fn consume_password_reset(token: &str, password: &str) -> Result<SkinResetCo
     if password.trim().is_empty() {
         return Err("password must not be empty".to_string());
     }
+    if password_too_long(password.trim()) {
+        return Err(PASSWORD_TOO_LONG.to_string());
+    }
     let token_hash = sha256_hex(token);
-    // argon2 before the skin mutex, like `set_principal_password`; it also
-    // stands in for the dummy verify on a miss (same cost either way).
-    let pw_hash = hash_password(password.trim())?;
     let now = now_secs();
+    // U5 (b): look the token up BEFORE hashing. A 256-bit token needs no
+    // timing cover, and a junk request must never cost an argon2 run (the
+    // route adds its 500 ms on every miss). The compare-and-set below
+    // decides; this only spares the hash.
+    let live: bool = with_conn(|conn| {
+        conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM password_reset_tokens WHERE token_hash = ?1 AND used_at IS NULL AND expires_at > ?2)",
+            params![token_hash, now],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("skin reset consume lookup: {e}"))
+    })?;
+    if !live {
+        return Ok(SkinResetConsume::BadToken);
+    }
+    // argon2 before the skin mutex, like `set_principal_password`.
+    let pw_hash = hash_password(password.trim())?;
     let used = with_conn(|conn| {
         let tx = immediate_tx(conn)?;
         let row: Option<(String, String)> = tx
@@ -3402,6 +3506,11 @@ pub fn consume_password_reset(token: &str, password: &str) -> Result<SkinResetCo
         tx.execute("UPDATE principals SET password_hash = ?1 WHERE id = ?2", params![pw_hash, principal_id])
             .map_err(|e| format!("skin password update: {e}"))?;
         revoke_sessions_for_principal(&tx, &principal_id)?;
+        // U4 / U7: the other unused links go, and the person proved their
+        // mailbox, so their login lockout ends, in this same transaction
+        // (`clear_login_lockout` would take the skin mutex again).
+        invites::void_unused_conn(&tx, &principal_id, invites::Void::KeepOwnerReset, None)?;
+        clear_lockouts_for_principal_conn(&tx, &principal_id)?;
         tx.commit().map_err(|e| format!("skin reset commit: {e}"))?;
         Ok(true)
     })?;
@@ -3413,6 +3522,32 @@ pub fn consume_password_reset(token: &str, password: &str) -> Result<SkinResetCo
 /// pass for a guest it may not touch).
 pub fn reset_miss_dummy() {
     dummy_verify("k2-skin-dummy-verify-target");
+}
+
+/// What a current-password check found (vs-live U5 a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CurrentPassword {
+    Ok,
+    Wrong,
+    /// Too many wrong answers for this person lately: refused before any
+    /// argon2 run.
+    Throttled { retry_after_secs: i64 },
+}
+
+/// Check `password` is the current password of `principal_id`
+/// (`username`), counting wrong answers per person ([`guard`]: 5 per 15
+/// minutes, then [`CurrentPassword::Throttled`]). Its own counter, never
+/// the login lockout.
+pub fn check_current_password(principal_id: &str, username: &str, password: &str) -> CurrentPassword {
+    if let Some(retry_after_secs) = guard::current_password_blocked(principal_id) {
+        return CurrentPassword::Throttled { retry_after_secs };
+    }
+    if verify_principal_password(username, password) {
+        CurrentPassword::Ok
+    } else {
+        guard::record_wrong_current_password(principal_id);
+        CurrentPassword::Wrong
+    }
 }
 
 /// Verify a guest's current password. Dummy argon2 on miss / NULL hash.
@@ -3529,6 +3664,23 @@ pub fn login_principal_username(presented: &str) -> Result<Option<String>, Strin
     let presented = presented.trim().to_ascii_lowercase();
     with_conn(|conn| Ok(lookup_login_principal(conn, &presented)?.map(|p| p.username)))
 }
+
+/// Delete every `login_lockouts` row of one principal (its username row
+/// and its email row, which is every key a login for it counts on), on
+/// the caller's connection: a used reset or invite link (vs-live U7, Q4:
+/// the person proved their mailbox). The owner's password set never
+/// calls this (Rosson 2026-09-29: set and unlock stay apart).
+pub(crate) fn clear_lockouts_for_principal_conn(conn: &Connection, principal_id: &str) -> Result<usize, String> {
+    let row: Option<(String, Option<String>)> = conn
+        .query_row("SELECT username, email FROM principals WHERE id = ?1", params![principal_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()
+        .map_err(|e| format!("skin lockout clear: {e}"))?;
+    let Some((username, email)) = row else { return Ok(0) };
+    let email = email.map(|e| e.trim().to_ascii_lowercase()).filter(|e| !e.is_empty()).unwrap_or_else(|| username.clone());
+    conn.execute("DELETE FROM login_lockouts WHERE username IN (?1, ?2)", params![username, email])
+        .map_err(|e| format!("skin lockout clear: {e}"))
+}
+
 
 pub fn clear_login_lockout(username: &str) -> Result<(String, bool), String> {
     let key = login_lockout_key(username);
@@ -6569,6 +6721,8 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
         let row = row.map(|(mut pass, tie)| {
             if pass.session {
                 pass.room_paths = paths::session_paths(conn, &pass);
+                // app-user-profile §3.7: last used, in memory only.
+                profile::touch(&pass.id);
             }
             (pass, tie)
         });
@@ -8485,15 +8639,13 @@ mod tests {
                 !password_reset_throttled("cara").unwrap(),
                 "other username is a different slot"
             );
-            with_conn(|conn| {
-                conn.execute(
-                    "UPDATE password_reset_throttle SET last_attempt = 1 WHERE username = 'ghost-user'",
-                    [],
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(())
+            // vs-live U9: a typed name never becomes a skin.db row.
+            let rows: i64 = with_conn(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM password_reset_throttle", [], |r| r.get(0)).map_err(|e| e.to_string())
             })
             .unwrap();
+            assert_eq!(rows, 0, "the forgot clock is memory only");
+            guard::expire_forgot("ghost-user", 60);
             assert!(
                 !password_reset_throttled("ghost-user").unwrap(),
                 "window elapsed allows another attempt"

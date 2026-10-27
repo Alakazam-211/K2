@@ -102,6 +102,7 @@ pub fn handle_refresh(body: &[u8]) -> CliResponse {
     };
     match app_login::refresh(raw, text(&v, &["app", "appId"])) {
         Ok(app_login::Refresh::Ok(d)) => {
+            skin::profile::record_session(&d.session.meta.id, skin::profile::VIA_REFRESH, Some(&d.device.name));
             let principal_id = skin::resolve_skin_token(&d.session.raw).and_then(|p| p.principal_id).unwrap_or_default();
             CliResponse::ok_json(device_session_json(&d, &principal_id).to_string())
         }

@@ -222,6 +222,11 @@
     {"code": "needs_editor", "doc": "Garden access lists on: this widget version isn't signed by the person, K2 or an agent on this Garden's list, so only its own store and save keyspace and widget.self answer. Someone who edits this Garden has to sign this version."},
     {"code": "retired", "doc": "K2 retired this verb: it answers this until a later release removes it (the message says which)."},
     {"code": "card_person_only", "doc": "Only a person answers a card (the Thread tab, the phone, an App's sign-in with the guest's own pass). An agent, a K2 terminal, an App's own pass or a platform pass never can; an agent closes its own card with k2 thread void."},
+    {"code": "edit_off", "doc": "The App (or this server) doesn't let people change that part of their profile; the error names the field."},
+    {"code": "type_refused", "doc": "A picture type K2 doesn't take (only PNG, JPEG or WebP; never SVG or GIF)."},
+    {"code": "type_mismatch", "doc": "The picture's bytes aren't the type its data URL declares."},
+    {"code": "bad_image", "doc": "The picture couldn't be read (damaged, too many pixels, or it wouldn't fit in 64 KiB)."},
+    {"code": "agent_login", "doc": "An agent's own login reads its profile but never changes it; the owner manages it (k2 app user …)."},
     {"code": "email_off", "doc": "This App doesn't send email: its owner turns it on with a sender (k2 app email on), or the server's switch is off."},
     {"code": "no_sender", "doc": "This App has no sender: its owner grants one (k2 app email on <app> --sender <address>)."},
     {"code": "sender_not_granted", "doc": "from names a sender this App wasn't granted; omit from to use the App's own."},
@@ -6598,8 +6603,7 @@
       "bindings": {
         "http": {
           "method": "POST",
-          "route": "/cli/skin/password/change",
-          "door": "helper"
+          "route": "/cli/skin/password/change"
         }
       },
       "request": [
@@ -6613,6 +6617,10 @@
             "password": {
               "type": "string",
               "description": "At least 8 characters."
+            },
+            "stay": {
+              "type": "boolean",
+              "description": "true: every other session and device of this person ends and this one stays (answers stayed: true). Left out: every session ends, this one too."
             }
           },
           "required": [
@@ -6623,11 +6631,15 @@
         }
       ],
       "response": {
-        "title": "AppOk",
+        "title": "AppPasswordChanged",
         "type": "object",
         "properties": {
           "ok": {
             "type": "boolean"
+          },
+          "stayed": {
+            "type": "boolean",
+            "description": "This pass stayed signed in (stay: true)."
           }
         },
         "required": [
@@ -6641,10 +6653,11 @@
         "pass_wrong_link",
         "usage",
         "bad_login",
+        "rate_limited",
         "failed"
       ],
-      "doc": "A guest changes their own password (browser only: it ends every session of theirs).",
-      "example": "await fetch('/cli/skin/password/change', {method: 'POST', body})"
+      "doc": "A guest changes their own password (5 wrong current passwords per 15 minutes, then rate_limited); stay: true keeps this pass signed in.",
+      "example": "await k2.asGuest(pass).password.change({oldPassword, password, stay: true})"
     },
     {
       "verb": "wallet.list",
@@ -8246,6 +8259,809 @@
       ],
       "doc": "Sign one of this guest's own devices out (its pass and refresh token end).",
       "example": "await k2.asGuest(pass).guests.revokeDevice({id})"
+    },
+    {
+      "verb": "profile.get",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-user-profile-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/profile"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "image": {
+              "type": "string",
+              "description": "1 to include the picture itself."
+            },
+            "ifImageHash": {
+              "type": "string",
+              "description": "The imageHash you have: the picture comes only if it changed."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppProfile",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "username": {
+            "type": "string",
+            "description": "Fixed: never changes."
+          },
+          "fullName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nameSetBySelf": {
+            "type": "boolean",
+            "description": "The person set fullName themselves (K2's own views show the username beside it)."
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A short name the App may show; K2 keeps using fullName."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "imageHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the picture: cache it, and ask again with ifImageHash."
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "data:image/jpeg;base64,… (K2's own re-encode, at most 64 KiB). Present only with image=1, or when ifImageHash differs."
+          },
+          "app": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The role on this App's grant (this App only)."
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "title": "AppProfileRoom",
+              "type": "object",
+              "properties": {
+                "room": {
+                  "type": "string"
+                },
+                "handle": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The agent's display name."
+                }
+              },
+              "required": [
+                "room",
+                "handle",
+                "name"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Account made, seconds since the epoch."
+          },
+          "lastSignInAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Last sign-in to this App (not a refresh), seconds since the epoch; null before the first since 0.46.5."
+          },
+          "hasPassword": {
+            "type": "boolean"
+          },
+          "test": {
+            "type": "boolean",
+            "description": "A test guest (names and picture only; never a reset)."
+          },
+          "agentLogin": {
+            "type": "boolean",
+            "description": "An agent's own login: reads only."
+          },
+          "can": {
+            "title": "AppProfileCan",
+            "type": "object",
+            "properties": {
+              "editNames": {
+                "type": "boolean"
+              },
+              "editImage": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "editNames",
+              "editImage"
+            ],
+            "additionalProperties": false
+          },
+          "counts": {
+            "title": "AppProfileCounts",
+            "type": "object",
+            "properties": {
+              "sessions": {
+                "type": "integer"
+              },
+              "devices": {
+                "type": "integer"
+              },
+              "pushDevices": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sessions",
+              "devices",
+              "pushDevices"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "username",
+          "fullName",
+          "nameSetBySelf",
+          "displayName",
+          "email",
+          "imageHash",
+          "app",
+          "role",
+          "rooms",
+          "createdAt",
+          "lastSignInAt",
+          "hasPassword",
+          "test",
+          "agentLogin",
+          "can",
+          "counts"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "failed"
+      ],
+      "doc": "This person's own profile in this App: names, email, picture hash, role and rooms here, sessions count, and what they may change.",
+      "example": "const me = await k2.asGuest(pass).profile.get({image: '1'})"
+    },
+    {
+      "verb": "profile.update",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-user-profile-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/profile"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "fullName": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Up to 64 characters; null or \"\" clears it. One name per person across Apps."
+            },
+            "displayName": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Up to 32 characters; null or \"\" clears it."
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppProfileUpdated",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "profile": {
+            "title": "AppProfile",
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "username": {
+                "type": "string",
+                "description": "Fixed: never changes."
+              },
+              "fullName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nameSetBySelf": {
+                "type": "boolean",
+                "description": "The person set fullName themselves (K2's own views show the username beside it)."
+              },
+              "displayName": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A short name the App may show; K2 keeps using fullName."
+              },
+              "email": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "imageHash": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "SHA-256 of the picture: cache it, and ask again with ifImageHash."
+              },
+              "image": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "data:image/jpeg;base64,… (K2's own re-encode, at most 64 KiB). Present only with image=1, or when ifImageHash differs."
+              },
+              "app": {
+                "type": "string"
+              },
+              "role": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The role on this App's grant (this App only)."
+              },
+              "rooms": {
+                "type": "array",
+                "items": {
+                  "title": "AppProfileRoom",
+                  "type": "object",
+                  "properties": {
+                    "room": {
+                      "type": "string"
+                    },
+                    "handle": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The agent's display name."
+                    }
+                  },
+                  "required": [
+                    "room",
+                    "handle",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "createdAt": {
+                "type": "integer",
+                "description": "Account made, seconds since the epoch."
+              },
+              "lastSignInAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Last sign-in to this App (not a refresh), seconds since the epoch; null before the first since 0.46.5."
+              },
+              "hasPassword": {
+                "type": "boolean"
+              },
+              "test": {
+                "type": "boolean",
+                "description": "A test guest (names and picture only; never a reset)."
+              },
+              "agentLogin": {
+                "type": "boolean",
+                "description": "An agent's own login: reads only."
+              },
+              "can": {
+                "title": "AppProfileCan",
+                "type": "object",
+                "properties": {
+                  "editNames": {
+                    "type": "boolean"
+                  },
+                  "editImage": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "editNames",
+                  "editImage"
+                ],
+                "additionalProperties": false
+              },
+              "counts": {
+                "title": "AppProfileCounts",
+                "type": "object",
+                "properties": {
+                  "sessions": {
+                    "type": "integer"
+                  },
+                  "devices": {
+                    "type": "integer"
+                  },
+                  "pushDevices": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "sessions",
+                  "devices",
+                  "pushDevices"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "ok",
+              "username",
+              "fullName",
+              "nameSetBySelf",
+              "displayName",
+              "email",
+              "imageHash",
+              "app",
+              "role",
+              "rooms",
+              "createdAt",
+              "lastSignInAt",
+              "hasPassword",
+              "test",
+              "agentLogin",
+              "can",
+              "counts"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "profile"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "usage",
+        "edit_off",
+        "agent_login",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "This person changes their own full name and display name, where the App allows it (20 changes per 10 minutes).",
+      "example": "await k2.asGuest(pass).profile.update({fullName: 'Dana Ruiz'})"
+    },
+    {
+      "verb": "profile.setImage",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-user-profile-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/profile/image"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "image": {
+              "type": "string",
+              "description": "data:image/png|jpeg|webp;base64,… up to 2 MiB; K2 turns it upright, shrinks it to 256 px and stores its own JPEG (no EXIF)."
+            }
+          },
+          "required": [
+            "image"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppProfileImage",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "image": {
+            "type": "string",
+            "description": "The stored picture, data:image/jpeg;base64,…"
+          },
+          "imageHash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "image",
+          "imageHash"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "usage",
+        "edit_off",
+        "agent_login",
+        "type_refused",
+        "type_mismatch",
+        "bad_image",
+        "too_large",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "This person sets their own picture, where the App allows it.",
+      "example": "await k2.asGuest(pass).profile.setImage({image: dataUrl})"
+    },
+    {
+      "verb": "profile.clearImage",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-user-profile-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/profile/image/clear"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "edit_off",
+        "agent_login",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "This person removes their own picture, where the App allows it.",
+      "example": "await k2.asGuest(pass).profile.clearImage()"
+    },
+    {
+      "verb": "profile.sessions",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-user-profile-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/sessions"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppSessions",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "title": "AppSession",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "What profile.revokeSession takes: ses_… for a browser (opaque; list again after a server restart), the device sign-in id for a device (as guests.devices)."
+                },
+                "kind": {
+                  "enum": [
+                    "browser",
+                    "device"
+                  ]
+                },
+                "client": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "A coarse label (\"Safari on macOS\", a device's name, or the clientLabel an App's server gave at login). Never an IP."
+                },
+                "via": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "password, device or refresh; null for a session from before 0.46.5."
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "description": "Signed in, seconds since the epoch."
+                },
+                "lastSeenAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Last used (to about 10 minutes), seconds since the epoch."
+                },
+                "expiresAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Ends unless used before then, seconds since the epoch."
+                },
+                "current": {
+                  "type": "boolean",
+                  "description": "The pass making this call."
+                },
+                "push": {
+                  "type": "boolean",
+                  "description": "A notification device is linked to it."
+                },
+                "pushPlatform": {
+                  "type": "string",
+                  "description": "ios or android, when push is true."
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "client",
+                "via",
+                "createdAt",
+                "lastSeenAt",
+                "expiresAt",
+                "current",
+                "push"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "sessions"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "failed"
+      ],
+      "doc": "The browsers and devices signed in to this App as this person, this one first (never another App's).",
+      "example": "const {sessions} = await k2.asGuest(pass).profile.sessions()"
+    },
+    {
+      "verb": "profile.revokeSession",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-user-profile-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/sessions/revoke"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "A session id from profile.sessions (this one too: that is a logout)."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Sign one of this person's own browsers or devices out of this App.",
+      "example": "await k2.asGuest(pass).profile.revokeSession({id})"
+    },
+    {
+      "verb": "profile.signOutOthers",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-user-profile-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/sessions/revoke-others"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppSignedOut",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "ended": {
+            "type": "integer",
+            "description": "How many sessions and device sign-ins ended."
+          }
+        },
+        "required": [
+          "ok",
+          "ended"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "failed"
+      ],
+      "doc": "Sign this person out of this App everywhere else (their notification devices there go too); this pass stays.",
+      "example": "await k2.asGuest(pass).profile.signOutOthers()"
     },
     {
       "verb": "push.register",

@@ -708,6 +708,88 @@ fn skin_login_client_trust(
     }
 }
 
+/// app-user-profile P0 (vs-live U5 d, U21): may this public reset POST go
+/// on to the token lookup (and, for a live token, argon2)? Its own door in
+/// the limiter: a client address the daemon can vouch for gets
+/// [`crate::login_throttle::RESET_LIMIT`] per window, an App's link one
+/// bucket per App, and anonymous callers share the reset door's own
+/// failure ceiling. `Some(anonymous)` = go on; `None` = 429.
+fn reset_door_admit(
+    limiter: &crate::login_throttle::LoginLimiter,
+    ingress: Ingress,
+    peer: Option<std::net::IpAddr>,
+    headers_blob: &str,
+    trusted: &[std::net::IpAddr],
+    relay: Option<std::net::IpAddr>,
+    link_app: Option<&str>,
+) -> Option<bool> {
+    let now = limiter.now();
+    let bucket = match (ingress, link_app) {
+        (Ingress::App, Some(app)) => Some((crate::login_throttle::reset_link_key(app), crate::login_throttle::RESET_LINK_LIMIT)),
+        (Ingress::App, None) => None,
+        _ => match skin_login_throttle_key(ingress, peer, headers_blob, trusted, relay) {
+            ThrottleKey::Client(ip) => Some((crate::login_throttle::reset_ip_key(&ip), crate::login_throttle::RESET_LIMIT)),
+            ThrottleKey::TunnelShared | ThrottleKey::Uncapped => None,
+        },
+    };
+    if let Some((key, limit)) = bucket {
+        if limiter.check_and_record_with_limit(&key, limit, now) == crate::login_throttle::Verdict::Limited {
+            return None;
+        }
+    }
+    let anonymous = skin_login_client_trust(ingress, peer, headers_blob, trusted, relay).under_global_ceiling();
+    if anonymous && limiter.global_ceiling_reached(crate::login_throttle::Door::Reset, now) {
+        return None;
+    }
+    Some(anonymous)
+}
+
+/// Send `r`, adding `Retry-After` when it is a 429 whose body carries
+/// `error.retryAfterSecs` (or a top-level `retryAfterSecs`).
+async fn send_with_retry_after(stream: &mut tokio::net::TcpStream, r: &crate::cli_response::CliResponse) {
+    if r.status.starts_with("429") {
+        let secs = serde_json::from_str::<serde_json::Value>(&r.body).ok().and_then(|v| {
+            v.pointer("/error/retryAfterSecs").and_then(serde_json::Value::as_i64).or_else(|| v.get("retryAfterSecs").and_then(serde_json::Value::as_i64))
+        });
+        if let Some(secs) = secs {
+            super::http::send_response_with_headers(stream, r.status, r.content_type, &r.body, &format!("Retry-After: {secs}\r\n")).await;
+            return;
+        }
+    }
+    super::http::send_response(stream, r.status, r.content_type, &r.body).await;
+}
+
+#[cfg(test)]
+mod reset_door_tests {
+    use super::*;
+
+    #[test]
+    fn the_reset_door_has_its_own_budget() {
+        let l = crate::login_throttle::LoginLimiter::new();
+        let peer: Option<std::net::IpAddr> = Some("192.0.2.7".parse().expect("ip"));
+        for i in 0..crate::login_throttle::RESET_LIMIT {
+            assert!(reset_door_admit(&l, Ingress::Lan, peer, "", &[], None, None).is_some(), "{i}");
+        }
+        assert!(reset_door_admit(&l, Ingress::Lan, peer, "", &[], None, None).is_none(), "over the per-client reset budget");
+        // Logins from the same address are another door.
+        let skin_key = crate::login_throttle::skin_ip_key("192.0.2.7");
+        assert_eq!(l.check_and_record(&skin_key, l.now()), crate::login_throttle::Verdict::Allow);
+        // An App's link: one bucket per App.
+        for _ in 0..crate::login_throttle::RESET_LINK_LIMIT {
+            assert!(reset_door_admit(&l, Ingress::App, None, "", &[], None, Some("svc-a")).is_some());
+        }
+        assert!(reset_door_admit(&l, Ingress::App, None, "", &[], None, Some("svc-a")).is_none());
+        assert!(reset_door_admit(&l, Ingress::App, None, "", &[], None, Some("svc-b")).is_some(), "another App's link");
+        // The anonymous ceiling is the reset door's own.
+        for _ in 0..crate::login_throttle::GLOBAL_FAIL_LIMIT {
+            l.record_global_failure(crate::login_throttle::Door::Reset, l.now());
+        }
+        assert!(reset_door_admit(&l, Ingress::Tunnel, None, "", &[], None, None).is_none(), "anonymous ceiling");
+        assert!(!l.global_ceiling_reached(crate::login_throttle::Door::Skin, l.now()), "logins keep their own ceiling");
+        assert!(reset_door_admit(&l, Ingress::Loopback, Some("127.0.0.1".parse().expect("ip")), "", &[], None, None).is_some(), "local is never anonymous");
+    }
+}
+
 #[cfg(test)]
 mod login_throttle_key_tests {
     use super::*;
@@ -4550,8 +4632,13 @@ async fn handle_one_request(
             // 0.46.4: the App whose link this login came through (a test
             // guest signs in only there; `skin::test_guests`).
             let link_app = if ingress == Ingress::App { crate::apps::gateway::current().map(|l| l.service_id.clone()) } else { None };
+            // app-user-profile §3.7: the session list's coarse client label.
+            let user_agent = headers_blob.lines().find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                k.trim().eq_ignore_ascii_case("user-agent").then(|| v.trim().chars().take(512).collect::<String>())
+            });
             let r = tokio::task::spawn_blocking(move || {
-                crate::skin_routes::handle_login_on(&body_bytes, &content_type, link_app.as_deref())
+                crate::skin_routes::handle_login_on(&body_bytes, &content_type, link_app.as_deref(), user_agent.as_deref())
             })
             .await
             .unwrap_or_else(|e| crate::skin_routes::SkinLoginReply {
@@ -4664,29 +4751,62 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // app-user-profile P0 (vs-live U5 d, U21): the reset door's own
+            // per-client budget and anonymous ceiling, before any argon2.
+            let trusted_proxies = trusted_proxies_from_env();
+            let relay_ip = relay_client_ip(ingress, stream);
+            let link_app = if ingress == Ingress::App { crate::apps::gateway::current().map(|l| l.service_id.clone()) } else { None };
+            let anonymous = match reset_door_admit(
+                &state.login_limiter,
+                ingress,
+                peer_ip(stream),
+                &headers_blob,
+                &trusted_proxies,
+                relay_ip,
+                link_app.as_deref(),
+            ) {
+                Some(anonymous) => anonymous,
+                None => {
+                    super::http::send_login_rate_limited(&mut *stream).await;
+                    return DispatchOutcome::Done;
+                }
+            };
             let r = tokio::task::spawn_blocking(move || {
                 crate::skin_routes::handle_password_reset(&body_bytes)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             if r.status.starts_with("401") {
+                if anonymous {
+                    state.login_limiter.record_global_failure(crate::login_throttle::Door::Reset, state.login_limiter.now());
+                }
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // POST /cli/skin/password/change — session k2skn_ only (session=1).
+        // The pass resolves on this task (an App's link admits only a guest
+        // session of that App, AR50). A wrong current password: 500 ms, like
+        // login; too many: 429 with Retry-After (app-user-profile P0).
         "/cli/skin/password/change" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let presented = super::http::extract_token(&query).map(str::to_string);
+            let pass = presented
+                .as_deref()
+                .filter(|t| k2_core::skin::is_skin_token(t))
+                .and_then(crate::apps::gateway::resolve_pass);
             let r = tokio::task::spawn_blocking(move || {
-                crate::skin_routes::handle_password_change(&body_bytes, presented.as_deref())
+                crate::skin_routes::handle_password_change(&body_bytes, presented.as_deref(), pass)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
-            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+            if r.status.starts_with("401") {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            send_with_retry_after(&mut *stream, &r).await;
         }
         // GET /cli/presence/roster — S1 (presence/multiplayer arc).
         // AUTHORIZED (owner OR connect-user session) — same gate as
@@ -7406,6 +7526,23 @@ async fn handle_one_request(
             let r = tokio::task::spawn_blocking(move || crate::apps::grace::handle(&p_owned, who, &body_bytes, &params))
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // app-user-profile (0.46.5): an App's profile settings. The owner,
+        // an Admin, or the App's own agent with "manage its Apps' users"
+        // (lower only, its own workspace's Apps; checked in the handler).
+        crate::app_profile_routes::SETTINGS => {
+            let body = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let r = tokio::task::spawn_blocking(move || crate::app_profile_routes::handle_settings(&who, is_post, &body, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // Room-scope R9/R16 (0.46.1): `k2 app members|self|usage|room-names`.
@@ -10135,6 +10272,81 @@ async fn handle_one_request(
                 }
             } else {
                 crate::app_mobile_routes::pass_required()
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // app-user-profile (0.46.5): a person's own profile and sessions.
+        // A guest session pass only (the handler checks), any door.
+        p if crate::app_profile_routes::PASS_ROUTES.contains(&p) => {
+            if crate::app_profile_routes::POST_ROUTES.contains(&p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::app_profile_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::app_profile_routes::too_large();
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let presented = super::http::extract_token(&query);
+            let r = match presented {
+                Some(t) if k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t) => {
+                    // Task-local link context: resolve here, not on the worker.
+                    match crate::apps::gateway::resolve_pass(t) {
+                        Some(pass) => {
+                            let route = p.to_string();
+                            let params = super::http::parse_params(&path, &query);
+                            tokio::task::spawn_blocking(move || crate::app_profile_routes::handle_pass(&route, &pass, is_post, &body, &params))
+                                .await
+                                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                        }
+                        None => crate::skin_routes::revoked_skin_response(),
+                    }
+                }
+                Some(_) => crate::app_profile_routes::guest_required(),
+                None => crate::app_profile_routes::pass_required(),
+            };
+            send_with_retry_after(&mut *stream, &r).await;
+        }
+        // app-user-profile P6 (owner): a person's profile, picture and
+        // sessions as the owner sees and ends them.
+        crate::app_profile_routes::OWNER_PROFILE => {
+            let _ = stream.read(&mut buf).await;
+            let r = if super::http::owner_role_identity(&query, state.token.as_str()).is_some() {
+                let params = super::http::parse_params(&path, &query);
+                tokio::task::spawn_blocking(move || crate::app_profile_routes::handle_owner_profile(&params))
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+            } else {
+                skin_dual_auth_failure(&query, bearer_token.as_deref())
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        p if p == crate::app_profile_routes::OWNER_IMAGE_CLEAR || p == crate::app_profile_routes::OWNER_SESSIONS_REVOKE => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = match super::http::owner_role_identity(&query, state.token.as_str()) {
+                Some(actor) => {
+                    let route = p.to_string();
+                    tokio::task::spawn_blocking(move || {
+                        if route == crate::app_profile_routes::OWNER_IMAGE_CLEAR {
+                            crate::app_profile_routes::handle_owner_image_clear(&body, &actor)
+                        } else {
+                            crate::app_profile_routes::handle_owner_sessions_revoke(&body, &actor)
+                        }
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                None => skin_dual_auth_failure(&query, bearer_token.as_deref()),
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }

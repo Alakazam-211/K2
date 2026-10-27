@@ -262,7 +262,7 @@ describe('the wire', () => {
   it('a browser-only verb and an unknown verb never reach K2', async () => {
     const k2 = client()
     const g = k2.asGuest(GUEST) as unknown as { call: (v: string, a?: unknown) => Promise<unknown> }
-    expect(((await g.call('password.change', { oldPassword: 'a', password: 'b' }).catch((e: unknown) => e)) as K2Error).code).toBe('not_on_link')
+    expect(((await g.call('wallet.list', {}).catch((e: unknown) => e)) as K2Error).code).toBe('not_on_link')
     expect(((await g.call('nope.nope').catch((e: unknown) => e)) as K2Error).code).toBe('unknown_verb')
     expect(gw.seen).toHaveLength(0)
   })

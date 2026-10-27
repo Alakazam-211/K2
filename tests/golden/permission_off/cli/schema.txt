@@ -2369,6 +2369,48 @@ exit: 0
       ]
     },
     {
+      "name": "app profile settings",
+      "usage": "k2 app profile settings <app> [--names on|off] [--image on|off] [--json]",
+      "description": "May an App's people change their own full and display names and their picture (both on by default). The owner or an Admin; the App's own agent with \"manage its Apps' users\" may only turn them off, for its own workspace's Apps. No flags: show them. See k2 study app-profile.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--names", "arg": "on|off", "description": "People may change their names."},
+        {"name": "--image", "arg": "on|off", "description": "People may set and clear their picture."},
+        {"name": "--json", "arg": null, "description": "{ok, settings}."}
+      ]
+    },
+    {
+      "name": "app user show",
+      "usage": "k2 app user show <username> --app <app> [--json]",
+      "description": "Owner only. A person's profile in one App: full name (a self-set one shows the username beside it), display name, email, picture hash, role there, last sign-in, sessions and the App's profile settings.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "The App (required)."},
+        {"name": "--json", "arg": null, "description": "The raw profile JSON."}
+      ]
+    },
+    {
+      "name": "app user image",
+      "usage": "k2 app user image <username> --clear",
+      "description": "Owner only. Remove a person's profile picture (every App shows the same one).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--clear", "arg": null, "description": "Remove it (required)."}
+      ]
+    },
+    {
+      "name": "app user sessions",
+      "usage": "k2 app user sessions <username> --app <app> [--revoke <id> | --revoke-all] [--json]",
+      "description": "Owner only. A person's signed-in browsers and devices in one App (coarse client label, never an IP); --revoke ends one (an id from the list), --revoke-all every one in that App.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "The App (required)."},
+        {"name": "--revoke", "arg": "id", "description": "End one session or device sign-in."},
+        {"name": "--revoke-all", "arg": null, "description": "End every one in that App."},
+        {"name": "--json", "arg": null, "description": "{ok, sessions} or {ok, ended}."}
+      ]
+    },
+    {
       "name": "app user email",
       "usage": "k2 app user email <username> [--email e]",
       "description": "Set or clear an app guest email. Omit or empty --email clears. Needed to mint a password-reset token.",

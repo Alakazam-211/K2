@@ -1,0 +1,61 @@
+$ k2 study app-profile
+exit: 0
+--- stdout
+k2 study app-profile — a person's own profile, picture and sessions in an App
+
+THE MODEL (0.46.5, feature app-user-profile-v1)
+  A person signed in to an App (their own session pass, k2skn_, from
+  guests.login) reads and changes their own account from inside the App:
+  the App's web page (the helper, same origin), its server for them (the
+  App's link with the person's pass: AR50) or its phone app (the main port,
+  Authorization: Bearer). The App and the person come from the pass, never
+  the body. An App's own pass, an App key, the owner token: guest_required.
+  One person is one account on this box: the name and picture are theirs
+  in every App; the role, rooms and sessions shown are this App's only.
+
+THE VERBS (k2.asGuest(pass).profile.* in the server SDK)
+  profile.get            GET  /cli/skin/profile[?image=1|?ifImageHash=<h>]
+    username (fixed), fullName, displayName, email, imageHash, role and
+    rooms here, createdAt, lastSignInAt, test, agentLogin, can {editNames,
+    editImage}, counts. The picture (image) only when asked: cache by hash.
+  profile.update         POST /cli/skin/profile {fullName?, displayName?}
+    64 / 32 characters; controls, bidi and zero-width are dropped; null or
+    "" clears. K2's own views show the username beside a self-set name.
+  profile.setImage       POST /cli/skin/profile/image {image: data URL}
+    PNG, JPEG or WebP, at most 2 MiB; K2 turns it upright (EXIF), shrinks
+    it to 256 px and stores its own JPEG (≤ 64 KiB, no EXIF, nothing you
+    sent). SVG/GIF: type_refused; wrong bytes: type_mismatch.
+  profile.clearImage     POST /cli/skin/profile/image/clear
+  profile.sessions       GET  /cli/skin/sessions
+    browsers and devices signed in to this App: id, kind, client (a coarse
+    label, never an IP), via, createdAt, lastSeenAt, current, push.
+  profile.revokeSession  POST /cli/skin/sessions/revoke {id}
+  profile.signOutOthers  POST /cli/skin/sessions/revoke-others  → {ended}
+    this pass stays; the others and their notification devices go.
+  password.change        POST /cli/skin/password/change
+    {oldPassword, password, stay: true} keeps this pass signed in.
+  A server signing someone in may pass clientLabel ("Chrome on Windows")
+  in the guests.login body on the link; the main port reads User-Agent.
+
+WHO DECIDES (per App; both on by default)
+  k2 app profile settings <app> [--names on|off] [--image on|off]
+  The owner or an Admin. The App's own agent with "manage its Apps'
+  users" may only turn them off, for its own workspace's Apps. Off:
+  edit_off (nothing written). K2_APP_PROFILE=off in the daemon's
+  environment turns every person's edits off (reads stay).
+
+PER PERSON
+  Test guests change their names and picture. An agent's own login reads
+  only (agent_login). 20 changes per person per 10 minutes (rate_limited).
+
+THE OWNER
+  k2 app user show <u> --app <app>          profile, picture hash, sessions
+  k2 app user image <u> --clear
+  k2 app user sessions <u> --app <app> [--revoke <id> | --revoke-all]
+
+NOT YET
+  Email change, a self-service forgot door, and K2's own account page come
+  with K2's own sender (0.46.6). Usernames never change. Password reset
+  today: k2 study apps (PASSWORD RESET).
+--- stderr
+--- requests

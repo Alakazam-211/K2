@@ -312,6 +312,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/move-plan/request", Admin),
     // Q8: park stops an App and holds it for the owner (lowering: Admin).
     post("/cli/app/park", Admin),
+    // app-user-profile (0.46.5): an App's profile settings. The owner or an
+    // Admin; the App's own agent (passport) lowers only, in the handler.
+    both("/cli/app/profile-settings", Admin),
     // prd-custom-app-push-v1 CP36: status, devices, send are Admin-floor
     // (the App's agent by its passport); keys and check are the Owner's.
     get("/cli/app/push", Admin),
@@ -1304,6 +1307,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/access/devices/revoke", Owner),
     post("/cli/skin/access/invites", Owner),
     post("/cli/skin/access/listed", Owner),
+    // app-user-profile P6 (0.46.5): a person's profile, picture and
+    // sessions as the owner sees and ends them.
+    get("/cli/skin/access/profile", Owner),
+    post("/cli/skin/access/profile/image/clear", Owner),
+    post("/cli/skin/access/sessions/revoke", Owner),
     post("/cli/skin/access/settings", Owner),
     get("/cli/skin/agents", NoLogin),
     get("/cli/skin/app-info", Public),
@@ -1349,6 +1357,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/password/forgot", Public),
     post("/cli/skin/password/reset", Public),
     get("/cli/skin/password/set", Public),
+    // app-user-profile (0.46.5): a person's own profile and picture (their
+    // own session pass; the handler checks).
+    both("/cli/skin/profile", NoLogin),
+    post("/cli/skin/profile/image", NoLogin),
+    post("/cli/skin/profile/image/clear", NoLogin),
     // 0.46.3 App project chat: a pass reads and posts in the projects
     // whose every member room it holds (the handler's all-members rule).
     get("/cli/skin/projects", NoLogin),
@@ -1376,6 +1389,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/roles/unassign", Owner),
     post("/cli/skin/roles/update", Owner),
     get("/cli/skin/self", NoLogin),
+    // app-user-profile (0.46.5): a person's own sessions in this App.
+    get("/cli/skin/sessions", NoLogin),
+    post("/cli/skin/sessions/revoke", NoLogin),
+    post("/cli/skin/sessions/revoke-others", NoLogin),
     both("/cli/skin/templates", Owner),
     post("/cli/skin/templates/apply", Owner),
     post("/cli/skin/templates/delete", Owner),

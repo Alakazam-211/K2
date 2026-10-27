@@ -164,3 +164,21 @@ describe('the frame loads the daemon’s resolved libKeys (WL7)', () => {
     expect(h.asked).toEqual([['k2-markdown@1']])
   })
 })
+
+// Security review finding 5 (widget-libs): the frame's caps, sources and
+// agent rows come from the page payload, so it runs only the bundle whose
+// hash is the payload's. A bundle that changed in between never runs.
+describe('the frame runs only the version its payload describes', () => {
+  it('a bundle whose hash is not the payload’s: nothing runs, a load card says why', async () => {
+    await show(page({ hash: 'hash-2', caps: ['sources:read'] }))
+    expect(document.querySelector('iframe')).toBeNull()
+    const card = document.querySelector('[data-zen-custom-card="load-failed"]')
+    expect(card?.textContent).toContain('This widget changed while its page was loading.')
+  })
+
+  it('the same hash: the frame mounts and no load card shows', async () => {
+    await show(page({ hash: 'hash-1' }))
+    expect(document.querySelector('[data-zen-custom-card="load-failed"]')).toBeNull()
+    expect(document.querySelector('iframe')).not.toBeNull()
+  })
+})

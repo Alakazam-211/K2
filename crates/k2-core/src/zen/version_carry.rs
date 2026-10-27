@@ -24,6 +24,16 @@
 //!   (`widget_store::read_saved_bundle`), so an old-shape file put on disk
 //!   later, with an edited manifest, is refused instead of run.
 //!
+//! - **logs a saved copy** (last good, frozen) whose manifest differs
+//!   from the code history of the same document (security review
+//!   finding 6), carried like the rest;
+//! - **refuses a late carry** (security review finding 4): when K2 0.46.5
+//!   served before this pass ran (a failed first carry), the old saved
+//!   copies were kept beside the new ones
+//!   (`widget_store::PRE_CARRY_JSON`); a live version is carried only
+//!   when its manifest is the one that copy shows, else it is left
+//!   unsigned and the refusal is logged (row, audit, news).
+//!
 //! The run is recorded in `zen_version_carry_runs`; a second boot does
 //! nothing. Stamps and the record are written in one transaction before
 //! any file is rewritten: a crash between leaves old-shape files that are
@@ -40,7 +50,9 @@ use serde_json::{json, Value as J};
 
 use super::lock::LOCKED_WIDGETS_DIR;
 use super::store::{valid_garden_id, ZenFiles};
-use super::widget_store::{read_legacy_saved_bundle, write_saved_bundle_at, WidgetState};
+use super::widget_store::{
+    drop_pre_carry, read_legacy_saved_bundle, read_pre_carry_saved_bundle, write_saved_bundle_at, WidgetState, LAST_GOOD_JSON,
+};
 use super::widgets::{self, Manifest};
 use crate::garden_data::{authors, DataError, MadeBy};
 
@@ -81,8 +93,14 @@ pub struct Carried {
     pub new_hash: String,
     /// `owner` / `agent:<id>` when a signature moved.
     pub maker: Option<String>,
-    /// How the live manifest differs from the signed one.
+    /// How the live manifest differs from the signed one; for a saved copy,
+    /// how its manifest differs from the one in its code history with the
+    /// same document (security review finding 6).
     pub differs: Option<String>,
+    /// Why a signature was not carried (security review finding 4): K2
+    /// 0.46.5 served before this carry ran and the manifest can't be shown
+    /// to be the one that was signed.
+    pub refused: Option<String>,
 }
 
 /// What one run did.
@@ -103,6 +121,10 @@ impl CarryReport {
 
     pub fn differing(&self) -> Vec<&Carried> {
         self.versions.iter().filter(|v| v.differs.is_some()).collect()
+    }
+
+    pub fn refused(&self) -> Vec<&Carried> {
+        self.versions.iter().filter(|v| v.refused.is_some()).collect()
     }
 }
 
@@ -176,6 +198,9 @@ pub fn manifest_diff(signed: &Manifest, live: &Manifest) -> Option<String> {
     if signed.color_scheme != live.color_scheme {
         parts.push("chooses its own light or dark instead of the Garden's (or back)".into());
     }
+    if signed.reasons != live.reasons {
+        parts.push("gives other reasons for its caps".into());
+    }
     if parts.is_empty() {
         parts.push("its manifest changed".into());
     }
@@ -213,60 +238,98 @@ pub fn unreviewed(conn: &Connection) -> Result<Vec<(String, String, String)>, Da
     Ok(rows)
 }
 
-/// The run fields of a manifest in plain words (what a first sign covers).
+/// The run fields of a manifest in plain words: every cap, neighbour read,
+/// library and data source it has, each named even when there are none
+/// (the `zen.sign` card always shows the whole version, never only a
+/// difference: security review finding 3).
 pub fn manifest_summary(m: &Manifest) -> String {
     let mut parts = vec![if m.caps.is_empty() { "asks for no caps".to_string() } else { format!("asks for {}", m.caps.join(", ")) }];
-    if !m.reads.is_empty() {
-        parts.push(format!("reads the data of {}", m.reads.join(", ")));
-    }
-    if !m.libs.is_empty() {
+    parts.push(if m.reads.is_empty() {
+        "reads no other widget's data".to_string()
+    } else {
+        format!("reads the data of {}", m.reads.join(", "))
+    });
+    parts.push(if m.libs.is_empty() {
+        "loads no libraries".to_string()
+    } else {
         let libs: Vec<String> = m
             .libs
             .iter()
             .map(|x| x.as_str().map_or_else(|| format!("the CDN file {}", x["url"].as_str().unwrap_or("?")), str::to_string))
             .collect();
-        parts.push(format!("loads {}", libs.join(", ")));
-    }
-    match &m.sources {
-        Some(J::String(_)) => parts.push("reads the data sources its placement names".into()),
-        Some(J::Array(a)) => {
-            parts.push(format!("reads the data sources {}", a.iter().filter_map(J::as_str).collect::<Vec<_>>().join(", ")))
+        format!("loads {}", libs.join(", "))
+    });
+    parts.push(match &m.sources {
+        Some(J::String(_)) => "reads the data sources its placement names".into(),
+        Some(J::Array(a)) if !a.is_empty() => {
+            format!("reads the data sources {}", a.iter().filter_map(J::as_str).collect::<Vec<_>>().join(", "))
         }
-        _ => {}
-    }
+        _ => "reads no data sources".into(),
+    });
     parts.join("; ")
 }
 
+/// Would `maker`'s signature on `widget` count where it is placed: the
+/// person, or an agent on the list of every Garden that places it (as
+/// `zen_access_routes::may_vouch`). An unlisted agent's stamp, K2 and
+/// nobody never count as "signed" for the card's comparison (security
+/// review finding 3). Read on `conn` (callers hold the shared lock).
+pub fn trusted_signer(files: &ZenFiles, conn: &Connection, widget: &str, maker: &MadeBy) -> Result<bool, DataError> {
+    match maker {
+        MadeBy::Owner => Ok(true),
+        MadeBy::Agent { project_id } => {
+            let gardens: std::collections::BTreeSet<String> =
+                files.custom_placements().into_iter().filter(|p| p.widget == widget).map(|p| p.garden).collect();
+            let refs: Vec<&str> = gardens.iter().map(String::as_str).collect();
+            crate::zen::garden_access::listed_on_all(conn, &refs, project_id)
+                .map_err(|e| DataError::Unavailable(format!("garden access list: {e:?}")))
+        }
+        MadeBy::K2 | MadeBy::Unclaimed => Ok(false),
+    }
+}
+
+/// The words for the version the card compares against.
+const BASE: &str = "Since the last version signed by you or an agent on its Gardens' lists";
+
 /// What signing `widget`'s live version means, in plain words for the
-/// `zen.sign` card: the carry's unreviewed difference; else the difference
-/// from the newest version someone signed (its manifest from the code
-/// history); else, for a widget nobody ever signed, what its manifest asks
-/// for. `None` when the widget has no live version.
+/// `zen.sign` card (security review finding 3):
+///
+/// 1. always the whole version ([`manifest_summary`]: caps, reads,
+///    libraries, data sources);
+/// 2. then, as context, the carry's unreviewed difference; else the
+///    difference from the newest history snapshot that (a) re-checks from
+///    its own files to the hash its meta names
+///    (`ZenFiles::verified_snapshot`) and (b) was signed by the person or
+///    an agent listed on every placing Garden ([`trusted_signer`]); else
+///    that no such version exists.
+///
+/// `None` when the widget has no live version.
 pub fn version_changes(files: &ZenFiles, conn: &Connection, widget: &str) -> Result<Option<String>, DataError> {
     let st = files.widget_status(widget);
     let (Some(live_m), Some(b)) = (st.manifest.as_ref(), st.bundle.as_ref()) else { return Ok(None) };
+    let whole = format!("This version of {widget} {}.", manifest_summary(live_m));
     if let Some(d) = unreviewed_difference(conn, widget, &b.hash)? {
-        return Ok(Some(format!("Since it was signed, this widget {d}.")));
+        return Ok(Some(format!("{whole} Since it was signed, it {d}.")));
     }
     for snap in files.widget_snapshots(widget) {
-        let Some(h) = snap.hash.as_deref().filter(|h| *h != b.hash && h.len() == 64) else { continue };
-        if !snap.clean || matches!(authors::maker_of(conn, widget, h)?, MadeBy::Unclaimed) {
+        if !snap.clean || snap.hash.as_deref().is_none_or(|h| h == b.hash) {
             continue;
         }
-        let Some(m) = files
-            .snapshot_files(widget, &snap.name)
-            .and_then(|f| f.get(widgets::MANIFEST_FILE).cloned())
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .and_then(|src| widgets::parse_manifest("manifest.json", &src, widget).0)
-        else {
+        let Some(v) = files.verified_snapshot(widget, &snap) else { continue };
+        // The hash the files make (never the meta's word for it).
+        let signed = if v.legacy { v.bundle.template_hash() } else { v.bundle.hash.clone() };
+        if signed == b.hash || !trusted_signer(files, conn, widget, &authors::maker_of(conn, widget, &signed)?)? {
             continue;
+        }
+        let context = match (manifest_diff(&v.manifest, live_m), v.legacy) {
+            (Some(d), false) => format!("{BASE}, it {d}."),
+            (None, false) => format!("{BASE}, only its code changed."),
+            (Some(d), true) => format!("{BASE} (before K2 0.46.5, when a manifest wasn't part of what was signed), it {d}."),
+            (None, true) => format!("{BASE} (before K2 0.46.5, when a manifest wasn't part of what was signed), its manifest looks the same."),
         };
-        return Ok(Some(match manifest_diff(&m, live_m) {
-            Some(d) => format!("Since the last signed version, this widget {d}."),
-            None => "Since the last signed version only its code changed; its manifest is the same.".to_string(),
-        }));
+        return Ok(Some(format!("{whole} {context}")));
     }
-    Ok(Some(format!("Nobody has signed {widget} yet. It {}.", manifest_summary(live_m))))
+    Ok(Some(format!("{whole} No earlier version was signed by you or an agent on its Gardens' lists.")))
 }
 
 /// A saved copy to carry and rewrite.
@@ -275,6 +338,39 @@ struct Saved {
     manifest: Manifest,
     bundle: super::bundle::Bundle,
     at: String,
+}
+
+/// The old-shape copy saved in `dir` and whether the carry is late: its
+/// `last-good.json` while still old (the normal first boot), else the copy
+/// kept beside it when K2 0.46.5 rewrote it before this carry ran
+/// (`late = true`: a failed first carry; security review finding 4).
+fn old_copy(dir: &std::path::Path) -> (Option<(Manifest, super::bundle::Bundle, String, String)>, bool) {
+    if let Some(l) = read_legacy_saved_bundle(dir) {
+        return (Some(l), false);
+    }
+    let late = dir.join(LAST_GOOD_JSON).exists();
+    (if late { read_pre_carry_saved_bundle(dir) } else { None }, late)
+}
+
+/// How a saved copy's manifest `saved` differs from the code history of
+/// the same document (`template`, the old hash): `None` when some history
+/// snapshot of that document, re-checked from its own files, has this
+/// manifest (or none is kept); else the difference from the newest one
+/// (security review finding 6). A manifest-only edit leaves several
+/// snapshots of one document, so any of them may be the one saved.
+fn history_difference(files: &ZenFiles, widget: &str, template: &str, saved: &Manifest) -> Option<String> {
+    let same_doc: Vec<_> = files
+        .widget_snapshots(widget)
+        .iter()
+        .filter(|s| s.clean)
+        .filter_map(|s| files.verified_snapshot(widget, s))
+        .filter(|v| v.bundle.template_hash() == template)
+        .collect();
+    let digest = widgets::version_digest(saved);
+    if same_doc.iter().any(|v| widgets::version_digest(&v.manifest) == digest) {
+        return None;
+    }
+    same_doc.first().and_then(|v| manifest_diff(&v.manifest, saved))
 }
 
 /// Run the carry once on `conn` (callers hold the shared DB lock) over the
@@ -287,20 +383,37 @@ pub fn carry_once(conn: &Connection, files: &ZenFiles, now: i64) -> Result<Optio
     let mut report = CarryReport::default();
     let mut saved: Vec<Saved> = Vec::new();
     let tx = conn.unchecked_transaction()?;
+    // Kept pre-0.46.5 copies to remove once the carry is recorded.
+    let mut kept: Vec<std::path::PathBuf> = Vec::new();
     if files.exists() {
         for name in files.widget_names() {
             let history = files.widget_history_dir(&name);
-            let legacy = read_legacy_saved_bundle(&history);
+            let (legacy, late) = old_copy(&history);
+            if late {
+                kept.push(history.clone());
+            }
             let st = files.widget_status(&name);
             if st.state == WidgetState::Ok {
                 if let (Some(m), Some(b)) = (&st.manifest, &st.bundle) {
                     let old = b.template_hash();
                     // What was signed: the copy saved when this document became good.
-                    let differs = legacy
-                        .as_ref()
-                        .filter(|(_, _, _, lh)| *lh == old)
-                        .and_then(|(lm, _, _, _)| manifest_diff(lm, m));
-                    let maker = authors::carry(&tx, &name, &old, &b.hash)?;
+                    let base = legacy.as_ref().filter(|(_, _, _, lh)| *lh == old);
+                    let differs = base.and_then(|(lm, _, _, _)| manifest_diff(lm, m));
+                    // K2 0.46.5 served before this carry (a failed first
+                    // carry): the live manifest may have changed since; carry
+                    // only what the copy saved before then shows unchanged.
+                    let refused = if late && authors::maker_of(&tx, &name, &old)? != MadeBy::Unclaimed {
+                        match (base, &differs) {
+                            (None, _) => Some(
+                                "K2 0.46.5 ran before this carry and no copy saved before it matches this code, so K2 can't tell what was signed".to_string(),
+                            ),
+                            (Some(_), Some(d)) => Some(format!("K2 0.46.5 ran before this carry and since then it {d}")),
+                            (Some(_), None) => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let maker = if refused.is_some() { None } else { authors::carry(&tx, &name, &old, &b.hash)? };
                     report.versions.push(Carried {
                         widget: name.clone(),
                         place: Place::Live,
@@ -308,7 +421,9 @@ pub fn carry_once(conn: &Connection, files: &ZenFiles, now: i64) -> Result<Optio
                         old_hash: old,
                         new_hash: b.hash.clone(),
                         maker: maker.as_ref().map(maker_label),
-                        differs,
+                        // A refused carry has no signature to review.
+                        differs: if refused.is_some() { None } else { differs },
+                        refused,
                     });
                 }
             }
@@ -318,12 +433,16 @@ pub fn carry_once(conn: &Connection, files: &ZenFiles, now: i64) -> Result<Optio
                     widget: name.clone(),
                     place: Place::LastGood,
                     garden: None,
+                    differs: history_difference(files, &name, &old, &m),
                     old_hash: old,
                     new_hash: b.hash.clone(),
                     maker: maker.as_ref().map(maker_label),
-                    differs: None,
+                    refused: None,
                 });
-                saved.push(Saved { dir: history, manifest: m, bundle: b, at });
+                // A late carry leaves the newer saved copy in place.
+                if !late {
+                    saved.push(Saved { dir: history, manifest: m, bundle: b, at });
+                }
             }
         }
         // Every locked Garden's frozen copies (`.locks/<id>/widgets/<name>/`).
@@ -340,25 +459,32 @@ pub fn carry_once(conn: &Connection, files: &ZenFiles, now: i64) -> Result<Optio
             names.sort();
             for name in names {
                 let dir = wdir.join(&name);
-                let Some((m, b, at, old)) = read_legacy_saved_bundle(&dir) else { continue };
+                let (legacy, late) = old_copy(&dir);
+                if late {
+                    kept.push(dir.clone());
+                }
+                let Some((m, b, at, old)) = legacy else { continue };
                 let maker = authors::carry(&tx, &name, &old, &b.hash)?;
                 report.versions.push(Carried {
                     widget: name.clone(),
                     place: Place::Frozen,
                     garden: Some(g.clone()),
+                    differs: history_difference(files, &name, &old, &m),
                     old_hash: old,
                     new_hash: b.hash.clone(),
                     maker: maker.as_ref().map(maker_label),
-                    differs: None,
+                    refused: None,
                 });
-                saved.push(Saved { dir, manifest: m, bundle: b, at });
+                if !late {
+                    saved.push(Saved { dir, manifest: m, bundle: b, at });
+                }
             }
         }
     }
     for v in &report.versions {
         tx.execute(
-            "INSERT INTO zen_version_carry (widget, place, garden, old_hash, new_hash, carried, maker, differs, at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO zen_version_carry (widget, place, garden, old_hash, new_hash, carried, maker, differs, refused, at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 v.widget,
                 v.place.as_str(),
@@ -368,6 +494,7 @@ pub fn carry_once(conn: &Connection, files: &ZenFiles, now: i64) -> Result<Optio
                 v.maker.is_some() as i64,
                 v.maker,
                 v.differs,
+                v.refused,
                 now
             ],
         )?;
@@ -376,6 +503,7 @@ pub fn carry_once(conn: &Connection, files: &ZenFiles, now: i64) -> Result<Optio
         "versions": report.versions.len(),
         "carried": report.carried(),
         "differing": report.differing().len(),
+        "refused": report.refused().len(),
         "savedCopies": saved.len(),
     });
     tx.execute(
@@ -394,9 +522,33 @@ pub fn carry_once(conn: &Connection, files: &ZenFiles, now: i64) -> Result<Optio
             }
         }
     }
-    for v in report.differing() {
+    for dir in &kept {
+        drop_pre_carry(dir);
+    }
+    for v in report.refused() {
         crate::log_debug!(
-            "[zen/version-carry] {}: carried {}'s signature although the live manifest differs from the signed one: {}",
+            "[zen/version-carry] {}: did NOT carry the signature on {}: {}; it runs without the person's data until someone signs it",
+            v.widget,
+            &v.old_hash[..12],
+            v.refused.as_deref().unwrap_or_default()
+        );
+        crate::auth_audit::record(&crate::auth_audit::AuditEvent::new(
+            AUDIT_EVENT,
+            "k2",
+            format!("refused widget={} old={} new={} {}", v.widget, &v.old_hash[..12], &v.new_hash[..12], v.refused.as_deref().unwrap_or_default()),
+            "-",
+            "-",
+            "daemon",
+        ));
+    }
+    for v in report.differing() {
+        let what = match (v.place, v.garden.as_deref()) {
+            (Place::Live, _) => "the live manifest differs from the signed one".to_string(),
+            (Place::LastGood, _) => "its saved copy's manifest differs from the one in its code history".to_string(),
+            (Place::Frozen, g) => format!("its frozen copy in {}'s manifest differs from the one in its code history", g.unwrap_or("?")),
+        };
+        crate::log_debug!(
+            "[zen/version-carry] {}: carried {}'s signature although {what}: {}",
             v.widget,
             v.maker.as_deref().unwrap_or("nobody"),
             v.differs.as_deref().unwrap_or_default()
@@ -405,8 +557,9 @@ pub fn carry_once(conn: &Connection, files: &ZenFiles, now: i64) -> Result<Optio
             AUDIT_EVENT,
             "k2",
             format!(
-                "differs widget={} new={} maker={} {}",
+                "differs widget={} place={} new={} maker={} {}",
                 v.widget,
+                v.place.as_str(),
                 &v.new_hash[..12],
                 v.maker.as_deref().unwrap_or("none"),
                 v.differs.as_deref().unwrap_or_default()
@@ -420,10 +573,11 @@ pub fn carry_once(conn: &Connection, files: &ZenFiles, now: i64) -> Result<Optio
         AUDIT_EVENT,
         "k2",
         format!(
-            "ok versions={} carried={} differing={} rewritten={} failed={}",
+            "ok versions={} carried={} differing={} refused={} rewritten={} failed={}",
             report.versions.len(),
             report.carried(),
             report.differing().len(),
+            report.refused().len(),
             report.rewritten,
             report.failed.len()
         ),
@@ -445,7 +599,8 @@ pub fn carry_once(conn: &Connection, files: &ZenFiles, now: i64) -> Result<Optio
 /// signed one, or a saved copy couldn't be rewritten.
 pub fn notice(r: &CarryReport) -> Option<super::news::NoticeItem> {
     let differing = r.differing();
-    if differing.is_empty() && r.failed.is_empty() {
+    let refused = r.refused();
+    if differing.is_empty() && refused.is_empty() && r.failed.is_empty() {
         return None;
     }
     let mut detail: Vec<String> = differing
@@ -460,6 +615,14 @@ pub fn notice(r: &CarryReport) -> Option<super::news::NoticeItem> {
             )
         })
         .collect();
+    detail.extend(refused.iter().map(|v| {
+        format!(
+            "{}: K2 didn't keep its signature: {}. It runs without your data until you sign it in its History, or an agent asks you with k2 zen widget sign {} --ask",
+            v.widget,
+            v.refused.as_deref().unwrap_or_default(),
+            v.widget
+        )
+    }));
     detail.extend(r.failed.iter().map(|p| format!("couldn't update {p}; that saved copy isn't used")));
     let mut body = String::from(
         "From this K2, a widget's manifest (its caps, the data it reads, its libraries) is part of the version you sign, like its code.",

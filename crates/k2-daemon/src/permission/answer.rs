@@ -311,16 +311,6 @@ fn decide_one(
     let Some(registered) = registered else {
         return record(RequestState::Stale, Some("K2 no longer offers this request"), None);
     };
-    if matches!(d, Decision::Allow | Decision::Always) {
-        if let Some(card) = single {
-            // "Applying…": the card still pending, same id and seq.
-            if let Some(view) = store::get(req.id.as_str()).ok().flatten().and_then(|r| present::view_for(&[r], false, None)) {
-                if let Err(e) = crate::overlay_routes::update_action_view(card.conversation_id, card.card_id, view) {
-                    k2_core::log_debug!("[permission] applying view for {}: {e}", req.id);
-                }
-            }
-        }
-    }
 
     // 2. The current state, on the stored values and the stored text.
     let ctx = present::ctx_of(req);
@@ -341,6 +331,20 @@ fn decide_one(
         // `Close` answers an already-done card; this one isn't any more.
         store::revert_applying(req.id.as_str(), prior).map_err(|e| err(500, "db", e))?;
         return Err(err(400, "usage", "'Close' is not an option on this card: it needs an answer again"));
+    }
+
+    // "Applying…" (the card still pending, same id and seq) only once the
+    // check passed: the card is on the asking agent's Thread, and an
+    // earlier flip told it when to swap the version under the check
+    // (security review finding 1).
+    if matches!(d, Decision::Allow | Decision::Always) {
+        if let Some(card) = single {
+            if let Some(view) = store::get(req.id.as_str()).ok().flatten().and_then(|r| present::view_for(&[r], false, None)) {
+                if let Err(e) = crate::overlay_routes::update_action_view(card.conversation_id, card.card_id, view) {
+                    k2_core::log_debug!("[permission] applying view for {}: {e}", req.id);
+                }
+            }
+        }
     }
 
     // 3. The apply, through the route's own entry, as the answerer.

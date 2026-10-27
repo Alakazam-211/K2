@@ -868,8 +868,11 @@ pub fn check_files(prefix: &str, folder: &str, files: &BTreeMap<String, Vec<u8>>
 /// `caps` and `reads` (sorted: their order changes nothing), `sources`,
 /// `libs` **as written** (request strings and CDN `{url, integrity}`, in
 /// load order, never the resolved rows, so a K2 patch update inside a
-/// line never unsigns a widget) and `colorScheme`. `name`, `description`,
-/// `reasons` and `requires.features` stay out: wording edits don't unsign.
+/// line never unsigns a widget), `colorScheme`, and `reasons` (the "why"
+/// shown next to each cap when the person decides: security review
+/// finding 7, so it can't be rewritten after signing). `name`,
+/// `description` and `requires.features` stay out: they change nothing a
+/// person decides on, and `features` has no runtime effect.
 pub fn version_digest(m: &Manifest) -> String {
     let mut caps = m.caps.clone();
     caps.sort();
@@ -883,6 +886,7 @@ pub fn version_digest(m: &Manifest) -> String {
         "sources": m.sources.clone().unwrap_or(J::Null),
         "libs": m.libs,
         "colorScheme": m.color_scheme.as_deref().unwrap_or("garden"),
+        "reasons": m.reasons,
     }))
 }
 

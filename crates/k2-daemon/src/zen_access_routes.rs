@@ -389,16 +389,65 @@ pub(crate) fn stamp_after_write(f: &ZenFiles, widget: &str, caller: &Caller, sou
     if !ga::enabled() || authors::is_builtin(widget) {
         return J::Null;
     }
-    let Some((maker, kind)) = signer_of(caller) else { return J::Null };
     let st = f.widget_status(widget);
     if st.state != WidgetState::Ok || st.hash().is_empty() {
         return J::Null;
     }
     let hash = st.hash().to_string();
+    stamp_exact(f, widget, &hash, caller, source).unwrap_or(J::Null)
+}
+
+/// 409 code: the widget's live version changed between the sign's check
+/// and its stamp; nothing was stamped (security review finding 1).
+pub(crate) const WIDGET_CHANGED: &str = "widget_changed";
+
+/// A stamp that didn't land on the checked version.
+#[derive(Debug)]
+pub(crate) enum StampMiss {
+    /// The live version is no longer `hash` (now this one, or none).
+    Changed(String),
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: runs once between a sign's check and its stamp (the window
+    /// security review finding 1 is about).
+    pub(crate) static BEFORE_STAMP: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn before_stamp() {
+    if let Some(hook) = BEFORE_STAMP.with(|h| h.borrow_mut().take()) {
+        hook();
+    }
+}
+
+#[cfg(not(test))]
+fn before_stamp() {}
+
+/// Stamp exactly `hash` of `widget` as `caller` (switch on): the version a
+/// sign checked, never whatever is live when the stamp is written. Under
+/// the DB lock the live version is read again; when it is no longer
+/// `hash` nothing is stamped (`Err(Changed)`, 409 [`WIDGET_CHANGED`]).
+/// `Ok(J::Null)` when there's nothing to stamp (a built-in, a caller that
+/// can't sign, a store error). Security review finding 1.
+pub(crate) fn stamp_exact(f: &ZenFiles, widget: &str, hash: &str, caller: &Caller, source: StampSource) -> Result<J, StampMiss> {
+    if !ga::enabled() || authors::is_builtin(widget) {
+        return Ok(J::Null);
+    }
+    let Some((maker, kind)) = signer_of(caller) else { return Ok(J::Null) };
+    before_stamp();
+    // Reads the Garden lists under its own lock: before ours.
     let vouch = may_vouch(f, widget, &maker);
+    let hash = hash.to_string();
     let out = {
         let db = k2_core::db::shared();
         let conn = db.lock();
+        let st = f.widget_status(widget);
+        let live = if st.state == WidgetState::Ok { st.hash().to_string() } else { String::new() };
+        if live != hash {
+            return Err(StampMiss::Changed(live));
+        }
         let t = now();
         let r = if vouch {
             authors::vouch(&conn, widget, &hash, &maker, source, kind, t)
@@ -408,17 +457,34 @@ pub(crate) fn stamp_after_write(f: &ZenFiles, widget: &str, caller: &Caller, sou
         r.and_then(|o| authors::maker_of(&conn, widget, &hash).map(|m| (o, m)))
     };
     match out {
-        Ok((o, now_maker)) => json!({
+        Ok((o, now_maker)) => Ok(json!({
             "hash": short(&hash),
             "madeBy": crate::garden_data::call::made_by_wire(&now_maker),
             "stamped": o == StampOutcome::Stamped,
             "vouched": vouch,
-        }),
+        })),
         Err(e) => {
             k2_core::log_debug!("[zen/access] stamp {widget}: {e}");
-            J::Null
+            Ok(J::Null)
         }
     }
+}
+
+/// The 409 for a version that changed between a sign's check and its
+/// stamp (or its signature's removal).
+fn widget_changed(widget: &str, checked: &str, live: &str) -> CliResponse {
+    let now_is = if live.is_empty() { "it has no clean version now".to_string() } else { format!("its live version is now {}", short(live)) };
+    resp(
+        "409 Conflict",
+        json!({
+            "ok": false,
+            "error": WIDGET_CHANGED,
+            "message": format!("{widget} changed while it was being signed ({now_is}); nothing was signed. A new version needs a new sign."),
+            "widget": widget,
+            "checked": checked,
+            "version": live,
+        }),
+    )
 }
 
 // ── refusals and cards ───────────────────────────────────────────────
@@ -951,6 +1017,11 @@ pub(crate) fn carry_review(widget: &str, hash: &str) -> J {
 /// exactly `version` of `widget` as `caller` (the person who clicked
 /// Allow). The same door as `k2 zen widget sign` and Sign in History.
 pub(crate) fn sign_entry(caller: &Caller, widget: &str, version: &str, ingress: &str) -> CliResponse {
+    // A card names the whole version, compared with == (security review
+    // finding 2: a prefix lets two versions share one card).
+    if !crate::permission::actions::gardens::full_version(version) {
+        return refuse("400 Bad Request", "bad_request", format!("name {widget}'s whole version (64 hex characters)"));
+    }
     sign_parsed(
         caller,
         SignBody { widget: widget.to_string(), garden: None, version: Some(version.to_string()), ask: false },
@@ -965,15 +1036,18 @@ pub(crate) fn unsign_entry(caller: &Caller, widget: &str, version: &str, ingress
     if !matches!(signer_of(caller), Some((MadeBy::Owner, _))) {
         return crate::zen_routes::error_response(ZenError::OwnerOnly("only the person takes their signature off".into()));
     }
-    let f = files();
-    let st = f.widget_status(widget);
-    let hash = st.hash().to_string();
-    if hash.is_empty() || !hash.starts_with(version) {
-        return refuse("409 Conflict", "stale_version", format!("{widget} changed since it was signed; nothing to take off"));
+    if !crate::permission::actions::gardens::full_version(version) {
+        return refuse("400 Bad Request", "bad_request", format!("name {widget}'s whole version (64 hex characters)"));
     }
+    let f = files();
+    let hash = version.to_string();
     let removed = {
         let db = k2_core::db::shared();
         let conn = db.lock();
+        let st = f.widget_status(widget);
+        if st.state != WidgetState::Ok || st.hash() != hash {
+            return refuse("409 Conflict", "stale_version", format!("{widget} changed since it was signed; nothing to take off"));
+        }
         authors::remove_owner_stamp(&conn, widget, &hash)
     };
     match removed {
@@ -1093,7 +1167,19 @@ fn sign_parsed(caller: &Caller, b: SignBody, ingress: &str) -> CliResponse {
             );
         }
     }
-    let out = stamp_after_write(&f, &widget, caller, StampSource::Sign);
+    // Exactly the version checked above: a write in between is refused, never signed.
+    let out = match stamp_exact(&f, &widget, &hash, caller, StampSource::Sign) {
+        Ok(o) => o,
+        Err(StampMiss::Changed(live)) => {
+            crate::zen_routes::audit_refusal(
+                "zen.widget.sign",
+                caller,
+                format!("{widget} {} changed before the stamp (now {})", short(&hash), if live.is_empty() { "-" } else { short(&live) }),
+                ingress,
+            );
+            return widget_changed(&widget, &hash, &live);
+        }
+    };
     if out.is_null() {
         return refuse("503 Service Unavailable", "store_unavailable", "the sign wasn't saved; try again");
     }

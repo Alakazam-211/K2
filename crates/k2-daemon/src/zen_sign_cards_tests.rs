@@ -164,7 +164,7 @@ fn a_manifest_change_is_refused_until_the_person_signs_that_exact_version() {
     assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some(SIGN_NEEDS_PERSON_CODE)), "{v}");
     assert_eq!(v["widget"], "board");
     assert_eq!(v["version"], json!(v1), "the exact version the card is for");
-    let want = "Since the last signed version, this widget now asks for thread:post.";
+    let want = "This version of board asks for agents:read, thread:post; reads no other widget's data; loads no libraries; reads no data sources. Since the last version signed by you or an agent on its Gardens' lists, it now asks for thread:post; gives other reasons for its caps.";
     assert_eq!(v["changes"], json!(want), "{v}");
     assert!(v["message"].as_str().is_some_and(|m| m.contains("zen.sign") && m.contains("k2 zen widget sign board")), "{v}");
     let card = v["card"].as_str().unwrap_or_else(|| panic!("no card: {v}")).to_string();
@@ -202,10 +202,16 @@ fn a_manifest_change_is_refused_until_the_person_signs_that_exact_version() {
     let (s, v) = sign(&agent(&ws), false, json!({"widget": "board"}));
     assert_eq!(s, "403 Forbidden", "{v}");
     assert_ne!(v["card"], json!(card), "a new version, a new card: {v}");
-    assert_eq!(v["changes"], json!("Since the last signed version, this widget now asks for presence:read."), "{v}");
+    assert_eq!(
+        v["changes"],
+        json!("This version of board asks for agents:read, thread:post, presence:read; reads no other widget's data; loads no libraries; reads no data sources. Since the last version signed by you or an agent on its Gardens' lists, it now asks for presence:read."),
+        "{v}"
+    );
 
     // A version named by the caller that isn't live is refused, never signed.
     let (s, v) = sign(&Caller::Owner, true, json!({"widget": "board", "version": &v1[..12]}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("409 Conflict", Some("stale_version")), "{v}");
+    let (s, v) = sign(&Caller::Owner, true, json!({"widget": "board", "version": v1}));
     assert_eq!((s.as_str(), v["error"].as_str()), ("409 Conflict", Some("stale_version")), "{v}");
     assert_eq!(maker(&v2), MadeBy::Unclaimed);
 
@@ -246,7 +252,11 @@ fn a_listed_agent_vouches_and_ask_presents_the_card_on_purpose() {
     assert_eq!(s, "200 OK", "{v}");
     assert_eq!(v["asked"], true);
     assert!(v["card"].is_string(), "{v}");
-    assert_eq!(v["changes"], json!("Since the last signed version, this widget now asks for thread:read."), "{v}");
+    assert_eq!(
+        v["changes"],
+        json!("This version of board asks for agents:read, thread:read; reads no other widget's data; loads no libraries; reads no data sources. Since the last version signed by you or an agent on its Gardens' lists, it now asks for thread:read; gives other reasons for its caps."),
+        "{v}"
+    );
 }
 
 /// The upgrade carried a signature although the manifest had changed: the
@@ -277,12 +287,14 @@ fn a_carried_difference_offers_the_card_until_the_person_signs() {
     let (s, v) = sign(&agent(&ws), false, json!({"widget": "board"}));
     assert_eq!(s, "200 OK", "{v}");
     assert_eq!(v["review"]["ask"], json!("k2 zen widget sign board --ask"), "{v}");
-    assert_eq!(v["review"]["changes"], json!("Since it was signed, this widget now asks for presence:read."));
+    assert_eq!(v["review"]["changes"], json!("Since it was signed, this widget now asks for presence:read."), "the answer's review line");
     let (s, v) = sign(&agent(&ws), false, json!({"widget": "board", "ask": true}));
     assert_eq!(s, "200 OK", "{v}");
     let card = v["card"].as_str().unwrap_or_else(|| panic!("no card: {v}")).to_string();
     assert!(
-        view_of(&ws, &card)["consequences"].as_str().is_some_and(|c| c.starts_with("Since it was signed, this widget now asks for presence:read.")),
+        view_of(&ws, &card)["consequences"].as_str().is_some_and(|c| c.starts_with(
+            "This version of board asks for agents:read, presence:read; reads no other widget's data; loads no libraries; reads no data sources. Since it was signed, it now asks for presence:read."
+        )),
         "the card shows the logged difference"
     );
     let (s, a) = answer(&ws, &card, "Allow");
@@ -300,3 +312,133 @@ fn a_carried_difference_offers_the_card_until_the_person_signs() {
 }
 
 const SIGN_NEEDS_PERSON_CODE: &str = crate::zen_access_routes::SIGN_NEEDS_PERSON;
+
+
+/// Security review finding 1: the person's Allow signs exactly the version
+/// the card checked. A write that lands between the check and the stamp is
+/// refused (409 `widget_changed`): the signature lands on neither version.
+#[test]
+fn a_version_swapped_between_the_check_and_the_stamp_is_never_signed() {
+    let e = env();
+    let ws = seed("race");
+    edit_caps(&e, &["agents:read", "thread:post"]);
+    let v1 = live(&e);
+    let (s, v) = sign(&agent(&ws), false, json!({"widget": "board"}));
+    assert_eq!(s, "403 Forbidden", "{v}");
+    let card = v["card"].as_str().unwrap_or_else(|| panic!("no card: {v}")).to_string();
+
+    // The card's Allow: after the check passed, the agent swaps in v2.
+    let swapped = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+    let seen = swapped.clone();
+    let home_board = e.f.widget_dir("board");
+    crate::zen_access_routes::BEFORE_STAMP.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            let m = "{\n  \"schema\": 1,\n  \"name\": \"Board\",\n  \"caps\": [\"agents:read\", \"thread:post\", \"presence:read\"]\n}\n";
+            std::fs::write(home_board.join("manifest.json"), m).expect("swap");
+            *seen.borrow_mut() = k2_core::zen::ZenFiles::local().widget_status("board").hash().to_string();
+        }))
+    });
+    let (s, a) = answer(&ws, &card, "Allow");
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(a["decided"][0]["state"], "failed", "the apply refused: {a}");
+    let v2 = swapped.borrow().clone();
+    assert_eq!(v2.len(), 64, "the hook ran and v2 bundles clean");
+    assert_ne!(v2, v1);
+    assert_eq!(maker(&v1), MadeBy::Unclaimed, "the checked version wasn't signed either");
+    assert_eq!(maker(&v2), MadeBy::Unclaimed, "the swapped-in version is never signed");
+    assert!(!passes(&e, &v2));
+
+    // The same on the person's own sign: 409 widget_changed, nothing stamped.
+    let home_board = e.f.widget_dir("board");
+    crate::zen_access_routes::BEFORE_STAMP.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            let m = "{\n  \"schema\": 1,\n  \"name\": \"Board\",\n  \"caps\": [\"agents:read\"]\n}\n";
+            std::fs::write(home_board.join("manifest.json"), m).expect("swap again");
+        }))
+    });
+    let (s, v) = sign(&Caller::Owner, true, json!({"widget": "board", "version": v2}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("409 Conflict", Some(crate::zen_access_routes::WIDGET_CHANGED)), "{v}");
+    assert_eq!(v["checked"], json!(v2), "{v}");
+    let v3 = live(&e);
+    assert_eq!(v["version"], json!(v3), "{v}");
+    assert_eq!(maker(&v2), MadeBy::Unclaimed);
+    assert_eq!(maker(&v3), MadeBy::Unclaimed);
+    assert!(crate::zen_access_routes::BEFORE_STAMP.with(|h| h.borrow().is_none()), "each hook ran once");
+}
+
+/// Security review finding 2: `zen.sign` takes the whole version (64
+/// lower-case hex) and compares it with ==; a prefix never matches.
+#[test]
+fn zen_sign_takes_the_whole_version_only() {
+    let e = env();
+    let ws = seed("pre");
+    edit_caps(&e, &["agents:read", "thread:post"]);
+    let v1 = live(&e);
+    let reg = actions::find(SIGN).expect("registered");
+    let off = actions::find(SIGN_OFF).expect("twin");
+    for bad in [v1[..12].to_string(), v1[..63].to_string(), v1.to_uppercase(), format!("{v1}0")] {
+        assert!(matches!((reg.check)(&ctx(&ws, "board", &bad)), Check::Moved(_)), "check refuses {bad}");
+        assert!(matches!((off.check)(&ctx(&ws, "board", &bad)), Check::Moved(_)), "the twin refuses {bad}");
+        match (reg.apply)(&ctx(&ws, "board", &bad), &Answerer::OwnerToken, None) {
+            Applied::Refused { message, .. } => assert!(message.contains("whole version"), "{message}"),
+            other => panic!("apply signed a partial version {bad}: {other:?}"),
+        }
+        assert_eq!(
+            crate::zen_sign_cards::changes_for("board", &bad),
+            "This version of board is no longer live.",
+            "no words for a partial version"
+        );
+    }
+    assert_eq!(maker(&v1), MadeBy::Unclaimed, "nothing signed by a prefix");
+    assert_eq!((reg.check)(&ctx(&ws, "board", &v1)), Check::Needed, "the whole version");
+    match (reg.apply)(&ctx(&ws, "board", &v1), &Answerer::OwnerToken, None) {
+        Applied::Done { .. } => {}
+        other => panic!("the whole version: {other:?}"),
+    }
+    assert_eq!(maker(&v1), MadeBy::Owner);
+}
+
+/// Security review finding 3: the card always shows the whole version;
+/// it compares only with a version the person (or a listed agent) signed,
+/// never an unlisted agent's; and a planted history snapshot whose files
+/// don't make the hash its meta names is ignored.
+#[test]
+fn the_card_shows_the_whole_version_and_ignores_planted_or_untrusted_baselines() {
+    let e = env();
+    let ws = seed("bait");
+    let v0 = live(&e);
+    // An unlisted agent's stamp on a narrower version is not a baseline.
+    edit_caps(&e, &["agents:read"]);
+    let vn = live(&e);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        authors::stamp(&conn, "board", &vn, &MadeBy::Agent { project_id: ws.id.clone() }, StampSource::Sign, CallerKind::Agent, 5)
+            .expect("unlisted agent stamps");
+    }
+    // The widening, by hand on disk.
+    edit_caps(&e, &["agents:read", "thread:post", "presence:read"]);
+    let v1 = live(&e);
+    // A planted snapshot: v0's (the person's) hash in its meta, v1's manifest.
+    let snap = e.f.history_root().join("widgets").join("board").join("29991231T235959999Z-000");
+    std::fs::create_dir_all(&snap).expect("snap dir");
+    for f in std::fs::read_dir(e.f.widget_dir("board")).expect("folder").flatten() {
+        std::fs::copy(f.path(), snap.join(f.file_name())).expect("copy v1's files");
+    }
+    std::fs::write(snap.join("meta.json"), format!("{{\"at\":\"2999-12-31T23:59:59Z\",\"clean\":true,\"hash\":\"{v0}\"}}")).expect("meta");
+    let newest = e.f.widget_snapshots("board").into_iter().next().expect("snapshots");
+    assert_eq!(newest.name, "29991231T235959999Z-000", "the planted snapshot is the newest");
+
+    let changes = crate::zen_sign_cards::changes_for("board", &v1);
+    assert!(
+        changes.starts_with(
+            "This version of board asks for agents:read, thread:post, presence:read; reads no other widget's data; loads no libraries; reads no data sources."
+        ),
+        "the whole version, always: {changes}"
+    );
+    assert!(!changes.contains("only its code changed") && !changes.contains("manifest looks the same"), "{changes}");
+    assert!(
+        changes.ends_with("Since the last version signed by you or an agent on its Gardens' lists, it now asks for thread:post, presence:read; gives other reasons for its caps."),
+        "compared with the person's v0, not the planted snapshot or the unlisted agent's version: {changes}"
+    );
+}

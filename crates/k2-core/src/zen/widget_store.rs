@@ -33,6 +33,12 @@ use super::widgets::{self, Manifest, WIDGETS_DIR};
 
 pub const LAST_GOOD_HTML: &str = "last-good.html";
 pub const LAST_GOOD_JSON: &str = "last-good.json";
+/// An old-shape (pre-0.46.5) saved copy K2 0.46.5 was about to overwrite
+/// before the one-time carry had read it (a failed first carry): kept
+/// beside it so the carry still compares the manifest with what was
+/// signed (security review finding 4). Read only by the carry.
+pub const PRE_CARRY_JSON: &str = "last-good.pre-0.46.5.json";
+pub const PRE_CARRY_HTML: &str = "last-good.pre-0.46.5.html";
 /// Each code snapshot folder's record: `{at, hash, clean}`.
 pub const SNAPSHOT_META: &str = "meta.json";
 
@@ -178,6 +184,17 @@ pub struct CodeSnapshot {
     pub hash: Option<String>,
 }
 
+/// A code snapshot whose files make the hash its meta names
+/// ([`ZenFiles::verified_snapshot`]).
+#[derive(Debug, Clone)]
+pub(crate) struct VerifiedSnapshot {
+    pub manifest: Manifest,
+    pub bundle: Bundle,
+    /// Written before 0.46.5: the files make the meta's *document* hash;
+    /// the manifest wasn't part of that version.
+    pub legacy: bool,
+}
+
 impl ZenFiles {
     /// `~/.k2/zen/widgets/`.
     pub fn widgets_dir(&self) -> PathBuf {
@@ -292,8 +309,12 @@ pub(crate) fn read_saved_bundle(dir: &std::path::Path) -> Option<(Manifest, Bund
 /// checked against `hash` (the pre-0.46.5 template hash every scheme
 /// keeps). The caller checks the version.
 fn read_saved_parts(dir: &std::path::Path) -> Option<(J, Manifest, Bundle)> {
-    let meta: J = serde_json::from_str(&fs::read_to_string(dir.join(LAST_GOOD_JSON)).ok()?).ok()?;
-    let html = fs::read_to_string(dir.join(LAST_GOOD_HTML)).ok()?;
+    read_saved_parts_named(dir, LAST_GOOD_JSON, LAST_GOOD_HTML)
+}
+
+fn read_saved_parts_named(dir: &std::path::Path, json_name: &str, html_name: &str) -> Option<(J, Manifest, Bundle)> {
+    let meta: J = serde_json::from_str(&fs::read_to_string(dir.join(json_name)).ok()?).ok()?;
+    let html = fs::read_to_string(dir.join(html_name)).ok()?;
     let offsets: Vec<usize> = meta["nonceAt"].as_array()?.iter().map(|v| v.as_u64().map(|n| n as usize)).collect::<Option<_>>()?;
     let code = meta["codeBytes"].as_u64()? as usize;
     let manifest = Manifest::from_saved(&meta["manifest"])?;
@@ -309,7 +330,16 @@ fn read_saved_parts(dir: &std::path::Path) -> Option<(J, Manifest, Bundle)> {
 /// old hash)`. `None` when it is missing, already carried, or its document
 /// doesn't match its old hash.
 pub(crate) fn read_legacy_saved_bundle(dir: &std::path::Path) -> Option<(Manifest, Bundle, String, String)> {
-    let (meta, manifest, bundle) = read_saved_parts(dir)?;
+    legacy_from(read_saved_parts(dir)?)
+}
+
+/// [`read_legacy_saved_bundle`] for the copy kept by
+/// [`keep_uncarried`] ([`PRE_CARRY_JSON`]).
+pub(crate) fn read_pre_carry_saved_bundle(dir: &std::path::Path) -> Option<(Manifest, Bundle, String, String)> {
+    legacy_from(read_saved_parts_named(dir, PRE_CARRY_JSON, PRE_CARRY_HTML)?)
+}
+
+fn legacy_from((meta, manifest, bundle): (J, Manifest, Bundle)) -> Option<(Manifest, Bundle, String, String)> {
     if meta.get("hashScheme").is_some() {
         return None;
     }
@@ -317,8 +347,47 @@ pub(crate) fn read_legacy_saved_bundle(dir: &std::path::Path) -> Option<(Manifes
     Some((manifest, bundle, meta["at"].as_str().unwrap_or_default().to_string(), old))
 }
 
+/// Is `dir`'s `last-good.json` in the old (pre-0.46.5) shape?
+fn saved_is_old_shape(dir: &std::path::Path) -> bool {
+    fs::read_to_string(dir.join(LAST_GOOD_JSON))
+        .ok()
+        .and_then(|t| serde_json::from_str::<J>(&t).ok())
+        .is_some_and(|m| m.is_object() && m.get("hashScheme").is_none())
+}
+
+/// Before K2 overwrites an old-shape saved copy in `dir` (the carry
+/// hasn't run: it rewrites every old copy itself, first), keep it as
+/// [`PRE_CARRY_JSON`] / [`PRE_CARRY_HTML`], once: the first old copy is
+/// the one that was signed. Security review finding 4.
+fn keep_uncarried(dir: &std::path::Path) -> Result<(), ZenError> {
+    if !saved_is_old_shape(dir) || dir.join(PRE_CARRY_JSON).exists() {
+        return Ok(());
+    }
+    let (from_html, to_html) = (dir.join(LAST_GOOD_HTML), dir.join(PRE_CARRY_HTML));
+    let html = fs::read(&from_html).map_err(|e| io(e, &from_html))?;
+    crate::fs_atomic::atomic_write(&to_html, &html).map_err(|e| io(e, &to_html))?;
+    let (from_json, to_json) = (dir.join(LAST_GOOD_JSON), dir.join(PRE_CARRY_JSON));
+    let json = fs::read(&from_json).map_err(|e| io(e, &from_json))?;
+    crate::fs_atomic::atomic_write(&to_json, &json).map_err(|e| io(e, &to_json))?;
+    crate::log_debug!("[zen/widgets] {}: kept the copy saved before 0.46.5 for the version carry", dir.display());
+    Ok(())
+}
+
+/// The carry is done with `dir`'s kept pre-0.46.5 copy.
+pub(crate) fn drop_pre_carry(dir: &std::path::Path) {
+    for f in [PRE_CARRY_JSON, PRE_CARRY_HTML] {
+        let p = dir.join(f);
+        if let Err(e) = fs::remove_file(&p) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                crate::log_debug!("[zen/widgets] couldn't remove {}: {e}", p.display());
+            }
+        }
+    }
+}
+
 /// Save `m` + `b` in `dir` in the [`read_saved_bundle`] shape.
 pub(crate) fn write_saved_bundle(dir: &std::path::Path, m: &Manifest, b: &Bundle) -> Result<(), ZenError> {
+    keep_uncarried(dir)?;
     write_saved_bundle_at(dir, m, b, &now_rfc3339())
 }
 
@@ -452,6 +521,31 @@ impl ZenFiles {
             .unwrap_or_default();
         out.sort_by(|a, b| b.name.cmp(&a.name));
         out
+    }
+
+    /// A history snapshot checked against its own files: its manifest and
+    /// bundle when the files bundle to the hash its `meta.json` names
+    /// (`legacy = false`), or, for a snapshot written before 0.46.5, to
+    /// that document hash (`legacy = true`: its manifest wasn't part of
+    /// what was signed then). `None` for a snapshot whose meta names a
+    /// hash its files don't make, so a planted `meta.json` never lends a
+    /// signed hash to other files (security review finding 3).
+    pub(crate) fn verified_snapshot(&self, name: &str, snap: &CodeSnapshot) -> Option<VerifiedSnapshot> {
+        let claimed = snap.hash.as_deref().filter(|h| h.len() == 64)?;
+        let files = self.snapshot_files(name, &snap.name)?;
+        let c = widgets::check_files(&widget_label(name), name, &files);
+        if !c.errors.is_empty() {
+            return None;
+        }
+        let (manifest, bundle) = (c.manifest?, c.bundle?);
+        let legacy = if bundle.hash == claimed {
+            false
+        } else if bundle.template_hash() == claimed {
+            true
+        } else {
+            return None;
+        };
+        Some(VerifiedSnapshot { manifest, bundle, legacy })
     }
 
     pub(crate) fn snapshot_files(&self, name: &str, snap: &str) -> Option<BTreeMap<String, Vec<u8>>> {

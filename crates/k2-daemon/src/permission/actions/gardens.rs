@@ -82,6 +82,15 @@ fn version_ok(v: &str) -> bool {
     v.len() >= MIN_VERSION && v.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// A `zen.sign` / `zen.sign-off` version: the whole hash, 64 lower-case
+/// hex characters, compared with `==`. A prefix would let an agent make
+/// two versions that share one (about 2^24 tries for 12 characters) and
+/// swap the code under a card whose words don't change (security review
+/// finding 2).
+pub(crate) fn full_version(v: &str) -> bool {
+    v.len() == 64 && v.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// `retired` while Garden access lists are on (G18): Keep as mine and
 /// proposals give way to the list. The rows stay registered while the old
 /// path exists (GA10).
@@ -389,12 +398,12 @@ fn signed_values(ctx: &Ctx) -> Result<(String, String, MadeBy), Check> {
     let (Some(widget), Some(version)) = (param(ctx, "widget"), param(ctx, "version")) else {
         return Err(Check::Moved("name the widget and its version: widget=<name> version=<hash>".into()));
     };
-    if !version_ok(version) {
-        return Err(Check::Moved(format!("version= is the first {MIN_VERSION}+ characters of {widget}'s version (k2 zen widgets shows it)")));
+    if !full_version(version) {
+        return Err(Check::Moved(format!("version= is {widget}'s whole version, 64 hex characters (runtime.hash in k2 zen widget show {widget} --json)")));
     }
     match crate::zen_routes::widget_live_version(widget) {
         Err(m) => Err(Check::Moved(m)),
-        Ok((live, _)) if !live.starts_with(version) => Err(Check::Moved(format!(
+        Ok((live, _)) if live != version => Err(Check::Moved(format!(
             "{widget} changed since this was asked (its live version is now {}); a new version needs a new card",
             &live[..live.len().min(12)]
         ))),

@@ -185,6 +185,19 @@ export function ZenCustomFrame({
     void Promise.all([fetchZenWidgetBundle(widget.widget, gardenId), zenLib.texts(widget.libKeys ?? widget.libs)])
       .then(([bundle, libs]) => {
         if (!live) return
+        // The caps, sources and agent rows this frame gets come from the
+        // page payload, so the code it runs must be the version that
+        // payload describes. A bundle that changed since (a write between
+        // the page and this fetch) never runs under the old version's
+        // rights: nothing renders; the payload for the new version re-keys
+        // this frame (security review finding 5).
+        if (bundle.hash !== widget.hash) {
+          problemRef.current({
+            code: 'failed',
+            message: 'This widget changed while its page was loading. It starts once K2 has read the new version.',
+          })
+          return
+        }
         const prelude = zenFramePrelude({ nonce: bundle.nonce, theme: readZenFrameTheme(root), libs, ownScheme: widget.colorScheme === 'own' })
         setLoaded({ html: bundle.html, nonce: bundle.nonce, prelude, hash: bundle.hash })
       })

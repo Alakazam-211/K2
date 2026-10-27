@@ -12,7 +12,7 @@ use crate::garden_data::authors::{CallerKind, StampSource};
 use crate::garden_data::signer_gate;
 use crate::zen::bundle::Bundle;
 use crate::zen::store::ZenFile;
-use crate::zen::widget_store::{read_saved_bundle, LAST_GOOD_HTML, LAST_GOOD_JSON};
+use crate::zen::widget_store::{read_saved_bundle, LAST_GOOD_HTML, LAST_GOOD_JSON, PRE_CARRY_JSON};
 use crate::zen::garden_access::{self as ga, Actor, Change, Via};
 
 struct Tmp(PathBuf);
@@ -106,6 +106,17 @@ fn a_manifest_only_disk_edit_is_a_new_unsigned_version() {
     edit_manifest(&f, "board", |v| v["description"] = json!("Says hello, in other words."));
     let (_, b1) = live(&f, "board");
     assert_eq!(b1.hash, b0.hash, "a description edit is not a new version");
+
+    // The "why" next to a cap is what the person decides on (review
+    // finding 7): rewriting it is a new, unsigned version.
+    edit_manifest(&f, "board", |v| v["reasons"] = json!({"agents:read": "Only to show who is around."}));
+    let (mr, br) = live(&f, "board");
+    assert_eq!(mr.reasons.get("agents:read").map(String::as_str), Some("Only to show who is around."));
+    assert_eq!(br.template(), b0.template(), "the code didn't change");
+    assert_ne!(br.hash, b0.hash, "reasons are part of the version");
+    assert!(!signer_gate::passes(&conn, &g, "board", &br.hash).expect("gate"), "rewritten reasons are unsigned");
+    edit_manifest(&f, "board", |v| v["reasons"] = json!({"agents:read": "to say hello to the first agent in this Home"}));
+    assert_eq!(live(&f, "board").1.hash, b0.hash, "the starter's own reason back: the signed version again");
 
     // A cap added by hand: same document, new version, unsigned.
     edit_manifest(&f, "board", |v| v["caps"] = json!(["agents:read", "thread:post"]));
@@ -287,7 +298,7 @@ fn the_carry_moves_signatures_once_and_logs_manifest_differences() {
     assert_eq!(unreviewed(&conn).expect("list").len(), 1);
     assert_eq!(
         version_changes(&f, &conn, "notes").expect("changes").as_deref(),
-        Some("Since it was signed, this widget now asks for thread:read.")
+        Some("This version of notes asks for agents:read, thread:read; reads no other widget's data; loads no libraries; reads no data sources. Since it was signed, it now asks for thread:read.")
     );
     assert_eq!(mark_reviewed(&conn, "notes", &nb2.hash, 400).expect("review"), 1);
     assert!(unreviewed_difference(&conn, "notes", &nb2.hash).expect("read").is_none());
@@ -330,7 +341,10 @@ fn manifest_diff_names_each_change() {
     let c = m(json!({"schema": 1, "name": "C", "caps": ["agents:read", "store:read"], "reads": ["other"],
         "requires": {"libs": [{"url": "https://cdn.jsdelivr.net/npm/x@1.0.0/x.js", "integrity": sri}]}}));
     assert_eq!(manifest_diff(&a, &c).as_deref(), Some("now loads the CDN file https://cdn.jsdelivr.net/npm/x@1.0.0/x.js"));
-    assert_eq!(manifest_summary(&c), "asks for agents:read, store:read; reads the data of other; loads the CDN file https://cdn.jsdelivr.net/npm/x@1.0.0/x.js");
+    assert_eq!(
+        manifest_summary(&c),
+        "asks for agents:read, store:read; reads the data of other; loads the CDN file https://cdn.jsdelivr.net/npm/x@1.0.0/x.js; reads no data sources"
+    );
 }
 
 /// The zen.sign card's words: the difference from the newest signed
@@ -343,7 +357,7 @@ fn version_changes_reads_the_last_signed_version_from_history() {
     f.refresh().expect("refresh");
     assert_eq!(
         version_changes(&f, &conn, "board").expect("changes").as_deref(),
-        Some("Nobody has signed board yet. It asks for agents:read.")
+        Some("This version of board asks for agents:read; reads no other widget's data; loads no libraries; reads no data sources. No earlier version was signed by you or an agent on its Gardens' lists.")
     );
     let (_, b0) = live(&f, "board");
     authors::stamp(&conn, "board", &b0.hash, &MadeBy::Owner, StampSource::Sign, CallerKind::Owner, 1).expect("stamp");
@@ -351,7 +365,168 @@ fn version_changes_reads_the_last_signed_version_from_history() {
     f.refresh().expect("refresh");
     assert_eq!(
         version_changes(&f, &conn, "board").expect("changes").as_deref(),
-        Some("Since the last signed version, this widget now loads the library uplot@1.")
+        Some("This version of board asks for agents:read; reads no other widget's data; loads uplot@1; reads no data sources. Since the last version signed by you or an agent on its Gardens' lists, it now loads the library uplot@1.")
     );
     assert_eq!(version_changes(&f, &conn, "nope").expect("changes"), None);
+}
+
+
+/// Security review finding 4: K2 0.46.5 served before the carry ran (a
+/// failed first carry) and rewrote the old saved copies. The copy saved
+/// before 0.46.5 is kept beside it, so the late carry still compares: an
+/// unchanged widget keeps its signature; one whose manifest changed in
+/// between is NOT carried (a row, the log, the audit, the news).
+#[test]
+fn a_late_carry_refuses_a_manifest_changed_since_0_46_5_first_ran() {
+    let (_t, f) = set_up("late");
+    let conn = db();
+    f.new_widget("board", Some("hello")).expect("new board");
+    f.new_widget("notes", Some("hello")).expect("new notes");
+    f.refresh().expect("refresh");
+    let (bm, bb) = live(&f, "board");
+    let (nm, nb) = live(&f, "notes");
+    write_legacy(&f.widget_history_dir("board"), &bm, &bb);
+    write_legacy(&f.widget_history_dir("notes"), &nm, &nb);
+    authors::stamp(&conn, "board", &bb.template_hash(), &MadeBy::Owner, StampSource::Sign, CallerKind::Owner, 100).expect("stamp board");
+    authors::stamp(&conn, "notes", &nb.template_hash(), &MadeBy::Owner, StampSource::Sign, CallerKind::Owner, 101).expect("stamp notes");
+
+    // 0.46.5 serves without the carry: its first refresh rewrites both
+    // saved copies (keeping each old one beside), and notes is widened.
+    f.refresh().expect("0.46.5 refresh");
+    for w in ["board", "notes"] {
+        let h = f.widget_history_dir(w);
+        assert!(read_legacy_saved_bundle(&h).is_none(), "{w}: rewritten in the new shape");
+        assert!(h.join(PRE_CARRY_JSON).exists(), "{w}: the copy saved before 0.46.5 is kept");
+    }
+    edit_manifest(&f, "notes", |v| v["caps"] = json!(["agents:read", "thread:post"]));
+    f.refresh().expect("refresh again");
+    let kept = read_pre_carry_saved_bundle(&f.widget_history_dir("notes")).expect("the first old copy stays");
+    assert_eq!(kept.0.caps, nm.caps, "the kept copy is the one saved before 0.46.5");
+    let (_, nb2) = live(&f, "notes");
+    assert_eq!(nb2.template_hash(), nb.template_hash(), "same code, wider manifest");
+
+    let r = carry_once(&conn, &f, 200).expect("carry").expect("first run");
+    // Board didn't change: carried.
+    assert_eq!(authors::maker_of(&conn, "board", &bb.hash).expect("maker"), MadeBy::Owner);
+    // Notes changed in between: its live version is NOT carried.
+    assert_eq!(authors::maker_of(&conn, "notes", &nb2.hash).expect("maker"), MadeBy::Unclaimed, "never carried onto a manifest changed since");
+    let refused = r.refused();
+    assert_eq!(refused.len(), 1, "{:?}", r.versions);
+    assert_eq!((refused[0].widget.as_str(), refused[0].place), ("notes", Place::Live));
+    assert_eq!(refused[0].refused.as_deref(), Some("K2 0.46.5 ran before this carry and since then it now asks for thread:post"));
+    assert!(refused[0].maker.is_none() && refused[0].differs.is_none(), "{:?}", refused[0]);
+    let (carried, why): (i64, String) = conn
+        .query_row("SELECT carried, refused FROM zen_version_carry WHERE widget = 'notes' AND place = 'live'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .expect("the refused row");
+    assert_eq!(carried, 0);
+    assert!(why.contains("thread:post"), "{why}");
+    // What was signed (the kept copy's own version) still carries.
+    assert_eq!(authors::maker_of(&conn, "notes", &nb.hash).expect("maker"), MadeBy::Owner);
+    // The newer saved copies stay; the kept old ones are gone.
+    for w in ["board", "notes"] {
+        let h = f.widget_history_dir(w);
+        assert!(!h.join(PRE_CARRY_JSON).exists(), "{w}: the kept copy is removed after the carry");
+        assert!(read_saved_bundle(&h).is_some(), "{w}: its saved copy reads");
+    }
+    assert_eq!(read_saved_bundle(&f.widget_history_dir("notes")).expect("notes").1.hash, nb2.hash, "the late carry left the newer copy");
+    // The news and the review list.
+    let n = notice(&r).expect("a notice");
+    assert!(n.detail.iter().any(|d| d.starts_with("notes: K2 didn't keep its signature: K2 0.46.5 ran before this carry")), "{:?}", n.detail);
+    assert!(unreviewed(&conn).expect("list").is_empty(), "a refused carry has no signature to review");
+}
+
+/// A late carry with no copy saved before 0.46.5 (nothing kept) can't tell
+/// what was signed: a signed live version is not carried.
+#[test]
+fn a_late_carry_without_the_old_copy_carries_nothing_live() {
+    let (_t, f) = set_up("late-none");
+    let conn = db();
+    f.new_widget("board", Some("hello")).expect("new board");
+    f.refresh().expect("refresh: a new-shape saved copy, no old one");
+    let (_, bb) = live(&f, "board");
+    authors::stamp(&conn, "board", &bb.template_hash(), &MadeBy::Owner, StampSource::Sign, CallerKind::Owner, 100).expect("stamp");
+    let r = carry_once(&conn, &f, 200).expect("carry").expect("first run");
+    assert_eq!(authors::maker_of(&conn, "board", &bb.hash).expect("maker"), MadeBy::Unclaimed);
+    assert_eq!(r.refused().len(), 1, "{:?}", r.versions);
+    assert!(r.refused()[0].refused.as_deref().is_some_and(|w| w.contains("can't tell what was signed")), "{:?}", r.refused());
+}
+
+/// Security review finding 6: a frozen copy whose saved manifest differs
+/// from the one in the code history with the same document is logged at
+/// the carry (carried, as Rosson's default, but never silently).
+#[test]
+fn the_carry_logs_a_frozen_copy_whose_manifest_differs_from_its_history() {
+    let (_t, f) = set_up("frozen-diff");
+    let conn = db();
+    f.new_widget("board", Some("hello")).expect("new");
+    let g = gid(&f, "Garden 1");
+    place(&f, &g, "board");
+    f.set_garden_lock(&g, true).expect("lock");
+    let (bm, bb) = live(&f, "board");
+    write_legacy(&f.widget_history_dir("board"), &bm, &bb);
+    // Before the upgrade the frozen copy's manifest was widened on disk
+    // (0.46.4 never hashed it).
+    let mut wide = bm.clone();
+    wide.caps.push("thread:post".into());
+    let wb = Bundle::from_template(&bb.template(), &bb.nonce_offsets(), bb.code_bytes, widgets::version_digest(&wide)).expect("bundle");
+    let frozen_dir = f.lock_dir(&g).join(crate::zen::lock::LOCKED_WIDGETS_DIR).join("board");
+    write_legacy(&frozen_dir, &wide, &wb);
+    authors::stamp(&conn, "board", &bb.template_hash(), &MadeBy::Owner, StampSource::Sign, CallerKind::Owner, 100).expect("stamp");
+
+    let r = carry_once(&conn, &f, 200).expect("carry").expect("first run");
+    let frozen = r.versions.iter().find(|v| v.place == Place::Frozen).expect("frozen row");
+    assert_eq!(frozen.differs.as_deref(), Some("now asks for thread:post"), "{frozen:?}");
+    assert_eq!(frozen.maker.as_deref(), Some("owner"), "carried, and logged");
+    let last = r.versions.iter().find(|v| v.place == Place::LastGood).expect("last good row");
+    assert_eq!(last.differs, None, "the last good copy matches its code history");
+    let logged: String = conn
+        .query_row("SELECT differs FROM zen_version_carry WHERE widget = 'board' AND place = 'frozen'", [], |r| r.get(0))
+        .expect("logged");
+    assert!(logged.contains("thread:post"), "{logged}");
+    assert_eq!(unreviewed_difference(&conn, "board", &wb.hash).expect("read").as_deref(), Some("now asks for thread:post"));
+    let n = notice(&r).expect("a notice");
+    assert!(n.detail.iter().any(|d| d.starts_with("board: signed by owner; since then it now asks for thread:post.")), "{:?}", n.detail);
+}
+
+/// Security review finding 3, in core: a planted snapshot (a signed hash
+/// in its meta, other files) is never a baseline, and an unlisted agent's
+/// stamp isn't "signed".
+#[test]
+fn version_changes_ignores_planted_snapshots_and_unlisted_signers() {
+    let (_t, f) = set_up("planted");
+    let conn = db();
+    f.new_widget("board", Some("hello")).expect("new");
+    let g = gid(&f, "Garden 1");
+    place(&f, &g, "board");
+    let (_, b0) = live(&f, "board");
+    authors::stamp(&conn, "board", &b0.hash, &MadeBy::Owner, StampSource::Sign, CallerKind::Owner, 1).expect("person signs v0");
+    edit_manifest(&f, "board", |v| v["caps"] = json!(["agents:read", "thread:post"]));
+    f.refresh().expect("refresh");
+    let (_, b1) = live(&f, "board");
+    // w-other isn't on Garden 1's list: its stamp on v1 is no baseline.
+    authors::stamp(&conn, "board", &b1.hash, &agent("w-other"), StampSource::Sign, CallerKind::Agent, 2).expect("unlisted stamp");
+    edit_manifest(&f, "board", |v| v["caps"] = json!(["agents:read", "thread:post", "presence:read"]));
+    f.refresh().expect("refresh");
+    let (_, b2) = live(&f, "board");
+    // Planted: v0's hash in the meta, v2's files.
+    let snap = f.widget_history_dir("board").join("29991231T235959999Z-000");
+    fs::create_dir_all(&snap).expect("dir");
+    for e in fs::read_dir(f.widget_dir("board")).expect("folder").flatten() {
+        fs::copy(e.path(), snap.join(e.file_name())).expect("copy");
+    }
+    fs::write(snap.join("meta.json"), json!({"at": "2999-12-31T23:59:59Z", "clean": true, "hash": b0.hash}).to_string()).expect("meta");
+    assert_eq!(f.widget_snapshots("board")[0].name, "29991231T235959999Z-000");
+    let words = version_changes(&f, &conn, "board").expect("changes").expect("live");
+    assert_eq!(
+        words,
+        format!(
+            "This version of board asks for agents:read, thread:post, presence:read; reads no other widget's data; loads no libraries; reads no data sources. Since the last version signed by you or an agent on its Gardens' lists, it now asks for thread:post, presence:read."
+        ),
+        "against the person's v0 (b2 = {})",
+        b2.hash
+    );
+    // With w-other listed, its v1 is the baseline.
+    ga::add(&conn, &g, "w-other", &Change::new(Via::Settings, &Actor::Owner, 3)).expect("list");
+    let words = version_changes(&f, &conn, "board").expect("changes").expect("live");
+    assert!(words.ends_with(&format!("Since the last version signed by you or an agent on its Gardens' lists, it now asks for presence:read.")), "{words}");
 }

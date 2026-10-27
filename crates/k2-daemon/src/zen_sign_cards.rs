@@ -39,13 +39,13 @@ pub(crate) const SIGN_OFF: &str = "zen.sign-off";
 pub(crate) const K2_SESSION: &str = "k2:zen-sign";
 
 /// The manifest changes the card shows for `widget`'s version `version`
-/// (its hash, or a prefix): K2's own words, computed from the files and the
+/// (its whole hash): K2's own words, computed from the files and the
 /// signatures, never from the request. "This version is no longer live"
 /// when the widget moved on (the check then answers `stale`).
 pub(crate) fn changes_for(widget: &str, version: &str) -> String {
     let f = k2_core::zen::ZenFiles::local();
     let st = f.widget_status(widget);
-    if st.hash().is_empty() || !st.hash().starts_with(version) {
+    if st.hash().is_empty() || st.hash() != version {
         return format!("This version of {widget} is no longer live.");
     }
     let db = k2_core::db::shared();

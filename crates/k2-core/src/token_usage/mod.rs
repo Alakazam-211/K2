@@ -198,7 +198,7 @@ pub fn canonical_workspace(path: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    fs::canonicalize(trimmed)
+    dunce::canonicalize(&trimmed)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| trimmed.trim_end_matches('/').to_string())
 }
@@ -475,8 +475,8 @@ fn push_root(out: &mut Vec<Root>, root: Root) {
     if root.dir.as_os_str().is_empty() {
         return;
     }
-    let key = fs::canonicalize(&root.dir).unwrap_or_else(|_| root.dir.clone());
-    if let Some(existing) = out.iter_mut().find(|r| fs::canonicalize(&r.dir).unwrap_or_else(|_| r.dir.clone()) == key) {
+    let key = dunce::canonicalize(&root.dir).unwrap_or_else(|_| root.dir.clone());
+    if let Some(existing) = out.iter_mut().find(|r| dunce::canonicalize(&r.dir).unwrap_or_else(|_| r.dir.clone()) == key) {
         // A slot wins over "default" for the same folder.
         if matches!(root.home, Home::Slot(_)) {
             existing.home = root.home;

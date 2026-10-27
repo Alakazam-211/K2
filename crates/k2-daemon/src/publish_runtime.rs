@@ -572,8 +572,7 @@ pub fn validate_skin_root(workspace: &Path, raw: &str) -> Result<String, String>
     if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
         return Err("skinRoot must not contain ..".into());
     }
-    let ws = workspace
-        .canonicalize()
+    let ws = dunce::canonicalize(&workspace)
         .map_err(|e| format!("workspace path: {e}"))?;
     let joined = ws.join(p);
     if !joined.is_dir() {
@@ -582,8 +581,7 @@ pub fn validate_skin_root(workspace: &Path, raw: &str) -> Result<String, String>
             p.display()
         ));
     }
-    let canon = joined
-        .canonicalize()
+    let canon = dunce::canonicalize(&joined)
         .map_err(|e| format!("skinRoot: {e}"))?;
     if !canon.starts_with(&ws) {
         return Err("skinRoot escapes the workspace".into());
@@ -606,8 +604,7 @@ fn spawn_skin_helper(
         None
     } else {
         let joined = cwd.join(row.skin_root.trim());
-        let canon = joined
-            .canonicalize()
+        let canon = dunce::canonicalize(&joined)
             .map_err(|e| format!("skinRoot: {e}"))?;
         Some(canon)
     };

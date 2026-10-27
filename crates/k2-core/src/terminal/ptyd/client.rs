@@ -820,7 +820,7 @@ pub fn prune_versioned(home: &Path, keep: &[PathBuf]) -> usize {
     let root = home.join("bin").join("ptyd");
     let keep_dirs: Vec<PathBuf> = keep
         .iter()
-        .filter_map(|p| p.parent().map(|d| std::fs::canonicalize(d).unwrap_or_else(|_| d.to_path_buf())))
+        .filter_map(|p| p.parent().map(|d| dunce::canonicalize(&d).unwrap_or_else(|_| d.to_path_buf())))
         .collect();
     let Ok(rd) = std::fs::read_dir(&root) else { return 0 };
     let mut removed = 0;
@@ -829,7 +829,7 @@ pub fn prune_versioned(home: &Path, keep: &[PathBuf]) -> usize {
         if !p.is_dir() {
             continue;
         }
-        let canon = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+        let canon = dunce::canonicalize(&p).unwrap_or_else(|_| p.clone());
         if keep_dirs.contains(&canon) {
             continue;
         }
@@ -935,7 +935,7 @@ mod tests {
     fn exe_of_reports_our_own_image() {
         // SAFETY: getpid.
         let me = exe_of(unsafe { libc::getpid() }).expect("own exe");
-        assert_eq!(std::fs::canonicalize(me).unwrap(), std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap());
+        assert_eq!(dunce::canonicalize(&me).unwrap(), dunce::canonicalize(&std::env::current_exe().unwrap()).unwrap());
     }
 
     #[test]

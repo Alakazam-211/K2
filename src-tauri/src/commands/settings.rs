@@ -234,8 +234,7 @@ fn write_windows_cli_cmd(cmd_path: &Path, script_path: &Path) -> Result<(), Stri
 /// Ensure `%LOCALAPPDATA%\K2\bin` is on the *user* PATH (no admin).
 #[cfg(windows)]
 fn ensure_windows_user_path_has(bin_dir: &Path) -> Result<(), String> {
-    let bin = bin_dir
-        .canonicalize()
+    let bin = dunce::canonicalize(&bin_dir)
         .unwrap_or_else(|_| bin_dir.to_path_buf());
     let bin_s = bin.display().to_string();
     // PowerShell: append if missing. Broadcasts WM_SETTINGCHANGE so new
@@ -367,7 +366,7 @@ pub(crate) fn cli_symlink_needs_heal() -> bool {
 /// (its file is gone) → heal.
 #[cfg(any(not(target_os = "linux"), test))]
 fn symlink_target_needs_heal(target: &Path, bundled: &Path) -> bool {
-    match (fs::canonicalize(target), fs::canonicalize(bundled)) {
+    match (dunce::canonicalize(&target), dunce::canonicalize(&bundled)) {
         (Ok(t), Ok(b)) => t != b,
         _ => true,
     }
@@ -434,7 +433,7 @@ pub fn cli_install_status() -> Result<serde_json::Value, String> {
         let found = linux_installed_cli();
         let package_managed = found.as_ref().is_some_and(|p| cli_is_distro_package(p));
         let installed_version = found.as_ref().and_then(|p| {
-            let actual = fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+            let actual = dunce::canonicalize(&p).unwrap_or_else(|_| p.clone());
             read_cli_version(&actual)
         });
         let update_available = if package_managed {

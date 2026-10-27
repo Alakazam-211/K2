@@ -160,13 +160,11 @@ pub struct HostWorkspaceRegistry {
 
 /// Resolve `<workspace>/.k2/wiki`, confined under the workspace root.
 pub fn wiki_root(workspace: &Path) -> Result<PathBuf, String> {
-    let root = workspace
-        .canonicalize()
+    let root = dunce::canonicalize(&workspace)
         .map_err(|e| format!("workspace path: {e}"))?;
     let wiki = root.join(WIKI_REL);
     if wiki.exists() {
-        let canon = wiki
-            .canonicalize()
+        let canon = dunce::canonicalize(&wiki)
             .map_err(|e| format!("wiki path: {e}"))?;
         if !canon.starts_with(&root) {
             return Err("wiki path escapes workspace root".into());
@@ -180,8 +178,7 @@ pub fn wiki_root(workspace: &Path) -> Result<PathBuf, String> {
 
 /// Build a full graph index for the workspace wiki (empty if missing).
 pub fn build_index(workspace: &Path) -> Result<WikiIndex, String> {
-    let root = workspace
-        .canonicalize()
+    let root = dunce::canonicalize(&workspace)
         .map_err(|e| format!("workspace path: {e}"))?;
     let wiki = root.join(WIKI_REL);
     let generated_at = chrono_now();
@@ -200,8 +197,7 @@ pub fn build_index(workspace: &Path) -> Result<WikiIndex, String> {
         });
     }
 
-    let wiki_canon = wiki
-        .canonicalize()
+    let wiki_canon = dunce::canonicalize(&wiki)
         .map_err(|e| format!("wiki path: {e}"))?;
     if !wiki_canon.starts_with(&root) {
         return Err("wiki path escapes workspace root".into());
@@ -769,17 +765,15 @@ pub fn read_note(workspace: &Path, id: &str) -> Result<WikiNoteBody, String> {
     if id.is_empty() || id.contains("..") || id.starts_with("missing:") {
         return Err("invalid note id".into());
     }
-    let root = workspace
-        .canonicalize()
+    let root = dunce::canonicalize(&workspace)
         .map_err(|e| format!("workspace path: {e}"))?;
     let wiki = root.join(WIKI_REL);
     if !wiki.is_dir() {
         return Err("wiki does not exist".into());
     }
-    let wiki_canon = wiki.canonicalize().map_err(|e| format!("wiki path: {e}"))?;
+    let wiki_canon = dunce::canonicalize(&wiki).map_err(|e| format!("wiki path: {e}"))?;
     let candidate = wiki_canon.join(id);
-    let abs = candidate
-        .canonicalize()
+    let abs = dunce::canonicalize(&candidate)
         .map_err(|_| format!("note not found: {id}"))?;
     if !abs.starts_with(&wiki_canon) {
         return Err("note path escapes wiki root".into());
@@ -866,21 +860,18 @@ pub fn write_note(workspace: &Path, id: &str, body: &str) -> Result<String, Stri
         ));
     }
     seed_wiki(workspace)?;
-    let root = workspace
-        .canonicalize()
+    let root = dunce::canonicalize(&workspace)
         .map_err(|e| format!("workspace path: {e}"))?;
     let wiki = root.join(WIKI_REL);
     fs::create_dir_all(&wiki).map_err(|e| format!("mkdir wiki: {e}"))?;
-    let wiki_canon = wiki
-        .canonicalize()
+    let wiki_canon = dunce::canonicalize(&wiki)
         .map_err(|e| format!("wiki path: {e}"))?;
     let dest = wiki_canon.join(&id);
     if !dest.starts_with(&wiki_canon) {
         return Err("note path escapes wiki root".into());
     }
     if dest.exists() {
-        let abs = dest
-            .canonicalize()
+        let abs = dunce::canonicalize(&dest)
             .map_err(|e| format!("note path: {e}"))?;
         if !abs.starts_with(&wiki_canon) {
             return Err("note path escapes wiki root".into());
@@ -918,8 +909,7 @@ pub struct WikiNoteBody {
 /// new brain appears on the K2 fleet map. Workspace seeds never link to
 /// the host index (one-way registration only).
 pub fn seed_wiki(workspace: &Path) -> Result<Vec<String>, String> {
-    let root = workspace
-        .canonicalize()
+    let root = dunce::canonicalize(&workspace)
         .map_err(|e| format!("workspace path: {e}"))?;
     let wiki = root.join(WIKI_REL);
     fs::create_dir_all(&wiki).map_err(|e| format!("mkdir wiki: {e}"))?;

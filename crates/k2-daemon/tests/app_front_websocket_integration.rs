@@ -126,7 +126,7 @@ fn ws_app_folder(dir: &std::path::Path) -> std::path::PathBuf {
     )
     .unwrap();
     std::fs::write(dir.join("server.py"), WS_APP_PY).unwrap();
-    std::fs::canonicalize(dir).unwrap()
+    dunce::canonicalize(&dir).unwrap()
 }
 
 mod any_cert {

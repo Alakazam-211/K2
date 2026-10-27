@@ -60,7 +60,7 @@ fn fx(tag: &str) -> Fx {
     dg::reset_scan_control();
     let root = home.path().to_path_buf();
     let (ws_a, ws_b) = (format!("ws-a-{tag}"), format!("ws-b-{tag}"));
-    let ws_a_path = std::fs::canonicalize(&root).unwrap().join("ws-a");
+    let ws_a_path = dunce::canonicalize(&root).unwrap().join("ws-a");
     std::fs::create_dir_all(&ws_a_path).unwrap();
     std::fs::create_dir_all(root.join("ws-b")).unwrap();
     {

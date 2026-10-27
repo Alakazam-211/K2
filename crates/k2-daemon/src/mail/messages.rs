@@ -925,16 +925,14 @@ pub fn resolve_out_path(ws_root: &str, out: &str) -> Result<PathBuf, String> {
     {
         return Err(format!("'out' must not contain '..' components: {out}"));
     }
-    let root = Path::new(ws_root)
-        .canonicalize()
+    let root = dunce::canonicalize(&Path::new(ws_root))
         .map_err(|e| format!("workspace root unavailable: {e}"))?;
     let target = root.join(rel);
     let parent = target
         .parent()
         .ok_or_else(|| "'out' has no parent directory".to_string())?;
     std::fs::create_dir_all(parent).map_err(|e| format!("create '{out}' parent: {e}"))?;
-    let parent = parent
-        .canonicalize()
+    let parent = dunce::canonicalize(&parent)
         .map_err(|e| format!("resolve '{out}' parent: {e}"))?;
     if !parent.starts_with(&root) {
         return Err(format!("'out' escapes the workspace: {out}"));
@@ -987,15 +985,13 @@ pub fn resolve_out_target(ws_root: &str, out: &str) -> Result<OutTarget, String>
     {
         return Err(format!("'out' must not contain '..' components: {out}"));
     }
-    let root = Path::new(ws_root)
-        .canonicalize()
+    let root = dunce::canonicalize(&Path::new(ws_root))
         .map_err(|e| format!("workspace root unavailable: {e}"))?;
     let dir = root.join(rel);
     std::fs::create_dir_all(&dir).map_err(|e| {
         format!("'{out}' names a folder, but it could not be created ({e}) — is part of it a file?")
     })?;
-    let dir = dir
-        .canonicalize()
+    let dir = dunce::canonicalize(&dir)
         .map_err(|e| format!("resolve '{out}': {e}"))?;
     if !dir.starts_with(&root) {
         return Err(format!("'out' escapes the workspace: {out}"));
@@ -1070,14 +1066,12 @@ pub fn resolve_in_path(ws_root: &str, path: &str) -> Result<PathBuf, InPathError
             "attachment path must not contain '..' components: {raw}"
         )));
     }
-    let root = Path::new(ws_root)
-        .canonicalize()
+    let root = dunce::canonicalize(&Path::new(ws_root))
         .map_err(|e| InPathError::Usage(format!("workspace root unavailable: {e}")))?;
     let target = root.join(rel);
     // Canonicalize the FILE — a missing file is NotFound; a symlink that
     // escapes the root is caught by the `starts_with` check below.
-    let canonical = target
-        .canonicalize()
+    let canonical = dunce::canonicalize(&target)
         .map_err(|_| InPathError::NotFound(raw.to_string()))?;
     if !canonical.starts_with(&root) {
         return Err(InPathError::Usage(format!(
@@ -1617,10 +1611,10 @@ pub(crate) mod tests {
 
         // Plain relative + nested both land under the root.
         let p = resolve_out_path(&root_s, "code.txt").expect("plain");
-        assert!(p.starts_with(root.canonicalize().unwrap()));
+        assert!(p.starts_with(dunce::canonicalize(&root).unwrap()));
         let p = resolve_out_path(&root_s, "downloads/mail/invite.ics").expect("nested");
         assert!(p.ends_with("downloads/mail/invite.ics"));
-        assert!(p.starts_with(root.canonicalize().unwrap()));
+        assert!(p.starts_with(dunce::canonicalize(&root).unwrap()));
 
         // Refusals: absolute, traversal, empty.
         assert!(resolve_out_path(&root_s, "/etc/passwd").is_err());
@@ -1654,7 +1648,7 @@ pub(crate) mod tests {
         ));
         std::fs::create_dir_all(root.join("calls")).unwrap();
         let root_s = root.to_string_lossy().to_string();
-        let canon = root.canonicalize().unwrap();
+        let canon = dunce::canonicalize(&root).unwrap();
 
         // An existing folder, with or without the trailing slash.
         for out in ["calls", "calls/"] {
@@ -1741,7 +1735,7 @@ pub(crate) mod tests {
 
         // Plain + nested existing files resolve under the canonical root.
         let p = resolve_in_path(&root_s, "a.txt").expect("plain");
-        assert!(p.starts_with(root.canonicalize().unwrap()));
+        assert!(p.starts_with(dunce::canonicalize(&root).unwrap()));
         let p = resolve_in_path(&root_s, "docs/b.bin").expect("nested");
         assert!(p.ends_with("docs/b.bin"));
 

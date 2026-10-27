@@ -440,7 +440,7 @@ fn same_repo_worktree(dir: &Path, main: Option<&Path>) -> bool {
     let Ok(text) = std::fs::read_to_string(&dotgit) else { return false };
     let Some(gitdir) = text.lines().find_map(|l| l.trim().strip_prefix("gitdir:")).map(str::trim) else { return false };
     let gitdir = if Path::new(gitdir).is_absolute() { PathBuf::from(gitdir) } else { dir.join(gitdir) };
-    match (gitdir.canonicalize(), main.join(".git").join("worktrees").canonicalize()) {
+    match (dunce::canonicalize(&gitdir), dunce::canonicalize(&main.join(".git").join("worktrees"))) {
         (Ok(g), Ok(w)) => g.starts_with(w),
         _ => false,
     }

@@ -304,13 +304,13 @@ fn source_parent_valid_for_project(parent: &Path, project_path: &str) -> bool {
         None => return false,
     };
     let projects = home.join(".claude").join("projects");
-    let Ok(parent_canon) = parent.canonicalize() else {
+    let Ok(parent_canon) = dunce::canonicalize(&parent) else {
         // Parent may not exist yet — still accept if it sits under the hash prefix.
         let s = parent.to_string_lossy();
         let hash = claude_project_hash(resolve_root_project_path(project_path));
         return s.contains(&hash);
     };
-    let Ok(projects_canon) = projects.canonicalize() else {
+    let Ok(projects_canon) = dunce::canonicalize(&projects) else {
         return false;
     };
     if !parent_canon.starts_with(&projects_canon) {

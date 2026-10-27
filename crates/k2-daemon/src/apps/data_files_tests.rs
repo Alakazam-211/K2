@@ -45,7 +45,7 @@ fn fx(tag: &str) -> Fx {
     k2_core::deploy::set_enabled(true);
     dg::clear_snapshot();
     dg::reset_scan_control();
-    let root = std::fs::canonicalize(home.path()).unwrap();
+    let root = dunce::canonicalize(&home.path()).unwrap();
     let (ws_a, ws_b) = (format!("ws-a-{tag}"), format!("ws-b-{tag}"));
     let ws_a_path = root.join("ws-a");
     std::fs::create_dir_all(&ws_a_path).unwrap();

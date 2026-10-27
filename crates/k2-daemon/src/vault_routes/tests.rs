@@ -452,7 +452,7 @@ fn a_carry_import_matches_the_workspace_by_id_never_by_name() {
         let register = |parent: &str| {
             let p = root.path().join(parent).join(&folder);
             std::fs::create_dir_all(&p).expect("mkdir");
-            let canon = std::fs::canonicalize(&p).expect("canon").to_string_lossy().to_string();
+            let canon = dunce::canonicalize(&p).expect("canon").to_string_lossy().to_string();
             k2_core::projects_ops::projects_add_without_git(&canon).expect("register")
         };
         // Same folder name three times: an unrelated workspace that will be
@@ -663,7 +663,7 @@ fn an_agents_carry_export_files_an_owner_notice_with_names_never_values() {
         let dir = TestDir::new("carry-notice-ws");
         let ws = dir.path().join(format!("notice-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]));
         std::fs::create_dir_all(&ws).expect("mkdir");
-        let path = std::fs::canonicalize(&ws).expect("canon").to_string_lossy().to_string();
+        let path = dunce::canonicalize(&ws).expect("canon").to_string_lossy().to_string();
         let project = k2_core::projects_ops::projects_add_without_git(&path).expect("register");
         let label = crate::vault::workspace_label(&project.id);
         let src = vault();

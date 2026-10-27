@@ -217,7 +217,7 @@ fn app_folder_nocaps(dir: &std::path::Path, id: &str, tag: &str) -> PathBuf {
         format!(r#"{{"schema":1,"kind":"app","id":"{id}","name":"{id}","version":"1.0.0","caps":[],"host":{{"mode":"cmd","start":["python3","server.py"],"health":{{"path":"/healthz"}},"drainSecs":2}}}}"#),
     )
     .unwrap();
-    std::fs::canonicalize(dir).unwrap()
+    dunce::canonicalize(&dir).unwrap()
 }
 
 fn body(port: u16, path: &str) -> String {

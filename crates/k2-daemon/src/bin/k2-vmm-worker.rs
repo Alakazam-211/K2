@@ -1120,8 +1120,7 @@ mod worker {
         //    dir first (TOCTOU). Initial bind, then a SEPARATE remount to apply
         //    nosuid,nodev (the kernel ignores those on the first bind).
         if let Some(ws) = &cfg.workspace_root {
-            let ws = ws
-                .canonicalize()
+            let ws = dunce::canonicalize(&ws)
                 .map_err(|e| format!("canonicalize workspace: {e}"))?;
             if !ws.is_dir() {
                 return fail("workspace-root is not a directory after canonicalize");
@@ -1192,8 +1191,7 @@ mod worker {
         // 6. Tool roots → NEWROOT/tools/<i>, READ-ONLY. Initial bind ignores
         //    MS_RDONLY → a SEPARATE remount actually applies ro,nosuid,nodev.
         for (idx, root) in cfg.tool_roots.iter().enumerate() {
-            let src = root
-                .canonicalize()
+            let src = dunce::canonicalize(&root)
                 .map_err(|e| format!("canonicalize tool-root {idx}: {e}"))?;
             let dst = newroot.join(format!("tools/{idx}"));
             std::fs::create_dir_all(&dst)
@@ -1334,8 +1332,7 @@ mod worker {
     /// `ro`, `run_libkrun` ALSO exports the tag `read_only=true` (belt-and-braces)
     /// so the RO guarantee holds at both the host bind and the virtiofs layer.
     fn bind_mirror_source(src: &Path, dst: &Path, ro: bool, label: &str) -> Result<(), WErr> {
-        let src = src
-            .canonicalize()
+        let src = dunce::canonicalize(&src)
             .map_err(|e| format!("canonicalize mirror {label}: {e}"))?;
         if !src.is_dir() {
             return fail(format!(
@@ -1381,7 +1378,7 @@ mod worker {
         let libdir = Path::new(LIBKRUN_LIBDIR);
 
         // Resolve the real shared object (follow the symlink chain to the file).
-        let real = std::fs::canonicalize(libdir.join("libkrunfw.so"))
+        let real = dunce::canonicalize(&libdir.join("libkrunfw.so"))
             .or_else(|_| {
                 // Fall back to canonicalizing any libkrunfw.so* entry.
                 std::fs::read_dir(libdir)
@@ -1395,7 +1392,7 @@ mod worker {
                                     .unwrap_or(false)
                             })
                     })
-                    .and_then(|p| std::fs::canonicalize(p).ok())
+                    .and_then(|p| dunce::canonicalize(&p).ok())
                     .ok_or_else(|| {
                         std::io::Error::new(std::io::ErrorKind::NotFound, "no libkrunfw.so*")
                     })

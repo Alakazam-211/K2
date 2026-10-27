@@ -307,7 +307,7 @@ pub fn check_not_real_under_test(dir: &Path, is_test: bool, real: &[PathBuf]) ->
     // Canonical parent + leaf name: the dir itself may not exist yet, and
     // macOS spells the temp dir both /var/folders and /private/var/folders.
     let canon = |p: &Path| match (p.parent(), p.file_name()) {
-        (Some(parent), Some(name)) => std::fs::canonicalize(parent)
+        (Some(parent), Some(name)) => dunce::canonicalize(&parent)
             .map(|c| c.join(name))
             .unwrap_or_else(|_| p.to_path_buf()),
         _ => p.to_path_buf(),
@@ -622,7 +622,7 @@ pub fn is_test_process(marker_set: bool, home: Option<&Path>, passwd: Option<&Pa
         return true;
     }
     let Some(home) = home else { return false };
-    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let canon = |p: &Path| dunce::canonicalize(&p).unwrap_or_else(|_| p.to_path_buf());
     let h = canon(home);
     if passwd.is_some_and(|p| canon(p) == h) {
         return false;

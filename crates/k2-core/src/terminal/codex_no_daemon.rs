@@ -288,7 +288,7 @@ pub fn binary_supports_no_daemon(program: &str, search_path: &str) -> Result<(),
     else {
         return Err(format!("{program} not found on the spawn PATH"));
     };
-    let key = found.canonicalize().unwrap_or_else(|_| found.clone());
+    let key = dunce::canonicalize(&found).unwrap_or_else(|_| found.clone());
     let fp = fingerprint(&key).ok_or_else(|| format!("cannot stat {}", key.display()))?;
     {
         let g = cache().lock().unwrap_or_else(|e| e.into_inner());

@@ -77,7 +77,7 @@ fn keychain_home(k2_home: &Path, real_home: Option<&Path>) -> bool {
     }
     let Some(real) = real_home else { return false };
     let want = real.join(".k2");
-    match (std::fs::canonicalize(k2_home), std::fs::canonicalize(&want)) {
+    match (dunce::canonicalize(&k2_home), dunce::canonicalize(&want)) {
         (Ok(a), Ok(b)) => a == b,
         _ => k2_home == want,
     }

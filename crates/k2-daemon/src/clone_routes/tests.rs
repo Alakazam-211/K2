@@ -74,7 +74,7 @@ fn build_source_bundle_with_identity(
     write(&project.join(".k2so/PROJECT.md"), "# Project\n");
     write(&project.join("src/main.rs"), "fn main() {}\n");
 
-    let canon = fs::canonicalize(&project).unwrap();
+    let canon = dunce::canonicalize(&project).unwrap();
     let slug = k2_core::chat_history::claude_project_hash(&canon.to_string_lossy());
     let slug_dir = src_home.join(".claude").join("projects").join(&slug);
     write(&slug_dir.join("memory/MEMORY.md"), "## Memory Index\nm1\n");
@@ -668,7 +668,7 @@ fn threads_source(root: &TempDir, name: &str) -> (PathBuf, PathBuf, String, Stri
     let src_home = root.path().join("src-home");
     fs::create_dir_all(&project).unwrap();
     write(&project.join("README.md"), "# threads source\n");
-    let canon = fs::canonicalize(&project).unwrap();
+    let canon = dunce::canonicalize(&project).unwrap();
     let slug = k2_core::chat_history::claude_project_hash(&canon.to_string_lossy());
     let sid = uuid::Uuid::new_v4().to_string();
     write(&src_home.join(".claude/projects").join(&slug).join(format!("{sid}.jsonl")), "{\"type\":\"live\"}\n");

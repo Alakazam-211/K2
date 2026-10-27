@@ -469,7 +469,7 @@ pub fn install_gate_for_process(home: &Path) -> Result<(), &'static str> {
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
-    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let canon = |p: &Path| dunce::canonicalize(&p).unwrap_or_else(|_| p.to_path_buf());
     a == b || canon(a) == canon(b)
 }
 
@@ -853,7 +853,7 @@ fn edit_config(
     let mut text = serde_json::to_string_pretty(&after).map_err(|e| EditError::Io(e.to_string()))?;
     text.push('\n');
     // Write through a symlinked config (dotfiles) instead of replacing the link.
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let target = dunce::canonicalize(&path).unwrap_or_else(|_| path.to_path_buf());
     crate::fs_atomic::atomic_write_str(&target, &text).map_err(|e| EditError::Io(e.to_string()))?;
     Ok((ConfigState::Written, after))
 }

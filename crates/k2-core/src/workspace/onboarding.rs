@@ -240,8 +240,8 @@ pub fn is_our_agents_md_symlink(project_path: &str, link: &Path) -> bool {
             .join(target)
     };
     if let (Ok(a), Ok(b)) = (
-        fs::canonicalize(&resolved),
-        fs::canonicalize(crate::workspace_dot_dir(project_path).join("AGENTS.md")),
+        dunce::canonicalize(&resolved),
+        dunce::canonicalize(&crate::workspace_dot_dir(project_path).join("AGENTS.md")),
     ) {
         return a == b;
     }

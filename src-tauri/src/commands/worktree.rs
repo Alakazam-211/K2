@@ -86,7 +86,7 @@ fn resolve_safe_path(worktree_path: &str, relative_path: &str) -> Result<PathBuf
     // Canonicalize the worktree root once. We need the real (symlink-
     // resolved) path so an `eq` check against the resolved file path
     // is meaningful.
-    let canonical_worktree = std::fs::canonicalize(&worktree)
+    let canonical_worktree = dunce::canonicalize(&worktree)
         .map_err(|e| format!("worktree_not_found: {}", e))?;
 
     let joined = worktree.join(rel);
@@ -96,7 +96,7 @@ fn resolve_safe_path(worktree_path: &str, relative_path: &str) -> Result<PathBuf
     // need to defend against parent symlinks that could redirect a
     // not-yet-created path outside the root — canonicalize the
     // parent directory instead.
-    let canonical_file = match std::fs::canonicalize(&joined) {
+    let canonical_file = match dunce::canonicalize(&joined) {
         Ok(p) => p,
         Err(_) => {
             // File missing — canonicalize the parent and re-join the
@@ -107,7 +107,7 @@ fn resolve_safe_path(worktree_path: &str, relative_path: &str) -> Result<PathBuf
             let leaf = joined
                 .file_name()
                 .ok_or_else(|| "no_file_name".to_string())?;
-            let canonical_parent = std::fs::canonicalize(parent)
+            let canonical_parent = dunce::canonicalize(&parent)
                 .map_err(|e| format!("parent_not_found: {}", e))?;
             canonical_parent.join(leaf)
         }

@@ -120,6 +120,10 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 # Home-directory lookup for ~/.k2so/k2so.db.
 dirs = "5"
+# canonicalize without the Windows \\?\ verbatim prefix (git, stored
+# workspace paths and path comparisons need the plain C:\ form); exactly
+# std::fs::canonicalize on Unix. Already in Cargo.lock.
+dunce = "1"
 
 # libgit2 bindings — worktree creation + branch management + diff/merge.
 # `vendored-openssl` matches the flag src-tauri had been using so the

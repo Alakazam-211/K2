@@ -132,9 +132,9 @@ pub fn jailed_path(workspace_root: &Path, rel: &str) -> Result<PathBuf, VaultErr
     }
     let p = Path::new(rel);
     let joined = if p.is_absolute() { p.to_path_buf() } else { workspace_root.join(p) };
-    let root = std::fs::canonicalize(workspace_root).map_err(|_| bad())?;
+    let root = dunce::canonicalize(&workspace_root).map_err(|_| bad())?;
     let parent = joined.parent().ok_or_else(bad)?;
-    let parent = std::fs::canonicalize(parent).map_err(|_| bad())?;
+    let parent = dunce::canonicalize(&parent).map_err(|_| bad())?;
     if !parent.starts_with(&root) {
         return Err(bad());
     }

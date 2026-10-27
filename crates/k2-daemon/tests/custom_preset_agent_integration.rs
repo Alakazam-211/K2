@@ -58,7 +58,7 @@ impl Drop for TestEnv {
 fn k2_cli() -> PathBuf {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
     assert!(p.is_file(), "cli/k2 missing at {}", p.display());
-    p.canonicalize().expect("canonical cli path")
+    dunce::canonicalize(&p).expect("canonical cli path")
 }
 
 /// `board-keeper`: emits its lifecycle through the real CLI (once

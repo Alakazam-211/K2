@@ -20,7 +20,7 @@ fn env() -> Env {
     let t = k2_core::test_env::TempHome::new();
     k2_core::db::init_for_tests();
     install();
-    let home = t.path().canonicalize().unwrap();
+    let home = dunce::canonicalize(&t.path()).unwrap();
     Env { home, _t: t }
 }
 
@@ -31,7 +31,7 @@ fn folder(home: &Path, name: &str, settings: Option<&str>) -> PathBuf {
         std::fs::create_dir_all(d.join(".claude")).unwrap();
         std::fs::write(d.join(".claude/settings.json"), s).unwrap();
     }
-    d.canonicalize().unwrap()
+    dunce::canonicalize(&d).unwrap()
 }
 
 fn s(p: &Path) -> String {

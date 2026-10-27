@@ -105,7 +105,7 @@ pub fn start() {
 /// for `/var` temp folders).
 fn root_forms(root: &Path) -> Vec<PathBuf> {
     let mut out = vec![root.to_path_buf()];
-    if let Ok(c) = std::fs::canonicalize(root) {
+    if let Ok(c) = dunce::canonicalize(&root) {
         if c != root {
             out.push(c);
         }

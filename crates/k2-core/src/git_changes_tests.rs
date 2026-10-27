@@ -98,7 +98,7 @@ fn normalize_rel_path_accepts_inside_and_refuses_escapes() {
     assert_eq!(normalize_rel_path(&wd, s(&abs)).expect("abs inside"), "src/b.rs");
     // git2 may report the workdir canonical (/private/var/…) while the
     // client spells it as given (/var/…): still inside.
-    let canon_wd = fs::canonicalize(&wd).expect("canon");
+    let canon_wd = dunce::canonicalize(&wd).expect("canon");
     assert_eq!(normalize_rel_path(&canon_wd, s(&abs)).expect("other spelling"), "src/b.rs");
     for bad in ["", "   ", "../x", "src/../../etc/passwd", "/etc/passwd", ".git/config", ".GIT/HEAD", "a\0b", "."] {
         let err = normalize_rel_path(&wd, bad).expect_err(bad);
@@ -646,7 +646,7 @@ fn classify_git_paths_for_main_and_linked_worktree() {
     assert_eq!(classify_git_path(&format!("{g}/config"), &dirs), None);
     assert_eq!(classify_git_path(s(&d.join("a.txt")), &dirs), None);
     // Canonical spelling (macOS /private/var) also matches.
-    let canon = std::fs::canonicalize(&dirs.gitdir).expect("canon");
+    let canon = dunce::canonicalize(&dirs.gitdir).expect("canon");
     assert_eq!(classify_git_path(&format!("{}/index", canon.to_string_lossy().trim_end_matches('/')), &dirs), Some(GitSignal::Local));
     assert!(is_git_internal(&format!("{g}/index")));
     assert!(!is_git_internal(s(&d.join("a.txt"))));

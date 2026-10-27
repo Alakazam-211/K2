@@ -174,7 +174,7 @@ pub struct GitWatchSet {
 }
 
 fn canon(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    dunce::canonicalize(&p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 impl GitWatchSet {

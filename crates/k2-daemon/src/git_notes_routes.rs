@@ -166,7 +166,7 @@ pub fn owning_project(path: &str) -> Option<(String, String)> {
 
 /// Is `child` the folder `parent` or inside it (canonical spellings)?
 fn inside(child: &str, parent: &str) -> bool {
-    let canon = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::PathBuf::from(p));
+    let canon = |p: &str| dunce::canonicalize(&p).unwrap_or_else(|_| std::path::PathBuf::from(p));
     canon(child).starts_with(canon(parent))
 }
 

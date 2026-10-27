@@ -162,7 +162,7 @@ pub fn export_threads_for_clone(
 /// canonical spelling).
 fn project_id_for_path(conn: &rusqlite::Connection, project_path: &str) -> Result<Option<String>, String> {
     let trimmed = project_path.trim_end_matches('/');
-    let canonical = std::fs::canonicalize(trimmed)
+    let canonical = dunce::canonicalize(&trimmed)
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| trimmed.to_string());
     let mut stmt = conn
@@ -177,7 +177,7 @@ fn project_id_for_path(conn: &rusqlite::Connection, project_path: &str) -> Resul
         if p == trimmed || p == canonical {
             return Ok(Some(id));
         }
-        if std::fs::canonicalize(p).is_ok_and(|c| c.to_string_lossy() == canonical) {
+        if dunce::canonicalize(&p).is_ok_and(|c| c.to_string_lossy() == canonical) {
             return Ok(Some(id));
         }
     }
@@ -938,7 +938,7 @@ fn is_registered_workspace(canonical: &std::path::Path) -> bool {
         Err(_) => return false,
     };
     projects.iter().any(|p| {
-        std::fs::canonicalize(&p.path)
+        dunce::canonicalize(&p.path)
             .map(|reg| reg == canonical)
             .unwrap_or(false)
     })

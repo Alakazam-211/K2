@@ -174,7 +174,7 @@ fn seed_room(tag: &str) -> Room {
     let handle = format!("{tag}{}", &id[..8]);
     let dir = std::env::temp_dir().join(format!("k2-app-hb-room-{handle}"));
     std::fs::create_dir_all(&dir).expect("room dir");
-    let path = dir.canonicalize().expect("canon").to_string_lossy().into_owned();
+    let path = dunce::canonicalize(&dir).expect("canon").to_string_lossy().into_owned();
     let db = k2_core::db::shared();
     let conn = db.lock();
     conn.execute(

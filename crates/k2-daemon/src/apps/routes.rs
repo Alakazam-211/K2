@@ -292,7 +292,7 @@ pub(crate) fn ws_by_token(token: &str) -> Option<Ws> {
     }
     let path = crate::workspace_msg::resolve_workspace(t).or_else(|| {
         t.starts_with('/')
-            .then(|| std::fs::canonicalize(t).ok())
+            .then(|| dunce::canonicalize(&t).ok())
             .flatten()
             .and_then(|c| crate::workspace_msg::resolve_workspace(&c.to_string_lossy()))
     })?;
@@ -331,10 +331,10 @@ pub(crate) fn resolve_folder(who: &Who, raw: &str) -> R<PathBuf> {
     if !p.is_absolute() {
         return Err(no(codes::BAD_REQUEST, 400, "give the folder as an absolute path"));
     }
-    let canon = std::fs::canonicalize(p).map_err(|e| no(codes::BAD_REQUEST, 400, format!("{}: {e}", p.display())))?;
+    let canon = dunce::canonicalize(&p).map_err(|e| no(codes::BAD_REQUEST, 400, format!("{}: {e}", p.display())))?;
     if let Some(ws) = agent_ws(who) {
         let w = ws_by_id(ws).ok_or_else(|| no(codes::FORBIDDEN, 404, "your workspace is not registered"))?;
-        let root = std::fs::canonicalize(&w.path).unwrap_or_else(|_| PathBuf::from(&w.path));
+        let root = dunce::canonicalize(&w.path).unwrap_or_else(|_| PathBuf::from(&w.path));
         if !canon.starts_with(&root) {
             return Err(no(
                 codes::FOLDER_OUTSIDE_WORKSPACE,

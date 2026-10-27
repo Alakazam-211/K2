@@ -68,11 +68,11 @@ pub fn resolve_link(root: &Path, home: Option<&Path>, input: &str) -> LinkAnswer
     } else {
         root.join(raw)
     };
-    let Ok(real_root) = root.canonicalize() else {
+    let Ok(real_root) = dunce::canonicalize(&root) else {
         return LinkAnswer::refused(input);
     };
     // realpath: follows every symlink and `..`; a missing path fails here.
-    let Ok(real) = joined.canonicalize() else {
+    let Ok(real) = dunce::canonicalize(&joined) else {
         return LinkAnswer::refused(input);
     };
     let Ok(rel) = real.strip_prefix(&real_root) else {

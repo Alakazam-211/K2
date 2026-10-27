@@ -1984,7 +1984,7 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&root).expect("temp root");
-        root.canonicalize().expect("canonical temp root")
+        dunce::canonicalize(&root).expect("canonical temp root")
     }
 
     fn get_into(

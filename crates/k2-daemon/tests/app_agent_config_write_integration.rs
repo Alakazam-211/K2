@@ -174,7 +174,7 @@ fn seed_room(tag: &str) -> Room {
     std::fs::create_dir_all(dir.join(".k2/inbox")).expect("inbox dir");
     std::fs::create_dir_all(dir.join("notes")).expect("notes dir");
     std::fs::write(dir.join(".k2/agent/ROLE.md"), "original role").expect("role");
-    let path = dir.canonicalize().expect("canon").to_string_lossy().into_owned();
+    let path = dunce::canonicalize(&dir).expect("canon").to_string_lossy().into_owned();
     let db = k2_core::db::shared();
     let conn = db.lock();
     conn.execute(

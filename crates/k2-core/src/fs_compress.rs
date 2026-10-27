@@ -335,7 +335,7 @@ mod tests {
     /// TempDir path canonicalized — /tmp is a symlink on macOS and
     /// compress_to_zip canonicalizes via validate_path.
     fn tmp_canon(tmp: &TempDir) -> PathBuf {
-        tmp.path().canonicalize().unwrap()
+        dunce::canonicalize(&tmp.path()).unwrap()
     }
 
     #[test]

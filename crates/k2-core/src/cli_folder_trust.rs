@@ -236,8 +236,8 @@ fn skip_unisolated_home(home: &Path) -> bool {
     #[cfg(any(test, feature = "test-util"))]
     {
         let tmp = std::env::temp_dir();
-        let home_c = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
-        let tmp_c = tmp.canonicalize().unwrap_or(tmp);
+        let home_c = dunce::canonicalize(&home).unwrap_or_else(|_| home.to_path_buf());
+        let tmp_c = dunce::canonicalize(&tmp).unwrap_or(tmp);
         return !home_c.starts_with(&tmp_c);
     }
     #[cfg(not(any(test, feature = "test-util")))]
@@ -253,7 +253,7 @@ fn canonical_abs(path: &Path) -> Option<PathBuf> {
     } else {
         std::env::current_dir().ok()?.join(path)
     };
-    match abs.canonicalize() {
+    match dunce::canonicalize(&abs) {
         Ok(p) => Some(p),
         Err(_) => {
             // Path may not exist yet; still strip `/.` / trailing slash.
@@ -350,7 +350,7 @@ fn linked_main_checkout(top: &Path) -> Option<PathBuf> {
     let text = read_to_string_lossy(&dotgit)?;
     let gitdir = text.lines().find_map(|l| l.trim().strip_prefix("gitdir:"))?.trim().to_string();
     let gitdir = if Path::new(&gitdir).is_absolute() { PathBuf::from(&gitdir) } else { top.join(&gitdir) };
-    let wt = gitdir.canonicalize().ok()?;
+    let wt = dunce::canonicalize(&gitdir).ok()?;
     let worktrees = wt.parent()?;
     if worktrees.file_name()? != "worktrees" {
         return None;
@@ -363,7 +363,7 @@ fn linked_main_checkout(top: &Path) -> Option<PathBuf> {
     let back = read_to_string_lossy(&wt.join("gitdir"))?;
     let back = PathBuf::from(back.trim());
     let back = if back.is_absolute() { back } else { wt.join(back) };
-    if back.canonicalize().ok()? != dotgit.canonicalize().ok()? {
+    if dunce::canonicalize(&back).ok()? != dunce::canonicalize(&dotgit).ok()? {
         return None;
     }
     is_registered_workspace(&main).then_some(main)
@@ -1344,7 +1344,7 @@ mod tests {
     fn unique_ws(home: &Path, label: &str) -> PathBuf {
         let dir = home.join(format!("ws-{label}"));
         fs::create_dir_all(&dir).unwrap();
-        dir.canonicalize().unwrap()
+        dunce::canonicalize(&dir).unwrap()
     }
 
     fn key(p: &Path) -> String {
@@ -1407,7 +1407,7 @@ mod tests {
     #[test]
     fn refuse_home_and_slash_and_parent_of_home() {
         let g = HomeGuard::new("refuse");
-        let home = g.home.canonicalize().unwrap();
+        let home = dunce::canonicalize(&g.home).unwrap();
         let home_s = key(&home);
         trust_cli_folder(&home_s);
         trust_cli_folder("/");
@@ -1490,7 +1490,7 @@ mod tests {
             .map(|s| s.success())
             .unwrap_or(false);
         assert!(wt_ok, "git worktree add");
-        let wt = wt.canonicalize().unwrap();
+        let wt = dunce::canonicalize(&wt).unwrap();
         let main_s = key(&main);
         crate::workspace::lifecycle::register_workspace_ex(&main_s, false, false, false)
             .expect("register");

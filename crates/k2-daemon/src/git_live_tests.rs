@@ -115,7 +115,7 @@ fn affected_maps_git_signals_edits_and_skips_ignored_and_noise() {
     assert_eq!(hit(&["/somewhere/else.txt".to_string()]), 0);
     assert_eq!(hit(&[]), 0);
     // Canonical spelling (FSEvents reports /private/var/... on macOS).
-    let canon = s(&std::fs::canonicalize(&d).expect("canon"));
+    let canon = s(&dunce::canonicalize(&d).expect("canon"));
     assert_eq!(hit(&[format!("{canon}/a.txt")]), 1);
 }
 

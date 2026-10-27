@@ -17,7 +17,7 @@ fn tmp() -> Tmp {
     let p = std::env::temp_dir().join(format!("k2-token-usage-{}-{n}", std::process::id()));
     let _ = fs::remove_dir_all(&p);
     fs::create_dir_all(&p).expect("tmpdir");
-    Tmp(fs::canonicalize(&p).expect("canon tmp"))
+    Tmp(dunce::canonicalize(&p).expect("canon tmp"))
 }
 
 fn line(v: &Value) -> String {

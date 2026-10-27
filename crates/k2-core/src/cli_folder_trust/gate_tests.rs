@@ -46,14 +46,14 @@ fn env() -> Env {
     let t = crate::test_env::TempHome::new();
     crate::db::init_for_tests();
     install_presenter();
-    let home = t.path().canonicalize().unwrap();
+    let home = dunce::canonicalize(&t.path()).unwrap();
     Env { home, _t: t }
 }
 
 fn folder(home: &Path, name: &str) -> PathBuf {
     let d = home.join(name);
     fs::create_dir_all(&d).unwrap();
-    d.canonicalize().unwrap()
+    dunce::canonicalize(&d).unwrap()
 }
 
 fn put(root: &Path, rel: &str, body: &str) {
@@ -273,8 +273,8 @@ fn worktrees_share_the_decision_by_common_dir() {
     git(&main, &["worktree", "add", &s(&same), "-b", "same"]);
     let other = e.home.join("wt-other");
     git(&main, &["worktree", "add", &s(&other), "-b", "other"]);
-    let same = same.canonicalize().unwrap();
-    let other = other.canonicalize().unwrap();
+    let same = dunce::canonicalize(&same).unwrap();
+    let other = dunce::canonicalize(&other).unwrap();
     put(&other, ".claude/settings.json", HOOK2);
 
     let Outcome::Held(r) = spawn(&main) else { panic!("held") };
@@ -360,7 +360,7 @@ fn a_planted_git_file_cant_borrow_another_repos_decision() {
     git(&other, &["commit", "--allow-empty", "-m", "x"]);
     let wt = e.home.join("wt-of-unregistered");
     git(&other, &["worktree", "add", &s(&wt), "-b", "b"]);
-    let wt = wt.canonicalize().unwrap();
+    let wt = dunce::canonicalize(&wt).unwrap();
     assert_eq!(scope_for(&s(&wt)).as_deref(), Some(s(&wt).as_str()));
 }
 

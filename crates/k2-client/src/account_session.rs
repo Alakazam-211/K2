@@ -205,7 +205,7 @@ fn acl_trusted_apps() -> Vec<String> {
     if let Ok(exe) = std::env::current_exe() {
         // Resolve symlinks so the ACL records the real bundle path (launchd
         // may exec the daemon through a symlink).
-        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        let exe = dunce::canonicalize(&exe).unwrap_or(exe);
         // (2) the current executable — whichever process is writing (the
         // daemon on rotation/boot, or the app `k2` on sign-in).
         apps.push(exe.to_string_lossy().to_string());

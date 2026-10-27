@@ -96,7 +96,7 @@ pub fn tree_roots(conn: &Connection, workspace_id: &str) -> Result<Vec<PathBuf>,
 }
 
 fn canon_root(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| lexical_abs(path))
+    dunce::canonicalize(&path).unwrap_or_else(|_| lexical_abs(path))
 }
 
 /// Absolute + `..` / `.` collapsed without requiring the path to exist.
@@ -136,7 +136,7 @@ pub fn confine_path(
         return Err(ResourceError::NotAFile(raw_path.to_string()));
     }
     let path = Path::new(raw);
-    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| lexical_abs(path));
+    let canon = dunce::canonicalize(&path).unwrap_or_else(|_| lexical_abs(path));
     if !canon.is_file() {
         return Err(ResourceError::NotAFile(canon.display().to_string()));
     }
@@ -206,7 +206,7 @@ pub fn remove(
     // client that still holds a pre-canonical listing can remove it.
     let candidates: Vec<String> = {
         let mut v = vec![raw.to_string()];
-        if let Ok(c) = std::fs::canonicalize(raw) {
+        if let Ok(c) = dunce::canonicalize(&raw) {
             let s = c.to_string_lossy().to_string();
             if s != raw {
                 v.push(s);

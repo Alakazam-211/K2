@@ -948,7 +948,7 @@ impl Drop for DaemonRuntime {
 #[cfg(unix)]
 pub fn reap_frpc_under(root: &Path) {
     let mut roots = vec![root.to_path_buf()];
-    if let Ok(c) = std::fs::canonicalize(root) {
+    if let Ok(c) = dunce::canonicalize(&root) {
         if c != root {
             roots.push(c);
         }

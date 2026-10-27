@@ -68,7 +68,7 @@ impl Src {
         let ws = dir.path().join(format!("ca-sales-{}", s.to_ascii_lowercase()));
         fs::create_dir_all(&ws).expect("mkdir");
         fs::write(ws.join("README.md"), "# sales\n").expect("readme");
-        let path = fs::canonicalize(&ws).expect("canon").to_string_lossy().to_string();
+        let path = dunce::canonicalize(&ws).expect("canon").to_string_lossy().to_string();
         let project = k2_core::projects_ops::projects_add_without_git(&path).expect("register source");
         let id = project.id.clone();
         let label = crate::vault::workspace_label(&id);
@@ -153,7 +153,7 @@ fn register(tag: &str) -> (TestDir, String) {
     let dir = TestDir::new(tag);
     let ws = dir.path().join(format!("ca-dst-{}", sfx().to_ascii_lowercase()));
     fs::create_dir_all(&ws).expect("mkdir");
-    let path = fs::canonicalize(&ws).expect("canon").to_string_lossy().to_string();
+    let path = dunce::canonicalize(&ws).expect("canon").to_string_lossy().to_string();
     let p = k2_core::projects_ops::projects_add_without_git(&path).expect("register");
     (dir, p.id)
 }

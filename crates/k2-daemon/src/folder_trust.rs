@@ -90,11 +90,11 @@ pub(crate) fn project_for_path(path: &str) -> Option<(String, String)> {
 
 /// The registered workspace whose folder IS `path` (canonical compare).
 fn registered_exact(path: &str) -> Option<(String, String)> {
-    let want = Path::new(path).canonicalize().ok()?;
+    let want = dunce::canonicalize(&Path::new(path)).ok()?;
     k2_core::projects_ops::projects_list()
         .ok()?
         .into_iter()
-        .find(|pr| !pr.path.is_empty() && Path::new(&pr.path).canonicalize().ok().as_deref() == Some(want.as_path()))
+        .find(|pr| !pr.path.is_empty() && dunce::canonicalize(&Path::new(&pr.path)).ok().as_deref() == Some(want.as_path()))
         .map(|pr| (pr.id, pr.path))
 }
 
@@ -452,7 +452,7 @@ pub fn gate_spawn(
     };
     if k2_core::cli_folder_trust::needs_gate(program, args, env) {
         if let Some(ws) = project_id.and_then(project_path_for_id) {
-            let same = match (Path::new(&ws).canonicalize(), Path::new(cwd).canonicalize()) {
+            let same = match (dunce::canonicalize(&Path::new(&ws)), dunce::canonicalize(&Path::new(cwd))) {
                 (Ok(a), Ok(b)) => a == b,
                 _ => ws == cwd,
             };

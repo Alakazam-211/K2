@@ -174,7 +174,7 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     k2_core::db::init_for_tests();
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
     let _enter = rt.enter();
-    let home = t.path().canonicalize().expect("canonical home");
+    let home = dunce::canonicalize(&t.path()).expect("canonical home");
     let mac = cfg!(target_os = "macos");
     let git = real_git();
 

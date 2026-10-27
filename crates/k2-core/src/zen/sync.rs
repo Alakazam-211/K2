@@ -1294,7 +1294,7 @@ pub fn guard_real_home_with(root: &Path, test_mode: bool, real_home: Option<&Pat
     let Some(real) = real_home else { return };
     let real_zen = real.join(".k2").join("zen");
     let canon = |p: &Path| -> PathBuf {
-        let parent = p.parent().and_then(|d| fs::canonicalize(d).ok());
+        let parent = p.parent().and_then(|d| dunce::canonicalize(&d).ok());
         match (parent, p.file_name()) {
             (Some(d), Some(n)) => d.join(n),
             _ => p.to_path_buf(),

@@ -1197,8 +1197,8 @@ fn read_static_file(root: &Path, url_path: &str) -> Result<(String, Vec<u8>), ()
         return Err(());
     }
     let joined = root.join(rel);
-    let canon = joined.canonicalize().map_err(|_| ())?;
-    let root_c = root.canonicalize().map_err(|_| ())?;
+    let canon = dunce::canonicalize(&joined).map_err(|_| ())?;
+    let root_c = dunce::canonicalize(&root).map_err(|_| ())?;
     if !canon.starts_with(&root_c) {
         return Err(());
     }

@@ -73,7 +73,7 @@ pub fn reachable_prod_files(home: &Path, real_home: Option<&Path>) -> Vec<PathBu
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+    match (dunce::canonicalize(&a), dunce::canonicalize(&b)) {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => a.to_string_lossy().trim_end_matches('/') == b.to_string_lossy().trim_end_matches('/'),
     }

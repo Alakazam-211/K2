@@ -98,8 +98,8 @@ fn a_spawned_test_daemon_keeps_its_runtime_dir_inside_its_temp_root() {
     let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("JSON ({e}): {body}"));
     let cfg = PathBuf::from(v["frpc_config"].as_str().unwrap_or_else(|| panic!("no frpc_config: {v}")));
 
-    let root = std::fs::canonicalize(&d.root).expect("canonical root");
-    let parent = std::fs::canonicalize(cfg.parent().expect("config parent"))
+    let root = dunce::canonicalize(&d.root).expect("canonical root");
+    let parent = dunce::canonicalize(&cfg.parent().expect("config parent"))
         .unwrap_or_else(|e| panic!("runtime dir {} was not created: {e}", cfg.display()));
     assert!(
         parent.starts_with(&root),

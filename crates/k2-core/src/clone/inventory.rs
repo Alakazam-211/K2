@@ -105,7 +105,7 @@ pub fn inventory(project_path: &str, opts: CloneOptions) -> Result<CloneInventor
 /// caller still gets a stable SLUG.
 fn resolve_project_path(project_path: &str) -> Result<PathBuf, String> {
     let p = Path::new(project_path);
-    if let Ok(canon) = std::fs::canonicalize(p) {
+    if let Ok(canon) = dunce::canonicalize(&p) {
         return Ok(canon);
     }
     if p.is_absolute() {

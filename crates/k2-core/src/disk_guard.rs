@@ -608,12 +608,12 @@ fn uuid_for_source(dir: &Path, source: &str) -> Option<String> {
     if !source.starts_with('/') {
         return None;
     }
-    let want = std::fs::canonicalize(source).ok()?;
+    let want = dunce::canonicalize(&source).ok()?;
     let mut entries: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     entries
         .into_iter()
-        .find(|e| std::fs::canonicalize(e.path()).ok().as_deref() == Some(want.as_path()))
+        .find(|e| dunce::canonicalize(&e.path()).ok().as_deref() == Some(want.as_path()))
         .map(|e| e.file_name().to_string_lossy().into_owned())
 }
 
@@ -640,7 +640,7 @@ fn mount_of(path: &Path, maj: u64, min: u64) -> (Option<String>, Option<String>)
     let Ok(info) = std::fs::read_to_string("/proc/self/mountinfo") else {
         return (None, None);
     };
-    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let canon = dunce::canonicalize(&path).unwrap_or_else(|_| path.to_path_buf());
     pick_mount(&info, &canon, &format!("{maj}:{min}"))
 }
 
@@ -1463,7 +1463,7 @@ pub mod fake {
     /// mount is shown as `mount`). Paths are compared as given and
     /// canonicalized, so `/var` vs `/private/var` both match.
     pub fn install(root: &Path, id: &str, mount: &str, raw: RawStat, mode: Option<Mode>) -> FakeGuard {
-        let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        let root = dunce::canonicalize(&root).unwrap_or_else(|_| root.to_path_buf());
         let id_n = next_id();
         let fs = Fs::from_raw(id.to_string(), Some(mount.to_string()), Some("fake".into()), raw);
         table().lock().unwrap_or_else(|p| p.into_inner()).push((id_n, root.clone(), FakeDisk { fs, mode }));
@@ -1478,7 +1478,7 @@ pub mod fake {
         }
         let canon = super::nearest_existing(path)
             .and_then(|e| {
-                let c = std::fs::canonicalize(&e).ok()?;
+                let c = dunce::canonicalize(&e).ok()?;
                 Some(match path.strip_prefix(&e) {
                     Ok(rest) if !rest.as_os_str().is_empty() => c.join(rest),
                     _ => c,

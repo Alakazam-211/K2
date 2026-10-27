@@ -86,7 +86,7 @@ pub(crate) fn live_folders() -> Vec<Live> {
             continue;
         }
         let Some(cwd) = s.cwd.as_ref() else { continue };
-        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.clone()).to_string_lossy().to_string();
+        let cwd = dunce::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone()).to_string_lossy().to_string();
         seen.entry(cwd.clone()).or_insert_with(|| Live {
             project_id: crate::folder_trust::project_for_path(&cwd).map(|(id, _)| id),
             cwd,

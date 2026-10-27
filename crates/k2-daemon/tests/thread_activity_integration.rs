@@ -174,7 +174,7 @@ fn with_temp_home<F: FnOnce(&Path)>(f: F) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     }
-    let tmp = std::fs::canonicalize(&tmp).expect("canonical tmp");
+    let tmp = dunce::canonicalize(&tmp).expect("canonical tmp");
     let _restore = Restore {
         _g: g,
         prev_home: std::env::var_os("HOME"),

@@ -763,12 +763,11 @@ pub fn write_details(workspace: &std::path::Path, file_name: &str, content: &str
     if !name_ok {
         return Err(DetailsError::Escape(format!("design details file name refused: {file_name:?}")));
     }
-    let root = workspace
-        .canonicalize()
+    let root = dunce::canonicalize(&workspace)
         .map_err(|e| DetailsError::Io(format!("workspace {}: {e}", workspace.display())))?;
     let dir = root.join(DESIGN_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| DetailsError::Io(format!("create {DESIGN_DIR}: {e}")))?;
-    let real_dir = dir.canonicalize().map_err(|e| DetailsError::Io(format!("{DESIGN_DIR}: {e}")))?;
+    let real_dir = dunce::canonicalize(&dir).map_err(|e| DetailsError::Io(format!("{DESIGN_DIR}: {e}")))?;
     if !real_dir.starts_with(&root) {
         return Err(DetailsError::Escape(format!(
             "{DESIGN_DIR} resolves outside the workspace ({}); not writing design details",

@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 fn temp(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("k2-git-tools-{tag}-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&d).expect("mkdir temp");
-    d.canonicalize().expect("canonical temp")
+    dunce::canonicalize(&d).expect("canonical temp")
 }
 
 /// Written by a `/bin/sh` child (`test_env::write_executable`), so no

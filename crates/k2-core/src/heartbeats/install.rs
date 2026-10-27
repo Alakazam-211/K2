@@ -107,7 +107,7 @@ pub(crate) fn writes_allowed_for(
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
-    match (fs::canonicalize(a), fs::canonicalize(b)) {
+    match (dunce::canonicalize(&a), dunce::canonicalize(&b)) {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => {
             let ta = a.to_string_lossy();

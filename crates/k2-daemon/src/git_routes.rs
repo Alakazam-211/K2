@@ -680,7 +680,7 @@ fn agent_forbidden(hint: String) -> CliResponse {
 pub(crate) fn agent_scope(requested: &str, own_workspace: &str) -> Result<String, CliResponse> {
     let own = own_workspace.trim_end_matches('/');
     let want = if requested.trim().is_empty() { own.to_string() } else { requested.trim_end_matches('/').to_string() };
-    let canon = |p: &str| std::fs::canonicalize(p).ok();
+    let canon = |p: &str| dunce::canonicalize(&p).ok();
     let (Some(own_c), Some(want_c)) = (canon(own), canon(&want)) else {
         return Err(agent_forbidden(format!("'{want}' is not a folder in your workspace ({own})")));
     };

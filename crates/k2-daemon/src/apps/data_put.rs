@@ -51,8 +51,8 @@ pub fn check_to(to: &str) -> Result<String, String> {
 pub fn resolve_from(root: &Path, raw: &str) -> Result<PathBuf, String> {
     let p = Path::new(raw.trim());
     let p = if p.is_absolute() { p.to_path_buf() } else { root.join(p) };
-    let canon = std::fs::canonicalize(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let canon = dunce::canonicalize(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+    let root = dunce::canonicalize(&root).unwrap_or_else(|_| root.to_path_buf());
     if !canon.starts_with(&root) {
         return Err(format!("{} is outside the App's workspace folder ({}): a put copies only the workspace's own files", canon.display(), root.display()));
     }

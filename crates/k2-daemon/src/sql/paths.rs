@@ -22,16 +22,14 @@ pub fn resolve_out_path(ws_root: &str, out: &str) -> Result<PathBuf, String> {
     }) {
         return Err(format!("'out' must not contain '..' components: {out}"));
     }
-    let root = Path::new(ws_root)
-        .canonicalize()
+    let root = dunce::canonicalize(&Path::new(ws_root))
         .map_err(|e| format!("workspace root unavailable: {e}"))?;
     let target = root.join(rel);
     let parent = target
         .parent()
         .ok_or_else(|| "'out' has no parent directory".to_string())?;
     std::fs::create_dir_all(parent).map_err(|e| format!("create '{out}' parent: {e}"))?;
-    let parent = parent
-        .canonicalize()
+    let parent = dunce::canonicalize(&parent)
         .map_err(|e| format!("resolve '{out}' parent: {e}"))?;
     if !parent.starts_with(&root) {
         return Err(format!("'out' escapes the workspace: {out}"));
@@ -69,11 +67,10 @@ pub fn resolve_in_path(ws_root: &str, path: &str) -> Result<PathBuf, InPathError
             "dump path must not contain '..' components: {raw}"
         )));
     }
-    let root = Path::new(ws_root)
-        .canonicalize()
+    let root = dunce::canonicalize(&Path::new(ws_root))
         .map_err(|e| InPathError::Usage(format!("workspace root unavailable: {e}")))?;
     let target = root.join(rel);
-    let canon = match target.canonicalize() {
+    let canon = match dunce::canonicalize(&target) {
         Ok(p) => p,
         Err(_) => {
             return Err(InPathError::NotFound(format!(
@@ -108,7 +105,7 @@ mod tests {
                 .unwrap_or(0)
         ));
         std::fs::create_dir_all(&dir).expect("mkdir");
-        let s = dir.canonicalize().unwrap().to_string_lossy().into_owned();
+        let s = dunce::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
         (dir, s)
     }
 

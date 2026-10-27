@@ -117,7 +117,7 @@ async fn carry_import_goes_by_workspace_id_never_by_name() {
     for parent in ["other", "source", "clone"] {
         let p = home.join(parent).join("sales");
         std::fs::create_dir_all(&p).expect("mkdir ws");
-        let path = std::fs::canonicalize(&p).expect("canon").to_string_lossy().to_string();
+        let path = dunce::canonicalize(&p).expect("canon").to_string_lossy().to_string();
         let r = curl(&[
             "-X",
             "POST",

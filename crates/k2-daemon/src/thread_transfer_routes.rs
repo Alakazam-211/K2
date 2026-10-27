@@ -125,8 +125,8 @@ fn import(who: &Who, body: &[u8], home: &std::path::Path) -> R<J> {
     let path = s(&v, "path").ok_or_else(|| no("bad_request", 400, "path of a k2-threads-export/1 file"))?;
     let w = ws(s(&v, "to"))?;
     // Only files this server's export wrote or a person put in clone-tmp.
-    let canon = std::fs::canonicalize(path).map_err(|e| no("bad_request", 400, format!("{path}: {e}")))?;
-    let tmp = std::fs::canonicalize(home.join(".k2").join("clone-tmp")).unwrap_or_else(|_| home.join(".k2").join("clone-tmp"));
+    let canon = dunce::canonicalize(&path).map_err(|e| no("bad_request", 400, format!("{path}: {e}")))?;
+    let tmp = dunce::canonicalize(&home.join(".k2").join("clone-tmp")).unwrap_or_else(|_| home.join(".k2").join("clone-tmp"));
     if !canon.starts_with(&tmp) {
         return Err(no("bad_request", 400, format!("put the file in {} first", tmp.display())));
     }

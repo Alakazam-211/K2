@@ -61,7 +61,7 @@ pub fn set_hire_root(raw: &str) -> Result<PathBuf, HireError> {
     if expanded.exists() && !expanded.is_dir() {
         return Err(HireError::usage(format!("{} exists and is not a folder", expanded.display())));
     }
-    let stored = expanded.canonicalize().unwrap_or(expanded);
+    let stored = dunce::canonicalize(&expanded).unwrap_or(expanded);
     let db = crate::db::shared();
     let conn = db.lock();
     conn.execute(
@@ -111,7 +111,7 @@ pub fn is_under(path: &Path, base: &Path) -> bool {
     if path.components().any(|c| matches!(c, Component::ParentDir)) {
         return false;
     }
-    let base_c = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    let base_c = dunce::canonicalize(&base).unwrap_or_else(|_| base.to_path_buf());
     let resolved = resolve_existing_prefix(path);
     resolved != base_c && resolved.starts_with(&base_c)
 }
@@ -121,7 +121,7 @@ fn resolve_existing_prefix(path: &Path) -> PathBuf {
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     let mut cur = path.to_path_buf();
     loop {
-        if let Ok(c) = cur.canonicalize() {
+        if let Ok(c) = dunce::canonicalize(&cur) {
             let mut out = c;
             for t in tail.iter().rev() {
                 out.push(t);

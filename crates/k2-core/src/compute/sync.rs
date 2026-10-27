@@ -55,21 +55,21 @@ pub fn caller_checkout(ws_dir: &Path, ws_root: &Path, caller_dir: &Path) -> Resu
     if !caller_dir.is_absolute() {
         return Err("your repo path isn't absolute".into());
     }
-    let Ok(caller) = caller_dir.canonicalize() else { return Ok(None) };
-    let ws = ws_dir.canonicalize().map_err(|e| format!("the workspace folder: {e}"))?;
+    let Ok(caller) = dunce::canonicalize(&caller_dir) else { return Ok(None) };
+    let ws = dunce::canonicalize(&ws_dir).map_err(|e| format!("the workspace folder: {e}"))?;
     if !caller.starts_with(&ws) {
         return Err(format!("{} is outside the workspace", caller_dir.display()));
     }
-    let root = repo_root(&caller)?.canonicalize().map_err(|e| format!("your repo: {e}"))?;
-    let ws_root = ws_root.canonicalize().map_err(|e| format!("the workspace repo: {e}"))?;
+    let root = dunce::canonicalize(&repo_root(&caller)?).map_err(|e| format!("your repo: {e}"))?;
+    let ws_root = dunce::canonicalize(&ws_root).map_err(|e| format!("the workspace repo: {e}"))?;
     if root == ws_root {
         return Ok(None);
     }
     if !root.starts_with(&ws) {
         return Err(format!("{} is outside the workspace", root.display()));
     }
-    let mine = common_dir(&root)?.canonicalize().map_err(|e| format!("your git dir: {e}"))?;
-    let theirs = common_dir(&ws_root)?.canonicalize().map_err(|e| format!("the workspace git dir: {e}"))?;
+    let mine = dunce::canonicalize(&common_dir(&root)?).map_err(|e| format!("your git dir: {e}"))?;
+    let theirs = dunce::canonicalize(&common_dir(&ws_root)?).map_err(|e| format!("the workspace git dir: {e}"))?;
     if mine != theirs {
         return Err(format!("{} is a different repo, not a worktree of the workspace's", root.display()));
     }
@@ -393,7 +393,7 @@ mod tests {
         g(&r, &["commit", "-q", "-am", "two"]);
         let tip = g(&r, &["rev-parse", "HEAD"]);
         let refs_before = g(&r, &["for-each-ref"]);
-        assert_eq!(repo_root(&r).unwrap().canonicalize().unwrap(), r.canonicalize().unwrap());
+        assert_eq!(dunce::canonicalize(&repo_root(&r).unwrap()).unwrap(), dunce::canonicalize(&r).unwrap());
         assert_eq!(resolve_commit(&r, "HEAD").unwrap(), tip);
         assert!(resolve_commit(&r, "--upload-pack=x").is_err());
         let out = d.join("job.bundle");
@@ -437,7 +437,7 @@ mod tests {
         let ws_root = repo_root(&r).unwrap();
 
         let got = caller_checkout(&r, &ws_root, &wt).unwrap().expect("the worktree");
-        assert_eq!(got, wt.canonicalize().unwrap());
+        assert_eq!(got, dunce::canonicalize(&wt).unwrap());
         assert_eq!(resolve_commit(&got, "HEAD").unwrap(), wt_head);
         // Its own dirty state, not the main checkout's.
         assert!(!is_dirty(&r).unwrap());

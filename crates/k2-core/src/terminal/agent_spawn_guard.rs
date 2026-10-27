@@ -174,7 +174,7 @@ impl GuardEnv {
 /// Raw + canonical spellings of a path (canonical only when it resolves).
 fn path_forms(p: &Path) -> Vec<PathBuf> {
     let mut v = vec![p.to_path_buf()];
-    if let Ok(c) = p.canonicalize() {
+    if let Ok(c) = dunce::canonicalize(&p) {
         if c != p {
             v.push(c);
         }
@@ -483,7 +483,7 @@ mod tests {
         // macOS: temp_dir() is `/var/folders/...` but a canonical HOME is
         // `/private/var/folders/...` — both spellings must match.
         let raw = scratch("canon");
-        let canon = raw.canonicalize().unwrap();
+        let canon = dunce::canonicalize(&raw).unwrap();
         let env_raw = temp_home_env(&raw);
         let env_canon = temp_home_env(&canon);
         assert!(env_raw.home_is_temp());

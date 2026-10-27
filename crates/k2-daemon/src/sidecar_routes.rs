@@ -374,7 +374,7 @@ fn workspace_by_token(token: &str) -> Option<Workspace> {
     let path = crate::workspace_msg::resolve_workspace(token).or_else(|| {
         token
             .starts_with('/')
-            .then(|| std::fs::canonicalize(token).ok())
+            .then(|| dunce::canonicalize(&token).ok())
             .flatten()
             .and_then(|c| crate::workspace_msg::resolve_workspace(&c.to_string_lossy()))
     })?;

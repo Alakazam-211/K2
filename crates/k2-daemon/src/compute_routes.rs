@@ -371,7 +371,7 @@ pub(crate) fn ws_by_token(token: &str) -> Option<Ws> {
     }
     let path = crate::workspace_msg::resolve_workspace(t).or_else(|| {
         t.starts_with('/')
-            .then(|| std::fs::canonicalize(t).ok())
+            .then(|| dunce::canonicalize(&t).ok())
             .flatten()
             .and_then(|c| crate::workspace_msg::resolve_workspace(&c.to_string_lossy()))
     })?;
@@ -396,7 +396,7 @@ pub(crate) fn ws_by_token_or_worktree(token: &str) -> Option<Ws> {
     if !t.is_absolute() || !t.is_dir() {
         return None;
     }
-    let main = compute::sync::main_checkout_of(t)?.canonicalize().ok()?;
+    let main = dunce::canonicalize(&compute::sync::main_checkout_of(t)?).ok()?;
     if let Some(w) = ws_by_token(&main.to_string_lossy()) {
         return Some(w);
     }
@@ -408,7 +408,7 @@ pub(crate) fn ws_by_token_or_worktree(token: &str) -> Option<Ws> {
         k2_core::db::schema::Project::list(&conn)
             .ok()?
             .into_iter()
-            .find(|p| Path::new(&p.path).canonicalize().is_ok_and(|c| c == main))
+            .find(|p| dunce::canonicalize(&Path::new(&p.path)).is_ok_and(|c| c == main))
             .map(|p| p.id)
     }?;
     ws_by_id(&id)
@@ -2459,8 +2459,8 @@ fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Ve
     // HEAD is its own), never the main one.
     let commit = compute::sync::resolve_commit(&root, sha.unwrap_or("HEAD")).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
     let rel = {
-        let base = Path::new(&ws.path).canonicalize().ok();
-        let r = root.canonicalize().unwrap_or_else(|_| root.clone());
+        let base = dunce::canonicalize(&Path::new(&ws.path)).ok();
+        let r = dunce::canonicalize(&root).unwrap_or_else(|_| root.clone());
         base.and_then(|b| r.strip_prefix(&b).ok().map(|p| p.to_string_lossy().into_owned())).unwrap_or_else(|| r.to_string_lossy().into_owned())
     };
     if dirty && sha.is_some() {
@@ -3806,8 +3806,8 @@ mod tests {
         let wt = r.join(".claude/worktrees/x");
         git(&r, &["worktree", "add", "-q", "-b", "wt", wt.to_str().expect("utf8")]);
         std::fs::create_dir_all(wt.join("sub")).expect("mkdir");
-        let main = |p: &Path| compute::sync::main_checkout_of(p).map(|m| m.canonicalize().expect("canon"));
-        let want = Some(r.canonicalize().expect("canon"));
+        let main = |p: &Path| compute::sync::main_checkout_of(p).map(|m| dunce::canonicalize(&m).expect("canon"));
+        let want = Some(dunce::canonicalize(&r).expect("canon"));
         assert_eq!(main(&wt), want);
         assert_eq!(main(&wt.join("sub")), want);
         assert_eq!(main(&r), want);

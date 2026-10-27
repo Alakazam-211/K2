@@ -67,6 +67,10 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 dirs = "5"
+# canonicalize without the Windows \\?\ verbatim prefix (git, stored
+# workspace paths and path comparisons need the plain C:\ form); exactly
+# std::fs::canonicalize on Unix. Already in Cargo.lock.
+dunce = "1"
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["ico", "png", "jpeg"] }

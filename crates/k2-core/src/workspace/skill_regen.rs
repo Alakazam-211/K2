@@ -208,11 +208,11 @@ pub fn is_compose_source_path(project_path: &str, path: &Path) -> bool {
             continue;
         }
         let canon = path_canon
-            .get_or_insert_with(|| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+            .get_or_insert_with(|| dunce::canonicalize(&path).unwrap_or_else(|_| path.to_path_buf()));
         if src == *canon {
             return true;
         }
-        if let Ok(sc) = src.canonicalize() {
+        if let Ok(sc) = dunce::canonicalize(&src) {
             if sc == *canon {
                 return true;
             }
@@ -2654,8 +2654,8 @@ mod tests {
         } else {
             link.parent().unwrap_or(proj).join(target)
         };
-        let got = fs::canonicalize(&resolved).unwrap_or(resolved);
-        let want = fs::canonicalize(expected).unwrap_or_else(|_| expected.to_path_buf());
+        let got = dunce::canonicalize(&resolved).unwrap_or(resolved);
+        let want = dunce::canonicalize(&expected).unwrap_or_else(|_| expected.to_path_buf());
         assert_eq!(got, want, "{leftover} must point at {}", expected.display());
     }
 

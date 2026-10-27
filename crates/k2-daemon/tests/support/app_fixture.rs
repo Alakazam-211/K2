@@ -134,7 +134,7 @@ pub struct Ws {
 pub fn seed_ws(env: &Env, handle: &str) -> Ws {
     let path = env.path().join(format!("ws-{handle}"));
     std::fs::create_dir_all(&path).unwrap();
-    let path = std::fs::canonicalize(&path).unwrap();
+    let path = dunce::canonicalize(&path).unwrap();
     let id = uuid::Uuid::new_v4().to_string();
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -234,7 +234,7 @@ pub fn app_folder(dir: &Path, id: &str, version: &str, tag: &str) -> PathBuf {
     std::fs::write(dir.join("manifest.json"), manifest(id, version)).unwrap();
     std::fs::write(dir.join("server.py"), SERVER_PY).unwrap();
     std::fs::write(dir.join("tag.txt"), tag).unwrap();
-    std::fs::canonicalize(dir).unwrap()
+    dunce::canonicalize(&dir).unwrap()
 }
 
 pub fn require_python3() {

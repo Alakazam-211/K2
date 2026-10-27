@@ -2094,8 +2094,7 @@ fn seed_files_workspace(handle: &str) -> (String, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("k2-skin-fs-{handle}-{id}"));
     std::fs::create_dir_all(&dir).expect("mkdir workspace");
     std::fs::write(dir.join("README.md"), b"hello sales\n").expect("readme");
-    let path = dir
-        .canonicalize()
+    let path = dunce::canonicalize(&dir)
         .unwrap_or(dir.clone())
         .to_string_lossy()
         .into_owned();
@@ -5547,7 +5546,7 @@ async fn skin_guest_upload_chunk_jailed_resumable_and_bound_to_the_guest() {
         let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_docs_id, docs_dir) = seed_files_workspace(&docs);
         let (_anna_id, anna_dir) = seed_files_workspace(&anna);
-        let docs_root = docs_dir.canonicalize().expect("canon docs");
+        let docs_root = dunce::canonicalize(&docs_dir).expect("canon docs");
         add_user(port, "bob");
         let (_id, alice) = mint(port, "guest-alice", &["files:read", "files:write"], &[&docs]);
         let (_id, mallory) = mint(port, "guest-mallory", &["files:read", "files:write"], &[&docs]);

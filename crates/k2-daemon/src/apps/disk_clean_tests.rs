@@ -62,7 +62,7 @@ fn fx(tag: &str) -> Fx {
     let root = home.path().to_path_buf();
     let k2 = k2_core::paths::k2_home();
     let (ws_a, ws_b) = (format!("ws-a-{tag}"), format!("ws-b-{tag}"));
-    let ws_a_path = std::fs::canonicalize(&root).unwrap().join("ws-a");
+    let ws_a_path = dunce::canonicalize(&root).unwrap().join("ws-a");
     std::fs::create_dir_all(&ws_a_path).unwrap();
     std::fs::create_dir_all(root.join("ws-b")).unwrap();
     let now = k2_core::deploy::now();

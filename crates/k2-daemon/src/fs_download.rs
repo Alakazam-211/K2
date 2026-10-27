@@ -237,7 +237,7 @@ fn walk(
         }
         // Symlinks are followed only when they land inside a download
         // entry (and inside the room): the same landed rule as a save.
-        let Ok(canon) = child.canonicalize() else { continue };
+        let Ok(canon) = dunce::canonicalize(&child) else { continue };
         if !entry_allows_landed(scope, resolved, &canon) {
             continue;
         }

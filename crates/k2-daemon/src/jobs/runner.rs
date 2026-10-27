@@ -153,13 +153,13 @@ struct Started {
 /// (checked on disk at every run: no symlink out).
 pub fn run_dir(workspace_root: &Path, rel: &str) -> Result<PathBuf, JobError> {
     let bad = || JobError::new("path_outside_workspace", 400, "the job's folder isn't inside its workspace");
-    let root = std::fs::canonicalize(workspace_root)
+    let root = dunce::canonicalize(&workspace_root)
         .map_err(|_| JobError::new("workspace_missing", 409, "the workspace folder isn't there"))?;
     let rel = store::validate_cwd(rel)?;
     if rel.is_empty() {
         return Ok(root);
     }
-    let p = std::fs::canonicalize(root.join(&rel)).map_err(|_| JobError::new("cwd_missing", 409, format!("{rel} isn't a folder in the workspace")))?;
+    let p = dunce::canonicalize(&root.join(&rel)).map_err(|_| JobError::new("cwd_missing", 409, format!("{rel} isn't a folder in the workspace")))?;
     if !p.starts_with(&root) {
         return Err(bad());
     }
@@ -233,7 +233,7 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
     let root = crate::vault::workspace_path(&job.workspace_id)
         .ok_or_else(|| (JobError::new("workspace_missing", 409, "the job's workspace is gone"), None))?;
     let cwd = run_dir(Path::new(&root), &job.cwd).map_err(|e| (e, None))?;
-    let root = std::fs::canonicalize(&root).unwrap_or_else(|_| PathBuf::from(&root));
+    let root = dunce::canonicalize(&root).unwrap_or_else(|_| PathBuf::from(&root));
     if let Some(parent) = log_path.parent() {
         private_dir(parent).map_err(|e| (JobError::new("log_failed", 500, format!("log folder: {}", e.kind())), None))?;
     }
@@ -481,7 +481,7 @@ mod tests {
         std::fs::create_dir_all(root.join("scripts")).expect("mkdir");
         std::fs::create_dir_all(t.path().join("outside")).expect("mkdir");
         k2_core::test_env::symlink(t.path().join("outside"), root.join("escape")).expect("symlink");
-        let canon = std::fs::canonicalize(&root).expect("canon");
+        let canon = dunce::canonicalize(&root).expect("canon");
         assert_eq!(run_dir(&root, "").expect("root"), canon);
         assert_eq!(run_dir(&root, "scripts").expect("sub"), canon.join("scripts"));
         assert_eq!(run_dir(&root, "escape").expect_err("symlink out").code, "path_outside_workspace");

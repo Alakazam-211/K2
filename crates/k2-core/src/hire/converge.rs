@@ -122,8 +122,7 @@ pub fn expand_hire_path(raw: &str) -> Result<String, HireError> {
         if !expanded.is_dir() {
             return Err(HireError::usage(format!("{} exists and is not a directory", expanded.display())));
         }
-        return expanded
-            .canonicalize()
+        return dunce::canonicalize(&expanded)
             .map(|p| p.to_string_lossy().into_owned())
             .map_err(|e| HireError::usage(format!("canonicalize: {e}")));
     }
@@ -157,7 +156,7 @@ fn path_lookup_candidates(path: &str) -> Vec<String> {
         }
     };
     push(path.to_string());
-    if let Ok(c) = Path::new(path).canonicalize() {
+    if let Ok(c) = dunce::canonicalize(&Path::new(path)) {
         push(c.to_string_lossy().into_owned());
     }
     if let Some(rest) = path.strip_prefix("/private") {

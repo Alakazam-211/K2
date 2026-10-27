@@ -255,7 +255,7 @@ pub(crate) fn set_live_profile(profile: &Value) -> Result<bool, WalletError> {
     let link = store::claude_live_global_config();
     // A symlinked dotfile: write the file it points at, keep the link.
     let path = match std::fs::symlink_metadata(&link) {
-        Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(&link).map_err(|e| WalletError::Io(e.to_string()))?,
+        Ok(m) if m.file_type().is_symlink() => dunce::canonicalize(&link).map_err(|e| WalletError::Io(e.to_string()))?,
         Ok(_) => link,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(WalletError::Io(e.to_string())),

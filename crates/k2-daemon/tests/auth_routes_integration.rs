@@ -889,7 +889,7 @@ async fn upload_binary_writes_file_and_returns_path() {
         // The handler canonicalizes `dir` (validate_path); on macOS the
         // tempdir under $TMPDIR is symlinked (/var → /private/var), so
         // compare the response against the canonical destination.
-        let dest_canon = dest.canonicalize().expect("canonicalize dest");
+        let dest_canon = dunce::canonicalize(&dest).expect("canonicalize dest");
 
         let payload = b"upload-test-bytes";
         let body = format!(

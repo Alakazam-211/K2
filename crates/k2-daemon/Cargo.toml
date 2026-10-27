@@ -92,6 +92,10 @@ subtle = "2.6"
 
 # Home-directory lookup for ~/.k2so/{daemon.port,daemon.token,daemon.log}.
 dirs = "5"
+# canonicalize without the Windows \\?\ verbatim prefix (git, stored
+# workspace paths and path comparisons need the plain C:\ form); exactly
+# std::fs::canonicalize on Unix. Already in Cargo.lock.
+dunce = "1"
 
 # Async runtime. The daemon is async-first by convention — scheduler ticks,
 # companion WS, the HTTP server, and the daemon->Tauri WS event channel all

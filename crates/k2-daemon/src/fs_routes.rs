@@ -313,8 +313,7 @@ pub fn jail_rel_path(ws_root: &str, rel: &str, for_write: bool) -> Result<PathBu
     }) {
         return Err("path must not contain '..'".to_string());
     }
-    let root = Path::new(ws_root)
-        .canonicalize()
+    let root = dunce::canonicalize(&Path::new(ws_root))
         .map_err(|e| format!("workspace root unavailable: {e}"))?;
     // `root.join(".")` collapses: components equal root, so `.parent()` is
     // the host parent (escapes). Treat CurDir-only as the workspace root.
@@ -327,8 +326,7 @@ pub fn jail_rel_path(ws_root: &str, rel: &str, for_write: bool) -> Result<PathBu
             .parent()
             .ok_or_else(|| "path has no parent directory".to_string())?;
         if parent.exists() {
-            let parent = parent
-                .canonicalize()
+            let parent = dunce::canonicalize(&parent)
                 .map_err(|e| format!("Invalid path: {e}"))?;
             if !parent.starts_with(&root) {
                 return Err("path escapes the workspace".to_string());
@@ -346,8 +344,7 @@ pub fn jail_rel_path(ws_root: &str, rel: &str, for_write: bool) -> Result<PathBu
         }
         Ok(target)
     } else {
-        let canon = target
-            .canonicalize()
+        let canon = dunce::canonicalize(&target)
             .map_err(|e| format!("Invalid path: {e}"))?;
         if !canon.starts_with(&root) {
             return Err("path escapes the workspace".to_string());
@@ -543,8 +540,7 @@ fn handle_skin_stat(params: &HashMap<String, String>, pass: &SkinPass) -> CliRes
     };
     match fsc::stat(&jailed.to_string_lossy()) {
         Ok(mut st) => {
-            let root = Path::new(&resolved.path)
-                .canonicalize()
+            let root = dunce::canonicalize(&Path::new(&resolved.path))
                 .unwrap_or_else(|_| PathBuf::from(&resolved.path));
             st.path = relative_under(&root, &st.path);
             CliResponse::ok_json(serde_json::to_string(&st).unwrap_or_else(|_| "{}".to_string()))
@@ -632,8 +628,7 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
     let abs = jailed.to_string_lossy().to_string();
     match fsc::read_dir(&abs, show_hidden) {
         Ok(mut entries) => {
-            let root = Path::new(&resolved.path)
-                .canonicalize()
+            let root = dunce::canonicalize(&Path::new(&resolved.path))
                 .unwrap_or_else(|_| PathBuf::from(&resolved.path));
             for e in &mut entries {
                 e.path = relative_under(&root, &e.path);
@@ -797,10 +792,9 @@ fn skin_write_heartbeat_wakeup(
     };
     // A symlinked heartbeat folder must not turn this into a write
     // elsewhere in the room: the parent must be that heartbeat's folder.
-    let want_parent = Path::new(&resolved.path)
-        .canonicalize()
+    let want_parent = dunce::canonicalize(&Path::new(&resolved.path))
         .map(|r| r.join(".k2").join("heartbeats").join(&name));
-    let got_parent = jailed.parent().map(|p| p.canonicalize());
+    let got_parent = jailed.parent().map(|p| dunce::canonicalize(&p));
     match (want_parent, got_parent) {
         (Ok(want), Some(Ok(got))) if want == got => {}
         _ => return heartbeats_area_response(),
@@ -907,7 +901,7 @@ fn scope_gate(
 /// The room-relative form of an already resolved absolute path, or `None`
 /// when it isn't under the room.
 pub(crate) fn rel_in_room(room_root: &str, full: &Path) -> Option<String> {
-    let root = Path::new(room_root).canonicalize().ok()?;
+    let root = dunce::canonicalize(&Path::new(room_root)).ok()?;
     let rest = full.strip_prefix(&root).ok()?;
     let s = rest.to_string_lossy().replace('\\', "/");
     Some(if s.is_empty() { ".".to_string() } else { s })
@@ -993,7 +987,7 @@ fn resolve_existing_prefix(abs: &Path) -> Option<PathBuf> {
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     let mut cur = abs.to_path_buf();
     loop {
-        match std::fs::canonicalize(&cur) {
+        match dunce::canonicalize(&cur) {
             Ok(mut out) => {
                 for seg in tail.iter().rev() {
                     out.push(seg);
@@ -1031,7 +1025,7 @@ fn resolve_parent_keep_leaf(abs: &Path) -> Option<PathBuf> {
 /// [`abs_in_agent_config`] on an already resolved target (`None` = could
 /// not be resolved: fails closed).
 fn resolved_in_agent_config(root: &str, target: Option<&Path>, ancestors: bool) -> bool {
-    let Ok(canon_root) = std::fs::canonicalize(root) else {
+    let Ok(canon_root) = dunce::canonicalize(&root) else {
         return true;
     };
     let Some(target) = target else {
@@ -1414,7 +1408,7 @@ fn ensure_user_dir(resolved: &SkinWorkspace, scope: &RoomPathScope, d: &DropTarg
         k2_core::log_debug!("[fs] drop refused for {}: {why}", d.user);
         scope_refused(PathNeed::Upload)
     };
-    let Ok(root) = Path::new(&resolved.path).canonicalize() else { return Err(refuse("room root")) };
+    let Ok(root) = dunce::canonicalize(&Path::new(&resolved.path)) else { return Err(refuse("room root")) };
     let lexical = root.join(&d.user_dir);
     // Where it lands, before anything is made (a drop folder that links to
     // a sibling folder never gets a guest folder or marker there).
@@ -1525,7 +1519,7 @@ impl Drop for DropReservation {
 /// own totals.
 fn drop_reserve(resolved: &SkinWorkspace, d: &DropTarget, add_files: u64, add_bytes: u64) -> Result<DropReservation, CliResponse> {
     let (max_files, max_bytes) = drop_limits();
-    let Ok(root) = Path::new(&resolved.path).canonicalize() else {
+    let Ok(root) = dunce::canonicalize(&Path::new(&resolved.path)) else {
         return Err(CliResponse::internal_error("workspace root unavailable"));
     };
     let key = format!("{}\u{0}{}", resolved.project_id, d.user);
@@ -1542,7 +1536,7 @@ fn drop_reserve(resolved: &SkinWorkspace, d: &DropTarget, add_files: u64, add_by
     let mut seen: Vec<PathBuf> = Vec::new();
     for f in d.roots.write.iter().chain(d.roots.upload.iter()) {
         let mine = root.join(f).join(&d.user);
-        let Ok(canon) = mine.canonicalize() else { continue };
+        let Ok(canon) = dunce::canonicalize(&mine) else { continue };
         if !canon.starts_with(&root) || seen.iter().any(|s| canon.starts_with(s) || s.starts_with(&canon)) {
             continue;
         }
@@ -1733,7 +1727,7 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
             if let Err(r) = ensure_user_dir(&resolved, &scope, d) {
                 return r;
             }
-            let root = match Path::new(&resolved.path).canonicalize() {
+            let root = match dunce::canonicalize(&Path::new(&resolved.path)) {
                 Ok(r) => r,
                 Err(e) => return CliResponse::internal_error(format!("workspace root unavailable: {e}")),
             };
@@ -1754,8 +1748,7 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
     };
     match fsc::write_upload(&abs_dir, &filename, &bytes) {
         Ok(path) => {
-            let root = Path::new(&resolved.path)
-                .canonicalize()
+            let root = dunce::canonicalize(&Path::new(&resolved.path))
                 .unwrap_or_else(|_| PathBuf::from(&resolved.path));
             let abs = path.to_string_lossy().to_string();
             crate::session_events::emit_fs_changed_for_paths([abs.clone()]);
@@ -1798,8 +1791,7 @@ fn jail_mkdir_p(root: &Path, rel: &str) -> Result<PathBuf, String> {
         match std::fs::symlink_metadata(&next) {
             Ok(m) if m.file_type().is_dir() => cur = next,
             Ok(m) if m.file_type().is_symlink() => {
-                let canon = next
-                    .canonicalize()
+                let canon = dunce::canonicalize(&next)
                     .map_err(|e| format!("Invalid path: {e}"))?;
                 if !canon.starts_with(root) {
                     return Err("path escapes the workspace".to_string());
@@ -1818,8 +1810,7 @@ fn jail_mkdir_p(root: &Path, rel: &str) -> Result<PathBuf, String> {
                 }
                 // Re-check what is there now (a racing create could be a
                 // symlink): it must be a real folder inside the room.
-                let canon = next
-                    .canonicalize()
+                let canon = dunce::canonicalize(&next)
                     .map_err(|e| format!("Invalid path: {e}"))?;
                 if !canon.starts_with(root) || !canon.is_dir() {
                     return Err("path escapes the workspace".to_string());
@@ -1829,7 +1820,7 @@ fn jail_mkdir_p(root: &Path, rel: &str) -> Result<PathBuf, String> {
             Err(e) => return Err(format!("Invalid path: {e}")),
         }
     }
-    let canon = cur.canonicalize().map_err(|e| format!("Invalid path: {e}"))?;
+    let canon = dunce::canonicalize(&cur).map_err(|e| format!("Invalid path: {e}"))?;
     if !canon.starts_with(root) {
         return Err("path escapes the workspace".to_string());
     }
@@ -1974,14 +1965,14 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
     ) {
         return r;
     }
-    let root = match Path::new(&resolved.path).canonicalize() {
+    let root = match dunce::canonicalize(&Path::new(&resolved.path)) {
         Ok(r) => r,
         Err(e) => return CliResponse::internal_error(format!("workspace root unavailable: {e}")),
     };
     let principal = guest_upload_principal(pass);
 
     if status_only {
-        let canon = match jailed_dir.canonicalize() {
+        let canon = match dunce::canonicalize(&jailed_dir) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return CliResponse::ok_json(
@@ -2253,11 +2244,10 @@ fn skin_new_name_is_normal_segment(name: &str) -> bool {
 }
 
 fn relative_inside(root: &str, abs: &str) -> Result<String, String> {
-    let root = Path::new(root)
-        .canonicalize()
+    let root = dunce::canonicalize(&Path::new(root))
         .map_err(|e| format!("workspace root unavailable: {e}"))?;
     let abs_path = Path::new(abs);
-    let canon = std::fs::canonicalize(abs_path).unwrap_or_else(|_| abs_path.to_path_buf());
+    let canon = dunce::canonicalize(&abs_path).unwrap_or_else(|_| abs_path.to_path_buf());
     let rel = canon
         .strip_prefix(&root)
         .or_else(|_| abs_path.strip_prefix(&root))
@@ -3398,7 +3388,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("mkdir");
         std::fs::write(dir.join("README.md"), b"hi").expect("readme");
-        let s = dir.canonicalize().unwrap().to_string_lossy().into_owned();
+        let s = dunce::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
         (dir, s)
     }
 
@@ -3494,7 +3484,7 @@ mod tests {
         std::fs::create_dir_all(&notes).expect("mkdir");
         let file = notes.join("draft.md");
         std::fs::write(&file, b"keep-me").expect("write");
-        let canon = dir.canonicalize().expect("canon");
+        let canon = dunce::canonicalize(&dir).expect("canon");
         let handle = format!("rn{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let id = insert_handled_project(&canon.to_string_lossy(), &handle);
         let pass = session_pass(
@@ -3566,7 +3556,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("mkdir");
         let file = dir.join("draft.md");
         std::fs::write(&file, b"keep-me").expect("write");
-        let canon = dir.canonicalize().expect("canon");
+        let canon = dunce::canonicalize(&dir).expect("canon");
         let handle = format!("rc{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let id = insert_handled_project(&canon.to_string_lossy(), &handle);
         let pass = session_pass(
@@ -3638,7 +3628,7 @@ mod tests {
             std::os::unix::fs::symlink(dir.join(".k2/agent"), dir.join("agentdir"))
                 .expect("agentdir link");
         }
-        let dir = dir.canonicalize().expect("canon");
+        let dir = dunce::canonicalize(&dir).expect("canon");
         let handle = format!("cf{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let id = insert_handled_project(&dir.to_string_lossy(), &handle);
         ConfigRoom { dir, handle, id }

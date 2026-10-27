@@ -236,11 +236,11 @@ pub fn project_id_for_path(path: &str) -> Option<String> {
     if let Some(id) = crate::canonical_session::lookup_project_id(path) {
         return Some(id);
     }
-    let want = std::fs::canonicalize(path).ok()?;
+    let want = dunce::canonicalize(&path).ok()?;
     k2_core::projects_ops::projects_list()
         .ok()?
         .into_iter()
-        .find(|p| std::fs::canonicalize(&p.path).map(|c| c == want).unwrap_or(false))
+        .find(|p| dunce::canonicalize(&p.path).map(|c| c == want).unwrap_or(false))
         .map(|p| p.id)
 }
 
@@ -484,7 +484,7 @@ pub fn plan_for(vault: &LocalVault, caller: &VaultCaller, ask: &CarryAsk) -> Res
             Ok(plan)
         }
         Err(e) if ask.vault_target.is_none() && ask.secrets.is_empty() && ask.project_id.is_none() => {
-            let Some(path) = ask.project_path.as_deref().and_then(|p| std::fs::canonicalize(p).ok()) else { return Err(e) };
+            let Some(path) = ask.project_path.as_deref().and_then(|p| dunce::canonicalize(&p).ok()) else { return Err(e) };
             let member = !caller.actor.is_admin_human();
             if ask.send_env_files && member {
                 return Err(VaultError::forbidden("copy_needs_admin", "sending .env files needs an Owner or Admin"));

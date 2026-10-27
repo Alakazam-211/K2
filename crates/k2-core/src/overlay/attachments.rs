@@ -292,8 +292,8 @@ pub fn resolve_now(root: &Path, att: &ThreadAttachment) -> Option<PathBuf> {
     if secret_paths::is_secret_rel(&att.path) {
         return None;
     }
-    let real_root = root.canonicalize().ok()?;
-    let real = root.join(rel).canonicalize().ok()?;
+    let real_root = dunce::canonicalize(&root).ok()?;
+    let real = dunce::canonicalize(&root.join(rel)).ok()?;
     if !real.starts_with(&real_root) {
         return None;
     }

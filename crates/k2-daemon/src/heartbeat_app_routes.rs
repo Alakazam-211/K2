@@ -146,7 +146,7 @@ pub fn extra_headers(resp: &CliResponse) -> String {
 pub fn sanitize(root: &str, s: &str) -> String {
     let mut out = s.to_string();
     let mut roots: Vec<String> = Vec::new();
-    if let Ok(c) = std::fs::canonicalize(root) {
+    if let Ok(c) = dunce::canonicalize(&root) {
         roots.push(c.to_string_lossy().into_owned());
     }
     roots.push(root.to_string());
@@ -861,11 +861,11 @@ pub fn exact_wakeup_name(rel: &str) -> Option<String> {
 /// or `.k2` itself. Compared canonically and ASCII case-folded, so a
 /// symlink or a case variant inside the room cannot reach the folder.
 pub fn abs_touches_heartbeats(root: &str, abs: &Path, ancestors: bool) -> bool {
-    let canon_root = std::fs::canonicalize(root).unwrap_or_else(|_| Path::new(root).to_path_buf());
-    let canon = std::fs::canonicalize(abs).unwrap_or_else(|_| {
+    let canon_root = dunce::canonicalize(&root).unwrap_or_else(|_| Path::new(root).to_path_buf());
+    let canon = dunce::canonicalize(&abs).unwrap_or_else(|_| {
         // A not-yet-created leaf: canonicalize the parent, keep the name.
         match (abs.parent(), abs.file_name()) {
-            (Some(parent), Some(name)) => std::fs::canonicalize(parent)
+            (Some(parent), Some(name)) => dunce::canonicalize(&parent)
                 .map(|p| p.join(name))
                 .unwrap_or_else(|_| abs.to_path_buf()),
             _ => abs.to_path_buf(),

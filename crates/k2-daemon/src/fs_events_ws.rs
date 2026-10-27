@@ -104,7 +104,7 @@ fn same_root(a: &str, b: &str) -> bool {
     if na == nb {
         return true;
     }
-    match (Path::new(a).canonicalize(), Path::new(b).canonicalize()) {
+    match (dunce::canonicalize(&Path::new(a)), dunce::canonicalize(&Path::new(b))) {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => false,
     }
@@ -129,9 +129,8 @@ pub fn relative_to_root(root: &str, path: &str) -> Option<String> {
         }
         return Some(s);
     }
-    let rc = Path::new(root).canonicalize().ok()?;
-    let pc = Path::new(path)
-        .canonicalize()
+    let rc = dunce::canonicalize(&Path::new(root)).ok()?;
+    let pc = dunce::canonicalize(&Path::new(path))
         .unwrap_or_else(|_| PathBuf::from(path));
     let s = try_strip(&rc.to_string_lossy(), &pc.to_string_lossy())?;
     if s.contains("..") {
@@ -435,8 +434,8 @@ mod tests {
         std::fs::create_dir_all(&dir_b).expect("mkdir b");
         std::fs::write(dir_a.join("a.csv"), b"a").expect("file a");
         std::fs::write(dir_b.join("b.csv"), b"b").expect("file b");
-        let root_a = dir_a.canonicalize().expect("canon a");
-        let root_b = dir_b.canonicalize().expect("canon b");
+        let root_a = dunce::canonicalize(&dir_a).expect("canon a");
+        let root_b = dunce::canonicalize(&dir_b).expect("canon b");
         let handle_a = format!("fa{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let handle_b = format!("fb{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let id_a = {

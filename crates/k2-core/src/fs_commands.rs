@@ -48,7 +48,7 @@ pub fn validate_path(path: &str) -> Result<PathBuf, String> {
     }
     let p = Path::new(path);
     if p.exists() {
-        p.canonicalize().map_err(|e| format!("Invalid path: {e}"))
+        dunce::canonicalize(&p).map_err(|e| format!("Invalid path: {e}"))
     } else {
         let parent = p
             .parent()
@@ -959,8 +959,8 @@ pub fn move_files(sources: &[String], destination: &str) -> Result<(), String> {
             return Err(format!("Source does not exist: {source}"));
         }
         let target = resolve_destination(src, dest);
-        if let (Ok(s), Some(parent)) = (src.canonicalize(), target.parent()) {
-            if let Ok(dp) = parent.canonicalize() {
+        if let (Ok(s), Some(parent)) = (dunce::canonicalize(&src), target.parent()) {
+            if let Ok(dp) = dunce::canonicalize(&parent) {
                 if dp.starts_with(&s) {
                     return Err("Cannot move a folder into itself".to_string());
                 }
@@ -1665,7 +1665,7 @@ mod tests {
         // write_upload canonicalizes the dir (via validate_path); compare
         // against the canonical form so the /tmp→/private/tmp symlink on
         // macOS doesn't trip the equality.
-        let canon = tmp.path().canonicalize().unwrap();
+        let canon = dunce::canonicalize(&tmp.path()).unwrap();
         let path = write_upload(&tmp.s(), "hello.txt", b"hi there").expect("write_upload");
         assert_eq!(path, canon.join("hello.txt"));
         assert_eq!(fs::read(&path).unwrap(), b"hi there");
@@ -1692,7 +1692,7 @@ mod tests {
     #[test]
     fn write_upload_never_follows_or_replaces_a_link_at_its_name() {
         let tmp = TempDir::new("upload-link");
-        let canon = tmp.path().canonicalize().unwrap();
+        let canon = dunce::canonicalize(&tmp.path()).unwrap();
         let outside = TempDir::new("upload-link-outside");
         let victim = outside.path().join("victim.txt");
         // A dangling link and a live one at the upload's name.
@@ -1718,7 +1718,7 @@ mod tests {
         let tmp = TempDir::new("upload-traversal");
         let dest = tmp.path().join("dest");
         fs::create_dir(&dest).unwrap();
-        let dest_canon = dest.canonicalize().unwrap();
+        let dest_canon = dunce::canonicalize(&dest).unwrap();
         // A filename trying to escape via `../` must be reduced to its
         // basename and land INSIDE `dest`, never in the parent.
         let path = write_upload(
@@ -1736,7 +1736,7 @@ mod tests {
     #[test]
     fn write_upload_strips_bare_separators_from_filename() {
         let tmp = TempDir::new("upload-sep");
-        let canon = tmp.path().canonicalize().unwrap();
+        let canon = dunce::canonicalize(&tmp.path()).unwrap();
         // Both unix and windows-style separators reduce to the last segment.
         let p1 = write_upload(&tmp.s(), "sub/dir/file.txt", b"u").expect("unix sep");
         assert_eq!(p1, canon.join("file.txt"));
@@ -1793,7 +1793,7 @@ mod tests {
     #[test]
     fn upload_chunk_assembles_ordered_chunks_into_one_file() {
         let tmp = TempDir::new("chunk-assemble");
-        let canon = tmp.path().canonicalize().unwrap();
+        let canon = dunce::canonicalize(&tmp.path()).unwrap();
         let id = "xfer-1";
         // Three ordered chunks; only the last finalizes (returns the path).
         assert_eq!(
@@ -1816,7 +1816,7 @@ mod tests {
     #[test]
     fn upload_chunk_single_chunk_finalizes() {
         let tmp = TempDir::new("chunk-single");
-        let canon = tmp.path().canonicalize().unwrap();
+        let canon = dunce::canonicalize(&tmp.path()).unwrap();
         let path = write_upload_chunk(&tmp.s(), "one.bin", "solo", 0, b"only", true, None)
             .expect("single chunk")
             .expect("is_last path");

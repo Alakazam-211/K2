@@ -76,8 +76,7 @@ fn servers() -> &'static Mutex<HashMap<String, ServeEntry>> {
 }
 
 fn workspace_key(workspace: &Path) -> String {
-    workspace
-        .canonicalize()
+    dunce::canonicalize(&workspace)
         .unwrap_or_else(|_| workspace.to_path_buf())
         .to_string_lossy()
         .into_owned()
@@ -626,8 +625,7 @@ fn resolve_project_path_for_settings(workspace_path: &str) -> String {
     ) {
         return p;
     }
-    let want = Path::new(workspace_path)
-        .canonicalize()
+    let want = dunce::canonicalize(&Path::new(workspace_path))
         .unwrap_or_else(|_| PathBuf::from(workspace_path));
     let mut stmt = match conn.prepare("SELECT path FROM projects") {
         Ok(s) => s,
@@ -638,8 +636,7 @@ fn resolve_project_path_for_settings(workspace_path: &str) -> String {
         Err(_) => return workspace_path.to_string(),
     };
     for p in rows.flatten() {
-        let got = Path::new(&p)
-            .canonicalize()
+        let got = dunce::canonicalize(&Path::new(&p))
             .unwrap_or_else(|_| PathBuf::from(&p));
         if got == want {
             return p;

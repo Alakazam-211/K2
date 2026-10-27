@@ -84,13 +84,13 @@ pub fn scratch_safe_trash<P: AsRef<Path>>(path: P) -> Result<(), String> {
 /// returns `false` and the caller routes through the production
 /// trash path.
 fn path_is_under_temp_dir(path: &Path) -> bool {
-    let Ok(temp) = std::env::temp_dir().canonicalize() else {
+    let Ok(temp) = dunce::canonicalize(&std::env::temp_dir()) else {
         return false;
     };
     // canonicalize() requires the path to exist; we already checked
     // above. Fall back to as-is comparison if canonicalize fails for
     // reasons other than non-existence (e.g. permission).
-    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let resolved = dunce::canonicalize(&path).unwrap_or_else(|_| path.to_path_buf());
     resolved.starts_with(&temp)
 }
 

@@ -48,7 +48,7 @@ fn door(caps: &[&str]) -> Door {
     std::fs::create_dir_all(files_root.join("docs")).expect("room dir");
     std::fs::write(files_root.join("docs/notes.md"), "# Notes\n").expect("notes");
     std::fs::write(files_root.join("docs/pixel.bin"), [0u8, 1, 2, 255]).expect("bin");
-    let files_root = std::fs::canonicalize(&files_root).expect("canonical");
+    let files_root = dunce::canonicalize(&files_root).expect("canonical");
     {
         let db = k2_core::db::shared();
         let conn = db.lock();

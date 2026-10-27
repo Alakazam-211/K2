@@ -49,7 +49,7 @@ impl GuestScrub {
         let mut roots: Vec<String> = Vec::new();
         if let Some(r) = root.map(|r| r.trim().trim_end_matches('/')).filter(|r| r.len() > 1) {
             roots.push(r.to_string());
-            if let Ok(real) = std::fs::canonicalize(r) {
+            if let Ok(real) = dunce::canonicalize(&r) {
                 let real = real.to_string_lossy().trim_end_matches('/').to_string();
                 if real.len() > 1 && !roots.contains(&real) {
                     roots.push(real);

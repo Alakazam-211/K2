@@ -60,7 +60,7 @@ fn setup() -> Env {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let home = PathBuf::from(format!("/tmp/k2cr-{:x}", nanos % 0xffff_ffff));
     std::fs::create_dir_all(&home).unwrap();
-    let home = std::fs::canonicalize(&home).unwrap();
+    let home = dunce::canonicalize(&home).unwrap();
     let env = Env { prev_home: std::env::var_os("HOME"), home: home.clone(), _guard: guard };
     std::env::set_var("HOME", &home);
     std::env::set_var("K2_COMPUTE", "1");

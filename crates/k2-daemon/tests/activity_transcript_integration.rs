@@ -84,7 +84,7 @@ fn tmp_dir(tag: &str) -> PathBuf {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos()
     ));
     std::fs::create_dir_all(&p).expect("tmp dir");
-    std::fs::canonicalize(&p).expect("canonical tmp dir")
+    dunce::canonicalize(&p).expect("canonical tmp dir")
 }
 
 fn now_ms() -> i64 {

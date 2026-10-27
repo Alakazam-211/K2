@@ -100,7 +100,7 @@ fn build_fixture() -> Fixture {
     // ── hermetic ~/.claude/projects/<slug>/ ─────────────────────────
     // Slug is computed from the CANONICAL project path (the engine
     // canonicalizes), so canonicalize here too.
-    let canon = fs::canonicalize(&project).unwrap();
+    let canon = dunce::canonicalize(&project).unwrap();
     let slug = claude_project_hash(&canon.to_string_lossy());
     let slug_dir = home.join(".claude").join("projects").join(&slug);
     fs::create_dir_all(&slug_dir).unwrap();

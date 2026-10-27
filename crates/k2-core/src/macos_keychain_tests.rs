@@ -386,7 +386,7 @@ fn no_source_file_writes_keychain_item_data_in_process() {
     // `security` read (Claude Code's) then prompts. Only this module's
     // tests may call these, plus the vault's own key (KV5, above).
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let root = root.canonicalize().unwrap_or(root);
+    let root = dunce::canonicalize(&root).unwrap_or(root);
     let hits = in_process_write_hits(&root, &["crates/k2-core/src", "crates/k2-client/src", "crates/k2-daemon/src"]);
     assert!(hits.is_empty(), "in-process keychain data writes: {hits:#?}");
     // The exemption is live: the vault key write is still where it was.
@@ -501,7 +501,7 @@ fn k2_owned_round_trip_and_repair(label: &str, opts: WriteOptions, value: &[u8])
     write(&svc, ACCT, value, &opts).unwrap();
     kc.assert_security_readable(&svc);
     assert_eq!(read_k2_owned(&svc, ACCT, &opts).unwrap(), K2Read::Value(value.to_vec()));
-    let exe = std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
+    let exe = dunce::canonicalize(&std::env::current_exe().unwrap()).unwrap();
     assert!(kc.acl(&svc).contains(exe.to_str().unwrap()), "K2's binary is on the item's ACL");
     // Rotation (same writer again): still readable.
     let rotated = [value, b"-rotated"].concat();

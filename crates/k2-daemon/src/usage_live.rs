@@ -79,7 +79,7 @@ pub fn slot_account(tool: Tool, home: &str) -> Option<String> {
     if home.is_empty() {
         return None;
     }
-    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let canon = |p: &Path| dunce::canonicalize(&p).unwrap_or_else(|_| p.to_path_buf());
     let dir = canon(Path::new(home));
     let parent = dir.parent()?;
     if parent != canon(&store::tool_dir(tool)) {

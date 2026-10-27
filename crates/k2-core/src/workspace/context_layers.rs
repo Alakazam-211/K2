@@ -1770,8 +1770,7 @@ pub fn normalize_layer_path(project_path: &str, raw: &str) -> Result<String, Con
     }
 
     let root = Path::new(project_path);
-    let root_canon = root
-        .canonicalize()
+    let root_canon = dunce::canonicalize(&root)
         .map_err(|e| ContextError::NotFound(format!("workspace path invalid: {e}")))?;
 
     let candidate = if Path::new(raw).is_absolute() {
@@ -1800,8 +1799,7 @@ pub fn normalize_layer_path(project_path: &str, raw: &str) -> Result<String, Con
 
     // If the path (or a parent) exists, canonicalize and require prefix.
     let resolved = if cleaned.exists() {
-        cleaned
-            .canonicalize()
+        dunce::canonicalize(&cleaned)
             .map_err(|e| ContextError::PathEscape(format!("cannot resolve path: {e}")))?
     } else {
         // Walk up to first existing ancestor, canonicalize that, rejoin.
@@ -1819,8 +1817,7 @@ pub fn normalize_layer_path(project_path: &str, raw: &str) -> Result<String, Con
                 None => break,
             }
         }
-        let base = existing
-            .canonicalize()
+        let base = dunce::canonicalize(&existing)
             .unwrap_or_else(|_| existing.to_path_buf());
         let mut joined = base;
         for part in suffix.into_iter().rev() {

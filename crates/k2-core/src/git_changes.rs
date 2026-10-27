@@ -83,7 +83,7 @@ fn boot_nonce() -> &'static str {
 /// exists, no trailing `/`. Every caller (routes, watcher) goes through
 /// this so `/var/…` and `/private/var/…` spellings share one counter.
 pub fn rev_key(workdir: &Path) -> String {
-    let canon = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+    let canon = dunce::canonicalize(&workdir).unwrap_or_else(|_| workdir.to_path_buf());
     trim_slash(&canon.to_string_lossy())
 }
 
@@ -157,7 +157,7 @@ pub fn normalize_rel_path(workdir: &Path, input: &str) -> Result<String, Changes
     let trimmed = input.trim_end_matches('/');
     let p = Path::new(trimmed);
     let rel: PathBuf = if p.is_absolute() {
-        let canon_wd = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+        let canon_wd = dunce::canonicalize(&workdir).unwrap_or_else(|_| workdir.to_path_buf());
         if let Ok(r) = p.strip_prefix(workdir) {
             r.to_path_buf()
         } else if let Ok(r) = p.strip_prefix(&canon_wd) {
@@ -195,7 +195,7 @@ fn canonical_prefix(p: &Path) -> Option<PathBuf> {
     let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
     let mut cur = p;
     loop {
-        if let Ok(c) = std::fs::canonicalize(cur) {
+        if let Ok(c) = dunce::canonicalize(&cur) {
             let mut out = c;
             for t in tail.iter().rev() {
                 out.push(t);
@@ -211,11 +211,11 @@ fn canonical_prefix(p: &Path) -> Option<PathBuf> {
 /// symlinked parent directories) is outside the repo. The leaf itself is
 /// never followed by callers.
 fn ensure_inside(workdir: &Path, full: &Path) -> Result<(), ChangesError> {
-    let canon_wd = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+    let canon_wd = dunce::canonicalize(&workdir).unwrap_or_else(|_| workdir.to_path_buf());
     // Nearest existing ancestor of the leaf's parent.
     let mut probe = full.parent().map(Path::to_path_buf);
     while let Some(dir) = probe {
-        if let Ok(real) = std::fs::canonicalize(&dir) {
+        if let Ok(real) = dunce::canonicalize(&dir) {
             if real.starts_with(&canon_wd) {
                 return Ok(());
             }
@@ -1211,7 +1211,7 @@ fn forms(p: &Path, alias: Option<&(String, String)>) -> Vec<String> {
             v.push(s);
         }
     };
-    if let Ok(c) = std::fs::canonicalize(p) {
+    if let Ok(c) = dunce::canonicalize(&p) {
         let c = trim_slash(&c.to_string_lossy());
         if let Some((canon_root, raw_root)) = alias {
             if c == *canon_root {
@@ -1252,7 +1252,7 @@ fn common_dir(repo: &Repository, gitdir: &Path) -> PathBuf {
             let rel = s.trim();
             if !rel.is_empty() {
                 let p = gitdir.join(rel);
-                return std::fs::canonicalize(&p).unwrap_or(p);
+                return dunce::canonicalize(&p).unwrap_or(p);
             }
         }
     }
@@ -1265,7 +1265,7 @@ pub fn repo_dirs(path: &str) -> Option<RepoDirs> {
     let workdir = repo.workdir()?.to_path_buf();
     let gitdir = repo.path().to_path_buf();
     let commondir = common_dir(&repo, &gitdir);
-    let alias = std::fs::canonicalize(path)
+    let alias = dunce::canonicalize(&path)
         .ok()
         .map(|c| (trim_slash(&c.to_string_lossy()), trim_slash(path)))
         .filter(|(c, raw)| c != raw);

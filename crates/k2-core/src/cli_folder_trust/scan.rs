@@ -930,8 +930,8 @@ impl Scanner<'_> {
                 _ => None,
             };
         }
-        let root_c = self.root.canonicalize().ok()?;
-        match p.canonicalize() {
+        let root_c = dunce::canonicalize(&self.root).ok()?;
+        match dunce::canonicalize(&p) {
             Ok(target) if target.starts_with(&root_c) && target.is_file() => {
                 if let Ok(rel_t) = target.strip_prefix(&root_c) {
                     self.followed.push(rel_t.to_string_lossy().replace('\\', "/"));
@@ -1048,7 +1048,7 @@ impl Scanner<'_> {
                 continue;
             }
             let rel = if Path::new(t).is_absolute() {
-                let Ok(root_c) = self.root.canonicalize() else { continue };
+                let Ok(root_c) = dunce::canonicalize(&self.root) else { continue };
                 match Path::new(t).strip_prefix(&root_c).or_else(|_| Path::new(t).strip_prefix(self.root)) {
                     Ok(r) => r.to_string_lossy().replace('\\', "/"),
                     Err(_) => continue,
@@ -1069,9 +1069,9 @@ impl Scanner<'_> {
     /// A launch block's `cwd:` resolves outside this folder (`~`, an
     /// absolute path elsewhere, `..`), as the spawn path resolves it.
     fn leaves_root(&self, cwd: &str) -> bool {
-        let Ok(root_c) = self.root.canonicalize() else { return true };
+        let Ok(root_c) = dunce::canonicalize(&self.root) else { return true };
         let resolved = crate::workspace::launch_profile::resolve_cwd(&root_c, Some(cwd));
-        let norm = resolved.canonicalize().unwrap_or_else(|_| {
+        let norm = dunce::canonicalize(&resolved).unwrap_or_else(|_| {
             let mut out = PathBuf::new();
             for c in resolved.components() {
                 match c {

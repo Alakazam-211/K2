@@ -2533,7 +2533,7 @@ mod tests {
         let home = crate::test_support::TempHome::new();
         let ws = home.path().join(format!("ws-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&ws).expect("spawn folder");
-        let ws = ws.canonicalize().expect("canonical spawn folder").to_string_lossy().into_owned();
+        let ws = dunce::canonicalize(&ws).expect("canonical spawn folder").to_string_lossy().into_owned();
         (home, ws)
     }
 

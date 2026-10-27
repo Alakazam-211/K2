@@ -459,7 +459,7 @@ mod tests {
                 std::process::id()
             ));
             fs::create_dir_all(&p).expect("mkdir tmp");
-            Tmp(p.canonicalize().expect("canon tmp"))
+            Tmp(dunce::canonicalize(&p).expect("canon tmp"))
         }
     }
     impl Drop for Tmp {

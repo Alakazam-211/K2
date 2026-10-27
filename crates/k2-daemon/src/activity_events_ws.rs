@@ -257,7 +257,7 @@ fn same_path(a: &str, b: &str) -> bool {
     if slash(a) == slash(b) {
         return true;
     }
-    match (std::fs::canonicalize(a.trim()), std::fs::canonicalize(b.trim())) {
+    match (dunce::canonicalize(&a.trim()), dunce::canonicalize(&b.trim())) {
         (Ok(x), Ok(y)) => x == y,
         _ => false,
     }
@@ -280,7 +280,7 @@ pub fn cwd_under_any_root(cwd: &str, roots: &[PathBuf]) -> bool {
     if slash(cwd).is_empty() {
         return false;
     }
-    let cwd_canon = std::fs::canonicalize(Path::new(cwd.trim()))
+    let cwd_canon = dunce::canonicalize(&Path::new(cwd.trim()))
         .ok()
         .map(|p| p.to_string_lossy().into_owned());
     for root in roots {
@@ -293,7 +293,7 @@ pub fn cwd_under_any_root(cwd: &str, roots: &[PathBuf]) -> bool {
                 return true;
             }
         }
-        if let Ok(rc) = std::fs::canonicalize(root) {
+        if let Ok(rc) = dunce::canonicalize(&root) {
             let rs = rc.to_string_lossy().into_owned();
             if boundary(cwd, &rs) {
                 return true;
@@ -872,7 +872,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&dir).expect("mkdir");
-        dir.canonicalize().expect("canon temp")
+        dunce::canonicalize(&dir).expect("canon temp")
     }
 
     #[test]

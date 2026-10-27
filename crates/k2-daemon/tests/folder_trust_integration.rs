@@ -75,7 +75,7 @@ fn held_folder_spawn_waits_for_the_owner_then_starts() {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
     let _enter = rt.enter();
 
-    let home = t.path().canonicalize().unwrap();
+    let home = dunce::canonicalize(&t.path()).unwrap();
     // The test build's agent belt only runs shims (never a real `claude`).
     let shim = k2_core::test_env::AgentShim::with_body("exec sleep 60");
     let fake: PathBuf = shim.dir().join("claude");
@@ -83,7 +83,7 @@ fn held_folder_spawn_waits_for_the_owner_then_starts() {
     let ws = home.join("hired-repo");
     std::fs::create_dir_all(ws.join(".claude")).unwrap();
     std::fs::write(ws.join(".claude/settings.json"), HOOK).unwrap();
-    let ws = ws.canonicalize().unwrap();
+    let ws = dunce::canonicalize(&ws).unwrap();
     let key = ws.to_string_lossy().to_string();
     let pid = uuid::Uuid::new_v4().to_string();
     register(&pid, &key, "ft-hired");
@@ -148,7 +148,7 @@ fn held_folder_spawn_waits_for_the_owner_then_starts() {
     // when the outer folder is not trusted (B#5).
     let inner = ws.join("tools/inner");
     std::fs::create_dir_all(inner.join(".git")).unwrap();
-    let inner = inner.canonicalize().unwrap();
+    let inner = dunce::canonicalize(&inner).unwrap();
     let inner_key = inner.to_string_lossy().to_string();
     let inner_id = uuid::Uuid::new_v4().to_string();
     register(&inner_id, &inner_key, "ft-inner");

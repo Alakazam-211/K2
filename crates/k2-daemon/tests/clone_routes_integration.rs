@@ -128,7 +128,7 @@ fn build_bundle_with_manager_settings(root: &Path) -> PathBuf {
     write(&project.join("README.md"), "# Cloned WS\ndocs\n");
     write(&project.join(".k2so/PROJECT.md"), "# Project\n");
 
-    let canon = std::fs::canonicalize(&project).unwrap();
+    let canon = dunce::canonicalize(&project).unwrap();
     let slug = k2_core::chat_history::claude_project_hash(&canon.to_string_lossy());
     let slug_dir = src_home.join(".claude").join("projects").join(&slug);
     write(&slug_dir.join("memory/MEMORY.md"), "## Memory\n");

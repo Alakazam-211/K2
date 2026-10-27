@@ -1445,7 +1445,7 @@ mod tests {
         std::fs::write(ws.join("app/server.js"), "const seen = new Map()\nserver.on('request', (req) => { seen.set(req.url, 1) })\n")
             .expect("write server.js");
         std::fs::write(ws.join("app/src/page.ts"), "export const n: number = \n").expect("write page.ts");
-        let ws_path = ws.canonicalize().expect("canon").display().to_string();
+        let ws_path = dunce::canonicalize(&ws).expect("canon").display().to_string();
         let id = format!("validate-ws-{pid}");
         seed_ws(&id, &ws_path, "Validate");
         let call = |dir: &str| {

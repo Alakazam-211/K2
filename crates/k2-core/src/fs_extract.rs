@@ -434,7 +434,7 @@ mod tests {
     }
 
     fn tmp_canon(tmp: &TempDir) -> PathBuf {
-        tmp.path().canonicalize().unwrap()
+        dunce::canonicalize(&tmp.path()).unwrap()
     }
 
     /// Build a simple zip at `zip_path` with the given (name, bytes) files.

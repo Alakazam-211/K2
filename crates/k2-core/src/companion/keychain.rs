@@ -73,7 +73,7 @@ pub(crate) fn item_write_options() -> crate::macos_keychain::WriteOptions {
 fn acl_trusted_apps() -> Vec<String> {
     let mut apps = vec!["/usr/bin/security".to_string()];
     if let Ok(exe) = std::env::current_exe() {
-        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        let exe = dunce::canonicalize(&exe).unwrap_or(exe);
         apps.push(exe.to_string_lossy().to_string());
     }
     apps

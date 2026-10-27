@@ -222,9 +222,9 @@ fn skin_rel_param(params: &HashMap<String, String>) -> Result<String, CliRespons
 /// root (a worktree file the owner list still shows) is omitted — never
 /// returned absolute.
 fn guest_file_path(room_root: &str, stored: &str) -> Option<String> {
-    let root = std::fs::canonicalize(room_root).ok()?;
+    let root = dunce::canonicalize(&room_root).ok()?;
     let stored_path = Path::new(stored);
-    let canon = std::fs::canonicalize(stored_path).unwrap_or_else(|_| stored_path.to_path_buf());
+    let canon = dunce::canonicalize(&stored_path).unwrap_or_else(|_| stored_path.to_path_buf());
     let rel = canon.strip_prefix(&root).ok()?;
     if rel.as_os_str().is_empty() {
         return None;
@@ -610,7 +610,7 @@ mod tests {
         let dir = unique_dir("skin-cap");
         let file = dir.join("a.csv");
         touch(&file);
-        let canon = dir.canonicalize().expect("canon");
+        let canon = dunce::canonicalize(&dir).expect("canon");
         let handle = format!("rcap{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let name = format!("rcap-name-{handle}");
         let id = insert_handled(&canon.to_string_lossy(), &name, &handle);
@@ -660,7 +660,7 @@ mod tests {
         let dir = unique_dir("skin-jail");
         let file = dir.join("a.csv");
         touch(&file);
-        let canon = dir.canonicalize().expect("canon");
+        let canon = dunce::canonicalize(&dir).expect("canon");
         let handle = format!("rjail{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let name = format!("rjail-name-{handle}");
         let id = insert_handled(&canon.to_string_lossy(), &name, &handle);
@@ -704,7 +704,7 @@ mod tests {
         fs::create_dir_all(&notes).expect("notes");
         let file = notes.join("a.csv");
         touch(&file);
-        let canon = dir.canonicalize().expect("canon");
+        let canon = dunce::canonicalize(&dir).expect("canon");
         let wt = unique_dir("skin-wt");
         let wt_file = wt.join("note.csv");
         touch(&wt_file);
@@ -719,7 +719,7 @@ mod tests {
                 rusqlite::params![
                     uuid::Uuid::new_v4().to_string(),
                     id,
-                    wt.canonicalize().expect("wt canon").to_string_lossy().to_string()
+                    dunce::canonicalize(&wt).expect("wt canon").to_string_lossy().to_string()
                 ],
             )
             .expect("insert worktree");

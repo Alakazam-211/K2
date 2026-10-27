@@ -59,8 +59,7 @@ pub fn store_dir() -> PathBuf {
 }
 
 fn path_key_hash(workspace_path: &str) -> String {
-    let canonical = Path::new(workspace_path)
-        .canonicalize()
+    let canonical = dunce::canonicalize(&Path::new(workspace_path))
         .unwrap_or_else(|_| PathBuf::from(workspace_path));
     let hex = format!("{:x}", Sha256::digest(canonical.to_string_lossy().as_bytes()));
     // Short stable id for the filename (full hash is fine too; 32 hex keeps

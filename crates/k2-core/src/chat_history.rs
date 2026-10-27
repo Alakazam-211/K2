@@ -75,7 +75,7 @@ pub fn claude_history_path() -> Option<PathBuf> {
 /// to the literal input. The char-map then still reproduces Claude's output
 /// for the no-symlink case (`/`→`-`, `.`→`-`, ` `→`-`, `_`→`-`).
 pub fn claude_project_hash(project_path: &str) -> String {
-    let canonical = std::fs::canonicalize(project_path)
+    let canonical = dunce::canonicalize(&project_path)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| project_path.to_string());
     canonical
@@ -3926,7 +3926,7 @@ fn cwd_matches_exact(cwd: &str, project_path: &str) -> bool {
         return true;
     }
     let canon = |p: &str| {
-        std::fs::canonicalize(p)
+        dunce::canonicalize(&p)
             .map(|c| c.to_string_lossy().into_owned())
             .unwrap_or_else(|_| p.to_string())
     };

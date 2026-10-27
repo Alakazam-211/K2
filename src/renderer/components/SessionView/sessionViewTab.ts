@@ -1,19 +1,20 @@
 import { hostScopedKey } from '@/lib/host-scoped-storage'
 /** Per-window remembered view (C8). Not daemon-canonical. */
 
-// `chat` (the Chat view: the agent's JSONL transcript drawn over its PTY,
-// LIVE 0.41.0) is RETIRED from the UI in 0.46.4 (Rosson 2026-10-23: "we're
-// sticking with threads"). Nothing a person can click picks it any more, and
-// every read below turns a saved `chat` into the terminal it always was
-// (`retireChatTab` / `retireChatSides`). The member stays in these types only
-// so the Chat view code (`ChatOverlayColumn`, `ChatOverlayPane`,
-// `useChatTranscript`, TerminalPane's chat branches), now reachable only from
-// tests, still compiles. 0.46.5: delete `'chat'` from both types along with
-// that code. See wiki `Plan - Retirement ledger`.
-export type SessionViewTab = 'terminal' | 'thread' | 'chatter' | 'split' | 'chat'
+export type SessionViewTab = 'terminal' | 'thread' | 'chatter' | 'split'
 
 /** One side of Split view. Not `split` itself. */
-export type SplitPaneView = 'chat' | 'terminal' | 'thread' | 'chatter'
+export type SplitPaneView = 'terminal' | 'thread' | 'chatter'
+
+// The Chat view (the agent's JSONL transcript drawn over its PTY, LIVE
+// 0.41.0) was retired from the UI in 0.46.4 and its code deleted in 0.46.5
+// (Rosson 2026-10-23: "we're sticking with threads"). Saved state on this
+// client can still name it: a remembered view, a Split side, or the
+// "New agents open in" choice. Since 0.46.5 that saved `chat` opens the
+// agent's Thread (Rosson 2026-10-27: "Anyone using it as a default point them
+// at threads"), the fixed value is written back, and nothing stores `chat`.
+// See wiki `Plan - Retirement ledger`.
+const LEGACY_CHAT = 'chat'
 
 export const SESSION_VIEW_TAB_DEFAULT: SessionViewTab = 'terminal'
 
@@ -45,62 +46,59 @@ export function sessionViewSplitStorageKey(hostKey: string, sessionKey: string):
 }
 
 export function parseSplitPaneView(raw: unknown, fallback: SplitPaneView): SplitPaneView {
-  if (raw === 'chat' || raw === 'terminal' || raw === 'thread' || raw === 'chatter') return raw
+  if (raw === 'terminal' || raw === 'thread' || raw === 'chatter') return raw
   return fallback
 }
 
-/** A remembered view, as this client shows it. A saved `chat` (Chat view,
- *  retired from the UI in 0.46.4) opens as the terminal. */
+/** A remembered view, as this client shows it. A saved `chat` (the retired
+ *  Chat view) opens the agent's Thread. */
 export function parseSessionViewTab(raw: string | null | undefined): SessionViewTab {
   if (raw === 'thread' || raw === 'chatter' || raw === 'split') return raw
+  if (raw === LEGACY_CHAT) return 'thread'
   return 'terminal'
 }
 
-/** 0.46.4 Chat view retirement: the view a saved or requested `chat` becomes.
- *  The Chat view was a face on the agent's own PTY, so it is the terminal.
- *  0.46.5: delete with the `'chat'` type member. */
-export function retireChatTab(tab: SessionViewTab): SessionViewTab {
-  return tab === 'chat' ? 'terminal' : tab
-}
-
-/** 0.46.4 Chat view retirement for the two Split sides: a `chat` side becomes
- *  the terminal, or the Thread when the other side is already the terminal
- *  (`chatFallbackSide`). Both sides `chat` → Terminal | Thread.
- *  0.46.5: delete with the `'chat'` type member. */
-export function retireChatSides(sides: SessionSplitSides): SessionSplitSides {
-  const { left, right } = sides
-  if (left === 'chat' && right === 'chat') return DEFAULT_SPLIT_SIDES
-  if (left === 'chat') return { left: chatFallbackSide(right), right }
-  if (right === 'chat') return { left, right: chatFallbackSide(left) }
-  return sides
+/** A saved Chat side becomes the Thread; when the other side is already the
+ *  Thread it becomes the terminal instead, so the Thread sits beside the
+ *  terminal. Both sides `chat` → Terminal | Thread. */
+function splitSidesFromRaw(rawLeft: unknown, rawRight: unknown): SessionSplitSides {
+  const leftChat = rawLeft === LEGACY_CHAT
+  const rightChat = rawRight === LEGACY_CHAT
+  if (leftChat && rightChat) return DEFAULT_SPLIT_SIDES
+  const left = parseSplitPaneView(rawLeft, DEFAULT_SPLIT_LEFT)
+  const right = parseSplitPaneView(rawRight, DEFAULT_SPLIT_RIGHT)
+  const besideThread = (other: SplitPaneView): SplitPaneView =>
+    other === 'thread' ? 'terminal' : 'thread'
+  if (leftChat) return { left: besideThread(right), right }
+  if (rightChat) return { left, right: besideThread(left) }
+  return { left, right }
 }
 
 /** True when a raw saved view (tab string + split JSON) still names the
- *  retired Chat view, so the caller writes the migrated view back.
- *  0.46.5: delete. */
-export function savedViewNamesChat(tabRaw: string | null, splitRaw: string | null): boolean {
-  if (tabRaw === 'chat') return true
+ *  retired Chat view, so the caller writes the migrated view back. */
+export function savedViewNamesLegacyChat(tabRaw: string | null, splitRaw: string | null): boolean {
+  if (tabRaw === LEGACY_CHAT) return true
   if (!splitRaw) return false
   try {
-    const parsed = JSON.parse(splitRaw) as { left?: unknown; right?: unknown } | null
-    return !!parsed && typeof parsed === 'object' && (parsed.left === 'chat' || parsed.right === 'chat')
+    const parsed = JSON.parse(splitRaw) as { left?: unknown; right?: unknown; view?: unknown } | null
+    return (
+      !!parsed &&
+      typeof parsed === 'object' &&
+      (parsed.left === LEGACY_CHAT || parsed.right === LEGACY_CHAT || parsed.view === LEGACY_CHAT)
+    )
   } catch {
     return false
   }
 }
 
-/** Overlay UI is a viewer. Mount Thread/Chatter/Chat only while that view is selected.
- *  Split without stored sides is Terminal + Thread. The `chat` flag is only
- *  ever true in tests since 0.46.4: no live view state can hold `chat`
- *  (reads and setters go through `retireChatTab` / `retireChatSides`).
- *  0.46.5: drop the `chat` flag. */
+/** Overlay UI is a viewer. Mount Thread/Chatter only while that view is selected.
+ *  Split without stored sides is Terminal + Thread. */
 export function overlayViewer(
   tab: SessionViewTab,
   sides?: { left?: SplitPaneView | null; right?: SplitPaneView | null } | null,
 ): {
   thread: boolean
   chatter: boolean
-  chat: boolean
   hidePty: boolean
 } {
   const views: SplitPaneView[] =
@@ -109,13 +107,12 @@ export function overlayViewer(
           parseSplitPaneView(sides?.left, DEFAULT_SPLIT_LEFT),
           parseSplitPaneView(sides?.right, DEFAULT_SPLIT_RIGHT),
         ]
-      : tab === 'thread' || tab === 'chatter' || tab === 'chat'
+      : tab === 'thread' || tab === 'chatter'
         ? [tab]
         : ['terminal']
   return {
     thread: views.includes('thread'),
     chatter: views.includes('chatter'),
-    chat: views.includes('chat'),
     hidePty: !views.includes('terminal'),
   }
 }
@@ -125,12 +122,8 @@ export function parseSessionSplitSides(raw: string | null | undefined): SessionS
   try {
     const parsed = JSON.parse(raw) as { left?: unknown; right?: unknown }
     if (!parsed || typeof parsed !== 'object') return DEFAULT_SPLIT_SIDES
-    // A saved Chat side (retired from the UI in 0.46.4) opens as the terminal
-    // or the Thread, never as a blank side.
-    return retireChatSides({
-      left: parseSplitPaneView(parsed.left, DEFAULT_SPLIT_LEFT),
-      right: parseSplitPaneView(parsed.right, DEFAULT_SPLIT_RIGHT),
-    })
+    // A saved Chat side (the retired Chat view) opens as the Thread.
+    return splitSidesFromRaw(parsed.left, parsed.right)
   } catch {
     return DEFAULT_SPLIT_SIDES
   }
@@ -147,20 +140,16 @@ export function readSessionSplitSides(storageKey: string): SessionSplitSides {
 
 export function writeSessionSplitSides(storageKey: string, sides: SessionSplitSides): void {
   if (typeof localStorage === 'undefined') return
+  // Never stores `chat`, even from an untyped caller.
+  const safe = splitSidesFromRaw(sides.left, sides.right)
   try {
     localStorage.setItem(
       storageKey,
-      JSON.stringify({ left: sides.left, right: sides.right }),
+      JSON.stringify({ left: safe.left, right: safe.right }),
     )
   } catch {
     /* quota / private mode */
   }
-}
-
-/** Replacement for a Chat side when the harness has no chat face: Terminal,
- *  or Thread if the other side is already Terminal. */
-export function chatFallbackSide(other: SplitPaneView): SplitPaneView {
-  return other === 'terminal' ? 'thread' : 'terminal'
 }
 
 // ── "New agents open in" (Settings → General → Workspaces) ─────────────
@@ -184,13 +173,12 @@ export const NEW_AGENT_VIEW_DEFAULT: NewAgentViewPref = {
   split: DEFAULT_SPLIT_SIDES,
 }
 
-// No `chat`: the Chat view is retired from the UI (0.46.4).
 const SPLIT_PANE_ORDER: SplitPaneView[] = ['terminal', 'thread', 'chatter']
 
 /** Coerce anything to a legal pref. Unknown view → Terminal; missing sides →
  *  Terminal | Thread; equal sides → the right side moves to the next view.
- *  A saved Chat view or Chat side (retired 0.46.4) becomes Terminal or the
- *  `retireChatSides` pick. */
+ *  A saved Chat view (retired) becomes Thread; a Chat side becomes the Thread
+ *  beside the terminal (`splitSidesFromRaw`). */
 export function normalizeNewAgentView(raw: unknown): NewAgentViewPref {
   if (!raw || typeof raw !== 'object') return NEW_AGENT_VIEW_DEFAULT
   // Accepts the pref shape (`split: {left, right}`) and the stored shape
@@ -203,12 +191,9 @@ export function normalizeNewAgentView(raw: unknown): NewAgentViewPref {
   }
   const view = parseSessionViewTab(typeof obj.view === 'string' ? obj.view : null)
   const sides = obj.split && typeof obj.split === 'object' ? obj.split : obj
-  const retired = retireChatSides({
-    left: parseSplitPaneView(sides.left, DEFAULT_SPLIT_LEFT),
-    right: parseSplitPaneView(sides.right, DEFAULT_SPLIT_RIGHT),
-  })
-  const left = retired.left
-  let right = retired.right
+  const migrated = splitSidesFromRaw(sides.left, sides.right)
+  const left = migrated.left
+  let right = migrated.right
   if (right === left) {
     right = SPLIT_PANE_ORDER.find((v) => v !== left) ?? DEFAULT_SPLIT_RIGHT
   }
@@ -220,7 +205,11 @@ export function readNewAgentView(): NewAgentViewPref {
   try {
     const raw = localStorage.getItem(LS_NEW_AGENT_VIEW)
     if (!raw) return NEW_AGENT_VIEW_DEFAULT
-    return normalizeNewAgentView(JSON.parse(raw))
+    const pref = normalizeNewAgentView(JSON.parse(raw))
+    // A saved Chat choice (the retired Chat view) now reads as Thread; write
+    // the fixed choice back so `chat` is gone from storage.
+    if (savedViewNamesLegacyChat(null, raw)) writeNewAgentView(pref)
+    return pref
   } catch {
     return NEW_AGENT_VIEW_DEFAULT
   }
@@ -228,10 +217,12 @@ export function readNewAgentView(): NewAgentViewPref {
 
 export function writeNewAgentView(pref: NewAgentViewPref): void {
   if (typeof localStorage === 'undefined') return
+  // Never stores `chat`, even from an untyped caller.
+  const safe = normalizeNewAgentView(pref)
   try {
     localStorage.setItem(
       LS_NEW_AGENT_VIEW,
-      JSON.stringify({ view: pref.view, left: pref.split.left, right: pref.split.right }),
+      JSON.stringify({ view: safe.view, left: safe.split.left, right: safe.split.right }),
     )
   } catch {
     /* quota / private mode */
@@ -250,8 +241,8 @@ export function resolveSessionView(
   tab: SessionViewTab
   sides: SessionSplitSides
   fresh: boolean
-  /** The saved view named the retired Chat view (0.46.4) and was migrated
-   *  on this read; the caller writes `tab` + `sides` back. 0.46.5: drop. */
+  /** The saved view named the retired Chat view and was migrated to the
+   *  Thread on this read; the caller writes `tab` + `sides` back. */
   migrated: boolean
 } {
   let storedTab: string | null = null
@@ -269,7 +260,7 @@ export function resolveSessionView(
       tab: parseSessionViewTab(storedTab),
       sides: parseSessionSplitSides(storedSplit),
       fresh: false,
-      migrated: savedViewNamesChat(storedTab, storedSplit),
+      migrated: savedViewNamesLegacyChat(storedTab, storedSplit),
     }
   }
   const pref = readNewAgentView()
@@ -277,7 +268,7 @@ export function resolveSessionView(
     tab: pref.view,
     sides: storedSplit !== null ? parseSessionSplitSides(storedSplit) : pref.split,
     fresh: storageKey !== null,
-    migrated: savedViewNamesChat(null, storedSplit),
+    migrated: savedViewNamesLegacyChat(null, storedSplit),
   }
 }
 
@@ -293,7 +284,8 @@ export function readSessionViewTab(storageKey: string): SessionViewTab {
 export function writeSessionViewTab(storageKey: string, tab: SessionViewTab): void {
   if (typeof localStorage === 'undefined') return
   try {
-    localStorage.setItem(storageKey, tab)
+    // Never stores `chat`, even from an untyped caller.
+    localStorage.setItem(storageKey, parseSessionViewTab(tab))
   } catch {
     /* quota / private mode */
   }

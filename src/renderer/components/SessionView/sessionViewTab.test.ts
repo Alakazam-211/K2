@@ -6,10 +6,9 @@ import {
   overlayViewer,
   parseSessionSplitSides,
   parseSessionViewTab,
+  readNewAgentView,
   resolveSessionView,
-  retireChatSides,
-  retireChatTab,
-  savedViewNamesChat,
+  savedViewNamesLegacyChat,
   readSessionSplitSides,
   readSessionViewTab,
   sessionViewSplitStorageKey,
@@ -30,8 +29,8 @@ describe('session view tab (C3/C8)', () => {
     expect(parseSessionViewTab('thread')).toBe('thread')
     expect(parseSessionViewTab('chatter')).toBe('chatter')
     expect(parseSessionViewTab('split')).toBe('split')
-    // Chat view retired from the UI (0.46.4): a saved `chat` opens as the terminal.
-    expect(parseSessionViewTab('chat')).toBe('terminal')
+    // The Chat view is gone (0.46.5): a saved `chat` opens the agent's Thread.
+    expect(parseSessionViewTab('chat')).toBe('thread')
   })
 
   it('keys memory per host + conversation (this window)', () => {
@@ -63,43 +62,53 @@ describe('session view tab (C3/C8)', () => {
   })
 })
 
-describe('saved Chat view migrates on read (Chat view retired from the UI in 0.46.4)', () => {
+// The Chat view was deleted in 0.46.5. Rosson 2026-10-27: "Anyone using it
+// as a default point them at threads." Saved state that names it migrates on
+// read to the Thread, and the caller writes the fixed value back.
+describe('saved Chat view migrates to Threads on read (0.46.5)', () => {
   beforeEach(() => {
     localStorage.clear()
   })
 
-  it('a saved chat pane opens as the terminal', () => {
+  it('a saved chat pane opens the Thread view', () => {
     const tabKey = sessionViewTabStorageKey('local', 'conv-chat')
     const splitKey = sessionViewSplitStorageKey('local', 'conv-chat')
     localStorage.setItem(tabKey, 'chat')
-    expect(readSessionViewTab(tabKey)).toBe('terminal')
+    expect(readSessionViewTab(tabKey)).toBe('thread')
     const resolved = resolveSessionView(tabKey, splitKey)
     expect(resolved).toEqual({
-      tab: 'terminal',
+      tab: 'thread',
       sides: { left: 'terminal', right: 'thread' },
       fresh: false,
       migrated: true,
     })
-    const viewer = overlayViewer(resolved.tab, resolved.sides)
-    expect(viewer.chat).toBe(false)
-    expect(viewer.hidePty).toBe(false)
+    expect(overlayViewer(resolved.tab, resolved.sides)).toEqual({
+      thread: true,
+      chatter: false,
+      hidePty: true,
+    })
   })
 
-  it('a saved Chat split side becomes the terminal, or the Thread beside a terminal', () => {
+  it('a saved Chat split side becomes the Thread beside the terminal', () => {
+    expect(parseSessionSplitSides(JSON.stringify({ left: 'chat', right: 'terminal' }))).toEqual({
+      left: 'thread',
+      right: 'terminal',
+    })
+    expect(parseSessionSplitSides(JSON.stringify({ left: 'terminal', right: 'chat' }))).toEqual({
+      left: 'terminal',
+      right: 'thread',
+    })
+    // The other side is already the Thread: the Chat side becomes the terminal.
     expect(parseSessionSplitSides(JSON.stringify({ left: 'chat', right: 'thread' }))).toEqual({
       left: 'terminal',
       right: 'thread',
     })
-    expect(parseSessionSplitSides(JSON.stringify({ left: 'chat', right: 'terminal' }))).toEqual({
+    expect(parseSessionSplitSides(JSON.stringify({ left: 'thread', right: 'chat' }))).toEqual({
       left: 'thread',
       right: 'terminal',
     })
     expect(parseSessionSplitSides(JSON.stringify({ left: 'chatter', right: 'chat' }))).toEqual({
       left: 'chatter',
-      right: 'terminal',
-    })
-    expect(parseSessionSplitSides(JSON.stringify({ left: 'terminal', right: 'chat' }))).toEqual({
-      left: 'terminal',
       right: 'thread',
     })
     expect(parseSessionSplitSides(JSON.stringify({ left: 'chat', right: 'chat' }))).toEqual({
@@ -110,13 +119,16 @@ describe('saved Chat view migrates on read (Chat view retired from the UI in 0.4
     const tabKey = sessionViewTabStorageKey('local', 'conv-split-chat')
     const splitKey = sessionViewSplitStorageKey('local', 'conv-split-chat')
     localStorage.setItem(tabKey, 'split')
-    localStorage.setItem(splitKey, JSON.stringify({ left: 'chat', right: 'chatter' }))
+    localStorage.setItem(splitKey, JSON.stringify({ left: 'chat', right: 'terminal' }))
     const resolved = resolveSessionView(tabKey, splitKey)
     expect(resolved.tab).toBe('split')
-    expect(resolved.sides).toEqual({ left: 'terminal', right: 'chatter' })
+    expect(resolved.sides).toEqual({ left: 'thread', right: 'terminal' })
     expect(resolved.migrated).toBe(true)
-    const viewer = overlayViewer(resolved.tab, resolved.sides)
-    expect(viewer).toEqual({ thread: false, chatter: true, chat: false, hidePty: false })
+    expect(overlayViewer(resolved.tab, resolved.sides)).toEqual({
+      thread: true,
+      chatter: false,
+      hidePty: false,
+    })
   })
 
   it('a view with no Chat in it is not flagged for a write-back', () => {
@@ -125,20 +137,22 @@ describe('saved Chat view migrates on read (Chat view retired from the UI in 0.4
     localStorage.setItem(tabKey, 'split')
     localStorage.setItem(splitKey, JSON.stringify({ left: 'chatter', right: 'thread' }))
     expect(resolveSessionView(tabKey, splitKey).migrated).toBe(false)
-    expect(savedViewNamesChat('thread', null)).toBe(false)
-    expect(savedViewNamesChat('terminal', 'not json')).toBe(false)
-    expect(savedViewNamesChat('chat', null)).toBe(true)
-    expect(savedViewNamesChat('split', '{"right":"chat"}')).toBe(true)
+    expect(savedViewNamesLegacyChat('thread', null)).toBe(false)
+    expect(savedViewNamesLegacyChat('terminal', 'not json')).toBe(false)
+    expect(savedViewNamesLegacyChat('chatter', '{"left":"chatter"}')).toBe(false)
+    expect(savedViewNamesLegacyChat('chat', null)).toBe(true)
+    expect(savedViewNamesLegacyChat('split', '{"right":"chat"}')).toBe(true)
+    expect(savedViewNamesLegacyChat(null, '{"view":"chat"}')).toBe(true)
   })
 
-  it('a saved "New agents open in" Chat pick reads back as Terminal, Chat sides too', () => {
+  it('a saved "New agents open in" Chat pick reads back as Thread, Chat sides as the Thread beside the terminal', () => {
     expect(normalizeNewAgentView({ view: 'chat', left: 'terminal', right: 'thread' })).toEqual({
-      view: 'terminal',
+      view: 'thread',
       split: { left: 'terminal', right: 'thread' },
     })
-    expect(normalizeNewAgentView({ view: 'split', left: 'chat', right: 'thread' })).toEqual({
+    expect(normalizeNewAgentView({ view: 'split', left: 'chat', right: 'terminal' })).toEqual({
       view: 'split',
-      split: { left: 'terminal', right: 'thread' },
+      split: { left: 'thread', right: 'terminal' },
     })
     expect(normalizeNewAgentView({ view: 'split', left: 'thread', right: 'chat' })).toEqual({
       view: 'split',
@@ -146,26 +160,33 @@ describe('saved Chat view migrates on read (Chat view retired from the UI in 0.4
     })
   })
 
-  it('retireChatTab and retireChatSides leave every other view alone', () => {
-    for (const tab of ['terminal', 'thread', 'chatter', 'split'] as const) {
-      expect(retireChatTab(tab)).toBe(tab)
-    }
-    expect(retireChatTab('chat')).toBe('terminal')
-    const sides = { left: 'chatter', right: 'chatter' } as const
-    expect(retireChatSides(sides)).toBe(sides)
+  it('reading a saved "New agents open in" Chat pick writes the Thread choice back', () => {
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'chat', left: 'terminal', right: 'thread' }))
+    expect(readNewAgentView()).toEqual({ view: 'thread', split: { left: 'terminal', right: 'thread' } })
+    expect(JSON.parse(localStorage.getItem('k2.newAgentView') ?? 'null')).toEqual({
+      view: 'thread',
+      left: 'terminal',
+      right: 'thread',
+    })
+
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'split', left: 'chat', right: 'chatter' }))
+    expect(readNewAgentView()).toEqual({ view: 'split', split: { left: 'thread', right: 'chatter' } })
+    expect(localStorage.getItem('k2.newAgentView')).not.toContain('"chat"')
+  })
+
+  it('a choice with no Chat in it is read without a write', () => {
+    const stored = JSON.stringify({ view: 'chatter', left: 'terminal', right: 'thread' })
+    localStorage.setItem('k2.newAgentView', stored)
+    expect(readNewAgentView().view).toBe('chatter')
+    expect(localStorage.getItem('k2.newAgentView')).toBe(stored)
   })
 })
 
-// `overlayViewer` is a pure function of the view it is handed. Its `chat`
-// flag is kept (with the retained Chat view code) until 0.46.5; since 0.46.4
-// no live view state can hand it `chat`, so the two `chat` cases below are
-// the only callers that do.
 describe('overlayViewer', () => {
   it('terminal mounts neither overlay and keeps the PTY visible', () => {
     expect(overlayViewer('terminal')).toEqual({
       thread: false,
       chatter: false,
-      chat: false,
       hidePty: false,
     })
   })
@@ -174,7 +195,6 @@ describe('overlayViewer', () => {
     expect(overlayViewer('thread')).toEqual({
       thread: true,
       chatter: false,
-      chat: false,
       hidePty: true,
     })
   })
@@ -183,7 +203,6 @@ describe('overlayViewer', () => {
     expect(overlayViewer('chatter')).toEqual({
       thread: false,
       chatter: true,
-      chat: false,
       hidePty: true,
     })
   })
@@ -192,31 +211,19 @@ describe('overlayViewer', () => {
     expect(overlayViewer('split')).toEqual({
       thread: true,
       chatter: false,
-      chat: false,
       hidePty: false,
     })
   })
 
-  it('chat hides the PTY and does not mount Thread or Chatter', () => {
-    expect(overlayViewer('chat')).toEqual({
-      thread: false,
-      chatter: false,
-      chat: true,
-      hidePty: true,
-    })
-  })
-
   it('split sides follow the stored pair, including the same view on both sides', () => {
-    expect(overlayViewer('split', { left: 'chat', right: 'chatter' })).toEqual({
-      thread: false,
+    expect(overlayViewer('split', { left: 'thread', right: 'chatter' })).toEqual({
+      thread: true,
       chatter: true,
-      chat: true,
       hidePty: true,
     })
     expect(overlayViewer('split', { left: 'thread', right: 'thread' })).toEqual({
       thread: true,
       chatter: false,
-      chat: false,
       hidePty: true,
     })
   })

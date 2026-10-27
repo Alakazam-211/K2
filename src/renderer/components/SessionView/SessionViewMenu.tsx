@@ -5,13 +5,9 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { unreadSupported, useUnreadEntry } from '@/stores/unread'
 import { muteMenuState, toggleMute } from '@/components/common/UnreadBadge'
 
-// The Chat view is retired from the UI in 0.46.4 (Rosson 2026-10-23: Threads
-// instead). It has no row in either menu below, a picked `chat` id is
-// ignored, and live view state never holds `chat` (see `retireChatTab`).
-// The `chat` label stays only because the types still name `chat` until the
-// Chat view code goes in 0.46.5 (then delete it here too).
+// No Chat view: it was retired in 0.46.4 and its code deleted in 0.46.5
+// (Rosson 2026-10-23/27: Threads instead).
 const PANE_LABEL: Record<SplitPaneView, string> = {
-  chat: 'Chat',
   terminal: 'Terminal',
   thread: 'Thread',
   chatter: 'Chatter',
@@ -20,7 +16,6 @@ const PANE_LABEL: Record<SplitPaneView, string> = {
 /** Button text for the active mode. Same words as the menu rows. */
 const VIEW_LABEL: Record<SessionViewTab, string> = {
   terminal: PANE_LABEL.terminal,
-  chat: PANE_LABEL.chat,
   thread: PANE_LABEL.thread,
   chatter: PANE_LABEL.chatter,
   split: 'Split view',
@@ -30,7 +25,7 @@ const MUTE_THREAD_ID = 'mute-thread'
 
 /** No unread count, unread dot or waiting count on the button or its
  *  rows: those live in the main nav (Rosson 2026-10-21). The menu keeps
- *  only the Mute / Unmute Thread item. No Chat row (retired 0.46.4). */
+ *  only the Mute / Unmute Thread item. */
 export function viewMenuItems(
   thread?: { muted: boolean; canMute: boolean },
 ): ContextMenuItemDef[] {
@@ -47,7 +42,7 @@ export function viewMenuItems(
   return items
 }
 
-/** A Split side's choices. No Chat row (retired 0.46.4). */
+/** A Split side's choices. */
 export function sideMenuItems(): ContextMenuItemDef[] {
   return [
     { id: 'terminal', label: 'Terminal' },
@@ -56,12 +51,12 @@ export function sideMenuItems(): ContextMenuItemDef[] {
   ]
 }
 
-/** A menu pick the view button acts on. Not `chat` (retired 0.46.4). */
+/** A menu pick the view button acts on. */
 function isSessionViewTab(id: string): id is SessionViewTab {
   return id === 'terminal' || id === 'thread' || id === 'chatter' || id === 'split'
 }
 
-/** A Split side pick the choosers act on. Not `chat` (retired 0.46.4). */
+/** A Split side pick the choosers act on. */
 function isSplitPaneView(id: string): id is SplitPaneView {
   return id === 'terminal' || id === 'thread' || id === 'chatter'
 }

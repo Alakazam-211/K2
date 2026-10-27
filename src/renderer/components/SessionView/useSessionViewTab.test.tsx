@@ -125,57 +125,64 @@ describe('useSessionViewTab — New agents open in', () => {
   })
 })
 
-describe('useSessionViewTab — saved Chat view (retired from the UI in 0.46.4)', () => {
+// The Chat view was deleted in 0.46.5; a saved Chat view or default opens
+// the agent's Thread instead (Rosson 2026-10-27), and the fix is written back.
+describe('useSessionViewTab — saved Chat view migrates to Threads (0.46.5)', () => {
   beforeEach(() => {
     localStorage.clear()
   })
 
-  it('a pane saved in chat mode opens as the terminal and the saved view is rewritten', () => {
+  it('a pane saved in chat mode opens the Thread and the saved view is rewritten', () => {
     localStorage.setItem('local|k2:session-view-tab:conv-chat', 'chat')
     const hook = renderHook(() => useSessionViewTab('conv-chat', PRIMARY))
-    expect(hook.result.current.viewTab).toBe('terminal')
-    expect(localStorage.getItem('local|k2:session-view-tab:conv-chat')).toBe('terminal')
+    expect(hook.result.current.viewTab).toBe('thread')
+    expect(localStorage.getItem('local|k2:session-view-tab:conv-chat')).toBe('thread')
     expect(JSON.parse(localStorage.getItem('local|k2:session-view-split:conv-chat') ?? 'null')).toEqual({
       left: 'terminal',
       right: 'thread',
     })
   })
 
-  it('a split saved with a Chat side opens with the terminal (or Thread) there, rewritten', () => {
+  it('a split saved with a Chat side opens the Thread beside the terminal, rewritten', () => {
     localStorage.setItem('local|k2:session-view-tab:conv-split-chat', 'split')
     localStorage.setItem(
       'local|k2:session-view-split:conv-split-chat',
-      JSON.stringify({ left: 'terminal', right: 'chat' }),
+      JSON.stringify({ left: 'chat', right: 'terminal' }),
     )
     const hook = renderHook(() => useSessionViewTab('conv-split-chat', PRIMARY))
     expect(hook.result.current.viewTab).toBe('split')
-    expect(hook.result.current.splitLeft).toBe('terminal')
-    expect(hook.result.current.splitRight).toBe('thread')
+    expect(hook.result.current.splitLeft).toBe('thread')
+    expect(hook.result.current.splitRight).toBe('terminal')
     expect(localStorage.getItem('local|k2:session-view-tab:conv-split-chat')).toBe('split')
     expect(JSON.parse(localStorage.getItem('local|k2:session-view-split:conv-split-chat') ?? 'null')).toEqual({
+      left: 'thread',
+      right: 'terminal',
+    })
+  })
+
+  it('a new agent whose "New agents open in" pick was Chat opens the Thread, and the pick is rewritten', () => {
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'chat', left: 'terminal', right: 'thread' }))
+    const hook = renderHook(() => useSessionViewTab('conv-new-chat', PRIMARY))
+    expect(hook.result.current.viewTab).toBe('thread')
+    expect(localStorage.getItem('local|k2:session-view-tab:conv-new-chat')).toBe('thread')
+    expect(JSON.parse(localStorage.getItem('k2.newAgentView') ?? 'null')).toEqual({
+      view: 'thread',
       left: 'terminal',
       right: 'thread',
     })
   })
 
-  it('a new agent whose "New agents open in" pick was Chat opens in Terminal', () => {
-    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'chat', left: 'terminal', right: 'thread' }))
-    const hook = renderHook(() => useSessionViewTab('conv-new-chat', PRIMARY))
-    expect(hook.result.current.viewTab).toBe('terminal')
-    expect(localStorage.getItem('local|k2:session-view-tab:conv-new-chat')).toBe('terminal')
-  })
-
-  it('the setters never store chat: asked-for chat becomes the terminal / a fallback side', () => {
+  it('the setters never store chat, even from an untyped caller', () => {
     localStorage.setItem('local|k2:session-view-tab:conv-set', 'split')
     const hook = renderHook(() => useSessionViewTab('conv-set', PRIMARY))
-    act(() => hook.result.current.setSplitLeft('chat'))
-    expect(hook.result.current.splitLeft).toBe('terminal')
-    expect(hook.result.current.splitRight).toBe('thread')
-    act(() => hook.result.current.setSplitRight('chat'))
-    expect(hook.result.current.splitRight).toBe('thread')
-    act(() => hook.result.current.setViewTab('chat'))
-    expect(hook.result.current.viewTab).toBe('terminal')
-    expect(localStorage.getItem('local|k2:session-view-tab:conv-set')).toBe('terminal')
-    expect(localStorage.getItem('local|k2:session-view-split:conv-set')).not.toContain('chat"')
+    const legacy = 'chat' as unknown as 'thread'
+    act(() => hook.result.current.setSplitLeft(legacy))
+    act(() => hook.result.current.setViewTab(legacy))
+    expect(localStorage.getItem('local|k2:session-view-tab:conv-set')).toBe('thread')
+    expect(localStorage.getItem('local|k2:session-view-split:conv-set')).not.toContain('"chat"')
+    expect(JSON.parse(localStorage.getItem('local|k2:session-view-split:conv-set') ?? 'null')).toEqual({
+      left: 'terminal',
+      right: 'thread',
+    })
   })
 })

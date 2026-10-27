@@ -75,8 +75,6 @@ const chrome: SessionViewChromeValue = {
   splitRight: 'thread',
   overlayAddr: 'sales',
   conversationId: null,
-  chatConversationId: null,
-  chatProvider: null,
   agentName: 'sales',
 } as unknown as SessionViewChromeValue
 

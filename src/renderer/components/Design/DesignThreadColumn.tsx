@@ -59,8 +59,6 @@ export function DesignThreadColumn({
       splitRight: 'terminal',
       overlayAddr: addr,
       conversationId,
-      chatConversationId: null,
-      chatProvider: null,
       agentName,
       displayName: agentName,
     }),

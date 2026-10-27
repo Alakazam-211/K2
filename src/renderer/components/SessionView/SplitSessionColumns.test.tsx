@@ -50,8 +50,8 @@ describe('SplitSessionColumns', () => {
     expect(screen.getByTestId('session-split-left').contains(screen.getByTestId('pty'))).toBe(true)
     expect(screen.getByTestId('session-split-right').contains(screen.getByTestId('shared'))).toBe(true)
 
-    rerender(<Frame showSplit left="chat" right="terminal" />)
-    expect(screen.getByTestId('session-split-left').getAttribute('data-split-view')).toBe('chat')
+    rerender(<Frame showSplit left="chatter" right="terminal" />)
+    expect(screen.getByTestId('session-split-left').getAttribute('data-split-view')).toBe('chatter')
     expect(screen.getByTestId('session-split-right').contains(screen.getByTestId('pty'))).toBe(true)
   })
 

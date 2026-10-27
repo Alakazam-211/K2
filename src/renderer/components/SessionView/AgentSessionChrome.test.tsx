@@ -101,7 +101,6 @@ function ProbeTerminal() {
     <div data-testid="terminal-pane">
       {chrome && viewer.thread ? <div data-testid="thread-overlay-pane" /> : null}
       {chrome && viewer.chatter ? <div data-testid="chatter-overlay-pane" /> : null}
-      {chrome && viewer.chat ? <div data-testid="chat-overlay-pane" /> : null}
       {viewer.hidePty ? null : <div data-testid="pty-visible" />}
       {chrome?.viewTab === 'split' ? (
         <>
@@ -228,7 +227,7 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     expect(viewButtonLabel()).not.toBe('View')
   })
 
-  it('has no Chat row for a shell or for claude (Chat view retired 0.46.4)', async () => {
+  it('has no Chat row for a shell or for claude (Chat view deleted 0.46.5)', async () => {
     for (const command of ['/bin/bash', '/opt/homebrew/bin/claude']) {
       const view = renderChrome(command)
       await act(async () => {
@@ -251,35 +250,31 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     }
   })
 
-  it('a pane saved in chat mode opens as its terminal, not blank and not Chat', async () => {
+  it('a pane saved in chat mode opens the Thread (Chat view deleted 0.46.5)', async () => {
     const tabKey = sessionViewTabStorageKey('local', 'conv-r')
     const splitKey = sessionViewSplitStorageKey('local', 'conv-r')
     localStorage.setItem(tabKey, 'chat')
     renderChrome('/opt/homebrew/bin/claude')
-    expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('terminal')
-    expect(viewButtonLabel()).toBe('Terminal')
-    expect(screen.getByTestId('terminal-pane')).not.toBeNull()
-    expect(screen.getByTestId('pty-visible')).not.toBeNull()
-    expect(screen.queryByTestId('chat-overlay-pane')).toBeNull()
-    expect(screen.queryByTestId('thread-overlay-pane')).toBeNull()
-    expect(screen.getByTestId('message-compose')).not.toBeNull()
+    expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('thread')
+    expect(viewButtonLabel()).toBe('Thread')
+    expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
+    expect(screen.queryByTestId('pty-visible')).toBeNull()
     // The saved view is rewritten, so the old value is gone.
-    await waitFor(() => expect(localStorage.getItem(tabKey)).toBe('terminal'))
+    await waitFor(() => expect(localStorage.getItem(tabKey)).toBe('thread'))
     expect(localStorage.getItem(splitKey)).not.toContain('"chat"')
   })
 
-  it('a split saved with a Chat side opens with the terminal and Thread', () => {
+  it('a split saved with a Chat side opens the Thread beside the terminal', () => {
     localStorage.setItem(sessionViewTabStorageKey('local', 'conv-r'), 'split')
     localStorage.setItem(
       sessionViewSplitStorageKey('local', 'conv-r'),
-      JSON.stringify({ left: 'chat', right: 'thread' }),
+      JSON.stringify({ left: 'terminal', right: 'chat' }),
     )
     renderChrome('/opt/homebrew/bin/claude')
     expect(screen.getByTestId('session-view-menu').getAttribute('data-split-left')).toBe('terminal')
     expect(screen.getByTestId('session-view-menu').getAttribute('data-split-right')).toBe('thread')
     expect(screen.getByTestId('pty-visible')).not.toBeNull()
     expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
-    expect(screen.queryByTestId('chat-overlay-pane')).toBeNull()
   })
 })
 

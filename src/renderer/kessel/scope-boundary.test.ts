@@ -292,7 +292,6 @@ describe('MS79 scope boundary ratchets', () => {
       'components/Projects/projects-api.ts',
       'components/SessionView/useOverlayThread.ts',
       'components/SessionView/useOverlayChatter.ts',
-      'components/SessionView/useChatTranscript.ts',
     ]) {
       expect([f, /\bprimaryScope\(\)/.test(read(f))]).toEqual([f, false])
     }

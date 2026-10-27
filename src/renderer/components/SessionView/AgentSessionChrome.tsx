@@ -11,8 +11,7 @@ import {
   type DaemonHandleRow,
 } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from './SessionViewMenu'
-import { chatHarnessName, harnessFieldsKnown } from './chatHarness'
-import { chatFallbackSide } from './sessionViewTab'
+import { chatHarnessName } from './chatHarness'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
@@ -78,28 +77,8 @@ export function AgentSessionChrome({
     setSplitLeft,
     setSplitRight,
   } = useSessionViewTab(sessionKey, room.scope)
-  // `chatProvider` also picks the Token control's provider below; that use
-  // stays. The effect after it is the Chat view's no-chat-face fallback:
-  // since 0.46.4 the view state can never hold `chat` (`retireChatTab`), so
-  // it never fires. 0.46.5: delete the effect and `harnessKnown` with the
-  // Chat view code.
-  const chatProvider = chatHarnessName({ command, commandHint, provider })
-  const harnessKnown = harnessFieldsKnown({ command, commandHint, provider })
-  useEffect(() => {
-    if (!harnessKnown || chatProvider) return
-    if (viewTab === 'chat') setViewTab('terminal')
-    if (splitLeft === 'chat') setSplitLeft(chatFallbackSide(splitRight))
-    if (splitRight === 'chat') setSplitRight(chatFallbackSide(splitLeft === 'chat' ? chatFallbackSide(splitRight) : splitLeft))
-  }, [
-    viewTab,
-    splitLeft,
-    splitRight,
-    harnessKnown,
-    chatProvider,
-    setViewTab,
-    setSplitLeft,
-    setSplitRight,
-  ])
+  // The harness picks the Token control's provider below.
+  const tokenProvider = chatHarnessName({ command, commandHint, provider })
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
@@ -152,8 +131,6 @@ export function AgentSessionChrome({
         splitRight,
         overlayAddr: addr,
         conversationId,
-        chatConversationId: conversationId,
-        chatProvider,
         agentName,
         displayName: title,
       }}
@@ -172,10 +149,10 @@ export function AgentSessionChrome({
           onRefresh={() => void handleRefresh()}
           refreshing={refreshing}
           tokenPicker={
-            chatProvider && !room.readOnly ? (
+            tokenProvider && !room.readOnly ? (
               <SessionTokenPicker
                 scope={room.scope}
-                provider={chatProvider}
+                provider={tokenProvider}
                 sessionKey={agentName}
                 conversationId={conversationId}
                 resolveProjectId={() => (cwd ? roomProjectForCwd(room, cwd)?.id ?? null : null)}
@@ -296,8 +273,6 @@ export function PinnedSessionBody({
   splitRight,
   addr,
   conversationId,
-  chatConversationId,
-  chatProvider,
   agentName,
   displayName,
   children,
@@ -307,8 +282,6 @@ export function PinnedSessionBody({
   splitRight: SplitPaneView
   addr: string
   conversationId: string | null
-  chatConversationId?: string | null
-  chatProvider?: string | null
   agentName?: string
   /** AGENT.md display name — the Thread empty state names the agent. */
   displayName?: string
@@ -322,8 +295,6 @@ export function PinnedSessionBody({
         splitRight,
         overlayAddr: addr,
         conversationId,
-        chatConversationId: chatConversationId ?? conversationId,
-        chatProvider: chatProvider ?? null,
         agentName: agentName ?? '',
         displayName,
       }}

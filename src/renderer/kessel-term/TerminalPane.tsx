@@ -92,11 +92,6 @@ import {
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalCompose'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
-// Chat view (retired from the UI in 0.46.4): the two `ChatOverlayColumn`
-// mounts below only render when the session chrome's view holds `chat`,
-// which only tests can set now. 0.46.5: delete this import, both mounts,
-// `showChat` and the `chat` split branch with the rest of the Chat view.
-import { ChatOverlayColumn } from '@/components/SessionView/ChatOverlayColumn'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
@@ -611,7 +606,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const splitLeft = sessionChrome?.splitLeft ?? DEFAULT_SPLIT_LEFT
   const splitRight = sessionChrome?.splitRight ?? DEFAULT_SPLIT_RIGHT
   const showSplit = viewTab === 'split'
-  const { thread: showThreadOverlay, chatter: showChatterOverlay, chat: showChat, hidePty } =
+  const { thread: showThreadOverlay, chatter: showChatterOverlay, hidePty } =
     overlayViewer(viewTab, { left: splitLeft, right: splitRight })
   const showThreadOnly = viewTab === 'thread'
   const showChatterOnly = viewTab === 'chatter'
@@ -5734,19 +5729,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             />
           )
         }
-        // Chat view side: unreachable outside tests since 0.46.4. 0.46.5: delete.
-        if (view === 'chat') {
-          return (
-            <ChatOverlayColumn
-              view="chat"
-              visible={isTabVisible}
-              provider={sessionChrome.chatProvider}
-              conversationId={sessionChrome.chatConversationId}
-              agentName={sessionChrome.agentName}
-              composeBar={composePty()}
-            />
-          )
-        }
         return (
           <div
             className="flex-1 min-w-0 min-h-0 flex flex-col"
@@ -5774,17 +5756,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               onStop={stopThreadTurn}
             />
           )}
-          {/* Chat view: unreachable outside tests since 0.46.4. 0.46.5: delete. */}
-          {sessionChrome && showChat && (
-            <ChatOverlayColumn
-              view={viewTab}
-              visible={isTabVisible}
-              provider={sessionChrome.chatProvider}
-              conversationId={sessionChrome.chatConversationId}
-              agentName={sessionChrome.agentName}
-              composeBar={composePty()}
-            />
-          )}
           {sessionChrome && showChatterOverlay && (
             <div
               className="flex-1 min-w-0 min-h-0 flex flex-col"
@@ -5806,7 +5777,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
        *  tab uses the overlay column above so DevTools/viewport shrinks
        *  chat + Message-the-agent together. Split keeps one bar per column.
        *  Chatter is mailbox-only — no compose under PTY or overlay. */}
-      {!showSplit && !showThreadOnly && !showChatterOnly && !showChat && showComposeBar && shouldShowTerminalComposeBar(phase) && (
+      {!showSplit && !showThreadOnly && !showChatterOnly && showComposeBar && shouldShowTerminalComposeBar(phase) && (
         <TerminalComposeBar
           sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
           workspacePath={cwd}

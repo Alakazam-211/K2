@@ -25,8 +25,7 @@ import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged, onAgentIdentit
 import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-identity'
 import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
-import { chatHarnessName } from '@/components/SessionView/chatHarness'
-import { chatFallbackSide, type SplitPaneView } from '@/components/SessionView/sessionViewTab'
+import type { SplitPaneView } from '@/components/SessionView/sessionViewTab'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
@@ -193,10 +192,6 @@ interface ChatHeaderProps {
   onViewTabChange: (tab: SessionViewTab) => void
   onSplitLeft: (view: SplitPaneView) => void
   onSplitRight: (view: SplitPaneView) => void
-  /** v1 harness from ensure or the launch command. Null when known but not v1. */
-  chatProvider: string | null
-  /** False until ensure/launch has named the program. Does not grey a fresh Codex. */
-  harnessReady: boolean
   /** Live pinned harness, including non-v1 (pi, cursor, hermes). */
   pinnedProvider: string | null
   /** Opens the shared continue dialog. Does not switch sessions. */
@@ -228,31 +223,11 @@ function ChatHeader({
   onViewTabChange,
   onSplitLeft,
   onSplitRight,
-  chatProvider,
-  harnessReady,
   pinnedProvider,
   onContinueNewChat,
   projectId,
 }: ChatHeaderProps): React.JSX.Element {
   const room = useRoom()
-  // The Chat view's no-chat-face fallback. Since 0.46.4 the view state can
-  // never hold `chat` (`retireChatTab` in sessionViewTab.ts), so this never
-  // fires. 0.46.5: delete it with the Chat view code.
-  useEffect(() => {
-    if (!harnessReady || chatProvider) return
-    if (viewTab === 'chat') onViewTabChange('terminal')
-    if (splitLeft === 'chat') onSplitLeft(chatFallbackSide(splitRight))
-    if (splitRight === 'chat') onSplitRight(chatFallbackSide(splitLeft === 'chat' ? chatFallbackSide(splitRight) : splitLeft))
-  }, [
-    harnessReady,
-    viewTab,
-    splitLeft,
-    splitRight,
-    chatProvider,
-    onViewTabChange,
-    onSplitLeft,
-    onSplitRight,
-  ])
   const [historySessions, setHistorySessions] = useState<HistorySession[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
   // The history dropdown can hang over a Browser pane beside this one.
@@ -713,9 +688,6 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     setSplitLeft,
     setSplitRight,
   } = useSessionViewTab(overlayConv, room.scope)
-  const [chatProvider, setChatProvider] = useState<string | null>(null)
-  const [harnessReady, setHarnessReady] = useState(false)
-  const [chatConversationId, setChatConversationId] = useState<string | null>(null)
   const [overlayAddr, setOverlayAddr] = useState('')
   useEffect(() => {
     let cancelled = false
@@ -744,41 +716,6 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const canonicalSessionId =
     phase.kind === 'ready' ? phase.canonicalSessionId : null
 
-  // Codex and Gemini mint the provider id after the first turn. Do not
-  // open the transcript socket until that id exists. This poll reads the
-  // list row; it does not spawn, close, or tail a file.
-  // Chat view retired from the UI in 0.46.4: `chatFaceOn` is always false
-  // now (the view state never holds `chat`), so this poll never runs.
-  // 0.46.5: delete it and `chatConversationId` with the Chat view code.
-  const chatFaceOn =
-    viewTab === 'chat' ||
-    (viewTab === 'split' && (splitLeft === 'chat' || splitRight === 'chat'))
-  useEffect(() => {
-    if (!chatFaceOn || !harnessReady || !chatProvider || chatConversationId) return
-    let cancelled = false
-    const tick = async (): Promise<void> => {
-      try {
-        const rows = await daemonCliGet<Array<{
-          agentName?: string
-          sessionId?: string
-          conversationId?: string
-        }>>(room.scope, 'sessions/list-for-workspace', { path: projectPath })
-        if (cancelled || !Array.isArray(rows)) return
-        const row = rows.find((item) => item.agentName === projectId)
-        const cid = row?.conversationId?.trim()
-        if (cid && cid !== row?.sessionId) setChatConversationId(cid)
-      } catch {
-        /* keep waiting */
-      }
-    }
-    void tick()
-    const timer = setInterval(() => void tick(), 1000)
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
-  }, [chatFaceOn, harnessReady, chatProvider, chatConversationId, projectPath, projectId])
-
   // ── ensure() — the one daemon RPC this component leans on ────────────
   // Idempotent on the daemon side. `forceRespawn` kills + respawns. The
   // SessionAdded broadcast re-attaches; but we also adopt the ensure
@@ -803,9 +740,6 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           }
           const cid = row.conversationId?.trim() || null
           setPhase({ kind: 'ready', sessionId: row.sessionId, canonicalSessionId: cid ?? '' })
-          setChatProvider(chatHarnessName({ provider: undefined, command: row.command ?? undefined }))
-          setHarnessReady(true)
-          setChatConversationId(cid && cid !== row.sessionId ? cid : null)
           attachedSessionIdRef.current = row.sessionId
         } catch (err) {
           setPhase({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
@@ -828,12 +762,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           // daemon contract) but the state is provider-neutral.
           canonicalSessionId: res.claudeSessionId,
         })
-        setChatProvider(chatHarnessName({ provider: res.provider, command: res.command }))
-        setHarnessReady(true)
         const ensuredProvider = res.provider || providerKeyForCommand(res.command)
         if (ensuredProvider) setLiveProvider(ensuredProvider)
-        const providerId = res.claudeSessionId?.trim() ?? ''
-        setChatConversationId(providerId || null)
         // #689 — record which session we're now attached to so the
         // SessionAdded echo for THIS session is recognised as our own
         // side-effect and doesn't trigger a spurious remount.
@@ -1014,11 +944,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         sessionId: res.sessionId,
         canonicalSessionId: source.sessionId,
       })
-      setChatProvider(chatHarnessName({ provider: res.provider, command: res.command }))
-      setHarnessReady(true)
       const nextProvider = res.provider || providerKeyForCommand(res.command)
       if (nextProvider) setLiveProvider(nextProvider)
-      setChatConversationId(null)
       setAttachNonce((n) => n + 1)
       if (!stillOpen()) return
       const msg = await daemonCliPost<MsgResponse>(room.scope, 'terminal/send-message', {
@@ -1046,7 +973,6 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           sessionId: res.sessionId,
           canonicalSessionId: premint,
         })
-        setChatConversationId(premint)
         setLiveProvider(req.targetProvider)
         return
       }
@@ -1065,7 +991,6 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           setPhase((prev) => (
             prev.kind === 'ready' ? { ...prev, canonicalSessionId: id } : prev
           ))
-          setChatConversationId(id)
           setLiveProvider(req.targetProvider)
         })
       })
@@ -1102,8 +1027,6 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       onViewTabChange={setViewTab}
       onSplitLeft={setSplitLeft}
       onSplitRight={setSplitRight}
-      chatProvider={chatProvider}
-      harnessReady={harnessReady}
       pinnedProvider={liveProvider}
       onContinueNewChat={setContinueSource}
       projectId={projectId}
@@ -1188,8 +1111,6 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         splitRight={splitRight}
         addr={overlayAddr}
         conversationId={overlayConv}
-        chatConversationId={chatConversationId}
-        chatProvider={chatProvider}
         agentName={projectId}
         displayName={displayName}
       >
@@ -1656,8 +1577,6 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       onViewTabChange={setViewTab}
       onSplitLeft={setSplitLeft}
       onSplitRight={setSplitRight}
-      chatProvider={launchConfig ? chatHarnessName({ command: launchConfig.command }) : null}
-      harnessReady={launchConfig != null}
       pinnedProvider={providerKeyForCommand(launchConfig?.command)}
       onContinueNewChat={setContinueSource}
       projectId={projectId}
@@ -1717,8 +1636,6 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
         splitRight={splitRight}
         addr={overlayAddr}
         conversationId={overlayConv}
-        chatConversationId={currentSessionId}
-        chatProvider={launchConfig ? chatHarnessName({ command: launchConfig.command }) : null}
         agentName={projectId}
         displayName={displayName}
       >

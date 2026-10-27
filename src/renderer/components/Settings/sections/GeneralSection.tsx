@@ -712,8 +712,8 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
 // view button on an agent). Conversations with a remembered view keep it.
 // Thin-client only (`k2.newAgentView` in localStorage), like the auto-select
 // row above and the per-conversation view memory. No Chat choice: the Chat
-// view is retired from the UI in 0.46.4 (Threads instead); a saved Chat pick
-// reads back as Terminal (`normalizeNewAgentView`).
+// view is gone (deleted 0.46.5); a saved Chat pick reads back as Thread and
+// is written back (`readNewAgentView`).
 const NEW_AGENT_VIEW_OPTIONS: { value: SessionViewTab; label: string }[] = [
   { value: 'terminal', label: 'Terminal' },
   { value: 'thread', label: 'Thread' },

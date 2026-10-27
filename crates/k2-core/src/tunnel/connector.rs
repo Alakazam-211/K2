@@ -1558,7 +1558,12 @@ fn reap_stray_frpc(cfg_path: &Path) {
         .status();
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn reap_stray_frpc(cfg_path: &Path) {
+    frpc_proc::reap_ours(cfg_path);
+}
+
+#[cfg(not(any(unix, windows)))]
 fn reap_stray_frpc(_cfg_path: &Path) {}
 
 /// True when a process matching our frpc config pattern is still alive

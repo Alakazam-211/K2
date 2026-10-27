@@ -203,12 +203,33 @@ pub(crate) fn proc_argv(pid: i32) -> Option<Vec<String>> {
     (!s.is_empty()).then(|| vec![s])
 }
 
-/// Windows: the recorded command line as one string (like the `ps` form);
-/// a quoted program keeps its trailing quote on the file name, which the
-/// `frpc` prefix check ignores.
+/// Windows: the recorded command line split as Windows programs read it,
+/// so a config under a profile folder with a space (`C:\Users\Ann Lee`)
+/// still matches.
 #[cfg(windows)]
 pub(crate) fn proc_argv(pid: i32) -> Option<Vec<String>> {
-    u32::try_from(pid).ok().and_then(crate::win_proc::command_line).map(|s| vec![s])
+    u32::try_from(pid)
+        .ok()
+        .and_then(crate::win_proc::command_line)
+        .map(|s| crate::win_proc::split_command_line(&s))
+}
+
+/// Windows: kill every live frpc started as `<frpc> -c <cfg>`, what
+/// `pkill -f "frpc -c <cfg>"` does on Unix (an frpc orphaned by a crashed
+/// daemon keeps its proxy name on frps). Only frpc-named programs have
+/// their command line read; none running costs a process snapshot.
+#[cfg(windows)]
+pub(crate) fn reap_ours(cfg: &Path) -> usize {
+    let me = std::process::id();
+    let pids: Vec<u32> = crate::win_proc::pids_named("frpc").into_iter().filter(|p| *p != me).collect();
+    let mut reaped = 0;
+    for (pid, line) in crate::win_proc::command_lines(&pids) {
+        if argv_is_our_frpc(&crate::win_proc::split_command_line(&line), cfg) {
+            kill_foreign(pid as i32);
+            reaped += 1;
+        }
+    }
+    reaped
 }
 
 #[cfg(not(any(unix, windows)))]

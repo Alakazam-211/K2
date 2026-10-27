@@ -705,6 +705,14 @@ fn grok_try_lock(store: &Path) -> Result<GrokLock, String> {
             return Err("grok lock busy (skip)".into());
         }
     }
+    // Windows: std's exclusive LockFileEx lock, released when the file
+    // closes (GrokLock's drop).
+    #[cfg(not(unix))]
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => return Err("grok lock busy (skip)".into()),
+        Err(std::fs::TryLockError::Error(e)) => return Err(format!("grok lock: {e}")),
+    }
     Ok(GrokLock(Some(file)))
 }
 

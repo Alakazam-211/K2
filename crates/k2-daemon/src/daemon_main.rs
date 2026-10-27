@@ -196,8 +196,8 @@ pub(crate) fn release_singleton_lock() {
 ///
 /// Escape hatch: `K2_ALLOW_MULTI_DAEMON=1` (dev/tests only).
 ///
-/// On non-unix we skip the flock (no portable equivalent without an
-/// extra crate) — macOS/Linux are the production targets.
+/// Windows takes std's exclusive LockFileEx lock on the same file (there
+/// is no flock); a second daemon is refused the same way.
 fn acquire_daemon_singleton(
     k2_dir: &std::path::Path,
     inherited: Option<std::fs::File>,
@@ -287,10 +287,26 @@ fn acquire_daemon_singleton(
 
     #[cfg(windows)]
     {
-        // First-cut singleton: write our PID; exclusive file lock can use
-        // Win32 LockFileEx later. Open succeeds; dual-daemon is rare on
-        // desktop bring-up.
+        // Exclusive LockFileEx over the whole file: a second daemon is
+        // refused. Windows locks are mandatory, so a contender can't read
+        // the holder's pid through the lock: it reports the lock path.
         use std::io::{Seek, SeekFrom, Write};
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(format!(
+                    "another k2-daemon is already running (lock {}). \
+                     Refusing to boot a second instance — dual daemons double-resume \
+                     agent sessions and corrupt git trees. \
+                     Quit K2 from the tray first. \
+                     Override only with K2_ALLOW_MULTI_DAEMON=1 (unsafe).",
+                    lock_path.display()
+                ));
+            }
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(format!("lock {}: {e}", lock_path.display()));
+            }
+        }
         let mut f = &file;
         let _ = f.seek(SeekFrom::Start(0));
         let _ = f.set_len(0);

@@ -608,11 +608,15 @@ impl FileLock {
                     return Ok(FileLock { file });
                 }
             }
+            // Windows: std's exclusive LockFileEx lock (no flock there).
             #[cfg(not(unix))]
             {
-                return Ok(FileLock { file });
+                match file.try_lock() {
+                    Ok(()) => return Ok(FileLock { file }),
+                    Err(std::fs::TryLockError::WouldBlock) => {}
+                    Err(std::fs::TryLockError::Error(e)) => return Err(e),
+                }
             }
-            #[allow(unreachable_code)]
             if Instant::now() >= deadline {
                 return Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "lock busy"));
             }

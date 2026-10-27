@@ -36,6 +36,13 @@ import { ImageViewer } from './ImageViewer'
 import { BinaryEmptyState } from './BinaryEmptyState'
 import { ViewerNote } from './ViewerNote'
 import { dxfReadErrorNote, dxfReadsAsBytes } from './dxfReadError'
+import {
+  TEXT_LOCK_MESSAGES,
+  textLockForBinaryContent,
+  textLockForReadError,
+  type TextLock,
+} from './textLock'
+import { looksLikeBinaryText } from '@/lib/load-host-binary'
 import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
 import { PinIcon } from '@/components/icons/K2Icons'
 import { isPinnedTab } from '@/lib/pinned-tabs'
@@ -230,15 +237,31 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const [editedContent, setEditedContent] = useState<string | null>(null) // null = not edited
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  // Last `fs/read-file` refusal. Most text views treat a failed read as an
-  // empty (new) file; the DXF preview names it (binary DXF, too large).
+  // Last `fs/read-file` refusal. A missing file opens as an empty (new)
+  // file; any other refusal also sets `textLock`. The DXF preview names
+  // it (binary DXF, too large).
   const [readError, setReadError] = useState<string | null>(null)
+  // Set when the last load failed for any reason but "no such file", or
+  // returned binary-looking text: the file may be real and K2 couldn't
+  // show it, so the pane is read-only and NOTHING writes it (Save,
+  // Cmd+S, the parent's save handle, autosave-on-leave). Data-loss fix:
+  // an .xlsx / Latin-1 / >10 MB file used to open as an empty editable
+  // buffer, and one keystroke + leaving the tab overwrote the real file.
+  const [textLock, setTextLockState] = useState<TextLock | null>(null)
+  // Mirrors `textLock` synchronously, so a save or an unmount that runs
+  // before the next render still sees the lock the last load set.
+  const textLockRef = useRef<TextLock | null>(null)
+  const setTextLock = useCallback((lock: TextLock | null) => {
+    textLockRef.current = lock
+    setTextLockState(lock)
+  }, [])
   const [saving, setSaving] = useState(false)
   const [cursorInfo, setCursorInfo] = useState({ line: 1, col: 1, selections: 1 })
 
   const category = getFileCategory(filePath)
   const [viewMode, setViewMode] = useState<ViewMode>(getDefaultViewMode(category))
-  const isDirty = editedContent !== null && editedContent !== content
+  // A locked pane can't save, so it never reports unsaved changes.
+  const isDirty = textLock === null && editedContent !== null && editedContent !== content
   const setTabDirty = useRoomTabs((s) => s.setTabDirty)
   const setFileViewerState = useRoomTabs((s) => s.setFileViewerState)
 
@@ -301,18 +324,28 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       const result = await daemonCliGet<{ content: string }>(room.scope, 'fs/read-file', { path: filePath })
       if (gen !== loadGenRef.current) return
       if (room.scope.connectionKey !== startedKey) return
-      setContent(result.content)
       setReadError(null)
+      if (looksLikeBinaryText(result.content, result.content.length)) {
+        // Read as "text" but holds NUL bytes: show nothing, write nothing.
+        setContent('')
+        setTextLock(textLockForBinaryContent())
+        return
+      }
+      setContent(result.content)
+      setTextLock(null)
     } catch (err) {
       if (gen !== loadGenRef.current) return
       if (isHostSwitchedError(err)) return
-      // File doesn't exist yet (e.g., untitled document) — start with empty content
       setContent('')
       setReadError(err instanceof Error ? err.message : String(err))
+      // Only "no such file" opens as an empty, editable new file. Anything
+      // else (binary, not UTF-8, too large, permission, network) locks the
+      // pane so an edit can't overwrite a file K2 couldn't show.
+      setTextLock(textLockForReadError(err))
     } finally {
       if (gen === loadGenRef.current) setLoading(false)
     }
-  }, [filePath])
+  }, [filePath, setTextLock])
 
   useEffect(() => {
     void loadFile()
@@ -344,6 +377,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     mountHostKeyRef.current = room.scope.connectionKey
     return () => {
       const { filePath: fp, editedContent: edited, content: onDisk } = flushRef.current
+      // The last load failed (not "no such file") or looked binary: the
+      // buffer is not the file, so writing it would destroy the file.
+      if (textLockRef.current !== null) return
       // Nothing edited, or buffer matches disk — nothing to flush.
       if (edited === null || edited === undefined || edited === onDisk) return
       // User chose Discard for this tab — drop the edit, don't write.
@@ -411,6 +447,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   useEffect(() => {
     if (isBinaryPreviewCategory(getFileCategory(filePath))) return
     if (isDirty) return // Don't overwrite user edits
+    // Locked (K2 couldn't show it as text): the poll's read would fail the
+    // same way. Refresh re-runs loadFile, which can lift the lock.
+    if (textLock !== null) return
 
     return startHostFileTextPoll({
       filePath,
@@ -421,14 +460,21 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         return result.content
       },
       apply: (next) => {
+        if (looksLikeBinaryText(next, next.length)) {
+          setContent('')
+          setTextLock(textLockForBinaryContent())
+          return
+        }
         setContent((prev) => (next !== prev ? next : prev))
       },
       shouldSkip: () => hasSelectionWithin(rootRef.current),
     })
-  }, [filePath, isDirty])
+  }, [filePath, isDirty, textLock, setTextLock])
 
   // Save file (Cmd+S) — called directly by CodeEditor with current content
   const saveFile = useCallback(async (contentToSave?: string) => {
+    // Never write a file the last load couldn't show as text (see textLock).
+    if (textLockRef.current !== null) return
     const toSave = contentToSave ?? editedContent
     if (toSave === null || toSave === undefined) return
     if (toSave === content) return // Nothing changed
@@ -552,6 +598,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   // Preview | Edit for markdown/html/image/csv/mermaid/diagram.
   // Audio/video/pdf/docx are preview-only surfaces (no raw text edit).
   const showViewToggle = supportsViewToggle(category)
+  // The lock replaces every text view. Binary previews read their own
+  // bytes, and the DXF drawing has its own read-error handling (it reads
+  // bytes when read-file calls the file binary or too large).
+  const showTextLock =
+    textLock !== null &&
+    !isBinaryPreviewCategory(category) &&
+    !(category === 'cad2d' && viewMode === 'rendered')
 
   if (loading) {
     return (
@@ -792,6 +845,12 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
             <MediaViewer filePath={filePath} kind="video" />
           </Suspense>
         </div>
+      ) : showTextLock && textLock ? (
+        // K2 couldn't show this file as text: no editor, nothing to type
+        // into, nothing to save (see `textLock`).
+        <div className="flex-1 overflow-hidden" ref={contentRef} data-testid="file-viewer-text-lock" data-reason={textLock.reason}>
+          <BinaryEmptyState filePath={filePath} message={TEXT_LOCK_MESSAGES[textLock.reason]} detail={textLock.detail} />
+        </div>
       ) : category === 'csv' && viewMode === 'rendered' ? (
         <div className="flex-1 overflow-hidden" ref={contentRef}>
           <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading table…</div>}>
@@ -881,7 +940,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
                 scope={room.scope}
                 localFormat={room.localCommands}
                 onSave={saveFile}
-                onChange={(newContent) => setEditedContent(newContent)}
+                onChange={(newContent) => {
+                  if (textLockRef.current === null) setEditedContent(newContent)
+                }}
                 onCursorChange={(line, col, selections) => setCursorInfo({ line, col, selections })}
                 initialScrollTop={initialScrollTop}
                 initialCursorPos={initialCursorPos}

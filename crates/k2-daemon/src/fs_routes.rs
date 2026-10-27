@@ -44,11 +44,25 @@ pub fn handle_read_file(params: &HashMap<String, String>) -> CliResponse {
         Some(p) if !p.is_empty() => p.clone(),
         _ => return CliResponse::bad_request("Missing 'path' parameter"),
     };
-    match fsc::read_file(&path) {
+    match fsc::read_file_coded(&path) {
         Ok(content) => CliResponse::ok_json(
             serde_json::to_string(&content).unwrap_or_else(|_| "{}".to_string()),
         ),
-        Err(e) => CliResponse::bad_request(e),
+        Err(e) => read_file_refusal(e),
+    }
+}
+
+/// `fs/read-file`'s 400: the old `{"error": "<message>"}` plus the
+/// refusal's `code` (`not_found`, `binary`, `not_utf8`, `too_large`,
+/// `permission_denied`, `invalid_path`, `read_failed`; see
+/// `fsc::ReadFileError`). The file viewer opens only `not_found` as a new,
+/// editable file; any other code makes it read-only so an edit can't
+/// overwrite a file it couldn't show.
+fn read_file_refusal(e: fsc::ReadFileError) -> CliResponse {
+    CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({ "error": e.message, "code": e.code }).to_string(),
     }
 }
 
@@ -660,14 +674,14 @@ fn handle_skin_read_file(params: &HashMap<String, String>, pass: &SkinPass) -> C
         Err(r) => return r,
     };
     let abs = jailed.to_string_lossy().to_string();
-    match fsc::read_file(&abs) {
+    match fsc::read_file_coded(&abs) {
         Ok(mut content) => {
             content.path = rel.replace('\\', "/");
             CliResponse::ok_json(
                 serde_json::to_string(&content).unwrap_or_else(|_| "{}".to_string()),
             )
         }
-        Err(e) => CliResponse::bad_request(e),
+        Err(e) => read_file_refusal(e),
     }
 }
 
@@ -3004,6 +3018,59 @@ pub fn handle_open_external(body: &[u8]) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `fs/read-file`'s refusal carries the old `error` message AND a
+    /// `code` the file viewer branches on: `not_found` opens a new,
+    /// editable file; `binary` / `not_utf8` / `too_large` lock the viewer
+    /// so an edit can't overwrite the real file.
+    #[test]
+    fn read_file_refusal_body_carries_the_code() {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-fs-routes-read-code-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let bin = dir.join("deck.pptx");
+        std::fs::write(&bin, [b'P', b'K', 0x03, 0x04, 0x00]).expect("write binary");
+        let latin = dir.join("latin1.txt");
+        std::fs::write(&latin, [b'c', b'a', b'f', 0xE9]).expect("write latin-1");
+        let text = dir.join("ok.txt");
+        std::fs::write(&text, "hello").expect("write text");
+
+        let read = |p: &Path| {
+            let mut params = HashMap::new();
+            params.insert("path".to_string(), p.to_string_lossy().to_string());
+            handle_read_file(&params)
+        };
+        let body = |r: &CliResponse| -> serde_json::Value {
+            serde_json::from_str(&r.body).expect("JSON body")
+        };
+
+        let cases: [(&Path, &str, &str); 3] = [
+            (&dir.join("new.md"), "not_found", "File not found"),
+            (&bin, "binary", "Cannot read binary file"),
+            (&latin, "not_utf8", "Cannot read binary file"),
+        ];
+        for (p, code, msg) in cases {
+            let r = read(p);
+            assert_eq!(r.status, "400 Bad Request", "{}", p.display());
+            let v = body(&r);
+            assert_eq!(v["code"], code, "{}", p.display());
+            assert_eq!(v["error"], msg, "{}", p.display());
+        }
+
+        let ok = read(&text);
+        assert_eq!(ok.status, "200 OK");
+        let v = body(&ok);
+        assert_eq!(v["content"], "hello");
+        assert!(v.get("code").is_none(), "a good read has no code: {v}");
+
+        std::fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
 
     /// 0.40.34 viewer-aware open-external: with ≥1 live events-bus
     /// subscriber, an http(s) target is BROADCAST (`open_url`, source

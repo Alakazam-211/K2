@@ -355,26 +355,88 @@ pub struct FileContent {
     pub name: String,
 }
 
-pub fn read_file(path: &str) -> Result<FileContent, String> {
-    let path = validate_path(path)?.to_string_lossy().to_string();
-    let p = Path::new(&path);
-    if !p.exists() {
-        return Err("File not found".to_string());
-    }
-    let meta = fs::metadata(&path).map_err(map_io_err)?;
-    if meta.len() > MAX_FILE_SIZE {
-        return Err("File too large (>10MB)".to_string());
-    }
-    let buffer = fs::read(&path).map_err(map_io_err)?;
-    // Reject binary files (null byte in first 8KB).
-    let check_len = std::cmp::min(buffer.len(), 8192);
-    for byte in &buffer[..check_len] {
-        if *byte == 0 {
-            return Err("Cannot read binary file".to_string());
+/// Why `read_file` refused, as a stable machine code next to the human
+/// message. The renderer's file viewer branches on the code: only
+/// `not_found` may open as an empty, editable new file. Every other
+/// refusal means the file can't be shown as text, so the viewer must not
+/// let an edit (or its autosave) overwrite it.
+///
+/// Codes (the `code` field of `/cli/fs/read-file`'s 400 body):
+/// - `not_found`: no file at the path, or its parent folder is missing;
+/// - `too_large`: over [`MAX_FILE_SIZE`];
+/// - `binary`: a NUL byte in the first 8 KB;
+/// - `not_utf8`: no NUL byte, but the bytes are not UTF-8 (Latin-1, …);
+/// - `permission_denied`: the OS refused the read;
+/// - `invalid_path`: an empty path, or one that would not resolve;
+/// - `read_failed`: any other I/O error (a folder, a device, …).
+///
+/// The messages are the ones `read_file` returned before the codes
+/// existed (older clients match on them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadFileError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl ReadFileError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
         }
     }
+
+    fn io(e: std::io::Error) -> Self {
+        let code = match e.kind() {
+            std::io::ErrorKind::NotFound => "not_found",
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "read_failed",
+        };
+        Self::new(code, map_io_err(e))
+    }
+}
+
+impl std::fmt::Display for ReadFileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+pub fn read_file(path: &str) -> Result<FileContent, String> {
+    read_file_coded(path).map_err(|e| e.message)
+}
+
+/// [`read_file`] with the refusal's [`ReadFileError::code`]. The
+/// `/cli/fs/read-file` routes call this one.
+pub fn read_file_coded(path: &str) -> Result<FileContent, ReadFileError> {
+    if path.is_empty() {
+        return Err(ReadFileError::new("invalid_path", "Path is empty"));
+    }
+    if !Path::new(path).exists() {
+        // A missing parent is still "no such file" to the viewer: it opens
+        // as a new, untitled document either way.
+        return Err(match validate_path(path) {
+            Err(msg) => ReadFileError::new("not_found", msg),
+            Ok(_) => ReadFileError::new("not_found", "File not found"),
+        });
+    }
+    let path = validate_path(path)
+        .map_err(|msg| ReadFileError::new("invalid_path", msg))?
+        .to_string_lossy()
+        .to_string();
+    let p = Path::new(&path);
+    let meta = fs::metadata(&path).map_err(ReadFileError::io)?;
+    if meta.len() > MAX_FILE_SIZE {
+        return Err(ReadFileError::new("too_large", "File too large (>10MB)"));
+    }
+    let buffer = fs::read(&path).map_err(ReadFileError::io)?;
+    // Reject binary files (null byte in first 8KB).
+    let check_len = std::cmp::min(buffer.len(), 8192);
+    if buffer[..check_len].contains(&0) {
+        return Err(ReadFileError::new("binary", "Cannot read binary file"));
+    }
     let content = String::from_utf8(buffer)
-        .map_err(|_| "Cannot read binary file".to_string())?;
+        .map_err(|_| ReadFileError::new("not_utf8", "Cannot read binary file"))?;
     let name = p
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -1307,6 +1369,80 @@ mod tests {
         fs::write(&p, &buf).unwrap();
         let err = read_file(p.to_str().unwrap()).expect_err("over 10MB must reject");
         assert!(err.contains("too large"), "got: {err}");
+    }
+
+    /// Each refusal carries its code; only a missing file is `not_found`
+    /// (the viewer opens that one as a new, editable file; every other
+    /// code locks the viewer so an edit can't overwrite the real file).
+    #[test]
+    fn read_file_coded_names_each_refusal() {
+        let tmp = TempDir::new("readfile-codes");
+
+        let missing = tmp.path().join("new-note.md");
+        let e = read_file_coded(missing.to_str().unwrap()).expect_err("missing");
+        assert_eq!(e.code, "not_found");
+        assert_eq!(e.message, "File not found");
+
+        let orphan = tmp.path().join("no-such-dir").join("x.txt");
+        let e = read_file_coded(orphan.to_str().unwrap()).expect_err("missing parent");
+        assert_eq!(e.code, "not_found");
+        assert!(
+            e.message.starts_with("Parent directory does not exist"),
+            "got: {}",
+            e.message
+        );
+
+        let nul = tmp.path().join("book.xlsx");
+        fs::write(&nul, [b'P', b'K', 0x03, 0x04, 0x00, 0x00]).unwrap();
+        let e = read_file_coded(nul.to_str().unwrap()).expect_err("binary");
+        assert_eq!(e.code, "binary");
+        assert_eq!(e.message, "Cannot read binary file");
+
+        // "café" in Latin-1: no NUL byte, not UTF-8.
+        let latin = tmp.path().join("latin1.txt");
+        fs::write(&latin, [b'c', b'a', b'f', 0xE9, b'\n']).unwrap();
+        let e = read_file_coded(latin.to_str().unwrap()).expect_err("latin-1");
+        assert_eq!(e.code, "not_utf8");
+        assert_eq!(e.message, "Cannot read binary file");
+
+        let huge = tmp.path().join("huge.log");
+        fs::write(&huge, vec![b'a'; (MAX_FILE_SIZE + 1) as usize]).unwrap();
+        let e = read_file_coded(huge.to_str().unwrap()).expect_err("too large");
+        assert_eq!(e.code, "too_large");
+        assert_eq!(e.message, "File too large (>10MB)");
+
+        let e = read_file_coded(&tmp.s()).expect_err("a folder");
+        assert_eq!(e.code, "read_failed");
+
+        let e = read_file_coded("").expect_err("empty");
+        assert_eq!(e.code, "invalid_path");
+        assert_eq!(e.message, "Path is empty");
+
+        // The plain `read_file` keeps the old messages.
+        assert_eq!(
+            read_file(latin.to_str().unwrap()).unwrap_err(),
+            "Cannot read binary file"
+        );
+        assert_eq!(
+            read_file(missing.to_str().unwrap()).unwrap_err(),
+            "File not found"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_file_coded_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new("readfile-perm");
+        let p = tmp.path().join("locked.txt");
+        fs::write(&p, "secret").unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o000)).unwrap();
+        let r = read_file_coded(p.to_str().unwrap());
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o600)).unwrap();
+        // Root reads a 0o000 file anyway; this suite runs as a normal user.
+        let e = r.expect_err("0o000 must refuse a non-root reader");
+        assert_eq!(e.code, "permission_denied");
+        assert_eq!(e.message, "Permission denied");
     }
 
     #[test]

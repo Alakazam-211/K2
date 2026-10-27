@@ -125,6 +125,12 @@ pub trait SewOps: Send + Sync {
     fn record_load(&self, name: &str) -> Option<Value>;
     /// Write a record (`None` removes it).
     fn record_save(&self, name: &str, v: Option<&Value>) -> Result<(), String>;
+    /// One notice for the server's owner (an inbox ticket from "Sew").
+    fn owner_notice(&self, title: &str, body: &str) {
+        if let Err(e) = crate::feedback_routes::file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "Sew", title, body) {
+            k2_core::log_debug!("[sew] owner notice '{title}': {e}");
+        }
+    }
 
     /// front443 holds this box's :443 and routes by SNI (0.46.1): voice
     /// then runs the `passthrough` TURN tier behind it (TURN on 443 only).
@@ -760,6 +766,8 @@ pub mod fake {
         pub served_ports: Mutex<Vec<u16>>,
         /// [`SewOps::front_routes_changed`] calls (front443 table rebuilds).
         pub front_rebuilds: Mutex<u32>,
+        /// Owner notices sent: (title, body).
+        pub notices: Mutex<Vec<(String, String)>>,
         /// Queued `/api/v1/health` answers (default: 200 ready).
         pub api_health_q: Mutex<VecDeque<Result<(u16, Value), String>>>,
         pub api_health_n: Mutex<usize>,
@@ -798,6 +806,7 @@ pub mod fake {
                 on_disk: Mutex::new(None),
                 helper_no_accept: Mutex::new(false),
                 mgmt_health_ok: Mutex::new(true),
+                notices: Mutex::new(Vec::new()),
                 api_health_q: Mutex::new(VecDeque::new()),
                 api_health_n: Mutex::new(0),
                 mgmt_status: Mutex::new(json!({
@@ -1282,6 +1291,9 @@ pub mod fake {
         }
         fn hostname(&self) -> String {
             "lztek".into()
+        }
+        fn owner_notice(&self, title: &str, body: &str) {
+            self.notices.lock().unwrap().push((title.to_string(), body.to_string()));
         }
         fn api_health(&self) -> Result<(u16, Value), String> {
             *self.api_health_n.lock().unwrap() += 1;

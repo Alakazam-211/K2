@@ -822,7 +822,7 @@ fn reconfigure_step_needs_protocol_11_and_sends_installs_inputs_without_a_key() 
     t.enabled();
     t.ops.clear();
     let env = t.env();
-    let e = reconfigure_step(&env).unwrap_err();
+    let e = reconfigure_step(&env).unwrap_err().to_string();
     assert!(e.contains("k2 root-helper update") && e.contains("k2 hostchat reconfigure"), "{e}");
     assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
     let mut st = helper_ok(11, true, pinned().version);
@@ -865,6 +865,45 @@ fn restart_brings_the_units_back_in_order() {
     let env = t.env();
     let _l = begin(&env).unwrap();
     assert_eq!(restart(&env).unwrap_err().code, "lifecycle_in_progress");
+}
+
+/// Sew 2026-10-27: on a box where Sew adopted a pre-existing `sew` login
+/// account, reconfigure refuses exit 3 `service_account_unsafe` and changes
+/// nothing. K2: the upgrade stands (no rollback), a typed blocked state on
+/// status with the person's fix, ONE owner notice, no retry loop; a later
+/// successful reconfigure clears it.
+#[test]
+fn a_blocked_reconfigure_keeps_the_upgrade_notices_once_and_shows_on_status() {
+    let t = t();
+    t.enabled();
+    let mut st = helper_ok(11, true, pinned().version);
+    st.version_json.as_mut().unwrap()["namespaces"]["sewreconf"] = json!(true);
+    *t.ops.helper.lock().unwrap() = st;
+    let unsafe_answer = || {
+        Ok(json!({"sewExit": 3, "sew": {"ok": false, "error": {"code": "service_account_unsafe",
+            "message": "the sew account is a login account (uid 1003)"}}, "reason": "service_account_unsafe"}))
+    };
+    t.ops.answers.lock().unwrap().insert("engine sew install reconfigure".into(), std::collections::VecDeque::from(vec![unsafe_answer(), unsafe_answer()]));
+    let env = t.env();
+    let e = reconfigure_step(&env).unwrap_err();
+    assert!(matches!(&e, ReconfErr::Blocked { code, .. } if code == "service_account_unsafe"), "{e:?}");
+    note_reconfigure(&env, &e, "0.3.0", "0.3.1");
+    assert!(!t.ops.effects().iter().any(|x| x.contains("rollback") || x == "engine sew systemctl restart"), "{:?}", t.ops.effects());
+    assert_eq!(t.ops.notices.lock().unwrap().len(), 1, "one owner notice");
+    assert!(t.ops.notices.lock().unwrap()[0].1.contains("k2 hostchat reconfigure"));
+    let s = status(&t.env(), false);
+    assert_eq!((s["reconfigure"]["state"].clone(), s["reconfigure"]["code"].clone()), (json!("reconfigure_blocked"), json!("service_account_unsafe")), "{s}");
+    assert!(s["alarms"].as_array().unwrap().iter().any(|a| a == "k2_reconfigure_blocked"), "{s}");
+    assert_eq!(t.row().status, "running", "the upgrade stands");
+    // The person's `k2 hostchat reconfigure` while still blocked: 409, quiet.
+    let f = reconfigure(&env).unwrap_err();
+    assert_eq!((f.code, f.status), ("reconfigure_blocked", 409));
+    assert_eq!(t.ops.notices.lock().unwrap().len(), 1, "the same block never notices twice");
+    // Fixed by a person: the next reconfigure succeeds and clears the state.
+    reconfigure(&env).expect("reconfigure after the fix");
+    let s = status(&t.env(), false);
+    assert!(s["reconfigure"].is_null(), "{s}");
+    assert!(!s["alarms"].as_array().unwrap().iter().any(|a| a == "k2_reconfigure_blocked"));
 }
 
 #[test]

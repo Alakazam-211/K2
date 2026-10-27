@@ -953,32 +953,112 @@ pub fn helper_reconfigures(env: &Env) -> bool {
         && st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/sewreconf")).and_then(Value::as_bool) == Some(true)
 }
 
+/// K2's record of a reconfigure that did not happen (`~/.k2/sew/
+/// reconfigure.json`): `{state: "reconfigure_blocked"|"reconfigure_failed",
+/// code, hint, at, from, to, noticed}`. Status shows it; a successful
+/// reconfigure removes it.
+pub const RECONFIGURE_RECORD: &str = "reconfigure";
+/// The alarm while a reconfigure is blocked on a person.
+pub const ALARM_RECONFIGURE_BLOCKED: &str = "k2_reconfigure_blocked";
+/// Sew 0.3.1's refusal when it adopted a pre-existing login account named
+/// `sew` (uid ≥ UID_MIN, or a home outside /var/lib/sew): exit 3, nothing
+/// changed. Fixing the account in place is a person step.
+pub const SERVICE_ACCOUNT_UNSAFE: &str = "service_account_unsafe";
+
+/// Why a reconfigure did not happen.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReconfErr {
+    /// Sew refused for a reason only a person can fix (the upgrade stands).
+    Blocked { code: String, hint: String },
+    Failed(String),
+}
+
+impl std::fmt::Display for ReconfErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReconfErr::Blocked { code, hint } => write!(f, "reconfigure blocked ({code}): {hint}"),
+            ReconfErr::Failed(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+fn blocked_hint(code: &str) -> String {
+    match code {
+        SERVICE_ACCOUNT_UNSAFE => "Sew runs as a pre-existing login account named `sew` (a uid at or above UID_MIN, or a \
+            home outside /var/lib/sew), so `sew install --reconfigure` changed nothing. The upgrade itself is done and \
+            chat keeps running. A person fixes the account in place (sew doctor shows service_accounts: fail), then runs \
+            k2 hostchat reconfigure."
+            .into(),
+        other => format!("Sew refused to reconfigure ({other}); a person must look (k2 hostchat doctor), then run k2 hostchat reconfigure"),
+    }
+}
+
 /// `sew install --reconfigure` through the helper (install's inputs, no
-/// master key), then restart `sew` and K2's health check. `Err` = why
-/// (the binary itself is fine: never a rollback).
-pub fn reconfigure_step(env: &Env) -> Result<Value, String> {
+/// master key), then restart `sew` and K2's health check. The binary itself
+/// is fine either way: never a rollback.
+pub fn reconfigure_step(env: &Env) -> Result<Value, ReconfErr> {
+    let failed = ReconfErr::Failed;
     if !helper_reconfigures(env) {
-        return Err(format!(
+        return Err(failed(format!(
             "the root helper is older than protocol {}: k2 root-helper update, then k2 hostchat reconfigure",
             k2_root_proto::version::SEW_RECONFIGURE_MIN_PROTOCOL
-        ));
+        )));
     }
-    let row = store::load().ok_or("Sew is not installed")?;
+    let row = store::load().ok_or_else(|| failed("Sew is not installed".into()))?;
     let body = if row_provider(&row) == pin::PROVIDER_STANDALONE {
         json!({"provider": pin::PROVIDER_STANDALONE})
     } else {
-        let port = env.ops.daemon_port().ok_or("the daemon's HTTP port is unknown")?;
+        let port = env.ops.daemon_port().ok_or_else(|| failed("the daemon's HTTP port is unknown".into()))?;
         json!({"jwksUrl": jwks_url_for(port)})
     };
-    let out = helper(env, &["install", "reconfigure"], Some(body.to_string().as_bytes()))?;
+    let out = helper(env, &["install", "reconfigure"], Some(body.to_string().as_bytes())).map_err(failed)?;
     match sew_exit(&out) {
         Some(0) => {}
-        Some(n) => return Err(format!("sew install --reconfigure: {}", install_refusal(n, &out))),
-        None => return Err(format!("sew install --reconfigure: the helper answered without Sew's exit code: {}", short(&out))),
+        Some(3) if sew_code(&out).as_deref() == Some(SERVICE_ACCOUNT_UNSAFE) => {
+            return Err(ReconfErr::Blocked { code: SERVICE_ACCOUNT_UNSAFE.into(), hint: blocked_hint(SERVICE_ACCOUNT_UNSAFE) });
+        }
+        Some(n) => return Err(failed(format!("sew install --reconfigure: {}", install_refusal(n, &out)))),
+        None => {
+            return Err(failed(format!("sew install --reconfigure: the helper answered without Sew's exit code: {}", short(&out))))
+        }
     }
-    helper(env, &["systemctl", "restart"], None)?;
-    health_check(env, pinned().version)?;
+    helper(env, &["systemctl", "restart"], None).map_err(failed)?;
+    health_check(env, pinned().version).map_err(failed)?;
+    if let Err(e) = env.ops.record_save(RECONFIGURE_RECORD, None) {
+        k2_core::log_debug!("[sew] reconfigure record: {e}");
+    }
     Ok(out)
+}
+
+/// Sew's error code in an `engine sew` answer (`sew.error.code`, else a
+/// known code named in the reason).
+fn sew_code(v: &Value) -> Option<String> {
+    if let Some(c) = v.pointer("/sew/error/code").and_then(Value::as_str) {
+        return Some(c.to_string());
+    }
+    let m = sew_message(v);
+    [SERVICE_ACCOUNT_UNSAFE, "pg_major_ambiguous"].iter().find(|c| m.contains(**c)).map(|c| c.to_string())
+}
+
+/// Record a reconfigure that did not happen. A block sends ONE owner
+/// notice per code (the same block again is quiet); nothing retries.
+pub fn note_reconfigure(env: &Env, e: &ReconfErr, from: &str, to: &str) {
+    let prev = env.ops.record_load(RECONFIGURE_RECORD);
+    let now = env.ops.now();
+    let rec = match e {
+        ReconfErr::Blocked { code, hint } => {
+            let already = prev.as_ref().is_some_and(|p| p["state"] == "reconfigure_blocked" && p["code"] == code.as_str());
+            if !already {
+                env.ops.owner_notice(&format!("Sew upgraded to {to}; its reconfigure needs you ({code})"), hint);
+            }
+            json!({"state": "reconfigure_blocked", "code": code, "hint": hint, "at": now, "from": from, "to": to, "noticed": true})
+        }
+        ReconfErr::Failed(why) => json!({"state": "reconfigure_failed", "hint": why, "at": now, "from": from, "to": to}),
+    };
+    if let Err(err) = env.ops.record_save(RECONFIGURE_RECORD, Some(&rec)) {
+        k2_core::log_debug!("[sew] reconfigure record: {err}");
+    }
+    changed("state");
 }
 
 /// `k2 hostchat restart` (S32 Q2, Sew's design; provisional until
@@ -1032,6 +1112,7 @@ pub fn reconfigure(env: &Env) -> R<Value> {
     need_row(false)?;
     helper_check(env)?;
     let _l = begin(env)?;
+    let v = store::load().and_then(|r| r.installed_version).unwrap_or_default();
     match reconfigure_step(env) {
         Ok(out) => {
             store::update(env.ops.now(), |r| {
@@ -1043,7 +1124,17 @@ pub fn reconfigure(env: &Env) -> R<Value> {
             changed("state");
             Ok(json!({"ok": true, "sew": out["sew"]}))
         }
-        Err(why) => Err(no("reconfigure_failed", 500, why)),
+        Err(e) => {
+            note_reconfigure(env, &e, &v, &v);
+            Err(match e {
+                ReconfErr::Blocked { code, hint } => {
+                    let mut f = no("reconfigure_blocked", 409, hint);
+                    f.extra = Some(json!({"state": "reconfigure_blocked", "code": code}));
+                    f
+                }
+                ReconfErr::Failed(why) => no("reconfigure_failed", 500, why),
+            })
+        }
     }
 }
 
@@ -1296,6 +1387,10 @@ fn status_body(env: &Env, with_health: bool) -> Value {
     if let Some(h) = api_health.as_ref().filter(|h| !h.ready) {
         alarms.push(format!("sew_not_ready_{}", h.reason.as_deref().unwrap_or("unknown")));
     }
+    let reconfigure = env.ops.record_load(RECONFIGURE_RECORD);
+    if reconfigure.as_ref().is_some_and(|r| r["state"] == "reconfigure_blocked") {
+        alarms.push(ALARM_RECONFIGURE_BLOCKED.into());
+    }
     alarms.extend(k2_alarms(env, &row, sew_status.as_ref(), now));
     let mut warnings = warnings;
     let public_url = public_url(env);
@@ -1326,6 +1421,8 @@ fn status_body(env: &Env, with_health: bool) -> Value {
         "voice": voice,
         "units": {"sewDb": db.json(), "sew": sew.json()},
         "apiHealth": api_health.as_ref().map(super::health::Health::json),
+        // A reconfigure that did not happen: typed state + the person's fix.
+        "reconfigure": reconfigure,
         "alarms": alarms,
         "warnings": warnings,
         "recoveryKeySaved": row.recovery_shown_at.is_some(),
@@ -2227,6 +2324,7 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
                         if needs_reconfigure(from, to) {
                             upgrade_note(env, Some("reconfigure"), None);
                             if let Err(why) = reconfigure_step(env) {
+                                note_reconfigure(env, &why, from, to);
                                 save_enable(env, |r| r.last_error = Some(format!("upgraded to {to}, but {why}")));
                             }
                         }

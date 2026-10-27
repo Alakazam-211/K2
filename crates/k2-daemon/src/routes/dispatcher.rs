@@ -1375,11 +1375,21 @@ async fn handle_one_request(
     // state. This preserves the pre-0.39.5 "handlers always see migrated
     // state" invariant now that migrations run AFTER the listener binds.
     // See `crate::boot_status`.
+    //
+    // k2-ptyd S5: on a restart that kept agents (this boot adopts ptyd
+    // sessions, or took the main listener back from ptyd), a real route
+    // that arrives before ready first WAITS for ready (bounded,
+    // `READY_WAIT`), then runs: the agents' `k2` calls queued in the
+    // listener ptyd held reach this point while B1 is still adopting, and
+    // complete instead of seeing a 503 window. Any other boot (first boot,
+    // no ptyd) answers the migrating 503 at once, as before.
     if !crate::boot_status::is_ready()
         && !matches!(
             path.as_str(),
             "/ping" | "/health" | "/boot-status" | "/v1/jwks" | "/v1/chat/jwks"
         )
+        && !(crate::ptyd_adopt::hold_until_ready()
+            && crate::boot_status::wait_ready(crate::boot_status::READY_WAIT).await)
     {
         let _ = stream.read(&mut buf).await;
         super::http::send_response(

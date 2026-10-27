@@ -490,13 +490,60 @@ _k2_cfg_add() {
 
 # _k2_curl CFG curl-args… — run curl with CFG (config lines) on stdin.
 # CFG empty → plain curl. The caller's stdin is NOT available to curl.
+#
+# k2-ptyd S5 (PRD P47, P49): a daemon restart must not fail an agent's
+# `k2` call. curl exit 7 (nothing accepted the connection: the daemon is
+# between processes and nothing held its socket) is retried, at most
+# $_K2_CURL_TRIES tries, 1 s apart; such a request never reached a
+# handler, so a retry can't run it twice. Never `curl --retry` (it also
+# retries after a response). A request whose body is read from stdin
+# (`@-`, `-T -`) is not retried: the first try consumed it. A refused
+# loopback request on $PORT also tries the port the daemon published in
+# ~/.k2/daemon.port, when that one differs (the daemon came back on
+# another port).
+_K2_CURL_TRIES=4
 _k2_curl() {
     local cfg="$1"; shift
-    if [ -z "$cfg" ]; then
-        curl "$@"
-        return
-    fi
-    printf '%s' "$cfg" | curl -K - "$@"
+    local try=1 rc once=0 a
+    for a in "$@"; do
+        case "$a" in *@-*|-T) once=1 ;; esac
+    done
+    while :; do
+        rc=0
+        if [ -z "$cfg" ]; then
+            curl "$@" || rc=$?
+        else
+            printf '%s' "$cfg" | curl -K - "$@" || rc=$?
+        fi
+        if [ "$rc" -ne 7 ] || [ "$once" -eq 1 ] || [ "$try" -ge "$_K2_CURL_TRIES" ]; then
+            return "$rc"
+        fi
+        try=$((try + 1))
+        sleep 1
+        _k2_follow_port_move
+        if [ -n "$_K2_PORT_FROM" ]; then
+            cfg="${cfg//:${_K2_PORT_FROM}\//:${PORT}/}"
+            local -a _k2_args=()
+            for a in "$@"; do _k2_args+=("${a//:${_K2_PORT_FROM}\//:${PORT}/}"); done
+            set -- "${_k2_args[@]}"
+        fi
+    done
+}
+
+# P49: when $PORT is a loopback port the daemon no longer publishes, move
+# PORT/BASE_URL to the one in ~/.k2/daemon.port. Sets _K2_PORT_FROM to the
+# old port (empty when nothing moved).
+_k2_follow_port_move() {
+    _K2_PORT_FROM=""
+    case "${HOST:-127.0.0.1}" in 127.0.0.1|localhost|::1) ;; *) return 0 ;; esac
+    local f="${K2_HOME:-$HOME/.k2}/daemon.port" p
+    [ -f "$f" ] || return 0
+    p="$(tr -d '[:space:]' < "$f" 2>/dev/null)" || return 0
+    case "$p" in ''|*[!0-9]*) return 0 ;; esac
+    [ -n "${PORT:-}" ] && [ "$p" != "$PORT" ] || return 0
+    _K2_PORT_FROM="$PORT"
+    PORT="$p"
+    BASE_URL="http://${HOST:-127.0.0.1}:${PORT}"
 }
 # END_CLI_CURL_CFG
 
@@ -824,17 +871,31 @@ _cli_transport_is_denied() {
 # `resp=$(cli_request …)` works); stderr is classified, never printed.
 # A leading `--k2-cfg CFG` hands curl secret config lines on stdin (_k2_curl).
 _cli_curl() {
-    local err rc=1 cfg=""
+    local err rc=1 cfg="" try=1 a once=0
     if [ "${1:-}" = "--k2-cfg" ]; then
         cfg="$2"
         shift 2
     fi
+    for a in "$@"; do
+        case "$a" in *@-*|-T) once=1 ;; esac
+    done
     local _had_e=0
     case $- in *e*) _had_e=1; set +e ;; esac
-    {
-        err=$(_k2_curl "$cfg" "$@" 2>&1 1>&4)
-        rc=$?
-    } 4>&1
+    while :; do
+        {
+            err=$(_k2_curl "$cfg" "$@" 2>&1 1>&4)
+            rc=$?
+        } 4>&1
+        # k2-ptyd S5 (P47): a connect that timed out (curl 28 with no
+        # "Connected to" in the -v trace) never reached the daemon: retry
+        # like a refused one. A timeout after connecting is never retried.
+        if [ "$rc" -eq 28 ] && [[ "$err" != *"Connected to"* ]] && [ "$once" -eq 0 ] && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
+            try=$((try + 1))
+            sleep 1
+            continue
+        fi
+        break
+    done
     [ "$_had_e" -eq 1 ] && set -e
     if [ "$rc" -eq 0 ]; then
         return 0
@@ -845,6 +906,10 @@ _cli_curl() {
     return "$rc"
 }
 
+# k2-ptyd S5 (P47): the daemon's pre-ready 503 (`"state":"migrating"`):
+# no handler ran, so the request may be sent again.
+_cli_migrating() { [[ "$1" == *'"state":"migrating"'* ]]; }
+
 cli_request() {
     local endpoint="$1"
     shift
@@ -852,13 +917,20 @@ cli_request() {
     for param in "$@"; do
         params="${params}&${param}"
     done
-    local _K2_CFG="" out rc=0
+    local _K2_CFG="" out rc=0 try=1
     _k2_cfg_add data "$params"
     # Captured (with a sentinel, so trailing newlines survive) only so the
     # permission-cards closing line can be noted; the bytes are unchanged.
-    out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G "${BASE_URL}${endpoint}" \
-        --connect-timeout 5 --max-time 30 || r=$?; printf x; exit "$r")" || rc=$?
-    out="${out%x}"
+    while :; do
+        rc=0
+        out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G "${BASE_URL}${endpoint}" \
+            --connect-timeout 5 --max-time 30 || r=$?; printf x; exit "$r")" || rc=$?
+        out="${out%x}"
+        if [ "$rc" -eq 0 ] && _cli_migrating "$out" && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
+            try=$((try + 1)); sleep 1; continue
+        fi
+        break
+    done
     _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
@@ -880,11 +952,18 @@ cli_request_post() {
     for param in "$@"; do
         params="${params}&${param}"
     done
-    local out rc=0 _K2_CFG=""
+    local out rc=0 _K2_CFG="" try=1
     _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
-    out="$(_cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST \
-        --connect-timeout 5 --max-time 30 \
-        --data-raw "")" || rc=$?
+    while :; do
+        rc=0
+        out="$(_cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST \
+            --connect-timeout 5 --max-time 30 \
+            --data-raw "")" || rc=$?
+        if [ "$rc" -eq 0 ] && _cli_migrating "$out" && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
+            try=$((try + 1)); sleep 1; continue
+        fi
+        break
+    done
     if [ "$rc" -eq 0 ] && [[ "$out" == *'method not allowed for this route'* ]]; then
         cli_request "$endpoint" "$@"
         return $?
@@ -899,12 +978,19 @@ cli_request_post_uds() {
     local endpoint="$1"; shift
     local params=""
     for param in "$@"; do params="${params}${params:+&}${param}"; done
-    local _K2_CFG="" out rc=0
+    local _K2_CFG="" out rc=0 try=1
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
-    out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
-        --connect-timeout 5 --max-time 30 \
-        --data-raw "" || r=$?; printf x; exit "$r")" || rc=$?
-    out="${out%x}"
+    while :; do
+        rc=0
+        out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
+            --connect-timeout 5 --max-time 30 \
+            --data-raw "" || r=$?; printf x; exit "$r")" || rc=$?
+        out="${out%x}"
+        if [ "$rc" -eq 0 ] && _cli_migrating "$out" && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
+            try=$((try + 1)); sleep 1; continue
+        fi
+        break
+    done
     _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
@@ -1038,14 +1124,21 @@ cli_request_uds() {
     local endpoint="$1"; shift
     local params=""
     for param in "$@"; do params="${params}${params:+&}${param}"; done
-    local _K2_CFG="" out rc=0
+    local _K2_CFG="" out rc=0 try=1
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     if [ -n "$params" ]; then
         _k2_cfg_add data "$params"
     fi
-    out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
-        --connect-timeout 5 --max-time 30 || r=$?; printf x; exit "$r")" || rc=$?
-    out="${out%x}"
+    while :; do
+        rc=0
+        out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+            --connect-timeout 5 --max-time 30 || r=$?; printf x; exit "$r")" || rc=$?
+        out="${out%x}"
+        if [ "$rc" -eq 0 ] && _cli_migrating "$out" && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
+            try=$((try + 1)); sleep 1; continue
+        fi
+        break
+    done
     _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
@@ -18088,11 +18181,12 @@ _git_tools_send() {
     local method="$1" path="$2" as_json="$3" q
     q="token=$(_git_tools_q "$TOKEN")"
     [ "$as_json" = "1" ] || q="${q}&format=text"
+    # Through _k2_curl: a refused connect (a daemon restart) is retried (S5).
     if [ "$method" = "GET" ]; then
-        curl -s "${BASE_URL}${path}?${q}" --connect-timeout 5 --max-time 120 \
+        _k2_curl "" -s "${BASE_URL}${path}?${q}" --connect-timeout 5 --max-time 120 \
             -w $'\n%{http_code}' 2>/dev/null || true
     else
-        curl -s -X POST "${BASE_URL}${path}?${q}" --connect-timeout 5 --max-time 120 \
+        _k2_curl "" -s -X POST "${BASE_URL}${path}?${q}" --connect-timeout 5 --max-time 120 \
             -H "Content-Type: application/json" --data-raw '{}' \
             -w $'\n%{http_code}' 2>/dev/null || true
     fi
@@ -23194,7 +23288,7 @@ _vault_sock_call() {
     [ -t 0 ] && [ -t 1 ] && tty="1"
     [ -t 0 ] && [ -t 2 ] && tty="1"
     if [ "$method" = "GET" ]; then
-        out="$(curl -s -G --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
+        out="$(_k2_curl "" -s -G --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
             -H "X-K2-Tty: ${tty}" --connect-timeout 5 --max-time 180 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     else
         out="$(printf '%s' "$payload" | curl -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
@@ -46600,7 +46694,7 @@ else:
             body=$(python3 -c 'import json,sys
 print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv[3],"public_key_pem":open(sys.argv[4]).read()}))' "$label" "$subdomain" "$url" "$pubkey_file")
             # UNAUTH route (creates only a Pending peer).
-            curl -s -X POST "${BASE_URL}/cli/federation/pair/request" \
+            _k2_curl "" -s -X POST "${BASE_URL}/cli/federation/pair/request" \
                 --connect-timeout 5 --max-time 30 \
                 -H "Content-Type: application/json" \
                 --data-raw "$body" 2>/dev/null
@@ -49321,18 +49415,54 @@ def request(method, route, params=None, body=None, timeout=30):
     data = dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8", "replace"))
-    except urllib.error.HTTPError as e:
+    # k2-ptyd S5 (P47, P48): a daemon restart is not a failure. A refused
+    # connect and the daemon's pre-ready 503 ("state":"migrating") never
+    # reached a handler: retried (4 tries, 1 s apart). A GET whose
+    # connection dropped with no answer (`mail wait` cut by the restart)
+    # is retried once. Anything that got an answer is final.
+    dropped = False
+    for attempt in range(4):
         try:
-            return json.loads(e.read().decode("utf-8", "replace"))
-        except Exception:
-            return {"error": {"code": "error", "hint": "HTTP %s on %s" % (e.code, route)}}
-    except Exception as e:
-        if _is_socket_timeout(e):
-            return _timeout_error_body(timeout)
-        return None
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", "replace")
+            if e.code == 503 and '"state":"migrating"' in raw and attempt < 3:
+                time.sleep(1)
+                continue
+            try:
+                return json.loads(raw)
+            except Exception:
+                return {"error": {"code": "error", "hint": "HTTP %s on %s" % (e.code, route)}}
+        except Exception as e:
+            if _is_socket_timeout(e):
+                return _timeout_error_body(timeout)
+            kind = _restart_kind(e)
+            if kind == "refused" and attempt < 3:
+                time.sleep(1)
+                continue
+            if kind == "dropped" and method == "GET" and not dropped and attempt < 3:
+                dropped = True
+                time.sleep(1)
+                continue
+            return None
+    return None
+
+def _restart_kind(exc):
+    # "refused": nothing accepted the connect. "dropped": the connection
+    # closed before any answer (RemoteDisconnected is a ConnectionResetError).
+    import http.client
+    cur = exc
+    for _ in range(4):
+        if isinstance(cur, ConnectionRefusedError):
+            return "refused"
+        if isinstance(cur, (ConnectionResetError, BrokenPipeError, http.client.IncompleteRead)):
+            return "dropped"
+        nxt = getattr(cur, "reason", None)
+        if nxt is None or nxt is cur:
+            break
+        cur = nxt
+    return None
 
 def call(method, route, params=None, body=None, timeout=30, timeout_hint=None):
     d = request(method, route, params, body, timeout)
@@ -56494,23 +56624,64 @@ def _is_timeout(exc):
         cur = nxt
     return False
 
+def _restart_kind(exc):
+    # k2-ptyd S5: "refused" = nothing accepted the connect; "dropped" = the
+    # connection closed before any answer (RemoteDisconnected is a
+    # ConnectionResetError).
+    import http.client
+    cur = exc
+    for _ in range(4):
+        if isinstance(cur, ConnectionRefusedError):
+            return "refused"
+        if isinstance(cur, (ConnectionResetError, BrokenPipeError, http.client.IncompleteRead)):
+            return "dropped"
+        nxt = getattr(cur, "reason", None)
+        if nxt is None or nxt is cur:
+            break
+        cur = nxt
+    return None
+
 def call(method, route, params=None, body=None, timeout=60):
+    import time
     qs = urllib.parse.urlencode(dict(params or {}, token=token))
     url = base + route + "?" + qs
     data = dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            d = json.loads(r.read().decode("utf-8", "replace"))
-    except urllib.error.HTTPError as e:
+    # k2-ptyd S5 (P47, P48): a refused connect and the daemon's pre-ready
+    # 503 ("state":"migrating") never reached a handler: retried (4 tries,
+    # 1 s apart). A GET whose connection dropped with no answer (`calendar
+    # wait` cut by a restart) is retried once. An answer is final.
+    d = None
+    dropped = False
+    for attempt in range(4):
         try:
-            d = json.loads(e.read().decode("utf-8", "replace"))
-        except Exception:
-            d = {"error": {"code": "error", "hint": "HTTP %s on %s" % (e.code, route)}}
-    except Exception as e:
-        if _is_timeout(e):
-            die({"code": "timeout", "hint": "daemon did not answer within %ss" % int(timeout)}, 1)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                d = json.loads(r.read().decode("utf-8", "replace"))
+            break
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", "replace")
+            if e.code == 503 and '"state":"migrating"' in raw and attempt < 3:
+                time.sleep(1)
+                continue
+            try:
+                d = json.loads(raw)
+            except Exception:
+                d = {"error": {"code": "error", "hint": "HTTP %s on %s" % (e.code, route)}}
+            break
+        except Exception as e:
+            if _is_timeout(e):
+                die({"code": "timeout", "hint": "daemon did not answer within %ss" % int(timeout)}, 1)
+            kind = _restart_kind(e)
+            if kind == "refused" and attempt < 3:
+                time.sleep(1)
+                continue
+            if kind == "dropped" and method == "GET" and not dropped and attempt < 3:
+                dropped = True
+                time.sleep(1)
+                continue
+            die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?)"})
+    if d is None:
         die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?)"})
     if isinstance(d.get("error"), dict):
         die(d["error"])

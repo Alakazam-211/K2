@@ -269,7 +269,26 @@ fn assert_no_gap(port: u16, token: &str, sid: &str, past: u64, what: &str) -> u6
 }
 
 fn hook_lines(dir: &Path) -> Vec<(u128, String)> {
-    std::fs::read_to_string(dir.join("hook.log"))
+    log_lines(dir, "hook.log")
+}
+
+/// The agent's TCP (`K2_PORT`) calls: `<unix_ms> <status|ERR:…>`.
+fn tcp_lines(dir: &Path) -> Vec<(u128, String)> {
+    log_lines(dir, "tcp.log")
+}
+
+/// S5 (no refused window): every call the agent made — over its cell
+/// socket and over TCP, including the ones started while no daemon ran —
+/// got a real answer: no refused/failed connect, no migrating 503.
+fn assert_no_failed_calls(dir: &Path, what: &str) {
+    for (file, lines) in [("hook.log", hook_lines(dir)), ("tcp.log", tcp_lines(dir))] {
+        let failed: Vec<_> = lines.iter().filter(|(_, r)| r.starts_with("ERR:") || r == "503").collect();
+        assert!(failed.is_empty(), "{what}: the agent's calls failed during a restart ({file}): {failed:?}");
+    }
+}
+
+fn log_lines(dir: &Path, name: &str) -> Vec<(u128, String)> {
+    std::fs::read_to_string(dir.join(name))
         .unwrap_or_default()
         .lines()
         .filter_map(|l| {
@@ -409,10 +428,14 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
     agent_thread_post(port, &token, &dir, "before-restarts");
 
     let mut port = port;
+    // S5: calls the agent started between a daemon's exit and its
+    // successor's ready (they must all have completed, see below).
+    let mut calls_in_windows = 0usize;
     for (i, mode) in [Restart::Sigterm, Restart::Kill9, Restart::Route, Restart::Sigterm, Restart::Kill9].into_iter().enumerate() {
         let what = format!("restart {} ({mode:?})", i + 1);
         // P37: the row as the agent's last daemon saw it.
         let row_before = activity_row(port, &h.token(), &sid);
+        let down_at = now_ms();
         match mode {
             // SAFETY: the daemon this test started.
             Restart::Sigterm => unsafe {
@@ -429,7 +452,9 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
         h.wait_daemon_exit(Duration::from_secs(20));
         assert!(alive(pid), "{what}: the agent died with the daemon");
         assert!(alive(ptyd), "{what}: ptyd died with the daemon");
-        std::thread::sleep(Duration::from_millis(500)); // the agent keeps writing while no daemon is attached
+        // The agent keeps writing, and keeps calling the daemon (S5), while
+        // no daemon is attached.
+        std::thread::sleep(Duration::from_millis(1500));
         port = h.start();
         let ready_at = now_ms();
         let token = h.token();
@@ -444,6 +469,15 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
         });
         let refused: Vec<_> = hook_lines(&dir).into_iter().filter(|(_, r)| r == "401" || r == "403").collect();
         assert!(refused.is_empty(), "{what}: the agent's passport was refused: {refused:?}");
+        // S5: calls the agent started while no daemon was ready completed
+        // once it was (they queued in the sockets ptyd held, and the new
+        // daemon held them until ready), and none failed.
+        wait_for(&format!("{what}: a TCP call after ready"), Duration::from_secs(30), || {
+            tcp_lines(&dir).iter().any(|(t, _)| *t >= ready_at).then_some(())
+        });
+        assert_no_failed_calls(&dir, &what);
+        let in_window = hook_lines(&dir).into_iter().chain(tcp_lines(&dir)).filter(|(t, _)| *t >= down_at && *t < ready_at).count();
+        calls_in_windows += in_window;
         // The renderer's reattach (empty-command spawn under the same key)
         // finds the adopted session instead of spawning (P43).
         let (s, resp) = http(port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &serde_json::json!({"agent_name": "tab-survive", "cwd": ws.to_string_lossy()}).to_string());
@@ -486,6 +520,11 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
         agent_thread_post(port, &token, &dir, &format!("after-restart-{}", i + 1));
     }
 
+    assert!(
+        calls_in_windows >= 5,
+        "S5: only {calls_in_windows} agent call(s) fell inside a restart window; the test did not exercise the refused window"
+    );
+
     // P74 (V2): the adopted agent's ancestry is agent → ptyd → init, no
     // daemon pid. A child of it with every K2 variable stripped still
     // isn't a person to the vault socket.
@@ -518,6 +557,18 @@ fn enc(s: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+/// Wait until the agent received exactly `n` wakes; fail with what it got.
+fn wait_for_pastes(dir: &Path, n: usize, what: &str) {
+    let t = Instant::now();
+    while pastes(dir) != n {
+        if t.elapsed() > Duration::from_secs(15) {
+            let raw = std::fs::read(dir.join("stdin")).unwrap_or_default();
+            panic!("{what}: the agent received {} wake(s), want {n}; its stdin: {:?}", pastes(dir), String::from_utf8_lossy(&raw));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// The heartbeat's fire audit rows, oldest first: (decision, reason).
@@ -634,7 +685,7 @@ fn a_restart_never_fires_a_heartbeat_twice_and_fires_land_in_the_adopted_agent()
     h.agent_pid = Some(pid);
     let ptyd = h.ptyd_pid.expect("ptyd launched");
     assert_eq!(parent_pid(pid), ptyd, "the heartbeat agent runs under k2-ptyd");
-    wait_for("the first wake", Duration::from_secs(10), || (pastes(&dir) == 1).then_some(()));
+    wait_for_pastes(&dir, 1, "the first wake");
     assert_eq!(fired_count(&hb_fires(&db, &project_id, "hb1")), 1);
     assert_eq!(stamp(&db).0.as_deref(), Some(sid.as_str()), "the fire stamped its session");
 
@@ -675,7 +726,7 @@ fn a_restart_never_fires_a_heartbeat_twice_and_fires_land_in_the_adopted_agent()
     assert_eq!(fired_count(&fires), 2, "{fires:?}");
     let last = fires.iter().rev().find(|(d, _)| d.starts_with("fired")).expect("a fired row");
     assert!(last.1.contains(&format!("active_terminal_id → {sid}")), "P29: the boot fire did not land in the adopted session: {last:?}");
-    wait_for("the second wake", Duration::from_secs(10), || (pastes(&dir) == 2).then_some(()));
+    wait_for_pastes(&dir, 2, "the second wake");
     assert_eq!(std::fs::read_to_string(dir.join("pid")).unwrap().trim(), pid.to_string(), "the boot fire spawned a new agent");
     assert_eq!(parent_pid(pid), ptyd);
 

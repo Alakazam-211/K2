@@ -152,11 +152,18 @@ fn survive(dir: &str, every_ms: u64, paste: bool) {
         let dir = dir.clone();
         std::thread::spawn(move || {
             let mut log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("hook.log")).unwrap();
+            let mut tcp_log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("tcp.log")).unwrap();
             loop {
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
                 let r = hook_call();
                 writeln!(log, "{now} {r}").unwrap();
                 log.flush().unwrap();
+                // The same call over the daemon's TCP port (`K2_PORT`), the
+                // way `k2` reaches the daemon without a cell socket.
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+                let r = tcp_call("/cli/whoami");
+                writeln!(tcp_log, "{now} {r}").unwrap();
+                tcp_log.flush().unwrap();
                 let hups = SIGHUPS.load(std::sync::atomic::Ordering::SeqCst);
                 if hups > 0 {
                     std::fs::write(dir.join("sighup"), hups.to_string()).unwrap();
@@ -207,6 +214,32 @@ fn hook_call() -> String {
     cell_request("GET", "/cli/whoami", None)
 }
 
+/// `GET <path>` over TCP to `127.0.0.1:$K2_PORT` with the passport as a
+/// Bearer; the status code or `ERR:…` (`ERR:connect:…` = refused).
+fn tcp_call(path: &str) -> String {
+    use std::io::Read;
+    let (Ok(port), Ok(token)) = (std::env::var("K2_PORT"), std::env::var("K2_HOOK_TOKEN")) else {
+        return "ERR:no_port".into();
+    };
+    let mut s = match std::net::TcpStream::connect(("127.0.0.1", port.parse::<u16>().unwrap_or(0))) {
+        Ok(s) => s,
+        Err(e) => return format!("ERR:connect:{}", e.kind()),
+    };
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(25)));
+    let _ = s.set_write_timeout(Some(std::time::Duration::from_secs(10)));
+    let head = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n");
+    if let Err(e) = s.write_all(head.as_bytes()) {
+        return format!("ERR:write:{}", e.kind());
+    }
+    let mut raw = Vec::new();
+    if let Err(e) = s.read_to_end(&mut raw) {
+        if raw.is_empty() {
+            return format!("ERR:read:{}", e.kind());
+        }
+    }
+    String::from_utf8_lossy(&raw).split_whitespace().nth(1).unwrap_or("ERR:empty").to_string()
+}
+
 /// One request over `$K2_HOOK_SOCK` with `$K2_HOOK_TOKEN` (form body for a
 /// POST); the status code or `ERR:…`.
 fn cell_request(method: &str, path: &str, form: Option<&str>) -> String {
@@ -218,7 +251,7 @@ fn cell_request(method: &str, path: &str, form: Option<&str>) -> String {
         Ok(s) => s,
         Err(e) => return format!("ERR:connect:{}", e.kind()),
     };
-    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(25)));
     let _ = s.set_write_timeout(Some(std::time::Duration::from_secs(10)));
     let body = form.unwrap_or("");
     let head = format!(

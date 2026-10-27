@@ -83,12 +83,25 @@ fn update_report(f: impl FnOnce(&mut Report)) {
     }
 }
 
+static HOLD_UNTIL_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// S5 (no refused window): this boot is a restart that kept agents — B0
+/// found sessions running in ptyd, or the main listener came back from
+/// ptyd. Real routes that arrive before ready then wait for ready instead
+/// of answering 503 (`dispatcher`, `boot_status::READY_WAIT`).
+pub fn hold_until_ready() -> bool {
+    HOLD_UNTIL_READY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// B0 (§7.9): the adoptable set. Call once, after the DB opens and before
 /// the vault boot / heartbeat / activity sweeps.
 pub fn b0() {
     #[cfg(unix)]
     {
         let scan = k2_core::terminal::ptyd::adopt::scan();
+        if !scan.running.is_empty() {
+            HOLD_UNTIL_READY.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         update_report(|r| {
             r.found_running = scan.running.len();
             r.found_exited = scan.exited.len();
@@ -131,6 +144,7 @@ pub fn take_main_listener() -> Option<k2_core::port_claim::ClaimedPort> {
             return None;
         }
         log_debug!("[ptyd] took the main listener back from ptyd (port {})", addr.port());
+        HOLD_UNTIL_READY.store(true, std::sync::atomic::Ordering::Relaxed);
         Some(k2_core::port_claim::ClaimedPort { port: addr.port(), listener, reused: true })
     }
     #[cfg(not(unix))]

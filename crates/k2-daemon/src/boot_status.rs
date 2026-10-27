@@ -429,6 +429,26 @@ pub fn is_ready() -> bool {
     BOOT.is_ready()
 }
 
+/// k2-ptyd S5 (no refused window, PRD P45/P47): how long a real route
+/// that arrives before ready waits for ready instead of answering the
+/// migrating 503. A restart that keeps agents boots in a few seconds (B1
+/// is bounded to 10 s), and the main listener ptyd held across it queues
+/// the agents' `k2` calls meanwhile, so they complete instead of failing.
+/// A long first-boot migration still answers 503 after this.
+pub const READY_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Wait (async, polling) up to `within` for [`set_ready`]. True when ready.
+pub async fn wait_ready(within: std::time::Duration) -> bool {
+    let until = tokio::time::Instant::now() + within;
+    while !BOOT.is_ready() {
+        if BOOT.phase.load(Ordering::SeqCst) == ERROR || tokio::time::Instant::now() >= until {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    true
+}
+
 /// Lowercase phase string for the `/boot-status` JSON. Unknown future
 /// values never appear here, but clients should treat any phase other
 /// than `ready` as "not ready" (forward-compatible).

@@ -277,7 +277,7 @@ fn doc_round_trips_through_log_and_compaction() {
     let rebuilt = Doc::from_store(S, &s.load(id).unwrap()).unwrap();
     assert_eq!(rebuilt.text("source").unwrap(), doc.text("source").unwrap());
     // compact, keep logging, rebuild from snapshot + tail
-    s.compact(id, upto, &doc.encode_state()).unwrap();
+    s.compact(id, upto, &doc.encode_state().unwrap()).unwrap();
     log(
         &mut doc,
         "agent:a",
@@ -486,7 +486,7 @@ fn on_behalf_entries_get_a_pending_approval_in_the_same_append() {
         (ApprovalState::Pending, None, None)
     );
     // compaction drops the log entry but not the approval
-    s.compact(id, 2, &doc.encode_state()).unwrap();
+    s.compact(id, 2, &doc.encode_state().unwrap()).unwrap();
     assert!(s.load(id).unwrap().updates.is_empty());
     let done = p.settled(ApprovalState::Declined, "rosson", 77);
     s.set_approval(id, 2, &done).unwrap();

@@ -16,7 +16,6 @@ untrusted-wire = []
 [dependencies]
 # The engine is private to this crate. Pinned exactly: its encoding is part of the stored format.
 yrs = "=0.28.0"
-similar = "2.7"
 thiserror = "2"
 # Same major as the host already uses, so vendoring adds no second copy.
 redb = "2"

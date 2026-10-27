@@ -121,6 +121,8 @@ pub enum Action {
     Approve,
     /// [`crate::session::Session::approval`] / [`crate::session::Session::approvals`].
     ReadApproval,
+    /// [`crate::session::Session::flush`].
+    Flush,
 }
 
 /// Why a participant left.
@@ -166,6 +168,20 @@ pub enum AuditEvent {
     /// A store write failed mid-edit. The session reloaded from the store; carets, viewing
     /// ranges and undo history were reset.
     Recovered { key: DocKey, error: String },
+    /// The file was edited outside the kit; the edit was merged in as change `seq` (by
+    /// [`crate::session::EXTERNAL_PID`]).
+    ExternalEdit { key: DocKey, seq: crate::store::Seq },
+    /// The file is gone (deleted, replaced by a folder...). Write-back stops; the doc is
+    /// kept. `unflushed`: it had changes the file never got. Tell participants.
+    FileMissing { key: DocKey, unflushed: bool },
+    /// The file can't be a live doc any more (`code` as in
+    /// [`crate::session::Declined`]). Write-back stops and edits are refused. Tell
+    /// participants.
+    FileDeclined { key: DocKey, code: &'static str },
+    /// The file is back (after missing or declined).
+    FileRestored { key: DocKey },
+    /// Reading or writing the file failed (write-back retries).
+    DiskError { key: DocKey, error: String },
     /// The person `pid` settled the approval of on-behalf change `seq`.
     Approval {
         key: DocKey,

@@ -2,6 +2,8 @@
 //! against an older version and for per-participant undo. Engine-independent.
 
 pub mod diff;
+pub mod lines;
 pub mod merge;
+pub(crate) mod myers;
 
 pub use diff::{Hunk, HunkError};

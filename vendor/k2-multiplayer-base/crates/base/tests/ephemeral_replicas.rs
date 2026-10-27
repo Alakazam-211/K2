@@ -73,7 +73,7 @@ fn agent_edits_keep_no_replica() {
     let session_heap = live() - before;
 
     // The same content, reloaded: what the doc alone costs.
-    let state = session.encode_state();
+    let state = session.encode_state().unwrap();
     let b2 = live();
     let reloaded = Doc::load(S, &state).unwrap();
     let reloaded_heap = live() - b2;

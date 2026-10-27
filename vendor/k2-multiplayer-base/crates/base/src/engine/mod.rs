@@ -26,7 +26,8 @@ pub(crate) trait EngineDoc: Sized + Send {
     fn load(schema: &Schema, state: &[u8]) -> Result<Self, DocError>;
     fn text(&self, root: &str) -> String;
     fn state_vector(&self) -> Vec<u8>;
-    fn encode_state(&self) -> Vec<u8>;
+    /// Fails (never panics) on a poisoned doc: see [`crate::doc::DocError::Pending`].
+    fn encode_state(&self) -> Result<Vec<u8>, DocError>;
     fn encode_diff(&self, remote_sv: &[u8]) -> Result<Vec<u8>, DocError>;
     fn check_update(&self, update: &[u8], allowed: ClientId) -> Result<UpdateInfo, DocError>;
     fn apply_trusted(&mut self, update: &[u8]) -> Result<(), DocError>;

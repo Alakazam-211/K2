@@ -9,12 +9,20 @@
 //! Granularity is the character (via [`diff::hunks`]): a writer changing one word and
 //! someone typing elsewhere in the same line both survive.
 //!
-//! Overlap rules, on half-open byte ranges of `base`:
-//! - two non-empty ranges that intersect conflict;
-//! - two insertions at the same point conflict, unless they insert the same text;
-//! - an insertion strictly inside the other side's range conflicts;
-//! - touching at a boundary does not conflict: the insertion lands on that side of it;
-//! - an identical change on both sides is taken once.
+//! Overlap rules (undo spec O1–O5), on half-open byte ranges of `base`:
+//! - O1: two non-empty ranges that intersect conflict;
+//! - O2: an insertion strictly inside the other side's range conflicts;
+//! - O3: touching at a boundary does not conflict: the insertion lands on that side of it;
+//! - O4: an identical change on both sides is taken once;
+//! - O5: two different insertions at the same point conflict, except at the end of the
+//!   text, where both land, theirs first, then ours (two agents appending to a log).
+//!
+//! O5 makes the merge asymmetric in one place: with both sides appending, swapping ours
+//! and theirs swaps the order of the two appends. Everything else is symmetric.
+//!
+//! "Identical" is hunk equality, which is sound because [`diff::hunks`] is a pure function
+//! (counted work bounds, no clock) and canonical (touching hunks are coalesced): the same
+//! change from `base` gives the same hunks on both sides.
 
 use std::ops::Range;
 
@@ -46,7 +54,15 @@ pub enum Merge {
     Conflicts(Vec<Conflict>),
 }
 
+/// Merge whole texts: the end of `base` is the end of the text (O5 applies there).
 pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
+    merge3_window(base, ours, theirs, true)
+}
+
+/// Merge a window of a longer text (undo merges one region of the doc). `at_end` says
+/// whether the window ends where the whole text ends: only then do same-point insertions at
+/// the window's end both land (O5); elsewhere they conflict as anywhere else.
+pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merge {
     let a = diff::hunks(base, ours);
     let b = diff::hunks(base, theirs);
 
@@ -61,9 +77,11 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
         let mut j = j0;
         while j < b.len() && b[j].start <= x.end {
             let y = &b[j];
+            let eof_appends =
+                at_end && x.is_insertion() && y.is_insertion() && x.start == base.len();
             if x == y {
                 keep[i] = false;
-            } else if overlaps(x, y) {
+            } else if !eof_appends && overlaps(x, y) {
                 clash.push((i, j));
             }
             j += 1;
@@ -79,7 +97,8 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
     let mut j = 0;
     for (i, x) in a.iter().enumerate() {
         // Every theirs-hunk ending at or before our start shifts us. A theirs-insertion at
-        // our start therefore lands before our change; one at our end lands after it.
+        // our start therefore lands before our change; one at our end lands after it. This
+        // also puts theirs first for two appends at the end of the text (O5).
         while j < b.len() && b[j].end <= x.start {
             shift += b[j].insert.len() as isize - (b[j].end - b[j].start) as isize;
             j += 1;
@@ -106,7 +125,8 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
 
 fn overlaps(x: &Hunk, y: &Hunk) -> bool {
     match (x.is_insertion(), y.is_insertion()) {
-        (true, true) => x.start == y.start, // same point, different text (identical handled by caller)
+        // same point, different text (identical, and appends at the end, handled by caller)
+        (true, true) => x.start == y.start,
         (true, false) => y.start < x.start && x.start < y.end,
         (false, true) => x.start < y.start && y.start < x.end,
         (false, false) => x.start < y.end && y.start < x.end,
@@ -229,7 +249,46 @@ mod tests {
     #[test]
     fn same_point_insertions_conflict_unless_identical() {
         assert!(matches!(merge3("ab", "aXb", "aYb"), Merge::Conflicts(_)));
+        assert!(matches!(merge3("ab", "Xab", "Yab"), Merge::Conflicts(_)));
         assert_eq!(clean("ab", "aXb", "aXb"), "aXb");
+        // at the end of the text the two land instead (O5)
+        assert_eq!(clean("ab", "abX", "abY"), "abYX");
+        // ... but not at the end of a window that isn't the end of the text
+        assert!(matches!(
+            merge3_window("ab", "abX", "abY", false),
+            Merge::Conflicts(_)
+        ));
+    }
+
+    #[test]
+    fn eof_appends_both_land() {
+        // two agents append to a log from the same base: theirs (already live) first
+        let base = "# Log\n- one\n";
+        assert_eq!(
+            clean(base, "# Log\n- one\n- ours\n", "# Log\n- one\n- theirs\n"),
+            "# Log\n- one\n- theirs\n- ours\n"
+        );
+        // an append repeating the last line is still an append (the diff trims the prefix first)
+        assert_eq!(
+            clean(base, "# Log\n- one\n- one\n", "# Log\n- one\n- two\n"),
+            "# Log\n- one\n- two\n- one\n"
+        );
+        // empty base, and an identical append taken once (O4 before O5)
+        assert_eq!(clean("", "b\n", "a\n"), "a\nb\n");
+        assert_eq!(
+            clean(base, "# Log\n- one\nx\n", "# Log\n- one\nx\n"),
+            "# Log\n- one\nx\n"
+        );
+        // appends land with other, disjoint edits on both sides
+        assert_eq!(
+            clean(base, "# LOG\n- one\n- ours\n", "# Log\n- ONE\n- theirs\n"),
+            "# LOG\n- ONE\n- theirs\n- ours\n"
+        );
+        // a replace ending at the end still conflicts with a different one (O1)
+        assert!(matches!(
+            merge3(base, "# Log\n- uno\n", "# Log\n- eins\n"),
+            Merge::Conflicts(_)
+        ));
     }
 
     #[test]
@@ -247,12 +306,46 @@ mod tests {
         assert_eq!(clean(after, before, live), "Sam\nx\ny\n");
     }
 
+    fn assert_identities(base: &str, other: &str) {
+        assert_eq!(clean(base, base, other), other, "merge3(base, base, other)");
+        assert_eq!(clean(base, other, base), other, "merge3(base, other, base)");
+        assert_eq!(
+            clean(base, other, other),
+            other,
+            "merge3(base, other, other)"
+        );
+    }
+
+    #[test]
+    fn identities_regression_emoji_lines() {
+        assert_identities(
+            "日日ab\nab\n日ab\n日ab\n日🎉ab\nbab\n日ab\nab\nab\naab\nab\n日ab\n",
+            "🎉🎉ab\nab\n\n🎉日日ab\n🎉ab\nab\n🎉\n日ab\naab\n🎉日日",
+        );
+    }
+
+    #[test]
+    fn identities_regression_ab_lines() {
+        assert_identities(
+            "ab\nab\nba\nab\nab\nab\nab\n\nab\na🎉ab\nab\nab\nbab\n日\n日ab\n",
+            "日ab\n日\n🎉ab\nab\n日🎉aab\n\nab\n🎉b\na",
+        );
+    }
+
+    /// `PROPTEST_CASES` overrides the default count (`with_cases` alone would ignore it).
+    fn cases(default: u32) -> u32 {
+        std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
     fn text() -> impl Strategy<Value = String> {
         proptest::string::string_regex("([ab日🎉\n]|ab\n){0,24}").unwrap()
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(3000))]
+        #![proptest_config(ProptestConfig::with_cases(cases(3000)))]
         #[test]
         fn identities(base in text(), other in text()) {
             // nothing changed on our side -> theirs
@@ -272,10 +365,35 @@ mod tests {
             prop_assert_eq!(clean(&base, &ours, &theirs), format!("{l2}|{mid}|{r2}"));
         }
 
+        /// Symmetric up to O5: when both sides append different text at the end, swapping
+        /// the sides swaps the two appends; everything before them is the same.
         #[test]
-        fn clean_merges_are_symmetric(base in text(), o in text(), t in text()) {
+        fn clean_merges_are_symmetric_up_to_eof_order(base in text(), o in text(), t in text()) {
             if let (Merge::Clean(x), Merge::Clean(y)) = (merge3(&base, &o, &t), merge3(&base, &t, &o)) {
-                prop_assert_eq!(x.text, y.text);
+                let eof = |new: &str| {
+                    diff::hunks(&base, new)
+                        .pop()
+                        .filter(|h| h.is_insertion() && h.start == base.len())
+                        .map(|h| h.insert)
+                };
+                match (eof(&o), eof(&t)) {
+                    (Some(eo), Some(et)) if eo != et => {
+                        let tail = eo.len() + et.len();
+                        prop_assert!(x.text.ends_with(&format!("{et}{eo}")), "{:?}", x.text);
+                        prop_assert!(y.text.ends_with(&format!("{eo}{et}")), "{:?}", y.text);
+                        prop_assert_eq!(&x.text[..x.text.len() - tail], &y.text[..y.text.len() - tail]);
+                    }
+                    _ => prop_assert_eq!(x.text, y.text),
+                }
+            }
+        }
+
+        /// O5 only adds clean merges: whenever the merge without it (a window not at the
+        /// end) is clean, the whole-text merge is clean with the same text.
+        #[test]
+        fn eof_rule_only_adds_clean_merges(base in text(), o in text(), t in text()) {
+            if let Merge::Clean(w) = merge3_window(&base, &o, &t, false) {
+                prop_assert_eq!(clean(&base, &o, &t), w.text);
             }
         }
     }

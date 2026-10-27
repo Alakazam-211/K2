@@ -46,6 +46,10 @@ const CLIENTS: TableDefinition<(u64, u64), &str> = TableDefinition::new("clients
 const VERSIONS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("versions");
 const APPROVALS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("approvals");
 const HOST: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("host");
+/// Disk sync: `(doc, 0)` is the synced state, `(doc, 1)` a write-back in flight.
+const SYNC: TableDefinition<(u64, u8), &[u8]> = TableDefinition::new("sync");
+const SYNCED: u8 = 0;
+const PENDING: u8 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StoreError {
@@ -69,6 +73,41 @@ pub enum StoreError {
     KeyChange,
     #[error("no approval for change {1} of doc {0}")]
     NoApproval(DocId, Seq),
+    #[error("doc {0}'s log moved under the session: expected position {1}, found {2}")]
+    LogMoved(DocId, Seq, Seq),
+}
+
+/// Disk sync: the doc state the file on disk corresponds to. Its text is the file's text
+/// (decoded), so an outside edit can be diffed against it and merged into the live doc as a
+/// change made from that state. Kept per doc so a restart can still merge correctly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SyncState {
+    /// SHA-256 of the file's bytes.
+    pub hash: Vec<u8>,
+    /// Log position the file corresponds to.
+    pub seq: Seq,
+    /// Engine state whose text is the file's text.
+    pub state: Vec<u8>,
+}
+
+fn enc_sync(s: &SyncState) -> Vec<u8> {
+    let mut w = W::default();
+    w.u8(1).bytes(&s.hash).u64(s.seq).bytes(&s.state);
+    w.0
+}
+
+fn dec_sync(b: &[u8]) -> Result<SyncState, StoreError> {
+    let mut r = R::new(b, "sync state");
+    if r.u8()? != 1 {
+        return Err(StoreError::Corrupt("sync state version"));
+    }
+    let s = SyncState {
+        hash: r.bytes()?,
+        seq: r.u64()?,
+        state: r.bytes()?,
+    };
+    r.end()?;
+    Ok(s)
 }
 
 macro_rules! db_err {
@@ -484,6 +523,7 @@ impl DocStore {
             w.open_table(VERSIONS)?;
             w.open_table(APPROVALS)?;
             w.open_table(HOST)?;
+            w.open_table(SYNC)?;
         }
         w.commit()?;
         Ok(Self { db })
@@ -550,6 +590,20 @@ impl DocStore {
         entry: Option<&LogEntry>,
         version: &Version,
     ) -> Result<(DocId, Option<Seq>, VersionId), StoreError> {
+        self.create_imported_synced(meta, client, owner, entry, version, None)
+    }
+
+    /// [`DocStore::create_imported`], also recording the disk-sync state (its `seq` is set
+    /// to the import's position) in the same transaction.
+    pub(crate) fn create_imported_synced(
+        &self,
+        meta: &DocMeta,
+        client: ClientId,
+        owner: &str,
+        entry: Option<&LogEntry>,
+        version: &Version,
+        sync: Option<&SyncState>,
+    ) -> Result<(DocId, Option<Seq>, VersionId), StoreError> {
         let w = self.db.begin_write()?;
         let out = {
             let mut paths = w.open_table(PATHS)?;
@@ -574,6 +628,14 @@ impl DocStore {
             v.seq = seq.unwrap_or(0);
             w.open_table(VERSIONS)?
                 .insert((id, 1), enc_version(&v).as_slice())?;
+            if let Some(sy) = sync {
+                let sy = SyncState {
+                    seq: v.seq,
+                    ..sy.clone()
+                };
+                w.open_table(SYNC)?
+                    .insert((id, SYNCED), enc_sync(&sy).as_slice())?;
+            }
             (id, seq, 1)
         };
         w.commit()?;
@@ -812,6 +874,133 @@ impl DocStore {
 }
 
 impl DocStore {
+    // ----- disk sync (crate-private: sessions keep these consistent) -----
+
+    /// The synced state, and the write-back in flight if a crash interrupted one.
+    pub(crate) fn sync_states(
+        &self,
+        id: DocId,
+    ) -> Result<(Option<SyncState>, Option<SyncState>), StoreError> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(SYNC)?;
+        let get = |slot| -> Result<Option<SyncState>, StoreError> {
+            t.get((id, slot))?.map(|v| dec_sync(v.value())).transpose()
+        };
+        Ok((get(SYNCED)?, get(PENDING)?))
+    }
+
+    /// One transaction for a change that came from disk (or only moves the sync point):
+    /// append `entries` (their first position must be `expect_first`, so the records below
+    /// can name it), store `versions`, replace the doc's metadata, set the synced state and
+    /// clear any write-back in flight.
+    pub(crate) fn commit_disk(
+        &self,
+        id: DocId,
+        expect_first: Seq,
+        entries: &[LogEntry],
+        versions: &[Version],
+        meta: &DocMeta,
+        synced: &SyncState,
+    ) -> Result<Vec<Seq>, StoreError> {
+        let w = self.db.begin_write()?;
+        let seqs = self.append_in(&w, id, entries)?;
+        if let Some(&first) = seqs.first() {
+            if first != expect_first {
+                return Err(StoreError::LogMoved(id, expect_first, first));
+            }
+        }
+        {
+            let mut docs = w.open_table(DOCS)?;
+            let old = dec_meta(docs.get(id)?.ok_or(StoreError::NoDoc(id))?.value())?;
+            if old.key != meta.key {
+                return Err(StoreError::KeyChange);
+            }
+            docs.insert(id, enc_meta(meta).as_slice())?;
+        }
+        {
+            let mut t = w.open_table(VERSIONS)?;
+            let mut last = t
+                .range((id, 0)..=(id, u64::MAX))?
+                .next_back()
+                .transpose()?
+                .map(|(k, _)| k.value().1)
+                .unwrap_or(0);
+            for v in versions {
+                last += 1;
+                t.insert((id, last), enc_version(v).as_slice())?;
+            }
+        }
+        {
+            let mut t = w.open_table(SYNC)?;
+            t.insert((id, SYNCED), enc_sync(synced).as_slice())?;
+            t.remove((id, PENDING))?;
+        }
+        w.commit()?;
+        Ok(seqs)
+    }
+
+    /// Record a write-back about to happen (before the file is renamed into place), so a
+    /// crash right after the rename can still tell the file is the kit's own write.
+    pub(crate) fn set_pending_sync(&self, id: DocId, s: &SyncState) -> Result<(), StoreError> {
+        let w = self.db.begin_write()?;
+        w.open_table(SYNC)?
+            .insert((id, PENDING), enc_sync(s).as_slice())?;
+        w.commit()?;
+        Ok(())
+    }
+
+    /// The write-back in flight landed: it becomes the synced state, and `meta` (with the
+    /// new synced hash and position) is stored, in one transaction.
+    pub(crate) fn promote_pending_sync(&self, id: DocId, meta: &DocMeta) -> Result<(), StoreError> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(SYNC)?;
+            let p = t
+                .remove((id, PENDING))?
+                .ok_or(StoreError::Corrupt("no write-back in flight"))?
+                .value()
+                .to_vec();
+            t.insert((id, SYNCED), p.as_slice())?;
+            let mut docs = w.open_table(DOCS)?;
+            let old = dec_meta(docs.get(id)?.ok_or(StoreError::NoDoc(id))?.value())?;
+            if old.key != meta.key {
+                return Err(StoreError::KeyChange);
+            }
+            docs.insert(id, enc_meta(meta).as_slice())?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Forget a write-back in flight that didn't land.
+    pub(crate) fn clear_pending_sync(&self, id: DocId) -> Result<(), StoreError> {
+        let w = self.db.begin_write()?;
+        w.open_table(SYNC)?.remove((id, PENDING))?;
+        w.commit()?;
+        Ok(())
+    }
+
+    /// The client ID owned by `owner` in this doc, if any (the lowest, if several).
+    pub fn client_owned_by(&self, id: DocId, owner: &str) -> Result<Option<ClientId>, StoreError> {
+        let r = self.db.begin_read()?;
+        for kv in r.open_table(CLIENTS)?.range((id, 0)..=(id, u64::MAX))? {
+            let (k, v) = kv?;
+            if v.value() == owner {
+                return Ok(Some(k.value().1));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The newest version of a doc.
+    pub fn last_version(&self, id: DocId) -> Result<Option<(VersionId, Version)>, StoreError> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(VERSIONS)?;
+        let last = t.range((id, 0)..=(id, u64::MAX))?.next_back().transpose()?;
+        last.map(|(k, v)| Ok((k.value().1, dec_version(v.value())?)))
+            .transpose()
+    }
+
     // ----- approvals (on-behalf changes) -----
 
     /// The approval record of change `seq`, if it was made on someone's behalf.

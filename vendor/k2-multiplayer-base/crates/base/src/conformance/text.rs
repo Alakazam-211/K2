@@ -7,7 +7,9 @@
 //! - `text.no_interleave_backward`: the same when typing backward (each char inserted
 //!   before the previous one).
 //! - `text.no_interleave_backward_multi`: backward typing by three writers who partly see
-//!   each other's keystrokes. YATA (Yrs/Yjs) interleaves here; Fugue/FugueMax doesn't.
+//!   each other's keystrokes. Some interleaving here is **unavoidable for every engine**
+//!   (after the first sync, writer 1 types `e` before `c`, so every order has e < c < f).
+//!   The rule asserts convergence and the order the reference engines agree on.
 //! - `text.keep_concurrent_insert`: text inserted inside a range someone else deleted
 //!   concurrently survives (no lost typing).
 //! - `text.delete_once`: two concurrent deletes of one range delete it once, nothing more.
@@ -162,10 +164,14 @@ fn no_interleave_backward_three_writers_with_partial_syncs() {
         }
     }
     let t = n.sync_all();
-    let ok = ["abc", "def", "xyz"].iter().all(|r| contiguous(&t, r));
+    // Cross-checked 2026-10-27 on Yrs 0.28.0, Yjs 13.6.33 and 14.0.0-16, Diamond Types
+    // 1.0.0 (FugueMax) and Loro 1.17.1: all give this order, identically at every step.
+    // Contiguous `abc`/`def`/`xyz` is impossible on this script for any engine meeting the
+    // strong list spec. The order depends on the ID tie-break (clients 101/102/103 here).
+    // The native engine's Quint model must reproduce it (E-TEXT-1).
     assert_eq!(
-        ok,
-        !deviates("text.no_interleave_backward_multi"),
-        "got {t:?}"
+        t, "[abdecfxyz]",
+        "three-writer backward script: unexpected order"
     );
+    assert!(!deviates("text.no_interleave_backward_multi"));
 }

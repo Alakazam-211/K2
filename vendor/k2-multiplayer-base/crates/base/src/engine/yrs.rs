@@ -24,6 +24,11 @@ use crate::text::diff::Hunk;
 pub(crate) struct YrsDoc {
     doc: Doc,
     texts: HashMap<&'static str, TextRef>,
+    /// An apply left the doc in a state that can't be trusted: pending updates (yrs 0.28
+    /// panics encoding those, transaction.rs:408, an unwrap on a merge error), or a failed or
+    /// panicked apply that may have half-integrated. Nothing is encoded or edited from a
+    /// poisoned doc; its owner reloads it from the store.
+    poisoned: bool,
 }
 
 fn new_doc(client: u64) -> Doc {
@@ -80,17 +85,19 @@ fn state_vector_well_formed(b: &[u8]) -> bool {
 }
 
 /// Shape check of a client's v1 update before decoding. Keeps work on hostile input bounded
-/// by its size: a client's own update carries at most one client, and that client's block
-/// count can't exceed the bytes left.
+/// by its size (no reservation bombs): the client count can't exceed the bytes left divided
+/// by 3 (each client section is at least its block count, client ID and clock), and the
+/// first client's block count can't exceed the bytes left. More than one client is allowed
+/// here; [`EngineDoc::check_update`] decides what other clients' blocks may be.
 fn client_update_well_formed(b: &[u8]) -> bool {
     let mut at = 0;
     let Some(clients) = read_varuint(b, &mut at) else {
         return false;
     };
-    if clients > 1 {
+    if clients > ((b.len() - at) / 3) as u64 {
         return false;
     }
-    if clients == 1 {
+    if clients >= 1 {
         let Some(blocks) = read_varuint(b, &mut at) else {
             return false;
         };
@@ -127,13 +134,36 @@ impl YrsDoc {
         let s = txn.store();
         s.pending_update().is_some() || s.pending_ds().is_some()
     }
+
+    /// Refuse to read engine state out of a poisoned (or pending) doc.
+    fn usable(&self) -> Result<(), DocError> {
+        if self.poisoned || self.has_pending() {
+            Err(DocError::Pending)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The full state, v2, under `catch_unwind` even when the doc looks usable.
+    fn encode_v2(&self) -> Result<Vec<u8>, DocError> {
+        guarded(|| {
+            Ok(self
+                .doc
+                .transact()
+                .encode_state_as_update_v2(&StateVector::default()))
+        })
+    }
 }
 
 impl EngineDoc for YrsDoc {
     fn new(schema: &Schema) -> Self {
         let doc = new_doc(SESSION_CLIENT);
         let texts = roots(&doc, schema);
-        Self { doc, texts }
+        Self {
+            doc,
+            texts,
+            poisoned: false,
+        }
     }
 
     fn load(schema: &Schema, state: &[u8]) -> Result<Self, DocError> {
@@ -145,6 +175,11 @@ impl EngineDoc for YrsDoc {
                 .apply_update(u)
                 .map_err(|err| DocError::Load(err.to_string()))
         })?;
+        if e.has_pending() {
+            return Err(DocError::Load(
+                "stored state has unresolved dependencies".into(),
+            ));
+        }
         Ok(e)
     }
 
@@ -156,16 +191,16 @@ impl EngineDoc for YrsDoc {
         self.doc.transact().state_vector().encode_v1()
     }
 
-    fn encode_state(&self) -> Vec<u8> {
-        self.doc
-            .transact()
-            .encode_state_as_update_v2(&StateVector::default())
+    fn encode_state(&self) -> Result<Vec<u8>, DocError> {
+        self.usable()?;
+        self.encode_v2()
     }
 
     fn encode_diff(&self, remote_sv: &[u8]) -> Result<Vec<u8>, DocError> {
         if !state_vector_well_formed(remote_sv) {
             return Err(DocError::Decode("malformed state vector".into()));
         }
+        self.usable()?;
         guarded(|| {
             let sv =
                 StateVector::decode_v1(remote_sv).map_err(|e| DocError::Decode(e.to_string()))?;
@@ -173,25 +208,54 @@ impl EngineDoc for YrsDoc {
         })
     }
 
+    /// The client-ID rule for an update from the connection that owns client `allowed`:
+    ///
+    /// - **New content** (blocks past what this doc has) may come only from `allowed`.
+    /// - Blocks from **other clients** are accepted only when **already known**: for each
+    ///   such client, the update's upper clock is at most this doc's state for it (every
+    ///   block lies within what the doc has). Real Yjs clients send these: a client that
+    ///   went offline holding another client's update as pending includes it in its resync.
+    ///   Applying them is a no-op (blocks are identified by client and clock, and yrs skips
+    ///   what it already has), so even forged content under a known ID changes nothing.
+    /// - A block from another client one clock past this doc's state is `ForeignClient`.
+    /// - The update must not skip ahead of the doc for any client (`MissingDeps`).
+    ///
+    /// `inserts_from` lists only clients with genuinely new insertions (at most `allowed`).
     fn check_update(&self, update: &[u8], allowed: ClientId) -> Result<UpdateInfo, DocError> {
         if !client_update_well_formed(update) {
-            return Err(DocError::Decode(
-                "malformed update, or more than one client in a client update".into(),
-            ));
+            return Err(DocError::Decode("malformed update".into()));
         }
         guarded(|| {
             let u = Update::decode_v1(update).map_err(|e| DocError::Decode(e.to_string()))?;
-            let mut inserts: Vec<ClientId> =
-                u.insertions(true).client_ids().map(|c| c.get()).collect();
-            // Upper state vector too: catches content blocks the insertion set might not list.
-            inserts.extend(u.state_vector().iter().map(|(c, _)| c.get()));
-            inserts.sort_unstable();
-            inserts.dedup();
-            if let Some(&found) = inserts.iter().find(|&&c| c != allowed) {
-                return Err(DocError::ForeignClient { allowed, found });
+            // Each client's upper clock over every content block (items and GC; skips carry
+            // nothing). Not `Update::state_vector`: that counts only runs starting at clock
+            // 0, so it says nothing about a held block from the middle of a history.
+            let mut upper: HashMap<ClientId, u32> = HashMap::new();
+            for (c, ranges) in u.insertions(true).iter() {
+                let end = ranges.iter().map(|r| r.end).max().unwrap_or(0);
+                let e = upper.entry(c.get()).or_insert(0);
+                *e = (*e).max(end);
             }
-            // The update must continue this client's history, not skip ahead.
+            // The upper state vector too, in case it names a client the set doesn't.
+            for (c, clock) in u.state_vector().iter() {
+                let e = upper.entry(c.get()).or_insert(0);
+                *e = (*e).max(*clock);
+            }
+            let mut clients: Vec<(ClientId, u32)> = upper.into_iter().collect();
+            clients.sort_unstable();
             let have = self.doc.transact().state_vector();
+            let mut inserts = Vec::new();
+            for &(c, up) in &clients {
+                // a client listed with no content range is not "known"
+                let known = up != 0 && up <= have.get(&ClientID::new(c));
+                if c != allowed && !known {
+                    return Err(DocError::ForeignClient { allowed, found: c });
+                }
+                if !known {
+                    inserts.push(c);
+                }
+            }
+            // The update must continue each client's history, not skip ahead.
             for (client, from) in u.state_vector_lower().iter() {
                 let h = have.get(client);
                 if *from > h {
@@ -209,21 +273,34 @@ impl EngineDoc for YrsDoc {
         })
     }
 
+    /// Apply a kit-made update. A decode error changes nothing. Anything after decoding
+    /// that goes wrong (an apply error, a panic, or unresolved dependencies left pending)
+    /// **poisons** the doc: from then on it refuses to encode or edit (`Pending`), and its
+    /// owner must reload it from the store.
     fn apply_trusted(&mut self, update: &[u8]) -> Result<(), DocError> {
-        guarded(|| {
-            let u = Update::decode_v1(update).map_err(|e| DocError::Decode(e.to_string()))?;
+        if self.poisoned {
+            return Err(DocError::Pending);
+        }
+        let u = guarded(|| Update::decode_v1(update).map_err(|e| DocError::Decode(e.to_string())))?;
+        let applied = guarded(|| {
             self.doc
                 .transact_mut()
                 .apply_update(u)
                 .map_err(|e| DocError::Apply(e.to_string()))
-        })?;
+        });
+        if let Err(e) = applied {
+            self.poisoned = true;
+            return Err(e);
+        }
         if self.has_pending() {
+            self.poisoned = true;
             return Err(DocError::Pending);
         }
         Ok(())
     }
 
     fn edit_as(&mut self, client: ClientId, edits: &[Edit]) -> Result<Vec<u8>, DocError> {
+        self.usable()?;
         // Positions are computed against the session's current text, before the replica exists.
         let plans: Vec<TextPlan> = edits
             .iter()
@@ -244,10 +321,12 @@ impl EngineDoc for YrsDoc {
                 .keys()
                 .map(|n| (*n, replica.get_or_insert_text(*n)))
                 .collect();
-            let full = self
-                .doc
-                .transact()
-                .encode_state_as_update_v1(&StateVector::default());
+            let full = guarded(|| {
+                Ok(self
+                    .doc
+                    .transact()
+                    .encode_state_as_update_v1(&StateVector::default()))
+            })?;
             guarded(|| {
                 let u = Update::decode_v1(&full).map_err(|e| DocError::Apply(e.to_string()))?;
                 replica
@@ -388,6 +467,85 @@ mod tests {
         ));
     }
 
+    /// An update from yrs client `c` (a transaction inserting `text` at 0).
+    fn typed(c: &(yrs::Doc, TextRef), text: &str) -> Vec<u8> {
+        let mut t = c.0.transact_mut();
+        c.1.insert(&mut t, 0, text);
+        t.encode_update_v1()
+    }
+
+    fn apply_raw(c: &(yrs::Doc, TextRef), u: &[u8]) {
+        c.0.transact_mut()
+            .apply_update(Update::decode_v1(u).unwrap())
+            .unwrap();
+    }
+
+    /// What a reconnecting client sends: everything it has that the session lacks.
+    fn resync(c: &(yrs::Doc, TextRef), session: &Doc) -> Vec<u8> {
+        let sv = StateVector::decode_v1(&session.state_vector()).unwrap();
+        c.0.transact().encode_state_as_update_v1(&sv)
+    }
+
+    #[test]
+    fn resyncs_may_carry_known_foreign_blocks_only() {
+        let mut e = Doc::new(S).unwrap();
+        e.replace_text_as(7, "source", "base\n").unwrap();
+        let a = client_doc(100, &e);
+        let b = client_doc(200, &e);
+        // b types twice; the session gets both, a gets only the second (the first was
+        // lost when a dropped), so a holds it as pending
+        let b1 = typed(&b, "b1 ");
+        let b2 = typed(&b, "b2 ");
+        e.apply_client_update(&b1, 200).unwrap();
+        e.apply_client_update(&b2, 200).unwrap();
+        apply_raw(&a, &b2);
+        assert!(a.0.transact().store().pending_update().is_some());
+        // a types offline, then resyncs: its own content plus b's held, known blocks
+        typed(&a, "a1 ");
+        let r = resync(&a, &e);
+        let before = e.text("source").unwrap();
+        let info = e.check_client_update(&r, 100).unwrap();
+        assert_eq!(info.inserts_from, vec![100], "only genuinely new content");
+        assert!(!info.delete_only);
+        e.apply_client_update(&r, 100).unwrap();
+        let after = e.text("source").unwrap();
+        assert_eq!(
+            after.len(),
+            before.len() + "a1 ".len(),
+            "nothing but a's content"
+        );
+        assert!(after.contains("a1 ") && after.contains("b1 ") && after.contains("b2 "));
+        assert_eq!(after.matches("b2 ").count(), 1);
+        // a resync carrying a foreign block one clock past the session's state is refused
+        let b3 = typed(&b, "b3 "); // never sent to the session
+        apply_raw(&a, &b3);
+        typed(&a, "a2 ");
+        let r = resync(&a, &e);
+        assert_eq!(
+            e.check_client_update(&r, 100),
+            Err(DocError::ForeignClient {
+                allowed: 100,
+                found: 200
+            })
+        );
+        // and forging as a known client past its state is refused as before
+        let f = client_doc(7, &e);
+        assert!(matches!(
+            e.check_client_update(&typed(&f, "forged "), 100),
+            Err(DocError::ForeignClient { found: 7, .. })
+        ));
+        // a resync of only known content inserts nothing
+        let c = client_doc(300, &e);
+        let r =
+            c.0.transact()
+                .encode_state_as_update_v1(&StateVector::default());
+        let info = e.check_client_update(&r, 300).unwrap();
+        assert!(info.inserts_from.is_empty() && info.delete_only);
+        let t = e.text("source").unwrap();
+        e.apply_client_update(&r, 300).unwrap();
+        assert_eq!(e.text("source").unwrap(), t, "known blocks are a no-op");
+    }
+
     #[test]
     fn garbage_never_panics_and_stays_cheap() {
         use rand::{rngs::SmallRng, Rng, SeedableRng};
@@ -413,9 +571,11 @@ mod tests {
             worst = worst.max(t.elapsed());
         }
         assert_eq!(e.text("source").unwrap(), "seed text\n");
-        // Bounded work on hostile input: nothing tiny may take long (debug-build allowance).
+        // Bounded work on hostile input. This catches the decode bombs (0.7-11 s per input
+        // before the shape checks), not the machine's speed: 500 ms leaves room for a debug
+        // build on a loaded box. The precise "rejected in O(1)" bound is in `shape_checks`.
         assert!(
-            worst < std::time::Duration::from_millis(50),
+            worst < std::time::Duration::from_millis(500),
             "slowest garbage input took {worst:?}"
         );
     }
@@ -432,6 +592,9 @@ mod tests {
         let sv = [255, 255, 255, 255, 15, 1, 1];
         assert!(!state_vector_well_formed(&sv));
         assert!(matches!(e.encode_diff(&sv), Err(DocError::Decode(_))));
+        // more clients than 3 bytes each could hold
+        assert!(!client_update_well_formed(&[3, 0, 0, 0, 0, 0, 0, 0]));
+        assert!(client_update_well_formed(&[2, 0, 0, 0, 0, 0, 0]));
         let upd = [255, 255, 255, 255, 15, 0, 1, 0, 0, 0];
         let t = std::time::Instant::now();
         assert!(matches!(
@@ -441,12 +604,76 @@ mod tests {
         assert!(t.elapsed() < std::time::Duration::from_millis(5));
     }
 
+    /// Two changes by client 77; the second depends on the first.
+    fn dependent_pair() -> (Vec<u8>, Vec<u8>) {
+        let mut a = Doc::new(S).unwrap();
+        let u1 = a.replace_text_as(77, "source", "one\n").unwrap().unwrap();
+        let u2 = a
+            .replace_text_as(77, "source", "one\ntwo\n")
+            .unwrap()
+            .unwrap();
+        (u1, u2)
+    }
+
+    #[test]
+    fn a_pending_update_poisons_the_doc_and_nothing_panics() {
+        let (_, u2) = dependent_pair();
+        let mut d = Doc::new(S).unwrap();
+        d.replace_text_as(9, "source", "x\n").unwrap();
+        assert_eq!(d.apply_trusted(&u2), Err(DocError::Pending));
+        // at the engine: yrs keeps the pending update, and the raw encode (what panicked in
+        // yrs 0.28, transaction.rs:408) is contained
+        let mut y = YrsDoc::new(&S);
+        assert_eq!(y.apply_trusted(&u2), Err(DocError::Pending));
+        assert!(y.has_pending() && y.poisoned);
+        let raw = y.encode_v2();
+        assert!(
+            matches!(raw, Err(DocError::Panic) | Ok(_)),
+            "never unwinds: {raw:?}"
+        );
+        assert_eq!(y.encode_state(), Err(DocError::Pending));
+        // and every way out refuses
+        assert_eq!(d.encode_state(), Err(DocError::Pending));
+        #[cfg(feature = "untrusted-wire")]
+        assert_eq!(
+            d.encode_diff(&StateVector::default().encode_v1()),
+            Err(DocError::Pending)
+        );
+        assert_eq!(
+            d.replace_text_as(9, "source", "y\n"),
+            Err(DocError::Pending)
+        );
+        assert_eq!(d.apply_trusted(&u2), Err(DocError::Pending));
+        // reading the text still works (it is what the doc shows)
+        assert_eq!(d.text("source").unwrap(), "x\n");
+    }
+
+    #[test]
+    fn a_decode_error_does_not_poison() {
+        let mut d = Doc::new(S).unwrap();
+        d.replace_text_as(9, "source", "x\n").unwrap();
+        assert!(matches!(
+            d.apply_trusted(&[1, 2, 3]),
+            Err(DocError::Decode(_))
+        ));
+        assert!(d.encode_state().is_ok());
+        let (u1, u2) = dependent_pair();
+        d.apply_trusted(&u1).unwrap();
+        d.apply_trusted(&u2).unwrap();
+        let t = d.text("source").unwrap();
+        assert!(
+            t.contains("one\ntwo\n") && t.contains("x\n") && t.len() == 10,
+            "{t:?}"
+        );
+        assert!(d.encode_state().is_ok());
+    }
+
     #[test]
     fn store_round_trip() {
         let mut e = Doc::new(S).unwrap();
         e.replace_text_as(3, "source", "a\nb\n").unwrap();
         e.replace_text_as(4, "source", "a\nB\nc\n").unwrap();
-        let l = Doc::load(S, &e.encode_state()).unwrap();
+        let l = Doc::load(S, &e.encode_state().unwrap()).unwrap();
         assert_eq!(l.text("source").unwrap(), "a\nB\nc\n");
         assert_eq!(l.state_vector(), e.state_vector());
     }

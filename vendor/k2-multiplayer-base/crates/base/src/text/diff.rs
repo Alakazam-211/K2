@@ -12,12 +12,18 @@
 //!    - otherwise a word diff. A char diff of "brown" -> "red" keeps the shared "r" and
 //!      splits the change in two, which merges badly ("rEDown").
 //!
-//! Diffs run under deadlines. When one runs out, the result is still a correct diff,
-//! just a coarser one.
+//! `hunks` is a pure function of its input: the three-way merge relies on two diffs of the
+//! same text being identical. So the diffs are bounded by counted work, never by a clock:
+//! one `Budget` per call, `BUDGET_BASE + BUDGET_PER_BYTE * (old.len() + new.len())` units
+//! (see `text/myers.rs`), shared by the line diff and every region's char and word diff,
+//! so the worst case is O(input) work. When it runs out the result is still a correct diff,
+//! just a coarser one, and the same one every time.
+//!
+//! Ties (several minimal diffs) are broken the same way every time: the common prefix is
+//! trimmed first, so a change inside a repeated run sits after the run's shared start; inside
+//! the middle, Myers' bisect decides. `tie_break_is_pinned` fixes the choice (undo spec D2).
 
-use std::time::{Duration, Instant};
-
-use similar::{Algorithm, ChangeTag, DiffOp, TextDiff};
+use super::myers::{self, Budget, Change};
 
 /// Replace `old[start..end]` (byte offsets, on char boundaries) with `insert`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,8 +49,6 @@ pub enum HunkError {
     Empty { index: usize },
 }
 
-const LINE_DEADLINE: Duration = Duration::from_millis(50);
-const WORD_DEADLINE: Duration = Duration::from_millis(20);
 /// Above this, a changed group of lines is replaced whole instead of word-diffed.
 const WORD_DIFF_MAX: usize = 64 * 1024;
 
@@ -57,10 +61,11 @@ pub fn hunks(old: &str, new: &str) -> Vec<Hunk> {
     let suf = common_suffix(&old[pre..], &new[pre..]);
     let (om, nm) = (&old[pre..old.len() - suf], &new[pre..new.len() - suf]);
     let mut out = Vec::new();
+    let mut budget = Budget::for_input(old.len() + new.len());
     if om.is_empty() || nm.is_empty() || (!om.contains('\n') && !nm.contains('\n')) {
-        region_hunks(om, nm, pre, &mut out);
+        region_hunks(om, nm, pre, &mut out, &mut budget);
     } else {
-        line_then_words(om, nm, pre, &mut out);
+        line_then_words(om, nm, pre, &mut out, &mut budget);
     }
     coalesce(out)
 }
@@ -132,55 +137,60 @@ fn floor_boundary(s: &str, mut i: usize) -> usize {
     i
 }
 
-fn line_then_words(om: &str, nm: &str, base: usize, out: &mut Vec<Hunk>) {
-    let diff = TextDiff::configure()
-        .algorithm(Algorithm::Myers)
-        .deadline(Instant::now() + LINE_DEADLINE)
-        .diff_lines(om, nm);
-    let ostart = offsets(diff.old_slices());
-    let nstart = offsets(diff.new_slices());
-    // Walk ops by their lengths with our own cursors: `similar` can report an Insert's
-    // old index out of sequence, but the lengths are always consistent.
-    let (mut oi, mut ni) = (0usize, 0usize);
-    let mut region: Option<(usize, usize)> = None; // (old line, new line) where the region starts
-    let flush = |r: (usize, usize), oi: usize, ni: usize, out: &mut Vec<Hunk>| {
-        let o = &om[ostart[r.0]..ostart[oi]];
-        let n = &nm[nstart[r.1]..nstart[ni]];
-        region_hunks(o, n, base + ostart[r.0], out);
-    };
-    for op in diff.ops() {
-        let (ol, nl) = (op.old_range().len(), op.new_range().len());
-        match *op {
-            DiffOp::Equal { .. } => {
-                if let Some(r) = region.take() {
-                    flush(r, oi, ni, out);
-                }
-            }
-            _ => {
-                region.get_or_insert((oi, ni));
-            }
-        }
-        oi += ol;
-        ni += nl;
-    }
-    if let Some(r) = region {
-        flush(r, oi, ni, out);
+fn line_then_words(om: &str, nm: &str, base: usize, out: &mut Vec<Hunk>, budget: &mut Budget) {
+    let (ol, nl) = (lines(om), lines(nm));
+    let (ostart, nstart) = (offsets(&ol), offsets(&nl));
+    for c in myers::diff(&ol, &nl, budget) {
+        let o = &om[ostart[c.old.start]..ostart[c.old.end]];
+        let n = &nm[nstart[c.new.start]..nstart[c.new.end]];
+        region_hunks(o, n, base + ostart[c.old.start], out, budget);
     }
 }
 
-/// Byte offset of each slice start, plus the total at the end.
-fn offsets(slices: &[&str]) -> Vec<usize> {
-    let mut v = Vec::with_capacity(slices.len() + 1);
+/// Lines, each with its `\n`.
+pub(crate) fn lines(s: &str) -> Vec<&str> {
+    s.split_inclusive('\n').collect()
+}
+
+/// Characters.
+fn chars(s: &str) -> Vec<&str> {
+    s.char_indices()
+        .map(|(i, c)| &s[i..i + c.len_utf8()])
+        .collect()
+}
+
+/// Runs of whitespace and runs of everything else.
+fn words(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut last_ws = None;
+    for (i, c) in s.char_indices() {
+        let ws = c.is_whitespace();
+        if last_ws.is_some_and(|l| l != ws) {
+            out.push(&s[start..i]);
+            start = i;
+        }
+        last_ws = Some(ws);
+    }
+    if start < s.len() {
+        out.push(&s[start..]);
+    }
+    out
+}
+
+/// Byte offset of each token start, plus the total at the end.
+fn offsets(tokens: &[&str]) -> Vec<usize> {
+    let mut v = Vec::with_capacity(tokens.len() + 1);
     let mut at = 0;
-    for s in slices {
+    for t in tokens {
         v.push(at);
-        at += s.len();
+        at += t.len();
     }
     v.push(at);
     v
 }
 
-fn region_hunks(o: &str, n: &str, base: usize, out: &mut Vec<Hunk>) {
+fn region_hunks(o: &str, n: &str, base: usize, out: &mut Vec<Hunk>, budget: &mut Budget) {
     if o == n {
         return;
     }
@@ -188,79 +198,37 @@ fn region_hunks(o: &str, n: &str, base: usize, out: &mut Vec<Hunk>) {
     let pre = common_prefix(o, n);
     let suf = common_suffix(&o[pre..], &n[pre..]);
     let (o, n, base) = (&o[pre..o.len() - suf], &n[pre..n.len() - suf], base + pre);
-    if o.is_empty() || n.is_empty() || o.len() > WORD_DIFF_MAX || n.len() > WORD_DIFF_MAX {
+    let whole = |out: &mut Vec<Hunk>| {
         out.push(Hunk {
             start: base,
             end: base + o.len(),
             insert: n.to_owned(),
-        });
-        return;
-    }
-    let chars = TextDiff::configure()
-        .algorithm(Algorithm::Myers)
-        .deadline(Instant::now() + WORD_DEADLINE)
-        .diff_chars(o, n);
-    let mut tags = chars
-        .iter_all_changes()
-        .map(|c| c.tag())
-        .filter(|t| *t != ChangeTag::Equal);
-    let one_sided = match tags.next() {
-        None => true,
-        Some(first) => tags.all(|t| t == first),
+        })
     };
+    if o.is_empty() || n.is_empty() || o.len() > WORD_DIFF_MAX || n.len() > WORD_DIFF_MAX {
+        return whole(out);
+    }
+    let (oc, nc) = (chars(o), chars(n));
+    let changes = myers::diff(&oc, &nc, budget);
+    let one_sided =
+        changes.iter().all(|c| c.old.is_empty()) || changes.iter().all(|c| c.new.is_empty());
     let single_token = |s: &str| !s.contains(char::is_whitespace);
     if !one_sided && single_token(o) && single_token(n) {
-        out.push(Hunk {
-            start: base,
-            end: base + o.len(),
-            insert: n.to_owned(),
-        });
-        return;
+        return whole(out);
     }
-    let words;
-    let diff = if one_sided {
-        &chars
+    let (ot, nt, changes) = if one_sided {
+        (oc, nc, changes)
     } else {
-        words = TextDiff::configure()
-            .algorithm(Algorithm::Myers)
-            .deadline(Instant::now() + WORD_DEADLINE)
-            .diff_words(o, n);
-        &words
+        let (ow, nw) = (words(o), words(n));
+        let changes = myers::diff(&ow, &nw, budget);
+        (ow, nw, changes)
     };
-    let mut at = base;
-    let mut cur: Option<Hunk> = None;
-    for ch in diff.iter_all_changes() {
-        let v = ch.value();
-        match ch.tag() {
-            ChangeTag::Equal => {
-                if let Some(h) = cur.take() {
-                    out.push(h);
-                }
-                at += v.len();
-            }
-            ChangeTag::Delete => {
-                let h = cur.get_or_insert_with(|| Hunk {
-                    start: at,
-                    end: at,
-                    insert: String::new(),
-                });
-                h.end += v.len();
-                at += v.len();
-            }
-            ChangeTag::Insert => {
-                cur.get_or_insert_with(|| Hunk {
-                    start: at,
-                    end: at,
-                    insert: String::new(),
-                })
-                .insert
-                .push_str(v);
-            }
-        }
-    }
-    if let Some(h) = cur {
-        out.push(h);
-    }
+    let (ostart, nstart) = (offsets(&ot), offsets(&nt));
+    out.extend(changes.into_iter().map(|Change { old, new }| Hunk {
+        start: base + ostart[old.start],
+        end: base + ostart[old.end],
+        insert: n[nstart[new.start]..nstart[new.end]].to_owned(),
+    }));
 }
 
 /// Merge hunks that touch, so the result is canonical.
@@ -394,7 +362,62 @@ mod tests {
             .replace("line 777 ", "LINE 777 ")
             .replace("line 15000 lorem", "x");
         new.insert_str(0, "# head\n");
-        check(&old, &new);
+        let h = check(&old, &new);
+        // a big doc with three small edits stays three small hunks (the budget scales with input)
+        assert_eq!(h.len(), 3, "{h:?}");
+        assert!(h.iter().all(|x| x.end - x.start <= 32), "{h:?}");
+    }
+
+    /// No clock: a worst case for the line diff (every line moved) finishes on counted work
+    /// alone, and gives a correct diff that is the same on every call.
+    #[test]
+    fn pathological_input_is_bounded_correct_and_deterministic() {
+        let lines: Vec<String> = (0..30_000).map(|i| format!("{i} lorem\n")).collect();
+        let old = lines.concat();
+        let new: String = lines.iter().rev().map(String::as_str).collect();
+        let h = check(&old, &new);
+        assert_eq!(hunks(&old, &new), h);
+    }
+
+    /// Undo spec D2: where several minimal diffs exist, the choice is fixed. These cases pin
+    /// it; changing any of them is a spec change. The common prefix is trimmed first, so a
+    /// change inside a repeated run lands after the run's shared start (an appended copy of
+    /// the last line is an append at the end); inside the middle, Myers' bisect decides.
+    #[test]
+    fn tie_break_is_pinned() {
+        let h = |start, end, insert: &str| Hunk {
+            start,
+            end,
+            insert: insert.into(),
+        };
+        let cases: &[(&str, &str, Vec<Hunk>)] = &[
+            ("aa", "aaa", vec![h(2, 2, "a")]),
+            ("xaay", "xay", vec![h(2, 3, "")]),
+            ("ab\n", "ab\nab\n", vec![h(3, 3, "ab\n")]),
+            (
+                "p a a q\n",
+                "r a a a s\n",
+                vec![h(0, 1, "r"), h(6, 7, "a s")],
+            ),
+            (
+                "x\na\na\ny\n",
+                "z\na\na\na\nw\n",
+                vec![h(0, 1, "z\na"), h(6, 7, "w")],
+            ),
+            ("c a b\n", "a b c\n", vec![h(0, 2, ""), h(5, 5, " c")]),
+            ("1 2\n", "2 1\n", vec![h(0, 2, ""), h(3, 3, " 1")]),
+        ];
+        for (o, n, want) in cases {
+            assert_eq!(&check(o, n), want, "{o:?} -> {n:?}");
+        }
+    }
+
+    /// `PROPTEST_CASES` overrides the default count (`with_cases` alone would ignore it).
+    fn cases(default: u32) -> u32 {
+        std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
     }
 
     fn text() -> impl Strategy<Value = String> {
@@ -402,7 +425,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(2000))]
+        #![proptest_config(ProptestConfig::with_cases(cases(2000)))]
         #[test]
         fn hunks_round_trip(old in text(), new in text()) {
             let h = hunks(&old, &new);
@@ -419,6 +442,17 @@ mod tests {
             for h in hunks(&old, &new) {
                 prop_assert!(h.start >= p, "hunk {:?} starts inside the common prefix ({})", h, p);
                 prop_assert!(h.end <= old.len() - s, "hunk {:?} ends inside the common suffix ({})", h, s);
+            }
+        }
+
+        /// The merge compares hunks from two diffs of the same base, so `hunks` must be a pure
+        /// function (same input, same hunks) and canonical (no two hunks touch).
+        #[test]
+        fn hunks_are_deterministic_and_canonical(old in text(), new in text()) {
+            let h = hunks(&old, &new);
+            prop_assert_eq!(&hunks(&old, &new), &h);
+            for w in h.windows(2) {
+                prop_assert!(w[0].end < w[1].start, "touching hunks {:?}", w);
             }
         }
     }

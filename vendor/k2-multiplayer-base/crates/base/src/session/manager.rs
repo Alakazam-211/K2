@@ -1,15 +1,17 @@
 //! The pool of loaded sessions: open, find, rename, unload within a memory budget.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::config::Config;
+use super::disk::{self, DiskCheck, Probe, ReadFile};
 use super::error::{Result, SessionError};
 use super::host::Host;
-use super::live::Session;
-use super::pack::Pack;
+use super::live::{probe_error, Session};
+use super::pack::{Declined, Pack};
 use super::participant::ConnId;
-use crate::store::{DocKey, DocStore};
+use crate::store::{DocKey, DocStore, Seq};
 
 /// Returned by [`SessionManager::stats`] (for the host's doctor/status).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +23,22 @@ pub struct PoolStats {
     pub budget_bytes: u64,
     /// Sessions unloaded since the manager started (idle or over budget).
     pub unloaded_total: u64,
+}
+
+/// Returned by [`SessionManager::tick`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct TickReport {
+    /// Connections closed for being idle (as [`SessionManager::expire_idle`]).
+    pub left: Vec<(DocKey, ConnId, String)>,
+    /// Docs whose file was written back.
+    pub written: Vec<DocKey>,
+    /// Docs that merged an outside edit found by the stat backup, at that version.
+    pub ingested: Vec<(DocKey, Seq)>,
+    /// Sessions unloaded (as [`SessionManager::unload_idle`]).
+    pub unloaded: usize,
+    /// Per-doc failures (a disk error: write-back retries on the next tick).
+    pub errors: Vec<(DocKey, SessionError)>,
 }
 
 struct Pool {
@@ -111,6 +129,114 @@ impl SessionManager {
         Ok(s)
     }
 
+    /// Like [`SessionManager::open`], for a doc that lives in a file, which the session then
+    /// keeps in sync (see `docs/SESSIONS.md`, "Disk sync"). The host resolves and jails
+    /// `path`; the kit checks again that it is a regular file (not a folder or a device)
+    /// that resolves, symlinks included, inside `root`, and refuses it otherwise
+    /// ([`SessionError::BadPath`]).
+    ///
+    /// - A doc not stored yet is imported from the file (it must exist).
+    /// - A stored doc is loaded and reconciled: an edit made to the file while the doc
+    ///   wasn't loaded is merged in as an outside edit, and changes the file never got (a
+    ///   crash before write-back) are written soon. A file that is gone opens `Missing`.
+    /// - Opening and closing an untouched file never writes it.
+    pub fn open_file(
+        &self,
+        pack: Arc<dyn Pack>,
+        key: &DocKey,
+        path: &Path,
+        root: &Path,
+    ) -> Result<Arc<Session>> {
+        let root = std::fs::canonicalize(root)
+            .ok()
+            .filter(|r| r.is_dir())
+            .ok_or_else(|| {
+                SessionError::BadPath(format!("root {} is not a folder", root.display()))
+            })?;
+        let probed = disk::probe(path, &root)
+            .map_err(|e| SessionError::Disk(format!("{}: {e}", path.display())))?;
+        if matches!(probed, Probe::NotFile | Probe::Outside(_)) {
+            return Err(probe_error(path, &probed));
+        }
+        let s = {
+            let pool = self.pool()?;
+            let store = pool.store.clone().ok_or(SessionError::Released)?;
+            let loaded = pool.sessions.contains_key(key) || store.find(key)?.is_some();
+            drop(pool);
+            if loaded {
+                self.open(pack, key, None)?
+            } else {
+                let Probe::File { real, .. } = &probed else {
+                    return Err(SessionError::NotFound(key.clone()));
+                };
+                let bytes = match disk::read(real, self.config.disk_read_max_bytes) {
+                    Ok(ReadFile::Bytes(b, _)) => b,
+                    Ok(ReadFile::TooLarge(n)) => {
+                        return Err(SessionError::Declined(Declined {
+                            code: "too_large",
+                            message: format!(
+                                "file is {n} bytes; live editing reads up to {}",
+                                self.config.disk_read_max_bytes
+                            ),
+                        }))
+                    }
+                    Err(e) => return Err(SessionError::Disk(format!("{}: {e}", real.display()))),
+                };
+                self.open(pack, key, Some(&bytes))?
+            }
+        };
+        // outside the pool lock (file I/O); our handle keeps the session from unloading
+        s.attach_file(path, &root)?;
+        Ok(s)
+    }
+
+    /// The host's clock tick (every second or so): closes idle connections, runs the disk
+    /// stat backup and due write-backs, and unloads idle sessions (writing back first).
+    /// Time is [`super::Host::now_ms`], like every other timer in the kit.
+    pub fn tick(&self) -> Result<TickReport> {
+        let mut rep = TickReport {
+            left: self.expire_idle()?,
+            ..TickReport::default()
+        };
+        for (k, s) in self.loaded()? {
+            match s.disk_tick() {
+                Ok((check, written)) => {
+                    if let Some(DiskCheck::Ingested { version }) = check {
+                        rep.ingested.push((k.clone(), version));
+                    }
+                    if written {
+                        rep.written.push(k);
+                    }
+                }
+                Err(SessionError::Unloaded | SessionError::Released) => {}
+                Err(e) => rep.errors.push((k, e)),
+            }
+        }
+        rep.unloaded = self.unload_idle()?;
+        Ok(rep)
+    }
+
+    /// Run the stat check ([`Session::check_disk`]) on every loaded session with a file now,
+    /// whatever the poll interval. Returns what each found.
+    pub fn poll_disk(&self) -> Result<Vec<(DocKey, Result<DiskCheck>)>> {
+        let mut out = Vec::new();
+        for (k, s) in self.loaded()? {
+            if matches!(s.file_path(), Ok(Some(_))) {
+                out.push((k, s.check_disk()));
+            }
+        }
+        Ok(out)
+    }
+
+    fn loaded(&self) -> Result<Vec<(DocKey, Arc<Session>)>> {
+        Ok(self
+            .pool()?
+            .sessions
+            .iter()
+            .map(|(k, s)| (k.clone(), s.clone()))
+            .collect())
+    }
+
     /// The loaded session for `key`, if any (never loads).
     pub fn get(&self, key: &DocKey) -> Option<Arc<Session>> {
         self.pool().ok()?.sessions.get(key).cloned()
@@ -189,8 +315,8 @@ impl SessionManager {
         })
     }
 
-    /// Process hand-off: close every session (handles the host still holds fail with
-    /// [`SessionError::Released`]) and drop the kit's store handles. Once the host drops its
+    /// Process hand-off: write back every file, close every session (handles the host
+    /// still holds fail with [`SessionError::Released`]) and drop the kit's store handles. Once the host drops its
     /// own `Arc<DocStore>`, the store file is unlocked for the next process.
     pub fn release(&self) -> Result<()> {
         let mut pool = self.pool()?;

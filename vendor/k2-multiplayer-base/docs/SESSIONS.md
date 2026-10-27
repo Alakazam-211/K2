@@ -14,7 +14,7 @@ engine update itself. Nothing here decodes bytes from a client (`untrusted-wire`
 | `Host` | host | `rights(who, key)`, `now_ms()`, `on_event(&AuditEvent)` |
 | `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)` |
 | `TextFilePack` | kit | a plain-text pack in one line: `TextFilePack::new("markdown", 4 << 20)` (root `source`) |
-| `SessionManager` | kit | one per store: `open`, `get`, `rekey`, `expire_idle`, `unload_idle`, `stats`, `release` |
+| `SessionManager` | kit | one per store: `open`, `open_file`, `get`, `rekey`, `tick`, `poll_disk`, `expire_idle`, `unload_idle`, `stats`, `release` |
 | `Session` | kit | one per loaded doc (`Arc<Session>`, `Send + Sync`) |
 | `ConnId` | kit | one connection (a tab, a `watch`, a CLI caller); `Copy`, passed to every call |
 | `Config` | host | every limit below; `Config::default()` then set fields |
@@ -37,6 +37,10 @@ must not call back into the kit, or they deadlock. Events carry metadata only, n
      `binary`, `mixed_line_endings`). Nothing is stored.
    - `NotFound`: no stored doc and no bytes.
    - `PackMismatch`: the stored doc belongs to another pack.
+
+   `open_file(pack, &key, path, root)` is the same for a doc that lives in a file, which
+   the session then keeps in sync ([Disk sync](#disk-sync)). `open` stays for docs without a
+   file (tests, in-memory use).
 3. Join to get a **connection**. Both calls return `Joined { conn: ConnId, client, version }`.
    - `join(participant, Stay)` always opens a new connection. Use it for anything with its own
      lifetime: a tab's socket (`Stay::Held`), `watch` or `open` (`Stay::Held`).
@@ -57,12 +61,16 @@ must not call back into the kit, or they deadlock. Events carry metadata only, n
    pool**. It unloads after `idle_unload_ms` (10 min, `unload_idle()`), or least recently used
    first while the pool is over `memory_budget_bytes` (checked on every `open`). Unloading
    loses nothing, and it compacts a log of `unload_compact_entries` or more first.
-7. `release()` is for process hand-off. Every session closes, and later calls on them fail
-   with `Released`. The kit drops its store handles. Once the host drops its own, the redb file
+7. `release()` is for process hand-off. Every file is written back, every session closes,
+   and later calls on them fail with `Released`. The kit drops its store handles. Once the host drops its own, the redb file
    is free for the next process (`DocStore::open_with_retry`).
 
-The host drives time: call `expire_idle()` and `unload_idle()` on a timer (a few seconds is
-fine). `recheck_rights()` per session is the host's periodic rights re-check (PRD §11.2).
+The host drives time: call `tick()` on a timer (about once a second). It closes idle
+connections, runs the disk stat backup and due write-backs, and unloads idle sessions, all on
+`Host::now_ms`, and returns a `TickReport { left, written, ingested, unloaded, errors }`.
+(`expire_idle()` and `unload_idle()` remain for hosts without files.) The kit starts no
+threads of its own. `recheck_rights()` per session is the host's periodic rights re-check
+(PRD §11.2).
 
 ## Identity, connections and attribution
 
@@ -155,7 +163,7 @@ an empty `changed`.
 |---|---|
 | `edit_with(conn, root, f)` | **Read live, compute, apply, atomically.** Runs `f(&live_text) -> Result<String, E>` under the session lock, diffs to minimal hunks, and applies them as one change. Returns `Ok(None)` when nothing changed. `f`'s error comes back as `EditWithError::Compute(e)`, and refusals as `EditWithError::Session(_)`; nothing is applied in either case. |
 | `edit(conn, Vec<Edit>, if_version)` | Hunks in byte offsets, at most one `Edit` per root. With `if_version: Some(V)`, a doc that has moved past V gives `Stale { expected, actual }` and nothing is applied. Invalid hunks (out of range, inside a character, overlapping) change nothing. |
-| `write_base(conn, root, base, text)` | `write --base V`: `merge3(text at V, text, live)`. Applies only what the caller changed since V. Overlap → `Conflicts(Vec<Conflict>)` and nothing applied. Unknown or expired V → `BaseExpired` ("re-read and retry"). |
+| `write_base(conn, root, base, text)` | `write --base V`: `merge3(text at V, text, live)`. Applies only what the caller changed since V. Overlap → `Conflicts(Vec<Conflict>)` and nothing applied; two different appends at the end of the text both land, the live one first (rule O5). Unknown or expired V → `BaseExpired` ("re-read and retry"). |
 | `replace_text(conn, root, text)` | Make a root equal `text` through a minimal diff. Last-writer-wins for that root: for people who mean "replace whatever is there" (`write --base live`). |
 
 ### Which to use
@@ -173,8 +181,10 @@ caller after the lock is released, so the session stays usable.
 
 After an edit, the connection's caret sits at the end of its last hunk.
 
-Failure handling: if the store write fails, the session reloads from the store, so memory
-again matches what is durable. Carets, views and undo history are reset
+Failure handling: if the store write fails, or the engine reports the in-memory doc
+**poisoned** (`DocError::Pending`: an apply left unresolved dependencies, failed or panicked
+after decoding), the session reloads from the store, so memory again matches what is durable.
+A poisoned doc is never encoded, compacted or written back from. Carets, views and undo history are reset
 (`AuditEvent::Recovered`). If the reload also fails, the session closes (`Broken`).
 
 ## Undo and redo
@@ -197,7 +207,13 @@ is one batch.
 
 A batch stores only the **region** it changed (text before and after), not whole texts. The
 region's bounds move through every later change. A later deletion that crosses a region's
-edge makes that undo report a conflict (conservative; see `src/session/undo.rs`).
+edge makes that undo report a conflict (conservative; see `src/session/undo.rs`). The region
+is merged with `merge3_window`, so the end-of-text rule (O5) applies only when the region ends
+where the doc does, as in a whole-text merge.
+
+`merge3` is built on `diff::hunks`, which is a pure function of its input (undo spec D1–D3):
+no clock, a counted work budget, a pinned tie-break. So undo, redo and `write --base` give the
+same result on every machine and under any load.
 
 ### Undo modes
 
@@ -250,16 +266,108 @@ the text before the change.
 
 Audit events `Joined` and `Left` carry both `pid` and `conn`.
 
+## Disk sync
+
+For a session opened with `open_file`, **the file on disk stays true**: the doc is written
+back to it, and edits made to it by other programs are merged in. The kit does the file I/O
+(std only) but never watches: the host's watcher calls `file_changed()`, and `tick()` runs a
+cheap stat backup. The three edit paths above are unchanged; disk sync sits beside them.
+
+**Opening.** The host resolves and jails `path`. The kit checks again: `root` must be a
+folder, and `path` must be a regular file (not a folder, device or pipe) resolving, symlinks
+included, **inside `root`**. Otherwise `BadPath`.
+- A new doc is imported from the file (it must exist; `Declined` as for `open`).
+- A stored doc is **reconciled**: if the file isn't what the doc last synced (`synced_hash`),
+  the difference is merged in as an outside edit (an edit made while no session was loaded),
+  and changes the file never got (a crash before write-back, K-DISK-10) are written by the
+  next write-back. A file that is gone opens `Missing`.
+- Opening and closing an untouched file **never writes it** (bytes and mtime unchanged).
+
+**Write-back (doc → file).** Any change marks the session dirty. It is written when the doc
+has been quiet `write_quiet_ms` (1 s), or `write_max_delay_ms` (5 s) after the first unwritten
+change, on `flush(conn)`, on unload, and on `release()`. Each write:
+1. checks the file first: an outside edit is merged in before anything is written, so the
+   kit never overwrites content it hasn't seen (the window left is between that read and the
+   rename);
+2. renders with `pack.encode` (BOM and line endings restored) and skips if the bytes equal
+   what the file holds;
+3. is **atomic**: a temp file beside it (`.<name>.~mp<pid>-<n>.tmp`; `is_write_temp(name)`
+   tells a watcher to ignore it), the old file's permissions, fsync, rename over, fsync the
+   folder. Symlinks are resolved, so a link stays a link and its target is written. Temp files
+   a crash left are removed on open;
+4. records the new synced hash, position and state. The record is written **before** the
+   rename and promoted after it, so a crash in between is recognised on the next open (the
+   file matches the write in flight) instead of looking like an outside edit;
+5. remembers the last 8 written hashes for **echo suppression**.
+
+If the file was deleted, replaced by a folder, or re-pointed outside the root, nothing is
+written: the state is `Missing`, the doc and its edits are kept, `AuditEvent::FileMissing
+{ unflushed }` is emitted, and the host decides the grace period (K-DISK-7, -17). When the
+file comes back, it is checked like any outside edit.
+
+**Outside edits (file → doc).** On `file_changed()`, or when `check_disk()` / `tick()` finds
+the size, mtime or inode changed (a rename-save changes the inode):
+- the file holds the last synced content → nothing;
+- it holds an older write of the kit's (an echo, or an editor saving a stale buffer) → not
+  an edit (`OwnWrite`); the next write-back puts the doc back;
+- otherwise: a version "before external edit" is cut (when the doc moved since the last
+  version), the diff from the **last synced text to the new file text** is applied as the
+  reserved participant `kit:external` (`EXTERNAL_PID`, its own client ID per doc,
+  `via: "disk"`, no `on_behalf_of`), and a version "external edit" is cut, all in one store
+  transaction. The diff is made on the doc **as the file held it** and merged into the live
+  doc as a CRDT change, so edits typed since the last write-back are kept, and the next
+  write-back writes the merged result. Subscribers get a `ChangeEvent` from `kit:external`;
+  the host gets `AuditEvent::ExternalEdit { seq }`.
+- A file that is the same text in other bytes (CRLF ↔ LF, a BOM added) adopts the new format.
+
+The disk is never the merge authority: the session is never replaced with the file's content
+wholesale, and no CRDT metadata is ever written into the file.
+
+**Declined.** A file that stops decoding (binary, not UTF-8, too large, mixed line endings) is
+never written. The doc is marked `declined` (stored), edits are refused with `Declined`, and
+`AuditEvent::FileDeclined { code }` is emitted for the host to tell participants. When the file
+decodes again it is merged in and the doc is live again (`FileRestored`).
+
+**Renames.** A rename the host paired: `SessionManager::rekey(old, new)` for the key and
+`Session::file_moved(new_path)` for the file (re-checked like `open_file`). An unpaired rename
+is a delete (`Missing`) plus a new file.
+
+**Line-aligned edits.** A minimal diff can express "add a line" as an insertion that starts
+mid-line (`"7\nagent-1"` after `agent-1`). As a CRDT change, a concurrent line added at the
+same spot would then land inside it. So the edit paths that diff (`edit_with`,
+`replace_text`, outside edits) slide pure line insertions to line starts
+(`text::lines::align_insertions`; same resulting text). `edit` takes hunks as given.
+
+| Call | What it does |
+|---|---|
+| `SessionManager::open_file(pack, &key, path, root)` | open, import or reconcile, as above |
+| `SessionManager::tick()` | idle expiry, stat backup (every `disk_poll_ms` while anyone is present; also on join), due write-backs, idle unload |
+| `SessionManager::poll_disk()` | the stat check on every loaded file now |
+| `Session::file_changed()` | the host's watcher saw a change: read and merge |
+| `Session::check_disk()` | read only if size, mtime or inode changed |
+| `Session::file_moved(new_path)` | the file now lives at `new_path` |
+| `Session::flush(conn)` | needs read; `FlushOutcome { written, hash (SHA-256 hex of the doc's bytes), disk }` |
+| `Session::file_path()` | the path as given |
+
+`DiskState`: `Clean`, `Dirty { since_ms }`, `Missing`, `Declined(reason)`. `DiskCheck`:
+`Unchanged`, `OwnWrite`, `Ingested { version }`, `Missing`, `Declined(Declined)`.
+
+Host duties: watch the file's folder (editors save by rename) and call `file_changed()`, with
+a short debounce, since a watcher may fire mid-write and the kit merges what it reads; ignore
+`is_write_temp` names; key sessions by file identity; decide the grace after `Missing`.
+
 ## Status and the pool
 
 - `status()` is metadata only and needs no connection. It returns
   `Status { key, version, participants (distinct pids), connections, log_entries,
-  estimated_bytes, declined }`. When `declined` is set, edits are refused with `Declined`.
+  estimated_bytes, declined, disk }`. When `declined` is set, edits are refused with
+  `Declined`. `disk` is `None` without a file, else a `DiskState` (see Disk sync).
 - `SessionManager::stats()` returns `PoolStats { loaded, estimated_bytes, budget_bytes,
   unloaded_total }`.
 - `SessionManager::expire_idle()` returns `(DocKey, ConnId, pid)` for each connection closed.
-- A session's estimate is its encoded state (snapshot plus log) × `memory_factor` (20). The
-  host exposes `memory_budget_bytes` (256 MiB) as its knob.
+- A session's estimate is its encoded state (snapshot plus log, plus the disk-sync state for
+  a file) × `memory_factor` (20). The host exposes `memory_budget_bytes` (256 MiB) as its
+  knob.
 
 ## Limits (`Config`)
 
@@ -275,6 +383,9 @@ Audit events `Joined` and `Left` carry both `pid` and `conn`.
 | `compact_entries` / `compact_bytes` | 1,000 / 2 MiB | compact after an append at either threshold |
 | `unload_compact_entries` | 100 | compact on unload |
 | `memory_budget_bytes` / `memory_factor` / `idle_unload_ms` | 256 MiB / 20 / 10 min | the pool |
+| `write_quiet_ms` / `write_max_delay_ms` | 1 s / 5 s | write-back after this much quiet, or this long after the first unwritten change |
+| `disk_poll_ms` | 3 s | stat backup interval while anyone is present |
+| `disk_read_max_bytes` | 64 MiB | larger files are declined unread (`too_large`) |
 
 ## Errors (`SessionError`)
 
@@ -289,6 +400,8 @@ Audit events `Joined` and `Left` carry both `pid` and `conn`.
 | `PackMismatch` | stored doc belongs to another pack | 4 |
 | `BadParticipant` / `BadPosition` / `BadEdit` / `Doc(_)` | bad input; nothing changed | 2 |
 | `NoApproval { seq }` / `BadApproval` | no approval to settle / already settled the other way | 2 |
+| `BadPath` | `open_file` / `file_moved`: not a regular file inside the root | 2 |
+| `Disk(_)` | reading or writing the file failed; nothing lost, write-back retries | 1 |
 | `Store(_)` | store failure; nothing acked | 1 |
 | `Pack(_)` | pack bug or damaged codec settings | 1 |
 | `Unloaded` / `Released` / `Broken` | stale handle: open again | retry |
@@ -317,18 +430,22 @@ exit 1, and nothing is applied.
 | P14 | `write --base V` / `--base live` | `write_base(V)` / `replace_text` |
 | P15 | formatting | as P9–P13 (Markdown formatting is text) |
 | P16 | `undo`, `redo` | `undo`, `redo` (per pid; `--partial` later) |
-| P17 | `status`, `flush` | `status`; `flush` is disk sync (C4) |
+| P17 | `status`, `flush` | `status` (`disk`); `flush(conn) -> FlushOutcome { written, hash, disk }` |
 | P18 | `watch`, `tail -f` | `join(Stay::Held)` + `subscribe` |
 | P19 | `log`, `diff --version`, `show --version` | versions and history (C7a); the store already lists versions |
 | P20 | `restore`, `version --name` | C7a (restore = `replace_text` as a `Restore` participant, after a version) |
-| P21 | `mv` | `SessionManager::rekey` |
+| P21 | `mv` | `SessionManager::rekey` + `Session::file_moved` |
 | P22 | `blame` | later (client→pid mapping is recorded now) |
 | P24 | export | `read` (`bytes`) |
 | P25 | why live editing is off | `open` → `Declined { code, message }`; `status().declined` |
 
 ## Not in this slice
 
-- **C4, disk sync:** write-back, external edits, `flush`, setting `declined` on a live doc.
+- **Disk, host side and later rows:** watching (the host's), the 24 h grace after a delete
+  and K-DISK-17's named version of unflushed edits (the host, from `FileMissing { unflushed }`),
+  one session per file identity (K-DISK-14: the host keys by device + inode), hardlinks
+  (K-DISK-15), synced-folder conflict copies (K-DISK-16), the git branch-switch rule
+  (K-DISK-13).
 - **C5, wire:** the socket, Yjs sync and awareness, each socket being a `join` connection.
   This needs the strict decoder.
 - **C6, tools:** grep, sed, patch and replace-section (run through `edit_with`), and
@@ -346,6 +463,33 @@ transaction. Namespaces and keys are opaque strings: **the kit never reads, inte
 erases these rows**, so erasing them (a person's data, a deleted workspace) is the host's job.
 
 ## Changelog
+
+### Engine hardening (after C4)
+
+- **Breaking (Rust API, not the session contract):** `Doc::encode_state()` returns
+  `Result<Vec<u8>, DocError>`. yrs 0.28 panics encoding a doc that holds pending updates
+  (an unwrap at transaction.rs:408); every engine encode now runs under `catch_unwind`, and a
+  doc an apply left pending (or that failed or panicked mid-apply) is **poisoned**: it refuses
+  `encode_state`, `encode_diff`, `edit_as` and further applies with `DocError::Pending`
+  until reloaded. A decode error poisons nothing.
+- `check_client_update` (`untrusted-wire`) accepts blocks from other clients that the doc
+  already has, as real Yjs resyncs carry held pending updates; anything past the doc's state
+  from another client is still `ForeignClient` (rule in `ARCHITECTURE.md`, rule 4).
+  `inserts_from` lists only genuinely new content.
+- Sessions treat `Pending`, `Panic` and `Apply` from the engine as poisoning: the call fails,
+  the session reloads from the store (`AuditEvent::Recovered`), and compaction or write-back
+  never encodes from such a doc (`CompactFailed` then reload).
+
+### C4: disk sync (additive)
+
+`SessionManager::open_file`, `tick`, `poll_disk`, `TickReport`; `Session::file_changed`,
+`check_disk`, `file_moved`, `flush`, `file_path`; `Status::disk`; `DiskState`,
+`DiskCheck`, `FlushOutcome`, `is_write_temp`; `Config::write_quiet_ms`,
+`write_max_delay_ms`, `disk_poll_ms`, `disk_read_max_bytes`; `Action::Flush`;
+`AuditEvent::ExternalEdit`, `FileMissing`, `FileDeclined`, `FileRestored`, `DiskError`;
+`SessionError::BadPath`, `Disk`; `DocStore::client_owned_by`, `last_version`;
+`text::lines::align_insertions`. Imports now also record the disk-sync state. Behaviour:
+`edit_with` and `replace_text` line-align pure line insertions (same text, different hunks).
 
 ### Amendment 1 (after `e307e43`)
 

@@ -11,7 +11,8 @@
 //! - once everything is delivered, every client equals the session, byte for byte;
 //! - `write --base` either applies exactly the agent's change or reports a conflict.
 //!
-//! A failing seed reproduces exactly: `SIM_SEED=<n> cargo test --test convergence`.
+//! A failing seed reproduces exactly: `SIM_SEED=<n> cargo test --test convergence`. A wider
+//! sweep: `SIM_SEEDS=200`.
 
 use std::collections::VecDeque;
 
@@ -266,7 +267,10 @@ fn run(seed: u64, ticks: u32) {
     }
     // And the store round trip keeps it.
     assert_eq!(
-        Doc::load(S, &s.encode_state()).unwrap().text(ROOT).unwrap(),
+        Doc::load(S, &s.encode_state().unwrap())
+            .unwrap()
+            .text(ROOT)
+            .unwrap(),
         final_text
     );
     assert!(merges_clean + merges_conflict > 0 || ticks < 40);
@@ -288,7 +292,12 @@ fn broadcast(cs: &mut [Client], from: u64, at: u32, u: Vec<u8>) {
 fn converges_across_seeds() {
     let (from, n): (u64, u64) = match std::env::var("SIM_SEED") {
         Ok(s) => (s.parse().expect("SIM_SEED must be a number"), 1),
-        Err(_) => (1, 40),
+        // SIM_SEEDS=n widens the sweep to seeds 1..=n (default 40)
+        Err(_) => (
+            1,
+            std::env::var("SIM_SEEDS")
+                .map_or(40, |n| n.parse().expect("SIM_SEEDS must be a number")),
+        ),
     };
     for seed in from..from + n {
         run(seed, 600);

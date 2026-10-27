@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 23,
+  "catalogVersion": 26,
   "caps": [
     {
       "name": "agents:read",
@@ -55,6 +55,7 @@
     },
     {"name": "files:write", "exposure": ["app"], "label": "Write files (not the agent's .k2 folder)"},
     {"name": "push:send", "exposure": ["app"], "label": "Send notifications to this App's users' phones"},
+    {"name": "email:send", "exposure": ["app"], "label": "Send email from this App's sender"},
     {
       "name": "tickets:read",
       "exposure": ["app", "garden-local"],
@@ -220,7 +221,19 @@
     {"code": "duplicate_label", "doc": "The person already has an item with that label for that provider."},
     {"code": "needs_editor", "doc": "Garden access lists on: this widget version isn't signed by the person, K2 or an agent on this Garden's list, so only its own store and save keyspace and widget.self answer. Someone who edits this Garden has to sign this version."},
     {"code": "retired", "doc": "K2 retired this verb: it answers this until a later release removes it (the message says which)."},
-    {"code": "card_person_only", "doc": "Only a person answers a card (the Thread tab, the phone, an App's sign-in with the guest's own pass). An agent, a K2 terminal, an App's own pass or a platform pass never can; an agent closes its own card with k2 thread void."}
+    {"code": "card_person_only", "doc": "Only a person answers a card (the Thread tab, the phone, an App's sign-in with the guest's own pass). An agent, a K2 terminal, an App's own pass or a platform pass never can; an agent closes its own card with k2 thread void."},
+    {"code": "email_off", "doc": "This App doesn't send email: its owner turns it on with a sender (k2 app email on), or the server's switch is off."},
+    {"code": "no_sender", "doc": "This App has no sender: its owner grants one (k2 app email on <app> --sender <address>)."},
+    {"code": "sender_not_granted", "doc": "from names a sender this App wasn't granted; omit from to use the App's own."},
+    {"code": "system_sender", "doc": "The system sender is K2's own; an App never sends from it."},
+    {"code": "recipient_out_of_scope", "doc": "This App emails only its own users whose address is confirmed (or the owner set the any scope); replyTo is the sender's own domain unless the scope is any."},
+    {"code": "header_not_allowed", "doc": "Only X-… headers (letters, digits and -, not X-K2-…, printable ASCII values); From, Reply-To, Bcc and the rest are K2's."},
+    {"code": "message_too_large", "doc": "An email is at most 1 MB (text 256 KB, html 512 KB)."},
+    {"code": "domain_not_ready", "doc": "The sender's domain can't send yet (not Verified, receive-only, or the mail server is down)."},
+    {"code": "dmarc_missing", "doc": "The sender's domain has no DMARC record (any policy works); its owner publishes one."},
+    {"code": "relay_not_ready", "doc": "The sender's SMTP relay hasn't passed a test or lost its login."},
+    {"code": "idempotency_conflict", "doc": "This idempotencyKey was used in the last 24 h for a different email."},
+    {"code": "no_mail_path", "doc": "This server has no way to send email (no hosted mail and no relay sender)."}
   ],
   "bannedFields": [
     "projectPath",
@@ -9157,6 +9170,390 @@
       ],
       "doc": "Which of this App's guests have phones registered, and on which platforms (never a token).",
       "example": "const {guests} = await k2.push.devices()"
+    },
+    {
+      "verb": "email.send",
+      "cap": "email:send",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "email-notifications-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/email/send",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "This App's sender (its id or address); omit to use it."
+            },
+            "fromName": {
+              "type": "string",
+              "description": "The From name (unless the owner locked it); no @, at most 128 characters."
+            },
+            "to": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Recipients; to, cc and bcc together at most 50."
+            },
+            "cc": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "bcc": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Envelope only: never in a header."
+            },
+            "subject": {
+              "type": "string",
+              "description": "At most 998 bytes, no line breaks."
+            },
+            "text": {
+              "type": "string",
+              "description": "At most 256 KB; text or html (or both) is required."
+            },
+            "html": {
+              "type": "string",
+              "description": "At most 512 KB."
+            },
+            "replyTo": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "At most 3: the sender's default, its own domain, or any address with the any scope."
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "At most 10 X-… headers (not X-K2-…), printable ASCII values."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "At most 10, letters, digits, _ and -; filter email.log by one."
+            },
+            "idempotencyKey": {
+              "type": "string",
+              "description": "At most 256 characters; the same key and email within 24 h answers the first send's id."
+            },
+            "sendAt": {
+              "type": "integer",
+              "description": "Seconds since the epoch, at most 30 days ahead."
+            }
+          },
+          "required": [
+            "to",
+            "subject"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppEmailAccepted",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "description": "What email.status takes."
+          },
+          "status": {
+            "enum": [
+              "submitted",
+              "scheduled",
+              "held"
+            ],
+            "description": "submitted = accepted for delivery (delivery events arrive later)."
+          },
+          "recipients": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "status",
+          "recipients"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "not_on_link",
+        "app_pass_required",
+        "cap_not_granted",
+        "email_off",
+        "no_sender",
+        "sender_not_granted",
+        "system_sender",
+        "recipient_out_of_scope",
+        "header_not_allowed",
+        "too_many_recipients",
+        "message_too_large",
+        "rate_limited",
+        "domain_not_ready",
+        "dmarc_missing",
+        "relay_not_ready",
+        "idempotency_conflict",
+        "no_mail_path",
+        "airgap",
+        "vault_closed",
+        "usage",
+        "failed"
+      ],
+      "doc": "Email from this App's own sender (granted by the owner) to its own users, or anyone with the owner's any scope. Answers 202 with an id.",
+      "example": "const {id} = await k2.email.send({to: [user.email], subject: 'Your order shipped', html, text, tags: ['orders'], idempotencyKey: orderId})"
+    },
+    {
+      "verb": "email.status",
+      "cap": "email:send",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "email-notifications-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/email/status",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppEmailStatus",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "scheduled",
+              "held",
+              "submitted",
+              "failed",
+              "refused"
+            ]
+          },
+          "recipients": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "updatedAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "sendAt": {
+            "type": "integer",
+            "description": "When a scheduled email goes, seconds since the epoch."
+          },
+          "error": {
+            "type": "string",
+            "description": "The refusal or failure code."
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "status",
+          "recipients",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "not_on_link",
+        "app_pass_required",
+        "cap_not_granted",
+        "not_found",
+        "usage",
+        "failed"
+      ],
+      "doc": "One email's state (kept 30 days): submitted means accepted for delivery; never the body.",
+      "example": "const s = await k2.email.status({id})"
+    },
+    {
+      "verb": "email.log",
+      "cap": "email:send",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "email-notifications-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/email/log",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "before": {
+              "type": "integer",
+              "description": "The next value of a previous page (seconds since the epoch)."
+            },
+            "status": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppEmailLog",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "AppEmailLogItem",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "status": {
+                  "type": "string"
+                },
+                "error": {
+                  "type": "string"
+                },
+                "origin": {
+                  "type": "string"
+                },
+                "purpose": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                }
+              },
+              "required": [
+                "id",
+                "to",
+                "subject",
+                "tags",
+                "status",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next": {
+            "type": "integer",
+            "description": "Pass as before for the next page (a createdAt, seconds since the epoch)."
+          }
+        },
+        "required": [
+          "ok",
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "not_on_link",
+        "app_pass_required",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "This App's sent email, newest first (metadata only, 30 days): who, subject, tags, status.",
+      "example": "const {items} = await k2.email.log({tag: 'orders', limit: 50})"
     },
     {
       "verb": "app.info",

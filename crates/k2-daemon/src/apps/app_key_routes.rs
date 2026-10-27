@@ -12,6 +12,8 @@
 //! POST /v1/apps/<id>/fetch       {url, secret|secrets, method?, headers?, bodyB64?, maxBytes?, timeoutSecs?}  fetch
 //! POST /v1/apps/<id>/push/send   {to, title, body, data?, topic?, …}             push (prd-custom-app-push-v1)
 //! GET  /v1/apps/<id>/push/status?sendId=                                         push
+//! POST /v1/apps/<id>/email/send  {to, subject, text|html, …}                    email (prd-email-notifications-core-v1)
+//! GET  /v1/apps/<id>/email/status?id=  ·  GET /v1/apps/<id>/email/log            email
 //! ```
 //!
 //! Rules:
@@ -47,6 +49,15 @@ pub const MAX_BODY: usize = 96 * 1024;
 /// Is `path` one of these routes (`/v1/apps/<id>/<verb…>`)?
 pub fn is_route(path: &str) -> bool {
     split(path).is_some()
+}
+
+/// The request body cap for `path`: an email may be up to 1 MB
+/// (Email Notifications E19); everything else [`MAX_BODY`].
+pub fn body_cap(path: &str) -> usize {
+    match split(path) {
+        Some((_, "email/send")) => crate::email_notify::MAX_BODY,
+        _ => MAX_BODY,
+    }
 }
 
 /// `(service id, verb)` from `/v1/apps/<id>/<verb…>`.
@@ -107,6 +118,8 @@ fn scope_for(method_post: bool, verb: &str) -> Option<&'static str> {
         (true, "users/disable" | "users/enable" | "users/remove" | "users/unlock" | "users/password-reset") => Some(keys::SCOPE_USERS),
         (true, "fetch") => Some(keys::SCOPE_FETCH),
         (true, "push/send") | (false, "push/status") => Some(keys::SCOPE_PUSH),
+        // Email Notifications (0.46.5): the App's own sender.
+        (true, "email/send") | (false, "email/status" | "email/log") => Some(keys::SCOPE_EMAIL),
         _ => None,
     }
 }
@@ -193,6 +206,14 @@ pub fn handle(path: &str, is_post: bool, presented: Option<&str>, body: &[u8], p
     if verb == "push/send" || verb == "push/status" {
         let r = push(&c, verb, body, params);
         audit(&c, verb, if r.status.starts_with('2') { "ok" } else { r.status });
+        return r;
+    }
+    // Email Notifications keeps its own answers (202, the email.* codes).
+    if verb.starts_with("email/") {
+        let r = crate::email_notify::link_routes::handle_key(&c.app, &c.actor(), verb, is_post, body, params);
+        if verb == "email/send" {
+            audit(&c, verb, if r.status.starts_with('2') { "ok" } else { r.status });
+        }
         return r;
     }
     let body_v: J = if is_post {

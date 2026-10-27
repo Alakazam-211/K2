@@ -819,6 +819,20 @@ mod unix_impl {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::app_push::owner_routes::handle(p, who, body, params))
             }
+            // Email Notifications (0.46.5): `k2 app email …` for this cell's
+            // passport (its own workspace's Apps; on is the owner's; send
+            // rides the agent's agentSend gate). `/cli/notifications/*` is
+            // never served here (owner and Admins only).
+            p if crate::email_notify::app_routes::is_route(p) => {
+                if crate::email_notify::app_routes::is_post_route(p) && !is_post {
+                    return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
+                }
+                if body.len() > crate::email_notify::MAX_BODY {
+                    return from_cli(crate::email_notify::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::email_notify::app_routes::handle(p, who, is_post, body, params))
+            }
             // 0.46.0 App grace (no preview flag): this cell's passport; the
             // handler scopes it to its own workspace's Apps and holds what
             // widens.

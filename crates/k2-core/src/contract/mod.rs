@@ -446,7 +446,7 @@ mod tests {
             .into_iter()
             // `push:send` (0.46.4) is the App's own cap (its link pass),
             // never a guest role's.
-            .filter(|cap| *cap != crate::skin::guest_rooms::CAP && *cap != crate::person_wallet::CAP && *cap != crate::skin::CAP_PUSH_SEND)
+            .filter(|cap| *cap != crate::skin::guest_rooms::CAP && *cap != crate::person_wallet::CAP && !crate::skin::APP_ONLY_CAPS.contains(cap))
             .collect();
         assert_eq!(pass_caps, accepted, "ACCEPTED_CAPS vs the catalog's app caps");
         assert!(!accepted.contains(&crate::skin::guest_rooms::CAP), "guests:rooms is an owner grant, never a pass cap");
@@ -658,6 +658,19 @@ mod tests {
                 // 0.46.4 (prd-app-caps-0464-v1 AC24/AC28): only a person
                 // answers a card.
                 "card_person_only",
+                // Email Notifications (0.46.5, catalog v26).
+                "email_off",
+                "no_sender",
+                "sender_not_granted",
+                "system_sender",
+                "recipient_out_of_scope",
+                "header_not_allowed",
+                "message_too_large",
+                "domain_not_ready",
+                "dmarc_missing",
+                "relay_not_ready",
+                "idempotency_conflict",
+                "no_mail_path",
             ]
         );
         let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();

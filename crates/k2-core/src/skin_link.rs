@@ -478,6 +478,10 @@ mod tests {
         // carries it; no guest role can (parse_caps refuses it).
         assert_eq!(link_caps(&caps(&["push:send"])).0, vec!["push:send".to_string()]);
         assert!(crate::skin::parse_caps(Some(&["push:send".to_string()])).is_err(), "never a role cap");
+        // email:send (Email Notifications, 0.46.5): the same rule.
+        assert_eq!(link_caps(&caps(&["email:send"])).0, vec!["email:send".to_string()]);
+        assert!(crate::skin::parse_caps(Some(&["email:send".to_string()])).is_err(), "never a role cap");
+        assert_eq!(crate::workspace::settings::app_core_of_cap("email:send"), None, "in no App core: the Mail tick never pre-approves it (Q13)");
     }
 
     /// AR9/AR50/§5.2: a link pass works only on its own link and App,

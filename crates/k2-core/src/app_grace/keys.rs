@@ -11,6 +11,7 @@
 //! | `rooms` | set the Thread rooms of its own App users, within the key's ceiling  |
 //! | `fetch` | call an outside API through K2 with a secret granted to the service, by name |
 //! | `push`  | send notifications to its own guests' phones (prd-custom-app-push-v1, 0.46.4) |
+//! | `email` | send email from the App's own sender (prd-email-notifications-core-v1, 0.46.5) |
 //!
 //! `spaces` (Space grants) is named so a mint can say "later": it arrives
 //! with Sew in K2. The ceiling (`rooms` workspace ids, `roles` role ids) is
@@ -27,8 +28,11 @@ pub const SCOPE_ROOMS: &str = "rooms";
 pub const SCOPE_FETCH: &str = "fetch";
 /// Send notifications to the App's own guests (`/v1/apps/<id>/push/*`).
 pub const SCOPE_PUSH: &str = "push";
+/// Send email from the App's own sender (`/v1/apps/<id>/email/*`,
+/// prd-email-notifications-core-v1, 0.46.5).
+pub const SCOPE_EMAIL: &str = "email";
 /// Scopes a key can hold today.
-pub const SCOPES: &[&str] = &[SCOPE_USERS, SCOPE_ROOMS, SCOPE_FETCH, SCOPE_PUSH];
+pub const SCOPES: &[&str] = &[SCOPE_USERS, SCOPE_ROOMS, SCOPE_FETCH, SCOPE_PUSH, SCOPE_EMAIL];
 /// Named for later: refused at mint with a pointer.
 pub const LATER_SCOPES: &[&str] = &["spaces"];
 /// Rooms one key may name.

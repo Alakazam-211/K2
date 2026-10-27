@@ -33,6 +33,7 @@ features:
   app-mobile-access-v1
   app-wallet-v1
   custom-app-push-v1
+  email-notifications-v1
   activity-live-busy
   thread-push-v1
   push-previews-v1

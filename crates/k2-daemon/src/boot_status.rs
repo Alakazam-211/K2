@@ -721,6 +721,11 @@ pub const FEATURE_APP_WALLET: &str = "app-wallet-v1";
 /// `/v1/apps/<id>/push/*` (App key scope `push`) and `/cli/app/push/*`.
 /// skin.db tables only, no SQL migration.
 pub const FEATURE_APP_PUSH: &str = "custom-app-push-v1";
+/// Email Notifications (prd-email-notifications-core-v1, 0.46.5):
+/// `email.send|status|log` on the App's link (cap `email:send`),
+/// `/v1/apps/<id>/email/*` (App key scope `email`), `/cli/app/email/*` and
+/// `/cli/notifications/email/*`. k2.db migration 0227.
+pub const FEATURE_EMAIL_NOTIFICATIONS: &str = "email-notifications-v1";
 /// Thread push message previews (0.46.1): `POST /cli/push/register-device`
 /// takes `previews` (absent = keep the stored value), its reply and
 /// `GET /cli/push/device` carry `previews` + `previewsAllowed`, and a
@@ -956,6 +961,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_MOBILE_ACCESS);
     out.push(FEATURE_APP_WALLET);
     out.push(FEATURE_APP_PUSH);
+    out.push(FEATURE_EMAIL_NOTIFICATIONS);
     out.push(FEATURE_ACTIVITY_LIVE_BUSY);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
@@ -1065,6 +1071,7 @@ mod tests {
                 "app-mobile-access-v1",
                 "app-wallet-v1",
                 "custom-app-push-v1",
+                "email-notifications-v1",
                 "activity-live-busy",
                 "thread-push-v1",
                 "push-previews-v1",

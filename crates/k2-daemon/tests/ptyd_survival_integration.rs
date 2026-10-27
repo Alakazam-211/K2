@@ -285,9 +285,14 @@ fn tcp_lines(dir: &Path) -> Vec<(u128, String)> {
 /// S5 (no refused window): every call the agent made — over its cell
 /// socket and over TCP, including the ones started while no daemon ran —
 /// got a real answer: no refused/failed connect, no migrating 503.
+///
+/// Counted from the agent's first served cell call on: a call made before
+/// the daemon bound the cell socket at spawn (a race the CLI's exit-7
+/// retry covers) is not a restart failure.
 fn assert_no_failed_calls(dir: &Path, what: &str) {
+    let since = hook_lines(dir).into_iter().find(|(_, r)| served(r)).map(|(t, _)| t).expect("a served cell call before any restart");
     for (file, lines) in [("hook.log", hook_lines(dir)), ("tcp.log", tcp_lines(dir))] {
-        let failed: Vec<_> = lines.iter().filter(|(_, r)| r.starts_with("ERR:") || r == "503").collect();
+        let failed: Vec<_> = lines.iter().filter(|(t, r)| *t >= since && (r.starts_with("ERR:") || r == "503")).collect();
         assert!(failed.is_empty(), "{what}: the agent's calls failed during a restart ({file}): {failed:?}");
     }
 }

@@ -104,12 +104,16 @@ swap_bins() {
     done
 }
 
-# S5: no call the agent made failed (refused connect, dropped socket, 503).
+# S5: no call the agent made failed (refused connect, dropped socket, 503),
+# counted from its first served cell call on (a call before the daemon bound
+# the cell socket at spawn is a spawn race the CLI's retry covers).
 assert_no_failed_calls() {
-    local f bad
+    local f bad since
+    since=$(grep -E ' (200|400)$' "$SCRATCH/agent/hook.log" | head -1 | cut -d' ' -f1)
+    [ -n "$since" ] || die "$1: the agent never got a served cell call"
     for f in hook.log tcp.log; do
         [ -f "$SCRATCH/agent/$f" ] || continue
-        bad=$(grep -E ' (ERR:|503)' "$SCRATCH/agent/$f" || true)
+        bad=$(awk -v s="$since" '$1 >= s && ($2 ~ /^ERR:/ || $2 == "503")' "$SCRATCH/agent/$f")
         [ -z "$bad" ] || die "$1: the agent's calls failed during the window ($f): $(printf '%s' "$bad" | head -3)"
     done
 }

@@ -10,17 +10,24 @@
 #
 # The unit carries the shipped hand-off lines (runtime stage H drop-in:
 # KillMode=process, NotifyAccess=main, ExecReload=SIGUSR2, OOMPolicy=
-# continue), so `systemctl --user reload` is the no-downtime hand-off the
-# Linux self-update uses after its in-place swap.
+# continue) and the shipped ExecStop that waits for the main process (a
+# hand-off successor is not systemd's child), so `systemctl --user reload`
+# is the no-downtime hand-off the Linux self-update uses after its swap.
+#
+# NO_EXECSTOP=1: a unit WITHOUT that ExecStop (units written before
+# 0.46.5): the new daemon must refuse the hand-off and turn a reload into a
+# plain graceful restart; step 1 then updates with a restart too (a 0.46.4
+# daemon would hand off regardless).
 #   0. the OLD daemon, terminal.ptyd on (the 0.46.4 Beta toggle), one
 #      restart so it boots with it on, then an agent;
 #   1. swap OLD → NEW in place, `systemctl --user reload` (hand-off from the
 #      old daemon to the new binary): same agent, adopted, screen replayed
 #      (the old daemon saves none), ptyd kept, no failed call;
 #   2. swap NEW → NEW, `systemctl --user restart`: screen restored (S4);
-#   3. `systemctl --user reload` again (new → new hand-off): restored;
-#   4. kill -9 (Restart=always): restored from the last save;
-#   5. `systemctl --user stop`: the agent and ptyd end.
+#   3. kill -9 (Restart=always): restored from the last save;
+#   4. `systemctl --user reload` again (new → new hand-off): restored;
+#   5. `systemctl --user stop` right after that reload: the agent and ptyd
+#      end (the successor shuts down gracefully and sees the stop job).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=common.sh
@@ -49,6 +56,7 @@ KillMode=process
 NotifyAccess=main
 ExecReload=/bin/kill -USR2 \$MAINPID
 OOMPolicy=continue
+$( [ -n "${NO_EXECSTOP:-}" ] || echo "ExecStop=/bin/sh -c 'kill -TERM \"\$\$MAINPID\" 2>/dev/null; while kill -0 \"\$\$MAINPID\" 2>/dev/null; do sleep 0.2; done' k2-wait-mainpid" )
 Environment=HOME=$SCRATCH
 Environment=TMPDIR=$SCRATCH/tmp
 Environment=K2_TEST_AGENT_SHIM_DIR=$(dirname "$AGENT")
@@ -93,10 +101,17 @@ PTYD_PID=$(ptyd_pid)
 old_version=$(curl -s "http://127.0.0.1:$PORT/boot-status" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
 
 # 1. The update: in-place swap, then the hand-off reload (old → new binary).
+#    (NO_EXECSTOP: a plain restart — a 0.46.4 daemon hands off regardless,
+#    and its successor could then only be SIGKILLed by this unit.)
 n=$(adoptions_of "$SID"); m=$(main_pid)
 swap_bins "$NEW" "$BIN"
-systemctl --user reload "$UNIT"; wait_new_main "$m"
-after_update "update $old_version → new (swap + systemctl --user reload hand-off)" "$n" replayed
+if [ -n "${NO_EXECSTOP:-}" ]; then
+    systemctl --user restart "$UNIT"; wait_new_main "$m"
+    after_update "update $old_version → new (swap + systemctl --user restart)" "$n" replayed
+else
+    systemctl --user reload "$UNIT"; wait_new_main "$m"
+    after_update "update $old_version → new (swap + systemctl --user reload hand-off)" "$n" replayed
+fi
 
 # 2. The next update with a plain restart.
 n=$(adoptions_of "$SID"); m=$(main_pid)
@@ -104,16 +119,28 @@ swap_bins "$NEW" "$BIN"
 systemctl --user restart "$UNIT"; wait_new_main "$m"
 after_update "update new → new (swap + systemctl --user restart)" "$n" restored
 
-# 3. The hand-off once more (new → new).
-n=$(adoptions_of "$SID"); m=$(main_pid)
-systemctl --user reload "$UNIT"; wait_new_main "$m"
-after_update "systemctl --user reload (new → new hand-off)" "$n" restored
-
-# 4. A crash.
+# 3. A crash.
 n=$(adoptions_of "$SID"); m=$(main_pid); kill -9 "$m"; wait_new_main "$m"
 after_update "kill -9 (Restart=always)" "$n" restored
 
-# 5. A stop ends it.
+# 4. The hand-off once more (new → new). NO_EXECSTOP: the new daemon must
+#    refuse it and restart gracefully instead.
+n=$(adoptions_of "$SID"); m=$(main_pid)
+systemctl --user reload "$UNIT"; wait_new_main "$m"
+if [ -n "${NO_EXECSTOP:-}" ]; then
+    grep -q "SIGUSR2: the systemd unit has no ExecStop that waits for the main process.*restarting" "$SCRATCH/daemon.log" \
+        || die "a unit without the ExecStop: the reload was not turned into a plain restart"
+    ok "unit without the ExecStop: the reload became a plain restart (no hand-off)"
+else
+    grep -q "SIGUSR2: hand-off started" "$SCRATCH/daemon.log" || die "the reload did not hand off"
+fi
+after_update "systemctl --user reload (new → new)" "$n" restored
+
+# 5. A stop right after that reload ends the agents (L2): with the ExecStop
+#    systemd waits for the successor (not its child) to shut down, so it
+#    sees the stop job instead of being SIGKILLed.
 systemctl --user stop "$UNIT"
-after_stop "systemctl --user stop"
+after_stop "systemctl --user stop (right after the reload)"
+grep -q 'shutdown: ended 1 ptyd agent session(s): systemd stop job' "$SCRATCH/daemon.log" \
+    || die "the stop after a hand-off did not run the daemon's stop path"
 ok "systemd user update: all cases passed"

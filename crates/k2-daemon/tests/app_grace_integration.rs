@@ -247,15 +247,15 @@ async fn app_key_is_minted_in_person_held_for_agents_and_opens_only_its_app() {
     let r = v1(d.port, "POST", &format!("{base}/users/disable"), &key, Some(json!({"username": "guest1"}))).await;
     assert_eq!(r.json()["enabled"], false, "{}", r.body);
 
-    // Only-this-App: a box login that also has this App can't be reset or
-    // removed as a person through the key.
+    // A box login that also has this App: an App key never manages it
+    // (0.46.4 App grants: every /v1 user verb refuses a box login).
     k2_core::skin::add_principal_with_email("boxperson", Some("box@example.com")).unwrap();
     k2_core::skin::set_principal_password("boxperson", Some("correct horse battery 1")).unwrap();
     k2_core::skin::set_app_grant_rooms("boxperson", &svc, &[], false, "owner").unwrap();
     let r = v1(d.port, "POST", &format!("{base}/users/password-reset"), &key, Some(json!({"username": "boxperson"}))).await;
-    assert_eq!((r.status, r.code()), (403, "not_only_this_app".to_string()), "{}", r.body);
+    assert_eq!((r.status, r.code()), (403, "box_login".to_string()), "{}", r.body);
     let r = v1(d.port, "POST", &format!("{base}/users/remove"), &key, Some(json!({"username": "boxperson"}))).await;
-    assert_eq!(r.json()["removed"], "app_access", "{}", r.body);
+    assert_eq!((r.status, r.code()), (403, "box_login".to_string()), "{}", r.body);
     assert!(k2_core::skin::principal_exists("boxperson").unwrap(), "the person keeps their box login");
     let r = v1(d.port, "POST", &format!("{base}/users"), &key, Some(json!({"username": "guest2", "email": "g2@example.com", "password": "another long pass 9"}))).await;
     assert_eq!(r.status, 200, "{}", r.body);

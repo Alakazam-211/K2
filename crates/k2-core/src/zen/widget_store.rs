@@ -75,11 +75,31 @@ pub struct WidgetStatus {
     pub warnings: Vec<Diagnostic>,
     /// When the live bundle was made good (RFC 3339), for a last good.
     pub last_good_at: Option<String>,
+    /// The folder's images and fonts in bytes, for a live clean folder
+    /// (`None` for a saved copy: last good or a locked Garden's frozen one).
+    pub assets: Option<u64>,
 }
 
 impl WidgetStatus {
     pub fn hash(&self) -> &str {
         self.bundle.as_ref().map_or("", |b| b.hash.as_str())
+    }
+
+    /// WS9's `size` for the version this status runs (`null` with none).
+    pub fn size(&self) -> J {
+        match (&self.bundle, &self.manifest) {
+            (Some(b), Some(m)) => widgets::size_json(b.code_bytes, b.bytes(), self.assets, &m.libs),
+            _ => J::Null,
+        }
+    }
+
+    /// WS12: the payload's `{code, codeWarnAt}` (the owner's "Large widget"
+    /// line reads it), `null` with no version.
+    pub fn size_brief(&self) -> J {
+        match &self.bundle {
+            Some(b) => json!({ "code": b.code_bytes, "codeWarnAt": super::bundle::WARN_CODE_BYTES, "codeMax": super::bundle::MAX_CODE_BYTES }),
+            None => J::Null,
+        }
     }
 
     /// The manifest's `caps` (empty with no live manifest).
@@ -340,6 +360,7 @@ impl ZenFiles {
             errors: Vec::new(),
             warnings: Vec::new(),
             last_good_at: None,
+            assets: None,
         };
         let Some((c, read_errors, read_warnings, _)) = self.check_now(widget) else {
             let message = if builtin {
@@ -359,6 +380,7 @@ impl ZenFiles {
             st.state = WidgetState::Ok;
             st.manifest = c.manifest.clone();
             st.bundle = c.bundle.clone();
+            st.assets = Some(c.assets_bytes);
             if !builtin {
                 st.last_good_at = self.last_good(widget).filter(|(_, b, _)| Some(&b.hash) == st.bundle.as_ref().map(|x| &x.hash)).map(|(_, _, at)| at);
             }
@@ -582,6 +604,11 @@ impl ZenFiles {
                 },
             });
         }
+        // WS9: the sizes and their limits (null when it doesn't bundle).
+        let size = match (c.bundle.as_ref(), c.manifest.as_ref()) {
+            (Some(b), Some(m)) => widgets::size_json(b.code_bytes, b.bytes(), Some(c.assets_bytes), &m.libs),
+            _ => J::Null,
+        };
         Ok(json!({
             "ok": errors.is_empty(),
             "status": status,
@@ -589,6 +616,7 @@ impl ZenFiles {
             "warnings": warnings,
             "files": [widget_label(widget)],
             "runtime": runtime,
+            "size": size,
         }))
     }
 
@@ -787,6 +815,10 @@ impl ZenFiles {
             w["state"] = json!(st.state.as_str());
             w["errors"] = json!(st.errors);
             w["warnings"] = json!(st.warnings);
+            // WS12 (vs-live L14): the effective version's code size (a
+            // locked Garden's frozen copy for a locked Garden); the owner's
+            // "Large widget" line reads it, never the canvas.
+            w["size"] = st.size_brief();
             w["origin"] = json!(origin);
             let caps = effective_caps(origin, &requested);
             if super::garden_access::enabled() {
@@ -985,6 +1017,8 @@ impl ZenFiles {
                     "state": st.state.as_str(),
                     "errors": st.errors,
                     "warnings": st.warnings,
+                    // WS14: Settings' "Large widget" note reads it.
+                    "size": st.size_brief(),
                     "placements": mine,
                 })
             })

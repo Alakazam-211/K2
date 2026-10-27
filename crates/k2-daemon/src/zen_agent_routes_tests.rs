@@ -419,8 +419,54 @@ fn only_a_writer_previews_and_the_preview_never_touches_the_persons_gardens() {
     assert!(e.f.find_garden("Widget preview").is_none());
 }
 
+/// 0.46.5 WS4, WS9, WS1/WS2 (S1 tests): a 1 MB code file puts and its
+/// answer carries `size` and the large warning; 1 MB + 1 byte is a 400 that
+/// names the limit; the request-body cap admits the 1 MB file's JSON.
 #[test]
-fn folder_routes_take_a_whole_folder_body_and_the_rest_keep_320_kb() {
+fn a_1_mb_put_is_the_limit_and_its_answer_carries_the_size() {
+    let e = env();
+    let owner = Caller::Owner;
+    e.f.new_widget("big", Some("hello")).expect("widget");
+    let html = std::fs::read(e.f.widget_dir("big").join("index.html")).expect("html").len();
+    let others: usize = ["hello.js", "hello.css"]
+        .iter()
+        .map(|n| std::fs::read(e.f.widget_dir("big").join(n)).expect("file").len())
+        .sum();
+    // hello.js grows so the whole code is exactly 1 MB.
+    let fill = (1 << 20) - html - others + std::fs::read(e.f.widget_dir("big").join("hello.js")).expect("js").len();
+    let mut js = String::from("//");
+    js.push_str(&"x".repeat(fill - 3));
+    js.push('\n');
+    assert_eq!(js.len(), fill);
+    let body = json!({"widget": "big", "file": "hello.js", "text": js});
+    assert!(body.to_string().len() <= crate::zen_routes::MAX_BODY, "the 1 MB file's JSON fits the body cap");
+    let (s, v) = call("/cli/zen/widget/put", true, &owner, body);
+    assert_eq!(s, "200 OK", "{v}");
+    let val = &v["validate"];
+    assert_eq!(val["ok"], true, "exactly 1 MB is within the limit: {val}");
+    assert_eq!(val["size"]["code"], json!(1 << 20), "{val}");
+    assert_eq!(val["size"]["codeWarnAt"], json!(512 * 1024));
+    assert_eq!(val["size"]["codeMax"], json!(1 << 20));
+    assert_eq!(val["size"]["pageMax"], json!(3 * 1024 * 1024 + 512 * 1024));
+    assert!(
+        val["warnings"].as_array().is_some_and(|w| w.iter().any(|d| d["message"].as_str().is_some_and(|m| m.starts_with("this widget is large: 1 MB of code")))),
+        "{val}"
+    );
+    let over = json!({"widget": "big", "file": "hello.js", "text": "y".repeat((1 << 20) + 1)});
+    let (s, v) = call("/cli/zen/widget/put", true, &owner, over);
+    assert_eq!(s, "400 Bad Request", "{v}");
+    assert!(v["message"].as_str().is_some_and(|m| m.contains("at most 1 MB (1048576 bytes)")), "{v}");
+}
+
+#[test]
+fn folder_routes_take_a_whole_folder_body_and_the_rest_keep_1280_kb() {
+    // 0.46.5 WS5: one 1 MB code file plus a quarter for JSON escaping.
+    assert_eq!(crate::zen_routes::MAX_BODY, 1280 * 1024);
+    assert_eq!(k2_core::zen::agent_edit::MAX_PUT_BYTES, 1 << 20);
+    let r = crate::zen_routes::too_large();
+    let v: J = serde_json::from_str(&r.body).expect("json");
+    assert_eq!(v["message"], "Zen request bodies must be under 1280 KB.", "the 413 names the constant: {v}");
+    assert_eq!(v["maxBytes"], 1280 * 1024);
     assert_eq!(crate::zen_routes::max_body("/cli/zen/widget/folder/put"), k2_core::zen::widget_folder::MAX_FOLDER_BODY);
     assert_eq!(crate::zen_routes::max_body("/cli/zen/widget/preview"), k2_core::zen::widget_folder::MAX_FOLDER_BODY);
     assert_eq!(crate::zen_routes::max_body("/cli/zen/widget/put"), crate::zen_routes::MAX_BODY);

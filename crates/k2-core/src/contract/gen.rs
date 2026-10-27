@@ -12,6 +12,8 @@
 //! - `sdk/generated/contract-snapshot.json`: sha256 of the catalog, the
 //!   runtime and every output, for the vitest twin of the freshness test.
 //! - The fenced `k2 zen guide api` block in `cli/k2`.
+//! - The fenced `k2 zen guide libs` block in `cli/k2`, from
+//!   `src/shared/zen-lib.json` (`contract::libs`, 0.46.5).
 //! - From the rows exposed to `app` (runtime S23, `contract::app`): the
 //!   App-facing route table `crates/k2-core/src/app_surface.rs`, the server
 //!   SDK's `sdk/server/src/generated/verbs.ts`, and the fenced
@@ -109,6 +111,8 @@ pub fn render(c: &Catalog, runtime: Option<&str>) -> Result<Vec<Output>, String>
         Output { path: super::app::APP_SURFACE_RS, text: super::app::app_surface_rs(c) },
         Output { path: super::app::SDK_VERBS_TS, text: super::app::sdk_verbs_ts(c)? },
         Output { path: super::app::STUDY_KEY, text: super::app::study_block(c) },
+        // 0.46.5 (vs-live L9): `k2 zen guide libs`, from `zen-lib.json`.
+        Output { path: super::libs::LIBS_KEY, text: super::libs::libs_block(crate::zen::stdlib::zen_lib_manifest()) },
     ];
     let snapshot = snapshot_json(c, runtime, &out);
     out.push(Output { path: SNAPSHOT_JSON, text: snapshot });
@@ -122,6 +126,8 @@ pub fn file_of(path: &str) -> (&str, Option<&'static str>) {
         (CLI, Some(CLI_BEGIN))
     } else if path == super::app::STUDY_KEY {
         (CLI, Some(super::app::STUDY_BEGIN))
+    } else if path == super::libs::LIBS_KEY {
+        (CLI, Some(super::libs::LIBS_BEGIN))
     } else {
         (path, None)
     }

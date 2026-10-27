@@ -12,6 +12,7 @@
 import { USER_WIDGET_CAPS, type UserWidgetCap } from '../k2-caps.generated'
 import { zenWidgetMayRun, type ZenCustomWidgetPayload, type ZenWidgetFinding, type ZenWidgetPause } from './zen-custom-types'
 import type { ZenLibRef } from './zen-lib-loader'
+import { parseZenWidgetSize } from './zen-widget-size'
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -150,5 +151,8 @@ export function parseZenCustomWidget(
     // prd-garden-access-v1 G26a: with Garden access on, whether the live
     // version passes the signer gate in this Garden. Absent with it off.
     ...(typeof raw.signed === 'boolean' ? { signed: raw.signed } : {}),
+    // 0.46.5 WS12: the running version's code size (the menu's "Large
+    // widget" line). Absent or unreadable: no line shows.
+    ...(parseZenWidgetSize(raw.size) ? { size: parseZenWidgetSize(raw.size) } : {}),
   }
 }

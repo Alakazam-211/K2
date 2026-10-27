@@ -885,9 +885,11 @@ strip back to the widget (`src/renderer/lib/zen/zen-canvas.ts`):
 
 ### Limits (UW8, UW29, UWB8, UWB9, UWB13)
 
-Code (HTML + JS + CSS after inlining) 512 KB (256 KB before 0.46.4); each asset 1 MB, all assets
-2 MB; the bundle 3 MB; libraries (`requires.libs`, inlined after `k2.js`) up
-to 8 MB per widget, outside those. 10 custom widgets per page (6 before
+Code (HTML + JS + CSS after inlining) 1 MB, with one warning above 512 KB
+("this widget is large", never an error; 512 KB before 0.46.5, 256 KB before
+0.46.4); each asset 1 MB, all assets 2 MB; the bundled page 3.5 MB (3 MB
+before 0.46.5); libraries (`requires.libs`, inlined after `k2.js`) up to 8 MB
+per widget, outside those (`k2 zen guide libs`). 10 custom widgets per page (6 before
 0.46.1). Per widget: 60
 calls a second (burst 120), 16 live subscriptions, 64 KB per message, 8 live
 servers. Posts are text only, up to 4,000 characters, never files or

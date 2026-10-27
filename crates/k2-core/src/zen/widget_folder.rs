@@ -212,6 +212,11 @@ pub fn check_staged(name: &str, files: &BTreeMap<String, Vec<u8>>) -> J {
         "staged": files.keys().collect::<Vec<_>>(),
         "manifest": c.manifest.as_ref().map(widgets::manifest_json),
         "bundleHash": c.bundle.as_ref().map(|b| b.hash.clone()),
+        // WS9: the sizes and their limits (null when it doesn't bundle).
+        "size": match (c.bundle.as_ref(), c.manifest.as_ref()) {
+            (Some(b), Some(m)) => widgets::size_json(b.code_bytes, b.bytes(), Some(c.assets_bytes), &m.libs),
+            _ => J::Null,
+        },
     })
 }
 

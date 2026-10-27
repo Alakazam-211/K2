@@ -13,6 +13,7 @@
 
 import { createContext } from 'react'
 import { zenWidgetDisplayName } from './zen-custom-words'
+import { zenLargeWidgetText } from './zen-widget-size'
 import { ZEN_CUSTOM_KIND, zenWidgetInBand, type ZenResolvedPage, type ZenWidgetDecl } from './zen-page'
 
 /** Which widget fills the page and which menu holds its Reload. */
@@ -23,6 +24,8 @@ export interface ZenFillReload {
   menuId: string
   /** The widget's name as K2 shows it (cut to length). */
   name: string
+  /** 0.46.5 WS13: the "Large widget" line for this widget, or null. */
+  large: string | null
 }
 
 /** K2's own built-in widgets (`k2:<name>@<n>`, the Diary) have no Reload. */
@@ -63,7 +66,7 @@ export function zenFillReload(page: Pick<ZenResolvedPage, 'layout' | 'widgets' |
   if (only.kind !== ZEN_CUSTOM_KIND || !only.custom || zenIsBuiltinCustomWidget(only.custom.widget)) return null
   const menuId = hostMenu(page)
   if (!menuId) return null
-  return { widgetId: only.id, menuId, name: zenWidgetDisplayName(only.custom.name) }
+  return { widgetId: only.id, menuId, name: zenWidgetDisplayName(only.custom.name), large: zenLargeWidgetText(only.custom.size) }
 }
 
 /** Provided by `ZenPage`: the custom widget skips its corner ⋯ and the

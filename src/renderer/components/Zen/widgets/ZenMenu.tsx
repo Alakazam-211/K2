@@ -388,6 +388,16 @@ export function ZenMenu({
           >
             <span className="min-w-0 flex-1 truncate">Reload {reload.name}</span>
           </button>
+          {reload.large && (
+            // 0.46.5 WS13: the full-canvas widget's "Large widget" line, here
+            // because its ⋯ is (never on the canvas).
+            <p
+              data-zen-large-widget={reload.widgetId}
+              style={{ ...ROW_STYLE, margin: 0, fontSize: '0.85em', color: 'var(--zen-text-muted)', whiteSpace: 'normal', maxWidth: 320 }}
+            >
+              {reload.large}
+            </p>
+          )}
         </div>,
       ])
     }

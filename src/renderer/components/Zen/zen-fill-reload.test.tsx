@@ -182,7 +182,7 @@ afterEach(() => {
 describe('a custom widget that fills a full-canvas Garden (0.45.2)', () => {
   it('with a menu: no corner ⋯; the menu holds "Reload <name>", and it reloads the widget', async () => {
     const p = page({ full: true, widgets: [custom('lab', 'diary-lab', 'Diary Lab')], chrome: withMenu() })
-    expect(zenFillReload(p)).toEqual({ widgetId: 'lab', menuId: 'more', name: 'Diary Lab' })
+    expect(zenFillReload(p)).toEqual({ widgetId: 'lab', menuId: 'more', name: 'Diary Lab', large: null })
     await show(p)
     q('[data-zen-custom-frame-slot="lab"]')
     expect(document.querySelector('[data-zen-custom-menu]'), 'no floating ⋯ over the page').toBeNull()
@@ -228,6 +228,44 @@ describe('a custom widget that fills a full-canvas Garden (0.45.2)', () => {
     expect(document.querySelectorAll('[data-zen-custom-menu]').length).toBe(2)
     openMenu('more')
     expect(document.querySelector('[data-zen-menu-reload]')).toBeNull()
+  })
+})
+
+// 0.46.5 WS13: "Large widget" in the widget's menu, never on the canvas.
+describe('a large widget says so in its menu, never on the canvas (0.46.5)', () => {
+  const sized = (code: number): Record<string, unknown> => ({
+    ...custom('lab', 'diary-lab', 'Diary Lab'),
+    size: { code, codeWarnAt: 512 * 1024, codeMax: 1024 * 1024 },
+  })
+  const LINE = 'Large widget: 740 KB of code (limit 1 MB). Ask your agent about splitting it or making it an App.'
+
+  it('a column widget above 512 KB: one quiet line in its ⋯ menu; the canvas is unchanged', async () => {
+    const p = page({ full: false, widgets: [sized(740 * 1024)], chrome: withMenu() })
+    await show(p)
+    expect(document.querySelector('[data-zen-large-widget]'), 'nothing drawn on the canvas').toBeNull()
+    act(() => {
+      fireEvent.click(q('[data-zen-custom-menu]'))
+    })
+    expect(q('[data-zen-large-widget="diary-lab"]').textContent).toBe(LINE)
+  })
+
+  it('exactly at 512 KB: no line', async () => {
+    const p = page({ full: false, widgets: [sized(512 * 1024)], chrome: withMenu() })
+    await show(p)
+    act(() => {
+      fireEvent.click(q('[data-zen-custom-menu]'))
+    })
+    q('[data-zen-custom-menu-item="reload"]')
+    expect(document.querySelector('[data-zen-large-widget]')).toBeNull()
+  })
+
+  it('a full-canvas widget: the line is in the Garden menu, beside its Reload', async () => {
+    const p = page({ full: true, widgets: [sized(740 * 1024)], chrome: withMenu() })
+    expect(zenFillReload(p)?.large).toBe(LINE)
+    await show(p)
+    expect(document.querySelector('[data-zen-large-widget]')).toBeNull()
+    openMenu('more')
+    expect(q('[data-zen-large-widget="lab"]').textContent).toBe(LINE)
   })
 })
 

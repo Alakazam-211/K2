@@ -81,6 +81,18 @@ export interface ZenCustomWidgetPayload {
    *  the signer gate in this Garden? False: the ⋯ menu reads "History · not
    *  signed". Absent with Garden access off. */
   signed?: boolean
+  /** 0.46.5 WS12: the running version's code size and the warning line
+   *  (the ⋯ menu's "Large widget" note reads it; never the canvas). Absent
+   *  from an older daemon. */
+  size?: ZenWidgetSize | null
+}
+
+/** 0.46.5 WS12: a widget version's code size in bytes, the size K2 warns
+ *  above (512 KB) and its limit (1 MB). */
+export interface ZenWidgetSize {
+  code: number
+  codeWarnAt: number
+  codeMax: number
 }
 
 /** The v4 seam: only a widget from your own Garden runs today. One that

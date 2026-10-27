@@ -171,7 +171,11 @@ impl ZenFiles {
     pub fn check_widget_put(&self, widget: &str, file: &str, text: &str) -> Result<String, ZenError> {
         let (name, _) = self.widget_file_text(widget, file)?;
         if text.len() > MAX_PUT_BYTES {
-            return Err(ZenError::BadRequest(format!("a widget code file is at most {} KiB", MAX_PUT_BYTES / 1024)));
+            return Err(ZenError::BadRequest(format!(
+                "a widget code file is at most {} ({MAX_PUT_BYTES} bytes); this one is {} bytes. Split the code, or use K2's libraries (k2 zen guide libs)",
+                super::bundle::human_bytes(MAX_PUT_BYTES),
+                text.len()
+            )));
         }
         if file == widgets::MANIFEST_FILE && serde_json::from_str::<J>(text).is_err() {
             return Err(ZenError::BadRequest("manifest.json is not JSON; nothing was written".into()));

@@ -220,9 +220,34 @@ describe('pure helpers', () => {
       ['quiet', 812, 'owner'],
     ])
   })
+
+  // 0.46.5 WS14: Settings shows the same "Large widget" note next to the name.
+  it('lines: a widget above 512 KB of code carries the Large widget note; at 512 KB none', () => {
+    const size = (code: number) => ({ code, codeWarnAt: 512 * 1024, codeMax: 1024 * 1024 })
+    const lines = buildDataLines(
+      [
+        { name: 'big', builtin: false, size: size(740 * 1024) },
+        { name: 'edge', builtin: false, size: size(512 * 1024) },
+        { name: 'old', builtin: false },
+      ],
+      { spaces: [], saves: [] },
+    )
+    expect(lines.map((l) => [l.widget, l.large])).toEqual([
+      ['big', 'Large widget: 740 KB of code (limit 1 MB). Ask your agent about splitting it or making it an App.'],
+      ['edge', null],
+      ['old', null],
+    ])
+  })
 })
 
 describe('ZenWidgetData', () => {
+  it('0.46.5 WS14: a large widget row says so next to its name', async () => {
+    h.widgets = [{ name: 'big', builtin: false, size: { code: 740 * 1024, codeWarnAt: 512 * 1024, codeMax: 1024 * 1024 } }]
+    await mount()
+    const note = line('big').querySelector('[data-zen-large-widget="big"]')
+    expect(note?.textContent).toBe('Large widget: 740 KB of code (limit 1 MB). Ask your agent about splitting it or making it an App.')
+  })
+
   it('shows size, keys, grants, grant admin and the maker', async () => {
     h.widgets = [{ name: 'board', builtin: false, title: 'Board' }]
     h.spaces = [row('board', { grants: 3, admins: ['board-builder'] })]

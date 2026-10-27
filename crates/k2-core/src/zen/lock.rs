@@ -374,6 +374,7 @@ impl ZenFiles {
                 }],
                 warnings: Vec::new(),
                 last_good_at: None,
+                assets: None,
             });
         };
         Some(WidgetStatus {
@@ -386,6 +387,7 @@ impl ZenFiles {
             errors: Vec::new(),
             warnings: Vec::new(),
             last_good_at: Some(at),
+            assets: None,
         })
     }
 

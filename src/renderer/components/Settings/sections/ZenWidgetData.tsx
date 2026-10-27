@@ -42,6 +42,7 @@ import type {
   GardenSpacesResponse,
 } from '@/lib/garden-data/garden-data-types'
 import { watchLocalZenChanged, zenLocalScope } from '@/lib/zen/zen-api'
+import { parseZenWidgetSize, zenLargeWidgetText } from '@/lib/zen/zen-widget-size'
 import { onGardenDataChanged } from '@/stores/session-events'
 import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -61,6 +62,8 @@ interface WidgetRow {
   builtin: boolean
   title?: string | null
   madeBy?: GardenMadeBy | null
+  /** 0.46.5 WS14: the live version's code size (`{code, codeWarnAt, codeMax}`). */
+  size?: unknown
 }
 
 /** A Data line: a custom widget, with its data row when it has one. */
@@ -69,6 +72,8 @@ export interface DataLineModel {
   title: string | null
   space: GardenSpaceRow | null
   madeBy: GardenMadeBy | null
+  /** 0.46.5 WS14: "Large widget: …" next to the name, or null. */
+  large: string | null
 }
 
 /** "2.1 MB", "812 B": the same units Finder uses (1000-based). */
@@ -126,11 +131,17 @@ export function buildDataLines(widgets: readonly WidgetRow[], spaces: GardenSpac
     const s = byWidget.get(w.name) ?? null
     if (s?.orphanedAt != null) continue
     seen.add(w.name)
-    out.push({ widget: w.name, title: w.title ?? null, space: s, madeBy: s?.madeBy ?? w.madeBy ?? null })
+    out.push({
+      widget: w.name,
+      title: w.title ?? null,
+      space: s,
+      madeBy: s?.madeBy ?? w.madeBy ?? null,
+      large: zenLargeWidgetText(parseZenWidgetSize(w.size)),
+    })
   }
   for (const s of spaces.spaces) {
     if (seen.has(s.widget) || s.orphanedAt != null) continue
-    out.push({ widget: s.widget, title: null, space: s, madeBy: s.madeBy })
+    out.push({ widget: s.widget, title: null, space: s, madeBy: s.madeBy, large: null })
   }
   out.sort((a, b) => a.widget.localeCompare(b.widget))
   return out
@@ -347,6 +358,11 @@ function DataLine({
           <div className="text-xs text-[var(--color-text-primary)] truncate">
             {line.title && line.title !== widget ? `${line.title} (${widget})` : widget}
           </div>
+          {line.large && (
+            <div className={MUTED} data-zen-large-widget={widget}>
+              {line.large}
+            </div>
+          )}
           <div className={MUTED} data-garden-data-summary="">
             {space ? `${formatBytes(space.bytes)} · ${space.keys} key${space.keys === 1 ? '' : 's'}` : 'No data yet'}
             {space ? ` · ${grants} grant${grants === 1 ? '' : 's'}` : ''}

@@ -550,6 +550,19 @@ mod tests {
         assert_eq!(BUILTIN_WIDGET_HASHES.len(), BUILTIN_WIDGETS.len(), "one pin per built-in");
     }
 
+    /// 0.46.5 WS8 (vs-live L7): every built-in stays under the large-widget
+    /// warning, so no K2 widget ever shows it.
+    #[test]
+    fn every_builtin_stays_under_the_large_widget_warning() {
+        for w in BUILTIN_WIDGETS {
+            let id = w.id();
+            let c = crate::zen::widgets::check_files(&format!("builtin:{id}"), w.name, &crate::zen::widgets::builtin_files(w));
+            let b = c.bundle.as_ref().unwrap_or_else(|| panic!("{id} bundles: {:?}", c.errors));
+            assert!(b.code_bytes <= crate::zen::bundle::WARN_CODE_BYTES, "WS8: {id} is {} bytes of code", b.code_bytes);
+            assert!(!c.warnings.iter().any(|d| d.message.starts_with("this widget is large")), "{id}: {:?}", c.warnings);
+        }
+    }
+
     /// Every released Diary version, oldest first.
     fn diaries() -> Vec<&'static BuiltinWidget> {
         let all: Vec<&BuiltinWidget> = BUILTIN_WIDGETS.iter().filter(|w| w.name == "diary").collect();
@@ -631,7 +644,7 @@ mod tests {
             assert!(ok, "diary.js calls k2.{name}, which isn't a widget helper");
         }
         let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
-        assert!(code <= crate::zen::bundle::MAX_CODE_BYTES, "UW8: {} is {code} bytes of code", w.id());
+        assert!(code <= crate::zen::bundle::WARN_CODE_BYTES, "WS8: {} is {code} bytes of code", w.id());
         // Rosson 2026-10-08: one page per agent on THIS computer. K2 binds
         // the grant to `{server: "local"}`; the page list keeps only
         // `<handle>::local` rows as a second lock.
@@ -1104,7 +1117,7 @@ mod tests {
         let css = file(w, "kanban.css");
         assert!(css.contains("@media (prefers-reduced-motion: reduce)"));
         let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
-        assert!(code <= crate::zen::bundle::MAX_CODE_BYTES, "UW8: {id} is {code} bytes of code");
+        assert!(code <= crate::zen::bundle::WARN_CODE_BYTES, "WS8: {id} is {code} bytes of code");
     }
 
     /// Garden v3 (contract-sources-v1 §11.4, §12.3): each data-source card

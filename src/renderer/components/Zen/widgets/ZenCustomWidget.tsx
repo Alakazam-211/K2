@@ -53,6 +53,7 @@ import { zenBoundSourceAddresses } from '@/lib/zen/zen-custom-sources'
 import { zenSourcesReader } from '@/lib/zen/zen-sources-live'
 import { loadGardenAccessSwitch, useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { ZenGardenHistoryModal } from './ZenGardenHistoryModal'
+import { zenLargeWidgetText } from '@/lib/zen/zen-widget-size'
 
 /** A source's link, when it's a plain https URL (PRD §12.8: opened in the
  *  system browser by K2, never by the sealed frame). */
@@ -156,6 +157,7 @@ function CornerMenu({
   onReload,
   askAbout = [],
   history,
+  large = null,
 }: {
   name: string
   onReload(): void
@@ -163,6 +165,8 @@ function CornerMenu({
   askAbout?: readonly string[]
   /** The widget folder and Garden for History…; absent for a built-in. */
   history?: { widget: string; garden: string; builtin: boolean; signed: boolean | undefined }
+  /** 0.46.5 WS13: the "Large widget" line, or null. */
+  large?: string | null
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -273,6 +277,15 @@ function CornerMenu({
               >
                 {historyLabel}
               </button>
+            )}
+            {large && (
+              // 0.46.5 WS13: one quiet line, in the menu, never on the canvas.
+              <p
+                data-zen-large-widget={history?.widget ?? name}
+                style={{ margin: 0, padding: '6px 10px', maxWidth: 260, fontSize: '0.85em', color: 'var(--zen-text-muted)' }}
+              >
+                {large}
+              </p>
             )}
           </div>,
         )}
@@ -413,6 +426,7 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
             onReload={() => reloadZenWidget(key)}
             askAbout={zenBoundSourceAddresses(widget)}
             history={{ widget: widget.widget, garden: gid, builtin, signed: widget.signed }}
+            large={zenLargeWidgetText(widget.size)}
           />
         )}
       </div>

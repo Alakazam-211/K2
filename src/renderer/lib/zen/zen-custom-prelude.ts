@@ -11,8 +11,9 @@
 //   <script nonce> each `requires.libs` library, in order       (UWB13)
 //   …the daemon's bundle (its own scripts already carry the nonce)
 //
-// The runtime and libraries never count toward the widget's 512 KB
-// (UW8). Every script text has `</script` escaped, so no text can close
+// The runtime and libraries never count toward the widget's code limit
+// (1 MB, a warning above 512 KB; UW8, 0.46.5 WS1/WS2) or its page limit
+// (3.5 MB). Every script text has `</script` escaped, so no text can close
 // its element early.
 //
 // k2-frame.js is generated (`contract-gen`, UWA11): the catalog's widget

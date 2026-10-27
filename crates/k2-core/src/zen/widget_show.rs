@@ -92,6 +92,8 @@ impl ZenFiles {
             "reads": reads,
             "placements": placements,
             "runtime": runtime,
+            // WS9: the sizes of the version this widget runs now.
+            "size": st.size(),
         }))
     }
 }

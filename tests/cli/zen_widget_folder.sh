@@ -182,6 +182,36 @@ capture zen validate --help
 assert_contains "validate --help shows --dir and --strict" "$out" "--dir <folder> [--as <name>]"
 assert_contains "validate --help says a check never signs" "$out" "check never signs on its own"
 
+echo "== 0.46.5: a large widget warns where the agent looks, and 1 MB of UTF-8 puts =="
+BIG="$SANDBOX/work/big"
+mkdir -p "$BIG"
+echo '{"schema": 1, "id": "big", "name": "Big", "caps": []}' >"$BIG/manifest.json"
+echo '<!doctype html><html><body><script src="big.js"></script></body></html>' >"$BIG/index.html"
+python3 -c 'import sys; sys.stdout.write("// " + "x" * (600 * 1024) + "\n")' >"$BIG/big.js"
+capture zen widget put --dir "$BIG"
+assert_eq "a 600 KB widget puts (warnings never fail)" "$rc" "0"
+assert_contains "put --dir prints the large warning" "$out" "warning: this widget is large: "
+assert_contains "the warning names the suggestion" "$out" "suggestion: consider splitting it or using an App"
+assert_contains "put --dir prints the size line" "$out" "size: code 600 KB of 1 MB (large), page "
+capture zen widget put big big.js --from "$BIG/big.js"
+assert_eq "a one-file put of it exits 0" "$rc" "0"
+assert_contains "put prints the warning too" "$out" "warning: this widget is large: "
+assert_contains "put prints the size line" "$out" "of 1 MB (large)"
+capture zen validate --widget big
+assert_contains "validate prints the size line" "$out" "size: code 600 KB of 1 MB (large)"
+# vs-live L5: 1,000,000 bytes, 30% of them 3-byte UTF-8. Escaped as \uXXXX
+# this would be 1.3 MB and pass the 1,280 KB body cap; sent as UTF-8 it fits.
+python3 -c '
+import sys
+cjk = "中" * 100000
+body = "// " + cjk + "\n// " + "y" * (1000000 - 3 * 100000 - 8) + "\n"
+assert len(body.encode("utf-8")) == 1000000, len(body.encode("utf-8"))
+sys.stdout.buffer.write(body.encode("utf-8"))' >"$BIG/big.js"
+capture zen widget put big big.js --from "$BIG/big.js"
+assert_eq "a 1 MB file that is 30% 3-byte UTF-8 puts cleanly" "$rc" "0"
+assert_not_contains "no body_too_large" "$out" "body_too_large"
+cmp -s "$BIG/big.js" "$ZEN/widgets/big/big.js" && ok "the UTF-8 file arrived byte for byte" || bad "big.js differs"
+
 echo "== validate: no signing by default, pending exits 0 unless --strict =="
 capture zen validate --widget board --json
 assert_eq "validate --widget exits 0" "$rc" "0"

@@ -742,6 +742,46 @@ pub struct Checked {
     pub bundle: Option<Bundle>,
     pub errors: Vec<Diagnostic>,
     pub warnings: Vec<Diagnostic>,
+    /// The folder's images and fonts, in bytes (the 2 MB asset cap's count).
+    pub assets_bytes: u64,
+}
+
+/// The bytes of the libraries a manifest's `requires.libs` names, as K2
+/// would load them today, and whether any is a CDN file whose size K2
+/// doesn't know until it is fetched (vs-live L14: counted as 0 with the flag).
+pub fn libs_bytes(libs: &[J]) -> (u64, bool) {
+    let m = stdlib::zen_lib_manifest();
+    let mut bytes = 0;
+    let mut unknown = false;
+    for item in libs {
+        match LibRef::from_json(item) {
+            Ok(r @ LibRef::Named { .. }) => bytes += stdlib::find(m, &r).map_or(0, |e| e.total_bytes()),
+            Ok(LibRef::Cdn { .. }) => unknown = true,
+            Err(_) => {}
+        }
+    }
+    (bytes, unknown)
+}
+
+/// A widget's sizes and their limits, in bytes (prd-widget-size-and-shared-
+/// libs-v1 WS9): the code (HTML, JS and CSS) and the page count toward the
+/// limits; K2's libraries never do (they count toward their own 8 MB).
+/// `assets` is `None` for a saved copy (a frozen or last good bundle keeps
+/// no asset count).
+pub fn size_json(code: usize, page: usize, assets: Option<u64>, libs: &[J]) -> J {
+    let (lib_bytes, unknown) = libs_bytes(libs);
+    json!({
+        "code": code,
+        "codeWarnAt": bundle::WARN_CODE_BYTES,
+        "codeMax": bundle::MAX_CODE_BYTES,
+        "page": page,
+        "pageMax": bundle::MAX_BUNDLE_BYTES,
+        "assets": assets,
+        "assetsMax": MAX_ASSETS_BYTES,
+        "libs": lib_bytes,
+        "libsMax": stdlib::zen_lib_manifest().max_bytes_per_widget,
+        "libsUnknown": unknown,
+    })
 }
 
 impl Checked {
@@ -798,6 +838,7 @@ pub fn check_files(prefix: &str, folder: &str, files: &BTreeMap<String, Vec<u8>>
             }),
         }
     }
+    c.assets_bytes = total;
     if total > MAX_ASSETS_BYTES {
         c.errors.push(Diagnostic {
             suggestion: None,

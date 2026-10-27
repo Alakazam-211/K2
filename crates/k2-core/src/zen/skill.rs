@@ -572,8 +572,8 @@ fn garden_data_section() -> String {
 A custom widget that asks for `store:read` / `store:write` gets its own keyspace,\n\
 `data:<widget>`, in a file K2 keeps on THIS computer (and `k2.save.*` for private\n\
 saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your side.\n\n\
-- **Use `k2.store` for data; never inline data into the widget's code** (code is capped\n\
-  at 512 KB, and a code edit is a new version).\n\
+- **Use `k2.store` for data; never inline data into the widget's code** (code warns above\n\
+  512 KB and stops at 1 MB, and a code edit is a new version).\n\
 - One key per object (`obj/<id>`, or `project/<pid>/board/<bid>/obj/<id>`), values JSON\n\
   ≤ 60 KiB. Write with `{ifRev}`; on `conflict` read again and re-apply only the fields\n\
   you changed. `k2.store.subscribe(prefix, cb)` shows anyone's change live.\n\
@@ -1059,8 +1059,9 @@ that ends at a dot works: `\"three@0.170\"`). Each defines a global.\n\n",
 or name a pinned CDN file as `{{\"url\": …, \"integrity\": \"sha256-…\"}}` from {}; K2's daemon\n\
 fetches and checks it, the frame never touches the network, and air-gap blocks it.\n\n\
 ### Limits\n\n\
-- Code (HTML + JS + CSS after inlining): 512 KB. Each asset 1 MB; all assets 2 MB; the\n\
-  bundled page 3 MB. Libraries: up to {} per widget, outside those limits.\n\
+- Code (HTML + JS + CSS after inlining): 1 MB, with a warning above 512 KB (\"this widget\n\
+  is large\": split it, or make it an App). Each asset 1 MB; all assets 2 MB; the bundled\n\
+  page 3.5 MB. Libraries: up to {} per widget, outside those limits (`k2 zen guide libs`).\n\
 - 10 custom widgets per page. Per widget: 60 calls a second, 16 live subscriptions,\n\
   64 KB per message, 8 live servers.\n\
 - WebGL, canvas, wasm and blob workers work. No network, storage, popups or dialogs\n\
@@ -1443,6 +1444,24 @@ mod tests {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
         assert!(crate::zen::stdlib::zen_lib_manifest().libs.iter().any(|l| l.id == "uplot" && l.version == "1.6.32"), "uPlot is vendored");
+    }
+
+    /// 0.46.5 S1 (prd-widget-size-and-shared-libs-v1 WS1, WS2, WS6): the
+    /// limits say 1 MB with a warning above 512 KB, a 3.5 MB page, and point
+    /// at `k2 zen guide libs`; the manifest is part of the signed version (S0).
+    #[test]
+    fn skill_states_the_0465_limits_and_the_signed_manifest() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 43, "the new limits need a new skill version");
+        let s = generate_k2_zen_skill_for(false);
+        let limits = s.split("### Limits").nth(1).and_then(|t| t.split("###").next()).expect("a Limits section");
+        for needle in ["1 MB", "512 KB", "3.5 MB", "k2 zen guide libs"] {
+            assert!(limits.contains(needle), "the limits must say {needle:?}: {limits}");
+        }
+        assert!(!limits.contains("page 3 MB"), "{limits}");
+        let on = generate_k2_zen_skill_for(true);
+        for needle in ["the code AND the\n  manifest", "sign_needs_person", "k2 zen widget sign <w> --ask"] {
+            assert!(on.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
     }
 
     /// TUW5.2 (UWB2): skill v12 documents custom widgets from the catalog.

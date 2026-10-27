@@ -39,7 +39,8 @@ pub const ZEN_LIB_JSON: &str = include_str!("../../../../src/shared/zen-lib.json
 pub struct ZenLibManifest {
     pub schema: u32,
     /// At most this many bytes of library text inlined into one widget
-    /// (UWB13: 8 MB), outside UW8's 512 KB code limit.
+    /// (UWB13: 8 MB), outside UW8's code limit (1 MB from 0.46.5) and the
+    /// page limit (3.5 MB).
     pub max_bytes_per_widget: u64,
     /// Hosts a widget's `{url, integrity}` entry may name (R2).
     pub cdn_hosts: Vec<String>,
@@ -114,6 +115,23 @@ impl ZenLibEntry {
 
     pub fn total_bytes(&self) -> u64 {
         self.files.iter().map(|f| f.bytes).sum()
+    }
+}
+
+/// A version's **line**: the part that may change its API (prd-widget-size-
+/// and-shared-libs-v1 §6.2). The major from 1.0.0 up (`1.6.32` → `1`,
+/// `3001.0.19` → `3001`), `0.minor` below 1 (`0.186.0` → `0.186`). A widget
+/// asks for a line; K2 updates patches inside it.
+pub fn line_of(version: &str) -> String {
+    let mut parts = version.split('.');
+    let major = parts.next().unwrap_or(version);
+    if major == "0" {
+        match parts.next() {
+            Some(minor) => format!("0.{minor}"),
+            None => "0".to_string(),
+        }
+    } else {
+        major.to_string()
     }
 }
 

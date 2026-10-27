@@ -27,6 +27,7 @@ use std::sync::OnceLock;
 
 pub mod app;
 pub mod gen;
+pub mod libs;
 pub mod lint;
 
 use serde::{Deserialize, Serialize};

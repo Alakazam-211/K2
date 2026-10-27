@@ -66,7 +66,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-TOPICS="gardens files widgets bands required menus themes sync examples undo safe-mode api services"
+TOPICS="gardens files widgets bands required menus themes sync examples undo safe-mode api services libs"
 # FC34's names in Cortana's order (FC65), menu-bottom-right before the
 # later column-corner.
 WANT_EXAMPLES="rail-top quiet-top bottom-bar menu-both texting-chrome menu-bottom-right column-corner"
@@ -124,6 +124,13 @@ print(d["id"], bool(d["title"]))')"
     body="$(printf '%s' "$out" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["body"])')"
     assert_eq "guide $t --json body is the page" "$body" "$page"
 done
+# 0.46.5 (vs-live L9): the topic K2's messages name ("see k2 zen guide libs")
+# exists with no daemon, and teaches lines, never patches.
+ndcap zen guide libs
+assert_eq "guide libs exits 0" "$rc" "0"
+assert_contains "guide libs teaches a line" "$out" '"requires": { "libs": ["uplot@1", "chart.js@4"] }'
+assert_contains "guide libs lists uplot by its line" "$out" "  uplot@1 "
+assert_contains "guide libs names the limits" "$out" "the code limit (1 MB; a warning above 512 KB)"
 ndcap zen guide nosuch
 assert_eq "an unknown topic exits 2" "$rc" "2"
 assert_contains "an unknown topic says so" "$out" "no guide topic 'nosuch'"

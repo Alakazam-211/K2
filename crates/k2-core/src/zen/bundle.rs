@@ -42,10 +42,48 @@ use sha2::{Digest, Sha256};
 use super::schema::Diagnostic;
 use crate::jscheck::{self, Lang, Severity, Surface};
 
-/// Code (HTML + JS + CSS that is inlined; assets excluded) per widget (UW8).
-pub const MAX_CODE_BYTES: usize = 512 * 1024;
-/// The bundled document, assets included (UW8).
-pub const MAX_BUNDLE_BYTES: usize = 3 * 1024 * 1024;
+/// Code (HTML + JS + CSS that is inlined; assets and K2's libraries
+/// excluded) per widget: over it is an error (UW8; 1 MB from 0.46.5, WS1).
+pub const MAX_CODE_BYTES: usize = 1024 * 1024;
+/// Code above this (strictly) gets one size warning, never an error
+/// (0.46.5 WS2, Rosson 2026-10-26).
+pub const WARN_CODE_BYTES: usize = 512 * 1024;
+/// The bundled document, assets included (UW8; 3.5 MB from 0.46.5, WS6:
+/// the code cap rose by 0.5 MB, so the room for images stays as it was).
+pub const MAX_BUNDLE_BYTES: usize = 3 * 1024 * 1024 + 512 * 1024;
+
+/// A byte count in K2's own words: "740 KB", "1 MB", "3.5 MB" (1 KB = 1,024
+/// bytes, as the limits are).
+pub fn human_bytes(n: usize) -> String {
+    const KB: usize = 1024;
+    const MB: usize = 1024 * 1024;
+    if n >= MB {
+        let tenths = (n * 10 + MB / 2) / MB;
+        if tenths % 10 == 0 {
+            format!("{} MB", tenths / 10)
+        } else {
+            format!("{}.{} MB", tenths / 10, tenths % 10)
+        }
+    } else if n >= KB {
+        format!("{} KB", (n + KB / 2) / KB)
+    } else {
+        format!("{n} bytes")
+    }
+}
+
+/// The large-widget warning's text (WS2), for `code` bytes of code.
+pub fn large_widget_message(code: usize) -> String {
+    format!(
+        "this widget is large: {} of code (K2 warns above {}; the limit is {})",
+        human_bytes(code),
+        human_bytes(WARN_CODE_BYTES),
+        human_bytes(MAX_CODE_BYTES)
+    )
+}
+
+/// The large-widget warning's suggestion (WS2).
+pub const LARGE_WIDGET_SUGGESTION: &str =
+    "consider splitting it or using an App; K2's shared libraries don't count toward the limit (k2 zen guide libs)";
 
 /// Asset file types K2 inlines (UW8): extension → MIME. No SVG in this
 /// cut, as for theme backgrounds.
@@ -869,9 +907,20 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
             line: 1,
             col: 1,
             message: format!(
-                "this widget's code (HTML, JS and CSS) is {} bytes; the limit is {MAX_CODE_BYTES} bytes (512 KB)",
-                cx.code_bytes
+                "this widget's code (HTML, JS and CSS) is {} bytes; the limit is {}. Split it into widgets, move data into k2.store, use K2's libraries (k2 zen guide libs), or make it an App",
+                cx.code_bytes,
+                human_bytes(MAX_CODE_BYTES)
             ),
+        });
+    } else if cx.code_bytes > WARN_CODE_BYTES {
+        // WS2/WS3: a size fact, raised on every check while it stays large;
+        // never an error, never a pause.
+        cx.warnings.push(Diagnostic {
+            suggestion: Some(LARGE_WIDGET_SUGGESTION.to_string()),
+            file: cx.label(&entry_owned),
+            line: 1,
+            col: 1,
+            message: large_widget_message(cx.code_bytes),
         });
     }
     let bundle = Bundle::new(doc.finish(), cx.code_bytes, String::new());
@@ -882,8 +931,9 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
             line: 1,
             col: 1,
             message: format!(
-                "the bundled widget is {} bytes; the limit is {MAX_BUNDLE_BYTES} bytes (3 MB). Use smaller images",
-                bundle.bytes()
+                "the bundled widget is {} bytes; the limit is {MAX_BUNDLE_BYTES} bytes ({}). Use smaller images",
+                bundle.bytes(),
+                human_bytes(MAX_BUNDLE_BYTES)
             ),
         });
     }
@@ -1109,25 +1159,93 @@ mod tests {
         assert!(out.errors.is_empty() && out.warnings.is_empty(), "{:?} {:?}", out.errors, out.warnings);
     }
 
-    #[test]
-    fn code_over_512_kb_is_an_error() {
-        assert_eq!(MAX_CODE_BYTES, 512 * 1024, "0.46.4: the code cap is 512 KB raw");
-        let big = vec![b'x'; MAX_CODE_BYTES + 1];
-        let f = files(&[("index.html", b"<script src=\"a.js\"></script>"), ("a.js", &big)]);
-        let out = bundle("widgets/w", "index.html", &f);
-        assert_eq!(out.errors.len(), 1, "{:?}", out.errors);
-        assert!(out.errors[0].message.contains("512 KB"), "{:?}", out.errors);
+    const ENTRY: &[u8] = b"<script src=\"a.js\"></script>";
+
+    /// `code` bytes of code in all: the entry HTML plus `a.js` (a comment,
+    /// so the size is all there is to check).
+    fn code_of(code: usize) -> BTreeMap<String, Vec<u8>> {
+        let mut js = b"//".to_vec();
+        js.resize(code - ENTRY.len(), b'x');
+        files(&[("index.html", ENTRY), ("a.js", &js)])
     }
 
     #[test]
-    fn code_of_400_kb_bundles() {
-        // Baden's Board was 237 KB at 0.46.3's 256 KB cap; 0.46.4 doubles it
-        // and keeps the 3 MB bundle cap.
-        let big = vec![b'x'; 400 * 1024];
-        let f = files(&[("index.html", b"<script src=\"a.js\"></script>"), ("a.js", &big)]);
+    fn the_caps_are_pinned() {
+        assert_eq!(MAX_CODE_BYTES, 1 << 20, "0.46.5 WS1: the code cap is 1 MB");
+        assert_eq!(WARN_CODE_BYTES, 512 << 10, "0.46.5 WS2: warn above 512 KB");
+        assert_eq!(MAX_BUNDLE_BYTES, 3 * 1024 * 1024 + 512 * 1024, "0.46.5 WS6: the page is 3.5 MB");
+        assert_eq!(human_bytes(MAX_CODE_BYTES), "1 MB");
+        assert_eq!(human_bytes(WARN_CODE_BYTES), "512 KB");
+        assert_eq!(human_bytes(MAX_BUNDLE_BYTES), "3.5 MB");
+        assert_eq!(human_bytes(740 * 1024 + 300), "740 KB");
+    }
+
+    /// WS1–WS3 at the exact boundaries (the entry HTML counts, L6).
+    #[test]
+    fn code_warns_above_512_kb_and_stops_above_1_mb() {
+        let out = bundle("widgets/w", "index.html", &code_of(WARN_CODE_BYTES));
+        assert!(out.errors.is_empty() && out.warnings.is_empty(), "{:?} {:?}", out.errors, out.warnings);
+        assert_eq!(out.bundle.as_ref().map(|b| b.code_bytes), Some(WARN_CODE_BYTES));
+
+        let out = bundle("widgets/w", "index.html", &code_of(WARN_CODE_BYTES + 1));
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        assert!(out.bundle.is_some(), "a warning never blocks");
+        assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
+        let w = &out.warnings[0];
+        assert_eq!((w.file.as_str(), w.line, w.col), ("widgets/w/index.html", 1, 1));
+        assert!(w.message.starts_with("this widget is large: ") && w.message.contains("512 KB") && w.message.contains("1 MB"), "{w:?}");
+        assert!(w.suggestion.as_deref().is_some_and(|s| s.contains("k2 zen guide libs")), "{w:?}");
+
+        let out = bundle("widgets/w", "index.html", &code_of(MAX_CODE_BYTES));
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
+        assert_eq!(
+            out.warnings[0].message,
+            "this widget is large: 1 MB of code (K2 warns above 512 KB; the limit is 1 MB)",
+            "exactly at the cap: still a warning"
+        );
+
+        let out = bundle("widgets/w", "index.html", &code_of(MAX_CODE_BYTES + 1));
+        assert!(out.bundle.is_none());
+        assert_eq!(out.errors.len(), 1, "{:?}", out.errors);
+        assert!(out.errors[0].message.contains("the limit is 1 MB") && out.errors[0].message.contains("k2 zen guide libs"), "{:?}", out.errors);
+        assert!(out.warnings.is_empty(), "over the cap is the error, not also the warning: {:?}", out.warnings);
+    }
+
+    /// WS6 with exact bytes (vs-live L6): 1 MB of code plus 1.7 MB of
+    /// unreferenced images bundles; one more referenced image (assets
+    /// still under the 2 MB asset cap) passes 3.5 MB and the error names
+    /// the page, not the assets.
+    #[test]
+    fn the_page_cap_is_3_5_mb_with_the_same_room_for_images() {
+        let png = |n: usize| {
+            let mut b = PNG.to_vec();
+            b.resize(n, 0);
+            b
+        };
+        let (a, b) = (png(850_000), png(850_000));
+        let mut f = code_of(MAX_CODE_BYTES);
+        f.insert("a.png".into(), a.clone());
+        f.insert("b.png".into(), b.clone());
         let out = bundle("widgets/w", "index.html", &f);
         assert!(out.errors.is_empty(), "{:?}", out.errors);
-        assert_eq!(MAX_BUNDLE_BYTES, 3 * 1024 * 1024, "the bundle cap stays 3 MB");
+        let page = out.bundle.as_ref().expect("bundle").bytes();
+        assert!(page > 3 * 1024 * 1024 && page <= MAX_BUNDLE_BYTES, "{page}");
+
+        let html: &[u8] = b"<img src=\"r.png\"><script src=\"a.js\"></script>";
+        let mut js = b"//".to_vec();
+        js.resize(MAX_CODE_BYTES - html.len(), b'x');
+        let mut f = files(&[("index.html", html), ("a.js", &js), ("a.png", &a), ("b.png", &b), ("r.png", &png(200_000))]);
+        let assets: usize = ["a.png", "b.png", "r.png"].iter().map(|n| f[*n].len()).sum();
+        assert!((assets as u64) < crate::zen::widgets::MAX_ASSETS_BYTES, "under the asset cap: {assets}");
+        let out = bundle("widgets/w", "index.html", &f);
+        assert_eq!(out.errors.len(), 1, "{:?}", out.errors);
+        assert!(out.errors[0].message.contains("(3.5 MB)") && out.errors[0].message.contains("bundled widget"), "{:?}", out.errors);
+        // The folder check agrees: the page is the one limit hit.
+        f.insert("manifest.json".into(), b"{\"schema\": 1, \"name\": \"W\", \"caps\": []}".to_vec());
+        let c = crate::zen::widgets::check_files("widgets/w", "w", &f);
+        assert_eq!(c.errors.len(), 1, "{:?}", c.errors);
+        assert!(c.errors[0].message.contains("3.5 MB"), "{:?}", c.errors);
     }
 
     #[test]

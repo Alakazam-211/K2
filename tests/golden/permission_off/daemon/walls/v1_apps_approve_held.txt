@@ -6,6 +6,12 @@ HTTP/1.1 202 Accepted
 content-type: application/json
 {
   "app": "pog-app",
+  "askedAgo": null,
+  "card": {
+    "cardsOff": true,
+    "raised": false,
+    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+  },
   "diff": {
     "lines": [
       "k2 app build pog-app"
@@ -56,6 +62,8 @@ content-type: application/json
     "workspaceHandle": "pog-billing",
     "workspaceId": "<WS_ID>"
   },
+  "requestedAt": "<requestedAt>",
+  "reused": false,
   "status": "held"
 }
 ## cell socket (same passport)
@@ -65,6 +73,12 @@ HTTP/1.1 202 Accepted
 content-type: application/json
 {
   "app": "pog-app",
+  "askedAgo": null,
+  "card": {
+    "cardsOff": true,
+    "raised": false,
+    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+  },
   "diff": {
     "lines": [
       "k2 app build pog-app"
@@ -115,5 +129,7 @@ content-type: application/json
     "workspaceHandle": "pog-billing",
     "workspaceId": "<WS_ID>"
   },
+  "requestedAt": "<requestedAt>",
+  "reused": false,
   "status": "held"
 }

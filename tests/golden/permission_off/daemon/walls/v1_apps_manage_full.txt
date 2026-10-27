@@ -35,8 +35,20 @@ content-type: application/json
     "warmUntil": null
   },
   "applied": [],
+  "askedAgo": null,
+  "card": {
+    "cardsOff": true,
+    "raised": false,
+    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+  },
   "held": {
     "app": "pogapp",
+    "askedAgo": null,
+    "card": {
+      "cardsOff": true,
+      "raised": false,
+      "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+    },
     "diff": [
       "memory limit 512 MiB → no limit"
     ],
@@ -84,6 +96,8 @@ content-type: application/json
       "workspaceHandle": "pog-apps",
       "workspaceId": "<APPS_WS_ID>"
     },
+    "requestedAt": "<requestedAt>",
+    "reused": false,
     "status": "held"
   },
   "io": {
@@ -97,6 +111,7 @@ content-type: application/json
   ],
   "note": "Stored now. Egress is enforced for guarded Apps (their own proxy). The unwalled process engine (owner opt-in, dev machines) doesn't enforce memory limits; the walled engines do.",
   "ok": true,
+  "reused": false,
   "status": "held"
 }
 ## cell socket (same passport)
@@ -135,8 +150,20 @@ content-type: application/json
     "warmUntil": null
   },
   "applied": [],
+  "askedAgo": null,
+  "card": {
+    "cardsOff": true,
+    "raised": false,
+    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+  },
   "held": {
     "app": "pogapp",
+    "askedAgo": null,
+    "card": {
+      "cardsOff": true,
+      "raised": false,
+      "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+    },
     "diff": [
       "memory limit 512 MiB → no limit"
     ],
@@ -184,6 +211,8 @@ content-type: application/json
       "workspaceHandle": "pog-apps",
       "workspaceId": "<APPS_WS_ID>"
     },
+    "requestedAt": "<requestedAt>",
+    "reused": false,
     "status": "held"
   },
   "io": {
@@ -197,5 +226,6 @@ content-type: application/json
   ],
   "note": "Stored now. Egress is enforced for guarded Apps (their own proxy). The unwalled process engine (owner opt-in, dev machines) doesn't enforce memory limits; the walled engines do.",
   "ok": true,
+  "reused": false,
   "status": "held"
 }

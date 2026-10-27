@@ -6,6 +6,12 @@ HTTP/1.1 202 Accepted
 content-type: application/json
 {
   "app": "pogapp",
+  "askedAgo": null,
+  "card": {
+    "cardsOff": true,
+    "raised": false,
+    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+  },
   "diff": {
     "caps": {
       "add": [
@@ -90,6 +96,8 @@ content-type: application/json
     "workspaceHandle": "pog-apps",
     "workspaceId": "<APPS_WS_ID>"
   },
+  "requestedAt": "<requestedAt>",
+  "reused": false,
   "seed": "47fbe0931ce36d44dba35c8f24e7d8ca5d1239ceff7dfc1bfdd2e470bf8a55d2",
   "status": "held"
 }
@@ -100,6 +108,12 @@ HTTP/1.1 202 Accepted
 content-type: application/json
 {
   "app": "pogapp",
+  "askedAgo": null,
+  "card": {
+    "cardsOff": true,
+    "raised": false,
+    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+  },
   "diff": {
     "caps": {
       "add": [
@@ -184,6 +198,8 @@ content-type: application/json
     "workspaceHandle": "pog-apps",
     "workspaceId": "<APPS_WS_ID>"
   },
+  "requestedAt": "<requestedAt>",
+  "reused": false,
   "seed": "47fbe0931ce36d44dba35c8f24e7d8ca5d1239ceff7dfc1bfdd2e470bf8a55d2",
   "status": "held"
 }

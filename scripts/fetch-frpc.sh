@@ -24,6 +24,10 @@
 #   3. Linux triples: download the pinned frp release archive straight
 #      from GitHub, verify it against the release's sha256 checksum
 #      manifest, and extract `frpc`.
+#   4. x86_64-pc-windows-msvc: the same pinned, checksum-verified
+#      download of frp's windows_amd64 zip (needs `unzip`; run it on a
+#      Mac or Linux box and copy the result to the Windows build box),
+#      staged as `frpc-x86_64-pc-windows-msvc.exe`.
 #
 # The staged binary lands in src-tauri/binaries/ (gitignored — a ~14MB
 # binary must NOT bloat the repo).
@@ -61,6 +65,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEST_DIR="$PROJECT_DIR/src-tauri/binaries"
 DEST="$DEST_DIR/frpc-${TRIPLE}"
+case "$TRIPLE" in
+    *-windows-*) DEST="${DEST}.exe" ;;
+esac
 mkdir -p "$DEST_DIR"
 
 # ── Path A: copy a local frpc (explicit FRPC_SRC, or the macOS default) ──
@@ -83,6 +90,7 @@ stage_from_github() {
     case "$TRIPLE" in
         x86_64-unknown-linux-gnu)  frp_arch="amd64" ;;
         aarch64-unknown-linux-gnu) frp_arch="arm64" ;;
+        x86_64-pc-windows-msvc)    stage_windows_from_github; return ;;
         *)
             echo "fetch-frpc: FATAL — no frp release mapping for triple $TRIPLE" >&2
             echo "  Set FRPC_SRC=/path/to/frpc to stage a local binary instead." >&2
@@ -141,12 +149,48 @@ stage_from_github() {
     echo "fetch-frpc: staged frp v$FRP_VERSION (${frp_arch}) -> $DEST (${size} bytes)"
 }
 
+# ── Path C: the pinned frp Windows zip (x86_64), checksum-verified ──────
+# Never executed here (a .exe on a Mac/Linux box); the size check and the
+# release's sha256 manifest are what bless it.
+stage_windows_from_github() {
+    command -v unzip >/dev/null 2>&1 || { echo "fetch-frpc: FATAL — unzip is needed for the Windows zip" >&2; exit 1; }
+    local base="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}"
+    local dirname="frp_${FRP_VERSION}_windows_amd64"
+    local archive="${dirname}.zip"
+    local tmp
+    tmp="$(mktemp -d)"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" EXIT
+    echo "fetch-frpc: downloading $base/$archive"
+    curl -fsSL --retry 3 -o "$tmp/$archive" "$base/$archive"
+    curl -fsSL --retry 3 -o "$tmp/frp_sha256_checksums.txt" "$base/frp_sha256_checksums.txt"
+    (
+        cd "$tmp"
+        grep " ${archive}\$" frp_sha256_checksums.txt > checksum.expected
+        if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum -c checksum.expected
+        else
+            shasum -a 256 -c checksum.expected
+        fi
+    )
+    unzip -q -o "$tmp/$archive" "${dirname}/frpc.exe" -d "$tmp"
+    local size
+    size=$(wc -c < "$tmp/${dirname}/frpc.exe")
+    if [ "$size" -lt 4000000 ]; then
+        echo "fetch-frpc: FATAL — extracted frpc.exe is only ${size} bytes; refusing" >&2
+        exit 1
+    fi
+    cp "$tmp/${dirname}/frpc.exe" "$DEST"
+    echo "fetch-frpc: staged frp v$FRP_VERSION (windows amd64) -> $DEST (${size} bytes)"
+}
+
 if [ -n "${FRPC_SRC:-}" ]; then
     stage_from_local "$FRPC_SRC"
 else
     case "$TRIPLE" in
         *-apple-darwin) stage_from_local "$HOME/.k2/bin/frpc" ;;
         *-linux-gnu)    stage_from_github ;;
+        x86_64-pc-windows-msvc) stage_windows_from_github ;;
         *)
             echo "fetch-frpc: FATAL — no source strategy for triple $TRIPLE (set FRPC_SRC)" >&2
             exit 1
@@ -154,6 +198,9 @@ else
     esac
 fi
 
+case "$TRIPLE" in
+    *-windows-*) exit 0 ;; # can't run a .exe here; checksum + size checked
+esac
 "$DEST" --version 2>/dev/null \
     && echo "fetch-frpc: sidecar reports version OK" \
     || echo "fetch-frpc: warning — could not read --version (continuing)"

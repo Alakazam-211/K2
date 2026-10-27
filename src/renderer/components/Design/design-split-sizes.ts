@@ -14,11 +14,7 @@ export const DESIGN_SPLIT_KEY_PREFIX = 'k2.windowChrome.design.'
 export const DEFAULT_DESIGN_SPLIT: readonly [number, number] = Object.freeze([35, 65]) as readonly [number, number]
 
 /** `<room>` → `[chatFlex, pageFlex]`. */
-type DesignSplitMap = Record<string, [number, number]>
-
-export function designSplitKey(label: string): string {
-  return `${DESIGN_SPLIT_KEY_PREFIX}${label}`
-}
+type SplitMap = Record<string, [number, number]>
 
 function storage(): Storage | null {
   try {
@@ -37,42 +33,69 @@ function validSplit(value: unknown): value is [number, number] {
   )
 }
 
-function readMap(label: string): DesignSplitMap {
-  const s = storage()
-  if (!s) return {}
-  let raw: string | null = null
-  try {
-    raw = s.getItem(designSplitKey(label))
-  } catch {
-    return {}
+/** One Thread | content split store under its own key prefix. The Design
+ *  tab uses `k2.windowChrome.design.`; the Mobile tab (prd-mobile-dev-v1
+ *  M-A7) the same rules under `k2.windowChrome.mobile.`. */
+export interface SplitSizes {
+  key(label: string): string
+  read(roomKey: string | null, label?: string): [number, number]
+  write(roomKey: string, split: readonly number[], label?: string): void
+}
+
+export function createSplitSizes(prefix: string, fallback: readonly [number, number]): SplitSizes {
+  const key = (label: string): string => `${prefix}${label}`
+  const readMap = (label: string): SplitMap => {
+    const s = storage()
+    if (!s) return {}
+    let raw: string | null = null
+    try {
+      raw = s.getItem(key(label))
+    } catch {
+      return {}
+    }
+    if (raw == null) return {}
+    try {
+      const parsed = JSON.parse(raw) as unknown
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+      return parsed as SplitMap
+    } catch {
+      return {}
+    }
   }
-  if (raw == null) return {}
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-    return parsed as DesignSplitMap
-  } catch {
-    return {}
+  return {
+    key,
+    read(roomKey, label = getWindowLabel()) {
+      if (!roomKey) return [fallback[0], fallback[1]]
+      const saved = readMap(label)[roomKey]
+      return validSplit(saved) ? [saved[0], saved[1]] : [fallback[0], fallback[1]]
+    },
+    write(roomKey, split, label = getWindowLabel()) {
+      if (!roomKey || !validSplit(split)) return
+      const s = storage()
+      if (!s) return
+      const map = readMap(label)
+      map[roomKey] = [split[0], split[1]]
+      try {
+        s.setItem(key(label), JSON.stringify(map))
+      } catch {
+        // Private mode / quota — the width still holds until the view unmounts.
+      }
+    },
   }
+}
+
+const designSplit = createSplitSizes(DESIGN_SPLIT_KEY_PREFIX, DEFAULT_DESIGN_SPLIT)
+
+export function designSplitKey(label: string): string {
+  return designSplit.key(label)
 }
 
 /** This window's saved split for `roomKey`, or the default. */
 export function readDesignSplit(roomKey: string | null, label = getWindowLabel()): [number, number] {
-  if (!roomKey) return [DEFAULT_DESIGN_SPLIT[0], DEFAULT_DESIGN_SPLIT[1]]
-  const saved = readMap(label)[roomKey]
-  return validSplit(saved) ? [saved[0], saved[1]] : [DEFAULT_DESIGN_SPLIT[0], DEFAULT_DESIGN_SPLIT[1]]
+  return designSplit.read(roomKey, label)
 }
 
 /** Remember the split for `roomKey` in this window. Malformed input is not saved. */
 export function writeDesignSplit(roomKey: string, split: readonly number[], label = getWindowLabel()): void {
-  if (!roomKey || !validSplit(split)) return
-  const s = storage()
-  if (!s) return
-  const map = readMap(label)
-  map[roomKey] = [split[0], split[1]]
-  try {
-    s.setItem(designSplitKey(label), JSON.stringify(map))
-  } catch {
-    // Private mode / quota — the width still holds until the view unmounts.
-  }
+  designSplit.write(roomKey, split, label)
 }

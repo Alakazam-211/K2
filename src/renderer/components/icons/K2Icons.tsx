@@ -373,3 +373,47 @@ export function SmartphoneOffIcon(props: K2IconProps = {}): React.JSX.Element {
     </svg>
   )
 }
+
+// ── Mobile tab device toolbar (prd-mobile-dev-v1 §2.2) ─────────────────
+// The Mobile tab and its + menu entry reuse `SmartphoneIcon` (M-A8). These
+// are the toolbar's own controls, Lucide glyphs squared like the rest.
+
+/** Rotate the device: Lucide `rotate-cw`, square caps. */
+export function RotateIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('rotate-cw', props)}>
+      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+    </svg>
+  )
+}
+
+/** The device's Back button (Android): Lucide `arrow-left`, squared. */
+export function ArrowLeftIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('arrow-left', props)}>
+      <path d="M19 12H5" />
+      <path d="M12 19l-7-7 7-7" />
+    </svg>
+  )
+}
+
+/** Screenshot: Lucide `camera`, squared body; the lens stays a true circle. */
+export function CameraIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('camera', props)}>
+      <path d="M2 7h5l2-3h6l2 3h5v13H2Z" />
+      <circle cx="12" cy="13" r="3.5" />
+    </svg>
+  )
+}
+
+/** Boot / Stop the device: Lucide `power`. */
+export function PowerIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('power', props)}>
+      <path d="M12 2v10" />
+      <path d="M18.4 6.6a9 9 0 1 1-12.77.04" />
+    </svg>
+  )
+}

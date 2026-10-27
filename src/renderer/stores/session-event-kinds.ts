@@ -134,6 +134,9 @@ export const SESSION_EVENT_ROUTES = {
   // Changes tab. Carried, so a pinned room on Home answers for its server
   // (it only opens a view of that room's own workspace, never a URL).
   open_changes: { class: 'app', app: true, carried: true },
+  // prd-mobile-dev-v1 M-A10 `k2 sim boot`: a window whose room shows the
+  // workspace opens its Mobile tab. Carried like open_changes.
+  open_mobile: { class: 'app', app: true, carried: true },
   // prd-zen-mode-v1 Z12/Z58: this computer's ~/.k2/zen changed. Only the
   // LOCAL daemon's bus matters (Zen config is local); not carried, a room's
   // socket never stands in for it.

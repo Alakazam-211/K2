@@ -121,6 +121,7 @@ vi.mock('@/stores/session-events', () => ({
   onAppHello: vi.fn(() => () => undefined),
   onOpenUrl: vi.fn(() => () => undefined),
   onOpenChanges: vi.fn(() => () => undefined),
+  onOpenMobile: vi.fn(() => () => undefined),
   onceRecovered: vi.fn(() => () => undefined),
 }))
 vi.mock('@/lib/terminal-daemon', () => ({

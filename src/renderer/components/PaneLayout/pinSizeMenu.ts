@@ -59,7 +59,7 @@ interface PinSizeResponse {
  *  'browser' items (browser-pane arc) have no PTY grid and resolve to
  *  null like file viewers. */
 export interface PinnableItem {
-  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design'
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design' | 'mobile'
   data: unknown
 }
 

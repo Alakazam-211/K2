@@ -98,7 +98,7 @@ describe('+ menu Design row', () => {
     setProject()
     renderBar()
     await openPlus()
-    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser', 'design', 'changes'])
+    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser', 'design', 'mobile', 'changes'])
     const row = useContextMenuStore.getState().items.find((i) => i.id === 'design')
     if (!row) throw new Error('no Design row')
     expect(row.label).toBe('Design')
@@ -108,7 +108,7 @@ describe('+ menu Design row', () => {
     setProject(0)
     renderBar()
     await openPlus()
-    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser', 'changes'])
+    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser', 'mobile', 'changes'])
   })
 
   it('a workspace the room does not know gets no Design row', async () => {

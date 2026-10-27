@@ -7,6 +7,9 @@ import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
 import { resolveAgentPreset, readProjectDefaultAgent } from '@/lib/agent-resolve'
 import { isFocusedRoom } from '@/stores/window-room'
 import { zenShownNow } from '@/lib/zen/zen-view'
+import { keyEventMatchesCombo } from '@/lib/page-shortcuts'
+import { isMacPlatform } from '@/lib/desktop-chrome'
+import { effectiveKeybinding } from '@shared/hotkeys'
 import { roomActiveProject, type Room } from '@/stores/room'
 import type { TerminalPane } from '@/stores/tabs'
 
@@ -35,6 +38,7 @@ import type { TerminalPane } from '@/stores/tabs'
  * - Cmd+Alt+Right — Next tab
  * - Cmd+K         — Clear active terminal (sends clear sequence)
  * - Ctrl+1-9      — Launch preset by position
+ * - Cmd+Shift+M   — Mobile tab (rebindable `openMobile`)
  */
 export function useTerminalShortcuts(room: Room, cwd: string): void {
   useEffect(() => {
@@ -58,6 +62,20 @@ export function useTerminalShortcuts(room: Room, cwd: string): void {
           }
           return
         }
+      }
+
+      // ⌘⇧M (rebindable `openMobile`, prd-mobile-dev-v1 §2.3): focus the
+      // workspace's Mobile tab or open one. Only on a server that can run a
+      // device (M-A13); elsewhere the chord does nothing.
+      if (
+        !e.repeat &&
+        keyEventMatchesCombo(e, effectiveKeybinding(useSettingsStore.getState().keybindings, 'openMobile', isMacPlatform()))
+      ) {
+        if (!room.scope.serverSupports('mobile-sim-v1')) return
+        e.preventDefault()
+        const st = tabs.getState()
+        st.openMobileTab(st.activeGroupIndex)
+        return
       }
 
       // Only handle Cmd (Meta) shortcuts

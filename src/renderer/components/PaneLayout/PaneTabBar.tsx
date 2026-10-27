@@ -12,7 +12,7 @@ import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { beginBrowserMotion } from '@/lib/browser-overlay'
 import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
-import { PaletteIcon } from '@/components/icons/K2Icons'
+import { PaletteIcon, SmartphoneIcon } from '@/components/icons/K2Icons'
 import { useStore } from 'zustand'
 import { TAB_SLOT_PX, TabSlotRest, terminalsStatus, type StatusTerminal } from '@/components/TabBar/TabStatus'
 
@@ -46,10 +46,15 @@ interface BrowserItemData {
   icon?: string
 }
 
+/** Mobile tab (prd-mobile-dev-v1 M-A7): the device profile it last picked. */
+interface MobileItemData {
+  deviceType?: string
+}
+
 interface Item {
   id: string
-  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design'
-  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData | { workspacePath: string }
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design' | 'mobile'
+  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData | MobileItemData | { workspacePath: string }
   pinned?: boolean
 }
 
@@ -77,6 +82,9 @@ function getTabLabel(item: Item): string {
   }
   if (item.type === 'design') {
     return 'Design'
+  }
+  if (item.type === 'mobile') {
+    return 'Mobile'
   }
   if (item.type === 'browser') {
     const data = item.data as BrowserItemData
@@ -111,6 +119,9 @@ function paneItemIcon(item: Item): React.JSX.Element | null {
   }
   if (item.type === 'design') {
     return <PaletteIcon size={14} />
+  }
+  if (item.type === 'mobile') {
+    return <SmartphoneIcon size={14} />
   }
   return null
 }

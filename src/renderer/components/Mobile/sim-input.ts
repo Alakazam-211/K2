@@ -1,0 +1,105 @@
+// The person's gestures on the device canvas → `SimInput` (prd-mobile-dev-v1
+// §2.4, §5; vs-live M-A9). Pure, so the rules are tested without a canvas.
+//
+//  - Pointer: a short press that barely moves is a tap; anything else is a
+//    swipe from the press to the release. Coordinates are device dp /
+//    points, scaled from the canvas box.
+//  - Keys while the device has focus: ordinary keys go to the device. ⌘
+//    chords stay with K2, except ⌘⇧H (Home) and ⌘D (the dev menu / shake).
+//    Esc leaves the device's focus.
+//
+// S5 hook: `deviceRectToCanvas` is the inverse mapping the pick overlay
+// will use to outline tree elements on the canvas.
+
+import type { SimInput, SimNamedKey, SimPoint, SimStreamMeta } from './sim-stream'
+
+export interface BoxRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+/** Moved less than this (CSS px) → a tap. */
+export const TAP_SLOP_PX = 8
+/** Held longer than this → a swipe (a long press as a slow swipe in place). */
+export const TAP_MAX_MS = 500
+
+/** A canvas client point → device dp, clamped to the screen. */
+export function canvasPointToDevice(clientX: number, clientY: number, box: BoxRect, meta: Pick<SimStreamMeta, 'width' | 'height'>): SimPoint {
+  const fx = box.width > 0 ? (clientX - box.left) / box.width : 0
+  const fy = box.height > 0 ? (clientY - box.top) / box.height : 0
+  const clamp = (v: number): number => Math.min(1, Math.max(0, v))
+  return {
+    x: Math.round(clamp(fx) * meta.width),
+    y: Math.round(clamp(fy) * meta.height),
+  }
+}
+
+/** A device dp rect → canvas client px (S5: outline an element). */
+export function deviceRectToCanvas(
+  rect: { x: number; y: number; width: number; height: number },
+  box: BoxRect,
+  meta: Pick<SimStreamMeta, 'width' | 'height'>,
+): BoxRect {
+  const sx = meta.width > 0 ? box.width / meta.width : 0
+  const sy = meta.height > 0 ? box.height / meta.height : 0
+  return { left: box.left + rect.x * sx, top: box.top + rect.y * sy, width: rect.width * sx, height: rect.height * sy }
+}
+
+export interface PointerSample {
+  clientX: number
+  clientY: number
+  at: number
+}
+
+/** One press → release as a tap or a swipe. */
+export function gestureFor(down: PointerSample, up: PointerSample, box: BoxRect, meta: Pick<SimStreamMeta, 'width' | 'height'>): SimInput {
+  const moved = Math.hypot(up.clientX - down.clientX, up.clientY - down.clientY)
+  const ms = Math.max(0, up.at - down.at)
+  const from = canvasPointToDevice(down.clientX, down.clientY, box, meta)
+  if (moved < TAP_SLOP_PX && ms <= TAP_MAX_MS) return { action: 'tap', x: from.x, y: from.y }
+  return { action: 'swipe', from, to: canvasPointToDevice(up.clientX, up.clientY, box, meta), durationMs: Math.max(50, Math.round(ms)) }
+}
+
+export interface KeyLike {
+  key: string
+  metaKey: boolean
+  ctrlKey: boolean
+  altKey: boolean
+  shiftKey: boolean
+  isComposing?: boolean
+}
+
+const NAMED_KEYS: ReadonlySet<string> = new Set<SimNamedKey>([
+  'Enter',
+  'Backspace',
+  'Delete',
+  'Tab',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+])
+
+/**
+ * What a keydown on the focused device means:
+ *  - `{ send }` → goes to the device (the caller prevents the default);
+ *  - `blur` → Esc: leave the device's focus;
+ *  - `pass` → K2 keeps it (every other ⌘ chord, Ctrl chords, IME).
+ */
+export function keyToSimInput(e: KeyLike): { send: SimInput } | 'blur' | 'pass' {
+  if (e.isComposing) return 'pass'
+  if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey && !e.altKey) return 'blur'
+  const lower = e.key.length === 1 ? e.key.toLowerCase() : e.key
+  if (e.metaKey) {
+    if (e.shiftKey && !e.ctrlKey && !e.altKey && lower === 'h') return { send: { action: 'button', button: 'home' } }
+    if (!e.shiftKey && !e.ctrlKey && !e.altKey && lower === 'd') return { send: { action: 'button', button: 'menu' } }
+    return 'pass'
+  }
+  if (e.ctrlKey) return 'pass'
+  if (NAMED_KEYS.has(e.key)) return { send: { action: 'key', key: e.key as SimNamedKey } }
+  // One printable character (Shift and Option change it already).
+  if ([...e.key].length === 1) return { send: { action: 'type', text: e.key } }
+  return 'pass'
+}

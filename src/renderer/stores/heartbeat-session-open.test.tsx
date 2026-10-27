@@ -70,6 +70,7 @@ vi.mock('@/stores/session-events', () => ({
   onAppHello: vi.fn(() => () => undefined),
   onOpenUrl: vi.fn(() => () => undefined),
   onOpenChanges: vi.fn(() => () => undefined),
+  onOpenMobile: vi.fn(() => () => undefined),
   onChatHistoryChanged: vi.fn(() => () => undefined),
   onceRecovered: vi.fn(),
 }))

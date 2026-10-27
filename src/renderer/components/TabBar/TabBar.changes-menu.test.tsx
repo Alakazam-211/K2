@@ -77,7 +77,9 @@ import { fakeScope } from '@/test-utils/fake-scope'
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 
 const realFetch = usePresetsStore.getState().fetchPresets
-const EXPECTED_IDS = ['terminal', 'new-file', 'browser', 'changes']
+// This computer's daemon is taken to report every feature, so Mobile
+// (mobile-sim-v1, prd-mobile-dev-v1 M-A13) is listed before Changes.
+const EXPECTED_IDS = ['terminal', 'new-file', 'browser', 'mobile', 'changes']
 
 function resetTabs(): void {
   useTabsStore.setState({ tabs: [], activeTabId: null, splitCount: 1, extraGroups: [], activeGroupIndex: 0, activeWorkspaceKey: null })

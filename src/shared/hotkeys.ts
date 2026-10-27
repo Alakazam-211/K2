@@ -89,7 +89,11 @@ export const HOTKEYS: HotkeyDefinition[] = [
   { id: 'focusWindow', label: 'Open in Focus Window', defaultKey: 'Meta+Shift+F', category: 'App' },
   { id: 'toggleServerSwitcher', label: 'Switch Server', defaultKey: 'Meta+L', category: 'App' },
   { id: 'toggleAssistant', label: 'Toggle Assistant', defaultKey: 'Meta+Shift+L', category: 'App' },
-  { id: 'openProjects', label: 'Open Projects', defaultKey: 'Meta+P', category: 'App' }
+  { id: 'openProjects', label: 'Open Projects', defaultKey: 'Meta+P', category: 'App' },
+  // Mobile tab (prd-mobile-dev-v1 §2.3, M-A9): focus the workspace's Mobile
+  // tab or open one. Only on a server that can run a device (M-A13). ⌘⇧M was
+  // free (catalog, native menu accelerators and App.tsx all checked).
+  { id: 'openMobile', label: 'Open Mobile', defaultKey: 'Meta+Shift+M', category: 'App' }
 ]
 
 /** Build a map of id -> default combo for quick lookup. `isMac` false

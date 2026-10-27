@@ -46,6 +46,7 @@ import {
   onAppHello,
   onOpenUrl,
   onOpenChanges,
+  onOpenMobile,
   onceRecovered,
   type SessionAddedEvent,
   type SessionRemovedEvent,
@@ -61,6 +62,12 @@ import {
   type DesignItemData,
   type SerializedDesignItem,
 } from '@/components/Design/design-serialize'
+import {
+  mobileDataFromSerializedBrowser,
+  serializeMobileItem,
+  type MobileItemData,
+  type SerializedMobileItem,
+} from '@/components/Mobile/mobile-serialize'
 import { takeSessionRemoved } from '@/lib/sidecar-refresh-tab'
 import {
   EMPTY_SERIALIZED_LAYOUT,
@@ -595,10 +602,22 @@ export interface ChangesItemData {
  *  as a Browser item; the notes draft is per viewer and never in here. */
 export type { DesignItemData, SerializedDesignItem }
 
+/** Mobile tab (prd-mobile-dev-v1 M-A7): the workspace's device beside its
+ *  Thread. Saved as an empty Browser item plus a `mobile` marker. The device
+ *  is the daemon's (one sim session per workspace), never in here. */
+export type { MobileItemData, SerializedMobileItem }
+
 export interface Item {
   id: string
-  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design'
-  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData | ChangesItemData | DesignItemData
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design' | 'mobile'
+  data:
+    | TerminalItemData
+    | FileViewerItemData
+    | AgentItemData
+    | BrowserItemData
+    | ChangesItemData
+    | DesignItemData
+    | MobileItemData
   pinned?: boolean
 }
 
@@ -973,6 +992,14 @@ export interface TabsState {
    *  NEW Design tab in column `groupIndex` (0 / omitted = primary); many
    *  are allowed. Returns its tab id. */
   openDesignTab: (groupIndex?: number, url?: string) => string
+  /** Mobile tab (prd-mobile-dev-v1 §2.3, + menu → Mobile, ⌘⇧M, the
+   *  `open_mobile` event): one device per workspace, so an open Mobile tab
+   *  (any column) is focused; else a NEW one opens in column `groupIndex`
+   *  (0 / omitted = primary). Returns its tab id. */
+  openMobileTab: (groupIndex?: number) => string
+  /** Remember the device profile a Mobile tab last picked (its chooser's
+   *  default next time). A same-value stamp changes nothing. */
+  setMobileItemDevice: (tabId: string, paneGroupId: string, itemId: string, deviceType: string) => void
   /** Keep the room's pinned Design tab in line with the workspace's
    *  "Design mode" setting (late decision Q-F2): on → exactly one
    *  `isPinnedDesign` tab after Chat and Inbox (created when missing); off →
@@ -1255,6 +1282,9 @@ function serializeTab(tab: Tab): SerializedTab {
         // D-A4 mixed-version guard: a Browser item plus a `design` marker,
         // so an older client shows a Browser tab at the same URL (Q-F3).
         return serializeDesignItem(item.id, item.data as DesignItemData)
+      } else if (item.type === 'mobile') {
+        // M-A7: the same guard; an older client shows an empty Browser tab.
+        return serializeMobileItem(item.id, item.data as MobileItemData)
       } else if (item.type === 'changes') {
         const d = item.data as ChangesItemData
         const out: SerializedChangesItem = {
@@ -1515,6 +1545,9 @@ function restoreSerializedItem(
       live?.type === 'browser' || live?.type === 'design'
         ? (live.data as BrowserItemData | DesignItemData).navSeq
         : undefined
+    // A Browser item carrying the `mobile` marker is a Mobile tab (M-A7).
+    const mobile = mobileDataFromSerializedBrowser(si)
+    if (mobile) return { id, type: 'mobile' as const, data: mobile }
     // A Browser item carrying the `design` marker is a Design tab (D-A4).
     const design = designDataFromSerializedBrowser(si, liveNav)
     if (design) return { id, type: 'design' as const, data: design }
@@ -1775,6 +1808,36 @@ function makeDesignTab(url: string, extra: Partial<Tab> = {}): Tab {
     paneGroups: new Map([[paneGroupId, makeDesignPaneGroup(paneGroupId, url)]]),
     ...extra,
   }
+}
+
+/** A new Mobile tab (title "Mobile", one Mobile item; M-A7). */
+function makeMobileTab(data: MobileItemData = {}): Tab {
+  const paneGroupId = crypto.randomUUID()
+  return {
+    id: crypto.randomUUID(),
+    title: 'Mobile',
+    mosaicTree: paneGroupId,
+    paneGroups: new Map([
+      [paneGroupId, { id: paneGroupId, items: [{ id: crypto.randomUUID(), type: 'mobile', data }], activeItemIndex: 0 }],
+    ]),
+  }
+}
+
+/** The room's Mobile tab in its live strips (one device per workspace, so
+ *  one is enough), or null. */
+export function findMobileTab(state: {
+  tabs: Tab[]
+  extraGroups: Array<{ tabs: Tab[]; activeTabId: string | null }>
+}): { groupIndex: number; tabId: string } | null {
+  const columns = [state.tabs, ...state.extraGroups.map((g) => g.tabs)]
+  for (let gi = 0; gi < columns.length; gi++) {
+    for (const tab of columns[gi]) {
+      for (const pg of tab.paneGroups.values()) {
+        if (pg.items.some((item) => item.type === 'mobile')) return { groupIndex: gi, tabId: tab.id }
+      }
+    }
+  }
+  return null
 }
 
 /** Drop the pinned-Design flag (the tab stays as an ordinary Design tab). */
@@ -2534,6 +2597,10 @@ export interface TabsRoomApi {
    *  daemon's `open_changes` names a workspace this room shows. The primary
    *  room is wired from App.tsx; a pinned room subscribes in `open()`. */
   initOpenChangesTabs(): UnsubscribeFn
+  /** prd-mobile-dev-v1 M-A10: open (or focus) the Mobile tab when the
+   *  daemon's `open_mobile` names a workspace this room shows (`k2 sim
+   *  boot`). Wired like `initOpenChangesTabs`. */
+  initOpenMobileTabs(): UnsubscribeFn
   /** Apply one `workspace:*` op to this room's tabs. */
   applyWorkspaceOp(op: WorkspaceOp): void
   /** Primary only: add a file tab to another workspace's layout without
@@ -4892,6 +4959,44 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       const tab = makeDesignTab(url)
       set((state) => placedTab(state, groupIndex ?? 0, tab))
       return tab.id
+    },
+
+    openMobileTab: (groupIndex?: number) => {
+      const existing = findMobileTab(get())
+      if (existing) {
+        get().setActiveTabInGroup(existing.groupIndex, existing.tabId)
+        get().setActiveGroup(existing.groupIndex)
+        return existing.tabId
+      }
+      const tab = makeMobileTab()
+      set((state) => placedTab(state, groupIndex ?? 0, tab))
+      return tab.id
+    },
+
+    setMobileItemDevice: (tabId, paneGroupId, itemId, deviceType) => {
+      set((state) => {
+        let changed = false
+        const stamp = (tabs: Tab[]): Tab[] =>
+          tabs.map((tab) => {
+            if (tab.id !== tabId) return tab
+            const pg = tab.paneGroups.get(paneGroupId)
+            if (!pg) return tab
+            const items = pg.items.map((item) => {
+              if (item.id !== itemId || item.type !== 'mobile') return item
+              if ((item.data as MobileItemData).deviceType === deviceType) return item
+              changed = true
+              return { ...item, data: { ...(item.data as MobileItemData), deviceType } }
+            })
+            if (!changed) return tab
+            const paneGroups = new Map(tab.paneGroups)
+            paneGroups.set(paneGroupId, { ...pg, items })
+            return { ...tab, paneGroups }
+          })
+        const tabs = stamp(state.tabs)
+        const extraGroups = changed ? state.extraGroups : state.extraGroups.map((g) => ({ ...g, tabs: stamp(g.tabs) }))
+        if (!changed) return {}
+        return { tabs, extraGroups }
+      })
     },
 
     ensurePinnedDesignTab: (projectPath: string, enabled?: boolean) => {
@@ -7582,6 +7687,21 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     })
   }
 
+  function initOpenMobileTabs(): UnsubscribeFn {
+    return onOpenMobile(scope, (e) => {
+      const path = typeof e.workspacePath === 'string' ? e.workspacePath.trim() : ''
+      if (!path || !roomShowsPath(path)) return
+      // A server that can't run a device never shows a Mobile tab (M-A13).
+      if (!scope.serverSupports('mobile-sim-v1')) return
+      try {
+        const st = store.getState()
+        st.openMobileTab(st.activeGroupIndex)
+      } catch (err) {
+        console.warn('[tabs] open_mobile tab surface failed:', err)
+      }
+    })
+  }
+
   /** Fetch the daemon-canonical tab titles for a project and apply them to
    *  the surfaced tabs (hydrate labels from the daemon on workspace load +
    *  on reconnect). No-op for tab ids not currently surfaced. Best-effort:
@@ -8078,6 +8198,8 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
   let disposed = false
   /** Pinned rooms: the `open_changes` subscription made in `open()`. */
   let pinnedOpenChangesOff: UnsubscribeFn | null = null
+  /** Pinned rooms: the `open_mobile` subscription made in `open()`. */
+  let pinnedOpenMobileOff: UnsubscribeFn | null = null
   /** Pinned rooms: flush the based save, then close sockets, timers and the
    *  autosave subscription. The instance is dead afterwards. */
   async function dispose(): Promise<void> {
@@ -8086,6 +8208,8 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     disposed = true
     pinnedOpenChangesOff?.()
     pinnedOpenChangesOff = null
+    pinnedOpenMobileOff?.()
+    pinnedOpenMobileOff = null
     if (persistDebounceTimer) {
       clearTimeout(persistDebounceTimer)
       persistDebounceTimer = null
@@ -8109,6 +8233,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     assertPinned('open')
     const ws = binding.workspace as TabsRoomWorkspace
     if (!pinnedOpenChangesOff) pinnedOpenChangesOff = initOpenChangesTabs()
+    if (!pinnedOpenMobileOff) pinnedOpenMobileOff = initOpenMobileTabs()
     await store.getState().loadLayoutForWorkspace(ws.projectId, ws.workspaceId, ws.path)
   }
 
@@ -8154,6 +8279,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     initApiSandboxTabAdoption,
     initOpenUrlBrowserTabs,
     initOpenChangesTabs,
+    initOpenMobileTabs,
     applyWorkspaceOp,
     parkFileTab,
     resetForHostSwitch,
@@ -8225,6 +8351,11 @@ export function initOpenUrlBrowserTabs(): UnsubscribeFn {
 /** Primary room: `k2 changes open` → the Changes tab (wired once from App.tsx). */
 export function initOpenChangesTabs(): UnsubscribeFn {
   return useTabsStore.room.initOpenChangesTabs()
+}
+
+/** Primary room: `open_mobile` → the Mobile tab (App.tsx, at boot). */
+export function initOpenMobileTabs(): UnsubscribeFn {
+  return useTabsStore.room.initOpenMobileTabs()
 }
 
 /** Primary room: #625 server-switch reset (tests drive it directly). */

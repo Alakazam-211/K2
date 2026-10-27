@@ -75,6 +75,12 @@ export const REPORTED_FEATURES = {
    *  agent row's badge sums them all, earlier chats' Threads included).
    *  "Mark all as read" on an agent row shows only for a server with it. */
   'thread-read-all-v1': 'thread-read-all-v1',
+  /** prd-mobile-dev-v1 M-A13 (0.46.6): this server can run at least one
+   *  device lane (`/cli/sim/*`, `/cli/sim/stream`, `open_mobile`). Without
+   *  it the + menu has no Mobile, ⌘⇧M does nothing and `open_mobile` opens
+   *  no tab, so no box shows a dead tab. `GET /cli/sim/status` lists the
+   *  lanes. */
+  'mobile-sim-v1': 'mobile-sim-v1',
   /** thread-read-v1 (0.46.1): per-person unread counts for Threads and
    *  project chats. `GET /cli/thread/unread`, `POST /cli/thread/read`,
    *  `POST /cli/project-group/read`, `POST /cli/thread/mute`, the

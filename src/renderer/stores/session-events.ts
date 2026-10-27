@@ -660,6 +660,13 @@ export interface OpenChangesEvent {
   workspacePath: string
 }
 
+/** APP-LEVEL — `k2 sim boot` (prd-mobile-dev-v1 M-A10): a window whose room
+ *  shows `workspacePath` opens (or focuses) its Mobile tab. */
+export interface OpenMobileEvent {
+  kind: 'open_mobile'
+  workspacePath: string
+}
+
 /** APP-LEVEL — this computer's Zen files changed (prd-zen-mode-v1 Z12).
  *  Payload-free: the Zen store re-reads `GET /cli/zen/get` from the LOCAL
  *  daemon. Nothing about the file rides the frame. */
@@ -866,6 +873,7 @@ export type SessionEventMessage =
   | GitChangedEvent
   | GitNotesChangedEvent
   | OpenChangesEvent
+  | OpenMobileEvent
   | ZenChangedEvent
   | ZenAgentsOrderChangedEvent
   | SourcesChangedEvent
@@ -1361,6 +1369,7 @@ type FsChangedHandler = (e: FsChangedEvent) => void
 type GitChangedHandler = (e: GitChangedEvent) => void
 type GitNotesChangedHandler = (e: GitNotesChangedEvent) => void
 type OpenChangesHandler = (e: OpenChangesEvent) => void
+type OpenMobileHandler = (e: OpenMobileEvent) => void
 // Home 0.43.2 (Q7) — Settings → Email's refetch signal (`reason` unwrapped,
 // the onFeedbackChanged idiom).
 type MailChangedHandler = (reason: string) => void
@@ -1423,6 +1432,7 @@ interface AppBusHandlers {
   gitChanged: Set<GitChangedHandler>
   gitNotesChanged: Set<GitNotesChangedHandler>
   openChanges: Set<OpenChangesHandler>
+  openMobile: Set<OpenMobileHandler>
   mailChanged: Set<MailChangedHandler>
   domainsChanged: Set<DomainsChangedHandler>
   federationPeersChanged: Set<FederationPeersChangedHandler>
@@ -1479,6 +1489,7 @@ function createBusState(scopeId: string): BusState {
       gitChanged: new Set(),
       gitNotesChanged: new Set(),
       openChanges: new Set(),
+      openMobile: new Set(),
       mailChanged: new Set(),
       domainsChanged: new Set(),
       federationPeersChanged: new Set(),
@@ -1787,6 +1798,13 @@ export function onOpenChanges(scope: ServerScope, fn: OpenChangesHandler): Unsub
   return addHandler(busFor(scope).handlers.openChanges, fn)
 }
 
+/** prd-mobile-dev-v1 M-A10 — subscribe to APP-LEVEL `open_mobile` (`k2 sim
+ *  boot`) on `scope`'s server. The tabs store acts only for a workspace its
+ *  room shows. */
+export function onOpenMobile(scope: ServerScope, fn: OpenMobileHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.openMobile, fn)
+}
+
 /** Home 0.43.2 (Q7) — subscribe to APP-LEVEL `mail_changed` (mail server,
  *  domain or approval queue changed on `scope`'s server). Refetch signal;
  *  the handler gets the `reason`. Settings → Email is the consumer, so a
@@ -2004,6 +2022,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   open_changes: (h, m) => {
     for (const fn of h.openChanges) fn(m)
   },
+  open_mobile: (h, m) => {
+    for (const fn of h.openMobile) fn(m)
+  },
   mail_changed: (h, m) => {
     for (const fn of h.mailChanged) fn(m.reason)
   },
@@ -2095,6 +2116,7 @@ export interface AppBus {
   onGitChanged(fn: GitChangedHandler): UnsubscribeFn
   onGitNotesChanged(fn: GitNotesChangedHandler): UnsubscribeFn
   onOpenChanges(fn: OpenChangesHandler): UnsubscribeFn
+  onOpenMobile(fn: OpenMobileHandler): UnsubscribeFn
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
   onDomainsChanged(fn: DomainsChangedHandler): UnsubscribeFn
   onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
@@ -2147,6 +2169,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onGitChanged: (fn) => onGitChanged(scope, fn),
     onGitNotesChanged: (fn) => onGitNotesChanged(scope, fn),
     onOpenChanges: (fn) => onOpenChanges(scope, fn),
+    onOpenMobile: (fn) => onOpenMobile(scope, fn),
     onMailChanged: (fn) => onMailChanged(scope, fn),
     onDomainsChanged: (fn) => onDomainsChanged(scope, fn),
     onZenChanged: (fn) => onZenChanged(scope, fn),

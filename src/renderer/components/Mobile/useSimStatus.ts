@@ -1,0 +1,57 @@
+// The workspace's sim session as the daemon reports it (`GET /cli/sim/status`).
+//
+// Read while the tab is shown: often while the device is changing state
+// (booting, stopping), slowly otherwise, and at once after a gesture
+// (`refresh`). Hidden tabs do not poll. A `sim_changed` event from the
+// daemon can replace the slow poll later without touching the pane.
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ServerScope } from '@/kessel/server-scope'
+import { fetchSimStatus, type SimStatus } from './simApi'
+
+export const SIM_STATUS_FAST_MS = 1500
+export const SIM_STATUS_SLOW_MS = 10_000
+
+export interface SimStatusView {
+  status: SimStatus | null
+  error: string | null
+  refresh(): void
+}
+
+export function useSimStatus(scope: ServerScope, workspace: string | null, visible: boolean): SimStatusView {
+  const [status, setStatus] = useState<SimStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [tick, setTick] = useState(0)
+  const refresh = useCallback(() => setTick((n) => n + 1), [])
+  const statusRef = useRef<SimStatus | null>(null)
+
+  useEffect(() => {
+    if (!workspace || !visible) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const load = async (): Promise<void> => {
+      try {
+        const next = await fetchSimStatus(scope, workspace)
+        if (cancelled) return
+        statusRef.current = next
+        setStatus(next)
+        setError(null)
+      } catch (err) {
+        if (cancelled) return
+        const msg = err instanceof Error ? err.message : String(err)
+        console.warn('[mobile] sim/status:', msg)
+        setError(msg)
+      }
+      if (cancelled) return
+      const st = statusRef.current?.session?.state
+      timer = setTimeout(() => void load(), st === 'booting' || st === 'stopping' ? SIM_STATUS_FAST_MS : SIM_STATUS_SLOW_MS)
+    }
+    void load()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [scope, workspace, visible, tick])
+
+  return { status, error, refresh }
+}

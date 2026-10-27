@@ -32,13 +32,14 @@ import { webFeatures } from '@/web/features'
 import { BrowserPane, browserNativeItemId, currentParentWindow } from '@/components/BrowserPane/BrowserPane'
 import { beginBrowserMotion } from '@/lib/browser-overlay'
 import { pickArm, pickDisarm, pickPoll, setDesignBadges } from '@/lib/design-picker-ipc'
-import type { AgentItemData, DesignItemData, Tab } from '@/stores/tabs'
+import type { DesignItemData } from '@/stores/tabs'
 import { DesignPaletteButton } from './DesignToolbar'
 import { DesignThreadColumn } from './DesignThreadColumn'
 import { DesignWebStub } from './DesignWebStub'
 import { NotePopover } from './NotePopover'
 import { NoteTray } from './NoteTray'
 import { designItemStillOpen } from './design-lifecycle'
+import { pinnedChatItem } from './pinned-chat-item'
 import { readDesignSplit, writeDesignSplit } from './design-split-sizes'
 import { scaleGuestRect } from './placement'
 import { badgesFor, useDesignNotesStore, useDesignTray } from './useDesignNotes'
@@ -64,18 +65,6 @@ export interface DesignPaneProps {
   data: DesignItemData
   /** Test seam: the picker IPC (default: the Tauri commands). */
   ipc?: DesignPickerIpc
-}
-
-/** The workspace's pinned Chat (the Chat system tab's agent item). */
-function pinnedChatItem(tabs: Tab[]): AgentItemData | null {
-  for (const tab of tabs) {
-    if (!tab.isSystemAgent) continue
-    const item = Array.from(tab.paneGroups.values())[0]?.items[0]
-    if (item?.type !== 'agent') continue
-    const d = item.data as AgentItemData
-    if (d.section === 'chat') return d
-  }
-  return null
 }
 
 export function DesignPane(props: DesignPaneProps): React.JSX.Element {

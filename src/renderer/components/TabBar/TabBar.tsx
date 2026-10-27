@@ -51,10 +51,12 @@ import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
 import { cachedChangesMenuState, probeChangesMenuState, type ChangesMenuState } from '@/stores/git-changes'
 import { PinnedTabMark } from '@/components/TabBar/TabPin'
 import { clampTabDropIndex, isPinnedDesignTab, isPinnedTab } from '@/lib/pinned-tabs'
-import { PaletteIcon } from '@/components/icons/K2Icons'
+import { PaletteIcon, SmartphoneIcon } from '@/components/icons/K2Icons'
 import { isDesignModeEnabled } from '@/components/Design/design-mode-setting'
 import { useToastStore } from '@/stores/toast'
 import { metaChordLabel } from '@/lib/shortcut-label'
+import { effectiveKeybinding } from '@shared/hotkeys'
+import { isMacPlatform } from '@/lib/desktop-chrome'
 import DrawerTabBarToggle from '@/components/Layout/DrawerTabBarToggle'
 import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
 import { useRoomTabBarDrawerToggle } from '@/components/Layout/drawer-toggles'
@@ -99,14 +101,17 @@ export function changesMenuItem(state: ChangesMenuState): ContextMenuItemDef {
 }
 
 /** Terminal, New File, Browser, Design (while the workspace's Design mode
- *  is on; D-A5, Q-F2), Changes (always; greyed until there are changes),
- *  then enabled presets in store order. No separator when none are enabled. */
+ *  is on; D-A5, Q-F2), Mobile (while the server can run a device;
+ *  prd-mobile-dev-v1 M-A7, M-A13), Changes (always; greyed until there are
+ *  changes), then enabled presets in store order. No separator when none
+ *  are enabled. */
 export function buildPlusMenuItems(
   presets: AgentPreset[],
   defaultPresetId: string | null,
   sandboxHint: boolean,
   changes: ChangesMenuState = 'checking',
   designMode = false,
+  mobile = false,
 ): ContextMenuItemDef[] {
   const enabled = presets.filter((p) => p.enabled !== 0)
   const items: ContextMenuItemDef[] = [
@@ -115,6 +120,15 @@ export function buildPlusMenuItems(
     { id: 'browser', label: 'Browser' },
   ]
   if (designMode) items.push({ id: 'design', label: 'Design', icon: <PaletteIcon size={14} /> })
+  if (mobile) {
+    const combo = effectiveKeybinding(useSettingsStore.getState().keybindings, 'openMobile', isMacPlatform())
+    items.push({
+      id: 'mobile',
+      label: 'Mobile',
+      icon: <SmartphoneIcon size={14} />,
+      shortcut: (combo && metaChordLabel(combo)) || undefined,
+    })
+  }
   items.push(changesMenuItem(changes))
   if (enabled.length === 0) return items
   items.push({ id: 'plus-presets-sep', label: '', type: 'separator' })
@@ -389,6 +403,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     // is on (Q-F2), read from the room's own project list (no fetch).
     const designProject = roomProjectForCwd(room, barCwd) ?? roomActiveProject(room)
     const designMode = designProject !== null && isDesignModeEnabled(designProject)
+    // Mobile shows only when the room's server can run a device (M-A13):
+    // a box with no lane never shows a dead tab.
+    const mobile = room.scope.serverSupports('mobile-sim-v1')
     // Snapshot Option. selectItem resolves an id only, so the click and Enter
     // that call it have to record altKey before that promise continues.
     let optionHeld = e.altKey
@@ -406,7 +423,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       shown = optionHeld
       shownChanges = changesState
       useContextMenuStore.getState().replaceItems(
-        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, designMode),
+        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, designMode, mobile),
       )
     }
     probeChangesMenuState(room.scope, barCwd).then(
@@ -460,7 +477,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       window.removeEventListener('blur', onBlur)
     }
     try {
-      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, designMode)
+      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, designMode, mobile)
       const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
       if (!picked) return
       if (picked === 'terminal') {
@@ -478,6 +495,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       if (picked === 'design') {
         // Always a new Design tab (DD3: many are allowed).
         room.tabs.getState().openDesignTab(group)
+        return
+      }
+      if (picked === 'mobile') {
+        // One device per workspace: focus its Mobile tab, or open one.
+        room.tabs.getState().openMobileTab(group)
         return
       }
       if (picked === 'changes') {
@@ -1245,6 +1267,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     icon = <ChangesTabIcon />
                   } else if (items.some((item) => item.type === 'design')) {
                     icon = <PaletteIcon size={14} />
+                  } else if (items.some((item) => item.type === 'mobile')) {
+                    icon = <SmartphoneIcon size={14} />
                   } else if (items.some((item) => item.type === 'browser')) {
                     // After file and terminal. A mixed tab never reaches here.
                     const browser = items.find((item) => item.type === 'browser')

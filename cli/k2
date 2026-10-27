@@ -64569,6 +64569,7 @@ WHICH TO PICK
   bar, pie, doughnut  chart.js@4       204 KB
   big dashboards      echarts@6        1.1 MB
   your own charts     d3@7             274 KB
+  markdown (safe)     k2-markdown@1    7 KB
   code highlighting   highlight.js@11  129 KB
   maths               katex@0.18       630 KB
   3D                  three@0.186      959 KB
@@ -64609,6 +64610,7 @@ EVERY LIBRARY: request, global, licence, size
   plotly.js-dist-min@4  Plotly           MIT                  4.6 MB  download
   k2-help@1             K2Help           FSL-1.1-Apache-2.0    14 KB
   k2-thread@1           K2Thread         FSL-1.1-Apache-2.0    53 KB
+  k2-markdown@1         K2Markdown       FSL-1.1-Apache-2.0     7 KB
 
 "download": fetched once by this computer's K2 on first use, checked, then
 kept (refused when the computer is air-gapped). Notes on each library are in

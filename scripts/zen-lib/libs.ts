@@ -144,6 +144,10 @@ const D3_GLUE = `/* K2 glue: d3.csvParse / d3.tsvParse without new Function (sea
 `
 
 /** The libraries, in manifest order. */
+/** The notes `k2-markdown`'s row carries (the k2-zen skill shows them). */
+export const K2_MARKDOWN_NOTES =
+  "K2's own: markdown, safe by default. K2Markdown.into(el, text, opts) fills el; K2Markdown.render(text, opts) returns a DocumentFragment (never a string, so no innerHTML). Raw HTML is escaped; links show as text with the URL visible, or with opts.links = 'open' and the links:open cap as buttons that call k2.open; images show as text, or with opts.images = 'data' as data: PNG, JPEG, GIF and WebP only. It loads marked and DOMPurify for you (its own DOMPurify instance: your settings never change its rules). Colours follow the Garden (--zen-*)."
+
 export const LIBS: LibSpec[] = [
   // ── 3D and physics ──────────────────────────────────────────────────
   {
@@ -597,5 +601,22 @@ export const LIBS: LibSpec[] = [
     files: [{ name: 'k2-thread.js', own: true }],
     notes:
       "K2's own: a Thread panel to talk to one agent inside a widget. K2Thread.mount(el, {look: 'chamfer' or 'glass', address: 'handle::host'}) then panel.open(address, label), panel.post(text), panel.setLook(look), panel.destroy(). chamfer is K2's Thread with chamfered corners in the Garden theme's colours; glass is K2 Companion's round look and palette. Both: bubbles with author and time, choice cards, Enter sends (Shift+Enter a new line), the working tab with counters and clock, stick-to-bottom scrolling with a new-messages pill, a narrow layout, file chips and data: images for attachments. Needs thread:read and thread:post (agents:read for names and counters). Add marked and dompurify for markdown bodies.",
+  },
+  {
+    // 0.46.5 (prd-widget-size-and-shared-libs-v1 WL13, vs-live L12): from
+    // Kanban's md.js, safe by default, with a private DOMPurify instance.
+    id: 'k2-markdown',
+    version: '1.0.0',
+    needs: ['marked@18', 'dompurify@3'],
+    fingerprints: ['/*! k2-markdown '],
+    title: 'K2 markdown (widget kit)',
+    global: 'K2Markdown',
+    license: 'FSL-1.1-Apache-2.0',
+    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    source: 'bundled',
+    own: true,
+    licenses: ['k2:LICENSE.md'],
+    files: [{ name: 'k2-markdown.js', own: true }],
+    notes: K2_MARKDOWN_NOTES,
   },
 ]

@@ -222,4 +222,13 @@ export const SMOKES: Record<string, string> = {
     } catch (e) { gl = 'fails (' + ((e && e.message) || e) + ')'; }
     done(!!el.querySelector('svg.main-svg'), 'scatter (svg) ok, scattergl ' + gl + ', Plotly ' + Plotly.version);
   `,
+  // 0.46.5 (WL13): headings, lists, code and a table under the sealed CSP,
+  // and nothing that runs (the XSS cases are in zen-lib-markdown.test.ts).
+  'k2-markdown': `
+    const el = document.createElement('div'); root.appendChild(el);
+    K2Markdown.into(el, '# Title\\n\\n- one\\n- **two**\\n\\n\`code\`\\n\\n| a | b |\\n|--|--|\\n| 1 | 2 |\\n\\n<img src=x onerror=alert(1)> [x](javascript:alert(1))');
+    const ok = !!el.querySelector('h1') && el.querySelectorAll('li').length === 2 && !!el.querySelector('code') && !!el.querySelector('table')
+      && !el.querySelector('img, a, script') && !Array.from(el.querySelectorAll('*')).some((n) => Array.from(n.attributes).some((a) => /^on/i.test(a.name)));
+    done(ok && K2Markdown.available(), 'h1, list, code, table; no img, a or on* attributes');
+  `,
 }

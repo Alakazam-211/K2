@@ -134,6 +134,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         blurb: "Send a Design note about a page to a workspace's Thread and agent.",
         example: 'k2 browser note --url http://localhost:3000 "make the header smaller"',
       },
+      {
+        noun: 'sim',
+        blurb: "Drive this workspace's phone device (the Mobile tab's): read the screen, tap, type, install.",
+        example: 'k2 sim tree',
+      },
       { noun: 'commit', blurb: 'AI-assisted commit (`--merge` to merge too).' },
     ],
   },

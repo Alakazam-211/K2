@@ -296,6 +296,25 @@ fn asking_conversation(workspace_id: &str, addr: Option<&str>) -> Result<(String
     Ok((conv, addr.to_string()))
 }
 
+/// The Thread the card goes on: `addr` when the agent named one, else the
+/// Thread of the session that asked (its passport's cell: a sidecar's own
+/// `<ws>/<name>` Thread, by `k2 whoami`'s rules), else the pinned Chat.
+/// 0.46.6 (NSI papercut 12): the CLI sends no `addr`, so a sidecar's card
+/// went to the main Thread and the `[permission:]` turn to the main
+/// session, never the one that asked.
+fn asking_thread(workspace_id: &str, session_id: &str, addr: Option<&str>) -> Result<(String, String), CliResponse> {
+    if addr.is_some() {
+        return asking_conversation(workspace_id, addr);
+    }
+    if let Some(own) = crate::cell_identity::sidecar_thread_addr(workspace_id, session_id) {
+        match asking_conversation(workspace_id, Some(&own)) {
+            Ok(x) => return Ok(x),
+            Err(r) => k2_core::log_debug!("[permission] {own}'s own Thread: {}; using the pinned Chat", r.body),
+        }
+    }
+    asking_conversation(workspace_id, None)
+}
+
 /// The login the agent was working with: the last person who posted to
 /// this conversation within 30 minutes (best effort, a label only).
 fn asked_for(conversation_id: &str, now: i64) -> Option<String> {
@@ -406,7 +425,7 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
             "expiresIn": spec.expiry.default_secs,
         }));
     }
-    let (conversation_id, addr) = match asking_conversation(workspace_id, str_field(body, "addr")) {
+    let (conversation_id, addr) = match asking_thread(workspace_id, session_id, str_field(body, "addr")) {
         Ok(x) => x,
         Err(r) => return r,
     };

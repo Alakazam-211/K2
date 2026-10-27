@@ -62,10 +62,21 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
         k2_core::log_debug!("[app-cards] {ACTION} is not registered");
         return json!({ "card": null });
     };
-    let Some(conversation_id) = crate::overlay_routes::pinned_chat_of(ws) else {
-        return json!({ "card": null, "where": "Settings → App Approvals" });
-    };
     let handle = present::workspace_handle(ws);
+    // The Thread of the session that asked (a sidecar's own, 0.46.6 NSI
+    // papercut 12), else the pinned Chat.
+    let own = r
+        .requester_session
+        .as_deref()
+        .and_then(|s| crate::cell_identity::sidecar_thread_addr(ws, s))
+        .and_then(|a| crate::overlay_routes::conversation_for_addr(&a).map(|c| (c, a)));
+    let (conversation_id, thread_addr) = match own {
+        Some(x) => x,
+        None => match crate::overlay_routes::pinned_chat_of(ws) {
+            Some(c) => (c, handle.clone()),
+            None => return json!({ "card": null, "where": "Settings → App Approvals" }),
+        },
+    };
     let at = k2_core::overlay::now_secs();
     let ctx = Ctx { workspace_id: ws.to_string(), workspace_handle: handle.clone(), params: params.clone() };
     let req = PermissionRequest {
@@ -73,7 +84,7 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
         workspace_id: ws.to_string(),
         session_id: Some(K2_SESSION.to_string()),
         conversation_id: None,
-        addr: Some(handle.clone()),
+        addr: Some(thread_addr),
         card_id: None,
         action: ACTION.to_string(),
         params: J::Object(params),

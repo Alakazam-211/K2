@@ -711,3 +711,130 @@ fn the_agents_route_lists_switches_and_recent_requests_for_owners_and_admins() {
     let r = handle_gated(routes::AGENTS, &Who::Owner, true, b"{}", &HashMap::new());
     assert_eq!(r.status, "405 Method Not Allowed");
 }
+
+// ── the asking session's Thread (0.46.6, NSI papercut 12) ───────────
+
+/// A sidecar Thread `<ws>/<name>` of `ws` (provider conversation `conv`,
+/// a `tab-*` harness tab), as the overlay route tests seed one.
+#[cfg(unix)]
+fn seed_sidecar(ws: &Ws, conv: &str, slug: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::workspace_session_handles::allocate_ordinal(&conn, &ws.id, conv).expect("ordinal");
+    conn.execute(
+        "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
+         VALUES ('claude', ?1, ?2, 0, unixepoch())",
+        rusqlite::params![conv, slug],
+    )
+    .expect("name");
+    conn.execute(
+        "INSERT INTO workspace_tab_sessions (project_id, pane_group_id, agent_name, session_id, command, last_seen_at) \
+         VALUES (?1, ?2, ?3, ?4, 'claude', unixepoch())",
+        rusqlite::params![ws.id, format!("pane-{conv}"), format!("tab-pane-{conv}"), conv],
+    )
+    .expect("tab");
+}
+
+/// A live PTY standing in for the sidecar's agent: a `claude` that is
+/// `cat`, registered under the tab's agent name. Its daemon session id is
+/// what the sidecar's passport carries.
+#[cfg(unix)]
+struct LiveCell {
+    agent_name: String,
+    session: std::sync::Arc<k2_core::terminal::DaemonPtySession>,
+    _rt: tokio::runtime::Runtime,
+}
+
+#[cfg(unix)]
+impl LiveCell {
+    fn spawn(conv: &str) -> LiveCell {
+        use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession, LabelSource};
+        use std::os::unix::fs::PermissionsExt;
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
+        let _enter = rt.enter();
+        let dir = std::env::temp_dir().join(format!("k2-pc-sidecar-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).expect("bin dir");
+        let bin = dir.join("claude");
+        std::fs::write(&bin, "#!/bin/sh\nexec cat\n").expect("fake claude");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let session = DaemonPtySession::spawn(DaemonPtyConfig {
+            session_id: k2_core::session::SessionId::new(),
+            cols: 80,
+            rows: 24,
+            cwd: Some(std::path::PathBuf::from("/tmp")),
+            program: Some(bin.display().to_string()),
+            args: vec![],
+            durable_args: None,
+            env: Default::default(),
+            drain_on_exit: true,
+            label: String::new(),
+            label_source: LabelSource::Pty,
+            sandbox: k2_core::terminal::SandboxSpec::Passthrough,
+            cell_uid: None,
+            overlay: None,
+            survive: false,
+            ptyd_meta: None,
+        })
+        .expect("spawn the fake claude");
+        let agent_name = format!("tab-pane-{conv}");
+        crate::v2_session_map::register(agent_name.clone(), session.clone());
+        drop(_enter);
+        LiveCell { agent_name, session, _rt: rt }
+    }
+
+    fn passport(&self, ws: &Ws) -> Who {
+        Who::Agent { project_id: ws.id.clone(), session_id: self.session.session_id.to_string() }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for LiveCell {
+    fn drop(&mut self) {
+        crate::v2_session_map::unregister(&self.agent_name);
+        self.session.kill();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_sidecars_ask_lands_on_its_own_thread_and_the_answer_comes_back_to_it() {
+    let ws = seed("pcside");
+    let conv = uuid::Uuid::new_v4().to_string();
+    seed_sidecar(&ws, &conv, "reviewer");
+    let side_addr = format!("{}/reviewer", ws.handle);
+    let cell = LiveCell::spawn(&conv);
+
+    // The CLI sends no addr: the daemon finds the asking cell's Thread.
+    let (s, v) = call(&cell.passport(&ws), routes::REQUEST, json!({ "action": "test.switch", "why": "Run the suite on the minis" }));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["status"], "pending", "{v}");
+    assert_eq!(v["addr"], side_addr.as_str(), "the card names the sidecar's Thread, not the main one: {v}");
+    let id = v["id"].as_str().expect("id").to_string();
+    let card = card_of(&v);
+    let r = row(&id);
+    assert_eq!(r.conversation_id.as_deref(), Some(conv.as_str()), "on the sidecar's conversation, not the pinned {}", ws.conv);
+    assert_eq!(r.addr.as_deref(), Some(side_addr.as_str()));
+    assert!(overlay::get_thread_doc(&conv, &card).expect("doc read").is_some(), "the card doc is on the sidecar's Thread");
+    assert!(overlay::get_thread_doc(&ws.conv, &card).expect("doc read").is_none(), "and not on the main Thread");
+
+    // The owner answers it on the sidecar's Thread; the turn goes to the sidecar.
+    let b = json!({ "addr": side_addr, "id": card, "answer": "Allow" });
+    let resp = crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), b.to_string().as_bytes(), "owner");
+    assert_eq!(resp.status, "200 OK", "{}", resp.body);
+    let r = row(&id);
+    assert_eq!((r.state, r.answered_by.as_deref()), (RequestState::Approved, Some("owner")));
+    assert_eq!(testkit::applied(&ws.id, "test.switch"), 1);
+    let turns = inject::sent_to(&side_addr);
+    assert_eq!(turns.len(), 1, "one turn, to the sidecar that asked: {turns:?}");
+    assert!(turns[0].starts_with(&format!("[permission:{id}] approved by owner")), "{turns:?}");
+    assert!(inject::sent_to(&ws.handle).iter().all(|t| !t.contains(&id)), "the main session gets no turn for the sidecar's ask");
+}
+
+#[test]
+fn a_cell_that_is_not_a_sidecar_still_asks_on_the_pinned_thread() {
+    let ws = seed("pccanon");
+    // `agent(ws)`'s session id names no live cell: the pinned Thread.
+    let v = ask_ok(&ws, "test.switch", json!({}));
+    assert_eq!(v["addr"], ws.handle.as_str(), "{v}");
+    assert_eq!(row(v["id"].as_str().expect("id")).conversation_id.as_deref(), Some(ws.conv.as_str()));
+}

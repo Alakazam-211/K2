@@ -293,7 +293,33 @@ fn resolve_whoami(params: &HashMap<String, String>) -> Result<WhoamiInfo, String
                 .to_string(),
         );
     };
+    identity_for(&project_id, cell_sid, env_cell, env_sidecar, env_primary)
+}
 
+/// The Thread address of the cell a passport belongs to (`session_id`:
+/// the passport's daemon PTY id), when that cell is a **sidecar**
+/// (`<ws>/<name>`), by the same rules as `k2 whoami`. `None` for the
+/// canonical cell, or a cell that can't be classified: callers use the
+/// workspace's pinned Thread then. 0.46.6 (NSI papercut 12): a sidecar's
+/// `k2 permission request` card went to the main Thread, so its
+/// `[permission:]` answer never reached the session that asked.
+pub(crate) fn sidecar_thread_addr(project_id: &str, session_id: &str) -> Option<String> {
+    let sid = session_id.trim();
+    if project_id.trim().is_empty() || sid.is_empty() {
+        return None;
+    }
+    let info = identity_for(project_id, Some(sid.to_string()), None, None, None).ok()?;
+    (info.role == "sidecar" && info.address != info.primary).then_some(info.address)
+}
+
+fn identity_for(
+    project_id: &str,
+    cell_sid: Option<String>,
+    env_cell: Option<&str>,
+    env_sidecar: Option<&str>,
+    env_primary: Option<&str>,
+) -> Result<WhoamiInfo, String> {
+    let project_id = project_id.to_string();
     let primary = {
         let db = k2_core::db::shared();
         let conn = db.lock();

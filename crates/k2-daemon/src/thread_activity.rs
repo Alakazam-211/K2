@@ -85,6 +85,12 @@
 //!   with the last state always sent; an end goes out at once. No 1 Hz
 //!   ticks: clients count from `startedAt` / `phaseSince`, corrected by
 //!   `serverNow`.
+//! - **Children by name (0.46.5, Rosson 2026-10-27: "it should show
+//!   what's actually going on").** Owner frames carry `children`: the
+//!   session's live subagents, background shells and monitors (what TW7
+//!   counts), each `{kind, state, label, since}`, oldest first, at most
+//!   eight. The label is short and never free text: a subagent's type, a
+//!   shell's redacted TW8 line, a task type. Guests still get counts only.
 //! - **Phases (TW6).** `delivering` → `working` → `tool` (a lead
 //!   `PreToolUse` until its Post; a transcript tool call for hookless
 //!   Codex / Grok) → `thinking` (lead working, no tool, 1.5 s since the
@@ -146,7 +152,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 
-use k2_core::activity::row::{ChildState, STALE_AFTER_MS};
+use k2_core::activity::row::{ChildState, ThreadChild, STALE_AFTER_MS};
 use k2_core::activity::{ChildKind, Display, LeadState, Reason, Row, TranscriptSignal};
 use k2_core::agent_hooks::envelope::HookEnvelope;
 use k2_core::log_debug;
@@ -197,6 +203,9 @@ pub struct RowSnap {
     pub owed_subagents: usize,
     /// TW7: running background shells and monitors.
     pub background: usize,
+    /// The same children by name (0.46.5, Rosson: show what's actually
+    /// going on), oldest first: kind, state, short label, since.
+    pub children: Vec<ThreadChild>,
     /// What starts and ends this session's turns.
     pub lifecycle: Lifecycle,
 }
@@ -269,6 +278,7 @@ impl RowSnap {
             subagents: subagents - owed_subagents,
             owed_subagents,
             background,
+            children: row.thread_children(),
             lifecycle: Lifecycle::of(row),
         }
     }
@@ -1251,6 +1261,13 @@ impl Tracker {
                 let state = if s.subagents > 0 { "working" } else { "monitoring" };
                 (state, "children", None, None)
             }
+            // 0.46.5: the lead is done but its children hold the turn (no
+            // reply yet): say so, never a bare "working" for a lead that
+            // isn't. The stage (when it ends) is unchanged.
+            (Stage::Live, Some(s)) if s.lead == LeadState::Idle && s.has_children() => {
+                let state = if s.subagents > 0 { "working" } else { "monitoring" };
+                (state, "children", None, None)
+            }
             (_, Some(s)) => {
                 let working = s.lead == LeadState::Working;
                 match steps.filter(|_| working) {
@@ -1283,10 +1300,15 @@ impl Tracker {
             "startedAt": turn.started_at,
             "since": turn.started_at,
             "messages": turn.messages,
+            // The agent posted in Thread during this turn (owner frames).
+            "replied": turn.replied,
             "lastComposeAt": turn.composed_at,
             "subagents": snap.map_or(0, |s| s.subagents),
             "subagentsDone": turn.subagents_done.len(),
             "background": snap.map_or(0, |s| s.background),
+            // Owner frames only: the guest projection is an allow list
+            // and never carries a label (`guest_turn_body`).
+            "children": snap.map_or_else(Vec::new, |s| s.children.iter().map(child_json).collect::<Vec<_>>()),
             "tally": turn.tally.to_json(),
             "waitingOn": (phase == "waiting").then(|| match snap {
                 Some(s) if s.waiting_question => "question",
@@ -1295,6 +1317,11 @@ impl Tracker {
             "end": Value::Null,
         })
     }
+}
+
+/// One child of the turn's session as the strip names it.
+fn child_json(c: &ThreadChild) -> Value {
+    json!({ "kind": c.kind, "state": c.state, "label": c.label, "since": c.since })
 }
 
 /// Send now (an end, a resume, a turn's first frame).
@@ -1586,6 +1613,7 @@ mod tests {
             subagents: 0,
             owed_subagents: 0,
             background: 0,
+            children: Vec::new(),
             lifecycle: Lifecycle::Agent,
         }
     }
@@ -2501,6 +2529,55 @@ mod tests {
         row.set(idle_with(0, 1, 0, Display::Monitoring));
         let b = only(&t.row_changed(SID, &row.lookup(), 3_200)).clone();
         assert_eq!((b["phase"].as_str(), b["state"].as_str(), b["end"].is_null()), (Some("children"), Some("monitoring"), true));
+    }
+
+    /// 0.46.5: the frame names what holds the turn, so a turn that stays
+    /// open says why (a subagent by its type, a background shell by its
+    /// line) instead of a bare "working"; the guest frame stays counts only.
+    #[test]
+    fn frames_name_the_children_for_owners_only() {
+        let mut t = Tracker::default();
+        let children = vec![
+            ThreadChild { kind: "shell", state: "running", label: Some("Running `npm run dev`".into()), since: 1_060 },
+            ThreadChild { kind: "subagent", state: "running", label: Some("Explore".into()), since: 1_070 },
+        ];
+        let row = Fake::new(RowSnap { children: children.clone(), ..busy(1, 1) });
+        live(&mut t, &row);
+        no_end(&t.reply(CONV, &row.lookup(), 2_000));
+        row.set(RowSnap { children: children.clone(), ..idle_with(1, 1, 0, Display::Working) });
+        let out = t.row_changed(SID, &row.lookup(), 3_200);
+        let b = only(&out).clone();
+        assert_eq!((b["phase"].as_str(), b["state"].as_str()), (Some("children"), Some("working")));
+        assert_eq!(
+            b["children"],
+            json!([
+                { "kind": "shell", "state": "running", "label": "Running `npm run dev`", "since": 1_060 },
+                { "kind": "subagent", "state": "running", "label": "Explore", "since": 1_070 },
+            ])
+        );
+        // The catch-up (`GET /cli/thread/activity`, a reload) says the same.
+        assert_eq!(t.current(CONV, &row.lookup(), 3_300).expect("live")["children"], b["children"]);
+        // Guests: counts, never the labels.
+        let g = out[0].guest.as_ref().expect("a guest frame");
+        assert_guest_turn_keys(g);
+        assert_guest_text_clean(g, &["npm run dev", "Explore"]);
+        assert_eq!((g["subagents"].as_u64(), g["background"].as_u64()), (Some(1), Some(1)));
+        assert_eq!(b["replied"], true);
+        assert!(g.get("replied").is_none(), "guests never hear whether the agent replied: {g}");
+
+        // No reply yet: the lead is done and a subagent holds the turn.
+        // The frame says `children` (the subagent by name), not a bare
+        // "working" for a lead that isn't; when the turn ends is unchanged.
+        let mut t = Tracker::default();
+        let sub = vec![ThreadChild { kind: "subagent", state: "running", label: Some("Explore".into()), since: 1_070 }];
+        let row = Fake::new(RowSnap { children: sub.clone(), ..busy(1, 0) });
+        live(&mut t, &row);
+        t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some(ADDR.into()) }, 1_200, &row.lookup(), 1_200);
+        row.set(RowSnap { children: sub, ..idle_with(1, 0, 0, Display::Working) });
+        let b = only(&t.row_changed(SID, &row.lookup(), 3_200)).clone();
+        assert_eq!((b["phase"].as_str(), b["state"].as_str(), b["replied"].as_bool()), (Some("children"), Some("working"), Some(false)));
+        assert_eq!(b["children"][0]["label"], "Explore");
+        assert!(b["end"].is_null(), "still open while the subagent runs");
     }
 
     /// A new compose supersedes the children's strip: the lead was done

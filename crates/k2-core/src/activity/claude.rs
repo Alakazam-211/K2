@@ -265,6 +265,7 @@ fn apply_bucket_inner(row: &mut Row, bucket: &str, now: i64) {
 fn apply_child(row: &mut Row, env: &HookEnvelope, agent_id: &str, now: i64) {
     match env.event.as_str() {
         "SubagentStop" => {
+            row.tombstone_child(agent_id, now);
             if let Some(child) = row.children.get_mut(agent_id) {
                 if child.background {
                     child.state = ChildState::Owed;
@@ -280,6 +281,7 @@ fn apply_child(row: &mut Row, env: &HookEnvelope, agent_id: &str, now: i64) {
             return;
         }
         "StopFailure" => {
+            row.tombstone_child(agent_id, now);
             if row.children.remove(agent_id).is_some() {
                 row.end_reason = Some(Reason::ChildDone);
             }
@@ -287,11 +289,23 @@ fn apply_child(row: &mut Row, env: &HookEnvelope, agent_id: &str, now: i64) {
         }
         _ => {}
     }
+    // A late async event (`SubagentStart` / `PreToolUse` / `PostToolUse`
+    // run `async: true`) from a subagent that already stopped: evidence
+    // only, never a running (or un-owed) subagent again.
+    if row.child_stopped_recently(agent_id, now) {
+        return;
+    }
     let lead_idle = row.lead.state == LeadState::Idle;
+    let label = env.agent_type.as_deref().and_then(crate::agent_hooks::tool_line::short_label);
     if !row.children.contains_key(agent_id)
-        && !ends::upsert_child(row, agent_id, ChildKind::Subagent, ChildOrigin::Hook, lead_idle, ends::sender_key(env), now)
+        && !ends::upsert_child(row, agent_id, ChildKind::Subagent, ChildOrigin::Hook, lead_idle, ends::sender_key(env), label.clone(), now)
     {
         return;
+    }
+    if let Some(child) = row.children.get_mut(agent_id) {
+        if child.label.is_none() {
+            child.label = label;
+        }
     }
     let tool = env.tool_name.as_deref().unwrap_or("");
     let Some(child) = row.children.get_mut(agent_id) else { return };
@@ -420,5 +434,113 @@ pub(crate) fn lead_end(row: &mut Row, outcome: Outcome, reason: Reason, now: i64
     }
     if was_busy {
         row.pending_turn_end = Some(TurnEnded { outcome, reason, at: now });
+    }
+}
+
+/// Phantom children (0.46.4 field bug, Baden / appa: the Thread said the
+/// agent was working after its turn ended) and the children's labels.
+#[cfg(test)]
+mod phantom_tests {
+    use super::super::row::{Display, Row, RowFacts, CHILD_TOMBSTONE_MS};
+    use super::super::Evidence;
+    use crate::agent_hooks::envelope::{self, HookHeaders, HookSource};
+
+    fn row() -> Row {
+        Row::new(RowFacts { session_id: "s".into(), harness: "claude".into(), ..Default::default() }, 0)
+    }
+
+    fn hook(r: &mut Row, body: &str, at: i64) {
+        let env = envelope::parse(
+            &HookHeaders {
+                pane: "s".into(),
+                agent_pid: Some(100),
+                source: HookSource::Claude,
+                hook_version: Some(2),
+                cli_version: Some("2.1.311".into()),
+                truncated: false,
+                event_hint: None,
+            },
+            body.as_bytes(),
+        )
+        .expect("synthetic hook parses");
+        r.apply(Evidence::Hook(&env), at);
+    }
+
+    /// A foreground subagent, the way Claude Code 2.1.311 reports it.
+    /// `SubagentStart` / `PreToolUse` / `PostToolUse` are installed
+    /// `async: true`, so the subagent's last ones can land after its
+    /// `SubagentStop` and even after the lead's `Stop`; and the
+    /// `SubagentStop` inventory, built from the task registry while the
+    /// hook runs, still lists the stopping subagent as `running` (every
+    /// subagent is registered `isBackgrounded: true`). Each of those used
+    /// to put a running subagent back on the roster: the row (and the
+    /// Thread turn following it) stayed `working` after the turn ended,
+    /// until a later Stop.
+    #[test]
+    fn a_stopped_subagent_never_comes_back_from_late_events_or_its_own_inventory() {
+        let mut r = row();
+        hook(&mut r, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"go"}"#, 100);
+        hook(&mut r, r#"{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Agent","tool_use_id":"tu-1","tool_input":{"subagent_type":"Explore"}}"#, 200);
+        hook(&mut r, r#"{"hook_event_name":"SubagentStart","agent_id":"a-1","agent_type":"Explore"}"#, 300);
+        hook(&mut r, r#"{"hook_event_name":"PreToolUse","agent_id":"a-1","agent_type":"Explore","tool_name":"Read","tool_use_id":"tu-a1","tool_input":{"file_path":"x"}}"#, 400);
+        assert_eq!(r.counts().subagents, 1);
+        let named = r.thread_children();
+        assert_eq!((named[0].kind, named[0].state, named[0].label.as_deref()), ("subagent", "running", Some("Explore")));
+        hook(
+            &mut r,
+            r#"{"hook_event_name":"SubagentStop","agent_id":"a-1","agent_type":"Explore","stop_hook_active":false,
+                "background_tasks":[{"id":"a-1","type":"subagent","status":"running","description":"d","agent_type":"Explore"}],
+                "session_crons":[]}"#,
+            800,
+        );
+        assert_eq!(r.counts().subagents, 0, "its own inventory never re-adds the stopping subagent: {:?}", r.children);
+        hook(&mut r, r#"{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Agent","tool_use_id":"tu-1","tool_input":{},"tool_response":{}}"#, 900);
+        hook(&mut r, r#"{"hook_event_name":"Stop","prompt_id":"p1","stop_hook_active":false,"background_tasks":[],"session_crons":[]}"#, 1_000);
+        assert_eq!(r.display, Display::Idle);
+        // The subagent's late async hooks land after the lead's Stop.
+        hook(&mut r, r#"{"hook_event_name":"PostToolUse","agent_id":"a-1","agent_type":"Explore","tool_name":"Read","tool_use_id":"tu-a1","tool_input":{},"tool_response":{}}"#, 1_200);
+        hook(&mut r, r#"{"hook_event_name":"SubagentStart","agent_id":"a-1","agent_type":"Explore"}"#, 1_300);
+        assert_eq!(r.counts().subagents, 0, "late events are evidence only: {:?}", r.children);
+        assert_eq!(r.display, Display::Idle, "the turn has ended; nothing is still working");
+        assert!(r.thread_children().is_empty());
+        // A subagent continued after the window shows again.
+        hook(&mut r, r#"{"hook_event_name":"SubagentStart","agent_id":"a-1","agent_type":"Explore"}"#, 800 + CHILD_TOMBSTONE_MS);
+        assert_eq!(r.counts().subagents, 1);
+    }
+
+    /// The Thread strip names each child: a subagent by its type, a
+    /// background shell by its redacted command line, an inventory task
+    /// by its type.
+    #[test]
+    fn children_carry_short_labels() {
+        let mut r = row();
+        hook(&mut r, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"go"}"#, 100);
+        hook(
+            &mut r,
+            r#"{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"tu-1",
+                "tool_input":{"command":"npm run dev","run_in_background":true},"tool_response":{"backgroundTaskId":"b-1"}}"#,
+            200,
+        );
+        hook(&mut r, r#"{"hook_event_name":"SubagentStart","agent_id":"a-2","agent_type":"code-reviewer"}"#, 300);
+        hook(
+            &mut r,
+            r#"{"hook_event_name":"Stop","prompt_id":"p1","stop_hook_active":false,
+                "background_tasks":[
+                    {"id":"b-1","type":"shell","status":"running","command":"npm run dev","description":"d"},
+                    {"id":"a-2","type":"subagent","status":"running","agent_type":"code-reviewer","description":"d"},
+                    {"id":"m-1","type":"monitor","status":"running","description":"d"}
+                ],"session_crons":[]}"#,
+            400,
+        );
+        let named: Vec<(&str, &str, Option<&str>)> =
+            r.thread_children().iter().map(|c| (c.kind, c.state, c.label.as_deref())).collect();
+        assert_eq!(
+            named,
+            vec![
+                ("shell", "running", Some("Running `npm run dev`")),
+                ("subagent", "running", Some("code-reviewer")),
+                ("monitor", "running", Some("monitor")),
+            ]
+        );
     }
 }

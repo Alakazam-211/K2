@@ -37,6 +37,25 @@ const SECRET_PREFIXES: &[&str] = &[
 /// `--user` carry curl's `user:password` (URL userinfo by another name).
 const SECRET_FLAGS: &[&str] = &["--password", "--token", "--secret", "-p", "-u", "--user"];
 
+/// Hard cap on a [`short_label`], in characters.
+pub const MAX_LABEL_CHARS: usize = 48;
+
+/// A short name for a background child (a subagent's type such as
+/// `Explore`, a task type such as `monitor` or `dream`): control
+/// characters stripped, whitespace folded, secrets redacted, at most
+/// [`MAX_LABEL_CHARS`]. `None` when nothing is left.
+pub fn short_label(s: &str) -> Option<String> {
+    let c = clean(&redact(s));
+    if c.is_empty() {
+        return None;
+    }
+    if c.chars().count() > MAX_LABEL_CHARS {
+        let keep: String = c.chars().take(MAX_LABEL_CHARS - 1).collect();
+        return Some(format!("{keep}…"));
+    }
+    Some(c)
+}
+
 /// Describe one tool call as a short, redacted line.
 pub fn describe(tool_name: &str, input: &Value) -> String {
     let field = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or("");

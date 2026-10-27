@@ -122,6 +122,7 @@ mod tests {
                     owed_at: None,
                     background: true,
                     sender: None,
+                    label: None,
                 },
             );
         }

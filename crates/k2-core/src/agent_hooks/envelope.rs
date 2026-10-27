@@ -106,13 +106,31 @@ impl HookHeaders {
 }
 
 /// One entry of a Claude `background_tasks[]` inventory. The
-/// `description` and `command` fields are dropped at parse time.
+/// `description` and the raw `command` are dropped at parse time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskEntry {
     pub id: String,
-    /// `shell` | `subagent` | `monitor` | `workflow` | an unknown raw type.
+    /// `shell` | `subagent` | `monitor` | `workflow` | an unknown raw type
+    /// (Claude 2.1.311 also sends `teammate`, `dream`, `auto-mode scan`,
+    /// `memory import`, `MCP task`, `cloud session`).
     pub kind: String,
     pub status: String,
+    /// What the Thread strip names it by (0.46.5, Rosson: show what's
+    /// actually going on): a shell's redacted TW8 line (`Running `npm run
+    /// dev``), a subagent's `agent_type` (`Explore`), else the raw type
+    /// ([`super::tool_line::short_label`]). Never the description.
+    pub label: Option<String>,
+}
+
+/// An inventory entry's label (see [`TaskEntry::label`]).
+fn task_label(kind: &str, entry: &Value) -> Option<String> {
+    let s = |k: &str| entry.get(k).and_then(Value::as_str).filter(|v| !v.trim().is_empty());
+    let named = match kind {
+        "shell" => s("command").map(|c| super::tool_line::describe("Bash", &serde_json::json!({ "command": c }))),
+        "subagent" | "teammate" => s("agent_type").and_then(super::tool_line::short_label),
+        _ => None,
+    };
+    named.or_else(|| super::tool_line::short_label(kind))
 }
 
 /// A parsed hook event (§7.1). Never serialized out.
@@ -254,7 +272,7 @@ pub fn parse(headers: &HookHeaders, body: &[u8]) -> Result<HookEnvelope, Envelop
         let input = obj.get("tool_input").cloned().unwrap_or(Value::Null);
         env.tool_line = Some(super::tool_line::describe(name, &input));
         if env.event == "PostToolUse" {
-            env.launched_task = obj.get("tool_response").and_then(|r| launched_task(name, r));
+            env.launched_task = obj.get("tool_response").and_then(|r| launched_task(name, &input, r));
             env.stopped_task_id = stopped_task_id(name, &input);
         }
     }
@@ -264,9 +282,11 @@ pub fn parse(headers: &HookHeaders, body: &[u8]) -> Result<HookEnvelope, Envelop
                 .iter()
                 .filter_map(|t| {
                     let field = |k: &str| t.get(k).and_then(Value::as_str).map(str::to_string);
+                    let kind = field("type").unwrap_or_else(|| "unknown".to_string());
                     Some(TaskEntry {
                         id: field("id")?,
-                        kind: field("type").unwrap_or_else(|| "unknown".to_string()),
+                        label: task_label(&kind, t),
+                        kind,
                         status: field("status").unwrap_or_default(),
                     })
                 })
@@ -337,19 +357,30 @@ fn short_id(v: Option<&Value>) -> Option<String> {
 
 /// A background task a lead `PostToolUse` launched, from its
 /// `tool_response` (see [`HookEnvelope::launched_task`]).
-fn launched_task(tool_name: &str, response: &Value) -> Option<TaskEntry> {
-    let entry = |id: String, kind: &str| TaskEntry { id, kind: kind.to_string(), status: "running".to_string() };
+fn launched_task(tool_name: &str, input: &Value, response: &Value) -> Option<TaskEntry> {
+    let entry = |id: String, kind: &str, label: Option<String>| TaskEntry {
+        id,
+        kind: kind.to_string(),
+        status: "running".to_string(),
+        label: label.or_else(|| super::tool_line::short_label(kind)),
+    };
     if let Some(id) = short_id(response.get("backgroundTaskId")) {
-        return Some(entry(id, "shell"));
+        let line = input
+            .get("command")
+            .and_then(Value::as_str)
+            .filter(|c| !c.trim().is_empty())
+            .map(|_| super::tool_line::describe(tool_name, input));
+        return Some(entry(id, "shell", line));
     }
     if response.get("isAsync").and_then(Value::as_bool) == Some(true) {
         if let Some(id) = short_id(response.get("agentId")) {
-            return Some(entry(id, "subagent"));
+            let ty = input.get("subagent_type").and_then(Value::as_str).and_then(super::tool_line::short_label);
+            return Some(entry(id, "subagent", ty));
         }
     }
     if tool_name == "Monitor" {
         if let Some(id) = short_id(response.get("taskId")) {
-            return Some(entry(id, "monitor"));
+            return Some(entry(id, "monitor", None));
         }
     }
     None
@@ -435,11 +466,34 @@ mod tests {
             }))
             .launched_task
         };
-        let entry = |id: &str, kind: &str| Some(TaskEntry { id: id.into(), kind: kind.into(), status: "running".into() });
-        assert_eq!(launched("Bash", json!({"backgroundTaskId": "bash_7", "stdout": "x"})), entry("bash_7", "shell"));
-        assert_eq!(launched("Task", json!({"isAsync": true, "agentId": "a-9"})), entry("a-9", "subagent"));
+        let entry = |id: &str, kind: &str, label: &str| {
+            Some(TaskEntry { id: id.into(), kind: kind.into(), status: "running".into(), label: Some(label.into()) })
+        };
+        assert_eq!(launched("Bash", json!({"backgroundTaskId": "bash_7", "stdout": "x"})), entry("bash_7", "shell", "shell"));
+        assert_eq!(launched("Task", json!({"isAsync": true, "agentId": "a-9"})), entry("a-9", "subagent", "subagent"));
         assert_eq!(launched("Task", json!({"isAsync": false, "agentId": "a-9"})), None);
-        assert_eq!(launched("Monitor", json!({"taskId": "m-1"})), entry("m-1", "monitor"));
+        assert_eq!(launched("Monitor", json!({"taskId": "m-1"})), entry("m-1", "monitor", "monitor"));
+        // The launch's own input names it: the redacted command line, the
+        // subagent's type.
+        let named = |tool: &str, input: Value, resp: Value| {
+            parse_json(json!({
+                "hook_event_name": "PostToolUse",
+                "tool_name": tool,
+                "tool_use_id": "tu",
+                "tool_input": input,
+                "tool_response": resp,
+            }))
+            .launched_task
+            .and_then(|t| t.label)
+        };
+        assert_eq!(
+            named("Bash", json!({"command": "npm run dev --token abc123", "run_in_background": true}), json!({"backgroundTaskId": "b"})).as_deref(),
+            Some("Running `npm run dev --token ***`")
+        );
+        assert_eq!(
+            named("Agent", json!({"subagent_type": "Explore", "prompt": "the secret plan"}), json!({"isAsync": true, "agentId": "a"})).as_deref(),
+            Some("Explore")
+        );
         assert_eq!(launched("Bash", json!({"stdout": "plain"})), None);
 
         // A PreToolUse never reports a launch, even with a response key.
@@ -459,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_inventory_keeps_id_type_status_only() {
+    fn stop_inventory_keeps_id_type_status_and_a_short_label_only() {
         let env = parse_json(json!({
             "hook_event_name": "Stop",
             "last_assistant_message": "the secret answer",
@@ -474,13 +528,48 @@ mod tests {
         assert_eq!(
             tasks,
             vec![
-                TaskEntry { id: "t1".into(), kind: "shell".into(), status: "running".into() },
-                TaskEntry { id: "t2".into(), kind: "subagent".into(), status: "running".into() },
+                TaskEntry { id: "t1".into(), kind: "shell".into(), status: "running".into(), label: Some("Running `npm run dev`".into()) },
+                TaskEntry { id: "t2".into(), kind: "subagent".into(), status: "running".into(), label: Some("Explore".into()) },
             ]
         );
         assert_eq!(env.session_crons, Some(1));
+        // The description and the last message never stay; the command
+        // only as its redacted TW8 line.
         let dbg = format!("{env:?}");
-        assert!(!dbg.contains("secret answer") && !dbg.contains("npm run dev"), "{dbg}");
+        assert!(!dbg.contains("secret answer") && !dbg.contains("dev server"), "{dbg}");
+    }
+
+    /// The Claude Code 2.1.311 `Stop` inventory, as its binary builds it
+    /// (`XTn(taskRegistry.all())`: running / pending, backgrounded tasks
+    /// only; `post_turn_memory` left out; types mapped `local_agent` →
+    /// `subagent`, `local_bash` → `shell`, `monitor_*` → `monitor`,
+    /// `in_process_teammate` → `teammate`, plus `workflow`, `MCP task`,
+    /// `dream`, `auto-mode scan`, `memory import`, `cloud session`).
+    #[test]
+    fn claude_2_1_311_inventory_types_get_labels() {
+        let env = parse_json(json!({
+            "hook_event_name": "Stop",
+            "background_tasks": [
+                { "id": "a1", "type": "subagent", "status": "running", "description": "d", "agent_type": "general-purpose" },
+                { "id": "d1", "type": "dream", "status": "running", "description": "d" },
+                { "id": "s1", "type": "auto-mode scan", "status": "pending", "description": "d" },
+                { "id": "m1", "type": "monitor", "status": "running", "description": "d", "server": "x", "tool": "y" },
+                { "id": "w1", "type": "workflow", "status": "running", "description": "d", "name": "release" },
+            ],
+            "session_crons": [],
+        }));
+        let labels: Vec<(String, Option<String>)> =
+            env.background_tasks.expect("inventory").into_iter().map(|t| (t.id, t.label)).collect();
+        assert_eq!(
+            labels,
+            vec![
+                ("a1".to_string(), Some("general-purpose".to_string())),
+                ("d1".to_string(), Some("dream".to_string())),
+                ("s1".to_string(), Some("auto-mode scan".to_string())),
+                ("m1".to_string(), Some("monitor".to_string())),
+                ("w1".to_string(), Some("workflow".to_string())),
+            ]
+        );
     }
 
     #[test]

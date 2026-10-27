@@ -31,6 +31,20 @@ pub const TRANSCRIPT_END_GRACE_MS: i64 = 5_000;
 /// DA24: the roster never grows past this.
 pub const ROSTER_CAP: usize = 64;
 
+/// A subagent that sent `SubagentStop` (or a child `StopFailure`) stays
+/// stopped this long: a child event for it that lands later is a late
+/// async hook (`PreToolUse` / `PostToolUse` / `SubagentStart` run
+/// `async: true`), not a new run, and never puts it back on the roster.
+/// A subagent continued within the window shows again on its first event
+/// after it.
+pub const CHILD_TOMBSTONE_MS: i64 = 30_000;
+
+/// Stopped subagent ids remembered (see [`CHILD_TOMBSTONE_MS`]).
+pub(crate) const TOMBSTONE_CAP: usize = 64;
+
+/// Children the Thread strip lists by name, at most.
+pub const THREAD_CHILDREN_CAP: usize = 8;
+
 /// Lead tools remembered in flight (for `waitingFor` binding).
 pub(crate) const IN_FLIGHT_CAP: usize = 32;
 
@@ -127,6 +141,22 @@ pub struct Child {
     /// complete `Stop` inventory only reconciles its own process's
     /// children: a pane may merge a background job's hooks (DA14-4a).
     pub sender: Option<i32>,
+    /// A short name for the Thread strip (0.46.5): a subagent's type, a
+    /// background shell's redacted TW8 line, a task type. Never free
+    /// text from the agent.
+    pub label: Option<String>,
+}
+
+/// One child as the Thread strip names it ([`Row::thread_children`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadChild {
+    /// `subagent` | `shell` | `monitor`.
+    pub kind: &'static str,
+    /// `running` | `waiting` | `done` (a subagent whose notification the
+    /// lead hasn't taken yet).
+    pub state: &'static str,
+    pub label: Option<String>,
+    pub since: i64,
 }
 
 /// What the row folds to (DA21 + DA29).
@@ -384,6 +414,8 @@ pub struct Row {
     #[serde(skip)]
     pub(crate) last_compat: Option<&'static str>,
     pub(crate) pending_turn_end: Option<TurnEnded>,
+    /// Subagents that stopped, with when ([`CHILD_TOMBSTONE_MS`]).
+    pub(crate) stopped_children: VecDeque<(String, i64)>,
 }
 
 /// A comparable picture of what a client draws.
@@ -438,6 +470,7 @@ impl Row {
             last_status_write: None,
             last_compat: None,
             pending_turn_end: None,
+            stopped_children: VecDeque::new(),
         }
     }
 
@@ -550,6 +583,46 @@ impl Row {
             }
         }
         (subagents, background)
+    }
+
+    /// TW7 by name (0.46.5): the children [`Row::thread_counts`] counts,
+    /// oldest first, at most [`THREAD_CHILDREN_CAP`].
+    pub fn thread_children(&self) -> Vec<ThreadChild> {
+        let mut out: Vec<(&String, ThreadChild)> = self
+            .children
+            .iter()
+            .filter_map(|(id, c)| {
+                let kind = match c.kind {
+                    ChildKind::Subagent => "subagent",
+                    ChildKind::Shell if c.state != ChildState::Owed => "shell",
+                    ChildKind::Monitor if c.state != ChildState::Owed => "monitor",
+                    _ => return None,
+                };
+                let state = match c.state {
+                    ChildState::Running => "running",
+                    ChildState::Waiting => "waiting",
+                    ChildState::Owed => "done",
+                };
+                Some((id, ThreadChild { kind, state, label: c.label.clone(), since: c.since }))
+            })
+            .collect();
+        out.sort_by(|a, b| a.1.since.cmp(&b.1.since).then_with(|| a.0.cmp(b.0)));
+        out.into_iter().take(THREAD_CHILDREN_CAP).map(|(_, c)| c).collect()
+    }
+
+    /// A subagent stopped at `now`: late child events for it are ignored
+    /// for [`CHILD_TOMBSTONE_MS`].
+    pub(crate) fn tombstone_child(&mut self, id: &str, now: i64) {
+        self.stopped_children.retain(|(t, _)| t != id);
+        if self.stopped_children.len() >= TOMBSTONE_CAP {
+            self.stopped_children.pop_front();
+        }
+        self.stopped_children.push_back((id.to_string(), now));
+    }
+
+    /// `id` stopped less than [`CHILD_TOMBSTONE_MS`] ago.
+    pub(crate) fn child_stopped_recently(&self, id: &str, now: i64) -> bool {
+        self.stopped_children.iter().any(|(t, at)| t == id && now < at + CHILD_TOMBSTONE_MS)
     }
 
     /// This turn's lead tool and command counts.
@@ -717,6 +790,7 @@ mod tests {
             owed_at: None,
             background: false,
             sender: None,
+            label: None,
         };
         row.children.insert("a".into(), child(ChildKind::Subagent, ChildState::Running));
         row.children.insert("b".into(), child(ChildKind::Subagent, ChildState::Owed));
@@ -726,6 +800,19 @@ mod tests {
         row.children.insert("f".into(), child(ChildKind::Monitor, ChildState::Running));
         row.children.insert("g".into(), child(ChildKind::Cron, ChildState::Running));
         assert_eq!(row.thread_counts(), (3, 2));
+        // The same children by name: the owed shell and the cron are not
+        // listed; an owed subagent reads `done`.
+        let named: Vec<(&str, &str)> = row.thread_children().iter().map(|c| (c.kind, c.state)).collect();
+        assert_eq!(
+            named,
+            vec![
+                ("subagent", "running"),
+                ("subagent", "done"),
+                ("subagent", "waiting"),
+                ("shell", "running"),
+                ("monitor", "running"),
+            ]
+        );
     }
 
     #[test]

@@ -55,6 +55,7 @@ pub(crate) fn upsert_child(
     origin: ChildOrigin,
     background: bool,
     sender: Option<i32>,
+    label: Option<String>,
     now: i64,
 ) -> bool {
     if let Some(child) = row.children.get_mut(id) {
@@ -66,6 +67,9 @@ pub(crate) fn upsert_child(
             child.kind = kind;
         }
         child.background |= background;
+        if child.label.is_none() {
+            child.label = label;
+        }
         return true;
     }
     if row.children.len() >= ROSTER_CAP {
@@ -84,7 +88,7 @@ pub(crate) fn upsert_child(
     }
     row.children.insert(
         id.to_string(),
-        Child { kind, state: ChildState::Running, origin, since: now, owed_at: None, background, sender },
+        Child { kind, state: ChildState::Running, origin, since: now, owed_at: None, background, sender, label },
     );
     true
 }
@@ -124,7 +128,7 @@ pub(crate) fn sender_key(env: &HookEnvelope) -> Option<i32> {
 
 /// A lead `PostToolUse` launched a background task.
 pub(crate) fn add_launched(row: &mut Row, task: &TaskEntry, sender: Option<i32>, now: i64) {
-    upsert_child(row, &task.id, kind_of(&task.kind), ChildOrigin::Launch, true, sender, now);
+    upsert_child(row, &task.id, kind_of(&task.kind), ChildOrigin::Launch, true, sender, task.label.clone(), now);
 }
 
 /// DA24: reconcile a `background_tasks` + `session_crons` inventory.
@@ -134,6 +138,12 @@ pub(crate) fn add_launched(row: &mut Row, task: &TaskEntry, sender: Option<i32>,
 /// removal), and a hook-tracked subagent goes too when the inventory
 /// lists no running subagent at all. A `SubagentStop` inventory only adds:
 /// it may describe the subagent's own tasks, not the lead's.
+///
+/// A subagent that stopped moments ago ([`Row::child_stopped_recently`])
+/// is never added back: Claude 2.1.311 builds the inventory from its task
+/// registry while the hook fires, so a `SubagentStop` lists the stopping
+/// subagent itself as still `running` (every subagent is registered
+/// `isBackgrounded: true`), and a lead `Stop` racing it can too.
 pub(crate) fn reconcile_inventory(row: &mut Row, env: &HookEnvelope, complete: bool, now: i64) {
     if let Some(tasks) = env.background_tasks.as_ref() {
         let mut running_ids = Vec::new();
@@ -144,12 +154,12 @@ pub(crate) fn reconcile_inventory(row: &mut Row, env: &HookEnvelope, complete: b
                 Some(false) => (kind_of(&task.kind), false),
                 None => (ChildKind::Unknown, true),
             };
-            if !running {
+            if !running || row.child_stopped_recently(&task.id, now) {
                 continue;
             }
             any_subagent |= kind == ChildKind::Subagent;
             running_ids.push(task.id.clone());
-            upsert_child(row, &task.id, kind, ChildOrigin::Inventory, true, sender_key(env), now);
+            upsert_child(row, &task.id, kind, ChildOrigin::Inventory, true, sender_key(env), task.label.clone(), now);
         }
         if complete {
             let before = row.children.len();
@@ -177,7 +187,7 @@ pub(crate) fn reconcile_inventory(row: &mut Row, env: &HookEnvelope, complete: b
     }
     match env.session_crons {
         Some(n) if n > 0 => {
-            upsert_child(row, CRON_ID, ChildKind::Cron, ChildOrigin::Cron, true, sender_key(env), now);
+            upsert_child(row, CRON_ID, ChildKind::Cron, ChildOrigin::Cron, true, sender_key(env), None, now);
         }
         Some(_) if complete => {
             if row.children.remove(CRON_ID).is_some() {

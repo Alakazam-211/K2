@@ -187,8 +187,89 @@ pub fn boot(home: &Path) {
                 v.recovery_state().0
             );
         }
-        Err(e) => k2_core::log_debug!("[vault] NOT open: {e}"),
+        Err(e) => {
+            k2_core::log_debug!("[vault] NOT open: {e}");
+            if retryable(&e.code) {
+                spawn_open_retry(home.to_path_buf());
+            }
+        }
     }
+}
+
+/// Key-store failures that can clear on their own: a locked login
+/// Keychain (a Mac mini reached only by SSH, a dismissed dialog), a root
+/// helper that didn't answer. A missing key or a substituted vault never
+/// clears by waiting, so those are not retried.
+pub fn retryable(code: &str) -> bool {
+    matches!(code, "keychain_error" | "keeper_error")
+}
+
+/// How often a vault that failed to open at boot is tried again
+/// (prd-llm-logins-in-vault-v1 Q4, Rosson: every minute).
+pub const OPEN_RETRY_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Try to open the vault again every minute until it opens or fails for
+/// a reason waiting can't fix. On success the vault is served at once
+/// ([`get`]) with its runtime steps; the boot-only steps (moving old
+/// stores in, the R8 upgrade, the secrets-dir sweep) wait for the next
+/// daemon start, because services are already running.
+fn spawn_open_retry(home: PathBuf) {
+    let rt = tokio::runtime::Handle::try_current().ok();
+    let _ = std::thread::Builder::new().name("vault-open-retry".into()).spawn(move || {
+        let _enter = rt.as_ref().map(|h| h.enter());
+        let mut tries: u64 = 0;
+        loop {
+            std::thread::sleep(OPEN_RETRY_EVERY);
+            if get().is_ok() {
+                return; // opened another way (a restore)
+            }
+            tries += 1;
+            let ks = select_key_store(&home);
+            match open_with_upgrade(&vault_dir(&home), &home, ks) {
+                Ok(v) => {
+                    *cell().write() = Ok(v.clone());
+                    k2_core::log_debug!("[vault] open after {tries} retr{}", if tries == 1 { "y" } else { "ies" });
+                    on_late_open(&v);
+                    return;
+                }
+                Err(e) => {
+                    let again = retryable(&e.code);
+                    // Keep the newest reason for /cli/vault/status.
+                    *cell().write() = Err(e.clone());
+                    if !again {
+                        k2_core::log_debug!("[vault] retry stopped: {e}");
+                        return;
+                    }
+                    if tries == 1 || tries % 60 == 0 {
+                        k2_core::log_debug!("[vault] still not open ({}), retrying every minute", e.code);
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// The runtime half of a boot open, for a vault that opened late.
+fn on_late_open(v: &Arc<LocalVault>) {
+    let _ = k2_core::secret_refs::install(Box::new(mainrefs::Holder));
+    let _ = k2_core::redaction::install(Box::new(|s: &str| redact_str(s)));
+    #[cfg(unix)]
+    k2_core::terminal::ptyd::set_spawned_hook(ssh_agent::on_ptyd_spawned);
+    let nd = k2_vault::secret::set_non_dumpable();
+    let _ = NON_DUMPABLE.set(nd);
+    start_ticker(v.clone());
+    // Saved LLM logins: what the closed vault couldn't take is sealed now.
+    k2_core::llm_accounts::slots::forget_known();
+    let _ = std::thread::Builder::new()
+        .name("vault-late-llm".into())
+        .spawn(|| {
+            let _ = crate::llm_accounts_runtime::seal_pass("vault opened");
+        });
+    k2_core::log_debug!(
+        "[vault] open (late): key={} recovery={} non_dumpable={nd}; moving old stores in waits for the next start",
+        v.key_store().kind().as_str(),
+        v.recovery_state().0
+    );
 }
 
 fn rotate_generated_after_move(subsystem: &'static str) {

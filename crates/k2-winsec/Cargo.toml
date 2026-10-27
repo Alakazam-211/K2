@@ -1,0 +1,17 @@
+[package]
+name = "k2-winsec"
+# Not the product version: release.sh doesn't bump this crate.
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "K2 owner-only file ACLs on Windows: what 0700/0600 mean for K2's private files there. Empty on Unix. No K2 dependencies."
+
+# windows-sys 0.61 is the copy already in Cargo.lock (tokio, mio, rustix…).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }

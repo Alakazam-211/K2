@@ -107,6 +107,7 @@ pub fn mlock_failed() -> bool {
     MLOCK_FAILED.load(Ordering::Relaxed)
 }
 
+#[cfg(unix)]
 fn page_size() -> usize {
     // SAFETY: sysconf has no preconditions.
     let p = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
@@ -115,6 +116,46 @@ fn page_size() -> usize {
     } else {
         p as usize
     }
+}
+
+#[cfg(windows)]
+fn page_size() -> usize {
+    use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
+    // SAFETY: GetSystemInfo fills the struct we pass; it cannot fail.
+    let p = unsafe {
+        let mut si: SYSTEM_INFO = std::mem::zeroed();
+        GetSystemInfo(&mut si);
+        si.dwPageSize as usize
+    };
+    if p == 0 {
+        4096
+    } else {
+        p
+    }
+}
+
+/// Lock one page in RAM (mlock / VirtualLock). Best effort.
+///
+/// # Safety
+/// `ptr..ptr+len` must be our own committed allocation.
+unsafe fn lock_pages(ptr: *mut u8, len: usize) -> bool {
+    #[cfg(unix)]
+    {
+        libc::mlock(ptr as *const libc::c_void, len) == 0
+    }
+    #[cfg(windows)]
+    {
+        windows_sys::Win32::System::Memory::VirtualLock(ptr as *const std::ffi::c_void, len) != 0
+    }
+}
+
+/// # Safety
+/// Same region a successful [`lock_pages`] locked.
+unsafe fn unlock_pages(ptr: *mut u8, len: usize) {
+    #[cfg(unix)]
+    libc::munlock(ptr as *const libc::c_void, len);
+    #[cfg(windows)]
+    windows_sys::Win32::System::Memory::VirtualUnlock(ptr as *const std::ffi::c_void, len);
 }
 
 /// A 32-byte key in locked, dump-excluded memory.
@@ -137,7 +178,7 @@ impl Key32 {
         let raw = unsafe { alloc_zeroed(layout) };
         let ptr = NonNull::new(raw).unwrap_or_else(|| std::alloc::handle_alloc_error(layout));
         // SAFETY: ptr/len describe our own allocation.
-        let locked = unsafe { libc::mlock(ptr.as_ptr() as *const libc::c_void, ps) } == 0;
+        let locked = unsafe { lock_pages(ptr.as_ptr(), ps) };
         if !locked {
             MLOCK_FAILED.store(true, Ordering::Relaxed);
         }
@@ -192,7 +233,7 @@ impl Drop for Key32 {
             let s = std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.layout.size());
             s.zeroize();
             if self.locked {
-                libc::munlock(self.ptr.as_ptr() as *const libc::c_void, self.layout.size());
+                unlock_pages(self.ptr.as_ptr(), self.layout.size());
             }
             dealloc(self.ptr.as_ptr(), self.layout);
         }

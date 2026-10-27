@@ -49,6 +49,13 @@ ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed2
 rsa = { version = "0.9.10", features = ["sha2"] }
 signature = "2"
 
+# Windows: owner-only DACLs stand in for 0700/0600 (k2-winsec); VirtualLock
+# and the page size for Key32; FILE_FLAG_OPEN_REPARSE_POINT for no-follow
+# opens. windows-sys 0.61 is the copy already in Cargo.lock.
+[target.'cfg(windows)'.dependencies]
+k2-winsec = { path = "../k2-winsec" }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_Memory", "Win32_System_SystemInformation"] }
+
 [features]
 # Test fakes (FakeKeyStore, fake root helper, cheap KDF). Never in release
 # builds (VS14).

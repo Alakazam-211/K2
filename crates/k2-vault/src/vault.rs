@@ -3261,8 +3261,7 @@ impl LocalVault {
         let conn = self.conn.lock();
         conn.execute("VACUUM INTO ?1", params![dest.to_string_lossy().to_string()])?;
         drop(conn);
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o600))?;
+        crate::fsutil::set_private_file(dest)?;
         Ok(())
     }
 }

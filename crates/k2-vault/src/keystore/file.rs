@@ -143,6 +143,7 @@ impl KeyStore for FileKeyStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -153,10 +154,18 @@ mod tests {
         let k = ks.init().expect("init");
         let again = ks.load().expect("load").expect("present");
         assert!(k == again);
-        let mode = fs::metadata(t.path().join("vault/key/kek")).expect("meta").permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
-        let dmode = fs::metadata(t.path().join("vault/key")).expect("meta").permissions().mode() & 0o777;
-        assert_eq!(dmode, 0o700);
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(t.path().join("vault/key/kek")).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+            let dmode = fs::metadata(t.path().join("vault/key")).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(dmode, 0o700);
+        }
+        #[cfg(windows)]
+        {
+            assert!(k2_winsec::is_owner_only(&t.path().join("vault/key/kek")).expect("dacl"));
+            assert!(k2_winsec::is_owner_only(&t.path().join("vault/key")).expect("dacl"));
+        }
         let tag = fs::read_to_string(t.path().join("vault/key/CACHEDIR.TAG")).expect("tag");
         assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55"));
         assert_eq!(ks.init().err().expect("exists").code, "kek_exists");

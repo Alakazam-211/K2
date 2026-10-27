@@ -13,6 +13,7 @@ members = [
     "crates/k2-app-engine",
     "crates/k2-vault",
     "crates/k2-redact",
+    "crates/k2-winsec",
     # TEST ONLY: Google / Microsoft OAuth + Graph fakes for the headless
     # mail smokes (prd-app-mail-calendar-surfaces-v1 §8.2). Never shipped.
     "tests/fakes/oauth-providers",

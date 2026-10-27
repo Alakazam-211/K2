@@ -826,18 +826,29 @@ fn proxy_items_list_only_proxy_deliveries_for_that_session() {
 
 #[test]
 fn files_are_private() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let t = TestDir::new("modes");
     let ks = Arc::new(FakeKeyStore::new());
     let v = open(&t, &ks);
     put_user(&v, Scope::workspace("ws1"), "A", SENTINEL, &["api.stripe.com"], &Actor::Owner);
-    let dmode = std::fs::metadata(t.path().join("vault")).expect("meta").permissions().mode() & 0o777;
-    assert_eq!(dmode, 0o700);
+    #[cfg(unix)]
+    {
+        let dmode = std::fs::metadata(t.path().join("vault")).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(dmode, 0o700);
+    }
+    #[cfg(windows)]
+    assert!(k2_winsec::is_owner_only(&t.path().join("vault")).expect("dacl"));
     for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
         let p = t.path().join("vault").join(f);
         if p.exists() {
-            let m = std::fs::metadata(&p).expect("meta").permissions().mode() & 0o777;
-            assert_eq!(m & 0o077, 0, "{f} must not be readable by others ({m:o})");
+            #[cfg(unix)]
+            {
+                let m = std::fs::metadata(&p).expect("meta").permissions().mode() & 0o777;
+                assert_eq!(m & 0o077, 0, "{f} must not be readable by others ({m:o})");
+            }
+            #[cfg(windows)]
+            assert!(k2_winsec::is_owner_only(&p).expect("dacl"), "{f} must not be readable by others");
         }
     }
 }

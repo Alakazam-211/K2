@@ -23,6 +23,10 @@ pub mod encode;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fake;
 pub mod hold;
+// The iOS Simulator lane (L-I). Compiles on every unix so its unit tests run
+// on Linux nodes; it registers only on macOS.
+#[cfg(unix)]
+pub mod ios;
 pub mod lane;
 pub mod licence;
 pub mod limits;
@@ -113,6 +117,8 @@ pub fn lanes() -> Vec<Arc<dyn SimLane>> {
 /// Register the lanes built into this daemon for this OS.
 pub fn register_builtin_lanes() {
     register_lane(Arc::new(android::AndroidLane::new(sim_home().join("android"))));
+    #[cfg(target_os = "macos")]
+    register_lane(Arc::new(ios::IosLane::new(ios::IosLaneConfig::under(&sim_home()))));
 }
 
 #[cfg(test)]

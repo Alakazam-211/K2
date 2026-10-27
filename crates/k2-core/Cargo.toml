@@ -8,6 +8,11 @@ description = "K2 device-local core library: db, llm, terminal, companion, sched
 [lib]
 path = "src/lib.rs"
 
+[[test]]
+name = "sim_live_ios"
+path = "tests/sim_live_ios.rs"
+required-features = ["sim-live-ios"]
+
 [features]
 # Enables db::shared()'s automatic in-memory-DB fallback for downstream
 # crates' test binaries. Without this, cfg(test) in k2so-core is only
@@ -35,6 +40,11 @@ sandbox-microvm = []
 # daemon-latest.json URL (no update-availability ping). Default OFF:
 # cloud/self-update daemons stay as they are. Not a GitHub Release asset.
 airgap = []
+
+# Mobile dev, iOS lane: the live Simulator test (tests/sim_live_ios.rs).
+# Needs a Mac with Xcode; without this feature the test doesn't compile,
+# with it a missing Xcode fails loudly (vs-live M-A18). Not a runtime feature.
+sim-live-ios = []
 
 # k2so-core's OWN integration tests (under `crates/k2so-core/tests/`) are
 # separate compilation units that don't see `cfg(test)` of the lib —

@@ -25,8 +25,11 @@
 //!   one-time key, caps, codes, the stdin pipe payload.
 //! - [`tiers`]: compute job tiers (protocol 5): CI, Priority, Normal, the
 //!   rules every orderer shares, and their codes.
+//! - [`cache`]: per-workspace job caches (protocol 6): names, the
+//!   workspace key, `cache_get` / `cache_view`.
 
 pub mod admin;
+pub mod cache;
 pub mod canonical;
 pub mod crypto;
 pub mod env;

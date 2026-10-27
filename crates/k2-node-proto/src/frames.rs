@@ -47,7 +47,16 @@ use crate::crypto::{self, SigningKey};
 /// and queue fields) only to a server that said protocol ≥ 5, and a server
 /// sends `Plan.tier` and the key only to a node offering `tiers`; it always
 /// sets `Plan.class` from the tier too, so an older node orders by class.
-pub const PROTOCOL: u32 = 5;
+/// 6 = job caches (0.46.6; [`crate::cache`]): `Plan.cache`, `cache_get` /
+/// `cache_view`. Additive: a node offers `job-cache` only to a server that
+/// said protocol ≥ 6, and a server sends `Plan.cache` and `cache_get` only
+/// to a node offering it (an older node would refuse the digest, or drop
+/// the session on a frame it can't parse), so a job with `--cache` is never
+/// placed on an older node.
+pub const PROTOCOL: u32 = 6;
+
+/// The first server protocol that gets the `job-cache` feature.
+pub const PROTOCOL_CACHE: u32 = 6;
 
 /// The first server protocol that gets the tier fields and the `tiers`
 /// feature.
@@ -318,6 +327,9 @@ pub enum Frame {
     /// Protocol 3: the node's queue as this server may see it (only to
     /// nodes offering `queue`; older parsers reject unknown variants).
     QueueGet(crate::share::QueueGet),
+    /// Protocol 6: list (or clear) this server's job caches on the node
+    /// (only to nodes offering `job-cache`).
+    CacheGet(crate::cache::CacheGet),
     /// Protocol 4: a job's secret env, sealed to the node's one-time key
     /// (only in answer to `secret_need`).
     SecretEnv(SecretEnv),
@@ -339,6 +351,8 @@ pub enum Frame {
     ArtifactFailed(ArtifactFailed),
     /// Protocol 3: the answer to `queue_get`.
     QueueView(crate::share::QueueView),
+    /// Protocol 6: the answer to `cache_get`.
+    CacheView(crate::cache::CacheView),
     /// Protocol 4: right before spawn, a job's secret env, for one fresh
     /// public key (only to a server that said protocol ≥ 4).
     SecretNeed(SecretNeed),
@@ -360,6 +374,7 @@ impl Frame {
             | Frame::AdminKeys(_)
             | Frame::ArtifactGet(_)
             | Frame::QueueGet(_)
+            | Frame::CacheGet(_)
             | Frame::SecretEnv(_)
             | Frame::SecretRefused(_) => Direction::ControllerToNode,
             Frame::Offer(_)
@@ -375,6 +390,7 @@ impl Frame {
             | Frame::ArtifactChunk(_)
             | Frame::ArtifactFailed(_)
             | Frame::QueueView(_)
+            | Frame::CacheView(_)
             | Frame::SecretNeed(_) => Direction::NodeToController,
         }
     }
@@ -407,6 +423,8 @@ impl Frame {
             Frame::ArtifactFailed(_) => "artifact_failed",
             Frame::QueueGet(_) => "queue_get",
             Frame::QueueView(_) => "queue_view",
+            Frame::CacheGet(_) => "cache_get",
+            Frame::CacheView(_) => "cache_view",
             Frame::SecretNeed(_) => "secret_need",
             Frame::SecretEnv(_) => "secret_env",
             Frame::SecretRefused(_) => "secret_refused",
@@ -560,6 +578,12 @@ pub struct Plan {
     /// peers; a plan without it counts as `Tier::from_class(class)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<crate::tiers::Tier>,
+    /// Protocol 6: the job's named cache ([`crate::cache`]), mounted at
+    /// `K2_JOB_CACHE` and kept between runs on this node. Absent without
+    /// `--cache`, so every other plan and digest is unchanged; sent only to
+    /// nodes offering [`crate::cache::FEATURE_JOB_CACHE`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<String>,
 }
 
 impl Plan {
@@ -1240,6 +1264,7 @@ mod tests {
             stall_secs: None,
             secret_env: Vec::new(),
             tier: None,
+            cache: None,
         }
     }
 
@@ -1548,5 +1573,45 @@ mod tests {
         let dropped: Plan = serde_json::from_value(v).unwrap();
         assert_ne!(dropped.digest().unwrap(), q.digest().unwrap());
         assert!(PROTOCOL >= PROTOCOL_TIERS && PROTOCOL_TIERS > PROTOCOL_SECRETS);
+    }
+
+    /// Protocol 6: a plan without a cache is byte-identical to a 0.46.5
+    /// plan (same digest as the tier test pins); a cache is bound by the
+    /// digest, so an older node that drops the field refuses the assign
+    /// instead of running the job without its cache.
+    #[test]
+    fn cache_is_absent_when_unset_and_bound_by_the_digest() {
+        let p = plan();
+        assert!(!crate::canonical::to_string(&p).unwrap().contains("cache"));
+        assert_eq!(p.digest().unwrap(), "sha256:31d079662290d8b6e10bc3595162f277743d060a50046b1be2f020e99d948e14");
+        let mut q = p.clone();
+        q.cache = Some("fuzz".into());
+        assert!(crate::canonical::to_string(&q).unwrap().contains(r#""cache":"fuzz""#));
+        assert_ne!(q.digest().unwrap(), p.digest().unwrap());
+        let mut v = serde_json::to_value(&q).unwrap();
+        v.as_object_mut().unwrap().remove("cache");
+        let dropped: Plan = serde_json::from_value(v).unwrap();
+        assert_ne!(dropped.digest().unwrap(), q.digest().unwrap());
+        assert!(PROTOCOL >= PROTOCOL_CACHE && PROTOCOL_CACHE > PROTOCOL_TIERS);
+    }
+
+    #[test]
+    fn cache_frames_travel_their_way() {
+        let k = SigningKey::generate().unwrap();
+        let get = Frame::CacheGet(crate::cache::CacheGet { request_id: "r1".into(), workspace_id: Some("w".into()), clear: true, name: Some("fuzz".into()) });
+        assert_eq!((get.direction(), get.kind()), (Direction::ControllerToNode, "cache_get"));
+        let t = seal(&k, Direction::ControllerToNode, "s", 0, &get).unwrap();
+        assert_eq!(open(k.spki_der(), Direction::ControllerToNode, "s", 0, &t).unwrap(), get);
+        let view = Frame::CacheView(crate::cache::CacheView {
+            request_id: "r1".into(),
+            at: 5,
+            caches: vec![crate::cache::CacheEntry { ws_key: "0123456789abcdef".into(), name: "fuzz".into(), bytes: 4096, used_at: 4, busy: true }],
+            cleared: vec![],
+            refused: None,
+        });
+        assert_eq!((view.direction(), view.kind()), (Direction::NodeToController, "cache_view"));
+        assert!(seal(&k, Direction::ControllerToNode, "s", 0, &view).is_err());
+        let t = seal(&k, Direction::NodeToController, "s", 0, &view).unwrap();
+        assert_eq!(open(k.spki_der(), Direction::NodeToController, "s", 0, &t).unwrap(), view);
     }
 }

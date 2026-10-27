@@ -381,9 +381,14 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let a = assigns(&node.frames());
     assert_eq!(a.len(), 1, "sent into the node's queue at once");
-    assert_eq!(a[0].2.class, Some(JobClass::Batch), "--detach is batch");
+    // Job tiers (0.46.5, G4/T11): --detach no longer lowers a job; the
+    // class follows the tier (Normal = interactive). This node doesn't
+    // offer `tiers`, so the plan carries no tier (its digest stays old).
+    assert_eq!(a[0].2.class, Some(JobClass::Interactive), "--detach is plain Normal now");
+    assert_eq!(a[0].2.tier, None, "no tier to a node without the tiers feature");
     assert_eq!(a[0].2.ws_max_running, Some(1), "the workspace cap travels in the plan");
-    assert_eq!(row(&job).class, "batch");
+    assert_eq!(row(&job).class, "interactive");
+    assert_eq!(row(&job).tier, "normal");
 
     // The node queues it: shown as queued at the node's place.
     compute_ws::test_frame("shr-1", state(&job, 1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 2, eta_secs: Some(360), eta_p90_secs: Some(600), blocked_by: Some("fair_share_wait".into()) })));
@@ -885,4 +890,56 @@ async fn the_role_follows_the_node_after_an_owner_change() {
     assert_eq!((r.status, code(&r).as_str()), (403, "vault_confirm_required"), "{}", r.body);
     assert_eq!(role(), "tenant");
     compute_ws::test_detach("flip-1");
+}
+
+/// Job tiers on a shared node (prd-compute-job-tiers-v1 S2: T7, T9, T11):
+/// a node offering `tiers` gets `Plan.tier` with the class beside it; a
+/// guest's Priority the node doesn't count runs as Normal with one note
+/// (`tierAsked` kept); once the node says it counts, it stays Priority;
+/// CI goes in as `gate` only where the share has gate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tiers_on_a_shared_node() {
+    use k2_core::compute::proto::tiers::{Tier, FEATURE_TIERS};
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "tiered");
+    active_node("shr-t", "k2n3-m1", "linux", &ws);
+    let feats = ["artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS, FEATURE_TIERS];
+    let mut v = view(Role::Tenant, 0, 0);
+    v.limits.max_queued = 30;
+    v.priority = Some(false);
+    let mut node = compute_ws::test_attach("shr-t", offer(&feats, 0, Some(v.clone())));
+
+    // A guest share where Priority doesn't count: Normal, with a note.
+    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "tier": "priority"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let out = j(&r);
+    assert_eq!((out["job"]["tier"].as_str(), out["job"]["tierAsked"].as_str()), (Some("normal"), Some("priority")), "{out}");
+    assert_eq!(out["notices"].as_array().map(Vec::len), Some(1), "{out}");
+    assert_eq!(out["notices"][0]["code"], "priority_downgraded", "{out}");
+    let a = assigns(&node.frames());
+    let p = &a.last().expect("sent into the node's queue").2;
+    assert_eq!((p.tier, p.class), (Some(Tier::Normal), Some(JobClass::Interactive)), "the node gets the tier it counts");
+
+    // CI on a share without gate: refused, as --gate was.
+    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "tier": "ci"})).await;
+    assert_eq!((r.status, code(&r).as_str()), (409, "gate_not_allowed"), "{}", r.body);
+
+    // The node's owner lets this server's Priority count, and gives it gate.
+    v.priority = Some(true);
+    v.limits.gate = true;
+    v.limits.top_class = JobClass::Gate;
+    compute_ws::test_frame("shr-t", Frame::Offer(offer(&feats, 0, Some(v.clone()))));
+    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "tier": "priority"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let out = j(&r);
+    assert_eq!((out["job"]["tier"].as_str(), out["job"]["tierAsked"].as_str()), (Some("priority"), None), "{out}");
+    assert!(out["notices"].as_array().is_some_and(|n| n.iter().all(|x| x["code"] != "priority_downgraded")), "{out}");
+    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "gate": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["job"]["tier"], "ci", "--gate is --tier ci");
+    let a = assigns(&node.frames());
+    let tiers: Vec<(Option<Tier>, Option<JobClass>)> = a.iter().map(|x| (x.2.tier, x.2.class)).collect();
+    assert_eq!(tiers, vec![(Some(Tier::Priority), Some(JobClass::Interactive)), (Some(Tier::Ci), Some(JobClass::Gate))], "Priority is interactive for old peers; CI is gate");
+    drop(env);
 }

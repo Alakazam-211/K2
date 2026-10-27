@@ -840,11 +840,17 @@ export function ZenConversation({
             </div>
           ))}
           {typing && <TypingIndicator />}
-          {drawerInList && ready && <ZenActivityDrawer turn={drawerTurn ?? null} attached={false} />}
           </ThreadMessageColumn>
           </ThreadAttachmentSourceProvider>
         )}
       </div>
+      {/* 0.46.5: no message box, so the drawer is a free tile at the
+          widget's foot (the dots used to sit under the last message). */}
+      {drawerInList && ready && (
+        <div className="flex-shrink-0" data-zen-drawer-foot="">
+          <ZenActivityDrawer turn={drawerTurn ?? null} attached={false} />
+        </div>
+      )}
 
       {options.compose && (
         <div

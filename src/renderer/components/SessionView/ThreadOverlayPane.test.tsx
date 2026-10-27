@@ -1083,7 +1083,8 @@ describe('Thread activity drawer (S7, the Zen look)', () => {
 
     threadHook.turn = turnOf({ phase: 'children', line: null, subagents: 2, subagentsDone: 1, background: 0, rev: 6 })
     view.rerender(pane({ onStop: () => {} }))
-    expect(text('[data-zen-drawer-step]')).toBe('Replied')
+    // 0.46.5: the line says what still holds the turn, not only "Replied".
+    expect(text('[data-zen-drawer-step]')).toBe('Replied · 2 subagents running, 1 done')
     expect(stop()).toBeNull()
   })
 

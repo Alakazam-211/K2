@@ -144,6 +144,17 @@ export const CATALOG_ERROR_CODES = [
   // App users' personal wallets (0.46.3).
   'person_pass_required',
   'wallet_off',
+  // A custom App's push notifications (0.46.4, prd-custom-app-push-v1).
+  'push_off',
+  'not_for_host',
+  'channel_unavailable',
+  'push_devices_full',
+  'push_not_configured',
+  'too_many_recipients',
+  'push_queue_full',
+  'airgap',
+  'vault_closed',
+  'token_in_use',
   'duplicate_label',
   // Garden access lists (prd-garden-access-v1 G22): the signer gate.
   'needs_editor',

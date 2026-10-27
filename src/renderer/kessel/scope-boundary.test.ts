@@ -216,6 +216,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'lib/daemon-settings.ts',
   'lib/external-drop-router.ts',
   'lib/federation.ts',
+  // 0.46.4 first run without git: whether git runs on the window's own
+  // server (Settings → General row, Add Workspace / Git Init banners).
+  'lib/git-tools.ts',
   'lib/heartbeat-delivery.ts',
   'lib/llmDaemonClient.ts',
   'lib/pick-remote-image.ts',
@@ -225,6 +228,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // Home M3 / Q4: the assistant acts only on rooms on the window's server.
   'lib/workspace-ops-router.ts',
   'stores/active-agents.ts',
+  // 0.46.4 Settings → App Approvals badge: the window's server's held App
+  // requests (its push on that server's events bus; a server switch reloads).
+  'stores/app-approvals.ts',
   'stores/assistant.ts',
   'stores/claude-auth.ts',
   'stores/custom-themes.ts',

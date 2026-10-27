@@ -15,7 +15,7 @@
 //     owns: "Shared by …", this server's share and the Queue; no admin.
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { Button, Callout, Input, SquareCheckbox } from '@/components/ui'
+import { Button, Callout, Input, SquareCheckbox, SquareRadio } from '@/components/ui'
 import {
   addNodeServer,
   changeNodeOwner,
@@ -614,10 +614,10 @@ function AddServerForm({
       </label>
       <div className={`text-[11px] ${secondary} flex items-center gap-3`}>
         <label className="flex items-center gap-1">
-          <input type="radio" name="trust" checked={trust === 'own'} onChange={() => setTrust('own')} aria-label="One of your own servers" /> Yours
+          <SquareRadio name="trust" checked={trust === 'own'} onChange={() => setTrust('own')} aria-label="One of your own servers" /> Yours
         </label>
         <label className="flex items-center gap-1" title={team.ok ? undefined : (team.why ?? undefined)}>
-          <input type="radio" name="trust" checked={trust === 'team'} disabled={!team.ok} onChange={() => setTrust('team')} aria-label="Another person’s server" />{' '}
+          <SquareRadio name="trust" checked={trust === 'team'} disabled={!team.ok} onChange={() => setTrust('team')} aria-label="Another person’s server" />{' '}
           Another person&apos;s
         </label>
         {!team.ok ? <span className={muted}>({team.why})</span> : null}

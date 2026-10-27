@@ -189,7 +189,7 @@ fn every_route_is_classified_post_guarded_and_an_agent_verb() {
             assert!(crate::session_token::is_agent_verb(p), "{p} must be served for a Manage-Sew passport");
         }
     }
-    assert_eq!(n, 20 + 13 + 11, "every chat route is counted once");
+    assert_eq!(n, 20 + 13 + 11 + 9, "every chat route is counted once");
     for p in routes::POST_ROUTES.iter().chain(super::routes_manage::POST_ROUTES).chain(super::routes_admin::POST_ROUTES) {
         assert!(routes::is_route(p), "{p}");
     }
@@ -451,7 +451,7 @@ fn wait_returns_the_first_foreign_message_or_times_out() {
     assert_eq!(v["timedOut"], true, "nothing new after the cursor: {v}");
     assert!(e.fake.calls().iter().filter(|c| c.op == "wait").count() >= 1);
     let (s, v) = get("/cli/sew/chat/wait", &agent(WA), &[("mention", "1")]);
-    assert_eq!((s, code(&v)), (400, "needs_delivery_hub"));
+    assert_eq!((s, code(&v)), (503, "hub_not_running"), "no address = the hub, which runs only under its supervisor");
 }
 
 // ── idempotency and limits ───────────────────────────────────────────
@@ -1278,3 +1278,7 @@ fn the_default_space_for_dms_is_a_persons_setting_an_agent_may_only_clear() {
     let (s, v) = post("/cli/sew/approvals/policy/set", &agent(WA), json!({"defaultSpace": "none"}));
     assert_eq!((s, v["defaultSpace"].clone()), (200, Value::Null), "clearing narrows, so Manage Sew may: {v}");
 }
+
+/// S31 K24: the delivery hub's verbs (same fake Sew and helpers).
+#[path = "tests_hub.rs"]
+mod hub_verbs;

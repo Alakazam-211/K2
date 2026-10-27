@@ -81,15 +81,26 @@ pub const POST_ROUTES: &[&str] = &[
 /// management (`routes_manage`), the admin plane and on-behalf opt-ins
 /// (`routes_admin`).
 pub fn all_routes() -> impl Iterator<Item = &'static str> {
-    ROUTES.iter().chain(super::routes_manage::ROUTES).chain(super::routes_admin::ROUTES).copied()
+    ROUTES
+        .iter()
+        .chain(super::routes_manage::ROUTES)
+        .chain(super::routes_admin::ROUTES)
+        .chain(super::routes_hub::ROUTES)
+        .copied()
 }
 
 pub fn is_route(p: &str) -> bool {
-    ROUTES.contains(&p) || super::routes_manage::ROUTES.contains(&p) || super::routes_admin::ROUTES.contains(&p)
+    ROUTES.contains(&p)
+        || super::routes_manage::ROUTES.contains(&p)
+        || super::routes_admin::ROUTES.contains(&p)
+        || super::routes_hub::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    POST_ROUTES.contains(&p) || super::routes_manage::POST_ROUTES.contains(&p) || super::routes_admin::POST_ROUTES.contains(&p)
+    POST_ROUTES.contains(&p)
+        || super::routes_manage::POST_ROUTES.contains(&p)
+        || super::routes_admin::POST_ROUTES.contains(&p)
+        || super::routes_hub::POST_ROUTES.contains(&p)
 }
 
 /// Classify a TCP caller (the dispatcher's effective auth query).
@@ -365,6 +376,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
     }
     let r = if path.starts_with("/cli/sew/approvals") {
         super::routes_approvals::handle(path, &who, body, params)
+    } else if super::routes_hub::ROUTES.contains(&path) {
+        super::routes_hub::handle(path, &who, body, params)
     } else if path.starts_with("/cli/sew/admin/") || path.starts_with("/cli/sew/on-behalf") {
         super::routes_admin::handle(path, &who, body, params)
     } else if path.starts_with("/cli/sew/chat/manage/") {
@@ -404,7 +417,7 @@ pub(crate) fn parse_body<T: for<'de> Deserialize<'de>>(body: &[u8]) -> R<T> {
     serde_json::from_slice(b).map_err(|e| usage(format!("bad request body: {e}")))
 }
 
-fn param<'a>(p: &'a HashMap<String, String>, k: &str) -> Option<&'a str> {
+pub(crate) fn param<'a>(p: &'a HashMap<String, String>, k: &str) -> Option<&'a str> {
     p.get(k).map(|s| s.trim()).filter(|s| !s.is_empty())
 }
 
@@ -416,7 +429,7 @@ fn all_access(c: &Caller) -> R<Vec<store::Access>> {
     store::list_access(&conn, &c.project_id).map_err(internal)
 }
 
-fn need_any_access(c: &Caller) -> R<Vec<store::Access>> {
+pub(crate) fn need_any_access(c: &Caller) -> R<Vec<store::Access>> {
     let all = all_access(c)?;
     if all.is_empty() {
         return Err(ChatErr::new(
@@ -438,7 +451,7 @@ fn governing_space(sew: &dyn SewChat, a: &ActAs, ch: &Channel) -> R<Option<Strin
 }
 
 /// The caller's access in the channel's Space (403 `not_granted` without).
-fn access_for(c: &Caller, sew: &dyn SewChat, a: &ActAs, ch: &Channel) -> R<store::Access> {
+pub(crate) fn access_for(c: &Caller, sew: &dyn SewChat, a: &ActAs, ch: &Channel) -> R<store::Access> {
     let space = governing_space(sew, a, ch)?;
     let row = match &space {
         Some(s) => {
@@ -675,11 +688,7 @@ fn wait(c: &Caller, params: &HashMap<String, String>) -> R<Value> {
     }
     let mention = matches!(param(params, "mention"), Some("1" | "true" | "yes"));
     let Some(raw) = param(params, "in") else {
-        return Err(ChatErr::new(
-            "needs_delivery_hub",
-            400,
-            "wait without --in needs the chat delivery hub (coming with k2 chat follow); use --in <space>/<channel> or --outbox",
-        ));
+        return wait_hub(c, mention, deadline);
     };
     let sew = backend()?;
     need_any_access(c)?;
@@ -716,6 +725,34 @@ fn wait(c: &Caller, params: &HashMap<String, String>) -> R<Value> {
             // A Sew long-poll that returned early with nothing: don't spin.
             std::thread::sleep(std::time::Duration::from_millis(wait_ms.min(250)));
         }
+    }
+}
+
+/// `wait` without an address (S31): the agent's next delivery from the hub
+/// — a mention, a DM, a followed channel or thread (`mention`: mentions and
+/// DMs only). Never delayed by prefs; what it returns is not also typed
+/// into the terminal.
+fn wait_hub(c: &Caller, mention: bool, deadline: std::time::Instant) -> R<Value> {
+    backend()?;
+    need_any_access(c)?;
+    if !super::hub::is_running(&c.project_id) {
+        return Err(ChatErr::new(
+            "hub_not_running",
+            503,
+            "your chat deliveries aren't running yet (they start within 30 s of Sew chat being on and your access); \
+             retry, or wait on one channel with --in <space>/<channel>",
+        ));
+    }
+    let _slot = WaitSlot::take(&c.project_id)?;
+    let ticket = super::hub::register_waiter(&c.project_id, mention);
+    let left = deadline.saturating_duration_since(std::time::Instant::now());
+    match ticket.rx.recv_timeout(left) {
+        Ok(ds) => Ok(json!({
+            "ok": true,
+            "timedOut": false,
+            "messages": ds.iter().map(super::hub::delivery_json).collect::<Vec<_>>(),
+        })),
+        Err(_) => Ok(json!({ "ok": true, "timedOut": true })),
     }
 }
 

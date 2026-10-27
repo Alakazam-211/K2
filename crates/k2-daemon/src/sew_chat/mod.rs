@@ -31,6 +31,7 @@ pub mod hub;
 pub mod routes;
 pub mod routes_admin;
 pub mod routes_approvals;
+pub mod routes_hub;
 pub mod routes_manage;
 pub mod sew;
 

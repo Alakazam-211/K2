@@ -694,7 +694,7 @@ no review, no permission dialog, nothing for the human to allow.\n\n\
 HTML, `*.js`, `*.css`, and `*.png *.jpg *.jpeg *.webp *.gif *.woff2` (no SVG). K2\n\
 inlines it all into one page; `k2.asset(\"cat.png\")` gives a file as a `data:` URL.\n\n\
 ```json\n\
-{\n  \"schema\": 1,\n  \"name\": \"Agent Arcade\",\n  \"description\": \"Your agents as little characters.\",\n  \"entry\": \"index.html\",\n  \"caps\": [\"agents:read\", \"thread:read\", \"thread:post\"],\n  \"reasons\": {\"thread:post\": \"so you can talk to a character from the game\"},\n  \"requires\": {\"libs\": [\"three@0.170\"]}\n}\n\
+{\n  \"schema\": 1,\n  \"name\": \"Agent Arcade\",\n  \"description\": \"Your agents as little characters.\",\n  \"entry\": \"index.html\",\n  \"caps\": [\"agents:read\", \"thread:read\", \"thread:post\"],\n  \"reasons\": {\"thread:post\": \"so you can talk to a character from the game\"},\n  \"requires\": {\"libs\": [\"three@0.186\"]}\n}\n\
 ```\n\n\
 - `schema` 1; `name` 1–40 characters (shown to the human as the widget's own words);\n\
   `description` up to 200; `entry` defaults to `index.html`.\n\
@@ -998,8 +998,9 @@ k2.connected.then(() => {\n\
   })\n\
 })\n\
 ```\n\n\
-Charts: name a pinned library in `requires.libs` (`uplot@1.6.32` for sparklines and\n\
-history lines; `chart.js`, `echarts`, `d3` too). They run offline; no CDN, no eval.\n\n\
+Charts: name a library's line in `requires.libs` (`uplot@1` for sparklines and\n\
+history lines; `chart.js@4` for bar and pie; `echarts`, `d3` too; `k2 zen guide libs`).\n\
+They run offline; no CDN, no eval.\n\n\
 **Built-in cards** (place them with `widget = \"k2:<card>@3\"`, `config.source` and, for\n\
 several sources, `config.sources = \"a, b\"`):\n\n",
     );
@@ -1033,8 +1034,10 @@ fn whats_available_section() -> String {
         s.push_str("This K2 ships no libraries yet; write plain JavaScript.\n\n");
     } else {
         s.push_str(
-            "Name them in the manifest's `requires.libs` as `\"<id>@<version>\"` (a version prefix\n\
-that ends at a dot works: `\"three@0.170\"`). Each defines a global.\n\n",
+            "Use K2's libraries; don't copy them into the widget's folder. Name each by its line in\n\
+the manifest's `requires.libs`: the major (`\"uplot@1\"`), or `0.minor` below 1.0\n\
+(`\"three@0.186\"`), never a patch: K2 updates patches inside a line. Each defines a\n\
+global; they don't count toward the code limit. `k2 zen guide libs` says which to pick.\n\n",
         );
         for l in &m.libs {
             let how = match l.source {
@@ -1043,9 +1046,11 @@ that ends at a dot works: `\"three@0.170\"`). Each defines a global.\n\n",
             };
             let notes = l.notes.as_deref().map(|n| format!(" {n}")).unwrap_or_default();
             s.push_str(&format!(
-                "- `{}` ({}, {}): global `{}`, {}, {}.{notes}\n",
-                l.key(),
+                "- `{}@{}` ({} {}, {}): global `{}`, {}, {}.{notes}\n",
+                l.id,
+                l.line,
                 l.title,
+                l.version,
                 l.license,
                 l.global,
                 how,
@@ -1440,10 +1445,58 @@ mod tests {
     fn skill_documents_the_resilient_sdk_and_chart_libraries() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 23, "the 0.46.1 SDK needs a new skill version");
         let s = generate_k2_zen_skill_for(false);
-        for needle in ["handler object", "err.retrying", "bad_shape", "bad_args", "k2.shape.view", "write your own retry timer", "`uplot@1.6.32`", "data: (view) => draw(view)"] {
+        // 0.46.5 (S2): charts by their line, never a pinned patch.
+        for needle in ["handler object", "err.retrying", "bad_shape", "bad_args", "k2.shape.view", "write your own retry timer", "`uplot@1`", "data: (view) => draw(view)"] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
-        assert!(crate::zen::stdlib::zen_lib_manifest().libs.iter().any(|l| l.id == "uplot" && l.version == "1.6.32"), "uPlot is vendored");
+        assert!(crate::zen::stdlib::zen_lib_manifest().libs.iter().any(|l| l.id == "uplot" && l.line == "1"), "uPlot line 1 is vendored");
+    }
+
+    /// 0.46.5 S2 (G1, G2, vs-live L8): every library request the skill and
+    /// `k2 study zen` teach resolves against `zen-lib.json`, as a line, with
+    /// no "write the line" warning; no exact patch is taught.
+    #[test]
+    fn every_library_the_skill_or_study_page_teaches_resolves_as_a_line() {
+        let cli = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2")).expect("cli/k2");
+        let study = cli.split("_study_page_zen() {").nth(1).and_then(|t| t.split("\nEOF\n").next()).expect("the study zen page");
+        let m = crate::zen::stdlib::zen_lib_manifest();
+        let mut seen = 0;
+        for (label, text) in [("skill", generate_k2_zen_skill_for(true)), ("study zen", study.to_string())] {
+            for tok in library_tokens(&text) {
+                let (id, want) = tok.rsplit_once('@').expect("id@want");
+                if !m.libs.iter().any(|e| e.id == id) {
+                    continue;
+                }
+                let (e, warn) = crate::zen::stdlib::resolve_one(m, id, want).unwrap_or_else(|err| panic!("{label} teaches {tok}: {err}"));
+                assert!(warn.is_none(), "{label} teaches {tok}: {warn:?}");
+                assert_eq!(e.line, want, "{label} teaches {tok}: ask for the line ({}@{})", id, e.line);
+                seen += 1;
+            }
+        }
+        assert!(seen >= 4, "the skill and the study page teach some libraries ({seen})");
+    }
+
+    /// `<id>@<version>` tokens that name libraries (not `k2:<widget>@<n>`).
+    fn library_tokens(s: &str) -> Vec<String> {
+        let b = s.as_bytes();
+        let mut out = Vec::new();
+        for (i, _) in s.match_indices('@') {
+            let mut start = i;
+            while start > 0 && (b[start - 1].is_ascii_alphanumeric() || b"-.".contains(&b[start - 1])) {
+                start -= 1;
+            }
+            let mut end = i + 1;
+            while end < b.len() && (b[end].is_ascii_digit() || b[end] == b'.') {
+                end += 1;
+            }
+            let id = &s[start..i];
+            let ver = s[i + 1..end].trim_end_matches('.');
+            if id.is_empty() || ver.is_empty() || !id.as_bytes()[0].is_ascii_lowercase() || (start > 0 && b[start - 1] == b':') {
+                continue;
+            }
+            out.push(format!("{id}@{ver}"));
+        }
+        out
     }
 
     /// 0.46.5 S1 (prd-widget-size-and-shared-libs-v1 WS1, WS2, WS6): the

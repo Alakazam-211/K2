@@ -180,7 +180,9 @@ export function ZenCustomFrame({
   useEffect(() => {
     let live = true
     const root = boxRef.current?.closest<HTMLElement>('[data-zen-root]') ?? null
-    void Promise.all([fetchZenWidgetBundle(widget.widget, gardenId), zenLib.texts(widget.libs)])
+    // 0.46.5 WL7: exactly the daemon's resolved `libKeys`; an older daemon's
+    // `libs` go through the same resolver in the loader.
+    void Promise.all([fetchZenWidgetBundle(widget.widget, gardenId), zenLib.texts(widget.libKeys ?? widget.libs)])
       .then(([bundle, libs]) => {
         if (!live) return
         const prelude = zenFramePrelude({ nonce: bundle.nonce, theme: readZenFrameTheme(root), libs, ownScheme: widget.colorScheme === 'own' })

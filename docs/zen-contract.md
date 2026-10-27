@@ -671,7 +671,7 @@ A custom placement is a content widget in `page.widgets`
   "props": { "home": "Work", "config": {} },
   "caps": ["agents:read"], "requested": ["agents:read", "thread:post"],
   "source": "user", "name": "Agent Arcade", "description": "…",
-  "reasons": { "thread:post": "…" }, "libs": ["three@0.170"],
+  "reasons": { "thread:post": "…" }, "libs": ["three@0.186"], "libKeys": ["three@0.186.0"],
   "hash": "<sha256 of the bundle without nonces>",
   "state": "ok", "errors": [], "warnings": [],
   "origin": "local", "paused": null }
@@ -850,11 +850,24 @@ them (`scripts/vendor-zen-lib.sh`: exact npm versions, tarball integrity in
 `src/shared/zen-lib.json`, licences in `NOTICE.md` and next to each copy)
 and inlines them as nonced classic scripts after `k2-frame.js`. The frame's
 CSP is unchanged: no network, no `unsafe-eval`, no import maps. Chart
-libraries in the set: `uplot@1.6.32` (new in 0.46.1, about 50 KB: time
-series, sparklines, source history), `chart.js@4.5.1`, `echarts@6.1.0`,
-`d3@7.9.0`, and `plotly.js-dist-min@4.1.1` (a download library, fetched
+libraries in the set: `uplot@1` (new in 0.46.1, about 50 KB: time
+series, sparklines, source history), `chart.js@4`, `echarts@6`,
+`d3@7`, and `plotly.js-dist-min@4` (a download library, fetched
 through the daemon and checked against its pin). The k2-zen skill's
-"What's available" section lists every library with its global and notes.
+"What's available" section lists every library with its global and notes;
+`k2 zen guide libs` says which to pick.
+
+Since 0.46.5 a widget asks for a library's **line**: the major (`uplot@1`), or
+`0.minor` below 1.0 (`three@0.186`). K2 updates patches inside a line, so a
+patch never breaks a widget; an exact pin still loads (the newest row of its
+line, at least that version) with a warning to write the line. A library may
+need others (`k2-markdown@1` needs `marked@18` and `dompurify@3`): K2 loads
+them first, once. Two lines of one library in one widget is an error. The
+daemon resolves the list once (`libKeys` in the page payload, exact keys in
+load order) and the frame loads exactly those. A retired line is never
+deleted: it becomes a download (fetched on first use, refused under
+air-gap) and asking for it warns. `requires.libs` as written is part of the
+widget's signed version; a K2 patch inside a line isn't.
 
 ### Using the whole canvas (0.45.3)
 

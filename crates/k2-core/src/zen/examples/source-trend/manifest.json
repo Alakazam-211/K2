@@ -8,5 +8,5 @@
     "sources:read": "to show the state and history of the source named in this card's config"
   },
   "sources": "config",
-  "requires": { "libs": ["uplot@1.6.32"] }
+  "requires": { "libs": ["uplot@1"] }
 }

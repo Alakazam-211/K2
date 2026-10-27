@@ -26,7 +26,7 @@ import { dirname, extname, join, resolve } from 'node:path'
 import { LIBS, type LibFile, type LibSpec, type StyleSource } from './libs'
 import { replaceZenLibNotice } from '../../src/renderer/lib/zen/zen-lib-notice'
 import { zenLibInlineProblem, zenLibInlineSafe } from '../../src/renderer/lib/zen/zen-lib-inline'
-import type { ZenLibEntry, ZenLibManifest } from '../../src/renderer/lib/zen/zen-lib-loader'
+import { zenLibLineOf, type ZenLibEntry, type ZenLibManifest } from '../../src/renderer/lib/zen/zen-lib-loader'
 
 const ROOT = resolve(import.meta.dir, '../..')
 const HERE = join(ROOT, 'scripts/zen-lib')
@@ -352,6 +352,9 @@ for (const lib of LIBS) {
   entries.push({
     id: lib.id,
     version: lib.version,
+    // Schema 2 (0.46.5): the line a widget asks for, and what it needs first.
+    line: zenLibLineOf(lib.version),
+    ...(lib.needs?.length ? { needs: lib.needs } : {}),
     title: lib.title,
     global: lib.global,
     license: lib.license,

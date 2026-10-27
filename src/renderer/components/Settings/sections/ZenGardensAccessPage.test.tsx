@@ -601,7 +601,7 @@ describe('the Garden pane (G26)', () => {
     expect(q('[data-garden-editor-added]', editors[1]).textContent).toMatch(/^added automatically at upgrade · /)
     expect(q('[data-garden-sees]', pane).textContent).toBe('SeesEverything you can see')
     await waitFor(() => expect(pane.querySelector('[data-zen-garden-lock="g-2"]')).not.toBeNull())
-    expect(q('[data-zen-garden-lock="g-2"]', pane).textContent).toBe('Lock gardenAgents can’t change this Garden. You still can.')
+    expect(q('[data-zen-garden-lock="g-2"]', pane).textContent).toBe('Lock gardenAgents can’t change this Garden. You still can, and K2’s updates to its libraries still apply.')
     expect(q('[data-zen-garden-sync="g-2"]', pane).textContent).toContain('Get K2’s design updates')
     await waitFor(() => expect(pane.querySelectorAll('[data-garden-widget]').length).toBe(2))
     const widgets = [...pane.querySelectorAll('[data-garden-widget]')]

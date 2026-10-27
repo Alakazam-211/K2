@@ -92,10 +92,12 @@ fn a_bundled_library_is_a_slot_and_a_downloaded_one_is_refused() {
     let manifest = |libs: &str| {
         format!("{{\"schema\": 1, \"name\": \"Trend\", \"entry\": \"index.html\", \"caps\": [\"sources:read\"], \"sources\": \"config\", \"requires\": {{\"libs\": [{libs}]}}}}")
     };
-    files.insert("manifest.json".into(), manifest("\"uplot@1.6.32\"").into_bytes());
+    // 0.46.5: a line, resolved by the one resolver to the row K2 ships.
+    files.insert("manifest.json".into(), manifest("\"uplot@1\"").into_bytes());
+    let shipped = crate::zen::stdlib::resolve_one(crate::zen::stdlib::zen_lib_manifest(), "uplot", "1").expect("uplot line 1").0.key();
     let v = shot_page("trend", &files, &ShotOptions::default()).expect("shot page");
     assert_eq!(v["ok"], true, "{v}");
-    assert_eq!(v["libs"][0]["key"], "uplot@1.6.32", "{v}");
+    assert_eq!(v["libs"][0]["key"], json!(shipped), "{v}");
     assert_eq!(v["libs"][0]["slot"], "__K2_SHOT_LIB_0__");
     assert_eq!(v["libs"][0]["files"][0]["name"], "uPlot.iife.min.js");
     assert!(v["frame"].as_str().expect("frame").contains(">__K2_SHOT_LIB_0__</script>"));

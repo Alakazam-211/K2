@@ -1,0 +1,431 @@
+{
+  "about": "The library resolver's shared cases (prd-widget-size-and-shared-libs-v1 WL7): read by crates/k2-core/src/zen/stdlib.rs and src/renderer/lib/zen/zen-lib-loader.test.ts. 'cases' run against 'manifest' (made up); 'real' against src/shared/zen-lib.json. Errors and warnings match by substring, in order.",
+  "manifest": {
+    "schema": 2,
+    "maxBytesPerWidget": 8388608,
+    "cdnHosts": [
+      "cdn.jsdelivr.net"
+    ],
+    "libs": [
+      {
+        "id": "uplot",
+        "version": "1.6.32",
+        "line": "1",
+        "title": "uplot",
+        "global": "uPlot",
+        "license": "MIT",
+        "licenseFile": "LICENSE.txt",
+        "copyright": "Copyright (c) fixture",
+        "source": "bundled",
+        "files": [
+          {
+            "name": "uplot.js",
+            "bytes": 100,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      {
+        "id": "three",
+        "version": "0.186.0",
+        "line": "0.186",
+        "title": "three",
+        "global": "THREE",
+        "license": "MIT",
+        "licenseFile": "LICENSE.txt",
+        "copyright": "Copyright (c) fixture",
+        "source": "bundled",
+        "files": [
+          {
+            "name": "three.js",
+            "bytes": 200,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      {
+        "id": "three",
+        "version": "0.190.1",
+        "line": "0.190",
+        "title": "three",
+        "global": "THREE",
+        "license": "MIT",
+        "licenseFile": "LICENSE.txt",
+        "copyright": "Copyright (c) fixture",
+        "source": "bundled",
+        "files": [
+          {
+            "name": "three.js",
+            "bytes": 210,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      {
+        "id": "marked",
+        "version": "18.0.14",
+        "line": "18",
+        "title": "marked",
+        "global": "marked",
+        "license": "MIT",
+        "licenseFile": "LICENSE.txt",
+        "copyright": "Copyright (c) fixture",
+        "source": "bundled",
+        "files": [
+          {
+            "name": "marked.js",
+            "bytes": 50,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      {
+        "id": "marked",
+        "version": "17.0.1",
+        "line": "17",
+        "title": "marked",
+        "global": "marked",
+        "license": "MIT",
+        "licenseFile": "LICENSE.txt",
+        "copyright": "Copyright (c) fixture",
+        "source": "download",
+        "files": [
+          {
+            "name": "marked.js",
+            "bytes": 40,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "url": "https://cdn.jsdelivr.net/npm/marked@17.0.1/marked.js"
+          }
+        ]
+      },
+      {
+        "id": "dompurify",
+        "version": "3.4.17",
+        "line": "3",
+        "title": "dompurify",
+        "global": "DOMPurify",
+        "license": "MIT",
+        "licenseFile": "LICENSE.txt",
+        "copyright": "Copyright (c) fixture",
+        "source": "bundled",
+        "files": [
+          {
+            "name": "dompurify.js",
+            "bytes": 30,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      {
+        "id": "k2-markdown",
+        "version": "1.0.0",
+        "line": "1",
+        "title": "k2-markdown",
+        "global": "K2Markdown",
+        "license": "MIT",
+        "licenseFile": "LICENSE.txt",
+        "copyright": "Copyright (c) fixture",
+        "source": "bundled",
+        "files": [
+          {
+            "name": "k2-markdown.js",
+            "bytes": 8,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ],
+        "needs": [
+          "marked@18",
+          "dompurify@3"
+        ]
+      },
+      {
+        "id": "huge",
+        "version": "1.0.0",
+        "line": "1",
+        "title": "huge",
+        "global": "huge",
+        "license": "MIT",
+        "licenseFile": "LICENSE.txt",
+        "copyright": "Copyright (c) fixture",
+        "source": "bundled",
+        "files": [
+          {
+            "name": "huge.js",
+            "bytes": 8388530,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    ],
+    "retired": [
+      {
+        "id": "marked",
+        "line": "17",
+        "release": "0.47.0",
+        "use": "marked@18"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "an exact pin of the shipped row",
+      "libs": [
+        "uplot@1.6.32"
+      ],
+      "keys": [
+        "uplot@1.6.32"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "name": "a line",
+      "libs": [
+        "uplot@1"
+      ],
+      "keys": [
+        "uplot@1.6.32"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "name": "a 0.minor line",
+      "libs": [
+        "three@0.186"
+      ],
+      "keys": [
+        "three@0.186.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "name": "an older patch resolves forward and warns",
+      "libs": [
+        "uplot@1.6.31"
+      ],
+      "keys": [
+        "uplot@1.6.32"
+      ],
+      "warnings": [
+        "K2 ships uplot 1.6.32 and updates it inside line 1; write \"uplot@1\""
+      ],
+      "errors": []
+    },
+    {
+      "name": "newer than K2's row in its line is an error",
+      "libs": [
+        "uplot@1.7"
+      ],
+      "errors": [
+        "is newer than K2's"
+      ],
+      "warnings": [],
+      "keys": []
+    },
+    {
+      "name": "a line K2 doesn't ship",
+      "libs": [
+        "uplot@2"
+      ],
+      "errors": [
+        "K2 ships uplot line 1 (1.6.32); this widget asks for uplot@2"
+      ],
+      "warnings": [],
+      "keys": []
+    },
+    {
+      "name": "a request spanning lines takes the newest and warns",
+      "libs": [
+        "three@0"
+      ],
+      "keys": [
+        "three@0.190.1"
+      ],
+      "warnings": [
+        "three@0 spans versions that break each other; write three@0.190"
+      ],
+      "errors": []
+    },
+    {
+      "name": "two lines of one library",
+      "libs": [
+        "three@0.186",
+        "three@0.190"
+      ],
+      "errors": [
+        "two versions of three in one widget"
+      ],
+      "warnings": [],
+      "keys": []
+    },
+    {
+      "name": "needs load first",
+      "libs": [
+        "k2-markdown@1"
+      ],
+      "keys": [
+        "marked@18.0.14",
+        "dompurify@3.4.17",
+        "k2-markdown@1.0.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "name": "a need listed too loads once, silently",
+      "libs": [
+        "marked@18",
+        "k2-markdown@1"
+      ],
+      "keys": [
+        "marked@18.0.14",
+        "dompurify@3.4.17",
+        "k2-markdown@1.0.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "name": "a library listed twice loads once and warns",
+      "libs": [
+        "uplot@1",
+        "uplot@1.6.32"
+      ],
+      "keys": [
+        "uplot@1.6.32"
+      ],
+      "warnings": [
+        "'uplot@1.6.32' is listed twice"
+      ],
+      "errors": []
+    },
+    {
+      "name": "a retired line still loads and warns",
+      "libs": [
+        "marked@17"
+      ],
+      "keys": [
+        "marked@17.0.1"
+      ],
+      "warnings": [
+        "K2 retired marked@17 in 0.47.0"
+      ],
+      "errors": []
+    },
+    {
+      "name": "an unknown library",
+      "libs": [
+        "nope@1"
+      ],
+      "errors": [
+        "has no nope@1"
+      ],
+      "warnings": [],
+      "keys": []
+    },
+    {
+      "name": "needs count toward the budget",
+      "libs": [
+        "huge@1",
+        "k2-markdown@1"
+      ],
+      "errors": [
+        "a widget may load at most 8388608"
+      ],
+      "warnings": [],
+      "keys": []
+    },
+    {
+      "name": "a CDN file passes as written",
+      "libs": [
+        {
+          "url": "https://cdn.jsdelivr.net/npm/x@1.2.3/x.min.js",
+          "integrity": "sha384-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "keys": [
+        {
+          "url": "https://cdn.jsdelivr.net/npm/x@1.2.3/x.min.js",
+          "integrity": "sha384-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "name": "a request with no version",
+      "libs": [
+        "three"
+      ],
+      "errors": [
+        "name a library as <id>@<line>"
+      ],
+      "warnings": [],
+      "keys": []
+    }
+  ],
+  "real": [
+    {
+      "request": "three@0.186",
+      "line": "0.186",
+      "warns": false
+    },
+    {
+      "request": "three@0",
+      "line": "0.186",
+      "warns": false
+    },
+    {
+      "request": "marked@18",
+      "line": "18",
+      "warns": false
+    },
+    {
+      "request": "dompurify@3",
+      "line": "3",
+      "warns": false
+    },
+    {
+      "request": "uplot@1.6.32",
+      "line": "1",
+      "warns": false
+    },
+    {
+      "request": "uplot@1",
+      "line": "1",
+      "warns": false
+    },
+    {
+      "request": "chart.js@4",
+      "line": "4",
+      "warns": false
+    },
+    {
+      "request": "perfect-freehand@1",
+      "line": "1",
+      "warns": false
+    },
+    {
+      "request": "font-caveat@5",
+      "line": "5",
+      "warns": false
+    },
+    {
+      "request": "pixi.js@8",
+      "line": "8",
+      "warns": false
+    },
+    {
+      "request": "tone@15",
+      "line": "15",
+      "warns": false
+    },
+    {
+      "request": "kaplay@3001",
+      "line": "3001",
+      "warns": false
+    }
+  ]
+}

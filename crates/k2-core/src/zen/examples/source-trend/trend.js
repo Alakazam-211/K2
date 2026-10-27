@@ -2,7 +2,7 @@
 // - A handler-object subscription: K2 re-subscribes on its own after a
 //   retryable refusal (not_bound until the placement binds it, unreachable,
 //   rate_limited) and hands `data` a normalised card view.
-// - A pinned chart library (requires.libs: uplot@1.6.32), inlined offline.
+// - A chart library by its line (requires.libs: uplot@1; K2 updates the patch), inlined offline.
 // - k2.shape guards for anything else read from K2.
 // Text from a source always goes in with textContent, never innerHTML.
 (function () {

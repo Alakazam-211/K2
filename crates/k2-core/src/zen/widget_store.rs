@@ -810,6 +810,12 @@ impl ZenFiles {
             w["description"] = json!(m.and_then(|m| m.description.clone()));
             w["reasons"] = json!(m.map(|m| m.reasons.clone()).unwrap_or_default());
             w["libs"] = json!(m.map(|m| m.libs.clone()).unwrap_or_default());
+            // 0.46.5 WL7 (vs-live L4): the one resolver's load order, from the
+            // effective manifest (a locked Garden's frozen copy for a locked
+            // Garden). The frame loads exactly these.
+            if let Some(keys) = m.and_then(|m| widgets::lib_keys(&m.libs)) {
+                w["libKeys"] = json!(keys);
+            }
             w["requested"] = json!(requested);
             w["hash"] = json!(st.hash());
             w["state"] = json!(st.state.as_str());

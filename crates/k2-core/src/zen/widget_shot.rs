@@ -328,17 +328,21 @@ pub fn shot_page(name: &str, files: &BTreeMap<String, Vec<u8>>, o: &ShotOptions)
             "files": [prefix],
         }));
     };
-    // Libraries: bundled ones become slots the runner fills.
+    // Libraries: the one resolver's load order (0.46.5 WL7, vs-live L4:
+    // needs first, every key once); bundled ones become slots the runner fills.
     let m = stdlib::zen_lib_manifest();
+    let resolved = stdlib::resolve(m, &manifest.libs);
+    if let Some(f) = resolved.errors().next() {
+        return Err(ZenError::BadRequest(f.message.clone()));
+    }
     let mut libs = Vec::new();
     let mut slots = Vec::new();
-    for (i, raw) in manifest.libs.iter().enumerate() {
-        let r = LibRef::from_json(raw).map_err(ZenError::BadRequest)?;
-        let entry = match &r {
+    for (i, key) in resolved.keys.iter().enumerate() {
+        let entry = match LibRef::from_json(key).map_err(ZenError::BadRequest)? {
             LibRef::Cdn { url, .. } => {
                 return Err(ZenError::BadRequest(format!("--shot can't load CDN libraries yet ({url}); preview it in Zen instead")));
             }
-            LibRef::Named { id, version } => stdlib::find(m, &r).ok_or_else(|| ZenError::BadRequest(format!("no library {id}@{version} in K2")))?,
+            r @ LibRef::Named { .. } => stdlib::find(m, &r).ok_or_else(|| ZenError::BadRequest(format!("no library {key} in K2")))?,
         };
         if entry.source != LibSource::Bundled {
             return Err(ZenError::BadRequest(format!(

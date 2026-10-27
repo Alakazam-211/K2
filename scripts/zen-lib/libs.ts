@@ -18,6 +18,13 @@
 //   OFL-1.1, MPL-2.0 as an option). p5.js is LGPL (R4: dropped). No GSAP.
 // - `copyright` must appear word for word in the licence text the vendor
 //   script writes (the NOTICE line is checked against it).
+// - 0.46.5 (prd-widget-size-and-shared-libs-v1 WL6, vs-live L3): one entry
+//   per LINE (the major; 0.minor below 1.0). A patch replaces its line's
+//   entry in place (K2 updates patches inside a line); a new major is a new
+//   entry beside the old one. A line is never removed: to retire it, make
+//   its entry `source: 'download'` (pinned URLs, fetched on first use) and
+//   add `{id, line, release, use}` to zen-lib.json's `retired` (the
+//   Retirement ledger). The stdlib tests enforce both.
 
 export type LibFile =
   /** Copy one file from an installed package, as is. */
@@ -70,6 +77,9 @@ export interface LibSpec {
    *  allowed here) and `licenses` names `k2:LICENSE.md`. A change ships as
    *  a new version folder; a shipped one is never edited. */
   own?: boolean
+  /** 0.46.5 (WL3): other libraries it needs, as line requests
+   *  (`marked@18`); K2 loads them first, once. */
+  needs?: string[]
 }
 
 const THREE_ADDONS: [string, string][] = [

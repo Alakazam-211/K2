@@ -1105,7 +1105,7 @@ describe('Settings → Gardens: two checkboxes per Garden (prd-garden-lock-and-s
     expect(box('sync', 'g-1').indeterminate).toBe(false)
     expect(within(row('g-1')).getByLabelText('Lock garden')).toBe(box('lock', 'g-1'))
     expect(within(row('g-1')).getByLabelText('Keep in sync with future template updates')).toBe(box('sync', 'g-1'))
-    expect(document.querySelector('[data-zen-garden-lock="g-1"]')?.getAttribute('title')).toBe('Agents can’t change this Garden. You still can.')
+    expect(document.querySelector('[data-zen-garden-lock="g-1"]')?.getAttribute('title')).toBe('Agents can’t change this Garden. You still can, and K2’s updates to its libraries still apply.')
     expect(document.querySelector('[data-zen-garden-sync="g-1"]')?.getAttribute('title')).toBe(
       'Gets K2’s improvements to this Garden’s template and theme.',
     )

@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "maxBytesPerWidget": 8388608,
   "cdnHosts": [
     "cdnjs.cloudflare.com",
@@ -10,6 +10,7 @@
     {
       "id": "three",
       "version": "0.186.0",
+      "line": "0.186",
       "title": "three.js",
       "global": "THREE",
       "license": "MIT",
@@ -29,6 +30,7 @@
     {
       "id": "globe.gl",
       "version": "2.46.2",
+      "line": "2",
       "title": "globe.gl",
       "global": "Globe",
       "license": "MIT",
@@ -47,6 +49,7 @@
     {
       "id": "cannon-es",
       "version": "0.20.0",
+      "line": "0.20",
       "title": "cannon-es",
       "global": "CANNON",
       "license": "MIT",
@@ -65,6 +68,7 @@
     {
       "id": "pixi.js",
       "version": "8.21.0",
+      "line": "8",
       "title": "PixiJS",
       "global": "PIXI",
       "license": "MIT",
@@ -88,6 +92,7 @@
     {
       "id": "phaser",
       "version": "4.2.1",
+      "line": "4",
       "title": "Phaser",
       "global": "Phaser",
       "license": "MIT",
@@ -106,6 +111,7 @@
     {
       "id": "kaplay",
       "version": "3001.0.19",
+      "line": "3001",
       "title": "KAPLAY",
       "global": "kaplay",
       "license": "MIT",
@@ -123,6 +129,7 @@
     {
       "id": "matter-js",
       "version": "0.20.0",
+      "line": "0.20",
       "title": "Matter.js",
       "global": "Matter",
       "license": "MIT",
@@ -140,6 +147,7 @@
     {
       "id": "d3",
       "version": "7.9.0",
+      "line": "7",
       "title": "D3",
       "global": "d3",
       "license": "ISC",
@@ -163,6 +171,7 @@
     {
       "id": "chart.js",
       "version": "4.5.1",
+      "line": "4",
       "title": "Chart.js",
       "global": "Chart",
       "license": "MIT",
@@ -181,6 +190,7 @@
     {
       "id": "echarts",
       "version": "6.1.0",
+      "line": "6",
       "title": "Apache ECharts",
       "global": "echarts",
       "license": "Apache-2.0",
@@ -198,6 +208,7 @@
     {
       "id": "uplot",
       "version": "1.6.32",
+      "line": "1",
       "title": "uPlot",
       "global": "uPlot",
       "license": "MIT",
@@ -221,6 +232,7 @@
     {
       "id": "animejs",
       "version": "4.5.0",
+      "line": "4",
       "title": "Anime.js",
       "global": "anime",
       "license": "MIT",
@@ -238,6 +250,7 @@
     {
       "id": "lottie-web",
       "version": "5.13.0",
+      "line": "5",
       "title": "Lottie",
       "global": "lottie",
       "license": "MIT",
@@ -256,6 +269,7 @@
     {
       "id": "perfect-freehand",
       "version": "1.2.3",
+      "line": "1",
       "title": "perfect-freehand",
       "global": "PerfectFreehand",
       "license": "MIT",
@@ -275,6 +289,7 @@
     {
       "id": "roughjs",
       "version": "4.6.6",
+      "line": "4",
       "title": "Rough.js",
       "global": "rough",
       "license": "MIT",
@@ -292,6 +307,7 @@
     {
       "id": "howler",
       "version": "2.2.4",
+      "line": "2",
       "title": "howler.js",
       "global": "Howler",
       "license": "MIT",
@@ -310,6 +326,7 @@
     {
       "id": "tone",
       "version": "15.1.22",
+      "line": "15",
       "title": "Tone.js",
       "global": "Tone",
       "license": "MIT",
@@ -328,6 +345,7 @@
     {
       "id": "leaflet",
       "version": "1.9.4",
+      "line": "1",
       "title": "Leaflet",
       "global": "L",
       "license": "BSD-2-Clause",
@@ -356,6 +374,7 @@
     {
       "id": "marked",
       "version": "18.0.14",
+      "line": "18",
       "title": "marked",
       "global": "marked",
       "license": "MIT",
@@ -374,6 +393,7 @@
     {
       "id": "dompurify",
       "version": "3.4.17",
+      "line": "3",
       "title": "DOMPurify",
       "global": "DOMPurify",
       "license": "Apache-2.0",
@@ -392,6 +412,7 @@
     {
       "id": "highlight.js",
       "version": "11.12.0",
+      "line": "11",
       "title": "highlight.js",
       "global": "hljs",
       "license": "BSD-3-Clause",
@@ -415,6 +436,7 @@
     {
       "id": "katex",
       "version": "0.18.9",
+      "line": "0.18",
       "title": "KaTeX",
       "global": "katex",
       "license": "MIT",
@@ -443,6 +465,7 @@
     {
       "id": "preact",
       "version": "10.29.8",
+      "line": "10",
       "title": "Preact + htm",
       "global": "preact",
       "license": "MIT AND Apache-2.0",
@@ -462,6 +485,7 @@
     {
       "id": "lit",
       "version": "3.3.3",
+      "line": "3",
       "title": "Lit",
       "global": "Lit",
       "license": "BSD-3-Clause",
@@ -481,6 +505,7 @@
     {
       "id": "font-caveat",
       "version": "5.3.0",
+      "line": "5",
       "title": "Caveat (handwriting font)",
       "global": "K2Fonts",
       "license": "OFL-1.1",
@@ -504,6 +529,7 @@
     {
       "id": "babylonjs",
       "version": "8.52.1",
+      "line": "8",
       "title": "Babylon.js",
       "global": "BABYLON",
       "license": "Apache-2.0",
@@ -523,6 +549,7 @@
     {
       "id": "plotly.js-dist-min",
       "version": "4.1.1",
+      "line": "4",
       "title": "Plotly",
       "global": "Plotly",
       "license": "MIT",
@@ -542,6 +569,7 @@
     {
       "id": "k2-help",
       "version": "1.0.0",
+      "line": "1",
       "title": "K2 help button (widget kit)",
       "global": "K2Help",
       "license": "FSL-1.1-Apache-2.0",
@@ -560,6 +588,7 @@
     {
       "id": "k2-thread",
       "version": "1.0.0",
+      "line": "1",
       "title": "K2 Thread panel (widget kit)",
       "global": "K2Thread",
       "license": "FSL-1.1-Apache-2.0",

@@ -44,7 +44,7 @@ function pinToast(r: PinOutcome | null): void {
 }
 
 export const ZEN_LOCK_LABEL = 'Lock garden'
-export const ZEN_LOCK_TIP = 'Agents can’t change this Garden. You still can.'
+export const ZEN_LOCK_TIP = 'Agents can’t change this Garden. You still can, and K2’s updates to its libraries still apply.'
 export const ZEN_SYNC_LABEL = 'Keep in sync with future template updates'
 export const ZEN_SYNC_TIP = 'Gets K2’s improvements to this Garden’s template and theme.'
 export const ZEN_SYNC_SCRATCH_TIP = 'Made from scratch, no template to follow'

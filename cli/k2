@@ -39740,7 +39740,7 @@ THE WIDGET SDK
   object ({data, error, state}) and K2 re-subscribes after a retryable
   refusal; since 0.46.3 k2.sources.subscribe(addr, cb, onError) does too.
   Light/dark follow the Garden, never the OS (--zen-*, [data-zen-scheme];
-  manifest "colorScheme": "own" opts out). Charts: requires.libs uplot@1.6.32.
+  manifest "colorScheme": "own" opts out). Charts: requires.libs uplot@1 (k2 zen guide libs).
 
 THE WIDGET KIT (0.46.3): don't hand-build these, require them
   "k2-thread@1"  K2Thread.mount(el, {look: 'chamfer' | 'glass', address})

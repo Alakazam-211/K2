@@ -40,6 +40,10 @@ export interface ZenLibFile {
 export interface ZenLibEntry {
   id: string
   version: string
+  /** Schema 2 (0.46.5): its line (`1`, `0.186`), what a widget asks for. */
+  line: string
+  /** Schema 2: line requests K2 loads first, once (`marked@18`). */
+  needs?: string[]
   title: string
   /** The classic global it defines: THREE, PIXI, d3, … */
   global: string
@@ -53,12 +57,21 @@ export interface ZenLibEntry {
   notes?: string
 }
 
+/** A retired line (0.46.5 WL6): its row stays, as a download. */
+export interface ZenLibRetired {
+  id: string
+  line: string
+  release: string
+  use: string
+}
+
 export interface ZenLibManifest {
-  schema: 1
+  schema: 2
   /** UWB13: at most 8 MB of library text per widget. */
   maxBytesPerWidget: number
   cdnHosts: string[]
   libs: ZenLibEntry[]
+  retired?: ZenLibRetired[]
 }
 
 /**
@@ -93,14 +106,197 @@ export function zenLibVersionMatches(entry: ZenLibEntry, want: string): boolean 
   return entry.version === want || (entry.version.startsWith(want) && entry.version[want.length] === '.')
 }
 
-/** The manifest row a named reference resolves to, or null (CDN refs: null). */
+// ── The resolver (0.46.5, prd-widget-size-and-shared-libs-v1 WL4–WL7) ────
+//
+// The Rust one (`stdlib::resolve_one` / `resolve`) is the truth: the
+// daemon sends each placement's `libKeys` and the frame loads exactly
+// those. This mirror serves the shot tool's renderer and an older daemon's
+// payload (no `libKeys`); the shared fixture
+// `src/shared/zen-lib-resolve-cases.json` keeps the two in step.
+
+/** A version's line: the major from 1.0.0 up, `0.minor` below 1. */
+export function zenLibLineOf(version: string): string {
+  const parts = version.split('.')
+  if (parts[0] === '0') return parts.length > 1 ? `0.${parts[1]}` : '0'
+  return parts[0]
+}
+
+function vparts(v: string): number[] {
+  return v.split('.').map((p) => {
+    const d = /^\d+/.exec(p)
+    return d ? Number(d[0]) : 0
+  })
+}
+
+/** Versions compared numerically (a missing part is 0). */
+export function zenLibVersionCmp(a: string, b: string): number {
+  const x = vparts(a)
+  const y = vparts(b)
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0)
+    if (d !== 0) return d < 0 ? -1 : 1
+  }
+  return 0
+}
+
+function newest(rows: readonly ZenLibEntry[]): ZenLibEntry | null {
+  let best: ZenLibEntry | null = null
+  for (const r of rows) if (!best || zenLibVersionCmp(r.version, best.version) > 0) best = r
+  return best
+}
+
+export type ZenLibResolvedOne = { entry: ZenLibEntry; warning: string | null } | { error: string }
+
+/** What `<id>@<want>` loads (Rust `resolve_one`, rule for rule). */
+export function zenLibResolveOne(id: string, want: string, manifest: ZenLibManifest = ZEN_LIB_MANIFEST): ZenLibResolvedOne {
+  const rows = manifest.libs.filter((e) => e.id === id)
+  if (rows.length === 0) return { error: `K2's widget library has no ${id}@${want}; see k2 zen guide libs for what's available` }
+  let warning: string | null = null
+  const matched = rows.filter((e) => zenLibVersionMatches(e, want))
+  let pick = newest(matched)
+  if (pick) {
+    if (new Set(matched.map((e) => e.line)).size > 1) {
+      warning = `${id}@${want} spans versions that break each other; write ${id}@${pick.line}`
+    }
+  } else {
+    const line = zenLibLineOf(want)
+    pick = newest(rows.filter((e) => e.line === line && zenLibVersionCmp(e.version, want) >= 0))
+    if (pick) {
+      warning = `K2 ships ${id} ${pick.version} and updates it inside line ${pick.line}; write "${id}@${pick.line}"`
+    } else {
+      const sameLine = newest(rows.filter((e) => e.line === line))
+      if (sameLine) {
+        return {
+          error: `K2 ships ${id} ${sameLine.version} in line ${sameLine.line}; ${id}@${want} is newer than K2's. Write "${id}@${sameLine.line}", or update K2`,
+        }
+      }
+      const list = [...rows].sort((a, b) => zenLibVersionCmp(a.version, b.version)).map((e) => `${e.line} (${e.version})`)
+      return { error: `K2 ships ${id} line${list.length === 1 ? '' : 's'} ${list.join(', ')}; this widget asks for ${id}@${want} (k2 zen guide libs)` }
+    }
+  }
+  const chosen: ZenLibEntry = pick
+  const retired = manifest.retired?.find((r) => r.id === id && r.line === chosen.line)
+  if (retired) {
+    const w = `K2 retired ${id}@${chosen.line} in ${retired.release}: it downloads on first use now (not under air-gap); move to ${retired.use}`
+    warning = warning ? `${warning}; ${w}` : w
+  }
+  return { entry: chosen, warning }
+}
+
+/** One finding of `zenLibResolve` (`index` null: the whole list). */
+export interface ZenLibFinding {
+  index: number | null
+  error: boolean
+  message: string
+}
+
+export interface ZenLibResolved {
+  /** The load order: exact keys (needs first, each once), CDN refs as written. */
+  keys: ZenLibRef[]
+  entries: Array<ZenLibEntry | null>
+  findings: ZenLibFinding[]
+}
+
+function parseRef(ref: unknown): { id: string; want: string } | { cdn: { url: string; integrity: string } } | { bad: string } {
+  if (typeof ref === 'string') {
+    const at = ref.lastIndexOf('@')
+    if (at <= 0 || at === ref.length - 1) return { bad: `'${ref}': name a library as <id>@<line>, like uplot@1 (k2 zen guide libs)` }
+    return { id: ref.slice(0, at), want: ref.slice(at + 1) }
+  }
+  if (ref && typeof ref === 'object' && !Array.isArray(ref)) {
+    const o = ref as Record<string, unknown>
+    const extra = Object.keys(o).find((k) => k !== 'url' && k !== 'integrity')
+    if (extra) return { bad: `unknown key '${extra}' in a requires.libs entry; use url and integrity` }
+    if (typeof o.url === 'string' && typeof o.integrity === 'string') return { cdn: { url: o.url, integrity: o.integrity } }
+    return { bad: 'a CDN entry needs both url and integrity' }
+  }
+  return { bad: 'a requires.libs entry is "<id>@<version>" or {url, integrity}' }
+}
+
+/** A whole `requires.libs` list (Rust `resolve`): needs first, every key
+ *  once, two lines of one library an error, the 8 MB budget. */
+export function zenLibResolve(refs: readonly unknown[], manifest: ZenLibManifest = ZEN_LIB_MANIFEST): ZenLibResolved {
+  const out: ZenLibResolved = { keys: [], entries: [], findings: [] }
+  const loaded: Array<{ key: string; id: string; line: string; explicit: boolean }> = []
+  let bytes = 0
+  const add = (index: number, e: ZenLibEntry, explicit: boolean, depth: number): void => {
+    const key = `${e.id}@${e.version}`
+    if (depth > 8) {
+      out.findings.push({ index, error: true, message: `${key}: its needs go round in a circle` })
+      return
+    }
+    for (const need of e.needs ?? []) {
+      const at = need.lastIndexOf('@')
+      if (at <= 0) {
+        out.findings.push({ index, error: true, message: `${key} needs '${need}', which isn't <id>@<line>` })
+        continue
+      }
+      const r = zenLibResolveOne(need.slice(0, at), need.slice(at + 1), manifest)
+      if ('error' in r) out.findings.push({ index, error: true, message: `${key} needs ${need}: ${r.error}` })
+      else add(index, r.entry, false, depth + 1)
+    }
+    const prev = loaded.find((l) => l.key === key)
+    if (prev) {
+      if (explicit && prev.explicit) out.findings.push({ index, error: false, message: `'${key}' is listed twice; K2 loads it once` })
+      prev.explicit ||= explicit
+      return
+    }
+    const other = loaded.find((l) => l.id === e.id && l.line !== e.line)
+    if (other) {
+      out.findings.push({
+        index,
+        error: true,
+        message: `two versions of ${e.id} in one widget (${other.key} and ${key}) define ${e.global} twice; ask for one line`,
+      })
+      return
+    }
+    bytes += e.files.reduce((n, f) => n + f.bytes, 0)
+    out.keys.push(key)
+    out.entries.push(e)
+    loaded.push({ key, id: e.id, line: e.line, explicit })
+  }
+  refs.forEach((ref, i) => {
+    const p = parseRef(ref)
+    if ('bad' in p) {
+      out.findings.push({ index: i, error: true, message: p.bad })
+    } else if ('cdn' in p) {
+      const problem = zenLibCdnProblem(manifest, p.cdn.url, p.cdn.integrity)
+      if (problem) {
+        out.findings.push({ index: i, error: true, message: problem })
+      } else if (out.keys.some((k) => typeof k !== 'string' && k.url === p.cdn.url && k.integrity === p.cdn.integrity)) {
+        out.findings.push({ index: i, error: false, message: `${p.cdn.url} is listed twice; K2 loads it once` })
+      } else {
+        out.keys.push(p.cdn)
+        out.entries.push(null)
+      }
+    } else {
+      const r = zenLibResolveOne(p.id, p.want, manifest)
+      if ('error' in r) {
+        out.findings.push({ index: i, error: true, message: r.error })
+      } else {
+        if (r.warning) out.findings.push({ index: i, error: false, message: r.warning })
+        add(i, r.entry, true, 0)
+      }
+    }
+  })
+  if (bytes > manifest.maxBytesPerWidget) {
+    out.findings.push({
+      index: null,
+      error: true,
+      message: `these libraries are ${bytes} bytes (with what they need); a widget may load at most ${manifest.maxBytesPerWidget} (8 MB)`,
+    })
+  }
+  return out
+}
+
+/** The manifest row a named reference resolves to, or null (CDN refs and
+ *  requests K2 can't serve: null). The resolver's rule, warnings dropped. */
 export function zenLibFind(ref: ZenLibRef, manifest: ZenLibManifest = ZEN_LIB_MANIFEST): ZenLibEntry | null {
   if (typeof ref !== 'string') return null
-  const at = ref.lastIndexOf('@')
-  if (at <= 0 || at === ref.length - 1) return null
-  const id = ref.slice(0, at)
-  const want = ref.slice(at + 1)
-  return manifest.libs.find((e) => e.id === id && zenLibVersionMatches(e, want)) ?? null
+  const p = parseRef(ref)
+  if (!('id' in p)) return null
+  const r = zenLibResolveOne(p.id, p.want, manifest)
+  return 'entry' in r ? r.entry : null
 }
 
 export interface ZenLib {
@@ -234,7 +430,10 @@ export function createZenLib(deps: ZenLibDeps): ZenLib {
       }
       if (buf.byteLength !== f.bytes) throw errorFor('hash_mismatch', ref, entry)
       const sum = await deps.sha256(buf)
-      if (sum !== null && sum !== f.sha256) throw errorFor('hash_mismatch', ref, entry)
+      // vs-live L2: fail closed. A platform that can't compute sha256 never
+      // inlines a library it couldn't check (Tauri always can).
+      if (sum === null) throw errorFor('hash_mismatch', ref, entry, "this app can't check fingerprints here")
+      if (sum !== f.sha256) throw errorFor('hash_mismatch', ref, entry)
       texts.push(decode(buf))
     }
     return texts.join(ZEN_LIB_FILE_SEPARATOR)
@@ -286,21 +485,18 @@ export function createZenLib(deps: ZenLibDeps): ZenLib {
 
   return {
     async texts(refs) {
-      // Resolve every ref before loading anything (all or nothing).
-      const plan = refs.map((ref) => {
-        if (typeof ref === 'string') {
-          const entry = zenLibFind(ref, deps.manifest)
-          if (!entry) throw errorFor('unknown_lib', ref, null)
-          return { ref, entry }
-        }
-        const problem = zenLibCdnProblem(deps.manifest, ref.url, ref.integrity)
-        if (problem) throw errorFor('unknown_lib', ref, null, problem)
-        return { ref, entry: null }
-      })
-      if (plan.length === 0) return []
+      // Resolve every ref before loading anything (all or nothing), with the
+      // one resolver: `libKeys` (exact keys) resolve to themselves; an older
+      // daemon's `libs` get their lines and needs here.
+      const r = zenLibResolve(refs, deps.manifest)
       const max = deps.manifest.maxBytesPerWidget
-      const known = plan.reduce((n, p) => n + (p.entry ? p.entry.files.reduce((s, f) => s + f.bytes, 0) : 0), 0)
-      if (known > max) throw errorFor('too_large', refs[0], null, `${mb(known)} asked, ${mb(max)} allowed`)
+      for (const f of r.findings) {
+        if (!f.error) continue
+        if (f.index === null) throw errorFor('too_large', refs[0], null, f.message)
+        throw errorFor('unknown_lib', refs[f.index], null, f.message)
+      }
+      const plan = r.keys.map((ref, i) => ({ ref, entry: r.entries[i] }))
+      if (plan.length === 0) return []
 
       const texts = await Promise.all(
         plan.map(({ ref, entry }) => {

@@ -136,7 +136,7 @@ describe('day-0: widget origin and templates', () => {
 
 describe('day-0: zenLib', () => {
   it('manifest loads; no p5 or gsap', () => {
-    expect(ZEN_LIB_MANIFEST.schema).toBe(1)
+    expect(ZEN_LIB_MANIFEST.schema).toBe(2)
     expect(ZEN_LIB_MANIFEST.maxBytesPerWidget).toBe(8 * 1024 * 1024)
     expect(ZEN_LIB_MANIFEST.libs.some((l) => l.id === 'p5' || l.id === 'gsap')).toBe(false)
   })

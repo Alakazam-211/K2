@@ -22,7 +22,7 @@ use serde_json::{json, Value as J};
 
 use super::bundle::{self, asset_mime, sniff_asset, Bundle};
 use super::schema::Diagnostic;
-use super::stdlib::{self, LibRef};
+use super::stdlib;
 
 /// `~/.k2/zen/widgets/`.
 pub const WIDGETS_DIR: &str = "widgets";
@@ -425,44 +425,24 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                             },
                             "libs" => match rv.as_array() {
                                 Some(list) => {
-                                    let m = stdlib::zen_lib_manifest();
-                                    let mut bytes: u64 = 0;
-                                    for (i, item) in list.iter().enumerate() {
-                                        let ip = format!("{p}.{i}");
-                                        match LibRef::from_json(item) {
-                                            Err(e) => err(&ip, e),
-                                            Ok(r @ LibRef::Named { .. }) => match stdlib::find(m, &r) {
-                                                Some(e) => {
-                                                    if libs.iter().any(|x| x == item) {
-                                                        err(&ip, format!("'{}' is listed twice", e.key()));
-                                                    } else {
-                                                        bytes += e.total_bytes();
-                                                        libs.push(item.clone());
-                                                    }
-                                                }
-                                                None => err(
-                                                    &ip,
-                                                    format!(
-                                                        "K2's widget library has no {}; see k2 zen guide libs for what's available",
-                                                        item.as_str().unwrap_or("such library")
-                                                    ),
-                                                ),
-                                            },
-                                            Ok(LibRef::Cdn { url, integrity }) => match stdlib::check_cdn(m, &url, &integrity) {
-                                                Ok(()) => libs.push(item.clone()),
-                                                Err(e) => err(&ip, e),
-                                            },
+                                    // 0.46.5 (WL3–WL7): the one resolver. Its
+                                    // errors stop the version; its warnings
+                                    // (write the line, listed twice, retired)
+                                    // never do. `libs` keeps what was written.
+                                    let r = stdlib::resolve(stdlib::zen_lib_manifest(), list);
+                                    for f in &r.findings {
+                                        let key = f.index.map_or_else(|| p.clone(), |i| format!("{p}.{i}"));
+                                        if f.error {
+                                            err(&key, f.message.clone());
+                                        } else {
+                                            let (l, c) = at(&key);
+                                            warnings.push(Diagnostic {
+                                                suggestion: Some("ask for a line, never a patch: k2 zen guide libs".into()),
+                                                ..d(l, c, f.message.clone())
+                                            });
                                         }
                                     }
-                                    if bytes > m.max_bytes_per_widget {
-                                        err(
-                                            &p,
-                                            format!(
-                                                "these libraries are {bytes} bytes; a widget may load at most {} (8 MB)",
-                                                m.max_bytes_per_widget
-                                            ),
-                                        );
-                                    }
+                                    libs = list.clone();
                                 }
                                 None => err(&p, "requires.libs is a list: \"<id>@<version>\" or {url, integrity}".into()),
                             },
@@ -750,17 +730,22 @@ pub struct Checked {
 /// would load them today, and whether any is a CDN file whose size K2
 /// doesn't know until it is fetched (vs-live L14: counted as 0 with the flag).
 pub fn libs_bytes(libs: &[J]) -> (u64, bool) {
-    let m = stdlib::zen_lib_manifest();
-    let mut bytes = 0;
-    let mut unknown = false;
-    for item in libs {
-        match LibRef::from_json(item) {
-            Ok(r @ LibRef::Named { .. }) => bytes += stdlib::find(m, &r).map_or(0, |e| e.total_bytes()),
-            Ok(LibRef::Cdn { .. }) => unknown = true,
-            Err(_) => {}
-        }
+    let r = stdlib::resolve(stdlib::zen_lib_manifest(), libs);
+    (r.bytes, r.unknown_bytes)
+}
+
+/// The libraries a widget's frame loads, in order (`libKeys`, WL7): the
+/// resolver's exact keys, needs first, every key once; CDN entries as
+/// written. Empty when the list doesn't resolve (the version wouldn't be
+/// good then). `None` when the list doesn't resolve on this K2 (an old saved
+/// copy): the payload then leaves `libKeys` out, so the frame's loader
+/// refuses it loudly instead of loading part of it.
+pub fn lib_keys(libs: &[J]) -> Option<Vec<J>> {
+    let r = stdlib::resolve(stdlib::zen_lib_manifest(), libs);
+    if r.errors().next().is_some() {
+        return None;
     }
-    (bytes, unknown)
+    Some(r.keys)
 }
 
 /// A widget's sizes and their limits, in bytes (prd-widget-size-and-shared-
@@ -971,8 +956,8 @@ pub const EXAMPLES: &[Example] = &[
         ],
     },
     // The 0.46.1 widget SDK: one data source with a handler-object
-    // subscription (re-subscribes on its own), k2.shape guards and a pinned
-    // chart library (uplot@1.6.32); `k2 zen widget new trend --from source-trend`.
+    // subscription (re-subscribes on its own), k2.shape guards and a chart
+    // library by its line (uplot@1, 0.46.5); `k2 zen widget new trend --from source-trend`.
     Example {
         name: "source-trend",
         files: &[
@@ -1195,7 +1180,22 @@ mod tests {
         // handler-object subscription.
         let trend = example("source-trend").expect("source-trend example");
         let manifest = trend.files.iter().find(|(n, _)| *n == "manifest.json").expect("manifest").1;
-        assert!(manifest.contains("\"uplot@1.6.32\""), "{manifest}");
+        assert!(manifest.contains("\"uplot@1\""), "0.46.5: a line, never a patch: {manifest}");
+        // Every example and built-in manifest resolves clean, with no
+        // "write the line" warning (S2: nothing K2 ships teaches a patch).
+        let lib_warnings: Vec<String> = EXAMPLES
+            .iter()
+            .flat_map(|ex| {
+                let files: BTreeMap<String, Vec<u8>> = ex.files.iter().map(|(n, t)| (n.to_string(), t.as_bytes().to_vec())).collect();
+                check_files(&format!("widgets/{}", ex.name), ex.name, &files).warnings
+            })
+            .chain(super::super::builtin_widgets::BUILTIN_WIDGETS.iter().flat_map(|w| {
+                check_files(&format!("builtin:{}", w.id()), w.name, &builtin_files(w)).warnings
+            }))
+            .filter(|d| d.suggestion.as_deref().is_some_and(|s| s.starts_with("ask for a line")))
+            .map(|d| format!("{}: {}", d.file, d.message))
+            .collect();
+        assert!(lib_warnings.is_empty(), "{lib_warnings:?}");
         let js = trend.files.iter().find(|(n, _)| *n == "trend.js").expect("trend.js").1;
         assert!(js.contains("k2.sources.subscribe(source, {") && js.contains("err.retrying") && js.contains("new uPlot("));
         assert!(!js.contains("setInterval") && !js.contains(".innerHTML"), "no hand-rolled retry, no innerHTML");

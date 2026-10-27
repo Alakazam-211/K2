@@ -60,6 +60,11 @@ export interface ZenCustomWidgetPayload {
   reasons: Partial<Record<UserWidgetCap, string>>
   /** `requires.libs` from the manifest, in inline order (UWB13). */
   libs: ZenLibRef[]
+  /** 0.46.5 WL7: what the daemon's resolver says to load, in order: exact
+   *  `<id>@<version>` keys (each library's needs first, every key once) and
+   *  CDN refs as written. The frame loads exactly these; absent from an
+   *  older daemon (then `libs`, through the same resolver here). */
+  libKeys?: ZenLibRef[]
   hash: string
   state: 'ok' | 'errors' | 'broken'
   errors: ZenWidgetFinding[]

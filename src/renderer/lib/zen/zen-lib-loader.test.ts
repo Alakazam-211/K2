@@ -12,6 +12,9 @@ import {
   ZEN_LIB_MANIFEST,
   ZenLibError,
   zenLibCdnProblem,
+  zenLibLineOf,
+  zenLibResolve,
+  zenLibResolveOne,
   type ZenLibDeps,
   type ZenLibEntry,
   type ZenLibManifest,
@@ -29,8 +32,26 @@ function file(name: string, text: string, url?: string) {
   return { name, bytes: Buffer.byteLength(text), sha256: hex(text), ...(url ? { url } : {}) }
 }
 
-function entry(id: string, version: string, files: ReturnType<typeof file>[], source: 'bundled' | 'download' = 'bundled'): ZenLibEntry {
-  return { id, version, title: id.toUpperCase(), global: 'G', license: 'MIT', licenseFile: 'LICENSE.txt', copyright: 'c', source, files }
+function entry(
+  id: string,
+  version: string,
+  files: ReturnType<typeof file>[],
+  source: 'bundled' | 'download' = 'bundled',
+  needs?: string[],
+): ZenLibEntry {
+  return {
+    id,
+    version,
+    line: zenLibLineOf(version),
+    ...(needs ? { needs } : {}),
+    title: id.toUpperCase(),
+    global: 'G',
+    license: 'MIT',
+    licenseFile: 'LICENSE.txt',
+    copyright: 'c',
+    source,
+    files,
+  }
 }
 
 const A1 = 'var A=1'
@@ -41,10 +62,11 @@ const DL = 'var D="</script>"'
 const SRI = `sha384-${'A'.repeat(64)}`
 const CDN_URL = 'https://cdn.jsdelivr.net/npm/x@1.2.3/dist/x.min.js'
 const CDN_TEXT = 'var X=3'
+const KIT = 'var K=A'
 
 function manifest(max = 1024): ZenLibManifest {
   return {
-    schema: 1,
+    schema: 2,
     maxBytesPerWidget: max,
     cdnHosts: ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'unpkg.com'],
     libs: [
@@ -52,6 +74,8 @@ function manifest(max = 1024): ZenLibManifest {
       entry('beta', '0.5.0', [file('b.js', B)]),
       entry('big', '1.0.0', [file('big.js', BIG)]),
       entry('dl', '2.0.0', [file('dl.js', DL, 'https://cdn.jsdelivr.net/npm/dl@2.0.0/dl.js')], 'download'),
+      // 0.46.5 WL3: a library that needs another one.
+      entry('kit', '1.0.0', [file('kit.js', KIT)], 'bundled', ['alpha@1']),
     ],
   }
 }
@@ -61,6 +85,7 @@ const DISK: Record<string, string> = {
   'alpha@1.2.3/a2.js': A2,
   'beta@0.5.0/b.js': B,
   'big@1.0.0/big.js': BIG,
+  'kit@1.0.0/kit.js': KIT,
 }
 
 function deps(over: Partial<ZenLibDeps> = {}, max?: number) {
@@ -124,11 +149,55 @@ describe('zenLib.texts: bundled', () => {
     expect(await lib.texts(['beta@0.5.0'])).toEqual([B])
   })
 
-  it('without SubtleCrypto the size check still runs', async () => {
-    const lib = createZenLib(deps({ sha256: async () => null, readBundled: async () => buf('var B=3') }))
-    expect(await lib.texts(['beta@0.5.0'])).toEqual(['var B=3'])
+  // vs-live L2 (0.46.5): fail closed. Without SubtleCrypto nothing loads,
+  // even bytes of the right size.
+  it('without SubtleCrypto a library is refused, never inlined unchecked', async () => {
+    const same = createZenLib(deps({ sha256: async () => null }))
+    expect(await codeOf(same.texts(['beta@0.5.0']))).toBe('hash_mismatch')
     const short = createZenLib(deps({ sha256: async () => null, readBundled: async () => buf('var B=') }))
     expect(await codeOf(short.texts(['beta@0.5.0']))).toBe('hash_mismatch')
+  })
+
+  it('a library that needs another loads it first, once (WL3)', async () => {
+    const readBundled = vi.fn(async (path: string) => buf(DISK[path]))
+    const lib = createZenLib(deps({ readBundled }))
+    expect(await lib.texts(['kit@1'])).toEqual([`${A1}${ZEN_LIB_FILE_SEPARATOR}${A2}`, KIT])
+    expect(await lib.texts(['alpha@1', 'kit@1'])).toEqual([`${A1}${ZEN_LIB_FILE_SEPARATOR}${A2}`, KIT])
+    // libKeys (exact keys, needs already in) load the same way.
+    expect(await lib.texts(['alpha@1.2.3', 'kit@1.0.0'])).toEqual([`${A1}${ZEN_LIB_FILE_SEPARATOR}${A2}`, KIT])
+  })
+})
+
+/** The shared request → key fixture (WL7): the Rust resolver's tests read
+ *  the same file, so the two can't drift. */
+describe('the one resolver, against the shared fixture', () => {
+  const FIXTURE = JSON.parse(readFileSync(resolve(__dirname, '../../../shared/zen-lib-resolve-cases.json'), 'utf8')) as {
+    manifest: ZenLibManifest
+    cases: Array<{ name: string; libs: unknown[]; keys: unknown[]; warnings: string[]; errors: string[] }>
+    real: Array<{ request: string; line: string; warns: boolean }>
+  }
+
+  it.each(FIXTURE.cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
+    const r = zenLibResolve(c.libs, FIXTURE.manifest)
+    const errors = r.findings.filter((f) => f.error).map((f) => f.message)
+    const warnings = r.findings.filter((f) => !f.error).map((f) => f.message)
+    expect(errors.length, JSON.stringify(errors)).toBe(c.errors.length)
+    c.errors.forEach((want, i) => expect(errors[i]).toContain(want))
+    expect(warnings.length, JSON.stringify(warnings)).toBe(c.warnings.length)
+    c.warnings.forEach((want, i) => expect(warnings[i]).toContain(want))
+    if (errors.length === 0) expect(r.keys).toEqual(c.keys)
+  })
+
+  it('today’s forms against K2’s own manifest keep their line, clean', () => {
+    expect(FIXTURE.real.length).toBeGreaterThan(5)
+    for (const c of FIXTURE.real) {
+      const at = c.request.lastIndexOf('@')
+      const r = zenLibResolveOne(c.request.slice(0, at), c.request.slice(at + 1))
+      if (!('entry' in r)) throw new Error(`${c.request}: ${r.error}`)
+      expect(r.entry.line, c.request).toBe(c.line)
+      expect(r.warning !== null, `${c.request}: ${r.warning}`).toBe(c.warns)
+    }
+    for (const e of ZEN_LIB_MANIFEST.libs) expect(e.line, e.id).toBe(zenLibLineOf(e.version))
   })
 })
 

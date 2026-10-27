@@ -137,6 +137,8 @@ export function parseZenCustomWidget(
     description: str(raw.description),
     reasons: parseReasons(raw.reasons),
     libs: parseLibs(raw.libs),
+    // 0.46.5 WL7: the daemon resolved them; absent from an older daemon.
+    ...(Array.isArray(raw.libKeys) ? { libKeys: parseLibs(raw.libKeys) } : {}),
     hash: str(raw.hash) ?? '',
     state,
     errors: parseFindings(raw.errors),

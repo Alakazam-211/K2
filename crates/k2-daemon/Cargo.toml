@@ -288,6 +288,11 @@ zeroize = "1"
 # K2 vault on macOS (KV5, KV7): the box key in the login Keychain through
 # Security.framework (never /usr/bin/security), and the owner confirm via
 # LocalAuthentication (system-drawn Touch ID / password sheet).
+# Windows: the machine's own addresses for the egress / vault-fetch guard
+# (GetAdaptersAddresses). windows-sys 0.61 is already in Cargo.lock.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 objc2 = "0.6"

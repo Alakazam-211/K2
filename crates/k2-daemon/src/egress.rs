@@ -391,10 +391,71 @@ pub fn own_addresses() -> Vec<IpAddr> {
         }
         out
     }
-    #[cfg(not(unix))]
+    // Windows: every unicast address of every adapter (the loopback
+    // pseudo-interface included), from GetAdaptersAddresses.
+    #[cfg(windows)]
+    {
+        windows_own_addresses()
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         Vec::new()
     }
+}
+
+#[cfg(windows)]
+fn windows_own_addresses() -> Vec<IpAddr> {
+    use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
+        IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR_IN, SOCKADDR_IN6};
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let mut out = Vec::new();
+    let mut len: u32 = 16 * 1024;
+    for _ in 0..4 {
+        // u64 words keep the buffer aligned for IP_ADAPTER_ADDRESSES_LH.
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        let head = buf.as_mut_ptr() as *mut IP_ADAPTER_ADDRESSES_LH;
+        // SAFETY: `buf` holds `len` bytes; the call fills a linked list
+        // that lives inside it, read below while `buf` is alive.
+        let rc = unsafe { GetAdaptersAddresses(AF_UNSPEC as u32, flags, std::ptr::null(), head, &mut len) };
+        if rc == ERROR_BUFFER_OVERFLOW {
+            continue;
+        }
+        if rc != NO_ERROR {
+            return out;
+        }
+        // SAFETY: walking the list GetAdaptersAddresses wrote into `buf`;
+        // each sockaddr is read as the family it says it is.
+        unsafe {
+            let mut a = head;
+            while !a.is_null() {
+                let mut u = (*a).FirstUnicastAddress;
+                while !u.is_null() {
+                    let sa = (*u).Address.lpSockaddr;
+                    if !sa.is_null() {
+                        match (*sa).sa_family {
+                            AF_INET => {
+                                let sin = &*(sa as *const SOCKADDR_IN);
+                                out.push(IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.S_un.S_addr))));
+                            }
+                            AF_INET6 => {
+                                let sin6 = &*(sa as *const SOCKADDR_IN6);
+                                out.push(canonical_ip(IpAddr::V6(std::net::Ipv6Addr::from(sin6.sin6_addr.u.Byte))));
+                            }
+                            _ => {}
+                        }
+                    }
+                    u = (*u).Next;
+                }
+                a = (*a).Next;
+            }
+        }
+        return out;
+    }
+    out
 }
 
 #[cfg(test)]

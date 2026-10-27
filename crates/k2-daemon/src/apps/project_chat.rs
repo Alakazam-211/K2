@@ -301,7 +301,18 @@ pub fn handle_pass(path: &str, pass: &SkinPass, params: &HashMap<String, String>
                 return usage("name the project: group=<groupId from project.list>");
             }
             match visible_group(pass, sel) {
-                Ok(Some((g, _))) => crate::project_group_routes::messages_read(&g.id, params),
+                Ok(Some((g, _))) => {
+                    // 0.46.5 (item 14): an agent line stored with its
+                    // folder as `author` reads as the workspace's name.
+                    let mut r = crate::project_group_routes::messages_read(&g.id, params);
+                    if r.status.starts_with("200") {
+                        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&r.body) {
+                            crate::guest_paths::project_authors(&mut v);
+                            r.body = v.to_string();
+                        }
+                    }
+                    r
+                }
                 Ok(None) => hidden(),
                 Err(e) => CliResponse::internal_error(e),
             }
@@ -455,14 +466,16 @@ pub fn subscribe() -> broadcast::Receiver<ProjectGroupMessage> {
 
 /// The wire frame of one line: a Thread frame's shape plus `groupId`.
 pub fn frame_wire(msg: &ProjectGroupMessage) -> String {
-    json!({
+    let mut v = json!({
         "collection": COLLECTION,
         "seq": msg.seq,
         "id": msg.id,
         "groupId": msg.group_id,
         "doc": msg,
-    })
-    .to_string()
+    });
+    // 0.46.5 (item 14): App sockets never carry a host path as `author`.
+    crate::guest_paths::project_authors(&mut v["doc"]);
+    v.to_string()
 }
 
 async fn refuse_http(stream: &mut TcpStream, r: CliResponse) {

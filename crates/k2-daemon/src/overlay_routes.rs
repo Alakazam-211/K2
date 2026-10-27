@@ -450,10 +450,23 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
                     "no pinned Chat conversation for '{addr}'"
                 )));
             };
+            // 0.46.5 (item 14): a workspace named by its folder answers at
+            // its address name, never the folder: `addr` becomes a stored
+            // sender/recipient (`post_workspace_note`, an unbound post's
+            // room handle), and App guests read those. `requested_addr`
+            // keeps what the caller sent.
+            let room_addr = if crate::guest_paths::is_host_path(addr) {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::workspace_session_handles::workspace_address_name(&conn, &project_id)
+                    .unwrap_or_else(|_| addr.to_string())
+            } else {
+                addr.to_string()
+            };
             Ok(ResolvedOverlay {
                 conversation_id,
                 project_id,
-                addr: addr.to_string(),
+                addr: room_addr,
                 requested_addr: addr.to_string(),
                 canonical_alias: true,
             })
@@ -583,6 +596,12 @@ fn thread_items_view(
         .collect();
     let mut v = serde_json::to_value(visible).unwrap_or_else(|_| serde_json::json!([]));
     crate::thread_attachments::rewrite_items(&mut v, &resolved.project_id, pass);
+    // 0.46.5 (item 14): an App guest never sees a host path (a system
+    // line stored with the workspace's folder as its sender, before the
+    // source fix in `resolve_addr`).
+    if pass.is_some() {
+        crate::guest_paths::GuestScrub::for_room(&resolved.project_id).items(&mut v);
+    }
     v
 }
 
@@ -948,8 +967,8 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
             let window = if guest { THREAD_LATEST_GUEST_WINDOW } else { 1 };
             match overlay::read_thread_page(&resolved.conversation_id, None, None, window) {
                 Ok(page) => match page.items.iter().rev().find(|i| !guest || !i.doc.is_action_card()).map(|i| seen.item(i)) {
-                    Some(item) => with_read(
-                        serde_json::json!({
+                    Some(item) => {
+                        let mut row = serde_json::json!({
                             "addr": addr,
                             "conversationId": resolved.conversation_id,
                             "seq": item.seq,
@@ -961,9 +980,13 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
                             "preview": thread_preview(&item.doc),
                             // thread-attachments-v1: a count only.
                             "attachmentCount": item.doc.attachments.len(),
-                        }),
-                        &resolved.conversation_id,
-                    ),
+                        });
+                        // 0.46.5 (item 14): no host path in a guest's preview.
+                        if guest {
+                            crate::guest_paths::GuestScrub::for_room(&resolved.project_id).doc(&mut row);
+                        }
+                        with_read(row, &resolved.conversation_id)
+                    }
                     None => with_read(
                         serde_json::json!({
                             "addr": addr,

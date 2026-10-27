@@ -385,6 +385,18 @@ pub(crate) struct GuestWire {
     pub pass: SkinPass,
     pub project_id: String,
     pub root: Option<std::path::PathBuf>,
+    /// 0.46.5 (item 14): the room's folder → its name, for every doc frame.
+    pub scrub: crate::guest_paths::GuestScrub,
+}
+
+impl GuestWire {
+    /// A guest subscriber in `project_id` (reads the database: the room's
+    /// folder and name).
+    pub(crate) fn for_room(pass: SkinPass, project_id: String) -> Self {
+        let root = crate::thread_attachments::project_root(&project_id);
+        let scrub = crate::guest_paths::GuestScrub::for_room(&project_id);
+        Self { pass, project_id, root, scrub }
+    }
 }
 
 /// [`wire_json`] for one subscriber. A doc with attachments is rewritten:
@@ -430,6 +442,15 @@ fn wire_json_projected(frame: &OverlayFrame, guest: Option<&GuestWire>) -> Strin
         let unstamped = OverlayFrame { rev: 0, ..frame.clone() };
         return wire_json_projected(&unstamped, guest);
     }
+    let out = wire_json_files(frame, guest);
+    // 0.46.5 (item 14): a guest's doc frames never carry a host path.
+    match guest {
+        Some(g) if frame.doc.is_some() => g.scrub.frame_json(out),
+        _ => out,
+    }
+}
+
+fn wire_json_files(frame: &OverlayFrame, guest: Option<&GuestWire>) -> String {
     let has_files = frame.doc.as_ref().is_some_and(|d| !d.attachments.is_empty());
     if !has_files || frame.activity.is_some() {
         return wire_json(frame);
@@ -605,8 +626,7 @@ pub async fn serve_overlay_events_connection(
     if let Some(ref pass) = skin_pass {
         match skin_overlay_gate(pass, &conversation) {
             Ok(project_id) => {
-                let root = crate::thread_attachments::project_root(&project_id);
-                guest_wire = Some(GuestWire { pass: pass.clone(), project_id, root });
+                guest_wire = Some(GuestWire::for_room(pass.clone(), project_id));
             }
             Err(r) => {
                 let resp = format!(
@@ -1155,7 +1175,7 @@ mod tests {
             app: String::new(),
             room_paths: Default::default(),
         };
-        let guest = GuestWire { pass, project_id: "p".into(), root: None };
+        let guest = GuestWire { pass, project_id: "p".into(), root: None, scrub: Default::default() };
         let g: serde_json::Value = serde_json::from_str(&wire_json_for(&revs[2], Some(&guest), &crate::permission::view::Seen::new(k2_core::permission::card::Viewer::Guest { app: None }, 0))).expect("json");
         assert!(g.get("rev").is_none(), "a guest frame carries no rev: {g}");
         assert_eq!(g["id"], "d2", "{g}");

@@ -1540,7 +1540,18 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
                         ),
                     );
                 }
-                (author.to_string(), Some(workspace_id))
+                // 0.46.5 (item 14): an agent that named itself by its
+                // folder is stored under the workspace's address name, so
+                // no reader (App guests included) gets a host path.
+                let stored = if crate::guest_paths::is_host_path(author) {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    k2_core::workspace_session_handles::workspace_address_name(&conn, &workspace_id)
+                        .unwrap_or_else(|_| author.to_string())
+                } else {
+                    author.to_string()
+                };
+                (stored, Some(workspace_id))
             }
         }
     };

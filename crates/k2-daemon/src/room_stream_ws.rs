@@ -445,8 +445,7 @@ fn guest_doc(raw: &str, link: Option<&LinkCtx>, frame: &OverlayFrame, room: &str
     if !still_pinned {
         return Ok(None);
     }
-    let root = crate::thread_attachments::project_root(room);
-    let wire = GuestWire { pass, project_id: room.to_string(), root };
+    let wire = GuestWire::for_room(pass, room.to_string());
     let seen = crate::permission::view::Seen::new(k2_core::permission::card::Viewer::Guest { app: None }, 0);
     Ok(Some(doc_for(frame, Some(&wire), &seen)))
 }

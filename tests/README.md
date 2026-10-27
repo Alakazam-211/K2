@@ -40,7 +40,7 @@ bash tests/behavior-test-tier3.sh
 # 1. Point TEST_WORKSPACE at a git-initialized dir. Default is
 #    /Users/z3thon/DevProjects/k2so-cli-test.
 # 2. Register that path in the projects table:
-sqlite3 ~/.k2so/k2so.db "INSERT OR REPLACE INTO projects \
+sqlite3 ~/.k2/k2.db "INSERT OR REPLACE INTO projects \
     (id, path, name, color, agent_mode, pinned, tab_order, heartbeat_mode) \
     VALUES ('cli-test', '$TEST_WORKSPACE', 'cli-test', \
     '#888', 'manager', 0, 99, 'heartbeat')"

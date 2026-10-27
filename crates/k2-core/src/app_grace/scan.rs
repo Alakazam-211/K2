@@ -243,6 +243,17 @@ fn scan_text(rep: &mut ScanReport, rel: &str, ext: &str, is_pkg: bool, text: &st
             push_path(rep, what, rel, line_of(text, at));
         }
     }
+    // `k2.db` (the home DB's name from 0.46.6) as a file name, not the SDK
+    // object `k2.db.query(…)` / `k2.db(…)`: no identifier character or `.`
+    // before it, and none of identifier / `.` / `(` after it.
+    if let Some(at) = find_all(text, "k2.db").find(|&i| {
+        let before = i.checked_sub(1).map(|j| b[j]);
+        let after = b.get(i + "k2.db".len()).copied();
+        !before.is_some_and(|c| is_ident(c) || c == b'.')
+            && !after.is_some_and(|c| is_ident(c) || c == b'.' || c == b'(')
+    }) {
+        push_path(rep, "k2_database", rel, line_of(text, at));
+    }
     if !is_pkg {
         form_posts(rep, rel, text);
     }
@@ -726,6 +737,29 @@ mod tests {
         let whats: Vec<(&str, u32)> = r.k2_paths.iter().map(|p| (p.what.as_str(), p.line)).collect();
         assert!(whats.contains(&("daemon_port_file", 2)), "{whats:?}");
         assert!(whats.contains(&("owner_token_file", 3)), "{whats:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The home DB under its 0.46.6 name is found; the SDK's `k2.db.*`
+    /// calls are not a file reference.
+    #[test]
+    fn finds_k2_db_file_but_not_sdk_calls() {
+        let d = tmp();
+        std::fs::create_dir_all(d.join("lib")).unwrap();
+        std::fs::write(
+            d.join("lib/sdk.ts"),
+            "const {rows} = await k2.db.query({workspace, sql});\nawait k2.db({x});\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("lib/peek.ts"),
+            "// nothing here\nconst db = new Database(home + '/.k2/k2.db');\n",
+        )
+        .unwrap();
+        let r = scan_folder(&d, "node lib/peek.js");
+        let found: Vec<(&str, &str, u32)> =
+            r.k2_paths.iter().map(|p| (p.what.as_str(), p.file.as_str(), p.line)).collect();
+        assert_eq!(found, vec![("k2_database", "lib/peek.ts", 2)], "{found:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

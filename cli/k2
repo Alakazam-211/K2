@@ -150,10 +150,12 @@ _thread_md_nudge() {
 }
 
 # Same policy as k2_core::db::resolve_home_db_path.
-# Stage A: prefer k2.db if it exists, else k2so.db.
-# Both real files: pick the one with more live workspaces so a stub k2.db
-# cannot hide k2so.db. Never create k2.db here. Stage B symlink k2so.db →
-# k2.db is not a "both real" case.
+# Stage B (0.46.6): the daemon renames k2so.db to k2.db at boot and leaves
+# a k2so.db -> k2.db symlink, so this normally returns k2.db.
+# Before that (or when the rename was deferred / refused): both real files
+# → the one with more live workspaces (a stub k2.db cannot hide k2so.db);
+# else k2.db if it exists, else k2so.db if it exists, else k2.db. Never
+# creates either file.
 _k2_home_db() {
     local new="$K2_HOME/k2.db"
     local old="$K2_HOME/k2so.db"
@@ -189,7 +191,7 @@ _k2_home_db() {
         echo "$old"
         return
     fi
-    if [ -e "$new" ]; then
+    if [ -e "$new" ] || [ ! -e "$old" ]; then
         echo "$new"
     else
         echo "$old"

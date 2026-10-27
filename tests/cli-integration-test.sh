@@ -1028,7 +1028,7 @@ fi
 # /cli/msg wrote event_type='message.received'; the awareness
 # primitive writes event_type='signal:msg' for every signal it
 # delivers. See k2so_core::awareness::egress::write_audit_event.
-MSG_COUNT=$(sqlite3 ~/.k2so/k2so.db "SELECT COUNT(*) FROM activity_feed WHERE event_type LIKE 'signal:%' AND to_agent = 'test-frontend';" 2>/dev/null || echo "0")
+MSG_COUNT=$(sqlite3 ~/.k2/k2.db "SELECT COUNT(*) FROM activity_feed WHERE event_type LIKE 'signal:%' AND to_agent = 'test-frontend';" 2>/dev/null || echo "0")
 if [ "$MSG_COUNT" -gt 0 ]; then
     pass "msg stored in DB activity_feed ($MSG_COUNT messages)"
 else

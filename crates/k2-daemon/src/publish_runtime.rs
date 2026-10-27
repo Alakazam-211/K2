@@ -2122,7 +2122,7 @@ pub fn spawn() -> thread::JoinHandle<()> {
 }
 
 #[cfg(windows)]
-mod win_job {
+pub(crate) mod win_job {
     use std::os::windows::io::AsRawHandle;
     use std::os::windows::process::CommandExt;
     use std::process::{Child, Command};

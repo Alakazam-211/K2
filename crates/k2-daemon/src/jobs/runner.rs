@@ -1,9 +1,8 @@
 //! One `k2 job` run: passport, vault delivery, process, timeout, log.
 
 use std::collections::HashMap;
-use std::fs::{DirBuilder, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+#[cfg(unix)]
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -30,7 +29,39 @@ pub fn jobs_dir() -> PathBuf {
 }
 
 fn private_dir(d: &Path) -> std::io::Result<()> {
-    DirBuilder::new().recursive(true).mode(0o700).create(d)
+    k2_core::private_fs::create_private_dir_all(d)
+}
+
+/// What a run's processes share, so they stop together. Unix: the run's
+/// own process group (`killpg`). Windows: a Job Object with
+/// KILL_ON_JOB_CLOSE; there is no console to send Ctrl+Break to, so
+/// "terminate" ends the job at once, and a daemon that dies takes its
+/// runs with it (the job handle closes).
+struct Group {
+    #[cfg(unix)]
+    pgid: i32,
+    #[cfg(windows)]
+    job: crate::publish_runtime::win_job::Job,
+}
+
+impl Group {
+    fn term(&self) {
+        #[cfg(unix)]
+        unsafe {
+            libc::killpg(self.pgid, libc::SIGTERM);
+        }
+        #[cfg(windows)]
+        self.job.terminate();
+    }
+
+    fn kill(&self) {
+        #[cfg(unix)]
+        unsafe {
+            libc::killpg(self.pgid, libc::SIGKILL);
+        }
+        #[cfg(windows)]
+        self.job.terminate();
+    }
 }
 
 /// Start a run of `job` now. `trigger`: schedule | catchup | manual.
@@ -88,7 +119,12 @@ pub fn start_run(job: &Job, trigger: &str, started_by: &str) -> Result<String, J
                 .spawn(move || supervise(job, live2, started));
             if let Err(e) = r {
                 // The run can't be watched: stop it now rather than leave it loose.
-                unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+                // (Windows: the dropped closure closed the run's job, which
+                // killed it.)
+                #[cfg(unix)]
+                unsafe {
+                    libc::killpg(pid as i32, libc::SIGKILL)
+                };
                 finish(&live, None, "spawn_failed", None, 0);
                 return Err(JobError::new("spawn_failed", 500, format!("couldn't watch the run: {e}")));
             }
@@ -107,6 +143,7 @@ pub fn start_run(job: &Job, trigger: &str, started_by: &str) -> Result<String, J
 
 struct Started {
     child: std::process::Child,
+    group: Group,
     sink: Arc<Mutex<Sink>>,
     readers: Vec<std::thread::JoinHandle<()>>,
     materialized: crate::vault::spawn::Materialized,
@@ -200,12 +237,7 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
     if let Some(parent) = log_path.parent() {
         private_dir(parent).map_err(|e| (JobError::new("log_failed", 500, format!("log folder: {}", e.kind())), None))?;
     }
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(log_path)
+    let file = k2_core::private_fs::create_new_private_file(log_path)
         .map_err(|e| (JobError::new("log_failed", 500, format!("log file: {}", e.kind())), None))?;
     let passport = crate::session_token::mint_job_passport(&live.session_id, &job.workspace_id, &job.name);
     let mut env = job_env(job, &root, &live.run_id, &passport);
@@ -221,9 +253,18 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
         .envs(&env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    let mut child = match cmd.spawn() {
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    let spawned = {
+        cmd.process_group(0);
+        cmd.spawn().map(|c| {
+            let pgid = c.id() as i32;
+            (c, Group { pgid })
+        }).map_err(|e| e.to_string())
+    };
+    #[cfg(windows)]
+    let spawned = crate::publish_runtime::win_job::spawn_in_job(&mut cmd).map(|(c, job)| (c, Group { job }));
+    let (mut child, group) = match spawned {
         Ok(c) => c,
         Err(e) => {
             crate::session_token::revoke_job_passport(&live.session_id);
@@ -240,7 +281,7 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
         let redactor = redactor.clone();
         readers.push(std::thread::spawn(move || pump(pipe, &redactor, &sink)));
     }
-    Ok(Started { child, sink, readers, materialized: mat })
+    Ok(Started { child, group, sink, readers, materialized: mat })
 }
 
 /// The capped log. Bytes past the cap are counted, not kept.
@@ -295,7 +336,6 @@ fn pump(mut pipe: Box<dyn Read + Send>, redactor: &k2_vault::redact::Redactor, s
 
 /// Wait for the run, enforce the timeout and the kill switch, then clean up.
 fn supervise(job: Job, live: Arc<Live>, mut s: Started) {
-    let pgid = s.child.id() as i32;
     let deadline = Instant::now() + Duration::from_secs(job.timeout_secs);
     let mut term_at: Option<Instant> = None;
     let mut reason: Option<&'static str> = None;
@@ -320,16 +360,16 @@ fn supervise(job: Job, live: Arc<Live>, mut s: Started) {
             if let Some(w) = why {
                 reason = Some(w);
                 term_at = Some(now);
-                unsafe { libc::killpg(pgid, libc::SIGTERM) };
+                s.group.term();
             }
         } else if term_at.is_some_and(|t| now.duration_since(t) >= KILL_GRACE) {
-            unsafe { libc::killpg(pgid, libc::SIGKILL) };
+            s.group.kill();
         }
         std::thread::sleep(POLL);
     };
     // Anything the job left behind in its group goes with it (and lets the
     // pipes close so the log readers finish).
-    unsafe { libc::killpg(pgid, libc::SIGKILL) };
+    s.group.kill();
     for r in s.readers.drain(..) {
         let _ = r.join();
     }
@@ -349,7 +389,10 @@ fn supervise(job: Job, live: Arc<Live>, mut s: Started) {
     };
     let _ = capped;
     let code = status.and_then(|st| st.code()).map(|c| c as i64);
+    #[cfg(unix)]
     let signal = status.and_then(|st| st.signal());
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
     let outcome = match (reason, code) {
         (Some(r), _) => r,
         (None, Some(0)) => "ok",
@@ -406,7 +449,10 @@ pub fn stop_leftover_group(pid: i64, run_id: &str) {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let ours = false;
     if ours {
-        unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+        #[cfg(unix)]
+        unsafe {
+            libc::killpg(pid as i32, libc::SIGKILL)
+        };
         log_debug!("[jobs] boot: stopped run {run_id}'s leftover processes");
     }
 }
@@ -434,7 +480,7 @@ mod tests {
         let root = t.path().join("ws");
         std::fs::create_dir_all(root.join("scripts")).expect("mkdir");
         std::fs::create_dir_all(t.path().join("outside")).expect("mkdir");
-        std::os::unix::fs::symlink(t.path().join("outside"), root.join("escape")).expect("symlink");
+        k2_core::test_env::symlink(t.path().join("outside"), root.join("escape")).expect("symlink");
         let canon = std::fs::canonicalize(&root).expect("canon");
         assert_eq!(run_dir(&root, "").expect("root"), canon);
         assert_eq!(run_dir(&root, "scripts").expect("sub"), canon.join("scripts"));

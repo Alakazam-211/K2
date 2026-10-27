@@ -445,6 +445,46 @@ fn systemctl_show(prop: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The marker of the unit line that lets systemd stop a hand-off successor
+/// gracefully: `ExecStop=/bin/sh -c '…kill -TERM "$MAINPID"; wait…' k2-wait-mainpid`.
+pub const WAIT_MAINPID_MARKER: &str = "k2-wait-mainpid";
+
+/// The `ExecStop=` line every K2 daemon unit carries (and what the marker
+/// stands for). A hand-off successor is not systemd's child, so systemd
+/// can't wait for it: a stop or restart sends SIGTERM and SIGKILL at once
+/// (journal: "Supervising process … which is not our child", then "Killing
+/// … with signal SIGKILL"; systemd 255, MAINPIDFD makes no difference). The
+/// successor never runs its shutdown — no k2-ptyd stop-vs-restart decision,
+/// so a stop leaves agents running, no saved screens, frpc not released.
+/// systemd DOES wait for its own ExecStop process: this one SIGTERMs the
+/// main process and waits until it is gone, for a child or not.
+pub const EXEC_STOP_WAIT_MAINPID: &str =
+    "ExecStop=/bin/sh -c 'kill -TERM \"$$MAINPID\" 2>/dev/null; while kill -0 \"$$MAINPID\" 2>/dev/null; do sleep 0.2; done' k2-wait-mainpid";
+
+/// Pure part of [`unit_waits_for_main`]: the unit's `ExecStop` property
+/// carries the marker.
+pub fn exec_stop_waits_for_main(exec_stop_prop: &str) -> bool {
+    exec_stop_prop.contains(WAIT_MAINPID_MARKER)
+}
+
+/// The unit's ExecStop waits for the main process (see
+/// [`EXEC_STOP_WAIT_MAINPID`]). Re-read on every call (unit files change).
+fn unit_waits_for_main() -> bool {
+    systemctl_show("ExecStop").is_some_and(|v| exec_stop_waits_for_main(&v))
+}
+
+/// Under systemd, a hand-off needs a unit that waits for its successor at
+/// stop ([`EXEC_STOP_WAIT_MAINPID`]); without it a hand-off request
+/// (`systemctl reload` → SIGUSR2) is a plain graceful restart instead: this
+/// daemon exits as for any restart (k2-ptyd sessions are detached and kept,
+/// §7.6 — a reload job is not a stop), `Restart=always` (every shipped
+/// unit) starts the binary at the unit's path again, and it adopts the
+/// agents. Only frpc/Caddy/App listeners restart; ptyd still holds the
+/// main listener, so agents' calls queue (S5).
+pub fn plain_restart_instead() -> bool {
+    under_systemd() && !unit_waits_for_main()
+}
+
 /// Can this daemon hand off right now? `Err` says why not (and what fixes
 /// it). The caller then falls back to a plain restart.
 pub fn capable() -> Result<(), String> {
@@ -463,6 +503,12 @@ pub fn capable() -> Result<(), String> {
              (frpc, published services and skin helpers already survive it there)"
                 .into(),
         );
+    }
+    if plain_restart_instead() {
+        return Err(format!(
+            "the systemd unit has no ExecStop that waits for the main process ({WAIT_MAINPID_MARKER}), so it \
+             couldn't stop a hand-off successor gracefully — a plain restart instead (agents keep running in k2-ptyd)"
+        ));
     }
     if under_systemd() && notify_socket().is_none() {
         return Err(

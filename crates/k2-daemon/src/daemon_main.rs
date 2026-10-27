@@ -978,6 +978,14 @@ async fn async_main() {
                 };
                 match crate::handoff::start(exe, Some(shutdown_tx.clone())) {
                     Ok(()) => log_debug!("[daemon/handoff] SIGUSR2: hand-off started"),
+                    // A unit that couldn't stop a successor gracefully:
+                    // `reload` becomes a graceful restart (Restart=always
+                    // brings the binary at the unit's path back; k2-ptyd
+                    // keeps the agents for it to adopt).
+                    Err(e) if crate::handoff::plain_restart_instead() => {
+                        log_debug!("[daemon/handoff] SIGUSR2: {e}; restarting");
+                        let _ = shutdown_tx.send(());
+                    }
                     Err(e) => log_debug!("[daemon/handoff] SIGUSR2: hand-off refused: {e}"),
                 }
             }

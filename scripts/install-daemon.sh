@@ -339,6 +339,12 @@ RestartSec=2
 # (<unit>.d/k2-handoff.conf) carries the same line, plus NotifyAccess=main
 # and ExecReload=SIGUSR2 for the no-downtime systemctl reload.
 KillMode=process
+# A hand-off successor (systemctl reload) is not systemd's child: systemd
+# can't wait for it and would SIGKILL it at stop/restart, skipping its
+# graceful shutdown (k2-ptyd: a stop must end agents, a restart keeps
+# them). systemd waits for its own ExecStop: SIGTERM the main process
+# and wait until it is gone. The daemon hands off only with this line.
+ExecStop=/bin/sh -c 'kill -TERM "\$\$MAINPID" 2>/dev/null; while kill -0 "\$\$MAINPID" 2>/dev/null; do sleep 0.2; done' k2-wait-mainpid
 # Agents run in this unit's cgroup. The default OOMPolicy=stop turns one
 # OOM-killed agent into a stop + restart of the whole daemon; continue lets
 # only that process die. (The stage H drop-in carries the same line.)

@@ -125,6 +125,12 @@ OOMPolicy=continue
 # (<unit>.d/k2-handoff.conf) carries the same line, plus NotifyAccess=main
 # and ExecReload=SIGUSR2 for the no-downtime systemctl reload.
 KillMode=process
+# A hand-off successor (systemctl reload) is not systemd's child: systemd
+# can't wait for it and would SIGKILL it at stop/restart, skipping its
+# graceful shutdown (k2-ptyd: a stop must end agents, a restart keeps
+# them). systemd waits for its own ExecStop: SIGTERM the main process
+# and wait until it is gone. The daemon hands off only with this line.
+ExecStop=/bin/sh -c 'kill -TERM "$$MAINPID" 2>/dev/null; while kill -0 "$$MAINPID" 2>/dev/null; do sleep 0.2; done' k2-wait-mainpid
 # The unit's own runtime dir (/run/k2; XDG_RUNTIME_DIR/k2 for a user unit)
 # holds frpc.toml and agents' secret files: systemd-logind deletes
 # /run/user/<uid> and the user's /dev/shm files when their last login

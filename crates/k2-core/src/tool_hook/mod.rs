@@ -437,6 +437,8 @@ static RECONCILE_WANTED: AtomicBool = AtomicBool::new(false);
 /// waits). Called after every commit that enqueued ops.
 pub fn kick() {
     notify().notify_one();
+    // S31: a chat grant change may start or stop an agent's delivery hub.
+    crate::sew_chat::hub::kick();
 }
 
 /// K31: after a chat grant change, ask for a sweep only when some Space

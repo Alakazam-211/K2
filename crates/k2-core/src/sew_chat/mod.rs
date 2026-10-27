@@ -13,6 +13,8 @@
 //! Routes, caller identity and the Sew seam live in k2-daemon
 //! (`sew_chat::routes`).
 
+/// The chat delivery hub's pure half and store (S31 K22).
+pub mod hub;
 pub mod person;
 pub mod store;
 /// What agents are taught about `k2 chat` / `k2 hostchat` (K21 gates).

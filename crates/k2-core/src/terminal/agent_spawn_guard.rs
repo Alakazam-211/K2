@@ -230,6 +230,17 @@ fn resolve_in_shim_dirs(program: &str, dirs: &[PathBuf]) -> Result<String, Strin
         ));
     };
     for dir in dirs {
+        // Windows: a shim is `name.exe` (an sh script beside it, run by
+        // k2_core::test_env's shim runner); prefer the runnable file.
+        #[cfg(windows)]
+        {
+            let mut exe = name.to_os_string();
+            exe.push(".exe");
+            let cand = dir.join(exe);
+            if cand.is_file() {
+                return Ok(cand.to_string_lossy().into_owned());
+            }
+        }
         let cand = dir.join(name);
         if cand.is_file() {
             return Ok(cand.to_string_lossy().into_owned());
@@ -283,7 +294,17 @@ fn is_os_system_bin(p: &Path) -> bool {
         };
         SYSTEM_BIN.iter().any(|d| Path::new(d) == parent)
     }
-    #[cfg(not(unix))]
+    // Windows: %SystemRoot%\System32 (TrustedInstaller-owned, like /bin).
+    #[cfg(windows)]
+    {
+        let Some(parent) = p.parent() else {
+            return false;
+        };
+        let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        let sys = root.join("System32");
+        parent.as_os_str().eq_ignore_ascii_case(sys.as_os_str())
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = p;
         false

@@ -2409,7 +2409,8 @@ mod tests {
 
     fn listener_cmd(port: u16) -> String {
         format!(
-            "python3 -c \"import socket,itertools; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',{port})); s.listen(8); [s.accept()[0].close() for _ in itertools.count()]\""
+            "{py} -c \"import socket,itertools; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',{port})); s.listen(8); [s.accept()[0].close() for _ in itertools.count()]\"",
+            py = k2_core::test_env::PYTHON
         )
     }
 
@@ -2423,7 +2424,7 @@ mod tests {
     }
 
     fn python_ok() -> bool {
-        Command::new("python3")
+        Command::new(k2_core::test_env::PYTHON)
             .arg("-c")
             .arg("print(1)")
             .stdout(Stdio::null())

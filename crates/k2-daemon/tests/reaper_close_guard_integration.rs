@@ -45,9 +45,10 @@ fn uniq_agent_name() -> String {
 /// test (a long `sleep`) so `is_child_alive()` holds and the session
 /// is a legitimate reap target.
 fn spawn_live_session() -> std::sync::Arc<DaemonPtySession> {
+    let (program, args) = k2_core::test_env::sleep_command(60);
     let cfg = DaemonPtyConfig {
-        program: Some("/bin/sleep".to_string()),
-        args: vec!["60".to_string()],
+        program: Some(program),
+        args,
         ..Default::default()
     };
     DaemonPtySession::spawn(cfg).expect("spawn sleep PTY")

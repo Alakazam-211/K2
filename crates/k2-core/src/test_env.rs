@@ -425,14 +425,15 @@ fn write_executable_unix(path: &Path, contents: &str) {
 /// list) while the guard lives. Holds [`lock`]. Any test that makes the
 /// daemon spawn an agent (an explicit `claude`, or a workspace default
 /// agent) needs one: test builds refuse real agent CLIs.
-#[cfg(unix)]
+///
+/// On Windows each shim is an sh script plus its `.exe` runner
+/// ([`write_executable`]), so the same bodies work there.
 #[must_use = "the shims are unregistered when the guard drops"]
 pub struct AgentShim {
     dir: PathBuf,
     _var: EnvVar,
 }
 
-#[cfg(unix)]
 impl AgentShim {
     /// Install the default `exec cat` shims.
     pub fn install() -> Self {
@@ -465,7 +466,6 @@ impl AgentShim {
     }
 }
 
-#[cfg(unix)]
 impl Drop for AgentShim {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
@@ -967,23 +967,16 @@ fn bind_plain(v6: bool, port: u16) -> std::io::Result<(std::os::fd::OwnedFd, lib
 /// (0700); pass [`DaemonRuntime::envs`] to the daemon `Command`. On drop it
 /// kills any frpc (real or fake) still running with a config under `root`
 /// — declare it BEFORE the daemon child so the child is killed first.
-#[cfg(unix)]
 #[must_use = "the frpc reap runs when the guard drops"]
 pub struct DaemonRuntime {
     root: PathBuf,
 }
 
-#[cfg(unix)]
 impl DaemonRuntime {
     pub fn new(root: &Path) -> Self {
-        use std::os::unix::fs::DirBuilderExt;
         for d in ["tmp", "run"] {
             let p = root.join(d);
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&p)
-                .unwrap_or_else(|e| panic!("create {}: {e}", p.display()));
+            crate::private_fs::create_private_dir_all(&p).unwrap_or_else(|e| panic!("create {}: {e}", p.display()));
         }
         Self { root: root.to_path_buf() }
     }
@@ -992,12 +985,22 @@ impl DaemonRuntime {
     /// `K2_RUNTIME_DIR` and `RUNTIME_DIRECTORY` (so an override, or the
     /// daemon unit's `/run/k2` an agent inherits, cannot win).
     pub fn envs(&self) -> Vec<(&'static str, OsString)> {
-        vec![
+        #[allow(unused_mut)]
+        let mut v = vec![
             ("TMPDIR", self.root.join("tmp").into_os_string()),
             ("XDG_RUNTIME_DIR", self.root.join("run").into_os_string()),
             (crate::runtime_dir::RUNTIME_DIR_ENV, OsString::new()),
             (crate::runtime_dir::SYSTEMD_RUNTIME_DIRECTORY_ENV, OsString::new()),
-        ]
+        ];
+        // Windows' per-user temp dir (std::env::temp_dir) comes from TMP,
+        // then TEMP: both point under the root so the runtime and secrets
+        // dirs are the test daemon's own.
+        #[cfg(windows)]
+        {
+            v.push(("TMP", self.root.join("tmp").into_os_string()));
+            v.push(("TEMP", self.root.join("tmp").into_os_string()));
+        }
+        v
     }
 
     pub fn root(&self) -> &Path {
@@ -1005,11 +1008,26 @@ impl DaemonRuntime {
     }
 }
 
-#[cfg(unix)]
 impl Drop for DaemonRuntime {
     fn drop(&mut self) {
         reap_frpc_under(&self.root);
     }
+}
+
+/// Windows: stop every process whose command line runs frpc with a config
+/// under `root` (a test daemon's frpc, or a fake one), via PowerShell's
+/// CIM process list.
+#[cfg(windows)]
+pub fn reap_frpc_under(root: &Path) {
+    let r = root.display().to_string().replace('\'', "''");
+    let script = format!(
+        "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*frpc*-c*' -and $_.CommandLine -like '*{r}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+    );
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 /// SIGKILL every process launched as `… frpc -c <root>/…` (a test daemon's
@@ -1069,6 +1087,27 @@ pub fn symlink(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Res
                 format!("symlink {} -> {}: {e} (Windows needs an administrator or Developer Mode)", link.display(), target.display()),
             )
         })
+    }
+}
+
+/// The Python 3 command a test runs: `python3` on Unix; `python` on
+/// Windows, where `python3` is usually the Microsoft Store stub.
+pub const PYTHON: &str = if cfg!(windows) { "python" } else { "python3" };
+
+/// A system program that runs about `secs` seconds and exits 0, as
+/// `(program, args)`: `sleep N` on Unix; on Windows System32's `PING.EXE
+/// -n N+1 127.0.0.1` (one echo a second; Windows has no `sleep`), which the
+/// temp-HOME spawn belt allows as it allows /bin/sleep.
+pub fn sleep_command(secs: u32) -> (String, Vec<String>) {
+    #[cfg(windows)]
+    {
+        let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        let ping = root.join("System32").join("PING.EXE");
+        (ping.display().to_string(), vec!["-n".into(), (secs + 1).to_string(), "127.0.0.1".into()])
+    }
+    #[cfg(not(windows))]
+    {
+        ("sleep".into(), vec![secs.to_string()])
     }
 }
 

@@ -697,8 +697,8 @@ mod tests {
         rt.block_on(async {
             k2_core::db::init_for_tests();
             let session = DaemonPtySession::spawn(DaemonPtyConfig {
-                program: Some("/bin/sleep".to_string()),
-                args: vec!["30".to_string()],
+                program: Some(k2_core::test_env::sleep_command(30).0),
+                args: k2_core::test_env::sleep_command(30).1,
                 ..Default::default()
             })
             .expect("spawn sleep PTY for force_teardown test");

@@ -2538,7 +2538,8 @@ mod tests {
     }
 
     fn sleep_spawn_body(agent: &str, cwd: &str, sandbox: bool) -> Vec<u8> {
-        let mut v = serde_json::json!({ "agent_name": agent, "cwd": cwd, "command": "sleep", "args": ["30"] });
+        let (cmd, args) = k2_core::test_env::sleep_command(30);
+        let mut v = serde_json::json!({ "agent_name": agent, "cwd": cwd, "command": cmd, "args": args });
         if sandbox {
             v["sandbox"] = serde_json::Value::Bool(true);
         }
@@ -2818,11 +2819,12 @@ mod tests {
     }
 
     fn spawn_sleep(agent: &str, cwd: &str) -> HandlerResult {
+        let (cmd, args) = k2_core::test_env::sleep_command(30);
         let body = serde_json::json!({
             "agent_name": agent,
             "cwd": cwd,
-            "command": "sleep",
-            "args": ["30"],
+            "command": cmd,
+            "args": args,
         })
         .to_string()
         .into_bytes();
@@ -2913,8 +2915,9 @@ mod tests {
         };
 
         // No session yet: 404, and nothing was spawned.
+        let (cmd, args) = k2_core::test_env::sleep_command(30);
         let missing = handle_v2_spawn(
-            &serde_json::json!({ "agent_name": agent, "cwd": cwd, "attach_only": true, "command": "sleep", "args": ["30"] })
+            &serde_json::json!({ "agent_name": agent, "cwd": cwd, "attach_only": true, "command": cmd, "args": args })
                 .to_string()
                 .into_bytes(),
         );
@@ -3332,9 +3335,9 @@ mod tests {
 
         // Live cell first. Its register() would overwrite a harness row
         // with command=sleep, so the resumable row is written after.
+        let (cmd, args) = k2_core::test_env::sleep_command(30);
         let prior = handle_v2_spawn(
-            format!(r#"{{"agent_name":"{agent}","cwd":"{cwd}","command":"sleep","args":["30"]}}"#)
-                .as_bytes(),
+            serde_json::json!({ "agent_name": agent, "cwd": cwd, "command": cmd, "args": args }).to_string().as_bytes(),
         );
         assert_eq!(prior.status, "200 OK", "{}", prior.body);
         let prior_pty = json_body(&prior.body)["sessionId"]
@@ -3699,8 +3702,9 @@ mod tests {
         assert_eq!(blank.status, "409 Conflict", "{}", blank.body);
 
         // A spawn that carries a command proceeds and clears the entry.
+        let (cmd, args) = k2_core::test_env::sleep_command(30);
         let with_cmd = handle_v2_spawn(
-            serde_json::json!({ "agent_name": agent, "cwd": cwd, "command": "sleep", "args": ["30"] })
+            serde_json::json!({ "agent_name": agent, "cwd": cwd, "command": cmd, "args": args })
                 .to_string()
                 .as_bytes(),
         );

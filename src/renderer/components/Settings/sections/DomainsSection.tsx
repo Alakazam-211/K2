@@ -16,6 +16,8 @@ export type AppNameStatus = {
   state: string
   live: boolean
   notServedYet: boolean
+  /** Grandfathered at 0.46.6: served by the box's own proxy, not by K2. */
+  external?: boolean
   words: string
   primary?: boolean
   served?: 'this_box' | 'elsewhere' | 'nothing'
@@ -35,6 +37,7 @@ type DomainNameRow = {
 /** The chip for an App name: never "issued" for a name nothing serves. */
 export function appStateLabel(a: AppNameStatus): string {
   if (a.error === 'unknown_app') return `not served · no App ${a.app}`
+  if (a.external) return `served by your own proxy (not by K2)${a.primary ? ' · primary' : ''}`
   if (a.notServedYet) return `not served yet · ${a.state.replace('_', ' ')}`
   return a.primary ? 'live · primary' : 'live'
 }

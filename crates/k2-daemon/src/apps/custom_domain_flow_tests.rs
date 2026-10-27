@@ -247,3 +247,59 @@ fn k2_plants_and_removes_the_txt_on_a_k2_hosted_zone() {
     assert!(calls.iter().any(|(m, p)| m == "DELETE" && p == "/api/dns/records/r1"), "the old proof is replaced: {calls:?}");
     assert!(!calls.iter().any(|(_, p)| p.ends_with("/r2")), "never touches other records");
 }
+
+/// Coordinator ruling on #10: a grandfathered `external` name (bound
+/// before 0.46.6, served by the box's own proxy) stays an origin, is never
+/// re-checked by the loop or routed to the door, and gets no warning. The
+/// owner's explicit check moves it into the door flow only when the proof
+/// passes; a failed check leaves it `external` (still an origin).
+#[test]
+fn a_grandfathered_name_stays_an_origin_until_the_owner_moves_it() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    let d = setup();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        domains::set_app_state(&conn, HOST, STATE_EXTERNAL, None).unwrap();
+    }
+    let ext = row();
+    assert!(ext.is_external() && ext.is_origin());
+    assert!(!due(&ext, 10_000_000_000), "the loop never checks it");
+    assert!(crate::apps::tls_door::reload().routed.is_empty(), "the door never routes it");
+    let st = crate::apps::custom_domains::status_json(&ext, true);
+    assert_eq!((st["notServedYet"].as_bool(), st["external"].as_bool()), (Some(false), Some(true)));
+    assert!(st["words"].as_str().unwrap().starts_with("served by your own proxy (not by K2)"), "{st}");
+    assert!(st.get("served").is_none() && st.get("warning").is_none(), "no probe, no warning spam: {st}");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert_eq!(domains::origin_hostnames_for_app(&conn, "agentnsi").unwrap(), vec![HOST.to_string()]);
+    }
+
+    // The owner's check, DNS not at this box: stays external, still an origin.
+    let issues = RefCell::new(0);
+    let (r, _) = check_with(HOST, &Fake::new(proof(&d), &["198.51.100.20"]), &|_| *issues.borrow_mut() += 1).unwrap();
+    assert_eq!(r.state, STATE_EXTERNAL);
+    assert!(r.is_origin());
+    assert!(r.last_error.as_deref().unwrap().contains("still served by your own proxy"), "{:?}", r.last_error);
+    assert_eq!(*issues.borrow(), 0);
+
+    // Proven: into the door flow (issuing, one order).
+    let (r, _) = check_with(HOST, &Fake::new(proof(&d), &[BOX]), &|_| *issues.borrow_mut() += 1).unwrap();
+    assert_eq!(r.state, STATE_ISSUING);
+    assert_eq!(*issues.borrow(), 1);
+}
+
+/// Coordinator ruling on #5: under air-gap the status says why a name
+/// stays where it is (no DNS checks, no certificates).
+#[test]
+fn under_air_gap_the_status_says_why_nothing_moves() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    let _air = k2_core::test_env::EnvVar::set("K2_AIRGAP", "1");
+    setup();
+    let w = crate::apps::custom_domains::state_words(&row());
+    assert!(w.contains("Air-gap is on") && w.contains("stays waiting_dns"), "{w}");
+    assert!(check_now(HOST).is_none(), "no check under air-gap");
+}

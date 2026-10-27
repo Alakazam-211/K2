@@ -24,6 +24,10 @@
 //!   `issuing`/`live` daily. A failed re-check of a served name keeps it
 //!   serving and says so; after 7 days in a row it goes `failing`: its
 //!   route is removed (front443 / door) and it is not renewed.
+//! - **Grandfathered** (`external`, migration 0236): a name bound before
+//!   0.46.6, served by the box's own proxy. It stays an origin and is never
+//!   checked by the loop; `k2 app domain check` moves it into this flow only
+//!   when the proof passes (a failed check leaves it `external`).
 
 use std::net::IpAddr;
 use std::sync::{Mutex, OnceLock};
@@ -32,7 +36,8 @@ use std::time::Duration;
 use serde_json::{json, Value as J};
 
 use k2_core::domains::{
-    self, AppDomain, CheckRecord, PATH_DIRECT, STATE_FAILING, STATE_ISSUING, STATE_LIVE, STATE_VERIFYING, STATE_WAITING_DNS,
+    self, AppDomain, CheckRecord, PATH_DIRECT, STATE_EXTERNAL, STATE_FAILING, STATE_ISSUING, STATE_LIVE, STATE_VERIFYING,
+    STATE_WAITING_DNS,
 };
 use k2_core::log_debug;
 
@@ -317,6 +322,22 @@ pub fn apply(d: &AppDomain, o: &Outcome, at: i64) -> Next {
     }
     let reason = o.reason.clone().unwrap_or_else(|| "the check failed".into());
     match d.state.as_str() {
+        // The owner's explicit check of a grandfathered name: it stays
+        // served by its own proxy (and an origin) until the proof passes.
+        STATE_EXTERNAL => {
+            let _ = domains::record_app_check(
+                &conn,
+                host,
+                &CheckRecord { checked_at: at, verified_at: None, path: o.path.map(str::to_string), failing_since: None },
+            );
+            let _ = domains::set_app_state(
+                &conn,
+                host,
+                STATE_EXTERNAL,
+                Some(&format!("still served by your own proxy; K2 can serve it once: {reason}")),
+            );
+            Next::Nothing
+        }
         STATE_LIVE | STATE_ISSUING => {
             let since = d.failing_since.unwrap_or(at);
             let _ = domains::record_app_check(
@@ -474,6 +495,10 @@ fn spawn_issue(host: &str) {
 
 /// Is a check due for `d` at `at`?
 pub fn due(d: &AppDomain, at: i64) -> bool {
+    if d.state == STATE_EXTERNAL {
+        // Grandfathered: only the owner's explicit check moves it.
+        return false;
+    }
     let every = match d.state.as_str() {
         STATE_LIVE | STATE_ISSUING => SERVED_EVERY,
         STATE_FAILING => FAILING_EVERY,

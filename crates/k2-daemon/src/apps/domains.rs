@@ -103,6 +103,11 @@ fn next_step(d: &k2_core::domains::AppDomain) -> String {
             d.app, d.hostname, d.app
         ),
         STATE_ISSUING => format!("Proven; K2 is getting its certificate (TLS-ALPN-01 or DNS-01).{front}"),
+        STATE_EXTERNAL => format!(
+            "Served by your own proxy (not by K2) and kept in the App's origins. For K2 to serve it (its own certificate, \
+             through the :443 front), point it at this box with the records below, then: k2 app domain check {} {}",
+            d.app, d.hostname
+        ),
         STATE_FAILING => format!(
             "Not served: {}. Fix the DNS records below, then: k2 app domain check {} {}",
             d.last_error.as_deref().unwrap_or("its DNS moved away"),

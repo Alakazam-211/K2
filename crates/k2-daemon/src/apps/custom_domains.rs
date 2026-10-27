@@ -188,13 +188,21 @@ pub fn state_words(d: &AppDomain) -> String {
     if !d.apex_attached {
         return format!("not served yet: its apex {} is no longer attached (k2 domain add {})", d.apex, d.apex);
     }
-    match d.state.as_str() {
+    let words = match d.state.as_str() {
         domains::STATE_LIVE => "live: this box serves it".to_string(),
+        domains::STATE_EXTERNAL => {
+            return "served by your own proxy (not by K2); bound before 0.46.6, it stays one of the App's origins".to_string()
+        }
         domains::STATE_ISSUING => "not served yet: proven, getting its certificate".to_string(),
         domains::STATE_VERIFYING => "not served yet: checking the DNS records".to_string(),
         domains::STATE_FAILING => "not served (failing): the DNS records stopped pointing here".to_string(),
         _ => "not served yet: waiting for the DNS records".to_string(),
+    };
+    if k2_core::airgap::enabled() && d.state != domains::STATE_LIVE {
+        // Departure #5: no DNS checks or public ACME under air-gap.
+        return format!("{words}. Air-gap is on: K2 makes no DNS checks and orders no certificates, so it stays {}", d.state);
     }
+    words
 }
 
 /// The `app` block K2 adds to a bound name's JSON (`k2 cert list`,
@@ -203,14 +211,17 @@ pub fn state_words(d: &AppDomain) -> String {
 /// `probe`: also ask which server answers on :443 (a network probe).
 pub fn status_json(d: &AppDomain, probe: bool) -> J {
     let (txt_name, txt_value) = d.txt();
-    let served = probe.then(|| served_by(&d.hostname));
+    // A grandfathered name is served by the box's own proxy: no probe and
+    // no warnings about it (it is not K2's to serve).
+    let served = (probe && !d.is_external()).then(|| served_by(&d.hostname));
     let live = d.is_live();
     let mut v = json!({
         "app": d.app,
         "state": d.state,
         "live": live,
         // Vanilla's small part: say plainly when nothing serves it yet.
-        "notServedYet": !live,
+        "notServedYet": !d.is_origin(),
+        "external": d.is_external(),
         "words": state_words(d),
         "primary": d.is_primary,
         "apexAttached": d.apex_attached,

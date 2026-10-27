@@ -113,13 +113,14 @@ fn for_service_on(service_id: &str, name: &str, sub: &str, meet: Option<(String,
             .flatten()
             .map(|r| r.expose)
             .unwrap_or_default();
-        // Live names only (CD-A4): a bound name that nothing serves yet is
-        // not an origin, so invite pages and the gateway's form check never
-        // trust it either.
+        // Served names only (CD-A4): `live` (the App TLS door) and the
+        // grandfathered `external` ones (the box's own proxy, bound before
+        // 0.46.6). A bound name that nothing serves yet is not an origin,
+        // so invite pages and the gateway's form check never trust it.
         let (custom, primary) = if name.is_empty() {
             (Vec::new(), None)
         } else {
-            let live = k2_core::domains::live_hostnames_for_app(&conn, name).unwrap_or_else(|e| {
+            let live = k2_core::domains::origin_hostnames_for_app(&conn, name).unwrap_or_else(|e| {
                 k2_core::log_debug!("[apps] origins for {name}: {e}");
                 Vec::new()
             });

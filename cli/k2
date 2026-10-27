@@ -12336,7 +12336,7 @@ for c in v.get("custom") or []:
     print("  %s" % c.get("words"))
     if c.get("lastError"):
         print("  last check: %s" % c["lastError"])
-    if c.get("state") != "live":
+    if c.get("state") not in ("live", "external"):
         for r in c.get("records") or []:
             print("    %-5s %-40s %s" % (r.get("type"), r.get("name"), r.get("value")))
     if c.get("next"):
@@ -65988,6 +65988,8 @@ def app_suffix(row):
         return ""
     if a.get("error") == "unknown_app":
         return "  (not served: no App %s here)" % (a.get("app") or "?")
+    if a.get("external"):
+        return "  (served by your own proxy, not by K2%s)" % ("; primary" if a.get("primary") else "")
     if a.get("notServedYet"):
         s = "  (not served yet: %s)" % (a.get("state") or "waiting_dns")
     else:

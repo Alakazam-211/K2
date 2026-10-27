@@ -68,7 +68,13 @@ pub const STATE_VERIFYING: &str = "verifying";
 pub const STATE_ISSUING: &str = "issuing";
 pub const STATE_LIVE: &str = "live";
 pub const STATE_FAILING: &str = "failing";
-pub const APP_STATES: &[&str] = &[STATE_WAITING_DNS, STATE_VERIFYING, STATE_ISSUING, STATE_LIVE, STATE_FAILING];
+/// Grandfathered at the 0.46.6 upgrade: a name bound before the App TLS
+/// door existed, served by the box's own proxy (to the App's front port),
+/// not by K2. It stays an origin; K2 never routes, checks or issues for it
+/// until the owner moves it into the door flow (`k2 app domain check`).
+pub const STATE_EXTERNAL: &str = "external";
+pub const APP_STATES: &[&str] =
+    &[STATE_WAITING_DNS, STATE_VERIFYING, STATE_ISSUING, STATE_LIVE, STATE_FAILING, STATE_EXTERNAL];
 
 /// What DNS showed at the last check: the name points at this box's
 /// public IP (path a) or at its `<sub>.k2.dev` (path b, through Connect).
@@ -122,6 +128,15 @@ impl AppDomain {
     /// Serving now: state `live` on an attached apex.
     pub fn is_live(&self) -> bool {
         self.state == STATE_LIVE && self.apex_attached
+    }
+    /// Served by the box's own proxy, not by K2 (grandfathered, 0236).
+    pub fn is_external(&self) -> bool {
+        self.state == STATE_EXTERNAL && self.apex_attached
+    }
+    /// An origin of its App: served by K2 (`live`) or by the box's own
+    /// proxy (`external`), on an attached apex.
+    pub fn is_origin(&self) -> bool {
+        self.is_live() || self.is_external()
     }
     /// The TXT record to set: (name, value).
     pub fn txt(&self) -> (String, String) {
@@ -184,17 +199,23 @@ pub fn app_domain(conn: &Connection, hostname: &str) -> rusqlite::Result<Option<
     .optional()
 }
 
-/// The hostnames that actually serve App `app` now: state `live` on an
-/// attached apex. These, and only these, are the App's custom origins
-/// (vs-live CD-A4). Sorted.
+/// The hostnames K2 itself serves for App `app` now (state `live` on an
+/// attached apex; the App TLS door). Sorted.
 pub fn live_hostnames_for_app(conn: &Connection, app: &str) -> rusqlite::Result<Vec<String>> {
     Ok(app_domains_for(conn, app)?.into_iter().filter(AppDomain::is_live).map(|d| d.hostname).collect())
 }
 
-/// The App's primary custom name: marked `is_primary` AND live. `None`
-/// means the App's own K2 label is its primary origin (§8.2).
+/// The App's custom ORIGINS (vs-live CD-A4): the names actually served,
+/// by K2 (`live`) or, grandfathered at the upgrade, by the box's own proxy
+/// (`external`). A bound name nothing serves yet is not one. Sorted.
+pub fn origin_hostnames_for_app(conn: &Connection, app: &str) -> rusqlite::Result<Vec<String>> {
+    Ok(app_domains_for(conn, app)?.into_iter().filter(AppDomain::is_origin).map(|d| d.hostname).collect())
+}
+
+/// The App's primary custom name: marked `is_primary` AND an origin.
+/// `None` means the App's own K2 label is its primary origin (§8.2).
 pub fn primary_hostname_for_app(conn: &Connection, app: &str) -> rusqlite::Result<Option<String>> {
-    Ok(app_domains_for(conn, app)?.into_iter().find(|d| d.is_primary && d.is_live()).map(|d| d.hostname))
+    Ok(app_domains_for(conn, app)?.into_iter().find(|d| d.is_primary && d.is_origin()).map(|d| d.hostname))
 }
 
 /// Mark `hostname` as App `app`'s primary name (clears the others).
@@ -882,23 +903,54 @@ mod tests {
     }
 
     /// 0236 on a database that already has `app:` rows (bound before
-    /// 0.46.6, never served): they come out `waiting_dns` with a token;
-    /// other roles stay NULL.
+    /// 0.46.6; a box may serve them through its own proxy, PRD path 4):
+    /// they are GRANDFATHERED `external`, stay the App's origins, and the
+    /// name that was K2_APP_ORIGIN before (the first by name on an attached
+    /// apex) stays primary. Names bound after the upgrade start
+    /// `waiting_dns`. Other roles stay NULL.
     #[test]
-    fn migration_0236_backfills_existing_app_rows() {
+    fn migration_0236_grandfathers_existing_app_rows_as_external_origins() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::run_migrations_through(&conn, Some("0231_zen_version_carry")).unwrap();
         conn.execute_batch(
             "INSERT INTO domain_bindings (apex) VALUES ('example.com');
-             INSERT INTO domain_names (hostname, apex, role) VALUES ('a.example.com', 'example.com', 'app:hearth');
+             INSERT INTO domain_bindings (apex) VALUES ('nsihomes.com');
+             INSERT INTO domain_names (hostname, apex, role) VALUES ('nsihomes.com', 'nsihomes.com', 'app:agentnsi');
+             INSERT INTO domain_names (hostname, apex, role) VALUES ('www.nsihomes.com', 'nsihomes.com', 'app:agentnsi');
+             INSERT INTO domain_names (hostname, apex, role) VALUES ('a.gone.test', 'gone.test', 'app:agentnsi');
+             INSERT INTO domain_names (hostname, apex, role) VALUES ('b.example.com', 'example.com', 'app:hearth');
              INSERT INTO domain_names (hostname, apex, role) VALUES ('mail.example.com', 'example.com', 'mail');",
         )
         .unwrap();
+        // What the App had before 0.46.6 (every bound name, first by name).
+        assert_eq!(
+            hostnames_for_app(&conn, "agentnsi").unwrap(),
+            vec!["nsihomes.com".to_string(), "www.nsihomes.com".to_string()]
+        );
         crate::db::run_migrations(&conn).unwrap();
-        let a = app_domain(&conn, "a.example.com").unwrap().expect("still bound");
-        assert_eq!(a.state, STATE_WAITING_DNS);
+        let a = app_domain(&conn, "nsihomes.com").unwrap().expect("still bound");
+        assert_eq!(a.state, STATE_EXTERNAL);
+        assert!(a.is_external() && a.is_origin() && !a.is_live(), "served by its own proxy, not by K2");
         assert_eq!(a.verify_token.len(), 32);
-        assert!(!a.is_primary);
+        assert!(a.is_primary, "the pre-upgrade K2_APP_ORIGIN stays primary");
+        assert!(!app_domain(&conn, "www.nsihomes.com").unwrap().unwrap().is_primary);
+        assert_eq!(
+            origin_hostnames_for_app(&conn, "agentnsi").unwrap(),
+            vec!["nsihomes.com".to_string(), "www.nsihomes.com".to_string()],
+            "the same origins as before the upgrade"
+        );
+        assert_eq!(primary_hostname_for_app(&conn, "agentnsi").unwrap(), Some("nsihomes.com".to_string()));
+        assert!(live_hostnames_for_app(&conn, "agentnsi").unwrap().is_empty(), "K2 serves none of them");
+        let gone = app_domain(&conn, "a.gone.test").unwrap().unwrap();
+        assert!(!gone.is_primary && !gone.is_origin(), "a dangling apex was no origin before either");
+        assert_eq!(primary_hostname_for_app(&conn, "hearth").unwrap(), Some("b.example.com".to_string()));
+        // Bound after the upgrade: waiting_dns, no origin.
+        upsert_name(&conn, "shop.nsihomes.com", "nsihomes.com", "app:agentnsi").unwrap();
+        assert_eq!(app_domain(&conn, "shop.nsihomes.com").unwrap().unwrap().state, STATE_WAITING_DNS);
+        assert_eq!(origin_hostnames_for_app(&conn, "agentnsi").unwrap().len(), 2);
+        // Re-adding a grandfathered name keeps it external.
+        upsert_name(&conn, "nsihomes.com", "nsihomes.com", "app:agentnsi").unwrap();
+        assert_eq!(app_domain(&conn, "nsihomes.com").unwrap().unwrap().state, STATE_EXTERNAL);
         let st: Option<String> = conn
             .query_row("SELECT state FROM domain_names WHERE hostname = 'mail.example.com'", [], |r| r.get(0))
             .unwrap();

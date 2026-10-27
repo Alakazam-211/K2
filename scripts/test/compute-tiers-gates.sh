@@ -20,7 +20,7 @@ step="${1:?step: check|proto|node|core|daemon-unit|daemon-int|js|drill}"
 shift || true
 case "$step" in
   check)
-    RUSTFLAGS="-D warnings" cargo check -p k2-node-proto -p k2-node -p k2-core -p k2-daemon --tests --message-format short
+    RUSTFLAGS="-D warnings" cargo check -p k2-node-proto -p k2-node -p k2-core -p k2-daemon --tests --keep-going --message-format short
     ;;
   proto)
     cargo test -p k2-node-proto

@@ -724,7 +724,7 @@ pub fn decay(usage: u64, dt_secs: i64, half_life_secs: i64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::share::{Network, Trust};
+    use crate::share::Trust;
 
     fn limits(weight: u32) -> ShareLimits {
         ShareLimits { weight, max_running: 8, max_queued: 1000, cpu_hours_day: 1000, ..ShareLimits::new_server(Trust::Own, false) }

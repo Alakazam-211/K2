@@ -69,6 +69,46 @@ export interface ComputeNode {
    *  another server owns the node (no admin from here). */
   role?: 'owner' | 'tenant'
   share?: NodeShareJson
+  /** Job tiers (0.46.5): this server's queued jobs on the node, by tier.
+   *  Absent on older daemons. */
+  queueTiers?: TierCounts
+}
+
+/** A compute job's tier (prd-compute-job-tiers-v1): CI, then Priority (the
+ *  critical path), then Normal. The daemon sets and orders them; this page
+ *  only shows them. */
+export type JobTier = 'ci' | 'priority' | 'normal'
+
+/** Queued jobs by tier, as the daemon counts them. */
+export interface TierCounts {
+  ci: number
+  priority: number
+  normal: number
+}
+
+/** A submitter with Priority work queued or running on this server
+ *  (a courtesy note, never enforced). */
+export interface CriticalPathEntry {
+  submitter: string
+  workspace: string
+  jobs: number
+}
+
+/** The tier's short tag: `CI`, `P`, or nothing for Normal. */
+export function tierTag(tier: JobTier | string | null | undefined): string {
+  if (tier === 'ci') return 'CI'
+  if (tier === 'priority') return 'P'
+  return ''
+}
+
+/** `CI 1 · P 0 · N 3`, or '' when nothing is queued. */
+export function tierCountsLine(c: TierCounts | null | undefined): string {
+  if (!c) return ''
+  const ci = c.ci ?? 0
+  const p = c.priority ?? 0
+  const n = c.normal ?? 0
+  if (ci + p + n === 0) return ''
+  return `CI ${ci} · P ${p} · N ${n}`
 }
 
 /** One server's share (the wire's own snake_case names, `ShareLimits`). */
@@ -103,6 +143,9 @@ export interface NodeShareJson {
   cpuSecsToday: number | null
   /** The daemon's one-line summary ("running 1/1 · queued 2/10 · …"). */
   line: string | null
+  /** Job tiers (0.46.5): does this server's Priority count on the node?
+   *  null = the node is too old to say. */
+  priority?: boolean | null
 }
 
 /** One server on a node this server owns (`GET compute/nodes/servers`). */
@@ -129,6 +172,9 @@ export interface NodeServerRow {
   addedBy?: string | null
   /** A solo node: just this server. */
   solo?: boolean
+  /** Job tiers (0.46.5): its Priority counts on this node (the node's
+   *  `queue.toml`). null = the node runs a k2-node without tiers. */
+  priority?: boolean | null
 }
 
 export interface NodeServersOwner {
@@ -185,6 +231,8 @@ export interface NodeQueueEntry {
   workspace?: string
   argv?: string
   otherWorkspace?: boolean
+  /** The tier the node counts (0.46.5 nodes; never who sent it). */
+  tier?: JobTier | null
 }
 
 export interface NodeQueue {
@@ -207,6 +255,9 @@ export interface ComputeNodesList {
   controller: string
   /** This server trusts a one-click ticket key (absent on older daemons). */
   ticketSupported?: boolean
+  /** Submitters with Priority work on this server (empty = nobody; absent
+   *  on daemons without tiers). */
+  criticalPath?: CriticalPathEntry[]
 }
 
 /** What the Agent tab's "Allow compute nodes" write did. */
@@ -233,6 +284,9 @@ export interface ComputeGrant {
   grantedAt: number
   node: string | null
   workspace: string
+  /** Job tiers (0.46.5): this workspace may send CI jobs to the node (set
+   *  by the owner or an Admin only). Absent on older daemons. */
+  allowCi?: boolean
 }
 
 export interface GrantLimits {
@@ -241,6 +295,11 @@ export interface GrantLimits {
   maxParallel?: number
   maxQueued?: number
 }
+
+/** A grant write: its limits (absent ones reset to the defaults) and,
+ *  optionally, `allowCi` (absent keeps the stored value; only the owner or
+ *  an Admin may set it). */
+export type GrantSet = GrantLimits & { allowCi?: boolean }
 
 export interface ComputeJob {
   id: string
@@ -254,6 +313,11 @@ export interface ComputeJob {
   exitCode: number | null
   /** What the job declared it needs (toolchains, packages). Not on every daemon. */
   needs?: unknown
+  /** Job tiers (0.46.5): the tier it runs as, what was asked when the daemon
+   *  lowered it (a guest share without Priority), and who sent it. */
+  tier?: JobTier
+  tierAsked?: string | null
+  submitter?: string | null
   createdAt: number
   startedAt?: number | null
   endedAt?: number | null
@@ -445,6 +509,7 @@ export async function fetchComputeNodes(): Promise<ComputeNodesList> {
     waitingCodes: Array.isArray(res?.waitingCodes) ? res.waitingCodes : [],
     controller: typeof res?.controller === 'string' ? res.controller : '',
     ticketSupported: res?.ticketSupported === true,
+    criticalPath: Array.isArray(res?.criticalPath) ? res.criticalPath : [],
   }
 }
 
@@ -469,7 +534,7 @@ export async function fetchComputeGrants(node?: string): Promise<ComputeGrant[]>
 export async function setComputeGrant(
   node: string,
   workspace: string,
-  limits: GrantLimits = {},
+  limits: GrantSet = {},
 ): Promise<{ ok: boolean; agentsCanUseCompute?: boolean; note?: string }> {
   return daemonCliPost(primaryScope(), 'compute/grants/set', { node, workspace, ...limits })
 }
@@ -594,6 +659,13 @@ export async function setServerLimits(
   forSecs?: number,
 ): Promise<ServersChangeResult> {
   return daemonCliPost(primaryScope(), 'compute/nodes/servers/limits', forSecs === undefined ? { node, server, set } : { node, server, set, forSecs })
+}
+
+/** Job tiers (0.46.5): does this server's Priority count on the node? Off
+ *  applies at once; on is a widening the daemon holds for approval. Sent
+ *  only to nodes with tiers (the daemon answers `node_too_old` otherwise). */
+export async function setServerPriority(node: string, server: string, priority: boolean): Promise<ServersChangeResult> {
+  return daemonCliPost(primaryScope(), 'compute/nodes/servers/limits', { node, server, priority })
 }
 
 export async function pauseServer(node: string, server: string, action: 'pause' | 'resume'): Promise<ServersChangeResult> {

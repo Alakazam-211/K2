@@ -18,6 +18,7 @@ vi.mock('./compute-api', async (importOriginal) => {
     fetchNodeServers: vi.fn(),
     addNodeServer: vi.fn(),
     setServerLimits: vi.fn(),
+    setServerPriority: vi.fn(),
     pauseServer: vi.fn(),
     revokeServer: vi.fn(),
     changeNodeOwner: vi.fn(),
@@ -377,5 +378,73 @@ describe('helpers', () => {
     const rows = owned().servers
     expect(api.ownerTargets(rows).map((r) => r.slot)).toEqual([1])
     expect(api.teamPossible({ os: 'linux', offer: undefined })).toEqual({ ok: false, why: 'its tenant wall isn’t on: your own servers only' })
+  })
+})
+
+describe('job tiers: Priority counts here (0.46.5)', () => {
+  function tiered(): NodeServersOwner {
+    return owned({
+      servers: [
+        row({ slot: 0, label: 'rosson.k2.dev', fp: 'a'.repeat(64), role: 'owner', priority: true }),
+        row({ priority: false }),
+        row({ slot: 2, label: 'baden.k2.dev', trust: 'team', fp: 'c'.repeat(64), priority: true }),
+        row({ slot: 3, label: 'old.k2.dev', fp: 'd'.repeat(64), priority: null }),
+      ],
+    })
+  }
+
+  it('shows each guest server’s switch as the daemon reports it; none for the owner’s own line', async () => {
+    m.fetchNodeServers.mockResolvedValue(tiered())
+    await openServers()
+    expect(within(screen.getByTestId('compute-server-row-0')).queryByTestId('compute-server-priority')).toBeNull()
+    const off = within(screen.getByTestId('compute-server-row-1')).getByRole('switch', { name: 'Priority counts here: z3thon.k2.dev' })
+    expect(off.getAttribute('aria-checked')).toBe('false')
+    const on = within(screen.getByTestId('compute-server-row-2')).getByRole('switch', { name: 'Priority counts here: baden.k2.dev' })
+    expect(on.getAttribute('aria-checked')).toBe('true')
+    const old = screen.getByTestId('compute-server-row-3')
+    const oldSw = within(old).getByRole('switch', { name: 'Priority counts here: old.k2.dev' })
+    expect(oldSw.hasAttribute('disabled')).toBe(true)
+    expect(within(old).getByTestId('compute-server-priority').textContent).toContain('needs k2-node 0.46.5')
+  })
+
+  it('turning it on sends one request and says it waits for approval (a widening)', async () => {
+    m.fetchNodeServers.mockResolvedValue(tiered())
+    m.setServerPriority.mockResolvedValue({ held: true, request: { id: 'car_7' } as never })
+    await openServers()
+    fireEvent.click(within(screen.getByTestId('compute-server-row-1')).getByRole('switch', { name: 'Priority counts here: z3thon.k2.dev' }))
+    await waitFor(() => expect(m.setServerPriority).toHaveBeenCalledTimes(1))
+    expect(m.setServerPriority).toHaveBeenCalledWith('mini-2', 'z3thon.k2.dev', true)
+    await waitFor(() => expect(screen.getByTestId('compute-servers-notice').textContent).toContain('Waiting for your approval'))
+  })
+
+  it('turning it off sends false; a daemon refusal shows its words', async () => {
+    m.fetchNodeServers.mockResolvedValue(tiered())
+    m.setServerPriority.mockRejectedValue(new Error(JSON.stringify({ error: { code: 'node_too_old', hint: 'mini-2 runs k2-node 0.46.4' } })))
+    await openServers()
+    fireEvent.click(within(screen.getByTestId('compute-server-row-2')).getByRole('switch', { name: 'Priority counts here: baden.k2.dev' }))
+    await waitFor(() => expect(m.setServerPriority).toHaveBeenCalledWith('mini-2', 'baden.k2.dev', false))
+    await waitFor(() => expect(screen.getByTestId('compute-servers-mini-2').textContent).toContain('mini-2 runs k2-node 0.46.4'))
+  })
+
+  it('an older daemon (no priority on the rows): no switch at all', async () => {
+    await openServers()
+    expect(screen.queryByTestId('compute-server-priority')).toBeNull()
+  })
+
+  it('the queue shows each entry’s tier as the node reports it', async () => {
+    m.fetchNodeQueue.mockResolvedValue({
+      node: 'mini-2',
+      shared: true,
+      from: 'node',
+      entries: [
+        { pos: 1, mine: false, class: 'gate', state: 'running', tier: 'ci' },
+        { pos: 2, mine: true, class: 'interactive', state: 'queued', tier: 'priority', short: 'j2' },
+        { pos: 3, mine: false, class: 'interactive', state: 'queued', tier: 'normal' },
+      ],
+    })
+    render(<NodeSharingPanel node={node()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Queue' }))
+    const q = await screen.findByTestId('compute-queue-mini-2')
+    await waitFor(() => expect(within(q).getAllByTestId('compute-queue-tier').map((e) => e.textContent)).toEqual(['CI', 'P']))
   })
 })

@@ -700,3 +700,120 @@ describe('this computer', () => {
     expect(m.fetchLocalStatus).not.toHaveBeenCalled()
   })
 })
+
+describe('job tiers (prd-compute-job-tiers-v1, 0.46.5)', () => {
+  const NOW = Math.floor(Date.now() / 1000)
+
+  it('recent jobs show the tier the daemon reports: CI, P, nothing for Normal; a lowered tier says what was asked', async () => {
+    m.fetchComputeJobs.mockResolvedValue([
+      { id: 'job-c', short: 'jc', node: 'mini-2', workspace: 'sales', argv: ['ci'], state: 'running', reason: null, exitCode: null, createdAt: NOW, tier: 'ci' },
+      { id: 'job-p', short: 'jp', node: 'mini-2', workspace: 'sales', argv: ['p'], state: 'queued', reason: null, exitCode: null, createdAt: NOW, tier: 'priority' },
+      { id: 'job-n', short: 'jn', node: 'mini-2', workspace: 'sales', argv: ['n'], state: 'queued', reason: null, exitCode: null, createdAt: NOW, tier: 'normal' },
+      {
+        id: 'job-d',
+        short: 'jd',
+        node: 'mini-2',
+        workspace: 'sales',
+        argv: ['d'],
+        state: 'queued',
+        reason: null,
+        exitCode: null,
+        createdAt: NOW,
+        tier: 'normal',
+        tierAsked: 'priority',
+      },
+    ])
+    render(<ComputeSection />)
+    const tags = await screen.findAllByTestId('compute-job-tier')
+    expect(tags.map((t) => t.textContent)).toEqual(['CI', 'P', 'asked priority'])
+    expect(tags[2].getAttribute('title')).toBe('asked priority')
+    expect(tags[0].getAttribute('title')).toBeNull()
+  })
+
+  it('the critical-path line shows only when the daemon names a Priority holder', async () => {
+    m.fetchComputeNodes.mockResolvedValue({
+      nodes: [ONLINE],
+      waitingCodes: [],
+      controller: 'rosson.k2.dev',
+      criticalPath: [{ submitter: 'k2/7f3a/builder-ptyd', workspace: 'k2', jobs: 2 }],
+    })
+    render(<ComputeSection />)
+    const line = await screen.findByTestId('compute-critical-path')
+    expect(line.textContent).toBe('Critical path (Priority): k2/7f3a/builder-ptyd — 2 jobs')
+    cleanup()
+    m.fetchComputeNodes.mockResolvedValue({ nodes: [ONLINE], waitingCodes: [], controller: 'rosson.k2.dev', criticalPath: [] })
+    render(<ComputeSection />)
+    await screen.findByTestId('compute-node-mini-2')
+    expect(screen.queryByTestId('compute-critical-path')).toBeNull()
+  })
+
+  it('a node card shows its queued jobs by tier, and nothing when none are queued', async () => {
+    m.fetchComputeNodes.mockResolvedValue({
+      nodes: [{ ...ONLINE, queueTiers: { ci: 1, priority: 0, normal: 3 } }],
+      waitingCodes: [],
+      controller: 'rosson.k2.dev',
+    })
+    render(<ComputeSection />)
+    const tiers = await screen.findByTestId('compute-node-tiers')
+    expect(tiers.textContent).toBe('queued: CI 1 · P 0 · N 3')
+    cleanup()
+    m.fetchComputeNodes.mockResolvedValue({
+      nodes: [{ ...ONLINE, queueTiers: { ci: 0, priority: 0, normal: 0 } }],
+      waitingCodes: [],
+      controller: 'rosson.k2.dev',
+    })
+    render(<ComputeSection />)
+    await screen.findByTestId('compute-node-mini-2')
+    expect(screen.queryByTestId('compute-node-tiers')).toBeNull()
+  })
+
+  it('Allow CI jobs: shows the grant’s allowCi and sends one grants/set with the current limits', async () => {
+    m.fetchComputeGrants.mockResolvedValue([{ ...GRANT, allowCi: false }])
+    render(<ComputeSection />)
+    const row = await screen.findByTestId('compute-grant-sales')
+    const sw = within(row).getByRole('switch', { name: 'Allow CI jobs: sales' })
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByTestId('compute-grant-ci-help').textContent).toBe(
+      'CI jumps every queue. Give it to CI and release workspaces, not to agents doing normal work.',
+    )
+    fireEvent.click(sw)
+    await waitFor(() => expect(m.setComputeGrant).toHaveBeenCalledTimes(1))
+    expect(m.setComputeGrant).toHaveBeenCalledWith('mini-2', 'p-sales', {
+      maxJobSecs: 3600,
+      maxDiskGb: 20,
+      maxParallel: 1,
+      maxQueued: 10,
+      allowCi: true,
+    })
+  })
+
+  it('Allow CI jobs on shows on; turning it off sends allowCi false', async () => {
+    m.fetchComputeGrants.mockResolvedValue([{ ...GRANT, allowCi: true }])
+    render(<ComputeSection />)
+    const row = await screen.findByTestId('compute-grant-sales')
+    const sw = within(row).getByRole('switch', { name: 'Allow CI jobs: sales' })
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(sw)
+    await waitFor(() => expect(m.setComputeGrant).toHaveBeenCalledTimes(1))
+    expect(m.setComputeGrant).toHaveBeenCalledWith('mini-2', 'p-sales', expect.objectContaining({ allowCi: false }))
+  })
+
+  it('a refused Allow CI (not the owner or an Admin) shows the daemon’s words', async () => {
+    m.fetchComputeGrants.mockResolvedValue([{ ...GRANT, allowCi: false }])
+    m.setComputeGrant.mockRejectedValue(
+      new Error(JSON.stringify({ error: { code: 'owner_only', hint: 'only the owner or an Admin allows CI jobs' } })),
+    )
+    render(<ComputeSection />)
+    const row = await screen.findByTestId('compute-grant-sales')
+    fireEvent.click(within(row).getByRole('switch', { name: 'Allow CI jobs: sales' }))
+    const card = screen.getByTestId('compute-node-mini-2')
+    await waitFor(() => expect(card.textContent).toContain('only the owner or an Admin allows CI jobs (owner_only)'))
+  })
+
+  it('an older daemon (no allowCi on the grant): no CI switch and no help line', async () => {
+    render(<ComputeSection />)
+    const row = await screen.findByTestId('compute-grant-sales')
+    expect(within(row).queryByRole('switch')).toBeNull()
+    expect(screen.queryByTestId('compute-grant-ci-help')).toBeNull()
+  })
+})

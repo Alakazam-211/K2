@@ -34,6 +34,9 @@ import {
   revokeComputeGrant,
   setComputeGrant,
   setLocalPolicy,
+  setServerPriority,
+  tierCountsLine,
+  tierTag,
   setWorkspaceComputeOperate,
   setWorkspaceComputeSwitch,
   validNodeName,
@@ -61,7 +64,7 @@ describe('controller routes go to the focused server', () => {
 
   it('nodes list tolerates a body without arrays', async () => {
     get.mockResolvedValue({})
-    expect(await fetchComputeNodes()).toEqual({ nodes: [], waitingCodes: [], controller: '', ticketSupported: false })
+    expect(await fetchComputeNodes()).toEqual({ nodes: [], waitingCodes: [], controller: '', ticketSupported: false, criticalPath: [] })
   })
 
   it('grants for one node, and all grants', async () => {
@@ -227,5 +230,38 @@ describe('Settings toggles (machines and agents)', () => {
     expect((await fetchComputeNodes()).ticketSupported).toBe(true)
     get.mockResolvedValue({ nodes: [], waitingCodes: [], controller: 'x' })
     expect((await fetchComputeNodes()).ticketSupported).toBe(false)
+  })
+})
+
+describe('job tiers (0.46.5)', () => {
+  it('the nodes list carries the critical path as the daemon sends it', async () => {
+    const cp = [{ submitter: 'k2/7f3a/builder-ptyd', workspace: 'k2', jobs: 2 }]
+    get.mockResolvedValue({ nodes: [], waitingCodes: [], controller: 'x', criticalPath: cp })
+    expect((await fetchComputeNodes()).criticalPath).toEqual(cp)
+  })
+
+  it('a grant write sends allowCi beside the limits it was given', async () => {
+    await setComputeGrant('mini-1', 'ws-id', { maxJobSecs: 600, maxDiskGb: 20, maxParallel: 2, maxQueued: 10, allowCi: true })
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'compute/grants/set', {
+      node: 'mini-1',
+      workspace: 'ws-id',
+      maxJobSecs: 600,
+      maxDiskGb: 20,
+      maxParallel: 2,
+      maxQueued: 10,
+      allowCi: true,
+    })
+  })
+
+  it('the Priority switch posts the servers-limits route with priority only', async () => {
+    await setServerPriority('mini-2', 'baden.k2.dev', true)
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'compute/nodes/servers/limits', { node: 'mini-2', server: 'baden.k2.dev', priority: true })
+  })
+
+  it('tier tags and counts are display only', () => {
+    expect([tierTag('ci'), tierTag('priority'), tierTag('normal'), tierTag(undefined)]).toEqual(['CI', 'P', '', ''])
+    expect(tierCountsLine({ ci: 1, priority: 0, normal: 3 })).toBe('CI 1 · P 0 · N 3')
+    expect(tierCountsLine({ ci: 0, priority: 0, normal: 0 })).toBe('')
+    expect(tierCountsLine(undefined)).toBe('')
   })
 })

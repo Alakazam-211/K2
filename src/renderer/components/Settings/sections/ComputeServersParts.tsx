@@ -15,7 +15,7 @@
 //     owns: "Shared by …", this server's share and the Queue; no admin.
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { Button, Callout, Input, SquareCheckbox, SquareRadio } from '@/components/ui'
+import { Button, Callout, Input, SquareCheckbox, SquareRadio, Toggle } from '@/components/ui'
 import {
   addNodeServer,
   changeNodeOwner,
@@ -28,7 +28,9 @@ import {
   pauseServer,
   revokeServer,
   setServerLimits,
+  setServerPriority,
   teamPossible,
+  tierTag,
   type ComputeNode,
   type NodeQueue,
   type NodeServerRow,
@@ -154,6 +156,11 @@ function QueuePart({ node }: { node: string }): React.JSX.Element {
               <span className={primary}>{e.mine ? (e.short ?? 'yours') : e.server ? e.server : 'another server'}</span>
               <span>{e.state}</span>
               <span>{e.class}</span>
+              {tierTag(e.tier) ? (
+                <span className={`font-medium ${primary}`} data-testid="compute-queue-tier">
+                  {tierTag(e.tier)}
+                </span>
+              ) : null}
               {e.cpuMillis ? <span>{formatCores(e.cpuMillis)}</span> : null}
               {typeof e.etaSecs === 'number' ? <span>~{Math.max(1, Math.round(e.etaSecs / 60))} min</span> : null}
               {e.blockedBy ? <span className={muted}>{e.blockedBy.replace(/_/g, ' ')}</span> : null}
@@ -316,6 +323,22 @@ function ServerRow({
         {!isOwner ? <span className={muted}>{endDate(r.expiresAt)}</span> : null}
       </div>
       {r.limits ? <div className={`text-[10px] ${muted}`}>{limitsLine(r.limits)}</div> : null}
+      {/* Job tiers (0.46.5): a guest server's Priority counts here only when
+          the node's owner says so; turning it on is a widening (held for
+          approval). The owner's own line always counts. Absent on older
+          daemons: nothing shown. */}
+      {!isOwner && r.priority !== undefined && r.state !== 'revoked' ? (
+        <div className="flex items-center gap-2 text-[11px]" data-testid="compute-server-priority">
+          <Toggle
+            checked={r.priority === true}
+            disabled={r.priority === null}
+            onChange={(v) => void act(() => setServerPriority(node, server, v))}
+            aria-label={`Priority counts here: ${r.label}`}
+          />
+          <span className={secondary}>Priority counts here</span>
+          {r.priority === null ? <span className={muted}>needs k2-node 0.46.5</span> : null}
+        </div>
+      ) : null}
       {r.sas && r.state === 'pending' ? (
         <div className={`text-[11px] ${primary}`} data-testid="compute-server-sas">
           SAS <span className="font-mono">{r.sas}</span>: read it to {r.label}&apos;s owner.

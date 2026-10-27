@@ -62,6 +62,8 @@ import {
   setComputeGrant,
   setLocalPolicy,
   setLocalRemoteAdmin,
+  tierCountsLine,
+  tierTag,
   validNodeName,
   type ComputeEvent,
   type ComputeGrant,
@@ -423,12 +425,34 @@ function ControllerPart({
         <SettingsGroup title="Recent jobs">
           <div data-settings-id="compute.jobs" className="space-y-1 py-1">
             {sideErrors.jobs ? <Callout tone="warn">{sideErrors.jobs}</Callout> : null}
+            {(list.criticalPath ?? []).map((c) => (
+              <p
+                key={`${c.workspace}/${c.submitter}`}
+                className="text-[11px] text-[var(--color-text-secondary)]"
+                data-testid="compute-critical-path"
+              >
+                Critical path (Priority): {c.submitter} — {c.jobs} {c.jobs === 1 ? 'job' : 'jobs'}
+              </p>
+            ))}
             {jobs.length === 0 && !sideErrors.jobs ? (
               <p className="text-[11px] text-[var(--color-text-muted)]">No jobs yet.</p>
             ) : null}
             {jobs.map((j) => (
               <div key={j.id} className="text-[11px] flex flex-wrap gap-x-3 gap-y-0.5 border-b border-[var(--color-border)] py-1">
                 <span className="font-mono text-[var(--color-text-primary)]">{j.short}</span>
+                {tierTag(j.tier) ? (
+                  <span
+                    className="font-medium text-[var(--color-text-primary)] border border-[var(--color-border)] px-1"
+                    data-testid="compute-job-tier"
+                    title={j.tierAsked ? `asked ${j.tierAsked}` : undefined}
+                  >
+                    {tierTag(j.tier)}
+                  </span>
+                ) : j.tierAsked ? (
+                  <span className="text-[var(--color-text-muted)]" data-testid="compute-job-tier" title={`asked ${j.tierAsked}`}>
+                    asked {j.tierAsked}
+                  </span>
+                ) : null}
                 <span className="text-[var(--color-text-secondary)]">{j.state}{j.reason ? ` · ${j.reason}` : ''}</span>
                 {j.exitCode !== null && j.exitCode !== undefined ? (
                   <span className="text-[var(--color-text-muted)]">exit {j.exitCode}</span>
@@ -556,6 +580,11 @@ function NodeCard({
         <span className="text-[11px] text-[var(--color-text-secondary)]">
           {node.running} running · {node.queued} queued
         </span>
+        {tierCountsLine(node.queueTiers) ? (
+          <span className="text-[11px] text-[var(--color-text-secondary)]" data-testid="compute-node-tiers">
+            queued: {tierCountsLine(node.queueTiers)}
+          </span>
+        ) : null}
         <span className="text-[11px] text-[var(--color-text-muted)]">
           seen {formatRelativeTime(node.lastSeen, nowSec())}
           {node.liveRoute || node.lastRoute ? ` · via ${node.liveRoute || node.lastRoute}` : ''}
@@ -681,6 +710,20 @@ function GrantsBlock({
   })
   const [note, setNote] = useState<string | null>(null)
 
+  /** One gesture: the grant as it is, with `allowCi` changed (grants/set
+   *  resets any limit left out, so the current ones go along). */
+  const setAllowCi = async (g: ComputeGrant, allowCi: boolean): Promise<void> => {
+    await run(() =>
+      setComputeGrant(node.name, g.workspaceId, {
+        maxJobSecs: g.maxJobSecs,
+        maxDiskGb: g.maxDiskGb,
+        maxParallel: g.maxParallel,
+        maxQueued: g.maxQueued,
+        allowCi,
+      }),
+    )
+  }
+
   const grantedIds = new Set(grants.map((g) => g.workspaceId))
   const options = projects
     .filter((p) => !grantedIds.has(p.id))
@@ -720,6 +763,20 @@ function GrantsBlock({
             <span className="text-[var(--color-text-secondary)]" data-testid="compute-grant-switch">
               Allow compute nodes: {on === undefined ? 'not reported by this server' : on ? 'on' : 'off (set on its Agent tab)'}
             </span>
+            {/* Job tiers (0.46.5): CI is a permission, set by the owner or an
+                Admin only; the daemon refuses anyone else and says so. Absent
+                on older daemons: no switch. */}
+            {g.allowCi === undefined ? null : (
+              <span className="inline-flex items-center gap-1.5" data-testid="compute-grant-ci">
+                <Toggle
+                  checked={g.allowCi}
+                  disabled={busy}
+                  onChange={(v) => void setAllowCi(g, v)}
+                  aria-label={`Allow CI jobs: ${project?.name ?? g.workspace}`}
+                />
+                <span className="text-[var(--color-text-secondary)]">Allow CI jobs</span>
+              </span>
+            )}
             <Button variant="quiet" disabled={busy} onClick={() => void run(() => revokeComputeGrant(node.name, g.workspaceId))}>
               Revoke
             </Button>
@@ -756,6 +813,11 @@ function GrantsBlock({
           Grant
         </Button>
       </div>
+      {grants.some((g) => g.allowCi !== undefined) ? (
+        <p className="text-[10px] text-[var(--color-text-muted)]" data-testid="compute-grant-ci-help">
+          CI jumps every queue. Give it to CI and release workspaces, not to agents doing normal work.
+        </p>
+      ) : null}
       {note ? <p className="text-[11px] text-[var(--color-text-muted)]">{note}</p> : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
     </div>

@@ -111,6 +111,7 @@ fn manage_sew_gate_owner_admin_or_the_switch() {
             "/cli/sew/server/rollback",
             "/cli/sew/server/backup",
             "/cli/sew/server/doctor",
+            "/cli/sew/server/reconfigure",
             "/cli/sew/server/rotate-master",
         ] {
             let (st, v) = t.call(&who, path, json!({"tarballPath": TARBALL}));

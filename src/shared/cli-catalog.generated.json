@@ -1065,7 +1065,7 @@
    },
    {
     "name": "hostchat",
-    "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|log> ...",
+    "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|reconfigure|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|log> ...",
     "description": "The Sew chat (and voice) server on this box, over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Sew (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge is the owner's, the other two the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra."
    },
    {
@@ -1105,8 +1105,8 @@
    },
    {
     "name": "hostchat app-space",
-    "usage": "k2 hostchat app-spaces [--json] | k2 hostchat app-space bind|unbind <app-id> <space-id> [--json]",
-    "description": "Which Sew Space belongs to which App (K31; GET /cli/sew/app-spaces, POST /cli/sew/app-spaces/{bind,unbind}). Members come ONLY from that App's user grants (an App grant plus a Sew member grant); Connect owners and admins are never added by role. bind binds Sew's side first; unbind removes the members K2 added. Manage Sew."
+    "usage": "k2 hostchat app-spaces [--json] | k2 hostchat app-space bind <app-id> <space-id> | unbind <app-id> <space-id> [--remove-app-members] [--json]",
+    "description": "Which Sew Space belongs to which App (K31; GET /cli/sew/app-spaces, POST /cli/sew/app-spaces/{bind,unbind}). Members come ONLY from that App's user grants (an App grant plus a Sew member grant); Connect owners and admins are never added by role. bind binds Sew's side first; unbind keeps everyone by default (K2 stops managing the Space), and --remove-app-members removes only the members K2 added (never people added by hand). Manage Sew."
    },
    {
     "name": "hostchat open",

@@ -55,6 +55,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/sew/server/config",
     "/cli/sew/server/disable",
     "/cli/sew/server/doctor",
+    "/cli/sew/server/reconfigure",
     "/cli/sew/server/enable",
     "/cli/sew/server/recovery-key",
     "/cli/sew/server/restore",
@@ -84,6 +85,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/sew/server/config",
     "/cli/sew/server/disable",
     "/cli/sew/server/doctor",
+    "/cli/sew/server/reconfigure",
     "/cli/sew/server/enable",
     "/cli/sew/server/recovery-key",
     "/cli/sew/server/restore",
@@ -645,6 +647,12 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         "/cli/sew/server/doctor" => {
             need_manage(who)?;
             sup::doctor(&env)
+        }
+        // Sew 2026-10-27 (protocol 11): `sew install --reconfigure` by hand,
+        // when an upgrade from 0.3.0 could not run it (an older helper).
+        "/cli/sew/server/reconfigure" => {
+            need_manage(who)?;
+            sup::reconfigure(&env)
         }
         "/cli/sew/server/rotate-master" => {
             let v = json_body(body)?;

@@ -586,7 +586,7 @@ fn a_doctored_state_file_fails_closed() {
 fn version_announces_creds_at_protocol_10_and_the_old_state_file_is_untouched() {
     let t = creds_box(255, &["k2-watch.service"], false);
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 10);
+    assert_eq!(v["protocol"], 11, "creds came in 10 (additive)");
     assert_eq!(v["namespaces"]["creds"], true);
     ok(&t.call_in(&["creds", "put", "ingest_key"], VALUE));
     assert!(!t.p(STATE_JSON).exists() || !std::fs::read_to_string(t.p(STATE_JSON)).unwrap().contains("creds"));

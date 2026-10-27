@@ -855,6 +855,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/sew/server/backup",
         "/cli/sew/server/restore",
         "/cli/sew/server/doctor",
+        "/cli/sew/server/reconfigure",
         "/cli/sew/server/rotate-master",
         // Voice (K13) and standalone users (K14): Manage Sew in the handler.
         "/cli/sew/server/config",

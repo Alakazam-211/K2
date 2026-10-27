@@ -1188,7 +1188,7 @@ fn psql_cluster_runs_that_majors_psql_on_its_port() {
 fn version_announces_pgmajor_on_protocol_9() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 10, "pgmajor came in 9; 10 is 0.46.4's one bump (additive)");
+    assert_eq!(v["protocol"], 11, "pgmajor came in 9; 11 is 0.46.6's one bump (additive)");
     assert_eq!(v["namespaces"]["pgmajor"], true);
     assert_eq!(v["namespaces"]["pg"], true, "protocols are additive");
     assert!(PROTOCOL >= k2_root_proto::version::PGMAJOR_MIN_PROTOCOL);
@@ -1519,7 +1519,7 @@ fn schema_only_dump_force_kept_off_force_back_and_quiesce_repl() {
 fn version_announces_pgdual_on_protocol_10() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 10, "pgdual joins 0.46.4's one bump; never 11");
+    assert_eq!(v["protocol"], 11, "pgdual came in 10 (additive)");
     assert_eq!(v["namespaces"]["pgdual"], true);
     assert_eq!(v["namespaces"]["creds"], true);
     assert_eq!(k2_root_proto::version::PGDUAL_MIN_PROTOCOL, 10);

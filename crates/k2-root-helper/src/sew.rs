@@ -90,6 +90,7 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
         SewVerb::Unstage => unstage(ctx),
         SewVerb::InstallBin => install_bin(ctx),
         SewVerb::Install => install(ctx, stdin, who),
+        SewVerb::InstallReconfigure => install_reconfigure(ctx, stdin, who),
         SewVerb::Config => config(ctx, stdin),
         SewVerb::Systemctl(op) => systemctl(ctx, *op),
         SewVerb::Upgrade => upgrade(ctx, None),
@@ -195,6 +196,7 @@ fn installs(verb: &SewVerb) -> bool {
             | SewVerb::StageMedia
             | SewVerb::InstallBin
             | SewVerb::Install
+            | SewVerb::InstallReconfigure
             | SewVerb::Upgrade
             | SewVerb::UpgradeAcceptBinary(_)
             | SewVerb::MediaInstall
@@ -866,6 +868,28 @@ fn install(ctx: &Ctx, stdin: &[u8], who: &Caller) -> HResult<J> {
         out["allowUid"] = json!({"uid": uid, "restartNeeded": was_active});
     }
     Ok(out)
+}
+
+/// `sew install --reconfigure --config-json <staged json>` (protocol 11):
+/// the pinned version's installer over an existing install, after an
+/// upgrade from Sew 0.3.0. Same inputs as [`install`] minus the master
+/// key; the caller's uid (never input) rides `mgmt_allow_uids`. Sew starts
+/// nothing; the daemon restarts `sew` after.
+fn install_reconfigure(ctx: &Ctx, stdin: &[u8], who: &Caller) -> HResult<J> {
+    let req: ReconfigureRequest = parse_json(stdin, "reconfigure refused: input")?;
+    req.validate().map_err(Fail::argv)?;
+    let uid = who.uid.ok_or_else(Fail::not_daemon)?;
+    if uid == 0 {
+        return Err(Fail::state("reconfigure refused: the daemon must not run as root"));
+    }
+    let v = require_known(ctx)?;
+    if v != pinned().version {
+        return Err(Fail::state(format!("reconfigure refused: Sew {v} is installed, the pin is {}", pinned().version)));
+    }
+    let path = put_json(ctx, SEW_STAGE_INSTALL_JSON, &req.sew_inputs(uid))?;
+    let res = run_sew(ctx, &["install", "--reconfigure", "--config-json", &path], None);
+    let _ = remove_file(ctx, SEW_STAGE_INSTALL_JSON);
+    res
 }
 
 fn config(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {

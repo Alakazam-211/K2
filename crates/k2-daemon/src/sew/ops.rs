@@ -517,14 +517,14 @@ pub fn parse_meminfo(text: &str) -> Option<u64> {
 /// One HTTP/1.1 request on Sew's mgmt socket (`Connection: close`).
 /// Sew's client listener as `host:port`: the loopback URL S29 recorded
 /// after enable, else `[server] listen` in `/etc/sew/sew.toml`, else the
-/// default 127.0.0.1:8470.
+/// default port [`k2_root_proto::sew::SEW_CLIENT_PORT`].
 pub fn client_addr() -> String {
     if let Some(u) = crate::chat_pass::link::client_url() {
         return u.trim().trim_start_matches("http://").trim_end_matches('/').to_string();
     }
     use k2_core::deploy::box_service as bs;
     let toml = std::fs::read_to_string(bs::SEW_CONFIG).ok();
-    let port = bs::preset("sew-api").and_then(|p| bs::resolve_preset(p, toml.as_deref()).ok()).map(|r| r.port).unwrap_or(8470);
+    let port = bs::preset("sew-api").and_then(|p| bs::resolve_preset(p, toml.as_deref()).ok()).map(|r| r.port).unwrap_or(k2_root_proto::sew::SEW_CLIENT_PORT);
     format!("127.0.0.1:{port}")
 }
 
@@ -1044,6 +1044,7 @@ pub mod fake {
                     v["allowUid"] = json!({"uid": 1001, "restartNeeded": up});
                     v
                 }
+                "engine sew install reconfigure" => Self::sew_exit(0, json!({"changed": ["sew.toml"], "versions": {"sew": pin}})),
                 "engine sew systemctl enable" => json!({"ok": true}),
                 "engine sew systemctl start-db" => {
                     active(UNIT_DB);

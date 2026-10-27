@@ -803,6 +803,43 @@ fn upgrade(t: &T) -> Value {
     p
 }
 
+/// Sew 2026-10-27: an upgrade FROM below 0.3.1 (0.3.0) re-runs Sew's
+/// installer; nothing else does.
+#[test]
+fn reconfigure_runs_only_after_an_upgrade_from_below_0_3_1() {
+    assert!(needs_reconfigure("0.3.0", "0.3.1"));
+    assert!(needs_reconfigure("0.2.1", "0.4.0"));
+    assert!(!needs_reconfigure("0.3.1", "0.3.2"), "already reconfigured");
+    assert!(!needs_reconfigure("0.0.1", "0.0.2"), "both below: the new release has no reconfigure");
+}
+
+/// The step: protocol 11 + `namespaces.sewreconf` → `engine sew install
+/// reconfigure` with install's inputs (no key), then restart + health. An
+/// older helper says how to finish by hand; nothing runs.
+#[test]
+fn reconfigure_step_needs_protocol_11_and_sends_installs_inputs_without_a_key() {
+    let t = t();
+    t.enabled();
+    t.ops.clear();
+    let env = t.env();
+    let e = reconfigure_step(&env).unwrap_err();
+    assert!(e.contains("k2 root-helper update") && e.contains("k2 hostchat reconfigure"), "{e}");
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
+    let mut st = helper_ok(11, true, pinned().version);
+    st.version_json.as_mut().unwrap()["namespaces"]["sewreconf"] = json!(true);
+    *t.ops.helper.lock().unwrap() = st;
+    let out = reconfigure_step(&env).expect("reconfigure");
+    assert_eq!(out["sewExit"], 0);
+    let calls = t.ops.calls.lock().unwrap().clone();
+    let rc = calls.iter().find(|c| c.argv == "engine sew install reconfigure").expect("reconfigure call");
+    let body: Value = serde_json::from_slice(rc.stdin.as_deref().expect("stdin")).unwrap();
+    assert!(body["jwksUrl"].as_str().unwrap().ends_with("/v1/chat/jwks"), "{body}");
+    assert!(body.get("masterKey").is_none(), "the install keeps its keys: {body}");
+    let eff = t.ops.effects();
+    let i = eff.iter().position(|e| e == "engine sew install reconfigure").unwrap();
+    assert_eq!(eff[i + 1], "engine sew systemctl restart", "{eff:?}");
+}
+
 #[test]
 fn upgrade_preconditions_refuse_without_effects() {
     let t = t();

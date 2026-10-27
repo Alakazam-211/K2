@@ -794,7 +794,7 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
         };
         let out = helper(env, &["install"], Some(body.to_string().as_bytes())).map_err(|e| ("install", e))?;
         if let Some(n) = sew_exit(&out).filter(|n| *n != 0) {
-            return Err(("install", format!("exit {n}: {}", sew_message(&out))));
+            return Err(("install", install_refusal(n, &out)));
         }
         let installed = out.pointer("/sew/versions/sew").and_then(Value::as_str).unwrap_or(pin_v);
         if installed.split('+').next() != Some(pin_v) {
@@ -917,6 +917,92 @@ fn wait_health(env: &Env, tries: u32) -> Result<(), String> {
         }
     }
     Err(format!("Sew never reported healthy: {last}"))
+}
+
+/// Why `sew install` (or `install --reconfigure`) said no, with K2's fix
+/// for the refusals it knows. Sew 0.3.1 refuses `pg_major_ambiguous`
+/// (exit 3) when it can't tell which Postgres major to use.
+fn install_refusal(exit: i64, out: &Value) -> String {
+    let m = sew_message(out);
+    let code = out.pointer("/sew/error/code").and_then(Value::as_str).unwrap_or("");
+    if code == "pg_major_ambiguous" || m.contains("pg_major_ambiguous") {
+        return format!(
+            "exit {exit}: Sew can't tell which Postgres major to use (pg_major_ambiguous): {m}. K2 always asks for \
+             Postgres {}; make sure /usr/lib/postgresql/{}/bin is complete (k2 hostchat preflight)",
+            pin::SEW_PG_MAJOR,
+            pin::SEW_PG_MAJOR
+        );
+    }
+    format!("exit {exit}: {m}")
+}
+
+// ── install reconfigure (protocol 11, Sew 2026-10-27) ───────────────────
+
+/// After an upgrade FROM a release below [`pin::SEW_RECONFIGURE_BELOW`]
+/// (Sew 0.3.0) to one at or above it, K2 runs `sew install --reconfigure`.
+pub fn needs_reconfigure(from: &str, to: &str) -> bool {
+    let below = pin::SEW_RECONFIGURE_BELOW;
+    version_cmp(from, below) == Some(std::cmp::Ordering::Less) && version_cmp(to, below) != Some(std::cmp::Ordering::Less)
+}
+
+/// The helper serves `engine sew install reconfigure`: protocol 11 AND
+/// `namespaces.sewreconf`.
+pub fn helper_reconfigures(env: &Env) -> bool {
+    let st = env.ops.helper_state();
+    st.usable(k2_root_proto::version::SEW_RECONFIGURE_MIN_PROTOCOL)
+        && st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/sewreconf")).and_then(Value::as_bool) == Some(true)
+}
+
+/// `sew install --reconfigure` through the helper (install's inputs, no
+/// master key), then restart `sew` and K2's health check. `Err` = why
+/// (the binary itself is fine: never a rollback).
+pub fn reconfigure_step(env: &Env) -> Result<Value, String> {
+    if !helper_reconfigures(env) {
+        return Err(format!(
+            "the root helper is older than protocol {}: k2 root-helper update, then k2 hostchat reconfigure",
+            k2_root_proto::version::SEW_RECONFIGURE_MIN_PROTOCOL
+        ));
+    }
+    let row = store::load().ok_or("Sew is not installed")?;
+    let body = if row_provider(&row) == pin::PROVIDER_STANDALONE {
+        json!({"provider": pin::PROVIDER_STANDALONE})
+    } else {
+        let port = env.ops.daemon_port().ok_or("the daemon's HTTP port is unknown")?;
+        json!({"jwksUrl": jwks_url_for(port)})
+    };
+    let out = helper(env, &["install", "reconfigure"], Some(body.to_string().as_bytes()))?;
+    match sew_exit(&out) {
+        Some(0) => {}
+        Some(n) => return Err(format!("sew install --reconfigure: {}", install_refusal(n, &out))),
+        None => return Err(format!("sew install --reconfigure: the helper answered without Sew's exit code: {}", short(&out))),
+    }
+    helper(env, &["systemctl", "restart"], None)?;
+    health_check(env, pinned().version)?;
+    Ok(out)
+}
+
+/// `POST /cli/sew/server/reconfigure` (Manage Sew): the same step by hand
+/// (after a root-helper update, when the upgrade could not run it).
+pub fn reconfigure(env: &Env) -> R<Value> {
+    if !env.ops.linux() {
+        return Err(unsupported());
+    }
+    need_row(false)?;
+    helper_check(env)?;
+    let _l = begin(env)?;
+    match reconfigure_step(env) {
+        Ok(out) => {
+            store::update(env.ops.now(), |r| {
+                if r.last_error.as_deref().is_some_and(|e| e.contains("reconfigure")) {
+                    r.last_error = None;
+                }
+            })
+            .map_err(|e| no("db_error", 500, e))?;
+            changed("state");
+            Ok(json!({"ok": true, "sew": out["sew"]}))
+        }
+        Err(why) => Err(no("reconfigure_failed", 500, why)),
+    }
 }
 
 /// Units active + mgmt healthy + Sew's version = `want`.
@@ -2093,6 +2179,15 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
                             r.installed_version = Some(to.into());
                             r.last_error = None;
                         });
+                        // Sew 2026-10-27: an upgrade from 0.3.0 re-runs
+                        // Sew's installer over the install. A failure is
+                        // recorded (the binary works); never a rollback.
+                        if needs_reconfigure(from, to) {
+                            upgrade_note(env, Some("reconfigure"), None);
+                            if let Err(why) = reconfigure_step(env) {
+                                save_enable(env, |r| r.last_error = Some(format!("upgraded to {to}, but {why}")));
+                            }
+                        }
                         // An install from before S27 gets its hook here.
                         if let Some(row) = store::load() {
                             grant_hook_on(env, &row);

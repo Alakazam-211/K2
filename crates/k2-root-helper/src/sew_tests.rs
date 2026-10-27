@@ -92,7 +92,8 @@ fn version_answers_the_current_protocol_with_the_sew_namespace_and_pin() {
     let v = json(&o);
     // 7 brought `engine sew`; 8 is 0.46.1's helper changes (protocols are
     // additive, so the Sew namespace is still here).
-    assert_eq!(v["protocol"], 10, "0.46.4's one bump");
+    assert_eq!(v["protocol"], 11, "0.46.6's one bump");
+    assert_eq!(v["namespaces"]["sewreconf"], true, "install reconfigure (0.46.6)");
     assert_eq!(v["protocol"], k2_root_proto::version::PROTOCOL);
     assert!(v["protocol"].as_u64().expect("number") >= u64::from(k2_root_proto::version::SEW_MIN_PROTOCOL));
     assert_eq!(v["namespaces"]["sew"], true);
@@ -575,6 +576,49 @@ fn install_pipes_the_key_on_stdin_only_and_hands_sew_the_daemon_uid() {
     let o = t.call_in(&["engine", "sew", "install"], install_body().as_bytes());
     assert_eq!(json(&o)["allowUid"]["restartNeeded"], true);
     assert_eq!(std::fs::read_to_string(t.p(SEW_CONFIG)).unwrap(), sew_toml);
+}
+
+/// Protocol 11 (Sew 2026-10-27): after an upgrade from Sew 0.3.0 the
+/// daemon runs `sew install --reconfigure` with install's inputs (pinned
+/// PG major, the caller's uid) and no master key.
+#[test]
+fn install_reconfigure_runs_sews_installer_over_the_install_without_a_key() {
+    let t = box_root();
+    with_pin_installed(&t);
+    sew_answers(&t, 0, r#"{"changed":["sew.toml"],"versions":{"sew":"0.0.2"}}"#);
+    let seen = capture_install_json(&t);
+    let body = format!(r#"{{"jwksUrl":"{JWKS}"}}"#);
+    let o = t.call_in(&["engine", "sew", "install", "reconfigure"], body.as_bytes());
+    ok(&o);
+    assert_eq!(json(&o)["sewExit"], 0);
+    let inputs: serde_json::Value = serde_json::from_str(&seen.borrow()[0]).unwrap();
+    assert_eq!(inputs["mgmt_allow_uids"], serde_json::json!([1001]));
+    assert_eq!(inputs["provider"], "k2");
+    assert_eq!(inputs["k2_jwks_url"], JWKS);
+    assert_eq!(inputs["pg_major"], serde_json::json!(16));
+    let calls = sew_calls(&t);
+    assert_eq!(calls.len(), 1);
+    let json_path = t.p(SEW_STAGE_INSTALL_JSON).display().to_string();
+    assert_eq!(calls[0].0, vec!["install", "--reconfigure", "--config-json", json_path.as_str(), "--json"]);
+    assert_eq!(calls[0].1, None, "no key on stdin: the install keeps its keys");
+    assert!(!t.p(SEW_STAGE_INSTALL_JSON).exists(), "the transient config is removed");
+    // Bad input refuses before anything runs; a key is an unknown field.
+    for bad in [
+        r#"{"jwksUrl":"http://evil.example/v1/chat/jwks"}"#.to_string(),
+        format!(r#"{{"jwksUrl":"{JWKS}","masterKey":"{KEY}"}}"#),
+        format!(r#"{{"jwksUrl":"{JWKS}","provider":"standalone"}}"#),
+        "{}".to_string(),
+    ] {
+        let o = t.call_in(&["engine", "sew", "install", "reconfigure"], bad.as_bytes());
+        assert_eq!(o.code, exit::ARGV, "{bad}: {}", o.stderr);
+    }
+    assert_eq!(sew_calls(&t).len(), 1, "nothing else ran");
+    // Only over the pinned release.
+    let t = box_root();
+    install_binary(&t, &member(&old_tarball(), "sew"));
+    let o = t.call_in(&["engine", "sew", "install", "reconfigure"], body.as_bytes());
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(sew_calls(&t).is_empty());
 }
 
 #[test]

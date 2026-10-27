@@ -1084,18 +1084,69 @@ impl InstallRequest {
     /// `mgmt_allow_uids`, SW7), so the daemon reaches the mgmt socket
     /// without a supplementary group and K2 never edits `sew.toml`.
     pub fn sew_inputs(&self, daemon_uid: u32) -> serde_json::Value {
-        let mut v = serde_json::json!({
-            "provider": self.provider(),
-            "profile": "shared",
-            "pg_major": SEW_PG_MAJOR,
-            "mgmt_allow_uids": [daemon_uid],
-        });
-        if let Some(u) = &self.jwks_url {
-            v["k2_jwks_url"] = serde_json::json!(u);
-        }
-        v
+        install_inputs(self.provider(), self.jwks_url.as_deref(), daemon_uid)
     }
 }
+
+/// Sew SW5 `InstallInputs` (shared by `install` and `install reconfigure`).
+fn install_inputs(provider: &str, jwks_url: Option<&str>, daemon_uid: u32) -> serde_json::Value {
+    let mut v = serde_json::json!({
+        "provider": provider,
+        "profile": "shared",
+        "pg_major": SEW_PG_MAJOR,
+        "mgmt_allow_uids": [daemon_uid],
+    });
+    if let Some(u) = jwks_url {
+        v["k2_jwks_url"] = serde_json::json!(u);
+    }
+    v
+}
+
+/// `engine sew install reconfigure` stdin (protocol 11, 0.46.6): what
+/// `install` takes minus the master key (the install's keys stay). The
+/// helper adds `pg_major` and the daemon's uid, exactly as for `install`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ReconfigureRequest {
+    /// `k2` (absent = `k2`) or `standalone`: the install's own provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// [`jwks_url_ok`]. Required for `k2`, refused for `standalone`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jwks_url: Option<String>,
+}
+
+impl ReconfigureRequest {
+    pub fn provider(&self) -> &str {
+        self.provider.as_deref().unwrap_or(PROVIDER_K2)
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match self.provider() {
+            PROVIDER_K2 => {
+                if !self.jwks_url.as_deref().is_some_and(jwks_url_ok) {
+                    return Err("reconfigure refused: jwksUrl");
+                }
+            }
+            PROVIDER_STANDALONE => {
+                if self.jwks_url.is_some() {
+                    return Err("reconfigure refused: jwksUrl with provider standalone");
+                }
+            }
+            _ => return Err("reconfigure refused: provider"),
+        }
+        Ok(())
+    }
+
+    pub fn sew_inputs(&self, daemon_uid: u32) -> serde_json::Value {
+        install_inputs(self.provider(), self.jwks_url.as_deref(), daemon_uid)
+    }
+}
+
+/// The Sew release whose installs `install reconfigure` brings forward:
+/// K2's upgrade flow runs it after an upgrade FROM a version below this
+/// (Sew 2026-10-27: after an upgrade from 0.3.0).
+pub const SEW_RECONFIGURE_BELOW: &str = "0.3.1";
 
 /// `engine sew config` stdin: the four keys `sew config set` accepts, each
 /// optional, each validated. Applied in a fixed order.

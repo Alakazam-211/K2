@@ -61,6 +61,13 @@
 //!   lane that needs a helper change joins 10 here and adds its own
 //!   namespace flag; never 11 before 10 ships. Anything after a 10 build
 //!   ships needs 11.
+//! - 11 = every root-helper change 0.46.6 makes, in one bump, shared by
+//!   every lane (the ONE place to add to it; 0.46.5 shipped 10 unchanged):
+//!   `engine sew install reconfigure` (`sew install --reconfigure` after an
+//!   upgrade from Sew 0.3.0, Sew 2026-10-27; `namespaces.sewreconf`,
+//!   [`SEW_RECONFIGURE_MIN_PROTOCOL`]). Another 0.46.6 lane that needs a
+//!   helper change (e.g. App custom domains' :80 listener) joins 11 here
+//!   with its own namespace flag; never 12 before 11 ships.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -69,7 +76,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 10;
+pub const PROTOCOL: u32 = 11;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -96,6 +103,9 @@ pub const APPS_MIN_PROTOCOL: u32 = 6;
 /// `namespaces.sew` flag in `helper version` (protocol numbers on other
 /// branches have collided before; the flag keeps them apart).
 pub const SEW_MIN_PROTOCOL: u32 = 7;
+/// `engine sew install reconfigure` (0.46.6). Gated on this AND
+/// `namespaces.sewreconf == true` in `helper version`.
+pub const SEW_RECONFIGURE_MIN_PROTOCOL: u32 = 11;
 /// `apps podman install|uninstall` (K2's Podman 5 bundle, 0.46.1 lane P).
 /// Rides 0.46.1's one helper bump, 8 (7 shipped in 0.46.0 for Sew).
 pub const PODMAN_INSTALL_MIN_PROTOCOL: u32 = 8;
@@ -273,7 +283,8 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 10, "protocol 10 = 0.46.4's one bump (creds); 9 = 0.46.3's (cli-refresh + Postgres majors)");
+        assert_eq!(PROTOCOL, 11, "protocol 11 = 0.46.6's one bump (Sew install reconfigure); 10 = 0.46.4's (creds)");
+        assert_eq!(SEW_RECONFIGURE_MIN_PROTOCOL, 11, "Sew reconfigure joins 0.46.6's one bump");
         assert_eq!(CREDS_MIN_PROTOCOL, 10, "creds joins 0.46.4's one bump; never 11 before 10 ships");
         let creds: Vec<_> = crate::verbs::catalog().into_iter().filter(|v| v.namespace() == "creds").collect();
         assert_eq!(creds.len(), 6, "creds status|put|bind|unbind|restart|remove: {creds:?}");

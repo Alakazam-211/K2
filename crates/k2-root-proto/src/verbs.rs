@@ -259,6 +259,14 @@ pub enum SewVerb {
     /// <staged json> --master-key-from - --no-start`, then the daemon's uid
     /// (from the caller check) into `[mgmt] allow_uids` (SW7).
     Install,
+    /// Stdin: [`crate::sew::ReconfigureRequest`] (protocol 11, 0.46.6):
+    /// `sew install --reconfigure --config-json <staged json>` on an
+    /// existing install of the pinned version, after an upgrade from Sew
+    /// 0.3.0 (Sew 2026-10-27). Same inputs as `install` (provider, K2's
+    /// JWKS, `pg_major`, the daemon's uid from the caller check) and no
+    /// master key: the install's keys stay. Sew restarts nothing; the
+    /// daemon restarts `sew` after.
+    InstallReconfigure,
     /// Stdin: [`crate::sew::ConfigRequest`] → `sew config set` per key.
     Config,
     Systemctl(SewSystemctl),
@@ -346,6 +354,7 @@ impl SewVerb {
             ["unstage"] => Self::Unstage,
             ["install-bin"] => Self::InstallBin,
             ["install"] => Self::Install,
+            ["install", "reconfigure"] => Self::InstallReconfigure,
             ["config"] => Self::Config,
             ["systemctl", op] => Self::Systemctl(SewSystemctl::parse(op)?),
             ["upgrade"] => Self::Upgrade,
@@ -391,6 +400,7 @@ impl SewVerb {
             Self::Unstage => s(&["unstage"]),
             Self::InstallBin => s(&["install-bin"]),
             Self::Install => s(&["install"]),
+            Self::InstallReconfigure => s(&["install", "reconfigure"]),
             Self::Config => s(&["config"]),
             Self::Systemctl(op) => s(&["systemctl", op.token()]),
             Self::Upgrade => s(&["upgrade"]),
@@ -437,6 +447,7 @@ impl SewVerb {
             | Self::MediaStatus
             | Self::Systemctl(S::Enable | S::StartDb | S::Start | S::Restart) => Class::Open,
             Self::Install
+            | Self::InstallReconfigure
             | Self::Config
             | Self::Systemctl(S::Migrate | S::Stop | S::DisableNow)
             | Self::Upgrade
@@ -463,7 +474,12 @@ impl SewVerb {
     fn stdin_cap(&self) -> Option<usize> {
         match self {
             Self::Stage | Self::StageMedia => Some(CAP_INSTALL_BIN),
-            Self::Install | Self::Config | Self::MediaInstall | Self::MediaReconfigure { .. } | Self::MediaTurnCert => {
+            Self::Install
+            | Self::InstallReconfigure
+            | Self::Config
+            | Self::MediaInstall
+            | Self::MediaReconfigure { .. }
+            | Self::MediaTurnCert => {
                 Some(CAP_SEW_JSON)
             }
             Self::RotateMaster => Some(CAP_SEW_KEY),
@@ -484,6 +500,7 @@ impl SewVerb {
             Self::Unstage,
             Self::InstallBin,
             Self::Install,
+            Self::InstallReconfigure,
             Self::Config,
             Self::Upgrade,
             Self::UpgradeAcceptBinary("7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385".into()),

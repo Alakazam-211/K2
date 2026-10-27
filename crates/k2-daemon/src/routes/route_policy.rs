@@ -1362,6 +1362,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/server/config", Admin),
     post("/cli/sew/server/disable", Admin),
     post("/cli/sew/server/doctor", Admin),
+    post("/cli/sew/server/reconfigure", Admin),
     post("/cli/sew/server/enable", Admin),
     // S32 (K27): Sew's keyring mirror (Manage Sew; never the vault).
     post("/cli/sew/server/mirror", Admin),

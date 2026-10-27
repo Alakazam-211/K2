@@ -34,8 +34,9 @@ pub const CLASS_OWNER: &str = "owner";
 /// Tied to (or added by) the giving workspace, with grants only on this
 /// App among A's Apps: re-tied to B and its known password retired (S3).
 pub const CLASS_GIVER_TIED: &str = "giver_tied";
-/// Tied by one of this App's keys (`app-key:<svc>`): A's runtime could
-/// know its password; retired with the giver-tied (S3).
+/// Tied to the giving workspace only by an App key (every tie reason is
+/// `app_key`): A's runtime could know its password. Re-tied and retired
+/// with the giver-tied (S3); listed apart on the card.
 pub const CLASS_APP_KEY_TIED: &str = "app_key_tied";
 /// Tied to A and also on A's other Apps: stays A's (§4.4).
 pub const CLASS_SHARED: &str = "shared";
@@ -51,7 +52,8 @@ pub struct HandoverGuest {
     pub principal_id: String,
     pub username: String,
     pub class: &'static str,
-    /// The tie (`workspace id` or `app-key:<svc>`), `None` for a person.
+    /// The workspace the guest's tie holds it to (`principal_agent_ties`,
+    /// the 0.46.4 ceiling), `None` for a person.
     pub tie: Option<String>,
     pub has_password: bool,
     pub grant_enabled: bool,
@@ -66,26 +68,10 @@ pub fn guests(service_id: &str, from: &str, other_services_of_from: &[String]) -
     with_conn(|conn| guests_conn(conn, service_id, from, other_services_of_from))
 }
 
-fn claimed(conn: &Connection, pid: &str) -> Result<bool, String> {
-    conn.query_row("SELECT 1 FROM principal_person_claims WHERE principal_id = ?1", params![pid], |_| Ok(()))
-        .optional()
-        .map(|o| o.is_some())
-        .map_err(|e| format!("person claim lookup: {e}"))
-}
-
-/// [`super::creators::agent_tie`] on an open connection.
-pub(crate) fn tie_conn(conn: &Connection, pid: &str) -> Result<Option<String>, String> {
-    if claimed(conn, pid)? {
-        return Ok(None);
-    }
-    let tied: Option<String> = conn
-        .query_row("SELECT tied_to FROM principal_agent_ties WHERE principal_id = ?1", params![pid], |r| r.get(0))
-        .optional()
-        .map_err(|e| format!("agent tie lookup: {e}"))?;
-    match tied {
-        Some(t) => Ok(Some(t)),
-        None => super::creators::workspace_of_conn(conn, pid),
-    }
+/// The guest's tie on an open connection (the one tie store, skin.db step
+/// 6: an owner reset or claim drops the row, so no row = a person).
+pub(crate) fn tie_conn(conn: &Connection, pid: &str) -> Result<Option<super::ties::Tie>, String> {
+    super::ties::get_conn(conn, pid)
 }
 
 pub(crate) fn guests_conn(conn: &Connection, service_id: &str, from: &str, other_services_of_from: &[String]) -> Result<Vec<HandoverGuest>, String> {
@@ -103,7 +89,6 @@ pub(crate) fn guests_conn(conn: &Connection, service_id: &str, from: &str, other
             .map_err(|e| format!("handover guests: {e}"))?;
         it.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("handover guests: {e}"))?
     };
-    let key_marker = super::creators::app_key_marker(service_id);
     let mut out = Vec::with_capacity(rows.len());
     for (pid, username, hash, agent_ws, enabled) in rows {
         let tie = tie_conn(conn, &pid)?;
@@ -123,16 +108,17 @@ pub(crate) fn guests_conn(conn: &Connection, service_id: &str, from: &str, other
         let class = if agent_ws.as_deref().map(str::trim) == Some(from) && !from.is_empty() {
             CLASS_AGENT_LOGIN
         } else {
-            match tie.as_deref() {
+            match tie.as_ref() {
                 None => CLASS_OWNER,
-                Some(t) if t == from && !from.is_empty() => {
+                Some(t) if t.workspace_id == from && !from.is_empty() => {
                     if on_others {
                         CLASS_SHARED
+                    } else if !t.reasons.is_empty() && t.reasons.iter().all(|r| r == super::ties::REASON_APP_KEY) {
+                        CLASS_APP_KEY_TIED
                     } else {
                         CLASS_GIVER_TIED
                     }
                 }
-                Some(t) if t == key_marker => CLASS_APP_KEY_TIED,
                 Some(_) => CLASS_OTHER_TIED,
             }
         };
@@ -147,7 +133,7 @@ pub(crate) fn guests_conn(conn: &Connection, service_id: &str, from: &str, other
             principal_id: pid,
             username,
             class,
-            tie,
+            tie: tie.map(|t| t.workspace_id),
             has_password: hash.is_some_and(|h| !h.trim().is_empty()),
             grant_enabled: enabled,
             test_guest,
@@ -472,12 +458,14 @@ mod tests {
 // ends the guest sets a new password (B's `k2 app user reset`, or the
 // owner's). Shared guests (also on A's other Apps) stay A's.
 //
-// Shape note: this is main's tie store (`principal_agent_ties.tied_to`,
-// creator stamps). When `k2/agent-app-users` lands (one tie table with a
-// ceiling, invites, unconfirmed emails), [`retie_conn`] and
-// [`retire_conn`] are the two functions to port; the ceiling's
-// `app_inside` consults [`handing_over`] so a tied guest's request between
-// the daemon-DB commit and this transaction is never refused.
+// Shape (0.46.5 port): the 0.46.4 tie store is the ceiling
+// (`principal_agent_ties.workspace_id`, `host_ok`, `reasons`): a tied
+// guest signs in only to Apps of its tie's workspace. So the re-tie is
+// load-bearing (without it every giver-tied guest is refused on B's App),
+// and the ceiling's `app_inside` consults [`tie_inside`] so a tied guest's
+// request between the daemon-DB commit and this transaction is never
+// refused. A shared guest the owner takes over is an owner claim
+// (`ties::owner_claim`'s steps, in this transaction).
 
 /// skin.db DDL (run by the idempotent open block): the undo journal of a
 /// handover, one row per guest it touched. Additive (an older K2 ignores
@@ -489,7 +477,7 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
             handover_id   TEXT NOT NULL,
             principal_id  TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
             class         TEXT NOT NULL,
-            tie_before    TEXT,
+            tie_before    TEXT, -- the tie row as JSON (principal_agent_ties, step 6)
             stamp_before  TEXT,
             password_hash TEXT,
             claimed       INTEGER NOT NULL DEFAULT 0,
@@ -567,19 +555,26 @@ pub fn apply_guests(service_id: &str, from: &str, to: &str, others_of_from: &[St
                     rep.retired += usize::from(g.has_password);
                 }
                 CLASS_APP_KEY_TIED => {
+                    // The App key's tie names A's workspace (the App's at
+                    // the time): the key is B's now, and so is the tie.
                     journal_conn(&tx, handover_id, g, false)?;
+                    retie_conn(&tx, &g.principal_id, from, to)?;
+                    rep.retied += 1;
                     rep.reset_links_voided += retire_conn(&tx, &g.principal_id)?;
                     rep.retired += usize::from(g.has_password);
                 }
                 CLASS_SHARED if reset_shared => {
+                    // The owner takes the shared guest over: an owner claim
+                    // (0.46.4, `ties::owner_claim`) in this transaction. The
+                    // tie goes, the password A may know is wiped, every
+                    // session ends (A could hold one it signed in with that
+                    // password) and the links A could see are voided. They
+                    // keep their grants and sign in again with the owner's
+                    // new password or reset link.
                     journal_conn(&tx, handover_id, g, true)?;
-                    tx.execute(
-                        "INSERT INTO principal_person_claims (principal_id, claimed_by, claimed_at) VALUES (?1, 'owner-token', ?2)
-                         ON CONFLICT(principal_id) DO UPDATE SET claimed_by = excluded.claimed_by, claimed_at = excluded.claimed_at",
-                        params![g.principal_id, super::now_secs()],
-                    )
-                    .map_err(|e| format!("handover shared reset: {e}"))?;
+                    super::ties::release_conn(&tx, &g.principal_id)?;
                     rep.reset_links_voided += retire_conn(&tx, &g.principal_id)?;
+                    super::revoke_sessions_for_principal(&tx, &g.principal_id)?;
                     rep.shared_reset += 1;
                 }
                 CLASS_SHARED => rep.shared_kept += 1,
@@ -595,10 +590,9 @@ pub fn apply_guests(service_id: &str, from: &str, to: &str, others_of_from: &[St
 /// Keep the before-values of one guest (first write wins: a roll-forward
 /// never overwrites what the first run saw).
 fn journal_conn(conn: &Connection, handover_id: &str, g: &HandoverGuest, claimed: bool) -> Result<(), String> {
-    let tie: Option<String> = conn
-        .query_row("SELECT tied_to FROM principal_agent_ties WHERE principal_id = ?1", params![g.principal_id], |r| r.get(0))
-        .optional()
-        .map_err(|e| format!("handover journal: {e}"))?;
+    let tie: Option<String> = super::ties::get_conn(conn, &g.principal_id)?
+        .map(|t| serde_json::to_string(&t).map_err(|e| format!("handover journal: {e}")))
+        .transpose()?;
     let stamp = super::creators::workspace_of_conn(conn, &g.principal_id)?;
     let hash: Option<String> = conn
         .query_row("SELECT password_hash FROM principals WHERE id = ?1", params![g.principal_id], |r| r.get(0))
@@ -614,9 +608,11 @@ fn journal_conn(conn: &Connection, handover_id: &str, g: &HandoverGuest, claimed
     Ok(())
 }
 
-/// The tie and the creator stamp say `to` instead of `from`.
+/// The tie (its ceiling) and the creator stamp say `to` instead of
+/// `from`. `host_ok`, the reasons and who set it are kept (the journal has
+/// the whole row).
 fn retie_conn(conn: &Connection, pid: &str, from: &str, to: &str) -> Result<(), String> {
-    conn.execute("UPDATE principal_agent_ties SET tied_to = ?3 WHERE principal_id = ?1 AND tied_to = ?2", params![pid, from, to])
+    conn.execute("UPDATE principal_agent_ties SET workspace_id = ?3 WHERE principal_id = ?1 AND workspace_id = ?2", params![pid, from, to])
         .map_err(|e| format!("handover re-tie: {e}"))?;
     conn.execute("UPDATE principal_agent_creators SET workspace_id = ?3 WHERE principal_id = ?1 AND workspace_id = ?2", params![pid, from, to])
         .map_err(|e| format!("handover re-tie: {e}"))?;
@@ -624,11 +620,39 @@ fn retie_conn(conn: &Connection, pid: &str, from: &str, to: &str) -> Result<(), 
 }
 
 /// Retire what the giver could know: the password (cleared; live sessions
-/// stay) and every unused reset link. Returns the links voided.
+/// stay), every unused reset link, and every unused invite or App reset
+/// link (`app_user_invites`, which an agent or the App could see; the
+/// owner's own reset links stay, as an owner claim keeps them). Returns the
+/// links voided.
 fn retire_conn(conn: &Connection, pid: &str) -> Result<usize, String> {
     conn.execute("UPDATE principals SET password_hash = NULL WHERE id = ?1", params![pid]).map_err(|e| format!("handover retire: {e}"))?;
-    conn.execute("UPDATE password_reset_tokens SET used_at = ?2 WHERE principal_id = ?1 AND used_at IS NULL", params![pid, super::now_secs()])
-        .map_err(|e| format!("handover retire: {e}"))
+    let resets = conn
+        .execute("UPDATE password_reset_tokens SET used_at = ?2 WHERE principal_id = ?1 AND used_at IS NULL", params![pid, super::now_secs()])
+        .map_err(|e| format!("handover retire: {e}"))?;
+    let invites = conn
+        .execute("DELETE FROM app_user_invites WHERE principal_id = ?1 AND used_at IS NULL AND purpose != 'owner_reset'", params![pid])
+        .map_err(|e| format!("handover retire (invites): {e}"))?;
+    Ok(resets + invites)
+}
+
+/// Put back a tie row the journal kept (undo of an owner take-over). A tie
+/// written since (a new tie after an owner reset) is left alone.
+fn restore_tie_conn(conn: &Connection, pid: &str, before: &str) -> Result<(), String> {
+    let t: serde_json::Value = serde_json::from_str(before).map_err(|e| format!("handover undo (tie): {e}"))?;
+    let ws = t["workspaceId"].as_str().ok_or("handover undo (tie): no workspace in the journal")?;
+    conn.execute(
+        "INSERT OR IGNORE INTO principal_agent_ties (principal_id, workspace_id, host_ok, reasons, set_by, set_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            pid,
+            ws,
+            i64::from(t["hostOk"].as_bool() == Some(true)),
+            t["reasons"].to_string(),
+            t["setBy"].as_str().unwrap_or("handover:undo"),
+            t["setAt"].as_i64().unwrap_or_else(super::now_secs),
+        ],
+    )
+    .map_err(|e| format!("handover undo (tie): {e}"))?;
+    Ok(())
 }
 
 /// One journal row (undo, tests).
@@ -695,13 +719,16 @@ pub fn undo_guests(service_id: &str, from: &str, to: &str, handover_id: &str) ->
         let tx = conn.unchecked_transaction().map_err(|e| format!("handover undo: {e}"))?;
         let mut rep = UndoReport::default();
         for j in &rows {
-            if j.class == CLASS_GIVER_TIED {
+            if j.class == CLASS_GIVER_TIED || j.class == CLASS_APP_KEY_TIED {
                 retie_conn(&tx, &j.principal_id, to, from)?;
                 rep.retied += 1;
             }
             if j.claimed {
-                tx.execute("DELETE FROM principal_person_claims WHERE principal_id = ?1", params![j.principal_id])
-                    .map_err(|e| format!("handover undo: {e}"))?;
+                // The shared guest the owner took over is tied to A again,
+                // as before (unless a tie was written since).
+                if let Some(before) = j.tie_before.as_deref() {
+                    restore_tie_conn(&tx, &j.principal_id, before)?;
+                }
             }
             if let Some(h) = &j.password_hash {
                 let n = tx

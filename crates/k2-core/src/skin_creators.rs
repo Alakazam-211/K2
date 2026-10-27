@@ -159,7 +159,7 @@ pub fn workspace_of(principal_id: &str) -> Result<Option<String>, String> {
 /// names it, or the owner marked them as that workspace's agent login
 /// (`principals.agent_workspace`). Sorted. The hand-over guard refuses
 /// while any exists: moving the App would leave them tied to a workspace
-/// that no longer maintains it (and, once ties are ceilings, sign them out).
+/// that no longer maintains it (ties are ceilings: it would sign them out).
 pub fn app_guests_tied_to(app: &str, workspace_id: &str) -> Result<Vec<String>, String> {
     let (app, ws) = (app.trim().to_string(), workspace_id.trim().to_string());
     if app.is_empty() || ws.is_empty() {
@@ -180,18 +180,9 @@ pub fn app_guests_tied_to(app: &str, workspace_id: &str) -> Result<Vec<String>, 
         let mut out = Vec::new();
         for (pid, username, marked) in rows {
             let marked_here = marked.as_deref().map(str::trim) == Some(ws.as_str());
-            let tie: Option<String> = if claimed(conn, &pid)? {
-                None
-            } else {
-                let tied: Option<String> = conn
-                    .query_row("SELECT tied_to FROM principal_agent_ties WHERE principal_id = ?1", params![pid], |r| r.get(0))
-                    .optional()
-                    .map_err(|e| format!("agent tie lookup: {e}"))?;
-                match tied {
-                    Some(t) => Some(t),
-                    None => workspace_of_conn(conn, &pid)?,
-                }
-            };
+            // The one tie store (step 6): an owner claim or reset drops the
+            // row, so no row is a person.
+            let tie: Option<String> = super::ties::get_conn(conn, &pid)?.map(|t| t.workspace_id);
             if marked_here || tie.as_deref() == Some(ws.as_str()) {
                 out.push(username);
             }

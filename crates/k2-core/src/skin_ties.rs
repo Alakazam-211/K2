@@ -404,12 +404,18 @@ pub fn stored_email_refusals() -> Result<std::collections::HashMap<String, &'sta
 pub struct Denied;
 
 /// Is App `app` (whose workspace is `app_workspace`; `None` for `host` or
-/// an App that no longer exists) inside `tie`'s ceiling?
+/// an App that no longer exists) inside `tie`'s ceiling? While `app` is
+/// being handed over (0.46.5, prd-app-handoff-v1 §4.4), a tie to either
+/// side counts as inside it: the daemon-DB commit names B before the skin
+/// transaction re-ties A's guests, and no tied guest is refused in that gap.
 pub fn app_inside(tie: &Tie, app: &str, app_workspace: Option<&str>) -> bool {
     if app == HOST_APP_ID {
         return tie.host_ok;
     }
-    app_workspace == Some(tie.workspace_id.as_str())
+    match app_workspace {
+        Some(ws) => ws == tie.workspace_id || super::handover::tie_inside(&tie.workspace_id, app, ws),
+        None => false,
+    }
 }
 
 /// What a tied user may use of `policy` on `app` (§5.2): no tie → the

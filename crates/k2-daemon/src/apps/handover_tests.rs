@@ -259,8 +259,10 @@ fn the_plan_lists_every_row_with_its_case() {
     let (o1, o2) = (guest("own1-t01", &f.svc, &[&f.a]), guest("own2-t01", &f.svc, &[&f.a]));
     let added = guest("added-t01", &f.svc, &[&f.a]);
     k2_core::skin::creators::stamp(&added, &f.a).unwrap();
+    k2_core::skin::creators::tie(&added, &f.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
     let shared = guest("shared-t01", &f.svc, &[&f.a]);
     k2_core::skin::creators::stamp(&shared, &f.a).unwrap();
+    k2_core::skin::creators::tie(&shared, &f.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
     grant_more(&shared, &f.other_svc, &[&f.a]);
     let stripe = put_ws_secret(&f.a, "STRIPE_KEY_T01", "sk_test_t01");
     grant_to_service(&stripe, &f.svc, "STRIPE_KEY");
@@ -563,6 +565,7 @@ fn a_tied_guest_stops_the_handover_and_nothing_changes() {
     let f = fx("t16");
     let pid = guest("tied-t16", &f.svc, &[&f.a]);
     k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
+    k2_core::skin::creators::tie(&pid, &f.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
     let (st, v) = ask(&f);
     assert_eq!((st, code(&v)), (409, "handover_needs_tie_move"), "{v}");
     assert_eq!(v["error"]["blockers"][0]["names"], json!(["tied-t16"]), "{v}");
@@ -784,7 +787,7 @@ fn a_guest_a_set_up_is_retied_and_its_password_retired() {
     let f = fx("t31");
     let pid = guest("bea-t31", &f.svc, &[&f.a]);
     k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
-    k2_core::skin::creators::tie(&pid, &f.a).unwrap();
+    k2_core::skin::creators::tie(&pid, &f.a, "agent:t31", k2_core::skin::ties::REASON_PASSWORD).unwrap();
     k2_core::skin::set_principal_password("bea-t31", Some("a-knows-this-1")).unwrap();
     let s = k2_core::skin::create_app_session_token("bea-t31", &f.svc).unwrap();
     let (_, v) = ask(&f);
@@ -802,7 +805,10 @@ fn a_guest_a_set_up_is_retied_and_its_password_retired() {
     assert_eq!(k2_core::skin::creators::workspace_of(&pid).unwrap().as_deref(), Some(f.b.as_str()), "stamped B");
     let j = sh::journal(&hid).unwrap();
     assert_eq!(j.len(), 1, "{j:?}");
-    assert_eq!((j[0].tie_before.as_deref(), j[0].stamp_before.as_deref()), (Some(f.a.as_str()), Some(f.a.as_str())));
+    let tie_before: serde_json::Value = serde_json::from_str(j[0].tie_before.as_deref().expect("the journal keeps the tie row")).expect("the tie row is JSON");
+    assert_eq!(tie_before["workspaceId"], json!(f.a), "the whole tie row, as it was: {tie_before}");
+    assert_eq!(tie_before["reasons"], json!(["password"]), "{tie_before}");
+    assert_eq!(j[0].stamp_before.as_deref(), Some(f.a.as_str()));
     assert!(j[0].password_hash.as_deref().is_some_and(|h| !h.is_empty()), "the journal keeps the hash for undo");
     // B manages it now: a new password from B (or the owner) signs in.
     k2_core::skin::set_principal_password("bea-t31", Some("new-from-b-2")).unwrap();
@@ -815,6 +821,7 @@ fn a_shared_guest_stays_a_s_unless_the_owner_resets_it() {
     let f = fx("t32");
     let pid = guest("sam-t32", &f.svc, &[&f.a]);
     k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
+    k2_core::skin::creators::tie(&pid, &f.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
     grant_more(&pid, &f.other_svc, &[&f.a]);
     k2_core::skin::set_principal_password("sam-t32", Some("shared-pw-1")).unwrap();
     let (st, v) = ask(&f);
@@ -827,6 +834,10 @@ fn a_shared_guest_stays_a_s_unless_the_owner_resets_it() {
     assert_eq!(st, 200);
     assert_eq!(tie_of(&pid).as_deref(), Some(f.a.as_str()), "the shared guest stays A's");
     assert!(k2_core::skin::verify_principal_password("sam-t32", "shared-pw-1"), "nothing of theirs changed");
+    // The 0.46.4 ceiling: a guest tied to A signs in only to A's Apps, so
+    // it loses this one (the card said so) and keeps A's other App.
+    assert!(k2_core::skin::create_app_session_token("sam-t32", &f.svc).is_err(), "outside its tie's ceiling now");
+    assert!(k2_core::skin::create_app_session_token("sam-t32", &f.other_svc).is_ok(), "A's other App stays");
 }
 
 /// T3.2 (b): with "take them over", the tie goes, the password A knew is
@@ -836,14 +847,17 @@ fn the_owner_may_take_a_shared_guest_over() {
     let g = fx("t32b");
     let pid = guest("tia-t32", &g.svc, &[&g.a]);
     k2_core::skin::creators::stamp(&pid, &g.a).unwrap();
+    k2_core::skin::creators::tie(&pid, &g.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
     grant_more(&pid, &g.other_svc, &[&g.a]);
     k2_core::skin::set_principal_password("tia-t32", Some("shared-pw-2")).unwrap();
+    let before = k2_core::skin::create_app_session_token("tia-t32", &g.other_svc).unwrap();
     let (st, v) = call("/cli/app/handover", &Who::Owner, json!({ "app": g.app, "to": g.b, "resetShared": true }));
     assert_eq!(st, 202, "{v}");
     let (st, _) = approve(&req_id(&v));
     assert_eq!(st, 200);
     assert_eq!(tie_of(&pid), None, "the owner took them over");
     assert!(!k2_core::skin::verify_principal_password("tia-t32", "shared-pw-2"), "A's known password is retired");
+    assert!(k2_core::skin::resolve_skin_token(&before.raw).is_none(), "an owner take-over ends their sessions (A could hold one)");
     let s = k2_core::skin::create_app_session_token("tia-t32", &g.svc).unwrap();
     assert_eq!(s.meta.rooms, vec![g.b.clone()], "they keep the App, now with B");
 }
@@ -876,6 +890,33 @@ fn ties_to_either_side_are_inside_only_during_the_handover() {
         assert!(!sh::tie_inside("ws-a", "svc-other", "ws-b"), "another App never");
     }
     assert!(!sh::tie_inside("ws-a", "svc-gap", "ws-b"), "over when the guard drops");
+}
+
+/// T3.4 against the 0.46.4 ceiling itself (`skin::ties::clamp`, what every
+/// sign-in and live session goes through): after the daemon-DB commit the
+/// App's workspace is B while the guest is still tied to A. Without the
+/// handover marker that is a refusal (the test bites); with it, the
+/// guest keeps its room until the skin transaction re-ties it.
+#[test]
+fn the_ceiling_lets_a_tied_guest_through_the_commit_gap_only() {
+    use k2_core::skin::ties;
+    let tie = ties::Tie {
+        principal_id: "p-gap".into(),
+        workspace_id: "ws-a".into(),
+        host_ok: false,
+        reasons: vec![ties::REASON_CREATED.into()],
+        set_by: "agent:a".into(),
+        set_at: 1,
+    };
+    let mut policy = k2_core::skin::RoomPolicy::new();
+    policy.insert("ws-a".into(), vec!["thread:read".into()]);
+    assert_eq!(ties::clamp(Some(&tie), "svc-gap2", Some("ws-b"), policy.clone()), Err(ties::Denied), "no marker: refused in the gap");
+    {
+        let _g = sh::begin_handing_over("svc-gap2", "ws-a", "ws-b");
+        assert_eq!(ties::clamp(Some(&tie), "svc-gap2", Some("ws-b"), policy.clone()), Ok(policy.clone()), "inside while it hands over");
+        assert_eq!(ties::clamp(Some(&tie), "svc-else", Some("ws-b"), policy.clone()), Err(ties::Denied), "only this App");
+    }
+    assert_eq!(ties::clamp(Some(&tie), "svc-gap2", Some("ws-b"), policy), Err(ties::Denied), "over when the guard drops");
 }
 
 // ── S4: secrets, the database, the re-key ────────────────────────────
@@ -1040,7 +1081,7 @@ fn a_shared_database_needs_the_owner_s_share() {
 #[test]
 fn the_app_s_vault_key_is_rekeyed() {
     let f = fx("t46");
-    let grant = k2_core::app_grace::keys::AppKeyGrant { scopes: vec!["users".into()], rooms: vec![f.a.clone()], roles: vec![], vault_secret: Some("K2_APP_KEY.t46".into()) };
+    let grant = k2_core::app_grace::keys::AppKeyGrant { scopes: vec!["users".into()], rooms: vec![f.a.clone()], roles: vec![], vault_secret: Some("K2_APP_KEY.t46".into()), minted_by_agent: None };
     let (old, raw) = k2_core::api_keys::create_app_key("jobs key", &f.svc, &grant.to_json()).unwrap();
     assert!(k2_core::api_keys::resolve_app_key(&raw).is_some());
     let (_, v) = ask(&f);
@@ -1067,9 +1108,11 @@ fn undo_puts_everything_back_with_compare_and_set_passwords() {
     add_labels(&f, "agent-t51", "dannon-t51");
     let kept = guest("kay-t51", &f.svc, &[&f.a]);
     k2_core::skin::creators::stamp(&kept, &f.a).unwrap();
+    k2_core::skin::creators::tie(&kept, &f.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
     k2_core::skin::set_principal_password("kay-t51", Some("a-set-kay-1")).unwrap();
     let changed = guest("cal-t51", &f.svc, &[&f.a]);
     k2_core::skin::creators::stamp(&changed, &f.a).unwrap();
+    k2_core::skin::creators::tie(&changed, &f.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
     k2_core::skin::set_principal_password("cal-t51", Some("a-set-cal-1")).unwrap();
     let sel = put_ws_secret(&f.a, "TOKEN_T51", "tok-t51");
     grant_to_service(&sel, &f.svc, "TOKEN");
@@ -1142,6 +1185,7 @@ fn the_window_end_forgets_the_credential_journal() {
     let f = fx("t53");
     let pid = guest("hal-t53", &f.svc, &[&f.a]);
     k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
+    k2_core::skin::creators::tie(&pid, &f.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
     k2_core::skin::set_principal_password("hal-t53", Some("a-set-hal-1")).unwrap();
     let (_, v) = ask(&f);
     let (_, v) = approve(&req_id(&v));

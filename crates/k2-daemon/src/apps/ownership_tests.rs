@@ -715,12 +715,13 @@ fn handover_refuses_each_blocker_by_name() {
     let tied = fresh("tied", &f.a);
     let g = k2_core::skin::add_principal_for_app("tied-added", None, &svc(&tied), None, "agent").unwrap();
     k2_core::skin::creators::stamp(&g.id, &f.a).unwrap();
+    k2_core::skin::creators::tie(&g.id, &f.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
     let v = assert_refused(&tied, &f.b, "handoff_needs_tie_move");
     let b = v["error"]["blockers"].as_array().unwrap().iter().find(|b| b["code"] == "handoff_needs_tie_move").unwrap().clone();
     assert_eq!(b["items"], json!(["tied-added"]), "names the guest: {v}");
     let rekeyed = fresh("rekey", &f.a);
     let g = k2_core::skin::add_principal_for_app("tied-rekeyed", None, &svc(&rekeyed), None, "owner").unwrap();
-    k2_core::skin::creators::tie(&g.id, &f.a).unwrap();
+    k2_core::skin::creators::tie(&g.id, &f.a, "agent:rekey", k2_core::skin::ties::REASON_PASSWORD).unwrap();
     assert_refused(&rekeyed, &f.b, "handoff_needs_tie_move");
     // Once the owner takes the guest over, it no longer blocks.
     k2_core::skin::creators::clear_agent_tie(&g.id, "owner-token").unwrap();
@@ -908,6 +909,7 @@ fn unpark_and_release_use_the_same_guard() {
     stamp_label(&f.a2, &f.a);
     let g = k2_core::skin::add_principal_for_app("parked-tied", None, &svc(&f.a2), None, "agent").unwrap();
     k2_core::skin::creators::stamp(&g.id, &f.a).unwrap();
+    k2_core::skin::creators::tie(&g.id, &f.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
 
     // Release to B: a2 is unsafe, so neither moves, and no confirm is asked.
     let (st, v) = call("/cli/app/release", &Who::Owner, json!({ "workspace": f.a, "apps": format!("handover:{}", f.b) }));

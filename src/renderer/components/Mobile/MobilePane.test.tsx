@@ -249,6 +249,7 @@ describe('no device running', () => {
       'The owner of this server must accept the Android SDK licence first (on its card in Settings).',
     )
     expect(document.querySelector('[data-mobile-start]')).toBeNull()
+    expect(tool('boot').disabled).toBe(true)
     cleanup()
     daemon.status = status({ sim: null, lanes: [{ lane: 'android', usable: false, ready: false, detail: '/dev/kvm: permission denied for user k2.' }] })
     renderMobile(createStubSimStream())

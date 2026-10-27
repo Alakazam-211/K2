@@ -407,6 +407,7 @@ function MobileDevice({
         device={device}
         canControl={canControl}
         busy={busy}
+        canBoot={laneReady}
         live={live}
         tookOver={tookOver}
         fps={scope.isRemote ? stream.fps ?? fps : null}

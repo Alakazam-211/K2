@@ -29,6 +29,8 @@ export interface MobileToolbarProps {
   canControl: boolean
   /** A boot / stop / screenshot request is in flight. */
   busy: boolean
+  /** A lane can boot now (not waiting on the owner's licence or step). */
+  canBoot: boolean
   /** The stream is open and drawing (rotate / Home / Back need it). */
   live: boolean
   /** This viewer holds the device with Take over. */
@@ -119,7 +121,7 @@ export function MobileToolbar(props: MobileToolbarProps): React.JSX.Element {
         <ToolButton
           label={on ? 'Stop the device' : 'Start the device'}
           onClick={on ? props.onStop : props.onBoot}
-          disabled={busy || changing || (!on && !device)}
+          disabled={busy || changing || (!on && (!device || !props.canBoot))}
           pressed={on}
           testId={on ? 'stop' : 'boot'}
         >

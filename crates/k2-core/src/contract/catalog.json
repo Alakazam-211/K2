@@ -4730,7 +4730,7 @@
           "properties": {
             "mime": {
               "type": "string",
-              "description": "Used only when K2 can't tell from the bytes."
+              "description": "Ignored: K2 sniffs the bytes (anything it can't tell is application/octet-stream)."
             },
             "name": {
               "type": "string",
@@ -5124,7 +5124,7 @@
         {
           "title": "name",
           "type": "string",
-          "description": "The file name (png jpg jpeg webp gif svg pdf json csv tsv txt md)."
+          "description": "The file name (png jpg jpeg webp gif pdf json csv tsv txt md; the extension must match the bytes)."
         },
         {
           "title": "opts",
@@ -5182,7 +5182,7 @@
         {
           "title": "name",
           "type": "string",
-          "description": "The file name (png jpg jpeg webp gif svg pdf json csv tsv txt md)."
+          "description": "The file name (png jpg jpeg webp gif pdf json csv tsv txt md; the extension must match the bytes)."
         },
         {
           "title": "data",

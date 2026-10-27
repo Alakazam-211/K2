@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS space_blobs (
   added_at      INTEGER NOT NULL,
   added_by      TEXT NOT NULL,
   name          TEXT,
+  mime          TEXT NOT NULL DEFAULT 'application/octet-stream',
   refs          INTEGER NOT NULL DEFAULT 0,
   first_ref_at  INTEGER,
   unref_at      INTEGER,
@@ -150,6 +151,8 @@ pub struct SqliteStore {
     pub(super) blob_store_cap: i64,
     /// One space's held and pending blobs (GB11; tests lower it).
     pub(super) space_blob_cap: i64,
+    /// Pending uploads per uploader across spaces (review #5; tests lower it).
+    pub(super) pending_blob_cap: i64,
     open: Mutex<Option<Open>>,
 }
 
@@ -201,6 +204,7 @@ impl SqliteStore {
             max_file_bytes: MAX_FILE_BYTES,
             blob_store_cap: super::blobs::MAX_BLOB_STORE_BYTES,
             space_blob_cap: super::blobs::MAX_SPACE_BLOB_BYTES,
+            pending_blob_cap: super::blobs::MAX_PENDING_PER_UPLOADER,
             open: Mutex::new(None),
         }
     }
@@ -216,6 +220,12 @@ impl SqliteStore {
     pub fn with_blob_caps(mut self, space: i64, store: i64) -> SqliteStore {
         self.space_blob_cap = space;
         self.blob_store_cap = store;
+        self
+    }
+
+    /// Lower the per-uploader pending cap (tests).
+    pub fn with_pending_cap(mut self, bytes: i64) -> SqliteStore {
+        self.pending_blob_cap = bytes;
         self
     }
 
@@ -295,6 +305,7 @@ impl SqliteStore {
         }
         conn.execute_batch(GARDENS_SCHEMA_V1)?;
         conn.execute_batch(GARDENS_AUX_V1)?;
+        super::blob_store::upgrade_aux(&conn)?;
         super::blob_store::reconcile_aux(&mut conn, self.now())?;
         Ok(conn)
     }
@@ -675,9 +686,13 @@ impl StoreBackend for SqliteStore {
     }
 
     fn drop_space(&self, space: &Space) -> Result<(), DataError> {
+        let now = self.now();
         self.with(|conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            // GB8: the blob rows go with the space; the files are GC's.
+            // GB8 + security review #9: the blob rows stay as let-go rows
+            // under a tombstone name for the 35-day keep, so a restore of
+            // the pre-op snapshot finds its files; GC takes them after.
+            super::blob_store::tombstone_space(&tx, space.as_str(), now)?;
             for t in SPACE_TABLES {
                 tx.execute(&format!("DELETE FROM {t} WHERE space = ?1"), [space.as_str()])?;
             }

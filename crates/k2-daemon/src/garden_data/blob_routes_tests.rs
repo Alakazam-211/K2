@@ -13,6 +13,56 @@ use crate::garden_data::agent_routes::tests::{agent, env, err, ok, person_grant}
 use crate::garden_data::call::door_tests::{builder, door, set_caps, Door, APP};
 use crate::zen_data_routes::{handle, is_agent_route, DataWho};
 
+/// A real PNG of `w`×`h` (for the thumbnail path).
+fn png(w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_pixel(w, h, image::Rgb([200, 40, 40]));
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .expect("encode png");
+    out
+}
+
+#[test]
+fn thumbnails_are_sniffed_cached_capped_and_cost_more() {
+    let d = door(&["store:read", "store:write"]);
+    d.stamp(MadeBy::Owner);
+    // Review #2: bytes K2 can't tell, declared as HEIC, are stored as
+    // octet-stream and never reach sips / ImageIO.
+    let tiff = d.upload(b"II*\0\x08\0\0\0not a heic at all");
+    assert_eq!(tiff["mime"], "application/octet-stream");
+    let (code, v) = d.blob_get(tiff["ref"].as_str().unwrap(), &[("px", "256")]);
+    assert_eq!((code, v["error"]["code"].as_str()), (400, Some("bad_request")), "{v}");
+    // Review #3: at most MAX_THUMB_DECODES at once; more answer busy.
+    let pic = d.upload(&png(600, 400));
+    assert_eq!(pic["mime"], "image/png");
+    let r = pic["ref"].as_str().unwrap().to_string();
+    {
+        let _a = super::DecodeSlot::take().expect("slot 1");
+        let _b = super::DecodeSlot::take().expect("slot 2");
+        let (code, v) = d.blob_get(&r, &[("px", "256")]);
+        assert_eq!((code, v["error"]["code"].as_str()), (429, Some("busy")), "{v}");
+    }
+    let (code, t) = d.blob_get(&r, &[("px", "256")]);
+    assert_eq!(code, 200, "{t}");
+    assert_eq!((t["px"].as_u64(), t["eof"].as_bool()), (Some(256), Some(true)));
+    // Cached by (hash, px): served even while every decode slot is taken.
+    {
+        let _a = super::DecodeSlot::take().expect("slot 1");
+        let _b = super::DecodeSlot::take().expect("slot 2");
+        let (code, again) = d.blob_get(&r, &[("px", "256")]);
+        assert_eq!(code, 200, "{again}");
+        assert_eq!(again["base64"], t["base64"]);
+    }
+    // A thumbnail read costs THUMB_READ_COST reads of the 120 burst.
+    let mut b = super::budget::Buckets::default();
+    let key = super::budget::BudgetKey::Placement { garden: "g".into(), placement: "p".into() };
+    for _ in 0..12 {
+        b.spend(&key, super::budget::Spend::Reads(k2_core::garden_data::blobs::THUMB_READ_COST), 0.0).expect("within the burst");
+    }
+    assert_eq!(b.spend(&key, super::budget::Spend::Reads(10), 0.0).unwrap_err().code(), "rate_limited");
+}
+
 fn b64(b: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(b)
 }
@@ -94,19 +144,26 @@ fn the_widget_door_uploads_reads_and_names_blobs() {
 fn chunked_uploads_must_follow_on_exactly() {
     let d = door(&["store:read", "store:write"]);
     d.stamp(MadeBy::Owner);
-    let (code, first) = d.blob_put(json!({ "base64": b64(b"hello "), "offset": 0 }), APP);
+    // Security review #8: every chunk but the last carries at least 1 MiB.
+    let (code, v) = d.blob_put(json!({ "base64": b64(b"tiny"), "offset": 0 }), APP);
+    assert_eq!((code, v["error"]["code"].as_str()), (400, Some("bad_request")), "a 1-byte trickle can't hold a slot");
+    let mib = 1024 * 1024;
+    let head = vec![b'h'; mib];
+    let (code, first) = d.blob_put(json!({ "base64": b64(&head), "offset": 0 }), APP);
     assert_eq!(code, 200, "{first}");
     let up = first["upload"].as_str().expect("an upload id").to_string();
-    assert_eq!(first["received"], 6);
+    assert_eq!(first["received"], mib);
     // A gap or an overlap is refused and adds nothing.
-    let (code, v) = d.blob_put(json!({ "upload": up, "offset": 5, "base64": b64(b"world") }), APP);
+    let (code, v) = d.blob_put(json!({ "upload": up, "offset": mib - 1, "base64": b64(b"world"), "last": true }), APP);
     assert_eq!((code, v["error"]["code"].as_str()), (400, Some("bad_request")));
-    let (code, done) = d.blob_put(json!({ "upload": up, "offset": 6, "base64": b64(b"world"), "last": true }), APP);
+    let (code, done) = d.blob_put(json!({ "upload": up, "offset": mib, "base64": b64(b"world"), "last": true, "mime": "image/heic" }), APP);
     assert_eq!(code, 200, "{done}");
-    assert_eq!(done["ref"], json!(ref_of(&sha256_hex(b"hello world"))));
-    assert_eq!(done["mime"], "text/plain");
+    let mut all = head.clone();
+    all.extend_from_slice(b"world");
+    assert_eq!(done["ref"], json!(ref_of(&sha256_hex(&all))));
+    assert_eq!(done["mime"], "text/plain", "a declared mime is ignored (review #2)");
     // The upload is closed now.
-    let (code, _) = d.blob_put(json!({ "upload": up, "offset": 11, "base64": b64(b"!"), "last": true }), APP);
+    let (code, _) = d.blob_put(json!({ "upload": up, "offset": mib + 5, "base64": b64(b"!"), "last": true }), APP);
     assert_eq!(code, 400);
     // A new upload must start at 0.
     let (code, _) = d.blob_put(json!({ "offset": 3, "base64": b64(b"x"), "last": true }), APP);
@@ -167,6 +224,7 @@ fn an_agent_made_widget_reads_only_blobs_its_makers_grants_reach() {
     assert_eq!(code, 200);
     let (code, v) = d.blob_get(secret["ref"].as_str().unwrap(), &[]);
     assert_eq!((code, v["error"]["code"].as_str()), (403, Some("not_granted")), "{v}");
+    assert!(v["error"].get("key").is_none(), "review #6: a refusal never names a key outside the grant: {v}");
     let l = d.call("blobs.list", json!([]));
     assert_eq!(l["items"].as_array().map(Vec::len), Some(1), "the list is filtered to the maker's prefixes: {l}");
     assert_eq!(d.refuse("blobs.info", json!([secret["ref"]])), "not_granted");
@@ -180,15 +238,16 @@ fn an_agent_made_widget_reads_only_blobs_its_makers_grants_reach() {
 fn the_agent_door_round_trips_bytes_under_grants() {
     let _e = env();
     let o = DataWho::Owner;
-    let bytes: Vec<u8> = (0..=255u8).cycle().take(70_000).collect();
+    let cut = 1024 * 1024;
+    let bytes: Vec<u8> = (0..=255u8).cycle().take(cut + 70_000).collect();
     // Owner: chunked put, ranged get, exact bytes back.
-    let first = ok(&o, "POST", "/cli/zen/data/blob/put", json!({ "widget": "board", "base64": b64(&bytes[..40_000]) }), &[]);
+    let first = ok(&o, "POST", "/cli/zen/data/blob/put", json!({ "widget": "board", "base64": b64(&bytes[..cut]) }), &[]);
     let up = first["upload"].as_str().expect("upload").to_string();
     let done = ok(
         &o,
         "POST",
         "/cli/zen/data/blob/put",
-        json!({ "widget": "board", "upload": up, "offset": 40_000, "base64": b64(&bytes[40_000..]), "last": true, "name": "data.bin" }),
+        json!({ "widget": "board", "upload": up, "offset": cut, "base64": b64(&bytes[cut..]), "last": true, "name": "data.bin" }),
         &[],
     );
     let r = done["ref"].as_str().expect("ref").to_string();
@@ -197,7 +256,7 @@ fn the_agent_door_round_trips_bytes_under_grants() {
     let mut offset = 0usize;
     loop {
         let off = offset.to_string();
-        let v = ok(&o, "GET", "/cli/zen/data/blob/get", json!({}), &[("widget", "board"), ("ref", &r), ("offset", &off), ("len", "30000")]);
+        let v = ok(&o, "GET", "/cli/zen/data/blob/get", json!({}), &[("widget", "board"), ("ref", &r), ("offset", &off), ("len", "300000")]);
         let chunk = unb64(v["base64"].as_str().unwrap());
         offset += chunk.len();
         back.extend(chunk);

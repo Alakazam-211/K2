@@ -35,6 +35,8 @@ pub enum Spend {
     /// A commit of this many ops and bytes.
     Commit { ops: usize, bytes: usize },
     GrantChange,
+    /// A read that costs more than one (a blob thumbnail: security review #3).
+    Reads(u32),
     /// A new blob upload (prd-garden-board-needs-v1 §3.3): 30 a minute.
     UploadStart,
     /// Uploaded bytes: 128 MiB per 10 minutes.
@@ -101,6 +103,7 @@ impl Buckets {
     pub fn spend(&mut self, key: &BudgetKey, what: Spend, now: f64) -> Result<(), DataError> {
         match what {
             Spend::Read => self.take(key, Kind::Read, 1.0, now),
+            Spend::Reads(n) => self.take(key, Kind::Read, f64::from(n.max(1)), now),
             Spend::Write => self.take(key, Kind::Write, 1.0, now),
             Spend::Save => self.take(key, Kind::Save, 1.0, now),
             Spend::GrantChange => self.take(key, Kind::Grant, 1.0, now),

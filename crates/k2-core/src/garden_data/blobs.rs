@@ -50,6 +50,24 @@ pub const MAX_NAME_CHARS: usize = 255;
 pub const MAX_MISSING_LISTED: usize = 20;
 /// A file left by a crash between the write and its row is swept after this.
 pub const STRAY_FILE_KEEP_SECS: i64 = 3_600;
+/// Pending (never named) uploads per uploader across every space
+/// (security review #5: one agent can't fill the store with them).
+pub const MAX_PENDING_PER_UPLOADER: i64 = 128 * 1024 * 1024;
+/// An open chunked upload lives at most this long from its first chunk,
+/// however often it is touched (review #8).
+pub const UPLOAD_MAX_LIFE_SECS: u64 = 600;
+/// Every chunk but the last carries at least this many bytes (review #8).
+pub const MIN_CHUNK_BYTES: usize = 1024 * 1024;
+/// A `px` thumbnail read costs this many reads (review #3).
+pub const THUMB_READ_COST: u32 = 10;
+/// Thumbnails made at once, daemon-wide; more answer `busy` (review #3).
+pub const MAX_THUMB_DECODES: usize = 2;
+/// The thumbnail cache, by (hash, px), in bytes (refs never change).
+pub const THUMB_CACHE_BYTES: usize = 32 * 1024 * 1024;
+/// A deleted space's blob rows move under this prefix
+/// (`deleted:<secs>:<rand>:<space>`) as let-go rows, so the 35-day keep
+/// covers a restore of the pre-op snapshot (review #9).
+pub const TOMBSTONE_PREFIX: &str = "deleted:";
 
 /// The `/boot-status` feature key and catalog feature for the blob verbs.
 pub const FEATURE: &str = "garden-blobs-v1";
@@ -223,10 +241,11 @@ fn looks_like_text(b: &[u8]) -> bool {
     }
 }
 
-/// The stored mime of `bytes` (GB14): sniffed from the leading bytes; when
-/// the sniff can't tell, the declared mime if it's on [`KNOWN_MIMES`]
-/// (never SVG: an SVG must look like one); else `application/octet-stream`.
-pub fn sniff(bytes: &[u8], declared: Option<&str>) -> String {
+/// The stored mime of `bytes` (GB14): sniffed from the leading bytes only;
+/// anything the sniff can't tell is `application/octet-stream`. A caller's
+/// declared type is never used (security review #2: a declared
+/// `image/heic` would hand arbitrary bytes to `sips` / ImageIO).
+pub fn sniff(bytes: &[u8]) -> String {
     let b = bytes;
     let sniffed: Option<&str> = if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
@@ -256,23 +275,34 @@ pub fn sniff(bytes: &[u8], declared: Option<&str>) -> String {
     } else {
         None
     };
-    if let Some(m) = sniffed {
-        return m.to_string();
-    }
-    let d = declared.map(|d| d.split(';').next().unwrap_or("").trim().to_ascii_lowercase()).unwrap_or_default();
-    if KNOWN_MIMES.contains(&d.as_str()) && d != "image/svg+xml" && d != "text/plain" && d != "application/json" {
-        d
-    } else {
-        OCTET.to_string()
-    }
+    sniffed.unwrap_or(OCTET).to_string()
 }
 
-/// A file name as kept (plain text): the basename, control characters
-/// stripped, at most [`MAX_NAME_CHARS`] characters; `None` when nothing is
-/// left.
+/// HEIF/HEIC by its own bytes (an `ftyp` brand on the HEIC list): the only
+/// files a thumbnail may hand to `sips` / `heif-convert`.
+pub fn is_heif(bytes: &[u8]) -> bool {
+    matches!(
+        ftyp_brand(bytes),
+        Some(b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1" | b"msf1")
+    )
+}
+
+/// Unicode format characters that change how a name reads: bidi embeddings,
+/// overrides and isolates, zero-width characters, the BOM, the soft hyphen
+/// (security review #4: `invoice<RLO>gnp.svg` reads as `invoicegvs.png`).
+pub fn is_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}'
+    )
+}
+
+/// A file name as kept (plain text): the basename, control and format
+/// characters stripped, at most [`MAX_NAME_CHARS`] characters; `None` when
+/// nothing is left.
 pub fn clean_name(name: &str) -> Option<String> {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
-    let s: String = base.chars().filter(|c| !c.is_control()).take(MAX_NAME_CHARS).collect();
+    let s: String = base.chars().filter(|c| !c.is_control() && !is_format_char(*c)).take(MAX_NAME_CHARS).collect();
     let s = s.trim().to_string();
     if s.is_empty() || s == "." || s == ".." {
         None
@@ -439,21 +469,23 @@ mod tests {
 
     #[test]
     fn mime_is_sniffed_never_trusted() {
-        assert_eq!(sniff(b"\x89PNG\r\n\x1a\nrest", Some("text/plain")), "image/png");
-        assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0], None), "image/jpeg");
-        assert_eq!(sniff(b"GIF89a....", None), "image/gif");
-        assert_eq!(sniff(b"RIFF\0\0\0\0WEBPVP8 ", None), "image/webp");
-        assert_eq!(sniff(b"%PDF-1.7\n", None), "application/pdf");
-        assert_eq!(sniff(b"\0\0\0\x1cftypavif\0\0", None), "image/avif");
-        assert_eq!(sniff(b"\0\0\0\x18ftypheic\0\0", None), "image/heic");
-        assert_eq!(sniff(b"<?xml version=\"1.0\"?>\n<!-- x --><svg xmlns='http://www.w3.org/2000/svg'/>", None), "image/svg+xml");
-        assert_eq!(sniff(b"<html><svg></svg></html>", Some("image/svg+xml")), "text/plain", "an HTML page is not an SVG");
-        assert_eq!(sniff(b"{\"a\": [1, 2]}", None), "application/json");
-        assert_eq!(sniff(b"hello\nworld", Some("application/json")), "text/plain");
-        assert_eq!(sniff(&[0u8, 1, 2, 3, 0xFE], Some("image/png")), "image/png", "an unknown sniff falls back to a known declared mime");
-        assert_eq!(sniff(&[0u8, 1, 2, 3, 0xFE], Some("text/html")), OCTET);
-        assert_eq!(sniff(&[0u8, 1, 2, 3, 0xFE], Some("image/svg+xml")), OCTET, "an SVG must look like one");
-        assert_eq!(sniff(&[0u8, 1, 2, 3, 0xFE], None), OCTET);
+        assert_eq!(sniff(b"\x89PNG\r\n\x1a\nrest"), "image/png");
+        assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), "image/jpeg");
+        assert_eq!(sniff(b"GIF89a...."), "image/gif");
+        assert_eq!(sniff(b"RIFF\0\0\0\0WEBPVP8 "), "image/webp");
+        assert_eq!(sniff(b"%PDF-1.7\n"), "application/pdf");
+        assert_eq!(sniff(b"\0\0\0\x1cftypavif\0\0"), "image/avif");
+        assert_eq!(sniff(b"\0\0\0\x18ftypheic\0\0"), "image/heic");
+        assert_eq!(sniff(b"<?xml version=\"1.0\"?>\n<!-- x --><svg xmlns='http://www.w3.org/2000/svg'/>"), "image/svg+xml");
+        assert_eq!(sniff(b"<html><svg></svg></html>"), "text/plain", "an HTML page is not an SVG");
+        assert_eq!(sniff(b"{\"a\": [1, 2]}"), "application/json");
+        assert_eq!(sniff(b"hello\nworld"), "text/plain");
+        // Review #2: bytes K2 can't tell (TIFF, PSD, EXR…) are never an image.
+        assert_eq!(sniff(b"II*\0\x08\0\0\0"), OCTET, "TIFF is not sniffed as anything");
+        assert_eq!(sniff(b"8BPS\0\x01"), OCTET);
+        assert_eq!(sniff(&[0u8, 1, 2, 3, 0xFE]), OCTET);
+        assert!(is_heif(b"\0\0\0\x18ftypheic\0\0") && is_heif(b"\0\0\0\x18ftypmif1\0\0"));
+        assert!(!is_heif(b"\0\0\0\x1cftypavif\0\0") && !is_heif(b"II*\0\x08\0\0\0"));
     }
 
     #[test]
@@ -461,6 +493,9 @@ mod tests {
         assert_eq!(clean_name("../../etc/passwd").as_deref(), Some("passwd"));
         assert_eq!(clean_name("C:\\Users\\x\\photo.png").as_deref(), Some("photo.png"));
         assert_eq!(clean_name("a\u{0}b\nc.png").as_deref(), Some("abc.png"));
+        // Review #4: bidi overrides, isolates and zero-width characters go.
+        assert_eq!(clean_name("invoice\u{202E}gnp.svg").as_deref(), Some("invoicegnp.svg"));
+        assert_eq!(clean_name("a\u{2066}b\u{200B}c\u{FEFF}.png").as_deref(), Some("abc.png"));
         assert_eq!(clean_name("..").as_deref(), None);
         assert_eq!(clean_name("").as_deref(), None);
         assert_eq!(clean_name(&"x".repeat(400)).map(|s| s.chars().count()), Some(MAX_NAME_CHARS));

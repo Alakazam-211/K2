@@ -15,15 +15,19 @@
 //! commits it. An upload idle 60 s is dropped. Reads are ranged (`offset`,
 //! `len` ≤ 8 MiB) and answer base64.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{json, Value as J};
 
-use k2_core::garden_data::blobs::{self, BlobRow, BLOB_CHUNK_BYTES, MAX_BLOB_BYTES, UPLOAD_IDLE_SECS};
+use k2_core::garden_data::blobs::{
+    self, BlobRow, BLOB_CHUNK_BYTES, MAX_BLOB_BYTES, MAX_THUMB_DECODES, MIN_CHUNK_BYTES, THUMB_CACHE_BYTES, THUMB_READ_COST,
+    UPLOAD_IDLE_SECS, UPLOAD_MAX_LIFE_SECS,
+};
 use k2_core::garden_data::{Access, Actor, DataError, Space, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT};
 use k2_core::overlay::thumbs;
 
@@ -82,9 +86,11 @@ pub(crate) fn readable_row(space: &Space, acc: &Access, actor: &Actor, hash: &st
                 return Ok(row);
             }
             let holders = s.blob_holders(space, hash, 10_000)?;
-            match holders.iter().find(|k| acc.can_read(k)) {
-                Some(_) => Ok(row),
-                None => Err(DataError::NotGranted { key: holders.first().cloned() }),
+            if holders.iter().any(|k| acc.can_read(k)) {
+                Ok(row)
+            } else {
+                // Security review #6: never name a key outside the grant.
+                Err(DataError::NotGranted { key: None })
             }
         }
     }
@@ -108,6 +114,81 @@ fn b64() -> base64::engine::GeneralPurpose {
     base64::engine::general_purpose::STANDARD
 }
 
+/// One cached thumbnail: its mime and bytes.
+type Thumb = Arc<(&'static str, Vec<u8>)>;
+
+/// Thumbnails by (hash, px), oldest out first past [`THUMB_CACHE_BYTES`]
+/// (security review #3: a blob never changes, so neither does its thumb).
+#[derive(Default)]
+struct ThumbCache {
+    map: HashMap<(String, u32), Thumb>,
+    order: VecDeque<(String, u32)>,
+    bytes: usize,
+}
+
+fn thumb_cache() -> &'static Mutex<ThumbCache> {
+    static C: OnceLock<Mutex<ThumbCache>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(ThumbCache::default()))
+}
+
+/// Thumbnails being made now, daemon-wide.
+static DECODING: AtomicUsize = AtomicUsize::new(0);
+
+/// Release a decode slot when the guard goes.
+struct DecodeSlot;
+
+impl DecodeSlot {
+    fn take() -> Result<DecodeSlot, DataError> {
+        let prev = DECODING.fetch_add(1, Ordering::SeqCst);
+        if prev >= MAX_THUMB_DECODES {
+            DECODING.fetch_sub(1, Ordering::SeqCst);
+            return Err(DataError::Busy);
+        }
+        Ok(DecodeSlot)
+    }
+}
+
+impl Drop for DecodeSlot {
+    fn drop(&mut self) {
+        DECODING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// The thumbnail of a blob (cached), made at most [`MAX_THUMB_DECODES`] at
+/// a time (more answer `busy`). Review #2: a HEIC goes to `sips` /
+/// `heif-convert` only when its own bytes say HEIF.
+fn thumbnail(row: &BlobRow, px: u32) -> Result<Thumb, DataError> {
+    let key = (row.hash.clone(), px);
+    if let Some(t) = thumb_cache().lock().unwrap_or_else(|e| e.into_inner()).map.get(&key) {
+        return Ok(t.clone());
+    }
+    let dir = store().blob_dir();
+    let (head, _) = blobs::read_range(&dir, &row.hash, 0, 64)?;
+    if blobs::sniff(&head) != row.mime && row.mime != "image/svg+xml" {
+        return Err(refused("no_thumbnail", 422, "no thumbnail: the file's bytes don't match its type"));
+    }
+    if matches!(row.mime.as_str(), "image/heic" | "image/heif") && !blobs::is_heif(&head) {
+        return Err(refused("no_thumbnail", 422, "no thumbnail: not a HEIF file"));
+    }
+    let _slot = DecodeSlot::take()?;
+    let path = blobs::blob_path(&dir, &row.hash)?;
+    let t = thumbs::make(&path, &row.mime, px).map_err(|e| refused(e.code(), 422, format!("no thumbnail: {}", e.hint())))?;
+    let t: Thumb = Arc::new((t.mime, t.bytes));
+    let mut c = thumb_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if t.1.len() <= THUMB_CACHE_BYTES && !c.map.contains_key(&key) {
+        c.bytes += t.1.len();
+        c.map.insert(key.clone(), t.clone());
+        c.order.push_back(key);
+        while c.bytes > THUMB_CACHE_BYTES {
+            let Some(old) = c.order.pop_front() else { break };
+            if let Some(gone) = c.map.remove(&old) {
+                c.bytes -= gone.1.len();
+            }
+        }
+    }
+    Ok(t)
+}
+
 /// A ranged read, or a `px` thumbnail of an image (GB14: an SVG thumbnail
 /// is sanitized; a non-image with `px` is `bad_request`).
 fn read_json(space: &Space, row: &BlobRow, offset: u64, len: usize, px: Option<&str>) -> Result<J, DataError> {
@@ -116,19 +197,17 @@ fn read_json(space: &Space, row: &BlobRow, offset: u64, len: usize, px: Option<&
         if !thumbs::is_image_mime(&row.mime) {
             return Err(DataError::BadRequest(format!("px makes image thumbnails; this blob is {}", row.mime)));
         }
-        let path = blobs::blob_path(&store().blob_dir(), &row.hash)?;
-        let t = thumbs::make(&path, &row.mime, px)
-            .map_err(|e| refused(e.code(), 422, format!("no thumbnail: {}", e.hint())))?;
+        let t = thumbnail(row, px)?;
         return Ok(json!({
             "ref": row.reference(),
-            "size": t.bytes.len(),
-            "mime": t.mime,
+            "size": t.1.len(),
+            "mime": t.0,
             "name": row.name,
             "offset": 0,
-            "len": t.bytes.len(),
+            "len": t.1.len(),
             "eof": true,
             "px": px,
-            "base64": b64().encode(&t.bytes),
+            "base64": b64().encode(&t.1),
         }));
     }
     if len == 0 || len > BLOB_CHUNK_BYTES {
@@ -147,6 +226,15 @@ fn read_json(space: &Space, row: &BlobRow, offset: u64, len: usize, px: Option<&
     }))
 }
 
+/// A thumbnail read costs [`THUMB_READ_COST`] reads (review #3).
+fn read_cost(params: &HashMap<String, String>) -> Spend {
+    if param(params, "px").is_some() {
+        Spend::Reads(THUMB_READ_COST)
+    } else {
+        Spend::Read
+    }
+}
+
 fn range_params(params: &HashMap<String, String>) -> Result<(u64, usize), DataError> {
     let offset = int_param(params, "offset")?.unwrap_or(0);
     let len = int_param(params, "len")?.unwrap_or(BLOB_CHUNK_BYTES as i64);
@@ -162,9 +250,10 @@ struct Upload {
     owner: String,
     space: Space,
     bytes: Vec<u8>,
-    mime: Option<String>,
     name: Option<String>,
     touched: Instant,
+    /// Review #8: an upload lives at most UPLOAD_MAX_LIFE_SECS from here.
+    started: Instant,
 }
 
 fn uploads() -> &'static Mutex<HashMap<String, Upload>> {
@@ -180,19 +269,22 @@ fn upload_id() -> String {
     format!("up-{}", b.iter().map(|x| format!("{x:02x}")).collect::<String>())
 }
 
-/// Drop uploads idle longer than [`UPLOAD_IDLE_SECS`] (also run each minute).
+/// Drop uploads idle longer than [`UPLOAD_IDLE_SECS`], or open longer than
+/// [`UPLOAD_MAX_LIFE_SECS`] however often touched (also run each minute).
 pub fn prune_uploads() {
     let mut g = uploads().lock().unwrap_or_else(|e| e.into_inner());
-    g.retain(|_, u| u.touched.elapsed().as_secs() < UPLOAD_IDLE_SECS as u64);
+    g.retain(|_, u| {
+        u.touched.elapsed().as_secs() < UPLOAD_IDLE_SECS as u64 && u.started.elapsed().as_secs() < UPLOAD_MAX_LIFE_SECS
+    });
 }
 
-/// One upload chunk, from either door.
+/// One upload chunk, from either door. A declared mime on the wire is
+/// accepted and ignored: K2 sniffs the bytes (security review #2).
 pub(crate) struct Chunk {
     pub upload: Option<String>,
     pub offset: u64,
     pub base64: String,
     pub last: bool,
-    pub mime: Option<String>,
     pub name: Option<String>,
 }
 
@@ -206,6 +298,12 @@ pub(crate) fn take_chunk(owner: &str, budget_key: Option<&BudgetKey>, space: &Sp
     if bytes.len() > BLOB_CHUNK_BYTES {
         return Err(DataError::TooLarge(format!("a chunk is at most {} MiB", BLOB_CHUNK_BYTES / (1024 * 1024))));
     }
+    if !c.last && bytes.len() < MIN_CHUNK_BYTES {
+        return Err(DataError::BadRequest(format!(
+            "every chunk but the last carries at least {} MiB",
+            MIN_CHUNK_BYTES / (1024 * 1024)
+        )));
+    }
     prune_uploads();
     let spend = |what: Spend| -> Result<(), DataError> {
         match budget_key {
@@ -213,8 +311,8 @@ pub(crate) fn take_chunk(owner: &str, budget_key: Option<&BudgetKey>, space: &Sp
             None => Ok(()),
         }
     };
-    let commit = |all: Vec<u8>, mime: Option<String>, name: Option<String>| -> Result<J, DataError> {
-        let info = store().blob_put(space, &all, mime.as_deref(), name.as_deref(), actor)?;
+    let commit = |all: Vec<u8>, name: Option<String>| -> Result<J, DataError> {
+        let info = store().blob_put(space, &all, name.as_deref(), actor)?;
         audit::count(space.as_str(), owner, None, Counted::Write { ops: 1, bytes: all.len() });
         serde_json::to_value(&info).map_err(|e| DataError::Unavailable(format!("blob info: {e}")))
     };
@@ -226,7 +324,7 @@ pub(crate) fn take_chunk(owner: &str, budget_key: Option<&BudgetKey>, space: &Sp
             spend(Spend::UploadStart)?;
             spend(Spend::UploadBytes { bytes: bytes.len() })?;
             if c.last {
-                return commit(bytes, c.mime, c.name);
+                return commit(bytes, c.name);
             }
             let mut g = uploads().lock().unwrap_or_else(|e| e.into_inner());
             let mine = g.values().filter(|u| u.owner == owner).count();
@@ -237,7 +335,14 @@ pub(crate) fn take_chunk(owner: &str, budget_key: Option<&BudgetKey>, space: &Sp
             let received = bytes.len();
             g.insert(
                 id.clone(),
-                Upload { owner: owner.to_string(), space: space.clone(), bytes, mime: c.mime, name: c.name, touched: Instant::now() },
+                Upload {
+                    owner: owner.to_string(),
+                    space: space.clone(),
+                    bytes,
+                    name: c.name,
+                    touched: Instant::now(),
+                    started: Instant::now(),
+                },
             );
             Ok(json!({ "upload": id, "received": received }))
         }
@@ -261,16 +366,13 @@ pub(crate) fn take_chunk(owner: &str, budget_key: Option<&BudgetKey>, space: &Sp
             spend(Spend::UploadBytes { bytes: bytes.len() })?;
             u.bytes.extend_from_slice(&bytes);
             u.touched = Instant::now();
-            if c.mime.is_some() {
-                u.mime = c.mime;
-            }
             if c.name.is_some() {
                 u.name = c.name;
             }
             if c.last {
                 let u = g.remove(&id).ok_or_else(|| DataError::Unavailable("an upload vanished".into()))?;
                 drop(g);
-                return commit(u.bytes, u.mime, u.name);
+                return commit(u.bytes, u.name);
             }
             Ok(json!({ "upload": id, "received": u.bytes.len() }))
         }
@@ -347,14 +449,15 @@ pub fn widget(path: &str, who: &DataWho, headers: &str, body: &[u8], params: &Ha
             if !acc.can_write_somewhere() {
                 return Err(DataError::NotGranted { key: None });
             }
-            let chunk = Chunk { upload: b.upload, offset: b.offset, base64: b.base64, last: b.last, mime: b.mime, name: b.name };
+            let _ = b.mime;
+            let chunk = Chunk { upload: b.upload, offset: b.offset, base64: b.base64, last: b.last, name: b.name };
             take_chunk(&w.label(), Some(&placement_key(&w)), &space, &w.actor(), chunk)
         }
         WIDGET_GET => {
             let need = |k: &str| param(params, k).ok_or_else(|| DataError::BadRequest(format!("{k} is required")));
             let w = placed(need("garden")?, need("placement")?, need("hash")?, "blobs.get")?;
             call::check_cap(&w, "blobs.get", "store:read")?;
-            budget::spend(&placement_key(&w), Spend::Read)?;
+            budget::spend(&placement_key(&w), read_cost(params))?;
             let hash = blobs::parse_ref(need("ref")?)?;
             let (space, acc, made) = call::data_access(&w, "blobs.get", param(params, "from"))?;
             let row = readable_row(&space, &acc, &w.actor(), &hash)?;
@@ -402,7 +505,8 @@ pub fn agent(path: &str, who: &DataWho, body: &[u8], params: &HashMap<String, St
                 audit::line("zen.data.refused", &who.audit_label(), &format!("space={space} code=not_granted"));
                 return Err(DataError::NotGranted { key: None });
             }
-            let chunk = Chunk { upload: b.upload, offset: b.offset, base64: b.base64, last: b.last, mime: b.mime, name: b.name };
+            let _ = b.mime;
+            let chunk = Chunk { upload: b.upload, offset: b.offset, base64: b.base64, last: b.last, name: b.name };
             take_chunk(&who.audit_label(), budget_key(&space).as_ref(), &space, &actor, chunk)
         }
         AGENT_GET => {
@@ -410,7 +514,7 @@ pub fn agent(path: &str, who: &DataWho, body: &[u8], params: &HashMap<String, St
             let hash = blobs::parse_ref(param(params, "ref").ok_or_else(|| DataError::BadRequest("ref is required".into()))?)?;
             let acc = access(who, &space)?;
             if let Some(k) = budget_key(&space) {
-                budget::spend(&k, Spend::Read)?;
+                budget::spend(&k, read_cost(params))?;
             }
             let row = readable_row(&space, &acc, &actor, &hash)?;
             let (offset, len) = range_params(params)?;

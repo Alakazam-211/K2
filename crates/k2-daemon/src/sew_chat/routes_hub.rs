@@ -186,7 +186,7 @@ fn follow(c: &Caller, body: &[u8], on: bool) -> R<Value> {
     need_any_access(c)?;
     let a = c.act_as(None);
     let to = b.to.trim();
-    if to.starts_with("msg_") || (!to.contains('/') && sew::sew_msg_id(to).is_some()) {
+    if to.starts_with("msg_") || (!to.is_empty() && to.bytes().all(|b| b.is_ascii_digit())) {
         if b.batch.is_some() {
             return Err(usage("--batch is for a channel follow (<space>/<channel>); a thread follow uses your prefs"));
         }

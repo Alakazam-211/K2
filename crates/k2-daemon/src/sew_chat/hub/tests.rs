@@ -113,6 +113,7 @@ fn a_first_start_begins_at_the_head_and_never_replays_old_deliveries() {
     let mut p = poller(&e);
     p.step(T0, 0).unwrap();
     assert!(e.rec.take().is_empty(), "nothing old is injected");
+    assert_eq!(e.fake.feed_head(&e.alpha), 2);
     assert_eq!(cursor(&e), Some(Cursor { member: e.alpha.clone(), after: 2, epoch: None, held: 0 }));
     // Every hub call acts as the agent with the hub's own session.
     let calls = e.fake.calls();

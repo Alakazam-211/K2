@@ -811,6 +811,18 @@ export interface LinkOpened {
   readonly ok: boolean
 }
 
+export interface DownloadTicket {
+  /** One file, this widget, 60 seconds. */
+  readonly ticket: string
+}
+
+export interface DownloadSaved {
+  /** The name it was saved as in Downloads (never a path). */
+  readonly name?: string
+  /** False when the person cancelled. */
+  readonly saved: boolean
+}
+
 export interface AppFileEntry {
   /** A symlinked folder reads false. */
   readonly isDirectory: boolean
@@ -1001,6 +1013,43 @@ export interface StoreChanges {
   readonly partial: boolean
 }
 
+export interface BlobData {
+  /** The bytes as a Blob (the SDK builds it from a transferred ArrayBuffer). */
+  readonly blob: unknown
+  readonly mime: string
+  /** The file name it came with (plain text, at most 255 characters). */
+  readonly name: string | null
+  readonly ref: string
+  /** Bytes (of the thumbnail with px). */
+  readonly size: number
+}
+
+export interface BlobDetail {
+  /** Seconds since the Unix epoch. */
+  readonly addedAt: number
+  /** you, you via <widget>, or agent:<handle>. */
+  readonly addedBy: string
+  readonly mime: string
+  /** The file name it came with (plain text, at most 255 characters). */
+  readonly name: string | null
+  /** No key has named it yet; K2 drops it after 24 hours. */
+  readonly pending: boolean
+  readonly ref: string
+  /** Live keys that name it. */
+  readonly refs: number
+  /** Bytes. */
+  readonly size: number
+}
+
+export interface BlobList {
+  /** Bytes this widget's files count for now (held and pending). */
+  readonly bytes: number
+  readonly items: BlobDetail[]
+  readonly next: string | null
+  /** Its file quota in bytes. */
+  readonly quota: number
+}
+
 export interface StoreRev {
   readonly rev: number
 }
@@ -1043,6 +1092,19 @@ export interface StoreTxStatus {
 
 export interface StoreTxAborted {
   readonly aborted: boolean
+}
+
+export interface BlobInfo {
+  /** Sniffed from the bytes by K2, never trusted from the caller. */
+  readonly mime: string
+  /** The file name it came with (plain text, at most 255 characters). */
+  readonly name: string | null
+  /** False when this widget's data already held these bytes. */
+  readonly new: boolean
+  /** Put it in a value (k2.store.put) to keep the file. */
+  readonly ref: string
+  /** Bytes. */
+  readonly size: number
 }
 
 export interface AppGuestRooms {
@@ -1215,7 +1277,7 @@ export interface RoomMembers {
 }
 
 /** A cap a widget may ask for. */
-export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members'
+export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members'
 
 /** What k2.store.subscribe delivers: the changed keys (value null = deleted), or after a gap the whole list again. `by` names the writer: you (by your name), `<you> via <widget>`, or `agent:<handle>`. */
 export type StoreDelivery = Array<{ key: string; rev: number; value: unknown; by: string }> | { resync: true; items: StoreEntry[] }
@@ -1228,7 +1290,7 @@ export interface StoreTxHandle {
 }
 
 /** The shared error codes (UWA10). */
-export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'bad_args' | 'bad_shape' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined' | 'refresh_invalid' | 'refresh_reused' | 'person_pass_required' | 'wallet_off' | 'push_off' | 'not_for_host' | 'channel_unavailable' | 'push_devices_full' | 'push_not_configured' | 'too_many_recipients' | 'push_queue_full' | 'airgap' | 'vault_closed' | 'token_in_use' | 'duplicate_label' | 'needs_editor' | 'retired' | 'card_person_only'
+export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'blob_missing' | 'bad_args' | 'bad_shape' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined' | 'refresh_invalid' | 'refresh_reused' | 'person_pass_required' | 'wallet_off' | 'push_off' | 'not_for_host' | 'channel_unavailable' | 'push_devices_full' | 'push_not_configured' | 'too_many_recipients' | 'push_queue_full' | 'airgap' | 'vault_closed' | 'token_in_use' | 'duplicate_label' | 'needs_editor' | 'retired' | 'card_person_only'
 
 /** Codes worth retrying unchanged (catalog `retryable`); handler-object subscriptions retry these on their own. */
 export type K2_RETRYABLE = 'not_bound' | 'rate_limited' | 'unreachable' | 'busy'
@@ -1351,6 +1413,8 @@ export interface K2Verbs {
   'sources.refresh': { args: [address: string]; value: SourceRefresh }
   'sources.ask': { args: [address: string, itemKey?: string | null]; value: SourceAsk }
   'links.open': { args: [url: string]; value: LinkOpened }
+  'downloads.begin': { args: [name: string, opts?: { mime?: string }]; value: DownloadTicket }
+  'downloads.save': { args: [name: string, data: unknown, opts?: { mime?: string; ticket?: string }]; value: DownloadSaved }
   'files.list': { args: [args: { relPath: string; showHidden?: boolean; workspace: string }]; value: AppFileEntry[] }
   'files.read': { args: [args: { relPath: string; workspace: string }]; value: AppFileText }
   'files.readBinary': { args: [args: { relPath: string; workspace: string }]; value: AppFileBase64 }
@@ -1362,6 +1426,9 @@ export interface K2Verbs {
   'store.get': { args: [key: string, opts?: { from?: string }]; value: StoreEntry | null }
   'store.list': { args: [opts?: { after?: string; from?: string; limit?: number; prefix?: string }]; value: StorePage }
   'store.changes': { args: [opts: { after?: string; from?: string; prefix?: string; since: number }]; value: StoreChanges }
+  'blobs.get': { args: [ref: string, opts?: { from?: string; px?: number }]; value: BlobData }
+  'blobs.info': { args: [ref: string]; value: BlobDetail }
+  'blobs.list': { args: [opts?: { after?: string; limit?: number }]; value: BlobList }
   'store.put': { args: [key: string, value: unknown, opts?: { ifRev?: number }]; value: StoreRev }
   'store.patch': { args: [key: string, partial: unknown, opts?: { ifRev?: number }]; value: StorePatched }
   'store.delete': { args: [key: string, opts?: { ifRev?: number }]; value: StoreDeleted }
@@ -1370,6 +1437,7 @@ export interface K2Verbs {
   'store.txAdd': { args: [txId: string, ops: StoreOp[]]; value: StoreTxStatus }
   'store.txCommit': { args: [txId: string]; value: StoreCommit }
   'store.txAbort': { args: [txId: string]; value: StoreTxAborted }
+  'blobs.put': { args: [data: unknown, opts?: { mime?: string; name?: string }]; value: BlobInfo }
   'guests.rooms': { args: [args: { app?: string; username: string }]; value: AppGuestRooms }
   'guests.setRooms': { args: [args: { app?: string; rooms: string[]; username: string }]; value: AppGuestRooms }
   'guests.list': { args: [args?: { app?: string; cursor?: string; limit?: number }]; value: AppGuestList }
@@ -1379,7 +1447,7 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'blobs.put' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members'
 export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'thread.onActivity'
 
 export interface K2 {
@@ -1539,6 +1607,12 @@ export interface K2 {
     /** Open a link in the person's browser, only just after a click in this widget (once a second, 10 a minute). The first time for a site in each Garden, K2 asks them on its own card (Don't open, Open once, Always open this site from this Garden). Also k2.open(url). cap links:open · local · zen-widgets-v1. e.g. `const {ok} = await k2.open('https://example.com/report')` */
     open(url: string): Promise<LinkOpened>
   }
+  readonly downloads: {
+    /** Start a download from a click (checked now); the bytes may follow within 60 s with downloads.save. k2.download does both. cap downloads:save · local · zen-files-v1. e.g. `k2.download('Board.png', async () => await drawPng())` */
+    begin(name: string, opts?: { mime?: string }): Promise<DownloadTicket>
+    /** Save a file the widget made to the person's Downloads, just after a click in it (or with a downloads.begin ticket); K2's toast names it. cap downloads:save · local · zen-files-v1. e.g. `const {saved, name} = await k2.download('board.json', JSON.stringify(doc))` */
+    save(name: string, data: unknown, opts?: { mime?: string; ticket?: string }): Promise<DownloadSaved>
+  }
   readonly files: {
     /** A folder's entries, folders first. This computer only. cap files:read · portable · app-api-v1. e.g. `const entries = await k2.files.list({workspace, relPath: '.'})` */
     list(args: { relPath: string; showHidden?: boolean; workspace: string }): Promise<AppFileEntry[]>
@@ -1593,6 +1667,20 @@ export interface K2 {
     /** Read a putChunked value back (null when missing). A part that doesn't match fails with reason chunk_mismatch. This computer only. */
     getChunked(key: string): Promise<string | null>
   }
+  readonly blobs: {
+    /** A file this widget's data holds, as a Blob (px: an image thumbnail). k2.blobs.url(ref) gives an img src. cap store:read · local · garden-blobs-v1. e.g. `img.src = await k2.blobs.url(obj.src, {px: 256})` */
+    get(ref: string, opts?: { from?: string; px?: number }): Promise<BlobData>
+    /** One file's size, type, name, who added it and how many keys name it. This computer only. cap store:read · local · garden-blobs-v1. e.g. `const {size, refs} = await k2.blobs.info(ref)` */
+    info(ref: string): Promise<BlobDetail>
+    /** This widget's files, a page at a time, with the bytes they count for and the quota. This computer only. cap store:read · local · garden-blobs-v1. e.g. `const {items, bytes, quota} = await k2.blobs.list()` */
+    list(opts?: { after?: string; limit?: number }): Promise<BlobList>
+    /** Keep a file (an image, a PDF) in this widget's data on this computer and get its ref; it stays only while a key's value names the ref. cap store:write · local · garden-blobs-v1. e.g. `const {ref} = await k2.blobs.put(file); await k2.store.patch('obj/7', {src: ref})` */
+    put(data: unknown, opts?: { mime?: string; name?: string }): Promise<BlobInfo>
+    /** A `blob:` URL for an img src (cached per ref and px for the frame's life; refs never change). For a canvas export, draw `data:` URLs instead (blobs.get + FileReader). This computer only. */
+    url(ref: string, opts?: { px?: 256 | 512 }): Promise<string>
+    /** Is this string a blob ref (`k2blob:sha256-<64 hex>`)? */
+    isRef(s: unknown): boolean
+  }
   readonly guests: {
     /** One of this App's guests: its rooms on this App and its role (App: its own guests; Garden: any local App's). This computer only. cap guests:rooms · portable · guests-rooms-v1. e.g. `const g = await k2.asApp().guests.rooms({username: 'dana'})` */
     rooms(args: { app?: string; username: string }): Promise<AppGuestRooms>
@@ -1632,6 +1720,8 @@ export interface K2 {
   asset(name: string): string | null
   /** Same as `k2.links.open(url)`: open an http(s) link in the person's browser, just after a click in this widget. */
   open(url: string): Promise<LinkOpened>
+  /** Same as `k2.downloads.save`: save a file to the person's Downloads from a click in this widget. `data` is bytes, a string, a Blob, {blob: ref}, or an async function that makes them (K2 checks the click when it starts; the bytes have 60 s). Needs downloads:save. */
+  download(name: string, data: unknown, opts?: { mime?: string }): Promise<DownloadSaved>
   readonly motion: { readonly reduced: boolean }
   /** Guards for data you didn't make. */
   readonly shape: K2Shape

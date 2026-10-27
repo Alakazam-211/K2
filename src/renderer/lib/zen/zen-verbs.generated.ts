@@ -61,9 +61,9 @@ export const ZEN_VERBS = {
 
 /** One custom-widget verb: its cap, portable or local, and how it answers. */
 export interface ZenCustomVerbRow {
-  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | null
+  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | null
   /** More caps the verb also needs (0.46.5); absent = `cap` alone. */
-  readonly also?: readonly ('agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members')[]
+  readonly also?: readonly ('agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members')[]
   readonly reach: CatalogReach
   readonly kind: CatalogVerbKind
 }
@@ -124,6 +124,8 @@ export const ZEN_CUSTOM_VERBS = {
   'sources.refresh': { cap: 'sources:read', reach: 'portable', kind: 'call' },
   'sources.ask': { cap: 'sources:read', reach: 'local', kind: 'call' },
   'links.open': { cap: 'links:open', reach: 'local', kind: 'call' },
+  'downloads.begin': { cap: 'downloads:save', reach: 'local', kind: 'call' },
+  'downloads.save': { cap: 'downloads:save', reach: 'local', kind: 'call' },
   'files.list': { cap: 'files:read', reach: 'portable', kind: 'call' },
   'files.read': { cap: 'files:read', reach: 'portable', kind: 'call' },
   'files.readBinary': { cap: 'files:read', reach: 'portable', kind: 'call' },
@@ -135,6 +137,9 @@ export const ZEN_CUSTOM_VERBS = {
   'store.get': { cap: 'store:read', reach: 'local', kind: 'call' },
   'store.list': { cap: 'store:read', reach: 'local', kind: 'call' },
   'store.changes': { cap: 'store:read', reach: 'local', kind: 'call' },
+  'blobs.get': { cap: 'store:read', reach: 'local', kind: 'call' },
+  'blobs.info': { cap: 'store:read', reach: 'local', kind: 'call' },
+  'blobs.list': { cap: 'store:read', reach: 'local', kind: 'call' },
   'store.put': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.patch': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.delete': { cap: 'store:write', reach: 'local', kind: 'call' },
@@ -143,6 +148,7 @@ export const ZEN_CUSTOM_VERBS = {
   'store.txAdd': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.txCommit': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.txAbort': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'blobs.put': { cap: 'store:write', reach: 'local', kind: 'call' },
   'guests.rooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
   'guests.setRooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
   'guests.list': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },

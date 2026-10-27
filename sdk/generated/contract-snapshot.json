@@ -2,18 +2,18 @@
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
   "catalogVersion": 23,
-  "catalogSha256": "96f0309c5e4e69534ef55f5da4de23f778350f2344a86ad7c78524f6ddfb7027",
-  "runtimeSha256": "42a76758704d0eac954b27268ca553c6dd46f3c50fe20d998b959b4d807daea7",
+  "catalogSha256": "7477621a63aa9d568f7954e49f0cf1b25633430847789577a7a818dc34ecedeb",
+  "runtimeSha256": "a78ae1d3663e0f6edbd3e755a8c76770396e1964173d7ce17573bb935bf43a6e",
   "files": {
-    "cli/k2": "73318f7a7ad1e87c76a100c25301c6de5483c1021c61588b64b37a7865e1abc1",
+    "cli/k2": "3db391b26b679ff3da6f734387aa727279a5d8da0512d3b6de13a8597f480643",
     "cli/k2#study app-api": "c277d72e7f0ae29482490988e0575c703be1ced884f2983b080ccacd33c046e6",
     "cli/k2#study live": "9d8f1fbe777a2686adb42d1a3a762a0c9457d1da6236222db7e3d0aa0084f572",
     "cli/k2#zen guide libs": "63056b26d9270ae9ed49a301dcd9ce004485d7c4e8f35f6ea62a08dc6e1bc0b3",
     "crates/k2-core/src/app_surface.rs": "be18083854c00019d989d285458a6a539e3c942ad3629ffe7b9f69f74c1399f6",
-    "sdk/generated/k2-frame.js": "1b441de8a45bd58997845263cf6c8c6abfe82d85d638b6452d1c7ce3e9f6f836",
-    "sdk/generated/k2.d.ts": "d9da0dc6f3c30152bc85eac56d374a0cd5b78940fd27be7fd99f5229046ce4d9",
-    "sdk/server/src/generated/verbs.ts": "949d73b403e9203e0863222ee5dcd712fed7a674e3e1719f0f68b4e070b68846",
-    "src/renderer/lib/k2-caps.generated.ts": "4cdb71d6f249d1f59fd53655146aaaeea1dc1d9e5996824b3fdeef0b0ade1b13",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "46d98b03481b391f9ad9564770a2e01b8ddd649b700340391af80a29e7491fa6"
+    "sdk/generated/k2-frame.js": "b201f5f25f0644f9d4e3d632f8004011e4802466d3e4b3006cdcc242b93d43c0",
+    "sdk/generated/k2.d.ts": "93fc2a8fe71e14d01cd69c7491fb2ee10266560e622e53511f43bffa7b9476c8",
+    "sdk/server/src/generated/verbs.ts": "bd473b7798953189722e2be8c9f3f0f4e1ea3d9ac37bb8f2b83bfd879e7e5f7e",
+    "src/renderer/lib/k2-caps.generated.ts": "a2c01af2b24209e745083bb5bfc38124ee0ea4b8a3dcdadf8b3a54da2676a287",
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "866487452e8ad06ce0cb0c818958770c323d3129ff949c0e7b255a2b0d2a7aa0"
   }
 }

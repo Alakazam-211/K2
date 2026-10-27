@@ -901,6 +901,14 @@ pub const FEATURE_ACTIVITY_LIVE_BUSY: &str = "activity-live-busy";
 /// client without the key shows no remote row badges (never guesses).
 pub const FEATURE_AGENT_UNREAD_TICKETS: &str = "agent-unread-tickets-v1";
 
+/// Mark all as read (0.46.5, Rosson 2026-10-26): `POST /cli/thread/read-all
+/// {agent | addr | projectId}` reads every Thread of one agent for the
+/// caller's person (an agent row's badge sums them all, earlier chats'
+/// Threads included); an App pass marks its room's Thread
+/// (`thread.markAllRead`). Listed with the read-state tables. A client
+/// shows "Mark all as read" only for a server reporting it.
+pub const FEATURE_THREAD_READ_ALL: &str = "thread-read-all-v1";
+
 /// `GET /cli/llm/accounts/for?addr=` answers the LLM token one chat (the
 /// pinned chat or a sidecar `ws/N`) runs on, with that token's chip number
 /// (`maxPercent`, the desktop top-bar chip's own calculation, also served
@@ -999,6 +1007,7 @@ pub fn features() -> Vec<&'static str> {
         out.push(FEATURE_APP_READ_STATE);
         out.push(FEATURE_GARDEN_PERSON_ROWS);
         out.push(FEATURE_AGENT_UNREAD_TICKETS);
+        out.push(FEATURE_THREAD_READ_ALL);
     }
     out.push(FEATURE_THREAD_STREAM);
     out.push(FEATURE_THREAD_ACTIVITY_EAR);
@@ -1099,6 +1108,7 @@ mod tests {
                 "app-read-state-v1",
                 "garden-person-rows-v1",
                 "agent-unread-tickets-v1",
+                "thread-read-all-v1",
                 "thread-stream-v1",
                 "thread-activity-ear-v1",
                 "thread-activity-rooms-v1",

@@ -313,6 +313,74 @@ export async function markReadOnServer(scope: ServerScope, kind: UnreadKind, id:
   }
 }
 
+// ── Mark all as read (thread-read-all-v1, 0.46.5) ─────────────────────────
+//
+// An agent row's badge sums EVERY Thread of the agent's workspace (the
+// pinned Chat, sidecars, and earlier chats' Threads that no address reaches
+// any more), but opening the agent reads only the Thread it shows. So a line
+// in an earlier chat's Thread could keep the badge at 1 for good (Agent NSI,
+// Rosson 2026-10-26). "Mark all as read" on the row asks the agent's own
+// server to read all of them for this login there.
+
+/** The context-menu row id (agent rows: the agents list, Home). */
+export const MARK_ALL_READ_MENU_ID = 'mark-all-read'
+
+/** The daemon's answer, as this window uses it. */
+export interface MarkAllReadResult {
+  /** Conversations whose cursor moved (none = nothing was unread). */
+  marked: string[]
+  /** The agent row's numbers after (waiting cards stay waiting). */
+  unread: number
+  waiting: number
+}
+
+/** `scope`'s server can mark all of an agent's Threads read, and this scope
+ *  may send it (a view-only room never does). */
+export function markAllReadSupported(scope: ServerScope): boolean {
+  return scope.serverSupports('thread-read-all-v1') && scopeMayWrite(scope, 'thread/read-all')
+}
+
+/**
+ * Mark every Thread of one agent (`projectId`, its workspace on `scope`'s
+ * server) read for this window's login there: `POST /cli/thread/read-all`.
+ * On the window's own server the unread store drops the agent's unread at
+ * once (waiting cards stay), then re-reads the daemon's truth whether the
+ * POST worked or not. Another server's row reconciles from that server's
+ * summary (the caller re-checks it). Throws on a refusal or network error.
+ */
+export async function markAgentAllRead(scope: ServerScope, projectId: string): Promise<MarkAllReadResult> {
+  if (!projectId) throw new Error('mark all as read: no agent')
+  const own = scope.isWindowHost()
+  if (own) {
+    useUnreadStore.setState((s) => {
+      let dropped = 0
+      const byKey = { ...s.byKey }
+      for (const [key, e] of Object.entries(s.byKey)) {
+        if (e.kind !== 'thread' || e.projectId !== projectId || e.unread <= 0) continue
+        if (!e.muted) dropped += e.unread
+        const next: UnreadEntry = { ...e, unread: 0, lastReadSeq: e.lastSeq }
+        if (worthKeeping(next)) byKey[key] = next
+        else delete byKey[key]
+      }
+      return { byKey, total: Math.max(0, s.total - dropped) }
+    })
+  }
+  try {
+    const raw = await daemonCliPost<unknown>(scope, 'thread/read-all', { projectId })
+    if (!isObj(raw) || raw.ok !== true || !Array.isArray(raw.marked)) {
+      throw new Error('thread/read-all: not an answer')
+    }
+    return {
+      marked: raw.marked.filter((m): m is string => typeof m === 'string'),
+      unread: num(raw.unread),
+      waiting: num(raw.waiting),
+    }
+  } finally {
+    // The daemon's truth either way (its frames carry the same news).
+    if (own) void useUnreadStore.getState().refresh()
+  }
+}
+
 // ── Selectors ─────────────────────────────────────────────────────────────
 
 /** The Projects tab badge: project chats with something unread or

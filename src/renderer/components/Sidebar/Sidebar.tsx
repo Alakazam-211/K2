@@ -43,6 +43,8 @@ import { primaryScope } from '@/kessel/server-scope'
 import { GrokBotSidebarSection } from '@/components/GrokBots/GrokBotRows'
 import { closeGrokChat } from '@/stores/grokbots'
 import { WorkspaceThreadUnreadBadge } from '@/components/common/UnreadBadge'
+import { threadSumForProject, useUnreadStore } from '@/stores/unread'
+import { MARK_ALL_READ_MENU_ID, markAllReadMenuItems, runMarkAllRead } from '@/lib/mark-all-read-menu'
 
 // ── Nav-visible worktrees (DB-backed via workspace.navVisible field) ─────────
 
@@ -866,7 +868,11 @@ export default function Sidebar(): React.JSX.Element {
 
       // Build menu items -- pin/Active sit above Open in [IDE] so the
       // day-to-day placement actions stay above the (often long) editor list.
+      // thread-read-all-v1: "Mark all as read" while the row's badge has
+      // unread (every Thread of the agent, for this login).
+      const rowUnread = threadSumForProject(useUnreadStore.getState(), project.id)?.unread ?? 0
       const menuItems: ContextMenuItemDef[] = [
+        ...markAllReadMenuItems(primaryScope(), rowUnread),
         { id: 'settings', label: 'Workspace Settings' },
         { id: 'view-wiki', label: 'View Wiki' },
         { id: 'separator-settings', label: '', type: 'separator' },
@@ -919,7 +925,9 @@ export default function Sidebar(): React.JSX.Element {
 
       const clickedId = await showContextMenu(menuItems)
 
-      if (clickedId === 'settings') {
+      if (clickedId === MARK_ALL_READ_MENU_ID) {
+        void runMarkAllRead(primaryScope(), project.id, project.name)
+      } else if (clickedId === 'settings') {
         useSettingsStore.getState().openSettings('projects', project.id)
       } else if (clickedId === RENAME_AGENT_MENU_ID) {
         useRenameAgentDialogStore.getState().open({

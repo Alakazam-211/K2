@@ -371,6 +371,7 @@ mod tests {
                     crate::read_routes::READ_PATH,
                     crate::read_routes::MUTE_PATH,
                     crate::read_routes::PROJECT_READ_PATH,
+                    crate::read_routes::READ_ALL_PATH,
                 ],
             ),
         ]

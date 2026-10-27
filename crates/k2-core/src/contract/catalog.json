@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 26,
+  "catalogVersion": 27,
   "caps": [
     {
       "name": "agents:read",
@@ -14801,6 +14801,107 @@
       ],
       "doc": "Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use.",
       "example": "await k2.thread.setRead({addr: 'sales', seq: last.seq})"
+    },
+    {
+      "verb": "thread.markAllRead",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "thread-read-all-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/read-all"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addr": {
+              "type": "string",
+              "description": "The room's handle (its agent)."
+            }
+          },
+          "required": [
+            "addr"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppReadState",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "The cursor (or the mute) moved."
+          },
+          "id": {
+            "type": "string",
+            "description": "The conversation id."
+          },
+          "addr": {
+            "type": "string",
+            "description": "The address as asked."
+          },
+          "lastReadSeq": {
+            "type": "integer"
+          },
+          "lastSeq": {
+            "type": "integer"
+          },
+          "unread": {
+            "type": "integer"
+          },
+          "waiting": {
+            "type": "integer",
+            "description": "Cards waiting for an answer."
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "mutedUntil": {
+            "type": "integer",
+            "description": "Seconds since the epoch, when a timed mute ends."
+          },
+          "total": {
+            "type": "integer",
+            "description": "The badge after the change: a guest's over its own rooms only."
+          },
+          "waitingTotal": {
+            "type": "integer",
+            "description": "Cards waiting for an answer, muted or not."
+          }
+        },
+        "required": [
+          "ok",
+          "lastReadSeq",
+          "lastSeq",
+          "unread"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Mark everything in a room's Thread read for the signed-in person (an App's own pass: its bookmark), so the agent's unread goes to 0; waiting cards stay waiting. Their own state only, on every surface they use.",
+      "example": "await k2.thread.markAllRead({addr: 'sales'})"
     },
     {
       "verb": "thread.unread",

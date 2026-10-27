@@ -125,6 +125,8 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
     'Turn off again on a permission card B approved; Admin floor on B, so a Member’s room never sends it',
   'thread/read':
     'reading the room’s Thread marks it read for your login on B (thread-read-v1), so B’s own clients and phone stop counting it',
+  'thread/read-all':
+    'Mark all as read on B’s agent row reads every Thread of that agent for your login on B (thread-read-all-v1); your own cursors only',
 
   // Design mode (prd-browser-design-mode-v1 D-A15): the page renders here,
   // the notes go to the room's agent on B (one Thread item + one inject).

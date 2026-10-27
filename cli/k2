@@ -17636,6 +17636,7 @@ cmd_thread() {
         void) cmd_thread_void "$@"; return $? ;;
         export|import|imports) cmd_thread_transfer "$@"; return $? ;;
         unread) cmd_thread_unread "$@"; return $? ;;
+        read-all) cmd_thread_read_all "$@"; return $? ;;
         post)
             echo "Error: no 'post' subcommand — use  k2 thread <addr> \"text\"" >&2
             exit 1 ;;
@@ -18067,6 +18068,65 @@ print(d.get("id",""))
 '
 }
 
+# thread-read-all-v1 (0.46.5): `k2 thread read-all <agent>` — Mark all as
+# read: every Thread of one agent (its pinned Chat, sidecars, and earlier
+# chats' Threads no address reaches any more) read for the caller's person
+# (POST /cli/thread/read-all). Waiting cards stay waiting. Agent passports
+# get 403 (agents have no read state).
+cmd_thread_read_all() {
+    local agent="" json="false"
+    shift # "read-all"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) json="true"; shift ;;
+            -*) echo "Error: unknown flag '$1' (k2 thread read-all <agent> [--json])" >&2; exit 1 ;;
+            *)
+                if [[ -n "$agent" ]]; then
+                    echo "Error: one agent at a time (k2 thread read-all <agent> [--json])" >&2; exit 1
+                fi
+                agent="$1"; shift ;;
+        esac
+    done
+    if [[ -z "$agent" ]]; then
+        echo "Error: agent required" >&2
+        echo "Usage: k2 thread read-all <agent> [--json]   # mark all of an agent's Thread messages read for you" >&2
+        exit 1
+    fi
+    local body
+    body="$(python3 -c 'import json,sys; print(json.dumps({"agent": sys.argv[1]}))' "$agent")" || exit 2
+    local response
+    response=$(cli_send cli_post_json "/cli/thread/read-all" "$body")
+    local rc=$?
+    if [[ "$json" == "true" ]]; then
+        echo "$response"
+        return $rc
+    fi
+    echo "$response" | python3 -c 'import json,sys
+agent=sys.argv[1]
+raw=sys.stdin.read()
+try:
+    d=json.loads(raw)
+except Exception:
+    sys.stdout.write(raw)
+    sys.exit(2)
+if d.get("ok") is not True:
+    err=d.get("error") or d
+    if isinstance(err, dict):
+        sys.stderr.write("%s: %s\n" % (err.get("code") or "error", err.get("hint") or err))
+    else:
+        sys.stderr.write(str(err)+"\n")
+    sys.exit(2)
+n=len(d.get("marked") or [])
+if n:
+    print("%s: marked %d Thread%s read; unread now %s" % (agent, n, "" if n == 1 else "s", d.get("unread",0)))
+else:
+    print("%s: nothing unread" % agent)
+w=d.get("waiting",0)
+if w:
+    print("  %s card%s still waiting on you (answer %s to clear)" % (w, "" if w == 1 else "s", "it" if w == 1 else "them"))
+' "$agent"
+}
+
 # thread-read-v1 (0.46.1): `k2 thread unread` — read-only, a person's own
 # unread / waiting counts (GET /cli/thread/unread). Agent passports get 403.
 cmd_thread_unread() {
@@ -18134,6 +18194,8 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
       say it's wrong, `k2 thread void` it and ask again. Exact hosts only. More: k2 study vault
   k2 thread void <addr> <card-id>                 # close your own card when it is obsolete
   k2 thread unread [--kind thread|project] [--json]  # a PERSON's unread + waiting counts
+  k2 thread read-all <agent> [--json]             # mark all of an agent's Thread messages read
+      (for you: every chat's Thread of that agent; waiting cards stay waiting)
       (owner token or a K2 login; agents have no read state and get 403)
 
 <addr> is the same first-arg grammar as k2 msg: sales / sales/reviewer / sales/1.
@@ -38320,7 +38382,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 26.
+From K2's verb catalog, version 27.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -38377,6 +38439,7 @@ thread:read (Read the Thread)
   thread.attachmentGet     GET  /cli/thread/attachment                        One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it; a download (a save) also needs files:download.
   thread.catchup           POST /cli/thread/catchup                           Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.
   thread.setRead           POST /cli/thread/read                              Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use.
+  thread.markAllRead       POST /cli/thread/read-all                          Mark everything in a room's Thread read for the signed-in person (an App's own pass: its bookmark), so the agent's unread goes to 0; waiting cards stay waiting. Their own state only, on every surface they use.
   thread.unread            GET  /cli/thread/unread                            The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads.
   thread.mute              POST /cli/thread/mute                              Mute or unmute a room's Thread for the signed-in person (their own state, on every surface); an App's own pass has no mutes.
   thread.ensurePinned      POST /cli/workspace/ensure-pinned-chat             Check the room's pinned Chat is live (find-only for Apps: it never starts one).
@@ -66573,7 +66636,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 26.
+for at once (no review). From K2's verb catalog, version 27.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope

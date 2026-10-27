@@ -307,6 +307,38 @@ pub(crate) fn pinned_chat_of(project_id: &str) -> Option<String> {
     pinned_chat_id(&conn, project_id).ok().flatten()
 }
 
+/// The workspace (project id) an agent address names, for a person's
+/// Mark all as read (thread-read-all-v1): `ws` (the workspace itself,
+/// pinned Chat or not), `ws/<chat>` (its workspace), or a session id (the
+/// workspace it ran in). Unlike a Thread read it needs no pinned Chat: an
+/// agent whose only unread sits in an earlier chat's Thread still resolves.
+pub(crate) fn workspace_of_addr(addr: &str) -> Result<String, CliResponse> {
+    let addr = addr.trim();
+    if addr.is_empty() {
+        return Err(usage("missing agent"));
+    }
+    if crate::grokbots_routes::is_gb_addr(addr) {
+        return Err(gb_refused());
+    }
+    let unknown = || not_found(format!("unknown agent '{addr}'"));
+    let db_err = |e: String| error_json("500 Internal Server Error", "db", e);
+    match workspace_msg::resolve_msg_target(addr) {
+        Some(MsgTarget::WorkspaceCanonical { path }) | Some(MsgTarget::Sidecar { path, .. }) => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            resolve_project_id(&conn, &path).ok_or_else(unknown)
+        }
+        Some(MsgTarget::Session { session_id }) => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::workspace_session_handles::project_id_for_session_id(&conn, &session_id)
+                .map_err(db_err)?
+                .ok_or_else(unknown)
+        }
+        None => Err(unknown()),
+    }
+}
+
 /// The room handle a conversation answers at when it is its room's pinned
 /// Chat (the address an App and a Garden name it by); `None` for any other
 /// conversation (a sidecar's, a removed room's).

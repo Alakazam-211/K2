@@ -36,7 +36,10 @@ import { homeRoomVerdict, type HomeRoomVerdict } from '@/lib/home-room-floor'
 import { hostPool } from '@/lib/host-pool-instance'
 import { useStore } from 'zustand'
 import type { RowStatus } from '@/lib/home-status'
-import { remoteAgentStatus, remoteRowBadges, rowActionWord, rowReach } from '@/lib/home-agent-status'
+import { remoteAgentStatus, remoteRowBadges, rowActionWord, rowReach, summaryHit } from '@/lib/home-agent-status'
+import { remoteRoomScope, scopeForHost, primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { threadSumForProject, useUnreadStore } from '@/stores/unread'
+import { MARK_ALL_READ_MENU_ID, markAllReadMenuItems, runMarkAllRead } from '@/lib/mark-all-read-menu'
 import { TicketCountBadge, UnreadBadge } from '@/components/common/UnreadBadge'
 import { MachineChip } from './MachineChip'
 import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
@@ -102,6 +105,51 @@ function SameServerNote({ note }: { note: string }): React.JSX.Element {
   )
 }
 
+/** What "Mark all as read" on a Home row acts on (thread-read-all-v1): the
+ *  agent's server, its workspace id there, and the unread its badge shows
+ *  now. A row on the window's server reads the unread store; a row on
+ *  another server reads that server's summary (the pool's) and goes through
+ *  a room scope on that server, like the room's own read marks. */
+export interface HomeRowReadTarget {
+  scope: ServerScope
+  projectId: string
+  unread: number
+  /** The other server's host key; null for the window's own server. */
+  remoteHost: string | null
+}
+
+export function homeRowReadTarget(row: HomeRow, ws: { id: string } | null): HomeRowReadTarget | null {
+  if (ws) {
+    const unread = threadSumForProject(useUnreadStore.getState(), ws.id)?.unread ?? 0
+    return { scope: primaryScope(), projectId: ws.id, unread, remoteHost: null }
+  }
+  const host = parseHomeAddress(row.address)?.host
+  if (!host) return null
+  const hit = summaryHit(hostPool.store.getState().entries[host]?.activity ?? null, row)
+  if (!hit) return null
+  return { scope: remoteRoomScope(scopeForHost(host)), projectId: hit.workspaceId, unread: hit.unread ?? 0, remoteHost: host }
+}
+
+/** Mark all as read for a row: optimistic on another server's summary (the
+ *  row's badge drops its unread at once), then that summary is re-read. */
+export async function markHomeRowAllRead(target: HomeRowReadTarget, label: string): Promise<void> {
+  const host = target.remoteHost
+  if (host) {
+    hostPool.store.setState((s) => {
+      const entry = s.entries[host]
+      if (!entry?.activity) return s
+      const activity = entry.activity.map((a) => (a.workspaceId === target.projectId ? { ...a, unread: 0 } : a))
+      return { entries: { ...s.entries, [host]: { ...entry, activity } } }
+    })
+  }
+  try {
+    await runMarkAllRead(target.scope, target.projectId, label)
+  } finally {
+    // That server's truth either way (a failure brings the badge back).
+    if (host) void hostPool.check(host)
+  }
+}
+
 /** Right-click menu on a Home row (the Agents rows' menu idiom). */
 export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: HomeRow): Promise<void> {
   e.preventDefault()
@@ -110,6 +158,9 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
   const ws =
     parsed && parsed.host === connectedKey ? findWorkspaceForRow(useProjectsStore.getState().projects, row) : null
   const items: ContextMenuItemDef[] = []
+  // thread-read-all-v1: while the row's badge has unread.
+  const readTarget = homeRowReadTarget(row, ws)
+  if (readTarget) items.push(...markAllReadMenuItems(readTarget.scope, readTarget.unread, { separator: false }))
   if (ws) {
     items.push({ id: 'home-settings', label: 'Workspace Settings' })
     items.push({ id: 'home-wiki', label: 'View Wiki' })
@@ -122,7 +173,9 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
   items.push({ id: 'home-remove', label: `Remove from ${home.name}` })
 
   const clicked = await showContextMenu(items)
-  if (clicked === 'home-settings' && ws) {
+  if (clicked === MARK_ALL_READ_MENU_ID && readTarget) {
+    void markHomeRowAllRead(readTarget, row.label)
+  } else if (clicked === 'home-settings' && ws) {
     useSettingsStore.getState().openSettings('projects', ws.id)
   } else if (clicked === 'home-wiki' && ws) {
     usePageViewStore.getState().openWiki(ws.path)

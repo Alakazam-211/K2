@@ -70,6 +70,11 @@ export const REPORTED_FEATURES = {
    *  and ticket badges only from a server with this key; an older server's
    *  rows show none (never guessed). */
   'agent-unread-tickets-v1': 'agent-unread-tickets-v1',
+  /** thread-read-all-v1 (0.46.5): `POST /cli/thread/read-all {agent |
+   *  projectId}` marks every Thread of one agent read for the caller (an
+   *  agent row's badge sums them all, earlier chats' Threads included).
+   *  "Mark all as read" on an agent row shows only for a server with it. */
+  'thread-read-all-v1': 'thread-read-all-v1',
   /** thread-read-v1 (0.46.1): per-person unread counts for Threads and
    *  project chats. `GET /cli/thread/unread`, `POST /cli/thread/read`,
    *  `POST /cli/project-group/read`, `POST /cli/thread/mute`, the

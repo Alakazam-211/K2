@@ -176,6 +176,7 @@ import { useSidebarStore } from '@/stores/sidebar'
 import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
+import { daemonCliPost } from '@/lib/daemon-cli'
 import { __seedActivityForTests } from '@/stores/activity'
 import { __resetHostPoolForTests, hostPool } from '@/lib/host-pool-instance'
 import { peekHostSelect, clearHostSelect, takeHostSelect } from '@/lib/home-pending-select'
@@ -588,6 +589,73 @@ describe('Home — the Agents page shell', () => {
     expect(rowOf('Bee').querySelector('[data-remote-row-badges]')).toBeNull()
     expect(rowOf('Bee').querySelector('[data-unread-count]')).toBeNull()
     expect(rowOf('Bee').querySelector('[data-ticket-count]')).toBeNull()
+  })
+
+  // thread-read-all-v1 (0.46.5): right-click → Mark all as read on a remote
+  // row reads every Thread of that agent ON ITS SERVER, for this window's
+  // login there, then the row follows that server's summary.
+  it('remote row: Mark all as read posts thread/read-all to the row’s server, then the badge follows its summary', async () => {
+    boxBState.features = ['activity-live-busy', 'agent-unread-tickets-v1', 'thread-read-all-v1']
+    boxBState.agentActivity = bInbox
+    render(<Shell />)
+    await waitFor(() => expect(rowOf('Bee').querySelector('[data-unread-count]')?.getAttribute('data-unread-count')).toBe('3'))
+    const post = vi.mocked(daemonCliPost)
+    post.mockClear()
+    const readAll = (): unknown[][] => post.mock.calls.filter((c) => c[1] === 'thread/read-all')
+    const answer = {
+      ok: true,
+      changed: true,
+      projectId: 'pb',
+      marked: ['conv-now', 'conv-earlier'],
+      unread: 0,
+      waiting: 1,
+      muted: false,
+      total: 1,
+      waitingTotal: 1,
+    }
+    post.mockImplementation((async (_scope: unknown, path: string) =>
+      path === 'thread/read-all' ? answer : {}) as unknown as typeof daemonCliPost)
+    // B's truth after the read: nothing unread, its card still waits.
+    boxBState.agentActivity = [{ ...bInbox[0], unread: 0 }]
+    menu.items = []
+    menu.next = 'mark-all-read'
+    await act(async () => {
+      fireEvent.contextMenu(rowOf('Bee'))
+    })
+    expect(menu.items[0].map((i) => i.label)[0]).toBe('Mark all as read')
+    await waitFor(() => expect(readAll()).toHaveLength(1))
+    const [scope, path, body] = readAll()[0] as unknown as [{ hostKey: string }, string, unknown]
+    expect([scope.hostKey, path, body]).toEqual(['b.k2.dev', 'thread/read-all', { projectId: 'pb' }])
+    await waitFor(() => expect(rowOf('Bee').querySelector('[data-unread-count]')).toBeNull())
+    expect(rowOf('Bee').querySelector('[data-unread-waiting]')?.getAttribute('data-unread-waiting')).toBe('1')
+    menu.next = null
+    post.mockImplementation((async () => ({})) as unknown as typeof daemonCliPost)
+  })
+
+  it('remote row: no Mark all as read from a server without thread-read-all-v1', async () => {
+    boxBState.features = ['activity-live-busy', 'agent-unread-tickets-v1']
+    boxBState.agentActivity = bInbox
+    render(<Shell />)
+    await waitFor(() => expect(rowOf('Bee').querySelector('[data-unread-count]')).not.toBeNull())
+    menu.items = []
+    menu.next = null
+    await act(async () => {
+      fireEvent.contextMenu(rowOf('Bee'))
+    })
+    expect(menu.items[0].map((i) => i.id)).not.toContain('mark-all-read')
+  })
+
+  it('remote row: no Mark all as read when only a card waits (reading never answers a card)', async () => {
+    boxBState.features = ['activity-live-busy', 'agent-unread-tickets-v1', 'thread-read-all-v1']
+    boxBState.agentActivity = [{ ...bInbox[0], unread: 0 }]
+    render(<Shell />)
+    await waitFor(() => expect(rowOf('Bee').querySelector('[data-unread-waiting]')).not.toBeNull())
+    menu.items = []
+    menu.next = null
+    await act(async () => {
+      fireEvent.contextMenu(rowOf('Bee'))
+    })
+    expect(menu.items[0].map((i) => i.id)).not.toContain('mark-all-read')
   })
 
   it('Add Agent is the one bottom button; its picker has This server and From a server', () => {

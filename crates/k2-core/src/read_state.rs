@@ -356,6 +356,72 @@ pub fn ack(conn: &Connection, person: &str, kind: &str, id: &str, seq: Option<i6
     Ok(true)
 }
 
+/// True when `project_id` is a workspace on this server.
+pub fn project_exists(conn: &Connection, project_id: &str) -> Result<bool, ReadError> {
+    conn.query_row("SELECT COUNT(*) > 0 FROM projects WHERE id = ?1", params![project_id.trim()], |r| r.get(0))
+        .map_err(store_err)
+}
+
+/// Mark all as read (thread-read-all-v1, 0.46.5, Rosson 2026-10-26): move
+/// `person`'s cursor to the head of EVERY Thread of one workspace: the
+/// pinned Chat, each sidecar's, and the Threads of earlier chats that no
+/// address reaches any more (a re-pinned Chat keeps its old conversation,
+/// and an agent row's badge sums them all, [`thread_sums_by_project`]).
+/// Forward only, one savepoint (all or none). Waiting cards stay waiting:
+/// reading never answers a card. Returns the conversations that moved.
+/// `NotFound` for a workspace this server doesn't have.
+pub fn ack_project_threads(conn: &Connection, person: &str, project_id: &str) -> Result<Vec<String>, ReadError> {
+    let project_id = project_id.trim();
+    if !project_exists(conn, project_id)? {
+        return Err(ReadError::NotFound(format!("no workspace '{project_id}'")));
+    }
+    ensure_person(conn, person)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT c.conversation_id, c.last_thread_seq, COALESCE(r.last_read_seq, 0) \
+             FROM overlay_conversations c LEFT JOIN read_cursors r \
+             ON r.person = ?1 AND r.kind = 'thread' AND r.conv_id = c.conversation_id \
+             WHERE c.project_id = ?2 ORDER BY c.conversation_id",
+        )
+        .map_err(store_err)?;
+    let behind: Vec<(String, i64)> = stmt
+        .query_map(params![person, project_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))
+        .map_err(store_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(store_err)?
+        .into_iter()
+        .filter(|(_, head, read)| head > read)
+        .map(|(conv, head, _)| (conv, head))
+        .collect();
+    drop(stmt);
+    if behind.is_empty() {
+        return Ok(Vec::new());
+    }
+    let now = now_secs();
+    conn.execute_batch("SAVEPOINT read_all").map_err(store_err)?;
+    let res = (|| -> rusqlite::Result<()> {
+        for (conv, head) in &behind {
+            conn.execute(
+                "INSERT INTO read_cursors (person, kind, conv_id, last_read_seq, updated_at) VALUES (?1, 'thread', ?2, ?3, ?4) \
+                 ON CONFLICT(person, kind, conv_id) DO UPDATE SET last_read_seq = excluded.last_read_seq, \
+                 updated_at = excluded.updated_at WHERE excluded.last_read_seq > read_cursors.last_read_seq",
+                params![person, conv, head, now],
+            )?;
+        }
+        Ok(())
+    })();
+    match res {
+        Ok(()) => {
+            conn.execute_batch("RELEASE read_all").map_err(store_err)?;
+            Ok(behind.into_iter().map(|(c, _)| c).collect())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO read_all; RELEASE read_all");
+            Err(store_err(e))
+        }
+    }
+}
+
 /// Mute or unmute a conversation for a person. `until` (unix secs) ends a
 /// mute on its own; `None` = until unmuted. Unmuting clears `until`.
 /// `Ok(true)` when the stored state changed.
@@ -1487,5 +1553,57 @@ mod tests {
                 ("pe".to_string(), ProjectThreadSum { unread: UNREAD_CAP, waiting: 0, muted: false }),
             ]
         );
+    }
+
+    /// The Agent NSI report (Rosson 2026-10-26: "a message that says
+    /// unread but I can never read it"): an agent row's badge sums every
+    /// Thread of the workspace, but reading the agent marks only the
+    /// conversation its address reaches now. An earlier chat's Thread keeps
+    /// its unread for good. Mark all as read moves every one of them, for
+    /// this person only; a waiting card stays waiting.
+    #[test]
+    fn mark_all_read_clears_every_thread_of_a_workspace_for_one_person() {
+        let (g, project) = db();
+        let h = g.handle();
+        let conn = h.lock();
+        let other = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+            params![other, format!("ro{}", &other[..6]), format!("/tmp/ro-{other}")],
+        )
+        .expect("second project");
+        ensure_person(&conn, "alice").expect("alice seen");
+        let (old_chat, current, elsewhere) = (conv(), conv(), conv());
+        agent_post(&conn, &old_chat, &project, "an earlier chat's last line");
+        agent_post(&conn, &old_chat, &project, "and one more");
+        let (card, _) = ask(&conn, &old_chat, &project);
+        agent_post(&conn, &current, &project, "the pinned Chat");
+        agent_post(&conn, &elsewhere, &other, "another agent");
+
+        let sums = |p: &Person| thread_sums_by_project(&summary(&conn, p, now_secs()).expect("summary").items);
+        // Reading the agent's current Thread leaves the earlier chat's two
+        // lines (and its card) on the agent row: the stuck badge.
+        assert!(ack(&conn, "owner", KIND_THREAD, &current, None).expect("read current"));
+        assert_eq!(sums(&owner()).get(&project).copied(), Some(ProjectThreadSum { unread: 2, waiting: 1, muted: false }));
+
+        let moved = ack_project_threads(&conn, "owner", &project).expect("read all");
+        assert_eq!(moved, vec![old_chat.clone()], "only the Threads behind their head move");
+        let after = sums(&owner());
+        assert_eq!(
+            after.get(&project).copied(),
+            Some(ProjectThreadSum { unread: 0, waiting: 1, muted: false }),
+            "unread 0; the card {card} still waits for an answer"
+        );
+        assert_eq!(after.get(&other).map(|s| s.unread), Some(1), "another workspace is untouched");
+        assert_eq!(
+            sums(&alice()).get(&project).map(|s| s.unread),
+            Some(3),
+            "another person's count never moves (the earlier chat's 2 lines + the pinned Chat's 1)"
+        );
+        assert_eq!(ack_project_threads(&conn, "owner", &project).expect("again"), Vec::<String>::new(), "idempotent");
+        assert!(matches!(ack_project_threads(&conn, "owner", "no-such-workspace"), Err(ReadError::NotFound(_))));
+        // A later post counts again.
+        agent_post(&conn, &old_chat, &project, "later");
+        assert_eq!(sums(&owner()).get(&project).map(|s| s.unread), Some(1));
     }
 }

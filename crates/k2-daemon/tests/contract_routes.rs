@@ -154,7 +154,8 @@ fn exposure_counts_are_pinned() {
     // Catalog v24 (0.46.5, app-phone-pairing-v1): + 5 app rows,
     // pairing.start, status, cancel (a guest's own web pass), check and
     // redeem (Public, the code).
-    assert_eq!((widget, app, garden_local), (42, 122, 39), "per-exposure verb counts (widget, app, garden-local)");
+    // Catalog v27 (0.46.5, thread-read-all-v1): + thread.markAllRead (app).
+    assert_eq!((widget, app, garden_local), (42, 123, 39), "per-exposure verb counts (widget, app, garden-local)");
     let both: Vec<&str> = c
         .verbs
         .iter()
@@ -183,11 +184,11 @@ fn exposure_counts_are_pinned() {
         let row = c.verb(verb).unwrap_or_else(|| panic!("{verb} row"));
         assert!(row.exposed_to(Exposure::App) && !row.exposed_to(Exposure::GardenLocal), "{verb}: App only");
     }
-    assert_eq!(c.catalog_version, 26);
+    assert_eq!(c.catalog_version, 27);
     assert_eq!(
         c.verbs.len(),
-        214,
-        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row, plus the nine wallet.* app rows (0.46.3), plus the counts-only ear's thread.activity app row (0.46.3), plus permission cards' 9 unexposed permission.* rows (7 + A2's note and undo person routes; 0.46.3, no catalog bump), plus catalog v20's Garden columns and agent list rows (layout.get/set/toggle/subscribe, agents.show, conversation.setContext; 0.46.3 r10), plus catalog v21's store.patch and links.open (0.46.4), plus box usage's garden-local app.resources (0.46.4, no catalog bump), plus catalog v22's app.rooms, guests.list, files.downloads and files.download (0.46.4), plus catalog v23's App push rows push.register/unregister/device/prefs and the link's push.send/status/devices (0.46.4), plus the 0.46.5 activity SDK's thread.onActivity (widget) and thread.activityRooms (app), plus Garden blobs' blobs.put/get/info/list and downloads.begin/save (0.46.5), plus catalog v24's App phone pairing rows pairing.start/status/cancel/check/redeem (0.46.5), plus catalog v25's App user profile rows profile.get/update/setImage/clearImage/sessions/revokeSession/signOutOthers (0.46.5), plus catalog v26's email.send/status/log (0.46.5)"
+        215,
+        "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row, plus the nine wallet.* app rows (0.46.3), plus the counts-only ear's thread.activity app row (0.46.3), plus permission cards' 9 unexposed permission.* rows (7 + A2's note and undo person routes; 0.46.3, no catalog bump), plus catalog v20's Garden columns and agent list rows (layout.get/set/toggle/subscribe, agents.show, conversation.setContext; 0.46.3 r10), plus catalog v21's store.patch and links.open (0.46.4), plus box usage's garden-local app.resources (0.46.4, no catalog bump), plus catalog v22's app.rooms, guests.list, files.downloads and files.download (0.46.4), plus catalog v23's App push rows push.register/unregister/device/prefs and the link's push.send/status/devices (0.46.4), plus the 0.46.5 activity SDK's thread.onActivity (widget) and thread.activityRooms (app), plus Garden blobs' blobs.put/get/info/list and downloads.begin/save (0.46.5), plus catalog v24's App phone pairing rows pairing.start/status/cancel/check/redeem (0.46.5), plus catalog v25's App user profile rows profile.get/update/setImage/clearImage/sessions/revokeSession/signOutOthers (0.46.5), plus catalog v26's email.send/status/log (0.46.5), plus catalog v27's thread.markAllRead (0.46.5)"
     );
     // Permission cards (0.46.3 Beta): K2's own verbs, never a widget's or
     // an App's (App guests never see a permission card).

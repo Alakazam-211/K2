@@ -11,6 +11,15 @@
 //!   Forward only; `seq` absent = the newest item now.
 //! - `POST /cli/thread/mute {kind?, id | conversationId | addr | group, muted, until?}`
 //!   → the same shape.
+//! - `POST /cli/thread/read-all {agent | addr | projectId}` (Mark all as
+//!   read, thread-read-all-v1, 0.46.5) → `{ok, changed, projectId, marked:
+//!   [conversationId…], unread, waiting, muted, total, waitingTotal}`:
+//!   every Thread of that agent's workspace read to its head for the
+//!   caller's person (the pinned Chat, sidecars and earlier chats' Threads
+//!   that no address reaches any more: the agent row's badge sums them
+//!   all). `unread` / `waiting` / `muted` are the agent row's numbers
+//!   after; waiting cards stay waiting. An App pass marks its room's
+//!   Thread read to the newest (`thread.markAllRead`, its own cursor).
 //!
 //! `State` = `{kind, id, projectId?, seq, lastReadSeq, lastSeq, unread,
 //! waiting, muted, mutedUntil?}` (`seq` = `lastReadSeq`).
@@ -50,15 +59,17 @@ pub const UNREAD_PATH: &str = "/cli/thread/unread";
 pub const READ_PATH: &str = "/cli/thread/read";
 pub const MUTE_PATH: &str = "/cli/thread/mute";
 pub const PROJECT_READ_PATH: &str = "/cli/project-group/read";
+/// Mark all as read for one agent (thread-read-all-v1, 0.46.5).
+pub const READ_ALL_PATH: &str = "/cli/thread/read-all";
 
 /// One of the thread-read-v1 routes.
 pub fn is_read_route(path: &str) -> bool {
-    matches!(path, UNREAD_PATH | READ_PATH | MUTE_PATH | PROJECT_READ_PATH)
+    matches!(path, UNREAD_PATH | READ_PATH | MUTE_PATH | PROJECT_READ_PATH | READ_ALL_PATH)
 }
 
 /// The POST-only ones.
 pub fn is_post_only(path: &str) -> bool {
-    matches!(path, READ_PATH | MUTE_PATH | PROJECT_READ_PATH)
+    matches!(path, READ_PATH | MUTE_PATH | PROJECT_READ_PATH | READ_ALL_PATH)
 }
 
 thread_local! {
@@ -477,7 +488,7 @@ pub fn handle_guest(is_post: bool, path: &str, params: &HashMap<String, String>,
     if path == UNREAD_PATH && is_post {
         return CliResponse::method_not_allowed();
     }
-    if !matches!(path, READ_PATH | UNREAD_PATH | MUTE_PATH) {
+    if !matches!(path, READ_PATH | UNREAD_PATH | MUTE_PATH | READ_ALL_PATH) {
         return not_a_person();
     }
     let fields = match Fields::parse(params, body) {
@@ -525,17 +536,25 @@ pub fn handle_guest(is_post: bool, path: &str, params: &HashMap<String, String>,
             }
         }
     }
-    let Some(addr) = fields.str(&["addr", "conversationId", "conversation_id", "id"]) else {
-        return usage("missing addr (or conversationId)");
+    // Mark all as read (thread.markAllRead): a pass reads only its room's
+    // pinned Chat, so "all" is that Thread read to the newest item now.
+    let all = path == READ_ALL_PATH;
+    let keys: &[&str] = if all { &["addr", "agent", "room"] } else { &["addr", "conversationId", "conversation_id", "id"] };
+    let Some(addr) = fields.str(keys) else {
+        return usage(if all { "missing addr (the room's handle)" } else { "missing addr (or conversationId)" });
     };
     let conv = match crate::overlay_routes::guest_thread_target(&addr) {
         Ok(c) => c,
         Err(r) => return r,
     };
-    let changed = if path == READ_PATH {
-        let seq = match fields.int("seq") {
-            Ok(s) => s,
-            Err(r) => return r,
+    let changed = if path == READ_PATH || all {
+        let seq = if all {
+            None
+        } else {
+            match fields.int("seq") {
+                Ok(s) => s,
+                Err(r) => return r,
+            }
         };
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -677,6 +696,7 @@ pub fn handle(is_post: bool, path: &str, params: &HashMap<String, String>, body:
             Err(r) => r,
         },
         MUTE_PATH => handle_mute(&person, &fields),
+        READ_ALL_PATH => handle_read_all(&person, &fields),
         _ => CliResponse::not_found(),
     }
 }
@@ -766,6 +786,66 @@ fn handle_ack(person: &Person, kind: &str, id: &str, f: &Fields) -> CliResponse 
         }
     };
     state_after(person, kind, id, changed)
+}
+
+/// The workspace an agent is named by: `projectId`, else `agent` / `addr`
+/// (a handle, `ws/<chat>`, or a session id: its workspace).
+fn agent_project(f: &Fields) -> Result<String, CliResponse> {
+    if let Some(id) = f.str(&["projectId", "project_id", "workspaceId"]) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        return match read_state::project_exists(&conn, &id) {
+            Ok(true) => Ok(id),
+            Ok(false) => Err(error_json("404 Not Found", "not_found", format!("no workspace '{id}'"))),
+            Err(e) => Err(read_error(e)),
+        };
+    }
+    match f.str(&["agent", "addr"]) {
+        Some(addr) => crate::overlay_routes::workspace_of_addr(&addr),
+        None => Err(usage("missing agent (its handle or address, or projectId)")),
+    }
+}
+
+/// `POST /cli/thread/read-all`: every Thread of one agent read for this
+/// person ([`read_state::ack_project_threads`]). Each moved conversation
+/// sends its `thread_read` frame to the person's sockets; phones get one
+/// corrected badge.
+fn handle_read_all(person: &Person, f: &Fields) -> CliResponse {
+    let project_id = match agent_project(f) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let now = read_state::now_secs();
+    let (marked, sum, totals) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let marked = match read_state::ack_project_threads(&conn, &person.key, &project_id) {
+            Ok(m) => m,
+            Err(e) => return read_error(e),
+        };
+        let summary = match read_state::summary(&conn, person, now) {
+            Ok(s) => s,
+            Err(e) => return read_error(e),
+        };
+        let sum = read_state::thread_sums_by_project(&summary.items).get(&project_id).copied().unwrap_or_default();
+        (marked, sum, summary.totals)
+    };
+    for conv in &marked {
+        crate::read_live::person_changed(&person.key, KIND_THREAD, conv);
+    }
+    if !marked.is_empty() {
+        crate::badge_push::trigger(&person.key);
+    }
+    let v = serde_json::json!({
+        "ok": true,
+        "changed": !marked.is_empty(),
+        "projectId": project_id,
+        "marked": marked,
+        "unread": sum.unread,
+        "waiting": sum.waiting,
+        "muted": sum.muted,
+    });
+    CliResponse::ok_json(with_totals(v, totals).to_string())
 }
 
 fn handle_mute(person: &Person, f: &Fields) -> CliResponse {

@@ -17,7 +17,9 @@
 //!
 //! Unlike `/cli/sessions/events`, this stream is **not** `?path=`-filtered: the
 //! ops pane is the whole-fleet-on-this-daemon view, so every session event AND
-//! every awareness signal is forwarded. (The pane links to `/cli/sessions/grid`
+//! every awareness signal is forwarded, except a person-scoped session event
+//! (`SessionEvent::person`) of someone other than the socket's own person
+//! (0.46.5, the same rule as `/cli/sessions/events`). (The pane links to `/cli/sessions/grid`
 //! per-session for screen replay — grid bytes are deliberately NOT folded in.)
 //!
 //! Structure mirrors `session_events_ws.rs` / `awareness_ws.rs`:
@@ -77,9 +79,10 @@ pub async fn serve_ops_stream_connection(
 
     let subscriber_id = NEXT_SUBSCRIBER_ID.fetch_add(1, Ordering::Relaxed);
 
-    // 0.46.6: person-scoped frames (read state, Homes, pair codes) reach
-    // only their own person here too, as on `/cli/sessions/events`; this
-    // route admits any Member login.
+    // 0.46.5: person-scoped frames (thread-read-v1 read state, homes-sync-v1
+    // Homes, and any later person-scoped kind) reach only their own person
+    // here too, as on `/cli/sessions/events`. This route admits any Member
+    // login, which used to get every other person's frames.
     let person = crate::session_events_ws::socket_person(
         crate::presence::resolve_identity(&token, &owner_token).as_ref(),
     );

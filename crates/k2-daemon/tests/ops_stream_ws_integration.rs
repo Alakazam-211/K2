@@ -155,6 +155,135 @@ async fn one_socket_delivers_both_session_and_awareness_source_tagged() {
     ws.close(None).await.ok();
 }
 
+/// A temp `$HOME` for the Connect login store, restored on drop.
+struct HomeEnv {
+    prev: Option<std::ffi::OsString>,
+    dir: std::path::PathBuf,
+}
+
+impl HomeEnv {
+    fn set() -> Self {
+        let prev = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!("k2-ops-person-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp HOME");
+        std::env::set_var("HOME", &dir);
+        Self { prev, dir }
+    }
+}
+
+impl Drop for HomeEnv {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+type OpsWs = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
+
+/// `/cli/ops/stream` through the real dispatcher (role gate included).
+async fn ops_socket(port: u16, token: &str) -> OpsWs {
+    let url = format!("ws://127.0.0.1:{port}/cli/ops/stream?token={token}");
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.expect("ops stream opens");
+    next_matching(&mut ws, "hello", |v| v["kind"] == "hello").await;
+    ws
+}
+
+/// The session events this socket got up to the `projects_changed`
+/// sentinel, minus daemon chatter (presence and the like).
+async fn person_frames_until_sentinel(ws: &mut OpsWs, who: &str) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for _ in 0..200 {
+        let msg = timeout(Duration::from_secs(5), ws.next())
+            .await
+            .unwrap_or_else(|_| panic!("{who}: timed out before the sentinel"))
+            .unwrap_or_else(|| panic!("{who}: ops stream closed"))
+            .unwrap_or_else(|e| panic!("{who}: ops stream error: {e}"));
+        let Message::Text(t) = msg else { continue };
+        let v: serde_json::Value = serde_json::from_str(&t).expect("frame is JSON");
+        if v["source"] != "session" {
+            continue;
+        }
+        let ev = v["event"].clone();
+        match ev["kind"].as_str() {
+            Some("projects_changed") => return out,
+            Some("homes_changed" | "homes_device_removed" | "thread_read" | "project_read") => out.push(ev),
+            _ => {}
+        }
+    }
+    panic!("{who}: never saw the sentinel");
+}
+
+fn read_frame(person: &str, id: &str) -> k2_daemon::session_events::ReadFrame {
+    k2_daemon::session_events::ReadFrame {
+        person: person.into(),
+        id: id.into(),
+        project_id: None,
+        seq: 1,
+        last_read_seq: 1,
+        last_seq: 2,
+        unread: 1,
+        waiting: 0,
+        muted: false,
+        muted_until: None,
+        total: 1,
+        waiting_total: 0,
+    }
+}
+
+/// 0.46.5: `/cli/ops/stream` admits any Member login. Person-scoped frames
+/// (read state, Homes) used to reach every ops socket; now a Member's ops
+/// stream gets only its own person's, and the owner's only the owner's,
+/// while app-level events still reach both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_members_ops_stream_never_receives_another_persons_frames() {
+    const OWNER: &str = "owner-token-ops-person-0465";
+    let _g = lock();
+    let _home = HomeEnv::set();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    k2_core::connect_users::add_user("ops_member", "password123").expect("add the Member login");
+    let member = k2_core::connect_users::create_session("ops_member");
+    let mut member_ws = ops_socket(d.port, &member).await;
+    let mut owner_ws = ops_socket(d.port, OWNER).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    for ev in [
+        SessionEvent::HomesChanged { person: "owner".into(), cursor: 1 },
+        SessionEvent::ThreadRead(read_frame("owner", "conv-owner")),
+        SessionEvent::ProjectRead(read_frame("someone_else", "group-else")),
+        SessionEvent::HomesDeviceRemoved { person: "someone_else".into(), device_id: "d-else".into() },
+        SessionEvent::HomesChanged { person: "ops_member".into(), cursor: 2 },
+        SessionEvent::ThreadRead(read_frame("ops_member", "conv-member")),
+        SessionEvent::ProjectsChanged {},
+    ] {
+        session_events::emit(ev).expect("the two ops sockets are subscribed");
+    }
+
+    let member_got = person_frames_until_sentinel(&mut member_ws, "member").await;
+    assert_eq!(
+        member_got,
+        vec![
+            serde_json::json!({ "kind": "homes_changed", "cursor": 2 }),
+            serde_json::to_value(SessionEvent::ThreadRead(read_frame("ops_member", "conv-member"))).expect("ser"),
+        ],
+        "a Member's ops stream carries only its own person's frames"
+    );
+    let owner_got = person_frames_until_sentinel(&mut owner_ws, "owner").await;
+    assert_eq!(
+        owner_got,
+        vec![
+            serde_json::json!({ "kind": "homes_changed", "cursor": 1 }),
+            serde_json::to_value(SessionEvent::ThreadRead(read_frame("owner", "conv-owner"))).expect("ser"),
+        ],
+        "the owner's ops stream carries only the owner's frames"
+    );
+
+    member_ws.close(None).await.ok();
+    owner_ws.close(None).await.ok();
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn rejects_invalid_token_at_upgrade() {
     let _g = lock();

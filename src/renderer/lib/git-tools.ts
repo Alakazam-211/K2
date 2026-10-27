@@ -40,16 +40,29 @@ export interface GitToolsStatus {
   finished?: string[]
 }
 
-export function fetchGitTools(): Promise<GitToolsStatus> {
-  return daemonCliGet<GitToolsStatus>(primaryScope(), 'git-tools')
+/** The daemon's answer as a status: one without a `state` (an older
+ *  server, a stub) is refused, so the caller shows nothing; the lists
+ *  default to empty. */
+export function asGitToolsStatus(v: unknown): GitToolsStatus {
+  const o = (v ?? {}) as Partial<GitToolsStatus>
+  if (typeof o.state !== 'string') throw new Error('not a git-tools status')
+  return {
+    ...(o as GitToolsStatus),
+    howTo: Array.isArray(o.howTo) ? o.howTo : [],
+    waiting: Array.isArray(o.waiting) ? o.waiting : [],
+  }
 }
 
-export function installGitTools(): Promise<GitToolsStatus> {
-  return daemonCliPost<GitToolsStatus>(primaryScope(), 'git-tools/install', {})
+export async function fetchGitTools(): Promise<GitToolsStatus> {
+  return asGitToolsStatus(await daemonCliGet<unknown>(primaryScope(), 'git-tools'))
 }
 
-export function recheckGitTools(): Promise<GitToolsStatus> {
-  return daemonCliPost<GitToolsStatus>(primaryScope(), 'git-tools/recheck', {})
+export async function installGitTools(): Promise<GitToolsStatus> {
+  return asGitToolsStatus(await daemonCliPost<unknown>(primaryScope(), 'git-tools/install', {}))
+}
+
+export async function recheckGitTools(): Promise<GitToolsStatus> {
+  return asGitToolsStatus(await daemonCliPost<unknown>(primaryScope(), 'git-tools/recheck', {}))
 }
 
 /** What Apple's dialog wants, shown while the install runs. */

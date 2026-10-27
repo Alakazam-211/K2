@@ -25,6 +25,13 @@
 // Zen's Tickets view (Rosson 2026-10-04) shows the chat only: it provides
 // `TicketRailTerminalContext` = false, so the rail draws no tabs and no
 // Agent terminal, just the Thread.
+//
+// Files (0.46.6, prd-ticket-attachments-v1 TK18–TK20): on a server with
+// `ticket-attachments-v1`, each message draws its files as the Thread does
+// (chips, list card, pictures, Download) read through the ticket door, keyed
+// by the comment's id; the message box takes files ("+", drop, paste) that
+// ride the next message, an option pick included. Without the feature:
+// chips only and no "+".
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
@@ -56,9 +63,13 @@ import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import { clearTicketDraft, getTicketDraft, setTicketDraft } from '@/lib/composer-drafts'
+import { ThreadAttachmentSourceProvider, ticketAttachmentSource } from '@/components/Thread/ThreadImageObjects'
+import { threadAttachmentRefusalText } from '@/lib/thread-compose-attachments'
+import { TicketAttachButton, TicketComposeFileChips, ticketComposeAttach, useTicketComposeFiles } from './TicketComposeFiles'
 import { primaryScope } from '@/kessel/server-scope'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import {
+  TICKET_ATTACHMENTS_FEATURE,
   askingSessionWakeAction,
   commentFeedback,
   type FeedbackSessionKind,
@@ -383,7 +394,25 @@ export function ThreadTab({
   // most ~50 while reading back), spacers of the measured height standing
   // in for the rest.
   const comments = item?.comments
-  const keys = useMemo(() => (comments ?? []).map((_, i) => `${ticketId}:${i}`), [comments, ticketId])
+  // A row's key is its comment id (0.46.6, TA12): the doc id its files are
+  // read by. An older daemon sends no ids: the place in the thread.
+  const keys = useMemo(() => (comments ?? []).map((c, i) => c.id || `${ticketId}:${i}`), [comments, ticketId])
+
+  // Files (0.46.6): the ticket door when the server has it.
+  const scope = primaryScope()
+  const filesOn = scope.serverSupports(TICKET_ATTACHMENTS_FEATURE)
+  const attachmentSource = useMemo(
+    () => (filesOn ? ticketAttachmentSource(scope, ticketId) : null),
+    [filesOn, scope, ticketId],
+  )
+  const attach = ticketComposeAttach(scope, item?.projectPath)
+  const composeFiles = useTicketComposeFiles({
+    ticketId,
+    scope,
+    workspacePath: item?.projectPath ?? null,
+    on: attach.on,
+    onError: setActionError,
+  })
   const followingRef = useRef(true)
   const scroller = (): HTMLElement | null => scrollRef.current?.parentElement ?? null
   const win = useRenderWindow({
@@ -486,8 +515,17 @@ export function ThreadTab({
   // Every message lands in the asking session (the daemon injects it and
   // wakes the agent). A pick is the answer; free text starts a discussion.
   // Keep delivered/deliveryReason (D8); a quiet miss is not a store error.
+  // Files waiting in the box ride this message (an option pick too).
   const send = async (text: string, optionPick: boolean): Promise<void> => {
-    const res = await commentFeedback(item.id, text, { optionPick })
+    const files = attach.on ? composeFiles.files : []
+    let res
+    try {
+      res = await commentFeedback(item.id, text, files.length > 0 ? { optionPick, files } : { optionPick })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new Error(threadAttachmentRefusalText(err, msg)?.replace('the Thread', 'the ticket') ?? msg)
+    }
+    if (files.length > 0) composeFiles.clear()
     // The person's own message: the list lands on it when it shows.
     sentRef.current = true
     setDeliveryMiss(res.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
@@ -495,7 +533,7 @@ export function ThreadTab({
 
   const sendReply = (draft: string): void => {
     const text = draft.trim()
-    if (!text) return
+    if (!text && !(attach.on && composeFiles.files.length > 0)) return
     void submit(async () => {
       await send(text, false)
       draftApi.current?.set('')
@@ -514,25 +552,28 @@ export function ThreadTab({
           data-zen-conversation-body=""
           style={{ padding: THREAD_LIST_PADDING }}
         >
-          <ThreadMessageColumn gap={THREAD_LIST_GAP} testId="ticket-rail-column">
-            <ThreadWindowSpacer px={win.above} gap={THREAD_LIST_GAP} edge="top" />
-            {item.comments.slice(win.lo, win.hi).map((c, j) => {
-              const i = win.lo + j
-              return (
-                <ThreadChatBubble
-                  key={`${c.at}-${i}`}
-                  id={keys[i]}
-                  author={c.author}
-                  mine={isYou(c.author)}
-                  body={c.body}
-                  createdAt={c.at}
-                  timeLabel={formatRelativeTime(c.at, nowSec)}
-                  still={win.wasDrawn(keys[i])}
-                />
-              )
-            })}
-            <ThreadWindowSpacer px={win.below} gap={THREAD_LIST_GAP} edge="bottom" />
-          </ThreadMessageColumn>
+          <ThreadAttachmentSourceProvider value={attachmentSource}>
+            <ThreadMessageColumn gap={THREAD_LIST_GAP} testId="ticket-rail-column">
+              <ThreadWindowSpacer px={win.above} gap={THREAD_LIST_GAP} edge="top" />
+              {item.comments.slice(win.lo, win.hi).map((c, j) => {
+                const i = win.lo + j
+                return (
+                  <ThreadChatBubble
+                    key={`${c.at}-${i}`}
+                    id={keys[i]}
+                    author={c.author}
+                    mine={isYou(c.author)}
+                    body={c.body}
+                    createdAt={c.at}
+                    timeLabel={formatRelativeTime(c.at, nowSec)}
+                    still={win.wasDrawn(keys[i])}
+                    attachments={c.attachments}
+                  />
+                )
+              })}
+              <ThreadWindowSpacer px={win.below} gap={THREAD_LIST_GAP} edge="bottom" />
+            </ThreadMessageColumn>
+          </ThreadAttachmentSourceProvider>
         </div>
       </SelectableRegion>
 
@@ -547,6 +588,21 @@ export function ThreadTab({
         inputRef={textareaRef}
         onSend={sendReply}
         busy={busy}
+        canSendEmpty={attach.on && composeFiles.files.length > 0}
+        tools={
+          filesOn ? (
+            <>
+              <TicketAttachButton on={attach.on} why={attach.why} busy={busy} onClick={composeFiles.pick} />
+              {composeFiles.fileInput}
+            </>
+          ) : undefined
+        }
+        onPaste={attach.on ? composeFiles.onPaste : undefined}
+        onDropFiles={attach.on ? composeFiles.onDropFiles : undefined}
+        rootRef={composeFiles.rootRef}
+        rootData={
+          attach.on ? { 'data-compose-bar': '', 'data-workspace-path': item.projectPath ?? undefined } : undefined
+        }
         drawer={<ZenActivityDrawer turn={turn} />}
         // One line, as the Thread's "Message <agent>" (an empty box stays
         // one line tall, so a longer hint would be cut off).
@@ -556,6 +612,7 @@ export function ThreadTab({
         above={
           <>
             {actionError && <ThreadChatNote error>{actionError}</ThreadChatNote>}
+            {attach.on && <TicketComposeFileChips files={composeFiles.files} onRemove={composeFiles.remove} />}
             {deliveryMiss && <ThreadChatNote>Saved. The agent did not receive it ({deliveryMiss}).</ThreadChatNote>}
             {options.length > 0 && (
               <ThreadChatChips testId="ticket-quick-answers">

@@ -17,6 +17,22 @@ export function setTicketDraft(id: string, text: string): void {
 
 export function clearTicketDraft(id: string): void {
   ticketDrafts.delete(id)
+  ticketDraftFiles.delete(id)
+}
+
+// 0.46.6 (prd-ticket-attachments-v1 TK20): the files waiting in a ticket's
+// message box, beside its text (same lifetime: this session, per ticket).
+// Paths on the ticket's server.
+const ticketDraftFiles = new Map<string, ReadonlyArray<{ path: string; name: string }>>()
+
+export function getTicketDraftFiles(id: string): Array<{ path: string; name: string }> {
+  return [...(ticketDraftFiles.get(id) ?? [])]
+}
+
+export function setTicketDraftFiles(id: string, files: ReadonlyArray<{ path: string; name: string }>): void {
+  if (!id) return
+  if (files.length === 0) ticketDraftFiles.delete(id)
+  else ticketDraftFiles.set(id, files.map((f) => ({ path: f.path, name: f.name })))
 }
 
 export function getProjectChatDraft(groupId: string): string {

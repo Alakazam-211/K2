@@ -41,6 +41,11 @@
 // through `GET /cli/thread/attachment?mode=download`
 // (`lib/thread-attachment-download`); it never opens the file, and opening
 // is unchanged.
+//
+// Tickets (0.46.6, `ticket-attachments-v1`): the ticket rail provides a
+// ticket source (`ticketAttachmentSource`): the same chips, cards and
+// Download, read through the ticket door. A file someone else attached
+// (`mine` false) saves quarantined (TK22).
 
 import {
   createContext,
@@ -78,6 +83,7 @@ import { chamferCutFor, chamferVars } from './chamfer'
 import { useThreadColumnNarrow } from './ThreadColumn'
 import {
   ThreadImageLightbox,
+  attachmentImageRef,
   useNearViewport,
   useThreadAttachmentSource,
   type ThreadAttachmentSource,
@@ -509,8 +515,8 @@ export function ThreadImageCard({
 }): JSX.Element {
   const actions = useContext(ThreadFileActionsContext)
   const imageRef = useMemo<ThreadImageRef>(
-    () => ({ scope: source.scope, addr: source.addr, docId, n, modifiedAt: file.modifiedAt }),
-    [source.scope, source.addr, docId, n, file.modifiedAt],
+    () => attachmentImageRef(source, docId, n, file.modifiedAt),
+    [source, docId, n, file.modifiedAt],
   )
   const [img, setImg] = useState<ThreadImage | null>(() => peekThreadThumb(imageRef))
   const [failed, setFailed] = useState(false)
@@ -657,17 +663,18 @@ export function ThreadFileObjects({
   // The index is the attachment's place on the message (the daemon's `n`).
   const all = (files ?? []).map((f, n) => ({ f, n })).filter(({ f }) => f && typeof f === 'object')
   if (all.length === 0) return null
-  const imagesOn = !!source && !!docId && source.scope.serverSupports('thread-images-v1')
+  const imagesOn = !!source && !!docId && source.scope.serverSupports(source.imagesFeature ?? 'thread-images-v1')
   const images = imagesOn ? all.filter(({ f }) => threadImageDrawable(f)) : []
   const restEntries = all.filter((x) => !images.includes(x))
   const rest = restEntries.map(({ f }) => f)
   // Save through the Thread's own server (the daemon's `canDownload` says
   // whether each tile shows the button). Without a source (a ticket, the
   // project chat) there is no attachment door to read: no button.
+  // A file someone else attached saves quarantined (TK22).
   const download =
     source && docId
       ? (f: ThreadFileObject, n: number) => {
-          void downloadThreadAttachment({ scope: source.scope, addr: source.addr, docId, n }, f.name ?? 'file')
+          void downloadThreadAttachment(attachmentImageRef(source, docId, n), f.name ?? 'file', { fromOthers: !mine })
         }
       : null
   const side = mine ? 'flex-end' : 'flex-start'
@@ -682,7 +689,7 @@ export function ThreadFileObjects({
         <div data-thread-images="" className="flex flex-wrap" style={{ gap: 6, flexBasis: '100%', maxWidth: '100%', justifyContent: side }}>
           {images.map(({ f, n }) => (
             <ThreadImageCard
-              key={threadThumbKey({ scope: source.scope, addr: source.addr, docId, n, modifiedAt: f.modifiedAt })}
+              key={threadThumbKey(attachmentImageRef(source, docId, n, f.modifiedAt))}
               file={f}
               source={source}
               docId={docId}

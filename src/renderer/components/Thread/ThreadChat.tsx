@@ -17,6 +17,12 @@
 //     stacking past 3 lines). Enter sends and Shift+Enter is a new line, as
 //     in the Thread; ⌘/Ctrl+Enter still sends.
 //   - `ThreadChatChip`: a soft pill above the box (a ticket's quick answers).
+//
+// Files (0.46.6, `ticket-attachments-v1`): a bubble draws its message's
+// files as the Thread does (`attachments`, the daemon's per-viewer views),
+// and the box takes a "+" (`tools`), pasted and dropped files
+// (`onPaste`, `onDropFiles`) and may send with no text (`canSendEmpty`,
+// when files wait to ride the message).
 
 import {
   createContext,
@@ -27,7 +33,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
   type CSSProperties,
+  type DragEvent,
   type JSX,
   type KeyboardEvent,
   type ReactNode,
@@ -38,7 +46,7 @@ import {
   applyComposeTextareaAutosize,
   COMPOSE_TEXTAREA_MAX_HEIGHT,
 } from '@/components/Terminal/terminalCompose'
-import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
+import type { OverlayThreadItem, ThreadFileObject } from '@/components/SessionView/overlayThread'
 import { ZEN_SOLID_PROPS } from '@/lib/zen/zen-materials'
 import {
   THREAD_COMPOSE_BOX_EDGE,
@@ -104,12 +112,27 @@ export function ThreadChatScope({
 
 /** A chat message as an overlay item, so it draws as the Thread's bubble.
  *  `message` is not a card kind: the body is the bubble's text. */
-export function threadChatItem(m: { id: string; seq?: number; author: string; body: string; createdAt: number }): OverlayThreadItem {
+export function threadChatItem(m: {
+  id: string
+  seq?: number
+  author: string
+  body: string
+  createdAt: number
+  /** The message's files (0.46.6): drawn under the bubble as the Thread's. */
+  attachments?: ThreadFileObject[] | null
+}): OverlayThreadItem {
   return {
     collection: 'thread-chat',
     seq: m.seq ?? 0,
     id: m.id,
-    doc: { id: m.id, kind: 'message', from: m.author, body: m.body, created_at: m.createdAt },
+    doc: {
+      id: m.id,
+      kind: 'message',
+      from: m.author,
+      body: m.body,
+      created_at: m.createdAt,
+      ...(m.attachments && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
+    },
   }
 }
 
@@ -125,6 +148,7 @@ export function ThreadChatBubble({
   timeLabel,
   footer,
   still,
+  attachments,
 }: {
   id: string
   seq?: number
@@ -137,9 +161,14 @@ export function ThreadChatBubble({
   footer?: ReactNode
   /** Drawn again by the render window: no message-in animation. */
   still?: boolean
+  /** The message's files; `id` is the doc id their door reads by. */
+  attachments?: ThreadFileObject[] | null
 }): JSX.Element {
   // One item per message (not per render), so the memoized bubble skips.
-  const item = useMemo(() => threadChatItem({ id, seq, author, body, createdAt }), [id, seq, author, body, createdAt])
+  const item = useMemo(
+    () => threadChatItem({ id, seq, author, body, createdAt, attachments }),
+    [id, seq, author, body, createdAt, attachments],
+  )
   return (
     <ThreadBubble
       item={item}
@@ -221,6 +250,18 @@ export interface ThreadChatComposerProps {
   /** Runs first; `preventDefault` there skips the send keys. */
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void
   testId?: string
+  /** Send works with no text (files wait to ride the message). */
+  canSendEmpty?: boolean
+  /** Inside the box, before the field: a "+". */
+  tools?: ReactNode
+  /** A paste into the field (files on the clipboard). */
+  onPaste?: (e: ClipboardEvent<HTMLTextAreaElement>) => void
+  /** Files dropped on the box (`dataTransfer`); unset: drops pass by. */
+  onDropFiles?: (e: DragEvent<HTMLDivElement>) => void
+  /** Extra attributes on the box's root (the drop router's marks). */
+  rootData?: Record<string, string | undefined>
+  /** The root element (a `k2so:compose-insert` listener). */
+  rootRef?: Ref<HTMLDivElement>
 }
 
 export function ThreadChatComposer({
@@ -238,6 +279,12 @@ export function ThreadChatComposer({
   drawer,
   onKeyDown,
   testId,
+  canSendEmpty = false,
+  tools,
+  onPaste,
+  onDropFiles,
+  rootData,
+  rootRef,
 }: ThreadChatComposerProps): JSX.Element {
   const fontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   const ownRef = useRef<HTMLTextAreaElement | null>(null)
@@ -249,7 +296,8 @@ export function ThreadChatComposer({
     },
     [inputRef],
   )
-  const canSend = !busy && value.trim().length > 0
+  const canSend = !busy && (value.trim().length > 0 || canSendEmpty)
+  const hasTools = tools != null && tools !== false
 
   // Grow with the text; past 3 lines the box stacks (the kit's rule, the
   // Thread's box does the same).
@@ -259,8 +307,10 @@ export function ThreadChatComposer({
     if (!el) return
     applyComposeTextareaAutosize(el, fontSize)
     const lines = threadComposeLines(el, fontSize * 1.4, 8)
-    setStacked((cur) => threadComposeStackNext({ stacked: cur, lines, width: el.clientWidth, rowChrome: THREAD_CHAT_ROW_CHROME }))
-  }, [fontSize])
+    // A "+" in the box (tools) takes its 32px and the gap from the row.
+    const rowChrome = THREAD_CHAT_ROW_CHROME + (hasTools ? 40 : 0)
+    setStacked((cur) => threadComposeStackNext({ stacked: cur, lines, width: el.clientWidth, rowChrome }))
+  }, [fontSize, hasTools])
   useEffect(() => {
     autoGrow()
   }, [value, autoGrow])
@@ -274,18 +324,41 @@ export function ThreadChatComposer({
 
   return (
     <div
+      ref={rootRef}
       className="flex min-w-0 w-full flex-shrink-0 flex-col"
       style={{ padding: '8px var(--zen-gap, 12px) var(--zen-gap, 12px)' }}
       data-zen-compose=""
       data-compose-look="zen"
       data-thread-chat-compose=""
       data-testid={testId}
+      {...rootData}
+      onDragOver={
+        onDropFiles
+          ? (e) => {
+              if (e.dataTransfer?.types?.includes?.('Files')) {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'copy'
+              }
+            }
+          : undefined
+      }
+      onDrop={
+        onDropFiles
+          ? (e) => {
+              if (!e.dataTransfer?.files || e.dataTransfer.files.length === 0) return
+              e.preventDefault()
+              e.stopPropagation()
+              onDropFiles(e)
+            }
+          : undefined
+      }
     >
       {above}
       <div className="flex min-w-0 items-end" style={{ gap: 8 }}>
         {leading}
         <div className="flex min-w-0 flex-1 flex-col">
           <ThreadComposeBox stacked={stacked} drawer={drawer}>
+            {tools}
             <div className="relative min-w-0 flex-1" style={{ alignSelf: 'center', ...threadComposeTextSlotStyle(stacked) }}>
               <textarea
                 ref={setRef}
@@ -293,6 +366,7 @@ export function ThreadChatComposer({
                 data-zen-compose-input=""
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
+                onPaste={onPaste}
                 onKeyDown={(e) => {
                   onKeyDown?.(e)
                   if (e.defaultPrevented) return

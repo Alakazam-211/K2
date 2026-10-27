@@ -20,15 +20,55 @@ import {
 import { createPortal } from 'react-dom'
 import type { ServerScope } from '@/kessel/server-scope'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
-import { fetchThreadImage, type ThreadImageRef } from '@/lib/thread-image-thumbs'
+import {
+  fetchThreadImage,
+  ticketAttachmentReader,
+  type AttachmentReader,
+  type ThreadImageRef,
+} from '@/lib/thread-image-thumbs'
 
-/** Where a Thread's attachments are read from: the server the Thread lives
- *  on (the room's scope) and the Thread's address. Set by the desktop
- *  Thread pane and Zen's conversation; without it (a ticket, the project
- *  chat) images stay chips. */
+/** Where a chat's attachments are read from: the server they live on and
+ *  the door. A Thread names its address (`addr`, the Thread door); a
+ *  ticket (0.46.6, `ticketAttachmentSource`) brings its own `read` (the
+ *  ticket door) and `key`. Set by the desktop Thread pane, Zen's
+ *  conversation and the ticket rail; without it (the project chat, a
+ *  ticket on a server without the feature) images stay chips. */
 export interface ThreadAttachmentSource {
   scope: ServerScope
-  addr: string
+  /** A Thread's address (the Thread door). */
+  addr?: string
+  /** Another door (a ticket's); wins over `addr`. */
+  read?: AttachmentReader
+  /** The cache key of this source (default `thread:<addr>`), so pictures of
+   *  two sources never share a cache entry. */
+  key?: string
+  /** The `/boot-status` key that says pictures can be drawn (default
+   *  `thread-images-v1`). */
+  imagesFeature?: Parameters<ServerScope['serverSupports']>[0]
+}
+
+/** A ticket's files (0.46.6, `ticket-attachments-v1`): the ticket door on
+ *  `scope`, keyed by the ticket. Memoize it per (scope, ticket). */
+export function ticketAttachmentSource(scope: ServerScope, ticketId: string): ThreadAttachmentSource {
+  return {
+    scope,
+    read: ticketAttachmentReader(scope, ticketId),
+    key: `ticket:${ticketId}`,
+    imagesFeature: 'ticket-attachments-v1',
+  }
+}
+
+/** The image ref of one attachment of `source`. */
+export function attachmentImageRef(source: ThreadAttachmentSource, docId: string, n: number, modifiedAt?: number): ThreadImageRef {
+  return {
+    scope: source.scope,
+    ...(source.addr !== undefined ? { addr: source.addr } : {}),
+    ...(source.read ? { read: source.read } : {}),
+    ...(source.key ? { sourceKey: source.key } : {}),
+    docId,
+    n,
+    ...(modifiedAt !== undefined ? { modifiedAt } : {}),
+  }
 }
 
 const ThreadAttachmentSourceContext = createContext<ThreadAttachmentSource | null>(null)

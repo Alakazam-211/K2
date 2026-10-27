@@ -16,6 +16,13 @@
 // granted, 413 too large) is remembered too, so a chip that fell back stays
 // a chip without asking again; anything else (network, a host switch) is
 // forgotten so the next mount tries again.
+//
+// Tickets (0.46.6, `ticket-attachments-v1`; prd-ticket-attachments-v1
+// TK19): a ticket message's files are read through the ticket door
+// `GET /cli/feedback/attachment?id=&commentId=&n=` with the same answers.
+// A ref names its door with `read` (the ticket's) or `addr` (a Thread's),
+// and the LRU keys on the source's own key (`ticket:<id>` / `thread:<addr>`),
+// so a ticket picture and a Thread picture never share an entry.
 
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { httpCodeOf, httpStatusOf } from '@/lib/daemon-http-error'
@@ -24,6 +31,20 @@ import type { ThreadFileObject } from '@/components/SessionView/overlayThread'
 
 /** The daemon's attachment route. */
 export const THREAD_ATTACHMENT_ROUTE = 'thread/attachment'
+
+/** The ticket attachment door (0.46.6, `ticket-attachments-v1`). */
+export const TICKET_ATTACHMENT_ROUTE = 'feedback/attachment'
+
+/** Read one attachment of message `docId` (its index `n`) through a door:
+ *  `params` carries `mode`, `px`, `offset`, `len`. */
+export type AttachmentReader = (docId: string, n: number, params: Record<string, string | number>) => Promise<unknown>
+
+/** The ticket door's reader for ticket `ticketId` on `scope`: the message
+ *  (doc) id is the comment's id. */
+export function ticketAttachmentReader(scope: ServerScope, ticketId: string): AttachmentReader {
+  return (docId, n, params) =>
+    daemonCliGet<unknown>(scope, TICKET_ATTACHMENT_ROUTE, { id: ticketId, commentId: docId, n, ...params })
+}
 
 /** Image types the daemon makes a picture of (its extension table). */
 export const THREAD_IMAGE_MIMES: ReadonlySet<string> = new Set([
@@ -88,13 +109,33 @@ const SETTLED_STATUSES: ReadonlySet<number> = new Set([403, 404, 413, 415])
 
 export interface ThreadImageRef {
   scope: ServerScope
-  /** The Thread's address (or its conversation id). */
-  addr: string
+  /** The Thread's address (or its conversation id): the Thread door. */
+  addr?: string
+  /** Another door (a ticket's, `ticketAttachmentReader`); wins over `addr`. */
+  read?: AttachmentReader
+  /** The source's cache key (a ticket: `ticket:<id>`); default
+   *  `thread:<addr>`. */
+  sourceKey?: string
   /** The message (doc) id. */
   docId: string
   /** The attachment's index on the message. */
   n: number
   modifiedAt?: number
+}
+
+/** One read of `ref`'s attachment through its own door. */
+export function readAttachment(
+  ref: Pick<ThreadImageRef, 'scope' | 'addr' | 'read' | 'docId' | 'n'>,
+  params: Record<string, string | number>,
+): Promise<unknown> {
+  if (ref.read) return ref.read(ref.docId, ref.n, params)
+  if (!ref.addr) return Promise.reject(new Error('this attachment has no door to read it through'))
+  return daemonCliGet<unknown>(ref.scope, THREAD_ATTACHMENT_ROUTE, { addr: ref.addr, id: ref.docId, n: ref.n, ...params })
+}
+
+/** The cache key of a ref's source. */
+export function attachmentSourceKey(ref: Pick<ThreadImageRef, 'addr' | 'sourceKey'>): string {
+  return ref.sourceKey ?? `thread:${ref.addr ?? ''}`
 }
 
 function decodeBase64(b64: string): Uint8Array {
@@ -139,13 +180,7 @@ export async function fetchThreadImage(
 ): Promise<ThreadImage> {
   let raw: unknown
   try {
-    raw = await daemonCliGet<unknown>(ref.scope, THREAD_ATTACHMENT_ROUTE, {
-      addr: ref.addr,
-      id: ref.docId,
-      n: ref.n,
-      mode,
-      ...(mode === 'thumb' ? { px } : {}),
-    })
+    raw = await readAttachment(ref, { mode, ...(mode === 'thumb' ? { px } : {}) })
   } catch (err) {
     throw asImageError(err)
   }
@@ -164,7 +199,7 @@ interface CacheEntry {
 const thumbs = new Map<string, CacheEntry>()
 
 export function threadThumbKey(ref: ThreadImageRef, px: number = THREAD_THUMB_PX): string {
-  return [ref.scope.hostKey, ref.addr, ref.docId, ref.n, ref.modifiedAt ?? '', px].join('\u0000')
+  return [ref.scope.hostKey, attachmentSourceKey(ref), ref.docId, ref.n, ref.modifiedAt ?? '', px].join('\u0000')
 }
 
 function revokeEntry(entry: CacheEntry): void {

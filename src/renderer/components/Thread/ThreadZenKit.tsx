@@ -545,7 +545,7 @@ function usePermissionActions(
   const isPermission = !!item.doc.choice?.permission
   return useMemo(() => {
     if (!isPermission) return null
-    if (source) return permissionCardActions(source.scope, source.addr, item.id, openPermissionSettings)
+    if (source?.addr) return permissionCardActions(source.scope, source.addr, item.id, openPermissionSettings)
     if (!onAnswer) return null
     return {
       answer: async (a) => {

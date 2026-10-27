@@ -105,6 +105,13 @@ export const REPORTED_FEATURES = {
    *  converted where the box can). With it, an image attachment draws as
    *  the picture under the bubble (S3); without it, today's chip. */
   'thread-images-v1': 'thread-images-v1',
+  /** ticket-attachments-v1 (0.46.6, prd-ticket-attachments-v1): files on
+   *  ticket messages. `show` comments carry `id` and `attachments`;
+   *  `attachments` on `POST /cli/feedback/comment`; the door
+   *  `GET /cli/feedback/attachment?id=&commentId=&n=` (meta, preview, thumb,
+   *  range, download). With it the ticket rail draws pictures and takes
+   *  files in its message box; without it, chips only and no "+". */
+  'ticket-attachments-v1': 'ticket-attachments-v1',
   /** permission-cards-v1 (0.46.3, Beta): listed only while the server's
    *  "Permission cards" switch is on. With it the Thread asks for the
    *  `cards=2` permission card view (`GET /cli/thread`, the overlay socket)

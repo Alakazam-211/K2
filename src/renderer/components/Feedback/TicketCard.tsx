@@ -29,7 +29,7 @@ import {
   type FeedbackStatus,
   type SelectableStatus,
 } from './feedback-api'
-import { HtmlBriefBadge } from './badges'
+import { FileCountBadge, HtmlBriefBadge } from './badges'
 import type { FilterableWorkspace } from './WorkspaceFilterDropdown'
 
 /** StatusBadge's palette (waiting = needs you, needs discussion orange,
@@ -331,6 +331,7 @@ export function FeedbackCard({
         <CardStatusDropdown row={row} onMutated={onMutated} />
         <CardAssigneeInitials assignees={row.assignees} />
         <span className="flex-1" />
+        <FileCountBadge count={row.fileCount} />
         {row.hasBrief === true && <HtmlBriefBadge />}
         <span data-testid="card-age" className="tabular-nums flex-shrink-0">
           {formatRelativeTime(row.createdAt, nowSec)}

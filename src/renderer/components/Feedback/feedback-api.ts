@@ -11,6 +11,12 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
+import { coerceThreadFileObjects, type ThreadFileObject } from '@/components/SessionView/overlayThread'
+
+/** `/boot-status` key: tickets carry files (0.46.6,
+ *  prd-ticket-attachments-v1): comment ids and `attachments` on `show`,
+ *  `attachments` on `comment`, the door `GET feedback/attachment`. */
+export const TICKET_ATTACHMENTS_FEATURE = 'ticket-attachments-v1'
 
 export type FeedbackKind = 'question' | 'approval' | 'fyi'
 export type FeedbackStatus =
@@ -48,6 +54,9 @@ export interface FeedbackItem {
   hasBrief?: boolean
   /** Stored (cleaned) brief size in bytes; null/missing when no brief. */
   briefBytes?: number | null
+  /** Files across the ticket's messages (0.46.6; the board's paperclip).
+   *  Older daemons omit it: treat missing as 0. */
+  fileCount?: number
 }
 
 /** `show?brief=1` → `brief`: the daemon-CLEANED brief HTML (H11) plus its
@@ -80,9 +89,15 @@ interface HostFeedbackWireRow extends FeedbackItem {
 }
 
 export interface FeedbackComment {
+  /** The message's id (0.46.6): its files' door reads by it. Older
+   *  daemons omit it. */
+  id?: string
   author: string
   body: string
   at: number
+  /** The message's files as this viewer sees them (0.46.6), the Thread's
+   *  file objects (`hidden` for one not shared with you). */
+  attachments?: ThreadFileObject[]
 }
 
 /** The `show` wire shape: the item flat + workspace/projectPath + thread. */
@@ -190,9 +205,21 @@ export async function fetchWaitingCount(opts: { me?: boolean } = {}): Promise<nu
   return res.count
 }
 
-/** GET /cli/feedback/show?id=<id> — one item + its full thread. */
+/** GET /cli/feedback/show?id=<id> — one item + its full thread. Each
+ *  comment's `attachments` go through the Thread's coercion (unknown
+ *  shapes never reach a bubble). */
 export async function fetchFeedbackShow(id: string): Promise<FeedbackShow> {
-  return daemonCliGet<FeedbackShow>(primaryScope(), 'feedback/show', { id })
+  const show = await daemonCliGet<FeedbackShow>(primaryScope(), 'feedback/show', { id })
+  if (show && Array.isArray(show.comments)) {
+    show.comments = show.comments.map((c) => {
+      if (!c || typeof c !== 'object' || !('attachments' in c)) return c
+      const files = coerceThreadFileObjects((c as { attachments?: unknown }).attachments)
+      const { attachments: _drop, ...rest } = c
+      void _drop
+      return files.length > 0 ? { ...rest, attachments: files } : rest
+    })
+  }
+  return show
 }
 
 /** Validate a `brief` wire value. `null`/missing = the ticket has no brief
@@ -251,19 +278,30 @@ export interface FeedbackCommentResult {
   delivered?: boolean
   deliveryReason?: string | null
   deliveredSessionId?: string | null
+  /** The stored files as this viewer sees them (0.46.6; always present on
+   *  a daemon that takes files). */
+  attachments?: ThreadFileObject[]
 }
 
 export async function commentFeedback(
   id: string,
   body: string,
-  opts: { optionPick?: boolean } = {},
+  opts: { optionPick?: boolean; files?: ReadonlyArray<{ path: string }> } = {},
 ): Promise<FeedbackCommentResult> {
   // optionPick: the person picked one of the ticket's options → the daemon
   // records it as the answer (status answered). Free text (no flag) moves
   // the ticket to needs_discussion until the agent settles it.
   const payload: Record<string, unknown> = { id, body }
   if (opts.optionPick === true) payload.optionPick = true
-  return daemonCliPost<FeedbackCommentResult>(primaryScope(), 'feedback/comment', payload)
+  const files = opts.files ?? []
+  if (files.length > 0) payload.attachments = files.map((f) => ({ path: f.path }))
+  const res = await daemonCliPost<FeedbackCommentResult>(primaryScope(), 'feedback/comment', payload)
+  // An older daemon drops `attachments` it doesn't know and answers success
+  // (TA3): say so instead of losing the files quietly.
+  if (files.length > 0 && res && typeof res === 'object' && !('attachments' in res)) {
+    throw new Error("This server's K2 doesn't take ticket files yet (it needs 0.46.6). The message was sent without them.")
+  }
+  return res
 }
 
 /** One quick-answer choice: `answer` is what gets sent, `label` what the

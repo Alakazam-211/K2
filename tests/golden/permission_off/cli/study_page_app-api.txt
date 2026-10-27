@@ -13,7 +13,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 26.
+From K2's verb catalog, version 30.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -34,15 +34,27 @@ no cap (your own rooms)
   roomAgents.list          GET  /cli/skin/agents                              The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.
   guests.login             POST /cli/skin/login (server only)                 Log a guest in through this App; the answer carries the guest's session pass.
   app.rooms                GET  /cli/skin/app-rooms (server only)             This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it).
-  password.change          POST /cli/skin/password/change (browser only)      A guest changes their own password (browser only: it ends every session of theirs).
+  password.change          POST /cli/skin/password/change                     A guest changes their own password (5 wrong current passwords per 15 minutes, then rate_limited); stay: true keeps this pass signed in.
   guests.logout            POST /cli/skin/logout (server only)                Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).
   guests.refresh           POST /cli/skin/refresh (server only)               Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in).
   guests.devices           GET  /cli/skin/devices                             This guest's devices that stay signed in to this App.
   guests.revokeDevice      POST /cli/skin/devices/revoke                      Sign one of this guest's own devices out (its pass and refresh token end).
+  profile.get              GET  /cli/skin/profile                             This person's own profile in this App: names, email, picture hash, role and rooms here, sessions count, and what they may change.
+  profile.update           POST /cli/skin/profile                             This person changes their own full name and display name, where the App allows it (20 changes per 10 minutes).
+  profile.setImage         POST /cli/skin/profile/image                       This person sets their own picture, where the App allows it.
+  profile.clearImage       POST /cli/skin/profile/image/clear                 This person removes their own picture, where the App allows it.
+  profile.sessions         GET  /cli/skin/sessions                            The browsers and devices signed in to this App as this person, this one first (never another App's).
+  profile.revokeSession    POST /cli/skin/sessions/revoke                     Sign one of this person's own browsers or devices out of this App.
+  profile.signOutOthers    POST /cli/skin/sessions/revoke-others              Sign this person out of this App everywhere else (their notification devices there go too); this pass stays.
   push.register            POST /cli/skin/push/register                       Register this guest's phone for this App's notifications; call it on every launch and whenever the token changes.
   push.unregister          POST /cli/skin/push/unregister                     Stop this App's notifications on one of this guest's own devices (signing out also removes it).
   push.device              GET  /cli/skin/push/device                         This guest's own push registration for one device (never the token).
   push.prefs               POST /cli/skin/push/prefs                          Change one device's notification choices (previews, muted topics) without its token.
+  pairing.start            POST /cli/skin/pair/start (server only)            Start pairing this guest's phone: a one-time code and its QR, from their own web sign-in (at most 15 minutes old, or with their password).
+  pairing.status           GET  /cli/skin/pair/status (server only)           Is this guest's pairing done: pending, paired (with the device's name), expired or cancelled.
+  pairing.cancel           POST /cli/skin/pair/cancel (server only)           Drop one of this guest's pairing codes (the QR stops working).
+  pairing.check            POST /cli/skin/pair/check (server only)            Public: who a pairing code would sign in, without using it (ask 'Sign in as ...?' first).
+  pairing.redeem           POST /cli/skin/pair (server only)                  Public: trade a pairing code for this App's device sign-in (a pass and a refresh token), once; optionally register push in the same call.
   app.info                 GET  /cli/skin/app-info (server only)              Public: this one App's name and how to sign in, only when the owner listed it; anything else answers like a route that doesn't exist.
   password.forgot          POST /cli/skin/password/forgot (server only)       Start a guest's password reset (a platform pass; the guest gets the reset link by email).
   password.reset           POST /cli/skin/password/reset (server only)        Public: finish a password reset with the emailed token (ends every session of that guest).
@@ -58,6 +70,7 @@ thread:read (Read the Thread)
   thread.attachmentGet     GET  /cli/thread/attachment                        One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it; a download (a save) also needs files:download.
   thread.catchup           POST /cli/thread/catchup                           Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.
   thread.setRead           POST /cli/thread/read                              Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use.
+  thread.markAllRead       POST /cli/thread/read-all                          Mark everything in a room's Thread read for the signed-in person (an App's own pass: its bookmark), so the agent's unread goes to 0; waiting cards stay waiting. Their own state only, on every surface they use.
   thread.unread            GET  /cli/thread/unread                            The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads.
   thread.mute              POST /cli/thread/mute                              Mute or unmute a room's Thread for the signed-in person (their own state, on every surface); an App's own pass has no mutes.
   thread.ensurePinned      POST /cli/workspace/ensure-pinned-chat             Check the room's pinned Chat is live (find-only for Apps: it never starts one).

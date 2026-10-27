@@ -48,6 +48,19 @@ impl Ring {
         self.cap
     }
 
+    /// Rebuild a ring at exact offsets (self-upgrade, PRD §7.10): `data`
+    /// covers `[start, start + data.len())`. `data` longer than `cap` keeps
+    /// its tail (never happens for a ring this build wrote).
+    pub fn restore(cap: usize, start: u64, data: Vec<u8>) -> Ring {
+        let mut r = Ring { cap, buf: VecDeque::from(data), start };
+        let over = r.buf.len().saturating_sub(cap);
+        if over > 0 {
+            r.buf.drain(..over);
+            r.start += over as u64;
+        }
+        r
+    }
+
     pub fn push(&mut self, bytes: &[u8]) {
         if bytes.len() >= self.cap {
             let skip = bytes.len() - self.cap;
@@ -142,6 +155,16 @@ mod tests {
         assert!(r.buf.capacity() < DEFAULT_RING, "no eager 4 MiB allocation");
         r.trim_front(4);
         assert_eq!((r.start(), r.end()), (4, 10));
+    }
+
+    #[test]
+    fn restore_keeps_exact_offsets() {
+        let mut r = Ring::new(MIN_RING);
+        let data: Vec<u8> = (0..(MIN_RING + 5000)).map(|i| (i % 253) as u8).collect();
+        r.push(&data);
+        let copy = Ring::restore(r.cap(), r.start(), r.copy_from(0));
+        assert_eq!((copy.start(), copy.end(), copy.cap()), (r.start(), r.end(), r.cap()));
+        assert_eq!(copy.copy_from(r.start() + 17), r.copy_from(r.start() + 17));
     }
 
     #[test]

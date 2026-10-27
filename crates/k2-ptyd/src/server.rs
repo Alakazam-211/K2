@@ -19,6 +19,9 @@ use crate::ring::{clamp_ring, Ring, TOTAL_CAP};
 use crate::spawn::{spawn, SpawnSpec};
 use crate::sys::{self, cvt, now_secs, set_cloexec, set_nonblocking};
 
+mod upgrade;
+pub use upgrade::{resume, selftest_reply, STATE_FORMAT};
+
 /// Runtime knobs. Defaults are the PRD's; tests shorten `idle`.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -587,7 +590,7 @@ impl Server {
                 None,
                 Reply::Challenge {
                     nonce: auth::hex(&nonce),
-                    ptyd_version: PTYD_VERSION.into(),
+                    ptyd_version: reported_version(),
                     proto_min: PROTO_MIN,
                     proto_max: PROTO_MAX,
                     boot_id: self.boot_id.clone(),
@@ -1054,7 +1057,7 @@ impl Server {
                 }
                 self.reply(id, rid, Reply::Ok);
             }
-            Request::Upgrade { .. } => self.reply(id, rid, err("unsupported", "exec self-upgrade lands in S7")),
+            Request::Upgrade { exe } => self.do_upgrade(id, rid, exe),
             Request::Shutdown { end_sessions } => {
                 let running = self.sessions.values().filter(|s| s.running()).count();
                 if !end_sessions && running > 0 {
@@ -1489,6 +1492,18 @@ const KNOWN_T: &[&str] = &[
     "hello", "spawn", "list", "update_meta", "resize", "signal", "fg_pgrp", "kill", "ack_exit",
     "hold_unix_listener", "hold_fd", "take_fd", "release_fd", "upgrade", "shutdown", "ping", "attach",
 ];
+
+/// The version the challenge reports. Debug builds honour
+/// `K2_PTYD_TEST_VERSION` so tests can stand up an "older" ptyd (P65);
+/// the knob is not on the env allowlist, so a self-upgrade drops it.
+fn reported_version() -> String {
+    if cfg!(debug_assertions) {
+        if let Some(v) = std::env::var("K2_PTYD_TEST_VERSION").ok().filter(|v| !v.is_empty()) {
+            return v;
+        }
+    }
+    PTYD_VERSION.into()
+}
 
 fn err(code: &str, detail: &str) -> Reply {
     Reply::Error { code: code.into(), detail: detail.into() }

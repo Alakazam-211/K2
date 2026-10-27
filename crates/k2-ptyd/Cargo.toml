@@ -3,7 +3,10 @@ name = "k2-ptyd"
 # ptyd has its own version line, independent of the K2 release (PRD §7.1,
 # §7.10): the daemon compares it against MIN_PTYD_VERSION. release.sh does
 # not bump it; it changes only when ptyd itself changes.
-version = "0.1.0"
+# 0.1.0 (K2 0.46.2–0.46.4); 0.2.0 adds exec self-upgrade (S7, `upgrade`,
+# `--selftest`, `--resume-state-fd`). A 0.1.x ptyd answers `upgrade` with
+# `unsupported`, so it can never be upgraded in place.
+version = "0.2.0"
 edition = "2021"
 license = "FSL-1.1-Apache-2.0"
 description = "K2 PTY host: owns agent PTYs so agents survive daemon restarts (PRD prd-k2-ptyd-v1)."

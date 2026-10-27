@@ -4,6 +4,10 @@
 //!   exit 0 once it listens (3 if one already owns this K2 home).
 //! - `k2-ptyd --serve`: run the server in the foreground (tests, debugging).
 //! - `k2-ptyd --version`.
+//! - `k2-ptyd --selftest --state-format N`: print `ok <version> N` and exit
+//!   0 when this build can take over a running ptyd's state (PRD §7.10).
+//! - `k2-ptyd --resume-state-fd N --listen-fd M`: the new image after a
+//!   self-upgrade exec (never run by hand).
 //!
 //! The K2 home comes from `K2_HOME` (the daemon always sets it).
 
@@ -11,7 +15,7 @@
 fn main() {
     use k2_ptyd::launch;
     use k2_ptyd::paths::Paths;
-    use k2_ptyd::server::{self, orphan_from_env, Config, Exit, EXITED_TTL, IDLE_DEFAULT};
+    use k2_ptyd::server::{self, orphan_from_env, Config, EXITED_TTL, IDLE_DEFAULT};
     use std::time::Duration;
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -19,6 +23,19 @@ fn main() {
     if mode == "--version" {
         println!("k2-ptyd {} proto {}", k2_ptyd::proto::PTYD_VERSION, k2_ptyd::proto::PROTO_MAX);
         return;
+    }
+    if mode == "--selftest" {
+        let format = (args.get(1).map(String::as_str) == Some("--state-format")).then(|| args.get(2).map(String::as_str)).flatten();
+        match server::selftest_reply(format) {
+            Ok(line) => {
+                println!("{line}");
+                return;
+            }
+            Err(e) => {
+                eprintln!("k2-ptyd: {e}");
+                std::process::exit(launch::EXIT_FAILED);
+            }
+        }
     }
     let Some(home) = std::env::var_os("K2_HOME").filter(|h| !h.is_empty()) else {
         eprintln!("k2-ptyd: K2_HOME is required");
@@ -45,23 +62,41 @@ fn main() {
     };
     let code = match mode {
         "--launch" => launch::launcher(cfg),
-        "--serve" => match server::serve(cfg) {
-            Ok(Exit::Clean) => launch::EXIT_OK,
-            Ok(Exit::AlreadyRunning(pid)) => {
-                eprintln!("k2-ptyd: already running (pid {})", pid.map(|p| p.to_string()).unwrap_or_else(|| "?".into()));
-                launch::EXIT_ALREADY_RUNNING
+        "--serve" => exit_code(server::serve(cfg)),
+        "--resume-state-fd" => {
+            let state_fd = args.get(1).and_then(|s| s.parse().ok());
+            let listen_fd = (args.get(2).map(String::as_str) == Some("--listen-fd")).then(|| args.get(3).and_then(|s| s.parse().ok())).flatten();
+            match (state_fd, listen_fd) {
+                (Some(state), Some(listen)) => exit_code(server::resume(cfg, state, listen)),
+                _ => {
+                    eprintln!("usage: k2-ptyd --resume-state-fd N --listen-fd M");
+                    2
+                }
             }
-            Err(e) => {
-                eprintln!("k2-ptyd: {e}");
-                launch::EXIT_FAILED
-            }
-        },
+        }
         _ => {
-            eprintln!("usage: k2-ptyd --launch | --serve | --version");
+            eprintln!("usage: k2-ptyd --launch | --serve | --version | --selftest --state-format N");
             2
         }
     };
     std::process::exit(code);
+}
+
+#[cfg(unix)]
+fn exit_code(r: std::io::Result<k2_ptyd::server::Exit>) -> i32 {
+    use k2_ptyd::launch;
+    use k2_ptyd::server::Exit;
+    match r {
+        Ok(Exit::Clean) => launch::EXIT_OK,
+        Ok(Exit::AlreadyRunning(pid)) => {
+            eprintln!("k2-ptyd: already running (pid {})", pid.map(|p| p.to_string()).unwrap_or_else(|| "?".into()));
+            launch::EXIT_ALREADY_RUNNING
+        }
+        Err(e) => {
+            eprintln!("k2-ptyd: {e}");
+            launch::EXIT_FAILED
+        }
+    }
 }
 
 #[cfg(not(unix))]

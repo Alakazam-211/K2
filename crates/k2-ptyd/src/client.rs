@@ -21,6 +21,10 @@ pub struct Hello {
     pub proto: u32,
     pub boot_id: String,
     pub sessions: usize,
+    /// The protocol range the running ptyd speaks (its challenge), for the
+    /// daemon's self-upgrade decision (P65).
+    pub proto_min: u32,
+    pub proto_max: u32,
 }
 
 #[derive(Debug)]
@@ -127,7 +131,7 @@ impl Conn {
             },
         ))?;
         match self.recv()?.body {
-            Reply::Welcome { proto, sessions } => Ok(Hello { ptyd_version, proto, boot_id, sessions }),
+            Reply::Welcome { proto, sessions } => Ok(Hello { ptyd_version, proto, boot_id, sessions, proto_min, proto_max }),
             Reply::Refused { code, detail } => Err(ConnectError::Refused { code, detail }),
             other => Err(ConnectError::Protocol(format!("expected welcome, got {other:?}"))),
         }

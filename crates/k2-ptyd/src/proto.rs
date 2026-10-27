@@ -19,6 +19,21 @@ pub const MAX_META: usize = 64 * 1024;
 /// ptyd's own version (independent of the K2 release).
 pub const PTYD_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Parse a ptyd version `MAJOR.MINOR.PATCH` (a `-suffix` or `+build` is
+/// ignored). `None` for anything else. Used for the P65 upgrade decision
+/// and the self-upgrade downgrade guard.
+pub fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
+    let core = v.trim().split(['-', '+']).next()?;
+    let mut it = core.split('.');
+    let a = it.next()?.parse().ok()?;
+    let b = it.next()?.parse().ok()?;
+    let c = it.next()?.parse().ok()?;
+    if it.next().is_some() {
+        return None;
+    }
+    Some((a, b, c))
+}
+
 /// Connection role in `hello`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -349,6 +364,16 @@ mod tests {
             serde_json::to_value(SessionState::Exited { code: None, signal: Some(9), at: 1 }).unwrap(),
             serde_json::json!({"exited":{"code":null,"signal":9,"at":1}})
         );
+    }
+
+    #[test]
+    fn versions_parse_and_order() {
+        assert_eq!(parse_version("0.2.0"), Some((0, 2, 0)));
+        assert_eq!(parse_version(" 1.10.3-rc1 "), Some((1, 10, 3)));
+        assert!(parse_version("0.10.0") > parse_version("0.9.9"));
+        for bad in ["", "1", "1.2", "1.2.3.4", "a.b.c", "1..2"] {
+            assert_eq!(parse_version(bad), None, "{bad}");
+        }
     }
 
     #[test]

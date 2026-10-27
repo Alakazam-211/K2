@@ -16,6 +16,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Tickets take files, like Threads.** An agent can attach workspace files to the ticket it opens, to its comments and to the outcome it settles (`k2 tickets ask … --file out/shot.png`, `k2 tickets comment <id> --file …`, `k2 tickets resolve <id> --answered "…" --file …`). You can pick, drop or paste files into a ticket's message box too. Files show under each message as chips, images show as pictures, and each one says when it changed or was deleted since it was sent. Click to open it, or Download to save it. A file is a pointer to the workspace file, never a copy. Secrets (`.env`, keys, tokens in a file) are refused, and App guests see only the files their own folder access already covers.
 - **Thread and ticket files are checked again when opened.** A file that gained a password or token after it was sent no longer previews or downloads, a file named like a HEIC photo that isn't one never reaches the image converter, and a file someone else sent is marked as downloaded from the internet on macOS when you save it.
 
+### Compute nodes
+- **Multi-repo workspaces can send code to compute nodes.** `k2 compute run --repo <folder>` ships a git repo nested in the workspace (or a worktree of one) at its own HEAD, `--sha` or `--dirty`, when the workspace folder itself isn't a repo. Run from inside one of those repos and K2 finds it for you. Only that repo goes, never the rest of the workspace or its `.k2/` folder, and each nested repo keeps its own warm build on the node. Needs only this server's update.
+- **Caches that outlive a job.** `k2 compute run --cache NAME` gives the job a folder on the node, `$K2_JOB_CACHE`, that the next run of the same workspace finds again, also for `--no-source` jobs (fuzz corpora, installed tools, a cargo target dir). Caches count toward the node's disk limits and are cleared when idle and the disk runs low. `k2 compute cache` lists them, `k2 compute cache clear` empties them. Needs k2-node 0.46.6 on the node (`k2 compute node update <node>`).
+
 ## 0.46.5 — Agents stay up
 
 ### When you update

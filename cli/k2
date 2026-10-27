@@ -19917,6 +19917,18 @@ Agents:
   k2 compute info <node> [--json]
   k2 compute run <node>|--any [--os linux] [--arch x86_64] [--label k=v]
                  [--detach] [--dirty] [--sha REV] [--no-source]
+                 [--dirty]      ship your uncommitted changes too (no commit needed;
+                                HEAD + the diff + untracked files, never .k2/)
+                 [--repo DIR]   ship a git repo nested in the workspace (or a worktree
+                                of one) instead of the workspace's own: a multi-repo
+                                workspace whose root isn't a repo. Found for you when
+                                you run from inside one. Same jail: inside the
+                                workspace, no '..', no link out, never .k2/
+                 [--cache NAME] a folder on the node that outlives the job, per
+                                workspace and NAME: $K2_JOB_CACHE (fuzz corpora,
+                                installs, a cargo target). With --no-source too.
+                                Evicted when idle and the node needs the disk;
+                                never with --secret. k2 compute cache lists them
                  [--env K=V]... [--cpus N] [--mem 16G]
                  [--secret NAME[=ENVNAME]]...  a vault secret as env, sealed to the
                                 node at spawn; names only in the plan (k2 study compute)
@@ -19970,6 +19982,11 @@ Agents:
                  (or was just assigned) needs --force (else job_started, exit 3).
                  On a shared node, a job in the node's queue is asked to cancel
                  only if it hasn't started: it ends cancelled, or job_started
+  k2 compute cache [list] [--node N] [--workspace WS] [--name NAME] [--json]
+  k2 compute cache clear (--workspace WS | --all) [--name NAME] [--node N]
+                 this server's --cache folders on its nodes: size, last use,
+                 busy (a running job holds it; never cleared). Owner/admin,
+                 or an agent allowed to manage compute nodes
   k2 compute queue <node> [--json]
                  the node's whole queue: on a shared node, other servers' jobs
                  show only as "another server" with tier, class, size and ETA
@@ -20670,11 +20687,21 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
 cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
-    local gate="" tier="" supersede="" submitter=""
+    local gate="" tier="" supersede="" submitter="" repo="" cache=""
     local -a labels=() envs=() needs=() artifacts=() secrets=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
+            # --repo <folder>: a git repo (or a worktree of one) inside the
+            # workspace, shipped instead of the workspace's own (0.46.6).
+            --repo) repo="${2:-}"; shift 2
+                [ -n "$repo" ] || { echo "usage: --repo <folder> (a git repo inside the workspace, e.g. k2-multiplayer-base)" >&2; exit 2; } ;;
+            # --cache NAME: a folder on the node that outlives the job
+            # ($K2_JOB_CACHE), per workspace and name (0.46.6).
+            --cache) cache="${2:-}"; shift 2
+                if ! [[ "$cache" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; then
+                    echo "usage: --cache NAME (1–64 of a-z 0-9 . _ -, starting with a letter or digit)" >&2; exit 2
+                fi ;;
             # --gate = --tier ci (0.46.5; an older daemon only knows gate,
             # so both go in the body).
             --gate) gate=1; tier="ci"; shift ;;
@@ -20773,6 +20800,8 @@ sys.exit(0 if ok else 1)'; then
         # The checkout we're in: from a git worktree inside the workspace the
         # daemon takes HEAD (and --dirty) from it, not the main checkout.
         repo_dir="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+        # (--repo naming another repo than the one we're in: the daemon
+        # starts the job at that repo's root; our folder means nothing there.)
     fi
     local client
     client="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
@@ -20833,7 +20862,8 @@ print(json.dumps(out))' "${secrets[@]}")" || exit 2
         K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
         K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate" \
-        K2_CJ_tier="$tier" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter")"
+        K2_CJ_tier="$tier" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
+        K2_CJ_repo="$repo" K2_CJ_cache="$cache")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -20893,6 +20923,7 @@ if j.get("tierAsked") and j.get("tierAsked") != j.get("tier"):
 src = v.get("source")
 if isinstance(src, dict):
     where = src.get("checkout") or "workspace"
+    if src.get("repo") and src.get("checkout") != "worktree": where = "repo"
     if src.get("path"): where += " " + src["path"]
     s = "[k2 compute] source: %s @ %s" % (where, (src.get("commit") or "")[:8])
     d = src.get("dirty")
@@ -20928,6 +20959,73 @@ print(j["id"] + "\t" + ("set" if v.get("shards") else "one") + "\t" + line)')"
         _compute_follow_set "$job_id" "$as_json"
     fi
     _compute_follow "$job_id" "$raw" 0 "$as_json"
+}
+
+# k2 compute cache [list|clear] — this server's job caches on its nodes
+# (`--cache NAME`, 0.46.6).
+cmd_compute_cache() {
+    local verb="list" node="" ws="" name="" all=0 as_json=0
+    case "${1:-}" in
+        list|ls) shift ;;
+        clear|rm) verb="clear"; shift ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --node) node="${2:-}"; shift 2 ;;
+            --workspace) ws="${2:-}"; shift 2 ;;
+            --name) name="${2:-}"; shift 2 ;;
+            --all) all=1; shift ;;
+            --json) as_json=1; shift ;;
+            *) echo "usage: k2 compute cache [list] [--node N] [--workspace WS] [--name NAME] [--json] | clear (--workspace WS | --all) [--name NAME] [--node N]" >&2; exit 2 ;;
+        esac
+    done
+    if [ "$verb" = "clear" ]; then
+        if [ -z "$ws" ] && [ "$all" = "0" ]; then
+            echo "usage: k2 compute cache clear --workspace WS [--name NAME] (or --all for every workspace's caches)" >&2; exit 2
+        fi
+        local body
+        body="$(_compute_json K2_CJ_node="$node" K2_CJ_workspace="$ws" K2_CJ_name="$name" K2_CJ_all_b="$all")"
+        _compute_call POST /cli/compute/cache/clear "$body"
+    else
+        local q=""
+        [ -n "$node" ] && q="$q&node=$(urlencode "$node")"
+        [ -n "$ws" ] && q="$q&workspace=$(urlencode "$ws")"
+        [ -n "$name" ] && q="$q&name=$(urlencode "$name")"
+        _compute_call GET /cli/compute/cache "${q#&}"
+    fi
+    if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; exit 0; fi
+    printf '%s' "$_CP_BODY" | K2_CP_VERB="$verb" python3 -c '
+import json, os, sys, time
+v = json.load(sys.stdin)
+clear = os.environ.get("K2_CP_VERB") == "clear"
+def size(b):
+    for u in ("B", "KB", "MB", "GB", "TB"):
+        if b < 1024 or u == "TB":
+            return ("%d %s" % (b, u)) if u == "B" else ("%.1f %s" % (b, u))
+        b /= 1024.0
+def ago(t):
+    if not t: return "-"
+    d = max(0, int(time.time()) - int(t))
+    return "%dm ago" % (d // 60) if d < 3600 else ("%dh ago" % (d // 3600) if d < 86400 else "%dd ago" % (d // 86400))
+rows = []
+for n in v.get("nodes") or []:
+    if n.get("error") or n.get("note") and not n.get("caches"):
+        sys.stderr.write("[k2 compute] %s: %s\n" % (n["node"], n.get("note") or n.get("error")))
+    for e in (n.get("cleared") or []) if clear else []:
+        print("cleared  %-14s %-20s %-24s %10s" % (n["node"], e.get("workspace") or "(another: %s)" % e["wsKey"][:8], e["name"], size(e["bytes"])))
+    for e in n.get("caches") or []:
+        rows.append((n["node"], e.get("workspace") or "(unknown %s)" % e["wsKey"][:8], e["name"], size(e["bytes"]), ago(e.get("usedAt")), "busy" if e.get("busy") else ""))
+if rows and not clear:
+    print("%-14s %-20s %-24s %10s  %-9s %s" % ("NODE", "WORKSPACE", "CACHE", "SIZE", "USED", ""))
+    for r in rows:
+        print("%-14s %-20s %-24s %10s  %-9s %s" % r)
+elif clear:
+    for r in rows:
+        if r[5] == "busy":
+            sys.stderr.write("[k2 compute] %s: %s/%s is held by a running job; not cleared\n" % (r[0], r[1], r[2]))
+elif not rows:
+    sys.stderr.write("[k2 compute] no job caches\n")
+'
 }
 
 # Follow a split run (--shards): one line per shard change on stderr,
@@ -21024,7 +21122,7 @@ cmd_compute_test() {
             --needs|--need)
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--supersede|--submitter)
+            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--supersede|--submitter|--repo|--cache)
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical) pass+=("$1"); shift ;;
             -*) echo "usage: unknown flag '$1' (k2 compute test --help)" >&2; exit 2 ;;
@@ -22249,6 +22347,7 @@ cmd_compute() {
             _compute_render info
             ;;
         run) cmd_compute_run "$@" ;;
+        cache) cmd_compute_cache "$@" ;;
         queue)
             [ -n "${1:-}" ] && [ "${1#-}" = "$1" ] || { echo "usage: k2 compute queue <node> [--json]" >&2; exit 2; }
             _compute_call GET /cli/compute/queue "node=$(urlencode "$1")"

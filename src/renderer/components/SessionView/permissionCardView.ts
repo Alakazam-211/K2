@@ -58,11 +58,12 @@ export const PERMISSION_LABEL = {
   always: "Allow, and let it manage its Apps' users from now on",
 } as const
 
-/** What "Let this agent manage its Apps' users" covers (the daemon's
- *  `held_cards::SWITCH_COVERS`): said again in the confirm for
- *  `PERMISSION_LABEL.always`. */
+/** What "Let this agent manage its Apps' users" covers: the daemon's
+ *  `held_cards::SWITCH_COVERS`, word for word (a daemon test reads this
+ *  line and fails when they differ). Said again in the confirm for
+ *  `PERMISSION_LABEL.always` and under the switch in Settings. */
 export const APP_USERS_SWITCH_COVERS =
-  "On its own Apps only: add and remove App users and test guests, set their passwords, email and names, unlock them, give them roles and its own room, invite people, and give its Apps the guests-rooms grant in its own room. Never a box login or another workspace's guests."
+  "On its own Apps only: add and remove App users and test guests, set their passwords, email and names, unlock them, give them roles and its own room, invite people, give its Apps the guests-rooms grant in its own room, and mint App keys that manage its Apps' users. The users it makes are tied to it. Never a box login or another workspace's guests."
 
 /** Deny reasons: one line, at most this many characters (§4.4). */
 export const DENY_REASON_MAX = 200

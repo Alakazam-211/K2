@@ -201,11 +201,22 @@ async fn copy_host_is_one_held_request_and_the_approval_copies_exactly_what_it_l
     let r = post(d.port, "/cli/app/grant/copy-host", &agent, json!({"app": "uswcopy"})).await;
     assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
     let held = r.json()["request"]["id"].as_str().expect("id").to_string();
-    let lines = r.json()["diff"]["lines"].to_string();
-    assert!(lines.contains("usw-box1") && lines.contains("usw-box2"), "the card lists them: {lines}");
-    // A dry run is a read: the agent may look.
+    // Review 0.46.4: the agent learns how many, never who, at every level.
+    assert!(!r.body.contains("usw-box"), "no names in the agent's held answer: {}", r.body);
+    assert!(r.json()["request"]["summary"].as_str().unwrap().contains("copy 2 box login(s)"), "{}", r.body);
+    assert_eq!(r.json()["request"]["body"]["body"]["usersCount"], 2, "{}", r.body);
+    // The owner's view names them.
+    let r = get(d.port, "/cli/app/approvals", OWNER, "").await;
+    let mine = r.json()["requests"].as_array().unwrap().iter().find(|x| x["id"] == json!(held)).cloned().expect("listed");
+    let lines = mine["diff"]["lines"].to_string();
+    assert!(lines.contains("usw-box1") && lines.contains("usw-box2"), "the owner sees them: {lines}");
+    let r = get(d.port, "/cli/app/approvals", &agent, "").await;
+    assert!(r.body.contains(&held) && !r.body.contains("usw-box"), "the agent's list has the count only: {}", r.body);
+    // A dry run is a read: the agent may look, and sees counts.
     let r = post(d.port, "/cli/app/grant/copy-host", &agent, json!({"app": "uswcopy", "dryRun": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["addedCount"], 2, "{}", r.body);
+    assert!(!r.body.contains("usw-box"), "no names in the agent's look: {}", r.body);
     // The list changes before the owner's click: nothing is copied.
     k2_core::skin::add_principal("usw-box3").expect("add");
     k2_core::skin::set_host_login("usw-box3", true).expect("box login");
@@ -215,6 +226,8 @@ async fn copy_host_is_one_held_request_and_the_approval_copies_exactly_what_it_l
     assert!(r.json()["error"]["hint"].as_str().unwrap_or("").contains("changed"), "{}", r.body);
     let copied = k2_core::skin::copy_host_grants_to_app_in(&svc, Some(&ws.id), "check", true).unwrap();
     assert_eq!(copied.added.len(), 3, "nothing was copied: {copied:?}");
+    let r = get(d.port, "/cli/app/approvals", &agent, "state=all").await;
+    assert!(r.body.contains(&held) && !r.body.contains("usw-box"), "a failed result names nobody to the agent: {}", r.body);
     // Asked again, approved: exactly the three.
     let r = post(d.port, "/cli/app/grant/copy-host", &agent, json!({"app": "uswcopy"})).await;
     let held = r.json()["request"]["id"].as_str().expect("id").to_string();
@@ -222,6 +235,34 @@ async fn copy_host_is_one_held_request_and_the_approval_copies_exactly_what_it_l
     assert_eq!((r.status, r.json()["status"].clone()), (200, json!("approved")), "{}", r.body);
     let after = k2_core::skin::copy_host_grants_to_app_in(&svc, Some(&ws.id), "check", true).unwrap();
     assert!(after.added.is_empty(), "all three copied: {after:?}");
+    // Review 0.46.4: a box login copied onto the App is still a box login:
+    // the App's key never acts on it at the /v1 door, enabled or not.
+    let grant = format!(r#"{{"scopes":["users","rooms"],"rooms":["{}"]}}"#, ws.id);
+    let (_, key) = k2_core::api_keys::create_app_key("usw-v1", &svc, &grant).expect("app key");
+    let host_grant = k2_core::skin::list_grants()
+        .unwrap()
+        .into_iter()
+        .find(|g| {
+            g.kind == "app"
+                && g.target_id == k2_core::skin::HOST_APP_ID
+                && k2_core::skin::list_principals().unwrap().iter().any(|p| p.id == g.subject_id && p.username == "usw-box2")
+        })
+        .expect("usw-box2's box login");
+    k2_core::skin::set_grant_enabled(&host_grant.id, false).expect("disable the box login");
+    for u in ["usw-box1", "usw-box2"] {
+        for (verb, body) in [
+            ("users/unlock", json!({"username": u})),
+            ("users/rooms", json!({"username": u, "rooms": [ws.handle]})),
+            ("users/enable", json!({"username": u})),
+            ("users/disable", json!({"username": u})),
+            ("users/remove", json!({"username": u})),
+            ("users/password-reset", json!({"username": u})),
+        ] {
+            let r = post(d.port, &format!("/v1/apps/{svc}/{verb}"), &key, body).await;
+            assert_eq!((r.status, r.code()), (403, "box_login".to_string()), "{u} {verb}: {}", r.body);
+        }
+    }
+    assert!(k2_core::skin::list_principals().unwrap().iter().any(|p| p.username == "usw-box1"), "untouched");
     // The owner still copies at once.
     let r = post(d.port, "/cli/app/grant/copy-host", OWNER, json!({"app": svc})).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -243,6 +284,7 @@ async fn the_review_lines_hold_box_logins_one_password_keys_and_suspensions() {
     allow_build_only(&ws, true);
     let r = post(d.port, "/cli/app/install", &agent, json!({"app": "uswrapp"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    let svc = r.json()["app"]["serviceId"].as_str().expect("serviceId").to_string();
 
     // 1. An owner-made box login whose room is the agent's own is still a
     // box login: refused for every user verb, with the switch on.
@@ -279,10 +321,19 @@ async fn the_review_lines_hold_box_logins_one_password_keys_and_suspensions() {
     assert_eq!((r.status, r.code()), (404, "not_a_test_guest".to_string()), "nothing made yet: {}", r.body);
     let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": held, "confirmToken": confirm("app-approve", &held)})).await;
     assert_eq!((r.status, r.json()["status"].clone()), (200, json!("approved")), "{}", r.body);
+    // A refused password never spends the one set.
+    let r = post(d.port, "/cli/app/test-guest/password", &agent, pw("short")).await;
+    assert_eq!((r.status, r.code()), (400, "bad_password".to_string()), "{}", r.body);
     let r = post(d.port, "/cli/app/test-guest/password", &agent, pw("first-set-pw-123")).await;
     assert_eq!((r.status, r.json()["once"].clone()), (200, json!(true)), "{}", r.body);
     let r = post(d.port, "/cli/app/test-guest/password", &agent, pw("second-set-pw-123")).await;
     assert_eq!((r.status, r.code()), (403, "app_users_off".to_string()), "only once: {}", r.body);
+
+    // A username is at most 64 characters (review 0.46.4).
+    let long = "u".repeat(65);
+    let r = post(d.port, "/cli/app/test-guest/add", &agent, json!({"app": "uswrapp", "username": long})).await;
+    assert_eq!((r.status, r.code()), (400, "bad_request".to_string()), "{}", r.body);
+    assert!(r.body.contains("at most 64"), "{}", r.body);
 
     // 3. At most 5 open held requests of one kind per agent.
     for n in 0..5 {
@@ -313,6 +364,29 @@ async fn the_review_lines_hold_box_logins_one_password_keys_and_suspensions() {
     assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "another room: {}", r.body);
     let r = post(d.port, "/cli/app/key/mint", &agent, json!({"app": "uswrapp", "scopes": ["users"], "rooms": [ws.handle]})).await;
     assert_eq!(r.status, 200, "its own room, both switches: {}", r.body);
+    // Review 0.46.4: the key it minted itself is stamped, and stops at the
+    // /v1 door while the owner has the users switch off.
+    let minted = k2_core::api_keys::get_app_key(r.json()["id"].as_str().expect("key id")).expect("the key row");
+    let stamped = k2_core::app_grace::keys::AppKeyGrant::from_stored(minted.grant_json.as_deref());
+    assert_eq!(stamped.minted_by_agent.as_deref(), Some(ws.id.as_str()), "{stamped:?}");
+    let (_, key) = k2_core::api_keys::create_app_key("usw-agent-key", &svc, &stamped.to_json()).expect("the same grant");
+    let r = get(d.port, &format!("/v1/apps/{svc}/users"), &key, "").await;
+    assert_eq!(r.status, 200, "switch on: {}", r.body);
+    let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "app_users", "value": false})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = get(d.port, &format!("/v1/apps/{svc}/users"), &key, "").await;
+    assert_eq!((r.status, r.code()), (403, "app_users_off".to_string()), "switch off: {}", r.body);
+    let r = post(d.port, &format!("/v1/apps/{svc}/users/unlock"), &key, json!({"username": "usw-once"})).await;
+    assert_eq!((r.status, r.code()), (403, "app_users_off".to_string()), "switch off: {}", r.body);
+    let mut owners = stamped.clone();
+    owners.minted_by_agent = None;
+    let (_, owner_key) = k2_core::api_keys::create_app_key("usw-owner-key", &svc, &owners.to_json()).expect("owner's grant");
+    let r = get(d.port, &format!("/v1/apps/{svc}/users"), &owner_key, "").await;
+    assert_eq!(r.status, 200, "a key the owner minted doesn't follow the agent's switch: {}", r.body);
+    let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "app_users", "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = get(d.port, &format!("/v1/apps/{svc}/users"), &key, "").await;
+    assert_eq!(r.status, 200, "switch on again: {}", r.body);
     let r = post(d.port, "/cli/app/key/mint", &agent, json!({"app": "uswrapp", "scopes": ["fetch"]})).await;
     assert_eq!(r.status, 200, "a key that manages no users: switch 2 as before: {}", r.body);
 

@@ -20,6 +20,7 @@
 
 import React, { useEffect, useState } from 'react'
 import { SquareCheckbox } from '@/components/ui'
+import { APP_USERS_SWITCH_COVERS } from '@/components/SessionView/permissionCardView'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { emit } from '@tauri-apps/api/event'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
@@ -239,10 +240,8 @@ export function AgentAppsAccess({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">Let this agent manage its Apps&rsquo; users</div>
           <div className={desc}>
-            Adds and removes App users and test guests of its own Apps, sets their passwords, email and names, unlocks them,
-            gives them roles and its own room, invites people, and gives its Apps the guests-rooms grant in its own room. The
-            users it makes are tied to it. Never a box login or another workspace&rsquo;s guests. Off: adding a test guest or
-            the guests-rooms grant is a card for you; the rest is refused until you turn it on.
+            {APP_USERS_SWITCH_COVERS} Off: adding a test guest, the guests-rooms grant or a key that manages users is a card
+            for you; the rest is refused until you turn it on.
           </div>
         </div>
       </div>

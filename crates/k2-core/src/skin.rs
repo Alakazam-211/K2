@@ -371,12 +371,19 @@ fn display_prefix(raw: &str) -> String {
     format!("{SKIN_KEY_PREFIX}…{tail}")
 }
 
-/// Normalize a skin username: lowercase, `^[a-z0-9_-]{2,}$`.
+/// The longest App username (review 0.46.4: every card, note and audit
+/// line shows it).
+pub const USERNAME_MAX_LEN: usize = 64;
+
+/// Normalize a skin username: lowercase, `^[a-z0-9_-]{2,64}$`.
 /// Do **not** accept `@` here — platform `--name` shares this charset.
 pub fn normalize_username(raw: &str) -> Result<String, String> {
     let lowered = raw.trim().to_ascii_lowercase();
     if lowered.len() < 2 {
         return Err("username must be at least 2 characters".to_string());
+    }
+    if lowered.len() > USERNAME_MAX_LEN {
+        return Err(format!("username must be at most {USERNAME_MAX_LEN} characters"));
     }
     if !lowered
         .chars()
@@ -8489,6 +8496,17 @@ mod tests {
         assert!(normalize_email("jane@@clinic.com").is_err());
         assert!(normalize_username("jane@clinic.com").is_err());
         assert!(normalize_username("jane").is_ok());
+    }
+
+    /// Review 0.46.4: every card, note and audit line shows the name.
+    #[test]
+    fn usernames_are_at_most_64_characters() {
+        let max = "a".repeat(USERNAME_MAX_LEN);
+        assert_eq!(normalize_username(&max).unwrap(), max);
+        let err = normalize_username(&"a".repeat(USERNAME_MAX_LEN + 1)).unwrap_err();
+        assert!(err.contains("at most 64"), "{err}");
+        // Surrounding space is trimmed before the count.
+        assert!(normalize_username(&format!("  {max}  ")).is_ok());
     }
 
     #[test]

@@ -30,12 +30,15 @@ use serde_json::{json, Map, Value as J};
 use crate::permission::actions::{Answerer, Applied, Ctx};
 use crate::permission::{answer, limits, present, store};
 
-/// What "Let this agent manage its Apps' users" covers, in one line (the
-/// card says it next to the option that turns it on; the desktop's
-/// confirm says it again).
+/// What "Let this agent manage its Apps' users" covers, in one line: the
+/// card says it next to the option that turns it on, the switch's own
+/// catalog entry (`apps.manage-users`) says it, and the desktop says it
+/// word for word (`APP_USERS_SWITCH_COVERS` in the renderer; a test below
+/// fails when they differ).
 pub(crate) const SWITCH_COVERS: &str = "On its own Apps only: add and remove App users and test guests, set their passwords, \
-     email and names, unlock them, give them roles and its own room, invite people, and give its Apps the guests-rooms grant \
-     in its own room. Never a box login or another workspace's guests.";
+     email and names, unlock them, give them roles and its own room, invite people, give its Apps the guests-rooms grant \
+     in its own room, and mint App keys that manage its Apps' users. The users it makes are tied to it. Never a box login \
+     or another workspace's guests.";
 
 /// The catalog action K2's App cards carry.
 pub(crate) const ACTION: &str = "apps.approve";
@@ -100,7 +103,13 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
     let (prompt, options) = present::prompt_and_options(std::slice::from_ref(&req), false);
     let opts: Vec<&str> = options.iter().map(String::as_str).collect();
     let card_action = present::card_action(std::slice::from_ref(&req), false, present::single_dedupe(&req));
-    let mut text = format!("{prompt}\n{}", r.summary);
+    // A copy-host request's summary is a count (the agent's notes repeat
+    // it); the owner's card names who, from the request's first line.
+    let detail = match r.body.get("route").and_then(J::as_str) {
+        Some(super::agent_grants::COPY_HOST_APPLY) => r.diff.pointer("/lines/0").and_then(J::as_str).unwrap_or(&r.summary),
+        _ => r.summary.as_str(),
+    };
+    let mut text = format!("{prompt}\n{detail}");
     if options.iter().any(|o| o == k2_core::permission::label::ALWAYS) {
         text.push_str(&format!(
             "\n\"{}\" also turns on \"Let this agent manage its Apps' users\" for {handle}: {SWITCH_COVERS}",
@@ -217,4 +226,15 @@ pub(crate) fn turn_on_always(ctx: &Ctx, who: &Answerer) -> Result<String, String
          (turn it off in Settings → Workspaces → {} → Agent → Apps).",
         ctx.workspace_handle, ctx.workspace_handle
     ))
+}
+
+#[cfg(test)]
+mod covers_tests {
+    /// The desktop's copy of [`super::SWITCH_COVERS`] is the same words.
+    #[test]
+    fn the_renderer_says_what_the_switch_covers_word_for_word() {
+        let ts = include_str!("../../../../src/renderer/components/SessionView/permissionCardView.ts");
+        let want = format!("export const APP_USERS_SWITCH_COVERS =\n  \"{}\"", super::SWITCH_COVERS);
+        assert!(ts.contains(&want), "permissionCardView.ts must say, word for word:\n{want}");
+    }
 }

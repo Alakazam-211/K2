@@ -164,6 +164,21 @@ pub fn handle(path: &str, is_post: bool, presented: Option<&str>, body: &[u8], p
     if !scope.is_empty() && !grant.has(scope) {
         return not_found();
     }
+    // Review 0.46.4: a key an agent minted itself for its App's users
+    // works only while "Let this agent manage its Apps' users" is on for
+    // that agent: turning the switch off stops its keys at this door too.
+    if scope == keys::SCOPE_USERS || scope == keys::SCOPE_ROOMS {
+        if let Some(ws) = grant.minted_by_agent.as_deref() {
+            if !k2_core::workspace::settings::agents_can_manage_app_users(ws) {
+                return err(
+                    403,
+                    crate::skin_routes::APP_USERS_OFF,
+                    "this key was minted by the App's agent, and \"Let this agent manage its Apps' users\" is off for it now: \
+                     the owner turns it back on, or mints the App a key itself",
+                );
+            }
+        }
+    }
     let workspace = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -281,6 +296,26 @@ fn app_grant(c: &Ctx, username: &str) -> Result<(String, skin::SkinGrant), CliRe
     Ok((p.id, g))
 }
 
+/// [`app_grant`] for a verb that acts on the person (rooms, enable and
+/// disable, remove, unlock, password reset): never a box login, enabled or
+/// not, even when copy-host gave that login access to this App (review
+/// 0.46.4). The key lives in the App's runtime; a box login is the owner's.
+fn app_user(c: &Ctx, username: &str) -> Result<(String, skin::SkinGrant), CliResponse> {
+    let (pid, g) = app_grant(c, username)?;
+    let grants = skin::list_grants().map_err(|e| err(500, "store", e))?;
+    if crate::skin_routes::has_box_login(&pid, &grants) {
+        return Err(err(
+            403,
+            BOX_LOGIN,
+            format!("'{username}' has a box login: an App key never manages a box login (the owner does, in Settings → Users)"),
+        ));
+    }
+    Ok((pid, g))
+}
+
+/// The /v1 refusal for a person who holds a box login.
+const BOX_LOGIN: &str = "box_login";
+
 /// Does the person belong to this App alone (no box login, no other App)?
 fn only_this_app(c: &Ctx, principal_id: &str) -> Result<bool, CliResponse> {
     let gs = skin::list_grants().map_err(|e| err(500, "store", e))?;
@@ -377,7 +412,7 @@ fn set_rooms(c: &Ctx, v: &J) -> R {
     let user = username(v)?;
     let tokens = rooms_of(v).ok_or_else(|| err(400, "rooms_required", "rooms is required ([] takes every room away)"))?;
     let ids = resolve_rooms(c, &tokens)?;
-    let _ = app_grant(c, &user)?;
+    let _ = app_user(c, &user)?;
     let apply = v.get("applyTokens").and_then(J::as_bool).unwrap_or(true);
     let g = skin::set_app_grant_rooms(&user, &c.app, &ids, apply, &c.actor()).map_err(|e| err(409, "not_settable", e))?;
     Ok(json!({ "ok": true, "username": user, "app": c.app, "rooms": ids, "roomHandles": skin::handles_for_project_ids(&ids), "grant": g }))
@@ -385,14 +420,14 @@ fn set_rooms(c: &Ctx, v: &J) -> R {
 
 fn set_enabled(c: &Ctx, v: &J, on: bool) -> R {
     let user = username(v)?;
-    let (_, g) = app_grant(c, &user)?;
+    let (_, g) = app_user(c, &user)?;
     let g = skin::set_grant_enabled(&g.id, on).map_err(|e| err(500, "store", e))?;
     Ok(json!({ "ok": true, "username": user, "enabled": g.enabled }))
 }
 
 fn remove_user(c: &Ctx, v: &J) -> R {
     let user = username(v)?;
-    let (pid, g) = app_grant(c, &user)?;
+    let (pid, g) = app_user(c, &user)?;
     if only_this_app(c, &pid)? {
         let removed = skin::remove_principal(&user).map_err(|e| err(500, "store", e))?;
         if removed {
@@ -407,14 +442,15 @@ fn remove_user(c: &Ctx, v: &J) -> R {
 
 fn unlock(c: &Ctx, v: &J) -> R {
     let user = username(v)?;
-    let _ = app_grant(c, &user)?;
+    // The lockout is box-wide (by name): a box login's is the owner's.
+    let _ = app_user(c, &user)?;
     let (_, cleared) = skin::clear_login_lockout(&user).map_err(|e| err(500, "store", e))?;
     Ok(json!({ "ok": true, "username": user, "cleared": cleared }))
 }
 
 fn password_reset(c: &Ctx, v: &J) -> R {
     let user = username(v)?;
-    let (pid, _) = app_grant(c, &user)?;
+    let (pid, _) = app_user(c, &user)?;
     if !only_this_app(c, &pid)? {
         return Err(err(403, "not_only_this_app", "this person also signs in elsewhere on this box; only the owner resets their password"));
     }

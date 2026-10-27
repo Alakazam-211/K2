@@ -842,6 +842,12 @@ fn key_mint(who: &Who, body: &[u8]) -> R<J> {
             k2_core::workspace::settings::agents_can_manage_app_users(ws) && grant.rooms.iter().all(|r| r == ws)
         });
     if super::access::self_widens(who) && users_ok {
+        // Stamped: a key that manages users stops at the /v1 door once the
+        // owner turns the users switch off (review 0.46.4).
+        let mut grant = grant.clone();
+        if user_power {
+            grant.minted_by_agent = super::routes::agent_ws(who).map(str::to_string);
+        }
         let mut out = mint_and_deliver(&t, &grant, &label, "vault", &actor(who))?;
         out["via"] = json!(super::access::SELF_VIA);
         return Ok(out);

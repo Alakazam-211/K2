@@ -102,17 +102,21 @@ fn suspend(who: &Who, body: &[u8]) -> R<J> {
     let app = app_for(who, s(&v, "app"))?;
     let by = actor(who);
     let reason = s(&v, "reason").map(|r| r.chars().take(500).collect::<String>());
-    let already = is_suspended(&app.app_id);
     let agent = super::routes::agent_ws(who).is_some();
-    if !already {
+    // Only the first suspension stamps who (review 0.46.4): two at once
+    // never let the later one overwrite `suspended_by`.
+    let already = {
         let h = k2_core::db::shared();
         let conn = h.lock();
         conn.execute(
-            "UPDATE apps SET suspended_at = ?2, suspended_by = ?3, suspended_reason = ?4, updated_at = ?2 WHERE app_id = ?1",
+            "UPDATE apps SET suspended_at = ?2, suspended_by = ?3, suspended_reason = ?4, updated_at = ?2 \
+             WHERE app_id = ?1 AND suspended_at IS NULL",
             params![app.app_id, deploy::now(), by, reason],
         )
-        .map_err(db_err)?;
-    } else if !agent {
+        .map_err(db_err)?
+            == 0
+    };
+    if already && !agent {
         // A person suspending an App its agent suspended takes the
         // suspension over (review 0.46.4 B-3): only the owner resumes it
         // now. An agent never takes over anyone's suspension.
@@ -205,11 +209,30 @@ fn resume(who: &Who, body: &[u8]) -> R<J> {
     {
         let h = k2_core::db::shared();
         let conn = h.lock();
-        conn.execute(
-            "UPDATE apps SET suspended_at = NULL, suspended_by = NULL, suspended_reason = NULL, updated_at = ?2 WHERE app_id = ?1",
-            params![app.app_id, deploy::now()],
-        )
+        // Compare and swap (review 0.46.4): an agent resumes only while the
+        // suspension is still its own; a person taking it over in between
+        // wins.
+        let n = if agent {
+            conn.execute(
+                "UPDATE apps SET suspended_at = NULL, suspended_by = NULL, suspended_reason = NULL, updated_at = ?2 \
+                 WHERE app_id = ?1 AND suspended_at IS NOT NULL AND suspended_by = ?3",
+                params![app.app_id, deploy::now(), by],
+            )
+        } else {
+            conn.execute(
+                "UPDATE apps SET suspended_at = NULL, suspended_by = NULL, suspended_reason = NULL, updated_at = ?2 \
+                 WHERE app_id = ?1 AND suspended_at IS NOT NULL",
+                params![app.app_id, deploy::now()],
+            )
+        }
         .map_err(db_err)?;
+        if n == 0 {
+            drop(conn);
+            if agent && is_suspended(&app.app_id) {
+                return Err(owner_only("resumes an App someone else suspended"));
+            }
+            return Ok(json!({ "ok": true, "app": app.app_id, "already": "not suspended" }));
+        }
         let _ = store::set_state(&conn, &app.app_id, store::STATE_STOPPED, Some("resumed; not started"));
         let _ = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, &app.app_id, "resume", &by, None, &json!({}));
     }

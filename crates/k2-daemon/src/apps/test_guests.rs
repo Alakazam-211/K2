@@ -371,6 +371,11 @@ fn password(who: &Who, body: &[u8]) -> R<J> {
         let conn = h.lock();
         deploy::store::get_app_by_service(&conn, &t.app).ok().flatten()
     };
+    // Checked before the one password set is used (review 0.46.4): a
+    // refused password never spends it.
+    if pw.trim().chars().count() < skin::PUBLIC_PASSWORD_MIN_LEN {
+        return Err(no("bad_password", 400, format!("password must be at least {} characters", skin::PUBLIC_PASSWORD_MIN_LEN)));
+    }
     let by = actor(who);
     let mut once: Option<String> = None;
     if let Some(ws) = agent_ws(who) {
@@ -408,7 +413,20 @@ fn password(who: &Who, body: &[u8]) -> R<J> {
             return Err(super::agent_grants::users_off(&format!("Setting '{}''s password again", p.username)));
         }
     }
-    skin::set_principal_password(&p.username, Some(pw)).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    if let Err(e) = skin::set_principal_password(&p.username, Some(pw)) {
+        // The write failed: the one set is given back.
+        if let Some(id) = once.as_deref() {
+            let h = k2_core::db::shared();
+            let conn = h.lock();
+            if let Err(e) = conn.execute(
+                "UPDATE app_widenings SET result_json = json_remove(result_json, '$.passwordSet') WHERE id = ?1",
+                rusqlite::params![id],
+            ) {
+                k2_core::log_debug!("[apps] give back the password set of {id}: {e}");
+            }
+        }
+        return Err(no(codes::BAD_REQUEST, 400, e));
+    }
     if let Some(a) = &app {
         app_audit(a, "test_guest_password", &by, json!({ "username": p.username, "approvedRequest": once }));
     }
@@ -435,7 +453,7 @@ fn approved_request_for(ws: &str, username: &str) -> R<Option<String>> {
             r.requester_workspace.as_deref() == Some(ws)
                 && r.body.get("route").and_then(J::as_str) == Some(super::agent_grants::TEST_GUEST_ADD)
                 && r.body.pointer("/body/username").and_then(J::as_str) == Some(username)
-                && r.result.as_ref().and_then(|x| x.get("passwordSet")).and_then(J::as_bool) != Some(true)
+                && !r.result.as_ref().and_then(|x| x.get("passwordSet")).is_some_and(|v| v.as_bool() == Some(true) || v.as_i64().is_some_and(|n| n != 0))
         })
         .map(|r| r.id))
 }

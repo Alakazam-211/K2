@@ -333,9 +333,17 @@ pub fn decide(conn: &Connection, id: &str, status: &str, by: &str, via: Option<&
 }
 
 /// Record the outcome of applying an approved request (`approved` with
-/// what it did, or `failed` with the error).
+/// what it did, or `failed` with the error). A `passwordSet` already on
+/// the row (a test guest's one password set, written while the request
+/// was applying) is kept, never overwritten (review 0.46.4).
 pub fn set_result(conn: &Connection, id: &str, status: &str, result: &Value) -> rusqlite::Result<()> {
-    conn.execute("UPDATE app_widenings SET status = ?2, result_json = ?3 WHERE id = ?1", params![id, status, result.to_string()])?;
+    conn.execute(
+        "UPDATE app_widenings SET status = ?2, result_json = CASE \
+            WHEN COALESCE(json_extract(result_json, '$.passwordSet'), 0) <> 0 THEN json_set(?3, '$.passwordSet', json('true')) \
+            ELSE ?3 END \
+         WHERE id = ?1",
+        params![id, status, result.to_string()],
+    )?;
     Ok(())
 }
 
@@ -424,6 +432,25 @@ pub(crate) mod tests {
             requester_workspace: Some("ws-1"),
             requester_session: None,
         }
+    }
+
+    #[test]
+    fn set_result_keeps_a_password_set_written_while_applying() {
+        let c = conn();
+        let r = create(&c, &new(KIND_CONFIG, "jobs", &serde_json::json!({"a": 1}), "agent:nsi"), 100).unwrap();
+        // The agent's one password set lands before the approval's result.
+        c.execute(
+            "UPDATE app_widenings SET result_json = json_set(COALESCE(result_json, '{}'), '$.passwordSet', json('true')) WHERE id = ?1",
+            params![r.id],
+        )
+        .unwrap();
+        set_result(&c, &r.id, STATUS_APPROVED, &serde_json::json!({"made": "usw-once"})).unwrap();
+        let got = get(&c, &r.id).unwrap().unwrap().result.unwrap();
+        assert_eq!(got, serde_json::json!({"made": "usw-once", "passwordSet": true}));
+        // Without one, the result is written as given.
+        let r2 = create(&c, &new(KIND_CONFIG, "other", &serde_json::json!({"a": 2}), "agent:nsi"), 100).unwrap();
+        set_result(&c, &r2.id, STATUS_FAILED, &serde_json::json!({"code": "x"})).unwrap();
+        assert_eq!(get(&c, &r2.id).unwrap().unwrap().result.unwrap(), serde_json::json!({"code": "x"}));
     }
 
     #[test]

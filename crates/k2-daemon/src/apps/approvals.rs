@@ -89,6 +89,16 @@ pub(crate) fn request_json(r: &reqs::AppRequest) -> J {
     v
 }
 
+/// [`request_json`] as `who` sees it: a passport (an agent, or a K2 shell
+/// tab) sees a copy-host request's count, never who (review 0.46.4).
+pub(crate) fn request_json_for(who: &Who, r: &reqs::AppRequest) -> J {
+    let mut v = request_json(r);
+    if who.passport().is_some() {
+        super::agent_grants::redact_request(&mut v);
+    }
+    v
+}
+
 /// The answer for a change held for the owner (`202`, exit 2 in the CLI).
 pub(crate) fn held_answer(r: &reqs::AppRequest) -> J {
     json!({
@@ -348,7 +358,7 @@ fn approvals(who: &Who, params: &HashMap<String, String>) -> R<J> {
     } else {
         rows.iter().filter(|r| r.status == reqs::STATUS_PENDING).count()
     };
-    Ok(json!({ "ok": true, "requests": rows.iter().map(request_json).collect::<Vec<_>>(), "pendingCount": pending,
+    Ok(json!({ "ok": true, "requests": rows.iter().map(|r| request_json_for(who, r)).collect::<Vec<_>>(), "pendingCount": pending,
         "ownerConfirm": owner_confirm_status() }))
 }
 
@@ -497,7 +507,7 @@ fn deny(who: &Who, body: &[u8]) -> R<J> {
             ),
         );
     }
-    Ok(json!({ "ok": true, "request": request_json(&d), "status": status }))
+    Ok(json!({ "ok": true, "request": request_json_for(who, &d), "status": status }))
 }
 
 // ── 0.46.1 door kinds (S19, S20, S42) ────────────────────────────────

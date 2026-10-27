@@ -189,6 +189,7 @@ fn pending_of(ws: &str, route: &str) -> R<usize> {
 }
 
 pub(crate) fn hold(step: Step<'_>, switch_hint: bool) -> R<J> {
+    let who = step.who;
     let open = pending_of(step.workspace, step.route)?;
     if open >= MAX_PENDING_PER_KIND {
         return Err(no(
@@ -213,6 +214,9 @@ pub(crate) fn hold(step: Step<'_>, switch_hint: bool) -> R<J> {
     })?;
     let card = super::held_cards::present_for(&r);
     let mut out = super::approvals::held_answer(&r);
+    if who.passport().is_some() {
+        redact_held(&mut out);
+    }
     let shown = match card.get("card").and_then(J::as_str) {
         Some(_) => "the owner sees it as a card on your Thread (and in Settings → App Approvals)",
         None => "the owner sees it in Settings → App Approvals",
@@ -232,6 +236,67 @@ pub(crate) fn hold(step: Step<'_>, switch_hint: bool) -> R<J> {
 }
 
 // ── copy-host ───────────────────────────────────────────────────────
+
+/// The second line of a copy-host request (no names in it).
+const COPY_LINE_2: &str = "each gets App access on it like their box login (no new box login); nothing is copied if the list changed";
+
+/// What an agent is told in place of the names.
+const NAMES_NOTE: &str = "who has a box login is the owner's to know: you see how many; the owner sees the names on the card and in Settings → App Approvals";
+
+fn copy_summary(n: usize, handle: &str) -> String {
+    format!("copy {n} box login(s) onto {handle}")
+}
+
+/// A copy report's name lists, as counts (`added` → `addedCount`, …).
+fn names_to_counts(o: &mut serde_json::Map<String, J>) {
+    for k in ["added", "keptExisting", "skippedOtherAppRole", "skippedOtherWorkspaceAgent", "now"] {
+        if let Some(J::Array(a)) = o.remove(k) {
+            o.insert(format!("{k}Count"), json!(a.len()));
+        }
+    }
+}
+
+/// A copy-host request as a passport (an agent, or a K2 shell tab) sees
+/// it: how many box logins, never who (review 0.46.4). `v` is
+/// [`super::approvals::request_json`]'s shape. Other requests are left as
+/// they are.
+pub(crate) fn redact_request(v: &mut J) {
+    if v.pointer("/body/route").and_then(J::as_str) != Some(COPY_HOST_APPLY) {
+        return;
+    }
+    let n = v.pointer("/body/body/users").and_then(J::as_array).map_or(0, Vec::len);
+    let handle = v.pointer("/body/body/app").and_then(J::as_str).unwrap_or("the App").to_string();
+    if let Some(b) = v.pointer_mut("/body/body").and_then(J::as_object_mut) {
+        b.remove("users");
+        b.insert("usersCount".into(), json!(n));
+    }
+    if let Some(d) = v.get_mut("diff").and_then(J::as_object_mut) {
+        d.insert("lines".into(), json!([format!("{} ({NAMES_NOTE})", copy_summary(n, &handle)), COPY_LINE_2]));
+    }
+    v["summary"] = json!(copy_summary(n, &handle));
+    if let Some(res) = v.get_mut("result").and_then(J::as_object_mut) {
+        names_to_counts(res);
+        if res.contains_key("hint") {
+            let hint = if res.get("code").and_then(J::as_str) == Some("logins_changed") {
+                "the box logins changed since the request: nothing was copied; ask again so the owner sees them"
+            } else {
+                "it was not applied; the owner sees why in Settings → App Approvals"
+            };
+            res.insert("hint".into(), json!(hint));
+        }
+    }
+}
+
+/// [`redact_request`] on a held answer ([`super::approvals::held_answer`]).
+pub(crate) fn redact_held(out: &mut J) {
+    let Some(req) = out.get_mut("request") else { return };
+    if req.pointer("/body/route").and_then(J::as_str) != Some(COPY_HOST_APPLY) {
+        return;
+    }
+    redact_request(req);
+    let diff = req["diff"].clone();
+    out["diff"] = diff;
+}
 
 fn sorted(mut v: Vec<String>) -> Vec<String> {
     for s in v.iter_mut() {
@@ -303,19 +368,15 @@ pub(crate) fn copy_host(who: &Who, body: &[u8]) -> R<J> {
     let look = copy_to(&t, &by, true, None)?;
     let added = sorted(look["added"].as_array().map(|a| a.iter().filter_map(J::as_str).map(str::to_string).collect()).unwrap_or_default());
     if dry_run || added.is_empty() {
-        // Who has a box login is the owner's to know: without "Build and
-        // run Apps" a look says how many, not who (review 0.46.4).
-        if super::access::level(&ws) == super::access::Level::Off {
-            return Ok(json!({
-                "ok": true,
-                "app": look["app"],
-                "appInfo": look["appInfo"],
-                "dryRun": true,
-                "addedCount": added.len(),
-                "note": "names need \"Build and run Apps\"; the owner sees them on the card",
-            }));
+        // Who has a box login is the owner's to know: an agent's look says
+        // how many, never who, whatever its switches (review 0.46.4).
+        let mut out = look;
+        if let Some(o) = out.as_object_mut() {
+            names_to_counts(o);
+            o.insert("dryRun".into(), json!(true));
+            o.insert("note".into(), json!(NAMES_NOTE));
         }
-        return Ok(look);
+        return Ok(out);
     }
     let handle = format!("{}/{}", ws_handle(&t.project_id), t.name);
     let app = app_row_of(&t);
@@ -327,11 +388,14 @@ pub(crate) fn copy_host(who: &Who, body: &[u8]) -> R<J> {
             workspace: &ws,
             route: COPY_HOST_APPLY,
             body: json!({ "service": t.service_id, "app": handle, "workspace": ws, "users": added }),
+            // The names are in the lines (the owner's card and App
+            // Approvals); the summary, which the agent's notes repeat, and
+            // every passport's view of the request carry the count only.
             lines: vec![
                 format!("copy {} box login(s) onto {handle}: {}", added.len(), added.join(", ")),
-                "each gets App access on it like their box login (no new box login); nothing is copied if the list changed".into(),
+                COPY_LINE_2.into(),
             ],
-            summary: format!("copy {} box login(s) onto {handle}: {}", added.len(), added.join(", ")),
+            summary: copy_summary(added.len(), &handle),
             why: "copying box logins onto an App is the owner's: they are the box's people, other workspaces' and yours".into(),
             reason: s(&v, "reason"),
         },

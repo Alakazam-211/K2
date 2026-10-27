@@ -53,6 +53,12 @@ pub struct AppKeyGrant {
     /// removes that grant and secret too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_secret: Option<String>,
+    /// The agent workspace that minted this key itself (switch 2 + "Let
+    /// this agent manage its Apps' users"). Its `users` / `rooms` scopes
+    /// work only while that switch stays on (review 0.46.4); `None` for a
+    /// key the owner minted or approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minted_by_agent: Option<String>,
 }
 
 impl AppKeyGrant {
@@ -170,7 +176,7 @@ pub fn grant_for_app(app: &str, scopes: &[String], rooms: &[String], roles: &[St
     if needs_ceiling && room_ids.is_empty() {
         return Err("the rooms scope needs a ceiling: name the rooms this key may hand out (--rooms a,b)".into());
     }
-    Ok(AppKeyGrant { scopes, rooms: room_ids, roles: role_ids, vault_secret: None })
+    Ok(AppKeyGrant { scopes, rooms: room_ids, roles: role_ids, vault_secret: None, minted_by_agent: None })
 }
 
 #[cfg(test)]

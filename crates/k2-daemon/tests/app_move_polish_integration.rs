@@ -757,6 +757,9 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     let env = setup(&[]);
     let _seen = quiet_alerts();
     let d = k2_daemon::test_harness::start(OWNER).await;
+    // A vault on a file key under the temp home (the approval's confirm):
+    // never left to whichever test ran first.
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
     let ws = seed_ws(&env, "tgws");
     let other = seed_ws(&env, "tgother");
     let svc = app_row(&ws, "tgapp");

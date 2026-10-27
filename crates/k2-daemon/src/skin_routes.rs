@@ -432,7 +432,7 @@ fn outside_workspace(what: String) -> CliResponse {
 pub(crate) fn has_box_login(principal_id: &str, grants: &[skin::SkinGrant]) -> bool {
     grants
         .iter()
-        .any(|g| g.enabled && g.subject_kind == "principal" && g.subject_id == principal_id && g.kind == "app" && g.target_id == skin::HOST_APP_ID)
+        .any(|g| g.subject_kind == "principal" && g.subject_id == principal_id && g.kind == "app" && g.target_id == skin::HOST_APP_ID)
 }
 
 /// The refusal for an agent on a guest that holds a box login.

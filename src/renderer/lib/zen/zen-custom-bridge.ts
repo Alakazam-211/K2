@@ -36,7 +36,9 @@
 //      and never in the first 2 s after mount; `canvas.setHitRegions` at
 //      most 32 finite rects (`zen-canvas`), `window.startDrag` only during
 //      a press in that frame; `layout.*` (Garden columns, 0.46.3 r10) on
-//      the caller's own page only, 4 a second per verb, a fold or unfold
+//      the caller's own page only, 4 a second per call verb (get, set,
+//      toggle; `layout.subscribe` only listens, so it is bounded by the 16
+//      live subscriptions instead, 0.46.5), a fold or unfold
 //      only within 5 s of a press in that frame, saved per Garden on this
 //      computer like the person's own click (0.46.4); `links.open`
 //      (`k2.open`, 0.46.4) only within 5 s of a press in that frame, once a
@@ -547,8 +549,9 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     }
   }
 
-  const needLayout = (verb: string): ZenCustomLayout => {
+  const needLayout = (verb: string, limited = true): ZenCustomLayout => {
     if (!deps.layout) refuse('verb_unavailable', `${verb} isn’t available here.`)
+    if (!limited) return deps.layout!
     const now = deps.now()
     const recent = (layoutCalls.get(verb) ?? []).filter((t) => now - t < 1_000)
     if (recent.length >= ZEN_LAYOUT_PER_SECOND) {
@@ -1117,9 +1120,12 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
   > = {
     'theme.changed': (_args, push) => deps.onThemeChange(() => push(deps.theme())),
     // A1: the columns now, then again whenever one folds or opens (any
-    // cause). Counts toward the 16 live subscriptions.
+    // cause). Counts toward the 16 live subscriptions; NOT toward the 4 a
+    // second (0.46.5): it only listens, and a canvas whose tiles each
+    // subscribe (or re-subscribe as they redraw) was refused `rate_limited`
+    // on every load, which the runtime then logged as an uncaught error.
     'layout.subscribe': (_args, push) => {
-      const layout = needLayout('layout.subscribe')
+      const layout = needLayout('layout.subscribe', false)
       const off = layout.subscribe((columns) => push({ columns }))
       push({ columns: layout.columns() })
       return off

@@ -149,6 +149,20 @@ fn row_age_secs(r: &J, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
     Some((now - at.with_timezone(&chrono::Utc)).num_seconds())
 }
 
+/// How long ago a run row happened, for validate's words (0.46.5: a
+/// logged error is from the past, never "now"): `"just now"`, `"40 s ago"`,
+/// `"12 min ago"`, `"5 h ago"`, `"3 d ago"`; `None` when `at` doesn't parse.
+pub fn run_age_text(r: &J, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
+    let a = row_age_secs(r, now)?.max(0);
+    Some(match a {
+        0..=4 => "just now".to_string(),
+        5..=59 => format!("{a} s ago"),
+        60..=3599 => format!("{} min ago", a / 60),
+        3600..=86_399 => format!("{} h ago", a / 3600),
+        _ => format!("{} d ago", a / 86_400),
+    })
+}
+
 /// The reason an error row of the saved version doesn't count, if any.
 fn stale_reason(r: &J, placed: bool, now: chrono::DateTime<chrono::Utc>) -> Option<&'static str> {
     if !placed {
@@ -567,6 +581,20 @@ impl ZenFiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_age_text_says_how_long_ago() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-27T12:00:00Z").expect("now").with_timezone(&chrono::Utc);
+        let at = |s: &str| json!({ "at": s });
+        assert_eq!(run_age_text(&at("2026-10-27T11:59:58Z"), now).as_deref(), Some("just now"));
+        assert_eq!(run_age_text(&at("2026-10-27T12:00:03Z"), now).as_deref(), Some("just now"), "a clock skew forward is now");
+        assert_eq!(run_age_text(&at("2026-10-27T11:59:20Z"), now).as_deref(), Some("40 s ago"));
+        assert_eq!(run_age_text(&at("2026-10-27T11:48:00Z"), now).as_deref(), Some("12 min ago"));
+        assert_eq!(run_age_text(&at("2026-10-27T07:00:00Z"), now).as_deref(), Some("5 h ago"));
+        assert_eq!(run_age_text(&at("2026-10-24T12:00:00Z"), now).as_deref(), Some("3 d ago"));
+        assert_eq!(run_age_text(&at("not a time"), now), None);
+        assert_eq!(run_age_text(&json!({}), now), None);
+    }
 
     #[test]
     fn suggestions_follow_the_message() {

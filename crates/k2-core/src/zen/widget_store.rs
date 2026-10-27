@@ -680,9 +680,11 @@ impl ZenFiles {
         if let (Ok(WidgetRef::User(name)), true, Some(b)) = (parse_widget_ref(widget), errors.is_empty(), c.bundle.as_ref()) {
             // 0.46.3: only a placed widget's fresh errors on this version
             // fail; the rest are warnings (and `--clear`able).
-            let v = self.widget_runtime(&name, &b.hash);
+            let now = chrono::Utc::now();
+            let v = self.widget_runtime_at(&name, &b.hash, now);
             let placed = v.placed();
-            errors.extend(runtime_diagnostics(&name, &v.failing));
+            let newest = newest_error_age(&v.failing, now);
+            errors.extend(runtime_diagnostics(&name, &v.failing, now));
             warnings.extend(stale_runtime_warnings(&name, &v.stale));
             status = if !v.failing.is_empty() {
                 "failed"
@@ -694,16 +696,24 @@ impl ZenFiles {
             runtime = json!({
                 "hash": b.hash,
                 "errorsSinceSave": v.failing.len(),
+                // 0.46.5: when the newest counted error was logged; they are
+                // a log of past runs, not what the frame is doing now.
+                "newestError": v.failing.iter().filter_map(|r| r["at"].as_str()).max(),
+                "newestErrorAge": newest,
                 "staleErrors": v.stale.len(),
                 "ran": v.ran,
                 "placed": placed,
                 "placements": v.placements,
                 "note": match status {
-                    "pending" => "this version hasn't run in a Zen window yet (an open Zen window reloads it on its own); validate again to see its runtime errors",
-                    "failed" => "these runtime errors happened in the version on disk now; fix, save and validate again",
-                    _ if !placed => "not placed in any Garden: it runs once a Garden places it",
-                    _ if !v.stale.is_empty() => "no recent runtime errors; older ones are warnings (k2 zen widget errors <name> --clear drops them)",
-                    _ => "ran in a Zen window with no runtime errors",
+                    "failed" => format!(
+                        "these runtime errors were logged while the version on disk now ran, the newest {} (validate reads that log; it doesn't watch a running frame). Each counts for {} h. Fix, save and validate again; once fixed, k2 zen widget errors {name} --clear --all drops them",
+                        newest.as_deref().unwrap_or("at an unknown time"),
+                        runs::RUNTIME_FRESH_SECS / 3600,
+                    ),
+                    "pending" => "this version hasn't run in a Zen window yet (an open Zen window reloads it on its own); validate again to see its runtime errors".to_string(),
+                    _ if !placed => "not placed in any Garden: it runs once a Garden places it".to_string(),
+                    _ if !v.stale.is_empty() => "no recent runtime errors; older ones are warnings (k2 zen widget errors <name> --clear drops them)".to_string(),
+                    _ => "ran in a Zen window with no runtime errors".to_string(),
                 },
             });
         }
@@ -732,8 +742,9 @@ impl ZenFiles {
             if let Some((c, e, w, _)) = self.check_now(&name) {
                 if e.is_empty() && c.errors.is_empty() {
                     if let Some(b) = c.bundle.as_ref() {
-                        let v = self.widget_runtime(&name, &b.hash);
-                        errors.extend(runtime_diagnostics(&name, &v.failing));
+                        let now = chrono::Utc::now();
+                        let v = self.widget_runtime_at(&name, &b.hash, now);
+                        errors.extend(runtime_diagnostics(&name, &v.failing, now));
                         warnings.extend(stale_runtime_warnings(&name, &v.stale));
                     }
                 }
@@ -1190,26 +1201,41 @@ impl ZenFiles {
     }
 }
 
+/// The newest counted error's age ("12 min ago"), for validate's words.
+fn newest_error_age(failing: &[J], now: chrono::DateTime<chrono::Utc>) -> Option<String> {
+    failing.iter().max_by_key(|r| r["at"].as_str().unwrap_or("").to_string()).and_then(|r| runs::run_age_text(r, now))
+}
+
 /// "N runtime errors since your last save" as validate errors: one line
 /// per distinct message (newest three), placed at the widget's folder.
-fn runtime_diagnostics(name: &str, failing: &[J]) -> Vec<Diagnostic> {
+/// 0.46.5: each says how long ago it was logged; they are past runs of the
+/// saved version, never reported as happening now.
+fn runtime_diagnostics(name: &str, failing: &[J], now: chrono::DateTime<chrono::Utc>) -> Vec<Diagnostic> {
     if failing.is_empty() {
         return Vec::new();
     }
+    let newest = newest_error_age(failing, now).unwrap_or_else(|| "at an unknown time".to_string());
     let mut out = vec![Diagnostic {
-        suggestion: Some(format!("read them with k2 zen widget errors {name}; fix, save and validate again")),
+        suggestion: Some(format!(
+            "read them with k2 zen widget errors {name}; fix, save and validate again (once fixed, k2 zen widget errors {name} --clear --all drops them)"
+        )),
         file: widget_label(name),
         line: 1,
         col: 1,
-        message: format!("{} runtime error(s) since your last save", failing.len()),
+        message: format!(
+            "{} runtime error(s) since your last save, logged while it ran (the newest {newest}; each counts for {} h)",
+            failing.len(),
+            runs::RUNTIME_FRESH_SECS / 3600
+        ),
     }];
     for r in &failing[failing.len().saturating_sub(3)..] {
+        let when = runs::run_age_text(r, now).unwrap_or_else(|| "at an unknown time".to_string());
         out.push(Diagnostic {
             suggestion: r["suggestion"].as_str().map(str::to_string),
             file: widget_label(name),
             line: 1,
             col: 1,
-            message: format!("runtime error #{}: {}", r["seq"], runs::run_text(r)),
+            message: format!("runtime error #{} ({when}): {}", r["seq"], runs::run_text(r)),
         });
     }
     out

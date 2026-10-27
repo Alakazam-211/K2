@@ -246,6 +246,49 @@ describe('k2.layout.* through the custom layer (A1, CA10)', () => {
     expect(page.listeners.size).toBe(16)
   })
 
+  it('0.46.5: layout.subscribe is not held to 4 a second (tiles subscribing at once, or re-subscribing as they redraw); the 16 live still bound it', async () => {
+    const page = new FakePage()
+    const { layer, clock, stops } = harness(page)
+    // Six tiles subscribe in the same millisecond, as a canvas does on load.
+    for (let i = 0; i < 6; i++) {
+      expect(await layer.handle({ sub: 1 + i, verb: 'layout.subscribe', args: [] })).toBeNull()
+    }
+    expect(page.listeners.size).toBe(6)
+    // Each redraw drops its subscription and takes a new one, many times a second.
+    for (let round = 0; round < 5; round++) {
+      for (let i = 0; i < 6; i++) {
+        await layer.handle({ unsub: 1 + i + round * 6 })
+        expect(await layer.handle({ sub: 1 + i + (round + 1) * 6, verb: 'layout.subscribe', args: [] })).toBeNull()
+      }
+    }
+    expect(page.listeners.size).toBe(6)
+    expect(stops).toEqual([])
+    // The 16 live subscriptions still bound it, in the same second.
+    for (let i = 0; i < 10; i++) {
+      expect(await layer.handle({ sub: 100 + i, verb: 'layout.subscribe', args: [] })).toBeNull()
+    }
+    expect(await layer.handle({ sub: 200, verb: 'layout.subscribe', args: [] })).toEqual({
+      sub: 200,
+      error: expect.objectContaining({ code: 'rate_limited', message: 'At most 16 live subscriptions.' }),
+    })
+    // The call verbs keep their 4 a second.
+    for (let i = 0; i < 4; i++) ok(await call(layer, 'layout.get'))
+    expect(code(await call(layer, 'layout.get'))).toBe('rate_limited')
+    expect(clock.t).toBeGreaterThan(0)
+  })
+
+  it('a frame reload is a new layer: nothing it did before counts against the new one', async () => {
+    const page = new FakePage()
+    const first = harness(page)
+    for (let i = 0; i < 4; i++) ok(await call(first.layer, 'layout.get'))
+    expect(code(await call(first.layer, 'layout.get'))).toBe('rate_limited')
+    first.layer.dispose()
+    expect(page.listeners.size).toBe(0)
+    const second = harness(page)
+    for (let i = 0; i < 4; i++) ok(await call(second.layer, 'layout.get'))
+    expect(await second.layer.handle({ sub: 1, verb: 'layout.subscribe', args: [] })).toBeNull()
+  })
+
   it('a call verb sent as a subscription, and a subscription sent as a call, are refused', async () => {
     const { layer } = harness(new FakePage())
     expect(await layer.handle({ sub: 3, verb: 'layout.get', args: [] })).toEqual({

@@ -431,8 +431,8 @@ fn runtime_errors_are_logged_per_version_and_validate_loops_on_them() {
     let v = f.validate_widget("agent-arcade").expect("validate");
     assert_eq!((v["status"].as_str(), v["ok"].as_bool()), (Some("failed"), Some(false)), "{v}");
     let msgs: Vec<&str> = v["errors"].as_array().expect("errors").iter().map(|e| e["message"].as_str().unwrap_or("")).collect();
-    assert_eq!(msgs[0], "1 runtime error(s) since your last save", "{v}");
-    assert!(msgs[1].starts_with("runtime error #2: ReferenceError"), "{v}");
+    assert_eq!(msgs[0], "1 runtime error(s) since your last save, logged while it ran (the newest just now; each counts for 24 h)", "{v}");
+    assert_eq!(msgs[1], "runtime error #2 (just now): ReferenceError: draw is not defined", "{v}");
     let logged = f.widget_errors("agent-arcade", None).expect("errors");
     assert!(logged["errors"][0]["suggestion"].as_str().is_some_and(|s| s.contains("<script src> order")), "{logged}");
     assert!(v["errors"][1]["suggestion"].as_str().is_some_and(|s| s.contains("<script src> order")), "{v}");
@@ -904,4 +904,34 @@ fn delete_refuses_a_placed_widget_and_keeps_a_whole_undo_point() {
     assert!(matches!(f.delete_widget("k2:diary@2"), Err(ZenError::BadRequest(_))), "built-ins are never deleted");
     assert!(matches!(f.delete_widget("../x"), Err(ZenError::BadRequest(_))));
     assert!(matches!(f.delete_widget("nope"), Err(ZenError::UnknownWidget(_))));
+}
+
+/// 0.46.5: validate never reports a logged runtime error as happening now.
+/// A counted error two hours old still fails (the 0.46.3 exit rules stand)
+/// but every line says how long ago it was logged, and the note says the
+/// log is read, not a running frame watched.
+#[test]
+fn validate_says_how_long_ago_each_runtime_error_was_logged() {
+    let (_t, f) = set_up("runs-age");
+    f.new_widget("agent-arcade", Some("hello")).expect("new widget");
+    write_garden(&f, &gid(&f, "Garden 2"), ARCADE_PAGE);
+    let hash = f.validate_widget("agent-arcade").expect("validate")["runtime"]["hash"].as_str().expect("hash").to_string();
+    f.record_widget_run("agent-arcade", &hash, "ready", None, None).expect("ready");
+    f.record_widget_run("agent-arcade", &hash, "error", Some("TypeError: x is null"), None).expect("error");
+    let two_h = (chrono::Utc::now() - chrono::Duration::seconds(2 * 3600 + 120)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    age_runs(&f, "agent-arcade", &two_h);
+
+    let v = f.validate_widget("agent-arcade").expect("validate");
+    assert_eq!((v["status"].as_str(), v["ok"].as_bool()), (Some("failed"), Some(false)), "still counted within 24 h: {v}");
+    let msgs: Vec<&str> = v["errors"].as_array().expect("errors").iter().map(|e| e["message"].as_str().unwrap_or("")).collect();
+    assert_eq!(msgs[0], "1 runtime error(s) since your last save, logged while it ran (the newest 2 h ago; each counts for 24 h)", "{v}");
+    assert_eq!(msgs[1], "runtime error #2 (2 h ago): TypeError: x is null", "{v}");
+    assert_eq!(v["runtime"]["newestErrorAge"], "2 h ago", "{v}");
+    assert_eq!(v["runtime"]["newestError"], two_h.as_str(), "{v}");
+    let note = v["runtime"]["note"].as_str().expect("note");
+    assert!(note.contains("the newest 2 h ago") && note.contains("doesn't watch a running frame"), "{note}");
+    assert!(note.contains("k2 zen widget errors agent-arcade --clear --all"), "{note}");
+    assert!(!note.contains("happened in the version on disk now"), "the old present-tense words are gone: {note}");
+    let (all_errors, _, _) = f.validate_all_widgets();
+    assert!(all_errors.iter().any(|d| d.message == "runtime error #2 (2 h ago): TypeError: x is null"), "{all_errors:?}");
 }

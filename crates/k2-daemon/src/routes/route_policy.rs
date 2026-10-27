@@ -1835,6 +1835,8 @@ pub const ROUTES: &[Route] = &[
     // Authorship (contract-garden-data-v1 §4.3, BG3): claim takes the
     // owner token only; sign takes it or a local agent/shell passport.
     post("/cli/zen/widget/claim", Member),
+    // 0.46.5: an unplaced widget folder into history (k2 zen reset undoes).
+    post("/cli/zen/widget/delete", Member),
     get("/cli/zen/widget/errors", Member),
     post("/cli/zen/widget/errors/clear", Member),
     // The widget dev loop (0.46.1 S3): a staged folder checked, written

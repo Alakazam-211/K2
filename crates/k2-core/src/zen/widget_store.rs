@@ -170,6 +170,13 @@ fn snapshot_at(name: &str) -> String {
         .unwrap_or_default()
 }
 
+/// `.deleted-<snapshot>`: the whole folder (assets too) a `widget/delete`
+/// moved into the widget's history, beside the code snapshot of the same
+/// name. Dot-named, so it is never listed as a snapshot.
+fn deleted_copy_name(snapshot: &str) -> String {
+    format!(".deleted-{snapshot}")
+}
+
 fn valid_snapshot_dir(name: &str) -> bool {
     !name.is_empty() && !name.starts_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
@@ -598,6 +605,8 @@ impl ZenFiles {
         crate::fs_atomic::atomic_write_str(&p, &(meta.to_string() + "\n")).map_err(|e| io(e, &p))?;
         for old in self.widget_snapshots(name).into_iter().skip(HISTORY_KEEP) {
             let _ = fs::remove_dir_all(root.join(&old.name));
+            // A deleted folder's whole copy goes with its snapshot.
+            let _ = fs::remove_dir_all(root.join(deleted_copy_name(&old.name)));
         }
         Ok(snap)
     }
@@ -779,6 +788,13 @@ impl ZenFiles {
             .snapshot_files(&name, &pick.name)
             .ok_or_else(|| ZenError::Io(format!("can't read snapshot {}", pick.name)))?;
         let dir = self.widget_dir(&name);
+        // Undo of `widget/delete` (0.46.5): the folder is gone and its whole
+        // copy (assets too) sits beside this snapshot: put it back first.
+        let deleted = self.widget_history_dir(&name).join(deleted_copy_name(&pick.name));
+        if fs::symlink_metadata(&dir).is_err() && deleted.is_dir() {
+            fs::create_dir_all(self.widgets_dir()).map_err(|e| io(e, &self.widgets_dir()))?;
+            fs::rename(&deleted, &dir).map_err(|e| io(e, &deleted))?;
+        }
         fs::create_dir_all(&dir).map_err(|e| io(e, &dir))?;
         let read = widgets::read_folder(&dir, &widget_label(&name));
         let current = widgets::code_files(&read.files);
@@ -802,6 +818,53 @@ impl ZenFiles {
             kept: kept.clone(),
         });
         Ok(json!({ "ok": true, "file": widget_label(&name), "restored": pick.name, "snapshot": kept }))
+    }
+
+    /// POST `/cli/zen/widget/delete {widget}` (0.46.5): remove a user
+    /// widget folder that no Garden places. Refused with 409
+    /// `widget_placed` (naming each Garden) while any Garden's live page
+    /// places it; K2's built-ins can't be deleted (400). The undo point is
+    /// kept first: the code as a snapshot (`k2 zen reset --widget <name>
+    /// --to <snapshot>` brings it back) and the whole folder, assets too,
+    /// moved beside it in the widget's history. The widget's last good
+    /// bundle, its data and its runtime record stay, so an undo is whole.
+    pub fn delete_widget(&self, widget: &str) -> Result<J, ZenError> {
+        self.require_set_up()?;
+        let name = self.user_widget_name(widget)?;
+        let dir = self.widget_dir(&name);
+        if !fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+            return Err(ZenError::UnknownWidget(format!("no widget folder '{name}'; list them with k2 zen widget list")));
+        }
+        let mut gardens: Vec<(String, String)> = self
+            .custom_placements()
+            .into_iter()
+            .filter(|p| p.widget == name)
+            .map(|p| (p.garden, p.garden_name))
+            .collect();
+        gardens.sort();
+        gardens.dedup();
+        if !gardens.is_empty() {
+            return Err(ZenError::WidgetPlaced { widget: widget_label(&name), gardens });
+        }
+        let read = widgets::read_folder(&dir, &widget_label(&name));
+        let code = widgets::code_files(&read.files);
+        let st = self.widget_status(&name);
+        let clean = st.state == WidgetState::Ok;
+        let snapshot = self.write_code_snapshot(&name, &code, clean, clean.then(|| st.hash().to_string()).as_deref())?;
+        let copy = self.widget_history_dir(&name).join(deleted_copy_name(&snapshot));
+        fs::rename(&dir, &copy).map_err(|e| io(e, &dir))?;
+        crate::deploy::widget_events::emit(crate::deploy::widget_events::WidgetEvent::Deleted {
+            widget: name.clone(),
+            snapshot: snapshot.clone(),
+        });
+        Ok(json!({
+            "ok": true,
+            "deleted": true,
+            "widget": name,
+            "file": widget_label(&name),
+            "snapshot": snapshot,
+            "undo": format!("k2 zen reset --widget {name} --to {snapshot}"),
+        }))
     }
 
     /// POST `/cli/zen/widget/new {name, from?}` (UW35, UWB21): copy a

@@ -57,6 +57,27 @@ run zen widget sign
 assert_eq "sign without a name" "$rc" "2"
 run zen widget claim a b
 assert_eq "claim with two names" "$rc" "2"
+# 0.46.5: k2 zen widget delete <name>.
+run zen widget delete
+assert_eq "delete without a name" "$rc" "2"
+run zen widget delete a b
+assert_eq "delete with two names" "$rc" "2"
+run zen widget delete a --force
+assert_eq "delete with an unknown flag" "$rc" "2"
+run zen widget delete --help
+assert_eq "delete help exits 0 with no daemon" "$rc" "0"
+assert_contains "delete help names the undo" "$out" "k2 zen reset --widget <name> --to <snapshot>"
+assert_contains "delete help says a placed widget is refused" "$out" "While any Garden places it, K2 refuses and names those Gardens"
+run zen --help
+assert_contains "zen help lists widget delete" "$out" "k2 zen widget delete <name> [--json]"
+run --schema json
+del="$(printf '%s' "$out" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+cmds = d.get("commands", d) if isinstance(d, dict) else d
+print(" | ".join(c["usage"] for c in cmds if c.get("name") == "zen widget delete"))
+')"
+assert_eq "the manifest has one zen widget delete entry" "$del" "k2 zen widget delete <name> [--json]"
 run zen validate --garden g --no-sign
 assert_eq "--no-sign without --widget" "$rc" "2"
 assert_contains "--no-sign says what it is for" "$out" "--no-sign is for k2 zen validate --widget"

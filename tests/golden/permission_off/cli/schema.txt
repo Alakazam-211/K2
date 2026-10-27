@@ -3218,6 +3218,15 @@ exit: 0
       ]
     },
     {
+      "name": "zen widget delete",
+      "usage": "k2 zen widget delete <name> [--json]",
+      "description": "Delete a custom widget that no Garden places (0.46.5). While any Garden places it, K2 refuses with widget_placed and names those Gardens (exit 1): take it off each Garden's page first. Its code is kept as a history snapshot and the whole folder (images, fonts) beside it; the answer prints the undo, k2 zen reset --widget <name> --to <snapshot>. Its data and last good version stay. The person, or an agent with \"Manage Gardens and data sources\" (Garden access on: as for put; a widget placed nowhere is open); any other agent gets person_only (exit 3). K2's built-in widgets can't be deleted. Exit 0 deleted, 1 refused, 2 usage, 3 not allowed / Zen not set up, 4 no such widget.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, deleted, widget, file, snapshot, undo}; refused: {error: widget_placed, widget, gardens: [{id, name}], message}."}
+      ]
+    },
+    {
       "name": "zen widget put",
       "usage": "k2 zen widget put <name> <file> --from <path>|- [--note \"…\"] [--json] | k2 zen widget put [<name>] --dir <folder> [--prune] [--note \"…\"] [--json]",
       "description": "Change a custom widget through K2 from anywhere on disk (never edit ~/.k2 yourself). One code file (.html .js .css .json; written even if the widget then has errors, the last good version keeps running), or with --dir the whole staged folder (code, images, .woff2 fonts) in one checked write: a folder with errors is refused and nothing is written; files the folder lacks are left alone unless --prune. The person, or an agent on the list of every Garden that places the widget, writes (in the Garden's History); any other agent is refused with garden_access_needed (exit 3) and K2 asks the person with a garden.access card. Nothing is proposed (proposals are retired: k2 study garden-changes). K2's built-in widgets are never written. k2 zen widget apply --from <folder> is the same as put --dir. Exit 0 written, 1 refused, 2 usage, 3 not on the Garden's list / locked / Zen not set up, 4 no such widget.",

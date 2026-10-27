@@ -37743,6 +37743,15 @@ cmd_schema() {
       ]
     },
     {
+      "name": "zen widget delete",
+      "usage": "k2 zen widget delete <name> [--json]",
+      "description": "Delete a custom widget that no Garden places (0.46.5). While any Garden places it, K2 refuses with widget_placed and names those Gardens (exit 1): take it off each Garden's page first. Its code is kept as a history snapshot and the whole folder (images, fonts) beside it; the answer prints the undo, k2 zen reset --widget <name> --to <snapshot>. Its data and last good version stay. The person, or an agent with \"Manage Gardens and data sources\" (Garden access on: as for put; a widget placed nowhere is open); any other agent gets person_only (exit 3). K2's built-in widgets can't be deleted. Exit 0 deleted, 1 refused, 2 usage, 3 not allowed / Zen not set up, 4 no such widget.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, deleted, widget, file, snapshot, undo}; refused: {error: widget_placed, widget, gardens: [{id, name}], message}."}
+      ]
+    },
+    {
       "name": "zen widget put",
       "usage": "k2 zen widget put <name> <file> --from <path>|- [--note \"…\"] [--json] | k2 zen widget put [<name>] --dir <folder> [--prune] [--note \"…\"] [--json]",
       "description": "Change a custom widget through K2 from anywhere on disk (never edit ~/.k2 yourself). One code file (.html .js .css .json; written even if the widget then has errors, the last good version keeps running), or with --dir the whole staged folder (code, images, .woff2 fonts) in one checked write: a folder with errors is refused and nothing is written; files the folder lacks are left alone unless --prune. The person, or an agent on the list of every Garden that places the widget, writes (in the Garden's History); any other agent is refused with garden_access_needed (exit 3) and K2 asks the person with a garden.access card. Nothing is proposed (proposals are retired: k2 study garden-changes). K2's built-in widgets are never written. k2 zen widget apply --from <folder> is the same as put --dir. Exit 0 written, 1 refused, 2 usage, 3 not on the Garden's list / locked / Zen not set up, 4 no such widget.",
@@ -65813,6 +65822,7 @@ USAGE
   k2 zen widget put <name> <file> --from <path>|- [--note "…"] [--json]
   k2 zen widget put [<name>] --dir <folder> [--prune] [--note "…"] [--json]   # the whole folder
   k2 zen widget apply --from <folder> [<name>] [--prune] [--json]            # = put --dir
+  k2 zen widget delete <name> [--json]    # an unplaced widget; prints the k2 zen reset that undoes it
   k2 zen widget preview --dir <folder> [<name>] [--config k=v]... | --clear [--json]
   k2 zen widget preview --dir <folder> --shot <png> [--theme dark|light] [--width N] [--height N] [--data f.json]   # headless PNG
   k2 zen validate [--garden <name|id> [--from <file>|-] | --theme <name> | --widget <name> [--sign] [--types[=all]] | --dir <folder> [--as <name>] | --file <file>] [--strict] [--json]
@@ -68069,6 +68079,10 @@ cmd_zen_widget() {
         cmd_zen_widget_show "$@"
         return
     fi
+    if [ "$verb" = "delete" ]; then
+        cmd_zen_widget_delete "$@"
+        return
+    fi
     # Garden access (G19). A K2 older than 0.46.3 has no History route: there
     # `history` stays the unknown subcommand it was.
     if [ "$verb" = "history" ] && _zen_access_on; then
@@ -69304,6 +69318,9 @@ if view == "put":
         if d.get("snapshot"):
             print("Previous version kept: %s (k2 zen reset --to %s)" % (d["snapshot"], d["snapshot"]))
         findings(d.get("validate") or {})
+elif view == "delete":
+    print("Deleted %s (kept in history as %s)." % (d.get("file"), d.get("snapshot")))
+    print("Undo: %s" % d.get("undo"))
 elif view == "folder":
     if d.get("proposed"):
         for p in d.get("proposals") or []:
@@ -69646,6 +69663,47 @@ if os.environ.get("ZN"): b["note"] = os.environ["ZN"]
 sys.stdout.buffer.write(json.dumps(b, ensure_ascii=False).encode("utf-8") + b"\n")')" || exit 2
     raw=$(_zen_session_post "/cli/zen/widget/put" "$body")
     _zen_agent_print put "$as_json" "$raw"
+}
+
+_zen_help_widget_delete() {
+    cat <<'EOF'
+Usage: k2 zen widget delete <name> [--json]
+
+Delete a custom widget (~/.k2/zen/widgets/<name>/) that no Garden places.
+While any Garden places it, K2 refuses and names those Gardens: take it off
+each Garden's page first. Nothing is lost: its code is kept as a history
+snapshot and the whole folder (images and fonts too) beside it, and the
+answer prints the undo:  k2 zen reset --widget <name> --to <snapshot>.
+Its data and its last good version stay. K2's built-in widgets (k2:<name>)
+can't be deleted.
+
+Who may delete: the person (outside K2), or an agent with "Manage Gardens
+and data sources" (with Garden access on: as for put, a widget placed
+nowhere is open). Any other agent is refused (person_only, exit 3).
+
+Exit: 0 deleted · 1 refused (still placed) · 2 usage ·
+3 Zen isn't set up / not allowed · 4 no such widget.
+EOF
+}
+
+# k2 zen widget delete <name> (0.46.5): POST /cli/zen/widget/delete; the
+# daemon refuses a placed widget and keeps the undo point.
+cmd_zen_widget_delete() {
+    local as_json=false
+    local -a pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -h|--help) _zen_help_widget_delete; exit 0 ;;
+            -*) echo "Error: unexpected '$1' (k2 zen widget delete --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    [ "${#pos[@]}" -eq 1 ] && [ -n "${pos[0]}" ] || { echo "Error: k2 zen widget delete <name> [--json]" >&2; exit 2; }
+    local body raw
+    body="$(ZW="${pos[0]}" python3 -c 'import json, os; print(json.dumps({"widget": os.environ["ZW"]}))')"
+    raw=$(_zen_session_post "/cli/zen/widget/delete" "$body")
+    _zen_agent_print delete "$as_json" "$raw"
 }
 
 # k2 zen widget apply --from <folder> [<name>] = k2 zen widget put [<name>] --dir <folder>.
@@ -72642,6 +72700,7 @@ EOF
             case "${3:-}" in
                 put) _zen_help_widget_put; exit 0 ;;
                 apply) _zen_help_widget_put; exit 0 ;;
+                delete) _zen_help_widget_delete; exit 0 ;;
                 preview) _zen_help_widget_preview; exit 0 ;;
                 errors|show) shift; cmd_zen widget "${2}" --help ;;
             esac

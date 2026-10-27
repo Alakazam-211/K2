@@ -212,6 +212,9 @@ pub enum ZenError {
     /// An agent's change to a locked Garden (423 `garden_locked`,
     /// prd-garden-lock-and-sync-v1 §6). `garden` is the id.
     GardenLocked { garden: String, name: String },
+    /// `widget/delete` of a widget a Garden still places (409
+    /// `widget_placed`, 0.46.5). `gardens`: `(id, name)` of each.
+    WidgetPlaced { widget: String, gardens: Vec<(String, String)> },
     Io(String),
 }
 
@@ -237,6 +240,13 @@ impl std::fmt::Display for ZenError {
             ),
             ZenError::LastGarden => f.write_str(LAST_GARDEN),
             ZenError::GardenLocked { name, .. } => f.write_str(&garden_locked_message(name)),
+            ZenError::WidgetPlaced { widget, gardens } => write!(
+                f,
+                "{widget} is placed in {}: {}. Take it off {} first (edit the Garden page), then delete it",
+                if gardens.len() == 1 { "a Garden" } else { "these Gardens" },
+                gardens.iter().map(|(id, name)| format!("\u{201c}{name}\u{201d} ({id})")).collect::<Vec<_>>().join(", "),
+                if gardens.len() == 1 { "it" } else { "each" },
+            ),
             ZenError::GardenHasChanges { keys, .. } => write!(
                 f,
                 "this Garden's file has its own changes ({}); starting over replaces them (the file is kept in history). Pass force to go ahead",

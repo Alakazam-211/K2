@@ -17,6 +17,12 @@
 //! | POST widget/folder/check, garden/check | yes | yes            | yes (writes nothing) |
 //! | POST widget/preview           | yes    | yes (audited)         | 403     |
 //! | POST widget/shot              | yes    | yes                   | yes (writes nothing) |
+//! | POST widget/delete            | deletes| deletes (audited)     | 403 `person_only` (no delete proposal) |
+//!
+//! `widget/delete` (0.46.5) removes an unplaced user widget folder only:
+//! while any Garden places it, 409 `widget_placed` names each Garden. The
+//! undo point (a code snapshot + the whole folder in the widget's history)
+//! is kept first, and the answer carries the `k2 zen reset` that undoes it.
 //!
 //! The widget dev loop (0.46.1 S3, no migration): a whole staged folder in
 //! one body (`k2 zen widget put <name> --dir`, `k2 zen validate --dir`,
@@ -49,6 +55,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/garden/put",
     "/cli/zen/proposals/approve",
     "/cli/zen/proposals/reject",
+    "/cli/zen/widget/delete",
     "/cli/zen/widget/folder/check",
     "/cli/zen/widget/folder/put",
     "/cli/zen/widget/preview",
@@ -191,6 +198,7 @@ pub fn handle(path: &str, owner_token: bool, caller: &Caller, params: &HashMap<S
         "/cli/zen/garden/put" => garden_put(r, caller, body),
         "/cli/zen/garden/check" => garden_check(r, body),
         "/cli/zen/widget/put" => widget_put(r, caller, body),
+        "/cli/zen/widget/delete" => widget_delete(r, caller, body),
         "/cli/zen/widget/folder/check" => folder_check(body),
         "/cli/zen/widget/folder/put" => folder_put(r, caller, body),
         "/cli/zen/widget/preview" => preview(r, caller, body),
@@ -467,6 +475,43 @@ fn widget_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
             };
             propose(caller, ProposalKind::Widget, &name, Some(&b.file), &b.text, &agent_edit::text_hash(base.as_deref()), note.as_deref())
         }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WidgetDelete {
+    widget: String,
+}
+
+/// POST `widget/delete {widget}` (0.46.5): the person, an agent with
+/// "Manage Gardens and data sources", or (Garden access on) a passport the
+/// gate let through deletes an UNPLACED user widget; an agent without the
+/// switch is refused (a put proposes; a delete has no proposal).
+fn widget_delete(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
+    let b: WidgetDelete = match parse(body, "widget/delete takes {widget}") {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    if r == Role::Agent {
+        return refuse(
+            "403 Forbidden",
+            "person_only",
+            format!(
+                "Deleting a widget needs a person or an agent with \"Manage Gardens and data sources\". Ask your person to run k2 zen widget delete {} (outside K2, or in Settings \u{2192} Gardens).",
+                b.widget.trim()
+            ),
+        );
+    }
+    match files().delete_widget(&b.widget) {
+        Ok(v) => {
+            after_write();
+            if matches!(r, Role::Manager | Role::Editor) {
+                audit("zen-widget-delete", caller, v["file"].as_str().unwrap_or(&b.widget));
+            }
+            resp("200 OK", v)
+        }
+        Err(e) => zen_err(e),
     }
 }
 

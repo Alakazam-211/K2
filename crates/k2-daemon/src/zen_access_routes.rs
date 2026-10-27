@@ -715,7 +715,7 @@ pub(crate) fn passport_gate(path: &str, caller: &Caller, body: &[u8], ingress: &
             Some(sel) => garden_write(&f, &sel, caller, path, ingress),
             None => look_write(caller, path, ingress),
         },
-        "/cli/zen/widget/put" | "/cli/zen/widget/folder/put" => match named("widget") {
+        "/cli/zen/widget/put" | "/cli/zen/widget/folder/put" | "/cli/zen/widget/delete" => match named("widget") {
             Some(w) => widget_write(&f, &w, caller, path, ingress),
             None => None,
         },

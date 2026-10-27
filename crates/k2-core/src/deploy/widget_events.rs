@@ -25,12 +25,18 @@ pub enum WidgetEvent {
     Reset { widget: String, restored: String, kept: Option<String> },
     /// `k2 zen widget new`: a widget folder created from a starter.
     Created { widget: String, from: String },
+    /// `k2 zen widget delete` (0.46.5): an unplaced folder moved into
+    /// history; `snapshot` is the undo point (`k2 zen reset --widget`).
+    Deleted { widget: String, snapshot: String },
 }
 
 impl WidgetEvent {
     pub fn widget(&self) -> &str {
         match self {
-            WidgetEvent::LastGood { widget, .. } | WidgetEvent::Reset { widget, .. } | WidgetEvent::Created { widget, .. } => widget,
+            WidgetEvent::LastGood { widget, .. }
+            | WidgetEvent::Reset { widget, .. }
+            | WidgetEvent::Created { widget, .. }
+            | WidgetEvent::Deleted { widget, .. } => widget,
         }
     }
 
@@ -39,6 +45,7 @@ impl WidgetEvent {
             WidgetEvent::LastGood { .. } => "last_good",
             WidgetEvent::Reset { .. } => "reset",
             WidgetEvent::Created { .. } => "created",
+            WidgetEvent::Deleted { .. } => "deleted",
         }
     }
 
@@ -56,6 +63,7 @@ impl WidgetEvent {
             WidgetEvent::LastGood { hash, .. } => json!({ "hash": hash }),
             WidgetEvent::Reset { restored, kept, .. } => json!({ "restored": restored, "kept": kept }),
             WidgetEvent::Created { from, .. } => json!({ "from": from }),
+            WidgetEvent::Deleted { snapshot, .. } => json!({ "snapshot": snapshot }),
         }
     }
 }

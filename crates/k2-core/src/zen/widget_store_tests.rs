@@ -845,3 +845,63 @@ fn pick_all_refusals_each_at_their_line() {
     let listed = PICK_PAGE.replace("[\"k2-dev-web\", \" k2 \"]", "[\"all\", \"k2\"]");
     assert_eq!(page_errors(&f, &g, &listed), Vec::<J>::new());
 }
+
+/// 0.46.5 (`k2 zen widget delete`): a placed widget is refused with every
+/// Garden that places it named; an unplaced one moves into history whole,
+/// and the printed `k2 zen reset --widget … --to …` brings it all back,
+/// assets included. Built-ins and unknown names are refused.
+#[test]
+fn delete_refuses_a_placed_widget_and_keeps_a_whole_undo_point() {
+    let (_t, f) = set_up("delete");
+    f.new_widget("agent-arcade", Some("arcade")).expect("new widget");
+    let asset: &[u8] = b"\x89PNG\r\n\x1a\nxxxx";
+    fs::write(f.widget_dir("agent-arcade").join("pic.png"), asset).expect("asset");
+    f.refresh().expect("refresh");
+    assert_eq!(f.widget_status("agent-arcade").state, WidgetState::Ok, "the widget with its asset is good before the delete");
+    let (g1, g2) = (gid(&f, "Garden 1"), gid(&f, "Garden 2"));
+    let before1 = fs::read_to_string(f.path_of(&ZenFile::Garden(g1.clone()))).ok();
+    let before2 = fs::read_to_string(f.path_of(&ZenFile::Garden(g2.clone()))).ok();
+    let put_back = |id: &str, before: &Option<String>| match before {
+        Some(t) => write_garden(&f, id, t),
+        None => fs::remove_file(f.path_of(&ZenFile::Garden(id.into()))).expect("remove page"),
+    };
+    write_garden(&f, &g1, ARCADE_PAGE);
+    write_garden(&f, &g2, ARCADE_PAGE);
+
+    match f.delete_widget("agent-arcade") {
+        Err(ZenError::WidgetPlaced { widget, gardens }) => {
+            assert_eq!(widget, "widgets/agent-arcade");
+            let mut want = vec![(g1.clone(), "Garden 1".to_string()), (g2.clone(), "Garden 2".to_string())];
+            want.sort();
+            assert_eq!(gardens, want);
+            let msg = ZenError::WidgetPlaced { widget, gardens }.to_string();
+            assert!(msg.contains("\u{201c}Garden 1\u{201d}") && msg.contains("\u{201c}Garden 2\u{201d}"), "{msg}");
+        }
+        other => panic!("a placed widget must be refused with widget_placed, got {other:?}"),
+    }
+    assert!(f.widget_dir("agent-arcade").join("pic.png").is_file(), "a refused delete changes nothing");
+
+    // Off both Gardens: now it deletes.
+    put_back(&g1, &before1);
+    put_back(&g2, &before2);
+    let v = f.delete_widget("agent-arcade").expect("delete an unplaced widget");
+    assert_eq!(v["deleted"], true, "{v}");
+    let snap = v["snapshot"].as_str().expect("snapshot").to_string();
+    assert_eq!(v["undo"], format!("k2 zen reset --widget agent-arcade --to {snap}"), "{v}");
+    assert!(!f.widget_dir("agent-arcade").exists(), "the folder is gone");
+    assert!(!f.widget_names().contains(&"agent-arcade".to_string()));
+    let snaps = f.widget_snapshots("agent-arcade");
+    assert_eq!(snaps.first().map(|s| s.name.as_str()), Some(snap.as_str()), "the undo point is the newest snapshot: {snaps:?}");
+    assert!(snaps.iter().all(|s| !s.name.starts_with('.')), "the whole copy is never listed as a snapshot: {snaps:?}");
+    assert!(matches!(f.delete_widget("agent-arcade"), Err(ZenError::UnknownWidget(_))), "deleting twice is 404");
+
+    // Undo: the whole folder comes back, the asset byte for byte.
+    let r = f.reset_widget("agent-arcade", Some(&snap)).expect("undo");
+    assert_eq!(r["restored"], snap.as_str(), "{r}");
+    assert_eq!(fs::read(f.widget_dir("agent-arcade").join("pic.png")).expect("asset back"), asset);
+    assert_eq!(f.widget_status("agent-arcade").state, WidgetState::Ok, "it runs again");
+
+    assert!(matches!(f.delete_widget("k2:diary@2"), Err(ZenError::BadRequest(_))), "built-ins are never deleted");
+    assert!(matches!(f.delete_widget("../x"), Err(ZenError::BadRequest(_))));
+    assert!(matches!(f.delete_widget("nope"), Err(ZenError::UnknownWidget(_))));
+}

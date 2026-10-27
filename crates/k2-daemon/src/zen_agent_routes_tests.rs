@@ -871,3 +871,68 @@ fn the_shot_route_is_a_post_folder_row() {
     assert!(crate::zen_routes::POST_ROUTES.contains(&"/cli/zen/widget/shot"));
     assert_eq!(crate::zen_routes::max_body("/cli/zen/widget/shot"), k2_core::zen::widget_folder::MAX_FOLDER_BODY);
 }
+
+/// 0.46.5 `k2 zen widget delete`: scoped like put (the person and an agent
+/// with the switch delete; another agent is refused; a Connect login is
+/// local-only), refused while a Garden places it (naming the Garden),
+/// POST-only, audited, and undone by the `k2 zen reset` it prints.
+#[test]
+fn widget_delete_is_scoped_like_put_and_refuses_a_placed_widget() {
+    let e = env();
+    let mgr = workspace("w-del-mgr", true);
+    let plain = workspace("w-del-plain", false);
+    e.f.new_widget("board", None).expect("new widget");
+    let g = garden1(&e.f);
+    let before = disk(&e.f, &g);
+    let placed = "schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 60\nmin-width = 200\n[[layout.column]]\nsize = 40\nmin-width = 200\n\n[[widget]]\nid = \"b1\"\nkind = \"custom\"\nwidget = \"board\"\ncolumn = 0\n";
+    std::fs::write(e.f.path_of(&ZenFile::Garden(g.clone())), placed).expect("place");
+    assert_eq!(e.f.custom_placements().iter().filter(|p| p.widget == "board").count(), 1, "the page places board");
+
+    // Placed: refused with the Garden named, nothing removed.
+    let (s, v) = call("/cli/zen/widget/delete", false, &mgr, json!({"widget": "board"}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("409 Conflict", Some("widget_placed")), "{v}");
+    assert_eq!(v["gardens"], json!([{"id": g, "name": "Garden 1"}]), "{v}");
+    assert!(v["message"].as_str().is_some_and(|m| m.contains("Garden 1")), "{v}");
+    assert!(e.f.widget_dir("board").is_dir());
+
+    match before {
+        Some(t) => std::fs::write(e.f.path_of(&ZenFile::Garden(g.clone())), t).expect("unplace"),
+        None => std::fs::remove_file(e.f.path_of(&ZenFile::Garden(g.clone()))).expect("unplace"),
+    }
+
+    // An agent without the switch, and a Connect login: refused.
+    let (s, v) = call("/cli/zen/widget/delete", false, &plain, json!({"widget": "board"}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("person_only")), "{v}");
+    let login = Caller::Login { username: "ada".into() };
+    let (s, v) = call("/cli/zen/widget/delete", false, &login, json!({"widget": "board"}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("zen_local_only")), "{v}");
+    assert!(e.f.widget_dir("board").is_dir(), "refusals remove nothing");
+    // A bad body is 400; built-ins are never deleted.
+    let (s, v) = call("/cli/zen/widget/delete", false, &mgr, json!({"widget": "board", "force": true}));
+    assert_eq!(s, "400 Bad Request", "{v}");
+    let (s, v) = call("/cli/zen/widget/delete", false, &mgr, json!({"widget": "k2:diary@2"}));
+    assert_eq!(s, "400 Bad Request", "{v}");
+
+    // The agent with the switch deletes the unplaced widget; audited.
+    let (s, v) = call("/cli/zen/widget/delete", false, &mgr, json!({"widget": "board"}));
+    assert_eq!((s.as_str(), v["deleted"].as_bool()), ("200 OK", Some(true)), "{v}");
+    assert!(!e.f.widget_dir("board").exists());
+    assert!(has_audit("zen-widget-delete", "widgets/board"), "{:?}", audit_events());
+    let snap = v["snapshot"].as_str().expect("snapshot").to_string();
+    assert_eq!(v["undo"], format!("k2 zen reset --widget board --to {snap}"), "{v}");
+    let (s, v) = call("/cli/zen/widget/delete", true, &Caller::Owner, json!({"widget": "board"}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("404 Not Found", Some("unknown_widget")), "{v}");
+
+    // The printed undo brings it back (the person's reset).
+    let (s, v) = call("/cli/zen/reset", true, &Caller::Owner, json!({"widget": "board", "to": snap}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert!(e.f.widget_dir("board").is_dir(), "undo restores the folder");
+    // The person deletes too.
+    let (s, v) = call("/cli/zen/widget/delete", true, &Caller::Owner, json!({"widget": "board"}));
+    assert_eq!(s, "200 OK", "{v}");
+
+    // POST only.
+    assert!(crate::zen_routes::POST_ROUTES.contains(&"/cli/zen/widget/delete"));
+    assert!(crate::zen_agent_routes::POST_ROUTES.contains(&"/cli/zen/widget/delete"));
+    assert!(crate::routes::route_policy::get_refused("/cli/zen/widget/delete", ""), "GET on the delete row is 405");
+}

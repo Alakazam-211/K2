@@ -102,6 +102,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/theme/set",
     "/cli/zen/widget/check",
     "/cli/zen/widget/claim",
+    "/cli/zen/widget/delete",
     "/cli/zen/widget/errors/clear",
     "/cli/zen/widget/folder/check",
     "/cli/zen/widget/folder/put",
@@ -265,6 +266,16 @@ fn err(e: ZenError) -> CliResponse {
         ZenError::GardenLocked { garden, name } => resp(
             "423 Locked",
             json!({ "ok": false, "error": "garden_locked", "garden": garden, "name": name, "message": message }),
+        ),
+        ZenError::WidgetPlaced { widget, gardens } => resp(
+            "409 Conflict",
+            json!({
+                "ok": false,
+                "error": "widget_placed",
+                "widget": widget,
+                "gardens": gardens.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect::<Vec<_>>(),
+                "message": message,
+            }),
         ),
         ZenError::Io(m) => resp("500 Internal Server Error", json!({ "ok": false, "error": "io", "message": m })),
     }

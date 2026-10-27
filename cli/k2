@@ -36279,6 +36279,7 @@ cmd_schema() {
       "flags": [
         {"name": "--from", "arg": "k2:diary|hello|arcade|board-lite", "description": "new: the example to copy (a built-in like k2:diary copies its latest version)."},
         {"name": "--widget", "arg": "name", "description": "revoke: every placement of this widget."},
+        {"name": "--ask", "arg": null, "description": "sign: ask the person to sign this version (K2's zen.sign card on your Thread, with the manifest changes in plain words) instead of signing it."},
         {"name": "--json", "arg": null, "description": "Daemon JSON."}
       ]
     },
@@ -63121,9 +63122,13 @@ SIGNED VERSIONS (the data guard)
   person, K2 or an agent on THAT Garden's list signed it. Any other
   version keeps its own store keyspace, agents:read and presence:read;
   every other call answers needs_editor ("Someone who edits this Garden
-  has to sign this version."). A raw edit of ~/.k2/zen lands but runs
-  that way until someone listed signs it (k2 zen widget sign <w>, or
-  validate --sign). Never sign with the owner token.
+  has to sign this version."). The version is the code AND the
+  manifest (caps, reads, sources, libraries): a raw edit of either lands
+  but runs that way until someone listed signs it (k2 zen widget sign
+  <w>, or validate --sign). Not on every placing Garden's list? The sign
+  answers sign_needs_person (exit 3) and K2 puts a zen.sign card on your
+  Thread showing the person what changed; k2 zen widget sign <w> --ask
+  asks on purpose. Never sign with the owner token.
 
 USING IS NEVER GATED
   Any agent shows in, is pinned in, and is talked to through any Garden.
@@ -63558,6 +63563,7 @@ USAGE
   k2 zen widget new <name> [--from k2:diary|hello|arcade] [--json]
   k2 zen widget list [--json]
   k2 zen widget sign <name> [--json]      # sign this version as you (or this agent)
+  k2 zen widget sign <name> --ask [--json]   # ask the person to sign it (a card)
   k2 zen widget history <name> [--kind …] [--limit n] [--before <cursor>] [--json]
   k2 zen widget put <name> <file> --from <path>|- [--note "…"] [--json]
   k2 zen widget put [<name>] --dir <folder> [--prune] [--note "…"] [--json]   # the whole folder
@@ -65695,11 +65701,14 @@ cmd_zen_widget() {
         cmd_zen_access_history widget "$@"
         return
     fi
-    local as_json=false from="" widget="" raw body
+    local as_json=false from="" widget="" raw body ask=false
     local -a pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
+            # 0.46.5: k2 zen widget sign <w> --ask puts K2's zen.sign card on
+            # your Thread with the person instead of signing.
+            --ask) ask=true; shift ;;
             --from)
                 [ -n "${2:-}" ] || { echo "Error: --from needs an example: k2:diary, hello or arcade" >&2; exit 2; }
                 from="$2"; shift 2 ;;
@@ -65740,7 +65749,17 @@ print(json.dumps(b))
             ;;
         sign|claim)
             [ "$n" -eq 1 ] || { echo "Error: k2 zen widget $verb needs one widget folder name" >&2; exit 2; }
-            body=$(ZW="${pos[0]}" python3 -c 'import json, os; print(json.dumps({"widget": os.environ["ZW"]}))')
+            if [ "$ask" = true ] && [ "$verb" != "sign" ]; then
+                echo "Error: --ask is for k2 zen widget sign" >&2
+                exit 2
+            fi
+            body=$(ZW="${pos[0]}" ZA="$ask" python3 -c '
+import json, os
+b = {"widget": os.environ["ZW"]}
+if os.environ.get("ZA") == "true":
+    b["ask"] = True
+print(json.dumps(b))
+')
             if [ "$verb" = "sign" ]; then
                 raw=$(_zen_session_post "/cli/zen/widget/sign" "$body")
             else
@@ -65807,10 +65826,30 @@ if err is not None:
     if code in ("owner_only", "zen_local_only"):
         print("Only the person can %s this widget: click It\x27s mine in Settings → Gardens → the Garden → Local Data, or run k2 zen widget claim outside K2." % verb if verb == "claim" else "Error: %s" % msg, file=sys.stderr)
         sys.exit(3)
+    if code == "sign_needs_person":
+        # 0.46.5: your signature can\x27t cover this version where it is
+        # placed; K2 put its zen.sign card on your Thread with the person.
+        if not as_json:
+            print("Error: %s" % msg, file=sys.stderr)
+            if d.get("changes"):
+                print("The card shows: %s" % d.get("changes"), file=sys.stderr)
+            if d.get("card"):
+                print("Card: %s (K2 tells you when the person answers)" % d.get("card"), file=sys.stderr)
+        sys.exit(3)
     print("Error: %s" % msg, file=sys.stderr)
     sys.exit(4 if code in ("unknown_widget", "not_found") else 1)
 if as_json:
     print(json.dumps(d, indent=2))
+    sys.exit(0)
+if d.get("asked"):
+    if d.get("card"):
+        print("Asked the person to sign %s: K2 put a card on your Thread%s." % (d.get("widget"), " (one was already waiting)" if d.get("waiting") else ""))
+    elif d.get("note"):
+        print("You have no Thread with the person, so K2 left them an inbox note to sign %s." % d.get("widget"))
+    else:
+        print("No new card: K2 already asked the person about this version of %s." % d.get("widget"))
+    if d.get("changes"):
+        print("The card shows: %s" % d.get("changes"))
     sys.exit(0)
 m = d.get("madeBy") or {}
 kind = m.get("kind")
@@ -65829,6 +65868,11 @@ elif d.get("stamped"):
     print("Signed as %s: this widget now reads and writes data with %s grants." % (who, whose))
 else:
     print("Already signed by %s (the first signer of a version keeps it): this widget reads and writes data with %s grants." % (who, whose))
+r = d.get("review")
+if isinstance(r, dict) and r.get("ask"):
+    # 0.46.5: the upgrade kept this version signed although its manifest
+    # had changed; the person hasn\x27t looked yet.
+    print("Note: %s %s. Ask the person to look: %s" % (d.get("widget"), (r.get("changes") or "").rstrip(".").replace("Since it was signed, this widget", "changed since it was signed: it"), r.get("ask")))
 '
 }
 

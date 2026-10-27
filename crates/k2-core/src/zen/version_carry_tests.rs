@@ -255,7 +255,7 @@ fn the_carry_moves_signatures_once_and_logs_manifest_differences() {
     let differs = r.differing();
     assert_eq!(differs.len(), 1, "{:?}", r.versions);
     assert_eq!(differs[0].widget, "notes");
-    assert!(differs[0].differs.as_deref().is_some_and(|d| d.contains("caps +thread:read")), "{differs:?}");
+    assert_eq!(differs[0].differs.as_deref(), Some("now asks for thread:read"), "{differs:?}");
     let logged: String = conn
         .query_row("SELECT differs FROM zen_version_carry WHERE widget = 'notes' AND place = 'live'", [], |r| r.get(0))
         .expect("logged difference");
@@ -277,7 +277,20 @@ fn the_carry_moves_signatures_once_and_logs_manifest_differences() {
     assert_eq!(f.widget_status("notes").last_good_at, None, "notes' live version isn't its last good one");
     // The news line names the difference.
     let n = notice(&r).expect("a notice");
-    assert!(n.detail.iter().any(|d| d.starts_with("notes: signed by owner; caps +thread:read")), "{:?}", n.detail);
+    assert!(
+        n.detail.iter().any(|d| d.starts_with("notes: signed by owner; since then it now asks for thread:read.") && d.contains("k2 zen widget sign notes --ask")),
+        "{:?}",
+        n.detail
+    );
+    // The difference waits for the person until they sign that version.
+    assert_eq!(unreviewed_difference(&conn, "notes", &nb2.hash).expect("read").as_deref(), Some("now asks for thread:read"));
+    assert_eq!(unreviewed(&conn).expect("list").len(), 1);
+    assert_eq!(
+        version_changes(&f, &conn, "notes").expect("changes").as_deref(),
+        Some("Since it was signed, this widget now asks for thread:read.")
+    );
+    assert_eq!(mark_reviewed(&conn, "notes", &nb2.hash, 400).expect("review"), 1);
+    assert!(unreviewed_difference(&conn, "notes", &nb2.hash).expect("read").is_none());
 
     // Once only.
     assert!(ran(&conn).expect("ran"));
@@ -308,7 +321,37 @@ fn manifest_diff_names_each_change() {
     let a = m(json!({"schema": 1, "name": "A", "caps": ["agents:read", "store:read"], "reads": ["other"]}));
     let b = m(json!({"schema": 1, "name": "B", "caps": ["agents:read", "thread:post"], "requires": {"libs": ["marked@18"]}}));
     let d = manifest_diff(&a, &b).expect("differs");
-    assert!(d.contains("caps +thread:post") && d.contains("caps -store:read"), "{d}");
-    assert!(d.contains("reads -other") && d.contains("libs [] → [marked@18]"), "{d}");
+    assert_eq!(
+        d,
+        "now asks for thread:post; no longer asks for store:read; no longer reads the data of other; now loads the library marked@18"
+    );
     assert_eq!(manifest_diff(&a, &a), None);
+    let sri = format!("sha384-{}", "A".repeat(64));
+    let c = m(json!({"schema": 1, "name": "C", "caps": ["agents:read", "store:read"], "reads": ["other"],
+        "requires": {"libs": [{"url": "https://cdn.jsdelivr.net/npm/x@1.0.0/x.js", "integrity": sri}]}}));
+    assert_eq!(manifest_diff(&a, &c).as_deref(), Some("now loads the CDN file https://cdn.jsdelivr.net/npm/x@1.0.0/x.js"));
+    assert_eq!(manifest_summary(&c), "asks for agents:read, store:read; reads the data of other; loads the CDN file https://cdn.jsdelivr.net/npm/x@1.0.0/x.js");
+}
+
+/// The zen.sign card's words: the difference from the newest signed
+/// version in the code history, or what a never-signed widget asks for.
+#[test]
+fn version_changes_reads_the_last_signed_version_from_history() {
+    let (_t, f) = set_up("changes");
+    let conn = db();
+    f.new_widget("board", Some("hello")).expect("new");
+    f.refresh().expect("refresh");
+    assert_eq!(
+        version_changes(&f, &conn, "board").expect("changes").as_deref(),
+        Some("Nobody has signed board yet. It asks for agents:read.")
+    );
+    let (_, b0) = live(&f, "board");
+    authors::stamp(&conn, "board", &b0.hash, &MadeBy::Owner, StampSource::Sign, CallerKind::Owner, 1).expect("stamp");
+    edit_manifest(&f, "board", |v| v["requires"] = json!({"libs": ["uplot@1"]}));
+    f.refresh().expect("refresh");
+    assert_eq!(
+        version_changes(&f, &conn, "board").expect("changes").as_deref(),
+        Some("Since the last signed version, this widget now loads the library uplot@1.")
+    );
+    assert_eq!(version_changes(&f, &conn, "nope").expect("changes"), None);
 }

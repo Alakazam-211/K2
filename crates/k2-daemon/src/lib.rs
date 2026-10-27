@@ -281,6 +281,8 @@ pub mod zen_data_routes;
 // K2's own garden.access / garden.delete cards (A4).
 pub mod zen_garden_cards;
 pub mod zen_access_routes;
+// 0.46.5 S0: K2's zen.sign card (a widget version whose manifest changed).
+pub mod zen_sign_cards;
 // Garden History (A6, G29): edits outside K2 and the History merge.
 pub mod zen_history;
 pub mod llm_account_for;

@@ -47,7 +47,7 @@ pub const NEEDS_EDITOR: &str = "needs_editor";
 /// The plain words for [`NEEDS_EDITOR`].
 pub fn needs_editor_message(widget: &str) -> String {
     format!(
-        "Someone who edits this Garden has to sign this version of {widget} (k2 zen widget sign {widget}, or Sign in its History). Until then it runs without your data."
+        "Someone who edits this Garden has to sign this version of {widget} (k2 zen widget sign {widget}, or Sign in its History); an agent not on the Garden's list asks the person with k2 zen widget sign {widget} --ask. Until then it runs without your data."
     )
 }
 

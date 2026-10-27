@@ -48,9 +48,13 @@ SIGNED VERSIONS (the data guard)
   person, K2 or an agent on THAT Garden's list signed it. Any other
   version keeps its own store keyspace, agents:read and presence:read;
   every other call answers needs_editor ("Someone who edits this Garden
-  has to sign this version."). A raw edit of ~/.k2/zen lands but runs
-  that way until someone listed signs it (k2 zen widget sign <w>, or
-  validate --sign). Never sign with the owner token.
+  has to sign this version."). The version is the code AND the
+  manifest (caps, reads, sources, libraries): a raw edit of either lands
+  but runs that way until someone listed signs it (k2 zen widget sign
+  <w>, or validate --sign). Not on every placing Garden's list? The sign
+  answers sign_needs_person (exit 3) and K2 puts a zen.sign card on your
+  Thread showing the person what changed; k2 zen widget sign <w> --ask
+  asks on purpose. Never sign with the owner token.
 
 USING IS NEVER GATED
   Any agent shows in, is pinned in, and is talked to through any Garden.

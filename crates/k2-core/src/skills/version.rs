@@ -204,7 +204,14 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// v42 = 0.46.4's first start moved the data-source cards from `@1`/`@2` to
 /// `@3` once in each Garden file it safely could; locked Gardens and ones
 /// with errors keep them and are listed in `k2 zen news` (for 0.46.4).
-pub const SKILL_VERSION_ZEN: u32 = 42;
+/// v43 = widget size and shared libraries (prd-widget-size-and-shared-libs-v1,
+/// 0.46.5): a widget's version is its code AND its manifest (caps, reads,
+/// sources, libraries), so a manifest change needs a sign; an agent not on
+/// every placing Garden's list gets `sign_needs_person` and K2's `zen.sign`
+/// card (`k2 zen widget sign <w> --ask`); code warns above 512 KB and stops
+/// at 1 MB, the page is 3.5 MB; `k2 zen guide libs`; ask for a library's
+/// line (`uplot@1`), never a patch.
+pub const SKILL_VERSION_ZEN: u32 = 43;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

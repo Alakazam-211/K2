@@ -236,6 +236,27 @@ if run 0 zen widget sign tally; then
     case "$OUT" in "Already signed by ana (the first signer"*) ok "sign (off answer) keeps today's words" ;; *) bad "sign (off answer): $OUT" ;; esac
 fi
 
+echo "== 0.46.5: a sign that can't cover a placed version asks the person (zen.sign) =="
+routes "{$ACCESS_ON, \"/cli/zen/widget/sign\": [403, {\"ok\": false, \"error\": \"sign_needs_person\", \"widget\": \"tally\", \"version\": \"$(printf 'ab%.0s' $(seq 1 32))\", \"changes\": \"Since the last signed version, this widget now asks for thread:post.\", \"card\": \"c9\", \"message\": \"tally's version abababababab runs without the person's data in Sales board.\"}]}"
+if run2 3 zen widget sign tally; then
+    case "$SERR" in
+        *"Error: tally's version abababababab runs without the person's data in Sales board."*"The card shows: Since the last signed version, this widget now asks for thread:post."*"Card: c9"*) ok "sign_needs_person: the message, the change and the card" ;;
+        *) bad "sign_needs_person: $SOUT / $SERR" ;;
+    esac
+fi
+routes "{$ACCESS_ON, \"/cli/zen/widget/sign\": [200, {\"ok\": true, \"widget\": \"tally\", \"version\": \"ab\", \"asked\": true, \"card\": \"c9\", \"changes\": \"Since it was signed, this widget now loads the library uplot@1.\"}]}"
+if run2 0 zen widget sign tally --ask; then
+    if [ "$SOUT" = "Asked the person to sign tally: K2 put a card on your Thread.
+The card shows: Since it was signed, this widget now loads the library uplot@1." ]; then ok "--ask says it asked, with the change"; else bad "--ask: $SOUT / $SERR"; fi
+fi
+if run2 2 zen widget claim tally --ask; then
+    case "$SERR" in *"--ask is for k2 zen widget sign"*) ok "--ask is sign's only" ;; *) bad "claim --ask: $SERR" ;; esac
+fi
+routes "{$ACCESS_ON, \"/cli/zen/widget/sign\": [200, {\"ok\": true, \"widget\": \"tally\", \"hash\": \"abcdef012345\", \"madeBy\": {\"kind\": \"owner\"}, \"stamped\": false, \"vouched\": false, \"review\": {\"changes\": \"Since it was signed, this widget now asks for presence:read.\", \"ask\": \"k2 zen widget sign tally --ask\"}}]}"
+if run2 0 zen widget sign tally; then
+    case "$SOUT" in *"Note: tally changed since it was signed: it now asks for presence:read. Ask the person to look: k2 zen widget sign tally --ask"*) ok "a carried difference offers the card" ;; *) bad "review note: $SOUT" ;; esac
+fi
+
 echo "== an agent's delete asks the person (G19) =="
 routes "{$ACCESS_ON, \"/cli/zen/garden/delete\": [403, {\"ok\": false, \"error\": \"garden_delete_person\", \"garden\": \"g-1a2b3c4d\", \"name\": \"Sales board\", \"card\": {\"card\": {\"id\": \"c1\"}, \"request\": \"r1\"}, \"message\": \"Only the person deletes a Garden. K2 asked them to delete Sales board (a card on their Thread with you).\"}]}"
 if run 3 zen garden delete "Sales board"; then

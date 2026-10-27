@@ -102,7 +102,7 @@ const IN_SETTINGS: &str = "a person with the owner role does this, in Settings o
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 27] = [
+pub(crate) const V1_ACTIONS: [&str; 29] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -131,6 +131,10 @@ pub(crate) const V1_ACTIONS: [&str; 27] = [
     "garden.delete",
     // 0.46.4 (Rosson 2026-10-26): "Let this agent manage its Apps' users".
     "apps.manage-users",
+    // 0.46.5 S0 (Rosson 2026-10-26): sign a widget version whose manifest
+    // changed (walled; K2 presents it too) and its twin (asked only).
+    "zen.sign",
+    "zen.sign-off",
 ];
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
@@ -219,6 +223,16 @@ pub(crate) const ROWS: &[Row] = &[
     Row {
         params: &[("garden", &[ParamFrom::Body("/garden"), ParamFrom::Response("/garden"), ParamFrom::Query("garden")])],
         ..row(ask("garden.delete", Floor::GardenOwner), code(403, "garden_delete_person"), "/cli/zen/garden/delete", POST)
+    },
+    // 0.46.5 S0: an agent's sign that can't cover a placed widget's version
+    // (it isn't on a placing Garden's list) names the widget and the exact
+    // version; K2 presents the zen.sign card in the same answer.
+    Row {
+        params: &[
+            ("widget", &[ParamFrom::Response("/widget"), ParamFrom::Body("/widget")]),
+            ("version", &[ParamFrom::Response("/version")]),
+        ],
+        ..row(ask("zen.sign", Floor::GardenOwner), code(403, "sign_needs_person"), "/cli/zen/widget/sign", POST)
     },
     // ── DNS, domains ───────────────────────────────────────────────────
     row(ask("dns.manage", Floor::Admin), code(403, "dns_manage_disabled"), "/cli/", ANY),
@@ -662,6 +676,8 @@ mod tests {
             (403, "POST", "/cli/zen/garden/put", vec![], Some(json!({"garden":"garden-2"})), json!({"ok":false,"error":"garden_access_needed","garden":"garden-2","card":null}), "garden.access"),
             (403, "POST", "/cli/zen/widget/folder/put", vec![], None, json!({"ok":false,"error":"garden_access_needed","garden":"garden-3","card":null}), "garden.access"),
             (403, "POST", "/cli/zen/garden/delete", vec![], Some(json!({"garden":"garden-2"})), json!({"ok":false,"error":"garden_delete_person","garden":"garden-2","card":null}), "garden.delete"),
+            // 0.46.5 S0: a sign that can't cover a placed widget's new version.
+            (403, "POST", "/cli/zen/widget/sign", vec![], Some(json!({"widget":"board"})), json!({"ok":false,"error":"sign_needs_person","widget":"board","version":"ab".repeat(32),"card":null}), "zen.sign"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {
@@ -674,7 +690,7 @@ mod tests {
         // except the two whose holds attach to apps.approve, keep-mine
         // (K2-presented) — PRD §5.2 walls column.
         for a in V1_ACTIONS {
-            if matches!(a, "apps.manage-full" | "apps.core" | "garden.keep-mine" | "garden.access-off") {
+            if matches!(a, "apps.manage-full" | "apps.core" | "garden.keep-mine" | "garden.access-off" | "zen.sign-off") {
                 continue;
             }
             assert!(asked.contains(&a), "{a}: no captured wall teaches it");
@@ -854,7 +870,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 27);
+        assert_eq!(V1_ACTIONS.len(), 29);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

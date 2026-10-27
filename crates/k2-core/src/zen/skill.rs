@@ -500,8 +500,12 @@ change, `k2 zen validate --widget <w> --sign`.**\n\n\
   lock or unlock.\n\
 - **Using is never gated**: any agent shows in, and is talked to through, any Garden.\n\
 - **Signed versions**: a widget version runs with the Garden's data only when the person,\n\
-  K2 or an agent on that Garden's list signed it. A raw edit of a `~/.k2/zen` file lands\n\
-  but runs without that data (`needs_editor`) until someone listed signs it.\n\
+  K2 or an agent on that Garden's list signed it. The version is the code AND the\n\
+  manifest (caps, reads, sources, libraries): a raw edit of either lands but runs without\n\
+  that data (`needs_editor`) until someone listed signs it. On every placing Garden's list,\n\
+  `k2 zen widget sign <w>` signs it; otherwise it answers `sign_needs_person` (exit 3) and\n\
+  K2 puts a `zen.sign` card on your Thread showing the person what changed;\n\
+  `k2 zen widget sign <w> --ask` asks on purpose. A later change needs a new sign.\n\
 - **History**: every change, signature, access change, ask and delete is in the\n\
   Garden's History (Settings → Gardens; `k2 zen garden history <g>` and\n\
   `k2 zen widget history <w>` for the person). `k2 study garden-access` has more.\n\

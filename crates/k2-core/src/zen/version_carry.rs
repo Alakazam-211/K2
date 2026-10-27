@@ -121,7 +121,9 @@ pub fn ran(conn: &Connection) -> Result<bool, DataError> {
 }
 
 /// How the run fields of `live` differ from `signed` (what was saved with
-/// the signed version), in a short line; `None` when they don't.
+/// the signed version), in plain words for a person (the `zen.sign` card,
+/// the news line, the carry log); `None` when they don't. Every cap, read,
+/// library and CDN URL that changed is named.
 pub fn manifest_diff(signed: &Manifest, live: &Manifest) -> Option<String> {
     if widgets::version_digest(signed) == widgets::version_digest(live) {
         return None;
@@ -131,38 +133,140 @@ pub fn manifest_diff(signed: &Manifest, live: &Manifest) -> Option<String> {
     let caps_in = added(&signed.caps, &live.caps);
     let caps_out = added(&live.caps, &signed.caps);
     if !caps_in.is_empty() {
-        parts.push(format!("caps +{}", caps_in.join(" +")));
+        parts.push(format!("now asks for {}", caps_in.join(", ")));
     }
     if !caps_out.is_empty() {
-        parts.push(format!("caps -{}", caps_out.join(" -")));
+        parts.push(format!("no longer asks for {}", caps_out.join(", ")));
     }
     let reads_in = added(&signed.reads, &live.reads);
     let reads_out = added(&live.reads, &signed.reads);
     if !reads_in.is_empty() {
-        parts.push(format!("reads +{}", reads_in.join(" +")));
+        parts.push(format!("now reads the data of {}", reads_in.join(", ")));
     }
     if !reads_out.is_empty() {
-        parts.push(format!("reads -{}", reads_out.join(" -")));
+        parts.push(format!("no longer reads the data of {}", reads_out.join(", ")));
     }
-    if signed.libs != live.libs {
-        let show = |l: &[J]| l.iter().map(|x| x.as_str().map_or_else(|| x["url"].as_str().unwrap_or("?").to_string(), str::to_string)).collect::<Vec<_>>().join(", ");
-        parts.push(format!("libs [{}] → [{}]", show(&signed.libs), show(&live.libs)));
+    let lib_name = |x: &J| match x.as_str() {
+        Some(s) => format!("the library {s}"),
+        None => format!("the CDN file {}", x["url"].as_str().unwrap_or("?")),
+    };
+    let libs_in: Vec<String> = live.libs.iter().filter(|x| !signed.libs.contains(x)).map(lib_name).collect();
+    let libs_out: Vec<String> = signed.libs.iter().filter(|x| !live.libs.contains(x)).map(lib_name).collect();
+    if !libs_in.is_empty() {
+        parts.push(format!("now loads {}", libs_in.join(", ")));
+    }
+    if !libs_out.is_empty() {
+        parts.push(format!("no longer loads {}", libs_out.join(", ")));
+    }
+    if libs_in.is_empty() && libs_out.is_empty() && signed.libs != live.libs {
+        parts.push("loads its libraries in another order".into());
     }
     if signed.sources != live.sources {
-        parts.push("sources changed".into());
+        let show = |s: &Option<J>| match s {
+            None => "none".to_string(),
+            Some(J::String(c)) => format!("\"{c}\" (the placement's config)"),
+            Some(J::Array(a)) => a.iter().filter_map(J::as_str).collect::<Vec<_>>().join(", "),
+            Some(other) => other.to_string(),
+        };
+        parts.push(format!("its data sources were {} and are now {}", show(&signed.sources), show(&live.sources)));
     }
     if signed.entry != live.entry {
-        parts.push(format!("entry {} → {}", signed.entry, live.entry));
+        parts.push(format!("starts from {} instead of {}", live.entry, signed.entry));
     }
     if signed.color_scheme != live.color_scheme {
-        parts.push("colorScheme changed".into());
+        parts.push("chooses its own light or dark instead of the Garden's (or back)".into());
     }
     if parts.is_empty() {
-        // Only order (caps or reads sorted the same) can't get here; keep a
-        // line anyway so a difference is never silent.
-        parts.push("run fields changed".into());
+        parts.push("its manifest changed".into());
     }
     Some(parts.join("; "))
+}
+
+/// The carry's difference for `(widget, hash)` that the person hasn't
+/// signed after seeing yet (`reviewed_at` NULL), if any.
+pub fn unreviewed_difference(conn: &Connection, widget: &str, hash: &str) -> Result<Option<String>, DataError> {
+    Ok(conn
+        .query_row(
+            "SELECT differs FROM zen_version_carry WHERE widget = ?1 AND new_hash = ?2 AND differs IS NOT NULL
+               AND reviewed_at IS NULL ORDER BY id DESC LIMIT 1",
+            params![widget, hash],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?)
+}
+
+/// The person signed `(widget, hash)`: its carry differences are reviewed.
+pub fn mark_reviewed(conn: &Connection, widget: &str, hash: &str, now: i64) -> Result<usize, DataError> {
+    Ok(conn.execute(
+        "UPDATE zen_version_carry SET reviewed_at = ?3 WHERE widget = ?1 AND new_hash = ?2 AND reviewed_at IS NULL",
+        params![widget, hash, now],
+    )?)
+}
+
+/// Every carried version whose difference still waits for the person:
+/// `(widget, new hash, difference)`.
+pub fn unreviewed(conn: &Connection) -> Result<Vec<(String, String, String)>, DataError> {
+    let mut st = conn.prepare(
+        "SELECT widget, new_hash, differs FROM zen_version_carry WHERE differs IS NOT NULL AND reviewed_at IS NULL ORDER BY id",
+    )?;
+    let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// The run fields of a manifest in plain words (what a first sign covers).
+pub fn manifest_summary(m: &Manifest) -> String {
+    let mut parts = vec![if m.caps.is_empty() { "asks for no caps".to_string() } else { format!("asks for {}", m.caps.join(", ")) }];
+    if !m.reads.is_empty() {
+        parts.push(format!("reads the data of {}", m.reads.join(", ")));
+    }
+    if !m.libs.is_empty() {
+        let libs: Vec<String> = m
+            .libs
+            .iter()
+            .map(|x| x.as_str().map_or_else(|| format!("the CDN file {}", x["url"].as_str().unwrap_or("?")), str::to_string))
+            .collect();
+        parts.push(format!("loads {}", libs.join(", ")));
+    }
+    match &m.sources {
+        Some(J::String(_)) => parts.push("reads the data sources its placement names".into()),
+        Some(J::Array(a)) => {
+            parts.push(format!("reads the data sources {}", a.iter().filter_map(J::as_str).collect::<Vec<_>>().join(", ")))
+        }
+        _ => {}
+    }
+    parts.join("; ")
+}
+
+/// What signing `widget`'s live version means, in plain words for the
+/// `zen.sign` card: the carry's unreviewed difference; else the difference
+/// from the newest version someone signed (its manifest from the code
+/// history); else, for a widget nobody ever signed, what its manifest asks
+/// for. `None` when the widget has no live version.
+pub fn version_changes(files: &ZenFiles, conn: &Connection, widget: &str) -> Result<Option<String>, DataError> {
+    let st = files.widget_status(widget);
+    let (Some(live_m), Some(b)) = (st.manifest.as_ref(), st.bundle.as_ref()) else { return Ok(None) };
+    if let Some(d) = unreviewed_difference(conn, widget, &b.hash)? {
+        return Ok(Some(format!("Since it was signed, this widget {d}.")));
+    }
+    for snap in files.widget_snapshots(widget) {
+        let Some(h) = snap.hash.as_deref().filter(|h| *h != b.hash && h.len() == 64) else { continue };
+        if !snap.clean || matches!(authors::maker_of(conn, widget, h)?, MadeBy::Unclaimed) {
+            continue;
+        }
+        let Some(m) = files
+            .snapshot_files(widget, &snap.name)
+            .and_then(|f| f.get(widgets::MANIFEST_FILE).cloned())
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .and_then(|src| widgets::parse_manifest("manifest.json", &src, widget).0)
+        else {
+            continue;
+        };
+        return Ok(Some(match manifest_diff(&m, live_m) {
+            Some(d) => format!("Since the last signed version, this widget {d}."),
+            None => "Since the last signed version only its code changed; its manifest is the same.".to_string(),
+        }));
+    }
+    Ok(Some(format!("Nobody has signed {widget} yet. It {}.", manifest_summary(live_m))))
 }
 
 /// A saved copy to carry and rewrite.
@@ -346,7 +450,15 @@ pub fn notice(r: &CarryReport) -> Option<super::news::NoticeItem> {
     }
     let mut detail: Vec<String> = differing
         .iter()
-        .map(|v| format!("{}: signed by {}; {}", v.widget, v.maker.as_deref().unwrap_or("nobody"), v.differs.as_deref().unwrap_or_default()))
+        .map(|v| {
+            format!(
+                "{}: signed by {}; since then it {}. Sign it in its History, or an agent asks you with k2 zen widget sign {} --ask",
+                v.widget,
+                v.maker.as_deref().unwrap_or("nobody"),
+                v.differs.as_deref().unwrap_or_default(),
+                v.widget
+            )
+        })
         .collect();
     detail.extend(r.failed.iter().map(|p| format!("couldn't update {p}; that saved copy isn't used")));
     let mut body = String::from(
@@ -354,7 +466,7 @@ pub fn notice(r: &CarryReport) -> Option<super::news::NoticeItem> {
     );
     if !differing.is_empty() {
         body.push_str(&format!(
-            " K2 kept the signature on {} widget{} whose manifest changed after it was signed; check the changes below, and sign again in its History if they're yours.",
+            " K2 kept the signature on {} widget{} whose manifest changed after it was signed; check the changes below and sign it if they're right (a card asks you when an agent next works on it).",
             differing.len(),
             if differing.len() == 1 { "" } else { "s" }
         ));

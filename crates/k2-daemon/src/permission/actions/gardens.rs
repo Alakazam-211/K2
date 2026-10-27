@@ -308,12 +308,152 @@ fn apply_delete(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     applied(&r, "Deleted. K2 keeps a copy in history.")
 }
 
+// ── zen.sign, its twin (0.46.5 S0, Rosson's addition) ───────────────
+
+/// Where the person signs by hand: the widget's History.
+const WIDGET_HISTORY: SettingsRef =
+    SettingsRef { page: "zen-gardens", path: "{widget}'s History (its menu in Zen \u{2192} History\u{2026})" };
+
+const WIDGET_VERSION: &[ParamSpec] = &[
+    ParamSpec { key: "widget", kind: ParamKind::Widget, required: true, list: false, choices: &[] },
+    ParamSpec { key: "version", kind: ParamKind::Version, required: true, list: false, choices: &[] },
+];
+
+/// "Sign <widget>'s current version": a widget version whose manifest (or
+/// code) changed runs without the person's data until someone on every
+/// placing Garden's list signs it; an agent that isn't asks with this
+/// card. `{changes}` is K2's own plain words for what changed
+/// (`zen_sign_cards::with_computed`), never the agent's. Allow signs that
+/// exact version as the person; a later change needs a new card.
+pub(crate) static SIGN: ActionSpec = ActionSpec {
+    id: crate::zen_sign_cards::SIGN,
+    area: Area::Gardens,
+    params: WIDGET_VERSION,
+    floor: Floor::GardenOwner,
+    direction: Direction::Loosen,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "Sign {widget}",
+        what_changes: "Sign {widget}'s current version as yours",
+        consequences: "{changes} Signed, this version of {widget} reads and writes Garden data with your rights. A later change needs a new card.",
+        scope: "this version of the {widget} widget",
+        duration: "for this version; a later change needs a new sign",
+        retry: "run your command again",
+    },
+    undo: Undo::Twin { action: crate::zen_sign_cards::SIGN_OFF },
+    settings: WIDGET_HISTORY,
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: "sign_needs_person" },
+        route_prefix: "/cli/zen/widget/sign",
+        method: WallMethod::Post,
+        params: &[("widget", ParamFrom::Response("/widget")), ("version", ParamFrom::Response("/version"))],
+    }],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+/// The tighten twin ("Turn off again"): the person's signature comes off
+/// that version, which then runs without their data.
+pub(crate) static SIGN_OFF: ActionSpec = ActionSpec {
+    id: crate::zen_sign_cards::SIGN_OFF,
+    area: Area::Gardens,
+    params: WIDGET_VERSION,
+    floor: Floor::GardenOwner,
+    direction: Direction::Tighten,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "Sign {widget}",
+        what_changes: "Take your signature off {widget}'s current version",
+        consequences: "This version of {widget} runs without your data until someone signs it again.",
+        scope: "this version of the {widget} widget",
+        duration: "until someone signs it again",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: WIDGET_HISTORY,
+    walls: &[],
+    coverage: WallCoverage::None,
+    machine_hints: &[],
+};
+
+/// The live version and its maker, checked against the request's
+/// `version` (`Err` is the check to answer).
+fn signed_values(ctx: &Ctx) -> Result<(String, String, MadeBy), Check> {
+    if !cards::garden_access_on() {
+        return Err(Check::Unavailable { code: "not_available", why: cards::OFF_WORDS.to_string() });
+    }
+    let (Some(widget), Some(version)) = (param(ctx, "widget"), param(ctx, "version")) else {
+        return Err(Check::Moved("name the widget and its version: widget=<name> version=<hash>".into()));
+    };
+    if !version_ok(version) {
+        return Err(Check::Moved(format!("version= is the first {MIN_VERSION}+ characters of {widget}'s version (k2 zen widgets shows it)")));
+    }
+    match crate::zen_routes::widget_live_version(widget) {
+        Err(m) => Err(Check::Moved(m)),
+        Ok((live, _)) if !live.starts_with(version) => Err(Check::Moved(format!(
+            "{widget} changed since this was asked (its live version is now {}); a new version needs a new card",
+            &live[..live.len().min(12)]
+        ))),
+        Ok((live, maker)) => Ok((widget.to_string(), live, maker)),
+    }
+}
+
+fn check_sign(ctx: &Ctx) -> Check {
+    let (widget, live, maker) = match signed_values(ctx) {
+        Ok(v) => v,
+        Err(c) => return c,
+    };
+    // Signed by the person, and no carried difference waits for them.
+    let pending_review = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::zen::version_carry::unreviewed_difference(&conn, &widget, &live).ok().flatten().is_some()
+    };
+    if maker == MadeBy::Owner && !pending_review {
+        Check::AlreadyDone
+    } else {
+        Check::Needed
+    }
+}
+
+fn check_sign_off(ctx: &Ctx) -> Check {
+    match signed_values(ctx) {
+        Err(c) => c,
+        Ok((_, _, MadeBy::Owner)) => Check::Needed,
+        Ok(_) => Check::AlreadyDone,
+    }
+}
+
+fn no_version() -> Applied {
+    Applied::Refused { code: "bad_params".into(), message: "the request names no widget or version".into() }
+}
+
+/// Allow: sign exactly that version as the person, through the same door
+/// as `k2 zen widget sign` and Sign in History.
+fn apply_sign(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    let (Some(widget), Some(version)) = (param(ctx, "widget"), param(ctx, "version")) else { return no_version() };
+    let r = crate::zen_access_routes::sign_entry(&as_caller(who), widget, version, "permission-card");
+    applied(&r, format!("Signed. This version of {widget} uses your data now; a later change needs a new card."))
+}
+
+fn apply_sign_off(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    let (Some(widget), Some(version)) = (param(ctx, "widget"), param(ctx, "version")) else { return no_version() };
+    let r = crate::zen_access_routes::unsign_entry(&as_caller(who), widget, version, "permission-card");
+    applied(&r, format!("Your signature is off this version of {widget}; it runs without your data until someone signs it."))
+}
+
 pub(crate) fn actions() -> Vec<Registered> {
     vec![
         Registered { spec: &KEEP_MINE, check: check_keep, apply: apply_keep },
         Registered { spec: &ACCESS, check: check_access, apply: apply_access },
         Registered { spec: &ACCESS_OFF, check: check_access_off, apply: apply_access_off },
         Registered { spec: &DELETE, check: check_delete, apply: apply_delete },
+        Registered { spec: &SIGN, check: check_sign, apply: apply_sign },
+        Registered { spec: &SIGN_OFF, check: check_sign_off, apply: apply_sign_off },
     ]
 }
 

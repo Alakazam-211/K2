@@ -3264,6 +3264,7 @@ exit: 0
       "flags": [
         {"name": "--from", "arg": "k2:diary|hello|arcade|board-lite", "description": "new: the example to copy (a built-in like k2:diary copies its latest version)."},
         {"name": "--widget", "arg": "name", "description": "revoke: every placement of this widget."},
+        {"name": "--ask", "arg": null, "description": "sign: ask the person to sign this version (K2's zen.sign card on your Thread, with the manifest changes in plain words) instead of signing it."},
         {"name": "--json", "arg": null, "description": "Daemon JSON."}
       ]
     },

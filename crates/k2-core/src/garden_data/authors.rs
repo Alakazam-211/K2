@@ -236,6 +236,22 @@ pub fn carry(conn: &Connection, widget: &str, old: &str, new: &str) -> Result<Op
     Ok(Some(maker))
 }
 
+/// "Turn off again" on a `zen.sign` card (0.46.5): take the person's
+/// signature off `(widget, hash)`, so that version runs unsigned (Always
+/// caps only) until someone signs it again. Only an `owner` row goes; an
+/// agent's stamp is never removed here. Returns whether a row went.
+pub fn remove_owner_stamp(conn: &Connection, widget: &str, hash: &str) -> Result<bool, DataError> {
+    if is_builtin(widget) {
+        return Ok(false);
+    }
+    check_widget(widget)?;
+    check_hash(hash)?;
+    Ok(conn.execute(
+        "DELETE FROM zen_widget_authors WHERE widget = ?1 AND hash = ?2 AND author_kind = 'owner'",
+        params![widget, hash],
+    )? == 1)
+}
+
 /// When `(widget, hash)` was signed (Unix seconds), if it has a row.
 pub fn signed_at(conn: &Connection, widget: &str, hash: &str) -> Result<Option<i64>, DataError> {
     Ok(conn

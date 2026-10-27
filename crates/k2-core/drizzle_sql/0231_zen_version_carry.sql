@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS zen_version_carry (
   -- version (Rosson 2026-10-26: carry anyway, log each difference).
   differs    TEXT,
   at         INTEGER NOT NULL,
+  -- When the person signed this version after seeing the difference (the
+  -- `zen.sign` card, Sign in History, or their own `k2 zen widget sign`).
+  -- NULL: still offered to them (`k2 zen widget sign <w> --ask`).
+  reviewed_at INTEGER,
   CHECK ((place = 'frozen') = (garden IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS zen_version_carry_by_widget ON zen_version_carry(widget);

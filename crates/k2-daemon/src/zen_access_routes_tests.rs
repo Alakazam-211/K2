@@ -396,18 +396,24 @@ fn a_persons_approve_of_a_pending_proposal_lists_the_proposer_and_stamps_the_per
 #[test]
 fn only_the_person_or_a_listed_agent_vouches_over_another_signer() {
     let e = env();
-    // An unlisted agent signs first: it stamps, but gives no sight.
+    // 0.46.5: an unlisted agent's sign of a placed widget can't cover it, so
+    // it stamps nothing and gets 403 sign_needs_person (K2's zen.sign card
+    // asks the person).
     let (s, v) = zen("/cli/zen/widget/sign", false, &agent("w-other"), json!({"widget": "board"}));
-    assert_eq!((s.as_str(), v["stamped"].as_bool(), v["vouched"].as_bool()), ("200 OK", Some(true), Some(false)), "{v}");
+    assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("sign_needs_person")), "{v}");
     let hash = e.f.widget_status("board").hash().to_string();
+    assert_eq!(v["version"], json!(hash), "{v}");
+    assert_eq!(maker(&e.f, "board"), MadeBy::Unclaimed, "nothing stamped");
+    // An unlisted agent's stamp (made directly) gives no sight, and another
+    // unlisted agent can't take it over.
+    stamp(&e, MadeBy::Agent { project_id: "w-other".into() });
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         assert!(!k2_core::garden_data::signer_gate::passes(&conn, &e.g1, "board", &hash).expect("gate"));
     }
-    // Another unlisted agent can't take it over.
-    let (_, v) = zen("/cli/zen/widget/sign", false, &agent("w-third"), json!({"widget": "board"}));
-    assert_eq!(v["stamped"], false, "{v}");
+    let (s, v) = zen("/cli/zen/widget/sign", false, &agent("w-third"), json!({"widget": "board"}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("sign_needs_person")), "{v}");
     assert_eq!(maker(&e.f, "board"), MadeBy::Agent { project_id: "w-other".into() });
     // A listed agent vouches.
     list(&e.g1, "w-ed");
@@ -424,7 +430,7 @@ fn only_the_person_or_a_listed_agent_vouches_over_another_signer() {
     assert_eq!(v["stamped"], true, "{v}");
     assert_eq!(maker(&e.f, "board"), MadeBy::Owner);
     let signed: Vec<_> = widget_events("board").into_iter().filter(|x| x.kind.as_str() == "signed").collect();
-    assert_eq!(signed.len(), 3, "{signed:?}");
+    assert_eq!(signed.len(), 2, "the listed agent's and the person's (a refused sign records nothing): {signed:?}");
     assert_eq!(signed[0].garden_id.as_deref(), Some(e.g1.as_str()), "the modal's Garden is on the line");
 }
 

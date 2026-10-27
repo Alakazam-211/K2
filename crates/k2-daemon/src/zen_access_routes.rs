@@ -873,18 +873,137 @@ struct SignBody {
     /// login's Sign button, G14/G26a). Recorded on the event only.
     #[serde(default)]
     garden: Option<String>,
+    /// 0.46.5: sign only this version (its hash or first 12+ hex
+    /// characters); a later change answers 409 `stale_version`. The
+    /// `zen.sign` card always names one.
+    #[serde(default)]
+    version: Option<String>,
+    /// 0.46.5: an agent asks the person to sign (`k2 zen widget sign <w>
+    /// --ask`): K2 puts a `zen.sign` card on its Thread instead of signing.
+    #[serde(default)]
+    ask: bool,
 }
 
-/// `POST /cli/zen/widget/sign {widget, garden?}` with the switch on: the
-/// person (owner token or Owner login) or a local passport signs the live
-/// clean version. The person, or an agent listed on every placing Garden,
-/// vouches (overwrites another signer); anyone else stamps only an unsigned
-/// version, which runs with Always only until someone listed signs (GA1).
+/// 403 code: an agent signed a placed widget's version that would still run
+/// without the person's data in a Garden whose list it isn't on (0.46.5).
+pub const SIGN_NEEDS_PERSON: &str = "sign_needs_person";
+
+/// Would `widget`'s version `hash` fail the signer gate in any Garden that
+/// places it once `signer` stamped it (first signer wins: an existing
+/// maker stays)? The placing Gardens it would fail in, by name.
+fn fails_after_stamp(f: &ZenFiles, widget: &str, hash: &str, signer: &MadeBy) -> Vec<String> {
+    let gardens = placing_gardens(f, widget);
+    if gardens.is_empty() {
+        return Vec::new();
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let maker = match authors::maker_of(&conn, widget, hash) {
+        Ok(MadeBy::Unclaimed) => signer.clone(),
+        Ok(m) => m,
+        Err(e) => {
+            k2_core::log_debug!("[zen/access] maker of {widget}: {e}");
+            return gardens.into_iter().map(|(_, n)| n).collect();
+        }
+    };
+    gardens
+        .into_iter()
+        .filter(|(g, _)| match &maker {
+            MadeBy::Owner | MadeBy::K2 => false,
+            MadeBy::Agent { project_id } => !ga::is_listed(&conn, g, project_id).unwrap_or(false),
+            MadeBy::Unclaimed => true,
+        })
+        .map(|(_, n)| n)
+        .collect()
+}
+
+/// The person signed `widget`'s version `hash`: any carry difference for it
+/// is reviewed (it no longer offers a `zen.sign` card).
+fn person_reviewed(widget: &str, hash: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if let Err(e) = k2_core::zen::version_carry::mark_reviewed(&conn, widget, hash, now()) {
+        k2_core::log_debug!("[zen/access] review of {widget}: {e}");
+    }
+}
+
+/// The `review` an answer about `widget` carries when its live version
+/// `hash` was carried at upgrade with a manifest that differs from the
+/// signed one and the person hasn't signed it since: the difference and the
+/// command that asks them (`--ask`). Null otherwise.
+pub(crate) fn carry_review(widget: &str, hash: &str) -> J {
+    let d = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::zen::version_carry::unreviewed_difference(&conn, widget, hash).ok().flatten()
+    };
+    match d {
+        Some(d) => json!({
+            "changes": format!("Since it was signed, this widget {d}."),
+            "ask": format!("k2 zen widget sign {widget} --ask"),
+            "message": format!("K2 kept {widget}'s signature at upgrade although its manifest changed after it was signed; ask the person to look: k2 zen widget sign {widget} --ask"),
+        }),
+        None => J::Null,
+    }
+}
+
+/// The `zen.sign` card's entry (`permission/actions/gardens.rs`): sign
+/// exactly `version` of `widget` as `caller` (the person who clicked
+/// Allow). The same door as `k2 zen widget sign` and Sign in History.
+pub(crate) fn sign_entry(caller: &Caller, widget: &str, version: &str, ingress: &str) -> CliResponse {
+    sign_parsed(
+        caller,
+        SignBody { widget: widget.to_string(), garden: None, version: Some(version.to_string()), ask: false },
+        ingress,
+    )
+}
+
+/// "Turn off again" on an approved `zen.sign` card: take the person's
+/// signature off exactly `version` of `widget` (the person only). The
+/// version then runs without their data until someone signs it again.
+pub(crate) fn unsign_entry(caller: &Caller, widget: &str, version: &str, ingress: &str) -> CliResponse {
+    if !matches!(signer_of(caller), Some((MadeBy::Owner, _))) {
+        return crate::zen_routes::error_response(ZenError::OwnerOnly("only the person takes their signature off".into()));
+    }
+    let f = files();
+    let st = f.widget_status(widget);
+    let hash = st.hash().to_string();
+    if hash.is_empty() || !hash.starts_with(version) {
+        return refuse("409 Conflict", "stale_version", format!("{widget} changed since it was signed; nothing to take off"));
+    }
+    let removed = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        authors::remove_owner_stamp(&conn, widget, &hash)
+    };
+    match removed {
+        Ok(gone) => {
+            crate::zen_routes::audit_refusal("zen.widget.unsign", caller, format!("{widget} {} removed={gone}", short(&hash)), ingress);
+            resp("200 OK", json!({ "ok": true, "widget": widget, "hash": hash, "removed": gone }))
+        }
+        Err(e) => refuse("503 Service Unavailable", "store_unavailable", format!("the signature wasn't changed: {e}")),
+    }
+}
+
+/// `POST /cli/zen/widget/sign {widget, garden?, version?, ask?}` with the
+/// switch on: the person (owner token or Owner login) or a local passport
+/// signs the live clean version. The person, or an agent listed on every
+/// placing Garden, vouches (overwrites another signer); anyone else stamps
+/// an unsigned version only when that leaves it passing in every Garden
+/// that places it. Otherwise (0.46.5) the agent gets 403
+/// [`SIGN_NEEDS_PERSON`] and K2's `zen.sign` card for the person, with the
+/// version's manifest changes in plain words; nothing is stamped.
 pub(crate) fn sign(caller: &Caller, body: &[u8], ingress: &str) -> CliResponse {
     let b: SignBody = match serde_json::from_value(body_json(body)) {
         Ok(b) => b,
-        Err(e) => return refuse("400 Bad Request", "bad_request", format!("widget/sign takes {{widget, garden?}}: {e}")),
+        Err(e) => {
+            return refuse("400 Bad Request", "bad_request", format!("widget/sign takes {{widget, garden?, version?, ask?}}: {e}"))
+        }
     };
+    sign_parsed(caller, b, ingress)
+}
+
+fn sign_parsed(caller: &Caller, b: SignBody, ingress: &str) -> CliResponse {
     let widget = b.widget.trim().to_string();
     if authors::is_builtin(&widget) {
         return resp("200 OK", json!({ "ok": true, "widget": widget, "hash": J::Null, "madeBy": { "kind": "k2" }, "stamped": false }));
@@ -905,14 +1024,82 @@ pub(crate) fn sign(caller: &Caller, body: &[u8], ingress: &str) -> CliResponse {
             "{widget} has errors; fix them (k2 zen validate --widget {widget}) and sign again"
         )));
     }
-    if signer_of(caller).is_none() {
+    let Some((signer, _)) = signer_of(caller) else {
         return crate::zen_routes::error_response(ZenError::OwnerOnly("only you or an agent on this computer can sign a widget".into()));
+    };
+    let hash = st.hash().to_string();
+    if let Some(v) = b.version.as_deref().map(str::trim) {
+        if v.len() < crate::permission::actions::gardens::MIN_VERSION || !hash.starts_with(v) {
+            return resp(
+                "409 Conflict",
+                json!({
+                    "ok": false,
+                    "error": "stale_version",
+                    "message": format!("{widget} changed since {v} was named; its live version is now {}. A new version needs a new sign.", short(&hash)),
+                    "widget": widget,
+                    "version": hash,
+                }),
+            );
+        }
+    }
+    // An agent asks the person (`--ask`), or can't make this version pass
+    // where it is placed: K2's zen.sign card, nothing stamped.
+    if signer != MadeBy::Owner {
+        // An agent on every placing Garden's list vouches, as before;
+        // another signs only what its signature makes pass everywhere.
+        let failing = if b.ask || may_vouch(&f, &widget, &signer) {
+            Vec::new()
+        } else {
+            fails_after_stamp(&f, &widget, &hash, &signer)
+        };
+        if b.ask || !failing.is_empty() {
+            let MadeBy::Agent { project_id } = &signer else { unreachable!("signer_of gives the person or an agent") };
+            let card = crate::zen_sign_cards::present_sign(project_id, &widget, &hash, b.ask);
+            let changes = card["changes"].clone();
+            crate::zen_routes::audit_refusal(
+                "zen.widget.sign",
+                caller,
+                format!("{widget} {} ask={} card={}", short(&hash), b.ask, card["card"]),
+                ingress,
+            );
+            if b.ask {
+                let mut out = json!({ "ok": true, "widget": widget, "version": hash, "asked": true, "changes": changes });
+                if let Some(o) = card.as_object() {
+                    for (k, v) in o {
+                        out[k] = v.clone();
+                    }
+                }
+                return resp("200 OK", out);
+            }
+            let message = format!(
+                "{widget}'s version {} runs without the person's data in {}: you aren't on {} list, so your signature doesn't cover it. K2 asked the person to sign it (a zen.sign card); until they answer it keeps its own data only. An agent on every placing Garden's list signs it with k2 zen widget sign {widget}.",
+                short(&hash),
+                failing.join(", "),
+                if failing.len() == 1 { "its" } else { "their" },
+            );
+            return resp(
+                "403 Forbidden",
+                json!({
+                    "ok": false,
+                    "error": SIGN_NEEDS_PERSON,
+                    "message": message,
+                    "widget": widget,
+                    "version": hash,
+                    "changes": changes,
+                    "gardens": failing,
+                    "card": card["card"],
+                    "request": card["request"],
+                }),
+            );
+        }
     }
     let out = stamp_after_write(&f, &widget, caller, StampSource::Sign);
     if out.is_null() {
         return refuse("503 Service Unavailable", "store_unavailable", "the sign wasn't saved; try again");
     }
-    let hash = st.hash().to_string();
+    if signer == MadeBy::Owner {
+        person_reviewed(&widget, &hash);
+    }
     let stamped = out["stamped"] == J::Bool(true);
     crate::zen_routes::audit_refusal(
         "zen.widget.sign",
@@ -930,7 +1117,15 @@ pub(crate) fn sign(caller: &Caller, body: &[u8], ingress: &str) -> CliResponse {
     }
     resp(
         "200 OK",
-        json!({ "ok": true, "widget": widget, "hash": hash, "madeBy": out["madeBy"], "stamped": stamped, "vouched": out["vouched"] }),
+        json!({
+            "ok": true,
+            "widget": widget,
+            "hash": hash,
+            "madeBy": out["madeBy"],
+            "stamped": stamped,
+            "vouched": out["vouched"],
+            "review": carry_review(&widget, &hash),
+        }),
     )
 }
 

@@ -3,7 +3,7 @@
 # meant for a compute node: `k2 compute run <node> --sha <sha> --needs
 # rust@stable,cmake@3 -- bash scripts/test/compute-tiers-gates.sh <step>`.
 #
-# Steps: check | proto | node | core | daemon-unit | daemon-int | js | drill
+# Steps: check | proto | node | core | daemon-unit | daemon-int | js | contract | typecheck | drill
 #
 # The node's job user has a nologin shell: SHELL is set here so tools that
 # spawn "$SHELL" work. Every K2_* variable is dropped so nothing reaches a
@@ -48,6 +48,13 @@ case "$step" in
     bunx vitest run src/renderer/components/Settings/sections/ComputeSection.test.tsx \
       src/renderer/components/Settings/sections/ComputeServersParts.test.tsx \
       src/renderer/components/Settings/sections/compute-api.test.ts
+    ;;
+  contract)
+    cargo run -q -p k2-core --bin contract-gen -- --check
+    ;;
+  typecheck)
+    bun install --frozen-lockfile
+    bun run typecheck
     ;;
   drill)
     [ $# -gt 0 ] || set -- tiers-solo tiers-shared

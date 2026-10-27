@@ -11,7 +11,7 @@
 // sends the owner's gestures.
 
 import React, { useRef, useState } from 'react'
-import { Button, Callout } from '@/components/ui'
+import { Button, Callout, SquareCheckbox } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { fetchHandoverPlan, requestHandover, type HandoverOptions, type HandoverPlan } from './app-access-api'
@@ -159,14 +159,13 @@ export function AppHandoverSheet({
           ))}
           {plan.databaseCase === 'shared' ? (
             <label className="flex items-center gap-2 text-[11px]">
-              <input type="checkbox" checked={opts.db === 'share'} onChange={(e) => setOpt({ ...opts, db: e.target.checked ? 'share' : undefined })} />
+              <SquareCheckbox checked={opts.db === 'share'} onChange={(e) => setOpt({ ...opts, db: e.target.checked ? 'share' : undefined })} />
               Share the database (the old agent keeps access to this App’s data)
             </label>
           ) : null}
           {plan.collisions ? (
             <label className="flex items-center gap-2 text-[11px]">
-              <input
-                type="checkbox"
+              <SquareCheckbox
                 checked={opts.collisions === 'use_b'}
                 onChange={(e) => setOpt({ ...opts, collisions: e.target.checked ? 'use_b' : undefined })}
               />
@@ -175,7 +174,7 @@ export function AppHandoverSheet({
           ) : null}
           {plan.sharedGuests > 0 ? (
             <label className="flex items-center gap-2 text-[11px]">
-              <input type="checkbox" checked={opts.resetShared === true} onChange={(e) => setOpt({ ...opts, resetShared: e.target.checked || undefined })} />
+              <SquareCheckbox checked={opts.resetShared === true} onChange={(e) => setOpt({ ...opts, resetShared: e.target.checked || undefined })} />
               Take over the guests who also use the old agent’s other Apps (they keep this App and set a new password)
             </label>
           ) : null}

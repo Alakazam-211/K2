@@ -46,6 +46,12 @@ pub const UNPIN: &str = "/cli/llm/accounts/unpin";
 pub const ADD_KEY: &str = "/cli/llm/accounts/add-key";
 /// Leave a tool with no server default token (an API token default only).
 pub const CLEAR_DEFAULT: &str = "/cli/llm/accounts/clear-default";
+/// Where saved logins live (prd-llm-logins-in-vault-v1 §5): the switch,
+/// the vault's state, the last seal pass, each login's storage facts.
+/// People only (names and labels; never a value).
+pub const STORAGE: &str = "/cli/llm/accounts/storage";
+/// Flip it (`{"storage":"files"|"vault"}`): Owner or Admin, audited.
+pub const STORAGE_SET: &str = "/cli/llm/accounts/storage/set";
 
 /// The token one chat runs on, with its chip number
 /// ([`crate::llm_account_for`]).
@@ -54,11 +60,11 @@ pub const FOR: &str = crate::llm_account_for::FOR;
 pub const FOR_REFRESH: &str = crate::llm_account_for::FOR_REFRESH;
 
 /// Read routes (passports allowed).
-pub const READ_ROUTES: &[&str] = &[LIST, STATUS, USAGE, LOGIN_STATUS, PINS, FOR];
+pub const READ_ROUTES: &[&str] = &[LIST, STATUS, USAGE, LOGIN_STATUS, PINS, FOR, STORAGE];
 /// POST-only routes (humans only).
 pub const POST_ROUTES: &[&str] = &[
     ADD, LOGIN, LOGIN_INPUT, LOGIN_CANCEL, SWITCH, NEXT, RENAME, REMOVE, REFRESH, PIN, UNPIN, ADD_KEY, CLEAR_DEFAULT,
-    FOR_REFRESH,
+    FOR_REFRESH, STORAGE_SET,
 ];
 
 /// Request bodies here are small JSON objects.
@@ -114,6 +120,22 @@ pub const DEFAULT_CHANGE_ADMIN_REASON: &str =
 pub const DEFAULT_CHANGE_AGENT_REASON: &str =
     "Agents and K2 terminals can only read tokens. Change the server default on Settings → Language Models → Subs / Tokens.";
 
+/// Shown when a Member (or a passport) tries to flip where saved logins
+/// live.
+pub const STORAGE_ADMIN_REASON: &str =
+    "Only an Admin or the Owner can change where this server keeps its saved LLM logins.";
+
+/// May this caller flip the storage switch? The owner token and Admin or
+/// Owner logins may.
+fn storage_change_blocked(caller: &Caller) -> bool {
+    use k2_core::connect_users::Role;
+    match caller {
+        Caller::Owner => false,
+        Caller::Login { username } => !matches!(k2_core::connect_users::role_for_user(username), Some(r) if r >= Role::Admin),
+        _ => true,
+    }
+}
+
 fn default_change_refusal(caller: &Caller) -> Option<CliResponse> {
     default_change_blocked(caller).map(|why| refuse(403, "admin_required", why))
 }
@@ -128,6 +150,7 @@ fn status_line(code: u16) -> &'static str {
         409 => "409 Conflict",
         413 => "413 Payload Too Large",
         422 => "422 Unprocessable Entity",
+        503 => "503 Service Unavailable",
         _ => "500 Internal Server Error",
     }
 }
@@ -496,6 +519,8 @@ struct Body {
     /// `remove`: the person confirmed removing the server default API
     /// token, leaving the tool with no default.
     clear_default: Option<bool>,
+    /// `storage/set`: `files` or `vault`.
+    storage: Option<String>,
 }
 
 /// The conversation a chat pin follows: the body's `conversationId`, else
@@ -609,6 +634,12 @@ pub fn handle(
             return r;
         }
     }
+    // Where saved logins live: Owner or Admin (Rosson #8, audited, no
+    // extra confirm: going back to files restores today's behaviour).
+    if path == STORAGE_SET && storage_change_blocked(&caller) {
+        audit("llm_accounts.storage_refused", key.as_deref().unwrap_or("-"), "admin_required", ingress);
+        return refuse(403, "admin_required", STORAGE_ADMIN_REASON);
+    }
     match path {
         LIST => match list_doc(human, key.as_deref(), default_change_blocked(&caller)) {
             Ok(v) => ok(v),
@@ -655,6 +686,13 @@ pub fn handle(
             }
         }
         FOR => crate::llm_account_for::handle_get(params),
+        STORAGE => {
+            if !human {
+                return refuse(403, "owner_only", "where saved logins live is shown to people only (Settings → Language Models)");
+            }
+            let items = params.get("items").map(String::as_str) != Some("0");
+            ok(rt::storage_status(items))
+        }
         PINS => {
             let res = with_conn(|conn| -> Result<Vec<Value>, WalletError> {
                 Ok(k2_core::llm_accounts::pins::list_pins(conn)?.iter().map(|p| pin_json(conn, p)).collect())
@@ -687,6 +725,15 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
         Err(r) => return r,
     };
     match path {
+        STORAGE_SET => {
+            let Some(target) = b.storage.as_deref().and_then(k2_core::llm_accounts::slots::Storage::parse) else {
+                return refuse(400, "bad_request", "storage must be \"files\" or \"vault\"");
+            };
+            match rt::set_storage(target, &key, ingress) {
+                Ok(v) => ok(v),
+                Err((code, err, hint)) => refuse(code, err, hint),
+            }
+        }
         ADD => {
             let tool = match tool_of(&b.tool) {
                 Ok(t) => t,
@@ -1250,5 +1297,100 @@ mod tests {
         assert_eq!(v["removed"]["id"], json!(key));
         assert_eq!(active(), None);
         clear_claude_rows();
+    }
+
+    // ── Saved logins in the vault (prd-llm-logins-in-vault-v1) ───────
+
+    /// Puts the storage switch back to the default even when an assert
+    /// fails, so no other test in this binary runs in vault mode.
+    struct StorageReset;
+    impl Drop for StorageReset {
+        fn drop(&mut self) {
+            k2_core::llm_accounts::slots::set_setting(None);
+        }
+    }
+
+    #[test]
+    fn an_admin_moves_saved_logins_into_the_vault_and_back_with_nothing_lost() {
+        use k2_core::connect_users::Role;
+        use k2_core::llm_accounts::slots;
+        use k2_core::sealed_slots::{SealedState, SecretSealer};
+        let home = crate::test_support::TempHome::new();
+        let _reset = StorageReset;
+        crate::vault::ensure_test_vault();
+        slots::install_sealer(std::sync::Arc::new(crate::vault::sealer::VaultSealer));
+        slots::set_setting(None);
+        let (a, b) = setup(home.path());
+        let member = login("llmsto_member", Role::Member);
+        let admin = login("llmsto_admin", Role::Admin);
+
+        // Who may: Admin and Owner flip it; a Member and a passport can't;
+        // a passport can't even read it.
+        let (st, v) = call(STORAGE_SET, member.clone(), r#"{"storage":"vault"}"#);
+        assert_eq!((st.as_str(), &v["error"]["code"]), ("403 Forbidden", &json!("admin_required")), "{v}");
+        assert_eq!(v["error"]["hint"], STORAGE_ADMIN_REASON);
+        for path in [STORAGE, STORAGE_SET] {
+            let (st, v) = call(path, agent(), r#"{"storage":"vault"}"#);
+            assert_eq!((st.as_str(), &v["error"]["code"]), ("403 Forbidden", &json!("owner_only")), "{path}: {v}");
+        }
+        let (st, v) = call(STORAGE_SET, admin.clone(), r#"{"storage":"both"}"#);
+        assert_eq!(st, "400 Bad Request", "{v}");
+        let (st, v) = call(STORAGE, member, "");
+        assert_eq!(st, "200 OK", "{v}");
+        assert_eq!(v["storage"], "files");
+        assert_eq!(v["source"], "default");
+        assert_eq!(slots::storage(), slots::Storage::Files, "a refusal changed nothing");
+
+        // To the vault: every saved login sealed, the files kept.
+        let (st, v) = call(STORAGE_SET, admin.clone(), r#"{"storage":"vault"}"#);
+        assert_eq!(st, "200 OK", "{v}");
+        assert_eq!(v["storage"], "vault");
+        assert_eq!(v["source"], "setting");
+        assert_eq!(v["vaultOpen"], true, "{v}");
+        assert_eq!(v["wipesPlainCopies"], false);
+        assert!(v["sync"]["sealed"].as_u64().unwrap() >= 2, "{v}");
+        assert!(!v.to_string().contains(MARKER), "a token reached a route answer");
+        assert_eq!(k2_core::app_settings::load().llm_accounts_storage, "vault", "persisted");
+        let sealer = crate::vault::sealer::VaultSealer;
+        assert_eq!(sealer.get_sealed(&slots::addr(Tool::Claude, &b)).unwrap().unwrap(), cred("b").into_bytes());
+        assert_eq!(sealer.get_sealed(&slots::addr(Tool::Claude, &a)).unwrap().unwrap(), cred("a").into_bytes());
+        assert_eq!(std::fs::read_to_string(store::slot_cred_path(Tool::Claude, &b)).unwrap(), cred("b"), "file kept");
+        // The vault never reveals a system item, even to the owner.
+        let (st, v) = call(STORAGE, Caller::Owner, "");
+        assert_eq!(st, "200 OK", "{v}");
+        assert!(!v.to_string().contains(MARKER));
+        let item = v["items"].as_array().unwrap().iter().find(|i| i["id"] == json!(b)).unwrap().clone();
+        assert_eq!((&item["file"], &item["vault"], &item["inStep"]), (&json!(true), &json!("active"), &json!(true)), "{item}");
+        // A plain settings write can't flip it around the audit.
+        let r = crate::settings_routes::handle_settings_update(br#"{"llmAccountsStorage":"files"}"#, crate::settings_routes::SettingsActor::Owner);
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert_eq!(slots::storage(), slots::Storage::Vault);
+
+        // Work in vault mode: switch to B, then remove A (kept disabled).
+        let body = Body { id: Some(b.clone()), ..Default::default() };
+        let vendor = NoVendor;
+        switch_two_phase(false, &body, "owner-token", &vendor).expect("switch in vault mode");
+        assert_eq!(std::fs::read_to_string(home.path().join(".claude/.credentials.json")).unwrap(), cred("b"));
+        let (st, v) = call(REMOVE, admin.clone(), &format!(r#"{{"id":"{a}"}}"#));
+        assert_eq!(st, "200 OK", "{v}");
+        assert_eq!(sealer.sealed_state(&slots::addr(Tool::Claude, &a)).unwrap(), Some(SealedState::Disabled));
+
+        // Back to files: instant, nothing lost.
+        let (st, v) = call(STORAGE_SET, admin, r#"{"storage":"files"}"#);
+        assert_eq!(st, "200 OK", "{v}");
+        assert_eq!(v["storage"], "files");
+        assert_eq!(v["export"]["failed"], json!([]), "{v}");
+        assert_eq!(slots::storage(), slots::Storage::Files);
+        let removed = std::fs::read_dir(store::removed_root()).unwrap().flatten().find(|d| d.file_name().to_string_lossy().contains(&a)).expect("A in Trash");
+        assert_eq!(std::fs::read_to_string(removed.path().join(".credentials.json")).unwrap(), cred("a"), "A's file kept in Trash");
+        clear_claude_rows();
+    }
+
+    /// A vendor that can't be asked (offline): no identity, no refresh.
+    struct NoVendor;
+    impl wallet::Refresher for NoVendor {
+        fn refresh(&self, _tool: Tool, _id: &str) -> Result<(), String> {
+            panic!("no refresh expected");
+        }
     }
 }

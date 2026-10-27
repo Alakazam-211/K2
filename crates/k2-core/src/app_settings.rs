@@ -552,6 +552,14 @@ pub struct AppSettings {
     /// survives the load/update round-trip.
     #[serde(default)]
     pub listen_lan: bool,
+    /// Where the server's saved LLM logins are kept
+    /// (prd-llm-logins-in-vault-v1 §5): `files` | `vault`. Empty = the
+    /// default (`files` in 0.46.6). Changes only through
+    /// `POST /cli/llm/accounts/storage/set` (Owner or Admin, audited);
+    /// `K2_LLM_ACCOUNTS_STORAGE` in the daemon's env wins. Never written
+    /// while unset, so an untouched settings.json stays byte-identical.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub llm_accounts_storage: String,
     /// Settings → General → "Allow cloning agents to people's personal
     /// computers" (prd-clone-carries-threads-and-vault-v1 §4.2, D2 as
     /// decided by Rosson 2026-10-16: **defaults ON**, so today's behaviour
@@ -1200,6 +1208,7 @@ impl Default for AppSettings {
             api_enabled: false,
             airgap: false,
             listen_lan: false,
+            llm_accounts_storage: String::new(),
             allow_clone_personal_computers: true,
             remote_sessions_enabled: false,
             web_client_enabled: true,

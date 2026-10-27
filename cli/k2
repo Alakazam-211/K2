@@ -22624,9 +22624,10 @@ print("Allow managing compute nodes: %s for %s%s" % ("on" if on else "off", v["w
 # (`k2 llm accounts` is a working alias.) One token per tool is the
 # SERVER DEFAULT, kept where the tool always keeps it; the other
 # subscriptions and API tokens wait in ~/.k2/llm-accounts. GET
-# /cli/llm/accounts/list|status|usage|login/status|pins; POST
+# /cli/llm/accounts/list|status|usage|login/status|pins|storage; POST
 # add|add-key|login|login/input|login/cancel|switch|next|rename|remove|
-# refresh|pin|unpin (JSON bodies; route names are internal and unchanged).
+# refresh|pin|unpin|storage/set (JSON bodies; route names are internal and
+# unchanged).
 # `llm` is an `id` tool: inside a K2 terminal the request carries this
 # session's passport, and the daemon keeps passports read-only
 # (list/status/usage/pins). Change tokens on Settings → Language Models → Subs / Tokens, or
@@ -22660,6 +22661,10 @@ k2 llm tokens — LLM tokens: subscriptions and API tokens
   k2 llm tokens for <agent> [--refresh] [--json]     the token one chat runs on (<agent> = ws or a
                                                      sidecar ws/2) and its usage, the top-bar chip's
                                                      number; --refresh re-reads it (once a minute)
+  k2 llm tokens storage [--json]                     where saved tokens are kept (files or the K2
+                                                     vault) and whether each is sealed
+  k2 llm tokens storage files|vault                  change it (Admin or Owner; audited). The plain
+                                                     files stay either way, so going back is instant
 
 `k2 llm accounts …` is the same command (alias).
 
@@ -23128,6 +23133,45 @@ import json, sys
 rows = json.load(sys.stdin).get("accounts") or []
 for a in rows:
     print("%s %-7s %-20s %s" % ("*" if a.get("active") else " ", a.get("tool"), (a.get("label") or "-")[:20], a.get("state") or "-"))
+'
+            ;;
+        storage)
+            case "${#pos[@]}" in
+                0)
+                    _llma_get storage
+                    if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+                    ;;
+                1)
+                    case "${pos[0]}" in
+                        files|vault) ;;
+                        *) echo "usage: k2 llm tokens storage [files|vault]" >&2; exit 2 ;;
+                    esac
+                    _llma_post storage/set "$(_llma_json storage "${pos[0]}")"
+                    if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+                    ;;
+                *) echo "usage: k2 llm tokens storage [files|vault]" >&2; exit 2 ;;
+            esac
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+src = v.get("source")
+print("saved tokens are kept in: %s%s" % (v.get("storage"), "" if src == "setting" else " (%s)" % ("K2_LLM_ACCOUNTS_STORAGE" if src == "env" else "the default")))
+print("K2 vault: %s" % ("open" if v.get("vaultOpen") else "NOT open (%s)" % (v.get("vaultError") or "?")))
+for k in ("banner", "nudge"):
+    if v.get(k):
+        print(v[k])
+s = v.get("sync")
+if s:
+    print("sealed %d, already sealed %d, removed kept disabled %d, waiting %d" % (s.get("sealed", 0), s.get("unchanged", 0), s.get("disabled", 0), s.get("waiting", 0)))
+e = v.get("export")
+if e and e.get("restored"):
+    print("wrote %d file(s) back from the vault" % e.get("restored"))
+items = v.get("items") or []
+if items:
+    print("%-7s %-22s %-5s %-9s %s" % ("tool", "token", "file", "vault", "in step"))
+for i in items:
+    step = {True: "yes", False: "NO", None: "-"}[i.get("inStep")]
+    print("%-7s %-22s %-5s %-9s %s%s" % (i.get("tool"), (i.get("label") or "-")[:22], "yes" if i.get("file") else "no", i.get("vault"), step, "  (removed)" if i.get("removed") else ""))
 '
             ;;
         pins)
@@ -42934,6 +42978,26 @@ ISOLATION
   a shell can read the token folders. Tokens decide which subscription
   or key the server bills to; this is an organizing feature, not a
   security boundary.
+
+IN THE K2 VAULT (0.46.6, opt-in per server)
+  k2 llm tokens storage            where saved tokens are kept, and for
+                                   each: file yes/no, vault active /
+                                   disabled / none, in step yes/no
+  k2 llm tokens storage vault      seal every saved token into the K2
+                                   vault (Admin or Owner; audited)
+  k2 llm tokens storage files      back to files only (Admin or Owner)
+  With vault, each saved token (subscriptions and API tokens, removed
+  ones kept disabled) is also sealed in the vault's daemon-only system
+  area as llm-login.<tool>.<id>: nobody can reveal it and it is never
+  copied to another server. The plain files stay in place in 0.46.6, so
+  switching back is instant and loses nothing. If a tool's CLI renews a
+  saved token in its folder, the newer file is sealed within minutes.
+  The server default stays where each tool reads it.
+  If the vault isn't open (a locked keychain), the server default and
+  every file keep working; a token only the vault holds answers
+  vault_unavailable (503) until it opens. K2 tries to open it every
+  minute. K2_LLM_ACCOUNTS_STORAGE=files|vault in the daemon's env wins
+  over the setting.
 
 MOVING A BOX
   Clone and migration bundles never carry the tokens. Sign each

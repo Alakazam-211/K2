@@ -443,6 +443,10 @@ fn no_server_login_code_reads_a_slot_around_the_store_switch() {
         root.join("src/llm_accounts/wallet.rs"),
         root.join("src/llm_accounts/pins.rs"),
         root.join("src/llm_accounts/identity.rs"),
+        root.join("../k2-daemon/src/llm_accounts_runtime.rs"),
+        root.join("../k2-daemon/src/llm_accounts_routes.rs"),
+        root.join("../k2-daemon/src/llm_account_for.rs"),
+        root.join("../k2-daemon/src/subscription_usage.rs"),
     ];
     let banned = [
         "store::read_slot(",

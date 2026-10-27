@@ -1628,6 +1628,9 @@ async fn async_main() {
     // LLM login wallet: import each tool's live login as the active
     // "Default" entry when nothing is active, then keep idle logins warm
     // (never the active one, never under air-gap).
+    // Saved logins (prd-llm-logins-in-vault-v1): the vault sealer and the
+    // storage switch go in before the wallet's boot import.
+    llm_accounts_runtime::install_storage();
     llm_accounts_runtime::spawn();
     // App users' personal wallets (0.46.3): re-seal idle slots, keep them
     // warm, and the lifecycle (dormant after App access is lost, deleted

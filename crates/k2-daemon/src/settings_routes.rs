@@ -423,6 +423,15 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
     if partial.get("ownerDisplayNameCarried").is_some() {
         return forbidden("\"ownerDisplayNameCarried\" is set by the daemon only".to_string());
     }
+    // Where saved LLM logins live: the flip seals or writes back every
+    // login first, so it goes through its own route (Owner or Admin,
+    // audited), never a plain settings write.
+    if partial.get(k2_core::llm_accounts::slots::SETTING_KEY).is_some() {
+        return forbidden(format!(
+            "\"{}\" changes only through POST /cli/llm/accounts/storage/set (Owner or Admin)",
+            k2_core::llm_accounts::slots::SETTING_KEY
+        ));
+    }
     if actor != SettingsActor::Owner {
         if let Some(gated) = OWNER_ONLY_KEYS.iter().find(|k| partial.get(**k).is_some()) {
             return forbidden(format!("updating \"{gated}\" requires the Owner role"));
@@ -504,6 +513,9 @@ pub fn handle_settings_reset(actor: SettingsActor) -> CliResponse {
     }
     match k2_core::app_settings::reset() {
         Ok(defaults) => {
+            // Saved LLM logins back to the default store (files in 0.46.6);
+            // a server leaving the vault gets any missing file written back.
+            crate::llm_accounts_runtime::storage_setting_changed(&defaults.llm_accounts_storage, actor.audit_user());
             // Reset returns federation to its default (OFF) — sync it.
             k2_core::federation::set_enabled(defaults.federation_enabled);
             k2_core::compute::set_enabled(defaults.compute_preview);

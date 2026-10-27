@@ -891,6 +891,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/llm/accounts/remove", Member),
     post("/cli/llm/accounts/rename", Member),
     get("/cli/llm/accounts/status", Member),
+    // Where saved logins live (prd-llm-logins-in-vault-v1): read by
+    // Members, flipped by Admins and the Owner (audited).
+    get("/cli/llm/accounts/storage", Member),
+    post("/cli/llm/accounts/storage/set", Admin),
     post("/cli/llm/accounts/switch", Admin),
     post("/cli/llm/accounts/unpin", Member),
     get("/cli/llm/accounts/usage", Member),

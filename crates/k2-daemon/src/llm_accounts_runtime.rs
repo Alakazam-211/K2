@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use k2_core::llm_accounts::slots::{self, Storage};
 use k2_core::llm_accounts::{self as wallet_core, state, store, wallet, Entry, Tool, WalletError};
 use k2_core::terminal::{AlacEvent, DaemonPtyConfig, DaemonPtySession, ScanRow, VisibleRow};
 use serde::Serialize;
@@ -829,7 +830,7 @@ fn restore_entry_state(account_id: &str, tool: Tool, prev: &str, new_entry: bool
         let _ = wallet::discard_unfinished(&conn, account_id);
         return;
     }
-    let st = if store::slot_has_cred(tool, account_id) {
+    let st = if slots::has_cred(tool, account_id) {
         if prev == state::SIGNING_IN { state::SIGNED_IN.to_string() } else { prev.to_string() }
     } else {
         state::NOT_SET_UP.to_string()
@@ -1194,6 +1195,11 @@ pub fn apply_spawn_login(
     let slot_lock = match login.pinned_slot() {
         Some((t, id)) => {
             let l = store::lock_slot(t, id, Duration::from_secs(30))?;
+            // Vault storage: a login with no whole credential in its slot
+            // gets the vault's copy written there for the CLI (0600).
+            if slots::ensure_plaintext(t, id)? {
+                k2_core::log_debug!("[llm-accounts] {}/{id}: unsealed into its slot for a session", t.as_str());
+            }
             k2_core::llm_accounts::pins::prepare_slot_home(t, id, cwd)?;
             Some(l)
         }
@@ -1383,7 +1389,7 @@ pub fn probe_idle_usage(entry: &Entry) -> Result<(), String> {
         return Ok(());
     }
     let tool = entry.tool().ok_or("unknown tool")?;
-    if active_is(tool, &entry.id) || !store::slot_has_cred(tool, &entry.id) {
+    if active_is(tool, &entry.id) || !slots::has_cred(tool, &entry.id) {
         return Ok(());
     }
     let _lock = store::lock_tool(tool, Duration::from_secs(5)).map_err(|e| e.to_string())?;
@@ -1392,13 +1398,13 @@ pub fn probe_idle_usage(entry: &Entry) -> Result<(), String> {
     }
     let slot = store::slot_dir(tool, &entry.id);
     let claude_token = if tool == Tool::Claude {
-        let meta = store::slot_meta(tool, &entry.id);
+        let meta = slots::slot_meta(tool, &entry.id);
         let expired = meta.expires_at.map(|x| x <= chrono::Utc::now().timestamp() + 60).unwrap_or(false);
         if expired && meta.has_refresh {
             let _ = wallet::claude_refresh_slot(&entry.id, &post_json);
         }
-        let meta = store::slot_meta(tool, &entry.id);
-        store::slot_claude_access_token(&entry.id).map(|t| (t, meta.expires_at.map(|s| s * 1000), meta.plan.unwrap_or_default()))
+        let meta = slots::slot_meta(tool, &entry.id);
+        slots::claude_access_token(&entry.id).map(|t| (t, meta.expires_at.map(|s| s * 1000), meta.plan.unwrap_or_default()))
     } else {
         None
     };
@@ -1550,20 +1556,201 @@ pub fn keep_warm_tick() -> Vec<wallet::WarmResult> {
 }
 
 /// Boot import, then the keep-warm loop (first pass after two minutes,
-/// then every 30). Skips everything under air-gap.
+/// then every 30). Skips everything under air-gap. With vault storage the
+/// migration pass runs right after the import, then the seal loop.
 pub fn spawn() {
     if std::env::var("K2_LLM_ACCOUNTS_LOOP").map(|v| v == "0").unwrap_or(false) {
         boot_import();
+        seal_pass("boot");
         return;
     }
     let _ = std::thread::Builder::new().name("llm-accounts".into()).spawn(|| {
         boot_import();
+        seal_pass("boot");
+        spawn_seal_loop();
         std::thread::sleep(KEEP_WARM_FIRST);
         loop {
             let _ = keep_warm_tick();
             std::thread::sleep(KEEP_WARM_EVERY);
         }
     });
+}
+
+// ── Where saved logins live (prd-llm-logins-in-vault-v1) ───────────
+
+/// The seal pass in vault mode: catches the vault up with slot files a
+/// CLI rewrote (pinned sessions refresh on their own) and with removed
+/// logins. Nothing is wiped in 0.46.6.
+const SEAL_EVERY: Duration = Duration::from_secs(5 * 60);
+
+static LAST_SYNC: Mutex<Option<slots::SyncReport>> = Mutex::new(None);
+static LAST_EXPORT: Mutex<Option<slots::ExportReport>> = Mutex::new(None);
+
+/// Boot: install the vault sealer (it answers `vault_not_open` until the
+/// vault opens, so a late open is picked up) and mirror the storage
+/// setting. Before [`spawn`].
+pub fn install_storage() {
+    slots::install_sealer(Arc::new(crate::vault::sealer::VaultSealer));
+    let s = k2_core::app_settings::load();
+    slots::set_setting(Storage::parse(&s.llm_accounts_storage));
+    k2_core::log_debug!(
+        "[llm-accounts] saved logins: {} ({})",
+        slots::storage().as_str(),
+        slots::storage_source()
+    );
+}
+
+/// One seal pass (vault storage only). Lists the logins under the
+/// database briefly, then works with no database lock.
+pub fn seal_pass(why: &str) -> Option<slots::SyncReport> {
+    if slots::storage() != Storage::Vault {
+        return None;
+    }
+    let (entries, removed) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        (wallet_core::list(&conn).unwrap_or_default(), wallet_core::list_removed(&conn).unwrap_or_default())
+    };
+    let r = slots::sync_to_vault(&entries, &removed);
+    if r.vault_closed || r.sealed > 0 || r.disabled > 0 || r.waiting > 0 || !r.broken.is_empty() {
+        k2_core::log_debug!(
+            "[llm-accounts] seal pass ({why}): sealed {} disabled {} unchanged {} waiting {} broken {} busy {} vault_closed {}",
+            r.sealed,
+            r.disabled,
+            r.unchanged,
+            r.waiting,
+            r.broken.len(),
+            r.busy,
+            r.vault_closed
+        );
+    }
+    *LAST_SYNC.lock().unwrap_or_else(|p| p.into_inner()) = Some(r.clone());
+    Some(r)
+}
+
+fn spawn_seal_loop() {
+    let _ = std::thread::Builder::new().name("llm-accounts-seal".into()).spawn(|| loop {
+        std::thread::sleep(SEAL_EVERY);
+        let _ = seal_pass("sweep");
+    });
+}
+
+/// Write back any slot file the vault holds and the slot doesn't (before
+/// the store goes back to files).
+pub fn export_pass() -> slots::ExportReport {
+    let entries = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        wallet_core::list(&conn).unwrap_or_default()
+    };
+    let r = slots::export_to_files(&entries);
+    if r.restored > 0 || !r.failed.is_empty() {
+        k2_core::log_debug!(
+            "[llm-accounts] back to files: restored {} already {} failed {} busy {}",
+            r.restored,
+            r.already,
+            r.failed.len(),
+            r.busy
+        );
+    }
+    *LAST_EXPORT.lock().unwrap_or_else(|p| p.into_inner()) = Some(r.clone());
+    r
+}
+
+fn storage_audit(user: &str, outcome: &str) {
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new("llm_accounts.storage", user, outcome.to_string(), "daemon", "-", "cli"));
+}
+
+/// The persisted setting changed some other way (a settings reset):
+/// mirror it, and run the pass for the store now in effect.
+pub fn storage_setting_changed(value: &str, by: &str) {
+    let before = slots::storage();
+    if before == Storage::Vault && slots::env_override().is_none() && Storage::parse(value).unwrap_or(slots::DEFAULT) == Storage::Files {
+        export_pass();
+    }
+    slots::set_setting(Storage::parse(value));
+    let after = slots::storage();
+    if before != after {
+        storage_audit(by, &format!("{}→{} (settings reset)", before.as_str(), after.as_str()));
+        if after == Storage::Vault {
+            seal_pass("switch");
+        }
+        emit(None);
+    }
+}
+
+/// Flip where saved logins live (Owner or Admin; the route checks).
+/// To `vault`: save the setting, then the migration pass (nothing is
+/// wiped). To `files`: write back any file only the vault holds first,
+/// refuse if one couldn't be, then save. Audited either way.
+pub fn set_storage(target: Storage, by: &str, ingress: &str) -> Result<Value, (u16, &'static str, String)> {
+    let before = slots::storage();
+    let mut export = None;
+    if target == Storage::Files {
+        let r = export_pass();
+        if !r.failed.is_empty() {
+            storage_audit(by, &format!("{}→files refused: {} not written back ({ingress})", before.as_str(), r.failed.len()));
+            return Err((
+                503,
+                "vault_unavailable",
+                format!(
+                    "{} saved login(s) exist only in the K2 vault and it couldn't be read, so K2 kept the vault as the store. Open the vault (Settings → Vault), then try again.",
+                    r.failed.len()
+                ),
+            ));
+        }
+        export = Some(r);
+    }
+    k2_core::app_settings::update(json!({ slots::SETTING_KEY: target.as_str() })).map_err(|e| (500, "settings_write_failed", e))?;
+    slots::set_setting(Some(target));
+    let after = slots::storage();
+    storage_audit(by, &format!("{}→{} ({ingress}){}", before.as_str(), target.as_str(), if after != target { "; the env override keeps it" } else { "" }));
+    let sync = if after == Storage::Vault { seal_pass("switch") } else { None };
+    emit(None);
+    let mut v = storage_status(false);
+    v["export"] = json!(export);
+    v["sync"] = json!(sync);
+    Ok(v)
+}
+
+/// Where saved logins live now, the vault's state, the last passes, and
+/// (with `items`) each login's storage facts. Never a value.
+pub fn storage_status(items: bool) -> Value {
+    let storage = slots::storage();
+    let open = slots::vault_open();
+    let recovery = slots::recovery_confirmed();
+    let nudge = (storage == Storage::Vault && recovery == Some(false)).then_some(slots::RECOVERY_NUDGE);
+    let banner = match (storage, &open) {
+        (Storage::Vault, Err(_)) => Some(
+            "The K2 vault isn't open, so saved logins that only it holds can't be used. The server default keeps working, and new sign-ins wait to be sealed. Check Settings → Vault.",
+        ),
+        _ => None,
+    };
+    let mut v = json!({
+        "storage": storage.as_str(),
+        "source": slots::storage_source(),
+        "setting": slots::setting().map(Storage::as_str),
+        "envOverride": slots::env_override().map(Storage::as_str),
+        "default": slots::DEFAULT.as_str(),
+        "vaultOpen": open.is_ok(),
+        "vaultError": open.err().map(|e| e.trim_start_matches("vault: ").to_string()),
+        "recoveryConfirmed": recovery,
+        "nudge": nudge,
+        "banner": banner,
+        "wipesPlainCopies": false,
+        "lastSync": LAST_SYNC.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+        "lastExport": LAST_EXPORT.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+    });
+    if items {
+        let (mut entries, removed) = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            (wallet_core::list(&conn).unwrap_or_default(), wallet_core::list_removed(&conn).unwrap_or_default())
+        };
+        entries.extend(removed);
+        v["items"] = json!(slots::facts(&entries));
+    }
+    v
 }
 
 /// JSON for a login view.

@@ -2191,6 +2191,9 @@ fn restore_from(vault: &LocalVault, c: &VaultCaller, b: &RestoreBody, ingress: &
     match LocalVault::adopt_with_identity(&dir, ks, &identity, holder, k2_vault::OpenOptions::default()) {
         Ok(v) => {
             crate::vault::replace(std::sync::Arc::new(v));
+            // Saved logins: forget what the old file held; the next read
+            // or seal pass compares again (the slot files are newest).
+            k2_core::llm_accounts::slots::forget_known();
             crate::vault::auth_audit("vault-restore", &c.actor.stamp(), &format!("ok from {holder} ({n} secrets)"), ingress);
             Ok(json!({ "ok": true, "vaultId": vid, "secrets": n, "previous": aside.display().to_string() }))
         }

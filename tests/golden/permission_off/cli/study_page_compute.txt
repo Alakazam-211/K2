@@ -39,6 +39,39 @@ RUN
   --env values are stored (the plan, the job row, the node's ledger):
   never put a key in --env. Use --secret (SECRETS below).
 
+TIERS (queue order, 0.46.5)
+  --tier ci        highest: the next free slot, ahead of everything queued.
+                   Needs a grant with --ci, which only the owner or an Admin
+                   sets (k2 compute grant <node> --workspace <ws> --ci).
+                   Agents ask: k2 permission request compute.ci --why "…"
+                   (refused: ci_not_allowed, exit 3). --gate = --tier ci.
+  --tier priority  the critical path: the next free slot, never before CI.
+                   (--critical is the same.) With --exclusive it needs --ci.
+  (no flag)        Normal: first come, first served in your workspace;
+                   workspaces take turns. A Normal job waiting an hour ranks
+                   above fresh Normal work, still below Priority and CI.
+  Priority = the critical path. Use --tier priority only when one result is
+  blocking others (the next builder, an integration pass, a release). One
+  submitter on this server at a time: if `k2 compute nodes` shows someone
+  else on the critical path, use Normal unless the coordinator named you.
+  Priority is optional: if work is independent, leave everything Normal. It
+  all still runs, in parallel, just more slowly.
+  K2 doesn't enforce that: a second submitter's Priority still submits,
+  with one note (critical_path_taken) on stderr.
+  Tiers never stop a running job. They only order the queue: nothing is
+  reserved, nothing is killed or paused. While a CI or Priority job waits
+  for room, smaller jobs behind it don't start (the node drains toward it).
+  On a node another server owns, your Priority counts only where its owner
+  allows it (else it runs as Normal: priority_downgraded), and your CI only
+  where your share has gate. A pre-0.46.5 node ignores Priority
+  (node_too_old_for_tiers); CI still runs first there.
+  --supersede KEY  cancels your workspace's older QUEUED jobs with the same
+                   KEY (reason replaced); a job that started keeps running.
+                   CI: --supersede ci/<branch>/<part>.
+  --submitter NAME names you in the critical-path note and the views
+                   (default: workspace/session/worktree). Display only.
+  k2 compute jobs shows a TIER column (CI, P); --tier T filters.
+
 SECRETS (vault values as env, 0.46.4, Linux nodes)
   k2 compute run <node> --secret GMAIL_CLIENT_SECRET -- make release
   k2 compute run <node> --secret STRIPE_KEY=STRIPE_TEST_KEY -- cargo test
@@ -273,7 +306,7 @@ operate compute nodes", which your owner turns on — separate from
             k2-node restarts to use it once its running jobs end, and never
             kills a job: after 30 min it gives up). A node whose owner said
             --no-job-wall holds it for the owner.
-            Nodes on <K2_CLI_VERSION> or older need one manual install of 0.46.4 at
+            Nodes on 0.46.3 or older need one manual install of 0.46.4 at
             the machine before an update works (sudo k2-node setup).
   Privileged (held for the owner EVERY time): raising limits, restarting
             k2-node as root (and, when nodes learn them: power settings,
@@ -339,6 +372,14 @@ COMMON ERRORS
   secret_unavailable     the node got no answer for its secret in 60 s (link dropped);
                          infrastructure, retried
   secret_isolation_wait  another workspace's job runs as the same user; it waits
+  ci_not_allowed         --tier ci (or --gate, or priority with --exclusive) without
+                         a grant with --ci: the owner or an Admin runs k2 compute
+                         grant <node> --workspace <ws> --ci; exit 3
+  tier_hold              a CI or Priority job ahead takes the next free slot
+  replaced               cancelled: a newer job with the same --supersede key
+  critical_path_taken    note only: another submitter already has Priority work
+  priority_downgraded    note only: your Priority runs as Normal on that node
+  node_too_old_for_tiers note only: that node predates tiers; Priority has no effect
   tool_install_failed    a --needs tool didn't install, or installed without its
                          command (version wrong, no network); the job never started
   tool_unsupported       k2-node doesn't install that tool (exit 2, nothing runs):

@@ -19670,9 +19670,16 @@ Agents:
                  [--artifact GLOB]... [--json]
                  [--queue-timeout 30m|off] [--retries N] [--stall-timeout 30m|off]
                  [--shards N]   (with --any: N jobs, {shard}/{shards} in the command)
-                 [--gate]       a release gate on a shared node: runs first, one at
-                                a time (only where your share allows it)
-                 [--plan]       dry run: the node it would pick, queue, warm slot,
+                 [--tier ci|priority|normal]   queue order on the node (never stops a running job)
+                      ci        highest; next free slot (needs a grant with --ci; release and CI runs)
+                      priority  the critical path: next free slot after CI. One submitter per server at
+                                a time (a courtesy: K2 doesn't stop you, it prints a note). Optional:
+                                use it only when one result blocks others; independent work stays Normal.
+                      normal    default; first come, first served in a workspace; workspaces take turns
+                 [--gate]       = --tier ci (kept for scripts)   [--critical] = --tier priority
+                 [--supersede KEY]   cancel your older QUEUED jobs with the same KEY (never a running one)
+                 [--submitter NAME]  name this submitter (display and the Priority note; not security)
+                 [--plan]     dry run: the node it would pick, queue, warm slot,
                                 estimate from earlier runs, grant left (JSON)
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
@@ -19683,7 +19690,7 @@ Agents:
                  a cargo-nextest suite split across nodes (nextest --partition),
                  JUnit kept and parsed, one combined result; --profile P to use
                  the repo's own nextest profile, --runner to replace cargo nextest run
-  k2 compute jobs [--node N] [--mine] [--state S] [--limit N] [--workspace WS] [--json]
+  k2 compute jobs [--node N] [--mine] [--state S] [--tier T] [--limit N] [--workspace WS] [--json]
                  From a git worktree inside the workspace (.claude/worktrees/x) the
                  workspace is found for you, and run takes HEAD and --dirty from
                  that worktree; from anywhere else pass --workspace <handle>.
@@ -19709,7 +19716,7 @@ Agents:
                  only if it hasn't started: it ends cancelled, or job_started
   k2 compute queue <node> [--json]
                  the node's whole queue: on a shared node, other servers' jobs
-                 show only as "another server" with class, size and ETA
+                 show only as "another server" with tier, class, size and ETA
   k2 compute retry <job>
   k2 compute receipt <job>
 Owner / admin (refused for agents and inside K2 terminals, except where
@@ -19739,8 +19746,10 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    narrowing at once, widening (a higher weight too) waits
                    for approval (max_running, max_queued, cpu_hours_day,
                    max_job_secs, max_cpus, max_mem_gb, disk_gb, weight,
-                   network, top_class, gate, exclusive; for=7d|none). Every
-                   server starts at weight 1, the owner too; <server> may be
+                   network, top_class, gate, exclusive; for=7d|none;
+                   priority=true|false: its --tier priority counts here, a
+                   0.46.5 node only; true is a widening). Every server
+                   starts at weight 1, the owner too; <server> may be
                    slot:0 (this server) for its weight
   k2 compute node servers <node> pause|resume <server>
   k2 compute node servers <node> revoke <server> [--now] [--wipe]   (owner)
@@ -19766,7 +19775,9 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    it; you type the node's name, then Touch ID / vault
                    password. An offer alone never makes a node this server's.
   k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G]
-                   [--max-parallel 1] [--max-queued 10]
+                   [--max-parallel 1] [--max-queued 10] [--ci|--no-ci]
+                   --ci: this workspace may send --tier ci (it jumps every queue;
+                   owner or an Admin login only; absent keeps what it was)
   k2 compute revoke <node> --workspace WS
   k2 compute grants [--node N] [--workspace WS]
   k2 compute access on|off --workspace WS
@@ -20043,8 +20054,16 @@ def node_line(n):
     par = o.get("parallelMax")
     run = "run %d/%s" % (n.get("running", 0), par if par is not None else "?")
     g = n.get("grant")
-    grant = ("  grant %s/job %s parallel %s queued" % (dur(g.get("maxJobSecs")), g.get("maxParallel"), g.get("maxQueued"))) if isinstance(g, dict) else ""
-    return "%-14s %-16s %-24s %-52s %s  queue %d%s  seen %s" % (n["name"], os_arch, status[:24], res, run, n.get("queued", 0), grant, ago(n.get("lastSeen")))
+    grant = ("  grant %s/job %s parallel %s queued%s" % (dur(g.get("maxJobSecs")), g.get("maxParallel"), g.get("maxQueued"), " ci" if g.get("allowCi") else "")) if isinstance(g, dict) else ""
+    return "%-14s %-16s %-24s %-52s %s  queue %d%s%s  seen %s" % (n["name"], os_arch, status[:24], res, run, n.get("queued", 0), tier_counts(n.get("queueTiers")), grant, ago(n.get("lastSeen")))
+def tier_counts(t, bare=False):
+    # Tiers (0.46.5): `CI 1 · P 0 · N 3`; nothing when none are queued.
+    if not isinstance(t, dict) or not any(t.get(k) for k in ("ci", "priority", "normal")):
+        return ""
+    line = "CI %d · P %d · N %d" % (t.get("ci") or 0, t.get("priority") or 0, t.get("normal") or 0)
+    return line if bare else " (%s)" % line
+def tier_tag(t):
+    return {"ci": "CI", "priority": "P"}.get(t or "", "")
 def dur(s):
     s = int(s or 0)
     if s >= 3600 and s % 3600 == 0: return "%dh" % (s // 3600)
@@ -20069,9 +20088,15 @@ def share_lines(n):
     out = ["%-14s %s" % ("", head)]
     if s.get("line"):
         out.append("%-14s your share: %s" % ("", s["line"]))
+    if s.get("priority") is False:
+        out.append("%-14s your --tier priority runs as Normal here (its owner has not set priority=true for this server)" % "")
     return out
 if verb == "nodes":
     rows = v.get("nodes", [])
+    # Tiers (0.46.5): who is on the critical path on this server, so a
+    # coordinator sees it before choosing (a courtesy, never enforced).
+    for c in v.get("criticalPath") or []:
+        print("critical path (Priority): %s (%s jobs)%s" % (c.get("submitter") or "?", c.get("jobs"), (" in %s" % c["workspace"]) if c.get("workspace") else ""))
     if not rows:
         print("(no compute nodes%s)" % ("" if v.get("waitingCodes") is None else "; add one with: k2 compute node add <name>"))
     for n in rows:
@@ -20090,7 +20115,7 @@ elif verb == "info":
     if v.get("routes"):
         print("routes: " + " ".join(v["routes"]))
     for g in v.get("grants") or []:
-        print("grant: %s  %s/job  %s parallel  %s queued  %s GB disk" % (g.get("workspace"), dur(g["maxJobSecs"]), g["maxParallel"], g["maxQueued"], g["maxDiskGb"]))
+        print("grant: %s  %s/job  %s parallel  %s queued  %s GB disk%s" % (g.get("workspace"), dur(g["maxJobSecs"]), g["maxParallel"], g["maxQueued"], g["maxDiskGb"], "  CI allowed" if g.get("allowCi") else ""))
     for j in v.get("recentJobs") or []:
         print("job %s  %-9s exit %-4s %s" % (j["short"], j["state"], "-" if j.get("exitCode") is None else j["exitCode"], " ".join(j.get("argv") or [])[:60]))
 elif verb == "jobs":
@@ -20099,11 +20124,21 @@ elif verb == "jobs":
         print("(no jobs)")
     for j in rows:
         # 0.46.1: the full reason (it was cut to 10 characters).
-        print("%s  %-12s %-11s exit %-4s %-22s %s" % (j["short"], (j.get("node") or "?")[:12], j["state"], "-" if j.get("exitCode") is None else j["exitCode"], j.get("reason") or "", " ".join(j.get("argv") or [])[:60]))
+        # Tiers (0.46.5): the TIER column (CI, P, blank for Normal).
+        print("%s  %-2s %-12s %-11s exit %-4s %-22s %s" % (j["short"], tier_tag(j.get("tier")), (j.get("node") or "?")[:12], j["state"], "-" if j.get("exitCode") is None else j["exitCode"], j.get("reason") or "", " ".join(j.get("argv") or [])[:60]))
 elif verb == "get":
     j = v
     print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
     print("  argv: %s" % " ".join(j.get("argv") or []))
+    # Tiers (0.46.5): shown when not Normal, or when the server lowered it.
+    if j.get("tierAsked") and j.get("tierAsked") != j.get("tier"):
+        print("  tier %s (asked %s: downgraded)" % (j.get("tier") or "normal", j["tierAsked"]))
+    elif j.get("tier") and j["tier"] != "normal":
+        print("  tier %s" % j["tier"])
+    if j.get("submitter"):
+        print("  submitter: %s" % j["submitter"])
+    if j.get("supersedeKey"):
+        print("  supersede key: %s" % j["supersedeKey"])
     if j.get("secrets"):
         # Secret-env: the env names it gets from the vault, never values.
         print("  secrets (env names): %s" % ", ".join(j["secrets"]))
@@ -20117,7 +20152,9 @@ elif verb == "get":
             print("  waiting for the node to answer: %s" % q["reason"])
     elif j.get("queue"):
         q = j["queue"]
-        print("  queued: position %s%s — %s (%s)" % (q["position"], (" of %s" % q["of"]) if q.get("of") else "", q["reason"], q["message"]))
+        at = q.get("aheadTiers") or {}
+        behind = ", ".join(x for x in [("%d CI" % at["ci"]) if at.get("ci") else "", ("%d Priority" % at["priority"]) if at.get("priority") else ""] if x)
+        print("  queued: position %s%s%s — %s (%s)" % (q["position"], (" of %s" % q["of"]) if q.get("of") else "", (", behind " + behind) if behind else "", q["reason"], q["message"]))
         if q.get("parallel"):
             print("  the node runs %s job(s) from this workspace at a time" % q["parallel"])
         for a in q.get("ahead") or []:
@@ -20152,7 +20189,7 @@ elif verb == "grants":
     if not rows:
         print("(no grants)")
     for g in rows:
-        print("%-14s %-20s max %ss/job  %s parallel  %s queued  %s GB disk  by %s" % (g.get("node"), g.get("workspace"), g["maxJobSecs"], g["maxParallel"], g["maxQueued"], g["maxDiskGb"], g["grantedBy"]))
+        print("%-14s %-20s max %ss/job  %s parallel  %s queued  %s GB disk%s  by %s" % (g.get("node"), g.get("workspace"), g["maxJobSecs"], g["maxParallel"], g["maxQueued"], g["maxDiskGb"], "  ci" if g.get("allowCi") else "", g["grantedBy"]))
 elif verb == "usage":
     rows = v.get("usage", [])
     if not rows:
@@ -20169,7 +20206,7 @@ elif verb == "queue":
     if not rows:
         print("(nothing running or queued)")
     else:
-        print("%-3s %-34s %-12s %-8s %-5s %s" % ("#", "who", "class", "state", "cpus", "eta"))
+        print("%-3s %-34s %-4s %-12s %-8s %-5s %s" % ("#", "who", "tier", "class", "state", "cpus", "eta"))
     for e in rows:
         if e.get("mine") and e.get("short"):
             who = "you: %s %s" % (e["short"], e.get("argv") or "")
@@ -20189,7 +20226,9 @@ elif verb == "queue":
         if e.get("blockedBy"):
             etas += " (%s)" % e["blockedBy"]
         cpus = ("%g" % (e["cpuMillis"] / 1000)) if e.get("cpuMillis") else "-"
-        print("%-3s %-34s %-12s %-8s %-5s %s" % (e.get("pos"), who[:34], e.get("class") or "-", e.get("state"), cpus, etas))
+        print("%-3s %-34s %-4s %-12s %-8s %-5s %s" % (e.get("pos"), who[:34], tier_tag(e.get("tier")) or "-", e.get("class") or "-", e.get("state"), cpus, etas))
+    if tier_counts(v.get("tiers")):
+        print("queued: " + tier_counts(v.get("tiers"), bare=True))
     for t in v.get("totals") or []:
         print("server %-20s running %s  queued %s  today %.1f CPU-h" % (t["label"], t["running"], t["queued"], (t.get("cpuSecsToday") or 0) / 3600))
 elif verb == "servers":
@@ -20220,6 +20259,11 @@ elif verb == "servers":
                 extra.append("today %.1f CPU-h" % (u["cpu_secs_today"] / 3600))
             if s.get("expiresAt"):
                 extra.append("until " + time.strftime("%b %d %H:%M", time.localtime(s["expiresAt"])))
+            # Tiers (0.46.5): does its --tier priority count here?
+            if s.get("priority") is True:
+                extra.append("Priority counts")
+            elif s.get("priority") is False and s.get("slot") != 0:
+                extra.append("Priority runs as Normal")
             if extra:
                 print("%-4s %s" % ("", " · ".join(extra)))
         for r in v.get("requests") or []:
@@ -20370,12 +20414,34 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
 cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
-    local gate=""
+    local gate="" tier="" supersede="" submitter=""
     local -a labels=() envs=() needs=() artifacts=() secrets=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
-            --gate) gate=1; shift ;;
+            # --gate = --tier ci (0.46.5; an older daemon only knows gate,
+            # so both go in the body).
+            --gate) gate=1; tier="ci"; shift ;;
+            --critical) tier="priority"; shift ;;
+            --tier) tier="${2:-}"; shift 2
+                case "$tier" in
+                    ci|priority|normal) ;;
+                    batch) echo "usage: --tier batch comes in 0.46.6 (nights and idle time); use normal for now" >&2; exit 2 ;;
+                    *) echo "usage: --tier ci|priority|normal (k2 study compute: TIERS)" >&2; exit 2 ;;
+                esac
+                [ "$tier" = "ci" ] && gate=1 ;;
+            --supersede) supersede="${2:-}"; shift 2
+                if ! printf '%s' "$supersede" | python3 -c '
+import sys
+k = sys.stdin.read()
+ok = 1 <= len(k) <= 120 and k == k.strip() and not any(ord(c) < 32 or ord(c) == 127 for c in k)
+sys.exit(0 if ok else 1)'; then
+                    echo "usage: --supersede KEY (1–120 characters, no control characters, no leading/trailing space)" >&2; exit 2
+                fi ;;
+            --submitter) submitter="${2:-}"; shift 2
+                if ! [[ "$submitter" =~ ^[a-z0-9._-]{1,40}$ ]]; then
+                    echo "usage: --submitter NAME (1–40 of a-z 0-9 . _ -)" >&2; exit 2
+                fi ;;
             --secret) secrets+=("${2:-}"); shift 2 ;;
             --wait) wait=1; shift ;;
             --failures) wait_failures=1; shift ;;
@@ -20510,7 +20576,8 @@ print(json.dumps(out))' "${secrets[@]}")" || exit 2
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
-        K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate")"
+        K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate" \
+        K2_CJ_tier="$tier" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -20557,6 +20624,16 @@ else:
     if q: line += " (position %s: %s)" % (q.get("position"), q.get("reason"))
 for w in v.get("warnings") or []:
     sys.stderr.write("[k2 compute] note: %s\n" % w)
+# Tiers (0.46.5): courtesy notes (the job is submitted) and --supersede.
+for n in v.get("notices") or []:
+    sys.stderr.write("note: %s\n" % (n.get("message") or n.get("code")))
+rep = v.get("replaced") or []
+if rep:
+    sys.stderr.write("[k2 compute] replaced %d queued job(s) with the same --supersede key: %s\n" % (len(rep), ", ".join(str(r)[:8] for r in rep)))
+if j.get("tier") and j.get("tier") != "normal":
+    line += " · tier " + j["tier"]
+if j.get("tierAsked") and j.get("tierAsked") != j.get("tier"):
+    line += " (asked %s)" % j["tierAsked"]
 src = v.get("source")
 if isinstance(src, dict):
     where = src.get("checkout") or "workspace"
@@ -20691,9 +20768,9 @@ cmd_compute_test() {
             --needs|--need)
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout)
+            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--supersede|--submitter)
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --detach|-d|--dirty|--exclusive|--raw|--json|--no-retry|--retry-interrupted|--no-source) pass+=("$1"); shift ;;
+            --detach|-d|--dirty|--exclusive|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical) pass+=("$1"); shift ;;
             -*) echo "usage: unknown flag '$1' (k2 compute test --help)" >&2; exit 2 ;;
             *) if [ -z "$node" ]; then node="$1"; shift; else echo "usage: put nextest's own arguments after --" >&2; exit 2; fi ;;
         esac
@@ -21398,12 +21475,18 @@ if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
         approve) [ -n "${1:-}" ] || { echo "usage: k2 compute node servers <node> approve <request>" >&2; exit 2; }; _compute_admin_approve "$1" ;;
         deny) cmd_compute_node_admin deny "$@" ;;
         limits)
-            local server="${1:-}" reason="" forv="" pairs=()
+            local server="${1:-}" reason="" forv="" prio="" pairs=()
             [ -n "$server" ] && [ "${server#-}" = "$server" ] || { echo "usage: k2 compute node servers <node> limits <server> [--weight N] key=value…" >&2; exit 2; }
             shift
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --reason) reason="${2:-}"; shift 2 ;;
+                    # Tiers (0.46.5): does this server's --tier priority count
+                    # on the node? Its own body key (kept in the node's
+                    # queue.toml, never in the share); a 0.46.5 node only.
+                    priority=true|priority=yes|priority=1) prio=1; shift ;;
+                    priority=false|priority=no|priority=0) prio=0; shift ;;
+                    priority=*) echo "usage: priority=true|false" >&2; exit 2 ;;
                     --weight) pairs+=("weight=${2:-}"); shift 2 ;;
                     for=*) forv="${1#for=}"; shift ;;
                     --for) forv="${2:-}"; shift 2 ;;
@@ -21421,10 +21504,10 @@ if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
                 *d) for_n=$(( ${forv%d} * 86400 )) ;;
                 *) for_n="$(_compute_secs "$forv")" ;;
             esac
-            [ ${#pairs[@]} -gt 0 ] || [ -n "$for_n" ] || { echo "usage: k2 compute node servers <node> limits <server> key=value… (at least one)" >&2; exit 2; }
+            [ ${#pairs[@]} -gt 0 ] || [ -n "$for_n" ] || [ -n "$prio" ] || { echo "usage: k2 compute node servers <node> limits <server> key=value… (at least one)" >&2; exit 2; }
             local set_json
             set_json="$(_compute_kv_json ${pairs[@]+"${pairs[@]}"})" || exit 2
-            _compute_call POST /cli/compute/nodes/servers/limits "$(_compute_json K2_CJ_node="$node" K2_CJ_server="$server" K2_CJ_set_j="$set_json" K2_CJ_forSecs_n="$for_n" K2_CJ_reason="$reason")" tcp
+            _compute_call POST /cli/compute/nodes/servers/limits "$(_compute_json K2_CJ_node="$node" K2_CJ_server="$server" K2_CJ_set_j="$set_json" K2_CJ_forSecs_n="$for_n" K2_CJ_reason="$reason" K2_CJ_priority_b="$prio")" tcp
             if printf '%s' "$_CP_BODY" | grep -q '"held": *true'; then
                 _compute_admin_held_or_approve
             fi
@@ -21708,10 +21791,14 @@ for r in rows:
 }
 
 cmd_compute_grant() {
-    local node="" workspace="" maxt="" maxd="" maxp="" maxq=""
+    local node="" workspace="" maxt="" maxd="" maxp="" maxq="" allow_ci=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --workspace) workspace="${2:-}"; shift 2 ;;
+            # CI permission (0.46.5): owner or an Admin login only; absent
+            # keeps what the grant had.
+            --ci) allow_ci=1; shift ;;
+            --no-ci) allow_ci=0; shift ;;
             --max-time) maxt="$(_compute_secs "${2:-}")"; shift 2 ;;
             --max-disk) maxd="${2:-}"; maxd="${maxd%[Gg]}"; shift 2 ;;
             --max-parallel) maxp="${2:-}"; shift 2 ;;
@@ -21720,12 +21807,15 @@ cmd_compute_grant() {
             *) node="$1"; shift ;;
         esac
     done
-    [ -n "$node" ] && [ -n "$workspace" ] || { echo "usage: k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10]" >&2; exit 2; }
+    [ -n "$node" ] && [ -n "$workspace" ] || { echo "usage: k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--ci|--no-ci]" >&2; exit 2; }
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_workspace="$workspace" K2_CJ_maxJobSecs_n="$maxt" \
         K2_CJ_maxDiskGb_n="$maxd" K2_CJ_maxParallel_n="$maxp" K2_CJ_maxQueued_n="$maxq")"
+    if [ -n "$allow_ci" ]; then
+        body="$(printf '%s' "$body" | K2_CG_CI="$allow_ci" python3 -c 'import json,os,sys; v=json.load(sys.stdin); v["allowCi"] = os.environ["K2_CG_CI"] == "1"; print(json.dumps(v))')"
+    fi
     _compute_call POST /cli/compute/grants/set "$body" tcp
-    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); g=v["grant"]; print("granted %s to %s (max %ss/job, %s parallel, %s queued, %s GB disk). %s" % (v["node"], v["workspace"], g["maxJobSecs"], g["maxParallel"], g["maxQueued"], g["maxDiskGb"], v["note"]))'
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); g=v["grant"]; print("granted %s to %s (max %ss/job, %s parallel, %s queued, %s GB disk%s). %s" % (v["node"], v["workspace"], g["maxJobSecs"], g["maxParallel"], g["maxQueued"], g["maxDiskGb"], ", CI allowed" if g.get("allowCi") else "", v["note"]))'
 }
 
 cmd_compute_local() {
@@ -21918,8 +22008,14 @@ cmd_compute() {
                     --limit) q="$q&limit=$(urlencode "${2:-}")"; shift 2 ;;
                     --workspace) q="$q&workspace=$(urlencode "${2:-}")"; shift 2 ;;
                     --mine) q="$q&mine=1"; shift ;;
+                    --tier)
+                        case "${2:-}" in
+                            ci|priority|normal) q="$q&tier=$(urlencode "${2:-}")" ;;
+                            *) echo "usage: --tier ci|priority|normal" >&2; exit 2 ;;
+                        esac
+                        shift 2 ;;
                     --json) shift ;;
-                    *) echo "usage: k2 compute jobs [--node N] [--mine] [--state S] [--limit N]" >&2; exit 2 ;;
+                    *) echo "usage: k2 compute jobs [--node N] [--mine] [--state S] [--tier T] [--limit N]" >&2; exit 2 ;;
                 esac
             done
             n="${q#&}"
@@ -41586,6 +41682,39 @@ RUN
   --env values are stored (the plan, the job row, the node's ledger):
   never put a key in --env. Use --secret (SECRETS below).
 
+TIERS (queue order, 0.46.5)
+  --tier ci        highest: the next free slot, ahead of everything queued.
+                   Needs a grant with --ci, which only the owner or an Admin
+                   sets (k2 compute grant <node> --workspace <ws> --ci).
+                   Agents ask: k2 permission request compute.ci --why "…"
+                   (refused: ci_not_allowed, exit 3). --gate = --tier ci.
+  --tier priority  the critical path: the next free slot, never before CI.
+                   (--critical is the same.) With --exclusive it needs --ci.
+  (no flag)        Normal: first come, first served in your workspace;
+                   workspaces take turns. A Normal job waiting an hour ranks
+                   above fresh Normal work, still below Priority and CI.
+  Priority = the critical path. Use --tier priority only when one result is
+  blocking others (the next builder, an integration pass, a release). One
+  submitter on this server at a time: if `k2 compute nodes` shows someone
+  else on the critical path, use Normal unless the coordinator named you.
+  Priority is optional: if work is independent, leave everything Normal. It
+  all still runs, in parallel, just more slowly.
+  K2 doesn't enforce that: a second submitter's Priority still submits,
+  with one note (critical_path_taken) on stderr.
+  Tiers never stop a running job. They only order the queue: nothing is
+  reserved, nothing is killed or paused. While a CI or Priority job waits
+  for room, smaller jobs behind it don't start (the node drains toward it).
+  On a node another server owns, your Priority counts only where its owner
+  allows it (else it runs as Normal: priority_downgraded), and your CI only
+  where your share has gate. A pre-0.46.5 node ignores Priority
+  (node_too_old_for_tiers); CI still runs first there.
+  --supersede KEY  cancels your workspace's older QUEUED jobs with the same
+                   KEY (reason replaced); a job that started keeps running.
+                   CI: --supersede ci/<branch>/<part>.
+  --submitter NAME names you in the critical-path note and the views
+                   (default: workspace/session/worktree). Display only.
+  k2 compute jobs shows a TIER column (CI, P); --tier T filters.
+
 SECRETS (vault values as env, 0.46.4, Linux nodes)
   k2 compute run <node> --secret GMAIL_CLIENT_SECRET -- make release
   k2 compute run <node> --secret STRIPE_KEY=STRIPE_TEST_KEY -- cargo test
@@ -41886,6 +42015,14 @@ COMMON ERRORS
   secret_unavailable     the node got no answer for its secret in 60 s (link dropped);
                          infrastructure, retried
   secret_isolation_wait  another workspace's job runs as the same user; it waits
+  ci_not_allowed         --tier ci (or --gate, or priority with --exclusive) without
+                         a grant with --ci: the owner or an Admin runs k2 compute
+                         grant <node> --workspace <ws> --ci; exit 3
+  tier_hold              a CI or Priority job ahead takes the next free slot
+  replaced               cancelled: a newer job with the same --supersede key
+  critical_path_taken    note only: another submitter already has Priority work
+  priority_downgraded    note only: your Priority runs as Normal on that node
+  node_too_old_for_tiers note only: that node predates tiers; Priority has no effect
   tool_install_failed    a --needs tool didn't install, or installed without its
                          command (version wrong, no network); the job never started
   tool_unsupported       k2-node doesn't install that tool (exit 2, nothing runs):
@@ -41927,23 +42064,27 @@ WHAT YOU SEE
   k2 compute nodes    "shared by rosson.k2.dev (3 servers) until Oct 27"
                       and your share: running 1/1 · queued 2/10 · …
   k2 compute queue <node>   the whole node queue. Other servers' jobs show
-                      as "another server", class, size and ETA only. No
+                      as "another server", tier, class, size and ETA only. No
                       command, workspace, session, job id or logs. Ever.
   k2 compute get <job>      "queued on k2n2-m1, position 2, ETA ~6m (fair
                       share: another server's jobs run first)"
   ETAs are durations, never clock times, and rounded for other servers.
 
 THE QUEUE (the node decides, one queue for every server)
-  1 gate first (only where the share allows it; one at a time; never kills)
-    A node's owner may keep slots for gate jobs (policy gate_reserved_slots=1):
-    normal work never fills them, so a release gate starts at once.
-  2 servers within today's CPU-hours before servers over them
-  3 interactive before batch (you get interactive for an attached run or
-    --wait; --detach, more than 4 shards and soaks are batch). A batch job
-    waiting over 60 min counts as interactive.
-  4 fair share by recent use and weight (every server starts at 1, the
+  1 the tier first (0.46.5; k2 study compute, TIERS): CI (only where the
+    share has gate), then Priority (only where the node's owner lets this
+    server's Priority count), then Normal waiting over an hour, then Normal.
+    A guest server's Priority counts only where the node's owner allows it
+    (priority=true); its CI only where its share has gate. No slot is
+    reserved and no tier ever stops a running job: while a CI or Priority
+    job waits for room, nothing behind it starts.
+  2 servers within today's CPU-hours before servers over them (inside a
+    tier: an over-quota server's CI still goes before anyone's Normal)
+  3 fair share by recent use and weight (every server starts at 1, the
     owner too; the node's owner raises a weight with servers limits)
-  Inside one server: workspaces take turns, then sessions, then first come.
+  Inside one server: CI, Priority and hour-old Normal go first come; other
+  Normal work: workspaces take turns, then sessions, then first come.
+  --detach and shard counts don't change the order.
   Over your limits you WAIT, never fail. A job bigger than your share's
   per-job limits is refused at submit (exit 3).
 
@@ -41959,7 +42100,13 @@ YOUR JOBS
 
 CODES (exit 3 with a JSON code)
   exceeds_share_caps     over your share's time/CPUs/memory per job
-  gate_not_allowed       --gate, but your share doesn't allow it
+  gate_not_allowed       --gate / --tier ci, but your share doesn't allow it
+  ci_not_allowed         --tier ci without a grant with --ci on your server
+  tier_hold              a CI or Priority job ahead takes the next free slot
+  replaced               cancelled: a newer job with the same --supersede key
+  critical_path_taken    (note) another submitter already holds Priority
+  priority_downgraded    (note) your Priority runs as Normal on this node
+  node_too_old_for_tiers (note) a pre-0.46.5 node: Priority has no effect
   exclusive_not_allowed  --exclusive, but your share doesn't allow it
   tenant_queue_full      your queue on the node is full: it waits here
   share_paused           the node's owner paused your server's share
@@ -41986,6 +42133,10 @@ FOR THE NODE'S OWNER
   k2 compute node servers <node>                 list (slot, state, share)
   k2 compute node servers <node> add --url … --code CODE.FP [--trust team]
   k2 compute node servers <node> limits|pause|resume|revoke <server> …
+  k2 compute node servers <node> limits <server> priority=true|false
+                                 its --tier priority counts here (default:
+                                 your own server yes, others no; a 0.46.5
+                                 node keeps it in queue.toml; true widens)
   Adds and widenings wait for your approval; narrowing, pause and revoke
   apply at once. Updates on a shared node wait for running jobs (≤ 30 min).
   An add from K2 needs the node's remote-admin level `full`; on a node set

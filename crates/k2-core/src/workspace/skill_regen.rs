@@ -655,6 +655,19 @@ New `schedule add` lands in the **pinned** chat. For a trained flow, prefer
 a sidecar: `k2 heartbeat session <name> --set sales/reviewer`.
 Run `k2 heartbeat --help` for the full surface.
 
+## Compute nodes
+Builds and tests on your owner's other machines. Read `k2 study compute` first.
+```
+k2 compute nodes                                       # what you may use, and who is on the critical path
+k2 compute run <node> --sha $(git rev-parse HEAD) -- cargo nextest run -p <crate>
+k2 compute run --any --detach -- <command>             # any granted node; prints a job id
+k2 compute run <node> --tier priority -- <command>     # only when you are the critical path
+k2 compute wait <job> | logs <job> --failures | get <job>
+```
+**Priority = the critical path.** Use `--tier priority` only when one result is blocking others (the next builder, an integration pass, a release). One submitter on this server at a time: if `k2 compute nodes` shows someone else on the critical path, use Normal unless the coordinator named you. Priority is optional: if work is independent, leave everything Normal. It all still runs, in parallel, just more slowly.
+
+Tiers never stop a running job. `--tier ci` needs a grant with `--ci` from your owner (ask: `k2 permission request compute.ci --why "…"`).
+
 ## Agent presets (which agent program a workspace launches)
 ```
 k2 preset list                   # the server's launchable agent roster
@@ -2113,6 +2126,22 @@ mod tests {
             body.contains("K2_HOOK_TOKEN"),
             "k2-cli skill must name K2_HOOK_TOKEN as the API-session marker",
         );
+        // Compute job tiers (0.46.5, prd-compute-job-tiers-v1 §4.5): the
+        // Priority courtesy rule word for word, including "optional"
+        // (SKILL_VERSION_WORKSPACE bumped 34→35 for this section).
+        assert!(body.contains("## Compute nodes"), "k2-cli skill must carry the Compute nodes block");
+        assert!(
+            body.contains(
+                "**Priority = the critical path.** Use `--tier priority` only when one result is blocking others \
+                 (the next builder, an integration pass, a release). One submitter on this server at a time: if \
+                 `k2 compute nodes` shows someone else on the critical path, use Normal unless the coordinator \
+                 named you. Priority is optional: if work is independent, leave everything Normal. It all still \
+                 runs, in parallel, just more slowly."
+            ),
+            "k2-cli skill must carry the Priority courtesy text verbatim",
+        );
+        assert!(body.contains("Priority is optional"), "k2-cli skill must say Priority is optional");
+        assert!(body.contains("k2 study compute"), "k2-cli skill must point at k2 study compute");
         // W6 (0.40.30): the agent-preset surface + custom-agent contract
         // pointer (SKILL_VERSION_WORKSPACE bumped 7→8 for this section).
         assert!(

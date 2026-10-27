@@ -24,7 +24,7 @@ pub struct FileSecretStore {
 
 /// The old file location (adoption reads it once).
 pub fn legacy_path() -> PathBuf {
-    dirs::home_dir()
+    k2_core::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
         .join("db-secrets.json")

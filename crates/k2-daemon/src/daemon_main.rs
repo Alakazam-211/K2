@@ -343,7 +343,7 @@ async fn async_main() {
     // workspace files the daemon writes. Unix only; no-op on Windows.
     {
         let report = k2_core::private_home::tighten_home();
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = k2_core::paths::home_dir() {
             if let Some(line) = report.log_line(&home.join(".k2")) {
                 k2_core::log_debug!("{line}");
             }
@@ -479,7 +479,7 @@ async fn async_main() {
 
     log_debug!("[daemon] {}", BANNER);
 
-    let k2so_dir = match dirs::home_dir() {
+    let k2so_dir = match k2_core::paths::home_dir() {
         Some(h) => h.join(".k2"),
         None => {
             log_debug!("[daemon] FATAL: cannot determine home directory");
@@ -2468,7 +2468,7 @@ fn run_migrate_k2so_dot_dirs() {
 }
 
 fn run_migrate_legacy_slug_dirs() {
-    let home = match dirs::home_dir() {
+    let home = match k2_core::paths::home_dir() {
         Some(h) => h,
         None => {
             log_debug!("[daemon/gh25] WARN: no home dir — skipping legacy-slug migration");
@@ -2530,7 +2530,7 @@ fn run_migrate_legacy_slug_dirs() {
 /// cloned on an affected build that lands here later. Non-fatal: a parse/
 /// read error on one file skips it; nothing here can abort boot.
 fn run_repair_cloned_session_paths() {
-    let home = match dirs::home_dir() {
+    let home = match k2_core::paths::home_dir() {
         Some(h) => h,
         None => {
             log_debug!("[daemon/gh23] WARN: no home dir — skipping clone session-path repair");

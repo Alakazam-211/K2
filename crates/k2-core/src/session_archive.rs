@@ -231,7 +231,7 @@ pub fn run_daily_sweep() -> ArchiveStats {
     if min_age_days == 0 {
         return stats;
     }
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = crate::paths::home_dir() else {
         return stats;
     };
     let now = SystemTime::now();

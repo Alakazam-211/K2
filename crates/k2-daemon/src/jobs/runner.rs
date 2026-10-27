@@ -26,7 +26,7 @@ const POLL: Duration = Duration::from_millis(100);
 
 /// `~/.k2/jobs`.
 pub fn jobs_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2").join("jobs")
+    k2_core::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2").join("jobs")
 }
 
 fn private_dir(d: &Path) -> std::io::Result<()> {
@@ -170,7 +170,7 @@ fn job_env(job: &Job, root: &Path, run_id: &str, passport: &str) -> HashMap<Stri
             }
         }
     }
-    let home = dirs::home_dir();
+    let home = k2_core::paths::home_dir();
     env.insert("PATH".into(), job_path(std::env::var("PATH").ok().as_deref(), home.as_deref()));
     let root_s = root.display().to_string();
     for k in ["K2_PROJECT_PATH", "K2SO_PROJECT_PATH"] {

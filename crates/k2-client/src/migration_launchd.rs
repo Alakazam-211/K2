@@ -42,7 +42,7 @@ pub fn migrate_launchd_labels() -> Vec<&'static str> {
     }
     #[cfg(target_os = "macos")]
     {
-        let Some(home) = dirs::home_dir() else {
+        let Some(home) = crate::paths::home_dir() else {
             return Vec::new();
         };
         let agents_dir = home.join("Library").join("LaunchAgents");

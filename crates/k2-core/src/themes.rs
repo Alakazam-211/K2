@@ -14,7 +14,7 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn themes_dir() -> PathBuf {
-    dirs::home_dir()
+    crate::paths::home_dir()
         .unwrap_or_default()
         .join(".k2")
         .join("themes")
@@ -140,7 +140,7 @@ pub(crate) static HOME_LOCK: crate::test_env::SharedEnvLock = crate::test_env::S
 mod tests {
     //! Tests for the Phase 2 Unit 6 themes module.
     //!
-    //! `themes_dir()` hardcodes `dirs::home_dir().join(".k2so/themes")`,
+    //! `themes_dir()` hardcodes `crate::paths::home_dir().join(".k2so/themes")`,
     //! so we install a fresh HOME for each test via a `HomeGuard` over
     //! `test_env::TempHome` (which holds the ONE crate-wide env lock).
     use super::*;

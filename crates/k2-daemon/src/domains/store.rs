@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn certs_root() -> PathBuf {
-    dirs::home_dir()
+    k2_core::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
         .join("certs")

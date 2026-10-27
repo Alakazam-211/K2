@@ -684,7 +684,7 @@ pub fn start_login(
     if mode == LoginMode::OtherDevice {
         env.insert("NO_OPEN_BROWSER".into(), "1".into());
     }
-    let cwd = if method == wallet::LoginMethod::TempHome { slot.clone() } else { dirs::home_dir().unwrap_or_else(|| slot.clone()) };
+    let cwd = if method == wallet::LoginMethod::TempHome { slot.clone() } else { k2_core::paths::home_dir().unwrap_or_else(|| slot.clone()) };
     let cfg = DaemonPtyConfig {
         cols: LOGIN_COLS,
         rows: LOGIN_ROWS,

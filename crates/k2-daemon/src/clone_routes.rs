@@ -356,7 +356,7 @@ pub fn handle_clone_bundle(
         home_override: None,
     };
 
-    let home = match dirs::home_dir() {
+    let home = match k2_core::paths::home_dir() {
         Some(h) => h,
         None => return CliResponse::internal_error("cannot resolve home directory"),
     };
@@ -424,7 +424,7 @@ pub fn handle_clone_unpack(
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
 
-    let home = match dirs::home_dir() {
+    let home = match k2_core::paths::home_dir() {
         Some(h) => h,
         None => return CliResponse::internal_error("cannot resolve home directory"),
     };
@@ -881,7 +881,7 @@ pub fn handle_clone_pack(
         ));
     }
 
-    let home = match dirs::home_dir() {
+    let home = match k2_core::paths::home_dir() {
         Some(h) => h,
         None => return CliResponse::internal_error("cannot resolve home directory"),
     };

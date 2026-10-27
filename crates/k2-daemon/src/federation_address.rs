@@ -394,7 +394,7 @@ mod tests {
         let home_a = k2_core::test_env::TempHome::new();
         let a_key = federation::identity::load_or_create().expect("A identity");
         let a_pem = a_key.public_key_pem();
-        let home_a_path = dirs::home_dir().expect("home a");
+        let home_a_path = k2_core::paths::home_dir().expect("home a");
 
         // Box B: a separate HOME with A pinned as Trusted at "afs".
         let home_b = k2_core::test_env::unique_temp_path("fed-address-b");
@@ -431,7 +431,7 @@ mod tests {
         assert!(matches!(first.issue, Some(notice::IssueOutcome::Baseline(_))), "{first:?}");
         let second = sweep_once_with(&PeerAddress::new("k2n1-m4", ""), deliver).expect("pass").expect("ran");
         assert_eq!(second.sent.len(), 2, "{second:?}");
-        assert_eq!(dirs::home_dir().expect("home"), home_a_path, "HOME is A again");
+        assert_eq!(k2_core::paths::home_dir().expect("home"), home_a_path, "HOME is A again");
 
         let rows = notice::rows().expect("rows");
         assert_eq!(rows[&fb].status, NoticeStatus::Delivered);

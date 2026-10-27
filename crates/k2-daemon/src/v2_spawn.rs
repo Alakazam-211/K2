@@ -216,7 +216,7 @@ pub struct SpawnRequest {
 /// Prefer the real home dir; never fall back to Unix-only `/tmp` on
 /// Windows (that path does not exist and breaks spawn).
 fn default_cwd() -> String {
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = k2_core::paths::home_dir() {
         return home.to_string_lossy().into_owned();
     }
     if let Ok(up) = std::env::var("USERPROFILE") {

@@ -352,7 +352,7 @@ pub fn install_hint(program: &str) -> String {
 /// pi's per-cwd session folder (`~/.pi/agent/sessions/--<cwd>--/`), the
 /// same encoding pi's `getDefaultSessionDir` uses.
 pub fn pi_sessions_dir(project_path: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let trimmed = project_path.trim_start_matches(['/', '\\']);
     let safe: String = trimmed
         .chars()

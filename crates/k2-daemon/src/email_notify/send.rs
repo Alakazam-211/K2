@@ -366,7 +366,7 @@ fn scheduled_dir() -> std::path::PathBuf {
 
 #[cfg(not(test))]
 fn scheduled_dir() -> std::path::PathBuf {
-    dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".k2").join("email-notify").join("scheduled")
+    k2_core::paths::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".k2").join("email-notify").join("scheduled")
 }
 
 /// A server-made log id (`enl_` + lowercase hex): the only names the

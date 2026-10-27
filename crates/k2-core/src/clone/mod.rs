@@ -128,7 +128,7 @@ pub struct CloneOptions {
 
     /// Home directory override for hermetic resolution of the
     /// `~/.claude/projects/<slug>/` memory + session locations. `None`
-    /// uses `dirs::home_dir()`. Tests set this to a temp dir so the
+    /// uses `crate::paths::home_dir()`. Tests set this to a temp dir so the
     /// real home is never touched.
     pub home_override: Option<PathBuf>,
 }

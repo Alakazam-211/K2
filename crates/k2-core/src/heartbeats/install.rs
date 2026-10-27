@@ -780,7 +780,7 @@ pub fn last_transport_repair() -> Option<serde_json::Value> {
 }
 
 fn home_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+    crate::paths::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Test scaffolding: run `f` with `$HOME` pointed at a fresh temp folder,

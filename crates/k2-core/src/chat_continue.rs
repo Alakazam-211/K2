@@ -391,7 +391,7 @@ pub fn locate_continue_transcript(
 /// Newest `{id}.jsonl` under any Claude project dir. Used only when the
 /// caller has a conversation id and no workspace cwd.
 fn find_claude_by_id(session_id: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let projects = home.join(".claude").join("projects");
     let name = format!("{session_id}.jsonl");
     let mut best: Option<(i64, PathBuf)> = None;
@@ -425,7 +425,7 @@ fn find_claude(session_id: &str, project_path: &str) -> Option<PathBuf> {
 }
 
 fn find_gemini(session_id: &str, project_path: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let slugs = gemini_slugs(&home, project_path);
     let mut best: Option<(i64, PathBuf)> = None;
     for slug in slugs {
@@ -478,7 +478,7 @@ fn gemini_slugs(home: &Path, project_path: &str) -> Vec<String> {
 }
 
 fn find_pi(session_id: &str, project_path: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let root = home.join(".pi").join("agent").join("sessions");
     let mut best: Option<(i64, PathBuf)> = None;
     let slugs = fs::read_dir(&root).ok()?;
@@ -520,7 +520,7 @@ fn find_pi(session_id: &str, project_path: &str) -> Option<PathBuf> {
 }
 
 fn find_grok(session_id: &str, project_path: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let root = home.join(".grok").join("sessions");
     let cwd_dirs = fs::read_dir(&root).ok()?;
     for cwd_dir in cwd_dirs.flatten() {
@@ -565,7 +565,7 @@ fn find_grok(session_id: &str, project_path: &str) -> Option<PathBuf> {
 }
 
 fn find_codex_rollout(session_id: &str, project_path: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let root = home.join(".codex").join("sessions");
     let mut best: Option<(i64, PathBuf)> = None;
     let years = fs::read_dir(&root).ok()?;
@@ -661,7 +661,7 @@ pub struct AdoptCandidate {
 /// Claude reads the cwd's own project folder; Gemini its slug's chats.
 /// The cwd match is exact (a worktree tab adopts only its own files).
 pub fn adoptable_transcripts(provider: &str, cwd: &str, since_ms: i64) -> Vec<AdoptCandidate> {
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = crate::paths::home_dir() else {
         return Vec::new();
     };
     let cwd = cwd.trim_end_matches('/');
@@ -1059,7 +1059,7 @@ fn codex_role_text(value: &Value) -> Option<(String, String)> {
 }
 
 fn latest_codex_history_text(session_id: &str) -> Option<String> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let file = File::open(home.join(".codex").join("history.jsonl")).ok()?;
     let mut best: Option<(i64, usize, String)> = None;
     for (idx, line) in BufReader::new(file).lines().flatten().enumerate() {
@@ -1089,7 +1089,7 @@ fn latest_codex_history_text(session_id: &str) -> Option<String> {
 }
 
 fn hermes_rows(session_id: &str, project_path: &str) -> Result<Vec<(String, String)>, String> {
-    let home = dirs::home_dir().ok_or_else(|| "no readable transcript".to_string())?;
+    let home = crate::paths::home_dir().ok_or_else(|| "no readable transcript".to_string())?;
     let db_path = home.join(".hermes").join("state.db");
     let conn = open_hermes_ro(&db_path).ok_or_else(|| "no readable transcript".to_string())?;
     if !project_path.is_empty() {

@@ -128,7 +128,7 @@ pub use k2_client::process::ignore_sigpipe;
 
 /// Expand tilde in a path and ensure the directory exists.
 pub fn resolve_cwd(cwd: &str) -> String {
-    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let home = crate::paths::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
     let resolved = if cwd == "~" {
         home.to_string_lossy().to_string()
     } else if cwd.starts_with("~/") {

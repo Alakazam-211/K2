@@ -250,7 +250,7 @@ pub fn parse_header(value: &str) -> Result<ParsedHeader, AttestError> {
 
 /// `~/.k2/edge-keys.json` — optional operator override / extension.
 pub fn override_path() -> PathBuf {
-    dirs::home_dir()
+    crate::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
         .join("edge-keys.json")

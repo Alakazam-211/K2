@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 /// no prior feature wrote downloads, so the OS convention is it).
 fn downloads_dir() -> Result<PathBuf, String> {
     dirs::download_dir()
-        .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
+        .or_else(|| k2_client::paths::home_dir().map(|h| h.join("Downloads")))
         .ok_or_else(|| "Cannot resolve the Downloads directory".to_string())
 }
 
@@ -32,7 +32,7 @@ fn downloads_dir() -> Result<PathBuf, String> {
 fn dest_dir(dest: Option<&str>) -> Result<PathBuf, String> {
     match dest {
         None | Some("downloads") => downloads_dir(),
-        Some("clone-tmp") => dirs::home_dir()
+        Some("clone-tmp") => k2_client::paths::home_dir()
             .map(|h| h.join(".k2").join("clone-tmp"))
             .ok_or_else(|| "Cannot resolve the home directory".to_string()),
         Some(other) => Err(format!("Unknown download destination mode: {other}")),

@@ -515,7 +515,7 @@ fn verify_hash(password: &str, hash: &str) -> bool {
 // ─────────────────────────────────────────────────────────────────────
 
 fn config_dir() -> PathBuf {
-    dirs::home_dir()
+    crate::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
 }

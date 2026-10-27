@@ -159,7 +159,7 @@ pub(crate) fn is_k2_credential(value: &[u8]) -> bool {
     if s.len() < 8 {
         return false;
     }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = k2_core::paths::home_dir() {
         for f in ["daemon.token", "heartbeat.token"] {
             if let Ok(t) = std::fs::read_to_string(home.join(".k2").join(f)) {
                 if !t.trim().is_empty() && crate::routes::http::ct_eq_token(t.trim(), s) {

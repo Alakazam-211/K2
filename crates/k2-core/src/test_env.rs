@@ -13,7 +13,7 @@
 //!
 //! - Every test that sets or removes an env var takes [`lock`] first, or
 //!   uses a guard here that takes it ([`EnvVar`], [`TempHome`]).
-//! - Every test that READS `$HOME` (directly, or through `dirs::home_dir()`
+//! - Every test that READS `$HOME` (directly, or through `paths::home_dir()`
 //!   / a store under `~/.k2`) and needs it stable holds [`lock`] (a
 //!   [`TempHome`] does) for the whole time it depends on that value.
 //! - Never call `std::env::set_var` / `remove_var` for `HOME`, `PATH` or

@@ -75,7 +75,7 @@ pub fn last_report() -> Option<InstallReport> {
 pub fn run_once(trigger: Trigger, remove: bool) -> LastRun {
     let at_ms = chrono::Utc::now().timestamp_millis();
     let setting = k2_core::app_settings::load().agent_hooks;
-    let run = match dirs::home_dir() {
+    let run = match k2_core::paths::home_dir() {
         None => LastRun {
             at_ms,
             trigger,

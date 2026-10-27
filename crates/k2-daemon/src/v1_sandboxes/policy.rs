@@ -141,7 +141,7 @@ pub(crate) fn resolve_spawn(
     let cwd_str = cwd.to_string_lossy().into_owned();
     // Risk-3 belt: the ephemeral cwd is NEVER the operator's home.
     debug_assert!(
-        Some(cwd.as_path()) != dirs::home_dir().as_deref(),
+        Some(cwd.as_path()) != k2_core::paths::home_dir().as_deref(),
         "ephemeral sandbox cwd must NEVER be $HOME",
     );
 
@@ -235,7 +235,7 @@ fn sanitize_id(s: &str) -> String {
 
 /// The root under which per-session ephemeral workspaces are provisioned.
 fn sandbox_sessions_root() -> PathBuf {
-    dirs::home_dir()
+    k2_core::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
         .join("sandbox-sessions")
@@ -384,7 +384,7 @@ fn continuity_settings_json() -> String {
         "messageIdleNotifThresholdMs", "todoFeatureEnabled", "alwaysThinkingEnabled",
     ];
     let mut out = serde_json::Map::new();
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = k2_core::paths::home_dir() {
         if let Ok(txt) = std::fs::read_to_string(home.join(".claude").join("settings.json")) {
             if let Ok(serde_json::Value::Object(m)) =
                 serde_json::from_str::<serde_json::Value>(&txt)
@@ -411,7 +411,7 @@ fn continuity_settings_json() -> String {
 /// layers live: `~/.k2/sandbox-overlays`. Derived ONLY from the daemon's home
 /// dir (never a caller path), mirroring [`sandbox_sessions_root`].
 fn sandbox_overlays_root() -> PathBuf {
-    dirs::home_dir()
+    k2_core::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
         .join("sandbox-overlays")
@@ -422,7 +422,7 @@ fn sandbox_overlays_root() -> PathBuf {
 /// sandbox session transcripts + memory (mounted at `<home>/.claude` in every
 /// cell for that workspace). Derived ONLY from the daemon's home dir.
 fn sandbox_homes_root() -> PathBuf {
-    dirs::home_dir()
+    k2_core::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
         .join("sandbox-homes")
@@ -433,7 +433,7 @@ fn sandbox_homes_root() -> PathBuf {
 /// the sandbox home mounts at `<home>/.claude`, the canonical memory at
 /// `<home>/.claude/projects/<slug>/memory`.
 fn incell_home() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/k2"))
+    k2_core::paths::home_dir().unwrap_or_else(|| PathBuf::from("/home/k2"))
 }
 
 /// Compute the claude project SLUG for an in-cell cwd: every `/` → `-` (e.g.
@@ -954,7 +954,7 @@ mod tests {
         // cwd is a fresh ephemeral dir, NEVER $HOME.
         assert_ne!(
             Some(PathBuf::from(&spawn.cwd)),
-            dirs::home_dir(),
+            k2_core::paths::home_dir(),
             "ephemeral cwd must never be $HOME",
         );
         assert!(
@@ -1016,7 +1016,7 @@ mod tests {
             env.get("K2_REQUEST_PROMPT").is_none(),
             "empty prompt must not stage K2_REQUEST_PROMPT (behavior unchanged)",
         );
-        assert_ne!(Some(PathBuf::from(&spawn.cwd)), dirs::home_dir());
+        assert_ne!(Some(PathBuf::from(&spawn.cwd)), k2_core::paths::home_dir());
         assert_eq!(spawn.command.as_deref(), Some("claude"));
     }
 
@@ -1275,7 +1275,7 @@ mod tests {
 
         // cwd = the REAL workspace path (mirror), NEVER == $HOME.
         assert_eq!(spawn.cwd, ws_path_str);
-        assert_ne!(Some(PathBuf::from(&spawn.cwd)), dirs::home_dir());
+        assert_ne!(Some(PathBuf::from(&spawn.cwd)), k2_core::paths::home_dir());
         // sandbox forced on; a claude workspace resolves BYTE-IDENTICAL argv
         // to the old hardcode (command + the standard headless flag, no more,
         // no less — the danger flag is KEPT: the jail is the boundary).

@@ -27,7 +27,7 @@ struct File {
 
 /// `~/.k2/tunnel-client-ip.json` (honours `$HOME`, like the other tunnel files).
 pub fn path() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2").join("tunnel-client-ip.json")
+    crate::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2").join("tunnel-client-ip.json")
 }
 
 /// A nested label: lowercase letters, digits and inner `-`, at most 63.

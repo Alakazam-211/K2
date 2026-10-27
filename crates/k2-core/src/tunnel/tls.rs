@@ -32,7 +32,7 @@ use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 /// Directory holding the tunnel TLS material (`~/.k2/`). Honors `$HOME`
 /// so tests can redirect it to a tempdir (matches `config::config_dir`).
 fn k2_dir() -> PathBuf {
-    dirs::home_dir()
+    crate::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
 }

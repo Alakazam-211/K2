@@ -444,7 +444,7 @@ pub fn emit_lifecycle(pane_id: &str, canonical: &str, workspace_path: Option<&st
 /// one event holds a K2 entry; `events` lists which. See
 /// [`install::check_hook_injections`] (DA17, DA18).
 pub fn check_hook_injections() -> serde_json::Value {
-    match dirs::home_dir() {
+    match crate::paths::home_dir() {
         Some(home) => install::check_hook_injections(&home),
         None => serde_json::json!({
             "notify_script": { "path": "", "exists": false, "version": null },

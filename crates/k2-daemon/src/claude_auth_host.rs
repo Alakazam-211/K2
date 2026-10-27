@@ -84,7 +84,7 @@ struct RawCredentials {
 }
 
 fn credentials_file() -> PathBuf {
-    dirs::home_dir()
+    k2_core::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".claude/.credentials.json")
 }
@@ -188,7 +188,7 @@ fn refresh_script_path() -> PathBuf {
 
 #[cfg(target_os = "macos")]
 fn plist_path() -> PathBuf {
-    dirs::home_dir()
+    k2_core::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Library/LaunchAgents/dev.k2.claude-auth.plist")
 }
@@ -198,7 +198,7 @@ fn plist_path() -> PathBuf {
 /// stays as a self-contained shell script rather than dispatching
 /// through the daemon's HTTP surface.
 fn generate_refresh_script() -> String {
-    let home = dirs::home_dir()
+    let home = k2_core::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))
         .to_string_lossy()
         .to_string();
@@ -314,7 +314,7 @@ tail -100 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
 #[cfg(target_os = "macos")]
 fn generate_plist() -> String {
     let script = refresh_script_path();
-    let home = dirs::home_dir()
+    let home = k2_core::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))
         .to_string_lossy()
         .to_string();

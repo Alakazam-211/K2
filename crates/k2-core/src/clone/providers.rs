@@ -498,7 +498,7 @@ fn staging_hermes_path(home: &Path, root: &str) -> PathBuf {
     let hash = md5_hex(root.as_bytes());
     // Heuristic: if `home` is not the real user home, treat it as a test
     // sandbox and write under it; otherwise use OS temp.
-    let use_home = dirs::home_dir().map(|h| h != home).unwrap_or(true);
+    let use_home = crate::paths::home_dir().map(|h| h != home).unwrap_or(true);
     if use_home {
         home.join(".hermes")
             .join(format!(".k2-clone-export-{hash}.json"))

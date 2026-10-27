@@ -537,7 +537,7 @@ pub fn refresh_once(primary: &str, token: &str) -> Result<(usize, bool), String>
 
 /// `~/.k2/tunnel-routes.json`.
 pub fn persisted_path() -> std::path::PathBuf {
-    dirs::home_dir()
+    crate::paths::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".k2")
         .join("tunnel-routes.json")

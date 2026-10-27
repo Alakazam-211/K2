@@ -199,7 +199,7 @@ impl RepairReport {
 }
 
 /// Repair every project in `project_paths`, resolving the slug dir under
-/// `home/.claude/projects/`. `home` is `dirs::home_dir()` in production, a
+/// `home/.claude/projects/`. `home` is `crate::paths::home_dir()` in production, a
 /// temp dir in tests.
 ///
 /// Idempotent + non-fatal — see module docs.

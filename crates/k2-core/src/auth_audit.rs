@@ -82,7 +82,7 @@ pub fn clean_user(raw: &str) -> String {
 }
 
 fn config_dir() -> PathBuf {
-    dirs::home_dir()
+    crate::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
 }

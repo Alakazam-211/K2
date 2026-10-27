@@ -31,7 +31,7 @@ use rcgen::KeyPair;
 
 /// `~/.k2/federation/` (honors `$HOME`, like the rest of `federation`).
 pub fn identity_dir() -> PathBuf {
-    dirs::home_dir()
+    crate::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
         .join("federation")
@@ -312,14 +312,14 @@ mod tests {
     #[test]
     fn concurrent_first_loads_agree_on_one_key() {
         with_temp_home(|| {
-            let home = dirs::home_dir().expect("home");
+            let home = crate::paths::home_dir().expect("home");
             let handles: Vec<_> = (0..8)
                 .map(|_| {
                     let home = home.clone();
                     std::thread::spawn(move || {
                         // The env lock is held by this test; worker threads
                         // read $HOME through the same process env.
-                        assert_eq!(dirs::home_dir().expect("home"), home);
+                        assert_eq!(crate::paths::home_dir().expect("home"), home);
                         fp_of(&load_or_create().expect("load"))
                     })
                 })

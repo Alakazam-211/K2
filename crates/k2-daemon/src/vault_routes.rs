@@ -717,7 +717,7 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
             "message": format!("stopped after {n} files (the doctor reads at most {ENV_SCAN_MAX_FILES} .env files and {} MiB per run); check the rest yourself", ENV_SCAN_MAX_BYTES / (1024 * 1024)),
         }));
     }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = k2_core::paths::home_dir() {
         for f in cli_credential_files(&home, &roots) {
             findings.push(json!({ "level": "info", "code": "cli_credential_file", "path": f.path, "message": f.message }));
         }

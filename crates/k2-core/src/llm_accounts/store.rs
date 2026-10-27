@@ -57,7 +57,7 @@ pub fn removed_root() -> PathBuf {
 }
 
 fn user_home() -> PathBuf {
-    dirs::home_dir().unwrap_or_default()
+    crate::paths::home_dir().unwrap_or_default()
 }
 
 /// The tool's live home: its home env var in the daemon's own env when

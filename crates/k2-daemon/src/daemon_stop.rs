@@ -279,7 +279,7 @@ pub fn end_ptyd_sessions_for_downgrade() -> usize {
 /// `stop --no-block`), or shut down directly with no supervisor.
 pub fn stop_via_supervisor(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
     if let Some(label) = launchd_label() {
-        let plist = dirs::home_dir().unwrap_or_default().join("Library/LaunchAgents").join(format!("{label}.plist"));
+        let plist = k2_core::paths::home_dir().unwrap_or_default().join("Library/LaunchAgents").join(format!("{label}.plist"));
         if plist.is_file() && spawn_detached("launchctl", &["unload", "-w", &plist.to_string_lossy()]) {
             log_debug!("[daemon] stop: launchctl unload -w {}", plist.display());
             return;

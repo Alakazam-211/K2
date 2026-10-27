@@ -547,7 +547,7 @@ fn a_deleted_person_loses_their_wallet_and_marks_at_the_next_sweep() {
     assert!(with_conn(|c| pw::get(c, &id)).unwrap().is_none());
     assert!(VaultSealer.unseal(&bob_id, &id).unwrap().is_none());
     assert!(with_conn(|c| pw::person_agent(c, &f.ws_bob)).unwrap().is_none(), "his mark goes in the same pass");
-    let audit = std::fs::read_to_string(dirs::home_dir().unwrap().join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    let audit = std::fs::read_to_string(k2_core::paths::home_dir().unwrap().join(".k2/auth-audit.jsonl")).unwrap_or_default();
     assert!(audit.contains("person_gone") && audit.contains(&f.ws_bob), "audited: {audit}");
 }
 
@@ -566,7 +566,7 @@ fn turning_a_person_into_an_agent_login_clears_their_wallet_and_their_marks() {
     assert!(with_conn(|c| pw::person_agent(c, &f.ws_alice)).unwrap().is_none(), "her personal-agent mark goes in the same pass");
     let bobs = with_conn(|c| pw::person_agent(c, &f.ws_bob)).unwrap().expect("Bob's mark is untouched");
     assert_eq!(bobs.principal_id, f.bob.principal_id.clone().unwrap());
-    let audit = std::fs::read_to_string(dirs::home_dir().unwrap().join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    let audit = std::fs::read_to_string(k2_core::paths::home_dir().unwrap().join(".k2/auth-audit.jsonl")).unwrap_or_default();
     assert!(audit.contains("now_an_agent_login") && audit.contains(&f.ws_alice), "the mark's removal is audited: {audit}");
     // The owner's list no longer names her.
     let (_, v, _) = owner_call(Caller::Owner, O_AGENTS, false, json!({}), &[]);

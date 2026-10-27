@@ -211,7 +211,7 @@ fn scan_secrets(root: &Path) -> Vec<String> {
 /// a `-2`, `-3`… suffix (never merged into, never overwritten).
 fn resolve_archive_dest(archive_to: &str, name: &str) -> Result<PathBuf, String> {
     let base = if archive_to.is_empty() {
-        let home = dirs::home_dir().ok_or("cannot resolve the daemon's home directory")?;
+        let home = k2_core::paths::home_dir().ok_or("cannot resolve the daemon's home directory")?;
         let date = chrono::Local::now().format("%Y-%m-%d");
         home.join(".k2").join("archive").join(format!("{name}-{date}"))
     } else {

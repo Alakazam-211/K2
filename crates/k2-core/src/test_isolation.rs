@@ -137,6 +137,7 @@ pub fn real_home() -> Option<PathBuf> {
 
 #[cfg(not(unix))]
 pub fn real_home() -> Option<PathBuf> {
+    // The profile folder the shell reports, never HOME/USERPROFILE.
     dirs::home_dir()
 }
 

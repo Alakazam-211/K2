@@ -1262,7 +1262,7 @@ fn credential_file_paths() -> Vec<PathBuf> {
             paths.push(PathBuf::from(dir).join(".credentials.json"));
         }
     }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = k2_core::paths::home_dir() {
         let fallback = home.join(".claude").join(".credentials.json");
         if !paths.iter().any(|p| p == &fallback) {
             paths.push(fallback);

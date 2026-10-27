@@ -57,7 +57,7 @@ pub fn inbox_root() -> PathBuf {
     if let Some(root) = inbox_root_slot().lock().clone() {
         return root;
     }
-    match dirs::home_dir() {
+    match crate::paths::home_dir() {
         Some(home) => home.join(".k2/awareness/inbox"),
         None => PathBuf::from("/tmp/.k2-awareness-inbox"),
     }

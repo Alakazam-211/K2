@@ -250,7 +250,7 @@ fn local_gate_and_never_sendable_refusals() {
         let (st, j, _) = call(&v, SEND, &agent(&sales), json!({ "name": "API_KEY_K2", "to": ops.name }));
         assert_eq!((st, code(&j)), (422, "never_sendable"));
         let owner_token = format!("owner-token-{}", uuid::Uuid::new_v4().simple());
-        let home = dirs::home_dir().expect("home").join(".k2");
+        let home = k2_core::paths::home_dir().expect("home").join(".k2");
         std::fs::create_dir_all(&home).expect("mkdir");
         std::fs::write(home.join("daemon.token"), &owner_token).expect("token");
         put(&v, &sales, "LOOKS_FINE", &owner_token, &me);

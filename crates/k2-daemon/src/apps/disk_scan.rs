@@ -845,7 +845,7 @@ fn compose(c: &Cache, rows: &Rows, live: &Live, now: i64, sweeping: bool) -> Sna
             kind: "shared".into(),
             id: "agentTools".into(),
             owner: Owner::server(),
-            disk: dirs::home_dir().and_then(|h| disk_of(&h, &mut disks)),
+            disk: k2_core::paths::home_dir().and_then(|h| disk_of(&h, &mut disks)),
             disk_bytes: Some(parts.values().sum()),
             parts,
             scanned_at: c.tools.values().map(|f| f.scanned_at).min(),
@@ -987,7 +987,7 @@ pub fn scan_folders(now: i64) {
         }
     }
     let mut tools = BTreeMap::new();
-    if let Some(h) = dirs::home_dir() {
+    if let Some(h) = k2_core::paths::home_dir() {
         for d in TOOL_DIRS {
             if Instant::now() >= deadline {
                 break;

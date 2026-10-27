@@ -95,12 +95,12 @@ fn pending_state() -> &'static Mutex<HashMap<String, usize>> {
 }
 
 /// Resolve the queue root. Daemon's `~/.k2so/daemon.pending-live/`.
-/// Tests override via env var; production uses `dirs::home_dir()`.
+/// Tests override via env var; production uses `k2_core::paths::home_dir()`.
 pub fn queue_root() -> PathBuf {
     if let Ok(override_path) = std::env::var("K2SO_PENDING_LIVE_ROOT") {
         return PathBuf::from(override_path);
     }
-    dirs::home_dir()
+    k2_core::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(".k2so/daemon.pending-live")
 }

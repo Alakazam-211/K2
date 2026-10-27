@@ -42,7 +42,7 @@ pub fn matches_project_family(session_project: &str, root: &str) -> bool {
 /// object per launch-prompt pair. `None` only if we can't find the
 /// user's home directory.
 pub fn claude_history_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude").join("history.jsonl"))
+    crate::paths::home_dir().map(|h| h.join(".claude").join("history.jsonl"))
 }
 
 /// Convert a project path to Claude Code's project-slug directory name —
@@ -168,7 +168,7 @@ pub fn detect_claude_session(project_path: &str) -> Option<String> {
     }
 
     best_session.and_then(|(_, id)| {
-        let home = dirs::home_dir()?;
+        let home = crate::paths::home_dir()?;
         let project_hash = claude_project_hash(resolve_root_project_path(project_path));
         let projects_dir = home.join(".claude").join("projects");
 
@@ -293,7 +293,7 @@ pub fn detect_claude_session_near(
     }
 
     best.and_then(|(_, id)| {
-        let home = dirs::home_dir()?;
+        let home = crate::paths::home_dir()?;
         let project_hash = claude_project_hash(resolve_root_project_path(project_path));
         let projects_dir = home.join(".claude").join("projects");
         if let Ok(entries) = fs::read_dir(&projects_dir) {
@@ -327,7 +327,7 @@ pub fn resolve_claude_session_file(session_id: &str, project_path: &str) -> Opti
     if session_id.is_empty() {
         return None;
     }
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let project_hash = claude_project_hash(resolve_root_project_path(project_path));
     let projects_dir = home.join(".claude").join("projects");
     let entries = fs::read_dir(&projects_dir).ok()?;
@@ -356,7 +356,7 @@ pub fn resolve_session_storage_path(
     if session_id.is_empty() {
         return None;
     }
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let project = if project_path.is_empty() {
         return None;
     } else {
@@ -512,7 +512,7 @@ fn find_named_jsonl_under(root: &Path, session_id: &str) -> Option<PathBuf> {
 /// pre-allocated but never run leaves an empty file that `--resume`
 /// would reject with "No conversation found".
 pub fn newest_claude_session_on_disk(project_path: &str) -> Option<String> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let project_hash = claude_project_hash(resolve_root_project_path(project_path));
     let projects_dir = home.join(".claude").join("projects");
     newest_session_in_projects_dir(&projects_dir, &project_hash)
@@ -568,7 +568,7 @@ pub fn detect_cursor_session(project_path: &str) -> Option<String> {
     // Cursor CLI stores chats under `~/.cursor/chats/<md5_hex(abs_path)>/`
     // (same key `parse_cursor_sessions` uses). The legacy dash-hash
     // (`cursor_project_hash`) never matched real on-disk dirs.
-    let cursor_chats_dir = dirs::home_dir()?.join(".cursor").join("chats");
+    let cursor_chats_dir = crate::paths::home_dir()?.join(".cursor").join("chats");
     let root = resolve_root_project_path(project_path);
     let root_hash = md5_hex(root.as_bytes());
     let hash_dir = cursor_chats_dir.join(&root_hash);
@@ -613,7 +613,7 @@ pub fn cursor_session_file_exists(session_id: &str, project_path: &str) -> bool 
     if session_id.is_empty() {
         return false;
     }
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = crate::paths::home_dir() else {
         return false;
     };
     let root = resolve_root_project_path(project_path);
@@ -639,7 +639,7 @@ pub fn cursor_session_file_exists(session_id: &str, project_path: &str) -> bool 
 /// (matching root + worktree paths the same way detect_cursor_session
 /// does).
 pub fn detect_gemini_session(project_path: &str) -> Option<String> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let projects_json = home.join(".gemini").join("projects.json");
     let tmp_dir = home.join(".gemini").join("tmp");
     if !tmp_dir.exists() {
@@ -715,7 +715,7 @@ pub fn detect_gemini_session(project_path: &str) -> Option<String> {
 /// any encoding edge case. Picks the newest by file mtime, then reads
 /// line 1 again to extract the full uuid for `pi --session <uuid>`.
 pub fn detect_pi_session(project_path: &str) -> Option<String> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let sessions_root = home.join(".pi").join("agent").join("sessions");
     if !sessions_root.exists() {
         return None;
@@ -801,7 +801,7 @@ pub fn detect_pi_session(project_path: &str) -> Option<String> {
 /// cwd (project family), picks the file with newest mtime, returns its
 /// `payload.id` for `codex resume <uuid>`.
 pub fn detect_codex_session(project_path: &str) -> Option<String> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let sessions_root = home.join(".codex").join("sessions");
     if !sessions_root.exists() {
         return None;
@@ -923,7 +923,7 @@ pub fn detect_codex_session(project_path: &str) -> Option<String> {
 
 /// `~/.grok/sessions` — grok's per-cwd session tree.
 fn grok_sessions_root() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".grok").join("sessions"))
+    crate::paths::home_dir().map(|h| h.join(".grok").join("sessions"))
 }
 
 /// Read + parse one grok session dir's `summary.json`. Returns `None`
@@ -1141,7 +1141,7 @@ pub fn detect_grok_session(project_path: &str) -> Option<String> {
 
 /// `~/.hermes/state.db` — hermes' single-SQLite session store.
 fn hermes_state_db_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".hermes").join("state.db"))
+    crate::paths::home_dir().map(|h| h.join(".hermes").join("state.db"))
 }
 
 /// Build a `file:…?mode=ro` URI for a db path. SQLite percent-decodes
@@ -1433,7 +1433,7 @@ fn branch_from_claude_slug_dir(dir_name: &str, project_hash: &str) -> Option<Str
 /// [`claude_session_file_exists`]: `~/.claude/projects/<hash>` and
 /// `<hash>-*`. Zero-byte files are skipped.
 fn union_claude_disk_sessions(sessions: &mut HashMap<String, ChatSession>, project_filter: &str) {
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = crate::paths::home_dir() else {
         return;
     };
     let root = resolve_root_project_path(project_filter);
@@ -1645,7 +1645,7 @@ fn read_cursor_chat_meta(store_db: &std::path::Path) -> Option<(String, i64)> {
 }
 
 pub fn parse_cursor_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
-    let cursor_chats_dir = match dirs::home_dir() {
+    let cursor_chats_dir = match crate::paths::home_dir() {
         Some(h) => h.join(".cursor").join("chats"),
         None => return Ok(vec![]),
     };
@@ -1754,7 +1754,7 @@ pub fn parse_cursor_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSes
 // ── Cursor IDE workspace storage parsing ────────────────────────────────
 
 pub fn parse_cursor_ide_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
-    let workspace_dir = match dirs::home_dir() {
+    let workspace_dir = match crate::paths::home_dir() {
         Some(h) => h.join("Library/Application Support/Cursor/User/workspaceStorage"),
         None => return Ok(vec![]),
     };
@@ -1893,7 +1893,7 @@ fn parse_rfc3339_to_ms(s: &str) -> Option<i64> {
 
 fn gemini_slug_to_cwd_map() -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let home = match dirs::home_dir() {
+    let home = match crate::paths::home_dir() {
         Some(h) => h,
         None => return map,
     };
@@ -1917,7 +1917,7 @@ fn gemini_slug_to_cwd_map() -> HashMap<String, String> {
 }
 
 pub fn parse_gemini_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
-    let home = match dirs::home_dir() {
+    let home = match crate::paths::home_dir() {
         Some(h) => h,
         None => return Ok(vec![]),
     };
@@ -2080,7 +2080,7 @@ pub fn parse_gemini_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSes
 // ── Pi chat parsing ─────────────────────────────────────────────────────
 
 pub fn parse_pi_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
-    let home = match dirs::home_dir() {
+    let home = match crate::paths::home_dir() {
         Some(h) => h,
         None => return Ok(vec![]),
     };
@@ -2244,7 +2244,7 @@ pub fn parse_pi_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession
 
 fn codex_history_index() -> HashMap<String, (i64, String)> {
     let mut map: HashMap<String, (i64, String)> = HashMap::new();
-    let home = match dirs::home_dir() {
+    let home = match crate::paths::home_dir() {
         Some(h) => h,
         None => return map,
     };
@@ -2281,7 +2281,7 @@ fn codex_history_index() -> HashMap<String, (i64, String)> {
 }
 
 pub fn parse_codex_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
-    let home = match dirs::home_dir() {
+    let home = match crate::paths::home_dir() {
         Some(h) => h,
         None => return Ok(vec![]),
     };
@@ -2831,7 +2831,7 @@ pub struct ChatStoragePaths {
 }
 
 pub fn get_storage_paths(project_path: &str) -> Result<ChatStoragePaths, String> {
-    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let home = crate::paths::home_dir().ok_or("Cannot determine home directory")?;
     let root = resolve_root_project_path(project_path);
     let root_hash = claude_project_hash(root);
 
@@ -3277,7 +3277,7 @@ pub struct CursorIdeSession {
 /// Discover Cursor IDE sessions for a given project path that could be
 /// migrated to the CLI format. Mirrors the pre-Phase-2 Tauri command.
 pub fn discover_ide_sessions(project_path: &str) -> Result<Vec<CursorIdeSession>, String> {
-    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let home = crate::paths::home_dir().ok_or("Cannot determine home directory")?;
     let ws_storage = home.join("Library/Application Support/Cursor/User/workspaceStorage");
     if !ws_storage.exists() {
         return Ok(vec![]);
@@ -3445,7 +3445,7 @@ pub fn migrate_ide_sessions(
     project_path: &str,
     composer_ids: &[String],
 ) -> Result<usize, String> {
-    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let home = crate::paths::home_dir().ok_or("Cannot determine home directory")?;
     let ws_storage = home.join("Library/Application Support/Cursor/User/workspaceStorage");
     let global_db_path =
         home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb");
@@ -3955,7 +3955,7 @@ pub fn codex_conversations_started_since(
     since_secs: i64,
     marker: Option<&str>,
 ) -> Vec<StartedConversation> {
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = crate::paths::home_dir() else {
         return Vec::new();
     };
     codex_conversations_started_since_in(
@@ -4105,7 +4105,7 @@ pub fn gemini_session_id_exists(session_id: &str) -> bool {
     if id.len() < 8 || !id.is_char_boundary(8) {
         return false;
     }
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = crate::paths::home_dir() else {
         return false;
     };
     let short = &id[..8];
@@ -4959,7 +4959,7 @@ mod tests {
         let _g = UNIT6_HOME_LOCK.lock();
         let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("dispatch-grok-hermes");
-        let home = dirs::home_dir().unwrap();
+        let home = crate::paths::home_dir().unwrap();
 
         let project = "/Users/z/proj-dispatch";
         let grok_sid = "01920000-cdcd-7000-8000-000000000001";
@@ -4986,7 +4986,7 @@ mod tests {
         let _g = UNIT6_HOME_LOCK.lock();
         let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("list-grok-hermes");
-        let home = dirs::home_dir().unwrap();
+        let home = crate::paths::home_dir().unwrap();
 
         let project = "/Users/z/proj-list";
         write_grok_session(
@@ -5014,7 +5014,7 @@ mod tests {
         let _g = UNIT6_HOME_LOCK.lock();
         let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("storage-grok-hermes");
-        let home = dirs::home_dir().unwrap();
+        let home = crate::paths::home_dir().unwrap();
 
         let project = "/Users/z/proj-storage";
         write_grok_session(
@@ -5070,7 +5070,7 @@ mod tests {
         // Build ~/.claude/history.jsonl with two entries — same
         // session_id repeated to exercise the SessionAccumulator
         // collapse logic.
-        let claude_dir = dirs::home_dir().unwrap().join(".claude");
+        let claude_dir = crate::paths::home_dir().unwrap().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         let history = "\
 {\"sessionId\":\"s1\",\"project\":\"/repo\",\"display\":\"first prompt\",\"timestamp\":100}
@@ -5094,7 +5094,7 @@ mod tests {
         let _g = UNIT6_HOME_LOCK.lock();
         let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("claude-filter");
-        let claude_dir = dirs::home_dir().unwrap().join(".claude");
+        let claude_dir = crate::paths::home_dir().unwrap().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         let history = "\
 {\"sessionId\":\"a\",\"project\":\"/repo\",\"display\":\"x\",\"timestamp\":1}
@@ -5121,7 +5121,7 @@ mod tests {
         let _g = UNIT6_HOME_LOCK.lock();
         let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("claude-disk-only");
-        let home = dirs::home_dir().unwrap();
+        let home = crate::paths::home_dir().unwrap();
         let project = "/Users/z/proj-disk-only";
         let hash = claude_project_hash(project);
         let sess_dir = home
@@ -5163,7 +5163,7 @@ mod tests {
         let _g = UNIT6_HOME_LOCK.lock();
         let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("claude-hist-disk");
-        let home = dirs::home_dir().unwrap();
+        let home = crate::paths::home_dir().unwrap();
         let project = "/Users/z/proj-hist-disk";
         let hash = claude_project_hash(project);
 
@@ -5276,7 +5276,7 @@ mod tests {
         let _g = UNIT6_HOME_LOCK.lock();
         let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("storage-claude");
-        let claude_dir = dirs::home_dir().unwrap().join(".claude");
+        let claude_dir = crate::paths::home_dir().unwrap().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         std::fs::write(claude_dir.join("history.jsonl"), "").unwrap();
         let paths = get_storage_paths("/proj").expect("get_storage_paths");
@@ -5379,7 +5379,7 @@ mod tests {
         let _scoped_db = crate::db::scoped_for_test();
         let _db = UNIT6_DB_LOCK.lock();
         let _h = U6HomeGuard::new("list-custom-name");
-        let home = dirs::home_dir().expect("home");
+        let home = crate::paths::home_dir().expect("home");
 
         let project = "/Users/z/proj-custom-name";
         let sid = format!("01920000-cccc-7000-8000-{:012x}", std::process::id() as u64);
@@ -5490,7 +5490,7 @@ mod tests {
         let _g = UNIT6_HOME_LOCK.lock();
         let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("cursor-dedup");
-        let cursor_chats = dirs::home_dir().unwrap().join(".cursor").join("chats");
+        let cursor_chats = crate::paths::home_dir().unwrap().join(".cursor").join("chats");
         // Two project-hash dirs, same chat_id under each.
         let hash_a = cursor_chats.join("00000000000000000000000000000001");
         let hash_b = cursor_chats.join("00000000000000000000000000000002");
@@ -5532,7 +5532,7 @@ mod tests {
         let _g = UNIT6_HOME_LOCK.lock();
         let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("pi-dedup");
-        let sessions_root = dirs::home_dir()
+        let sessions_root = crate::paths::home_dir()
             .unwrap()
             .join(".pi")
             .join("agent")
@@ -5584,7 +5584,7 @@ mod tests {
         let _g = UNIT6_HOME_LOCK.lock();
         let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("codex-dedup");
-        let sessions_root = dirs::home_dir().unwrap().join(".codex").join("sessions");
+        let sessions_root = crate::paths::home_dir().unwrap().join(".codex").join("sessions");
         let day_a = sessions_root.join("2026").join("01").join("01");
         let day_b = sessions_root.join("2026").join("05").join("01");
         std::fs::create_dir_all(&day_a).unwrap();
@@ -5634,7 +5634,7 @@ mod tests {
         let _g = UNIT6_HOME_LOCK.lock();
         let _scoped_db = crate::db::scoped_for_test();
         let _h = U6HomeGuard::new("cursor-ide-dedup");
-        let workspace_dir = dirs::home_dir()
+        let workspace_dir = crate::paths::home_dir()
             .unwrap()
             .join("Library/Application Support/Cursor/User/workspaceStorage");
         let ws_a = workspace_dir.join("ws-a");

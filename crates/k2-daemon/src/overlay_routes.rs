@@ -1579,7 +1579,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 return r;
             }
         }
-        let home = dirs::home_dir();
+        let home = k2_core::paths::home_dir();
         match k2_core::overlay::attachments::snapshot_all(&root, home.as_deref(), &attach_reqs) {
             Ok(a) => {
                 crate::thread_attachments::audit(

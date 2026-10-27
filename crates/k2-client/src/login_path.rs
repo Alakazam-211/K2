@@ -252,7 +252,7 @@ pub fn known_fallback_dirs() -> Vec<PathBuf> {
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
     ];
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::paths::home_dir() {
         dirs.push(home.join(".local/bin"));
         dirs.push(home.join(".grok/bin"));
         dirs.push(home.join(".cargo/bin"));
@@ -269,7 +269,7 @@ pub fn known_fallback_dirs() -> Vec<PathBuf> {
     // Windows than HOME, which may be unset under services).
     let home = std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
-        .or_else(dirs::home_dir);
+        .or_else(crate::paths::home_dir);
 
     if let Some(home) = home {
         dirs.push(home.join(".local").join("bin"));

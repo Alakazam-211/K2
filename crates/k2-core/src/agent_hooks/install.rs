@@ -5,7 +5,7 @@
 //! hooks too. The daemon runs [`run`] after boot is ready and every
 //! 10 minutes (self-heal); `POST /cli/hooks/install` runs it on demand.
 //!
-//! What it writes, all under an explicit `home` (never `dirs::home_dir`):
+//! What it writes, all under an explicit `home` (never `crate::paths::home_dir`):
 //! - `~/.k2/hooks/notify.sh` — [`generate_hook_script`], stamped
 //!   `# k2-hook-version: <daemon version>`. An installer older than the
 //!   on-disk stamp writes nothing at all (A10).

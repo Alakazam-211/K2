@@ -127,7 +127,7 @@ pub fn sibling(path: &Path, suffix: &str) -> PathBuf {
 
 /// Boot sweep against the real `$HOME`. See module docs.
 pub fn tighten_home() -> TightenReport {
-    match dirs::home_dir() {
+    match crate::paths::home_dir() {
         Some(home) => tighten_home_at(&home),
         None => TightenReport::default(),
     }

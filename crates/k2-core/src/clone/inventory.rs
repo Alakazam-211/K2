@@ -117,12 +117,12 @@ fn resolve_project_path(project_path: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Home dir: explicit override (tests) else `dirs::home_dir()`.
+/// Home dir: explicit override (tests) else `crate::paths::home_dir()`.
 fn resolve_home(opts: &CloneOptions) -> Result<PathBuf, String> {
     if let Some(h) = &opts.home_override {
         return Ok(h.clone());
     }
-    dirs::home_dir().ok_or_else(|| "cannot resolve home directory".to_string())
+    crate::paths::home_dir().ok_or_else(|| "cannot resolve home directory".to_string())
 }
 
 /// True only if `path` resolves (following symlinks) to a regular file the

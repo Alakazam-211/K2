@@ -28,7 +28,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn k2_home_dir() -> PathBuf {
-    dirs::home_dir()
+    k2_client::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
 }

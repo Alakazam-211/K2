@@ -128,7 +128,7 @@ pub fn handle_read_range(params: &HashMap<String, String>) -> CliResponse {
 /// `/`) and render paths with the host's separator. No path input — purely
 /// describes the host. Gated like the other `fs/*` reads (`token_ok`).
 pub fn handle_info(_params: &HashMap<String, String>) -> CliResponse {
-    let home = dirs::home_dir()
+    let home = k2_core::paths::home_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
     let separator = std::path::MAIN_SEPARATOR.to_string();
@@ -212,7 +212,7 @@ pub fn handle_resolve_links(body: &[u8]) -> CliResponse {
         };
     };
     let root = PathBuf::from(root);
-    let home = dirs::home_dir();
+    let home = k2_core::paths::home_dir();
     let links = k2_core::file_links::resolve_links(&root, home.as_deref(), &parsed.paths);
     CliResponse::ok_json(
         serde_json::json!({

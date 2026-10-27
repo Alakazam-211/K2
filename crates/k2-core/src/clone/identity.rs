@@ -116,7 +116,7 @@ pub fn capture_chat_pins(
 /// without failing the whole unpack.
 ///
 /// `home` is the remote home dir sessions were unpacked under
-/// (`dirs::home_dir()` in production, a temp dir in hermetic tests).
+/// (`crate::paths::home_dir()` in production, a temp dir in hermetic tests).
 /// When `Some`, Claude session existence is checked under that home so
 /// tests and home-override unpacks still pin correctly.
 pub fn apply_clone_identity(

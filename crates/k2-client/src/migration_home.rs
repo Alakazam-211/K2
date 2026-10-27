@@ -45,7 +45,7 @@ pub enum HomeMigration {
 
 /// Run the one-time migration against the real `$HOME`. See module docs.
 pub fn migrate_home_dir() -> Result<HomeMigration, String> {
-    let home = dirs::home_dir().ok_or("no home dir")?;
+    let home = crate::paths::home_dir().ok_or("no home dir")?;
     migrate_home_dir_at(&home)
 }
 

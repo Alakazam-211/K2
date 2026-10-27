@@ -292,14 +292,14 @@ pub fn archive_user_session(
 
 /// Primary Claude projects dir for a workspace: `~/.claude/projects/<hash>/`.
 fn primary_claude_project_dir(project_path: &str) -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
+    let home = crate::paths::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
     let hash = claude_project_hash(resolve_root_project_path(project_path));
     Ok(home.join(".claude").join("projects").join(hash))
 }
 
 /// Is `parent` a plausible Claude projects dir for this project family?
 fn source_parent_valid_for_project(parent: &Path, project_path: &str) -> bool {
-    let home = match dirs::home_dir() {
+    let home = match crate::paths::home_dir() {
         Some(h) => h,
         None => return false,
     };
@@ -434,7 +434,7 @@ mod tests {
 
     fn seed_claude_session(project: &Path, session_id: &str, body: &str) -> PathBuf {
         let hash = claude_project_hash(project.to_str().unwrap());
-        let dir = dirs::home_dir()
+        let dir = crate::paths::home_dir()
             .unwrap()
             .join(".claude")
             .join("projects")
@@ -544,7 +544,7 @@ mod tests {
         // Seed 110 live sessions with newer timestamps so top-100 would
         // drop the archived one if dual-query failed.
         let hash = claude_project_hash(project_s);
-        let dir = dirs::home_dir()
+        let dir = crate::paths::home_dir()
             .unwrap()
             .join(".claude")
             .join("projects")

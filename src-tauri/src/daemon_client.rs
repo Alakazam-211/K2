@@ -280,7 +280,7 @@ fn pct_encode(s: &str) -> String {
 }
 
 fn k2_home_dir() -> Result<PathBuf, String> {
-    Ok(dirs::home_dir()
+    Ok(k2_client::paths::home_dir()
         .ok_or_else(|| "home dir unavailable".to_string())?
         .join(".k2"))
 }

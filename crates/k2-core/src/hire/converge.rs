@@ -109,9 +109,9 @@ pub fn expand_hire_path(raw: &str) -> Result<String, HireError> {
         return Err(HireError::usage("missing path"));
     }
     let expanded = if t == "~" {
-        dirs::home_dir().ok_or_else(|| HireError::usage("cannot resolve ~"))?
+        crate::paths::home_dir().ok_or_else(|| HireError::usage("cannot resolve ~"))?
     } else if let Some(rest) = t.strip_prefix("~/") {
-        dirs::home_dir().ok_or_else(|| HireError::usage("cannot resolve ~"))?.join(rest)
+        crate::paths::home_dir().ok_or_else(|| HireError::usage("cannot resolve ~"))?.join(rest)
     } else {
         PathBuf::from(t)
     };

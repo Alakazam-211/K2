@@ -215,7 +215,7 @@ pub struct GrokBot {
 impl GrokBot {
     /// The daemon OS user's own Grok Bot. Never another user's home.
     pub fn for_current_user() -> Self {
-        let root = dirs::home_dir().unwrap_or_default().join(schema::DATA_DIR);
+        let root = crate::paths::home_dir().unwrap_or_default().join(schema::DATA_DIR);
         Self {
             root,
             http_timeout: Duration::from_secs(3),

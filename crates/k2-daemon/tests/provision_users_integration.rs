@@ -385,7 +385,7 @@ async fn seed_users_file_provisions_and_is_deleted() {
         // Pre-existing user the seed file must NOT modify.
         connect_users::add_user("seed_existing", "keep-this-pass").expect("add existing");
 
-        let dir = dirs::home_dir().expect("home").join(".k2");
+        let dir = k2_core::paths::home_dir().expect("home").join(".k2");
         std::fs::create_dir_all(&dir).expect("mkdir .k2");
         let seed_path = dir.join("seed-users.json");
         std::fs::write(
@@ -473,7 +473,7 @@ async fn seed_users_file_provisions_and_is_deleted() {
 async fn seed_users_malformed_file_is_still_deleted() {
     let _g = lock();
     with_temp_home(|| {
-        let dir = dirs::home_dir().expect("home").join(".k2");
+        let dir = k2_core::paths::home_dir().expect("home").join(".k2");
         std::fs::create_dir_all(&dir).expect("mkdir .k2");
         let seed_path = dir.join("seed-users.json");
         std::fs::write(&seed_path, "this is { not json [").expect("write garbage");

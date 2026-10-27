@@ -23,7 +23,7 @@ fn layers_dir(tier: &str) -> Result<PathBuf, String> {
     if !valid.contains(&tier) {
         return Err(format!("Invalid tier: {}. Must be one of: {:?}", tier, valid));
     }
-    let dir = dirs::home_dir()
+    let dir = crate::paths::home_dir()
         .ok_or("No home directory")?
         .join(".k2/templates")
         .join(tier);
@@ -120,7 +120,7 @@ pub fn get_content(tier: &str, filename: &str) -> Result<String, String> {
 mod tests {
     //! Tests for the Phase 2 Unit 6 skill_layers module.
     //!
-    //! `layers_dir()` hardcodes `dirs::home_dir().join(".k2/templates/<tier>)`,
+    //! `layers_dir()` hardcodes `crate::paths::home_dir().join(".k2/templates/<tier>)`,
     //! so we install a fresh HOME for each test via a HomeGuard over
     //! `test_env::TempHome` (which holds the ONE crate-wide env lock).
     //!

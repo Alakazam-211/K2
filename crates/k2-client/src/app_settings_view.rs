@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 /// `~/.k2/settings.json` (same resolution as `k2_core::app_settings`).
 pub fn settings_file() -> PathBuf {
-    dirs::home_dir()
+    crate::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
         .join("settings.json")

@@ -1204,7 +1204,7 @@ pub fn scoped_hook_authorizes(presented: &str, path: &str, pane: &str) -> bool {
 /// Path to `~/.k2/hook-sessions.json` (mirrors
 /// `connect_users::sessions_store_path`).
 pub fn store_path() -> PathBuf {
-    dirs::home_dir()
+    k2_core::paths::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
         .join("hook-sessions.json")
@@ -1698,7 +1698,7 @@ fn restrict_mode(_file: &std::path::Path) {}
 // Tests — pure registry logic on a *local* SessionTokenRegistry::new()
 // never touches disk. Tests that call the process-wide mint/validate/
 // prepare helpers (mint_session_token → save_to_disk → real ~/.k2) MUST
-// wrap in `crate::test_support::with_temp_home` so dirs::home_dir()
+// wrap in `crate::test_support::with_temp_home` so k2_core::paths::home_dir()
 // redirects store_path() to a throwaway dir (fail-loud per
 // feedback_test_discipline; prevents live hook-sessions.json pollution).
 // ─────────────────────────────────────────────────────────────────────

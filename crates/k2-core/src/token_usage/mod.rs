@@ -493,7 +493,7 @@ fn push_root(out: &mut Vec<Root>, root: Root) {
 pub fn host_roots() -> Vec<Root> {
     use crate::llm_accounts::{store, Tool};
     let mut out = Vec::new();
-    let home = dirs::home_dir().unwrap_or_default();
+    let home = crate::paths::home_dir().unwrap_or_default();
     let defaults = [
         (Source::Claude, Tool::Claude, home.join(".claude"), "projects"),
         (Source::Codex, Tool::Codex, home.join(".codex"), "sessions"),

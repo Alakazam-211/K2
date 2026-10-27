@@ -49,7 +49,7 @@ pub struct UnpackResult {
 /// stays a pure filesystem op (the manifest is returned for the caller to
 /// apply settings).
 ///
-/// `home` is the remote home dir (`dirs::home_dir()` in production, a temp
+/// `home` is the remote home dir (`crate::paths::home_dir()` in production, a temp
 /// dir in tests) under which `.claude/projects/<slug>/` and provider trees
 /// are rooted.
 pub fn unpack_bundle(

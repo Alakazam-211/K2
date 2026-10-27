@@ -221,7 +221,7 @@ pub fn handle_revoke(body: &[u8]) -> CliResponse {
 
 /// Default cwd for remote shells: daemon process HOME (soft default only).
 fn default_remote_shell_cwd() -> String {
-    if let Some(h) = dirs::home_dir() {
+    if let Some(h) = k2_core::paths::home_dir() {
         return h.to_string_lossy().into_owned();
     }
     std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())

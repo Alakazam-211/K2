@@ -169,7 +169,7 @@ fn daemon_uninstall_blocking() -> Result<(), String> {
 
     // Best-effort cleanup of the port/token/log files. Missing files
     // are fine.
-    if let Some(dir) = dirs::home_dir().map(|h| h.join(".k2")) {
+    if let Some(dir) = k2_client::paths::home_dir().map(|h| h.join(".k2")) {
         for f in &["daemon.port", "daemon.token"] {
             let _ = std::fs::remove_file(dir.join(f));
         }
@@ -237,7 +237,7 @@ pub async fn daemon_restart() -> Result<(), String> {
 /// to reveal the file in Finder or tail it via a child process.
 #[tauri::command]
 pub fn daemon_log_path() -> Result<String, String> {
-    let dir = dirs::home_dir()
+    let dir = k2_client::paths::home_dir()
         .ok_or_else(|| "home dir unavailable".to_string())?
         .join(".k2");
     Ok(dir.join("daemon.stdout.log").to_string_lossy().to_string())
@@ -290,7 +290,7 @@ pub enum DaemonWsUrlResponse {
 
 #[tauri::command]
 pub fn daemon_ws_url() -> DaemonWsUrlResponse {
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = k2_client::paths::home_dir() else {
         return DaemonWsUrlResponse::NotInstalled {
             reason: "home directory unavailable".to_string(),
         };

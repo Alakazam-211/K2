@@ -279,7 +279,7 @@ fn clear_companion_password_hash_on_disk() -> Result<(), String> {
 }
 
 fn settings_path() -> Option<std::path::PathBuf> {
-    Some(dirs::home_dir()?.join(".k2").join("settings.json"))
+    Some(k2_core::paths::home_dir()?.join(".k2").join("settings.json"))
 }
 
 /// Persist `companion.passwordHash` + `companion.passwordSet` to the

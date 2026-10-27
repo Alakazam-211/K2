@@ -6994,7 +6994,7 @@ async fn handle_one_request(
             let params = super::http::parse_params(&path, &query);
             let p_owned = p.to_string();
             let r = tokio::task::spawn_blocking(move || {
-                let home = dirs::home_dir().unwrap_or_default();
+                let home = k2_core::paths::home_dir().unwrap_or_default();
                 crate::thread_transfer_routes::handle(&p_owned, &clone_who, &body_bytes, &params, &home)
             })
             .await

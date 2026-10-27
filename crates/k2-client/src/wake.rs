@@ -36,7 +36,7 @@ pub const MENU_BAR_HELPER_BIN: &str = "k2-menubar";
 
 /// Where user-scope launchd agents live on macOS.
 pub fn launch_agents_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join("Library/LaunchAgents"))
+    crate::paths::home_dir().map(|h| h.join("Library/LaunchAgents"))
 }
 
 /// Describes the k2so-daemon plist. Exposed as a builder so the Tauri
@@ -64,7 +64,7 @@ pub struct DaemonPlist {
 impl DaemonPlist {
     /// Canonical config: k2so-daemon, always-on, logs under `~/.k2so/`.
     pub fn canonical(program: PathBuf) -> Self {
-        let k2so_dir = dirs::home_dir()
+        let k2so_dir = crate::paths::home_dir()
             .map(|h| h.join(".k2"))
             .unwrap_or_else(|| PathBuf::from("."));
         Self {
@@ -83,7 +83,7 @@ impl DaemonPlist {
     /// `dev.k2.app`). `RunAtLoad` so login shows the icon without opening
     /// the window. Quit-daemon must not unload this label.
     pub fn menu_bar_helper(program: PathBuf) -> Self {
-        let k2_dir = dirs::home_dir()
+        let k2_dir = crate::paths::home_dir()
             .map(|h| h.join(".k2"))
             .unwrap_or_else(|| PathBuf::from("."));
         Self {

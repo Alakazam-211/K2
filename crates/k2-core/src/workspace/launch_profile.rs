@@ -241,10 +241,10 @@ pub fn resolve_cwd(project_root: &Path, cwd: Option<&str>) -> PathBuf {
         return project_root.to_path_buf();
     };
     if cwd == "~" {
-        return dirs::home_dir().unwrap_or_else(|| project_root.to_path_buf());
+        return crate::paths::home_dir().unwrap_or_else(|| project_root.to_path_buf());
     }
     if let Some(rest) = cwd.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::paths::home_dir() {
             return home.join(rest);
         }
     }
@@ -409,7 +409,7 @@ coordination_level: chatty
     #[test]
     fn resolve_cwd_expands_tilde() {
         let root = PathBuf::from("/tmp/project");
-        let home = dirs::home_dir().expect("test needs HOME");
+        let home = crate::paths::home_dir().expect("test needs HOME");
         assert_eq!(resolve_cwd(&root, Some("~")), home);
         assert_eq!(
             resolve_cwd(&root, Some("~/nested/dir")),

@@ -398,7 +398,7 @@ pub fn current_user() -> (String, PathBuf) {
     unsafe {
         let pw = libc::getpwuid(libc::geteuid());
         if pw.is_null() {
-            return (std::env::var("USER").unwrap_or_default(), dirs::home_dir().unwrap_or_default());
+            return (std::env::var("USER").unwrap_or_default(), k2_core::paths::home_dir().unwrap_or_default());
         }
         let name = std::ffi::CStr::from_ptr((*pw).pw_name).to_string_lossy().into_owned();
         let dir = std::ffi::CStr::from_ptr((*pw).pw_dir).to_string_lossy().into_owned();

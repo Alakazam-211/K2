@@ -227,7 +227,7 @@ pub fn current_home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
-        .or_else(dirs::home_dir)
+        .or_else(crate::paths::home_dir)
 }
 
 /// Tests (k2-core cfg(test) or daemon test-util) must not merge throwaway

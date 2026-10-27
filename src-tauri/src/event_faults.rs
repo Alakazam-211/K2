@@ -58,7 +58,7 @@ pub fn record_line(what: &str) {
 fn log_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .or_else(dirs::home_dir)?;
+        .or_else(k2_client::paths::home_dir)?;
     Some(home.join(".k2").join(LOG_FILE_NAME))
 }
 

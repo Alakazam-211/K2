@@ -425,7 +425,7 @@ pub fn before_spawn(cwd: Option<&Path>) -> Option<PathBuf> {
         }
         return None;
     }
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     match stage_wait_shim_at(&home, &wait_shim_script(&agent_note(), git_safe::apple_pair().as_ref())) {
         Ok(dir) => Some(dir),
         Err(e) => {

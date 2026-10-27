@@ -109,7 +109,7 @@ pub fn stage_at(home: &Path, stage_xdg_open: bool) -> Result<Vec<PathBuf>, Strin
 /// Stage against the real `$HOME` (daemon boot). `xdg-open` is staged
 /// on Linux ONLY — see the module docs for why macOS keeps its `open`.
 pub fn stage() -> Result<Vec<PathBuf>, String> {
-    let home = dirs::home_dir().ok_or("no home dir")?;
+    let home = crate::paths::home_dir().ok_or("no home dir")?;
     stage_at(&home, cfg!(target_os = "linux"))
 }
 
@@ -117,7 +117,7 @@ pub fn stage() -> Result<Vec<PathBuf>, String> {
 /// exists on disk — the PTY env block gates on this so a failed staging
 /// never points `BROWSER` at a dangling path.
 pub fn staged_shim_path() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::paths::home_dir()?;
     let path = shim_path_at(&home);
     if path.is_file() {
         Some(path)

@@ -29,7 +29,7 @@ pub fn hire_root() -> Result<PathBuf, HireError> {
     };
     match stored {
         Some(s) => Ok(PathBuf::from(s)),
-        None => dirs::home_dir()
+        None => crate::paths::home_dir()
             .map(|h| h.join(DEFAULT_ROOT_DIR))
             .ok_or_else(|| HireError::internal("no home folder to put the hire root in; set one: k2 agent hire-root set <dir>")),
     }
@@ -43,7 +43,7 @@ pub fn set_hire_root(raw: &str) -> Result<PathBuf, HireError> {
         return Err(HireError::usage("missing root folder"));
     }
     let expanded = if let Some(rest) = t.strip_prefix("~/") {
-        dirs::home_dir()
+        crate::paths::home_dir()
             .ok_or_else(|| HireError::usage("cannot resolve ~"))?
             .join(rest)
     } else {

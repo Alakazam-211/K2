@@ -841,7 +841,7 @@ fn node_status(who: &Who, n: &store::NodeRow) -> serde_json::Value {
 /// volume and, on macOS, how many Time Machine local snapshots hold space
 /// (`tmutil listlocalsnapshots /`).
 fn controller_machine() -> serde_json::Value {
-    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let home = k2_core::paths::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
     let hw = compute::advertise::probe(&home);
     let mut v = serde_json::json!({
         "name": compute_ws::controller_label(),

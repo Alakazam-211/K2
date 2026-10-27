@@ -354,7 +354,7 @@ pub fn init_database() -> Result<Arc<ReentrantMutex<Connection>>> {
         return Ok(existing.clone());
     }
 
-    let db_dir = dirs::home_dir()
+    let db_dir = crate::paths::home_dir()
         .ok_or_else(|| rusqlite::Error::InvalidParameterName("Could not determine home directory".to_string()))?
         .join(".k2");
     std::fs::create_dir_all(&db_dir)

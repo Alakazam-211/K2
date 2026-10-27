@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Home applies Settings → General → Workspaces → "When moving between
+// Home applies Settings → Workspaces / Agents → Workspace settings → "When moving between
 // workspaces, auto-select" (Rosson 2026-10-16): arriving on Home, picking
 // a row and Cmd+1–9 there land the caret like a switch on Agents — the
 // Thread's composer when the Thread is open, else the agent message box.

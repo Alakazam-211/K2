@@ -698,7 +698,7 @@ export default function ProjectDashboard({
 
   // ── ⌘1…⌘9 pane switching (the page-level capture keydown lands
   //    here via the dashboard-dnd registry). Terminal panes flash and
-  //    take the General → Workspaces auto-select input (compose bar
+  //    take the Workspace settings auto-select input (compose bar
   //    vs kessel); htmlDoc/unknown panes just flash. Focus-only, so
   //    viewers get it too. ─────────────────────────────────────────────
   useEffect(() => {

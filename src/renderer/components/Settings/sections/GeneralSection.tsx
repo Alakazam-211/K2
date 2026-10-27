@@ -46,10 +46,7 @@ import { jittered } from '@/lib/backoff'
 // `/cli/settings/{get,update}`; route them through the host-aware
 // daemon-settings client instead so the toggle works against any daemon.
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
-import { useSettingsStore, normalizeWorkspaceSwitchFocus } from '@/stores/settings'
-import { SettingDropdown } from '../controls/SettingControls'
-import { previewCompletionSound } from '@/lib/completion-sound'
-import { COMPLETION_SOUNDS, normalizeCompletionSound } from '@/lib/completion-sound-options'
+import { useSettingsStore } from '@/stores/settings'
 import { useUpdateStore } from '@/stores/update'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
 import { showContextMenu } from '@/lib/context-menu'
@@ -58,22 +55,14 @@ import {
   setAutoUpdateChecksEnabled,
 } from '@/lib/auto-update-checks'
 import { LocalLLMSettings } from '../shared/LocalLLMSettings'
-import { AgentSkillsSection } from './AgentSkillsSection'
 import type { SettingEntry } from '../searchManifest'
 import { webFeatures } from '@/web/features'
 import type { GeneralSubTab } from '@/stores/settings'
 import { primaryScope } from '@/kessel/server-scope'
-import { RemoteRoomsPreviewRow } from './RemoteRoomsPreviewRow'
 import { AppFontRows } from '../shared/AppFontRows'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
 import { YourAccountRow } from './YourAccountRow'
 import { GitToolsRow } from '@/components/GitTools/GitToolsNotice'
-import {
-  parseSessionViewTab,
-  parseSplitPaneView,
-  type SessionViewTab,
-  type SplitPaneView,
-} from '@/components/SessionView/sessionViewTab'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
@@ -85,17 +74,6 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.your-account', section: 'general', group: 'General', label: 'Your account', description: 'The Connect login you use on your phone or laptop counts as you (owner)', keywords: ['account', 'login', 'owner', 'you', 'me', 'this is me', 'linked', 'phone', 'laptop', 'connect', 'identity'] },
   { id: 'general.config-location', section: 'general', group: 'General', label: 'Config Location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
   { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
-  { id: 'general.active-window-hours', section: 'general', group: 'Workspaces', label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
-  { id: 'general.completion-sound', section: 'general', group: 'Workspaces', label: 'Completion sound', description: 'Play a sound when an agent finishes unwatched', keywords: ['sound', 'chime', 'audio', 'notification', 'agent', 'done', 'finished', 'complete', 'unseen', 'orange', 'amber', 'dot'] },
-  { id: 'general.completion-sound-choice', section: 'general', group: 'Workspaces', label: 'Completion sound choice', description: 'Which sound plays when an agent finishes, with a Preview button', keywords: ['sound', 'chime', 'ping', 'ding', 'pop', 'tick', 'audio', 'preview', 'choose', 'notification'] },
-  { id: 'general.completion-sound-volume', section: 'general', group: 'Workspaces', label: 'Completion sound volume', description: 'How loud the sound is when an agent finishes', keywords: ['sound', 'volume', 'loud', 'quiet', 'level', 'ping', 'chime', 'audio'] },
-  { id: 'general.workspace-switch-focus', section: 'general', group: 'Workspaces', label: 'When moving between workspaces, auto-select', description: 'Switching workspaces or project panes (⌘1–⌘9) focuses the terminal or the agent message box so you can type immediately', keywords: ['workspace', 'switch', 'focus', 'terminal', 'composer', 'message', 'agent', 'auto-select', 'input', 'pane', 'project'] },
-  { id: 'general.new-agent-view', section: 'general', group: 'Workspaces', label: 'New agents open in', description: 'The view a new agent opens in: Terminal, Thread, Chatter, or Split view with the two sides you choose. Agents you already set a view for keep it.', keywords: ['new', 'agent', 'default', 'view', 'open', 'terminal', 'thread', 'chatter', 'split', 'split view', 'left', 'right', 'side', 'layout', 'workspace'] },
-  // Graduated out of Experimental in 0.46.3 (Rosson 2026-10-21). Desktop
-  // only: the hosted web client is single-server (MS56).
-  ...(webFeatures.multiHost
-    ? [{ id: 'general.remote-rooms-preview', section: 'general' as const, group: 'Workspaces', label: "Open other servers' agents in Home (don't switch servers)", description: 'On: clicking an agent on Home that lives on another server opens it right here. Off: it switches this window to that server', keywords: ['home', 'remote', 'room', 'rooms', 'server', 'servers', 'other', 'multi', 'switch', 'open', 'agent', 'agents', 'here'] }]
-    : []),
   { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
   { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'When on, clicking the red close button hides the window and keeps the Agent & Companion server running. When off, the red button stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
   { id: 'general.agents-survive-restarts', section: 'general', group: 'Server', label: 'Agents keep running through updates and restarts', description: 'On by default: agent sessions keep running when K2 updates, restarts or crashes; quitting the server still stops them. macOS and Linux.', keywords: ['agents', 'survive', 'restart', 'update', 'crash', 'keep', 'running', 'ptyd', 'session', 'terminal'] },
@@ -110,11 +88,13 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
 
 const GENERAL_TABS: Array<{ id: GeneralSubTab; label: string; beta?: boolean }> = [
   { id: 'general', label: 'General' },
-  { id: 'workspaces', label: 'Workspaces' },
   { id: 'server', label: 'Server' },
   { id: 'local-llm', label: 'Local LLM', beta: true },
   // The Experimental tab held only "Open other servers' agents in Home";
   // that row graduated to Workspaces in 0.46.3, so the tab is gone.
+  // The Workspaces tab moved out in 0.46.5 (Rosson 2026-10-27): its rows and
+  // the Canonical Agent Flow guide are Settings → Workspaces / Agents →
+  // Workspace settings (WorkspaceSettingsPage.tsx).
 ]
 
 export function GeneralSection(): React.JSX.Element {
@@ -129,7 +109,7 @@ export function GeneralSection(): React.JSX.Element {
   const [tab, setTab] = useState<GeneralSubTab>('general')
   const [confirming, setConfirming] = useState(false)
 
-  // Deep-link: openSettings('agent-skills') sets generalSubTab to workspaces.
+  // Deep-link / search: a one-shot sub-tab (e.g. a Server row's result).
   useEffect(() => {
     if (!generalSubTab) return
     setTab(generalSubTab)
@@ -179,11 +159,9 @@ export function GeneralSection(): React.JSX.Element {
     }
   }, [handleCheckUpdate])
 
-  // Chrome (title + tabs) spans the full General pane; body is half-width for
-  // form tabs, full-width for Workspaces (Canonical Agent Flow / diagrams).
-  // Remote hosts: this pane is the left half; Restart/Update live on the right
-  // (see Settings.tsx + GeneralRemoteHostPanel).
-  const fullWidthBody = tab === 'workspaces'
+  // Chrome (title + tabs) spans the full General pane; the body is
+  // half-width forms. Remote hosts: this pane is the left half;
+  // Restart/Update live on the right (see Settings.tsx + GeneralRemoteHostPanel).
 
   return (
     <div className="w-full h-full flex flex-col min-h-0">
@@ -223,12 +201,8 @@ export function GeneralSection(): React.JSX.Element {
         </div>
       </div>
 
-      {/* Tab body: half-width forms vs full-width Workspaces */}
-      <div
-        className={`flex-1 min-h-0 overflow-y-auto px-6 pt-4 pb-8 [scrollbar-gutter:stable] ${
-          fullWidthBody ? 'w-full max-w-none' : 'w-full max-w-xl'
-        }`}
-      >
+      {/* Tab body: half-width forms */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-4 pb-8 [scrollbar-gutter:stable] w-full max-w-xl">
       {tab === 'general' && (
       <div className="space-y-4">
         {/* Version & Update */}
@@ -446,21 +420,6 @@ export function GeneralSection(): React.JSX.Element {
       </div>
       )}
 
-      {tab === 'workspaces' && (
-        <div className="space-y-6 w-full">
-          <div className="space-y-4 max-w-xl">
-            <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed -mt-1">
-              How workspaces behave in the sidebar Active bar and when agents finish out of view.
-            </p>
-            <WorkspaceBehaviorRows />
-          </div>
-          {/* Full column for Canonical Agent Flow diagram + guide */}
-          <div className="border-t border-[var(--color-border)] pt-5 w-full">
-            <AgentSkillsSection />
-          </div>
-        </div>
-      )}
-
       {tab === 'server' && (
         <div className="space-y-4">
           <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed -mt-1">
@@ -500,299 +459,6 @@ export function GeneralRemoteHostPanel(): React.JSX.Element {
     </div>
   )
 }
-
-/** General → Workspaces rows, in order. Exported for tests. */
-export function WorkspaceBehaviorRows(): React.JSX.Element {
-  return (
-    <>
-      <ActiveWindowHoursRow />
-      <CompletionSoundRow />
-      <WorkspaceSwitchFocusRow />
-      <NewAgentViewRow />
-      {/* Graduated from Experimental in 0.46.3. Desktop only (MS56). */}
-      {webFeatures.multiHost && <RemoteRoomsPreviewRow />}
-    </>
-  )
-}
-
-// ── Active Bar window (P1.C) ───────────────────────────────────────────
-// How long a workspace stays in the sidebar's Active section after the
-// user last interacted with it (Active-Bar rule 2). Default 24h, min 1h.
-// Backed by `settings.activeWindowHours` (persisted via the daemon's
-// app_settings deep-merge); read by ActiveBar and a future reaper.
-function ActiveWindowHoursRow(): React.JSX.Element {
-  const activeWindowHours = useSettingsStore((s) => s.activeWindowHours)
-  const setActiveWindowHours = useSettingsStore((s) => s.setActiveWindowHours)
-  // Local draft so the user can clear/type freely; commit (clamped) on blur
-  // or Enter. Mirrors the typed-input ergonomics of the terminal settings.
-  const [draft, setDraft] = useState<string>(String(activeWindowHours))
-
-  useEffect(() => {
-    setDraft(String(activeWindowHours))
-  }, [activeWindowHours])
-
-  const commit = useCallback(() => {
-    const parsed = parseInt(draft, 10)
-    const next = Number.isFinite(parsed) ? Math.max(1, parsed) : activeWindowHours
-    setDraft(String(next))
-    if (next !== activeWindowHours) {
-      void setActiveWindowHours(next)
-    }
-  }, [draft, activeWindowHours, setActiveWindowHours])
-
-  return (
-    <div
-      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
-      data-settings-id="general.active-window-hours"
-    >
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
-          Keep workspaces Active for
-        </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-          How long a workspace stays in the sidebar&apos;s Active section after
-          you last interacted with it. Minimum 1 hour.
-        </p>
-      </div>
-      <div className="flex items-center gap-2 flex-shrink-0">
-        <input
-          type="number"
-          min={1}
-          step={1}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.currentTarget.blur()
-            }
-          }}
-          // colorScheme:dark renders the native up/down stepper carrots light
-          // (visible) instead of the default dark-on-dark black — matches the
-          // K2 Connect section's number stepper.
-          style={{ colorScheme: 'dark' }}
-          className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
-        />
-        <span className="text-[10px] text-[var(--color-text-muted)]">hours</span>
-      </div>
-    </div>
-  )
-}
-
-// ── Completion sound (F4) ──────────────────────────────────────────────
-// Chimes ONLY for UNSEEN completions — an agent finished while its pane
-// wasn't being watched (the same fire that lights the Active-bar amber
-// dot). Watched panes never chime. Backed by
-// `settings.completionSoundEnabled` (daemon settings.json deep-merge),
-// default ON. See .k2/notes/orange-dot-done-sound.md.
-//
-// 0.46.1: the sound and its volume (`completionSound`,
-// `completionSoundVolume` 0–100, 50 = the pre-0.46.1 level) sit under the
-// switch. Global daemon settings, so every client plays the same chime at
-// the same level; per-workspace bells stay on/off. Preview plays the
-// chosen sound at the chosen volume, even with the switch off.
-function CompletionSoundRow(): React.JSX.Element {
-  const enabled = useSettingsStore((s) => s.completionSoundEnabled)
-  const setCompletionSoundEnabled = useSettingsStore((s) => s.setCompletionSoundEnabled)
-  const sound = useSettingsStore((s) => s.completionSound)
-  const setCompletionSound = useSettingsStore((s) => s.setCompletionSound)
-  const volume = useSettingsStore((s) => s.completionSoundVolume)
-  const setCompletionSoundVolume = useSettingsStore((s) => s.setCompletionSoundVolume)
-
-  return (
-    <div className="border-b border-[var(--color-border)]">
-      <div
-        className="flex items-center justify-between py-2"
-        data-settings-id="general.completion-sound"
-      >
-        <div className="flex-1 min-w-0 mr-3">
-          <span className="text-xs text-[var(--color-text-secondary)]">
-            Play a sound when an agent finishes unwatched
-          </span>
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-            A soft chime when an agent completes while you&apos;re looking
-            elsewhere — the audible twin of the amber dot in the Active bar.
-            Agents you&apos;re watching never chime.
-          </p>
-        </div>
-        <Toggle
-          checked={enabled}
-          onChange={(next) => void setCompletionSoundEnabled(next)}
-          aria-label="Play a sound when an agent finishes unwatched"
-        />
-      </div>
-      <div className="pl-3 pb-2 space-y-1">
-        <div
-          className="flex items-center justify-between py-1"
-          data-settings-id="general.completion-sound-choice"
-        >
-          <span className="text-[11px] text-[var(--color-text-muted)]">Sound</span>
-          <div className="flex items-center gap-2">
-            <SettingDropdown
-              value={sound}
-              ariaLabel="Completion sound"
-              options={COMPLETION_SOUNDS.map((s) => ({ value: s.id, label: s.label }))}
-              onChange={(v) => void setCompletionSound(normalizeCompletionSound(v))}
-            />
-            <button
-              type="button"
-              onClick={() => previewCompletionSound(sound, volume)}
-              className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
-            >
-              Preview
-            </button>
-          </div>
-        </div>
-        <div
-          className="flex items-center justify-between py-1"
-          data-settings-id="general.completion-sound-volume"
-        >
-          <span className="text-[11px] text-[var(--color-text-muted)]">Volume</span>
-          <div className="flex items-center gap-3">
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={1}
-              value={volume}
-              aria-label="Completion sound volume"
-              onChange={(e) => setCompletionSoundVolume(parseInt(e.target.value, 10))}
-              className="w-40 no-drag k2so-slider"
-            />
-            <span className="w-9 text-right text-[11px] tabular-nums text-[var(--color-text-secondary)]">
-              {volume}%
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Workspace-switch focus target ──────────────────────────────────────
-// When the user switches workspaces (icon rail / Active bar / workspace
-// tab), focus the terminal or the compose bar so they can type immediately.
-// Thin-client only (`k2.workspaceSwitchFocus` in localStorage) — not a
-// daemon setting. `"terminal"` is the default; `"off"` moves nothing.
-function WorkspaceSwitchFocusRow(): React.JSX.Element {
-  const value = useSettingsStore((s) => s.workspaceSwitchFocus)
-  const setWorkspaceSwitchFocus = useSettingsStore((s) => s.setWorkspaceSwitchFocus)
-
-  return (
-    <div
-      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
-      data-settings-id="general.workspace-switch-focus"
-    >
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
-          When moving between workspaces, auto-select
-        </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-          Switching workspaces, opening Home, and ⌘1–⌘9 focus the terminal
-          or the agent message box (the Thread's when it is open) so you can
-          type immediately.
-        </p>
-      </div>
-      <SettingDropdown
-        value={value}
-        options={[
-          { value: 'terminal', label: 'Terminal' },
-          { value: 'composer', label: 'Message agent' },
-          { value: 'off', label: 'Nothing' },
-        ]}
-        onChange={(v) => setWorkspaceSwitchFocus(normalizeWorkspaceSwitchFocus(v))}
-      />
-    </div>
-  )
-}
-
-// ── New agents open in ─────────────────────────────────────────────────
-// The view a conversation opens in when this client has no remembered view
-// for it (Terminal / Thread / Chatter / Split view — the same choices as the
-// view button on an agent). Conversations with a remembered view keep it.
-// Thin-client only (`k2.newAgentView` in localStorage), like the auto-select
-// row above and the per-conversation view memory. No Chat choice: the Chat
-// view is gone (deleted 0.46.5); a saved Chat pick reads back as Thread and
-// is written back (`readNewAgentView`).
-const NEW_AGENT_VIEW_OPTIONS: { value: SessionViewTab; label: string }[] = [
-  { value: 'terminal', label: 'Terminal' },
-  { value: 'thread', label: 'Thread' },
-  { value: 'chatter', label: 'Chatter' },
-  { value: 'split', label: 'Split view' },
-]
-
-const SPLIT_SIDE_OPTIONS: { value: SplitPaneView; label: string }[] = [
-  { value: 'terminal', label: 'Terminal' },
-  { value: 'thread', label: 'Thread' },
-  { value: 'chatter', label: 'Chatter' },
-]
-
-function NewAgentViewRow(): React.JSX.Element {
-  const pref = useSettingsStore((s) => s.newAgentView)
-  const setNewAgentView = useSettingsStore((s) => s.setNewAgentView)
-  const isSplit = pref.view === 'split'
-
-  return (
-    <div data-settings-id="general.new-agent-view">
-      <div className="flex items-center justify-between py-2">
-        <div className="flex-1 min-w-0 mr-3">
-          <span className="text-xs text-[var(--color-text-secondary)]">
-            New agents open in
-          </span>
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-            The view an agent opens in the first time you see it here. Agents
-            you have already set a view for keep it.
-          </p>
-        </div>
-        <SettingDropdown
-          value={pref.view}
-          ariaLabel="New agents open in"
-          options={NEW_AGENT_VIEW_OPTIONS}
-          onChange={(v) =>
-            setNewAgentView({ view: parseSessionViewTab(v), split: pref.split })
-          }
-        />
-      </div>
-      {isSplit ? (
-        <div className="pl-3 pb-2 space-y-1" data-testid="new-agent-view-split">
-          <div className="flex items-center justify-between py-1">
-            <span className="text-[11px] text-[var(--color-text-muted)]">Left side</span>
-            <SettingDropdown
-              value={pref.split.left}
-              ariaLabel="Split view left side"
-              options={SPLIT_SIDE_OPTIONS.map((o) => ({
-                ...o,
-                disabled: o.value === pref.split.right,
-              }))}
-              onChange={(v) => {
-                const left = parseSplitPaneView(v, pref.split.left)
-                if (left === pref.split.right) return
-                setNewAgentView({ view: 'split', split: { left, right: pref.split.right } })
-              }}
-            />
-          </div>
-          <div className="flex items-center justify-between py-1">
-            <span className="text-[11px] text-[var(--color-text-muted)]">Right side</span>
-            <SettingDropdown
-              value={pref.split.right}
-              ariaLabel="Split view right side"
-              options={SPLIT_SIDE_OPTIONS.map((o) => ({
-                ...o,
-                disabled: o.value === pref.split.left,
-              }))}
-              onChange={(v) => {
-                const right = parseSplitPaneView(v, pref.split.right)
-                if (right === pref.split.left) return
-                setNewAgentView({ view: 'split', split: { left: pref.split.left, right } })
-              }}
-            />
-          </div>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
 
 // ── Composer 1c (D4) — "Allow remote instruct" ─────────────────────────
 // MOVED to Settings → K2 Connect (shared/AllowRemoteInstructRow), beneath

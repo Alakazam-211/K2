@@ -94,7 +94,7 @@ export type SettingsSection =
   | 'zen-widget-data'
   | 'context-catalog'
   | 'timer'
-  /** @deprecated Help guide lives under General → Workspaces. Deep-links redirect. */
+  /** @deprecated Help guide lives under Workspaces / Agents → Workspace settings. Deep-links redirect. */
   | 'agent-skills'
   | 'heartbeats'
   | 'companion'
@@ -151,17 +151,27 @@ export interface TerminalSettings {
   naturalTextEditing: boolean
 }
 
-/** Sub-tabs inside Settings → General (Canonical Agent Flow deep-links to workspaces). */
-export type GeneralSubTab = 'general' | 'workspaces' | 'server' | 'local-llm'
+/** Sub-tabs inside Settings → General. (The Workspaces tab moved to
+ *  Workspaces / Agents → Workspace settings in 0.46.5.) */
+export type GeneralSubTab = 'general' | 'server' | 'local-llm'
+
+/** A page of Settings → Workspaces / Agents that is not one workspace. */
+export type ProjectsPage = 'workspace-settings'
 
 interface SettingsState {
   settingsOpen: boolean
   activeSection: SettingsSection
   /**
    * One-shot: when set, GeneralSection opens this sub-tab then clears it.
-   * Used by deep-links (e.g. agent-skills → General → Workspaces).
+   * Used by search results for a General row.
    */
   generalSubTab: GeneralSubTab | null
+  /**
+   * One-shot: when set, ProjectsSection (Workspaces / Agents) opens this
+   * page instead of a workspace, then clears it. Used by deep-links
+   * (`agent-skills`) and by search results for the Workspace settings rows.
+   */
+  projectsPage: ProjectsPage | null
 
   // Terminal settings
   terminal: TerminalSettings
@@ -540,10 +550,10 @@ async function persistAndApply(
 function resolveSettingsSection(
   section: SettingsSection | undefined,
   fallback: SettingsSection,
-): { section: SettingsSection; generalSubTab?: GeneralSubTab } {
+): { section: SettingsSection; generalSubTab?: GeneralSubTab; projectsPage?: ProjectsPage } {
   if (!section) return { section: fallback }
   if (section === 'editors-agents') return { section: 'agents' }
-  if (section === 'agent-skills') return { section: 'general', generalSubTab: 'workspaces' }
+  if (section === 'agent-skills') return { section: 'projects', projectsPage: 'workspace-settings' }
   return { section }
 }
 
@@ -551,6 +561,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   settingsOpen: false,
   activeSection: 'general',
   generalSubTab: null,
+  projectsPage: null,
   terminal: { ...DEFAULT_TERMINAL },
   keybindings: {},
   projectSettings: {},
@@ -593,8 +604,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     // The optional preselect payload routes by section: the legacy
     // 'projects' (Workspaces / Agents) section consumes initialProjectId; the
     // 'project-groups' (Projects) section consumes initialProjectGroupId.
-    // 'editors-agents' → Agents; 'agent-skills' → General → Workspaces.
-    const { section: resolved, generalSubTab } = resolveSettingsSection(
+    // 'editors-agents' → Agents; 'agent-skills' → Workspaces / Agents →
+    // Workspace settings.
+    const { section: resolved, generalSubTab, projectsPage } = resolveSettingsSection(
       section,
       get().activeSection,
     )
@@ -602,6 +614,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       settingsOpen: true,
       activeSection: resolved,
       ...(generalSubTab ? { generalSubTab } : {}),
+      ...(projectsPage ? { projectsPage } : {}),
       initialProjectId: section === 'project-groups' ? null : (projectId ?? null),
       initialProjectGroupId: section === 'project-groups' ? (projectId ?? null) : null,
       initialWorkspaceTab: workspaceTab ?? null,
@@ -613,10 +626,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setSection: (section: SettingsSection) => {
-    const { section: resolved, generalSubTab } = resolveSettingsSection(section, section)
+    const { section: resolved, generalSubTab, projectsPage } = resolveSettingsSection(section, section)
     set({
       activeSection: resolved,
       ...(generalSubTab ? { generalSubTab } : {}),
+      ...(projectsPage ? { projectsPage } : {}),
     })
   },
 

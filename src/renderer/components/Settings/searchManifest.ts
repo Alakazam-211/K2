@@ -1,4 +1,4 @@
-import type { SettingsSection } from '@/stores/settings'
+import type { GeneralSubTab, ProjectsPage, SettingsSection } from '@/stores/settings'
 
 /**
  * One searchable entry in the Settings search palette. Each section
@@ -97,6 +97,30 @@ export function searchManifest(entries: SettingEntry[], query: string): SettingE
   return scored.map((s) => s.entry)
 }
 
+/** Which General sub-tab, or which Workspaces / Agents page, a picked
+ *  search result opens before Settings scrolls to its row. General rows go
+ *  by their group; the Workspace settings rows (and the Canonical Agent Flow
+ *  guide) open that page of Workspaces / Agents (moved from General →
+ *  Workspaces in 0.46.5). */
+export function searchPickPage(entry: Pick<SettingEntry, 'section' | 'group'>): {
+  generalSubTab?: GeneralSubTab
+  projectsPage?: ProjectsPage
+} {
+  if (entry.section === 'general' && entry.group) {
+    const subByGroup: Record<string, GeneralSubTab> = {
+      General: 'general',
+      Server: 'server',
+      'Local LLM': 'local-llm',
+    }
+    const sub = subByGroup[entry.group]
+    return sub ? { generalSubTab: sub } : {}
+  }
+  if (entry.section === 'projects' && entry.group === 'Workspace settings') {
+    return { projectsPage: 'workspace-settings' }
+  }
+  return {}
+}
+
 /** Section label lookup — duplicated from Settings.tsx SECTIONS so manifests don't import the router. */
 /** A section's name in search results. On a client with Settings →
  *  Gardens (`gardensPage`, 0.46.3), Local Data and External Data live in
@@ -117,8 +141,8 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'zen-gardens': 'Gardens',
   'zen-widget-data': 'Local Data',
   'context-catalog': 'Context Catalog',
-  /** @deprecated — content under General → Workspaces */
-  'agent-skills': 'General',
+  /** @deprecated — content under Workspaces / Agents → Workspace settings */
+  'agent-skills': 'Workspaces / Agents',
   terminal: 'Terminal',
   'code-editor': 'Code',
   editors: 'Defaults',

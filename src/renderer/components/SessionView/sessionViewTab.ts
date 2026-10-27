@@ -152,7 +152,7 @@ export function writeSessionSplitSides(storageKey: string, sides: SessionSplitSi
   }
 }
 
-// ── "New agents open in" (Settings → General → Workspaces) ─────────────
+// ── "New agents open in" (Settings → Workspaces / Agents → Workspace settings)
 // The view a conversation opens in when this client has no remembered view
 // for it yet. Per-install localStorage, like `k2.workspaceSwitchFocus` and
 // the per-session view memory above: it is how THIS viewer likes to look at

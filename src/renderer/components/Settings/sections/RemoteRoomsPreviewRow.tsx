@@ -7,7 +7,7 @@ import { useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
 // On (the default on every OS from 0.45.5): a Home row on another server opens
 // that server's room in Home without switching. Off: it switches this
 // window's server. Graduated out of Experimental in 0.46.3 (Rosson
-// 2026-10-21): it lives in General → Workspaces, desktop only. Per computer,
+// 2026-10-21): it lives in Workspace settings (Workspaces / Agents, 0.46.5), desktop only. Per computer,
 // never the daemon: localStorage `k2.homeRemoteRooms.v1` (what each value
 // means, and the one-time graduation reset: lib/remote-rooms-preview).
 export const REMOTE_ROOMS_LABEL = "Open other servers' agents in Home (don't switch servers)"

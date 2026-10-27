@@ -14,14 +14,16 @@ import { AgentContextDiagram } from './AgentContextDiagram'
 // standard (Pi/Hermes/Codex/+28 read it natively); CLAUDE.md is the bridge
 // for Claude Code, which doesn't read AGENTS.md natively.
 
-// Lives under Settings → General → Workspaces (help guide, not a top-level nav item).
-// section stays `general` so search jumps to General; deep-link id `agent-skills` still
-// redirects via the settings store.
+// Lives under Settings → Workspaces / Agents → Workspace settings (help
+// guide, not a top-level nav item; moved from General → Workspaces in
+// 0.46.5). Section `projects` + group `Workspace settings` so search opens
+// that page; deep-link id `agent-skills` still redirects via the settings
+// store.
 export const AGENT_SKILLS_MANIFEST: SettingEntry[] = [
-  { id: 'agent-skills.canonical-flow', section: 'general', group: 'Workspaces', label: 'Canonical Agent Flow', description: 'How the context stack (ROLE + PROJECT + optional layers) generates .k2/AGENTS.md and mirrors out to harness files', keywords: ['canonical', 'agent', 'agents.md', 'harness', 'mirror', 'fan-out', 'ROLE.md', 'context stack', 'help'] },
-  { id: 'agent-skills.workspace-manager', section: 'general', group: 'Workspaces', label: 'Workspace Manager skill', description: 'Opt-in loadable role skill — manager guidance (not auto-stacked into AGENTS.md)', keywords: ['manager', 'skill', 'role', 'triage', 'delegate'] },
-  { id: 'agent-skills.k2-agent', section: 'general', group: 'Workspaces', label: 'K2 Agent skill', description: 'Opt-in loadable role skill — planner guidance (not auto-stacked into AGENTS.md)', keywords: ['k2', 'agent', 'planner', 'prd', 'skill', 'role'] },
-  { id: 'agent-skills.k2-canonical-agent', section: 'general', group: 'Workspaces', label: 'K2 Canonical Agent skill', description: 'Opt-in skill — unify the workspace harness files safely (merge + mirror)', keywords: ['canonical', 'unify', 'harness', 'merge', 'mirror', 'skill'] },
+  { id: 'agent-skills.canonical-flow', section: 'projects', group: 'Workspace settings', label: 'Canonical Agent Flow', description: 'How the context stack (ROLE + PROJECT + optional layers) generates .k2/AGENTS.md and mirrors out to harness files', keywords: ['canonical', 'agent', 'agents.md', 'harness', 'mirror', 'fan-out', 'ROLE.md', 'context stack', 'help'] },
+  { id: 'agent-skills.workspace-manager', section: 'projects', group: 'Workspace settings', label: 'Workspace Manager skill', description: 'Opt-in loadable role skill — manager guidance (not auto-stacked into AGENTS.md)', keywords: ['manager', 'skill', 'role', 'triage', 'delegate'] },
+  { id: 'agent-skills.k2-agent', section: 'projects', group: 'Workspace settings', label: 'K2 Agent skill', description: 'Opt-in loadable role skill — planner guidance (not auto-stacked into AGENTS.md)', keywords: ['k2', 'agent', 'planner', 'prd', 'skill', 'role'] },
+  { id: 'agent-skills.k2-canonical-agent', section: 'projects', group: 'Workspace settings', label: 'K2 Canonical Agent skill', description: 'Opt-in skill — unify the workspace harness files safely (merge + mirror)', keywords: ['canonical', 'unify', 'harness', 'merge', 'mirror', 'skill'] },
 ]
 
 // The three opt-in skills of this PRD (canonical-agents §2), surfaced as

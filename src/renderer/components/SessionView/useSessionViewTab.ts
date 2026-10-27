@@ -46,7 +46,7 @@ export function useSessionViewTab(
   const storageKey = sessionKey ? sessionViewTabStorageKey(hostKey, sessionKey) : null
   const splitKey = sessionKey ? sessionViewSplitStorageKey(hostKey, sessionKey) : null
   // A conversation this client has never shown opens in the
-  // "New agents open in" choice (Settings → General → Workspaces); one with
+  // "New agents open in" choice (Settings → Workspaces / Agents → Workspace settings); one with
   // a remembered view keeps it.
   const [viewTab, setViewTabState] = useState<SessionViewTab>(
     () => resolveSessionView(storageKey, splitKey).tab,

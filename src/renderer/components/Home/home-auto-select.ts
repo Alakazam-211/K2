@@ -83,7 +83,7 @@ export function trySelectTopHomeRow(): boolean {
 export function useSelectTopHomeRowOnEnter(): void {
   const homeId = useHomesStore((s) => selectedHome(s).id)
   useEffect(() => {
-    // Arriving on Home lands the caret per Settings → General → Workspaces
+    // Arriving on Home lands the caret per Settings → Workspaces / Agents → Workspace settings
     // ("auto-select"), Thread composer first (Rosson 2026-10-16). Opening
     // a row below re-applies for that row. A Grok Bot chat has no room.
     if (!useGrokBotsStore.getState().open) applyWorkspaceSwitchFocus()

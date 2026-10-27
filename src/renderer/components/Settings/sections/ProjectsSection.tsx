@@ -72,6 +72,7 @@ import { AgentHandoffAcceptFrom } from './HandoffAcceptFrom'
 import { AgentAppsAccess } from './AgentAppsAccess'
 import { AgentPermissionCardsRow, AskedChip, PermissionAsksProvider } from './PermissionCardsSection'
 import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
+import { WorkspaceSettingsPage } from './WorkspaceSettingsPage'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -135,12 +136,30 @@ export function ProjectsSection(): React.JSX.Element {
     initialProjectId ?? (projects.length > 0 ? projects[0].id : null)
   )
 
+  // "Workspace settings" (0.46.5, moved from General → Workspaces): the
+  // entry at the very top of the list opens the page for every workspace
+  // instead of one workspace. `projectsPage` is the one-shot a deep link
+  // (`agent-skills`) or a search result sets.
+  const projectsPage = useSettingsStore((s) => s.projectsPage)
+  const [showWorkspaceSettings, setShowWorkspaceSettings] = useState<boolean>(
+    () => projectsPage === 'workspace-settings',
+  )
+  useEffect(() => {
+    if (!projectsPage) return
+    setShowWorkspaceSettings(projectsPage === 'workspace-settings')
+    useSettingsStore.setState({ projectsPage: null })
+  }, [projectsPage])
+  const selectProject = useCallback((id: string) => {
+    setShowWorkspaceSettings(false)
+    setSelectedProjectId(id)
+  }, [])
+
   // When initialProjectId changes (e.g. right-click a different project), update selection
   useEffect(() => {
     if (initialProjectId) {
-      setSelectedProjectId(initialProjectId)
+      selectProject(initialProjectId)
     }
-  }, [initialProjectId])
+  }, [initialProjectId, selectProject])
 
   // Projects often load after mount — seed the first row so the detail
   // panel isn't blank on a cold open of Settings → Projects.
@@ -433,9 +452,9 @@ export function ProjectsSection(): React.JSX.Element {
       setKeyboardIndex((prev) => Math.max(prev - 1, 0))
     } else if (e.key === 'Enter' && keyboardIndex >= 0 && keyboardIndex < allVisibleProjects.length) {
       e.preventDefault()
-      setSelectedProjectId(allVisibleProjects[keyboardIndex].id)
+      selectProject(allVisibleProjects[keyboardIndex].id)
     }
-  }, [allVisibleProjects, keyboardIndex])
+  }, [allVisibleProjects, keyboardIndex, selectProject])
 
   // Scroll keyboard-selected item into view
   useEffect(() => {
@@ -479,14 +498,14 @@ export function ProjectsSection(): React.JSX.Element {
 
   // Workspace row renderer (called as function, NOT as <Component/>, to avoid unmount/remount flicker)
   const renderProjectRow = (p: typeof projects[number], zone: string, containerSelector: string) => {
-    const isSelected = selectedProjectId === p.id
+    const isSelected = !showWorkspaceSettings && selectedProjectId === p.id
     const isDragged = reorderDragId === p.id
     const kbIdx = allVisibleProjects.findIndex((vp) => vp.id === p.id)
     const isKeyboardHighlighted = kbIdx >= 0 && kbIdx === keyboardIndex
     return (
       <div
         data-settings-project-id={p.id}
-        onClick={() => setSelectedProjectId(p.id)}
+        onClick={() => selectProject(p.id)}
         onContextMenu={(e) => handleProjectContextMenu(e, p)}
         onMouseDown={(e) => { if (e.button === 0) handleReorderMouseDown(e, p.id, zone, containerSelector) }}
         className={`flex items-center gap-2 px-2 py-1.5 transition-colors no-drag cursor-pointer group select-none ${
@@ -538,7 +557,39 @@ export function ProjectsSection(): React.JSX.Element {
     <div className="flex h-full min-h-0">
       {/* ── Left panel: focus group toggle + organized workspace list ── */}
       <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col">
-        {/* Focus groups toggle at top */}
+        {/* Workspace settings: the page for every workspace, at the very top
+            above the Focus Groups toggle (Rosson 2026-10-27). */}
+        <div className="px-1 py-1 border-b border-[var(--color-border)]">
+          <button
+            type="button"
+            data-testid="workspace-settings-entry"
+            aria-current={showWorkspaceSettings ? 'page' : undefined}
+            onClick={() => setShowWorkspaceSettings(true)}
+            className={`w-full flex items-center gap-2 px-2 py-1.5 transition-colors no-drag cursor-pointer select-none text-left ${
+              showWorkspaceSettings
+                ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
+            }`}
+          >
+            <svg
+              className="w-[14px] h-[14px] flex-shrink-0 mx-[3px]"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.75}
+              aria-hidden="true"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <span className="text-xs truncate flex-1">Workspace settings</span>
+            <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Focus groups toggle */}
         <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)] flex items-center justify-between">
           <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
             Focus Groups
@@ -825,7 +876,9 @@ export function ProjectsSection(): React.JSX.Element {
           overflow-hidden (not y-auto) so only ProjectDetail's tab panel
           scrolls — avoids a nested scrollbar that overpaints content. */}
       <div className="flex-1 overflow-hidden p-6 min-h-0 relative flex flex-col">
-        {selectedProject ? (
+        {showWorkspaceSettings ? (
+          <WorkspaceSettingsPage />
+        ) : selectedProject ? (
           <ProjectDetail
             project={selectedProject}
             focusGroups={focusGroups}

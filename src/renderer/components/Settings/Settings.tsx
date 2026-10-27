@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
-import type { GeneralSubTab, SettingsSection } from '@/stores/settings'
+import type { SettingsSection } from '@/stores/settings'
 import { SectionErrorBoundary } from './SectionErrorBoundary'
 import { SettingsSearchModal } from './SettingsSearchModal'
-import type { SettingEntry } from './searchManifest'
+import { searchPickPage, type SettingEntry } from './searchManifest'
 import { GeneralSection, GeneralRemoteHostPanel, GENERAL_MANIFEST } from './sections/GeneralSection'
+import { WORKSPACE_SETTINGS_MANIFEST } from './sections/WorkspaceSettingsPage'
 import { TokenUsageSection, TOKEN_USAGE_MANIFEST } from './sections/TokenUsageSection'
 import { LlmTokensSection, LLM_TOKENS_MANIFEST } from './sections/LlmTokensSection'
 import { StylesSection, STYLES_MANIFEST } from './sections/StylesSection'
@@ -303,6 +304,7 @@ export default function Settings(): React.JSX.Element {
       ...GENERAL_MANIFEST,
       ...TOKEN_USAGE_MANIFEST,
       ...STYLES_MANIFEST,
+      ...WORKSPACE_SETTINGS_MANIFEST,
       ...PROJECTS_MANIFEST,
       ...PROJECT_GROUPS_MANIFEST,
       ...TICKETS_MANIFEST,
@@ -401,18 +403,12 @@ export default function Settings(): React.JSX.Element {
   // so the user's eye lands on the right control.
   const handlePick = useCallback((entry: SettingEntry) => {
     setSearchOpen(false)
-    // General sub-tabs: search entries carry a group so we open the right tab
-    // (e.g. Canonical Agent Flow → Workspaces) before scrolling to the row.
-    if (entry.section === 'general' && entry.group) {
-      const subByGroup: Record<string, GeneralSubTab> = {
-        General: 'general',
-        Workspaces: 'workspaces',
-        Server: 'server',
-        'Local LLM': 'local-llm',
-      }
-      const sub = subByGroup[entry.group]
-      if (sub) useSettingsStore.setState({ generalSubTab: sub })
-    }
+    // A General sub-tab, or the Workspace settings page of Workspaces /
+    // Agents: search entries carry a group so we open the right tab or page
+    // before scrolling to the row.
+    const page = searchPickPage(entry)
+    if (page.generalSubTab) useSettingsStore.setState({ generalSubTab: page.generalSubTab })
+    if (page.projectsPage) useSettingsStore.setState({ projectsPage: page.projectsPage })
     // Local Data / External Data results land on Settings → Gardens (with
     // their Garden when they know it) on a client with Gardens.
     const { section, landing } = gardensLandingFor(entry.section, entry.garden, zenGardensShown)

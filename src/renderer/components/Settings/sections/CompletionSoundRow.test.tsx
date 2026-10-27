@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-// 0.46.1 — completion sound volume + choice (General → Workspaces, under
+// 0.46.1 — completion sound volume + choice (Workspaces / Agents → Workspace
+// settings since 0.46.5; General → Workspaces before), under
 // the completion-sound switch). Both are daemon settings written through
 // `/cli/settings/update`; Preview plays the chosen sound at the chosen
 // volume.
@@ -15,7 +16,7 @@ vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => {}), listen: v
 vi.mock('@/lib/daemon-settings', () => ({ settingsGet, settingsUpdate, settingsReset }))
 vi.mock('@/lib/completion-sound', () => ({ previewCompletionSound }))
 
-import { GENERAL_MANIFEST, WorkspaceBehaviorRows } from './GeneralSection'
+import { WORKSPACE_SETTINGS_MANIFEST, WorkspaceBehaviorRows } from './WorkspaceSettingsPage'
 import { COMPLETION_SOUND_VOLUME_SAVE_DELAY_MS, useSettingsStore } from '@/stores/settings'
 
 /** The daemon echoes the merged settings; this one keeps what it was sent. */
@@ -80,9 +81,10 @@ describe('Completion sound volume and choice', () => {
   })
 
   it('is findable in settings search', () => {
-    const volume = GENERAL_MANIFEST.find((e) => e.id === 'general.completion-sound-volume')
-    const choice = GENERAL_MANIFEST.find((e) => e.id === 'general.completion-sound-choice')
-    expect(volume?.group).toBe('Workspaces')
+    const volume = WORKSPACE_SETTINGS_MANIFEST.find((e) => e.id === 'general.completion-sound-volume')
+    const choice = WORKSPACE_SETTINGS_MANIFEST.find((e) => e.id === 'general.completion-sound-choice')
+    expect(volume?.group).toBe('Workspace settings')
+    expect(volume?.section).toBe('projects')
     expect(volume?.keywords).toContain('volume')
     expect(choice?.keywords).toContain('ping')
   })

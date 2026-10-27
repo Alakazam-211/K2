@@ -1,5 +1,5 @@
 // After a workspace switch, focus the input the user asked for
-// (Settings → General → Workspaces → "When moving between workspaces,
+// (Settings → Workspaces / Agents → Workspace settings → "When moving between workspaces,
 // auto-select").
 //
 // The compose bar only mounts once the terminal pane is ready/connecting

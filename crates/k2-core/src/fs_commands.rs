@@ -734,6 +734,57 @@ pub fn free_disk_space(path: &Path) -> Option<u64> {
     }
 }
 
+/// Windows: the volume holding `path`: its root (`C:\\`), filesystem
+/// name (`NTFS`, `ReFS`), and `(available to this user, total, free)`
+/// bytes from GetDiskFreeSpaceExW. `None` when a call fails.
+#[cfg(windows)]
+pub struct WinVolume {
+    pub root: std::path::PathBuf,
+    pub fs_type: Option<String>,
+    pub avail: u64,
+    pub total: u64,
+    pub free: u64,
+}
+
+#[cfg(windows)]
+pub fn win_volume(path: &Path) -> Option<WinVolume> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetVolumeInformationW, GetVolumePathNameW};
+    let wide = |p: &Path| -> Vec<u16> { p.as_os_str().encode_wide().chain(std::iter::once(0)).collect() };
+    let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+    let mut root_buf = [0u16; 1024];
+    // SAFETY: NUL-terminated input, a fixed out-buffer of its stated size.
+    if unsafe { GetVolumePathNameW(wide(dir).as_ptr(), root_buf.as_mut_ptr(), root_buf.len() as u32) } == 0 {
+        return None;
+    }
+    let n = root_buf.iter().position(|c| *c == 0).unwrap_or(root_buf.len());
+    let root = std::path::PathBuf::from(std::ffi::OsString::from_wide(&root_buf[..n]));
+    let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
+    // SAFETY: NUL-terminated root; three u64 out-params we own.
+    if unsafe { GetDiskFreeSpaceExW(wide(&root).as_ptr(), &mut avail, &mut total, &mut free) } == 0 {
+        return None;
+    }
+    let mut fs_buf = [0u16; 64];
+    // SAFETY: NUL-terminated root; the name buffers we don't want are null.
+    let ok = unsafe {
+        GetVolumeInformationW(
+            wide(&root).as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            fs_buf.as_mut_ptr(),
+            fs_buf.len() as u32,
+        )
+    };
+    let fs_type = (ok != 0).then(|| {
+        let n = fs_buf.iter().position(|c| *c == 0).unwrap_or(fs_buf.len());
+        String::from_utf16_lossy(&fs_buf[..n])
+    });
+    Some(WinVolume { root, fs_type, avail, total, free })
+}
+
 /// Reduce an `upload_id` to filename-safe characters so it can never inject
 /// a path separator into — or escape — the `.part` temp name. Keeps ASCII
 /// alphanumerics, `-`, and `_`; drops everything else. Falls back to `anon`

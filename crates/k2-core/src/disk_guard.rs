@@ -617,7 +617,16 @@ fn uuid_for_source(dir: &Path, source: &str) -> Option<String> {
         .map(|e| e.file_name().to_string_lossy().into_owned())
 }
 
-#[cfg(not(unix))]
+/// Windows: the volume (`C:\\`) is the filesystem; no inode counts.
+#[cfg(windows)]
+fn real_probe(path: &Path) -> Option<Fs> {
+    let v = crate::fs_commands::win_volume(path)?;
+    let raw = RawStat { blocks: v.total, bfree: v.free, bavail: v.avail, frsize: 1, files: 0, ffree: 0 };
+    let root = v.root.display().to_string();
+    Some(Fs::from_raw(root.clone(), Some(root), v.fs_type, raw))
+}
+
+#[cfg(not(any(unix, windows)))]
 fn real_probe(_path: &Path) -> Option<Fs> {
     None
 }

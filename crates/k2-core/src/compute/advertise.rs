@@ -68,7 +68,12 @@ fn disk(path: &Path) -> (u64, u64) {
     (st.f_bavail as u64 * frsize, st.f_blocks as u64 * frsize)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn disk(path: &Path) -> (u64, u64) {
+    crate::fs_commands::win_volume(path).map(|v| (v.avail, v.total)).unwrap_or((0, 0))
+}
+
+#[cfg(not(any(unix, windows)))]
 fn disk(_path: &Path) -> (u64, u64) {
     (0, 0)
 }

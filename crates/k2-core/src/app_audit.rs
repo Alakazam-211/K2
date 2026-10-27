@@ -106,6 +106,8 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
     }
+    #[cfg(windows)]
+    let _ = crate::private_fs::make_private_file(path);
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
     migrate(&conn)?;
@@ -611,8 +613,12 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
         }
+        #[cfg(windows)]
+        assert!(k2_winsec::is_owner_only(&p).unwrap(), "app-audit.db is owner-only");
         let c = open(&p).unwrap();
         assert_eq!(list(&c, &Query { app_id: "jobs", limit: 5, ..Default::default() }).unwrap().len(), 1);
+        // Windows can't delete a file an open connection holds.
+        drop(c);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

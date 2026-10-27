@@ -165,8 +165,12 @@ pub const K2_OWN_UNITS: &[&str] = &[
     "sew-transcriber.service",
     // The distro's Postgres wrapper K2 drives (pg namespace).
     "postgresql.service",
-    // ptyd's survival test unit (scripts/ptyd-survival/systemd-user.sh).
+    // ptyd's survival test units (scripts/ptyd-survival/systemd-user.sh and
+    // its update-swap run, update-systemd-user.sh): systemd user units that
+    // run a real k2-daemon (scratch HOME, but the daemon's own vault and
+    // owner token live there), so they are denied like the daemon itself.
     "k2-ptydtest.service",
+    "k2-ptydupd.service",
 ];
 
 /// K2's generated families, as (prefix, middle) patterns: the stem starts

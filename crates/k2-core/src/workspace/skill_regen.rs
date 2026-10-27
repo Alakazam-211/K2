@@ -685,7 +685,15 @@ Tooling. Prefer short standing orders; load skills for depth.
 not a crawl of wiki or PRDs. `k2 study <topic>` prints one page. Daemon-optional.
 
 Topics: what, source, map, identity, send, human, people, auth, errors, context,
-db, mail, connect-boundary, apps, skins, feedback-loop.
+db, mail, connect-boundary, apps, app-deploys, app-move, app-api, live,
+app-heartbeats, app-tickets, app-identity, app-surfaces, app-resources,
+app-runtime, app-push, skins, feedback-loop, ticket-brief, zen, sidecars,
+llm-tokens, llm-accounts, publish-framing, compute, compute-shared, vault,
+notifications, data-sources, projects, hooks, agent-hire, garden-data,
+garden-access, garden-changes, changes, design, db-upgrade, jobs, folder-trust.
+Building an App or widget that shows live state (an agent working, counts,
+unread) → `k2 study live`: every surface, its caps, read + live verbs, and
+what never to infer.
 `k2 study apps` is canonical; `k2 study skins` is a leftover alias.
 Guests/roles/tokens: `k2 app` (leftover `k2 skin` / `k2 skin-token`). Pass prefix `k2skn_`.
 
@@ -1667,6 +1675,22 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use uuid::Uuid;
+
+    /// 0.46.5 activity SDK (review §4.1: the list was 16 topics, stale):
+    /// the k2-cli skill's Study topics are exactly the CLI's
+    /// `_STUDY_TOPIC_IDS`, in its order, and point at `k2 study live`.
+    #[test]
+    fn the_cli_skill_lists_every_study_topic() {
+        let cli = include_str!("../../../../cli/k2");
+        let ids_line = cli.lines().find(|l| l.starts_with("_STUDY_TOPIC_IDS=\"")).expect("_STUDY_TOPIC_IDS in cli/k2");
+        let ids: Vec<&str> = ids_line.trim_start_matches("_STUDY_TOPIC_IDS=\"").trim_end_matches('"').split_whitespace().collect();
+        let skill = generate_k2_cli_skill();
+        let start = skill.find("Topics: ").expect("a Topics line") + "Topics: ".len();
+        let end = start + skill[start..].find('.').expect("the list ends with a full stop");
+        let listed: Vec<&str> = skill[start..end].split(',').map(str::trim).collect();
+        assert_eq!(listed, ids, "the k2-cli skill's topics vs cli/k2 _STUDY_TOPIC_IDS");
+        assert!(skill.contains("`k2 study live`"), "the skill points at k2 study live");
+    }
 
     fn scratch_project() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

@@ -268,7 +268,10 @@ pub const SKILL_VERSION_ZEN: u32 = 44;
 /// Bumped to 34 (0.46.1, thread-attachments-v1): `k2 thread … --file
 /// path[:line[-end]]` and the attach-the-files-you-mention rule; the
 /// AGENTS.md Tooling line names `--file`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 34;
+/// Bumped to 35 (0.46.5 activity SDK): the Study topics are the CLI's whole
+/// list (review §4.1: 16 of 49 before) and point at `k2 study live`.
+/// (Integrator: renumber if another held branch took 35.)
+pub const SKILL_VERSION_WORKSPACE: u32 = 35;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

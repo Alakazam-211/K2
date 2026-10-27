@@ -29,6 +29,7 @@ pub mod app;
 pub mod gen;
 pub mod libs;
 pub mod lint;
+pub mod live;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as J;
@@ -146,6 +147,50 @@ pub struct VerbRow {
     pub doc: String,
     /// One line.
     pub example: String,
+    /// 0.46.5: the row's place on `k2 study live` (a live surface), or
+    /// absent. See [`live`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<LiveRow>,
+}
+
+/// A row's place on `k2 study live` (0.46.5 activity SDK, review §4.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LiveRow {
+    /// The surface, a `live-topics.json` topic (`thread-turn`).
+    pub topic: String,
+    /// Other surfaces the same row also feeds (`thread.stream` carries
+    /// messages and, with the ear, the Thread turn).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also_topics: Vec<String>,
+    /// Which line of the block the row is on.
+    pub role: LiveRole,
+    /// A live row: the read verbs to call on every (re)open.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pairs: Vec<String>,
+    /// The counts the answer carries, name → what it counts.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub counts: BTreeMap<String, String>,
+    /// At most two use ideas, ≤ 80 characters each.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<String>,
+    /// What never to infer, ≤ 100 characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub never: Option<String>,
+    /// A ready-made helper for this row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LiveRole {
+    /// The state now (a call).
+    Read,
+    /// What changes (a subscribe row).
+    Subscribe,
+    /// A helper row.
+    Ready,
 }
 
 impl VerbRow {

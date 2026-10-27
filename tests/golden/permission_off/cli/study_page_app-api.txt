@@ -121,6 +121,7 @@ guests:rooms (Set its own guests' rooms (an owner grant per App, never a guest's
   guests.list              GET  /cli/skin/guests/list (server only)           This App's own guests with their rooms on this App, role, on/off and whether each is an agent login, a page at a time (never the owner, a Connect login or another App's guest).
 activity:read (See when the agent is working)
   thread.activity          GET  /cli/thread/activity                          The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Live: kind thread_activity on thread.stream (the SDK opens it with ear=1); a raw overlay socket opened with ear=1 gets collection activity frames.
+  thread.activityRooms     GET  /cli/thread/activity/rooms                    Every room's live pinned-Chat Thread turn in one read (one rate-limit token for the set): the catch-up for thread.stream with many rooms, on every socket open. thread.watchActivity({rooms}) calls it for you.
   activity.snapshot        GET  /cli/activity/snapshot                        Whether the room's agent is working now, per session.
   activity.events          WS   /cli/activity/events?workspace=               Live room events: agent working, heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.
 heartbeats:read (See heartbeats: schedule, next fire, history)

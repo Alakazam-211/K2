@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
-skill_version: 34
-skill_checksum: 75872d82dc0a76ef
+skill_version: 35
+skill_checksum: d628733e1c0348bc
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat
 ---
@@ -301,7 +301,15 @@ Tooling. Prefer short standing orders; load skills for depth.
 not a crawl of wiki or PRDs. `k2 study <topic>` prints one page. Daemon-optional.
 
 Topics: what, source, map, identity, send, human, people, auth, errors, context,
-db, mail, connect-boundary, apps, skins, feedback-loop.
+db, mail, connect-boundary, apps, app-deploys, app-move, app-api, live,
+app-heartbeats, app-tickets, app-identity, app-surfaces, app-resources,
+app-runtime, app-push, skins, feedback-loop, ticket-brief, zen, sidecars,
+llm-tokens, llm-accounts, publish-framing, compute, compute-shared, vault,
+notifications, data-sources, projects, hooks, agent-hire, garden-data,
+garden-access, garden-changes, changes, design, db-upgrade, jobs, folder-trust.
+Building an App or widget that shows live state (an agent working, counts,
+unread) → `k2 study live`: every surface, its caps, read + live verbs, and
+what never to infer.
 `k2 study apps` is canonical; `k2 study skins` is a leftover alias.
 Guests/roles/tokens: `k2 app` (leftover `k2 skin` / `k2 skin-token`). Pass prefix `k2skn_`.
 

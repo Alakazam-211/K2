@@ -1,0 +1,118 @@
+$ k2 study live
+exit: 0
+--- stdout
+k2 study live — live surfaces: what an App or a Garden widget can show live
+
+Every live surface is a READ (the state now) and a LIVE feed (what
+changes). Open the live feed first, read on every (re)open and REPLACE
+what you show, then apply changes. App = an App's server SDK
+(@k2/server) or its pages; Garden = a custom widget (window.k2).
+"—" = not on that side yet (a gap, not a workaround). Show only what
+K2 sends: never infer state from terminal output, timing or replies.
+
+THREAD TURN (what the agent is doing with a message, now)
+  tells   state, step kind, why it is still open, elapsed (server clock) (counts: background, subagents, tally)
+  cap     App activity:read + thread:read · Garden activity:read + thread:read
+  read    App thread.activity, thread.activityRooms · Garden —
+  live    App thread.stream (on open: thread.page, thread.activityRooms) · Garden thread.onActivity
+  ready   App: k2.asGuest(pass).thread.watchActivity({rooms: 'all'}, cb) · page: <k2-activity-bar addr=…> · Garden: K2Activity.mount(el, {address}) (k2-activity@1)
+  use     a working dot on a chat button · "Running a command · 1:12" under a card
+  never   infer it from terminal output, send/reply timing or a reply (a reply doesn't end it)
+
+ROOM WORKING (is anything running in a room, any session)
+  tells   status per session (working, permission, idle, unknown) (counts: commands, subagents, tools)
+  cap     App activity:read · Garden activity:read
+  read    App activity.snapshot · Garden activity.snapshot
+  live    App activity.events (on open: activity.snapshot) · Garden —
+  use     a busy badge on a room tile
+  never   that the Thread's agent is working on your message (that is the THREAD TURN)
+
+AGENTS (the agents a widget shows, with their look)
+  tells   name, colour, picture, working, needs you
+  cap     App none · Garden agents:read
+  read    App roomAgents.list · Garden agents.list
+  live    App — · Garden agents.subscribe
+  use     a picker with colours and pictures
+  never   a turn from the row's working flag (it covers every session)
+
+UNREAD (what is new or waiting on the person)
+  tells   unread counts per Thread, the read cursor
+  cap     App thread:read · Garden thread:read
+  read    App me.get, thread.unread · Garden thread.unread
+  live    App — · Garden —
+  use     an unread pill · "2 cards wait on you"
+  never   it from local seen-state alone: use the server cursor (markRead / setRead)
+
+THREAD MESSAGES (the conversation itself)
+  tells   items in seq order, cards and their answers
+  cap     App thread:read · Garden thread:read
+  read    App thread.page · Garden thread.read
+  live    App thread.events (on open: thread.page), thread.stream (on open: thread.page, thread.activityRooms) · Garden thread.subscribe, thread.inbox
+  use     an inbox · a toast on a new reply
+  never   the order from client clocks (use seq)
+
+PRESENCE (who else is looking)
+  tells   people viewing an agent now
+  cap     App — · Garden presence:read
+  read    App — · Garden presence.get
+  live    App — · Garden presence.subscribe
+  use     a "who's here" strip
+  never   that someone is online from their grants or membership
+
+ROOM MEMBERS (who belongs to a room)
+  tells   members and their roles
+  cap     App room:members · Garden room:members
+  read    App room.members · Garden room.members
+  live    App — · Garden —
+  use     a member list · an invite screen
+  never   presence from membership
+
+FILES (the room's files and what changed)
+  tells   paths, sizes, modified times; live: changed paths only
+  cap     App files:read · Garden files:read
+  read    App files.list · Garden files.list
+  live    App files.events (on open: files.list) · Garden —
+  use     "updated 2m ago" on a doc card
+  never   content from a change event (paths only: read the file again)
+
+TICKETS (questions and tasks between agents and people)
+  tells   status, assignee, the brief
+  cap     App tickets:read · Garden tickets:read
+  read    App tickets.list · Garden tickets.list
+  live    App — · Garden —
+  use     a "waiting on you" count
+  never   a status from the comment text
+
+STORE (a widget's own data, on this computer)
+  tells   keys and values by rev, from any writer
+  cap     App — · Garden store:read
+  read    App — · Garden store.list, store.changes
+  live    App — · Garden —
+  ready   Garden: k2.store.subscribe(prefix, cb)
+  use     live board columns
+
+PROJECT CHAT (a project's shared channel)
+  tells   messages in seq order
+  cap     App thread:read · Garden —
+  read    App project.read · Garden —
+  live    App project.events (on open: project.read) · Garden —
+  use     a team channel
+
+APP SELF (this App's own health)
+  tells   its identity, usage and limits
+  cap     App none · Garden none
+  read    App app.self, app.usage · Garden app.self, app.usage
+  live    App — · Garden —
+  use     a health chip
+
+RESOURCES (this computer's disk and boxes)
+  tells   disk used and free per App
+  cap     App — · Garden none
+  read    App — · Garden app.resources
+  live    App — · Garden —
+  use     a disk gauge
+
+More: k2 study apps (THREAD EAR, AGENT WORKING), k2 study app-api (every
+App verb), k2 zen guide api (every widget verb), k2 zen guide libs.
+--- stderr
+--- requests

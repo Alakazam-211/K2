@@ -75,6 +75,7 @@ pub fn lint(c: &Catalog) -> Vec<String> {
         }
     }
     super::app::lint_catalog(c, &mut out);
+    super::live::lint_live(c, &mut out);
     out
 }
 

@@ -1084,6 +1084,13 @@ export interface AppGuestList {
   readonly ok: boolean
 }
 
+export interface AppThreadChildCounts {
+  readonly monitor: number
+  readonly shell: number
+  readonly subagent: number
+  readonly task: number
+}
+
 export interface AppThreadTurnEnd {
   /** done, stopped or failed. */
   readonly reason: string
@@ -1099,22 +1106,32 @@ export interface AppThreadTally {
 export interface AppThreadTurn {
   /** Background tasks running now. */
   readonly background: number
+  /** Children running now, by kind (numbers only). */
+  readonly childCounts?: AppThreadChildCounts
   /** Null while it runs; the turn's end frame says how it ended. */
   readonly end: AppThreadTurnEnd | null
+  /** Milliseconds since the epoch, rounded down to 10 s: the agent's last sign of life; null when unknown. */
+  readonly evidenceAt?: number | null
   /** Thread messages in this turn. */
   readonly messages: number
+  /** Why the turn is still open: lead, children, waiting or stale; null while delivering and on an end frame. */
+  readonly openBecause?: string | null
   /** delivering, working, tool (no line), thinking, waiting, stale or children. */
   readonly phase: string
   /** Milliseconds since the epoch: when this phase began. */
   readonly phaseSince: number | null
   /** This turn's frame counter (not a time): a later frame has a higher rev. */
   readonly rev: number
+  /** 2 since K2 0.46.5 (absent from an older server): the frame names its step kind, child counts and why it is open. */
+  readonly schema?: number
   /** Milliseconds since the epoch: the server clock when the frame was built. */
   readonly serverNow: number | null
   /** Milliseconds since the epoch: the first message's receipt time (the clock). */
   readonly startedAt: number | null
   /** working, monitoring, needs-you, unverifiable, stopped or idle. */
   readonly state: string
+  /** While phase is tool: read, search, cmd, edit, web, subagent or tool (never the tool's name or input); else null. */
+  readonly stepKind?: string | null
   /** Subagents running now. */
   readonly subagents: number
   /** Subagents done in this turn. */

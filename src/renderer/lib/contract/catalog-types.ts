@@ -51,6 +51,17 @@ export interface CatalogVerbRow {
   /** More caps the verb also needs, checked like `cap` (0.46.5). Absent =
    *  `cap` alone. */
   alsoCaps?: string[]
+  /** Its place on `k2 study live` (0.46.5): a live surface. */
+  live?: {
+    topic: string
+    alsoTopics?: string[]
+    role: 'read' | 'subscribe' | 'ready'
+    pairs?: string[]
+    counts?: Record<string, string>
+    uses?: string[]
+    never?: string
+    ready?: string
+  }
   /** Absent or empty = none (K2 built-ins only). */
   exposure?: CatalogExposure[]
   reach: CatalogReach

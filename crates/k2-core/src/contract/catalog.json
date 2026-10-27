@@ -343,7 +343,8 @@
       },
       "errors": ["cap_not_granted", "verb_unavailable", "failed"],
       "doc": "The agents in the widget's scope, with live status.",
-      "example": "const rows = await k2.agents.list()"
+      "example": "const rows = await k2.agents.list()",
+      "live": {"topic": "agents", "role": "read"}
     },
     {
       "verb": "agents.subscribe",
@@ -464,7 +465,8 @@
       },
       "errors": ["cap_not_granted", "verb_unavailable", "failed"],
       "doc": "The same rows as agents.list, pushed on every change.",
-      "example": "const off = k2.agents.subscribe((rows) => draw(rows))"
+      "example": "const off = k2.agents.subscribe((rows) => draw(rows))",
+      "live": {"topic": "agents", "role": "subscribe"}
     },
     {
       "verb": "agents.add",
@@ -544,7 +546,8 @@
       },
       "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
       "doc": "Other people looking at one agent right now (never you).",
-      "example": "const people = await k2.presence.get(row.address)"
+      "example": "const people = await k2.presence.get(row.address)",
+      "live": {"topic": "presence", "role": "read"}
     },
     {
       "verb": "presence.subscribe",
@@ -568,7 +571,8 @@
       },
       "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
       "doc": "The same list as presence.get, pushed on change.",
-      "example": "const off = k2.presence.subscribe(row.address, (people) => draw(people))"
+      "example": "const off = k2.presence.subscribe(row.address, (people) => draw(people))",
+      "live": {"topic": "presence", "role": "subscribe"}
     },
     {
       "verb": "conversation.open",
@@ -923,7 +927,8 @@
       },
       "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed"],
       "doc": "A page of a conversation (oldest first); beforeSeq pages back, afterSeq reads a delta (new items plus changed and removed).",
-      "example": "const page = await k2.thread.read(row.address, {limit: 50})"
+      "example": "const page = await k2.thread.read(row.address, {limit: 50})",
+      "live": {"topic": "thread-messages", "role": "read"}
     },
     {
       "verb": "thread.subscribe",
@@ -1083,7 +1088,8 @@
       },
       "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed", "rate_limited"],
       "doc": "The live Thread with one agent and its working turn, pushed on every change.",
-      "example": "const off = k2.thread.subscribe(row.address, (view) => draw(view))"
+      "example": "const off = k2.thread.subscribe(row.address, (view) => draw(view))",
+      "live": {"topic": "thread-messages", "role": "subscribe"}
     },
     {
       "verb": "thread.onActivity",
@@ -1233,6 +1239,57 @@
                   "reason"
                 ],
                 "additionalProperties": false
+              },
+              "schema": {
+                "type": "integer",
+                "description": "2 since K2 0.46.5 (absent from an older server): the frame names its step kind, child counts and why it is open."
+              },
+              "stepKind": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "While phase is tool: read, search, cmd, edit, web, subagent or tool (never the tool's name or input); else null."
+              },
+              "childCounts": {
+                "title": "AppThreadChildCounts",
+                "type": "object",
+                "description": "Children running now, by kind (numbers only).",
+                "properties": {
+                  "subagent": {
+                    "type": "integer"
+                  },
+                  "shell": {
+                    "type": "integer"
+                  },
+                  "monitor": {
+                    "type": "integer"
+                  },
+                  "task": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "subagent",
+                  "shell",
+                  "monitor",
+                  "task"
+                ],
+                "additionalProperties": false
+              },
+              "openBecause": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Why the turn is still open: lead, children, waiting or stale; null while delivering and on an end frame."
+              },
+              "evidenceAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch, rounded down to 10 s: the agent's last sign of life; null when unknown."
               }
             },
             "required": [
@@ -1290,7 +1347,8 @@
         "rate_limited"
       ],
       "doc": "The agent's live Thread turn, exactly as an App guest with the same caps sees it (thread.activity + its thread_activity frames: counts, never text): the current turn at once, then every frame; turn null means nothing is running (never infer it from messages).",
-      "example": "const off = k2.thread.onActivity(row.address, ({turn}) => turn ? drawWorking(turn) : hideWorking())"
+      "example": "const off = k2.thread.onActivity(row.address, ({turn}) => turn ? drawWorking(turn) : hideWorking())",
+      "live": {"topic": "thread-turn", "role": "subscribe", "counts": {"subagents": "helper agents running now", "background": "background tasks running now", "tally": "tool calls this turn by kind (read, search, cmd, edit)"}}
     },
     {
       "verb": "thread.inbox",
@@ -1450,7 +1508,8 @@
         "rate_limited"
       ],
       "doc": "Every new Thread message (and card change) on your agents on this server, on one socket with your own rights; merge by id.",
-      "example": "const off = k2.thread.inbox((m) => bump(m.address, m))"
+      "example": "const off = k2.thread.inbox((m) => bump(m.address, m))",
+      "live": {"topic": "thread-messages", "role": "subscribe"}
     },
     {
       "verb": "thread.markRead",
@@ -4159,7 +4218,8 @@
         "bad_key"
       ],
       "doc": "Keys in order, a page at a time (at most 500 and 60 KiB).",
-      "example": "const {items, next} = await k2.store.list({prefix: 'obj/'})"
+      "example": "const {items, next} = await k2.store.list({prefix: 'obj/'})",
+      "live": {"topic": "store", "role": "read"}
     },
     {
       "verb": "store.changes",
@@ -4296,7 +4356,8 @@
         "bad_key"
       ],
       "doc": "Changes after a cursor, whole revs at a time (subscribe uses this).",
-      "example": "const page = await k2.store.changes({since: 41})"
+      "example": "const page = await k2.store.changes({since: 41})",
+      "live": {"topic": "store", "role": "read"}
     },
     {
       "verb": "store.batch",
@@ -5163,7 +5224,8 @@
         "failed"
       ],
       "doc": "Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features.",
-      "example": "const me = await k2.asGuest(pass).me.get()"
+      "example": "const me = await k2.asGuest(pass).me.get()",
+      "live": {"topic": "unread", "role": "read"}
     },
     {
       "verb": "roomAgents.list",
@@ -5255,7 +5317,8 @@
         "failed"
       ],
       "doc": "The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.",
-      "example": "const {agents} = await k2.roomAgents.list()"
+      "example": "const {agents} = await k2.roomAgents.list()",
+      "live": {"topic": "agents", "role": "read"}
     },
     {
       "verb": "guests.login",
@@ -9483,7 +9546,8 @@
         "failed"
       ],
       "doc": "A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back, afterSeq reads a delta (new, changed, removed).",
-      "example": "const page = await k2.thread.page({addr: 'sales', limit: 50})"
+      "example": "const page = await k2.thread.page({addr: 'sales', limit: 50})",
+      "live": {"topic": "thread-messages", "role": "read"}
     },
     {
       "verb": "thread.latest",
@@ -9650,7 +9714,9 @@
     {
       "verb": "thread.activity",
       "cap": "activity:read",
-      "alsoCaps": ["thread:read"],
+      "alsoCaps": [
+        "thread:read"
+      ],
       "exposure": [
         "app"
       ],
@@ -9808,6 +9874,57 @@
                   "reason"
                 ],
                 "additionalProperties": false
+              },
+              "schema": {
+                "type": "integer",
+                "description": "2 since K2 0.46.5 (absent from an older server): the frame names its step kind, child counts and why it is open."
+              },
+              "stepKind": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "While phase is tool: read, search, cmd, edit, web, subagent or tool (never the tool's name or input); else null."
+              },
+              "childCounts": {
+                "title": "AppThreadChildCounts",
+                "type": "object",
+                "description": "Children running now, by kind (numbers only).",
+                "properties": {
+                  "subagent": {
+                    "type": "integer"
+                  },
+                  "shell": {
+                    "type": "integer"
+                  },
+                  "monitor": {
+                    "type": "integer"
+                  },
+                  "task": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "subagent",
+                  "shell",
+                  "monitor",
+                  "task"
+                ],
+                "additionalProperties": false
+              },
+              "openBecause": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Why the turn is still open: lead, children, waiting or stale; null while delivering and on an end frame."
+              },
+              "evidenceAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch, rounded down to 10 s: the agent's last sign of life; null when unknown."
               }
             },
             "required": [
@@ -9849,7 +9966,82 @@
         "failed"
       ],
       "doc": "The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Live: kind thread_activity on thread.stream (the SDK opens it with ear=1); a raw overlay socket opened with ear=1 gets collection activity frames.",
-      "example": "const {turn} = await k2.thread.activity({addr})"
+      "example": "const {turn} = await k2.thread.activity({addr})",
+      "live": {"topic": "thread-turn", "role": "read", "counts": {"subagents": "helper agents running now", "background": "background tasks running now", "tally": "tool calls this turn by kind (read, search, cmd, edit)"}}
+    },
+    {
+      "verb": "thread.activityRooms",
+      "cap": "activity:read",
+      "alsoCaps": [
+        "thread:read"
+      ],
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "thread-activity-rooms-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/thread/activity/rooms"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "rooms": {
+              "type": "string",
+              "description": "all, or room ids joined with commas (at most 200): the same set thread.stream takes."
+            }
+          },
+          "required": [
+            "rooms"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppThreadActivityRooms",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "turns": {
+            "type": "json",
+            "description": "A map: room id to its pinned-Chat turn (the shape thread.activity answers, AppThreadTurn), or null for none; every asked room where the pass has thread:read and activity:read (rooms without the ear are left out)."
+          },
+          "unknown": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Asked ids this pass can't read (the same whether or not they exist)."
+          }
+        },
+        "required": [
+          "ok",
+          "turns",
+          "unknown"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "cap_not_granted",
+        "usage",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Every room's live pinned-Chat Thread turn in one read (one rate-limit token for the set): the catch-up for thread.stream with many rooms, on every socket open. thread.watchActivity({rooms}) calls it for you.",
+      "example": "const {turns} = await k2.thread.activityRooms({rooms: 'all'})",
+      "live": {"topic": "thread-turn", "role": "read"}
     },
     {
       "verb": "thread.send",
@@ -10563,7 +10755,8 @@
         "failed"
       ],
       "doc": "Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq. The SDK never asks for the counts-only ear here (it keeps every frame a Thread item); a raw socket opened with ear=1 also gets collection activity frames: use thread.stream or thread.activity for the ear.",
-      "example": "const off = k2.thread.events({conversation}, (item) => draw(item))"
+      "example": "const off = k2.thread.events({conversation}, (item) => draw(item))",
+      "live": {"topic": "thread-messages", "role": "subscribe", "pairs": ["thread.page"]}
     },
     {
       "verb": "thread.stream",
@@ -10612,7 +10805,8 @@
               "thread_message",
               "thread_activity",
               "inbox_error",
-              "inbox_reset"
+              "inbox_reset",
+              "activity_reset"
             ]
           },
           "activity": {
@@ -10723,6 +10917,57 @@
                   "reason"
                 ],
                 "additionalProperties": false
+              },
+              "schema": {
+                "type": "integer",
+                "description": "2 since K2 0.46.5 (absent from an older server): the frame names its step kind, child counts and why it is open."
+              },
+              "stepKind": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "While phase is tool: read, search, cmd, edit, web, subagent or tool (never the tool's name or input); else null."
+              },
+              "childCounts": {
+                "title": "AppThreadChildCounts",
+                "type": "object",
+                "description": "Children running now, by kind (numbers only).",
+                "properties": {
+                  "subagent": {
+                    "type": "integer"
+                  },
+                  "shell": {
+                    "type": "integer"
+                  },
+                  "monitor": {
+                    "type": "integer"
+                  },
+                  "task": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "subagent",
+                  "shell",
+                  "monitor",
+                  "task"
+                ],
+                "additionalProperties": false
+              },
+              "openBecause": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Why the turn is still open: lead, children, waiting or stale; null while delivering and on an end frame."
+              },
+              "evidenceAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Milliseconds since the epoch, rounded down to 10 s: the agent's last sign of life; null when unknown."
               }
             },
             "required": [
@@ -11088,6 +11333,10 @@
           "reason": {
             "type": "string",
             "description": "inbox_reset: lagged; catch up with thread.page sinceSeq (or POST /cli/thread/catchup)."
+          },
+          "turns": {
+            "type": "json",
+            "description": "activity_reset (0.46.5): the socket fell behind and turn frames were dropped. A map: room id to that room's turn as it is now (the shape thread.activity answers, AppThreadTurn), or null for none. Replace what you show with it."
           }
         },
         "required": [
@@ -11105,7 +11354,8 @@
         "failed"
       ],
       "doc": "Live Thread items of every room the pass may read on one socket (inbox_subscribed names the set; grants and revokes apply live); after a gap, thread.page with sinceSeq.",
-      "example": "const off = k2.thread.stream({rooms: 'all'}, (f) => f.kind === 'thread_message' && draw(f.room, f))"
+      "example": "const off = k2.thread.stream({rooms: 'all'}, (f) => f.kind === 'thread_message' && draw(f.room, f))",
+      "live": {"topic": "thread-messages", "alsoTopics": ["thread-turn"], "role": "subscribe", "pairs": ["thread.page", "thread.activityRooms"]}
     },
     {
       "verb": "thread.attachmentGet",
@@ -12242,7 +12492,8 @@
         "failed"
       ],
       "doc": "The signed-in person's own unread counts: a guest's over the room Threads it may read, a Garden's over the person's Threads.",
-      "example": "const {total, byConversation} = await k2.thread.unread()"
+      "example": "const {total, byConversation} = await k2.thread.unread()",
+      "live": {"topic": "unread", "role": "read"}
     },
     {
       "verb": "thread.mute",
@@ -12620,7 +12871,8 @@
         "failed"
       ],
       "doc": "A folder's entries, folders first.",
-      "example": "const entries = await k2.files.list({workspace, relPath: '.'})"
+      "example": "const entries = await k2.files.list({workspace, relPath: '.'})",
+      "live": {"topic": "files", "role": "read"}
     },
     {
       "verb": "files.read",
@@ -13789,7 +14041,8 @@
         "failed"
       ],
       "doc": "Live file changes in one room (paths only; refetch what you show).",
-      "example": "const off = k2.files.events({workspace}, (f) => refresh(f.paths))"
+      "example": "const off = k2.files.events({workspace}, (f) => refresh(f.paths))",
+      "live": {"topic": "files", "role": "subscribe", "pairs": ["files.list"]}
     },
     {
       "verb": "resources.list",
@@ -14210,7 +14463,8 @@
         "failed"
       ],
       "doc": "A room's tickets, newest first.",
-      "example": "const {items} = await k2.tickets.list({project: 'sales'})"
+      "example": "const {items} = await k2.tickets.list({project: 'sales'})",
+      "live": {"topic": "tickets", "role": "read"}
     },
     {
       "verb": "tickets.show",
@@ -17422,7 +17676,8 @@
         "failed"
       ],
       "doc": "Whether the room's agent is working now, per session.",
-      "example": "const {status} = await k2.activity.snapshot({workspace})"
+      "example": "const {status} = await k2.activity.snapshot({workspace})",
+      "live": {"topic": "room-working", "role": "read", "counts": {"subagents": "helper agents per session", "tools": "tool calls this turn", "commands": "shell commands this turn"}}
     },
     {
       "verb": "activity.events",
@@ -17563,7 +17818,8 @@
         "failed"
       ],
       "doc": "Live room events: agent working, heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.",
-      "example": "const off = k2.activity.events({workspace}, (f) => f.kind === 'resync' ? reload() : apply(f))"
+      "example": "const off = k2.activity.events({workspace}, (f) => f.kind === 'resync' ? reload() : apply(f))",
+      "live": {"topic": "room-working", "role": "subscribe", "pairs": ["activity.snapshot"]}
     },
     {
       "verb": "agentIdentity.get",
@@ -18035,7 +18291,8 @@
         "failed"
       ],
       "doc": "Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line.",
-      "example": "const {members} = await k2.room.members({workspace})"
+      "example": "const {members} = await k2.room.members({workspace})",
+      "live": {"topic": "room-members", "role": "read"}
     },
     {
       "verb": "app.self",
@@ -18139,7 +18396,8 @@
         "failed"
       ],
       "doc": "This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest).",
-      "example": "const me = await k2.asApp().app.self()"
+      "example": "const me = await k2.asApp().app.self()",
+      "live": {"topic": "app-self", "role": "read"}
     },
     {
       "verb": "app.usage",
@@ -18323,7 +18581,8 @@
         "failed"
       ],
       "doc": "This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest).",
-      "example": "const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})"
+      "example": "const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})",
+      "live": {"topic": "app-self", "role": "read"}
     },
     {
       "verb": "widget.self",
@@ -18727,7 +18986,8 @@
         "failed"
       ],
       "doc": "This computer's disk use for a box card: each disk's use and guard level, the guard's lines, the biggest users and agents (names, never paths). Read only.",
-      "example": "const {disks, top} = await k2.app.resources()"
+      "example": "const {disks, top} = await k2.app.resources()",
+      "live": {"topic": "resources", "role": "read"}
     },
     {
       "verb": "chat.pass",
@@ -19038,7 +19298,8 @@
       },
       "errors": ["pass_required", "pass_invalid", "pass_wrong_link", "skin_room", "cap_not_granted", "usage", "failed"],
       "doc": "A page of a project chat, oldest first: the latest page, afterSeq to catch up, or beforeSeq to page back.",
-      "example": "const page = await k2.project.read({group, beforeSeq: oldest, limit: 50})"
+      "example": "const page = await k2.project.read({group, beforeSeq: oldest, limit: 50})",
+      "live": {"topic": "project-chat", "role": "read"}
     },
     {
       "verb": "project.post",
@@ -19288,7 +19549,8 @@
       },
       "errors": ["pass_required", "pass_invalid", "pass_wrong_link", "skin_room", "cap_not_granted", "usage", "failed"],
       "doc": "Live lines of one project chat, shaped like Thread frames (collection project), plus a guest's own read frames (collection read); after a gap, project.read with afterSeq.",
-      "example": "const off = k2.project.events({group}, (f) => append(f.doc))"
+      "example": "const off = k2.project.events({group}, (f) => append(f.doc))",
+      "live": {"topic": "project-chat", "role": "subscribe", "pairs": ["project.read"]}
     },
     {
       "verb": "permission.request",

@@ -23,6 +23,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-deploys         Host a server App: Seeds, deploys, rollback (beta)
   app-move            Move your --cmd service to an App when ready, step by step
   app-api             An App's server calls: the SDK, every route, passes, refusals
+  live                Live surfaces (turns, counts, unread, files…): caps, read + live, never infer
   app-heartbeats      App heartbeats: routes, caps, wait reasons, contract
   app-tickets         App tickets: routes, live ticket_changed frames, contract
   app-identity        App agent identity: name, color, picture, handle; caps

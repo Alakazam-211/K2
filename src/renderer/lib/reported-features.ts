@@ -112,6 +112,12 @@ export const REPORTED_FEATURES = {
    *  without the context ("Not sent: <server> is older"), never folded into
    *  the body. */
   'thread-context-v1': 'thread-context-v1',
+  /** Markdown multiplayer v1 (vs-live MI18): `/cli/docs/*` serves live
+   *  Markdown docs AND the daemon writes them back to their files. Listed
+   *  only once both hold; nothing in the renderer reads it until the live
+   *  tab (K4), which must still fall back on a socket 404 because a local
+   *  daemon reads as supporting every key before `/boot-status` lands. */
+  'docs-md-v1': 'docs-md-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

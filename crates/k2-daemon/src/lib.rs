@@ -59,6 +59,9 @@ pub mod federation_rosters;
 pub mod federation_routes;
 pub mod federation_vault;
 pub mod fs_routes;
+/// Live docs (Markdown multiplayer v1): the vendored multiplayer kit's
+/// sessions, K2 as its host, `/cli/docs/*`.
+pub mod docs;
 /// prd-app-caps-0464-v1 AC16/AC17 (0.46.4): `files.downloads` / `files.download`.
 pub mod fs_download;
 pub mod fs_live;

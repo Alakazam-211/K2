@@ -1367,6 +1367,10 @@ async fn async_main() {
     // FileTree. DB is ready above; projects_list() is live.
     fs_live::start();
     charter_compose_watch::start();
+    // Live docs (Markdown multiplayer v1, K1): open ~/.k2/docs.redb and
+    // start the session manager. Off the boot path: the open waits up to
+    // 5 s for a handing-off predecessor to let go of the file.
+    let _ = std::thread::Builder::new().name("k2-docs-open".into()).spawn(crate::docs::start);
     // 0.46.5 S0, once per install: a widget's version now covers its
     // manifest, so every hash changes; carry each signature to the new hash
     // (and rewrite old-shape saved copies) before anything reads them.
@@ -1802,6 +1806,11 @@ async fn async_main() {
     // own task (spawned above). A Ctrl+C during the migration sweep was
     // buffered on `main_shutdown_rx`, so this returns promptly then too.
     let _ = main_shutdown_rx.recv().await;
+
+    // Live docs (MI14): close every session and let go of docs.redb on a
+    // normal stop too (a hand-off already did this in quiesce; a second
+    // call is a no-op). Every change is durable before it was acked.
+    let _ = tokio::task::spawn_blocking(|| crate::docs::release("daemon stop")).await;
 
     // 0.40.48: release the tunnel BEFORE exiting. frpc is our child; if we
     // exit without stopping it, it is orphaned and keeps the frps

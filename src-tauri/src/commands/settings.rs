@@ -273,6 +273,12 @@ fn windows_cli_install(cli_script: &Path, legacy_shim: &Option<PathBuf>) -> Resu
     let dest_script = cli_dir.join("k2");
     fs::copy(cli_script, &dest_script)
         .map_err(|e| format!("copy CLI script to {}: {e}", dest_script.display()))?;
+    // `k2 zen widget preview --shot` runs the Playwright runner that sits
+    // next to the script.
+    if let Some(runner) = cli_script.parent().map(|d| d.join("k2-widget-shot.mjs")).filter(|p| p.is_file()) {
+        fs::copy(&runner, cli_dir.join("k2-widget-shot.mjs"))
+            .map_err(|e| format!("copy the widget-shot runner to {}: {e}", cli_dir.display()))?;
+    }
     if let Some(shim) = legacy_shim {
         let _ = fs::copy(shim, cli_dir.join("k2so"));
     }

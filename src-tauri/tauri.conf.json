@@ -67,7 +67,7 @@
         "applicationFolderPosition": { "x": 480, "y": 170 }
       }
     },
-    "resources": ["../cli/*"],
+    "resources": ["../cli/k2", "../cli/k2so", "../cli/k2-widget-shot.mjs"],
     "externalBin": ["binaries/frpc"]
   },
   "plugins": {

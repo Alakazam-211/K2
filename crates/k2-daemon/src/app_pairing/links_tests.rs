@@ -285,9 +285,18 @@ async fn the_front_answers_before_dialing_so_a_down_app_still_serves_its_files()
     assert_eq!(dials.load(Ordering::SeqCst), 0, "the App was never dialed");
     let mut c = via_front(id).await;
     c.write_all(b"GET /x HTTP/1.1\r\nHost: jobs.box.k2.dev\r\n\r\n").await.unwrap();
-    let mut first = [0u8; 64];
-    let n = tokio::time::timeout(Duration::from_secs(10), c.read(&mut first)).await.expect("answer").unwrap();
-    assert!(String::from_utf8_lossy(&first[..n]).ends_with("app"), "the App answered the first request");
+    // The App's answer may arrive in more than one read (headers, then
+    // body): read until its 3-byte body is in, within the timeout.
+    let mut first = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !first.ends_with(b"app") {
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout_at(deadline, c.read(&mut buf)).await.expect("answer").unwrap();
+        assert!(n > 0, "the connection closed before the App's answer: {:?}", String::from_utf8_lossy(&first));
+        first.extend_from_slice(&buf[..n]);
+    }
+    let first = String::from_utf8_lossy(&first).into_owned();
+    assert!(first.starts_with("HTTP/1.1 200 OK") && first.ends_with("app"), "the App answered the first request: {first}");
     c.write_all(b"GET /.well-known/apple-app-site-association HTTP/1.1\r\nHost: jobs.box.k2.dev\r\n\r\n").await.unwrap();
     let out = read_all(c).await;
     assert!(out.contains("ABCDE12345.com.jobs.app"), "K2 answered the second: {out}");

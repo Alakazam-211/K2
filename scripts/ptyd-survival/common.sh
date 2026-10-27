@@ -84,6 +84,59 @@ after_stop() {
     ok "$what: agent and ptyd ended"
 }
 
+# ── update-swap runs (update-launchd.sh, update-systemd-user.sh) ─────────
+# OLD and NEW: dirs holding a k2-daemon and the k2-ptyd built with it (e.g.
+# v0.46.4 and the tip); AGENT: the k2-ptyd-test-agent binary.
+need_update_bins() {
+    : "${OLD:?set OLD to the dir of the old k2-daemon + k2-ptyd}" "${NEW:?set NEW to the dir of the new ones}" "${AGENT:?set AGENT to k2-ptyd-test-agent}"
+    local b
+    for b in "$OLD/k2-daemon" "$OLD/k2-ptyd" "$NEW/k2-daemon" "$NEW/k2-ptyd" "$AGENT"; do [ -x "$b" ] || die "missing $b"; done
+}
+
+# swap_bins <src dir> <dst dir>: the self-updater's in-place swap — stage
+# beside the running binary, then rename over it (the running image keeps
+# its inode). k2-ptyd ships beside the daemon.
+swap_bins() {
+    local src="$1" dst="$2" b
+    mkdir -p "$dst"
+    for b in k2-daemon k2-ptyd; do
+        cp "$src/$b" "$dst/.$b.new" && chmod 755 "$dst/.$b.new" && mv -f "$dst/.$b.new" "$dst/$b" || die "swap $b"
+    done
+}
+
+# S5: no call the agent made failed (refused connect, dropped socket, 503).
+assert_no_failed_calls() {
+    local f bad
+    for f in hook.log tcp.log; do
+        [ -f "$SCRATCH/agent/$f" ] || continue
+        bad=$(grep -E ' (ERR:|503)' "$SCRATCH/agent/$f" || true)
+        [ -z "$bad" ] || die "$1: the agent's calls failed during the window ($f): $(printf '%s' "$bad" | head -3)"
+    done
+}
+
+adoptions_of() { grep -c "adopted session=$1 " "$SCRATCH/daemon.log" || true; }
+
+# after_update <what> <adoptions before> <screen: restored|replayed>: the
+# same agent, adopted once more by the new daemon, its screen restored or
+# replayed as expected, ptyd kept, and no call failed.
+after_update() {
+    local what="$1" before="$2" want="$3" now last
+    after_restart "$what"
+    now=$(adoptions_of "$SID")
+    [ "$now" -gt "$before" ] || die "$what: the new daemon did not adopt session $SID"
+    last=$(grep "adopted session=$SID " "$SCRATCH/daemon.log" | grep 'screen=' | tail -1)
+    case "$last" in *"screen=$want"*) ;; *) die "$what: expected screen=$want, got: $last" ;; esac
+    [ "$(ptyd_pid)" = "$PTYD_PID" ] || die "$what: ptyd changed ($PTYD_PID → $(ptyd_pid)); expected it kept (same protocol)"
+    alive "$PTYD_PID" || die "$what: ptyd died"
+    assert_no_failed_calls "$what"
+    ok "$what: agent $AGENT_PID adopted (screen $want), ptyd $PTYD_PID kept, no failed calls"
+}
+
+enable_survive_setting() {
+    curl -s -X POST "http://127.0.0.1:$PORT/cli/settings/update?token=$TOKEN" -H 'Content-Type: application/json' \
+        --data '{"terminal":{"ptyd":"on"}}' | grep -q '"ptyd":"on"' || die "could not turn terminal.ptyd on"
+}
+
 write_intent() {
     mkdir -p "$SCRATCH/.k2/run"
     ( umask 077; printf '{"by":"%s","at":%s,"nonce":"t-%s"}' "$1" "$(date +%s)" "$$" > "$SCRATCH/.k2/run/stop-intent.json" )

@@ -110,8 +110,13 @@ fn restrict_mode(file: &std::path::Path) {
     }
 }
 
+/// Windows: an owner-only DACL, the 0600 of this OS.
 #[cfg(not(unix))]
-fn restrict_mode(_file: &std::path::Path) {}
+fn restrict_mode(file: &std::path::Path) {
+    if let Err(e) = crate::private_fs::make_private_file(file) {
+        crate::log_debug!("[auth_audit] WARN make owner-only {}: {e}", file.display());
+    }
+}
 
 fn render_line(ev: &AuditEvent) -> String {
     let mut v = serde_json::json!({

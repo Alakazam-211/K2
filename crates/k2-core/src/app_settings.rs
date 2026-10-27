@@ -1322,8 +1322,13 @@ fn restrict_mode(file: &Path) {
     }
 }
 
+/// Windows: an owner-only DACL, the 0600 of this OS.
 #[cfg(not(unix))]
-fn restrict_mode(_file: &Path) {}
+fn restrict_mode(file: &Path) {
+    if let Err(e) = crate::private_fs::make_private_file(file) {
+        log_debug!("[app_settings] WARN: make owner-only {}: {}", file.display(), e);
+    }
+}
 
 #[cfg(unix)]
 fn restrict_mode_if_wider(file: &Path) {
@@ -1343,7 +1348,12 @@ fn restrict_mode_if_wider(file: &Path) {
 }
 
 #[cfg(not(unix))]
-fn restrict_mode_if_wider(_file: &Path) {}
+fn restrict_mode_if_wider(file: &Path) {
+    let Ok(meta) = fs::metadata(file) else { return };
+    if !crate::private_fs::is_private(file, &meta) {
+        restrict_mode(file);
+    }
+}
 
 /// Process-wide lock around `load + merge + save` critical sections.
 /// The on-disk file uses tmp+rename so readers never see a torn write,

@@ -101,9 +101,10 @@ fn restrict_dir(dir: &std::path::Path) -> Result<(), String> {
         .map_err(|e| format!("vault chmod 0700 {}: {e}", dir.display()))
 }
 
+/// Windows: an owner-only DACL, the 0700 of this OS.
 #[cfg(not(unix))]
-fn restrict_dir(_dir: &std::path::Path) -> Result<(), String> {
-    Ok(())
+fn restrict_dir(dir: &std::path::Path) -> Result<(), String> {
+    crate::private_fs::make_private_dir(dir).map_err(|e| format!("vault make owner-only {}: {e}", dir.display()))
 }
 
 pub fn exists(workspace_id: &str, name: &str) -> bool {

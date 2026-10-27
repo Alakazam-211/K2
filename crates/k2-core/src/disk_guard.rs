@@ -1229,8 +1229,13 @@ fn restrict_mode(file: &Path) {
     }
 }
 
+/// Windows: an owner-only DACL, the 0600 of this OS.
 #[cfg(not(unix))]
-fn restrict_mode(_file: &Path) {}
+fn restrict_mode(file: &Path) {
+    if let Err(e) = crate::private_fs::make_private_file(file) {
+        crate::log_debug!("[disk_guard] make owner-only {}: {e}", file.display());
+    }
+}
 
 /// Append one guard-log line: `{"at": <unix s>, "event": <event>, …fields}`.
 /// Events: `refused`, `warned`, `override`, `held`, `notice`, `sweep`,
@@ -1937,6 +1942,9 @@ mod tests {
 
     /// Linux: the mount's source from mountinfo (the mount in effect), and
     /// the `by-uuid` link that resolves to it.
+    // /dev/disk/by-uuid and its relative '../dev/sdX' links are Linux's;
+    // Windows names a volume by its serial (win_volume).
+    #[cfg(unix)]
     #[test]
     fn linux_uuid_comes_from_the_mount_source_and_by_uuid() {
         let info = "\

@@ -160,14 +160,15 @@ fn restrict_dir(p: &Path) -> Result<(), String> {
         .map_err(|e| format!("chmod 0700 {}: {e}", p.display()))
 }
 
+/// Windows: an owner-only DACL, the 0600 of this OS.
 #[cfg(not(unix))]
-fn restrict_file(_p: &Path) -> Result<(), String> {
-    Ok(())
+fn restrict_file(p: &Path) -> Result<(), String> {
+    crate::private_fs::make_private_file(p).map_err(|e| format!("make {} owner-only: {e}", p.display()))
 }
 
 #[cfg(not(unix))]
-fn restrict_dir(_p: &Path) -> Result<(), String> {
-    Ok(())
+fn restrict_dir(p: &Path) -> Result<(), String> {
+    crate::private_fs::make_private_dir(p).map_err(|e| format!("make {} owner-only: {e}", p.display()))
 }
 
 #[cfg(test)]
@@ -278,6 +279,18 @@ mod tests {
                 .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
                 .collect();
             assert_eq!(leftovers, vec!["identity.pem".to_string()], "no temp files left behind");
+        });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn identity_file_and_dir_are_owner_only() {
+        use crate::private_fs::is_private;
+        with_temp_home(|| {
+            load_or_create().expect("identity");
+            let (f, d) = (identity_path(), identity_dir());
+            assert!(is_private(&f, &fs::metadata(&f).expect("stat")), "identity.pem owner-only");
+            assert!(is_private(&d, &fs::metadata(&d).expect("stat dir")), "its folder owner-only");
         });
     }
 

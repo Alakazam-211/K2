@@ -533,8 +533,13 @@ fn restrict_mode(file: &Path) {
     }
 }
 
+/// Windows: an owner-only DACL, the 0600 of this OS.
 #[cfg(not(unix))]
-fn restrict_mode(_file: &Path) {}
+fn restrict_mode(file: &Path) {
+    if let Err(e) = crate::private_fs::make_private_file(file) {
+        crate::log_debug!("[connect_users] WARN make owner-only {}: {e}", file.display());
+    }
+}
 
 /// On-disk shape: a flat list of accounts + the password policy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -3308,6 +3313,21 @@ mod tests {
                 mode2, 0o600,
                 "store must stay 0600 after a rewrite, got {mode2:o}"
             );
+        });
+    }
+
+    /// Windows: the same store is owner-only (DACL) after a write and a
+    /// rewrite.
+    #[cfg(windows)]
+    #[test]
+    fn store_file_is_written_owner_only() {
+        use crate::private_fs::is_private;
+        with_temp_home(|| {
+            add_user("permu", "password").expect("add");
+            let p = store_path();
+            assert!(is_private(&p, &fs::metadata(&p).expect("stat")), "owner-only after the first write");
+            set_policy(PasswordPolicy { min_length: 10, ..Default::default() }).expect("set policy");
+            assert!(is_private(&p, &fs::metadata(&p).expect("stat")), "owner-only after a rewrite");
         });
     }
 

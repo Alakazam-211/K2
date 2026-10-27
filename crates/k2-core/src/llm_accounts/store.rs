@@ -323,9 +323,19 @@ pub fn set_mode(p: &Path, mode: u32) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(p, fs::Permissions::from_mode(mode))
 }
+/// Windows has no mode bits: an owner-only mode (no group/other bits, as
+/// 0600 / 0700) becomes an owner-only DACL; a wider one keeps what the
+/// file inherited.
 #[cfg(not(unix))]
-pub fn set_mode(_p: &Path, _mode: u32) -> std::io::Result<()> {
-    Ok(())
+pub fn set_mode(p: &Path, mode: u32) -> std::io::Result<()> {
+    if mode & 0o077 != 0 {
+        return Ok(());
+    }
+    if p.is_dir() {
+        crate::private_fs::make_private_dir(p)
+    } else {
+        crate::private_fs::make_private_file(p)
+    }
 }
 
 /// Create `dir` (and the wallet parents) with mode 0700.

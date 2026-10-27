@@ -466,9 +466,10 @@ fn restrict_mode(file: &Path) -> Result<(), String> {
         .map_err(|e| format!("chmod 0600 {}: {e}", file.display()))
 }
 
+/// Windows: an owner-only DACL, the 0600 of this OS.
 #[cfg(not(unix))]
-fn restrict_mode(_file: &Path) -> Result<(), String> {
-    Ok(())
+fn restrict_mode(file: &Path) -> Result<(), String> {
+    crate::private_fs::make_private_file(file).map_err(|e| format!("make {} owner-only: {e}", file.display()))
 }
 
 #[cfg(test)]

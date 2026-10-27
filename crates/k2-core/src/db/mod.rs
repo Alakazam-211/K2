@@ -585,7 +585,7 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
 
 /// [`run_migrations`], stopping after `last` when given (tests build an
 /// older release's database this way, then upgrade it).
-fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
+pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS _migrations (
             id INTEGER PRIMARY KEY,
@@ -1664,6 +1664,13 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // off). ADD COLUMN only. Provisional number: renumber at
         // integration (Ops - Migration numbers).
         ("0241_compute_submitter_cap", include_str!("../../drizzle_sql/0241_compute_submitter_cap.sql")),
+        // 0236 — custom domains that serve an App (prd-app-custom-domains-v1
+        // §5, vs-live CD-A4; 0.46.6): additive columns on `domain_names`
+        // (state, TXT proof token, last check, path, primary, last error,
+        // failing-since). Existing `app:` rows start at `waiting_dns`. It lands after
+        // 0233, 0232 and 0234 and runs after them, in landing order. The
+        // store is `crate::domains` (`AppDomain`).
+        ("0236_app_custom_domains", include_str!("../../drizzle_sql/0236_app_custom_domains.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2327,7 +2334,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0241_compute_submitter_cap",
+            last_name, "0236_app_custom_domains",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2415,6 +2422,8 @@ mod tests {
                 "0240_compute_queue_of",
                 // 0.46.6: compute per-submitter cap (provisional number).
                 "0241_compute_submitter_cap",
+                // 0.46.6: App custom domains (state, TXT proof, primary).
+                "0236_app_custom_domains",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2510,6 +2519,8 @@ mod tests {
                 "0240_compute_queue_of",
                 // 0.46.6: compute per-submitter cap (provisional number).
                 "0241_compute_submitter_cap",
+                // 0.46.6: App custom domains (state, TXT proof, primary).
+                "0236_app_custom_domains",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2737,7 +2748,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0241_compute_submitter_cap", "0241 (0.46.6, compute per-submitter cap) runs last");
+        assert_eq!(top, "0236_app_custom_domains", "0236 (0.46.6) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2767,9 +2778,10 @@ mod tests {
                 "0232_ticket_attachments",
                 "0234_sew_chat",
                 "0240_compute_queue_of",
-                "0241_compute_submitter_cap"
+                "0241_compute_submitter_cap",
+                "0236_app_custom_domains"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240 then 0241)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240, 0241 then 0236)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3607,7 +3619,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0241 and 0240 (compute job tiers v2, 0.46.6) are the newest:
+            // 0236 (App custom domains, 0.46.6) is the newest: its record
+            // goes (its columns stay; re-adding is skipped as duplicates).
+            conn.execute("DELETE FROM _migrations WHERE name = '0236_app_custom_domains'", []).unwrap();
+            // 0241 and 0240 (compute job tiers v2, 0.46.6) came before it:
             // their records go (their columns stay; re-adding is skipped as
             // a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0241_compute_submitter_cap'", []).unwrap();

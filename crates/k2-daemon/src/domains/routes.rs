@@ -104,12 +104,34 @@ fn gate_agent_list() -> Result<(), CliResponse> {
 }
 
 fn name_json(n: &DomainName) -> serde_json::Value {
-    serde_json::json!({
+    let mut v = serde_json::json!({
         "hostname": n.hostname,
         "role": n.role,
         "cert": crate::domains::status::cert_json_for(&n.hostname, &n.role),
         "renewal": crate::domains::renew::name_json(&n.hostname),
-    })
+    });
+    // 0.46.6 (CD-A5): an App name says whether it is served, and by whom.
+    if let Some(app) = crate::apps::custom_domains::status_json_for(&n.hostname, true) {
+        v["app"] = app;
+    }
+    v
+}
+
+/// The caller's workspace id when an agent passport made the request
+/// (`None` = the owner token or an Admin).
+fn caller_ws() -> Option<String> {
+    crate::caller_workspace::request_principal().map(|p| p.workspace_uuid)
+}
+
+fn custom_refusal(r: crate::apps::custom_domains::Refusal) -> CliResponse {
+    let status = match r.status {
+        400 => "400 Bad Request",
+        403 => "403 Forbidden",
+        404 => "404 Not Found",
+        409 => "409 Conflict",
+        _ => "500 Internal Server Error",
+    };
+    error_response(status, r.code, &r.hint)
 }
 
 fn domain_json(conn: &rusqlite::Connection, b: &DomainBinding) -> serde_json::Value {
@@ -443,6 +465,26 @@ pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
         Ok(r) => r,
         Err(e) => return error_response("400 Bad Request", "invalid_role", &e),
     };
+    // 0.46.6 (vs-live CD-A2): `app:<id>` must name an App on this box, and
+    // an agent may bind only its own workspace's (with "Build and run
+    // Apps"). A name already bound to another workspace's App is never an
+    // agent's to re-role.
+    let caller = caller_ws();
+    if let Some(app) = k2_core::domains::app_of_role(&role) {
+        if let Err(r) = crate::apps::custom_domains::may_bind(caller.as_deref(), app) {
+            return custom_refusal(r);
+        }
+    }
+    let existing = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        get_name(&conn, &hostname).ok().flatten()
+    };
+    if let Some(cur) = existing.as_ref().filter(|c| c.role != role) {
+        if let Err(r) = crate::apps::custom_domains::may_change_existing(caller.as_deref(), &hostname, &cur.role) {
+            return custom_refusal(r);
+        }
+    }
 
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -475,18 +517,19 @@ pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
     }
 
     match upsert_name(&conn, &hostname, &apex, &role) {
-        Ok(n) => CliResponse::ok_json(
-            serde_json::json!({
-                "ok": true,
-                "name": {
-                    "hostname": n.hostname,
-                    "apex": n.apex,
-                    "role": n.role,
-                    "cert": crate::domains::status::cert_json_for(&n.hostname, &n.role),
-                }
-            })
-            .to_string(),
-        ),
+        Ok(n) => {
+            drop(conn);
+            let mut name = serde_json::json!({
+                "hostname": n.hostname,
+                "apex": n.apex,
+                "role": n.role,
+                "cert": crate::domains::status::cert_json_for(&n.hostname, &n.role),
+            });
+            if let Some(app) = crate::apps::custom_domains::status_json_for(&n.hostname, false) {
+                name["app"] = app;
+            }
+            CliResponse::ok_json(serde_json::json!({ "ok": true, "name": name }).to_string())
+        }
         Err(e) => error_response("500 Internal Server Error", "db", &e.to_string()),
     }
 }
@@ -525,6 +568,12 @@ pub fn handle_names_remove(params: &HashMap<String, String>) -> CliResponse {
     };
     let db = k2_core::db::shared();
     let conn = db.lock();
+    // 0.46.6 (CD-A2): an agent never unbinds another workspace's App name.
+    if let Some(cur) = get_name(&conn, &hostname).ok().flatten() {
+        if let Err(r) = crate::apps::custom_domains::may_change_existing(caller_ws().as_deref(), &hostname, &cur.role) {
+            return custom_refusal(r);
+        }
+    }
     match remove_name(&conn, &hostname) {
         Ok(true) => CliResponse::ok_json(
             serde_json::json!({ "ok": true, "removed": hostname }).to_string(),
@@ -549,16 +598,23 @@ pub fn handle_certs_list(_params: &HashMap<String, String>) -> CliResponse {
         Ok(v) => v,
         Err(e) => return error_response("500 Internal Server Error", "db", &e.to_string()),
     };
+    drop(conn);
     let certs: Vec<serde_json::Value> = names
         .iter()
         .map(|n| {
-            serde_json::json!({
+            let mut v = serde_json::json!({
                 "hostname": n.hostname,
                 "apex": n.apex,
                 "role": n.role,
                 "cert": crate::domains::status::cert_json_for(&n.hostname, &n.role),
                 "renewal": crate::domains::renew::name_json(&n.hostname),
-            })
+            });
+            // 0.46.6 (CD-A5): an App name says whether it is served (a cert
+            // in the store is not a served name).
+            if let Some(app) = crate::apps::custom_domains::status_json_for(&n.hostname, true) {
+                v["app"] = app;
+            }
+            v
         })
         .collect();
     CliResponse::ok_json(serde_json::json!({ "ok": true, "certs": certs }).to_string())

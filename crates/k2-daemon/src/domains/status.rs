@@ -490,6 +490,20 @@ fn pem_first_cert_der(pem: &str) -> Option<Vec<u8>> {
 }
 
 pub fn cert_json_for(hostname: &str, role: &str) -> serde_json::Value {
+    // 0.46.6 (vs-live CD-A5): an App name's certificate is THIS box's
+    // stored one. The public :443 probe answers for whatever DNS points at
+    // (the old host's valid leaf read `issued` here before), so it counts
+    // only when the served leaf is ours; `served` says which server
+    // answered.
+    if k2_core::domains::app_of_role(role).is_some() {
+        let served = crate::apps::custom_domains::served_by(hostname);
+        let mut v = match served {
+            crate::apps::custom_domains::ServedBy::ThisBox => probe_hostname(hostname, false).to_json(),
+            _ => from_pem_file(hostname).unwrap_or_else(|| ProbeResult::missing(hostname)).to_json(),
+        };
+        v["served"] = serde_json::json!(served.as_str());
+        return v;
+    }
     let mail = role == k2_core::domains::ROLE_MAIL;
     let live = probe_hostname(hostname, mail);
     if live.state != "missing" {

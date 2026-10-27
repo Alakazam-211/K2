@@ -32,6 +32,9 @@ pub mod handover_plan;
 pub mod labels;
 /// `k2 app domain add|rm`: any subdomain of the App's workspace (0.46.4).
 pub mod domains;
+/// Custom domains that actually serve an App (0.46.6,
+/// prd-app-custom-domains-v1): who may bind, state, checks, the TLS door.
+pub mod custom_domains;
 /// `k2 app move-plan`: every step of a move, one owner approval (0.46.4).
 pub mod move_plan;
 /// Test guests of one App, made by a person (0.46.4).

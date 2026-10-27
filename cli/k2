@@ -10680,11 +10680,15 @@ MANIFEST (manifest.json at the folder root, schema 1)
 
 PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
   Every App process gets the https origins people reach it on:
-    K2_APP_ORIGIN    the primary one: a bound custom domain, else
-                     https://<app-id>.<sub>.k2.dev
-    K2_APP_ORIGINS   all of them, comma-separated, primary first
-  A custom domain counts once it is bound to the App:
-    k2 domain name add app.example.com --role app:<app-id>
+    K2_APP_ORIGIN    the primary one: the custom domain you picked with
+                     k2 app domain primary <app-id> <host> (once it is
+                     live), else https://<app-id>.<sub>.k2.dev
+    K2_APP_ORIGINS   all of them, comma-separated, primary first; the
+                     App's k2.dev labels always stay listed
+  A custom domain counts once this box actually serves it (state live,
+  see k2 app domains <app-id>); a bound name that is not served yet is
+  not an origin:
+    k2 app domain add <app-id> app.example.com
   K2 reads them at every start, so a changed binding reaches the App on
   its next deploy or restart (k2 app restart <app-id>). No public URL
   (a local-only App, no K2 Connect subdomain, no custom domain): neither
@@ -65888,6 +65892,24 @@ def renew_suffix(row):
         s += " (%s failed; next %s)" % (r.get("failures"), r.get("nextAttempt") or "?")
     return s
 
+def app_suffix(row):
+    # 0.46.6 (CD-A5): an App name says whether anything serves it. A cert
+    # in the store is not a served name.
+    a = row.get("app") if isinstance(row, dict) else None
+    if not isinstance(a, dict):
+        return ""
+    if a.get("error") == "unknown_app":
+        return "  (not served: no App %s here)" % (a.get("app") or "?")
+    if a.get("notServedYet"):
+        s = "  (not served yet: %s)" % (a.get("state") or "waiting_dns")
+    else:
+        s = "  (served: live%s)" % (", primary" if a.get("primary") else "")
+    if a.get("served") == "elsewhere":
+        s += "  :443 answers with another server's certificate"
+    if a.get("warning"):
+        s += "  warning: %s" % a.get("warning")
+    return s
+
 def state_words(row):
     if is_pending(row):
         return "pending nameservers"
@@ -65933,7 +65955,7 @@ if verb == "list":
             if not isinstance(n, dict):
                 continue
             cert = (n.get("cert") or {}).get("state") or "missing"
-            print("  %-26s  %-8s  cert %s%s" % (n.get("hostname") or "?", n.get("role") or "other", cert, renew_suffix(n)))
+            print("  %-26s  %-8s  cert %s%s%s" % (n.get("hostname") or "?", n.get("role") or "other", cert, renew_suffix(n), app_suffix(n)))
     sys.exit(0)
 
 if verb == "certs":
@@ -65947,7 +65969,7 @@ if verb == "certs":
             print(str(c))
             continue
         cert = (c.get("cert") or {}).get("state") or "missing"
-        print("%-32s  %-8s  %s%s" % (c.get("hostname") or "?", c.get("role") or "other", cert, renew_suffix(c)))
+        print("%-32s  %-8s  %s%s%s" % (c.get("hostname") or "?", c.get("role") or "other", cert, renew_suffix(c), app_suffix(c)))
     sys.exit(0)
 
 # remove / name — compact success

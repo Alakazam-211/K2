@@ -47,7 +47,9 @@ pub fn normalize_role(raw: Option<&str>) -> Result<String, String> {
 }
 
 /// The custom hostnames bound to App `name` (role `app:<name>`) whose apex
-/// is still attached here. Sorted; a dangling apex is treated as missing.
+/// is still attached here, served or not. Sorted; a dangling apex is
+/// treated as missing. For the App's ORIGINS use [`live_hostnames_for_app`]
+/// (0.46.6, vs-live CD-A4): a bound name that nothing serves is no origin.
 pub fn hostnames_for_app(conn: &Connection, name: &str) -> rusqlite::Result<Vec<String>> {
     let role = format!("{ROLE_APP_PREFIX}{}", name.to_ascii_lowercase());
     let mut stmt = conn.prepare(
@@ -56,6 +58,199 @@ pub fn hostnames_for_app(conn: &Connection, name: &str) -> rusqlite::Result<Vec<
     )?;
     let rows = stmt.query_map(params![role], |row| row.get::<_, String>(0))?;
     rows.collect()
+}
+
+// ── App custom domains (0.46.6, prd-app-custom-domains-v1 §5/§6) ─────
+
+/// `app:` row states. Every other role keeps `state` NULL.
+pub const STATE_WAITING_DNS: &str = "waiting_dns";
+pub const STATE_VERIFYING: &str = "verifying";
+pub const STATE_ISSUING: &str = "issuing";
+pub const STATE_LIVE: &str = "live";
+pub const STATE_FAILING: &str = "failing";
+pub const APP_STATES: &[&str] = &[STATE_WAITING_DNS, STATE_VERIFYING, STATE_ISSUING, STATE_LIVE, STATE_FAILING];
+
+/// What DNS showed at the last check: the name points at this box's
+/// public IP (path a) or at its `<sub>.k2.dev` (path b, through Connect).
+pub const PATH_DIRECT: &str = "direct";
+pub const PATH_CONNECT: &str = "connect";
+
+/// The owner name of the TXT proof (§6).
+pub const VERIFY_LABEL: &str = "_k2-domain";
+
+/// `_k2-domain.<host>`: where the TXT proof for `host` lives.
+pub fn verify_txt_name(hostname: &str) -> String {
+    format!("{VERIFY_LABEL}.{}", hostname.trim().trim_end_matches('.').to_ascii_lowercase())
+}
+
+/// `k2-verify=<token>`: the TXT proof's value.
+pub fn verify_txt_value(token: &str) -> String {
+    format!("k2-verify={token}")
+}
+
+/// A fresh random 128-bit token (32 lowercase hex chars).
+pub fn new_verify_token() -> String {
+    let mut b = [0u8; 16];
+    if getrandom::getrandom(&mut b).is_err() {
+        // Never a predictable token: fall back to a v4 uuid's randomness.
+        b = *uuid::Uuid::new_v4().as_bytes();
+    }
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// One `app:` hostname with its serving state (0236).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppDomain {
+    pub hostname: String,
+    pub apex: String,
+    /// The App id (`app:<id>` → `<id>`).
+    pub app: String,
+    pub state: String,
+    pub verify_token: String,
+    pub verified_at: Option<i64>,
+    pub checked_at: Option<i64>,
+    pub path: Option<String>,
+    pub is_primary: bool,
+    pub last_error: Option<String>,
+    pub failing_since: Option<i64>,
+    /// The apex row still exists (a dangling apex serves nothing).
+    pub apex_attached: bool,
+}
+
+impl AppDomain {
+    /// Serving now: state `live` on an attached apex.
+    pub fn is_live(&self) -> bool {
+        self.state == STATE_LIVE && self.apex_attached
+    }
+    /// The TXT record to set: (name, value).
+    pub fn txt(&self) -> (String, String) {
+        (verify_txt_name(&self.hostname), verify_txt_value(&self.verify_token))
+    }
+}
+
+const APP_DOMAIN_COLS: &str = "n.hostname, n.apex, n.role, n.state, n.verify_token, n.verified_at, n.checked_at, \
+     n.path, n.is_primary, n.last_error, n.failing_since, (b.apex IS NOT NULL)";
+
+fn app_domain_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AppDomain> {
+    let role: String = row.get(2)?;
+    Ok(AppDomain {
+        hostname: row.get(0)?,
+        apex: row.get(1)?,
+        app: app_of_role(&role).unwrap_or("").to_string(),
+        state: row.get::<_, Option<String>>(3)?.unwrap_or_else(|| STATE_WAITING_DNS.to_string()),
+        verify_token: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+        verified_at: row.get(5)?,
+        checked_at: row.get(6)?,
+        path: row.get(7)?,
+        is_primary: row.get::<_, i64>(8)? != 0,
+        last_error: row.get(9)?,
+        failing_since: row.get(10)?,
+        apex_attached: row.get::<_, i64>(11)? != 0,
+    })
+}
+
+/// Every `app:` hostname on this box, by hostname.
+pub fn app_domains(conn: &Connection) -> rusqlite::Result<Vec<AppDomain>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {APP_DOMAIN_COLS} FROM domain_names n LEFT JOIN domain_bindings b ON b.apex = n.apex \
+         WHERE n.role LIKE 'app:%' ORDER BY n.hostname"
+    ))?;
+    let rows = stmt.query_map([], app_domain_from_row)?;
+    rows.collect()
+}
+
+/// The `app:` hostnames bound to App `app`, by hostname.
+pub fn app_domains_for(conn: &Connection, app: &str) -> rusqlite::Result<Vec<AppDomain>> {
+    let role = format!("{ROLE_APP_PREFIX}{}", app.to_ascii_lowercase());
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {APP_DOMAIN_COLS} FROM domain_names n LEFT JOIN domain_bindings b ON b.apex = n.apex \
+         WHERE n.role = ?1 ORDER BY n.hostname"
+    ))?;
+    let rows = stmt.query_map(params![role], app_domain_from_row)?;
+    rows.collect()
+}
+
+/// One `app:` hostname (`None` = not bound, or bound to another role).
+pub fn app_domain(conn: &Connection, hostname: &str) -> rusqlite::Result<Option<AppDomain>> {
+    conn.query_row(
+        &format!(
+            "SELECT {APP_DOMAIN_COLS} FROM domain_names n LEFT JOIN domain_bindings b ON b.apex = n.apex \
+             WHERE n.hostname = ?1 AND n.role LIKE 'app:%'"
+        ),
+        params![hostname],
+        app_domain_from_row,
+    )
+    .optional()
+}
+
+/// The hostnames that actually serve App `app` now: state `live` on an
+/// attached apex. These, and only these, are the App's custom origins
+/// (vs-live CD-A4). Sorted.
+pub fn live_hostnames_for_app(conn: &Connection, app: &str) -> rusqlite::Result<Vec<String>> {
+    Ok(app_domains_for(conn, app)?.into_iter().filter(AppDomain::is_live).map(|d| d.hostname).collect())
+}
+
+/// The App's primary custom name: marked `is_primary` AND live. `None`
+/// means the App's own K2 label is its primary origin (§8.2).
+pub fn primary_hostname_for_app(conn: &Connection, app: &str) -> rusqlite::Result<Option<String>> {
+    Ok(app_domains_for(conn, app)?.into_iter().find(|d| d.is_primary && d.is_live()).map(|d| d.hostname))
+}
+
+/// Mark `hostname` as App `app`'s primary name (clears the others).
+/// `Ok(false)` = `hostname` is not one of `app`'s names.
+pub fn set_primary(conn: &Connection, app: &str, hostname: &str) -> rusqlite::Result<bool> {
+    let role = format!("{ROLE_APP_PREFIX}{}", app.to_ascii_lowercase());
+    let tx = conn.unchecked_transaction()?;
+    let mine: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM domain_names WHERE hostname = ?1 AND role = ?2",
+        params![hostname, role],
+        |r| r.get(0),
+    )?;
+    if mine == 0 {
+        return Ok(false);
+    }
+    tx.execute("UPDATE domain_names SET is_primary = 0 WHERE role = ?1 AND hostname != ?2", params![role, hostname])?;
+    tx.execute("UPDATE domain_names SET is_primary = 1 WHERE hostname = ?1", params![hostname])?;
+    tx.commit()?;
+    Ok(true)
+}
+
+/// Move an `app:` hostname to `state`, with `last_error` (None clears it).
+/// Returns whether a row changed. Refuses an unknown state.
+pub fn set_app_state(conn: &Connection, hostname: &str, state: &str, last_error: Option<&str>) -> rusqlite::Result<bool> {
+    if !APP_STATES.contains(&state) {
+        return Err(rusqlite::Error::InvalidParameterName(format!("unknown App domain state '{state}'")));
+    }
+    let n = conn.execute(
+        "UPDATE domain_names SET state = ?2, last_error = ?3 WHERE hostname = ?1 AND role LIKE 'app:%'",
+        params![hostname, state, last_error],
+    )?;
+    Ok(n > 0)
+}
+
+/// What one DNS check found, written in one statement.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CheckRecord {
+    pub checked_at: i64,
+    /// Set when the TXT proof and DNS both passed.
+    pub verified_at: Option<i64>,
+    /// What DNS showed (`None` keeps the last one).
+    pub path: Option<String>,
+    /// `Some(t)`: this check failed and the failing run started at `t`.
+    /// `None`: this check passed (the run is cleared).
+    pub failing_since: Option<i64>,
+}
+
+/// Store a check's outcome on an `app:` row (the state is set separately).
+pub fn record_app_check(conn: &Connection, hostname: &str, c: &CheckRecord) -> rusqlite::Result<bool> {
+    let n = conn.execute(
+        "UPDATE domain_names SET checked_at = ?2, verified_at = COALESCE(?3, verified_at), \
+           path = COALESCE(?4, path), failing_since = ?5 \
+         WHERE hostname = ?1 AND role LIKE 'app:%'",
+        params![hostname, c.checked_at, c.verified_at, c.path, c.failing_since],
+    )?;
+    Ok(n > 0)
 }
 
 /// True iff `hostname` is the apex or a label under it.
@@ -367,11 +562,32 @@ pub fn get_name(conn: &Connection, hostname: &str) -> rusqlite::Result<Option<Do
     .optional()
 }
 
+/// Insert or re-role a hostname. An `app:` role starts (or restarts, when
+/// the role or apex changes) at `waiting_dns` with a fresh TXT token, not
+/// primary; re-adding the same name with the same role and apex keeps its
+/// state. Any other role clears the App columns.
 pub fn upsert_name(conn: &Connection, hostname: &str, apex: &str, role: &str) -> rusqlite::Result<DomainName> {
+    let is_app = app_of_role(role).is_some();
+    let state = is_app.then_some(STATE_WAITING_DNS);
+    let token = is_app.then(new_verify_token);
+    // `same`: the row keeps its App columns only when role and apex stay.
+    const SAME: &str = "(domain_names.role = excluded.role AND domain_names.apex = excluded.apex)";
     conn.execute(
-        "INSERT INTO domain_names (hostname, apex, role) VALUES (?1, ?2, ?3) \
-         ON CONFLICT(hostname) DO UPDATE SET apex = excluded.apex, role = excluded.role",
-        params![hostname, apex, role],
+        &format!(
+            "INSERT INTO domain_names (hostname, apex, role, state, verify_token) VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(hostname) DO UPDATE SET \
+               state = CASE WHEN {SAME} THEN COALESCE(domain_names.state, excluded.state) ELSE excluded.state END, \
+               verify_token = CASE WHEN {SAME} THEN COALESCE(domain_names.verify_token, excluded.verify_token) \
+                                   ELSE excluded.verify_token END, \
+               verified_at = CASE WHEN {SAME} THEN domain_names.verified_at END, \
+               checked_at = CASE WHEN {SAME} THEN domain_names.checked_at END, \
+               path = CASE WHEN {SAME} THEN domain_names.path END, \
+               is_primary = CASE WHEN {SAME} THEN domain_names.is_primary ELSE 0 END, \
+               last_error = CASE WHEN {SAME} THEN domain_names.last_error END, \
+               failing_since = CASE WHEN {SAME} THEN domain_names.failing_since END, \
+               apex = excluded.apex, role = excluded.role"
+        ),
+        params![hostname, apex, role, state, token],
     )?;
     Ok(get_name(conn, hostname)?.expect("just upserted"))
 }
@@ -556,5 +772,136 @@ mod tests {
             vec!["chat.example.com".to_string(), "hearth.example.com".to_string()]
         );
         assert_eq!(hostnames_for_app(&conn, "nobody").unwrap(), Vec::<String>::new());
+    }
+
+    /// 0236: an `app:` name starts at `waiting_dns` with its own random
+    /// token; re-adding keeps it; a re-role or a move to another App starts
+    /// over (new token, not primary); another role clears the App columns.
+    #[test]
+    fn app_names_start_waiting_with_a_token_and_reset_on_re_role() {
+        let conn = fresh();
+        upsert_binding(&conn, "example.com", None, false).unwrap();
+        upsert_name(&conn, "a.example.com", "example.com", "app:hearth").unwrap();
+        upsert_name(&conn, "b.example.com", "example.com", "app:hearth").unwrap();
+        let a = app_domain(&conn, "a.example.com").unwrap().expect("bound");
+        let b = app_domain(&conn, "b.example.com").unwrap().expect("bound");
+        assert_eq!(a.state, STATE_WAITING_DNS);
+        assert_eq!(a.app, "hearth");
+        assert_eq!(a.verify_token.len(), 32, "128-bit hex token: {}", a.verify_token);
+        assert!(a.verify_token.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a.verify_token, b.verify_token, "per-name tokens");
+        assert_eq!(a.txt(), ("_k2-domain.a.example.com".to_string(), format!("k2-verify={}", a.verify_token)));
+        assert!(!a.is_primary);
+
+        // Same role again: nothing changes.
+        set_app_state(&conn, "a.example.com", STATE_LIVE, None).unwrap();
+        assert!(set_primary(&conn, "hearth", "a.example.com").unwrap());
+        upsert_name(&conn, "a.example.com", "example.com", "app:hearth").unwrap();
+        let again = app_domain(&conn, "a.example.com").unwrap().unwrap();
+        assert_eq!((again.state.as_str(), again.verify_token.as_str(), again.is_primary), (STATE_LIVE, a.verify_token.as_str(), true));
+
+        // Moved to another App: starts over.
+        upsert_name(&conn, "a.example.com", "example.com", "app:other").unwrap();
+        let moved = app_domain(&conn, "a.example.com").unwrap().unwrap();
+        assert_eq!(moved.state, STATE_WAITING_DNS);
+        assert_ne!(moved.verify_token, a.verify_token, "a new token");
+        assert!(!moved.is_primary, "not primary on its new App");
+
+        // Re-roled to mail: no App columns, and no longer an App domain.
+        upsert_name(&conn, "a.example.com", "example.com", ROLE_MAIL).unwrap();
+        assert!(app_domain(&conn, "a.example.com").unwrap().is_none());
+        let (st, tok): (Option<String>, Option<String>) = conn
+            .query_row("SELECT state, verify_token FROM domain_names WHERE hostname = 'a.example.com'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((st, tok), (None, None));
+    }
+
+    /// vs-live CD-A4: only `live` names on an attached apex are origins;
+    /// the primary is the one marked AND live, never the first by name.
+    #[test]
+    fn only_live_names_count_and_the_primary_must_be_live() {
+        let conn = fresh();
+        upsert_binding(&conn, "example.com", None, false).unwrap();
+        for h in ["aaa.example.com", "hearth.example.com", "zzz.example.com"] {
+            upsert_name(&conn, h, "example.com", "app:hearth").unwrap();
+        }
+        upsert_name(&conn, "hearth.gone.test", "gone.test", "app:hearth").unwrap();
+        assert!(live_hostnames_for_app(&conn, "hearth").unwrap().is_empty(), "nothing serves them yet");
+        assert_eq!(primary_hostname_for_app(&conn, "hearth").unwrap(), None);
+
+        set_app_state(&conn, "zzz.example.com", STATE_LIVE, None).unwrap();
+        set_app_state(&conn, "hearth.example.com", STATE_LIVE, None).unwrap();
+        set_app_state(&conn, "hearth.gone.test", STATE_LIVE, None).unwrap();
+        assert_eq!(
+            live_hostnames_for_app(&conn, "hearth").unwrap(),
+            vec!["hearth.example.com".to_string(), "zzz.example.com".to_string()],
+            "live on an attached apex only (aaa is waiting; gone.test has no apex)"
+        );
+        assert_eq!(primary_hostname_for_app(&conn, "hearth").unwrap(), None, "nobody picked one");
+
+        // A primary that is not live does not count.
+        assert!(set_primary(&conn, "hearth", "aaa.example.com").unwrap());
+        assert_eq!(primary_hostname_for_app(&conn, "hearth").unwrap(), None);
+        assert!(set_primary(&conn, "hearth", "zzz.example.com").unwrap());
+        assert_eq!(primary_hostname_for_app(&conn, "hearth").unwrap(), Some("zzz.example.com".to_string()));
+        let primaries: i64 = conn
+            .query_row("SELECT COUNT(*) FROM domain_names WHERE role = 'app:hearth' AND is_primary = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(primaries, 1, "one primary per App");
+        assert!(!set_primary(&conn, "other", "zzz.example.com").unwrap(), "not that App's name");
+        assert!(!set_primary(&conn, "hearth", "nope.example.com").unwrap());
+
+        assert!(set_app_state(&conn, "zzz.example.com", "bogus", None).is_err(), "unknown state refused");
+        set_app_state(&conn, "zzz.example.com", STATE_FAILING, Some("DNS now points at 203.0.113.9")).unwrap();
+        let z = app_domain(&conn, "zzz.example.com").unwrap().unwrap();
+        assert_eq!(z.last_error.as_deref(), Some("DNS now points at 203.0.113.9"));
+        assert_eq!(primary_hostname_for_app(&conn, "hearth").unwrap(), None, "a failing primary is no origin");
+    }
+
+    #[test]
+    fn a_check_record_keeps_the_last_proof_and_path() {
+        let conn = fresh();
+        upsert_binding(&conn, "example.com", None, false).unwrap();
+        upsert_name(&conn, "a.example.com", "example.com", "app:hearth").unwrap();
+        record_app_check(
+            &conn,
+            "a.example.com",
+            &CheckRecord { checked_at: 100, verified_at: Some(100), path: Some(PATH_DIRECT.into()), failing_since: None },
+        )
+        .unwrap();
+        record_app_check(&conn, "a.example.com", &CheckRecord { checked_at: 200, verified_at: None, path: None, failing_since: Some(200) })
+            .unwrap();
+        let a = app_domain(&conn, "a.example.com").unwrap().unwrap();
+        assert_eq!(
+            (a.checked_at, a.verified_at, a.path.as_deref(), a.failing_since),
+            (Some(200), Some(100), Some(PATH_DIRECT), Some(200))
+        );
+        assert!(!record_app_check(&conn, "nope.example.com", &CheckRecord::default()).unwrap());
+    }
+
+    /// 0236 on a database that already has `app:` rows (bound before
+    /// 0.46.6, never served): they come out `waiting_dns` with a token;
+    /// other roles stay NULL.
+    #[test]
+    fn migration_0236_backfills_existing_app_rows() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::run_migrations_through(&conn, Some("0231_zen_version_carry")).unwrap();
+        conn.execute_batch(
+            "INSERT INTO domain_bindings (apex) VALUES ('example.com');
+             INSERT INTO domain_names (hostname, apex, role) VALUES ('a.example.com', 'example.com', 'app:hearth');
+             INSERT INTO domain_names (hostname, apex, role) VALUES ('mail.example.com', 'example.com', 'mail');",
+        )
+        .unwrap();
+        crate::db::run_migrations(&conn).unwrap();
+        let a = app_domain(&conn, "a.example.com").unwrap().expect("still bound");
+        assert_eq!(a.state, STATE_WAITING_DNS);
+        assert_eq!(a.verify_token.len(), 32);
+        assert!(!a.is_primary);
+        let st: Option<String> = conn
+            .query_row("SELECT state FROM domain_names WHERE hostname = 'mail.example.com'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(st, None);
     }
 }

@@ -1272,6 +1272,13 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // its workspace's "Manage K2 projects" switch is off. The switch
         // itself (`/cli/agent-access/set`) is NOT an agent verb.
         "/cli/project-group/",
+        // Live docs (`k2 doc`, Markdown multiplayer v1; vs-live MI2). Not
+        // `/cli/fs/` (still DENY): the docs handler resolves the passport
+        // to its own workspace, jails every path, refuses the deny list
+        // (secrets, vault, generated files), and checks rights per doc on
+        // every call (another workspace needs a connection and a share).
+        // Identity is stamped from the session, never the body.
+        "/cli/docs/",
         // Sandbox P1 (Finding-1 follow-on): `/cli/review-checklist/` was
         // DROPPED from the scoped allowlist. Its handlers take the raw `body`
         // (not the params map) and so are NOT reached by the principal-pin in

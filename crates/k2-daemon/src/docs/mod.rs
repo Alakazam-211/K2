@@ -19,7 +19,10 @@
 //! `K2_DOCS_UNSYNCED_EDITS=1` (tests and headless smokes), and the
 //! `docs-md-v1` feature key stays off ([`live_ready`]).
 
+pub mod caller;
 pub mod host;
+pub mod routes;
+pub mod target;
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};

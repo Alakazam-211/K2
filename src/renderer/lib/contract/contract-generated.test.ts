@@ -345,6 +345,8 @@ describe('TUWA10: one cap table', () => {
       'wallet:self': "Use the person's own wallet (an owner setting per App, never a room cap)",
       // 0.46.4 App push (prd-custom-app-push-v1): the App's own cap, off until the owner approves.
       'push:send': "Send notifications to this App's users' phones",
+      // 0.46.5 Email Notifications (catalog v26): the App's own cap, off until the owner grants a sender.
+      'email:send': "Send email from this App's sender",
     })
   })
 

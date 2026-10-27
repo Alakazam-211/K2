@@ -171,6 +171,16 @@ export const CATALOG_ERROR_CODES = [
   'airgap',
   'vault_closed',
   'token_in_use',
+  // App phone pairing (0.46.5, catalog v24).
+  'pairing_off',
+  'pairing_from_device',
+  'reauth_required',
+  'device_signin_off',
+  'host_not_paired',
+  'no_public_host',
+  'pairing_not_served',
+  'pair_code_invalid',
+  'pairing_not_from_browser',
   'duplicate_label',
   // Garden access lists (prd-garden-access-v1 G22): the signer gate.
   'needs_editor',
@@ -178,6 +188,25 @@ export const CATALOG_ERROR_CODES = [
   'retired',
   // 0.46.4 (catalog v22): only a person answers a card.
   'card_person_only',
+  // App user profile (0.46.5, catalog v25): a person's own edits and pictures.
+  'edit_off',
+  'type_refused',
+  'type_mismatch',
+  'bad_image',
+  'agent_login',
+  // Email Notifications (0.46.5, catalog v26).
+  'email_off',
+  'no_sender',
+  'sender_not_granted',
+  'system_sender',
+  'recipient_out_of_scope',
+  'header_not_allowed',
+  'message_too_large',
+  'domain_not_ready',
+  'dmarc_missing',
+  'relay_not_ready',
+  'idempotency_conflict',
+  'no_mail_path',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

@@ -60,8 +60,9 @@ pub fn cell_listener_name(sid: &str) -> String {
 /// The name ptyd holds the daemon's main TCP listener under (P50).
 pub const MAIN_LISTENER_NAME: &str = "main";
 
-/// The 0.46.2 switch (PRD P67). Dev-only: only the env var is honoured; the
-/// `terminal.ptyd` app setting arrives (hidden → opt-in) in 0.46.3.
+/// The switch (PRD P67). 0.46.5: on by default on macOS and Linux; an
+/// owner turns it off with `terminal.ptyd = off` (Settings → General →
+/// Server, `k2 daemon survive off`). `K2_PTYD` in the daemon's env wins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Switch {
     On,
@@ -79,7 +80,7 @@ impl Switch {
 
     /// P67: `K2_PTYD` in the daemon's env wins (any value: `1|on|true` on,
     /// anything else off); otherwise the app setting `terminal.ptyd`
-    /// (`on` → on; empty, `off` or `auto` → off in 0.46.4).
+    /// (0.46.5: `off` → off; `on`, `auto` or unset → on, on Unix).
     pub fn resolve() -> Switch {
         match std::env::var("K2_PTYD") {
             Ok(v) => Switch::from_env_value(Some(&v)),
@@ -87,12 +88,16 @@ impl Switch {
         }
     }
 
-    /// The `terminal.ptyd` app setting: only an explicit `on` is on.
+    /// The `terminal.ptyd` app setting. 0.46.5 default flip: everything
+    /// but an explicit `off` is on (`on`, `auto`, unset), on macOS and
+    /// Linux. The in-process path stays the fallback: with ptyd missing,
+    /// unreachable or a `KillMode` other than `process`, sessions run
+    /// in-process as before (`select_backend`). Windows waits for S8.
     pub fn from_setting(v: &str) -> Switch {
-        if v.trim().eq_ignore_ascii_case("on") {
-            Switch::On
-        } else {
+        if v.trim().eq_ignore_ascii_case("off") || !cfg!(unix) {
             Switch::Off
+        } else {
+            Switch::On
         }
     }
 }
@@ -246,12 +251,13 @@ mod tests {
     }
 
     #[test]
-    fn setting_is_on_only_when_explicitly_on() {
-        assert_eq!(Switch::from_setting(""), Switch::Off, "unset = off (the default)");
-        assert_eq!(Switch::from_setting("off"), Switch::Off);
-        assert_eq!(Switch::from_setting("auto"), Switch::Off, "auto stays off until 0.46.5");
+    fn setting_is_on_unless_explicitly_off() {
+        assert_eq!(Switch::from_setting(""), Switch::On, "unset = on (the 0.46.5 default)");
+        assert_eq!(Switch::from_setting("auto"), Switch::On);
         assert_eq!(Switch::from_setting("on"), Switch::On);
         assert_eq!(Switch::from_setting(" On "), Switch::On);
+        assert_eq!(Switch::from_setting("off"), Switch::Off, "the owner's off always wins");
+        assert_eq!(Switch::from_setting(" OFF "), Switch::Off);
     }
 
     #[test]

@@ -50,8 +50,9 @@ pub struct TerminalSettings {
     /// k2-ptyd (PRD prd-k2-ptyd-v1 P67): `terminal.ptyd` = `off` | `on` |
     /// `auto` — host agent terminals in k2-ptyd so they survive daemon
     /// restarts and updates. `K2_PTYD` in the daemon's env wins. Empty =
-    /// off (0.46.4: opt-in; `auto` is still off). Never written while
-    /// unset, so an untouched settings.json stays byte-identical.
+    /// `auto` = on (0.46.5 default on macOS and Linux); `off` turns it off.
+    /// Never written while unset, so an untouched settings.json stays
+    /// byte-identical.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub ptyd: String,
 }

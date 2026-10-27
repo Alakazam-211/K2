@@ -3980,8 +3980,8 @@ cmd_daemon_restart() {
     fi
 }
 
-# k2-ptyd (prd-k2-ptyd-v1 P67, 0.46.4 Beta opt-in): `k2 daemon survive
-# [on|off|status]`. With it on, NEW agent sessions run under k2-ptyd and
+# k2-ptyd (prd-k2-ptyd-v1 P67; on by default since 0.46.5): `k2 daemon
+# survive [on|off|status]`. With it on, NEW agent sessions run under k2-ptyd and
 # keep running through daemon updates, restarts and crashes; quitting the
 # daemon still ends them. The switch is the daemon's own `terminal.ptyd`
 # setting (Settings → General → Server shows the same toggle).
@@ -4002,7 +4002,7 @@ got = ((d.get("terminal") or {}).get("ptyd") or "off")
 if got != os.environ["SV_WANT"]:
     print("Error: the daemon kept terminal.ptyd=%s" % got, file=sys.stderr); sys.exit(1)
 if got == "on":
-    print("Agents keep running through updates and restarts: on (Beta).")
+    print("Agents keep running through updates and restarts: on.")
     print("New agent sessions run under k2-ptyd; sessions already running stop at the next restart.")
 else:
     print("Agents keep running through updates and restarts: off. New sessions stop with the daemon.")
@@ -4019,8 +4019,9 @@ try:
     s = json.loads(lines[0])
 except Exception:
     print("Error: the K2 daemon gave no usable answer", file=sys.stderr); sys.exit(1)
-setting = ((s.get("terminal") or {}).get("ptyd") or "off")
-print("Setting:  terminal.ptyd = %s" % setting)
+setting = ((s.get("terminal") or {}).get("ptyd") or "")
+effective = "off" if setting.strip().lower() == "off" else "on"
+print("Setting:  terminal.ptyd = %s (%s)" % (setting or "unset", effective))
 try:
     b = json.loads(lines[1]) if len(lines) > 1 and lines[1].strip() else {}
 except Exception:
@@ -4032,8 +4033,9 @@ if "ptyd" in b:
             ;;
         -h|--help|help)
             echo "Usage: k2 daemon survive [on|off|status]"
-            echo "  Beta: agents keep running through K2 updates, restarts and crashes"
-            echo "  (macOS and Linux). Quitting the daemon still ends them."
+            echo "  On by default: agents keep running through K2 updates, restarts and"
+            echo "  crashes (macOS and Linux). Quitting the daemon still ends them."
+            echo "  'off' makes new sessions stop with the daemon again."
             ;;
         *)
             echo "Usage: k2 daemon survive [on|off|status]" >&2
@@ -69837,7 +69839,7 @@ EOF
                 echo "Usage: k2 daemon <status|start|stop|restart|survive|log|install|uninstall|companion>" >&2
                 echo "" >&2
                 echo "  survive [on|off|status]" >&2
-                echo "    Beta: agents keep running through K2 updates, restarts and crashes" >&2
+                echo "    On by default: agents keep running through K2 updates, restarts and crashes" >&2
                 echo "    (the daemon's terminal.ptyd setting; same as Settings → General → Server)." >&2
                 echo "" >&2
                 echo "  install [--version <x.y.z>] [--bin-dir <dir>] [--manifest-url <url>]" >&2

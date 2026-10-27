@@ -108,6 +108,8 @@ struct Harness {
     boots: usize,
     agent_pid: Option<i32>,
     ptyd_pid: Option<i32>,
+    /// `K2_PTYD` for the daemon (`None`: unset, the default switch).
+    ptyd_env: Option<&'static str>,
 }
 
 impl Drop for Harness {
@@ -149,7 +151,7 @@ impl Harness {
         std::fs::create_dir_all(home.join("xdg")).unwrap();
         std::fs::create_dir_all(home.join("tmp")).unwrap();
         let k2 = home.join(".k2");
-        Harness { home, k2, daemon: None, boots: 0, agent_pid: None, ptyd_pid: None }
+        Harness { home, k2, daemon: None, boots: 0, agent_pid: None, ptyd_pid: None, ptyd_env: Some("1") }
     }
 
     fn start(&mut self) -> u16 {
@@ -162,11 +164,14 @@ impl Harness {
         if !EMBEDDED {
             cmd.env("K2_PTYD_BIN", bin("K2_PTYD_BIN", "k2-ptyd"));
         }
+        match self.ptyd_env {
+            Some(v) => cmd.env("K2_PTYD", v),
+            None => cmd.env_remove("K2_PTYD"),
+        };
         let child = cmd
             .env("HOME", &self.home)
             .env("XDG_RUNTIME_DIR", self.home.join("xdg"))
             .env("TMPDIR", self.home.join("tmp"))
-            .env("K2_PTYD", "1")
             .env("K2_TEST_AGENT_SHIM_DIR", agent.parent().unwrap())
             .env("K2_TUNNEL_LEASE", "off")
             .env("K2_CONNECT_BASE", "http://127.0.0.1:1")
@@ -644,6 +649,80 @@ fn the_screen_comes_back_whole_after_a_restart_even_past_the_ring() {
     wait_for("the tui agent to end", Duration::from_secs(10), || (!alive(pid)).then_some(()));
     wait_for("ptyd to exit", Duration::from_secs(10), || (!alive(ptyd)).then_some(()));
     assert!(!snap.exists(), "a stopped session's saved screen was left behind");
+    h.agent_pid = None;
+    h.ptyd_pid = None;
+    let _ = std::fs::remove_dir_all(&h.home);
+}
+
+/// T2 for the 0.46.5 default flip (P67): with no `K2_PTYD` and no
+/// `terminal.ptyd` setting, agent sessions run under k2-ptyd and survive a
+/// restart; the owner's `terminal.ptyd = off` sends NEW sessions back to
+/// the in-process path (the agent is the daemon's own child) while the
+/// session already under ptyd keeps running (P68).
+#[test]
+fn survival_is_on_by_default_and_the_owner_can_turn_it_off() {
+    let mut h = Harness::new("def");
+    h.ptyd_env = None;
+    let port = h.start();
+    let token = h.token();
+    let ws = h.home.join("ws");
+    let spawn = |port: u16, token: &str, name: &str, dir: &Path| -> String {
+        let body = serde_json::json!({
+            "agent_name": name,
+            "cwd": ws.to_string_lossy(),
+            "command": "k2-ptyd-test-agent",
+            "args": ["survive", dir.to_string_lossy(), "200"],
+        })
+        .to_string();
+        let (s, resp) = http(port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &body);
+        assert_eq!(s, 200, "v2 spawn {name}: {resp}");
+        serde_json::from_str::<serde_json::Value>(&resp).unwrap()["sessionId"].as_str().expect("sessionId").to_string()
+    };
+    let (s, b) = http(port, "GET", &format!("/cli/settings/get?token={token}"), "");
+    assert_eq!(s, 200, "settings/get: {b}");
+    let v: serde_json::Value = serde_json::from_str(&b).unwrap();
+    assert!(v["terminal"]["ptyd"].as_str().unwrap_or("").is_empty(), "a fresh home has no terminal.ptyd setting: {b}");
+
+    let a = h.home.join("agent-a");
+    let sid_a = spawn(port, &token, "tab-default", &a);
+    let pid_a: i32 = wait_for("agent a pid", Duration::from_secs(15), || std::fs::read_to_string(a.join("pid")).ok()?.trim().parse().ok());
+    h.agent_pid = Some(pid_a);
+    let ptyd = h.ptyd_pid.expect("the default switch launched ptyd");
+    assert_eq!(parent_pid(pid_a), ptyd, "by default a new agent runs under k2-ptyd");
+    let (_, b) = http(port, "GET", &format!("/boot-status?token={token}"), "");
+    assert!(b.contains("\"ptyd\":\"on\""), "boot-status: {b}");
+
+    // A restart keeps it (the default, with nothing configured).
+    // SAFETY: the daemon this test started.
+    unsafe { libc::kill(h.daemon_pid(), libc::SIGTERM) };
+    h.wait_daemon_exit(Duration::from_secs(20));
+    let port = h.start();
+    let token = h.token();
+    assert!(alive(pid_a), "the default-on agent died with the daemon");
+    let log = std::fs::read_to_string(h.home.join(format!("daemon-{}.log", h.boots))).unwrap_or_default();
+    assert!(log.contains(&format!("adopted session={sid_a} ")), "not adopted");
+
+    // The owner turns it off: new sessions are in-process again.
+    let (s, b) = http(port, "POST", &format!("/cli/settings/update?token={token}"), r#"{"terminal":{"ptyd":"off"}}"#);
+    assert_eq!(s, 200, "settings/update: {b}");
+    let bdir = h.home.join("agent-b");
+    spawn(port, &token, "tab-off", &bdir);
+    let pid_b: i32 = wait_for("agent b pid", Duration::from_secs(15), || std::fs::read_to_string(bdir.join("pid")).ok()?.trim().parse().ok());
+    assert_eq!(parent_pid(pid_b), h.daemon_pid(), "with terminal.ptyd=off a new agent is the daemon's own child");
+    assert_eq!(parent_pid(pid_a), ptyd, "P68: the session already under ptyd stays there");
+
+    // Stop: both end.
+    let (s, b) = http(port, "POST", &format!("/cli/daemon/stop?token={}", h.token()), "");
+    assert_eq!(s, 200, "stop: {b}");
+    h.wait_daemon_exit(Duration::from_secs(20));
+    wait_for("the ptyd agent to end after a stop", Duration::from_secs(10), || (!alive(pid_a)).then_some(()));
+    wait_for("ptyd to exit after a stop", Duration::from_secs(10), || (!alive(ptyd)).then_some(()));
+    // The in-process agent's terminal hung up with the daemon, as before
+    // ptyd. (This fake agent traps SIGHUP to record it, so it lingers;
+    // a real agent ends.)
+    wait_for("the in-process agent's SIGHUP", Duration::from_secs(10), || bdir.join("sighup").exists().then_some(()));
+    // SAFETY: the agent this test started.
+    unsafe { libc::kill(pid_b, libc::SIGKILL) };
     h.agent_pid = None;
     h.ptyd_pid = None;
     let _ = std::fs::remove_dir_all(&h.home);

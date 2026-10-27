@@ -23,8 +23,15 @@ fn main() {
 
 #[cfg(windows)]
 mod win {
+    use std::io::{Read, Write};
     use std::path::PathBuf;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileType, FILE_TYPE_DISK};
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_HANDLE, STD_OUTPUT_HANDLE};
 
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
@@ -83,12 +90,76 @@ mod win {
             return 127;
         };
         contain_self();
-        match Command::new(&bash).arg(&script).args(std::env::args_os().skip(1)).status() {
-            Ok(st) => st.code().unwrap_or(1),
+        let mut cmd = Command::new(&bash);
+        cmd.arg(&script).args(std::env::args_os().skip(1));
+        let (relay_out, relay_err) = (is_disk_file(STD_OUTPUT_HANDLE), is_disk_file(STD_ERROR_HANDLE));
+        if relay_out {
+            cmd.stdout(Stdio::piped());
+        }
+        if relay_err {
+            cmd.stderr(Stdio::piped());
+        }
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
             Err(e) => {
                 eprintln!("k2-test-sh-shim: run {}: {e}", bash.display());
+                return 127;
+            }
+        };
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let mut relays = 0;
+        if let Some(out) = child.stdout.take() {
+            relay(out, std::io::stdout(), done_tx.clone());
+            relays += 1;
+        }
+        if let Some(err) = child.stderr.take() {
+            relay(err, std::io::stderr(), done_tx.clone());
+            relays += 1;
+        }
+        let code = match child.wait() {
+            Ok(st) => st.code().unwrap_or(1),
+            Err(e) => {
+                eprintln!("k2-test-sh-shim: wait for {}: {e}", bash.display());
                 127
             }
+        };
+        // The script's own leftovers (a backgrounded `sleep`) can hold a
+        // pipe open; they die with this process's job, so don't wait on them.
+        for _ in 0..relays {
+            if done_rx.recv_timeout(Duration::from_secs(2)).is_err() {
+                break;
+            }
         }
+        code
+    }
+
+    /// The handle is a file on disk. Git Bash can't write to one opened
+    /// append-only (`FILE_APPEND_DATA` without `FILE_WRITE_DATA`, which is
+    /// what Rust's `append(true)` gives, as for K2's `frpc.log`); a real
+    /// Windows program can. So for a file, the shim relays the script's
+    /// output through a pipe; a console or pipe is handed straight down.
+    fn is_disk_file(which: STD_HANDLE) -> bool {
+        // SAFETY: plain queries of this process's own standard handles.
+        unsafe {
+            let h = GetStdHandle(which);
+            !h.is_null() && h != INVALID_HANDLE_VALUE && GetFileType(h) == FILE_TYPE_DISK
+        }
+    }
+
+    fn relay(mut from: impl Read + Send + 'static, mut to: impl Write + Send + 'static, done: mpsc::Sender<()>) {
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            loop {
+                match from.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if to.write_all(&buf[..n]).and_then(|_| to.flush()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            let _ = done.send(());
+        });
     }
 }

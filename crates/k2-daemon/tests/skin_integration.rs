@@ -4714,6 +4714,128 @@ async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
     });
 }
 
+/// 0.46.5 (`k2 app grant role <id> --role <r>`): POST /cli/skin/grants/role
+/// re-roles a login grant IN PLACE. The live session is kept (never
+/// revoked) and rewritten to the new role's caps; owner tier like grant
+/// add (POST-only, Member and agent refused, nothing changed).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_grant_role_rewrites_live_session_in_place() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let sales = format!("sales{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (sales_id, _dir) = seed_files_workspace(&sales);
+        add_user(port, "dora");
+        set_password(port, "dora", "s3cret-horse");
+        for (name, caps) in [("reader", r#"["thread:read","files:read"]"#), ("talker", r#"["thread:read"]"#)] {
+            let r = http(
+                port,
+                "POST",
+                &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+                Some(&format!(r#"{{"name":"{name}","roomAccess":[{{"handle":"{sales}","caps":{caps}}}]}}"#)),
+            );
+            assert_eq!(r.status, 200, "role {name}: {}", r.body);
+        }
+        let assign = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"dora","role":"talker"}"#),
+        );
+        assert_eq!(assign.status, 200, "{}", assign.body);
+        let login = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"dora","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login.status, 200, "{}", login.body);
+        let sess = json(&login.body)["token"].as_str().expect("token").to_string();
+        let read_dir = || {
+            http(
+                port,
+                "GET",
+                &format!("/cli/fs/read-dir?token={sess}&workspace={sales}&path=."),
+                None,
+            )
+        };
+        assert_missing_cap(&read_dir(), "files:read");
+
+        let grants = http(port, "GET", &format!("/cli/skin/grants?token={OWNER_TOKEN}"), None);
+        assert_eq!(grants.status, 200, "{}", grants.body);
+        let users = json(&http(port, "GET", &format!("/cli/skin/users?token={OWNER_TOKEN}"), None).body);
+        let dora_id = users["users"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|u| u["username"] == "dora"))
+            .and_then(|u| u["id"].as_str())
+            .expect("dora id")
+            .to_string();
+        let grant_id = json(&grants.body)["grants"]
+            .as_array()
+            .and_then(|rows| {
+                rows.iter().find(|g| {
+                    g["subjectId"] == dora_id.as_str() && g["kind"] == "app" && g["targetId"] == k2_core::skin::HOST_APP_ID
+                })
+            })
+            .and_then(|g| g["id"].as_str())
+            .expect("dora's login grant")
+            .to_string();
+        let body = serde_json::json!({ "id": grant_id, "role": "reader" }).to_string();
+
+        let get = http(port, "GET", &format!("/cli/skin/grants/role?token={OWNER_TOKEN}"), None);
+        assert_eq!(get.status, 405, "POST only; {}", get.body);
+        let member = provision_role(port, "rolemember", "hunter2-strong-9", "member");
+        let by_member = http(port, "POST", &format!("/cli/skin/grants/role?token={member}"), Some(&body));
+        assert_eq!(by_member.status, 403, "{}", by_member.body);
+        let hook = mint_scoped_hook_for(&sales_id);
+        let on = set_agents_manage_skin(port, &sales_id, 1);
+        assert_eq!(on.status, 200, "{}", on.body);
+        let by_agent = http(port, "POST", &format!("/cli/skin/grants/role?token={hook}"), Some(&body));
+        assert_eq!(by_agent.status, 403, "an agent never re-roles a login grant; {}", by_agent.body);
+        assert_missing_cap(&read_dir(), "files:read");
+
+        let re = http(port, "POST", &format!("/cli/skin/grants/role?token={OWNER_TOKEN}"), Some(&body));
+        assert_eq!(re.status, 200, "{}", re.body);
+        let rv = json(&re.body);
+        assert_eq!(rv["id"], grant_id.as_str(), "same grant row: {}", re.body);
+        assert_eq!(rv["changed"], true, "{}", re.body);
+        assert_eq!(rv["actor"], "owner-token", "{}", re.body);
+        let fs = read_dir();
+        assert_eq!(fs.status, 200, "the SAME live session now has the new role's files:read; {}", fs.body);
+
+        let again = http(port, "POST", &format!("/cli/skin/grants/role?token={OWNER_TOKEN}"), Some(&body));
+        assert_eq!(again.status, 200, "{}", again.body);
+        assert_eq!(json(&again.body)["changed"], false, "{}", again.body);
+
+        let bad = http(
+            port,
+            "POST",
+            &format!("/cli/skin/grants/role?token={OWNER_TOKEN}"),
+            Some(&serde_json::json!({ "id": grant_id, "role": "no-such-role" }).to_string()),
+        );
+        assert_eq!(bad.status, 400, "{}", bad.body);
+        assert!(bad.body.contains("unknown skin role"), "{}", bad.body);
+        assert_eq!(read_dir().status, 200, "a refusal changes nothing");
+
+        let back = http(
+            port,
+            "POST",
+            &format!("/cli/skin/grants/role?token={OWNER_TOKEN}"),
+            Some(&serde_json::json!({ "id": grant_id, "role": "talker" }).to_string()),
+        );
+        assert_eq!(back.status, 200, "{}", back.body);
+        assert_missing_cap(&read_dir(), "files:read");
+        let users = json(&http(port, "GET", &format!("/cli/skin/users?token={OWNER_TOKEN}"), None).body);
+        let dora = users["users"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|u| u["username"] == "dora"))
+            .cloned()
+            .expect("dora");
+        assert_eq!(dora["roleName"], "talker", "box login shadow column follows: {dora}");
+    });
+}
+
 fn assert_skin_rate_limited(r: &Resp, what: &str) {
     assert_eq!(
         r.status, 429,

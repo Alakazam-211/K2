@@ -11529,6 +11529,7 @@ async fn handle_one_request(
                 | "/cli/skin/grants/host"
                 | "/cli/skin/grants/copy-host"
                 | "/cli/skin/grants/update"
+                | "/cli/skin/grants/role"
                 | "/cli/skin/grant-hooks/target"
                 | "/cli/skin/grant-hooks/retry"
                 | "/cli/skin/grant-hooks/skip"

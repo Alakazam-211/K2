@@ -1500,7 +1500,7 @@
    },
    {
     "name": "app grant",
-    "usage": "k2 app grant <list|add|set|rm|copy-host|hooks> ...",
+    "usage": "k2 app grant <list|add|set|role|rm|copy-host|hooks> ...",
     "description": "Owner-only grants. kind=app is a login on one App (host = the box login): a role, or Thread-only rooms. Since 0.45.5 a login needs the grant for that App and its pass reaches only that App's rooms. Other kinds store a scope and no role (recorded, not enforced). Revoke deletes the grant, keeps the role, and ends that App's live logins."
    },
    {
@@ -1517,6 +1517,11 @@
     "name": "app grant rm",
     "usage": "k2 app grant rm --id <id> | --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>",
     "description": "Revoke a grant. The role stays. A kind=app grant's live logins on that App end."
+   },
+   {
+    "name": "app grant role",
+    "usage": "k2 app grant role <grant-id> --role <role>",
+    "description": "Give an App login (a kind=app grant) another role in place (0.46.5). The grant keeps its id and on/off; its live logins stay signed in and are rewritten to the new role's rooms (a guest tied to an agent stays inside its tie). The role must be box-wide or that App's (the add rule). A rooms-only grant becomes role-backed. The box login (host) also sets the guest's role, like k2 app user role. Same role again changes nothing. Owner only, like add."
    },
    {
     "name": "app grant set",

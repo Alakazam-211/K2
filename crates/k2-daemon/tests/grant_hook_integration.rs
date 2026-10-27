@@ -1554,6 +1554,7 @@ fn json(s: &str) -> Value {
 
 const POST_ROUTES: &[&str] = &[
     "/cli/skin/grants/update",
+    "/cli/skin/grants/role",
     "/cli/skin/grant-hooks/target",
     "/cli/skin/grant-hooks/retry",
     "/cli/skin/grant-hooks/skip",

@@ -1361,6 +1361,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/grants/delete", Owner),
     post("/cli/skin/grants/enabled", Owner),
     post("/cli/skin/grants/host", Owner),
+    post("/cli/skin/grants/role", Owner),
     post("/cli/skin/grants/update", Owner),
     // prd-app-caps-0464-v1 AC5 (0.46.4): guests.list, an App's own pass
     // only (the handler refuses the rest).

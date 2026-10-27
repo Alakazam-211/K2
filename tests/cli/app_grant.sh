@@ -210,6 +210,12 @@ class H(BaseHTTPRequestHandler):
                              "subjectId": "w-1", "scope": "assistant:p-ann"}]
             self._send(200, json.dumps({"success": True, "cascaded": cascaded}))
             return
+        if path == "/cli/skin/grants/role":
+            same = body.get("role") == "desk"
+            self._send(200, json.dumps({"id": body.get("id"), "kind": "app", "subjectKind": "principal",
+                                        "subjectId": "p-ada", "targetId": "svc-1", "roleId": "r-" + body.get("role", ""),
+                                        "changed": not same}))
+            return
         if path == "/cli/skin/grants/update":
             self._send(200, json.dumps({"id": body.get("id"), "kind": "chat", "scope": body.get("scope")}))
             return
@@ -300,6 +306,12 @@ hooks_tgt_out="$(run_k2 app grant hooks target chat --on --socket /run/sew/mgmt.
 hooks_tgt_rc=$?
 set_missing="$(run_k2 app grant set --id g-chat 2>&1)"
 set_missing_rc=$?
+role_out="$(run_k2 app grant role g-app --role reader 2>/dev/null)"
+role_rc=$?
+role_same_out="$(run_k2 app grant role --id g-app --role desk 2>/dev/null)"
+role_same_rc=$?
+role_missing="$(run_k2 app grant role g-app 2>&1)"
+role_missing_rc=$?
 set -e
 assert_eq "grant list exit 0" "$list_rc" "0"
 assert_contains "list prints grant" "$list_out" "g1"
@@ -373,12 +385,23 @@ assert_contains "hooks reconcile" "$hooks_rec_out" "Reconcile started."
 assert_eq "hooks target exit 0" "$hooks_tgt_rc" "0"
 assert_contains "hooks target" "$hooks_tgt_out" "Target chat on (socket /run/sew/mgmt.sock)"
 assert_eq "set without --scope exit 1" "$set_missing_rc" "1"
+assert_eq "grant role exit 0" "$role_rc" "0"
+assert_contains "grant role keeps logins" "$role_out" "Grant g-app  now role reader (p-ada on svc-1). Live logins kept"
+assert_eq "grant role same exit 0" "$role_same_rc" "0"
+assert_contains "grant role same role" "$role_same_out" "Grant g-app already has role desk. Nothing changed."
+assert_eq "grant role without --role exit 1" "$role_missing_rc" "1"
+assert_contains "grant role usage" "$role_missing" "Usage: k2 app grant role <grant-id> --role <role>"
 seen="$(cat "$SEEN")"
 assert_contains "chat add body kind" "$seen" '"kind": "chat"'
 assert_contains "chat add body default target" "$seen" '"subjectId": "ann", "kind": "chat", "targetId": "sew"'
 assert_contains "chat ws body scope" "$seen" '"scope": "assistant:ann"'
 assert_contains "set posts update" "$seen" '/cli/skin/grants/update'
 assert_contains "set body" "$seen" '{"id": "g-chat", "scope": "guest"}'
+assert_contains "role posts /cli/skin/grants/role" "$seen" '/cli/skin/grants/role'
+assert_contains "role body (positional id)" "$seen" '{"id": "g-app", "role": "reader"}'
+assert_contains "role body (--id)" "$seen" '{"id": "g-app", "role": "desk"}'
+assert_contains "schema grant role" "$schema" '"name": "app grant role"'
+assert_contains "help names grant role" "$help_out" "k2 app grant role <grant-id> --role <role>"
 assert_contains "rm by key fills sew" "$seen" '"subjectId": "ann", "kind": "chat", "targetId": "sew"'
 assert_contains "retry posts" "$seen" '/cli/skin/grant-hooks/retry'
 assert_contains "skip posts" "$seen" '/cli/skin/grant-hooks/skip'

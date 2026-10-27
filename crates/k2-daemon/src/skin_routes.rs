@@ -1518,6 +1518,58 @@ pub fn handle_grants_delete(body: &[u8], actor: &str) -> CliResponse {
     }
 }
 
+/// `POST /cli/skin/grants/role {id, role}` → the grant, re-roled in place
+/// (`k2 app grant role <id> --role <r>`, 0.46.5). Owner tier, like `grant
+/// add` (`/cli/skin/grants`): the dispatcher's `owner_role_identity` gate
+/// and POST-only guard; never an agent verb. Live App logins are kept and
+/// rewritten to the new role ([`skin::set_app_grant_role`]); `changed`
+/// says whether anything moved. Audited in the auth log like a role assign.
+pub fn handle_grants_role(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(&v, &["id", "grantId", "grant_id"]) else {
+        return CliResponse::bad_request("missing grant id");
+    };
+    let Some(role) = str_field(&v, &["role", "roleId", "role_id"]) else {
+        return CliResponse::bad_request("missing role");
+    };
+    match skin::set_app_grant_role(id, role) {
+        Ok((g, changed)) => {
+            if changed {
+                k2_core::log_debug!(
+                    "[skin] actor={actor} grant {} role -> {} (app {}, {} {}; live sessions rewritten)",
+                    g.id,
+                    g.role_id.as_deref().unwrap_or("-"),
+                    g.target_id,
+                    g.subject_kind,
+                    g.subject_id
+                );
+                k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                    "app_grant_role",
+                    actor,
+                    format!(
+                        "grant {} ({} {} on app {}) role -> {}",
+                        g.id,
+                        g.subject_kind,
+                        g.subject_id,
+                        g.target_id,
+                        g.role_id.as_deref().unwrap_or("-")
+                    ),
+                    "cli",
+                    "-",
+                    "cli",
+                ));
+            }
+            let mut out = serde_json::to_value(&g).unwrap_or_default();
+            out["changed"] = serde_json::json!(changed);
+            CliResponse::ok_json(out.to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
 // ── Sew S27 grant hooks (owner-tier; POSTs are POST-only) ────────────
 
 /// `POST /cli/skin/grants/update {id, scope}` → the updated grant.
@@ -1951,6 +2003,7 @@ pub fn handle_access_post(path: &str, body: &[u8], actor: &str) -> CliResponse {
         "/cli/skin/grants/host" => handle_grants_host(body, actor),
         "/cli/skin/grants/copy-host" => handle_grants_copy_host(body, actor),
         "/cli/skin/grants/update" => handle_grants_update(body, actor),
+        "/cli/skin/grants/role" => handle_grants_role(body, actor),
         "/cli/skin/grant-hooks/target" => handle_grant_hooks_target(body, actor),
         "/cli/skin/grant-hooks/retry" => handle_grant_hooks_retry(body, actor),
         "/cli/skin/grant-hooks/skip" => handle_grant_hooks_skip(body, actor),

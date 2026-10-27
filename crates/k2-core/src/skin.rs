@@ -6035,6 +6035,102 @@ pub fn set_app_grant_rooms(
     }))
 }
 
+/// `POST /cli/skin/grants/role` (`k2 app grant role <id> --role <r>`,
+/// 0.46.5): give one App login (a `kind=app` grant) another role IN PLACE.
+/// Before, re-roling meant `grant rm` + `grant add`, which ended that App's
+/// live logins. Here the row keeps its id, its on/off and its sessions:
+/// every live session of that `(principal, App)` is rewritten (R8, like a
+/// role edit) to the new role's rooms, held to the guest's tie ceiling
+/// exactly as a fresh sign-in is ([`ties::clamp`]; outside it, the session
+/// keeps no room). The role follows the add rule ([`app_grant_shape`]: a
+/// box-wide role or one of this App's). A rooms-only grant becomes
+/// role-backed (its scope is cleared). The box login (`host`) also writes
+/// the shadow column, like [`assign_role`]. Same role again = no change.
+/// Returns the grant and whether it changed.
+pub fn set_app_grant_role(id: &str, role_token: &str) -> Result<(SkinGrant, bool), String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("missing grant id".to_string());
+    }
+    let role_token = role_token.trim();
+    if role_token.is_empty() {
+        return Err("missing role".to_string());
+    }
+    // A21: the App's workspace (daemon DB) before the skin mutex.
+    let target = with_conn(|conn| grant_by_id(conn, id))?
+        .ok_or_else(|| "unknown grant".to_string())?
+        .target_id;
+    let app_ws = ties::app_workspace(&target);
+    let (grant, changed) = with_conn(|conn| {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin grant begin: {e}"))?;
+        let Some(old) = grant_by_id(&tx, id)? else {
+            return Err("unknown grant".to_string());
+        };
+        if old.kind != "app" {
+            return Err(format!(
+                "only an App login (kind=app) has a role; this grant is kind={} (a chat grant changes with k2 app grant set --scope)",
+                old.kind
+            ));
+        }
+        if old.target_id != target {
+            return Err("the grant changed while it was read; try again".to_string());
+        }
+        let (Some(role_id), None) = app_grant_shape(&tx, &old.target_id, Some(role_token), None)? else {
+            return Err("kind=app requires roleId".to_string());
+        };
+        if old.role_id.as_deref() == Some(role_id.as_str()) && old.scope.is_none() {
+            return Ok((old, false));
+        }
+        let Some(role) = role_by_id_or_name(&tx, &role_id)? else {
+            return Err(format!("unknown skin role '{role_token}'"));
+        };
+        // Compare-and-set on what was read: a concurrent writer is an
+        // error, never a silent overwrite.
+        let n = tx
+            .execute(
+                "UPDATE grants SET role_id = ?1, scope = NULL
+                 WHERE id = ?2 AND role_id IS ?3 AND scope IS ?4",
+                params![role.id, old.id, old.role_id, old.scope],
+            )
+            .map_err(|e| format!("skin grant role: {e}"))?;
+        if n != 1 {
+            return Err("the grant changed while it was read; try again".to_string());
+        }
+        if old.subject_kind == "principal" {
+            if old.target_id == HOST_APP_ID {
+                // Shadow column (AM1), as `assign_role` writes it.
+                tx.execute(
+                    "UPDATE principals SET role_id = ?1 WHERE id = ?2",
+                    params![role.id, old.subject_id],
+                )
+                .map_err(|e| format!("skin grant shadow: {e}"))?;
+            }
+            let tie = ties::get_conn(&tx, &old.subject_id)?;
+            let policy = ties::clamp(tie.as_ref(), &old.target_id, app_ws.as_deref(), role.room_policy.clone())
+                .unwrap_or_default();
+            rewrite_live_sessions(&tx, &old.subject_id, &old.target_id, &policy)?;
+        }
+        tx.commit().map_err(|e| format!("skin grant commit: {e}"))?;
+        Ok((
+            SkinGrant {
+                role_id: Some(role.id),
+                scope: None,
+                ..old
+            },
+            true,
+        ))
+    })?;
+    if changed {
+        members::changed(None);
+        crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+        // K31 derives App Space membership from App grants.
+        crate::tool_hook::kick_reconcile();
+    }
+    Ok((grant, changed))
+}
+
 // S24-19 (agent hire S5, 0.45.6): an App login a hire makes calls
 // `add_principal_for_app` (an App grant, never the box login) for the App
 // the recipe names and the key's ceiling allows; see `k2_core::hire::apply`.
@@ -11319,6 +11415,80 @@ mod tests {
             assert!(both.contains("not both"), "{both}");
             let junk = create_grant(&app_write(&bob.id, "x", None, Some("owner"))).unwrap_err();
             assert!(junk.contains("JSON array"), "{junk}");
+        });
+    }
+
+    /// 0.46.5 (`k2 app grant role`): an App login gets another role IN
+    /// PLACE: same grant id, its live sessions kept and rewritten to the new
+    /// role's rooms; other Apps' sessions and the box login untouched; a
+    /// rooms-only grant becomes role-backed; the add rule on roles holds.
+    #[test]
+    fn set_app_grant_role_rewrites_live_sessions_in_place() {
+        with_temp_home(|| {
+            let r1 = uuid::Uuid::new_v4().to_string();
+            let r2 = uuid::Uuid::new_v4().to_string();
+            create_role("host-role", &one_room_policy(&r1, &[CAP_THREAD_READ])).unwrap();
+            create_role_for_app("looker", &one_room_policy(&r1, &[CAP_THREAD_READ]), Some(APP_A)).unwrap();
+            let editor = create_role_for_app("editor", &one_room_policy(&r2, &[CAP_THREAD_READ, CAP_FILES_READ]), Some(APP_A))
+                .unwrap();
+            create_role_for_app("b-only", &one_room_policy(&r2, &[CAP_THREAD_READ]), Some(APP_B)).unwrap();
+            let ada = add_principal("ada").unwrap();
+            assign_role("ada", "host-role").unwrap();
+            let g = create_grant(&app_write(&ada.id, APP_A, Some("looker"), None)).unwrap();
+            let gb = create_grant(&app_write(&ada.id, APP_B, None, Some(&rooms_json(&[r2.clone()])))).unwrap();
+            let a = create_app_session_token("ada", APP_A).unwrap().raw;
+            let b = create_app_session_token("ada", APP_B).unwrap().raw;
+            let host = create_session_token("ada").unwrap().1;
+
+            let (ng, changed) = set_app_grant_role(&g.id, "editor").expect("re-role");
+            assert!(changed);
+            assert_eq!(ng.id, g.id, "same row, not rm + add");
+            assert_eq!(ng.role_id.as_deref(), Some(editor.id.as_str()));
+            assert!(ng.enabled);
+            let stored = list_grants().unwrap().into_iter().find(|x| x.id == g.id).expect("row kept");
+            assert_eq!(stored.role_id.as_deref(), Some(editor.id.as_str()));
+            assert!(session_revoked_at(&a).is_none(), "the live App login is kept");
+            let pa = resolve_skin_token(&a).expect("A session still signs in");
+            assert!(pa.has_cap_in_room(&r2, CAP_FILES_READ), "new role reaches the live session: {pa:?}");
+            assert!(!pa.has_room(&r1), "old role's room left the live session: {pa:?}");
+            let pb = resolve_skin_token(&b).expect("B untouched");
+            assert!(pb.has_room(&r2) && !pb.has_cap_in_room(&r2, CAP_FILES_READ), "{pb:?}");
+            let ph = resolve_skin_token(&host).expect("box login untouched");
+            assert!(ph.has_room(&r1) && !ph.has_room(&r2), "{ph:?}");
+            let fresh = create_app_session_token("ada", APP_A).unwrap();
+            assert_eq!(fresh.role_name.as_deref(), Some("editor"), "a new sign-in gets the new role");
+
+            let (_, again) = set_app_grant_role(&g.id, "editor").unwrap();
+            assert!(!again, "same role: no change");
+
+            let err = set_app_grant_role(&g.id, "b-only").unwrap_err();
+            assert!(err.contains("is for app"), "another App's role is refused: {err}");
+            let err = set_app_grant_role(&g.id, "nope").unwrap_err();
+            assert!(err.contains("unknown skin role"), "{err}");
+            let err = set_app_grant_role("no-such-grant", "editor").unwrap_err();
+            assert_eq!(err, "unknown grant");
+            let stored = list_grants().unwrap().into_iter().find(|x| x.id == g.id).unwrap();
+            assert_eq!(stored.role_id.as_deref(), Some(editor.id.as_str()), "refusals change nothing");
+
+            // A rooms-only grant becomes role-backed; its session follows.
+            let (nb, changed) = set_app_grant_role(&gb.id, "host-role").unwrap();
+            assert!(changed && nb.scope.is_none() && nb.role_id.is_some(), "{nb:?}");
+            let pb = resolve_skin_token(&b).expect("B kept");
+            assert!(pb.has_room(&r1) && !pb.has_room(&r2), "{pb:?}");
+
+            // Only App logins have a role.
+            let mail = create_grant(&SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: ada.id.clone(),
+                kind: "mailbox".into(),
+                target_id: "ada@example.test".into(),
+                role: None,
+                scope: Some("read".into()),
+                created_by: None,
+            })
+            .unwrap();
+            let err = set_app_grant_role(&mail.id, "editor").unwrap_err();
+            assert!(err.contains("only an App login"), "{err}");
         });
     }
 

@@ -316,7 +316,7 @@ signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
 [target.'cfg(windows)'.dependencies]
 k2-winsec = { path = "../k2-winsec" }
 socket2 = "0.6"
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 
 # macOS-only deps.
 #

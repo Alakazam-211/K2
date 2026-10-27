@@ -87,7 +87,20 @@ fn kill_foreign(pid: i32) {
     }
 }
 
-#[cfg(not(unix))]
+/// Windows: TerminateProcess, then wait up to 1 s for it to be gone.
+#[cfg(windows)]
+fn kill_foreign(pid: i32) {
+    if pid <= 0 {
+        return;
+    }
+    crate::win_proc::terminate(pid as u32);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline && pid_alive(pid) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn kill_foreign(_pid: i32) {}
 
 /// The process exists and is not a zombie.
@@ -124,7 +137,12 @@ pub(crate) fn pid_alive(pid: i32) -> bool {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub(crate) fn pid_alive(pid: i32) -> bool {
+    pid > 0 && crate::win_proc::pid_alive(pid as u32)
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn pid_alive(_pid: i32) -> bool {
     false
 }
@@ -149,7 +167,13 @@ pub(crate) fn proc_identity(pid: i32) -> Option<String> {
     (!s.is_empty()).then(|| format!("ls:{s}"))
 }
 
-#[cfg(not(unix))]
+/// Windows: the creation time (GetProcessTimes).
+#[cfg(windows)]
+pub(crate) fn proc_identity(pid: i32) -> Option<String> {
+    u32::try_from(pid).ok().and_then(crate::win_proc::start_key).map(|t| format!("ct:{t}"))
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn proc_identity(_pid: i32) -> Option<String> {
     None
 }
@@ -179,7 +203,15 @@ pub(crate) fn proc_argv(pid: i32) -> Option<Vec<String>> {
     (!s.is_empty()).then(|| vec![s])
 }
 
-#[cfg(not(unix))]
+/// Windows: the recorded command line as one string (like the `ps` form);
+/// a quoted program keeps its trailing quote on the file name, which the
+/// `frpc` prefix check ignores.
+#[cfg(windows)]
+pub(crate) fn proc_argv(pid: i32) -> Option<Vec<String>> {
+    u32::try_from(pid).ok().and_then(crate::win_proc::command_line).map(|s| vec![s])
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn proc_argv(_pid: i32) -> Option<Vec<String>> {
     None
 }

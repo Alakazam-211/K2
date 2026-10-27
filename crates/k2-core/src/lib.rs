@@ -173,6 +173,8 @@ pub use k2_client::paths;
 /// request and card-view types plus the two switches. Off by default.
 pub mod permission;
 pub mod private_fs;
+#[cfg(windows)]
+pub mod win_proc;
 pub mod private_home;
 pub mod session_archive;
 pub use k2_client::migration_launchd;

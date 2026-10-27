@@ -220,7 +220,12 @@ run owner hostchat app-space bind hearth spc_1
 assert_eq "bind exit 0" "$rc" "0"
 assert_eq "bind body" "$(req_where /cli/sew/app-spaces/bind body)" '{"app": "hearth", "spaceId": "spc_1"}'
 run owner hostchat app-space unbind hearth spc_1 --json
-assert_eq "unbind body" "$(req_where /cli/sew/app-spaces/unbind body)" '{"app": "hearth", "spaceId": "spc_1"}'
+assert_eq "unbind body (default: members stay)" "$(req_where /cli/sew/app-spaces/unbind body)" '{"app": "hearth", "spaceId": "spc_1"}'
+run owner hostchat app-space unbind hearth spc_1 --remove-app-members --json
+assert_eq "unbind --remove-app-members body" "$(req_where /cli/sew/app-spaces/unbind body)" '{"app": "hearth", "removeAppMembers": true, "spaceId": "spc_1"}'
+before="$(nreq)"
+run owner hostchat app-space bind hearth spc_1 --remove-app-members
+assert_eq "--remove-app-members on bind → exit 2, nothing sent" "$rc/$(nreq)" "2/$before"
 before="$(nreq)"
 run owner hostchat app-space bind hearth
 assert_eq "bind without a space → exit 2" "$rc" "2"

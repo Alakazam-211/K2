@@ -183,7 +183,7 @@ fn every_route_is_classified_post_guarded_and_an_agent_verb() {
             assert!(crate::session_token::is_agent_verb(p), "{p} must be served for a passport");
         } else if p.starts_with("/cli/sew/on-behalf") {
             assert_eq!(floor, Floor::Member, "{p}: the person themselves (the handler decides who)");
-            assert!(!crate::session_token::is_agent_verb(p), "{p}: a person's own opt-in is never an agent verb");
+            assert!(!crate::session_token::is_agent_verb(p), "{p}: a person's own review is never an agent verb");
         } else {
             assert_eq!(floor, Floor::Admin, "{p}: approvals and admin are owner/admin (or a Manage-Sew passport)");
             assert!(crate::session_token::is_agent_verb(p), "{p} must be served for a Manage-Sew passport");
@@ -803,29 +803,32 @@ fn the_manage_sew_switch_defaults_off_and_only_owner_or_admin_sets_it() {
     assert!(k2_core::workspace::settings::agents_can_manage_chat(WA));
 }
 
-// ── on behalf of a person: --as (builder decisions 3 and 9) ──────────
+// ── on behalf of a person (Rosson 2026-10-27, ticket 411eda53) ───────
 
 fn owner_person() -> k2_core::sew_chat::person::Person {
     k2_core::sew_chat::person::Person { external_id: "k2:owner".into(), username: "rosson".into() }
 }
 
-fn send_as(who: &Who, text: &str, as_user: &str) -> (u16, Value) {
-    post("/cli/sew/chat/send", who, json!({"to": "hearth/general", "text": text, "as": as_user}))
+fn send_for(who: &Who, text: &str, person: &str) -> (u16, Value) {
+    post("/cli/sew/chat/send", who, json!({"to": "hearth/general", "text": text, "onBehalfOf": person}))
 }
 
 #[test]
-fn as_must_name_the_person_the_agent_assists() {
+fn on_behalf_must_name_the_person_the_agent_assists() {
     let e = env();
     hearth(WA, Level::Send, ApprovalMode::None);
-    let (s, v) = send_as(&agent(WA), "hi", "rosson");
-    assert_eq!((s, code(&v)), (403, "not_assistant"), "a coworker never posts as someone: {v}");
+    let (s, v) = send_for(&agent(WA), "hi", "rosson");
+    assert_eq!((s, code(&v)), (403, "not_assistant"), "a coworker never speaks for someone: {v}");
     routes::test_assist::set(WA, Some(owner_person()));
     let (s, v) = send(&agent(WA), "hearth/general", "hi");
-    assert_eq!((s, code(&v)), (400, "as_required"), "an assistant says whom it speaks for: {v}");
-    let (s, v) = send_as(&agent(WA), "hi", "@ada");
+    assert_eq!((s, code(&v)), (400, "on_behalf_required"), "an assistant says whom it speaks for: {v}");
+    let (s, v) = send_for(&agent(WA), "hi", "@ada");
     assert_eq!((s, code(&v)), (403, "not_assistant"), "only the person it assists: {v}");
     assert!(e.fake.writes().is_empty(), "nothing reached Sew");
-    // A delete says nothing, so it needs no --as.
+    // The old "post as the person" field is gone (an unknown field is a 400).
+    let (s, v) = post("/cli/sew/chat/send", &agent(WA), json!({"to": "hearth/general", "text": "x", "as": "rosson"}));
+    assert_eq!(s, 400, "{v}");
+    // A delete says nothing, so it needs no on-behalf.
     let mine = e.fake.post(&e.alpha, "c-general", "old", None, &[]);
     let (s, v) = post("/cli/sew/chat/delete", &agent(WA), json!({"id": format!("msg_{mine}")}));
     assert_eq!((s, v["status"].as_str()), (200, Some("deleted")), "{v}");
@@ -834,67 +837,78 @@ fn as_must_name_the_person_the_agent_assists() {
 }
 
 #[test]
-fn posts_as_a_person_queue_until_they_opt_in_and_they_never_approve_their_own() {
+fn on_behalf_posts_go_out_at_once_and_the_person_reviews_them_later() {
     let e = env();
     hearth(WA, Level::Send, ApprovalMode::None);
     routes::test_assist::set(WA, Some(owner_person()));
-    let (s, v) = send_as(&agent(WA), "on behalf", "@Rosson");
-    assert_eq!((s, v["status"].as_str(), v["queueReason"].as_str()), (200, Some("queued"), Some("on_behalf")), "{v}");
-    let id = v["id"].as_str().unwrap().to_string();
-    let r = outbox_row(&id);
-    assert_eq!(
-        (r.on_behalf_of.as_deref(), r.on_behalf_person.as_deref(), r.queue_reason.as_str()),
-        (Some("rosson"), Some("k2:owner"), "on_behalf")
-    );
-    assert!(e.fake.writes().is_empty());
-    // Decision 3: the owner can't approve a post written as them…
-    let tok = mint("chat-approve", &id, "owner");
-    let (s, v) = post("/cli/sew/approvals/approve", &Who::Owner, json!({"id": id, "confirmToken": tok}));
-    assert_eq!((s, code(&v)), (403, "own_post"), "{v}");
-    let (_, v) = get("/cli/sew/approvals", &Who::Owner, &[]);
-    assert_eq!((v["items"][0]["canApprove"].clone(), v["items"][0]["queueReason"].clone()), (json!(false), json!("on_behalf")));
-    // …an admin approves it.
-    let tok = mint("chat-approve", &id, "connect:ada");
-    let (s, v) = post("/cli/sew/approvals/approve", &admin(), json!({"id": id, "confirmToken": tok}));
-    assert_eq!((s, v["delivery"].as_str()), (200, Some("posted")), "{v}");
-    assert_eq!(e.fake.writes()[0].on_behalf_of.as_deref(), Some("rosson"));
-    // The owner may deny one, though.
-    let (_, v) = send_as(&agent(WA), "second", "rosson");
-    let id2 = v["id"].as_str().unwrap().to_string();
-    let (s, v) = post("/cli/sew/approvals/deny", &Who::Owner, json!({"id": id2, "note": "not what I'd say"}));
-    assert_eq!((s, v["status"].as_str()), (200, Some("denied")), "{v}");
-
-    // Opting in is the person's, with a confirm bound to the workspace.
-    let (s, v) = post("/cli/sew/on-behalf/set", &agent(WA), json!({"workspace": "alpha", "on": true}));
-    assert_eq!((s, code(&v)), (403, "person_only"), "an agent never opts itself in: {v}");
-    let (s, v) = post("/cli/sew/on-behalf/set", &admin(), json!({"workspace": "alpha", "on": true}));
-    assert_eq!((s, code(&v)), (403, "person_only"), "an admin can't opt the owner in: {v}");
-    let (s, v) = post("/cli/sew/on-behalf/set", &Who::Owner, json!({"workspace": "alpha", "on": true}));
-    assert_eq!((s, code(&v)), (403, "confirm_required"), "{v}");
-    assert_eq!((v["error"]["details"]["action"].clone(), v["error"]["details"]["secretId"].clone()), (json!("chat-act-as"), json!(WA)));
-    let wrong = mint("chat-act-as", WB, "owner");
-    let (s, _) = post("/cli/sew/on-behalf/set", &Who::Owner, json!({"workspace": "alpha", "on": true, "confirmToken": wrong}));
-    assert_eq!(s, 403, "a confirm for another workspace doesn't count");
-    let tok = mint("chat-act-as", WA, "owner");
-    let (s, v) = post("/cli/sew/on-behalf/set", &Who::Owner, json!({"workspace": "alpha", "on": true, "confirmToken": tok}));
-    assert_eq!((s, v["on"].clone()), (200, json!(true)), "{v}");
-    let (_, v) = get("/cli/sew/on-behalf", &Who::Owner, &[]);
-    assert_eq!((v["person"].clone(), v["allowed"][0]["workspace"].clone()), (json!("k2:owner"), json!("alpha")));
-    let (s, v) = send_as(&agent(WA), "straight out", "rosson");
+    // 1. It posts at once (never queued for its person), authored by the
+    // agent, and carries a pending review.
+    let (s, v) = send_for(&agent(WA), "on behalf", "@Rosson");
     assert_eq!((s, v["status"].as_str()), (200, Some("posted")), "{v}");
-    // The Space's own approval mode still wins.
-    hearth(WA, Level::Send, ApprovalMode::Required);
-    let (_, v) = send_as(&agent(WA), "space says wait", "rosson");
-    assert_eq!((v["status"].as_str(), v["queueReason"].as_str()), (Some("queued"), Some("approval_required")), "{v}");
-    // Stopping needs no confirm; then posts queue again.
-    hearth(WA, Level::Send, ApprovalMode::None);
-    let (s, v) = post("/cli/sew/on-behalf/set", &Who::Owner, json!({"workspace": "alpha", "on": false}));
-    assert_eq!((s, v["changed"].clone()), (200, json!(true)), "{v}");
-    let (_, v) = send_as(&agent(WA), "back to waiting", "rosson");
-    assert_eq!(v["queueReason"], "on_behalf", "{v}");
+    assert_eq!(
+        (v["onBehalf"]["onBehalfOf"].as_str(), v["onBehalf"]["state"].as_str(), v["onBehalf"]["decidedBy"].clone()),
+        (Some("rosson"), Some("pending"), Value::Null),
+        "{v}"
+    );
+    let msg = v["id"].as_str().unwrap().to_string();
+    let w = e.fake.writes();
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0].on_behalf_of.as_deref(), Some("rosson"), "K2 records whom it speaks for");
+    // A read shows the review next to Sew's on_behalf_of.
+    let (_, v) = get("/cli/sew/chat/read", &agent(WA), &[("id", msg.as_str())]);
+    assert_eq!(v["message"]["onBehalfReview"]["state"], "pending", "{v}");
+
+    // 2. Only that person reviews it.
+    let (s, v) = post("/cli/sew/on-behalf/review", &agent(WA), json!({"id": msg, "decision": "approve"}));
+    assert_eq!((s, code(&v)), (403, "person_only"), "an agent never reviews: {v}");
+    let (s, v) = post("/cli/sew/on-behalf/review", &admin(), json!({"id": msg, "decision": "approve"}));
+    assert_eq!((s, code(&v)), (403, "person_only"), "an admin can't review for the owner: {v}");
+    // Approving is person proof: a confirm bound to this write.
+    let (s, v) = post("/cli/sew/on-behalf/review", &Who::Owner, json!({"id": msg, "decision": "approve"}));
+    assert_eq!((s, code(&v)), (403, "confirm_required"), "{v}");
+    let write = v["error"]["details"]["secretId"].as_str().unwrap().to_string();
+    assert!(write.starts_with("act_"), "{v}");
+    assert_eq!(v["error"]["details"]["action"], "chat-behalf-approve");
+    let wrong = mint("chat-behalf-approve", "act_other", "owner");
+    let (s, _) = post("/cli/sew/on-behalf/review", &Who::Owner, json!({"id": msg, "decision": "approve", "confirmToken": wrong}));
+    assert_eq!(s, 403, "a confirm for another write doesn't count");
+    let tok = mint("chat-behalf-approve", &write, "owner");
+    let (s, v) = post("/cli/sew/on-behalf/review", &Who::Owner, json!({"id": msg, "decision": "approve", "confirmToken": tok}));
+    assert_eq!((s, v["onBehalf"]["state"].as_str(), v["onBehalf"]["decidedBy"].as_str()), (200, Some("approved"), Some("owner")), "{v}");
+    assert!(v["onBehalf"]["decidedAt"].as_i64().is_some(), "{v}");
+    let (_, v) = get("/cli/sew/on-behalf", &Who::Owner, &[]);
+    assert_eq!((v["items"][0]["state"].as_str(), v["items"][0]["workspace"].as_str()), (Some("approved"), Some("alpha")), "{v}");
+    // They may change their mind; declining needs no confirm.
+    let (s, v) = post("/cli/sew/on-behalf/review", &Who::Owner, json!({"id": write, "decision": "decline", "note": "not my words"}));
+    assert_eq!((s, v["onBehalf"]["state"].as_str(), v["onBehalf"]["note"].as_str()), (200, Some("declined"), Some("not my words")), "{v}");
+    let (_, v) = get("/cli/sew/on-behalf", &Who::Owner, &[("state", "pending")]);
+    assert_eq!(v["items"].as_array().unwrap().len(), 0, "{v}");
     let (_, v) = get("/cli/sew/admin/log", &Who::Owner, &[]);
     let ops: Vec<&str> = v["entries"].as_array().unwrap().iter().map(|r| r["op"].as_str().unwrap()).collect();
-    assert!(ops.contains(&"on_behalf.allow") && ops.contains(&"on_behalf.stop"), "{ops:?}");
+    assert!(ops.contains(&"on_behalf.approve") && ops.contains(&"on_behalf.decline"), "{ops:?}");
+
+    // 3. A Space that holds every post still holds this one (and anyone,
+    // the person included, may approve it: it is the agent's post).
+    hearth(WA, Level::Send, ApprovalMode::Required);
+    let (_, v) = send_for(&agent(WA), "space says wait", "rosson");
+    assert_eq!((v["status"].as_str(), v["queueReason"].as_str()), (Some("queued"), Some("approval_required")), "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    let r = outbox_row(&id);
+    assert_eq!((r.on_behalf_of.as_deref(), r.on_behalf_person.as_deref()), (Some("rosson"), Some("k2:owner")));
+    let (s, v) = post("/cli/sew/on-behalf/review", &Who::Owner, json!({"id": r.action_id, "decision": "decline"}));
+    assert_eq!((s, code(&v)), (409, "not_posted"), "reviewed once it posts: {v}");
+    let tok = mint("chat-approve", &id, "owner");
+    let (s, v) = post("/cli/sew/approvals/approve", &Who::Owner, json!({"id": id, "confirmToken": tok}));
+    assert_eq!((s, v["delivery"].as_str()), (200, Some("posted")), "the person it speaks for may approve it: {v}");
+    let (_, v) = get("/cli/sew/on-behalf", &Who::Owner, &[("state", "pending")]);
+    assert_eq!(v["items"].as_array().unwrap().len(), 1, "it now waits for their review: {v}");
+    // A denied one never posted: no review is left behind.
+    let (_, v) = send_for(&agent(WA), "never mind", "rosson");
+    let id2 = v["id"].as_str().unwrap().to_string();
+    let (s, _) = post("/cli/sew/approvals/deny", &Who::Owner, json!({"id": id2, "note": "no"}));
+    assert_eq!(s, 200);
+    let (_, v) = get("/cli/sew/on-behalf", &Who::Owner, &[("state", "pending")]);
+    assert_eq!(v["items"].as_array().unwrap().len(), 1, "{v}");
 }
 
 // ── K19: the admin plane ─────────────────────────────────────────────

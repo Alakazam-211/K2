@@ -1065,7 +1065,7 @@
    },
    {
     "name": "hostchat",
-    "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|act-as|log> ...",
+    "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|log> ...",
     "description": "The Sew chat (and voice) server on this box, over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Sew (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge is the owner's, the other two the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra."
    },
    {
@@ -1126,7 +1126,7 @@
    {
     "name": "hostchat approvals",
     "usage": "k2 hostchat approvals [list] [--workspace W] | approve <out_…> [<out_…>…] [--note \"…\"] | deny <out_…> --note \"…\" [--json]",
-    "description": "Every agent's queued chat posts. approve needs a person confirm (Touch ID or the vault password, from a terminal outside K2) unless approvals.by = people+agents and the caller is an agent with Manage Sew (labelled as an agent's approval). Nobody approves their own post, and a person never approves a post made as them. deny needs a note; the agent sees it."
+    "description": "Every agent's queued chat posts. approve needs a person confirm (Touch ID or the vault password, from a terminal outside K2) unless approvals.by = people+agents and the caller is an agent with Manage Sew (labelled as an agent's approval). Nobody approves their own post (an assistant's post on someone's behalf is the assistant's, so that person may approve it). deny needs a note; the agent sees it."
    },
    {
     "name": "hostchat agents",
@@ -1134,14 +1134,14 @@
     "description": "Alias of k2 chat access: which agent workspaces may use chat in which Space, at what level, and whether their posts wait for approval. Manage Sew or owner/admin; an agent can't raise its own access."
    },
    {
-    "name": "hostchat act-as",
-    "usage": "k2 hostchat act-as list | allow <workspace> | stop <workspace> [--json]",
-    "description": "A person lets an assistant workspace post as them without approval (allow needs that person's confirm, from a terminal outside K2). Without it every post an assistant makes as the person waits for someone else's approval."
+    "name": "hostchat on-behalf",
+    "usage": "k2 hostchat on-behalf [list] [--state pending|approved|declined|all] [--limit N] | approve <act_…|msg_…> [--note \"…\"] | decline <act_…|msg_…> [--note \"…\"] [--json]",
+    "description": "Posts an assistant made on your behalf. They are the assistant's own posts and never wait for you; each carries whether you have reviewed it (pending, approved or declined, who and when). approve needs your confirm (Touch ID or the vault password, from a terminal outside K2); decline needs none. GET /cli/sew/on-behalf, POST /cli/sew/on-behalf/review."
    },
    {
     "name": "hostchat log",
     "usage": "k2 hostchat log [--limit N] [--json]",
-    "description": "Chat administration record: access grants and changes, community management and act-as opt-ins (no message text). GET /cli/sew/admin/log."
+    "description": "Chat administration record: access grants and changes, community management and on-behalf reviews (no message text). GET /cli/sew/admin/log."
    },
    {
     "name": "chat",
@@ -1150,17 +1150,17 @@
    },
    {
     "name": "chat send",
-    "usage": "k2 chat send|post <space>/<channel> \"text\"|- [--as <user>] [--key K] [--json]",
-    "description": "Post to a channel (POST /cli/sew/chat/send). Prints msg_… when posted or out_… when queued for approval. --as <user>: on behalf of the person you assist (waits for approval unless that person allowed it). --key: idempotency key; re-run with the same key after an error so nothing double-posts. - reads the text from stdin."
+    "usage": "k2 chat send|post <space>/<channel> \"text\"|- [--on-behalf-of <user>] [--key K] [--json]",
+    "description": "Post to a channel (POST /cli/sew/chat/send). Prints msg_… when posted or out_… when queued for approval. --on-behalf-of <user>: you speak for the person you assist; the post is yours, goes out at once (unless the Space holds every post) and they can review it later. --key: idempotency key; re-run with the same key after an error so nothing double-posts. - reads the text from stdin."
    },
    {
     "name": "chat reply",
-    "usage": "k2 chat reply <msg_…> \"text\"|- [--broadcast] [--as <user>] [--key K] [--json]",
+    "usage": "k2 chat reply <msg_…> \"text\"|- [--broadcast] [--on-behalf-of <user>] [--key K] [--json]",
     "description": "Reply under a message (replying to a reply answers in the same chain). --broadcast also shows it in the channel; fine at level reply."
    },
    {
     "name": "chat dm",
-    "usage": "k2 chat dm <user> \"text\"|- [--as <user>] [--key K] [--json]",
+    "usage": "k2 chat dm <user> \"text\"|- [--on-behalf-of <user>] [--key K] [--json]",
     "description": "Direct message a K2 username (needs level send in the box's default Space)."
    },
    {

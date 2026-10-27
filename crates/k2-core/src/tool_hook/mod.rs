@@ -992,15 +992,17 @@ pub fn app_space_bind(
     Ok(r)
 }
 
-/// Forget `app` ↔ `space`; the members K2 added there are removed.
+/// Forget `app` ↔ `space`. Members stay unless `remove_members` (then only
+/// the members K2 added automatically leave; S32 Q3, Rosson 2026-10-27).
 pub fn app_space_unbind(
     app_id: &str,
     space_id: &str,
     actor: &str,
+    remove_members: bool,
 ) -> Result<(bool, app_space::Summary), String> {
     let now = outbox::now_secs();
     let r = crate::skin::with_skin_conn(|conn| {
-        let gone = app_space::unbind(conn, app_id, space_id)?;
+        let gone = app_space::unbind(conn, app_id, space_id, remove_members, actor, now)?;
         let s = app_space::reconcile(conn, actor, now)?;
         Ok((gone, s))
     })?;

@@ -31,11 +31,18 @@
 //! add never races the provision) and `space_member_remove`, one person
 //! per row, subject key `space:<space id>:<external id>`.
 //!
-//! **HC2.** A member Sew lists in `skipped` (banned in that Space) or in
-//! `not_added` for a reason other than `not_provisioned` (deactivated,
-//! assistant, guest) is recorded `held` with the grant rev it was held
-//! under, and is not re-added until that rev changes. `not_provisioned`
-//! is retried with backoff (the person's provision is still queued).
+//! **HC2.** A member Sew lists in `not_added` for a reason other than
+//! `not_provisioned` (deactivated, assistant, guest) is recorded `held`
+//! with the grant rev it was held under, and is not re-added until that rev
+//! changes. `not_provisioned` is retried with backoff (the person's
+//! provision is still queued).
+//!
+//! **Banned (Rosson 2026-10-27, ticket 411eda53).** A member Sew lists in
+//! `skipped` is banned in that Space. K2 never re-adds them on its own: not
+//! when their grant changes, and not after their grant goes and comes back
+//! (the held row outlives the grant). Only [`clear_banned`] lets K2 add them
+//! again; the Sew 0.4.0 wiring (unban, and public → private Spaces) calls it
+//! once that version is pinned (slot: [`SEW_040_UNBAN_SLOT`]).
 //!
 //! Tables live in `skin.db` (idempotent DDL like `tool_outbox`), so this
 //! needs no main-DB migration.
@@ -54,6 +61,17 @@ use super::{outbox, Cause, NewOp, Op, CHAT_KIND};
 pub const PENDING_ADD: &str = "pending_add";
 pub const ADDED: &str = "added";
 pub const HELD: &str = "held";
+/// The `why` of a held row that Sew skipped as banned. Sticky: see the
+/// module note.
+pub const BANNED_WHY: &str = "skipped: banned in this Space";
+/// Sew 0.4.0 slot: bans and private Spaces land there (Rosson green-lit
+/// Sew building them, 2026-10-27). When K2 pins 0.4.0, the unban event (or
+/// a members listing that no longer shows the ban) calls [`clear_banned`].
+pub const SEW_040_UNBAN_SLOT: &str = "sew-0.4.0: unban → clear_banned";
+
+fn is_banned(why: Option<&str>) -> bool {
+    why == Some(BANNED_WHY)
+}
 pub const PENDING_REMOVE: &str = "pending_remove";
 
 /// Outbox subject-key prefix for Space membership rows.
@@ -81,6 +99,12 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             why         TEXT,
             updated_at  INTEGER NOT NULL,
             PRIMARY KEY (space_id, external_id)
+         );
+         CREATE TABLE IF NOT EXISTS tool_app_space_kept (
+            space_id  TEXT PRIMARY KEY NOT NULL,
+            app_id    TEXT NOT NULL,
+            kept_at   INTEGER NOT NULL,
+            kept_by   TEXT NOT NULL
          );",
     )
     .map_err(|e| format!("skin.db app spaces schema: {e}"))
@@ -155,20 +179,50 @@ pub fn bind(
                 params![app_id, space_id, now, actor],
             )
             .map_err(|e| format!("app spaces insert: {e}"))?;
+            // Bound again: K2 manages its members again.
+            conn.execute("DELETE FROM tool_app_space_kept WHERE space_id = ?1", params![space_id])
+                .map_err(|e| format!("app spaces kept: {e}"))?;
             Ok(true)
         }
     }
 }
 
 /// Forget a binding. `Ok(false)` = there was none.
-pub fn unbind(conn: &Connection, app_id: &str, space_id: &str) -> Result<bool, String> {
+/// Forget `app` ↔ `space` (S32 Q3, Rosson 2026-10-27: a choice at unbind
+/// time). `remove_members = false` (the default; reversible) leaves every
+/// member where they are and K2 stops managing that Space. `true` removes
+/// the members K2 added automatically — only those: K2's ledger never holds
+/// someone added by hand, so they are never touched.
+pub fn unbind(conn: &Connection, app_id: &str, space_id: &str, remove_members: bool, actor: &str, now: i64) -> Result<bool, String> {
     let n = conn
         .execute(
             "DELETE FROM tool_app_spaces WHERE app_id = ?1 AND space_id = ?2",
             params![app_id, space_id],
         )
         .map_err(|e| format!("app spaces delete: {e}"))?;
-    Ok(n > 0)
+    if n == 0 {
+        return Ok(false);
+    }
+    if remove_members {
+        conn.execute("DELETE FROM tool_app_space_kept WHERE space_id = ?1", params![space_id])
+            .map_err(|e| format!("app spaces kept: {e}"))?;
+    } else {
+        conn.execute(
+            "INSERT INTO tool_app_space_kept (space_id, app_id, kept_at, kept_by) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(space_id) DO UPDATE SET app_id = excluded.app_id, kept_at = excluded.kept_at, kept_by = excluded.kept_by",
+            params![space_id, app_id, now, actor],
+        )
+        .map_err(|e| format!("app spaces kept: {e}"))?;
+    }
+    Ok(true)
+}
+
+/// Spaces unbound with their members kept: K2 forgets its ledger there.
+fn kept_spaces(conn: &Connection) -> Result<HashSet<String>, String> {
+    let mut stmt =
+        conn.prepare("SELECT space_id FROM tool_app_space_kept").map_err(|e| format!("app spaces kept: {e}"))?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| format!("app spaces kept: {e}"))?;
+    rows.collect::<Result<HashSet<_>, _>>().map_err(|e| format!("app spaces kept row: {e}"))
 }
 
 pub fn bindings(conn: &Connection) -> Result<Vec<Binding>, String> {
@@ -274,17 +328,18 @@ struct LedgerRow {
     app_id: String,
     state: String,
     rev: Option<String>,
+    why: Option<String>,
 }
 
 fn ledger(conn: &Connection) -> Result<HashMap<(String, String), LedgerRow>, String> {
     let mut stmt = conn
-        .prepare("SELECT space_id, external_id, app_id, state, grant_rev FROM tool_app_space_members")
+        .prepare("SELECT space_id, external_id, app_id, state, grant_rev, why FROM tool_app_space_members")
         .map_err(|e| format!("app space ledger: {e}"))?;
     let rows = stmt
         .query_map([], |r| {
             Ok((
                 (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
-                LedgerRow { app_id: r.get(2)?, state: r.get(3)?, rev: r.get(4)? },
+                LedgerRow { app_id: r.get(2)?, state: r.get(3)?, rev: r.get(4)?, why: r.get(5)? },
             ))
         })
         .map_err(|e| format!("app space ledger: {e}"))?;
@@ -369,6 +424,9 @@ pub struct Summary {
     pub removes: usize,
     pub held_kept: usize,
     pub held_forgotten: usize,
+    /// Members of a Space unbound with its members kept: forgotten, not
+    /// removed.
+    pub kept: usize,
 }
 
 /// Diff the desired set against the ledger, write the ledger changes and
@@ -397,6 +455,11 @@ pub fn plan(
                 PENDING_ADD => !open,
                 // The remove is queued: the add lands after it.
                 PENDING_REMOVE => true,
+                // Banned: never again on K2's own (only `clear_banned`).
+                HELD if is_banned(l.why.as_deref()) => {
+                    s.held_kept += 1;
+                    false
+                }
                 HELD => {
                     let changed = l.rev.as_deref() != Some(w.rev.as_str());
                     if !changed {
@@ -413,14 +476,25 @@ pub fn plan(
             s.adds += 1;
         }
     }
-    // Everything left in the ledger is no longer wanted.
+    // Everything left in the ledger is no longer wanted. In a Space
+    // unbound with its members kept, K2 just forgets them (they stay).
+    let kept = kept_spaces(conn)?;
     for ((space_id, ext_s), l) in have {
+        if kept.contains(&space_id) && !(l.state == HELD && is_banned(l.why.as_deref())) {
+            drop_ledger(conn, &space_id, &ext_s)?;
+            s.kept += 1;
+            continue;
+        }
         let Ok(ext) = ExternalId::parse(&ext_s) else {
             drop_ledger(conn, &space_id, &ext_s)?;
             continue;
         };
         let open = busy.contains(&subject_key(&space_id, &ext));
         match l.state.as_str() {
+            // A ban outlives the grant: a later grant must not re-add them.
+            HELD if is_banned(l.why.as_deref()) => {
+                s.held_kept += 1;
+            }
             HELD => {
                 drop_ledger(conn, &space_id, &ext_s)?;
                 s.held_forgotten += 1;
@@ -480,7 +554,7 @@ pub fn add_verdict(payload_raw: &str, body: &str) -> AddVerdict {
         };
     }
     if !resp.skipped.is_empty() {
-        return AddVerdict::Held("skipped: banned in this Space".into());
+        return AddVerdict::Held(BANNED_WHY.into());
     }
     AddVerdict::Unknown(format!("Sew did not list {ext} in its answer"))
 }
@@ -539,8 +613,21 @@ pub fn after_done(conn: &Connection, id: &str, now: i64) -> Result<(), String> {
     }
 }
 
+/// Let K2 add a banned person to a Space again (Sew reported the unban).
+/// Returns whether there was a banned hold. The next reconcile re-adds them
+/// if they still hold the App's grant.
+pub fn clear_banned(conn: &Connection, space_id: &str, external_id: &str) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "DELETE FROM tool_app_space_members WHERE space_id = ?1 AND external_id = ?2 AND state = 'held' AND why = ?3",
+            params![space_id, external_id, BANNED_WHY],
+        )
+        .map_err(|e| format!("skin.db app space members: {e}"))?;
+    Ok(n > 0)
+}
+
 /// The worker recorded row `id` held (HC2): the ledger keeps the person
-/// out until the grant rev changes.
+/// out until the grant rev changes (banned: until [`clear_banned`]).
 pub fn after_held(conn: &Connection, id: &str, why: &str, now: i64) -> Result<(), String> {
     let Some(row) = outbox::get(conn, id)? else { return Ok(()) };
     let Some((space, ext, _app)) = row_target(&row) else { return Ok(()) };

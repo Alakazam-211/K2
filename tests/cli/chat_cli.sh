@@ -7,7 +7,7 @@
 #   1. help without a daemon; the tool catalog (chat = id + locked); the
 #      S31 delivery-hub verbs refuse with exit 1 (no daemon needed).
 #   2. Every verb's route, method and JSON body: send/post/reply/dm with
-#      --as, --key, --broadcast, stdin text ("-"), `<space>/#<id>`; edit,
+#      --on-behalf-of, --key, --broadcast, stdin text ("-"), `<space>/#<id>`; edit,
 #      delete, outbox, outbox cancel, messages/read/wait/channels/spaces/
 #      whoami, access (own + grant/set/revoke/list), every MANAGE verb.
 #   3. Output: msg_… when posted, "queued for approval (out_…)" (exit 0),
@@ -58,7 +58,7 @@ set -e
 assert_eq "chat --help exit 0" "$rc" "0"
 assert_contains "help: the split in one line" "$out" '`k2 chat` = inside Spaces (use + community admin); `k2 hostchat` = the server on this box.'
 assert_contains "help: App Spaces come from k2 app grant" "$out" "k2 app grant"
-assert_contains "help: --as" "$out" "--as <user>"
+assert_contains "help: --on-behalf-of" "$out" "--on-behalf-of <user>"
 assert_contains "help: manage gates" "$out" "the Manage Sew switch on your workspace AND level manage"
 assert_contains "help: untrusted markers" "$out" "BEGIN CHAT MESSAGE (untrusted"
 assert_absent "help: no S31 verbs" "$out" "mark-read"
@@ -80,7 +80,7 @@ python3 -c '
 import json, sys
 names = {c["name"] for c in json.loads(sys.argv[1])["commands"]}
 for n in ("chat", "chat send", "chat wait", "chat access", "chat channel", "chat space", "chat role",
-          "hostchat people", "hostchat approvals", "hostchat agents", "hostchat act-as", "hostchat log"):
+          "hostchat people", "hostchat approvals", "hostchat agents", "hostchat on-behalf", "hostchat log"):
     assert n in names, n
 ' "$schema" && ok "schema lists the chat verbs" || bad "schema lists the chat verbs"
 
@@ -134,8 +134,11 @@ class H(BaseHTTPRequestHandler):
                 status, out = err(403, "level_denied", "your chat level in hearth is 'reply'", {"level": "reply", "needs": "send"})
             elif b.get("to") == "hearth/boom":
                 status, out = err(503, "chat_unavailable", "Sew didn't answer (re-run with --key %s to retry without a double post)" % key, {"key": key})
-            elif b.get("text") == "queue me" or b.get("as"):
-                out = {"ok": True, "id": "out_aaaa", "status": "queued", "key": key, "queueReason": "on_behalf" if b.get("as") else "approval_required"}
+            elif b.get("text") == "queue me":
+                out = {"ok": True, "id": "out_aaaa", "status": "queued", "key": key, "queueReason": "approval_required"}
+            elif b.get("onBehalfOf"):
+                out = {"ok": True, "id": "msg_77", "status": "posted", "key": key, "addr": "hearth/general",
+                       "onBehalf": {"onBehalfOf": b.get("onBehalfOf"), "state": "pending"}}
             else:
                 out = {"ok": True, "id": "msg_9", "status": "posted", "key": key, "addr": "hearth/general"}
         elif p == "/cli/sew/chat/edit":
@@ -217,12 +220,13 @@ class H(BaseHTTPRequestHandler):
         elif p == "/cli/sew/approvals/policy/set":
             out = {"ok": True, "approvalsBy": b.get("approvalsBy")}
         elif p == "/cli/sew/on-behalf":
-            out = {"ok": True, "person": "k2:owner", "allowed": [{"workspace": "alpha", "workspaceId": "w1", "setAt": 1, "confirmMethod": "vault-password"}]}
-        elif p == "/cli/sew/on-behalf/set":
-            if b.get("on") and not b.get("confirmToken"):
-                status, out = err(403, "confirm_required", "a person confirms", {"action": "chat-act-as", "secretId": "w-" + str(b.get("workspace"))})
+            out = {"ok": True, "person": "k2:owner", "items": [{"write": "act_1", "messageId": "msg_77", "action": "send",
+                   "state": "pending", "workspace": "alpha", "onBehalfOf": "rosson"}]}
+        elif p == "/cli/sew/on-behalf/review":
+            if b.get("decision") == "approve" and not b.get("confirmToken"):
+                status, out = err(403, "confirm_required", "a person confirms", {"action": "chat-behalf-approve", "secretId": "act_1"})
             else:
-                out = {"ok": True, "workspace": b.get("workspace"), "on": b.get("on")}
+                out = {"ok": True, "onBehalf": {"state": "approved" if b.get("decision") == "approve" else "declined", "write": "act_1"}}
         else:
             status, out = 404, {"error": "route not found"}
         data = json.dumps(out).encode()
@@ -311,12 +315,16 @@ assert_eq "post = send, <space>/#<id>, --key" "$(req_where /cli/sew/chat/send bo
 run cell chat send hearth/general "queue me"
 assert_eq "queued exit 0" "$rc" "0"
 assert_contains "queued output" "$out" "queued for approval (out_aaaa)"
-run cell chat reply msg_5 "on it" --broadcast --as @rosson
-assert_eq "reply: --broadcast + --as (any position, @ dropped)" "$(req_where /cli/sew/chat/reply body)" \
-    '{"as": "rosson", "broadcast": true, "text": "on it", "to": "msg_5"}'
-assert_contains "reply as a person queues" "$out" "queued for approval"
-run cell chat dm --as rosson @bob "psst"
-assert_eq "dm body (@ dropped, --as first)" "$(req_where /cli/sew/chat/dm body)" '{"as": "rosson", "text": "psst", "to": "bob"}'
+run cell chat reply msg_5 "on it" --broadcast --on-behalf-of @rosson
+assert_eq "reply: --broadcast + --on-behalf-of (any position, @ dropped)" "$(req_where /cli/sew/chat/reply body)" \
+    '{"broadcast": true, "onBehalfOf": "rosson", "text": "on it", "to": "msg_5"}'
+assert_contains "reply on behalf: posted now, reviewed later" "$out" "they can review it later (pending)"
+before="$(nreq)"
+run cell chat send hearth/general "x" --as rosson
+assert_eq "--as is gone → exit 2, nothing sent" "$rc/$(nreq)" "2/$before"
+assert_contains "--as names the new flag" "$err" "--on-behalf-of"
+run cell chat dm --on-behalf-of rosson @bob "psst"
+assert_eq "dm body (@ dropped, --on-behalf-of first)" "$(req_where /cli/sew/chat/dm body)" '{"onBehalfOf": "rosson", "text": "psst", "to": "bob"}'
 run cell_in "from stdin
 two lines" chat send hearth/general -
 assert_eq "stdin text" "$(req_where /cli/sew/chat/send body)" '{"text": "from stdin\ntwo lines", "to": "hearth/general"}'
@@ -349,8 +357,8 @@ run cell chat send hearth/general
 assert_eq "send without text → exit 2" "$rc" "2"
 run cell chat send hearth/general "x" --broadcast
 assert_eq "--broadcast outside reply → exit 2" "$rc" "2"
-run cell chat edit msg_1 "x" --as rosson
-assert_eq "--as outside send/reply/dm → exit 2" "$rc" "2"
+run cell chat delete msg_1 --on-behalf-of rosson
+assert_eq "--on-behalf-of outside send/reply/dm/edit → exit 2" "$rc" "2"
 run cell chat frobnicate
 assert_eq "unknown verb → exit 2" "$rc" "2"
 run cell chat access grant hearth beta --level admin
@@ -391,7 +399,7 @@ assert_contains "wait --outbox prints the decision" "$out" "denied"
 run cell chat wait --outbox
 assert_eq "wait --outbox (any)" "$(req_where /cli/sew/chat/wait query)" '{"outbox": "any"}'
 run cell chat outbox
-assert_contains "outbox shows the on-behalf wait" "$out" "waits: posting as a person"
+assert_contains "outbox shows whom a queued post speaks for" "$out" "on behalf of k2:owner"
 run cell chat outbox out_aaaa
 assert_eq "outbox <id>" "$(req_where /cli/sew/chat/outbox query)" '{"id": "out_aaaa"}'
 run cell chat outbox cancel out_aaaa
@@ -504,20 +512,23 @@ before="$(nreq)"
 run owner hostchat approvals deny out_aaaa
 assert_eq "deny without a note → exit 2" "$rc/$(nreq)" "2/$before"
 
-echo "== act-as =="
-run owner hostchat act-as allow alpha
-assert_eq "act-as allow with confirm → exit 0" "$rc" "0"
-assert_eq "act-as: confirm action + workspace id" "$(req_where /cli/vault/confirm/finish body)" \
-    '{"action": "chat-act-as", "method": "vault-password", "password": "", "secretId": "w-alpha"}'
-assert_eq "act-as: resent with the token" "$(req_where /cli/sew/on-behalf/set body)" '{"confirmToken": "tok-chat-act-as-w-alpha", "on": true, "workspace": "alpha"}'
-run owner hostchat act-as stop alpha
-assert_eq "act-as stop body" "$(req_where /cli/sew/on-behalf/set body)" '{"on": false, "workspace": "alpha"}'
-run owner hostchat act-as list
-assert_contains "act-as list" "$out" "alpha"
+echo "== on-behalf =="
+run owner hostchat on-behalf approve msg_77
+assert_eq "on-behalf approve with confirm → exit 0" "$rc" "0"
+assert_eq "on-behalf: confirm action + write id" "$(req_where /cli/vault/confirm/finish body)" \
+    '{"action": "chat-behalf-approve", "method": "vault-password", "password": "", "secretId": "act_1"}'
+assert_eq "on-behalf: resent with the token" "$(req_where /cli/sew/on-behalf/review body)" \
+    '{"confirmToken": "tok-chat-behalf-approve-act_1", "decision": "approve", "id": "msg_77"}'
+run owner hostchat on-behalf decline act_1 --note "not mine"
+assert_eq "on-behalf decline body (no confirm)" "$(req_where /cli/sew/on-behalf/review body)" '{"decision": "decline", "id": "act_1", "note": "not mine"}'
+run owner hostchat on-behalf
+assert_contains "on-behalf list" "$out" "act_1  msg_77  send  pending  by alpha"
 before="$(nreq)"
-run cell hostchat act-as allow alpha
-assert_eq "agent act-as allow → exit 3, nothing sent" "$rc/$(nreq)" "3/$before"
-assert_contains "agent act-as: person only" "$err" "person_only"
+run cell hostchat on-behalf approve msg_77
+assert_eq "agent on-behalf approve → exit 3, nothing sent" "$rc/$(nreq)" "3/$before"
+assert_contains "agent on-behalf: person only" "$err" "person_only"
+run owner hostchat act-as allow alpha
+assert_eq "act-as is gone → exit 2" "$rc" "2"
 
 echo
 echo "chat CLI: $pass passed, $fail failed"

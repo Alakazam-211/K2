@@ -228,7 +228,7 @@ fn held_stays_out_until_the_grant_changes() {
     let c = chat(&ann, "member");
     bind("hearth", SPACE);
     let add = open_space_rows().remove(0);
-    hook::record_held(&add.id, 200, r#"{"skipped":["mem_1"]}"#, "skipped: banned in this Space").unwrap();
+    hook::record_held(&add.id, 200, r#"{"not_added":[{"external_id":"x","reason":"deactivated"}]}"#, "not added: deactivated").unwrap();
     assert_eq!(ledger_state(SPACE, &pext(&ann.id)).as_deref(), Some(HELD));
     let s = skin::with_skin_conn(|c| reconcile(c, "system:reconcile", outbox::now_secs())).unwrap();
     assert_eq!((s.adds, s.held_kept), (0, 1), "held is not re-added: {s:?}");
@@ -238,6 +238,36 @@ fn held_stays_out_until_the_grant_changes() {
     let s = skin::with_skin_conn(|c| reconcile(c, "system:reconcile", outbox::now_secs())).unwrap();
     assert_eq!((s.adds, s.held_forgotten), (0, 1), "a guest is not wanted; the hold is forgotten: {s:?}");
     skin::update_grant_scope(&c.id, "member", "owner-token").unwrap();
+    let s = skin::with_skin_conn(|c| reconcile(c, "system:reconcile", outbox::now_secs())).unwrap();
+    assert_eq!(s.adds, 1, "{s:?}");
+}
+
+/// Rosson 2026-10-27 (ticket 411eda53): K2 never re-adds someone Sew
+/// reports as banned — not on a grant change, not after the grant goes and
+/// comes back — until `clear_banned` (the Sew 0.4.0 unban slot).
+#[test]
+fn a_banned_member_is_never_re_added_until_cleared() {
+    let _e = setup();
+    let ann = person("ann");
+    app_user(&ann, "hearth");
+    let c = chat(&ann, "member");
+    bind("hearth", SPACE);
+    let add = open_space_rows().remove(0);
+    hook::record_held(&add.id, 200, r#"{"skipped":["mem_1"]}"#, BANNED_WHY).unwrap();
+    assert_eq!(ledger_state(SPACE, &pext(&ann.id)).as_deref(), Some(HELD));
+    let s = skin::with_skin_conn(|c| reconcile(c, "system:reconcile", outbox::now_secs())).unwrap();
+    assert_eq!((s.adds, s.held_kept), (0, 1), "{s:?}");
+    // A new grant rev (member → guest → member) does not re-add her…
+    skin::update_grant_scope(&c.id, "guest", "owner-token").unwrap();
+    let s = skin::with_skin_conn(|c| reconcile(c, "system:reconcile", outbox::now_secs())).unwrap();
+    assert_eq!((s.adds, s.held_forgotten, s.held_kept), (0, 0, 1), "the ban outlives the grant: {s:?}");
+    skin::update_grant_scope(&c.id, "member", "owner-token").unwrap();
+    let s = skin::with_skin_conn(|c| reconcile(c, "system:reconcile", outbox::now_secs())).unwrap();
+    assert_eq!((s.adds, s.held_kept), (0, 1), "still banned: {s:?}");
+    assert_eq!(ledger_state(SPACE, &pext(&ann.id)).as_deref(), Some(HELD));
+    // …until Sew reports the unban.
+    let cleared = skin::with_skin_conn(|c| clear_banned(c, SPACE, &pext(&ann.id))).unwrap();
+    assert!(cleared);
     let s = skin::with_skin_conn(|c| reconcile(c, "system:reconcile", outbox::now_secs())).unwrap();
     assert_eq!(s.adds, 1, "{s:?}");
 }
@@ -290,10 +320,22 @@ fn bind_rules_and_unbind_removes_what_k2_added() {
     let add = open_space_rows().remove(0);
     hook::record_done(&add.id, 200, &added_body(&pext(&ann.id))).unwrap();
     assert_eq!(hook::app_spaces().unwrap()[0].members, Counts { added: 1, held: 0, pending: 0 });
-    let (gone, s) = hook::app_space_unbind("hearth", SPACE, "owner-token").unwrap();
+    // S32 Q3 (Rosson 2026-10-27): unbinding keeps everyone by default (it
+    // is reversible); K2 just stops managing that Space.
+    let (gone, s) = hook::app_space_unbind("hearth", SPACE, "owner-token", false).unwrap();
     assert!(gone);
-    assert_eq!(s.removes, 1, "{s:?}");
+    assert_eq!((s.removes, s.kept), (0, 1), "{s:?}");
     assert!(hook::app_spaces().unwrap().is_empty());
+    assert_eq!(ledger_state(SPACE, &pext(&ann.id)), None, "K2 forgot her; she stays in the Space");
+    assert!(open_space_rows().iter().all(|r| r.op != "space_member_remove"), "nobody is removed");
+    // Bound again: K2 manages the Space again and asks to add her.
+    bind("hearth", SPACE);
+    let add = open_space_rows().into_iter().find(|r| r.op == "space_member_add").expect("re-add");
+    hook::record_done(&add.id, 200, &added_body(&pext(&ann.id))).unwrap();
+    // The other choice: only the members K2 added leave.
+    let (gone, s) = hook::app_space_unbind("hearth", SPACE, "owner-token", true).unwrap();
+    assert!(gone);
+    assert_eq!((s.removes, s.kept), (1, 0), "{s:?}");
     assert_eq!(ledger_state(SPACE, &pext(&ann.id)).as_deref(), Some(PENDING_REMOVE));
 }
 

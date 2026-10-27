@@ -1352,7 +1352,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/meet/bind", Admin),
     post("/cli/sew/meet/unbind", Admin),
     get("/cli/sew/on-behalf", Member),
-    post("/cli/sew/on-behalf/set", Member),
+    post("/cli/sew/on-behalf/review", Member),
     post("/cli/sew/owner-handoff", Owner),
     post("/cli/sew/pass", Member),
     get("/cli/sew/preflight", Member),

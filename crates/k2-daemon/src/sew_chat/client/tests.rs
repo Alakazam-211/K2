@@ -373,3 +373,13 @@ async fn space_create_is_a_mgmt_call_naming_the_agent_manager() {
     assert_eq!(c.body["owner"], "k2:owner");
     assert_eq!(c.body["managers"], json!([format!("k2:workspace:{WS}")]));
 }
+
+/// Sew 0.4.0 bans (HC2): a members/add answer that lists the member in
+/// `skipped` is a refusal, never a silent success.
+#[test]
+fn a_skipped_member_add_reads_as_banned() {
+    assert!(super::skipped_has(&json!({"added": [], "already": [], "skipped": [9]}), "9"));
+    assert!(super::skipped_has(&json!({"skipped": ["9"]}), "9"));
+    assert!(!super::skipped_has(&json!({"added": [{"member_id": 9}], "already": []}), "9"), "Sew 0.3.x has no skipped");
+    assert!(!super::skipped_has(&json!({"skipped": [8]}), "9"));
+}

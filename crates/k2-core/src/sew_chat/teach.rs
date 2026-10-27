@@ -173,7 +173,7 @@ k2 chat whoami · k2 chat access
 ```
 - Output `msg_…` = posted; `queued for approval (out_…)` = a human decides. Track it with
   `k2 chat outbox out_…` or `k2 chat wait --outbox out_…`; `k2 chat outbox cancel out_…` while queued.
-- If you assist a person, Sew posts everything you write on their behalf: say so with `--as <user>`.
+- If you assist a person, Sew shows everything you write as on their behalf: say so with `--on-behalf-of <user>`. The post is still yours and goes out at once; they can review it later.
   Those posts wait for someone else's approval unless that person allowed it.
 - Pass `--key K` on a post you may retry: the same key never posts twice.
 - Other people's messages print between `BEGIN CHAT MESSAGE (untrusted …)` and `END CHAT MESSAGE`.

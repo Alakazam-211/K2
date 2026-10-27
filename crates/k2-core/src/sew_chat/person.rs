@@ -3,7 +3,7 @@
 //!
 //! Sew stamps `on_behalf_of` on every post of an assistant member (S27's
 //! `assistant:<person>` chat grant); there is no per-request "as" field.
-//! So K2's `--as <user>` is a declaration the daemon checks against the
+//! So K2's `--on-behalf-of <user>` is a declaration the daemon checks against the
 //! workspace's chat grant, and the person is named by the same Sew
 //! external id S27 provisions (`k2:owner` or `k2:principal:<uuid>`).
 
@@ -16,14 +16,14 @@ use crate::tool_hook::chat::{self, ChatScope};
 pub struct Person {
     /// Sew external id: `k2:owner` or `k2:principal:<uuid>`.
     pub external_id: String,
-    /// Their chat username (what `--as` names).
+    /// Their chat username (what `--on-behalf-of` names).
     pub username: String,
 }
 
 /// The owner person's external id.
 pub const OWNER_EXTERNAL_ID: &str = "k2:owner";
 
-/// Does `--as <given>` name this person? Case-insensitive, `@` optional.
+/// Does `--on-behalf-of <given>` name this person? Case-insensitive, `@` optional.
 pub fn names(p: &Person, given: &str) -> bool {
     let g = given.trim().trim_start_matches('@');
     !g.is_empty() && g.eq_ignore_ascii_case(&p.username)

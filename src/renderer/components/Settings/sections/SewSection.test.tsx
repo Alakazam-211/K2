@@ -623,8 +623,21 @@ describe('panels', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Bind' }))
     await waitFor(() => expect(postBodies('sew/app-spaces/bind')).toEqual([{ app: 'meet', spaceId: 'spc_2' }]))
     expect(await screen.findByText('spc_2')).toBeTruthy()
+    // S32 Q3: unbinding is a choice; the default keeps everyone.
+    expect(screen.getByText('Unbinding keeps everyone by default. You can instead remove the members K2 added; people added by hand always stay.')).toBeTruthy()
     fireEvent.click(screen.getAllByRole('button', { name: 'Unbind' })[0])
+    expect(postBodies('sew/app-spaces/unbind')).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Unbind, keep members' }))
     await waitFor(() => expect(postBodies('sew/app-spaces/unbind')).toEqual([{ app: 'hearth', spaceId: 'spc_1' }]))
+    await waitFor(() => expect(screen.queryByTestId('sew-unbind-choice')).toBeNull())
+    fireEvent.click(screen.getAllByRole('button', { name: 'Unbind' })[0])
+    fireEvent.click(screen.getByRole('button', { name: 'Unbind and remove members K2 added' }))
+    await waitFor(() =>
+      expect(postBodies('sew/app-spaces/unbind')).toEqual([
+        { app: 'hearth', spaceId: 'spc_1' },
+        { app: 'hearth', spaceId: 'spc_1', removeAppMembers: true },
+      ]),
+    )
   })
 
   it('App Spaces on an older daemon (404) say so and offer no bind', async () => {

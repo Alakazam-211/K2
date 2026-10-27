@@ -122,11 +122,10 @@ pub fn emit(reason: &str) {
 /// `status.you`. A hint for clients (enable / grey out); every route still
 /// checks on its own (S32-A5: a 200 on status is not permission).
 ///
-/// Person-only steps follow S29's current gate: purge and the recovery
-/// key are the owner's (token or Owner login), with a vault confirm, never
-/// a passport. NOTE: `feat/sew-s29-0463` widens the recovery key and
-/// `drop-prev` to Admin logins (`PersonFloor::Admin`); flip
-/// [`RECOVERY_KEY_ADMIN`] when that lands.
+/// Person-only steps follow S29's gate: purge is the owner's (token or
+/// Owner login); the recovery key and `drop-prev` are the owner's or an
+/// Admin login's (S29 shipped `PersonFloor::Admin` in 0.46.3); each with a
+/// vault confirm, never a passport.
 pub fn you(who: &Who) -> Value {
     let passport = who.passport().is_some();
     let person = !passport && need_credential(who).is_ok();
@@ -143,8 +142,8 @@ pub fn you(who: &Who) -> Value {
 }
 
 /// Whether an Admin login (with its own confirm) may reveal the recovery
-/// key. `false` on r3 (owner only); the S29 finisher makes it `true`.
-pub const RECOVERY_KEY_ADMIN: bool = false;
+/// key: `true` since S29 landed (0.46.3, `route_policy` Admin floor).
+pub const RECOVERY_KEY_ADMIN: bool = true;
 
 // ── status decoration ───────────────────────────────────────────────────
 
@@ -765,12 +764,25 @@ fn app_space_unbind(who: &Who, v: &Value) -> R<Value> {
     if app.is_empty() || space.is_empty() {
         return Err(no("bad_request", 400, "name the App and the Space (app, spaceId)"));
     }
-    let (gone, plan) = k2_core::tool_hook::app_space_unbind(&app, &space, &who.label()).map_err(|e| no("db_error", 500, e))?;
+    // S32 Q3 (Rosson 2026-10-27): a choice at unbind time, default keep
+    // (reversible). Removing only ever touches the members K2 added.
+    let remove = match v.get("removeAppMembers") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(no("bad_request", 400, "removeAppMembers is true or false")),
+    };
+    let (gone, plan) =
+        k2_core::tool_hook::app_space_unbind(&app, &space, &who.label(), remove).map_err(|e| no("db_error", 500, e))?;
     if !gone {
         return Err(no("not_found", 404, format!("Space {space} is not bound to App '{app}' here")));
     }
     emit("app-space");
-    Ok(json!({"ok": true, "app": app, "spaceId": space, "plan": plan, "hint": "the members K2 added there are being removed"}))
+    let hint = if remove {
+        "the members K2 added there are being removed (people added by hand stay)"
+    } else {
+        "everyone stays in the Space; K2 no longer manages its members (bind again to resume)"
+    };
+    Ok(json!({"ok": true, "app": app, "spaceId": space, "removeAppMembers": remove, "plan": plan, "hint": hint}))
 }
 
 // ── entry ────────────────────────────────────────────────────────────────

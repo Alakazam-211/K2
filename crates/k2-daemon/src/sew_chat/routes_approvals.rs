@@ -13,9 +13,11 @@
 //!   shown as an agent's approval — never person proof (KM13 rev 148).
 //!
 //! Nobody approves their own post: an agent's own items are refused (it
-//! cancels them with `k2 chat outbox cancel`), and a person never approves
-//! a post an assistant made AS them (builder decision 3: it is their own
-//! post, someone else approves; they may still deny it). Deny needs a note;
+//! cancels them with `k2 chat outbox cancel`). A post an assistant makes
+//! on a person's behalf is still the agent's post (Rosson 2026-10-27,
+//! ticket 411eda53), so that person may approve it here like anyone else;
+//! their own after-the-fact review of what was said for them is a separate
+//! record (`/cli/sew/on-behalf/review`). Deny needs a note;
 //! an agent with Manage Sew may deny other agents' items whatever the
 //! policy (denying never widens anything). Widening the policy is a person
 //! step (owner/admin); an agent with Manage Sew may only tighten it back to
@@ -41,9 +43,8 @@ use crate::compute_routes::Who;
 #[derive(Debug, Clone)]
 enum Decider {
     /// The owner token or an Owner/Admin login. `stamp` is the vault
-    /// confirm stamp (`owner` / `connect:<user>`); `person` the Sew
-    /// external id of who they are (`k2:owner` / `k2:connect:<login>`).
-    Person { label: String, stamp: String, person: String },
+    /// confirm stamp (`owner` / `connect:<user>`).
+    Person { label: String, stamp: String },
     /// A passport whose workspace has Manage Sew on.
     Agent { project_id: String, label: String },
 }
@@ -62,12 +63,10 @@ fn decider(who: &Who) -> R<Decider> {
         Who::Owner => Ok(Decider::Person {
             label: "owner".into(),
             stamp: "owner".into(),
-            person: core::person::OWNER_EXTERNAL_ID.into(),
         }),
         Who::Login { username, role } if *role >= Role::Admin => Ok(Decider::Person {
             label: format!("login:{username}"),
             stamp: format!("connect:{username}"),
-            person: core::person::person_of_login(username, core::person::login_is_owner(username)),
         }),
         Who::Agent { project_id, .. } | Who::Shell { project_id, .. } => {
             if !k2_core::workspace::settings::agents_can_manage_chat(project_id) {
@@ -113,17 +112,10 @@ fn policy_now() -> R<ApprovalsBy> {
 /// Can `d` approve `r` under `by`? `Err` carries the refusal.
 fn may_approve(d: &Decider, by: ApprovalsBy, r: &store::OutboxRow) -> R<()> {
     match d {
-        Decider::Person { person, .. } => {
-            if r.on_behalf_person.as_deref() == Some(person.as_str()) {
-                return Err(ChatErr::new(
-                    "own_post",
-                    403,
-                    "this post was written as you (by your assistant), so it counts as your own post — someone else \
-                     approves it; you can deny it",
-                ));
-            }
-            Ok(())
-        }
+        // An on-behalf post is the agent's own, not the person's (Rosson
+        // 2026-10-27): any person may approve it, including the one it
+        // speaks for.
+        Decider::Person { .. } => Ok(()),
         Decider::Agent { project_id, .. } => {
             if by == ApprovalsBy::People {
                 return Err(ChatErr::new(

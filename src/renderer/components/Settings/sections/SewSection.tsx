@@ -1036,6 +1036,8 @@ function AppSpacesPanel({ sample, canMutate }: PanelProps): React.JSX.Element {
   const [app, setApp] = useState('')
   const [spaceId, setSpaceId] = useState('')
   const [busy, setBusy] = useState(false)
+  // `app/space` whose unbind choice is open (S32 Q3: keep or remove).
+  const [unbinding, setUnbinding] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (sample) return
@@ -1069,6 +1071,9 @@ function AppSpacesPanel({ sample, canMutate }: PanelProps): React.JSX.Element {
     <div className="max-w-2xl space-y-3" data-settings-id="sew.app-spaces">
       <Title>App Spaces</Title>
       <p className={`text-[11px] ${secondary}`}>Members come only from each App&apos;s user grants; Admin Access never adds anyone.</p>
+      <p className={`text-[11px] ${muted}`}>
+        Unbinding keeps everyone by default. You can instead remove the members K2 added; people added by hand always stay.
+      </p>
       {notBuilt ? <p className={`text-[11px] ${muted}`}>This server does not report App Spaces yet.</p> : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
       <ul className="space-y-1" data-testid="sew-app-spaces">
@@ -1079,10 +1084,23 @@ function AppSpacesPanel({ sample, canMutate }: PanelProps): React.JSX.Element {
             <span className={secondary}>
               {s.members.added} in · {s.members.pending} pending · {s.members.held} held
             </span>
-            {canMutate ? (
-              <Button className="ml-auto" disabled={busy} onClick={() => void act(() => unbindSewAppSpace(s.app, s.spaceId))}>
+            {canMutate && unbinding !== `${s.app}/${s.spaceId}` ? (
+              <Button className="ml-auto" disabled={busy} onClick={() => setUnbinding(`${s.app}/${s.spaceId}`)}>
                 Unbind
               </Button>
+            ) : null}
+            {canMutate && unbinding === `${s.app}/${s.spaceId}` ? (
+              <span className="ml-auto flex flex-wrap items-center gap-2" data-testid="sew-unbind-choice">
+                <Button disabled={busy} onClick={() => void act(() => unbindSewAppSpace(s.app, s.spaceId, false)).then(() => setUnbinding(null))}>
+                  Unbind, keep members
+                </Button>
+                <Button disabled={busy} onClick={() => void act(() => unbindSewAppSpace(s.app, s.spaceId, true)).then(() => setUnbinding(null))}>
+                  Unbind and remove members K2 added
+                </Button>
+                <Button disabled={busy} onClick={() => setUnbinding(null)}>
+                  Cancel
+                </Button>
+              </span>
             ) : null}
           </li>
         ))}

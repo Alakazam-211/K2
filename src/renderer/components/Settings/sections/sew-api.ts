@@ -504,8 +504,16 @@ export async function bindSewAppSpace(app: string, spaceId: string): Promise<{ o
   return daemonCliPost(primaryScope(), 'sew/app-spaces/bind', { app: app.trim(), spaceId: spaceId.trim() })
 }
 
-export async function unbindSewAppSpace(app: string, spaceId: string): Promise<{ ok: boolean }> {
-  return daemonCliPost(primaryScope(), 'sew/app-spaces/unbind', { app, spaceId })
+/**
+ * S32 Q3 (Rosson 2026-10-27): unbinding is a choice. By default everyone
+ * stays (reversible); `removeAppMembers` removes only the members K2 added.
+ */
+export async function unbindSewAppSpace(app: string, spaceId: string, removeAppMembers = false): Promise<{ ok: boolean }> {
+  return daemonCliPost(
+    primaryScope(),
+    'sew/app-spaces/unbind',
+    removeAppMembers ? { app, spaceId, removeAppMembers: true } : { app, spaceId },
+  )
 }
 
 // ── person confirm (vault) ────────────────────────────────────────────────

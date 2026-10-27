@@ -3334,7 +3334,7 @@ mod tests {
 
     /// The tables 0234 creates (Sew chat for agents, S30 K16).
     const SEW_CHAT_TABLES: &[&str] =
-        &["sew_chat_access", "sew_chat_actions", "sew_chat_outbox", "sew_chat_settings", "sew_chat_on_behalf", "sew_chat_audit"];
+        &["sew_chat_access", "sew_chat_actions", "sew_chat_outbox", "sew_chat_settings", "sew_chat_behalf", "sew_chat_audit"];
 
     /// 0234 on a fresh database: the tables exist; the CHECKs refuse
     /// unknown levels, modes, statuses, queue reasons and actor kinds; a
@@ -3398,7 +3398,10 @@ mod tests {
         for (i, st) in ["queued", "approved", "denied", "cancelled"].iter().enumerate() {
             outbox(&format!("o{i}"), st, None, "approval_required").unwrap_or_else(|e| panic!("outbox {st}: {e}"));
         }
-        outbox("o-ob", "queued", None, "on_behalf").unwrap();
+        assert!(
+            outbox("o-ob", "queued", None, "on_behalf").is_err(),
+            "an on-behalf post never queues for its person (Rosson 2026-10-27)"
+        );
         assert!(outbox("o-x1", "expired", None, "approval_required").is_err(), "expiry is a denial, not a fifth state");
         assert!(outbox("o-x2", "approved", Some("robot"), "approval_required").is_err());
         assert!(outbox("o-x3", "queued", None, "because").is_err(), "unknown queue reason");
@@ -3413,17 +3416,21 @@ mod tests {
         }
         assert!(audit("au-x", "person", "ok").is_err(), "the owner token is never labelled a person");
         assert!(audit("au-y", "agent", "maybe").is_err());
-        conn.execute(
-            "INSERT INTO sew_chat_on_behalf (person, project_id, set_by, confirm_method, created_at) VALUES ('k2:owner', 'w-sew', 'owner', 'vault-password', 1)",
-            [],
-        )
-        .unwrap();
-        assert!(conn
-            .execute(
-                "INSERT INTO sew_chat_on_behalf (person, project_id, set_by, confirm_method, created_at) VALUES ('k2:owner', 'w-sew', 'owner', 'x', 2)",
-                [],
+        let behalf = |id: &str, state: &str, kind: Option<&str>, at: Option<i64>| {
+            conn.execute(
+                "INSERT INTO sew_chat_behalf (action_id, person, person_name, project_id, action, state, decided_kind, created_at, decided_at)
+                 VALUES (?1, 'k2:owner', 'rosson', 'w-sew', 'send', ?2, ?3, 1, ?4)",
+                params![id, state, kind, at],
             )
-            .is_err(), "one opt-in per (person, workspace)");
+        };
+        behalf("b1", "pending", None, None).unwrap();
+        behalf("b2", "approved", Some("login"), Some(2)).unwrap();
+        behalf("b3", "declined", Some("owner_token"), Some(2)).unwrap();
+        assert!(behalf("b1", "pending", None, None).is_err(), "one review per write");
+        assert!(behalf("b4", "maybe", None, None).is_err(), "unknown review state");
+        assert!(behalf("b5", "approved", Some("agent"), Some(2)).is_err(), "only the person reviews: never an agent");
+        assert!(behalf("b6", "approved", Some("login"), None).is_err(), "a decision has a time");
+        assert!(behalf("b7", "pending", None, Some(2)).is_err(), "pending has no decision time");
     }
 
     /// 0164 on a fresh database: both tables exist; a delegation is a

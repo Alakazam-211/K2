@@ -303,6 +303,14 @@ pub fn finish_action(
         params![id, status, message_id, reason, sew_status, now],
     )
     .map_err(db)?;
+    // An on-behalf write's review follows it: it learns its message id, and
+    // goes when nothing reached Sew (failed, denied or cancelled).
+    if matches!(status, "failed" | "refused" | "denied" | "cancelled") {
+        conn.execute("DELETE FROM sew_chat_behalf WHERE action_id = ?1", params![id]).map_err(db)?;
+    } else if message_id.is_some() {
+        conn.execute("UPDATE sew_chat_behalf SET message_id = ?2 WHERE action_id = ?1", params![id, message_id])
+            .map_err(db)?;
+    }
     Ok(())
 }
 
@@ -569,6 +577,11 @@ fn decide_in(conn: &Connection, id: &str, d: &Decision, now: i64) -> Result<Outb
         params![row.action_id, d.status.as_str(), now],
     )
     .map_err(|e| DecideErr::Db(e.to_string()))?;
+    if d.status != OutboxStatus::Approved {
+        // Never posted: no on-behalf review to keep.
+        conn.execute("DELETE FROM sew_chat_behalf WHERE action_id = ?1", params![row.action_id])
+            .map_err(|e| DecideErr::Db(e.to_string()))?;
+    }
     Ok(row)
 }
 
@@ -648,69 +661,129 @@ pub fn expire_due(conn: &Connection, now: i64) -> Result<Vec<OutboxRow>, String>
     Ok(out)
 }
 
-// ── on-behalf opt-ins (builder decision 9) ───────────────────────────
+// ── on-behalf reviews (Rosson 2026-10-27, ticket 411eda53) ───────────
 
-/// One person's opt-in for one assistant workspace.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OnBehalf {
+/// An assistant's write that speaks for a person, and that person's
+/// after-the-fact review. Metadata only: nothing waits on it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Behalf {
+    pub action_id: String,
+    /// The person's Sew external id (`k2:owner` / `k2:principal:<uuid>`).
     pub person: String,
+    /// Their chat username.
+    pub person_name: String,
     pub project_id: String,
-    pub set_by: String,
-    pub confirm_method: String,
+    pub action: String,
+    pub message_id: Option<String>,
+    pub outbox_id: Option<String>,
+    /// `pending`, `approved` or `declined`.
+    pub state: String,
+    pub decided_by: Option<String>,
+    /// `login` (a Connect login, a person channel) or `owner_token`.
+    pub decided_kind: Option<String>,
+    pub confirm_method: Option<String>,
+    pub note: Option<String>,
     pub created_at: i64,
+    pub decided_at: Option<i64>,
 }
 
-/// Has `person` (a Sew external id) let this workspace post as them
-/// without an approval?
-pub fn on_behalf_allowed(conn: &Connection, person: &str, project_id: &str) -> Result<bool, String> {
-    let n: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sew_chat_on_behalf WHERE person = ?1 AND project_id = ?2",
-            params![person, project_id],
-            |r| r.get(0),
-        )
-        .map_err(db)?;
-    Ok(n > 0)
+const BEHALF_COLS: &str = "action_id, person, person_name, project_id, action, message_id, outbox_id, state, decided_by, \
+     decided_kind, confirm_method, note, created_at, decided_at";
+
+fn behalf_from(r: &Row) -> rusqlite::Result<Behalf> {
+    Ok(Behalf {
+        action_id: r.get(0)?,
+        person: r.get(1)?,
+        person_name: r.get(2)?,
+        project_id: r.get(3)?,
+        action: r.get(4)?,
+        message_id: r.get(5)?,
+        outbox_id: r.get(6)?,
+        state: r.get(7)?,
+        decided_by: r.get(8)?,
+        decided_kind: r.get(9)?,
+        confirm_method: r.get(10)?,
+        note: r.get(11)?,
+        created_at: r.get(12)?,
+        decided_at: r.get(13)?,
+    })
 }
 
-pub fn set_on_behalf(conn: &Connection, o: &OnBehalf) -> Result<(), String> {
+/// Record an on-behalf write (state `pending`), next to its action row.
+pub fn insert_behalf(conn: &Connection, b: &Behalf) -> Result<(), String> {
     conn.execute(
-        "INSERT INTO sew_chat_on_behalf (person, project_id, set_by, confirm_method, created_at) VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(person, project_id) DO UPDATE SET set_by = excluded.set_by, confirm_method = excluded.confirm_method,
-           created_at = excluded.created_at",
-        params![o.person, o.project_id, o.set_by, o.confirm_method, o.created_at],
+        "INSERT INTO sew_chat_behalf (action_id, person, person_name, project_id, action, message_id, outbox_id, state, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8)",
+        params![b.action_id, b.person, b.person_name, b.project_id, b.action, b.message_id, b.outbox_id, b.created_at],
     )
     .map_err(db)?;
     Ok(())
 }
 
-/// Withdraw an opt-in. Returns whether there was one.
-pub fn clear_on_behalf(conn: &Connection, person: &str, project_id: &str) -> Result<bool, String> {
-    let n = conn
-        .execute("DELETE FROM sew_chat_on_behalf WHERE person = ?1 AND project_id = ?2", params![person, project_id])
-        .map_err(db)?;
-    Ok(n > 0)
+/// One review by its write's action id, or the newest one for a Sew
+/// message id (an edit is a newer write of the same message).
+pub fn get_behalf(conn: &Connection, id: &str) -> Result<Option<Behalf>, String> {
+    conn.query_row(
+        &format!(
+            "SELECT {BEHALF_COLS} FROM sew_chat_behalf WHERE action_id = ?1 OR message_id = ?1
+             ORDER BY created_at DESC, rowid DESC LIMIT 1"
+        ),
+        params![id],
+        behalf_from,
+    )
+    .optional()
+    .map_err(db)
 }
 
-pub fn list_on_behalf(conn: &Connection, person: &str) -> Result<Vec<OnBehalf>, String> {
-    let mut s = conn
-        .prepare(
-            "SELECT person, project_id, set_by, confirm_method, created_at FROM sew_chat_on_behalf WHERE person = ?1
-             ORDER BY created_at",
+/// A person's on-behalf writes, newest first (`state` filters).
+pub fn list_behalf(conn: &Connection, person: &str, state: Option<&str>, limit: i64) -> Result<Vec<Behalf>, String> {
+    let mut st = conn
+        .prepare(&format!(
+            "SELECT {BEHALF_COLS} FROM sew_chat_behalf WHERE person = ?1 AND (?2 IS NULL OR state = ?2)
+             ORDER BY created_at DESC, rowid DESC LIMIT ?3"
+        ))
+        .map_err(db)?;
+    let rows = st.query_map(params![person, state, limit.clamp(1, 500)], behalf_from).map_err(db)?;
+    rows.collect::<Result<_, _>>().map_err(db)
+}
+
+/// The newest review per Sew message id, for the messages a list shows.
+pub fn behalf_for_messages(conn: &Connection, ids: &[String]) -> Result<std::collections::HashMap<String, Behalf>, String> {
+    let mut out = std::collections::HashMap::new();
+    let sql = format!("SELECT {BEHALF_COLS} FROM sew_chat_behalf WHERE message_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1");
+    for id in ids {
+        if let Some(b) = conn.query_row(&sql, params![id], behalf_from).optional().map_err(db)? {
+            out.insert(id.clone(), b);
+        }
+    }
+    Ok(out)
+}
+
+/// The person's decision (`approved` / `declined`). A later decision
+/// replaces an earlier one (they may change their mind); the row keeps the
+/// newest and the audit keeps each. False when there is no such row.
+#[allow(clippy::too_many_arguments)]
+pub fn review_behalf(
+    conn: &Connection,
+    action_id: &str,
+    state: &str,
+    decided_by: &str,
+    decided_kind: &str,
+    confirm_method: Option<&str>,
+    note: Option<&str>,
+    now: i64,
+) -> Result<bool, String> {
+    if !matches!(state, "approved" | "declined") {
+        return Err(format!("unknown review decision {state:?}"));
+    }
+    let n = conn
+        .execute(
+            "UPDATE sew_chat_behalf SET state = ?2, decided_by = ?3, decided_kind = ?4, confirm_method = ?5, note = ?6,
+               decided_at = ?7 WHERE action_id = ?1",
+            params![action_id, state, decided_by, decided_kind, confirm_method, note, now],
         )
         .map_err(db)?;
-    let rows = s
-        .query_map(params![person], |r| {
-            Ok(OnBehalf {
-                person: r.get(0)?,
-                project_id: r.get(1)?,
-                set_by: r.get(2)?,
-                confirm_method: r.get(3)?,
-                created_at: r.get(4)?,
-            })
-        })
-        .map_err(db)?;
-    rows.collect::<Result<_, _>>().map_err(db)
+    Ok(n > 0)
 }
 
 // ── audit (K19/K20 administration) ───────────────────────────────────

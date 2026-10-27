@@ -559,6 +559,14 @@ pub(crate) fn message_json(m: &Message, ch: &Channel, me: &str) -> Value {
     });
     if let Some(o) = &m.on_behalf_of {
         v["onBehalfOf"] = o.clone().into();
+        // K2's metadata for a post an assistant made on someone's behalf
+        // (Rosson 2026-10-27): whether that person has reviewed it yet.
+        // Sew doesn't carry it; a K2 read joins it from K2's record.
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Ok(Some(b)) = store::get_behalf(&conn, &m.id) {
+            v["onBehalfReview"] = behalf_json(&b);
+        }
     }
     // KM1-ready: only echoed when Sew sent them (never required).
     if let Some(k) = &m.message_kind {
@@ -851,8 +859,9 @@ struct WriteBody {
     text: Option<String>,
     #[serde(default)]
     key: Option<String>,
-    /// `--as <user>`.
-    #[serde(default, rename = "as")]
+    /// `--for <user>`: the person an assistant speaks for. The post is
+    /// still the agent's own (Rosson 2026-10-27).
+    #[serde(default)]
     on_behalf_of: Option<String>,
     #[serde(default)]
     broadcast: bool,
@@ -932,30 +941,31 @@ fn write_route(c: &Caller, action: Action, body: &[u8]) -> R<Value> {
     need_any_access(c)?;
 
     // 2b. Whom the agent speaks for. Sew stamps every post of an assistant
-    // as on behalf of its person, so `--as` must name exactly that person,
-    // a coworker can't use it, and an assistant must say it.
+    // as on behalf of its person, so `--for` must name exactly that person,
+    // a coworker can't use it, and an assistant must say it. The post stays
+    // the agent's own; it never waits for that person (Rosson 2026-10-27).
     let on_behalf: Option<Person> = match (as_given, assistant_of(&c.project_id)?) {
         (Some(given), Some(p)) if person::names(&p, given) => Some(p),
         (Some(_), Some(p)) => {
             return Err(ChatErr::new(
                 "not_assistant",
                 403,
-                format!("you assist @{} in chat; --as can only name them", p.username),
+                format!("you assist @{} in chat; --for can only name them", p.username),
             ))
         }
         (Some(_), None) => {
             return Err(ChatErr::new(
                 "not_assistant",
                 403,
-                "this workspace is a coworker in chat, not someone's assistant: post without --as",
+                "this workspace is a coworker in chat, not someone's assistant: post without --for",
             ))
         }
         (None, Some(p)) if action.is_content() => {
             return Err(ChatErr::new(
-                "as_required",
+                "on_behalf_required",
                 400,
                 format!(
-                    "you are @{0}'s assistant in chat, so everything you write shows as on behalf of @{0} — say so with --as {0}",
+                    "you are @{0}'s assistant in chat, so everything you write shows as on behalf of @{0} — say so with --for {0}",
                     p.username
                 ),
             ))
@@ -1044,31 +1054,26 @@ fn write_route(c: &Caller, action: Action, body: &[u8]) -> R<Value> {
         return Err(level_denied(acc.level, need, action, &acc.space_slug));
     }
 
-    // 7. Queue (content writes only): the Space's mode says so, or an
-    // assistant posts as a person who hasn't let it post as them freely
-    // (builder decision 9).
-    if action.is_content() {
-        let reason = if acc.approval == ApprovalMode::Required {
-            Some("approval_required")
-        } else if let Some(p) = &on_behalf {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            (!store::on_behalf_allowed(&conn, &p.external_id, &c.project_id).map_err(internal)?).then_some("on_behalf")
-        } else {
-            None
-        };
-        if let Some(reason) = reason {
-            let q = Queued { reason, person: on_behalf.as_ref().map(|p| p.external_id.clone()) };
-            return enqueue(c, base, &t, text.expect("content write has text"), b.broadcast, &key, b.kind, b.wake, now0, q);
-        }
+    // 7. Queue (content writes only) when the Space's mode says so. A post
+    // that speaks for a person never queues for that person: it carries an
+    // after-the-fact review instead (Rosson 2026-10-27, ticket 411eda53).
+    if action.is_content() && acc.approval == ApprovalMode::Required {
+        let q = Queued { reason: "approval_required", person: on_behalf.clone() };
+        return enqueue(c, base, &t, text.expect("content write has text"), b.broadcast, &key, b.kind, b.wake, now0, q);
     }
 
-    // 8. No row, no send.
+    // 8. No row, no send (an on-behalf write's review row goes in with it).
     let row = store::ActionRow { status: "sending".into(), ..base };
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::insert_action(&conn, &row).map_err(|e| internal(format!("{e} (nothing was sent)")))?;
+        if action.is_content() {
+            if let Some(p) = &on_behalf {
+                store::insert_behalf(&conn, &behalf_row(&row, p, None, now0))
+                    .map_err(|e| internal(format!("{e} (nothing was sent)")))?;
+            }
+        }
     }
     let idem = format!("k2c-{key}");
     let res = match action {
@@ -1092,13 +1097,17 @@ fn write_route(c: &Caller, action: Action, body: &[u8]) -> R<Value> {
     match res {
         Ok(mid) => {
             store::finish_action(&conn, &row.id, "posted", mid.as_deref(), None, None, now()).map_err(internal)?;
-            Ok(json!({
+            let mut v = json!({
                 "ok": true,
                 "id": mid.as_deref().map(sew::wire_msg_id),
                 "status": if action == Action::Delete { "deleted" } else { "posted" },
                 "key": key,
                 "addr": sew::channel_addr(&t.channel),
-            }))
+            });
+            if let Some(bh) = store::get_behalf(&conn, &row.id).map_err(internal)? {
+                v["onBehalf"] = behalf_json(&bh);
+            }
+            Ok(v)
         }
         Err(e) => {
             store::finish_action(&conn, &row.id, "failed", None, Some(&e.code), Some(i64::from(e.status)), now()).map_err(internal)?;
@@ -1216,7 +1225,41 @@ fn replay(conn: &rusqlite::Connection, prev: &store::ActionRow, key: &str) -> R<
 /// Why a write queues, and the person it speaks for.
 struct Queued {
     reason: &'static str,
-    person: Option<String>,
+    /// The person an assistant's queued post speaks for (it still never
+    /// waits for them: they review it after it posts).
+    person: Option<Person>,
+}
+
+/// The review row of an on-behalf write (`pending`).
+pub(crate) fn behalf_row(row: &store::ActionRow, p: &Person, outbox_id: Option<String>, now0: i64) -> store::Behalf {
+    store::Behalf {
+        action_id: row.id.clone(),
+        person: p.external_id.clone(),
+        person_name: p.username.clone(),
+        project_id: row.project_id.clone(),
+        action: row.action.clone(),
+        outbox_id,
+        state: "pending".into(),
+        created_at: now0,
+        ..Default::default()
+    }
+}
+
+/// The on-behalf metadata a post carries (Rosson 2026-10-27): the person,
+/// and whether they have reviewed it yet (who and when). UIs may use it or
+/// ignore it.
+pub(crate) fn behalf_json(b: &store::Behalf) -> Value {
+    json!({
+        "onBehalfOf": b.person_name,
+        "person": b.person,
+        "state": b.state,
+        "decidedBy": b.decided_by,
+        "decidedKind": b.decided_kind,
+        "decidedAt": b.decided_at,
+        "confirmMethod": b.confirm_method,
+        "note": b.note,
+        "write": b.action_id,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1258,7 +1301,7 @@ fn enqueue(
         target_id: t.target_id.clone(),
         addr: sew::channel_addr(&t.channel),
         on_behalf_of: base.on_behalf_of.clone(),
-        on_behalf_person: q.person.clone(),
+        on_behalf_person: q.person.as_ref().map(|p| p.external_id.clone()),
         broadcast,
         client_key: key.to_string(),
         body_sha256: core::body_sha256(&text),
@@ -1274,6 +1317,10 @@ fn enqueue(
         ..Default::default()
     };
     store::queue(&conn, &action_row, &o).map_err(|e| internal(format!("{e} (nothing was queued)")))?;
+    if let Some(p) = &q.person {
+        // Reviewed by its person after it posts; dropped if it never does.
+        store::insert_behalf(&conn, &behalf_row(&action_row, p, Some(out_id.clone()), now0)).map_err(internal)?;
+    }
     drop(conn);
     // The notice never carries the body, the channel or the person.
     emit_hook(
@@ -1288,15 +1335,10 @@ fn enqueue(
         "queueReason": q.reason,
         "key": key,
         "expiresAt": o.expires_at,
-        "hint": if q.reason == "on_behalf" {
-            format!(
-                "queued for approval ({out_id}): you post as @{} and they haven't let you post as them without one \
-                 (they can: k2 hostchat act-as allow <workspace>) — track it with k2 chat wait --outbox {out_id}",
-                base.on_behalf_of.as_deref().unwrap_or("them")
-            )
-        } else {
-            format!("queued for approval ({out_id}) — track it with k2 chat outbox {out_id}, or k2 chat wait --outbox {out_id}")
-        },
+        "hint": format!(
+            "queued for approval ({out_id}): this Space holds posts for approval — track it with k2 chat outbox {out_id}, \
+             or k2 chat wait --outbox {out_id}"
+        ),
     }))
 }
 

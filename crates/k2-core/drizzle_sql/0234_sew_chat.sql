@@ -30,22 +30,28 @@
 --     is 'person' (vault confirm, `confirm_method`) or 'agent' (labelled as
 --     an agent's approval, never person proof: KM13 rev 148). on_behalf_of
 --     is the person's chat username, on_behalf_person their Sew external
---     id (`k2:owner` / `k2:principal:<uuid>`): that person never approves
---     the item (builder decision 3). message_kind,
+--     id (`k2:owner` / `k2:principal:<uuid>`). An item queues only because
+--     its Space requires approval (never because it speaks for someone).
+--     message_kind,
 --     wake and response are KM1-ready optional fields (NULL = plain text).
 --
 -- sew_chat_settings  Per-box chat policy. `approvals.by` = 'people'
 --     (default when absent) or 'people+agents'.
 --
--- sew_chat_on_behalf  The people who let one assistant workspace post as
---     them without an approval (builder decision 9, provisional). No row =
---     every post an assistant makes as that person queues. `person` is the
---     Sew external id (`k2:owner` or `k2:principal:<uuid>`). Written only
---     by that person with a vault confirm (`chat-act-as`).
+-- sew_chat_behalf  On-behalf posts (Rosson 2026-10-27, ticket 411eda53):
+--     an assistant agent's post is always the agent's own; when it speaks
+--     for a person (Sew stamps `on_behalf_of` on every post of an assistant
+--     member) it does NOT wait for that person. One row per such write
+--     (send/reply/dm/edit), keyed by its action row, carries the person's
+--     after-the-fact review: state pending → approved | declined, who
+--     decided, how (`confirm_method` for an approval: a vault confirm by
+--     that person) and when. Metadata only: UIs may show or ignore it, and
+--     nothing is held back while it is pending. `person` is the Sew
+--     external id (`k2:owner` or `k2:principal:<uuid>`).
 --
 -- sew_chat_audit  K2's record of chat administration: agent access grants
 --     and changes (K19), community management through act-as (K20) and
---     on-behalf opt-ins. No message content. `actor_kind` says what the
+--     on-behalf reviews. No message content. `actor_kind` says what the
 --     caller was: a Connect login (a person channel), the owner token (not
 --     proof a person acted), an agent passport, or the system.
 CREATE TABLE IF NOT EXISTS sew_chat_access (
@@ -123,7 +129,7 @@ CREATE TABLE IF NOT EXISTS sew_chat_outbox (
   message_id     TEXT,
   sew_code       TEXT,
   queue_reason   TEXT NOT NULL DEFAULT 'approval_required'
-                 CHECK (queue_reason IN ('approval_required','on_behalf')),
+                 CHECK (queue_reason IN ('approval_required')),
   created_at     INTEGER NOT NULL,
   expires_at     INTEGER NOT NULL,
   decided_at     INTEGER
@@ -142,14 +148,27 @@ CREATE TABLE IF NOT EXISTS sew_chat_settings (
   updated_at INTEGER NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS sew_chat_on_behalf (
+CREATE TABLE IF NOT EXISTS sew_chat_behalf (
+  action_id      TEXT PRIMARY KEY NOT NULL,
   person         TEXT NOT NULL,
+  person_name    TEXT NOT NULL,
   project_id     TEXT NOT NULL,
-  set_by         TEXT NOT NULL,
-  confirm_method TEXT NOT NULL,
+  action         TEXT NOT NULL,
+  message_id     TEXT,
+  outbox_id      TEXT,
+  state          TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','approved','declined')),
+  decided_by     TEXT,
+  decided_kind   TEXT CHECK (decided_kind IS NULL OR decided_kind IN ('login','owner_token')),
+  confirm_method TEXT,
+  note           TEXT,
   created_at     INTEGER NOT NULL,
-  PRIMARY KEY (person, project_id)
+  decided_at     INTEGER,
+  CHECK ((state = 'pending') = (decided_at IS NULL))
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS idx_sew_chat_behalf_person ON sew_chat_behalf (person, state, created_at);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS idx_sew_chat_behalf_message ON sew_chat_behalf (message_id);
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS sew_chat_audit (
   id          TEXT PRIMARY KEY NOT NULL,

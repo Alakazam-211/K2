@@ -28,7 +28,7 @@ pub struct ActAs {
     pub workspace_uuid: String,
     /// The agent's cell session (`Sew-Via: k2; agent=…; k2_session=…`).
     pub k2_session: String,
-    /// `--as <user>`: posting on behalf of the person the agent assists
+    /// `--on-behalf-of <user>`: posting on behalf of the person the agent assists
     /// (Sew enforces its assistant rules).
     pub on_behalf_of: Option<String>,
     /// `Sew-Actor` (G7): who approved a queued post and how, e.g.

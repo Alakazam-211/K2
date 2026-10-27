@@ -593,7 +593,13 @@ impl SewChat for SewClientChat {
 
     fn space_member_add(&self, a: &ActAs, space_id: &str, member_id: &str) -> R<()> {
         let req = AddSpaceMembersRequest { member_ids: vec![parse_id(member_id)?] };
-        let _: Value = self.post_plain(a, r::with_id(r::SPACE_MEMBERS_ADD, parse_id(space_id)?), to_json(&req)?)?;
+        let v: Value = self.post_plain(a, r::with_id(r::SPACE_MEMBERS_ADD, parse_id(space_id)?), to_json(&req)?)?;
+        // Sew 0.4.0 (bans; HC2): a banned member comes back in `skipped`, not
+        // added. Say so instead of reporting a silent success; K2 never
+        // retries it (Rosson 2026-10-27). Sew 0.3.x has no such field.
+        if skipped_has(&v, member_id) {
+            return Err(SewError::new(409, "banned_in_space", "that member is banned in this Space; unban them first"));
+        }
         Ok(())
     }
 
@@ -705,6 +711,14 @@ impl SewChat for SewClientChat {
 }
 
 // ── transport helpers ─────────────────────────────────────────────────
+
+/// Whether a members/add answer lists `member_id` in `skipped` (Sew ids
+/// may be numbers or strings on the wire).
+fn skipped_has(v: &Value, member_id: &str) -> bool {
+    v.get("skipped").and_then(Value::as_array).is_some_and(|a| {
+        a.iter().any(|x| x.as_str() == Some(member_id) || x.as_u64().is_some_and(|n| n.to_string() == member_id))
+    })
+}
 
 /// The act-as client for `a` (agent workspace + its cell session).
 fn act(m: &MgmtClient, a: &ActAs) -> R<Client> {

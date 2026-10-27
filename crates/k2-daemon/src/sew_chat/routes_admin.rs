@@ -1,5 +1,6 @@
 //! `/cli/sew/admin/*` — the agent management plane for Sew chat (S30 K19)
-//! — and `/cli/sew/on-behalf*` (a person's opt-in, builder decision 9).
+//! — and `/cli/sew/on-behalf*` (a person's after-the-fact review of what
+//! an assistant said for them, Rosson 2026-10-27).
 //!
 //! **Who may manage (the CM gate):** the owner token, an Owner/Admin
 //! Connect login, or an agent (or K2 shell-tab) passport whose workspace
@@ -23,9 +24,12 @@
 //!   membership comes from `k2 app grant` (K31), never from here.
 //! - `log`: K2's administration audit (no message content).
 //! - `on-behalf*`: the person themselves (today the owner: the owner token
-//!   or an owner-linked login) lets one assistant workspace post as them
-//!   without an approval. Turning it on needs a vault confirm
-//!   (`chat-act-as`, `secretId` = the workspace id); off needs none.
+//!   or an owner-linked login) lists the posts an assistant made on their
+//!   behalf and reviews them after the fact. Those posts never waited for
+//!   them (ticket 411eda53); the review is metadata a UI may show. Approving
+//!   needs a vault confirm (`chat-behalf-approve`, `secretId` = the write's
+//!   `act_…` id), so "approved by <person>" is person proof; declining
+//!   needs none (it never widens anything).
 //!
 //! Every change writes a `sew_chat_audit` row.
 
@@ -53,7 +57,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/sew/admin/people/revoke",
     "/cli/sew/admin/people/update",
     "/cli/sew/on-behalf",
-    "/cli/sew/on-behalf/set",
+    "/cli/sew/on-behalf/review",
 ];
 
 pub const POST_ROUTES: &[&str] = &[
@@ -63,7 +67,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/sew/admin/people/grant",
     "/cli/sew/admin/people/revoke",
     "/cli/sew/admin/people/update",
-    "/cli/sew/on-behalf/set",
+    "/cli/sew/on-behalf/review",
 ];
 
 /// A caller that cleared the CM gate.
@@ -173,8 +177,8 @@ pub(crate) fn audit(
 pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> R<Value> {
     if path.starts_with("/cli/sew/on-behalf") {
         return match path {
-            "/cli/sew/on-behalf" => on_behalf_list(who),
-            "/cli/sew/on-behalf/set" => on_behalf_set(who, body),
+            "/cli/sew/on-behalf" => on_behalf_list(who, params),
+            "/cli/sew/on-behalf/review" => on_behalf_review(who, body),
             _ => Err(ChatErr::new("not_found", 404, "no such route")),
         };
     }
@@ -633,11 +637,11 @@ fn log(params: &HashMap<String, String>) -> R<Value> {
     }))
 }
 
-// ── on-behalf opt-ins (the person themselves) ────────────────────────
+// ── on-behalf reviews (the person themselves) ────────────────────────
 
-/// The person a caller is, for their own opt-ins: the owner token or an
+/// The person a caller is, for their own reviews: the owner token or an
 /// owner-linked login is the owner. Other logins and every passport are
-/// refused (an App user's opt-in needs an App surface; not built).
+/// refused (an App user's review needs an App surface; not built).
 fn the_person(who: &Who) -> R<(String, String, String)> {
     credential(who)?;
     match who {
@@ -648,7 +652,7 @@ fn the_person(who: &Who) -> R<(String, String, String)> {
         Who::Agent { .. } | Who::Shell { .. } => Err(ChatErr::new(
             "person_only",
             403,
-            "only the person an assistant posts for decides whether it may post as them without approval",
+            "only the person an assistant spoke for reviews what it said for them",
         )),
         _ => Err(ChatErr::new(
             "person_only",
@@ -658,63 +662,111 @@ fn the_person(who: &Who) -> R<(String, String, String)> {
     }
 }
 
-fn on_behalf_list(who: &Who) -> R<Value> {
+fn on_behalf_list(who: &Who, params: &HashMap<String, String>) -> R<Value> {
     let (person, _, _) = the_person(who)?;
+    let state = match params.get("state").map(String::as_str) {
+        None | Some("") | Some("all") => None,
+        Some(s @ ("pending" | "approved" | "declined")) => Some(s),
+        Some(other) => return Err(usage(format!("state is pending, approved, declined or all (not {other:?})"))),
+    };
+    let limit = match params.get("limit") {
+        Some(l) => l.parse::<i64>().map_err(|_| usage("limit is a number"))?,
+        None => 50,
+    };
     let rows = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::list_on_behalf(&conn, &person).map_err(internal)?
+        store::list_behalf(&conn, &person, state, limit).map_err(internal)?
     };
     Ok(json!({
         "ok": true,
         "person": person,
-        "allowed": rows.iter().map(|r| json!({
-            "workspace": crate::compute_routes::ws_handle(&r.project_id),
-            "workspaceId": r.project_id,
-            "setAt": r.created_at,
-            "confirmMethod": r.confirm_method,
-        })).collect::<Vec<_>>(),
+        "items": rows.iter().map(|b| {
+            let mut v = super::routes::behalf_json(b);
+            v["workspace"] = json!(crate::compute_routes::ws_handle(&b.project_id));
+            v["workspaceId"] = json!(b.project_id);
+            v["action"] = json!(b.action);
+            v["messageId"] = json!(b.message_id.as_deref().map(super::sew::wire_msg_id));
+            v["outboxId"] = json!(b.outbox_id);
+            v["createdAt"] = json!(b.created_at);
+            v
+        }).collect::<Vec<_>>(),
     }))
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct OnBehalfBody {
-    workspace: String,
-    on: bool,
+struct ReviewBody {
+    /// The write's `act_…` id, or the `msg_…` it posted (its newest write).
+    id: String,
+    /// `approve` or `decline`.
+    decision: String,
+    #[serde(default)]
+    note: Option<String>,
     #[serde(default)]
     confirm_token: Option<String>,
 }
 
-fn on_behalf_set(who: &Who, body: &[u8]) -> R<Value> {
+fn on_behalf_review(who: &Who, body: &[u8]) -> R<Value> {
     let (person, label, stamp) = the_person(who)?;
-    let b: OnBehalfBody = parse_body(body)?;
-    let ws = workspace(&b.workspace)?;
-    let kind = if matches!(who, Who::Owner) { "owner_token" } else { "login" };
-    let a = Admin::Person { label: label.clone(), kind };
-    if !b.on {
-        let had = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            store::clear_on_behalf(&conn, &person, &ws.id).map_err(internal)?
-        };
-        audit(&a, Some(&ws.id), "on_behalf.stop", None, Some(&person), None, "ok", None)?;
-        return Ok(json!({ "ok": true, "workspace": ws.handle, "on": false, "changed": had }));
+    let b: ReviewBody = parse_body(body)?;
+    let state = match b.decision.as_str() {
+        "approve" | "approved" => "approved",
+        "decline" | "declined" => "declined",
+        other => return Err(usage(format!("decision is approve or decline (not {other:?})"))),
+    };
+    let note = b.note.as_deref().map(str::trim).filter(|n| !n.is_empty());
+    if note.is_some_and(|n| n.len() > 500) {
+        return Err(usage("a note is at most 500 bytes"));
     }
-    // Turning it on loosens what an agent may say in this person's name:
-    // a fresh vault confirm bound to the workspace.
-    let method = super::routes_approvals::take_confirm(&stamp, b.confirm_token.as_deref(), core::CONFIRM_ACT_AS, &ws.id)?;
-    {
+    let id = b.id.trim();
+    let lookup = super::sew::sew_msg_id(id).unwrap_or_else(|| id.to_string());
+    let row = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::set_on_behalf(
-            &conn,
-            &store::OnBehalf { person: person.clone(), project_id: ws.id.clone(), set_by: label, confirm_method: method.clone(), created_at: now() },
-        )
-        .map_err(internal)?;
+        store::get_behalf(&conn, &lookup).map_err(internal)?
+    };
+    // Someone else's item reads exactly like a missing one.
+    let Some(row) = row.filter(|r| r.person == person) else {
+        return Err(ChatErr::new("not_found", 404, format!("no post made on your behalf is {id}")));
+    };
+    if row.message_id.is_none() {
+        return Err(ChatErr::new(
+            "not_posted",
+            409,
+            "that post has not reached chat yet (it waits for its Space's approval); review it once it posts",
+        ));
     }
-    audit(&a, Some(&ws.id), "on_behalf.allow", None, Some(&person), Some(method.clone()), "ok", None)?;
-    Ok(json!({ "ok": true, "workspace": ws.handle, "on": true, "confirmMethod": method }))
+    let kind = if matches!(who, Who::Owner) { "owner_token" } else { "login" };
+    // "Approved by <person>" is person proof: a fresh vault confirm bound to
+    // this write. Declining never widens anything and needs none.
+    let method = if state == "approved" {
+        Some(super::routes_approvals::take_confirm(&stamp, b.confirm_token.as_deref(), core::CONFIRM_BEHALF_APPROVE, &row.action_id)?)
+    } else {
+        None
+    };
+    let t = now();
+    let changed = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::review_behalf(&conn, &row.action_id, state, &label, kind, method.as_deref(), note, t).map_err(internal)?
+    };
+    if !changed {
+        return Err(ChatErr::new("not_found", 404, format!("no post made on your behalf is {id}")));
+    }
+    let a = Admin::Person { label: label.clone(), kind };
+    let op = if state == "approved" { "on_behalf.approve" } else { "on_behalf.decline" };
+    audit(&a, Some(&row.project_id), op, None, Some(&row.action_id), method.clone(), "ok", None)?;
+    let after = store::Behalf {
+        state: state.into(),
+        decided_by: Some(label),
+        decided_kind: Some(kind.into()),
+        confirm_method: method,
+        note: note.map(str::to_string),
+        decided_at: Some(t),
+        ..row
+    };
+    Ok(json!({ "ok": true, "onBehalf": super::routes::behalf_json(&after) }))
 }
 
 #[cfg(test)]

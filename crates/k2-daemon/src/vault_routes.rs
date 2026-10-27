@@ -1724,11 +1724,11 @@ const CONFIRM_ACTIONS: &[&str] = &[
     "chat-owner-handoff",
     // Sew chat S30 (K18, KM13 person-proof): approving one queued agent
     // post (`secretId` = the `out_…` id) or a batch (`secretId` = the
-    // batch hash), and a person letting an assistant workspace post as
-    // them without approval (`secretId` = the workspace id).
+    // batch hash), and a person approving after the fact a post an
+    // assistant made on their behalf (`secretId` = the write's `act_…` id).
     k2_core::sew_chat::CONFIRM_APPROVE,
     k2_core::sew_chat::CONFIRM_APPROVE_BATCH,
-    k2_core::sew_chat::CONFIRM_ACT_AS,
+    k2_core::sew_chat::CONFIRM_BEHALF_APPROVE,
     // RS-A15 (0.46.1): a Garden widget's `guests.setRooms`, confirmed on
     // K2's sheet outside the frame (`secretId` = the change's hash).
     crate::garden_data::guest_rooms::CONFIRM_ACTION,

@@ -52,9 +52,10 @@ pub const POLICY_APPROVALS_BY: &str = "approvals.by";
 pub const CONFIRM_APPROVE: &str = "chat-approve";
 /// Vault confirm action for a batch (`secretId` = [`batch_hash`]).
 pub const CONFIRM_APPROVE_BATCH: &str = "chat-approve-batch";
-/// Vault confirm action for a person letting one assistant workspace post
-/// as them without an approval (`secretId` = the workspace id).
-pub const CONFIRM_ACT_AS: &str = "chat-act-as";
+/// Vault confirm action for a person approving, after the fact, a post an
+/// assistant made on their behalf (`secretId` = the write's `act_…` id;
+/// Rosson 2026-10-27: on-behalf posts never wait, the person reviews them).
+pub const CONFIRM_BEHALF_APPROVE: &str = "chat-behalf-approve";
 
 /// What an agent may do in one Space. Derived `Ord`: read < reply < send <
 /// manage.

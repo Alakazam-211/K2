@@ -1010,6 +1010,10 @@ pub struct ServerListing {
     pub refusal: Option<String>,
     /// Its session is up now.
     pub online: bool,
+    /// Does its Priority count here (`queue.toml`, prd-compute-job-tiers-v1
+    /// T7)? Absent from a node older than 0.46.5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<bool>,
 }
 
 // ── servers.* admin verbs (§10.2) ────────────────────────────────────
@@ -1211,7 +1215,7 @@ pub fn check_verb_args(verb: &str, args: &Value) -> Result<(), String> {
         VERB_LIMITS => {
             let a: LimitsArgs = parse(verb, args)?;
             server_ok(&a.server)?;
-            if a.set.is_empty() && a.for_secs.is_none() {
+            if a.set.is_empty() && a.for_secs.is_none() && a.priority.is_none() {
                 return Err(format!("{verb}: change at least one limit"));
             }
             a.set.check_ranges().map_err(|e| format!("{verb}: {e}"))?;
@@ -1501,6 +1505,7 @@ mod tests {
             sas: Some("482913".into()),
             refusal: None,
             online: false,
+            priority: None,
         };
         let l = ServersList { max_servers: DEFAULT_MAX_SERVERS, solo: false, servers: vec![entry] };
         let v = serde_json::to_value(&l).unwrap();

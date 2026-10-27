@@ -493,7 +493,7 @@ const LIMITS_OTHER_FLAGS: &[&str] = &["for", "home", "config-dir", "state-dir", 
 /// like `max_running` too), in that order. An unknown `--flag` or key is
 /// refused, naming the valid ones; never silently ignored.
 fn limits_pairs(a: &Args) -> Result<Vec<(String, String)>, String> {
-    const KEY_ALIASES: &[&str] = &["cpu-hours-day", "max-job-secs", "max-cpus", "max-mem-gb", "disk-gb", "top-class", "gate", "exclusive"];
+    const KEY_ALIASES: &[&str] = &["cpu-hours-day", "max-job-secs", "max-cpus", "max-mem-gb", "disk-gb", "top-class", "gate", "exclusive", "priority"];
     let valid = || LIMIT_FLAGS.iter().map(|k| format!("--{k}")).collect::<Vec<_>>().join(", ");
     for k in a.flags.keys() {
         if !LIMIT_FLAGS.contains(&k.as_str()) && !LIMITS_OTHER_FLAGS.contains(&k.as_str()) {
@@ -619,15 +619,26 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
         }
         Some("limits") => {
             // The add flags (`--cpus 8`) and `key=value` (`cpus=8`) both work.
-            let pairs = limits_pairs(a)?;
+            let mut pairs = limits_pairs(a)?;
             let for_secs = match a.get("for") {
                 Some(v) => Some(parse_for(v)?.unwrap_or(0)),
+                None => None,
+            };
+            // `priority=true|false` (job tiers, 0.46.5): kept in queue.toml,
+            // not a share limit.
+            let priority = match pairs.iter().position(|(k, _)| k.replace('-', "_") == "priority") {
+                Some(i) => Some(match pairs.remove(i).1.trim() {
+                    "true" | "yes" | "on" => true,
+                    "false" | "no" | "off" => false,
+                    v => return Err(format!("priority: {v:?} is true or false")),
+                }),
                 None => None,
             };
             let args = share::LimitsArgs {
                 server: server()?,
                 set: share_overrides(&pairs, a.has("--gate"), a.has("--exclusive"))?,
                 for_secs,
+                priority,
             };
             servers::run(&ctx, share::VERB_LIMITS, &serde_json::to_value(&args).map_err(|e| e.to_string())?)
         }

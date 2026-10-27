@@ -982,6 +982,9 @@ struct ServersLoop {
     fq: std::collections::BTreeMap<Slot, crate::fairq::ShareInfo>,
     /// The SAS file as last written (slot → SAS).
     sas: Option<std::collections::BTreeMap<String, String>>,
+    /// The last `queue.toml` read error (logged once per change; the node
+    /// then keeps the Priority words it had).
+    queue_error: Option<String>,
 }
 
 impl Drop for ServersLoop {
@@ -1294,6 +1297,30 @@ async fn servers_pass(node: &Arc<Node>, st: &mut ServersLoop) {
         }
     }
     st.fq = fq;
+
+    // Job tiers (prd-compute-job-tiers-v1 T7): whose Priority counts here,
+    // from `queue.toml` (the owner's yes and guests' no by default). A
+    // broken file keeps the words the node had; a change re-offers.
+    match crate::queue_file::read(&layout.config) {
+        Ok(q) => {
+            if st.queue_error.take().is_some() {
+                crate::nlog!("queue.toml reads again");
+            }
+            for (e, _) in &lines {
+                if node.fairq.set_priority(e.slot, q.priority(e)) {
+                    if let Some(t) = node.tenant(e.slot) {
+                        t.offer_changed.notify_one();
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            if st.queue_error.as_deref() != Some(e.as_str()) {
+                crate::nlog!("{e} (keeping the Priority settings the node had)");
+                st.queue_error = Some(e);
+            }
+        }
+    }
 
     // The status file lists the other servers.
     let running = node.running_by_tenant();

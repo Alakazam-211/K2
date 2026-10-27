@@ -63,11 +63,16 @@ pub struct PolicyFile {
     /// `.tool-versions`, `.nvmrc`, `rust-toolchain.toml`, …). Default on;
     /// a job's explicit `--needs` are installed either way.
     pub repo_toolchains: Option<bool>,
-    /// Slots only release-gate (`--gate`) jobs may fill on a shared node
-    /// (default 0). Normal work never takes the last of them; at least
-    /// one slot always stays for normal work.
+    /// 0.46.4's reserved release-gate slots. **Ignored since 0.46.5**
+    /// (prd-compute-job-tiers-v1 R2: no reserved slots; CI takes the next
+    /// free slot instead). Still parsed, so a 0.46.4 `policy.toml` stays
+    /// valid; `policy.show` notes it and `policy.set` refuses a value
+    /// (`deprecated_key`), but may remove it.
     pub gate_reserved_slots: Option<u32>,
 }
+
+/// `policy.show`'s note for a file that still sets `gate_reserved_slots`.
+pub const GATE_RESERVED_IGNORED: &str = "gate_reserved_slots: ignored since 0.46.5 (tiers: CI takes the next free slot)";
 
 /// Facts about the machine the defaults depend on.
 #[derive(Debug, Clone)]
@@ -95,7 +100,6 @@ pub struct Policy {
     pub write_smoke_lock: Option<String>,
     pub network: String,
     pub repo_toolchains: bool,
-    pub gate_reserved_slots: u32,
 }
 
 impl Policy {
@@ -123,10 +127,6 @@ impl Policy {
         }
         if availability == AvailabilityMode::Window && window.is_empty() {
             return Err("availability = \"window\" needs at least one [[window]]".into());
-        }
-        let gate_reserved_slots = f.gate_reserved_slots.unwrap_or(0);
-        if gate_reserved_slots > 8 {
-            return Err(format!("gate_reserved_slots must be 0..8, got {gate_reserved_slots}"));
         }
         let network = f.network.clone().unwrap_or_else(|| "full".into());
         if network != "full" && network != "none" {
@@ -158,7 +158,6 @@ impl Policy {
             write_smoke_lock,
             network,
             repo_toolchains: f.repo_toolchains.unwrap_or(true),
-            gate_reserved_slots,
         })
     }
 

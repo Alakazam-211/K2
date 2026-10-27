@@ -11,7 +11,9 @@
 //!   machine facts;
 //! - `control_by` (a person's name) only to the owner;
 //! - `share`: this server's [`ShareView`] when it speaks protocol 3 and the
-//!   node is set up for sharing (`servers.toml`);
+//!   node is set up for sharing (`servers.toml`), with `priority` (does its
+//!   Priority count here) when it speaks protocol 5;
+//! - `tiers` (protocol 5) in `features` to a server that speaks 5;
 //! - revision and dedupe per session; `share.expires_in_secs` and the
 //!   quotes don't count as a change (they ride the 30 s offer).
 
@@ -20,6 +22,7 @@ use std::sync::atomic::Ordering;
 use k2_node_proto::frames::{Availability, Caps, Free, Offer, PROTOCOL};
 use k2_node_proto::refusal::{self, NodeView};
 use k2_node_proto::share::{ShareView, FEATURE_QUEUE, FEATURE_SERVERS, FEATURE_SERVERS_OWNER, FEATURE_TENANT_WALL};
+use k2_node_proto::tiers::FEATURE_TIERS;
 
 use super::{Node, Tenant, NODE_VERSION};
 
@@ -149,6 +152,12 @@ impl Node {
         if self.secret_env_refusal(t).is_none() {
             f.push(k2_node_proto::secret::FEATURE_SECRET_ENV.to_string());
         }
+        // Job tiers (protocol 5): `Plan.tier`, the tier ledger column, the
+        // tier-first queue, `servers.limits priority=`. Only to a server
+        // that speaks protocol 5; an older one keeps sending `class`.
+        if t.speaks_tiers() && !f.iter().any(|x| x == FEATURE_TIERS) {
+            f.push(FEATURE_TIERS.to_string());
+        }
         f
     }
 
@@ -186,6 +195,9 @@ impl Node {
             skew_secs: t.link.lock().unwrap().skew_secs,
             // Start-now / ETA for this server's last four sizes (V53).
             quotes,
+            // Does this server's Priority count here (`queue.toml`, T7)?
+            // Protocol 5 only.
+            priority: t.speaks_tiers().then(|| self.fairq.priority(t.slot)),
         })
     }
 }

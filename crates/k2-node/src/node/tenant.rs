@@ -332,6 +332,12 @@ impl Tenant {
         self.protocol() >= k2_node_proto::frames::PROTOCOL_SECRETS
     }
 
+    /// May this session see the job-tier fields and the `tiers` feature
+    /// (protocol 5)?
+    pub fn speaks_tiers(&self) -> bool {
+        self.protocol() >= k2_node_proto::frames::PROTOCOL_TIERS
+    }
+
     pub fn share(&self) -> Option<ShareInfo> {
         self.share.lock().unwrap().clone()
     }

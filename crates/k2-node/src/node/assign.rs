@@ -173,7 +173,10 @@ impl Node {
                 exclusive: a.plan.exclusive,
                 stop: stop_tx,
                 seq: self.job_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                gate: a.plan.class == Some(k2_node_proto::share::JobClass::Gate),
+                // The disk guard stops CI only when nothing else is left
+                // (T6); Priority is no shield. A plan from an older server
+                // counts by its class (`gate` = CI).
+                gate: a.plan.tier_or_class() == k2_node_proto::tiers::Tier::Ci,
                 workspace: a.plan.workspace_id.clone(),
                 secret: !a.plan.secret_env.is_empty(),
             },
@@ -270,7 +273,9 @@ impl Node {
         if blocked.is_none() && crate::toolchain::installing(&self.toolchains().root) {
             blocked = Some(codes::INSTALLING_TOOLS.into());
         }
-        k2_node_proto::queue::Caps { cpu_millis: cpu, mem_bytes: mem, parallel_max: par, blocked, gate_reserved: l.policy.gate_reserved_slots }
+        // No slot is reserved for any tier (prd-compute-job-tiers-v1 R2):
+        // the policy's `gate_reserved_slots` is ignored since 0.46.5.
+        k2_node_proto::queue::Caps { cpu_millis: cpu, mem_bytes: mem, parallel_max: par, blocked }
     }
 
     /// Every running attempt (all tenants).

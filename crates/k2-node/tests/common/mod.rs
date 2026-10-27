@@ -439,6 +439,7 @@ pub fn plan(job: &str, argv: &[&str]) -> Plan {
         artifacts: Vec::new(),
         stall_secs: None,
         secret_env: Vec::new(),
+        tier: None,
     }
 }
 

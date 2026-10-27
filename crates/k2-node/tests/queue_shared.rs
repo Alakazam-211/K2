@@ -18,6 +18,7 @@ use k2_node::fairq::ShareInfo;
 use k2_node::node::Tenant;
 use k2_node_proto::frames::{Cancel, Frame, JobState, ResumeHint, CANCEL_IF_QUEUED, CANCEL_WITHDRAW};
 use k2_node_proto::share::{codes, JobClass, ServerStatus, ServersFile, ShareLimits, ShareState, Trust};
+use k2_node_proto::tiers::Tier;
 
 fn limits() -> ShareLimits {
     ShareLimits { max_running: 4, max_queued: 10, weight: 1, ..ShareLimits::new_server(Trust::Own, false) }
@@ -546,4 +547,63 @@ async fn the_queue_never_deadlocks_under_contention() {
         }
     }
     node.stop_all(JobState::Cancelled, "test_over");
+}
+
+// ── job tiers (prd-compute-job-tiers-v1 S1) ──────────────────────────
+
+/// A guest server whose share has `gate` sends CI: it takes the next free
+/// slot ahead of the owner's older Normal job, and never stops the
+/// running one. Both servers speak protocol 5, so both are offered `tiers`.
+#[tokio::test(flavor = "multi_thread")]
+async fn ci_from_a_guest_with_gate_jumps_the_owners_normal_work() {
+    let mut w = two("q-tier-ci", "max_parallel = 1\n").await;
+    for t in [&w.owner, &w.tb] {
+        assert!(w.n.node.session_features(t).iter().any(|f| f == k2_node_proto::tiers::FEATURE_TIERS), "slot {} speaks 5", t.slot);
+    }
+    w.n.node.fairq.set_share(1, share("b.k2.dev", ShareLimits { gate: true, top_class: JobClass::Gate, ..limits() }, ServerStatus::Active));
+    w.ca.send(Frame::Assign(assign(job("node-1", "a0", &["/bin/sh", "-c", "sleep 1"]), 1)));
+    wait_row(&w.owner, "a0", 1, "started", started).await;
+    w.ca.send(Frame::Assign(assign(job("node-1", "a1", &["/bin/echo", "a1"]), 1)));
+    wait_row(&w.owner, "a1", 1, "queued", queued).await;
+    let mut ci = job("node-b", "bc", &["/bin/echo", "bc"]);
+    ci.tier = Some(Tier::Ci);
+    ci.class = Some(JobClass::Gate);
+    w.cb.send(Frame::Assign(assign(ci, 1)));
+    wait_row(&w.tb, "bc", 1, "queued", queued).await;
+    let a0 = wait_row(&w.owner, "a0", 1, "ended", ended).await;
+    assert_eq!((a0.state, a0.exit.as_ref().and_then(|e| e.code)), (JobState::Done, Some(0)), "CI never stops a running job");
+    let bc = wait_row(&w.tb, "bc", 1, "ended", ended).await;
+    let a1 = wait_row(&w.owner, "a1", 1, "ended", ended).await;
+    assert!(bc.started_at.unwrap() <= a1.started_at.unwrap(), "CI went first: bc {bc:?} a1 {a1:?}");
+}
+
+/// T7: a guest's Priority counts only where the node's owner says so in
+/// `queue.toml`; its offer tells it (`ShareView.priority`), and the
+/// servers loop picks a change up without a restart.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guests_priority_word_comes_from_queue_toml() {
+    let w = two("q-tier-p", "max_parallel = 1\n").await;
+    let word = |t: &Tenant| w.n.node.offer(t).share.and_then(|s| s.priority);
+    for _ in 0..400 {
+        if word(w.tb.as_ref()).is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(word(w.owner.as_ref()), Some(true), "the owner's Priority counts by default");
+    assert_eq!(word(w.tb.as_ref()), Some(false), "a guest's doesn't");
+    let fp = w.b.key.fingerprint();
+    let prefix = &fp[..16];
+    std::fs::write(w.n.layout.config.join(k2_node::queue_file::QUEUE_FILE), format!("[servers.{prefix}]\npriority = true\n")).unwrap();
+    for _ in 0..800 {
+        if w.n.node.fairq.priority(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(w.n.node.fairq.priority(1), "the servers loop read queue.toml");
+    assert_eq!(word(w.tb.as_ref()), Some(true));
+    let listed = k2_node::admin::servers::node_list(&w.n.node).unwrap();
+    assert_eq!(listed.servers.iter().map(|s| (s.slot, s.priority)).collect::<Vec<_>>(), vec![(0, Some(true)), (1, Some(true))]);
+    let _ = (&w.a, &w.ca, &w.cb);
 }

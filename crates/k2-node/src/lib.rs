@@ -19,6 +19,7 @@ pub mod locks;
 pub mod node;
 pub mod packages;
 pub mod paths;
+pub mod queue_file;
 pub mod queue_store;
 pub mod request;
 pub mod runner;
@@ -41,16 +42,16 @@ pub const PRODUCT_VERSION: &str = env!("K2_PRODUCT_VERSION");
 /// `k2_node_proto::PROTOCOL` (a test pins them together).
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=4 os=linux arch=x86_64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=5 os=linux arch=x86_64;");
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=4 os=linux arch=aarch64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=5 os=linux arch=aarch64;");
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=4 os=macos arch=x86_64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=5 os=macos arch=x86_64;");
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=4 os=macos arch=aarch64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=5 os=macos arch=aarch64;");
 
 /// Present only in a `test-keys` build (it also trusts the TEST minisign
 /// key); release signing must refuse a binary that contains it.

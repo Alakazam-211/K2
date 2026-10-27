@@ -71,6 +71,10 @@ pub mod code {
     pub const REMOTE_ADMIN_OFF: &str = "remote_admin_off";
     pub const VERB_NOT_ALLOWED: &str = "verb_not_allowed";
     pub const BAD_ARGS: &str = "bad_args";
+    /// A key that is still read but no longer set: `gate_reserved_slots`
+    /// since 0.46.5 (prd-compute-job-tiers-v1 §3.7). A usage error (exit
+    /// 2), like `bad_args`.
+    pub const DEPRECATED_KEY: &str = "deprecated_key";
     pub const PEER_NOT_ALLOWED: &str = "peer_not_allowed";
     pub const EXECUTOR_UNREACHABLE: &str = "executor_unreachable";
     pub const NOT_CONFIGURED: &str = "not_configured";

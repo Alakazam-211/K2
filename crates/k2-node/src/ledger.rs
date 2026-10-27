@@ -10,7 +10,12 @@
 //! can't start yet is a row in state `queued` (reason `node_queued`). Those
 //! rows survive a reboot and a `k2-node` restart (V47): only rows that had
 //! started are interrupted. v3 adds `enqueued_at` (node clock), `class`,
-//! `ws_id`, `session_id` and `est_secs`; an older binary ignores them.
+//! `ws_id`, `session_id` and `est_secs`; v4 (job tiers, 0.46.5) adds
+//! `tier`. An older binary ignores the newer columns.
+//!
+//! Upgrades find columns with `pragma_table_info`, never by trusting
+//! `user_version`: a node rolled back to 0.46.4 stamps 3 again over a v4
+//! file, and this build then finds `tier` already there (T17).
 
 use std::path::Path;
 
@@ -203,7 +208,17 @@ impl Ledger {
             )
             .map_err(sqlerr)?;
         }
-        conn.execute_batch("PRAGMA user_version = 3;").map_err(sqlerr)?;
+        // v4: job tiers (prd-compute-job-tiers-v1). The plan carries the
+        // tier too (`Plan::tier_or_class`); the column is for reading the
+        // ledger by hand and for later tools.
+        let has_tier = conn
+            .prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'tier'")
+            .and_then(|mut st| st.exists([]))
+            .map_err(sqlerr)?;
+        if !has_tier {
+            conn.execute_batch("ALTER TABLE jobs ADD COLUMN tier TEXT;").map_err(sqlerr)?;
+        }
+        conn.execute_batch("PRAGMA user_version = 4;").map_err(sqlerr)?;
         let id: Option<String> = conn
             .query_row("SELECT v FROM meta WHERE k = 'ledger_id'", [], |r| r.get(0))
             .optional()
@@ -224,9 +239,18 @@ impl Ledger {
         let plan_json = serde_json::to_string(&a.plan).map_err(|e| format!("encode plan: {e}"))?;
         self.conn
             .execute(
-                "INSERT INTO jobs (job_id, generation, attempt, plan_digest, plan_json, state, created_at, boot_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'preparing', ?6, ?7)",
-                params![a.fence.job_id, a.fence.generation, a.fence.attempt, a.fence.plan_digest, plan_json, clock.now(), clock.boot_id()],
+                "INSERT INTO jobs (job_id, generation, attempt, plan_digest, plan_json, state, created_at, boot_id, tier)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'preparing', ?6, ?7, ?8)",
+                params![
+                    a.fence.job_id,
+                    a.fence.generation,
+                    a.fence.attempt,
+                    a.fence.plan_digest,
+                    plan_json,
+                    clock.now(),
+                    clock.boot_id(),
+                    a.plan.tier_or_class().as_str()
+                ],
             )
             .map_err(sqlerr)?;
         Ok(())
@@ -241,8 +265,8 @@ impl Ledger {
         self.conn
             .execute(
                 "INSERT INTO jobs (job_id, generation, attempt, plan_digest, plan_json, state, reason, created_at, boot_id,
-                   enqueued_at, class, ws_id, session_id, est_secs)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8, ?7, ?9, ?10, ?11, ?12)",
+                   enqueued_at, class, ws_id, session_id, est_secs, tier)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8, ?7, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     a.fence.job_id,
                     a.fence.generation,
@@ -256,6 +280,7 @@ impl Ledger {
                     a.plan.workspace_id,
                     a.plan.session_id,
                     a.plan.est_secs.map(|e| e as i64),
+                    a.plan.tier_or_class().as_str(),
                 ],
             )
             .map_err(sqlerr)?;
@@ -573,6 +598,7 @@ pub mod tests {
             artifacts: Vec::new(),
             stall_secs: None,
             secret_env: Vec::new(),
+            tier: None,
         };
         Assign { fence: Fence { job_id: job.into(), attempt: generation, generation, plan_digest: plan.digest().unwrap() }, plan }
     }
@@ -753,5 +779,66 @@ pub mod tests {
         assert_eq!(a, b);
         let c = Ledger::open(&d.join("other.sqlite")).unwrap().ledger_id;
         assert_ne!(a, c, "a replaced ledger gets a new id");
+    }
+
+    /// Ledger v4 (job tiers): a v3 file gains `tier`; every new row records
+    /// the plan's tier (an old server's plan by its class). A node rolled
+    /// back to 0.46.4 stamps user_version 3 over the v4 file; reopening it
+    /// here finds the column by name and changes nothing (T17).
+    #[test]
+    fn a_v3_ledger_gains_the_tier_column_and_survives_a_rollback_stamp() {
+        let d = crate::util::temp_dir("ledger-v3");
+        let path = d.join("l.sqlite");
+        let clock = FakeClock { t: Mutex::new(10), boot: Mutex::new("b1".into()) };
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+                 CREATE TABLE jobs (job_id TEXT NOT NULL, generation INTEGER NOT NULL, attempt INTEGER NOT NULL,
+                   plan_digest TEXT NOT NULL, plan_json TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, detail TEXT,
+                   created_at INTEGER NOT NULL, started_at INTEGER, ended_at INTEGER, exit_code INTEGER, signal INTEGER,
+                   log_seq INTEGER NOT NULL DEFAULT 0, pid INTEGER, boot_id TEXT NOT NULL, src_json TEXT,
+                   receipt_json TEXT, cleaned INTEGER NOT NULL DEFAULT 0, outputs_json TEXT, enqueued_at INTEGER,
+                   class TEXT, ws_id TEXT, session_id TEXT, est_secs INTEGER, UNIQUE (job_id, generation));
+                 PRAGMA user_version = 3;",
+            )
+            .unwrap();
+        }
+        let tier_of = |c: &Connection, job: &str| -> Option<String> { c.query_row("SELECT tier FROM jobs WHERE job_id = ?1", params![job], |r| r.get(0)).unwrap() };
+        let version = |c: &Connection| -> i64 { c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap() };
+        let l = Ledger::open(&path).unwrap();
+        let mut p = assign("p", 1);
+        p.plan.tier = Some(k2_node_proto::tiers::Tier::Priority);
+        p.plan.class = Some(k2_node_proto::share::JobClass::Interactive);
+        p.fence.plan_digest = p.plan.digest().unwrap();
+        l.insert_queued(&p, &clock).unwrap();
+        let mut old = assign("old-gate", 1);
+        old.plan.class = Some(k2_node_proto::share::JobClass::Gate);
+        old.fence.plan_digest = old.plan.digest().unwrap();
+        l.insert(&old, &clock).unwrap();
+        l.insert(&assign("plain", 1), &clock).unwrap();
+        drop(l);
+        let c = Connection::open(&path).unwrap();
+        assert_eq!(version(&c), 4);
+        assert_eq!(tier_of(&c, "p").as_deref(), Some("priority"));
+        assert_eq!(tier_of(&c, "old-gate").as_deref(), Some("ci"), "an old server's gate plan is CI");
+        assert_eq!(tier_of(&c, "plain").as_deref(), Some("normal"));
+        // A 0.46.4 binary opened it: it stamps 3 and ignores the column.
+        c.execute_batch("PRAGMA user_version = 3;").unwrap();
+        drop(c);
+        let l = Ledger::open(&path).expect("a rolled-back stamp over a v4 file reopens");
+        let row = l.get("p", 1).unwrap().unwrap();
+        assert_eq!((row.state, row.plan.tier), (JobState::Queued, Some(k2_node_proto::tiers::Tier::Priority)), "queued tiers survive the restart");
+        drop(l);
+        let c = Connection::open(&path).unwrap();
+        assert_eq!(version(&c), 4);
+        let cols: i64 = c.query_row("SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'tier'", [], |r| r.get(0)).unwrap();
+        assert_eq!(cols, 1, "the column is added once");
+        // The 0.46.4 reader: its column list (this build's, without `tier`)
+        // and a plan JSON with a field it doesn't know both still read.
+        let plan_json: String = c.query_row("SELECT plan_json FROM jobs WHERE job_id = 'p'", [], |r| r.get(0)).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
+        v["a_field_from_the_future"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<Plan>(v).is_ok(), "Plan has no deny_unknown_fields: an older binary reads a tiered row");
     }
 }

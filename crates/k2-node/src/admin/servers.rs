@@ -644,14 +644,32 @@ pub fn classify_limits(config_dir: &Path, a: &Value, now: i64) -> Result<Class, 
     let a: LimitsArgs = args(share::VERB_LIMITS, a)?;
     let f = read_file(config_dir).map_err(|e| refuse(code::NOT_CONFIGURED, e))?;
     Ok(match f {
-        Some(f) if !widens(&f, &a, now).is_empty() => Class::Privileged,
+        Some(f) if !widens_all(config_dir, &f, &a, now).is_empty() => Class::Privileged,
         _ => Class::Operate,
     })
 }
 
+/// [`widens`] plus the Priority word (prd-compute-job-tiers-v1 T8): a
+/// server's Priority starting to count is a widening, like `weight`. An
+/// unreadable `queue.toml` counts as the defaults.
+pub fn widens_all(config_dir: &Path, f: &ServersFile, a: &LimitsArgs, now: i64) -> Vec<&'static str> {
+    let mut w = widens(f, a, now);
+    if a.priority == Some(true) {
+        if let Some(e) = f.find(&a.server) {
+            if !crate::queue_file::read(config_dir).unwrap_or_default().priority(e) {
+                w.push("priority");
+            }
+        }
+    }
+    w
+}
+
 pub fn limits(ctx: &Ctx, a: &LimitsArgs) -> Result<Value, AdminRefusal> {
     let mut f = read_file(&ctx.config_dir).map_err(|e| refuse(code::NOT_CONFIGURED, e))?.ok_or_else(|| refuse(code::BAD_ARGS, "this node isn't shared"))?;
-    let widened = widens(&f, a, ctx.now);
+    let widened = widens_all(&ctx.config_dir, &f, a, ctx.now);
+    // Read before anything is written: a broken `queue.toml` refuses the
+    // whole change rather than half of it.
+    let mut q = crate::queue_file::read(&ctx.config_dir).map_err(|e| refuse(code::NOT_CONFIGURED, e))?;
     let e = find_mut(&mut f, &a.server)?;
     if e.state == ShareState::Revoked {
         return Err(refuse(code::BAD_ARGS, "that server is revoked"));
@@ -663,9 +681,24 @@ pub fn limits(ctx: &Ctx, a: &LimitsArgs) -> Result<Value, AdminRefusal> {
     }
     e.set_limits(&l);
     e.expires_at = exp;
-    let (slot, label) = (e.slot, e.label.clone());
-    write_file(&ctx.config_dir, &f).map_err(failed)?;
-    Ok(json!({"slot": slot, "label": label, "limits": l, "expires_at": exp, "widened": widened}))
+    let (slot, label, line) = (e.slot, e.label.clone(), e.clone());
+    if !a.set.is_empty() || a.for_secs.is_some() {
+        write_file(&ctx.config_dir, &f).map_err(failed)?;
+    }
+    // The Priority word lives in `queue.toml`, never in `servers.toml`
+    // (a node rolled back to 0.46.4 must still read that one, T8).
+    if let Some(p) = a.priority {
+        q.set_priority(&line, p);
+        write_queue_file(&ctx.config_dir, &q).map_err(failed)?;
+    }
+    Ok(json!({"slot": slot, "label": label, "limits": l, "expires_at": exp, "priority": q.priority(&line), "widened": widened}))
+}
+
+/// Write `queue.toml` (root and the config dir's group, 0664, like
+/// `servers.toml`).
+pub fn write_queue_file(config_dir: &Path, q: &crate::queue_file::QueueFile) -> Result<(), String> {
+    let text = crate::queue_file::render(q)?;
+    crate::util::atomic_write_owned(&crate::queue_file::path(config_dir), text.as_bytes(), 0o664, dir_group(config_dir))
 }
 
 /// `servers.pause` / `servers.resume`: queued work waits; running jobs
@@ -858,6 +891,7 @@ pub fn fill_sas(layout: &Layout, lines: &mut [crate::status::ServerLine]) {
 
 /// The lines as the file says them (the machine CLI adds the node's view).
 pub fn list_file(ctx: &Ctx) -> Value {
+    let q = crate::queue_file::read(&ctx.config_dir).unwrap_or_default();
     match read_file(&ctx.config_dir) {
         Ok(None) => json!({"shared": false, "servers": []}),
         Ok(Some(f)) => json!({
@@ -875,6 +909,7 @@ pub fn list_file(ctx: &Ctx) -> Value {
                 "pending_until": (e.state == ShareState::Pending).then_some(e.pending_until),
                 "added_at": e.added_at,
                 "added_by": e.added_by,
+                "priority": q.priority(e),
             })).collect::<Vec<_>>(),
         }),
         Err(e) => json!({"error": e}),
@@ -914,11 +949,15 @@ pub fn node_list(node: &crate::node::Node) -> Result<ServersList, String> {
                 sas: None,
                 refusal: None,
                 online: *owner.hub.connected.borrow() != 0,
+                priority: Some(node.fairq.priority(OWNER_SLOT)),
             })
             .into_iter()
             .collect();
         return Ok(ServersList { max_servers: share::DEFAULT_MAX_SERVERS, solo: true, servers });
     };
+    // Whose Priority counts here: the file as written (a broken one reads
+    // as the defaults here; the servers loop logs it).
+    let q = crate::queue_file::read(&node.layout().config).unwrap_or_default();
     let servers = f
         .servers
         .iter()
@@ -948,6 +987,7 @@ pub fn node_list(node: &crate::node::Node) -> Result<ServersList, String> {
                 sas: pin.as_ref().filter(|p| !p.confirmed && !p.revoked).map(|p| p.sas.replace(' ', "")),
                 refusal: (state == ServerStatus::Refused).then_some(refusal).flatten(),
                 online: t.as_ref().is_some_and(|t| *t.hub.connected.borrow() != 0),
+                priority: Some(q.priority(e)),
             }
         })
         .collect();

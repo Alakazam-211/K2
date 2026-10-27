@@ -27,6 +27,7 @@ use std::time::Duration;
 use k2_node_proto::frames::{Assign, Frame, JobState, StateUpdate};
 use k2_node_proto::queue::{self, Caps, Config, Decision, Queued, Rotation, Running, Viewer};
 use k2_node_proto::share::{codes, Network, QueuePos, QueueView, Quote, ServerStatus, ShareLimits, Slot, OWNER_SLOT};
+use k2_node_proto::tiers::Tier;
 use tokio::sync::Notify;
 
 use crate::ledger::Row;
@@ -51,6 +52,8 @@ pub struct ShareInfo {
 #[derive(Debug, Clone)]
 struct RunMeta {
     class: k2_node_proto::share::JobClass,
+    /// The plan's tier (views only: a running job is never reordered).
+    tier: Tier,
     ws: String,
     session: Option<String>,
     cmd_hash: String,
@@ -79,6 +82,9 @@ struct State {
     store: QueueStore,
     shares: BTreeMap<Slot, ShareInfo>,
     protocol: BTreeMap<Slot, u32>,
+    /// Does each server's Priority count here (`queue.toml`)? Absent = the
+    /// default: the owner yes, guests no (prd-compute-job-tiers-v1 T7).
+    priority: BTreeMap<Slot, bool>,
     blocked: BTreeMap<Slot, String>,
     /// Queued attempts that may start in the session with this hub epoch.
     gates: HashMap<Key, u64>,
@@ -150,6 +156,7 @@ impl FairQ {
             store,
             shares: BTreeMap::new(),
             protocol: BTreeMap::new(),
+            priority: BTreeMap::new(),
             blocked: BTreeMap::new(),
             gates: HashMap::new(),
             runs: HashMap::new(),
@@ -193,6 +200,25 @@ impl FairQ {
     /// The protocol `slot`'s server said (0 = not known yet: treated as old).
     pub fn protocol(&self, slot: Slot) -> u32 {
         self.st.lock().unwrap().protocol.get(&slot).copied().unwrap_or(0)
+    }
+
+    /// Does `slot`'s Priority count here (from `queue.toml`, read by the
+    /// servers loop)? Returns whether the answer changed (its offer's
+    /// `ShareView.priority` then changes too).
+    pub fn set_priority(&self, slot: Slot, on: bool) -> bool {
+        let mut st = self.st.lock().unwrap();
+        let before = st.priority.get(&slot).copied().unwrap_or(slot == OWNER_SLOT);
+        st.priority.insert(slot, on);
+        drop(st);
+        if before != on {
+            self.kick.notify_one();
+        }
+        before != on
+    }
+
+    /// Does `slot`'s Priority count here (default: the owner yes, guests no)?
+    pub fn priority(&self, slot: Slot) -> bool {
+        self.st.lock().unwrap().priority.get(&slot).copied().unwrap_or(slot == OWNER_SLOT)
     }
 
     pub fn set_blocked(&self, slot: Slot, why: Option<String>) {
@@ -264,6 +290,7 @@ impl FairQ {
         let est = hist.or_else(|| a.plan.est_secs.map(|p| (p, a.plan.est_p90_secs.unwrap_or(p))));
         let meta = RunMeta {
             class: a.plan.class.unwrap_or_default(),
+            tier: a.plan.tier_or_class(),
             ws: a.plan.workspace_id.clone(),
             session: a.plan.session_id.clone(),
             cmd_hash: hash,
@@ -371,6 +398,7 @@ impl FairQ {
                     usage: queue::decay(u, now - at, self.cfg.half_life_secs),
                     cpu_secs_today: store.day_cpu_secs(t.slot, &day).unwrap_or(0) + st.day_cpu.get(&(t.slot, day.clone())).copied().unwrap_or(0) / 1000,
                     blocked,
+                    priority: st.priority.get(&t.slot).copied().unwrap_or(t.slot == OWNER_SLOT),
                 }
             })
             .collect();
@@ -387,6 +415,7 @@ impl FairQ {
                     workspace_id: m.ws.clone(),
                     session_id: m.session.clone(),
                     class: m.class,
+                    tier: m.tier,
                     cpu_millis: m.cpu,
                     mem_bytes: m.mem,
                     exclusive: m.exclusive,
@@ -402,6 +431,7 @@ impl FairQ {
                 workspace_id: crate::node::LINGER_WORKSPACE.to_string(),
                 session_id: None,
                 class: k2_node_proto::share::JobClass::Batch,
+                tier: Tier::Normal,
                 cpu_millis: 0,
                 mem_bytes: 0,
                 exclusive: false,
@@ -425,6 +455,7 @@ impl FairQ {
                     workspace_id: r.plan.workspace_id.clone(),
                     session_id: r.plan.session_id.clone(),
                     class: r.plan.class.unwrap_or_default(),
+                    tier: r.plan.tier_or_class(),
                     cpu_millis: r.plan.limits.cpu_millis,
                     mem_bytes: r.plan.limits.mem_bytes,
                     exclusive: r.plan.exclusive,
@@ -534,7 +565,7 @@ impl FairQ {
         let snap = self.snapshot(node, now);
         let input = snap.input(&self.cfg);
         let d = queue::decide(&input);
-        let mut v = queue::view(&input, &d, &Viewer { slot: t.slot, owner: t.is_owner(), labels: &snap.labels }, request_id);
+        let mut v = queue::view(&input, &d, &Viewer { slot: t.slot, owner: t.is_owner(), labels: &snap.labels, tiers: t.speaks_tiers() }, request_id);
         // A server whose share ended (revoked, expired, refused, or no
         // line) keeps its session only to hear its own jobs end: it sees
         // its own rows and nothing of anyone else's (review B8).
@@ -610,5 +641,20 @@ mod tests {
         assert_eq!(q.protocol(1), 0, "unknown protocol is old");
         q.set_protocol(1, Some(3));
         assert_eq!(q.protocol(1), 3);
+    }
+
+    /// T7: the owner's Priority counts by default, a guest's doesn't;
+    /// `queue.toml` says otherwise per server, and a change is reported.
+    #[test]
+    fn priority_defaults_to_the_owner_only_and_reports_changes() {
+        let q = FairQ::with_store(QueueStore::open_in_memory().unwrap()).unwrap();
+        assert!(q.priority(OWNER_SLOT));
+        assert!(!q.priority(1));
+        assert!(!q.set_priority(OWNER_SLOT, true), "same as the default: no change");
+        assert!(q.set_priority(1, true));
+        assert!(q.priority(1));
+        assert!(!q.set_priority(1, true));
+        assert!(q.set_priority(OWNER_SLOT, false));
+        assert!(!q.priority(OWNER_SLOT));
     }
 }

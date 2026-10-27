@@ -467,14 +467,19 @@ pub struct Candidate {
 
 /// Which running job the disk guard stops (an index into `cands`).
 ///
-/// 1. A gate job (a release build, plan-ci-release-on-k2-compute G5)
-///    only when no other job is left: before 0.46.4 the newest job paid,
-///    and a release build submitted last was exactly that job.
+/// 1. A CI job (`gate`: a release build, plan-ci-release-on-k2-compute
+///    G5) only when no other job is left: before 0.46.4 the newest job
+///    paid, and a release build submitted last was exactly that job.
 /// 2. Among the rest, the server furthest over its disk share pays first
 ///    (`over`), so no server fills the disk to get another's job stopped
 ///    (review A-disk 3)…
 /// 3. …its newest job; with none over (or none of its jobs left), the
 ///    newest job on the node.
+///
+/// Priority and Normal are one band here (prd-compute-job-tiers-v1 T6):
+/// Priority needs no permission, so sparing it would let any agent shield
+/// its job by flagging it. The disk guard is a safety stop, not a tier
+/// action.
 pub fn disk_victim(cands: &[Candidate], over: Option<k2_node_proto::share::Slot>) -> Option<usize> {
     let any_plain = cands.iter().any(|c| !c.gate);
     let pool: Vec<usize> = (0..cands.len()).filter(|i| !any_plain || !cands[*i].gate).collect();

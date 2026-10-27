@@ -86,6 +86,14 @@ fn edit(l: &Layout, args: &Value, m: &MachineFacts) -> Result<Edit, AdminRefusal
         if !FIELDS.contains(&k.as_str()) {
             return Err(bad(format!("unknown policy field {k:?}")));
         }
+        // 0.46.4's reserved gate slots are gone (prd-compute-job-tiers-v1
+        // R2): a value is refused, removing the key is fine.
+        if k == "gate_reserved_slots" && !v.is_null() {
+            return Err(AdminRefusal::new(
+                code::DEPRECATED_KEY,
+                "gate_reserved_slots is ignored since 0.46.5: no slot is reserved, CI takes the next free slot (k2 compute run --tier ci). Remove it with gate_reserved_slots=null",
+            ));
+        }
         if v.is_null() {
             table.remove(k);
         } else {
@@ -176,10 +184,6 @@ pub fn widened(old: &Policy, new: &Policy) -> Vec<&'static str> {
     if !old.repo_toolchains && new.repo_toolchains {
         w.push("repo_toolchains");
     }
-    // Fewer gate slots gives normal work more (and can stall a release).
-    if new.gate_reserved_slots < old.gate_reserved_slots {
-        w.push("gate_reserved_slots");
-    }
     w
 }
 
@@ -252,9 +256,11 @@ pub fn apply_narrow(config_dir: &Path, args: &Value) -> Result<Value, AdminRefus
 pub fn show(l: &Layout, m: &MachineFacts, session_narrow: &NodeLimits) -> Value {
     let file = config::read_policy_file(&l.policy());
     let resolved = file.as_ref().map_err(|e| e.clone()).and_then(|f| Policy::resolve(f, m));
+    let notes: Vec<&str> = file.as_ref().ok().filter(|f| f.gate_reserved_slots.is_some()).map(|_| config::GATE_RESERVED_IGNORED).into_iter().collect();
     json!({
         "policy": resolved.as_ref().ok(),
         "error": resolved.as_ref().err(),
+        "notes": notes,
         "file": file.ok(),
         "narrow": read_narrow(&l.config).ok(),
         "session_narrow": session_narrow,
@@ -282,20 +288,26 @@ mod tests {
         }
     }
 
-    /// G4: reserving a gate slot narrows normal work (operate, at once);
-    /// giving it back widens it (held for the owner). Range 0..8.
+    /// prd-compute-job-tiers-v1 §3.7: a 0.46.4 file that reserves gate
+    /// slots still reads (the key is ignored); `policy.set` refuses a value
+    /// with `deprecated_key` but may remove the key; `policy.show` says why.
     #[test]
-    fn gate_reserved_slots_up_is_operate_down_is_privileged() {
+    fn gate_reserved_slots_is_ignored_and_setting_it_is_deprecated() {
         let (l, m) = rig();
-        assert_eq!(class(&l, &m, json!({"gate_reserved_slots": 1})), Class::Operate);
-        let out = apply_set_with(&l, &json!({"gate_reserved_slots": 1}), &m).unwrap();
-        assert_eq!(out["policy"]["gate_reserved_slots"], 1);
-        let f = config::read_policy_file(&l.policy()).unwrap();
+        std::fs::write(l.policy(), "max_parallel = 3\ngate_reserved_slots = 1\n").unwrap();
+        let f = config::read_policy_file(&l.policy()).expect("a 0.46.4 policy.toml stays valid");
         assert_eq!(f.gate_reserved_slots, Some(1));
-        assert_eq!(class(&l, &m, json!({"gate_reserved_slots": 0})), Class::Privileged);
-        assert_eq!(class(&l, &m, json!({"gate_reserved_slots": null})), Class::Privileged, "reset to 0 widens");
-        assert_eq!(class(&l, &m, json!({"gate_reserved_slots": 2})), Class::Operate);
-        assert_eq!(edit(&l, &json!({"gate_reserved_slots": 9}), &m).err().map(|e| e.code), Some(code::BAD_ARGS.to_string()));
+        assert_eq!(Policy::resolve(&f, &m).unwrap().max_parallel, 3);
+        let shown = show(&l, &m, &NodeLimits::default());
+        assert_eq!(shown["notes"], json!([config::GATE_RESERVED_IGNORED]));
+        for v in [json!(2), json!(0)] {
+            let e = edit(&l, &json!({"gate_reserved_slots": v}), &m).err().expect("refused");
+            assert_eq!(e.code, code::DEPRECATED_KEY);
+        }
+        assert_eq!(class(&l, &m, json!({"gate_reserved_slots": null})), Class::Operate, "removing an ignored key changes nothing");
+        apply_set_with(&l, &json!({"gate_reserved_slots": null}), &m).unwrap();
+        assert_eq!(config::read_policy_file(&l.policy()).unwrap().gate_reserved_slots, None);
+        assert_eq!(show(&l, &m, &NodeLimits::default())["notes"], json!([]));
     }
 
     #[test]

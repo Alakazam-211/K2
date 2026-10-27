@@ -85,6 +85,24 @@ class H(BaseHTTPRequestHandler):
                 "rootOwned": True, "daemonCliVersion": "0.46.3", "lastAttempt": 1,
                 "lastResult": {"result": "refreshed", "from": "0.40.148", "to": "0.46.3"}}
             return self._send(200, json.dumps(d))
+        if mode == "update_dropin_installed":
+            return self._send(200, json.dumps({"heal": {"result": "updated", "from": "0.46.3", "to": "0.46.5"},
+                "cli": {"result": "current"},
+                "dropin": {"result": "installed", "unit": "k2-daemon.service", "scope": "system", "restartNeeded": True,
+                    "restart": "k2 daemon restart from a root shell (or: sudo systemctl restart k2-daemon.service)",
+                    "why": "the daemon unit started without this drop-in: RuntimeDirectory=k2 and KillMode=process take effect when the unit next starts (one restart, when convenient)"},
+                "status": STATUS}))
+        if mode == "update_dropin_current":
+            return self._send(200, json.dumps({"heal": {"result": "up_to_date", "version": "0.46.5"}, "cli": {"result": "current"},
+                "dropin": {"result": "current", "unit": "k2-daemon.service", "scope": "system", "restartNeeded": False},
+                "status": STATUS}))
+        if mode == "update_dropin_failed":
+            return self._send(200, json.dumps({"heal": {"result": "retry", "reason": "offline"}, "cli": {"result": "current"},
+                "dropin": {"result": "failed", "unit": "k2-daemon.service", "scope": "system", "reason": "helper_needed: protocol 4"},
+                "status": STATUS}))
+        if mode == "update_dropin_na":
+            return self._send(200, json.dumps({"heal": {"result": "up_to_date", "version": "0.46.5"}, "cli": {"result": "current"},
+                "dropin": {"result": "not_applicable", "reason": "not a systemd unit"}, "status": STATUS}))
         if mode == "no_command":
             d = dict(STATUS); d["installCommand"] = None
             return self._send(200, json.dumps(d))
@@ -145,6 +163,30 @@ run root-helper status
 assert_contains "current cli: says current" "$out" "cli        : /usr/local/bin/k2 v0.46.3 — current"
 assert_contains "current cli: the last refresh" "$out" "cli refresh: refreshed 0.40.148 -> 0.46.3"
 assert_absent "cli: no traceback" "$err" "Traceback"
+
+echo "== update: the unit drop-in converged after the helper update (0.46.5) =="
+echo update_dropin_installed >"$MODE_FILE"
+run root-helper update
+assert_eq "dropin installed: exit 0" "$rc" "0"
+assert_contains "dropin installed: written through the helper" "$out" "unit dropin: k2-daemon.service written now (through the helper; systemd reloaded)"
+assert_contains "dropin installed: the one restart" "$out" "restart    : once, when convenient: k2 daemon restart from a root shell (or: sudo systemctl restart k2-daemon.service)"
+assert_contains "dropin installed: why" "$out" "RuntimeDirectory=k2 and KillMode=process take effect when the unit next starts"
+assert_absent "dropin installed: no traceback" "$err" "Traceback"
+echo update_dropin_current >"$MODE_FILE"
+run root-helper update
+assert_eq "dropin current: exit 0" "$rc" "0"
+assert_contains "dropin current: says current" "$out" "unit dropin: k2-daemon.service current"
+assert_absent "dropin current: no restart line" "$out" "restart    :"
+echo update_dropin_failed >"$MODE_FILE"
+run root-helper update
+assert_eq "dropin failed: exit 0 (the heal answered)" "$rc" "0"
+assert_contains "dropin failed: the reason" "$out" "unit dropin: k2-daemon.service not written: helper_needed: protocol 4"
+assert_absent "dropin failed: no restart line" "$out" "restart    :"
+echo update_dropin_na >"$MODE_FILE"
+run root-helper update
+assert_eq "dropin n/a: exit 0" "$rc" "0"
+assert_absent "dropin n/a: no line off systemd" "$out" "unit dropin"
+assert_absent "dropin: no traceback" "$err" "Traceback"
 
 for sub in status update rollback; do
     echo "== $sub: string error body =="

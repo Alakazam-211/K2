@@ -426,6 +426,13 @@ pub fn spawn_auto_heal() {
                     "daemon",
                 );
                 k2_core::log_debug!("[root-helper] cli refresh: {:?}", cli);
+                // 0.46.5: a helper that just updated (or is current while
+                // the unit's drop-in is still an older helper's) converges
+                // the hand-off drop-in now; no root call when it's current.
+                if matches!(out, Outcome::Updated { .. } | Outcome::UpToDate { .. }) {
+                    let d = crate::handoff_setup::after_helper_update(true);
+                    k2_core::log_debug!("[root-helper] unit drop-in after heal: {d}");
+                }
                 let wait = match out {
                     Outcome::Deferred => 300,
                     Outcome::Retry { .. } => {

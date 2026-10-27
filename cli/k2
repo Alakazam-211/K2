@@ -19151,6 +19151,16 @@ d = json.loads(os.environ["K2_RH_BODY"])
 h = d.get("heal")
 if h is not None:
     print("heal       :", h.get("result"), {k: v for k, v in h.items() if k != "result"} or "")
+    dr = d.get("dropin") or {}
+    if dr and dr.get("result") not in ("not_applicable", "opted_out"):
+        word = {"installed": "written now (through the helper; systemd reloaded)", "current": "current", "stale": "still the older helper drop-in", "failed": "not written"}.get(dr.get("result"), str(dr.get("result")))
+        line = "%s %s" % (dr.get("unit") or "unit", word)
+        if dr.get("reason"):
+            line += ": " + str(dr["reason"])
+        print("unit dropin:", line)
+        if dr.get("restartNeeded"):
+            print("restart    : once, when convenient: " + str(dr.get("restart")))
+            print("             (" + str(dr.get("why")) + ")")
     d = d.get("status") or {}
 if "state" in d:
     print("state      :", d.get("state"), "(" + str(d.get("path")) + ")")

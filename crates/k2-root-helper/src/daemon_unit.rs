@@ -4,7 +4,9 @@
 //! `daemon handoff-dropin install|remove` writes (or removes)
 //! `/etc/systemd/system/<unit>.d/k2-handoff.conf` — the canned
 //! [`k2_root_proto::templates::handoff_dropin`] bytes — then runs
-//! `systemctl daemon-reload`.
+//! `systemctl daemon-reload`. Since 0.46.5 `install` also reloads when the
+//! file was already right but systemd reports `NeedDaemonReload=yes` for
+//! the unit (no new argv, so no protocol bump).
 //!
 //! The unit is never taken from argv: it is the `daemon.toml` entry whose
 //! main process is the caller (the verb is `daemon` class, so the caller
@@ -126,12 +128,38 @@ pub fn handoff_dropin_set(ctx: &Ctx, who: &Caller, install: bool) -> HResult<ser
     }
     let bytes = install.then(|| handoff_dropin().as_bytes());
     let changed = set_dropin(ctx, &d.unit, HANDOFF_DROPIN_FILE, bytes, "handoff-dropin")?;
-    if changed {
+    // 0.46.5: an unchanged file can still be unloaded (written by an older
+    // helper that failed its reload, or by hand): reload when systemd says
+    // the unit's loaded config is stale, so the daemon never needs a
+    // separate `systemctl daemon-reload` step after a helper update.
+    let reloaded = changed || (install && needs_daemon_reload(ctx, &d.unit));
+    if reloaded {
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }
     Ok(serde_json::json!({
         "unit": d.unit,
         "installed": install,
         "changed": changed,
+        "reloaded": reloaded,
     }))
+}
+
+/// `systemctl show -p NeedDaemonReload --value <unit>` says `yes`. The unit
+/// comes from `daemon.toml` (validated). Any failure reads as "no": the
+/// query only ever adds a reload, never refuses the verb.
+pub(crate) fn needs_daemon_reload(ctx: &Ctx, unit: &str) -> bool {
+    ctx.run_ok(
+        SYSTEMCTL,
+        &["show", "-p", "NeedDaemonReload", "--value", unit],
+        None,
+    )
+    .map(|o| needs_reload_answer(&o.stdout))
+    .unwrap_or(false)
+}
+
+/// The answer to the `NeedDaemonReload` query: exactly `yes` (one trailing
+/// newline allowed). Anything else, empty or garbled, is "no".
+pub(crate) fn needs_reload_answer(stdout: &[u8]) -> bool {
+    let s = stdout.strip_suffix(b"\n").unwrap_or(stdout);
+    s == b"yes"
 }

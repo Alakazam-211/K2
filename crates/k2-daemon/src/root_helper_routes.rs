@@ -160,8 +160,13 @@ pub fn handle(
                 &root_helper::cli_refresh::daemon_cli(),
                 &who,
             );
+            // 0.46.5: converge the daemon unit's hand-off drop-in now,
+            // through the helper just installed (it writes the file and
+            // reloads systemd), rather than at the next daemon restart.
+            // The answer says whether one restart is still needed.
+            let dropin = crate::handoff_setup::after_helper_update(false);
             ok(
-                json!({"heal": out, "cli": cli, "status": root_helper::status_json(&root_helper::state(), crate::mail::supervisor::mail_helper_legacy_state().as_str(), root_helper::legacy_pg_present(), None)}),
+                json!({"heal": out, "cli": cli, "dropin": dropin, "status": root_helper::status_json(&root_helper::state(), crate::mail::supervisor::mail_helper_legacy_state().as_str(), root_helper::legacy_pg_present(), None)}),
             )
         }
         _ => refuse("404 Not Found", "not_found", "unknown root-helper route"),

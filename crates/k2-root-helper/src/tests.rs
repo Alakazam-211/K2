@@ -2073,6 +2073,101 @@ fn handoff_dropin_install_upgrades_the_0_46_0_dropin() {
     assert_eq!(reloads(&t), 1);
 }
 
+/// 0.46.5: the file is already this build's, but systemd never loaded it
+/// (an older helper's reload failed, or a hand edit): `install` reloads
+/// once, through the helper, so the daemon needs no separate
+/// daemon-reload step. A "no" (or any garbled answer) reloads nothing.
+#[test]
+fn handoff_dropin_install_reloads_an_unloaded_unchanged_dropin() {
+    let t = box_root();
+    ok(&t.call(&["daemon", "handoff-dropin", "install"]));
+    assert_eq!(reloads(&t), 1);
+
+    // Unchanged, systemd says its loaded config is current: no reload.
+    let o = t.call(&["daemon", "handoff-dropin", "install"]);
+    ok(&o);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["changed"], false);
+    assert_eq!(v["reloaded"], false);
+    assert_eq!(reloads(&t), 1);
+
+    // Unchanged, systemd says NeedDaemonReload=yes: one reload.
+    t.exec.0.borrow_mut().rules.push((
+        SYSTEMCTL.to_string(),
+        "NeedDaemonReload".to_string(),
+        ExecOut {
+            status: 0,
+            stdout: b"yes\n".to_vec(),
+            stderr: vec![],
+        },
+    ));
+    let o = t.call(&["daemon", "handoff-dropin", "install"]);
+    ok(&o);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["changed"], false);
+    assert_eq!(v["reloaded"], true);
+    assert_eq!(reloads(&t), 2);
+    // The query names the caller's own unit from daemon.toml, nothing else.
+    let q: Vec<String> = t
+        .non_query_calls()
+        .into_iter()
+        .filter(|c| c.contains("NeedDaemonReload"))
+        .collect();
+    assert!(!q.is_empty());
+    for c in &q {
+        assert_eq!(
+            c,
+            &format!("{SYSTEMCTL} show -p NeedDaemonReload --value k2-daemon.service")
+        );
+    }
+
+    // `remove` never asks: removing nothing reloads nothing.
+    ok(&t.call(&["daemon", "handoff-dropin", "remove"]));
+    let after_remove = reloads(&t);
+    ok(&t.call(&["daemon", "handoff-dropin", "remove"]));
+    assert_eq!(reloads(&t), after_remove);
+}
+
+#[test]
+fn need_daemon_reload_answer_is_exactly_yes() {
+    use crate::daemon_unit::needs_reload_answer;
+    assert!(needs_reload_answer(b"yes\n"));
+    assert!(needs_reload_answer(b"yes"));
+    for no in [
+        &b"no\n"[..],
+        b"",
+        b"\n",
+        b"yes\n\n",
+        b" yes\n",
+        b"YES\n",
+        b"yes please\n",
+        b"NeedDaemonReload=yes\n",
+    ] {
+        assert!(!needs_reload_answer(no), "{:?}", String::from_utf8_lossy(no));
+    }
+}
+
+/// A failing query never fails the verb (and adds no reload).
+#[test]
+fn handoff_dropin_install_survives_a_failing_reload_query() {
+    let t = box_root();
+    ok(&t.call(&["daemon", "handoff-dropin", "install"]));
+    t.exec.0.borrow_mut().rules.push((
+        SYSTEMCTL.to_string(),
+        "NeedDaemonReload".to_string(),
+        ExecOut {
+            status: 1,
+            stdout: vec![],
+            stderr: b"Failed to connect to bus".to_vec(),
+        },
+    ));
+    let o = t.call(&["daemon", "handoff-dropin", "install"]);
+    ok(&o);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["reloaded"], false);
+    assert_eq!(reloads(&t), 1);
+}
+
 #[test]
 fn handoff_dropin_is_daemon_only() {
     let t = box_root();

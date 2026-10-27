@@ -61,7 +61,14 @@ fail() {
 }
 pass() { echo "PASS: $*"; }
 
-"$BIN" >"$SANDBOX/daemon.log" 2>&1 &
+# On Linux the vault's person check refuses a caller in the daemon's own
+# cgroup ("K2's own service group"), so a person run starts the daemon in
+# its own transient scope, the way systemd runs it on a box.
+LAUNCH=()
+if [ "$MODE" = person ] && [ "$(uname -s)" = Linux ] && command -v systemd-run >/dev/null 2>&1; then
+    LAUNCH=(systemd-run --scope --quiet --collect --unit "k2-email-headless-$$" --)
+fi
+"${LAUNCH[@]}" "$BIN" >"$SANDBOX/daemon.log" 2>&1 &
 PID=$!
 
 K2DIR=""

@@ -348,12 +348,13 @@ fn follower_leaves_a_pending_sidecar_row_to_the_sidecar_adoption() {
     activity_store::unregister(&sid);
 }
 
-/// T-S3f: the Chat view tail and the activity follower share the file.
+/// T-S3f: the activity follower sees every turn appended to the file. (The
+/// Chat view's tail that once shared the file was deleted in 0.46.5; the
+/// follower runs on its own.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_view_and_activity_follower_both_see_every_turn() {
+async fn activity_follower_sees_every_turn() {
     let env = Env::new("f");
     let ws = tmp_dir("ws-f");
-    let ws_s = ws.to_string_lossy().into_owned();
     let conv = uuid::Uuid::new_v4().to_string();
     let path = claude_dir(&env.home, &ws).join(format!("{conv}.jsonl"));
     append(&path, &[r#"{"type":"user","uuid":"u0","timestamp":"2026-09-21T14:13:00.000Z","message":{"role":"user","content":"Earlier synthetic prompt."}}"#]);
@@ -366,8 +367,6 @@ async fn chat_view_and_activity_follower_both_see_every_turn() {
     activity_transcript::poll_all_once(now_ms());
     assert_eq!(activity_transcript::conversation_of(&sid), Some((conv.clone(), ConversationSource::Hook)));
 
-    let mut chat = k2_daemon::chat_overlay_ws::subscribe_chat_tail("claude", &conv, &ws_s).expect("chat tail");
-    let mut chat_turns: Vec<String> = Vec::new();
     let mut act_signals = 0usize;
     let turns = 6;
     for i in 0..turns {
@@ -382,28 +381,25 @@ async fn chat_view_and_activity_follower_both_see_every_turn() {
     // slack), so the activity follower reads it from its first record:
     // `turns` appended prompts plus the seed one.
     let want_signals = turns + 1;
-    while (chat_turns.iter().filter(|id| id.ends_with('x')).count() < turns || act_signals < want_signals)
-        && tokio::time::Instant::now() < deadline
-    {
+    while act_signals < want_signals && tokio::time::Instant::now() < deadline {
         activity_transcript::poll_all_once(now_ms());
         while let Ok(ev) = signals.try_recv() {
             if ev.session_id == sid {
                 act_signals += 1;
             }
         }
-        if let Ok(Some(frame)) = tokio::time::timeout(Duration::from_millis(100), chat.rx.recv()).await {
-            let v: serde_json::Value = serde_json::from_str(&frame).expect("frame json");
-            if v["kind"] == "turn" {
-                chat_turns.push(v["turn"]["id"].as_str().expect("turn id").to_string());
-            }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // One more poll after a pause: a turn counted twice would show up here.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    activity_transcript::poll_all_once(now_ms());
+    while let Ok(ev) = signals.try_recv() {
+        if ev.session_id == sid {
+            act_signals += 1;
         }
     }
-    let new_chat: Vec<&String> = chat_turns.iter().filter(|id| id.ends_with('x')).collect();
-    assert_eq!(new_chat.len(), turns, "chat view saw {chat_turns:?}");
-    assert!(chat_turns.contains(&"u0".to_string()), "the Chat view reads from the start");
     assert_eq!(act_signals, want_signals, "the activity follower saw one turn start per record, each once");
     assert_eq!(row(&sid)["evidenceSource"], "transcript");
-    drop(chat);
     activity_store::unregister(&sid);
 }
 

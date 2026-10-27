@@ -465,7 +465,6 @@ pub const ROUTES: &[Route] = &[
     get("/cli/chat/session-path", Member),
     get("/cli/chat/storage-paths", Member),
     post("/cli/chat/toggle-pin", Member),
-    get("/cli/chat/transcript", Member),
     get("/cli/chatter", Member),
     get("/cli/chatterlog", Member),
     post("/cli/checkin", Member),

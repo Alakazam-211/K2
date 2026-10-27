@@ -1,9 +1,10 @@
 //! One transcript follower for every reader of a harness session log
 //! (prd-daemon-activity-and-thread-working-v1 DA27, A18).
 //!
-//! The Chat view (`chat_overlay_ws`, [`FollowStart::FromStart`]) and the
-//! activity store's per-session follower ([`FollowStart::FromEnd`]) both
-//! read through this type. It never locates a file: the caller resolves
+//! The activity store's per-session follower ([`FollowStart::FromEnd`])
+//! reads through this type. (The Chat view's tail, the one
+//! [`FollowStart::FromStart`] reader, was deleted in 0.46.5; the mode stays
+//! for any later reader that needs a whole log.) It never locates a file: the caller resolves
 //! the path once (and again only on a miss, with backoff) and hands it in.
 //!
 //! What it guarantees, poll to poll:

@@ -180,7 +180,6 @@ mod tests {
         ("POST", "/cli/terminal/write"),
         ("GET", "/cli/terminal/read"),
         ("POST", "/cli/terminal/send-message"),
-        ("GET", "/cli/chat/transcript"),
         ("GET", "/v1/sandboxes"),
         ("POST", "/v1/w"),
         ("GET", "/cli/presence/roster"),
@@ -341,7 +340,6 @@ mod tests {
             ("crate::overlay_ws::OVERLAY_WS_PATH", vec![crate::overlay_ws::OVERLAY_WS_PATH]),
             ("crate::fs_events_ws::FS_EVENTS_WS_PATH", vec![crate::fs_events_ws::FS_EVENTS_WS_PATH]),
             ("crate::activity_events_ws::ACTIVITY_EVENTS_WS_PATH", vec![crate::activity_events_ws::ACTIVITY_EVENTS_WS_PATH]),
-            ("crate::chat_overlay_ws::CHAT_TRANSCRIPT_WS_PATH", vec![crate::chat_overlay_ws::CHAT_TRANSCRIPT_WS_PATH]),
             ("crate::thread_attachments::ROUTE", vec![crate::thread_attachments::ROUTE]),
             ("crate::skin_me_routes::ROUTE", vec![crate::skin_me_routes::ROUTE]),
             ("crate::guest_rooms_routes::ROUTE", vec![crate::guest_rooms_routes::ROUTE]),
@@ -382,7 +380,6 @@ mod tests {
     const REFUSING_ARMS: &[&str] = &[
         "/cli/sessions/bytes",
         "/cli/sessions/grid",
-        "/cli/chat/transcript",
         "/cli/browser/notes",
         "/cli/browser/notes/redeliver",
         "/cli/workspace/set",

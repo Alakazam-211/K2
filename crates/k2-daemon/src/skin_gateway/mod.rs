@@ -323,7 +323,6 @@ pub fn never_proxy(path: &str) -> bool {
             | "/cli/sessions/bytes"
             | "/cli/sessions/events"
             | "/cli/sessions/subscribe"
-            | "/cli/chat/transcript"
             | "/cli/grid"
             | "/cli/pty"
             | "/cli/auth/login"
@@ -1903,8 +1902,8 @@ mod tests {
         assert!(!allowlisted_http("GET", "/cli/fs/rename"));
         assert!(!allowlisted_http("POST", "/cli/fs/rename/foo"));
 
-        // AP3: the guest snapshot is one exact GET; the chat transcript
-        // never is (AP1).
+        // AP3: the guest snapshot is one exact GET. (The chat transcript
+        // route was deleted in 0.46.5; it is not on any list.)
         assert!(allowlisted_http("GET", "/cli/activity/snapshot"));
         assert!(allowlisted_http("GET", "/cli/activity/snapshot?workspace=sales"));
         assert!(!allowlisted_http("POST", "/cli/activity/snapshot"));
@@ -1917,8 +1916,6 @@ mod tests {
         assert!(!allowlisted_http("POST", "/cli/thread/activity"));
         assert!(!allowlisted_ws("/cli/thread/activity"));
         assert!(!allowlisted_http("GET", "/cli/chat/transcript"));
-        assert!(never_proxy("/cli/chat/transcript"));
-        assert!(never_proxy("/cli/chat/transcript?session=x"));
 
         // 0.45.5 app identity surface: identity GET/HEAD/POST, handle POST
         // only; none of the owner identity routes, and no prefix match.

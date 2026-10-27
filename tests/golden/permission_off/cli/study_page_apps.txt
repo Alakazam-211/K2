@@ -447,7 +447,6 @@ AGENT WORKING (activity:read)
   closes with 4008 right after). Frames sent while you were away are gone.
   Errors: 400 missing workspace | 403 skin_room (room not on the pass) |
   403 missing capability activity:read. Never the host-wide snapshot.
-  Never /cli/chat/transcript.
 
 THREAD EAR (thread:read + activity:read; K2 <K2_CLI_VERSION>+, thread-activity-ear-v1)
   activity:read gives both this ear and AGENT WORKING above; no new cap.

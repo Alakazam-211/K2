@@ -3997,7 +3997,8 @@ fn open_socket(port: u16, path_and_query: &str, extra_headers: &str) -> StdTcpSt
 ///   owner on the same conversation does; the guest's counts-only ear is
 ///   its own bus, tested in `app_activity_ear_integration.rs`);
 ///   `/cli/thread/activity` is an app door (`thread.activity`) answering a
-///   guest the guest projection only; `/cli/chat/transcript` stays refused.
+///   guest the guest projection only; `/cli/chat/transcript` (the Chat
+///   view's socket, deleted 0.46.5) answers like any unknown route.
 /// - T-S8b: the guest snapshot and the guest frames carry exactly the
 ///   documented keys and nothing from the row (no path, id, reason, tool,
 ///   count); `permission`, `unknown`, `since`, change-only sends, and a
@@ -4243,16 +4244,22 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         assert_eq!(direct.status, 403, "thread:read alone; {}", direct.body);
         assert!(direct.body.contains("cap_not_granted") && direct.body.contains("activity:read"), "{}", direct.body);
 
-        // ── T-S8a (3): the chat transcript stays refused ──
+        // ── T-S8a (3): the chat transcript route is gone (0.46.5) and
+        // answers exactly like a route that never existed ──
+        let unknown = "/cli/chat/no-such-route?session=x";
         let gw = http_ex(gport, "GET", "/cli/chat/transcript?session=x", None, &cookie);
-        assert_eq!(gw.status, 403, "{}", gw.body);
-        assert!(gw.body.contains("not allowed"), "{}", gw.body);
+        let gw_unknown = http_ex(gport, "GET", unknown, None, &cookie);
+        assert_eq!(gw.status, 404, "{}", gw.body);
+        assert_eq!((gw.status, &gw.body), (gw_unknown.status, &gw_unknown.body));
         let gw_ws = ws_upgrade(gport, "/cli/chat/transcript?session=x", &cookie);
+        let gw_ws_unknown = ws_upgrade(gport, unknown, &cookie);
         assert_eq!(gw_ws.status, 403, "{}", gw_ws.body);
-        assert!(gw_ws.body.contains("not allowed"), "{}", gw_ws.body);
+        assert_eq!((gw_ws.status, &gw_ws.body), (gw_ws_unknown.status, &gw_ws_unknown.body));
         let direct = http(dport, "GET", &format!("/cli/chat/transcript?session=x&token={docs_pass}"), None);
-        assert_eq!(direct.status, 403, "{}", direct.body);
-        assert!(direct.body.contains("skin token cannot read host session logs"), "{}", direct.body);
+        let direct_unknown = http(dport, "GET", &format!("{unknown}&token={docs_pass}"), None);
+        assert_ne!(direct.status, 101, "{}", direct.body);
+        assert!(!direct.body.contains("host session logs"), "{}", direct.body);
+        assert_eq!((direct.status, &direct.body), (direct_unknown.status, &direct_unknown.body));
 
         for key in ["tab-docsquiet", "tab-annawork"] {
             if let Some(s) = k2_daemon::v2_session_map::unregister(key) {

@@ -8278,6 +8278,9 @@ clean-mode, key mint|revoke, keys, approvals, approve, deny, access
 Phone notifications for a custom App's own phone app: k2 app push
 (k2 app push --help, k2 study app-push).
 
+Email from the App's own sender: k2 app email (k2 app email --help,
+k2 study email-notifications).
+
 Read `k2 study apps` first. Guests, roles and tokens: k2 app user|role|grant|token.
 EOF
 }
@@ -12304,6 +12307,626 @@ for d in ds:
     print("%s  %-16s %-5s %-10s %-24s seen %s" % (d["id"], (d.get("username") or "-")[:16], d.get("platform"), d.get("environment"), (d.get("deviceId") or "")[:24], seen))'
 }
 
+# k2 app email … and k2 notifications email … (prd-email-notifications-core-v1,
+# 0.46.5): one-way email from SENDERS no agent can read. The owner adds a
+# sender (k2 notifications email sender add) and grants it to an App (k2 app
+# email on); the App sends with email.send on its link, an App key with scope
+# email, or its agent here under its email sending setting.
+_app_email_usage() {
+    cat <<'EOF'
+k2 app email — an App's own email (Email Notifications). The App sends from
+a sender the owner granted it (noreply@your-domain), never from a mailbox; no
+agent can read the sender's mail.
+
+  k2 app email show <app> [--json]   On or off, the sender, the recipient scope.
+  k2 app email on <app> --sender <address|id> [--scope users|any]
+                                     The owner, in person, from a terminal
+                                     outside K2 (Touch ID / login / vault
+                                     password confirms; scope any asks twice).
+  k2 app email off <app>             The owner, an Admin or the App's agent.
+  k2 app email test <app>            K2's fixed text to the owner's own address.
+  k2 app email send <app> --to <addr> [--to …] [--cc …] [--bcc …]
+                 --subject S (--text T | --text-file F) [--html-file F]
+                 [--reply-to <addr>] [--header X-Name=value]… [--tag t]…
+                 [--idempotency-key K] [--json]
+                                     The owner and Admins send as themselves;
+                                     the App's agent needs "…and manage them
+                                     end to end" and its email sending setting
+                                     (approval holds the email for the owner).
+  k2 app email log <app> [--limit N] [--status S] [--tag T] [--json]
+  k2 app email status <app> <id> [--json]
+
+Scope users (default): only this App's users whose address is confirmed
+(they used a link K2 mailed them). Scope any: any address, lower limits.
+Limits: 100 recipients an hour and 1,000 a day per App (any: 30 and 300;
+a domain's first 14 days: 20 and 200). Senders and relays: k2 notifications
+email --help. The whole guide: k2 study email-notifications.
+EOF
+}
+
+# POST an Email Notifications body; on vault_confirm_required (the owner,
+# outside K2) confirm in person and send it again. app-email-any needs a
+# second confirm (confirmAnyToken).
+_email_post() {
+    local path="$1" body="$2" tries=0
+    while :; do
+        _app_rt_post "$path" "$body"
+        if [ "$_CP_STATUS" = "403" ] && [[ "$_CP_BODY" == *'"vault_confirm_required"'* ]] && ! _compute_in_session && [ "$tries" -lt 3 ]; then
+            local action sid field tok
+            action="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or {}).get("action") or "")')"
+            sid="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; e=json.load(sys.stdin).get("error") or {}; print(e.get("secretId") or e.get("serviceId") or "")')"
+            { [ -n "$action" ] && [ -n "$sid" ]; } || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            tok="$(_vault_confirm_token "$action" "$sid" "")" || exit 3
+            field=confirmToken
+            [ "$action" = "app-email-any" ] && field=confirmAnyToken
+            body="$(printf '%s' "$body" | K2_EM_TOK="$tok" K2_EM_FIELD="$field" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b[os.environ["K2_EM_FIELD"]]=os.environ["K2_EM_TOK"]; print(json.dumps(b))')"
+            tok=""
+            tries=$((tries + 1))
+            continue
+        fi
+        break
+    done
+    case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
+}
+
+_app_email_state_print() {
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+s = v.get("sender") or {}
+state = "on" if v.get("on") else "off"
+print("%s: email %s%s" % (v.get("name") or v.get("app"), state, "" if v.get("boxSwitch") == "on" else " (K2_EMAIL_NOTIFICATIONS=off on this server)"))
+if s:
+    print("  sender:  %s (%s, %s, %s)" % (s.get("address"), s.get("fromName"), s.get("path"), s.get("state")))
+else:
+    print("  sender:  none (the owner grants one: k2 app email on <app> --sender <address>)")
+print("  scope:   %s" % v.get("recipientScope"))
+if v.get("offReason") and state == "off":
+    print("  off:     %s" % v["offReason"])'
+}
+
+cmd_app_email() {
+    local sub="${1:-}"
+    case "$sub" in
+        ""|-h|--help|help) _app_email_usage; return 0 ;;
+    esac
+    shift
+    case "$sub" in
+        show|status-of) cmd_app_email_show "$@" ;;
+        on) cmd_app_email_on "$@" ;;
+        off) cmd_app_email_onoff off "$@" ;;
+        test) cmd_app_email_onoff test "$@" ;;
+        send) cmd_app_email_send "$@" ;;
+        log) cmd_app_email_log "$@" ;;
+        status) cmd_app_email_status "$@" ;;
+        *) echo "usage: k2 app email show|on|off|test|send|log|status (k2 app email --help)" >&2; exit 2 ;;
+    esac
+}
+
+cmd_app_email_show() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_email_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app email show <app> [--json]" >&2; exit 2; }
+    _compute_call GET /cli/app/email "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_email_state_print
+}
+
+cmd_app_email_on() {
+    local app="" sender="" scope="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --sender|--from) sender="${2:-}"; shift 2 ;;
+            --scope) scope="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_email_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$sender" ]; } && { echo "usage: k2 app email on <app> --sender <address|id> [--scope users|any]" >&2; exit 2; }
+    case "$scope" in ""|users|any) ;; *) echo "--scope is users or any" >&2; exit 2 ;; esac
+    _email_post /cli/app/email/on "$(_compute_json K2_CJ_app="$app" K2_CJ_sender="$sender" K2_CJ_scope="$scope")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_email_state_print
+}
+
+cmd_app_email_onoff() {
+    local mode="$1"; shift
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_email_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app email $mode <app>" >&2; exit 2; }
+    _email_post "/cli/app/email/$mode" "$(_compute_json K2_CJ_app="$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    if [ "$mode" = test ]; then
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("test email %s: %s (to %s)" % (v.get("id"), v.get("result"), v.get("to")))'
+    else
+        printf '%s' "$_CP_BODY" | _app_email_state_print
+    fi
+}
+
+cmd_app_email_send() {
+    local app="" subject="" text="" text_file="" html_file="" key="" json_out=0
+    local tos=() ccs=() bccs=() rts=() hdrs=() tags=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --to) tos+=("${2:-}"); shift 2 ;;
+            --cc) ccs+=("${2:-}"); shift 2 ;;
+            --bcc) bccs+=("${2:-}"); shift 2 ;;
+            --reply-to) rts+=("${2:-}"); shift 2 ;;
+            --header) hdrs+=("${2:-}"); shift 2 ;;
+            --tag) tags+=("${2:-}"); shift 2 ;;
+            --subject) subject="${2:-}"; shift 2 ;;
+            --text) text="${2:-}"; shift 2 ;;
+            --text-file) text_file="${2:-}"; shift 2 ;;
+            --html-file) html_file="${2:-}"; shift 2 ;;
+            --idempotency-key) key="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_email_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    local usage="usage: k2 app email send <app> --to <addr> --subject S (--text T | --text-file F) [--html-file F]"
+    { [ -z "$app" ] || [ "${#tos[@]}" -eq 0 ] || [ -z "$subject" ]; } && { echo "$usage" >&2; exit 2; }
+    { [ -z "$text" ] && [ -z "$text_file" ] && [ -z "$html_file" ]; } && { echo "$usage" >&2; exit 2; }
+    [ -z "$text_file" ] || [ -r "$text_file" ] || { echo "can't read $text_file" >&2; exit 2; }
+    [ -z "$html_file" ] || [ -r "$html_file" ] || { echo "can't read $html_file" >&2; exit 2; }
+    local body
+    body="$(K2_EM_APP="$app" K2_EM_SUBJECT="$subject" K2_EM_TEXT="$text" K2_EM_TEXTF="$text_file" K2_EM_HTMLF="$html_file" K2_EM_KEY="$key" python3 -c '
+import json, os, sys
+e = os.environ
+args = sys.argv[1:]
+lists = {"to": [], "cc": [], "bcc": [], "replyTo": [], "headers": [], "tags": []}
+cur = None
+for a in args:
+    if a.startswith("--") and a[2:] in lists:
+        cur = a[2:]
+        continue
+    lists[cur].append(a)
+b = {"app": e["K2_EM_APP"], "subject": e["K2_EM_SUBJECT"], "to": lists["to"]}
+for k in ("cc", "bcc", "replyTo", "tags"):
+    if lists[k]:
+        b[k] = lists[k]
+if lists["headers"]:
+    h = {}
+    for kv in lists["headers"]:
+        if "=" not in kv:
+            print("--header is X-Name=value", file=sys.stderr); sys.exit(2)
+        k, v = kv.split("=", 1)
+        h[k] = v
+    b["headers"] = h
+if e.get("K2_EM_TEXTF"):
+    with open(e["K2_EM_TEXTF"], encoding="utf-8") as f:
+        b["text"] = f.read()
+elif e.get("K2_EM_TEXT"):
+    b["text"] = e["K2_EM_TEXT"]
+if e.get("K2_EM_HTMLF"):
+    with open(e["K2_EM_HTMLF"], encoding="utf-8") as f:
+        b["html"] = f.read()
+if e.get("K2_EM_KEY"):
+    b["idempotencyKey"] = e["K2_EM_KEY"]
+print(json.dumps(b))' --to "${tos[@]}" --cc "${ccs[@]}" --bcc "${bccs[@]}" --replyTo "${rts[@]}" --headers "${hdrs[@]}" --tags "${tags[@]}")" || exit 2
+    _email_post /cli/app/email/send "$body"
+    body=""
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+line = "email %s: %s (%s recipient%s)" % (v.get("id"), v.get("status"), v.get("recipients"), "" if v.get("recipients") == 1 else "s")
+if v.get("status") == "held":
+    line += " — held for the owner (k2 mail approvals)"
+print(line)'
+    # Held for the owner's approval: exit 2 (still pending), like k2 mail send.
+    if printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") == "held" else 1)'; then
+        exit 2
+    fi
+    return 0
+}
+
+cmd_app_email_log() {
+    local app="" limit="" status="" tag="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --limit) limit="${2:-}"; shift 2 ;;
+            --status) status="${2:-}"; shift 2 ;;
+            --tag) tag="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_email_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app email log <app> [--limit N] [--status S] [--tag T] [--json]" >&2; exit 2; }
+    local q="app=$(urlencode "$app")"
+    [ -n "$limit" ] && q="$q&limit=$(urlencode "$limit")"
+    [ -n "$status" ] && q="$q&status=$(urlencode "$status")"
+    [ -n "$tag" ] && q="$q&tag=$(urlencode "$tag")"
+    _compute_call GET /cli/app/email/log "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _email_log_print
+}
+
+_email_log_print() {
+    python3 -c '
+import json, sys, datetime
+v = json.load(sys.stdin)
+rows = v.get("items") or []
+if not rows:
+    print("No email in the log (it keeps 30 days)."); sys.exit(0)
+for r in rows:
+    at = datetime.datetime.fromtimestamp(r.get("createdAt") or 0).strftime("%Y-%m-%d %H:%M")
+    to = r.get("to") or []
+    who = (to[0] + (" +%d" % (len(to) - 1) if len(to) > 1 else "")) if to else "-"
+    extra = (" " + r["error"]) if r.get("error") else ""
+    what = r.get("subject") or r.get("purpose") or ""
+    print("%s  %s  %-9s%s  %s  %s" % (at, r.get("id"), r.get("status"), extra, who, what[:60]))'
+}
+
+cmd_app_email_status() {
+    local app="" id="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; else id="$1"; fi; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$id" ]; } && { echo "usage: k2 app email status <app> <id> [--json]" >&2; exit 2; }
+    _compute_call GET /cli/app/email/status "app=$(urlencode "$app")&id=$(urlencode "$id")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s: %s%s (%s recipients)" % (v.get("id"), v.get("status"), (" " + v["error"]) if v.get("error") else "", v.get("recipients")))'
+}
+
+_notifications_usage() {
+    cat <<'EOF'
+k2 notifications email — the senders K2's notification mail leaves from
+(Email Notifications). Owner and Admins only; adding a sender or a relay,
+choosing the system sender and test sends need the owner in person (Touch
+ID / login / vault password), from a terminal outside K2.
+
+  k2 notifications email [status] [--json]
+  k2 notifications email sender add <address> [--name N] [--lock-name]
+                 [--reply-to <addr>]… [--relay <relay id>]
+                                    A send-only account K2 creates (hosted
+                                    mail, Linux) or an address on a relay. It
+                                    is never a mailbox: no agent can read it.
+  k2 notifications email sender list [--all] [--json]
+  k2 notifications email sender check <sender>   re-check DMARC and the domain
+  k2 notifications email sender set <sender> [--name N] [--lock-name|--unlock-name] [--reply-to <addr>]…
+  k2 notifications email sender rm <sender>       its address stays reserved 30 days
+  k2 notifications email system-sender [show] | set <sender> | clear | test
+                                    K2's own mail (owner password resets with
+                                    no --from, codes) comes from it.
+  k2 notifications email relay add --host H [--port P] [--tls implicit|starttls]
+                 --username U --from-domain D   (the password is read from stdin)
+  k2 notifications email relay list | rm <relay>
+  k2 notifications email relay test <relay> --from <sender>
+                                    One test to your own address; the sender
+                                    goes ready when the relay takes it.
+  k2 notifications email log [--app <app>] [--limit N] [--json]
+  k2 notifications email settings [--retention-days 7-90] [--owner-email <you@…>]
+                                    Test emails only ever go to --owner-email.
+
+A hosted sender needs its domain Verified (k2 hostmail domain check) and a
+DMARC record (any policy). On a Mac (no hosted mail), add a relay first.
+Grant a sender to an App: k2 app email on. The guide: k2 study email-notifications.
+EOF
+}
+
+cmd_notifications() {
+    case "${1:-}" in
+        email) shift; cmd_notifications_email "$@" ;;
+        ""|-h|--help|help) _notifications_usage ;;
+        *) echo "usage: k2 notifications email … (k2 notifications --help)" >&2; exit 2 ;;
+    esac
+}
+
+_notif_sender_print() {
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+s = v.get("sender") or v.get("systemSender")
+if not s:
+    print("no sender"); sys.exit(0)
+owner = s.get("owner") or "unassigned"
+print("%s  %s  %s  %s  %s (%s)" % (s.get("id"), s.get("address"), s.get("path"), s.get("state"), owner, s.get("fromName")))
+nr = s.get("notReady")
+if nr:
+    print("  not ready: %s: %s" % (nr.get("code"), nr.get("hint")))
+if s.get("next"):
+    print("  next: " + s["next"])'
+}
+
+cmd_notifications_email() {
+    local sub="${1:-status}"
+    [ $# -gt 0 ] && shift
+    case "$sub" in
+        -h|--help|help) _notifications_usage; return 0 ;;
+        status|--json)
+            local json_out=0
+            [ "$sub" = "--json" ] && json_out=1
+            [ "${1:-}" = "--json" ] && json_out=1
+            _compute_call GET /cli/notifications/email "" tcp
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("Email Notifications: %s; hosted mail %s%s" % (v.get("boxSwitch"), "here" if v.get("hostedMail") else "not on this server (use a relay)", "; AIR-GAP ON" if v.get("airgap") else ""))
+sys_s = v.get("systemSender")
+print("system sender: %s" % ((sys_s.get("address") + " (" + sys_s.get("state") + ")") if sys_s else "none"))
+for s in v.get("senders") or []:
+    print("  %s  %-34s %-6s %-11s %s" % (s.get("id"), s.get("address"), s.get("path"), s.get("state"), s.get("owner") or "unassigned"))
+for r in v.get("relays") or []:
+    print("  relay %s  %s:%s %s  user %s  for %s  test %s" % (r.get("id"), r.get("host"), r.get("port"), r.get("tls"), r.get("username"), r.get("fromDomain"), {True: "ok", False: "FAILED"}.get(r.get("lastTestOk"), "never")))
+st = v.get("settings") or {}
+print("log kept %s days; owner address %s" % (st.get("logRetentionDays"), st.get("ownerEmail") or "not set (k2 notifications email settings --owner-email)"))'
+            ;;
+        sender) cmd_notifications_sender "$@" ;;
+        system-sender) cmd_notifications_system "$@" ;;
+        relay|relays) cmd_notifications_relay "$@" ;;
+        log)
+            local app="" limit="" json_out=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --app) app="${2:-}"; shift 2 ;;
+                    --limit) limit="${2:-}"; shift 2 ;;
+                    --json) json_out=1; shift ;;
+                    *) echo "Unknown flag: $1" >&2; exit 2 ;;
+                esac
+            done
+            local q=""
+            [ -n "$app" ] && q="app=$(urlencode "$app")"
+            [ -n "$limit" ] && q="${q:+$q&}limit=$(urlencode "$limit")"
+            _compute_call GET /cli/notifications/email/log "$q" tcp
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | _email_log_print
+            ;;
+        settings)
+            local days="" owner="" set_owner=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --retention-days) days="${2:-}"; shift 2 ;;
+                    --owner-email) owner="${2:-}"; set_owner=1; shift 2 ;;
+                    *) echo "Unknown flag: $1" >&2; exit 2 ;;
+                esac
+            done
+            local body
+            body="$(K2_EM_DAYS="$days" K2_EM_OWNER="$owner" K2_EM_SETO="$set_owner" python3 -c '
+import json, os
+e = os.environ
+b = {}
+if e.get("K2_EM_DAYS"):
+    b["logRetentionDays"] = int(e["K2_EM_DAYS"])
+if e.get("K2_EM_SETO") == "1":
+    b["ownerEmail"] = e.get("K2_EM_OWNER") or ""
+print(json.dumps(b))')" || { echo "--retention-days is a number" >&2; exit 2; }
+            _email_post /cli/notifications/email/settings "$body"
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; s=json.load(sys.stdin).get("settings") or {}; print("log kept %s days; owner address %s" % (s.get("logRetentionDays"), s.get("ownerEmail") or "not set"))'
+            ;;
+        *) echo "usage: k2 notifications email status|sender|system-sender|relay|log|settings (--help)" >&2; exit 2 ;;
+    esac
+}
+
+cmd_notifications_sender() {
+    local verb="${1:-list}"
+    [ $# -gt 0 ] && shift
+    case "$verb" in
+        add)
+            local addr="" name="" lock=0 relay=""
+            local rts=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --name) name="${2:-}"; shift 2 ;;
+                    --lock-name) lock=1; shift ;;
+                    --reply-to) rts+=("${2:-}"); shift 2 ;;
+                    --relay) relay="${2:-}"; shift 2 ;;
+                    -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+                    *) addr="$1"; shift ;;
+                esac
+            done
+            [ -n "$addr" ] || { echo "usage: k2 notifications email sender add <address> [--name N] [--lock-name] [--reply-to A]… [--relay ID]" >&2; exit 2; }
+            local body
+            body="$(K2_EM_ADDR="$addr" K2_EM_NAME="$name" K2_EM_LOCK="$lock" K2_EM_RELAY="$relay" python3 -c '
+import json, os, sys
+e = os.environ
+b = {"address": e["K2_EM_ADDR"]}
+if e.get("K2_EM_NAME"):
+    b["name"] = e["K2_EM_NAME"]
+if e.get("K2_EM_LOCK") == "1":
+    b["nameLocked"] = True
+if e.get("K2_EM_RELAY"):
+    b["relay"] = e["K2_EM_RELAY"]
+if sys.argv[1:]:
+    b["replyTo"] = sys.argv[1:]
+print(json.dumps(b))' "${rts[@]}")"
+            _email_post /cli/notifications/email/sender/add "$body"
+            printf '%s' "$_CP_BODY" | _notif_sender_print
+            ;;
+        list|ls)
+            local q="" json_out=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --all) q="all=1"; shift ;;
+                    --json) json_out=1; shift ;;
+                    *) echo "Unknown flag: $1" >&2; exit 2 ;;
+                esac
+            done
+            _compute_call GET /cli/notifications/email/senders "$q" tcp
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin).get("senders") or []
+if not rows:
+    print("No senders yet: k2 notifications email sender add noreply@<your domain>"); sys.exit(0)
+for s in rows:
+    print("%s  %-34s %-6s %-11s %-18s %s" % (s.get("id"), s.get("address"), s.get("path"), s.get("state"), s.get("owner") or "unassigned", s.get("fromName")))'
+            ;;
+        check|set|rm|remove)
+            local who="" name="" lockflag=""
+            local rts=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --name) name="${2:-}"; shift 2 ;;
+                    --lock-name) lockflag=1; shift ;;
+                    --unlock-name) lockflag=0; shift ;;
+                    --reply-to) rts+=("${2:-}"); shift 2 ;;
+                    -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+                    *) who="$1"; shift ;;
+                esac
+            done
+            [ -n "$who" ] || { echo "usage: k2 notifications email sender $verb <sender>" >&2; exit 2; }
+            [ "$verb" = remove ] && verb=rm
+            local body
+            body="$(K2_EM_S="$who" K2_EM_NAME="$name" K2_EM_LOCK="$lockflag" python3 -c '
+import json, os, sys
+e = os.environ
+b = {"sender": e["K2_EM_S"]}
+if e.get("K2_EM_NAME"):
+    b["name"] = e["K2_EM_NAME"]
+if e.get("K2_EM_LOCK") in ("0", "1"):
+    b["nameLocked"] = e["K2_EM_LOCK"] == "1"
+if sys.argv[1:]:
+    b["replyTo"] = sys.argv[1:]
+print(json.dumps(b))' "${rts[@]}")"
+            _email_post "/cli/notifications/email/sender/$verb" "$body"
+            if [ "$verb" = rm ]; then
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("removed %s (%s); its address stays reserved %s days" % (v.get("removed"), v.get("address"), v.get("reservedDays")))'
+            else
+                printf '%s' "$_CP_BODY" | _notif_sender_print
+            fi
+            ;;
+        *) echo "usage: k2 notifications email sender add|list|check|set|rm" >&2; exit 2 ;;
+    esac
+}
+
+cmd_notifications_system() {
+    local verb="${1:-show}"
+    [ $# -gt 0 ] && shift
+    case "$verb" in
+        show)
+            _compute_call GET /cli/notifications/email/system-sender "" tcp
+            printf '%s' "$_CP_BODY" | _notif_sender_print
+            ;;
+        set)
+            [ -n "${1:-}" ] || { echo "usage: k2 notifications email system-sender set <sender>" >&2; exit 2; }
+            _email_post /cli/notifications/email/system-sender/set "$(_compute_json K2_CJ_sender="$1")"
+            printf '%s' "$_CP_BODY" | _notif_sender_print
+            ;;
+        clear)
+            _email_post /cli/notifications/email/system-sender/clear '{}'
+            echo "no system sender"
+            ;;
+        test)
+            _email_post /cli/notifications/email/system-sender/test '{}'
+            printf '%s' "$_CP_BODY" | _notif_test_print
+            ;;
+        *) echo "usage: k2 notifications email system-sender show|set|clear|test" >&2; exit 2 ;;
+    esac
+}
+
+_notif_test_print() {
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("test email %s: %s (to %s)" % (v.get("id") or v.get("sender"), v.get("result"), v.get("to")))
+c = v.get("checks") or {}
+d = c.get("dmarc") or {}
+print("  DMARC: %s" % (("found at %s, p=%s" % (d.get("at"), d.get("policy"))) if d.get("ok") else ("missing: " + str(d.get("hint")))))
+if c.get("dkimPublished") is not None:
+    print("  DKIM key published: %s; SPF published: %s" % (c.get("dkimPublished"), c.get("spfPublished")))
+if c.get("note"):
+    print("  " + c["note"])'
+}
+
+cmd_notifications_relay() {
+    local verb="${1:-list}"
+    [ $# -gt 0 ] && shift
+    case "$verb" in
+        add)
+            local host="" port="" tls="" user="" dom=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --host) host="${2:-}"; shift 2 ;;
+                    --port) port="${2:-}"; shift 2 ;;
+                    --tls) tls="${2:-}"; shift 2 ;;
+                    --username) user="${2:-}"; shift 2 ;;
+                    --from-domain) dom="${2:-}"; shift 2 ;;
+                    *) echo "Unknown flag: $1" >&2; exit 2 ;;
+                esac
+            done
+            { [ -z "$host" ] || [ -z "$user" ] || [ -z "$dom" ]; } && { echo "usage: k2 notifications email relay add --host H [--port P] [--tls implicit|starttls] --username U --from-domain D (password on stdin)" >&2; exit 2; }
+            case "$port" in ""|*[!0-9]*) [ -z "$port" ] || { echo "--port is a number" >&2; exit 2; } ;; esac
+            local pw=""
+            if [ -t 0 ]; then
+                printf 'Relay password (SMTP password or API key): ' >&2
+                IFS= read -rs pw || pw=""
+                echo >&2
+            else
+                IFS= read -r pw || true
+            fi
+            [ -n "$pw" ] || { echo "no password given" >&2; exit 2; }
+            local body
+            body="$(printf '%s' "$pw" | K2_EM_HOST="$host" K2_EM_PORT="$port" K2_EM_TLS="$tls" K2_EM_USER="$user" K2_EM_DOM="$dom" python3 -c '
+import json, os, sys
+e = os.environ
+b = {"host": e["K2_EM_HOST"], "username": e["K2_EM_USER"], "fromDomain": e["K2_EM_DOM"], "password": sys.stdin.read()}
+if e.get("K2_EM_PORT"):
+    b["port"] = int(e["K2_EM_PORT"])
+if e.get("K2_EM_TLS"):
+    b["tls"] = e["K2_EM_TLS"]
+print(json.dumps(b))')"
+            pw=""
+            _email_post /cli/notifications/email/relay/add "$body"
+            body=""
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); r=v.get("relay") or {}; print("relay %s: %s:%s %s for %s" % (r.get("id"), r.get("host"), r.get("port"), r.get("tls"), r.get("fromDomain"))); print("  next: " + v.get("next", ""))'
+            ;;
+        list|ls)
+            _compute_call GET /cli/notifications/email/relays "" tcp
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin).get("relays") or []
+if not rows:
+    print("No relays."); sys.exit(0)
+for r in rows:
+    print("%s  %s:%s %s  user %s  for %s  last test %s" % (r.get("id"), r.get("host"), r.get("port"), r.get("tls"), r.get("username"), r.get("fromDomain"), {True: "ok", False: "FAILED"}.get(r.get("lastTestOk"), "never")))'
+            ;;
+        rm|remove)
+            [ -n "${1:-}" ] || { echo "usage: k2 notifications email relay rm <relay>" >&2; exit 2; }
+            _email_post /cli/notifications/email/relay/rm "$(_compute_json K2_CJ_relay="$1")"
+            echo "removed relay $1"
+            ;;
+        test)
+            local relay="" from=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --from) from="${2:-}"; shift 2 ;;
+                    -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+                    *) relay="$1"; shift ;;
+                esac
+            done
+            { [ -z "$relay" ] || [ -z "$from" ]; } && { echo "usage: k2 notifications email relay test <relay> --from <sender>" >&2; exit 2; }
+            _email_post /cli/notifications/email/relay/test "$(_compute_json K2_CJ_relay="$relay" K2_CJ_from="$from")"
+            printf '%s' "$_CP_BODY" | _notif_test_print
+            ;;
+        *) echo "usage: k2 notifications email relay add|list|rm|test" >&2; exit 2 ;;
+    esac
+}
+
 # Held App requests of every kind (an agent's widening, an App key, clean
 # mode off, a new --cmd service, new egress hosts, broad egress): one list,
 # one approve (the owner, in person), one deny.
@@ -13480,6 +14103,7 @@ cmd_app() {
         key) shift; cmd_app_key "$@" ;;
         keys) shift; cmd_app_keys "$@" ;;
         push) shift; cmd_app_push "$@" ;;
+        email) shift; cmd_app_email "$@" ;;
         approvals) shift; cmd_app_approvals "$@" ;;
         approve) shift; cmd_app_approve "$@" ;;
         deny) shift; cmd_app_deny "$@" ;;
@@ -36394,7 +37018,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-push skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs folder-trust"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-push skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes design db-upgrade jobs folder-trust email-notifications"
 
 _study_usage() {
     cat <<'EOF'
@@ -36415,7 +37039,7 @@ Topics:
   zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  db-upgrade  jobs
-  folder-trust
+  folder-trust  email-notifications
 EOF
 }
 
@@ -36460,6 +37084,7 @@ _study_title() {
         vault) echo "Secrets (the vault)" ;;
         jobs) echo "Scheduled jobs the daemon runs" ;;
         folder-trust) echo "Who may start AI tools in a folder" ;;
+        email-notifications) echo "One-way email from senders no agent can read" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
         projects) echo "K2 projects and who may change them" ;;
@@ -36569,6 +37194,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   changes             Git changes (the Changes tab): your own workspace; discard = Trash
   design              Design notes from a page: the shape, k2 browser note, answer in Thread
   folder-trust        Folder trust: the card, asking vs deciding, re-scan, honest limits
+  email-notifications Email from senders: K2's resets, an App's email.send, scope, limits
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -36602,6 +37228,7 @@ _study_page() {
         app-resources) _study_page_app_resources ;;
         app-runtime) _study_page_app_runtime ;;
         app-push) _study_page_app_push ;;
+        email-notifications) _study_page_email_notifications ;;
         skins)
             echo "k2 study skins is now k2 study apps — this page still works."
             echo
@@ -37174,6 +37801,71 @@ NOT A THREAD PUSH
   k2 msg, k2 mail and terminal output never push. `k2 feedback ask`
   tickets push on their own (the server bell silences those too).
   An air-gapped server sends no pushes at all.
+EOF
+}
+
+_study_page_email_notifications() {
+    cat <<'EOF'
+k2 study email-notifications — one-way email from senders no agent can read
+
+THE MODEL
+  K2's own mail (password resets, codes) and an App's email (receipts,
+  sign-up mail) leave from SENDERS: a send-only address like
+  noreply@notify.your-domain. A sender is never a mailbox: it has no
+  password, nobody logs into it, no agent can read, forward or grant it, and
+  its address can't become a mailbox, alias, list or catch-all. On Linux with
+  hosted mail K2 creates it on its own mail server (which signs DKIM); on a
+  Mac, or for a domain hosted elsewhere, it is an address on the owner's SMTP
+  relay (SES, Postmark, Resend SMTP, Mailgun, Google Workspace). Agents send
+  their OWN mail with k2 mail send (k2 study mail), never from a sender.
+
+THE OWNER SETS IT UP (from a terminal outside K2; Touch ID confirms)
+  1 Hosted: k2 hostmail domain add notify.your-domain (a sending subdomain
+    keeps your apex mail where it is), publish its records, then k2
+    hostmail domain check. Mac: k2 notifications email relay add ...
+  2 A DMARC record (any policy) on the domain or its parent.
+  3 k2 notifications email sender add noreply@notify.your-domain --name Brand
+  4 K2's own mail: k2 notifications email system-sender set <sender>
+  5 An App's: k2 app email on <app> --sender <sender> [--scope any]
+  Tests go only to the owner's own address (settings --owner-email).
+
+AN APP SENDS (its own pass on its link, cap email:send; or an App key
+with scope email at /v1/apps/<id>/email/send)
+  const {id} = await k2.email.send({to: [user.email], subject, html, text,
+    replyTo, headers: {'X-Order': id}, tags: ['orders'], idempotencyKey})
+  k2.email.status({id})  ·  k2.email.log({tag, limit})
+  email:send is in no App core: a deploy adding it waits for the owner once,
+  and approving it grants no sender (k2 app email on does).
+
+THE APP'S AGENT
+  k2 app email show | log | status | test (to the owner) | off: allowed.
+  k2 app email send: needs "…and manage them end to end" and follows your
+  workspace's email sending setting (off refuses, approval holds it for the
+  owner in k2 mail approvals). on is the owner's: ask them, naming the sender.
+
+WHO IT MAY REACH
+  Scope users (default): only this App's users whose address is confirmed
+  (they used a link K2 mailed them). Scope any: any address (the owner's
+  second confirm). replyTo: the sender's default or its own domain.
+  Limits (recipients, not calls): 100/h and 1,000/day per App; any 30/h and
+  300/day; a domain's first 14 days 20/h and 200/day; 1,000/h per server.
+  Over: 429 rate_limited with retryAfterMs. At most 50 recipients, 1 MB.
+
+REFUSALS (HTTP code, then what to do)
+  email_off 403 (owner turns it on) · no_sender 409 · sender_not_granted 403
+  system_sender 409 · recipient_out_of_scope 403 · header_not_allowed 400
+  (X-… only, never X-K2-…) · too_many_recipients 400 · message_too_large 413
+  domain_not_ready / dmarc_missing / relay_not_ready 409 (the owner's setup)
+  idempotency_conflict 409 · airgap 503 · vault_closed 503 (retry shortly)
+
+WHAT K2 KEEPS
+  A log of metadata only (who, subject, tags, status), 30 days by default;
+  never a body. submitted means the mail server accepted it; delivery and
+  bounce events come later. A removed App user's rows go with them.
+
+LICENSE
+  Hosted mail runs Stalwart (AGPL-3.0-only), unmodified, as its own program;
+  source: https://github.com/Alakazam-211/stalwart/tree/v0.16.25 (NOTICE.md).
 EOF
 }
 
@@ -50296,6 +50988,10 @@ elif verb == "status":
     else:
         print("server   : %s  (email supported on this daemon: %s)"
               % (d.get("state", "?"), "yes" if d.get("supported") else "no"))
+        # AGPL source pointer (Email Notifications E23; NOTICE.md).
+        sv = d.get("version") or d.get("pinnedVersion") or "?"
+        print("license  : Stalwart %s (AGPL-3.0-only), unmodified; source:"
+              " https://github.com/Alakazam-211/stalwart/tree/v%s" % (sv, sv))
         if d.get("consistent") is False:
             print("WARNING  : status and systemd disagree — %s"
                   % (d.get("lastError") or "no detail from the daemon"))
@@ -50416,6 +51112,14 @@ elif verb == "domain_add":
         print(dumps(d))
     else:
         print_domain(d)
+        # The zone is on K2: the exact k2 dns lines (nothing is planted
+        # for you; MX and SPF change live mail routing).
+        cmds = d.get("dnsCommands") or []
+        if cmds:
+            print("")
+            print("This domain's zone is on K2. To publish the records:")
+            for c in cmds:
+                print("  " + c)
 
 elif verb == "domain_list":
     # Owner table — deliberately NO `project` param (route contract).
@@ -70586,6 +71290,10 @@ EOF
     push)
         # Phones and end-to-end encrypted pushes (prd-e2e-push-v1 §4a).
         shift; cmd_push "$@"
+        ;;
+    notifications)
+        # Email Notifications (prd-email-notifications-core-v1, 0.46.5).
+        shift; cmd_notifications "$@"
         ;;
     compute)
         # K2 compute nodes (prd-k2-compute-nodes-v1).

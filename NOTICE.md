@@ -206,6 +206,22 @@ viewer above).
 | **License** | **MIT** (Copyright (c) 2017-2024 Vasco Asturiano; Brian Hough and Maximilian Stoiber; Sebastian McKenzie and other contributors; Tween.js authors; Andrei Kashcha for ngraph.merge) and **BSD-3-Clause** for ngraph.forcelayout, ngraph.graph, ngraph.events and ngraph.random (Copyright (c) Andrei Kashcha) — full texts in `src/renderer/components/Wiki/THIRD_PARTY_NOTICES.txt` |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. These packages do **not** relicense the product. |
 
+## Third-party: Stalwart mail server (AGPL-3.0-only)
+
+Hosted mail (Email Hosting) and Email Notifications on Linux run the
+**Stalwart** mail server as a separate program K2 installs and supervises.
+
+| | |
+|--|--|
+| **What** | The `stalwart` server binary, version **0.16.25**, downloaded unmodified (sha256-checked) at install time from the release `v0.16.25` of [github.com/Alakazam-211/stalwart](https://github.com/Alakazam-211/stalwart), which mirrors upstream [stalwartlabs/stalwart](https://github.com/stalwartlabs/stalwart) byte for byte |
+| **License** | **AGPL-3.0-only** (the Community Edition). No Enterprise licence key is ever installed |
+| **Source** | The complete corresponding source is the `v0.16.25` tag: https://github.com/Alakazam-211/stalwart/tree/v0.16.25 (also printed by `k2 study email-notifications` and `k2 notifications email status`) |
+| **How K2 uses it** | As a separate process over its loopback HTTP/JMAP management API only. Stalwart's code is **never linked, vendored or patched** into K2 |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. Running Stalwart beside K2 does **not** relicense the product |
+
+When redistributing K2 builds or boxes that install Stalwart, keep this
+notice and the source pointer with them.
+
 ## Third-party: Zen widget library
 
 <!-- zen-lib:begin (generated from src/shared/zen-lib.json by scripts/vendor-zen-lib.sh; do not edit by hand) -->

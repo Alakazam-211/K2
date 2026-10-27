@@ -159,6 +159,9 @@ mod tests {
 
     /// THE convergence-critical case: a real pre-0.40 ~/.k2so moves to
     /// ~/.k2, contents intact, with a working compat symlink behind.
+    // The ~/.k2so compat symlink exists only for Unix installs from before
+    // the 0.40.4 rename; Windows K2 began (0.40.94) with ~/.k2 and makes none.
+    #[cfg(unix)]
     #[test]
     fn migrates_real_k2so_dir_and_leaves_symlink() {
         let home = tmp_home("move");
@@ -194,6 +197,9 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
+    // The ~/.k2so compat symlink exists only for Unix installs from before
+    // the 0.40.4 rename; Windows K2 began (0.40.94) with ~/.k2 and makes none.
+    #[cfg(unix)]
     #[test]
     fn heals_missing_symlink_from_0_40_33_34_fresh_install() {
         // The regression state: `~/.k2` exists, no `~/.k2so` at all. Next
@@ -213,6 +219,29 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
+    /// Windows: a fresh machine gets ~/.k2 and no ~/.k2so; a real ~/.k2so
+    /// (copied over by hand) still moves to ~/.k2 with its contents.
+    #[cfg(windows)]
+    #[test]
+    fn windows_creates_or_moves_to_dot_k2_without_a_compat_link() {
+        let home = tmp_home("fresh-win");
+        assert_eq!(migrate_home_dir_at(&home).unwrap(), HomeMigration::FreshInit);
+        assert!(home.join(".k2").is_dir());
+        assert!(home.join(".k2so").symlink_metadata().is_err(), "no ~/.k2so on Windows");
+        std::fs::remove_dir_all(&home).unwrap();
+
+        let home = tmp_home("move-win");
+        std::fs::create_dir_all(home.join(".k2so")).unwrap();
+        std::fs::write(home.join(".k2so/daemon.port"), b"12345").unwrap();
+        assert_eq!(migrate_home_dir_at(&home).unwrap(), HomeMigration::Migrated);
+        assert_eq!(std::fs::read(home.join(".k2/daemon.port")).unwrap(), b"12345");
+        assert!(home.join(".k2so").symlink_metadata().is_err());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    // The ~/.k2so compat symlink exists only for Unix installs from before
+    // the 0.40.4 rename; Windows K2 began (0.40.94) with ~/.k2 and makes none.
+    #[cfg(unix)]
     #[test]
     fn fresh_machine_creates_k2_and_compat_symlink() {
         // 0.40.35: fresh installs MUST get the `~/.k2so` symlink — the app's

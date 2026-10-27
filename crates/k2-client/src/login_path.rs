@@ -412,23 +412,29 @@ mod tests {
         assert_eq!(extract_login_path(&stdout).as_deref(), Some("/usr/bin:/bin"));
     }
 
+    /// A PATH value with the host separator (`:` on Unix, `;` on Windows):
+    /// the merge is the same logic on both.
+    fn j(parts: &[&str]) -> String {
+        parts.join(if cfg!(windows) { ";" } else { ":" })
+    }
+
     #[test]
     fn login_present_dedups_vs_inherited() {
         // /usr/bin appears in both login and inherited — kept once,
         // at its login-shell position.
-        let login = "/opt/homebrew/bin:/usr/bin";
-        let inherited = "/usr/bin:/bin";
-        let merged = merge_path(Some(login), &[], inherited);
-        assert_eq!(merged, "/opt/homebrew/bin:/usr/bin:/bin");
+        let login = j(&["/opt/homebrew/bin", "/usr/bin"]);
+        let inherited = j(&["/usr/bin", "/bin"]);
+        let merged = merge_path(Some(&login), &[], &inherited);
+        assert_eq!(merged, j(&["/opt/homebrew/bin", "/usr/bin", "/bin"]));
     }
 
     #[test]
     fn login_absent_known_then_inherited() {
         // No login PATH → known dirs lead, inherited follows.
         let known = vec![PathBuf::from("/opt/homebrew/bin")];
-        let inherited = "/usr/bin:/bin";
-        let merged = merge_path(None, &known, inherited);
-        assert_eq!(merged, "/opt/homebrew/bin:/usr/bin:/bin");
+        let inherited = j(&["/usr/bin", "/bin"]);
+        let merged = merge_path(None, &known, &inherited);
+        assert_eq!(merged, j(&["/opt/homebrew/bin", "/usr/bin", "/bin"]));
     }
 
     #[test]
@@ -437,45 +443,45 @@ mod tests {
         let known = vec![PathBuf::from("/known/bin")];
         let inherited = "/inherited/bin";
         let merged = merge_path(Some(login), &known, inherited);
-        assert_eq!(merged, "/login/bin:/known/bin:/inherited/bin");
+        assert_eq!(merged, j(&["/login/bin", "/known/bin", "/inherited/bin"]));
     }
 
     #[test]
     fn no_dup_across_all_three() {
         // /shared/bin appears in all three sources — exactly one copy
         // survives, at its earliest (login) position.
-        let login = "/a:/shared/bin";
+        let login = j(&["/a", "/shared/bin"]);
         let known = vec![PathBuf::from("/shared/bin"), PathBuf::from("/b")];
-        let inherited = "/shared/bin:/c";
-        let merged = merge_path(Some(login), &known, inherited);
-        assert_eq!(merged, "/a:/shared/bin:/b:/c");
+        let inherited = j(&["/shared/bin", "/c"]);
+        let merged = merge_path(Some(&login), &known, &inherited);
+        assert_eq!(merged, j(&["/a", "/shared/bin", "/b", "/c"]));
     }
 
     #[test]
     fn empty_inherited_tolerated() {
-        let login = "/opt/homebrew/bin:/usr/bin";
-        let merged = merge_path(Some(login), &[], "");
-        assert_eq!(merged, "/opt/homebrew/bin:/usr/bin");
+        let login = j(&["/opt/homebrew/bin", "/usr/bin"]);
+        let merged = merge_path(Some(&login), &[], "");
+        assert_eq!(merged, login);
     }
 
     #[test]
     fn known_dir_already_in_login_not_duplicated() {
         // The known fallback dir is already present in the login PATH;
         // it must NOT be appended a second time.
-        let login = "/opt/homebrew/bin:/usr/bin";
+        let login = j(&["/opt/homebrew/bin", "/usr/bin"]);
         let known = vec![PathBuf::from("/opt/homebrew/bin")];
-        let merged = merge_path(Some(login), &known, "/bin");
-        assert_eq!(merged, "/opt/homebrew/bin:/usr/bin:/bin");
+        let merged = merge_path(Some(&login), &known, "/bin");
+        assert_eq!(merged, j(&["/opt/homebrew/bin", "/usr/bin", "/bin"]));
     }
 
     #[test]
     fn empty_segments_skipped() {
-        // Leading/trailing/consecutive colons produce empty segments
+        // Leading/trailing/consecutive separators produce empty segments
         // which must be dropped (never inject "" = cwd).
-        let login = ":/usr/bin::/bin:";
-        let inherited = "::/sbin:";
-        let merged = merge_path(Some(login), &[], inherited);
-        assert_eq!(merged, "/usr/bin:/bin:/sbin");
+        let login = j(&["", "/usr/bin", "", "/bin", ""]);
+        let inherited = j(&["", "", "/sbin", ""]);
+        let merged = merge_path(Some(&login), &[], &inherited);
+        assert_eq!(merged, j(&["/usr/bin", "/bin", "/sbin"]));
     }
 
     #[test]
@@ -489,8 +495,8 @@ mod tests {
 
     #[test]
     fn none_login_no_known_returns_inherited() {
-        let merged = merge_path(None, &[], "/usr/bin:/bin");
-        assert_eq!(merged, "/usr/bin:/bin");
+        let merged = merge_path(None, &[], &j(&["/usr/bin", "/bin"]));
+        assert_eq!(merged, j(&["/usr/bin", "/bin"]));
     }
 
     #[test]

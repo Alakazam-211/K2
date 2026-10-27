@@ -1,31 +1,35 @@
 //! Live docs: Markdown multiplayer v1 on the vendored multiplayer kit
 //! (`vendor/k2-multiplayer-base`, `vendor/k2-multiplayer-markdown`).
 //!
-//! The kit owns the docs, their history, presence and merge rules; K2 owns
-//! identity, permission, time, transport and files (`docs/SESSIONS.md` in
-//! the kit). This module is K2's side:
+//! The kit owns the docs, their history, presence, merge rules and the file
+//! I/O of disk sync; K2 owns identity, permission, time, transport and
+//! watching (`docs/SESSIONS.md` in the kit). This module is K2's side:
 //!
 //! | File | What |
 //! |---|---|
-//! | `mod.rs` | the runtime: the store (`~/.k2/docs.redb`), the session manager, the 2 s upkeep, release on hand-off and stop, pool stats (K1) |
+//! | `mod.rs` | the runtime: the store (`~/.k2/docs.redb`), the session manager, the upkeep timer, release on hand-off and stop, pool stats (K1) |
+//! | [`watch`] | the watcher feeding the kit's disk sync: `FsChanged` outside `.k2/`, its own watch inside `.k2/` (MI13) |
 //! | [`host`] | K2 as the kit's `Host`: rights per pid, the clock, the audit sink (K2) |
 //! | [`caller`] | who is calling, and the participant K2 stamps for them (K2) |
 //! | [`target`] | workspace + path → a jailed doc key, and the deny list (K2) |
+//! | [`shares`] | cross-workspace shares on the kit's host table (MI25) |
 //! | [`routes`] | `/cli/docs/*` (K2) |
 //!
-//! **Disk sync isn't in the kit yet** (its C4). Until it lands, nothing a
-//! session changes reaches the file, so edit verbs answer
-//! `409 disk_sync_pending` unless the daemon runs with
-//! `K2_DOCS_UNSYNCED_EDITS=1` (tests and headless smokes), and the
-//! `docs-md-v1` feature key stays off ([`live_ready`]).
+//! **Disk sync** (kit C4): every doc is opened with `open_file`, so the file
+//! on disk stays true. The kit writes changes back (1 s quiet, 5 s at most,
+//! atomic, echo-suppressed), merges outside edits as `kit:external`, and
+//! reconciles a reopened doc with edits made while it was closed. K2 calls
+//! `tick()` every 250 ms and feeds `file_changed()` from its watcher.
 
 pub mod caller;
 pub mod host;
 pub mod routes;
 pub mod shares;
 pub mod target;
+pub mod watch;
 
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -33,12 +37,9 @@ use k2_core::log_debug;
 use k2_multiplayer_base::session::{Config, PoolStats, Session, SessionError, SessionManager, TextFilePack};
 use k2_multiplayer_base::store::{DocKey, DocStore};
 
-/// Whether the vendored kit writes docs back to their files (its C4). Flip
-/// with the kit bump that brings `Session::file_changed` and write-back.
-pub const KIT_DISK_SYNC: bool = false;
-
-/// Daemon env that lets edit verbs run without disk sync (tests, smokes).
-pub const ENV_UNSYNCED_EDITS: &str = "K2_DOCS_UNSYNCED_EDITS";
+/// The vendored kit writes docs back to their files (its C4, base
+/// `e7c1fd6`). `docs-md-v1` is advertised while the runtime is up.
+pub const KIT_DISK_SYNC: bool = true;
 
 /// Env override for the memory budget, in MiB.
 pub const ENV_MEMORY_MIB: &str = "K2_DOCS_MEMORY_MIB";
@@ -47,9 +48,14 @@ pub const ENV_MEMORY_MIB: &str = "K2_DOCS_MEMORY_MIB";
 /// store (hand-off).
 const OPEN_WAIT: Duration = Duration::from_secs(5);
 
-/// Upkeep period: idle connections leave, idle sessions unload, open
-/// connections' rights are re-checked (PRD K-PERM-12: within 5 s).
-pub const UPKEEP_EVERY: Duration = Duration::from_secs(2);
+/// The kit's timer: due write-backs, stat checks, idle expiry and unload.
+pub const TICK_EVERY: Duration = Duration::from_millis(250);
+
+/// Rights re-check of every open connection (PRD K-PERM-12: within 5 s).
+const RECHECK_EVERY_TICKS: u64 = 8;
+
+/// Orphan-share sweep (about a minute; the first runs on the first tick).
+const SWEEP_EVERY_TICKS: u64 = 240;
 
 /// The Markdown pack: one text root over the file's source, 4 MiB.
 pub static MARKDOWN: TextFilePack = TextFilePack::new("markdown", k2_multiplayer_markdown::MAX_FILE_BYTES);
@@ -57,12 +63,14 @@ pub static MARKDOWN: TextFilePack = TextFilePack::new("markdown", k2_multiplayer
 /// The loaded runtime.
 pub struct Runtime {
     manager: SessionManager,
-    /// K2's own handle on the store (for status); dropped at release so the
-    /// file lock goes with the kit's.
+    /// K2's own handle on the store (shares, `log`); dropped at release so
+    /// the file lock goes with the kit's.
     store: Mutex<Option<Arc<DocStore>>>,
-    /// Docs opened in this process, for the rights re-check (the manager
-    /// doesn't list its sessions; unloaded keys drop out at the next pass).
-    opened: Mutex<HashSet<DocKey>>,
+    /// Docs opened in this process: key → canonical file path. For the
+    /// rights re-check and the watcher (the manager doesn't list its
+    /// sessions; unloaded keys drop out at the next re-check).
+    opened: Mutex<HashMap<DocKey, PathBuf>>,
+    watch: watch::Watch,
 }
 
 enum Slot {
@@ -116,8 +124,9 @@ fn config() -> Config {
     c
 }
 
-/// Open the store and start the session manager. Called once at boot, on
-/// a blocking thread (the open waits for a handing-off predecessor).
+/// Open the store and start the session manager, its timer and the
+/// watcher. Called once at boot, on its own thread (the open waits for a
+/// handing-off predecessor).
 pub fn start() {
     {
         let s = slot().read().expect("docs slot");
@@ -141,17 +150,18 @@ pub fn start() {
                     config(),
                 ),
                 store: Mutex::new(Some(store)),
-                opened: Mutex::new(HashSet::new()),
+                opened: Mutex::new(HashMap::new()),
+                watch: watch::Watch::start(),
             };
             log_debug!(
-                "[docs] store open at {} (budget {} MiB, disk sync {})",
+                "[docs] store open at {} (budget {} MiB, disk sync on)",
                 path.display(),
                 rt.manager.config().memory_budget_bytes >> 20,
-                if KIT_DISK_SYNC { "on" } else { "not yet" }
             );
             *s = Slot::Running(Arc::new(rt));
             drop(s);
-            spawn_upkeep();
+            spawn_timer();
+            watch::spawn_fs_changed_listener();
         }
         Err(e) => {
             log_debug!("[docs] WARN: docs store at {} failed to open: {e}", path.display());
@@ -176,17 +186,11 @@ pub fn live_ready() -> bool {
     KIT_DISK_SYNC && runtime().is_ok()
 }
 
-/// Edit verbs may run: disk sync is in, or the daemon was started with
-/// `K2_DOCS_UNSYNCED_EDITS=1`.
-pub fn edits_allowed() -> bool {
-    KIT_DISK_SYNC || std::env::var(ENV_UNSYNCED_EDITS).is_ok_and(|v| v.trim() == "1")
-}
-
-/// Hand-off (quiesce) and normal stop: close every session and let go of
-/// the store file so the next daemon can open it. One-way: later calls get
-/// [`Unavailable::Released`]. Every change is already durable (the kit
-/// commits before it acks); when the kit's disk sync lands, its flush runs
-/// here first. Returns whether the store was open.
+/// Hand-off (quiesce) and normal stop: write back every doc with unwritten
+/// changes, close every session and let go of the store file so the next
+/// daemon can open it (the kit's `release()` flushes first). One-way:
+/// later calls get [`Unavailable::Released`]. Returns whether the store was
+/// open.
 pub fn release(why: &str) -> bool {
     let rt = {
         let mut s = slot().write().expect("docs slot");
@@ -199,34 +203,34 @@ pub fn release(why: &str) -> bool {
         log_debug!("[docs] WARN: release ({why}): {e}");
     }
     rt.store.lock().expect("docs store handle").take();
+    rt.watch.stop();
     log_debug!("[docs] released the docs store ({why})");
     true
 }
 
-/// The 2 s upkeep thread (exits once released).
-fn spawn_upkeep() {
-    let _ = std::thread::Builder::new().name("k2-docs-upkeep".into()).spawn(|| {
-        let mut tick: u64 = 0;
+/// The 250 ms timer thread (exits once released).
+fn spawn_timer() {
+    let _ = std::thread::Builder::new().name("k2-docs-tick".into()).spawn(|| {
+        let mut n: u64 = 0;
         loop {
-            std::thread::sleep(UPKEEP_EVERY);
+            std::thread::sleep(TICK_EVERY);
             match runtime() {
                 Ok(rt) => {
-                    rt.upkeep();
-                    if tick % SWEEP_EVERY_TICKS == 0 {
+                    rt.tick();
+                    if n % RECHECK_EVERY_TICKS == 0 {
+                        rt.recheck_rights();
+                    }
+                    if n % SWEEP_EVERY_TICKS == 0 {
                         rt.sweep_orphan_shares();
                     }
                 }
                 Err(Unavailable::Released) => return,
                 Err(_) => {}
             }
-            tick += 1;
+            n = n.wrapping_add(1);
         }
     });
 }
-
-/// Upkeep ticks between orphan-share sweeps (about a minute; the first runs
-/// on the first tick after boot).
-const SWEEP_EVERY_TICKS: u64 = 30;
 
 /// Whether a project id is still a registered workspace. Only a definite
 /// "no such row" says no: a DB error keeps the share (never erase on doubt).
@@ -241,10 +245,15 @@ fn workspace_exists(id: &str) -> bool {
 }
 
 impl Runtime {
-    /// The session for `key`, importing `bytes` if the store has no doc.
-    pub fn open(&self, key: &DocKey, bytes: Option<&[u8]>) -> Result<Arc<Session>, SessionError> {
-        let s = self.manager.open(Arc::new(MARKDOWN), key, bytes)?;
-        self.opened.lock().expect("docs opened set").insert(key.clone());
+    /// The session for `key`, syncing with the file at `abs` inside `root`
+    /// (`open_file`: import, or reconcile a stored doc with the file).
+    pub fn open(&self, key: &DocKey, abs: &Path, root: &Path) -> Result<Arc<Session>, SessionError> {
+        let s = self.manager.open_file(Arc::new(MARKDOWN), key, abs, root)?;
+        let rel_in_k2 = key.path.starts_with(".k2/");
+        let fresh = self.opened.lock().expect("docs opened set").insert(key.clone(), abs.to_path_buf()).is_none();
+        if fresh && rel_in_k2 {
+            self.watch.watch_k2_file(abs);
+        }
         Ok(s)
     }
 
@@ -266,16 +275,47 @@ impl Runtime {
         self.store.lock().expect("docs store handle").clone()
     }
 
-    /// Idle connections leave, idle sessions unload, and every loaded
-    /// doc's participants have their rights re-checked (losing read
-    /// removes them; the kit audits it through the host).
-    fn upkeep(&self) {
-        if let Err(e) = self.manager.expire_idle() {
-            log_debug!("[docs] WARN: expire_idle: {e}");
+    /// The loaded docs whose file is `path`, or (for a folder) whose file is
+    /// directly inside it: `(key, is_the_file)`.
+    pub(crate) fn docs_at(&self, path: &Path) -> Vec<(DocKey, bool)> {
+        self.opened
+            .lock()
+            .expect("docs opened set")
+            .iter()
+            .filter_map(|(k, f)| {
+                if f == path {
+                    Some((k.clone(), true))
+                } else if f.parent() == Some(path) {
+                    Some((k.clone(), false))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// The kit's timer: due write-backs, the stat backup, idle expiry and
+    /// unload. Failures are per doc (write-back retries next tick).
+    fn tick(&self) {
+        match self.manager.tick() {
+            Ok(rep) => {
+                for (k, e) in &rep.errors {
+                    log_debug!("[docs] WARN: {}: {e}", host::key_label(k));
+                }
+            }
+            Err(SessionError::Released) => {}
+            Err(e) => log_debug!("[docs] WARN: tick: {e}"),
         }
-        let keys: Vec<DocKey> = self.opened.lock().expect("docs opened set").iter().cloned().collect();
+    }
+
+    /// Every loaded doc's participants have their rights re-checked (losing
+    /// read removes them; the kit audits it through the host). Keys that
+    /// unloaded drop out, with their `.k2/` watches.
+    fn recheck_rights(&self) {
+        let keys: Vec<(DocKey, PathBuf)> =
+            self.opened.lock().expect("docs opened set").iter().map(|(k, p)| (k.clone(), p.clone())).collect();
         let mut gone = Vec::new();
-        for k in keys {
+        for (k, p) in keys {
             match self.manager.get(&k) {
                 Some(s) => match s.recheck_rights() {
                     Ok(changed) => {
@@ -283,20 +323,20 @@ impl Runtime {
                             log_debug!("[docs] rights of {} on {} now {:?}", c.pid, host::key_label(&k), c.rights);
                         }
                     }
-                    Err(SessionError::Unloaded | SessionError::Released) => gone.push(k),
+                    Err(SessionError::Unloaded | SessionError::Released) => gone.push((k, p)),
                     Err(e) => log_debug!("[docs] WARN: recheck_rights on {}: {e}", host::key_label(&k)),
                 },
-                None => gone.push(k),
+                None => gone.push((k, p)),
             }
         }
         if !gone.is_empty() {
             let mut set = self.opened.lock().expect("docs opened set");
-            for k in gone {
+            for (k, p) in gone {
                 set.remove(&k);
+                if k.path.starts_with(".k2/") {
+                    self.watch.unwatch_k2_file(&p);
+                }
             }
-        }
-        if let Err(e) = self.manager.unload_idle() {
-            log_debug!("[docs] WARN: unload_idle: {e}");
         }
     }
 
@@ -313,17 +353,10 @@ impl Runtime {
             Err(e) => log_debug!("[docs] WARN: share sweep: {e}"),
         }
     }
-
-    /// After a rename (`mv`), track the new key.
-    pub fn rekeyed(&self, old: &DocKey, new: &DocKey) {
-        let mut set = self.opened.lock().expect("docs opened set");
-        set.remove(old);
-        set.insert(new.clone());
-    }
 }
 
-/// Pool stats for status and doctor: `{loaded, estimatedBytes, budgetBytes,
-/// unloadedTotal, diskSync, editsAllowed}`, or why the runtime is down.
+/// Pool stats for status and doctor: `{running, loaded, estimatedBytes,
+/// budgetBytes, unloadedTotal, diskSync}`, or why the runtime is down.
 pub fn pool_json() -> serde_json::Value {
     match runtime() {
         Ok(rt) => match rt.stats() {
@@ -334,7 +367,6 @@ pub fn pool_json() -> serde_json::Value {
                 "budgetBytes": p.budget_bytes,
                 "unloadedTotal": p.unloaded_total,
                 "diskSync": KIT_DISK_SYNC,
-                "editsAllowed": edits_allowed(),
             }),
             Err(e) => serde_json::json!({ "running": false, "error": e.to_string() }),
         },

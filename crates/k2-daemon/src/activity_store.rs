@@ -1073,7 +1073,7 @@ mod tests {
         std::fs::write(&big, vec![b' '; (CARRIED_ROW_MAX_BYTES + 1) as usize]).unwrap();
         assert!(read_capped(&big, CARRIED_ROW_MAX_BYTES).is_none(), "over the cap");
         let link = d.join("link.json");
-        std::os::unix::fs::symlink(&ok, &link).unwrap();
+        k2_core::test_env::symlink(&ok, &link).unwrap();
         assert!(read_capped(&link, CARRIED_ROW_MAX_BYTES).is_none(), "never through a symlink");
         let _ = std::fs::remove_dir_all(&d);
     }

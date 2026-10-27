@@ -32,7 +32,7 @@ fn the_walk_counts_like_du_and_each_byte_once() {
     write(&root.join("uploads/a.bin"), 256 * 1024);
     write(&root.join("node_modules/x/index.js"), 64 * 1024);
     std::fs::hard_link(root.join("uploads/a.bin"), root.join("uploads/a-link.bin")).unwrap();
-    std::os::unix::fs::symlink("/", root.join("to-root")).unwrap();
+    k2_core::test_env::symlink(std::path::MAIN_SEPARATOR_STR, root.join("to-root")).unwrap();
     write(&root.join("inner/big.bin"), 512 * 1024);
     write(&root.join("README.md"), 100);
     let skip = [root.join("inner")];
@@ -268,6 +268,9 @@ fn proc_stat_gives_session_and_rss() {
 
 /// A fake engine on a socket: answers `version` (with or without the
 /// verbs list) and `disk-usage`.
+// Server-only feature (Linux boxes): the App engine (k2-app-engine) is a Unix
+// socket; not shipped on personal Windows machines.
+#[cfg(unix)]
 fn fake_engine(dir: &Path, with_verbs: bool, conns: usize) -> (PathBuf, std::thread::JoinHandle<Vec<String>>) {
     use std::os::unix::net::UnixListener;
     let sock = dir.join("e.sock");
@@ -300,6 +303,8 @@ fn fake_engine(dir: &Path, with_verbs: bool, conns: usize) -> (PathBuf, std::thr
 /// Test 19 (daemon side): an engine without `verbs` is `old` and never
 /// gets the new verb; one that lists it is asked and parsed; none is
 /// `missing`.
+// Server-only feature (Linux boxes): k2-app-engine's Unix socket.
+#[cfg(unix)]
 #[test]
 fn the_engine_is_asked_only_when_it_lists_the_verb() {
     let d = PathBuf::from(format!("/tmp/k2ds-{}", std::process::id()));

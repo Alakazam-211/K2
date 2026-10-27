@@ -2,6 +2,9 @@
 //! Homes. `/cli/me/homes*` is not on the scoped-token capability allowlist
 //! (`session_token::require_hook`), so every method on every Homes path is
 //! 403 before any handler runs, and nothing is written.
+// The per-cell socket is a Unix socket; on Windows cells reach the daemon
+// over its TCP arm (cell_uds is a stub there), so this suite is Unix-only.
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::sync::Mutex;

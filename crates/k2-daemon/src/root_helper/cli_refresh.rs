@@ -610,6 +610,9 @@ mod tests {
         Rm(base)
     }
 
+    // Server-only feature (Linux boxes): the root helper's /usr/local/bin/k2
+    // refresh; not shipped on personal Windows machines.
+    #[cfg(unix)]
     #[test]
     fn inspect_reads_the_marker_and_never_follows_a_link() {
         let dir = tmp();
@@ -634,6 +637,9 @@ mod tests {
         assert!(f.regular && f.version.is_none(), "{f:?}");
     }
 
+    // Server-only feature (Linux boxes): the root helper's /usr/local/bin/k2
+    // refresh; not shipped on personal Windows machines.
+    #[cfg(unix)]
     #[test]
     fn inspect_names_a_linked_or_writable_directory() {
         let dir = tmp();
@@ -672,6 +678,9 @@ mod tests {
 
     /// A FIFO at the path: `GET /cli/root-helper/status` (open to agents)
     /// and auto-heal must answer at once, not wait for a writer.
+    // Server-only feature (Linux boxes): the root helper's /usr/local/bin/k2
+    // refresh; not shipped on personal Windows machines.
+    #[cfg(unix)]
     #[test]
     fn inspect_never_blocks_on_a_fifo() {
         let dir = tmp();

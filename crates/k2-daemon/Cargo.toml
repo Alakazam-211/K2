@@ -335,9 +335,6 @@ vte = { version = "0.15", features = ["std", "ansi"] }
 # Thread image tests (thread-images-v1) encode one fixture per image type.
 # Same version/features k2-core pins: the one `image` already in the tree.
 image = { version = "0.25", default-features = false, features = ["ico", "png", "jpeg", "webp", "gif", "bmp", "tiff"] }
-# K2 compute nodes: the headless contract test drives the REAL node runtime
-# (a separate crate that never links k2-core) against the in-process daemon.
-k2-node = { path = "../k2-node" }
 k2-node-proto = { path = "../k2-node-proto" }
 # Root-helper heal tests sign fixture builds with the TEST key.
 k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }
@@ -351,3 +348,9 @@ k2-ptyd = { path = "../k2-ptyd" }
 # the header back with mail-parser. Test-only, no transitive deps
 # (gethostname feature off).
 mail-builder = { version = "1.0", default-features = false }
+
+# K2 compute nodes: the headless contract test drives the REAL node runtime
+# (a separate crate that never links k2-core) against the in-process daemon.
+# pending k2-node Windows port: k2-node is Unix-only until then.
+[target.'cfg(unix)'.dev-dependencies]
+k2-node = { path = "../k2-node" }

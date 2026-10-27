@@ -10,6 +10,7 @@ use super::*;
 use k2_core::clone;
 use k2_core::overlay::transfer::ThreadsChoice;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -635,6 +636,14 @@ fn prune_stale_bundles_removes_only_old_tar_gz() {
 /// crate dep. We re-write the file then use `std::fs` + a filetime shim:
 /// here we lean on the `filetime` crate if present, else fall back to
 /// touching with a backdated time through a small unsafe utimes call.
+#[cfg(windows)]
+fn filetime_set(path: &Path, when: std::time::SystemTime) {
+    let f = std::fs::OpenOptions::new().write(true).open(path).unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
+    f.set_times(std::fs::FileTimes::new().set_accessed(when).set_modified(when))
+        .unwrap_or_else(|e| panic!("set_times failed for {}: {e}", path.display()));
+}
+
+#[cfg(unix)]
 fn filetime_set(path: &Path, when: std::time::SystemTime) {
     let dur = when
         .duration_since(std::time::UNIX_EPOCH)

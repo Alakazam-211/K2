@@ -14,6 +14,9 @@
 //! - split runs (compute B): `k2 compute test --shards N` puts one nextest
 //!   partition per node, merges the JUnit, gives one exit code, one wake
 //!   message; logs/fetch/retry/cancel work on the run.
+// pending k2-node Windows port: these tests drive the real k2-node runtime
+// in-process, and k2-node is Unix-only until its Windows port (Phase 3).
+#![cfg(unix)]
 
 #![cfg(unix)]
 

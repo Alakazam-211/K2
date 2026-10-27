@@ -12,6 +12,9 @@
 //! confirm, and the executor accepts the owner signature and writes the
 //! policy; a two-step plan approved once runs on the node; the agent hears
 //! back; a passport can't approve.
+// pending k2-node Windows port: these tests drive the real k2-node runtime
+// in-process, and k2-node is Unix-only until its Windows port (Phase 3).
+#![cfg(unix)]
 
 #![cfg(unix)]
 

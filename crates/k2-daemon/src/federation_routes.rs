@@ -4198,6 +4198,7 @@ mod tests {
             std::fs::create_dir_all(&shim_dir).unwrap();
             let shim = shim_dir.join("cat");
             std::fs::write(&shim, "#!/bin/sh\nexec cat\n").unwrap();
+            #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();

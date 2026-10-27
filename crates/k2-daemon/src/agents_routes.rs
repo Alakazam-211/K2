@@ -1632,7 +1632,7 @@ mod gap_route_tests {
         let dir = std::env::temp_dir().join(format!("agent-conf-charter-{}-{id}", std::process::id()));
         std::fs::create_dir_all(dir.join(".k2")).expect("mkdir .k2");
         let gone = dir.join(".k2/skills/k2so/SKILL.md");
-        std::os::unix::fs::symlink(&gone, dir.join("CLAUDE.md")).expect("dangling link");
+        k2_core::test_env::symlink(&gone, dir.join("CLAUDE.md")).expect("dangling link");
         let path = dir.to_string_lossy().into_owned();
         {
             let db = k2_core::db::shared();

@@ -14,6 +14,9 @@
 //! workspace's agent can't see the job; cancel; owner verbs refuse a
 //! passport with `owner_only`; remove → the node is revoked and can't
 //! reattach.
+// pending k2-node Windows port: these tests drive the real k2-node runtime
+// in-process, and k2-node is Unix-only until its Windows port (Phase 3).
+#![cfg(unix)]
 
 #![cfg(unix)]
 

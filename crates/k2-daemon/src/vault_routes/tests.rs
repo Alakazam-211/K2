@@ -1002,7 +1002,7 @@ fn the_doctor_reads_one_level_of_subfolders_and_skips_build_folders() {
     write(&ws.join("clone/deeper/.env"), "API_KEY=k2test-deep\n");
     write(&ws.join("clone/.env.example"), "API_KEY=k2test-example\n");
     write(&ws.join("clone/.env.k2"), "API_KEY=k2test-k2\n");
-    std::os::unix::fs::symlink(ws.join("clone"), ws.join("linked")).expect("symlink");
+    k2_core::test_env::symlink(ws.join("clone"), ws.join("linked")).expect("symlink");
     let scan = scan_env_files(&[ws.clone()]);
     assert_eq!(scan.stopped_after, None);
     let mut paths: Vec<String> = scan.files.iter().map(|f| f.path.trim_start_matches(&ws.display().to_string()).to_string()).collect();

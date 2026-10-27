@@ -689,6 +689,8 @@ mod tests {
             (403, "POST", "/cli/zen/widget/sign", vec![], Some(json!({"widget":"board"})), json!({"ok":false,"error":"sign_needs_person","widget":"board","version":"ab".repeat(32),"card":null}), "zen.sign"),
             // Job tiers (prd-compute-job-tiers-v1 T13).
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n4","tier":"ci"})), json!({"error":{"code":"ci_not_allowed","hint":"x"}}), "compute.ci"),
+            // Mobile dev (0.46.6): `k2 sim boot` with "Allow mobile devices" off.
+            (403, "POST", "/cli/sim/boot", vec![], Some(json!({})), json!({"error":{"code":"sim_switch_off","hint":"x"},"code":"sim_switch_off"}), "sim.use"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {

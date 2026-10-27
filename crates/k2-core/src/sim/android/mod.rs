@@ -593,17 +593,29 @@ impl SimLane for AndroidLane {
         let st = Self::state(dev)?;
         let t0 = Instant::now();
         let s = Self::serial(&st);
-        let o = self.adb(&["-s", &s, "exec-out", "uiautomator", "dump", "/dev/tty"], TREE_TIMEOUT, 8 * 1024 * 1024)?;
-        let text = o.text();
-        let mut t = ui::parse_dump(&text, st.scale, self.screen_px(&st)).map_err(|e| {
-            if o.ok() {
-                LaneError::tool(format!("read the screen: {e}"))
-            } else {
-                LaneError::tool(o.failure("uiautomator dump"))
+        let screen = self.screen_px(&st);
+        // Right after a launch or a transition uiautomator may answer
+        // "could not get idle state" / "null root node": try up to three
+        // times before failing with the device's own words.
+        let mut last_err = String::new();
+        for attempt in 0..3 {
+            if attempt > 0 {
+                std::thread::sleep(Duration::from_millis(600));
             }
-        })?;
-        t.took_ms = t0.elapsed().as_millis() as u64;
-        Ok(t)
+            let o = self.adb(&["-s", &s, "exec-out", "uiautomator", "dump", "/dev/tty"], TREE_TIMEOUT, 8 * 1024 * 1024)?;
+            let text = o.text();
+            match ui::parse_dump(&text, st.scale, screen) {
+                Ok(mut t) => {
+                    t.took_ms = t0.elapsed().as_millis() as u64;
+                    return Ok(t);
+                }
+                Err(e) => {
+                    let said: String = text.trim().lines().next().unwrap_or("").chars().take(200).collect();
+                    last_err = if said.is_empty() { format!("{e} ({})", o.failure("uiautomator dump")) } else { format!("{e}: {said}") };
+                }
+            }
+        }
+        Err(LaneError::tool(crate::redaction::redact(&format!("read the screen: {last_err}"))))
     }
 
     fn act(&self, dev: &DeviceRef, action: &Action) -> Result<(), LaneError> {

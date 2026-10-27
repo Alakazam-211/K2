@@ -167,6 +167,11 @@ fn state(w: Writer, ws: &Ws) -> bool {
         Writer::Access("apps_build") => crate::apps::access::level(&ws.id) >= crate::apps::access::Level::Build,
         Writer::Access("apps_manage_full") => crate::apps::access::level(&ws.id) == crate::apps::access::Level::Full,
         Writer::Access("app_users") => k2_core::workspace::settings::agents_can_manage_app_users(&ws.id),
+        Writer::Access("sim") => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::sim::store::agents_can_use_sim(&conn, &ws.id)
+        }
         Writer::Access(other) => panic!("no state reader for {other}"),
         Writer::AppCore => crate::apps::cores::ticked(&ws.id).iter().any(|c| c == "db"),
         Writer::Dns => k2_core::workspace::settings::get_dns_manage_enabled(&ws.path),

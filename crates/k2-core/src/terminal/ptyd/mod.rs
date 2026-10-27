@@ -320,10 +320,19 @@ mod tests {
 
     #[test]
     fn setting_is_on_unless_explicitly_off() {
-        assert_eq!(Switch::from_setting(""), Switch::On, "unset = on (the 0.46.5 default)");
-        assert_eq!(Switch::from_setting("auto"), Switch::On);
-        assert_eq!(Switch::from_setting("on"), Switch::On);
-        assert_eq!(Switch::from_setting(" On "), Switch::On);
+        #[cfg(unix)]
+        {
+            assert_eq!(Switch::from_setting(""), Switch::On, "unset = on (the 0.46.5 default)");
+            assert_eq!(Switch::from_setting("auto"), Switch::On);
+            assert_eq!(Switch::from_setting("on"), Switch::On);
+            assert_eq!(Switch::from_setting(" On "), Switch::On);
+        }
+        // k2-ptyd is Unix-only until its Windows port (0.47, S8): every
+        // setting resolves off there.
+        #[cfg(windows)]
+        for v in ["", "auto", "on", " On "] {
+            assert_eq!(Switch::from_setting(v), Switch::Off, "{v:?}");
+        }
         assert_eq!(Switch::from_setting("off"), Switch::Off, "the owner's off always wins");
         assert_eq!(Switch::from_setting(" OFF "), Switch::Off);
     }

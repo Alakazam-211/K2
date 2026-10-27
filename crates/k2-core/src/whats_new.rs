@@ -587,7 +587,7 @@ older minor body
     #[test]
     fn state_path_lives_in_dot_k2() {
         let p = state_path();
-        let s = p.to_string_lossy();
+        let s = p.to_string_lossy().replace('\\', "/");
         assert!(s.ends_with(".k2/whats-new.state"), "got {s}");
     }
 

@@ -670,6 +670,8 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
     }
 }
 
-#[cfg(test)]
+// Server-only feature (Linux boxes): Sew is hosted on a box through the root
+// helper (stage, units, media); not shipped on personal Windows machines.
+#[cfg(all(test, unix))]
 #[path = "routes_tests.rs"]
 mod tests;

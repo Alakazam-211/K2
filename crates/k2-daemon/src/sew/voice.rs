@@ -1204,6 +1204,8 @@ fn voice_warning(code: &str) -> &'static str {
     }
 }
 
-#[cfg(test)]
+// Server-only feature (Linux boxes): Sew is hosted on a box through the root
+// helper (stage, units, media); not shipped on personal Windows machines.
+#[cfg(all(test, unix))]
 #[path = "voice_tests.rs"]
 mod tests;

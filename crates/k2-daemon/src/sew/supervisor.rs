@@ -2710,6 +2710,8 @@ pub fn job(env: &Env, id: &str) -> R<Value> {
     })
 }
 
-#[cfg(test)]
+// Server-only feature (Linux boxes): Sew is hosted on a box through the root
+// helper (stage, units, media); not shipped on personal Windows machines.
+#[cfg(all(test, unix))]
 #[path = "supervisor_tests.rs"]
 mod tests;

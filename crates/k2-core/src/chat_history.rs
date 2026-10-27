@@ -5286,6 +5286,7 @@ mod tests {
                 .claude_history_file
                 .as_ref()
                 .unwrap()
+                .replace('\\', "/")
                 .ends_with(".claude/history.jsonl")
         );
     }

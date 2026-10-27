@@ -461,7 +461,7 @@ fn hold_and_deny_strip_slot_homes() {
     fs::write(c_slot.join(".claude.json"), serde_json::json!({ "projects": { k.clone(): { "hasTrustDialogAccepted": true } } }).to_string()).unwrap();
     let x_slot = crate::llm_accounts::store::tool_dir(crate::llm_accounts::Tool::Codex).join("pin-2");
     fs::create_dir_all(&x_slot).unwrap();
-    fs::write(x_slot.join("config.toml"), format!("[projects.\"{k}\"]\ntrust_level = \"trusted\"\n")).unwrap();
+    fs::write(x_slot.join("config.toml"), format!("[projects.'{k}']\ntrust_level = \"trusted\"\n")).unwrap();
     decide(&k, Decision::Deny, "owner", None).unwrap();
     let v: serde_json::Value = serde_json::from_slice(&fs::read(c_slot.join(".claude.json")).unwrap()).unwrap();
     assert!(v["projects"][&k].get("hasTrustDialogAccepted").is_none(), "{v}");
@@ -592,7 +592,7 @@ fn slot_homes_go_through_the_gate() {
     // Codex shadow: the shared config trusts the cwd (the person's own
     // entry); the denied shadow copy drops it.
     let codex_shared = folder(&e.home, "codex-shared");
-    fs::write(codex_shared.join("config.toml"), format!("model = \"o\"\n[projects.\"{k}\"]\ntrust_level = \"trusted\"\n")).unwrap();
+    fs::write(codex_shared.join("config.toml"), format!("model = \"o\"\n[projects.'{k}']\ntrust_level = \"trusted\"\n")).unwrap();
     let codex_slot = e.home.join("slot-codex");
     let err = crate::llm_accounts::pins::materialize_codex_shadow_for(&codex_slot, &codex_shared, Some(&ws)).expect_err("denied");
     assert!(err.starts_with(DENIED), "{err}");

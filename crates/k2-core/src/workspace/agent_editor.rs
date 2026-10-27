@@ -222,7 +222,7 @@ mod tests {
             md_path.ends_with("AGENT.md") || md_path.ends_with("ROLE.md"),
             "agentMdPath must be the live persona file, got {md_path}"
         );
-        assert!(ctx["agentDir"].as_str().unwrap().contains(".k2so/agent"));
+        assert!(ctx["agentDir"].as_str().unwrap().replace('\\', "/").contains(".k2so/agent"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

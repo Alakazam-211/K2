@@ -329,7 +329,7 @@ mod fake {
         /// }));
         /// ```
         pub fn insert_tree(&self, root: &Path, tree: serde_json::Value) {
-            assert!(root.is_absolute(), "FakeFs requires absolute paths: {}", root.display());
+            assert!(root.has_root(), "FakeFs requires absolute paths: {}", root.display());
             self.insert_tree_inner(root, &tree);
         }
 
@@ -359,7 +359,7 @@ mod fake {
 
         /// Insert a single file outside the JSON DSL.
         pub fn insert_file(&self, path: &Path, bytes: &[u8]) {
-            assert!(path.is_absolute(), "FakeFs requires absolute paths");
+            assert!(path.has_root(), "FakeFs requires absolute paths");
             if let Some(parent) = path.parent() {
                 self.create_dir_all_inner(parent).expect("fakefs insert_file parent");
             }
@@ -404,7 +404,7 @@ mod fake {
         }
 
         fn split_path(&self, path: &Path) -> Vec<String> {
-            assert!(path.is_absolute(), "FakeFs requires absolute paths: {}", path.display());
+            assert!(path.has_root(), "FakeFs requires absolute paths: {}", path.display());
             path.components()
                 .filter_map(|c| match c {
                     std::path::Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
@@ -448,7 +448,7 @@ mod fake {
                 let entry = self.get_entry(state, &current)?;
                 match entry {
                     Entry::Symlink { target, .. } => {
-                        current = if target.is_absolute() {
+                        current = if target.has_root() {
                             target.clone()
                         } else {
                             current.parent().unwrap_or(Path::new("/")).join(target)

@@ -23,4 +23,6 @@
   nsExec::ExecToLog 'taskkill /F /IM k2-daemon.exe /T'
   nsExec::ExecToLog 'taskkill /F /IM frpc.exe /T'
   Sleep 800
+  ; The daemon's logon autostart (k2_client::win_autostart).
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "K2 Daemon"
 !macroend

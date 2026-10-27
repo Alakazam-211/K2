@@ -54,3 +54,5 @@ pub mod perf;
 pub mod process;
 pub mod release_sums;
 pub mod wake;
+#[cfg(windows)]
+pub mod win_autostart;

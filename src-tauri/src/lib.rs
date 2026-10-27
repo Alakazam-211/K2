@@ -1280,6 +1280,28 @@ pub fn run() {
                 }
             });
 
+            // Windows: the daemon starts at logon, as the macOS launchd
+            // agent does (k2_client::win_autostart: a per-user Run value
+            // naming the installed k2-daemon.exe). Never from a dev build
+            // or a transient location; checked on every launch so a moved
+            // install heals.
+            #[cfg(windows)]
+            perf_timer!("startup_ensure_daemon_autostart", {
+                let daemon_bin = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| k2_client::daemon_lifecycle::bundled_daemon_path(&p))
+                    .filter(|p| p.exists())
+                    .filter(|p| !k2_client::daemon_lifecycle::is_transient_exe_location(p));
+                match daemon_bin {
+                    Some(bin) if !cfg!(debug_assertions) => match k2_client::win_autostart::ensure(&bin) {
+                        Ok(true) => log_debug!("[k2] daemon logon autostart set -> {}", bin.display()),
+                        Ok(false) => {}
+                        Err(e) => log_debug!("[k2] daemon logon autostart failed: {e}"),
+                    },
+                    _ => log_debug!("[k2] daemon logon autostart skipped (dev build or no installed daemon)"),
+                }
+            });
+
             // Autostart: on every Tauri launch (not just first-install
             // migration), make sure the daemon plist is loaded. Covers
             // the case where the user red-buttoned with "keep server

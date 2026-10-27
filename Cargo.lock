@@ -4105,6 +4105,7 @@ dependencies = [
  "sha2 0.10.9",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

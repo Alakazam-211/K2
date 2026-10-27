@@ -29,6 +29,11 @@ sha2 = "0.10"
 url = "2"
 libc = "0.2"
 
+# Windows: the daemon's logon autostart (HKCU Run value; win_autostart).
+# windows-sys 0.61 is already in Cargo.lock.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 security-framework-sys = "2.17"

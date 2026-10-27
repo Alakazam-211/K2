@@ -1512,7 +1512,7 @@ mod tests {
         }
         assert!(!limits.contains("page 3 MB"), "{limits}");
         let on = generate_k2_zen_skill_for(true);
-        for needle in ["the code AND the\n  manifest", "sign_needs_person", "k2 zen widget sign <w> --ask"] {
+        for needle in ["the code AND the\nmanifest", "sign_needs_person", "k2 zen widget sign <w> --ask"] {
             assert!(on.contains(needle), "the k2-zen skill must say {needle:?}");
         }
     }
@@ -1609,8 +1609,10 @@ mod tests {
     #[test]
     fn whats_available_lists_every_library() {
         let body = generate_k2_zen_skill_for(false);
+        // 0.46.5: each by its line (what a widget asks for), with the version shipped.
         for l in &stdlib::zen_lib_manifest().libs {
-            assert!(body.contains(&format!("`{}`", l.key())), "what's available lists {}", l.key());
+            let line = format!("- `{}@{}` ({} {},", l.id, l.line, l.title, l.version);
+            assert!(body.contains(&line), "what's available lists {line}");
         }
         for host in &stdlib::zen_lib_manifest().cdn_hosts {
             assert!(body.contains(host.as_str()), "{host}");

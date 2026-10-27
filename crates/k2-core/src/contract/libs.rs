@@ -56,17 +56,20 @@ runs inside the widget's sealed frame, with the widget's caps and no more.\n\n",
         human_bytes(MAX_BUNDLE_BYTES),
         human_bytes(m.max_bytes_per_widget as usize),
     ));
-    s.push_str(
-        "ASK FOR A LINE, NOT A PATCH\n\
-  \"requires\": { \"libs\": [\"uplot@1\", \"chart.js@4\"] }\n\
-  A line is the major (uplot@1), or 0.minor below 1.0 (three@0.186). K2\n\
-  updates patches inside a line, so the widget keeps working.\n",
-    );
-    s.push_str(&format!(
-        "  One file from a CDN: {{\"url\": \"https://cdn.jsdelivr.net/npm/x@1.2.3/x.min.js\",\n  \"integrity\": \"sha384-...\"}}, an exact version, from one of\n  {}.\n\
-  The list is part of the version you sign, like your code.\n\n",
-        m.cdn_hosts.join(", ")
-    ));
+    // One line per push: a `\` line continuation would eat the indent.
+    for line in [
+        "ASK FOR A LINE, NOT A PATCH",
+        "  \"requires\": { \"libs\": [\"uplot@1\", \"chart.js@4\"] }",
+        "  A line is the major (uplot@1), or 0.minor below 1.0 (three@0.186). K2",
+        "  updates patches inside a line, so the widget keeps working.",
+        "  One file from a CDN: {\"url\": \"https://cdn.jsdelivr.net/npm/x@1.2.3/x.min.js\",",
+        "  \"integrity\": \"sha384-...\"}, an exact version, from one of",
+    ] {
+        s.push_str(line);
+        s.push('\n');
+    }
+    s.push_str(&format!("  {}.\n", m.cdn_hosts.join(", ")));
+    s.push_str("  The list is part of the version you sign, like your code.\n\n");
     s.push_str("WHICH TO PICK\n");
     let picks: Vec<(&str, &ZenLibEntry)> =
         PICKS.iter().filter_map(|(job, id)| m.libs.iter().find(|e| e.id == *id).map(|e| (*job, e))).collect();

@@ -262,6 +262,7 @@ pub mod llm;
 pub mod llm_accounts;
 /// App users' personal wallets (prd-app-user-llm-logins-v1 rev 2, 0.46.3).
 pub mod person_wallet;
+pub mod sealed_slots;
 /// macOS keychain generic passwords: every write by `/usr/bin/security`
 /// with the secret on stdin (keeps the item's `apple-tool:` partition),
 /// no read that could prompt, every write read back (Claude's live login,

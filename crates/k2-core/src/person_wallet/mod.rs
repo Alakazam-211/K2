@@ -458,17 +458,15 @@ pub fn set_app_settings(
 
 // ── Sealing ────────────────────────────────────────────────────────
 
-/// What a sealed secret holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SealKind {
-    /// A subscription's credential file (the tool's own format).
-    LoginSlot,
-    /// A pasted API key.
-    ApiKey,
-}
+/// What a sealed secret holds (shared with the server's logins).
+pub use crate::sealed_slots::SealKind;
+#[cfg(test)]
+pub(crate) use crate::sealed_slots::overwrite_then_unlink;
+use crate::sealed_slots::{SealAddr, SealScope, SecretSealer};
 
 /// The vault's `person` scope, as the wallet needs it. Values cross this
 /// trait only between the vault and a slot / a spawn env; never a caller.
+/// Every [`SecretSealer`] (the daemon's one vault sealer) is a `Sealer`.
 pub trait Sealer {
     /// Store (or replace) `bytes` as `wallet-<item>` in scope
     /// `person:<principal>`.
@@ -479,57 +477,37 @@ pub trait Sealer {
     fn destroy(&self, principal_id: &str, item_id: &str) -> Result<(), String>;
 }
 
+/// Where a person's item is sealed: scope `person:<principal>`, name
+/// `wallet-<item>`.
+pub fn seal_addr(principal_id: &str, item_id: &str) -> SealAddr {
+    SealAddr { scope: SealScope::Person(principal_id.to_string()), name: secret_name(item_id) }
+}
+
+impl<T: SecretSealer + ?Sized> Sealer for T {
+    fn seal(&self, principal_id: &str, item_id: &str, kind: SealKind, bytes: &[u8]) -> Result<(), String> {
+        self.put_sealed(&seal_addr(principal_id, item_id), kind, bytes)
+    }
+    fn unseal(&self, principal_id: &str, item_id: &str) -> Result<Option<Vec<u8>>, String> {
+        self.get_sealed(&seal_addr(principal_id, item_id))
+    }
+    fn destroy(&self, principal_id: &str, item_id: &str) -> Result<(), String> {
+        self.destroy_sealed(&seal_addr(principal_id, item_id))
+    }
+}
+
 pub fn slot_dir(tool: Tool, item_id: &str) -> PathBuf {
     store::slot_dir(tool, item_id)
 }
 
-/// Remove the plaintext credential from a slot (the file, and on macOS the
-/// per-slot keychain item Claude may have written).
+/// Remove the plaintext credential from a slot (the shared wipe:
+/// overwrite, then unlink; and Claude's per-slot keychain item).
 fn wipe_slot_cred(tool: Tool, item_id: &str) -> Result<(), WalletError> {
-    if tool == Tool::Claude && store::keychain_enabled() {
-        let svc = store::claude_keychain_service(Some(&slot_dir(tool, item_id)));
-        let acct = store::claude_keychain_account();
-        if let Ok(true) = store::keychain::exists(&svc, &acct) {
-            store::keychain::delete(&svc, &acct).map_err(WalletError::Io)?;
-        }
-    }
-    overwrite_then_unlink(&store::slot_cred_path(tool, item_id))
-}
-
-/// Overwrite a credential file with zeros (its whole length, fsynced),
-/// then unlink it. Best effort against recovery: on copy-on-write
-/// filesystems and SSDs old blocks may survive (the same honest limit as
-/// the vault's own key wipe). A missing file is fine.
-pub(crate) fn overwrite_then_unlink(path: &Path) -> Result<(), WalletError> {
-    use std::io::Write;
-    match std::fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(WalletError::Io(e.to_string())),
-        Ok(m) if m.file_type().is_symlink() => {
-            // Never write through a link: just remove the link itself.
-        }
-        Ok(m) => {
-            let len = m.len() as usize;
-            let mut f = std::fs::OpenOptions::new().write(true).open(path).map_err(|e| WalletError::Io(e.to_string()))?;
-            f.write_all(&vec![0u8; len.max(1)]).map_err(|e| WalletError::Io(e.to_string()))?;
-            f.sync_all().map_err(|e| WalletError::Io(e.to_string()))?;
-        }
-    }
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(WalletError::Io(e.to_string())),
-    }
+    crate::sealed_slots::wipe_slot_cred(tool, item_id)
 }
 
 /// Did the vault keep exactly `bytes` for this item? Reads it back.
 fn vault_holds(sealer: &dyn Sealer, item: &Item, bytes: &[u8]) -> Result<(), String> {
-    match sealer.unseal(&item.principal_id, &item.id) {
-        Ok(Some(back)) if back == bytes => Ok(()),
-        Ok(Some(back)) => Err(format!("read back {} bytes, not the {} written", back.len(), bytes.len())),
-        Ok(None) => Err("read back nothing".into()),
-        Err(e) => Err(format!("read back failed ({e})")),
-    }
+    crate::sealed_slots::verify_holds(|| sealer.unseal(&item.principal_id, &item.id), bytes)
 }
 
 /// Is there a plaintext credential in the slot right now?

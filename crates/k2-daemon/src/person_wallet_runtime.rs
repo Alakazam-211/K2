@@ -23,9 +23,8 @@ use std::time::{Duration, Instant};
 
 use k2_core::llm_accounts::pins::{SpawnLogin, Source};
 use k2_core::llm_accounts::{kind, state, store, wallet, Tool, WalletError};
-use k2_core::person_wallet::{self as pw, decide, Item, SealKind, Sealer};
+use k2_core::person_wallet::{self as pw, decide, Item};
 use k2_core::terminal::{AlacEvent, DaemonPtyConfig, DaemonPtySession};
-use k2_vault::{Actor, Delivery, Kind, Namespace, PutMode, PutRequest, Requester, Scope, SecretBytes, SecretStore, Selector, Use};
 use serde::Serialize;
 
 use crate::llm_accounts_runtime as rt;
@@ -44,55 +43,12 @@ pub fn person_key(principal_id: &str) -> String {
 
 // ── The vault's person scope ────────────────────────────────────────
 
-/// The real [`Sealer`]: `system` namespace, scope `person:<principal>`,
-/// name `wallet-<item>`, delivery `none` (nothing is ever delivered from
-/// it; only the daemon resolves it with `Use::System`).
-pub struct VaultSealer;
-
-const SUBSYSTEM: &str = "person-wallet";
-
-fn sel(principal_id: &str, item_id: &str) -> Selector {
-    Selector::system(Scope::person(principal_id), pw::secret_name(item_id))
-}
-
-impl Sealer for VaultSealer {
-    fn seal(&self, principal_id: &str, item_id: &str, kind_: SealKind, bytes: &[u8]) -> Result<(), String> {
-        let vault = crate::vault::get().map_err(|e| format!("vault: {}", e.code))?;
-        let k = match kind_ {
-            SealKind::LoginSlot => Kind::LoginSlot,
-            SealKind::ApiKey => Kind::ApiKey,
-        };
-        let mut r = PutRequest::new(Namespace::System, Scope::person(principal_id), pw::secret_name(item_id), k);
-        r.default_delivery = Some(Delivery::None);
-        r.delivery_ceiling = Some(Delivery::None);
-        r.origin = format!("system:{SUBSYSTEM}");
-        r.description = "A person's wallet item (App user); daemon-only.".into();
-        r.mode = PutMode::Upsert;
-        r.idempotent = true;
-        vault
-            .put(r, SecretBytes::from_slice(bytes), &Actor::System(SUBSYSTEM.into()))
-            .map(|_| ())
-            .map_err(|e| format!("vault: {}", e.code))
-    }
-
-    fn unseal(&self, principal_id: &str, item_id: &str) -> Result<Option<Vec<u8>>, String> {
-        let vault = crate::vault::get().map_err(|e| format!("vault: {}", e.code))?;
-        match vault.resolve(&sel(principal_id, item_id), Use::System, &Requester::System(SUBSYSTEM.into())) {
-            Ok(r) => Ok(Some(r.value.expose().to_vec())),
-            Err(e) if e.status == 404 || e.code == "secret_not_active" => Ok(None),
-            Err(e) => Err(format!("vault: {}", e.code)),
-        }
-    }
-
-    fn destroy(&self, principal_id: &str, item_id: &str) -> Result<(), String> {
-        let vault = crate::vault::get().map_err(|e| format!("vault: {}", e.code))?;
-        match vault.destroy(&sel(principal_id, item_id), &Actor::System(SUBSYSTEM.into())) {
-            Ok(()) => Ok(()),
-            Err(e) if e.status == 404 => Ok(()),
-            Err(e) => Err(format!("vault: {}", e.code)),
-        }
-    }
-}
+/// The real [`Sealer`]: the daemon's one vault sealer
+/// ([`crate::vault::sealer`]); a person's item lives in the `system`
+/// namespace, scope `person:<principal>`, name `wallet-<item>`, delivery
+/// `none` (nothing is ever delivered from it; only the daemon resolves it
+/// with `Use::System`).
+pub use crate::vault::sealer::VaultSealer;
 
 fn with_conn<T>(f: impl FnOnce(&rusqlite::Connection) -> T) -> T {
     let db = k2_core::db::shared();

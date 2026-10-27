@@ -21,6 +21,7 @@ pub mod local_auth;
 pub mod mainrefs;
 pub mod publish_env;
 pub mod refstore;
+pub mod sealer;
 pub mod server_refs;
 pub mod spawn;
 #[cfg(unix)]

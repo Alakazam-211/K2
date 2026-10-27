@@ -247,11 +247,12 @@ pub fn slice_minor_track(sections: &[VersionSection], current: &str) -> String {
 // State file I/O (~/.k2so/whats-new.state)
 // ─────────────────────────────────────────────────────────────────────
 
-/// Path to the single-line state file. Lives next to other K2SO state
-/// in `~/.k2so/`. Absent file = "user has never dismissed the popup."
+/// Path to the single-line state file: `~/.k2/whats-new.state`. Absent
+/// file = "user has never dismissed the popup." Resolved through
+/// [`crate::paths::k2_home`]: a GUI-started daemon on Windows has no
+/// `HOME`, and reading it directly gave a relative `.k2/…` path.
 pub fn state_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".k2").join("whats-new.state")
+    crate::paths::k2_home().join("whats-new.state")
 }
 
 /// Read the last-seen version from the state file. Returns `None` if

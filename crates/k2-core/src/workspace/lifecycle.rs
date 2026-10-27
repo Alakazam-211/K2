@@ -219,7 +219,7 @@ pub fn create_workspace_dir(path: &str) -> Result<(), String> {
             let user = std::env::var("USER")
                 .or_else(|_| std::env::var("LOGNAME"))
                 .unwrap_or_else(|_| "the daemon's user".to_string());
-            let home = std::env::var("HOME").unwrap_or_default();
+            let home = crate::paths::home_dir().map(|h| h.display().to_string()).unwrap_or_default();
             let hint = if home.is_empty() {
                 String::new()
             } else {

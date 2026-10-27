@@ -209,6 +209,78 @@ fn deferred_marker_round_trips_and_clears() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// 0.46.5 (first-run review item 14): a typo'd path is refused and never
+/// created; a file isn't a folder either.
+#[test]
+fn a_missing_folder_is_refused_and_never_created() {
+    let d = temp("typo");
+    let typo = d.join("sitee").join("nested");
+    let err = defer_init(&typo, "main").expect_err("a missing folder is refused");
+    assert!(err.contains("There's no folder at") && err.contains("sitee"), "{err}");
+    assert!(!d.join("sitee").exists(), "nothing was created at the typo");
+    let file = d.join("a-file");
+    std::fs::write(&file, "x").expect("write file");
+    let err = defer_init(&file, "main").expect_err("a file is refused");
+    assert!(err.contains("isn't a folder"), "{err}");
+    assert!(!marker_path(&file).exists());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// 0.46.5 (first-run review item 9): a marker written while the watch
+/// loop's scan finds none is not lost. The old flag was set back to
+/// "none" after that write, so the loop skipped the marker.
+#[test]
+fn a_marker_written_during_an_empty_scan_is_not_lost() {
+    let f = PendingFlag::new();
+    let seen = f.begin_scan().expect("pending at start (markers from before this run)");
+    f.found_none(seen);
+    assert_eq!(f.begin_scan(), None, "an empty scan clears it");
+    // The race: the scan reads, a defer lands, the scan finds nothing.
+    f.mark();
+    let seen = f.begin_scan().expect("a marker was written");
+    f.mark(); // defer_init during the scan
+    f.found_none(seen); // that scan saw no marker
+    assert!(f.begin_scan().is_some(), "the marker written during the scan is looked for again");
+    let seen = f.begin_scan().expect("pending");
+    f.found_none(seen);
+    assert_eq!(f.begin_scan(), None);
+    // An older scan finishing late never moves `clean` backwards.
+    f.mark();
+    let old = f.begin_scan().expect("pending");
+    f.mark();
+    let new = f.begin_scan().expect("pending");
+    f.found_none(new);
+    f.found_none(old);
+    assert_eq!(f.begin_scan(), None);
+}
+
+/// 0.46.5 (first-run review item 12): a spawn that finishes a folder's
+/// waiting git steps tells the listener (the daemon emits
+/// `ProjectsChanged`), like the watch loop and a recheck do.
+#[cfg(unix)]
+#[test]
+fn a_spawn_that_finishes_the_waiting_steps_tells_the_listener() {
+    static SEEN: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    fn listener(p: &Path) {
+        SEEN.lock().unwrap_or_else(|e| e.into_inner()).push(p.to_path_buf());
+    }
+    set_done_listener(listener);
+    assert!(crate::git_safe::availability().is_ready(), "this test needs git on the test machine");
+    let d = temp("spawn-done");
+    // A repo already (no init or identity write on the test machine).
+    std::fs::create_dir_all(d.join(".git")).expect("mkdir .git");
+    defer_init(&d, "main").expect("defer");
+    assert_eq!(before_spawn(Some(&d)), None, "git runs: no shim");
+    assert_eq!(read_deferred(&d), None, "the steps ran");
+    let seen = SEEN.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert_eq!(seen.iter().filter(|p| **p == d).count(), 1, "told once: {seen:?}");
+    // Nothing waiting: nothing to tell.
+    assert_eq!(before_spawn(Some(&d)), None);
+    let seen = SEEN.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert_eq!(seen.iter().filter(|p| **p == d).count(), 1, "not told again: {seen:?}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn run_deferred_without_a_marker_does_nothing() {
     let d = temp("nomarker");

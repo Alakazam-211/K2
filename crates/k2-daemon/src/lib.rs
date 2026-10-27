@@ -477,6 +477,8 @@ pub mod test_harness {
         crate::thread_activity::spawn();
         crate::overlay_routes::spawn_card_expiry();
         crate::overlay_ws::install_move_listener();
+        // A spawn that finishes waiting git steps emits ProjectsChanged.
+        crate::git_tools_routes::install_listener();
         crate::read_routes::boot();
 
         // The dispatcher 503s every real route until boot-status is

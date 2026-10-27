@@ -24,6 +24,11 @@
 //!    other run the waiting steps (identity seed, `git init` on the chosen
 //!    branch, the first commit).
 //!
+//! 0.46.5 (first-run review leftovers): a typo'd path is refused and never
+//! created (14); an agent's passport reads the state and rechecks, and its
+//! install is a teaching owner_only (13); a spawn that finishes the waiting
+//! steps emits `ProjectsChanged` (12).
+//!
 //! Temp HOME; the agent shim stands in for the real CLI.
 
 #![cfg(unix)]
@@ -35,6 +40,9 @@ use std::time::{Duration, Instant};
 
 use k2_core::git_safe;
 use k2_core::git_tools;
+use k2_core::session::SessionId;
+use k2_daemon::session_events::SessionEvent;
+use k2_daemon::session_token::{self, HookPrincipal};
 use k2_daemon::spawn::{spawn_agent_session_v2_blocking, SpawnWorkspaceSessionRequest};
 use k2_daemon::{test_harness, v2_session_map};
 
@@ -141,6 +149,19 @@ fn spawn_in(path: &Path, shim: &Path, tag: &str) -> String {
     pid
 }
 
+/// `ProjectsChanged` events waiting on `rx` (drains it).
+fn projects_changed(rx: &mut tokio::sync::broadcast::Receiver<SessionEvent>) -> usize {
+    use tokio::sync::broadcast::error::TryRecvError;
+    let mut n = 0;
+    loop {
+        match rx.try_recv() {
+            Ok(SessionEvent::ProjectsChanged {}) => n += 1,
+            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+            Err(TryRecvError::Empty | TryRecvError::Closed) => return n,
+        }
+    }
+}
+
 fn stop(key: &str) {
     if let Some(s) = v2_session_map::unregister(key) {
         s.kill();
@@ -230,6 +251,46 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     assert_eq!(st.body["waiting"][0]["lastError"], serde_json::Value::Null, "not tried yet: {}", st.raw);
     assert!(!shim_ran.exists(), "K2 ran Apple's git shim (that opens the install dialog)");
     assert!(!home.join(".gitconfig").exists(), "no identity write while git is missing");
+    // 2b. A typo'd path is refused, never created (review item 14).
+    let typo = home.join("site-aa").join("nested");
+    let r = init_git_and_open(port, &typo, "main");
+    assert_eq!(r.status, 400, "{}", r.raw);
+    assert!(r.raw.contains("There's no folder at"), "{}", r.raw);
+    assert!(!home.join("site-aa").exists(), "the typo'd folder was created");
+
+    // 2c. An agent's passport (review item 13): reads the state, may
+    // recheck; install is the owner's (a teaching owner_only).
+    let ws_a_id = project_id_for(&ws_a);
+    let passport = session_token::mint_session_token(
+        &SessionId::new(),
+        "pane-git-tools",
+        HookPrincipal { workspace_uuid: ws_a_id, agent_address: "git-tools-agent".into() },
+        session_token::CredMode::ApiKey,
+        session_token::Provider::Anthropic,
+    );
+    let st = http(port, "GET", &format!("/cli/git-tools?token={passport}"), None);
+    assert_eq!(st.status, 200, "an agent reads the state: {}", st.raw);
+    assert_eq!(st.body["state"], "not_installed", "{}", st.raw);
+    let tx = http(port, "GET", &format!("/cli/git-tools?token={passport}&format=text"), None);
+    assert_eq!(tx.status, 200, "{}", tx.raw);
+    let r = http(port, "POST", &format!("/cli/git-tools/recheck?token={passport}"), Some("{}"));
+    assert_eq!(r.status, 200, "an agent may recheck: {}", r.raw);
+    assert_eq!(r.body["finished"], serde_json::json!([]), "git still missing: {}", r.raw);
+    assert_eq!(http(port, "GET", &format!("/cli/git-tools/recheck?token={passport}"), None).status, 405, "POST only");
+    let r = http(port, "POST", &format!("/cli/git-tools/install?token={passport}"), Some("{}"));
+    assert_eq!(r.status, 403, "{}", r.raw);
+    assert_eq!(r.body["error"], "owner_only", "{}", r.raw);
+    assert!(r.body["hint"].as_str().is_some_and(|h| h.contains("owner")), "{}", r.raw);
+    if mac {
+        assert!(!install_log.exists(), "an agent's passport ran xcode-select --install");
+    }
+    let forged = format!("{passport}x");
+    assert_eq!(http(port, "GET", &format!("/cli/git-tools?token={forged}"), None).status, 403, "a bad passport");
+    assert_eq!(
+        http(port, "POST", &format!("/cli/git-tools/install?token={forged}"), Some("{}")).body["error"],
+        "invalid or missing token",
+        "a bad passport is not told it is an agent"
+    );
 
     // 3. Install.
     assert_eq!(http(port, "GET", &format!("/cli/git-tools/install?token={OWNER}"), None).status, 405, "POST only");
@@ -257,7 +318,9 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     }
 
     // 4. A spawn while git is missing: the git-wait shim first on PATH.
+    let mut events = k2_daemon::session_events::subscribe();
     let key_a = spawn_in(&ws_a, &claude, "a");
+    assert_eq!(projects_changed(&mut events), 0, "a spawn that finished nothing tells no one");
     let path_file = ws_a.join(".k2-test-path");
     wait_for("the agent's PATH", 15, || path_file.exists() && std::fs::metadata(&path_file).is_ok_and(|m| m.len() > 0));
     let child_path = std::fs::read_to_string(&path_file).expect("read PATH");
@@ -275,8 +338,11 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     assert!(probe.is_ready(), "{probe:?}");
     // 5a. The next spawn in workspace A runs its waiting steps first.
     std::fs::remove_file(&path_file).expect("rm PATH file");
+    let _ = projects_changed(&mut events);
     let key_a = spawn_in(&ws_a, &claude, "a2");
     assert!(ws_a.join(".git").is_dir(), "spawn ran the deferred git init");
+    // Review item 12: clients hear it at once, not on their next poll.
+    assert!(projects_changed(&mut events) >= 1, "the spawn that finished the git steps emits ProjectsChanged");
     assert_eq!(git_out(&git, &ws_a, &["rev-parse", "--abbrev-ref", "HEAD"]), "trunk");
     assert_eq!(git_out(&git, &ws_a, &["log", "--format=%s"]), "Initial commit");
     assert_eq!(git_tools::read_deferred(&ws_a), None, "marker gone");

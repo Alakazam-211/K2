@@ -3440,20 +3440,40 @@ async fn handle_one_request(
                 .await;
         }
         // 0.46.4 first run without git (`git_tools_routes`). GET the state
-        // (any login: it only reads); POST install is OWNER-ONLY (it opens
-        // Apple's installer dialog on this machine); POST recheck looks for
-        // git again and does the waiting git steps (any login). Probes and
-        // git run on a blocking thread.
+        // (any login or agent passport: it only reads); POST install is
+        // OWNER-ONLY (it opens Apple's installer dialog on this machine);
+        // POST recheck looks for git again and does the waiting git steps
+        // (any login or agent passport). Probes and git run on a blocking
+        // thread.
         p @ ("/cli/git-tools" | "/cli/git-tools/install" | "/cli/git-tools/recheck") => {
             let p = p.to_string();
             if p != "/cli/git-tools" && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
             if p == "/cli/git-tools/install" {
+                // 0.46.5 (first-run review item 13): an agent's passport
+                // gets a teaching owner_only (exit 3 in the CLI), not the
+                // bare "invalid or missing token".
+                if !super::http::token_is_owner(&query, state.token.as_str())
+                    && crate::session_token::validate_hook(presented_bearer(&query, bearer_token.as_deref())).is_some()
+                {
+                    let _ = stream.read(&mut buf).await;
+                    super::http::send_response(
+                        &mut *stream,
+                        "403 Forbidden",
+                        "application/json",
+                        &crate::git_tools_routes::agent_install_refusal(),
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
                 if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
                     return DispatchOutcome::Done;
                 }
-            } else if !super::http::token_ok(&query, state.token.as_str()) {
+            } else if !token_or_scoped_hook_auth(&p, &query, bearer_token.as_deref(), state.token.as_str()).0 {
+                // Status and recheck: any login, or an agent's passport
+                // (0.46.5, first-run review item 13: agents got 403). They
+                // read, or run only git steps that already wait.
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,

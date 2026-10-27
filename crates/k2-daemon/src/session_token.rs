@@ -607,6 +607,12 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/git/stage",
         "/cli/git/stage-all",
         "/cli/git/unstage",
+        // First run without git (0.46.5, first-run review item 13): an
+        // agent reads the state and runs recheck (only git steps that
+        // already wait). `/cli/git-tools/install` is NOT here: it opens
+        // Apple's installer on the owner's screen (owner token only).
+        "/cli/git-tools",
+        "/cli/git-tools/recheck",
         // C2: workspace-addressed live terminal peek (`k2 read <ws>`).
         // Peer gate runs in the handler when principal is scoped.
         "/cli/terminal/read",
@@ -1897,6 +1903,16 @@ mod tests {
             assert!(!is_agent_verb_when("/cli/settings/update", on));
             assert!(is_agent_verb_when("/cli/thread/answer", on));
         }
+    }
+
+    /// 0.46.5 (first-run review item 13): an agent reads `k2 git-tools`
+    /// and may recheck; installing (Apple's dialog) stays the owner's.
+    #[test]
+    fn git_tools_status_and_recheck_are_agent_verbs_install_is_not() {
+        assert!(is_agent_verb("/cli/git-tools"));
+        assert!(is_agent_verb("/cli/git-tools/recheck"));
+        assert!(!is_agent_verb("/cli/git-tools/install"));
+        assert!(!is_agent_verb("/cli/git-tools/installx"));
     }
 
     #[test]

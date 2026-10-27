@@ -19678,6 +19678,14 @@ _git_tools_render() {
                 err="HTTP $code"
             fi
             echo "k2 git-tools: error: $err" >&2
+            # 0.46.5: an agent's `install` is the owner's step: refused
+            # (exit 3) with what to do instead, not a bare exit 1.
+            if [ "$code" = "403" ] && [ "$err" = "owner_only" ]; then
+                if [[ "$body" =~ \"hint\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
+                    echo "  ${BASH_REMATCH[1]}" >&2
+                fi
+                exit 3
+            fi
             ;;
     esac
     exit 1

@@ -319,15 +319,29 @@ const RECHECK_EVERY: Duration = Duration::from_secs(10);
 
 static CACHE: Mutex<Option<(GitProbe, Instant)>> = Mutex::new(None);
 
-/// Is git usable here? Cached: a working git stays cached; a missing one
-/// is probed again after [`RECHECK_EVERY`] (or at once by [`refresh`]).
+/// Is git usable here? Cached: a working git stays cached while its
+/// program is still there; a missing one is probed again after
+/// [`RECHECK_EVERY`] (or at once by [`refresh`]).
 pub fn availability() -> GitProbe {
     if let Some((p, at)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        if p.is_ready() || at.elapsed() < RECHECK_EVERY {
+        if cache_still_good(p, at.elapsed()) {
             return p.clone();
         }
     }
     refresh()
+}
+
+/// Pure: may a cached answer stand? A ready git only while its program is
+/// still an executable file (0.46.5, first-run review item 10: a cached
+/// Homebrew git that was uninstalled used to fail every K2 git call with
+/// "not found" until the daemon restarted; now the next call probes again
+/// and finds `/usr/bin/git` or whatever else runs). Anything else for
+/// [`RECHECK_EVERY`].
+pub fn cache_still_good(p: &GitProbe, age: Duration) -> bool {
+    match p {
+        GitProbe::Ready { program, .. } => is_exec_file(program),
+        _ => age < RECHECK_EVERY,
+    }
 }
 
 /// Probe again now and cache the answer.
@@ -569,6 +583,35 @@ mod tests {
         assert_eq!(dirs, vec![PathBuf::from("/usr/bin"), PathBuf::from("/home/me/.k2/bin")]);
         assert!(is_git_wait_dir(Path::new("/Users/x/.k2/bin/git-wait")));
         assert!(!is_git_wait_dir(Path::new("/Users/x/.k2/bin")));
+    }
+
+    /// 0.46.5 (first-run review item 10): a cached ready git stands only
+    /// while its program is there. Uninstall it (Homebrew's, say) and the
+    /// cache gives way, so the next call probes again instead of failing
+    /// "not found" until the daemon restarts; then the probe finds the git
+    /// left on PATH. A not-ready answer still waits [`RECHECK_EVERY`].
+    #[cfg(unix)]
+    #[test]
+    fn a_cached_git_that_was_uninstalled_is_probed_again() {
+        let d = temp("probe-gone");
+        let brew = d.join("brew-bin");
+        let usr = d.join("usr-bin");
+        stub_git(&brew, &d.join("brew-ran"), true);
+        stub_git(&usr, &d.join("usr-ran"), true);
+        let first = probe_in(&[brew.clone(), usr.clone()], None);
+        assert_eq!(first, GitProbe::Ready { program: brew.join("git"), version: "git version 9.9.9-stub".into() });
+        let long_ago = Duration::from_secs(24 * 60 * 60);
+        assert!(cache_still_good(&first, long_ago), "a ready git that is still there stays cached");
+        std::fs::remove_file(brew.join("git")).expect("uninstall the cached git");
+        assert!(!cache_still_good(&first, Duration::ZERO), "the cached git is gone: probe again at once");
+        assert_eq!(
+            probe_in(&[brew, usr.clone()], None),
+            GitProbe::Ready { program: usr.join("git"), version: "git version 9.9.9-stub".into() },
+            "the probe falls back to the git that is left"
+        );
+        assert!(cache_still_good(&GitProbe::Missing, Duration::from_secs(1)));
+        assert!(!cache_still_good(&GitProbe::Missing, RECHECK_EVERY));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[cfg(unix)]

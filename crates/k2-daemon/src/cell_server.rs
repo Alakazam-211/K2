@@ -1028,6 +1028,19 @@ mod unix_impl {
                 let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
                 from_cli(crate::root_helper_routes::handle(p, caller, body, params))
             }
+            // First run without git (0.46.5, first-run review item 13): the
+            // state and recheck, as on TCP. Install never passes require_hook
+            // on this socket (owner token only, over TCP).
+            "/cli/git-tools" | "/cli/git-tools/recheck" => {
+                let as_text = params.get("format").is_some_and(|f| f == "text");
+                if path == "/cli/git-tools/recheck" {
+                    from_cli(crate::git_tools_routes::handle_recheck(is_post, as_text))
+                } else if is_post {
+                    from_cli(crate::cli_response::CliResponse::method_not_allowed())
+                } else {
+                    from_cli(crate::git_tools_routes::handle_status(as_text))
+                }
+            }
             // App (skin) roster reads. On TCP these GETs admit the owner or
             // any validated passport (`owner_or_scoped_hook_auth`); here the
             // passport is already validated for this path. They live only in

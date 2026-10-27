@@ -11,7 +11,8 @@
 #   a python3 first on PATH that exits 1 with the xcrun note and leaves a
 #   mark; the mark must never appear.
 # - A refusal (409 text) prints the daemon's lines on stderr, exit 1; a
-#   router refusal (JSON 403) prints one plain line; no daemon → one line.
+#   router refusal (JSON 403) prints one plain line; an agent's install
+#   (403 owner_only) adds the hint and exits 3; no daemon → one line.
 # Nothing is installed: the daemon is a stub (python3 runs only the stub
 # server, from its absolute path, outside the CLI's PATH).
 
@@ -92,6 +93,8 @@ class H(BaseHTTPRequestHandler):
         mode = open(MODE_FILE).read().strip()
         if q.get("token") != ["t.k/+= z"]:
             return self._send(403, '{"error":"invalid or missing token"}', "application/json")
+        if mode == "agent" and u.path == "/cli/git-tools/install":
+            return self._send(403, json.dumps({"error": "owner_only", "hint": "Installing git is your owner's step. Ask them to click Install in Settings."}), "application/json")
         if mode == "linux" and u.path == "/cli/git-tools/install":
             if text:
                 return self._send(409, "k2 git-tools: K2 installs git only on macOS\n  sudo apt install git\n", "text/plain")
@@ -186,6 +189,17 @@ set -e
 err="$(cat "$WORK/err")"
 assert_eq "bad token: exit 1" "$rc" "1"
 assert_eq "bad token: one plain line" "$err" "k2 git-tools: error: invalid or missing token"
+
+# 0.46.5: an agent's passport on install is the owner's step: refused,
+# exit 3, with the daemon's hint (first-run review item 13).
+echo agent >"$MODE_FILE"
+run git-tools install
+assert_eq "agent install: exit 3 (refused)" "$rc" "3"
+assert_eq "agent install: the refusal and the hint" "$err" "$(printf "k2 git-tools: error: owner_only\n  Installing git is your owner's step. Ask them to click Install in Settings.")"
+assert_eq "agent install: nothing on stdout" "$out" ""
+run git-tools
+assert_eq "agent status: exit 0" "$rc" "0"
+echo linux >"$MODE_FILE"
 
 echo "== bad usage =="
 run git-tools fix

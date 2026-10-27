@@ -250,6 +250,30 @@ async fn case3_other_cells_token_on_this_socket_is_403() {
     assert_eq!(status, 403, "cell B's token must NOT be accepted on cell A's socket");
 }
 
+/// 0.46.5 (first-run git review item 13): `k2 git-tools` status and
+/// recheck are served on the cell socket for an agent; install (Apple's
+/// installer on the owner's screen) is refused before any handler.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn git_tools_status_and_recheck_are_served_install_is_refused() {
+    let _g = lock();
+    let _home = set_short_home();
+    let (_sid, token, sock) = mint_bind_serve("pane-gt");
+    settle().await;
+    let (status, body) = uds(&sock, &get("/cli/git-tools", Some(&token))).await;
+    assert_eq!(status, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("status JSON: {e}: {body}"));
+    assert!(v["state"].is_string(), "{body}");
+    let (status, body) = uds(&sock, &get("/cli/git-tools?format=text", Some(&token))).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body.starts_with("git        : "), "{body}");
+    let (status, body) = uds(&sock, &post_json("/cli/git-tools/recheck", &token, "{}")).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = uds(&sock, &get("/cli/git-tools/recheck", Some(&token))).await;
+    assert_eq!(status, 405, "recheck is POST only: {body}");
+    let (status, body) = uds(&sock, &post_json("/cli/git-tools/install", &token, "{}")).await;
+    assert_eq!(status, 403, "install is never an agent verb: {body}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn case4_users_set_role_with_valid_bearer_is_403() {
     let _g = lock();

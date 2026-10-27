@@ -971,6 +971,10 @@ pub fn projects_init_git_and_open_ex(
     // Trimmed and checked up front (0.46.4): a name git refuses would
     // otherwise sit deferred forever on a machine without git.
     let branch_name = crate::git_tools::valid_branch(branch.filter(|b| !b.trim().is_empty()).unwrap_or("main"))?;
+    // A typo'd path is refused, with or without git (0.46.5, first-run
+    // review item 14): the deferred path used to create the folder and
+    // register the workspace at the typo.
+    crate::git_tools::require_folder(Path::new(path))?;
 
     // git doesn't run yet (a Mac without Apple's Command Line Tools, a box
     // with no git): add the workspace anyway and leave the identity seed,
@@ -1731,6 +1735,23 @@ mod tests {
         assert!(!err.contains("Failed to add workspace"));
         assert_eq!(count_projects_at(&path), 1, "still one projects row");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0.46.5 (first-run review item 14): "Init git" on a typo'd path is
+    /// refused before anything happens: no folder, no marker, no row.
+    #[test]
+    fn init_git_and_open_refuses_a_missing_folder_and_creates_nothing() {
+        let _home = crate::test_env::TempHome::new();
+        let _scoped_db = db::scoped_for_test();
+        let parent = std::env::temp_dir().join(format!("k2-proj-typo-{}-{}", std::process::id(), Uuid::new_v4()));
+        std::fs::create_dir_all(&parent).expect("mkdir parent");
+        let typo = parent.join("sitee");
+        let path = typo.to_string_lossy().into_owned();
+        let err = projects_init_git_and_open_ex(&path, Some("main"), false, false, false).unwrap_err();
+        assert!(err.contains("There's no folder at"), "{err}");
+        assert!(!typo.exists(), "the typo'd folder was created");
+        assert_eq!(count_projects_at(&path), 0, "no workspace row at the typo");
+        let _ = std::fs::remove_dir_all(&parent);
     }
 
     // ── iconRev / avatarRev ─────────────────────────────────────────────

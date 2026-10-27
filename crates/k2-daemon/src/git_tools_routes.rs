@@ -38,10 +38,26 @@ fn text(status: &'static str, body: String) -> CliResponse {
 fn run_waiting(force: bool) -> Vec<String> {
     let done = git_tools::run_all_deferred(force);
     if !done.is_empty() {
-        let _ = crate::session_events::emit(crate::session_events::SessionEvent::ProjectsChanged {});
-        crate::fs_live::resync_watches();
+        tell_clients();
     }
     done
+}
+
+fn tell_clients() {
+    let _ = crate::session_events::emit(crate::session_events::SessionEvent::ProjectsChanged {});
+    crate::fs_live::resync_watches();
+}
+
+fn spawn_finished_git_steps(_folder: &std::path::Path) {
+    tell_clients();
+}
+
+/// Register k2-core's listener for a PTY spawn that finished a folder's
+/// waiting git steps (0.46.5, first-run review item 12): clients hear
+/// `ProjectsChanged` at once, as after the loop or a recheck. Idempotent;
+/// called by [`spawn_loop`] and the test harness.
+pub fn install_listener() {
+    git_tools::set_done_listener(spawn_finished_git_steps);
 }
 
 fn respond(as_text: bool, started: Option<InstallStart>, finished: Option<Vec<String>>) -> CliResponse {
@@ -72,6 +88,17 @@ fn refused(as_text: bool, code: &str, message: String, how_to: Vec<String>) -> C
         content_type: "application/json",
         body: serde_json::json!({ "error": message, "code": code, "howTo": how_to }).to_string(),
     }
+}
+
+/// The 403 body an agent's passport gets on `POST /cli/git-tools/install`
+/// (0.46.5, first-run review item 13): the owner's step, and what the agent
+/// can do instead. `k2 git-tools` prints the hint and exits 3.
+pub fn agent_install_refusal() -> String {
+    serde_json::json!({
+        "error": "owner_only",
+        "hint": "Installing git is your owner's step (on a Mac it opens Apple's installer on this computer's screen). Ask them to click Install in Settings → General → Git, or run `k2 git-tools install` in their own terminal. `k2 git-tools` shows the state; the waiting git steps finish by themselves once git runs.",
+    })
+    .to_string()
 }
 
 /// `GET /cli/git-tools`.
@@ -133,6 +160,7 @@ pub fn loop_should_probe(missing_for: Duration, since_last_probe: Duration, inst
 /// seconds (every 10 minutes after an hour, unless an install was
 /// started); once it does, do every workspace's waiting git steps.
 pub fn spawn_loop() {
+    install_listener();
     let _ = std::thread::Builder::new().name("git-tools".into()).spawn(|| {
         let mut missing_since: Option<Instant> = None;
         let mut last_probe = Instant::now();

@@ -29,8 +29,8 @@
 //!   instead of Apple's dialog and xcrun error.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -77,8 +77,44 @@ pub struct Deferred {
     pub deferred_at: i64,
 }
 
-/// Some workspace may have a marker; cleared when a scan finds none.
-static MAYBE_PENDING: AtomicBool = AtomicBool::new(true);
+/// "Some workspace may have a marker", without a lost update (0.46.5,
+/// first-run review item 9). It used to be one flag: a [`defer_init`] that
+/// landed while the watch loop's scan was finding no markers was then
+/// overwritten with "none", and the loop skipped that marker until a spawn
+/// or a recheck found it. Now [`defer_init`] bumps `deferred`; a scan reads
+/// it BEFORE looking and records that number in `clean` only when it found
+/// nothing. A marker written during the scan bumps `deferred` past what the
+/// scan read, so the next tick looks again.
+pub(crate) struct PendingFlag {
+    deferred: AtomicU64,
+    clean: AtomicU64,
+}
+
+impl PendingFlag {
+    /// Starts "may be pending" (markers from before this daemon run).
+    pub(crate) const fn new() -> Self {
+        Self { deferred: AtomicU64::new(1), clean: AtomicU64::new(0) }
+    }
+
+    /// A marker was written.
+    pub(crate) fn mark(&self) {
+        self.deferred.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Before a scan: `None` when the last scan found nothing and no marker
+    /// was written since; else the number to hand [`Self::found_none`].
+    pub(crate) fn begin_scan(&self) -> Option<u64> {
+        let seen = self.deferred.load(Ordering::SeqCst);
+        (self.clean.load(Ordering::SeqCst) != seen).then_some(seen)
+    }
+
+    /// The scan that began at `seen` found no marker.
+    pub(crate) fn found_none(&self, seen: u64) {
+        self.clean.fetch_max(seen, Ordering::SeqCst);
+    }
+}
+
+static MAYBE_PENDING: PendingFlag = PendingFlag::new();
 
 pub fn marker_path(root: &Path) -> PathBuf {
     root.join(".k2").join("git-deferred.json")
@@ -92,8 +128,13 @@ pub fn read_deferred(root: &Path) -> Option<Deferred> {
 /// Leave the marker: `git init` on `branch` (and the identity seed) wait
 /// for git. A name git would refuse is refused now (it would otherwise
 /// wait forever).
+///
+/// `root` must be an existing folder: a typo'd path is refused, never
+/// created (0.46.5, first-run review item 14; with git, `git init` in a
+/// missing folder fails the same way).
 pub fn defer_init(root: &Path, branch: &str) -> Result<(), String> {
     let branch = valid_branch(branch)?;
+    require_folder(root)?;
     let path = marker_path(root);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
@@ -104,8 +145,19 @@ pub fn defer_init(root: &Path, branch: &str) -> Result<(), String> {
     };
     let text = serde_json::to_string_pretty(&d).map_err(|e| e.to_string())?;
     crate::fs_atomic::atomic_write_str(&path, &text).map_err(|e| format!("write {}: {e}", path.display()))?;
-    MAYBE_PENDING.store(true, Ordering::Relaxed);
+    MAYBE_PENDING.mark();
     Ok(())
+}
+
+/// `root` is an existing folder, or the error Add workspace shows.
+pub fn require_folder(root: &Path) -> Result<(), String> {
+    if root.is_dir() {
+        return Ok(());
+    }
+    if root.exists() {
+        return Err(format!("{} isn't a folder", root.display()));
+    }
+    Err(format!("There's no folder at {} (check the path; K2 doesn't create it)", root.display()))
 }
 
 pub fn clear_deferred(root: &Path) {
@@ -254,12 +306,15 @@ pub fn waiting_workspaces() -> Vec<WaitingWorkspace> {
 /// Run every waiting workspace's steps if git runs now. Returns the
 /// folders that changed (Done or AlreadyARepo).
 pub fn run_all_deferred(force: bool) -> Vec<String> {
-    if !force && !MAYBE_PENDING.load(Ordering::Relaxed) {
+    let seen = MAYBE_PENDING.begin_scan();
+    if !force && seen.is_none() {
         return Vec::new();
     }
     let waiting = waiting_workspaces();
     if waiting.is_empty() {
-        MAYBE_PENDING.store(false, Ordering::Relaxed);
+        if let Some(seen) = seen {
+            MAYBE_PENDING.found_none(seen);
+        }
         return Vec::new();
     }
     let mut changed = Vec::new();
@@ -341,9 +396,19 @@ pub fn stage_wait_shim_at(home: &Path, body: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+static DONE_LISTENER: OnceLock<fn(&Path)> = OnceLock::new();
+
+/// Register what to call when a spawn finished a folder's waiting git
+/// steps (the daemon: `ProjectsChanged` + watch resync). First call wins.
+pub fn set_done_listener(f: fn(&Path)) {
+    let _ = DONE_LISTENER.set(f);
+}
+
 /// Called by every PTY spawn. When git runs: do any waiting steps for
-/// `cwd` and return `None`. When it doesn't: return the shim folder to put
-/// first on the child's PATH.
+/// `cwd` and return `None`, telling the listener when they finished, as
+/// the watch loop and a recheck do (0.46.5, first-run review item 12:
+/// clients used to learn only on their next poll). When it doesn't: return
+/// the shim folder to put first on the child's PATH.
 pub fn before_spawn(cwd: Option<&Path>) -> Option<PathBuf> {
     if cfg!(windows) {
         return None;
@@ -351,7 +416,11 @@ pub fn before_spawn(cwd: Option<&Path>) -> Option<PathBuf> {
     if git_safe::availability().is_ready() {
         if let Some(cwd) = cwd {
             if marker_path(cwd).exists() {
-                let _ = run_deferred(cwd, true);
+                if let Ok(DeferredRun::Done { .. } | DeferredRun::AlreadyARepo) = run_deferred(cwd, true) {
+                    if let Some(f) = DONE_LISTENER.get() {
+                        f(cwd);
+                    }
+                }
             }
         }
         return None;

@@ -183,10 +183,11 @@ function ServersPanel({ node }: { node: ComputeNode }): React.JSX.Element {
   const [adding, setAdding] = useState(false)
 
   const load = useCallback(
-    async (refresh = false) => {
+    async (refresh = false, keepError = false) => {
       try {
         setData(await fetchNodeServers(node.name, refresh))
-        setError(null)
+        // The re-read after a refused change keeps the refusal on screen.
+        if (!keepError) setError(null)
       } catch (e) {
         setError(computeErrorMessage(e))
       }
@@ -210,7 +211,7 @@ function ServersPanel({ node }: { node: ComputeNode }): React.JSX.Element {
         setError(computeErrorMessage(e))
         return false
       } finally {
-        void load()
+        void load(false, true)
       }
     },
     [load],

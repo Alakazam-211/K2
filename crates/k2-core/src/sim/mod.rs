@@ -19,9 +19,14 @@
 
 pub mod android;
 pub mod api;
+pub mod encode;
+#[cfg(any(test, feature = "test-util"))]
+pub mod fake;
 pub mod hold;
 pub mod lane;
 pub mod limits;
+pub mod manager;
+pub mod store;
 pub mod stream;
 pub mod tree;
 
@@ -38,9 +43,26 @@ pub const BOOT_STATUS_KEY: &str = "mobile-sim-v1";
 pub const ISOLATION_NOTE: &str =
     "Separate, not sealed: the device runs as the same system user as this server's agents.";
 
+static BASE_OVERRIDE: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// The K2 home as sims see it: `~/.k2`, or a test's temp folder
+/// ([`set_base_for_tests`]) so no test ever writes the real `~/.k2`.
+pub fn base() -> PathBuf {
+    if let Some(p) = BASE_OVERRIDE.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        return p.clone();
+    }
+    crate::paths::k2_home()
+}
+
+/// Point [`base`] at a temp folder (tests only).
+#[cfg(any(test, feature = "test-util"))]
+pub fn set_base_for_tests(p: PathBuf) {
+    *BASE_OVERRIDE.write().unwrap_or_else(|e| e.into_inner()) = Some(p);
+}
+
 /// `~/.k2/sim`: SDKs, device data, licence records.
 pub fn sim_home() -> PathBuf {
-    crate::paths::k2_home().join("sim")
+    base().join("sim")
 }
 
 /// Where a workspace's device data lives for a lane.

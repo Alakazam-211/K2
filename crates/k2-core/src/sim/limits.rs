@@ -110,7 +110,7 @@ impl SimSettings {
 }
 
 pub fn settings_path() -> std::path::PathBuf {
-    crate::paths::k2_home().join(SETTINGS_FILE)
+    super::base().join(SETTINGS_FILE)
 }
 
 pub fn load_settings() -> SimSettings {

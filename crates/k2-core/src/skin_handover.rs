@@ -616,6 +616,11 @@ fn retie_conn(conn: &Connection, pid: &str, from: &str, to: &str) -> Result<(), 
         .map_err(|e| format!("handover re-tie: {e}"))?;
     conn.execute("UPDATE principal_agent_creators SET workspace_id = ?3 WHERE principal_id = ?1 AND workspace_id = ?2", params![pid, from, to])
         .map_err(|e| format!("handover re-tie: {e}"))?;
+    // A test guest A's agent made (0.46.4) is the maintaining agent's: its
+    // row follows the stamp, so B manages it (and A, no longer the App's,
+    // can't: `skin_routes::agent_test_guest_refused` wants stamp = row).
+    conn.execute("UPDATE app_test_guests SET workspace_id = ?3 WHERE principal_id = ?1 AND workspace_id = ?2", params![pid, from, to])
+        .map_err(|e| format!("handover re-tie (test guest): {e}"))?;
     Ok(())
 }
 

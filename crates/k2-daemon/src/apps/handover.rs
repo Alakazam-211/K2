@@ -354,6 +354,18 @@ pub(crate) fn request_route(who: &Who, body: &[u8], unpark: bool) -> R<J> {
     Ok(out)
 }
 
+/// One row in the App's hash-chained audit for a handover step before the
+/// commit (offered, card filed, accepted, declined, cancelled): with the
+/// commit's `handover` row and the Access Audit line, the whole trail of
+/// who started, accepted and approved it stays with the App.
+fn trail(app_id: &str, event: &str, by: &str, payload: J) {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    if let Err(e) = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, app_id, event, by, None, &payload) {
+        k2_core::log_debug!("WARN [apps/handover] audit {app_id} {event}: {e}");
+    }
+}
+
 fn hov_db<T>(f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> R<T> {
     let h = k2_core::db::shared();
     let conn = h.lock();
@@ -486,6 +498,7 @@ pub(crate) fn file_card(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief:
         Ok(r) => r,
         Err(answer) => return answer,
     };
+    trail(&app.app_id, "handover_requested", &actor(who), json!({ "handover": row.id, "to": to.id, "startedBy": started_by, "planHash": row.plan_hash }));
     match file_request(who, &row, app, &p) {
         Ok(out) => Ok(out),
         Err(e) => {
@@ -511,6 +524,7 @@ pub(crate) fn offer(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief: Opt
         Ok(r) => r,
         Err(answer) => return answer,
     };
+    trail(&app.app_id, "handover_offered", &actor(who), json!({ "handover": row.id, "to": to.id, "startedBy": started_by, "autoAccept": auto_accept }));
     let (a, b) = (ws_handle(&app.owner_workspace), ws_handle(&to.id));
     if auto_accept {
         hov_db(|c| hs::set_accepted(c, &row.id, &format!("hire:{b}"), deploy::now()))?;
@@ -603,6 +617,7 @@ fn accept_route(who: &Who, body: &[u8]) -> R<J> {
     }
     if row.state == hs::OFFERED {
         hov_db(|c| hs::set_accepted(c, &row.id, &actor(who), deploy::now()))?;
+        trail(&row.app_id, "handover_accepted", &actor(who), json!({ "handover": row.id, "to": row.to_workspace }));
     }
     let row = hov_db(|c| hs::get(c, &row.id))?.ok_or_else(|| no("db_error", 500, "the handover row vanished"))?;
     let opts: Options = serde_json::from_value(row.options.clone()).unwrap_or_default();
@@ -661,6 +676,7 @@ fn end(row: &Handover, to: &str, who: &Who, reason: Option<&str>) -> R<J> {
     }
     let why = reason.map(|r| format!(" ({})", r.chars().take(300).collect::<String>())).unwrap_or_default();
     let by = actor(who);
+    trail(&row.app_id, &format!("handover_{to}"), &by, json!({ "handover": row.id, "to": row.to_workspace, "reason": reason }));
     if !row.from_workspace.is_empty() {
         super::ownership::note(&row.from_workspace, &format!("Handover of {} {to}", row.app_id), &format!("{by} {to} the handover of {} to {}{why}. You still maintain it.", row.app_id, ws_handle(&row.to_workspace)));
     }
@@ -888,18 +904,20 @@ fn commit(id: &str, plan: &Plan, by: &str, raised: bool) -> R<()> {
             Some(_) => {}
         }
     }
-    // P12: the App keys' room ceilings name B.
+    // P12: the App keys' room ceilings name B, and a key A's agent minted
+    // itself answers to B's "Let this agent manage its Apps' users" from
+    // now on (0.46.4 `mintedByAgent`: its users/rooms scopes work only
+    // while that switch is on for the stamped workspace; left on A, B's
+    // App's key would follow A's switch).
     let mut key_rooms = serde_json::Map::new();
     for k in &plan.keys {
         let before: Option<String> = tx.query_row("SELECT app_key FROM api_keys WHERE id = ?1", rusqlite::params![k.id], |r| r.get(0)).map_err(db_err)?;
         let Some(before) = before else { continue };
-        let Ok(mut g) = serde_json::from_str::<J>(&before) else { continue };
-        if let Some(rooms) = g.get("rooms").and_then(J::as_array).map(|a| a.iter().filter_map(J::as_str).map(str::to_string).collect::<Vec<_>>()) {
-            if rooms.iter().any(|r| r == room_from) {
-                g["rooms"] = json!(k2_core::skin::handover::swap_room(&rooms, room_from, to));
-                tx.execute("UPDATE api_keys SET app_key = ?2 WHERE id = ?1", rusqlite::params![k.id, g.to_string()]).map_err(db_err)?;
-                key_rooms.insert(k.id.clone(), json!(before));
-            }
+        let Ok(g) = serde_json::from_str::<J>(&before) else { continue };
+        let g2 = rekey_grant_json(&g, room_from, to);
+        if g2 != g {
+            tx.execute("UPDATE api_keys SET app_key = ?2 WHERE id = ?1", rusqlite::params![k.id, g2.to_string()]).map_err(db_err)?;
+            key_rooms.insert(k.id.clone(), json!(before));
         }
     }
     // P5 (§4.6): the App's sole database moves to B; a shared one stays
@@ -991,6 +1009,25 @@ fn commit(id: &str, plan: &Plan, by: &str, raised: bool) -> R<()> {
         "apps",
     ));
     Ok(())
+}
+
+/// An App key's stored grant with workspace `from` → `to`: its room
+/// ceiling (`rooms`) and the agent that minted it (`mintedByAgent`). The
+/// same value when neither names `from`.
+pub(crate) fn rekey_grant_json(g: &J, from: &str, to: &str) -> J {
+    let mut g = g.clone();
+    if from.is_empty() {
+        return g;
+    }
+    if let Some(rooms) = g.get("rooms").and_then(J::as_array).map(|a| a.iter().filter_map(J::as_str).map(str::to_string).collect::<Vec<_>>()) {
+        if rooms.iter().any(|r| r == from) {
+            g["rooms"] = json!(k2_core::skin::handover::swap_room(&rooms, from, to));
+        }
+    }
+    if g.get("mintedByAgent").and_then(J::as_str) == Some(from) {
+        g["mintedByAgent"] = json!(to);
+    }
+    g
 }
 
 /// Run the steps after the commit point that haven't run yet (3–7),
@@ -1345,7 +1382,9 @@ fn put_dsn(journal: &J, to: &str, field: &str, dsn: &str) -> Result<(), String> 
 /// old keys are revoked (`done`); failed or rolled back → the App keeps
 /// its old instance and keys (`failed`, B is told).
 fn watch_rekey(id: String, app_id: String, dep: String, old_keys: Vec<String>) {
+    let app = app_id.clone();
     let spawn = std::thread::Builder::new().name("app-handover-rekey".into()).spawn(move || {
+        let app_id = app;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30 * 60);
         loop {
             let d = hov_db(|c| store::get_deployment(c, &dep)).ok().flatten();
@@ -1354,6 +1393,11 @@ fn watch_rekey(id: String, app_id: String, dep: String, old_keys: Vec<String>) {
                     let drain = std::env::var("K2_APPS_DRAIN_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(30u64);
                     std::thread::sleep(std::time::Duration::from_secs(drain + 2));
                     revoke_keys(&old_keys);
+                    // The old instance's link passes (minted for the old
+                    // room when the link couldn't re-bind in place) end too.
+                    if let Err(e) = super::gateway::revoke_other_passes(&app_id) {
+                        k2_core::log_debug!("WARN [apps/handover] {app_id}: revoke the old link passes: {e}");
+                    }
                     let _ = hov_db(|c| hs::set_rekey(c, &id, "done", deploy::now()));
                     return;
                 }
@@ -1515,19 +1559,18 @@ pub(crate) fn apply_undo(r: &reqs::AppRequest, by: &str) -> R<J> {
                 }
             }
         }
-        // App keys (the successors too): their room ceilings name A again.
+        // App keys (the successors too): their room ceilings name A again,
+        // and a key minted by A's agent answers to A's switch again.
         let keys: Vec<(String, Option<String>)> = {
             let mut st = tx.prepare("SELECT id, app_key FROM api_keys WHERE app_service_id = ?1 AND revoked_at IS NULL").map_err(db_err)?;
             let rows = st.query_map(rusqlite::params![app.service_id], |r| Ok((r.get(0)?, r.get(1)?))).map_err(db_err)?.flatten().collect();
             rows
         };
         for (kid, raw) in keys {
-            let Some(mut g) = raw.as_deref().and_then(|s| serde_json::from_str::<J>(s).ok()) else { continue };
-            if let Some(rooms) = g.get("rooms").and_then(J::as_array).map(|a| a.iter().filter_map(J::as_str).map(str::to_string).collect::<Vec<_>>()) {
-                if rooms.iter().any(|r| r == &to) {
-                    g["rooms"] = json!(k2_core::skin::handover::swap_room(&rooms, &to, &room_from));
-                    tx.execute("UPDATE api_keys SET app_key = ?2 WHERE id = ?1", rusqlite::params![kid, g.to_string()]).map_err(db_err)?;
-                }
+            let Some(g) = raw.as_deref().and_then(|s| serde_json::from_str::<J>(s).ok()) else { continue };
+            let g2 = rekey_grant_json(&g, &to, &room_from);
+            if g2 != g {
+                tx.execute("UPDATE api_keys SET app_key = ?2 WHERE id = ?1", rusqlite::params![kid, g2.to_string()]).map_err(db_err)?;
             }
         }
         match j["db"]["case"].as_str() {

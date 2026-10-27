@@ -428,6 +428,18 @@ pub fn rebind_workspace(app_id: &str, workspace_id: &str) -> Result<Rebind, Stri
     Ok(Rebind::Delivered { revoked })
 }
 
+/// Revoke every link pass of `app_id` but the one its open link holds now
+/// (a handover's re-key restart went live: a pass minted for the old
+/// workspace's room, which the old instance held, ends here instead of at
+/// its own expiry). `Ok(0)` when no link is open.
+pub fn revoke_other_passes(app_id: &str) -> Result<usize, String> {
+    let held = links().lock().unwrap_or_else(|e| e.into_inner()).get(app_id).map(|e| (e.ctx.service_id.clone(), e.pass_id.clone()));
+    match held {
+        Some((svc, Some(keep))) => passes::revoke_link_passes_except(&svc, &keep),
+        _ => Ok(0),
+    }
+}
+
 /// An open link's rooms and whether it can hand the App a new pass
 /// (`None`: no open link). The handover plan reads it.
 pub fn link_info(app_id: &str) -> Option<(Vec<String>, bool)> {

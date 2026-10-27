@@ -1098,6 +1098,116 @@ fn the_app_s_vault_key_is_rekeyed() {
     assert_eq!(h.rekey_state.as_deref(), Some("done"));
 }
 
+// ── 0.46.5 review (review-app-handoff-0465-v1): 0.46.4's App grants ──
+
+/// R1: a key A's agent minted itself (0.46.4 `mintedByAgent`: its users
+/// and rooms scopes follow that agent's "Let this agent manage its Apps'
+/// users") answers to B's switch after the handover, never A's; undo puts
+/// A back.
+#[test]
+fn an_agent_minted_key_follows_b_s_users_switch() {
+    let f = fx("r1");
+    let grant = k2_core::app_grace::keys::AppKeyGrant {
+        scopes: vec!["users".into()],
+        rooms: vec![f.a.clone()],
+        roles: vec![],
+        vault_secret: Some("K2_APP_KEY.r1".into()),
+        minted_by_agent: Some(f.a.clone()),
+    };
+    let (_old, raw) = k2_core::api_keys::create_app_key("agent key", &f.svc, &grant.to_json()).unwrap();
+    let (_, v) = ask(&f);
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!(st, 200, "{v}");
+    assert!(k2_core::api_keys::resolve_app_key(&raw).is_none(), "the key A's runtime could read is revoked");
+    let live: Vec<_> = k2_core::api_keys::list_app_keys(Some(&f.svc)).unwrap().into_iter().filter(|k| k.revoked_at.is_none()).collect();
+    assert_eq!(live.len(), 1, "one successor");
+    let g = k2_core::app_grace::keys::AppKeyGrant::from_stored(live[0].grant_json.as_deref());
+    assert_eq!(g.minted_by_agent.as_deref(), Some(f.b.as_str()), "B's switch governs it now");
+    assert_eq!(g.rooms, vec![f.b.clone()]);
+    let (st, v) = call("/cli/app/handover/undo", &Who::Owner, json!({ "app": f.app }));
+    assert_eq!(st, 202, "{v}");
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!(st, 200, "{v}");
+    let live: Vec<_> = k2_core::api_keys::list_app_keys(Some(&f.svc)).unwrap().into_iter().filter(|k| k.revoked_at.is_none()).collect();
+    assert_eq!(live.len(), 1, "one key again after the undo's re-key");
+    let g = k2_core::app_grace::keys::AppKeyGrant::from_stored(live[0].grant_json.as_deref());
+    assert_eq!(g.minted_by_agent.as_deref(), Some(f.a.as_str()), "undo: A's switch again");
+    assert_eq!(g.rooms, vec![f.a.clone()]);
+}
+
+/// R2: a test guest A's agent made (0.46.4) follows its re-tie: B's agent
+/// manages it, A's doesn't.
+#[test]
+fn an_agent_made_test_guest_follows_the_app() {
+    let f = fx("r2");
+    let pid = guest("tg-r2", &f.svc, &[&f.a]);
+    k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
+    k2_core::skin::creators::tie(&pid, &f.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
+    k2_core::skin::test_guests::record(&pid, &f.svc, &f.a, &format!("agent:{}", handle_of(&f.a)), k2_core::deploy::now() + 3600).unwrap();
+    let (_, v) = ask(&f);
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!(st, 200, "{v}");
+    let t = k2_core::skin::test_guests::get(&pid).unwrap().expect("still a test guest");
+    assert_eq!(t.workspace_id, f.b, "the row follows the maintaining agent");
+    let a_actor = format!("agent:{}", handle_of(&f.a));
+    let b_actor = format!("agent:{}", handle_of(&f.b));
+    assert!(crate::skin_routes::agent_test_guest_refused(&a_actor, "tg-r2").is_some(), "A no longer manages it");
+    assert!(crate::skin_routes::agent_test_guest_refused(&b_actor, "tg-r2").is_none(), "B does");
+}
+
+/// R3: the card says what B's 0.46.4 App settings mean for the App: the
+/// users switch a handover never turns on, the cores B lacks, and the caps
+/// that reach the maintaining agent itself (hashed: they reach B).
+#[test]
+fn the_card_names_b_s_users_switch_cores_and_agent_caps() {
+    let f = fx("r3");
+    guest("gus-r3", &f.svc, &[&f.a]);
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        super::grants::record(&conn, &f.app, &["thread:read".to_string(), "files:agentconfig".to_string()]).unwrap();
+    }
+    let (st, v) = plan(&f, &Who::Owner);
+    assert_eq!(st, 200, "{v}");
+    let lines: Vec<String> = v["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap().to_string()).collect();
+    assert!(lines.iter().any(|l| l.contains("Let this agent manage its Apps' users") && l.contains("never")), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("files:agentconfig") && l.contains(&handle_of(&f.b))), "{lines:?}");
+    assert_eq!(v["toSettings"]["appUsers"], json!(false));
+    assert_eq!(v["toSettings"]["agentCaps"], json!(["files:agentconfig"]));
+    assert!(v["toSettings"]["coresMissing"].as_array().is_some_and(|c| !c.is_empty()), "{v}");
+    // The handover never raises B's users switch.
+    let (_, v) = ask(&f);
+    let (st, _) = approve(&req_id(&v));
+    assert_eq!(st, 200);
+    assert!(!k2_core::workspace::settings::agents_can_manage_app_users(&f.b), "still off for B");
+}
+
+/// R4: the App's audit keeps the whole trail: offered, accepted, the card,
+/// the commit (who approved), in order.
+#[test]
+fn the_app_s_audit_keeps_the_whole_trail() {
+    let f = fx("r4");
+    switch1(&f.a, true);
+    let (st, v) = call("/cli/app/handover", &agent(&f.a), json!({ "app": f.app, "to": f.b }));
+    assert_eq!((st, v["handover"]["state"].as_str()), (202, Some("offered")), "{v}");
+    let (st, v) = call("/cli/app/handover/accept", &agent(&f.b), json!({ "app": f.app }));
+    assert_eq!(st, 202, "{v}");
+    let (st, _) = approve(&req_id(&v));
+    assert_eq!(st, 200);
+    let events: Vec<(String, String)> = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let mut rows = k2_core::deploy::audit::list_for(&conn, k2_core::deploy::audit::SUBJECT_APP, &f.app, 100).unwrap();
+        rows.sort_by_key(|r| r.seq);
+        rows.into_iter().filter(|r| r.event.starts_with("handover")).map(|r| (r.event, r.actor)).collect()
+    };
+    let names: Vec<&str> = events.iter().map(|(e, _)| e.as_str()).collect();
+    assert_eq!(names, vec!["handover_offered", "handover_accepted", "handover"], "{events:?}");
+    assert_eq!(events[0].1, format!("agent:{}", handle_of(&f.a)), "who offered");
+    assert_eq!(events[1].1, format!("agent:{}", handle_of(&f.b)), "who accepted");
+    assert_eq!(events[2].1, "owner", "who approved");
+}
+
 // ── S5: the undo window, recovery ───────────────────────────────────
 
 /// T5.1: undo puts rooms, ties, labels and secrets back; a retired

@@ -143,6 +143,15 @@ pub(crate) struct Plan {
     pub keys: Vec<KeyItem>,
     pub requests: Vec<J>,
     pub to_build: bool,
+    /// B's "Let this agent manage its Apps' users" (0.46.4, 0225). A
+    /// handover never turns it on; shown, not hashed (the owner's toggle).
+    pub to_app_users: bool,
+    /// P15: cores (labels) the App's approved caps need that B hasn't
+    /// ticked. Shown, not hashed (the owner's ticks).
+    pub cores_missing: Vec<&'static str>,
+    /// The App's approved caps that reach its agent (`files:agentconfig`,
+    /// `heartbeats:write`): hashed, since they reach B from the switch.
+    pub agent_caps: Vec<String>,
     pub overages: Vec<String>,
     pub folder_held: Option<bool>,
     pub link_open: bool,
@@ -208,6 +217,7 @@ impl Plan {
             "keys": keys,
             "requests": requests,
             "toBuild": self.to_build,
+            "agentCaps": self.agent_caps,
             "options": self.options,
             "brief": self.brief_hash,
         })
@@ -258,7 +268,12 @@ impl Plan {
                 "Shared guests: {} guest(s) also use {a}'s other Apps and stay {a}'s ({}). They lose {app} until you send them a reset{}.",
                 shared.len(),
                 shared.join(", "),
-                if self.options.reset_shared { ": owner reset links go out now" } else { "" }
+                if self.options.reset_shared {
+                    ": you take them over now (their passwords are cleared and their sign-ins end; they keep the App and sign in again with \
+                     a password or reset link from you)"
+                } else {
+                    ""
+                }
             ));
         }
         let logins = self.names(sh::CLASS_AGENT_LOGIN);
@@ -310,6 +325,24 @@ impl Plan {
         }
         if !self.to_build {
             out.push(format!("Turns on \"Build and run Apps\" for {b} (it's off)."));
+        }
+        if !self.cores_missing.is_empty() {
+            out.push(format!(
+                "{b}'s cores don't cover {}: {app} keeps the caps it has, and a deploy that adds more of those waits for you.",
+                self.cores_missing.join(", ")
+            ));
+        }
+        if !self.agent_caps.is_empty() {
+            out.push(format!(
+                "{app} holds {}, which reach its agent's own room: from the switch they reach {b}'s, not {a}'s.",
+                self.agent_caps.join(", ")
+            ));
+        }
+        if !self.to_app_users && !self.guests.is_empty() {
+            out.push(format!(
+                "{b} can't manage {app}'s users itself: \"Let this agent manage its Apps' users\" is off for it, and a handover never \
+                 turns it on (you can: Settings → Workspaces → {b} → Agent → Apps)."
+            ));
         }
         if !self.overages.is_empty() {
             out.push(format!("{b} goes past its default budget: {}.", self.overages.join("; ")));
@@ -371,7 +404,7 @@ impl Plan {
             "database": self.db,
             "appKeys": self.keys,
             "requests": self.requests,
-            "toSettings": { "build": self.to_build, "overages": self.overages, "folderHeld": self.folder_held },
+            "toSettings": { "build": self.to_build, "appUsers": self.to_app_users, "coresMissing": self.cores_missing, "agentCaps": self.agent_caps, "overages": self.overages, "folderHeld": self.folder_held },
             "link": { "open": self.link_open, "deliver": self.link_deliver },
             "rekey": self.rekey,
             "source": self.source,
@@ -401,7 +434,7 @@ pub(crate) fn compute(app: &AppRow, to: &Ws, options: &Options, brief: Option<&s
     let cfg = super::labels::load_cfg(&app.app_id)?;
 
     // ── daemon DB first ──────────────────────────────────────────────
-    let (others_of_a, domains, requests, keys_rows) = {
+    let (others_of_a, domains, requests, keys_rows, caps) = {
         let h = k2_core::db::shared();
         let conn = h.lock();
         let others: Vec<AppRow> = if room_from.is_empty() {
@@ -417,9 +450,10 @@ pub(crate) fn compute(app: &AppRow, to: &Ws, options: &Options, brief: Option<&s
             .filter(|r| r.body.get("route").and_then(J::as_str) != Some(super::handover::APPLY_ROUTE))
             .map(|r| json!({ "id": r.id, "kind": r.kind, "summary": r.summary, "requestedBy": r.requested_by }))
             .collect();
+        let caps = super::grants::recorded(&conn, &app.app_id).map_err(db_err)?.unwrap_or_default();
         drop(conn);
         let keys = k2_core::api_keys::list_app_keys(Some(&app.service_id)).map_err(|e| super::routes::no("db_error", 500, e))?;
-        (others, domains, requests, keys)
+        (others, domains, requests, keys, caps)
     };
     let mut labels = vec![LabelItem { label: app.app_id.clone(), kind: "app", holder: super::labels::holder_of(&app.app_id)? }];
     for t in &cfg.labels {
@@ -444,6 +478,15 @@ pub(crate) fn compute(app: &AppRow, to: &Ws, options: &Options, brief: Option<&s
         })
         .collect();
     let to_build = super::access::level(&to.id) >= super::access::Level::Build;
+    let to_app_users = k2_core::workspace::settings::agents_can_manage_app_users(&to.id);
+    // P15: the App keeps its approved caps. Those B's ticked cores don't
+    // cover are listed (a deploy that adds more waits for the owner), and
+    // the caps that reach the maintaining agent itself (`files:agentconfig`,
+    // `heartbeats:write`) are named: from the switch they reach B.
+    let missing = super::cores::need(&super::cores::ticked(&to.id), &caps);
+    let cores_missing: Vec<&'static str> = missing.cores.iter().map(|c| super::cores::label(c)).collect();
+    let mut agent_caps: Vec<String> = caps.iter().filter(|c| super::access::LOOSENING_CAPS.contains(&c.as_str())).cloned().collect();
+    agent_caps.sort();
     let tunnel = {
         let h = k2_core::db::shared();
         let conn = h.lock();
@@ -488,6 +531,9 @@ pub(crate) fn compute(app: &AppRow, to: &Ws, options: &Options, brief: Option<&s
         keys,
         requests,
         to_build,
+        to_app_users,
+        cores_missing,
+        agent_caps,
         overages,
         folder_held,
         link_open,

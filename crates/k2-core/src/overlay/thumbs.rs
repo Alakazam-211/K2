@@ -18,10 +18,20 @@
 //! Thumbnails are cached under `~/.k2/cache/thread-thumbs`, keyed by the
 //! file's identity (workspace, path, size, mtime) and `px`; the cache is
 //! pruned oldest-first past [`CACHE_MAX_BYTES`].
+//!
+//! Hardening shared by Thread and ticket attachments (0.46.6,
+//! prd-ticket-attachments-v1 TA14, ported from the Garden blobs review):
+//! - a HEIC/HEIF goes to `sips` / `heif-convert` only when the file's own
+//!   bytes carry a HEIF `ftyp` brand ([`crate::garden_data::blobs::is_heif`]);
+//!   an attachment's type comes from its name, so a renamed text file is
+//!   refused before any converter runs;
+//! - at most [`MAX_DECODES`] thumbnails are made at once, daemon-wide
+//!   ([`DecodeSlot`]); the door answers `busy` past that.
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use image::{DynamicImage, GenericImageView, ImageFormat, ImageReader};
@@ -42,6 +52,33 @@ pub const MAX_SVG_BYTES: u64 = 2 * 1024 * 1024;
 pub const CONVERT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The thumbnail cache's size cap (pruned oldest-first to 3/4 of it).
 pub const CACHE_MAX_BYTES: u64 = 200 * 1024 * 1024;
+/// Thumbnails made at once, daemon-wide (Thread and ticket doors; a cache
+/// hit takes no slot). More answer `busy`.
+pub const MAX_DECODES: usize = 2;
+
+static DECODING: AtomicUsize = AtomicUsize::new(0);
+
+/// One of the [`MAX_DECODES`] decode slots, released on drop.
+#[derive(Debug)]
+pub struct DecodeSlot(());
+
+impl DecodeSlot {
+    /// A slot, or `None` when [`MAX_DECODES`] thumbnails are being made now.
+    pub fn try_take() -> Option<DecodeSlot> {
+        let prev = DECODING.fetch_add(1, Ordering::SeqCst);
+        if prev >= MAX_DECODES {
+            DECODING.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(DecodeSlot(()))
+    }
+}
+
+impl Drop for DecodeSlot {
+    fn drop(&mut self) {
+        DECODING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// One thumbnail.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +165,11 @@ pub fn make(real: &Path, mime: &str, px: u32) -> Result<Thumb, ThumbError> {
             if size > MAX_SOURCE_BYTES {
                 return Err(too_large());
             }
+            // The type came from the name: only a file whose own bytes say
+            // HEIF reaches the converter (TA14).
+            if !crate::garden_data::blobs::is_heif(&read_head(real, 64)?) {
+                return Err(ThumbError::Unsupported("not a HEIF image (its bytes say otherwise); open the file".into()));
+            }
             let jpeg = heic_to_jpeg(real, px)?;
             raster_from_bytes(&jpeg, Some(ImageFormat::Jpeg), px)
         }
@@ -140,6 +182,14 @@ pub fn make(real: &Path, mime: &str, px: u32) -> Result<Thumb, ThumbError> {
         }
         other => Err(ThumbError::Unsupported(format!("{other} has no thumbnail; open the file"))),
     }
+}
+
+fn read_head(real: &Path, n: u64) -> Result<Vec<u8>, ThumbError> {
+    use std::io::Read;
+    let f = std::fs::File::open(real).map_err(|e| ThumbError::Io(e.to_string()))?;
+    let mut head = Vec::with_capacity(n as usize);
+    f.take(n).read_to_end(&mut head).map_err(|e| ThumbError::Io(e.to_string()))?;
+    Ok(head)
 }
 
 fn too_large() -> ThumbError {
@@ -761,6 +811,32 @@ mod tests {
         assert_eq!(t.mime, "image/jpeg");
         assert_eq!((t.width, t.height), (256, 128));
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_heic_by_name_only_never_reaches_the_converter() {
+        let d = tmpdir("fakeheic");
+        let fake = d.join("photo.heic");
+        std::fs::write(&fake, b"just some text, named like a photo\n").unwrap();
+        let e = make(&fake, "image/heic", PX_SMALL).expect_err("refused");
+        assert_eq!(e.code(), "no_thumbnail", "{e:?}");
+        assert!(e.hint().contains("HEIF"), "{e:?}");
+        // A PNG renamed .heif is refused the same way (its bytes aren't HEIF).
+        let png_heif = d.join("x.heif");
+        std::fs::write(&png_heif, png(10, 10, false)).unwrap();
+        assert!(matches!(make(&png_heif, "image/heif", PX_SMALL), Err(ThumbError::Unsupported(_))));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn decode_slots_cap_at_two_and_free_on_drop() {
+        // Nothing in k2-core takes a slot (only the daemon's doors do).
+        let a = DecodeSlot::try_take().expect("slot 1");
+        let b = DecodeSlot::try_take().expect("slot 2");
+        assert!(DecodeSlot::try_take().is_none(), "a third decode is refused");
+        drop(a);
+        let c = DecodeSlot::try_take().expect("a dropped slot is free again");
+        drop((b, c));
     }
 
     const EVIL_SVG: &str = r##"<?xml version="1.0"?>

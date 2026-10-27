@@ -214,6 +214,11 @@ pub(crate) fn cap_refused(cap: &str) -> CliResponse {
     }
 }
 
+/// Every decode slot is taken (TA14); the client retries.
+fn busy() -> CliResponse {
+    error_json("503 Service Unavailable", "busy", "thumbnails are being made; try again in a moment")
+}
+
 fn gone() -> CliResponse {
     error_json("404 Not Found", "attachment_gone", "the file is no longer there (moved or deleted)")
 }
@@ -230,6 +235,40 @@ pub(crate) struct ResolvedThread {
     pub project_id: String,
 }
 
+/// A door request's own parameters (`n`, `mode`, `px`), shared by the
+/// Thread door and the ticket door (`GET /cli/feedback/attachment`,
+/// 0.46.6). Checked before anything is loaded.
+pub(crate) struct DoorRequest {
+    pub n: usize,
+    pub mode: String,
+    pub px: u32,
+}
+
+/// Parse `n`, `mode` and `px`; a bad one is a 400 `usage`.
+pub(crate) fn parse_door_request(params: &HashMap<String, String>) -> Result<DoorRequest, CliResponse> {
+    let n: usize = match opt_param(params, "n").unwrap_or_else(|| "0".into()).trim().parse() {
+        Ok(n) => n,
+        Err(_) => return Err(error_json("400 Bad Request", "usage", "n must be the attachment's index (0-based)")),
+    };
+    let mode = opt_param(params, "mode").unwrap_or_else(|| "meta".into());
+    if !matches!(mode.as_str(), "meta" | "preview" | "range" | "thumb" | MODE_DOWNLOAD) {
+        return Err(error_json("400 Bad Request", "usage", "mode is meta, preview, thumb, range or download"));
+    }
+    let px = match k2_core::overlay::thumbs::parse_px(opt_param(params, "px").as_deref()) {
+        Ok(px) => px,
+        Err(e) => return Err(error_json("400 Bad Request", "usage", e)),
+    };
+    Ok(DoorRequest { n, mode, px })
+}
+
+/// What a door's audit lines say: the surface (`thread` / `ticket`, the
+/// event prefix) and where the attachment hangs (`conversation=… doc=…`
+/// or `ticket=… comment=…`). Never file contents.
+pub(crate) struct DoorAudit {
+    pub surface: &'static str,
+    pub detail: String,
+}
+
 /// `GET /cli/thread/attachment?addr|conversationId=&id=&n=&mode=meta|preview|thumb|range|download[&offset=&len=]`.
 /// `resolved`: the Thread, already resolved for this caller with Thread
 /// read rights checked (a guest: room, pinned Chat, `thread:read`).
@@ -239,34 +278,46 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
     if id.trim().is_empty() {
         return error_json("400 Bad Request", "usage", "missing id (the message's doc id)");
     }
-    let n: usize = match opt_param(params, "n").unwrap_or_else(|| "0".into()).trim().parse() {
-        Ok(n) => n,
-        Err(_) => return error_json("400 Bad Request", "usage", "n must be the attachment's index (0-based)"),
-    };
-    let mode = opt_param(params, "mode").unwrap_or_else(|| "meta".into());
-    if !matches!(mode.as_str(), "meta" | "preview" | "range" | "thumb" | MODE_DOWNLOAD) {
-        return error_json("400 Bad Request", "usage", "mode is meta, preview, thumb, range or download");
-    }
-    let px = match k2_core::overlay::thumbs::parse_px(opt_param(params, "px").as_deref()) {
-        Ok(px) => px,
-        Err(e) => return error_json("400 Bad Request", "usage", e),
+    let req = match parse_door_request(params) {
+        Ok(r) => r,
+        Err(r) => return r,
     };
     let doc = match k2_core::overlay::get_thread_doc(&resolved.conversation_id, id.trim()) {
         Ok(Some(d)) => d,
         Ok(None) => return error_json("404 Not Found", "not_found", "no such message in this Thread"),
         Err(e) => return error_json("500 Internal Server Error", "store", e),
     };
-    let Some(a) = doc.attachments.get(n) else {
+    let Some(a) = doc.attachments.get(req.n) else {
         return error_json("404 Not Found", "not_found", "no such attachment on this message");
     };
-    let Some(root) = project_root(&resolved.project_id) else {
+    let audit_ctx = DoorAudit {
+        surface: "thread",
+        detail: format!("conversation={} doc={}", resolved.conversation_id, doc.id),
+    };
+    serve(params, &req, a, &resolved.project_id, pass, &audit_ctx)
+}
+
+/// Serve one loaded attachment: the part both doors share (Thread and
+/// ticket). `project_id`'s folder is the root; `pass` adds the guest's
+/// own file rights (a pointer is never a grant).
+pub(crate) fn serve(
+    params: &HashMap<String, String>,
+    req: &DoorRequest,
+    a: &ThreadAttachment,
+    project_id: &str,
+    pass: Option<&SkinPass>,
+    audit_ctx: &DoorAudit,
+) -> CliResponse {
+    let mode = req.mode.as_str();
+    let n = req.n;
+    let Some(root) = project_root(project_id) else {
         return gone();
     };
     // A pointer, not a grant: a guest opens only what their own file
-    // rights already cover. `meta` answers what `GET /cli/thread` shows
+    // rights already cover. `meta` answers what the list views show
     // (`hidden`); preview and range are the uniform `cap_not_granted` 403.
     if let Some(p) = pass {
-        if !guest_sees(p, &resolved.project_id, &root, a) {
+        if !guest_sees(p, project_id, &root, a) {
             if mode == "meta" {
                 return CliResponse::ok_json(
                     serde_json::json!({ "ok": true, "kind": att::KIND_FILE, "state": att::STATE_HIDDEN }).to_string(),
@@ -278,11 +329,11 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
         // who may open the file may save it only with files:download in
         // the room. Checked before the file is touched (no existence
         // oracle beyond what opening already shows).
-        if mode == MODE_DOWNLOAD && !guest_may_download(p, &resolved.project_id) {
+        if mode == MODE_DOWNLOAD && !guest_may_download(p, project_id) {
             audit(
-                "thread.attachment.download_refused",
+                &format!("{}.attachment.download_refused", audit_ctx.surface),
                 &format!("guest:{}", p.username.trim()),
-                format!("conversation={} doc={} n={n}", resolved.conversation_id, doc.id),
+                format!("{} n={n}", audit_ctx.detail),
             );
             return cap_refused(k2_core::skin::CAP_FILES_DOWNLOAD);
         }
@@ -297,15 +348,36 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
         Some(p) => Some(format!("guest:{}", p.username.trim())),
         None => crate::read_routes::request_login().filter(|l| l != "owner").map(|l| format!("user:{l}")),
     };
+    // TA16 (0.46.6): the bytes are re-checked when they would leave the
+    // daemon. A file edited into holding a credential after it was sent
+    // no longer previews or downloads; meta, thumb and the lists stay
+    // stat-only.
+    if matches!(mode, "preview" | "range" | MODE_DOWNLOAD) {
+        if let Some(hit) = k2_core::secret_paths::classify(&a.path, &real) {
+            audit(
+                &format!("{}.attachment.secret_refused", audit_ctx.surface),
+                who.as_deref().unwrap_or("owner"),
+                format!("{} rel={:?} hit={} mode={mode}", audit_ctx.detail, a.path, hit.as_str()),
+            );
+            return error_json(
+                "403 Forbidden",
+                "attachment_secret",
+                format!(
+                    "{} now looks like a secret and can't be opened here; secrets travel through the vault (k2 vault)",
+                    a.path
+                ),
+            );
+        }
+    }
     if let Some(who) = who.as_deref() {
         audit(
-            "thread.attachment.open",
+            &format!("{}.attachment.open", audit_ctx.surface),
             who,
-            format!("conversation={} doc={} rel={:?} mode={mode}", resolved.conversation_id, doc.id, a.path),
+            format!("{} rel={:?} mode={mode}", audit_ctx.detail, a.path),
         );
     }
     let size = meta.len();
-    match mode.as_str() {
+    match mode {
         "meta" => {
             let mut v = serde_json::json!({
                 "ok": true,
@@ -328,7 +400,7 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
             CliResponse::ok_json(v.to_string())
         }
         "preview" => preview(a, &real, size, att::live_state(&root, a, true)),
-        "thumb" => thumb(&resolved.project_id, a, &real, &meta, px),
+        "thumb" => thumb(project_id, a, &real, &meta, req.px),
         MODE_DOWNLOAD => download(params, a, &real),
         _ => range(params, &real),
     }
@@ -463,13 +535,19 @@ fn thumb(project_id: &str, a: &ThreadAttachment, real: &Path, meta: &std::fs::Me
     let dir = thumbs::cache_dir();
     let t = match thumbs::cache_get(&dir, &key) {
         Some(t) => t,
-        None => match thumbs::make(real, &a.mime, px) {
-            Ok(t) => {
-                thumbs::cache_put(&dir, &key, &t, thumbs::CACHE_MAX_BYTES);
-                t
+        None => {
+            // TA14: at most two thumbnails are made at once, daemon-wide.
+            let Some(_slot) = thumbs::DecodeSlot::try_take() else {
+                return busy();
+            };
+            match thumbs::make(real, &a.mime, px) {
+                Ok(t) => {
+                    thumbs::cache_put(&dir, &key, &t, thumbs::CACHE_MAX_BYTES);
+                    t
+                }
+                Err(e) => return thumb_error(e),
             }
-            Err(e) => return thumb_error(e),
-        },
+        }
     };
     let unchanged = meta.len() == a.size && att::modified_ms(meta) == a.modified_at;
     let mut v = serde_json::json!({

@@ -442,3 +442,74 @@ async fn thread_attachments_send_view_open_and_scope() {
     assert!(listing.contains("  [file] docs/plan.md:1-2 (10 B)"), "{listing}");
     assert!(listing.contains("  [file] src/main.rs (13 B) (gone)"), "{listing}");
 }
+
+/// Shared door hardening (0.46.6, prd-ticket-attachments-v1 S0: TA14,
+/// TA16): a file edited into holding a credential after it was sent no
+/// longer previews, ranges or downloads (meta still answers); a `.heic` by
+/// name with text bytes never reaches the converter (415); a third
+/// thumbnail decode at once answers `busy`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn thread_door_rechecks_secrets_sniffs_heic_and_caps_decodes() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let ws = seed_ws(&env, &format!("hard{tag}"));
+    let _conv = pin_chat(&ws);
+    let addr = ws.handle.clone();
+    write(&ws.path, "notes/plan.md", b"# Plan\nnothing secret\n");
+    write(&ws.path, "pics/fake.heic", b"plain text pretending to be a photo\n");
+    let png = {
+        let img = image::RgbImage::from_pixel(64, 32, image::Rgb([10, 200, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    write(&ws.path, "pics/dot.png", &png);
+    let r = thread_post(
+        port,
+        OWNER,
+        &addr,
+        "files",
+        json!([{ "path": "notes/plan.md" }, { "path": "pics/fake.heic" }, { "path": "pics/dot.png" }]),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let id = r.json()["id"].as_str().unwrap().to_string();
+
+    // TA16: the credential arrives after the send.
+    let r = att_get(port, OWNER, &addr, &id, 0, "mode=preview").await;
+    assert_eq!(r.status, 200, "clean before the edit: {}", r.body);
+    write(&ws.path, "notes/plan.md", b"# Plan\ntoken: ghp_abcdefghijklmnopqrstuvwxyz0123\n");
+    for mode in ["mode=preview", "mode=range&offset=0&len=8", "mode=download"] {
+        let r = att_get(port, OWNER, &addr, &id, 0, mode).await;
+        assert_eq!((r.status, code_of(&r).as_str()), (403, "attachment_secret"), "{mode}: {}", r.body);
+        assert!(!r.body.contains("ghp_"), "never quotes the secret: {}", r.body);
+    }
+    let r = att_get(port, OWNER, &addr, &id, 0, "mode=meta").await;
+    assert_eq!(r.status, 200, "meta stays stat-only: {}", r.body);
+    assert_eq!(r.json()["state"], "changed", "{}", r.body);
+
+    // TA14: a name-only HEIC is refused before any converter runs.
+    let r = att_get(port, OWNER, &addr, &id, 1, "mode=thumb").await;
+    assert_eq!((r.status, code_of(&r).as_str()), (415, "no_thumbnail"), "{}", r.body);
+    assert!(r.body.contains("HEIF"), "{}", r.body);
+
+    // TA14: at most two decodes at once; a third answers busy, then works.
+    {
+        let _a = k2_core::overlay::thumbs::DecodeSlot::try_take().expect("slot 1");
+        let _b = k2_core::overlay::thumbs::DecodeSlot::try_take().expect("slot 2");
+        let r = att_get(port, OWNER, &addr, &id, 2, "mode=thumb&px=512").await;
+        assert_eq!((r.status, code_of(&r).as_str()), (503, "busy"), "{}", r.body);
+    }
+    let r = att_get(port, OWNER, &addr, &id, 2, "mode=thumb&px=512").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["width"], 64, "{}", r.body);
+    // A cache hit takes no slot.
+    {
+        let _a = k2_core::overlay::thumbs::DecodeSlot::try_take().expect("slot 1");
+        let _b = k2_core::overlay::thumbs::DecodeSlot::try_take().expect("slot 2");
+        let r = att_get(port, OWNER, &addr, &id, 2, "mode=thumb&px=512").await;
+        assert_eq!(r.status, 200, "cached thumbs are served while every slot is taken: {}", r.body);
+    }
+}

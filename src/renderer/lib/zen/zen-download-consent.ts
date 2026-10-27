@@ -1,9 +1,16 @@
 // `k2.download` (prd-garden-board-needs-v1 GS1; security review #1, belt
 // and braces): K2's own card the first time a widget saves a file to
-// Downloads in a Garden. "Always" is kept per Garden and widget on this
-// computer's app (this window's memory and its local storage); "Save once"
-// asks again next time. The press check and the hourly budget still apply
-// to every download.
+// Downloads in a Garden.
+//
+// "Always" is kept by this computer's daemon, per Garden and widget
+// (`GET/POST /cli/zen/downloads*`, `~/.k2/zen/downloads.json`), so every
+// client (each window, the web client) honours the same answer, clearing a
+// browser's storage never skips the card, and revoking it brings the card
+// back everywhere. Only the owner token reads or changes that list.
+// "Save once" is this one save: nothing is kept.
+
+import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { zenLocalScope } from './zen-api'
 
 /** The person's answer on K2's card. */
 export type ZenDownloadAnswer = 'deny' | 'once' | 'always'
@@ -17,58 +24,50 @@ export interface ZenDownloadAsk {
   size: number
 }
 
-const STORAGE_KEY = 'k2.zen.downloadsAllowed'
-const allowed = new Set<string>()
+/** The daemon's list, injectable for tests. */
+export interface ZenDownloadConsentStore {
+  /** The widgets this Garden lets save files without asking. */
+  widgets(gardenId: string): Promise<readonly string[]>
+  /** "Always": the daemon keeps it. */
+  allow(gardenId: string, widget: string): Promise<void>
+}
 
-function stored(): string[] {
-  try {
-    const raw = globalThis.localStorage?.getItem(STORAGE_KEY)
-    const v: unknown = raw ? JSON.parse(raw) : []
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
-  } catch {
-    return []
+/** `GET /cli/zen/downloads?garden=` on this computer's daemon. */
+export async function fetchZenDownloadWidgets(gardenId: string): Promise<readonly string[]> {
+  const r = await daemonCliGet<{ widgets?: unknown }>(zenLocalScope(), 'zen/downloads', { garden: gardenId })
+  if (!Array.isArray(r.widgets) || !r.widgets.every((w) => typeof w === 'string')) {
+    throw new Error('zen/downloads answered without a widgets list')
   }
+  return r.widgets as string[]
 }
 
-/** The Garden/widget pair a consent covers. */
-export function zenDownloadConsentKey(gardenId: string, widget: string): string {
-  return `${gardenId}/${widget}`
+/** `POST /cli/zen/downloads/allow` (the owner token: only the person's app). */
+export async function allowZenDownloadWidget(gardenId: string, widget: string): Promise<void> {
+  await daemonCliPost(zenLocalScope(), 'zen/downloads/allow', { garden: gardenId, widget })
 }
 
-export function zenDownloadAllowed(key: string): boolean {
-  return allowed.has(key) || stored().includes(key)
-}
-
-export function rememberZenDownloadAllowed(key: string): void {
-  allowed.add(key)
-  try {
-    const all = new Set(stored())
-    all.add(key)
-    globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify([...all]))
-  } catch (err) {
-    // This window still remembers it; the next window asks again.
-    console.warn('[zen] k2.download: keeping the answer failed:', err)
-  }
-}
-
-/** Tests only. */
-export function __resetZenDownloadConsentForTests(): void {
-  allowed.clear()
-  try {
-    globalThis.localStorage?.removeItem(STORAGE_KEY)
-  } catch {
-    // nothing kept
-  }
+export const daemonZenDownloadConsent: ZenDownloadConsentStore = {
+  widgets: fetchZenDownloadWidgets,
+  allow: allowZenDownloadWidget,
 }
 
 /** Ask (or not) and answer whether to go on. */
 export async function zenDownloadConsent(
-  key: string,
+  store: ZenDownloadConsentStore,
+  gardenId: string,
+  widget: string,
   ask: ZenDownloadAsk,
   show: (ask: ZenDownloadAsk) => Promise<ZenDownloadAnswer>,
 ): Promise<boolean> {
-  if (zenDownloadAllowed(key)) return true
+  if ((await store.widgets(gardenId)).includes(widget)) return true
   const answer = await show(ask)
-  if (answer === 'always') rememberZenDownloadAllowed(key)
+  if (answer === 'always') {
+    try {
+      await store.allow(gardenId, widget)
+    } catch (err) {
+      // The person said yes: save this one; they'll be asked again next time.
+      console.warn('[zen] k2.download: keeping the answer failed:', err)
+    }
+  }
   return answer !== 'deny'
 }

@@ -1674,6 +1674,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/data/tx/begin", NoLogin),
     post("/cli/zen/data/tx/commit", NoLogin),
     get("/cli/zen/doctor", Member),
+    // `k2.download` consent (0.46.5): the widgets a Garden lets save files
+    // without asking. The owner token only (zen_downloads_routes).
+    get("/cli/zen/downloads", Member),
+    post("/cli/zen/downloads/allow", Member),
+    post("/cli/zen/downloads/forget", Member),
     // Garden access (prd-garden-access-v1 G14), live only with the
     // `gardenAccess` switch on (`live_row`): GET the list (the person; a
     // passport learns whether it is listed), POST a change (the person);

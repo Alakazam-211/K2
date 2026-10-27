@@ -56,6 +56,7 @@ pub mod card_moves;
 pub mod defaults;
 pub mod garden_access;
 pub mod garden_catalog;
+pub mod downloads;
 pub mod links;
 pub mod lock;
 pub mod news;

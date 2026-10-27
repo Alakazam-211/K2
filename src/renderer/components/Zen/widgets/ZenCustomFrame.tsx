@@ -37,7 +37,7 @@ import { ZenPermissionSheet } from './ZenPermissionSheet'
 import { allowZenLinkSite, createZenLinks, fetchZenLinkSites, type ZenLinkAnswer, type ZenLinkAsk } from '@/lib/zen/zen-links'
 import { ZenLinkSheet } from './ZenLinkSheet'
 import { ZenDownloadSheet } from './ZenDownloadSheet'
-import { zenDownloadConsent, zenDownloadConsentKey, type ZenDownloadAnswer, type ZenDownloadAsk } from '@/lib/zen/zen-download-consent'
+import { daemonZenDownloadConsent, zenDownloadConsent, type ZenDownloadAnswer, type ZenDownloadAsk } from '@/lib/zen/zen-download-consent'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { gardenBlobGet, gardenBlobPut, gardenCall, type GardenBlobPlace } from '@/lib/garden-data/garden-data-api'
 import { createZenCustomBlobs } from '@/lib/zen/zen-custom-blobs'
@@ -326,10 +326,13 @@ export function ZenCustomFrame({
           downloads: {
             pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
             // Security review #1: K2's card the first time this widget
-            // saves a file in this Garden.
+            // saves a file in this Garden; "Always" is the daemon's (one
+            // answer for every client).
             consent: ({ name, size }) =>
               zenDownloadConsent(
-                zenDownloadConsentKey(gardenId, widgetRef.current.widget),
+                daemonZenDownloadConsent,
+                gardenId,
+                widgetRef.current.widget,
                 {
                   name,
                   size,

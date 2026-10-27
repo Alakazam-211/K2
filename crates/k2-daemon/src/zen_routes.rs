@@ -74,6 +74,9 @@ pub const MAX_BODY: usize = k2_core::zen::agent_edit::MAX_PUT_BYTES + k2_core::z
 pub const POST_ROUTES: &[&str] = &[
     // The person's order and pins in the Agents widget (0.46.4).
     "/cli/zen/agents/order/set",
+    // `k2.download` consent (0.46.5): owner token only (zen_downloads_routes).
+    "/cli/zen/downloads/allow",
+    "/cli/zen/downloads/forget",
     "/cli/zen/garden/check",
     "/cli/zen/garden/delete",
     "/cli/zen/garden/lock",
@@ -116,6 +119,7 @@ pub const GET_ROUTES: &[&str] = &[
     // Agents may read the person's order and pins (0.46.4).
     "/cli/zen/agents/order",
     "/cli/zen/doctor",
+    "/cli/zen/downloads",
     "/cli/zen/gardens",
     "/cli/zen/get",
     "/cli/zen/history",
@@ -1380,6 +1384,11 @@ pub fn handle(
     // `k2.open` (0.46.4): the per-Garden site list; its own credential
     // rules (agents read, only the owner token writes).
     if let Some(r) = crate::zen_links_routes::handle(path, owner, caller, params, body) {
+        return r;
+    }
+    // `k2.download` consent (0.46.5): owner token only, one answer for
+    // every client.
+    if let Some(r) = crate::zen_downloads_routes::handle(path, owner, caller, params, body) {
         return r;
     }
     if !GET_ROUTES.contains(&path) && !POST_ROUTES.contains(&path) {

@@ -12,7 +12,7 @@ import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import {
   LS_REMOTE_ROOMS_GRADUATED,
   LS_REMOTE_ROOMS_PREVIEW,
@@ -392,7 +392,7 @@ describe('writes (T1.2)', () => {
     const preview: string[] = []
     for (const f of files) {
       const text = readFileSync(f, 'utf8')
-      const rel = relative(root, f)
+      const rel = relative(root, f).split(sep).join('/')
       if (/setItem\(\s*(LS_REMOTE_ROOMS_PREVIEW|['"]k2\.homeRemoteRooms\.v1['"])/.test(text)) writers.push(rel)
       // T1.4 is about Remote rooms' old "(preview)" label. Compute nodes are
       // still a preview by design (0.45.3+, Settings → Compute), so match

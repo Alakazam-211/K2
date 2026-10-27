@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const dir = dirname(fileURLToPath(import.meta.url))
@@ -133,7 +133,7 @@ describe('one renderer for agent activity', () => {
   it('no component outside AgentStatus draws its own activity look', () => {
     const offenders: string[] = []
     for (const file of walk(componentsDir)) {
-      const rel = relative(componentsDir, file)
+      const rel = relative(componentsDir, file).split(sep).join('/')
       if (rel.startsWith('AgentStatus/') || PART_2_PENDING.has(rel)) continue
       const src = readFileSync(file, 'utf8')
       if (/<ActivityMark\b/.test(src)) offenders.push(`${rel}: ActivityMark`)

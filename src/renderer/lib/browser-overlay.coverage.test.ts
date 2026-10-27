@@ -3,7 +3,7 @@
 // or says here why it never covers a live Browser page. A new portal, fixed
 // layer, menu or dialog that does neither fails this test.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = join(__dirname, '..')
@@ -93,7 +93,7 @@ function overlayFiles(): { path: string; claims: boolean }[] {
   const files: string[] = []
   walk(ROOT, files)
   return files
-    .map((p) => ({ path: relative(ROOT, p), src: readFileSync(p, 'utf8') }))
+    .map((p) => ({ path: relative(ROOT, p).split(sep).join('/'), src: readFileSync(p, 'utf8') }))
     .filter(({ src }) => OVERLAY_PATTERNS.some((re) => re.test(src)))
     .map(({ path, src }) => ({ path, claims: CLAIMS.some((re) => re.test(src)) }))
 }

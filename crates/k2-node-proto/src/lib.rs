@@ -23,6 +23,8 @@
 //!   arguments and the sharing reason codes.
 //! - [`secret`]: compute secret-env (protocol 4): the seal to the node's
 //!   one-time key, caps, codes, the stdin pipe payload.
+//! - [`tiers`]: compute job tiers (protocol 5): CI, Priority, Normal, the
+//!   rules every orderer shares, and their codes.
 
 pub mod admin;
 pub mod canonical;
@@ -38,5 +40,6 @@ pub mod results;
 pub mod secret;
 pub mod share;
 pub mod ticket;
+pub mod tiers;
 
 pub use frames::PROTOCOL;

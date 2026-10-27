@@ -848,6 +848,12 @@ pub struct ShareView {
     /// node quotes 0 as "an even share", like an unsized job).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quotes: Vec<Quote>,
+    /// Protocol 5 (prd-compute-job-tiers-v1 T7): does this server's
+    /// Priority count on this node (`queue.toml`; default: the owner yes,
+    /// guests no)? The server lowers a Priority it doesn't have to Normal
+    /// at submit, with a notice. Absent for a server below protocol 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<bool>,
 }
 
 /// Can a job of this size start now, and if not, when (§10.2)?
@@ -921,6 +927,10 @@ pub struct QueueEntry {
     pub pos: u32,
     pub mine: bool,
     pub class: JobClass,
+    /// Protocol 5: the tier the node counts (shown for others' jobs too;
+    /// never who sent them). Absent for a server below protocol 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<crate::tiers::Tier>,
     /// `running` or `queued`.
     pub state: crate::frames::JobState,
     pub cpu_millis: u64,
@@ -1047,6 +1057,12 @@ pub struct LimitsArgs {
     /// A new end date from now; `Some(0)` clears it (a widening).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub for_secs: Option<i64>,
+    /// Protocol 5, only to nodes offering `tiers` (an older node refuses
+    /// the unknown key): does this server's Priority count here? Kept in
+    /// the node's `queue.toml`, never in `servers.toml` (rollback safety,
+    /// T8). `true` where it was `false` is a widening.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<bool>,
 }
 
 /// `servers.pause` / `servers.resume`.

@@ -4,28 +4,40 @@
 //! answer. Solo nodes never use it (the server's `scheduler::decide`
 //! places their jobs, as today).
 //!
-//! **Order** (the first rule that separates two candidates wins):
-//! 1. `gate` first (only where the share allows it);
-//! 2. tenants within today's soft CPU-hours before those over it;
-//! 3. `interactive` before `batch` (a batch job queued 60 min counts as
-//!    interactive);
-//! 4. fair share: lowest `decayed usage / weight`;
-//! 5. tie: rotate after the tenant served last.
+//! **Order** (the first rule that separates two candidates wins;
+//! prd-compute-job-tiers-v1 §3.4 with vs-live T5, T22):
+//! 1. the tier band, highest first: CI (only where the share allows
+//!    `gate`), Priority (only where Priority counts for that server),
+//!    Normal waiting an hour or more, then fresh Normal
+//!    ([`crate::tiers::band`]);
+//! 2. tenants within today's soft CPU-hours before those over it (inside a
+//!    band: an over-quota server's CI still goes before anyone's Normal);
+//! 3. fair share: lowest `decayed usage / weight`;
+//! 4. tie: rotate after the tenant served last.
 //!
-//! Inside a tenant: the best class first, then rotate across workspaces,
-//! then sessions, then FIFO by the time *the node* received the job. While
+//! Inside a tenant: the best band first. CI, Priority and aged Normal go
+//! strictly by the time *the node* received them; fresh Normal rotates
+//! across workspaces, then sessions, then FIFO by node arrival. While
 //! building the order each pick is charged its estimated CPU, so the order
 //! interleaves tenants by weight instead of draining the cheapest one.
 //!
-//! **Hard limits wait, never fail**: the tenant's `max_running`, the
-//! workspace's `max_running`, the node's parallel/CPU/memory caps, one
-//! `gate` job at a time, an exclusive job running (or waiting for an idle
-//! node), a node-wide block (paused, foreign lock, low disk, an install),
-//! a tenant-wide block (share paused, disk full, wall missing).
+//! **Tiers only order the queue**: no slot is reserved and nothing here
+//! ever stops a running job (R2, R3). The 0.46.4 `gate_reserved_slots` and
+//! "one gate job at a time" are gone (G3, G6).
 //!
-//! **Backfill**: when the first job held up only by capacity can't fit,
-//! later jobs that fit may start, until it has waited 20 min; then nothing
-//! else starts until it fits.
+//! **Hard limits wait, never fail**: the tenant's `max_running`, the
+//! workspace's `max_running`, the node's parallel/CPU/memory caps, an
+//! exclusive job running (or waiting for an idle node), a node-wide block
+//! (paused, foreign lock, low disk, an install), a tenant-wide block (share
+//! paused, disk full, wall missing).
+//!
+//! **Next free slot / backfill**: when the first job held up by capacity is
+//! CI or Priority, nothing ordered after it starts (hold 0): the node
+//! drains toward it, nothing is killed. For a Normal head, later jobs that
+//! fit may start until it has waited 20 min; then nothing else starts until
+//! it fits. A CI or Priority job held by the secret-env isolation rule
+//! (SE26) counts as waiting for capacity (T4); a tenant's own limits never
+//! hold other tenants.
 //!
 //! **ETAs** simulate the queue: running jobs end at their p50 (or p90)
 //! remaining time when known, then queued jobs start in order. Unknown
@@ -37,14 +49,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::frames::JobState;
 use crate::share::{self, blocked, codes, JobClass, Quote, QueueEntry, QueueView, ShareLimits, Slot, TenantTotals};
+use crate::tiers::{self, Band, Tier};
 
 /// Knobs (§7 "Defaults").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     /// Usage half-life.
     pub half_life_secs: i64,
-    /// A batch job queued this long counts as interactive.
-    pub batch_aging_secs: i64,
+    /// A Normal job queued this long ranks above fresh Normal work, below
+    /// Priority ([`tiers::AGE_SECS`]; T5).
+    pub aging_secs: i64,
     /// The backfill hold: once the capacity-blocked head waited this long,
     /// nothing else starts until it fits.
     pub backfill_hold_secs: i64,
@@ -57,7 +71,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { half_life_secs: 24 * 3600, batch_aging_secs: 3600, backfill_hold_secs: 20 * 60, default_est_secs: 600, one_uid: false }
+        Self { half_life_secs: 24 * 3600, aging_secs: tiers::AGE_SECS, backfill_hold_secs: 20 * 60, default_est_secs: 600, one_uid: false }
     }
 }
 
@@ -79,11 +93,6 @@ pub struct Caps {
     /// A node-wide reason nothing starts (`paused`, `foreign_lock`,
     /// `disk_low`, `installing_tools`, a refusal code).
     pub blocked: Option<String>,
-    /// Slots only `gate` jobs may fill (policy `gate_reserved_slots`,
-    /// plan-ci-release-on-k2-compute G4): non-gate work never takes the
-    /// last of them, so a release gate starts at once instead of waiting
-    /// behind 2-hour test runs. See [`gate_reserve`].
-    pub gate_reserved: u32,
 }
 
 impl Caps {
@@ -109,11 +118,20 @@ pub struct Tenant {
     /// A tenant-wide reason its jobs wait (`share_paused`,
     /// `tenant_disk_full`, `tenant_wall_missing`, …).
     pub blocked: Option<String>,
+    /// Its Priority counts here (`queue.toml`; default: the owner yes,
+    /// guests no). Otherwise its Priority jobs run as Normal (T7).
+    pub priority: bool,
 }
 
 impl Tenant {
     fn over_quota(&self) -> bool {
         self.cpu_secs_today >= u64::from(self.limits.cpu_hours_day) * 3600
+    }
+
+    /// The tier this tenant's job counts as here: CI only with the share's
+    /// `gate`, Priority only where Priority counts for it (T7, T9).
+    pub fn effective_tier(&self, tier: Tier) -> Tier {
+        tiers::effective(tier, self.limits.allows_class(JobClass::Gate), self.priority)
     }
 }
 
@@ -126,6 +144,9 @@ pub struct Running {
     pub workspace_id: String,
     pub session_id: Option<String>,
     pub class: JobClass,
+    /// The tier it was sent with (shown in views; a running job is never
+    /// stopped or reordered by its tier).
+    pub tier: Tier,
     pub cpu_millis: u64,
     pub mem_bytes: u64,
     pub exclusive: bool,
@@ -144,7 +165,11 @@ pub struct Queued {
     pub generation: u32,
     pub workspace_id: String,
     pub session_id: Option<String>,
+    /// The plan's class (old peers; views).
     pub class: JobClass,
+    /// The plan's tier (`Plan::tier_or_class`); what counts here is
+    /// [`Tenant::effective_tier`].
+    pub tier: Tier,
     /// `None` = an even share of the node ([`Caps::default_cpu`]).
     pub cpu_millis: Option<u64>,
     pub mem_bytes: Option<u64>,
@@ -226,16 +251,11 @@ fn tenant_of(tenants: &[Tenant], slot: Slot) -> Option<&Tenant> {
     tenants.iter().find(|t| t.slot == slot)
 }
 
-/// The class the order uses: an unallowed `gate` counts as interactive
-/// (the node refuses those at assign anyway); old batch counts as
-/// interactive.
-fn effective_class(q: &Queued, t: &Tenant, now: i64, cfg: &Config) -> JobClass {
-    match q.class {
-        JobClass::Gate if t.limits.allows_class(JobClass::Gate) => JobClass::Gate,
-        JobClass::Gate => JobClass::Interactive,
-        JobClass::Batch if now - q.enqueued_at >= cfg.batch_aging_secs => JobClass::Interactive,
-        c => c,
-    }
+/// The band the order uses: the tier the tenant may use here (CI without
+/// the share's `gate`, or Priority where it doesn't count, is Normal), with
+/// an hour-old Normal job aged above fresh Normal (T5).
+fn band_of(q: &Queued, t: &Tenant, now: i64, cfg: &Config) -> Band {
+    tiers::band(t.effective_tier(q.tier), now - q.enqueued_at, cfg.aging_secs)
 }
 
 /// The next value after `last` in `keys`' order (wrapping), or the first.
@@ -247,12 +267,21 @@ fn rotate_after<'a>(keys: &BTreeSet<&'a str>, last: Option<&str>) -> Option<&'a 
     keys.iter().find(|k| **k > last).or_else(|| keys.iter().next()).copied()
 }
 
-/// A tenant's next job: its best class, then the workspace after the last
-/// served, then the session after the last served there, then FIFO.
+/// Node arrival order: when the node received it, then its insert order.
+fn arrival_key(q: &Queued) -> (i64, u64, &str) {
+    (q.enqueued_at, q.arrival, q.job_id.as_str())
+}
+
+/// A tenant's next job: its best band; CI, Priority and aged Normal by
+/// node arrival; fresh Normal by the workspace after the last served, then
+/// the session after the last served there, then FIFO.
 fn tenant_head(pending: &[usize], input: &Input<'_>, t: &Tenant, rot: &Rotation) -> usize {
     let q = input.queued;
-    let best = pending.iter().map(|i| effective_class(&q[*i], t, input.now, input.cfg)).max().expect("non-empty");
-    let mine: Vec<usize> = pending.iter().copied().filter(|i| effective_class(&q[*i], t, input.now, input.cfg) == best).collect();
+    let best = pending.iter().map(|i| band_of(&q[*i], t, input.now, input.cfg)).max().expect("non-empty");
+    let mine: Vec<usize> = pending.iter().copied().filter(|i| band_of(&q[*i], t, input.now, input.cfg) == best).collect();
+    if best.by_arrival() {
+        return mine.into_iter().min_by(|a, b| arrival_key(&q[*a]).cmp(&arrival_key(&q[*b]))).expect("a job");
+    }
     let wss: BTreeSet<&str> = mine.iter().map(|i| q[*i].workspace_id.as_str()).collect();
     let ws = rotate_after(&wss, rot.last_ws.get(&t.slot).map(String::as_str)).expect("a workspace");
     let in_ws: Vec<usize> = mine.iter().copied().filter(|i| q[*i].workspace_id == ws).collect();
@@ -262,7 +291,7 @@ fn tenant_head(pending: &[usize], input: &Input<'_>, t: &Tenant, rot: &Rotation)
     in_ws
         .into_iter()
         .filter(|i| q[*i].session_id.as_deref().unwrap_or("") == s)
-        .min_by(|a, b| (q[*a].enqueued_at, q[*a].arrival, &q[*a].job_id).cmp(&(q[*b].enqueued_at, q[*b].arrival, &q[*b].job_id)))
+        .min_by(|a, b| arrival_key(&q[*a]).cmp(&arrival_key(&q[*b])))
         .expect("a job")
 }
 
@@ -313,36 +342,32 @@ pub fn order(input: &Input<'_>) -> Vec<usize> {
             pending.remove(&slot);
         }
     }
-    away.sort_by(|a, b| (q[*a].enqueued_at, q[*a].arrival, &q[*a].job_id).cmp(&(q[*b].enqueued_at, q[*b].arrival, &q[*b].job_id)));
+    away.sort_by(|a, b| arrival_key(&q[*a]).cmp(&arrival_key(&q[*b])));
     out.extend(away);
     out
 }
 
-/// Does candidate `a` go before `b`? (§7 rules 1–5.)
+/// Does candidate `a` go before `b`? (Rules 1–4 in the module header.)
 fn before(input: &Input<'_>, a: (usize, Slot), b: (usize, Slot), usage: &BTreeMap<Slot, u128>, today: &BTreeMap<Slot, u64>, rot: &Rotation) -> bool {
     let (ta, tb) = (tenant_of(input.tenants, a.1).expect("known"), tenant_of(input.tenants, b.1).expect("known"));
     let (qa, qb) = (&input.queued[a.0], &input.queued[b.0]);
-    let (ca, cb) = (effective_class(qa, ta, input.now, input.cfg), effective_class(qb, tb, input.now, input.cfg));
-    // 1. gate first.
-    if (ca == JobClass::Gate) != (cb == JobClass::Gate) {
-        return ca == JobClass::Gate;
+    let (ba, bb) = (band_of(qa, ta, input.now, input.cfg), band_of(qb, tb, input.now, input.cfg));
+    // 1. the tier band, highest first.
+    if ba != bb {
+        return ba > bb;
     }
-    // 2. within quota first.
+    // 2. within quota first (inside a band, T22).
     let over = |t: &Tenant| today.get(&t.slot).copied().unwrap_or(0) >= u64::from(t.limits.cpu_hours_day) * 3600;
     if over(ta) != over(tb) {
         return !over(ta);
     }
-    // 3. interactive before batch.
-    if ca != cb {
-        return ca > cb;
-    }
-    // 4. lowest usage / weight (cross-multiplied, no floats).
+    // 3. lowest usage / weight (cross-multiplied, no floats).
     let (ua, ub) = (usage.get(&a.1).copied().unwrap_or(0), usage.get(&b.1).copied().unwrap_or(0));
     let (wa, wb) = (u128::from(ta.limits.weight.max(1)), u128::from(tb.limits.weight.max(1)));
     if ua * wb != ub * wa {
         return ua * wb < ub * wa;
     }
-    // 5. rotate after the tenant served last.
+    // 4. rotate after the tenant served last.
     let dist = |s: Slot| match rot.last_slot {
         Some(l) => (s as i32 - l as i32 - 1).rem_euclid(share::MAX_SLOTS as i32),
         None => s as i32,
@@ -358,7 +383,6 @@ struct SimRun {
     slot: Slot,
     ws: String,
     secret: bool,
-    gate: bool,
     cpu: u64,
     mem: u64,
     exclusive: bool,
@@ -367,27 +391,15 @@ struct SimRun {
 }
 
 /// Why a job can't start in this state: `Wait` lets later jobs go
-/// (tenant or workspace limits, one gate); `Capacity` is the node being
-/// full (the backfill hold applies); `Never` can't fit even on an idle
-/// node.
+/// (tenant or workspace limits); `Capacity` is the node being full (the
+/// hold applies: at once behind a CI or Priority head, after 20 min behind
+/// a Normal one); `Never` can't fit even on an idle node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Fit {
     Now,
     Wait,
     Capacity,
     Never,
-}
-
-/// The gate slots in force: the policy's `gate_reserved`, never all of
-/// the node's slots (at least one stays for normal work), and none when
-/// no server here may run gate jobs at all (an idle reservation nobody
-/// can use would only waste a slot).
-pub fn gate_reserve(input: &Input<'_>) -> u32 {
-    let r = input.caps.gate_reserved.min(input.caps.parallel_max.saturating_sub(1));
-    if r == 0 || !input.tenants.iter().any(|t| t.limits.allows_class(JobClass::Gate)) {
-        return 0;
-    }
-    r
 }
 
 fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
@@ -397,12 +409,10 @@ fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
     if cpu > caps.cpu_millis || mem > caps.mem_bytes {
         return Fit::Never;
     }
+    // The tenant's and the workspace's own limits: `Wait`, never a hold on
+    // other tenants (§2.5 of the vs-live).
     let mine = run.iter().filter(|r| r.slot == e.slot).count() as u32;
     if mine >= t.limits.max_running {
-        return Fit::Wait;
-    }
-    // SE26: no secret job beside another workspace's job under one uid.
-    if isolation_blocks(input.cfg.one_uid, e.slot, &e.workspace_id, e.secret, run.iter().map(|r| (r.slot, r.ws.as_str(), r.secret))) {
         return Fit::Wait;
     }
     if let Some(m) = e.ws_max_running {
@@ -410,26 +420,11 @@ fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
             return Fit::Wait;
         }
     }
-    let gate = effective_class(e, t, input.now, input.cfg) == JobClass::Gate;
-    if gate && run.iter().any(|r| r.gate) {
-        return Fit::Wait;
-    }
-    let reserve = gate_reserve(input);
-    if !gate && reserve > 0 {
-        // Non-gate work stays out of the reserved slots and their even
-        // share of CPU and memory. A job bigger than what's left may still
-        // run alone (the reservation never makes a job impossible; the
-        // gate then waits for capacity like before).
-        let others: Vec<&SimRun> = run.iter().filter(|r| !r.gate).collect();
-        if others.len() as u32 >= caps.parallel_max - reserve {
-            return Fit::Capacity;
-        }
-        let (rc, rm) = (caps.default_cpu() * u64::from(reserve), caps.default_mem() * u64::from(reserve));
-        let oc: u64 = others.iter().map(|r| r.cpu).sum();
-        let om: u64 = others.iter().map(|r| r.mem).sum();
-        if !others.is_empty() && (oc.saturating_add(cpu) > caps.cpu_millis.saturating_sub(rc) || om.saturating_add(mem) > caps.mem_bytes.saturating_sub(rm)) {
-            return Fit::Capacity;
-        }
+    // SE26: no secret job beside another workspace's job under one uid. A
+    // CI or Priority job waits for the node to drain toward it (T4: as
+    // `Wait` it could starve while other workspaces keep starting).
+    if isolation_blocks(input.cfg.one_uid, e.slot, &e.workspace_id, e.secret, run.iter().map(|r| (r.slot, r.ws.as_str(), r.secret))) {
+        return if band_of(e, t, input.now, input.cfg).holds() { Fit::Capacity } else { Fit::Wait };
     }
     let used_cpu: u64 = run.iter().map(|r| r.cpu).sum();
     let used_mem: u64 = run.iter().map(|r| r.mem).sum();
@@ -461,7 +456,6 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
             slot: r.slot,
             ws: r.workspace_id.clone(),
             secret: r.secret,
-            gate: r.class == JobClass::Gate,
             cpu: r.cpu_millis,
             mem: r.mem_bytes,
             exclusive: r.exclusive,
@@ -488,9 +482,11 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
     }
     let mut now: u64 = 0;
     for _round in 0..(4 * q.len() + 8) {
-        // Start pass at `now`, in order, with the backfill hold. (Gate
-        // jobs always come first in the order, so the hold never stands
-        // between a gate job and its reserved slot.)
+        // Start pass at `now`, in order, with the hold: the first job that
+        // waits for capacity holds every later start at once when it is
+        // CI or Priority ("next free slot"), after 20 min when it is
+        // Normal. The order is band-first, so nothing of a higher band
+        // ever sits behind it.
         let mut held = false;
         let mut capacity_head_seen = false;
         let mut started = Vec::new();
@@ -502,23 +498,16 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
                     let cpu = e.cpu_millis.unwrap_or_else(|| input.caps.default_cpu());
                     let mem = e.mem_bytes.unwrap_or_else(|| input.caps.default_mem());
                     let est = if p90 { e.est_p90.or(e.est_p50) } else { e.est_p50 };
-                    run.push(SimRun {
-                        slot: e.slot,
-                        ws: e.workspace_id.clone(),
-                        secret: e.secret,
-                        gate: effective_class(e, t, input.now, input.cfg) == JobClass::Gate,
-                        cpu,
-                        mem,
-                        exclusive: e.exclusive,
-                        end: est.map(|d| now + d.max(1)),
-                    });
+                    run.push(SimRun { slot: e.slot, ws: e.workspace_id.clone(), secret: e.secret, cpu, mem, exclusive: e.exclusive, end: est.map(|d| now + d.max(1)) });
                     start_at[*i] = Some(now);
                     started.push(*i);
                 }
                 Fit::Capacity if !capacity_head_seen => {
                     capacity_head_seen = true;
                     let waited = input.now - e.enqueued_at + now as i64;
-                    if waited >= input.cfg.backfill_hold_secs {
+                    // Its band as of the real now (ETAs don't age a job
+                    // into a hold it doesn't have yet).
+                    if band_of(e, t, input.now, input.cfg).holds() || waited >= input.cfg.backfill_hold_secs {
                         held = true;
                     }
                 }
@@ -593,6 +582,7 @@ pub fn quote(input: &Input<'_>, slot: Slot, cpu_millis: u64, mem_bytes: u64) -> 
         workspace_id: "\u{0}quote".into(),
         session_id: None,
         class: JobClass::Interactive,
+        tier: Tier::Normal,
         // 0 = the plan named no limit: an even share, like an unsized job.
         cpu_millis: (cpu_millis > 0).then_some(cpu_millis),
         mem_bytes: (mem_bytes > 0).then_some(mem_bytes),
@@ -627,10 +617,13 @@ pub struct Viewer<'a> {
     /// The owner server: also other tenants' labels and per-tenant totals.
     pub owner: bool,
     pub labels: &'a BTreeMap<Slot, String>,
+    /// It said protocol ≥ 5: entries carry their tier.
+    pub tiers: bool,
 }
 
 /// The queue as `viewer` may see it (§7): its own jobs in full; others'
-/// as "another server" with class, state, size and a rounded ETA only.
+/// as "another server" with class, tier, state, size and a rounded ETA
+/// only (never who sent them).
 pub fn view(input: &Input<'_>, d: &Decision, viewer: &Viewer<'_>, request_id: &str) -> QueueView {
     let mut entries = Vec::new();
     let mut pos = 0u32;
@@ -661,6 +654,7 @@ pub fn view(input: &Input<'_>, d: &Decision, viewer: &Viewer<'_>, request_id: &s
             pos: 0,
             mine,
             class: r.class,
+            tier: viewer.tiers.then(|| tenant_of(input.tenants, r.slot).map(|t| t.effective_tier(r.tier)).unwrap_or(Tier::Normal)),
             state: JobState::Running,
             cpu_millis: r.cpu_millis,
             mem_bytes: r.mem_bytes,
@@ -683,6 +677,7 @@ pub fn view(input: &Input<'_>, d: &Decision, viewer: &Viewer<'_>, request_id: &s
             pos: 0,
             mine,
             class: q.class,
+            tier: viewer.tiers.then(|| tenant_of(input.tenants, q.slot).map(|t| t.effective_tier(q.tier)).unwrap_or(Tier::Normal)),
             state: JobState::Queued,
             cpu_millis: q.cpu_millis.unwrap_or_else(|| input.caps.default_cpu()),
             mem_bytes: q.mem_bytes.unwrap_or_else(|| input.caps.default_mem()),
@@ -735,12 +730,22 @@ mod tests {
         ShareLimits { weight, max_running: 8, max_queued: 1000, cpu_hours_day: 1000, ..ShareLimits::new_server(Trust::Own, false) }
     }
 
+    /// The owner (slot 0) has Priority by default; guests don't.
     fn tenant(slot: Slot, weight: u32) -> Tenant {
-        Tenant { slot, limits: limits(weight), usage: 0, cpu_secs_today: 0, blocked: None }
+        Tenant { slot, limits: limits(weight), usage: 0, cpu_secs_today: 0, blocked: None, priority: slot == crate::share::OWNER_SLOT }
+    }
+
+    /// A tenant whose share allows CI (`gate`) and whose Priority counts.
+    fn gate_tenant(slot: Slot) -> Tenant {
+        let mut t = tenant(slot, 1);
+        t.limits.top_class = JobClass::Gate;
+        t.limits.gate = true;
+        t.priority = true;
+        t
     }
 
     fn caps(par: u32) -> Caps {
-        Caps { cpu_millis: 8000, mem_bytes: 32 << 30, parallel_max: par, blocked: None, gate_reserved: 0 }
+        Caps { cpu_millis: 8000, mem_bytes: 32 << 30, parallel_max: par, blocked: None }
     }
 
     fn q(slot: Slot, job: &str, ws: &str, at: i64) -> Queued {
@@ -751,6 +756,7 @@ mod tests {
             workspace_id: ws.into(),
             session_id: None,
             class: JobClass::Interactive,
+            tier: Tier::Normal,
             cpu_millis: Some(1000),
             mem_bytes: Some(1 << 30),
             exclusive: false,
@@ -772,6 +778,7 @@ mod tests {
             workspace_id: "w".into(),
             session_id: None,
             class: JobClass::Interactive,
+            tier: Tier::Normal,
             cpu_millis: cpu,
             mem_bytes: 1 << 30,
             exclusive: false,
@@ -838,7 +845,9 @@ mod tests {
 
     impl World {
         fn new(par: u32, tenants: Vec<Tenant>) -> Self {
-            Self { cfg: Config::default(), caps: caps(par), tenants, running: vec![], queued: vec![], rot: Rotation::default(), now: 10_000 }
+            // Jobs queued at small times are under an hour old (fresh
+            // Normal) unless a test ages them on purpose.
+            Self { cfg: Config::default(), caps: caps(par), tenants, running: vec![], queued: vec![], rot: Rotation::default(), now: 1_000 }
         }
         fn input(&self) -> Input<'_> {
             Input { now: self.now, cfg: &self.cfg, caps: &self.caps, tenants: &self.tenants, running: &self.running, queued: &self.queued, rotation: &self.rot }
@@ -854,120 +863,264 @@ mod tests {
         }
     }
 
+    /// CI jumps the queue and takes every free slot (no "one gate job at a
+    /// time", G6), and it never stops a running job (R3).
     #[test]
-    fn gate_jumps_the_queue_but_only_one_runs_and_it_never_kills() {
-        let mut owner = tenant(0, 2);
-        owner.limits = ShareLimits::owner(8, 8, 32, 100, Network::On);
-        let mut w = World::new(4, vec![owner, tenant(1, 1)]);
+    fn ci_jumps_the_queue_takes_every_free_slot_and_never_kills() {
+        let mut w = World::new(4, vec![gate_tenant(0), tenant(1, 1)]);
         w.running = vec![running(1, "r1", 1000, Some(600))];
-        w.queued = vec![q(1, "b1", "w", 1), q(0, "g1", "w", 5), q(0, "g2", "w", 6)];
-        w.queued[1].class = JobClass::Gate;
-        w.queued[2].class = JobClass::Gate;
-        assert_eq!(w.order(), vec!["g1", "g2", "b1"]);
+        w.queued = vec![q(1, "n1", "w", 1), q(0, "c1", "w", 5), q(0, "c2", "w", 6)];
+        w.queued[1].tier = Tier::Ci;
+        w.queued[2].tier = Tier::Ci;
+        assert_eq!(w.order(), vec!["c1", "c2", "n1"]);
         let d = w.decide();
-        assert_eq!(w.ids(&d.start), vec!["g1", "b1"], "one gate at a time; the other waits, b1 backfills");
-        assert!(!d.info[2].starts_now && d.info[2].pos == 2);
-        // A gate from a tenant whose share doesn't allow it is interactive.
-        w.queued[0].class = JobClass::Gate;
-        w.queued[1].class = JobClass::Interactive;
-        w.queued[2].class = JobClass::Interactive;
-        assert_eq!(w.order()[0], "g1", "tenant 1 can't gate, so b1 doesn't jump; slot 0 wins the tie");
-    }
-
-    /// G4 (plan-ci-release-on-k2-compute-v1): with `gate_reserved_slots
-    /// = 1`, normal work never fills the last slot, so a release gate
-    /// starts at once on a node busy with long test runs.
-    #[test]
-    fn a_reserved_gate_slot_keeps_normal_work_out_and_the_gate_starts_at_once() {
-        let owner = || {
-            let mut o = tenant(0, 1);
-            o.limits = ShareLimits::owner(8, 8, 32, 100, Network::On);
-            o
-        };
-        let mut w = World::new(3, vec![owner(), tenant(1, 1)]);
-        w.caps.gate_reserved = 1;
-        w.running = vec![running(1, "t1", 1000, Some(7200)), running(1, "t2", 1000, Some(7200))];
-        w.queued = vec![q(1, "b1", "w", 1)];
+        assert_eq!(w.ids(&d.start), vec!["c1", "c2", "n1"], "every free slot fills; two CI jobs run at once");
+        // A full node: nothing is stopped for CI, it waits for the next end.
+        w.running = (0..4).map(|i| running(1, &format!("r{i}"), 1000, Some(600))).collect();
         let d = w.decide();
-        assert!(d.start.is_empty(), "the third slot is the gate's: {:?}", w.ids(&d.start));
-        assert_eq!(d.info[0].eta_secs, Some(7200), "b1 starts when a normal slot frees");
-        // The gate arrives later and still starts now.
-        w.queued.push(q(0, "g1", "w", 50));
-        w.queued[1].class = JobClass::Gate;
-        let d = w.decide();
-        assert_eq!(w.ids(&d.start), vec!["g1"]);
-        // While the gate runs, normal work still has its two slots, no more.
-        let mut g = running(0, "g1", 1000, Some(1200));
-        g.class = JobClass::Gate;
-        w.running = vec![g, running(1, "t1", 1000, Some(7200))];
-        w.queued = vec![q(1, "b1", "w", 1), q(1, "b2", "w", 2)];
-        assert_eq!(w.ids(&w.decide().start), vec!["b1"], "one normal slot was free");
-
-        // Without the reservation the third slot goes to normal work (today).
-        let mut w = World::new(3, vec![owner(), tenant(1, 1)]);
-        w.running = vec![running(1, "t1", 1000, Some(7200)), running(1, "t2", 1000, Some(7200))];
-        w.queued = vec![q(1, "b1", "w", 1)];
-        assert_eq!(w.ids(&w.decide().start), vec!["b1"]);
-        // Nobody here may run gate jobs: the reservation is idle and off.
-        w.tenants = vec![tenant(0, 1), tenant(1, 1)];
-        w.caps.gate_reserved = 1;
-        assert_eq!(gate_reserve(&w.input()), 0);
-        assert_eq!(w.ids(&w.decide().start), vec!["b1"]);
-        // Never every slot: a one-slot node still runs normal work.
-        let mut w = World::new(1, vec![owner()]);
-        w.caps.gate_reserved = 1;
-        assert_eq!(gate_reserve(&w.input()), 0);
-        w.queued = vec![q(0, "b1", "w", 1)];
-        assert_eq!(w.ids(&w.decide().start), vec!["b1"]);
-        let mut w = World::new(4, vec![owner()]);
-        w.caps.gate_reserved = 9;
-        assert_eq!(gate_reserve(&w.input()), 3, "clamped to slots - 1");
-    }
-
-    /// The reserved slot keeps its even share of CPU and memory too, but
-    /// never makes a big job impossible: alone, it still runs.
-    #[test]
-    fn a_reserved_gate_slot_keeps_its_cpu_share_but_a_big_job_may_run_alone() {
-        let mut o = tenant(0, 1);
-        o.limits = ShareLimits::owner(8, 8, 32, 100, Network::On);
-        // 8 CPUs, 4 slots: the gate's share is 2000 millicores.
-        let mut w = World::new(4, vec![o]);
-        w.caps.gate_reserved = 1;
-        w.running = vec![running(0, "t1", 5000, Some(600))];
-        w.queued = vec![q(0, "b1", "w", 1)];
-        w.queued[0].cpu_millis = Some(1500); // 6500 > 8000 - 2000
-        assert!(w.decide().start.is_empty(), "it would eat the gate's CPU");
-        w.queued[0].cpu_millis = Some(1000); // 6000 fits
-        assert_eq!(w.ids(&w.decide().start), vec!["b1"]);
+        assert!(d.start.is_empty());
+        assert_eq!(d.info[1].eta_secs, Some(600));
+        // CI from a server whose share has no `gate` counts as Normal.
         w.running.clear();
-        w.queued[0].cpu_millis = Some(7000);
-        assert_eq!(w.ids(&w.decide().start), vec!["b1"], "alone, a big job still runs");
+        w.caps = caps(1);
+        w.queued = vec![q(0, "n0", "w", 1), q(1, "c1", "w", 5)];
+        w.queued[1].tier = Tier::Ci;
+        assert_eq!(w.order(), vec!["n0", "c1"], "slot 1 can't use CI: it takes its turn as Normal");
+    }
+
+    /// R2 / G3: no slot is ever held back. With three slots and two long
+    /// runs, the third goes to Normal work even where servers may send CI.
+    #[test]
+    fn no_slot_is_reserved_for_ci() {
+        let mut w = World::new(3, vec![gate_tenant(0), tenant(1, 1)]);
+        w.running = vec![running(1, "t1", 1000, Some(7200)), running(1, "t2", 1000, Some(7200))];
+        w.queued = vec![q(1, "n1", "w", 1)];
+        assert_eq!(w.ids(&w.decide().start), vec!["n1"]);
+    }
+
+    /// R1 "next free slot": a CI or Priority head that waits for room holds
+    /// every later start, even a small job that would fit; the node drains
+    /// toward it and nothing is killed. A Normal head lets it backfill.
+    #[test]
+    fn a_ci_or_priority_head_takes_the_next_free_slot() {
+        for tier in [Tier::Ci, Tier::Priority] {
+            let mut w = World::new(4, vec![gate_tenant(0), tenant(1, 1)]);
+            w.running = vec![running(1, "big", 6000, Some(300))];
+            let mut head = q(0, "head", "w", w.now - 5);
+            head.tier = tier;
+            head.cpu_millis = Some(4000);
+            w.queued = vec![head, q(1, "small", "w", w.now - 600)];
+            let d = w.decide();
+            assert!(d.start.is_empty(), "{tier:?}: nothing starts ahead of it: {:?}", w.ids(&d.start));
+            assert_eq!((d.info[0].pos, d.info[0].eta_secs), (1, Some(300)), "{tier:?}: it starts when the running job ends");
+            assert_eq!(d.info[1].eta_secs, Some(300), "{tier:?}: the small job starts beside it then");
+        }
+        let mut w = World::new(4, vec![gate_tenant(0), tenant(1, 1)]);
+        w.running = vec![running(1, "big", 6000, Some(300))];
+        let mut head = q(0, "head", "w", w.now - 5);
+        head.cpu_millis = Some(4000);
+        w.queued = vec![head, q(1, "small", "w", w.now - 1)];
+        assert_eq!(w.ids(&w.decide().start), vec!["small"], "a Normal head lets small jobs backfill (its 20 minutes)");
     }
 
     #[test]
-    fn within_quota_goes_before_over_quota_even_against_class() {
-        let mut a = tenant(0, 1);
-        a.cpu_secs_today = 1000 * 3600; // at the soft limit
-        let b = tenant(1, 1);
-        let mut w = World::new(1, vec![a, b]);
-        w.queued = vec![q(0, "a-int", "w", 1), q(1, "b-batch", "w", 2)];
-        w.queued[1].class = JobClass::Batch;
-        assert_eq!(w.order(), vec!["b-batch", "a-int"], "quota sits above class, so marking all interactive can't win");
+    fn priority_never_goes_before_ci_and_ci_never_waits_behind_priority() {
+        let mut w = World::new(1, vec![gate_tenant(0), gate_tenant(1)]);
+        let mut p = q(0, "p-old", "w", 1);
+        p.tier = Tier::Priority;
+        let mut c = q(1, "ci-new", "w", 900);
+        c.tier = Tier::Ci;
+        w.queued = vec![p, c, q(0, "n-oldest", "w", 0)];
+        assert_eq!(w.order(), vec!["ci-new", "p-old", "n-oldest"]);
         let d = w.decide();
-        assert_eq!(w.ids(&d.start), vec!["b-batch"]);
+        assert_eq!(w.ids(&d.start), vec!["ci-new"]);
+        assert_eq!(d.info.iter().map(|i| i.pos).collect::<Vec<_>>(), vec![2, 1, 3]);
+    }
+
+    /// T5: an hour-old Normal job ranks above fresh Normal work but below
+    /// Priority, so Priority keeps "next free slot" under load. The old
+    /// `batch` class is just Normal (G4).
+    #[test]
+    fn aged_normal_ranks_between_priority_and_fresh_normal() {
+        let mut w = World::new(1, vec![gate_tenant(0)]);
+        w.now = 10_000;
+        let aged = q(0, "aged", "w-a", w.now - 3600);
+        let fresh = q(0, "fresh", "w-b", w.now - 10);
+        let mut p = q(0, "p", "w-c", w.now - 1);
+        p.tier = Tier::Priority;
+        w.queued = vec![fresh.clone(), aged.clone(), p];
+        assert_eq!(w.order(), vec!["p", "aged", "fresh"]);
+        // Workspaces would take turns (w-b after w-a was served), but the
+        // aged job ranks above fresh work.
+        w.rot.last_ws.insert(0, "w-a".into());
+        w.queued = vec![fresh, aged];
+        assert_eq!(w.order(), vec!["aged", "fresh"]);
+        let mut b = q(0, "old-batch", "w", w.now - 5);
+        b.class = JobClass::Batch;
+        w.queued = vec![b, q(0, "later", "w", w.now - 1)];
+        assert_eq!(w.order(), vec!["old-batch", "later"], "a detached (batch) job is plain Normal, FIFO");
+    }
+
+    /// T7: a guest server's Priority counts only where the node's owner
+    /// allows it; otherwise it runs, and shows, as Normal. Views carry the
+    /// tier only for protocol-5 servers.
+    #[test]
+    fn a_guests_priority_counts_only_where_the_owner_allows_it() {
+        let mut w = World::new(1, vec![tenant(0, 1), tenant(1, 1)]);
+        let mut gp = q(1, "guest-p", "w", 2);
+        gp.tier = Tier::Priority;
+        w.queued = vec![q(0, "owner-n", "w", 1), gp];
+        assert_eq!(w.order(), vec!["owner-n", "guest-p"], "no priority for slot 1: Normal; slot 0 wins the tie");
+        w.tenants[1].priority = true;
+        assert_eq!(w.order(), vec!["guest-p", "owner-n"]);
+        let labels = BTreeMap::new();
+        let d = w.decide();
+        let v = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels, tiers: true }, "r");
+        assert_eq!(v.entries.iter().map(|e| e.tier).collect::<Vec<_>>(), vec![Some(Tier::Priority), Some(Tier::Normal)]);
+        w.tenants[1].priority = false;
+        let d = w.decide();
+        let v = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: true }, "r");
+        assert!(v.entries.iter().all(|e| e.tier == Some(Tier::Normal)), "shown as it counts: {:?}", v.entries);
+        let old = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: false }, "r");
+        assert!(old.entries.iter().all(|e| e.tier.is_none()), "a protocol-4 server gets no tier field");
+        let mut r = running(0, "r", 1000, Some(60));
+        r.tier = Tier::Ci;
+        w.tenants[0] = gate_tenant(0);
+        w.running = vec![r];
+        let d = w.decide();
+        let v = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: true }, "r");
+        assert_eq!((v.entries[0].state, v.entries[0].tier, v.entries[0].job_id.as_deref()), (JobState::Running, Some(Tier::Ci), None));
+    }
+
+    /// T4: a CI job with secrets on a one-uid node waits for the node to
+    /// drain toward it, instead of starving while other workspaces start.
+    #[test]
+    fn a_ci_job_with_secrets_drains_the_node_toward_it() {
+        let mut w = World::new(4, vec![gate_tenant(0)]);
+        w.cfg.one_uid = true;
+        let mut r = running(0, "other", 1000, Some(120));
+        r.workspace_id = "w-other".into();
+        w.running = vec![r];
+        let mut ci = q(0, "ci", "w-rel", w.now - 5);
+        ci.tier = Tier::Ci;
+        ci.secret = true;
+        w.queued = vec![ci.clone(), q(0, "n", "w-x", w.now - 1)];
+        let d = w.decide();
+        assert!(d.start.is_empty(), "no other workspace starts beside the waiting CI job: {:?}", w.ids(&d.start));
+        assert_eq!(d.info[0].eta_secs, Some(120));
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(crate::secret::codes::ISOLATION_WAIT));
+        // A Normal secret job keeps today's rule: it waits, others go.
+        ci.tier = Tier::Normal;
+        w.queued = vec![ci, q(0, "n", "w-x", w.now - 1)];
+        assert_eq!(w.ids(&w.decide().start), vec!["n"]);
+    }
+
+    /// A server's own limits are `Wait`: a CI job held by its own server's
+    /// `max_running` never holds other servers' work.
+    #[test]
+    fn a_tenants_own_limits_never_hold_other_tenants() {
+        let mut t0 = gate_tenant(0);
+        t0.limits.max_running = 1;
+        let mut w = World::new(4, vec![t0, tenant(1, 1)]);
+        w.running = vec![running(0, "mine", 1000, Some(100))];
+        let mut ci = q(0, "ci", "w", 1);
+        ci.tier = Tier::Ci;
+        w.queued = vec![ci, q(1, "guest", "w", 2)];
+        let d = w.decide();
+        assert_eq!(w.ids(&d.start), vec!["guest"]);
+        assert_eq!(d.info[0].eta_secs, Some(100));
+    }
+
+    /// CI, Priority and aged Normal go strictly by node arrival inside a
+    /// server (no workspace or session turns); fresh Normal keeps them.
+    #[test]
+    fn urgent_tiers_go_by_arrival_inside_a_server() {
+        let mut w = World::new(1, vec![gate_tenant(0)]);
+        let mk = |job: &str, ws: &str, sess: &str, at: i64, tier: Tier| {
+            let mut e = q(0, job, ws, at);
+            e.session_id = Some(sess.into());
+            e.tier = tier;
+            e
+        };
+        w.queued = vec![mk("p1", "a", "x", 1, Tier::Priority), mk("p2", "a", "x", 2, Tier::Priority), mk("p3", "b", "y", 3, Tier::Priority)];
+        w.rot.last_ws.insert(0, "a".into());
+        assert_eq!(w.order(), vec!["p1", "p2", "p3"], "no workspace turns for Priority");
+        for e in w.queued.iter_mut() {
+            e.tier = Tier::Normal;
+        }
+        assert_eq!(w.order(), vec!["p3", "p1", "p2"], "fresh Normal: workspaces take turns (b after a)");
+    }
+
+    /// T22: CPU-hours sort inside a band, never across: an over-quota
+    /// server's CI still goes before a within-quota server's Normal.
+    #[test]
+    fn quota_sorts_inside_a_band_never_across() {
+        let mut a = gate_tenant(0);
+        a.cpu_secs_today = 1000 * 3600; // at its soft limit
+        let mut w = World::new(1, vec![a, tenant(1, 1)]);
+        w.queued = vec![q(0, "a-ci", "w", 1), q(1, "b-n", "w", 2)];
+        w.queued[0].tier = Tier::Ci;
+        assert_eq!(w.order(), vec!["a-ci", "b-n"]);
+        w.queued[0].tier = Tier::Normal;
+        assert_eq!(w.order(), vec!["b-n", "a-ci"], "same band: within quota first");
+        let d = w.decide();
+        assert_eq!(w.ids(&d.start), vec!["b-n"]);
         assert_eq!(d.info[0].blocked_by.as_deref(), Some(blocked::OVER_QUOTA), "it waits, it doesn't fail");
         assert!(d.info[0].eta_secs.is_some(), "over quota still gets an ETA");
     }
 
+    /// Random queues (a fixed LCG, no extra crates): the order is always
+    /// band-first; whenever a CI or Priority job can't start (here only
+    /// for room: no tenant limits, secrets or exclusive jobs), nothing
+    /// ordered after it starts; and starts never overfill the node. A
+    /// decision only ever starts jobs: running ones are input (R3).
     #[test]
-    fn interactive_before_batch_and_old_batch_counts_as_interactive() {
-        let mut w = World::new(1, vec![tenant(0, 1)]);
-        w.queued = vec![q(0, "batch", "w", 1), q(0, "int", "w", 5)];
-        w.queued[0].class = JobClass::Batch;
-        w.now = 100;
-        assert_eq!(w.order(), vec!["int", "batch"]);
-        w.now = 1 + 3600;
-        assert_eq!(w.order(), vec!["batch", "int"], "aged batch is interactive and older");
+    fn random_queues_keep_band_order_and_the_next_free_slot() {
+        let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = move |n: u64| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % n
+        };
+        for round in 0..2000 {
+            let par = 1 + next(4) as u32;
+            let mut w = World::new(par, vec![gate_tenant(0), gate_tenant(1), tenant(2, 1)]);
+            w.now = 20_000;
+            let now = w.now;
+            let nr = next(u64::from(par) + 1);
+            let mut running_jobs = Vec::new();
+            for i in 0..nr {
+                running_jobs.push(running(next(3) as u8, &format!("r{i}"), 500 + 500 * next(4), Some(30 + 60 * next(10))));
+            }
+            w.running = running_jobs;
+            let n = 1 + next(8);
+            let mut queued = Vec::new();
+            for i in 0..n {
+                let mut e = q(next(3) as u8, &format!("j{i}"), &format!("w{}", next(3)), now - next(7200) as i64);
+                e.tier = [Tier::Normal, Tier::Normal, Tier::Priority, Tier::Ci][next(4) as usize];
+                e.cpu_millis = Some(500 + 500 * next(8));
+                e.arrival = i;
+                queued.push(e);
+            }
+            w.queued = queued;
+            let d = w.decide();
+            let bands: Vec<Band> = d
+                .order
+                .iter()
+                .map(|i| {
+                    let e = &w.queued[*i];
+                    band_of(e, tenant_of(&w.tenants, e.slot).expect("tenant"), w.now, &w.cfg)
+                })
+                .collect();
+            assert!(bands.windows(2).all(|p| p[0] >= p[1]), "round {round}: not band-first: {bands:?}");
+            let started: BTreeSet<usize> = d.start.iter().copied().collect();
+            if let Some(k) = (0..d.order.len()).find(|k| !started.contains(&d.order[*k]) && bands[*k].holds()) {
+                let after: Vec<String> = d.order[k + 1..].iter().filter(|i| started.contains(i)).map(|i| w.queued[*i].job_id.clone()).collect();
+                assert!(after.is_empty(), "round {round}: {after:?} started past a waiting {:?} head", bands[k]);
+            }
+            assert!(w.running.len() + d.start.len() <= par as usize, "round {round}: overfilled");
+            let cpu: u64 = w.running.iter().map(|r| r.cpu_millis).sum::<u64>() + d.start.iter().map(|i| w.queued[*i].cpu_millis.expect("sized")).sum::<u64>();
+            assert!(cpu <= w.caps.cpu_millis || (w.running.is_empty() && d.start.len() == 1), "round {round}: CPU overfilled");
+        }
     }
 
     #[test]
@@ -1188,7 +1341,7 @@ mod tests {
         w.queued = vec![mine];
         let d = w.decide();
         let labels = BTreeMap::from([(0, "rosson.k2.dev".to_string()), (1, "baden.k2.dev".to_string())]);
-        let v = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels }, "r1");
+        let v = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: false }, "r1");
         assert_eq!(v.request_id, "r1");
         let other = &v.entries[0];
         assert!(!other.mine && other.job_id.is_none() && other.workspace_id.is_none() && other.session_id.is_none() && other.server_label.is_none());
@@ -1198,7 +1351,7 @@ mod tests {
         assert!(v.totals.is_empty());
         let text = crate::canonical::to_string(&v).unwrap();
         assert!(!text.contains("secret-job") && !text.contains("owner-ws") && !text.contains("rosson"), "{text}");
-        let o = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels }, "r2");
+        let o = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels, tiers: false }, "r2");
         assert_eq!(o.entries[1].server_label.as_deref(), Some("baden.k2.dev"));
         assert!(o.entries[1].job_id.is_none(), "the owner sees labels, not other servers' jobs");
         assert_eq!(o.totals.len(), 2);
@@ -1207,12 +1360,12 @@ mod tests {
         // its own server and the owner see it.
         w.tenants[1].blocked = Some(codes::SHARE_PAUSED.into());
         let d = w.decide();
-        let peer = Viewer { slot: 2, owner: false, labels: &labels };
+        let peer = Viewer { slot: 2, owner: false, labels: &labels, tiers: false };
         let v = view(&w.input(), &d, &peer, "r3");
         assert!(v.entries.iter().all(|e| e.blocked_by.is_none()), "{:?}", v.entries);
-        let own = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels }, "r4");
+        let own = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: false }, "r4");
         assert_eq!(own.entries[1].blocked_by.as_deref(), Some(codes::SHARE_PAUSED));
-        let o = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels }, "r5");
+        let o = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels, tiers: false }, "r5");
         assert_eq!(o.entries[1].blocked_by.as_deref(), Some(codes::SHARE_PAUSED));
     }
 

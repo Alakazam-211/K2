@@ -40,8 +40,18 @@ use crate::crypto::{self, SigningKey};
 /// `Receipt.secret_env`, `secret_need` / `secret_env` / `secret_refused`.
 /// Additive: a node sends no secret frame to a server below 4, and a server
 /// sends a secret plan only to a node whose offer lists `secret-env`, so a
-/// protocol-3 peer never sees one.
-pub const PROTOCOL: u32 = 4;
+/// protocol-3 peer never sees one. 5 = job tiers (0.46.5,
+/// prd-compute-job-tiers-v1; [`crate::tiers`]): `Plan.tier`,
+/// `ShareView.priority`, `QueueEntry.tier`, the `priority` key in
+/// `servers.limits`. Additive: a node offers `tiers` (and sends the share
+/// and queue fields) only to a server that said protocol ≥ 5, and a server
+/// sends `Plan.tier` and the key only to a node offering `tiers`; it always
+/// sets `Plan.class` from the tier too, so an older node orders by class.
+pub const PROTOCOL: u32 = 5;
+
+/// The first server protocol that gets the tier fields and the `tiers`
+/// feature.
+pub const PROTOCOL_TIERS: u32 = 5;
 
 /// The first server protocol that may get secret-env plans and frames.
 pub const PROTOCOL_SECRETS: u32 = 4;
@@ -543,6 +553,21 @@ pub struct Plan {
     /// another digest and fail the job `plan_mismatch`, SV14).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secret_env: Vec<String>,
+    /// Protocol 5: the job's tier (prd-compute-job-tiers-v1). Absent unless
+    /// the node offers [`crate::tiers::FEATURE_TIERS`], so every older plan
+    /// and digest is unchanged (an older node would compute another digest
+    /// and refuse). `class` is set beside it (`Tier::class`) for old
+    /// peers; a plan without it counts as `Tier::from_class(class)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<crate::tiers::Tier>,
+}
+
+impl Plan {
+    /// The tier this plan asks for: `tier`, else from `class` (an older
+    /// server's plan), else Normal.
+    pub fn tier_or_class(&self) -> crate::tiers::Tier {
+        self.tier.unwrap_or_else(|| crate::tiers::Tier::from_class(self.class.unwrap_or_default()))
+    }
 }
 
 /// `secret_need` (node → controller, protocol 4): the node is about to
@@ -1214,6 +1239,7 @@ mod tests {
             artifacts: Vec::new(),
             stall_secs: None,
             secret_env: Vec::new(),
+            tier: None,
         }
     }
 
@@ -1427,6 +1453,7 @@ mod tests {
                 workspace_id: None,
                 session_id: None,
                 server_label: None,
+                tier: None,
             }],
             totals: vec![],
         });
@@ -1491,5 +1518,35 @@ mod tests {
         }
         assert!(JobState::Done.is_terminal());
         assert!(!JobState::Running.is_terminal());
+    }
+
+    /// Protocol 5 (prd-compute-job-tiers-v1 §3.6, T11): a plan without a
+    /// tier has the 0.46.2–0.46.4 digest (an old node keeps taking it); a
+    /// tier changes the digest (an old node refuses a tiered plan instead
+    /// of running it wrong), and a plan without one counts by its class.
+    #[test]
+    fn tier_is_absent_when_unset_and_bound_by_the_digest() {
+        let p = plan();
+        assert!(!crate::canonical::to_string(&p).unwrap().contains("tier"));
+        assert_eq!(p.digest().unwrap(), "sha256:31d079662290d8b6e10bc3595162f277743d060a50046b1be2f020e99d948e14");
+        assert_eq!(p.tier_or_class(), crate::tiers::Tier::Normal);
+        let mut q = p.clone();
+        q.tier = Some(crate::tiers::Tier::Priority);
+        assert_ne!(q.digest().unwrap(), p.digest().unwrap(), "the tier is bound by the digest");
+        assert!(crate::canonical::to_string(&q).unwrap().contains(r#""tier":"priority""#));
+        assert_eq!(q.tier_or_class(), crate::tiers::Tier::Priority);
+        // An older server's plan: the class says it.
+        let mut old = p.clone();
+        old.class = Some(crate::share::JobClass::Gate);
+        assert_eq!(old.tier_or_class(), crate::tiers::Tier::Ci);
+        old.class = Some(crate::share::JobClass::Batch);
+        assert_eq!(old.tier_or_class(), crate::tiers::Tier::Normal);
+        // An old node reads a tiered plan (no deny_unknown_fields) but gets
+        // another digest: it refuses at assign, never runs it wrong.
+        let mut v = serde_json::to_value(&q).unwrap();
+        v.as_object_mut().unwrap().remove("tier");
+        let dropped: Plan = serde_json::from_value(v).unwrap();
+        assert_ne!(dropped.digest().unwrap(), q.digest().unwrap());
+        assert!(PROTOCOL >= PROTOCOL_TIERS && PROTOCOL_TIERS > PROTOCOL_SECRETS);
     }
 }

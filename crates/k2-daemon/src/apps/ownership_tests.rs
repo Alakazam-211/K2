@@ -630,6 +630,21 @@ fn fresh(tag: &str, ws: &str) -> String {
     app
 }
 
+/// Mark `app` running the way the supervisor keeps it: a walled App (the
+/// default isolation since 0.46.3). `add_app` makes `process` Apps, and the
+/// supervisor's boot (the first App route of a test process starts it, as
+/// the daemon's start does) stops an unwalled "running" App while the
+/// process engine is off, the default: `UNWALLED_STOPPED`. Its state check
+/// then reads `stopped` and the handover goes through.
+fn mark_running(app: &str) {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    assert_eq!(conn.execute("UPDATE apps SET isolation = 'container' WHERE app_id = ?1", params![app]).unwrap(), 1, "{app}");
+    store::set_state(&conn, app, store::STATE_RUNNING, None).unwrap();
+    let r = store::get_app(&conn, app).unwrap().unwrap_or_else(|| panic!("no App {app}"));
+    assert!(!super::supervisor::runs_unwalled(&r), "{app}: walled");
+}
+
 /// The hand-over with a valid confirm is refused `409 handoff_needs_v1`
 /// naming `want`, the hint gives the 0.46.5 line and the manual path, and
 /// nothing changed (the confirm wasn't spent: it still works for this App).
@@ -703,11 +718,7 @@ fn handover_refuses_each_blocker_by_name() {
 
     // A running App: its link keeps the old room until it restarts.
     let running = fresh("run", &f.a);
-    {
-        let h = k2_core::db::shared();
-        let conn = h.lock();
-        store::set_state(&conn, &running, store::STATE_RUNNING, None).unwrap();
-    }
+    mark_running(&running);
     assert_refused(&running, &f.b, "handoff_app_running");
 
     // Guests tied to the old workspace: added by its agent (creator
@@ -861,11 +872,7 @@ fn handover_refuses_each_blocker_by_name() {
     let all = fresh("all", &f.a);
     k2_core::skin::app_push::set_switches(&svc(&all), k2_core::skin::app_push::Switches { previews: Some(false), ..Default::default() }, "owner").unwrap();
     k2_core::api_keys::create_app_key("ci", &svc(&all), "{}").unwrap();
-    {
-        let h = k2_core::db::shared();
-        let conn = h.lock();
-        store::set_state(&conn, &all, store::STATE_RUNNING, None).unwrap();
-    }
+    mark_running(&all);
     let v = assert_refused(&all, &f.b, "handoff_needs_push_move");
     let codes: Vec<&str> = v["error"]["blockers"].as_array().unwrap().iter().map(|b| b["code"].as_str().unwrap()).collect();
     assert_eq!(codes, vec!["handoff_app_running", "handoff_needs_key_move", "handoff_needs_push_move"], "{v}");

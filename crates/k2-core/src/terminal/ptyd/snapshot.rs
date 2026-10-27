@@ -36,6 +36,12 @@ use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
 use serde::{Deserialize, Serialize};
 
+/// F7: a saved-screen file larger than this is refused (and removed). A
+/// full 5,000-line scrollback is well under 8 MiB.
+pub const MAX_FILE: u64 = 64 << 20;
+/// F7: the most a saved screen may inflate to.
+pub const MAX_RAW: u64 = 256 << 20;
+
 /// File magic + format version (a change in layout bumps the version; an
 /// unknown version is ignored and the session replays from the ring).
 const MAGIC: &[u8; 8] = b"K2TSNAP\0";
@@ -213,15 +219,28 @@ impl Snapshot {
     }
 
     /// `None` for a foreign file, another format version, or corrupt data.
+    /// Bounded (security review F7): the gzip stream inflates to at most
+    /// [`MAX_RAW`] bytes and bincode reads within that limit, so a hostile
+    /// file can't exhaust memory.
     pub fn decode(bytes: &[u8]) -> Option<Snapshot> {
+        use bincode::Options;
         let rest = bytes.strip_prefix(MAGIC.as_slice())?;
         let (ver, body) = rest.split_at_checked(4)?;
         if u32::from_be_bytes(ver.try_into().ok()?) != FORMAT {
             return None;
         }
         let mut raw = Vec::new();
-        flate2::read::GzDecoder::new(body).read_to_end(&mut raw).ok()?;
-        let s: Snapshot = bincode::deserialize(&raw).ok()?;
+        flate2::read::GzDecoder::new(body).take(MAX_RAW + 1).read_to_end(&mut raw).ok()?;
+        if raw.len() as u64 > MAX_RAW {
+            return None;
+        }
+        // The same encoding `bincode::serialize` writes, with a limit.
+        let s: Snapshot = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .with_limit(MAX_RAW)
+            .deserialize(&raw)
+            .ok()?;
         // Sanity: the cursors must sit on the grid it carries.
         let ok = |c: &SnapCursor| c.column < s.cols.max(1) && c.line >= 0 && (c.line as usize) < s.rows.max(1);
         (s.cols == s.grid.columns() && s.rows == s.grid.screen_lines() && ok(&s.cursor) && ok(&s.saved_cursor)).then_some(s)
@@ -261,9 +280,61 @@ pub fn write_to(path: &Path, snap: &Snapshot) -> io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-/// Read `sid`'s snapshot (`None` when absent or unusable).
-pub fn read(sid: &str) -> Option<Snapshot> {
-    Snapshot::decode(&std::fs::read(path_for(sid)?).ok()?)
+/// Read `sid`'s snapshot (`None` when absent or unusable). Security review
+/// F7: only a regular file (not a symlink) of at most [`MAX_FILE`] bytes
+/// that decodes within bounds AND restores cleanly at `cols`×`rows` (a
+/// trial restore under `catch_unwind`: a malformed grid must never panic
+/// adoption into a crash loop) is used; anything else is removed and logged.
+pub fn read(sid: &str, cols: usize, rows: usize) -> Option<Snapshot> {
+    read_path(&path_for(sid)?, cols, rows)
+}
+
+/// [`read`] for an explicit path.
+pub fn read_path(path: &Path, cols: usize, rows: usize) -> Option<Snapshot> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = path.to_path_buf();
+    let bad = |why: &str| {
+        crate::log_debug!("[ptyd] saved screen {} refused ({why}); removed", path.display());
+        let _ = std::fs::remove_file(&path);
+        None
+    };
+    let md = match std::fs::symlink_metadata(&path) {
+        Ok(m) => m,
+        Err(_) => return None, // none saved
+    };
+    if !md.is_file() {
+        return bad("not a regular file");
+    }
+    if md.len() > MAX_FILE {
+        return bad("too large");
+    }
+    let mut bytes = Vec::new();
+    let opened = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&path);
+    match opened.and_then(|f| f.take(MAX_FILE + 1).read_to_end(&mut bytes)) {
+        Ok(_) if bytes.len() as u64 <= MAX_FILE => {}
+        _ => return bad("unreadable"),
+    }
+    let Some(snap) = Snapshot::decode(&bytes) else { return bad("undecodable") };
+    if !snap.restores_cleanly(cols, rows) {
+        return bad("does not restore");
+    }
+    Some(snap)
+}
+
+impl Snapshot {
+    /// Restore into a scratch Term and catch any panic (a grid whose
+    /// internals don't hold together).
+    pub fn restores_cleanly(&self, cols: usize, rows: usize) -> bool {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::term::Config;
+        let snap = self.clone();
+        std::panic::catch_unwind(move || {
+            let size = crate::terminal::daemon_pty::TermSize { cols: snap.cols.max(1), rows: snap.rows.max(1) };
+            let mut t = Term::new(Config::default(), &size, VoidListener);
+            snap.restore_into(&mut t, cols.max(1), rows.max(1));
+        })
+        .is_ok()
+    }
 }
 
 /// The session ended: its screen contents go (S-5).
@@ -460,6 +531,57 @@ mod tests {
         assert!(bytes.len() < 8 << 20, "snapshot is {} bytes", bytes.len());
         // Generous (debug builds, busy CI); S0 measured ~110 ms release.
         assert!(took < std::time::Duration::from_secs(5), "capture + encode took {took:?}");
+    }
+
+    /// F7: a gzip bomb (a valid header over a stream inflating past
+    /// MAX_RAW) is refused without inflating it all.
+    #[test]
+    fn a_gzip_bomb_is_refused() {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let zeros = vec![0u8; 1 << 20];
+        for _ in 0..(MAX_RAW / (1 << 20) + 2) {
+            gz.write_all(&zeros).unwrap();
+        }
+        let body = gz.finish().unwrap();
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend_from_slice(&FORMAT.to_be_bytes());
+        bytes.extend_from_slice(&body);
+        assert!(bytes.len() < 2 << 20, "the bomb itself is small ({} bytes)", bytes.len());
+        assert!(Snapshot::decode(&bytes).is_none());
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("k2snap-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// F7: a saved screen that isn't usable is removed (never retried at
+    /// every boot) and reads as "none": too large, garbage, a symlink. A
+    /// good one reads back.
+    #[test]
+    fn unusable_saved_screens_are_removed() {
+        let d = scratch("read");
+        let good = d.join("good.snap");
+        let mut t = term(20, 5);
+        feed(&mut t, b"hello\r\nworld");
+        write_to(&good, &Snapshot::capture(&t, 3)).unwrap();
+        assert_eq!(read_path(&good, 20, 5).expect("good").ring_offset, 3);
+        let garbage = d.join("garbage.snap");
+        std::fs::write(&garbage, b"K2TSNAP\0\0\0\0\x01not gzip").unwrap();
+        assert!(read_path(&garbage, 20, 5).is_none());
+        assert!(!garbage.exists(), "a garbage file is removed");
+        let big = d.join("big.snap");
+        let f = std::fs::File::create(&big).unwrap();
+        f.set_len(MAX_FILE + 1).unwrap();
+        assert!(read_path(&big, 20, 5).is_none());
+        assert!(!big.exists(), "an oversized file is removed");
+        let link = d.join("link.snap");
+        std::os::unix::fs::symlink(&good, &link).unwrap();
+        assert!(read_path(&link, 20, 5).is_none());
+        assert!(good.exists(), "the symlink's target is untouched");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

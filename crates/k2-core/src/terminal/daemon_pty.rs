@@ -1525,7 +1525,7 @@ impl DaemonPtySession {
         let events = owner.watch(&info.sid);
         // S4 (P42): a saved screen whose offset the ring still holds →
         // restore it and replay only the tail; otherwise replay the ring.
-        let snap = crate::terminal::ptyd::snapshot::read(&info.sid).filter(|s| s.ring_offset >= info.ring_start && s.ring_offset <= info.ring_end);
+        let snap = crate::terminal::ptyd::snapshot::read(&info.sid, info.cols.max(1) as usize, info.rows.max(1) as usize).filter(|s| s.ring_offset >= info.ring_start && s.ring_offset <= info.ring_end);
         let attach = |from: u64| match owner.attach(&info.sid, from) {
             Ok(s) => Ok(s),
             Err(e) => {

@@ -491,9 +491,35 @@ fn carried_row_if_fresh(raw: &[u8], now: i64) -> Option<Row> {
 /// confirmation — comes back. Returns whether the row was seeded.
 pub fn restore_after_adoption(session_id: &str) -> bool {
     let Some(path) = carried_row_path(session_id) else { return false };
-    let Ok(raw) = std::fs::read(&path) else { return false };
+    // Security review F7: a regular file (not a symlink) of at most
+    // CARRIED_ROW_MAX_BYTES, read through O_NOFOLLOW; it is removed either
+    // way, and anything else is just logged (the row starts unconfirmed).
+    let Ok(md) = std::fs::symlink_metadata(&path) else { return false };
+    let raw = if md.is_file() && md.len() <= CARRIED_ROW_MAX_BYTES {
+        read_capped(&path, CARRIED_ROW_MAX_BYTES)
+    } else {
+        None
+    };
     let _ = std::fs::remove_file(&path);
+    let Some(raw) = raw else {
+        log_debug!("[activity] carried row for {session_id} refused (not a regular file under {CARRIED_ROW_MAX_BYTES} bytes); removed");
+        return false;
+    };
     restore_from(session_id, &raw, now_ms())
+}
+
+/// F7: a carried row is a few KiB; anything over this is refused.
+pub const CARRIED_ROW_MAX_BYTES: u64 = 1 << 20;
+
+fn read_capped(path: &std::path::Path, max: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut opts, libc::O_NOFOLLOW);
+    let mut buf = Vec::new();
+    opts.open(path).ok()?.take(max + 1).read_to_end(&mut buf).ok()?;
+    (buf.len() as u64 <= max).then_some(buf)
 }
 
 /// [`restore_after_adoption`] without the file: seed the registered row
@@ -971,6 +997,24 @@ mod tests {
         };
         assert!(ev.holds_awake, "a carried working row holds Keep awake again");
         unregister(sid);
+    }
+
+    /// F7: a carried row is read only through O_NOFOLLOW and up to the cap.
+    #[test]
+    fn carried_rows_are_read_capped_and_never_through_a_symlink() {
+        let d = std::env::temp_dir().join(format!("k2row-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let ok = d.join("ok.json");
+        std::fs::write(&ok, b"{}").unwrap();
+        assert_eq!(read_capped(&ok, CARRIED_ROW_MAX_BYTES).as_deref(), Some(&b"{}"[..]));
+        let big = d.join("big.json");
+        std::fs::write(&big, vec![b' '; (CARRIED_ROW_MAX_BYTES + 1) as usize]).unwrap();
+        assert!(read_capped(&big, CARRIED_ROW_MAX_BYTES).is_none(), "over the cap");
+        let link = d.join("link.json");
+        std::os::unix::fs::symlink(&ok, &link).unwrap();
+        assert!(read_capped(&link, CARRIED_ROW_MAX_BYTES).is_none(), "never through a symlink");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

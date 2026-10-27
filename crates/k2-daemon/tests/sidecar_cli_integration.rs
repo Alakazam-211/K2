@@ -110,11 +110,8 @@ fn setup() -> TestEnv {
     );
     for name in HARNESS_SHIMS {
         let p = shim_dir.join(name);
-        if *name == "cat" {
-            k2_core::test_env::write_executable(&p, "#!/bin/sh\nexec /bin/cat\n");
-        } else {
-            std::fs::write(&p, &script).expect("shim");
-        }
+        let body = if *name == "cat" { "#!/bin/sh\nexec /bin/cat\n" } else { script.as_str() };
+        k2_core::test_env::write_executable(&p, body);
     }
     let env = TestEnv {
         prev_home: std::env::var_os("HOME"),

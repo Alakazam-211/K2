@@ -315,7 +315,14 @@ fn services(cutoff_unix: i64) -> Result<Vec<Service>, String> {
 
 fn pid_alive(pid: i64) -> bool {
     let Ok(p) = i32::try_from(pid) else { return false };
-    p > 0 && unsafe { libc::kill(p, 0) == 0 }
+    #[cfg(unix)]
+    {
+        p > 0 && unsafe { libc::kill(p, 0) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        p > 0 && crate::publish_runtime::win_job::pid_alive(p as u32)
+    }
 }
 
 /// How far a process's start may be from `last_started_at` and still be

@@ -23,6 +23,13 @@ pub mod publish_env;
 pub mod refstore;
 pub mod server_refs;
 pub mod spawn;
+#[cfg(unix)]
+pub mod ssh_agent;
+/// The vault ssh-agent is a Unix socket server; on Windows a stand-in that
+/// refuses `agent` delivery until the named-pipe agent lands (pending
+/// Windows parity).
+#[cfg(not(unix))]
+#[path = "ssh_agent_windows.rs"]
 pub mod ssh_agent;
 pub mod systemd_creds;
 pub mod tunnel;

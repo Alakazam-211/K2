@@ -33,12 +33,12 @@
 //! "restart your session to receive it".
 
 use std::collections::HashMap;
-use std::fs::{DirBuilder, OpenOptions};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+
+use k2_core::private_fs;
 
 use k2_vault::{Delivery, Requester, SecretStore, Selector, Use};
 use parking_lot::Mutex;
@@ -103,7 +103,13 @@ pub fn secrets_root() -> Option<PathBuf> {
         let dir = PathBuf::from(t).join("k2-secrets");
         Some(dir)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    // Windows: like macOS, the per-user temp dir (TMP / TEMP); the dirs in
+    // it are owner-only DACLs (k2_core::private_fs).
+    #[cfg(windows)]
+    {
+        Some(std::env::temp_dir().join("k2-secrets"))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         None
     }
@@ -158,16 +164,15 @@ pub fn linux_secrets_candidates(
 fn ensure_private(dir: &Path) -> std::io::Result<()> {
     match std::fs::symlink_metadata(dir) {
         Ok(m) => {
-            let me = unsafe { libc::geteuid() };
-            if m.file_type().is_symlink() || !m.is_dir() || m.uid() != me {
+            if m.file_type().is_symlink() || !m.is_dir() || !private_fs::owned_by_me(dir, &m) {
                 return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "unsafe secrets dir"));
             }
-            if m.permissions().mode() & 0o077 != 0 {
-                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+            if !private_fs::is_private(dir, &m) {
+                private_fs::make_private_dir(dir)?;
             }
             Ok(())
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DirBuilder::new().mode(0o700).create(dir),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => private_fs::create_private_dir(dir),
         Err(e) => Err(e),
     }
 }
@@ -176,12 +181,7 @@ fn ensure_private(dir: &Path) -> std::io::Result<()> {
 pub fn write_secret_file(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     k2_vault::delivery::validate_file_name(name)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.hint))?;
-    let mut f = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(dir.join(name))?;
+    let mut f = private_fs::create_new_private_file(&dir.join(name))?;
     f.write_all(bytes)?;
     f.sync_all()
 }
@@ -191,10 +191,9 @@ pub fn make_session_dir(root: &Path, session: &str) -> std::io::Result<PathBuf> 
     ensure_private(root)?;
     let tag: String = session.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect();
     let dir = root.join(format!("{tag}-{}", k2_vault::crypto::base62(8)));
-    DirBuilder::new().mode(0o700).create(&dir)?;
+    private_fs::create_private_dir(&dir)?;
     let m = std::fs::symlink_metadata(&dir)?;
-    let me = unsafe { libc::geteuid() };
-    if m.file_type().is_symlink() || m.uid() != me || m.permissions().mode() & 0o077 != 0 {
+    if m.file_type().is_symlink() || !private_fs::owned_by_me(&dir, &m) || !private_fs::is_private(&dir, &m) {
         return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "secrets dir check failed"));
     }
     Ok(dir)
@@ -552,16 +551,19 @@ fn remove_dir(d: &Path) {
 /// on Unix walks with `openat`/`O_NOFOLLOW` and never follows a symlink,
 /// even one swapped in mid-walk; nothing in it is zeroed.
 pub(crate) fn wipe_entry(p: &Path) {
-    let me = unsafe { libc::geteuid() };
     let Ok(lm) = std::fs::symlink_metadata(p) else { return };
     if lm.file_type().is_dir() {
         let _ = std::fs::remove_dir_all(p);
         return;
     }
     if lm.file_type().is_file() {
-        if let Ok(mut f) = OpenOptions::new().write(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(p) {
+        if let Ok(mut f) = private_fs::open_write_nofollow(p) {
             if let Ok(m) = f.metadata() {
-                if m.is_file() && m.uid() == me && m.nlink() == 1 && m.len() <= 16 * 1024 * 1024 {
+                if m.is_file()
+                    && private_fs::owned_by_me(p, &m)
+                    && private_fs::link_count(&f).ok() == Some(1)
+                    && m.len() <= 16 * 1024 * 1024
+                {
                     let _ = f.write_all(&vec![0u8; m.len() as usize]);
                     let _ = f.sync_all();
                 }
@@ -808,8 +810,7 @@ fn top_up_one(
 fn ensure_session_dir(d: &Path) -> std::io::Result<()> {
     match std::fs::symlink_metadata(d) {
         Ok(m) => {
-            let me = unsafe { libc::geteuid() };
-            if m.file_type().is_symlink() || !m.is_dir() || m.uid() != me || m.permissions().mode() & 0o077 != 0 {
+            if m.file_type().is_symlink() || !m.is_dir() || !private_fs::owned_by_me(d, &m) || !private_fs::is_private(d, &m) {
                 return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "secrets dir check failed"));
             }
             Ok(())
@@ -820,11 +821,10 @@ fn ensure_session_dir(d: &Path) -> std::io::Result<()> {
                 return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "not under the secrets root"));
             }
             ensure_private(&root)?;
-            DirBuilder::new().mode(0o700).create(d)?;
+            private_fs::create_private_dir(d)?;
             k2_core::log_debug!("[vault] WARN: secrets dir {} was gone under a live session; made it again", d.display());
             let m = std::fs::symlink_metadata(d)?;
-            let me = unsafe { libc::geteuid() };
-            if m.file_type().is_symlink() || !m.is_dir() || m.uid() != me {
+            if m.file_type().is_symlink() || !m.is_dir() || !private_fs::owned_by_me(d, &m) {
                 return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "secrets dir check failed"));
             }
             Ok(())
@@ -846,6 +846,21 @@ pub fn sweep_dead(live: &dyn Fn(&str) -> bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    /// 0700 dir / 0600 file on Unix; an owner-only DACL on Windows.
+    #[track_caller]
+    fn assert_private(p: &Path, unix_mode: u32) {
+        #[cfg(unix)]
+        assert_eq!(std::fs::metadata(p).expect("m").permissions().mode() & 0o777, unix_mode, "{}", p.display());
+        #[cfg(windows)]
+        {
+            let _ = unix_mode;
+            let m = std::fs::metadata(p).expect("m");
+            assert!(private_fs::is_private(p, &m), "{} is not owner-only", p.display());
+        }
+    }
 
     /// k2-ptyd P36: boot keeps the secrets dir of a session that survived
     /// in k2-ptyd (and re-registers it so it goes with the session); every
@@ -877,12 +892,15 @@ mod tests {
         std::fs::remove_dir_all(&outside).unwrap();
     }
 
+    #[cfg(unix)]
     fn mkfifo(p: &Path) {
         let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).expect("path");
         // SAFETY: a valid C path.
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "mkfifo {}", p.display());
     }
 
+    // pending Windows vault ssh-agent (named pipe): a Unix-socket client.
+    #[cfg(unix)]
     fn list_ids(sock: &Path) -> Vec<String> {
         use std::io::{Read, Write};
         let mut s = std::os::unix::net::UnixStream::connect(sock).expect("connect");
@@ -901,6 +919,8 @@ mod tests {
     /// it. A dead session's dir, socket and record go; a record that points
     /// at another session's socket is never followed; a FIFO planted in a
     /// secrets dir never hangs the sweep.
+    // pending Windows vault ssh-agent (named pipe): serves a Unix socket.
+    #[cfg(unix)]
     #[test]
     fn boot_re_serves_an_agent_socket_only_from_the_daemons_record() {
         use super::super::ssh_agent::{self as agent, ResumeRefused};
@@ -1062,6 +1082,8 @@ mod tests {
     /// never-accepting listener (backlog 0) can't stall it. Named ones and
     /// other namespaces' stay; a symlinked dir is never followed. Runs
     /// under a temp `$TMPDIR` (env lock), never the real short-path root.
+    // pending Windows vault ssh-agent (named pipe): Unix socket dirs.
+    #[cfg(unix)]
     #[test]
     fn boot_removes_orphaned_short_path_socket_dirs() {
         use super::super::ssh_agent as agent;
@@ -1116,7 +1138,7 @@ mod tests {
         let el = std::os::unix::net::UnixListener::bind(elsewhere.join("a.sock")).expect("bind elsewhere");
         drop(el);
         let linked = root.join(k2_vault::crypto::base62(8));
-        std::os::unix::fs::symlink(&elsewhere, &linked).expect("symlink");
+        k2_core::test_env::symlink(&elsewhere, &linked).expect("symlink");
         // Another namespace's root: never looked at.
         let other_root = tmpdir.join("k2a-0badc0de");
         let other = other_root.join(k2_vault::crypto::base62(8));
@@ -1338,7 +1360,7 @@ mod tests {
         let _o = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, &over);
         assert_eq!(secrets_root(), Some(over.join("secrets")), "K2_RUNTIME_DIR set");
         assert!(over.is_dir());
-        assert_eq!(std::fs::metadata(&over).expect("m").permissions().mode() & 0o777, 0o700);
+        assert_private(&&over, 0o700);
         drop(_o);
         let _u = k2_core::test_env::EnvVar::remove(k2_core::runtime_dir::RUNTIME_DIR_ENV);
         let unit = t.path().join("unit");
@@ -1368,8 +1390,10 @@ mod tests {
         let sub = d.join("planted").join("deeper");
         std::fs::create_dir_all(&sub).expect("planted dirs");
         std::fs::write(sub.join("f"), b"x").expect("file");
+        // Windows filesystems have no FIFOs.
+        #[cfg(unix)]
         mkfifo(&sub.join("fifo"));
-        std::os::unix::fs::symlink(&precious, sub.join("link")).expect("symlink");
+        k2_core::test_env::symlink(&precious, sub.join("link")).expect("symlink");
         let t0 = std::time::Instant::now();
         remove_dir(&d);
         assert!(t0.elapsed() < std::time::Duration::from_secs(5));
@@ -1382,18 +1406,18 @@ mod tests {
         let t = k2_vault::fsutil::TestDir::new("spawn-dir");
         let root = t.path().join("secrets");
         let d = make_session_dir(&root, "sess-1").expect("dir");
-        assert_eq!(std::fs::metadata(&d).expect("m").permissions().mode() & 0o777, 0o700);
+        assert_private(&&d, 0o700);
         write_secret_file(&d, "STRIPE_KEY", b"v").expect("write");
-        assert_eq!(std::fs::metadata(d.join("STRIPE_KEY")).expect("m").permissions().mode() & 0o777, 0o600);
+        assert_private(&d.join("STRIPE_KEY"), 0o600);
         assert!(write_secret_file(&d, "STRIPE_KEY", b"v").is_err(), "no overwrite (O_EXCL)");
         assert!(write_secret_file(&d, "../x", b"v").is_err(), "no traversal");
         // A pre-made symlink in place of a file is refused.
-        std::os::unix::fs::symlink(t.path().join("elsewhere"), d.join("LINKED")).expect("symlink");
+        k2_core::test_env::symlink(t.path().join("elsewhere"), d.join("LINKED")).expect("symlink");
         assert!(write_secret_file(&d, "LINKED", b"v").is_err());
         assert!(!t.path().join("elsewhere").exists(), "nothing written through the link");
         // A symlinked root is refused.
         let link_root = t.path().join("linkroot");
-        std::os::unix::fs::symlink(t.path(), &link_root).expect("symlink");
+        k2_core::test_env::symlink(t.path(), &link_root).expect("symlink");
         assert!(make_session_dir(&link_root, "s").is_err());
     }
 
@@ -1457,7 +1481,7 @@ mod tests {
         let dir = out.dir.clone().expect("a session with nothing to deliver still gets its secrets dir");
         assert_eq!(env.get(SECRETS_DIR_ENV).map(String::as_str), Some(dir.display().to_string().as_str()));
         assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0, "empty at spawn");
-        assert_eq!(std::fs::metadata(&dir).expect("m").permissions().mode() & 0o777, 0o700);
+        assert_private(&&dir, 0o700);
         // A bystander session of a third workspace.
         let by_ws = uuid::Uuid::new_v4().to_string();
         let by_sid = uuid::Uuid::new_v4().to_string();
@@ -1473,7 +1497,7 @@ mod tests {
         let n = top_up_all(&v);
         assert!(n >= 1, "live delivery wrote the granted file (wrote {n})");
         assert_eq!(std::fs::read(dir.join("LATE_FILE")).expect("the file arrived live"), b"late-file-value-1");
-        assert_eq!(std::fs::metadata(dir.join("LATE_FILE")).expect("m").permissions().mode() & 0o777, 0o600);
+        assert_private(&dir.join("LATE_FILE"), 0o600);
         assert!(!by_dir.join("LATE_FILE").exists(), "another workspace's session gets nothing");
 
         let t1 = top_up(&v, &sid, &ws);
@@ -1488,7 +1512,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("rm");
         let t2 = top_up(&v, &sid, &ws);
         assert_eq!(t2.delivered, vec!["LATE_FILE".to_string()], "{t2:?}");
-        assert_eq!(std::fs::metadata(&dir).expect("made again").permissions().mode() & 0o777, 0o700);
+        assert_private(&&dir, 0o700);
         assert_eq!(std::fs::read(dir.join("LATE_FILE")).expect("file"), b"late-file-value-1");
 
         // Ended: the dir goes and nothing is made again.

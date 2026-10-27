@@ -245,15 +245,24 @@ fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value,
 
 fn write_no_follow(p: &Path, bytes: &[u8]) -> Result<(), VaultError> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(p)
-        .map_err(|e| VaultError::bad_request("out_not_writable", format!("can't write the output file ({})", e.kind())))?;
+    let not_writable = |e: std::io::Error| VaultError::bad_request("out_not_writable", format!("can't write the output file ({})", e.kind()));
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_OPEN_REPARSE_POINT: never write through a planted link.
+        o.custom_flags(0x0020_0000);
+    }
+    let mut f = o.open(p).map_err(not_writable)?;
+    // Windows: owner-only before the secret is written (Unix: 0600 at create).
+    #[cfg(windows)]
+    k2_core::private_fs::make_private_file(p).map_err(not_writable)?;
     f.write_all(bytes).map_err(|e| VaultError::internal(format!("write: {}", e.kind())))
 }
 
@@ -1106,7 +1115,7 @@ mod tests {
         jailed_path(&ws, "sub/out.json").expect("inside");
         assert!(jailed_path(&ws, "../escape.json").is_err());
         assert!(jailed_path(&ws, "/etc/passwd").is_err());
-        std::os::unix::fs::symlink(t.path(), ws.join("link")).expect("symlink");
+        k2_core::test_env::symlink(t.path(), ws.join("link")).expect("symlink");
         assert!(jailed_path(&ws, "link/x").is_err(), "a symlinked folder can't lead outside");
     }
 }

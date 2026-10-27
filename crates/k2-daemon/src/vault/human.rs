@@ -18,10 +18,13 @@
 //! or tricked agent from running these steps from its own terminal.
 
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(unix)]
 use tokio::net::UnixStream;
 
 use super::actor::{Channel, VaultCaller};
@@ -189,6 +192,7 @@ mod os {
 }
 
 /// Judge the peer of a connected socket.
+#[cfg(unix)]
 pub fn check_peer(stream: &UnixStream) -> PeerVerdict {
     let (pid, uid) = match os::peer(stream.as_raw_fd()) {
         Some(p) => p,
@@ -223,6 +227,7 @@ pub fn check_peer(stream: &UnixStream) -> PeerVerdict {
 }
 
 /// Is `pid` running a `k2-ptyd` binary (any copy: versioned, bundled)?
+#[cfg(unix)]
 fn is_ptyd_exe(pid: u32) -> bool {
     let Ok(p) = i32::try_from(pid) else { return false };
     k2_core::terminal::ptyd::client::exe_of(p)
@@ -230,7 +235,16 @@ fn is_ptyd_exe(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// Windows: no person channel from a terminal yet (pending: the vault
+/// person check over a named pipe, Windows parity). The person steps take a
+/// Connect login there until then.
+#[cfg(not(unix))]
+pub fn serve(_home: &Path) {
+    k2_core::log_debug!("[vault] no terminal person channel on Windows yet; person steps need a Connect login");
+}
+
 /// Bind `~/.k2/vault.sock` (0600) and serve vault routes on it.
+#[cfg(unix)]
 pub fn serve(home: &Path) {
     let path = socket_path(home);
     let _ = std::fs::remove_file(&path);
@@ -270,6 +284,7 @@ pub fn serve(home: &Path) {
     });
 }
 
+#[cfg(unix)]
 async fn read_request(s: &mut UnixStream) -> Result<(String, Vec<u8>), &'static str> {
     let mut buf: Vec<u8> = Vec::with_capacity(2048);
     let mut chunk = [0u8; 4096];
@@ -310,11 +325,13 @@ async fn read_request(s: &mut UnixStream) -> Result<(String, Vec<u8>), &'static 
     Ok((head, body))
 }
 
+#[cfg(unix)]
 async fn write(s: &mut UnixStream, status: &str, ctype: &str, body: &str) {
     let r = format!("HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     let _ = s.write_all(r.as_bytes()).await;
 }
 
+#[cfg(unix)]
 async fn handle_conn(mut s: UnixStream) {
     let v = check_peer(&s);
     let (head, body) = match read_request(&mut s).await {
@@ -385,6 +402,8 @@ mod tests {
         assert!(judge(100, &[500], &[], Some("/system.slice/k2.serviceX"), Some("/system.slice/k2.service")).person, "prefix only");
     }
 
+    // pending Windows vault person channel (named pipe): a Unix socket pair.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_process_inside_the_daemon_tree_is_not_a_person() {
         // The test process plays the daemon: a socket pair's peer is this

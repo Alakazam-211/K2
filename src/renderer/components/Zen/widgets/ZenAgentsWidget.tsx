@@ -114,6 +114,7 @@ import {
   zenPinGridCentred,
   zenPinGridColumns,
 } from '@/lib/zen/zen-pin-grid'
+import { STATE_WORDS } from '@k2/activity'
 import { ZenGardenSettingsButton } from './ZenGardenSettings'
 import { dropTargetIndex, useRowDragReorder } from '@/components/Sidebar/row-drag-reorder'
 import {
@@ -336,12 +337,14 @@ function useWidgetHome(bridge: ZenWidgetBridge, rows: ZenAgentRow[]): [string | 
   return [homeId, pick]
 }
 
+// 0.46.5 activity SDK: the state words are @k2/activity's, the same ones
+// every activity bar says.
 const ACTIVITY_TEXT = {
-  working: 'working',
-  monitoring: 'monitoring',
-  'needs-you': 'needs you',
-  unverifiable: 'no update',
-  idle: 'idle',
+  working: STATE_WORDS.working.toLowerCase(),
+  monitoring: STATE_WORDS.monitoring.toLowerCase(),
+  'needs-you': STATE_WORDS['needs-you'].toLowerCase(),
+  unverifiable: STATE_WORDS.unverifiable.toLowerCase(),
+  idle: STATE_WORDS.idle.toLowerCase(),
 } as const
 
 /** The one state a Zen dot shows, by the app's rank (plan-agent-status-
@@ -358,13 +361,13 @@ export function zenDotState(row: Pick<ZenAgentRow, 'activity' | 'unseen'>): ZenD
 }
 
 const DOT_TITLE: Record<ZenDotState, string> = {
-  'needs-you': 'Needs you',
+  'needs-you': STATE_WORDS['needs-you'],
   failed: 'Failed (not viewed yet)',
   done: 'Done (not viewed yet)',
-  working: 'Working',
-  monitoring: 'Monitoring',
-  unverifiable: 'No update',
-  idle: 'Idle',
+  working: STATE_WORDS.working,
+  monitoring: STATE_WORDS.monitoring,
+  unverifiable: STATE_WORDS.unverifiable,
+  idle: STATE_WORDS.idle,
 }
 
 /** The status mark on the avatar. Circles (Zen's own look), one shape per

@@ -3,6 +3,13 @@
 // clock in, three lines out. The renderer only labels what the daemon
 // decided; it never works out a state of its own.
 //
+// 0.46.5 activity SDK: the words live in ONE place, @k2/activity
+// (sdk/activity/src/core.ts), which the Garden's `k2-activity@1`, App
+// pages' `<k2-activity-bar>` and the App server SDK build from too. This
+// file keeps the desktop's names and types and hands each ThreadTurn to it
+// (`coreTurn`), plus the drawer's pixel fitting, which only the desktop
+// does. Change a word in core.ts, never here.
+//
 //   line 1  a pulse, the state word where it adds something, the time
 //           since the user's message, Stop
 //   line 2  the current step, the main line: the tool line, "Thinking… 8s",
@@ -10,91 +17,60 @@
 //   line 3  the tally: "Read 3 files · ran 2 commands", subagents,
 //           background tasks
 //
-// "Working" is said at most once: while a step line says what the agent is
-// doing the header has no state word (the pulse says it), and when the step
-// is unknown the header reads "Working" and there is no step line. The
-// strip never tells anyone to go to the terminal: a wait is stated as a
-// fact, with no call to action.
-//
 // After the agent replies, a turn whose subagents or background tasks are
 // still running stays on the strip in phase `children` (Rosson
-// 2026-10-07: a reply must not hide live work): the header is the children
-// ("2 subagents running, 1 done · 4m 10s"), the tally the tools so far, and
-// there is no step line and no Stop (Esc reaches only the lead).
-//
-// Every clock is the daemon's: server times read as `Date.now() + skewMs`
-// (the frame's `serverNow`). An ended turn shows nothing (Decision 2, Q8),
-// except a turn you stopped, which reads "Stopped" for a moment so the
-// click visibly landed.
+// 2026-10-07: a reply must not hide live work). Every clock is the
+// daemon's: server times read as `Date.now() + skewMs`. An ended turn
+// shows nothing, except a turn you stopped, which reads "Stopped" for a
+// moment so the click visibly landed.
 
-import { minutesWithoutUpdate } from '@/lib/activity-copy'
+import {
+  STOPPED_LINGER_MS as CORE_STOPPED_LINGER_MS,
+  childItems as coreChildItems,
+  childText as coreChildText,
+  coerceTurn,
+  counterSpoken as coreCounterSpoken,
+  counters as coreCounters,
+  drawerLine as coreDrawerLine,
+  stripClock as coreStripClock,
+  stripClockShort as coreStripClockShort,
+  stripView as coreStripView,
+  tallyItems as coreTallyItems,
+  type Counter,
+  type CounterKey,
+  type DetailItem,
+  type DrawerLine,
+  type StripStep,
+  type StripView,
+  type Tone,
+  type Turn,
+} from '@k2/activity'
 import type { ThreadTurn, ThreadTurnChild, ThreadTurnTally } from './overlayThread'
 
 /** How long "Stopped" stays after an interrupt (the mockup's 3 s). */
-export const STOPPED_LINGER_MS = 3_000
+export const STOPPED_LINGER_MS = CORE_STOPPED_LINGER_MS
 
-export type ThreadStripTone = 'working' | 'monitoring' | 'needs-you' | 'unverifiable' | 'stopped'
+export type ThreadStripTone = Tone
+export type ThreadStripStep = StripStep
+export type ThreadStripView = StripView
+export type StripDetailItem = DetailItem
+export type StripCounterKey = CounterKey
+export type StripCounter = Counter
+export type ThreadDrawerLine = DrawerLine
 
-export interface ThreadStripStep {
-  /** `line`: a tool line with `code` spans; `thinking` shimmers. */
-  kind: 'line' | 'thinking' | 'plain' | 'needs'
-  text: string
-  /** Time in this step ("12s"), or null when the text carries it. */
-  elapsed: string | null
-}
-
-export interface ThreadStripView {
-  tone: ThreadStripTone
-  /** The state word, only where it adds something: "Working" (no step
-   *  known), "Monitoring", "Needs you", "Stopped", "No update in 34m".
-   *  Empty while the step line says what the agent is doing. */
-  label: string
-  /** The header's clock or note: "1m 12s", "you stopped it after 14s", … */
-  since: string
-  /** Hover text for `since` ("since your message"), or null. */
-  sinceTitle: string | null
-  /** The whole strip in words, for assistive tech: "Agent working, 1m 12s
-   *  since your message". */
-  ariaLabel: string
-  step: ThreadStripStep | null
-  /** Muted bits, joined with " · ". */
-  tally: string[]
-  /** The owner may press Stop (Esc to the session). */
-  stoppable: boolean
+/** The desktop's ThreadTurn as @k2/activity's Turn (its own skew kept). */
+export function coreTurn(turn: ThreadTurn): Turn {
+  const t = coerceTurn(turn, 0)
+  if (!t) throw new Error(`threadStrip: not a Thread turn: ${turn.turnId}`)
+  return t
 }
 
 /** "8s", "1m 05s", "1h 02m". */
-export function stripClock(ms: number): string {
-  const sec = Math.max(0, Math.floor(ms / 1000))
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  const s = sec % 60
-  if (h) return `${h}h ${String(m).padStart(2, '0')}m`
-  if (m) return `${m}m ${String(s).padStart(2, '0')}s`
-  return `${s}s`
-}
-
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`
-}
-
-/** One expanded-detail bit with the counter it explains: the key picks
- *  the same icon its collapsed counter shows (K2 Companion `c29b6db`,
- *  Rosson 2026-10-18). */
-export interface StripDetailItem {
-  key: StripCounterKey
-  text: string
-}
+export const stripClock: (ms: number) => string = coreStripClock
 
 /** "Read 3 files", "searched 1 time", "ran 2 commands", "edited 1 file". */
 export function tallyItems(t: ThreadTurnTally): StripDetailItem[] {
-  const out: StripDetailItem[] = []
-  if (t.read) out.push({ key: 'read', text: `read ${plural(t.read, 'file', 'files')}` })
-  if (t.search) out.push({ key: 'search', text: `searched ${plural(t.search, 'time', 'times')}` })
-  if (t.cmd) out.push({ key: 'cmd', text: `ran ${plural(t.cmd, 'command', 'commands')}` })
-  if (t.edit) out.push({ key: 'edit', text: `edited ${plural(t.edit, 'file', 'files')}` })
-  if (out.length) out[0] = { ...out[0], text: out[0].text.charAt(0).toUpperCase() + out[0].text.slice(1) }
-  return out
+  return coreTallyItems(t)
 }
 
 /** The tally in words only (`tallyItems` without the keys). */
@@ -102,41 +78,16 @@ export function tallyBits(t: ThreadTurnTally): string[] {
   return tallyItems(t).map((i) => i.text)
 }
 
-/** One named child in words (0.46.5): "Explore subagent running",
- *  "Running `npm run dev` in the background". */
+/** One named child in words: "Explore subagent running", "Running `npm
+ *  run dev` in the background". */
 export function childText(c: ThreadTurnChild): string {
-  if (c.kind === 'subagent') {
-    const name = c.label ? `${c.label} subagent` : 'A subagent'
-    const state = c.state === 'waiting' ? 'waiting on a prompt' : c.state === 'owed' ? 'done' : 'running'
-    return `${name} ${state}`
-  }
-  const name = c.label ?? (c.kind === 'monitor' ? 'A monitor' : c.kind === 'task' ? 'A task' : 'A background task')
-  return `${name} in the background`
+  return coreChildText(c)
 }
 
-/** TW7: what holds the turn. By name when the daemon sends `children`
- *  (0.46.5): one item per child, plus the subagents already done; from
- *  an older server, counts only. */
+/** TW7: what holds the turn. By name when the daemon sends `children`;
+ *  from an older server, counts only. */
 export function childItems(turn: ThreadTurn): StripDetailItem[] {
-  if (turn.children && turn.children.length > 0) {
-    const named: StripDetailItem[] = turn.children.map((c) => ({
-      key: c.kind === 'subagent' ? 'subagents' : 'background',
-      text: childText(c),
-    }))
-    const listedDone = turn.children.filter((c) => c.kind === 'subagent' && c.state === 'owed').length
-    const done = turn.subagentsDone - listedDone
-    if (done > 0) named.push({ key: 'subagents', text: `${plural(done, 'subagent', 'subagents')} done` })
-    return named
-  }
-  const out: StripDetailItem[] = []
-  if (turn.subagents > 0) {
-    const done = turn.subagentsDone > 0 ? `, ${turn.subagentsDone} done` : ''
-    out.push({ key: 'subagents', text: `${plural(turn.subagents, 'subagent', 'subagents')} running${done}` })
-  } else if (turn.subagentsDone > 0) {
-    out.push({ key: 'subagents', text: `${plural(turn.subagentsDone, 'subagent', 'subagents')} done` })
-  }
-  if (turn.background > 0) out.push({ key: 'background', text: plural(turn.background, 'background task', 'background tasks') })
-  return out
+  return coreChildItems({ ...turn, children: turn.children ?? null })
 }
 
 /** The children in words only (`childItems` without the keys). */
@@ -144,184 +95,29 @@ export function childBits(turn: ThreadTurn): string[] {
   return childItems(turn).map((i) => i.text)
 }
 
-/** The step line, or null when the step is unknown (the header then says
- *  "Working" instead). */
-function stepOf(turn: ThreadTurn, serverNow: number): ThreadStripStep | null {
-  const inPhase = stripClock(serverNow - turn.phaseSince)
-  switch (turn.phase) {
-    case 'tool':
-      return turn.line ? { kind: 'line', text: turn.line, elapsed: inPhase } : null
-    case 'thinking':
-      return { kind: 'thinking', text: `Thinking… ${inPhase}`, elapsed: null }
-    case 'waiting':
-      return {
-        kind: 'needs',
-        text: turn.waitingOn === 'question' ? 'Stuck on a question' : 'Stuck on a permission prompt',
-        elapsed: inPhase,
-      }
-    case 'delivering':
-      return { kind: 'plain', text: 'Delivering…', elapsed: null }
-    case 'working':
-    case 'stale':
-    case 'children':
-      return null
-  }
-}
-
-/** A step for assistive tech: the tool line without its backticks. */
-function spokenStep(step: ThreadStripStep | null): string {
-  return step ? `: ${step.text.replace(/`/g, '')}` : ''
-}
-
 /** The strip for `turn` at `now` (this client's clock), or null: nothing
  *  to show (the turn ended, or it is in no state the strip draws). */
 export function threadStripView(turn: ThreadTurn, now: number): ThreadStripView | null {
-  const serverNow = now + turn.skewMs
-  if (turn.end) {
-    if (turn.end.reason !== 'interrupted' || serverNow - turn.end.at >= STOPPED_LINGER_MS) return null
-    const since = `you stopped it after ${stripClock(turn.end.at - turn.startedAt)}`
-    return {
-      tone: 'stopped',
-      label: 'Stopped',
-      since,
-      sinceTitle: null,
-      ariaLabel: `Stopped, ${since}`,
-      step: null,
-      tally: [],
-      stoppable: false,
-    }
-  }
-  const clock = stripClock(serverNow - turn.startedAt)
-  const sinceMessage = `${clock} since your message`
-  const tally = [...tallyBits(turn.tally), ...childBits(turn)]
-  const step = stepOf(turn, serverNow)
-  if (turn.phase === 'children' && (turn.state === 'working' || turn.state === 'monitoring')) {
-    const children = childBits(turn)
-    const label = children.length ? children.join(' · ') : 'Background work'
-    return {
-      tone: turn.state,
-      label,
-      since: clock,
-      sinceTitle: 'since your message',
-      ariaLabel: `${turn.replied === false ? 'Agent' : 'Agent replied'}; ${label.charAt(0).toLowerCase()}${label.slice(1)}, ${sinceMessage}`,
-      step: null,
-      tally: tallyBits(turn.tally),
-      stoppable: false,
-    }
-  }
-  switch (turn.state) {
-    case 'working':
-    case 'monitoring': {
-      // The pulse says "working"; the word only stands in for an unknown
-      // step. Monitoring keeps its word: it tells you something.
-      const word = turn.state === 'working' ? 'Working' : 'Monitoring'
-      return {
-        tone: turn.state,
-        label: turn.state === 'monitoring' || !step ? word : '',
-        since: clock,
-        sinceTitle: 'since your message',
-        ariaLabel: `Agent ${word.toLowerCase()}, ${sinceMessage}${spokenStep(step)}`,
-        step,
-        tally,
-        stoppable: true,
-      }
-    }
-    case 'needs-you':
-      return {
-        tone: 'needs-you',
-        label: 'Needs you',
-        since: clock,
-        sinceTitle: 'since your message',
-        ariaLabel: `Agent needs you, ${sinceMessage}${spokenStep(step)}`,
-        step,
-        tally,
-        stoppable: false,
-      }
-    case 'unverifiable': {
-      // A24: phase `stale` starts at the row's `staleSince`.
-      const minutes = minutesWithoutUpdate({ evidenceAt: null, staleSince: turn.phaseSince }, now, turn.skewMs)
-      return {
-        tone: 'unverifiable',
-        label: `No update in ${minutes}m`,
-        since: 'the session is still open',
-        sinceTitle: null,
-        ariaLabel: `No update in ${minutes}m, the session is still open`,
-        step: null,
-        tally,
-        stoppable: false,
-      }
-    }
-    case 'stopped':
-    case 'idle':
-      return null
-  }
+  return coreStripView(coreTurn(turn), now)
 }
 
 // ── The drawer's one line (0.45.6 Garden 1, ported from K2 Companion) ───
-// Garden 1's activity drawer above the message box (`ZenActivityDrawer`).
 // Collapsed it is one line: pulse · step · icon counters · clock. The
-// icons are decoration; the drawer's aria-label stays the full sentence
-// above, and each counter carries a visually hidden word equivalent.
-// Subagents read `[agent] ⠋1  ✓2`: the agent icon, a spinner and the
-// running count, then a check and the done count, each group only when it
-// is above zero. Expanded it is the detail in words.
-
-export type StripCounterKey = 'subagents' | 'background' | 'read' | 'search' | 'cmd' | 'edit'
-
-/** Display order, left to right. */
-const COUNTER_ORDER: StripCounterKey[] = ['subagents', 'background', 'read', 'search', 'cmd', 'edit']
+// icons are decoration; the drawer's aria-label stays the full sentence,
+// and each counter carries a visually hidden word equivalent.
 
 /** Dropped first to last when the line is too narrow (after the
  *  subagents' done group). Subagents and background tasks always show. */
 export const COUNTER_DROP_ORDER: StripCounterKey[] = ['search', 'read', 'edit', 'cmd']
 
-export interface StripCounter {
-  key: StripCounterKey
-  /** Subagents: the running ones. */
-  count: number
-  /** Subagents only: finished ones (the check group). */
-  done: number
-}
-
 /** Non-zero counters, in display order. */
 export function stripCounters(turn: Pick<ThreadTurn, 'subagents' | 'subagentsDone' | 'background' | 'tally'>): StripCounter[] {
-  const counts: Record<StripCounterKey, number> = {
-    subagents: turn.subagents,
-    background: turn.background,
-    read: turn.tally.read,
-    search: turn.tally.search,
-    cmd: turn.tally.cmd,
-    edit: turn.tally.edit,
-  }
-  const out: StripCounter[] = []
-  for (const key of COUNTER_ORDER) {
-    const count = Math.max(0, counts[key] || 0)
-    const done = key === 'subagents' ? Math.max(0, turn.subagentsDone || 0) : 0
-    if (count > 0 || done > 0) out.push({ key, count, done })
-  }
-  return out
+  return coreCounters(turn)
 }
 
 /** The counter in words, for screen readers. */
 export function counterSpoken(c: StripCounter): string {
-  switch (c.key) {
-    case 'subagents':
-      if (c.count > 0) {
-        const done = c.done > 0 ? `, ${c.done} done` : ''
-        return `${plural(c.count, 'subagent', 'subagents')} running${done}`
-      }
-      return `${plural(c.done, 'subagent', 'subagents')} done`
-    case 'background':
-      return plural(c.count, 'background task', 'background tasks')
-    case 'read':
-      return `read ${plural(c.count, 'file', 'files')}`
-    case 'search':
-      return `searched ${plural(c.count, 'time', 'times')}`
-    case 'cmd':
-      return `ran ${plural(c.count, 'command', 'commands')}`
-    case 'edit':
-      return `edited ${plural(c.count, 'file', 'files')}`
-  }
+  return coreCounterSpoken(c)
 }
 
 /** Gap (px) between counters. */
@@ -402,101 +198,12 @@ export function fitStripCounters(
   return list
 }
 
-/** The clock at the far right: "0:08", "1:12", "1:02:03". */
-export function stripClockShort(ms: number): string {
-  const sec = Math.max(0, Math.floor(ms / 1000))
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  const s = String(sec % 60).padStart(2, '0')
-  return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`
-}
 
-export interface ThreadDrawerLine {
-  tone: ThreadStripTone
-  /** Full sentence, from `threadStripView`. */
-  ariaLabel: string
-  /** The middle of the collapsed line: the step, or the state word. */
-  step: ThreadStripStep
-  counters: StripCounter[]
-  /** Far right, "1:12". */
-  clock: string
-  /** Expanded, in words. */
-  detail: {
-    /** "Working · 1m 12s since your message". */
-    head: string
-    /** The full step with its time in step, or null. */
-    step: ThreadStripStep | null
-    /** "Read 3 files · searched 1 time · ran 2 commands · edited 1 file". */
-    tally: string
-    /** "2 subagents running, 1 done · 1 background task". */
-    children: string
-    /** The same bits with their counter keys, so each shows its icon. */
-    tallyItems: StripDetailItem[]
-    childItems: StripDetailItem[]
-  }
-}
+/** The clock at the far right: "0:08", "1:12", "1:02:03". */
+export const stripClockShort: (ms: number) => string = coreStripClockShort
 
 /** The drawer for `turn` at `now` (this client's clock), or null: nothing
  *  to show. */
 export function threadDrawerLine(turn: ThreadTurn, now: number): ThreadDrawerLine | null {
-  const view = threadStripView(turn, now)
-  if (!view) return null
-  const tallyList = tallyItems(turn.tally)
-  const childList = childItems(turn)
-  const tally = tallyList.map((i) => i.text).join(' · ')
-  const children = childList.map((i) => i.text).join(' · ')
-  if (turn.end) {
-    return {
-      tone: view.tone,
-      ariaLabel: view.ariaLabel,
-      step: { kind: 'plain', text: 'Stopped', elapsed: null },
-      counters: [],
-      clock: stripClockShort(turn.end.at - turn.startedAt),
-      detail: {
-        head: `Stopped after ${stripClock(turn.end.at - turn.startedAt)}`,
-        step: null,
-        tally,
-        children,
-        tallyItems: tallyList,
-        childItems: childList,
-      },
-    }
-  }
-  const serverNow = now + turn.skewMs
-  const sinceMessage = `${stripClock(serverNow - turn.startedAt)} since your message`
-  const replied = turn.phase === 'children' && (turn.state === 'working' || turn.state === 'monitoring')
-  let word: string
-  let step: ThreadStripStep
-  if (replied) {
-    // 0.46.5: say what holds the turn, not only that the agent replied.
-    // An older server (no `replied`) only sent this phase after a reply.
-    const said = turn.replied !== false
-    word = said ? 'Replied' : turn.state === 'monitoring' ? 'Monitoring' : 'Working'
-    const first = childList[0]?.text
-    const more = childList.length > 1 ? ` +${childList.length - 1}` : ''
-    const what = first ? `${first}${more}` : null
-    const text = said ? (what ? `Replied · ${what}` : 'Replied') : (what ?? word)
-    step = { kind: text.includes('`') ? 'line' : 'plain', text, elapsed: null }
-  } else if (view.tone === 'unverifiable') {
-    word = view.label
-    step = { kind: 'plain', text: view.label, elapsed: null }
-  } else {
-    word = turn.state === 'needs-you' ? 'Needs you' : turn.state === 'monitoring' ? 'Monitoring' : 'Working'
-    step = view.step ?? { kind: 'plain', text: view.label || word, elapsed: null }
-  }
-  return {
-    tone: view.tone,
-    ariaLabel: view.ariaLabel,
-    step,
-    counters: stripCounters(turn),
-    clock: stripClockShort(serverNow - turn.startedAt),
-    detail: {
-      head: `${word} · ${sinceMessage}`,
-      step: replied || view.tone === 'unverifiable' ? null : view.step,
-      tally,
-      children,
-      tallyItems: tallyList,
-      childItems: childList,
-    },
-  }
+  return coreDrawerLine(coreTurn(turn), now)
 }

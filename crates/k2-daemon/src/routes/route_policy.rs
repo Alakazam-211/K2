@@ -529,6 +529,10 @@ pub const ROUTES: &[Route] = &[
     get("/cli/compute/agents", Admin),
     post("/cli/compute/agents/set", Admin),
     get("/cli/compute/attach", Public),
+    // Job caches on the nodes (`--cache NAME`, 0.46.6): list and clear,
+    // owner/Admin (or an agent under "Allow managing compute nodes").
+    get("/cli/compute/cache", Admin),
+    post("/cli/compute/cache/clear", Admin),
     get("/cli/compute/enroll", Public),
     get("/cli/compute/events", Admin),
     get("/cli/compute/grants", Member),

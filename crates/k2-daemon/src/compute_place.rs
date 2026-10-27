@@ -104,6 +104,8 @@ pub struct Want {
     /// only nodes where this workspace may send CI: the share's `gate` and
     /// a grant with `allow_ci` (or an owner/Admin caller) (T12).
     pub tier: JobTier,
+    /// `--cache NAME` (protocol 6): the node must offer `job-cache`.
+    pub cache: bool,
 }
 
 impl Want {
@@ -121,6 +123,7 @@ impl Want {
             stall: j.ctl.stall_secs.is_some_and(|s| s > 0),
             secret_ids: j.ctl.secrets.iter().map(|p| p.secret_id.clone()).collect(),
             tier: j.tier(),
+            cache: plan.cache.is_some(),
         }
     }
 
@@ -226,6 +229,9 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     }
     if !w.secret_ids.is_empty() {
         f.push(k2_core::compute::proto::secret::FEATURE_SECRET_ENV);
+    }
+    if w.cache {
+        f.push(k2_core::compute::proto::cache::FEATURE_JOB_CACHE);
     }
     f
 }

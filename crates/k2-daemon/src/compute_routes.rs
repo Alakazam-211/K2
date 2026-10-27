@@ -21,9 +21,10 @@
 //! call [`handle`] (blocking: DB, git, the log long-poll).
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use k2_core::compute::proto::cache as pcache;
 use k2_core::compute::proto::frames::{Blob, Control, JobLimits, JobState, Plan, Src};
 use k2_core::compute::proto::share as pshare;
 use k2_core::compute::proto::tiers::{self, Tier};
@@ -50,6 +51,8 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/agents",
     "/cli/compute/agents/set",
     compute_ws::ATTACH_PATH,
+    "/cli/compute/cache",
+    "/cli/compute/cache/clear",
     compute_ws::ENROLL_PATH,
     "/cli/compute/events",
     "/cli/compute/grants",
@@ -105,6 +108,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/admin/propose",
     "/cli/compute/admin/withdraw",
     "/cli/compute/agents/set",
+    "/cli/compute/cache/clear",
     "/cli/compute/grants/revoke",
     "/cli/compute/grants/set",
     "/cli/compute/jobs/cancel",
@@ -562,6 +566,9 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/local/remote-admin" => local_remote_admin(&who, body),
         // Node sharing (prd-compute-shared-queue-v1 §9).
         "/cli/compute/queue" => queue(&who, params),
+        // Job caches on the nodes (`--cache NAME`, protocol 6).
+        "/cli/compute/cache" => caches(&who, params, mgr),
+        "/cli/compute/cache/clear" => cache_clear(&who, body, mgr),
         // Node admin (prd-k2-node-admin-v1): approvals, policy, update,
         // health, alerts; and a shared node's servers.
         p if crate::compute_admin::is_route(p) => crate::compute_admin::handle(p, &who, body, params, mgr),
@@ -1601,6 +1608,12 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // value), env names and grant coverage once the node is known.
     let secret_asks = crate::compute_secrets::asks_from(v)?;
     let secrets_found = crate::compute_secrets::find(&ws.id, &ws.handle, who.is_admin(), &secret_asks)?;
+    // `--cache NAME` (protocol 6): a folder on the node that outlives the
+    // job. Never with secret env: a secret job keeps nothing between runs.
+    let cache = cache_from(v)?;
+    if cache.is_some() && !secret_asks.is_empty() {
+        return Err(no(pcache::codes::CACHE_WITH_SECRET, 400, "--cache and --secret don't mix: a job with secret env keeps nothing between runs on the node"));
+    }
     let detach = b(&v, "detach") == Some(true);
     // Job tiers (prd-compute-job-tiers-v1): `--tier` (`--gate` = ci), the
     // supersede key and the submitter's own name. The node decides below.
@@ -1650,6 +1663,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         stall: stall.is_some_and(|x| x > 0),
         secret_ids: secrets_found.iter().map(|f| f.secret_id.clone()).collect(),
         tier: tier_ask,
+        cache: cache.is_some(),
     };
     // Node: by name, or --any.
     let mut warnings: Vec<String> = Vec::new();
@@ -1677,6 +1691,16 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         if let Some(r) = crate::compute_secrets::not_granted(&secret_envs, &ws.handle, &node) {
             return Err(r);
         }
+    }
+    if cache.is_some() && !node_features(&node).iter().any(|f| f == pcache::FEATURE_JOB_CACHE) {
+        return Err(no(
+            pcache::codes::NODE_TOO_OLD_FOR_CACHE,
+            409,
+            format!(
+                "'{}' runs a k2-node older than 0.46.6, which has no job caches; update it (k2 compute node update {}), pick another node, or run without --cache",
+                node.name, node.name
+            ),
+        ));
     }
     if want.stall && !node_features(&node).iter().any(|f| f == k2_core::compute::proto::frames::FEATURE_STALL) {
         return Err(no(
@@ -1868,12 +1892,17 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // Source: the workspace's own repo only (never a path the client names
     // outside it, so a passport can't ship another repo off this machine).
     let job_id = crypto::random_id().map_err(|e| no("internal", 500, e))?;
-    let (src, source) = if b(&v, "noSource") == Some(true) {
-        (None, None)
+    let (src, source, repo) = if b(&v, "noSource") == Some(true) {
+        if s(&v, "repo").is_some_and(|r| !r.is_empty()) {
+            return Err(no(codes::BAD_REQUEST, 400, "--repo picks the code to ship; --no-source ships none (drop one)"));
+        }
+        (None, None, None)
     } else {
         let (src, info) = source_for(&ws, &v, &compute_ws::dirty_blob_path(&job_id), &mut warnings)?;
-        (Some(src), Some(info))
+        let repo = info.repo.clone();
+        (Some(src), Some(info), repo)
     };
+    let cwd = if source.as_ref().is_some_and(|i| i.caller_elsewhere) { None } else { cwd };
     let ctl = store::JobCtl {
         any: any.then_some(filter),
         admin: who.is_admin(),
@@ -1884,6 +1913,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         stall_secs: stall,
         shard: opts.shard.clone(),
         secrets: crate::compute_secrets::pins(&secret_envs).0,
+        repo,
         ..Default::default()
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
@@ -1929,6 +1959,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         stall_secs,
         // Names only (SE5): the values come sealed at spawn.
         secret_env: crate::compute_secrets::pins(&secret_envs).1,
+        // Protocol 6: only ever placed on nodes offering `job-cache` (above,
+        // and `required_features` for --any and moves).
+        cache: cache.clone(),
     };
     let job = {
         let db = k2_core::db::shared();
@@ -1982,7 +2015,133 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     Ok(Submitted { job: Some(job), warnings, source: source.as_ref().map(SourceInfo::json), preview: None, notices, replaced })
 }
 
+// ── job caches (`k2 compute cache`, protocol 6) ──────────────────────
+
+/// How long `cache` waits for each node's `cache_view`.
+const CACHE_WAIT: Duration = Duration::from_secs(20);
+
+/// This server's job caches on its nodes, newest node first: every node
+/// (or `node`), every workspace (or `workspace`). With `clear`, the
+/// matching caches no running job holds go first. Owner and Admin logins,
+/// or a local agent under "Allow managing compute nodes".
+fn cache_op(who: &Who, node: Option<&str>, workspace: Option<&str>, name: Option<&str>, clear: bool, mgr: Option<&Manager>) -> R<serde_json::Value> {
+    admin_or_manager(who, mgr)?;
+    if let Some(n) = name.filter(|n| !pcache::valid_name(n)) {
+        return Err(no(pcache::codes::CACHE_INVALID, 400, format!("{n:?} isn't a cache name (1–{} of a-z 0-9 . _ -)", pcache::NAME_MAX)));
+    }
+    let ws = workspace.map(|w| ws_by_token_or_worktree(w).ok_or_else(|| no_workspace(w))).transpose()?;
+    let nodes: Vec<store::NodeRow> = match node {
+        Some(n) => vec![node_or_404(Some(n))?],
+        None => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::list_nodes(&conn, false).into_iter().filter(|n| n.state == "active").collect()
+        }
+    };
+    // Which of this server's workspaces a node's `ws_key` is.
+    let fp = compute::controller_key().map_err(|e| no("internal", 500, format!("controller key: {e}")))?.fingerprint();
+    let names: HashMap<String, (String, String)> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::Project::list(&conn)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| (pcache::ws_key(&fp, &p.id), (p.id.clone(), ws_handle(&p.id))))
+            .collect()
+    };
+    let entry = |e: &pcache::CacheEntry| {
+        let (id, handle) = names.get(&e.ws_key).cloned().map(|(i, h)| (Some(i), Some(h))).unwrap_or((None, None));
+        serde_json::json!({"workspace": handle, "workspaceId": id, "wsKey": e.ws_key, "name": e.name, "bytes": e.bytes, "usedAt": e.used_at, "busy": e.busy})
+    };
+    let mut out = Vec::new();
+    for n in &nodes {
+        let (online, _, live) = compute_ws::live_view(&n.id);
+        let feats = live.as_ref().or(n.last_offer.as_ref()).map(|o| o.features.clone()).unwrap_or_default();
+        let mut row = serde_json::json!({"node": n.name, "online": online});
+        if !feats.iter().any(|f| f == pcache::FEATURE_JOB_CACHE) {
+            row["supported"] = false.into();
+            row["note"] = "its k2-node has no job caches (0.46.6+)".into();
+            out.push(row);
+            continue;
+        }
+        row["supported"] = true.into();
+        if !online {
+            row["note"] = "offline".into();
+            out.push(row);
+            continue;
+        }
+        let ask = pcache::CacheGet {
+            request_id: crypto::random_id().map_err(|e| no("internal", 500, e))?,
+            workspace_id: ws.as_ref().map(|w| w.id.clone()),
+            clear,
+            name: name.map(str::to_string),
+        };
+        match compute_ws::cache_get(&n.id, ask, CACHE_WAIT) {
+            Ok(v) => {
+                if let Some(code) = v.refused {
+                    row["error"] = code.into();
+                } else {
+                    row["caches"] = v.caches.iter().map(entry).collect::<Vec<_>>().into();
+                    if clear {
+                        row["cleared"] = v.cleared.iter().map(entry).collect::<Vec<_>>().into();
+                    }
+                }
+            }
+            Err((code, hint)) => {
+                row["error"] = code.into();
+                row["note"] = hint.into();
+            }
+        }
+        out.push(row);
+    }
+    if clear {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::record_event(
+            &conn,
+            &who.label(),
+            "cache_clear",
+            node.and_then(|_| nodes.first().map(|n| n.id.as_str())),
+            ws.as_ref().map(|w| w.id.as_str()),
+            None,
+            serde_json::json!({"name": name, "cleared": out.iter().map(|r| r.get("cleared").and_then(|c| c.as_array()).map(Vec::len).unwrap_or(0)).sum::<usize>()}),
+        );
+    }
+    Ok(serde_json::json!({"nodes": out}))
+}
+
+/// `GET /cli/compute/cache?node=&workspace=&name=`.
+fn caches(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<serde_json::Value> {
+    let p = |k: &str| params.get(k).map(String::as_str).filter(|v| !v.is_empty());
+    cache_op(who, p("node"), p("workspace"), p("name"), false, mgr)
+}
+
+/// `POST /cli/compute/cache/clear {node?, workspace?, name?, all?}`: a
+/// workspace, or `all` for every workspace of this server (never by
+/// accident: one of the two is required).
+fn cache_clear(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
+    let v = json_body(body)?;
+    let workspace = s(&v, "workspace").filter(|w| !w.is_empty());
+    if workspace.is_none() && b(&v, "all") != Some(true) {
+        return Err(no(codes::BAD_REQUEST, 400, "name a workspace (--workspace WS), or pass --all for every workspace's caches"));
+    }
+    cache_op(who, s(&v, "node").filter(|n| !n.is_empty()), workspace, s(&v, "name").filter(|n| !n.is_empty()), true, mgr)
+}
+
 // ── job tiers (prd-compute-job-tiers-v1) ─────────────────────────────
+
+/// `cache` from a run request: a cache name (`--cache NAME`), or none.
+fn cache_from(v: &serde_json::Value) -> R<Option<String>> {
+    match v.get("cache") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(n)) if pcache::valid_name(n) => Ok(Some(n.clone())),
+        Some(_) => Err(no(
+            pcache::codes::CACHE_INVALID,
+            400,
+            format!("--cache NAME: 1–{} of a-z 0-9 . _ -, starting with a letter or digit (e.g. fuzz-corpus)", pcache::NAME_MAX),
+        )),
+    }
+}
 
 /// `tier` from a run request (`gate: true` is the old spelling of CI).
 fn tier_from(v: &serde_json::Value) -> R<Tier> {
@@ -2193,11 +2352,11 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     let running_ws = load.running_by_workspace.get(&f.ws.id).copied().unwrap_or(0);
     // Warm slot: the commit this run would use, against the node's slots.
     let warm = (b(f.v, "noSource") != Some(true))
-        .then(|| compute::sync::repo_root(Path::new(&f.ws.path)).ok())
+        .then(|| repo_pick(f.ws, f.v).ok())
         .flatten()
-        .map(|root| {
-            let pk = compute::sync::project_key(&f.ws.id, compute::sync::origin_url(&root).as_deref());
-            let commit = compute::sync::resolve_commit(&root, s(f.v, "sha").unwrap_or("HEAD")).ok();
+        .map(|pick| {
+            let pk = pick.project_key(f.ws);
+            let commit = compute::sync::resolve_commit(pick.named.as_ref().unwrap_or(&pick.home), s(f.v, "sha").unwrap_or("HEAD")).ok();
             let slots: Vec<_> = offer.as_ref().map(|o| o.slots.iter().filter(|x| x.project_key == pk).cloned().collect()).unwrap_or_default();
             if commit.is_some() && slots.iter().any(|x| x.last_sha == commit) {
                 "warm (a slot built this commit)"
@@ -2357,9 +2516,7 @@ fn pick_node(
             "no node granted to this workspace matches --any (os/arch/labels, --needs/--artifact support, queue room); k2 compute nodes",
         ));
     }
-    let pk = compute::sync::repo_root(Path::new(&ws.path))
-        .ok()
-        .map(|root| compute::sync::project_key(&ws.id, compute::sync::origin_url(&root).as_deref()));
+    let pk = (b(v, "noSource") != Some(true)).then(|| repo_pick(ws, v).ok()).flatten().map(|pick| pick.project_key(ws));
     let Some((c, tier)) = choose(&cands, want, prefer_not, pk.as_deref(), None) else {
         return Err(no(
             codes::NO_NODE_FITS,
@@ -2422,6 +2579,11 @@ pub(crate) struct SourceInfo {
     pub(crate) commit: String,
     /// (changed, untracked, bytes) when `--dirty` sent changes.
     pub(crate) dirty: Option<(usize, usize, u64)>,
+    /// `--repo`: the nested repo (its folder in the workspace), else none.
+    pub(crate) repo: Option<String>,
+    /// `--repo` names a repo the caller doesn't run from: its `cwd` (a
+    /// folder of another repo) is dropped.
+    pub(crate) caller_elsewhere: bool,
 }
 
 impl SourceInfo {
@@ -2431,28 +2593,116 @@ impl SourceInfo {
             "path": self.path,
             "commit": self.commit,
             "dirty": self.dirty.map(|(c, u, b)| serde_json::json!({"changed": c, "untracked": u, "bytes": b})),
+            "repo": self.repo,
         })
     }
 }
 
+/// The repo a job's code comes from (`--repo`, 0.46.6).
+#[derive(Debug, Clone)]
+pub(crate) struct RepoPick {
+    /// The repo's main checkout: bundles are built from it, and a caller's
+    /// worktree of it may stand in for its HEAD.
+    pub(crate) home: PathBuf,
+    /// A checkout `--repo` named that isn't `home` (a worktree): its HEAD
+    /// and `--dirty`, whatever folder the caller ran from.
+    pub(crate) named: Option<PathBuf>,
+    /// `home` relative to the workspace folder; `None` = the workspace's
+    /// own repo (today's path, today's project key).
+    pub(crate) rel: Option<String>,
+    /// Found from the caller's folder (no `--repo`; the workspace root
+    /// isn't a repo).
+    pub(crate) auto: bool,
+}
+
+impl RepoPick {
+    /// The warm-slot key on the node for this repo.
+    pub(crate) fn project_key(&self, ws: &Ws) -> String {
+        compute::sync::project_key_in(&ws.id, compute::sync::origin_url(&self.home).as_deref(), self.rel.as_deref())
+    }
+}
+
+/// `--repo` refused (bad folder, escapes the jail, not a repo there).
+pub(crate) const REPO_INVALID: &str = "repo_invalid";
+
+fn nested_pick(n: compute::sync::NestedRepo, auto: bool) -> RepoPick {
+    let named = (n.root != n.home).then(|| n.root.clone());
+    RepoPick { home: n.home, named, rel: Some(n.rel).filter(|r| !r.is_empty()), auto }
+}
+
+/// Which repo of the workspace a job ships: `--repo <subdir>` (a nested
+/// repo, jailed like a caller's worktree: `sync::nested_repo`), else the
+/// workspace's own repo, else (a multi-repo workspace whose root isn't a
+/// repo) the nested repo the caller runs from. Never a repo outside the
+/// workspace, never `.k2/`.
+pub(crate) fn repo_pick(ws: &Ws, v: &serde_json::Value) -> R<RepoPick> {
+    let ws_dir = Path::new(&ws.path);
+    if let Some(rel) = s(v, "repo").filter(|r| !r.is_empty()) {
+        let n = compute::sync::nested_repo(ws_dir, rel).map_err(|e| no(REPO_INVALID, 400, e))?;
+        return Ok(nested_pick(n, false));
+    }
+    match compute::sync::repo_root(ws_dir) {
+        Ok(home) => Ok(RepoPick { home, named: None, rel: None, auto: false }),
+        Err(_) => {
+            let from_caller = s(v, "repoDir")
+                .filter(|d| !d.is_empty())
+                .map(|d| compute::sync::nested_repo_of_caller(ws_dir, Path::new(d)))
+                .transpose()
+                .map_err(|e| no(REPO_INVALID, 400, e))?
+                .flatten();
+            match from_caller {
+                Some(n) => Ok(nested_pick(n, true)),
+                None => Err(no(
+                    codes::NOT_A_REPO,
+                    400,
+                    format!(
+                        "workspace {} isn't a git repo; run from inside one of its repos, pass --repo <folder> (a git repo inside the workspace), or --no-source to run without code",
+                        ws.handle
+                    ),
+                )),
+            }
+        }
+    }
+}
+
 fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Vec<String>) -> R<(Src, SourceInfo)> {
-    let ws_root = compute::sync::repo_root(Path::new(&ws.path))
-        .map_err(|_| no(codes::NOT_A_REPO, 400, format!("workspace {} isn't a git repo; pass --no-source to run without code", ws.handle)))?;
+    let pick = repo_pick(ws, v)?;
+    let ws_root = pick.home.clone();
     // Run from a git worktree inside the workspace (e.g.
     // .claude/worktrees/x): HEAD and --dirty come from that checkout, not
     // the main one. Objects are shared, so bundling by commit still works
-    // from the workspace repo.
-    let (root, checkout) = match s(v, "repoDir").filter(|d| !d.is_empty()) {
-        Some(d) => match compute::sync::caller_checkout(Path::new(&ws.path), &ws_root, Path::new(d)) {
+    // from the repo's main checkout. A worktree `--repo` named itself wins.
+    // `--repo` naming a repo the caller isn't in: its folder means nothing
+    // there, so the job starts at the repo's root (`cwd` is dropped).
+    let caller_elsewhere = pick.rel.is_some()
+        && !pick.auto
+        && s(v, "repoDir")
+            .filter(|d| !d.is_empty())
+            .is_none_or(|d| compute::sync::caller_checkout(Path::new(&ws.path), &pick.home, Path::new(d)).is_err());
+    let (root, checkout) = match (&pick.named, s(v, "repoDir").filter(|d| !d.is_empty())) {
+        (Some(named), _) => (named.clone(), "worktree"),
+        (None, Some(d)) => match compute::sync::caller_checkout(Path::new(&ws.path), &ws_root, Path::new(d)) {
             Ok(Some(wt)) => (wt, "worktree"),
             Ok(None) => (ws_root, "workspace"),
+            // Run from outside the --repo you named: no warning, that's
+            // what --repo is for.
+            Err(_) if caller_elsewhere => (ws_root, "workspace"),
             Err(e) => {
-                warnings.push(format!("{e}; using workspace {}'s own checkout", ws.handle));
+                let whose = match &pick.rel {
+                    Some(r) => format!("repo {r}'s"),
+                    None => format!("workspace {}'s", ws.handle),
+                };
+                warnings.push(format!("{e}; using {whose} own checkout"));
                 (ws_root, "workspace")
             }
         },
-        None => (ws_root, "workspace"),
+        (None, None) => (ws_root, "workspace"),
     };
+    if pick.auto {
+        if let Some(r) = &pick.rel {
+            warnings.push(format!("workspace {} isn't a git repo: shipping its repo {r} (the one you're in; --repo picks another)", ws.handle));
+        }
+    }
     let dirty = b(v, "dirty") == Some(true);
     let sha = s(v, "sha");
     // Every revision resolves in the checkout actually used (a worktree's
@@ -2497,8 +2747,8 @@ fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Ve
     if remote.is_none() {
         warnings.push("no fetchable https origin: the node gets history as git bundles from this server".into());
     }
-    let pk = compute::sync::project_key(&ws.id, remote.as_deref());
-    let info = SourceInfo { checkout, path: rel, commit: commit.clone(), dirty: dirty_info };
+    let pk = compute::sync::project_key_in(&ws.id, remote.as_deref(), pick.rel.as_deref());
+    let info = SourceInfo { checkout, path: rel, commit: commit.clone(), dirty: dirty_info, repo: pick.rel, caller_elsewhere };
     Ok((Src { project_key: pk, remote_url: remote, commit, dirty: blob, slots: 1 }, info))
 }
 
@@ -2969,6 +3219,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         stall_secs: None,
         secret_env: Vec::new(),
         tier: None,
+        cache: None,
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());
     let parent = {
@@ -3819,5 +4070,95 @@ mod tests {
         std::fs::create_dir_all(&plain).expect("mkdir");
         assert_eq!(compute::sync::main_checkout_of(&plain).filter(|p| p.starts_with(&d)), None);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `--repo` (0.46.6): a multi-repo workspace whose root isn't a repo
+    /// (k2-cores) ships one nested repo at its own HEAD (or a worktree's),
+    /// under its own project key; the caller's folder in another repo
+    /// isn't the job's cwd; escapes and `.k2/` are refused.
+    #[test]
+    fn a_nested_repo_ships_on_its_own() {
+        let d = std::env::temp_dir().join(format!("k2-compute-src-nested-{}-{}", std::process::id(), compute::now()));
+        let ws_dir = d.join("k2-cores");
+        let init = |at: &Path, file: &str| -> String {
+            std::fs::create_dir_all(at).expect("mkdir");
+            git(at, &["init", "-q"]);
+            std::fs::write(at.join(file), "x\n").expect("write");
+            git(at, &["add", "."]);
+            git(at, &["commit", "-q", "-m", "init"]);
+            git(at, &["rev-parse", "HEAD"])
+        };
+        let base = ws_dir.join("k2-multiplayer-base");
+        let md = ws_dir.join("k2-multiplayer-markdown");
+        let base_head = init(&base, "base.rs");
+        init(&md, "md.rs");
+        std::fs::create_dir_all(ws_dir.join(".k2")).expect("mkdir");
+        let wt = ws_dir.join("wt-base-x");
+        git(&base, &["worktree", "add", "-q", "-b", "x", wt.to_str().expect("utf8")]);
+        std::fs::write(wt.join("base.rs"), "y\n").expect("write");
+        git(&wt, &["commit", "-q", "-am", "x"]);
+        let wt_head = git(&wt, &["rev-parse", "HEAD"]);
+        let ws = Ws { id: "ws-cores".into(), path: ws_dir.to_str().expect("utf8").into(), handle: "k2-cores".into() };
+        let go = |v: serde_json::Value| -> (R<(Src, SourceInfo)>, Vec<String>) {
+            let mut w = vec![];
+            let r = source_for(&ws, &v, &d.join("blob.dirty.tar"), &mut w);
+            (r, w)
+        };
+        let key = compute::sync::project_key_in("ws-cores", None, Some("k2-multiplayer-base"));
+
+        // --repo from the workspace root: the repo's own HEAD, its own key.
+        let (r, w) = go(serde_json::json!({"repo": "k2-multiplayer-base"}));
+        let (src, info) = r.expect("--repo k2-multiplayer-base");
+        assert_eq!((src.commit.as_str(), src.project_key.as_str(), info.repo.as_deref()), (base_head.as_str(), key.as_str(), Some("k2-multiplayer-base")));
+        assert!(info.caller_elsewhere, "no caller folder in that repo: the job starts at its root");
+        assert!(w.iter().all(|x| !x.contains("own checkout")), "{w:?}");
+        // From the sibling repo: still base, and the sibling's folder isn't the cwd.
+        let (r, _) = go(serde_json::json!({"repo": "k2-multiplayer-base", "repoDir": md.to_str().expect("utf8")}));
+        assert!(r.expect("from the sibling").1.caller_elsewhere);
+        // --repo naming the worktree: its HEAD, the main checkout's key.
+        let (r, _) = go(serde_json::json!({"repo": "wt-base-x"}));
+        let (src, info) = r.expect("--repo wt-base-x");
+        assert_eq!((src.commit.as_str(), src.project_key.as_str(), info.checkout), (wt_head.as_str(), key.as_str(), "worktree"));
+        // No --repo, run from inside the worktree: found for you, with a note.
+        let (r, w) = go(serde_json::json!({"repoDir": wt.to_str().expect("utf8")}));
+        let (src, info) = r.expect("found from the caller's worktree");
+        assert_eq!((src.commit.as_str(), info.repo.as_deref(), info.caller_elsewhere), (wt_head.as_str(), Some("k2-multiplayer-base"), false));
+        assert!(w.iter().any(|x| x.contains("isn't a git repo: shipping its repo k2-multiplayer-base")), "{w:?}");
+        // --repo base from inside the worktree: the worktree's HEAD (as today).
+        let (r, _) = go(serde_json::json!({"repo": "k2-multiplayer-base", "repoDir": wt.to_str().expect("utf8")}));
+        let (src, info) = r.expect("worktree of the named repo");
+        assert_eq!((src.commit.as_str(), info.caller_elsewhere), (wt_head.as_str(), false));
+        // --dirty from the worktree: its own changes only.
+        std::fs::write(wt.join("new.rs"), "n\n").expect("write");
+        std::fs::create_dir_all(wt.join(".k2")).expect("mkdir");
+        std::fs::write(wt.join(".k2/note.md"), "private\n").expect("write");
+        let (r, _) = go(serde_json::json!({"repo": "wt-base-x", "dirty": true}));
+        let (src, info) = r.expect("dirty nested worktree");
+        assert!(src.dirty.is_some());
+        assert_eq!(info.dirty.map(|(c, u, _)| (c, u)), Some((0, 1)), "new.rs only, never .k2/");
+        // Nothing to go on: not_a_repo, teaching --repo.
+        let (r, _) = go(serde_json::json!({}));
+        let e = r.err().expect("refused");
+        assert_eq!(e.code, codes::NOT_A_REPO);
+        assert!(e.hint.contains("--repo"), "{}", e.hint);
+        // The jail.
+        for bad in ["../k2-cores/k2-multiplayer-base", ".k2", "/etc", "k2-multiplayer-base/..", "nope"] {
+            let (r, _) = go(serde_json::json!({"repo": bad}));
+            assert_eq!(r.err().map(|e| e.code), Some(REPO_INVALID), "{bad}");
+        }
+        // The bundle comes from the stored rel, checked again.
+        let n = compute::sync::nested_repo(&ws_dir, "k2-multiplayer-base").expect("again");
+        assert_eq!(n.home, base.canonicalize().expect("canon"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn cache_names_are_checked_at_submit() {
+        assert_eq!(cache_from(&serde_json::json!({})).unwrap(), None);
+        assert_eq!(cache_from(&serde_json::json!({"cache": "fuzz-corpus"})).unwrap().as_deref(), Some("fuzz-corpus"));
+        for bad in [serde_json::json!({"cache": "../x"}), serde_json::json!({"cache": ""}), serde_json::json!({"cache": 3}), serde_json::json!({"cache": "Fuzz"})] {
+            let e = cache_from(&bad).unwrap_err();
+            assert_eq!((e.code, e.status), (pcache::codes::CACHE_INVALID, 400), "{bad}");
+        }
     }
 }

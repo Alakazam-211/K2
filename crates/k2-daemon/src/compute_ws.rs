@@ -34,6 +34,7 @@ use k2_core::compute::proto::frames::{
 };
 use k2_core::compute::proto::results::{self, ArtifactInfo, Outputs};
 use k2_core::compute::proto::pairing;
+use k2_core::compute::proto::cache::{self as pcache, CacheView};
 use k2_core::compute::proto::share::{self as pshare, QueueView};
 use k2_core::compute::proto::tiers::{self, Tier};
 use k2_core::compute::share::{self, pending};
@@ -675,6 +676,7 @@ fn handle_frame(node_id: &str, route: &'static str, conn_id: u64, f: Frame, tall
         Frame::ArtifactChunk(c) => on_artifact_chunk(&node_id, c),
         Frame::ArtifactFailed(f) => on_artifact_failed(&node_id, f),
         Frame::QueueView(v) => on_queue_view(&node_id, v),
+        Frame::CacheView(v) => on_cache_view(&node_id, v),
         other => log_debug!("[compute] node {node_id} sent {}", other.kind()),
     }
 }
@@ -1755,7 +1757,14 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
                     return fail("bad_need", "the node asked for another commit".into());
                 }
                 let Some(ws) = ws_path else { return fail("workspace_gone", "the workspace is gone".into()) };
-                let root = match compute::sync::repo_root(std::path::Path::new(&ws)) {
+                // `--repo`: the nested repo's main checkout, checked against
+                // the workspace jail again now (the folder may have changed
+                // since submit); else the workspace's own repo.
+                let root = match job.ctl.repo.as_deref() {
+                    Some(rel) => compute::sync::nested_repo(std::path::Path::new(&ws), rel).map(|n| n.home),
+                    None => compute::sync::repo_root(std::path::Path::new(&ws)),
+                };
+                let root = match root {
                     Ok(r) => r,
                     Err(e) => return fail("sync_failed", e),
                 };
@@ -1958,6 +1967,12 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
         // `secret-env` right now; it waits on this server otherwise.
         if !plan.secret_env.is_empty() && !offer.features.iter().any(|f| f == k2_core::compute::proto::secret::FEATURE_SECRET_ENV) {
             wait(secret_feature_wait(), &mut pass);
+            continue;
+        }
+        // `--cache` (protocol 6): only to a node offering `job-cache` (an
+        // older one, e.g. rolled back since submit, would refuse the digest).
+        if plan.cache.is_some() && !offer.features.iter().any(|f| f == pcache::FEATURE_JOB_CACHE) {
+            wait(cache_feature_wait(), &mut pass);
             continue;
         }
         let class = pshare::JobClass::parse(&j.class).unwrap_or_default();
@@ -2173,6 +2188,14 @@ pub fn kick(node_id: &str) {
         }
         return;
     }
+    // `--cache`: the same wait for a node without `job-cache` (protocol 6).
+    if plan.cache.is_some() && !offer.as_ref().is_some_and(|o| o.features.iter().any(|f| f == pcache::FEATURE_JOB_CACHE)) {
+        let w = cache_feature_wait();
+        if job.reason.as_deref() != Some(w.code.as_str()) {
+            store::set_job_reason(&conn, &job.id, Some(&w.code), Some(&w.message));
+        }
+        return;
+    }
     let features = offer.as_ref().map(|o| o.features.clone()).unwrap_or_default();
     let Some((job, plan)) = fit_plan_to(&conn, job, plan, &features) else { return };
     let fence = Fence { job_id: job.id.clone(), attempt: job.attempt as u32, generation: job.generation as u32, plan_digest: job.plan_digest.clone() };
@@ -2224,6 +2247,62 @@ fn secret_feature_wait() -> frames::Refusal {
         k2_core::compute::proto::secret::codes::FEATURE_MISSING,
         "the node doesn't take --secret jobs right now (k2-node 0.46.4 on Linux with the job wall, and trust 'own' for this server)",
     )
+}
+
+/// Why a `--cache` job waits for its node (protocol 6): the node's
+/// k2-node is older than 0.46.6 (or rolled back since the job was sent).
+fn cache_feature_wait() -> frames::Refusal {
+    frames::Refusal::new(
+        pcache::codes::NODE_TOO_OLD_FOR_CACHE,
+        "the node's k2-node has no job caches (--cache needs k2-node 0.46.6; k2 compute node update <node>)",
+    )
+}
+
+// ── job caches (`k2 compute cache`, protocol 6) ──────────────────────
+
+/// `cache_get` answers being waited for, by request id.
+static CACHE_WAITERS: (Mutex<Option<HashMap<String, Option<CacheView>>>>, Condvar) = (Mutex::new(None), Condvar::new());
+
+fn on_cache_view(node_id: &str, v: CacheView) {
+    let (m, cv) = &CACHE_WAITERS;
+    let mut g = m.lock().unwrap_or_else(|p| p.into_inner());
+    match g.as_mut().and_then(|w| w.get_mut(&v.request_id)) {
+        Some(slot) => {
+            *slot = Some(v);
+            cv.notify_all();
+        }
+        None => log_debug!("[compute] node {node_id}: cache_view nobody asked for"),
+    }
+}
+
+/// Ask a node that offers `job-cache` for this server's caches on it (and
+/// clear some first), and wait up to `timeout` for the answer. The caller
+/// checks the feature: an older node can't parse `cache_get` and would
+/// drop the session.
+pub fn cache_get(node_id: &str, ask: pcache::CacheGet, timeout: Duration) -> Result<CacheView, (&'static str, String)> {
+    let request_id = ask.request_id.clone();
+    let (m, cv) = &CACHE_WAITERS;
+    m.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).insert(request_id.clone(), None);
+    let sent = send_to(node_id, Frame::CacheGet(ask));
+    let deadline = Instant::now() + timeout;
+    let mut g = m.lock().unwrap_or_else(|p| p.into_inner());
+    loop {
+        if let Some(Some(v)) = g.as_ref().and_then(|w| w.get(&request_id)) {
+            let v = v.clone();
+            g.as_mut().map(|w| w.remove(&request_id));
+            return Ok(v);
+        }
+        let now = Instant::now();
+        if !sent || now >= deadline {
+            g.as_mut().map(|w| w.remove(&request_id));
+            return Err(if sent {
+                ("cache_timeout", "the node didn't answer about its caches in time; try again".to_string())
+            } else {
+                (compute::codes::NODE_OFFLINE, "the node is offline".to_string())
+            });
+        }
+        g = cv.wait_timeout(g, deadline - now).map(|(g, _)| g).unwrap_or_else(|p| p.into_inner().0);
+    }
 }
 
 /// Ask the node to stop a job (cancel route).
@@ -2362,6 +2441,7 @@ mod tests {
             stall_secs: None,
             secret_env: Vec::new(),
             tier: None,
+            cache: None,
         };
         store::insert_job(
             conn,

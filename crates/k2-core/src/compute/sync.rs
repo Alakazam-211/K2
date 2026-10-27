@@ -76,6 +76,101 @@ pub fn caller_checkout(ws_dir: &Path, ws_root: &Path, caller_dir: &Path) -> Resu
     Ok(Some(root))
 }
 
+/// `--repo <subdir>` (0.46.6): a git repo nested in the workspace folder
+/// that a job ships instead of the workspace's own (a multi-repo
+/// workspace whose root isn't a repo, e.g. `k2-cores/`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedRepo {
+    /// The checkout `--repo` named (canonical): HEAD and `--dirty` come
+    /// from it (a worktree's are its own).
+    pub root: PathBuf,
+    /// The repo's main checkout when it is inside the workspace (canonical;
+    /// else `root`): bundles are built from it, and its path names the
+    /// repo for the warm-slot key, so a worktree and its main checkout
+    /// share warm slots.
+    pub home: PathBuf,
+    /// `home` relative to the workspace folder, `/`-joined. Empty = the
+    /// workspace's own repo (`--repo` named one of its worktrees).
+    pub rel: String,
+}
+
+/// The one folder name a repo path may never go through: the workspace's
+/// private K2 state (notes, wiki, PRDs). A job never ships it.
+const K2_DIR: &str = ".k2";
+
+/// Check a `--repo` value and find the repo (the jail, as for a caller's
+/// worktree): relative to the workspace folder, plain names only (no
+/// `..`, no `.`, no `.k2`), resolving inside the workspace with every
+/// link followed (no link out), the top level of a git repo or of a
+/// worktree, whose git dir is inside the workspace too (a worktree of a
+/// repo elsewhere on this machine is refused). Never reads a repo outside
+/// `ws_dir`.
+pub fn nested_repo(ws_dir: &Path, rel: &str) -> Result<NestedRepo, String> {
+    let trimmed = rel.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed.len() > 1024 || trimmed.contains('\0') || trimmed.starts_with('/') {
+        return Err(format!("--repo {rel:?}: a folder relative to the workspace, like k2-multiplayer-base"));
+    }
+    for part in trimmed.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return Err(format!("--repo {rel:?}: plain folder names only (no '..', '.' or '//')"));
+        }
+        if part == K2_DIR {
+            return Err(format!("--repo {rel:?}: never inside .k2/ (the workspace's private K2 folder)"));
+        }
+    }
+    let ws = ws_dir.canonicalize().map_err(|e| format!("the workspace folder: {e}"))?;
+    let named = ws.join(trimmed);
+    let canon = named.canonicalize().map_err(|e| format!("--repo {trimmed}: {e}"))?;
+    let inside = |p: &Path| -> Option<PathBuf> { p.strip_prefix(&ws).ok().map(Path::to_path_buf) };
+    let through_k2 = |rel: &Path| rel.components().any(|c| c.as_os_str() == K2_DIR);
+    match inside(&canon) {
+        Some(r) if !r.as_os_str().is_empty() && !through_k2(&r) => {}
+        Some(r) if r.as_os_str().is_empty() => return Err(format!("--repo {trimmed} is the workspace folder itself; drop --repo")),
+        _ => return Err(format!("--repo {trimmed} leads outside the workspace (or into .k2/) through a link")),
+    }
+    if !canon.is_dir() {
+        return Err(format!("--repo {trimmed} isn't a folder"));
+    }
+    let top = repo_root(&canon).map_err(|_| format!("--repo {trimmed} isn't a git repo"))?;
+    let top = top.canonicalize().map_err(|e| format!("--repo {trimmed}: {e}"))?;
+    if top != canon {
+        return Err(format!("--repo {trimmed} is a folder inside the git repo at {}; name the repo's top folder", top.display()));
+    }
+    let common = common_dir(&canon)?.canonicalize().map_err(|e| format!("--repo {trimmed}: its git dir: {e}"))?;
+    match inside(&common) {
+        Some(r) if !through_k2(&r) => {}
+        _ => return Err(format!("--repo {trimmed} is a worktree of a repo outside the workspace ({})", common.display())),
+    }
+    let home = main_checkout_of(&canon)
+        .and_then(|h| h.canonicalize().ok())
+        .filter(|h| inside(h).is_some_and(|r| !through_k2(&r)))
+        .unwrap_or_else(|| canon.clone());
+    let rel_home = inside(&home).unwrap_or_default();
+    let rel = rel_home.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+    Ok(NestedRepo { root: canon, home, rel })
+}
+
+/// The nested repo a caller's checkout (`caller_dir`, its top level)
+/// belongs to, when the workspace folder itself isn't a repo: `Ok(None)`
+/// when the caller isn't in a repo inside the workspace (or the folder
+/// isn't on this machine). The same jail as [`nested_repo`].
+pub fn nested_repo_of_caller(ws_dir: &Path, caller_dir: &Path) -> Result<Option<NestedRepo>, String> {
+    if !caller_dir.is_absolute() {
+        return Ok(None);
+    }
+    let Ok(caller) = caller_dir.canonicalize() else { return Ok(None) };
+    let ws = ws_dir.canonicalize().map_err(|e| format!("the workspace folder: {e}"))?;
+    if !caller.starts_with(&ws) || caller == ws {
+        return Ok(None);
+    }
+    let Ok(top) = repo_root(&caller) else { return Ok(None) };
+    let top = top.canonicalize().map_err(|e| format!("your repo: {e}"))?;
+    let home = main_checkout_of(&top).and_then(|h| h.canonicalize().ok()).filter(|h| h.starts_with(&ws) && *h != ws).unwrap_or(top);
+    let Ok(rel) = home.strip_prefix(&ws) else { return Ok(None) };
+    let rel = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+    nested_repo(ws_dir, &rel).map(Some)
+}
+
 /// Full 40-hex commit for `rev`.
 pub fn resolve_commit(root: &Path, rev: &str) -> Result<String, String> {
     if rev.starts_with('-') {
@@ -108,8 +203,14 @@ pub fn dirty_counts(root: &Path) -> Result<(usize, usize), String> {
     let changed = run(c, "list changed files")?.lines().filter(|l| !l.is_empty()).count();
     let mut c = git(root);
     c.args(["ls-files", "--others", "--exclude-standard"]);
-    let untracked = run(c, "list untracked files")?.lines().filter(|l| !l.is_empty()).count();
+    let untracked = run(c, "list untracked files")?.lines().filter(|l| !l.is_empty() && !in_k2_dir(l)).count();
     Ok((changed, untracked))
+}
+
+/// An untracked path under a `.k2/` folder: K2's private state (notes,
+/// wiki, vault files) never rides `--dirty` to a node, ignored or not.
+fn in_k2_dir(rel: &str) -> bool {
+    rel.split('/').any(|p| p == K2_DIR)
 }
 
 /// The main checkout of the repo `dir` belongs to, when `dir` is (inside)
@@ -168,6 +269,23 @@ pub fn origin_url(root: &Path) -> Option<String> {
 pub fn project_key(workspace_id: &str, remote: Option<&str>) -> String {
     let h = crypto::sha256_hex(&crypto::signed_bytes("k2-compute-project-v1", &[workspace_id.as_bytes(), remote.unwrap_or("").as_bytes()]));
     h[..16].to_string()
+}
+
+/// [`project_key`] for a job's repo: the workspace's own (`repo` `None`
+/// or empty: the same key as ever), or a nested one (`--repo`), whose
+/// workspace-relative path is in the hash so two nested repos of one
+/// workspace (even with no remote) never share a mirror or warm slots.
+pub fn project_key_in(workspace_id: &str, remote: Option<&str>, repo: Option<&str>) -> String {
+    match repo.filter(|r| !r.is_empty()) {
+        None => project_key(workspace_id, remote),
+        Some(r) => {
+            let h = crypto::sha256_hex(&crypto::signed_bytes(
+                "k2-compute-project-v2",
+                &[workspace_id.as_bytes(), remote.unwrap_or("").as_bytes(), r.as_bytes()],
+            ));
+            h[..16].to_string()
+        }
+    }
 }
 
 /// The ref a bundle names its commit under (the node fetches
@@ -268,6 +386,9 @@ pub fn create_dirty_blob(root: &Path, out: &Path, cap: u64) -> Result<(String, u
             let rel = std::str::from_utf8(rel).map_err(|_| "an untracked path isn't UTF-8".to_string())?;
             if rel.split('/').any(|p| p == ".." || p.is_empty()) || rel.starts_with('/') {
                 return Err(format!("unsafe untracked path '{rel}'"));
+            }
+            if in_k2_dir(rel) {
+                continue;
             }
             let src = root.join(rel);
             let dst = base.join("untracked").join(rel);
@@ -465,6 +586,86 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    fn nested(at: &Path, file: &str) -> String {
+        std::fs::create_dir_all(at).unwrap();
+        g(at, &["init", "-q"]);
+        std::fs::write(at.join(file), "x\n").unwrap();
+        g(at, &["add", "."]);
+        g(at, &["commit", "-q", "-m", "init"]);
+        g(at, &["rev-parse", "HEAD"])
+    }
+
+    /// `--repo`: a multi-repo workspace whose root isn't a repo. The jail
+    /// is the caller-worktree one: inside the workspace, links followed,
+    /// never `.k2/`, the top of a repo or worktree whose git dir is inside.
+    #[test]
+    fn nested_repos_are_jailed_to_the_workspace() {
+        let d = temp("nested");
+        let ws = d.join("k2-cores");
+        std::fs::create_dir_all(ws.join(".k2/notes")).unwrap();
+        let base_head = nested(&ws.join("k2-multiplayer-base"), "base.rs");
+        nested(&ws.join("k2-multiplayer-markdown"), "md.rs");
+        assert!(repo_root(&ws).is_err(), "the workspace root isn't a repo");
+        let canon = |p: &Path| p.canonicalize().unwrap();
+
+        let n = nested_repo(&ws, "k2-multiplayer-base").unwrap();
+        assert_eq!((n.root.clone(), n.home.clone(), n.rel.as_str()), (canon(&ws.join("k2-multiplayer-base")), canon(&ws.join("k2-multiplayer-base")), "k2-multiplayer-base"));
+        assert_eq!(resolve_commit(&n.root, "HEAD").unwrap(), base_head);
+        assert_eq!(nested_repo(&ws, "k2-multiplayer-base/").unwrap(), n, "a trailing slash is fine");
+
+        // A worktree of the nested repo, inside the workspace: its own
+        // HEAD, the main checkout's name (so they share warm slots).
+        let wt = ws.join(".worktrees/base-x");
+        g(&ws.join("k2-multiplayer-base"), &["worktree", "add", "-q", "-b", "x", wt.to_str().unwrap()]);
+        std::fs::write(wt.join("base.rs"), "y\n").unwrap();
+        g(&wt, &["commit", "-q", "-am", "x"]);
+        let w = nested_repo(&ws, ".worktrees/base-x").unwrap();
+        assert_eq!((w.root.clone(), w.home.clone(), w.rel.as_str()), (canon(&wt), n.home.clone(), "k2-multiplayer-base"));
+        assert_ne!(resolve_commit(&w.root, "HEAD").unwrap(), base_head);
+        // From inside that worktree, no --repo: the same repo is found.
+        assert_eq!(nested_repo_of_caller(&ws, &wt).unwrap(), Some(n.clone()));
+        assert_eq!(nested_repo_of_caller(&ws, &canon(&ws.join("k2-multiplayer-markdown"))).unwrap().unwrap().rel, "k2-multiplayer-markdown");
+        assert_eq!(nested_repo_of_caller(&ws, &ws).unwrap(), None, "the root is no repo");
+        assert_eq!(nested_repo_of_caller(&ws, &d).unwrap(), None, "outside the workspace");
+
+        // Refused: escapes, odd names, .k2, a folder inside a repo, the root.
+        for bad in ["", "/etc", "../k2-cores/k2-multiplayer-base", "k2-multiplayer-base/../k2-multiplayer-markdown", "./k2-multiplayer-base", "a//b", ".k2", ".k2/notes", "k2-multiplayer-base/src", "nope"] {
+            assert!(nested_repo(&ws, bad).is_err(), "{bad:?}");
+        }
+        std::fs::create_dir_all(ws.join("k2-multiplayer-base/src")).unwrap();
+        assert!(nested_repo(&ws, "k2-multiplayer-base/src").unwrap_err().contains("inside the git repo"));
+        // A repo hidden under .k2/: refused even through a link.
+        nested(&ws.join(".k2/notes/repo"), "n.md");
+        std::os::unix::fs::symlink(ws.join(".k2/notes/repo"), ws.join("notes-link")).unwrap();
+        assert!(nested_repo(&ws, ".k2/notes/repo").is_err());
+        assert!(nested_repo(&ws, "notes-link").is_err(), "a link into .k2/");
+        // A link out of the workspace to a real repo: refused.
+        let outside = d.join("private-repo");
+        nested(&outside, "secret.txt");
+        std::os::unix::fs::symlink(&outside, ws.join("escape")).unwrap();
+        assert!(nested_repo(&ws, "escape").unwrap_err().contains("outside the workspace"));
+        // A link inside the workspace to a nested repo: fine, by its real name.
+        std::os::unix::fs::symlink(ws.join("k2-multiplayer-base"), ws.join("base-link")).unwrap();
+        assert_eq!(nested_repo(&ws, "base-link").unwrap().rel, "k2-multiplayer-base");
+        // A worktree, inside the workspace, of a repo outside it: refused.
+        let foreign = ws.join("foreign-wt");
+        g(&outside, &["worktree", "add", "-q", "-b", "f", foreign.to_str().unwrap()]);
+        assert!(nested_repo(&ws, "foreign-wt").unwrap_err().contains("outside the workspace"));
+        assert!(nested_repo_of_caller(&ws, &foreign).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_nested_repo_has_its_own_project_key() {
+        assert_eq!(project_key_in("w", Some("r"), None), project_key("w", Some("r")), "the workspace's own repo keeps its key");
+        assert_eq!(project_key_in("w", None, Some("")), project_key("w", None));
+        let a = project_key_in("w", None, Some("k2-multiplayer-base"));
+        let b = project_key_in("w", None, Some("k2-multiplayer-markdown"));
+        assert_ne!(a, b, "two nested repos with no remote never share warm slots");
+        assert_ne!(a, project_key("w", None));
+        assert_eq!(a.len(), 16);
+    }
+
     #[test]
     fn dirty_blob_has_patch_untracked_and_binary_and_respects_cap() {
         let d = temp("dirty");
@@ -475,7 +676,11 @@ mod tests {
         std::fs::write(r.join("bin.dat"), [0u8, 159, 146, 150, 255]).unwrap();
         std::fs::write(r.join(".gitignore"), "ignored.log\n").unwrap();
         std::fs::write(r.join("ignored.log"), "nope").unwrap();
+        std::fs::create_dir_all(r.join(".k2/wiki")).unwrap();
+        std::fs::write(r.join(".k2/wiki/notes.md"), "private").unwrap();
         assert!(is_dirty(&r).unwrap());
+        // .gitignore, bin.dat, new/dir/u.txt: never the .k2 note.
+        assert_eq!(dirty_counts(&r).unwrap(), (1, 3));
         let out = d.join("dirty.tar");
         let (sha, bytes) = create_dirty_blob(&r, &out, 1 << 20).unwrap();
         assert_eq!(sha.len(), 64);
@@ -489,6 +694,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(x.join("k2-dirty/untracked/new/dir/u.txt")).unwrap(), "untracked\n");
         assert_eq!(std::fs::read(x.join("k2-dirty/untracked/bin.dat")).unwrap(), vec![0u8, 159, 146, 150, 255]);
         assert!(!x.join("k2-dirty/untracked/ignored.log").exists(), "ignored files stay home");
+        assert!(!x.join("k2-dirty/untracked/.k2").exists(), "K2's private folder never rides --dirty");
         assert!(create_dirty_blob(&r, &d.join("small.tar"), 4).is_err(), "cap enforced");
         let _ = std::fs::remove_dir_all(&d);
     }

@@ -876,6 +876,7 @@ fn running_job(job: &str, node: &str, ws: &str) {
         stall_secs: None,
         secret_env: Vec::new(),
         tier: None,
+        cache: None,
     };
     let client = format!("client-{job:0>16}");
     let db = k2_core::db::shared();

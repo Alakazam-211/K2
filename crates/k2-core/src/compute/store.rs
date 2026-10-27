@@ -630,6 +630,13 @@ pub struct JobCtl {
     /// `cancelled` (prd-compute-job-tiers-v1 §3.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced_by: Option<String>,
+    /// `--repo` (0.46.6): the nested repo the job's code comes from, its
+    /// main checkout relative to the workspace folder (`/`-joined; checked
+    /// again by `sync::nested_repo` whenever a bundle is built from it).
+    /// `None` = the workspace's own repo. Controller-only: the node only
+    /// ever sees the commit and the project key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 
 /// One secret a compute job gets (SE4): what was asked, the vault id it
@@ -1529,6 +1536,7 @@ mod tests {
             stall_secs: None,
             secret_env: Vec::new(),
             tier: None,
+            cache: None,
         }
     }
 

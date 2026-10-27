@@ -2259,6 +2259,74 @@ async fn handle_one_request(
         // `/cli/agent/handle` is refused with a hint. A GET to
         // `/cli/agent/handle` was already refused (405) by the central
         // POST-only check.
+        // Live docs (Markdown multiplayer v1, `docs/routes.rs`): the 4-way
+        // caller resolver (vs-live MI8). An App pass is refused for now (the
+        // App surface, K6); the owner token or a Connect login is a person;
+        // an agent passport is the agent, on Loopback only (its session
+        // lives on this machine; from a shell tab it is the person "via
+        // terminal"); anything else 403. Refusals go out through
+        // `send_response` so the permission wrapper can teach them (MI7).
+        p if p.starts_with(crate::docs::routes::PREFIX) => {
+            let presented = super::http::extract_token(&query);
+            let passport = presented
+                .filter(|s| !s.is_empty())
+                .or_else(|| bearer_token.as_deref().map(str::trim).filter(|s| !s.is_empty()));
+            let caller = if presented.is_some_and(k2_core::skin::is_skin_token) {
+                Err(crate::docs::caller::app_pass_refused())
+            } else if super::http::token_is_owner(&query, state.token.as_str()) {
+                Ok(crate::docs::caller::owner())
+            } else if let Some(user) = presented
+                .filter(|t| !t.is_empty())
+                .and_then(k2_core::connect_users::validate_session)
+            {
+                Ok(crate::docs::caller::login(&user))
+            } else if let Some(v) = passport.and_then(|t| crate::session_token::require_hook(t, &path)) {
+                if ingress == Ingress::Loopback {
+                    crate::docs::caller::from_passport(&v.session_id, &v.principal)
+                } else {
+                    Err(crate::docs::caller::refusal(
+                        "403 Forbidden",
+                        "remote_passport",
+                        "an agent's passport works only on this machine",
+                    ))
+                }
+            } else {
+                Err(crate::cli::CliResponse::forbidden())
+            };
+            let body = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::docs::routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        super::http::refuse_body_too_large(
+                            &mut *stream,
+                            &refused,
+                            "413 Payload Too Large",
+                            "application/json",
+                            r#"{"error":"too_large","message":"body over the limit"}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let r = match caller {
+                Err(r) => r,
+                Ok(caller) => {
+                    let params = super::http::parse_params(&path, &query);
+                    let p_owned = path.to_string();
+                    let method_owned = method.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::docs::routes::handle(&method_owned, &p_owned, &params, &body, &caller)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         "/cli/agent/identity" | "/cli/agent/handle" => {
             let presented = super::http::extract_token(&query);
             let passport = presented

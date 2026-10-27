@@ -64,6 +64,18 @@ mod unix_impl {
     /// footgun before the flag is ever flipped on.)
     const MAX_BODY: usize = 4 * 1024 * 1024;
 
+    /// The body cap for one request: [`MAX_BODY`], except the live-docs
+    /// family, whose `write` carries a whole doc (up to 4 MiB of text, as an
+    /// escaped JSON string): `docs::routes::MAX_BODY`.
+    fn body_cap(head: &str) -> usize {
+        let target = head.lines().next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("");
+        if target.starts_with(crate::docs::routes::PREFIX) {
+            crate::docs::routes::MAX_BODY
+        } else {
+            MAX_BODY
+        }
+    }
+
     /// The set of peer uids allowed to drive this cell's socket.
     ///
     /// **The peer-cred belt, widened by exactly ONE known uid for sandboxed
@@ -334,7 +346,7 @@ mod unix_impl {
         // Refuse an oversized declared body BEFORE allocating toward it.
         // The caller drains what the client is still sending after the
         // 413, so the close is clean instead of a reset.
-        if content_len > MAX_BODY {
+        if content_len > body_cap(&head) {
             let body_read = buf.len().saturating_sub(body_start);
             return Err(RequestRefused {
                 status: "413 Payload Too Large",
@@ -699,6 +711,16 @@ mod unix_impl {
             // 0.46.1 `k2 agent identity`: this passport's own color and
             // picture (the handler pins the workspace and refuses a name).
             // Same body cap as TCP (413).
+            // Live docs (`k2 doc`, vs-live MI3): this passport as an agent
+            // (or, from a plain shell tab, its person "via terminal"); the
+            // handler jails the path and checks rights per doc. Streaming
+            // (`watch`, `tail -f`) comes with the CLI slice.
+            p if p.starts_with(crate::docs::routes::PREFIX) => {
+                match crate::docs::caller::from_passport(this_session_id, principal) {
+                    Ok(caller) => from_cli(crate::docs::routes::handle(method, p, params, body, &caller)),
+                    Err(r) => from_cli(r),
+                }
+            }
             crate::agent_identity_routes::IDENTITY_PATH => {
                 if body.len() > crate::agent_identity_routes::MAX_BODY {
                     return (

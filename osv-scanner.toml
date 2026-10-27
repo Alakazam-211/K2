@@ -65,6 +65,12 @@ id = "RUSTSEC-2025-0141"
 ignoreUntil = 2026-12-05T00:00:00Z
 reason = "Unmaintained (no known vulnerability). One use: k2-core's ptyd saved-screen file (terminal/ptyd/snapshot.rs, 0.46.5 S4), K2's own file (0600 in a 0700 dir under <K2 home>/run), written and read by the same daemon user. Decode is bounded: magic + FORMAT header, a file of at most 64 MiB, gzip inflate capped at 256 MiB, bincode with_limit, then a trial restore under catch_unwind; anything else is removed and the session replays from the ring. Fix: 0.46.6 replaces the codec (postcard as FORMAT 2, keeping a read-only FORMAT 1 reader for one release), then drop bincode."
 
+# block-buffer 0.10.4
+[[IgnoredVulns]]
+id = "GHSA-qwgh-2vcv-g2f7"
+ignoreUntil = 2027-01-15T00:00:00Z
+reason = "The advisory is the inline cursor of block-buffer 0.11+/0.12 (EagerBuffer's position in the block's last byte, ReadBuffer::write_block). 0.10.4 keeps the cursor in its own pos: u8 field and has no ReadBuffer: a compress that panics leaves pos at its old, in-bounds value. It also needs the hash's own compress to panic and a caller to catch it and keep hashing; RustCrypto's compress functions don't panic. Comes through digest 0.10 (sha2, hmac, rsa, ed25519...). Fix: the RustCrypto digest 0.11 generation (a major bump)."
+
 # browserslist 4.28.1
 [[IgnoredVulns]]
 id = "GHSA-73wf-gq98-2v4g"
@@ -310,6 +316,12 @@ reason = "rustls 0.22.4 only via imap -> rustls-connector 0.19 (mail IMAP client
 id = "RUSTSEC-2026-0349"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "rustls 0.22.4 only via imap -> rustls-connector 0.19 (mail IMAP client). 0346 needs Debug-logging session values (not done); 0349 needs an active MITM and only downgrades key exchange. Fix: move imap off rustls-connector 0.19."
+
+# rustls 0.22.4 (alias RUSTSEC-2026-0348)
+[[IgnoredVulns]]
+id = "GHSA-h2v8-394m-p7vv"
+ignoreUntil = 2027-01-15T00:00:00Z
+reason = "Brotli certificate decompression (RFC 8879), which rustls added in 0.23 behind the off-by-default brotli feature. rustls 0.22.4 has no certificate compression code at all (no CertDecompressor, no brotli dependency or feature), so the bug can't be there; osv's range simply starts at 0. 0.22.4 comes only via imap 3.0.0-alpha.15 (the newest imap) -> rustls-connector 0.19. K2's rustls 0.23 is 0.23.46, the fixed version. Fix: move imap off rustls-connector 0.19."
 
 # rustls-pemfile 2.2.0
 [[IgnoredVulns]]

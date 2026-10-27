@@ -2414,6 +2414,32 @@ async fn handle_one_request(
             .await;
             return DispatchOutcome::Done;
         }
+        // Mobile dev (prd-mobile-dev-v1 §7, M-A4, 0.46.6): the live device
+        // stream. People only: the owner token or a Connect login (the
+        // handler re-checks it every 5 s). App passes, API keys and agent
+        // passports are refused before the upgrade; agents read the tree.
+        "/cli/sim/stream" => {
+            let caller = crate::sidecar_routes::caller_from_tcp("/cli/sim/stream", &query, bearer_token.as_deref(), state.token.as_str());
+            if !matches!(caller, crate::sidecar_routes::Caller::Owner | crate::sidecar_routes::Caller::Login { .. }) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":{"code":"forbidden","hint":"the device stream is for people (the owner or a login); agents use k2 sim tree and screenshot"},"code":"forbidden"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let token = super::http::extract_token(&query)
+                .map(str::to_string)
+                .or_else(|| bearer_token.clone())
+                .unwrap_or_default();
+            let params = super::http::parse_params(&path, &query);
+            let viewer = crate::sim_stream_ws::Viewer { caller, token, remote: ingress != Ingress::Loopback };
+            crate::sim_stream_ws::serve(stream, params, viewer, state.token.to_string()).await;
+            return DispatchOutcome::Done;
+        }
         // Kessel (A3): grid snapshot + delta WS endpoint.
         // Serves one Tauri thin client per session. Single-subscriber
         // by design. See `.k2so/prds/alacritty-v2.md`.

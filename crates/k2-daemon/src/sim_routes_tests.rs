@@ -85,6 +85,7 @@ fn agent_verbs_are_exactly_the_agent_routes() {
 /// One sequential pass: the lane registry and the manager are process-wide.
 #[test]
 fn sim_routes_end_to_end_on_a_fake_lane() {
+    let _serial = sim_test_lock();
     let tmp = std::env::temp_dir().join(format!("k2-sim-routes-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join("mine")).expect("ws");

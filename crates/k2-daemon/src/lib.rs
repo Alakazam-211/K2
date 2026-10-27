@@ -291,6 +291,8 @@ pub mod llm_account_for;
 pub mod llm_accounts_routes;
 /// Mobile dev (prd-mobile-dev-v1, 0.46.6): `/cli/sim/*`.
 pub mod sim_routes;
+/// Mobile dev S3: `/cli/sim/stream` (JPEG frames + people's input).
+pub mod sim_stream_ws;
 pub mod llm_accounts_runtime;
 pub mod person_wallet_routes;
 pub mod person_wallet_runtime;

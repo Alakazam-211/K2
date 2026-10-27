@@ -1,0 +1,493 @@
+//! `GET /cli/sim/stream` (prd-mobile-dev-v1 §7, S3; vs-live M-A4, M-A19):
+//! the live device as JPEG frames over a WebSocket, plus people's input.
+//! Wire format: `k2_core::sim::stream`.
+//!
+//! **One capture per device, many viewers.** A [`Hub`] per sim session
+//! runs one encoder thread: it pulls the lane's [`FrameSource`], encodes a
+//! points-size JPEG and publishes it into a `watch` channel, which keeps
+//! only the newest frame. Each viewer task sends the newest frame when its
+//! last one is acked (one in flight) and its fps cap allows, so a slow
+//! viewer skips frames and never holds the others back. The hub stops when
+//! its last viewer leaves.
+//!
+//! **Auth.** People only: the owner token or a Connect login (re-checked
+//! every 5 s, like `/cli/sessions/bytes`; a revoked login is closed with
+//! 4401). App passes, API keys and agent passports never upgrade (agents
+//! read the tree and take screenshots instead). Input needs control: the
+//! owner and Owner/Admin logins; Member logins watch only.
+//!
+//! **Rates.** Loopback viewers up to 30 fps (default 30); remote viewers
+//! (LAN / Connect) 8 fps by default, 2–15 on request.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use futures_util::{SinkExt, StreamExt};
+use tokio::net::TcpStream;
+use tokio::sync::watch;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::Message;
+
+use k2_core::log_debug;
+use k2_core::sim::encode;
+use k2_core::sim::hold::HoldView;
+use k2_core::sim::lane::{Action, FrameOpts, Point};
+use k2_core::sim::manager::{self, Ws};
+use k2_core::sim::stream::*;
+
+use crate::sidecar_routes::Caller;
+
+/// One encoded frame, shared by every viewer.
+#[derive(Debug)]
+pub struct Encoded {
+    pub seq: u32,
+    /// Header + JPEG, ready to send.
+    pub message: Vec<u8>,
+}
+
+/// What the encoder publishes.
+#[derive(Debug, Clone)]
+pub enum Pub {
+    Starting,
+    Frame(Arc<Encoded>),
+    /// The device stopped or the capture failed for good.
+    Ended(String),
+}
+
+/// One device's capture.
+pub struct Hub {
+    gen: u64,
+    rx: watch::Receiver<Pub>,
+    /// Highest fps any viewer asked for (the encoder's pace).
+    want_fps: Arc<Mutex<HashMap<u64, u32>>>,
+    encodes: Arc<std::sync::atomic::AtomicU64>,
+}
+
+fn hubs() -> &'static Mutex<HashMap<i64, Arc<Hub>>> {
+    static H: OnceLock<Mutex<HashMap<i64, Arc<Hub>>>> = OnceLock::new();
+    H.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// How many JPEG encodes a device's hub has done (tests: one encode per
+/// frame however many viewers).
+pub fn encodes(sim_id: i64) -> Option<u64> {
+    hubs().lock().ok()?.get(&sim_id).map(|h| h.encodes.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+/// Join (or start) the hub for a running device.
+pub fn join(ws: &Ws) -> Result<(i64, Arc<Hub>), manager::SimError> {
+    let m = manager::manager();
+    let row = m.running(ws)?;
+    let mut map = hubs().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(h) = map.get(&row.id) {
+        if !matches!(&*h.rx.borrow(), Pub::Ended(_)) {
+            return Ok((row.id, h.clone()));
+        }
+    }
+    let source = m.frames(&row, FrameOpts { max_fps: LOCAL_MAX_FPS, max_width_px: None })?;
+    let (tx, rx) = watch::channel(Pub::Starting);
+    let want_fps = Arc::new(Mutex::new(HashMap::new()));
+    let encodes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    static GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let gen = GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let hub = Arc::new(Hub { gen, rx, want_fps: want_fps.clone(), encodes: encodes.clone() });
+    map.insert(row.id, hub.clone());
+    let sim_id = row.id;
+    std::thread::Builder::new()
+        .name(format!("k2-sim-encode-{sim_id}"))
+        .spawn(move || encoder(sim_id, gen, source, tx, want_fps, encodes))
+        .map_err(|e| manager::SimError::new(500, "sim_io", format!("encoder thread: {e}")))?;
+    Ok((sim_id, hub))
+}
+
+fn encoder(
+    sim_id: i64,
+    gen: u64,
+    mut source: Box<dyn k2_core::sim::lane::FrameSource>,
+    tx: watch::Sender<Pub>,
+    want_fps: Arc<Mutex<HashMap<u64, u32>>>,
+    encodes: Arc<std::sync::atomic::AtomicU64>,
+) {
+    let mut seq: u32 = 0;
+    let born = Instant::now();
+    let mut last = Instant::now() - Duration::from_secs(1);
+    loop {
+        // Only the hub's own receiver is left: nobody watches (after a
+        // grace for the first viewer to attach).
+        if tx.receiver_count() <= 1 && born.elapsed() > Duration::from_secs(5) {
+            break;
+        }
+        let fps = want_fps.lock().map(|m| m.values().copied().max().unwrap_or(REMOTE_DEFAULT_FPS)).unwrap_or(REMOTE_DEFAULT_FPS).clamp(1, LOCAL_MAX_FPS);
+        let gap = Duration::from_millis(1000 / fps as u64);
+        let since = last.elapsed();
+        if since < gap {
+            std::thread::sleep(gap - since);
+        }
+        match source.next_frame(Duration::from_millis(500)) {
+            Ok(None) => continue, // a still screen costs nothing
+            Ok(Some(f)) => {
+                let (jpeg, w, h) = match encode::frame_jpeg(&f, encode::JPEG_QUALITY) {
+                    Ok(x) => x,
+                    Err(e) => {
+                        log_debug!("[sim] encode failed on s{sim_id}: {e}");
+                        continue;
+                    }
+                };
+                encodes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                seq = seq.wrapping_add(1);
+                // Points: the frame is points-sized (scale 1) unless the lane
+                // says otherwise.
+                let (wpt, hpt) = if (f.scale - 1.0).abs() < 1e-3 {
+                    (w, h)
+                } else {
+                    let p = encode::points_size(&f);
+                    (p.0, p.1)
+                };
+                let header = FrameHeader { seq, width_px: w as u16, height_px: h as u16, width_pt: wpt as u16, height_pt: hpt as u16 };
+                let _ = tx.send(Pub::Frame(Arc::new(Encoded { seq, message: header.encode(&jpeg) })));
+                last = Instant::now();
+            }
+            Err(e) => {
+                log_debug!("[sim] frame source ended on s{sim_id}: {}", e.message());
+                let _ = tx.send(Pub::Ended(e.message().to_string()));
+                break;
+            }
+        }
+    }
+    if let Ok(mut map) = hubs().lock() {
+        if map.get(&sim_id).is_some_and(|h| h.gen == gen) {
+            map.remove(&sim_id);
+        }
+    }
+}
+
+/// Who is watching (decided by the dispatcher from the credential).
+#[derive(Debug, Clone)]
+pub struct Viewer {
+    pub caller: Caller,
+    pub token: String,
+    pub remote: bool,
+}
+
+fn clamp_fps(remote: bool, asked: Option<u32>) -> u32 {
+    if remote {
+        asked.unwrap_or(REMOTE_DEFAULT_FPS).clamp(REMOTE_MIN_FPS, REMOTE_MAX_FPS)
+    } else {
+        asked.unwrap_or(LOCAL_MAX_FPS).clamp(1, LOCAL_MAX_FPS)
+    }
+}
+
+fn who_name(c: &Caller) -> String {
+    match c {
+        Caller::Login { username } => username.clone(),
+        _ => "owner".to_string(),
+    }
+}
+
+/// The viewer message → a lane action (points).
+fn to_action(m: &ViewerMsg) -> Option<Action> {
+    Some(match m {
+        ViewerMsg::Touch { phase, x, y } => Action::Touch { phase: *phase, at: Point { x: *x, y: *y } },
+        ViewerMsg::Tap { x, y } => Action::Tap { at: Point { x: *x, y: *y } },
+        ViewerMsg::Swipe { x1, y1, x2, y2, duration_ms } => Action::Swipe {
+            from: Point { x: *x1, y: *y1 },
+            to: Point { x: *x2, y: *y2 },
+            duration: Duration::from_millis(duration_ms.unwrap_or(250).clamp(50, 3000) as u64),
+        },
+        ViewerMsg::Text { text } => {
+            if text.chars().count() > 4096 {
+                return None;
+            }
+            Action::Type { text: k2_core::sim::lane::SimText::plain(text.clone()) }
+        }
+        ViewerMsg::Key { key } => Action::Key { key: *key },
+        ViewerMsg::Button { button } => Action::Button { button: *button },
+        ViewerMsg::Rotate { orientation } => Action::Rotate { orientation: *orientation },
+        ViewerMsg::Appearance { appearance } => Action::Appearance { appearance: *appearance },
+        ViewerMsg::OpenUrl { url } => {
+            if url.len() > 2048 || url.chars().any(char::is_control) || !url.contains(':') {
+                return None;
+            }
+            Action::OpenUrl { url: url.clone() }
+        }
+        _ => return None,
+    })
+}
+
+async fn close(write: &mut (impl SinkExt<Message> + Unpin), code: u16, reason: &str) {
+    let _ = write
+        .send(Message::Close(Some(CloseFrame { code: CloseCode::from(code), reason: std::borrow::Cow::Owned(reason.to_string()) })))
+        .await;
+}
+
+fn text(m: &ServerMsg) -> Message {
+    Message::Text(serde_json::to_string(m).unwrap_or_default())
+}
+
+/// Serve one viewer. The dispatcher has refused app passes, agents and bad
+/// tokens before the upgrade.
+pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, viewer: Viewer, owner_token: String) {
+    let token = params.get("workspace").cloned().unwrap_or_default();
+    let ws = {
+        let caller = viewer.caller.clone();
+        let t = token.clone();
+        match tokio::task::spawn_blocking(move || crate::sim_routes::resolve_ws_for(&caller, Some(&t))).await {
+            Ok(Ok(ws)) => ws,
+            Ok(Err(e)) => {
+                crate::routes::http::send_response(&mut *stream, "404 Not Found", "application/json", &e.body().to_string()).await;
+                return;
+            }
+            Err(e) => {
+                crate::routes::http::send_response(&mut *stream, "500 Internal Server Error", "application/json", &format!("{{\"error\":\"{e}\"}}")).await;
+                return;
+            }
+        }
+    };
+    let joined = {
+        let ws2 = ws.clone();
+        tokio::task::spawn_blocking(move || join(&ws2)).await
+    };
+    let (sim_id, hub) = match joined {
+        Ok(Ok(x)) => x,
+        Ok(Err(e)) => {
+            crate::routes::http::send_response(&mut *stream, "409 Conflict", "application/json", &e.body().to_string()).await;
+            return;
+        }
+        Err(e) => {
+            crate::routes::http::send_response(&mut *stream, "500 Internal Server Error", "application/json", &format!("{{\"error\":\"{e}\"}}")).await;
+            return;
+        }
+    };
+    let ws_conn = match tokio_tungstenite::accept_async(stream).await {
+        Ok(w) => w,
+        Err(e) => {
+            log_debug!("[sim] stream handshake failed: {e}");
+            return;
+        }
+    };
+    let (mut write, mut read) = ws_conn.split();
+    let m = manager::manager();
+    m.viewer_joined(sim_id);
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let me = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let mut fps = clamp_fps(viewer.remote, params.get("fps").and_then(|f| f.parse().ok()));
+    if let Ok(mut w) = hub.want_fps.lock() {
+        w.insert(me, fps);
+    }
+    let can_control = crate::sim_routes::can_control(&viewer.caller);
+    let who = who_name(&viewer.caller);
+    let status = {
+        let ws2 = ws.clone();
+        tokio::task::spawn_blocking(move || manager::manager().status(&ws2, false)).await.ok().and_then(|r| r.ok())
+    };
+    let view = status.and_then(|s| s.sim);
+    let hello = ServerMsg::Hello {
+        sim: format!("s{sim_id}"),
+        lane: view.as_ref().map(|v| v.lane).unwrap_or(k2_core::sim::LaneKind::Android),
+        state: view.as_ref().map(|v| v.state).unwrap_or(SimState::Running),
+        profile: view.as_ref().and_then(|v| v.profile.clone()),
+        fps,
+        remote: viewer.remote,
+        hold: m.hold_view(sim_id),
+        isolation: k2_core::sim::ISOLATION_NOTE.to_string(),
+    };
+    let mut rx = hub.rx.clone();
+    let mut in_flight = false;
+    let mut last_sent = Instant::now() - Duration::from_secs(1);
+    let mut last_hold = m.hold_view(sim_id);
+    if write.send(text(&hello)).await.is_err() {
+        m.viewer_left(sim_id);
+        return;
+    }
+    let mut auth = tokio::time::interval(Duration::from_secs(5));
+    auth.tick().await;
+    let mut pending = true; // send the newest frame as soon as we may
+    loop {
+        // Send the newest frame when allowed (one in flight, fps cap).
+        if pending && !in_flight && last_sent.elapsed() >= Duration::from_millis(1000 / fps as u64) {
+            let p = rx.borrow_and_update().clone();
+            match p {
+                Pub::Frame(f) => {
+                    if write.send(Message::Binary(f.message.clone())).await.is_err() {
+                        break;
+                    }
+                    in_flight = true;
+                    last_sent = Instant::now();
+                    pending = false;
+                }
+                Pub::Ended(why) => {
+                    let _ = write.send(text(&ServerMsg::State { state: SimState::Stopped, message: Some(why) })).await;
+                    close(&mut write, CLOSE_DEVICE_STOPPED, "device stopped").await;
+                    break;
+                }
+                Pub::Starting => pending = false,
+            }
+        }
+        tokio::select! {
+            _ = auth.tick() => {
+                if !crate::routes::http::token_still_valid(&viewer.token, &owner_token) {
+                    log_debug!("[sim] stream token revoked; closing s{sim_id}");
+                    close(&mut write, CLOSE_AUTH_REVOKED, "token revoked").await;
+                    break;
+                }
+            }
+            changed = rx.changed() => {
+                if changed.is_err() {
+                    close(&mut write, CLOSE_DEVICE_STOPPED, "device stopped").await;
+                    break;
+                }
+                pending = true;
+            }
+            _ = tokio::time::sleep(if pending && !in_flight {
+                Duration::from_millis(1000 / fps as u64).saturating_sub(last_sent.elapsed()).max(Duration::from_millis(2))
+            } else {
+                Duration::from_millis(250)
+            }) => {
+                // Hold changes (a tap from another viewer, take-over expiry).
+                let h = m.hold_view(sim_id);
+                let changed_kind = std::mem::discriminant(&h) != std::mem::discriminant(&last_hold)
+                    || matches!((&h, &last_hold), (HoldView::Takeover { by: a, .. }, HoldView::Takeover { by: b, .. }) if a != b);
+                if changed_kind {
+                    last_hold = h.clone();
+                    if write.send(text(&ServerMsg::Hold { hold: h })).await.is_err() {
+                        break;
+                    }
+                }
+            }
+            msg = read.next() => {
+                let Some(Ok(msg)) = msg else { break };
+                let Message::Text(t) = msg else {
+                    if matches!(msg, Message::Close(_)) { break; }
+                    continue;
+                };
+                let Ok(vm) = serde_json::from_str::<ViewerMsg>(&t) else {
+                    let _ = write.send(text(&ServerMsg::Error { code: "bad_message".into(), message: "unknown message".into() })).await;
+                    continue;
+                };
+                match vm {
+                    ViewerMsg::Ack { seq } => {
+                        let _ = seq;
+                        in_flight = false;
+                    }
+                    ViewerMsg::Fps { fps: f } => {
+                        fps = clamp_fps(viewer.remote, Some(f));
+                        if let Ok(mut w) = hub.want_fps.lock() { w.insert(me, fps); }
+                        let _ = write.send(text(&ServerMsg::Fps { fps })).await;
+                    }
+                    other => {
+                        if !can_control {
+                            let _ = write.send(text(&ServerMsg::Error { code: "sim_watch_only".into(), message: "You can watch this device but not use it.".into() })).await;
+                            continue;
+                        }
+                        let ws2 = ws.clone();
+                        let who2 = who.clone();
+                        let caller2 = viewer.caller.clone();
+                        let r = tokio::task::spawn_blocking(move || -> Result<(), manager::SimError> {
+                            let m = manager::manager();
+                            let actor = manager::Actor::Person { name: match &caller2 { Caller::Login { username } => format!("login:{username}"), _ => "owner".into() } };
+                            match other {
+                                ViewerMsg::TakeOver => m.hold(&ws2, &actor, k2_core::sim::api::HoldAction::TakeOver).map(|_| ()),
+                                ViewerMsg::HandBack => m.hold(&ws2, &actor, k2_core::sim::api::HoldAction::HandBack).map(|_| ()),
+                                o => match to_action(&o) {
+                                    Some(a) => m.person_action(&ws2, &who2, &a),
+                                    None => Err(manager::SimError::new(400, "sim_invalid", "bad input")),
+                                },
+                            }
+                        }).await;
+                        let err = match r { Ok(Ok(())) => None, Ok(Err(e)) => Some((e.code.to_string(), e.message)), Err(e) => Some(("sim_io".into(), e.to_string())) };
+                        if let Some((code, message)) = err {
+                            let _ = write.send(text(&ServerMsg::Error { code, message })).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(mut w) = hub.want_fps.lock() {
+        w.remove(&me);
+    }
+    drop(rx);
+    m.viewer_left(sim_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fps_caps_follow_local_and_remote() {
+        assert_eq!(clamp_fps(false, None), 30);
+        assert_eq!(clamp_fps(false, Some(60)), 30);
+        assert_eq!(clamp_fps(true, None), 8);
+        assert_eq!(clamp_fps(true, Some(1)), 2);
+        assert_eq!(clamp_fps(true, Some(30)), 15);
+    }
+
+    /// Two viewers share one hub and one encode per frame; a viewer that
+    /// never reads holds nobody back (the channel keeps only the newest).
+    #[test]
+    fn one_encoder_serves_every_viewer() {
+        let _serial = crate::sim_routes::sim_test_lock();
+        let tmp = std::env::temp_dir().join(format!("k2-sim-stream-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("ws")).expect("ws");
+        k2_core::sim::set_base_for_tests(tmp.join("home"));
+        k2_core::sim::limits::save_settings(&k2_core::sim::limits::SimSettings { min_free_ram_bytes: Some(0), ..Default::default() }).expect("limits");
+        let fake = Arc::new(k2_core::sim::fake::FakeLane::new(k2_core::sim::LaneKind::Android));
+        k2_core::sim::register_lane(fake);
+        let m = manager::manager();
+        m.refresh_probes();
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, 'stream', ?2)", rusqlite::params![id, tmp.join("ws").display().to_string()])
+                .expect("project");
+        }
+        let ws = Ws { id: id.clone(), handle: "stream".into(), path: tmp.join("ws") };
+        m.boot(&ws, &manager::Actor::Person { name: "owner".into() }, &k2_core::sim::api::BootReq { no_tab: true, ..Default::default() }).expect("boot");
+        let (sim_a, hub_a) = join(&ws).expect("join a");
+        let (sim_b, hub_b) = join(&ws).expect("join b");
+        assert_eq!(sim_a, sim_b);
+        assert!(Arc::ptr_eq(&hub_a, &hub_b), "one hub per device");
+        hub_a.want_fps.lock().expect("fps").insert(1, 30);
+        let mut fast = hub_a.rx.clone();
+        let _slow = hub_b.rx.clone(); // never reads
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
+        let mut got = Vec::new();
+        rt.block_on(async {
+            while got.len() < 5 {
+                tokio::time::timeout(Duration::from_secs(5), fast.changed()).await.expect("a frame within 5 s").expect("hub alive");
+                if let Pub::Frame(f) = &*fast.borrow_and_update() {
+                    got.push(f.clone());
+                }
+            }
+        });
+        let seqs: Vec<u32> = got.iter().map(|f| f.seq).collect();
+        assert!(seqs.windows(2).all(|w| w[1] > w[0]), "{seqs:?}");
+        let (h, jpeg) = FrameHeader::decode(&got[0].message).expect("header");
+        assert_eq!((h.width_px, h.height_px), (4, 8));
+        assert_eq!(&jpeg[..2], &[0xff, 0xd8]);
+        // The slow viewer's receiver sees the same Arc as the fast one: no
+        // second encode.
+        let n = encodes(sim_a).expect("hub");
+        assert!(n >= 5 && n < 5 + 40, "{n} encodes for 5+ frames");
+        drop(fast);
+        drop(_slow);
+        drop(hub_a);
+        drop(hub_b);
+        m.stop(&ws, &manager::Actor::Person { name: "owner".into() }, "test").expect("stop");
+        k2_core::sim::clear_lanes();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn viewer_messages_map_to_point_actions_and_bad_ones_are_dropped() {
+        assert!(matches!(to_action(&ViewerMsg::Tap { x: 1.0, y: 2.0 }), Some(Action::Tap { .. })));
+        assert!(to_action(&ViewerMsg::OpenUrl { url: "no scheme".into() }).is_none());
+        assert!(to_action(&ViewerMsg::Text { text: "x".repeat(5000) }).is_none());
+        assert!(to_action(&ViewerMsg::Ack { seq: 1 }).is_none());
+    }
+}

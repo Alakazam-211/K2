@@ -171,6 +171,19 @@ fn resolve_ws(c: &Caller, token: Option<&str>) -> Result<Ws, SimError> {
     Ok(Ws { handle: handle_of(&id), id, path: std::path::PathBuf::from(path) })
 }
 
+/// Daemon tests that register sim lanes (a process-wide registry) take
+/// this lock so they never run side by side.
+#[cfg(test)]
+pub(crate) fn sim_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    L.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// [`resolve_ws`] for the stream socket.
+pub fn resolve_ws_for(c: &Caller, token: Option<&str>) -> Result<Ws, SimError> {
+    resolve_ws(c, token)
+}
+
 /// "Allow mobile devices" for agents (exit 3 with the Settings row; the
 /// permission-card wall adds `Ask with:` when cards are on).
 fn agent_switch(c: &Caller, ws: &Ws) -> Result<(), SimError> {

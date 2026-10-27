@@ -16,6 +16,11 @@ path = "src/lib.rs"
 # Enable in src-tauri's [dev-dependencies] entry; NOT a runtime feature.
 test-util = ["k2-client/test-util"]
 
+# Mobile dev (prd-mobile-dev-v1 vs-live M-A18): the live Android lane test
+# (`tests/sim_live_android.rs`). Only on a Linux box with KVM and the SDK
+# (the k2n9 sandbox lane); without the feature the test doesn't compile.
+sim-live-android = ["test-util"]
+
 # Session-sandboxing P2a/P2b — gates the libkrun microVM backend body in
 # `terminal::sandbox`. Default OFF: the seam scaffolding (SandboxBackend,
 # SpawnRequest, SandboxSpec::Microvm, FailClosed, build_worker_invocation)

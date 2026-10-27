@@ -252,7 +252,18 @@ fn sync_up(tool: Tool, id: &str, kind: SealKind, bytes: &[u8]) -> Synced {
     }
 }
 
+/// Once per login per 10 minutes: reads happen on every list, and a
+/// closed vault would otherwise log on each one.
 fn log_waiting(tool: Tool, id: &str, what: &str, why: &str) {
+    static LAST: OnceLock<Mutex<HashMap<String, std::time::Instant>>> = OnceLock::new();
+    {
+        let mut last = LAST.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|p| p.into_inner());
+        let key = vault_name(tool, id);
+        if last.get(&key).is_some_and(|t| t.elapsed() < Duration::from_secs(600)) {
+            return;
+        }
+        last.insert(key, std::time::Instant::now());
+    }
     crate::log_debug!("[llm-accounts] {}/{id}: {what} waiting to seal ({why}); the file copy is kept", tool.as_str());
 }
 

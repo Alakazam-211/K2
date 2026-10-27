@@ -286,6 +286,32 @@ python3 -I -c 'import base64,sys; sys.stdout.write(base64.b64encode(open(sys.arg
 lib k2u_verify_u2 "$tmp/k2-daemon-macos-aarch64" "$tmp/wrapped.sig2" k2-daemon-macos-aarch64 9.9.9 2>/dev/null && pass "k2u_verify_u2 reads the base64-wrapped form" || fail "verify_u2 wrapped" ""
 [ "$(lib k2u_slot_key_id u2)" = "$U2_ID" ] && pass "k2u_slot_key_id u2 = the source tree's primary" || fail "slot key id" ""
 
+echo "== k2u_verify_u1: the bridge half fails closed too (installs on 0.46.4 or older) =="
+lib k2u_verify_u1 "$tmp/k2-daemon-macos-aarch64" "$tmp/raw.sig" k2-daemon-macos-aarch64 2>"$tmp/err" \
+    && pass "k2u_verify_u1 accepts the raw U1 signature" || fail "verify_u1 raw" "$(cat "$tmp/err")"
+lib k2u_verify_u1 "$tmp/K2.app.tar.gz" "$tmp/app.sig" K2.app.tar.gz 2>"$tmp/err" \
+    && pass "k2u_verify_u1 accepts the base64-wrapped app signature (latest.json form)" || fail "verify_u1 b64" "$(cat "$tmp/err")"
+u1_refuses() { # <label> <expect> <file> <sig> <asset>
+    if lib k2u_verify_u1 "$3" "$4" "$5" 2>"$tmp/err"; then
+        fail "verify_u1 $1" "accepted"
+    elif grep -q -- "$2" "$tmp/err"; then
+        pass "k2u_verify_u1 refuses $1"
+    else
+        fail "verify_u1 $1" "$(cat "$tmp/err")"
+    fi
+}
+u1_refuses "a missing signature" "no U1 signature" "$tmp/k2-daemon-macos-aarch64" "$tmp/does-not-exist.sig" k2-daemon-macos-aarch64
+: > "$tmp/empty.sig"
+u1_refuses "an empty signature (the old Step 8 fallback)" "no U1 signature" "$tmp/k2-daemon-macos-aarch64" "$tmp/empty.sig" k2-daemon-macos-aarch64
+u1_refuses "a U2 signature in the U1 slot" "does not verify with LEGACY" "$tmp/k2-daemon-macos-aarch64" "$tmp/raw.sig2" k2-daemon-macos-aarch64
+u1_refuses "another file's name" "does not name exactly file:" "$tmp/k2-daemon-macos-aarch64" "$tmp/raw.sig" k2-daemon-linux-x86_64
+cp "$tmp/k2-daemon-macos-aarch64" "$tmp/changed-daemon"; printf 'x' >> "$tmp/changed-daemon"
+u1_refuses "changed bytes" "does not verify with LEGACY" "$tmp/changed-daemon" "$tmp/raw.sig" k2-daemon-macos-aarch64
+printf '%s\n' "$PW" | minisign -S -l -s "$tmp/gen/u1.key" -m "$tmp/k2-daemon-macos-aarch64" -x "$tmp/legacy-u1.sig" -t "timestamp:1"$'\t'"file:k2-daemon-macos-aarch64" >/dev/null
+u1_refuses "a legacy (non-prehashed) U1 signature (0.46.4 daemons refuse it)" "not prehashed" "$tmp/k2-daemon-macos-aarch64" "$tmp/legacy-u1.sig" k2-daemon-macos-aarch64
+printf '%s\n' "$PW" | minisign -S -s "$tmp/gen/u1.key" -m "$tmp/k2-daemon-macos-aarch64" -x "$tmp/ver-u1.sig" -t "timestamp:1"$'\t'"file:k2-daemon-macos-aarch64"$'\t'"version:9.9.1" >/dev/null
+u1_refuses "a U1 comment with a version: field (old Tauri apps compare it)" "and no version:" "$tmp/k2-daemon-macos-aarch64" "$tmp/ver-u1.sig" k2-daemon-macos-aarch64
+
 echo "== the audit log has one line per signature =="
 tsv="$K2_RELEASE_AUDIT_DIR/9.9.9/signatures.tsv"
 python3 -I - "$tsv" "$tmp/k2-daemon-macos-aarch64" "$U1_ID" "${USER:-$(id -un)}" <<'PY' && pass "signatures.tsv: header + asset, sha256, key id, comment (\\t), user" || fail "audit" "$(cat "$tsv")"
@@ -858,11 +884,37 @@ for want in \
     'k2_verify_published_u2 || U2_VERIFY_FAILED=1' \
     '[ -z "$WIN_PATCH_FAILED" ] && [ -z "$U2_VERIFY_FAILED" ] && [ -z "$DAEMON_SIGN_FAILED" ]' \
     'WIN_PATCH_FAILED=1' \
-    'Re-run: bash scripts/windows-patch-latest-json.sh'; do
+    'Re-run: bash scripts/windows-patch-latest-json.sh' \
+    'k2u_verify_u1 "target/release/bundle/macos/K2.app.tar.gz" "$SIG_FILE" K2.app.tar.gz \' \
+    '[ -s "$SIG_FILE" ] || { echo "FATAL: $SIG_FILE missing or empty' \
+    'k2u_verify_u1 "target/release/bundle/macos/K2.app.tar.gz" "$d/app.sig" K2.app.tar.gz \' \
+    'k2u_verify_u1 "$DIST_DIR/$MAC_ASSET" "$d/mac.sig" "$MAC_ASSET" \' \
+    'for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR; do'; do
     grep -qF -- "$want" "$R" && pass "release.sh (dual-sign): $want" || fail "release.sh dual-sign" "missing: $want"
 done
 grep -qF 'k2u_sign u2 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig2" raw' "$ROOT/scripts/sign-daemon.sh" \
     && pass "sign-daemon.sh signs each Linux daemon with U2 too" || fail "sign-daemon u2" ""
+grep -qF 'k2u_verify_u1 "$CHECK/$A" "$CHECK/$A.sig" "$A"' "$ROOT/scripts/sign-daemon.sh" \
+    && pass "sign-daemon.sh re-checks each published .sig (U1) after the upload" || fail "sign-daemon u1 post-check" ""
+# The SIG_CONTENT fallback that let Step 8 publish an empty "signature" is gone.
+! grep -qE '^SIG_CONTENT=""$' "$R" && pass "release.sh Step 8 has no empty-signature fallback" || fail "Step 8 fallback" "SIG_CONTENT=\"\" still there"
+# The seam guard runs: release.sh exits before anything with K2_UPDATER_SRC_ROOT set.
+seam_snip="$(sed -n '/^for _k2_seam in /,/^unset _k2_seam$/p' "$R")"
+if K2_UPDATER_SRC_ROOT=/tmp/x bash -c "$seam_snip" >"$tmp/seam.out" 2>&1; then
+    fail "seam guard" "passed with K2_UPDATER_SRC_ROOT set"
+else
+    grep -q "K2_UPDATER_SRC_ROOT is set" "$tmp/seam.out" && pass "release.sh refuses K2_UPDATER_SRC_ROOT (a test seam)" || fail "seam guard" "$(cat "$tmp/seam.out")"
+fi
+if env -u K2_UPDATER_SRC_ROOT -u K2_SIGN_SOURCE_DIR bash -c "$seam_snip" >"$tmp/seam.out" 2>&1; then
+    pass "release.sh's seam guard passes a clean env"
+else
+    fail "seam guard clean" "$(cat "$tmp/seam.out")"
+fi
+if env -u K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR=/tmp/y bash -c "$seam_snip" >"$tmp/seam.out" 2>&1; then
+    fail "seam guard 2" "passed with K2_SIGN_SOURCE_DIR set"
+else
+    pass "release.sh refuses K2_SIGN_SOURCE_DIR (a test seam)"
+fi
 grep -qF 'k2u_sign u2 "$STAGE/setup.exe" "$WIN_ASSET" "$VERSION" "$STAGE/setup.exe.sig2" raw' "$ROOT/scripts/windows-patch-latest-json.sh" \
     && pass "the Windows patch signs setup.exe with U2 too" || fail "windows u2" ""
 

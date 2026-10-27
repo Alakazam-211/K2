@@ -11,6 +11,9 @@
 #   k2u_verify_u2 <file> <minisig> <asset> <version>
 #                                         verify with the SOURCE tree's
 #                                         UPDATER_KEYS (file: + version: exact)
+#   k2u_verify_u1 <file> <minisig> <asset>
+#                                         the bridge signature, as installs
+#                                         older than 0.46.5 check it
 #   k2u_slot_key_id u2                    the U2 key id (k2_signatures key)
 #   k2u_b64 <file>                        one-line base64 of a file
 #
@@ -290,6 +293,43 @@ sys.exit(0 if files == [sys.argv[2]] and vers == [sys.argv[3]] else 1)' "$(print
     done < <(k2u_source_keys all)
     rm -f "$tmp"
     return "$ok"
+}
+
+# k2u_verify_u1 <file> <minisig (raw or base64)> <asset>: what an install
+# older than 0.46.5 checks on the bridge signature — the source tree's
+# LEGACY_UPDATER_KEY_B64 (U1), a prehashed signature (0.46.4 daemons refuse
+# legacy ones) and a trusted comment with exactly one file:<asset> and no
+# version: field (the Tauri plugin would compare one with the manifest).
+# Dual-signing is fail closed both ways: a release without a good U1
+# signature strands every install still on 0.46.4 or older.
+k2u_verify_u1() {
+    local file="$1" sigf="$2" asset="$3" pub tc tmp
+    pub="$(k2u_source_keys legacy)" || { k2u_fail "no U1 public key in the source tree"; return 1; }
+    [ -s "$sigf" ] || { k2u_fail "$asset: no U1 signature ($sigf missing or empty)"; return 1; }
+    tmp="$(mktemp "${TMPDIR:-/tmp}/k2u-v1.XXXXXX")" || return 1
+    python3 -I - "$sigf" > "$tmp" <<'PY' || { rm -f "$tmp"; k2u_fail "$asset: $sigf is not a minisign signature"; return 1; }
+import base64, sys
+b = open(sys.argv[1], "rb").read().strip()
+if not b.startswith(b"untrusted comment:"):
+    b = base64.b64decode(b"".join(b.split()))
+if not b.startswith(b"untrusted comment:"):
+    sys.exit(1)
+sys.stdout.write(b.decode() + "\n")
+PY
+    if [ "$(sed -n 2p "$tmp" | python3 -I -c 'import base64,sys; print(base64.b64decode(sys.stdin.read().strip())[:2].decode("latin-1"))')" != "ED" ]; then
+        rm -f "$tmp"; k2u_fail "$asset: U1 signature is not prehashed"; return 1
+    fi
+    if ! tc="$(minisign -V -P "$pub" -m "$file" -x "$tmp" -Q 2>/dev/null)"; then
+        rm -f "$tmp"; k2u_fail "$asset: the U1 (bridge) signature does not verify with LEGACY_UPDATER_KEY_B64"; return 1
+    fi
+    rm -f "$tmp"
+    python3 -I -c '
+import sys
+f = sys.argv[1].split("\t")
+files = [x[5:] for x in f if x.startswith("file:")]
+vers = [x for x in f if x.startswith("version:")]
+sys.exit(0 if files == [sys.argv[2]] and not vers else 1)' "$(printf '%s\n' "$tc" | tail -n1)" "$asset" \
+        || { k2u_fail "$asset: U1 trusted comment '$tc' does not name exactly file:$asset (and no version:)"; return 1; }
 }
 
 k2u_preflight_slot() {

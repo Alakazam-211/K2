@@ -2328,8 +2328,8 @@ fn pick_node(
     let cands = candidates(want, &[], compute::now());
     // `--any --tier ci`: candidates keep only nodes where this workspace
     // may send CI; refused only when that rules out every one (T12).
-    if cands.is_empty() && want.tier == Tier::Ci {
-        let any_tier = crate::compute_place::Want { tier: Tier::Normal, ..want.clone() };
+    if cands.is_empty() && want.tier == tiers::Tier::Ci {
+        let any_tier = crate::compute_place::Want { tier: tiers::Tier::Normal, ..want.clone() };
         if !candidates(&any_tier, &[], compute::now()).is_empty() {
             return Err(no(
                 tiers::codes::CI_NOT_ALLOWED,

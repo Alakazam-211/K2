@@ -556,7 +556,7 @@ async fn the_queue_never_deadlocks_under_contention() {
 /// running one. Both servers speak protocol 5, so both are offered `tiers`.
 #[tokio::test(flavor = "multi_thread")]
 async fn ci_from_a_guest_with_gate_jumps_the_owners_normal_work() {
-    let mut w = two("q-tier-ci", "max_parallel = 1\n").await;
+    let w = two("q-tier-ci", "max_parallel = 1\n").await;
     for t in [&w.owner, &w.tb] {
         assert!(w.n.node.session_features(t).iter().any(|f| f == k2_node_proto::tiers::FEATURE_TIERS), "slot {} speaks 5", t.slot);
     }

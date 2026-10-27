@@ -430,6 +430,36 @@ impl Node {
         // A secret job's sccache server is its own (in its own tmp, killed
         // with its unit), never the slot's shared one.
         let sccache_socket = if secret_job { dirs.tmp.join("sccache.sock") } else { t.paths.sccache_socket() };
+        // `--cache NAME` (protocol 6): the workspace's folder that outlives
+        // the job. Never for a secret job (it keeps nothing between runs);
+        // the server refuses that too. The hold goes back in `finish_job`.
+        let mut job_cache_dir: Option<PathBuf> = None;
+        if let Some(name) = a.plan.cache.clone() {
+            if secret_job {
+                let detail = "a job with secret env keeps nothing between runs: no --cache".to_string();
+                sys(&mut journal, &detail);
+                self.finish_job(&t, &a, Some(&dirs), JobState::Failed, Some(k2_node_proto::cache::codes::CACHE_WITH_SECRET), Some(&detail), src_ran, None, Some(journal), lease, None).await;
+                return;
+            }
+            let (n, tt, ws) = (self.clone(), t.clone(), a.plan.workspace_id.clone());
+            let opened = tokio::task::spawn_blocking(move || n.job_cache_open(&tt, &ws, &name, unit_mode)).await.map_err(|e| e.to_string()).and_then(|r| r);
+            match opened {
+                Ok((held, notes)) => {
+                    for l in notes {
+                        sys(&mut journal, &l);
+                    }
+                    sys(&mut journal, &format!("{}={}", k2_node_proto::cache::ENV_JOB_CACHE, held.dir.display()));
+                    job_cache_dir = Some(held.dir.clone());
+                    self.job_cache_holds.lock().unwrap().insert((t.slot, job.clone(), gen), held);
+                }
+                Err(e) => {
+                    let detail = format!("cache: {e}");
+                    sys(&mut journal, &detail);
+                    self.finish_job(&t, &a, Some(&dirs), JobState::Failed, Some(k2_node_proto::cache::codes::CACHE_FAILED), Some(&detail), src_ran, None, Some(journal), lease, None).await;
+                    return;
+                }
+            }
+        }
         if unit_mode {
             // The job (k2job, the node's group) writes these.
             let prep = (target.clone(), sccache.clone(), cargo_home.clone(), a.plan.src.is_some().then(|| dirs.src.clone()));
@@ -455,6 +485,7 @@ impl Node {
             tool_env: &resolved.env,
             sccache_socket: (secret_job || slot_tmp.is_dir()).then_some(sccache_socket.as_path()),
             src_dir: a.plan.src.is_some().then_some(dirs.src.as_path()),
+            job_cache: job_cache_dir.as_deref(),
         }) {
             Ok(e) => e,
             Err((code, name)) => {
@@ -503,6 +534,11 @@ impl Node {
             // The slot's shared tmp (its sccache socket) only for other jobs.
             if slot_tmp.is_dir() && !secret_job {
                 rw.push(slot_tmp.clone());
+            }
+            // The job cache (under the slot's `cache/`, which the executor
+            // allows as a read-write path).
+            if let Some(c) = &job_cache_dir {
+                rw.push(c.clone());
             }
             self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit, secrets.as_ref()).await
         } else {
@@ -1116,6 +1152,9 @@ impl Node {
             .map(|s| s.to_string())
             .chain(a.plan.env.keys().cloned())
             .collect();
+        if self.job_cache_holds.lock().unwrap().contains_key(&(t.slot, job.clone(), gen)) {
+            env_names.push(k2_node_proto::cache::ENV_JOB_CACHE.to_string());
+        }
         env_names.sort();
         let receipt = Receipt {
             v: 1,
@@ -1210,6 +1249,12 @@ impl Node {
         }
         if let Some(l) = lease.as_ref().filter(|l| l.slot.is_some()) {
             self.after_slot_use(&l.dir).await;
+        }
+        // The job cache goes back last: its unit is gone, so nothing writes
+        // it while it's measured, and it's never evicted under the job.
+        let held = self.job_cache_holds.lock().unwrap().remove(&(t.slot, job.clone(), gen));
+        if let Some(h) = held {
+            self.job_cache_close(h).await;
         }
     }
 

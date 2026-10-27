@@ -338,6 +338,12 @@ impl Tenant {
         self.protocol() >= k2_node_proto::frames::PROTOCOL_TIERS
     }
 
+    /// May this session get `Plan.cache`, `cache_get` and the `job-cache`
+    /// feature (protocol 6)?
+    pub fn speaks_cache(&self) -> bool {
+        self.protocol() >= k2_node_proto::frames::PROTOCOL_CACHE
+    }
+
     pub fn share(&self) -> Option<ShareInfo> {
         self.share.lock().unwrap().clone()
     }

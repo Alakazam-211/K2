@@ -440,6 +440,7 @@ pub fn plan(job: &str, argv: &[&str]) -> Plan {
         stall_secs: None,
         secret_env: Vec::new(),
         tier: None,
+        cache: None,
     }
 }
 

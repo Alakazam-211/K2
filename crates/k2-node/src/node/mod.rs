@@ -18,7 +18,8 @@
 //! - `run.rs`: one job's life (toolchains, spawn behind the wall, wait,
 //!   artifacts, finish);
 //! - `sync_src.rs`: the job's code (mirror, fetch, bundle, dirty) and blob
-//!   transfers.
+//!   transfers;
+//! - [`job_cache`]: `--cache NAME` folders that outlive a job (protocol 6).
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -45,6 +46,7 @@ use crate::wall::Wall;
 
 mod assign;
 mod disk;
+pub mod job_cache;
 mod offer;
 pub mod owner_swap;
 mod run;
@@ -281,6 +283,11 @@ pub struct Node {
     /// The executor relays a secret-env stdin pipe (`Ready.stdin`; asked at
     /// start and on every wall probe, so an executor restart is noticed).
     pub exec_stdin: std::sync::atomic::AtomicBool,
+    /// Job caches running jobs hold (module `job_cache`).
+    job_caches_busy: Mutex<job_cache::Busy>,
+    /// Which running attempt holds which job cache, by (slot, job, gen):
+    /// `finish_job` gives it back.
+    job_cache_holds: Mutex<HashMap<(Slot, String, u32), job_cache::Held>>,
 }
 
 /// The running-jobs key prefix of a stand-in for a lingering unit, and the
@@ -376,6 +383,8 @@ impl Node {
             job_seq: Default::default(),
             slot_use: Mutex::new(HashMap::new()),
             exec_stdin: std::sync::atomic::AtomicBool::new(exec_stdin),
+            job_caches_busy: Mutex::new(job_cache::Busy::default()),
+            job_cache_holds: Mutex::new(HashMap::new()),
             opts,
         });
         node.hold_lingering(OWNER_SLOT, lingering);
@@ -1147,6 +1156,7 @@ mod wall_tests {
             stall_secs: None,
             secret_env: Vec::new(),
             tier: None,
+            cache: None,
         };
         let fence = k2_node_proto::frames::Fence { job_id: job.into(), attempt: 1, generation: 1, plan_digest: plan.digest().unwrap() };
         k2_node_proto::frames::Assign { fence, plan }

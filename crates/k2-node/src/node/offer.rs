@@ -158,6 +158,12 @@ impl Node {
         if t.speaks_tiers() && !f.iter().any(|x| x == FEATURE_TIERS) {
             f.push(FEATURE_TIERS.to_string());
         }
+        // Job caches (protocol 6): `Plan.cache` and `cache_get`. Only to a
+        // server that speaks protocol 6 (an older one would never send
+        // either, and a 0.46.5 server's goldens stay as they were).
+        if t.speaks_cache() && !f.iter().any(|x| x == k2_node_proto::cache::FEATURE_JOB_CACHE) {
+            f.push(k2_node_proto::cache::FEATURE_JOB_CACHE.to_string());
+        }
         f
     }
 

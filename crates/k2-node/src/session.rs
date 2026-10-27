@@ -723,6 +723,21 @@ where
                     }
                 }
             }
+            // Job caches (protocol 6): only this server's own, never
+            // another's (the view comes from this session's slot).
+            Frame::CacheGet(g) => {
+                if tenant.speaks_cache() {
+                    let (n, t, tx2) = (node.clone(), tenant.clone(), tx.clone());
+                    tokio::spawn(async move {
+                        match tokio::task::spawn_blocking(move || n.cache_view(&t, &g)).await {
+                            Ok(v) => {
+                                let _ = tx2.send(Frame::CacheView(v)).await;
+                            }
+                            Err(e) => crate::nlog!("cache view: {e}"),
+                        }
+                    });
+                }
+            }
             Frame::Revoked(r) => {
                 node.revoke(&tenant, &r.reason);
                 break SessionEnd::Revoked(r.reason);

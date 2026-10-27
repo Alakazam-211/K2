@@ -175,6 +175,23 @@ impl TenantLayout {
     pub fn project_cache(&self, project_key: &str) -> PathBuf {
         self.cache().join(project_key)
     }
+    /// Job caches (`--cache NAME`, protocol 6): `cache/job-caches/`, one
+    /// folder per workspace ([`k2_node_proto::cache::ws_key`]), one per
+    /// name in it. Under `cache/`, so the executor's checks already allow
+    /// it as a job's read-write path and a reclaim target, and a tenant's
+    /// counts in its disk share. Never a 16-hex project key, so the warm
+    /// slot scans pass it by.
+    pub fn job_caches(&self) -> PathBuf {
+        self.cache().join(JOB_CACHES_DIR)
+    }
+    /// One workspace's job caches.
+    pub fn job_cache_ws(&self, ws_key: &str) -> PathBuf {
+        self.job_caches().join(ws_key)
+    }
+    /// One job cache folder (`K2_JOB_CACHE`).
+    pub fn job_cache(&self, ws_key: &str, name: &str) -> PathBuf {
+        self.job_cache_ws(ws_key).join(name)
+    }
     /// The slot's shared scratch (`<root>/tmp`): its sccache server socket
     /// lives here, so one server's builds never reach another's sccache
     /// (V63). Group-writable for the slot's job user only.
@@ -218,6 +235,9 @@ impl TenantLayout {
         Ok(())
     }
 }
+
+/// The folder under a slot's `cache/` that holds its job caches.
+pub const JOB_CACHES_DIR: &str = "job-caches";
 
 /// The K2 daemon files that mark a user who runs K2 itself (CN25). A
 /// compute node must never run as (or be installed for) such a user.
@@ -305,6 +325,9 @@ mod tests {
         assert_eq!(t.artifacts(), PathBuf::from("/var/lib/k2node/state/tenants/3/artifacts"));
         assert_eq!(t.sccache_socket(), PathBuf::from("/var/lib/k2node-t/3/tmp/sccache.sock"));
         assert_eq!(o.sccache_socket(), PathBuf::from("/var/lib/k2node/tmp/sccache.sock"));
+        assert_eq!(o.job_cache("0123456789abcdef", "fuzz"), PathBuf::from("/var/lib/k2node/cache/job-caches/0123456789abcdef/fuzz"));
+        assert_eq!(t.job_cache("0123456789abcdef", "fuzz"), PathBuf::from("/var/lib/k2node-t/3/cache/job-caches/0123456789abcdef/fuzz"));
+        assert!(!k2_node_proto::frames::valid_project_key(JOB_CACHES_DIR) || JOB_CACHES_DIR.len() != 16, "never a project key");
         assert!(t.sccache_socket().as_os_str().len() < 100, "fits sun_path");
         // Journals and artifacts are node-only state, never in the root a job writes.
         for p in [t.journal("j", 2), t.artifacts(), t.ledger(), t.pin()] {

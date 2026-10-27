@@ -45,6 +45,8 @@ pub struct EnvInputs<'a> {
     /// may read it although the job user doesn't own it (see
     /// [`git_safe_directory`]).
     pub src_dir: Option<&'a Path>,
+    /// The job's `--cache NAME` folder (`K2_JOB_CACHE`, protocol 6).
+    pub job_cache: Option<&'a Path>,
 }
 
 /// Names only the node sets, beyond the proto's list: the sccache server
@@ -81,6 +83,9 @@ pub fn job_env(i: &EnvInputs<'_>) -> Result<Vec<(String, String)>, (String, Stri
     ];
     if let Some(sock) = i.sccache_socket {
         env.push(("SCCACHE_SERVER_UDS".into(), sock.display().to_string()));
+    }
+    if let Some(c) = i.job_cache {
+        env.push((k2_node_proto::cache::ENV_JOB_CACHE.into(), c.display().to_string()));
     }
     for (k, v) in i.tool_env {
         env.retain(|(ek, _)| ek != k);
@@ -318,7 +323,7 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     fn inputs<'a>(d: &'a Path, extra: &'a BTreeMap<String, String>) -> EnvInputs<'a> {
-        EnvInputs { node_home: d, job_home: d, job_tmp: d, target_dir: d, cache_dir: d, job_id: "j1", user: "k2node", extra, tool_paths: &[], tool_env: &[], sccache_socket: None, src_dir: None }
+        EnvInputs { node_home: d, job_home: d, job_tmp: d, target_dir: d, cache_dir: d, job_id: "j1", user: "k2node", extra, tool_paths: &[], tool_env: &[], sccache_socket: None, src_dir: None, job_cache: None }
     }
 
     /// V28/V29: warm caches come from the cache dir the node picked (the
@@ -340,6 +345,25 @@ mod tests {
         assert_eq!(get("CARGO_HOME"), "/n/cache/0123456789abcdef/cargo-home");
         assert_eq!(get("RUSTUP_HOME"), "/n/toolchains/rustup");
         assert!(!env.iter().any(|(_, v)| v == "/n/cache/sccache"), "no node-wide sccache any more");
+    }
+
+    /// `--cache NAME`: the job finds its folder in `K2_JOB_CACHE`; without
+    /// one the name is absent, and no `--env` can set or move it.
+    #[test]
+    fn the_job_cache_is_the_nodes_to_name() {
+        let home = PathBuf::from("/n");
+        let none = BTreeMap::new();
+        let env = job_env(&inputs(&home, &none)).unwrap();
+        assert!(!env.iter().any(|(k, _)| k == "K2_JOB_CACHE"));
+        let c = PathBuf::from("/n/cache/job-caches/0123456789abcdef/fuzz");
+        let mut i = inputs(&home, &none);
+        i.job_cache = Some(&c);
+        let env = job_env(&i).unwrap();
+        assert!(env.contains(&("K2_JOB_CACHE".to_string(), "/n/cache/job-caches/0123456789abcdef/fuzz".to_string())));
+        let evil = BTreeMap::from([("K2_JOB_CACHE".to_string(), "/etc".to_string())]);
+        let mut i = inputs(&home, &evil);
+        i.job_cache = Some(&c);
+        assert_eq!(job_env(&i).unwrap_err().0, "env_k2_reserved");
     }
 
     /// V63: the job's sccache server is its server's own socket, and no

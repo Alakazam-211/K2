@@ -14,7 +14,8 @@
 //!   evicted when its job ends, then idle slots least recently used first.
 //! - **The guard pass** ([`Node::disk_guard_pass`], every `disk_poll`):
 //!   under the floor plus [`RECLAIM_MARGIN`] it reclaims (leftover
-//!   evictions, ended job dirs, idle warm slots oldest first); still under
+//!   evictions, ended job dirs, idle warm slots oldest first, then idle
+//!   job caches least recently used first); still under
 //!   the floor, it stops the newest running job (`failed / disk_low`).
 //!   Admission already refuses under the floor (`disk_low`).
 //! - **Finish retries** (run.rs): a ledger finish that fails is retried
@@ -416,6 +417,22 @@ impl Node {
                 if self.evict_slot(s).await {
                     crate::nlog!("disk low: evicted warm slot {}", s.dir.display());
                 }
+            }
+            free = self.disk_free_bytes();
+        }
+        // Then idle job caches (`--cache NAME`), least recently used first:
+        // rebuilt from scratch by their next run, like a warm slot.
+        if free < floor.saturating_add(RECLAIM_MARGIN) {
+            let n = self.clone();
+            let target = floor.saturating_add(RECLAIM_MARGIN);
+            let gone = tokio::task::spawn_blocking(move || {
+                n.sweep_evicted_job_caches();
+                n.evict_job_caches_for_disk(|| n.disk_free_bytes() >= target)
+            })
+            .await
+            .unwrap_or(0);
+            if gone > 0 {
+                crate::nlog!("disk low ({} GB free, floor {} GB): evicted {gone} idle job cache(s)", free >> 30, floor >> 30);
             }
             free = self.disk_free_bytes();
         }

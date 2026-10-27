@@ -599,6 +599,7 @@ pub mod tests {
             stall_secs: None,
             secret_env: Vec::new(),
             tier: None,
+            cache: None,
         };
         Assign { fence: Fence { job_id: job.into(), attempt: generation, generation, plan_digest: plan.digest().unwrap() }, plan }
     }

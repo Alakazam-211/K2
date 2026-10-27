@@ -1367,6 +1367,17 @@ async fn async_main() {
     // FileTree. DB is ready above; projects_list() is live.
     fs_live::start();
     charter_compose_watch::start();
+    // 0.46.5 S0, once per install: a widget's version now covers its
+    // manifest, so every hash changes; carry each signature to the new hash
+    // (and rewrite old-shape saved copies) before anything reads them.
+    if let Some(r) = k2_core::zen::version_carry::boot() {
+        log_debug!(
+            "[daemon/zen] widget version carry: {} version(s), {} signature(s) carried, {} with a changed manifest",
+            r.versions.len(),
+            r.carried(),
+            r.differing().len()
+        );
+    }
     // Zen Mode (Z12/Z61): watch `~/.k2/zen/` only when this computer has
     // set Zen up; otherwise the first `page/ensure` starts it.
     zen_watch::start_at_boot();

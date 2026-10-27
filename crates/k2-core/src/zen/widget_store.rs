@@ -169,7 +169,7 @@ impl ZenFiles {
         self.widgets_dir().join(name)
     }
 
-    fn widget_history_dir(&self, name: &str) -> PathBuf {
+    pub(crate) fn widget_history_dir(&self, name: &str) -> PathBuf {
         self.history_root().join(WIDGETS_DIR).join(name)
     }
 
@@ -243,30 +243,80 @@ impl ZenFiles {
     }
 }
 
+/// `last-good.json`'s `hashScheme` from 0.46.5 (S0): `version` is the
+/// document AND the saved manifest's run fields. A file without it (an
+/// older K2's) is read only by the one-time carry
+/// (`zen::version_carry`), never by [`read_saved_bundle`].
+pub const HASH_SCHEME: u64 = 2;
+
 /// A bundle saved as `last-good.html` + `last-good.json` in `dir` (a
 /// widget's last good, or a locked Garden's frozen copy): `(manifest,
-/// bundle, at)`, or `None` when it is missing or doesn't check out.
+/// bundle, at)`, or `None` when it is missing or doesn't check out. The
+/// version is recomputed from the saved document **and the saved
+/// manifest** (S0), so an edit to either one on disk (a frozen copy's
+/// caps or libraries, say) refuses the copy instead of running it.
 pub(crate) fn read_saved_bundle(dir: &std::path::Path) -> Option<(Manifest, Bundle, String)> {
+    let (meta, manifest, bundle) = read_saved_parts(dir)?;
+    if meta["hashScheme"].as_u64() != Some(HASH_SCHEME) {
+        crate::log_debug!("[zen/widgets] {}: last-good.json is from before 0.46.5 and wasn't carried; not used", dir.display());
+        return None;
+    }
+    if Some(bundle.hash.as_str()) != meta["version"].as_str() {
+        crate::log_debug!("[zen/widgets] {}: the saved version doesn't match its document and manifest; not used", dir.display());
+        return None;
+    }
+    Some((manifest, bundle, meta["at"].as_str().unwrap_or_default().to_string()))
+}
+
+/// The meta, manifest and bound bundle of a saved copy, with the document
+/// checked against `hash` (the pre-0.46.5 template hash every scheme
+/// keeps). The caller checks the version.
+fn read_saved_parts(dir: &std::path::Path) -> Option<(J, Manifest, Bundle)> {
     let meta: J = serde_json::from_str(&fs::read_to_string(dir.join(LAST_GOOD_JSON)).ok()?).ok()?;
     let html = fs::read_to_string(dir.join(LAST_GOOD_HTML)).ok()?;
     let offsets: Vec<usize> = meta["nonceAt"].as_array()?.iter().map(|v| v.as_u64().map(|n| n as usize)).collect::<Option<_>>()?;
     let code = meta["codeBytes"].as_u64()? as usize;
-    let bundle = Bundle::from_template(&html, &offsets, code)?;
-    if Some(bundle.hash.as_str()) != meta["hash"].as_str() {
+    let manifest = Manifest::from_saved(&meta["manifest"])?;
+    let bundle = Bundle::from_template(&html, &offsets, code, widgets::version_digest(&manifest))?;
+    if Some(bundle.template_hash().as_str()) != meta["hash"].as_str() {
         return None;
     }
-    let manifest = Manifest::from_saved(&meta["manifest"])?;
-    Some((manifest, bundle, meta["at"].as_str().unwrap_or_default().to_string()))
+    Some((meta, manifest, bundle))
+}
+
+/// A saved copy written by K2 before 0.46.5 (no `hashScheme`), for the
+/// one-time carry only: `(manifest, bundle bound to that manifest, at, the
+/// old hash)`. `None` when it is missing, already carried, or its document
+/// doesn't match its old hash.
+pub(crate) fn read_legacy_saved_bundle(dir: &std::path::Path) -> Option<(Manifest, Bundle, String, String)> {
+    let (meta, manifest, bundle) = read_saved_parts(dir)?;
+    if meta.get("hashScheme").is_some() {
+        return None;
+    }
+    let old = meta["hash"].as_str()?.to_string();
+    Some((manifest, bundle, meta["at"].as_str().unwrap_or_default().to_string(), old))
 }
 
 /// Save `m` + `b` in `dir` in the [`read_saved_bundle`] shape.
 pub(crate) fn write_saved_bundle(dir: &std::path::Path, m: &Manifest, b: &Bundle) -> Result<(), ZenError> {
+    write_saved_bundle_at(dir, m, b, &now_rfc3339())
+}
+
+/// [`write_saved_bundle`] keeping a given `at` (the carry rewrites old
+/// copies without changing when they were made good).
+pub(crate) fn write_saved_bundle_at(dir: &std::path::Path, m: &Manifest, b: &Bundle, at: &str) -> Result<(), ZenError> {
+    debug_assert_eq!(b.digest(), widgets::version_digest(m), "a saved bundle is bound to its own manifest");
     fs::create_dir_all(dir).map_err(|e| io(e, dir))?;
     let html = dir.join(LAST_GOOD_HTML);
     crate::fs_atomic::atomic_write_str(&html, &b.template()).map_err(|e| io(e, &html))?;
     let meta = json!({
-        "hash": b.hash,
-        "at": now_rfc3339(),
+        // `hash` stays the document's own hash (what K2 0.46.4 and older
+        // check, so a downgrade still reads this file); `version` is the
+        // hash 0.46.5 checks, over the document and the manifest.
+        "hash": b.template_hash(),
+        "hashScheme": HASH_SCHEME,
+        "version": b.hash,
+        "at": at,
         "nonceAt": b.nonce_offsets(),
         "codeBytes": b.code_bytes,
         "manifest": widgets::manifest_json(m),
@@ -463,7 +513,9 @@ impl ZenFiles {
         }
         Ok(json!({
             "hash": st.hash(),
-            // The manifest is outside the bundle (name, caps, reasons, libs).
+            // The hash covers the manifest's run fields (caps, reads,
+            // sources, libs, entry, colorScheme; S0); name, description and
+            // reasons are carried here only.
             "manifest": st.manifest.as_ref().map(widgets::manifest_json),
             "state": st.state.as_str(),
             "errors": st.errors,

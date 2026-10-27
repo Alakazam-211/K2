@@ -210,6 +210,32 @@ pub fn vouch(
     Ok(StampOutcome::Stamped)
 }
 
+/// The one-time carry of 0.46.5 (S0, `zen::version_carry`): copy the
+/// stamp of `(widget, old)` to `(widget, new)`: same maker, caller kind and
+/// signing time, `source = import`. Nothing is written when `old` has no
+/// row or `new` already has one. Returns the copied maker, as stored (a
+/// gone workspace's stamp is copied too and reads `Unclaimed` as before).
+pub fn carry(conn: &Connection, widget: &str, old: &str, new: &str) -> Result<Option<MadeBy>, DataError> {
+    if is_builtin(widget) {
+        return Ok(None);
+    }
+    check_widget(widget)?;
+    check_hash(old)?;
+    check_hash(new)?;
+    if old == new || row_of(conn, widget, new)?.is_some() {
+        return Ok(None);
+    }
+    let Some(maker) = row_of(conn, widget, old)? else { return Ok(None) };
+    conn.execute(
+        "INSERT INTO zen_widget_authors (widget, hash, author_kind, author_project_id, source, caller_kind, signed_at)
+         SELECT widget, ?3, author_kind, author_project_id, 'import', caller_kind, signed_at
+           FROM zen_widget_authors WHERE widget = ?1 AND hash = ?2",
+        params![widget, old, new],
+    )?;
+    prune(conn, widget, new)?;
+    Ok(Some(maker))
+}
+
 /// When `(widget, hash)` was signed (Unix seconds), if it has a row.
 pub fn signed_at(conn: &Connection, widget: &str, hash: &str) -> Result<Option<i64>, DataError> {
     Ok(conn

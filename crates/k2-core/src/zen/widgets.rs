@@ -829,10 +829,34 @@ pub fn check_files(prefix: &str, folder: &str, files: &BTreeMap<String, Vec<u8>>
     c.errors.extend(out.errors);
     c.warnings.extend(out.warnings);
     if c.errors.is_empty() {
-        c.bundle = out.bundle;
+        // S0: the version is the document AND the manifest's run fields.
+        c.bundle = out.bundle.map(|b| b.bound(version_digest(&manifest)));
     }
     c.manifest = Some(manifest);
     c
+}
+
+/// The manifest's run fields as one canonical JSON text (0.46.5 S0, vs-live
+/// L1): what the version hash covers besides the document. `entry`,
+/// `caps` and `reads` (sorted: their order changes nothing), `sources`,
+/// `libs` **as written** (request strings and CDN `{url, integrity}`, in
+/// load order, never the resolved rows, so a K2 patch update inside a
+/// line never unsigns a widget) and `colorScheme`. `name`, `description`,
+/// `reasons` and `requires.features` stay out: wording edits don't unsign.
+pub fn version_digest(m: &Manifest) -> String {
+    let mut caps = m.caps.clone();
+    caps.sort();
+    let mut reads = m.reads.clone();
+    reads.sort();
+    super::defaults::canonical_json(&json!({
+        "v": 1,
+        "entry": m.entry,
+        "caps": caps,
+        "reads": reads,
+        "sources": m.sources.clone().unwrap_or(J::Null),
+        "libs": m.libs,
+        "colorScheme": m.color_scheme.as_deref().unwrap_or("garden"),
+    }))
 }
 
 /// The bytes of every code file (manifest, HTML, JS, CSS), for history.

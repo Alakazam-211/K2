@@ -1,7 +1,8 @@
 //! The signer gate (prd-garden-access-v1 §1.6, GA1, G15, G22; slice A3).
 //!
-//! **Only with the `gardenAccess` switch on** (`zen::garden_access::enabled`).
-//! Off, nothing here is consulted and every door behaves as 0.46.3.
+//! Garden access is always on in a running daemon (0.46.3,
+//! `zen::garden_access::enabled`); the switch survives only for unit tests
+//! of the retired path.
 //!
 //! A Garden sees everything the person sees (Rosson rev 4), so the one
 //! thing that decides whether a placement's code runs with the person's
@@ -15,6 +16,14 @@
 //!   on the next call);
 //! - anything else (unsigned, a raw disk edit, a reset to an unsigned
 //!   hash, an unlisted agent's stamp, a gone workspace's stamp) fails.
+//!
+//! "Its live version" is the bundle hash, and from 0.46.5 (S0) that hash
+//! covers the manifest's run fields too (`zen::widgets::version_digest`:
+//! caps, reads, sources, libraries as written, entry, colorScheme). So a
+//! raw disk edit of `manifest.json` alone (a cap, a neighbour read, a CDN
+//! file) is a new, unsigned version and fails here, exactly like an edit
+//! to the code; a locked Garden's frozen copy is re-checked against its
+//! saved manifest on every read (`zen::lock::frozen_widget`).
 //!
 //! A version that fails keeps **Always** only ([`ALWAYS_CAPS`]): its own
 //! `store:*` keyspace, `agents:read` and `presence:read`. Every other call

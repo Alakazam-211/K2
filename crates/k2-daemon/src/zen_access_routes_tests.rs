@@ -840,3 +840,78 @@ fn garden_and_widget_rows_carry_editors_and_signers_with_the_switch_on() {
     let (_, v) = zen("/cli/zen/widgets", true, &Caller::Owner, json!({}));
     assert!(v["widgets"][0].get("signedBy").is_none(), "{v}");
 }
+
+// ── 0.46.5 S0: the manifest is part of the signed version ────────────
+
+fn placed_b1(e: &Env) -> J {
+    let page = crate::zen_sync_routes::get(&e.f, Some(&e.g1), None, &k2_core::zen::widget_access::WidgetPauses::new()).expect("page");
+    find_placement(&page, "b1").unwrap_or_else(|| panic!("no b1 in {page}"))
+}
+
+/// vs-live L1: a manifest-only change (by a raw disk edit, or by a put
+/// from an agent that can't vouch) is a new version. It runs unsigned
+/// (Always caps only, `needs_editor` on every person door), its hash
+/// changes (the frame's key, so the frame reloads), and a frame still on
+/// the old version gets 409 `stale_widget`.
+#[test]
+fn a_manifest_only_change_is_a_new_unsigned_version_on_every_door() {
+    let e = env();
+    list(&e.g1, "w-ed");
+    stamp(&e, MadeBy::Agent { project_id: "w-ed".into() });
+    let before = placed_b1(&e);
+    assert_eq!(before["signed"], true, "{before}");
+    let (c, v) = call(&e, "viewer.get", json!([]));
+    assert_eq!(c, 200, "{v}");
+    let old_hash = before["hash"].as_str().expect("hash").to_string();
+
+    // A raw disk edit of manifest.json alone: one more cap, no code change.
+    std::fs::write(
+        e.f.widget_dir("board").join("manifest.json"),
+        manifest(&["store:read", "store:write", "thread:post", "files:read", "presence:read"]),
+    )
+    .expect("disk edit");
+    crate::zen_routes::refresh_and_emit().expect("refresh");
+    let after = placed_b1(&e);
+    assert_ne!(after["hash"], before["hash"], "the frame's key changes, so the frame reloads: {after}");
+    assert_eq!(after["signed"], false, "a manifest edit on disk isn't signed: {after}");
+    assert_eq!(after["caps"], json!(["store:read", "store:write", "presence:read"]), "Always only: {after}");
+    // The frame still on the old version: stale.
+    let body = json!({ "garden": e.g1, "placement": "b1", "hash": old_hash, "verb": "viewer.get", "args": [] });
+    let r = crate::zen_data_routes::handle(
+        "/cli/zen/call",
+        crate::zen_data_routes::DataWho::Owner,
+        body.to_string().as_bytes(),
+        &HashMap::new(),
+        APP,
+    );
+    assert!(r.status.starts_with("409"), "{}: {}", r.status, r.body);
+    // The new version acts as the person nowhere until someone signs it.
+    let (c, v) = call(&e, "viewer.get", json!([]));
+    assert_eq!((c, code(&v)), (403, "needs_editor"), "{v}");
+    // The listed editor signs it: back to full.
+    let (s, v) = zen("/cli/zen/widget/sign", false, &agent("w-ed"), json!({"widget": "board"}));
+    assert_eq!((s.as_str(), v["stamped"].as_bool()), ("200 OK", Some(true)), "{v}");
+    assert_eq!(placed_b1(&e)["signed"], true);
+
+    // A non-voucher's manifest-only put on a draft placed nowhere: it signs
+    // only for itself, so once the draft is placed in a Garden that agent
+    // isn't on, it runs unsigned.
+    e.f.new_widget("draft", Some("hello")).expect("draft");
+    crate::zen_routes::refresh_and_emit().expect("refresh");
+    let draft_manifest = "{\n  \"schema\": 1,\n  \"name\": \"Draft\",\n  \"caps\": [\"agents:read\", \"thread:post\"]\n}\n";
+    let (s, v) = zen(
+        "/cli/zen/widget/put",
+        false,
+        &agent("w-other"),
+        json!({"widget": "draft", "file": "manifest.json", "text": draft_manifest}),
+    );
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(maker(&e.f, "draft"), MadeBy::Agent { project_id: "w-other".into() }, "the new version is the putter's own stamp");
+    let page = format!("{PAGE}\n[[widget]]\nid = \"d1\"\nkind = \"custom\"\nwidget = \"draft\"\ncolumn = 0\n");
+    std::fs::write(e.f.path_of(&ZenFile::Garden(e.g1.clone())), page).expect("place the draft");
+    crate::zen_routes::refresh_and_emit().expect("refresh");
+    let g = crate::zen_sync_routes::get(&e.f, Some(&e.g1), None, &k2_core::zen::widget_access::WidgetPauses::new()).expect("page");
+    let d1 = find_placement(&g, "d1").unwrap_or_else(|| panic!("no d1 in {g}"));
+    assert_eq!(d1["signed"], false, "an unlisted agent's manifest put never signs for this Garden: {d1}");
+    assert_eq!(d1["caps"], json!(["agents:read"]), "{d1}");
+}

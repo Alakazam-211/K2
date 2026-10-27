@@ -16,8 +16,11 @@
 //! - `window.K2_ASSETS` (name → `data:` URL) is set by a nonced script
 //!   before the widget's first script, so `k2.asset("cat.png")` works.
 //!
-//! The bundle hash is the sha256 of the document with every nonce empty,
-//! so it is stable across responses. HTML is read with html5ever's
+//! The bundle hash is the widget's **version**: the sha256 of the document
+//! with every nonce empty, a 0 byte, and the manifest's run fields
+//! ([`Bundle::bound`], `widgets::version_digest`; 0.46.5 S0). It is stable
+//! across responses, and a manifest-only change (caps, reads, sources,
+//! libraries) is a new version, as a code change is. HTML is read with html5ever's
 //! tokenizer (the copy `feedback_brief` uses) and written back token by
 //! token; comments are dropped.
 //!
@@ -83,16 +86,51 @@ pub fn sniff_asset(b: &[u8]) -> Option<&'static str> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bundle {
     parts: Vec<String>,
-    /// sha256 (hex) of the document with every nonce empty.
+    /// The version hash (hex): [`version_hash`] of the nonce-free document
+    /// and [`Bundle::digest`]. The signer gate, the data door's stale
+    /// check, the frame key, runs and history all key on it.
     pub hash: String,
-    /// HTML + JS + CSS bytes inlined (UW8's 512 KB limit; 256 KB before 0.46.4).
+    /// HTML + JS + CSS bytes inlined (UW8: warn above 512 KB, limit 1 MB).
     pub code_bytes: usize,
+    /// The manifest's run fields in canonical JSON (`widgets::version_digest`);
+    /// empty for a bundle the bundler made and nobody bound yet.
+    digest: String,
+}
+
+/// The version hash of a nonce-free document and a manifest digest:
+/// `sha256(template ‖ 0x00 ‖ digest)` (0.46.5 S0, vs-live L1).
+pub fn version_hash(template: &str, digest: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(template.as_bytes());
+    h.update([0u8]);
+    h.update(digest.as_bytes());
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl Bundle {
-    fn new(parts: Vec<String>, code_bytes: usize) -> Self {
-        let hash = sha256_hex(parts.concat().as_bytes());
-        Self { parts, hash, code_bytes }
+    fn new(parts: Vec<String>, code_bytes: usize, digest: String) -> Self {
+        let hash = version_hash(&parts.concat(), &digest);
+        Self { parts, hash, code_bytes, digest }
+    }
+
+    /// This document bound to a manifest digest: the hash becomes the
+    /// version of both (`widgets::check_files` binds every bundle it
+    /// returns).
+    pub fn bound(self, digest: String) -> Self {
+        Self::new(self.parts, self.code_bytes, digest)
+    }
+
+    /// The manifest digest this version is bound to.
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    /// The hash K2 before 0.46.5 gave this document: the sha256 of the
+    /// nonce-free document alone. Only the one-time carry of old
+    /// signatures (`zen::version_carry`) and `last-good.json`'s downgrade
+    /// field read it.
+    pub fn template_hash(&self) -> String {
+        sha256_hex(self.template().as_bytes())
     }
 
     /// The document with `nonce` in every script's `nonce` attribute.
@@ -123,9 +161,10 @@ impl Bundle {
         self.parts.iter().map(String::len).sum()
     }
 
-    /// Rebuild from a stored template and its nonce offsets. `None` when an
-    /// offset is out of order, past the end, or not on a char boundary.
-    pub fn from_template(html: &str, offsets: &[usize], code_bytes: usize) -> Option<Self> {
+    /// Rebuild from a stored template, its nonce offsets and the manifest
+    /// digest it is bound to. `None` when an offset is out of order, past
+    /// the end, or not on a char boundary.
+    pub fn from_template(html: &str, offsets: &[usize], code_bytes: usize, digest: String) -> Option<Self> {
         let mut parts = Vec::with_capacity(offsets.len() + 1);
         let mut prev = 0;
         for &o in offsets {
@@ -136,7 +175,7 @@ impl Bundle {
             prev = o;
         }
         parts.push(html[prev..].to_string());
-        Some(Self::new(parts, code_bytes))
+        Some(Self::new(parts, code_bytes, digest))
     }
 }
 
@@ -835,7 +874,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
             ),
         });
     }
-    let bundle = Bundle::new(doc.finish(), cx.code_bytes);
+    let bundle = Bundle::new(doc.finish(), cx.code_bytes, String::new());
     if bundle.bytes() > MAX_BUNDLE_BYTES {
         cx.errors.push(Diagnostic {
             suggestion: None,
@@ -955,10 +994,20 @@ mod tests {
         assert!(html.contains("<p>1 &lt; 2</p>"));
         assert!(!html.contains("gone"), "comments are dropped");
         assert_eq!(b.render("x").len(), b.template().len() + 3, "three one-byte nonces");
-        assert_eq!(b.hash, sha256_hex(b.template().as_bytes()));
+        assert_eq!(b.hash, version_hash(&b.template(), ""), "unbound: the template and an empty digest");
+        assert_eq!(b.template_hash(), sha256_hex(b.template().as_bytes()));
         assert_eq!(b.render("A") != b.render("B"), true);
-        let again = Bundle::from_template(&b.template(), &b.nonce_offsets(), b.code_bytes).expect("rebuild");
+        let again = Bundle::from_template(&b.template(), &b.nonce_offsets(), b.code_bytes, String::new()).expect("rebuild");
         assert_eq!(again, b);
+        // S0: binding a manifest digest changes the version, never the document.
+        let bound = b.clone().bound("{\"caps\":[]}".into());
+        assert_ne!(bound.hash, b.hash);
+        assert_eq!(bound.template(), b.template());
+        assert_eq!(bound.hash, version_hash(&b.template(), "{\"caps\":[]}"));
+        let rebuilt =
+            Bundle::from_template(&bound.template(), &bound.nonce_offsets(), bound.code_bytes, bound.digest().to_string())
+                .expect("rebuild bound");
+        assert_eq!(rebuilt, bound);
     }
 
     #[test]

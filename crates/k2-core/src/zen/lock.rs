@@ -340,12 +340,42 @@ impl ZenFiles {
 
     /// A locked Garden's frozen copy of widget folder `widget` (`None` for
     /// an unlocked Garden, a built-in, or a widget it didn't freeze).
+    ///
+    /// The copy is checked every time it is read (0.46.5 S0): its version
+    /// is recomputed from the saved document AND the saved manifest. A copy
+    /// that doesn't check out (an edit on disk to its caps, reads or
+    /// libraries, say) is `broken` here: the Garden doesn't run it, and
+    /// doesn't fall back to the live folder either.
     pub fn frozen_widget(&self, garden: &str, widget: &str) -> Option<WidgetStatus> {
         let Ok(WidgetRef::User(name)) = parse_widget_ref(widget) else { return None };
         if !self.is_locked(garden) {
             return None;
         }
-        let (m, b, at) = read_saved_bundle(&self.lock_dir(garden).join(LOCKED_WIDGETS_DIR).join(&name))?;
+        let dir = self.lock_dir(garden).join(LOCKED_WIDGETS_DIR).join(&name);
+        let Some((m, b, at)) = read_saved_bundle(&dir) else {
+            if !dir.join(super::widget_store::LAST_GOOD_JSON).exists() {
+                return None;
+            }
+            return Some(WidgetStatus {
+                widget: widget.to_string(),
+                exists: true,
+                builtin: false,
+                manifest: None,
+                bundle: None,
+                state: WidgetState::Broken,
+                errors: vec![super::schema::Diagnostic {
+                    suggestion: Some("the person unlocks the Garden and locks it again to freeze the folder's current version".into()),
+                    file: super::widget_store::widget_label(&name),
+                    line: 1,
+                    col: 1,
+                    message: format!(
+                        "this Garden's locked copy of {name} was changed on disk, so it doesn't run; unlock the Garden and lock it again"
+                    ),
+                }],
+                warnings: Vec::new(),
+                last_good_at: None,
+            });
+        };
         Some(WidgetStatus {
             widget: widget.to_string(),
             exists: true,

@@ -1557,6 +1557,14 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // Rosson 2026-10-26): `projects.agents_can_manage_app_users`, DEFAULT
         // 0. Additive. 0224 is reserved for compute rollouts.
         ("0225_app_users_switch", include_str!("../../drizzle_sql/0225_app_users_switch.sql")),
+        // 0231 — the manifest is part of a widget's version
+        // (prd-widget-size-and-shared-libs-v1 vs-live L1, S0; 0.46.5): two
+        // additive tables, `zen_version_carry_runs` (one row: the one-time
+        // carry of old signatures to the new hashes ran) and
+        // `zen_version_carry` (what it carried, and how each live manifest
+        // differs from the signed one). 0226–0230 are taken by other
+        // 0.46.5 work. The pass is `crate::zen::version_carry`.
+        ("0231_zen_version_carry", include_str!("../../drizzle_sql/0231_zen_version_carry.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2220,7 +2228,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0225_app_users_switch",
+            last_name, "0231_zen_version_carry",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2290,6 +2298,8 @@ mod tests {
                 "0222_pg_dual_runs",
                 // 0.46.4: "Let this agent manage its Apps' users".
                 "0225_app_users_switch",
+                // 0.46.5: the manifest is part of a widget's version (S0).
+                "0231_zen_version_carry",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2367,6 +2377,8 @@ mod tests {
                 "0222_pg_dual_runs",
                 // 0.46.4: "Let this agent manage its Apps' users".
                 "0225_app_users_switch",
+                // 0.46.5: the manifest is part of a widget's version (S0).
+                "0231_zen_version_carry",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2594,11 +2606,11 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let last: String = conn
-            .query_row("SELECT name FROM _migrations WHERE name != '0225_app_users_switch' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
+            .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(last, "0222_pg_dual_runs", "0222 runs last of the 0.46.3 tail (then 0225)");
+        assert_eq!(last, "0222_pg_dual_runs", "0222 runs last of the 0.46.3 tail (then 0225 and 0231)");
         let before_last: String = conn
-            .query_row("SELECT name FROM _migrations WHERE name != '0225_app_users_switch' ORDER BY id DESC LIMIT 1 OFFSET 1", [], |r| r.get(0))
+            .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1 OFFSET 1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(before_last, "0223_folder_trust", "0223 runs after 0217, before 0222");
         let tail: Vec<String> = {
@@ -2607,7 +2619,15 @@ mod tests {
         };
         assert_eq!(
             tail,
-            vec!["0220_jobs", "0221_app_rehost", "0217_app_resource_samples", "0223_folder_trust", "0222_pg_dual_runs", "0225_app_users_switch"],
+            vec![
+                "0220_jobs",
+                "0221_app_rehost",
+                "0217_app_resource_samples",
+                "0223_folder_trust",
+                "0222_pg_dual_runs",
+                "0225_app_users_switch",
+                "0231_zen_version_carry"
+            ],
             "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, then 0222)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
@@ -3345,7 +3365,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0225 (the App users switch, 0.46.4) is the newest: its column
+            // 0231 (the widget version carry, 0.46.5) is the newest: its
+            // record goes (its tables and index are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0231_zen_version_carry'", []).unwrap();
+            // 0225 (the App users switch, 0.46.4) came before it: its column
             // and record go.
             conn.execute_batch("ALTER TABLE projects DROP COLUMN agents_can_manage_app_users;").unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0225_app_users_switch'", []).unwrap();

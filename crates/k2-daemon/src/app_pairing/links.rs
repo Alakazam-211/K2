@@ -249,9 +249,12 @@ fn nonce() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Every pairing link file and the landing page refuse every frame
+/// (`X-Frame-Options: DENY`, stricter than the daemon's SAMEORIGIN; the
+/// frame-header walk reads it here).
 fn response(head_only: bool, ct: &str, extra: &str, body: &str) -> Vec<u8> {
     let mut out = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\n{extra}Connection: close\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n{extra}Connection: close\r\n\r\n",
         body.len()
     )
     .into_bytes();
@@ -291,14 +294,14 @@ fn answer_on(box_on: bool, app_id: &str, method: &str, path_and_query: &str, hos
         return None;
     }
     let path = path_and_query.split('?').next().unwrap_or(path_and_query);
-    let static_headers = "Cache-Control: public, max-age=300\r\nX-Frame-Options: DENY\r\n";
+    let static_headers = "Cache-Control: public, max-age=300\r\n";
     Some(match path {
         AASA if !l.ios.is_empty() => response(head_only, "application/json", static_headers, &aasa_body(&l)),
         ASSETLINKS if !l.android.is_empty() => response(head_only, "application/json", static_headers, &assetlinks_body(&l)),
         PAIR_PATH => {
             let n = nonce();
             let extra = format!(
-                "Content-Security-Policy: {}\r\nReferrer-Policy: no-referrer\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\n",
+                "Content-Security-Policy: {}\r\nReferrer-Policy: no-referrer\r\nCache-Control: no-store\r\n",
                 page_csp(&n)
             );
             response(head_only, "text/html; charset=utf-8", &extra, &page_html(&l, &n))

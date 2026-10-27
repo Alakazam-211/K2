@@ -215,7 +215,7 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// a widget with thread:read + activity:read the App guest's Thread turn
 /// (counts and step kinds, never text); `activity:read` is a bridge cap; the
 /// `k2-activity@1` library draws K2's activity bar. Never infer activity
-/// from messages. (Integrator: renumber if another held branch took 44.)
+/// from messages.
 pub const SKILL_VERSION_ZEN: u32 = 44;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow

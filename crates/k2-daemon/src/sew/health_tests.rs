@@ -31,7 +31,9 @@ fn reasons_since_and_unknowns() {
     let up = parse(Ok((503, json!({"ok": false, "error": {"code": "not_ready", "hint": "upgrading"}, "ready": false, "reason": "upgrading", "since": "2026-10-27T10:00:00Z"}))));
     assert_eq!((up.ready, up.reason.as_deref(), up.since.clone()), (false, Some("upgrading"), Some(json!("2026-10-27T10:00:00Z"))));
     assert!(up.waits(), "K2 waits on upgrading");
-    let stop = parse(Ok((503, json!({"ok": false, "error": {"code": "not_ready"}, "ready": false, "reason": "stopping"}))));
+    // Sew's exact body (2026-10-27).
+    let stop = parse(Ok((503, json!({"ok": false, "ready": false, "reason": "stopping", "error": {"code": "unavailable", "hint": "draining", "details": {"reason": "stopping"}}}))));
+    assert_eq!(stop.detail.as_deref(), Some("draining"));
     assert_eq!((stop.reason.as_deref(), stop.since.clone()), (Some("stopping"), None), "stopping has no since");
     assert!(!stop.waits(), "K2 never waits on stopping");
     for r in ["db", "migrations", "cosmic_rays"] {

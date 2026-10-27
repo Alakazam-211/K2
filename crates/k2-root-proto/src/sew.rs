@@ -525,29 +525,97 @@ pub const SEW_RELEASES: &[SewRelease] = &[
             ],
         }),
     },
-    // ┌─ SLOT: Sew 0.3.1 pin (K2 0.46.6) ─────────────────────────────────┐
-    // │ Waiting on Sew's REL-031 tarballs (version + sha256 per tarball). │
-    // │ Do NOT add a placeholder entry here: the LAST entry is the pin,  │
-    // │ and a placeholder pin turns every install path off               │
-    // │ (`sew_release_pinned()` = false → `sew_not_released`).            │
-    // │ When the values arrive:                                           │
-    // │  1. Print the entry with `scripts/sew-pins-from-release.sh <dir>` │
-    // │     from the release's release.json + SHA256SUMS (it checks every │
-    // │     tarball and binary member) and paste it here as             │
-    // │     `SewRelease { version: "0.3.1", … }` (core + media +        │
-    // │     transcriber + recorder, aarch64 + x86_64), and add a        │
-    // │     `- 0.3.1:` line to the doc comment above (tag, SHA256SUMS and │
-    // │     release.json sha256s, schema max).                           │
-    // │  2. SEW_PG_MAJOR stays 16 unless Sew 0.3.1 says otherwise.       │
-    // │  3. 0.3.0 → 0.3.1 runs `engine sew install reconfigure`           │
-    // │     (SEW_RECONFIGURE_BELOW = "0.3.1"; root-helper protocol 11).  │
-    // │  4. Re-vendor sew-proto/sew-client at the 0.3.1 tag if Sew cut  │
-    // │     vendoring tarballs (third_party/SEW-VENDOR.txt; its drift    │
-    // │     test lists every file's sha256).                             │
-    // │  5. The helper's sewPin must match the daemon's: the pin bump    │
-    // │     ships helper + daemon together (helper_outdated otherwise).  │
-    // └────────────────────────────────────────────────────────────────────┘
+    // Sew 0.3.1 is NOT appended here yet: it becomes the pin (the last
+    // entry) only once Sew publishes it on sew-releases (waiting on Rosson's
+    // yes) AND its sidecars' binary sha256s are filled. Until then it lives
+    // in [`SEW_0_3_1_PENDING`]; to land it, move that entry here (last) and
+    // add a `- 0.3.1:` line to the doc comment above.
 ];
+
+/// Sew 0.3.1 (tag v0.3.1 = `f45759535532f59e4755a478554ff1c1963a19f0`,
+/// schema max 930003 as 0.3.0; SHA256SUMS sha256 `c7e82dc1…2bba`,
+/// release.json `8789dc47…582f`), sent by Sew 2026-10-27. **Pending, not
+/// the pin**: it is not in [`SEW_RELEASES`] until Sew publishes it on
+/// sew-releases (Rosson's yes) — a release build keeps installing 0.3.0.
+/// Sew tested 0.3.0 → 0.3.1 with rollback, re-upgrade and `sew install
+/// --reconfigure`; 0.2.1 → 0.3.1 via `--tarball`; 0.1.2 → 0.3.1 via
+/// `--binary --sha256` (the helper's form).
+///
+/// **Gap:** Sew's message carried the sidecars' TARBALL sha256s only; K2's
+/// table also pins each sidecar's binary member (the helper verifies it at
+/// stage). Those are marked `PENDING-…` (never hex, so
+/// [`checksum_is_placeholder`] is true and nothing can install from them):
+/// fill them from release.json (`scripts/sew-pins-from-release.sh <dir>`
+/// prints the whole entry) before moving this into [`SEW_RELEASES`]. The
+/// sidecar versions are assumed to be 0.3.1 (Sew didn't say).
+pub const SEW_0_3_1_PENDING: SewRelease = SewRelease {
+    version: "0.3.1",
+    artifacts: &[
+        SewArtifact {
+            arch: "aarch64",
+            triple: "aarch64-unknown-linux-gnu",
+            tarball_sha256: "88e3e5ea39add6f2e53f136de407ca5e3aae3ce672a3cabb181d989656a3584c",
+            binary_sha256: "53d66e9d38a582a8721302832d6abf43aee2d6d82e6c172fb162ddd8cda1b2fa",
+        },
+        SewArtifact {
+            arch: "x86_64",
+            triple: "x86_64-unknown-linux-gnu",
+            tarball_sha256: "db9f8b783449023fc4f4bc98257354afde95c57dae9222d413c1729cfbc39ae1",
+            binary_sha256: "60a6b5a233aca211f1cafb382468bbb26c937de6170e72bcbe7c91f7b7dc102b",
+        },
+    ],
+    media: Some(SewSidecar {
+        version: "0.3.1",
+        artifacts: &[
+            SewArtifact {
+                arch: "aarch64",
+                triple: "aarch64-unknown-linux-gnu",
+                tarball_sha256: "fdf984f8b3d701f3f11b6256dd7c96d4255214d73d892d942cfbc666e472d630",
+                binary_sha256: "PENDING-sew-media-0.3.1-aarch64-binary-sha256",
+            },
+            SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "24d97dbe93a190d9e17497cbc4ba5ac396c03792e147cadfddc444c281c47ab9",
+                binary_sha256: "PENDING-sew-media-0.3.1-x86_64-binary-sha256",
+            },
+        ],
+    }),
+    transcriber: Some(SewSidecar {
+        version: "0.3.1",
+        artifacts: &[
+            SewArtifact {
+                arch: "aarch64",
+                triple: "aarch64-unknown-linux-gnu",
+                tarball_sha256: "e451f6bb76be98dca87ad64624aea577d871ad06dac6c6913a6a7302f442edf4",
+                binary_sha256: "PENDING-sew-transcriber-0.3.1-aarch64-binary-sha256",
+            },
+            SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "97ffd5e7d107ad548420355ebb7d55f59c3e2db598cbf225380717db6499647f",
+                binary_sha256: "PENDING-sew-transcriber-0.3.1-x86_64-binary-sha256",
+            },
+        ],
+    }),
+    recorder: Some(SewSidecar {
+        version: "0.3.1",
+        artifacts: &[
+            SewArtifact {
+                arch: "aarch64",
+                triple: "aarch64-unknown-linux-gnu",
+                tarball_sha256: "74d5b6ae63b58c5a27279fb811c4e959d23f74bdd2fa7c8b551d746cd27ed01e",
+                binary_sha256: "PENDING-sew-recorder-0.3.1-aarch64-binary-sha256",
+            },
+            SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "e9af0ca85919881ab1abeb04da901c3bfbea39057f931a12bef73dff008881e0",
+                binary_sha256: "PENDING-sew-recorder-0.3.1-x86_64-binary-sha256",
+            },
+        ],
+    }),
+};
 
 /// K2's fixture releases (`testdata/sew/*.tar.gz`, made by a deterministic
 /// script: gzip mtime 0, ustar, root-owned members). The `sew` member is a
@@ -1456,6 +1524,28 @@ mod tests {
     fn all_artifacts(r: &SewRelease) -> Vec<&SewArtifact> {
         let side = [&r.media, &r.transcriber, &r.recorder];
         r.artifacts.iter().chain(side.into_iter().flatten().flat_map(|s| s.artifacts)).collect()
+    }
+
+    /// Sew 0.3.1 waits outside the table: 0.3.0 stays the pin until Sew
+    /// publishes 0.3.1 (Rosson's yes) and its sidecar binary sha256s are in.
+    /// When it moves into SEW_RELEASES this test is the reminder to delete it.
+    #[test]
+    fn sew_0_3_1_is_pending_not_the_pin() {
+        assert!(SEW_RELEASES.iter().all(|r| r.version != "0.3.1"), "0.3.1 is pending (not published)");
+        assert_eq!(SEW_RELEASES.last().unwrap().version, "0.3.0");
+        let p = &SEW_0_3_1_PENDING;
+        assert_eq!(p.version, "0.3.1");
+        assert!(p.artifacts.iter().all(|a| !checksum_is_placeholder(a)), "the core artifacts are real");
+        let side: Vec<&SewArtifact> = all_artifacts(p).into_iter().skip(p.artifacts.len()).collect();
+        assert_eq!(side.len(), 6, "media, transcriber, recorder × 2 arches");
+        assert!(side.iter().all(|a| hex64(a.tarball_sha256)), "sidecar tarballs are pinned");
+        assert!(side.iter().all(|a| a.binary_sha256.starts_with("PENDING-")), "sidecar binaries still to fill");
+        // No hash is shared with an earlier release (a copy-paste guard).
+        let older: Vec<&str> = SEW_RELEASES.iter().flat_map(|r| all_artifacts(r)).flat_map(|a| [a.tarball_sha256, a.binary_sha256]).collect();
+        for a in all_artifacts(p) {
+            assert!(!older.contains(&a.tarball_sha256), "{}", a.tarball_sha256);
+        }
+        assert_eq!(SEW_RECONFIGURE_BELOW, p.version, "0.3.0 → 0.3.1 reconfigures");
     }
 
     /// item 12: sewlab's 0.1.2 test build is an upgrade source only. It is

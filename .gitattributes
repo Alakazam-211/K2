@@ -1,0 +1,8 @@
+# Every text file checks out with LF on every OS. A default Git for Windows
+# clone has core.autocrlf=true and would otherwise hand CRLF to include_str!
+# templates, goldens, shell scripts run by Git Bash and the vitest fixtures.
+* text=auto eol=lf
+
+# Vendored Zen libraries keep their exact upstream bytes (seven LICENSE.txt
+# files there mix CRLF and LF).
+src/renderer/zen-lib/** -text

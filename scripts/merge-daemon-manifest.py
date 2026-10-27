@@ -4,13 +4,13 @@
 Usage: merge-daemon-manifest.py <manifest.json> <release-download-base> <asset-dir>
 
 Run on z3mbpZ by scripts/sign-daemon.sh after it signs the Linux daemons
-(0.46.4, SS1; CI's merge job is gone), for GitHub and K2 Compute builds
+(0.46.5, SS1; CI's merge job is gone), for GitHub and K2 Compute builds
 alike: keep one copy of these rules. Idempotent: re-runs overwrite the same
 keys.
 
 - `linux-<arch>`: k2-daemon-linux-<arch> (url, sig, sha256), as before,
   plus `sig2` (prd-security-sweep-0464-v1 SS4): the URL of the `.sig2`
-  made with the K2 update key U2, the only signature 0.46.4+ installs
+  made with the K2 update key U2, the only signature 0.46.5+ installs
   accept. `sig` (the retired key U1) stays for older installs; their parsers
   ignore the new field (tests/packaging/daemon-manifest.sh).
 - `k2-app-engine-linux-<arch>` (prd-app-runtime-update-continuity-v1 A1,

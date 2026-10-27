@@ -48,7 +48,7 @@ echo "Signing $(basename "$SETUP") for updater..."
 # Base64-wrapped minisig (b64), as the tauri signer wrote it and the Tauri
 # updater reads it; trusted comment file:setup.exe as before.
 k2u_sign u1 "$STAGE/setup.exe" setup.exe "$VERSION" "$STAGE/setup.exe.sig" b64
-# U2 (SS4/SS5): `k2_signatures`, the only signature 0.46.4+ apps read. The
+# U2 (SS4/SS5): `k2_signatures`, the only signature 0.46.5+ apps read. The
 # asset name is the URL's file name (what the app checks).
 WIN_ASSET="K2_${VERSION}_x64-setup.exe"
 k2u_sign u2 "$STAGE/setup.exe" "$WIN_ASSET" "$VERSION" "$STAGE/setup.exe.sig2" raw

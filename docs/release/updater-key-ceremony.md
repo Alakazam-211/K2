@@ -4,26 +4,29 @@ Runbook for the planned rotation of K2's update-signing key
 (prd-security-sweep-0464-v1, SS4/SS5, option C "dual-sign bridge").
 Rosson runs it **once**, on **z3mbpZ**, in a **GUI terminal** (iTerm or
 Terminal, not SSH). It takes about 15 minutes, and it must be done before
-0.46.4 can be released: `release.sh` refuses to start while the new key is
+0.46.5 can be released: `release.sh` refuses to start while the new key is
 missing.
 
 ## What changes
 
 | Key | What it is | Where it lives | Who trusts it |
 |---|---|---|---|
-| **U1** `E9111446F65EBB05` | today's key, now retired | `~/.k2-updater/k2-updater-u1.key` on z3mbpZ, password in the keychain (`k2-updater-signing-u1`) | installs **older than 0.46.4** only |
-| **U2** (new) | the new primary | `~/.k2-updater/k2-updater-u2.key` on z3mbpZ, password in the keychain (`k2-updater-signing-u2`) | **0.46.4 and newer** |
-| **U3** (new) | the offline backup | your password manager only, never on a box | **0.46.4 and newer** (if U2 is ever lost) |
+| **U1** `E9111446F65EBB05` | today's key, now retired | `~/.k2-updater/k2-updater-u1.key` on z3mbpZ, password in the keychain (`k2-updater-signing-u1`) | installs **older than 0.46.5** only |
+| **U2** (new) | the new primary | `~/.k2-updater/k2-updater-u2.key` on z3mbpZ, password in the keychain (`k2-updater-signing-u2`) | **0.46.5 and newer** |
+| **U3** (new) | the offline backup | your password manager only, never on a box | **0.46.5 and newer** (if U2 is ever lost) |
 
-From 0.46.4 every release is signed with **both** U1 and U2:
+v0.46.4 shipped signed with U1 only (this work slipped from 0.46.4), so
+0.46.5 is the first release the new keys sign.
+
+From 0.46.5 every release is signed with **both** U1 and U2:
 - old installs read the old fields (`signature` in `latest.json`, the daemon
   `.sig`) and keep updating;
 - new installs read only the new fields (`k2_signatures`, the daemon
   `.sig2`) and trust only U2/U3.
 
-So a stolen U1 can't make 0.46.4+ installs accept anything. The bridge (U1
-signatures) ends in SS6, once K2 Web confirms the whole fleet is on 0.46.4 or
-newer and at least 6 weeks after 0.46.4 shipped. That end is not part of this
+So a stolen U1 can't make 0.46.5+ installs accept anything. The bridge (U1
+signatures) ends in SS6, once K2 Web confirms the whole fleet is on 0.46.5 or
+newer and at least 6 weeks after 0.46.5 shipped. That end is not part of this
 runbook.
 
 ## Why the keychain and not the K2 vault (yet)
@@ -111,7 +114,7 @@ bash scripts/updater-key-ceremony.sh pubkeys <U2 line> <U3 line>
 This writes them into every verifier copy (`crates/k2-release-keys/src/lib.rs`,
 `cli/k2`, `scripts/install-daemon.sh`, `src-tauri/tauri.conf.json`); the
 `k2-release-keys` copies test checks they agree (release.sh Step 0.45 runs
-it). K2 lands the keys together with the SS4/SS5 code, before the 0.46.4 tag:
+it). K2 lands the keys together with the SS4/SS5 code, before the 0.46.5 tag:
 this branch never lands on main without them, because a main build installed
 before the keys exist could never self-update.
 
@@ -120,7 +123,7 @@ before the keys exist could never self-update.
 After the public keys have landed (on this branch, or on main once it merges):
 
 ```sh
-bash scripts/sign-daemon.sh --preflight 0.46.4
+bash scripts/sign-daemon.sh --preflight 0.46.5
 ```
 
 It checks both key files (0600 in a 0700 folder), both keychain items, a
@@ -169,7 +172,7 @@ gh secret delete TAURI_SIGNING_PRIVATE_KEY_PASSWORD -R Alakazam-211/K2
 (or Settings → Secrets and variables → Actions). The preflight fails while
 they exist, unless `K2_ALLOW_GH_SIGNING_SECRETS=1`.
 
-### 6. After the first green 0.46.4 release
+### 6. After the first green 0.46.5 release
 
 ```sh
 rm ~/.tauri/k2-updater.key ~/.tauri/k2so-updater.key
@@ -188,9 +191,9 @@ rm ~/.tauri/k2-updater.key ~/.tauri/k2so-updater.key
 - **U2 stolen:** an emergency release signed with U3 that drops U2 from
   `UPDATER_KEYS`, plus a new backup.
 
-## Next: two independent builds (0.46.5, owner: K2)
+## Next: two independent builds (after 0.46.5, owner: K2)
 
-0.46.4 signs a Linux daemon only when GitHub's build-provenance attestation
+0.46.5 signs a Linux daemon only when GitHub's build-provenance attestation
 has the exact certificate identity of `daemon-binaries.yml` at
 `refs/tags/v<x>` and its source commit is the commit of the LOCAL tag (the
 checkout the Mac build came from), with GitHub's tag pointing at that same
@@ -204,10 +207,10 @@ Compute (different machines, different owners), and sign only when the two
 hashes match. That needs reproducible builds: a pinned rustc, `--remap-path-prefix`,
 no timestamps or absolute paths in the binary (plan-ci-release-on-k2-compute
 G12; the shadow report already compares the two). Owner: K2 (this
-workspace), for 0.46.5. Until then the residual risk is written down in the
+workspace), after 0.46.5. Until then the residual risk is written down in the
 SS1 threat notes.
 
-## Threat notes (what 0.46.4 does and doesn't stop)
+## Threat notes (what 0.46.5 does and doesn't stop)
 
 - **Key theft from GitHub (SS1):** stopped. No signing key on GitHub; the
   runner builds unsigned and z3mbpZ signs.
@@ -220,17 +223,17 @@ SS1 threat notes.
   are belts only: any workflow token uploads as `github-actions[bot]`, and
   GitHub never lists two assets with one name, so they prove little.
 - **A poisoned build on the self-hosted runner:** NOT stopped. Next step:
-  two independent builds (above), 0.46.5.
-- **Same-user read on z3mbpZ:** NOT stopped, accepted for 0.46.4 pending
+  two independent builds (above), after 0.46.5.
+- **Same-user read on z3mbpZ:** NOT stopped, accepted for 0.46.5 pending
   Rosson's OK. Any process running as Rosson's macOS user (a build script, a
   package, an agent) can read `~/.k2-updater/*.key` and ask the unlocked
   login keychain for the passwords, exactly like the root-helper key today.
   The release run itself never puts the keys in an environment or on argv.
   Real fix: SS2b, a separate `k2sign` macOS user that holds the keys and
-  only signs (0.46.5).
-- **A stolen U1:** can't make 0.46.4+ installs accept anything (they trust
-  only U2/U3). It still works on installs that never updated past 0.46.3,
+  only signs (prd-signing-user-v1; not on this branch).
+- **A stolen U1:** can't make 0.46.5+ installs accept anything (they trust
+  only U2/U3). It still works on installs that never updated past 0.46.4,
   until the bridge ends (SS6).
-- **Rollback:** a 0.46.4+ daemon refuses an older or the same version unless
+- **Rollback:** a 0.46.5+ daemon refuses an older or the same version unless
   the owner asks for it (`allowDowngrade` / `reinstall`).
 - **Linux packages (deb/rpm/AppImage):** still HTTPS + sha256 only, until SS7.

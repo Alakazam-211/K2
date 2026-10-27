@@ -10,7 +10,7 @@
 # Trigger: a pushed release tag (v<x.y.z>). The matrix builds
 # x86_64-unknown-linux-gnu (native) and aarch64-unknown-linux-gnu (via the
 # gnu cross toolchain) and uploads k2-daemon-linux-<arch> + its .sha256
-# UNSIGNED (prd-security-sweep-0464-v1 SS1, 0.46.4). The update key is not
+# UNSIGNED (prd-security-sweep-0464-v1 SS1, 0.46.5). The update key is not
 # a GitHub secret any more: z3mbpZ signs the daemons with
 # scripts/sign-daemon.sh (release.sh Step 10.5), uploads the .sig files and
 # then merges them into daemon-latest.json, so the manifest never lists a

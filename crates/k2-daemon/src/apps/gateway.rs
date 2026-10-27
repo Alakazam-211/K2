@@ -1100,7 +1100,10 @@ mod tests {
             assert!(!host_is_loopback(bad), "{bad}");
         }
         assert!(route_allowed("GET", "/cli/thread", "", false));
-        assert!(!route_allowed("POST", "/cli/skin/password/change", "", false), "helper-only");
+        // app-user-profile (0.46.5): password.change also rides the link (the
+        // App's server, for the person); a wallet row is still helper-only.
+        assert!(route_allowed("POST", "/cli/skin/password/change", "", false), "password.change on the link");
+        assert!(!route_allowed("POST", "/cli/skin/wallet/add", "", false), "helper-only");
         assert!(!route_allowed("GET", "/cli/app/deploy", "", false));
         assert!(route_allowed("GET", "/cli/overlay/events", "conversation=c", true));
         assert!(!route_allowed("GET", "/cli/overlay/events", "conversation=", true), "the socket's parameter");

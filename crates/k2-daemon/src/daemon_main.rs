@@ -596,14 +596,14 @@ async fn async_main() {
 
     log_debug!("[daemon] {}", BANNER);
 
-    let k2so_dir = match k2_core::paths::home_dir() {
+    let k2_dir = match k2_core::paths::home_dir() {
         Some(h) => h.join(".k2"),
         None => {
             log_debug!("[daemon] FATAL: cannot determine home directory");
             std::process::exit(2);
         }
     };
-    if let Err(e) = fs::create_dir_all(&k2so_dir) {
+    if let Err(e) = fs::create_dir_all(&k2_dir) {
         log_debug!("[daemon] FATAL: create ~/.k2: {e}");
         std::process::exit(2);
     }
@@ -626,7 +626,7 @@ async fn async_main() {
     // Stage B (0.46.6): a hand-off successor must not rename the DB — the
     // predecessor keeps its connection open (query_only) while it drains.
     let handed_off = inherited_lock.is_some();
-    if let Err(e) = acquire_daemon_singleton(&k2so_dir, inherited_lock) {
+    if let Err(e) = acquire_daemon_singleton(&k2_dir, inherited_lock) {
         eprintln!("[daemon] FATAL: {e}");
         // Windows: the keep-alive supervisor waits on another daemon
         // instead of starting this one again at once.
@@ -763,8 +763,8 @@ async fn async_main() {
     // here — the serve path, after the single-instance lock, before any
     // route serves — and bind ~/.k2/vault.sock (the person channel, VS2).
     // A vault that can't open leaves the daemon running; status says why.
-    crate::vault::boot(&k2so_dir);
-    crate::vault::human::serve(&k2so_dir);
+    crate::vault::boot(&k2_dir);
+    crate::vault::human::serve(&k2_dir);
     // Clone slice A × B (CL18): a pending imported Thread settling onto
     // the clone's pin posts the clone's deferred "Leave blank" cards.
     crate::clone_vault::install_settle_listener();
@@ -894,10 +894,10 @@ async fn async_main() {
     // P5.6: legacy heartbeat-projects.txt has been retired in favor
     // of `/cli/heartbeat/active-projects`. If it's still on disk from
     // a pre-P5 install (or if the user only ever runs the daemon
-    // headlessly without Tauri's `k2so_agents_install_heartbeat`),
+    // headlessly without Tauri's `k2_agents_install_heartbeat`),
     // delete it so heartbeat.sh can't be tempted to read stale data
     // even if a stray pre-P5 script is still around.
-    let legacy_projects_file = k2so_dir.join("heartbeat-projects.txt");
+    let legacy_projects_file = k2_dir.join("heartbeat-projects.txt");
     if legacy_projects_file.exists() {
         match fs::remove_file(&legacy_projects_file) {
             Ok(_) => log_debug!("[daemon] removed legacy heartbeat-projects.txt"),
@@ -930,7 +930,7 @@ async fn async_main() {
     // from the previous boot so the renderer's `daemon_ws_url` cache + the
     // CLI's port-file readers don't get stale-port traffic on daemon
     // restart. Algorithm + tests in `k2_core::port_claim`.
-    let daemon_port_path = k2so_dir.join("daemon.port");
+    let daemon_port_path = k2_dir.join("daemon.port");
     let bind_ip = k2_core::listen::bind_ip();
     let lan = k2_core::listen::lan_requested();
     let inherited_main = crate::handoff::take_inherited(crate::handoff::Role::Main).and_then(|l| {
@@ -998,10 +998,10 @@ async fn async_main() {
     // have existed since 0.33.0 and are intentionally separate from
     // heartbeat.port to avoid clashes while the Tauri agent_hooks
     // listener coexisted.
-    if let Err(e) = write_restricted(&k2so_dir.join("daemon.port"), port.to_string().as_bytes()) {
+    if let Err(e) = write_restricted(&k2_dir.join("daemon.port"), port.to_string().as_bytes()) {
         log_debug!("[daemon] WARN: write daemon.port: {e}");
     }
-    if let Err(e) = write_restricted(&k2so_dir.join("daemon.token"), token.as_bytes()) {
+    if let Err(e) = write_restricted(&k2_dir.join("daemon.token"), token.as_bytes()) {
         log_debug!("[daemon] WARN: write daemon.token: {e}");
     }
 
@@ -1013,10 +1013,10 @@ async fn async_main() {
     // unconditionally at startup, and Tauri stops binding its own
     // listener. The CLI (`cli/k2so`) + every launchd hook script
     // read these files to discover the sole HTTP server.
-    if let Err(e) = write_restricted(&k2so_dir.join("heartbeat.port"), port.to_string().as_bytes()) {
+    if let Err(e) = write_restricted(&k2_dir.join("heartbeat.port"), port.to_string().as_bytes()) {
         log_debug!("[daemon] WARN: write heartbeat.port: {e}");
     }
-    if let Err(e) = write_restricted(&k2so_dir.join("heartbeat.token"), token.as_bytes()) {
+    if let Err(e) = write_restricted(&k2_dir.join("heartbeat.token"), token.as_bytes()) {
         log_debug!("[daemon] WARN: write heartbeat.token: {e}");
     }
 
@@ -1102,13 +1102,13 @@ async fn async_main() {
         log_debug!(
             "[daemon] listening on 0.0.0.0:{} (LAN) — daemon.{{port,token}} + heartbeat.{{port,token}} published to {}",
             port,
-            k2so_dir.display()
+            k2_dir.display()
         );
     } else {
         log_debug!(
             "[daemon] listening on 127.0.0.1:{} — daemon.{{port,token}} + heartbeat.{{port,token}} published to {}",
             port,
-            k2so_dir.display()
+            k2_dir.display()
         );
     }
 
@@ -1627,10 +1627,10 @@ async fn async_main() {
     // isn't writing to it, so the CLI and launchd-triggered heartbeat
     // script always find a reachable server.
     {
-        let k2so_dir = k2so_dir.clone();
+        let k2_dir = k2_dir.clone();
         let token = token.clone();
         tokio::spawn(async move {
-            run_heartbeat_port_watchdog(k2so_dir, port, token).await;
+            run_heartbeat_port_watchdog(k2_dir, port, token).await;
         });
     }
 
@@ -2413,7 +2413,7 @@ fn maybe_autostart_tunnel(daemon_port: u16) {
 /// startup write path — we've already staked our claim before any
 /// other process could.
 async fn run_heartbeat_port_watchdog(
-    k2so_dir: PathBuf,
+    k2_dir: PathBuf,
     own_port: u16,
     own_token: String,
 ) {
@@ -2427,8 +2427,8 @@ async fn run_heartbeat_port_watchdog(
 
     const INTERVAL_SECS: u64 = 30;
     const CONNECT_TIMEOUT_MS: u64 = 500;
-    let port_path = k2so_dir.join("heartbeat.port");
-    let token_path = k2so_dir.join("heartbeat.token");
+    let port_path = k2_dir.join("heartbeat.port");
+    let token_path = k2_dir.join("heartbeat.token");
 
     loop {
         let claim = match fs::read_to_string(&port_path) {

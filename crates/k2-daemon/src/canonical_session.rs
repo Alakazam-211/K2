@@ -46,7 +46,7 @@
 //! 4. Spawns via `spawn_agent_session_v2_blocking` under the
 //!    canonical key — guaranteed to register in `v2_session_map`
 //!    before this function returns.
-//! 5. Persists the workspace_sessions row via `k2so_agents_lock`,
+//! 5. Persists the workspace_sessions row via `k2_agents_lock`,
 //!    setting `terminal_id` to the v2 session id and marking the
 //!    row `running` with `owner=system`.
 //!
@@ -277,7 +277,7 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
     // 5. Persist workspace_sessions row. Best-effort — the PTY is
     //    alive regardless. Mirrors what `try_auto_launch` and the
     //    `/cli/agents/launch` handler do.
-    let _ = k2_core::workspace::session::k2so_agents_lock(
+    let _ = k2_core::workspace::session::k2_agents_lock(
         project_path.to_string(),
         agent_name.clone(),
         Some(outcome.session_id.to_string()),
@@ -365,7 +365,7 @@ pub fn lookup_project_id(project_path: &str) -> Option<String> {
 /// (only `pinned_chat.rs` set it), so after a restart it pointed at the dead
 /// pre-restart PTY and the pinned chat lost its "main chat" identity.
 /// Best-effort: a missing row no-ops (the fresh-spawn path's
-/// `k2so_agents_lock` creates the row first).
+/// `k2_agents_lock` creates the row first).
 fn stamp_active_terminal_id(project_id: &str, terminal_id: &str) {
     let db = k2_core::db::shared();
     let conn = db.lock();

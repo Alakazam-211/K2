@@ -484,7 +484,7 @@ async fn chat_tab_and_heartbeat_register_under_separate_canonical_keys() {
 
     // 4. workspace_sessions.terminal_id must still point at the chat
     //    tab's PTY, not the heartbeat's. Pre-fix the heartbeat fire's
-    //    `k2so_agents_lock` clobbered this column with its own PTY id
+    //    `k2_agents_lock` clobbered this column with its own PTY id
     //    (because we removed the gate, that was the second contributor
     //    to the lane collapse).
     let db = k2_core::db::shared();
@@ -582,7 +582,7 @@ async fn pinned_fire_emits_roster_changed_and_list_carries_next_fire() {
     }
     assert!(saw, "a pinned-chat fire must emit heartbeat_roster_changed for its workspace");
 
-    let rows = k2_core::heartbeats::k2so_heartbeat_list(project_path.clone())
+    let rows = k2_core::heartbeats::k2_heartbeat_list(project_path.clone())
         .expect("refetch the list");
     let hb = rows.iter().find(|r| r.name == "pinned-hb").expect("row listed");
     let last = chrono::DateTime::parse_from_rfc3339(hb.last_fired.as_deref().expect("lastFired"))

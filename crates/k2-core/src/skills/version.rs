@@ -17,7 +17,7 @@
 //! Four-tier system matching the Agent Skills Settings UI:
 //!
 //! - [`SKILL_VERSION_MANAGER`] — Workspace Manager (workspace's manager-mode primary agent).
-//! - [`SKILL_VERSION_K2SO_AGENT`] — K2SO planner agent (PRDs, etc.).
+//! - [`SKILL_VERSION_K2_AGENT`] — K2SO planner agent (PRDs, etc.).
 //! - [`SKILL_VERSION_CUSTOM_AGENT`] — Custom mode single-agent.
 //! - [`SKILL_VERSION_TEMPLATE`] — Sub-agent template delegated to by
 //!   a manager.
@@ -82,7 +82,7 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// Bumped to 14 (template to 4) in 0.46.11: `k2 checkin` is retired, so
 /// the tiers teach `inbox`, `organization bulletin` / `update` and `done`.
 pub const SKILL_VERSION_MANAGER: u32 = 14;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 14;
+pub const SKILL_VERSION_K2_AGENT: u32 = 14;
 pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 14;
 pub const SKILL_VERSION_TEMPLATE: u32 = 4;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
@@ -725,7 +725,7 @@ mod tests {
         // would break every caller. Test just reads them to prevent
         // accidental removal.
         let _ = SKILL_VERSION_MANAGER;
-        let _ = SKILL_VERSION_K2SO_AGENT;
+        let _ = SKILL_VERSION_K2_AGENT;
         let _ = SKILL_VERSION_CUSTOM_AGENT;
         let _ = SKILL_VERSION_TEMPLATE;
         let _ = SKILL_VERSION_WORKSPACE;

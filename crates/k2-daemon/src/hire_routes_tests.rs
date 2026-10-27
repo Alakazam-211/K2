@@ -113,7 +113,7 @@ fn owner_hires_one_agent_with_the_whole_recipe() {
     let skill = k2_core::skills::crud::profile(&path, "plan-index").expect("skill");
     assert!(skill.contains("# Plan index"), "{skill}");
     assert!(
-        k2_core::heartbeats::k2so_heartbeat_list(path.clone()).expect("hb list").iter().any(|h| h.name == "reindex"),
+        k2_core::heartbeats::k2_heartbeat_list(path.clone()).expect("hb list").iter().any(|h| h.name == "reindex"),
         "heartbeat added"
     );
     assert_eq!(k2_core::workspace::display::agent_display_name(&path), "Plans Librarian");

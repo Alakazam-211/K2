@@ -167,7 +167,7 @@ fn deliver_federated_files(
 
 /// GET /cli/inbox/count?project=<path> → the number of items at the inbox
 /// ROOT (`k2_core::inbox::list_root`, not subfolders) as a bare JSON
-/// number. The desktop badge's `k2so_inbox_count` Tauri command forwards
+/// number. The desktop badge's `k2_inbox_count` Tauri command forwards
 /// here (0.46.4: the app no longer links k2-core).
 pub fn handle_count(params: &HashMap<String, String>) -> CliResponse {
     let workspace = match need_project_path(params) {

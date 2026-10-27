@@ -8,7 +8,7 @@
 //! workspace-level lead-agent body (manager brief from
 //! [`crate::skills::content::generate_manager_skill_content`] or AI-
 //! planner brief from
-//! [`crate::skills::content::generate_k2so_agent_skill_content`]),
+//! [`crate::skills::content::generate_k2_agent_skill_content`]),
 //! prepends a per-regen workspace-inbox snapshot, writes the canonical
 //! `.k2so/skills/k2so/SKILL.md`, adopts SOURCE-region drift back into
 //! `PROJECT.md` / `AGENT.md`, archives pre-existing user-authored
@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 
 use crate::fs_atomic::{self, atomic_write_str, log_if_err};
 use crate::skills::version::{skill_checksum_hex, SKILL_VERSION_WORKSPACE};
-use crate::skills::writer::{force_symlink, upsert_k2so_section};
+use crate::skills::writer::{force_symlink, upsert_k2_section};
 use crate::workspace::agent_identity::{
     agent_dir, agents_dir, backup_sibling_legacy_persona, find_primary_agent, parse_frontmatter,
     persona_md_in, workspace_agent_path, PERSONA_MD_NAME,
@@ -1241,7 +1241,7 @@ pub fn apply_leftover_harness_fanout(project_path: &str) {
     if let Ok(full) = fs::read_to_string(&target) {
         let github_dir = root.join(".github");
         let _ = fs::create_dir_all(&github_dir);
-        upsert_k2so_section(&github_dir.join("copilot-instructions.md"), full.trim());
+        upsert_k2_section(&github_dir.join("copilot-instructions.md"), full.trim());
     }
 }
 
@@ -1453,7 +1453,7 @@ pub fn ensure_all_skills_up_to_date(project_path: &str) {
 /// k2so-agent dirs, inbox/active/done folders, prds/, PROJECT.md).
 ///
 /// Phase 2 Unit 7d: moved from
-/// `src-tauri/src/commands/k2so_agents.rs::k2so_agents_regenerate_workspace_skill`
+/// `src-tauri/src/commands/k2so_agents.rs::k2_agents_regenerate_workspace_skill`
 /// so the daemon can run this directly. The Tauri-side wrapper now
 /// forwards here.
 ///
@@ -1472,9 +1472,9 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
     // unified `k2_core::inbox::*` primitive). The legacy
     // `.k2so/work/inbox/` was retired and the first-boot daemon hook
     // trashes any straggler.
-    let k2so_dir = crate::workspace_dot_dir(&project_path);
-    let _ = fs::create_dir_all(k2so_dir.join("inbox"));
-    let _ = fs::create_dir_all(k2so_dir.join("prds"));
+    let k2_dir = crate::workspace_dot_dir(&project_path);
+    let _ = fs::create_dir_all(k2_dir.join("inbox"));
+    let _ = fs::create_dir_all(k2_dir.join("prds"));
 
     // 0.37.0 unification check: if the workspace has been migrated to
     // the single-agent layout (`.k2so/agent/AGENT.md` exists OR the
@@ -1490,8 +1490,8 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
     // `.k2so/agents/manager/` + `.k2so/agents/k2so-agent/` on first
     // call for a fresh workspace — a layout the runtime no longer
     // reads after the consolidator runs at first boot.
-    let unification_sentinel = k2so_dir.join(".unification-0.37.0-done");
-    let unified_agent_dir = k2so_dir.join("agent");
+    let unification_sentinel = k2_dir.join(".unification-0.37.0-done");
+    let unified_agent_dir = k2_dir.join("agent");
     let post_unification = unification_sentinel.exists() || unified_agent_dir.exists();
     if post_unification {
         // Don't recreate `.k2so/skills/` either — the post-migration
@@ -1499,14 +1499,14 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
         // `.k2so/agent-templates/<n>/`. Skip straight to PROJECT.md +
         // workspace SKILL writes below.
     } else {
-        let _ = fs::create_dir_all(k2so_dir.join("skills"));
+        let _ = fs::create_dir_all(k2_dir.join("skills"));
     }
 
     // Auto-create manager skill if it doesn't exist (pre-unification only).
     // Check for old "pod-leader" and "coordinator" directory names as fallback.
-    let manager_dir = k2so_dir.join("skills").join("manager");
-    let legacy_coordinator_dir = k2so_dir.join("skills").join("coordinator");
-    let legacy_pod_leader_dir = k2so_dir.join("skills").join("pod-leader");
+    let manager_dir = k2_dir.join("skills").join("manager");
+    let legacy_coordinator_dir = k2_dir.join("skills").join("coordinator");
+    let legacy_pod_leader_dir = k2_dir.join("skills").join("pod-leader");
     if !post_unification
         && !manager_dir.exists()
         && !legacy_coordinator_dir.exists()
@@ -1536,20 +1536,20 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
     // Auto-create K2SO agent if it doesn't exist (pre-unification only).
     // Post-0.37.0 the workspace agent lives at .k2so/agent/, not
     // .k2so/skills/k2so-agent/.
-    let k2so_agent_dir = k2so_dir.join("skills").join("k2so-agent");
-    if !post_unification && !k2so_agent_dir.exists() {
-        let _ = fs::create_dir_all(&k2so_agent_dir);
-        let k2so_role = "K2SO planner — builds PRDs, milestones, and technical plans";
-        let k2so_body = generate_default_agent_body("k2so", "k2so-agent", k2so_role, &project_path);
-        let k2so_md = format!(
+    let k2_agent_dir = k2_dir.join("skills").join("k2so-agent");
+    if !post_unification && !k2_agent_dir.exists() {
+        let _ = fs::create_dir_all(&k2_agent_dir);
+        let k2_role = "K2SO planner — builds PRDs, milestones, and technical plans";
+        let k2_body = generate_default_agent_body("k2so", "k2so-agent", k2_role, &project_path);
+        let k2_md = format!(
             "---\nname: k2so-agent\nrole: {}\ntype: k2so\n---\n\n{}\n",
-            k2so_role, k2so_body
+            k2_role, k2_body
         );
-        let k2so_md_path = k2so_agent_dir.join("AGENT.md");
+        let k2_md_path = k2_agent_dir.join("AGENT.md");
         log_if_err(
             "auto-scaffold k2so-agent AGENT.md",
-            &k2so_md_path,
-            atomic_write_str(&k2so_md_path, &k2so_md),
+            &k2_md_path,
+            atomic_write_str(&k2_md_path, &k2_md),
         );
         write_agent_skill_file(&project_path, "k2so-agent", "k2so");
     }
@@ -1633,7 +1633,7 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
                             })
                             .unwrap_or(false)
                 };
-                let skills_root = k2so_dir.join("skills");
+                let skills_root = k2_dir.join("skills");
                 has_subagents(&skills_root) || has_subagents(&agents_dir(&project_path))
             }
         }
@@ -1641,7 +1641,7 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
 
     // Scaffold PROJECT.md for manager mode — shared context across all agents
     if is_manager_mode {
-        let project_md_path = k2so_dir.join("PROJECT.md");
+        let project_md_path = k2_dir.join("PROJECT.md");
         if !project_md_path.exists() {
             let project_md_content = format!(
                 r#"# {project_name}
@@ -1722,13 +1722,13 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
         crate::skills::content::generate_manager_skill_content(&project_path, &project_name)
     } else {
         // Non-manager workspace = AI Planner role (the comprehensive
-        // top-tier autonomous variant). `generate_k2so_agent_skill_content`
+        // top-tier autonomous variant). `generate_k2_agent_skill_content`
         // emits the planner-focused brief including PRD/milestone
         // workflow, cross-workspace messaging, heartbeat scheduling,
         // and review-queue triage.
         let planner_name = crate::workspace::agent_identity::resolve_agent_name(&project_path)
             .unwrap_or_else(|| "k2so-agent".to_string());
-        crate::skills::content::generate_k2so_agent_skill_content(&project_name, &planner_name)
+        crate::skills::content::generate_k2_agent_skill_content(&project_name, &planner_name)
     };
 
     // Prepend a per-regen "Workspace Inbox" header so the manager /

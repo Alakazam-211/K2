@@ -1394,7 +1394,7 @@ fn run_resume_and_fire(
         Ok(out) => {
             // 0.37.8 — heartbeat fires don't touch workspace_sessions;
             // that row is the chat tab's lane. The pre-fix
-            // `k2so_agents_lock` call stamped the chat tab's
+            // `k2_agents_lock` call stamped the chat tab's
             // `active_terminal_id` to the heartbeat PTY id and
             // contributed to the lane collapse. Heartbeat's
             // `active_terminal_id` is stamped below on

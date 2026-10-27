@@ -2,8 +2,8 @@
 //! releases the session lock on turn-end evidence, so the legacy
 //! `.k2/agent/work/.lock` file must not keep holding it.
 //!
-//! `k2so_agents_lock` writes BOTH the `workspace_sessions` row (`running`)
-//! and the `.lock` file; only `k2so_agents_unlock` removes the file. Before
+//! `k2_agents_lock` writes BOTH the `workspace_sessions` row (`running`)
+//! and the `.lock` file; only `k2_agents_unlock` removes the file. Before
 //! this fix `is_agent_locked` fell back to the file even when the row said
 //! `sleeping`, so a workspace that was ever locked that way stayed locked
 //! after the store released it: heartbeats skipped it forever.
@@ -21,7 +21,7 @@ use std::sync::Mutex as StdMutex;
 use k2_core::activity::Evidence;
 use k2_core::agent_hooks::envelope::{self, HookHeaders, HookSource};
 use k2_core::workspace::scheduler::{agent_work_dir, is_agent_locked};
-use k2_core::workspace::session::{k2so_agents_lock, k2so_agents_unlock};
+use k2_core::workspace::session::{k2_agents_lock, k2_agents_unlock};
 use k2_daemon::activity_store::{self, SessionFacts};
 
 static TEST_LOCK: StdMutex<()> = StdMutex::new(());
@@ -85,9 +85,9 @@ fn a_released_row_unlocks_even_with_the_legacy_lock_file_on_disk() {
     let sid = uuid::Uuid::new_v4().to_string();
 
     // The canonical-session claim: row `running` + the `.lock` file.
-    k2so_agents_lock(path.clone(), "scout".into(), Some(sid.clone()), None).expect("lock");
+    k2_agents_lock(path.clone(), "scout".into(), Some(sid.clone()), None).expect("lock");
     let file = agent_work_dir(&path, "scout", "").join(".lock");
-    assert!(file.exists(), "k2so_agents_lock writes the legacy file");
+    assert!(file.exists(), "k2_agents_lock writes the legacy file");
     assert!(is_agent_locked(&path, "scout"));
 
     activity_store::register(SessionFacts {
@@ -109,7 +109,7 @@ fn a_released_row_unlocks_even_with_the_legacy_lock_file_on_disk() {
     apply(&sid, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p2"}"#, 3_000);
     assert!(is_agent_locked(&path, "scout"));
     activity_store::unregister(&sid);
-    k2so_agents_unlock(path.clone(), "scout".into()).expect("unlock");
+    k2_agents_unlock(path.clone(), "scout".into()).expect("unlock");
     assert!(!file.exists());
 }
 

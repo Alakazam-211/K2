@@ -67,7 +67,7 @@ pub fn ensure_persona(path: &str, role: Option<&str>, source: &PersonaSource) ->
     crate::workspace::agent::create(path.to_string(), agent_name.clone(), role_s, prompt, agent_type)
         .map_err(|e| HireError::internal(format!("persona: {e}")))?;
     if let PersonaSource::Raw(content) = source {
-        crate::workspace::agent_editor::k2so_agents_save_agent_md(path.to_string(), agent_name, content.clone())
+        crate::workspace::agent_editor::k2_agents_save_agent_md(path.to_string(), agent_name, content.clone())
             .map_err(|e| HireError::internal(format!("persona write: {e}")))?;
     }
     Ok(true)
@@ -208,7 +208,7 @@ pub fn write_skills(path: &str, skills: &[SkillIn]) -> Result<Vec<String>, HireE
 pub fn add_heartbeats(path: &str, hbs: &[HeartbeatIn]) -> Result<Vec<String>, HireError> {
     let mut out = Vec::new();
     for hb in hbs {
-        crate::heartbeats::k2so_heartbeat_add_with_instructions(
+        crate::heartbeats::k2_heartbeat_add_with_instructions(
             path.to_string(),
             hb.name.clone(),
             hb.frequency.clone(),

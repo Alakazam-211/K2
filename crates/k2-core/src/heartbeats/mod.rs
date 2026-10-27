@@ -2,7 +2,7 @@
 //!
 //! This is the piece that makes the persistent-agents feature real:
 //! when launchd wakes the laptop and fires the heartbeat plist, the
-//! daemon calls [`k2so_agents_heartbeat_tick`] to find eligible
+//! daemon calls [`k2_agents_heartbeat_tick`] to find eligible
 //! heartbeats, runs them, and stamps audit rows so
 //! `k2so heartbeat status <name>` can show what happened.
 //!
@@ -138,16 +138,16 @@ pub fn record_change(project_path: &str, name: &str, reason: &str, actor: Option
 /// mode-specific JSON payload (interval seconds, cron-ish spec, etc.).
 /// Stores the `WAKEUP.md` path as workspace-relative so project moves
 /// don't break rows.
-pub fn k2so_heartbeat_add(
+pub fn k2_heartbeat_add(
     project_path: String,
     name: String,
     frequency: String,
     spec_json: String,
 ) -> Result<serde_json::Value, String> {
-    k2so_heartbeat_add_with_instructions(project_path, name, frequency, spec_json, None)
+    k2_heartbeat_add_with_instructions(project_path, name, frequency, spec_json, None)
 }
 
-/// S5 HB32 — [`k2so_heartbeat_add`] that also writes the WAKEUP.md body.
+/// S5 HB32 — [`k2_heartbeat_add`] that also writes the WAKEUP.md body.
 ///
 /// The daemon writes the instructions before it answers, on its own
 /// machine. Pre-S5 the CLI wrote the `wakeupAbs` path itself, which is
@@ -157,7 +157,7 @@ pub fn k2so_heartbeat_add(
 ///
 /// The body is written only AFTER the row insert succeeds, so a
 /// duplicate name can never clobber the existing heartbeat's file.
-pub fn k2so_heartbeat_add_with_instructions(
+pub fn k2_heartbeat_add_with_instructions(
     project_path: String,
     name: String,
     frequency: String,
@@ -327,11 +327,11 @@ fn friendly_heartbeat_insert_error(name: &str, raw: &str) -> String {
 /// List active (non-archived) heartbeat rows for a workspace,
 /// enabled + disabled. Archived rows are hidden — they appear only in
 /// the sidebar's Archived collapsed section, sourced from
-/// `k2so_heartbeat_list_archived`.
+/// `k2_heartbeat_list_archived`.
 ///
 /// Pre-0.36.0 this returned every row; the post-archive filter went in
 /// when soft-archive replaced hard-delete.
-pub fn k2so_heartbeat_list(project_path: String) -> Result<Vec<AgentHeartbeat>, String> {
+pub fn k2_heartbeat_list(project_path: String) -> Result<Vec<AgentHeartbeat>, String> {
     let db = crate::db::shared();
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
@@ -349,7 +349,7 @@ pub fn k2so_heartbeat_list(project_path: String) -> Result<Vec<AgentHeartbeat>, 
 /// List archived heartbeat rows for a workspace, newest archive first.
 /// Powers the sidebar Heartbeats panel's collapsed Archived section so
 /// past chat threads remain auditable after a heartbeat is retired.
-pub fn k2so_heartbeat_list_archived(
+pub fn k2_heartbeat_list_archived(
     project_path: String,
 ) -> Result<Vec<AgentHeartbeat>, String> {
     let db = crate::db::shared();
@@ -362,15 +362,15 @@ pub fn k2so_heartbeat_list_archived(
 }
 
 /// Soft-archive a heartbeat. Sets `archived_at` to the current
-/// timestamp; the row is then hidden from `k2so_heartbeat_list` and
+/// timestamp; the row is then hidden from `k2_heartbeat_list` and
 /// excluded from `list_enabled` so the scheduler-tick evaluator stops
 /// firing it. Idempotent — re-archiving an already-archived row is a
 /// no-op (timestamp preserved).
 ///
 /// Replaces the previous "Remove" delete in the Settings UI from
 /// 0.36.0 onward; users who want a real delete can use
-/// `k2so_heartbeat_remove` (kept for power-user flows).
-pub fn k2so_heartbeat_archive(
+/// `k2_heartbeat_remove` (kept for power-user flows).
+pub fn k2_heartbeat_archive(
     project_path: String,
     name: String,
 ) -> Result<(), String> {
@@ -396,7 +396,7 @@ pub fn k2so_heartbeat_archive(
 
 /// Restore a soft-archived heartbeat. Reserved for a future
 /// "Restore from Archive" UI affordance — no caller in 0.36.0.
-pub fn k2so_heartbeat_unarchive(
+pub fn k2_heartbeat_unarchive(
     project_path: String,
     name: String,
 ) -> Result<(), String> {
@@ -417,7 +417,7 @@ pub fn k2so_heartbeat_unarchive(
 
 /// Delete a heartbeat row + best-effort remove its `WAKEUP.md` folder.
 /// Row delete is the source of truth; folder cleanup is advisory.
-pub fn k2so_heartbeat_remove(project_path: String, name: String) -> Result<(), String> {
+pub fn k2_heartbeat_remove(project_path: String, name: String) -> Result<(), String> {
     let db = crate::db::shared();
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
@@ -452,7 +452,7 @@ pub fn k2so_heartbeat_remove(project_path: String, name: String) -> Result<(), S
 
 /// Toggle a heartbeat's `enabled` flag. Disabled rows are skipped by
 /// the tick evaluator regardless of schedule eligibility.
-pub fn k2so_heartbeat_set_enabled(
+pub fn k2_heartbeat_set_enabled(
     project_path: String,
     name: String,
     enabled: bool,
@@ -477,7 +477,7 @@ pub fn k2so_heartbeat_set_enabled(
 /// `heartbeat_launch::smart_launch` skips the heartbeat's own
 /// cascade and routes through `workspace_msg::deliver_live` instead.
 /// See migration 0043.
-pub fn k2so_heartbeat_set_use_workspace_session(
+pub fn k2_heartbeat_set_use_workspace_session(
     project_path: String,
     name: String,
     enabled: bool,
@@ -499,7 +499,7 @@ pub fn k2so_heartbeat_set_use_workspace_session(
 ///   (`use_workspace_session = 1`). The heartbeat's own
 ///   `last_session_id`/`session_provider` stay untouched so switching
 ///   back restores the historical thread — same contract as
-///   [`k2so_heartbeat_set_use_workspace_session`].
+///   [`k2_heartbeat_set_use_workspace_session`].
 /// - `"auto"` — the heartbeat's own session, minted fresh on the next
 ///   fire: `use_workspace_session = 0`, `last_session_id = NULL`,
 ///   `session_provider = NULL`.
@@ -620,7 +620,7 @@ fn workspace_name_to_path(token: &str) -> Option<String> {
     .ok()
 }
 
-pub fn k2so_heartbeat_set_session(
+pub fn k2_heartbeat_set_session(
     project_path: String,
     name: String,
     mode: String,
@@ -854,7 +854,7 @@ pub fn validate_spec_json(frequency: &str, spec_json: &str) -> Result<(), String
 
 /// Replace a heartbeat row's `frequency` + `spec_json` in place. Used
 /// when the user edits the schedule via the Settings UI.
-pub fn k2so_heartbeat_edit(
+pub fn k2_heartbeat_edit(
     project_path: String,
     name: String,
     frequency: String,
@@ -882,7 +882,7 @@ pub fn k2so_heartbeat_edit(
 /// key other wakeups show), refuses a blank body, and runs the S3 refresh.
 /// It never writes the `wakeup_added` marker: the next tick does, so new
 /// instructions on an empty row wait for the next slot (D4).
-pub fn k2so_heartbeat_set_instructions(
+pub fn k2_heartbeat_set_instructions(
     project_path: String,
     name: String,
     instructions: String,
@@ -914,7 +914,7 @@ pub fn k2so_heartbeat_set_instructions(
 
 /// AH9 — a heartbeat's WAKEUP.md body (frontmatter stripped) and its
 /// workspace-relative path. A missing file reads as an empty body.
-pub fn k2so_heartbeat_instructions(
+pub fn k2_heartbeat_instructions(
     project_path: &str,
     name: &str,
 ) -> Result<(String, String), String> {
@@ -1019,7 +1019,7 @@ pub struct HeartbeatFireCandidate {
 /// of every row in the workspace (only what changed) — including the
 /// paths that return early, so a workspace with no agent is stored as
 /// `no_agent` instead of being skipped silently.
-pub fn k2so_agents_heartbeat_tick(project_path: &str) -> Vec<HeartbeatFireCandidate> {
+pub fn k2_agents_heartbeat_tick(project_path: &str) -> Vec<HeartbeatFireCandidate> {
     let candidates = heartbeat_tick_candidates(project_path);
     refresh_wait_after_write(project_path);
     candidates
@@ -1394,7 +1394,7 @@ pub fn stamp_heartbeat_fired(project_path: &str, heartbeat_name: &str) {
 /// Schedule-name on `heartbeat_fires` is denormalized on purpose —
 /// audit survives without a cascade (fires referring to the old name
 /// stay pointing at the old value, as designed).
-pub fn k2so_heartbeat_rename(
+pub fn k2_heartbeat_rename(
     project_path: String,
     old_name: String,
     new_name: String,
@@ -1463,7 +1463,7 @@ fn refresh_agents_md_if_heartbeats_roster(project_path: &str) {
 
 /// Return the most recent `limit` fire rows for a workspace. Powers
 /// the History panel on the Workspaces Settings page. Newest first.
-pub fn k2so_heartbeat_fires_list(
+pub fn k2_heartbeat_fires_list(
     project_path: String,
     limit: Option<i64>,
 ) -> Result<Vec<HeartbeatFire>, String> {
@@ -1482,7 +1482,7 @@ pub fn k2so_heartbeat_fires_list(
 ///
 /// Hand-builds the JSON in `camelCase` to match the renderer's
 /// existing shape and tack on `projectName` for the join.
-pub fn k2so_heartbeat_fires_list_all(
+pub fn k2_heartbeat_fires_list_all(
     limit: Option<i64>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let db = crate::db::shared();
@@ -1519,9 +1519,9 @@ pub fn k2so_heartbeat_fires_list_all(
 /// so the operator can see and toggle every heartbeat from one place.
 ///
 /// JSON is hand-built so the camelCase shape matches the per-workspace
-/// `k2so_heartbeat_list` payload the renderer already understands —
+/// `k2_heartbeat_list` payload the renderer already understands —
 /// plus two extra fields (`projectName`, `projectPath`) for the join.
-pub fn k2so_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
+pub fn k2_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
     let db = crate::db::shared();
     let conn = db.lock();
     let mut rows = AgentHeartbeat::list_all_active_with_project(&conn)
@@ -1573,7 +1573,7 @@ pub fn k2so_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
 /// tabs. Audit via the sidebar Heartbeats panel on demand.
 /// `1` = each scheduled heartbeat fire opens a background tab in the
 /// Tauri window. Tab persists until the user closes it.
-pub fn k2so_workspace_get_show_heartbeat_sessions(
+pub fn k2_workspace_get_show_heartbeat_sessions(
     project_path: String,
 ) -> Result<bool, String> {
     let db = crate::db::shared();
@@ -1589,7 +1589,7 @@ pub fn k2so_workspace_get_show_heartbeat_sessions(
 }
 
 /// Flip the workspace's `show_heartbeat_sessions` flag.
-pub fn k2so_workspace_set_show_heartbeat_sessions(
+pub fn k2_workspace_set_show_heartbeat_sessions(
     project_path: String,
     enabled: bool,
 ) -> Result<(), String> {
@@ -1613,7 +1613,7 @@ mod tests {
     //! `src-tauri/src/commands/k2so_agents.rs` has 30+ tests that
     //! exercise those functions under their original call sites.
     //!
-    //! `k2so_heartbeat_set_session` (0073) is tested HERE — it was
+    //! `k2_heartbeat_set_session` (0073) is tested HERE — it was
     //! born in core, so its mode/validation matrix has no other home.
 
     use super::*;
@@ -1693,7 +1693,7 @@ mod tests {
         // calls — this add once replaced the real `dev.k2.heartbeat` job.
         let out = crate::heartbeats::install::with_temp_home("add-no-mode", |_home| {
             crate::heartbeats::install::test_recorder::take();
-            let out = k2so_heartbeat_add(
+            let out = k2_heartbeat_add(
                 path.clone(),
                 "daily-check".into(),
                 "daily".into(),
@@ -1776,7 +1776,7 @@ mod tests {
         let project_id = seed_project_and_heartbeat(&path);
         seed_saved_session(&project_id, "historic-sid", "grok");
 
-        let v = k2so_heartbeat_set_session(path, "hb".into(), "pinned".into(), None, None)
+        let v = k2_heartbeat_set_session(path, "hb".into(), "pinned".into(), None, None)
             .expect("pinned mode succeeds");
         assert_eq!(v["success"], true);
         assert_eq!(v["mode"], "pinned");
@@ -1806,7 +1806,7 @@ mod tests {
             AgentHeartbeat::set_use_workspace_session(&conn, &project_id, "hb", true).unwrap();
         }
 
-        let v = k2so_heartbeat_set_session(path, "hb".into(), "auto".into(), None, None)
+        let v = k2_heartbeat_set_session(path, "hb".into(), "auto".into(), None, None)
             .expect("auto mode succeeds");
         assert_eq!(v["mode"], "auto");
 
@@ -1821,13 +1821,13 @@ mod tests {
         let path = format!("/fixture/hb-set-session-req-{}", uuid::Uuid::new_v4());
         let _pid = seed_project_and_heartbeat(&path);
 
-        let err = k2so_heartbeat_set_session(
+        let err = k2_heartbeat_set_session(
             path.clone(), "hb".into(), "session".into(), None, Some("claude".into()),
         )
         .unwrap_err();
         assert!(err.contains("session_id"), "err={err}");
 
-        let err = k2so_heartbeat_set_session(
+        let err = k2_heartbeat_set_session(
             path, "hb".into(), "session".into(), Some("sid-1".into()), None,
         )
         .unwrap_err();
@@ -1838,7 +1838,7 @@ mod tests {
     fn set_session_unknown_provider_errors() {
         let path = format!("/fixture/hb-set-session-unk-{}", uuid::Uuid::new_v4());
         let _pid = seed_project_and_heartbeat(&path);
-        let err = k2so_heartbeat_set_session(
+        let err = k2_heartbeat_set_session(
             path,
             "hb".into(),
             "session".into(),
@@ -1868,7 +1868,7 @@ mod tests {
             )
             .unwrap();
         }
-        let err = k2so_heartbeat_set_session(
+        let err = k2_heartbeat_set_session(
             path,
             "hb".into(),
             "session".into(),
@@ -1887,7 +1887,7 @@ mod tests {
         let _guard = HomeGuard::new("missing-file");
         let path = format!("/fixture/hb-set-session-miss-{}", uuid::Uuid::new_v4());
         let project_id = seed_project_and_heartbeat(&path);
-        let err = k2so_heartbeat_set_session(
+        let err = k2_heartbeat_set_session(
             path,
             "hb".into(),
             "session".into(),
@@ -1923,7 +1923,7 @@ mod tests {
             AgentHeartbeat::set_use_workspace_session(&conn, &project_id, "hb", true).unwrap();
         }
 
-        let v = k2so_heartbeat_set_session(
+        let v = k2_heartbeat_set_session(
             path,
             "hb".into(),
             "session".into(),
@@ -1971,7 +1971,7 @@ mod tests {
             crate::workspace_session_handles::allocate_ordinal(&conn, &project_id, &sid)
                 .expect("ord");
         }
-        let v = k2so_heartbeat_set_session(
+        let v = k2_heartbeat_set_session(
             path,
             "hb".into(),
             "session".into(),
@@ -1987,13 +1987,13 @@ mod tests {
     fn set_session_unknown_mode_and_missing_heartbeat_error() {
         let path = format!("/fixture/hb-set-session-bad-{}", uuid::Uuid::new_v4());
         let _pid = seed_project_and_heartbeat(&path);
-        let err = k2so_heartbeat_set_session(
+        let err = k2_heartbeat_set_session(
             path.clone(), "hb".into(), "banana".into(), None, None,
         )
         .unwrap_err();
         assert!(err.contains("unknown mode 'banana'"), "err={err}");
 
-        let err = k2so_heartbeat_set_session(
+        let err = k2_heartbeat_set_session(
             path, "no-such-hb".into(), "auto".into(), None, None,
         )
         .unwrap_err();
@@ -2122,7 +2122,7 @@ mod tests {
     #[test]
     fn s5_unknown_frequency_and_short_interval_are_refused_on_write() {
         let allowed = "hourly|daily|weekly|monthly|yearly";
-        let err = k2so_heartbeat_add_with_instructions(
+        let err = k2_heartbeat_add_with_instructions(
             "/fixture/s5-never-registered".into(),
             "reggie".into(),
             "list".into(),
@@ -2133,7 +2133,7 @@ mod tests {
         assert!(err.contains("unknown frequency 'list'"), "err={err}");
         assert!(err.contains(allowed), "err={err}");
 
-        let err = k2so_heartbeat_edit(
+        let err = k2_heartbeat_edit(
             "/fixture/s5-never-registered".into(),
             "reggie".into(),
             "list".into(),
@@ -2209,7 +2209,7 @@ mod tests {
         crate::heartbeats::install::with_temp_home("hb-existing", |_home| {
             crate::heartbeats::install::test_recorder::take();
             // No --instructions: the cloned body is kept and reported.
-            let out = k2so_heartbeat_add_with_instructions(
+            let out = k2_heartbeat_add_with_instructions(
                 path.clone(),
                 "cloned".into(),
                 "daily".into(),
@@ -2226,7 +2226,7 @@ mod tests {
             assert_ne!(out["waitReason"], serde_json::json!("wakeup_empty"), "{out}");
 
             // --instructions over a non-empty WAKEUP.md: kept, and said so.
-            let out = k2so_heartbeat_add_with_instructions(
+            let out = k2_heartbeat_add_with_instructions(
                 path.clone(),
                 "cloned-with-text".into(),
                 "daily".into(),
@@ -2241,7 +2241,7 @@ mod tests {
             assert_eq!(out["wakeupBodyBytes"], serde_json::json!(body.trim().len()));
 
             // A fresh heartbeat still gets the empty scaffold and says so.
-            let out = k2so_heartbeat_add_with_instructions(
+            let out = k2_heartbeat_add_with_instructions(
                 path.clone(),
                 "fresh".into(),
                 "daily".into(),
@@ -2252,7 +2252,7 @@ mod tests {
             assert_eq!(out["wakeupBodyBytes"], serde_json::json!(0));
             assert_eq!(out["waitReason"], serde_json::json!("wakeup_empty"));
             // And a body written at add time is counted.
-            let out = k2so_heartbeat_add_with_instructions(
+            let out = k2_heartbeat_add_with_instructions(
                 path.clone(),
                 "fresh-text".into(),
                 "daily".into(),
@@ -2271,7 +2271,7 @@ mod tests {
         let path = dir.to_string_lossy().to_string();
         crate::heartbeats::install::with_temp_home("s5-add", |_home| {
             crate::heartbeats::install::test_recorder::take();
-            let out = k2so_heartbeat_add_with_instructions(
+            let out = k2_heartbeat_add_with_instructions(
                 path.clone(),
                 "with-body".into(),
                 "daily".into(),
@@ -2287,7 +2287,7 @@ mod tests {
             assert_eq!(out["waitReason"], serde_json::json!("no_agent"));
             assert!(out["nextFireAt"].is_string(), "S3 stores the next fire: {out}");
 
-            let out = k2so_heartbeat_add_with_instructions(
+            let out = k2_heartbeat_add_with_instructions(
                 path.clone(),
                 "no-body".into(),
                 "daily".into(),
@@ -2301,7 +2301,7 @@ mod tests {
             assert_eq!(out["waitReason"], serde_json::json!("wakeup_empty"));
 
             // A duplicate name never clobbers the existing file.
-            let err = k2so_heartbeat_add_with_instructions(
+            let err = k2_heartbeat_add_with_instructions(
                 path.clone(),
                 "with-body".into(),
                 "daily".into(),
@@ -2317,7 +2317,7 @@ mod tests {
                 "heartbeat add must not run launchctl/crontab in tests"
             );
         });
-        let rows = k2so_heartbeat_list(path.clone()).expect("list");
+        let rows = k2_heartbeat_list(path.clone()).expect("list");
         let with_body = rows.iter().find(|r| r.name == "with-body").expect("with-body row");
         let no_body = rows.iter().find(|r| r.name == "no-body").expect("no-body row");
         assert!(no_body.enabled, "an empty WAKEUP.md row is created enabled");
@@ -2397,7 +2397,7 @@ mod s3_next_fire_tests {
 
         // ── create (no instructions) ────────────────────────────────
         let out = crate::heartbeats::install::with_temp_home("s3-outcomes", |_home| {
-            k2so_heartbeat_add(
+            k2_heartbeat_add(
                 path.clone(),
                 "drive".into(),
                 "hourly".into(),
@@ -2478,14 +2478,14 @@ mod s3_next_fire_tests {
 
         // ── enable (core CRUD writes the state; S2 anchors at now) ──
         let before_enable = Utc::now();
-        k2so_heartbeat_set_enabled(path.clone(), "drive".into(), true).expect("enable");
+        k2_heartbeat_set_enabled(path.clone(), "drive".into(), true).expect("enable");
         let hb = row(&project_id, "drive");
         assert_eq!(hb.wait_reason.as_deref(), Some(wait::WAIT_SCHEDULED));
         let next = utc(hb.next_fire_at.as_deref().expect("enabled valid row has a next fire"));
         assert!(next > before_enable, "D4: enable waits for the next slot, no catch-up");
 
         // ── user disable ────────────────────────────────────────────
-        k2so_heartbeat_set_enabled(path.clone(), "drive".into(), false).expect("disable");
+        k2_heartbeat_set_enabled(path.clone(), "drive".into(), false).expect("disable");
         let hb = row(&project_id, "drive");
         assert_eq!(hb.wait_reason.as_deref(), Some(wait::WAIT_DISABLED_USER));
         assert_eq!(hb.next_fire_at, None);

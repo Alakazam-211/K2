@@ -606,7 +606,7 @@ pub fn scan_harness_files(project_path: &str) -> Vec<DetectedHarnessFile> {
         // containing *only* K2SO-injected content registers as
         // empty.
         let body = strip_frontmatter(&content);
-        let user_body = strip_k2so_managed_block(body);
+        let user_body = strip_k2_managed_block(body);
         let stripped = user_body.trim();
         if stripped.is_empty() {
             continue;
@@ -663,7 +663,7 @@ pub fn adopt_harness_as_project_md(
 
     let raw = fs::read_to_string(source_path).map_err(|e| format!("read source: {e}"))?;
     let body_no_fm = strip_frontmatter(&raw);
-    let body = strip_k2so_managed_block(body_no_fm);
+    let body = strip_k2_managed_block(body_no_fm);
     let body = body.trim();
     let adopted_bytes = body.len();
 
@@ -735,10 +735,10 @@ fn strip_frontmatter(content: &str) -> &str {
 /// from a string. Used so files containing *only* K2-injected content read
 /// as empty during scan, and so adopting a file's body doesn't carry K2's
 /// own markers into the new PROJECT.md. Anchored on the writer's
-/// [`crate::skills::writer::K2SO_SECTION_BEGIN`] / `…_END` constants so the
+/// [`crate::skills::writer::K2_SECTION_BEGIN`] / `…_END` constants so the
 /// strip stays in lockstep with the inject.
-pub fn strip_k2so_managed_block(content: &str) -> String {
-    use crate::skills::writer::{K2SO_SECTION_BEGIN as BEGIN, K2SO_SECTION_END as END};
+pub fn strip_k2_managed_block(content: &str) -> String {
+    use crate::skills::writer::{K2_SECTION_BEGIN as BEGIN, K2_SECTION_END as END};
     if let (Some(b), Some(e)) = (content.find(BEGIN), content.find(END)) {
         if e > b {
             let mut out = String::with_capacity(content.len());
@@ -874,7 +874,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_skips_files_containing_only_k2so_block() {
+    fn scan_skips_files_containing_only_k2_block() {
         let p = temp_project();
         let path = p.to_string_lossy().to_string();
         fs::write(

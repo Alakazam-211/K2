@@ -770,7 +770,7 @@ fn heartbeat_mutate_refreshes_when_roster_stacked_fire_does_not() {
     // calls — this add once replaced the real `dev.k2.heartbeat` job.
     crate::heartbeats::install::with_temp_home("roster-add", |_home| {
         crate::heartbeats::install::test_recorder::take();
-        crate::heartbeats::k2so_heartbeat_add(
+        crate::heartbeats::k2_heartbeat_add(
             path.to_string(),
             "roster-hb".into(),
             "daily".into(),

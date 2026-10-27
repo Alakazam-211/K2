@@ -26,8 +26,8 @@ use crate::workspace::work_item::atomic_write;
 /// to `agent-template`.
 ///
 /// Phase 2 Unit 7d: moved from
-/// `src-tauri/src/commands/k2so_agents.rs::k2so_agents_get_editor_context`.
-pub fn k2so_agents_get_editor_context(
+/// `src-tauri/src/commands/k2so_agents.rs::k2_agents_get_editor_context`.
+pub fn k2_agents_get_editor_context(
     project_path: String,
     agent_name: String,
 ) -> Result<serde_json::Value, String> {
@@ -72,8 +72,8 @@ pub fn k2so_agents_get_editor_context(
 /// `contextPath` once populated.
 ///
 /// Phase 2 Unit 7d: moved from
-/// `src-tauri/src/commands/k2so_agents.rs::k2so_agents_preview_agent_context`.
-pub fn k2so_agents_preview_agent_context(
+/// `src-tauri/src/commands/k2so_agents.rs::k2_agents_preview_agent_context`.
+pub fn k2_agents_preview_agent_context(
     project_path: String,
     agent_name: String,
 ) -> Result<serde_json::Value, String> {
@@ -105,8 +105,8 @@ pub fn k2so_agents_preview_agent_context(
 /// an atomic write.
 ///
 /// Phase 2 Unit 7d: moved from
-/// `src-tauri/src/commands/k2so_agents.rs::k2so_agents_regenerate_agent_context`.
-pub fn k2so_agents_regenerate_agent_context(
+/// `src-tauri/src/commands/k2so_agents.rs::k2_agents_regenerate_agent_context`.
+pub fn k2_agents_regenerate_agent_context(
     project_path: String,
     agent_name: String,
 ) -> Result<String, String> {
@@ -122,8 +122,8 @@ pub fn k2so_agents_regenerate_agent_context(
 /// `<agent>/agent-backups/`.
 ///
 /// Phase 2 Unit 7d: moved from
-/// `src-tauri/src/commands/k2so_agents.rs::k2so_agents_save_agent_md`.
-pub fn k2so_agents_save_agent_md(
+/// `src-tauri/src/commands/k2so_agents.rs::k2_agents_save_agent_md`.
+pub fn k2_agents_save_agent_md(
     project_path: String,
     agent_name: String,
     content: String,
@@ -165,7 +165,7 @@ pub fn k2so_agents_save_agent_md(
 #[cfg(test)]
 mod tests {
     //! Phase 2 Tier 2.1 coverage for the AIFileEditor surface
-    //! (k2so_agents_get_editor_context + k2so_agents_save_agent_md).
+    //! (k2_agents_get_editor_context + k2_agents_save_agent_md).
     //!
     //! These tests scaffold a scratch workspace with a unified-primary
     //! agent on disk (`.k2so/agent/AGENT.md`) and exercise the editor
@@ -207,7 +207,7 @@ mod tests {
         let path = dir.to_string_lossy().into_owned();
 
         let ctx =
-            k2so_agents_get_editor_context(path, "cortana".to_string()).expect("editor context");
+            k2_agents_get_editor_context(path, "cortana".to_string()).expect("editor context");
         assert_eq!(ctx["agentName"], "cortana");
         assert_eq!(ctx["role"], "test pilot", "role pulled from frontmatter");
         // type=custom: not a manager, normalized agentType
@@ -238,7 +238,7 @@ mod tests {
         let dir = scratch_workspace_with_primary("captain", "pod-leader", "lead");
         let path = dir.to_string_lossy().into_owned();
 
-        let ctx = k2so_agents_get_editor_context(path, "captain".to_string()).expect("ctx");
+        let ctx = k2_agents_get_editor_context(path, "captain".to_string()).expect("ctx");
         assert_eq!(
             ctx["agentType"], "manager",
             "pod-leader should normalize to manager in the agentType readout"
@@ -263,7 +263,7 @@ mod tests {
         std::fs::write(dir.join(".k2so/agent/AGENT.md"), body).unwrap();
         let path = dir.to_string_lossy().into_owned();
 
-        let ctx = k2so_agents_get_editor_context(path, "alpha".to_string()).expect("ctx");
+        let ctx = k2_agents_get_editor_context(path, "alpha".to_string()).expect("ctx");
         assert_eq!(
             ctx["isManager"], true,
             "manager:true frontmatter key should flip isManager"
@@ -283,7 +283,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().into_owned();
 
-        let err = k2so_agents_get_editor_context(path, "ghost".to_string())
+        let err = k2_agents_get_editor_context(path, "ghost".to_string())
             .expect_err("missing agent must error");
         assert!(
             err.contains("does not exist"),
@@ -302,7 +302,7 @@ mod tests {
         let agent_dir_path = dir.join(".k2so/agent");
         let pre_save = std::fs::read_to_string(persona_md_in(&agent_dir_path)).unwrap();
 
-        k2so_agents_save_agent_md(
+        k2_agents_save_agent_md(
             path.clone(),
             "scout".to_string(),
             "---\nname: scout\ntype: custom\nrole: scout role\n---\n\n# scout\n\nNew body.\n"
@@ -351,7 +351,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().into_owned();
 
-        let err = k2so_agents_save_agent_md(path, "ghost".to_string(), "anything".to_string())
+        let err = k2_agents_save_agent_md(path, "ghost".to_string(), "anything".to_string())
             .expect_err("missing agent must error");
         assert!(
             err.contains("does not exist"),
@@ -378,7 +378,7 @@ mod tests {
         crate::workspace::skill_regen::write_workspace_skill_file(&path);
 
         let marker = "PERSONA-SAVE-MARKER unique body";
-        k2so_agents_save_agent_md(
+        k2_agents_save_agent_md(
             path.clone(),
             "scout".to_string(),
             format!(

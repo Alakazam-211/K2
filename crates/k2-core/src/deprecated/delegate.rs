@@ -2,7 +2,7 @@
 //!
 //! Pre-Phase-2.1, K2SO owned the spawn lifecycle for delegated sub-agents:
 //! the daemon (or the UI Delegate button) called
-//! [`k2so_agents_delegate`] which created a worktree, registered it,
+//! [`k2_agents_delegate`] which created a worktree, registered it,
 //! moved the work item into the agent's `active/`, generated CLAUDE.md,
 //! and returned a launch JSON the caller used to spawn `claude` in the
 //! new worktree.
@@ -15,7 +15,7 @@
 //! [`shorten_slug`]) are still used by the review queue (`reviews.rs`)
 //! and the legacy `agent_launch` path; they're preserved with
 //! `#[deprecated]` annotations so callers see compiler warnings at
-//! every use site. The top-level [`k2so_agents_delegate`] is kept
+//! every use site. The top-level [`k2_agents_delegate`] is kept
 //! for the daemon's `agents_routes.rs` delegate route + the
 //! `agent_launch` inbox-delegate branch — both will be retired in
 //! Phase 2.5d.
@@ -144,13 +144,13 @@ pub fn strip_worktree_from_frontmatter(content: &str) -> String {
 /// Intended callers:
 /// - Manager's UI "Delegate" button (via `#[tauri::command]` wrapper
 ///   still in `src-tauri/src/commands/k2so_agents.rs`).
-/// - `k2so_agents_build_launch` when an agent's inbox has work but
+/// - `k2_agents_build_launch` when an agent's inbox has work but
 ///   no active worktree yet.
 #[deprecated(
     since = "0.39.0h",
     note = "Harness owns spawn lifecycle post-Phase-2.1; see Phase 2.1 PRD A23"
 )]
-pub fn k2so_agents_delegate(
+pub fn k2_agents_delegate(
     project_path: String,
     target_agent: String,
     source_file: String,

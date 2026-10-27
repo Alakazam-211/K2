@@ -243,7 +243,7 @@ async fn wake_headless_v2_writes_heartbeat_fields_and_does_not_touch_workspace_s
     );
 
     // 0.37.8: heartbeat fires don't touch workspace_sessions; that
-    // row is the chat tab's lane. Pre-fix, `k2so_agents_lock` ran
+    // row is the chat tab's lane. Pre-fix, `k2_agents_lock` ran
     // unconditionally and clobbered the chat tab's terminal_id with
     // the heartbeat's PTY id.
     let db = k2_core::db::shared();

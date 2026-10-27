@@ -121,8 +121,8 @@ async fn two_ticks_on_the_same_slot_fire_once() {
     let path = project.to_string_lossy().into_owned();
 
     // Both tickers evaluate before either fires.
-    let tick_a = k2_core::heartbeats::k2so_agents_heartbeat_tick(&path);
-    let tick_b = k2_core::heartbeats::k2so_agents_heartbeat_tick(&path);
+    let tick_a = k2_core::heartbeats::k2_agents_heartbeat_tick(&path);
+    let tick_b = k2_core::heartbeats::k2_agents_heartbeat_tick(&path);
     assert_eq!(tick_a.len(), 1, "precondition: the slot is due");
     assert_eq!(tick_b.len(), 1, "precondition: the second ticker sees it due too");
 
@@ -227,7 +227,7 @@ async fn fan_out_holds_the_machine_awake_once_and_releases() {
     let fake = Arc::new(FakePowerOs::ready());
     k2_daemon::power::install_os(fake.clone());
 
-    let cands = k2_core::heartbeats::k2so_agents_heartbeat_tick(&path);
+    let cands = k2_core::heartbeats::k2_agents_heartbeat_tick(&path);
     assert_eq!(cands.len(), 1);
     let launches = Arc::new(AtomicUsize::new(0));
     let fired = run_candidates_bounded_with(&path, cands, counting_launcher(ws.into(), launches));

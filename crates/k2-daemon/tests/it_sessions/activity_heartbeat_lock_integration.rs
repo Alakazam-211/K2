@@ -97,7 +97,7 @@ fn apply(sid: &str, body: &str, at: i64) {
 }
 
 fn launchable(path: &Path) -> Vec<String> {
-    k2_core::workspace::scheduler::k2so_agents_scheduler_tick(path.to_string_lossy().into_owned())
+    k2_core::workspace::scheduler::k2_agents_scheduler_tick(path.to_string_lossy().into_owned())
         .expect("scheduler tick")
 }
 
@@ -211,7 +211,7 @@ fn legacy_scheduler_never_re_wakes_a_live_unconfirmed_session() {
     let dir = tmp_dir("h");
     seed_project(&pid, &dir);
     k2_core::inbox::compose(&dir, "Synthetic task", "Body.", None, None, None).expect("inbox item");
-    // The canonical session was claimed (`k2so_agents_lock` → running)
+    // The canonical session was claimed (`k2_agents_lock` → running)
     // and is live, but no evidence has arrived (a daemon restart, or a
     // CLI that hasn't spoken yet).
     let sid = uuid::Uuid::new_v4().to_string();

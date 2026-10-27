@@ -832,7 +832,7 @@ mod transport_guard_tests {
     }
 
     /// T1 — the 2026-09-30 hijack path. Under a temp HOME, a real
-    /// `k2so_heartbeat_add` runs no launchctl/crontab and writes nothing
+    /// `k2_heartbeat_add` runs no launchctl/crontab and writes nothing
     /// under that HOME. After S2, add does not touch the OS at all.
     #[test]
     fn heartbeat_add_under_temp_home_never_reaches_the_scheduler() {
@@ -855,7 +855,7 @@ mod transport_guard_tests {
         }
         with_temp_home("add", |home| {
             test_recorder::take();
-            crate::heartbeats::k2so_heartbeat_add(
+            crate::heartbeats::k2_heartbeat_add(
                 path.clone(),
                 "guarded".into(),
                 "daily".into(),

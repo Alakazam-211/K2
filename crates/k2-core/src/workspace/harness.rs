@@ -9,9 +9,9 @@
 //! Public surface:
 //!   - [`HARNESS_WORKSPACE_FILES`] — workspace-root targets list
 //!   - [`WorkspacePreviewEntry`] — preview row the UI consumes
-//!   - [`k2so_agents_preview_workspace_ingest`] — preview a workspace
+//!   - [`k2_agents_preview_workspace_ingest`] — preview a workspace
 //!     add without mutating
-//!   - [`k2so_agents_run_workspace_ingest`] — fire the harvest + write
+//!   - [`k2_agents_run_workspace_ingest`] — fire the harvest + write
 //!     pipeline for a workspace
 //!   - [`disable_workspace_claude_md`] — flip the root CLAUDE.md off
 //!
@@ -283,7 +283,7 @@ pub(crate) fn scaffold_aider_conf(project_path: &str) {
 
 /// Inspect a workspace path WITHOUT mutating anything. Returns a list
 /// of entries describing what K2SO will do on add.
-pub fn k2so_agents_preview_workspace_ingest(
+pub fn k2_agents_preview_workspace_ingest(
     project_path: String,
 ) -> Result<Vec<WorkspacePreviewEntry>, String> {
     let root = PathBuf::from(&project_path);
@@ -397,7 +397,7 @@ pub fn k2so_agents_preview_workspace_ingest(
 
 /// Trigger the workspace skill write for a single project on demand.
 
-pub fn k2so_agents_run_workspace_ingest(project_path: String) -> Result<(), String> {
+pub fn k2_agents_run_workspace_ingest(project_path: String) -> Result<(), String> {
     harvest_per_agent_claude_md_files(&project_path);
     write_workspace_skill_file(&project_path);
     Ok(())
@@ -410,7 +410,7 @@ pub fn k2so_agents_run_workspace_ingest(project_path: String) -> Result<(), Stri
 /// (when the Agent toggle is turned off).
 ///
 /// Phase 2 Unit 7d: moved from
-/// `src-tauri/src/commands/k2so_agents.rs::k2so_agents_disable_workspace_claude_md`.
+/// `src-tauri/src/commands/k2so_agents.rs::k2_agents_disable_workspace_claude_md`.
 pub fn disable_workspace_claude_md(project_path: String) -> Result<(), String> {
     let claude_md = PathBuf::from(&project_path).join("CLAUDE.md");
     let disabled = crate::workspace_dot_dir(&project_path).join("CLAUDE.md.disabled");
@@ -453,7 +453,7 @@ mod tests {
         let proj = scratch_project();
         let path = proj.to_str().unwrap().to_string();
 
-        let entries = k2so_agents_preview_workspace_ingest(path).expect("preview ok");
+        let entries = k2_agents_preview_workspace_ingest(path).expect("preview ok");
 
         // Every collision target + marker file should be reported.
         let by_path = entries_by_path(&entries);
@@ -497,7 +497,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = k2so_agents_preview_workspace_ingest(path).expect("preview ok");
+        let entries = k2_agents_preview_workspace_ingest(path).expect("preview ok");
         let by_path = entries_by_path(&entries);
 
         let claude = by_path
@@ -531,7 +531,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = k2so_agents_preview_workspace_ingest(path).expect("preview");
+        let entries = k2_agents_preview_workspace_ingest(path).expect("preview");
         let by_path = entries_by_path(&entries);
 
         let mdc = by_path
@@ -552,7 +552,7 @@ mod tests {
         let path = proj.to_str().unwrap().to_string();
         fs::write(proj.join("AGENTS.md"), "user-authored agents.md content").unwrap();
 
-        let entries = k2so_agents_preview_workspace_ingest(path).expect("preview");
+        let entries = k2_agents_preview_workspace_ingest(path).expect("preview");
         let by_path = entries_by_path(&entries);
 
         let agents = by_path.get("AGENTS.md").expect("AGENTS.md entry");

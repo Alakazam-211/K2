@@ -1,4 +1,4 @@
-//! Reminders through the real tick (`k2so_agents_heartbeat_tick`) against the
+//! Reminders through the real tick (`k2_agents_heartbeat_tick`) against the
 //! shared test DB: what the scan does with a due, a far-too-late and a capped
 //! reminder.
 
@@ -83,7 +83,7 @@ fn decisions(project_id: &str) -> Vec<String> {
 #[test]
 fn a_due_reminder_is_a_candidate_with_no_wakeup_file_and_stays_enabled() {
     let (path, pid) = seed("due", 5);
-    let cands = k2so_agents_heartbeat_tick(&path);
+    let cands = k2_agents_heartbeat_tick(&path);
     assert_eq!(cands.len(), 1, "the reminder is due");
     assert_eq!(cands[0].name, "r");
     assert_eq!(cands[0].catchup_of, None, "on time");
@@ -95,7 +95,7 @@ fn a_due_reminder_is_a_candidate_with_no_wakeup_file_and_stays_enabled() {
 #[test]
 fn a_late_reminder_is_a_catchup_candidate() {
     let (path, _pid) = seed("late", 13 * 3600);
-    let cands = k2so_agents_heartbeat_tick(&path);
+    let cands = k2_agents_heartbeat_tick(&path);
     assert_eq!(cands.len(), 1, "W8: 13 h late still fires");
     assert!(cands[0].catchup_of.is_some());
 }
@@ -103,7 +103,7 @@ fn a_late_reminder_is_a_catchup_candidate() {
 #[test]
 fn past_24h_it_retires_as_missed_with_one_note_and_never_fires() {
     let (path, pid) = seed("missed", 25 * 3600);
-    let cands = k2so_agents_heartbeat_tick(&path);
+    let cands = k2_agents_heartbeat_tick(&path);
     assert!(cands.is_empty(), "too late to fire");
     let r = row(&pid);
     assert_eq!(r.retired_reason.as_deref(), Some("missed"));
@@ -113,7 +113,7 @@ fn past_24h_it_retires_as_missed_with_one_note_and_never_fires() {
     assert_eq!(notes.len(), 1, "one note to the owner: {notes:?}");
     assert!(notes[0].contains("call Jane back") && notes[0].contains("didn't fire"), "{notes:?}");
 
-    assert!(k2so_agents_heartbeat_tick(&path).is_empty());
+    assert!(k2_agents_heartbeat_tick(&path).is_empty());
     assert_eq!(decisions(&pid).len(), 1, "no second audit row");
     assert_eq!(notes_for(&path).len(), 1, "no second note");
 }
@@ -131,13 +131,13 @@ fn the_21st_fire_in_an_hour_waits_a_minute_and_is_audited_once() {
             .expect("fire");
         }
     }
-    assert!(k2so_agents_heartbeat_tick(&path).is_empty(), "held by the cap");
+    assert!(k2_agents_heartbeat_tick(&path).is_empty(), "held by the cap");
     let r = row(&pid);
     assert!(r.next_retry_at.is_some(), "the next minute");
     assert!(r.enabled && r.retired_at.is_none(), "still pending");
     assert_eq!(decisions(&pid), vec![reminders::DECISION_DEFERRED_CAP.to_string()]);
 
-    assert!(k2so_agents_heartbeat_tick(&path).is_empty(), "the retry gate holds it");
+    assert!(k2_agents_heartbeat_tick(&path).is_empty(), "the retry gate holds it");
     assert_eq!(decisions(&pid).len(), 1, "one audit row per wait");
 }
 
@@ -159,6 +159,6 @@ fn the_agents_wake_budget_holds_a_reminder_too() {
             .expect("source fire");
         }
     }
-    assert!(k2so_agents_heartbeat_tick(&path).is_empty(), "the budget is spent");
+    assert!(k2_agents_heartbeat_tick(&path).is_empty(), "the budget is spent");
     assert_eq!(decisions(&pid), vec![crate::wake_budget::DECISION_AGENT_CAP.to_string()]);
 }

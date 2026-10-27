@@ -27,11 +27,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::skills::content::{
-    generate_custom_agent_skill_content, generate_k2so_agent_skill_content,
+    generate_custom_agent_skill_content, generate_k2_agent_skill_content,
     generate_manager_skill_content, generate_template_skill_content,
 };
 use crate::skills::version::{
-    ensure_skill_up_to_date, SKILL_VERSION_CUSTOM_AGENT, SKILL_VERSION_K2SO_AGENT,
+    ensure_skill_up_to_date, SKILL_VERSION_CUSTOM_AGENT, SKILL_VERSION_K2_AGENT,
     SKILL_VERSION_MANAGER, SKILL_VERSION_TEMPLATE,
 };
 use crate::workspace::agent_identity::{
@@ -42,8 +42,8 @@ use crate::fs_atomic::{atomic_symlink, atomic_write_str, log_if_err};
 /// Markers that delimit the K2-managed section inside marker-injected
 /// files (copilot-instructions.md). Content between the markers is
 /// considered K2's; user edits outside the pair are preserved.
-pub const K2SO_SECTION_BEGIN: &str = "<!-- K2:BEGIN -->";
-pub const K2SO_SECTION_END: &str = "<!-- K2:END -->";
+pub const K2_SECTION_BEGIN: &str = "<!-- K2:BEGIN -->";
+pub const K2_SECTION_END: &str = "<!-- K2:END -->";
 
 /// Render the "How to update this skill" footer that gets appended to
 /// every generated SKILL body. Tells the AI that the SKILL is compiled
@@ -101,15 +101,15 @@ future wake of every agent.
 /// at the bottom; otherwise replaces just the content between them,
 /// preserving user content above and below. Atomic write — a crash
 /// mid-update can't corrupt the file.
-pub fn upsert_k2so_section(file_path: &Path, content: &str) {
-    let section = format!("{}\n{}\n{}", K2SO_SECTION_BEGIN, content, K2SO_SECTION_END);
+pub fn upsert_k2_section(file_path: &Path, content: &str) {
+    let section = format!("{}\n{}\n{}", K2_SECTION_BEGIN, content, K2_SECTION_END);
 
     let existing = fs::read_to_string(file_path).unwrap_or_default();
     let composed = if let (Some(start), Some(end)) =
-        (existing.find(K2SO_SECTION_BEGIN), existing.find(K2SO_SECTION_END))
+        (existing.find(K2_SECTION_BEGIN), existing.find(K2_SECTION_END))
     {
         let before = &existing[..start];
-        let after = &existing[end + K2SO_SECTION_END.len()..];
+        let after = &existing[end + K2_SECTION_END.len()..];
         format!("{}{}{}", before, section, after)
     } else if existing.is_empty() {
         section.clone()
@@ -117,7 +117,7 @@ pub fn upsert_k2so_section(file_path: &Path, content: &str) {
         format!("{}\n\n{}", existing.trim_end(), section)
     };
     log_if_err(
-        "upsert_k2so_section",
+        "upsert_k2_section",
         file_path,
         atomic_write_str(file_path, &composed),
     );
@@ -225,7 +225,7 @@ pub fn write_skill_to_all_harnesses(
         // cwd AGENTS.md is owned by generate — never marker-inject here.
         let github_dir = root.join(".github");
         let _ = fs::create_dir_all(&github_dir);
-        upsert_k2so_section(&github_dir.join("copilot-instructions.md"), content);
+        upsert_k2_section(&github_dir.join("copilot-instructions.md"), content);
     }
 }
 
@@ -248,9 +248,9 @@ pub fn write_agent_skill_file(project_path: &str, agent_name: &str, agent_type: 
         ),
         // Stage A dual-read: `k2` and legacy `k2so` share the builtin skill.
         "k2so" | "k2" => (
-            generate_k2so_agent_skill_content(&project_name, agent_name),
+            generate_k2_agent_skill_content(&project_name, agent_name),
             "k2so-agent",
-            SKILL_VERSION_K2SO_AGENT,
+            SKILL_VERSION_K2_AGENT,
         ),
         "custom" => (
             generate_custom_agent_skill_content(&project_name, agent_name),
@@ -331,11 +331,11 @@ mod tests {
             "k2so-skill-writer-test-{}.md",
             uuid::Uuid::new_v4()
         ));
-        upsert_k2so_section(&tmp, "hello content");
+        upsert_k2_section(&tmp, "hello content");
         let s = std::fs::read_to_string(&tmp).unwrap();
-        assert!(s.contains(K2SO_SECTION_BEGIN));
+        assert!(s.contains(K2_SECTION_BEGIN));
         assert!(s.contains("hello content"));
-        assert!(s.contains(K2SO_SECTION_END));
+        assert!(s.contains(K2_SECTION_END));
         std::fs::remove_file(&tmp).ok();
     }
 
@@ -349,11 +349,11 @@ mod tests {
             &tmp,
             format!(
                 "# User Heading\n\n{}\nold content\n{}\n\n## User Footer\n",
-                K2SO_SECTION_BEGIN, K2SO_SECTION_END
+                K2_SECTION_BEGIN, K2_SECTION_END
             ),
         )
         .unwrap();
-        upsert_k2so_section(&tmp, "new content");
+        upsert_k2_section(&tmp, "new content");
         let s = std::fs::read_to_string(&tmp).unwrap();
         assert!(s.contains("# User Heading"), "user heading gone: {s}");
         assert!(s.contains("## User Footer"), "user footer gone: {s}");
@@ -485,10 +485,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::write(&tmp, "# Pure user content\n").unwrap();
-        upsert_k2so_section(&tmp, "injected");
+        upsert_k2_section(&tmp, "injected");
         let s = std::fs::read_to_string(&tmp).unwrap();
         assert!(s.contains("# Pure user content"));
-        assert!(s.contains(K2SO_SECTION_BEGIN));
+        assert!(s.contains(K2_SECTION_BEGIN));
         assert!(s.contains("injected"));
         std::fs::remove_file(&tmp).ok();
     }

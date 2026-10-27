@@ -2658,7 +2658,7 @@ impl AgentHeartbeat {
     /// 0073 — set (or clear, both `None`) the heartbeat's delivery
     /// session: `last_session_id` + the provider that owns it, in one
     /// statement so a reader never observes a half-written pair.
-    /// Used by `k2so_heartbeat_set_session` (mode `session` writes
+    /// Used by `k2_heartbeat_set_session` (mode `session` writes
     /// both; mode `auto` clears both).
     pub fn set_session(
         conn: &Connection,

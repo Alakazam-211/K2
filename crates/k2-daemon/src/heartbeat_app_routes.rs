@@ -513,7 +513,7 @@ fn handle_read(
 ) -> CliResponse {
     let root = room.root.as_str();
     match path {
-        "/cli/heartbeat/list" => match hb::k2so_heartbeat_list(root.to_string()) {
+        "/cli/heartbeat/list" => match hb::k2_heartbeat_list(root.to_string()) {
             Ok(rows) => json_response(
                 "200 OK",
                 Value::Array(rows.iter().map(|h| guest_row(root, h)).collect()),
@@ -545,7 +545,7 @@ fn handle_read(
                 })
                 .unwrap_or(false);
             if pass.has_cap_in_room(&room.project_id, CAP_FILES_READ) && body_in_scope {
-                match hb::k2so_heartbeat_instructions(root, name) {
+                match hb::k2_heartbeat_instructions(root, name) {
                     Ok((body, rel)) => {
                         v["instructions"] = Value::String(body);
                         v["wakeupPath"] = Value::String(rel);
@@ -585,7 +585,7 @@ fn handle_read(
                 .and_then(|s| s.parse::<i64>().ok())
                 .unwrap_or(FIRES_LIST_DEFAULT)
                 .clamp(1, HISTORY_MAX);
-            match hb::k2so_heartbeat_fires_list(root.to_string(), Some(limit)) {
+            match hb::k2_heartbeat_fires_list(root.to_string(), Some(limit)) {
                 Ok(rows) => json_response(
                     "200 OK",
                     Value::Array(rows.iter().map(|f| guest_fire(root, f)).collect()),
@@ -622,7 +622,7 @@ fn handle_write(path: &str, body: &Map<String, Value>, room: &Room) -> CliRespon
                 root,
                 &name,
                 "added",
-                hb::k2so_heartbeat_add_with_instructions(
+                hb::k2_heartbeat_add_with_instructions(
                     root.to_string(),
                     name.clone(),
                     frequency,
@@ -700,7 +700,7 @@ fn handle_write(path: &str, body: &Map<String, Value>, room: &Room) -> CliRespon
                 root,
                 &name,
                 if enabled { "enabled" } else { "disabled" },
-                hb::k2so_heartbeat_set_enabled(root.to_string(), name.clone(), enabled)
+                hb::k2_heartbeat_set_enabled(root.to_string(), name.clone(), enabled)
                     .map(|_| String::new()),
             );
             match result {
@@ -723,7 +723,7 @@ fn handle_write(path: &str, body: &Map<String, Value>, room: &Room) -> CliRespon
                 root,
                 &to,
                 &reason,
-                hb::k2so_heartbeat_rename(root.to_string(), from, to.clone()).map(|_| String::new()),
+                hb::k2_heartbeat_rename(root.to_string(), from, to.clone()).map(|_| String::new()),
             );
             match result {
                 Ok(_) => row_reply(root, &room.project_id, &to),
@@ -742,7 +742,7 @@ fn handle_write(path: &str, body: &Map<String, Value>, room: &Room) -> CliRespon
                 root,
                 &name,
                 "archived",
-                hb::k2so_heartbeat_archive(root.to_string(), name.clone()).map(|_| String::new()),
+                hb::k2_heartbeat_archive(root.to_string(), name.clone()).map(|_| String::new()),
             );
             match result {
                 Ok(_) => json_response("200 OK", json!({ "success": true, "name": name, "archived": true })),
@@ -774,7 +774,7 @@ fn handle_fire(body: &Map<String, Value>, pass: &SkinPass, room: &Room) -> CliRe
             json!({ "error": "backoff", "nextFireAt": h.next_fire_at }),
         );
     }
-    match hb::k2so_heartbeat_instructions(root, &name) {
+    match hb::k2_heartbeat_instructions(root, &name) {
         Ok((text, _)) if text.trim().is_empty() => return err("409 Conflict", "wakeup_empty"),
         Ok(_) => {}
         Err(e) => return core_err(root, &e),

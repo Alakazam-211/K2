@@ -56,7 +56,7 @@ impl Drop for KillOnDrop {
 #[tokio::test(flavor = "current_thread")]
 async fn daemon_writes_heartbeat_port_eagerly_on_startup() {
     let home = isolated_home("eager");
-    let k2so_dir = home.join(".k2");
+    let k2_dir = home.join(".k2");
     // Spawn guard (2026-09-12): this boots the REAL daemon binary under a
     // temp HOME. It needs no agent, so `K2_TEST_AGENT_SHIM_DIR` points at
     // an EMPTY dir — any spawn attempt inside the child fails loudly
@@ -89,9 +89,9 @@ async fn daemon_writes_heartbeat_port_eagerly_on_startup() {
     // Poll for up to 5 seconds waiting for heartbeat.port to
     // appear. Success should be much faster than that; the
     // generous timeout is just for slow CI.
-    let heartbeat_port = k2so_dir.join("heartbeat.port");
-    let heartbeat_token = k2so_dir.join("heartbeat.token");
-    let daemon_port = k2so_dir.join("daemon.port");
+    let heartbeat_port = k2_dir.join("heartbeat.port");
+    let heartbeat_token = k2_dir.join("heartbeat.token");
+    let daemon_port = k2_dir.join("daemon.port");
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut saw_hb_port = false;
     let mut saw_hb_token = false;

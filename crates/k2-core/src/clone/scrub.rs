@@ -7,7 +7,7 @@
 //! - a path pattern (`.env*`, `.auth/`, `.ssh/`, key files, login files)
 //!   is [`SecretReason::PathPattern`];
 //! - a content hit in a `.k2/` (or legacy `.k2so/`) file is
-//!   [`SecretReason::K2soContent`] (benign config lives there too, so the
+//!   [`SecretReason::K2DirContent`] (benign config lives there too, so the
 //!   folder is gated on content);
 //! - any other content hit (including a `.env.k2` holding a literal
 //!   secret, or a `.git/config` remote with a login) is
@@ -30,7 +30,7 @@ pub enum SecretReason {
     PathPattern,
     /// A `.k2/` (or legacy `.k2so/`) file whose CONTENT tripped the
     /// credential scan.
-    K2soContent,
+    K2DirContent,
     /// CONTENT tripped the credential scan (path not otherwise flagged).
     Content,
 }
@@ -44,7 +44,7 @@ pub fn classify_secret(rel_path: &str, abs_path: &Path) -> Option<SecretReason> 
     match secret_paths::classify(rel_path, abs_path)? {
         SecretHit::Path => Some(SecretReason::PathPattern),
         SecretHit::Content if path_under_agent_dot_dir(rel_path) && final_component(rel_path) != ".env.k2" => {
-            Some(SecretReason::K2soContent)
+            Some(SecretReason::K2DirContent)
         }
         SecretHit::Content => Some(SecretReason::Content),
     }
@@ -85,7 +85,7 @@ mod env_k2_tests {
         assert_eq!(classify_secret("server.pem", &pem), Some(SecretReason::PathPattern));
         let k2 = dir.join(".k2/config.toml");
         std::fs::write(&k2, "api_key = \"abc\"\n").expect("write");
-        assert_eq!(classify_secret(".k2/config.toml", &k2), Some(SecretReason::K2soContent));
+        assert_eq!(classify_secret(".k2/config.toml", &k2), Some(SecretReason::K2DirContent));
         let k2_doc = dir.join(".k2/notes.md");
         std::fs::write(&k2_doc, "# plan\n").expect("write");
         assert_eq!(classify_secret(".k2/notes.md", &k2_doc), None);

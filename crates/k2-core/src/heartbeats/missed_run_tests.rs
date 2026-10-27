@@ -1,6 +1,6 @@
 //! Heartbeat S2 — missed runs (D7) and "enable / edit waits for the next
 //! slot" (D4), driven through the real tick evaluator
-//! (`k2so_agents_heartbeat_tick`) against the shared test DB.
+//! (`k2_agents_heartbeat_tick`) against the shared test DB.
 //!
 //! Kept in its own file so the S5 creation-trap tests in `mod.rs` and
 //! these never touch the same lines.
@@ -87,7 +87,7 @@ fn slot_missed_by_more_than_12h_is_skipped_once_and_reanchored() {
     let last = chrono::Utc::now() - chrono::Duration::seconds(day + 13 * 3600);
     let (path, pid) = seed("skip", day, Some(last));
 
-    let first = k2so_agents_heartbeat_tick(&path);
+    let first = k2_agents_heartbeat_tick(&path);
     assert!(first.is_empty(), "a 13h-old miss must not fire, got {first:?}");
     assert_eq!(audit_count(&pid, "skipped_missed"), 1);
     let after = row(&pid);
@@ -99,7 +99,7 @@ fn slot_missed_by_more_than_12h_is_skipped_once_and_reanchored() {
 
     // The next tick sees the next real slot (a day away): no fire, no
     // second skip row.
-    let second = k2so_agents_heartbeat_tick(&path);
+    let second = k2_agents_heartbeat_tick(&path);
     assert!(second.is_empty(), "second tick must not fire, got {second:?}");
     assert_eq!(audit_count(&pid, "skipped_missed"), 1, "one skip row per missed slot");
 }
@@ -110,7 +110,7 @@ fn slot_missed_within_12h_fires_one_catch_up_carrying_the_evaluated_last_fired()
     let last = chrono::Utc::now() - chrono::Duration::seconds(day + 2 * 3600);
     let (path, pid) = seed("catchup", day, Some(last));
 
-    let cands = k2so_agents_heartbeat_tick(&path);
+    let cands = k2_agents_heartbeat_tick(&path);
     assert_eq!(cands.len(), 1, "a 2h-old miss fires one catch-up");
     let c = &cands[0];
     assert!(c.catchup_of.is_some(), "a 2h-late fire is a catch-up");
@@ -128,17 +128,17 @@ fn enabling_a_disabled_row_waits_for_its_next_slot() {
     let hour = 3600;
     let last = chrono::Utc::now() - chrono::Duration::days(3);
     let (path, pid) = seed("enable", hour, Some(last));
-    k2so_heartbeat_set_enabled(path.clone(), "hb".into(), false).expect("disable");
+    k2_heartbeat_set_enabled(path.clone(), "hb".into(), false).expect("disable");
     assert!(row(&pid).schedule_anchor_at.is_none(), "disabling does not anchor");
-    k2so_heartbeat_set_enabled(path.clone(), "hb".into(), true).expect("enable");
+    k2_heartbeat_set_enabled(path.clone(), "hb".into(), true).expect("enable");
     let anchor = row(&pid).schedule_anchor_at.expect("enable must anchor the schedule");
 
-    let cands = k2so_agents_heartbeat_tick(&path);
+    let cands = k2_agents_heartbeat_tick(&path);
     assert!(cands.is_empty(), "enable must not fire a catch-up, got {cands:?}");
     assert_eq!(audit_count(&pid, "skipped_missed"), 0, "enable is not a skipped miss");
 
     // Re-saving an already-enabled row keeps the anchor.
-    k2so_heartbeat_set_enabled(path.clone(), "hb".into(), true).expect("re-enable");
+    k2_heartbeat_set_enabled(path.clone(), "hb".into(), true).expect("re-enable");
     assert_eq!(row(&pid).schedule_anchor_at.as_deref(), Some(anchor.as_str()));
 }
 
@@ -148,10 +148,10 @@ fn editing_the_schedule_waits_for_the_next_slot() {
     let last = chrono::Utc::now() - chrono::Duration::hours(5);
     let (path, pid) = seed("edit", hour, Some(last));
     // Before the edit the row is overdue (catch-up due).
-    let before = k2so_agents_heartbeat_tick(&path);
+    let before = k2_agents_heartbeat_tick(&path);
     assert_eq!(before.len(), 1, "precondition: the row is due before the edit");
 
-    k2so_heartbeat_edit(
+    k2_heartbeat_edit(
         path.clone(),
         "hb".into(),
         "hourly".into(),
@@ -159,7 +159,7 @@ fn editing_the_schedule_waits_for_the_next_slot() {
     )
     .expect("edit schedule");
     assert!(row(&pid).schedule_anchor_at.is_some(), "edit must anchor the schedule");
-    let after = k2so_agents_heartbeat_tick(&path);
+    let after = k2_agents_heartbeat_tick(&path);
     assert!(after.is_empty(), "an edit must not fire a catch-up, got {after:?}");
 }
 
@@ -168,9 +168,9 @@ fn unarchive_waits_for_the_next_slot() {
     let hour = 3600;
     let last = chrono::Utc::now() - chrono::Duration::hours(6);
     let (path, pid) = seed("unarchive", hour, Some(last));
-    k2so_heartbeat_archive(path.clone(), "hb".into()).expect("archive");
-    k2so_heartbeat_unarchive(path.clone(), "hb".into()).expect("unarchive");
+    k2_heartbeat_archive(path.clone(), "hb".into()).expect("archive");
+    k2_heartbeat_unarchive(path.clone(), "hb".into()).expect("unarchive");
     assert!(row(&pid).schedule_anchor_at.is_some(), "unarchive must anchor the schedule");
-    let cands = k2so_agents_heartbeat_tick(&path);
+    let cands = k2_agents_heartbeat_tick(&path);
     assert!(cands.is_empty(), "unarchive must not fire a catch-up, got {cands:?}");
 }

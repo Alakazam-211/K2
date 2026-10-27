@@ -368,7 +368,7 @@ pub(crate) fn handle(
             &target.path,
             name,
             if enabled { "enabled" } else { "disabled" },
-            k2_core::heartbeats::k2so_heartbeat_set_enabled(target.path.clone(), name.to_string(), enabled)
+            k2_core::heartbeats::k2_heartbeat_set_enabled(target.path.clone(), name.to_string(), enabled)
                 .map(|_| r#"{"success":true}"#.to_string()),
         )
     });

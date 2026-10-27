@@ -30,7 +30,7 @@ pub async fn k2so_agents_list(project_path: String) -> Result<Value, String> {
 }
 
 /// Full-fat wake-launch builder (UI "Launch" button + Chat tab):
-/// `workspace::agent_launch::k2so_agents_build_launch` →
+/// `workspace::agent_launch::k2_agents_build_launch` →
 /// `POST /cli/agents/build-launch`. `heartbeat_name` is the
 /// heartbeat-scoped resume target (React callers leave it `None`).
 #[tauri::command]
@@ -76,7 +76,7 @@ pub async fn k2so_agents_review_queue(project_path: String) -> Result<Value, Str
     off_main(move || daemon()?.mirror_get("/cli/reviews", &[("project", &project_path)])).await
 }
 
-/// `workspace::session::k2so_agents_lock` → `POST /cli/agents/lock`.
+/// `workspace::session::k2_agents_lock` → `POST /cli/agents/lock`.
 #[tauri::command]
 pub async fn k2so_agents_lock(
     project_path: String,
@@ -125,7 +125,7 @@ pub async fn k2so_agents_preview_schedule(
     .await
 }
 
-/// `heartbeats::k2so_heartbeat_list` → `GET /cli/heartbeat/list`.
+/// `heartbeats::k2_heartbeat_list` → `GET /cli/heartbeat/list`.
 #[tauri::command]
 pub async fn k2so_heartbeat_list(project_path: String) -> Result<Value, String> {
     off_main(move || daemon()?.mirror_get("/cli/heartbeat/list", &[("project", &project_path)])).await
@@ -133,7 +133,7 @@ pub async fn k2so_heartbeat_list(project_path: String) -> Result<Value, String> 
 
 /// 0.38.3 — most recent heartbeat fire records across ALL projects (the
 /// Heartbeats settings page audit log). Default limit 100 fires.
-/// `heartbeats::k2so_heartbeat_fires_list_all` → `GET /cli/heartbeat/fires-list-all`.
+/// `heartbeats::k2_heartbeat_fires_list_all` → `GET /cli/heartbeat/fires-list-all`.
 #[tauri::command]
 pub async fn k2so_heartbeat_fires_list_all(limit: Option<i64>) -> Result<Value, String> {
     off_main(move || {
@@ -148,7 +148,7 @@ pub async fn k2so_heartbeat_fires_list_all(limit: Option<i64>) -> Result<Value, 
 }
 
 /// 0.38.3 — every active heartbeat across ALL workspaces with the parent
-/// project's name + path. `heartbeats::k2so_heartbeat_list_all` →
+/// project's name + path. `heartbeats::k2_heartbeat_list_all` →
 /// `GET /cli/heartbeat/list-all`.
 #[tauri::command]
 pub async fn k2so_heartbeat_list_all() -> Result<Value, String> {
@@ -156,7 +156,7 @@ pub async fn k2so_heartbeat_list_all() -> Result<Value, String> {
 }
 
 /// 1 = each scheduled heartbeat fire opens a background tab.
-/// `heartbeats::k2so_workspace_get_show_heartbeat_sessions` →
+/// `heartbeats::k2_workspace_get_show_heartbeat_sessions` →
 /// `POST /cli/heartbeat/show-sessions`.
 #[tauri::command]
 pub async fn k2so_workspace_get_show_heartbeat_sessions(project_path: String) -> Result<Value, String> {
@@ -273,7 +273,7 @@ pub async fn k2so_agents_update_heartbeat_projects() -> Result<(), String> {
 }
 
 /// AIFileEditor agent-editing context:
-/// `workspace::agent_editor::k2so_agents_get_editor_context` →
+/// `workspace::agent_editor::k2_agents_get_editor_context` →
 /// `POST /cli/agents/editor-context`.
 #[tauri::command]
 pub async fn k2so_agents_get_editor_context(project_path: String, agent_name: String) -> Result<Value, String> {
@@ -311,7 +311,7 @@ pub async fn workspace_session_set_session_id(
     .await
 }
 
-/// `workspace::teardown::k2so_agents_teardown_workspace` →
+/// `workspace::teardown::k2_agents_teardown_workspace` →
 /// `POST /cli/agents/teardown-workspace`.
 #[tauri::command]
 pub async fn k2so_agents_teardown_workspace(project_path: String, mode: String) -> Result<Value, String> {

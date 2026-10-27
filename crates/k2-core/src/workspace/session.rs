@@ -3,19 +3,19 @@
 //! Small DB-backed helpers the host (daemon OR src-tauri) calls around
 //! a PTY spawn to make it visible to the scheduler:
 //!
-//! - [`k2so_agents_lock`] — record that an agent has an active session.
+//! - [`k2_agents_lock`] — record that an agent has an active session.
 //!   Writes both a DB row (`agent_sessions`) and a legacy `.lock` file.
 //!   Callers: forced-fire + heartbeat-fired + interactive launches.
 //!   The scheduler reads this via
 //!   [`crate::workspace::scheduler::is_agent_locked`]
 //!   to skip agents that are already running.
-//! - [`k2so_agents_unlock`] — mark the session `sleeping` + remove the
+//! - [`k2_agents_unlock`] — mark the session `sleeping` + remove the
 //!   `.lock` file. Called at session-end by the TUI exit listener (and
 //!   by the scheduler when it observes a stop event).
-//! - [`k2so_agents_save_session_id`] — persist the CLI session ID
+//! - [`k2_agents_save_session_id`] — persist the CLI session ID
 //!   (Claude Code's `--resume <id>` target) so the next wake rejoins
 //!   the same chat instead of spawning fresh.
-//! - [`k2so_agents_clear_session_id`] — null out the saved ID after a
+//! - [`k2_agents_clear_session_id`] — null out the saved ID after a
 //!   no-op (next wake will be a fresh session).
 
 use std::fs;
@@ -27,7 +27,7 @@ use crate::db::schema::WorkspaceSession;
 /// Best-effort upsert of an `agent_sessions` row + create the legacy
 /// `.lock` file. The row is the source of truth; the file is for
 /// pre-migration workspaces whose .k2so layout predates the DB.
-pub fn k2so_agents_lock(
+pub fn k2_agents_lock(
     project_path: String,
     agent_name: String,
     terminal_id: Option<String>,
@@ -76,7 +76,7 @@ pub fn k2so_agents_lock(
 /// Flip the session to `sleeping` + remove the `.lock` file. Silent
 /// no-op if neither the DB row nor the file is present (common on
 /// fresh workspaces).
-pub fn k2so_agents_unlock(project_path: String, agent_name: String) -> Result<(), String> {
+pub fn k2_agents_unlock(project_path: String, agent_name: String) -> Result<(), String> {
     {
         let db = crate::db::shared();
         let conn = db.lock();
@@ -95,7 +95,7 @@ pub fn k2so_agents_unlock(project_path: String, agent_name: String) -> Result<()
 /// Persist the CLI session ID on the `agent_sessions` row so the next
 /// wake can `--resume` into the same chat. Errors if the agent
 /// directory doesn't exist (bogus name / already archived).
-pub fn k2so_agents_save_session_id(
+pub fn k2_agents_save_session_id(
     project_path: String,
     agent_name: String,
     session_id: String,
@@ -117,7 +117,7 @@ pub fn k2so_agents_save_session_id(
 /// Null out the saved session ID. Called on no-op so the next wake is
 /// a fresh session — no point resuming a session that was just "I have
 /// nothing to do."
-pub fn k2so_agents_clear_session_id(
+pub fn k2_agents_clear_session_id(
     project_path: String,
     _agent_name: String,
 ) -> Result<(), String> {
@@ -151,7 +151,7 @@ pub fn k2so_agents_clear_session_id(
 /// a hot path. Pass empty strings / empty Vec / None when not
 /// applicable.
 #[allow(clippy::too_many_arguments)]
-pub fn k2so_session_set_surfaced(
+pub fn k2_session_set_surfaced(
     project_path: String,
     agent_name: String,
     surfaced: bool,
@@ -218,7 +218,7 @@ pub fn k2so_session_set_surfaced(
 /// AgentChatPane listener bumps its own `refreshNonce` when the
 /// payload's `projectPath` matches its workspace, keeping pinned
 /// chat sessions in sync across viewers.
-pub fn k2so_chat_refresh_broadcast(project_path: String) -> Result<(), String> {
+pub fn k2_chat_refresh_broadcast(project_path: String) -> Result<(), String> {
     crate::agent_hooks::emit(
         crate::agent_hooks::HookEvent::ChatRefreshed,
         serde_json::json!({ "projectPath": project_path }),

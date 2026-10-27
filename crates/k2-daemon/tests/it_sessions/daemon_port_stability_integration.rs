@@ -61,8 +61,8 @@ impl Drop for KillOnDrop {
 /// resolving the real `~/.local/bin/claude` (which opened a browser OAuth
 /// login under a fresh HOME). `Command` inherits env, so the child sees it.
 fn boot_once_and_read_port(home: &PathBuf) -> u16 {
-    let k2so_dir = home.join(".k2");
-    let daemon_port = k2so_dir.join("daemon.port");
+    let k2_dir = home.join(".k2");
+    let daemon_port = k2_dir.join("daemon.port");
     let shim_dir = home.join("agent-shim-empty");
     std::fs::create_dir_all(&shim_dir).unwrap();
 

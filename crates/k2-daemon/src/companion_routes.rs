@@ -372,7 +372,7 @@ fn companion_label(
 ///
 /// Review-pending count routes through
 /// `k2_core::workspace::reviews::review_queue` — the same
-/// canonical source the Tauri `k2so_agents_review_queue` command
+/// canonical source the Tauri `k2_agents_review_queue` command
 /// uses. Pre-Phase-2.5b this walked `<project>/.k2so/agents/*/work/done/`
 /// on the filesystem; that directory tree was retired by the 2.5b
 /// unification migration, so on every upgraded workspace the walk
@@ -431,7 +431,7 @@ pub fn handle_companion_projects_summary(
 ///
 /// Delegates to `k2_core::workspace::reviews::review_queue` — the
 /// canonical "items awaiting review" surface that powers the Tauri
-/// `k2so_agents_review_queue` command and the daemon's
+/// `k2_agents_review_queue` command and the daemon's
 /// `/cli/reviews` endpoint. We sum the `work_items` lengths so the
 /// count matches what a human reviewer sees in the panel (one entry
 /// per done-item, not per agent-with-done-items).

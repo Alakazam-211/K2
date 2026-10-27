@@ -52,7 +52,7 @@ pub enum TerminalIdKind {
 /// sites but it's IGNORED in the produced id. Mirrors the renderer
 /// `terminal-id.ts agentChatId()` helper. Pre-0.37.5 the id was
 /// `agent-chat:<project_id>:<agent>`; rebuilding it that way
-/// caused the renderer-side `k2so_agents_lock` call to write the
+/// caused the renderer-side `k2_agents_lock` call to write the
 /// wrong shape to `workspace_sessions.terminal_id`, bypassing the
 /// SQL migration 0042 (C3PO 5c80bef1).
 pub fn agent_chat_id(project_id: &str, agent: &str) -> String {

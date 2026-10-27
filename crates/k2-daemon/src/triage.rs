@@ -83,7 +83,7 @@ fn lease_watchdog_grace_secs() -> u64 {
 }
 
 /// Handler for `/cli/agents/triage` — read-only summary. Matches
-/// pre-Phase-4 Tauri's `k2so_agents_triage_summary` shape. No CLI
+/// pre-Phase-4 Tauri's `k2_agents_triage_summary` shape. No CLI
 /// verb calls it any more; the route is public API. Never spawns.
 pub fn handle_triage(project_path: &str) -> String {
     triage_summary::triage_summary(project_path)
@@ -293,7 +293,7 @@ pub fn handle_scheduler_fire(project_path: &str) -> String {
         }
     }
 
-    let launchable = match scheduler::k2so_agents_scheduler_tick(project_path.to_string()) {
+    let launchable = match scheduler::k2_agents_scheduler_tick(project_path.to_string()) {
         Ok(v) => v,
         Err(e) => {
             return serde_json::json!({
@@ -345,7 +345,7 @@ pub fn handle_scheduler_fire(project_path: &str) -> String {
         }
     }
 
-    let candidates = heartbeat::k2so_agents_heartbeat_tick(project_path);
+    let candidates = heartbeat::k2_agents_heartbeat_tick(project_path);
     // Cron tick uses the same smart_launch decision tree the Launch
     // button + `k2so heartbeat launch` CLI use. The decision tree
     // (fresh / inject-into-live / resume-and-fire) handles

@@ -106,7 +106,7 @@ fn parse<T: serde::de::DeserializeOwned + Default>(body: &[u8]) -> Result<T, Cli
 
 /// Handler for `POST /cli/skills/list` `{project_path}` → the workspace's
 /// `SkillSummary[]` (`k2_core::skills::crud::list`). The desktop Skills
-/// panel's `k2so_skills_list` Tauri command forwards here (0.46.4: the app
+/// panel's `k2_skills_list` Tauri command forwards here (0.46.4: the app
 /// no longer links k2-core).
 pub fn handle_list(body: &[u8]) -> CliResponse {
     let b: ProjectPathBody = match parse(body) {
@@ -123,7 +123,7 @@ pub fn handle_list(body: &[u8]) -> CliResponse {
 ///
 /// Wraps `k2_core::skills::crud::create`. Returns the created
 /// [`skills::crud::SkillSummary`] as JSON. Mirrors the
-/// `k2so_skills_create` Tauri command.
+/// `k2_skills_create` Tauri command.
 pub fn handle_create(body: &[u8]) -> CliResponse {
     let b: CreateBody = match parse(body) {
         Ok(b) => b,
@@ -147,7 +147,7 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
 ///
 /// Wraps `k2_core::skills::crud::remove`, which TRASHES the skill dir
 /// (recoverable via the OS recycle bin) — never a hard `remove_dir_all`.
-/// Mirrors the `k2so_skills_remove` Tauri command.
+/// Mirrors the `k2_skills_remove` Tauri command.
 pub fn handle_remove(body: &[u8]) -> CliResponse {
     let b: RemoveBody = match parse(body) {
         Ok(b) => b,
@@ -170,7 +170,7 @@ pub fn handle_remove(body: &[u8]) -> CliResponse {
 /// Wraps `k2_core::skills::content::write_opt_in_skill`. Writes one of
 /// the three canonical opt-in skills to `.k2so/skills/<name>/SKILL.md`
 /// and returns the absolute path written. Mirrors the
-/// `k2so_write_opt_in_skill` Tauri command (including its
+/// `k2_write_opt_in_skill` Tauri command (including its
 /// unknown-skill-name error).
 pub fn handle_write_opt_in(body: &[u8]) -> CliResponse {
     let b: WriteOptInBody = match parse(body) {
@@ -196,7 +196,7 @@ pub fn handle_write_opt_in(body: &[u8]) -> CliResponse {
 ///
 /// Wraps `k2_core::workspace::onboarding::set_harness_fanout_enabled`,
 /// which writes/removes the `.k2so/.harness-fanout-enabled` marker.
-/// Mirrors the `k2so_set_harness_fanout_enabled` Tauri command.
+/// Mirrors the `k2_set_harness_fanout_enabled` Tauri command.
 pub fn handle_set_harness_fanout_enabled(body: &[u8]) -> CliResponse {
     let b: SetHarnessFanoutBody = match parse(body) {
         Ok(b) => b,
@@ -290,7 +290,7 @@ pub fn handle_agents_md_generate_enabled(body: &[u8]) -> CliResponse {
 }
 
 /// GET-equivalent read: `POST /cli/onboarding/harness-fanout-enabled` → `{ "enabled": bool }`.
-/// Host-aware mirror of the `k2so_harness_fanout_enabled` Tauri command — wraps the SAME
+/// Host-aware mirror of the `k2_harness_fanout_enabled` Tauri command — wraps the SAME
 /// `k2_core::workspace::onboarding::harness_fanout_enabled` so local + remote stay identical.
 pub fn handle_harness_fanout_enabled(body: &[u8]) -> CliResponse {
     let b: ProjectPathBody = match parse(body) {
@@ -305,7 +305,7 @@ pub fn handle_harness_fanout_enabled(body: &[u8]) -> CliResponse {
 }
 
 /// `POST /cli/canonical/detect-state` → the `Vec<HarnessProbe>` JSON array.
-/// Host-aware mirror of the `k2so_detect_canonical_state` Tauri command.
+/// Host-aware mirror of the `k2_detect_canonical_state` Tauri command.
 pub fn handle_detect_canonical_state(body: &[u8]) -> CliResponse {
     let b: ProjectPathBody = match parse(body) {
         Ok(b) => b,

@@ -71,7 +71,7 @@ pub fn count_md_files(dir: &Path) -> usize {
 ///
 /// prd-daemon-activity-and-thread-working-v1 DA32: the daemon activity
 /// store releases the row (`sleeping`) on turn-end evidence, but only
-/// `k2so_agents_unlock` deletes the file `k2so_agents_lock` writes. While
+/// `k2_agents_unlock` deletes the file `k2_agents_lock` writes. While
 /// the file was consulted after a `sleeping` row, a workspace locked that
 /// way once stayed locked for good and its heartbeats never fired.
 pub fn is_agent_locked(project_path: &str, agent_name: &str) -> bool {
@@ -158,7 +158,7 @@ pub fn get_highest_inbox_priority(project_path: &str, agent_name: &str) -> u8 {
 /// ready to launch. The caller is responsible for spawning PTYs. All
 /// gating decisions write `heartbeat_fires` audit rows so
 /// `k2so heartbeat status` can show what happened.
-pub fn k2so_agents_scheduler_tick(project_path: String) -> Result<Vec<String>, String> {
+pub fn k2_agents_scheduler_tick(project_path: String) -> Result<Vec<String>, String> {
     let tick_start = std::time::Instant::now();
 
     let project_row: Option<(String, String, Option<String>, Option<String>)> = {

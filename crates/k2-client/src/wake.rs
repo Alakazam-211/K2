@@ -67,7 +67,7 @@ pub struct DaemonPlist {
 impl DaemonPlist {
     /// Canonical config: k2so-daemon, always-on, logs under `~/.k2so/`.
     pub fn canonical(program: PathBuf) -> Self {
-        let k2so_dir = crate::paths::home_dir()
+        let k2_dir = crate::paths::home_dir()
             .map(|h| h.join(".k2"))
             .unwrap_or_else(|| PathBuf::from("."));
         Self {
@@ -76,8 +76,8 @@ impl DaemonPlist {
             args: vec![],
             run_at_load: true,
             keep_alive: true,
-            stderr_path: k2so_dir.join("daemon.stderr.log"),
-            stdout_path: k2so_dir.join("daemon.stdout.log"),
+            stderr_path: k2_dir.join("daemon.stderr.log"),
+            stdout_path: k2_dir.join("daemon.stdout.log"),
         }
     }
 

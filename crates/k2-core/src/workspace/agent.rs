@@ -36,7 +36,7 @@ use crate::workspace::scheduler::{agent_work_dir, count_md_files};
 /// Summary row the UI agent-list + `k2so agents list` CLI render.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct K2soAgentInfo {
+pub struct K2AgentInfo {
     pub name: String,
     pub role: String,
     pub inbox_count: usize,
@@ -96,7 +96,7 @@ pub fn log_agent_warning(project_path: &str, agent_name: &str, message: &str) {
 /// back to enumerating the legacy `.k2so/agents/` tree so the call
 /// keeps returning useful data during the boot-cycle window where
 /// the daemon hasn't run `consolidate_skills_v1` yet.
-pub fn list(project_path: String) -> Result<Vec<K2soAgentInfo>, String> {
+pub fn list(project_path: String) -> Result<Vec<K2AgentInfo>, String> {
     let new_home = crate::workspace::agent_identity::skills_dir(&project_path);
     let dir = if new_home.exists() {
         new_home
@@ -167,7 +167,7 @@ pub fn list(project_path: String) -> Result<Vec<K2soAgentInfo>, String> {
         let active_count = count_md_files(&agent_work_dir(&project_path, &name, "active"));
         let done_count = count_md_files(&agent_work_dir(&project_path, &name, "done"));
 
-        agents.push(K2soAgentInfo {
+        agents.push(K2AgentInfo {
             name,
             role,
             inbox_count,
@@ -194,7 +194,7 @@ pub fn create(
     role: String,
     prompt: Option<String>,
     agent_type: Option<String>,
-) -> Result<K2soAgentInfo, String> {
+) -> Result<K2AgentInfo, String> {
     if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
         return Err("Agent name must be alphanumeric (hyphens and underscores allowed)".to_string());
     }
@@ -207,12 +207,12 @@ pub fn create(
     // always present (the migration created it). Frontend "Manage
     // Persona" buttons that reflexively call `create` to ensure the
     // agent exists used to error here ("Agent already exists"); now
-    // they get back the existing K2soAgentInfo and proceed to the
+    // they get back the existing K2AgentInfo and proceed to the
     // edit flow.
     let unified_primary = crate::workspace_dot_dir(&project_path).join("agent");
     if persona_present_in(&unified_primary) {
         let existing_type = agent_type_for(&project_path, &name);
-        return Ok(K2soAgentInfo {
+        return Ok(K2AgentInfo {
             name,
             role,
             inbox_count: 0,
@@ -272,7 +272,7 @@ pub fn create(
     write_agent_skill_file(&project_path, &name, &agent_type);
     ensure_agent_wakeup(&project_path, &name, &agent_type);
 
-    Ok(K2soAgentInfo {
+    Ok(K2AgentInfo {
         name,
         role,
         inbox_count: 0,
@@ -790,7 +790,7 @@ mod tests {
     // layout-aware probe correctly resolved to the unified path —
     // which always exists post-migration. Tests below pin the
     // short-circuit: when the unified primary's AGENT.md is on
-    // disk, create() returns Ok with the existing K2soAgentInfo
+    // disk, create() returns Ok with the existing K2AgentInfo
     // instead of erroring.
 
     fn temp_workspace_with_unified_agent(persona_type: &str) -> std::path::PathBuf {

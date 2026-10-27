@@ -186,7 +186,7 @@ pub fn handle_set_wake(body: &[u8], caller: crate::power::HelperCaller) -> CliRe
 // ──────────────────────────────────────────────────────────────────────
 //
 // The renderer previously flipped this via the LOCAL
-// `k2so_workspace_set_show_heartbeat_sessions` Tauri command — which
+// `k2_workspace_set_show_heartbeat_sessions` Tauri command — which
 // misfires when driving a REMOTE host (K2 Connect). This route wraps the
 // SAME core fn so the write always lands on the daemon the renderer is
 // talking to. Workspace-scoped (a `project_path` in the body), NOT
@@ -201,8 +201,8 @@ struct SetShowHeartbeatSessionsBody {
 
 /// Handler for `POST /cli/heartbeat/set-show-sessions`.
 ///
-/// Wraps `k2_core::heartbeats::k2so_workspace_set_show_heartbeat_sessions`.
-/// Mirrors the `k2so_workspace_set_show_heartbeat_sessions` Tauri command.
+/// Wraps `k2_core::heartbeats::k2_workspace_set_show_heartbeat_sessions`.
+/// Mirrors the `k2_workspace_set_show_heartbeat_sessions` Tauri command.
 pub fn handle_set_show_heartbeat_sessions(body: &[u8]) -> CliResponse {
     let parsed: SetShowHeartbeatSessionsBody = if body.is_empty() {
         SetShowHeartbeatSessionsBody::default()
@@ -215,7 +215,7 @@ pub fn handle_set_show_heartbeat_sessions(body: &[u8]) -> CliResponse {
     if parsed.project_path.is_empty() {
         return CliResponse::bad_request("missing project_path");
     }
-    match hb::k2so_workspace_set_show_heartbeat_sessions(parsed.project_path, parsed.enabled) {
+    match hb::k2_workspace_set_show_heartbeat_sessions(parsed.project_path, parsed.enabled) {
         Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
         Err(e) => CliResponse::bad_request(e),
     }
@@ -229,8 +229,8 @@ struct ShowHeartbeatSessionsBody {
 
 /// Handler for `POST /cli/heartbeat/show-sessions` `{project_path}` → `true`
 /// / `false`. The READ twin of `set-show-sessions`: wraps
-/// `k2_core::heartbeats::k2so_workspace_get_show_heartbeat_sessions`, the
-/// body of the `k2so_workspace_get_show_heartbeat_sessions` Tauri command
+/// `k2_core::heartbeats::k2_workspace_get_show_heartbeat_sessions`, the
+/// body of the `k2_workspace_get_show_heartbeat_sessions` Tauri command
 /// (which the desktop app now forwards here instead of linking k2-core).
 pub fn handle_show_heartbeat_sessions(body: &[u8]) -> CliResponse {
     let parsed: ShowHeartbeatSessionsBody = if body.is_empty() {
@@ -244,7 +244,7 @@ pub fn handle_show_heartbeat_sessions(body: &[u8]) -> CliResponse {
     if parsed.project_path.is_empty() {
         return CliResponse::bad_request("missing project_path");
     }
-    crate::cli::respond(hb::k2so_workspace_get_show_heartbeat_sessions(parsed.project_path))
+    crate::cli::respond(hb::k2_workspace_get_show_heartbeat_sessions(parsed.project_path))
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -258,7 +258,7 @@ struct PreviewScheduleBody {
 /// Handler for `POST /cli/heartbeat/preview-schedule`
 /// `{mode, schedule_json, count}` → the next fire times as
 /// `"YYYY-MM-DD HH:MM"` strings (`k2_core::scheduler::preview_fire_times`,
-/// formerly the `k2so_agents_preview_schedule` Tauri command's body).
+/// formerly the `k2_agents_preview_schedule` Tauri command's body).
 /// Pure computation; no project, no DB.
 pub fn handle_preview_schedule(body: &[u8]) -> CliResponse {
     let parsed: PreviewScheduleBody = if body.is_empty() {
@@ -591,7 +591,7 @@ pub fn apply_edit(
         }
     }
     if let Some(freq) = frequency.as_ref() {
-        hb::k2so_heartbeat_edit(
+        hb::k2_heartbeat_edit(
             project_path.to_string(),
             name.to_string(),
             freq.clone(),
@@ -599,7 +599,7 @@ pub fn apply_edit(
         )?;
     }
     if let Some(text) = instructions.as_ref() {
-        hb::k2so_heartbeat_set_instructions(
+        hb::k2_heartbeat_set_instructions(
             project_path.to_string(),
             name.to_string(),
             text.clone(),
@@ -628,7 +628,7 @@ fn owner_show(project_path: &str, name: &str) -> Result<String, String> {
         hb::wait::overlay_no_ticks_now(&conn, &mut rows);
         rows.remove(0)
     };
-    let (body, rel) = hb::k2so_heartbeat_instructions(project_path, name)?;
+    let (body, rel) = hb::k2_heartbeat_instructions(project_path, name)?;
     let mut v = serde_json::to_value(&row).map_err(|e| e.to_string())?;
     v["instructions"] = serde_json::Value::String(body);
     v["wakeupPath"] = serde_json::Value::String(rel);
@@ -800,7 +800,7 @@ pub fn dispatch_get(
                 project_path,
                 &name,
                 "added",
-                hb::k2so_heartbeat_add_with_instructions(
+                hb::k2_heartbeat_add_with_instructions(
                     project_path.to_string(),
                     name.clone(),
                     frequency,
@@ -810,7 +810,7 @@ pub fn dispatch_get(
                 .map(|v| v.to_string()),
             )
         }
-        "/cli/heartbeat/list" => hb::k2so_heartbeat_list(project_path.to_string())
+        "/cli/heartbeat/list" => hb::k2_heartbeat_list(project_path.to_string())
             .map(|rows| serde_json::to_string(&rows).unwrap_or_default()),
         "/cli/heartbeat/show" => {
             let name = params.get("name").cloned().unwrap_or_default();
@@ -820,7 +820,7 @@ pub fn dispatch_get(
             owner_show(project_path, &name)
         }
         "/cli/heartbeat/list-archived" => {
-            hb::k2so_heartbeat_list_archived(project_path.to_string())
+            hb::k2_heartbeat_list_archived(project_path.to_string())
                 .map(|rows| serde_json::to_string(&rows).unwrap_or_default())
         }
         "/cli/heartbeat/archive" => {
@@ -832,7 +832,7 @@ pub fn dispatch_get(
                 project_path,
                 &name,
                 "archived",
-                hb::k2so_heartbeat_archive(project_path.to_string(), name.clone())
+                hb::k2_heartbeat_archive(project_path.to_string(), name.clone())
                     .map(|_| r#"{"success":true}"#.to_string()),
             )
         }
@@ -845,7 +845,7 @@ pub fn dispatch_get(
                 project_path,
                 &name,
                 "restored from archive",
-                hb::k2so_heartbeat_unarchive(project_path.to_string(), name.clone())
+                hb::k2_heartbeat_unarchive(project_path.to_string(), name.clone())
                     .map(|_| r#"{"success":true}"#.to_string()),
             )
         }
@@ -917,7 +917,7 @@ pub fn dispatch_get(
                 project_path,
                 &name,
                 "removed",
-                hb::k2so_heartbeat_remove(project_path.to_string(), name.clone())
+                hb::k2_heartbeat_remove(project_path.to_string(), name.clone())
                     .map(|_| r#"{"success":true}"#.to_string()),
             )
         }
@@ -934,7 +934,7 @@ pub fn dispatch_get(
                 project_path,
                 &name,
                 if enabled { "enabled" } else { "disabled" },
-                hb::k2so_heartbeat_set_enabled(project_path.to_string(), name.clone(), enabled)
+                hb::k2_heartbeat_set_enabled(project_path.to_string(), name.clone(), enabled)
                     .map(|_| r#"{"success":true}"#.to_string()),
             )
         }
@@ -958,7 +958,7 @@ pub fn dispatch_get(
                 } else {
                     "delivery set to its own session"
                 },
-                hb::k2so_heartbeat_set_use_workspace_session(
+                hb::k2_heartbeat_set_use_workspace_session(
                     project_path.to_string(),
                     name.clone(),
                     enabled,
@@ -992,7 +992,7 @@ pub fn dispatch_get(
                 project_path,
                 &name,
                 &reason,
-                hb::k2so_heartbeat_set_session(
+                hb::k2_heartbeat_set_session(
                     project_path.to_string(),
                     name.clone(),
                     mode,
@@ -1033,7 +1033,7 @@ pub fn dispatch_get(
                 project_path,
                 &new_name,
                 &reason,
-                hb::k2so_heartbeat_rename(project_path.to_string(), old_name, new_name.clone())
+                hb::k2_heartbeat_rename(project_path.to_string(), old_name, new_name.clone())
                     .map(|_| r#"{"success":true}"#.to_string()),
             )
         }
@@ -1069,7 +1069,7 @@ pub fn dispatch_get(
             let limit = params
                 .get("limit")
                 .and_then(|s| s.parse::<i64>().ok());
-            hb::k2so_heartbeat_fires_list(project_path.to_string(), limit)
+            hb::k2_heartbeat_fires_list(project_path.to_string(), limit)
                 .map(|rows| serde_json::to_string(&rows).unwrap_or_default())
         }
         "/cli/heartbeat/active-session" => {

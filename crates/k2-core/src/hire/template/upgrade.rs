@@ -566,7 +566,7 @@ fn version_steps(pass: &mut Pass<'_>, t: &Template) -> R<()> {
     pass.lock.catalog = t.meta.context.catalog.clone();
 
     // Heartbeats and permissions: reported, never applied.
-    let have: Vec<String> = crate::heartbeats::k2so_heartbeat_list(ws.to_string())
+    let have: Vec<String> = crate::heartbeats::k2_heartbeat_list(ws.to_string())
         .map(|hs| hs.into_iter().map(|h| h.name).collect())
         .unwrap_or_default();
     for hb in &t.meta.heartbeats {

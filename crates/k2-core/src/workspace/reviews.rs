@@ -27,7 +27,7 @@ use std::path::Path;
 use crate::deprecated::delegate::strip_worktree_from_frontmatter;
 use crate::workspace::agent_identity::parse_frontmatter;
 use crate::workspace::scheduler::agent_work_dir;
-use crate::workspace::session::{k2so_agents_unlock, simple_date};
+use crate::workspace::session::{k2_agents_unlock, simple_date};
 use crate::workspace::work_item::{atomic_write, read_work_item, WorkItem};
 
 /// One file in the branch diff between main and the agent's worktree.
@@ -245,7 +245,7 @@ pub fn review_approve(
         }
     }
 
-    let _ = k2so_agents_unlock(project_path, agent_name);
+    let _ = k2_agents_unlock(project_path, agent_name);
 
     Ok(format!("Approved and merged: {} files", result.merged_files))
 }
@@ -322,7 +322,7 @@ pub fn review_reject(
         atomic_write(&path, &content)?;
     }
 
-    let _ = k2so_agents_unlock(project_path, agent_name);
+    let _ = k2_agents_unlock(project_path, agent_name);
 
     Ok(())
 }

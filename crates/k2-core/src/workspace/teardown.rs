@@ -266,7 +266,7 @@ fn find_latest_archive(project_path: &str, rel: &str) -> Option<PathBuf> {
 /// Tauri-style entrypoint: parse mode string + run teardown. Returns
 
 /// the per-file result list ready for JSON-encoding back to the UI.
-pub fn k2so_agents_teardown_workspace(
+pub fn k2_agents_teardown_workspace(
     project_path: String,
     mode: String,
 ) -> Result<Vec<TeardownResult>, String> {

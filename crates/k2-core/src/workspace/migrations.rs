@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use crate::db::schema::{AgentHeartbeat, WorkspaceSession};
 use crate::fs_atomic::{self, atomic_write_str, log_if_err, unique_archive_path};
 use crate::heartbeats::control::ensure_agent_wakeup;
-use crate::heartbeats::k2so_heartbeat_add;
+use crate::heartbeats::k2_heartbeat_add;
 use crate::workspace::agent_identity::{
     agent_dir, agent_type_for, agents_dir, find_primary_agent, resolve_project_id,
     workspace_agent_path, workspace_heartbeats_dir,
@@ -667,7 +667,7 @@ pub fn migrate_or_scaffold_lead_heartbeat(project_path: &str) {
     };
 
     let spec = r#"{"frequency":"hourly","every_seconds":3600}"#.to_string();
-    match k2so_heartbeat_add(
+    match k2_heartbeat_add(
         project_path.to_string(),
         "triage".to_string(),
         "hourly".to_string(),
@@ -675,7 +675,7 @@ pub fn migrate_or_scaffold_lead_heartbeat(project_path: &str) {
     ) {
         Ok(_) => {
             // GH#27: write the wake body to the SAME canonical
-            // workspace-level path `k2so_heartbeat_add` just scaffolded
+            // workspace-level path `k2_heartbeat_add` just scaffolded
             // (and pointed the row at) — pre-fix this wrote into the
             // legacy `.k2/agent/heartbeats/` tree, so the content never
             // reached the file the row fires from.
@@ -1809,9 +1809,9 @@ mod migration_safety_tests {
     fn detect_interrupted_regen_flags_stale_marker_once() {
         let proj = scratch_project();
         let project_path = proj.to_str().unwrap();
-        let k2so_dir = proj.join(".k2so");
-        fs::create_dir_all(&k2so_dir).unwrap();
-        let marker = k2so_dir.join(".regen-in-flight");
+        let k2_dir = proj.join(".k2so");
+        fs::create_dir_all(&k2_dir).unwrap();
+        let marker = k2_dir.join(".regen-in-flight");
         fs::write(&marker, b"").unwrap();
         assert!(detect_interrupted_regen(project_path), "must flag the stale marker");
         assert!(!marker.exists(), "must clear the marker after surfacing the warning");

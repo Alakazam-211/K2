@@ -160,8 +160,8 @@ pub fn reserve(
     }
     let project_id = open_project(&project_path)?;
 
-    let k2so_dir = crate::workspace_dot_dir(&project_path);
-    fs::create_dir_all(&k2so_dir).ok();
+    let k2_dir = crate::workspace_dot_dir(&project_path);
+    fs::create_dir_all(&k2_dir).ok();
 
     let path = reservations_path(&project_path);
     let mut reservations = read_reservations(&path);

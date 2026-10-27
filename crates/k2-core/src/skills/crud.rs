@@ -13,7 +13,7 @@
 //! `SkillSummary` is the row shape both surfaces render. It's
 //! intentionally narrow — name + title + mtime — so callers can list
 //! cheaply without parsing the full body. Heavier fields (role,
-//! inbox/active/done counts) live on `K2soAgentInfo` and remain on
+//! inbox/active/done counts) live on `K2AgentInfo` and remain on
 //! the legacy `k2_core::agents::commands::list` surface for the
 //! existing K2SO Agents panel.
 
@@ -903,10 +903,10 @@ mod regenerate_skills_tests {
         // silently no-op on regen.
         let proj = scratch_project();
 
-        let k2so_agent = proj.join(".k2so/skills/k2so-agent");
-        std::fs::create_dir_all(&k2so_agent).unwrap();
+        let k2_agent = proj.join(".k2so/skills/k2so-agent");
+        std::fs::create_dir_all(&k2_agent).unwrap();
         std::fs::write(
-            k2so_agent.join("SKILL.md"),
+            k2_agent.join("SKILL.md"),
             "---\nname: k2so-agent\ntype: k2so\n---\n",
         )
         .unwrap();
@@ -924,7 +924,7 @@ mod regenerate_skills_tests {
 
         // Confirm the upgrade actually happened (managed frontmatter
         // appears in the regenerated file).
-        let regenerated = std::fs::read_to_string(k2so_agent.join("SKILL.md"))
+        let regenerated = std::fs::read_to_string(k2_agent.join("SKILL.md"))
             .expect("k2so-agent SKILL.md exists post-regen");
         assert!(
             regenerated.contains("k2_skill: k2so-agent"),

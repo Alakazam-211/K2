@@ -232,9 +232,9 @@ fn try_auto_launch(agent: &str, signal: &AgentSignal) -> Result<(), String> {
     // spawn.
     //
     // Mirrors `agents_routes::handle_agents_launch`'s post-spawn
-    // k2so_agents_lock call. Best-effort: failure logs but doesn't
+    // k2_agents_lock call. Best-effort: failure logs but doesn't
     // unwind the spawn (the PTY is alive regardless).
-    let _ = k2_core::workspace::session::k2so_agents_lock(
+    let _ = k2_core::workspace::session::k2_agents_lock(
         project_path.to_string(),
         agent.to_string(),
         Some(outcome.session_id.to_string()),

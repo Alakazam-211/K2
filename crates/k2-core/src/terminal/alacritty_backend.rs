@@ -29,7 +29,7 @@ use super::grid_types::*;
 /// [`TerminalEventSink`] (or onto the wakeup channel, for grid-redraw
 /// triggers).
 #[derive(Clone)]
-struct K2SOListener {
+struct K2Listener {
     wakeup_tx: mpsc::Sender<()>,
     event_sink: Arc<dyn TerminalEventSink>,
     id: String,
@@ -42,7 +42,7 @@ struct K2SOListener {
     reply_tx: Arc<std::sync::OnceLock<EventLoopSender>>,
 }
 
-impl EventListener for K2SOListener {
+impl EventListener for K2Listener {
     fn send_event(&self, event: AlacEvent) {
         match event {
             AlacEvent::Wakeup => {
@@ -232,7 +232,7 @@ pub struct GlyphState {
 // ── Terminal Instance ────────────────────────────────────────────────────
 
 struct AlacrittyTerminalInstance {
-    term: Arc<FairMutex<Term<K2SOListener>>>,
+    term: Arc<FairMutex<Term<K2Listener>>>,
     event_loop_sender: EventLoopSender,
     /// Stored for future use — emission threads receive their own clone.
     /// Keeping the handle on the Instance means lifecycle paths that
@@ -333,7 +333,7 @@ impl TerminalManager {
         // Scroll uses this to inject wakeups into the same channel as PTY events.
         let scroll_wakeup_tx = wakeup_tx.clone();
         let query_reply = Arc::new(std::sync::OnceLock::new());
-        let listener = K2SOListener {
+        let listener = K2Listener {
             wakeup_tx,
             event_sink: event_sink.clone(),
             id: id.clone(),
@@ -575,7 +575,7 @@ impl TerminalManager {
         let event_loop_sender = event_loop.channel();
 
         // Terminal-query answers route back into the PTY input channel
-        // (see `K2SOListener::reply_tx`). Installed before the IO thread
+        // (see `K2Listener::reply_tx`). Installed before the IO thread
         // spawns so the child's first query can't race an empty sink.
         assert!(
             query_reply.set(event_loop.channel()).is_ok(),
@@ -1298,7 +1298,7 @@ fn row_to_compact_line(
 
 /// Take a full snapshot of the terminal grid using compact line format.
 fn snapshot_grid(
-    term: &Term<K2SOListener>,
+    term: &Term<K2Listener>,
     palette: &[Option<Rgb>; 269],
     full: bool,
 ) -> GridUpdate {
@@ -1367,7 +1367,7 @@ fn snapshot_grid(
 
 /// Take an incremental snapshot using damage tracking with compact line format.
 fn snapshot_damaged(
-    term: &mut Term<K2SOListener>,
+    term: &mut Term<K2Listener>,
     palette: &[Option<Rgb>; 269],
 ) -> GridUpdate {
     let start = std::time::Instant::now();
@@ -1453,7 +1453,7 @@ fn snapshot_damaged(
 /// This replaces bitmap rendering with text-based IPC.
 fn grid_emission_loop(
     id: &str,
-    term: &Arc<FairMutex<Term<K2SOListener>>>,
+    term: &Arc<FairMutex<Term<K2Listener>>>,
     event_sink: &Arc<dyn TerminalEventSink>,
     wakeup_rx: mpsc::Receiver<()>,
     palette: [Option<Rgb>; 269],

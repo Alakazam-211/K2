@@ -523,7 +523,7 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
 
     // Heartbeats: an existing name is skipped (AT20).
     let have: Vec<String> = if inp.registered {
-        crate::heartbeats::k2so_heartbeat_list(inp.path.to_string())
+        crate::heartbeats::k2_heartbeat_list(inp.path.to_string())
             .map_err(|e| HireError::internal(format!("heartbeats: {e}")))?
             .into_iter()
             .map(|h| h.name)

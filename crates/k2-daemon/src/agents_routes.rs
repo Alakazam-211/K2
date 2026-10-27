@@ -11,10 +11,10 @@
 //!
 //! The heavy lifting (decision tree for launch, worktree + task
 //! CLAUDE.md for delegate) is already in k2so-core:
-//! - `k2_core::workspace::agent_launch::k2so_agents_build_launch`
+//! - `k2_core::workspace::agent_launch::k2_agents_build_launch`
 //!   walks the three wake branches (resume active / delegate from
 //!   inbox / fresh launch) and returns the launch JSON.
-//! - `k2_core::deprecated::delegate::k2so_agents_delegate` creates
+//! - `k2_core::deprecated::delegate::k2_agents_delegate` creates
 //!   the worktree + moves the inbox item + writes CLAUDE.md and
 //!   returns the launch JSON.
 //!
@@ -140,7 +140,7 @@ pub fn spawn_wake_via_session_stream(
         label: None,
     })?;
 
-    let _ = k2_core::workspace::session::k2so_agents_lock(
+    let _ = k2_core::workspace::session::k2_agents_lock(
         project_path.to_string(),
         agent_name.to_string(),
         Some(outcome.session_id.to_string()),
@@ -216,7 +216,7 @@ fn str_array(v: &serde_json::Value, key: &str) -> Vec<String> {
 /// Handler for `GET /cli/agents/launch?project=<path>&agent=<name>[&command=<cmd>]`.
 ///
 /// Walks the three wake branches in core
-/// (`k2so_agents_build_launch`) and spawns the resolved command in
+/// (`k2_agents_build_launch`) and spawns the resolved command in
 /// the resolved `cwd` as a Session Stream session tagged with the
 /// agent name. Emits `CliTerminalSpawnBackground` — matches the
 /// legacy Tauri path so UI subscribers render the pane the same
@@ -249,7 +249,7 @@ pub fn handle_agents_launch(
     let effective_command =
         cli_command.or_else(|| resolved.as_ref().map(|r| r.command.clone()));
 
-    let launch_info = match k2_core::workspace::agent_launch::k2so_agents_build_launch(
+    let launch_info = match k2_core::workspace::agent_launch::k2_agents_build_launch(
         project_path.to_string(),
         agent.clone(),
         effective_command,
@@ -355,7 +355,7 @@ pub fn handle_agents_launch(
     // scheduler skips the agent on subsequent ticks. Best-effort —
     // the PTY is already live and will keep running if the DB
     // write fails.
-    let _ = k2_core::workspace::session::k2so_agents_lock(
+    let _ = k2_core::workspace::session::k2_agents_lock(
         project_path.to_string(),
         agent.clone(),
         Some(outcome.session_id.to_string()),
@@ -391,7 +391,7 @@ pub fn handle_agents_launch(
 /// Handler for `GET /cli/agents/delegate?project=<path>&target=<agent>&file=<path>`.
 ///
 /// Creates a fresh worktree + writes the task CLAUDE.md (via
-/// `agents::delegate::k2so_agents_delegate`), then spawns `claude`
+/// `agents::delegate::k2_agents_delegate`), then spawns `claude`
 /// in the worktree as a Session Stream session tagged with the
 /// target agent's name. Emits `CliTerminalSpawn` +
 /// `SyncProjects` — the first opens a UI pane for the new
@@ -410,7 +410,7 @@ pub fn handle_agents_delegate(
     }
 
     #[allow(deprecated)] // deprecated-but-live delegate seam (Phase 2.1 PRD A23)
-    let launch_info = match k2_core::deprecated::delegate::k2so_agents_delegate(
+    let launch_info = match k2_core::deprecated::delegate::k2_agents_delegate(
         project_path.to_string(),
         target.clone(),
         file.clone(),
@@ -423,7 +423,7 @@ pub fn handle_agents_delegate(
     let agent_name = str_field(&launch_info, "agentName", &target).to_string();
     let mut args = str_array(&launch_info, "args");
 
-    // Agent-degeneralization S2: `k2so_agents_delegate` stamps
+    // Agent-degeneralization S2: `k2_agents_delegate` stamps
     // `command: "claude"` today, so this fallback is defensive-only —
     // but if the delegate JSON ever omits the command, the
     // workspace/global default agent fills it instead of a bare
@@ -502,7 +502,7 @@ pub fn handle_agents_delegate(
         Err(e) => return crate::folder_trust::spawn_failed_response(&e),
     };
 
-    let _ = k2_core::workspace::session::k2so_agents_lock(
+    let _ = k2_core::workspace::session::k2_agents_lock(
         project_path.to_string(),
         agent_name.clone(),
         Some(outcome.session_id.to_string()),
@@ -703,7 +703,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
 
         // ── Agent lifecycle: lock + session ─────────────────────────
         "/cli/agents/lock" => match need_project(params) {
-            Ok(p) => respond_unit(k2_core::workspace::session::k2so_agents_lock(
+            Ok(p) => respond_unit(k2_core::workspace::session::k2_agents_lock(
                 p,
                 str_param(params, "agent"),
                 opt_param(params, "terminal_id"),
@@ -712,7 +712,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             Err(r) => r,
         },
         "/cli/agents/unlock" => match need_project(params) {
-            Ok(p) => respond_unit(k2_core::workspace::session::k2so_agents_unlock(
+            Ok(p) => respond_unit(k2_core::workspace::session::k2_agents_unlock(
                 p,
                 str_param(params, "agent"),
             )),
@@ -866,7 +866,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
 // ══════════════════════════════════════════════════════════════════════
 //
 // The renderer previously called the matching `k2so_agents_*` /
-// `workspace_relations_*` / `k2so_session_set_surfaced` Tauri commands
+// `workspace_relations_*` / `k2_session_set_surfaced` Tauri commands
 // via LOCAL `invoke()`. Those run in-process against the LOCAL daemon's
 // filesystem/DB, so when the renderer is driving a REMOTE host (K2
 // Connect) the call misfires (wrong machine, or no Tauri backend). These
@@ -949,7 +949,7 @@ struct RelationDeleteBody {
 ///
 /// Wraps `k2_core::workspace::skill_regen::regenerate_workspace_skill`.
 /// Returns the regenerated SKILL.md text as JSON. Mirrors the
-/// `k2so_agents_regenerate_workspace_skill` Tauri command (4 renderer
+/// `k2_agents_regenerate_workspace_skill` Tauri command (4 renderer
 /// callers).
 /// Handler for `GET /cli/agent/conf?q=<name|path|uuid>` (0.40.24 S2).
 ///
@@ -1173,11 +1173,11 @@ pub fn handle_regenerate_workspace_skill(body: &[u8]) -> CliResponse {
 
 /// Handler for `POST /cli/agents/save-agent-md`.
 ///
-/// Wraps `k2_core::workspace::agent_editor::k2so_agents_save_agent_md`.
-/// Mirrors the `k2so_agents_save_agent_md` Tauri command.
+/// Wraps `k2_core::workspace::agent_editor::k2_agents_save_agent_md`.
+/// Mirrors the `k2_agents_save_agent_md` Tauri command.
 ///
 /// DESIGN NOTE: a dedicated route (rather than reusing the generic
-/// `/cli/fs/write-file`) is the correct choice — `k2so_agents_save_agent_md`
+/// `/cli/fs/write-file`) is the correct choice — `k2_agents_save_agent_md`
 /// is NOT a plain byte write. The core fn resolves the canonical
 /// `.k2so/agent/<agent>/AGENT.md` path from `(project_path, agent_name)`,
 /// applies the same backup/validation the editor pipeline owns, and keeps
@@ -1196,7 +1196,7 @@ pub fn handle_save_agent_md(body: &[u8]) -> CliResponse {
     if b.agent_name.is_empty() {
         return CliResponse::bad_request("missing agent_name");
     }
-    match k2_core::workspace::agent_editor::k2so_agents_save_agent_md(
+    match k2_core::workspace::agent_editor::k2_agents_save_agent_md(
         b.project_path,
         b.agent_name,
         b.content,
@@ -1210,7 +1210,7 @@ pub fn handle_save_agent_md(body: &[u8]) -> CliResponse {
 ///
 /// Wraps `k2_core::workspace::harness::disable_workspace_claude_md`.
 /// Removes/disables the workspace SKILL.md + CLAUDE.md symlink. Mirrors
-/// the `k2so_agents_disable_workspace_claude_md` Tauri command.
+/// the `k2_agents_disable_workspace_claude_md` Tauri command.
 pub fn handle_disable_workspace_claude_md(body: &[u8]) -> CliResponse {
     let b: ProjectPathBody = match parse_body(body) {
         Ok(b) => b,
@@ -1227,8 +1227,8 @@ pub fn handle_disable_workspace_claude_md(body: &[u8]) -> CliResponse {
 
 /// Handler for `POST /cli/agents/run-workspace-ingest`.
 ///
-/// Wraps `k2_core::workspace::harness::k2so_agents_run_workspace_ingest`.
-/// Mirrors the `k2so_agents_run_workspace_ingest` Tauri command.
+/// Wraps `k2_core::workspace::harness::k2_agents_run_workspace_ingest`.
+/// Mirrors the `k2_agents_run_workspace_ingest` Tauri command.
 pub fn handle_run_workspace_ingest(body: &[u8]) -> CliResponse {
     let b: ProjectPathBody = match parse_body(body) {
         Ok(b) => b,
@@ -1237,7 +1237,7 @@ pub fn handle_run_workspace_ingest(body: &[u8]) -> CliResponse {
     if b.project_path.is_empty() {
         return CliResponse::bad_request("missing project_path");
     }
-    match k2_core::workspace::harness::k2so_agents_run_workspace_ingest(b.project_path) {
+    match k2_core::workspace::harness::k2_agents_run_workspace_ingest(b.project_path) {
         Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
         Err(e) => CliResponse::bad_request(e),
     }
@@ -1245,8 +1245,8 @@ pub fn handle_run_workspace_ingest(body: &[u8]) -> CliResponse {
 
 /// Handler for `POST /cli/agents/save-session-id`.
 ///
-/// Wraps `k2_core::workspace::session::k2so_agents_save_session_id`.
-/// Mirrors the `k2so_agents_save_session_id` Tauri command.
+/// Wraps `k2_core::workspace::session::k2_agents_save_session_id`.
+/// Mirrors the `k2_agents_save_session_id` Tauri command.
 pub fn handle_save_session_id(body: &[u8]) -> CliResponse {
     let b: SaveSessionIdBody = match parse_body(body) {
         Ok(b) => b,
@@ -1258,7 +1258,7 @@ pub fn handle_save_session_id(body: &[u8]) -> CliResponse {
     if b.agent_name.is_empty() {
         return CliResponse::bad_request("missing agent_name");
     }
-    match k2_core::workspace::session::k2so_agents_save_session_id(
+    match k2_core::workspace::session::k2_agents_save_session_id(
         b.project_path,
         b.agent_name,
         b.session_id,
@@ -1270,9 +1270,9 @@ pub fn handle_save_session_id(body: &[u8]) -> CliResponse {
 
 /// Handler for `POST /cli/session/set-surfaced`.
 ///
-/// Wraps `k2_core::workspace::session::k2so_session_set_surfaced` (the
+/// Wraps `k2_core::workspace::session::k2_session_set_surfaced` (the
 /// multi-arg surfaced-toggle; each arg is a body field). Mirrors the
-/// `k2so_session_set_surfaced` Tauri command.
+/// `k2_session_set_surfaced` Tauri command.
 pub fn handle_session_set_surfaced(body: &[u8]) -> CliResponse {
     let b: SetSurfacedBody = match parse_body(body) {
         Ok(b) => b,
@@ -1284,7 +1284,7 @@ pub fn handle_session_set_surfaced(body: &[u8]) -> CliResponse {
     if b.agent_name.is_empty() {
         return CliResponse::bad_request("missing agent_name");
     }
-    match k2_core::workspace::session::k2so_session_set_surfaced(
+    match k2_core::workspace::session::k2_session_set_surfaced(
         b.project_path,
         b.agent_name,
         b.surfaced,
@@ -1540,8 +1540,8 @@ struct ProjectIdBody {
 }
 
 /// `POST /cli/agents/teardown-workspace` `{project_path, mode}` → the
-/// `TeardownResult[]` of `workspace::teardown::k2so_agents_teardown_workspace`
-/// (was the `k2so_agents_teardown_workspace` Tauri command's body).
+/// `TeardownResult[]` of `workspace::teardown::k2_agents_teardown_workspace`
+/// (was the `k2_agents_teardown_workspace` Tauri command's body).
 pub fn handle_teardown_workspace(body: &[u8]) -> CliResponse {
     let b: TeardownBody = match parse_body(body) {
         Ok(b) => b,
@@ -1550,14 +1550,14 @@ pub fn handle_teardown_workspace(body: &[u8]) -> CliResponse {
     if b.project_path.is_empty() {
         return CliResponse::bad_request("missing project_path");
     }
-    crate::cli::respond(k2_core::workspace::teardown::k2so_agents_teardown_workspace(
+    crate::cli::respond(k2_core::workspace::teardown::k2_agents_teardown_workspace(
         b.project_path,
         b.mode,
     ))
 }
 
 /// `POST /cli/agents/build-launch` → the launch object of
-/// `workspace::agent_launch::k2so_agents_build_launch` (the desktop Launch
+/// `workspace::agent_launch::k2_agents_build_launch` (the desktop Launch
 /// button / Chat tab). Builds only; `/cli/agents/launch` is the
 /// build-and-spawn route.
 pub fn handle_build_launch(body: &[u8]) -> CliResponse {
@@ -1568,7 +1568,7 @@ pub fn handle_build_launch(body: &[u8]) -> CliResponse {
     if b.project_path.is_empty() {
         return CliResponse::bad_request("missing project_path");
     }
-    crate::cli::respond(k2_core::workspace::agent_launch::k2so_agents_build_launch(
+    crate::cli::respond(k2_core::workspace::agent_launch::k2_agents_build_launch(
         b.project_path,
         b.agent_name,
         b.agent_cli_command,
@@ -1580,7 +1580,7 @@ pub fn handle_build_launch(body: &[u8]) -> CliResponse {
 
 /// `POST /cli/agents/editor-context` `{project_path, agent_name}` → the
 /// AIFileEditor context object of
-/// `workspace::agent_editor::k2so_agents_get_editor_context`.
+/// `workspace::agent_editor::k2_agents_get_editor_context`.
 pub fn handle_editor_context(body: &[u8]) -> CliResponse {
     let b: ProjectAgentBody = match parse_body(body) {
         Ok(b) => b,
@@ -1589,7 +1589,7 @@ pub fn handle_editor_context(body: &[u8]) -> CliResponse {
     if b.project_path.is_empty() {
         return CliResponse::bad_request("missing project_path");
     }
-    crate::cli::respond(k2_core::workspace::agent_editor::k2so_agents_get_editor_context(
+    crate::cli::respond(k2_core::workspace::agent_editor::k2_agents_get_editor_context(
         b.project_path,
         b.agent_name,
     ))

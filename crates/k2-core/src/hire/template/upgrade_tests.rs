@@ -129,7 +129,7 @@ fn template_upgrade_replaces_untouched_files_and_proposes_beside_edited_ones() {
     let layers = crate::workspace::context_layers::list_layers(&path).unwrap();
     assert!(layers.iter().any(|l| l.source == "catalog:heartbeats-roster"), "{layers:?}");
     // Never: heartbeats, permissions, tool.
-    let hbs = crate::heartbeats::k2so_heartbeat_list(path.clone()).unwrap();
+    let hbs = crate::heartbeats::k2_heartbeat_list(path.clone()).unwrap();
     assert!(!hbs.iter().any(|h| h.name == "daily-check"), "heartbeats are only reported");
     let l2 = lock::read(&path).unwrap().unwrap();
     assert_eq!(l2.version, 2);

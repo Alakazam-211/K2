@@ -80,7 +80,7 @@
 //! mount, restart-recovery, CLI) keeps the converge fallback, so GH#24
 //! stays fixed.
 //!
-//! Lifted from `src-tauri/src/commands/k2so_agents.rs::k2so_agents_resume_chat_args`
+//! Lifted from `src-tauri/src/commands/k2so_agents.rs::k2_agents_resume_chat_args`
 //! (which was a Tauri-side command pre-0.37.5). Moving it to k2so-core
 //! means:
 //!

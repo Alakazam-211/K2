@@ -36,7 +36,7 @@ pub const WAKEUP_TEMPLATE_MANAGER: &str =
     include_str!("../../wakeup_templates/manager.md");
 pub const WAKEUP_TEMPLATE_CUSTOM: &str =
     include_str!("../../wakeup_templates/custom.md");
-pub const WAKEUP_TEMPLATE_K2SO: &str = include_str!("../../wakeup_templates/k2so.md");
+pub const WAKEUP_TEMPLATE_K2: &str = include_str!("../../wakeup_templates/k2so.md");
 
 /// Resolve the shipped template for a given agent type. Returns `None`
 /// for agent types that don't use wake-up at all (currently just
@@ -47,7 +47,7 @@ pub fn wakeup_template_for(agent_type: &str) -> Option<&'static str> {
         "manager" | "coordinator" | "pod-leader" => Some(WAKEUP_TEMPLATE_MANAGER),
         "custom" => Some(WAKEUP_TEMPLATE_CUSTOM),
         // Stage A dual-read: `k2` and legacy `k2so` share the builtin template.
-        "k2so" | "k2" => Some(WAKEUP_TEMPLATE_K2SO),
+        "k2so" | "k2" => Some(WAKEUP_TEMPLATE_K2),
         _ => None,
     }
 }
@@ -327,12 +327,12 @@ pub fn compose_wake_delivery_from_path(
 //   when the Tauri app reopens, it learns about the running PTY via
 //   `HookEvent::CliTerminalSpawnBackground` (which propagates through
 //   the daemon's /events WS).
-// - `k2so_agents_lock` marks the session `running` so the scheduler's
+// - `k2_agents_lock` marks the session `running` so the scheduler's
 //   `is_agent_locked` check skips the agent on the next tick.
 // - Sensible default terminal dims (120×38) match the existing nudge
 //   size from src-tauri.
 //
-// This is intentionally simpler than `k2so_agents_build_launch` —
+// This is intentionally simpler than `k2_agents_build_launch` —
 // no worktree resume, no inbox delegate. Those paths remain Tauri-
 // only for v1; they involve user-facing decisions (new branches,
 // work-item moves) that belong in supervised sessions.
@@ -357,7 +357,7 @@ impl TerminalEventSink for NoOpTerminalEventSink {
 /// 1. `TerminalManager::create` in `crate::terminal::shared()` — the
 ///    PTY is owned by the daemon process, survives the Tauri app
 ///    reopening/closing.
-/// 2. [`crate::workspace::session::k2so_agents_lock`] — writes the
+/// 2. [`crate::workspace::session::k2_agents_lock`] — writes the
 ///    `agent_sessions` row + legacy `.lock` file so subsequent
 ///    scheduler ticks skip this agent.
 /// 3. `AgentHookEventSink` fires `HookEvent::CliTerminalSpawnBackground`
@@ -403,7 +403,7 @@ pub fn spawn_wake_headless(
     // in the same project root attach to whichever session Claude
     // considers most recent — the deferred-save thread then stamps
     // both heartbeat rows with the same id (proven in production:
-    // TestingK2SO fast-test + triage at 22:50/22:51 both got
+    // TestingK2 fast-test + triage at 22:50/22:51 both got
     // f13453c8). Pinning the UUID at spawn time means each spawn
     // owns a distinct session id deterministically; we stamp the
     // row immediately, no race window, no async lookup heuristic.
@@ -460,7 +460,7 @@ pub fn spawn_wake_headless(
     // Mark the session running so the next scheduler tick skips it.
     // Best-effort: don't fail the spawn if the DB write trips (PTY is
     // already live and will run regardless).
-    let _ = crate::workspace::session::k2so_agents_lock(
+    let _ = crate::workspace::session::k2_agents_lock(
         project_path.to_string(),
         agent_name.to_string(),
         Some(terminal_id.clone()),
@@ -556,7 +556,7 @@ pub fn spawn_wake_headless(
                 // is independent of the user's Chat tab — see the
                 // matching comment in src-tauri's spawn_wake_pty.
                 if heartbeat_name_owned.is_none() {
-                    match crate::workspace::session::k2so_agents_save_session_id(
+                    match crate::workspace::session::k2_agents_save_session_id(
                         project_path_owned.clone(),
                         agent_name_owned.clone(),
                         session_id.clone(),
@@ -788,7 +788,7 @@ mod tests {
             ("workspace", WAKEUP_TEMPLATE_WORKSPACE),
             ("manager", WAKEUP_TEMPLATE_MANAGER),
             ("custom", WAKEUP_TEMPLATE_CUSTOM),
-            ("k2so", WAKEUP_TEMPLATE_K2SO),
+            ("k2so", WAKEUP_TEMPLATE_K2),
         ] {
             assert!(body.starts_with("<!-- DEFAULT TEMPLATE"), "{name}.md: {body}");
         }

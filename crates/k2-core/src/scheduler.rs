@@ -267,7 +267,7 @@ pub fn matches_ordinal_day(date: NaiveDate, ordinal: &str, day_type: &str) -> bo
 /// strings, for the Settings schedule preview (`POST
 /// /cli/heartbeat/preview-schedule`).
 ///
-/// Moved verbatim from the desktop app's `k2so_agents_preview_schedule`
+/// Moved verbatim from the desktop app's `k2_agents_preview_schedule`
 /// Tauri command (0.46.4: the app no longer links k2-core). Kept exactly as
 /// it was, including that `should_project_fire` reads the wall clock while
 /// the cursor is only passed as `last_fire`; changing what the preview

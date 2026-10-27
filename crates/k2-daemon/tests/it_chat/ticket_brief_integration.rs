@@ -836,7 +836,7 @@ fn the_cli_template_cleans_without_warnings() {
 #[test]
 fn teaching_sites_teach_the_brief() {
     use k2_core::skills::content::{
-        generate_custom_agent_skill_content, generate_k2so_agent_skill_content,
+        generate_custom_agent_skill_content, generate_k2_agent_skill_content,
         generate_manager_skill_content,
     };
     use k2_core::skills::version;
@@ -852,7 +852,7 @@ fn teaching_sites_teach_the_brief() {
     for (name, body) in [
         ("manager", generate_manager_skill_content(&pp, "P")),
         ("custom", generate_custom_agent_skill_content("P", "a")),
-        ("k2so-agent", generate_k2so_agent_skill_content("P", "a")),
+        ("k2so-agent", generate_k2_agent_skill_content("P", "a")),
     ] {
         assert!(body.contains("k2so tickets template > brief.html"), "{name}");
         assert!(body.contains("--html brief.html"), "{name}");
@@ -863,7 +863,7 @@ fn teaching_sites_teach_the_brief() {
         assert!(body.contains("k2 connections list --users"), "{name}");
     }
     assert_eq!(version::SKILL_VERSION_MANAGER, 14);
-    assert_eq!(version::SKILL_VERSION_K2SO_AGENT, 14);
+    assert_eq!(version::SKILL_VERSION_K2_AGENT, 14);
     assert_eq!(version::SKILL_VERSION_CUSTOM_AGENT, 14);
     assert_eq!(version::SKILL_VERSION_WORKSPACE, 58);
 

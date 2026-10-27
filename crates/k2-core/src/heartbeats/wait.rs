@@ -628,7 +628,7 @@ mod tests {
     //! shared test DB (no add → no scheduler install path at all).
 
     use super::*;
-    use crate::heartbeats::k2so_agents_heartbeat_tick;
+    use crate::heartbeats::k2_agents_heartbeat_tick;
 
     const SCAFFOLD: &str = "---\ndescription:\n---\n\n";
 
@@ -730,11 +730,11 @@ mod tests {
     }
 
     fn candidate_names(ws: &Ws) -> Vec<String> {
-        k2so_agents_heartbeat_tick(&ws.path).into_iter().map(|c| c.name).collect()
+        k2_agents_heartbeat_tick(&ws.path).into_iter().map(|c| c.name).collect()
     }
 
     fn listed(ws: &Ws, name: &str) -> AgentHeartbeat {
-        crate::heartbeats::k2so_heartbeat_list(ws.path.clone())
+        crate::heartbeats::k2_heartbeat_list(ws.path.clone())
             .expect("list")
             .into_iter()
             .find(|r| r.name == name)
@@ -808,7 +808,7 @@ mod tests {
                 assert_eq!(n, 1, "{decision}");
             }
         }
-        let fired = k2so_agents_heartbeat_tick(&ws.path);
+        let fired = k2_agents_heartbeat_tick(&ws.path);
         assert_eq!(fired.len(), 1, "fires at the first slot after the body was seen");
         assert_eq!(fired[0].name, "minutely");
         assert_eq!(fired[0].catchup_of, None, "the next slot is on time, not a catch-up");
@@ -865,7 +865,7 @@ mod tests {
     fn body_from_the_start_fires_normally() {
         let ws = workspace("normal");
         seed(&ws, "ready", "hourly", r#"{"every_seconds":60}"#, 90, Some("check inbox\n"));
-        let fired = k2so_agents_heartbeat_tick(&ws.path);
+        let fired = k2_agents_heartbeat_tick(&ws.path);
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].name, "ready");
         assert_eq!(decisions(&ws, "ready"), Vec::<String>::new(), "no wait markers");

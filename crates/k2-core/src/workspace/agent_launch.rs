@@ -1,6 +1,6 @@
 //! Full-fat wake-launch argument builder.
 //!
-//! [`k2so_agents_build_launch`] is the code path behind the UI's
+//! [`k2_agents_build_launch`] is the code path behind the UI's
 //! "Launch agent" button and the scheduler-triggered heartbeat wake.
 //! It returns the JSON the host (Tauri app or daemon) uses to spawn
 //! `claude` with the right `cwd`, `args`, and `--resume` handling for
@@ -12,7 +12,7 @@
 //!    resume-context system prompt.
 //! 2. **Delegate from inbox.** Agent has work waiting in `inbox/` but
 //!    no active worktree → call
-//!    [`crate::deprecated::delegate::k2so_agents_delegate`] (now
+//!    [`crate::deprecated::delegate::k2_agents_delegate`] (now
 //!    deprecated alongside the rest of the agents-CRUD surface) on the
 //!    highest-priority item, which creates a worktree + moves inbox →
 //!    active in one step.
@@ -52,7 +52,7 @@ use crate::workspace::work_item::{read_work_item, WorkItem};
 // dedicated chat thread that the user can audit independently from
 // the Chat tab session. None = manual launch / Chat tab — use the
 // per-agent global.
-pub fn k2so_agents_build_launch(
+pub fn k2_agents_build_launch(
     project_path: String,
     agent_name: String,
     agent_cli_command: Option<String>,
@@ -138,7 +138,7 @@ pub fn k2so_agents_build_launch(
         if let Some((top_path, _)) = items.into_iter().next() {
             let source_file = top_path.to_string_lossy().to_string();
             #[allow(deprecated)] // deprecated-but-live delegate seam (Phase 2.1 PRD A23)
-            return crate::deprecated::delegate::k2so_agents_delegate(
+            return crate::deprecated::delegate::k2_agents_delegate(
                 project_path,
                 agent_name,
                 source_file,
@@ -373,7 +373,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().into_owned();
 
-        let result = k2so_agents_build_launch(path, "ghost".to_string(), None, None, None, None);
+        let result = k2_agents_build_launch(path, "ghost".to_string(), None, None, None, None);
 
         match result {
             Ok(v) => panic!("expected error for missing agent, got {v:?}"),
@@ -394,7 +394,7 @@ mod tests {
         let dir = scratch_workspace_with_primary("scout", "custom");
         let path = dir.to_string_lossy().into_owned();
 
-        let result = k2so_agents_build_launch(
+        let result = k2_agents_build_launch(
             path.clone(),
             "scout".to_string(),
             Some("claude".to_string()),
@@ -438,7 +438,7 @@ mod tests {
         let dir = scratch_workspace_with_primary("scout", "custom");
         let path = dir.to_string_lossy().into_owned();
 
-        let result = k2so_agents_build_launch(
+        let result = k2_agents_build_launch(
             path,
             "scout".to_string(),
             Some("codex".to_string()),
@@ -460,7 +460,7 @@ mod tests {
         let dir = scratch_workspace_with_primary("scout", "custom");
         let path = dir.to_string_lossy().into_owned();
 
-        let result = k2so_agents_build_launch(
+        let result = k2_agents_build_launch(
             path,
             "scout".to_string(),
             None, // no override
@@ -503,7 +503,7 @@ mod tests {
         )
         .unwrap();
 
-        let _ = k2so_agents_build_launch(
+        let _ = k2_agents_build_launch(
             path.clone(),
             "scout".to_string(),
             Some("claude".to_string()),

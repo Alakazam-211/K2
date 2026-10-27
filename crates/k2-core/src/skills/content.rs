@@ -1,7 +1,7 @@
 //! Skill + CLAUDE.md content generators for each agent tier.
 //!
 //! Four generators (`generate_manager_skill_content`,
-//! `generate_custom_agent_skill_content`, `generate_k2so_agent_skill_content`,
+//! `generate_custom_agent_skill_content`, `generate_k2_agent_skill_content`,
 //! `generate_template_skill_content`) each produce the tier's canonical
 //! SKILL.md body. [`compose_agent_wake_context`] (previously known as
 //! `generate_agent_claude_md_content` — renamed during the 0.33.0 move
@@ -626,10 +626,10 @@ Run `k2so glossary <term>` for definitions of K2SO-specific terms (workspace, sk
 /// work creation, and audit commands — because a K2SO agent is the top-tier
 /// autonomous role in its workspace and needs the full surface area.
 ///
-/// Detected by the migration in ensure_k2so_skills_up_to_date() via the
+/// Detected by the migration in ensure_k2_skills_up_to_date() via the
 /// first-line signature "# K2SO Agent Skill (Comprehensive)" which the
 /// older shared `generate_custom_agent_skill_content` doesn't emit.
-pub fn generate_k2so_agent_skill_content(project_name: &str, agent_name: &str) -> String {
+pub fn generate_k2_agent_skill_content(project_name: &str, agent_name: &str) -> String {
     let mut skill = format!(
 r#"# K2SO Agent Skill (Comprehensive)
 
@@ -979,7 +979,7 @@ impl OptInSkill {
                 ("manager", crate::skills::version::SKILL_VERSION_MANAGER)
             }
             OptInSkill::K2Agent => {
-                ("k2so-agent", crate::skills::version::SKILL_VERSION_K2SO_AGENT)
+                ("k2so-agent", crate::skills::version::SKILL_VERSION_K2_AGENT)
             }
             OptInSkill::K2CanonicalAgent => (
                 "canonical-agent",
@@ -1015,7 +1015,7 @@ impl OptInSkill {
                 let agent_name =
                     crate::workspace::agent_identity::resolve_agent_name(project_path)
                         .unwrap_or_else(|| "k2-agent".to_string());
-                generate_k2so_agent_skill_content(project_name, &agent_name)
+                generate_k2_agent_skill_content(project_name, &agent_name)
             }
             OptInSkill::K2CanonicalAgent => {
                 generate_canonical_agent_skill_content(project_name)
@@ -1930,11 +1930,11 @@ mod tests {
         );
     }
 
-    // ── generate_k2so_agent_skill_content ──────────────────────────
+    // ── generate_k2_agent_skill_content ──────────────────────────
 
     #[test]
-    fn k2so_agent_skill_content_is_comprehensive_and_planner_focused() {
-        let body = generate_k2so_agent_skill_content("PlanProject", "planner");
+    fn k2_agent_skill_content_is_comprehensive_and_planner_focused() {
+        let body = generate_k2_agent_skill_content("PlanProject", "planner");
 
         assert!(!body.is_empty(), "k2so-agent body must be non-empty");
         assert!(
@@ -1949,15 +1949,15 @@ mod tests {
     }
 
     #[test]
-    fn k2so_agent_skill_content_uses_canonical_a25_verbs_and_no_deprecated() {
-        let body = generate_k2so_agent_skill_content("PlanProject", "planner");
+    fn k2_agent_skill_content_uses_canonical_a25_verbs_and_no_deprecated() {
+        let body = generate_k2_agent_skill_content("PlanProject", "planner");
 
-        assert_no_deprecated_verbs(&body, "generate_k2so_agent_skill_content");
+        assert_no_deprecated_verbs(&body, "generate_k2_agent_skill_content");
         // The comprehensive variant gets the broader surface — verify
         // it includes the connections/messaging + heartbeat verbs.
         assert_contains_canonical_a25_verbs(
             &body,
-            "generate_k2so_agent_skill_content",
+            "generate_k2_agent_skill_content",
             &[
                 "k2so inbox",
                 "k2so organization update",
@@ -1990,8 +1990,8 @@ mod tests {
                 generate_custom_agent_skill_content("P", "a"),
             ),
             (
-                "generate_k2so_agent_skill_content",
-                generate_k2so_agent_skill_content("P", "a"),
+                "generate_k2_agent_skill_content",
+                generate_k2_agent_skill_content("P", "a"),
             ),
         ];
         for (generator, body) in &cases {
@@ -2045,8 +2045,8 @@ mod tests {
                 generate_custom_agent_skill_content("P", "a"),
             ),
             (
-                "generate_k2so_agent_skill_content",
-                generate_k2so_agent_skill_content("P", "a"),
+                "generate_k2_agent_skill_content",
+                generate_k2_agent_skill_content("P", "a"),
             ),
         ];
         for (generator, body) in &cases {
@@ -2129,8 +2129,8 @@ mod tests {
                 generate_custom_agent_skill_content("P", "a"),
             ),
             (
-                "generate_k2so_agent_skill_content",
-                generate_k2so_agent_skill_content("P", "a"),
+                "generate_k2_agent_skill_content",
+                generate_k2_agent_skill_content("P", "a"),
             ),
         ];
         for (generator, body) in &cases {
@@ -2167,8 +2167,8 @@ mod tests {
                 generate_custom_agent_skill_content("P", "a"),
             ),
             (
-                "generate_k2so_agent_skill_content",
-                generate_k2so_agent_skill_content("P", "a"),
+                "generate_k2_agent_skill_content",
+                generate_k2_agent_skill_content("P", "a"),
             ),
         ];
         for (generator, body) in &cases {
@@ -2228,8 +2228,8 @@ mod tests {
                 generate_custom_agent_skill_content("P", "a"),
             ),
             (
-                "generate_k2so_agent_skill_content",
-                generate_k2so_agent_skill_content("P", "a"),
+                "generate_k2_agent_skill_content",
+                generate_k2_agent_skill_content("P", "a"),
             ),
         ];
         for (generator, body) in &cases {
@@ -2303,13 +2303,13 @@ mod tests {
         let mgr_path = format!("/tmp/distinct-mgr-{}", Uuid::new_v4());
         let manager = generate_manager_skill_content(&mgr_path, "Project");
         let custom = generate_custom_agent_skill_content("Project", "agent");
-        let k2so_agent = generate_k2so_agent_skill_content("Project", "agent");
+        let k2_agent = generate_k2_agent_skill_content("Project", "agent");
         let template = generate_template_skill_content("Project", "agent");
 
         let bodies = [
             ("manager", &manager),
             ("custom", &custom),
-            ("k2so_agent", &k2so_agent),
+            ("k2_agent", &k2_agent),
             ("template", &template),
         ];
         for i in 0..bodies.len() {
@@ -2370,7 +2370,7 @@ mod tests {
     fn role_skills_instruct_organic_integration_not_injection() {
         let manager =
             generate_manager_skill_content(&format!("/tmp/org-mgr-{}", Uuid::new_v4()), "Proj");
-        let k2 = generate_k2so_agent_skill_content("Proj", "planner");
+        let k2 = generate_k2_agent_skill_content("Proj", "planner");
 
         for (name, body) in [("manager", &manager), ("k2_agent", &k2)] {
             let lc = body.to_lowercase();

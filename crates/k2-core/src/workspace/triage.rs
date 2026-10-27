@@ -8,7 +8,7 @@
 //! reads `/cli/inbox/list` instead. Never spawns anything; the
 //! destructive heartbeat path is `/cli/scheduler-tick`.
 //!
-//! History: pre-Phase-4 this was `k2so_agents_triage_summary` in
+//! History: pre-Phase-4 this was `k2_agents_triage_summary` in
 //! `src-tauri/src/commands/k2so_agents.rs`, served by Tauri's
 //! `agent_hooks` listener at the same route.
 //!

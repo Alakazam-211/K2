@@ -2730,7 +2730,7 @@ fn wake_and_fire(
     // premint/converge cases; the stamp below keeps the resume case's
     // pre-3b parity (idempotent re-write of the same id).
     let canonical_terminal_id = format!("agent-chat:{project_id}");
-    let _ = k2_core::workspace::session::k2so_agents_lock(
+    let _ = k2_core::workspace::session::k2_agents_lock(
         project_path.to_string(),
         agent_name.to_string(),
         Some(canonical_terminal_id),

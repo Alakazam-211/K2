@@ -1144,7 +1144,7 @@ pub fn render_heartbeats_roster_body(project_path: &str) -> String {
          bodies into AGENTS.md; edit the path listed below.\n\n",
     );
 
-    let rows = crate::heartbeats::k2so_heartbeat_list(project_path.to_string()).unwrap_or_default();
+    let rows = crate::heartbeats::k2_heartbeat_list(project_path.to_string()).unwrap_or_default();
     if rows.is_empty() {
         out.push_str("### No heartbeats yet\n\n");
         out.push_str("Create one in Settings → Heartbeats, or:\n\n");

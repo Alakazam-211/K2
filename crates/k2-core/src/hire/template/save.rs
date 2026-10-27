@@ -523,7 +523,7 @@ fn gather(inp: &SaveInput) -> R<(BTreeMap<String, String>, Vec<Skipped>, Manifes
 
     // Heartbeats: name, schedule, WAKEUP text.
     let mut heartbeats = Vec::new();
-    let hbs = crate::heartbeats::k2so_heartbeat_list(ws.to_string()).unwrap_or_default();
+    let hbs = crate::heartbeats::k2_heartbeat_list(ws.to_string()).unwrap_or_default();
     for h in hbs {
         let rel = h.wakeup_path.trim().to_string();
         let inside = !rel.starts_with('/') && !rel.split('/').any(|s| s == "..") && (rel.starts_with(".k2/heartbeats/") || rel.starts_with(".k2so/heartbeats/"));

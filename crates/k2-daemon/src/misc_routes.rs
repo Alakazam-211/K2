@@ -278,8 +278,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                             serde_json::to_string(&settings).unwrap_or_default(),
                         ),
                         Err(_) => {
-                            let k2so_dir = k2_core::workspace_dot_dir(&p);
-                            let agents_dir = k2so_dir.join("agents");
+                            let k2_dir = k2_core::workspace_dot_dir(&p);
+                            let agents_dir = k2_dir.join("agents");
                             let has_agents = agents_dir.exists()
                                 && std::fs::read_dir(&agents_dir)
                                     .map(|e| e.count() > 0)
@@ -1114,11 +1114,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // fires audit, daemon-wide (no project param — must precede the
         // project-scoped catch-all arm below, like scheduler-status).
         // These expose the same core functions the Tauri commands
-        // `k2so_heartbeat_list_all` / `k2so_heartbeat_fires_list_all`
+        // `k2_heartbeat_list_all` / `k2_heartbeat_fires_list_all`
         // call in-process, so a remote client's Settings page can audit
         // THIS host's heartbeats instead of its own machine's. Read-only.
         "/cli/heartbeat/list-all" => {
-            match k2_core::heartbeats::k2so_heartbeat_list_all() {
+            match k2_core::heartbeats::k2_heartbeat_list_all() {
                 Ok(rows) => CliResponse::ok_json(
                     serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string()),
                 ),
@@ -1127,7 +1127,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         }
         "/cli/heartbeat/fires-list-all" => {
             let limit = params.get("limit").and_then(|s| s.parse::<i64>().ok());
-            match k2_core::heartbeats::k2so_heartbeat_fires_list_all(limit) {
+            match k2_core::heartbeats::k2_heartbeat_fires_list_all(limit) {
                 Ok(rows) => CliResponse::ok_json(
                     serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string()),
                 ),

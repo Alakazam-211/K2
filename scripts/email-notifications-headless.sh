@@ -68,7 +68,8 @@ LAUNCH=()
 if [ "$MODE" = person ] && [ "$(uname -s)" = Linux ] && command -v systemd-run >/dev/null 2>&1; then
     LAUNCH=(systemd-run --scope --quiet --collect --unit "k2-email-headless-$$" --)
 fi
-"${LAUNCH[@]}" "$BIN" >"$SANDBOX/daemon.log" 2>&1 &
+# ${LAUNCH[@]+…}: macOS's bash 3.2 calls an empty array unbound under set -u.
+${LAUNCH[@]+"${LAUNCH[@]}"} "$BIN" >"$SANDBOX/daemon.log" 2>&1 &
 PID=$!
 
 K2DIR=""

@@ -548,9 +548,10 @@ change, `k2 zen validate --widget <w> --sign`.**\n\n\
     ),
     (
         // 0.46.4: `retired` (k2.sources.ask until 0.47.0), then catalog v22's
-        // `card_person_only` (only a person answers a card) close the list.
-        "`duplicate_label`, `retired`, `card_person_only`).\n\n### Rules\n\n",
-        "`duplicate_label`, `needs_editor`, `retired`, `card_person_only`).\n\n### Rules\n\n",
+        // `card_person_only` (only a person answers a card) follow. 0.46.5's
+        // profile and email codes come after it, so the anchor stops there.
+        "`duplicate_label`, `retired`, `card_person_only`",
+        "`duplicate_label`, `needs_editor`, `retired`, `card_person_only`",
     ),
 ];
 

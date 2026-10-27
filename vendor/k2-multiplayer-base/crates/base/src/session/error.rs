@@ -42,6 +42,14 @@ pub enum SessionError {
     /// An approval can only go from pending to approved or declined, once.
     #[error("bad approval: {0}")]
     BadApproval(String),
+    /// [`super::SessionManager::open_file`] / [`super::Session::file_moved`]: the path isn't
+    /// a regular file inside the root (a folder, a symlink resolving outside it...).
+    #[error("bad path: {0}")]
+    BadPath(String),
+    /// Reading or writing the file failed. Nothing is lost: the doc keeps its changes and
+    /// write-back retries.
+    #[error("disk: {0}")]
+    Disk(String),
     #[error(transparent)]
     Doc(#[from] DocError),
     #[error(transparent)]

@@ -3,7 +3,6 @@
 | Dependency | Licence | Used for |
 |---|---|---|
 | [yrs](https://github.com/y-crdt/y-crdt) | MIT | The CRDT engine (Yjs-compatible), private to this crate |
-| [similar](https://github.com/mitsuhiko/similar) | Apache-2.0 | Text diffs |
 | [thiserror](https://github.com/dtolnay/thiserror) | MIT OR Apache-2.0 | Error types |
 
 Transitive dependencies are all MIT, Apache-2.0, BSD, ISC or Zlib (checked by

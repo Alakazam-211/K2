@@ -13,11 +13,13 @@
 mod text;
 
 /// (rule id, why today's engine deviates). Empty for a conforming engine.
-pub const KNOWN_DEVIATIONS: &[(&str, &str)] = &[(
-    "text.no_interleave_backward_multi",
-    "yrs (YATA) is not maximally non-interleaving: 3 writers typing backward with partial \
-     syncs produce \"[abdecfxyz]\". Wire-format bound; fixed only by a Fugue-class engine.",
-)];
+///
+/// Empty for yrs today. An earlier entry, `text.no_interleave_backward_multi`, was wrong:
+/// its expectation (three contiguous runs) is unsatisfiable for any engine meeting the
+/// strong list spec on that script, and Yrs, Yjs, Diamond Types and Loro all give the same
+/// order (cross-checked 2026-10-27). A real Yrs-vs-FugueMax separating case will be added as
+/// `text.yata_separating_case` once differential search finds a minimal one.
+pub const KNOWN_DEVIATIONS: &[(&str, &str)] = &[];
 
 #[cfg(test)]
 pub(crate) mod harness {
@@ -39,7 +41,7 @@ pub(crate) mod harness {
                     .replace_text_as(2, schema.roots[0].0, seed_text)
                     .unwrap();
             }
-            let state = first.encode_state();
+            let state = first.encode_state().unwrap();
             let r = (0..n).map(|_| Doc::load(schema, &state).unwrap()).collect();
             Net { schema, r }
         }

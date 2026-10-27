@@ -3,29 +3,34 @@
 use std::collections::{HashMap, VecDeque};
 use std::hash::{BuildHasher, Hasher};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::config::Config;
+use super::disk::{self, DiskCheck, DiskState, FileStat, FlushOutcome, Probe, ReadFile};
 use super::error::{EditWithError, Result, SessionError};
 use super::host::{Action, AuditEvent, Host, LeaveReason, Need, Rights};
-use super::pack::{Pack, PackError};
+use super::pack::{Declined, Pack, PackError};
 use super::participant::{
-    ConnId, CursorAt, Participant, Role, RosterEntry, Stay, IMPORT_PID, RESERVED_PID_PREFIX,
+    ConnId, CursorAt, Participant, Role, RosterEntry, Stay, EXTERNAL_PID, IMPORT_PID,
+    RESERVED_PID_PREFIX,
 };
 use super::position::{self, At, Bias, Cursor, LineRange};
 use super::ratelimit::Bucket;
 use super::summary;
 use super::undo::{self, Batch, Region};
-use crate::doc::{ClientId, Doc, Edit, Neutral, MAX_CLIENT_ID};
+use crate::doc::{ClientId, Doc, DocError, Edit, Neutral, MAX_CLIENT_ID};
 use crate::engine::{ENGINE_FORMAT, ENGINE_NAME};
+use crate::hash::{hex, sha256};
 use crate::schema::{Kind, Schema};
 use crate::store::{
-    Approval, ApprovalState, DocId, DocKey, DocMeta, DocStore, LogEntry, Seq, Version,
+    Approval, ApprovalState, DocId, DocKey, DocMeta, DocStore, LogEntry, Seq, SyncState, Version,
     VersionReason,
 };
 use crate::text::diff::{self, Hunk};
+use crate::text::lines;
 use crate::text::merge::{self, Conflict, Merge};
 
 /// Returned by [`Session::join`].
@@ -126,6 +131,9 @@ pub struct Status {
     pub estimated_bytes: u64,
     /// Why live editing is off, when it is (edits are then refused).
     pub declined: Option<String>,
+    /// Where the file stands, for a session opened with
+    /// [`super::SessionManager::open_file`] (`None` without a file).
+    pub disk: Option<DiskState>,
 }
 
 /// A participant whose rights changed in [`Session::recheck_rights`].
@@ -201,9 +209,37 @@ struct State {
     /// Recent change authors, for "contributors since last read".
     authors: VecDeque<(Seq, String)>,
     subs: Vec<(ConnId, SyncSender<ChangeEvent>)>,
+    disk: Option<Disk>,
 }
 
 const AUTHORS_KEPT: usize = 1024;
+/// Hashes of the kit's own recent writes kept for echo suppression.
+const OWN_WRITES_KEPT: usize = 8;
+
+/// Disk sync for a session opened with a file.
+struct Disk {
+    /// As the host gave it (symlinks are resolved on every read and write).
+    path: PathBuf,
+    /// Canonical; the file must resolve inside it.
+    root: PathBuf,
+    /// The doc as the file holds it: its text is the file's text. Outside edits are made
+    /// on it (a diff from the file's previous text to its new text) and the resulting
+    /// update is merged into the live doc, so edits not yet written survive.
+    replica: Doc,
+    replica_bytes: u64,
+    synced_hash: Vec<u8>,
+    synced_seq: Seq,
+    /// Recent own writes: a file holding one of them is an echo, never an outside edit.
+    own: VecDeque<Vec<u8>>,
+    /// The file as last seen (`None`: read it on the next check).
+    stat: Option<FileStat>,
+    missing: bool,
+    /// The first change not yet written.
+    dirty_since: Option<u64>,
+    last_change_ms: u64,
+    last_check_ms: u64,
+    external_client: Option<ClientId>,
+}
 
 /// One loaded doc: its live text, the participants in it, their carets, undo history and
 /// rate limits, and the subscribers to its changes. Thread-safe (`Send + Sync`): every call
@@ -251,6 +287,54 @@ fn texts_of(doc: &Doc, schema: &Schema) -> Result<Vec<(&'static str, String)>> {
         .roots
         .iter()
         .map(|(r, _)| Ok((*r, doc.text(r)?)))
+        .collect()
+}
+
+/// An engine error after which the in-memory doc can't be trusted (see
+/// [`crate::doc::DocError::Pending`]): the session reloads from the store.
+fn poisons(e: &SessionError) -> bool {
+    matches!(
+        e,
+        SessionError::Doc(DocError::Pending | DocError::Panic | DocError::Apply(_))
+    )
+}
+
+/// A pack's decoded roots in schema order: every root exactly once, of the right kind.
+fn ordered_roots(schema: &Schema, roots: Vec<(String, Neutral)>) -> Result<Vec<(String, Neutral)>> {
+    if roots.len() != schema.roots.len() {
+        return Err(PackError(format!(
+            "decode gave {} roots; schema {:?} has {}",
+            roots.len(),
+            schema.name,
+            schema.roots.len()
+        ))
+        .into());
+    }
+    let mut ordered = Vec::with_capacity(schema.roots.len());
+    for (name, kind) in schema.roots {
+        let found: Vec<&Neutral> = roots
+            .iter()
+            .filter(|(r, _)| r == name)
+            .map(|(_, v)| v)
+            .collect();
+        match (found.as_slice(), kind) {
+            ([v @ Neutral::Text(_)], Kind::Text) => {
+                ordered.push(((*name).to_owned(), (*v).clone()))
+            }
+            _ => {
+                return Err(
+                    PackError(format!("decode must give root {name:?} once, as {kind:?}")).into(),
+                )
+            }
+        }
+    }
+    Ok(ordered)
+}
+
+fn neutral(texts: &[(&'static str, String)]) -> Vec<(String, Neutral)> {
+    texts
+        .iter()
+        .map(|(r, t)| ((*r).to_owned(), Neutral::Text(t.clone())))
         .collect()
 }
 
@@ -303,6 +387,7 @@ impl Session {
                 read_base_bytes: 0,
                 authors,
                 subs: Vec::new(),
+                disk: None,
             }),
         })
     }
@@ -367,36 +452,7 @@ impl Session {
     ) -> Result<Self> {
         let schema = pack.schema();
         let content = pack.decode(bytes).map_err(SessionError::Declined)?;
-        // every schema root exactly once, of the right kind; kept in schema order
-        if content.roots.len() != schema.roots.len() {
-            return Err(PackError(format!(
-                "decode gave {} roots; schema {:?} has {}",
-                content.roots.len(),
-                schema.name,
-                schema.roots.len()
-            ))
-            .into());
-        }
-        let mut ordered = Vec::with_capacity(schema.roots.len());
-        for (name, kind) in schema.roots {
-            let found: Vec<&Neutral> = content
-                .roots
-                .iter()
-                .filter(|(r, _)| r == name)
-                .map(|(_, v)| v)
-                .collect();
-            match (found.as_slice(), kind) {
-                ([v @ Neutral::Text(_)], Kind::Text) => {
-                    ordered.push(((*name).to_owned(), (*v).clone()))
-                }
-                _ => {
-                    return Err(PackError(format!(
-                        "decode must give root {name:?} once, as {kind:?}"
-                    ))
-                    .into())
-                }
-            }
-        }
+        let ordered = ordered_roots(&schema, content.roots)?;
         let mut doc = Doc::new(schema)?;
         let client = loop {
             let c = random_client();
@@ -443,8 +499,20 @@ impl Session {
             authors: vec![IMPORT_PID.to_owned()],
             content: ordered,
         };
-        let (doc_id, seq, _) =
-            store.create_imported(&meta, client, IMPORT_PID, entry.as_ref(), &version)?;
+        // the bytes are the file's: the doc as imported is what the file holds
+        let sync = SyncState {
+            hash: sha256(bytes).to_vec(),
+            seq: 0,
+            state: doc.encode_state()?,
+        };
+        let (doc_id, seq, _) = store.create_imported_synced(
+            &meta,
+            client,
+            IMPORT_PID,
+            entry.as_ref(),
+            &version,
+            Some(&sync),
+        )?;
         let ub = entry.as_ref().map_or(0, |e| e.update.len() as u64);
         let mut authors = VecDeque::new();
         if let Some(s) = seq {
@@ -678,6 +746,10 @@ impl Session {
             conn,
             client,
         });
+        if st.disk.is_some() {
+            // a stat check on join (errors are reported as events)
+            let _ = self.disk_check(st, now, false);
+        }
         st.members.push(Member {
             p,
             conn,
@@ -1104,8 +1176,9 @@ impl Session {
             },
             connections: st.members.len(),
             log_entries: st.log_entries,
-            estimated_bytes: st.state_bytes * self.config.memory_factor,
+            estimated_bytes: self.estimate(&st),
             declined: st.declined.clone(),
+            disk: Self::disk_state(&st),
         })
     }
 
@@ -1173,7 +1246,7 @@ impl Session {
                 }
             };
             let new_text = self.pack.normalize_input(root, &computed);
-            diff::hunks(live, &new_text)
+            lines::align_insertions(live, diff::hunks(live, &new_text))
         };
         if hunks.is_empty() {
             return Ok(None);
@@ -1199,7 +1272,8 @@ impl Session {
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
         let new_text = self.pack.normalize_input(root, new_text);
-        let hunks = diff::hunks(self.text_of(&st, root)?.1, &new_text);
+        let live = self.text_of(&st, root)?.1;
+        let hunks = lines::align_insertions(live, diff::hunks(live, &new_text));
         let edits = vec![Edit::Text {
             root: root.to_owned(),
             hunks,
@@ -1209,8 +1283,9 @@ impl Session {
 
     /// `write --base V`: apply only what the caller changed between version `base` and
     /// `new_text`, three-way merged onto the live text. Overlap with a change made since
-    /// `base` gives [`WriteOutcome::Conflicts`] and applies nothing. Valid bases: the live
-    /// version, recently read versions, and stored versions.
+    /// `base` gives [`WriteOutcome::Conflicts`] and applies nothing, except that two
+    /// appends at the end of the text both land, the live one first (merge rule O5). Valid
+    /// bases: the live version, recently read versions, and stored versions.
     pub fn write_base(
         &self,
         conn: ConnId,
@@ -1338,7 +1413,8 @@ impl Session {
             match self.apply_local(st, i, step) {
                 Ok(Some(a)) => applied.push(a),
                 Ok(None) => {}
-                Err(e) if applied.is_empty() => return Err(e),
+                // a doc the engine poisoned is reloaded, even when nothing was applied
+                Err(e) if applied.is_empty() && !poisons(&e) => return Err(e),
                 Err(e) => {
                     self.recover(st, &e.to_string());
                     return Err(e);
@@ -1414,10 +1490,7 @@ impl Session {
                     at_ms: now,
                     on_behalf_of: obo.clone(),
                 };
-                st.subs.retain(|(_, tx)| match tx.try_send(ev.clone()) {
-                    Ok(()) => true,
-                    Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
-                });
+                Self::broadcast(st, &ev);
             }
             if n_steps == 1 {
                 changed = a.changed;
@@ -1431,6 +1504,7 @@ impl Session {
             self.push_batch(st, &pid, batch, origin);
         }
         st.version = *seqs.last().expect("one seq per entry");
+        Self::mark_dirty(st, now);
         if n_steps > 1 {
             for (root, before) in &orig {
                 let after = &self.text_of(st, root)?.1;
@@ -1520,21 +1594,7 @@ impl Session {
             let after = diff::apply(&before, &hunks);
             debug_assert_eq!(Ok(after.as_str()), st.doc.text(&root).as_deref());
             a.regions.push(Region::of_change(&root, &before, &hunks));
-            for m in &mut st.members {
-                if let Some(c) = m.cursor.as_mut().filter(|c| c.root == root) {
-                    c.anchor = position::transform(c.anchor, &hunks, Bias::After);
-                    c.head = position::transform(c.head, &hunks, Bias::After);
-                }
-                if let Some((_, s, e)) = m.view.as_mut().filter(|v| v.0 == root) {
-                    *s = position::transform(*s, &hunks, Bias::Before);
-                    *e = position::transform(*e, &hunks, Bias::After).max(*s);
-                }
-            }
-            for h in st.hist.values_mut() {
-                for b in h.undo.iter_mut().chain(h.redo.iter_mut()) {
-                    b.transform(&root, &hunks);
-                }
-            }
+            Self::carry(st, &root, &hunks);
             a.changed
                 .extend(summary::changed_lines(&root, &after, &hunks));
             let (ad, rm) = summary::line_counts(&before, &after, &hunks);
@@ -1550,6 +1610,33 @@ impl Session {
             a.roots.push((root, hunks));
         }
         Ok(Some(a))
+    }
+
+    /// Carry every stored position (carets, views, undo regions) through a change to `root`.
+    fn carry(st: &mut State, root: &str, hunks: &[Hunk]) {
+        for m in &mut st.members {
+            if let Some(c) = m.cursor.as_mut().filter(|c| c.root == root) {
+                c.anchor = position::transform(c.anchor, hunks, Bias::After);
+                c.head = position::transform(c.head, hunks, Bias::After);
+            }
+            if let Some((_, s, e)) = m.view.as_mut().filter(|v| v.0 == root) {
+                *s = position::transform(*s, hunks, Bias::Before);
+                *e = position::transform(*e, hunks, Bias::After).max(*s);
+            }
+        }
+        for h in st.hist.values_mut() {
+            for b in h.undo.iter_mut().chain(h.redo.iter_mut()) {
+                b.transform(root, hunks);
+            }
+        }
+    }
+
+    /// Send an event to every subscriber; one that is full or gone is cut off.
+    fn broadcast(st: &mut State, ev: &ChangeEvent) {
+        st.subs.retain(|(_, tx)| match tx.try_send(ev.clone()) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
+        });
     }
 
     /// After a failed store write: rebuild from the store so memory matches what is durable.
@@ -1585,6 +1672,7 @@ impl Session {
                     h.redo.clear();
                 }
                 st.undo_bytes = 0;
+                self.reload_disk(st);
                 self.emit(AuditEvent::Recovered {
                     key: st.key.clone(),
                     error: error.to_owned(),
@@ -1608,7 +1696,18 @@ impl Session {
     }
 
     fn compact(&self, st: &mut State) {
-        let state = st.doc.encode_state();
+        // never compact from a doc that can't be trusted: reload it instead
+        let state = match st.doc.encode_state() {
+            Ok(s) => s,
+            Err(e) => {
+                self.emit(AuditEvent::CompactFailed {
+                    key: st.key.clone(),
+                    error: e.to_string(),
+                });
+                self.recover(st, &e.to_string());
+                return;
+            }
+        };
         let res = self
             .store(st)
             .and_then(|s| Ok(s.compact(self.doc_id, st.version, &state)?));
@@ -1714,6 +1813,13 @@ impl Session {
         Ok(all)
     }
 
+    /// Tests only: apply a raw update to the live doc, as a bug or a damaged log would.
+    #[cfg(test)]
+    pub(crate) fn apply_raw_for_tests(&self, update: &[u8]) -> Result<()> {
+        let mut st = self.lock()?;
+        Ok(st.doc.apply_trusted(update)?)
+    }
+
     // ----- for the manager -----
 
     pub(crate) fn schema_name(&self) -> &'static str {
@@ -1727,7 +1833,7 @@ impl Session {
     /// (participants, memory estimate), or `None` once closed.
     pub(crate) fn pool_info(&self) -> Option<(usize, u64)> {
         let st = self.lock().ok()?;
-        Some((st.members.len(), st.state_bytes * self.config.memory_factor))
+        Some((st.members.len(), self.estimate(&st)))
     }
 
     /// Rename under the session's lock, so no edit interleaves with the store's rekey.
@@ -1747,6 +1853,12 @@ impl Session {
         if st.closed.is_some() {
             return;
         }
+        // write back what the file doesn't have yet (an error is reported and kept: the
+        // changes are in the log, and the next load writes them)
+        if st.disk.as_ref().is_some_and(|d| d.dirty_since.is_some()) {
+            let now = self.host.now_ms();
+            let _ = self.write_back(&mut st, now);
+        }
         if compact_long_log
             && st.log_entries > 0
             && st.log_entries >= self.config.unload_compact_entries
@@ -1758,6 +1870,651 @@ impl Session {
         st.subs.clear();
         st.members.clear();
     }
+}
+
+// ----- disk sync -----
+
+impl Session {
+    // --- public: the host reports file events, the kit checks and writes ---
+
+    /// The host's watcher saw the file change (or the host wants a check now): read it and
+    /// merge an outside edit in, if there is one. A file holding the kit's own last write
+    /// is ignored (an echo). Never writes the file. `Unchanged` for a session without a
+    /// file.
+    ///
+    /// An outside edit is the difference between the file's previous text (the last synced
+    /// state) and its new text, applied as [`EXTERNAL_PID`] (`via: "disk"`), with a version
+    /// cut before it ([`VersionReason::BeforeExternal`], when the doc moved since the last
+    /// version) and after it ([`VersionReason::External`]). Edits not yet written back are
+    /// kept: the next write-back writes the merged doc.
+    pub fn file_changed(&self) -> Result<DiskCheck> {
+        let now = self.host.now_ms();
+        let mut st = self.lock()?;
+        self.disk_check(&mut st, now, true)
+    }
+
+    /// The stat backup: like [`Session::file_changed`], but reads the file only when its
+    /// size, mtime or inode changed since the kit last saw it.
+    pub fn check_disk(&self) -> Result<DiskCheck> {
+        let now = self.host.now_ms();
+        let mut st = self.lock()?;
+        self.disk_check(&mut st, now, false)
+    }
+
+    /// The host paired a rename of this doc's file: from now on it lives at `new_path`
+    /// (inside the same root; re-checked like [`super::SessionManager::open_file`]). Then
+    /// checks it like [`Session::file_changed`]. Rename the doc's key with
+    /// [`super::SessionManager::rekey`].
+    pub fn file_moved(&self, new_path: &Path) -> Result<DiskCheck> {
+        let now = self.host.now_ms();
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        let Some(d) = st.disk.as_mut() else {
+            return Err(SessionError::BadPath("this session has no file".into()));
+        };
+        match disk::probe(new_path, &d.root) {
+            Ok(Probe::File { .. }) => {}
+            Ok(p) => return Err(SessionError::BadPath(probe_problem(new_path, &p))),
+            Err(e) => return Err(SessionError::Disk(format!("{}: {e}", new_path.display()))),
+        }
+        d.path = new_path.to_owned();
+        d.stat = None;
+        self.disk_check(st, now, true)
+    }
+
+    /// `flush`: write the doc to its file now if the file doesn't hold it (after merging any
+    /// outside edit first). Needs read. `written` is false when there was nothing to write,
+    /// or nothing could be written (`disk` says why: missing or declined).
+    pub fn flush(&self, conn: ConnId) -> Result<FlushOutcome> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        self.admit(&mut st, conn, Need::Read, Action::Flush, now)?;
+        let written = self.write_back(&mut st, now)?;
+        Ok(FlushOutcome {
+            written,
+            hash: hex(&sha256(&self.render(&st)?)),
+            disk: Self::disk_state(&st),
+        })
+    }
+
+    /// The file this session syncs with, as the host gave it.
+    pub fn file_path(&self) -> Result<Option<PathBuf>> {
+        Ok(self.lock()?.disk.as_ref().map(|d| d.path.clone()))
+    }
+
+    // --- for the manager ---
+
+    /// Start syncing with the file at `path` (inside canonical `root`): load the sync state,
+    /// settle a write-back a crash interrupted, then reconcile (an edit made while the doc
+    /// wasn't loaded is merged in like any outside edit; changes the file never got are
+    /// written by the next write-back).
+    pub(crate) fn attach_file(&self, path: &Path, root: &Path) -> Result<DiskCheck> {
+        let now = self.host.now_ms();
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        if let Some(d) = &st.disk {
+            if d.path == path && d.root == root {
+                return self.disk_check(st, now, false);
+            }
+            return Err(SessionError::BadPath(format!(
+                "doc is open at {}; report a rename with file_moved",
+                d.path.display()
+            )));
+        }
+        let store = self.store(st)?.clone();
+        let (synced, pending) = store.sync_states(self.doc_id)?;
+        let (replica, replica_bytes, hash, seq) = match synced {
+            Some(s) => (
+                Doc::load(self.schema, &s.state)?,
+                s.state.len() as u64,
+                s.hash,
+                s.seq,
+            ),
+            // a doc from before disk sync: take its content as what the file held
+            None => {
+                let state = st.doc.encode_state()?;
+                (
+                    Doc::load(self.schema, &state)?,
+                    state.len() as u64,
+                    sha256(&self.render(st)?).to_vec(),
+                    st.version,
+                )
+            }
+        };
+        let mut d = Disk {
+            path: path.to_owned(),
+            root: root.to_owned(),
+            replica,
+            replica_bytes,
+            synced_hash: hash,
+            synced_seq: seq,
+            own: VecDeque::new(),
+            stat: None,
+            missing: false,
+            dirty_since: None,
+            last_change_ms: now,
+            last_check_ms: now,
+            external_client: None,
+        };
+        let on_disk = match disk::probe(path, root) {
+            Ok(Probe::File { real, .. }) => {
+                disk::clean_temps(&real);
+                match disk::read(&real, self.config.disk_read_max_bytes) {
+                    Ok(ReadFile::Bytes(b, _)) => Some(sha256(&b).to_vec()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        // a write-back a crash interrupted: did it land?
+        if let Some(p) = pending {
+            if on_disk.as_deref() == Some(p.hash.as_slice()) {
+                let mut meta = store.meta(self.doc_id)?;
+                meta.synced_hash = Some(p.hash.clone());
+                meta.synced_seq = p.seq;
+                store.promote_pending_sync(self.doc_id, &meta)?;
+                d.replica = Doc::load(self.schema, &p.state)?;
+                d.replica_bytes = p.state.len() as u64;
+                d.synced_hash = p.hash;
+                d.synced_seq = p.seq;
+            } else {
+                store.clear_pending_sync(self.doc_id)?;
+            }
+        }
+        st.disk = Some(d);
+        let out = self.disk_check(st, now, true)?;
+        // changes the file never got (a crash before write-back): write them soon
+        let live = sha256(&self.render(st)?).to_vec();
+        if st.disk.as_ref().is_some_and(|d| d.synced_hash != live) {
+            Self::mark_dirty(st, now);
+        }
+        Ok(out)
+    }
+
+    /// One tick of the host's clock: the stat backup while anyone is present (every
+    /// [`Config::disk_poll_ms`]), and the write-back when due. Returns what the check found
+    /// (if it ran) and whether the file was written.
+    pub(crate) fn disk_tick(&self) -> Result<(Option<DiskCheck>, bool)> {
+        let now = self.host.now_ms();
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        let c = &self.config;
+        let Some(d) = &st.disk else {
+            return Ok((None, false));
+        };
+        let check =
+            if !st.members.is_empty() && now.saturating_sub(d.last_check_ms) >= c.disk_poll_ms {
+                Some(self.disk_check(st, now, false)?)
+            } else {
+                None
+            };
+        let d = st.disk.as_ref().expect("checked above");
+        let due = d.dirty_since.is_some_and(|since| {
+            now.saturating_sub(since) >= c.write_max_delay_ms
+                || now.saturating_sub(d.last_change_ms) >= c.write_quiet_ms
+        }) && !d.missing
+            && st.declined.is_none();
+        let written = due && self.write_back(st, now)?;
+        Ok((check, written))
+    }
+
+    // --- internals ---
+
+    fn render(&self, st: &State) -> Result<Vec<u8>> {
+        Ok(self.pack.encode(&neutral(&st.texts), &st.codec)?)
+    }
+
+    fn estimate(&self, st: &State) -> u64 {
+        (st.state_bytes + st.disk.as_ref().map_or(0, |d| d.replica_bytes))
+            * self.config.memory_factor
+    }
+
+    fn mark_dirty(st: &mut State, now: u64) {
+        if let Some(d) = st.disk.as_mut() {
+            d.dirty_since.get_or_insert(now);
+            d.last_change_ms = now;
+        }
+    }
+
+    fn disk_state(st: &State) -> Option<DiskState> {
+        let d = st.disk.as_ref()?;
+        Some(if let Some(r) = &st.declined {
+            DiskState::Declined(r.clone())
+        } else if d.missing {
+            DiskState::Missing
+        } else if let Some(since_ms) = d.dirty_since {
+            DiskState::Dirty { since_ms }
+        } else {
+            DiskState::Clean
+        })
+    }
+
+    fn disk_error(&self, st: &State, what: &str, e: impl std::fmt::Display) -> SessionError {
+        let error = format!("{what}: {e}");
+        self.emit(AuditEvent::DiskError {
+            key: st.key.clone(),
+            error: error.clone(),
+        });
+        SessionError::Disk(error)
+    }
+
+    /// Look at the file; read it when forced or when its stat changed; ingest an outside
+    /// edit. Never writes the file.
+    fn disk_check(&self, st: &mut State, now: u64, force: bool) -> Result<DiskCheck> {
+        let Some(d) = st.disk.as_mut() else {
+            return Ok(DiskCheck::Unchanged);
+        };
+        d.last_check_ms = now;
+        let (path, root) = (d.path.clone(), d.root.clone());
+        let (real, stat) = match disk::probe(&path, &root) {
+            Ok(Probe::File { real, stat }) => (real, stat),
+            Ok(_) => return Ok(self.set_missing(st)),
+            Err(e) => return Err(self.disk_error(st, &path.display().to_string(), e)),
+        };
+        if !force && !d.missing && d.stat == Some(stat) {
+            return Ok(DiskCheck::Unchanged);
+        }
+        let (bytes, stat) = match disk::read(&real, self.config.disk_read_max_bytes) {
+            Ok(ReadFile::Bytes(b, s)) => (b, s),
+            Ok(ReadFile::TooLarge(n)) => {
+                d.stat = Some(stat);
+                d.missing = false;
+                return self.decline(
+                    st,
+                    Declined {
+                        code: "too_large",
+                        message: format!("file is {n} bytes; live editing reads up to {}", {
+                            self.config.disk_read_max_bytes
+                        }),
+                    },
+                );
+            }
+            Err(e) => return Err(self.disk_error(st, &real.display().to_string(), e)),
+        };
+        let was_missing = std::mem::replace(&mut d.missing, false);
+        d.stat = Some(stat);
+        let h = sha256(&bytes).to_vec();
+        if h == d.synced_hash {
+            if was_missing || st.declined.is_some() {
+                self.restored(st)?;
+            }
+            return Ok(DiskCheck::Unchanged);
+        }
+        if d.own.contains(&h) {
+            // an older write of ours is back (an editor saved a stale buffer, or a late
+            // echo): not an edit; the next write-back puts the doc back
+            Self::mark_dirty(st, now);
+            return Ok(DiskCheck::OwnWrite);
+        }
+        if was_missing {
+            self.emit(AuditEvent::FileRestored {
+                key: st.key.clone(),
+            });
+        }
+        self.ingest(st, &bytes, h, now)
+    }
+
+    fn set_missing(&self, st: &mut State) -> DiskCheck {
+        let d = st.disk.as_mut().expect("has disk");
+        if !d.missing {
+            d.missing = true;
+            d.stat = None;
+            let unflushed = d.dirty_since.is_some();
+            self.emit(AuditEvent::FileMissing {
+                key: st.key.clone(),
+                unflushed,
+            });
+        }
+        DiskCheck::Missing
+    }
+
+    fn set_declined(&self, st: &mut State, reason: Option<String>) -> Result<()> {
+        let store = self.store(st)?;
+        let mut meta = store.meta(self.doc_id)?;
+        meta.declined = reason.clone();
+        store.put_meta(self.doc_id, &meta)?;
+        st.declined = reason;
+        Ok(())
+    }
+
+    fn decline(&self, st: &mut State, why: Declined) -> Result<DiskCheck> {
+        if st.declined.is_none() {
+            self.set_declined(st, Some(why.to_string()))?;
+            self.emit(AuditEvent::FileDeclined {
+                key: st.key.clone(),
+                code: why.code,
+            });
+        }
+        Ok(DiskCheck::Declined(why))
+    }
+
+    /// The file is back as the doc knows it (after missing or declined).
+    fn restored(&self, st: &mut State) -> Result<()> {
+        if st.declined.is_some() {
+            self.set_declined(st, None)?;
+        }
+        self.emit(AuditEvent::FileRestored {
+            key: st.key.clone(),
+        });
+        Ok(())
+    }
+
+    fn external_client(&self, st: &mut State) -> Result<ClientId> {
+        if let Some(c) = st.disk.as_ref().and_then(|d| d.external_client) {
+            return Ok(c);
+        }
+        let store = self.store(st)?.clone();
+        let c = match store.client_owned_by(self.doc_id, EXTERNAL_PID)? {
+            Some(c) => c,
+            None => {
+                let c = fresh_client(&store, self.doc_id, |c| {
+                    st.members.iter().any(|m| m.client == c)
+                })?;
+                store.set_client(self.doc_id, c, EXTERNAL_PID)?;
+                c
+            }
+        };
+        if let Some(d) = st.disk.as_mut() {
+            d.external_client = Some(c);
+        }
+        Ok(c)
+    }
+
+    /// Merge the file's new content (`bytes`, hash `h`) into the live doc.
+    fn ingest(&self, st: &mut State, bytes: &[u8], h: Vec<u8>, now: u64) -> Result<DiskCheck> {
+        let content = match self.pack.decode(bytes) {
+            Ok(c) => c,
+            Err(why) => return self.decline(st, why),
+        };
+        let roots = ordered_roots(&self.schema, content.roots)?;
+        let store = self.store(st)?.clone();
+        let mut meta = store.meta(self.doc_id)?;
+        meta.codec = content.codec.clone();
+        meta.declined = None;
+        meta.synced_hash = Some(h.clone());
+        let was_declined = st.declined.is_some();
+        let d = st.disk.as_mut().expect("has disk");
+        let mut edits = Vec::new();
+        for (root, Neutral::Text(t)) in &roots {
+            let old = d.replica.text(root)?;
+            let hunks = lines::align_insertions(&old, diff::hunks(&old, t));
+            if !hunks.is_empty() {
+                edits.push(Edit::Text {
+                    root: root.clone(),
+                    hunks,
+                });
+            }
+        }
+        if edits.is_empty() {
+            // the same text in other bytes (line endings, BOM): adopt the file's format
+            meta.synced_seq = d.synced_seq;
+            let sync = SyncState {
+                hash: h.clone(),
+                seq: d.synced_seq,
+                state: d.replica.encode_state()?,
+            };
+            store.commit_disk(self.doc_id, st.version + 1, &[], &[], &meta, &sync)?;
+            d.synced_hash = h;
+            st.codec = content.codec;
+            if was_declined {
+                st.declined = None;
+                self.emit(AuditEvent::FileRestored {
+                    key: st.key.clone(),
+                });
+            }
+            self.settle_dirty(st, now)?;
+            return Ok(DiskCheck::Unchanged);
+        }
+        let client = self.external_client(st)?;
+        let before = st.texts.clone();
+        let d = st.disk.as_mut().expect("has disk");
+        // the outside edit is made on the doc as the file held it, then merged into the
+        // live doc: changes made since the last write-back are kept
+        let made = d.replica.edit_as(client, &edits).and_then(|u| {
+            let u = u.expect("non-empty edits change the replica");
+            let replica_state = d.replica.encode_state()?;
+            st.doc.apply_trusted(&u)?;
+            Ok((u, replica_state))
+        });
+        let (update, replica_state) = match made {
+            Ok(u) => u,
+            Err(e) => {
+                self.recover(st, &e.to_string());
+                return Err(e.into());
+            }
+        };
+        let after = texts_of(&st.doc, &self.schema)?;
+        let seq = st.version + 1;
+        let mut versions = Vec::new();
+        let last = store.last_version(self.doc_id)?.map(|(_, v)| v.seq);
+        if last != Some(st.version) {
+            let since = last.unwrap_or(0);
+            let mut authors: Vec<String> = Vec::new();
+            for (_, a) in st.authors.iter().filter(|(s, _)| *s > since) {
+                if !authors.contains(a) {
+                    authors.push(a.clone());
+                }
+            }
+            versions.push(Version {
+                seq: st.version,
+                at_ms: now,
+                reason: VersionReason::BeforeExternal,
+                name: None,
+                authors,
+                content: neutral(&before),
+            });
+        }
+        versions.push(Version {
+            seq,
+            at_ms: now,
+            reason: VersionReason::External,
+            name: None,
+            authors: vec![EXTERNAL_PID.to_owned()],
+            content: neutral(&after),
+        });
+        meta.synced_seq = seq;
+        let sync = SyncState {
+            hash: h.clone(),
+            seq,
+            state: replica_state,
+        };
+        let entry = LogEntry {
+            author: EXTERNAL_PID.to_owned(),
+            client,
+            at_ms: now,
+            via: "disk".to_owned(),
+            update,
+            on_behalf_of: None,
+        };
+        if let Err(e) = store.commit_disk(
+            self.doc_id,
+            seq,
+            std::slice::from_ref(&entry),
+            &versions,
+            &meta,
+            &sync,
+        ) {
+            self.recover(st, &e.to_string());
+            return Err(e.into());
+        }
+        // bookkeeping, as for any change
+        for ((root, old), (_, new)) in before.iter().zip(&after) {
+            if old != new {
+                let hunks = diff::hunks(old, new);
+                Self::carry(st, root, &hunks);
+                Self::broadcast(
+                    st,
+                    &ChangeEvent {
+                        version: seq,
+                        pid: EXTERNAL_PID.to_owned(),
+                        client,
+                        via: "disk".to_owned(),
+                        root: (*root).to_owned(),
+                        hunks,
+                        at_ms: now,
+                        on_behalf_of: None,
+                    },
+                );
+            }
+        }
+        st.texts = after;
+        st.version = seq;
+        st.codec = content.codec;
+        st.log_entries += 1;
+        st.log_bytes += entry.update.len() as u64;
+        st.state_bytes += entry.update.len() as u64;
+        st.authors.push_back((seq, EXTERNAL_PID.to_owned()));
+        if st.authors.len() > AUTHORS_KEPT {
+            st.authors.pop_front();
+        }
+        let d = st.disk.as_mut().expect("has disk");
+        d.synced_hash = h;
+        d.synced_seq = seq;
+        d.replica_bytes = sync.state.len() as u64;
+        if was_declined {
+            st.declined = None;
+            self.emit(AuditEvent::FileRestored {
+                key: st.key.clone(),
+            });
+        }
+        self.emit(AuditEvent::ExternalEdit {
+            key: st.key.clone(),
+            seq,
+        });
+        self.settle_dirty(st, now)?;
+        self.maybe_compact(st);
+        Ok(DiskCheck::Ingested { version: seq })
+    }
+
+    /// After the sync point moved: dirty when the doc differs from the file, clean if not.
+    fn settle_dirty(&self, st: &mut State, now: u64) -> Result<()> {
+        let live = sha256(&self.render(st)?).to_vec();
+        let d = st.disk.as_mut().expect("has disk");
+        if live == d.synced_hash {
+            d.dirty_since = None;
+        } else {
+            Self::mark_dirty(st, now);
+        }
+        Ok(())
+    }
+
+    /// Write the doc to its file if the file doesn't hold it. Merges an outside edit first,
+    /// so the file is never overwritten with content the kit hasn't seen (except for one
+    /// written between that read and the rename). Atomic; keeps the file's mode.
+    fn write_back(&self, st: &mut State, now: u64) -> Result<bool> {
+        if st.disk.is_none() || st.declined.is_some() {
+            return Ok(false);
+        }
+        // the file holds the synced content unless it holds an older write of ours
+        let stale = match self.disk_check(st, now, true)? {
+            DiskCheck::Missing | DiskCheck::Declined(_) => return Ok(false),
+            DiskCheck::OwnWrite => true,
+            _ => false,
+        };
+        let bytes = self.render(st)?;
+        let h = sha256(&bytes).to_vec();
+        let d = st.disk.as_mut().expect("has disk");
+        if h == d.synced_hash && !stale {
+            d.dirty_since = None;
+            return Ok(false);
+        }
+        let real = match disk::probe(&d.path, &d.root) {
+            Ok(Probe::File { real, .. }) => real,
+            Ok(_) => {
+                self.set_missing(st);
+                return Ok(false);
+            }
+            Err(e) => {
+                let p = d.path.display().to_string();
+                return Err(self.disk_error(st, &p, e));
+            }
+        };
+        let state = match st.doc.encode_state() {
+            Ok(s) => s,
+            Err(e) => {
+                self.recover(st, &e.to_string());
+                return Err(e.into());
+            }
+        };
+        let replica = Doc::load(self.schema, &state)?;
+        let store = self.store(st)?.clone();
+        let pending = SyncState {
+            hash: h.clone(),
+            seq: st.version,
+            state,
+        };
+        store.set_pending_sync(self.doc_id, &pending)?;
+        let stat = match disk::atomic_write(&real, &bytes) {
+            Ok((stat, dir_sync)) => {
+                if let Some(e) = dir_sync {
+                    self.disk_error(st, "fsync of the file's folder", e);
+                }
+                stat
+            }
+            Err(e) => {
+                let _ = store.clear_pending_sync(self.doc_id);
+                return Err(self.disk_error(st, &real.display().to_string(), e));
+            }
+        };
+        // the file is in place: memory follows whatever the store does (if recording it
+        // fails, the next load sees the file matches the write in flight and promotes it)
+        let promoted = store.meta(self.doc_id).and_then(|mut meta| {
+            meta.synced_hash = Some(h.clone());
+            meta.synced_seq = st.version;
+            store.promote_pending_sync(self.doc_id, &meta)
+        });
+        if let Err(e) = promoted {
+            self.disk_error(st, "recording the write-back", e);
+        }
+        let d = st.disk.as_mut().expect("has disk");
+        d.replica = replica;
+        d.replica_bytes = pending.state.len() as u64;
+        d.synced_hash = h.clone();
+        d.synced_seq = st.version;
+        d.own.push_back(h);
+        while d.own.len() > OWN_WRITES_KEPT {
+            d.own.pop_front();
+        }
+        d.stat = Some(stat);
+        d.dirty_since = None;
+        Ok(true)
+    }
+
+    /// After a store failure: the disk replica and format back to what the store holds.
+    fn reload_disk(&self, st: &mut State) {
+        let Some(store) = st.store.clone() else {
+            return;
+        };
+        if let Ok(meta) = store.meta(self.doc_id) {
+            st.codec = meta.codec;
+            st.declined = meta.declined;
+        }
+        if let (Some(d), Ok((Some(s), _))) = (st.disk.as_mut(), store.sync_states(self.doc_id)) {
+            if let Ok(r) = Doc::load(self.schema, &s.state) {
+                d.replica = r;
+                d.replica_bytes = s.state.len() as u64;
+                d.synced_hash = s.hash;
+                d.synced_seq = s.seq;
+            }
+        }
+    }
+}
+
+fn probe_problem(path: &Path, p: &Probe) -> String {
+    match p {
+        Probe::File { .. } => format!("{} is a file", path.display()),
+        Probe::Missing => format!("{} does not exist", path.display()),
+        Probe::NotFile => format!("{} is not a regular file", path.display()),
+        Probe::Outside(r) => format!(
+            "{} resolves to {}, outside the root",
+            path.display(),
+            r.display()
+        ),
+    }
+}
+
+pub(crate) fn probe_error(path: &Path, p: &Probe) -> SessionError {
+    SessionError::BadPath(probe_problem(path, p))
 }
 
 /// What a loaded or imported doc starts from.

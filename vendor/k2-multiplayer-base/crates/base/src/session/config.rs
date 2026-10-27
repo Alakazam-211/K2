@@ -56,6 +56,19 @@ pub struct Config {
     pub memory_factor: u64,
     /// A session with no participants unloads after this long unused. Default 10 min.
     pub idle_unload_ms: u64,
+
+    // --- disk sync (sessions opened with SessionManager::open_file) ---
+    /// Write the file back once the doc has been quiet this long... Default 1 s.
+    pub write_quiet_ms: u64,
+    /// ...or this long after the first unwritten change, during continuous typing.
+    /// Default 5 s.
+    pub write_max_delay_ms: u64,
+    /// While anyone is present, stat the file (size, mtime, inode) this often, as a backup
+    /// for the host's watcher. Default 3 s.
+    pub disk_poll_ms: u64,
+    /// Files larger than this are declined without being read (`too_large`); the pack's
+    /// own limit applies below it. Default 64 MiB.
+    pub disk_read_max_bytes: u64,
 }
 
 impl Default for Config {
@@ -78,6 +91,10 @@ impl Default for Config {
             memory_budget_bytes: 256 << 20,
             memory_factor: 20,
             idle_unload_ms: 10 * 60_000,
+            write_quiet_ms: 1_000,
+            write_max_delay_ms: 5_000,
+            disk_poll_ms: 3_000,
+            disk_read_max_bytes: 64 << 20,
         }
     }
 }

@@ -6,3 +6,5 @@
 # everyone who runs the test benefits from these saved cases.
 cc d2e2c722a385b842948b8827e5cbb49d98e96a2f7c746b4827e236af5e3eff08 # shrinks to base = "ab\nab\n🎉\nab\n\n🎉🎉\nab\n\nab\naab\n", o = "日\nab\nab\n\nab\n日", t = "ab\n🎉ab\n\naab\n🎉ab\n\nab\n"
 cc b2e473e2e13a23c774f2faa12d302ce8b9843f5fe431d6f8f90af27b3b343936 # shrinks to base = "ab\n\nab\n\nab\n\n", o = "ab\nab\nab\nab\nab\nab\nab\n\n\n\nab\nab\n\n\n\nab\n🎉", t = "ab\nab\n\n日\nab\n\nab\n"
+cc 34a7a925ff47b843cde60f381dce34c2ff8ba266891b52e2ea69ae1c6abfe244 # shrinks to base = "日日ab\nab\n日ab\n日ab\n日🎉ab\nbab\n日ab\nab\nab\naab\nab\n日ab\n", other = "🎉🎉ab\nab\n\n🎉日日ab\n🎉ab\nab\n🎉\n日ab\naab\n🎉日日"
+cc 281d6a8d5ceabf853933597bb6b258fcc6d584217abdb58b8ae6fbcfdd113124 # shrinks to base = "ab\nab\nba\nab\nab\nab\nab\n\nab\na🎉ab\nab\nab\nbab\n日\n日ab\n", other = "日ab\n日\n🎉ab\nab\n日🎉aab\n\nab\n🎉b\na"

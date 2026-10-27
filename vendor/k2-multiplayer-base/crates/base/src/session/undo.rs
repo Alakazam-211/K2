@@ -81,7 +81,10 @@ impl Region {
             Some(t) if !self.tainted => t,
             _ => return Err(vec![self.whole_conflict(live)]),
         };
-        match merge::merge3(&self.after, &self.before, theirs) {
+        // The region is a window of the doc: O5 (appends at the end both land) only applies
+        // when it ends where the doc does, so undo matches a whole-text merge3 (U12).
+        let at_end = self.end == live.len();
+        match merge::merge3_window(&self.after, &self.before, theirs, at_end) {
             Merge::Clean(c) => Ok(c
                 .hunks
                 .into_iter()

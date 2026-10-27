@@ -50,7 +50,10 @@ pub enum DocError {
         from: u32,
         have: u32,
     },
-    #[error("update left unresolved dependencies after apply; the doc needs a resync")]
+    /// An update left unresolved dependencies (or an apply failed after decoding): the
+    /// in-memory doc is poisoned and refuses to encode or edit until reloaded. Sessions
+    /// reload from the store on their own.
+    #[error("update left unresolved dependencies after apply; the doc needs a reload or resync")]
     Pending,
     #[error("update could not be applied: {0}")]
     Apply(String),
@@ -185,8 +188,10 @@ impl Doc {
         self.inner.state_vector()
     }
 
-    /// Full state, in the compact store format.
-    pub fn encode_state(&self) -> Vec<u8> {
+    /// Full state, in the compact store format. Fails with [`DocError::Pending`] on a
+    /// poisoned doc (see [`DocError::Pending`]) and with [`DocError::Panic`] if the engine
+    /// panics; it never unwinds.
+    pub fn encode_state(&self) -> Result<Vec<u8>, DocError> {
         self.inner.encode_state()
     }
 
@@ -197,7 +202,14 @@ impl Doc {
     }
 
     /// Check an update from a connection that owns client `allowed`, without applying it:
-    /// it must be well formed, insert only under `allowed`, and not skip ahead of this doc.
+    /// it must be well formed, and not skip ahead of this doc for any client. **New content
+    /// only from `allowed`:** blocks from another client are accepted only when this doc
+    /// already has all of them (for each such client, the update's highest clock is within
+    /// this doc's state for it), as a Yjs client's resync carries an update it held as
+    /// pending. Those are no-ops on apply (blocks are identified by client and clock, and
+    /// known ones are skipped), so even forged content under a known ID changes nothing.
+    /// Any block from another client past this doc's state is
+    /// [`DocError::ForeignClient`]. `inserts_from` lists only clients with new content.
     #[cfg(feature = "untrusted-wire")]
     pub fn check_client_update(
         &self,
@@ -323,7 +335,7 @@ mod tests {
         .unwrap();
         assert_eq!(d.text("body").unwrap(), "# Body\n");
         assert_eq!(d.text("notes").unwrap(), "n1\n");
-        let l = Doc::load(TWO_TEXT, &d.encode_state()).unwrap();
+        let l = Doc::load(TWO_TEXT, &d.encode_state().unwrap()).unwrap();
         assert_eq!(l.text("notes").unwrap(), "n1\n");
     }
 

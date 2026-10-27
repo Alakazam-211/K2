@@ -1,11 +1,8 @@
 //! What an edit changed, in lines: the ranges to flash and the `(+added -removed)` summary.
 
-use std::time::Duration;
-
-use similar::{ChangeTag, TextDiff};
-
 use super::position::LineRange;
-use crate::text::diff::Hunk;
+use crate::text::diff::{self, Hunk};
+use crate::text::myers::{self, Budget};
 
 fn newlines(b: &[u8]) -> usize {
     b.iter().filter(|&&c| c == b'\n').count()
@@ -73,18 +70,14 @@ pub(crate) fn line_counts(before: &str, after: &str, hunks: &[Hunk]) -> (usize, 
         delta += grow;
     }
     let (mut added, mut removed) = (0, 0);
+    // One work budget for the whole count, so it is deterministic and O(input) (see text/myers.rs).
+    let mut budget = Budget::for_input(before.len() + after.len());
     for (s, e, d0, d) in groups {
         let old = &before[s..e];
         let new = &after[(s as isize + d0) as usize..(e as isize + d0 + d) as usize];
-        let diff = TextDiff::configure()
-            .timeout(Duration::from_millis(50))
-            .diff_lines(old, new);
-        for c in diff.iter_all_changes() {
-            match c.tag() {
-                ChangeTag::Insert => added += 1,
-                ChangeTag::Delete => removed += 1,
-                ChangeTag::Equal => {}
-            }
+        for c in myers::diff(&diff::lines(old), &diff::lines(new), &mut budget) {
+            added += c.new.len();
+            removed += c.old.len();
         }
     }
     (added, removed)

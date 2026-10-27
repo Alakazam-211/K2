@@ -662,6 +662,62 @@ fn write_base_merges_conflicts_and_expires() {
 }
 
 #[test]
+fn write_base_appends_at_the_end_both_land() {
+    let f = fx_with("wbase-eof", burst(100));
+    let s = f.open("log.md", b"# Log\n- one\n");
+    let a = f.join(&s, "a", Rights::EDIT);
+    let b = f.join(&s, "b", Rights::EDIT);
+    // both agents read the same version, then each appends its own line from it
+    let v = s.read(a).unwrap().version;
+    assert_eq!(s.read(b).unwrap().version, v);
+    for (c, line) in [(a, "- from a\n"), (b, "- from b\n")] {
+        match s
+            .write_base(c, ROOT, v, &format!("# Log\n- one\n{line}"))
+            .unwrap()
+        {
+            WriteOutcome::Applied(e) => assert_eq!(e.lines_added, 1),
+            o => panic!("EOF appends must both land (O5): {o:?}"),
+        }
+    }
+    // theirs (a's, already live) first, then b's
+    assert_eq!(text(&s, a), "# Log\n- one\n- from a\n- from b\n");
+    // the same two inserts in the middle of the text still conflict
+    let v = s.read(a).unwrap().version;
+    s.write_base(a, ROOT, v, "# Log\nA\n- one\n- from a\n- from b\n")
+        .unwrap();
+    assert!(matches!(
+        s.write_base(b, ROOT, v, "# Log\nB\n- one\n- from a\n- from b\n")
+            .unwrap(),
+        WriteOutcome::Conflicts(_)
+    ));
+}
+
+#[test]
+fn undo_applies_the_eof_rule_only_at_the_end_of_the_doc() {
+    let f = fx_with("undo-eof", burst(100));
+    let s = f.open("u.md", b"one\ntwo\nthree\n");
+    let a = f.join(&s, "a", Rights::EDIT);
+    let b = f.join(&s, "b", Rights::EDIT);
+    // a deletes the last line, b then appends at the end: undoing a's deletion re-inserts
+    // at the end of the doc, after b's append (O5: theirs first), as a whole-text merge would
+    replace(&s, a, "three\n", "");
+    s.edit(b, ins(text(&s, b).len(), "four\n"), None).unwrap();
+    match s.undo(a, 1).unwrap() {
+        UndoOutcome::Applied { steps: 1, .. } => {}
+        o => panic!("{o:?}"),
+    }
+    assert_eq!(text(&s, a), "one\ntwo\nfour\nthree\n");
+    // the same shape in the middle of the doc conflicts: the region ends there, not the doc
+    replace(&s, a, "two\n", "");
+    s.edit(b, ins(4, "2\n"), None).unwrap();
+    assert_eq!(text(&s, a), "one\n2\nfour\nthree\n");
+    assert!(matches!(
+        s.undo(a, 1).unwrap(),
+        UndoOutcome::Conflicts { step: 1, .. }
+    ));
+}
+
+#[test]
 fn undo_redo_is_per_participant() {
     let f = fx_with("undo", burst(100));
     let s = f.open("u.md", b"one\ntwo\nthree\nfour\n");

@@ -14,13 +14,17 @@
 //!   undo, change events, the memory-bounded pool (`docs/SESSIONS.md`).
 //! - [`conformance`]: K2's primitive semantics as tests any engine must pass.
 //!
-//! Planned here (see `docs/ARCHITECTURE.md`): sync transport, disk sync, versions/history/
-//! blame, the parity framework, tier-0 support for any file.
+//! Disk sync (sessions opened with a file): atomic write-back, outside edits merged in as a
+//! CRDT change, echo suppression; the host watches and drives the clock.
+//!
+//! Planned here (see `docs/ARCHITECTURE.md`): sync transport, versions/history/blame, the
+//! parity framework, tier-0 support for any file.
 
 pub mod codec;
 pub mod conformance;
 pub mod doc;
 mod engine;
+mod hash;
 pub mod schema;
 pub mod session;
 pub mod store;

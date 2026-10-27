@@ -186,7 +186,9 @@ fn files_answer_the_apps_room_relative_shape() {
 /// an unknown key is still refused.
 #[test]
 fn ticket_files_follow_the_widgets_file_caps() {
-    let d = door(&["tickets:read", "tickets:post", "files:read", "files:download"]);
+    // files:download is an App cap (a widget manifest can't hold it), so a
+    // Garden reads ticket files but never gets the save.
+    let d = door(&["tickets:read", "tickets:post", "files:read"]);
     let made = d.call(
         "tickets.create",
         json!([{ "project": "garden-files", "title": "Notes ok?", "attachments": [{ "relPath": "docs/notes.md" }] }]),
@@ -200,9 +202,11 @@ fn ticket_files_follow_the_widgets_file_caps() {
     no_banned_fields(&shown, "tickets.show");
     let seed = &shown["comments"][0];
     let comment_id = seed["id"].as_str().unwrap_or_else(|| panic!("comment ids survive the projection: {shown}")).to_string();
-    assert_eq!((seed["attachments"][0]["state"].as_str(), seed["attachments"][0]["canDownload"].as_bool()), (Some("ok"), Some(true)), "{shown}");
+    assert_eq!((seed["attachments"][0]["state"].as_str(), seed["attachments"][0]["canDownload"].as_bool()), (Some("ok"), Some(false)), "{shown}");
     let meta = d.call("tickets.attachment", json!([{ "id": id, "commentId": comment_id, "n": 0, "mode": "preview" }]));
     assert_eq!(meta["text"], "# Notes\n", "{meta}");
+    let (code, v) = d.raw("tickets.attachment", json!([{ "id": id, "commentId": comment_id, "n": 0, "mode": "download" }]));
+    assert_eq!((code, v["error"]["cap"].as_str()), (403, Some("files:download")), "{v}");
     assert_eq!(d.refuse("tickets.comment", json!([{ "id": id, "body": "x", "grant": true }])), "bad_request", "unknown keys are still refused");
 
     // Without files:read in the manifest, files are hidden and don't open.

@@ -281,9 +281,11 @@ fn room_view(project_id: &str, cap: &str) -> SkinPass {
 
 /// The person's view for a ticket row (0.46.6, TA8): `cap` plus the file
 /// caps the widget's manifest holds (`files:read`, unscoped: the Garden is
-/// the person on their own computer; `files:download`). Without
-/// `files:read` in the manifest, ticket files read `hidden`: the manifest is
-/// the gate.
+/// the person on their own computer). Without `files:read` in the manifest,
+/// ticket files read `hidden`: the manifest is the gate. `files:download`
+/// is an App cap a manifest can't hold today, so a widget opens files but
+/// never saves them (`canDownload: false`); the check stays so the save
+/// follows if that cap ever joins widgets.
 fn ticket_room_view(project_id: &str, cap: &str, w: &Placed) -> SkinPass {
     let mut caps = vec![cap.to_string()];
     for file_cap in [k2_core::skin::CAP_FILES_READ, k2_core::skin::CAP_FILES_DOWNLOAD] {

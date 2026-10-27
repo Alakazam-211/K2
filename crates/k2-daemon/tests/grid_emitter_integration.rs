@@ -14,8 +14,6 @@
 //! Fail-loudly discipline: assertions have no fallbacks; a client that
 //! never converges panics with the frames it did receive.
 
-#![cfg(unix)]
-
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 

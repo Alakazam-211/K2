@@ -14,8 +14,6 @@
 //! - `GET /cli/app/link` / `POST /cli/app/link/rotate` (`k2 app link`) with
 //!   passport scoping and the manage-Apps switch.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

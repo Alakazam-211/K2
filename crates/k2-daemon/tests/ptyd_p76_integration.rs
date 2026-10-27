@@ -12,7 +12,7 @@
 //! or set `K2_PTYD_BIN`. A missing binary fails loudly. The test removes
 //! every `K2_*` / `K2SO_*` var and uses a temp `HOME`; it never touches the
 //! real `~/.k2` or a running daemon's ptyd.
-
+// k2-ptyd is Unix-only until its Windows port (0.47: ConPTY, named pipe, Job Objects).
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};

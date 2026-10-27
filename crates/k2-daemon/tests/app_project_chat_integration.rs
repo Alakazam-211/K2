@@ -18,8 +18,6 @@
 //!   and GETs on the POST rows are refused; an App's own pass has no read
 //!   state (`not_exposed`).
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

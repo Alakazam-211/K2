@@ -9,8 +9,6 @@
 //!   its rooms are B's after.
 //! - T1.8: every mutating handover route is POST-only (405 on GET).
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

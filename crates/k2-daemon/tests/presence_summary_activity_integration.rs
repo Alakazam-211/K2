@@ -19,8 +19,6 @@
 //! ISOLATION: `$HOME`, the shared DB, the v2 map and the hook sink are
 //! process-wide. One test in this binary.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;

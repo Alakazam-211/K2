@@ -13,8 +13,6 @@
 //!
 //! No agent CLI runs: the PTYs are `cat`, the hook envelopes synthetic.
 
-#![cfg(unix)]
-
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 

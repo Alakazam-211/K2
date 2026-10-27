@@ -10,8 +10,6 @@
 //! Headless, temp HOME (the audit file and every AGENT.md land there or in
 //! temp room folders). No agent is spawned.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::path::PathBuf;

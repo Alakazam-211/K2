@@ -26,11 +26,23 @@
 //! loopback (MS73), so the client-side budgets are tested in the renderer
 //! (lib/host-pool.test.ts), not here.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
-use std::os::unix::fs::MetadataExt;
+/// A file's identity: a rewrite through a temp file + rename gives a new
+/// one. Unix: the inode; Windows: the creation time (a renamed-in file
+/// keeps the temp file's own).
+fn file_id(p: &std::path::Path) -> String {
+    let m = std::fs::metadata(p).expect("file metadata");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        m.ino().to_string()
+    }
+    #[cfg(not(unix))]
+    {
+        format!("{:?}", m.created().expect("creation time"))
+    }
+}
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -304,16 +316,17 @@ async fn two_daemons_each_answer_for_themselves() {
 
     // MS44 b / MS82: authed traffic on B does not rewrite its session file.
     let file = sessions_file(&b);
-    let ino_before = std::fs::metadata(&file).expect("B has a session file").ino();
+    assert!(file.exists(), "B has a session file");
+    let ino_before = file_id(&file);
     let bytes_before = std::fs::read(&file).expect("read B session file");
     for _ in 0..20 {
         assert_eq!(who(&b, &tok_b).status, 200);
     }
-    assert_eq!(std::fs::metadata(&file).expect("file").ino(), ino_before, "steady traffic rewrote the file");
+    assert_eq!(file_id(&file), ino_before, "steady traffic rewrote the file");
     assert_eq!(std::fs::read(&file).expect("read"), bytes_before);
     // A second login is a real change: written.
     let tok_b2 = login_token(&b, "anna", "correct horse 1");
-    assert_ne!(std::fs::metadata(&file).expect("file").ino(), ino_before, "a new session must be saved");
+    assert_ne!(file_id(&file), ino_before, "a new session must be saved");
     assert_eq!(who(&b, &tok_b2).status, 200);
 }
 

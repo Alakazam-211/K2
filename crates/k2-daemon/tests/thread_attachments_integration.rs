@@ -17,8 +17,6 @@
 //! - The push preview says `[file]`, never a name; `thread/latest` counts.
 //! - `k2 thread <addr> "…" --file path[:line]` and the read listing.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 
@@ -128,7 +126,7 @@ async fn thread_attachments_send_view_open_and_scope() {
     write(&ws.path, "big.bin", &vec![7u8; 300_000]);
     let outside = env.path().join(format!("outside-{tag}"));
     write(&outside, "elsewhere.txt", b"outside the workspace");
-    std::os::unix::fs::symlink(outside.join("elsewhere.txt"), ws.path.join("leak.txt")).unwrap();
+    k2_core::test_env::symlink(outside.join("elsewhere.txt"), ws.path.join("leak.txt")).unwrap();
 
     // Feature key.
     let boot = get(port, "/boot-status", OWNER, "").await;
@@ -236,7 +234,7 @@ async fn thread_attachments_send_view_open_and_scope() {
     assert_eq!(it["doc"]["attachments"][2]["name"], "session.rs", "gone keeps its snapshot for the chip");
     // A file swapped for a link that escapes is gone, and never opens.
     std::fs::remove_file(ws.path.join("private/notes.txt")).unwrap();
-    std::os::unix::fs::symlink(outside.join("elsewhere.txt"), ws.path.join("private/notes.txt")).unwrap();
+    k2_core::test_env::symlink(outside.join("elsewhere.txt"), ws.path.join("private/notes.txt")).unwrap();
     let r = att_get(port, OWNER, &addr, &id, 3, "mode=preview").await;
     assert_eq!((r.status, code_of(&r).as_str()), (404, "attachment_gone"), "{}", r.body);
     assert!(!r.body.contains("outside the workspace"), "{}", r.body);

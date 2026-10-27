@@ -17,8 +17,6 @@
 //!   only; another room is the uniform `skin_room`.
 //! - A removed guest's read state goes with them.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

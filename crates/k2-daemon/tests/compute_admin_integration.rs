@@ -5,8 +5,6 @@
 //! without the operate switch can't propose. No vault, keychain or node
 //! is touched: every check here refuses before those.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::path::PathBuf;

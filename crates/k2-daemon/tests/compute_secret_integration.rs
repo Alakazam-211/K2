@@ -13,8 +13,6 @@
 //! records `secret_redaction_miss`; agents can't grant to `compute:`.
 //! Fake secrets only; every check fails loudly.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::path::{Path, PathBuf};

@@ -13,8 +13,6 @@
 //!
 //! Never the real `~/.k2`, never the keychain, never a real mail send.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

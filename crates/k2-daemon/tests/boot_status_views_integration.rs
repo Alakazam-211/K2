@@ -23,8 +23,6 @@
 //! every in-process test serializes on `TEST_LOCK` and points `$HOME` at
 //! a fresh tempdir.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;

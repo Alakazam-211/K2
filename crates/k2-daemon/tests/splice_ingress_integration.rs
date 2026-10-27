@@ -17,8 +17,6 @@
 //! The same requests on an unmarked loopback socket keep today's
 //! behaviour (control).
 
-#![cfg(unix)]
-
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 

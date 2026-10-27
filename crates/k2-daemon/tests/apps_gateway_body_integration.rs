@@ -14,8 +14,6 @@
 //! - `k2 app warnings` names the `?token=` use (deprecated) and the
 //!   refused writes from the audit.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

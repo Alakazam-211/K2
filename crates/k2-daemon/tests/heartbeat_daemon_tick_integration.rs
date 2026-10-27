@@ -14,8 +14,6 @@
 //!
 //! Before S2 this failed: the daemon never ticked by itself.
 
-#![cfg(unix)]
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -78,11 +76,7 @@ fn headless_daemon_fires_with_no_external_ticker_within_150s() {
     let shim_dir = home.join("agent-shim");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     let shim = shim_dir.join("cat");
-    std::fs::write(&shim, "#!/bin/sh\nexec /bin/cat\n").expect("shim");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod shim");
-    }
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec /bin/cat\n");
 
     // Own TMPDIR / XDG_RUNTIME_DIR under the temp HOME (never the real runtime
     // dir with the production frpc.toml). Declared before the child, so it

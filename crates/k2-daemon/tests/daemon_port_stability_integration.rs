@@ -15,8 +15,6 @@
 //! recycling) and verifies the published port is identical across
 //! both invocations.
 
-#![cfg(unix)]
-
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};

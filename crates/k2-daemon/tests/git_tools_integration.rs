@@ -31,8 +31,6 @@
 //!
 //! Temp HOME; the agent shim stands in for the real CLI.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -333,7 +331,7 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     assert!(!ws_a.join(".git").exists(), "no git steps while git is missing");
 
     // 5. git arrives.
-    std::os::unix::fs::symlink(&git, ready_bin.join("git")).expect("link a real git");
+    k2_core::test_env::symlink(&git, ready_bin.join("git")).expect("link a real git");
     let probe = git_safe::refresh();
     assert!(probe.is_ready(), "{probe:?}");
     // 5a. The next spawn in workspace A runs its waiting steps first.

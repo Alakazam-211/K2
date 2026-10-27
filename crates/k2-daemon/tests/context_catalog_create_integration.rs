@@ -4,8 +4,6 @@
 //! `require_post` + `require_manage`. GET create → 405. GET catalog stays
 //! `token_ok` (member 200). Member/Viewer POST → 403; owner/admin POST → 200.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Mutex as StdMutex;

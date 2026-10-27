@@ -17,8 +17,6 @@
 //! listener comes up through the same ensure hook a tunnel start uses),
 //! the control plane pointed at a 503 server, no real `~/.k2`.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

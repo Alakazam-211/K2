@@ -9,8 +9,6 @@
 //! - W2: a fan-out with a due heartbeat takes exactly one keep-awake hold
 //!   and releases it (counting fake, no real power calls).
 
-#![cfg(unix)]
-
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};

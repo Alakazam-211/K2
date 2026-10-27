@@ -16,7 +16,8 @@
 //! One test in this binary. No agent CLI is ever started: the PTY child
 //! is `cat`, and the installer's `claude --version` probe is refused
 //! under a temp HOME.
-
+// The suite runs over the per-cell Unix socket (cell_server::serve_cell); on
+// Windows cells reach the same gate over the TCP arm (cell_uds is a stub there).
 #![cfg(unix)]
 
 use std::io::{Read, Write};

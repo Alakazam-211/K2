@@ -15,8 +15,6 @@
 //! ISOLATION: a temp `$HOME`, the in-memory test DB, a vault on a file key
 //! under the temp home. No real agent CLI runs (alerts go to a sink).
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

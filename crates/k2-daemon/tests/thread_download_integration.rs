@@ -16,8 +16,6 @@
 //! - `files:download` is person-only to grant: an agent with "manage Apps"
 //!   gets 403 `owner_only`; the owner may grant it.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

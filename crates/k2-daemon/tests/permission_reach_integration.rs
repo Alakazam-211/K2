@@ -9,7 +9,8 @@
 //! actions), so the card here is seeded straight into the store; the
 //! request → card → push → note → undo path on real actions is in the lib's
 //! `permission::notes::reach_tests`.
-
+// The suite runs over the per-cell Unix socket (cell_server::serve_cell); on
+// Windows cells reach the same gate over the TCP arm (cell_uds is a stub there).
 #![cfg(unix)]
 
 use std::io::{Read, Write};

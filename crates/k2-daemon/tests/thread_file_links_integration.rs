@@ -5,8 +5,6 @@
 //! path to open, everything else (outside, missing, a `..` walk out, a
 //! symlink that escapes) answers the same bare `linkable: false`.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 
@@ -38,9 +36,9 @@ async fn resolve_links_answers_only_paths_inside_the_threads_workspace() {
     std::fs::create_dir_all(ws.path.join("docs")).unwrap();
     let outside = env.path().join(format!("outside-{tag}"));
     write(&outside, "secret.txt", b"not yours");
-    std::os::unix::fs::symlink(outside.join("secret.txt"), ws.path.join("leak.txt")).unwrap();
-    std::os::unix::fs::symlink(&outside, ws.path.join("leakdir")).unwrap();
-    std::os::unix::fs::symlink(ws.path.join("src/a.ts"), ws.path.join("alias.ts")).unwrap();
+    k2_core::test_env::symlink(outside.join("secret.txt"), ws.path.join("leak.txt")).unwrap();
+    k2_core::test_env::symlink(&outside, ws.path.join("leakdir")).unwrap();
+    k2_core::test_env::symlink(ws.path.join("src/a.ts"), ws.path.join("alias.ts")).unwrap();
 
     let abs_inside = ws.path.join("src/a.ts").to_string_lossy().into_owned();
     let abs_outside = outside.join("secret.txt").to_string_lossy().into_owned();

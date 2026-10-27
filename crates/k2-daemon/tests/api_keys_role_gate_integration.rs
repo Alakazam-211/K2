@@ -23,8 +23,6 @@
 //! serializes on `TEST_LOCK`, redirects `$HOME` to a fresh tempdir, and
 //! uses per-test usernames/labels (provision-suite pattern).
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

@@ -14,8 +14,6 @@
 //!   usage counts the App's own audited calls with catalog verb names.
 //! - Both doors: the browser helper forwards members, never self/usage.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

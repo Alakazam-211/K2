@@ -24,8 +24,6 @@
 //! always restore `phase = ready` after a 503 test so later tests in the
 //! same process see a ready daemon.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Mutex as StdMutex;

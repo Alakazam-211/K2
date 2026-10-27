@@ -10,8 +10,6 @@
 //! every spawned daemon its own TMPDIR / XDG_RUNTIME_DIR; this proves it
 //! through the daemon's own `/cli/tunnel/status` (`frpc_config`).
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};

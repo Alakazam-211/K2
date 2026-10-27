@@ -17,8 +17,6 @@
 //! ISOLATION: a temp `$HOME`, the in-memory test DB, a fake control plane
 //! on loopback (`K2_CONNECT_BASE`), no real agent CLI (alerts to a sink).
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

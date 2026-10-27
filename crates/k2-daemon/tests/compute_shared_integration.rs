@@ -16,8 +16,6 @@
 //! queue` redaction; the `servers` verbs (held add, one pending at a time,
 //! the binding never shown, refusals) and the mirrored list.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::path::PathBuf;

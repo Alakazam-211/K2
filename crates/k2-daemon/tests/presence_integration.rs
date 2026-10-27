@@ -22,8 +22,6 @@
 //! empty before releasing the lock so leakage across tests fails loudly
 //! at the source.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

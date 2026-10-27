@@ -20,8 +20,6 @@
 //! the test process's PATH (`daemon_pty.rs` PATH-enrichment), which we
 //! prepend the shim dir to.
 
-#![cfg(unix)]
-
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -53,9 +51,7 @@ fn install_claude_shim() -> PathBuf {
     std::fs::create_dir_all(&shim_dir).unwrap();
     let shim = shim_dir.join("claude");
     // `cat` with no args reads stdin until EOF → long-lived PTY child.
-    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
 
     let prev = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), prev));
@@ -901,9 +897,7 @@ fn install_agent_shim(binary: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&shim_dir).unwrap();
     let shim = shim_dir.join(binary);
-    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let prev = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), prev));
     register_shim_dir(&shim_dir);

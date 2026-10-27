@@ -14,8 +14,6 @@
 //!   6. Reuse inside debounce window still lands sync (apply_resize_now)
 //!   7. Same-dims set_active after attach does not reflow
 
-#![cfg(unix)]
-
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 

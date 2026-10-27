@@ -278,6 +278,12 @@ impl TempHome {
         Self::at(PathBuf::from(format!("/tmp/k2t-{}", &id[..8])))
     }
 
+    /// Windows: no Unix-socket path limit applies; a normal temp home.
+    #[cfg(not(unix))]
+    pub fn short() -> Self {
+        Self::new()
+    }
+
     fn at(home: PathBuf) -> Self {
         let lock = lock();
         std::fs::create_dir_all(home.join(".k2")).expect("create temp HOME/.k2");

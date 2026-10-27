@@ -17,8 +17,6 @@
 //! - `k2 zen guide api` works with no daemon, is at most 80 lines, names
 //!   every widget helper with its cap and reach, and `--json` parses.
 
-#![cfg(unix)]
-
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::net::TcpStream;

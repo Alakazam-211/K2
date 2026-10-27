@@ -13,8 +13,6 @@
 //!     change, and an Admin login may do both (route_policy: status
 //!     Member, keep-awake Admin since 0.43.2).
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};

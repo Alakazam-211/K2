@@ -12,8 +12,6 @@
 //!
 //! Isolation mirrors grants/layer0 tests: TEST_LOCK + temp HOME.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

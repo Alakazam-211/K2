@@ -18,8 +18,6 @@
 //!   passports;
 //! - the HTTP shape: Member login, 405, 413 + close, the cap of 8.
 
-#![cfg(unix)]
-
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
@@ -113,12 +111,10 @@ fn setup() -> TestEnv {
     for name in HARNESS_SHIMS {
         let p = shim_dir.join(name);
         if *name == "cat" {
-            std::fs::write(&p, "#!/bin/sh\nexec /bin/cat\n").expect("cat shim");
+            k2_core::test_env::write_executable(&p, "#!/bin/sh\nexec /bin/cat\n");
         } else {
             std::fs::write(&p, &script).expect("shim");
         }
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod shim");
     }
     let env = TestEnv {
         prev_home: std::env::var_os("HOME"),
@@ -507,6 +503,8 @@ fn live_session_passport_and_id(
 }
 
 /// One raw request over a cell's own socket (one request per connection).
+// The per-cell socket is a Unix socket; Windows cells use the TCP arm.
+#[cfg(unix)]
 fn uds(sock: &Path, raw: &str) -> Resp {
     let mut stream = std::os::unix::net::UnixStream::connect(sock)
         .unwrap_or_else(|e| panic!("connect cell socket {}: {e}", sock.display()));
@@ -735,15 +733,16 @@ async fn owner_new_list_stop_resume_and_msg_wake() {
         std::fs::read_to_string(&brief_path).expect("BRIEF.md"),
         brief
     );
-    use std::os::unix::fs::PermissionsExt;
-    assert_eq!(
-        std::fs::metadata(&brief_path)
-            .expect("meta")
-            .permissions()
-            .mode()
-            & 0o777,
-        0o600
-    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&brief_path).expect("meta").permissions().mode() & 0o777, 0o600);
+    }
+    #[cfg(windows)]
+    {
+        let m = std::fs::metadata(&brief_path).expect("meta");
+        assert!(k2_core::private_fs::is_private(&brief_path, &m), "BRIEF.md is owner-only");
+    }
     assert_eq!(
         std::fs::read_to_string(ws.path.join(".k2/sidecars/.gitignore")).expect("gitignore"),
         "*\n"
@@ -1368,6 +1367,9 @@ async fn codex_without_discovery_restarts_fresh_and_rereads_the_brief() {
 
 // ── agent gate (§7.3) ────────────────────────────────────────────────
 
+// Drives the per-cell Unix socket; Windows cells reach the same gate over
+// the TCP arm (cell_uds is a stub there).
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agent_permission_refusals() {
     let env = setup();

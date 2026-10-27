@@ -26,8 +26,6 @@
 //! ISOLATION: gate env vars + `$HOME` + `PATH` are process-wide — every
 //! test serializes on `TEST_LOCK` (api_gate/viewer-claimer pattern).
 
-#![cfg(unix)]
-
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
@@ -133,13 +131,7 @@ impl HostEnv {
             .join(format!("k2-host-sess-shim-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&shim_dir).expect("create shim dir");
         let shim = shim_dir.join("claude");
-        std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("write shim");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod shim");
-        }
+        k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
         // Spawn guard (2026-09-12): the daemon resolves agent basenames
         // ONLY inside this dir (`shim_named` mints siblings here too) and
         // refuses anything else under the temp HOME above.
@@ -170,20 +162,13 @@ impl HostEnv {
     fn make_shim_recording_named(&self, name: &str) -> (String, std::path::PathBuf) {
         let capture = self.shim_dir.join("received.bytes");
         let shim = self.shim_dir.join(name);
-        std::fs::write(
+        k2_core::test_env::write_executable(
             &shim,
-            format!(
+            &format!(
                 "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> '{c}'; done\nexec tee -a '{c}'\n",
                 c = capture.display()
             ),
-        )
-        .expect("write recording shim");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod recording shim");
-        }
+        );
         (shim.to_string_lossy().into_owned(), capture)
     }
 
@@ -191,14 +176,7 @@ impl HostEnv {
     /// before `exec cat`, so a launch-param spawn prompt shows on the Term.
     fn make_shim_echo_argv(&self) {
         let shim = self.shim_dir.join("claude");
-        std::fs::write(&shim, "#!/bin/sh\nprintf '%s\\n' \"$@\"\nexec cat\n")
-            .expect("write argv-echo shim");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod argv-echo shim");
-        }
+        k2_core::test_env::write_executable(&shim, "#!/bin/sh\nprintf '%s\\n' \"$@\"\nexec cat\n");
     }
 
     /// Mint an additional `exec cat` shim under `name` (the basename drives
@@ -206,13 +184,7 @@ impl HostEnv {
     /// self-minting adoption path). Returns its absolute path.
     fn shim_named(&self, name: &str) -> String {
         let shim = self.shim_dir.join(name);
-        std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("write named shim");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod named shim");
-        }
+        k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
         shim.to_string_lossy().into_owned()
     }
 }

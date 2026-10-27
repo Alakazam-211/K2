@@ -24,8 +24,6 @@
 //! process-wide, so dispatcher tests serialize on `TEST_LOCK`. Rows are
 //! found by id, never by count.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Mutex as StdMutex;

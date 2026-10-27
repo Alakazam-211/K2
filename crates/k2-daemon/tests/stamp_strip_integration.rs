@@ -6,8 +6,6 @@
 //! `/cli/thread/*` POST (post, ask, secret), `/cli/workspace/msg` POST and
 //! `/cli/folder-trust/*`.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

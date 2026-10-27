@@ -2543,7 +2543,7 @@ fn background_image_is_capped_typed_and_keeps_its_last_good_copy() {
     std::fs::write(&outside, &ok).expect("outside");
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(&outside, dir.join("wall.png")).expect("symlink");
+        k2_core::test_env::symlink(&outside, dir.join("wall.png")).expect("symlink");
         let g = f.resolve(None).expect("link");
         assert!(g["errors"][0]["message"].as_str().is_some_and(|m| m.contains("is a link")), "{g}");
         assert_eq!(g["theme"]["background"]["lastGood"], true, "a link never replaces the last good image");

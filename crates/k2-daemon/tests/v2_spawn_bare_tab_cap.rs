@@ -19,8 +19,6 @@
 //! shrunk to 3 via `K2_V2_BARE_TAB_CAP` so the test spawns a handful of
 //! PTYs, all reaped in cleanup.
 
-#![cfg(unix)]
-
 use std::sync::Mutex as StdMutex;
 
 use k2_core::db::init_for_tests;

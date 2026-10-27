@@ -18,8 +18,6 @@
 // in-process, and k2-node is Unix-only until its Windows port (Phase 3).
 #![cfg(unix)]
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::path::{Path, PathBuf};

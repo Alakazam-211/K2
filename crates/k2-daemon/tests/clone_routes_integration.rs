@@ -13,8 +13,6 @@
 //! touch the real machine. Mirrors the harness in
 //! `auth_routes_integration.rs`.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};

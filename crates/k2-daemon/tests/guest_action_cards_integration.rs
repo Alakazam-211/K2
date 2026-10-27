@@ -14,8 +14,6 @@
 //! In-process daemon on a temp `$HOME`; the card is written with the same
 //! core call and frame publish `present_action_card` uses.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

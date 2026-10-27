@@ -5,8 +5,6 @@
 //! local one, found / not found without the workspace's path or id. The
 //! privilege stamp is the dispatcher's: a Member can't send its own.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

@@ -10,8 +10,6 @@
 //! - The source: a post addressed by the workspace's folder now stores the
 //!   workspace's address name as its sender and recipient.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

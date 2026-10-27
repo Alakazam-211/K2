@@ -3,8 +3,6 @@
 //! Template: `skin_agents_can_manage_skin_toggle_gates_mutations`.
 //! Auth tests run on Mac (no skip-if-linux). Enable may 409 `unsupported`.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

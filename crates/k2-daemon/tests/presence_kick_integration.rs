@@ -20,8 +20,6 @@
 //! `TEST_LOCK` and points `$HOME` at a fresh tempdir (auth-suite
 //! pattern), and waits for the registry to drain before releasing.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

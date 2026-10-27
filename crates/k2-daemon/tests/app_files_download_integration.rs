@@ -13,8 +13,6 @@
 //!   stored list; a download-only body leaves the read folders alone.
 //! - Each saved chunk leaves an audit line; `.k2` is never an entry.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 
@@ -72,7 +70,7 @@ fn seed(docs: &Ws) {
     write(&docs.path, "public/.env", b"SECRET=1");
     write(&docs.path, "private/secret.txt", b"private");
     write(&docs.path, ".k2/AGENT.md", b"agent config");
-    std::os::unix::fs::symlink(docs.path.join("private"), docs.path.join("public/to-private")).unwrap();
+    k2_core::test_env::symlink(docs.path.join("private"), docs.path.join("public/to-private")).unwrap();
     // Review A3: never listed or served, by name or by content.
     write(&docs.path, "public/.git/config", b"[core]\n");
     write(&docs.path, "public/.git/HEAD", b"ref: refs/heads/main\n");

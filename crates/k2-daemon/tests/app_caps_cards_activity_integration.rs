@@ -9,8 +9,6 @@
 //!   so only a GET reaches the bucket here); another guest is unaffected;
 //!   the owner token is never limited.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

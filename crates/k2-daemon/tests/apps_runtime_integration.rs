@@ -6,8 +6,6 @@
 //! tampered Seed is refused; passports are scoped to their workspace's
 //! folders and need "Allow this agent to manage Apps" to build.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 
@@ -88,9 +86,17 @@ async fn s6_build_validate_flag_scope_and_tamper() {
 
     // Tamper with the stored Seed: refused on validate (and on deploy).
     let stored = k2_core::deploy::seed::seed_path(&hash).join("tag.txt");
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stored, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    // Windows: Seeds are stored read-only; clear the attribute to tamper.
+    #[cfg(windows)]
+    {
+        let mut p = std::fs::metadata(&stored).unwrap().permissions();
+        p.set_readonly(false);
+        std::fs::set_permissions(&stored, p).unwrap();
     }
     std::fs::write(&stored, "evil").unwrap();
     let r = post(d.port, "/cli/app/validate", OWNER, json!({"seed": hash})).await;

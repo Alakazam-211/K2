@@ -15,8 +15,6 @@
 //!   `stay: true`; the 256-byte cap; a used owner reset clears the lock
 //!   and voids an App's leftover reset link; the reset door's own budget.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

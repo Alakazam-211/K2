@@ -20,8 +20,6 @@
 //! Tests fail loudly: no fallback defaults in assertions, no
 //! skip-if-missing.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Mutex as StdMutex;

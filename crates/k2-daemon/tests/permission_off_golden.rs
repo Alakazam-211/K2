@@ -59,7 +59,8 @@
 //!
 //! No vault, keychain, real `~/.k2` or running daemon is touched: `$HOME` is
 //! a short temp dir under /tmp (Unix socket paths are length-capped).
-
+// The table runs over the per-cell Unix socket (cell_server::serve_cell); on
+// Windows cells reach the same gate over the TCP arm (cell_uds is a stub there).
 #![cfg(unix)]
 
 use std::collections::BTreeMap;

@@ -12,8 +12,6 @@
 //! ISOLATION: a temp `$HOME`, the in-memory test DB, alerts to a sink. No
 //! real agent CLI, no real `~/.k2`, no running daemon.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

@@ -18,8 +18,6 @@
 //! - Refusals: no `rooms=`, an agent passport, a pass without
 //!   `thread:read`, a revoked pass; on the link, GA1 and no cookies.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

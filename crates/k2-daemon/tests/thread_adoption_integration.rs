@@ -25,8 +25,6 @@
 //! provider id, in order, once each; a socket on the pane key and one on
 //! the provider id each get the `moved` frame.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -89,9 +87,7 @@ fn setup() -> TestEnv {
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     for name in ["claude", "grok", "codex", "hermes", "cat"] {
         let p = shim_dir.join(name);
-        std::fs::write(&p, "#!/bin/sh\nexec /bin/cat\n").expect("shim");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod shim");
+        k2_core::test_env::write_executable(&p, "#!/bin/sh\nexec /bin/cat\n");
     }
     let env = TestEnv {
         prev_home: std::env::var_os("HOME"),

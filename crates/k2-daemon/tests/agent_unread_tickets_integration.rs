@@ -17,8 +17,6 @@
 //!   the pass is never listed, counted or named. A guest's unread is its
 //!   own read state (`guest:<principalId>`), not the owner's.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

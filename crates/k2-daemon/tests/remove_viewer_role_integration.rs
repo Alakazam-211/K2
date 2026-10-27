@@ -16,8 +16,6 @@
 //!
 //! Fail loudly: every assertion names what it saw; no defaults.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

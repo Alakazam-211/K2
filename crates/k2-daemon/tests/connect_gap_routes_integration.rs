@@ -22,8 +22,6 @@
 //! process-wide lock, point `$HOME` at a fresh tempdir, init the
 //! in-memory DB, talk to the daemon over a raw loopback TCP socket.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Mutex as StdMutex;

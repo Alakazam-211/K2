@@ -19,8 +19,6 @@
 //!
 //! No push leaves the machine: the gateway URL is a local fake.
 
-#![cfg(unix)]
-
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Mutex, OnceLock};
@@ -198,11 +196,7 @@ fn with_temp_home<F: FnOnce()>(f: F) {
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     std::fs::create_dir_all(tmp.join(".k2")).expect(".k2");
     let shim = shim_dir.join("claude");
-    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("shim");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let _restore = Restore {
         prev_home: std::env::var_os("HOME"),
         prev_shim: std::env::var_os("K2_TEST_AGENT_SHIM_DIR"),

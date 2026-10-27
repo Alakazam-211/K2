@@ -14,8 +14,6 @@
 //!
 //! Fail loudly: every assertion names the arm and the credential.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

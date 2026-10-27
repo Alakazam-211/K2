@@ -19,7 +19,6 @@
 //! (A1 posts the real ones), with the stored view of the phone contract's
 //! §17.11.1.
 
-#![cfg(unix)]
 #![recursion_limit = "256"]
 
 #[path = "support/app_fixture.rs"]

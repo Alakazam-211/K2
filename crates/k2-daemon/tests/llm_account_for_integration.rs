@@ -17,8 +17,6 @@
 //! per token; `pinnedTo` carries ids; the boot-status feature key; no
 //! secret in any answer.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::path::{Path, PathBuf};
@@ -80,9 +78,7 @@ fn setup() -> TestEnv {
     std::fs::create_dir_all(&shim).expect("shim dir");
     for name in ["claude", "codex", "grok"] {
         let p = shim.join(name);
-        std::fs::write(&p, "#!/bin/sh\nexec /bin/cat\n").expect("shim");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        k2_core::test_env::write_executable(&p, "#!/bin/sh\nexec /bin/cat\n");
     }
     let prev = VARS.iter().map(|v| (*v, std::env::var_os(v))).collect();
     for v in VARS {

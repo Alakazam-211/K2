@@ -11,8 +11,6 @@
 //!   size) for files outside its file rights, exactly as its plain read;
 //! - (d) the owner's delta matches the plain read's attachment JSON.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

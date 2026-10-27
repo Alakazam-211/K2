@@ -13,8 +13,6 @@
 //! - `requires.sew` / `requires.voice`: install and deploy refuse with the
 //!   owner's fix when this box's Sew doesn't meet them.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

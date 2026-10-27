@@ -20,8 +20,6 @@
 //!   without `thread:read` is `cap_not_granted`, and the owner's count
 //!   never moves.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

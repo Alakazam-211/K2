@@ -10,8 +10,6 @@
 //! and checks each response belongs to its own request. It also checks the
 //! same with a Connect login session, the token a remote desktop uses.
 
-#![cfg(unix)]
-
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};

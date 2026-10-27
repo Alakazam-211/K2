@@ -30,8 +30,6 @@
 //! process `OnceLock`); every test serializes on `TEST_LOCK`, runs under a
 //! fresh temp `$HOME`, and points `K2_CONNECT_BASE` at its own fake.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream as StdTcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};

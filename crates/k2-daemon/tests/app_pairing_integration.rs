@@ -13,8 +13,6 @@
 //!   lock out the person's App login (R4).
 //! - The box host keeps Companion's AASA and has no `/.well-known/k2-pair`.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

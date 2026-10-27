@@ -8,8 +8,6 @@
 //! `source`-tagged, with the verbatim event nested under `event`. Also asserts
 //! initial-auth rejection of an invalid token.
 
-#![cfg(unix)]
-
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 

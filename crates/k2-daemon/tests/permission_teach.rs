@@ -18,7 +18,8 @@
 //!   pointer appear, and the k2-cli skill stays byte-identical.
 //!
 //! No vault, keychain, real `~/.k2` or running daemon is touched.
-
+// The suite runs over the per-cell Unix socket (cell_server::serve_cell); on
+// Windows cells reach the same gate over the TCP arm (cell_uds is a stub there).
 #![cfg(unix)]
 
 use std::io::{Read, Write};

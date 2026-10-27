@@ -16,8 +16,6 @@
 //! Isolation mirrors `remote_session_layer0_integration.rs`: TEST_LOCK +
 //! temp HOME.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

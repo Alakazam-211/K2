@@ -11,7 +11,7 @@
 //! k2-ptyd-test-agent next to this test's target dir), or set
 //! `K2_PTYD_BIN` / `K2_PTYD_TEST_AGENT`. Missing binaries fail loudly.
 //! Uses a temp `HOME`; never touches the real `~/.k2` or a running daemon.
-
+// k2-ptyd is Unix-only until its Windows port (0.47: ConPTY, named pipe, Job Objects).
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};

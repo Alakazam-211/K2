@@ -5,8 +5,6 @@
 //! a 404 from the `/cli/` catchall. The read-chain twin in
 //! `agents_routes::dispatch` is what `cli::dispatch` hits.
 
-#![cfg(unix)]
-
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;

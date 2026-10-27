@@ -11,8 +11,6 @@
 //! - an agent sets its own App's guests within the grant over the CLI
 //!   routes; it can't grant itself.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

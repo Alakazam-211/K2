@@ -13,8 +13,6 @@
 //! Headless: in-memory DB, temp `$HOME`, `claude` is a `cat` shim under
 //! `K2_TEST_AGENT_SHIM_DIR`; no real CLI and no real `~/.claude`.
 
-#![cfg(unix)]
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
@@ -65,9 +63,7 @@ fn setup() -> TestEnv {
     let shim_dir = home.join("shim");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     let shim = shim_dir.join("claude");
-    std::fs::write(&shim, "#!/bin/sh\nexec /bin/cat\n").expect("claude shim");
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod shim");
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec /bin/cat\n");
     let env = TestEnv {
         prev_home: std::env::var_os("HOME"),
         prev_shim: std::env::var_os("K2_TEST_AGENT_SHIM_DIR"),

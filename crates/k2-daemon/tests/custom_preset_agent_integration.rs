@@ -16,10 +16,7 @@
 //! Headless: in-memory DB, a short temp `$HOME`, the agent is a `/bin/sh`
 //! shim under `K2_TEST_AGENT_SHIM_DIR`; no LLM CLI is ever started.
 
-#![cfg(unix)]
-
 use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
@@ -90,8 +87,7 @@ fn setup() -> TestEnv {
     std::fs::create_dir_all(home.join(".k2")).expect("k2 home");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     let shim = shim_dir.join("board-keeper");
-    std::fs::write(&shim, keeper_script(&home)).expect("keeper shim");
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod shim");
+    k2_core::test_env::write_executable(&shim, &keeper_script(&home));
     let env = TestEnv {
         prev_home: std::env::var_os("HOME"),
         prev_shim: std::env::var_os("K2_TEST_AGENT_SHIM_DIR"),

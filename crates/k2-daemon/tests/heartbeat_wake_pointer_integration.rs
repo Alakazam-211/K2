@@ -11,8 +11,6 @@
 //! into the PTY, so the grid shows exactly what the agent would have
 //! received: either the whole body or the pointer, never a tail.
 
-#![cfg(unix)]
-
 use std::path::{Path, PathBuf};
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
@@ -163,11 +161,7 @@ impl TestCommandGuard {
         ));
         std::fs::create_dir_all(&shim_dir).unwrap();
         let shim = shim_dir.join(cmd);
-        std::fs::write(&shim, script).unwrap();
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        k2_core::test_env::write_executable(&shim, script);
         std::env::set_var("K2SO_WAKE_HEADLESS_TEST_COMMAND", cmd);
         std::env::set_var("K2_TEST_AGENT_SHIM_DIR", &shim_dir);
         Self { prior, prior_shim, shim_dir }

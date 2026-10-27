@@ -8,8 +8,6 @@
 //! ISOLATION: `$HOME` is a fresh temp dir; the vault opens on a file key
 //! under it (never the Keychain); every test serializes on `TEST_LOCK`.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::{Arc, Mutex as StdMutex, Once};

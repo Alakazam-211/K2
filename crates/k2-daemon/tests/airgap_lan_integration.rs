@@ -3,8 +3,6 @@
 //! Loud tests: no skip-if-missing, no live GitHub/Connect. LAN bind is
 //! proven by `local_addr()` being unspecified (`0.0.0.0`).
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

@@ -20,8 +20,6 @@
 //!   - `k2 vault send` exits 0 landed, 3 pending / a person must act,
 //!     2 peer_too_old / a value on stdin to a local agent, 4 no such secret.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};

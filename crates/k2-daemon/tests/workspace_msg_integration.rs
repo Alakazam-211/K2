@@ -16,8 +16,6 @@
 //! that crate's own test suite + the `inbox_shape_tauri_parity.sh`
 //! CLI test).
 
-#![cfg(unix)]
-
 use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
 
@@ -192,9 +190,7 @@ fn install_agent_shim(binary: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&shim_dir).unwrap();
     let shim = shim_dir.join(binary);
-    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let prev = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), prev));
     // Spawn guard (2026-09-12): the daemon resolves agent basenames ONLY

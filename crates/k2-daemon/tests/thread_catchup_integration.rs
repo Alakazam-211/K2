@@ -15,8 +15,6 @@
 //!   top-level `has_more` asks for another call.
 //! - Project chat groups equal the plain `after_seq` read.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

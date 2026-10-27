@@ -9,8 +9,6 @@
 //! into the temp home; rolled-back folders go to a temp trash dir). No real
 //! AI CLI runs: no member launches.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

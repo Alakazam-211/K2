@@ -4197,12 +4197,7 @@ mod tests {
                 .join(format!("k2-fed-wake-shim-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&shim_dir).unwrap();
             let shim = shim_dir.join("cat");
-            std::fs::write(&shim, "#!/bin/sh\nexec cat\n").unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
+            k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
             let _cmd = k2_core::test_env::EnvVar::set("K2SO_WAKE_HEADLESS_TEST_COMMAND", "cat");
             let _shim = k2_core::test_env::EnvVar::set("K2_TEST_AGENT_SHIM_DIR", &shim_dir);
 

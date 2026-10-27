@@ -36,8 +36,6 @@
 //! ISOLATION: temp HOME, an `exec cat` shim as `claude` (no agent CLI ever
 //! starts), synthetic transcript lines and hook payloads only.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -169,11 +167,7 @@ fn with_temp_home<F: FnOnce(&Path)>(f: F) {
     let shim_dir = tmp.join("shim");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     let shim = shim_dir.join("claude");
-    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("shim");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let tmp = dunce::canonicalize(&tmp).expect("canonical tmp");
     let _restore = Restore {
         _g: g,

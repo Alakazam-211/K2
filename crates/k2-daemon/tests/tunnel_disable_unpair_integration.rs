@@ -20,8 +20,6 @@
 //! process-wide — every test serializes on `TEST_LOCK` and redirects HOME
 //! to a fresh tempdir.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

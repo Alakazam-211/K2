@@ -13,7 +13,8 @@
 //!
 //! Isolation: `TempHome::short()` (holds the one env lock; short path so
 //! the socket fits `SUN_LEN`). Never the real `~/.k2` or `/run/sew`.
-
+// Server-only feature (Linux boxes): drives a fake Sew over its Unix management
+// socket; not shipped on personal Windows machines.
 #![cfg(unix)]
 
 #[path = "support/fake_sew.rs"]

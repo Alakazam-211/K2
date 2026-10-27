@@ -16,8 +16,6 @@
 //! No agent CLI runs: transcripts are synthetic files under a temp HOME,
 //! and the PTYs are `exec cat` shims named after the harness.
 
-#![cfg(unix)]
-
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -50,9 +48,7 @@ impl Env {
         std::fs::create_dir_all(&shims).expect("shim dir");
         for name in ["claude", "codex", "hermes", "cursor-agent"] {
             let shim = shims.join(name);
-            std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("shim");
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+            k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
         }
         std::env::set_var("K2_TEST_AGENT_SHIM_DIR", &shims);
         k2_core::test_isolation::assert_isolated_from_prod();

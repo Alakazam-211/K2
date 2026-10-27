@@ -17,8 +17,6 @@
 //! `$HOME` are process-wide. One test in this binary; `$HOME` points at a
 //! fresh tempdir with the agent shim (no real `claude` can spawn).
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::time::{Duration, Instant};
@@ -144,11 +142,7 @@ fn with_temp_home<F: FnOnce()>(f: F) {
     let shim_dir = tmp.join("shim");
     std::fs::create_dir_all(&shim_dir).expect("create shim dir");
     let shim = shim_dir.join("claude");
-    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("write claude shim");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod shim");
-    }
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let _restore = Restore {
         prev_home: std::env::var_os("HOME"),
         prev_shim: std::env::var_os("K2_TEST_AGENT_SHIM_DIR"),

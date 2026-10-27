@@ -3,8 +3,6 @@
 //! Real dispatcher. Temp `$HOME`. Fail loud — a missing row, hash, or
 //! session is a panic, not a default.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Mutex as StdMutex;

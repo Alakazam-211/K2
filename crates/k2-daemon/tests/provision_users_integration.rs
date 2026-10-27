@@ -19,8 +19,6 @@
 //! test serializes on `TEST_LOCK` and points `$HOME` at a fresh tempdir
 //! (presence-suite pattern).
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

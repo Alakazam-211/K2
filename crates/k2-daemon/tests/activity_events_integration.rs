@@ -20,8 +20,6 @@
 //! the session-events bus are process-wide, so every test here holds one
 //! lock.
 
-#![cfg(unix)]
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};

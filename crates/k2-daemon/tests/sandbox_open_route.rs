@@ -3,8 +3,6 @@
 //! nothing. A connect-user session, a skin token, and an API key do not pass.
 //! `$HOME` is a temp dir so the test daemon does not touch the user's home.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::path::PathBuf;

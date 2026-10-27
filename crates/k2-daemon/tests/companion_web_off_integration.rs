@@ -20,8 +20,6 @@
 //! - the `/pair` page and the iOS app-site-association file;
 //! - web on → unchanged.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

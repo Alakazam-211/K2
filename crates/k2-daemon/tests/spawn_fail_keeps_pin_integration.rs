@@ -16,8 +16,6 @@
 //! `GET /cli/thread` is the same conversation with every earlier item, and
 //! the guest's `GET /cli/thread/unread` row is unchanged.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

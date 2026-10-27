@@ -17,8 +17,6 @@
 //!   3. record the hang as a failed fire-attempt (error audit row +
 //!      consecutive_failures bump).
 
-#![cfg(unix)]
-
 use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;

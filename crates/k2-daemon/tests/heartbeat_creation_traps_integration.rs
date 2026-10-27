@@ -16,8 +16,6 @@
 //! scheduler install is real code. `K2_HEARTBEAT_NO_SELF_HEAL=1` makes
 //! the S1 guard refuse every launchctl/crontab write before it runs.
 
-#![cfg(unix)]
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;

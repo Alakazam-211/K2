@@ -22,7 +22,8 @@
 //!   through `/cli/agent-access/set {toggle: permission_cards}` by an Owner
 //!   or Admin login (a Member gets the route floor), is never in Project
 //!   JSON, and `enabled_for` needs both.
-
+// The table runs over the per-cell Unix socket (cell_server::serve_cell); on
+// Windows cells reach the same gate over the TCP arm (cell_uds is a stub there).
 #![cfg(unix)]
 
 use std::io::{Read, Write};

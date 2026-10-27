@@ -25,8 +25,6 @@
 //! harness spawns no agent; `K2_TEST_AGENT_SHIM_DIR` points at an empty
 //! dir so any stray spawn fails instead of running a real CLI.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

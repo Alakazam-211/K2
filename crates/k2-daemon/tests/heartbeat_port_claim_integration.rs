@@ -13,8 +13,6 @@
 //! shared DB), so instead this test spawns the compiled binary
 //! as a subprocess and asserts on the filesystem side-effects.
 
-#![cfg(unix)]
-
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};

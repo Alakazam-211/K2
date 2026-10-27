@@ -16,8 +16,6 @@
 //! process-wide, so every test serializes on `TEST_LOCK`. Assertions on
 //! the shared DB check membership by id, never a row count.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Mutex as StdMutex;

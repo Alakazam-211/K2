@@ -20,7 +20,8 @@
 //! (PATH stays ours: the box may have a real frpc), an empty agent shim
 //! dir, the control plane pointed at a closed port, no systemd/launchd
 //! vars. Needs `python3`.
-
+// The daemon hand-off passes listening sockets and the lock by fd (Unix);
+// Windows restart hand-off comes with the ptyd/restart port (0.47).
 #![cfg(unix)]
 
 use std::io::{Read, Write};

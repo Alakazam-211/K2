@@ -20,7 +20,6 @@
 //! Its own binary: it turns the process-wide server switch on (lane B's
 //! rule). In-process daemon on a temp `$HOME`.
 
-#![cfg(unix)]
 #![recursion_limit = "256"]
 
 #[path = "support/app_fixture.rs"]

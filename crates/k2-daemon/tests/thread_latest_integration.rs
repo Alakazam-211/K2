@@ -11,8 +11,6 @@
 //! ISOLATION: one test, temp HOME + agent shim (Thread posts never spawn
 //! the real `claude`).
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -90,11 +88,7 @@ fn with_temp_home<F: FnOnce()>(f: F) {
     let shim_dir = tmp.join("shim");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     let shim = shim_dir.join("claude");
-    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("shim");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let _restore = Restore {
         prev_home: std::env::var_os("HOME"),
         prev_shim: std::env::var_os("K2_TEST_AGENT_SHIM_DIR"),

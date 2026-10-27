@@ -25,8 +25,6 @@
 //! `connect-users.json` writes never touch the real store. The in-memory
 //! DB (`db::init_for_tests`) backs the catchall data routes.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Mutex as StdMutex;

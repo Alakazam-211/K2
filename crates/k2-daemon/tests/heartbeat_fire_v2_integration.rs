@@ -15,8 +15,6 @@
 //! `claude` with `cat` so the test doesn't require claude on PATH
 //! and doesn't burn API calls.
 
-#![cfg(unix)]
-
 use std::path::{Path, PathBuf};
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -100,12 +98,7 @@ impl TestCommandGuard {
         ));
         std::fs::create_dir_all(&shim_dir).unwrap();
         let shim = shim_dir.join(cmd);
-        std::fs::write(&shim, "#!/bin/sh\nexec cat\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
         std::env::set_var("K2SO_WAKE_HEADLESS_TEST_COMMAND", cmd);
         std::env::set_var("K2_TEST_AGENT_SHIM_DIR", &shim_dir);
         Self {

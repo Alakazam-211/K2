@@ -12,8 +12,6 @@
 //! on `TEST_LOCK` and points `$HOME` at a fresh tempdir (connect-users
 //! store, tunnel.json, edge-keys.json, auth-audit.jsonl all live there).
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Mutex as StdMutex;

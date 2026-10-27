@@ -15,8 +15,6 @@
 //!
 //! No agent CLI runs: the hook envelopes are synthetic.
 
-#![cfg(unix)]
-
 use std::path::{Path, PathBuf};
 use std::sync::Mutex as StdMutex;
 

@@ -22,8 +22,6 @@
 //! the SAME registry + claims the spawn-time mint produces — so the wire
 //! contract is exercised without shelling the bash CLI.
 
-#![cfg(unix)]
-
 use std::sync::Mutex as StdMutex;
 
 use k2_daemon::session_token::{CredMode, HookPrincipal, Provider};
@@ -114,13 +112,7 @@ impl RespondEnv {
             .join(format!("k2-host-respond-shim-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&shim_dir).expect("create shim dir");
         let shim = shim_dir.join("claude");
-        std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("write shim");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod shim");
-        }
+        k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
         // Spawn guard (2026-09-12): the daemon resolves agent basenames
         // ONLY inside this dir and refuses anything else under the temp
         // HOME above.

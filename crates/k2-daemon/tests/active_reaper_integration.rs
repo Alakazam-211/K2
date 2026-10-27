@@ -21,8 +21,6 @@
 //!     (window/pin, not live PTYs);
 //!   * POST activate after dismiss un-suppresses without waiting a tick.
 
-#![cfg(unix)]
-
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;

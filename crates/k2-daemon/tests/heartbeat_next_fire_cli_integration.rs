@@ -7,8 +7,6 @@
 //! not the password-database home), `K2_HEARTBEAT_NO_SELF_HEAL=1`, and an
 //! EMPTY `K2_TEST_AGENT_SHIM_DIR` so no real agent CLI can start.
 
-#![cfg(unix)]
-
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

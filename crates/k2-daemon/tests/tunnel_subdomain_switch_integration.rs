@@ -17,8 +17,6 @@
 //! captures the runtime handle on first registration (first write wins),
 //! so every test must run on the runtime that registered it.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::path::PathBuf;

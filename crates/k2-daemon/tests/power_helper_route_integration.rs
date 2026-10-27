@@ -16,8 +16,6 @@
 //!   - an old client's `approveLid` and the wake switch never prompt for
 //!     a Member or a remote client.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex as StdMutex};

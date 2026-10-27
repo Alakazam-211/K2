@@ -19,7 +19,8 @@
 //!
 //! Its own binary: it flips the process-wide switch and installs a panic
 //! hook.
-
+// The suite runs over the per-cell Unix socket (cell_server::serve_cell); on
+// Windows cells reach the same gate over the TCP arm (cell_uds is a stub there).
 #![cfg(unix)]
 
 use std::io::{Read, Write};

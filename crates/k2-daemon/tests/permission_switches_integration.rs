@@ -14,8 +14,6 @@
 //!
 //! Its own binary: it flips the process-wide switch (lane B's rule).
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::path::PathBuf;

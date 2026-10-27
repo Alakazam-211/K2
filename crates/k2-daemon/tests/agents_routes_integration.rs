@@ -18,8 +18,6 @@
 //! a HEAD commit. Helpers at the top of this file keep each
 //! test body short.
 
-#![cfg(unix)]
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex as StdMutex;

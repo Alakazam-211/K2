@@ -13,8 +13,6 @@
 //! stops only sessions of that scope, never a nested workspace (B#5).
 //! Temp HOME; the agent shim (`sleep`) stands in for the real CLI.
 
-#![cfg(unix)]
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

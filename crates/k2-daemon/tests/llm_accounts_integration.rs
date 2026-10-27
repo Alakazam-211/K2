@@ -16,7 +16,8 @@
 //! captures then restores; air-gap refuses sign-in but allows local
 //! changes; secrets and pasted codes never appear in responses, the DB or
 //! the audit log.
-
+// pending Windows LLM sign-in terminals (Phase 3 agent spawn): this suite runs
+// login shims from a /tmp home and checks Unix modes.
 #![cfg(unix)]
 
 use std::io::{Read, Write};

@@ -17,8 +17,6 @@
 //!   (legacy `spawn_wake_headless` path owns the PTY).
 //! - Response JSON always carries `{count, launched, heartbeats}`.
 
-#![cfg(unix)]
-
 use std::path::{Path, PathBuf};
 use std::sync::Mutex as StdMutex;
 

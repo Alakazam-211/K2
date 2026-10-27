@@ -22,8 +22,6 @@
 //! - **The App link** serves every new row: attachment (meta/thumb), the
 //!   catch-up delta, mark-read, unread, resolve-links, a post with files.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

@@ -8,8 +8,6 @@
 //! (`K2_TEST_AGENT_SHIM_DIR`), and `K2_HEARTBEAT_NO_SELF_HEAL=1` keeps the
 //! add path from touching launchd / crontab.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::path::PathBuf;
@@ -140,11 +138,7 @@ fn with_temp_home<F: FnOnce()>(f: F) {
     let shim_dir = tmp.join("shim");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     let shim = shim_dir.join("claude");
-    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("shim");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let _restore = Restore {
         prev: NAMES.iter().map(|n| (*n, std::env::var_os(n))).collect(),
         tmp: tmp.clone(),
@@ -904,7 +898,7 @@ async fn wakeup_md_file_access_follows_r2() {
         let r = app_post(port, &both, "/cli/fs/upload-binary", serde_json::json!({"workspace": a.handle, "dir": ".k2/heartbeats/digest", "filename": "x.bin", "base64": "AAAA"}));
         assert_status(&r, 403, "heartbeats_area", "upload into heartbeats");
         // A symlink inside the room cannot reach the folder.
-        std::os::unix::fs::symlink(format!("{}/.k2/heartbeats", a.path), format!("{}/hb-link", a.path))
+        k2_core::test_env::symlink(format!("{}/.k2/heartbeats", a.path), format!("{}/hb-link", a.path))
             .expect("symlink");
         let r = write(&both, "hb-link/digest/notes.md", "x");
         assert_status(&r, 403, "heartbeats_area", "symlinked heartbeats folder");

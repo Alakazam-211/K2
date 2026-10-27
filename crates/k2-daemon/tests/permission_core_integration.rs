@@ -12,7 +12,8 @@
 //! release catalog may be empty on this branch (E-lanes register actions),
 //! so "served" is shown by the family's own answers (`enabled`, `bad_action`,
 //! `list`); the request → card → answer path is in the lib's core tests.
-
+// The suite runs over the per-cell Unix socket (cell_server::serve_cell); on
+// Windows cells reach the same gate over the TCP arm (cell_uds is a stub there).
 #![cfg(unix)]
 
 use std::io::{Read, Write};

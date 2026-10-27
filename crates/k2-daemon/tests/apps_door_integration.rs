@@ -11,8 +11,6 @@
 //! - suspend: every pass revoked in one step; a connection still open gets
 //!   `401` on its very next request; deploys frozen; only the owner resumes.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

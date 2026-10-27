@@ -15,8 +15,6 @@
 //! ISOLATION: `$HOME` is process-wide — every test serializes on `TEST_LOCK`
 //! and redirects HOME to a fresh tempdir (`~/.k2/skin.db`).
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;
@@ -239,13 +237,7 @@ fn with_temp_home<F: FnOnce()>(f: F) {
     let shim_dir = tmp.join("shim");
     std::fs::create_dir_all(&shim_dir).expect("create shim dir");
     let shim = shim_dir.join("claude");
-    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("write claude shim");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod claude shim");
-    }
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let _restore = Restore {
         prev_home: std::env::var_os("HOME"),
         prev_shim: std::env::var_os("K2_TEST_AGENT_SHIM_DIR"),
@@ -5336,7 +5328,7 @@ async fn skin_guest_binary_create_copy_move_and_pin_find_only() {
             uuid::Uuid::new_v4()
         ));
         std::fs::write(&outside, b"untouched\n").expect("outside");
-        std::os::unix::fs::symlink(&outside, docs_dir.join("link.bin")).expect("symlink");
+        k2_core::test_env::symlink(&outside, docs_dir.join("link.bin")).expect("symlink");
         let f23 = http(
             port,
             "POST",
@@ -5704,7 +5696,7 @@ async fn skin_guest_upload_chunk_jailed_resumable_and_bound_to_the_guest() {
         }
         // A symlinked folder that points out of the room: refused as the
         // destination, and as a middle component (nothing made outside).
-        std::os::unix::fs::symlink(&outside, docs_dir.join("out")).expect("symlink out");
+        k2_core::test_env::symlink(&outside, docs_dir.join("out")).expect("symlink out");
         let leaf = guest_chunk(port, &alice, &docs, "out", "esc", &chunk_x);
         assert_eq!(leaf.status, 400, "symlinked dir leaf; {}", leaf.body);
         let mid = guest_chunk(port, &alice, &docs, "out/sub", "esc", &chunk_x);
@@ -5714,7 +5706,7 @@ async fn skin_guest_upload_chunk_jailed_resumable_and_bound_to_the_guest() {
         // A symlink sitting at the final name is never written through.
         let victim = outside.join("victim.txt");
         std::fs::write(&victim, b"untouched").expect("victim");
-        std::os::unix::fs::symlink(&victim, docs_dir.join("big.bin")).expect("symlink leaf");
+        k2_core::test_env::symlink(&victim, docs_dir.join("big.bin")).expect("symlink leaf");
         let through = guest_chunk(port, &alice, &docs, ".", "leaf", &chunk_x);
         assert_eq!(through.status, 200, "publishes beside the symlink; {}", through.body);
         assert_eq!(json(&through.body)["path"].as_str(), Some("big (1).bin"), "{}", through.body);

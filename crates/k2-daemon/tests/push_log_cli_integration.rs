@@ -9,8 +9,6 @@
 //! Spawn guards as in `heartbeat_next_fire_cli_integration`: temp HOME, an
 //! EMPTY `K2_TEST_AGENT_SHIM_DIR`, no heartbeat self-heal, no watchdog.
 
-#![cfg(unix)]
-
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};

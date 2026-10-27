@@ -17,8 +17,6 @@
 //!
 //! Never touches the real `~/.k2`: HOME is a temp dir removed on drop.
 
-#![cfg(unix)]
-
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};

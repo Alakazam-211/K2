@@ -17,8 +17,6 @@
 //!    before_seq=N` pages a project chat back, same auth and view as the
 //!    plain read.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

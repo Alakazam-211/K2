@@ -98,12 +98,7 @@ fn with_temp_home<F: FnOnce(&Path)>(f: F) {
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     std::fs::create_dir_all(tmp.join(".k2")).expect(".k2");
     let shim = shim_dir.join("claude");
-    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("shim");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let tmp = dunce::canonicalize(&tmp).expect("canonical tmp");
     let _restore = Restore {
         _g: g,

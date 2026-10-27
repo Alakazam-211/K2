@@ -4,8 +4,6 @@
 //! and a host page for a staged built-in card, and writes nothing under
 //! `~/.k2/zen`. Never touches the real `~/.k2`. Fail loudly.
 
-#![cfg(unix)]
-
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};

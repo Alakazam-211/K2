@@ -13,8 +13,6 @@
 //! - the owner's `/cli/app/approvals` lists it with `pendingCount`, and
 //!   every filing pushes `app_approvals_changed {pending}` (the badge).
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

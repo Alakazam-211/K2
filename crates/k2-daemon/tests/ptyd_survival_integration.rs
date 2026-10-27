@@ -25,7 +25,7 @@
 //! Never touches the real `~/.k2`, the keychain, a running daemon or its
 //! ptyd: everything lives under the scratch HOME and only pids this test
 //! started are killed.
-
+// k2-ptyd is Unix-only until its Windows port (0.47: ConPTY, named pipe, Job Objects).
 #![cfg(unix)]
 
 use std::io::{Read, Write};

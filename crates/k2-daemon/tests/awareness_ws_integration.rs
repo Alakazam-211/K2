@@ -3,8 +3,6 @@
 //! loopback listener, hand the accepted connection to the handler,
 //! then drive a tokio-tungstenite client against it.
 
-#![cfg(unix)]
-
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 

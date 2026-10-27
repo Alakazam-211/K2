@@ -14,8 +14,6 @@
 //! - `me.get` shows `folders.upload` and `can.upload`; an agent with
 //!   "manage Apps" may grant `files:upload` and set drop folders.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 
@@ -279,7 +277,7 @@ async fn nowhere_to_drop_links_out_and_write_holders_keep_todays_landing() {
     let linked = format!("linked{tag}");
     role_with_rooms(port, &linked, &[(&docs, &["files:upload"])]).await;
     owner_ok(port, "/cli/skin/roles/paths", json!({ "name": linked, "handle": docs.handle, "upload": ["Drop"] })).await;
-    std::os::unix::fs::symlink(docs.path.join("jobs/J2"), docs.path.join("Drop")).unwrap();
+    k2_core::test_env::symlink(docs.path.join("jobs/J2"), docs.path.join("Drop")).unwrap();
     let lpass = login_with_role(port, &format!("linked{tag}"), &linked).await;
     let r = upload_binary(port, &lpass, &docs, Some("Drop"), "x.bin", b"x").await;
     assert_missing_cap(&r, "files:upload", "drop folder links to a sibling");

@@ -16,8 +16,6 @@
 //! - `GET /cli/fs/stat` (`files.stat`) under the same rules.
 //! - `k2 app role paths` round trip.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 
@@ -100,9 +98,9 @@ fn seed_jobs(docs: &Ws) {
     write(&docs.path, "jobs/J3/notes.txt", b"job three notes");
     std::fs::create_dir_all(docs.path.join("inbox")).unwrap();
     // A link inside a granted folder pointing at a sibling job.
-    std::os::unix::fs::symlink(docs.path.join("jobs/J2"), docs.path.join("jobs/J1/to-j2")).unwrap();
+    k2_core::test_env::symlink(docs.path.join("jobs/J2"), docs.path.join("jobs/J1/to-j2")).unwrap();
     // And one inside a write folder (photos), relative this time.
-    std::os::unix::fs::symlink("../../J2", docs.path.join("jobs/J1/photos/esc")).unwrap();
+    k2_core::test_env::symlink("../../J2", docs.path.join("jobs/J1/photos/esc")).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

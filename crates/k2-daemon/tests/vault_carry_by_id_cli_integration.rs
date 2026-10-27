@@ -5,8 +5,6 @@
 //! refused, `--workspace <id>` lands them, and the dry run prints the id.
 //! No value ever reaches stdout or stderr.
 
-#![cfg(unix)]
-
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};

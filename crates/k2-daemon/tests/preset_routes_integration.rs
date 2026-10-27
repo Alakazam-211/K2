@@ -23,8 +23,6 @@
 //! preset rows live in the process-global in-memory DB, so every id is
 //! uniquified per test.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

@@ -3,8 +3,6 @@
 //! Headless. No Caddy. Teaching string only on FULL `/cli/sessions/grid`
 //! and `/cli/sessions/bytes` at the daemon. Gateway must not proxy those.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream as StdTcpStream};
 use std::sync::Mutex as StdMutex;
@@ -219,12 +217,7 @@ fn with_temp_home<F: FnOnce()>(f: F) {
     let shim_dir = tmp.join("shim");
     std::fs::create_dir_all(&shim_dir).expect("create shim dir");
     let shim = shim_dir.join("claude");
-    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("write claude shim");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod claude shim");
-    }
+    k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let _restore = Restore {
         prev: NAMES.iter().map(|n| (*n, std::env::var_os(n))).collect(),
         tmp: tmp.clone(),
@@ -1951,7 +1944,7 @@ async fn publish_run_skin_gateway_files_rooms_jail_and_ws() {
             uuid::Uuid::new_v4()
         ));
         std::fs::write(&outside, b"untouched\n").expect("outside");
-        std::os::unix::fs::symlink(&outside, format!("{docs_path}/notes.md")).expect("symlink");
+        k2_core::test_env::symlink(&outside, format!("{docs_path}/notes.md")).expect("symlink");
         let write_link = http_ex(
             gport,
             "POST",
@@ -3898,9 +3891,7 @@ fn spawn_cat(cwd: &str, key: &str) -> std::sync::Arc<k2_core::terminal::DaemonPt
     let shim_dir = std::env::var_os("K2_TEST_AGENT_SHIM_DIR").expect("with_temp_home sets the shim dir");
     let shim = std::path::Path::new(&shim_dir).join("cat");
     if !shim.exists() {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::write(&shim, "#!/bin/sh\nexec /bin/cat\n").expect("write cat shim");
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod cat shim");
+        k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec /bin/cat\n");
     }
     let cfg = k2_core::terminal::DaemonPtyConfig {
         cols: 80,

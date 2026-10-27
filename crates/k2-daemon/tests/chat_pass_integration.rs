@@ -8,8 +8,6 @@
 //! key under that home (never the Keychain); the DB is the in-memory test
 //! DB. Every test serializes on `TEST_LOCK`.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

@@ -18,8 +18,6 @@
 //! - C templates: suggestions are listed, never created on their own, and
 //!   one becomes a role only when asked.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

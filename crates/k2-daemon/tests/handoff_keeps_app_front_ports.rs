@@ -14,7 +14,8 @@
 //!    port keeps serving from the successor.
 //!
 //! Spawn guards as `handoff_keeps_app_connections`. Needs `python3`.
-
+// The daemon hand-off passes listening sockets by fd (Unix); Windows restart
+// hand-off comes with the ptyd/restart port (0.47).
 #![cfg(unix)]
 
 #[path = "support/app_fixture.rs"]

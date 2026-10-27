@@ -17,8 +17,6 @@
 //!
 //! No vault, keychain, real node or `~/.k2` is touched (temp `$HOME`).
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::path::PathBuf;

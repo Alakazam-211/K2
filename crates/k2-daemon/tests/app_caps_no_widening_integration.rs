@@ -14,8 +14,6 @@
 //! Drop folders are not "inert" by design (they wall the line, a
 //! narrowing), so they are covered by `app_files_drop_integration`.
 
-#![cfg(unix)]
-
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 

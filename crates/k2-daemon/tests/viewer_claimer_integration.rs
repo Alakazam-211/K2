@@ -17,8 +17,6 @@
 //! Fail-loudly discipline: no unwrap_or-defaults in assertions; every
 //! wait has a deadline that panics listing what WAS observed.
 
-#![cfg(unix)]
-
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 

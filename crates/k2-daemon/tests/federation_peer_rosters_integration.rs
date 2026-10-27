@@ -17,8 +17,6 @@
 //!   - `?peer=` asks one server; POST is 405; a Member login is 403;
 //!   - `/cli/federation/peers` and `k2 fed peers` list the same order.
 
-#![cfg(unix)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -175,8 +173,7 @@ fn write_peers(d: &Daemon, peers: &[(&str, &str, String, u32)]) {
         .collect();
     let path = d.home.join(".k2/federation-peers.json");
     std::fs::write(&path, serde_json::json!({ "version": 1, "peers": rows }).to_string()).expect("peer store");
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    k2_core::private_fs::make_private_file(&path).expect("peer store 0600 / owner-only");
 }
 
 fn create_workspace(d: &Daemon, name: &str) {

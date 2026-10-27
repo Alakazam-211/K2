@@ -7,8 +7,6 @@
 //!
 //! Fail loudly: every assertion names what it saw.
 
-#![cfg(unix)]
-
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};

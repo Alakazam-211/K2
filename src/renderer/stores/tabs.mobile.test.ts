@@ -16,7 +16,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
 
-type MobileEvt = { kind: 'open_mobile'; workspacePath: string }
+type MobileEvt = { kind: 'open_mobile'; workspace: string; sim: string }
 const bus = vi.hoisted(() => ({ handlers: new Map<string, Set<(e: MobileEvt) => void>>() }))
 vi.mock('@/stores/session-events', async () => {
   const actual = await vi.importActual<typeof import('@/stores/session-events')>('@/stores/session-events')
@@ -43,8 +43,8 @@ import {
   type Tab,
 } from './tabs'
 
-function fire(scopeId: string, workspacePath: string): void {
-  for (const fn of bus.handlers.get(scopeId) ?? []) fn({ kind: 'open_mobile', workspacePath })
+function fire(scopeId: string, workspace: string): void {
+  for (const fn of bus.handlers.get(scopeId) ?? []) fn({ kind: 'open_mobile', workspace, sim: 's1' })
 }
 
 function items(tabs: Tab[] = useTabsStore.getState().tabs): Array<{ id: string; type: string; data: unknown }> {
@@ -180,6 +180,22 @@ describe('open_mobile (M-A10)', () => {
     expect(mobileTabs()).toHaveLength(0)
     noteServerVersion('local', '0.46.6', ['mobile-sim-v1'])
     fire(primaryScope().id, '/srv/alpha')
+    expect(mobileTabs()).toHaveLength(1)
+    off()
+  })
+
+  it('names the workspace by project id too (k2-core::sim::api sends {workspace, sim})', () => {
+    const off = initOpenMobileTabs()
+    const id = primaryScope().id
+    fire(id, 'p2')
+    expect(mobileTabs()).toHaveLength(0)
+    fire(id, 'p1')
+    expect(mobileTabs()).toHaveLength(1)
+    // The workspace key wins over the projects store selection.
+    useTabsStore.setState({ tabs: [], activeTabId: null, activeWorkspaceKey: 'p2:w2' })
+    fire(id, 'p1')
+    expect(mobileTabs()).toHaveLength(0)
+    fire(id, 'p2')
     expect(mobileTabs()).toHaveLength(1)
     off()
   })

@@ -1,50 +1,78 @@
-// The device stream (prd-mobile-dev-v1 §7; vs-live M-A4, M-A19).
+// The device stream (prd-mobile-dev-v1 §7; vs-live M-A4, M-A19), mirroring
+// Builder A's frozen wire, `k2-core::sim::stream`:
 //
-// `GET /cli/sim/stream?sim=<id>&token=…&fps=<n>` is a WebSocket:
-//  - outbound (daemon → tab): BINARY messages are JPEG frames at dp/points
-//    resolution; TEXT messages are JSON (`meta`, `control`, `error`);
-//  - inbound (tab → daemon): JSON TEXT — one `ack` per drawn frame (one
-//    frame in flight per viewer, the k1 ack idea), and the person's input
-//    (`tap`, `swipe`, `type`, `key`, `button`, `rotate`, `take`, `release`).
+//   GET /cli/sim/stream?workspace=<id|handle|path>&token=…[&fps=<n>]  (WebSocket)
 //
-// ADAPTER: Builder A owns the socket. Until the shapes are frozen this file
-// is the only place that knows the wire; the pane talks to a
-// `SimStreamConnection`. `createStubSimStream` stands in for the daemon in
-// tests and headless screenshots (no JPEG decode, a painted fake screen).
+//  - daemon → viewer, BINARY: a 16-byte header then a baseline JPEG:
+//      0..4 b"K2SF" · 4..8 seq u32 · 8..10 width px u16 · 10..12 height px
+//      u16 · 12..14 width pt u16 · 14..16 height pt u16 (all LE)
+//  - daemon → viewer, TEXT: JSON tagged by "t": hello, state, hold, error, fps;
+//  - viewer → daemon, TEXT: JSON tagged by "t": ack {seq} (one frame in
+//    flight), fps, touch, tap, swipe, text, key, button, rotate, appearance,
+//    open-url, take-over, hand-back. Input is in points.
+//  - close codes: 4401 login revoked, 4403 forbidden, 4410 device stopped.
+//
+// The pane talks to a `SimStreamConnection`; `createStubSimStream` stands in
+// for the daemon in tests and headless screenshots (a painted fake screen,
+// no JPEG decode).
 
 import type { ServerScope } from '@/kessel/server-scope'
 import { daemonWsBase } from '@/kessel/daemon-ws'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
-import type { SimControl, SimOrientation } from './simApi'
+import { parseDeviceProfile, parseSimHold, type SimDeviceProfile, type SimHold, type SimLaneId, type SimState } from './simApi'
 
-/** A point on the device screen, in dp / points. */
+export const FRAME_MAGIC = 'K2SF'
+export const FRAME_HEADER_LEN = 16
+
+/** fps caps (stream::LOCAL_MAX_FPS, REMOTE_*). */
+export const LOCAL_FPS = 30
+export const REMOTE_DEFAULT_FPS = 8
+export const REMOTE_FPS_CHOICES: readonly number[] = [2, 4, 8, 12, 15]
+
+export const CLOSE_AUTH_REVOKED = 4401
+export const CLOSE_FORBIDDEN = 4403
+export const CLOSE_DEVICE_STOPPED = 4410
+
+export function defaultFps(isRemote: boolean): number {
+  return isRemote ? REMOTE_DEFAULT_FPS : LOCAL_FPS
+}
+
+/** `lane::Key`. */
+export type SimKey =
+  | 'enter'
+  | 'backspace'
+  | 'delete'
+  | 'tab'
+  | 'escape'
+  | 'arrow-up'
+  | 'arrow-down'
+  | 'arrow-left'
+  | 'arrow-right'
+/** `lane::Button`. */
+export type SimButton = 'home' | 'back' | 'lock' | 'volume-up' | 'volume-down' | 'app-switch' | 'dev-menu'
+/** `lane::Orientation`. */
+export type SimOrientation = 'portrait' | 'landscape-left' | 'landscape-right' | 'portrait-upside-down'
+export type SimAppearance = 'light' | 'dark'
+
+/** `stream::ViewerMsg` the tab sends (ack and fps go through their own calls). */
+export type SimInput =
+  | { t: 'tap'; x: number; y: number }
+  | { t: 'swipe'; x1: number; y1: number; x2: number; y2: number; durationMs?: number }
+  | { t: 'touch'; phase: 'down' | 'move' | 'up'; x: number; y: number }
+  | { t: 'text'; text: string }
+  | { t: 'key'; key: SimKey }
+  | { t: 'button'; button: SimButton }
+  | { t: 'rotate'; orientation: SimOrientation }
+  | { t: 'appearance'; appearance: SimAppearance }
+  | { t: 'open-url'; url: string }
+  | { t: 'take-over' }
+  | { t: 'hand-back' }
+
+/** A point on the device screen, in points. */
 export interface SimPoint {
   x: number
   y: number
 }
-
-export type SimButton = 'home' | 'back' | 'lock' | 'menu'
-export type SimNamedKey =
-  | 'Enter'
-  | 'Backspace'
-  | 'Delete'
-  | 'Tab'
-  | 'Escape'
-  | 'ArrowUp'
-  | 'ArrowDown'
-  | 'ArrowLeft'
-  | 'ArrowRight'
-
-/** The person's input, sent on the stream socket (M-A4). */
-export type SimInput =
-  | { action: 'tap'; x: number; y: number }
-  | { action: 'swipe'; from: SimPoint; to: SimPoint; durationMs: number }
-  | { action: 'type'; text: string }
-  | { action: 'key'; key: SimNamedKey }
-  | { action: 'button'; button: SimButton }
-  | { action: 'rotate'; direction: 'left' | 'right' }
-  | { action: 'take' }
-  | { action: 'release' }
 
 /** What a frame holds: a JPEG off the wire, or (stub) a painter. */
 export type SimFrameSource =
@@ -52,96 +80,158 @@ export type SimFrameSource =
   | { kind: 'paint'; paint: (ctx: CanvasRenderingContext2D, width: number, height: number) => void }
 
 export interface SimFrame {
-  /** Per-connection counter; the ack names it. */
+  /** Per device; the ack names it. */
   seq: number
+  /** The screen in points for the current orientation. */
+  widthPt: number
+  heightPt: number
   source: SimFrameSource
 }
 
-/** The stream's view of the device (sent on connect and on change). */
-export interface SimStreamMeta {
-  /** Screen size in dp / points for the CURRENT orientation. */
-  width: number
-  height: number
-  orientation: SimOrientation
-}
+/** `stream::ServerMsg`. */
+export type SimServerMsg =
+  | {
+      t: 'hello'
+      sim: string
+      lane: SimLaneId
+      state: SimState
+      profile?: SimDeviceProfile
+      fps: number
+      remote: boolean
+      hold: SimHold
+      isolation: string
+    }
+  | { t: 'state'; state: SimState; message?: string }
+  | { t: 'hold'; hold: SimHold }
+  | { t: 'error'; code: string; message: string }
+  | { t: 'fps'; fps: number }
 
-export type SimStreamState = 'connecting' | 'open' | 'closed' | 'error'
+export type SimConnState = 'connecting' | 'open' | 'closed' | 'error'
 
 export interface SimStreamHandlers {
   onFrame(frame: SimFrame): void
-  onMeta(meta: SimStreamMeta): void
-  onControl(control: SimControl): void
-  onState(state: SimStreamState, reason?: string): void
+  onServer(msg: SimServerMsg): void
+  onConn(state: SimConnState, reason?: string): void
 }
 
 export interface SimStreamConnection {
   send(input: SimInput): void
-  /** The frame `seq` is drawn (or skipped while held); send the next. */
+  /** Frame `seq` is drawn (or skipped while held); send the next. */
   ack(seq: number): void
+  /** Ask for another rate (the daemon clamps and answers `fps`). */
+  setFps(fps: number): void
   close(): void
 }
 
 export interface SimStreamOptions {
   scope: ServerScope
-  simId: string
-  /** Frame cap for this viewer: local up to 30, remote 8 by default (2–15). */
+  /** The workspace whose device to watch (path, handle or id). */
+  workspace: string
   fps: number
   handlers: SimStreamHandlers
 }
 
 export type SimStreamConnector = (opts: SimStreamOptions) => SimStreamConnection
 
-/** Local viewers: up to 30 fps. Remote (Connect): 8 by default (M-A19). */
-export const LOCAL_FPS = 30
-export const REMOTE_DEFAULT_FPS = 8
-export const REMOTE_FPS_CHOICES: readonly number[] = [2, 4, 8, 12, 15]
-
-export function defaultFps(isRemote: boolean): number {
-  return isRemote ? REMOTE_DEFAULT_FPS : LOCAL_FPS
-}
-
 /** The stream URL. `token` rides the query for WebSockets (same as the grid
- *  socket); the daemon re-checks it every 5 s (M-A4). */
-export function simStreamUrl(wsBase: string, simId: string, token: string | null | undefined, fps: number): string {
-  const q = new URLSearchParams({ sim: simId, fps: String(Math.round(fps)) })
+ *  socket); the daemon re-checks it every 5 s. */
+export function simStreamUrl(wsBase: string, workspace: string, token: string | null | undefined, fps: number): string {
+  const q = new URLSearchParams({ workspace, fps: String(Math.round(fps)) })
   if (token) q.set('token', token)
   return `${wsBase}/cli/sim/stream?${q.toString()}`
 }
 
-function parseText(
-  raw: string,
-): { type: 'meta'; meta: SimStreamMeta } | { type: 'control'; control: SimControl } | { type: 'error'; message: string } | null {
-  let msg: unknown
+/** Split a binary message into its header fields and the JPEG bytes. */
+export function decodeFrame(buf: ArrayBuffer): { seq: number; widthPx: number; heightPx: number; widthPt: number; heightPt: number; jpeg: Uint8Array<ArrayBuffer> } | null {
+  if (buf.byteLength < FRAME_HEADER_LEN) return null
+  const v = new DataView(buf)
+  const magic = String.fromCharCode(v.getUint8(0), v.getUint8(1), v.getUint8(2), v.getUint8(3))
+  if (magic !== FRAME_MAGIC) return null
+  return {
+    seq: v.getUint32(4, true),
+    widthPx: v.getUint16(8, true),
+    heightPx: v.getUint16(10, true),
+    widthPt: v.getUint16(12, true),
+    heightPt: v.getUint16(14, true),
+    jpeg: new Uint8Array(buf, FRAME_HEADER_LEN),
+  }
+}
+
+/** Encode a frame the way the daemon does (tests, the stub). */
+export function encodeFrame(h: { seq: number; widthPx: number; heightPx: number; widthPt: number; heightPt: number }, jpeg: Uint8Array): ArrayBuffer {
+  const buf = new ArrayBuffer(FRAME_HEADER_LEN + jpeg.byteLength)
+  const v = new DataView(buf)
+  for (let i = 0; i < 4; i++) v.setUint8(i, FRAME_MAGIC.charCodeAt(i))
+  v.setUint32(4, h.seq, true)
+  v.setUint16(8, h.widthPx, true)
+  v.setUint16(10, h.heightPx, true)
+  v.setUint16(12, h.widthPt, true)
+  v.setUint16(14, h.heightPt, true)
+  new Uint8Array(buf, FRAME_HEADER_LEN).set(jpeg)
+  return buf
+}
+
+const STATES: ReadonlySet<string> = new Set(['installing', 'booting', 'running', 'stopping', 'stopped', 'failed'])
+
+/** One text frame → a server message, or null (logged). */
+export function parseServerMsg(raw: string): SimServerMsg | null {
+  let m: unknown
   try {
-    msg = JSON.parse(raw)
+    m = JSON.parse(raw)
   } catch {
     console.warn('[mobile] stream: text frame is not JSON:', raw.slice(0, 120))
     return null
   }
-  if (!msg || typeof msg !== 'object') return null
-  const m = msg as Record<string, unknown>
-  if (m.type === 'meta' && typeof m.width === 'number' && typeof m.height === 'number') {
-    return {
-      type: 'meta',
-      meta: { width: m.width, height: m.height, orientation: m.orientation === 'landscape' ? 'landscape' : 'portrait' },
+  if (!m || typeof m !== 'object') return null
+  const o = m as Record<string, unknown>
+  try {
+    switch (o.t) {
+      case 'hello':
+        if (typeof o.sim !== 'string' || typeof o.lane !== 'string' || typeof o.state !== 'string' || !STATES.has(o.state)) break
+        return {
+          t: 'hello',
+          sim: o.sim,
+          lane: o.lane as SimLaneId,
+          state: o.state as SimState,
+          ...(o.profile ? { profile: parseDeviceProfile(o.profile) } : {}),
+          fps: typeof o.fps === 'number' ? o.fps : 0,
+          remote: o.remote === true,
+          hold: parseSimHold(o.hold),
+          isolation: typeof o.isolation === 'string' ? o.isolation : '',
+        }
+      case 'state':
+        if (typeof o.state !== 'string' || !STATES.has(o.state)) break
+        return { t: 'state', state: o.state as SimState, ...(typeof o.message === 'string' ? { message: o.message } : {}) }
+      case 'hold':
+        return { t: 'hold', hold: parseSimHold(o.hold) }
+      case 'error':
+        return { t: 'error', code: String(o.code ?? 'error'), message: String(o.message ?? 'stream error') }
+      case 'fps':
+        if (typeof o.fps !== 'number') break
+        return { t: 'fps', fps: o.fps }
     }
+  } catch (err) {
+    console.warn('[mobile] stream: bad text frame:', err)
+    return null
   }
-  if (m.type === 'control') {
-    const heldBy = m.heldBy === 'person' || m.heldBy === 'takeover' ? m.heldBy : null
-    return { type: 'control', control: { heldBy, ...(typeof m.by === 'string' && m.by ? { by: m.by } : {}) } }
-  }
-  if (m.type === 'error') return { type: 'error', message: typeof m.message === 'string' ? m.message : 'stream error' }
   console.warn('[mobile] stream: unknown text frame:', raw.slice(0, 120))
   return null
 }
 
-/** The real socket (M-A4). */
-export const wsSimStream: SimStreamConnector = ({ scope, simId, fps, handlers }) => {
+/** What a close code means for the person watching. */
+export function closeReason(code: number, reason: string): string {
+  if (code === CLOSE_AUTH_REVOKED) return 'Your login was signed out of this server.'
+  if (code === CLOSE_FORBIDDEN) return 'This login may not watch this device.'
+  if (code === CLOSE_DEVICE_STOPPED) return 'The device stopped.'
+  return reason || 'The device stream closed.'
+}
+
+/** The real socket. */
+export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handlers }) => {
   let ws: WebSocket | null = null
   let closed = false
-  let seq = 0
   const pending: string[] = []
-  handlers.onState('connecting')
+  handlers.onConn('connecting')
   const sendRaw = (text: string): void => {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(text)
     else if (!closed) pending.push(text)
@@ -151,18 +241,18 @@ export const wsSimStream: SimStreamConnector = ({ scope, simId, fps, handlers })
       const creds = await scope.creds()
       if (closed) return
       // MS70: every daemon socket dials through the per-server queue.
-      const sock = await openQueuedWebSocket(scope, simStreamUrl(daemonWsBase(creds), simId, creds.token, fps))
+      const sock = await openQueuedWebSocket(scope, simStreamUrl(daemonWsBase(creds), workspace, creds.token, fps))
       if (closed) {
         sock.close()
         return
       }
-      sock.binaryType = 'blob'
+      sock.binaryType = 'arraybuffer'
       ws = sock
       const opened = (): void => {
         if (closed) return
-        handlers.onState('open')
-        // Input typed before the socket opened goes out in order. Acks are
-        // never queued (a new socket starts with a key frame).
+        handlers.onConn('open')
+        // Input sent before the socket opened goes out in order. Acks are
+        // never queued (a new socket starts with a fresh frame).
         for (const p of pending.splice(0)) sock.send(p)
       }
       if (sock.readyState === WebSocket.OPEN) opened()
@@ -170,34 +260,42 @@ export const wsSimStream: SimStreamConnector = ({ scope, simId, fps, handlers })
       sock.onmessage = (ev: MessageEvent) => {
         if (closed) return
         if (typeof ev.data === 'string') {
-          const m = parseText(ev.data)
-          if (!m) return
-          if (m.type === 'meta') handlers.onMeta(m.meta)
-          else if (m.type === 'control') handlers.onControl(m.control)
-          else handlers.onState('error', m.message)
+          const m = parseServerMsg(ev.data)
+          if (m) handlers.onServer(m)
           return
         }
-        seq += 1
-        const data = ev.data instanceof Blob ? ev.data : new Blob([ev.data as ArrayBuffer], { type: 'image/jpeg' })
-        handlers.onFrame({ seq, source: { kind: 'jpeg', data } })
+        const f = ev.data instanceof ArrayBuffer ? decodeFrame(ev.data) : null
+        if (!f) {
+          console.warn('[mobile] stream: a binary message without the K2SF header')
+          return
+        }
+        handlers.onFrame({
+          seq: f.seq,
+          widthPt: f.widthPt,
+          heightPt: f.heightPt,
+          source: { kind: 'jpeg', data: new Blob([f.jpeg], { type: 'image/jpeg' }) },
+        })
       }
       sock.onerror = () => {
-        if (!closed) handlers.onState('error', 'The device stream failed.')
+        if (!closed) handlers.onConn('error', 'The device stream failed.')
       }
       sock.onclose = (ev: CloseEvent) => {
         if (closed) return
-        handlers.onState('closed', ev.reason || undefined)
+        handlers.onConn('closed', closeReason(ev.code, ev.reason))
       }
     } catch (err) {
-      if (!closed) handlers.onState('error', err instanceof Error ? err.message : String(err))
+      if (!closed) handlers.onConn('error', err instanceof Error ? err.message : String(err))
     }
   })()
   return {
     send(input) {
       sendRaw(JSON.stringify(input))
     },
-    ack(n) {
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'ack', seq: n }))
+    ack(seq) {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'ack', seq }))
+    },
+    setFps(n) {
+      sendRaw(JSON.stringify({ t: 'fps', fps: Math.round(n) }))
     },
     close() {
       closed = true
@@ -208,7 +306,7 @@ export const wsSimStream: SimStreamConnector = ({ scope, simId, fps, handlers })
   }
 }
 
-// ── Stub (tests, headless screenshots, building before the daemon) ──────
+// ── Stub (tests, headless screenshots) ──────────────────────────────────
 
 export interface StubSimStream {
   connector: SimStreamConnector
@@ -216,12 +314,15 @@ export interface StubSimStream {
   inputs: SimInput[]
   /** Acked seqs, in order. */
   acks: number[]
+  /** fps requests, in order. */
+  fpsAsks: number[]
   /** Push one frame now (a painted fake screen). */
   pushFrame(label?: string): void
-  pushMeta(meta: SimStreamMeta): void
-  pushControl(control: SimControl): void
+  pushServer(msg: SimServerMsg): void
   /** How many connections are open now. */
   openCount(): number
+  /** The workspace the last connection asked for. */
+  lastWorkspace(): string | null
 }
 
 /** A fake home screen: status bar, a title, a grid of app tiles. */
@@ -230,9 +331,9 @@ function paintFakeScreen(label: string) {
     ctx.fillStyle = '#1d2433'
     ctx.fillRect(0, 0, w, h)
     ctx.fillStyle = '#e8ecf4'
-    ctx.font = `${Math.max(10, Math.round(w / 28))}px sans-serif`
+    ctx.font = `${Math.max(10, Math.round(Math.min(w, h) / 28))}px sans-serif`
     ctx.fillText('9:41', w * 0.06, h * 0.035)
-    ctx.font = `${Math.max(14, Math.round(w / 16))}px sans-serif`
+    ctx.font = `${Math.max(14, Math.round(Math.min(w, h) / 16))}px sans-serif`
     ctx.fillText(label, w * 0.08, h * 0.14)
     const cols = 4
     const size = (w * 0.84) / cols - w * 0.04
@@ -246,39 +347,52 @@ function paintFakeScreen(label: string) {
   }
 }
 
-export function createStubSimStream(
-  initial: SimStreamMeta = { width: 412, height: 915, orientation: 'portrait' },
-): StubSimStream {
+export function createStubSimStream(screen: { widthPt: number; heightPt: number } = { widthPt: 412, heightPt: 915 }): StubSimStream {
   const inputs: SimInput[] = []
   const acks: number[] = []
+  const fpsAsks: number[] = []
   const live = new Set<SimStreamHandlers>()
   let seq = 0
-  let meta = initial
+  let size = { ...screen }
+  let workspace: string | null = null
   const stub: StubSimStream = {
     inputs,
     acks,
-    connector: ({ handlers }) => {
+    fpsAsks,
+    connector: (opts) => {
+      const { handlers } = opts
+      workspace = opts.workspace
       live.add(handlers)
-      handlers.onState('connecting')
+      handlers.onConn('connecting')
       queueMicrotask(() => {
         if (!live.has(handlers)) return
-        handlers.onState('open')
-        handlers.onMeta(meta)
+        handlers.onConn('open')
+        handlers.onServer({
+          t: 'hello',
+          sim: 's1',
+          lane: 'android',
+          state: 'running',
+          fps: opts.fps,
+          remote: false,
+          hold: { kind: 'free' },
+          isolation: 'Separate, not sealed: the device runs as the same system user as this server’s agents.',
+        })
       })
       return {
         send(input) {
           inputs.push(input)
-          if (input.action === 'rotate') {
-            meta = {
-              width: meta.height,
-              height: meta.width,
-              orientation: meta.orientation === 'portrait' ? 'landscape' : 'portrait',
-            }
-            for (const h of live) h.onMeta(meta)
+          if (input.t === 'rotate') {
+            const landscape = input.orientation === 'landscape-left' || input.orientation === 'landscape-right'
+            const long = Math.max(size.widthPt, size.heightPt)
+            const short = Math.min(size.widthPt, size.heightPt)
+            size = landscape ? { widthPt: long, heightPt: short } : { widthPt: short, heightPt: long }
           }
         },
         ack(n) {
           acks.push(n)
+        },
+        setFps(n) {
+          fpsAsks.push(n)
         },
         close() {
           live.delete(handlers)
@@ -287,16 +401,15 @@ export function createStubSimStream(
     },
     pushFrame(label = 'Stub device') {
       seq += 1
-      for (const h of live) h.onFrame({ seq, source: { kind: 'paint', paint: paintFakeScreen(label) } })
+      for (const h of live) {
+        h.onFrame({ seq, widthPt: size.widthPt, heightPt: size.heightPt, source: { kind: 'paint', paint: paintFakeScreen(label) } })
+      }
     },
-    pushMeta(next) {
-      meta = next
-      for (const h of live) h.onMeta(next)
-    },
-    pushControl(control) {
-      for (const h of live) h.onControl(control)
+    pushServer(msg) {
+      for (const h of live) h.onServer(msg)
     },
     openCount: () => live.size,
+    lastWorkspace: () => workspace,
   }
   return stub
 }

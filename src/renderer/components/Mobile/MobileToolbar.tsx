@@ -16,11 +16,13 @@ import {
   PowerIcon,
   RotateIcon,
 } from '@/components/icons/K2Icons'
-import type { SimDeviceProfile, SimSession } from './simApi'
+import type { SimDeviceProfile, SimLaneId, SimView } from './simApi'
 import { REMOTE_FPS_CHOICES } from './sim-stream'
 
 export interface MobileToolbarProps {
-  session: SimSession | null
+  session: SimView | null
+  /** The lane the chooser's devices boot on (before any device runs). */
+  lane: SimLaneId | null
   devices: SimDeviceProfile[]
   /** The chooser's value (the running device, else this tab's last pick). */
   device: string
@@ -87,10 +89,12 @@ const Sep = (): React.JSX.Element => <span className="mx-1 h-4 w-px flex-shrink-
 export function MobileToolbar(props: MobileToolbarProps): React.JSX.Element {
   const { session, devices, device, canControl, busy, live, tookOver, fps } = props
   const running = session?.state === 'running'
-  const changing = session?.state === 'booting' || session?.state === 'stopping'
+  const changing = session?.state === 'installing' || session?.state === 'booting' || session?.state === 'stopping'
   const on = running || changing
-  const lane = session?.lane ?? devices.find((d) => d.id === device || d.name === device)?.lane ?? null
-  const choices = devices.length > 0 ? devices : session ? [{ id: session.device, name: session.device, lane: session.lane }] : []
+  const lane = session?.lane ?? props.lane
+  const profile = session?.profile
+  const choices: Array<{ id: string; name: string }> =
+    devices.length > 0 ? devices : profile ? [{ id: profile.id, name: profile.name }] : []
   return (
     <div
       className="flex h-9 flex-shrink-0 items-center gap-1 border-b border-[var(--color-border)] px-2 text-xs"

@@ -16,7 +16,7 @@
 // the real `/cli/sim/stream` socket.
 //
 // S5 (pick → note → Send) is undecided. Its hooks are here and unused:
-// `renderOverlay` draws over the canvas with the dp ↔ canvas mapping
+// `renderOverlay` draws over the canvas with the points ↔ canvas mapping
 // (`deviceRectToCanvas`), `holdFrame` keeps the last frame while a note
 // pop-up is open, and the toolbar's `extra` slot takes the Select toggle.
 
@@ -27,7 +27,7 @@ import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { DesignThreadColumn } from '@/components/Design/DesignThreadColumn'
 import { pinnedChatItem } from '@/components/Design/pinned-chat-item'
 import type { MobileItemData } from '@/stores/tabs'
-import { scopeMayWrite } from '@/kessel/server-scope'
+import { roomProjectForCwd } from '@/stores/room'
 import { MobileToolbar } from './MobileToolbar'
 import { readMobileSplit, writeMobileSplit } from './mobile-split-sizes'
 import {
@@ -35,13 +35,16 @@ import {
   fetchSimDevices,
   firstUsableLane,
   screenshotSim,
-  SIM_BOOT_ROUTE,
+  simIsUp,
   stopSim,
   type SimDeviceProfile,
+  type SimHold,
+  type SimLaneId,
   type SimStatus,
 } from './simApi'
-import { type BoxRect, gestureFor, keyToSimInput, type PointerSample } from './sim-input'
-import { defaultFps, type SimStreamConnector, type SimStreamMeta, wsSimStream } from './sim-stream'
+import { type BoxRect, gestureFor, keyToSimInput, nextOrientation, type PointerSample, type ScreenPt } from './sim-input'
+import { defaultFps, type SimStreamConnector, wsSimStream } from './sim-stream'
+import { useSimCanControl } from './useSimCanControl'
 import { useSimStatus } from './useSimStatus'
 import { useSimStream } from './useSimStream'
 
@@ -51,7 +54,8 @@ const MIN_SPLIT_SHARE = 15
 export interface MobileOverlayContext {
   /** The canvas box in client px. */
   box: BoxRect
-  meta: SimStreamMeta
+  /** The screen in points (map tree frames with `deviceRectToCanvas`). */
+  screen: ScreenPt
 }
 
 export interface MobilePaneProps {
@@ -177,18 +181,32 @@ interface MobileDeviceProps {
 /** What the device area says when there is no stream to draw. */
 export function deviceNotice(status: SimStatus | null, statusError: string | null): string | null {
   if (!status) return statusError ? `Can't reach the device service: ${statusError}` : 'Checking for devices…'
+  const s = status.sim
+  if (s?.state === 'installing') return `Installing the device tools for ${s.profile?.name ?? 'the device'}… (first use only)`
+  if (s?.state === 'booting') return `Starting ${s.profile?.name ?? 'the device'}…`
+  if (s?.state === 'stopping') return `Stopping ${s.profile?.name ?? 'the device'}…`
+  if (s?.state === 'running') return null
   const lane = firstUsableLane(status.lanes)
-  const s = status.session
-  if (!s || s.state === 'off') {
-    if (!lane) {
-      const why = status.lanes.map((l) => l.reason).filter(Boolean).join(' ')
-      return `This server can't run a device yet.${why ? ` ${why}` : ''}`
-    }
-    return 'No device is running.'
+  if (!lane) {
+    const why = status.lanes.map((l) => l.detail).filter(Boolean).join(' ')
+    return `This server can't run a device yet.${why ? ` ${why}` : ''}`
   }
-  if (s.state === 'booting') return `Starting ${s.device}…`
-  if (s.state === 'stopping') return `Stopping ${s.device}…`
-  if (s.state === 'error') return s.error ? `The device stopped: ${s.error}` : 'The device stopped with an error.'
+  if (!lane.ready) {
+    const licence = lane.needs.find((n) => n.kind === 'licence')
+    if (licence && licence.kind === 'licence') {
+      return `The owner of this server must accept the ${licence.title} first (on its card in Settings).`
+    }
+    const step = lane.needs.find((n) => n.kind === 'owner-step')
+    if (step && step.kind === 'owner-step') return `The owner of this server must ${step.what} first: ${step.command}`
+  }
+  if (s?.state === 'failed') return s.reason ? `The device stopped: ${s.reason}` : 'The device stopped with an error.'
+  return 'No device is running.'
+}
+
+/** How the hold banner reads, or null when nothing shows. */
+export function holdBanner(hold: SimHold, tookOver: boolean): string | null {
+  if (hold.kind === 'person') return `${hold.by || 'A person'} is using the device`
+  if (hold.kind === 'takeover' && !tookOver) return `${hold.by || 'A person'} has taken over the device`
   return null
 }
 
@@ -206,31 +224,35 @@ function MobileDevice({
 }: MobileDeviceProps): React.JSX.Element {
   const room = useRoom()
   const scope = room.scope
-  const { status, error: statusError, refresh } = useSimStatus(scope, workspace, visible)
-  const session = status?.session ?? null
-  // The daemon answers per login (remote Members watch only). A Home room on
-  // another server also watches only until its server's sim routes are on
-  // the room write allowlist (kessel/room-writes.ts).
-  const canControl = (status?.canControl ?? false) && scopeMayWrite(scope, SIM_BOOT_ROUTE)
+  // The daemon names a workspace by handle or project id (sim::api); the
+  // room's project id when it knows the folder, else the folder itself.
+  const workspaceRef = useStore(room.projects, () => (workspace ? roomProjectForCwd(room, workspace)?.id ?? workspace : null))
+  const { status, error: statusError, refresh } = useSimStatus(scope, workspaceRef, visible)
+  const session = status?.sim ?? null
+  const canControl = useSimCanControl(scope, status?.canControl ?? null)
   const running = session?.state === 'running'
 
   // ── Device profiles (the chooser) ─────────────────────────────────────
   const [devices, setDevices] = useState<SimDeviceProfile[]>([])
+  const [devicesLane, setDevicesLane] = useState<SimLaneId | null>(null)
   const anyLane = !!status && firstUsableLane(status.lanes) !== null
   useEffect(() => {
-    if (!workspace || !visible || !canControl || !anyLane) return
+    if (!workspaceRef || !visible || !canControl || !anyLane) return
     let cancelled = false
-    fetchSimDevices(scope, workspace)
-      .then((list) => {
-        if (!cancelled) setDevices(list)
+    fetchSimDevices(scope, workspaceRef)
+      .then((r) => {
+        if (cancelled) return
+        setDevices(r.devices)
+        setDevicesLane(r.lane)
       })
-      .catch((err: unknown) => console.warn('[mobile] sim/list-devices:', err))
+      .catch((err: unknown) => console.warn('[mobile] sim/devices:', err))
     return () => {
       cancelled = true
     }
-  }, [scope, workspace, visible, canControl, anyLane])
+  }, [scope, workspaceRef, visible, canControl, anyLane])
   const [picked, setPicked] = useState<string>(data.deviceType ?? '')
-  const device = session && session.state !== 'off' ? session.device : picked || devices[0]?.id || ''
+  const fallbackDevice = devices.find((d) => d.default)?.id ?? devices[0]?.id ?? ''
+  const device = session && simIsUp(session) && session.profile ? session.profile.id : picked || fallbackDevice
 
   // ── Gestures to the daemon ────────────────────────────────────────────
   const [busy, setBusy] = useState(false)
@@ -260,32 +282,33 @@ function MobileDevice({
   )
   const boot = useCallback(
     (which: string) => {
-      if (!workspace) return
-      const profile = devices.find((d) => d.id === which)
+      if (!workspaceRef) return
       remember(which)
       void act('boot', async () => {
-        await bootSim(scope, workspace, { device: which, ...(profile ? { platform: profile.lane } : {}) })
+        await bootSim(scope, workspaceRef, { device: which, ...(devicesLane ? { platform: devicesLane } : {}) })
       })
     },
-    [act, devices, remember, scope, workspace],
+    [act, devicesLane, remember, scope, workspaceRef],
   )
   const onDevice = useCallback(
     (which: string) => {
       setPicked(which)
       // Changing the device boots a new one; the daemon shuts the old one.
-      if (session && (session.state === 'running' || session.state === 'error')) boot(which)
+      if (session && (session.state === 'running' || session.state === 'failed')) boot(which)
       else remember(which)
     },
     [boot, remember, session],
   )
   const onStop = useCallback(() => {
-    if (!workspace) return
-    void act('stop', () => stopSim(scope, workspace))
-  }, [act, scope, workspace])
+    if (!workspaceRef) return
+    void act('stop', async () => {
+      await stopSim(scope, workspaceRef)
+    })
+  }, [act, scope, workspaceRef])
   const onScreenshot = useCallback(() => {
-    if (!workspace) return
+    if (!workspaceRef) return
     void act('screenshot', async () => {
-      const path = await screenshotSim(scope, workspace)
+      const path = await screenshotSim(scope, workspaceRef)
       try {
         await navigator.clipboard.writeText(path)
         setNotice(`Saved ${path} (path copied)`)
@@ -293,34 +316,37 @@ function MobileDevice({
         setNotice(`Saved ${path}`)
       }
     })
-  }, [act, scope, workspace])
+  }, [act, scope, workspaceRef])
 
   // ── Stream ────────────────────────────────────────────────────────────
-  const [fps, setFps] = useState(() => defaultFps(scope.isRemote))
+  const [fps, setFpsState] = useState(() => defaultFps(scope.isRemote))
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const stream = useSimStream({
     scope,
-    simId: running && session ? session.id : null,
+    // The daemon's own name for the workspace, once it reported the device.
+    workspace: running && session ? session.workspace : null,
     visible,
     fps,
     connector,
     canvasRef,
     hold: holdFrame,
   })
-  const live = stream.state === 'open'
-  const meta: SimStreamMeta | null =
-    stream.meta ??
-    (session?.screen
-      ? session.orientation === 'landscape'
-        ? { width: session.screen.height, height: session.screen.width, orientation: 'landscape' }
-        : { width: session.screen.width, height: session.screen.height, orientation: 'portrait' }
-      : null)
-  const control = stream.control ?? session?.control ?? { heldBy: null }
+  const live = stream.conn === 'open'
+  const screen: ScreenPt | null =
+    stream.screen ?? (session?.profile ? { widthPt: session.profile.widthPt, heightPt: session.profile.heightPt } : null)
+  const hold: SimHold = stream.deviceHold ?? session?.hold ?? { kind: 'free' }
   const [tookOver, setTookOver] = useState(false)
   useEffect(() => {
     // The daemon ended the hold (Hand back elsewhere, 10 min idle).
-    if (control.heldBy !== 'takeover') setTookOver(false)
-  }, [control.heldBy])
+    if (hold.kind !== 'takeover') setTookOver(false)
+  }, [hold.kind])
+  const onFps = useCallback(
+    (n: number) => {
+      setFpsState(n)
+      stream.setFps(n)
+    },
+    [stream],
+  )
 
   // ── Pointer and keys on the device ────────────────────────────────────
   const screenRef = useRef<HTMLDivElement | null>(null)
@@ -343,10 +369,10 @@ function MobileDevice({
   const onPointerUp = (e: React.PointerEvent): void => {
     const down = downRef.current
     downRef.current = null
-    if (!interactive || !down || !meta) return
+    if (!interactive || !down || !screen) return
     const b = box()
     if (!b) return
-    stream.send(gestureFor(down, { clientX: e.clientX, clientY: e.clientY, at: performance.now() }, b, meta))
+    stream.send(gestureFor(down, { clientX: e.clientX, clientY: e.clientY, at: performance.now() }, b, screen))
   }
   const onKeyDown = (e: React.KeyboardEvent): void => {
     if (!interactive) return
@@ -362,46 +388,49 @@ function MobileDevice({
   }
 
   const blocked = deviceNotice(status, statusError)
-  // Off (or stopped with an error) on a usable lane: offer Start right
-  // there, not only in the toolbar.
-  const canStart =
-    canControl && anyLane && !!device && (!session || session.state === 'off' || session.state === 'error')
-  const portrait = (meta?.orientation ?? 'portrait') === 'portrait'
-  const aspect = meta ? `${meta.width} / ${meta.height}` : portrait ? '9 / 19.5' : '19.5 / 9'
-  const overlayBox = renderOverlay && meta && live ? box() : null
+  const laneReady = !!status && status.lanes.some((l) => l.usable && l.ready)
+  // Stopped (or failed) on a ready lane: offer Start right there, not only
+  // in the toolbar.
+  const canStart = canControl && laneReady && !!device && !simIsUp(session)
+  const portrait = !screen || screen.heightPt >= screen.widthPt
+  const aspect = screen ? `${screen.widthPt} / ${screen.heightPt}` : '9 / 19.5'
+  const overlayBox = renderOverlay && screen && live ? box() : null
+  const banner = holdBanner(hold, tookOver)
+  const shownNotice = notice ?? stream.inputError
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col" data-testid="mobile-device">
       <MobileToolbar
         session={session}
+        lane={devicesLane}
         devices={devices}
         device={device}
         canControl={canControl}
         busy={busy}
         live={live}
         tookOver={tookOver}
-        fps={scope.isRemote ? fps : null}
+        fps={scope.isRemote ? stream.fps ?? fps : null}
         onDevice={onDevice}
         onBoot={() => boot(device)}
         onStop={onStop}
-        onRotate={() => stream.send({ action: 'rotate', direction: 'right' })}
-        onHome={() => stream.send({ action: 'button', button: 'home' })}
-        onBack={() => stream.send({ action: 'button', button: 'back' })}
+        onRotate={() => screen && stream.send({ t: 'rotate', orientation: nextOrientation(screen) })}
+        onHome={() => stream.send({ t: 'button', button: 'home' })}
+        onBack={() => stream.send({ t: 'button', button: 'back' })}
         onScreenshot={onScreenshot}
         onTakeOver={() => {
-          stream.send({ action: 'take' })
+          stream.send({ t: 'take-over' })
           setTookOver(true)
         }}
         onHandBack={() => {
-          stream.send({ action: 'release' })
+          stream.send({ t: 'hand-back' })
           setTookOver(false)
         }}
-        onFps={setFps}
+        onFps={onFps}
         extra={toolbarExtra}
       />
-      {notice ? (
+      {shownNotice ? (
         <div className="flex-shrink-0 border-b border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text-secondary)]" data-mobile-notice="">
-          {notice}
+          {shownNotice}
         </div>
       ) : null}
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4">
@@ -420,7 +449,7 @@ function MobileDevice({
               ref={screenRef}
               tabIndex={interactive ? 0 : -1}
               role="application"
-              aria-label={`${session?.device ?? 'Device'} screen${interactive ? '' : ' (watching)'}`}
+              aria-label={`${session?.profile?.name ?? 'Device'} screen${interactive ? '' : ' (watching)'}`}
               className="relative h-full w-full overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
               style={{ borderRadius: 18, cursor: interactive ? 'pointer' : 'default', touchAction: 'none' }}
               onPointerDown={onPointerDown}
@@ -433,13 +462,13 @@ function MobileDevice({
             >
               <canvas ref={canvasRef} className="block h-full w-full" data-mobile-canvas="" />
               {!stream.hasFrame ? (
-                <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-                  {stream.state === 'error' || stream.state === 'closed'
+                <div className="absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]" data-mobile-stream-note="">
+                  {stream.conn === 'error' || stream.conn === 'closed'
                     ? stream.reason ?? 'The device stream closed. Reopen the tab to try again.'
                     : 'Connecting to the device…'}
                 </div>
               ) : null}
-              {overlayBox && meta && renderOverlay ? renderOverlay({ box: overlayBox, meta }) : null}
+              {overlayBox && screen && renderOverlay ? renderOverlay({ box: overlayBox, screen }) : null}
             </div>
           </div>
         ) : (
@@ -460,17 +489,20 @@ function MobileDevice({
             ) : null}
           </div>
         )}
-        {control.heldBy && !tookOver ? (
+        {banner ? (
           <div
             className="absolute bottom-2 left-1/2 -translate-x-1/2 border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-0.5 text-xs text-[var(--color-text-secondary)]"
-            data-mobile-held={control.heldBy}
+            data-mobile-held={hold.kind}
           >
-            {control.heldBy === 'takeover'
-              ? `${control.by ?? 'A person'} has taken over the device`
-              : `${control.by ?? 'A person'} is using the device`}
+            {banner}
           </div>
         ) : null}
       </div>
+      {running && stream.isolation ? (
+        <div className="flex-shrink-0 px-3 pb-2 text-center text-[11px] text-[var(--color-text-muted)]" data-mobile-isolation="">
+          {stream.isolation}
+        </div>
+      ) : null}
     </div>
   )
 }

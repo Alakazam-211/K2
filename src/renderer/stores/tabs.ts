@@ -7687,10 +7687,19 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     })
   }
 
+  /** `open_mobile` names a workspace by project id, handle or path. */
+  function roomShowsWorkspaceRef(ref: string): boolean {
+    if (ref.startsWith('/')) return roomShowsPath(ref)
+    if (binding.workspace) return binding.workspace.projectId === ref
+    const key = store.getState().activeWorkspaceKey
+    const active = key ? key.split(':')[0] : deps.activeProjectId()
+    return !!active && active === ref
+  }
+
   function initOpenMobileTabs(): UnsubscribeFn {
     return onOpenMobile(scope, (e) => {
-      const path = typeof e.workspacePath === 'string' ? e.workspacePath.trim() : ''
-      if (!path || !roomShowsPath(path)) return
+      const ref = typeof e.workspace === 'string' ? e.workspace.trim() : ''
+      if (!ref || !roomShowsWorkspaceRef(ref)) return
       // A server that can't run a device never shows a Mobile tab (M-A13).
       if (!scope.serverSupports('mobile-sim-v1')) return
       try {

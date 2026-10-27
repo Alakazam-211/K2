@@ -1,7 +1,7 @@
 // The real stream adapter (`wsSimStream`, prd-mobile-dev-v1 M-A4) against a
 // fake socket, fail loud: it dials `/cli/sim/stream` through the per-server
-// queue with the sim id, fps cap and token; binary messages are frames
-// numbered per connection; text JSON is meta / control / error; input typed
+// queue with the workspace, fps cap and token; binary messages are K2SF
+// frames acked by their seq; text JSON is tagged by "t"; input typed
 // before OPEN goes out in order after it; acks name the frame; close stops
 // every callback.
 
@@ -53,7 +53,7 @@ class FakeWebSocket {
 import { resetGridDialQueueForTests } from '@/lib/grid-dial-queue'
 import type { ServerScope } from '@/kessel/server-scope'
 import { fakeScope } from '@/test-utils/fake-scope'
-import { wsSimStream, type SimStreamHandlers } from './sim-stream'
+import { encodeFrame, wsSimStream, type SimStreamHandlers } from './sim-stream'
 
 async function tick(): Promise<void> {
   for (let i = 0; i < 10; i++) await Promise.resolve()
@@ -69,53 +69,57 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('wsSimStream', () => {
-  it('dials, decodes frames and text, queues early input, acks, and goes quiet on close', async () => {
+describe('wsSimStream (k2-core::sim::stream)', () => {
+  it('dials, decodes K2SF frames and t-tagged text, queues early input, acks by seq, and goes quiet on close', async () => {
     const scope = {
       ...fakeScope('box.test'),
       creds: async () => ({ host: 'box.test', port: 443, secure: true, token: 'tok-1' }),
     } as unknown as ServerScope
     const seen: string[] = []
     const handlers: SimStreamHandlers = {
-      onFrame: (f) => seen.push(`frame:${f.seq}:${f.source.kind}`),
-      onMeta: (m) => seen.push(`meta:${m.width}x${m.height}:${m.orientation}`),
-      onControl: (c) => seen.push(`control:${c.heldBy}:${c.by ?? ''}`),
-      onState: (s, why) => seen.push(`state:${s}${why ? `:${why}` : ''}`),
+      onFrame: (f) => seen.push(`frame:${f.seq}:${f.widthPt}x${f.heightPt}:${f.source.kind}`),
+      onServer: (m) => seen.push(`server:${m.t}${m.t === 'hold' ? `:${m.hold.kind}` : ''}${m.t === 'error' ? `:${m.code}` : ''}`),
+      onConn: (s, why) => seen.push(`conn:${s}${why ? `:${why}` : ''}`),
     }
-    const conn = wsSimStream({ scope, simId: 's1', fps: 8, handlers })
-    conn.send({ action: 'tap', x: 10, y: 20 })
+    const conn = wsSimStream({ scope, workspace: 'p-docs', fps: 8, handlers })
+    conn.send({ t: 'tap', x: 10, y: 20.5 })
     await tick()
     expect(FakeWebSocket.instances).toHaveLength(1)
     const sock = FakeWebSocket.instances[0]
+    expect(sock.binaryType).toBe('arraybuffer')
     const url = new URL(sock.url)
     expect(url.pathname).toBe('/cli/sim/stream')
-    expect(url.searchParams.get('sim')).toBe('s1')
+    expect(url.searchParams.get('workspace')).toBe('p-docs')
     expect(url.searchParams.get('fps')).toBe('8')
     expect(url.protocol).toBe('wss:')
     expect(url.host).toBe('box.test')
     expect(url.searchParams.get('token')).toBe('tok-1')
 
     sock.open()
-    expect(sock.sent).toEqual([JSON.stringify({ action: 'tap', x: 10, y: 20 })])
-    sock.onmessage?.({ data: JSON.stringify({ type: 'meta', width: 412, height: 915, orientation: 'portrait' }) })
-    sock.onmessage?.({ data: new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: 'image/jpeg' }) })
-    sock.onmessage?.({ data: new Uint8Array([0xff, 0xd8]).buffer })
-    sock.onmessage?.({ data: JSON.stringify({ type: 'control', heldBy: 'takeover', by: 'rosson' }) })
-    conn.ack(2)
-    expect(sock.sent[1]).toBe(JSON.stringify({ action: 'ack', seq: 2 }))
-    sock.onmessage?.({ data: JSON.stringify({ type: 'error', message: 'sim stopped' }) })
+    expect(sock.sent).toEqual(['{"t":"tap","x":10,"y":20.5}'])
+    sock.onmessage?.({
+      data: '{"t":"hello","sim":"s1","lane":"android","state":"running","fps":8,"remote":true,"hold":{"kind":"free"},"isolation":"x"}',
+    })
+    sock.onmessage?.({ data: encodeFrame({ seq: 41, widthPx: 824, heightPx: 1830, widthPt: 412, heightPt: 915 }, new Uint8Array([0xff, 0xd8])) })
+    sock.onmessage?.({ data: new Uint8Array([0xff, 0xd8]).buffer }) // no header: dropped
+    sock.onmessage?.({ data: '{"t":"hold","hold":{"kind":"takeover","by":"rosson","idle_ms":600000}}' })
+    conn.ack(41)
+    conn.setFps(4)
+    conn.send({ t: 'take-over' })
+    expect(sock.sent.slice(1)).toEqual(['{"t":"ack","seq":41}', '{"t":"fps","fps":4}', '{"t":"take-over"}'])
+    sock.onmessage?.({ data: '{"t":"error","code":"sim_held","message":"held"}' })
+    sock.onclose?.({ code: 4410, reason: '' })
     conn.close()
-    sock.onmessage?.({ data: JSON.stringify({ type: 'meta', width: 1, height: 1 }) })
-    sock.onclose?.({ code: 1000 })
+    sock.onmessage?.({ data: '{"t":"fps","fps":2}' })
     expect(sock.readyState).toBe(3)
     expect(seen).toEqual([
-      'state:connecting',
-      'state:open',
-      'meta:412x915:portrait',
-      'frame:1:jpeg',
-      'frame:2:jpeg',
-      'control:takeover:rosson',
-      'state:error:sim stopped',
+      'conn:connecting',
+      'conn:open',
+      'server:hello',
+      'frame:41:412x915:jpeg',
+      'server:hold:takeover',
+      'server:error:sim_held',
+      'conn:closed:The device stopped.',
     ])
   })
 })

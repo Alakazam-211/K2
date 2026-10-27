@@ -1,9 +1,10 @@
-// The person's gestures on the device canvas → `SimInput` (prd-mobile-dev-v1
-// §2.4, §5; vs-live M-A9). Pure, so the rules are tested without a canvas.
+// The person's gestures on the device canvas → stream input
+// (prd-mobile-dev-v1 §2.4, §5; vs-live M-A9; `k2-core::sim::stream::ViewerMsg`).
+// Pure, so the rules are tested without a canvas.
 //
 //  - Pointer: a short press that barely moves is a tap; anything else is a
-//    swipe from the press to the release. Coordinates are device dp /
-//    points, scaled from the canvas box.
+//    swipe from the press to the release. Coordinates are device points,
+//    scaled from the canvas box (`cx / canvas_w * wpt`).
 //  - Keys while the device has focus: ordinary keys go to the device. ⌘
 //    chords stay with K2, except ⌘⇧H (Home) and ⌘D (the dev menu / shake).
 //    Esc leaves the device's focus.
@@ -11,7 +12,7 @@
 // S5 hook: `deviceRectToCanvas` is the inverse mapping the pick overlay
 // will use to outline tree elements on the canvas.
 
-import type { SimInput, SimNamedKey, SimPoint, SimStreamMeta } from './sim-stream'
+import type { SimInput, SimKey, SimOrientation, SimPoint } from './sim-stream'
 
 export interface BoxRect {
   left: number
@@ -20,30 +21,35 @@ export interface BoxRect {
   height: number
 }
 
+/** The screen in points (the current orientation). */
+export interface ScreenPt {
+  widthPt: number
+  heightPt: number
+}
+
 /** Moved less than this (CSS px) → a tap. */
 export const TAP_SLOP_PX = 8
 /** Held longer than this → a swipe (a long press as a slow swipe in place). */
 export const TAP_MAX_MS = 500
 
-/** A canvas client point → device dp, clamped to the screen. */
-export function canvasPointToDevice(clientX: number, clientY: number, box: BoxRect, meta: Pick<SimStreamMeta, 'width' | 'height'>): SimPoint {
+const round1 = (v: number): number => Math.round(v * 10) / 10
+
+/** A canvas client point → device points, clamped to the screen. */
+export function canvasPointToDevice(clientX: number, clientY: number, box: BoxRect, screen: ScreenPt): SimPoint {
   const fx = box.width > 0 ? (clientX - box.left) / box.width : 0
   const fy = box.height > 0 ? (clientY - box.top) / box.height : 0
   const clamp = (v: number): number => Math.min(1, Math.max(0, v))
-  return {
-    x: Math.round(clamp(fx) * meta.width),
-    y: Math.round(clamp(fy) * meta.height),
-  }
+  return { x: round1(clamp(fx) * screen.widthPt), y: round1(clamp(fy) * screen.heightPt) }
 }
 
-/** A device dp rect → canvas client px (S5: outline an element). */
+/** A device rect in points → canvas client px (S5: outline an element). */
 export function deviceRectToCanvas(
   rect: { x: number; y: number; width: number; height: number },
   box: BoxRect,
-  meta: Pick<SimStreamMeta, 'width' | 'height'>,
+  screen: ScreenPt,
 ): BoxRect {
-  const sx = meta.width > 0 ? box.width / meta.width : 0
-  const sy = meta.height > 0 ? box.height / meta.height : 0
+  const sx = screen.widthPt > 0 ? box.width / screen.widthPt : 0
+  const sy = screen.heightPt > 0 ? box.height / screen.heightPt : 0
   return { left: box.left + rect.x * sx, top: box.top + rect.y * sy, width: rect.width * sx, height: rect.height * sy }
 }
 
@@ -54,12 +60,18 @@ export interface PointerSample {
 }
 
 /** One press → release as a tap or a swipe. */
-export function gestureFor(down: PointerSample, up: PointerSample, box: BoxRect, meta: Pick<SimStreamMeta, 'width' | 'height'>): SimInput {
+export function gestureFor(down: PointerSample, up: PointerSample, box: BoxRect, screen: ScreenPt): SimInput {
   const moved = Math.hypot(up.clientX - down.clientX, up.clientY - down.clientY)
   const ms = Math.max(0, up.at - down.at)
-  const from = canvasPointToDevice(down.clientX, down.clientY, box, meta)
-  if (moved < TAP_SLOP_PX && ms <= TAP_MAX_MS) return { action: 'tap', x: from.x, y: from.y }
-  return { action: 'swipe', from, to: canvasPointToDevice(up.clientX, up.clientY, box, meta), durationMs: Math.max(50, Math.round(ms)) }
+  const from = canvasPointToDevice(down.clientX, down.clientY, box, screen)
+  if (moved < TAP_SLOP_PX && ms <= TAP_MAX_MS) return { t: 'tap', x: from.x, y: from.y }
+  const to = canvasPointToDevice(up.clientX, up.clientY, box, screen)
+  return { t: 'swipe', x1: from.x, y1: from.y, x2: to.x, y2: to.y, durationMs: Math.max(50, Math.round(ms)) }
+}
+
+/** Rotate a quarter turn from what the frames show. */
+export function nextOrientation(screen: ScreenPt): SimOrientation {
+  return screen.widthPt > screen.heightPt ? 'portrait' : 'landscape-right'
 }
 
 export interface KeyLike {
@@ -71,16 +83,16 @@ export interface KeyLike {
   isComposing?: boolean
 }
 
-const NAMED_KEYS: ReadonlySet<string> = new Set<SimNamedKey>([
-  'Enter',
-  'Backspace',
-  'Delete',
-  'Tab',
-  'ArrowUp',
-  'ArrowDown',
-  'ArrowLeft',
-  'ArrowRight',
-])
+const NAMED_KEYS: Readonly<Record<string, SimKey>> = {
+  Enter: 'enter',
+  Backspace: 'backspace',
+  Delete: 'delete',
+  Tab: 'tab',
+  ArrowUp: 'arrow-up',
+  ArrowDown: 'arrow-down',
+  ArrowLeft: 'arrow-left',
+  ArrowRight: 'arrow-right',
+}
 
 /**
  * What a keydown on the focused device means:
@@ -93,13 +105,14 @@ export function keyToSimInput(e: KeyLike): { send: SimInput } | 'blur' | 'pass' 
   if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey && !e.altKey) return 'blur'
   const lower = e.key.length === 1 ? e.key.toLowerCase() : e.key
   if (e.metaKey) {
-    if (e.shiftKey && !e.ctrlKey && !e.altKey && lower === 'h') return { send: { action: 'button', button: 'home' } }
-    if (!e.shiftKey && !e.ctrlKey && !e.altKey && lower === 'd') return { send: { action: 'button', button: 'menu' } }
+    if (e.shiftKey && !e.ctrlKey && !e.altKey && lower === 'h') return { send: { t: 'button', button: 'home' } }
+    if (!e.shiftKey && !e.ctrlKey && !e.altKey && lower === 'd') return { send: { t: 'button', button: 'dev-menu' } }
     return 'pass'
   }
   if (e.ctrlKey) return 'pass'
-  if (NAMED_KEYS.has(e.key)) return { send: { action: 'key', key: e.key as SimNamedKey } }
+  const named = NAMED_KEYS[e.key]
+  if (named) return { send: { t: 'key', key: named } }
   // One printable character (Shift and Option change it already).
-  if ([...e.key].length === 1) return { send: { action: 'type', text: e.key } }
+  if ([...e.key].length === 1) return { send: { t: 'text', text: e.key } }
   return 'pass'
 }

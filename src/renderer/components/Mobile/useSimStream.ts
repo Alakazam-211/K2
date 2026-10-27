@@ -1,30 +1,27 @@
 // One viewer of the workspace's device stream (prd-mobile-dev-v1 §7).
 //
-//  - Connects only while the tab is shown and a device is running; a hidden
+//  - Connects only while the tab is shown and the device is up; a hidden
 //    tab closes its socket, so it stops counting as a viewer (the daemon's
 //    idle shutdown counts viewers).
-//  - Draws each frame on the canvas, then acks it: one frame in flight, so a
-//    slow viewer skips frames instead of backing up the others.
-//  - `hold` keeps the last drawn frame on screen (M-A3: "freeze" is a
-//    client-side hold; the device keeps running and frames are still acked).
-//    The S5 pick pop-up holds the frame this way.
+//  - Draws each frame on the canvas, then acks its seq: one frame in
+//    flight, so a slow viewer skips frames instead of backing up others.
+//  - The screen size in points comes from each frame's header (it changes
+//    when the device rotates); `hello` / `hold` / `state` / `fps` text
+//    messages keep the rest current.
+//  - `hold` keeps the last drawn frame (M-A3: "freeze" is a client-side
+//    hold; the device keeps running and frames are still acked). The S5
+//    pick pop-up holds the frame this way.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
-import type { SimControl } from './simApi'
-import type {
-  SimFrame,
-  SimInput,
-  SimStreamConnection,
-  SimStreamConnector,
-  SimStreamMeta,
-  SimStreamState,
-} from './sim-stream'
+import type { SimHold, SimState } from './simApi'
+import type { ScreenPt } from './sim-input'
+import type { SimConnState, SimFrame, SimInput, SimStreamConnection, SimStreamConnector } from './sim-stream'
 
 export interface UseSimStreamArgs {
   scope: ServerScope
-  /** The running sim session; null = no device (no socket). */
-  simId: string | null
+  /** The workspace whose device to watch; null = no socket. */
+  workspace: string | null
   /** The tab is shown in this window. */
   visible: boolean
   fps: number
@@ -35,24 +32,35 @@ export interface UseSimStreamArgs {
 }
 
 export interface SimStreamView {
-  state: SimStreamState | 'idle'
+  conn: SimConnState | 'idle'
   reason: string | null
-  meta: SimStreamMeta | null
-  control: SimControl | null
+  /** The screen in points, from the latest frame. */
+  screen: ScreenPt | null
+  /** From `hello` / `hold`. */
+  deviceHold: SimHold | null
+  /** From `hello` / `state`. */
+  state: SimState | null
+  /** The cap the daemon gave this socket. */
+  fps: number | null
+  /** The isolation note from `hello` ("separate, not sealed"). */
+  isolation: string | null
+  /** The last refused input (`error`). */
+  inputError: string | null
   /** A frame has been drawn since the socket opened. */
   hasFrame: boolean
   send(input: SimInput): void
+  setFps(fps: number): void
 }
 
-/** Painted size for a stub frame: 2× dp so text stays crisp. */
+/** Painted size for a stub frame: 2× points so text stays crisp. */
 const PAINT_SCALE = 2
 
-async function drawFrame(canvas: HTMLCanvasElement, frame: SimFrame, meta: SimStreamMeta | null): Promise<boolean> {
+async function drawFrame(canvas: HTMLCanvasElement, frame: SimFrame): Promise<boolean> {
   const ctx = canvas.getContext('2d')
   if (!ctx) return false
   if (frame.source.kind === 'paint') {
-    const w = (meta?.width ?? canvas.width) * PAINT_SCALE
-    const h = (meta?.height ?? canvas.height) * PAINT_SCALE
+    const w = frame.widthPt * PAINT_SCALE
+    const h = frame.heightPt * PAINT_SCALE
     if (canvas.width !== w) canvas.width = w
     if (canvas.height !== h) canvas.height = h
     frame.source.paint(ctx, w, h)
@@ -69,53 +77,80 @@ async function drawFrame(canvas: HTMLCanvasElement, frame: SimFrame, meta: SimSt
   return true
 }
 
-export function useSimStream({ scope, simId, visible, fps, connector, canvasRef, hold }: UseSimStreamArgs): SimStreamView {
-  const [state, setState] = useState<SimStreamState | 'idle'>('idle')
+export function useSimStream({ scope, workspace, visible, fps, connector, canvasRef, hold }: UseSimStreamArgs): SimStreamView {
+  const [conn, setConn] = useState<SimConnState | 'idle'>('idle')
   const [reason, setReason] = useState<string | null>(null)
-  const [meta, setMeta] = useState<SimStreamMeta | null>(null)
-  const [control, setControl] = useState<SimControl | null>(null)
+  const [screen, setScreen] = useState<ScreenPt | null>(null)
+  const [deviceHold, setDeviceHold] = useState<SimHold | null>(null)
+  const [state, setState] = useState<SimState | null>(null)
+  const [fpsGiven, setFpsGiven] = useState<number | null>(null)
+  const [isolation, setIsolation] = useState<string | null>(null)
+  const [inputError, setInputError] = useState<string | null>(null)
   const [hasFrame, setHasFrame] = useState(false)
   const connRef = useRef<SimStreamConnection | null>(null)
-  const metaRef = useRef<SimStreamMeta | null>(null)
   const holdRef = useRef(hold)
   holdRef.current = hold
   const warnedRef = useRef(false)
+  // The first socket's fps; later changes go over the open socket.
+  const fpsRef = useRef(fps)
 
   useEffect(() => {
-    if (!simId || !visible) {
-      setState('idle')
+    if (!workspace || !visible) {
+      setConn('idle')
       setHasFrame(false)
       return
     }
     let live = true
     // Frames arrive one at a time (ack-paced); draw strictly in order.
     let drawing: Promise<void> = Promise.resolve()
-    const conn = connector({
+    const c = connector({
       scope,
-      simId,
-      fps,
+      workspace,
+      fps: fpsRef.current,
       handlers: {
-        onState(s, why) {
+        onConn(s, why) {
           if (!live) return
-          setState(s)
+          setConn(s)
           setReason(why ?? null)
           if (s !== 'open') setHasFrame(false)
         },
-        onMeta(m) {
+        onServer(m) {
           if (!live) return
-          metaRef.current = m
-          setMeta(m)
-        },
-        onControl(c) {
-          if (live) setControl(c)
+          switch (m.t) {
+            case 'hello':
+              setState(m.state)
+              setDeviceHold(m.hold)
+              setFpsGiven(m.fps)
+              setIsolation(m.isolation || null)
+              return
+            case 'state':
+              setState(m.state)
+              if (m.message) setReason(m.message)
+              return
+            case 'hold':
+              setDeviceHold(m.hold)
+              return
+            case 'fps':
+              setFpsGiven(m.fps)
+              return
+            case 'error':
+              console.warn('[mobile] input refused:', m.code, m.message)
+              setInputError(m.message)
+              return
+          }
         },
         onFrame(frame) {
           drawing = drawing.then(async () => {
             if (!live) return
             try {
               const canvas = canvasRef.current
+              setScreen((prev) =>
+                prev && prev.widthPt === frame.widthPt && prev.heightPt === frame.heightPt
+                  ? prev
+                  : { widthPt: frame.widthPt, heightPt: frame.heightPt },
+              )
               if (canvas && !holdRef.current) {
-                const drawn = await drawFrame(canvas, frame, metaRef.current)
+                const drawn = await drawFrame(canvas, frame)
                 if (drawn) {
                   if (live) setHasFrame(true)
                 } else if (!warnedRef.current) {
@@ -127,28 +162,34 @@ export function useSimStream({ scope, simId, visible, fps, connector, canvasRef,
               console.warn('[mobile] frame draw failed:', err)
             } finally {
               // Ack even a skipped or failed frame, or the stream stalls.
-              if (live) conn.ack(frame.seq)
+              if (live) c.ack(frame.seq)
             }
           })
         },
       },
     })
-    connRef.current = conn
+    connRef.current = c
     return () => {
       live = false
-      conn.close()
-      if (connRef.current === conn) connRef.current = null
+      c.close()
+      if (connRef.current === c) connRef.current = null
     }
-  }, [scope, simId, visible, fps, connector, canvasRef])
+  }, [scope, workspace, visible, connector, canvasRef])
 
   const send = useCallback((input: SimInput) => {
-    const conn = connRef.current
-    if (!conn) {
-      console.warn('[mobile] input with no stream open:', input.action)
+    const c = connRef.current
+    if (!c) {
+      console.warn('[mobile] input with no stream open:', input.t)
       return
     }
-    conn.send(input)
+    setInputError(null)
+    c.send(input)
   }, [])
 
-  return { state, reason, meta, control, hasFrame, send }
+  const setFps = useCallback((n: number) => {
+    fpsRef.current = n
+    connRef.current?.setFps(n)
+  }, [])
+
+  return { conn, reason, screen, deviceHold, state, fps: fpsGiven, isolation, inputError, hasFrame, send, setFps }
 }

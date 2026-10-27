@@ -190,7 +190,49 @@ interface Entry {
   down: boolean
   downAt: number
   over: boolean
+  /** When this page saw focus move into the frame (its window's blur with
+   *  the iframe as the active element). */
+  focusAt: number
   off: (() => void) | null
+}
+
+/**
+ * What THIS page sees of the person, never what a frame says (security
+ * review #1): the frame runtime's `{pointer: 'down'}` is posted by code in
+ * the widget's own realm, so a widget can send it with no click. Every
+ * press-gated verb (`downloads.*`, `links.open`, `thread.pickFiles`'s press,
+ * `layout.*` folds, `window.startDrag`) also needs the page's own sight:
+ * the iframe holds this page's focus, and the person's activation is live
+ * (`navigator.userActivation`, which a click in the frame gives its
+ * ancestors and which no script can fake), or, where the API is missing,
+ * focus moved into the frame within the window.
+ */
+export interface ZenHostSight {
+  activeElement(): Element | null
+  /** `navigator.userActivation.isActive`, or null where the API is missing. */
+  userActive(): boolean | null
+}
+
+const browserSight: ZenHostSight = {
+  activeElement: () => (typeof document === 'undefined' ? null : document.activeElement),
+  userActive: () => {
+    const ua = (typeof navigator === 'undefined' ? undefined : (navigator as { userActivation?: { isActive: boolean } }).userActivation)
+    return ua ? ua.isActive : null
+  },
+}
+
+let sight: ZenHostSight = browserSight
+
+/** Tests only: what the page sees (null puts the browser's back). */
+export function __setZenHostSightForTests(s: ZenHostSight | null): void {
+  sight = s ?? browserSight
+}
+
+/** Did this page itself see the person act in this frame within `ms`? */
+function hostSaw(e: Entry, ms: number, now: number): boolean {
+  if (!e.el || sight.activeElement() !== e.el) return false
+  const active = sight.userActive()
+  return active === null ? e.focusAt > 0 && now - e.focusAt <= ms : active
 }
 
 const entries = new Map<string, Entry>()
@@ -202,7 +244,7 @@ let notifiedAt = -Infinity
 function entry(key: string): Entry {
   let e = entries.get(key)
   if (!e) {
-    e = { el: null, regions: [], down: false, downAt: 0, over: false, off: null }
+    e = { el: null, regions: [], down: false, downAt: 0, over: false, focusAt: 0, off: null }
     entries.set(key, e)
   }
   return e
@@ -231,11 +273,17 @@ export function registerZenCanvasFrame(key: string, el: HTMLIFrameElement): () =
   e.el = el
   const enter = (): void => void (e.over = true)
   const leave = (): void => void (e.over = false)
+  // The page's own sight of focus moving into this frame (a click or Tab).
+  const blurred = (): void => {
+    if (sight.activeElement() === el) e.focusAt = Date.now()
+  }
   el.addEventListener('mouseenter', enter)
   el.addEventListener('mouseleave', leave)
+  if (typeof window !== 'undefined') window.addEventListener('blur', blurred)
   const off = (): void => {
     el.removeEventListener('mouseenter', enter)
     el.removeEventListener('mouseleave', leave)
+    if (typeof window !== 'undefined') window.removeEventListener('blur', blurred)
   }
   e.off = off
   changed()
@@ -266,12 +314,17 @@ export function zenCanvasPointer(key: string, down: boolean, now: number = Date.
   if (down) e.downAt = now
 }
 
-/** Did a trusted primary-button press go down in this frame within `ms`?
- *  (`thread.pickFiles`: K2's picker follows the person's own click.) Never
- *  spends the press. */
+/** Did the person press in this frame within `ms`: the frame reported a
+ *  press AND this page saw it itself (`hostSaw`; review #1)? Never spends
+ *  the press. */
 export function zenCanvasPressedWithin(key: string, ms: number, now: number = Date.now()): boolean {
   const e = entries.get(key)
-  return !!e && e.downAt > 0 && now - e.downAt <= ms
+  return !!e && e.downAt > 0 && now - e.downAt <= ms && hostSaw(e, ms, now)
+}
+
+/** Tests only: this page saw focus move into the frame at `now`. */
+export function __zenCanvasFocusInForTests(key: string, now: number): void {
+  entry(key).focusAt = now
 }
 
 /** `window.startDrag` for one frame: the checks, then the native drag. */
@@ -288,6 +341,12 @@ export function startZenCanvasDrag(
   const active = opts.activeElement !== undefined ? opts.activeElement : typeof document === 'undefined' ? null : document.activeElement
   if (!e.el || !(active === e.el || e.over)) {
     throw new ZenCanvasError('failed', 'window.startDrag: this widget has neither the focus nor the pointer.')
+  }
+  // Review #1: the person's live activation as this page sees it (where
+  // the API is missing, focus that moved into this frame during the press).
+  const ua = sight.userActive()
+  if (ua === false || (ua === null && !(e.focusAt > 0 && now - e.focusAt <= ZEN_DRAG_PRESS_MAX_MS))) {
+    throw new ZenCanvasError('failed', 'window.startDrag needs the person’s own press in this widget.')
   }
   ;(opts.drag ?? startWindowDragNow)()
 }
@@ -320,6 +379,7 @@ export function zenCanvasVersion(): number {
 
 /** Tests only. */
 export function __resetZenCanvasForTests(): void {
+  sight = browserSight
   for (const e of entries.values()) e.off?.()
   entries.clear()
   listeners.clear()

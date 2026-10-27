@@ -2,7 +2,7 @@
 // (GB12, V1), blobs.put / blobs.get over the widget door (chunked), the
 // reply transfer list (V2), k2.download's press, rate, name and 60 s
 // ticket (GS2, GS3, GS7). Fixtures are made up (g-test0001, board-lite).
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { ZenWidgetBridge } from './zen-bridge'
 import type { ZenCustomWidgetPayload, ZenFrameReply } from './zen-custom-types'
 import { createZenCustomLayer, type ZenCustomDownloads, type ZenCustomLayerDeps } from './zen-custom-bridge'
@@ -10,11 +10,15 @@ import {
   ZEN_BLOB_CHUNK_BYTES,
   ZEN_BLOB_MAX_BYTES,
   ZEN_DOWNLOADS,
+  ZEN_DOWNLOAD_HOURLY,
+  __resetZenDownloadBudgetForTests,
   base64ToBytes,
   bytesToBase64,
   createZenCustomBlobs,
   zenBytesReader,
+  zenDownloadMatches,
   zenDownloadName,
+  zenSniffDownload,
   type ZenCustomBlobs,
 } from './zen-custom-blobs'
 import { startZenFrameHost } from './zen-custom-host'
@@ -49,6 +53,10 @@ class FakeBlobs implements ZenCustomBlobs {
   puts: Array<{ bytes: number[]; opts: unknown }> = []
   gets: Array<[string, unknown]> = []
   readers: string[] = []
+  headMime = 'image/png'
+  async head(_ref: string) {
+    return { mime: this.headMime, size: 2 }
+  }
   async put(bytes: ArrayBuffer, opts: { mime?: string; name?: string }) {
     this.puts.push({ bytes: [...new Uint8Array(bytes)], opts })
     return { ref: REF, size: bytes.byteLength, mime: 'image/png', name: opts.name ?? null, new: true }
@@ -67,8 +75,14 @@ class FakeDownloads implements ZenCustomDownloads {
   press = true
   saved: Array<{ name: string; bytes: number[] }> = []
   answer: string | null = '/Users/x/Downloads/Board (1).png'
+  consentAnswer = true
+  asked: Array<{ name: string; size: number }> = []
   pressed(): boolean {
     return this.press
+  }
+  async consent(ask: { name: string; size: number }): Promise<boolean> {
+    this.asked.push(ask)
+    return this.consentAnswer
   }
   async save(name: string, read: DownloadSliceReader): Promise<string | null> {
     const out: number[] = []
@@ -211,38 +225,83 @@ describe('the frame host moves reply bytes (V2) and keeps replies uncapped (GH12
   })
 })
 
+const PNG = (): ArrayBuffer => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]).buffer
+const TXT = (s = 'hello'): ArrayBuffer => new TextEncoder().encode(s).buffer as ArrayBuffer
+
 describe('k2.download: a press, the rate, the name and the 60 s ticket (GS2, GS3, GS7)', () => {
+  beforeEach(() => __resetZenDownloadBudgetForTests())
+
   it('saves bytes after a press and answers the name it landed as, never a path', async () => {
     const h = harness()
-    const r = ok(await h.send('downloads.save', ['Board.png', null, {}], new Uint8Array([1, 2, 3, 4, 5]).buffer))
+    const r = ok(await h.send('downloads.save', ['Board.png', null, {}], PNG()))
     expect(r).toEqual({ saved: true, name: 'Board (1).png' })
-    expect(h.downloads.saved).toEqual([{ name: 'Board.png', bytes: [1, 2, 3, 4, 5] }])
+    expect(h.downloads.saved).toEqual([{ name: 'Board.png', bytes: [...new Uint8Array(PNG())] }])
+    expect(h.downloads.asked).toEqual([{ name: 'Board.png', size: 10 }])
   })
 
-  it('needs a press, the downloads:save cap, and an allowed extension', async () => {
+  it('needs a press, the downloads:save cap, and an allowed extension (no SVG)', async () => {
     const h = harness()
     h.downloads.press = false
-    expect(code(await h.send('downloads.save', ['a.png', null, {}], new ArrayBuffer(1)))).toBe('failed')
+    expect(code(await h.send('downloads.save', ['a.png', null, {}], PNG()))).toBe('failed')
     expect(code(await h.send('downloads.begin', ['a.png']))).toBe('failed')
     h.downloads.press = true
     h.clock.t += 10_000
-    expect(code(await h.send('downloads.save', ['run.html', null, {}], new ArrayBuffer(1)))).toBe('bad_args')
-    expect(code(await h.send('downloads.save', ['tool.exe', null, {}], new ArrayBuffer(1)))).toBe('bad_args')
+    expect(code(await h.send('downloads.save', ['run.html', null, {}], TXT()))).toBe('bad_args')
+    expect(code(await h.send('downloads.save', ['tool.exe', null, {}], TXT()))).toBe('bad_args')
+    expect(code(await h.send('downloads.save', ['board.svg', null, {}], TXT('<svg/>')))).toBe('bad_args')
     const n = harness(['store:read'])
-    expect(code(await n.send('downloads.save', ['a.png', null, {}], new ArrayBuffer(1)))).toBe('cap_not_granted')
+    expect(code(await n.send('downloads.save', ['a.png', null, {}], PNG()))).toBe('cap_not_granted')
+    expect(h.downloads.saved).toEqual([])
+  })
+
+  it('the extension must match the bytes (review #4)', async () => {
+    const h = harness()
+    expect(code(await h.send('downloads.save', ['photo.png', null, {}], TXT('<svg onload=x>')))).toBe('bad_args')
+    h.clock.t += 10_000
+    expect(code(await h.send('downloads.save', ['notes.txt', null, {}], PNG()))).toBe('bad_args')
+    h.clock.t += 10_000
+    h.blobs.headMime = 'text/plain'
+    expect(code(await h.send('downloads.save', ['photo.png', { blob: REF }, {}]))).toBe('bad_args')
+    expect(h.downloads.saved).toEqual([])
+  })
+
+  it('strips bidi overrides and zero-width characters from the name (review #4)', async () => {
+    const h = harness()
+    ok(await h.send('downloads.save', ['invoice‮gnp.txt​', null, {}], TXT()))
+    expect(h.downloads.saved[0].name).toBe('invoicegnp.txt')
+  })
+
+  it('K2 asks the first time; saying no saves nothing (review #1)', async () => {
+    const h = harness()
+    h.downloads.consentAnswer = false
+    expect(ok(await h.send('downloads.save', ['a.txt', null, {}], TXT()))).toEqual({ saved: false })
     expect(h.downloads.saved).toEqual([])
   })
 
   it('is at most one every 2 seconds and 10 a minute', async () => {
     const h = harness()
-    ok(await h.send('downloads.save', ['a.txt', null, {}], new ArrayBuffer(1)))
-    expect(code(await h.send('downloads.save', ['b.txt', null, {}], new ArrayBuffer(1)))).toBe('rate_limited')
+    ok(await h.send('downloads.save', ['a.txt', null, {}], TXT()))
+    expect(code(await h.send('downloads.save', ['b.txt', null, {}], TXT()))).toBe('rate_limited')
     for (let i = 0; i < ZEN_DOWNLOADS.perMinute - 1; i++) {
       h.clock.t += ZEN_DOWNLOADS.everyMs
-      ok(await h.send('downloads.save', [`n${i}.txt`, null, {}], new ArrayBuffer(1)))
+      ok(await h.send('downloads.save', [`n${i}.txt`, null, {}], TXT()))
     }
     h.clock.t += ZEN_DOWNLOADS.everyMs
-    expect(code(await h.send('downloads.save', ['over.txt', null, {}], new ArrayBuffer(1)))).toBe('rate_limited')
+    expect(code(await h.send('downloads.save', ['over.txt', null, {}], TXT()))).toBe('rate_limited')
+  })
+
+  it('has an hourly budget per widget that a reload doesn’t reset (review #1)', async () => {
+    const h = harness()
+    for (let i = 0; i < ZEN_DOWNLOAD_HOURLY.files; i++) {
+      h.clock.t += 7_000
+      ok(await h.send('downloads.save', [`n${i}.txt`, null, {}], TXT()))
+    }
+    // A new layer (the frame reloaded) for the same widget: still spent.
+    const again = harness()
+    again.clock.t = h.clock.t + 7_000
+    expect(code(await again.send('downloads.save', ['more.txt', null, {}], TXT()))).toBe('rate_limited')
+    again.clock.t += 3_600_000
+    ok(await again.send('downloads.save', ['later.txt', null, {}], TXT()))
   })
 
   it('begin checks the press now; the bytes may follow with the ticket within 60 s, once', async () => {
@@ -251,22 +310,22 @@ describe('k2.download: a press, the rate, the name and the 60 s ticket (GS2, GS3
     expect(typeof t.ticket).toBe('string')
     h.downloads.press = false
     h.clock.t += 30_000
-    expect(ok(await h.send('downloads.save', ['Board.png', null, { ticket: t.ticket }], new ArrayBuffer(2)))).toEqual({
+    expect(ok(await h.send('downloads.save', ['Board.png', null, { ticket: t.ticket }], PNG()))).toEqual({
       saved: true,
       name: 'Board (1).png',
     })
-    expect(code(await h.send('downloads.save', ['Board.png', null, { ticket: t.ticket }], new ArrayBuffer(2)))).toBe('failed')
+    expect(code(await h.send('downloads.save', ['Board.png', null, { ticket: t.ticket }], PNG()))).toBe('failed')
     h.downloads.press = true
     h.clock.t += 5_000
     const late = ok(await h.send('downloads.begin', ['late.png'])) as { ticket: string }
     h.clock.t += ZEN_DOWNLOADS.ticketMs + 1
     h.downloads.press = false
-    expect(code(await h.send('downloads.save', ['late.png', null, { ticket: late.ticket }], new ArrayBuffer(2)))).toBe('failed')
-    expect(code(await h.send('downloads.save', ['late.png', null, { ticket: 'dl-forged' }], new ArrayBuffer(2)))).toBe('failed')
+    expect(code(await h.send('downloads.save', ['late.png', null, { ticket: late.ticket }], PNG()))).toBe('failed')
+    expect(code(await h.send('downloads.save', ['late.png', null, { ticket: 'dl-forged' }], PNG()))).toBe('failed')
     // A ticket belongs to this placement's layer: another layer never knows it.
     const other = harness()
     other.downloads.press = false
-    expect(code(await other.send('downloads.save', ['late.png', null, { ticket: late.ticket }], new ArrayBuffer(2)))).toBe('failed')
+    expect(code(await other.send('downloads.save', ['late.png', null, { ticket: late.ticket }], PNG()))).toBe('failed')
   })
 
   it('{blob: ref} reads from the daemon, never through the frame', async () => {
@@ -279,7 +338,7 @@ describe('k2.download: a press, the rate, the name and the 60 s ticket (GS2, GS3
   it('answers saved: false when the person cancels', async () => {
     const h = harness()
     h.downloads.answer = null
-    expect(ok(await h.send('downloads.save', ['a.json', null, {}], new ArrayBuffer(1)))).toEqual({ saved: false })
+    expect(ok(await h.send('downloads.save', ['a.json', null, {}], TXT('{"a":1}')))).toEqual({ saved: false })
   })
 
   it('cleans names', () => {
@@ -287,9 +346,21 @@ describe('k2.download: a press, the rate, the name and the 60 s ticket (GS2, GS3
     expect(zenDownloadName('.hidden.txt')).toEqual({ name: 'hidden.txt' })
     expect(zenDownloadName('Board', 'image/png')).toEqual({ name: 'Board.png' })
     expect(zenDownloadName('Board')).toHaveProperty('problem')
+    expect(zenDownloadName('Board', 'image/svg+xml')).toHaveProperty('problem')
     expect(zenDownloadName('a\u0000b.csv')).toEqual({ name: 'ab.csv' })
+    expect(zenDownloadName('a⁦b⁩.csv')).toEqual({ name: 'ab.csv' })
     const long = zenDownloadName(`${'x'.repeat(300)}.pdf`)
     expect('name' in long && long.name.length === 120 && long.name.endsWith('.pdf')).toBe(true)
+  })
+
+  it('knows what the bytes are', () => {
+    expect(zenSniffDownload(new Uint8Array(PNG()))).toBe('png')
+    expect(zenSniffDownload(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe('jpeg')
+    expect(zenSniffDownload(new TextEncoder().encode('%PDF-1.7'))).toBe('pdf')
+    expect(zenSniffDownload(new TextEncoder().encode('plain words'))).toBe('text')
+    expect(zenSniffDownload(new Uint8Array([0, 1, 2, 0xfe]))).toBe(null)
+    expect(zenDownloadMatches('a.json', { mime: 'application/json' })).toBe(null)
+    expect(zenDownloadMatches('a.png', { mime: 'image/svg+xml' })).not.toBe(null)
   })
 })
 

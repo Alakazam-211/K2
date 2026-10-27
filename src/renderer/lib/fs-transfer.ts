@@ -279,15 +279,26 @@ export type DownloadSliceReader = (offset: number, len: number) => Promise<ReadR
  * @returns a local path (desktop) or the saved filename (web), or null
  *   (failed or cancelled, already surfaced).
  */
-export async function downloadChunks(label: string, read: DownloadSliceReader): Promise<string | null> {
+export async function downloadChunks(
+  label: string,
+  read: DownloadSliceReader,
+  opts: DownloadOptions = {},
+): Promise<string | null> {
   if (isWebClient()) {
     return downloadChunksInBrowser(label, read)
   }
-  return downloadChunksDesktop(label, read)
+  return downloadChunksDesktop(label, read, opts)
+}
+
+/** How a download lands (desktop). */
+export interface DownloadOptions {
+  /** Mark the file `com.apple.quarantine` on macOS (a file a Garden widget
+   *  made: Gatekeeper asks before it opens). */
+  quarantine?: boolean
 }
 
 /** Desktop path: Tauri local_download_chunk → ~/Downloads. */
-async function downloadChunksDesktop(label: string, read: DownloadSliceReader): Promise<string | null> {
+async function downloadChunksDesktop(label: string, read: DownloadSliceReader, opts: DownloadOptions = {}): Promise<string | null> {
   const toast = useToastStore.getState()
   const tid = useTransferProgressStore.getState().begin('download', label)
   const downloadId = `dl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -306,6 +317,7 @@ async function downloadChunksDesktop(label: string, read: DownloadSliceReader): 
         offset,
         base64: slice.base64,
         isLast: slice.eof,
+        ...(opts.quarantine ? { quarantine: true } : {}),
       })
       offset += slice.len
       useTransferProgressStore

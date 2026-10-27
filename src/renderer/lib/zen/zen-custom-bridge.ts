@@ -99,6 +99,8 @@ import {
   ZEN_DOWNLOADS,
   isArrayBuffer,
   zenBytesReader,
+  zenDownloadBudget,
+  zenDownloadMatches,
   zenDownloadName,
   type ZenCustomBlobs,
 } from './zen-custom-blobs'
@@ -223,9 +225,12 @@ export interface ZenCustomLayerDeps {
 
 /** What the layer needs for `downloads.*` (`k2.download`). */
 export interface ZenCustomDownloads {
-  /** Did the person press in this frame within the last 5 s? (A press
-   *  only; the frame having the focus is not enough.) */
+  /** Did the person press in this frame within the last 5 s, as K2's page
+   *  saw it (`zenCanvasPressedWithin`; never only the frame's word)? */
   pressed(): boolean
+  /** Security review #1 (belt and braces): K2's card the first time this
+   *  widget saves a file in this Garden; true to go on. */
+  consent(ask: { name: string; size: number }): Promise<boolean>
   /** K2's download lifecycle (`downloadChunks`): the path or file name it
    *  landed as, or null when the person cancelled or it failed (K2 said so). */
   save(name: string, read: DownloadSliceReader): Promise<string | null>
@@ -704,19 +709,34 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     }
     const data = args[1]
     let read: DownloadSliceReader
-    if (bytes) {
-      if (data !== undefined && data !== null) refuse('bad_args', 'downloads.save: the data rides as bytes, not in the arguments.')
-      read = zenBytesReader(bytes)
-    } else if (isObj(data) && Object.keys(data).length === 1 && typeof data.blob === 'string' && ZEN_BLOB_REF.test(data.blob)) {
-      // GS4: a file this widget's data holds goes daemon → Downloads; the
-      // daemon checks store:read and the maker's rights on every slice.
-      if (!caps().has('store:read')) refuse('cap_not_granted', 'downloads.save with {blob} needs store:read.', { cap: 'store:read' })
-      read = needBlobs('downloads.save').reader(data.blob)
-    } else {
-      refuse('bad_args', 'downloads.save takes bytes (k2.download sends them) or {blob: ref}.')
-    }
+    let size: number
+    let mismatch: string | null
     downloading = true
     try {
+      if (bytes) {
+        if (data !== undefined && data !== null) refuse('bad_args', 'downloads.save: the data rides as bytes, not in the arguments.')
+        read = zenBytesReader(bytes)
+        size = bytes.byteLength
+        mismatch = zenDownloadMatches(name, { head: new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 4096)) })
+      } else if (isObj(data) && Object.keys(data).length === 1 && typeof data.blob === 'string' && ZEN_BLOB_REF.test(data.blob)) {
+        // GS4: a file this widget's data holds goes daemon → Downloads; the
+        // daemon checks store:read and the maker's rights on every slice.
+        if (!caps().has('store:read')) refuse('cap_not_granted', 'downloads.save with {blob} needs store:read.', { cap: 'store:read' })
+        const blobs = needBlobs('downloads.save')
+        const h = await blobCall(() => blobs.head(data.blob as string))
+        read = blobs.reader(data.blob as string)
+        size = h.size
+        mismatch = zenDownloadMatches(name, { mime: h.mime })
+      } else {
+        refuse('bad_args', 'downloads.save takes bytes (k2.download sends them) or {blob: ref}.')
+      }
+      // Review #4: the name's extension must match the bytes.
+      if (mismatch!) refuse('bad_args', `downloads.save: ${mismatch}`)
+      // Review #1: a per-widget budget per hour, whatever the frame says.
+      const over = zenDownloadBudget(`${deps.gardenId()}/${deps.widget().widget}`, size!, deps.now())
+      if (over) refuse('rate_limited', `downloads.save: ${over}.`)
+      // Review #1: K2's own card the first time this widget saves a file.
+      if (!(await d.consent({ name, size: size! }))) return { saved: false }
       const landed = await d.save(name, read!)
       if (landed === null) return { saved: false }
       return { saved: true, name: landed.split(/[\\/]/).pop() || name }

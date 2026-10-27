@@ -6,6 +6,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   __resetZenCanvasForTests,
+  __setZenHostSightForTests,
+  __zenCanvasFocusInForTests,
+  zenCanvasPressedWithin,
   registerZenCanvasFrame,
   setZenCanvasRegions,
   startZenCanvasDrag,
@@ -232,6 +235,8 @@ describe('window.startDrag', () => {
     el = document.createElement('iframe')
     document.body.appendChild(el)
     registerZenCanvasFrame('g/a', el)
+    // The page sees the person's live activation (a real click).
+    __setZenHostSightForTests({ activeElement: () => el, userActive: () => true })
   })
   afterEach(() => {
     __resetZenCanvasForTests()
@@ -278,5 +283,53 @@ describe('window.startDrag', () => {
     el.dispatchEvent(new MouseEvent('mouseleave'))
     zenCanvasPointer('g/a', true, 1000)
     expect(() => startZenCanvasDrag('g/a', { now: 1000, activeElement: document.body, drag })).toThrow(ZenCanvasError)
+  })
+})
+
+describe('a press is the page’s own sight, never only the frame’s word (security review #1)', () => {
+  let el: HTMLIFrameElement
+  beforeEach(() => {
+    __resetZenCanvasForTests()
+    el = document.createElement('iframe')
+    document.body.appendChild(el)
+    registerZenCanvasFrame('g/a', el)
+  })
+  afterEach(() => {
+    __resetZenCanvasForTests()
+    document.body.innerHTML = ''
+  })
+
+  it('a forged {pointer: down} with no activation the page can see opens nothing', () => {
+    __setZenHostSightForTests({ activeElement: () => el, userActive: () => false })
+    zenCanvasPointer('g/a', true, 1000)
+    expect(zenCanvasPressedWithin('g/a', 5000, 1500)).toBe(false)
+    expect(() => startZenCanvasDrag('g/a', { now: 1500, activeElement: el, drag: vi.fn() })).toThrow(/own press/)
+  })
+
+  it('a live activation counts only while this frame holds the page’s focus', () => {
+    let active: Element | null = document.body
+    __setZenHostSightForTests({ activeElement: () => active, userActive: () => true })
+    zenCanvasPointer('g/a', true, 1000)
+    expect(zenCanvasPressedWithin('g/a', 5000, 1500)).toBe(false)
+    active = el
+    expect(zenCanvasPressedWithin('g/a', 5000, 1500)).toBe(true)
+    expect(zenCanvasPressedWithin('g/a', 5000, 7000)).toBe(false) // the frame's press is stale
+  })
+
+  it('without the activation API: focus moving into the frame, seen by the page, within the window', () => {
+    __setZenHostSightForTests({ activeElement: () => el, userActive: () => null })
+    zenCanvasPointer('g/a', true, 1000)
+    expect(zenCanvasPressedWithin('g/a', 5000, 1500)).toBe(false) // focus never moved in
+    __zenCanvasFocusInForTests('g/a', 1000)
+    expect(zenCanvasPressedWithin('g/a', 5000, 1500)).toBe(true)
+    expect(zenCanvasPressedWithin('g/a', 5000, 6500)).toBe(false)
+  })
+
+  it('the window’s blur with the iframe active is the page’s sight of focus moving in', () => {
+    __setZenHostSightForTests({ activeElement: () => el, userActive: () => null })
+    const now = Date.now()
+    zenCanvasPointer('g/a', true, now)
+    window.dispatchEvent(new Event('blur'))
+    expect(zenCanvasPressedWithin('g/a', 5000, now + 100)).toBe(true)
   })
 })

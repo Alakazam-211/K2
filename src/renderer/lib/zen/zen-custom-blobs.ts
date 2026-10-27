@@ -25,15 +25,95 @@ export const ZEN_BYTE_VERBS: Readonly<Record<string, number>> = {
   'downloads.save': ZEN_DOWNLOAD_MAX_BYTES,
 }
 
-/** GS3 / Q6: what `k2.download` saves (no html, zip or anything that runs). */
-export const ZEN_DOWNLOAD_EXTENSIONS: readonly string[] = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'pdf', 'json', 'csv', 'tsv', 'txt', 'md']
+/** GS3 / Q6: what `k2.download` saves (no html, zip or anything that runs;
+ *  no SVG either: it runs script when opened in a browser, security review #4). */
+export const ZEN_DOWNLOAD_EXTENSIONS: readonly string[] = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'json', 'csv', 'tsv', 'txt', 'md']
+
+/** Review #1 (belt and braces): per widget, per hour, however the frame
+ *  reloads (this window's memory). */
+export const ZEN_DOWNLOAD_HOURLY = { bytes: 200 * 1024 * 1024, files: 30 } as const
+
+const downloadLedger = new Map<string, Array<{ at: number; bytes: number }>>()
+
+/** Spend one download of `bytes` for `widgetKey` at `now`, or a sentence
+ *  why not (the hour's budget is spent). */
+export function zenDownloadBudget(widgetKey: string, bytes: number, now: number): string | null {
+  const recent = (downloadLedger.get(widgetKey) ?? []).filter((d) => now - d.at < 3_600_000)
+  const used = recent.reduce((n, d) => n + d.bytes, 0)
+  if (recent.length >= ZEN_DOWNLOAD_HOURLY.files) return `at most ${ZEN_DOWNLOAD_HOURLY.files} downloads an hour from one widget`
+  if (used + bytes > ZEN_DOWNLOAD_HOURLY.bytes) return `at most ${ZEN_DOWNLOAD_HOURLY.bytes / (1024 * 1024)} MiB of downloads an hour from one widget`
+  recent.push({ at: now, bytes })
+  downloadLedger.set(widgetKey, recent)
+  return null
+}
+
+/** Tests only. */
+export function __resetZenDownloadBudgetForTests(): void {
+  downloadLedger.clear()
+}
+
+/** What the bytes are, as far as a download needs to know (review #4: the
+ *  name's extension must match). Null: none of the saved kinds. */
+export function zenSniffDownload(head: Uint8Array): 'png' | 'jpeg' | 'gif' | 'webp' | 'pdf' | 'text' | null {
+  const b = head
+  const starts = (sig: number[]): boolean => sig.every((x, i) => b[i] === x)
+  if (starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'png'
+  if (starts([0xff, 0xd8, 0xff])) return 'jpeg'
+  if (starts([0x47, 0x49, 0x46, 0x38])) return 'gif'
+  if (starts([0x52, 0x49, 0x46, 0x46]) && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return 'webp'
+  if (starts([0x25, 0x50, 0x44, 0x46, 0x2d])) return 'pdf'
+  try {
+    // Text: well-formed UTF-8 with no NUL (a cut multi-byte tail is fine).
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(b.length > 64 ? b.subarray(0, b.length - 3) : b)
+    if (text.includes('\u0000')) return null
+    return 'text'
+  } catch {
+    return null
+  }
+}
+
+const EXT_KIND: Readonly<Record<string, string>> = {
+  png: 'png',
+  jpg: 'jpeg',
+  jpeg: 'jpeg',
+  gif: 'gif',
+  webp: 'webp',
+  pdf: 'pdf',
+  json: 'text',
+  csv: 'text',
+  tsv: 'text',
+  txt: 'text',
+  md: 'text',
+}
+
+const MIME_KIND: Readonly<Record<string, string>> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpeg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'application/pdf': 'pdf',
+  'application/json': 'text',
+  'text/plain': 'text',
+}
+
+/** Does a saved name's extension match what the file is (review #4)? A
+ *  sentence when it doesn't. `kind` is `zenSniffDownload`'s, or a blob's
+ *  stored (sniffed) mime. */
+export function zenDownloadMatches(name: string, what: { head: Uint8Array } | { mime: string }): string | null {
+  const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase()
+  const want = EXT_KIND[ext]
+  const got = 'head' in what ? zenSniffDownload(what.head) : (MIME_KIND[what.mime] ?? null)
+  if (!want || got !== want) {
+    return `the file isn’t a .${ext} (K2 saves a file only under the extension its bytes match)`
+  }
+  return null
+}
 
 const MIME_EXT: Readonly<Record<string, string>> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
   'image/gif': 'gif',
-  'image/svg+xml': 'svg',
   'application/pdf': 'pdf',
   'application/json': 'json',
   'text/csv': 'csv',
@@ -83,8 +163,9 @@ export function base64ToBytes(b64: string): Uint8Array {
 export function zenDownloadName(raw: unknown, mime?: unknown): { name: string } | { problem: string } {
   if (typeof raw !== 'string') return { problem: 'the file name is text' }
   const base = raw.split(/[\\/]/).pop() ?? ''
-  // eslint-disable-next-line no-control-regex
-  let name = base.replace(/[\u0000-\u001f\u007f]/g, '').trim().replace(/^\.+/, '')
+  // Control and format characters go (review #4: bidi overrides, isolates
+  // and zero-width characters can make `x<RLO>gnp.svg` read as `xgvs.png`).
+  let name = base.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().replace(/^\.+/, '')
   if (!name) return { problem: 'the file needs a name' }
   const dot = name.lastIndexOf('.')
   let ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
@@ -143,6 +224,8 @@ export interface ZenCustomBlobsDeps {
 
 export interface ZenCustomBlobs {
   put(bytes: ArrayBuffer, opts: { mime?: string; name?: string }): Promise<ZenBlobInfo>
+  /** A blob's stored (sniffed) mime and size, from its first bytes. */
+  head(ref: string): Promise<{ mime: string; size: number }>
   /** The whole blob (or its thumbnail with `px`). */
   get(ref: string, opts: { px?: number; from?: string }): Promise<{ info: Omit<ZenBlobSlice, 'offset' | 'len' | 'eof' | 'base64'>; bytes: ArrayBuffer }>
   /** A download reader for a blob this widget's data holds (GS4: the bytes
@@ -211,10 +294,15 @@ export function createZenCustomBlobs(deps: ZenCustomBlobsDeps): ZenCustomBlobs {
     return { info: { ref: first.ref, size: first.size, mime: first.mime, name: first.name }, bytes: out.buffer }
   }
 
+  const head = async (ref: string): Promise<{ mime: string; size: number }> => {
+    const s = await slice(ref, 0, 1, {})
+    return { mime: s.mime, size: s.size }
+  }
+
   const reader = (ref: string): DownloadSliceReader => async (offset, len) => {
     const s = await slice(ref, offset, len, {})
     return { base64: s.base64, len: s.len, size: s.size, eof: s.eof }
   }
 
-  return { put, get, reader }
+  return { put, head, get, reader }
 }

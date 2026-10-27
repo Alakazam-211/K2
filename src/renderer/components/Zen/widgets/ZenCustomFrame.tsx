@@ -36,6 +36,8 @@ import { createZenPermissionSheet, type ZenPermissionAsk } from '@/lib/zen/permi
 import { ZenPermissionSheet } from './ZenPermissionSheet'
 import { allowZenLinkSite, createZenLinks, fetchZenLinkSites, type ZenLinkAnswer, type ZenLinkAsk } from '@/lib/zen/zen-links'
 import { ZenLinkSheet } from './ZenLinkSheet'
+import { ZenDownloadSheet } from './ZenDownloadSheet'
+import { zenDownloadConsent, zenDownloadConsentKey, type ZenDownloadAnswer, type ZenDownloadAsk } from '@/lib/zen/zen-download-consent'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { gardenBlobGet, gardenBlobPut, gardenCall, type GardenBlobPlace } from '@/lib/garden-data/garden-data-api'
 import { createZenCustomBlobs } from '@/lib/zen/zen-custom-blobs'
@@ -163,6 +165,7 @@ export function ZenCustomFrame({
   const [permissionAsk, setPermissionAsk] = useState<{ ask: ZenPermissionAsk; resolve: () => void } | null>(null)
   // `k2.open` (0.46.4): K2's card the first time a site is opened from this Garden.
   const [linkAsk, setLinkAsk] = useState<{ ask: ZenLinkAsk; resolve: (answer: ZenLinkAnswer) => void } | null>(null)
+  const [downloadAsk, setDownloadAsk] = useState<{ ask: ZenDownloadAsk; resolve: (answer: ZenDownloadAnswer) => void } | null>(null)
   const loadedRef = useRef<Loaded | null>(null)
   loadedRef.current = loaded
   const boxRef = useRef<HTMLDivElement | null>(null)
@@ -322,7 +325,21 @@ export function ZenCustomFrame({
           // widget names), only after a press in this frame within 5 s.
           downloads: {
             pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
-            save: (name, read) => downloadChunks(name, read),
+            // Security review #1: K2's card the first time this widget
+            // saves a file in this Garden.
+            consent: ({ name, size }) =>
+              zenDownloadConsent(
+                zenDownloadConsentKey(gardenId, widgetRef.current.widget),
+                {
+                  name,
+                  size,
+                  widget: label,
+                  garden: useZenGardensStore.getState().gardens.find((g) => g.id === gardenId)?.name ?? 'this Garden',
+                },
+                (ask) => new Promise<ZenDownloadAnswer>((resolve) => setDownloadAsk({ ask, resolve })),
+              ),
+            // Review #4: a file a widget made is quarantined on macOS.
+            save: (name, read) => downloadChunks(name, read, { quarantine: true }),
           },
           // RS-A15: local Apps' guests' rooms; a write waits for the
           // person on ZenGuestRoomsSheet (K2's DOM over the card).
@@ -432,6 +449,15 @@ export function ZenCustomFrame({
           onDone={() => {
             permissionAsk.resolve()
             setPermissionAsk(null)
+          }}
+        />
+      )}
+      {downloadAsk && (
+        <ZenDownloadSheet
+          ask={downloadAsk.ask}
+          onDone={(answer) => {
+            downloadAsk.resolve(answer)
+            setDownloadAsk(null)
           }}
         />
       )}

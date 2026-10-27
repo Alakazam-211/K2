@@ -54,18 +54,11 @@ fn sanitize_id(id: &str) -> String {
     }
 }
 
-/// Reduce a filename to a safe basename (strip separators + NUL) so a
-/// hostile remote path can't escape Downloads. Mirrors the daemon's
-/// `sanitize_filename`.
+/// Reduce a filename to a safe basename (separators, control and format
+/// characters stripped) so a hostile remote path can't escape Downloads or
+/// disguise its type (`k2_client::download_file`).
 fn sanitize_filename(filename: &str) -> String {
-    let last = filename.rsplit(['/', '\\']).next().unwrap_or(filename);
-    let cleaned: String = last.chars().filter(|c| *c != '\0').collect();
-    let cleaned = cleaned.trim();
-    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
-        "download".to_string()
-    } else {
-        cleaned.to_string()
-    }
+    k2_client::download_file::sanitize_filename(filename)
 }
 
 /// Non-colliding `dir/filename`, appending ` (1)`, ` (2)`, … before the
@@ -116,6 +109,7 @@ pub async fn local_download_chunk(
     base64: String,
     is_last: bool,
     dest: Option<String>,
+    quarantine: Option<bool>,
 ) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::{Seek, SeekFrom, Write};
@@ -152,6 +146,14 @@ pub async fn local_download_chunk(
             let dir = dest_dir(dest.as_deref())?;
             let target = collision_free_path(&dir, &sanitize_filename(&filename));
             std::fs::rename(&part, &target).map_err(|e| format!("Cannot finalize: {e}"))?;
+            if quarantine == Some(true) {
+                // A file a Garden widget made: Gatekeeper asks before it
+                // opens (security review #4).
+                if let Err(e) = set_quarantine(&target) {
+                    let _ = std::fs::remove_file(&target);
+                    return Err(e);
+                }
+            }
             Ok(Some(target.to_string_lossy().to_string()))
         } else {
             Ok(None)
@@ -159,6 +161,11 @@ pub async fn local_download_chunk(
     })
     .await
     .map_err(|e| format!("download task failed: {e}"))?
+}
+
+/// Mark a downloaded file `com.apple.quarantine` (macOS; elsewhere none).
+fn set_quarantine(path: &Path) -> Result<(), String> {
+    k2_client::download_file::set_quarantine(path)
 }
 
 /// Remove an in-progress download's `.part` (cancel / hard failure). A
@@ -179,3 +186,4 @@ pub async fn local_download_abort(
     .await
     .map_err(|e| format!("abort task failed: {e}"))?
 }
+

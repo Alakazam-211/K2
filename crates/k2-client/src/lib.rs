@@ -40,6 +40,7 @@ pub mod airgap;
 pub mod app_settings_view;
 pub mod browser_notes;
 pub mod daemon_lifecycle;
+pub mod download_file;
 pub mod editors;
 pub mod events;
 pub mod login_path;

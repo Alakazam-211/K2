@@ -1056,12 +1056,18 @@ cli_post_json() {
         body="$(cat)"
     fi
     # Bodies carry passwords (k2 users add, k2 app user password): config too.
-    local _K2_CFG=""
+    local _K2_CFG="" out rc=0
     _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
     _k2_cfg_add data-raw "$body"
-    _k2_curl "$_K2_CFG" -s -X POST \
+    # 0.46.6 (NSI papercut 12): note the refusal's (or hold's) `permission`
+    # object, so a held `k2 publish run` ends with its Ask-with line.
+    out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 30 \
-        -H "Content-Type: application/json" 2>/dev/null
+        -H "Content-Type: application/json" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    _permission_note "$out"
+    printf '%s' "$out"
+    return "$rc"
 }
 
 # POST a JSON body read from STDIN (`--data-binary @-`). For bodies that
@@ -1210,12 +1216,17 @@ cli_post_json_uds() {
     local endpoint="$1"
     local body="${2:-}"
     if [ -z "$body" ]; then body="$(cat)"; fi
-    local _K2_CFG=""
+    local _K2_CFG="" out rc=0
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     _k2_cfg_add data-raw "$body"
-    _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+    # 0.46.6: the permission note, as cli_post_json.
+    out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
         --connect-timeout 5 --max-time 30 \
-        -H "Content-Type: application/json" 2>/dev/null
+        -H "Content-Type: application/json" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    _permission_note "$out"
+    printf '%s' "$out"
+    return "$rc"
 }
 
 # Verbs the scoped per-cell socket actually serves (the daemon allowlist).
@@ -28945,6 +28956,13 @@ if mode == "service" and verb == "run" and d.get("status") == "held":
         print("held for the owner: %s  %s" % (r.get("id") or d.get("requestId") or "?", r.get("summary") or ""))
         for why in d.get("reasons") or []:
             print("  why: %s" % why)
+        # 0.46.6 (NSI papercut 12): where the owner sees it, and the
+        # permission card K2 raised for it (as k2 app holds say).
+        if d.get("reused"):
+            print("  this is your earlier request %s (asked %s ago), still pending; nothing new was filed" % (r.get("id") or "?", d.get("askedAgo") or "a while"))
+        c = d.get("card") if isinstance(d.get("card"), dict) else {}
+        if c.get("where"):
+            print("  owner: %s" % c["where"])
         if d.get("hint"):
             print(d["hint"])
     sys.exit(2)

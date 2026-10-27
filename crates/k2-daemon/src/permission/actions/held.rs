@@ -170,6 +170,13 @@ pub(crate) static APPS_APPROVE: ActionSpec = ActionSpec {
             method: WallMethod::Any,
             params: &[("request", ParamFrom::Response("/request/id"))],
         },
+        // An agent's held `k2 publish run` (a `publish_run` request).
+        Wall {
+            matches: WallMatch::Held { status: 202, field: "status", value: "held" },
+            route_prefix: "/cli/publish/run",
+            method: WallMethod::Post,
+            params: &[("request", ParamFrom::Response("/request/id"))],
+        },
         // An agent trying to approve its own held request.
         Wall {
             matches: WallMatch::Code { status: 403, code: "owner_only" },

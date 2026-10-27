@@ -186,6 +186,17 @@ pub(crate) const ROWS: &[Row] = &[
             ANY,
         )
     },
+    // An agent's held `k2 publish run` (a `publish_run` App request, 0.46.6
+    // NSI papercut 12: it printed no Ask-with line).
+    Row {
+        params: &[("request", &[ParamFrom::Response("/request/id")])],
+        ..row(
+            ask("apps.approve", Floor::Owner),
+            WallMatch::Held { status: 202, field: "status", value: "held" },
+            "/cli/publish/run",
+            POST,
+        )
+    },
     Row {
         params: &[("request", &[ParamFrom::Body("/request"), ParamFrom::Body("/id"), ParamFrom::Query("id")])],
         ..row(ask("apps.approve", Floor::Owner), code(403, "owner_only"), "/cli/app/approve", POST)

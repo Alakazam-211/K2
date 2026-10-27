@@ -156,8 +156,11 @@ pub fn dispatch_post_as(path: &str, params: &HashMap<String, String>, who: crate
         }
     }
     let _clear = Clear;
-    CALLER.with(|c| *c.borrow_mut() = Some(who));
-    dispatch_post(path, params)
+    CALLER.with(|c| *c.borrow_mut() = Some(who.clone()));
+    // 0.46.6 (NSI papercut 12): a held `k2 publish run` (a `publish_run`
+    // request) says where the owner sees it and raises the agent's
+    // `apps.approve` card, as every `/cli/app/*` hold does.
+    crate::apps::approvals::enrich_held(&who, dispatch_post(path, params))
 }
 
 fn caller_agent_ws() -> Option<String> {

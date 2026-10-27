@@ -907,8 +907,25 @@ _cli_curl() {
 }
 
 # k2-ptyd S5 (P47): the daemon's pre-ready 503 (`"state":"migrating"`):
-# no handler ran, so the request may be sent again.
-_cli_migrating() { [[ "$1" == *'"state":"migrating"'* ]]; }
+# no handler ran, so the request may be sent again. Security review F4: the
+# HTTP status decides, never the body alone — a 200 whose body happens to
+# contain that text is final. The request functions append the status
+# (`-w "$_K2_WSTATUS"`) and `_cli_split_status` strips it off again, so the
+# bytes callers see are unchanged.
+_K2_WSTATUS=$'\n__k2http:%{http_code}'
+# Strip the appended status from the caller's `out` into `_K2_HTTP` (the
+# last one: a refused try that `_k2_curl` retried wrote its own `000`, so
+# every marker goes).
+_cli_split_status() {
+    _K2_HTTP=""
+    case "$out" in
+        *$'\n__k2http:'*)
+            _K2_HTTP="${out##*$'\n__k2http:'}"
+            out="${out//$'\n__k2http:'[0-9][0-9][0-9]/}"
+            ;;
+    esac
+}
+_cli_migrating() { [ "${_K2_HTTP:-}" = 503 ] && [[ "$1" == *'"state":"migrating"'* ]]; }
 
 cli_request() {
     local endpoint="$1"
@@ -923,9 +940,10 @@ cli_request() {
     # permission-cards closing line can be noted; the bytes are unchanged.
     while :; do
         rc=0
-        out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G "${BASE_URL}${endpoint}" \
+        out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G "${BASE_URL}${endpoint}" -w "$_K2_WSTATUS" \
             --connect-timeout 5 --max-time 30 || r=$?; printf x; exit "$r")" || rc=$?
         out="${out%x}"
+        _cli_split_status
         if [ "$rc" -eq 0 ] && _cli_migrating "$out" && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
             try=$((try + 1)); sleep 1; continue
         fi
@@ -956,9 +974,10 @@ cli_request_post() {
     _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
     while :; do
         rc=0
-        out="$(_cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST \
+        out="$(_cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST -w "$_K2_WSTATUS" \
             --connect-timeout 5 --max-time 30 \
             --data-raw "")" || rc=$?
+        _cli_split_status
         if [ "$rc" -eq 0 ] && _cli_migrating "$out" && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
             try=$((try + 1)); sleep 1; continue
         fi
@@ -982,10 +1001,11 @@ cli_request_post_uds() {
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     while :; do
         rc=0
-        out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
+        out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST -w "$_K2_WSTATUS" --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
             --connect-timeout 5 --max-time 30 \
             --data-raw "" || r=$?; printf x; exit "$r")" || rc=$?
         out="${out%x}"
+        _cli_split_status
         if [ "$rc" -eq 0 ] && _cli_migrating "$out" && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
             try=$((try + 1)); sleep 1; continue
         fi
@@ -1131,9 +1151,10 @@ cli_request_uds() {
     fi
     while :; do
         rc=0
-        out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+        out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G -w "$_K2_WSTATUS" --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
             --connect-timeout 5 --max-time 30 || r=$?; printf x; exit "$r")" || rc=$?
         out="${out%x}"
+        _cli_split_status
         if [ "$rc" -eq 0 ] && _cli_migrating "$out" && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
             try=$((try + 1)); sleep 1; continue
         fi

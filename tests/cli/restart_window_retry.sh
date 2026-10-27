@@ -179,6 +179,22 @@ k2_on "$P1" heartbeat list --json >/dev/null 2>&1 || true
 n="$(arrivals /cli/heartbeat/list)"
 if [ "$n" = 4 ]; then ok "at most 4 tries on a daemon that stays migrating"; else bad "expected 4 tries, got $n"; fi
 
+# ── 6b. security review F4: only a 503 is the daemon's pre-ready answer ─
+echo "== a 200 whose body contains \"state\":\"migrating\" =="
+plan '{"/cli/heartbeat/list": [[200, "{\"ok\":true,\"heartbeats\":[{\"state\":\"migrating\"}]}"]], "/cli/review/approve": [[200, "{\"ok\":true,\"echo\":{\"state\":\"migrating\"}}"]]}'
+rc=0; out="$(k2_on "$P1" heartbeat list --json 2>&1)" || rc=$?
+n="$(arrivals /cli/heartbeat/list)"
+if [ "$n" = 1 ]; then ok "a GET answered 200 is never resent, whatever its body"; else bad "a GET answered 200 was sent $n times"; fi
+k2_on "$P1" review approve agentx branchx >/dev/null 2>&1 || true
+n="$(arrivals /cli/review/approve)"
+if [ "$n" = 1 ]; then ok "a POST answered 200 is never resent, whatever its body"; else bad "a POST answered 200 was sent $n times"; fi
+# The status rides after the body only inside the CLI: it never shows.
+plan '{}'
+rc=0; out="$(k2_on "$DEAD" heartbeat list --json 2>&1)" || rc=$?
+echo "$P1" >"$HOME/.k2/daemon.port"
+rc=0; out="$(k2_on "$DEAD" heartbeat list --json 2>&1)" || rc=$?
+if [[ "$out" != *__k2http* ]]; then ok "no status marker in the output (refused tries included)"; else bad "a status marker leaked: $out"; fi
+
 # ── 7. a long-poll cut by a restart is retried once (P48) ─────────────
 echo "== mail wait: the connection drops once =="
 plan '{"/cli/mail/wait": [["drop", ""]]}'

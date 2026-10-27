@@ -591,7 +591,19 @@ fn stamp_of(p: &Path) -> Stamp {
             Err(_) => (key, 0, 0, 0, 0, 0),
         }
     }
-    #[cfg(not(unix))]
+    // Windows: the file index, size, attributes and change time (which,
+    // like ctime, a process can't put back; the last-write time it can).
+    #[cfg(windows)]
+    {
+        match crate::win_fs::change_stamp(p) {
+            Some(s) => {
+                let (secs, nanos) = s.change_unix();
+                (key, s.file_index, s.size, s.attrs, secs, nanos)
+            }
+            None => (key, 0, 0, 0, 0, 0),
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         match std::fs::symlink_metadata(p) {
             Ok(m) => {

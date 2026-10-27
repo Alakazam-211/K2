@@ -174,6 +174,8 @@ pub use k2_client::paths;
 pub mod permission;
 pub mod private_fs;
 #[cfg(windows)]
+pub mod win_fs;
+#[cfg(windows)]
 pub mod win_proc;
 pub mod private_home;
 pub mod session_archive;

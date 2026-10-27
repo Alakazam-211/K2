@@ -422,7 +422,9 @@ pub fn unregister(session_id: &str) {
 // old, so a turn that was running is still `working` after the restart.
 // Older files, and every crash (nothing was written), start unconfirmed.
 // The file holds the row only (states, counts, times, tool names): no env
-// values, tokens or screen text (P72).
+// values, tokens or screen text (P72). 0.46.5: no child labels either (the
+// activity SDK's `Child.label` can be a redacted shell line); the file
+// drops them and a restore sanitises and caps any label it finds.
 
 /// P37: a carried row seeds the adopted row only when it is this fresh.
 pub const CARRIED_ROW_MAX_AGE_MS: i64 = 10 * 60 * 1000;
@@ -445,6 +447,21 @@ struct CarriedRow {
     row: Row,
 }
 
+/// The on-disk form of a carried row: the row with every child's `label`
+/// key removed (the live wire keeps labels; a file under `~/.k2/run` never
+/// holds one, P72).
+fn carried_body(row: Row, saved_at: i64) -> serde_json::Result<Vec<u8>> {
+    let mut v = serde_json::to_value(CarriedRow { v: 1, saved_at, row })?;
+    if let Some(children) = v.pointer_mut("/row/children").and_then(serde_json::Value::as_object_mut) {
+        for child in children.values_mut() {
+            if let Some(o) = child.as_object_mut() {
+                o.remove("label");
+            }
+        }
+    }
+    serde_json::to_vec(&v)
+}
+
 /// P37: write this session's row for the next daemon. `Ok(false)` when
 /// the session has no row.
 pub fn save_for_restart(session_id: &str) -> std::io::Result<bool> {
@@ -454,7 +471,7 @@ pub fn save_for_restart(session_id: &str) -> std::io::Result<bool> {
     let Some(row) = store().lock().rows.get(session_id).map(|e| e.row.clone()) else {
         return Ok(false);
     };
-    let body = serde_json::to_vec(&CarriedRow { v: 1, saved_at: now_ms(), row }).map_err(std::io::Error::other)?;
+    let body = carried_body(row, now_ms()).map_err(std::io::Error::other)?;
     // Security review F8: a private dir checked without following a
     // symlink, an unpredictable temp name, create_new + O_NOFOLLOW, rename.
     #[cfg(unix)]
@@ -470,9 +487,17 @@ pub fn save_for_restart(session_id: &str) -> std::io::Result<bool> {
 /// Pure part of [`restore_after_adoption`]: the carried row when `raw`
 /// parses and is fresh at `now`.
 fn carried_row_if_fresh(raw: &[u8], now: i64) -> Option<Row> {
-    let c: CarriedRow = serde_json::from_slice(raw).ok()?;
+    let mut c: CarriedRow = serde_json::from_slice(raw).ok()?;
     let age = now - c.saved_at;
-    (c.v == 1 && (0..=CARRIED_ROW_MAX_AGE_MS).contains(&age)).then_some(c.row)
+    if c.v != 1 || !(0..=CARRIED_ROW_MAX_AGE_MS).contains(&age) {
+        return None;
+    }
+    // [`carried_body`] never writes a label; one in the file is sanitised
+    // and capped as a live label is (control characters, secrets, 48 chars).
+    for child in c.row.children.values_mut() {
+        child.label = child.label.as_deref().and_then(k2_core::agent_hooks::tool_line::short_label);
+    }
+    Some(c.row)
 }
 
 /// P37: B1 registered the adopted session; seed its row from the file the
@@ -986,6 +1011,52 @@ mod tests {
             }
         };
         assert!(ev.holds_awake, "a carried working row holds Keep awake again");
+        unregister(sid);
+    }
+
+    /// 0.46.5 merge review L1: the carried file never holds a child label
+    /// (a background shell's label is a redacted command line); the live
+    /// row keeps it, and a label found in a file comes back sanitised and
+    /// capped.
+    #[test]
+    fn a_carried_row_file_holds_no_child_labels() {
+        use k2_core::activity::row::{Child, ChildKind, ChildOrigin, ChildState};
+        let _g = LOCK.lock();
+        k2_core::test_isolation::assert_no_prod_env();
+        let _db = k2_core::db::init_for_tests();
+        let sid = "55555555-5555-4555-8555-555555555555";
+        register(SessionFacts { session_id: sid.into(), agent_name: "tab-l1".into(), cwd: None, program: Some("claude".into()) });
+        let mut row = with_row(sid, |r| r.clone()).expect("row");
+        let child = |label: &str| Child {
+            kind: ChildKind::Shell,
+            state: ChildState::Running,
+            origin: ChildOrigin::Launch,
+            since: 1,
+            owed_at: None,
+            background: true,
+            sender: None,
+            label: Some(label.to_string()),
+        };
+        row.children.insert("bg-1".into(), child("cargo test -p k2-core"));
+        let saved_at = now_ms();
+        let body = carried_body(row.clone(), saved_at).expect("serialize");
+        let v: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        let c = &v["row"]["children"]["bg-1"];
+        assert!(c.is_object(), "the child itself is carried: {v}");
+        assert!(c.get("label").is_none(), "no label key on disk: {c}");
+        assert!(!String::from_utf8_lossy(&body).contains("cargo test"), "no label text anywhere in the file");
+        let back = carried_row_if_fresh(&body, saved_at + 1).expect("fresh");
+        assert_eq!(back.children["bg-1"].label, None, "nothing to restore");
+        assert_eq!(row.children["bg-1"].label.as_deref(), Some("cargo test -p k2-core"), "the live row keeps its label");
+
+        // A file written by anything else: its label is sanitised and capped.
+        let long = format!("x\u{1b}[31m{}", "y".repeat(200));
+        row.children.insert("bg-1".into(), child(&long));
+        let raw = serde_json::to_vec(&CarriedRow { v: 1, saved_at, row }).expect("serialize with a label");
+        let back = carried_row_if_fresh(&raw, saved_at + 1).expect("fresh");
+        let label = back.children["bg-1"].label.clone().expect("a sanitised label");
+        assert!(label.chars().count() <= k2_core::agent_hooks::tool_line::MAX_LABEL_CHARS, "{label}");
+        assert!(!label.contains('\u{1b}'), "control characters stripped: {label:?}");
         unregister(sid);
     }
 

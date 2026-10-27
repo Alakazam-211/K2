@@ -6,35 +6,20 @@ import type { JSX } from 'react'
 import setiWoffUrl from '@/assets/seti/seti.woff?url'
 import { useStyleStore } from '@/stores/style'
 import { resolveSetiIcon, type SetiScheme } from './resolve'
+import { createSetiFontLoader, type SetiFontEnv, type SetiFontLoader } from './seti-font'
 
-let fontReady: Promise<void> | null = null
+let loader: SetiFontLoader | null = null
 
+/** Inject the Seti @font-face once; retries with a fresh rule if a load fails. */
 function ensureSetiFont(): void {
   if (typeof document === 'undefined') return
-  if (fontReady) return
-  const id = 'k2-seti-font-face'
-  if (!document.getElementById(id)) {
-    const style = document.createElement('style')
-    style.id = id
-    style.textContent = `
-@font-face {
-  font-family: 'k2-seti';
-  src: url('${setiWoffUrl}') format('woff');
-  font-weight: normal;
-  font-style: normal;
-  font-display: block;
-}
-`.trim()
-    document.head.appendChild(style)
+  if (!loader) {
+    loader = createSetiFontLoader(setiWoffUrl, {
+      document: document as SetiFontEnv['document'],
+      setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+    })
   }
-  if ('fonts' in document) {
-    fontReady = document.fonts.load("16px 'k2-seti'").then(
-      () => undefined,
-      () => undefined,
-    )
-  } else {
-    fontReady = Promise.resolve()
-  }
+  loader.ensure()
 }
 
 export interface SetiFileIconProps {

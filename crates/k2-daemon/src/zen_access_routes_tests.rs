@@ -880,7 +880,7 @@ fn a_manifest_only_change_is_a_new_unsigned_version_on_every_door() {
     let after = placed_b1(&e);
     assert_ne!(after["hash"], before["hash"], "the frame's key changes, so the frame reloads: {after}");
     assert_eq!(after["signed"], false, "a manifest edit on disk isn't signed: {after}");
-    assert_eq!(after["caps"], json!(["store:read", "store:write", "presence:read"]), "Always only: {after}");
+    assert_eq!(after["caps"], json!(["presence:read", "store:read", "store:write"]), "Always only: {after}");
     // The frame still on the old version: stale.
     let body = json!({ "garden": e.g1, "placement": "b1", "hash": old_hash, "verb": "viewer.get", "args": [] });
     let r = crate::zen_data_routes::handle(

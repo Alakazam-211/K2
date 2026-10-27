@@ -35,6 +35,13 @@ pub enum SessionError {
     BadPosition(String),
     #[error("bad edit: {0}")]
     BadEdit(String),
+    /// [`super::Session::set_approval`] / [`super::Session::approval`]: change `seq` was not
+    /// made on anyone's behalf (or doesn't exist).
+    #[error("change {seq} has no approval (it wasn't made on anyone's behalf)")]
+    NoApproval { seq: Seq },
+    /// An approval can only go from pending to approved or declined, once.
+    #[error("bad approval: {0}")]
+    BadApproval(String),
     #[error(transparent)]
     Doc(#[from] DocError),
     #[error(transparent)]

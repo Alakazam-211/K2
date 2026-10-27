@@ -5,26 +5,70 @@ use crate::doc::ClientId;
 use crate::store::DocKey;
 
 /// What a participant may do with one doc, as the host decides it.
+///
+/// `#[non_exhaustive]`: build it with the constructors ([`Rights::none`],
+/// [`Rights::read_only`], [`Rights::editor`], [`Rights::full`]) and adjust with
+/// [`Rights::with_history`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct Rights {
+    /// Read the doc, be present in it, subscribe. Every call needs it.
     pub read: bool,
+    /// Change the doc (and place a caret). Meaningless without `read`.
     pub edit: bool,
+    /// Read its history: versions, log, diff, show, blame (C7a), and the approval state of
+    /// other people's on-behalf changes. **Never implied** by read or edit: grant it
+    /// explicitly. Meaningless without `read`.
+    pub history: bool,
 }
 
 impl Rights {
-    pub const NONE: Rights = Rights {
-        read: false,
-        edit: false,
-    };
-    pub const READ: Rights = Rights {
-        read: true,
-        edit: false,
-    };
-    /// Read and edit (editing without reading is not a thing).
-    pub const EDIT: Rights = Rights {
-        read: true,
-        edit: true,
-    };
+    /// No access.
+    pub const fn none() -> Self {
+        Self {
+            read: false,
+            edit: false,
+            history: false,
+        }
+    }
+
+    /// Read only. History is not included; add it with [`Rights::with_history`].
+    pub const fn read_only() -> Self {
+        Self {
+            read: true,
+            ..Self::none()
+        }
+    }
+
+    /// Read and edit (editing without reading is not a thing). No history.
+    pub const fn editor() -> Self {
+        Self {
+            read: true,
+            edit: true,
+            history: false,
+        }
+    }
+
+    /// Read, edit and history.
+    pub const fn full() -> Self {
+        Self {
+            read: true,
+            edit: true,
+            history: true,
+        }
+    }
+
+    /// The same rights with `history` set or cleared.
+    pub const fn with_history(self, history: bool) -> Self {
+        Self { history, ..self }
+    }
+
+    /// Same as [`Rights::none`] (kept from before amendment 1).
+    pub const NONE: Rights = Rights::none();
+    /// Same as [`Rights::read_only`] (kept from before amendment 1).
+    pub const READ: Rights = Rights::read_only();
+    /// Same as [`Rights::editor`] (kept from before amendment 1).
+    pub const EDIT: Rights = Rights::editor();
 }
 
 /// The host application, as the kit sees it. Identity, permission and time belong to the
@@ -47,13 +91,20 @@ pub trait Host: Send + Sync {
 
 /// The right a refused call needed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Need {
     Read,
     Edit,
+    /// [`Rights::history`]: reading history, or someone else's approval state.
+    History,
+    /// Not a right the host grants: only the person a change was made on behalf of
+    /// ([`super::Participant::on_behalf_of`]) may approve or decline it.
+    Approver,
 }
 
 /// The call that was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Action {
     Join,
     Touch,
@@ -66,6 +117,10 @@ pub enum Action {
     WriteBase,
     Undo,
     Redo,
+    /// [`crate::session::Session::set_approval`].
+    Approve,
+    /// [`crate::session::Session::approval`] / [`crate::session::Session::approvals`].
+    ReadApproval,
 }
 
 /// Why a participant left.
@@ -111,4 +166,11 @@ pub enum AuditEvent {
     /// A store write failed mid-edit. The session reloaded from the store; carets, viewing
     /// ranges and undo history were reset.
     Recovered { key: DocKey, error: String },
+    /// The person `pid` settled the approval of on-behalf change `seq`.
+    Approval {
+        key: DocKey,
+        seq: crate::store::Seq,
+        pid: String,
+        state: crate::store::ApprovalState,
+    },
 }

@@ -66,15 +66,41 @@ fine). `recheck_rights()` per session is the host's periodic rights re-check (PR
 
 ## Identity, connections and attribution
 
-- `Participant { pid, name, colour, kind, via, home }` is **stamped by the host** from its own
-  authentication. `pid` is the host's stable id. It must not be empty or start with `kit:`.
+- `Participant { pid, name, colour, kind, via, home, on_behalf_of }` is **stamped by the host**
+  from its own authentication: `Participant::new(pid, name, colour, kind, via)`, then
+  `.home(..)` / `.on_behalf_of(..)`. `pid` is the host's stable id. It must not be empty or
+  start with `kit:` (the kit's own: `kit:import`, `kit:external`).
 - **One pid, many connections.** A person may have two tabs, or run a CLI call while a
   `watch` runs. Each connection gets its own fresh, random 53-bit client ID. It is never 0
   or 1, and never one this doc has used before (the store's client table is checked).
   - The client ID is recorded durably as the pid's (`store.set_client`).
   - Two tabs never share a client ID, which a Yjs doc requires.
-- Every change is logged with `author = pid`, the connection's client ID, `at_ms` and `via`.
-  Blame reads the client ID→pid mapping, so all of a pid's connections attribute to that pid.
+- Every change is logged with `author = pid`, the connection's client ID, `at_ms`, `via` and
+  `on_behalf_of`. Blame reads the client ID→pid mapping, so all of a pid's connections
+  attribute to that pid.
+
+### On-behalf edits and approvals (K-ID-10, K-ID-11)
+
+- The host sets `on_behalf_of: Some(person_pid)` **only** for an assistant agent acting for
+  that person. It must not be empty, reserved, or the agent's own pid (`BadParticipant`).
+- The change is **the agent's own**: its pid, client ID, undo stack, rate limit, and its own
+  rights (the host is asked about the agent; acting for someone never widens them, K-PERM-10).
+- Edits are **never held**: they apply at once like any edit. The log entry carries
+  `on_behalf_of`, and the store records `Approval { state: Pending, .. }` keyed `(doc, seq)`
+  **in the same transaction** as the entry. `ChangeEvent` carries `on_behalf_of`, and the
+  roster's `participant.on_behalf_of` shows "agent for person" (K-PRES-13).
+- `join_shared` reuses a connection only for the same `(pid, via, on_behalf_of)`.
+- `set_approval(conn, seq, Approved | Declined)`: only the connection's pid **equal to that
+  change's `on_behalf_of`** may do it; anyone else (the agent included) gets
+  `Forbidden { need: Approver }` and an `AuditEvent::Refused`. Pending → approved or declined,
+  **once**: repeating the same state returns the record, the other state or `Pending` is
+  `BadApproval`, and a change without an approval is `NoApproval { seq }`. It emits
+  `AuditEvent::Approval { key, seq, pid, state }` (metadata only). A declined change stays
+  applied: an explicit edit, a restore or the agent's undo reverses it.
+- `approval(conn, seq) -> Option<Approval>` and `approvals(conn)` (for `log --pending`) need
+  read; the author and the person see their own records, everything else needs `history`.
+- `Approval { state, by, at_ms, author, on_behalf_of }` survives compaction (the log entry may
+  not).
 
 **What is per pid and what is per connection:**
 
@@ -84,9 +110,15 @@ fine). `recheck_rights()` per session is the host's periodic rights re-check (PR
 
 ## Rights
 
+`Rights { read, edit, history }` (`#[non_exhaustive]`): `Rights::none()`, `read_only()`,
+`editor()` (read + edit), `full()` (read + edit + history), and `.with_history(bool)`.
+**History is never implied** by read or edit; the host grants it explicitly (K-PERM-9: owner
+and editors by default, not App guests or read-only shares). It gates history reads (versions,
+log, diff, show, blame: C7a) and other people's approval records today.
+
 - The host is asked on **every** call, for the connection's pid: read for every call, and
   edit on every edit call (`edit`, `edit_with`, `replace_text`, `write_base`, `undo`, `redo`,
-  `set_cursor`).
+  `set_cursor`), and history on history reads.
 - A refusal returns `Forbidden { need }` and emits `AuditEvent::Refused { pid, action, need }`.
 - A pid found without read is removed on the spot, with **all** its connections
   (`Left { reason: RightsLost }` for each), and their subscriptions close.
@@ -208,7 +240,7 @@ Carets and views (per connection):
 ## Events
 
 `subscribe(conn)` needs read. It returns a `Receiver<ChangeEvent { version, pid, client, via,
-root, hunks, at_ms }>` with one event per root per change. The hunks are in the coordinates of
+root, hunks, at_ms, on_behalf_of }>` with one event per root per change. The hunks are in the coordinates of
 the text before the change.
 - Each receiver queues `subscriber_queue` (1024) events. A receiver that falls that far behind
   is **cut off**: it drains what was queued, then sees the channel disconnected, and should
@@ -248,7 +280,7 @@ Audit events `Joined` and `Left` carry both `pid` and `conn`.
 
 | Error | Meaning | Suggested exit |
 |---|---|---|
-| `Forbidden { need }` | No right. For read, the pid is also removed. | 3 |
+| `Forbidden { need }` | No right (`Read`, `Edit`, `History`, or `Approver`: not the person the change was for). For read, the pid is also removed. | 3 |
 | `NotJoined { conn }` | The connection isn't in this doc: join again | 2 (or rejoin silently) |
 | `Stale { expected, actual }` | `edit(.., if_version)` but the doc moved; nothing applied | 1 (re-read and retry) |
 | `RateLimited { retry_after_ms }` | over the edit rate | 2 |
@@ -256,6 +288,7 @@ Audit events `Joined` and `Left` carry both `pid` and `conn`.
 | `NotFound` | no doc and no bytes | 4 |
 | `PackMismatch` | stored doc belongs to another pack | 4 |
 | `BadParticipant` / `BadPosition` / `BadEdit` / `Doc(_)` | bad input; nothing changed | 2 |
+| `NoApproval { seq }` / `BadApproval` | no approval to settle / already settled the other way | 2 |
 | `Store(_)` | store failure; nothing acked | 1 |
 | `Pack(_)` | pack bug or damaged codec settings | 1 |
 | `Unloaded` / `Released` / `Broken` | stale handle: open again | retry |
@@ -302,3 +335,38 @@ exit 1, and nothing is applied.
   `undo --partial`.
 - **C7a, history:** automatic and named versions, restore, history and diff, blame, stored
   versions as `write --base` bases beyond the import, and possibly `undo --partial`.
+
+## Store: the host's table
+
+`DocStore` has a small key-value table for the host's own records next to the docs (same
+transactions, hand-off and backups): `host_put(ns, key, value)`, `host_get`, `host_delete`,
+`host_scan(ns, prefix) -> Vec<(key, value)>` (key order, one consistent read), and
+`host_batch(&[HostOp])` for several writes in one transaction. Each call is one durable
+transaction. Namespaces and keys are opaque strings: **the kit never reads, interprets or
+erases these rows**, so erasing them (a person's data, a deleted workspace) is the host's job.
+
+## Changelog
+
+### Amendment 1 (after `e307e43`)
+
+Breaking changes, and only these:
+
+1. **`Rights`** gains `history` and is `#[non_exhaustive]`: build it with `Rights::none()`,
+   `read_only()`, `editor()`, `full()`, `.with_history(bool)` instead of a struct literal.
+   `Rights::NONE` / `READ` / `EDIT` remain as aliases of the first three (no history).
+2. **`Participant`** gains `on_behalf_of: Option<String>` and is `#[non_exhaustive]`: build it
+   with `Participant::new(pid, name, colour, kind, via)` and `.home(..)` / `.on_behalf_of(..)`.
+3. **`LogEntry`** gains `on_behalf_of: Option<String>`. Log records are now version 2;
+   version-1 records still decode (as `None`). The store format is 2: a format-1 store is
+   stamped 2 on open with nothing rewritten, and a build that reads only format 1 refuses a
+   format-2 store (`StoreError::Newer`).
+4. **`Need`** gains `History` and `Approver`, and **`Action`** gains `Approve` and
+   `ReadApproval`; both enums are now `#[non_exhaustive]` (add a `_` arm), so later variants
+   don't break hosts again.
+
+Additive: `ChangeEvent::on_behalf_of`; `Session::set_approval`, `approval`, `approvals`;
+`Approval`, `ApprovalState` (in `store`, re-exported from `session`);
+`AuditEvent::Approval`; `SessionError::NoApproval`, `BadApproval`;
+`StoreError::NoApproval`; `DocStore::approval`, `approvals`, `set_approval`; the host table
+(`host_put`, `host_get`, `host_delete`, `host_scan`, `host_batch`, `HostOp`);
+`EXTERNAL_PID` (`kit:external`, used by disk sync).

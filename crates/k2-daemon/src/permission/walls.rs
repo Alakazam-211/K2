@@ -128,7 +128,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 47] = [
+pub(crate) const V1_ACTIONS: [&str; 48] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -202,6 +202,9 @@ pub(crate) const V1_ACTIONS: [&str; 47] = [
     // chat key, and switch who governs one of that App's Spaces.
     "apps.chat-key",
     "sew.space-governance",
+    // Markdown multiplayer v1 (MI25): share a file or folder with another
+    // workspace as live docs.
+    "docs.share",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -555,6 +558,16 @@ pub(crate) const ROWS: &[Row] = &[
             ],
         )],
         ..row(ask("connections.add", Floor::Admin), code(403, "not_connected"), "/cli/", ANY)
+    },
+    // ── live docs (MI25) ───────────────────────────────────────────────
+    // Connected but not shared: the refusal names the workspace and the
+    // workspace-relative path it checked.
+    Row {
+        params: &[
+            ("from", &[ParamFrom::Response("/error/workspace")]),
+            ("path", &[ParamFrom::Response("/error/path")]),
+        ],
+        ..row(ask("docs.share", Floor::Admin), code(403, "doc_not_shared"), "/cli/docs/", ANY)
     },
     // ── mail ───────────────────────────────────────────────────────────
     // The mail-manage surfaces' refusal names the workspace it checked; the
@@ -1025,6 +1038,7 @@ mod tests {
             // it may not set (a box login).
             (403, "POST", "/cli/skin/users/reset-link", vec![], Some(json!({"username":"adam","app":"agents.nsi","code":true})), json!({"ok":false,"error":{"code":"owner_only","hint":"x"}}), "apps.user-password-reset"),
             (403, "POST", "/cli/skin/users/password", vec![], Some(json!({"username":"adam","password":"hunter2-not-real"})), json!({"ok":false,"error":{"code":"owner_only","hint":"'adam' has a box login"}}), "apps.user-password-reset"),
+            (403, "GET", "/cli/docs/read", vec![("workspace", "alpha"), ("path", "/abs/alpha/notes/plan.md")], None, json!({"ok":false,"error":{"code":"doc_not_shared","hint":"x","workspace":"alpha","path":"notes/plan.md"}}), "docs.share"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {
@@ -1042,6 +1056,22 @@ mod tests {
             }
             assert!(asked.contains(&a), "{a}: no captured wall teaches it");
         }
+    }
+
+    #[test]
+    fn doc_not_shared_asks_for_the_resolved_workspace_and_path() {
+        let p = teach_of(
+            403,
+            "GET",
+            "/cli/docs/read",
+            &[("workspace", "/abs/alpha"), ("path", "/abs/alpha/notes/plan.md")],
+            None,
+            json!({"ok":false,"error":{"code":"doc_not_shared","hint":"x","workspace":"alpha","path":"notes/plan.md"}}),
+        )
+        .expect("a permission object");
+        assert_eq!(action_of(&p), "docs.share");
+        let cmd = p["command"].as_str().expect("command");
+        assert!(cmd.contains("from=alpha") && cmd.contains("path=notes/plan.md"), "{cmd}");
     }
 
     #[test]
@@ -1458,7 +1488,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 47);
+        assert_eq!(V1_ACTIONS.len(), 48);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

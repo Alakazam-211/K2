@@ -22,6 +22,7 @@
 //! | `workbench.rs` | 0.46.7 | `git.land`, `sidecar.retire` (a person lands / retires an agent's worktree sidecar) |
 //! | `publish.rs` | 0.46.7 | `publish.public`, `publish.pin` (who may open a published site) |
 //! | `chat_cards.rs` | 0.46.7 | `apps.chat-key` (turn on or widen its App's chat key), `sew.space-governance` (switch who governs its App's Space) |
+//! | `docs.rs` | Markdown multiplayer v1 | `docs.share` (MI25) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -35,6 +36,7 @@ pub(crate) mod app_login;
 pub(crate) mod chat_cards;
 pub(crate) mod compute;
 pub(crate) mod connections;
+pub(crate) mod docs;
 pub(crate) mod gardens;
 pub(crate) mod harness;
 pub(crate) mod heartbeats;
@@ -129,6 +131,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(app_login::actions());
     out.extend(publish::actions());
     out.extend(chat_cards::actions());
+    out.extend(docs::actions());
     out
 }
 
@@ -149,6 +152,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(app_login::not_cardable());
     out.extend(publish::not_cardable());
     out.extend(chat_cards::not_cardable());
+    out.extend(docs::not_cardable());
     out
 }
 

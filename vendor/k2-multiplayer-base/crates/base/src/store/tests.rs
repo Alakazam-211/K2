@@ -56,6 +56,7 @@ fn entry(author: &str, client: u64, update: Vec<u8>) -> LogEntry {
         at_ms: 5,
         via: "cli".into(),
         update,
+        on_behalf_of: None,
     }
 }
 
@@ -361,4 +362,196 @@ fn create_imported_is_one_unit() {
     assert_eq!(seq2, None);
     assert_eq!(s.version(id2, vid2).unwrap().seq, 0);
     assert!(s.load(id2).unwrap().updates.is_empty());
+}
+
+fn enc_entry_v1(e: &LogEntry) -> Vec<u8> {
+    let mut w = W::default();
+    w.u8(1)
+        .str(&e.author)
+        .u64(e.client)
+        .u64(e.at_ms)
+        .str(&e.via)
+        .bytes(&e.update);
+    w.0
+}
+
+#[test]
+fn log_records_v2_and_v1_both_decode() {
+    let mut e = entry("agent-a", 9, vec![1, 2, 3]);
+    // v1 (stored before amendment 1): decodes with no on_behalf_of
+    let v1 = enc_entry_v1(&e);
+    assert_eq!(v1[0], 1);
+    assert_eq!(dec_entry(&v1).unwrap(), e);
+    // v2 round trips, with and without on_behalf_of
+    let v2 = enc_entry(&e);
+    assert_eq!(v2[0], 2, "new records are version 2");
+    assert_eq!(dec_entry(&v2).unwrap(), e);
+    e.on_behalf_of = Some("rosson".into());
+    assert_eq!(dec_entry(&enc_entry(&e)).unwrap(), e);
+    // damaged records are loud
+    let mut bad = enc_entry(&e);
+    bad[0] = 3;
+    assert_eq!(
+        dec_entry(&bad),
+        Err(StoreError::Corrupt("log entry version"))
+    );
+    let mut trailing = v1.clone();
+    trailing.push(0);
+    assert!(
+        dec_entry(&trailing).is_err(),
+        "a v1 record with extra bytes"
+    );
+    assert!(dec_entry(&enc_entry(&e)[..v2.len() - 1]).is_err());
+}
+
+#[test]
+fn v1_log_records_load_from_a_store() {
+    let d = TmpDir::new("v1-records");
+    let s = DocStore::open(d.db()).unwrap();
+    let id = s.create(&meta("a.md")).unwrap();
+    let mut doc = Doc::new(S).unwrap();
+    let u = doc.replace_text_as(5, "source", "old\n").unwrap().unwrap();
+    // write a v1 record directly, as a format-1 store holds it
+    let w = s.db.begin_write().unwrap();
+    w.open_table(UPDATES)
+        .unwrap()
+        .insert((id, 1), enc_entry_v1(&entry("a", 5, u)).as_slice())
+        .unwrap();
+    w.commit().unwrap();
+    let l = s.load(id).unwrap();
+    assert_eq!(l.updates[0].1.on_behalf_of, None);
+    assert_eq!(
+        Doc::from_store(S, &l).unwrap().text("source").unwrap(),
+        "old\n"
+    );
+    // and v2 records append after it
+    assert_eq!(s.append(id, &[entry("b", 6, vec![0])]).unwrap(), vec![2]);
+}
+
+#[test]
+fn format_1_stores_are_stamped_2_and_newer_refused() {
+    let d = TmpDir::new("format");
+    {
+        let s = DocStore::open(d.db()).unwrap();
+        let w = s.db.begin_write().unwrap();
+        w.open_table(META)
+            .unwrap()
+            .insert("store_format", 1u64)
+            .unwrap();
+        w.commit().unwrap();
+    }
+    {
+        let s = DocStore::open(d.db()).unwrap();
+        let r = s.db.begin_read().unwrap();
+        let f = r
+            .open_table(META)
+            .unwrap()
+            .get("store_format")
+            .unwrap()
+            .unwrap()
+            .value();
+        assert_eq!(f, STORE_FORMAT);
+        assert_eq!(STORE_FORMAT, 2);
+        drop(r);
+        let w = s.db.begin_write().unwrap();
+        w.open_table(META)
+            .unwrap()
+            .insert("store_format", 3u64)
+            .unwrap();
+        w.commit().unwrap();
+    }
+    assert!(matches!(
+        DocStore::open(d.db()),
+        Err(StoreError::Newer { found: 3 })
+    ));
+}
+
+#[test]
+fn on_behalf_entries_get_a_pending_approval_in_the_same_append() {
+    let d = TmpDir::new("approvals");
+    let s = DocStore::open(d.db()).unwrap();
+    let id = s.create(&meta("a.md")).unwrap();
+    let mut doc = Doc::new(S).unwrap();
+    let u1 = doc.replace_text_as(5, "source", "a\n").unwrap().unwrap();
+    let u2 = doc.replace_text_as(6, "source", "a\nb\n").unwrap().unwrap();
+    let mut obo = entry("helper", 6, u2);
+    obo.on_behalf_of = Some("rosson".into());
+    let seqs = s.append(id, &[entry("rosson", 5, u1), obo]).unwrap();
+    assert_eq!(seqs, vec![1, 2]);
+    assert_eq!(s.approval(id, 1).unwrap(), None, "own edits have none");
+    let p = s.approval(id, 2).unwrap().unwrap();
+    assert_eq!(p, Approval::pending("helper", "rosson"));
+    assert_eq!(
+        (p.state, p.by.as_deref(), p.at_ms),
+        (ApprovalState::Pending, None, None)
+    );
+    // compaction drops the log entry but not the approval
+    s.compact(id, 2, &doc.encode_state()).unwrap();
+    assert!(s.load(id).unwrap().updates.is_empty());
+    let done = p.settled(ApprovalState::Declined, "rosson", 77);
+    s.set_approval(id, 2, &done).unwrap();
+    assert_eq!(s.approval(id, 2).unwrap(), Some(done.clone()));
+    assert_eq!(s.approvals(id).unwrap(), vec![(2, done)]);
+    // only existing records can be set
+    assert_eq!(
+        s.set_approval(id, 1, &p),
+        Err(StoreError::NoApproval(id, 1))
+    );
+    // other docs see nothing
+    let id2 = s.create(&meta("b.md")).unwrap();
+    assert!(s.approvals(id2).unwrap().is_empty());
+    // a damaged record is loud
+    assert!(dec_approval(&[1, 9]).is_err());
+    assert!(dec_approval(&[]).is_err());
+}
+
+#[test]
+fn host_table_is_opaque_and_transactional() {
+    let d = TmpDir::new("host-kv");
+    let s = DocStore::open(d.db()).unwrap();
+    assert_eq!(s.host_get("ns", "k").unwrap(), None);
+    s.host_put("ns", "a/1", b"one").unwrap();
+    s.host_put("ns", "a/2", b"two").unwrap();
+    s.host_put("ns", "b/1", b"three").unwrap();
+    s.host_put("ns2", "a/1", b"other ns").unwrap();
+    s.host_put("n", "s", b"prefix of ns").unwrap();
+    s.host_put("ns", "a/1", b"ONE").unwrap(); // overwrite
+    assert_eq!(
+        s.host_get("ns", "a/1").unwrap().as_deref(),
+        Some(&b"ONE"[..])
+    );
+    assert_eq!(
+        s.host_scan("ns", "a/").unwrap(),
+        vec![
+            ("a/1".to_owned(), b"ONE".to_vec()),
+            ("a/2".to_owned(), b"two".to_vec())
+        ]
+    );
+    assert_eq!(s.host_scan("ns", "").unwrap().len(), 3, "namespace only");
+    assert!(s.host_scan("ns", "c").unwrap().is_empty());
+    assert!(s.host_scan("nope", "").unwrap().is_empty());
+    assert!(s.host_delete("ns", "a/2").unwrap());
+    assert!(!s.host_delete("ns", "a/2").unwrap());
+    s.host_batch(&[
+        HostOp::Put {
+            ns: "ns",
+            key: "c",
+            value: b"",
+        },
+        HostOp::Delete {
+            ns: "ns",
+            key: "b/1",
+        },
+    ])
+    .unwrap();
+    assert_eq!(s.host_get("ns", "c").unwrap(), Some(vec![]));
+    assert_eq!(s.host_get("ns", "b/1").unwrap(), None);
+    // it survives reopening
+    drop(s);
+    let s = DocStore::open(d.db()).unwrap();
+    assert_eq!(s.host_scan("ns", "").unwrap().len(), 2);
+    assert_eq!(
+        s.host_get("ns2", "a/1").unwrap().as_deref(),
+        Some(&b"other ns"[..])
+    );
 }

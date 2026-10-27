@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use k2_multiplayer_base::session::{
-    Action, At, AuditEvent, Config, ConnId, EditWithError, Host, LeaveReason, LineCol, LineRange,
-    Need, Pack, Participant, ParticipantKind, Rights, Role, Session, SessionError, SessionManager,
-    Stay, TextFilePack, UndoOutcome, WriteOutcome, IMPORT_PID,
+    Action, ApprovalState, At, AuditEvent, Config, ConnId, EditWithError, Host, LeaveReason,
+    LineCol, LineRange, Need, Pack, Participant, ParticipantKind, Rights, Role, Session,
+    SessionError, SessionManager, Stay, TextFilePack, UndoOutcome, WriteOutcome, IMPORT_PID,
 };
 use k2_multiplayer_base::store::{DocKey, DocStore};
 use k2_multiplayer_base::text::diff::{self, Hunk};
@@ -51,7 +51,7 @@ impl Host for TestHost {
             .unwrap()
             .get(&who.pid)
             .copied()
-            .unwrap_or(Rights::NONE)
+            .unwrap_or(Rights::none())
     }
     fn now_ms(&self) -> u64 {
         self.now.load(Ordering::SeqCst)
@@ -126,14 +126,7 @@ fn pack() -> Arc<dyn Pack> {
 }
 
 fn who(pid: &str, kind: ParticipantKind) -> Participant {
-    Participant {
-        pid: pid.into(),
-        name: pid.to_uppercase(),
-        colour: "#123456".into(),
-        kind,
-        via: "cli".into(),
-        home: None,
-    }
+    Participant::new(pid, pid.to_uppercase(), "#123456", kind, "cli")
 }
 
 fn agent(pid: &str) -> Participant {
@@ -200,7 +193,7 @@ fn concurrent_agents_lose_nothing_and_are_attributed() {
         .collect();
     let s = f.open("c.md", seed.as_bytes());
     let conns: Vec<ConnId> = (0..AGENTS)
-        .map(|k| f.join(&s, &format!("a{k}"), Rights::EDIT))
+        .map(|k| f.join(&s, &format!("a{k}"), Rights::editor()))
         .collect();
     std::thread::scope(|sc| {
         for (k, &conn) in conns.iter().enumerate() {
@@ -232,7 +225,7 @@ fn concurrent_agents_lose_nothing_and_are_attributed() {
             });
         }
     });
-    let checker = f.join(&s, "checker", Rights::READ);
+    let checker = f.join(&s, "checker", Rights::read_only());
     let expect: String = (0..AGENTS)
         .map(|k| {
             let lines: String = (0..EACH).map(|j| format!("a{k} line {j}\n")).collect();
@@ -266,7 +259,7 @@ fn one_pid_many_connections() {
     c.edit_burst = 1_000_000;
     let f = fx_with("conns", c);
     let s = f.open("m.md", b"top\nbottom\n");
-    f.host.grant("sam", Rights::EDIT);
+    f.host.grant("sam", Rights::editor());
     let tab1 = s
         .join(who("sam", ParticipantKind::Person), Stay::Held)
         .unwrap();
@@ -278,7 +271,7 @@ fn one_pid_many_connections() {
         tab1.client, tab2.client,
         "each connection has its own client id"
     );
-    let watcher = f.join(&s, "w", Rights::READ);
+    let watcher = f.join(&s, "w", Rights::read_only());
     let rx = s.subscribe(tab2.conn).unwrap();
     // both connections edit concurrently, in different places
     std::thread::scope(|sc| {
@@ -379,9 +372,9 @@ fn one_pid_many_connections() {
         .collect();
     assert_eq!(kicked.len(), 2);
     // losing read removes every connection of the pid
-    let a1 = f.join(&s, "x", Rights::READ);
-    let a2 = f.join(&s, "x", Rights::READ);
-    f.host.grant("x", Rights::NONE);
+    let a1 = f.join(&s, "x", Rights::read_only());
+    let a2 = f.join(&s, "x", Rights::read_only());
+    f.host.grant("x", Rights::none());
     assert_eq!(
         s.read(a1),
         Err(SessionError::Forbidden { need: Need::Read })
@@ -393,7 +386,7 @@ fn one_pid_many_connections() {
 fn shared_joins_reuse_a_connection_and_fresh_ones_never_reuse_clients() {
     let f = fx("shared");
     let s = f.open("a.md", b"x\n");
-    f.host.grant("a", Rights::EDIT);
+    f.host.grant("a", Rights::editor());
     let j1 = s.join_shared(agent("a"), Stay::UntilIdle).unwrap();
     let j2 = s.join_shared(agent("a"), Stay::UntilIdle).unwrap();
     assert_eq!(
@@ -419,7 +412,7 @@ fn shared_joins_reuse_a_connection_and_fresh_ones_never_reuse_clients() {
         );
     }
     // identity namespace: the kit's own pids are refused
-    f.host.grant("kit:import", Rights::EDIT);
+    f.host.grant("kit:import", Rights::editor());
     assert!(matches!(
         s.join(agent("kit:import"), Stay::UntilIdle),
         Err(SessionError::BadParticipant(_))
@@ -437,8 +430,8 @@ fn shared_joins_reuse_a_connection_and_fresh_ones_never_reuse_clients() {
 fn rights_are_checked_on_every_call() {
     let f = fx("rights");
     let s = f.open("r.md", b"line one\nline two\n");
-    let ed = f.join(&s, "ed", Rights::EDIT);
-    let ro = f.join(&s, "ro", Rights::READ);
+    let ed = f.join(&s, "ed", Rights::editor());
+    let ro = f.join(&s, "ro", Rights::read_only());
     // no read: can't join
     assert_eq!(
         s.join(agent("nobody"), Stay::UntilIdle),
@@ -499,13 +492,13 @@ fn rights_are_checked_on_every_call() {
         );
     }
     // edit revoked mid-session: the very next edit is refused
-    f.host.grant("ed", Rights::READ);
+    f.host.grant("ed", Rights::read_only());
     assert_eq!(
         s.edit(ed, ins(0, "x"), None),
         Err(SessionError::Forbidden { need: Need::Edit })
     );
     // read revoked: refused and removed
-    f.host.grant("ro", Rights::NONE);
+    f.host.grant("ro", Rights::none());
     assert_eq!(
         s.read(ro),
         Err(SessionError::Forbidden { need: Need::Read })
@@ -514,8 +507,8 @@ fn rights_are_checked_on_every_call() {
     assert_eq!(roster_pids(&s, ed), vec!["ed"]);
     assert_eq!(s.read(ro), Err(SessionError::NotJoined { conn: ro }));
     // the periodic re-check reports changes (once per pid) and removes who lost read
-    let ed2 = f.join(&s, "ed", Rights::READ);
-    f.host.grant("ed", Rights::NONE);
+    let ed2 = f.join(&s, "ed", Rights::read_only());
+    f.host.grant("ed", Rights::none());
     let ch = s.recheck_rights().unwrap();
     assert_eq!(ch.len(), 1);
     assert_eq!(ch[0].pid, "ed");
@@ -531,8 +524,8 @@ fn rights_are_checked_on_every_call() {
 fn positional_edits_are_guarded_and_edit_with_is_atomic() {
     let f = fx_with("guard", burst(100));
     let s = f.open("g.md", b"alpha\nbeta\n");
-    let a = f.join(&s, "a", Rights::EDIT);
-    let b = f.join(&s, "b", Rights::EDIT);
+    let a = f.join(&s, "a", Rights::editor());
+    let b = f.join(&s, "b", Rights::editor());
     let r = s.read(a).unwrap();
     // hunks computed at r.version apply while the doc hasn't moved
     s.edit(a, ins(0, ">"), Some(r.version)).unwrap();
@@ -594,8 +587,8 @@ fn write_base_merges_conflicts_and_expires() {
     c.read_bases_max = 2;
     let f = fx_with("wbase", c);
     let s = f.open("w.md", b"alpha\nbeta\ngamma\n");
-    let a = f.join(&s, "a", Rights::EDIT);
-    let b = f.join(&s, "b", Rights::EDIT);
+    let a = f.join(&s, "a", Rights::editor());
+    let b = f.join(&s, "b", Rights::editor());
     let r = s.read(a).unwrap();
     let v0 = r.version;
     assert_eq!(v0, 1, "the import is version 1");
@@ -672,8 +665,8 @@ fn write_base_merges_conflicts_and_expires() {
 fn undo_redo_is_per_participant() {
     let f = fx_with("undo", burst(100));
     let s = f.open("u.md", b"one\ntwo\nthree\nfour\n");
-    let a = f.join(&s, "a", Rights::EDIT);
-    let b = f.join(&s, "b", Rights::EDIT);
+    let a = f.join(&s, "a", Rights::editor());
+    let b = f.join(&s, "b", Rights::editor());
     replace(&s, a, "two", "TWO");
     replace(&s, b, "four", "FOUR");
     // a's undo reverts only a's change
@@ -725,7 +718,7 @@ fn undo_redo_is_per_participant() {
     assert_eq!(text(&s, a), "ONE\ntwo\nTHREE\nFOUR\n");
     // undo is per pid: it survives leave/rejoin (until unload), on the new connection
     s.leave(a).unwrap();
-    let a2 = f.join(&s, "a", Rights::EDIT);
+    let a2 = f.join(&s, "a", Rights::editor());
     s.undo(a2, 1).unwrap();
     assert_eq!(text(&s, a2), "ONE\ntwo\nthree\nFOUR\n");
 }
@@ -736,7 +729,7 @@ fn undo_depth_is_bounded() {
     c.undo_depth = 3;
     let f = fx_with("undodepth", c);
     let s = f.open("d.md", b"");
-    let a = f.join(&s, "a", Rights::EDIT);
+    let a = f.join(&s, "a", Rights::editor());
     for i in 0..6 {
         let len = text(&s, a).len();
         s.edit(a, ins(len, &format!("{i}\n")), None).unwrap();
@@ -752,8 +745,8 @@ fn undo_depth_is_bounded() {
 fn carets_follow_edits_and_convert_to_line_col() {
     let f = fx("caret");
     let s = f.open("k.md", "a\nbé🎉c\nd\n".as_bytes());
-    let a = f.join(&s, "a", Rights::EDIT);
-    let b = f.join(&s, "b", Rights::EDIT);
+    let a = f.join(&s, "a", Rights::editor());
+    let b = f.join(&s, "b", Rights::editor());
     let lc = |line, col| At::Line(LineCol { line, col });
     let c = s.set_cursor(a, ROOT, lc(2, 4), lc(2, 4)).unwrap();
     assert_eq!(&text(&s, a)[c.head..], "c\nd\n");
@@ -809,13 +802,13 @@ fn carets_follow_edits_and_convert_to_line_col() {
 fn roster_roles_away_and_idle_expiry() {
     let f = fx_with("roster", burst(100));
     let s = f.open("p.md", b"hello\n");
-    f.host.grant("tab", Rights::EDIT);
+    f.host.grant("tab", Rights::editor());
     let tab = s
         .join(who("tab", ParticipantKind::Person), Stay::Held)
         .unwrap()
         .conn;
-    let ag = f.join(&s, "agent", Rights::EDIT);
-    let reader = f.join(&s, "reader", Rights::READ);
+    let ag = f.join(&s, "agent", Rights::editor());
+    let reader = f.join(&s, "reader", Rights::read_only());
     let roles = |s: &Session| -> Vec<(String, Role, bool)> {
         s.roster(tab)
             .unwrap()
@@ -869,7 +862,7 @@ fn roster_roles_away_and_idle_expiry() {
     assert!(s.expire_idle().unwrap().is_empty());
     assert_eq!(roles(&s).len(), 1);
     // a hold is sticky across a shared rejoin; set_stay drops it
-    f.host.grant("cli", Rights::EDIT);
+    f.host.grant("cli", Rights::editor());
     let cli = s.join_shared(agent("cli"), Stay::Held).unwrap().conn;
     assert_eq!(
         s.join_shared(agent("cli"), Stay::UntilIdle).unwrap().conn,
@@ -891,7 +884,7 @@ fn roster_roles_away_and_idle_expiry() {
         |e| matches!(e, AuditEvent::Left { pid, reason: LeaveReason::Idle, .. } if pid == "agent")
     ));
     // the manager drives the same expiry across sessions
-    let late = f.join(&s, "late", Rights::READ);
+    let late = f.join(&s, "late", Rights::read_only());
     f.host.advance(61_000);
     assert_eq!(
         f.mgr.expire_idle().unwrap(),
@@ -905,7 +898,7 @@ fn edits_persist_and_compaction_keeps_them() {
     c.compact_entries = 10;
     let dir = TmpDir::new("persist");
     let host = TestHost::new();
-    host.grant("a", Rights::EDIT);
+    host.grant("a", Rights::editor());
     let (text_before, version_before) = {
         let store = Arc::new(DocStore::open(dir.db()).unwrap());
         let mgr = SessionManager::new(store.clone(), host.clone(), c.clone());
@@ -962,7 +955,7 @@ fn pool_unloads_idle_sessions_within_budget() {
     let mut c = Config::default();
     c.memory_budget_bytes = 1; // anything idle is over budget
     let f = fx_with("pool", c);
-    f.host.grant("a", Rights::EDIT);
+    f.host.grant("a", Rights::editor());
     let a = f.open("a.md", b"aaa\n");
     let ca = a.join(agent("a"), Stay::UntilIdle).unwrap().conn;
     a.edit(ca, ins(0, "edited "), None).unwrap();
@@ -1018,7 +1011,7 @@ fn idle_unload_uses_the_host_clock_and_compacts_long_logs() {
     let mut c = burst(100);
     c.unload_compact_entries = 3;
     let f = fx_with("idleunload", c);
-    f.host.grant("a", Rights::EDIT);
+    f.host.grant("a", Rights::editor());
     let s = f.open("x.md", b"x\n");
     let a = s.join(agent("a"), Stay::UntilIdle).unwrap().conn;
     for _ in 0..3 {
@@ -1043,7 +1036,7 @@ fn idle_unload_uses_the_host_clock_and_compacts_long_logs() {
 #[test]
 fn closed_handles_fail_loudly() {
     let f = fx("closed");
-    f.host.grant("a", Rights::EDIT);
+    f.host.grant("a", Rights::editor());
     let s = f.open("x.md", b"x\n");
     let a = s.join(agent("a"), Stay::UntilIdle).unwrap().conn;
     f.mgr.release().unwrap();
@@ -1066,9 +1059,9 @@ fn closed_handles_fail_loudly() {
 fn edit_rate_is_limited_on_the_host_clock() {
     let f = fx("rate");
     let s = f.open("r.md", b"");
-    let a = f.join(&s, "a", Rights::EDIT);
-    let a_tab = f.join(&s, "a", Rights::EDIT);
-    let b = f.join(&s, "b", Rights::EDIT);
+    let a = f.join(&s, "a", Rights::editor());
+    let a_tab = f.join(&s, "a", Rights::editor());
+    let b = f.join(&s, "b", Rights::editor());
     for i in 0..10 {
         s.edit(if i % 2 == 0 { a } else { a_tab }, ins(0, "x"), None)
             .unwrap();
@@ -1086,7 +1079,7 @@ fn edit_rate_is_limited_on_the_host_clock() {
     // leaving and rejoining doesn't reset it
     s.leave(a).unwrap();
     s.leave(a_tab).unwrap();
-    let a = f.join(&s, "a", Rights::EDIT);
+    let a = f.join(&s, "a", Rights::editor());
     assert!(matches!(
         s.undo(a, 1),
         Err(SessionError::RateLimited { .. })
@@ -1138,7 +1131,7 @@ fn read_gives_the_files_bytes() {
     let f = fx("bytes");
     let raw = b"\xEF\xBB\xBF# Title\r\n\r\nbody\r\n";
     let s = f.open("crlf.md", raw);
-    let a = f.join(&s, "a", Rights::EDIT);
+    let a = f.join(&s, "a", Rights::editor());
     let r = s.read(a).unwrap();
     assert_eq!(r.bytes, raw);
     assert_eq!(r.text_by_root[0].1, "# Title\n\nbody\n");
@@ -1151,7 +1144,7 @@ fn read_gives_the_files_bytes() {
     );
     // an empty file imports as an empty doc at version 0
     let e = f.open("empty.md", b"");
-    let ea = f.join(&e, "a", Rights::READ);
+    let ea = f.join(&e, "a", Rights::read_only());
     let r = e.read(ea).unwrap();
     assert_eq!((r.bytes.as_slice(), r.version), (&b""[..], 0));
 }
@@ -1160,10 +1153,10 @@ fn read_gives_the_files_bytes() {
 fn contributors_since_last_read() {
     let f = fx("contrib");
     let s = f.open("c.md", b"x\n");
-    let a = f.join(&s, "a", Rights::EDIT);
-    let a2 = f.join(&s, "a", Rights::EDIT);
-    let b = f.join(&s, "b", Rights::EDIT);
-    let c = f.join(&s, "c", Rights::EDIT);
+    let a = f.join(&s, "a", Rights::editor());
+    let a2 = f.join(&s, "a", Rights::editor());
+    let b = f.join(&s, "b", Rights::editor());
+    let c = f.join(&s, "c", Rights::editor());
     assert!(
         s.read(a).unwrap().contributors_since_last_read.is_empty(),
         "import excluded"
@@ -1187,8 +1180,8 @@ fn subscribers_get_every_change_in_order() {
     c.subscriber_queue = 3;
     let f = fx_with("subs", c);
     let s = f.open("s.md", b"abc\n");
-    let w = f.join(&s, "w", Rights::READ);
-    let a = f.join(&s, "a", Rights::EDIT);
+    let w = f.join(&s, "w", Rights::read_only());
+    let a = f.join(&s, "a", Rights::editor());
     let rx = s.subscribe(w).unwrap();
     let slow = s.subscribe(w).unwrap();
     let e1 = s.edit(a, ins(0, "1"), None).unwrap();
@@ -1223,9 +1216,9 @@ fn subscribers_get_every_change_in_order() {
     s.edit(a, ins(0, "z"), None).unwrap();
     assert!(rx.iter().next().is_none());
     // losing read closes them too
-    let w = f.join(&s, "w", Rights::READ);
+    let w = f.join(&s, "w", Rights::read_only());
     let rx = s.subscribe(w).unwrap();
-    f.host.grant("w", Rights::NONE);
+    f.host.grant("w", Rights::none());
     assert_eq!(s.recheck_rights().unwrap().len(), 1);
     s.edit(a, ins(0, "z"), None).unwrap();
     assert!(rx.iter().next().is_none());
@@ -1235,7 +1228,7 @@ fn subscribers_get_every_change_in_order() {
 fn rekey_moves_the_doc() {
     let f = fx("rekey");
     let s = f.open("old.md", b"x\n");
-    let a = f.join(&s, "a", Rights::EDIT);
+    let a = f.join(&s, "a", Rights::editor());
     f.mgr.rekey(&key("old.md"), key("new.md")).unwrap();
     assert_eq!(s.key().unwrap(), key("new.md"));
     assert!(f.mgr.get(&key("old.md")).is_none());
@@ -1264,7 +1257,7 @@ fn rekey_moves_the_doc() {
 fn bad_edits_change_nothing() {
     let f = fx("bad");
     let s = f.open("b.md", "héllo\n".as_bytes());
-    let a = f.join(&s, "a", Rights::EDIT);
+    let a = f.join(&s, "a", Rights::editor());
     let v = s.status().unwrap().version;
     assert!(
         matches!(s.edit(a, ins(2, "x"), None), Err(SessionError::Doc(_))),
@@ -1305,4 +1298,223 @@ fn bad_edits_change_nothing() {
     assert!(e.changed.is_empty());
     assert_eq!(s.status().unwrap().version, v);
     assert_eq!(text(&s, a), "héllo\n");
+}
+
+// ---------- amendment 1: rights, on-behalf edits, approvals ----------
+
+#[test]
+fn rights_constructors() {
+    let n = Rights::none();
+    assert!(!n.read && !n.edit && !n.history);
+    let r = Rights::read_only();
+    assert!(r.read && !r.edit && !r.history, "history is never implied");
+    let e = Rights::editor();
+    assert!(e.read && e.edit && !e.history);
+    let f = Rights::full();
+    assert!(f.read && f.edit && f.history);
+    assert_eq!(Rights::editor().with_history(true), Rights::full());
+    assert_eq!(Rights::full().with_history(false), Rights::editor());
+    assert_eq!(Rights::default(), Rights::none());
+    assert_eq!(
+        (Rights::NONE, Rights::READ, Rights::EDIT),
+        (Rights::none(), Rights::read_only(), Rights::editor())
+    );
+}
+
+fn helper_for(pid: &str, person: &str) -> Participant {
+    agent(pid).on_behalf_of(person)
+}
+
+#[test]
+fn on_behalf_edits_apply_at_once_and_carry_metadata() {
+    let f = fx("obo");
+    let s = f.open("o.md", b"one\ntwo\n");
+    let person = f.join(&s, "rosson", Rights::editor());
+    let watch = s.subscribe(person).unwrap();
+    f.host.grant("helper", Rights::editor());
+    let h = s
+        .join(helper_for("helper", "rosson"), Stay::UntilIdle)
+        .unwrap()
+        .conn;
+    replace(&s, h, "two", "TWO");
+    // not held: it is live at once
+    assert_eq!(text(&s, person), "one\nTWO\n");
+    let ev = watch.recv().unwrap();
+    assert_eq!(
+        (ev.pid.as_str(), ev.on_behalf_of.as_deref()),
+        ("helper", Some("rosson"))
+    );
+    // logged with the metadata, approval pending
+    let id = f.store.find(&key("o.md")).unwrap().unwrap();
+    let (seq, e) = f.store.load(id).unwrap().updates.pop().unwrap();
+    assert_eq!(
+        (e.author.as_str(), e.on_behalf_of.as_deref()),
+        ("helper", Some("rosson"))
+    );
+    let a = s.approval(person, seq).unwrap().unwrap();
+    assert_eq!(a.state, ApprovalState::Pending);
+    assert_eq!(
+        (a.author.as_str(), a.on_behalf_of.as_str()),
+        ("helper", "rosson")
+    );
+    // the person's own edit has none, and an event says so
+    replace(&s, person, "one", "ONE");
+    let ev = watch.recv().unwrap();
+    assert_eq!(ev.on_behalf_of, None);
+    // ...and saying so is history: without that right, only your own records are visible
+    assert_eq!(
+        s.approval(person, ev.version),
+        Err(SessionError::Forbidden {
+            need: Need::History
+        })
+    );
+    f.host.grant("rosson", Rights::full());
+    assert_eq!(s.approval(person, ev.version).unwrap(), None);
+    // presence shows "helper for rosson"
+    let roster = s.roster(person).unwrap();
+    let row = roster
+        .iter()
+        .find(|r| r.participant.pid == "helper")
+        .unwrap();
+    assert_eq!(row.participant.on_behalf_of.as_deref(), Some("rosson"));
+    // the agent's undo is its own, and works as for anyone
+    assert!(matches!(
+        s.undo(h, 1).unwrap(),
+        UndoOutcome::Applied { steps: 1, .. }
+    ));
+    assert_eq!(text(&s, person), "ONE\ntwo\n");
+}
+
+#[test]
+fn on_behalf_needs_a_real_person_and_rights_are_the_agents() {
+    let f = fx("obo-bad");
+    let s = f.open("o.md", b"x\n");
+    f.host.grant("helper", Rights::read_only());
+    for bad in ["", "kit:import", "helper"] {
+        assert!(
+            matches!(
+                s.join(helper_for("helper", bad), Stay::UntilIdle),
+                Err(SessionError::BadParticipant(_))
+            ),
+            "{bad:?}"
+        );
+    }
+    // acting for someone never widens the agent's own rights (the host is asked about the
+    // agent, and here grants it read only)
+    f.host.grant("rosson", Rights::full());
+    let h = s
+        .join(helper_for("helper", "rosson"), Stay::UntilIdle)
+        .unwrap()
+        .conn;
+    assert_eq!(
+        s.edit(h, ins(0, "x"), None),
+        Err(SessionError::Forbidden { need: Need::Edit })
+    );
+    // shared joins don't mix principals: acting for another person is another connection
+    f.host.grant("helper", Rights::editor());
+    let a = s
+        .join_shared(helper_for("helper", "rosson"), Stay::UntilIdle)
+        .unwrap();
+    let a2 = s
+        .join_shared(helper_for("helper", "rosson"), Stay::UntilIdle)
+        .unwrap();
+    let b = s
+        .join_shared(helper_for("helper", "sam"), Stay::UntilIdle)
+        .unwrap();
+    let own = s.join_shared(agent("helper"), Stay::UntilIdle).unwrap();
+    assert_eq!(a.conn, a2.conn);
+    assert_ne!(a.conn, b.conn);
+    assert_ne!(a.conn, own.conn);
+    assert_ne!(b.conn, own.conn);
+}
+
+#[test]
+fn only_the_named_person_settles_an_approval_once() {
+    let f = fx("approve");
+    let s = f.open("o.md", b"one\n");
+    let person = f.join(&s, "rosson", Rights::editor());
+    let other = f.join(&s, "sam", Rights::editor());
+    let auditor = f.join(&s, "aud", Rights::read_only().with_history(true));
+    f.host.grant("helper", Rights::editor());
+    let h = s
+        .join(helper_for("helper", "rosson"), Stay::UntilIdle)
+        .unwrap()
+        .conn;
+    replace(&s, h, "one", "uno");
+    let seq = s.status().unwrap().version;
+    // the agent can't settle it, nor can anyone else
+    for c in [h, other, auditor] {
+        assert_eq!(
+            s.set_approval(c, seq, ApprovalState::Approved),
+            Err(SessionError::Forbidden {
+                need: Need::Approver
+            })
+        );
+    }
+    assert!(f.host.events().iter().any(|e| matches!(
+        e,
+        AuditEvent::Refused {
+            action: Action::Approve,
+            need: Need::Approver,
+            ..
+        }
+    )));
+    // reading it: the author and the person may; others need history
+    assert!(s.approval(h, seq).unwrap().is_some());
+    assert_eq!(
+        s.approval(other, seq),
+        Err(SessionError::Forbidden {
+            need: Need::History
+        })
+    );
+    assert!(s.approval(auditor, seq).unwrap().is_some());
+    assert_eq!(s.approvals(other).unwrap(), vec![]);
+    assert_eq!(s.approvals(auditor).unwrap().len(), 1);
+    assert_eq!(s.approvals(h).unwrap().len(), 1);
+    // pending is not a settlement
+    assert!(matches!(
+        s.set_approval(person, seq, ApprovalState::Pending),
+        Err(SessionError::BadApproval(_))
+    ));
+    // the person declines: attributed, timed, audited (metadata only)
+    f.host.advance(5);
+    let now = f.host.now_ms();
+    let d = s
+        .set_approval(person, seq, ApprovalState::Declined)
+        .unwrap();
+    assert_eq!(
+        (d.state, d.by.as_deref(), d.at_ms),
+        (ApprovalState::Declined, Some("rosson"), Some(now))
+    );
+    assert!(f.host.events().iter().any(|e| matches!(
+        e,
+        AuditEvent::Approval { seq: s2, pid, state: ApprovalState::Declined, .. }
+            if *s2 == seq && pid == "rosson"
+    )));
+    // once: the same again is a no-op, the other way is refused
+    assert_eq!(
+        s.set_approval(person, seq, ApprovalState::Declined)
+            .unwrap(),
+        d
+    );
+    assert!(matches!(
+        s.set_approval(person, seq, ApprovalState::Approved),
+        Err(SessionError::BadApproval(_))
+    ));
+    // a declined change stays applied (reversing it is an explicit act)
+    assert_eq!(text(&s, person), "uno\n");
+    // a change not made on anyone's behalf has no approval to set
+    replace(&s, other, "uno", "un");
+    let plain = s.status().unwrap().version;
+    assert_eq!(
+        s.set_approval(person, plain, ApprovalState::Approved),
+        Err(SessionError::NoApproval { seq: plain })
+    );
+    // the record survives unload and reload
+    drop(s);
+    f.mgr.release().unwrap();
+    let mgr = SessionManager::new(f.store.clone(), f.host.clone(), Config::default());
+    let s = mgr.open(pack(), &key("o.md"), None).unwrap();
+    let p = s.join(agent("rosson"), Stay::UntilIdle).unwrap().conn;
+    assert_eq!(s.approval(p, seq).unwrap(), Some(d));
 }

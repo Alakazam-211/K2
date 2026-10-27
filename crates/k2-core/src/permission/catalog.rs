@@ -196,6 +196,10 @@ pub enum ParamKind {
     /// Chat caps for an App's chat key, a list from `chat:read chat:post
     /// chat:respond voice:join voice:video`: `apps.chat-key caps=` (0.46.7).
     ChatCaps,
+    /// A workspace-relative file or folder path in the workspace another
+    /// param names: `docs.share from= path=` (Markdown multiplayer v1,
+    /// MI25). Jailed and deny-listed by the action's check.
+    Path,
 }
 
 /// One value an action takes (`key=value` on the CLI).

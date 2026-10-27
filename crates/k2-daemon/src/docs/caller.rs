@@ -58,20 +58,21 @@ impl DocCaller {
         matches!(self, DocCaller::Person { .. })
     }
 
-    /// The participant, stamped from K2's records.
-    pub fn participant(&self) -> Participant {
+    /// The participant, stamped from K2's records. `on_behalf_of` (a
+    /// person's pid, already checked by [`on_behalf_pid`]) marks an agent
+    /// acting for that person; it is ignored for people.
+    pub fn participant(&self, on_behalf_of: Option<&str>) -> Participant {
         match self {
             DocCaller::Person { key, via } => {
                 let people = k2_core::notify_prefs::People::load().unwrap_or_default();
                 let owner_color = k2_core::app_settings::load().owner_color;
-                Participant {
-                    pid: format!("{PERSON_PREFIX}{key}"),
-                    name: k2_core::person_name::effective(key, &people).display_name,
-                    colour: k2_core::person_color::effective(key, &people, owner_color.as_deref()),
-                    kind: ParticipantKind::Person,
-                    via: (*via).to_string(),
-                    home: None,
-                }
+                Participant::new(
+                    format!("{PERSON_PREFIX}{key}"),
+                    k2_core::person_name::effective(key, &people).display_name,
+                    k2_core::person_color::effective(key, &people, owner_color.as_deref()),
+                    ParticipantKind::Person,
+                    *via,
+                )
             }
             DocCaller::Agent { project_id } => {
                 let (path, color) = {
@@ -88,17 +89,39 @@ impl DocCaller {
                 };
                 let colour = k2_core::workspace::agent_look::normalize_color(&color)
                     .unwrap_or_else(|_| k2_core::person_color::hash_color(project_id).to_string());
-                Participant {
-                    pid: format!("{AGENT_PREFIX}{project_id}"),
-                    name,
-                    colour,
-                    kind: ParticipantKind::Agent,
-                    via: VIA_CLI.to_string(),
-                    home: None,
+                let p = Participant::new(format!("{AGENT_PREFIX}{project_id}"), name, colour, ParticipantKind::Agent, VIA_CLI);
+                match on_behalf_of {
+                    Some(person) => p.on_behalf_of(person),
+                    None => p,
                 }
             }
         }
     }
+}
+
+/// `onBehalfOf` (K-ID-10): only an agent may act for someone, and only for
+/// a person on this box (`owner`, or a Connect login; `person:<key>` too).
+/// Returns that person's pid. Acting for someone never widens the agent's
+/// rights (the kit asks about the agent's own pid).
+pub fn on_behalf_pid(caller: &DocCaller, named: Option<&str>) -> Result<Option<String>, CliResponse> {
+    let Some(named) = named.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if caller.is_person() {
+        return Err(refusal(
+            "400 Bad Request",
+            "bad_request",
+            "only an agent acts on someone's behalf; a person edits as themselves",
+        ));
+    }
+    let login = named.strip_prefix(PERSON_PREFIX).unwrap_or(named);
+    let key = k2_core::notify_prefs::People::load()
+        .map(|p| p.person_key(login))
+        .unwrap_or_else(|_| login.to_ascii_lowercase());
+    if !super::host::person_exists(&key) {
+        return Err(refusal("404 Not Found", "person_not_found", format!("no person '{named}' on this server")));
+    }
+    Ok(Some(format!("{PERSON_PREFIX}{key}")))
 }
 
 /// The owner daemon token.

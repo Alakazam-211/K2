@@ -719,6 +719,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/dns/zones/delete", Member),
     // Live docs (Markdown multiplayer v1, `docs/routes.rs`): any login; the
     // handler checks rights per doc (read / edit / history) on every call.
+    // Shares to another workspace (MI25) need an Admin login, like
+    // connections; the handler refuses agents (they ask with a card).
+    get("/cli/docs/approvals", Member),
+    post("/cli/docs/approve", Member),
     post("/cli/docs/cursor", Member),
     post("/cli/docs/edit", Member),
     post("/cli/docs/leave", Member),
@@ -726,8 +730,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/docs/open", Member),
     get("/cli/docs/read", Member),
     post("/cli/docs/redo", Member),
+    post("/cli/docs/share", Admin),
+    get("/cli/docs/shares", Admin),
     get("/cli/docs/status", Member),
     post("/cli/docs/undo", Member),
+    post("/cli/docs/unshare", Admin),
     post("/cli/docs/view", Member),
     get("/cli/docs/who", Member),
     post("/cli/docs/write", Member),

@@ -16,10 +16,16 @@
 //! | `/cli/docs/edit` | POST | edit | `edit_with`, or `edit` with `ifVersion` | P9–P11, P15 |
 //! | `/cli/docs/write` | POST | edit | `write_base` / `replace_text` (`base: "live"`) | P14 |
 //! | `/cli/docs/undo`, `/cli/docs/redo` | POST | edit | `undo` / `redo` | P16 |
+//! | `/cli/docs/approve` | POST | the named person | `set_approval` | P29 |
+//! | `/cli/docs/approvals` | GET | read (others' records: history) | `approvals` | P30 |
+//! | `/cli/docs/shares` | GET | a person | host table ([`super::shares`]) | MI25 |
+//! | `/cli/docs/share`, `/cli/docs/unshare` | POST | a person (Admin floor for logins) | host table | MI25 |
 //!
 //! Every param may come in the query string or the JSON body (the body
 //! wins): `workspace` (handle, name, id or root; an agent's own when
-//! absent) and `path` (workspace-relative, or absolute).
+//! absent) and `path` (workspace-relative, or absolute). An agent may add
+//! `onBehalfOf` (a person) to any verb (K-ID-10): its edits then carry that
+//! person and wait for their approval, without being held.
 //!
 //! Refusals use the comms shape `{"ok":false,"error":{"code","hint"}}` so
 //! the permission-card wrapper can teach them (`not_connected` →
@@ -35,15 +41,17 @@ use serde_json::{json, Value};
 
 use k2_multiplayer_base::session::position::{self, At, LineCol, LineRange};
 use k2_multiplayer_base::session::{
-    EditResult, EditWithError, Need, RosterEntry, Role, Session, SessionError, Stay, TextFilePack, UndoOutcome,
-    WriteOutcome,
+    Approval, ApprovalState, EditResult, EditWithError, Need, RosterEntry, Role, Session, SessionError, Stay,
+    TextFilePack, UndoOutcome, WriteOutcome,
 };
+use k2_multiplayer_base::store::DocStore;
 use k2_multiplayer_base::text::merge::Conflict;
 use k2_multiplayer_base::text::Hunk;
 use k2_multiplayer_base::{Edit, ParticipantKind};
 
 use super::caller::{refusal, DocCaller};
 use super::host::{self, CrossRefusal, DocRights, Principal};
+use super::shares::{self, Share};
 use super::target::{self, Target};
 use crate::cli_response::CliResponse;
 
@@ -59,6 +67,11 @@ pub const EDIT: &str = "/cli/docs/edit";
 pub const WRITE: &str = "/cli/docs/write";
 pub const UNDO: &str = "/cli/docs/undo";
 pub const REDO: &str = "/cli/docs/redo";
+pub const APPROVE: &str = "/cli/docs/approve";
+pub const APPROVALS: &str = "/cli/docs/approvals";
+pub const SHARES: &str = "/cli/docs/shares";
+pub const SHARE: &str = "/cli/docs/share";
+pub const UNSHARE: &str = "/cli/docs/unshare";
 
 /// The family's prefix (passport allowlist, cell arm, dispatcher arm).
 pub const PREFIX: &str = "/cli/docs/";
@@ -72,11 +85,22 @@ const MAX_STEPS: usize = 100;
 const ROOT: &str = TextFilePack::ROOT;
 
 /// Every route, for the dispatcher arm and the tests.
-pub const ROUTES: &[&str] = &[STATUS, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO];
+pub const ROUTES: &[&str] = &[
+    STATUS, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
+    UNSHARE,
+];
 
 fn is_post_route(path: &str) -> bool {
-    matches!(path, "/cli/docs/open" | "/cli/docs/leave" | "/cli/docs/view" | "/cli/docs/cursor")
-        || is_edit_route(path)
+    matches!(
+        path,
+        "/cli/docs/open"
+            | "/cli/docs/leave"
+            | "/cli/docs/view"
+            | "/cli/docs/cursor"
+            | "/cli/docs/approve"
+            | "/cli/docs/share"
+            | "/cli/docs/unshare"
+    ) || is_edit_route(path)
 }
 
 fn is_edit_route(path: &str) -> bool {
@@ -155,6 +179,13 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     if path == STATUS && input.str("path").is_none_or(|p| p.trim().is_empty()) {
         return ok(json!({ "pool": super::pool_json() }));
     }
+    if matches!(path, SHARES | SHARE | UNSHARE) {
+        return shares_route(path, caller, &input);
+    }
+    let on_behalf = match super::caller::on_behalf_pid(caller, input.str("onBehalfOf").as_deref()) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
     if is_edit_route(path) && !super::edits_allowed() {
         return refusal(
             "409 Conflict",
@@ -170,10 +201,12 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         Ok(t) => t,
         Err(r) => return target_refusal(r),
     };
-    let rights = match rights_or_refusal(caller, &target, input.str("workspace").as_deref()) {
+    let store = rt.store();
+    let rights = match rights_or_refusal(caller, &target, input.str("workspace").as_deref(), store.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
+    drop(store);
     if path == LOG {
         return log(&rt, &target, rights);
     }
@@ -181,12 +214,13 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         Ok(s) => s,
         Err(resp) => return resp,
     };
-    let r = verb(path, &session, caller, &target, &input, rights);
+    let call = Call { caller, on_behalf: on_behalf.as_deref(), target: &target, input: &input, rights };
+    let r = verb(path, &session, &call);
     match r {
         // The pool unloaded the session between open and the call (it was
         // idle and nobody held it): open again, once.
         Err(VerbError::Session(SessionError::Unloaded)) => match open(&rt, &target) {
-            Ok(s) => verb(path, &s, caller, &target, &input, rights).unwrap_or_else(VerbError::into_response),
+            Ok(s) => verb(path, &s, &call).unwrap_or_else(VerbError::into_response),
             Err(resp) => resp,
         },
         Ok(resp) => resp,
@@ -194,26 +228,53 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     }
 }
 
+/// One doc call, resolved.
+struct Call<'a> {
+    caller: &'a DocCaller,
+    /// `person:<key>` when an agent acts for that person.
+    on_behalf: Option<&'a str>,
+    target: &'a Target,
+    input: &'a Input<'a>,
+    rights: DocRights,
+}
+
 /// K2's own rights check before the kit's (the kit re-asks on every call):
 /// it gives the refusal its teaching code.
-fn rights_or_refusal(caller: &DocCaller, t: &Target, workspace_param: Option<&str>) -> Result<DocRights, CliResponse> {
+fn rights_or_refusal(
+    caller: &DocCaller,
+    t: &Target,
+    workspace_param: Option<&str>,
+    store: Option<&DocStore>,
+) -> Result<DocRights, CliResponse> {
     let rights = match caller.principal() {
         Principal::Person(k) => host::person_rights(&k),
-        Principal::Agent(id) => match host::agent_rights(&id, &t.project_id, &t.rel) {
+        Principal::Agent(id) => match host::agent_rights(&id, &t.project_id, &t.rel, store) {
             Ok(r) => r,
             Err(CrossRefusal::NotConnected) => {
                 let shown = workspace_param.map(str::trim).filter(|s| !s.is_empty()).unwrap_or(&t.project_id).to_string();
                 return Err(refusal("403 Forbidden", crate::comms::NOT_CONNECTED, crate::comms::not_connected_hint(&shown)));
             }
             Err(CrossRefusal::NotShared) => {
-                return Err(refusal(
-                    "403 Forbidden",
-                    "doc_not_shared",
-                    format!(
-                        "{} is in another workspace and its owner hasn't shared it with you. Ask the owner to share the file or its folder",
-                        t.rel
-                    ),
-                ))
+                // `workspace` + `path` let the permission wrapper fill in
+                // `k2 permission request docs.share from= path=` (walls.rs).
+                let ws = workspace_label(&t.project_id);
+                return Err(CliResponse {
+                    status: "403 Forbidden",
+                    content_type: "application/json",
+                    body: json!({
+                        "ok": false,
+                        "error": {
+                            "code": "doc_not_shared",
+                            "hint": format!(
+                                "{} is in workspace {ws}, which hasn't shared it with yours. A person shares it (k2 doc share), or you ask with a permission card",
+                                t.rel
+                            ),
+                            "workspace": ws,
+                            "path": t.rel,
+                        },
+                    })
+                    .to_string(),
+                });
             }
         },
     };
@@ -265,14 +326,17 @@ impl VerbError {
 /// The kit's errors on the wire (SESSIONS.md "Errors").
 pub fn session_error(e: &SessionError) -> CliResponse {
     match e {
-        SessionError::Forbidden { need } => refusal(
-            "403 Forbidden",
-            "doc_forbidden",
-            match need {
-                Need::Read => "you can't read this doc",
-                Need::Edit => "you can't edit this doc (read-only)",
-            },
-        ),
+        SessionError::Forbidden { need } => match need {
+            Need::Read => refusal("403 Forbidden", "doc_forbidden", "you can't read this doc"),
+            Need::Edit => refusal("403 Forbidden", "doc_forbidden", "you can't edit this doc (read-only)"),
+            Need::History => refusal("403 Forbidden", "history_forbidden", "you may read this doc but not its history"),
+            Need::Approver => refusal(
+                "403 Forbidden",
+                "not_the_approver",
+                "only the person this change was made for can approve or decline it",
+            ),
+            _ => refusal("403 Forbidden", "doc_forbidden", "refused"),
+        },
         SessionError::NotJoined { .. } => refusal("409 Conflict", "not_joined", "your connection to this doc closed; run the command again"),
         SessionError::Stale { expected, actual } => CliResponse {
             status: "409 Conflict",
@@ -290,6 +354,10 @@ pub fn session_error(e: &SessionError) -> CliResponse {
             body: json!({ "ok": false, "error": { "code": "declined", "reason": d.code, "hint": format!("live editing is off for this file: {}", d.message) } }).to_string(),
         },
         SessionError::NotFound(_) => refusal("404 Not Found", "doc_not_found", "no such doc"),
+        SessionError::NoApproval { seq } => {
+            refusal("404 Not Found", "no_approval", format!("change {seq} wasn't made on anyone's behalf"))
+        }
+        SessionError::BadApproval(m) => refusal("409 Conflict", "bad_approval", m.clone()),
         SessionError::PackMismatch { stored, pack } => {
             refusal("409 Conflict", "pack_mismatch", format!("this doc was stored as {stored}, not {pack}"))
         }
@@ -303,19 +371,14 @@ pub fn session_error(e: &SessionError) -> CliResponse {
 }
 
 /// A one-shot verb's connection: the pid's shared CLI connection (one
-/// client ID across verbs), held when `stay` is `Held`.
-fn join(s: &Session, caller: &DocCaller, stay: Stay) -> Result<k2_multiplayer_base::session::Joined, SessionError> {
-    s.join_shared(caller.participant(), stay)
+/// client ID across verbs; the kit keeps one per pid, via and
+/// on-behalf-of), held when `stay` is `Held`.
+fn join(s: &Session, c: &Call, stay: Stay) -> Result<k2_multiplayer_base::session::Joined, SessionError> {
+    s.join_shared(c.caller.participant(c.on_behalf), stay)
 }
 
-fn verb(
-    path: &str,
-    s: &Arc<Session>,
-    caller: &DocCaller,
-    t: &Target,
-    input: &Input,
-    rights: DocRights,
-) -> Result<CliResponse, VerbError> {
+fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
+    let (t, input, rights) = (c.target, c.input, c.rights);
     match path {
         STATUS => {
             let st = s.status()?;
@@ -332,7 +395,7 @@ fn verb(
             })))
         }
         READ => {
-            let j = join(s, caller, Stay::UntilIdle)?;
+            let j = join(s, c, Stay::UntilIdle)?;
             if let Some(lines) = input.str("lines") {
                 let (first, last) = parse_lines(&lines).map_err(|m| VerbError::Response(bad(m)))?;
                 s.set_view(j.conn, LineRange { root: ROOT.to_string(), first, last })?;
@@ -350,23 +413,23 @@ fn verb(
             })))
         }
         WHO => {
-            let j = join(s, caller, Stay::UntilIdle)?;
+            let j = join(s, c, Stay::UntilIdle)?;
             let roster = s.roster(j.conn)?;
             Ok(ok(json!({ "doc": doc_json(t), "roster": roster.iter().map(roster_json).collect::<Vec<_>>() })))
         }
         OPEN => {
-            let j = join(s, caller, Stay::Held)?;
+            let j = join(s, c, Stay::Held)?;
             Ok(ok(json!({ "doc": doc_json(t), "version": j.version, "client": j.client, "rights": rights.json() })))
         }
         LEAVE => {
-            let j = join(s, caller, Stay::UntilIdle)?;
+            let j = join(s, c, Stay::UntilIdle)?;
             let left = s.leave(j.conn)?;
             Ok(ok(json!({ "doc": doc_json(t), "left": left })))
         }
         VIEW => {
             let lines = input.str("lines").ok_or_else(|| VerbError::Response(bad("lines is required (a,b)")))?;
             let (first, last) = parse_lines(&lines).map_err(|m| VerbError::Response(bad(m)))?;
-            let j = join(s, caller, Stay::UntilIdle)?;
+            let j = join(s, c, Stay::UntilIdle)?;
             let r = s.set_view(j.conn, LineRange { root: ROOT.to_string(), first, last })?;
             Ok(ok(json!({ "doc": doc_json(t), "view": { "first": r.first, "last": r.last } })))
         }
@@ -377,32 +440,78 @@ fn verb(
                 Some(to) => parse_line_col(&to).map_err(|m| VerbError::Response(bad(m)))?,
                 None => anchor,
             };
-            let j = join(s, caller, Stay::UntilIdle)?;
-            let c = s.set_cursor(j.conn, ROOT, At::Line(anchor), At::Line(head))?;
-            Ok(ok(json!({ "doc": doc_json(t), "cursor": { "anchor": c.anchor, "head": c.head } })))
+            let j = join(s, c, Stay::UntilIdle)?;
+            let cur = s.set_cursor(j.conn, ROOT, At::Line(anchor), At::Line(head))?;
+            Ok(ok(json!({ "doc": doc_json(t), "cursor": { "anchor": cur.anchor, "head": cur.head } })))
         }
-        EDIT => edit(s, caller, t, input),
-        WRITE => write(s, caller, t, input),
+        EDIT => edit(s, c),
+        WRITE => write(s, c),
         UNDO | REDO => {
             let steps = input.u64("steps").map_err(VerbError::Response)?.unwrap_or(1) as usize;
             if steps == 0 || steps > MAX_STEPS {
                 return Err(VerbError::Response(bad(format!("steps must be 1..={MAX_STEPS}"))));
             }
-            let j = join(s, caller, Stay::UntilIdle)?;
+            let j = join(s, c, Stay::UntilIdle)?;
             let out = if path == UNDO { s.undo(j.conn, steps)? } else { s.redo(j.conn, steps)? };
-            Ok(undo_response(t, out))
+            Ok(undo_response(c, out))
+        }
+        APPROVE => {
+            let seq = input.u64("change").map_err(VerbError::Response)?.ok_or_else(|| {
+                VerbError::Response(bad("change is required: the change number from approvals or the edit"))
+            })?;
+            let state = match input.str("state").as_deref().map(str::trim) {
+                Some("approved") | Some("approve") => ApprovalState::Approved,
+                Some("declined") | Some("decline") => ApprovalState::Declined,
+                _ => return Err(VerbError::Response(bad("state must be approved or declined"))),
+            };
+            let j = join(s, c, Stay::UntilIdle)?;
+            let a = s.set_approval(j.conn, seq, state)?;
+            Ok(ok(json!({ "doc": doc_json(t), "change": seq, "approval": approval_json(&a) })))
+        }
+        APPROVALS => {
+            let pending_only = input.str("pending").is_some_and(|v| v == "1" || v == "true");
+            let mine = input.str("mine").is_some_and(|v| v == "1" || v == "true");
+            let me = c.caller.pid();
+            let j = join(s, c, Stay::UntilIdle)?;
+            let rows: Vec<Value> = s
+                .approvals(j.conn)?
+                .into_iter()
+                .filter(|(_, a)| !pending_only || a.state == ApprovalState::Pending)
+                .filter(|(_, a)| !mine || a.on_behalf_of == me)
+                .map(|(seq, a)| json!({ "change": seq, "approval": approval_json(&a) }))
+                .collect();
+            Ok(ok(json!({ "doc": doc_json(t), "approvals": rows })))
         }
         _ => Ok(CliResponse::not_found()),
     }
 }
 
-fn edit(s: &Arc<Session>, caller: &DocCaller, t: &Target, input: &Input) -> Result<CliResponse, VerbError> {
-    let ops = match input.body.get("edits") {
+/// The edit's own approval, when an agent made it on someone's behalf (the
+/// kit records `Pending` with the change; edits are never held).
+fn edit_reply(s: &Session, c: &Call, r: &EditResult, extra: Option<(&str, Value)>) -> Result<CliResponse, VerbError> {
+    let mut v = json!({ "doc": doc_json(c.target), "result": edit_json(r) });
+    if let Some(person) = c.on_behalf {
+        v["onBehalfOf"] = json!(person);
+        if !r.changed.is_empty() || r.lines_added + r.lines_removed > 0 {
+            let j = join(s, c, Stay::UntilIdle)?;
+            if let Some(a) = s.approval(j.conn, r.version)? {
+                v["approval"] = approval_json(&a);
+            }
+        }
+    }
+    if let Some((k, val)) = extra {
+        v[k] = val;
+    }
+    Ok(ok(v))
+}
+
+fn edit(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
+    let ops = match c.input.body.get("edits") {
         Some(Value::Array(a)) if !a.is_empty() => a.clone(),
         _ => return Err(VerbError::Response(bad("edits is required: a non-empty list"))),
     };
-    let if_version = input.u64("ifVersion").map_err(VerbError::Response)?;
-    let j = join(s, caller, Stay::UntilIdle)?;
+    let if_version = c.input.u64("ifVersion").map_err(VerbError::Response)?;
+    let j = join(s, c, Stay::UntilIdle)?;
     let result = match if_version {
         // Positions are from version V: refuse at once if the doc moved,
         // else the kit re-checks V atomically with the edit.
@@ -417,46 +526,203 @@ fn edit(s: &Arc<Session>, caller: &DocCaller, t: &Target, input: &Input) -> Resu
         }
         // Positions against the live text, computed and applied under the
         // session lock.
-        None => {
-            match s.edit_with(j.conn, ROOT, |live| hunks_for(live, &ops).map(|h| splice(live, &h))) {
-                Ok(Some(r)) => r,
-                Ok(None) => {
-                    let mut r = EditResult::default();
-                    r.version = s.status()?.version;
-                    r
-                }
-                Err(EditWithError::Compute(m)) => return Err(VerbError::Response(bad(m))),
-                Err(EditWithError::Session(e)) => return Err(VerbError::Session(e)),
+        None => match s.edit_with(j.conn, ROOT, |live| hunks_for(live, &ops).map(|h| splice(live, &h))) {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                let mut r = EditResult::default();
+                r.version = s.status()?.version;
+                r
             }
-        }
+            Err(EditWithError::Compute(m)) => return Err(VerbError::Response(bad(m))),
+            Err(EditWithError::Session(e)) => return Err(VerbError::Session(e)),
+        },
     };
-    Ok(ok(json!({ "doc": doc_json(t), "result": edit_json(&result) })))
+    edit_reply(s, c, &result, None)
 }
 
-fn write(s: &Arc<Session>, caller: &DocCaller, t: &Target, input: &Input) -> Result<CliResponse, VerbError> {
-    let text = match input.body.get("text") {
+fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
+    let text = match c.input.body.get("text") {
         Some(Value::String(s)) => s.clone(),
         _ => return Err(VerbError::Response(bad("text is required (a string in the JSON body)"))),
     };
-    let base = input.str("base").ok_or_else(|| VerbError::Response(bad("base is required: a version you read, or \"live\"")))?;
-    let j = join(s, caller, Stay::UntilIdle)?;
+    let base = c
+        .input
+        .str("base")
+        .ok_or_else(|| VerbError::Response(bad("base is required: a version you read, or \"live\"")))?;
+    let j = join(s, c, Stay::UntilIdle)?;
     if base.trim() == "live" {
         let r = s.replace_text(j.conn, ROOT, &text)?;
-        let mut v = json!({ "doc": doc_json(t), "result": edit_json(&r) });
-        if matches!(caller, DocCaller::Agent { .. }) {
-            v["warning"] = json!("--base live replaced whatever was there, including other people's edits since you read it; use --base <version> to merge");
-        }
-        return Ok(ok(v));
+        let warning = matches!(c.caller, DocCaller::Agent { .. }).then(|| {
+            (
+                "warning",
+                json!("--base live replaced whatever was there, including other people's edits since you read it; use --base <version> to merge"),
+            )
+        });
+        return edit_reply(s, c, &r, warning);
     }
     let base: u64 = base.trim().parse().map_err(|_| VerbError::Response(bad("base must be a version number or \"live\"")))?;
     match s.write_base(j.conn, ROOT, base, &text)? {
-        WriteOutcome::Applied(r) => Ok(ok(json!({ "doc": doc_json(t), "result": edit_json(&r) }))),
-        WriteOutcome::Conflicts(c) => Ok(conflicts_response(t, None, &c)),
+        WriteOutcome::Applied(r) => edit_reply(s, c, &r, None),
+        WriteOutcome::Conflicts(conf) => Ok(conflicts_response(c.target, None, &conf)),
         WriteOutcome::BaseExpired => Ok(refusal(
             "409 Conflict",
             "base_expired",
             format!("version {base} is no longer kept as a base; read the doc again and retry"),
         )),
+    }
+}
+
+fn approval_json(a: &Approval) -> Value {
+    json!({
+        "state": match a.state {
+            ApprovalState::Pending => "pending",
+            ApprovalState::Approved => "approved",
+            ApprovalState::Declined => "declined",
+        },
+        "by": a.by,
+        "atMs": a.at_ms,
+        "author": a.author,
+        "onBehalfOf": a.on_behalf_of,
+    })
+}
+
+// ── shares (MI25) ─────────────────────────────────────────────────────
+
+/// `shares` / `share` / `unshare`: people only (the owner token, a login
+/// at the Admin floor, a shell tab). An agent asks with a Permission Card
+/// (`docs.share`); it never shares by itself.
+fn shares_route(path: &str, caller: &DocCaller, input: &Input) -> CliResponse {
+    let Principal::Person(by) = caller.principal() else {
+        return refusal(
+            "403 Forbidden",
+            "person_only",
+            "only a person shares files with another workspace; ask with a permission card",
+        );
+    };
+    let rt = match super::runtime() {
+        Ok(rt) => rt,
+        Err(u) => return refusal("503 Service Unavailable", "docs_unavailable", u.message()),
+    };
+    let Some(store) = rt.store() else {
+        return refusal("503 Service Unavailable", "docs_unavailable", "live docs are restarting; run the command again");
+    };
+    let ws = |k: &str| -> Result<Option<String>, CliResponse> {
+        match input.str(k).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+            None => Ok(None),
+            Some(t) => target::workspace_root(&t).map(|(id, _)| Some(id)).map_err(target_refusal),
+        }
+    };
+    if path == SHARES {
+        let (owner, with) = match (ws("workspace"), ws("with")) {
+            (Ok(o), Ok(w)) => (o, w),
+            (Err(r), _) | (_, Err(r)) => return r,
+        };
+        return match shares::list(&store, owner.as_deref(), with.as_deref()) {
+            Ok(list) => ok(json!({ "shares": list })),
+            Err(e) => refusal("500 Internal Server Error", "docs_failed", e.to_string()),
+        };
+    }
+    let owner_tok = match input.str("workspace").filter(|s| !s.trim().is_empty()) {
+        Some(t) => t,
+        None => return bad("workspace is required: the workspace whose file you share"),
+    };
+    let with_tok = match input.str("with").filter(|s| !s.trim().is_empty()) {
+        Some(t) => t,
+        None => return bad("with is required: the workspace you share it with"),
+    };
+    let (owner, root) = match target::workspace_root(&owner_tok) {
+        Ok(x) => x,
+        Err(r) => return target_refusal(r),
+    };
+    let (sharee, _) = match target::workspace_root(&with_tok) {
+        Ok(x) => x,
+        Err(r) => return target_refusal(r),
+    };
+    if owner == sharee {
+        return bad("a workspace always has its own files; name another workspace");
+    }
+    let raw_path = input.str("path").unwrap_or_default();
+    let pid = format!("{}{by}", host::PERSON_PREFIX);
+    if path == UNSHARE {
+        let rel = match target::share_rel(&root, &raw_path, false) {
+            Ok((rel, _)) => rel,
+            Err(r) => return target_refusal(r),
+        };
+        return match shares::remove(&store, &owner, &sharee, &rel) {
+            Ok(Some(s)) => {
+                host::audit("doc-unshare", &pid, format!("{owner}:{} with={sharee}", show_rel(&s.path)));
+                ok(json!({ "removed": s }))
+            }
+            Ok(None) => refusal("404 Not Found", "share_not_found", "no such share"),
+            Err(e) => refusal("500 Internal Server Error", "docs_failed", e.to_string()),
+        };
+    }
+    let (rel, folder) = match target::share_rel(&root, &raw_path, true) {
+        Ok(x) => x,
+        Err(r) => return target_refusal(r),
+    };
+    let flag = |k: &str| match input.body.get(k) {
+        Some(Value::Bool(b)) => *b,
+        _ => input.str(k).is_some_and(|v| v == "1" || v == "true"),
+    };
+    let s = Share {
+        owner: owner.clone(),
+        sharee: sharee.clone(),
+        path: rel,
+        folder,
+        write: flag("write"),
+        history: flag("history"),
+        by: pid.clone(),
+        at_ms: host::now_ms(),
+    };
+    match shares::put(&store, &s) {
+        Ok(prev) => {
+            host::audit(
+                "doc-share",
+                &pid,
+                format!(
+                    "{owner}:{} with={sharee} folder={} write={} history={}",
+                    show_rel(&s.path),
+                    s.folder,
+                    s.write,
+                    s.history
+                ),
+            );
+            ok(json!({ "share": s, "replaced": prev }))
+        }
+        Err(e) => refusal("500 Internal Server Error", "docs_failed", e.to_string()),
+    }
+}
+
+/// The share route's entry for a permission card's apply (`docs.share`):
+/// the same handler, as the answering person (the card checks the Admin
+/// floor first).
+pub fn share_entry(by: &DocCaller, from: &str, path: &str, with_project: &str, write: bool, history: bool) -> CliResponse {
+    let params = HashMap::new();
+    let input = Input {
+        params: &params,
+        body: json!({ "workspace": from, "path": path, "with": with_project, "write": write, "history": history }),
+    };
+    shares_route(SHARE, by, &input)
+}
+
+/// A workspace's handle, else its name, else its id (refusal words and the
+/// card's `from=`, which the workspace resolver takes back).
+fn workspace_label(project_id: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::Project::get(&conn, project_id)
+        .ok()
+        .map(|p| if p.handle.trim().is_empty() { p.name } else { p.handle })
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| project_id.to_string())
+}
+
+fn show_rel(rel: &str) -> &str {
+    if rel.is_empty() {
+        "."
+    } else {
+        rel
     }
 }
 
@@ -527,7 +793,8 @@ fn conflicts_response(t: &Target, step: Option<usize>, c: &[Conflict]) -> CliRes
     }
 }
 
-fn undo_response(t: &Target, out: UndoOutcome) -> CliResponse {
+fn undo_response(c: &Call, out: UndoOutcome) -> CliResponse {
+    let t = c.target;
     match out {
         UndoOutcome::Applied { steps, result } => ok(json!({ "doc": doc_json(t), "steps": steps, "result": edit_json(&result) })),
         UndoOutcome::Conflicts { step, conflicts } => conflicts_response(t, Some(step), &conflicts),
@@ -773,5 +1040,19 @@ mod tests {
             assert!(resp.status.starts_with("405"), "{wrong} {r} answered {}", resp.status);
         }
         assert!(handle("GET", "/cli/docs/nope", &params, b"", &caller).status.starts_with("404"));
+    }
+
+    #[test]
+    fn an_agent_never_shares_and_a_person_never_acts_on_behalf() {
+        let agent = DocCaller::Agent { project_id: "p1".into() };
+        let params = HashMap::new();
+        for (m, r) in [("GET", SHARES), ("POST", SHARE), ("POST", UNSHARE)] {
+            let resp = handle(m, r, &params, br#"{"workspace":"x","path":"a.md","with":"y"}"#, &agent);
+            assert!(resp.status.starts_with("403"), "{m} {r}: {}", resp.status);
+            assert!(resp.body.contains("person_only"), "{}", resp.body);
+        }
+        let person = super::super::caller::owner();
+        let resp = handle("GET", READ, &params, br#"{"path":"a.md","onBehalfOf":"owner"}"#, &person);
+        assert!(resp.status.starts_with("400"), "{}", resp.status);
     }
 }

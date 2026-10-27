@@ -25,7 +25,12 @@ use crate::doc::{ClientId, Neutral};
 use enc::{R, W};
 
 /// Version of this store's layout. Bumped on incompatible changes; older stores are migrated.
-pub const STORE_FORMAT: u64 = 1;
+///
+/// - 1: first layout.
+/// - 2: log records v2 (`on_behalf_of`), approvals, the host table. A format-1 store opens
+///   as is (its records still decode) and is stamped 2; a build reading only format 1
+///   refuses it with [`StoreError::Newer`] instead of misreading v2 log records.
+pub const STORE_FORMAT: u64 = 2;
 
 pub type DocId = u64;
 /// Position in a doc's update log (1-based, increasing, never reused).
@@ -39,6 +44,8 @@ const SNAPSHOTS: TableDefinition<u64, &[u8]> = TableDefinition::new("snapshots")
 const UPDATES: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("updates");
 const CLIENTS: TableDefinition<(u64, u64), &str> = TableDefinition::new("clients");
 const VERSIONS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("versions");
+const APPROVALS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("approvals");
+const HOST: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("host");
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StoreError {
@@ -60,6 +67,8 @@ pub enum StoreError {
     NamedVersion(DocId, VersionId),
     #[error("put_meta can't change a doc's key; use rekey")]
     KeyChange,
+    #[error("no approval for change {1} of doc {0}")]
+    NoApproval(DocId, Seq),
 }
 
 macro_rules! db_err {
@@ -118,6 +127,89 @@ pub struct LogEntry {
     pub via: String,
     /// The engine update (kit-made).
     pub update: Vec<u8>,
+    /// The person an assistant agent made this change for (`author` is the agent). An
+    /// entry with this set gets a `Pending` [`Approval`] in the same transaction it is
+    /// appended in. Record version 2; version-1 records decode with `None`.
+    pub on_behalf_of: Option<String>,
+}
+
+/// Where an on-behalf change stands with the person it was made for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ApprovalState {
+    Pending,
+    Approved,
+    Declined,
+}
+
+impl ApprovalState {
+    fn from_u8(v: u8) -> Result<Self, StoreError> {
+        Ok(match v {
+            0 => Self::Pending,
+            1 => Self::Approved,
+            2 => Self::Declined,
+            _ => return Err(StoreError::Corrupt("approval state")),
+        })
+    }
+    fn to_u8(self) -> u8 {
+        match self {
+            Self::Pending => 0,
+            Self::Approved => 1,
+            Self::Declined => 2,
+        }
+    }
+}
+
+/// The approval record of one on-behalf change, keyed `(doc, seq)`. It survives compaction
+/// (the log entry may not).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Approval {
+    pub state: ApprovalState,
+    /// Who settled it (always the `on_behalf_of` person); `None` while pending.
+    pub by: Option<String>,
+    /// When it was settled, on the host's clock; `None` while pending.
+    pub at_ms: Option<u64>,
+    /// The agent that made the change.
+    pub author: String,
+    /// The person it was made for: the only one who may settle it.
+    pub on_behalf_of: String,
+}
+
+impl Approval {
+    /// A new pending approval for a change by `author` on behalf of `on_behalf_of`.
+    pub fn pending(author: impl Into<String>, on_behalf_of: impl Into<String>) -> Self {
+        Self {
+            state: ApprovalState::Pending,
+            by: None,
+            at_ms: None,
+            author: author.into(),
+            on_behalf_of: on_behalf_of.into(),
+        }
+    }
+
+    /// This approval settled as `state` by `by` at `at_ms`.
+    pub fn settled(&self, state: ApprovalState, by: impl Into<String>, at_ms: u64) -> Self {
+        Self {
+            state,
+            by: Some(by.into()),
+            at_ms: Some(at_ms),
+            ..self.clone()
+        }
+    }
+}
+
+/// One write in [`DocStore::host_batch`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostOp<'a> {
+    Put {
+        ns: &'a str,
+        key: &'a str,
+        value: &'a [u8],
+    },
+    Delete {
+        ns: &'a str,
+        key: &'a str,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,20 +301,24 @@ fn dec_meta(b: &[u8]) -> Result<DocMeta, StoreError> {
     Ok(m)
 }
 
+/// Log record version 2: version 1 plus `on_behalf_of` at the end.
 fn enc_entry(e: &LogEntry) -> Vec<u8> {
     let mut w = W::default();
-    w.u8(1)
+    w.u8(2)
         .str(&e.author)
         .u64(e.client)
         .u64(e.at_ms)
         .str(&e.via)
-        .bytes(&e.update);
+        .bytes(&e.update)
+        .opt_str(e.on_behalf_of.as_deref());
     w.0
 }
 
+/// Decodes log records version 1 and 2.
 fn dec_entry(b: &[u8]) -> Result<LogEntry, StoreError> {
     let mut r = R::new(b, "log entry");
-    if r.u8()? != 1 {
+    let v = r.u8()?;
+    if v != 1 && v != 2 {
         return Err(StoreError::Corrupt("log entry version"));
     }
     let e = LogEntry {
@@ -231,9 +327,64 @@ fn dec_entry(b: &[u8]) -> Result<LogEntry, StoreError> {
         at_ms: r.u64()?,
         via: r.str()?,
         update: r.bytes()?,
+        on_behalf_of: if v >= 2 { r.opt_str()? } else { None },
     };
     r.end()?;
     Ok(e)
+}
+
+fn enc_approval(a: &Approval) -> Vec<u8> {
+    let mut w = W::default();
+    w.u8(1)
+        .u8(a.state.to_u8())
+        .opt_str(a.by.as_deref())
+        .u8(u8::from(a.at_ms.is_some()))
+        .u64(a.at_ms.unwrap_or(0))
+        .str(&a.author)
+        .str(&a.on_behalf_of);
+    w.0
+}
+
+fn dec_approval(b: &[u8]) -> Result<Approval, StoreError> {
+    let mut r = R::new(b, "approval");
+    if r.u8()? != 1 {
+        return Err(StoreError::Corrupt("approval version"));
+    }
+    let state = ApprovalState::from_u8(r.u8()?)?;
+    let by = r.opt_str()?;
+    let has_at = r.u8()?;
+    let at = r.u64()?;
+    let a = Approval {
+        state,
+        by,
+        at_ms: match has_at {
+            0 => None,
+            1 => Some(at),
+            _ => return Err(StoreError::Corrupt("approval")),
+        },
+        author: r.str()?,
+        on_behalf_of: r.str()?,
+    };
+    r.end()?;
+    Ok(a)
+}
+
+/// Insert one log entry, and its pending approval when it was made on someone's behalf.
+fn put_entry(
+    w: &redb::WriteTransaction,
+    id: DocId,
+    seq: Seq,
+    e: &LogEntry,
+) -> Result<(), StoreError> {
+    w.open_table(UPDATES)?
+        .insert((id, seq), enc_entry(e).as_slice())?;
+    if let Some(p) = &e.on_behalf_of {
+        w.open_table(APPROVALS)?.insert(
+            (id, seq),
+            enc_approval(&Approval::pending(e.author.clone(), p.clone())).as_slice(),
+        )?;
+    }
+    Ok(())
 }
 
 fn enc_version(v: &Version) -> Vec<u8> {
@@ -319,6 +470,10 @@ impl DocStore {
                     meta.insert("store_format", STORE_FORMAT)?;
                 }
                 Some(f) if f > STORE_FORMAT => return Err(StoreError::Newer { found: f }),
+                // 1 -> 2: nothing to rewrite (v1 records still decode); new tables below
+                Some(f) if f < STORE_FORMAT => {
+                    meta.insert("store_format", STORE_FORMAT)?;
+                }
                 Some(_) => {}
             }
             w.open_table(DOCS)?;
@@ -327,6 +482,8 @@ impl DocStore {
             w.open_table(UPDATES)?;
             w.open_table(CLIENTS)?;
             w.open_table(VERSIONS)?;
+            w.open_table(APPROVALS)?;
+            w.open_table(HOST)?;
         }
         w.commit()?;
         Ok(Self { db })
@@ -408,8 +565,7 @@ impl DocStore {
             w.open_table(CLIENTS)?.insert((id, client), owner)?;
             let seq = match entry {
                 Some(e) => {
-                    w.open_table(UPDATES)?
-                        .insert((id, 1), enc_entry(e).as_slice())?;
+                    put_entry(&w, id, 1, e)?;
                     Some(1)
                 }
                 None => None,
@@ -466,27 +622,37 @@ impl DocStore {
     }
 
     /// Append entries to a doc's log in one durable transaction; returns their positions.
+    /// An entry with `on_behalf_of` gets a `Pending` [`Approval`] in the same transaction.
     pub fn append(&self, id: DocId, entries: &[LogEntry]) -> Result<Vec<Seq>, StoreError> {
         let w = self.db.begin_write()?;
-        let seqs = {
-            if w.open_table(DOCS)?.get(id)?.is_none() {
-                return Err(StoreError::NoDoc(id));
-            }
-            let mut t = w.open_table(UPDATES)?;
-            let mut next = self.last_seq_in(&t, id)? + 1;
-            // after a compaction the log may be empty; never reuse a snapshot's position
-            if let Some(v) = w.open_table(SNAPSHOTS)?.get(id)? {
-                next = next.max(dec_snapshot(v.value())?.0 + 1);
-            }
-            let mut seqs = Vec::with_capacity(entries.len());
-            for e in entries {
-                t.insert((id, next), enc_entry(e).as_slice())?;
-                seqs.push(next);
-                next += 1;
-            }
-            seqs
-        };
+        let seqs = self.append_in(&w, id, entries)?;
         w.commit()?;
+        Ok(seqs)
+    }
+
+    fn append_in(
+        &self,
+        w: &redb::WriteTransaction,
+        id: DocId,
+        entries: &[LogEntry],
+    ) -> Result<Vec<Seq>, StoreError> {
+        if w.open_table(DOCS)?.get(id)?.is_none() {
+            return Err(StoreError::NoDoc(id));
+        }
+        let mut next = {
+            let t = w.open_table(UPDATES)?;
+            self.last_seq_in(&t, id)? + 1
+        };
+        // after a compaction the log may be empty; never reuse a snapshot's position
+        if let Some(v) = w.open_table(SNAPSHOTS)?.get(id)? {
+            next = next.max(dec_snapshot(v.value())?.0 + 1);
+        }
+        let mut seqs = Vec::with_capacity(entries.len());
+        for e in entries {
+            put_entry(w, id, next, e)?;
+            seqs.push(next);
+            next += 1;
+        }
         Ok(seqs)
     }
 
@@ -639,6 +805,109 @@ impl DocStore {
                 return Err(StoreError::NamedVersion(id, vid));
             }
             t.remove((id, vid))?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+}
+
+impl DocStore {
+    // ----- approvals (on-behalf changes) -----
+
+    /// The approval record of change `seq`, if it was made on someone's behalf.
+    pub fn approval(&self, id: DocId, seq: Seq) -> Result<Option<Approval>, StoreError> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(APPROVALS)?;
+        let v = t.get((id, seq))?;
+        v.map(|v| dec_approval(v.value())).transpose()
+    }
+
+    /// Every approval record of a doc, oldest change first.
+    pub fn approvals(&self, id: DocId) -> Result<Vec<(Seq, Approval)>, StoreError> {
+        let r = self.db.begin_read()?;
+        let mut out = Vec::new();
+        for kv in r.open_table(APPROVALS)?.range((id, 0)..=(id, u64::MAX))? {
+            let (k, v) = kv?;
+            out.push((k.value().1, dec_approval(v.value())?));
+        }
+        Ok(out)
+    }
+
+    /// Replace an existing approval record. The store doesn't check who may do it: sessions
+    /// do ([`crate::session::Session::set_approval`]).
+    pub fn set_approval(&self, id: DocId, seq: Seq, a: &Approval) -> Result<(), StoreError> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(APPROVALS)?;
+            if t.get((id, seq))?.is_none() {
+                return Err(StoreError::NoApproval(id, seq));
+            }
+            t.insert((id, seq), enc_approval(a).as_slice())?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    // ----- the host's own table -----
+    //
+    // A small key-value table for the host's own records next to the docs (so they share
+    // the store's transactions, hand-off and backups). Namespaces and keys are opaque: the
+    // kit never reads, interprets or erases these rows. Erasing them (a person's data, a
+    // deleted workspace) is the host's job.
+
+    /// Set `ns`/`key` to `value`, in one durable transaction.
+    pub fn host_put(&self, ns: &str, key: &str, value: &[u8]) -> Result<(), StoreError> {
+        self.host_batch(&[HostOp::Put { ns, key, value }])
+    }
+
+    /// The value at `ns`/`key`.
+    pub fn host_get(&self, ns: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(HOST)?;
+        let v = t.get((ns, key))?;
+        Ok(v.map(|v| v.value().to_vec()))
+    }
+
+    /// Delete `ns`/`key`; returns whether it existed. One durable transaction.
+    pub fn host_delete(&self, ns: &str, key: &str) -> Result<bool, StoreError> {
+        let w = self.db.begin_write()?;
+        let existed = w.open_table(HOST)?.remove((ns, key))?.is_some();
+        w.commit()?;
+        Ok(existed)
+    }
+
+    /// Every `(key, value)` in `ns` whose key starts with `prefix` (`""` for all), in key
+    /// order, from one consistent read.
+    pub fn host_scan(&self, ns: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(HOST)?;
+        let mut out = Vec::new();
+        for kv in t.range((ns, prefix)..)? {
+            let (k, v) = kv?;
+            let (kns, kkey) = k.value();
+            if kns != ns || !kkey.starts_with(prefix) {
+                break;
+            }
+            out.push((kkey.to_owned(), v.value().to_vec()));
+        }
+        Ok(out)
+    }
+
+    /// Apply several puts and deletes in **one** durable transaction: all or none.
+    pub fn host_batch(&self, ops: &[HostOp<'_>]) -> Result<(), StoreError> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(HOST)?;
+            for op in ops {
+                match *op {
+                    HostOp::Put { ns, key, value } => {
+                        t.insert((ns, key), value)?;
+                    }
+                    HostOp::Delete { ns, key } => {
+                        t.remove((ns, key))?;
+                    }
+                }
+            }
         }
         w.commit()?;
         Ok(())

@@ -32,6 +32,9 @@ export interface ZenLibFile {
   bytes: number
   /** Lower-case hex sha256. */
   sha256: string
+  /** A copied npm file: the package's own sha256 before K2's inline
+   *  rewrite (0.46.5, copy detection). */
+  upstreamSha256?: string
   /** Pinned download URL; set when the library is `download`. */
   url?: string
 }
@@ -44,6 +47,8 @@ export interface ZenLibEntry {
   line: string
   /** Schema 2: line requests K2 loads first, once (`marked@18`). */
   needs?: string[]
+  /** Schema 2: the banner a copy of it starts with (copy detection). */
+  fingerprints?: string[]
   title: string
   /** The classic global it defines: THREE, PIXI, d3, … */
   global: string

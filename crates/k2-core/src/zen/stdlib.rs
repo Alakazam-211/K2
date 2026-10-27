@@ -33,6 +33,9 @@ use serde_json::Value as J;
 /// The checked-in manifest.
 pub const ZEN_LIB_JSON: &str = include_str!("../../../../src/shared/zen-lib.json");
 
+/// A fingerprint counts within this many bytes of a file's start (WL17 (b)).
+pub const FINGERPRINT_WINDOW: usize = 1024;
+
 /// The resolver's shared request → key cases (WL7): this file's tests and
 /// `zen-lib-loader.test.ts` read the same fixture, so the Rust resolver and
 /// the renderer's can't drift.
@@ -95,6 +98,12 @@ pub struct ZenLibEntry {
     /// them first, once (schema 2, WL3).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub needs: Vec<String>,
+    /// Text a copy of this library starts with (its upstream banner, within
+    /// the first [`FINGERPRINT_WINDOW`] bytes): how K2 spots a copy pasted
+    /// into a widget (WL17 (b), vs-live L11). None for a library whose
+    /// banner isn't its own (ECharts' ASF header).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fingerprints: Vec<String>,
     /// Human name for the guide: `three.js`.
     pub title: String,
     /// The classic global it defines (`THREE`, `PIXI`, `d3`). Libraries are
@@ -127,6 +136,11 @@ pub struct ZenLibFile {
     pub bytes: u64,
     /// Lower-case hex sha256 of the file.
     pub sha256: String,
+    /// A file copied from an npm package: the sha256 of the package's own
+    /// file before K2's inline rewrite (vs-live L11), so an agent's copy from
+    /// npm or a CDN is recognised even where K2's bytes differ.
+    #[serde(default, rename = "upstreamSha256", skip_serializing_if = "Option::is_none")]
+    pub upstream_sha256: Option<String>,
     /// The pinned download URL; required when the library is `download`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -467,13 +481,14 @@ mod tests {
             version: "0.170.0".into(),
             line: "0.170".into(),
             needs: Vec::new(),
+            fingerprints: Vec::new(),
             title: "three.js".into(),
             global: "THREE".into(),
             license: "MIT".into(),
             license_file: "LICENSE".into(),
             copyright: "Copyright © 2010-2024 three.js authors".into(),
             source: LibSource::Bundled,
-            files: vec![ZenLibFile { name: "three.min.js".into(), bytes: 10, sha256: "00".into(), url: None }],
+            files: vec![ZenLibFile { name: "three.min.js".into(), bytes: 10, sha256: "00".into(), upstream_sha256: None, url: None }],
             prebundled: Some("esbuild three/src/Three.js --bundle --format=iife --global-name=THREE".into()),
             notes: None,
         }

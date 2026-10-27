@@ -854,6 +854,7 @@ pub fn check_files(prefix: &str, folder: &str, files: &BTreeMap<String, Vec<u8>>
     let out = bundle::bundle(prefix, &manifest.entry, files);
     c.errors.extend(out.errors);
     c.warnings.extend(out.warnings);
+    c.warnings.extend(library_globals_not_loaded(&manifest, &out.declared, &out.globals_read));
     if c.errors.is_empty() {
         // S0: the version is the document AND the manifest's run fields.
         c.bundle = out.bundle.map(|b| b.bound(version_digest(&manifest)));
@@ -883,6 +884,50 @@ pub fn version_digest(m: &Manifest) -> String {
         "libs": m.libs,
         "colorScheme": m.color_scheme.as_deref().unwrap_or("garden"),
     }))
+}
+
+/// WL16 (vs-live L10): a script reads a global that one of K2's libraries
+/// defines (`uPlot`, `Chart`, `marked`, …), no script of the widget declares
+/// it, and the widget doesn't load that library: one warning per name, at
+/// its first read. (A library's other globals, like Howler's `Howl`, aren't
+/// in the manifest; those misses are accepted.)
+pub fn library_globals_not_loaded(
+    manifest: &Manifest,
+    declared: &std::collections::BTreeSet<String>,
+    reads: &[(String, Diagnostic)],
+) -> Vec<Diagnostic> {
+    let m = stdlib::zen_lib_manifest();
+    let r = stdlib::resolve(m, &manifest.libs);
+    let loaded: Vec<&str> = r
+        .keys
+        .iter()
+        .filter_map(J::as_str)
+        .filter_map(|k| m.libs.iter().find(|e| e.key() == k))
+        .map(|e| e.global.as_str())
+        .collect();
+    let mut out = Vec::new();
+    for (name, place) in reads {
+        if declared.contains(name) || loaded.contains(&name.as_str()) {
+            continue;
+        }
+        let Some(e) = m
+            .libs
+            .iter()
+            .filter(|e| e.global == *name)
+            .max_by(|a, b| stdlib::version_cmp(&a.version, &b.version))
+        else {
+            continue;
+        };
+        out.push(Diagnostic {
+            message: format!(
+                "{name} is K2's {} library, but this widget doesn't load it; add \"{}@{}\" to requires.libs",
+                e.id, e.id, e.line
+            ),
+            suggestion: Some("K2's libraries are globals that load before your scripts; list them, never copy them (k2 zen guide libs)".into()),
+            ..place.clone()
+        });
+    }
+    out
 }
 
 /// The bytes of every code file (manifest, HTML, JS, CSS), for history.
@@ -1199,6 +1244,29 @@ mod tests {
         let js = trend.files.iter().find(|(n, _)| *n == "trend.js").expect("trend.js").1;
         assert!(js.contains("k2.sources.subscribe(source, {") && js.contains("err.retrying") && js.contains("new uPlot("));
         assert!(!js.contains("setInterval") && !js.contains(".innerHTML"), "no hand-rolled retry, no innerHTML");
+    }
+
+    /// WL16: a library global used without listing it warns once, naming
+    /// the line; listed, or declared by the widget itself, it doesn't.
+    #[test]
+    fn a_library_global_used_but_not_listed_warns() {
+        let check = |libs: &str, js: &str| {
+            let mut f: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+            f.insert("manifest.json".into(), format!("{{\"schema\": 1, \"name\": \"Chart\", \"caps\": []{libs}}}").into_bytes());
+            f.insert("index.html".into(), b"<script src=\"a.js\"></script>".to_vec());
+            f.insert("a.js".into(), js.as_bytes().to_vec());
+            let c = check_files("widgets/chart", "chart", &f);
+            assert!(c.errors.is_empty(), "{:?}", c.errors);
+            c.warnings.into_iter().filter(|d| d.message.contains("is K2's")).collect::<Vec<_>>()
+        };
+        let w = check("", "const el = document.body\nnew uPlot({}, [], el)\nnew uPlot({}, [], el)\n");
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!((w[0].file.as_str(), w[0].line), ("widgets/chart/a.js", 2));
+        assert!(w[0].message.starts_with("uPlot is K2's uplot library") && w[0].message.contains("add \"uplot@1\" to requires.libs"), "{w:?}");
+        assert!(check(", \"requires\": {\"libs\": [\"uplot@1\"]}", "new uPlot({}, [], document.body)\n").is_empty());
+        assert!(check("", "function uPlot() {}\nnew uPlot()\n").is_empty(), "the widget's own uPlot");
+        let w = check("", "window.marked.parse('x')\n");
+        assert!(w.iter().any(|d| d.message.starts_with("marked is K2's marked library")), "{w:?}");
     }
 
     #[test]

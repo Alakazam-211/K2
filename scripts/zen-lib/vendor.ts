@@ -321,7 +321,10 @@ for (const lib of LIBS) {
       const text = inlineSafe(lib, f.name, await fileText(lib, f))
       const buf = Buffer.from(text, 'utf8')
       writeFileSync(join(dir, f.name), buf)
-      files.push({ name: f.name, bytes: buf.length, sha256: sha256(buf) })
+      // 0.46.5 (copy detection, vs-live L11): a copied npm file also records
+      // the package's own sha256, before the inline rewrite.
+      const upstream = 'copy' in f ? sha256(readFileSync(pkgFile(f.copy))) : null
+      files.push({ name: f.name, bytes: buf.length, sha256: sha256(buf), ...(upstream ? { upstreamSha256: upstream } : {}) })
     }
   } else {
     if (lib.files.length || !lib.urls) die(`${key}: a download library names urls, not files`)
@@ -355,6 +358,7 @@ for (const lib of LIBS) {
     // Schema 2 (0.46.5): the line a widget asks for, and what it needs first.
     line: zenLibLineOf(lib.version),
     ...(lib.needs?.length ? { needs: lib.needs } : {}),
+    ...(lib.fingerprints?.length ? { fingerprints: lib.fingerprints } : {}),
     title: lib.title,
     global: lib.global,
     license: lib.license,

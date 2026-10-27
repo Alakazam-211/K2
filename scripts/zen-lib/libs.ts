@@ -80,6 +80,9 @@ export interface LibSpec {
   /** 0.46.5 (WL3): other libraries it needs, as line requests
    *  (`marked@18`); K2 loads them first, once. */
   needs?: string[]
+  /** 0.46.5 (WL17): text a copy of it carries in its first 1 KB (its own
+   *  upstream banner, never a generic licence header). */
+  fingerprints?: string[]
 }
 
 const THREE_ADDONS: [string, string][] = [
@@ -146,6 +149,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'three',
     version: '0.186.0',
+    fingerprints: ['Three.js Authors', '/*! three.js '],
     title: 'three.js',
     global: 'THREE',
     license: 'MIT',
@@ -159,6 +163,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'globe.gl',
     version: '2.46.2',
+    fingerprints: ['globe.gl - https://github.com/vasturiano/globe.gl'],
     title: 'globe.gl',
     global: 'Globe',
     license: 'MIT',
@@ -184,6 +189,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'pixi.js',
     version: '8.21.0',
+    fingerprints: ['PixiJS - v'],
     title: 'PixiJS',
     global: 'PIXI',
     license: 'MIT',
@@ -224,6 +230,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'matter-js',
     version: '0.20.0',
+    fingerprints: ['http://brm.io/matter-js/'],
     title: 'Matter.js',
     global: 'Matter',
     license: 'MIT',
@@ -236,6 +243,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'd3',
     version: '7.9.0',
+    fingerprints: ['// https://d3js.org v'],
     title: 'D3',
     global: 'd3',
     license: 'ISC',
@@ -252,6 +260,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'chart.js',
     version: '4.5.1',
+    fingerprints: ['https://www.chartjs.org'],
     title: 'Chart.js',
     global: 'Chart',
     license: 'MIT',
@@ -276,6 +285,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'uplot',
     version: '1.6.32',
+    fingerprints: ['/*! https://github.com/leeoniya/uPlot (v'],
     title: 'uPlot',
     global: 'uPlot',
     license: 'MIT',
@@ -292,6 +302,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'animejs',
     version: '4.5.0',
+    fingerprints: ['Anime.js - '],
     title: 'Anime.js',
     global: 'anime',
     license: 'MIT',
@@ -340,6 +351,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'howler',
     version: '2.2.4',
+    fingerprints: ['howler.js v'],
     title: 'howler.js',
     global: 'Howler',
     license: 'MIT',
@@ -352,6 +364,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'tone',
     version: '15.1.22',
+    fingerprints: ['Tone.js.LICENSE.txt'],
     title: 'Tone.js',
     global: 'Tone',
     license: 'MIT',
@@ -366,6 +379,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'leaflet',
     version: '1.9.4',
+    fingerprints: ['a JS library for interactive maps'],
     title: 'Leaflet',
     global: 'L',
     license: 'BSD-2-Clause',
@@ -384,6 +398,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'marked',
     version: '18.0.14',
+    fingerprints: [' - a markdown parser'],
     title: 'marked',
     global: 'marked',
     license: 'MIT',
@@ -396,6 +411,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'dompurify',
     version: '3.4.17',
+    fingerprints: ['@license DOMPurify '],
     title: 'DOMPurify',
     global: 'DOMPurify',
     license: 'Apache-2.0',
@@ -408,6 +424,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'highlight.js',
     version: '11.12.0',
+    fingerprints: ['Highlight.js v'],
     title: 'highlight.js',
     global: 'hljs',
     license: 'BSD-3-Clause',
@@ -554,6 +571,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'k2-help',
     version: '1.0.0',
+    fingerprints: ['/*! k2-help '],
     title: 'K2 help button (widget kit)',
     global: 'K2Help',
     license: 'FSL-1.1-Apache-2.0',
@@ -568,6 +586,7 @@ export const LIBS: LibSpec[] = [
   {
     id: 'k2-thread',
     version: '1.0.0',
+    fingerprints: ['/*! k2-thread '],
     title: 'K2 Thread panel (widget kit)',
     global: 'K2Thread',
     license: 'FSL-1.1-Apache-2.0',

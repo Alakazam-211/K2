@@ -235,6 +235,11 @@ pub struct BundleOut {
     pub bundle: Option<Bundle>,
     pub errors: Vec<Diagnostic>,
     pub warnings: Vec<Diagnostic>,
+    /// Every top-level name the widget's scripts declare (WL16).
+    pub declared: std::collections::BTreeSet<String>,
+    /// Globals the scripts read without declaring them, each once, in
+    /// document order, with where it is first read (WL16): `(name, place)`.
+    pub globals_read: Vec<(String, Diagnostic)>,
 }
 
 /// What a `src` / `href` / `url()` value names.
@@ -505,6 +510,24 @@ struct Ctx<'a> {
     warnings: Vec<Diagnostic>,
     data_urls: BTreeMap<String, String>,
     code_bytes: usize,
+    declared: std::collections::BTreeSet<String>,
+    globals_read: Vec<(String, Diagnostic)>,
+    /// Scripts that look like a copied library (WL17), reported at the end
+    /// with the code size before and after.
+    copies: Vec<Copied>,
+}
+
+/// One script that looks like a copy of K2's library `id`.
+struct Copied {
+    file: String,
+    pos: (usize, usize),
+    /// `None`: an inline `<script>` in the entry HTML.
+    src: Option<String>,
+    bytes: usize,
+    id: String,
+    line: String,
+    title: String,
+    how: &'static str,
 }
 
 impl Ctx<'_> {
@@ -527,13 +550,82 @@ impl Ctx<'_> {
     /// starts in `file` (an inline `<script>`); `None` = not JavaScript.
     fn js(&mut self, file: &str, text: &str, base: (usize, usize), lang: Option<Lang>) {
         let Some(lang) = lang else { return };
-        for f in jscheck::check(text, lang, Surface::Widget) {
+        let (findings, facts) = jscheck::check_with_facts(text, lang, Surface::Widget);
+        for f in findings {
             let (line, col) = jscheck::line_col_from(text, f.offset as usize, base);
             let d = Diagnostic { file: self.label(file), line, col, message: f.message, suggestion: Some(f.suggestion) };
             match f.severity {
                 Severity::Error => self.errors.push(d),
                 Severity::Warning => self.warnings.push(d),
             }
+        }
+        // WL16: what the scripts declare and the globals they read.
+        self.declared.extend(facts.declared);
+        let mut reads: Vec<(String, u32)> = facts.unresolved.into_iter().collect();
+        reads.sort_by_key(|(_, at)| *at);
+        for (name, at) in reads {
+            if self.globals_read.iter().any(|(n, _)| *n == name) {
+                continue;
+            }
+            let (line, col) = jscheck::line_col_from(text, at as usize, base);
+            let place = Diagnostic { file: self.label(file), line, col, message: String::new(), suggestion: None };
+            self.globals_read.push((name, place));
+        }
+    }
+
+    /// WL17 (vs-live L11): does this script body look like a copy of one of
+    /// K2's libraries? By sha256 (K2's file or the npm package's own), by
+    /// its banner in the first 1 KB, or (a `<script src>` file) by its name.
+    /// Bodies under 16 KB are never flagged.
+    fn note_copy(&mut self, file: &str, pos: (usize, usize), src: Option<&str>, body: &str) {
+        let bytes = body.len();
+        if bytes < COPY_FLOOR_BYTES {
+            return;
+        }
+        let m = super::stdlib::zen_lib_manifest();
+        let sum = sha256_hex(body.as_bytes());
+        let newest = |id: &str| m.libs.iter().filter(|e| e.id == id).max_by(|a, b| super::stdlib::version_cmp(&a.version, &b.version));
+        let mut hit: Option<(&super::stdlib::ZenLibEntry, &'static str)> = None;
+        for e in &m.libs {
+            if e.files.iter().any(|f| f.sha256 == sum || f.upstream_sha256.as_deref() == Some(sum.as_str())) {
+                hit = Some((e, "byte for byte"));
+                break;
+            }
+        }
+        if hit.is_none() {
+            let mut cut = body.len().min(super::stdlib::FINGERPRINT_WINDOW);
+            while !body.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            let head = &body[..cut];
+            hit =m.libs.iter().find(|e| e.fingerprints.iter().any(|f| head.contains(f.as_str()))).map(|e| (e, "by its banner"));
+        }
+        if hit.is_none() {
+            if let Some(name) = src {
+                let stem = name.to_ascii_lowercase();
+                let stem = stem.trim_end_matches(".js");
+                let matches = |id: &str| stem == id || stem.strip_prefix(id).is_some_and(|r| r.starts_with(['.', '-', '_']));
+                hit = m.libs.iter().find(|e| matches(&e.id.to_ascii_lowercase())).map(|e| (e, "by its name")).or_else(|| {
+                    COMMON_LIBRARIES
+                        .iter()
+                        .find(|(alias, _)| matches(alias))
+                        .and_then(|(_, id)| newest(id))
+                        .map(|e| (e, "by its name"))
+                });
+            }
+        }
+        if let Some((e, how)) = hit {
+            let e = newest(&e.id).unwrap_or(e);
+            self.copies.push(Copied {
+                file: file.to_string(),
+                pos,
+                src: src.map(str::to_string),
+                bytes,
+                id: e.id.clone(),
+                line: e.line.clone(),
+                title: e.title.clone(),
+                how,
+            });
         }
     }
 
@@ -659,6 +751,9 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
         warnings: Vec::new(),
         data_urls: BTreeMap::new(),
         code_bytes: raw.len(),
+        declared: std::collections::BTreeSet::new(),
+        globals_read: Vec::new(),
+        copies: Vec::new(),
     };
     let mut doc = Out { parts: Vec::new(), cur: String::new() };
     let mut raw_state: Option<Raw> = None;
@@ -687,6 +782,9 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
                     if emit {
                         let base = after_tag(src, l, "<script");
                         cx.js(&entry_owned, &body, base, lang);
+                        if lang.is_some() {
+                            cx.note_copy(&entry_owned, base, None, &body);
+                        }
                         doc.push(&body);
                     }
                     doc.push("</script>");
@@ -760,7 +858,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
                             Ref::Local(file) => match cx.text_file(&file, ".js") {
                                 Ok(js) => {
                                     cx.js(&file, &js, (1, 1), lang);
-                                    copied_library_warning(&mut cx, &file);
+                                    cx.note_copy(&file, (1, 1), Some(&file), &js);
                                     write_start(&mut doc, "script", &tag, &["src", "nonce", "integrity", "crossorigin", "async", "defer"]);
                                     doc.nonce_attr();
                                     doc.push(">");
@@ -900,6 +998,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
         Some(Raw::Other { name }) => doc.push(&format!("</{name}>")),
         None => {}
     }
+    copied_library_warnings(&mut cx);
     if cx.code_bytes > MAX_CODE_BYTES {
         cx.errors.push(Diagnostic {
             suggestion: None,
@@ -937,6 +1036,8 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
             ),
         });
     }
+    out.declared = std::mem::take(&mut cx.declared);
+    out.globals_read = std::mem::take(&mut cx.globals_read);
     out.errors = cx.errors;
     out.warnings = cx.warnings;
     if out.errors.is_empty() {
@@ -974,36 +1075,52 @@ fn write_start(doc: &mut Out, name: &str, tag: &Tag, skip: &[&str]) {
     }
 }
 
-/// Library ids a widget folder shouldn't carry a copy of (UWB17).
-const COMMON_LIBRARIES: &[&str] = &[
-    "three", "d3", "pixi", "phaser", "kaplay", "matter", "chart", "echarts", "anime", "lottie", "perfect-freehand",
-    "rough", "howler", "tone", "leaflet", "marked", "purify", "dompurify", "highlight", "katex", "preact", "lit",
-    "babylon", "plotly", "globe", "cannon", "mermaid",
+/// File-name stems that mean one of K2's libraries (UWB17): `(stem, id)`.
+/// A library's own id always counts too.
+const COMMON_LIBRARIES: &[(&str, &str)] = &[
+    ("pixi", "pixi.js"),
+    ("matter", "matter-js"),
+    ("chart", "chart.js"),
+    ("anime", "animejs"),
+    ("lottie", "lottie-web"),
+    ("rough", "roughjs"),
+    ("purify", "dompurify"),
+    ("highlight", "highlight.js"),
+    ("babylon", "babylonjs"),
+    ("plotly", "plotly.js-dist-min"),
+    ("globe", "globe.gl"),
+    ("cannon", "cannon-es"),
 ];
 
-/// A big JS file named like a standard library: suggest `requires.libs`.
-fn copied_library_warning(cx: &mut Ctx<'_>, file: &str) {
-    let size = cx.files.get(file).map_or(0, Vec::len);
-    if size < 30 * 1024 {
-        return;
-    }
-    let stem = file.to_ascii_lowercase();
-    let stem = stem.trim_end_matches(".js");
-    let lib_ids: Vec<String> = super::stdlib::zen_lib_manifest().libs.iter().map(|l| l.id.to_ascii_lowercase()).collect();
-    let hit = COMMON_LIBRARIES
-        .iter()
-        .map(|s| s.to_string())
-        .chain(lib_ids)
-        .find(|id| stem == id || stem.strip_prefix(id.as_str()).is_some_and(|r| r.starts_with(['.', '-', '_'])));
-    if let Some(id) = hit {
-        let label = cx.label(file);
+/// A script body this big or bigger may be a copied library (WL17: 16 KB,
+/// was 30 KB and names only).
+pub const COPY_FLOOR_BYTES: usize = 16 * 1024;
+
+/// WL17's warning for each copy, with the saving: the file (or inline
+/// script), its size, and the code before and after.
+fn copied_library_warnings(cx: &mut Ctx<'_>) {
+    let before = cx.code_bytes;
+    for c in std::mem::take(&mut cx.copies) {
+        let what = match &c.src {
+            Some(f) => format!("remove {f} ({})", human_bytes(c.bytes)),
+            None => format!("remove this inline <script> ({})", human_bytes(c.bytes)),
+        };
+        let after = before.saturating_sub(c.bytes);
+        let file = cx.label(&c.file);
         cx.warnings.push(Diagnostic {
-            suggestion: None,
-            file: label,
-            line: 1,
-            col: 1,
+            suggestion: Some(format!(
+                "{what} and add \"{}@{}\" to requires.libs; code drops from {} to {} (k2 zen guide libs)",
+                c.id,
+                c.line,
+                human_bytes(before),
+                human_bytes(after)
+            )),
+            file,
+            line: c.pos.0,
+            col: c.pos.1,
             message: format!(
-                "this looks like a copy of {id}; K2 ships a widget library: list it in manifest.json requires.libs (see k2 zen guide libs) instead of copying {file}"
+                "this looks like a copy of {} ({}, matched {}); K2 ships it as a shared library that doesn't count toward the code limit",
+                c.title, c.id, c.how
             ),
         });
     }
@@ -1246,6 +1363,77 @@ mod tests {
         let c = crate::zen::widgets::check_files("widgets/w", "w", &f);
         assert_eq!(c.errors.len(), 1, "{:?}", c.errors);
         assert!(c.errors[0].message.contains("3.5 MB"), "{:?}", c.errors);
+    }
+
+    /// K2's uPlot file (byte for byte the npm package's, `upstreamSha256`).
+    fn uplot_file() -> Vec<u8> {
+        let m = crate::zen::stdlib::zen_lib_manifest();
+        let e = m.libs.iter().find(|e| e.id == "uplot").expect("uplot row");
+        let f = e.files.iter().find(|f| f.name.ends_with(".js") && f.upstream_sha256.is_some()).expect("the copied uPlot file");
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../src/renderer/zen-lib/{}/{}", e.key(), f.name));
+        let b = std::fs::read(&p).unwrap_or_else(|err| panic!("{}: {err}", p.display()));
+        assert_eq!(sha256_hex(&b), f.sha256);
+        b
+    }
+
+    /// WL17 (vs-live L11): a renamed exact copy is caught by sha256; a
+    /// pasted inline copy by its banner; the warning names the file, its
+    /// size and the code before and after.
+    #[test]
+    fn a_copied_library_is_caught_by_hash_banner_or_name() {
+        let up = uplot_file();
+        let f = files(&[("index.html", b"<script src=\"vendor.js\"></script><script src=\"a.js\"></script>"), ("vendor.js", &up), ("a.js", b"1")]);
+        let out = bundle("widgets/w", "index.html", &f);
+        let w: Vec<&Diagnostic> = out.warnings.iter().filter(|d| d.message.starts_with("this looks like a copy of")).collect();
+        assert_eq!(w.len(), 1, "{:?}", out.warnings);
+        assert_eq!(w[0].file, "widgets/w/vendor.js");
+        assert!(w[0].message.contains("(uplot, matched byte for byte)"), "{}", w[0].message);
+        let s = w[0].suggestion.as_deref().expect("suggestion");
+        let code = out.bundle.as_ref().expect("bundle").code_bytes;
+        let want = format!(
+            "remove vendor.js ({}) and add \"uplot@1\" to requires.libs; code drops from {} to {}",
+            human_bytes(up.len()),
+            human_bytes(code),
+            human_bytes(code - up.len())
+        );
+        assert!(s.starts_with(&want), "{s}\nwant {want}");
+
+        // The same pasted inline, with a changed byte: caught by its banner.
+        let mut text = String::from_utf8(up.clone()).expect("utf8");
+        text.push_str("\n;var extra=1\n");
+        let html = format!("<script>{}</script>", text.replace("</script", "<\\/script"));
+        let out = bundle("widgets/w", "index.html", &files(&[("index.html", html.as_bytes())]));
+        let w: Vec<&Diagnostic> = out.warnings.iter().filter(|d| d.message.starts_with("this looks like a copy of")).collect();
+        assert_eq!(w.len(), 1, "{:?}", out.warnings);
+        assert!(w[0].message.contains("matched by its banner"), "{}", w[0].message);
+        assert_eq!(w[0].file, "widgets/w/index.html");
+        assert!(w[0].suggestion.as_deref().is_some_and(|s| s.starts_with("remove this inline <script>")), "{:?}", w[0].suggestion);
+
+        // A 16 KB file named like a library (no banner, other bytes): by its name.
+        let mut body = b"//".to_vec();
+        body.resize(COPY_FLOOR_BYTES, b'x');
+        let out = bundle("widgets/w", "index.html", &files(&[("index.html", b"<script src=\"chart.min.js\"></script>"), ("chart.min.js", &body)]));
+        assert!(out.warnings.iter().any(|d| d.message.contains("(chart.js, matched by its name)")), "{:?}", out.warnings);
+        // Under 16 KB: never.
+        body.truncate(COPY_FLOOR_BYTES - 1);
+        let out = bundle("widgets/w", "index.html", &files(&[("index.html", b"<script src=\"chart.min.js\"></script>"), ("chart.min.js", &body)]));
+        assert!(!out.warnings.iter().any(|d| d.message.starts_with("this looks like a copy")), "{:?}", out.warnings);
+    }
+
+    /// WL16 (vs-live L10): what the scripts declare and read is collected
+    /// from the same parse, in document order.
+    #[test]
+    fn the_bundle_reports_declared_names_and_globals_read() {
+        let f = files(&[
+            ("index.html", b"<script src=\"a.js\"></script>\n<script>\n  draw(new uPlot(opts, data, el))\n</script>"),
+            ("a.js", b"function draw(x) { return window.Chart }\nconst opts = {}\n"),
+        ]);
+        let out = bundle("widgets/w", "index.html", &f);
+        assert!(out.declared.contains("draw") && out.declared.contains("opts"), "{:?}", out.declared);
+        let names: Vec<&str> = out.globals_read.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"Chart") && names.contains(&"uPlot") && names.contains(&"data"), "{names:?}");
+        let (_, at) = out.globals_read.iter().find(|(n, _)| n == "uPlot").expect("uPlot");
+        assert_eq!((at.file.as_str(), at.line), ("widgets/w/index.html", 3), "{at:?}");
     }
 
     #[test]

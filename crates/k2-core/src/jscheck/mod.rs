@@ -139,18 +139,76 @@ const PARSE_SUGGESTION: &str =
 /// Parse `text` and run every rule for `surface`. Parse errors come back
 /// alone (lints on a broken tree would only add noise).
 pub fn check(text: &str, lang: Lang, surface: Surface) -> Vec<Finding> {
+    check_with_facts(text, lang, surface).0
+}
+
+/// What one script declares at its top level and which globals it reads
+/// without declaring them (0.46.5 WL16, vs-live L10): gathered from the
+/// same parse as the lints, never a second one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptFacts {
+    /// Top-level names (`function uPlot`, `var Chart`, `class K2Table`).
+    pub declared: std::collections::BTreeSet<String>,
+    /// Globals read but declared nowhere in the script (`uPlot`, and the
+    /// `X` of `window.X` / `globalThis.X` / `self.X`), with the offset of
+    /// the first read.
+    pub unresolved: std::collections::BTreeMap<String, u32>,
+}
+
+/// [`check`], and the script's [`ScriptFacts`] (empty when it doesn't parse).
+pub fn check_with_facts(text: &str, lang: Lang, surface: Surface) -> (Vec<Finding>, ScriptFacts) {
     let alloc = Allocator::default();
     let parsed = Parser::new(&alloc, text, lang.source_type()).parse();
     let mut errors: Vec<Finding> = parsed.diagnostics.errors().map(|d| from_oxc(d, text)).collect();
     if parsed.panicked || !errors.is_empty() {
-        return import_hint(text, lang, errors);
+        return (import_hint(text, lang, errors), ScriptFacts::default());
     }
     let sem = SemanticBuilder::new().with_check_syntax_error(true).build(&parsed.program);
     errors.extend(sem.diagnostics.errors().map(|d| from_oxc(d, text)));
     if !errors.is_empty() {
-        return import_hint(text, lang, errors);
+        return (import_hint(text, lang, errors), ScriptFacts::default());
     }
-    lint::run(&parsed.program, sem.semantic.scoping(), surface)
+    let scoping = sem.semantic.scoping();
+    let mut facts = ScriptFacts::default();
+    for s in scoping.iter_bindings_in(scoping.root_scope_id()) {
+        facts.declared.insert(scoping.symbol_name(s).to_string());
+    }
+    {
+        use oxc_ast_visit::Visit;
+        struct GlobalReads<'s> {
+            scoping: &'s oxc_semantic::Scoping,
+            out: &'s mut std::collections::BTreeMap<String, u32>,
+            unresolved: std::collections::BTreeMap<String, u32>,
+        }
+        impl<'a> Visit<'a> for GlobalReads<'_> {
+            fn visit_identifier_reference(&mut self, it: &oxc_ast::ast::IdentifierReference<'a>) {
+                if self.scoping.get_reference(it.reference_id()).symbol_id().is_none() {
+                    let at = it.span.start;
+                    self.unresolved.entry(it.name.as_str().to_string()).and_modify(|o| *o = (*o).min(at)).or_insert(at);
+                }
+            }
+            fn visit_static_member_expression(&mut self, it: &oxc_ast::ast::StaticMemberExpression<'a>) {
+                if let oxc_ast::ast::Expression::Identifier(o) = it.object.without_parentheses() {
+                    let global = self.scoping.get_reference(o.reference_id()).symbol_id().is_none();
+                    if global && ["window", "globalThis", "self"].contains(&o.name.as_str()) {
+                        self.out.entry(it.property.name.as_str().to_string()).or_insert(it.span.start);
+                    }
+                }
+                oxc_ast_visit::walk::walk_static_member_expression(self, it);
+            }
+        }
+        let mut reads = std::collections::BTreeMap::new();
+        let mut v = GlobalReads { scoping, out: &mut reads, unresolved: std::collections::BTreeMap::new() };
+        v.visit_program(&parsed.program);
+        let firsts = std::mem::take(&mut v.unresolved);
+        for (name, at) in firsts {
+            facts.unresolved.insert(name, at);
+        }
+        for (name, at) in reads {
+            facts.unresolved.entry(name).or_insert(at);
+        }
+    }
+    (lint::run(&parsed.program, scoping, surface), facts)
 }
 
 /// A classic script that fails only because it uses `import`/`export`:
@@ -174,7 +232,7 @@ fn import_hint(text: &str, lang: Lang, errors: Vec<Finding>) -> Vec<Finding> {
                 rule: "parse-import",
                 message: "import/export only work in <script type=\"module\">, and a widget's files can't import each other"
                     .into(),
-                suggestion: "list each file in its own <script src=\"file.js\"> in order, and share values through globals"
+                suggestion: "list each file in its own <script src=\"file.js\"> in order, and share values through globals; K2's libraries are globals: list them in requires.libs (k2 zen guide libs)"
                     .into(),
             }]
         }

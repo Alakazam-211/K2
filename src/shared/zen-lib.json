@@ -11,6 +11,10 @@
       "id": "three",
       "version": "0.186.0",
       "line": "0.186",
+      "fingerprints": [
+        "Three.js Authors",
+        "/*! three.js "
+      ],
       "title": "three.js",
       "global": "THREE",
       "license": "MIT",
@@ -31,6 +35,9 @@
       "id": "globe.gl",
       "version": "2.46.2",
       "line": "2",
+      "fingerprints": [
+        "globe.gl - https://github.com/vasturiano/globe.gl"
+      ],
       "title": "globe.gl",
       "global": "Globe",
       "license": "MIT",
@@ -41,7 +48,8 @@
         {
           "name": "globe.gl.min.js",
           "bytes": 1885160,
-          "sha256": "2c3e445c04d121215910a89688b96091c8a72071c122a4f830081a39b636c94c"
+          "sha256": "2c3e445c04d121215910a89688b96091c8a72071c122a4f830081a39b636c94c",
+          "upstreamSha256": "2c3e445c04d121215910a89688b96091c8a72071c122a4f830081a39b636c94c"
         }
       ],
       "notes": "Carries its own copy of three.js inside. Its example earth textures are web URLs, which a sealed widget cannot load: pass your own image as a data: URL (globeImageUrl(k2.asset(\"earth.jpg\")))."
@@ -69,6 +77,9 @@
       "id": "pixi.js",
       "version": "8.21.0",
       "line": "8",
+      "fingerprints": [
+        "PixiJS - v"
+      ],
       "title": "PixiJS",
       "global": "PIXI",
       "license": "MIT",
@@ -79,12 +90,14 @@
         {
           "name": "pixi.min.js",
           "bytes": 828284,
-          "sha256": "47c542b4038968bece0effdc8025c5c7df8f5a5b717ebddc58617f22571cf77d"
+          "sha256": "47c542b4038968bece0effdc8025c5c7df8f5a5b717ebddc58617f22571cf77d",
+          "upstreamSha256": "c6d9d4c897b15576cce0055d0ba4382021181c99cdf08a446be9d61e16833db0"
         },
         {
           "name": "unsafe-eval.min.js",
           "bytes": 15701,
-          "sha256": "fa8d42a545150a1f38ea98a5aff6da5b4ef1b2fcc0e917a90bad962a6d08b03d"
+          "sha256": "fa8d42a545150a1f38ea98a5aff6da5b4ef1b2fcc0e917a90bad962a6d08b03d",
+          "upstreamSha256": "95b16558c615575f08d6b9e2b518b0edc4d446673b3307d967e2e59fab0464cd"
         }
       ],
       "notes": "Ships with PixiJS's no-eval add-on already loaded, so it runs under the widget security policy."
@@ -103,7 +116,8 @@
         {
           "name": "phaser.min.js",
           "bytes": 1375976,
-          "sha256": "66348b1b5141e49b7d5ebbe688cddcb502eab1cb00f21c538686a5b2c5abe4de"
+          "sha256": "66348b1b5141e49b7d5ebbe688cddcb502eab1cb00f21c538686a5b2c5abe4de",
+          "upstreamSha256": "66348b1b5141e49b7d5ebbe688cddcb502eab1cb00f21c538686a5b2c5abe4de"
         }
       ],
       "notes": "Load images and audio from data: URLs (this.load.image(\"cat\", k2.asset(\"cat.png\")))."
@@ -122,7 +136,8 @@
         {
           "name": "kaplay.js",
           "bytes": 189050,
-          "sha256": "710f0696e0a867f530c1be204464e288d5326870f2de5c0fd114e7c33315a933"
+          "sha256": "710f0696e0a867f530c1be204464e288d5326870f2de5c0fd114e7c33315a933",
+          "upstreamSha256": "88a946eafc4161f83505449d830b87c7bc15822bb0dae8ce03b2437506ef4a4b"
         }
       ]
     },
@@ -130,6 +145,9 @@
       "id": "matter-js",
       "version": "0.20.0",
       "line": "0.20",
+      "fingerprints": [
+        "http://brm.io/matter-js/"
+      ],
       "title": "Matter.js",
       "global": "Matter",
       "license": "MIT",
@@ -140,7 +158,8 @@
         {
           "name": "matter.min.js",
           "bytes": 83476,
-          "sha256": "72d30be0f579eb02ce1e0b6f9d359a4f392e6837e5a26ba8be5dbee7f88e24ae"
+          "sha256": "72d30be0f579eb02ce1e0b6f9d359a4f392e6837e5a26ba8be5dbee7f88e24ae",
+          "upstreamSha256": "72d30be0f579eb02ce1e0b6f9d359a4f392e6837e5a26ba8be5dbee7f88e24ae"
         }
       ]
     },
@@ -148,6 +167,9 @@
       "id": "d3",
       "version": "7.9.0",
       "line": "7",
+      "fingerprints": [
+        "// https://d3js.org v"
+      ],
       "title": "D3",
       "global": "d3",
       "license": "ISC",
@@ -158,7 +180,8 @@
         {
           "name": "d3.min.js",
           "bytes": 279706,
-          "sha256": "f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539"
+          "sha256": "f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539",
+          "upstreamSha256": "f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539"
         },
         {
           "name": "d3-k2.js",
@@ -172,6 +195,9 @@
       "id": "chart.js",
       "version": "4.5.1",
       "line": "4",
+      "fingerprints": [
+        "https://www.chartjs.org"
+      ],
       "title": "Chart.js",
       "global": "Chart",
       "license": "MIT",
@@ -182,7 +208,8 @@
         {
           "name": "chart.umd.min.js",
           "bytes": 208480,
-          "sha256": "84d0e233daba702b8f77d669d8c137cad36d441a10f200b6f2d3ab553bdfcf6b"
+          "sha256": "84d0e233daba702b8f77d669d8c137cad36d441a10f200b6f2d3ab553bdfcf6b",
+          "upstreamSha256": "48444a82d4edcb5bec0f1965faacdde18d9c17db3063d042abada2f705c9f54a"
         }
       ],
       "notes": "If a responsive chart draws at 0×0 (seen in Chrome, not WebKit), set responsive: false and give the canvas a width and height."
@@ -201,7 +228,8 @@
         {
           "name": "echarts.min.js",
           "bytes": 1121883,
-          "sha256": "b66b25aeb4df84e33199dc21694014d336d222cbd9deb0e5a7c14bd6aa0d0fd0"
+          "sha256": "b66b25aeb4df84e33199dc21694014d336d222cbd9deb0e5a7c14bd6aa0d0fd0",
+          "upstreamSha256": "b66b25aeb4df84e33199dc21694014d336d222cbd9deb0e5a7c14bd6aa0d0fd0"
         }
       ]
     },
@@ -209,6 +237,9 @@
       "id": "uplot",
       "version": "1.6.32",
       "line": "1",
+      "fingerprints": [
+        "/*! https://github.com/leeoniya/uPlot (v"
+      ],
       "title": "uPlot",
       "global": "uPlot",
       "license": "MIT",
@@ -219,7 +250,8 @@
         {
           "name": "uPlot.iife.min.js",
           "bytes": 51081,
-          "sha256": "19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f"
+          "sha256": "19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f",
+          "upstreamSha256": "19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f"
         },
         {
           "name": "uplot-style.js",
@@ -233,6 +265,9 @@
       "id": "animejs",
       "version": "4.5.0",
       "line": "4",
+      "fingerprints": [
+        "Anime.js - "
+      ],
       "title": "Anime.js",
       "global": "anime",
       "license": "MIT",
@@ -243,7 +278,8 @@
         {
           "name": "anime.umd.min.js",
           "bytes": 118043,
-          "sha256": "8d5b3a58a1f64023a04a4cedeef135a2263b18da04b35177ac13438a0bad033b"
+          "sha256": "8d5b3a58a1f64023a04a4cedeef135a2263b18da04b35177ac13438a0bad033b",
+          "upstreamSha256": "8d5b3a58a1f64023a04a4cedeef135a2263b18da04b35177ac13438a0bad033b"
         }
       ]
     },
@@ -261,7 +297,8 @@
         {
           "name": "lottie.min.js",
           "bytes": 305704,
-          "sha256": "2eb762973aec914d981f426123040bfac9d26217239605e225ddc7cee17618ac"
+          "sha256": "2eb762973aec914d981f426123040bfac9d26217239605e225ddc7cee17618ac",
+          "upstreamSha256": "2eb762973aec914d981f426123040bfac9d26217239605e225ddc7cee17618ac"
         }
       ],
       "notes": "Pass the animation as animationData (an object), not a path. Animations that use expressions need eval and do not run."
@@ -300,7 +337,8 @@
         {
           "name": "rough.js",
           "bytes": 27762,
-          "sha256": "6853af8619532f3939b156cd16824d2e14f31e71d3df306ad5558eeafacab194"
+          "sha256": "6853af8619532f3939b156cd16824d2e14f31e71d3df306ad5558eeafacab194",
+          "upstreamSha256": "6853af8619532f3939b156cd16824d2e14f31e71d3df306ad5558eeafacab194"
         }
       ]
     },
@@ -308,6 +346,9 @@
       "id": "howler",
       "version": "2.2.4",
       "line": "2",
+      "fingerprints": [
+        "howler.js v"
+      ],
       "title": "howler.js",
       "global": "Howler",
       "license": "MIT",
@@ -318,7 +359,8 @@
         {
           "name": "howler.min.js",
           "bytes": 36173,
-          "sha256": "736c339444c88baad593e24afdf1d6e8f574019b4e37a110ecb453ff745ffd41"
+          "sha256": "736c339444c88baad593e24afdf1d6e8f574019b4e37a110ecb453ff745ffd41",
+          "upstreamSha256": "736c339444c88baad593e24afdf1d6e8f574019b4e37a110ecb453ff745ffd41"
         }
       ],
       "notes": "Also defines Howl. Sounds play from data: URLs. Audio files are not widget assets in this version, so keep short sounds as base64 in a script, or synthesize them with Tone.js."
@@ -327,6 +369,9 @@
       "id": "tone",
       "version": "15.1.22",
       "line": "15",
+      "fingerprints": [
+        "Tone.js.LICENSE.txt"
+      ],
       "title": "Tone.js",
       "global": "Tone",
       "license": "MIT",
@@ -337,7 +382,8 @@
         {
           "name": "Tone.js",
           "bytes": 345468,
-          "sha256": "6b1d53712892f2ef423d7b2dd2bbb122c4520205cfa7404a97b0d354bd8a883c"
+          "sha256": "6b1d53712892f2ef423d7b2dd2bbb122c4520205cfa7404a97b0d354bd8a883c",
+          "upstreamSha256": "e290952fa43d9a7a780182a83c6fccf44d79cb7ae2cba102ef1f2b9d98124e22"
         }
       ],
       "notes": "Limited: AudioWorklet modules can't load in a sealed widget (audioWorklet.addModule(blob:) is refused: worklets need blob: scripts, which the widget policy does not allow), so worklet-based nodes fail. Oscillators, synths, effects and the Transport work. Sound starts only after a click (browser autoplay rule)."
@@ -346,6 +392,9 @@
       "id": "leaflet",
       "version": "1.9.4",
       "line": "1",
+      "fingerprints": [
+        "a JS library for interactive maps"
+      ],
       "title": "Leaflet",
       "global": "L",
       "license": "BSD-2-Clause",
@@ -356,7 +405,8 @@
         {
           "name": "leaflet.js",
           "bytes": 147517,
-          "sha256": "dc71f8a6880bc3ca1bd9fa8dc5f1af48c702dc510b0a78240a07c5feed7ce935"
+          "sha256": "dc71f8a6880bc3ca1bd9fa8dc5f1af48c702dc510b0a78240a07c5feed7ce935",
+          "upstreamSha256": "db49d009c841f5ca34a888c96511ae936fd9f5533e90d8b2c4d57596f4e5641a"
         },
         {
           "name": "leaflet-style.js",
@@ -375,6 +425,9 @@
       "id": "marked",
       "version": "18.0.14",
       "line": "18",
+      "fingerprints": [
+        " - a markdown parser"
+      ],
       "title": "marked",
       "global": "marked",
       "license": "MIT",
@@ -385,7 +438,8 @@
         {
           "name": "marked.umd.js",
           "bytes": 46855,
-          "sha256": "d577478a6e64341800388a528847255715d04ad35fcc03fdd9b1290c37acd592"
+          "sha256": "d577478a6e64341800388a528847255715d04ad35fcc03fdd9b1290c37acd592",
+          "upstreamSha256": "21568877a938d2c4e7d74e27f18e60da96bb73a68809610ca39216e1efebae62"
         }
       ],
       "notes": "marked does not sanitize: pass its HTML through DOMPurify.sanitize before showing agent text."
@@ -394,6 +448,9 @@
       "id": "dompurify",
       "version": "3.4.17",
       "line": "3",
+      "fingerprints": [
+        "@license DOMPurify "
+      ],
       "title": "DOMPurify",
       "global": "DOMPurify",
       "license": "Apache-2.0",
@@ -404,7 +461,8 @@
         {
           "name": "purify.min.js",
           "bytes": 29796,
-          "sha256": "b08361de6f15903fc076dd17e1b3482457f3e50bc0d9e2118b3d529d4ed59e93"
+          "sha256": "b08361de6f15903fc076dd17e1b3482457f3e50bc0d9e2118b3d529d4ed59e93",
+          "upstreamSha256": "cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31"
         }
       ],
       "notes": "Dual-licensed MPL-2.0 OR Apache-2.0 upstream; K2 ships it under Apache-2.0."
@@ -413,6 +471,9 @@
       "id": "highlight.js",
       "version": "11.12.0",
       "line": "11",
+      "fingerprints": [
+        "Highlight.js v"
+      ],
       "title": "highlight.js",
       "global": "hljs",
       "license": "BSD-3-Clause",
@@ -423,7 +484,8 @@
         {
           "name": "highlight.min.js",
           "bytes": 129257,
-          "sha256": "0c0c3108d9e23bc37f474063432137b4d3319fc742cc25ec36ba006f305caca5"
+          "sha256": "0c0c3108d9e23bc37f474063432137b4d3319fc742cc25ec36ba006f305caca5",
+          "upstreamSha256": "8ab71eb09c51f501e5e25157d9cff100e46cc29bcbfc744d0b746d451fca7f53"
         },
         {
           "name": "highlight-style.js",
@@ -447,12 +509,14 @@
         {
           "name": "katex.min.js",
           "bytes": 272755,
-          "sha256": "155f6c2d673c5912e3b48f45d8830eaad18ae1953915939ceb648ea8b9c3e7e2"
+          "sha256": "155f6c2d673c5912e3b48f45d8830eaad18ae1953915939ceb648ea8b9c3e7e2",
+          "upstreamSha256": "155f6c2d673c5912e3b48f45d8830eaad18ae1953915939ceb648ea8b9c3e7e2"
         },
         {
           "name": "auto-render.min.js",
           "bytes": 3486,
-          "sha256": "e5372d199bcdae8b4de71d0f7ceba72a4ba12774a27c60a6f1f77d03b3228ee4"
+          "sha256": "e5372d199bcdae8b4de71d0f7ceba72a4ba12774a27c60a6f1f77d03b3228ee4",
+          "upstreamSha256": "e5372d199bcdae8b4de71d0f7ceba72a4ba12774a27c60a6f1f77d03b3228ee4"
         },
         {
           "name": "katex-style.js",
@@ -570,6 +634,9 @@
       "id": "k2-help",
       "version": "1.0.0",
       "line": "1",
+      "fingerprints": [
+        "/*! k2-help "
+      ],
       "title": "K2 help button (widget kit)",
       "global": "K2Help",
       "license": "FSL-1.1-Apache-2.0",
@@ -589,6 +656,9 @@
       "id": "k2-thread",
       "version": "1.0.0",
       "line": "1",
+      "fingerprints": [
+        "/*! k2-thread "
+      ],
       "title": "K2 Thread panel (widget kit)",
       "global": "K2Thread",
       "license": "FSL-1.1-Apache-2.0",

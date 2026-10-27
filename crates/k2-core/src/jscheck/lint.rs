@@ -650,7 +650,7 @@ impl<'a> Visit<'a> for Lint<'_> {
                 "import",
                 "widget-import",
                 "import: one script per file; imports between files don't load (list each file in a <script src>)".into(),
-                "list each file in its own <script src=\"file.js\"> in the order they need each other",
+                "list each file in its own <script src=\"file.js\"> in the order they need each other; K2's libraries are globals: list them in requires.libs (k2 zen guide libs)",
             );
         }
         walk::walk_import_declaration(self, it);

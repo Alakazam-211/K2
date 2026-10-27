@@ -121,11 +121,11 @@ export const APP_VERBS = {
     effect: 'write',
     kind: 'call',
     feature: 'app-api-v1',
-    door: 'helper',
+    door: 'both',
     http: { method: 'POST', route: '/cli/skin/password/change', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"},"stayed":{"type":"boolean"}},"type":"object"},
   },
   'wallet.list': {
     cap: 'wallet:self',
@@ -269,6 +269,83 @@ export const APP_VERBS = {
     socket: null,
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'profile.get': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-user-profile-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/skin/profile', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"agentLogin":{"type":"boolean"},"app":{"type":"string"},"can":{"additionalProperties":false,"properties":{"editImage":{"type":"boolean"},"editNames":{"type":"boolean"}},"type":"object"},"counts":{"additionalProperties":false,"properties":{"devices":{"type":"integer"},"pushDevices":{"type":"integer"},"sessions":{"type":"integer"}},"type":"object"},"createdAt":{"type":"integer"},"displayName":{"type":["string","null"]},"email":{"type":["string","null"]},"fullName":{"type":["string","null"]},"hasPassword":{"type":"boolean"},"image":{"type":["string","null"]},"imageHash":{"type":["string","null"]},"lastSignInAt":{"type":["integer","null"]},"nameSetBySelf":{"type":"boolean"},"ok":{"type":"boolean"},"role":{"type":["string","null"]},"rooms":{"items":{"additionalProperties":false,"properties":{"handle":{"type":"string"},"name":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"test":{"type":"boolean"},"username":{"type":"string"}},"type":"object"},
+  },
+  'profile.update': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-user-profile-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/skin/profile', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"},"profile":{"additionalProperties":false,"properties":{"agentLogin":{"type":"boolean"},"app":{"type":"string"},"can":{"additionalProperties":false,"properties":{"editImage":{"type":"boolean"},"editNames":{"type":"boolean"}},"type":"object"},"counts":{"additionalProperties":false,"properties":{"devices":{"type":"integer"},"pushDevices":{"type":"integer"},"sessions":{"type":"integer"}},"type":"object"},"createdAt":{"type":"integer"},"displayName":{"type":["string","null"]},"email":{"type":["string","null"]},"fullName":{"type":["string","null"]},"hasPassword":{"type":"boolean"},"image":{"type":["string","null"]},"imageHash":{"type":["string","null"]},"lastSignInAt":{"type":["integer","null"]},"nameSetBySelf":{"type":"boolean"},"ok":{"type":"boolean"},"role":{"type":["string","null"]},"rooms":{"items":{"additionalProperties":false,"properties":{"handle":{"type":"string"},"name":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"test":{"type":"boolean"},"username":{"type":"string"}},"type":"object"}},"type":"object"},
+  },
+  'profile.setImage': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-user-profile-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/skin/profile/image', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"image":{"type":"string"},"imageHash":{"type":"string"},"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'profile.clearImage': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-user-profile-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/skin/profile/image/clear', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'profile.sessions': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-user-profile-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/skin/sessions', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"},"sessions":{"items":{"additionalProperties":false,"properties":{"client":{"type":["string","null"]},"createdAt":{"type":"integer"},"current":{"type":"boolean"},"expiresAt":{"type":["integer","null"]},"id":{"type":"string"},"kind":{"enum":["browser","device"]},"lastSeenAt":{"type":["integer","null"]},"push":{"type":"boolean"},"pushPlatform":{"type":"string"},"via":{"type":["string","null"]}},"type":"object"},"type":"array"}},"type":"object"},
+  },
+  'profile.revokeSession': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-user-profile-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/skin/sessions/revoke', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"type":"object"},
+  },
+  'profile.signOutOthers': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-user-profile-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/skin/sessions/revoke-others', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"ended":{"type":"integer"},"ok":{"type":"boolean"}},"type":"object"},
   },
   'push.register': {
     cap: null,
@@ -1480,8 +1557,10 @@ export interface AppGuestList {
   readonly ok: boolean
 }
 
-export interface AppOk {
+export interface AppPasswordChanged {
   readonly ok: boolean
+  /** This pass stayed signed in (stay: true). */
+  readonly stayed?: boolean
 }
 
 export interface WalletItem {
@@ -1562,6 +1641,10 @@ export interface WalletLoginStatus {
   readonly ok: boolean
 }
 
+export interface AppOk {
+  readonly ok: boolean
+}
+
 export interface WalletUse {
   readonly id: string | null
   readonly ok: boolean
@@ -1607,6 +1690,100 @@ export interface AppDeviceLogin {
 
 export interface AppDevices {
   readonly devices: AppDeviceLogin[]
+  readonly ok: boolean
+}
+
+export interface AppProfileCan {
+  readonly editImage: boolean
+  readonly editNames: boolean
+}
+
+export interface AppProfileCounts {
+  readonly devices: number
+  readonly pushDevices: number
+  readonly sessions: number
+}
+
+export interface AppProfileRoom {
+  readonly handle: string
+  /** The agent's display name. */
+  readonly name: string
+  readonly room: string
+}
+
+export interface AppProfile {
+  /** An agent's own login: reads only. */
+  readonly agentLogin: boolean
+  readonly app: string
+  readonly can: AppProfileCan
+  readonly counts: AppProfileCounts
+  /** Account made, seconds since the epoch. */
+  readonly createdAt: number
+  /** A short name the App may show; K2 keeps using fullName. */
+  readonly displayName: string | null
+  readonly email: string | null
+  readonly fullName: string | null
+  readonly hasPassword: boolean
+  /** data:image/jpeg;base64,… (K2's own re-encode, at most 64 KiB). Present only with image=1, or when ifImageHash differs. */
+  readonly image?: string | null
+  /** SHA-256 of the picture: cache it, and ask again with ifImageHash. */
+  readonly imageHash: string | null
+  /** Last sign-in to this App (not a refresh), seconds since the epoch; null before the first since 0.46.5. */
+  readonly lastSignInAt: number | null
+  /** The person set fullName themselves (K2's own views show the username beside it). */
+  readonly nameSetBySelf: boolean
+  readonly ok: boolean
+  /** The role on this App's grant (this App only). */
+  readonly role: string | null
+  readonly rooms: AppProfileRoom[]
+  /** A test guest (names and picture only; never a reset). */
+  readonly test: boolean
+  /** Fixed: never changes. */
+  readonly username: string
+}
+
+export interface AppProfileUpdated {
+  readonly ok: boolean
+  readonly profile: AppProfile
+}
+
+export interface AppProfileImage {
+  /** The stored picture, data:image/jpeg;base64,… */
+  readonly image: string
+  readonly imageHash: string
+  readonly ok: boolean
+}
+
+export interface AppSession {
+  /** A coarse label ("Safari on macOS", a device's name, or the clientLabel an App's server gave at login). Never an IP. */
+  readonly client: string | null
+  /** Signed in, seconds since the epoch. */
+  readonly createdAt: number
+  /** The pass making this call. */
+  readonly current: boolean
+  /** Ends unless used before then, seconds since the epoch. */
+  readonly expiresAt: number | null
+  /** What profile.revokeSession takes: ses_… for a browser (opaque; list again after a server restart), the device sign-in id for a device (as guests.devices). */
+  readonly id: string
+  readonly kind: 'browser' | 'device'
+  /** Last used (to about 10 minutes), seconds since the epoch. */
+  readonly lastSeenAt: number | null
+  /** A notification device is linked to it. */
+  readonly push: boolean
+  /** ios or android, when push is true. */
+  readonly pushPlatform?: string
+  /** password, device or refresh; null for a session from before 0.46.5. */
+  readonly via: string | null
+}
+
+export interface AppSessions {
+  readonly ok: boolean
+  readonly sessions: AppSession[]
+}
+
+export interface AppSignedOut {
+  /** How many sessions and device sign-ins ended. */
+  readonly ended: number
   readonly ok: boolean
 }
 
@@ -2979,7 +3156,7 @@ export interface AppProjectFrame {
 }
 
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -2992,7 +3169,7 @@ export interface AppVerbs {
   'guests.setRooms': { args: { app?: string; rooms: string[]; username: string }; value: AppGuestRooms }
   'app.rooms': { args: { app?: string }; value: AppRooms }
   'guests.list': { args: { app?: string; cursor?: string; limit?: number }; value: AppGuestList }
-  'password.change': { args: { oldPassword: string; password: string }; value: AppOk }
+  'password.change': { args: { oldPassword: string; password: string; stay?: boolean }; value: AppPasswordChanged }
   'wallet.list': { args: Record<string, never>; value: WalletList }
   'wallet.status': { args: { id: string }; value: WalletItemAnswer }
   'wallet.add': { args: { key?: string; label?: string; provider: string; type?: 'llm_subscription' | 'llm_api_key' }; value: WalletSignIn }
@@ -3006,6 +3183,13 @@ export interface AppVerbs {
   'guests.refresh': { args: { app?: string; refresh: string }; value: AppDeviceSession }
   'guests.devices': { args: {  }; value: AppDevices }
   'guests.revokeDevice': { args: { id: string }; value: AppOk }
+  'profile.get': { args: { ifImageHash?: string; image?: string }; value: AppProfile }
+  'profile.update': { args: { displayName?: string | null; fullName?: string | null }; value: AppProfileUpdated }
+  'profile.setImage': { args: { image: string }; value: AppProfileImage }
+  'profile.clearImage': { args: {  }; value: AppOk }
+  'profile.sessions': { args: {  }; value: AppSessions }
+  'profile.revokeSession': { args: { id: string }; value: AppOk }
+  'profile.signOutOthers': { args: {  }; value: AppSignedOut }
   'push.register': { args: { channel?: 'app' | 'k2-companion'; deviceId: string; environment?: 'production' | 'sandbox'; mutedTopics?: string[]; platform: 'apns' | 'fcm'; previews?: boolean | null; pushToken: string }; value: AppPushDevice }
   'push.unregister': { args: { deviceId: string }; value: AppPushRemoved }
   'push.device': { args: { deviceId: string }; value: AppPushDevice }
@@ -3097,7 +3281,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.send' | 'push.status' | 'push.devices' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.send' | 'push.status' | 'push.devices' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -3138,6 +3322,30 @@ export interface AppSurfaces {
     /** This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest). no cap · GET /cli/skin/usage. e.g. `const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})` */
     usage(args?: { app?: string; hours?: number }): Promise<AppUsage>
   }
+  readonly password: {
+    /** A guest changes their own password (5 wrong current passwords per 15 minutes, then rate_limited); stay: true keeps this pass signed in. no cap · POST /cli/skin/password/change. e.g. `await k2.asGuest(pass).password.change({oldPassword, password, stay: true})` */
+    change(args: { oldPassword: string; password: string; stay?: boolean }): Promise<AppPasswordChanged>
+    /** Start a guest's password reset (a platform pass; the guest gets the reset link by email). no cap · POST /cli/skin/password/forgot. e.g. `await k2.asApp().password.forgot({username})` */
+    forgot(args: { username: string }): Promise<AppOk>
+    /** Public: finish a password reset with the emailed token (ends every session of that guest). no cap · POST /cli/skin/password/reset. e.g. `await fetch('/cli/skin/password/reset', {method: 'POST', body})` */
+    reset(args: { password: string; resetToken: string }): Promise<AppOk>
+  }
+  readonly profile: {
+    /** This person's own profile in this App: names, email, picture hash, role and rooms here, sessions count, and what they may change. no cap · GET /cli/skin/profile. e.g. `const me = await k2.asGuest(pass).profile.get({image: '1'})` */
+    get(args?: { ifImageHash?: string; image?: string }): Promise<AppProfile>
+    /** This person changes their own full name and display name, where the App allows it (20 changes per 10 minutes). no cap · POST /cli/skin/profile. e.g. `await k2.asGuest(pass).profile.update({fullName: 'Dana Ruiz'})` */
+    update(args: { displayName?: string | null; fullName?: string | null }): Promise<AppProfileUpdated>
+    /** This person sets their own picture, where the App allows it. no cap · POST /cli/skin/profile/image. e.g. `await k2.asGuest(pass).profile.setImage({image: dataUrl})` */
+    setImage(args: { image: string }): Promise<AppProfileImage>
+    /** This person removes their own picture, where the App allows it. no cap · POST /cli/skin/profile/image/clear. e.g. `await k2.asGuest(pass).profile.clearImage()` */
+    clearImage(args?: {  }): Promise<AppOk>
+    /** The browsers and devices signed in to this App as this person, this one first (never another App's). no cap · GET /cli/skin/sessions. e.g. `const {sessions} = await k2.asGuest(pass).profile.sessions()` */
+    sessions(args?: {  }): Promise<AppSessions>
+    /** Sign one of this person's own browsers or devices out of this App. no cap · POST /cli/skin/sessions/revoke. e.g. `await k2.asGuest(pass).profile.revokeSession({id})` */
+    revokeSession(args: { id: string }): Promise<AppOk>
+    /** Sign this person out of this App everywhere else (their notification devices there go too); this pass stays. no cap · POST /cli/skin/sessions/revoke-others. e.g. `await k2.asGuest(pass).profile.signOutOthers()` */
+    signOutOthers(args?: {  }): Promise<AppSignedOut>
+  }
   readonly push: {
     /** Register this guest's phone for this App's notifications; call it on every launch and whenever the token changes. no cap · POST /cli/skin/push/register. e.g. `await k2.asGuest(pass).push.register({deviceId, platform: 'apns', pushToken, environment: 'sandbox'})` */
     register(args: { channel?: 'app' | 'k2-companion'; deviceId: string; environment?: 'production' | 'sandbox'; mutedTopics?: string[]; platform: 'apns' | 'fcm'; previews?: boolean | null; pushToken: string }): Promise<AppPushDevice>
@@ -3161,12 +3369,6 @@ export interface AppSurfaces {
     status(args: { id: string }): Promise<AppEmailStatus>
     /** This App's sent email, newest first (metadata only, 30 days): who, subject, tags, status. cap email:send · GET /cli/skin/email/log. e.g. `const {items} = await k2.email.log({tag: 'orders', limit: 50})` */
     log(args?: { before?: number; limit?: number; status?: string; tag?: string }): Promise<AppEmailLog>
-  }
-  readonly password: {
-    /** Start a guest's password reset (a platform pass; the guest gets the reset link by email). no cap · POST /cli/skin/password/forgot. e.g. `await k2.asApp().password.forgot({username})` */
-    forgot(args: { username: string }): Promise<AppOk>
-    /** Public: finish a password reset with the emailed token (ends every session of that guest). no cap · POST /cli/skin/password/reset. e.g. `await fetch('/cli/skin/password/reset', {method: 'POST', body})` */
-    reset(args: { password: string; resetToken: string }): Promise<AppOk>
   }
   readonly thread: {
     /** A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back, afterSeq reads a delta (new, changed, removed). cap thread:read · GET /cli/thread. e.g. `const page = await k2.thread.page({addr: 'sales', limit: 50})` */
@@ -3345,4 +3547,4 @@ export interface AppSurfaces {
 }
 
 /** The surface names, in catalog order (the client builds one object each). */
-export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'app', 'push', 'email', 'password', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'project'] as const
+export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'app', 'password', 'profile', 'push', 'email', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'project'] as const

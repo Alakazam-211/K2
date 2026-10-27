@@ -43,6 +43,15 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/cli/skin/devices"),
     ("HEAD", "/cli/skin/devices"),
     ("POST", "/cli/skin/devices/revoke"),
+    ("GET", "/cli/skin/profile"),
+    ("HEAD", "/cli/skin/profile"),
+    ("POST", "/cli/skin/profile"),
+    ("POST", "/cli/skin/profile/image"),
+    ("POST", "/cli/skin/profile/image/clear"),
+    ("GET", "/cli/skin/sessions"),
+    ("HEAD", "/cli/skin/sessions"),
+    ("POST", "/cli/skin/sessions/revoke"),
+    ("POST", "/cli/skin/sessions/revoke-others"),
     ("POST", "/cli/skin/push/register"),
     ("POST", "/cli/skin/push/unregister"),
     ("GET", "/cli/skin/push/device"),
@@ -160,11 +169,21 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("POST", "/cli/skin/guests/rooms"),
     ("GET", "/cli/skin/app-rooms"),
     ("GET", "/cli/skin/guests/list"),
+    ("POST", "/cli/skin/password/change"),
     ("POST", "/cli/skin/logout"),
     ("POST", "/cli/skin/refresh"),
     ("GET", "/cli/skin/devices"),
     ("HEAD", "/cli/skin/devices"),
     ("POST", "/cli/skin/devices/revoke"),
+    ("GET", "/cli/skin/profile"),
+    ("HEAD", "/cli/skin/profile"),
+    ("POST", "/cli/skin/profile"),
+    ("POST", "/cli/skin/profile/image"),
+    ("POST", "/cli/skin/profile/image/clear"),
+    ("GET", "/cli/skin/sessions"),
+    ("HEAD", "/cli/skin/sessions"),
+    ("POST", "/cli/skin/sessions/revoke"),
+    ("POST", "/cli/skin/sessions/revoke-others"),
     ("POST", "/cli/skin/push/register"),
     ("POST", "/cli/skin/push/unregister"),
     ("GET", "/cli/skin/push/device"),
@@ -301,7 +320,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
 
 /// Routes only the browser helper forwards: they act on a guest's own
 /// login session (`session=1`), which an App pass never is.
-pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/password/change", "/cli/skin/wallet/list", "/cli/skin/wallet/status", "/cli/skin/wallet/add", "/cli/skin/wallet/login", "/cli/skin/wallet/login/status", "/cli/skin/wallet/login/input", "/cli/skin/wallet/login/cancel", "/cli/skin/wallet/use", "/cli/skin/wallet/remove"];
+pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/wallet/list", "/cli/skin/wallet/status", "/cli/skin/wallet/add", "/cli/skin/wallet/login", "/cli/skin/wallet/login/status", "/cli/skin/wallet/login/input", "/cli/skin/wallet/login/cancel", "/cli/skin/wallet/use", "/cli/skin/wallet/remove"];
 
 /// Routes only an App's gateway link serves: a BFF's server-side calls.
 pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/skin/app-rooms", "/cli/skin/guests/list", "/cli/skin/logout", "/cli/skin/refresh", "/cli/skin/push/send", "/cli/skin/push/status", "/cli/skin/push/devices", "/cli/skin/email/send", "/cli/skin/email/status", "/cli/skin/email/log", "/cli/skin/app-info", "/cli/skin/password/forgot", "/cli/skin/password/reset", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass"];
@@ -317,7 +336,7 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("POST", "/cli/skin/guests/rooms", "guests.setRooms", "link"),
     ("GET", "/cli/skin/app-rooms", "app.rooms", "link"),
     ("GET", "/cli/skin/guests/list", "guests.list", "link"),
-    ("POST", "/cli/skin/password/change", "password.change", "helper"),
+    ("POST", "/cli/skin/password/change", "password.change", "both"),
     ("GET", "/cli/skin/wallet/list", "wallet.list", "helper"),
     ("GET", "/cli/skin/wallet/status", "wallet.status", "helper"),
     ("POST", "/cli/skin/wallet/add", "wallet.add", "helper"),
@@ -331,6 +350,13 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("POST", "/cli/skin/refresh", "guests.refresh", "link"),
     ("GET", "/cli/skin/devices", "guests.devices", "both"),
     ("POST", "/cli/skin/devices/revoke", "guests.revokeDevice", "both"),
+    ("GET", "/cli/skin/profile", "profile.get", "both"),
+    ("POST", "/cli/skin/profile", "profile.update", "both"),
+    ("POST", "/cli/skin/profile/image", "profile.setImage", "both"),
+    ("POST", "/cli/skin/profile/image/clear", "profile.clearImage", "both"),
+    ("GET", "/cli/skin/sessions", "profile.sessions", "both"),
+    ("POST", "/cli/skin/sessions/revoke", "profile.revokeSession", "both"),
+    ("POST", "/cli/skin/sessions/revoke-others", "profile.signOutOthers", "both"),
     ("POST", "/cli/skin/push/register", "push.register", "both"),
     ("POST", "/cli/skin/push/unregister", "push.unregister", "both"),
     ("GET", "/cli/skin/push/device", "push.device", "both"),
@@ -473,7 +499,10 @@ mod tests {
         for p in LINK_ONLY_HTTP {
             assert!(on_link(p) && !on_helper(p), "{p} is the link's alone");
         }
-        assert!(HELPER_ONLY_HTTP.contains(&"/cli/skin/password/change"));
+        assert!(HELPER_ONLY_HTTP.contains(&"/cli/skin/wallet/list"));
+        // 0.46.5 (app-user-profile G12): password.change is on both doors,
+        // so an App's server changes a password for the person it signed in.
+        assert!(on_link("/cli/skin/password/change") && on_helper("/cli/skin/password/change"));
         assert!(LINK_ONLY_HTTP.contains(&"/cli/skin/login"));
         for never in ["/cli/auth/login", "/cli/sessions/events", "/cli/app/deploy", "/cli/skin/users/rooms", "/v1/sandboxes", "/cli/vault/get"] {
             assert!(!link_allows_http("GET", never) && !link_allows_http("POST", never), "{never}");

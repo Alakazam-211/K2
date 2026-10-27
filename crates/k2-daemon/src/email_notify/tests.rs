@@ -1450,8 +1450,9 @@ fn l3_a_retired_senders_mailbox_is_emptied() {
 #[test]
 fn l4_mail_manage_agents_cant_reach_a_senders_domain_or_its_apps_gate() {
     let f = fx("l4");
+    let _mail = crate::mail::mail_server_test_lock();
     on_app(&f, store::SCOPE_ANY);
-    let owner_only = |r: &crate::cli_response::CliResponse| (status_of(r), body_of(r)["error"]["code"].clone()) == (403, json!("owner_only"));
+    let owner_only =|r: &crate::cli_response::CliResponse| (status_of(r), body_of(r)["error"]["code"].clone()) == (403, json!("owner_only"));
     let r = as_it_agent(&f, || crate::mail::dkim::handle_dkim_rotate(json!({"domain": DOMAIN}).to_string().as_bytes()));
     assert!(owner_only(&r), "{}", r.body);
     let r = as_it_agent(&f, || crate::mail::dmarc::handle_dmarc_report_to(json!({"domain": DOMAIN, "address": "x@notify.brand.test"}).to_string().as_bytes()));

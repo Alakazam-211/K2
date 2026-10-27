@@ -73,6 +73,8 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "thread-activity-rooms-v1",
     // 0.46.3 r10: the Board context chip (`conversation.setContext`).
     "thread-context-v1",
+    // 0.46.5 (prd-garden-board-needs-v1): k2.download, k2.pick, k2.onDrop.
+    "zen-files-v1",
 ];
 
 /// A widget's manifest after checking (UW5, UWA7, UWB13).

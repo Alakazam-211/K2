@@ -15,15 +15,15 @@ use crate::garden_data::agent_routes::tests::{agent, env, err, ok, person_grant,
 use crate::sidecar_routes::{AgentCaller, Caller};
 use crate::zen_data_routes::{handle, DataWho};
 
-const APP: &str = "POST /cli/zen/call HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: tauri://localhost\r\n\r\n";
+pub(crate) const APP: &str = "POST /cli/zen/call HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: tauri://localhost\r\n\r\n";
 
 /// The Garden page: one custom placement `b1` of widget `board`.
 const PAGE: &str = "schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 100\nmin-width = 200\n\n[[widget]]\nid = \"b1\"\nkind = \"custom\"\nwidget = \"board\"\ncolumn = 0\n";
 
-struct Door {
-    _env: Env,
-    f: ZenFiles,
-    garden: String,
+pub(crate) struct Door {
+    pub(crate) _env: Env,
+    pub(crate) f: ZenFiles,
+    pub(crate) garden: String,
 }
 
 fn manifest(caps: &[&str]) -> String {
@@ -36,7 +36,7 @@ fn manifest(caps: &[&str]) -> String {
 }
 
 /// A Zen folder whose first Garden places `board` (with `caps`).
-fn door(caps: &[&str]) -> Door {
+pub(crate) fn door(caps: &[&str]) -> Door {
     let e = env();
     let f = ZenFiles::local();
     f.setup().expect("zen setup");
@@ -47,46 +47,46 @@ fn door(caps: &[&str]) -> Door {
     Door { _env: e, f, garden }
 }
 
-fn set_caps(f: &ZenFiles, caps: &[&str]) {
+pub(crate) fn set_caps(f: &ZenFiles, caps: &[&str]) {
     std::fs::write(f.widget_dir("board").join("manifest.json"), manifest(caps)).expect("manifest");
 }
 
 impl Door {
-    fn hash(&self) -> String {
+    pub(crate) fn hash(&self) -> String {
         let h = self.f.garden_widget_status(&self.garden, "board").hash().to_string();
         assert_eq!(h.len(), 64, "board bundles clean");
         h
     }
 
-    fn stamp(&self, maker: MadeBy) {
+    pub(crate) fn stamp(&self, maker: MadeBy) {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let kind = if maker == MadeBy::Owner { CallerKind::Owner } else { CallerKind::Agent };
         authors::stamp(&conn, "board", &self.hash(), &maker, StampSource::Sign, kind, 1).expect("stamp");
     }
 
-    fn raw(&self, hash: &str, verb: &str, args: Value) -> (u16, Value) {
+    pub(crate) fn raw(&self, hash: &str, verb: &str, args: Value) -> (u16, Value) {
         let body = json!({ "garden": self.garden, "placement": "b1", "hash": hash, "verb": verb, "args": args });
         let r = handle("/cli/zen/call", DataWho::Owner, body.to_string().as_bytes(), &HashMap::new(), APP);
         let code: u16 = r.status.split(' ').next().unwrap().parse().unwrap();
         (code, serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{verb}: {e}: {}", r.body)))
     }
 
-    fn call(&self, verb: &str, args: Value) -> Value {
+    pub(crate) fn call(&self, verb: &str, args: Value) -> Value {
         let (code, v) = self.raw(&self.hash(), verb, args);
         assert_eq!(code, 200, "{verb}: {v}");
         assert_eq!(v["ok"], true, "{v}");
         v["result"].clone()
     }
 
-    fn refuse(&self, verb: &str, args: Value) -> String {
+    pub(crate) fn refuse(&self, verb: &str, args: Value) -> String {
         let (code, v) = self.raw(&self.hash(), verb, args);
         assert_ne!(code, 200, "{verb} should refuse: {v}");
         v["error"]["code"].as_str().unwrap_or("").to_string()
     }
 }
 
-fn builder() -> MadeBy {
+pub(crate) fn builder() -> MadeBy {
     MadeBy::Agent { project_id: "w-builder".into() }
 }
 

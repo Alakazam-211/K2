@@ -103,7 +103,7 @@ impl Default for TxTable {
     }
 }
 
-fn random_hex(bytes: usize) -> String {
+pub(crate) fn random_hex(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
     // The OS RNG never fails on the platforms K2 runs on; if it ever did,
     // an all-zero id is still bound to its owner (and to this epoch).

@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod authors;
 pub mod backend;
+pub mod blob_store;
+pub mod blobs;
 pub mod export;
 pub mod grants;
 pub mod keys;
@@ -273,6 +275,9 @@ pub enum DataError {
     /// `grant_not_found` | `widget_not_found`.
     NotFound(&'static str),
     NoSnapshot { oldest: Option<String> },
+    /// A value names a blob this space doesn't hold (GB3): the first
+    /// [`blobs::MAX_MISSING_LISTED`] missing refs. Nothing was written.
+    BlobMissing { refs: Vec<String> },
     /// The other fixed codes in contract §4.6 (`self_grant`,
     /// `level_too_high`, `not_own`, `grant_exists`, `use_admin_revoke`,
     /// `space_exists`, `confirm_required`, `owner_only`, `origin_refused`,
@@ -304,6 +309,7 @@ impl DataError {
             DataError::RateLimited { .. } => "rate_limited",
             DataError::NotFound(code) => code,
             DataError::NoSnapshot { .. } => "no_snapshot",
+            DataError::BlobMissing { .. } => "blob_missing",
             DataError::Refused { code, .. } => code,
             DataError::Unavailable(_) => "store_unavailable",
             DataError::NotBuilt => "not_built",
@@ -315,7 +321,10 @@ impl DataError {
             DataError::BadRequest(_) | DataError::BadKey(_) => 400,
             DataError::NotGranted { .. } | DataError::AuthorUnknown | DataError::PersonOnly => 403,
             DataError::NotFound(_) | DataError::BadTx | DataError::NoSnapshot { .. } => 404,
-            DataError::Conflict { .. } | DataError::SpaceFull { .. } | DataError::Resync { .. } => 409,
+            DataError::Conflict { .. }
+            | DataError::SpaceFull { .. }
+            | DataError::Resync { .. }
+            | DataError::BlobMissing { .. } => 409,
             DataError::TxExpired => 410,
             DataError::ValueTooLarge { .. } | DataError::TooLarge(_) => 413,
             DataError::Busy | DataError::RateLimited { .. } => 429,
@@ -359,6 +368,10 @@ impl DataError {
             DataError::RateLimited { retry_after_secs } => format!("too many writes; retry in {retry_after_secs} s"),
             DataError::NotFound(code) => code.replace('_', " "),
             DataError::NoSnapshot { .. } => "no snapshot on or before that date".into(),
+            DataError::BlobMissing { refs } => format!(
+                "a value names a file this widget's data doesn't hold ({}); upload it first (k2.blobs.put, k2 store blob put)",
+                refs.first().map(String::as_str).unwrap_or("?")
+            ),
             DataError::Refused { hint, .. } => hint.clone(),
             DataError::NotBuilt => "not built yet (Garden data C0 stub)".into(),
         }
@@ -376,6 +389,7 @@ impl DataError {
             DataError::Resync { reaped_rev } => json!({ "reapedRev": reaped_rev }),
             DataError::RateLimited { retry_after_secs } => json!({ "retryAfterSecs": retry_after_secs }),
             DataError::NoSnapshot { oldest } => json!({ "oldest": oldest }),
+            DataError::BlobMissing { refs } => json!({ "ref": refs.first(), "refs": refs }),
             _ => json!({}),
         }
     }

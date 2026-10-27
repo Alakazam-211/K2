@@ -161,15 +161,15 @@ pub(crate) struct Placed {
 
 impl Placed {
     /// The widget's keyspace name: a folder, or a built-in without `@<n>`.
-    fn space_widget(&self) -> &str {
+    pub(crate) fn space_widget(&self) -> &str {
         self.widget.split('@').next().unwrap_or(&self.widget)
     }
 
-    fn label(&self) -> String {
+    pub(crate) fn label(&self) -> String {
         format!("placement:{}/{}", self.garden, self.placement)
     }
 
-    fn actor(&self) -> Actor {
+    pub(crate) fn actor(&self) -> Actor {
         Actor::Widget { widget: self.space_widget().to_string() }
     }
 }
@@ -249,7 +249,7 @@ fn run(b: &CallBody) -> Result<J, DataError> {
     // Garden access (switch on, §1.6): a version that fails the signer gate
     // keeps Always only: its own store and save keyspace and widget.self.
     // Everything else that acts as the person answers `needs_editor`.
-    if !w.signed && !matches!(b.verb.as_str(), "widget.self") && !b.verb.starts_with("save.") && !b.verb.starts_with("store.") {
+    if !w.signed && !matches!(b.verb.as_str(), "widget.self") && !b.verb.starts_with("save.") && !b.verb.starts_with("store.") && !b.verb.starts_with("blobs.") {
         return Err(needs_editor(&w));
     }
     if row.effect == Effect::Write {
@@ -292,47 +292,7 @@ fn run(b: &CallBody) -> Result<J, DataError> {
             // data on this Garden, read-only, when the manifest's `reads`
             // names it.
             let from = from_opt(v, args)?;
-            let space = match &from {
-                Some(other) => read_space(&w, v, other)?,
-                None => data_space(&w.widget)?,
-            };
-            if k2_core::zen::garden_access::enabled() {
-                // Garden access (G15): its own keyspace is Full for any good
-                // version; a neighbour's (`{from}`, manifest `reads` kept)
-                // only for a version that passes the signer gate.
-                if from.is_some() && !w.signed {
-                    return Err(needs_editor(&w));
-                }
-                let maker = {
-                    let db = k2_core::db::shared();
-                    let conn = db.lock();
-                    authors::maker_of(&conn, &w.widget, &w.hash)?
-                };
-                let made = made_by_label(&maker);
-                return store_verb(&w, &key, &space, &Access::Full, &made, v, args).map_err(|e| {
-                    if matches!(e, DataError::NotGranted { .. } | DataError::BadTx) {
-                        audit::line("zen.data.refused", &w.label(), &format!("{} code={}", space.as_str(), e.code()));
-                    }
-                    e
-                });
-            }
-            // The maker's rights, read now (a revoke wins on the next call).
-            let (maker, acc) = {
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                let maker = authors::maker_of(&conn, &w.widget, &w.hash)?;
-                let rights = if from.is_some() { rights::rights_for_neighbour(&conn, &space, &maker) } else { rights::rights_for_widget(&conn, &space, &maker) };
-                let acc = match rights {
-                    Ok(a) => a,
-                    Err(DataError::AuthorUnknown) => {
-                        audit::line("zen.data.refused", &w.label(), &format!("{} code=author_unknown", space.as_str()));
-                        return Err(author_unknown(&w));
-                    }
-                    Err(e) => return Err(e),
-                };
-                (maker, acc)
-            };
-            let made = made_by_label(&maker);
+            let (space, acc, made) = data_access(&w, v, from.as_deref())?;
             store_verb(&w, &key, &space, &acc, &made, v, args).map_err(|e| {
                 if matches!(e, DataError::NotGranted { .. } | DataError::BadTx) {
                     audit::line("zen.data.refused", &w.label(), &format!("{} code={}", space.as_str(), e.code()));
@@ -340,6 +300,46 @@ fn run(b: &CallBody) -> Result<J, DataError> {
                 e
             })
         }
+    }
+}
+
+/// The space a widget's data call reaches (its own, or a neighbour's with
+/// `from`), what it may touch there and its maker's label. Garden access
+/// on: its own keyspace is Full for any good version; a neighbour's only
+/// for a version that passes the signer gate. Off: the maker's rights,
+/// read now (a revoke wins on the next call). Shared with the blob routes
+/// (prd-garden-board-needs-v1 GB13).
+pub(crate) fn data_access(w: &Placed, verb: &str, from: Option<&str>) -> Result<(Space, Access, String), DataError> {
+    let space = match from {
+        Some(other) => read_space(w, verb, other)?,
+        None => data_space(&w.widget)?,
+    };
+    if k2_core::zen::garden_access::enabled() {
+        if from.is_some() && !w.signed {
+            return Err(needs_editor(w));
+        }
+        let maker = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            authors::maker_of(&conn, &w.widget, &w.hash)?
+        };
+        return Ok((space, Access::Full, made_by_label(&maker)));
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let maker = authors::maker_of(&conn, &w.widget, &w.hash)?;
+    let rights = if from.is_some() {
+        rights::rights_for_neighbour(&conn, &space, &maker)
+    } else {
+        rights::rights_for_widget(&conn, &space, &maker)
+    };
+    match rights {
+        Ok(acc) => Ok((space, acc, made_by_label(&maker))),
+        Err(DataError::AuthorUnknown) => {
+            audit::line("zen.data.refused", &w.label(), &format!("{} code=author_unknown", space.as_str()));
+            Err(author_unknown(w))
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -424,7 +424,7 @@ fn from_opt(verb: &str, args: &[J]) -> Result<Option<String>, DataError> {
 
 /// The other widget's space for a `{from}` read: named in the live
 /// manifest's `reads`, placed on this Garden, and never a write.
-fn read_space(w: &Placed, verb: &str, other: &str) -> Result<Space, DataError> {
+pub(crate) fn read_space(w: &Placed, verb: &str, other: &str) -> Result<Space, DataError> {
     let other = other.split('@').next().unwrap_or(other);
     if !w.reads.iter().any(|r| r == other) {
         return Err(refused(
@@ -696,6 +696,28 @@ fn store_verb(
             let tx_id = arg_str(args, 0, verb, "a txId")?;
             Ok(json!({ "aborted": tx_routes::table().abort(tx_id, &tx_owner(w)) }))
         }
+        // prd-garden-board-needs-v1 GB13 (garden-blobs-v1).
+        "blobs.info" => {
+            budget::spend(key, Spend::Read)?;
+            let r = arg_str(args, 0, verb, "a blob ref")?;
+            let hash = k2_core::garden_data::blobs::parse_ref(r)?;
+            let row = crate::garden_data::blob_routes::readable_row(space, acc, &w.actor(), &hash)?;
+            audit::count(space.as_str(), &label, Some(made), Counted::Read);
+            Ok(crate::garden_data::blob_routes::info_json(&row, &mut names))
+        }
+        "blobs.list" => {
+            budget::spend(key, Spend::Read)?;
+            let o = arg_obj(args, 0, verb)?;
+            known_opts(o, &["after", "limit"], verb)?;
+            let after: Option<String> = opt_field(o, "after", verb)?;
+            let limit: usize = opt_field::<u64>(o, "limit", verb)?.map_or(DEFAULT_LIST_LIMIT, |l| l as usize);
+            if limit == 0 || limit > MAX_LIST_LIMIT {
+                return Err(DataError::BadRequest(format!("{verb}: limit is 1..={MAX_LIST_LIMIT}")));
+            }
+            let page = crate::garden_data::blob_routes::list_page(space, acc, after.as_deref(), limit, &mut names)?;
+            audit::count(space.as_str(), &label, Some(made), Counted::Read);
+            Ok(page)
+        }
         _ => Err(refused("unknown_verb", 400, format!("no verb {verb}"))),
     }
 }
@@ -794,7 +816,7 @@ pub(crate) fn made_by_label(m: &MadeBy) -> String {
 
 #[cfg(test)]
 #[path = "call_tests.rs"]
-mod door_tests;
+pub(crate) mod door_tests;
 
 #[cfg(test)]
 mod tests {

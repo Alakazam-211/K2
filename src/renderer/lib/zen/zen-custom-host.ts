@@ -102,8 +102,13 @@ export function startZenFrameHost(frame: ZenFrameWindow, opts: ZenFrameHostOptio
   const errors: number[] = []
   let pingTimer: ReturnType<typeof setInterval> | null = null
 
+  /** A reply that carries bytes moves its buffer (prd-garden-board-needs-v1
+   *  GB12, V2); everything else is cloned. No size cap on replies (GH12). */
   const post = (msg: ZenFrameReply): void => {
-    if (!disposed) port.postMessage(msg)
+    if (disposed) return
+    const bytes = 'bytes' in msg ? msg.bytes : undefined
+    if (bytes instanceof ArrayBuffer) port.postMessage(msg, [bytes])
+    else port.postMessage(msg)
   }
   const report = (r: ZenFrameReport): void => {
     try {

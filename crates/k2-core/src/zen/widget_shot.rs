@@ -64,6 +64,10 @@ pub const FRAME_FEATURES: &[&str] = &[
     "thread-images-v1",
     // 0.46.5 activity SDK: thread.onActivity.
     "widget-activity-v1",
+    // 0.46.5: the preview answers blobs.get from fixtures and
+    // downloads.* / uploads.* with verb_unavailable (GB18, GS6, GP6).
+    "garden-blobs-v1",
+    "zen-files-v1",
 ];
 
 /// The shot's size limits (CSS pixels).

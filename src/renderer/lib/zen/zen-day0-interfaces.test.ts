@@ -82,8 +82,17 @@ describe('day-0: verb tables', () => {
         expect(verb in ZEN_VERBS, verb).toBe(false)
         continue
       }
+      // 0.46.5 (prd-garden-board-needs-v1): blobs.put/get and downloads.*
+      // are frame rows the custom layer answers (bytes over the widget door
+      // and K2's download path); blobs.info/list are garden-local.
+      if (verb === 'blobs.put' || verb === 'blobs.get' || verb.startsWith('downloads.')) {
+        expect(row.reach).toBe('local')
+        expect(['store:read', 'store:write', 'downloads:save']).toContain(row.cap)
+        expect(verb in ZEN_VERBS, verb).toBe(false)
+        continue
+      }
       // Garden data: garden-local rows, answered by this computer's daemon.
-      if (verb.startsWith('store.') || verb.startsWith('save.') || verb === 'viewer.get') {
+      if (verb.startsWith('store.') || verb.startsWith('save.') || verb.startsWith('blobs.') || verb === 'viewer.get') {
         expect(row.reach).toBe('local')
         expect([null, 'store:read', 'store:write']).toContain(row.cap)
         expect(verb in ZEN_VERBS, verb).toBe(false)

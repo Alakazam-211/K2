@@ -230,8 +230,8 @@
    },
    {
     "name": "store --widget",
-    "usage": "k2 store get|put|patch|rm|list|changes|batch|grants|grant|revoke|export --widget <name> ...",
-    "description": "A Garden widget's own data on this computer. Agents read and write only the keys they were granted; grant/revoke are for a grant admin. patch changes only the fields it names and keeps the rest (null removes a field). batch reads put, patch and delete ops on stdin, all or nothing. Exit 3 not granted, 4 not found, 5 conflict."
+    "usage": "k2 store get|put|patch|rm|list|changes|batch|grants|grant|revoke|export|blob --widget <name> ...",
+    "description": "A Garden widget's own data on this computer. Agents read and write only the keys they were granted; grant/revoke are for a grant admin. patch changes only the fields it names and keeps the rest (null removes a field). batch reads put, patch and delete ops on stdin, all or nothing. blob put|get|ls keeps files (at most 16 MiB) a value names by ref. Exit 3 not granted, 4 not found or blob_missing, 5 conflict."
    },
    {
     "name": "zen data",

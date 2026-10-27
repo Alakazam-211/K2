@@ -33231,7 +33231,7 @@ cmd_schema() {
     {"name": "changes notes add", "usage": "k2 changes notes add <path> --line <n>[-<m>] [--old] -m \"comment\"  ·  edit <id> -m \"...\"  ·  delete <id>...  ·  reopen <id>...  ·  send [<id>...] [--no-wake]", "description": "People only (owner token or a Connect login; an agent passport gets forbidden). add = a note on lines of a changed file (--old: the text before the change); edit/delete = the author or an Admin; send = the open unsent notes, batched into one message to this workspace's agent through the k2 msg path (wakes it unless --no-wake), then marked sent (nothing_to_send, not_delivered and send_in_progress exit 3).", "args": [{"name": "path", "required": true}], "flags": [{"name": "--line", "arg": "n[-m]", "description": "1-based line or range."}, {"name": "--old", "arg": null, "description": "Note the old side."}, {"name": "-m", "arg": "comment", "description": "The note (repeat for paragraphs)."}, {"name": "--no-wake", "arg": null, "description": "send: do not wake a sleeping agent (fails with not_delivered instead)."}]},
     {"name": "changes open", "usage": "k2 changes open [--workspace <path>] [--json]", "description": "Ask a K2 window that shows this workspace to open (or focus) its Changes tab (daemon event open_changes). Agents: their own workspace. 200 means asked; a window opens it only while it shows that workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, workspacePath}."}]},
     {"name": "changes init", "usage": "k2 changes init [--workspace <path>] [--json]", "description": "Make the workspace root a git repository (git init, no commit), like the Changes tab's Initialize repository. Only a workspace root; refused inside an existing repository (already_a_repo) or for a folder that is not a workspace root (bad_path / not_found). Agents: their own workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, repoRoot, rev}."}]},
-    {"name": "store --widget", "usage": "k2 store get|put|patch|rm|list|changes|batch|grants|grant|revoke|export --widget <name> ...", "description": "A Garden widget's own data on this computer. Agents read and write only the keys they were granted; grant/revoke are for a grant admin. patch changes only the fields it names and keeps the rest (null removes a field). batch reads put, patch and delete ops on stdin, all or nothing. Exit 3 not granted, 4 not found, 5 conflict.", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--widget", "arg": "name", "description": "The widget whose data this is."}, {"name": "--if-rev", "arg": "n", "description": "Write only if the key's rev is n (0 = only if missing)."}, {"name": "--prefix", "arg": "prefix", "description": "Only keys under this prefix."}, {"name": "--since", "arg": "rev", "description": "changes: after this rev."}, {"name": "--wait", "arg": "secs", "description": "changes: wait up to 30 s for a change."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "store --widget", "usage": "k2 store get|put|patch|rm|list|changes|batch|grants|grant|revoke|export|blob --widget <name> ...", "description": "A Garden widget's own data on this computer. Agents read and write only the keys they were granted; grant/revoke are for a grant admin. patch changes only the fields it names and keeps the rest (null removes a field). batch reads put, patch and delete ops on stdin, all or nothing. blob put|get|ls keeps files (at most 16 MiB) a value names by ref. Exit 3 not granted, 4 not found or blob_missing, 5 conflict.", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--widget", "arg": "name", "description": "The widget whose data this is."}, {"name": "--if-rev", "arg": "n", "description": "Write only if the key's rev is n (0 = only if missing)."}, {"name": "--prefix", "arg": "prefix", "description": "Only keys under this prefix."}, {"name": "--since", "arg": "rev", "description": "changes: after this rev."}, {"name": "--wait", "arg": "secs", "description": "changes: wait up to 30 s for a change."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "zen data", "usage": "k2 zen data list|show|grant|revoke|admin|unadmin|delete|move|export|import ...", "description": "The person's admin for widget data: grants (agent = a wall; project = a convenience), grant admins, delete, move, export, import. Refused inside a K2 terminal (exit 3).", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--agent", "arg": "handle", "description": "The agent."}, {"name": "--project", "arg": "name", "description": "A K2 project (any agent can join it)."}, {"name": "--level", "arg": "read|write", "description": "The grant level."}, {"name": "--prefix", "arg": "prefix", "description": "Only keys under this prefix (default: all)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {
       "name": "llm tokens list",
@@ -62081,8 +62081,12 @@ Agents see only the keys the person (or a grant admin) granted them.
   grant   --widget <w> --agent <h> | --project <p> --level read|write [--prefix p/]
   revoke  --widget <w> --agent <h> | --project <p> [--prefix p/]
   export  --widget <w> [--at YYYY-MM-DD] > data.jsonl
+  blob put <file> --widget <w> [--mime m] [--name n]   (prints the ref; ≤ 16 MiB)
+  blob get <ref> --widget <w> --out <file> [--px 256|512]
+  blob ls  --widget <w>                (files the widget's data holds)
+          A file stays while a key's value names its ref ("k2blob:sha256-…").
 grant/revoke are for a grant admin the person named (k2 zen data admin).
-Exit codes: 3 not granted / needs a person, 4 not found, 5 conflict (re-read, retry).
+Exit codes: 3 not granted / needs a person, 4 not found or blob_missing, 5 conflict (re-read, retry).
 The person's admin commands: k2 zen data --help.
 EOF
 }
@@ -62525,7 +62529,7 @@ except Exception:
             echo "This needs a person. Run it outside K2, or use Settings → Gardens → the Garden → Local Data." >&2
             exit 3 ;;
         not_granted|self_grant|level_too_high|not_own|author_unknown) exit 3 ;;
-        space_not_found|agent_not_found|project_not_found|grant_not_found|widget_not_found|no_snapshot) exit 4 ;;
+        space_not_found|agent_not_found|project_not_found|grant_not_found|widget_not_found|no_snapshot|blob_missing) exit 4 ;;
         conflict) exit 5 ;;
         *) exit 1 ;;
     esac
@@ -62586,6 +62590,7 @@ cmd_store_widget() {
         grant) cmd_store_widget_grant "$@" ;;
         revoke) cmd_store_widget_revoke "$@" ;;
         export) cmd_store_widget_export "$@" ;;
+        blob) cmd_store_widget_blob "$@" ;;
         *)
             echo "Error: unknown 'k2 store $sub --widget' command — see k2 store --help" >&2
             exit 2 ;;
@@ -62639,8 +62644,8 @@ USAGE
   k2 zen data unadmin <widget> --agent <h> [--prefix p/] [--yes]
   k2 zen data delete <widget> [--yes]
   k2 zen data move <old> <new>
-  k2 zen data export <widget> [--at YYYY-MM-DD] > data.jsonl
-  k2 zen data import <widget> [--replace] < data.jsonl
+  k2 zen data export <widget> [--at YYYY-MM-DD] [--blobs <dir>] > data.jsonl
+  k2 zen data import <widget> [--replace] [--blobs <dir>] < data.jsonl
 
 GRANTS
   An agent grant is a wall: only that agent gets it. A --project grant is a
@@ -62995,6 +63000,129 @@ cmd_store_widget_revoke() {
     local body; body="$(_gd_body revoke)" || exit 2
     _gd_call POST /cli/zen/data/revoke "$body"
     _gd_out 'print("Revoked.")'
+}
+# 0.46.5 (prd-garden-board-needs-v1 GB16): files in a widget's data.
+#   k2 store blob put <file> --widget <w> [--mime m] [--name n] [--json]
+#   k2 store blob get <ref> --widget <w> --out <file> [--px 256|512] [--json]
+#   k2 store blob ls --widget <w> [--json]
+# Bytes go in 2 MiB chunks (the cell socket takes 4 MiB bodies); the daemon
+# hashes them, sniffs the type and keeps the file until no key names it.
+_GD_BLOB_CHUNK=2097152
+
+# _gd_blob_put_file WIDGET FILE MIME NAME → _GD_BODY is the BlobInfo.
+_gd_blob_put_file() {
+    local widget="$1" file="$2" mime="$3" name="$4" size offset=0 upload="" body last
+    [ -f "$file" ] && [ -r "$file" ] || { echo "Error: can't read '$file'" >&2; exit 2; }
+    size="$(python3 -c 'import os, sys; print(os.path.getsize(sys.argv[1]))' "$file")"
+    if [ "$size" -gt 16777216 ]; then
+        echo "Error: too_large: a file is at most 16 MiB; '$file' is $size bytes" >&2
+        exit 1
+    fi
+    [ -n "$name" ] || name="$(basename "$file")"
+    while :; do
+        body="$(GD_W="$widget" GD_F="$file" GD_OFF="$offset" GD_N="$_GD_BLOB_CHUNK" GD_UP="$upload" GD_MIME="$mime" GD_NAME="$name" python3 -c '
+import base64, json, os
+e = os.environ
+off, n = int(e["GD_OFF"]), int(e["GD_N"])
+size = os.path.getsize(e["GD_F"])
+with open(e["GD_F"], "rb") as f:
+    f.seek(off)
+    chunk = f.read(n)
+b = {"widget": e["GD_W"], "offset": off, "base64": base64.b64encode(chunk).decode(), "last": off + len(chunk) >= size}
+if e["GD_UP"]:
+    b["upload"] = e["GD_UP"]
+if e["GD_MIME"]:
+    b["mime"] = e["GD_MIME"]
+if e["GD_NAME"]:
+    b["name"] = e["GD_NAME"]
+print(json.dumps(b))
+')" || { echo "Error: can't read '$file'" >&2; exit 1; }
+        last="$(printf '%s' "$body" | python3 -c 'import json, sys; print("1" if json.loads(sys.stdin.read())["last"] else "0")')"
+        _gd_call POST /cli/zen/data/blob/put "$body"
+        [ "$last" = "1" ] && break
+        upload="$(printf '%s' "$_GD_BODY" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read())["upload"])')"
+        offset=$((offset + _GD_BLOB_CHUNK))
+    done
+}
+
+# _gd_blob_get_file WIDGET REF OUT PX → writes OUT whole (or not at all);
+# _GD_BODY is the last answer without its bytes.
+_gd_blob_get_file() {
+    local widget="$1" ref="$2" out="$3" px="$4" offset=0 tmp eof q
+    tmp="$(mktemp "${out}.k2part.XXXXXX")" || { echo "Error: can't write next to '$out'" >&2; exit 1; }
+    # A refusal exits from _gd_call: never leave a half file behind.
+    trap 'rm -f "$tmp"' EXIT
+    while :; do
+        q="$(GD_W="$widget" GD_R="$ref" GD_OFF="$offset" GD_N="$_GD_BLOB_CHUNK" GD_PX="$px" python3 -c '
+import os, urllib.parse
+e = os.environ
+pairs = [("widget", e["GD_W"]), ("ref", e["GD_R"]), ("offset", e["GD_OFF"]), ("len", e["GD_N"])]
+if e["GD_PX"]:
+    pairs.append(("px", e["GD_PX"]))
+print(urllib.parse.urlencode(pairs))
+')"
+        _gd_call GET /cli/zen/data/blob/get "$q"
+        eof="$(printf '%s' "$_GD_BODY" | GD_T="$tmp" python3 -c '
+import base64, json, os, sys
+v = json.loads(sys.stdin.read())
+with open(os.environ["GD_T"], "ab") as f:
+    f.write(base64.b64decode(v["base64"]))
+print("%s %s" % ("1" if v["eof"] else "0", v["len"]))
+')" || { rm -f "$tmp"; echo "Error: the daemon's answer wasn't readable" >&2; exit 1; }
+        offset=$((offset + ${eof#* }))
+        [ "${eof%% *}" = "1" ] && break
+        [ "${eof#* }" -gt 0 ] || { rm -f "$tmp"; echo "Error: the daemon stopped before the end" >&2; exit 1; }
+    done
+    mv -f "$tmp" "$out" || { rm -f "$tmp"; echo "Error: can't write '$out'" >&2; exit 1; }
+    trap - EXIT
+    _GD_BODY="$(printf '%s' "$_GD_BODY" | python3 -c 'import json, sys; v = json.loads(sys.stdin.read()); v.pop("base64", None); v.pop("offset", None); v.pop("len", None); v.pop("eof", None); print(json.dumps(v))')"
+}
+
+cmd_store_widget_blob() {
+    local sub="${1:-}" pos="" mime="" name="" out="" px="" after="" limit=""
+    shift || true
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --mime) mime="${2:-}"; shift 2 || { echo "Error: --mime takes a type" >&2; exit 2; } ;;
+            --name) name="${2:-}"; shift 2 || { echo "Error: --name takes a file name" >&2; exit 2; } ;;
+            --out|-o) out="${2:-}"; shift 2 || { echo "Error: --out takes a path" >&2; exit 2; } ;;
+            --px) px="${2:-}"; shift 2 || { echo "Error: --px takes 256 or 512" >&2; exit 2; } ;;
+            --after) after="${2:-}"; shift 2 || { echo "Error: --after takes a ref" >&2; exit 2; } ;;
+            --limit) limit="${2:-}"; shift 2 || { echo "Error: --limit takes a number" >&2; exit 2; } ;;
+            --json) _GD_JSON=1; shift ;;
+            --*) echo "Error: unknown flag $1" >&2; exit 2 ;;
+            *) if [ -z "$pos" ]; then pos="$1"; shift; else echo "Error: unexpected '$1'" >&2; exit 2; fi ;;
+        esac
+    done
+    case "$px" in ""|256|512) ;; *) echo "Error: --px is 256 or 512" >&2; exit 2 ;; esac
+    case "$limit" in *[!0-9]*) echo "Error: --limit takes a whole number" >&2; exit 2 ;; esac
+    case "$sub" in
+        put)
+            [ -n "$pos" ] || { echo "Error: usage: k2 store blob put <file> --widget <w> [--mime m] [--name n]" >&2; exit 2; }
+            _gd_blob_put_file "$_GD_WIDGET" "$pos" "$mime" "$name"
+            _gd_out 'import json, sys; print(json.loads(sys.stdin.read())["ref"])'
+            ;;
+        get)
+            [ -n "$pos" ] && [ -n "$out" ] || { echo "Error: usage: k2 store blob get <ref> --widget <w> --out <file> [--px 256|512]" >&2; exit 2; }
+            _gd_blob_get_file "$_GD_WIDGET" "$pos" "$out" "$px"
+            _gd_out 'import json, sys; v = json.loads(sys.stdin.read()); print("%s bytes, %s" % (v["size"], v["mime"]))'
+            ;;
+        ls|list)
+            _gd_call GET /cli/zen/data/blob/list "$(_gd_q "after=$after" "limit=$limit")"
+            _gd_out '
+import json, sys
+v = json.loads(sys.stdin.read())
+for b in v["items"]:
+    flag = "pending" if b["pending"] else "%d key%s" % (b["refs"], "" if b["refs"] == 1 else "s")
+    print("%s  %9d  %-24s %-10s %s" % (b["ref"], b["size"], b["mime"], flag, b["name"] or ""))
+print("%d of %d MiB used" % (v["bytes"] // 1048576, v["quota"] // 1048576), file=sys.stderr)
+if v["next"]:
+    print("more: --after %s" % v["next"], file=sys.stderr)'
+            ;;
+        *)
+            echo "Error: k2 store blob put|get|ls --widget <w> (see k2 store --help)" >&2
+            exit 2 ;;
+    esac
 }
 # END_GARDEN_DATA_B1
 
@@ -63543,25 +63671,75 @@ cmd_zen_data_move() {
 # END_ZEN_DATA_B1
 
 # BEGIN_ZEN_DATA_B3
+# --blobs <dir> (prd-garden-board-needs-v1 GB17): export also copies every
+# file a key in the export names into <dir>/<hash> (read-only); import
+# uploads the files in <dir> first, so the refs in the data are held.
+_gd_take_blobs() {
+    _GD_BLOBS="" _GD_REST=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --blobs) _GD_BLOBS="${2:-}"; [ -n "$_GD_BLOBS" ] || { echo "Error: --blobs takes a folder" >&2; exit 2; }; shift 2 ;;
+            *) _GD_REST+=("$1"); shift ;;
+        esac
+    done
+}
+
 cmd_zen_data_export() {
-    local widget="${1:-}"
-    case "$widget" in ""|-*) echo "Error: k2 zen data export <widget> [--at YYYY-MM-DD] > data.jsonl" >&2; exit 2 ;; esac
+    local widget="${1:-}" tmp ref
+    case "$widget" in ""|-*) echo "Error: k2 zen data export <widget> [--at YYYY-MM-DD] [--blobs <dir>] > data.jsonl" >&2; exit 2 ;; esac
     shift
-    _gd_take_at "k2 zen data export <widget> [--at YYYY-MM-DD]" "$@"
-    _gd_export_jsonl "$widget" "$_GD_AT"
+    _gd_take_blobs "$@"
+    _gd_take_at "k2 zen data export <widget> [--at YYYY-MM-DD] [--blobs <dir>]" ${_GD_REST[@]+"${_GD_REST[@]}"}
+    if [ -z "$_GD_BLOBS" ]; then
+        _gd_export_jsonl "$widget" "$_GD_AT"
+        return 0
+    fi
+    mkdir -p "$_GD_BLOBS" || { echo "Error: can't make '$_GD_BLOBS'" >&2; exit 1; }
+    tmp="$(mktemp "${TMPDIR:-/tmp}/k2-gd-export.XXXXXX")" || { echo "Error: can't make a temp file" >&2; exit 1; }
+    _gd_export_jsonl "$widget" "$_GD_AT" > "$tmp"
+    cat "$tmp"
+    for ref in $(python3 -c '
+import json, re, sys
+REF = re.compile(r"^k2blob:sha256-[0-9a-f]{64}$")
+found = set()
+def walk(v):
+    if isinstance(v, str):
+        if REF.match(v):
+            found.add(v)
+    elif isinstance(v, list):
+        for x in v:
+            walk(x)
+    elif isinstance(v, dict):
+        for x in v.values():
+            walk(x)
+with open(sys.argv[1]) as f:
+    for n, line in enumerate(f):
+        if n == 0 or not line.strip():
+            continue
+        walk(json.loads(line).get("value"))
+for r in sorted(found):
+    print(r)
+' "$tmp"); do
+        local hash="${ref#k2blob:sha256-}"
+        [ -f "$_GD_BLOBS/$hash" ] && continue
+        _gd_blob_get_file "$widget" "$ref" "$_GD_BLOBS/$hash" ""
+        chmod 0444 "$_GD_BLOBS/$hash"
+    done
+    rm -f "$tmp"
 }
 
 # k2 zen data import <widget> [--replace] < data.jsonl: the person only. A
 # snapshot first, then one write at one new rev. Reads the JSONL an export
 # writes (the header line is skipped) or a JSON array of {key, value}.
 cmd_zen_data_import() {
-    local widget="${1:-}" mode="merge" body
-    case "$widget" in ""|-*) echo "Error: k2 zen data import <widget> [--replace] < data.jsonl" >&2; exit 2 ;; esac
+    local widget="${1:-}" mode="merge" body blobs="" f
+    case "$widget" in ""|-*) echo "Error: k2 zen data import <widget> [--replace] [--blobs <dir>] < data.jsonl" >&2; exit 2 ;; esac
     shift
     while [ $# -gt 0 ]; do
         case "$1" in
             --replace) mode="replace"; shift ;;
             --merge) mode="merge"; shift ;;
+            --blobs) blobs="${2:-}"; [ -d "$blobs" ] || { echo "Error: --blobs takes a folder of files named by their sha256" >&2; exit 2; }; shift 2 ;;
             --json) shift ;;
             *) echo "Error: unexpected '$1' (k2 zen data import <widget> [--replace] < data.jsonl)" >&2; exit 2 ;;
         esac
@@ -63600,6 +63778,19 @@ for n, r in enumerate(rows, 1):
     items.append({"key": r["key"], "value": r["value"]})
 print(json.dumps({"widget": os.environ["GD_W"], "mode": os.environ["GD_MODE"], "items": items}, separators=(",", ":"), ensure_ascii=False))
 ')" || exit $?
+    if [ -n "$blobs" ]; then
+        for f in "$blobs"/*; do
+            [ -f "$f" ] || continue
+            local base; base="$(basename "$f")"
+            case "$base" in *[!0-9a-f]*) continue ;; esac
+            [ "${#base}" -eq 64 ] || continue
+            _gd_blob_put_file "$widget" "$f" "" ""
+            if [ "$(printf '%s' "$_GD_BODY" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read())["ref"])')" != "k2blob:sha256-$(basename "$f")" ]; then
+                echo "Error: $(basename "$f") isn't named by its sha256; nothing was imported" >&2
+                exit 1
+            fi
+        done
+    fi
     _gd_call POST /cli/zen/data/import "$body"
     if [ "$_GD_JSON" = "1" ]; then
         printf '%s\n' "$_GD_BODY"
@@ -64619,6 +64810,9 @@ sources:read (Read data sources)
   k2.sources.ask(address, itemKey?)                                                                   local    sources-v1             await k2.sources.ask(k2.config.source, tile.key)  [not_bound retired]
 links:open (Open links in your browser)
   k2.links.open(url)                                                                                  local    zen-widgets-v1         const {ok} = await k2.open('https://example.com/report')  [bad_args rate_limited]
+downloads:save (Save files to your Downloads)
+  k2.downloads.begin(name, {mime})                                                                    local    zen-files-v1           k2.download('Board.png', async () => await drawPng())  [bad_args rate_limited]
+  k2.downloads.save(name, data, {mime, ticket})                                                       local    zen-files-v1           const {saved, name} = await k2.download('board.json', JSON.stringify(doc))  [not_granted bad_args too_large rate_limited blob_missing]
 files:read (Read files (also shows heartbeat instructions))
   k2.files.list({relPath, showHidden, workspace})                                                     portable app-api-v1             const entries = await k2.files.list({workspace, relPath: '.'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
   k2.files.read({relPath, workspace})                                                                 portable app-api-v1             const {content} = await k2.files.read({workspace, relPath: 'notes.md'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
@@ -64634,6 +64828,9 @@ store:read (Read the workspace store)
   k2.store.get(key, {from})                                                                           local    garden-data-v1         const e = await k2.store.get('obj/7')  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
   k2.store.list({after, from, limit, prefix})                                                         local    garden-data-v1         const {items, next} = await k2.store.list({prefix: 'obj/'})  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
   k2.store.changes({after, from, prefix, since})                                                      local    garden-data-v1         const page = await k2.store.changes({since: 41})  [not_bound not_granted author_unknown stale_widget rate_limited resync bad_key]
+  k2.blobs.get(ref, {from, px})                                                                       local    garden-blobs-v1        img.src = await k2.blobs.url(obj.src, {px: 256})  [not_granted author_unknown stale_widget rate_limited bad_args not_bound blob_missing]
+  k2.blobs.info(ref)                                                                                  local    garden-blobs-v1        const {size, refs} = await k2.blobs.info(ref)  [not_granted author_unknown stale_widget rate_limited blob_missing]
+  k2.blobs.list({after, limit})                                                                       local    garden-blobs-v1        const {items, bytes, quota} = await k2.blobs.list()  [not_granted author_unknown stale_widget rate_limited]
 store:write (Change dump-table rows)
   k2.store.put(key, value, {ifRev})                                                                   local    garden-data-v1         const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
   k2.store.patch(key, partial, {ifRev})                                                               local    garden-data-v1         const {rev} = await k2.store.patch('obj/7', {done: true}, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
@@ -64643,6 +64840,7 @@ store:write (Change dump-table rows)
   k2.store.txAdd(txId, ops)                                                                           local    garden-data-v1         await tx.add(ops)  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired bad_key value_too_large too_large]
   k2.store.txCommit(txId)                                                                             local    garden-data-v1         const {rev} = await tx.commit()  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired conflict value_too_large space_full store_full paused]
   k2.store.txAbort(txId)                                                                              local    garden-data-v1         await tx.abort()
+  k2.blobs.put(data, {mime, name})                                                                    local    garden-blobs-v1        const {ref} = await k2.blobs.put(file); await k2.store.patch('obj/7', {src: ref})  [not_granted author_unknown stale_widget rate_limited bad_args too_large space_full store_full paused busy]
 guests:rooms (Set its own guests' rooms (an owner grant per App, never a guest's))
   k2.guests.rooms({app, username})                                                                    portable guests-rooms-v1        const g = await k2.asApp().guests.rooms({username: 'dana'})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found rate_limited stale_widget author_unknown]
   k2.guests.setRooms({app, rooms, username})                                                          portable guests-rooms-v1        await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found outside_app_rooms above_role has_role rate_limited stale_widget author_unknown confirm_required declined paused]

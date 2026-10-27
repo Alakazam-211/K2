@@ -67,6 +67,9 @@ export const ZEN_STORE_VERBS: ReadonlySet<string> = new Set([
   'tickets.comment',
   'tickets.resolve',
   'activity.snapshot',
+  // 0.46.5 (prd-garden-board-needs-v1 GB13): a file's details and the list.
+  'blobs.info',
+  'blobs.list',
 ])
 
 /** How long the person's name is reused before `viewer.get` again. */

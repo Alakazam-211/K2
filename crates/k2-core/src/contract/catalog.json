@@ -37,6 +37,12 @@
       "label": "Open links in your browser",
       "sentence": "Open web links in your browser when you click in it. K2 asks you the first time for each site."
     },
+    {
+      "name": "downloads:save",
+      "exposure": ["widget"],
+      "label": "Save files to your Downloads",
+      "sentence": "Save files it makes (like a PNG or PDF of your board) to your Downloads folder when you click in it."
+    },
     {"name": "agents:add", "label": "Open Add agent"},
     {"name": "gardens:manage", "label": "Create, rename and delete Gardens"},
     {"name": "gardens:template", "label": "Turn this Garden into a built-in page"},
@@ -64,13 +70,13 @@
     {"name": "wiki:read", "exposure": ["app"], "label": "Read the wiki"},
     {
       "name": "store:read",
-      "exposure": ["app", "garden-local"],
+      "exposure": ["app", "garden-local", "widget"],
       "label": "Read the workspace store",
       "sentence": "Read this widget's own data on this computer."
     },
     {
       "name": "store:write",
-      "exposure": ["app", "garden-local"],
+      "exposure": ["app", "garden-local", "widget"],
       "label": "Change dump-table rows",
       "sentence": "Save this widget's own data on this computer. Agents you allow can read and change it too."
     },
@@ -171,6 +177,7 @@
     {"code": "tx_expired", "doc": "The transaction expired (30 s idle, or the daemon restarted); start again."},
     {"code": "busy", "retryable": true, "doc": "Too many open transactions; finish or abort one."},
     {"code": "paused", "doc": "This widget is paused for too many identical writes; the person can resume it."},
+    {"code": "blob_missing", "doc": "A value names a file (k2blob:sha256-…) this widget's data doesn't hold (the error's ref names it); upload it first with k2.blobs.put. Nothing was written."},
     {"code": "bad_args", "doc": "An argument isn't plain data (functions, DOM nodes and cycles never cross) or the call's arguments aren't a list. The frame refuses it before it leaves; K2 refuses it too."},
     {"code": "bad_shape", "doc": "K2 delivered a value that isn't the verb's shape (a card view without items, say). The runtime's guard refuses it to a handler-object subscription; the widget keeps its last good data."},
     {"code": "pass_required", "doc": "No pass on an App call: send this App's pass (K2_PASS_FILE) or a guest's session pass as Authorization: Bearer."},
@@ -4695,6 +4702,540 @@
       ],
       "doc": "Drop a transaction's staged writes.",
       "example": "await tx.abort()"
+    },
+    {
+      "verb": "blobs.put",
+      "cap": "store:write",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-blobs-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        }
+      },
+      "request": [
+        {
+          "title": "data",
+          "type": "json",
+          "description": "Blob, File, ArrayBuffer, typed array or string; the SDK sends it as transferred bytes (at most 16 MiB)."
+        },
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "mime": {
+              "type": "string",
+              "description": "Used only when K2 can't tell from the bytes."
+            },
+            "name": {
+              "type": "string",
+              "description": "A file name to keep with it (plain text)."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "BlobInfo",
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "description": "Put it in a value (k2.store.put) to keep the file."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Bytes."
+          },
+          "mime": {
+            "type": "string",
+            "description": "Sniffed from the bytes by K2, never trusted from the caller."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file name it came with (plain text, at most 255 characters)."
+          },
+          "new": {
+            "type": "boolean",
+            "description": "False when this widget's data already held these bytes."
+          }
+        },
+        "required": [
+          "ref",
+          "size",
+          "mime",
+          "name",
+          "new"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_args",
+        "too_large",
+        "space_full",
+        "store_full",
+        "paused",
+        "busy"
+      ],
+      "doc": "Keep a file (an image, a PDF) in this widget's data on this computer and get its ref; it stays only while a key's value names the ref.",
+      "example": "const {ref} = await k2.blobs.put(file); await k2.store.patch('obj/7', {src: ref})"
+    },
+    {
+      "verb": "blobs.get",
+      "cap": "store:read",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "garden-blobs-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        }
+      },
+      "request": [
+        {
+          "title": "ref",
+          "type": "string",
+          "description": "A blob ref, k2blob:sha256-<64 lowercase hex>."
+        },
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "px": {"type": "integer", "minimum": 256, "maximum": 512, "description": "An image thumbnail 256 or 512 pixels on its longest side."},
+            "from": {
+              "type": "string",
+              "description": "Read another widget's file on this Garden (it must be in your manifest's reads)."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "BlobData",
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Bytes (of the thumbnail with px)."
+          },
+          "mime": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file name it came with (plain text, at most 255 characters)."
+          },
+          "blob": {
+            "type": "json",
+            "description": "The bytes as a Blob (the SDK builds it from a transferred ArrayBuffer)."
+          }
+        },
+        "required": [
+          "ref",
+          "size",
+          "mime",
+          "name",
+          "blob"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_args",
+        "not_bound",
+        "blob_missing"
+      ],
+      "doc": "A file this widget's data holds, as a Blob (px: an image thumbnail). k2.blobs.url(ref) gives an img src.",
+      "example": "img.src = await k2.blobs.url(obj.src, {px: 256})"
+    },
+    {
+      "verb": "blobs.info",
+      "cap": "store:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "garden-blobs-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "ref",
+          "type": "string",
+          "description": "A blob ref, k2blob:sha256-<64 lowercase hex>."
+        }
+      ],
+      "response": {
+        "title": "BlobDetail",
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Bytes."
+          },
+          "mime": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file name it came with (plain text, at most 255 characters)."
+          },
+          "refs": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Live keys that name it."
+          },
+          "pending": {
+            "type": "boolean",
+            "description": "No key has named it yet; K2 drops it after 24 hours."
+          },
+          "addedAt": {
+            "type": "integer",
+            "description": "Seconds since the Unix epoch."
+          },
+          "addedBy": {
+            "type": "string",
+            "description": "you, you via <widget>, or agent:<handle>."
+          }
+        },
+        "required": [
+          "ref",
+          "size",
+          "mime",
+          "name",
+          "refs",
+          "pending",
+          "addedAt",
+          "addedBy"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "blob_missing"
+      ],
+      "doc": "One file's size, type, name, who added it and how many keys name it.",
+      "example": "const {size, refs} = await k2.blobs.info(ref)"
+    },
+    {
+      "verb": "blobs.list",
+      "cap": "store:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "garden-blobs-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "after": {
+              "type": "string",
+              "description": "next from an earlier page."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "BlobList",
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "BlobDetail",
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Bytes."
+                },
+                "mime": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The file name it came with (plain text, at most 255 characters)."
+                },
+                "refs": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Live keys that name it."
+                },
+                "pending": {
+                  "type": "boolean",
+                  "description": "No key has named it yet; K2 drops it after 24 hours."
+                },
+                "addedAt": {
+                  "type": "integer",
+                  "description": "Seconds since the Unix epoch."
+                },
+                "addedBy": {
+                  "type": "string",
+                  "description": "you, you via <widget>, or agent:<handle>."
+                }
+              },
+              "required": [
+                "ref",
+                "size",
+                "mime",
+                "name",
+                "refs",
+                "pending",
+                "addedAt",
+                "addedBy"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Bytes this widget's files count for now (held and pending)."
+          },
+          "quota": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Its file quota in bytes."
+          }
+        },
+        "required": [
+          "items",
+          "next",
+          "bytes",
+          "quota"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "This widget's files, a page at a time, with the bytes they count for and the quota.",
+      "example": "const {items, bytes, quota} = await k2.blobs.list()"
+    },
+    {
+      "verb": "downloads.begin",
+      "cap": "downloads:save",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-files-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        }
+      },
+      "request": [
+        {
+          "title": "name",
+          "type": "string",
+          "description": "The file name (png jpg jpeg webp gif svg pdf json csv tsv txt md)."
+        },
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "mime": {
+              "type": "string"
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "DownloadTicket",
+        "type": "object",
+        "properties": {
+          "ticket": {
+            "type": "string",
+            "description": "One file, this widget, 60 seconds."
+          }
+        },
+        "required": [
+          "ticket"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "bad_args",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "Start a download from a click (checked now); the bytes may follow within 60 s with downloads.save. k2.download does both.",
+      "example": "k2.download('Board.png', async () => await drawPng())"
+    },
+    {
+      "verb": "downloads.save",
+      "cap": "downloads:save",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-files-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        }
+      },
+      "request": [
+        {
+          "title": "name",
+          "type": "string",
+          "description": "The file name (png jpg jpeg webp gif svg pdf json csv tsv txt md)."
+        },
+        {
+          "title": "data",
+          "type": "json",
+          "description": "Blob, ArrayBuffer, typed array or string (sent as transferred bytes, at most 50 MiB), or {blob: ref} for a file in this widget's data."
+        },
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "mime": {
+              "type": "string"
+            },
+            "ticket": {
+              "type": "string",
+              "description": "From downloads.begin, in place of a click just now."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "DownloadSaved",
+        "type": "object",
+        "properties": {
+          "saved": {
+            "type": "boolean",
+            "description": "False when the person cancelled."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name it was saved as in Downloads (never a path)."
+          }
+        },
+        "required": [
+          "saved"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "bad_args",
+        "too_large",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "blob_missing"
+      ],
+      "doc": "Save a file the widget made to the person's Downloads, just after a click in it (or with a downloads.begin ticket); K2's toast names it.",
+      "example": "const {saved, name} = await k2.download('board.json', JSON.stringify(doc))"
     },
     {
       "verb": "save.get",

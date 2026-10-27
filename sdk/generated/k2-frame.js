@@ -8,7 +8,7 @@
   'use strict'
   var K2_CONTRACT = Object.freeze({
     catalogVersion: 23,
-    errors: Object.freeze(['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only']),
+    errors: Object.freeze(['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only']),
     retryable: Object.freeze(['not_bound', 'rate_limited', 'unreachable', 'busy']),
     verbs: Object.freeze({
       'gardens.list': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-gardens-v1' }),
@@ -61,6 +61,8 @@
       'sources.refresh': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'call', feature: 'sources-v1' }),
       'sources.ask': Object.freeze({ cap: 'sources:read', reach: 'local', kind: 'call', feature: 'sources-v1' }),
       'links.open': Object.freeze({ cap: 'links:open', reach: 'local', kind: 'call', feature: 'zen-widgets-v1' }),
+      'downloads.begin': Object.freeze({ cap: 'downloads:save', reach: 'local', kind: 'call', feature: 'zen-files-v1' }),
+      'downloads.save': Object.freeze({ cap: 'downloads:save', reach: 'local', kind: 'call', feature: 'zen-files-v1' }),
       'files.list': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
       'files.read': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
       'files.readBinary': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
@@ -72,6 +74,9 @@
       'store.get': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.list': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.changes': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
+      'blobs.get': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-blobs-v1' }),
+      'blobs.info': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-blobs-v1' }),
+      'blobs.list': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-blobs-v1' }),
       'store.put': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.patch': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.delete': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
@@ -80,6 +85,7 @@
       'store.txAdd': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.txCommit': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.txAbort': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
+      'blobs.put': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-blobs-v1' }),
       'guests.rooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
       'guests.setRooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
       'guests.list': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
@@ -133,7 +139,8 @@ unhelloed = rej
 connected.catch(function () {})
 
 function send(msg) {
-if (port) port.postMessage(msg)
+var t = msg && msg.bytes ? [msg.bytes] : []
+if (port) port.postMessage(msg, t)
 else if (early && early.length < 1000) early.push(msg)
 }
 
@@ -194,16 +201,16 @@ report(e)
 
 /**
 * One adapter: the hello's MessagePort.
-* @type {{call(verb: string, args: unknown[]): Promise<unknown>, subscribe(verb: string, args: unknown[], cb: (v: unknown) => void, onError: ((e: K2Error) => void) | null): () => void, info(): {caps: string[], features: string[], mode: 'frame'}}}
+* @type {{call(verb: string, args: unknown[], bytes?: ArrayBuffer, raw?: boolean): Promise<unknown>, subscribe(verb: string, args: unknown[], cb: (v: unknown) => void, onError: ((e: K2Error) => void) | null): () => void, info(): {caps: string[], features: string[], mode: 'frame'}}}
 */
 var transport = {
-call: function (verb, args) {
+call: function (verb, args, bytes, raw) {
 if (!plain(args, 0)) return Promise.reject(badArgs(verb))
 if (!port && !early) return Promise.reject(notConnected(verb))
 var id = nextId++
 return new Promise(function (resolve, reject) {
-pending.set(id, { resolve: resolve, reject: reject, verb: verb })
-send({ id: id, verb: verb, args: args })
+pending.set(id, { resolve: resolve, reject: reject, verb: verb, raw: !!raw })
+send(bytes ? { id: id, verb: verb, args: args, bytes: bytes } : { id: id, verb: verb, args: args })
 })
 },
 subscribe: function (verb, args, cb, onError) {
@@ -249,7 +256,7 @@ if (typeof m.id === 'number') {
 var p = pending.get(m.id)
 if (!p) return
 pending.delete(m.id)
-if (m.ok === true) p.resolve(m.value)
+if (m.ok === true) p.resolve(p.raw ? { value: m.value, bytes: m.bytes } : m.value)
 else p.reject(new K2Error(m.error || { code: 'failed', message: 'refused' }, p.verb))
 }
 }
@@ -289,7 +296,7 @@ g.removeEventListener('message', onHello)
 transport.subscribe('theme.changed', [], applyTheme, null)
 var waiting = early || []
 early = null
-for (var i = 0; i < waiting.length; i++) port.postMessage(waiting[i])
+for (var i = 0; i < waiting.length; i++) send(waiting[i])
 helloed(Object.freeze({ caps: hello.caps.slice(), features: hello.features.slice(), widget: hello.widget, config: hello.config, motion: hello.motion }))
 }
 g.addEventListener('message', onHello)
@@ -886,6 +893,90 @@ return viewerGet()
 groups.viewer = Object.assign(viewer, groups.viewer)
 }
 if (groups.links && groups.links.open) k2.open = groups.links.open
+
+
+function badData(verb, message) {
+return new K2Error({ code: 'bad_args', message: verb + ': ' + message }, verb)
+}
+/** Bytes now (string, ArrayBuffer, typed array: copied), or null for a
+*  Blob / File, whose bytes come later (`blobBytes`).
+* @param {unknown} d @returns {ArrayBuffer | null | undefined} */
+function nowBytes(d) {
+if (typeof d === 'string') return new TextEncoder().encode(d).buffer
+if (d instanceof ArrayBuffer) return d.slice(0)
+if (ArrayBuffer.isView(d)) return d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength)
+if (typeof Blob !== 'undefined' && d instanceof Blob) return null
+return undefined
+}
+function anyBytes(d) {
+var b = nowBytes(d)
+if (b === null) return /** @type {Blob} */ (d).arrayBuffer()
+return Promise.resolve(b)
+}
+var REF = /^k2blob:sha256-[0-9a-f]{64}$/
+if (groups.blobs) {
+var blobs = groups.blobs
+blobs.put = function (/** @type {unknown} */ data, /** @type {any} */ opts) {
+var o = Object.assign({}, opts || {})
+if (typeof File !== 'undefined' && data instanceof File && o.name === undefined) o.name = data.name
+if (typeof Blob !== 'undefined' && data instanceof Blob && o.mime === undefined && data.type) o.mime = data.type
+return anyBytes(data).then(function (b) {
+if (!b) throw badData('blobs.put', 'data is a Blob, File, ArrayBuffer, typed array or string')
+return transport.call('blobs.put', [null, o], b)
+})
+}
+blobs.get = function (/** @type {string} */ ref, /** @type {any} */ opts) {
+return transport.call('blobs.get', opts === undefined ? [ref] : [ref, opts], undefined, true).then(function (/** @type {any} */ r) {
+var v = r.value || {}
+return Object.assign({}, v, { blob: new Blob([r.bytes || new ArrayBuffer(0)], { type: v.mime || '' }) })
+})
+}
+var urls = new Map()
+blobs.url = function (/** @type {string} */ ref, /** @type {any} */ opts) {
+var px = opts && opts.px ? opts.px : 0
+var key = ref + '|' + px
+var hit = urls.get(key)
+if (hit) return hit
+var p = blobs.get(ref, px ? { px: px } : undefined).then(function (/** @type {any} */ r) {
+return URL.createObjectURL(r.blob)
+})
+p.catch(function () {
+urls.delete(key)
+})
+urls.set(key, p)
+return p
+}
+blobs.isRef = function (/** @type {unknown} */ s) {
+return typeof s === 'string' && REF.test(s)
+}
+}
+if (groups.downloads) {
+var downloads = groups.downloads
+var download = function (/** @type {string} */ name, /** @type {unknown} */ data, /** @type {any} */ opts) {
+var o = Object.assign({}, opts || {})
+if (data && typeof data === 'object' && !ArrayBuffer.isView(data) && !(data instanceof ArrayBuffer) && typeof (/** @type {any} */ (data)).blob === 'string') {
+return transport.call('downloads.save', [name, { blob: /** @type {any} */ (data).blob }, o])
+}
+var now = typeof data === 'function' ? undefined : nowBytes(data)
+if (now) return transport.call('downloads.save', [name, null, o], now)
+if (now === undefined && typeof data !== 'function') return Promise.reject(badData('downloads.save', 'data is bytes, a string, a Blob, {blob: ref} or a function'))
+var begun = transport.call('downloads.begin', [name, o.mime ? { mime: o.mime } : {}])
+var made = Promise.resolve(typeof data === 'function' ? /** @type {Function} */ (data)() : data)
+return begun.then(function (/** @type {any} */ t) {
+return made.then(function (/** @type {unknown} */ d) {
+if (d && typeof d === 'object' && typeof (/** @type {any} */ (d)).blob === 'string') {
+return transport.call('downloads.save', [name, { blob: /** @type {any} */ (d).blob }, Object.assign({}, o, { ticket: t.ticket })])
+}
+return anyBytes(d).then(function (b) {
+if (!b) throw badData('downloads.save', 'the function made no bytes')
+return transport.call('downloads.save', [name, null, Object.assign({}, o, { ticket: t.ticket })], b)
+})
+})
+})
+}
+downloads.save = download
+k2.download = download
+}
 
 Object.keys(groups).forEach(function (surface) {
 if (surface === 'widget') return // served by the k2.widget getter

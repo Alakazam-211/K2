@@ -12,7 +12,7 @@
 //! it; deletes leave tombstones until the reaper removes them and raises
 //! `reaped_rev`).
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -76,6 +76,42 @@ CREATE TABLE IF NOT EXISTS changes (
 CREATE INDEX IF NOT EXISTS changes_by_at ON changes(at);
 "#;
 
+/// Tables added beside version 1 (prd-garden-board-needs-v1 GB6, V6). The
+/// schema version stays 1, so an older K2 still opens the file and simply
+/// ignores these; `blob_store::reconcile_aux` repairs them after such a K2
+/// wrote.
+pub const GARDENS_AUX_V1: &str = r#"
+CREATE TABLE IF NOT EXISTS blobs (
+  hash        TEXT PRIMARY KEY,
+  size        INTEGER NOT NULL,
+  mime        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS space_blobs (
+  space         TEXT NOT NULL,
+  hash          TEXT NOT NULL,
+  size          INTEGER NOT NULL,
+  added_at      INTEGER NOT NULL,
+  added_by      TEXT NOT NULL,
+  name          TEXT,
+  refs          INTEGER NOT NULL DEFAULT 0,
+  first_ref_at  INTEGER,
+  unref_at      INTEGER,
+  PRIMARY KEY (space, hash)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS blob_refs (
+  space  TEXT NOT NULL,
+  key    TEXT NOT NULL,
+  hash   TEXT NOT NULL,
+  PRIMARY KEY (space, key, hash)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS blob_refs_by_hash ON blob_refs(space, hash);
+"#;
+
+/// Every table keyed by space: a space delete or move carries all of them
+/// (GB8, V8).
+pub const SPACE_TABLES: [&str; 5] = ["entries", "changes", "blob_refs", "space_blobs", "spaces"];
+
 /// Seconds since the Unix epoch (injectable for tests).
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
@@ -110,6 +146,10 @@ pub struct SqliteStore {
     path: PathBuf,
     clock: Clock,
     max_file_bytes: u64,
+    /// The whole blob folder (GB10; tests lower it).
+    pub(super) blob_store_cap: i64,
+    /// One space's held and pending blobs (GB11; tests lower it).
+    pub(super) space_blob_cap: i64,
     open: Mutex<Option<Open>>,
 }
 
@@ -155,7 +195,14 @@ impl SqliteStore {
 
     /// The same with an injected clock (tests).
     pub fn with_clock(dir: &Path, clock: Clock) -> SqliteStore {
-        SqliteStore { path: dir.join(FILE_NAME), clock, max_file_bytes: MAX_FILE_BYTES, open: Mutex::new(None) }
+        SqliteStore {
+            path: dir.join(FILE_NAME),
+            clock,
+            max_file_bytes: MAX_FILE_BYTES,
+            blob_store_cap: super::blobs::MAX_BLOB_STORE_BYTES,
+            space_blob_cap: super::blobs::MAX_SPACE_BLOB_BYTES,
+            open: Mutex::new(None),
+        }
     }
 
     /// Lower the whole-file cap (tests of `store_full`).
@@ -164,8 +211,21 @@ impl SqliteStore {
         self
     }
 
+    /// Lower the blob caps (tests of `space_full` / `store_full` / GC
+    /// pressure): one space's blobs, and the whole folder.
+    pub fn with_blob_caps(mut self, space: i64, store: i64) -> SqliteStore {
+        self.space_blob_cap = space;
+        self.blob_store_cap = store;
+        self
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// `<stores>/blobs/` (GB5).
+    pub fn blob_dir(&self) -> PathBuf {
+        self.path.parent().map(|d| d.join("blobs")).unwrap_or_else(|| PathBuf::from("blobs"))
     }
 
     pub fn now(&self) -> i64 {
@@ -208,7 +268,7 @@ impl SqliteStore {
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
                 .map_err(|e| DataError::Unavailable(format!("can't protect the store folder: {e}")))?;
         }
-        let conn = Connection::open(&self.path)?;
+        let mut conn = Connection::open(&self.path)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -234,11 +294,13 @@ impl SqliteStore {
             }
         }
         conn.execute_batch(GARDENS_SCHEMA_V1)?;
+        conn.execute_batch(GARDENS_AUX_V1)?;
+        super::blob_store::reconcile_aux(&mut conn, self.now())?;
         Ok(conn)
     }
 
     /// Run `f` on the open connection (opening it first).
-    fn with<T>(&self, f: impl FnOnce(&mut Connection) -> Result<T, DataError>) -> Result<T, DataError> {
+    pub(super) fn with<T>(&self, f: impl FnOnce(&mut Connection) -> Result<T, DataError>) -> Result<T, DataError> {
         let mut g = self.open.lock().unwrap_or_else(|e| e.into_inner());
         if g.is_none() {
             *g = Some(Open { conn: self.open_conn()?, last_used: Instant::now() });
@@ -272,10 +334,16 @@ impl SqliteStore {
         // opened for a bad request.
         let mut seen = HashSet::new();
         let mut texts: Vec<Act> = Vec::with_capacity(ops.len());
+        // Blob refs each written value names (GB2; `data:` spaces only, GB4).
+        let blobs_on = space.is_data();
+        let mut refs: Vec<Option<BTreeSet<String>>> = vec![None; ops.len()];
         for (i, op) in ops.iter().enumerate() {
             keys::validate_key(op.key())?;
             if !seen.insert(op.key().to_string()) {
                 return Err(DataError::BadRequest(format!("'{}' appears twice in one write", op.key())));
+            }
+            if let (true, Op::Put { value, .. }) = (blobs_on, op) {
+                refs[i] = Some(super::blobs::scan_refs(value).map_err(|e| at(i, op, e))?);
             }
             texts.push(match op {
                 Op::Put { value, .. } => Act::Write(canonical(value)?),
@@ -332,7 +400,12 @@ impl SqliteStore {
                             Some(parse_value(qv.query_row(params![space.as_str(), op.key()], |r| r.get(0)).optional()?)?)
                         };
                         texts[i] = match super::patch::merged(op.key(), live.as_ref(), partial).map_err(|e| at(i, op, e))? {
-                            Some(doc) => Act::Write(canonical(&doc)?),
+                            Some(doc) => {
+                                if blobs_on {
+                                    refs[i] = Some(super::blobs::scan_refs(&doc).map_err(|e| at(i, op, e))?);
+                                }
+                                Act::Write(canonical(&doc)?)
+                            }
                             None => Act::Skip,
                         };
                     }
@@ -367,6 +440,17 @@ impl SqliteStore {
             if nkeys > max_keys {
                 return Err(DataError::SpaceFull { what: "keys" });
             }
+            // GB3: every ref must name a blob this space holds, before
+            // anything is written.
+            if blobs_on {
+                let named: BTreeSet<&str> = plan
+                    .iter()
+                    .filter(|(i, ..)| matches!(texts[*i], Act::Write(_)))
+                    .filter_map(|(i, ..)| refs[*i].as_ref())
+                    .flat_map(|r| r.iter().map(String::as_str))
+                    .collect();
+                super::blob_store::check_held(&tx, space, &named)?;
+            }
             let new_rev = rev + 1;
             {
                 let mut up = tx.prepare_cached(
@@ -379,20 +463,30 @@ impl SqliteStore {
                 let mut log = tx.prepare_cached(
                     "INSERT INTO changes (space, rev, key, deleted, by, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 )?;
+                let empty = BTreeSet::new();
                 for &(i, live_rev, _) in &plan {
                     let key = ops[i].key();
                     match &texts[i] {
                         Act::Write(t) => {
                             up.execute(params![space.as_str(), key, new_rev, 0, t, t.len() as i64, now, who])?;
                             log.execute(params![space.as_str(), new_rev, key, 0, who, now])?;
+                            if blobs_on {
+                                super::blob_store::set_key_refs(&tx, space, key, refs[i].as_ref().unwrap_or(&empty), now)?;
+                            }
                         }
                         Act::Delete if live_rev != 0 => {
                             up.execute(params![space.as_str(), key, new_rev, 1, Option::<String>::None, 0, now, who])?;
                             log.execute(params![space.as_str(), new_rev, key, 1, who, now])?;
+                            if blobs_on {
+                                super::blob_store::set_key_refs(&tx, space, key, &empty, now)?;
+                            }
                         }
                         Act::Delete | Act::Skip | Act::Patch => {}
                     }
                 }
+            }
+            if blobs_on {
+                super::blob_store::set_aux_rev(&tx, space, new_rev)?;
             }
             tx.execute(
                 "INSERT INTO spaces (space, rev, bytes, keys, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
@@ -583,9 +677,11 @@ impl StoreBackend for SqliteStore {
     fn drop_space(&self, space: &Space) -> Result<(), DataError> {
         self.with(|conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            for t in ["entries", "changes", "spaces"] {
+            // GB8: the blob rows go with the space; the files are GC's.
+            for t in SPACE_TABLES {
                 tx.execute(&format!("DELETE FROM {t} WHERE space = ?1"), [space.as_str()])?;
             }
+            super::blob_store::forget_aux_rev(&tx, space)?;
             tx.commit()?;
             Ok(())
         })
@@ -613,10 +709,11 @@ impl StoreBackend for SqliteStore {
                     hint: format!("{} already has data; delete or export it first", to.widget()),
                 });
             }
-            for t in ["entries", "changes", "spaces"] {
+            for t in SPACE_TABLES {
                 tx.execute(&format!("DELETE FROM {t} WHERE space = ?1"), [to.as_str()])?;
                 tx.execute(&format!("UPDATE {t} SET space = ?2 WHERE space = ?1"), params![from.as_str(), to.as_str()])?;
             }
+            super::blob_store::move_aux_rev(&tx, from, to)?;
             tx.execute("UPDATE spaces SET orphaned_at = NULL WHERE space = ?1", [to.as_str()])?;
             tx.commit()?;
             Ok(())

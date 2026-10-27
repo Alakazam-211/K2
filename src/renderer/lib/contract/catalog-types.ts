@@ -123,6 +123,8 @@ export const CATALOG_ERROR_CODES = [
   'tx_expired',
   'busy',
   'paused',
+  // 0.46.5 (prd-garden-board-needs-v1 GB3): a value names an unheld blob.
+  'blob_missing',
   // Widget SDK guards (0.46.1, catalog 11).
   'bad_args',
   'bad_shape',

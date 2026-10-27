@@ -98,3 +98,21 @@ export function claimWidget(widget: string): Promise<{ widget: string; hash: str
 export function gardenCall<T = unknown>(body: GardenCallBody): Promise<GardenCallResponse<T>> {
   return daemonCliPost<GardenCallResponse<T>>(zenLocalScope(), 'zen/call', body)
 }
+
+/** Where a widget door byte call comes from: the placement and the hash
+ *  its frame runs (prd-garden-board-needs-v1 GB13). */
+export interface GardenBlobPlace {
+  garden: string
+  placement: string
+  hash: string
+}
+
+/** One chunk of a blob upload (`/cli/zen/blob/put`, ≤ 8 MiB raw). */
+export function gardenBlobPut(place: GardenBlobPlace, chunk: Record<string, unknown>): Promise<unknown> {
+  return daemonCliPost<unknown>(zenLocalScope(), 'zen/blob/put', { ...place, ...chunk })
+}
+
+/** One ranged read of a blob (`/cli/zen/blob/get`). */
+export function gardenBlobGet(place: GardenBlobPlace, params: Record<string, string | number>): Promise<unknown> {
+  return daemonCliGet<unknown>(zenLocalScope(), 'zen/blob/get', { ...place, ...params })
+}

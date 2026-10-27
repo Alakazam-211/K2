@@ -24,6 +24,7 @@ use crate::cli_response::CliResponse;
 
 pub mod agent_routes;
 pub mod audit;
+pub mod blob_routes;
 pub mod budget;
 pub mod call;
 pub mod export_routes;
@@ -71,6 +72,7 @@ pub fn start() {
             store().close_if_idle();
             audit::flush();
             budget::prune();
+            blob_routes::prune_uploads();
             if minutes.is_multiple_of(60) {
                 hourly();
             }
@@ -89,6 +91,8 @@ pub fn hourly() {
         k2_core::log_debug!("[garden-data] reaper: {e}");
     }
     mark_orphans();
+    // prd-garden-board-needs-v1 GB10: blob GC after the reaper.
+    blob_routes::gc_tick();
     // B3: today's dated snapshot unless one exists or nothing changed.
     if let Err(e) = export_routes::snapshot_tick() {
         k2_core::log_debug!("[garden-data] daily snapshot: {e}");

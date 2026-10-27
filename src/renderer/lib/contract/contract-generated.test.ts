@@ -170,6 +170,13 @@ describe('TUWA5: the generated tables', () => {
       'layout.subscribe': { cap: null, reach: 'local', kind: 'subscribe' },
       // Catalog v21 (0.46.4): k2.open(url), answered by the custom layer.
       'links.open': { cap: 'links:open', reach: 'local', kind: 'call' },
+      // 0.46.5 (prd-garden-board-needs-v1): files and downloads.
+      'blobs.put': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'blobs.get': { cap: 'store:read', reach: 'local', kind: 'call' },
+      'blobs.info': { cap: 'store:read', reach: 'local', kind: 'call' },
+      'blobs.list': { cap: 'store:read', reach: 'local', kind: 'call' },
+      'downloads.begin': { cap: 'downloads:save', reach: 'local', kind: 'call' },
+      'downloads.save': { cap: 'downloads:save', reach: 'local', kind: 'call' },
       // Garden data (contract-garden-data-v1 §7.2): garden-local rows, the
       // daemon answers them through /cli/zen/call.
       'save.get': { cap: null, reach: 'local', kind: 'call' },
@@ -260,6 +267,7 @@ describe('TUWA5: the generated tables', () => {
     const extra = [
       'sources:read',
       'links:open',
+      'downloads:save',
       'store:read',
       'store:write',
       'guests:rooms',
@@ -277,6 +285,7 @@ describe('TUWA5: the generated tables', () => {
       'thread:post',
       'sources:read',
       'links:open',
+      'downloads:save',
       'files:read',
       'tickets:read',
       'tickets:post',

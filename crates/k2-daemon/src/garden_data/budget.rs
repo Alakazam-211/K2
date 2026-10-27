@@ -12,6 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
+use k2_core::garden_data::blobs::{UPLOADS_PER_MIN, UPLOAD_BYTES_PER_10_MIN};
 use k2_core::garden_data::{
     DataError, COMMIT_BYTES_PER_MIN, GRANT_CHANGES_PER_MIN, READS_PER_SEC, RUNAWAY_SAME_WRITES, RUNAWAY_WINDOW_SECS,
     SAVES_PER_10_MIN, TX_OPS_PER_TOKEN, WRITES_PER_SEC, WRITE_BURST,
@@ -34,6 +35,10 @@ pub enum Spend {
     /// A commit of this many ops and bytes.
     Commit { ops: usize, bytes: usize },
     GrantChange,
+    /// A new blob upload (prd-garden-board-needs-v1 §3.3): 30 a minute.
+    UploadStart,
+    /// Uploaded bytes: 128 MiB per 10 minutes.
+    UploadBytes { bytes: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -43,6 +48,8 @@ enum Kind {
     Save,
     Bytes,
     Grant,
+    Upload,
+    UploadBytes,
 }
 
 impl Kind {
@@ -54,6 +61,8 @@ impl Kind {
             Kind::Save => (f64::from(SAVES_PER_10_MIN), f64::from(SAVES_PER_10_MIN) / 600.0),
             Kind::Bytes => (COMMIT_BYTES_PER_MIN as f64, COMMIT_BYTES_PER_MIN as f64 / 60.0),
             Kind::Grant => (f64::from(GRANT_CHANGES_PER_MIN), f64::from(GRANT_CHANGES_PER_MIN) / 60.0),
+            Kind::Upload => (f64::from(UPLOADS_PER_MIN), f64::from(UPLOADS_PER_MIN) / 60.0),
+            Kind::UploadBytes => (UPLOAD_BYTES_PER_10_MIN as f64, UPLOAD_BYTES_PER_10_MIN as f64 / 600.0),
         }
     }
 }
@@ -95,6 +104,8 @@ impl Buckets {
             Spend::Write => self.take(key, Kind::Write, 1.0, now),
             Spend::Save => self.take(key, Kind::Save, 1.0, now),
             Spend::GrantChange => self.take(key, Kind::Grant, 1.0, now),
+            Spend::UploadStart => self.take(key, Kind::Upload, 1.0, now),
+            Spend::UploadBytes { bytes } => self.take(key, Kind::UploadBytes, bytes as f64, now),
             Spend::Commit { ops, bytes } => {
                 let tokens = ops.div_ceil(TX_OPS_PER_TOKEN).max(1) as f64;
                 // Check both before spending either.

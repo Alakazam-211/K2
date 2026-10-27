@@ -476,8 +476,8 @@ mod tests {
         let local = c.verbs_exposed_to(Exposure::GardenLocal);
         assert_eq!(
             local.len(),
-            37,
-            "store.* ×11 (store.patch since catalog v21, 0.46.4), save.* ×4, viewer.get, guests.rooms, guests.setRooms, app.rooms, guests.list (catalog v22, 0.46.4), room.members, app.self, app.usage, widget.self, the 12 person rows, and box usage's app.resources (0.46.4)"
+            39,
+            "store.* ×11 (store.patch since catalog v21, 0.46.4), save.* ×4, viewer.get, guests.rooms, guests.setRooms, app.rooms, guests.list (catalog v22, 0.46.4), room.members, app.self, app.usage, widget.self, the 12 person rows, box usage's app.resources (0.46.4), and blobs.info / blobs.list (0.46.5)"
         );
         let both: Vec<&str> = local.iter().filter(|v| v.exposed_to(Exposure::App)).map(|v| v.verb.as_str()).collect();
         assert_eq!(
@@ -545,7 +545,10 @@ mod tests {
             let room_scope = v.verb == "widget.self" && v.feature == "app-self-v1";
             // 0.46.4: box usage's Garden card, its own feature key.
             let box_card = v.verb == "app.resources" && v.feature == "app-resources-v1";
-            assert!(room_scope || box_card || v.feature == crate::garden_data::FEATURE, "{}", v.verb);
+            // 0.46.5 (prd-garden-board-needs-v1): blobs and history keep
+            // their own feature keys.
+            let board_needs = [crate::garden_data::blobs::FEATURE, "garden-history-v1"].contains(&v.feature.as_str());
+            assert!(room_scope || box_card || board_needs || v.feature == crate::garden_data::FEATURE, "{}", v.verb);
         }
         assert!(c.verb("theme.changed").is_some_and(|v| v.kind == VerbKind::Event));
         // Rosson 2026-10-20 (Thread parity, 0.46.3) replaces UW51: a widget
@@ -593,6 +596,9 @@ mod tests {
                 "tx_expired",
                 "busy",
                 "paused",
+                // 0.46.5 (prd-garden-board-needs-v1 GB3): a value names a blob its
+                // space doesn't hold (with the Garden data codes).
+                "blob_missing",
                 // The widget SDK's guards (0.46.1, catalog 11).
                 "bad_args",
                 "bad_shape",
@@ -681,9 +687,21 @@ mod tests {
         let c = catalog();
         assert_eq!(
             c.caps_exposed_to(Exposure::Widget),
-            // 0.46.5 activity SDK: activity:read reaches the bridge too
-            // (`thread.onActivity`, with thread:read, as the App ear).
-            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "links:open", "activity:read"]
+            [
+                "agents:read",
+                "presence:read",
+                "thread:read",
+                "thread:post",
+                "sources:read",
+                "links:open",
+                "downloads:save",
+                // 0.46.5: the byte rows (blobs.put / blobs.get) are frame rows.
+                "store:read",
+                "store:write",
+                // 0.46.5 activity SDK: activity:read reaches the bridge too
+                // (`thread.onActivity`, with thread:read, as the App ear).
+                "activity:read"
+            ]
         );
         // 0.46.3 (garden-person-rows-v1): files:read, tickets:read,
         // tickets:post and activity:read join through the Garden door.
@@ -697,6 +715,7 @@ mod tests {
                 "sources:read",
                 // 0.46.4: k2.open(url), answered by the custom layer.
                 "links:open",
+                "downloads:save",
                 "files:read",
                 "tickets:read",
                 "tickets:post",
@@ -723,6 +742,7 @@ mod tests {
             "presence:read",
             "sources:read",
             "links:open",
+            "downloads:save",
             "files:read",
             "tickets:read",
             "tickets:post",

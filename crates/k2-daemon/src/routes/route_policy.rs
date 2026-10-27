@@ -1645,10 +1645,15 @@ pub const ROUTES: &[Route] = &[
     // §4.4): this computer only, so no Connect login ever (NoLogin). The
     // owner token and agent passports reach the handlers, which apply
     // grants on every call; `/cli/zen/call` takes the owner token only.
+    get("/cli/zen/blob/get", NoLogin),
+    post("/cli/zen/blob/put", NoLogin),
     post("/cli/zen/call", NoLogin),
     post("/cli/zen/data/admin", NoLogin),
     post("/cli/zen/data/admin/revoke", NoLogin),
     post("/cli/zen/data/batch", NoLogin),
+    get("/cli/zen/data/blob/get", NoLogin),
+    get("/cli/zen/data/blob/list", NoLogin),
+    post("/cli/zen/data/blob/put", NoLogin),
     get("/cli/zen/data/changes", NoLogin),
     post("/cli/zen/data/delete", NoLogin),
     get("/cli/zen/data/export", NoLogin),

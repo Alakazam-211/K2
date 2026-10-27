@@ -37,7 +37,9 @@ import { ZenPermissionSheet } from './ZenPermissionSheet'
 import { allowZenLinkSite, createZenLinks, fetchZenLinkSites, type ZenLinkAnswer, type ZenLinkAsk } from '@/lib/zen/zen-links'
 import { ZenLinkSheet } from './ZenLinkSheet'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { gardenCall } from '@/lib/garden-data/garden-data-api'
+import { gardenBlobGet, gardenBlobPut, gardenCall, type GardenBlobPlace } from '@/lib/garden-data/garden-data-api'
+import { createZenCustomBlobs } from '@/lib/zen/zen-custom-blobs'
+import { downloadChunks } from '@/lib/fs-transfer'
 import type { GardenCallBody } from '@/lib/garden-data/garden-data-types'
 import { onGardenDataChanged } from '@/stores/session-events'
 import { startZenFrameHost } from '@/lib/zen/zen-custom-host'
@@ -103,6 +105,10 @@ export const ZEN_FRAME_FEATURES: readonly string[] = [
   // 0.46.5 activity SDK: `thread.onActivity` (the renderer answers it from
   // the Thread feed; an agent server without turns gives source none).
   'widget-activity-v1',
+  // 0.46.5 (prd-garden-board-needs-v1): blobs, and k2.download / k2.pick /
+  // k2.onDrop.
+  'garden-blobs-v1',
+  'zen-files-v1',
 ]
 
 /** The Garden's theme as the frame gets it: the Zen root's `--zen-*`
@@ -269,6 +275,11 @@ export function ZenCustomFrame({
         )
       },
       makeLayer: (push, pushError) => {
+        const blobPlace = (): GardenBlobPlace => ({
+          garden: gardenId,
+          placement: widgetRef.current.id,
+          hash: loadedRef.current?.hash ?? widgetRef.current.hash,
+        })
         const layer = createZenCustomLayer({
           widget: () => widgetRef.current,
           gardenId: () => gardenId,
@@ -299,6 +310,20 @@ export function ZenCustomFrame({
             clearTimer: (t) => window.clearTimeout(t as number),
             now: () => Date.now(),
           }),
+          // prd-garden-board-needs-v1 GB12/GB13: this widget's files, over
+          // the daemon's widget door for the placement and the hash this
+          // frame runs (8 MiB chunks; the daemon runs the call gates).
+          blobs: createZenCustomBlobs({
+            put: (chunk) => gardenBlobPut(blobPlace(), chunk),
+            get: (params) => gardenBlobGet(blobPlace(), params),
+          }),
+          // GS1–GS7: `k2.download` lands through K2's own download path
+          // (transfer card, Cancel, toast; Downloads, never a folder the
+          // widget names), only after a press in this frame within 5 s.
+          downloads: {
+            pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
+            save: (name, read) => downloadChunks(name, read),
+          },
           // RS-A15: local Apps' guests' rooms; a write waits for the
           // person on ZenGuestRoomsSheet (K2's DOM over the card).
           guests: createZenCustomGuests({

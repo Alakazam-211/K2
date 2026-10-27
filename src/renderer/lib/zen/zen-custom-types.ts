@@ -209,7 +209,9 @@ export type ZenFrameRequest =
 
 /** Host → frame over the port. */
 export type ZenFrameReply =
-  | { id: number; ok: true; value: unknown }
+  /** `bytes`: a call that answers bytes (`blobs.get`) moves one
+   *  ArrayBuffer to the frame (the host's transfer list). */
+  | { id: number; ok: true; value: unknown; bytes?: ArrayBuffer }
   | { id: number; ok: false; error: CatalogWireError }
   | { sub: number; value: unknown }
   /** The subscription was refused (cap, budget, bad args, unknown verb):

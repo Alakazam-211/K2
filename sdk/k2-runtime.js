@@ -7,10 +7,10 @@
 // (`K2_CONTRACT`) into `sdk/generated/k2-frame.js`; rerun it after an edit.
 //
 // Transport: the hello's MessagePort. The frame never holds a token.
-//   frame → host {id, verb, args} · {sub, verb, args} · {unsub} · {ready}
+//   frame → host {id, verb, args, bytes?} · {sub, verb, args} · {unsub} · {ready}
 //                {pong} · {error: {message, stack?}} · {chord}
 //                {pointer: 'down' | 'up'} (trusted primary-button presses)
-//   host → frame {id, ok, value} · {id, ok: false, error} · {sub, value}
+//   host → frame {id, ok, value, bytes?} · {id, ok: false, error} · {sub, value}
 //                {sub, error} · {ping}
 // The hello comes on the frame's load, AFTER the widget's top-level script
 // runs. Calls made before it wait; `k2.can`, `k2.config`, `k2.widget` and
@@ -27,6 +27,11 @@
 // sources view is normalised; a bad one reaches `error` as bad_shape), and
 // calls nothing after its unsubscribe. Arguments that aren't plain data are
 // refused in the frame as bad_args. `k2.shape` holds the guards.
+//
+// 0.46.5 (prd-garden-board-needs-v1): `bytes` is one transferred
+// ArrayBuffer, only for blobs.put / downloads.save out and blobs.get back.
+// k2.blobs.put/get/url/isRef and k2.download turn Blobs, typed arrays and
+// strings into it; a caller's own ArrayBuffer is copied, never detached.
 ;(function () {
   'use strict'
 
@@ -66,7 +71,7 @@
   /** @type {{caps: string[], features: string[], widget: {id: string, name: string, garden: string}, config: Record<string, unknown>, motion: {reduced: boolean}} | null} */
   var hello = null
   var nextId = 1
-  /** @type {Map<number, {resolve: (v: unknown) => void, reject: (e: unknown) => void, verb: string}>} */
+  /** @type {Map<number, {resolve: (v: unknown) => void, reject: (e: unknown) => void, verb: string, raw?: boolean}>} */
   var pending = new Map()
   /** @typedef {{cb: (v: unknown) => void, onError: ((e: K2Error) => void) | null, verb: string}} Sub */
   /** @type {Map<number, Sub>} */
@@ -87,9 +92,10 @@
   })
   connected.catch(function () {})
 
-  /** @param {unknown} msg */
+  /** @param {any} msg */
   function send(msg) {
-    if (port) port.postMessage(msg)
+    var t = msg && msg.bytes ? [msg.bytes] : []
+    if (port) port.postMessage(msg, t)
     else if (early && early.length < 1000) early.push(msg)
   }
 
@@ -157,16 +163,16 @@
 
   /**
    * One adapter: the hello's MessagePort.
-   * @type {{call(verb: string, args: unknown[]): Promise<unknown>, subscribe(verb: string, args: unknown[], cb: (v: unknown) => void, onError: ((e: K2Error) => void) | null): () => void, info(): {caps: string[], features: string[], mode: 'frame'}}}
+   * @type {{call(verb: string, args: unknown[], bytes?: ArrayBuffer, raw?: boolean): Promise<unknown>, subscribe(verb: string, args: unknown[], cb: (v: unknown) => void, onError: ((e: K2Error) => void) | null): () => void, info(): {caps: string[], features: string[], mode: 'frame'}}}
    */
   var transport = {
-    call: function (verb, args) {
+    call: function (verb, args, bytes, raw) {
       if (!plain(args, 0)) return Promise.reject(badArgs(verb))
       if (!port && !early) return Promise.reject(notConnected(verb))
       var id = nextId++
       return new Promise(function (resolve, reject) {
-        pending.set(id, { resolve: resolve, reject: reject, verb: verb })
-        send({ id: id, verb: verb, args: args })
+        pending.set(id, { resolve: resolve, reject: reject, verb: verb, raw: !!raw })
+        send(bytes ? { id: id, verb: verb, args: args, bytes: bytes } : { id: id, verb: verb, args: args })
       })
     },
     subscribe: function (verb, args, cb, onError) {
@@ -213,7 +219,7 @@
       var p = pending.get(m.id)
       if (!p) return
       pending.delete(m.id)
-      if (m.ok === true) p.resolve(m.value)
+      if (m.ok === true) p.resolve(p.raw ? { value: m.value, bytes: m.bytes } : m.value)
       else p.reject(new K2Error(m.error || { code: 'failed', message: 'refused' }, p.verb))
     }
   }
@@ -260,7 +266,7 @@
     transport.subscribe('theme.changed', [], applyTheme, null)
     var waiting = early || []
     early = null
-    for (var i = 0; i < waiting.length; i++) port.postMessage(waiting[i])
+    for (var i = 0; i < waiting.length; i++) send(waiting[i])
     helloed(Object.freeze({ caps: hello.caps.slice(), features: hello.features.slice(), widget: hello.widget, config: hello.config, motion: hello.motion }))
   }
   g.addEventListener('message', onHello)
@@ -949,6 +955,103 @@
   }
   // k2.open(url) (0.46.4) = k2.links.open(url): a link in the person's browser.
   if (groups.links && groups.links.open) k2.open = groups.links.open
+
+  // ── Files (0.46.5, prd-garden-board-needs-v1 §3–§5) ─────────────────────
+
+  /** @param {string} verb @param {string} message */
+  function badData(verb, message) {
+    return new K2Error({ code: 'bad_args', message: verb + ': ' + message }, verb)
+  }
+  /** Bytes now (string, ArrayBuffer, typed array: copied), or null for a
+   *  Blob / File, whose bytes come later (`blobBytes`).
+   * @param {unknown} d @returns {ArrayBuffer | null | undefined} */
+  function nowBytes(d) {
+    if (typeof d === 'string') return new TextEncoder().encode(d).buffer
+    if (d instanceof ArrayBuffer) return d.slice(0)
+    if (ArrayBuffer.isView(d)) return d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength)
+    if (typeof Blob !== 'undefined' && d instanceof Blob) return null
+    return undefined
+  }
+  /** @param {unknown} d @returns {Promise<ArrayBuffer | undefined>} */
+  function anyBytes(d) {
+    var b = nowBytes(d)
+    if (b === null) return /** @type {Blob} */ (d).arrayBuffer()
+    return Promise.resolve(b)
+  }
+  var REF = /^k2blob:sha256-[0-9a-f]{64}$/
+  if (groups.blobs) {
+    var blobs = groups.blobs
+    // k2.blobs.put(data, {mime?, name?}): Blob, File, ArrayBuffer, typed array or string.
+    blobs.put = function (/** @type {unknown} */ data, /** @type {any} */ opts) {
+      var o = Object.assign({}, opts || {})
+      if (typeof File !== 'undefined' && data instanceof File && o.name === undefined) o.name = data.name
+      if (typeof Blob !== 'undefined' && data instanceof Blob && o.mime === undefined && data.type) o.mime = data.type
+      return anyBytes(data).then(function (b) {
+        if (!b) throw badData('blobs.put', 'data is a Blob, File, ArrayBuffer, typed array or string')
+        return transport.call('blobs.put', [null, o], b)
+      })
+    }
+    // k2.blobs.get(ref, {px?, from?}) → {ref, size, mime, name, blob}.
+    blobs.get = function (/** @type {string} */ ref, /** @type {any} */ opts) {
+      return transport.call('blobs.get', opts === undefined ? [ref] : [ref, opts], undefined, true).then(function (/** @type {any} */ r) {
+        var v = r.value || {}
+        return Object.assign({}, v, { blob: new Blob([r.bytes || new ArrayBuffer(0)], { type: v.mime || '' }) })
+      })
+    }
+    /** @type {Map<string, Promise<string>>} */
+    var urls = new Map()
+    // k2.blobs.url(ref, {px?}) → a blob: URL for an img src, kept for the
+    // frame's life (refs never change).
+    blobs.url = function (/** @type {string} */ ref, /** @type {any} */ opts) {
+      var px = opts && opts.px ? opts.px : 0
+      var key = ref + '|' + px
+      var hit = urls.get(key)
+      if (hit) return hit
+      var p = blobs.get(ref, px ? { px: px } : undefined).then(function (/** @type {any} */ r) {
+        return URL.createObjectURL(r.blob)
+      })
+      p.catch(function () {
+        urls.delete(key)
+      })
+      urls.set(key, p)
+      return p
+    }
+    blobs.isRef = function (/** @type {unknown} */ s) {
+      return typeof s === 'string' && REF.test(s)
+    }
+  }
+  // k2.download(name, data, {mime?}): data is bytes, a string, a Blob,
+  // {blob: ref}, or an async function that makes them. Call it from a
+  // click: K2 checks the press when it starts; a function (or a Blob) gets
+  // a 60 s ticket for its bytes to follow.
+  if (groups.downloads) {
+    var downloads = groups.downloads
+    var download = function (/** @type {string} */ name, /** @type {unknown} */ data, /** @type {any} */ opts) {
+      var o = Object.assign({}, opts || {})
+      if (data && typeof data === 'object' && !ArrayBuffer.isView(data) && !(data instanceof ArrayBuffer) && typeof (/** @type {any} */ (data)).blob === 'string') {
+        return transport.call('downloads.save', [name, { blob: /** @type {any} */ (data).blob }, o])
+      }
+      var now = typeof data === 'function' ? undefined : nowBytes(data)
+      if (now) return transport.call('downloads.save', [name, null, o], now)
+      if (now === undefined && typeof data !== 'function') return Promise.reject(badData('downloads.save', 'data is bytes, a string, a Blob, {blob: ref} or a function'))
+      // The press is checked now; the bytes follow with the ticket.
+      var begun = transport.call('downloads.begin', [name, o.mime ? { mime: o.mime } : {}])
+      var made = Promise.resolve(typeof data === 'function' ? /** @type {Function} */ (data)() : data)
+      return begun.then(function (/** @type {any} */ t) {
+        return made.then(function (/** @type {unknown} */ d) {
+          if (d && typeof d === 'object' && typeof (/** @type {any} */ (d)).blob === 'string') {
+            return transport.call('downloads.save', [name, { blob: /** @type {any} */ (d).blob }, Object.assign({}, o, { ticket: t.ticket })])
+          }
+          return anyBytes(d).then(function (b) {
+            if (!b) throw badData('downloads.save', 'the function made no bytes')
+            return transport.call('downloads.save', [name, null, Object.assign({}, o, { ticket: t.ticket })], b)
+          })
+        })
+      })
+    }
+    downloads.save = download
+    k2.download = download
+  }
 
   Object.keys(groups).forEach(function (surface) {
     if (surface === 'widget') return // served by the k2.widget getter

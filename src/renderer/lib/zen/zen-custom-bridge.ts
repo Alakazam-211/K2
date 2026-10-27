@@ -40,7 +40,15 @@
 //      only within 5 s of a press in that frame, saved per Garden on this
 //      computer like the person's own click (0.46.4); `links.open`
 //      (`k2.open`, 0.46.4) only within 5 s of a press in that frame, once a
-//      second and 10 a minute, one card at a time (`zen-links`).
+//      second and 10 a minute, one card at a time (`zen-links`);
+//      `downloads.*` (`k2.download`, 0.46.5) the same press rule, once
+//      every 2 s and 10 a minute, one at a time; a `downloads.begin` ticket
+//      lets the bytes follow within 60 s (`zen-custom-blobs`).
+// 0.46.5 (prd-garden-board-needs-v1 GB12): bytes ride beside a message as
+// one transferred ArrayBuffer (`bytes`), only on `blobs.put` and
+// `downloads.save`, at most 16 / 50 MiB; the 64 KB check can't see them
+// (an ArrayBuffer stringifies to `{}`), so step 1 checks them itself. A
+// `blobs.get` reply moves its buffer back the same way.
 // 0.46.3 Thread parity (Rosson 2026-10-20): `thread.read` takes `afterSeq`
 // (a delta: items, hasMore, changed, removed), and `thread.markRead`,
 // `thread.attachment`, `thread.open`, `thread.links` and `thread.pickFiles`
@@ -85,6 +93,17 @@ import { ZEN_GUEST_VERBS, ZenGuestsError, type ZenCustomGuests } from './zen-cus
 import { ZenWidgetError } from './zen-widget-routes'
 import type { ZenColumnFoldRefusal, ZenLayoutColumn } from './zen-columns'
 import { ZEN_THREAD_CONTEXT_PER_SECOND, clearZenThreadContextFor, zenThreadContextProblem } from './zen-thread-context'
+import {
+  ZEN_BLOB_REF,
+  ZEN_BYTE_VERBS,
+  ZEN_DOWNLOADS,
+  isArrayBuffer,
+  zenBytesReader,
+  zenDownloadName,
+  type ZenCustomBlobs,
+} from './zen-custom-blobs'
+import { zenStoreErrorFrom } from './zen-custom-store'
+import type { DownloadSliceReader } from '../fs-transfer'
 
 /** UW29 budgets. */
 export const ZEN_WIDGET_BUDGET = {
@@ -192,7 +211,32 @@ export interface ZenCustomLayerDeps {
    *  first time per site in this Garden. Without it `links.open` answers
    *  `verb_unavailable`. */
   links?: ZenCustomLinks
+  /** prd-garden-board-needs-v1 GB12: this widget's files on this computer
+   *  (the daemon's widget door). Without it `blobs.put` / `blobs.get`
+   *  answer `verb_unavailable`. */
+  blobs?: ZenCustomBlobs
+  /** GS1–GS7: K2's own download path. Without it `downloads.*` answer
+   *  `verb_unavailable` (the widget preview, a headless daemon). */
+  downloads?: ZenCustomDownloads
   now(): number
+}
+
+/** What the layer needs for `downloads.*` (`k2.download`). */
+export interface ZenCustomDownloads {
+  /** Did the person press in this frame within the last 5 s? (A press
+   *  only; the frame having the focus is not enough.) */
+  pressed(): boolean
+  /** K2's download lifecycle (`downloadChunks`): the path or file name it
+   *  landed as, or null when the person cancelled or it failed (K2 said so). */
+  save(name: string, read: DownloadSliceReader): Promise<string | null>
+}
+
+/** A call's answer that carries bytes back to the frame (moved, not copied). */
+export class ZenBytesValue {
+  constructor(
+    readonly value: unknown,
+    readonly bytes: ArrayBuffer,
+  ) {}
 }
 
 /** What the layer needs for `links.open` (`zen-links`). */
@@ -536,9 +580,159 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     }
   }
 
+  // ── Garden blobs and downloads (prd-garden-board-needs-v1 §3–§4) ─────────
+
+  const needBlobs = (verb: string): ZenCustomBlobs => {
+    if (!deps.blobs) refuse('verb_unavailable', `${verb} isn’t available here.`)
+    return deps.blobs!
+  }
+
+  /** An options object with only `allowed` string fields. */
+  const stringOpts = (verb: string, v: unknown, allowed: readonly string[]): Record<string, string> => {
+    if (v === undefined || v === null) return {}
+    if (!isObj(v)) refuse('bad_args', `${verb}: options are an object`)
+    const out: Record<string, string> = {}
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      if (!allowed.includes(k)) refuse('bad_args', `${verb}: unknown option '${k}'`)
+      if (x === undefined || x === null) continue
+      if (typeof x !== 'string' || x.length > 255) refuse('bad_args', `${verb}: ${k} is text (at most 255 characters)`)
+      out[k] = x as string
+    }
+    return out
+  }
+
+  const blobCall = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn()
+    } catch (err) {
+      throw err instanceof ZenCustomRefusal ? err : toRefusal(zenStoreErrorFrom(err))
+    }
+  }
+
+  const putBlob = async (args: unknown[], bytes: ArrayBuffer | undefined): Promise<unknown> => {
+    const blobs = needBlobs('blobs.put')
+    if (!bytes) refuse('bad_args', 'blobs.put: send the data as bytes (k2.blobs.put does).')
+    if (args[0] !== undefined && args[0] !== null) refuse('bad_args', 'blobs.put: the data rides as bytes, not in the arguments.')
+    const o = stringOpts('blobs.put', args[1], ['mime', 'name'])
+    return blobCall(() => blobs.put(bytes!, o))
+  }
+
+  const getBlob = async (args: unknown[]): Promise<ZenBytesValue> => {
+    const blobs = needBlobs('blobs.get')
+    const ref = args[0]
+    if (typeof ref !== 'string' || !ZEN_BLOB_REF.test(ref)) refuse('bad_args', 'blobs.get needs a ref (k2blob:sha256-<64 lowercase hex>)')
+    const o = args[1]
+    let px: number | undefined
+    let from: string | undefined
+    if (o !== undefined && o !== null) {
+      if (!isObj(o) || Object.keys(o).some((k) => k !== 'px' && k !== 'from')) refuse('bad_args', 'blobs.get options are {px?, from?}')
+      const p = (o as Record<string, unknown>).px
+      if (p !== undefined && p !== null && p !== 256 && p !== 512) refuse('bad_args', 'blobs.get: px is 256 or 512')
+      px = (p ?? undefined) as number | undefined
+      const f = (o as Record<string, unknown>).from
+      if (f !== undefined && f !== null && (typeof f !== 'string' || !f.trim())) refuse('bad_args', 'blobs.get: from is a widget name')
+      from = (f ?? undefined) as string | undefined
+    }
+    const r = await blobCall(() => blobs.get(ref as string, { px, from }))
+    return new ZenBytesValue({ ref: r.info.ref, size: r.info.size, mime: r.info.mime, name: r.info.name }, r.bytes)
+  }
+
+  const downloadCalls: number[] = []
+  let downloading = false
+  let ticket: { id: string; name: string; at: number } | null = null
+
+  const needDownloads = (verb: string): ZenCustomDownloads => {
+    if (!deps.downloads) refuse('verb_unavailable', `${verb} isn’t available here.`)
+    return deps.downloads!
+  }
+
+  /** GS2: a press in this frame within 5 s, once every 2 s, 10 a minute,
+   *  one at a time (a refusal counts toward UW29). */
+  const downloadGate = (verb: string, d: ZenCustomDownloads): void => {
+    const now = deps.now()
+    while (downloadCalls.length > 0 && now - downloadCalls[0] >= 60_000) downloadCalls.shift()
+    const last = downloadCalls[downloadCalls.length - 1]
+    if ((last !== undefined && now - last < ZEN_DOWNLOADS.everyMs) || downloadCalls.length >= ZEN_DOWNLOADS.perMinute) {
+      refuse('rate_limited', `${verb}: at most one download every 2 seconds and ${ZEN_DOWNLOADS.perMinute} a minute.`)
+    }
+    if (!d.pressed()) refuse('failed', `${verb} needs a click: it works only just after the person presses in the widget.`)
+    if (downloading) refuse('rate_limited', `${verb}: a download is already running.`)
+    downloadCalls.push(now)
+  }
+
+  const downloadName = (verb: string, raw: unknown, mime: unknown): string => {
+    const r = zenDownloadName(raw, mime)
+    if ('problem' in r) refuse('bad_args', `${verb}: ${r.problem}`)
+    return (r as { name: string }).name
+  }
+
+  const ticketId = (): string => {
+    const b = new Uint8Array(12)
+    crypto.getRandomValues(b)
+    return `dl-${Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')}`
+  }
+
+  /** GS7: the press is checked now; the bytes may follow within 60 s. */
+  const beginDownload = (args: unknown[]): { ticket: string } => {
+    const d = needDownloads('downloads.begin')
+    const o = stringOpts('downloads.begin', args[1], ['mime'])
+    const name = downloadName('downloads.begin', args[0], o.mime)
+    const now = deps.now()
+    if (ticket && now - ticket.at <= ZEN_DOWNLOADS.ticketMs) refuse('rate_limited', 'downloads.begin: a download is already waiting for its bytes.')
+    downloadGate('downloads.begin', d)
+    ticket = { id: ticketId(), name, at: now }
+    return { ticket: ticket.id }
+  }
+
+  const saveDownload = async (args: unknown[], bytes: ArrayBuffer | undefined): Promise<{ saved: boolean; name?: string }> => {
+    const d = needDownloads('downloads.save')
+    const o = stringOpts('downloads.save', args[2], ['mime', 'ticket'])
+    const name = downloadName('downloads.save', args[0], o.mime)
+    if (o.ticket !== undefined) {
+      const t = ticket
+      const now = deps.now()
+      if (t && now - t.at > ZEN_DOWNLOADS.ticketMs) ticket = null
+      if (!t || t.id !== o.ticket || now - t.at > ZEN_DOWNLOADS.ticketMs) {
+        refuse('failed', 'downloads.save: start the download from a click (this ticket is unknown, used, or older than 60 s).')
+      }
+      if (t!.name !== name) refuse('bad_args', `downloads.save: the ticket is for ${t!.name}`)
+      // One ticket, one file.
+      ticket = null
+      if (downloading) refuse('rate_limited', 'downloads.save: a download is already running.')
+    } else {
+      downloadGate('downloads.save', d)
+    }
+    const data = args[1]
+    let read: DownloadSliceReader
+    if (bytes) {
+      if (data !== undefined && data !== null) refuse('bad_args', 'downloads.save: the data rides as bytes, not in the arguments.')
+      read = zenBytesReader(bytes)
+    } else if (isObj(data) && Object.keys(data).length === 1 && typeof data.blob === 'string' && ZEN_BLOB_REF.test(data.blob)) {
+      // GS4: a file this widget's data holds goes daemon → Downloads; the
+      // daemon checks store:read and the maker's rights on every slice.
+      if (!caps().has('store:read')) refuse('cap_not_granted', 'downloads.save with {blob} needs store:read.', { cap: 'store:read' })
+      read = needBlobs('downloads.save').reader(data.blob)
+    } else {
+      refuse('bad_args', 'downloads.save takes bytes (k2.download sends them) or {blob: ref}.')
+    }
+    downloading = true
+    try {
+      const landed = await d.save(name, read!)
+      if (landed === null) return { saved: false }
+      return { saved: true, name: landed.split(/[\\/]/).pop() || name }
+    } finally {
+      downloading = false
+    }
+  }
+
   // ── calls ────────────────────────────────────────────────────────────────
 
-  const calls: Record<string, (args: unknown[]) => unknown> = {
+  const calls: Record<string, (args: unknown[], bytes?: ArrayBuffer) => unknown> = {
+    // prd-garden-board-needs-v1: files in this widget's data, and downloads.
+    'blobs.put': (args, bytes) => putBlob(args, bytes),
+    'blobs.get': (args) => getBlob(args),
+    'downloads.begin': (args) => beginDownload(args),
+    'downloads.save': (args, bytes) => saveDownload(args, bytes),
     'gardens.list': () => inner('gardens.list'),
     'gardens.current': () => inner('gardens.current'),
     'gardens.switch': (args) => {
@@ -1060,6 +1254,16 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
         return null
       }
       if (id === null && typeof m.sub !== 'number') return null
+      // GB12 (V1): transferred bytes, which the JSON size check can't see.
+      let bytes: ArrayBuffer | undefined
+      if ('bytes' in m && m.bytes !== undefined) {
+        const name = typeof m.verb === 'string' ? m.verb : ''
+        const cap = Object.prototype.hasOwnProperty.call(ZEN_BYTE_VERBS, name) ? ZEN_BYTE_VERBS[name] : undefined
+        if (cap === undefined || typeof m.sub === 'number') refuse('bad_args', `${name || 'This call'} takes no bytes.`)
+        if (!isArrayBuffer(m.bytes)) refuse('bad_args', 'Bytes are one ArrayBuffer.')
+        if ((m.bytes as ArrayBuffer).byteLength > cap!) refuse('too_large', `${name} takes at most ${cap! / (1024 * 1024)} MiB.`)
+        bytes = m.bytes as ArrayBuffer
+      }
       if (JSON.stringify(msg).length > ZEN_WIDGET_BUDGET.messageBytes) refuse('too_large', 'A message is over 64 KB.')
       takeToken()
       // 0.46.1: args are a list when given (bad_args, not a guess).
@@ -1122,7 +1326,8 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
         return null
       }
       if (row.kind !== 'call') refuse('failed', `${verb} is a subscription: use k2.subscribe.`)
-      const value = await calls[verb](args)
+      const value = await calls[verb](args, bytes)
+      if (value instanceof ZenBytesValue) return { id: id as number, ok: true, value: zenPlain(value.value), bytes: value.bytes }
       return { id: id as number, ok: true, value: zenPlain(value) }
     } catch (err) {
       const wire = toRefusal(err).wire

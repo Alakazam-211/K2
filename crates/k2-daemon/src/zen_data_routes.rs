@@ -20,6 +20,7 @@
 
 use std::collections::HashMap;
 
+use k2_core::garden_data::blobs::MAX_BLOB_BODY;
 use k2_core::garden_data::{Actor, DataError, MAX_BODY, MAX_IMPORT_BYTES};
 
 use crate::cli_response::CliResponse;
@@ -32,12 +33,21 @@ pub const CALL_ROUTE: &str = "/cli/zen/call";
 /// The import route (the one body over 64 KiB).
 pub const IMPORT_ROUTE: &str = "/cli/zen/data/import";
 
+/// The widget door's byte routes (prd-garden-board-needs-v1 GB13): owner
+/// token and Origin gate, like `/cli/zen/call`; never on the cell socket.
+pub const WIDGET_DOOR: &[&str] = &[CALL_ROUTE, "/cli/zen/blob/get", "/cli/zen/blob/put"];
+
 /// Every Garden data route (contract §4.3).
 pub const ROUTES: &[&str] = &[
+    "/cli/zen/blob/get",
+    "/cli/zen/blob/put",
     "/cli/zen/call",
     "/cli/zen/data/admin",
     "/cli/zen/data/admin/revoke",
     "/cli/zen/data/batch",
+    "/cli/zen/data/blob/get",
+    "/cli/zen/data/blob/list",
+    "/cli/zen/data/blob/put",
     "/cli/zen/data/changes",
     "/cli/zen/data/delete",
     "/cli/zen/data/export",
@@ -61,10 +71,12 @@ pub const ROUTES: &[&str] = &[
 
 /// POST-only rows (405 on GET).
 pub const POST_ROUTES: &[&str] = &[
+    "/cli/zen/blob/put",
     "/cli/zen/call",
     "/cli/zen/data/admin",
     "/cli/zen/data/admin/revoke",
     "/cli/zen/data/batch",
+    "/cli/zen/data/blob/put",
     "/cli/zen/data/delete",
     "/cli/zen/data/grant",
     "/cli/zen/data/import",
@@ -96,7 +108,7 @@ pub fn is_route(p: &str) -> bool {
 
 /// The routes the per-cell socket serves (every one but the widget door).
 pub fn is_agent_route(p: &str) -> bool {
-    is_route(p) && p != CALL_ROUTE
+    is_route(p) && !WIDGET_DOOR.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -107,6 +119,8 @@ pub fn is_post_route(p: &str) -> bool {
 pub fn max_body(p: &str) -> usize {
     if p == IMPORT_ROUTE {
         MAX_IMPORT_BYTES
+    } else if p == crate::garden_data::blob_routes::WIDGET_PUT || p == crate::garden_data::blob_routes::AGENT_PUT {
+        MAX_BLOB_BODY
     } else {
         MAX_BODY
     }
@@ -206,6 +220,12 @@ pub fn handle(path: &str, who: DataWho, body: &[u8], params: &HashMap<String, St
     if path == CALL_ROUTE {
         return gd::call::handle(&who, headers, body);
     }
+    if gd::blob_routes::is_widget_route(path) {
+        return match gd::blob_routes::widget(path, &who, headers, body, params) {
+            Ok(v) => gd::ok(v),
+            Err(e) => gd::response(&e),
+        };
+    }
     let gate = match &who {
         DataWho::Invalid => Some(refused("invalid_token", 401, "invalid or missing token")),
         DataWho::Wrong => Some(refused(
@@ -246,6 +266,8 @@ pub fn handle(path: &str, who: DataWho, body: &[u8], params: &HashMap<String, St
         "/cli/zen/data/tx/begin" | "/cli/zen/data/tx/add" | "/cli/zen/data/tx/commit" | "/cli/zen/data/tx/abort" => {
             gd::tx_routes::handle(path, &who, body, params)
         }
+        // prd-garden-board-needs-v1 GB15: blobs.
+        p if gd::blob_routes::is_agent_route(p) => gd::blob_routes::agent(p, &who, body, params),
         // B3: export and import.
         "/cli/zen/data/export" | "/cli/zen/data/import" => gd::export_routes::handle(path, &who, body, params),
         _ => Err(DataError::NotFound("route_not_found")),
@@ -269,13 +291,18 @@ mod tests {
             assert!(is_route(p), "{p} is a route");
         }
         for p in ROUTES {
-            assert!(p.starts_with("/cli/zen/data/") || *p == CALL_ROUTE, "{p}");
+            assert!(p.starts_with("/cli/zen/data/") || WIDGET_DOOR.contains(p), "{p}");
             let row = crate::routes::route_policy::lookup(p).unwrap_or_else(|| panic!("{p} has no policy row"));
             assert_eq!(row.post.is_some(), is_post_route(p), "{p}: policy POST row vs POST_ROUTES");
         }
-        assert!(!is_agent_route(CALL_ROUTE));
+        for p in WIDGET_DOOR {
+            assert!(is_route(p) && !is_agent_route(p), "{p}: the widget door never reaches the cell socket");
+        }
         assert_eq!(max_body(IMPORT_ROUTE), MAX_IMPORT_BYTES);
         assert_eq!(max_body("/cli/zen/data/put"), MAX_BODY);
+        assert_eq!(max_body("/cli/zen/blob/put"), MAX_BLOB_BODY);
+        assert_eq!(max_body("/cli/zen/data/blob/put"), MAX_BLOB_BODY);
+        assert_eq!(max_body("/cli/zen/data/blob/get"), MAX_BODY);
     }
 
     #[test]

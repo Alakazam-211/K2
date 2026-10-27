@@ -640,6 +640,14 @@ pub const FEATURE_GROKBOTS: &str = "grokbots-v1";
 /// `POST /cli/zen/call` on this computer's daemon.
 pub const FEATURE_GARDEN_DATA: &str = "garden-data-v1";
 
+/// Garden blobs (prd-garden-board-needs-v1 §3): `blobs.*`, the widget
+/// door's `/cli/zen/blob/*` and the agent door's `/cli/zen/data/blob/*`.
+pub const FEATURE_GARDEN_BLOBS: &str = k2_core::garden_data::blobs::FEATURE;
+
+/// `k2.download`, `k2.pick` and `k2.onDrop` (prd-garden-board-needs-v1 §4,
+/// §5): frame rows the app answers; the daemon half is the blob routes.
+pub const FEATURE_ZEN_FILES: &str = "zen-files-v1";
+
 /// The App API (runtime S23, room-scope R1/R5/R6, 0.46.1): the App-facing
 /// routes are catalogued (`contract/catalog.json` rows exposed to `app`;
 /// the gateway table is generated from them), `GET /cli/skin/me` answers,
@@ -932,6 +940,8 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_THREAD_ADDRESS_STABLE);
     out.push(FEATURE_SOURCES);
     out.push(FEATURE_GARDEN_DATA);
+    out.push(FEATURE_GARDEN_BLOBS);
+    out.push(FEATURE_ZEN_FILES);
     out.push(FEATURE_GROKBOTS);
     out.push(FEATURE_APP_API);
     out.push(FEATURE_GUESTS_ROOMS);
@@ -1039,6 +1049,8 @@ mod tests {
                 "thread-address-stable",
                 "sources-v1",
                 "garden-data-v1",
+                "garden-blobs-v1",
+                "zen-files-v1",
                 "grokbots-v1",
                 "app-api-v1",
                 "guests-rooms-v1",

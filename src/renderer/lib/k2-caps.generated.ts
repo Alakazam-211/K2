@@ -43,6 +43,11 @@ export const K2_CAPS = {
     sentence: 'Open web links in your browser when you click in it. K2 asks you the first time for each site.',
     exposure: ['widget'],
   },
+  'downloads:save': {
+    label: 'Save files to your Downloads',
+    sentence: 'Save files it makes (like a PNG or PDF of your board) to your Downloads folder when you click in it.',
+    exposure: ['widget'],
+  },
   'agents:add': { label: 'Open Add agent', exposure: [] },
   'gardens:manage': { label: 'Create, rename and delete Gardens', exposure: [] },
   'gardens:template': { label: 'Turn this Garden into a built-in page', exposure: [] },
@@ -68,12 +73,12 @@ export const K2_CAPS = {
   'store:read': {
     label: 'Read the workspace store',
     sentence: "Read this widget's own data on this computer.",
-    exposure: ['app', 'garden-local'],
+    exposure: ['app', 'garden-local', 'widget'],
   },
   'store:write': {
     label: 'Change dump-table rows',
     sentence: "Save this widget's own data on this computer. Agents you allow can read and change it too.",
-    exposure: ['app', 'garden-local'],
+    exposure: ['app', 'garden-local', 'widget'],
   },
   'guests:rooms': {
     label: "Set its own guests' rooms (an owner grant per App, never a guest's)",
@@ -108,6 +113,6 @@ export const K2_CAPS = {
 export type K2Cap = keyof typeof K2_CAPS
 
 /** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */
-export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'links:open', 'files:read', 'tickets:read', 'tickets:post', 'store:read', 'store:write', 'guests:rooms', 'activity:read', 'room:members'] as const
+export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'links:open', 'downloads:save', 'files:read', 'tickets:read', 'tickets:post', 'store:read', 'store:write', 'guests:rooms', 'activity:read', 'room:members'] as const
 
 export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]

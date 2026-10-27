@@ -296,6 +296,9 @@ pub const USER_WIDGET_CAPS: &[&str] = &[
     // 0.46.4: `k2.open(url)` (links.open), answered by the custom layer; the
     // first time per site in each Garden K2 asks the person on its own card.
     "links:open",
+    // 0.46.5 (prd-garden-board-needs-v1 §4): `k2.download`, answered by the
+    // custom layer over K2's own download path, after a click in the frame.
+    "downloads:save",
     // 0.46.3 (garden-person-rows-v1): the Garden bridge's person rows.
     "files:read",
     "tickets:read",

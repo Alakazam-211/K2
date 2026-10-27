@@ -344,6 +344,9 @@ pub mod skin_me_routes;
 pub mod app_mobile_routes;
 // Push notifications for custom Apps (prd-custom-app-push-v1, 0.46.4).
 pub mod app_push;
+// Email Notifications (prd-email-notifications-core-v1, 0.46.5): K2's
+// one-way mail from senders no agent can read, the App `email.send` door.
+pub mod email_notify;
 // agent-app-users (0.46.4): invites, owner reset links, App invite settings.
 pub mod app_user_invites;
 pub mod guest_rooms_routes;

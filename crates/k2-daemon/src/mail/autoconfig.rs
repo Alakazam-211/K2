@@ -168,19 +168,27 @@ fn zonefile_for(domain: &str, stw_id: &str) -> Result<String, CliResponse> {
         })
 }
 
-fn lookup_dns_zone_id(domain: &str) -> Option<String> {
+/// The K2-hosted zone `domain`'s rows go in: its own zone, else (a sending
+/// subdomain, Email Notifications E11) the LONGEST zone it sits under.
+/// Returns `(zone id, zone apex)`.
+fn lookup_dns_zone_id(domain: &str) -> Option<(String, String)> {
     use crate::dns::proxy::proxy_request;
     let resp = proxy_request("GET", "/api/dns/zones", None, None).ok()?;
     if resp.status != 200 {
         return None;
     }
     let v: serde_json::Value = serde_json::from_str(&resp.body).ok()?;
-    let want = domain.trim().trim_end_matches('.').to_ascii_lowercase();
-    v.get("zones")
+    zone_for(&v, domain)
+}
+
+/// Pure: pick the zone for `domain` out of a `/api/dns/zones` answer.
+fn zone_for(v: &serde_json::Value, domain: &str) -> Option<(String, String)> {
+    let zones: Vec<(String, String)> = v
+        .get("zones")
         .and_then(|z| z.as_array())
         .into_iter()
         .flatten()
-        .find_map(|z| {
+        .filter_map(|z| {
             let d = z
                 .get("domain")
                 .or_else(|| z.get("name"))
@@ -189,15 +197,13 @@ fn lookup_dns_zone_id(domain: &str) -> Option<String> {
                 .trim()
                 .trim_end_matches('.')
                 .to_ascii_lowercase();
-            if d == want {
-                z.get("id")
-                    .or_else(|| z.get("zone"))
-                    .and_then(|x| x.as_str())
-                    .map(str::to_string)
-            } else {
-                None
-            }
+            let id = z.get("id").or_else(|| z.get("zone")).and_then(|x| x.as_str())?;
+            (!d.is_empty()).then(|| (d, id.to_string()))
         })
+        .collect();
+    let (apex, _) = k2_core::domains::zone_for_name(domain, zones.iter().map(|(d, _)| d.as_str()))?;
+    let apex = apex.to_string();
+    zones.into_iter().find(|(d, _)| *d == apex).map(|(d, id)| (id, d))
 }
 
 /// The k2.dev records-API body for one zone-file row in zone `apex`.
@@ -307,7 +313,7 @@ pub fn handle_autoconfig_apply(body: &[u8]) -> CliResponse {
     let rows = autoconfig_rows(&domain, &zone, hostname.as_deref());
     let mut payload = show_payload(&domain, &rows, hostname.as_deref());
     payload["bind"] = serde_json::json!(false);
-    let Some(zone_id) = lookup_dns_zone_id(&domain) else {
+    let Some((zone_id, zone_apex)) = lookup_dns_zone_id(&domain) else {
         payload["planted"] = serde_json::json!(false);
         payload["hint"] = serde_json::json!(
             "this server does not host NS for this zone — print these records at your registrar (not A8 bind)"
@@ -317,7 +323,7 @@ pub fn handle_autoconfig_apply(body: &[u8]) -> CliResponse {
     let mut planted = Vec::new();
     let mut errors = Vec::new();
     for row in &rows {
-        match plant_record(&zone_id, &domain, row) {
+        match plant_record(&zone_id, &zone_apex, row) {
             Ok(()) => planted.push(record_json(row)),
             Err(e) => errors.push(e),
         }
@@ -343,6 +349,27 @@ pub fn handle_autoconfig_apply(body: &[u8]) -> CliResponse {
 mod tests {
     use super::*;
     use crate::mail::domains::tests::ZONE_FIXTURE;
+
+    #[test]
+    fn a_sending_subdomain_uses_its_longest_parent_zone() {
+        // Email Notifications E11.
+        let v = serde_json::json!({ "zones": [
+            { "id": "z-brand", "domain": "brand.com." },
+            { "id": "z-deep", "name": "deep.brand.com" },
+            { "id": "z-other", "domain": "rand.com" },
+        ]});
+        assert_eq!(zone_for(&v, "notify.brand.com"), Some(("z-brand".to_string(), "brand.com".to_string())));
+        assert_eq!(zone_for(&v, "x.deep.brand.com"), Some(("z-deep".to_string(), "deep.brand.com".to_string())));
+        assert_eq!(zone_for(&v, "brand.com"), Some(("z-brand".to_string(), "brand.com".to_string())));
+        assert_eq!(zone_for(&v, "abrand.com"), None);
+        // A subdomain row is named relative to the parent zone.
+        let row = RecordRow {
+            name: "_jmap._tcp.notify.brand.com.".to_string(),
+            ..autoconfig_rows("acme.dev", ZONE_FIXTURE, Some("mail.acme.dev")).into_iter().next().expect("a row")
+        };
+        let b = records_api_body("brand.com", &row).expect("in zone");
+        assert_eq!(b["name"], "_jmap._tcp.notify");
+    }
 
     #[test]
     fn fixture_rows_match_live_zone_not_invented_imaps() {

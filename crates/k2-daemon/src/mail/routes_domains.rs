@@ -90,9 +90,56 @@ pub fn handle_domain_add(body: &[u8]) -> CliResponse {
     // never under air-gap).
     crate::mail::cert_names::refresh_public_ipv4_if_stale();
     match domains::add_domain(&engine, &b.domain) {
-        Ok(v) => ok_json(v),
+        Ok(mut v) => {
+            // Email Notifications E11: a domain (or a sending subdomain)
+            // whose zone is on K2 gets the exact `k2 dns` lines. Nothing
+            // is planted here: MX/SPF change live mail routing.
+            let zone = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::domains::binding_for_name(&conn, v["domain"].as_str().unwrap_or("")).ok().flatten()
+            };
+            if let Some((binding, _)) = zone {
+                let rows = v["records"].as_array().cloned().unwrap_or_default();
+                v["dnsCommands"] = serde_json::json!(k2_dns_commands(&binding.apex, &rows));
+            }
+            ok_json(v)
+        }
         Err(e) => op_error_response(e),
     }
+}
+
+/// The `k2 dns record add …` lines that publish a domain's missing rows in
+/// the K2-hosted zone `apex` (E11). Names are relative to the zone (a
+/// sending subdomain's rows sit under it). An existing DMARC policy is
+/// never touched (E10): only a missing one is printed. Rows outside the
+/// zone (the box's PTR) are skipped.
+pub(crate) fn k2_dns_commands(apex: &str, rows: &[serde_json::Value]) -> Vec<String> {
+    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    let mut out = Vec::new();
+    for r in rows {
+        let field = |k: &str| r.get(k).and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let (id, rtype, name, value, status) = (field("id"), field("type").to_ascii_uppercase(), field("name"), field("expected"), field("status"));
+        if status == "valid" || value.is_empty() || !matches!(rtype.as_str(), "MX" | "TXT" | "CNAME" | "A" | "SRV") {
+            continue;
+        }
+        if id == "dmarc" && status != "missing" {
+            continue;
+        }
+        let Ok(rel) = crate::dns::relative_record_name(&name, apex) else { continue };
+        let mut line = format!("k2 dns record add {apex} {rtype} {} ", quote(&rel));
+        if rtype == "MX" || rtype == "SRV" {
+            let Some((prio, rest)) = value.split_once(char::is_whitespace) else { continue };
+            if prio.parse::<u16>().is_err() {
+                continue;
+            }
+            line.push_str(&format!("{} --priority {prio}", quote(rest.trim())));
+        } else {
+            line.push_str(&quote(&value));
+        }
+        out.push(line);
+    }
+    out
 }
 
 /// `POST /cli/mail/domain/remove` body. `confirm` is REQUIRED true
@@ -218,6 +265,33 @@ pub fn handle_domain_show(params: &HashMap<String, String>) -> CliResponse {
 mod tests {
     use super::*;
     use crate::mail::domains::tests::{FakeEngine, ZONE_FIXTURE};
+
+    /// E11: a sending subdomain in a K2-hosted zone gets relative `k2 dns`
+    /// lines for its missing rows; an existing DMARC policy and valid rows
+    /// are left alone; the PTR (outside the zone) is skipped.
+    #[test]
+    fn k2_dns_lines_for_a_sending_subdomain() {
+        let rows = vec![
+            serde_json::json!({"id": "mx", "type": "MX", "name": "notify.brand.com", "expected": "10 mail.box.example.", "status": "missing"}),
+            serde_json::json!({"id": "spf", "type": "TXT", "name": "notify.brand.com", "expected": "v=spf1 mx ~all", "status": "missing"}),
+            serde_json::json!({"id": "dkim:s1", "type": "TXT", "name": "s1._domainkey.notify.brand.com", "expected": "v=DKIM1; k=ed25519; p=abc'd", "status": "wrong"}),
+            serde_json::json!({"id": "dmarc", "type": "TXT", "name": "_dmarc.notify.brand.com", "expected": "v=DMARC1; p=none", "status": "wrong"}),
+            serde_json::json!({"id": "adv:1", "type": "TXT", "name": "x.notify.brand.com", "expected": "ok", "status": "valid"}),
+            serde_json::json!({"id": "ptr", "type": "PTR", "name": "1.2.3.4.in-addr.arpa", "expected": "mail.box.example.", "status": "missing"}),
+        ];
+        let lines = k2_dns_commands("brand.com", &rows);
+        assert_eq!(
+            lines,
+            vec![
+                "k2 dns record add brand.com MX 'notify' 'mail.box.example.' --priority 10".to_string(),
+                "k2 dns record add brand.com TXT 'notify' 'v=spf1 mx ~all'".to_string(),
+                "k2 dns record add brand.com TXT 's1._domainkey.notify' 'v=DKIM1; k=ed25519; p=abc'\\''d'".to_string(),
+            ],
+            "{lines:#?}"
+        );
+        let missing_dmarc = vec![serde_json::json!({"id": "dmarc", "type": "TXT", "name": "_dmarc.notify.brand.com", "expected": "v=DMARC1; p=none", "status": "missing"})];
+        assert_eq!(k2_dns_commands("brand.com", &missing_dmarc), vec!["k2 dns record add brand.com TXT '_dmarc.notify' 'v=DMARC1; p=none'".to_string()]);
+    }
 
     fn body_json(resp: &CliResponse) -> serde_json::Value {
         serde_json::from_str(&resp.body).expect("valid JSON body")

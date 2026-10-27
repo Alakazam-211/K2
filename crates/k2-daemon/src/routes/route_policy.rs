@@ -246,6 +246,16 @@ pub const ROUTES: &[Route] = &[
     get("/cli/app/egress/log", Member),
     post("/cli/app/egress/mode", Admin),
     post("/cli/app/egress/rm", Admin),
+    // Email Notifications (0.46.5, `k2 app email`): reads, off, test and
+    // send are Admin-floor (the App's agent by its passport; send rides
+    // its agentSend gate); on is the owner's with a fresh confirm.
+    get("/cli/app/email", Admin),
+    get("/cli/app/email/log", Admin),
+    post("/cli/app/email/off", Admin),
+    post("/cli/app/email/on", Owner),
+    post("/cli/app/email/send", Admin),
+    get("/cli/app/email/status", Admin),
+    post("/cli/app/email/test", Admin),
     // The guarded engine's install/update through the root helper (S11).
     post("/cli/app/engine/install", Owner),
     // 0.46.4 (update continuity R9): the engine's status, read-only.
@@ -998,6 +1008,26 @@ pub const ROUTES: &[Route] = &[
     // `k2 msg who <id>` (0.45.6 S7): any login; a passport sees only
     // deliveries to or from its own workspace.
     get("/cli/msg/who", Member),
+    // Email Notifications (0.46.5, `k2 notifications email`): the owner's
+    // and Admins' (passports are refused: deny list + handler). Adding a
+    // sender or relay, the system sender, tests and settings are the
+    // owner's, with a fresh confirm where they widen.
+    get("/cli/notifications/email", Admin),
+    get("/cli/notifications/email/log", Admin),
+    post("/cli/notifications/email/relay/add", Owner),
+    post("/cli/notifications/email/relay/rm", Admin),
+    post("/cli/notifications/email/relay/test", Owner),
+    get("/cli/notifications/email/relays", Admin),
+    post("/cli/notifications/email/sender/add", Owner),
+    post("/cli/notifications/email/sender/check", Admin),
+    post("/cli/notifications/email/sender/rm", Admin),
+    post("/cli/notifications/email/sender/set", Admin),
+    get("/cli/notifications/email/senders", Admin),
+    post("/cli/notifications/email/settings", Owner),
+    get("/cli/notifications/email/system-sender", Admin),
+    post("/cli/notifications/email/system-sender/clear", Admin),
+    post("/cli/notifications/email/system-sender/set", Owner),
+    post("/cli/notifications/email/system-sender/test", Owner),
     // prd-thread-push-notifications-v1 §5 (TP19): own row = any login;
     // everyone + defaults = Admin. Other people's rows are Owner-only in
     // the handler (Admins are read-only on people).
@@ -1281,6 +1311,11 @@ pub const ROUTES: &[Route] = &[
     get("/cli/skin/app-rooms", NoLogin),
     get("/cli/skin/devices", NoLogin),
     post("/cli/skin/devices/revoke", NoLogin),
+    // Email Notifications (0.46.5): the App's own email.* on its link
+    // (the handler checks the pass and email:send).
+    get("/cli/skin/email/log", NoLogin),
+    post("/cli/skin/email/send", NoLogin),
+    get("/cli/skin/email/status", NoLogin),
     both("/cli/skin/front-door", Owner),
     // Sew S27 grant hook: owner-tier like the grants routes; not an agent
     // verb (agents grant chat through K19's /cli/sew/admin/* later).

@@ -1633,6 +1633,17 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // prd-vault-gaps-v1 item 4: putting a secret into a root unit's
     // systemd credential, or taking it off (`secretId` = the secret id).
     crate::vault_systemd_routes::CONFIRM_ACTION,
+    // Email Notifications (prd-email-notifications-core-v1 §5.3, 0.46.5):
+    // adding a sender (`secretId` = its address), the system sender (its
+    // address), a relay login (its host), a test send (the sender's
+    // address), turning an App's email on and its any-address scope (the
+    // App's service id). Every caller, the owner token included.
+    crate::email_notify::CONFIRM_SENDER,
+    crate::email_notify::CONFIRM_SYSTEM_SENDER,
+    crate::email_notify::CONFIRM_RELAY,
+    crate::email_notify::CONFIRM_TEST,
+    crate::email_notify::CONFIRM_APP_ON,
+    crate::email_notify::CONFIRM_APP_ANY,
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
@@ -1695,6 +1706,11 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
     } else if let Some(reason) = crate::app_push::confirm_reason(action, b.secret_id.as_deref()) {
         // App push: the sheet names the App from the daemon's own record,
         // never from the client's label (review A-L1).
+        let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
+        (b.secret_id.clone(), reason)
+    } else if let Some(reason) = crate::email_notify::confirm_reason(action, b.secret_id.as_deref()) {
+        // Email Notifications: the daemon writes the sheet's words (the
+        // address, the App's real name), never the client's label.
         let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
         (b.secret_id.clone(), reason)
     } else {

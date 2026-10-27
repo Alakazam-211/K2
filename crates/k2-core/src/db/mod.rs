@@ -1557,13 +1557,22 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // Rosson 2026-10-26): `projects.agents_can_manage_app_users`, DEFAULT
         // 0. Additive. 0224 is reserved for compute rollouts.
         ("0225_app_users_switch", include_str!("../../drizzle_sql/0225_app_users_switch.sql")),
+        // 0227 — Email Notifications (prd-email-notifications-core-v1 §5.1,
+        // E6/E25; 0.46.5): senders (never `mail_addresses` rows, E1), SMTP
+        // relays (passwords in the vault, E12), per-App state, the
+        // metadata-only send log, idempotency keys and the one settings row.
+        // Additive; empty until the owner adds a sender. 0224 (compute
+        // rollouts), 0225 (the App users switch) and 0226 (App handover) are
+        // held by other lanes; 0228/0229 are Routines'. The store is
+        // `crate::email_notify`.
+        ("0227_email_notifications", include_str!("../../drizzle_sql/0227_email_notifications.sql")),
         // 0231 — the manifest is part of a widget's version
         // (prd-widget-size-and-shared-libs-v1 vs-live L1, S0; 0.46.5): two
         // additive tables, `zen_version_carry_runs` (one row: the one-time
         // carry of old signatures to the new hashes ran) and
         // `zen_version_carry` (what it carried, and how each live manifest
-        // differs from the signed one). 0226–0230 are taken by other
-        // 0.46.5 work. The pass is `crate::zen::version_carry`.
+        // differs from the signed one). 0226–0230 are 0.46.5's other
+        // lanes (0227 runs before it). The pass is `crate::zen::version_carry`.
         ("0231_zen_version_carry", include_str!("../../drizzle_sql/0231_zen_version_carry.sql")),
     ];
 
@@ -2298,6 +2307,8 @@ mod tests {
                 "0222_pg_dual_runs",
                 // 0.46.4: "Let this agent manage its Apps' users".
                 "0225_app_users_switch",
+                // 0.46.5: Email Notifications (senders, relays, log).
+                "0227_email_notifications",
                 // 0.46.5: the manifest is part of a widget's version (S0).
                 "0231_zen_version_carry",
             ],
@@ -2377,6 +2388,8 @@ mod tests {
                 "0222_pg_dual_runs",
                 // 0.46.4: "Let this agent manage its Apps' users".
                 "0225_app_users_switch",
+                // 0.46.5: Email Notifications (senders, relays, log).
+                "0227_email_notifications",
                 // 0.46.5: the manifest is part of a widget's version (S0).
                 "0231_zen_version_carry",
             ],
@@ -2605,10 +2618,12 @@ mod tests {
         conn.execute("INSERT INTO projects (id, name, path) VALUES ('p-old', 'old', '/tmp/p-old')", []).unwrap();
 
         run_migrations(&conn).unwrap();
+        let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(top, "0231_zen_version_carry", "0231 (0.46.5) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(last, "0222_pg_dual_runs", "0222 runs last of the 0.46.3 tail (then 0225 and 0231)");
+        assert_eq!(last, "0222_pg_dual_runs", "0222 runs last of the 0.46.3 tail (then 0225, 0227 and 0231)");
         let before_last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1 OFFSET 1", [], |r| r.get(0))
             .unwrap();
@@ -2626,9 +2641,10 @@ mod tests {
                 "0223_folder_trust",
                 "0222_pg_dual_runs",
                 "0225_app_users_switch",
+                "0227_email_notifications",
                 "0231_zen_version_carry"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, then 0222)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225 and 0.46.5's 0227 and 0231)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3368,6 +3384,10 @@ mod tests {
             // 0231 (the widget version carry, 0.46.5) is the newest: its
             // record goes (its tables and index are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0231_zen_version_carry'", []).unwrap();
+            // 0227 (Email Notifications, 0.46.5) came before it: its record
+            // goes (its tables and indexes are IF NOT EXISTS and its
+            // settings insert OR IGNORE).
+            conn.execute("DELETE FROM _migrations WHERE name = '0227_email_notifications'", []).unwrap();
             // 0225 (the App users switch, 0.46.4) came before it: its column
             // and record go.
             conn.execute_batch("ALTER TABLE projects DROP COLUMN agents_can_manage_app_users;").unwrap();

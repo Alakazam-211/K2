@@ -332,6 +332,11 @@ pub fn handle_dkim_retire(body: &[u8]) -> CliResponse {
         Ok(r) => r,
         Err(resp) => return resp,
     };
+    // Email Notifications (E4, Rosson R1): retiring a key on a domain that
+    // carries a notification sender can stop K2's own resets; owner/admin.
+    if let Err(resp) = crate::email_notify::fence::domain_gate(&row.domain, "retire a DKIM key") {
+        return resp;
+    }
     let domain_id = row.stalwart_domain_id.clone().unwrap_or_default();
     let engine = match engine() {
         Ok(e) => e,
@@ -414,14 +419,39 @@ fn poll_zone_for_selectors(
     }
 }
 
+/// Is the zone `domain` lives in (its own binding, or for a sending
+/// subdomain the longest bound parent, Email Notifications E11) writable?
 fn apex_writable(domain: &str) -> bool {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    k2_core::domains::apex_attached_for_write(&conn, domain).unwrap_or(false)
+    match k2_core::domains::binding_for_name(&conn, domain) {
+        Ok(Some((b, _))) => k2_core::domains::apex_attached_for_write(&conn, &b.apex).unwrap_or(false),
+        _ => false,
+    }
 }
 
 fn plant_relative_name(selector: &str) -> String {
     format!("{selector}._domainkey")
+}
+
+/// The record name relative to the zone: `<sel>._domainkey` at the apex,
+/// `<sel>._domainkey.<sub-labels>` for a subdomain under it (E11).
+pub(crate) fn dkim_record_name(selector: &str, sub_labels: &str) -> String {
+    if sub_labels.is_empty() {
+        plant_relative_name(selector)
+    } else {
+        format!("{}.{sub_labels}", plant_relative_name(selector))
+    }
+}
+
+/// `(zone id, writable, record name, zone apex)` for `domain`'s DKIM row.
+fn dkim_zone(domain: &str, selector: &str) -> Result<(Option<String>, bool, String, String), String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (b, sub) = k2_core::domains::binding_for_name(&conn, domain)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "no domain binding".to_string())?;
+    Ok((b.zone_id.clone(), b.dns_write, dkim_record_name(selector, &sub), b.apex.clone()))
 }
 
 fn plant_records_path(zone_id: &str) -> String {
@@ -435,14 +465,7 @@ fn unplant_record_path(record_id: &str) -> String {
 /// ACME-shaped records proxy. Never `/api/dns/zones/bind`, never
 /// `/cli/dns/records/add`.
 fn plant_dkim_txt(domain: &str, selector: &str, value: &str) -> Result<bool, String> {
-    let (zone_id, writable) = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let b = k2_core::domains::get_binding(&conn, domain)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "no domain binding".to_string())?;
-        (b.zone_id.clone(), b.dns_write)
-    };
+    let (zone_id, writable, record_name, _apex) = dkim_zone(domain, selector)?;
     if !writable {
         return Ok(false);
     }
@@ -451,7 +474,7 @@ fn plant_dkim_txt(domain: &str, selector: &str, value: &str) -> Result<bool, Str
     };
     let body = serde_json::json!({
         "type": "TXT",
-        "name": plant_relative_name(selector),
+        "name": record_name,
         "content": value,
         "ttl": 3600,
     })
@@ -468,14 +491,7 @@ fn plant_dkim_txt(domain: &str, selector: &str, value: &str) -> Result<bool, Str
 }
 
 fn unplant_dkim_txt(domain: &str, selector: &str) -> Result<bool, String> {
-    let (zone_id, writable) = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let b = k2_core::domains::get_binding(&conn, domain)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "no domain binding".to_string())?;
-        (b.zone_id.clone(), b.dns_write)
-    };
+    let (zone_id, writable, want, apex) = dkim_zone(domain, selector)?;
     if !writable {
         return Ok(false);
     }
@@ -488,8 +504,7 @@ fn unplant_dkim_txt(domain: &str, selector: &str) -> Result<bool, String> {
         return Ok(false);
     }
     let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap_or(serde_json::json!({}));
-    let want = plant_relative_name(selector);
-    let want_fqdn = format!("{want}.{domain}");
+    let want_fqdn = format!("{want}.{apex}");
     let recs = v
         .get("records")
         .or_else(|| v.pointer("/zone/records"))
@@ -587,6 +602,26 @@ mod tests {
             let conn = db.lock();
             let _ = conn.execute("DELETE FROM mail_domains WHERE domain = ?1", [&domain]);
         }
+    }
+
+    #[test]
+    fn a_sending_subdomain_plants_its_dkim_row_in_the_parent_zone() {
+        // Email Notifications E11: notify.brand.com has no binding of its
+        // own; its key goes in brand.com's zone as <sel>._domainkey.notify.
+        let _db = k2_core::db::scoped_for_test();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::upsert_binding(&conn, "brand.com", Some("zone-brand"), true).unwrap();
+        }
+        let (zone, writable, name, apex) = dkim_zone("notify.brand.com", "v1-ed25519-20261026").expect("bound");
+        assert_eq!(zone.as_deref(), Some("zone-brand"));
+        assert!(writable);
+        assert_eq!(name, "v1-ed25519-20261026._domainkey.notify");
+        assert_eq!(apex, "brand.com");
+        let (_, _, apex_name, _) = dkim_zone("brand.com", "s1").expect("bound");
+        assert_eq!(apex_name, "s1._domainkey", "the apex itself is unchanged");
+        assert!(dkim_zone("notify.other.org", "s1").is_err(), "no zone, no plant");
     }
 
     #[test]

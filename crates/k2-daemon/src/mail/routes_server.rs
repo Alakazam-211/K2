@@ -475,6 +475,12 @@ pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> 
 /// KEEP all data (owner-or-admin). The reply carries the loud §4.1
 /// warning: verified domains' MX records now point at a dead port.
 pub fn handle_server_disable(_body: &[u8]) -> CliResponse {
+    // Email Notifications (E4, Rosson R1): while a notification sender is
+    // hosted here, stopping the mail server stops K2's own resets; that
+    // is the owner's call, never a mail-manage agent's.
+    if let Err(resp) = crate::email_notify::fence::server_gate("stop the mail server") {
+        return resp;
+    }
     let Some(state) = supervisor::current_status() else {
         return err_json(
             "409 Conflict",
@@ -989,6 +995,14 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
                     return resp;
                 }
             }
+        }
+    }
+    // Email Notifications (E4, Rosson R1): a domain carrying a notification
+    // sender keeps its send mode unless the owner (or an Admin) changes it.
+    // Checked before anything here applies.
+    if let Some(domain) = b.domain.as_deref().filter(|_| b.send_mode.is_some()) {
+        if let Err(resp) = crate::email_notify::fence::domain_gate(domain, "change the send mode") {
+            return resp;
         }
     }
 

@@ -65,6 +65,7 @@ fn addr_error_response(err: AddrError) -> CliResponse {
         AddrError::NotFound(hint) => error_response("404 Not Found", "not_found", &hint),
         AddrError::Exists(hint) => error_response("409 Conflict", "exists", &hint),
         AddrError::CapReached(hint) => error_response("409 Conflict", "cap_reached", &hint),
+        AddrError::Reserved(hint) => error_response("409 Conflict", "reserved", &hint),
         AddrError::NotReady(hint) => {
             error_response("503 Service Unavailable", "not_ready", &hint)
         }

@@ -840,6 +840,10 @@ pub fn group_create_with(ctx: &Ctx<'_>, b: &GroupBody) -> CliResponse {
     if let Err(r) = group_collision(ctx, &dir, &local, &domain_id, &address) {
         return r;
     }
+    // Email Notifications (E2): a group never claims a sender's address.
+    if crate::email_notify::fence::reserved(&address) {
+        return crate::email_notify::fence::reserved_response(&address);
+    }
     let mail = b.mail.unwrap_or(false);
     let perms = group_permissions(mail);
     match ctx.api.group_create(&local, &domain_id, "k2 group (shared calendars)", perms.as_ref()) {

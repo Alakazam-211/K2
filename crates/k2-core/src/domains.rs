@@ -175,6 +175,45 @@ pub fn get_binding(conn: &Connection, apex: &str) -> rusqlite::Result<Option<Dom
     .optional()
 }
 
+/// The zone a DNS name lives in, out of `apexes`: the name itself, else the
+/// LONGEST apex it is a dot-suffix of (`notify.brand.com` under
+/// `brand.com`, never under `rand.com`). Returns `(apex, sub-labels)`,
+/// sub-labels empty for the apex itself (Email Notifications E11: a
+/// sending subdomain's DKIM and autoconfig rows go in its parent's zone).
+pub fn zone_for_name<'a>(name: &str, apexes: impl IntoIterator<Item = &'a str>) -> Option<(&'a str, String)> {
+    let n = name.trim().trim_end_matches('.').to_ascii_lowercase();
+    if n.is_empty() {
+        return None;
+    }
+    let mut best: Option<(&'a str, String)> = None;
+    for apex in apexes {
+        let a = apex.trim().trim_end_matches('.').to_ascii_lowercase();
+        if a.is_empty() {
+            continue;
+        }
+        let sub = if n == a {
+            String::new()
+        } else if let Some(prefix) = n.strip_suffix(&format!(".{a}")) {
+            prefix.to_string()
+        } else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(b, _)| a.len() > b.trim_end_matches('.').len()) {
+            best = Some((apex, sub));
+        }
+    }
+    best
+}
+
+/// [`zone_for_name`] over this box's domain bindings: the binding a mail
+/// domain's records go in, and the sub-labels to prefix record names with.
+pub fn binding_for_name(conn: &Connection, name: &str) -> rusqlite::Result<Option<(DomainBinding, String)>> {
+    let all = list_bindings(conn)?;
+    let Some((apex, sub)) = zone_for_name(name, all.iter().map(|b| b.apex.as_str())) else { return Ok(None) };
+    let apex = apex.to_string();
+    Ok(all.into_iter().find(|b| b.apex == apex).map(|b| (b, sub)))
+}
+
 pub fn get_binding_by_zone_id(conn: &Connection, zone_id: &str) -> rusqlite::Result<Option<DomainBinding>> {
     let z = zone_id.trim();
     if z.is_empty() {
@@ -373,6 +412,23 @@ mod tests {
 
     fn fresh() -> Connection {
         crate::db::isolated_test_connection()
+    }
+
+    /// Email Notifications E11: a sending subdomain's records go in the
+    /// longest bound zone it sits under, named relative to it.
+    #[test]
+    fn a_subdomain_finds_its_longest_bound_zone() {
+        let apexes = ["brand.com", "notify.brand.com.example", "rand.com", "deep.brand.com"];
+        assert_eq!(zone_for_name("notify.brand.com", apexes), Some(("brand.com", "notify".to_string())));
+        assert_eq!(zone_for_name("x.deep.brand.com.", apexes), Some(("deep.brand.com", "x".to_string())));
+        assert_eq!(zone_for_name("Brand.COM", apexes), Some(("brand.com", String::new())));
+        assert_eq!(zone_for_name("abrand.com", apexes), None, "a label boundary, not a string suffix");
+        assert_eq!(zone_for_name("", apexes), None);
+        let conn = fresh();
+        upsert_binding(&conn, "brand.com", Some("z1"), true).unwrap();
+        let (b, sub) = binding_for_name(&conn, "notify.brand.com").unwrap().expect("bound");
+        assert_eq!((b.apex.as_str(), sub.as_str()), ("brand.com", "notify"));
+        assert!(binding_for_name(&conn, "brand.org").unwrap().is_none());
     }
 
     #[test]

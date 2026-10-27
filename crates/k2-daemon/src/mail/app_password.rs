@@ -64,6 +64,7 @@ fn addr_error_response(err: AddrError) -> CliResponse {
         AddrError::NotFound(hint) => err_json("404 Not Found", "not_found", hint),
         AddrError::Exists(hint) => err_json("409 Conflict", "exists", hint),
         AddrError::CapReached(hint) => err_json("409 Conflict", "cap_reached", hint),
+        AddrError::Reserved(hint) => err_json("409 Conflict", "reserved", hint),
         AddrError::NotReady(hint) => err_json("503 Service Unavailable", "not_ready", hint),
         AddrError::Engine(hint) => err_json("502 Bad Gateway", "engine", hint),
     }

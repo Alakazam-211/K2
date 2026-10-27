@@ -105,6 +105,9 @@ pub enum AddrError {
     Exists(String),
     /// Over the active-address cap → 409 `cap_reached`, §11.1.5 text.
     CapReached(String),
+    /// A notification sender's address (Email Notifications E2) → 409
+    /// `reserved`.
+    Reserved(String),
     /// No mintable domain / pending with send unlocked → 503 `not_ready`.
     /// Pending + receive-only is mintable (mailboxes before NS cut).
     NotReady(String),
@@ -595,6 +598,11 @@ pub fn mint_address(
         // Collision pre-check — ANY status (retired rows reserve their
         // address string); the UNIQUE constraint backstops the race.
         let address = format!("{local}@{}", domain_row.domain);
+        // Email Notifications (E2): a notification sender's address, live
+        // or still reserved, is never a mailbox.
+        if crate::email_notify::fence::reserved_conn(&conn, &address) {
+            return Err(AddrError::Reserved(crate::email_notify::fence::reserved_hint(&address)));
+        }
         if let Some(holder) = load_address(&conn, &address) {
             return Err(collision_error(
                 &address,

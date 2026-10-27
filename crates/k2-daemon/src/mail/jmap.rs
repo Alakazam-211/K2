@@ -5244,6 +5244,244 @@ fn parse_submission_created(reply: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+// ── Email Notifications (prd-email-notifications-core-v1 E3, E5, E8) ──
+
+/// Permissions a notification sender's account has OFF (E3): no login as
+/// the sender over any protocol, and no submission of its own.
+/// ✔ LIVE-VERIFIED v0.16.25 (N0 spike, 2026-10-26, k2-soak netns): these
+/// exact camelCase names are accepted; with them off (and no credential at
+/// all) SMTP AUTH answers 535/550, IMAP and POP3 refuse, JMAP Basic is
+/// 401/403, while delegated submission by the admin-role service account
+/// (module header item 6) still works, `emailSend` off included (Stalwart
+/// checks the caller's permissions). `authenticateOauth`,
+/// `smtpAuthenticate`, `jmapAuthenticate` and `davAuthenticate` do NOT
+/// exist in 0.16.25: one unknown name fails the whole create with
+/// `invalidPatch`, so never add a name without a live check.
+pub const SENDER_DISABLED_PERMISSIONS: &[&str] = &[
+    "authenticate",
+    "authenticateWithAlias",
+    "imapAuthenticate",
+    "pop3Authenticate",
+    "sieveAuthenticate",
+    "emailSend",
+];
+
+/// A sender account's quotas: a mailbox for DSNs only (E3).
+pub const SENDER_MAX_EMAILS: u64 = 1_000;
+pub const SENDER_MAX_DISK_BYTES: u64 = 50 * 1024 * 1024;
+
+/// The `permissions` object a sender account is created with.
+pub fn sender_permissions() -> serde_json::Value {
+    let mut off = serde_json::Map::new();
+    for p in SENDER_DISABLED_PERMISSIONS {
+        off.insert((*p).to_string(), serde_json::Value::Bool(true));
+    }
+    serde_json::json!({ "@type": "Merge", "enabledPermissions": {}, "disabledPermissions": off })
+}
+
+/// The one JMAP request a notification send makes (E8): `Email/set`
+/// create in `mailbox_id` + `EmailSubmission/set` with an explicit
+/// envelope whose `mailFrom` carries the RFC 3461 parameters
+/// (`RET=HDRS`: a bounce carries headers only, never a reset link back
+/// into a mailbox; `ENVID` = K2's log id), and `onSuccessDestroyEmail`
+/// when `destroy_copy` (no stored copy, E7). The agent path's
+/// [`submission_request`] is not changed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn notify_submission_request(
+    account_id: &str,
+    identity_id: &str,
+    mailbox_id: &str,
+    from_email: &str,
+    rcpt_to: &[String],
+    email_create: serde_json::Value,
+    mail_from_params: Option<&serde_json::Value>,
+    destroy_copy: bool,
+) -> serde_json::Value {
+    let mut body = submission_request(account_id, identity_id, mailbox_id, from_email, rcpt_to, email_create, destroy_copy);
+    if let Some(p) = mail_from_params.filter(|p| p.as_object().is_some_and(|o| !o.is_empty())) {
+        body["methodCalls"][1][1]["create"][SUBMIT_SUB_TAG]["envelope"]["mailFrom"]["parameters"] = p.clone();
+    }
+    body
+}
+
+/// Is a message summary a delivery report (a DSN/ARF the sweep counts as
+/// a bounce hint, E5)? From the envelope only, never the body.
+pub(crate) fn looks_like_dsn(from: &str, subject: &str) -> bool {
+    let f = from.to_ascii_lowercase();
+    let s = subject.to_ascii_lowercase();
+    f.starts_with("mailer-daemon@")
+        || f.starts_with("postmaster@")
+        || s.starts_with("undelivered")
+        || s.starts_with("delivery status notification")
+        || s.contains("delivery failure")
+        || s.starts_with("returned mail")
+        || s.starts_with("failure notice")
+        // ✔ LIVE (N0 P4): Stalwart 0.16.25's own DSN subject.
+        || s.starts_with("failed to deliver message")
+}
+
+/// The `x:Account/set` create object for a notification sender (E3):
+/// a `User` with NO `credentials` (✔ LIVE-VERIFIED v0.16.25, N0: accepted,
+/// `x:Account/get` then shows `"credentials": {}`), login and submission
+/// permissions off, a DSN-sized quota. Stalwart names the account's
+/// Identity after `description`; K2 stamps the From name per message.
+pub fn sender_account_object(local_part: &str, stalwart_domain_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "@type": "User",
+        "name": local_part,
+        "domainId": stalwart_domain_id,
+        "description": "K2 Email Notifications sender",
+        "quotas": { "maxDiskQuota": SENDER_MAX_DISK_BYTES, "maxEmails": SENDER_MAX_EMAILS },
+        "permissions": sender_permissions(),
+    })
+}
+
+/// The id of the Email a combined submit created (`Email/set` `k2out`),
+/// if it did.
+fn submitted_email_id(reply: &serde_json::Value) -> Option<String> {
+    reply.get("methodResponses")?.as_array()?.iter().find_map(|entry| {
+        let arr = entry.as_array()?;
+        if arr.first()?.as_str()? != "Email/set" {
+            return None;
+        }
+        arr.get(1)?.get("created")?.get(SUBMIT_EMAIL_TAG)?.get("id")?.as_str().map(str::to_string)
+    })
+}
+
+impl StalwartClient {
+    /// E3: create a notification sender's account ([`sender_account_object`]):
+    /// no credential at all, so nothing secret exists to keep or leak.
+    /// Returns the account id.
+    pub fn sender_account_create(&self, local_part: &str, stalwart_domain_id: &str) -> Result<String, String> {
+        let args = serde_json::json!({ "create": { CREATE_TAG: sender_account_object(local_part, stalwart_domain_id) } });
+        let resp = self.registry_call("x:Account/set", args)?;
+        parse_set_created_id("x:Account/set", &resp)
+    }
+
+    /// E8: submit one notification as `account_id` by delegation (the
+    /// service ApiKey; the sender's own secret is never used). Accepted =
+    /// Ok; never "delivered".
+    #[allow(clippy::too_many_arguments)]
+    pub fn submission_send_envelope(
+        &self,
+        account_id: &str,
+        from_email: &str,
+        rcpt_to: &[String],
+        email_create: serde_json::Value,
+        mail_from_params: Option<&serde_json::Value>,
+        destroy_copy: bool,
+    ) -> Result<(), String> {
+        if rcpt_to.is_empty() {
+            return Err("submission: empty rcptTo".to_string());
+        }
+        let identity_id = self.identity_id_for(account_id, from_email)?;
+        let mailbox_id = match self.mailbox_role_id(account_id, "drafts")? {
+            Some(id) => id,
+            None => self.mailbox_inbox_id(account_id)?,
+        };
+        let body = notify_submission_request(account_id, &identity_id, &mailbox_id, from_email, rcpt_to, email_create, mail_from_params, destroy_copy);
+        let api_url = self.discover_api_url()?;
+        let reply = self.post_json_url(&api_url, &body)?;
+        if let Err(e) = parse_submission_created(&reply) {
+            // ✔ LIVE (N0 P6): a refused EmailSubmission leaves the created
+            // Email, body included, in Drafts. Destroy it now (the sweep
+            // is the backstop).
+            if let Some(id) = submitted_email_id(&reply) {
+                if let Err(d) = self.mail_call(account_id, "Email/set", serde_json::json!({ "destroy": [id] })) {
+                    return Err(format!("{e} (and its draft copy wasn't destroyed: {d})"));
+                }
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// E5: destroy every message in `account_id` received before
+    /// `before_rfc3339` (DSNs, ARF reports, replies to a no-reply address).
+    /// Returns `(destroyed, delivery reports among them)`. Bodies are never
+    /// read: only `from` and `subject` to count reports.
+    pub fn email_sweep_older_than(&self, account_id: &str, before_rfc3339: &str) -> Result<(u64, u64), String> {
+        let mut destroyed = 0u64;
+        let mut dsns = 0u64;
+        // Bounded: at most 20 pages of 200 per sweep (a sender mailbox
+        // holds at most SENDER_MAX_EMAILS anyway).
+        for _ in 0..20 {
+            let ids = self.email_query_ids(account_id, serde_json::json!({ "before": before_rfc3339 }), 200, 0)?;
+            if ids.is_empty() {
+                break;
+            }
+            let summaries = self.email_get_summaries(account_id, &ids)?;
+            dsns += summaries
+                .iter()
+                .filter(|s| looks_like_dsn(s.from.first().map(|a| a.email.as_str()).unwrap_or(""), &s.subject))
+                .count() as u64;
+            let args = self.mail_call(account_id, "Email/set", serde_json::json!({ "destroy": ids }))?;
+            let gone = args.get("destroyed").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0) as u64;
+            destroyed += gone;
+            if gone == 0 {
+                return Err("sweep: Email/set destroyed nothing".to_string());
+            }
+        }
+        Ok((destroyed, dsns))
+    }
+}
+
+#[cfg(test)]
+mod notify_tests {
+    use super::*;
+
+    #[test]
+    fn a_sender_account_has_no_credential_and_its_logins_off() {
+        let v = sender_account_object("noreply", "d1");
+        assert!(v.get("credentials").is_none(), "no credential at all (E3): {v}");
+        assert_eq!(v["@type"], "User");
+        assert_eq!(v["quotas"]["maxEmails"], 1000);
+        let off = v["permissions"]["disabledPermissions"].as_object().expect("map");
+        for p in ["authenticate", "authenticateWithAlias", "imapAuthenticate", "pop3Authenticate", "sieveAuthenticate", "emailSend"] {
+            assert_eq!(off.get(p), Some(&serde_json::json!(true)), "{p}");
+        }
+        for bad in ["authenticateOauth", "smtpAuthenticate", "jmapAuthenticate", "davAuthenticate", "emailReceive"] {
+            assert!(off.get(bad).is_none(), "{bad} is not a 0.16.25 name or must stay on");
+        }
+    }
+
+    #[test]
+    fn the_envelope_carries_ret_hdrs_and_the_copy_is_destroyed() {
+        let params = serde_json::json!({ "RET": "HDRS", "ENVID": "enl_1" });
+        let body = notify_submission_request(
+            "acct",
+            "ident",
+            "drafts",
+            "noreply@brand.test",
+            &["a@x.test".to_string()],
+            serde_json::json!({ "subject": "s" }),
+            Some(&params),
+            true,
+        );
+        let sub = &body["methodCalls"][1][1];
+        assert_eq!(sub["create"]["k2sub"]["envelope"]["mailFrom"]["email"], "noreply@brand.test");
+        assert_eq!(sub["create"]["k2sub"]["envelope"]["mailFrom"]["parameters"], params);
+        assert_eq!(sub["onSuccessDestroyEmail"], serde_json::json!(["#k2sub"]));
+        assert_eq!(body["methodCalls"][0][1]["create"]["k2out"]["mailboxIds"]["drafts"], true);
+        let plain = notify_submission_request("a", "i", "m", "f@x.test", &["a@x.test".to_string()], serde_json::json!({}), None, false);
+        assert!(plain["methodCalls"][1][1]["create"]["k2sub"]["envelope"]["mailFrom"].get("parameters").is_none());
+        assert!(plain["methodCalls"][1][1].get("onSuccessDestroyEmail").is_none());
+    }
+
+    #[test]
+    fn a_refused_submission_names_the_draft_to_destroy() {
+        let reply = serde_json::json!({ "methodResponses": [
+            ["Email/set", { "created": { "k2out": { "id": "e42" } } }, "0"],
+            ["EmailSubmission/set", { "notCreated": { "k2sub": { "type": "forbiddenFrom" } } }, "1"],
+        ]});
+        assert!(parse_submission_created(&reply).is_err());
+        assert_eq!(submitted_email_id(&reply).as_deref(), Some("e42"));
+        assert!(looks_like_dsn("MAILER-DAEMON@box.test", "Failed to deliver message"));
+        assert!(looks_like_dsn("x@y.test", "Undelivered Mail Returned to Sender"));
+        assert!(!looks_like_dsn("person@y.test", "Re: your order"));
+    }
+}
+
 /// Percent-encode one URI component (RFC 3986 unreserved passthrough).
 fn encode_uri_component(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

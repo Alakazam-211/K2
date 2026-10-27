@@ -298,6 +298,10 @@ pub fn handle_list_create(body: &[u8]) -> CliResponse {
     if let Err(r) = collision_user(&address) {
         return r;
     }
+    // Email Notifications (E2): a list never claims a sender's address.
+    if crate::email_notify::fence::reserved(&address) {
+        return crate::email_notify::fence::reserved_response(&address);
+    }
     let (_local, domain) = match split_list_addr(&address) {
         Ok(v) => v,
         Err(r) => return r,

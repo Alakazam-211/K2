@@ -34,6 +34,23 @@ fn require_id(body: &[u8]) -> Result<String, CliResponse> {
         })
 }
 
+/// Email Notifications (E4, Rosson R1): dropping or retrying a queued
+/// notification (a reset in flight) is the owner's or an Admin's. A
+/// mail-manage agent gets `owner_only`; an unreadable queue row refuses
+/// (fail-closed).
+fn notification_gate(engine: &crate::mail::jmap::StalwartClient, id: &str, what: &str) -> Result<(), CliResponse> {
+    if !crate::mail::agent_creds::mail_caller().is_agent() {
+        return Ok(());
+    }
+    let rows = engine
+        .queued_message_get(&[id.to_string()])
+        .map_err(|e| err_json("502 Bad Gateway", "engine", e))?;
+    if rows.iter().any(|m| crate::email_notify::fence::is_notification(m.return_path.as_deref())) {
+        return Err(crate::email_notify::fence::owner_only(what));
+    }
+    Ok(())
+}
+
 fn now_utc_date() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
@@ -52,15 +69,27 @@ pub fn handle_queue_get(_params: &HashMap<String, String>) -> CliResponse {
         Ok(r) => r,
         Err(e) => return err_json("502 Bad Gateway", "engine", e),
     };
+    // Email Notifications (E4): a notification's recipients are the
+    // owner's to see; anyone else gets the count only.
+    let owner = !crate::mail::agent_creds::mail_caller().is_agent();
     let messages: Vec<serde_json::Value> = rows
         .iter()
         .map(|m| {
-            serde_json::json!({
+            let mut v = serde_json::json!({
                 "id": m.id,
                 "nextRetry": m.next_retry,
                 "returnPath": m.return_path,
                 "recipients": m.recipients,
-            })
+            });
+            if crate::email_notify::fence::is_notification(m.return_path.as_deref()) {
+                v["notification"] = serde_json::json!(true);
+                if !owner {
+                    v["recipientCount"] = serde_json::json!(crate::email_notify::fence::count_recipients(&m.recipients));
+                    v["recipients"] = serde_json::json!({});
+                    v["redacted"] = serde_json::json!(true);
+                }
+            }
+            v
         })
         .collect();
     CliResponse::ok_json(
@@ -82,6 +111,9 @@ pub fn handle_retry(body: &[u8]) -> CliResponse {
         Ok(e) => e,
         Err(r) => return r,
     };
+    if let Err(r) = notification_gate(&engine, &id, "retry a queued notification") {
+        return r;
+    }
     let next = now_utc_date();
     if let Err(e) = engine.queued_message_retry(&id, &next) {
         return err_json("502 Bad Gateway", "engine", e);
@@ -107,6 +139,9 @@ pub fn handle_drop(body: &[u8]) -> CliResponse {
         Ok(e) => e,
         Err(r) => return r,
     };
+    if let Err(r) = notification_gate(&engine, &id, "drop a queued notification") {
+        return r;
+    }
     if let Err(e) = engine.queued_message_destroy(&id) {
         return err_json("502 Bad Gateway", "engine", e);
     }

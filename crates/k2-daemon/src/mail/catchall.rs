@@ -108,6 +108,11 @@ pub fn handle_catchall_post(body: &[u8]) -> CliResponse {
         None
     } else {
         let raw = address_field.and_then(|v| v.as_str()).unwrap_or("").trim();
+        // Email Notifications (E2): a sender's mailbox never takes mail
+        // for other addresses.
+        if crate::email_notify::fence::reserved(raw) {
+            return crate::email_notify::fence::reserved_response(raw);
+        }
         let dest = match authorize_mailbox(raw) {
             Ok(r) => r,
             Err(resp) => {

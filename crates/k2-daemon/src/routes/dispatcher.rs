@@ -7310,6 +7310,42 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Email Notifications (prd-email-notifications-core-v1, 0.46.5):
+        // `k2 notifications email …` (owner/Admins) and `k2 app email …`
+        // (owner, Admins, the App's agent). Caller rules live in the
+        // handlers; every mutation is POST-only.
+        p if crate::email_notify::owner_routes::is_route(p) || crate::email_notify::app_routes::is_route(p) => {
+            let post_route = crate::email_notify::owner_routes::is_post_route(p) || crate::email_notify::app_routes::is_post_route(p);
+            if post_route && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::email_notify::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::email_notify::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                if crate::email_notify::owner_routes::is_route(&p_owned) {
+                    crate::email_notify::owner_routes::handle(&p_owned, who, is_post, &body_bytes, &params)
+                } else {
+                    crate::email_notify::app_routes::handle(&p_owned, who, is_post, &body_bytes, &params)
+                }
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // RS-A15 (0.46.1): the owner's per-App grants and guest rooms over
         // the CLI. Not behind the preview flag (every published service).
         // Caller rules live in the handler.
@@ -10140,6 +10176,46 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Email Notifications (0.46.5): the App's own `email.send/status/log`
+        // on its link (its pass with email:send; the handler checks).
+        p if crate::email_notify::link_routes::PASS_ROUTES.contains(&p) => {
+            if crate::email_notify::link_routes::POST_ROUTES.contains(&p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::email_notify::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::email_notify::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let presented = super::http::extract_token(&query);
+            let r = match presented {
+                None => crate::email_notify::link_routes::pass_required(),
+                Some(t) if k2_core::skin::is_skin_token(t) => match crate::apps::gateway::resolve_pass(t) {
+                    Some(pass) => {
+                        let route = p.to_string();
+                        let params = super::http::parse_params(&path, &query);
+                        // The link's App, read on this task (task-local).
+                        let link_app = crate::apps::gateway::current().map(|l| l.service_id.clone());
+                        tokio::task::spawn_blocking(move || {
+                            crate::email_notify::link_routes::handle_pass(&route, &pass, link_app.as_deref(), is_post, &body, &params)
+                        })
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                    None => crate::skin_routes::revoked_skin_response(),
+                },
+                Some(_) => crate::email_notify::link_routes::not_a_pass(),
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         crate::app_mobile_routes::ACCESS => {
             let _ = stream.read(&mut buf).await;
             let r = if super::http::owner_role_identity(&query, state.token.as_str()).is_some() {
@@ -11365,7 +11441,7 @@ async fn handle_one_request(
         // past the handler's uniform 404.
         p if crate::apps::app_key_routes::is_route(p) => {
             let body = if is_post {
-                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::apps::app_key_routes::MAX_BODY).await {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::apps::app_key_routes::body_cap(p)).await {
                     Ok(b) => b,
                     Err(_) => {
                         let r = crate::apps::app_key_routes::too_large();

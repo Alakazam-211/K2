@@ -1553,6 +1553,11 @@ async fn async_main() {
         }
     });
 
+    // Email Notifications (prd-email-notifications-core-v1 §5.2, E5, E22):
+    // scheduled sends every 15 s; sender-mailbox sweep, log retention,
+    // idempotency keys and retired addresses hourly. Headless.
+    crate::email_notify::sweep::spawn();
+
     // prd-custom-app-push-v1 CP6: push devices whose pass or device
     // sign-in expired without a revoke. First pass ~6 min after boot,
     // then hourly.

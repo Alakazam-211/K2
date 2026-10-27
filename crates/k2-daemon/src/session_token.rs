@@ -573,6 +573,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // passes and people (contract-app-room-stream-0463 §1: a passport
         // is 403). A WebSocket, never a cell-socket GET.
         "/cli/thread/stream",
+        // Email Notifications (0.46.5): senders, the system sender, relays
+        // and their settings are the owner's and Admins' (the handlers
+        // refuse every passport too). `k2 app email` is under `/cli/app/`.
+        "/cli/notifications/",
         // Folder trust (SS10): the owner decides; agents only ask.
         "/cli/folder-trust/decide",
         "/cli/folder-trust/reset",

@@ -161,6 +161,10 @@ pub fn handle_alias_add(body: &[u8]) -> CliResponse {
             format!("'{alias}' is already a minted mailbox"),
         );
     }
+    // Email Notifications (E2): no alias may claim a sender's address.
+    if crate::email_notify::fence::reserved(&alias) {
+        return crate::email_notify::fence::reserved_response(&alias);
+    }
     let account_id = match account_id_of(&row, &row.address) {
         Ok(id) => id,
         Err(resp) => return resp,

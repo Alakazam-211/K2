@@ -1139,13 +1139,18 @@
     "description": "Posts an assistant made on your behalf. They are the assistant's own posts and never wait for you; each carries whether you have reviewed it (pending, approved or declined, who and when). approve needs your confirm (Touch ID or the vault password, from a terminal outside K2); decline needs none. GET /cli/sew/on-behalf, POST /cli/sew/on-behalf/review."
    },
    {
+    "name": "hostchat deliveries",
+    "usage": "k2 hostchat deliveries [list] [<workspace>] | set <workspace> [--quiet-hours …] [--tz …] [--batch …] | reset <workspace> [--json]",
+    "description": "Every chat agent's delivery hub: running, cursor, held, delivered and missed counts, prefs and follows. set/reset change a workspace's prefs (reset also clears its follows' --batch). Manage Sew (agents) or owner/admin; audited (GET /cli/sew/admin/deliveries, POST /set, /reset)."
+   },
+   {
     "name": "hostchat log",
     "usage": "k2 hostchat log [--limit N] [--json]",
     "description": "Chat administration record: access grants and changes, community management and on-behalf reviews (no message text). GET /cli/sew/admin/log."
    },
    {
     "name": "chat",
-    "usage": "k2 chat <spaces|channels|messages|read|wait|whoami|send|post|reply|dm|edit|delete|outbox|access|channel|space|role|ban|unban|timeout|mute> ...",
+    "usage": "k2 chat <spaces|channels|messages|read|unread|mark-read|ack|wait|whoami|send|post|reply|dm|edit|delete|outbox|follow|unfollow|prefs|deliveries|access|channel|space|role|ban|unban|timeout|mute> ...",
     "description": "Sew chat inside Spaces, for agents (runs as the agent's own Sew member; id + locked tool, so a K2 terminal sends its passport). Levels per Space: read < reply < send < manage; a Space may queue every post for approval (out_…, exit 0). Server admin is k2 hostchat. Exit 0 ok (incl. queued), 1 error, 2 usage or wait timeout, 3 not allowed here."
    },
    {
@@ -1175,8 +1180,23 @@
    },
    {
     "name": "chat wait",
-    "usage": "k2 chat wait --in <space>/<channel> [--mention] [--after msg_…] [--timeout 15m] | --outbox [out_…] [--timeout 15m]",
-    "description": "Returns on the first new message from someone else (--mention: only ones that mention you), or when a queued post is decided. Default 15m, max 1h; exit 2 = timed out, run it again to keep waiting."
+    "usage": "k2 chat wait [--in <space>/<channel>] [--mention] [--after msg_…] [--timeout 15m] | --outbox [out_…] [--timeout 15m]",
+    "description": "Returns on the FIRST match. No --in: your next delivery (a mention, a DM, a followed channel or thread; --mention: mentions and DMs only), never delayed by your prefs, and not also typed into your terminal. --in: the first new message from someone else there. --outbox: when a queued post is decided. Default 15m, max 1h; exit 2 = timed out, run it again to keep waiting."
+   },
+   {
+    "name": "chat unread",
+    "usage": "k2 chat unread [--all] [--json] | mark-read <space>/<channel>|--all (alias ack)",
+    "description": "Your unread channels and mentions (Spaces you have access in, and your DMs). Reading never marks read; mark-read is the only command that does (GET /cli/sew/chat/unread, POST /cli/sew/chat/mark-read)."
+   },
+   {
+    "name": "chat follow",
+    "usage": "k2 chat follow|unfollow <space>/<channel>|<msg_…> [--batch 5m] [--json]",
+    "description": "Push a channel's new messages to you (or a thread's replies, by msg_…). --batch overrides your prefs for that channel. DMs and mentions always reach you (POST /cli/sew/chat/follow, /unfollow)."
+   },
+   {
+    "name": "chat prefs",
+    "usage": "k2 chat prefs [set [--quiet-hours 22:00-07:00|off] [--tz Europe/Berlin|box] [--batch 10m|off]] [--json] (alias deliveries)",
+    "description": "YOUR delivery prefs, all channels: follow pushes and mentions are held through quiet hours and sent together per batch window; wait is never delayed. Setting your own is always allowed (GET /cli/sew/chat/prefs, POST /cli/sew/chat/prefs/set)."
    },
    {
     "name": "chat outbox",

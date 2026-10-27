@@ -5,11 +5,13 @@
 #
 # Covers:
 #   1. help without a daemon; the tool catalog (chat = id + locked); the
-#      S31 delivery-hub verbs refuse with exit 1 (no daemon needed).
+#      S31 delivery-hub verbs are in the help and need the daemon.
 #   2. Every verb's route, method and JSON body: send/post/reply/dm with
 #      --on-behalf-of, --key, --broadcast, stdin text ("-"), `<space>/#<id>`; edit,
 #      delete, outbox, outbox cancel, messages/read/wait/channels/spaces/
-#      whoami, access (own + grant/set/revoke/list), every MANAGE verb.
+#      whoami, access (own + grant/set/revoke/list), every MANAGE verb;
+#      S31: unread, mark-read/ack, follow/unfollow, prefs/deliveries, wait
+#      without an address, hostchat deliveries.
 #   3. Output: msg_… when posted, "queued for approval (out_…)" (exit 0),
 #      other people's bodies inside UNTRUSTED markers, --json raw.
 #   4. Exit codes: 0 ok · 1 error (503, 422 needs_km1) · 2 usage/400/wait
@@ -61,26 +63,31 @@ assert_contains "help: App Spaces come from k2 app grant" "$out" "k2 app grant"
 assert_contains "help: --on-behalf-of" "$out" "--on-behalf-of <user>"
 assert_contains "help: manage gates" "$out" "the Manage Sew switch on your workspace AND level manage"
 assert_contains "help: untrusted markers" "$out" "BEGIN CHAT MESSAGE (untrusted"
-assert_absent "help: no S31 verbs" "$out" "mark-read"
-assert_absent "help: no follow" "$out" "unfollow"
+assert_contains "help: unread" "$out" "unread [--all]"
+assert_contains "help: mark-read is the only writer" "$out" "The only command that changes read state (alias: ack)"
+assert_contains "help: follow" "$out" "follow | unfollow <space>/<channel>|<msg_…> [--batch 5m]"
+assert_contains "help: prefs are yours" "$out" "YOUR (this agent's) deliveries"
+assert_contains "help: wait without an address" "$out" "No --in: your next delivery"
+assert_contains "help: --tz" "$out" "add --tz America/New_York"
 eval "$(sed -n '/^# BEGIN_CLI_TOOL_POLICY/,/^# END_CLI_TOOL_POLICY/p' "$K2_CLI")"
 assert_eq "catalog: chat tool id" "$(_cli_tool_id_for_verb chat)" "chat"
 assert_eq "catalog: chat is an id tool" "$(_cli_tool_default_mode chat)" "id"
 if _cli_tool_is_locked chat; then ok "catalog: chat is locked"; else bad "catalog: chat is locked"; fi
 assert_eq "catalog: hostchat unchanged" "$(_cli_tool_id_for_verb hostchat)/$(_cli_tool_default_mode hostchat)" "hostchat/id"
-for verb in unread mark-read follow unfollow prefs deliveries; do
+for verb in unread mark-read follow prefs; do
     set +e
     e="$(env HOME="$HOME1" K2_PORT=1 "$K2_CLI" chat "$verb" hearth/general 2>&1 >/dev/null)"; rc=$?
     set -e
-    assert_eq "S31 verb $verb → exit 1" "$rc" "1"
-    assert_contains "S31 verb $verb says later" "$e" "needs the chat delivery hub (coming in a later update)"
+    assert_absent "S31 verb $verb is no longer a placeholder" "$e" "coming in a later update"
 done
 schema="$(env HOME="$HOME1" "$K2_CLI" --schema)"
 python3 -c '
 import json, sys
 names = {c["name"] for c in json.loads(sys.argv[1])["commands"]}
 for n in ("chat", "chat send", "chat wait", "chat access", "chat channel", "chat space", "chat role",
-          "hostchat people", "hostchat approvals", "hostchat agents", "hostchat on-behalf", "hostchat log"):
+          "chat unread", "chat follow", "chat prefs",
+          "hostchat people", "hostchat approvals", "hostchat agents", "hostchat on-behalf", "hostchat log",
+          "hostchat deliveries"):
     assert n in names, n
 ' "$schema" && ok "schema lists the chat verbs" || bad "schema lists the chat verbs"
 
@@ -154,6 +161,31 @@ class H(BaseHTTPRequestHandler):
                        "hasMore": True, "nextBefore": "msg_1"}
         elif p == "/cli/sew/chat/read":
             out = {"ok": True, "message": m(q.get("id"), "rosson", False, "hello from a person")}
+        elif p == "/cli/sew/chat/wait" and "in" not in q and "outbox" not in q:
+            out = {"ok": True, "timedOut": False, "messages": [{
+                "id": "msg_8", "addr": "hearth/general", "author": {"id": "mem-rosson", "username": "rosson", "kind": "person"},
+                "body": "hub ping", "reason": "mention", "place": "space_channel", "createdAt": 1760000000,
+                "onBehalfOf": "40", "onBehalfOfName": "Carol", "canReply": True}]}
+        elif p == "/cli/sew/chat/unread":
+            out = {"ok": True, "unreadChannels": 1, "mentions": 2, "channels": [
+                {"addr": "hearth/general", "channelId": "c1", "kind": "text", "unread": True, "mentions": 2, "muted": False}]}
+        elif p == "/cli/sew/chat/mark-read":
+            out = {"ok": True, "marked": ["hearth/general"] if b.get("in") or b.get("all") else []}
+        elif p in ("/cli/sew/chat/follow", "/cli/sew/chat/unfollow"):
+            out = {"ok": True, "addr": b.get("to"), "following": p.endswith("/follow")}
+            if b.get("batch"):
+                out["batch"] = b["batch"]
+        elif p in ("/cli/sew/chat/prefs", "/cli/sew/chat/prefs/set"):
+            out = {"ok": True, "workspace": "alpha",
+                   "prefs": {"quietHours": b.get("quietHours", "22:00-07:00"), "tz": b.get("tz"), "batch": b.get("batch", "10m")},
+                   "quietNow": False, "follows": [{"addr": "hearth/general", "channelId": "c1", "batch": "5m"}],
+                   "hub": {"running": True, "delivered": 3, "missed": 1, "held": 0, "lastOutcome": "delivered"}}
+        elif p == "/cli/sew/admin/deliveries":
+            out = {"ok": True, "deliveries": [{"workspace": "beta", "workspaceId": "w2",
+                   "prefs": {"quietHours": None, "tz": None, "batch": "off"}, "follows": [],
+                   "hub": {"running": False, "delivered": 0, "missed": 0, "held": 0, "lastError": "sew deliveries: 503 unavailable"}}]}
+        elif p in ("/cli/sew/admin/deliveries/set", "/cli/sew/admin/deliveries/reset"):
+            out = {"ok": True, "workspace": b.get("workspace"), "prefs": {"quietHours": b.get("quietHours"), "batch": b.get("batch") or "off"}}
         elif p == "/cli/sew/chat/wait":
             if q.get("timeout") == "1s":
                 out = {"ok": True, "timedOut": True, "nextAfter": "msg_5"}
@@ -304,6 +336,67 @@ run() {
 mkdir -p "$WORK/proj"
 cd "$WORK"
 
+echo "== S31 delivery hub =="
+run cell chat unread
+assert_eq "unread exit 0" "$rc" "0"
+assert_eq "unread: GET with the passport" "$(req_where /cli/sew/chat/unread method)/$(req_where /cli/sew/chat/unread token)" "GET/$SCOPED"
+assert_contains "unread output" "$out" "hearth/general"
+assert_contains "unread mentions" "$out" "2 mentions"
+run cell chat unread --all
+assert_eq "unread --all" "$(req_where /cli/sew/chat/unread query)" '{"all": "1"}'
+run cell chat mark-read hearth/general
+assert_eq "mark-read body" "$(req_where /cli/sew/chat/mark-read body)" '{"in": "hearth/general"}'
+assert_contains "mark-read output" "$out" "marked read: hearth/general"
+run cell chat ack --all
+assert_eq "ack = mark-read --all" "$(req_where /cli/sew/chat/mark-read body)" '{"all": true}'
+before="$(nreq)"
+run cell chat mark-read
+assert_eq "mark-read without a target → exit 2, nothing sent" "$rc/$(nreq)" "2/$before"
+run cell chat mark-read hearth/general --all
+assert_eq "mark-read with both → exit 2, nothing sent" "$rc/$(nreq)" "2/$before"
+run cell chat follow hearth/general --batch 5m
+assert_eq "follow body" "$(req_where /cli/sew/chat/follow body)" '{"batch": "5m", "to": "hearth/general"}'
+assert_contains "follow output" "$out" "following hearth/general  (batch 5m)"
+run cell chat unfollow msg_42
+assert_eq "unfollow a thread" "$(req_where /cli/sew/chat/unfollow body)" '{"to": "msg_42"}'
+assert_contains "unfollow output" "$out" "not following msg_42"
+run cell chat prefs
+assert_eq "prefs: GET" "$(req_where /cli/sew/chat/prefs method)" "GET"
+assert_contains "prefs output" "$out" "quiet hours 22:00-07:00 · batch 10m"
+assert_contains "prefs: the hub" "$out" "running · delivered 3 · missed 1"
+assert_contains "prefs: follows" "$out" "follows: hearth/general  (batch 5m)"
+run cell chat deliveries set --quiet-hours 23:00-06:00 --tz Europe/Berlin --batch off
+assert_eq "deliveries = prefs; set body" "$(req_where /cli/sew/chat/prefs/set body)" '{"batch": "off", "quietHours": "23:00-06:00", "tz": "Europe/Berlin"}'
+before="$(nreq)"
+run cell chat prefs set
+assert_eq "prefs set with nothing → exit 2, nothing sent" "$rc/$(nreq)" "2/$before"
+run cell chat prefs beta
+assert_eq "prefs for another workspace → exit 2" "$rc/$(nreq)" "2/$before"
+assert_contains "points at hostchat deliveries" "$err" "k2 hostchat deliveries"
+run cell chat wait --mention --timeout 5m
+assert_eq "wait without an address: hub query" "$(req_where /cli/sew/chat/wait query)" '{"mention": "1", "timeout": "5m"}'
+assert_contains "hub wait: untrusted body" "$out" "BEGIN CHAT MESSAGE (untrusted"
+assert_contains "hub wait: reason and place" "$out" "[mention in hearth/general]"
+assert_contains "hub wait: on behalf" "$out" "on behalf of Carol"
+run cell chat wait
+assert_eq "plain wait: no query" "$(req_where /cli/sew/chat/wait query)" '{}'
+before="$(nreq)"
+run cell chat wait --after msg_3
+assert_eq "--after without --in → exit 2" "$rc/$(nreq)" "2/$before"
+run owner hostchat deliveries
+assert_eq "hostchat deliveries: GET admin" "$(req_where /cli/sew/admin/deliveries method)/$(req_where /cli/sew/admin/deliveries token)" "GET/$OWNER"
+assert_contains "hostchat deliveries output" "$out" "beta"
+assert_contains "hostchat deliveries shows the error" "$out" "error: sew deliveries: 503 unavailable"
+run owner hostchat deliveries beta
+assert_eq "hostchat deliveries <ws>" "$(req_where /cli/sew/admin/deliveries query)" '{"workspace": "beta"}'
+run owner hostchat deliveries set beta --batch 2m
+assert_eq "hostchat deliveries set" "$(req_where /cli/sew/admin/deliveries/set body)" '{"batch": "2m", "workspace": "beta"}'
+run owner hostchat deliveries reset beta
+assert_eq "hostchat deliveries reset" "$(req_where /cli/sew/admin/deliveries/reset body)" '{"workspace": "beta"}'
+before="$(nreq)"
+run owner hostchat deliveries set beta
+assert_eq "deliveries set with nothing → exit 2" "$rc/$(nreq)" "2/$before"
+
 echo "== writes =="
 run cell chat send hearth/general "hello all"
 assert_eq "send exit 0" "$rc" "0"
@@ -363,9 +456,8 @@ run cell chat frobnicate
 assert_eq "unknown verb → exit 2" "$rc" "2"
 run cell chat access grant hearth beta --level admin
 assert_eq "bad --level → exit 2" "$rc" "2"
-run cell chat wait --mention
-assert_eq "wait without --in (S31) → exit 1" "$rc" "1"
-assert_contains "wait without --in says later" "$err" "needs the chat delivery hub"
+run cell chat wait --after msg_1 --mention
+assert_eq "wait --after without --in → exit 2" "$rc" "2"
 assert_eq "usage errors send nothing" "$(nreq)" "$before"
 
 echo "== reads =="

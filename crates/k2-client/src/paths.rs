@@ -37,6 +37,14 @@ fn windows_home_from(home: Option<std::ffi::OsString>, profile: Option<std::ffi:
     [home, profile].into_iter().flatten().map(PathBuf::from).find(|p| p.is_absolute())
 }
 
+/// A relative path as a `/`-joined string on every OS: the portable form
+/// K2 keeps in bundles, manifests, rule lists and reports (Windows'
+/// `to_string_lossy` would give `a\b`). Same string as `to_string_lossy`
+/// for a clean relative Unix path.
+pub fn slash_rel(rel: &std::path::Path) -> String {
+    rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
+}
+
 /// The K2 home directory: `$HOME/.k2`.
 ///
 /// Falls back to a relative `.k2` when no home directory can be resolved
@@ -81,6 +89,13 @@ mod tests {
         assert_eq!(windows_home_from(os("/c/Users/u"), os(r"C:\Users\u")), Some(PathBuf::from(r"C:\Users\u")));
         assert_eq!(windows_home_from(None, os(r"C:\Users\u")), Some(PathBuf::from(r"C:\Users\u")));
         assert_eq!(windows_home_from(os("rel"), None), None);
+    }
+
+    #[test]
+    fn slash_rel_is_slash_joined_on_every_os() {
+        let p = PathBuf::from(".k2").join("vault").join("vault.db");
+        assert_eq!(slash_rel(&p), ".k2/vault/vault.db");
+        assert_eq!(slash_rel(std::path::Path::new("one")), "one");
     }
 
     #[test]

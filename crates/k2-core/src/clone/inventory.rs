@@ -298,7 +298,7 @@ fn process_workspace_file(
         return;
     }
     let rel = match path.strip_prefix(project) {
-        Ok(r) => r.to_string_lossy().to_string(),
+        Ok(r) => crate::paths::slash_rel(r),
         Err(_) => return,
     };
     // Dedupe across passes: a file the main walk already took (or already
@@ -433,7 +433,7 @@ fn collect_memory(slug_dir: &Path, entries: &mut Vec<InventoryEntry>) {
         if let Ok(rel) = path.strip_prefix(&memory_dir) {
             entries.push(InventoryEntry {
                 abs_path: path.to_path_buf(),
-                rel_path: rel.to_string_lossy().to_string(),
+                rel_path: crate::paths::slash_rel(rel),
                 class: DestinationClass::Memory,
             });
         }
@@ -494,7 +494,7 @@ fn collect_sessions(
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
             let rel = match path.strip_prefix(projects_dir) {
-                Ok(r) => r.to_string_lossy().to_string(),
+                Ok(r) => crate::paths::slash_rel(r),
                 Err(_) => continue,
             };
             found.push((path, rel, mtime));

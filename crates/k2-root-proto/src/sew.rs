@@ -525,6 +525,28 @@ pub const SEW_RELEASES: &[SewRelease] = &[
             ],
         }),
     },
+    // ┌─ SLOT: Sew 0.3.1 pin (K2 0.46.6) ─────────────────────────────────┐
+    // │ Waiting on Sew's REL-031 tarballs (version + sha256 per tarball). │
+    // │ Do NOT add a placeholder entry here: the LAST entry is the pin,  │
+    // │ and a placeholder pin turns every install path off               │
+    // │ (`sew_release_pinned()` = false → `sew_not_released`).            │
+    // │ When the values arrive:                                           │
+    // │  1. Print the entry with `scripts/sew-pins-from-release.sh <dir>` │
+    // │     from the release's release.json + SHA256SUMS (it checks every │
+    // │     tarball and binary member) and paste it here as             │
+    // │     `SewRelease { version: "0.3.1", … }` (core + media +        │
+    // │     transcriber + recorder, aarch64 + x86_64), and add a        │
+    // │     `- 0.3.1:` line to the doc comment above (tag, SHA256SUMS and │
+    // │     release.json sha256s, schema max).                           │
+    // │  2. SEW_PG_MAJOR stays 16 unless Sew 0.3.1 says otherwise.       │
+    // │  3. 0.3.0 → 0.3.1 runs `engine sew install reconfigure`           │
+    // │     (SEW_RECONFIGURE_BELOW = "0.3.1"; root-helper protocol 11).  │
+    // │  4. Re-vendor sew-proto/sew-client at the 0.3.1 tag if Sew cut  │
+    // │     vendoring tarballs (third_party/SEW-VENDOR.txt; its drift    │
+    // │     test lists every file's sha256).                             │
+    // │  5. The helper's sewPin must match the daemon's: the pin bump    │
+    // │     ships helper + daemon together (helper_outdated otherwise).  │
+    // └────────────────────────────────────────────────────────────────────┘
 ];
 
 /// K2's fixture releases (`testdata/sew/*.tar.gz`, made by a deterministic

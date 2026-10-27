@@ -1007,3 +1007,58 @@ fn a_failed_exec_keeps_the_old_image_serving() {
     let log = std::fs::read_to_string(home.home.join("logs/ptyd.log")).unwrap();
     assert!(log.contains("upgrade_failed: exec"), "{log}");
 }
+
+/// A private scratch dir for the F3 socket tests (short: sun_path).
+fn f3_dir(tag: &str) -> PathBuf {
+    let d = PathBuf::from(format!("/tmp/k2f3-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn set_mode(p: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// Security review F3: the client refuses a server that runs as another
+/// uid (the real peer-credential path; an expected uid other than ours
+/// stands in for "the listener belongs to someone else").
+#[test]
+fn f3_client_refuses_a_server_of_another_uid() {
+    let base = f3_dir("uid");
+    let dir = base.join("sock");
+    std::fs::create_dir(&dir).unwrap();
+    set_mode(&dir, 0o700);
+    let sock = dir.join("ctl.sock");
+    let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    // SAFETY: no preconditions.
+    let me = unsafe { libc::geteuid() };
+    assert!(Conn::connect_expecting(&sock, me).is_ok(), "our own server is accepted");
+    let err = Conn::connect_expecting(&sock, me.wrapping_add(1)).err().expect("another uid must be refused");
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+    assert!(err.to_string().contains("not our k2-ptyd"), "{err}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Security review F3: the client refuses a socket whose directory isn't a
+/// private (0700, ours) real directory — the squatted `/tmp` fallback case.
+#[test]
+fn f3_client_refuses_a_socket_in_a_shared_or_symlinked_dir() {
+    let base = f3_dir("dir");
+    let dir = base.join("sock");
+    std::fs::create_dir(&dir).unwrap();
+    let sock = dir.join("ctl.sock");
+    let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    set_mode(&dir, 0o755);
+    let err = Conn::connect(&sock).err().expect("a group/other-readable dir must be refused");
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+    set_mode(&dir, 0o700);
+    assert!(Conn::connect(&sock).is_ok(), "the private dir is accepted");
+    // The same socket reached through a symlinked directory.
+    let link = base.join("link");
+    std::os::unix::fs::symlink(&dir, &link).unwrap();
+    let err = Conn::connect(&link.join("ctl.sock")).err().expect("a symlinked dir must be refused");
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+    let _ = std::fs::remove_dir_all(&base);
+}

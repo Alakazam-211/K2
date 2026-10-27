@@ -60,9 +60,51 @@ pub struct Conn {
     fds: VecDeque<OwnedFd>,
 }
 
+/// Security review F3: the client authenticates the SERVER too. Before
+/// connecting, the socket's directory must be a real directory (not a
+/// symlink) owned by us with no group/other access — ptyd creates it 0700,
+/// including the short `$TMPDIR/k2p-<hash>/` fallback, which another local
+/// user could otherwise pre-create. After connecting, the peer must run as
+/// our uid (`SO_PEERCRED` / `getpeereid`), mirroring the server's P10
+/// check. Either failure is `PermissionDenied`: the daemon treats it as
+/// "ptyd unavailable" and keeps sessions in-process.
+///
+/// No server key proof in `welcome`: it could only be optional (a 0.46.x
+/// ptyd the daemon must still adopt can't send it), and an optional proof
+/// stops nobody. Same-uid processes can read the key anyway (S-1).
+pub fn check_socket_dir(sock: &Path) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let denied = |why: String| io::Error::new(io::ErrorKind::PermissionDenied, why);
+    let dir = sock.parent().ok_or_else(|| denied(format!("{} has no parent dir", sock.display())))?;
+    let md = std::fs::symlink_metadata(dir)?;
+    if md.file_type().is_symlink() || !md.is_dir() {
+        return Err(denied(format!("ptyd socket dir {} is not a real directory", dir.display())));
+    }
+    if md.uid() != sys::euid() {
+        return Err(denied(format!("ptyd socket dir {} belongs to uid {}, not us", dir.display(), md.uid())));
+    }
+    if md.mode() & 0o077 != 0 {
+        return Err(denied(format!("ptyd socket dir {} is mode {:o}, not private", dir.display(), md.mode() & 0o777)));
+    }
+    Ok(())
+}
+
 impl Conn {
     pub fn connect(sock: &Path) -> io::Result<Conn> {
+        Self::connect_expecting(sock, sys::euid())
+    }
+
+    /// [`Conn::connect`] expecting the server to run as `uid` (tests).
+    pub fn connect_expecting(sock: &Path, uid: u32) -> io::Result<Conn> {
+        check_socket_dir(sock)?;
         let stream = UnixStream::connect(sock)?;
+        let peer = sys::peer_uid(stream.as_raw_fd())?;
+        if peer != uid {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("the process on {} runs as uid {peer}, not {uid}: not our k2-ptyd", sock.display()),
+            ));
+        }
         Ok(Conn { stream, dec: FrameDecoder::default(), fds: VecDeque::new() })
     }
 

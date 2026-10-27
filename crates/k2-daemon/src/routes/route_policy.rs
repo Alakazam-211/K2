@@ -1443,6 +1443,8 @@ pub const ROUTES: &[Route] = &[
     get("/cli/themes/list", Member),
     get("/cli/thread", Member),
     get("/cli/thread/activity", Member),
+    // 0.46.5 activity SDK (review D2): the batched catch-up.
+    get("/cli/thread/activity/rooms", Member),
     // KV10: the handler 405s a GET; the row says so.
     post("/cli/thread/answer", Member),
     post("/cli/thread/ask", Member),

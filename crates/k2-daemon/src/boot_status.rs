@@ -846,6 +846,17 @@ pub const FEATURE_THREAD_STREAM: &str = "thread-stream-v1";
 /// the room-wide counts too, as before. No SQL migration.
 pub const FEATURE_THREAD_ACTIVITY_EAR: &str = "thread-activity-ear-v1";
 
+/// The batched catch-up for the ear (0.46.5 activity SDK, review D2):
+/// `GET /cli/thread/activity/rooms?rooms=all|<id>,…` answers every room's
+/// turn in one read and one rate-limit token (`thread.activityRooms`).
+/// No SQL migration.
+pub const FEATURE_THREAD_ACTIVITY_ROOMS: &str = "thread-activity-rooms-v1";
+
+/// The Garden's twin of the ear (0.46.5 activity SDK): a custom widget's
+/// `k2.thread.onActivity` and the `k2-activity@1` library. The renderer
+/// this daemon serves answers it; the frame's hello names it.
+pub const FEATURE_WIDGET_ACTIVITY: &str = "widget-activity-v1";
+
 /// plan-agent-status-unify-v1 D1/D2 (0.46.0): the activity rollup carries
 /// `live` and `busy` (snapshot `workspaces[]` and every `activity_changed`
 /// `workspace`), and `presence/summary` `agentActivity` entries carry
@@ -962,6 +973,8 @@ pub fn features() -> Vec<&'static str> {
     }
     out.push(FEATURE_THREAD_STREAM);
     out.push(FEATURE_THREAD_ACTIVITY_EAR);
+    out.push(FEATURE_THREAD_ACTIVITY_ROOMS);
+    out.push(FEATURE_WIDGET_ACTIVITY);
     out.push(FEATURE_THREAD_CONTEXT);
     out.push(FEATURE_APP_RESOURCES);
     out.push(FEATURE_LLM_ACCOUNT_FOR);
@@ -1054,6 +1067,8 @@ mod tests {
                 "agent-unread-tickets-v1",
                 "thread-stream-v1",
                 "thread-activity-ear-v1",
+                "thread-activity-rooms-v1",
+                "widget-activity-v1",
                 "thread-context-v1",
                 "app-resources-v1",
                 "llm-account-for-v1",

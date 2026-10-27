@@ -3411,6 +3411,63 @@ fn handle_get_thread_activity(params: &HashMap<String, String>) -> CliResponse {
     ))
 }
 
+/// Route of the batched catch-up ([`handle_get_thread_activity_rooms`]).
+pub const THREAD_ACTIVITY_ROOMS_ROUTE: &str = "/cli/thread/activity/rooms";
+
+/// `GET /cli/thread/activity/rooms?rooms=all|<id>,<id>` (0.46.5 activity
+/// SDK, review D2/F8): every requested room's live pinned-Chat turn in ONE
+/// read, `{ok, turns: {room: turn|null}, unknown}`, for a client that
+/// streams many rooms (`thread.stream?rooms=all&ear=1`) and must catch up
+/// on every (re)open. One rate-limit token for the whole set, so an App
+/// with 15 rooms no longer runs into the 10-a-person burst.
+///
+/// The rooms are exactly the ones the room stream would stream to this
+/// caller (`room_stream_ws::readable_for_pass` / `readable_for_login` +
+/// `compute_view`). An App pass gets the guest projection, only for rooms
+/// where it holds thread:read AND activity:read and only for the room's
+/// pinned Chat (`guest_ear_allowed`, the check every door of the ear
+/// makes); a room without the ear is left out. A login (owner token,
+/// Connect session) gets the owner bodies. An agent's passport is refused:
+/// agents read one Thread at a time (`/cli/thread/activity?addr=`).
+fn handle_get_thread_activity_rooms(params: &HashMap<String, String>) -> CliResponse {
+    let skin = request_skin();
+    if let Some(key) = crate::thread_activity_limit::key_for(params, skin.as_ref()) {
+        if let Err(ms) = crate::thread_activity_limit::take(&key) {
+            return crate::thread_activity_limit::refused(ms);
+        }
+    }
+    if skin.is_none() && crate::caller_workspace::principal_from_params(params).is_some() {
+        return forbidden("an agent reads one Thread at a time: GET /cli/thread/activity?addr=");
+    }
+    let want = match crate::room_stream_ws::parse_rooms_param(&str_param(params, "rooms")) {
+        Ok(w) => w,
+        Err(e) => return usage(e),
+    };
+    let readable = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match &skin {
+            Some(pass) => crate::room_stream_ws::readable_for_pass(&conn, pass),
+            None => crate::room_stream_ws::readable_for_login(&conn),
+        }
+    };
+    let view = crate::room_stream_ws::compute_view(&readable, &want);
+    let mut turns = serde_json::Map::new();
+    for (room, conv) in &view.rooms {
+        let turn = match &skin {
+            Some(pass) => {
+                if !crate::overlay_ws::guest_ear_allowed(pass, room, conv) {
+                    continue;
+                }
+                crate::thread_activity::current_turn_guest(conv)
+            }
+            None => crate::thread_activity::current_turn(conv),
+        };
+        turns.insert(room.clone(), turn.unwrap_or(serde_json::Value::Null));
+    }
+    CliResponse::ok_json(serde_json::json!({ "ok": true, "turns": turns, "unknown": view.unknown }).to_string())
+}
+
 /// [`handle_get_thread_activity`] for an App pass (0.46.3).
 fn guest_thread_activity(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
     let addr = str_param(params, "addr");
@@ -3677,6 +3734,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         crate::thread_attachments::ROUTE => handle_get_attachment(params),
         "/cli/thread/latest" => handle_get_thread_latest(params),
         "/cli/thread/activity" => handle_get_thread_activity(params),
+        THREAD_ACTIVITY_ROOMS_ROUTE => handle_get_thread_activity_rooms(params),
         "/cli/chatter" => handle_get_chatter(params),
         "/cli/chatterlog" => handle_get_chatterlog(params),
         "/cli/thread/post" | "/cli/thread/ask" | "/cli/thread/secret" | "/cli/thread/answer"

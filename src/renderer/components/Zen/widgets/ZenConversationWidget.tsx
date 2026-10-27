@@ -19,7 +19,10 @@
 //
 // 0.45.6 (Rosson 2026-10-15, from K2 Companion): with `activity-drawer` (on
 // in Garden 1) the live Thread turn shows in `ZenActivityDrawer`, pulled
-// out of the message box's top edge, instead of the typing dots.
+// out of the message box's top edge, instead of the typing dots. 0.46.5
+// (Rosson 2026-10-27): always, on any server that reports Thread turns
+// (with no message box, as a tile under the last message): the dots said
+// "typing" while the turn was held by a subagent or a background task.
 //
 // 0.46.1 (thread-read-v1, Zen defaults): the conversation marks its Thread
 // read while it is looked at, says how many cards wait on you ("2
@@ -72,7 +75,7 @@ import { zenGardenHomeKey } from '@/lib/zen/zen-garden-homes'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenCompose } from './ZenCompose'
-import { ZenActivityDrawer, zenDrawerShows } from './ZenActivityDrawer'
+import { ZenActivityDrawer } from './ZenActivityDrawer'
 import { ZenStatusDot, ZenUnreadPills } from './ZenAgentsWidget'
 import { ZEN_DROPDOWN_STYLE } from './ZenChromeControls'
 import { ZenProgressiveBlur } from './ZenProgressiveBlur'
@@ -132,7 +135,9 @@ export interface ZenConversationOptions {
   compose: boolean
   attachments: boolean
   loadOlder: boolean
-  /** 0.45.6 Garden 1: the activity drawer above the box (`activity-drawer`). */
+  /** 0.45.6 Garden 1: the activity drawer above the box (`activity-drawer`).
+   *  From 0.46.5 the drawer always replaces the typing dots on a server
+   *  that reports Thread turns; the prop is still read, for older Gardens. */
   activityDrawer?: boolean
   /** 0.46.1 Garden 1: the bell that mutes this Thread (`mute`). */
   mute?: boolean
@@ -567,15 +572,17 @@ export function ZenConversation({
   const insets = useZenFloatInsets(floating, headerRef, slotRef)
   const items = view?.items ?? []
   const ready = view?.phase === 'ready'
-  // TW14: the dots follow the Thread turn when the server reports turns,
-  // else the row's rollup (an older server).
-  // Garden 1's activity drawer (`activity-drawer`) stands in for the dots
-  // while it has a turn to show (a server that reports Thread turns).
-  const drawerTurn = options.activityDrawer && options.compose && view?.liveTurn !== undefined ? view.liveTurn : undefined
-  const drawerOn = drawerTurn !== undefined && zenDrawerShows(drawerTurn)
-  const typing =
-    !drawerOn &&
-    (view?.turn !== undefined ? view.turn !== null && (view.turn.state === 'working' || view.turn.state === 'monitoring') : row.working)
+  // 0.46.5 (Rosson 2026-10-27: "the stuck typing bubble shouldn't be a
+  // bubble, it should show what's actually going on"): a server that
+  // reports Thread turns gets the activity drawer, never the typing dots:
+  // the step, the subagents and background tasks by name, the clock. On
+  // the message box when there is one, else as a tile under the last
+  // message. Nothing tells us the agent is composing its reply, so there
+  // are no dots for it. Only an older server (no turns, only the row's
+  // `working` rollup) keeps the dots: it has nothing else to show.
+  const drawerTurn = view?.liveTurn !== undefined ? view.liveTurn : undefined
+  const drawerInList = drawerTurn !== undefined && !options.compose
+  const typing = drawerTurn === undefined && view?.turn === undefined && row.working
 
   // The card awaits this: a secret card's refusal (a red warning, a scope
   // only an admin may pick) shows on the card. Never logs the payload.
@@ -833,6 +840,7 @@ export function ZenConversation({
             </div>
           ))}
           {typing && <TypingIndicator />}
+          {drawerInList && ready && <ZenActivityDrawer turn={drawerTurn ?? null} attached={false} />}
           </ThreadMessageColumn>
           </ThreadAttachmentSourceProvider>
         )}

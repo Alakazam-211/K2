@@ -28,7 +28,7 @@
 // click visibly landed.
 
 import { minutesWithoutUpdate } from '@/lib/activity-copy'
-import type { ThreadTurn, ThreadTurnTally } from './overlayThread'
+import type { ThreadTurn, ThreadTurnChild, ThreadTurnTally } from './overlayThread'
 
 /** How long "Stopped" stays after an interrupt (the mockup's 3 s). */
 export const STOPPED_LINGER_MS = 3_000
@@ -102,8 +102,32 @@ export function tallyBits(t: ThreadTurnTally): string[] {
   return tallyItems(t).map((i) => i.text)
 }
 
-/** TW7: counts only, never labels. */
+/** One named child in words (0.46.5): "Explore subagent running",
+ *  "Running `npm run dev` in the background". */
+export function childText(c: ThreadTurnChild): string {
+  if (c.kind === 'subagent') {
+    const name = c.label ? `${c.label} subagent` : 'A subagent'
+    const state = c.state === 'waiting' ? 'waiting on a prompt' : c.state === 'done' ? 'done' : 'running'
+    return `${name} ${state}`
+  }
+  const name = c.label ?? (c.kind === 'monitor' ? 'A monitor' : 'A background task')
+  return `${name} in the background`
+}
+
+/** TW7: what holds the turn. By name when the daemon sends `children`
+ *  (0.46.5): one item per child, plus the subagents already done; from
+ *  an older server, counts only. */
 export function childItems(turn: ThreadTurn): StripDetailItem[] {
+  if (turn.children && turn.children.length > 0) {
+    const named: StripDetailItem[] = turn.children.map((c) => ({
+      key: c.kind === 'subagent' ? 'subagents' : 'background',
+      text: childText(c),
+    }))
+    const listedDone = turn.children.filter((c) => c.kind === 'subagent' && c.state === 'done').length
+    const done = turn.subagentsDone - listedDone
+    if (done > 0) named.push({ key: 'subagents', text: `${plural(done, 'subagent', 'subagents')} done` })
+    return named
+  }
   const out: StripDetailItem[] = []
   if (turn.subagents > 0) {
     const done = turn.subagentsDone > 0 ? `, ${turn.subagentsDone} done` : ''
@@ -179,7 +203,7 @@ export function threadStripView(turn: ThreadTurn, now: number): ThreadStripView 
       label,
       since: clock,
       sinceTitle: 'since your message',
-      ariaLabel: `Agent replied; ${label.charAt(0).toLowerCase()}${label.slice(1)}, ${sinceMessage}`,
+      ariaLabel: `${turn.replied === false ? 'Agent' : 'Agent replied'}; ${label.charAt(0).toLowerCase()}${label.slice(1)}, ${sinceMessage}`,
       step: null,
       tally: tallyBits(turn.tally),
       stoppable: false,
@@ -444,8 +468,15 @@ export function threadDrawerLine(turn: ThreadTurn, now: number): ThreadDrawerLin
   let word: string
   let step: ThreadStripStep
   if (replied) {
-    word = 'Replied'
-    step = { kind: 'plain', text: 'Replied', elapsed: null }
+    // 0.46.5: say what holds the turn, not only that the agent replied.
+    // An older server (no `replied`) only sent this phase after a reply.
+    const said = turn.replied !== false
+    word = said ? 'Replied' : turn.state === 'monitoring' ? 'Monitoring' : 'Working'
+    const first = childList[0]?.text
+    const more = childList.length > 1 ? ` +${childList.length - 1}` : ''
+    const what = first ? `${first}${more}` : null
+    const text = said ? (what ? `Replied · ${what}` : 'Replied') : (what ?? word)
+    step = { kind: text.includes('`') ? 'line' : 'plain', text, elapsed: null }
   } else if (view.tone === 'unverifiable') {
     word = view.label
     step = { kind: 'plain', text: view.label, elapsed: null }

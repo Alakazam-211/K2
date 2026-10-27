@@ -324,7 +324,8 @@ function DetailBits({ items, fallback }: { items: StripDetailItem[]; fallback: s
   return (
     <>
       {items.map((it, i) => (
-        <span key={it.key} data-zen-drawer-detail-bit={it.key}>
+        // 0.46.5: children by name can repeat a key (two subagents).
+        <span key={`${it.key}-${i}`} data-zen-drawer-detail-bit={it.key}>
           {i > 0 ? ' · ' : null}
           <span data-zen-drawer-detail-icon={it.key} style={{ whiteSpace: 'nowrap' }}>
             {ICON[it.key](COUNTER_ICON_PX)}

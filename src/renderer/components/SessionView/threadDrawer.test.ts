@@ -70,12 +70,61 @@ describe('threadDrawerLine', () => {
     expect(d.detail.head.startsWith('Needs you · ')).toBe(true)
   })
 
-  it('replied with children still running: "Replied", the children in the detail', () => {
+  it('replied with children still running: "Replied" and what holds it, the children in the detail', () => {
     const d = threadDrawerLine(turn({ phase: 'children', subagents: 1, background: 2 }), NOW)
     if (!d) throw new Error('drawer')
-    expect(d.step).toEqual({ kind: 'plain', text: 'Replied', elapsed: null })
+    expect(d.step).toEqual({ kind: 'plain', text: 'Replied · 1 subagent running +1', elapsed: null })
     expect(d.detail.step).toBeNull()
     expect(d.detail.children).toBe('1 subagent running · 2 background tasks')
+  })
+
+  // 0.46.5 (Rosson 2026-10-27, "it should show what's actually going on"):
+  // the daemon names the children; the line and the detail say them.
+  it('children by name: a background shell after a reply reads as itself, not "typing"', () => {
+    const d = threadDrawerLine(
+      turn({
+        state: 'monitoring',
+        phase: 'children',
+        line: null,
+        background: 1,
+        replied: true,
+        children: [{ kind: 'shell', state: 'running', label: 'Running `npm run dev`', since: NOW - 60_000 }],
+      }),
+      NOW,
+    )
+    if (!d) throw new Error('drawer')
+    expect(d.tone).toBe('monitoring')
+    expect(d.step).toEqual({ kind: 'line', text: 'Replied · Running `npm run dev` in the background', elapsed: null })
+    expect(d.detail.head).toBe('Replied · 1m 12s since your message')
+    expect(d.detail.childItems).toEqual([{ key: 'background', text: 'Running `npm run dev` in the background' }])
+  })
+
+  it('no reply yet, the lead done, a subagent holds the turn: the subagent, never "Replied"', () => {
+    const d = threadDrawerLine(
+      turn({
+        phase: 'children',
+        line: null,
+        subagents: 2,
+        subagentsDone: 3,
+        replied: false,
+        children: [
+          { kind: 'subagent', state: 'running', label: 'Explore', since: NOW - 30_000 },
+          { kind: 'subagent', state: 'waiting', label: 'code-reviewer', since: NOW - 20_000 },
+          { kind: 'subagent', state: 'done', label: null, since: NOW - 10_000 },
+        ],
+      }),
+      NOW,
+    )
+    if (!d) throw new Error('drawer')
+    expect(d.tone).toBe('working')
+    expect(d.step).toEqual({ kind: 'plain', text: 'Explore subagent running +3', elapsed: null })
+    expect(d.detail.head).toBe('Working · 1m 12s since your message')
+    expect(d.detail.childItems.map((i) => i.text)).toEqual([
+      'Explore subagent running',
+      'code-reviewer subagent waiting on a prompt',
+      'A subagent done',
+      '2 subagents done',
+    ])
   })
 
   it('an ended turn shows nothing, except "Stopped" for a moment after an interrupt', () => {

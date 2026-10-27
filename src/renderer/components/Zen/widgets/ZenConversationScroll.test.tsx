@@ -437,14 +437,40 @@ describe('Zen conversation: stick to the bottom', () => {
   })
 })
 
-// prd-daemon-activity-and-thread-working-v1 TW14 (Q13): the typing dots follow
-// the Thread turn when the server reports turns, else the row's rollup.
-describe('Zen conversation: typing dots follow the Thread turn', () => {
+// prd-daemon-activity-and-thread-working-v1 TW14 (Q13), 0.46.5 (Rosson
+// 2026-10-27, "it should show what's actually going on"): a server that
+// reports Thread turns never gets the typing dots; the activity drawer says
+// what the turn holds. Only an older server keeps the row's rollup dots.
+describe('Zen conversation: the Thread turn shows as activity, not typing dots', () => {
   const dots = (): Element | null => document.querySelector('[data-zen-typing]')
 
-  it('a live turn shows the dots even when the row reads idle', () => {
+  it('a live turn shows the activity drawer, never the dots', () => {
+    const now = Date.now()
+    const live = coerceThreadTurn(
+      {
+        turnId: 't',
+        state: 'monitoring',
+        phase: 'children',
+        startedAt: now - 60_000,
+        serverNow: now,
+        end: null,
+        rev: 1,
+        background: 1,
+        replied: true,
+        children: [{ kind: 'shell', state: 'running', label: 'Running `npm run dev`', since: now - 50_000 }],
+      },
+      now,
+    )
+    mount(false, many(3), { turn: { state: 'monitoring', since: 1 }, liveTurn: live })
+    expect(dots()).toBeNull()
+    const drawer = document.querySelector('[data-zen-drawer]')
+    expect(drawer?.getAttribute('data-tone')).toBe('monitoring')
+    expect(document.querySelector('[data-zen-drawer-step]')?.textContent).toBe('Replied · Running npm run dev in the background')
+  })
+
+  it('a reported turn with no detail yet still shows no dots', () => {
     mount(false, many(3), { turn: { state: 'working', since: 1 } })
-    expect(dots()).not.toBeNull()
+    expect(dots()).toBeNull()
   })
 
   it('no live turn hides the dots even when the row reads working', () => {

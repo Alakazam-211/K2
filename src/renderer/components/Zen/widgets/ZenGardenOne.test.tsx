@@ -459,13 +459,40 @@ describe('the activity drawer (`activity-drawer`)', () => {
     expect(localStorage.getItem('k2.zen.activityDrawerExpanded')).toBe('1')
   })
 
-  it('off: no drawer, the typing dots stay', () => {
+  // 0.46.5 (Rosson 2026-10-27): "the stuck typing bubble shouldn't be a
+  // bubble, it should show what's actually going on".
+  it('off: the drawer still replaces the typing dots (0.46.5)', () => {
     const fb = fakeBridge([])
     const r = row('cortana', { activity: 'working', working: true, selected: true })
     render(<ZenConversation bridge={fb.bridge} row={r} options={{ compose: true, attachments: true, loadOlder: true }} />)
     fb.pushThread(threadView())
-    expect(document.querySelector('[data-zen-drawer]')).toBeNull()
-    expect(document.querySelector('[data-zen-typing]')).not.toBeNull()
+    expect(el('[data-zen-compose] [data-zen-drawer]').getAttribute('data-tone')).toBe('working')
+    expect(document.querySelector('[data-zen-typing]')).toBeNull()
+  })
+
+  it('no message box: the drawer is a tile under the last message, with the subagent by name', () => {
+    const fb = fakeBridge([])
+    const r = row('cortana', { activity: 'working', working: true, selected: true })
+    render(<ZenConversation bridge={fb.bridge} row={r} options={{ compose: false, attachments: false, loadOlder: true }} />)
+    const now = Date.now()
+    fb.pushThread(
+      threadView({
+        liveTurn: {
+          ...liveTurn(),
+          phase: 'children',
+          line: null,
+          replied: false,
+          children: [{ kind: 'subagent', state: 'running', label: 'Explore', since: now - 5_000 }],
+        },
+      }),
+    )
+    expect(document.querySelector('[data-zen-typing]')).toBeNull()
+    expect(document.querySelector('[data-zen-compose]')).toBeNull()
+    const drawer = el('[data-zen-drawer]')
+    expect(drawer.getAttribute('data-zen-drawer-attached')).toBe('false')
+    expect(el('[data-zen-drawer-step]').textContent).toBe('Explore subagent running')
+    act(() => void fireEvent.click(el('[data-zen-drawer-tile]')))
+    expect(el('[data-zen-drawer-children]').textContent).toBe('Explore subagent running')
   })
 
   it('a send from the Garden’s box records the agent for Recent agents first', async () => {

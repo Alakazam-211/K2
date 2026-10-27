@@ -760,6 +760,20 @@ export interface ThreadTurnEnd {
   at: number
 }
 
+/** One child of the turn's session, by name (0.46.5, Rosson 2026-10-27:
+ *  "show what's actually going on"): a subagent, a background shell or a
+ *  monitor. The daemon picks the label (a subagent's type, a shell's
+ *  redacted command line, a task type); the renderer only says it. */
+export interface ThreadTurnChild {
+  kind: 'subagent' | 'shell' | 'monitor'
+  /** `done`: a subagent that finished and whose result the agent hasn't
+   *  taken yet. */
+  state: 'running' | 'waiting' | 'done'
+  label: string | null
+  /** Server ms. */
+  since: number
+}
+
 export interface ThreadTurn {
   turnId: string
   state: ThreadTurnState
@@ -779,6 +793,13 @@ export interface ThreadTurn {
   subagents: number
   subagentsDone: number
   background: number
+  /** The live children by name, oldest first (0.46.5). Absent from an
+   *  older server: the counts above are all there is. */
+  children?: ThreadTurnChild[]
+  /** The agent has posted in Thread during this turn (0.46.5). Absent
+   *  from an older server, whose `children` phase only ever followed a
+   *  reply. */
+  replied?: boolean
   tally: ThreadTurnTally
   /** Phase `waiting`: what the agent is stuck on. Null otherwise (and from
    *  a server that doesn't say). */
@@ -800,6 +821,26 @@ function finite(v: unknown): number | null {
 function count(v: unknown): number {
   const n = finite(v)
   return n !== null && n > 0 ? Math.floor(n) : 0
+}
+
+const CHILD_KINDS: readonly ThreadTurnChild['kind'][] = ['subagent', 'shell', 'monitor']
+const CHILD_STATES: readonly ThreadTurnChild['state'][] = ['running', 'waiting', 'done']
+
+/** The frame's `children`, or undefined when it has none (an older
+ *  server). Unknown kinds and states are dropped, never guessed. */
+function coerceChildren(raw: unknown, fallbackSince: number): ThreadTurnChild[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: ThreadTurnChild[] = []
+  for (const c of raw) {
+    if (!c || typeof c !== 'object') continue
+    const r = c as Record<string, unknown>
+    const kind = CHILD_KINDS.find((k) => k === r.kind)
+    const state = CHILD_STATES.find((s) => s === r.state)
+    if (!kind || !state) continue
+    const label = typeof r.label === 'string' && r.label.trim() ? r.label.trim() : null
+    out.push({ kind, state, label, since: finite(r.since) ?? fallbackSince })
+  }
+  return out
 }
 
 /** One §7.6 activity body, or null when it isn't one. `receivedAt` is this
@@ -836,6 +877,8 @@ export function coerceThreadTurn(raw: unknown, receivedAt: number): ThreadTurn |
     subagents: count(a.subagents),
     subagentsDone: count(a.subagentsDone),
     background: count(a.background),
+    ...(Array.isArray(a.children) ? { children: coerceChildren(a.children, startedAt) } : {}),
+    ...(typeof a.replied === 'boolean' ? { replied: a.replied } : {}),
     tally: { read: count(t.read), search: count(t.search), cmd: count(t.cmd), edit: count(t.edit) },
     waitingOn: a.waitingOn === 'permission' || a.waitingOn === 'question' ? a.waitingOn : null,
     end,

@@ -211,6 +211,20 @@ describe('TUWA6: the frame runtime', () => {
     expect(r.k2.can('foo.bar')).toBe(false)
   })
 
+  it('k2.can: a row with alsoCaps needs every cap (0.46.5 thread.onActivity: activity:read + thread:read)', () => {
+    const feature = { features: ['zen-v1', 'zen-gardens-v1', 'zen-widgets-v1', 'widget-activity-v1'] }
+    const one = realm()
+    connect(one, { caps: ['agents:read', 'activity:read'], ...feature })
+    expect(one.k2.can('thread.onActivity')).toBe(false)
+    const other = realm()
+    connect(other, { caps: ['agents:read', 'thread:read'], ...feature })
+    expect(other.k2.can('thread.onActivity')).toBe(false)
+    const both = realm()
+    connect(both, { caps: ['agents:read', 'thread:read', 'activity:read'], ...feature })
+    expect(both.k2.can('thread.onActivity')).toBe(true)
+    expect(typeof both.k2.thread.onActivity).toBe('function')
+  })
+
   it('k2.connected: pending until the hello (which comes after the widget script), then resolves with it; can/config/motion follow', async () => {
     const r = realm()
     expect(typeof r.k2.connected.then).toBe('function')

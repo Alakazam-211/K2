@@ -62,6 +62,8 @@ pub const FRAME_FEATURES: &[&str] = &[
     "thread-read-v1",
     "thread-attachments-v1",
     "thread-images-v1",
+    // 0.46.5 activity SDK: thread.onActivity.
+    "widget-activity-v1",
 ];
 
 /// The shot's size limits (CSS pixels).

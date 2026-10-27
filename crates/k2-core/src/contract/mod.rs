@@ -118,6 +118,12 @@ pub struct VerbRow {
     pub verb: String,
     /// A cap from [`Catalog::caps`], or null for a no-cap verb.
     pub cap: Option<String>,
+    /// More caps the verb ALSO needs, checked like `cap` (0.46.5 activity
+    /// SDK: the Thread ear needs `thread:read` beside `activity:read`, as
+    /// its route always checked). Absent = `cap` alone. Never on a no-cap
+    /// row, never repeats `cap`.
+    #[serde(default, rename = "alsoCaps", skip_serializing_if = "Vec::is_empty")]
+    pub also_caps: Vec<String>,
     /// Empty or absent = none (K2 built-ins only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exposure: Vec<Exposure>,
@@ -146,6 +152,11 @@ impl VerbRow {
     /// True when `who` may call this verb.
     pub fn exposed_to(&self, who: Exposure) -> bool {
         self.exposure.contains(&who)
+    }
+
+    /// Every cap a caller needs: `cap`, then `alsoCaps`. Empty for a no-cap row.
+    pub fn all_caps(&self) -> Vec<&str> {
+        self.cap.iter().chain(self.also_caps.iter()).map(String::as_str).collect()
     }
 }
 
@@ -625,7 +636,9 @@ mod tests {
         let c = catalog();
         assert_eq!(
             c.caps_exposed_to(Exposure::Widget),
-            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "links:open"]
+            // 0.46.5 activity SDK: activity:read reaches the bridge too
+            // (`thread.onActivity`, with thread:read, as the App ear).
+            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "links:open", "activity:read"]
         );
         // 0.46.3 (garden-person-rows-v1): files:read, tickets:read,
         // tickets:post and activity:read join through the Garden door.
@@ -649,11 +662,18 @@ mod tests {
                 "room:members"
             ]
         );
-        for name in ["files:read", "tickets:read", "tickets:post", "activity:read"] {
+        for name in ["files:read", "tickets:read", "tickets:post"] {
             let row = c.cap(name).unwrap_or_else(|| panic!("{name}"));
             assert_eq!(row.exposure, [Exposure::App, Exposure::GardenLocal], "{name}: App and Garden, never the widget bridge");
             assert!(row.sentence.as_deref().is_some_and(|s| s.contains("on this computer")), "{name}: its sentence says where");
         }
+        // 0.46.5 activity SDK: activity:read also reaches the bridge
+        // (`thread.onActivity`, any agent in the widget's scope), so its
+        // sentence names the scope, and says counts only.
+        let activity = c.cap("activity:read").expect("activity:read");
+        assert_eq!(activity.exposure, [Exposure::Widget, Exposure::App, Exposure::GardenLocal]);
+        let s = activity.sentence.as_deref().expect("a widget cap has a sentence");
+        assert!(s.contains("{where}") && s.contains("counts only"), "{s}");
         let local_scope = [
             "presence:read",
             "sources:read",

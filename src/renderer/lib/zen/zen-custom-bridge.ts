@@ -62,6 +62,8 @@ import { ZEN_AGENTS_SHOW_MAX, type ZenCustomWidgetPayload, type ZenFrameReply, t
 import type { ZenAgentRow, ZenPerson, ZenThreadView } from './zen-data'
 import { ZEN_LINKS_OPEN, zenLinkTarget } from './zen-links'
 import {
+  projectZenActivityState,
+  zenEndedAtSubscribe,
   projectZenPeople,
   projectZenRows,
   projectZenThreadDelta,
@@ -251,7 +253,7 @@ export const ZEN_SOURCES_ASK_RETIRED =
  *  instead and starts it if `boundChanged` brings the address in time. */
 export const ZEN_SOURCES_REBIND_MS = 30_000
 
-type Row = { cap: UserWidgetCap | null; kind: 'call' | 'subscribe' | 'event' }
+type Row = { cap: UserWidgetCap | null; also?: readonly UserWidgetCap[]; kind: 'call' | 'subscribe' | 'event' }
 
 const CUSTOM: Record<string, Row> = ZEN_CUSTOM_VERBS as unknown as Record<string, Row>
 const WIDGET_CAPS: ReadonlySet<string> = new Set(USER_WIDGET_CAPS)
@@ -932,6 +934,25 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       void deps.ensureConversation(address).catch((err: unknown) => console.warn(`[zen] widget Thread for ${address}:`, err))
       return off
     },
+    // 0.46.5 activity SDK: the Thread turn as an App guest sees it, on the
+    // same feed as thread.subscribe (K2's socket, the catch-up read on every
+    // (re)open, a re-read on focus). The current turn first (an ended one
+    // reads as none, like thread.activity), then every change.
+    'thread.onActivity': (args, push) => {
+      const address = needAddress('thread.onActivity', args[0])
+      let last = ''
+      let endedBefore: string | null | undefined
+      const off = inner('thread.subscribe', address, (view: ZenThreadView) => {
+        if (endedBefore === undefined) endedBefore = zenEndedAtSubscribe(view)
+        const projected = projectZenActivityState(view, endedBefore)
+        const sig = JSON.stringify(projected)
+        if (sig === last) return
+        last = sig
+        push(projected)
+      }) as () => void
+      void deps.ensureConversation(address).catch((err: unknown) => console.warn(`[zen] widget Thread for ${address}:`, err))
+      return off
+    },
     // app-room-stream (0.46.3): every new message on this server's agents,
     // one socket for all of them; the item is projected like a Thread view's.
     'thread.inbox': (_args, push) =>
@@ -979,6 +1000,12 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     if (!row) {
       if (Object.prototype.hasOwnProperty.call(ZEN_VERBS, v)) refuse('not_exposed', `${v} isn’t available to custom widgets.`)
       refuse('unknown_verb', `No verb ${v}.`)
+    }
+    // 0.46.5: a row may need more than one cap (`alsoCaps`): each is
+    // checked, and the refusal names the first one missing.
+    const missingAlso = (row!.also ?? []).find((c) => !caps().has(c))
+    if (row!.cap !== null && caps().has(row!.cap) && missingAlso) {
+      refuse('cap_not_granted', `${v} needs ${missingAlso}.`, { cap: missingAlso })
     }
     if (row!.cap !== null && !caps().has(row!.cap)) {
       // CA14 (Garden access on): an unsigned version that asked for
@@ -1044,7 +1071,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
         if (row.kind === 'call' && verb !== ZEN_STORE_SUBSCRIBE_VERB) refuse('failed', `${verb} is a call: use k2.call.`)
         if (subs.has(sub)) return null
         const budget = verb !== 'theme.changed'
-        const thread = verb === 'thread.subscribe' || verb === 'thread.inbox'
+        const thread = verb === 'thread.subscribe' || verb === 'thread.inbox' || verb === 'thread.onActivity'
         const live = [...subs.values()]
         if (budget && live.filter((s) => s.budget).length >= ZEN_WIDGET_BUDGET.liveSubscriptions) {
           refuse('rate_limited', 'At most 16 live subscriptions.')

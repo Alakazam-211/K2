@@ -1084,6 +1084,61 @@ export interface AppGuestList {
   readonly ok: boolean
 }
 
+export interface AppThreadTurnEnd {
+  /** done, stopped or failed. */
+  readonly reason: string
+}
+
+export interface AppThreadTally {
+  readonly cmd: number
+  readonly edit: number
+  readonly read: number
+  readonly search: number
+}
+
+export interface AppThreadTurn {
+  /** Background tasks running now. */
+  readonly background: number
+  /** Null while it runs; the turn's end frame says how it ended. */
+  readonly end: AppThreadTurnEnd | null
+  /** Thread messages in this turn. */
+  readonly messages: number
+  /** delivering, working, tool (no line), thinking, waiting, stale or children. */
+  readonly phase: string
+  /** Milliseconds since the epoch: when this phase began. */
+  readonly phaseSince: number | null
+  /** This turn's frame counter (not a time): a later frame has a higher rev. */
+  readonly rev: number
+  /** Milliseconds since the epoch: the server clock when the frame was built. */
+  readonly serverNow: number | null
+  /** Milliseconds since the epoch: the first message's receipt time (the clock). */
+  readonly startedAt: number | null
+  /** working, monitoring, needs-you, unverifiable, stopped or idle. */
+  readonly state: string
+  /** Subagents running now. */
+  readonly subagents: number
+  /** Subagents done in this turn. */
+  readonly subagentsDone: number
+  /** Tools called in this turn, by kind (numbers only). */
+  readonly tally: AppThreadTally
+  /** The Thread message that started the turn. */
+  readonly turnId: string
+  /** owner while the agent waits on the owner (never which prompt), else null. */
+  readonly waitingOn: string | null
+}
+
+export interface ThreadActivityState {
+  readonly address: string
+  /** live: K2 is connected and caught up; catching-up: the first read is on its way; retrying: the connection dropped and K2 is reconnecting (the last turn stays). */
+  readonly fresh: 'live' | 'catching-up' | 'retrying'
+  /** A turn is running (turn is set and has no end). */
+  readonly live: boolean
+  /** thread: the agent's server reports Thread turns; none: it doesn't (turn is always null, never a guess). */
+  readonly source: 'thread' | 'none'
+  /** The counts-only ear: the room's pinned-Chat Thread turn a Thread message started (no tool line, path, command or text). */
+  readonly turn: AppThreadTurn | null
+}
+
 export interface AppActivityCounts {
   readonly commands: number
   readonly subagents: number
@@ -1301,13 +1356,14 @@ export interface K2Verbs {
   'guests.rooms': { args: [args: { app?: string; username: string }]; value: AppGuestRooms }
   'guests.setRooms': { args: [args: { app?: string; rooms: string[]; username: string }]; value: AppGuestRooms }
   'guests.list': { args: [args?: { app?: string; cursor?: string; limit?: number }]; value: AppGuestList }
+  'thread.onActivity': { args: [address: string]; value: ThreadActivityState }
   'activity.snapshot': { args: [args: { workspace: string }]; value: AppActivity }
   'room.members': { args: [args: { app?: string; workspace: string }]; value: RoomMembers }
 }
 
 export type K2Verb = keyof K2Verbs
 export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members'
-export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe'
+export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'thread.onActivity'
 
 export interface K2 {
   readonly gardens: {
@@ -1437,6 +1493,10 @@ export interface K2 {
     post(address: string, text: string, opts?: { attachments?: ThreadAttach[] }): Promise<Posted>
     /** Answer a choice card in the Thread (never a secret card). cap thread:post · portable · zen-v1. e.g. `await k2.thread.answer(row.address, card.id, 'Yes')` */
     answer(address: string, cardId: string, choice: string): Promise<null>
+    /** The agent's live Thread turn, exactly as an App guest with the same caps sees it (thread.activity + its thread_activity frames: counts, never text): the current turn at once, then every frame; turn null means nothing is running (never infer it from messages). caps activity:read + thread:read · portable · widget-activity-v1. e.g. `const off = k2.thread.onActivity(row.address, ({turn}) => turn ? drawWorking(turn) : hideWorking())` */
+    onActivity(address: string, cb: (value: ThreadActivityState) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
+    onActivity(address: string, handlers: K2Handlers<ThreadActivityState>): () => void
   }
   readonly compose: {
     /** Set K2's message box for that agent; never sends. cap thread:post · local · zen-v1. e.g. `await k2.compose.draft(row.address, 'Ask for a status')` */

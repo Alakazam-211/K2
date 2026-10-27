@@ -25,6 +25,7 @@ export const ZEN_VERBS = {
   'agents.show': 'agents:read',
   'thread.read': 'thread:read',
   'thread.subscribe': 'thread:read',
+  'thread.onActivity': 'activity:read',
   'thread.inbox': 'thread:read',
   'thread.markRead': 'thread:read',
   'thread.attachment': 'thread:read',
@@ -61,6 +62,8 @@ export const ZEN_VERBS = {
 /** One custom-widget verb: its cap, portable or local, and how it answers. */
 export interface ZenCustomVerbRow {
   readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | null
+  /** More caps the verb also needs (0.46.5); absent = `cap` alone. */
+  readonly also?: readonly ('agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members')[]
   readonly reach: CatalogReach
   readonly kind: CatalogVerbKind
 }
@@ -143,6 +146,7 @@ export const ZEN_CUSTOM_VERBS = {
   'guests.rooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
   'guests.setRooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
   'guests.list': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
+  'thread.onActivity': { cap: 'activity:read', also: ['thread:read'], reach: 'portable', kind: 'subscribe' },
   'activity.snapshot': { cap: 'activity:read', reach: 'portable', kind: 'call' },
   'room.members': { cap: 'room:members', reach: 'portable', kind: 'call' },
 } as const satisfies Record<string, ZenCustomVerbRow>

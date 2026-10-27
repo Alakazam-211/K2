@@ -251,6 +251,9 @@ pub const BRIDGE_CAPS: &[&str] = &[
     "gardens:manage",
     "gardens:template",
     "app:navigate",
+    // 0.46.5 activity SDK: `thread.onActivity` (with thread:read), the
+    // Garden's twin of the App ear.
+    "activity:read",
 ];
 
 /// The caps a custom widget may ask for, and runs with when it asks

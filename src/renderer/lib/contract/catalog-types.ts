@@ -48,6 +48,9 @@ export interface CatalogVerbRow {
   /** `surface.action` */
   verb: string
   cap: string | null
+  /** More caps the verb also needs, checked like `cap` (0.46.5). Absent =
+   *  `cap` alone. */
+  alsoCaps?: string[]
   /** Absent or empty = none (K2 built-ins only). */
   exposure?: CatalogExposure[]
   reach: CatalogReach

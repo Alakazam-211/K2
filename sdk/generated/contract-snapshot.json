@@ -2,17 +2,17 @@
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
   "catalogVersion": 23,
-  "catalogSha256": "70b51680a65c4c174385160c72ee90a07bd184cbdf53dd81a76207d478c13625",
-  "runtimeSha256": "e22fa32d0189148dca17880241a4dfec415841b4e38db9711f891f1b9774262c",
+  "catalogSha256": "ea25bd7b99973f6551dd8fc3778325b5e98b0ea54536b1ace6bdef11f55ca12d",
+  "runtimeSha256": "42a76758704d0eac954b27268ca553c6dd46f3c50fe20d998b959b4d807daea7",
   "files": {
-    "cli/k2": "6539178fa8650e2be54edc5f3b7425004084e62451f88bf9b3d53fab0ed9a983",
+    "cli/k2": "73318f7a7ad1e87c76a100c25301c6de5483c1021c61588b64b37a7865e1abc1",
     "cli/k2#study app-api": "332a79ace31f4701e249d11d564c4d938fc4a9e9b5931ae7a2aa6f3dd94edc7a",
     "cli/k2#zen guide libs": "a8a8721df1bd1406fb05064ead247bdcf6bc42cee0c01e90eeb0b4dc6273a117",
     "crates/k2-core/src/app_surface.rs": "f409bc52a9836cec479b2e6684931771d47e50bb003dec2504455338d8938726",
-    "sdk/generated/k2-frame.js": "736fbb6e7e3bf0ce784d6accb2310b837d6fbdf5efa3f2bb0af06547ec54939d",
-    "sdk/generated/k2.d.ts": "4cef624e73228bef365f0e90c967a93639f6e1f093e36486ae3600089719fc54",
-    "sdk/server/src/generated/verbs.ts": "f6408c837cfa54c0167a3f4cda2e3e8e03464b5f906440c2c4605f4544482a4c",
-    "src/renderer/lib/k2-caps.generated.ts": "0fbb399d20dc1cd55a7eaefd3133c1552101a4710c8fbc538f1cbda28f447093",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "30f13e530213914ca14255917d75785b66f3ce4948b4dce6cb7773c362e19099"
+    "sdk/generated/k2-frame.js": "1b441de8a45bd58997845263cf6c8c6abfe82d85d638b6452d1c7ce3e9f6f836",
+    "sdk/generated/k2.d.ts": "9831ea02ce798c53d5ab31a93ce836295c2863ec3bd9ec3b3c299632d20363ef",
+    "sdk/server/src/generated/verbs.ts": "02b3e71f58e0925241b18d69618f0210f71d1b91317c0cf464318f6bb5f4e1b7",
+    "src/renderer/lib/k2-caps.generated.ts": "4cdb71d6f249d1f59fd53655146aaaeea1dc1d9e5996824b3fdeef0b0ade1b13",
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "46d98b03481b391f9ad9564770a2e01b8ddd649b700340391af80a29e7491fa6"
   }
 }

@@ -3045,7 +3045,7 @@ export interface AppSurfaces {
     page(args: { addr: string; afterSeq?: number; beforeSeq?: number; limit?: number; sinceSeq?: number }): Promise<AppThreadPage>
     /** The newest Thread item per room, for list previews; a room the pass can't read is an item with error. cap thread:read · GET /cli/thread/latest. e.g. `const {items} = await k2.thread.latest({addrs: ['sales', 'ops']})` */
     latest(args: { addrs: string[] }): Promise<AppThreadLatest>
-    /** The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Live: kind thread_activity on thread.stream (the SDK opens it with ear=1); a raw overlay socket opened with ear=1 gets collection activity frames. cap activity:read · GET /cli/thread/activity. e.g. `const {turn} = await k2.thread.activity({addr})` */
+    /** The room's live pinned-Chat Thread turn, counts only (needs thread:read and activity:read); null when none. Live: kind thread_activity on thread.stream (the SDK opens it with ear=1); a raw overlay socket opened with ear=1 gets collection activity frames. caps activity:read + thread:read · GET /cli/thread/activity. e.g. `const {turn} = await k2.thread.activity({addr})` */
     activity(args: { addr: string }): Promise<AppThreadActivity>
     /** Post text (and room files) to a room's Thread as the guest (or the App); the agent gets it at once. cap thread:post · POST /cli/thread/post. e.g. `await k2.thread.send({addr: 'sales', text: 'Hi'})` */
     send(args: { addr: string; attachments?: AppThreadAttach[]; text?: string; via?: string }): Promise<AppThreadPosted>

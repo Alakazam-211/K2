@@ -267,6 +267,8 @@ fn zen_verbs_ts(c: &Catalog) -> String {
     s.push_str("/** One custom-widget verb: its cap, portable or local, and how it answers. */\n");
     s.push_str("export interface ZenCustomVerbRow {\n");
     s.push_str(&format!("  readonly cap: {caps} | null\n"));
+    s.push_str("  /** More caps the verb also needs (0.46.5); absent = `cap` alone. */\n");
+    s.push_str(&format!("  readonly also?: readonly ({caps})[]\n"));
     s.push_str("  readonly reach: CatalogReach\n  readonly kind: CatalogVerbKind\n}\n\n");
     s.push_str(
         "/**\n * The custom-widget allowlist (UW16, UWB10): catalog rows whose `exposure`\n * includes `widget` or `garden-local` (this computer's daemon, through\n * `/cli/zen/call`), grouped by cap. Its own table, never `ZEN_VERBS`.\n */\nexport const ZEN_CUSTOM_VERBS = {\n",
@@ -275,8 +277,9 @@ fn zen_verbs_ts(c: &Catalog) -> String {
         for v in rows {
             let cap = v.cap.as_deref().map(ts_str).unwrap_or_else(|| "null".into());
             s.push_str(&format!(
-                "  {}: {{ cap: {cap}, reach: {}, kind: {} }},\n",
+                "  {}: {{ cap: {cap},{} reach: {}, kind: {} }},\n",
                 ts_str(&v.verb),
+                also_ts(v, "also: [", "],"),
                 ts_str(reach_name(v)),
                 ts_str(kind_name(v.kind))
             ));
@@ -285,6 +288,24 @@ fn zen_verbs_ts(c: &Catalog) -> String {
     s.push_str("} as const satisfies Record<string, ZenCustomVerbRow>\n\n");
     s.push_str("export type ZenCustomVerb = keyof typeof ZEN_CUSTOM_VERBS\n");
     s
+}
+
+/// ` also: ['a', 'b'],` for a row with `alsoCaps` (between `open` and
+/// `close`), else nothing: rows without it keep their bytes.
+fn also_ts(v: &VerbRow, open: &str, close: &str) -> String {
+    if v.also_caps.is_empty() {
+        return String::new();
+    }
+    format!(" {open}{}{close}", v.also_caps.iter().map(|c| ts_str(c)).collect::<Vec<_>>().join(", "))
+}
+
+/// `cap a` or `caps a + b` (helper docs), `no cap` for a no-cap row.
+pub(super) fn caps_words(v: &VerbRow) -> String {
+    match v.all_caps().as_slice() {
+        [] => "no cap".into(),
+        [one] => format!("cap {one}"),
+        many => format!("caps {}", many.join(" + ")),
+    }
 }
 
 fn reach_name(v: &VerbRow) -> &'static str {
@@ -464,7 +485,7 @@ impl Ts {
 }
 
 fn helper_doc(v: &VerbRow) -> String {
-    let cap = v.cap.as_deref().map(|c| format!("cap {c}")).unwrap_or_else(|| "no cap".into());
+    let cap = caps_words(v);
     let here = if v.exposed_to(Exposure::GardenLocal) { " This computer only." } else { "" };
     format!("  /** {}{here} {cap} · {} · {}. e.g. `{}` */\n", v.doc, reach_name(v), v.feature, v.example)
 }
@@ -617,8 +638,9 @@ fn frame_js(c: &Catalog, runtime: Option<&str>) -> String {
         for v in rows {
             let cap = v.cap.as_deref().map(ts_str).unwrap_or_else(|| "null".into());
             s.push_str(&format!(
-                "      {}: Object.freeze({{ cap: {cap}, reach: {}, kind: {}, feature: {} }}),\n",
+                "      {}: Object.freeze({{ cap: {cap},{} reach: {}, kind: {}, feature: {} }}),\n",
                 ts_str(&v.verb),
+                also_ts(v, "also: Object.freeze([", "]),"),
                 ts_str(reach_name(v)),
                 ts_str(kind_name(v.kind)),
                 ts_str(&v.feature)
@@ -689,8 +711,9 @@ local: Garden only). Each line: helper, reach, feature, example, [errors]\n",
         for v in rows {
             let errs: Vec<&str> = v.errors.iter().map(String::as_str).filter(|e| !ALWAYS_ERRORS.contains(e)).collect();
             let errs = if errs.is_empty() { String::new() } else { format!("  [{}]", errs.join(" ")) };
+            let also: String = v.also_caps.iter().map(|a| format!("  +{a}")).collect();
             s.push_str(&format!(
-                "  {:<w_sig$} {:<8} {:<w_feat$}  {}{errs}\n",
+                "  {:<w_sig$} {:<8} {:<w_feat$}  {}{also}{errs}\n",
                 format!("k2.{}", signature(v)),
                 reach_name(v),
                 v.feature,
@@ -804,7 +827,7 @@ mod tests {
     #[test]
     fn zen_verbs_is_todays_37_plus_nothing_else() {
         let rows = bridge_rows(catalog());
-        assert_eq!(rows.len(), 44, "ZEN_VERBS: today's 37 plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles, plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's agents.show and conversation.setContext");
+        assert_eq!(rows.len(), 45, "ZEN_VERBS: today's 37 plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles, plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's agents.show and conversation.setContext, plus the 0.46.5 activity SDK's thread.onActivity");
         for frame in ["layout.get", "layout.set", "layout.toggle", "layout.subscribe"] {
             assert!(!rows.iter().any(|v| v.verb == frame), "{frame} is a frame row (no cap), never in ZEN_VERBS");
         }
@@ -812,10 +835,10 @@ mod tests {
         let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            74,
-            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch and links.open (0.46.4), plus box usage's app.resources (0.46.4), plus catalog v22's app.rooms and guests.list (0.46.4)"
+            75,
+            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch and links.open (0.46.4), plus box usage's app.resources (0.46.4), plus catalog v22's app.rooms and guests.list (0.46.4), plus the 0.46.5 activity SDK's thread.onActivity"
         );
-        assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 37, "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows; catalog v21's links.open)");
+        assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 38, "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows; catalog v21's links.open; 0.46.5's thread.onActivity)");
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",
             "thread.void", "gardens.create", "gardens.rename", "gardens.delete", "app.open"]
         {

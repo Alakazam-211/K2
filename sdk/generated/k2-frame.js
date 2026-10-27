@@ -83,6 +83,7 @@
       'guests.rooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
       'guests.setRooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
       'guests.list': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
+      'thread.onActivity': Object.freeze({ cap: 'activity:read', also: Object.freeze(['thread:read']), reach: 'portable', kind: 'subscribe', feature: 'widget-activity-v1' }),
       'activity.snapshot': Object.freeze({ cap: 'activity:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
       'room.members': Object.freeze({ cap: 'room:members', reach: 'portable', kind: 'call', feature: 'room-members-v1' }),
     }),
@@ -813,6 +814,8 @@ k2.can = function (/** @type {string} */ verb) {
 var row = TABLE[verb]
 if (!row || !hello) return false
 if (row.cap !== null && hello.caps.indexOf(row.cap) < 0) return false
+var also = row.also || []
+for (var i = 0; i < also.length; i++) if (hello.caps.indexOf(also[i]) < 0) return false
 if (row.feature && hello.features.indexOf(row.feature) < 0) return false
 return true
 }

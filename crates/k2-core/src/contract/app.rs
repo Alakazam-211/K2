@@ -450,7 +450,7 @@ fn ts_record(m: &std::collections::BTreeMap<String, String>) -> String {
 }
 
 fn sdk_doc(v: &VerbRow) -> String {
-    let cap = v.cap.as_deref().map(|c| format!("cap {c}")).unwrap_or_else(|| "no cap".into());
+    let cap = super::gen::caps_words(v);
     let wire = match (&v.bindings.http, &v.bindings.socket) {
         (Some(h), _) => format!("{} {}", if h.method == HttpMethod::Get { "GET" } else { "POST" }, h.route),
         (None, Some(s)) => format!("WS {}?{}=", s.path, s.param.as_deref().unwrap_or("")),

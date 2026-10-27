@@ -821,6 +821,9 @@ export interface ThreadTurn {
   /** `serverNow − Date.now()` when this frame arrived. Server times read
    *  on this client's clock as `Date.now() + skewMs`. */
   skewMs: number
+  /** Server ms: when the daemon built this frame (the frame's own
+   *  `serverNow`, 0.46.5), so a projection can hand it on unchanged. */
+  serverNow?: number
 }
 
 const TURN_STATES: readonly ThreadTurnState[] = ['working', 'monitoring', 'needs-you', 'unverifiable', 'stopped', 'idle']
@@ -908,6 +911,7 @@ export function coerceThreadTurn(raw: unknown, receivedAt: number): ThreadTurn |
     end,
     rev: finite(a.rev) ?? 0,
     skewMs: serverNow - receivedAt,
+    serverNow,
   }
 }
 

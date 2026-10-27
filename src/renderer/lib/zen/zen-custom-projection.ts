@@ -25,9 +25,12 @@
 //     out. `conversation_id` never crosses (it can be the pinned session id).
 //     A post with a Board context (thread-context-v1, 0.46.3 r10) adds
 //     `context: {text, widget, placement}` (never the Garden or the hash);
-//   - a Thread view: `{address, phase, note, items, hasMore, turn}`.
+//   - a Thread view: `{address, phase, note, items, hasMore, turn?}` (`turn`
+//     absent when the agent's server reports no Thread turns);
+//   - a Thread turn (`thread.onActivity`, 0.46.5): `{address, turn, live,
+//     source, fresh}`, where `turn` is the App guest's turn, key for key.
 
-import type { OverlayChoice, OverlayThreadItem, ThreadFileObject } from '@/components/SessionView/overlayThread'
+import type { OverlayChoice, OverlayThreadItem, ThreadFileObject, ThreadTurn } from '@/components/SessionView/overlayThread'
 import type { UserWidgetCap } from '../k2-caps.generated'
 import { agentLookColor, agentLookImage } from '../agent-look'
 import type { ZenAgentRow, ZenPerson, ZenPreview, ZenThreadView } from './zen-data'
@@ -327,7 +330,9 @@ export interface ZenWidgetThreadView {
   note: string | null
   items: ZenWidgetThreadItem[]
   hasMore: boolean
-  turn: { state: string; since: number } | null
+  /** Absent when the agent's server doesn't report Thread turns (the
+   *  catalog's ThreadView, `k2.d.ts`): never null for "unknown". */
+  turn?: { state: string; since: number } | null
 }
 
 export function projectZenThreadView(v: ZenThreadView): ZenWidgetThreadView {
@@ -337,6 +342,121 @@ export function projectZenThreadView(v: ZenThreadView): ZenWidgetThreadView {
     note: v.note,
     items: projectZenThreadItems(v.items),
     hasMore: v.hasMore,
-    turn: v.turn ? { state: v.turn.state, since: v.turn.since } : null,
+    // 0.46.5 (review B4): `undefined` (no turns on that server) stays
+    // absent; only a server that reports turns says null.
+    ...(v.turn === undefined ? {} : { turn: v.turn ? { state: v.turn.state, since: v.turn.since } : null }),
   }
+}
+
+// ── The Thread turn as an App guest sees it (0.46.5 activity SDK) ─────────
+//
+// `k2.thread.onActivity` hands a widget the SAME turn an App guest with
+// `thread:read` + `activity:read` gets from `thread.activity` and its
+// `thread_activity` frames: the daemon's `guest_turn_body`
+// (thread_activity.rs), key for key, built fresh from an allow list.
+// Strings only from fixed word lists; no tool line, child label, end
+// detail, path or text. The shared fixture
+// `tests/fixtures/activity/guest-turn-parity.json` holds both sides to it.
+
+/** The exact keys of a guest turn (`GUEST_TURN_KEYS`, thread_activity.rs). */
+export const ZEN_ACTIVITY_TURN_KEYS = [
+  'turnId',
+  'rev',
+  'state',
+  'phase',
+  'phaseSince',
+  'startedAt',
+  'serverNow',
+  'tally',
+  'subagents',
+  'subagentsDone',
+  'background',
+  'messages',
+  'waitingOn',
+  'end',
+] as const
+
+/** The catalog's AppThreadTurn. */
+export interface ZenWidgetActivityTurn {
+  turnId: string
+  rev: number
+  state: string
+  phase: string
+  phaseSince: number | null
+  startedAt: number | null
+  serverNow: number | null
+  tally: { read: number; search: number; cmd: number; edit: number }
+  subagents: number
+  subagentsDone: number
+  background: number
+  messages: number
+  waitingOn: 'owner' | null
+  end: { reason: 'done' | 'stopped' | 'failed' } | null
+}
+
+/** The catalog's ThreadActivityState (`thread.onActivity`). */
+export interface ZenWidgetActivityState {
+  address: string
+  turn: ZenWidgetActivityTurn | null
+  live: boolean
+  source: 'thread' | 'none'
+  fresh: 'live' | 'catching-up' | 'retrying'
+}
+
+/** `coarse_end_reason` (thread_activity.rs). */
+export function zenCoarseEndReason(reason: string | null | undefined): 'done' | 'stopped' | 'failed' {
+  if (reason === 'reply' || reason === 'done') return 'done'
+  if (reason === 'interrupted' || reason === 'superseded' || reason === 'stale') return 'stopped'
+  return 'failed'
+}
+
+function whole(n: number | undefined): number {
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
+}
+
+function msOrNull(n: number | undefined): number | null {
+  return typeof n === 'number' && Number.isFinite(n) ? Math.trunc(n) : null
+}
+
+/** One owner turn (the feed's, coerced by `coerceThreadTurn`) as an App
+ *  guest reads it: `guest_turn_body`'s twin. */
+export function projectZenActivityTurn(t: ThreadTurn): ZenWidgetActivityTurn {
+  return {
+    turnId: t.turnId,
+    rev: Math.trunc(t.rev),
+    state: t.state,
+    phase: t.phase,
+    phaseSince: msOrNull(t.phaseSince),
+    startedAt: msOrNull(t.startedAt),
+    serverNow: msOrNull(t.serverNow),
+    tally: { read: whole(t.tally.read), search: whole(t.tally.search), cmd: whole(t.tally.cmd), edit: whole(t.tally.edit) },
+    subagents: whole(t.subagents),
+    subagentsDone: whole(t.subagentsDone),
+    background: whole(t.background),
+    messages: whole(t.messages),
+    // Rosson 2026-10-21: "waiting on the owner", never which prompt.
+    waitingOn: t.waitingOn !== null ? 'owner' : null,
+    end: t.end ? { reason: zenCoarseEndReason(t.end.reason) } : null,
+  }
+}
+
+/** The turn id a subscriber must not show as an end frame: the turn that
+ *  had already ended when it subscribed (its snapshot reads as no turn, as
+ *  `thread.activity` answers null once a turn is over). Null when the
+ *  first view had no ended turn. */
+export function zenEndedAtSubscribe(v: ZenThreadView): string | null {
+  const t = v.liveTurn
+  return t && t.end ? t.turnId : null
+}
+
+/** What `k2.thread.onActivity` pushes for a Thread view. `endedBefore`
+ *  ({@link zenEndedAtSubscribe} of the first view): that ended turn reads
+ *  as none; any other end frame is pushed as is (the App socket's end
+ *  frame), and the caller pushes a value only when it changed. */
+export function projectZenActivityState(v: ZenThreadView, endedBefore: string | null): ZenWidgetActivityState {
+  const reported = v.liveTurn !== undefined
+  const raw = reported ? v.liveTurn ?? null : null
+  const turn = raw && !(raw.end && raw.turnId === endedBefore) ? projectZenActivityTurn(raw) : null
+  const fresh: ZenWidgetActivityState['fresh'] = v.error ? 'retrying' : v.phase === 'ready' && v.loaded ? 'live' : 'catching-up'
+  return { address: v.address, turn, live: !!turn && turn.end === null, source: reported ? 'thread' : 'none', fresh }
 }

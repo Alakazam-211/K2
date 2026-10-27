@@ -82,8 +82,8 @@ export const K2_CAPS = {
   },
   'activity:read': {
     label: 'See when the agent is working',
-    sentence: 'See when the agents on this computer are working (no tool names, text or paths).',
-    exposure: ['app', 'garden-local'],
+    sentence: 'See when the agents in {where} are working (counts only: no tool names, text or paths).',
+    exposure: ['widget', 'app', 'garden-local'],
   },
   'heartbeats:read': { label: 'See heartbeats: schedule, next fire, history', exposure: ['app'] },
   'heartbeats:write': { label: 'Add, edit, turn on or off, archive and fire heartbeats', exposure: ['app'] },

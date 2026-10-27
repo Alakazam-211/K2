@@ -2835,6 +2835,29 @@ mod tests {
         }
     }
 
+    /// 0.46.5 activity SDK: the shared fixture the Garden widget test
+    /// (`zen-activity-parity.test.ts`) reads too. Each owner body's guest
+    /// projection is exactly its `guest`, so a widget with `thread:read` +
+    /// `activity:read` (`k2.thread.onActivity`) sees what an App guest with
+    /// the same caps sees. A new guest key fails here until the fixture and
+    /// the renderer's twin (`projectZenActivityTurn`) carry it too.
+    #[test]
+    fn guest_turn_parity_fixture() {
+        let fixture: Value = serde_json::from_str(include_str!("../../../tests/fixtures/activity/guest-turn-parity.json"))
+            .expect("the parity fixture parses");
+        let secrets: Vec<&str> =
+            fixture["secrets"].as_array().expect("secrets").iter().map(|s| s.as_str().expect("a string")).collect();
+        let cases = fixture["cases"].as_array().expect("cases");
+        assert!(cases.len() >= 8, "the fixture keeps its cases");
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            let got = guest_turn_body(&case["owner"]);
+            assert_eq!(got, case["guest"], "{name}");
+            assert_guest_turn_keys(&got);
+            assert_guest_text_clean(&got, &secrets);
+        }
+    }
+
     #[test]
     fn the_guest_body_is_built_from_an_allow_list_never_by_stripping() {
         // A hostile owner body: every free-text field filled, extra keys,

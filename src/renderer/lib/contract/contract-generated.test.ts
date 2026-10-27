@@ -96,7 +96,7 @@ describe('TUWA5: the generated tables', () => {
   // thread.attachment, thread.open, thread.links and thread.pickFiles.
   // app-room-stream (0.46.3) adds thread.inbox. Catalog v20 (0.46.3 r10)
   // adds agents.show and conversation.setContext.
-  it('ZEN_VERBS is today’s 44 entries, key for key and cap for cap', () => {
+  it('ZEN_VERBS is today’s 45 entries, key for key and cap for cap', () => {
     expect(ZEN_VERBS).toEqual({
       'agents.list': 'agents:read',
       'agents.subscribe': 'agents:read',
@@ -116,6 +116,8 @@ describe('TUWA5: the generated tables', () => {
       'thread.subscribe': 'thread:read',
       // app-room-stream (0.46.3): one socket for every agent's new messages.
       'thread.inbox': 'thread:read',
+      // 0.46.5 activity SDK: the App guest's Thread turn (alsoCaps thread:read).
+      'thread.onActivity': 'activity:read',
       'thread.markRead': 'thread:read',
       'thread.attachment': 'thread:read',
       'thread.open': 'thread:read',
@@ -146,7 +148,7 @@ describe('TUWA5: the generated tables', () => {
       'controls.bind': null,
       'theme.get': null,
     })
-    expect(Object.keys(ZEN_VERBS)).toHaveLength(44)
+    expect(Object.keys(ZEN_VERBS)).toHaveLength(45)
   })
 
   it('ZEN_CUSTOM_VERBS is the UW16 list as amended by UWB10, plus the whole canvas (0.45.3)', () => {
@@ -191,6 +193,8 @@ describe('TUWA5: the generated tables', () => {
       'thread.pickFiles': { cap: 'thread:post', reach: 'local', kind: 'call' },
       'thread.inbox': { cap: 'thread:read', reach: 'portable', kind: 'subscribe' },
       'thread.post': { cap: 'thread:post', reach: 'portable', kind: 'call' },
+      // 0.46.5 activity SDK: both caps, as the App route checks them.
+      'thread.onActivity': { cap: 'activity:read', also: ['thread:read'], reach: 'portable', kind: 'subscribe' },
       'thread.answer': { cap: 'thread:post', reach: 'portable', kind: 'call' },
       'compose.draft': { cap: 'thread:post', reach: 'local', kind: 'call' },
       // Garden v3 data sources (contract-sources-v1 §6): frame-host verbs.

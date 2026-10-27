@@ -100,6 +100,9 @@ export const ZEN_FRAME_FEATURES: readonly string[] = [
   'thread-read-v1',
   'thread-attachments-v1',
   'thread-images-v1',
+  // 0.46.5 activity SDK: `thread.onActivity` (the renderer answers it from
+  // the Thread feed; an agent server without turns gives source none).
+  'widget-activity-v1',
 ]
 
 /** The Garden's theme as the frame gets it: the Zen root's `--zen-*`

@@ -30,7 +30,7 @@
 ;(function () {
   'use strict'
 
-  /** @typedef {{cap: string | null, reach: 'portable' | 'local', kind: 'call' | 'subscribe' | 'event', feature?: string}} VerbRow */
+  /** @typedef {{cap: string | null, also?: string[], reach: 'portable' | 'local', kind: 'call' | 'subscribe' | 'event', feature?: string}} VerbRow */
   /** @typedef {{code: string, message: string, cap?: string, room?: string, feature?: string, last?: unknown}} WireError */
 
   var g = /** @type {any} */ (self)
@@ -863,6 +863,8 @@
     var row = TABLE[verb]
     if (!row || !hello) return false
     if (row.cap !== null && hello.caps.indexOf(row.cap) < 0) return false
+    var also = row.also || []
+    for (var i = 0; i < also.length; i++) if (hello.caps.indexOf(also[i]) < 0) return false
     if (row.feature && hello.features.indexOf(row.feature) < 0) return false
     return true
   }

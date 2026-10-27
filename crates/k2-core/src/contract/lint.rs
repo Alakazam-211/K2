@@ -147,6 +147,26 @@ fn lint_row(c: &Catalog, v: &VerbRow, out: &mut Vec<String>) {
             }
         }
     }
+    // 0.46.5: `alsoCaps` (a verb that needs more than one cap).
+    if !v.also_caps.is_empty() && v.cap.is_none() {
+        out.push(format!("{name}: alsoCaps on a no-cap row"));
+    }
+    let mut also_seen = BTreeSet::new();
+    for also in &v.also_caps {
+        if v.cap.as_deref() == Some(also.as_str()) || !also_seen.insert(also.as_str()) {
+            out.push(format!("{name}: alsoCaps repeats '{also}'"));
+        }
+        match c.cap(also) {
+            None => out.push(format!("{name}: alsoCaps '{also}' isn't in the cap table")),
+            Some(row) => {
+                for who in &v.exposure {
+                    if !row.exposure.contains(who) {
+                        out.push(format!("{name}: exposed to {who:?} but its cap '{also}' isn't"));
+                    }
+                }
+            }
+        }
+    }
     for e in &v.errors {
         if c.error(e).is_none() {
             out.push(format!("{name}: error '{e}' isn't in the shared error list"));
@@ -526,6 +546,24 @@ mod tests {
     fn a_widget_row_with_an_unexposed_cap_fails() {
         let bad = GOOD.replace(r#""cap":"thread:read""#, r#""cap":"gardens:manage""#);
         assert_one(&with_rows(&format!("[{bad}]")), "its cap 'gardens:manage' isn't");
+    }
+
+    /// 0.46.5: `alsoCaps` names caps from the table, exposed where the
+    /// row is, never the row's own cap again, never on a no-cap row.
+    #[test]
+    fn also_caps_are_checked_like_the_cap() {
+        let good = GOOD.replace(r#""cap":"thread:read""#, r#""cap":"thread:read","alsoCaps":["agents:read"]"#);
+        let c = with_rows(&format!("[{good}]"));
+        assert!(lint(&c).is_empty(), "{:#?}", lint(&c));
+        assert_eq!(c.verb("seed.good").expect("seeded").all_caps(), ["thread:read", "agents:read"]);
+        let bad = GOOD.replace(r#""cap":"thread:read""#, r#""cap":"thread:read","alsoCaps":["nope:read"]"#);
+        assert_one(&with_rows(&format!("[{bad}]")), "alsoCaps 'nope:read' isn't in the cap table");
+        let bad = GOOD.replace(r#""cap":"thread:read""#, r#""cap":"thread:read","alsoCaps":["thread:read"]"#);
+        assert_one(&with_rows(&format!("[{bad}]")), "alsoCaps repeats 'thread:read'");
+        let bad = GOOD.replace(r#""cap":"thread:read""#, r#""cap":"thread:read","alsoCaps":["wiki:read"]"#);
+        assert_one(&with_rows(&format!("[{bad}]")), "its cap 'wiki:read' isn't");
+        let bad = GOOD.replace(r#""cap":"thread:read""#, r#""cap":null,"alsoCaps":["agents:read"]"#);
+        assert_one(&with_rows(&format!("[{bad}]")), "alsoCaps on a no-cap row");
     }
 
     #[test]

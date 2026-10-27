@@ -15,6 +15,8 @@
 //!
 //! A bug in any namespace is a root bug: changes here need two
 //! independent reviewers, one of them a security pass (Q10).
+// Server-only feature (Linux boxes); not shipped on personal Windows machines.
+#![cfg(unix)]
 
 pub mod apps;
 pub mod caller;

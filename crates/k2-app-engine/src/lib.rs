@@ -17,6 +17,8 @@
 //! Signed with the root-helper key (trusted comment
 //! `file:k2-app-engine-linux-<arch>`), installed and updated only through
 //! the root helper. Links nothing from k2-daemon or k2-core.
+// Server-only feature (Linux boxes); not shipped on personal Windows machines.
+#![cfg(unix)]
 
 pub mod build;
 pub mod oci;

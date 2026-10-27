@@ -1,6 +1,8 @@
 //! The built binary itself (never run as root here): exactly one build
 //! marker, `helper version` works unprivileged, everything else refuses
 //! without root, and refused argv never echoes caller bytes.
+// Server-only feature (Linux boxes); not shipped on personal Windows machines.
+#![cfg(unix)]
 
 use std::process::{Command, Stdio};
 

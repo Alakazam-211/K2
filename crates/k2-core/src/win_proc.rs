@@ -33,19 +33,26 @@ impl Drop for Proc {
     }
 }
 
+impl Proc {
+    /// Still running. An exited process stays openable while anyone (its
+    /// parent's `Child`, say) holds a handle, so opening is not enough.
+    fn running(&self) -> bool {
+        let mut code = 0u32;
+        // SAFETY: a live handle and our own out-param.
+        let ok = unsafe { GetExitCodeProcess(self.0, &mut code) };
+        ok != 0 && code == STILL_ACTIVE
+    }
+}
+
 /// The process exists and has not exited.
 pub fn pid_alive(pid: u32) -> bool {
-    let Some(p) = Proc::open(pid) else { return false };
-    let mut code = 0u32;
-    // SAFETY: a live handle and our own out-param.
-    let ok = unsafe { GetExitCodeProcess(p.0, &mut code) };
-    ok != 0 && code == STILL_ACTIVE
+    Proc::open(pid).is_some_and(|p| p.running())
 }
 
 /// The process's creation time (100 ns since 1601), a stable identity for a
-/// live pid. `None` when the process is gone or can't be opened.
+/// live pid. `None` when the process has exited or can't be opened.
 pub fn start_key(pid: u32) -> Option<u64> {
-    let p = Proc::open(pid)?;
+    let p = Proc::open(pid).filter(Proc::running)?;
     let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
     let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
     // SAFETY: a live handle and four out-params we own.

@@ -1547,7 +1547,7 @@ pub fn resolve_workspace_for_path(path: &str) -> String {
         if root.is_empty() {
             continue;
         }
-        let is_match = path == root || path.starts_with(&format!("{root}/"));
+        let is_match = k2_core::paths::is_under(&path, &root);
         if !is_match {
             continue;
         }

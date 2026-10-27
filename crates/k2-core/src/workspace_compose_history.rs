@@ -50,7 +50,7 @@ pub fn resolve_project_id_for_path(path: &str) -> Option<String> {
         if root.is_empty() {
             continue;
         }
-        let is_match = path == root || path.starts_with(&format!("{root}/"));
+        let is_match = crate::paths::is_under(&path, &root);
         if !is_match {
             continue;
         }

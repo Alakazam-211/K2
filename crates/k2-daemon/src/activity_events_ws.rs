@@ -271,7 +271,7 @@ fn slash(p: &str) -> String {
 fn boundary(path: &str, root: &str) -> bool {
     let path = slash(path);
     let root = slash(root);
-    !root.is_empty() && (path == root || path.starts_with(&format!("{root}/")))
+    !root.is_empty() && k2_core::paths::is_under(&path, &root)
 }
 
 /// True when `cwd` is a root or a directory under one, on a path boundary.

@@ -683,7 +683,7 @@ fn grok_workspace(updates: &Path) -> String {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let decoded = percent_decode(&encoded);
-    if decoded.starts_with('/') {
+    if crate::paths::is_path_token(&decoded) {
         decoded
     } else {
         String::new()
@@ -900,7 +900,9 @@ fn codex_file_cwd(path: &Path) -> Option<String> {
 }
 
 fn within(path: &str, ws: &str) -> bool {
-    path == ws || (path.starts_with(ws) && path.as_bytes().get(ws.len()) == Some(&b'/'))
+    // The next byte must be a separator: '/' everywhere, '\\' too on Windows.
+    let sep = |b: &u8| *b == b'/' || (cfg!(windows) && *b == b'\\');
+    path == ws || (path.starts_with(ws) && path.as_bytes().get(ws.len()).is_some_and(sep))
 }
 
 /// Idle scan for one workspace: its Claude project folder and Grok session

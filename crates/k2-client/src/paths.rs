@@ -37,6 +37,22 @@ fn windows_home_from(home: Option<std::ffi::OsString>, profile: Option<std::ffi:
     [home, profile].into_iter().flatten().map(PathBuf::from).find(|p| p.is_absolute())
 }
 
+/// Whether a workspace token is a filesystem path (vs a handle, name or
+/// id): it starts with `/`, or, on Windows, it is an absolute Windows path
+/// (`D:\ws`, `\\server\share\ws`). Exactly `starts_with('/')` on Unix.
+pub fn is_path_token(token: &str) -> bool {
+    token.starts_with('/') || (cfg!(windows) && std::path::Path::new(token).is_absolute())
+}
+
+/// `path` is `root` or inside it, compared as strings: the byte after
+/// `root` must be a separator (`/`; `\` too on Windows), so `/a/bc` is not
+/// under `/a/b`. Exactly the old `starts_with(root + "/")` test on Unix.
+pub fn is_under(path: &str, root: &str) -> bool {
+    path == root
+        || (path.starts_with(root)
+            && path.as_bytes().get(root.len()).is_some_and(|b| *b == b'/' || (cfg!(windows) && *b == b'\\')))
+}
+
 /// A relative path as a `/`-joined string on every OS: the portable form
 /// K2 keeps in bundles, manifests, rule lists and reports (Windows'
 /// `to_string_lossy` would give `a\b`). Same string as `to_string_lossy`
@@ -89,6 +105,16 @@ mod tests {
         assert_eq!(windows_home_from(os("/c/Users/u"), os(r"C:\Users\u")), Some(PathBuf::from(r"C:\Users\u")));
         assert_eq!(windows_home_from(None, os(r"C:\Users\u")), Some(PathBuf::from(r"C:\Users\u")));
         assert_eq!(windows_home_from(os("rel"), None), None);
+    }
+
+    #[test]
+    fn path_tokens_are_absolute_paths_only() {
+        assert!(is_path_token("/Users/a/ws"));
+        for t in ["sales", "sales/reviewer", "rosson.k2.dev::sales", "", "ws\\x"] {
+            assert!(!is_path_token(t), "{t:?}");
+        }
+        assert_eq!(is_path_token(r"D:\ws"), cfg!(windows));
+        assert_eq!(is_path_token(r"\\server\share\ws"), cfg!(windows));
     }
 
     #[test]

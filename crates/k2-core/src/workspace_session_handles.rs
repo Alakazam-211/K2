@@ -1216,7 +1216,7 @@ pub fn ensure_sidecar_handle_shared(
 /// `sales-reviewer` (no slash) returns None. Federation `::` is not parsed.
 pub fn split_workspace_handle(token: &str) -> Option<(&str, &str)> {
     let token = token.trim();
-    if token.is_empty() || token.starts_with('/') {
+    if token.is_empty() || crate::paths::is_path_token(token) {
         return None;
     }
     if token.contains("::") {

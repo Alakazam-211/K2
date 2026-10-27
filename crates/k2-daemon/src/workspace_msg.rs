@@ -1000,7 +1000,7 @@ fn deliver_live_inner(
                 resp.hint = Some(format!(
                     "'{workspace_token}' is an address on another server; this call only reaches workspaces on this server. Use `k2 msg {workspace_token} \"text\"` for a live message, or `k2 msg {workspace_token} --inbox-wake ...` to deliver a package and wake the agent there."
                 ));
-            } else if workspace_token.contains('/') && !workspace_token.starts_with('/') {
+            } else if workspace_token.contains('/') && !k2_core::paths::is_path_token(workspace_token) {
                 resp.hint = Some(match explain_unresolved_sidecar(workspace_token) {
                     Some(why) => format!("{why}. Use `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions live`)."),
                     None => format!(

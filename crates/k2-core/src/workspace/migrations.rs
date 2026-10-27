@@ -221,7 +221,7 @@ pub fn repair_mismigrated_heartbeats(project_path: &str) {
 
         let canonical_rel = canonical_wakeup
             .strip_prefix(project_path)
-            .map(|p| p.to_string_lossy().to_string())
+            .map(crate::paths::slash_rel)
             .unwrap_or_else(|_| canonical_wakeup.to_string_lossy().to_string());
         let row_is_canonical = hb.wakeup_path == canonical_rel;
 
@@ -434,7 +434,7 @@ pub fn promote_legacy_heartbeat(project_path: &str) {
 
     let workspace_relative = new_wakeup
         .strip_prefix(project_path)
-        .map(|p| p.to_string_lossy().to_string())
+        .map(crate::paths::slash_rel)
         .unwrap_or_else(|_| new_wakeup.to_string_lossy().to_string());
 
     let id = uuid::Uuid::new_v4().to_string();

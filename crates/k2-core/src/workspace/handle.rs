@@ -544,7 +544,7 @@ pub fn resolve_workspace_token(conn: &Connection, token: &str) -> WorkspaceToken
         return WorkspaceTokenResolve::Miss;
     }
 
-    if token.starts_with('/') {
+    if crate::paths::is_path_token(token) {
         return match conn.query_row(
             "SELECT path FROM projects WHERE path = ?1",
             params![token],

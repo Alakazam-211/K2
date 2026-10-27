@@ -876,7 +876,7 @@ pub fn abs_touches_heartbeats(root: &str, abs: &Path, ancestors: bool) -> bool {
     let k2_dir = fold(&canon_root.join(".k2"));
     let root_s = fold(&canon_root);
     let target = fold(&canon);
-    if target == hb_dir || target.starts_with(&format!("{hb_dir}/")) {
+    if k2_core::paths::is_under(&target, &hb_dir) {
         return true;
     }
     ancestors && (target == k2_dir || target == root_s)

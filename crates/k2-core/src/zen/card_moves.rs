@@ -418,7 +418,7 @@ impl ZenFiles {
             }
             let path = self.path_of(&f);
             crate::fs_atomic::atomic_write_str(&path, &moved).map_err(|e| ZenError::Io(format!("{}: {e}", path.display())))?;
-            let rel = backup.strip_prefix(self.root()).unwrap_or(&backup).to_string_lossy().to_string();
+            let rel = crate::paths::slash_rel(backup.strip_prefix(self.root()).unwrap_or(&backup));
             r.moved.push(MovedGarden {
                 garden: id.clone(),
                 name: name.clone(),

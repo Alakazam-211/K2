@@ -167,7 +167,7 @@ fn preview(who: &Who, caller: Option<&VaultCaller>, body: &[u8]) -> R<J> {
     if token.is_empty() {
         return Err(no("bad_request", 400, "name the workspace (project_path or workspace)"));
     }
-    let ws = if token.starts_with('/') {
+    let ws = if k2_core::paths::is_path_token(token) {
         // The path as registered first (a /tmp spelling stays /tmp), then
         // its canonical form (validate_path refuses traversal).
         let canonical = k2_core::fs_commands::validate_path(token).map_err(|e| no("bad_request", 400, e))?;

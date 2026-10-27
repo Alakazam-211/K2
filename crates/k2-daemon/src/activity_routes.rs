@@ -42,7 +42,7 @@ use crate::cli_response::CliResponse;
 /// itself, for sessions outside any project).
 fn workspace_key(token: &str) -> Result<WorkspaceKey, CliResponse> {
     let token = token.trim();
-    if token.starts_with('/') {
+    if k2_core::paths::is_path_token(token) {
         let path = token.trim_end_matches('/');
         let path = if path.is_empty() { "/" } else { path };
         let db = k2_core::db::shared();

@@ -154,7 +154,7 @@ pub fn owning_project(path: &str) -> Option<(String, String)> {
     let mut best: Option<(String, String)> = None;
     for (id, p) in rows.flatten() {
         let root = trim_ws(&p);
-        if root.is_empty() || root == "/" || !path.starts_with(&format!("{root}/")) {
+        if root.is_empty() || root == "/" || !k2_core::paths::is_under(&path, &root) || path == root {
             continue;
         }
         if best.as_ref().is_none_or(|(_, b)| b.len() < root.len()) {

@@ -90,6 +90,16 @@ async fn connect_login(port: u16, username: &str) -> String {
 /// The caller's unread on `ws`'s agent row (`presence/summary`). A
 /// workspace the summary doesn't list has nothing unread, waiting or
 /// ticketed: 0.
+/// The caller's whole badge on this server (`GET /cli/thread/unread`
+/// `total`). Other tests in this binary leave Threads in the same process
+/// DB, so tests compare it against a baseline read first, never a literal.
+async fn badge_total(port: u16, token: &str) -> i64 {
+    let r = get(port, "/cli/thread/unread", token, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    v["total"].as_i64().unwrap_or_else(|| panic!("total: {v}"))
+}
+
 async fn row_unread(port: u16, token: &str, ws: &Ws) -> i64 {
     let r = get(port, "/cli/presence/summary", token, "").await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -123,7 +133,9 @@ async fn mark_all_read_clears_an_agents_unreachable_threads_for_the_caller_only(
         boot.body
     );
 
-    // Both people are seen before anything is posted.
+    // Both people are seen before anything is posted; the owner's badge
+    // before this test's messages is the baseline.
+    let baseline = badge_total(port, OWNER).await;
     assert_eq!(row_unread(port, OWNER, &a).await, 0);
     assert_eq!(row_unread(port, &anna, &a).await, 0);
 
@@ -143,6 +155,8 @@ async fn mark_all_read_clears_an_agents_unreachable_threads_for_the_caller_only(
     assert_eq!(agent_post_convs(port, &a, 1).await, vec![second.clone()]);
     agent_posts(port, &b, 1).await;
     assert_eq!(row_unread(port, OWNER, &a).await, 3);
+    // The badge rose by exactly agent A's 3 plus agent B's 1.
+    assert_eq!(badge_total(port, OWNER).await, baseline + 3 + 1);
     // THE BUG: reading the agent (its address) reads only the pinned Chat.
     // The earlier chat's two lines stay on the row, and reading again
     // changes nothing: no address reaches them.
@@ -151,6 +165,7 @@ async fn mark_all_read_clears_an_agents_unreachable_threads_for_the_caller_only(
     assert_eq!(row_unread(port, OWNER, &a).await, 2, "the stuck count");
     owner_ok(port, "/cli/thread/read", json!({ "addr": a.handle })).await;
     assert_eq!(row_unread(port, OWNER, &a).await, 2, "still stuck after another read");
+    assert_eq!(badge_total(port, OWNER).await, baseline + 2 + 1, "the badge holds A's stuck 2 and B's 1");
 
     // POST-only, people only, a known agent.
     let r = get(port, "/cli/thread/read-all", OWNER, &format!("agent={}", enc(&a.handle))).await;
@@ -171,13 +186,19 @@ async fn mark_all_read_clears_an_agents_unreachable_threads_for_the_caller_only(
     assert_eq!(r["projectId"], a.id.as_str(), "{r}");
     assert_eq!(r["marked"], json!([earlier]), "only the Thread behind its head moved: {r}");
     assert_eq!((r["unread"].as_i64(), r["waiting"].as_i64()), (Some(0), Some(0)), "{r}");
-    // `total` is the owner's whole badge on this server (other tests'
-    // Threads share the process DB): agent B's line is still in it.
-    assert!(r["total"].as_i64().is_some_and(|t| t >= 1), "agent B's line is still unread: {r}");
+    // Agent A's whole 3 left the badge (1 by reading its Chat, 2 by mark
+    // all); only agent B's line remains above the baseline.
+    assert_eq!(r["total"].as_i64(), Some(baseline + 1), "baseline {baseline}: {r}");
+    assert_eq!(badge_total(port, OWNER).await, baseline + 1);
     assert_eq!(row_unread(port, OWNER, &a).await, 0);
     assert_eq!(row_unread(port, OWNER, &b).await, 1, "another agent is untouched");
     let again = owner_ok(port, "/cli/thread/read-all", json!({ "agent": a.handle })).await;
     assert_eq!((again["changed"].as_bool(), again["marked"].clone()), (Some(false), json!([])), "idempotent: {again}");
+    assert_eq!(again["total"].as_i64(), Some(baseline + 1), "idempotent total: {again}");
+    // Agent B too: the badge lands back on the baseline exactly.
+    let rb = owner_ok(port, "/cli/thread/read-all", json!({ "agent": b.handle })).await;
+    assert_eq!(rb["total"].as_i64(), Some(baseline), "baseline {baseline}: {rb}");
+    assert_eq!(badge_total(port, OWNER).await, baseline);
 
     // Per person: anna's count is hers.
     assert_eq!(row_unread(port, &anna, &a).await, 3, "an owner's read never moves another login");

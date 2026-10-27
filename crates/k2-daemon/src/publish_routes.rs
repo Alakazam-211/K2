@@ -262,6 +262,39 @@ fn publish_run_gate(project_id: &str, name: &str, skin: bool) -> Option<Gate> {
     gate_for(legacy, crate::apps::access::level(project_id))
 }
 
+/// What an approved `publish_run` request is bound to: the App (workspace
+/// and name), the exact command, the folder, the port and the tunnel.
+/// `probeTimeout` and `cwdExplicit` change nothing the owner approved.
+const APPROVED_RUN_KEYS: &[&str] = &["projectId", "name", "cmd", "cwd", "port", "noTunnel"];
+
+/// The owner's approved request this re-run repeats exactly (NSI
+/// papercut 13): the App or service is still this workspace's under the
+/// name, and its latest approved `publish_run` has this run's fingerprint
+/// ([`APPROVED_RUN_KEYS`]). `None`: ask (a new App, or anything changed).
+fn approved_run(project_id: &str, name: &str, body: &serde_json::Value) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let still_ours = k2_core::published_services::get_by_project_name(&conn, project_id, name).ok().flatten().is_some()
+        || k2_core::deploy::store::get_app(&conn, &name.to_ascii_lowercase())
+            .ok()
+            .flatten()
+            .is_some_and(|a| a.owner_workspace == project_id && a.source == "folder" && a.path == "open");
+    if !still_ours {
+        return None;
+    }
+    k2_core::app_grace::requests::approved_same(
+        &conn,
+        k2_core::app_grace::requests::KIND_PUBLISH_RUN,
+        project_id,
+        name,
+        body,
+        APPROVED_RUN_KEYS,
+    )
+    .ok()
+    .flatten()
+    .map(|r| r.id)
+}
+
 /// The gate for an agent's run: `legacy` = an existing `--cmd` service.
 fn gate_for(legacy: bool, level: crate::apps::access::Level) -> Option<Gate> {
     if legacy {
@@ -844,12 +877,28 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
     // unprepared box) the run stays as in 0.46.0, with the notice.
     let gate = publish_run_gate(&project_id, &name, skin);
     let who = CALLER.with(|c| c.borrow().clone()).unwrap_or(crate::compute_routes::Who::Invalid);
+    let run_body = serde_json::json!({
+        "projectId": project_id, "name": name, "cmd": cmd, "cwd": cwd.display().to_string(),
+        "port": port, "noTunnel": no_tunnel, "cwdExplicit": cwd_explicit,
+        "probeTimeout": probe_timeout_body(probe_timeout),
+    });
+    // 0.46.6 (NSI papercut 13): the owner already approved this exact run
+    // (same App, command, folder, port and tunnel) and it is still the
+    // App's latest approved run: the identical re-run goes through. Any
+    // change asks again.
+    let approved_run = gate.as_ref().and_then(|_| approved_run(&project_id, &name, &run_body));
+    let gate = if approved_run.is_some() { None } else { gate };
+    let approved_note = approved_run.as_ref().map(|id| {
+        serde_json::json!({
+            "request": id,
+            "note": format!(
+                "the owner approved this exact run of {name} ({id}): the same command, folder, port and tunnel run again \
+                 without asking; any change asks the owner again"
+            ),
+        })
+    });
     let hold_run = |reasons: Vec<String>| {
-        let body = serde_json::json!({
-            "projectId": project_id, "name": name, "cmd": cmd, "cwd": cwd.display().to_string(),
-            "port": port, "noTunnel": no_tunnel, "cwdExplicit": cwd_explicit,
-            "probeTimeout": probe_timeout_body(probe_timeout),
-        });
+        let body = run_body.clone();
         let diff = serde_json::json!([format!("new open-path App {name}: {cmd} (port {port})")]);
         crate::apps::routes::respond(crate::apps::grace::hold(
             &who,
@@ -893,6 +942,9 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         let run = crate::apps::open::Run { project_id, name, cmd, cwd, port, no_tunnel };
         return crate::apps::routes::respond(crate::apps::open::publish_run(&who, &run).map(|mut v| {
             crate::apps::resources::decorate(&mut v, disk_extra);
+            if let (Some(n), Some(o)) = (approved_note, v.as_object_mut()) {
+                o.insert("approvedRun".into(), n);
+            }
             v
         }));
     }
@@ -926,6 +978,9 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
                 }
                 if let serde_json::Value::Object(m) = disk_extra {
                     o.extend(m);
+                }
+                if let Some(n) = approved_note {
+                    o.insert("approvedRun".into(), n);
                 }
                 if let Some(why) = not_ready {
                     o.insert(

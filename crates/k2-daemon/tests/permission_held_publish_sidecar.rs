@@ -16,6 +16,9 @@
 //! - a hold whose card can't go up (no Thread) carries the Ask-with
 //!   `permission` object (`/cli/publish/run` had no wall row).
 //!
+//! NSI papercut 13: one owner approval covers identical re-runs of the
+//! same App (command, folder, port, tunnel); any change asks again.
+//!
 //! No real agent CLI runs (a `claude` that is `cat`), no real `~/.k2`, no
 //! keychain.
 
@@ -117,6 +120,63 @@ fn permission_row(held: &str) -> (String, Option<String>, Option<String>, String
 
 fn confirm(bound: &str) -> String {
     k2_daemon::vault::get().expect("vault open").confirm.mint("app-approve", Some(bound), "owner", "local-auth")
+}
+
+fn publish_run_requests(ws: &Ws, name: &str) -> Vec<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut st = conn
+        .prepare("SELECT id FROM app_widenings WHERE kind = 'publish_run' AND workspace_id = ?1 AND app_label = ?2 ORDER BY requested_at, id")
+        .expect("prepare");
+    let ids = st.query_map(rusqlite::params![ws.id, name], |r| r.get::<_, String>(0)).expect("query");
+    ids.collect::<rusqlite::Result<Vec<_>>>().expect("rows")
+}
+
+/// NSI papercut 13: one owner approval covers identical re-runs of the
+/// same App (same command, folder, port, tunnel); any change asks again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_identical_publish_runs_take_one_approval_and_a_change_asks_again() {
+    require_python3();
+    let env = setup(&[("K2_PUBLISH_PROBE_MS", "8000"), ("K2_OPEN_APPS_GATE", "enforce")]);
+    k2_daemon::apps::alerts::set_sink(Some(Box::new(|_: &str, _: &str| {})));
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
+    let ws = seed_ws(&env, "nsirerun");
+    let agent = passport(&ws);
+    let port = k2_core::test_env::loopback_test_port();
+    let cmd = "exec python3 -m http.server $PORT --bind 127.0.0.1";
+    let run = |port: u16| json!({"name": "rerun-sales", "cmd": cmd, "port": port, "noTunnel": true});
+
+    // Run 1: held; the owner approves it once.
+    let r = post(d.port, "/cli/publish/run", &agent, run(port)).await;
+    assert_eq!((r.status, r.json()["kind"].clone()), (202, json!("publish_run")), "{}", r.body);
+    let first = r.json()["request"]["id"].as_str().expect("held id").to_string();
+    let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": first, "confirmToken": confirm(&first)})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (200, json!("approved")), "{}", r.body);
+
+    // Runs 2 and 3, identical: they run, naming the approval they repeat.
+    for n in 2..=3 {
+        let r = post(d.port, "/cli/publish/stop", &agent, json!({"name": "rerun-sales"})).await;
+        assert_eq!(r.status, 200, "stop before run {n}: {}", r.body);
+        let r = post(d.port, "/cli/publish/run", &agent, run(port)).await;
+        assert_eq!(r.status, 200, "identical run {n} goes through: {}", r.body);
+        assert_eq!(r.json()["approvedRun"]["request"], first.as_str(), "run {n}: {}", r.body);
+    }
+    assert_eq!(publish_run_requests(&ws, "rerun-sales"), vec![first.clone()], "three identical runs, one approval");
+
+    // A different port asks again (a new request), and so does a new command.
+    let r = post(d.port, "/cli/publish/stop", &agent, json!({"name": "rerun-sales"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/publish/run", &agent, run(k2_core::test_env::loopback_test_port())).await;
+    assert_eq!((r.status, r.json()["kind"].clone()), (202, json!("publish_run")), "a new port is held: {}", r.body);
+    let changed = json!({"name": "rerun-sales", "cmd": "exec python3 -m http.server $PORT --bind 0.0.0.0", "port": port, "noTunnel": true});
+    let r = post(d.port, "/cli/publish/run", &agent, changed).await;
+    assert_eq!((r.status, r.json()["kind"].clone()), (202, json!("publish_run")), "a new command is held: {}", r.body);
+    assert_eq!(publish_run_requests(&ws, "rerun-sales").len(), 3, "each change is its own request");
+
+    let r = post(d.port, "/cli/publish/rm", OWNER, json!({"name": "rerun-sales", "project": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    k2_daemon::apps::alerts::set_sink(None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

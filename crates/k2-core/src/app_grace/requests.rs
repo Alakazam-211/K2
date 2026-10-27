@@ -275,6 +275,35 @@ pub fn list(conn: &Connection, f: &Filter<'_>, limit: i64) -> rusqlite::Result<V
     rows.collect()
 }
 
+/// The owner's latest approved-and-applied (`approved`) request of `kind`
+/// for this workspace's `app_label`, when its body has the same value as
+/// `body` under every one of `keys` (the change's fingerprint). Only the
+/// latest counts: once a different change was approved, going back to an
+/// older one asks again. 0.46.6 (NSI papercut 13): [`create`] reuses only
+/// a *pending* twin, so an identical re-run after the approval filed a
+/// fresh request each time; the caller uses this to let it through.
+pub fn approved_same(
+    conn: &Connection,
+    kind: &str,
+    workspace_id: &str,
+    app_label: &str,
+    body: &Value,
+    keys: &[&str],
+) -> rusqlite::Result<Option<AppRequest>> {
+    let latest = conn
+        .query_row(
+            &format!(
+                "SELECT {COLS} FROM app_widenings WHERE kind = ?1 AND workspace_id = ?2 AND app_label = ?3 AND status = 'approved' \
+                 ORDER BY COALESCE(decided_at, requested_at) DESC, requested_at DESC LIMIT 1"
+            ),
+            params![kind, workspace_id, app_label],
+            row,
+        )
+        .optional()?;
+    let same = |r: &AppRequest| !keys.is_empty() && keys.iter().all(|k| r.body.get(*k).is_some() && r.body.get(*k) == body.get(*k));
+    Ok(latest.filter(same))
+}
+
 /// The newest pending request of `kind` on a runtime App.
 pub fn pending_of_kind(conn: &Connection, app_id: &str, kind: &str) -> rusqlite::Result<Option<AppRequest>> {
     conn.query_row(

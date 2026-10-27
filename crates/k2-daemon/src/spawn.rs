@@ -529,9 +529,11 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         cell_uid: None,
         overlay: None,
         // k2-ptyd (PRD P76): canonical pinned chats, heartbeats, agents
-        // routes, providers and remote sessions may be ptyd-hosted. Inert
-        // unless the dev-only `K2_PTYD=1` switch is on.
-        survive: true,
+        // routes and providers may be ptyd-hosted (on by default since
+        // 0.46.5). Remote-session grant shells never are (security review
+        // F1: their grant binding is memory-only), nor `api-*` host
+        // sessions (N8).
+        survive: k2_core::workspace_session_handles::may_survive_restart(&req.agent_name),
         ptyd_meta: None,
     };
     let session_id = cfg.session_id;

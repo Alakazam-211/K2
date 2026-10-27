@@ -168,6 +168,24 @@ pub fn is_api_agent_name(agent_name: &str) -> bool {
     agent_name.starts_with("api-")
 }
 
+/// The prefix of a remote-session grant shell's map key
+/// (`remote-shell-<grant>-<short>`, `remote_session_routes`).
+pub const REMOTE_SHELL_PREFIX: &str = "remote-shell-";
+
+/// A remote-session grant shell (`k2 remote-session shell`).
+pub fn is_remote_shell_agent_name(agent_name: &str) -> bool {
+    agent_name.starts_with(REMOTE_SHELL_PREFIX)
+}
+
+/// k2-ptyd (PRD N8; security review F1): may this session be hosted by
+/// k2-ptyd and outlive a daemon restart? Not `/v1` host sessions
+/// (`api-*`: their registries are memory-only) and not remote-session
+/// grant shells (`remote-shell-*`: their grant binding is memory-only, so
+/// after a restart `revoke`/`disable` could no longer end them).
+pub fn may_survive_restart(agent_name: &str) -> bool {
+    !is_api_agent_name(agent_name) && !is_remote_shell_agent_name(agent_name)
+}
+
 /// Command is a known harness (claude/grok/pi/codex/gemini/cursor/hermes).
 pub fn is_harness_command(command: Option<&str>) -> bool {
     command
@@ -1229,6 +1247,18 @@ pub fn is_uuid_shape(s: &str) -> bool {
 mod tests {
     use super::*;
     use crate::db;
+
+    /// Security review F1 / PRD N8: grant shells and `/v1` host sessions
+    /// never survive a restart; everything else may.
+    #[test]
+    fn grant_shells_and_api_sessions_never_survive_a_restart() {
+        assert!(!may_survive_restart("remote-shell-1a2b3c4d-9f8e7d6c"));
+        assert!(!may_survive_restart("api-owner-4f6e9a1c"));
+        assert!(may_survive_restart("tab-1"));
+        assert!(may_survive_restart("4f6e9a1c-1111-4222-8333-944455556666"));
+        assert!(may_survive_restart("4f6e9a1c-1111-4222-8333-944455556666:hb:nightly"));
+        assert!(may_survive_restart("my-remote-shell-notes"), "only the prefix counts");
+    }
 
     fn conn() -> std::sync::Arc<parking_lot::ReentrantMutex<Connection>> {
         db::init_for_tests()

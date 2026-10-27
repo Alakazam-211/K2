@@ -771,6 +771,63 @@ fn survival_is_on_by_default_and_the_owner_can_turn_it_off() {
     let _ = std::fs::remove_dir_all(&h.home);
 }
 
+/// Security review F1: a remote-session grant shell never survives a
+/// restart (it stays in-process: its grant binding is memory-only, so an
+/// adopted one would be a shell `revoke`/`disable` can't end), and after
+/// the restart revoke and disable report and end shells correctly.
+#[test]
+fn remote_session_grant_shells_do_not_survive_a_restart() {
+    let mut h = Harness::new("rs");
+    let port = h.start();
+    let token = h.token();
+    let post = |port: u16, path: &str, body: &str| -> serde_json::Value {
+        let (s, b) = http(port, "POST", path, body);
+        assert_eq!(s, 200, "{path}: {b}");
+        serde_json::from_str(&b).unwrap_or_else(|e| panic!("{path} JSON {e}: {b}"))
+    };
+    post(port, &format!("/cli/remote-session/enable?token={token}"), "");
+    let grant = |port: u16, token: &str| -> (String, String) {
+        let v = post(port, &format!("/cli/remote-session/grant?token={token}"), r#"{"scope":"shell","ttlSeconds":1800,"label":"f1"}"#);
+        (v["grant"]["id"].as_str().expect("grant id").to_string(), v["token"].as_str().expect("grant token").to_string())
+    };
+    let shell = |port: u16, gtok: &str| -> String {
+        let v = post(port, &format!("/cli/remote-session/shell/spawn?token={gtok}"), "");
+        v["sessionId"].as_str().unwrap_or_else(|| panic!("sessionId in {v}")).to_string()
+    };
+    let screen_status = |port: u16, token: &str, sid: &str| -> u16 {
+        http(port, "GET", &format!("/cli/terminal/read?token={token}&id={sid}&lines=5"), "").0
+    };
+    let ptyd_log = |h: &Harness| std::fs::read_to_string(h.k2.join("logs/ptyd.log")).unwrap_or_default();
+
+    let (_ga, gtok_a) = grant(port, &token);
+    let sid_a = shell(port, &gtok_a);
+    assert_eq!(screen_status(port, &token, &sid_a), 200, "the shell runs");
+    assert!(!ptyd_log(&h).contains(&format!("sid={sid_a}")), "a grant shell must not be hosted by k2-ptyd");
+
+    // A restart (SIGTERM, no stop intent: KeepAgents) ends the in-process
+    // grant shell with the daemon.
+    // SAFETY: the daemon this test started.
+    unsafe { libc::kill(h.daemon_pid(), libc::SIGTERM) };
+    h.wait_daemon_exit(Duration::from_secs(20));
+    let port = h.start();
+    let token = h.token();
+    assert_ne!(screen_status(port, &token, &sid_a), 200, "the grant shell outlived the restart");
+    let log = std::fs::read_to_string(h.home.join(format!("daemon-{}.log", h.boots))).unwrap_or_default();
+    assert!(!log.contains(&format!("adopted session={sid_a}")), "the grant shell was adopted");
+
+    // After the restart: a new shell is bound to its grant, so revoke ends
+    // it (and says so), and disable then finds nothing left.
+    let (gb, gtok_b) = grant(port, &token);
+    let sid_b = shell(port, &gtok_b);
+    assert_eq!(screen_status(port, &token, &sid_b), 200);
+    let v = post(port, &format!("/cli/remote-session/revoke?token={token}"), &serde_json::json!({"id": gb}).to_string());
+    assert_eq!(v["killedSessions"], 1, "revoke must end the grant's shell: {v}");
+    wait_for("the revoked shell to end", Duration::from_secs(10), || (screen_status(port, &token, &sid_b) != 200).then_some(()));
+    let v = post(port, &format!("/cli/remote-session/disable?token={token}"), "");
+    assert_eq!(v["killedSessions"], 0, "nothing left for disable: {v}");
+    // Drop ends this test's daemon and ptyd.
+}
+
 fn enc(s: &str) -> String {
     s.bytes()
         .map(|b| match b {

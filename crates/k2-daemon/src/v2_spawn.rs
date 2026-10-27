@@ -1240,10 +1240,11 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         // persistent upper/work + fs_mode). `None` for every non-workspace spawn.
         // Threaded into the worker by `daemon_pty`; chowned at the door below.
         overlay: req.overlay.clone(),
-        // k2-ptyd (PRD P76): renderer/agent spawns may be ptyd-hosted;
-        // `/v1` host sessions (`api-*`) stay in-process (N8). Inert unless
-        // the dev-only `K2_PTYD=1` switch is on.
-        survive: !k2_core::workspace_session_handles::is_api_agent_name(&req.agent_name),
+        // k2-ptyd (PRD P76): renderer/agent spawns may be ptyd-hosted (on by
+        // default since 0.46.5); `/v1` host sessions (`api-*`, N8) and
+        // remote-session grant shells (`remote-shell-*`, security review
+        // F1) stay in-process.
+        survive: k2_core::workspace_session_handles::may_survive_restart(&req.agent_name),
         // k2-ptyd S3: filled in just before `DaemonPtySession::spawn`.
         ptyd_meta: None,
     };

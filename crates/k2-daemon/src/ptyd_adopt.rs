@@ -306,6 +306,14 @@ fn adopt_one(owner: &std::sync::Arc<k2_core::terminal::ptyd::client::Owner>, inf
         // under. Today's restart semantics for it: end it.
         return end("no session key in its meta");
     };
+    // Security review F1: a remote-session grant shell is never adopted.
+    // Its grant binding lived only in the previous daemon's memory, so
+    // adopted it would be a shell `revoke`/`disable` can't end. Spawns keep
+    // them in-process (`may_survive_restart`); this ends any that a daemon
+    // without that rule left in ptyd.
+    if k2_core::workspace_session_handles::is_remote_shell_agent_name(&key) {
+        return end("a remote-session grant shell: its grant binding can't survive a restart");
+    }
     // P89: adoption is not a revive — but never two sessions under one key.
     if let Some(existing) = crate::v2_session_map::lookup_by_agent_name(&key) {
         if existing.session_id.to_string() != sid {

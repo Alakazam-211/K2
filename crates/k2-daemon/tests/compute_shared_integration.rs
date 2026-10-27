@@ -220,6 +220,7 @@ fn view(role: Role, running: u32, queued: u32) -> ShareView {
         expires_in_secs: Some(7 * 86_400),
         skew_secs: None,
         quotes: vec![],
+        priority: None,
     }
 }
 
@@ -595,6 +596,7 @@ async fn queue_shows_other_servers_redacted() {
             workspace_id: None,
             session_id: None,
             server_label: None,
+            tier: None,
         };
         let mine = QueueEntry { pos: 2, mine: true, class: JobClass::Interactive, state: JobState::Queued, cpu_millis: 4000, job_id: Some(job.to_string()), generation: Some(1), ..other.clone() };
         compute_ws::test_frame("q-1", Frame::QueueView(QueueView { request_id: rid, at: 1, entries: vec![other, mine], totals: vec![] }));
@@ -721,6 +723,7 @@ async fn servers_add_is_held_one_at_a_time_and_hides_the_binding() {
                     sas: (state == ServerStatus::Pending).then(|| "482913".to_string()),
                     refusal: (state == ServerStatus::Refused).then(|| "server_too_old".to_string()),
                     online: slot == 0,
+                    priority: None,
                 };
                 let result = serde_json::to_value(ServersList {
                     max_servers: 3,

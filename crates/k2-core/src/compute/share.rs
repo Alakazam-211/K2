@@ -82,6 +82,32 @@ pub fn offer_role(offer: &Offer) -> Option<Role> {
     offer.features.iter().any(|f| owner_only.contains(&f.as_str())).then_some(Role::Owner)
 }
 
+// ── job tiers (prd-compute-job-tiers-v1) ─────────────────────────────
+
+/// The node takes `Plan.tier` (protocol 5, feature `tiers`).
+pub fn tiers_on(offer: &Offer) -> bool {
+    offer.features.iter().any(|f| f == super::proto::tiers::FEATURE_TIERS)
+}
+
+/// May this server send CI to the node behind `offer`? Its share must allow
+/// `gate` (T9: `top_class = gate` and `gate`). No share (a solo node
+/// without `servers.toml`, or no offer yet): this server owns the node, so
+/// yes; the grant's `allow_ci` is checked separately.
+pub fn share_allows_ci(offer: Option<&Offer>) -> bool {
+    offer.and_then(view).is_none_or(|v| v.limits.allows_class(JobClass::Gate))
+}
+
+/// Does this server's Priority count on the node behind `offer` (T7)?
+/// `Some(false)` only when the node says so (`ShareView.priority`, a guest
+/// share the node's owner didn't allow); no share = this server owns the
+/// node = yes; a share from a node older than 0.46.5 says nothing (`None`).
+pub fn priority_counts(offer: Option<&Offer>) -> Option<bool> {
+    match offer.and_then(view) {
+        None => Some(true),
+        Some(v) => v.priority,
+    }
+}
+
 /// The class the server sets from facts (§7 rule 3): `--gate` (where the
 /// share allows it) is `gate`; `--detach`, a split run over
 /// [`BATCH_SHARDS_OVER`] shards and soaks are `batch`; an attached run or
@@ -294,6 +320,10 @@ pub fn parse_servers_list(result: &Value) -> Result<(share::ServersList, Vec<Ser
         if let Some(r) = &e.refusal {
             usage["refusal"] = r.clone().into();
         }
+        // Job tiers (T7): does its Priority count on the node (0.46.5+)?
+        if let Some(p) = e.priority {
+            usage["priority"] = p.into();
+        }
         out.push(ServerRow {
             slot: e.slot,
             label: e.label.clone(),
@@ -347,6 +377,7 @@ mod tests {
             expires_in_secs: Some(86_400),
             skew_secs: None,
             quotes,
+            priority: None,
         }
     }
 
@@ -468,6 +499,7 @@ mod tests {
             sas: (state == ServerStatus::Pending).then(|| "482913".to_string()),
             refusal: (state == ServerStatus::Refused).then(|| "server_too_old".to_string()),
             online: slot == 0,
+            priority: None,
         }
     }
 
@@ -510,5 +542,51 @@ mod tests {
         assert!(!b.contains("ABCDE"), "only the binding travels");
         assert!(split_add_code("ABCDE-FGHJK").is_err());
         assert!(split_add_code("ABCDE-FGHJK.0123").is_err());
+    }
+
+    /// prd-compute-job-tiers-v1 T7, T9, T12: what the server reads off a
+    /// node's offer for tiers. No share = this server owns the node.
+    #[test]
+    fn tiers_ci_and_priority_from_the_offer() {
+        use crate::compute::proto::frames::{Availability, Caps, Control, Free};
+        let mut o = Offer {
+            share: None,
+            revision: 1,
+            control: Control::Active,
+            control_by: None,
+            control_at: None,
+            availability: Availability { ok: true, reasons: vec![] },
+            caps: Caps { cpu_millis: 1000, mem_bytes: 1 << 30, disk_budget_bytes: 1 << 30, hard: true },
+            free: Free { cpu_millis: 1000, mem_bytes: 1 << 30, disk_free_bytes: 1 << 30 },
+            slots: vec![],
+            running: 0,
+            parallel_max: 1,
+            refusal: None,
+            labels: Default::default(),
+            tools: Default::default(),
+            protocol: crate::compute::proto::PROTOCOL,
+            boot_id: "b".into(),
+            ledger_id: "l".into(),
+            node_version: "0.46.5".into(),
+            features: vec![],
+        };
+        assert!(!tiers_on(&o));
+        assert!(share_allows_ci(Some(&o)) && share_allows_ci(None), "a solo node (or none yet): the owner may send CI");
+        assert_eq!(priority_counts(Some(&o)), Some(true));
+        o.features.push(crate::compute::proto::tiers::FEATURE_TIERS.into());
+        assert!(tiers_on(&o));
+        // A guest share: no gate, Priority not counted unless the node says so.
+        o.share = Some(view(vec![], 0, 0));
+        assert!(!share_allows_ci(Some(&o)), "a guest share without gate never sends CI");
+        assert_eq!(priority_counts(Some(&o)), None, "a node older than 0.46.5 says nothing");
+        o.share.as_mut().unwrap().priority = Some(false);
+        assert_eq!(priority_counts(Some(&o)), Some(false));
+        o.share.as_mut().unwrap().priority = Some(true);
+        assert_eq!(priority_counts(Some(&o)), Some(true));
+        // gate needs top_class = gate too (T9).
+        o.share.as_mut().unwrap().limits.gate = true;
+        assert!(!share_allows_ci(Some(&o)), "gate without top_class gate is not CI");
+        o.share.as_mut().unwrap().limits.top_class = JobClass::Gate;
+        assert!(share_allows_ci(Some(&o)));
     }
 }

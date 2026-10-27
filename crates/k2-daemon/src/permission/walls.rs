@@ -102,7 +102,7 @@ const IN_SETTINGS: &str = "a person with the owner role does this, in Settings o
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 29] = [
+pub(crate) const V1_ACTIONS: [&str; 30] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -135,6 +135,8 @@ pub(crate) const V1_ACTIONS: [&str; 29] = [
     // changed (walled; K2 presents it too) and its twin (asked only).
     "zen.sign",
     "zen.sign-off",
+    // 0.46.5 (prd-compute-job-tiers-v1 T13): CI jobs on one node.
+    "compute.ci",
 ];
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
@@ -158,6 +160,9 @@ pub(crate) const ROWS: &[Row] = &[
         params: &[("request", &[ParamFrom::Body("/request"), ParamFrom::Body("/id"), ParamFrom::Query("request")])],
         ..row(ask("compute.admin-approve", Floor::Owner), code(403, "owner_only"), "/cli/compute/admin/approve", POST)
     },
+    // Job tiers (0.46.5): `--tier ci` / `--gate` without a grant that
+    // allows CI, and a compute manager setting `allowCi` on a grant.
+    Row { params: &[("node", &[ParamFrom::Body("/node")])], ..row(ask("compute.ci", Floor::Admin), code(403, "ci_not_allowed"), "/cli/compute/", ANY) },
     // ── agents, projects ───────────────────────────────────────────────
     row(ask("agents.manage", Floor::Admin), code(403, "gated"), "/cli/sidecar/", ANY),
     row(ask("projects.manage", Floor::Admin), code(403, "agent_permission_off"), "/cli/", ANY),
@@ -678,6 +683,8 @@ mod tests {
             (403, "POST", "/cli/zen/garden/delete", vec![], Some(json!({"garden":"garden-2"})), json!({"ok":false,"error":"garden_delete_person","garden":"garden-2","card":null}), "garden.delete"),
             // 0.46.5 S0: a sign that can't cover a placed widget's new version.
             (403, "POST", "/cli/zen/widget/sign", vec![], Some(json!({"widget":"board"})), json!({"ok":false,"error":"sign_needs_person","widget":"board","version":"ab".repeat(32),"card":null}), "zen.sign"),
+            // Job tiers (prd-compute-job-tiers-v1 T13).
+            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n4","tier":"ci"})), json!({"error":{"code":"ci_not_allowed","hint":"x"}}), "compute.ci"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {
@@ -870,7 +877,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 29);
+        assert_eq!(V1_ACTIONS.len(), 30);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

@@ -467,10 +467,13 @@ pub struct GrantRow {
     pub expires_at: Option<i64>,
     pub granted_by: String,
     pub granted_at: i64,
+    /// 0230: this workspace may send CI jobs to this node (owner or Admin
+    /// only; prd-compute-job-tiers-v1 §5.1, T1).
+    pub allow_ci: bool,
 }
 
 const GRANT_COLS: &str = "node_id, workspace_id, scopes, max_job_secs, max_disk_gb, max_parallel, max_queued, \
-    warm_at, expires_at, granted_by, granted_at";
+    warm_at, expires_at, granted_by, granted_at, allow_ci";
 
 fn grant_from_row(r: &Row<'_>) -> rusqlite::Result<GrantRow> {
     Ok(GrantRow {
@@ -485,6 +488,7 @@ fn grant_from_row(r: &Row<'_>) -> rusqlite::Result<GrantRow> {
         expires_at: r.get(8)?,
         granted_by: r.get(9)?,
         granted_at: r.get(10)?,
+        allow_ci: r.get::<_, i64>(11)? != 0,
     })
 }
 
@@ -495,6 +499,9 @@ pub struct GrantLimits {
     pub max_disk_gb: Option<i64>,
     pub max_parallel: Option<i64>,
     pub max_queued: Option<i64>,
+    /// `None` keeps what the grant has (a new grant: off). Re-granting
+    /// limits never silently sets or drops CI (T1).
+    pub allow_ci: Option<bool>,
 }
 
 pub fn set_grant(
@@ -507,10 +514,11 @@ pub fn set_grant(
 ) -> Result<GrantRow, String> {
     conn.execute(
         "INSERT INTO compute_node_grants (node_id, workspace_id, max_job_secs, max_disk_gb, max_parallel, max_queued, \
-         granted_by, granted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+         granted_by, granted_at, allow_ci) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE(?9, 0)) \
          ON CONFLICT(node_id, workspace_id) DO UPDATE SET max_job_secs = excluded.max_job_secs, \
          max_disk_gb = excluded.max_disk_gb, max_parallel = excluded.max_parallel, max_queued = excluded.max_queued, \
-         granted_by = excluded.granted_by, granted_at = excluded.granted_at",
+         granted_by = excluded.granted_by, granted_at = excluded.granted_at, \
+         allow_ci = COALESCE(?9, compute_node_grants.allow_ci)",
         params![
             node_id,
             workspace_id,
@@ -519,7 +527,8 @@ pub fn set_grant(
             limits.max_parallel.unwrap_or(super::DEFAULT_MAX_PARALLEL),
             limits.max_queued.unwrap_or(super::DEFAULT_MAX_QUEUED),
             by,
-            at
+            at,
+            limits.allow_ci.map(i64::from)
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -616,6 +625,11 @@ pub struct JobCtl {
     /// (never sent: `Plan.secret_env` carries the env names to the node).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretPin>,
+    /// `--supersede`: a newer job with the same key replaced this queued
+    /// one (its id). A node-queued job's cancel then ends `replaced`, not
+    /// `cancelled` (prd-compute-job-tiers-v1 §3.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced_by: Option<String>,
 }
 
 /// One secret a compute job gets (SE4): what was asked, the vault id it
@@ -750,9 +764,23 @@ pub struct JobRow {
     pub withdraws: i64,
     #[serde(skip)]
     pub withdrawn_at: Option<i64>,
+    /// 0230 (prd-compute-job-tiers-v1): `ci` | `priority` | `normal`, the
+    /// tier the queue orders it by.
+    pub tier: String,
+    /// What the caller asked when the server lowered it (a guest share
+    /// where Priority doesn't count).
+    pub tier_asked: Option<String>,
+    /// Who sent it (display and the Priority note; not security).
+    pub submitter: Option<String>,
+    /// `--supersede KEY`.
+    pub supersede_key: Option<String>,
 }
 
 impl JobRow {
+    /// The tier the queue orders it by (an unknown word is Normal).
+    pub fn tier(&self) -> super::proto::tiers::Tier {
+        super::proto::tiers::Tier::parse(&self.tier).unwrap_or_default()
+    }
     pub fn plan(&self) -> Option<Plan> {
         serde_json::from_str(&self.plan_json).ok()
     }
@@ -768,7 +796,8 @@ const JOB_COLS: &str = "id, client_job_id, node_id, workspace_id, session_id, re
     request_sha256, plan_json, src_commit, src_tree, dirty_sha256, state, reason, detail, attempt, generation, \
     plan_digest, exclusive, detach, retry_interrupted, exit_code, signal, created_at, assigned_at, started_at, \
     ended_at, log_seq, log_bytes, summary_json, receipt_json, receipt_ok, notified_at, class, est_secs, node_queued, \
-    node_pos, node_eta_secs, node_eta_p90_secs, node_blocked_by, node_seen_at, withdraws, withdrawn_at";
+    node_pos, node_eta_secs, node_eta_p90_secs, node_blocked_by, node_seen_at, withdraws, withdrawn_at, tier, tier_asked, \
+    submitter, supersede_key";
 
 fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
     let argv: String = r.get(6)?;
@@ -819,6 +848,10 @@ fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         node_seen_at: r.get(41)?,
         withdraws: r.get(42)?,
         withdrawn_at: r.get(43)?,
+        tier: r.get(44)?,
+        tier_asked: r.get(45)?,
+        submitter: r.get(46)?,
+        supersede_key: r.get(47)?,
     })
 }
 
@@ -916,17 +949,20 @@ pub struct JobFilter<'a> {
     pub state: Option<&'a str>,
     pub session_id: Option<&'a str>,
     pub limit: i64,
+    /// `ci` | `priority` | `normal` (0230).
+    pub tier: Option<&'a str>,
 }
 
 pub fn list_jobs(conn: &Connection, f: &JobFilter<'_>) -> Vec<JobRow> {
     let limit = if f.limit <= 0 { 50 } else { f.limit.min(500) };
     let Ok(mut stmt) = conn.prepare(&format!(
         "SELECT {JOB_COLS} FROM compute_jobs WHERE (?1 IS NULL OR node_id = ?1) AND (?2 IS NULL OR workspace_id = ?2) \
-         AND (?3 IS NULL OR state = ?3 OR (?3 = 'queued' AND state = 'assigned' AND node_queued = 1)) AND (?4 IS NULL OR session_id = ?4) ORDER BY created_at DESC, id DESC LIMIT ?5"
+         AND (?3 IS NULL OR state = ?3 OR (?3 = 'queued' AND state = 'assigned' AND node_queued = 1)) AND (?4 IS NULL OR session_id = ?4) \
+         AND (?6 IS NULL OR tier = ?6) ORDER BY created_at DESC, id DESC LIMIT ?5"
     )) else {
         return Vec::new();
     };
-    stmt.query_map(params![f.node_id, f.workspace_id, f.state, f.session_id, limit], job_from_row)
+    stmt.query_map(params![f.node_id, f.workspace_id, f.state, f.session_id, limit, f.tier], job_from_row)
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default()
 }
@@ -1080,6 +1116,19 @@ pub fn move_queued_job(conn: &Connection, id: &str, plan: &Plan, ctl: &JobCtl, r
     Ok(n == 1)
 }
 
+/// Rewrite a still-queued job's plan in place, same node: its JSON and
+/// digest (job tiers T11: the tier follows the node's features when the
+/// job is sent). `Ok(false)` when it isn't queued any more.
+pub fn rewrite_queued_plan(conn: &Connection, id: &str, plan: &Plan, ctl: &JobCtl) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "UPDATE compute_jobs SET plan_json = ?2, plan_digest = ?3 WHERE id = ?1 AND state = 'queued'",
+            params![id, plan_json_with(plan, ctl)?, plan.digest()?],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(n == 1)
+}
+
 /// A split run's parent is `running` (no node) until its shards end.
 pub fn set_parent_running(conn: &Connection, id: &str) -> Result<(), String> {
     conn.execute(
@@ -1160,6 +1209,81 @@ pub fn set_job_queue_facts(conn: &Connection, id: &str, class: &str, est_secs: O
     conn.execute("UPDATE compute_jobs SET class = ?2, est_secs = ?3 WHERE id = ?1", params![id, class, est_secs])
         .map_err(|e| e.to_string())
         .map(|_| ())
+}
+
+// ── job tiers (0230, prd-compute-job-tiers-v1) ───────────────────────
+
+/// Non-terminal states, as SQL (queued here, on a node or running).
+const OPEN_STATES_SQL: &str = "('queued','assigned','preparing','running','finishing')";
+
+/// A queued job, wherever it waits: on this server, or in a shared node's
+/// queue (`assigned` + `node_queued`).
+const QUEUED_SQL: &str = "(state = 'queued' OR (state = 'assigned' AND node_queued = 1))";
+
+/// A new job's tier facts: the tier the queue orders it by, what the
+/// caller asked when the server lowered it, who sent it, its supersede key.
+pub fn set_job_tier_facts(conn: &Connection, id: &str, tier: &str, asked: Option<&str>, submitter: Option<&str>, supersede_key: Option<&str>) -> Result<(), String> {
+    conn.execute(
+        "UPDATE compute_jobs SET tier = ?2, tier_asked = ?3, submitter = ?4, supersede_key = ?5 WHERE id = ?1",
+        params![id, tier, asked, submitter, supersede_key],
+    )
+    .map_err(|e| e.to_string())
+    .map(|_| ())
+}
+
+/// Who holds Priority on this server right now (prd §3.5): every submitter
+/// with Priority work queued or running on any node, its workspace and how
+/// many jobs, oldest holder first.
+pub fn priority_holders(conn: &Connection) -> Vec<PriorityHolder> {
+    let Ok(mut stmt) = conn.prepare(&format!(
+        "SELECT COALESCE(submitter, requested_by), workspace_id, COUNT(*), MIN(created_at) FROM compute_jobs \
+         WHERE tier = 'priority' AND state IN {OPEN_STATES_SQL} GROUP BY 1, 2 ORDER BY 4, 1"
+    )) else {
+        return Vec::new();
+    };
+    stmt.query_map([], |r| Ok(PriorityHolder { submitter: r.get(0)?, workspace_id: r.get(1)?, jobs: r.get(2)? }))
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
+/// One submitter on the critical path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PriorityHolder {
+    pub submitter: String,
+    pub workspace_id: String,
+    pub jobs: i64,
+}
+
+/// `workspace_id`'s jobs with `key` that are still queued (here or in a
+/// node's queue), oldest first: what a new `--supersede KEY` replaces.
+pub fn queued_with_supersede_key(conn: &Connection, workspace_id: &str, key: &str) -> Vec<JobRow> {
+    let Ok(mut stmt) = conn.prepare(&format!(
+        "SELECT {JOB_COLS} FROM compute_jobs WHERE workspace_id = ?1 AND supersede_key = ?2 AND {QUEUED_SQL} ORDER BY created_at, id"
+    )) else {
+        return Vec::new();
+    };
+    stmt.query_map(params![workspace_id, key], job_from_row)
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
+/// How many of this server's jobs wait on `node_id`, by tier.
+pub fn queued_tiers(conn: &Connection, node_id: &str) -> BTreeMap<String, i64> {
+    let Ok(mut stmt) = conn.prepare(&format!("SELECT tier, COUNT(*) FROM compute_jobs WHERE node_id = ?1 AND {QUEUED_SQL} GROUP BY tier")) else {
+        return BTreeMap::new();
+    };
+    stmt.query_map(params![node_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
+/// End a job still queued on this server as replaced by `by_job` (a newer
+/// `--supersede` with the same key). `Ok(false)` when it isn't queued here
+/// any more (assigned, started or ended meanwhile): nothing changed.
+pub fn replace_if_queued(conn: &Connection, id: &str, by_job: &str, at: i64) -> Result<bool, String> {
+    let detail = format!("replaced by job {}", super::message::short(by_job));
+    set_job_state_if(conn, id, "queued", JobState::Cancelled, Some(super::proto::tiers::codes::REPLACED), Some(&detail), at)
 }
 
 /// The node holds attempt `generation` in its queue: keep the row
@@ -1404,6 +1528,7 @@ mod tests {
             artifacts: Vec::new(),
             stall_secs: None,
             secret_env: Vec::new(),
+            tier: None,
         }
     }
 
@@ -1544,6 +1669,7 @@ mod tests {
             expires_in_secs: Some(100),
             skew_secs: None,
             quotes: vec![],
+            priority: None,
         };
         store_share(&c, "n1", Some(&v), 50);
         let n = node_by_id(&c, "n1").unwrap();
@@ -1631,6 +1757,7 @@ mod tests {
             expires_in_secs: None,
             skew_secs: None,
             quotes: vec![],
+            priority: None,
         };
         let offer = |share: Option<ShareView>, features: &[&str]| Offer {
             share,
@@ -1807,5 +1934,78 @@ mod tests {
         assert_eq!(job_by_id(&c, &a.id).expect("row").state, "cancelled");
         assert!(!set_job_state_if(&c, &a.id, "queued", JobState::Failed, Some("x"), None, 22).expect("fail"));
         assert_eq!(job_by_id(&c, &a.id).expect("row").state, "cancelled");
+    }
+
+    // ── job tiers (0230) ─────────────────────────────────────────────
+
+    /// T1: `allow_ci` is off for a new grant, set only when asked, and an
+    /// absent `allow_ci` (re-granting limits) keeps what the grant had.
+    #[test]
+    fn allow_ci_is_off_by_default_and_kept_when_absent() {
+        let c = conn();
+        insert_pending_node(&c, "n1", "a", "fp", "pem", &labels(), "o", "1", 1).unwrap();
+        let g = set_grant(&c, "n1", "ws", &GrantLimits::default(), "owner", 2).unwrap();
+        assert!(!g.allow_ci);
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_ci: Some(true), ..Default::default() }, "owner", 3).unwrap();
+        assert!(g.allow_ci);
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { max_parallel: Some(2), ..Default::default() }, "owner", 4).unwrap();
+        assert!(g.allow_ci, "re-granting limits never drops CI");
+        assert_eq!(g.max_parallel, 2);
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_ci: Some(false), ..Default::default() }, "owner", 5).unwrap();
+        assert!(!g.allow_ci);
+        assert_eq!(serde_json::to_value(&g).unwrap()["allowCi"], serde_json::json!(false), "the routes show it as allowCi");
+    }
+
+    fn tiered_job(c: &Connection, id: &str, ws: &str, tier: &str, submitter: &str, key: Option<&str>, at: i64) -> JobRow {
+        let mut p = plan(id, "n1", ws);
+        p.created_at = at;
+        let j = insert_job(
+            c,
+            &NewJob { plan: &p, client_job_id: &format!("client-{id}"), session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: JobCtl::default() },
+        )
+        .unwrap();
+        set_job_tier_facts(c, &j.id, tier, None, Some(submitter), key).unwrap();
+        job_by_id(c, &j.id).unwrap()
+    }
+
+    /// The critical-path note (§3.5) reads open Priority work by submitter;
+    /// ended jobs and other tiers don't count.
+    #[test]
+    fn priority_holders_count_open_priority_work_by_submitter() {
+        let c = conn();
+        assert!(priority_holders(&c).is_empty());
+        let a = tiered_job(&c, "p1000000000000000000000000000001", "ws", "priority", "k2/7f3a/.claude/worktrees/builder-a", None, 1);
+        tiered_job(&c, "p1000000000000000000000000000002", "ws", "priority", "k2/7f3a/.claude/worktrees/builder-a", None, 2);
+        tiered_job(&c, "p1000000000000000000000000000003", "ws", "normal", "k2/9b1c", None, 3);
+        let b = tiered_job(&c, "p1000000000000000000000000000004", "ws2", "priority", "ops/1d2e", None, 4);
+        assert_eq!(a.tier(), crate::compute::proto::tiers::Tier::Priority);
+        let h = priority_holders(&c);
+        assert_eq!(h.iter().map(|x| (x.submitter.as_str(), x.jobs)).collect::<Vec<_>>(), vec![("k2/7f3a/.claude/worktrees/builder-a", 2), ("ops/1d2e", 1)]);
+        set_job_state(&c, &b.id, JobState::Done, None, None, 9).unwrap();
+        assert_eq!(priority_holders(&c).len(), 1, "an ended job no longer holds the critical path");
+        let mut tiers = queued_tiers(&c, "n1");
+        assert_eq!((tiers.remove("priority"), tiers.remove("normal")), (Some(2), Some(1)));
+        assert_eq!(list_jobs(&c, &JobFilter { tier: Some("priority"), ..Default::default() }).len(), 3);
+    }
+
+    /// Supersede (§3.4): only this workspace's still-queued jobs with the
+    /// key; a replaced one ends `cancelled/replaced`; a started one is
+    /// never touched (R3).
+    #[test]
+    fn supersede_finds_only_queued_jobs_with_the_key_and_replaces_them() {
+        let c = conn();
+        let old = tiered_job(&c, "s1000000000000000000000000000001", "ws", "ci", "ci", Some("ci/main/rust"), 1);
+        let started = tiered_job(&c, "s1000000000000000000000000000002", "ws", "ci", "ci", Some("ci/main/rust"), 2);
+        tiered_job(&c, "s1000000000000000000000000000003", "ws", "ci", "ci", Some("ci/main/ui"), 3);
+        tiered_job(&c, "s1000000000000000000000000000004", "other", "ci", "ci", Some("ci/main/rust"), 4);
+        set_job_state(&c, &started.id, JobState::Running, None, None, 5).unwrap();
+        let found = queued_with_supersede_key(&c, "ws", "ci/main/rust");
+        assert_eq!(found.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(), vec![old.id.as_str()]);
+        assert!(replace_if_queued(&c, &old.id, "newjob00000000000000000000000001", 6).unwrap());
+        let r = job_by_id(&c, &old.id).unwrap();
+        assert_eq!((r.state.as_str(), r.reason.as_deref()), ("cancelled", Some("replaced")));
+        assert!(r.detail.as_deref().is_some_and(|d| d.starts_with("replaced by job ")), "{:?}", r.detail);
+        assert!(!replace_if_queued(&c, &started.id, "newjob00000000000000000000000001", 7).unwrap(), "a started job is never replaced");
+        assert_eq!(job_by_id(&c, &started.id).unwrap().state, "running");
     }
 }

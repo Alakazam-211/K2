@@ -147,6 +147,9 @@ pub enum ParamKind {
     /// One of a fixed set of words (`mail.send-mode mode=`,
     /// `db.agent-access level=`); see [`ParamSpec::choices`].
     Choice,
+    /// A compute node, by name: `compute.ci node=` (prd-compute-job-tiers-v1
+    /// T13).
+    Node,
 }
 
 /// One value an action takes (`key=value` on the CLI).

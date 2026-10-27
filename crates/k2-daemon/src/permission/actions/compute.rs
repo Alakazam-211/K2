@@ -125,8 +125,151 @@ fn apply(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
     }
 }
 
+
+// ── compute.ci (prd-compute-job-tiers-v1 §5.1, vs-live T13) ─────────
+
+const CI_SETTING: &str = "Allow CI jobs (Settings → Compute → Grants)";
+const CI_NODE: &[ParamSpec] = &[ParamSpec { key: "node", kind: ParamKind::Node, required: true, list: false, choices: &[] }];
+const CI_SETTINGS: SettingsRef = SettingsRef { page: "compute", path: "Settings → Compute → Grants" };
+
+/// `compute.ci node=`: let the asking workspace send CI jobs to one node
+/// (its grant's `allow_ci`). Admin floor: only the owner or an Admin login
+/// may set it (never an agent, not even a compute manager). The node
+/// owner's share must still allow `gate` for this server; the card can't
+/// change that.
+pub(crate) static CI: ActionSpec = ActionSpec {
+    id: "compute.ci",
+    area: Area::Compute,
+    params: CI_NODE,
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: CI_SETTING,
+        what_changes: "Let {ws} send CI jobs to {node}",
+        consequences: "A CI job takes the next free slot on {node}, ahead of every queued job (it never stops a running one). Give it to CI and release workspaces, not to agents doing normal work.",
+        scope: "{ws} on {node}",
+        duration: "until someone turns it off",
+        retry: "run your command again",
+    },
+    undo: Undo::Twin { action: "compute.ci-off" },
+    settings: CI_SETTINGS,
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: "ci_not_allowed" },
+        route_prefix: "/cli/compute/",
+        method: WallMethod::Any,
+        params: &[("node", ParamFrom::Body("/node"))],
+    }],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+/// The twin: stop it again (asked only, no wall).
+pub(crate) static CI_OFF: ActionSpec = ActionSpec {
+    id: "compute.ci-off",
+    area: Area::Compute,
+    params: CI_NODE,
+    floor: Floor::Admin,
+    direction: Direction::Tighten,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: CI_SETTING,
+        what_changes: "Stop {ws} sending CI jobs to {node}",
+        consequences: "Its CI jobs already queued keep their place; new ones are refused (ci_not_allowed).",
+        scope: "{ws} on {node}",
+        duration: "until someone turns it on",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: CI_SETTINGS,
+    walls: &[],
+    coverage: WallCoverage::None,
+    machine_hints: &[],
+};
+
+/// The asking workspace's grant on `node=`: `Ok((node name, its grant))`.
+fn ci_grant(ctx: &Ctx) -> Result<(String, k2_core::compute::store::GrantRow), String> {
+    let name = text_param(ctx, "node").ok_or("name the node: node=<name> (k2 compute nodes)")?;
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let n = k2_core::compute::store::find_node(&conn, name)
+        .filter(|n| n.state == "active")
+        .ok_or_else(|| format!("no active compute node '{name}' (k2 compute nodes)"))?;
+    let g = k2_core::compute::store::grant(&conn, &n.id, &ctx.workspace_id)
+        .ok_or_else(|| format!("{} has no grant on '{}': it needs one first (compute.use)", ctx.workspace_handle, n.name))?;
+    Ok((n.name, g))
+}
+
+fn check_ci_state(ctx: &Ctx, want_on: bool) -> Check {
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    match ci_grant(ctx) {
+        Ok((_, g)) if g.allow_ci == want_on => Check::AlreadyDone,
+        Ok(_) => Check::Needed,
+        Err(m) => Check::Moved(m),
+    }
+}
+
+fn check_ci(ctx: &Ctx) -> Check {
+    check_ci_state(ctx, true)
+}
+
+fn check_ci_off(ctx: &Ctx) -> Check {
+    check_ci_state(ctx, false)
+}
+
+/// Through the Settings route's own entry (`POST /cli/compute/grants/set`,
+/// Admin), as the answerer: the grant's current limits plus `allowCi`
+/// (that route resets a limit it isn't sent).
+fn apply_ci_to(ctx: &Ctx, who: &Answerer, on: bool) -> Applied {
+    if !compute_on() {
+        return Applied::Refused { code: "compute_off".into(), message: "compute nodes are off on this server".into() };
+    }
+    let (node, g) = match ci_grant(ctx) {
+        Ok(x) => x,
+        Err(m) => return Applied::Refused { code: "bad_params".into(), message: m },
+    };
+    let body = json!({
+        "node": node,
+        "workspace": ctx.workspace_handle,
+        "maxJobSecs": g.max_job_secs,
+        "maxDiskGb": g.max_disk_gb,
+        "maxParallel": g.max_parallel,
+        "maxQueued": g.max_queued,
+        "allowCi": on,
+    });
+    let path = "/cli/compute/grants/set";
+    if let Err(r) = super::switches::route_floor(who, path) {
+        return super::switches::applied(&r, "");
+    }
+    let r = crate::compute_routes::handle(path, who_of(who), body.to_string().as_bytes(), &HashMap::new());
+    let message = if on {
+        format!("{} may send CI jobs to {node} now.", ctx.workspace_handle)
+    } else {
+        format!("{} sends no more CI jobs to {node}. Turn it back on in Settings → Compute → Grants.", ctx.workspace_handle)
+    };
+    super::switches::applied(&r, message)
+}
+
+fn apply_ci(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    apply_ci_to(ctx, who, true)
+}
+
+fn apply_ci_off(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    apply_ci_to(ctx, who, false)
+}
+
 pub(crate) fn actions() -> Vec<Registered> {
-    vec![Registered { spec: &ADMIN_APPROVE, check, apply }]
+    vec![
+        Registered { spec: &ADMIN_APPROVE, check, apply },
+        Registered { spec: &CI, check: check_ci, apply: apply_ci },
+        Registered { spec: &CI_OFF, check: check_ci_off, apply: apply_ci_off },
+    ]
 }
 
 // ── Appendix A4: compute rows that aren't card-able in v1 ───────────

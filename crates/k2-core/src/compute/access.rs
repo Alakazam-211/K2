@@ -52,6 +52,9 @@ pub fn limits_for(n: &NodeRow, asked: &GrantLimits) -> GrantLimits {
         max_disk_gb: Some(asked.max_disk_gb.unwrap_or_else(|| default_disk_gb(node_disk_free(n)))),
         max_parallel: Some(asked.max_parallel.unwrap_or(super::DEFAULT_MAX_PARALLEL)),
         max_queued: Some(asked.max_queued.unwrap_or(super::DEFAULT_MAX_QUEUED)),
+        // CI is never a default: kept as asked (absent = the grant keeps
+        // what it has, a new grant has none).
+        allow_ci: asked.allow_ci,
     }
 }
 

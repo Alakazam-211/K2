@@ -39,7 +39,7 @@ if command -v cargo >/dev/null 2>&1; then
 fi
 PIDS=()
 
-ALL_SCENARIOS=(solo old-node rollback share both fair reconnect lost restart withdraw revoke expiry skew old-owner old-tenant)
+ALL_SCENARIOS=(solo old-node rollback share both fair reconnect lost restart withdraw revoke expiry skew old-owner old-tenant tiers-solo tiers-shared tiers-old-node tiers-rollback)
 
 # To stderr: a die inside $(...) must still reach the terminal.
 say() { printf '[k2x2 %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
@@ -378,10 +378,10 @@ s_rollback() {
   wait_job A "$j" '.state == "done"' 60 >/dev/null
   restart_node n1
   for _ in $(seq 1 150); do
-    node_row A n1 | jq -e '.online == true and .offer.protocol == 3' >/dev/null 2>&1 && break
+    node_row A n1 | jq -e '.online == true and .offer.protocol >= 3' >/dev/null 2>&1 && break
     sleep 0.2
   done
-  node_row A n1 | jq -e '.offer.protocol == 3' >/dev/null || die "rollback: n1 didn't come back on 0.46.3"
+  node_row A n1 | jq -e '.offer.protocol >= 3' >/dev/null || die "rollback: n1 didn't come back on the new binary"
   pass "rollback: the owner works on the v0.46.2 node binary and again after rolling forward"
 }
 
@@ -670,6 +670,163 @@ s_old_tenant() {
     die "old-tenant: no server_too_old: $(k2 A compute node servers n1 --json)"
   node_row O n1 | jq -e '.online != true' >/dev/null || die "old-tenant: the 0.46.2 server attached"
   pass "old-tenant: a 0.46.2 server is refused server_too_old after its SAS"
+}
+
+# ── job tiers (prd-compute-job-tiers-v1, 0.46.5) ─────────────────────
+
+# The server's own queue for a solo node, queued entries' short ids in order.
+queued_order() { api "$1" GET /cli/compute/queue '' "node=$2" | jq -r '[.entries[] | select(.state == "queued") | .short] | join(",")'; }
+
+# Grants that never get in the way of the node's own room (the node's
+# max_parallel is 3; a grant cap of 1 would refuse before the node does).
+wide_grant() {
+  local server="$1" node="$2" ws="WS_$1"
+  api "$server" POST /cli/compute/grants/set "{\"node\":\"$node\",\"workspace\":\"${!ws}\",\"maxParallel\":8,\"maxQueued\":30}" >/dev/null
+}
+
+# Tiers on a solo node: the server orders CI, then Priority, then Normal;
+# a Priority job waiting for room holds a later Normal one (the next free
+# slot); nothing running is ever stopped.
+s_tiers_solo() {
+  ensure_a
+  wide_grant A n1
+  api A POST /cli/compute/nodes/pause '{"node":"n1","action":"pause"}' >/dev/null
+  local n p c
+  n="$(run_job A n1 ts-n '["true"]')"
+  p="$(run_job A n1 ts-p '["true"]' '"tier":"priority"')"
+  c="$(run_job A n1 ts-c '["true"]' '"tier":"ci"')"
+  local order
+  order="$(queued_order A n1)"
+  [[ "$order" == "${c:0:8},${p:0:8},${n:0:8}" ]] || die "tiers-solo: queue order $order (want CI ${c:0:8}, P ${p:0:8}, N ${n:0:8})"
+  api A GET /cli/compute/queue '' node=n1 | jq -e '.tiers == {"ci": 1, "priority": 1, "normal": 1}' >/dev/null ||
+    die "tiers-solo: counts $(api A GET /cli/compute/queue '' node=n1 | jq -c .tiers)"
+  api A POST /cli/compute/nodes/pause '{"node":"n1","action":"resume"}' >/dev/null
+  local a_c a_p a_n
+  a_c="$(wait_job A "$c" '.state == "done"' | jq -r '.assignedAt')"
+  a_p="$(wait_job A "$p" '.state == "done"' | jq -r '.assignedAt')"
+  a_n="$(wait_job A "$n" '.state == "done"' | jq -r '.assignedAt')"
+  ((a_c <= a_p && a_p <= a_n)) || die "tiers-solo: assigned CI $a_c, P $a_p, N $a_n"
+  # The next free slot: three runs fill the node; a Priority job waits for
+  # room and holds a later Normal one, which says why.
+  local b1 b2 b3 p2 n2
+  b1="$(run_job A n1 ts-b1 "$(burn 8)" '"cpus":1')"
+  b2="$(run_job A n1 ts-b2 "$(burn 8)" '"cpus":1')"
+  b3="$(run_job A n1 ts-b3 "$(burn 8)" '"cpus":1')"
+  for b in "$b1" "$b2" "$b3"; do wait_job A "$b" '.state == "running"' 30 >/dev/null; done
+  p2="$(run_job A n1 ts-p2 '["true"]' '"tier":"priority","cpus":1')"
+  n2="$(run_job A n1 ts-n2 '["true"]' '"cpus":1')"
+  wait_job A "$n2" '.state == "queued" and .reason == "tier_hold"' 20 >/dev/null
+  local s_p s_n
+  s_p="$(wait_job A "$p2" '.state == "done"' 60 | jq -r '.startedAt')"
+  s_n="$(wait_job A "$n2" '.state == "done"' 60 | jq -r '.startedAt')"
+  ((s_p <= s_n)) || die "tiers-solo: Priority started $s_p, after the Normal job ($s_n)"
+  for b in "$b1" "$b2" "$b3"; do
+    wait_job A "$b" '.state == "done" and .exitCode == 0' 60 >/dev/null || die "tiers-solo: a running job was stopped"
+  done
+  pass "tiers-solo: CI, Priority, Normal; Priority took the next free slot; nothing running stopped"
+}
+
+# Tiers on a shared node (B is a guest without gate or Priority): B's
+# Priority runs as Normal with a note, B's CI is refused; A's CI jumps B's
+# queued Normal job on the node; the node's owner lets B's Priority count
+# (queue.toml) and B's offer says so.
+s_tiers_shared() {
+  ensure_shared
+  wide_grant A n1
+  wide_grant B n1
+  local out
+  out="$(api B POST /cli/compute/run "{\"node\":\"n1\",\"argv\":[\"true\"],\"clientJobId\":\"k2x2-sh-bp-00000000\",\"workspace\":\"$WS_B\",\"noSource\":true,\"detach\":true,\"tier\":\"priority\"}")"
+  printf '%s' "$out" | jq -e '.job.tier == "normal" and .job.tierAsked == "priority" and ([.notices[].code] | index("priority_downgraded") != null)' >/dev/null ||
+    die "tiers-shared: B's Priority on a guest share: $(printf '%s' "$out" | jq -c '{tier: .job.tier, asked: .job.tierAsked, notices}')"
+  out="$(API_OK=any api B POST /cli/compute/run "{\"node\":\"n1\",\"argv\":[\"true\"],\"clientJobId\":\"k2x2-sh-bc-00000000\",\"workspace\":\"$WS_B\",\"noSource\":true,\"detach\":true,\"tier\":\"ci\"}")"
+  printf '%s' "$out" | jq -e '.error.code == "gate_not_allowed"' >/dev/null || die "tiers-shared: B's CI without gate: $out"
+  local b1 b2 b3 bn ac
+  b1="$(run_job B n1 sh-b1 "$(burn 10)" '"cpus":1')"
+  b2="$(run_job B n1 sh-b2 "$(burn 10)" '"cpus":1')"
+  b3="$(run_job B n1 sh-b3 "$(burn 10)" '"cpus":1')"
+  for b in "$b1" "$b2" "$b3"; do wait_job B "$b" '.state == "running"' 30 >/dev/null; done
+  bn="$(run_job B n1 sh-bn '["true"]' '"cpus":1')"
+  wait_job B "$bn" '.nodeQueued == true' 30 >/dev/null
+  ac="$(run_job A n1 sh-ac '["true"]' '"tier":"ci","cpus":1')"
+  # B sees a CI job ahead of its own (another server's: no id).
+  local v
+  for _ in $(seq 1 50); do
+    v="$(k2 B compute queue n1 --json)"
+    printf '%s' "$v" | jq -e '[.entries[] | select(.state == "queued")][0] | .tier == "ci" and .mine == false' >/dev/null && break
+    sleep 0.2
+  done
+  printf '%s' "$v" | jq -e '[.entries[] | select(.state == "queued")][0] | .tier == "ci" and .mine == false' >/dev/null ||
+    die "tiers-shared: B's view doesn't show the CI job first: $v"
+  printf '%s' "$v" | jq -e '.tiers.ci >= 1' >/dev/null || die "tiers-shared: no tier counts: $v"
+  local s_ac s_bn
+  s_ac="$(wait_job A "$ac" '.state == "done"' 60 | jq -r '.startedAt')"
+  s_bn="$(wait_job B "$bn" '.state == "done"' 60 | jq -r '.startedAt')"
+  ((s_ac <= s_bn)) || die "tiers-shared: A's CI started $s_ac, after B's older Normal job ($s_bn)"
+  for b in "$b1" "$b2" "$b3"; do
+    wait_job B "$b" '.state == "done" and .exitCode == 0' 60 >/dev/null || die "tiers-shared: CI stopped a running job"
+  done
+  # The node's owner lets B's Priority count (queue.toml, at the machine).
+  node_servers n1 limits slot:1 priority=true >/dev/null || die "servers limits priority=true"
+  grep -q 'priority = true' "$ROOT/node-n1/config/queue.toml" || die "no queue.toml: $(cat "$ROOT/node-n1/config/queue.toml" 2>&1)"
+  grep -q 'priority' "$ROOT/node-n1/config/servers.toml" && die "the Priority word leaked into servers.toml (an old k2-node couldn't read it)"
+  for _ in $(seq 1 100); do
+    node_row B n1 | jq -e '.share.priority == true' >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  node_row B n1 | jq -e '.share.priority == true' >/dev/null || die "B's offer never said its Priority counts: $(node_row B n1 | jq -c .share)"
+  out="$(api B POST /cli/compute/run "{\"node\":\"n1\",\"argv\":[\"true\"],\"clientJobId\":\"k2x2-sh-bp-00000001\",\"workspace\":\"$WS_B\",\"noSource\":true,\"detach\":true,\"tier\":\"priority\"}")"
+  printf '%s' "$out" | jq -e '.job.tier == "priority" and ([.notices[].code] | index("priority_downgraded") == null)' >/dev/null ||
+    die "tiers-shared: B's Priority after the owner's word: $(printf '%s' "$out" | jq -c '{tier: .job.tier, notices}')"
+  pass "tiers-shared: guest Priority downgraded then allowed; guest CI refused; CI jumped the node's queue; nothing stopped"
+}
+
+# Mixed versions (§3.6): a 0.46.5 server orders a v0.46.2 solo node by
+# tier (the server holds a solo node's queue), and the plans it sends carry
+# no tier (an old node would refuse the digest).
+s_tiers_old_node() {
+  old_build
+  [[ -n "${PORT_A:-}" ]] || { start_daemon A; seed_ws A; }
+  [[ -d "$ROOT/node-n0" ]] || start_node n0 A "$OLD_DIR/target/debug/k2-node"
+  node_row A n0 | jq -e '.offer.protocol == 2' >/dev/null || die "n0 isn't protocol 2"
+  wide_grant A n0
+  api A POST /cli/compute/nodes/pause '{"node":"n0","action":"pause"}' >/dev/null
+  local n p c
+  n="$(run_job A n0 to-n '["true"]')"
+  p="$(run_job A n0 to-p '["true"]' '"tier":"priority"')"
+  c="$(run_job A n0 to-c '["true"]' '"tier":"ci"')"
+  [[ "$(queued_order A n0)" == "${c:0:8},${p:0:8},${n:0:8}" ]] || die "tiers-old-node: order $(queued_order A n0)"
+  api A POST /cli/compute/nodes/pause '{"node":"n0","action":"resume"}' >/dev/null
+  for j in "$c" "$p" "$n"; do wait_job A "$j" '.state == "done" and .exitCode == 0' 60 >/dev/null; done
+  pass "tiers-old-node: a v0.46.2 node runs CI, Priority, Normal in tier order"
+}
+
+# Rollback (T11, T17): a Priority job queued on the server for a 0.46.5
+# node (its plan carries the tier) still runs after the node is rolled
+# back to the old binary: the plan loses its tier before it is sent.
+s_tiers_rollback() {
+  old_build
+  ensure_a
+  wide_grant A n1
+  api A POST /cli/compute/nodes/pause '{"node":"n1","action":"pause"}' >/dev/null
+  local p
+  p="$(run_job A n1 tr-p '["sh","-c","echo tiered"]' '"tier":"priority"')"
+  restart_node n1 "$OLD_DIR/target/debug/k2-node"
+  for _ in $(seq 1 150); do
+    node_row A n1 | jq -e '.online == true and .offer.protocol == 2' >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  node_row A n1 | jq -e '.offer.protocol == 2' >/dev/null || die "tiers-rollback: n1 isn't on the old binary"
+  api A POST /cli/compute/nodes/pause '{"node":"n1","action":"resume"}' >/dev/null
+  wait_job A "$p" '.state == "done" and .exitCode == 0' 60 >/dev/null || die "tiers-rollback: the tiered job didn't run on the rolled-back node"
+  job A "$p" | jq -e '.tier == "priority"' >/dev/null || die "tiers-rollback: the server forgot the tier"
+  restart_node n1
+  wait_online A n1
+  for _ in $(seq 1 150); do
+    node_row A n1 | jq -e '.offer.protocol >= 5' >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  node_row A n1 | jq -e '(.offer.features | index("tiers")) != null' >/dev/null || die "tiers-rollback: n1 back on 0.46.5 doesn't offer tiers"
+  pass "tiers-rollback: a tiered job runs on the rolled-back node; tiers come back with the new binary"
 }
 
 # ── main ─────────────────────────────────────────────────────────────

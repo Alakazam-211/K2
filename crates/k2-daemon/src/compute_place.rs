@@ -27,6 +27,7 @@ use std::sync::Mutex;
 
 use k2_core::compute::proto::frames::{self, JobState, Offer, Plan, FEATURE_STALL};
 use k2_core::compute::proto::share::{self as pshare, ShareView};
+use k2_core::compute::proto::tiers::{Tier as JobTier, FEATURE_TIERS};
 use k2_core::compute::proto::{needs, refusal, results};
 use k2_core::compute::retry::{self, NodeHealth};
 use k2_core::compute::share::{self, pending};
@@ -99,6 +100,10 @@ pub struct Want {
     /// Compute secret-env (SE6): the vault secret ids the job gets. A node
     /// must offer `secret-env` and be covered by a grant for each.
     pub secret_ids: Vec<String>,
+    /// The job's tier (prd-compute-job-tiers-v1). `--any --tier ci` keeps
+    /// only nodes where this workspace may send CI: the share's `gate` and
+    /// a grant with `allow_ci` (or an owner/Admin caller) (T12).
+    pub tier: JobTier,
 }
 
 impl Want {
@@ -115,6 +120,7 @@ impl Want {
             mem_bytes: plan.limits.mem_bytes,
             stall: j.ctl.stall_secs.is_some_and(|s| s > 0),
             secret_ids: j.ctl.secrets.iter().map(|p| p.secret_id.clone()).collect(),
+            tier: j.tier(),
         }
     }
 
@@ -128,8 +134,17 @@ impl Want {
             mem_bytes: self.mem_bytes,
             disk_bytes: 0,
             needs_git: self.needs_git,
+            tier: self.tier,
         }
     }
+}
+
+/// May `w`'s workspace send CI to the node behind `offer` with `grant`?
+/// The node owner's share must allow `gate` (no share: this server owns
+/// the node), and the grant must allow CI unless the caller is the owner
+/// or an Admin (prd-compute-job-tiers-v1 §5.1, T12).
+pub fn ci_allowed(admin: bool, grant: Option<&GrantRow>, offer: Option<&Offer>) -> bool {
+    share::share_allows_ci(offer) && (admin || grant.is_some_and(|g| g.allow_ci))
 }
 
 /// One node that could take the job.
@@ -275,6 +290,10 @@ pub fn candidates(w: &Want, exclude: &[String], now: i64) -> Vec<Cand> {
         if !w.secret_ids.is_empty() && !crate::compute_secrets::covers_all(&w.ws_id, &n, &w.secret_ids) {
             continue;
         }
+        // `--any --tier ci`: only where this workspace may send CI (T12).
+        if w.tier == JobTier::Ci && !ci_allowed(w.admin, grant.as_ref(), Some(&offer)) {
+            continue;
+        }
         out.push(Cand { node: n, online, offer, load, queued: queued_all, grant });
     }
     out
@@ -355,7 +374,28 @@ pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&G
         // the plan's digest wouldn't match (§10.2).
         strip_queue_fields(&mut p);
     }
+    // The tier only to nodes offering `tiers` (T11), the same rule as the
+    // queue fields; `set_queue_fields` then sets the job's own tier.
+    p.tier = offers_tiers(features).then(|| base.tier_or_class());
     p
+}
+
+/// Does a node with these features take `Plan.tier` (protocol 5)?
+pub fn offers_tiers(features: &[String]) -> bool {
+    features.iter().any(|f| f == FEATURE_TIERS)
+}
+
+/// The stored plan fitted to what the node understands right now (T11): a
+/// tier only for a node offering `tiers` (a node rolled back to 0.46.4
+/// would refuse a tiered plan's digest; one updated to 0.46.5 gets it).
+/// `Some(plan)` when it changed; the caller rewrites the queued row.
+pub fn fit_tier(plan: &Plan, j: &JobRow, features: &[String]) -> Option<Plan> {
+    let want = offers_tiers(features).then(|| j.tier());
+    (plan.tier != want).then(|| {
+        let mut p = plan.clone();
+        p.tier = want;
+        p
+    })
 }
 
 /// The protocol 3 plan fields a node keeps its queue by (§10.2), for a
@@ -363,6 +403,9 @@ pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&G
 /// session.
 pub fn set_queue_fields(p: &mut Plan, j: &JobRow) {
     p.class = Some(pshare::JobClass::parse(&j.class).unwrap_or_default());
+    if p.tier.is_some() {
+        p.tier = Some(j.tier());
+    }
     p.session_id = j.session_id.clone();
     p.est_secs = j.est_secs.filter(|e| *e > 0).map(|e| e as u64);
 }
@@ -853,5 +896,32 @@ mod tests {
         assert_eq!(awake_since(1_005), 1_000, "a normal tick keeps the start");
         note_tick(5_000);
         assert_eq!(awake_since(5_000), 5_000, "a gap over a minute = slept");
+    }
+
+    /// Job tiers T11, T17 (mixed versions): a tiered plan sent to a node
+    /// without `tiers` (an older k2-node, or one rolled back to 0.46.4)
+    /// loses its tier and gets the untiered digest back, so that node takes
+    /// it; a node offering `tiers` gets the job's own tier; a plan that
+    /// already fits is left alone.
+    #[test]
+    fn the_tier_follows_the_nodes_features() {
+        let plan: Plan = serde_json::from_value(serde_json::json!({
+            "job_id": "j1", "node_id": "n1", "workspace_id": "w1", "workspace_label": "k2", "requested_by": "owner",
+            "argv": ["true"], "env": {}, "cwd": null,
+            "limits": {"max_secs": 60, "cpu_millis": null, "mem_bytes": null, "disk_bytes": 1, "log_cap_bytes": 1},
+            "src": null, "exclusive": false, "created_at": 1, "class": "interactive"
+        }))
+        .expect("a plan");
+        let job = JobRow { id: "j1".into(), tier: "priority".into(), ..Default::default() };
+        let new_node = vec![FEATURE_TIERS.to_string(), pshare::FEATURE_QUEUE.to_string()];
+        let old_node = vec![pshare::FEATURE_QUEUE.to_string()];
+        assert_eq!(fit_tier(&plan, &job, &old_node), None, "no tier, an old node: as it is");
+        let tiered = fit_tier(&plan, &job, &new_node).expect("a node with tiers gets the tier");
+        assert_eq!(tiered.tier, Some(JobTier::Priority));
+        assert_ne!(tiered.digest().unwrap(), plan.digest().unwrap());
+        assert_eq!(fit_tier(&tiered, &job, &new_node), None, "already fits");
+        let back = fit_tier(&tiered, &job, &old_node).expect("a rolled-back node loses the tier");
+        assert_eq!((back.tier, back.digest().unwrap()), (None, plan.digest().unwrap()), "the untiered digest, byte for byte");
+        assert!(offers_tiers(&new_node) && !offers_tiers(&old_node));
     }
 }

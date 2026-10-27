@@ -35,6 +35,7 @@ use k2_core::compute::proto::frames::{
 use k2_core::compute::proto::results::{self, ArtifactInfo, Outputs};
 use k2_core::compute::proto::pairing;
 use k2_core::compute::proto::share::{self as pshare, QueueView};
+use k2_core::compute::proto::tiers::{self, Tier};
 use k2_core::compute::share::{self, pending};
 use k2_core::compute::{self as compute, logs, scheduler, store};
 use k2_core::log_debug;
@@ -991,7 +992,9 @@ fn apply_observation(
         // here (the node never started it, so it would answer that Cancel
         // with `unknown`, and re-queueing would run it later).
         if asked == Some("cancel_requested") || asked == Some(pending::CANCEL) {
-            let _ = store::set_job_state(&conn, job_id, JobState::Cancelled, Some("cancelled"), None, now);
+            // `--supersede`: a newer job replaced it (prd-compute-job-tiers-v1).
+            let (end, end_detail) = replaced_end(&job, asked).unwrap_or(("cancelled", None));
+            let _ = store::set_job_state(&conn, job_id, JobState::Cancelled, Some(end), end_detail.as_deref(), now);
             store::record_event(
                 &conn,
                 "node",
@@ -999,7 +1002,7 @@ fn apply_observation(
                 Some(node_id),
                 Some(&job.workspace_id),
                 Some(job_id),
-                serde_json::json!({"state": "cancelled", "reason": "cancelled", "refused": reason}),
+                serde_json::json!({"state": "cancelled", "reason": end, "refused": reason}),
             );
             drop(conn);
             finalize(job_id);
@@ -1038,6 +1041,14 @@ fn apply_observation(
         _ => None,
     };
     let detail = detail.or(ended_by_node);
+    // `--supersede`: the node confirmed our "only if not started" cancel of
+    // a job a newer one replaced: it ends `replaced`, not `cancelled`.
+    let replaced = if state == JobState::Cancelled { replaced_end(&job, asked) } else { None };
+    let replaced_detail = replaced.as_ref().and_then(|(_, d)| d.clone());
+    let (reason, detail) = match &replaced {
+        Some((r, _)) => (Some(*r), replaced_detail.as_deref()),
+        None => (reason, detail),
+    };
     // A job someone asked to cancel that comes back interrupted (the node
     // restarted, rebooted or lost it) or unknown ends `cancelled`: that is
     // what was asked, and it is never sent again (k2n4, 2026-10-21: two
@@ -1837,6 +1848,7 @@ pub fn queued_view(conn: &rusqlite::Connection, node_id: &str) -> (Vec<scheduler
                 mem_bytes: plan.as_ref().and_then(|p| p.limits.mem_bytes),
                 disk_bytes: 0,
                 needs_git: plan.as_ref().is_some_and(|p| p.src.is_some()),
+                tier: j.tier(),
             }
         })
         .collect();
@@ -1850,8 +1862,9 @@ pub fn queued_view(conn: &rusqlite::Connection, node_id: &str) -> (Vec<scheduler
 
 /// One placement pass on a SHARED node (protocol 3, §6): every job this
 /// server has queued for it goes into the node's queue at once, in this
-/// server's own order (workspace rotation, FIFO), as long as its share has
-/// room. Nothing here waits for free capacity: the node decides who runs.
+/// server's own order (CI, then Priority, then workspace rotation, FIFO),
+/// as long as its share has room. Nothing here waits for free capacity:
+/// the node decides who runs.
 struct SharedPass {
     /// Send now, in this order.
     send: Vec<String>,
@@ -1861,9 +1874,17 @@ struct SharedPass {
     waiting: BTreeMap<String, (usize, frames::Refusal)>,
 }
 
-/// Workspace rotation (after the last-served workspace), FIFO within one.
+/// The send order into a shared node (the third orderer, vs-live T2): CI,
+/// then Priority, each by `created_at`, then everything else in workspace
+/// rotation (after the last-served workspace), FIFO within one. Without
+/// the tier first a CI job would wait on this server behind a full share
+/// (`tenant_queue_full`) and never reach the node's queue to jump it.
 fn rotation_order(mut jobs: Vec<store::JobRow>, last_ws: Option<&str>) -> Vec<store::JobRow> {
     jobs.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+    let (urgent, jobs): (Vec<store::JobRow>, Vec<store::JobRow>) = jobs.into_iter().partition(|j| j.tier() != Tier::Normal);
+    let mut urgent = urgent;
+    // Stable: CI before Priority, each still oldest first.
+    urgent.sort_by_key(|j| std::cmp::Reverse(j.tier()));
     let mut order: Vec<String> = jobs.iter().map(|j| j.workspace_id.clone()).collect();
     order.sort_unstable();
     order.dedup();
@@ -1875,7 +1896,7 @@ fn rotation_order(mut jobs: Vec<store::JobRow>, last_ws: Option<&str>) -> Vec<st
     for j in jobs {
         by_ws.entry(j.workspace_id.clone()).or_default().push_back(j);
     }
-    let mut out = Vec::new();
+    let mut out = urgent;
     loop {
         let mut any = false;
         for w in &order {
@@ -1927,6 +1948,7 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             mem_bytes: plan.limits.mem_bytes,
             disk_bytes: 0,
             needs_git: plan.src.is_some(),
+            tier: j.tier(),
         };
         if let Some(r) = scheduler::never_fits(offer, &probe) {
             pass.fail.push((j.id.clone(), r));
@@ -1999,7 +2021,7 @@ pub fn decision_for(node_id: &str) -> scheduler::Decision {
         .into_iter()
         .map(|g| (g.workspace_id, g.max_parallel.max(1) as u32))
         .collect();
-    let mut d = scheduler::decide(&queue, last.as_deref(), &load, &|ws| caps.get(ws).copied().unwrap_or(1), offer.as_ref(), pause.as_deref());
+    let mut d = scheduler::decide(compute::now(), &queue, last.as_deref(), &load, &|ws| caps.get(ws).copied().unwrap_or(1), offer.as_ref(), pause.as_deref());
     let now = compute::now();
     for j in store::jobs_in_states(&conn, node_id, &["queued"]) {
         if let Some(nb) = j.ctl.not_before.filter(|nb| *nb > now) {
@@ -2059,6 +2081,8 @@ fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
         let conn = db.lock();
         let Some(job) = store::job_by_id(&conn, &id) else { continue };
         let Some(plan) = job.plan() else { continue };
+        // The tier only to a node offering `tiers` right now (T11).
+        let Some((job, plan)) = fit_tier_to(&conn, job, plan, &offer.features) else { continue };
         let fence = Fence { job_id: job.id.clone(), attempt: job.attempt as u32, generation: job.generation as u32, plan_digest: job.plan_digest.clone() };
         if store::assign_if_queued(&conn, &job.id, now) != Ok(true) {
             continue;
@@ -2149,6 +2173,8 @@ pub fn kick(node_id: &str) {
         }
         return;
     }
+    let features = offer.as_ref().map(|o| o.features.clone()).unwrap_or_default();
+    let Some((job, plan)) = fit_tier_to(&conn, job, plan, &features) else { return };
     let fence = Fence { job_id: job.id.clone(), attempt: job.attempt as u32, generation: job.generation as u32, plan_digest: job.plan_digest.clone() };
     // Compare-and-set: the decision was read under a different DB lock,
     // and a cancel may have ended the job since. Never assign over it.
@@ -2163,6 +2189,32 @@ pub fn kick(node_id: &str) {
     drop(conn);
     with_engine(|e| e.last_ws.insert(node_id.to_string(), job.workspace_id.clone()));
     notify_change();
+}
+
+/// The stored plan fitted to the node's features before it is sent (T11):
+/// a tier only for a node offering `tiers` (one rolled back to 0.46.4
+/// would refuse a tiered plan's digest; one updated to 0.46.5 gets it).
+/// A changed plan is written back (JSON and digest) while the row is still
+/// queued; `None` when it no longer is (a cancel won): don't send.
+fn fit_tier_to(conn: &rusqlite::Connection, job: store::JobRow, plan: frames::Plan, features: &[String]) -> Option<(store::JobRow, frames::Plan)> {
+    match crate::compute_place::fit_tier(&plan, &job, features) {
+        None => Some((job, plan)),
+        Some(p) => {
+            if store::rewrite_queued_plan(conn, &job.id, &p, &job.ctl) != Ok(true) {
+                return None;
+            }
+            let job = store::job_by_id(conn, &job.id)?;
+            Some((job, p))
+        }
+    }
+}
+
+/// A node-queued job a newer `--supersede` replaced, whose cancel the
+/// node just answered: its end reason and detail. Only for our own "only
+/// if not started" cancel (`pending::CANCEL`), never another end.
+fn replaced_end(job: &store::JobRow, asked: Option<&str>) -> Option<(&'static str, Option<String>)> {
+    let by = job.ctl.replaced_by.as_deref().filter(|_| asked == Some(pending::CANCEL))?;
+    Some((tiers::codes::REPLACED, Some(format!("replaced by job {}", compute::message::short(by)))))
 }
 
 /// Why a secret job waits for its node (SE6).
@@ -2308,6 +2360,7 @@ mod tests {
             artifacts: Vec::new(),
             stall_secs: None,
             secret_env: Vec::new(),
+            tier: None,
         };
         store::insert_job(
             conn,
@@ -2325,6 +2378,27 @@ mod tests {
         let ids = |v: Vec<store::JobRow>| v.into_iter().map(|j| j.id).collect::<Vec<_>>();
         assert_eq!(ids(rotation_order(jobs.clone(), None)), ["a1", "b1", "c1", "a2"]);
         assert_eq!(ids(rotation_order(jobs, Some("a"))), ["b1", "c1", "a1", "a2"]);
+    }
+
+    /// Job tiers T2: the send order into a shared node is tier-first: CI,
+    /// then Priority, each oldest first, then the workspace rotation. A
+    /// share's room (`max_running + max_queued`) is cut from the front of
+    /// this order, so a guest with two Normal jobs waiting and room for two
+    /// sends a new CI job first instead of leaving it `tenant_queue_full`.
+    #[test]
+    fn the_send_order_into_a_shared_node_is_tier_first() {
+        let mk = |id: &str, ws: &str, at: i64, tier: &str| store::JobRow {
+            id: id.into(),
+            workspace_id: ws.into(),
+            created_at: at,
+            tier: tier.into(),
+            ..Default::default()
+        };
+        let ids = |v: Vec<store::JobRow>| v.into_iter().map(|j| j.id).collect::<Vec<_>>();
+        let jobs = vec![mk("n1", "a", 1, "normal"), mk("n2", "b", 2, "normal"), mk("p1", "a", 3, "priority"), mk("c1", "b", 4, "ci"), mk("c0", "a", 5, "ci")];
+        let order = ids(rotation_order(jobs, Some("a")));
+        assert_eq!(order, ["c1", "c0", "p1", "n2", "n1"], "Normal still takes turns after the last-served workspace");
+        assert_eq!(&order[..2], ["c1", "c0"], "room for two: both CI jobs go first");
     }
 
     /// r8 (2026-10-22): a job its requester cancelled sends no `[compute]`

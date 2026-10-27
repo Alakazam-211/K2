@@ -1,19 +1,32 @@
 //! The per-node fair queue (§10.2, lifted from FICC's fair scheduler).
 //! Pure: the daemon feeds it the queue, what's running and the node's
 //! last offer, and it answers which job to place next (one placement per
-//! call) plus, for display, each queued job's position and reason.
+//! call) plus, for display, each queued job's position and reason. Solo
+//! nodes only: a shared node keeps its own queue (`k2_node_proto::queue`).
 //!
-//! Rules: round-robin across workspaces (rotating after the workspace
-//! that got the last placement), FIFO by `created_at` within a
-//! workspace, the node's `parallel_max` and each grant's `max_parallel`.
-//! An exclusive job waits for an idle node; when it is the OLDEST queued
-//! job it also holds every other start, so a stream of small jobs can't
-//! starve it.
+//! Order (prd-compute-job-tiers-v1 §3.4 with vs-live T3, T5, T15):
+//! - **tiers first**: CI, then Priority, then Normal waiting an hour or
+//!   more (below Priority, T5), each strictly by `created_at`; then fresh
+//!   Normal ([`super::proto::tiers::band`]);
+//! - **Normal**: round-robin across workspaces (rotating after the
+//!   workspace that got the last placement), strict FIFO by `created_at`
+//!   within a workspace (only its oldest Normal job may start, aged ones
+//!   included), the node's `parallel_max` and each grant's `max_parallel`;
+//! - **next free slot**: a CI or Priority job that waits only for room on
+//!   the node (`parallel_full`, `local_resource_limit`, `waiting_for_idle`,
+//!   `exclusive_running`) holds every start ordered after it. Any other
+//!   refusal (the grant's cap, a missing tool, a per-job disk ask) never
+//!   holds (T3). A Normal head never holds, except an exclusive job at the
+//!   head of the order waiting for an idle node, so a stream of small jobs
+//!   can't starve it.
+//!
+//! Tiers never stop a running job (R3): this only ever places queued ones.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use super::proto::frames::{Offer, Refusal};
 use super::proto::refusal::{self, JobAsk};
+use super::proto::tiers::{self, Band, Tier};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedJob {
@@ -25,6 +38,9 @@ pub struct QueuedJob {
     pub mem_bytes: Option<u64>,
     pub disk_bytes: u64,
     pub needs_git: bool,
+    /// The job's tier as the server stored it (CI only with `allow_ci`,
+    /// checked at submit).
+    pub tier: Tier,
 }
 
 /// What is on the node right now (from the controller registry).
@@ -126,7 +142,60 @@ fn ask(j: &QueuedJob) -> JobAsk<'_> {
     }
 }
 
-/// Decide one placement.
+/// Where `j` ranks at `now` (server clock; aging from `created_at`).
+pub fn band_of(j: &QueuedJob, now: i64) -> Band {
+    tiers::band(j.tier, now - j.created_at, tiers::AGE_SECS)
+}
+
+/// The start order at `now`: CI, Priority and aged Normal by
+/// `created_at`; then fresh Normal, round-robin across workspaces (after
+/// `last_workspace`), FIFO inside each. Positions follow this order.
+pub fn order<'a>(now: i64, queue: &'a [QueuedJob], last_workspace: Option<&str>) -> Vec<&'a QueuedJob> {
+    let fifo = |a: &&QueuedJob, b: &&QueuedJob| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id));
+    let mut urgent: Vec<&QueuedJob> = queue.iter().filter(|j| band_of(j, now).by_arrival()).collect();
+    urgent.sort_by(|a, b| band_of(b, now).cmp(&band_of(a, now)).then_with(|| fifo(a, b)));
+    let mut normal: Vec<&QueuedJob> = queue.iter().filter(|j| !band_of(j, now).by_arrival()).collect();
+    normal.sort_by(fifo);
+    // Workspace rotation over a STABLE cyclic order (sorted ids), starting
+    // just after the last-served workspace, so every workspace with work
+    // waits at most (workspaces − 1) placements.
+    let mut wss: Vec<&str> = normal.iter().map(|j| j.workspace_id.as_str()).collect();
+    wss.sort_unstable();
+    wss.dedup();
+    if let Some(last) = last_workspace {
+        let start = wss.iter().position(|w| *w > last).unwrap_or(0);
+        wss.rotate_left(start);
+    }
+    let mut by_ws: HashMap<&str, VecDeque<&QueuedJob>> = HashMap::new();
+    for j in normal {
+        by_ws.entry(j.workspace_id.as_str()).or_default().push_back(j);
+    }
+    let mut out = urgent;
+    loop {
+        let mut any = false;
+        for w in &wss {
+            if let Some(j) = by_ws.get_mut(w).and_then(VecDeque::pop_front) {
+                out.push(j);
+                any = true;
+            }
+        }
+        if !any {
+            return out;
+        }
+    }
+}
+
+/// Why everything after a held head waits.
+fn hold_reason(j: &QueuedJob, band: Band) -> Refusal {
+    match band {
+        Band::Ci => Refusal::new(tiers::codes::TIER_HOLD, "a CI job ahead of it takes the next free slot"),
+        Band::Priority => Refusal::new(tiers::codes::TIER_HOLD, "a Priority job ahead of it takes the next free slot"),
+        _ if j.exclusive => Refusal::new(refusal::WAITING_FOR_IDLE, "an exclusive job ahead of it waits for an idle node"),
+        _ => Refusal::new(tiers::codes::TIER_HOLD, "a job ahead of it takes the next free slot"),
+    }
+}
+
+/// Decide one placement at `now` (server clock).
 ///
 /// - `queue`: queued jobs on this node (any order).
 /// - `last_workspace`: who got the previous placement on this node.
@@ -135,6 +204,7 @@ fn ask(j: &QueuedJob) -> JobAsk<'_> {
 /// - `controller_pause`: `Some("paused"|"draining")` when the controller
 ///   owner stopped new assignments.
 pub fn decide(
+    now: i64,
     queue: &[QueuedJob],
     last_workspace: Option<&str>,
     load: &Load,
@@ -142,8 +212,7 @@ pub fn decide(
     offer: Option<&Offer>,
     controller_pause: Option<&str>,
 ) -> Decision {
-    let mut jobs: Vec<&QueuedJob> = queue.iter().collect();
-    jobs.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+    let jobs = order(now, queue, last_workspace);
     let position: HashMap<&str, usize> = jobs.iter().enumerate().map(|(i, j)| (j.id.as_str(), i + 1)).collect();
     let mut waiting: BTreeMap<String, (usize, Refusal)> = BTreeMap::new();
     let wait_all = |why: Refusal, waiting: &mut BTreeMap<String, (usize, Refusal)>| {
@@ -162,78 +231,50 @@ pub fn decide(
         wait_all(Refusal::new("node_offline", "the node is offline; the job starts when it reconnects"), &mut waiting);
         return Decision { place: None, waiting };
     };
-    // A job over the node's caps can never start: report it (the daemon
-    // fails it) and leave it out, so it never holds the jobs behind it.
-    jobs.retain(|j| match never_fits(offer, j) {
-        Some(r) => {
-            waiting.insert(j.id.clone(), (position[j.id.as_str()], r));
-            false
+    let mut place: Option<String> = None;
+    let mut hold: Option<Refusal> = None;
+    let mut head_seen = false;
+    // Workspaces whose oldest Normal job was already looked at (strict
+    // FIFO inside a workspace).
+    let mut seen_ws: HashSet<&str> = HashSet::new();
+    for j in &jobs {
+        let pos = position[j.id.as_str()];
+        // A job over the node's caps can never start: report it (the
+        // daemon fails it) and leave it out, so it never holds the jobs
+        // behind it.
+        if let Some(r) = never_fits(offer, j) {
+            waiting.insert(j.id.clone(), (pos, r));
+            continue;
         }
-        None => true,
-    });
-    if jobs.is_empty() {
-        return Decision { place: None, waiting };
-    }
-
-    // Workspace rotation over a STABLE cyclic order (sorted ids), starting
-    // just after the last-served workspace, so every workspace with work
-    // waits at most (workspaces − 1) placements.
-    let mut order: Vec<&str> = jobs.iter().map(|j| j.workspace_id.as_str()).collect();
-    order.sort_unstable();
-    order.dedup();
-    if let Some(last) = last_workspace {
-        let start = order.iter().position(|w| *w > last).unwrap_or(0);
-        order.rotate_left(start);
-    }
-
-    // The oldest job overall is exclusive: hold everything else until it runs.
-    let oldest = jobs[0];
-    let mut place = None;
-    if oldest.exclusive {
-        let r = refusal::offer_refusal(offer, load.total(), load.exclusive_running, &ask(oldest));
-        match r {
-            None if within_grant(oldest, load, grant_max_parallel) => place = Some(oldest.id.clone()),
-            None => {
-                waiting.insert(oldest.id.clone(), (1, grant_full()));
-            }
-            Some(r) => {
-                waiting.insert(oldest.id.clone(), (1, with_numbers(r, offer, oldest, load.total())));
-            }
+        let is_head = !std::mem::replace(&mut head_seen, true);
+        if let Some(h) = &hold {
+            waiting.insert(j.id.clone(), (pos, h.clone()));
+            continue;
         }
-        for j in jobs.iter().skip(1) {
-            waiting.insert(
-                j.id.clone(),
-                (position[j.id.as_str()], Refusal::new(refusal::WAITING_FOR_IDLE, "an older exclusive job goes first")),
-            );
+        if j.tier == Tier::Normal && !seen_ws.insert(j.workspace_id.as_str()) {
+            waiting.insert(j.id.clone(), (pos, Refusal::new("behind_older_job", "an older job from this workspace goes first")));
+            continue;
         }
-        return Decision { place, waiting };
-    }
-
-    for ws in &order {
-        // FIFO within the workspace: only its head may start.
-        let Some(head) = jobs.iter().find(|j| j.workspace_id == *ws) else { continue };
-        let refused = refusal::offer_refusal(offer, load.total(), load.exclusive_running, &ask(head));
-        let verdict = match refused {
-            Some(r) => Err(with_numbers(r, offer, head, load.total())),
-            None if !within_grant(head, load, grant_max_parallel) => Err(grant_full()),
+        let band = band_of(j, now);
+        let verdict = match refusal::offer_refusal(offer, load.total(), load.exclusive_running, &ask(j)) {
+            Some(r) => Err(with_numbers(r, offer, j, load.total())),
+            None if !within_grant(j, load, grant_max_parallel) => Err(grant_full()),
             None => Ok(()),
         };
         match verdict {
-            Ok(()) if place.is_none() => place = Some(head.id.clone()),
+            Ok(()) if place.is_none() => place = Some(j.id.clone()),
             Ok(()) => {
-                waiting.insert(head.id.clone(), (position[head.id.as_str()], Refusal::new("next_in_turn", "next in turn")));
+                waiting.insert(j.id.clone(), (pos, Refusal::new("next_in_turn", "next in turn")));
             }
             Err(r) => {
-                waiting.insert(head.id.clone(), (position[head.id.as_str()], r));
+                // Next free slot: only while it waits for room, never for a
+                // refusal that could last (T3); CI and Priority, and an
+                // exclusive job at the head of the order.
+                if tiers::waits_for_room(&r.code) && (band.holds() || (is_head && j.exclusive)) {
+                    hold = Some(hold_reason(j, band));
+                }
+                waiting.insert(j.id.clone(), (pos, r));
             }
-        }
-    }
-    for j in &jobs {
-        if Some(&j.id) != place.as_ref() && !waiting.contains_key(&j.id) {
-            waiting.insert(
-                j.id.clone(),
-                (position[j.id.as_str()], Refusal::new("behind_older_job", "an older job from this workspace goes first")),
-            );
         }
     }
     Decision { place, waiting }
@@ -336,8 +377,15 @@ mod tests {
         }
     }
 
+    /// "Now" for tests whose jobs are all fresh (created at small times).
+    const T0: i64 = 0;
+
     fn job(id: &str, ws: &str, at: i64) -> QueuedJob {
-        QueuedJob { id: id.into(), workspace_id: ws.into(), created_at: at, exclusive: false, cpu_millis: None, mem_bytes: None, disk_bytes: 0, needs_git: true }
+        QueuedJob { id: id.into(), workspace_id: ws.into(), created_at: at, exclusive: false, cpu_millis: None, mem_bytes: None, disk_bytes: 0, needs_git: true, tier: Tier::Normal }
+    }
+
+    fn tiered(id: &str, ws: &str, at: i64, tier: Tier) -> QueuedJob {
+        QueuedJob { tier, ..job(id, ws, at) }
     }
 
     fn cap1(_: &str) -> u32 {
@@ -347,11 +395,11 @@ mod tests {
     #[test]
     fn fifo_within_a_workspace_and_round_robin_across() {
         let q = vec![job("a1", "A", 1), job("a2", "A", 2), job("b1", "B", 3)];
-        let d = decide(&q, None, &Load::default(), &cap1, Some(&offer(4)), None);
+        let d = decide(T0, &q, None, &Load::default(), &cap1, Some(&offer(4)), None);
         assert_eq!(d.place.as_deref(), Some("a1"));
         // A just got a placement → B is next even though a2 is older.
         let q2 = vec![job("a2", "A", 2), job("b1", "B", 3)];
-        let d = decide(&q2, Some("A"), &Load::default(), &cap1, Some(&offer(4)), None);
+        let d = decide(T0, &q2, Some("A"), &Load::default(), &cap1, Some(&offer(4)), None);
         assert_eq!(d.place.as_deref(), Some("b1"));
         assert_eq!(d.waiting["a2"].1.code, "next_in_turn");
     }
@@ -362,12 +410,12 @@ mod tests {
         let mut load = Load::default();
         load.running_by_workspace.insert("A".into(), 1);
         // Node parallel 2, A at its grant cap of 1 → B goes.
-        let d = decide(&q, None, &load, &cap1, Some(&offer(2)), None);
+        let d = decide(T0, &q, None, &load, &cap1, Some(&offer(2)), None);
         assert_eq!(d.place.as_deref(), Some("b1"));
         assert_eq!(d.waiting["a1"].1.code, GRANT_PARALLEL_FULL);
         // Node full.
         load.running_by_workspace.insert("B".into(), 1);
-        let d = decide(&q, None, &load, &|_| 5, Some(&offer(2)), None);
+        let d = decide(T0, &q, None, &load, &|_| 5, Some(&offer(2)), None);
         assert_eq!(d.place, None);
         assert_eq!(d.waiting["a1"].1.code, refusal::PARALLEL_FULL);
         assert_eq!(d.waiting["b1"].0, 2, "position is global FIFO order");
@@ -383,7 +431,7 @@ mod tests {
         o.free = Free { cpu_millis: 3000, mem_bytes: (42 << 30) / 10, disk_free_bytes: 500 << 30 };
         let mut load = Load::default();
         load.running_by_workspace.insert("B".into(), 1);
-        let d = decide(&[big.clone()], None, &load, &|_| 4, Some(&o), None);
+        let d = decide(T0, &[big.clone()], None, &load, &|_| 4, Some(&o), None);
         assert_eq!(d.place, None);
         let (pos, r) = &d.waiting["a1"];
         assert_eq!((*pos, r.code.as_str()), (1, refusal::LOCAL_RESOURCE_LIMIT));
@@ -401,17 +449,17 @@ mod tests {
     #[test]
     fn offline_paused_and_node_refusals_pass_through() {
         let q = vec![job("a1", "A", 1)];
-        assert_eq!(decide(&q, None, &Load::default(), &cap1, None, None).waiting["a1"].1.code, "node_offline");
+        assert_eq!(decide(T0, &q, None, &Load::default(), &cap1, None, None).waiting["a1"].1.code, "node_offline");
         assert_eq!(
-            decide(&q, None, &Load::default(), &cap1, Some(&offer(1)), Some("paused")).waiting["a1"].1.code,
+            decide(T0, &q, None, &Load::default(), &cap1, Some(&offer(1)), Some("paused")).waiting["a1"].1.code,
             CONTROLLER_PAUSED
         );
         let mut o = offer(1);
         o.control = Control::Draining;
-        assert_eq!(decide(&q, None, &Load::default(), &cap1, Some(&o), None).waiting["a1"].1.code, refusal::LOCAL_DRAINING);
+        assert_eq!(decide(T0, &q, None, &Load::default(), &cap1, Some(&o), None).waiting["a1"].1.code, refusal::LOCAL_DRAINING);
         let mut o = offer(1);
         o.refusal = Some(Refusal::new(refusal::FOREIGN_LOCK, "sew"));
-        assert_eq!(decide(&q, None, &Load::default(), &cap1, Some(&o), None).waiting["a1"].1.code, refusal::FOREIGN_LOCK);
+        assert_eq!(decide(T0, &q, None, &Load::default(), &cap1, Some(&o), None).waiting["a1"].1.code, refusal::FOREIGN_LOCK);
     }
 
     #[test]
@@ -421,17 +469,17 @@ mod tests {
         let q = vec![ex.clone(), job("b1", "B", 2)];
         let mut load = Load::default();
         load.running_by_workspace.insert("C".into(), 1);
-        let d = decide(&q, None, &load, &|_| 5, Some(&offer(4)), None);
+        let d = decide(T0, &q, None, &load, &|_| 5, Some(&offer(4)), None);
         assert_eq!(d.place, None, "nothing starts while the exclusive job waits for idle");
         assert_eq!(d.waiting["x"].1.code, refusal::WAITING_FOR_IDLE);
         assert_eq!(d.waiting["b1"].1.code, refusal::WAITING_FOR_IDLE);
-        let d = decide(&q, None, &Load::default(), &|_| 5, Some(&offer(4)), None);
+        let d = decide(T0, &q, None, &Load::default(), &|_| 5, Some(&offer(4)), None);
         assert_eq!(d.place.as_deref(), Some("x"));
         // While it runs, nothing else starts.
         let mut running = Load::default();
         running.running_by_workspace.insert("A".into(), 1);
         running.exclusive_running = true;
-        let d = decide(&[job("b1", "B", 2)], Some("A"), &running, &|_| 5, Some(&offer(4)), None);
+        let d = decide(T0, &[job("b1", "B", 2)], Some("A"), &running, &|_| 5, Some(&offer(4)), None);
         assert_eq!(d.place, None);
         assert_eq!(d.waiting["b1"].1.code, refusal::EXCLUSIVE_RUNNING);
     }
@@ -469,7 +517,7 @@ mod tests {
                     submitted += 1;
                 }
             }
-            let d = decide(&queue, last.as_deref(), &Load::default(), &cap1, Some(&offer(1)), None);
+            let d = decide(T0, &queue, last.as_deref(), &Load::default(), &cap1, Some(&offer(1)), None);
             let Some(id) = d.place else { continue };
             let i = queue.iter().position(|j| j.id == id).unwrap();
             let j = queue.remove(i);
@@ -569,7 +617,7 @@ mod tests {
     #[test]
     fn a_job_over_the_node_caps_never_blocks_the_jobs_behind_it() {
         let q = vec![mem_job("big", "A", 1, 4), job("a2", "A", 2), job("a3", "A", 3)];
-        let d = decide(&q, None, &Load::default(), &cap1, Some(&small(2)), None);
+        let d = decide(T0, &q, None, &Load::default(), &cap1, Some(&small(2)), None);
         assert_eq!(d.place.as_deref(), Some("a2"));
         let (pos, why) = d.waiting.get("big").expect("big is reported");
         assert_eq!((*pos, why.code.as_str()), (1, EXCEEDS_NODE_CAPS));
@@ -577,8 +625,110 @@ mod tests {
         // Same for an exclusive job over the caps.
         let mut ex = mem_job("ex", "A", 1, 4);
         ex.exclusive = true;
-        let d = decide(&[ex, job("b1", "B", 2)], None, &Load::default(), &cap1, Some(&small(2)), None);
+        let d = decide(T0, &[ex, job("b1", "B", 2)], None, &Load::default(), &cap1, Some(&small(2)), None);
         assert_eq!(d.place.as_deref(), Some("b1"));
         assert_eq!(d.waiting.get("ex").expect("ex is reported").1.code, EXCEEDS_NODE_CAPS);
+    }
+
+    // ── tiers (prd-compute-job-tiers-v1, solo nodes) ──────────────────
+
+    #[test]
+    fn a_solo_node_orders_ci_then_priority_then_normal() {
+        let q = vec![job("n", "A", 1), tiered("p", "B", 2, Tier::Priority), tiered("c", "C", 3, Tier::Ci)];
+        let d = decide(T0, &q, None, &Load::default(), &cap1, Some(&offer(4)), None);
+        assert_eq!(d.place.as_deref(), Some("c"));
+        assert_eq!(d.waiting["p"].0, 2);
+        assert_eq!(d.waiting["n"].0, 3, "positions follow the tier order, not created_at");
+        assert_eq!(order(T0, &q, None).iter().map(|j| j.id.as_str()).collect::<Vec<_>>(), vec!["c", "p", "n"]);
+    }
+
+    /// R1 "next free slot": a CI or Priority head that waits for room holds
+    /// every later start, even a small job that fits now.
+    #[test]
+    fn a_ci_or_priority_head_waiting_for_room_holds_the_node() {
+        for tier in [Tier::Ci, Tier::Priority] {
+            let mut o = offer(4);
+            o.free.cpu_millis = 2000;
+            let mut head = tiered("head", "A", 5, tier);
+            head.cpu_millis = Some(4000);
+            let mut load = Load::default();
+            load.running_by_workspace.insert("C".into(), 1);
+            let d = decide(T0, &[head, job("small", "B", 1)], None, &load, &|_| 5, Some(&o), None);
+            assert_eq!(d.place, None, "{tier:?}: nothing starts ahead of it");
+            assert_eq!(d.waiting["head"].1.code, refusal::LOCAL_RESOURCE_LIMIT);
+            assert_eq!(d.waiting["small"].1.code, tiers::codes::TIER_HOLD);
+        }
+        // A Normal head in the same spot: the small job goes (no hold on solo).
+        let mut o = offer(4);
+        o.free.cpu_millis = 2000;
+        let mut head = job("head", "A", 1);
+        head.cpu_millis = Some(4000);
+        let d = decide(T0, &[head, job("small", "B", 2)], None, &Load::default(), &|_| 5, Some(&o), None);
+        assert_eq!(d.place.as_deref(), Some("small"));
+    }
+
+    /// T3: a CI head refused for anything but room (its grant's cap, a
+    /// missing tool, a per-job disk ask) never holds the node.
+    #[test]
+    fn a_ci_head_refused_for_a_lasting_reason_never_holds_the_node() {
+        let mut load = Load::default();
+        load.running_by_workspace.insert("A".into(), 1);
+        let d = decide(T0, &[tiered("ci", "A", 1, Tier::Ci), job("b", "B", 2)], None, &load, &cap1, Some(&offer(4)), None);
+        assert_eq!(d.waiting["ci"].1.code, GRANT_PARALLEL_FULL);
+        assert_eq!(d.place.as_deref(), Some("b"), "the grant's cap is the workspace's limit, not the node's room");
+        let mut no_git = offer(4);
+        no_git.tools.clear();
+        let mut plain = job("b", "B", 2);
+        plain.needs_git = false;
+        let d = decide(T0, &[tiered("ci", "A", 1, Tier::Ci), plain.clone()], None, &Load::default(), &cap1, Some(&no_git), None);
+        assert_eq!(d.waiting["ci"].1.code, refusal::TOOL_MISSING);
+        assert_eq!(d.place.as_deref(), Some("b"), "a missing tool would hold the node forever");
+        let mut disk = offer(4);
+        disk.free.disk_free_bytes = 1 << 30;
+        let mut p = tiered("p", "A", 1, Tier::Priority);
+        p.disk_bytes = 10 << 30;
+        let d = decide(T0, &[p, plain], None, &Load::default(), &cap1, Some(&disk), None);
+        assert_eq!(d.waiting["p"].1.code, refusal::DISK_LOW);
+        assert_eq!(d.place.as_deref(), Some("b"));
+    }
+
+    /// T5: an hour-old Normal job ranks above fresh Normal work and below
+    /// Priority; on a solo node it never holds (Normal's rule), and strict
+    /// FIFO inside its workspace still applies.
+    #[test]
+    fn aged_normal_ranks_below_priority_and_never_holds_a_solo_node() {
+        let now = 10_000;
+        let aged = job("aged", "A", now - 3600);
+        let fresh = job("fresh", "B", now - 10);
+        let p = tiered("p", "C", now - 1, Tier::Priority);
+        let q = vec![fresh.clone(), aged.clone(), p];
+        assert_eq!(order(now, &q, Some("A")).iter().map(|j| j.id.as_str()).collect::<Vec<_>>(), vec!["p", "aged", "fresh"]);
+        let d = decide(now, &[fresh.clone(), aged.clone()], Some("A"), &Load::default(), &cap1, Some(&offer(4)), None);
+        assert_eq!(d.place.as_deref(), Some("aged"), "aged beats the workspace turn");
+        let mut o = offer(4);
+        o.free.cpu_millis = 2000;
+        let mut big = aged;
+        big.cpu_millis = Some(4000);
+        let d = decide(now, &[big, fresh], None, &Load::default(), &cap1, Some(&o), None);
+        assert_eq!(d.place.as_deref(), Some("fresh"), "an old Normal job never drains a node");
+        let mut a1 = job("a1", "A", now - 7200);
+        a1.cpu_millis = Some(4000);
+        let d = decide(now, &[a1, job("a2", "A", now - 3700)], None, &Load::default(), &cap1, Some(&o), None);
+        assert_eq!(d.place, None);
+        assert_eq!(d.waiting["a2"].1.code, "behind_older_job");
+    }
+
+    /// An exclusive Normal job waiting for idle no longer holds a CI job
+    /// back: CI heads the order and the exclusive one waits behind it.
+    #[test]
+    fn an_exclusive_normal_job_never_blocks_ci() {
+        let mut ex = job("ex", "A", 1);
+        ex.exclusive = true;
+        let mut load = Load::default();
+        load.running_by_workspace.insert("C".into(), 1);
+        let d = decide(T0, &[ex, tiered("ci", "B", 2, Tier::Ci)], None, &load, &|_| 5, Some(&offer(4)), None);
+        assert_eq!(d.place.as_deref(), Some("ci"));
+        assert_eq!(d.waiting["ex"].1.code, refusal::WAITING_FOR_IDLE);
+        assert_eq!(d.waiting["ex"].0, 2);
     }
 }

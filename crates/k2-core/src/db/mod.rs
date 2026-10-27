@@ -1574,6 +1574,13 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // runs before it) are held by other lanes; 0228/0229 are Routines'. The store is
         // `crate::email_notify`.
         ("0227_email_notifications", include_str!("../../drizzle_sql/0227_email_notifications.sql")),
+        // 0230 — compute job tiers (prd-compute-job-tiers-v1, 0.46.5):
+        // `compute_jobs.tier` (gate rows become `ci`), `tier_asked`,
+        // `submitter`, `supersede_key`; `compute_node_grants.allow_ci`
+        // (DEFAULT 0, nobody granted). Additive. 0226 (handover) and 0227
+        // (email) run before it; 0228/0229 stay Routines' (vs-live T16: 0229
+        // renumbers above 0230 if it ships after it).
+        ("0230_compute_job_tiers", include_str!("../../drizzle_sql/0230_compute_job_tiers.sql")),
         // 0231 — the manifest is part of a widget's version
         // (prd-widget-size-and-shared-libs-v1 vs-live L1, S0; 0.46.5): two
         // additive tables, `zen_version_carry_runs` (one row: the one-time
@@ -2319,6 +2326,8 @@ mod tests {
                 "0226_app_handovers",
                 // 0.46.5: Email Notifications (senders, relays, log).
                 "0227_email_notifications",
+                // 0.46.5: compute job tiers.
+                "0230_compute_job_tiers",
                 // 0.46.5: the manifest is part of a widget's version (S0).
                 "0231_zen_version_carry",
             ],
@@ -2402,6 +2411,8 @@ mod tests {
                 "0226_app_handovers",
                 // 0.46.5: Email Notifications (senders, relays, log).
                 "0227_email_notifications",
+                // 0.46.5: compute job tiers.
+                "0230_compute_job_tiers",
                 // 0.46.5: the manifest is part of a widget's version (S0).
                 "0231_zen_version_carry",
             ],
@@ -2635,7 +2646,7 @@ mod tests {
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(last, "0222_pg_dual_runs", "0222 runs last of the 0.46.3 tail (then 0225, 0226, 0227 and 0231)");
+        assert_eq!(last, "0222_pg_dual_runs", "0222 runs last of the 0.46.3 tail (then 0225, 0226, 0227, 0230 and 0231)");
         let before_last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1 OFFSET 1", [], |r| r.get(0))
             .unwrap();
@@ -2655,9 +2666,10 @@ mod tests {
                 "0225_app_users_switch",
                 "0226_app_handovers",
                 "0227_email_notifications",
+                "0230_compute_job_tiers",
                 "0231_zen_version_carry"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225 and 0.46.5's 0226, 0227 and 0231)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225 and 0.46.5's 0226, 0227, 0230 and 0231)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3397,6 +3409,10 @@ mod tests {
             // 0231 (the widget version carry, 0.46.5) is the newest: its
             // record goes (its tables and index are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0231_zen_version_carry'", []).unwrap();
+            // 0230 (compute job tiers, 0.46.5) came before it: its record goes
+            // (its columns and indexes stay; re-adding is skipped as
+            // duplicates).
+            conn.execute("DELETE FROM _migrations WHERE name = '0230_compute_job_tiers'", []).unwrap();
             // 0227 (Email Notifications, 0.46.5) came before it: its record
             // goes (its tables and indexes are IF NOT EXISTS and its
             // settings insert OR IGNORE).
@@ -4788,5 +4804,51 @@ mod tests {
         }
         assert!(Arc::ptr_eq(&shared(), &global), "the guard restores the shared DB");
         assert!(!project_ids(&global.lock()).contains(&marker));
+    }
+
+    /// 0230 (compute job tiers, prd-compute-job-tiers-v1 §6 with T1) on a
+    /// 0.46.4 database (last migration 0225): gate rows become `ci`, every
+    /// other row `normal` (a detached `batch` row too, G4), no grant gets
+    /// `allow_ci`, the tier check refuses a word it doesn't know, and a
+    /// second run is a no-op.
+    #[test]
+    fn a_046_4_database_upgrades_through_0230_compute_job_tiers() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0225_app_users_switch")).unwrap();
+        conn.execute(
+            "INSERT INTO compute_nodes (id, name, fingerprint, public_key_pem, state, enrolled_via, enrolled_at) \
+             VALUES ('n1', 'k2n4', 'fp', 'pem', 'active', 'code', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO compute_node_grants (node_id, workspace_id, granted_by, granted_at) VALUES ('n1', 'w-ci', 'owner', 1)", []).unwrap();
+        for (id, class) in [("j-gate", "gate"), ("j-int", "interactive"), ("j-batch", "batch")] {
+            conn.execute(
+                "INSERT INTO compute_jobs (id, client_job_id, node_id, workspace_id, requested_by, argv_json, env_names_json, \
+                 request_sha256, plan_json, state, plan_digest, created_at, class) \
+                 VALUES (?1, ?1, 'n1', 'w-ci', 'owner', '[]', '[]', 'sha', '{}', 'queued', 'd', 1, ?2)",
+                params![id, class],
+            )
+            .unwrap();
+        }
+        run_migrations(&conn).unwrap();
+        let tier = |id: &str| -> String { conn.query_row("SELECT tier FROM compute_jobs WHERE id = ?1", params![id], |r| r.get(0)).unwrap() };
+        assert_eq!(tier("j-gate"), "ci");
+        assert_eq!(tier("j-int"), "normal");
+        assert_eq!(tier("j-batch"), "normal", "a detached job is plain Normal now");
+        let (asked, submitter, key): (Option<String>, Option<String>, Option<String>) = conn
+            .query_row("SELECT tier_asked, submitter, supersede_key FROM compute_jobs WHERE id = 'j-gate'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!((asked, submitter, key), (None, None, None));
+        let allow: i64 = conn.query_row("SELECT allow_ci FROM compute_node_grants WHERE workspace_id = 'w-ci'", [], |r| r.get(0)).unwrap();
+        assert_eq!(allow, 0, "nobody gets CI from the migration (Q11)");
+        let bad = conn.execute("UPDATE compute_jobs SET tier = 'urgent' WHERE id = 'j-int'", []);
+        assert!(bad.is_err(), "the tier check refuses an unknown word");
+        let bad = conn.execute("UPDATE compute_jobs SET tier_asked = 'urgent' WHERE id = 'j-int'", []);
+        assert!(bad.is_err(), "tier_asked too");
+        run_migrations(&conn).unwrap();
+        let once: i64 = conn.query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0230_compute_job_tiers'", [], |r| r.get(0)).unwrap();
+        assert_eq!(once, 1, "0230 is recorded once");
+        assert_eq!(tier("j-gate"), "ci");
     }
 }

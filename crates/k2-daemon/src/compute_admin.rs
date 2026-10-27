@@ -2176,7 +2176,15 @@ fn server_json(r: &share::ServerRow, now: i64) -> Value {
         .map(k2_core::compute::proto::pairing::display_sas)
         .into();
     v["refusal"] = r.usage.as_ref().and_then(|u| u.get("refusal")).cloned().filter(|_| r.state == "refused").unwrap_or(Value::Null);
+    // Job tiers (T7): does its Priority count here? null = the node is
+    // older than 0.46.5 and doesn't say.
+    v["priority"] = server_priority(r).into();
     v
+}
+
+/// A mirrored server's Priority word (`servers.list`, k2-node 0.46.5+).
+fn server_priority(r: &share::ServerRow) -> Option<bool> {
+    r.usage.as_ref().and_then(|u| u.get("priority")).and_then(Value::as_bool)
 }
 
 /// `GET /cli/compute/nodes/servers?node=N[&refresh=1]`: on a node this
@@ -2396,15 +2404,27 @@ fn servers_operate(who: &Who, node: &store::NodeRow, verb: &str, args: &Value) -
 }
 
 /// `POST /cli/compute/nodes/servers/limits {node, server, set{…},
-/// forSecs}`: a narrowing applies at once; a widening is held for the
-/// owner's approval (§4.3).
+/// forSecs, priority}`: a narrowing applies at once; a widening is held for
+/// the owner's approval (§4.3). `priority` (job tiers, T8) goes only to a
+/// node offering `tiers`: an older one would refuse the whole change.
 fn servers_limits(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
     let op = servers_operator(who, mgr)?;
     let v = json_body(body)?;
     let node = node_or_404(s(&v, "node"))?;
     servers_ready(&node)?;
     let server = server_arg(&v, true)?;
-    let largs = pshare::LimitsArgs { server: server.clone(), set: limits_from(&v)?, for_secs: crate::compute_routes::n(&v, "forSecs") };
+    let priority = match v.get("priority") {
+        None | Some(Value::Null) => None,
+        Some(x) => Some(x.as_bool().ok_or_else(|| no(acodes::BAD_ARGS, 400, "priority is true or false"))?),
+    };
+    if priority.is_some() && !features(&node.id).iter().any(|f| f == k2_core::compute::proto::tiers::FEATURE_TIERS) {
+        return Err(no(
+            pshare::codes::NODE_TOO_OLD,
+            409,
+            format!("{} runs a k2-node older than 0.46.5: it has no Priority setting per server yet (k2 compute node update {})", node.name, node.name),
+        ));
+    }
+    let largs = pshare::LimitsArgs { server: server.clone(), set: limits_from(&v)?, for_secs: crate::compute_routes::n(&v, "forSecs"), priority };
     let args = serde_json::to_value(&largs).map_err(|e| no("internal", 500, e.to_string()))?;
     pshare::check_verb_args(pshare::VERB_LIMITS, &args).map_err(|e| no(acodes::BAD_ARGS, 400, e))?;
     let row = server_row(&node, &server)?;
@@ -2414,7 +2434,7 @@ fn servers_limits(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
         let reason = s(&v, "reason").map(str::to_string).or_else(|| (!why.is_empty()).then(|| why.to_string()));
         file_request(&op, &node, "command", Class::Privileged, &body_v, &summary, reason.as_deref())
     };
-    match admin::classify_servers_limits(&row.limits, row.expires_at, &largs, compute::now()) {
+    match admin::classify_servers_limits(&row.limits, row.expires_at, server_priority(&row), &largs, compute::now()) {
         Class::Read => Ok(json!({"ok": true, "node": node.name, "server": row.label, "changed": false, "note": "nothing to change"})),
         Class::Operate => {
             let (cmd_id, result) = servers_operate(who, &node, pshare::VERB_LIMITS, &args)?;

@@ -101,7 +101,6 @@ const POLICY_KEYS: &[(&str, &str)] = &[
     ("max_parallel", "int"),
     ("network", "enum"),
     ("repo_toolchains", "bool"),
-    ("gate_reserved_slots", "int"),
 ];
 
 fn enum_ok(key: &str, v: &str) -> bool {
@@ -119,6 +118,11 @@ pub fn set_policy(updates: &[(String, String)]) -> Result<toml::Table, String> {
     let p = config_dir().join("policy.toml");
     let mut t = read_toml(&p).unwrap_or_default();
     for (k, v) in updates {
+        // 0.46.4's reserved gate slots are ignored since 0.46.5
+        // (prd-compute-job-tiers-v1 §3.7).
+        if k == "gate_reserved_slots" {
+            return Err(format!("{}: {}", super::admin::codes::DEPRECATED_KEY, super::admin::GATE_RESERVED_DEPRECATED));
+        }
         let Some((_, kind)) = POLICY_KEYS.iter().find(|(name, _)| name == k) else {
             return Err(format!("unknown policy key '{k}'"));
         };

@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 
 use k2_core::compute::proto::frames::{Blob, Control, JobLimits, JobState, Plan, Src};
 use k2_core::compute::proto::share as pshare;
+use k2_core::compute::proto::tiers::{self, Tier};
 use k2_core::compute::proto::{crypto, env as penv, needs, pairing, results};
 use k2_core::compute::share::{self, pending};
 use k2_core::compute::{self as compute, codes, logs, scheduler, store};
@@ -651,8 +652,34 @@ fn share_json(n: &store::NodeRow) -> Option<serde_json::Value> {
         // §14: the node's clock against this server's, only when worth
         // showing (order and ETAs never use it).
         "skewSecs": v.and_then(|v| v.skew_secs).filter(|s| s.abs() > pshare::SKEW_SHOW_SECS),
+        // Job tiers (T7): does this server's Priority count there? null =
+        // a node older than 0.46.5 doesn't say.
+        "priority": v.and_then(|v| v.priority),
         "at": n.share_at,
     }))
+}
+
+/// `{ci, priority, normal}` counts, every tier present (0 when none).
+fn tier_counts(m: &BTreeMap<String, i64>) -> serde_json::Value {
+    serde_json::json!({
+        "ci": m.get("ci").copied().unwrap_or(0),
+        "priority": m.get("priority").copied().unwrap_or(0),
+        "normal": m.get("normal").copied().unwrap_or(0),
+    })
+}
+
+/// The Priority holders on this server: `[{submitter, workspace, jobs}]`.
+fn critical_path_json() -> serde_json::Value {
+    let holders = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::priority_holders(&conn)
+    };
+    holders
+        .into_iter()
+        .map(|h| serde_json::json!({"submitter": h.submitter, "workspace": ws_handle(&h.workspace_id), "jobs": h.jobs}))
+        .collect::<Vec<_>>()
+        .into()
 }
 
 fn granted_node_ids(ws: &str) -> Vec<String> {
@@ -701,6 +728,12 @@ fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>
                 let conn = db.lock();
                 v["grant"] = serde_json::to_value(store::grant(&conn, &n.id, ws)).unwrap_or_default();
             }
+            // This server's jobs waiting there, by tier (counts only).
+            v["queueTiers"] = tier_counts(&{
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                store::queued_tiers(&conn, &n.id)
+            });
             if detail {
                 v["status"] = node_status(who, n);
             }
@@ -722,6 +755,9 @@ fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>
         // approving a node's move to this server (servers.owner, review F5).
         "controllerFp": compute::controller_key().ok().map(|k| k.fingerprint()),
         "ticketSupported": compute::ticket::supported(),
+        // Who is on the critical path on this server (§3.5): a coordinator
+        // sees it before choosing. Empty when nobody uses Priority.
+        "criticalPath": critical_path_json(),
     });
     if detail {
         out["controllerMachine"] = controller_machine();
@@ -1210,11 +1246,33 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
         return Err(no("not_active", 409, format!("'{}' is {}; confirm it first", n.name, n.state)));
     }
     let ws = grant_target_ws(who, s(&v, "workspace"), mgr)?;
+    // CI jumps every queue on the node: only the owner or an Admin login
+    // turns it on or off, never an agent, not even one that may manage
+    // compute nodes (prd-compute-job-tiers-v1 §5.1, T12). Agents ask with a
+    // `compute.ci` permission card.
+    let allow_ci = match v.get("allowCi") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(x) => Some(x.as_bool().ok_or_else(|| no(codes::BAD_REQUEST, 400, "allowCi is true or false"))?),
+    };
+    if allow_ci.is_some() && (mgr.is_some() || !who.is_admin()) {
+        if let Some(m) = mgr {
+            crate::compute_manage::audit(m, "grant_ci_refused", &n.name, &[("for", &ws.handle)]);
+        }
+        return Err(no(
+            tiers::codes::CI_NOT_ALLOWED,
+            403,
+            format!(
+                "only the owner or an Admin turns CI on or off for a grant (CI jumps every queue): the owner runs k2 compute grant {} --workspace {} --ci",
+                n.name, ws.handle
+            ),
+        ));
+    }
     let limits = store::GrantLimits {
         max_job_secs: n_pos(&v, "maxJobSecs", 60, 7 * 86_400)?,
         max_disk_gb: n_pos(&v, "maxDiskGb", 1, 10_000)?,
         max_parallel: n_pos(&v, "maxParallel", 1, 64)?,
         max_queued: n_pos(&v, "maxQueued", 1, 1000)?,
+        allow_ci,
     };
     let g = {
         let db = k2_core::db::shared();
@@ -1367,6 +1425,8 @@ fn agents_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         max_disk_gb: n_pos(&v, "maxDiskGb", 1, 10_000)?,
         max_parallel: n_pos(&v, "maxParallel", 1, 64)?,
         max_queued: n_pos(&v, "maxQueued", 1, 1000)?,
+        // The agents switch never touches CI (owner/Admin, per grant).
+        allow_ci: None,
     };
     set_agent_compute(&ws.id, &ws.handle, on, &limits, &who.label()).map_err(|e| no("internal", 500, e))
 }
@@ -1491,11 +1551,16 @@ struct Submitted {
     /// Where the code came from (slice A's `source` in the run response).
     source: Option<serde_json::Value>,
     preview: Option<serde_json::Value>,
+    /// Job tiers: one-line notes (`{code, message, by?, jobs?}`; stderr,
+    /// exit 0) and the queued jobs `--supersede` replaced.
+    notices: Vec<serde_json::Value>,
+    replaced: Vec<String>,
 }
 
 fn submitted_json(who: &Who, sub: &Submitted) -> serde_json::Value {
     let Some(job) = sub.job.as_ref() else { return sub.preview.clone().unwrap_or_default() };
-    let mut out = serde_json::json!({ "job": job_summary(job), "existing": false, "warnings": sub.warnings, "source": sub.source });
+    let mut out = serde_json::json!({ "job": job_summary(job), "existing": false, "warnings": sub.warnings, "source": sub.source,
+        "notices": sub.notices, "replaced": sub.replaced });
     if job.state == "queued" {
         if let Some(q) = queue_view(who, job, &compute_ws::decision_for(&job.node_id)) {
             out["queue"] = q;
@@ -1537,6 +1602,11 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let secret_asks = crate::compute_secrets::asks_from(v)?;
     let secrets_found = crate::compute_secrets::find(&ws.id, &ws.handle, who.is_admin(), &secret_asks)?;
     let detach = b(&v, "detach") == Some(true);
+    // Job tiers (prd-compute-job-tiers-v1): `--tier` (`--gate` = ci), the
+    // supersede key and the submitter's own name. The node decides below.
+    let tier_ask = tier_from(v)?;
+    let supersede_key = supersede_from(v)?;
+    let submitter_name = submitter_name_from(v)?;
     // Never stuck (G3/G4): queue timeout, infra retries.
     let tun = compute::retry::tuning();
     let queue_timeout = match n(&v, "queueTimeoutSecs") {
@@ -1579,6 +1649,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         mem_bytes,
         stall: stall.is_some_and(|x| x > 0),
         secret_ids: secrets_found.iter().map(|f| f.secret_id.clone()).collect(),
+        tier: tier_ask,
     };
     // Node: by name, or --any.
     let mut warnings: Vec<String> = Vec::new();
@@ -1647,6 +1718,28 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             format!("'{}' isn't granted to workspace {}: ask your owner (k2 compute grant {} --workspace {})", node.name, ws.handle, node.name, ws.handle),
         ));
     }
+    // CI needs the node owner's share `gate` for this server and a grant
+    // with `allow_ci` (the owner and Admin logins pass the grant check);
+    // Priority with --exclusive would drain the node, so it needs CI's
+    // grant too (prd-compute-job-tiers-v1 §5.1, T12, T18).
+    let tier_offer = compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone());
+    let grant_ci = who.is_admin() || grant.as_ref().is_some_and(|g| g.allow_ci);
+    if tier_ask == Tier::Ci && !share::share_allows_ci(tier_offer.as_ref()) {
+        return Err(no(
+            pshare::codes::GATE_NOT_ALLOWED,
+            409,
+            format!(
+                "'{}': this server's share on the node doesn't allow CI jobs (gate); the node's owner allows it with k2 compute node servers {} limits <this server> --gate",
+                node.name, node.name
+            ),
+        ));
+    }
+    if tier_ask == Tier::Ci && !grant_ci {
+        return Err(ci_not_allowed(&node.name, &ws.handle, "--tier ci (or --gate)"));
+    }
+    if tier_ask == Tier::Priority && want.exclusive && !grant_ci {
+        return Err(ci_not_allowed(&node.name, &ws.handle, "--tier priority with --exclusive (it would drain the whole node)"));
+    }
     // Limits first, before any source is read or bundled (A8): each
     // refusal names the whole grant and the owner's command.
     let max_secs = grant.as_ref().map(|g| g.max_job_secs).unwrap_or(compute::DEFAULT_MAX_JOB_SECS);
@@ -1700,24 +1793,44 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             ));
         }
     }
-    // Node sharing (protocol 3): the class from facts (§7 rule 3), and on a
-    // shared node this server's share is checked here first (exit 3; the
-    // node checks again at assign). A solo node takes today's path.
-    let live_offer = compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone());
+    // Node sharing (protocol 3): on a shared node this server's share is
+    // checked here first (exit 3; the node checks again at assign). A solo
+    // node takes today's path.
+    let live_offer = tier_offer;
     let queue_node = live_offer.as_ref().is_some_and(share::queue_on);
-    let shard_of = opts.shard.as_ref().map(|s| s.of);
+    let tiers_node = live_offer.as_ref().is_some_and(share::tiers_on);
     let shared_view = live_offer.as_ref().filter(|o| share::is_shared(o)).and_then(|o| o.share.clone());
+    // The tier the queue orders it by: a guest's Priority where the node's
+    // owner didn't allow it runs as Normal, said once (T7).
+    let mut notices: Vec<serde_json::Value> = Vec::new();
+    let tier = if tier_ask == Tier::Priority && share::priority_counts(live_offer.as_ref()) == Some(false) {
+        notices.push(notice(
+            tiers::codes::PRIORITY_DOWNGRADED,
+            format!("'{}' doesn't count this server's Priority (a guest share; its owner can allow it): this job runs as Normal there", node.name),
+        ));
+        Tier::Normal
+    } else {
+        tier_ask
+    };
+    if tier == Tier::Priority && shared_view.is_some() && !tiers_node {
+        notices.push(notice(
+            tiers::codes::NODE_TOO_OLD_FOR_TIERS,
+            format!("'{}' runs a k2-node older than 0.46.5: it orders its queue without tiers, so Priority has no effect there (CI still goes first)", node.name),
+        ));
+    }
+    // The class old nodes order by comes from the tier (T11): CI is
+    // `gate`, everything else `interactive` (`--detach` and shard counts no
+    // longer lower a job, G4), lowered to a share's top class (T9).
     let class = match &shared_view {
         Some(view) => {
-            let class = share::clamp_class(&view.limits, share::class_for(b(&v, "gate") == Some(true), detach, shard_of, false));
+            let class = share::clamp_class(&view.limits, tier.class());
             let ask = share::ShareAsk { cpu_millis, mem_bytes, max_secs: timeout as u64, exclusive: want.exclusive, class };
             if let Some((code, msg)) = share::share_refusal(&view.limits, &ask) {
                 return Err(no(code, 409, format!("'{}': {msg} (k2 compute nodes shows your share)", node.name)));
             }
             class
         }
-        // `--gate` means something only on a shared node.
-        None => share::class_for(false, detach, shard_of, false),
+        None => tier.class(),
     };
     let est = {
         let db = k2_core::db::shared();
@@ -1744,10 +1857,13 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             artifacts: &artifacts,
             warnings: &warnings,
             class,
+            tier,
+            tier_asked: (tier != tier_ask).then_some(tier_ask),
+            notices: &notices,
             shared: shared_view.as_ref(),
             secrets: &secret_envs,
         });
-        return Ok(Submitted { job: None, warnings, source: None, preview: Some(preview) });
+        return Ok(Submitted { job: None, warnings, source: None, preview: Some(preview), notices: Vec::new(), replaced: Vec::new() });
     }
     // Source: the workspace's own repo only (never a path the client names
     // outside it, so a passport can't ship another repo off this machine).
@@ -1771,9 +1887,21 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         ..Default::default()
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
+    // Who sent it (display and the Priority note; not a security boundary).
+    let submitter = submitter_for(who, ws, source.as_ref(), submitter_name.as_deref());
+    // The Priority courtesy (R4, §3.5): one line when another submitter on
+    // this server already has Priority work queued or running. Never a
+    // refusal; once per submit (a split run: its first shard only).
+    if tier_ask == Tier::Priority && opts.shard.as_ref().is_none_or(|s| s.index == 1) {
+        if let Some(n) = critical_path_note(&submitter) {
+            notices.push(n);
+        }
+    }
     let plan = Plan {
         // Protocol 3 fields only to nodes offering `queue` (§10.2).
         class: queue_node.then_some(class),
+        // Protocol 5: the tier only to nodes offering `tiers` (T11).
+        tier: tiers_node.then_some(tier),
         session_id: opts.session.clone().filter(|_| queue_node),
         est_secs: est.filter(|_| queue_node).map(|(m, _)| m.max(0) as u64),
         est_p90_secs: est.filter(|_| queue_node).map(|(_, p)| p.max(0) as u64),
@@ -1820,6 +1948,10 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         )
         .map_err(|e| no("internal", 500, e))?;
         store::set_job_queue_facts(&conn, &j.id, class.as_str(), est.map(|(m, _)| m)).map_err(|e| no("internal", 500, e))?;
+        let asked = (tier != tier_ask).then(|| tier_ask.as_str());
+        store::set_job_tier_facts(&conn, &j.id, tier.as_str(), asked, Some(&submitter), supersede_key.as_deref()).map_err(|e| no("internal", 500, e))?;
+        // Audit: every submit says its tier (a CI submit is the one that
+        // jumps queues, §5.1).
         store::record_event(
             &conn,
             &who.label(),
@@ -1829,9 +1961,16 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             Some(&j.id),
             serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach, "needs": plan.needs,
                 "source": source.as_ref().map(SourceInfo::json), "any": any, "retries": retries, "queueTimeoutSecs": queue_timeout,
-                "shard": opts.shard, "secrets": plan.secret_env}),
+                "shard": opts.shard, "secrets": plan.secret_env, "tier": tier.as_str(), "tierAsked": asked, "submitter": submitter,
+                "supersede": supersede_key}),
         );
         j
+    };
+    // `--supersede KEY`: this workspace's older jobs with the key that are
+    // still queued end `cancelled/replaced`; a started one runs on (R3).
+    let replaced = match supersede_key.as_deref() {
+        Some(key) => supersede_older(ws, key, &job),
+        None => Vec::new(),
     };
     compute_ws::kick(&node.id);
     compute_ws::notify_change();
@@ -1840,7 +1979,169 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         let conn = db.lock();
         store::job_by_id(&conn, &job.id).unwrap_or(job)
     };
-    Ok(Submitted { job: Some(job), warnings, source: source.as_ref().map(SourceInfo::json), preview: None })
+    Ok(Submitted { job: Some(job), warnings, source: source.as_ref().map(SourceInfo::json), preview: None, notices, replaced })
+}
+
+// ── job tiers (prd-compute-job-tiers-v1) ─────────────────────────────
+
+/// `tier` from a run request (`gate: true` is the old spelling of CI).
+fn tier_from(v: &serde_json::Value) -> R<Tier> {
+    let asked = match s(v, "tier") {
+        None => None,
+        Some("batch") => return Err(no(codes::BAD_REQUEST, 400, "--tier batch comes in 0.46.6; use normal (the default) for now")),
+        Some(t) => Some(Tier::parse(t).ok_or_else(|| no(codes::BAD_REQUEST, 400, "--tier is ci, priority or normal"))?),
+    };
+    match (b(v, "gate") == Some(true), asked) {
+        (true, None | Some(Tier::Ci)) => Ok(Tier::Ci),
+        (true, Some(_)) => Err(no(codes::BAD_REQUEST, 400, "--gate is --tier ci: drop one of them")),
+        (false, t) => Ok(t.unwrap_or_default()),
+    }
+}
+
+/// `--supersede KEY` (1–120 printable characters).
+fn supersede_from(v: &serde_json::Value) -> R<Option<String>> {
+    match s(v, "supersede") {
+        None => Ok(None),
+        Some(k) if tiers::valid_supersede(k) => Ok(Some(k.to_string())),
+        Some(_) => Err(no(codes::BAD_REQUEST, 400, format!("--supersede is 1–{} printable characters", tiers::SUPERSEDE_MAX))),
+    }
+}
+
+/// `--submitter NAME` (1–40 of a-z 0-9 . _ -).
+fn submitter_name_from(v: &serde_json::Value) -> R<Option<String>> {
+    match s(v, "submitter") {
+        None => Ok(None),
+        Some(n) if tiers::valid_submitter_name(n) => Ok(Some(n.to_string())),
+        Some(_) => Err(no(codes::BAD_REQUEST, 400, format!("--submitter is 1–{} of a-z 0-9 . _ -", tiers::SUBMITTER_NAME_MAX))),
+    }
+}
+
+/// Who sent a job (prd §3.3): `<workspace>/<session short>` for an agent or
+/// a K2 tab, `owner` / `login:<user>` otherwise, then `/<name>` from
+/// `--submitter`, else `/<worktree path>` when the run came from a git
+/// worktree inside the workspace. Display and the Priority note only: an
+/// agent may call itself anything inside its own workspace.
+fn submitter_for(who: &Who, ws: &Ws, source: Option<&SourceInfo>, name: Option<&str>) -> String {
+    let base = match who.passport() {
+        Some((_, sid)) => format!("{}/{}", ws.handle, sid.chars().take(8).collect::<String>()),
+        None => who.label(),
+    };
+    let last = name.map(str::to_string).or_else(|| source.filter(|s| s.checkout == "worktree" && !s.path.is_empty()).map(|s| s.path.clone()));
+    match last {
+        Some(l) => format!("{base}/{l}"),
+        None => base,
+    }
+}
+
+/// One notice in a run answer (a stderr line, exit 0).
+fn notice(code: &str, message: String) -> serde_json::Value {
+    serde_json::json!({"code": code, "message": message})
+}
+
+/// The Priority courtesy note (§3.5): another submitter on this server has
+/// Priority work queued or running. `None` when nobody else does.
+fn critical_path_note(me: &str) -> Option<serde_json::Value> {
+    let holders = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::priority_holders(&conn)
+    };
+    let h = holders.into_iter().find(|h| h.submitter != me)?;
+    let mut n = notice(
+        tiers::codes::CRITICAL_PATH_TAKEN,
+        format!("another submitter is on the critical path: {} ({} job{}). Use Normal unless you're it.", h.submitter, h.jobs, if h.jobs == 1 { "" } else { "s" }),
+    );
+    n["by"] = h.submitter.into();
+    n["jobs"] = h.jobs.into();
+    Some(n)
+}
+
+/// `ci_not_allowed` (exit 3), naming the human fix: permission cards are
+/// Beta and off by default, so the text alone must say what to do (T12).
+fn ci_not_allowed(node: &str, ws: &str, what: &str) -> Refusal {
+    no(
+        tiers::codes::CI_NOT_ALLOWED,
+        403,
+        format!(
+            "{what} on '{node}' needs a grant with CI allowed: CI jumps every queue. The owner or an Admin turns it on: k2 compute grant {node} --workspace {ws} --ci. Otherwise run it Normal (no flag)"
+        ),
+    )
+}
+
+/// `--supersede KEY`: end this workspace's older jobs with the same key
+/// while they are still queued, `cancelled/replaced` (in a shared node's
+/// queue: an "only if not started" cancel, V57). A started job is never
+/// touched (R3). The shards of one split run never replace each other, and
+/// a split run replaces once (its first shard). Returns the ids replaced
+/// or asked of their node.
+fn supersede_older(ws: &Ws, key: &str, new_job: &store::JobRow) -> Vec<String> {
+    if new_job.ctl.shard.as_ref().is_some_and(|s| s.index != 1) {
+        return Vec::new();
+    }
+    let parent = new_job.ctl.shard.as_ref().map(|s| s.parent.clone());
+    let olds = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::queued_with_supersede_key(&conn, &ws.id, key)
+    };
+    let mut replaced = Vec::new();
+    let mut ended = Vec::new();
+    for old in olds {
+        if old.id == new_job.id || (parent.is_some() && old.ctl.shard.as_ref().map(|s| &s.parent) == parent.as_ref()) {
+            continue;
+        }
+        // Decide under the placement lock on a fresh read (like cancel):
+        // `kick` can't start it between the read and the write.
+        let outcome = compute_ws::with_kick_lock(|| -> Option<bool> {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let cur = store::job_by_id(&conn, &old.id)?;
+            let mut ctl = cur.ctl.clone();
+            ctl.replaced_by = Some(new_job.id.clone());
+            // The same requester replacing its own job needs no message.
+            ctl.cancelled_by_requester |= cur.requested_by == new_job.requested_by;
+            let event = |how: &str| {
+                store::record_event(
+                    &conn,
+                    &new_job.requested_by,
+                    "job_replaced",
+                    Some(&cur.node_id),
+                    Some(&cur.workspace_id),
+                    Some(&cur.id),
+                    serde_json::json!({"by": new_job.id, "key": key, "how": how}),
+                )
+            };
+            if cur.state == "queued" {
+                store::set_job_ctl(&conn, &cur.id, &ctl).ok()?;
+                if store::replace_if_queued(&conn, &cur.id, &new_job.id, compute::now()).ok()? {
+                    event("queued_here");
+                    return Some(true);
+                }
+                return None;
+            }
+            let asked_already = pending::any(cur.reason.as_deref()) || cur.reason.as_deref() == Some("cancel_requested");
+            if cur.state == "assigned" && cur.node_queued && !asked_already {
+                store::set_job_ctl(&conn, &cur.id, &ctl).ok()?;
+                let sent = compute_ws::send_cancel_if_not_started(&cur.node_id, &cur.id, cur.generation, k2_core::compute::proto::frames::CANCEL_IF_QUEUED);
+                store::set_job_reason(&conn, &cur.id, Some(pending::CANCEL), None);
+                event(if sent { "asked_the_node" } else { "asked_when_the_node_is_back" });
+                return Some(false);
+            }
+            None
+        });
+        match outcome {
+            Some(true) => {
+                ended.push(old.id.clone());
+                replaced.push(old.id);
+            }
+            Some(false) => replaced.push(old.id),
+            None => {}
+        }
+    }
+    for id in &ended {
+        compute_ws::finalize(id);
+    }
+    replaced
 }
 
 /// What `--plan` looks at.
@@ -1860,6 +2161,11 @@ struct PlanFacts<'a> {
     artifacts: &'a [String],
     warnings: &'a [String],
     class: pshare::JobClass,
+    /// The tier the queue would order it by, what was asked when lowered,
+    /// and the notices a real run would print.
+    tier: Tier,
+    tier_asked: Option<Tier>,
+    notices: &'a [serde_json::Value],
     /// This server's share, when the node is shared.
     shared: Option<&'a pshare::ShareView>,
     /// `--secret`s: (found, env name, covered on this node) (SE7).
@@ -1938,6 +2244,13 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
         // Names and coverage only, never a value (SE7).
         out["secrets"] = crate::compute_secrets::plan_view(f.secrets);
     }
+    out["tier"] = f.tier.as_str().into();
+    if let Some(a) = f.tier_asked {
+        out["tierAsked"] = a.as_str().into();
+    }
+    if !f.notices.is_empty() {
+        out["notices"] = f.notices.to_vec().into();
+    }
     // A shared node (§6 `--plan`): who owns it, this server's share and
     // the node's quote for this ask. Absent on solo nodes.
     if let Some(view) = f.shared {
@@ -2013,6 +2326,21 @@ fn pick_node(
     }
     use crate::compute_place::{candidates, choose, Tier};
     let cands = candidates(want, &[], compute::now());
+    // `--any --tier ci`: candidates keep only nodes where this workspace
+    // may send CI; refused only when that rules out every one (T12).
+    if cands.is_empty() && want.tier == Tier::Ci {
+        let any_tier = crate::compute_place::Want { tier: Tier::Normal, ..want.clone() };
+        if !candidates(&any_tier, &[], compute::now()).is_empty() {
+            return Err(no(
+                tiers::codes::CI_NOT_ALLOWED,
+                403,
+                format!(
+                    "--any --tier ci: no node granted to workspace {} allows CI for it (a grant with --ci, and the node's share allows gate). The owner or an Admin: k2 compute grant <node> --workspace {} --ci",
+                    ws.handle, ws.handle
+                ),
+            ));
+        }
+    }
     if cands.is_empty() {
         // Slice A's teaching refusal when only --mem/--cpus rule nodes out.
         let uncapped = crate::compute_place::Want { cpu_millis: None, mem_bytes: None, ..want.clone() };
@@ -2075,6 +2403,7 @@ fn probe_job(ws: &Ws, v: &serde_json::Value, cpu_millis: Option<u64>, mem_bytes:
         mem_bytes,
         disk_bytes: 0,
         needs_git: b(v, "noSource") != Some(true),
+        tier: Tier::Normal,
     }
 }
 
@@ -2228,7 +2557,7 @@ fn node_queue_json(j: &store::JobRow, node: Option<&str>) -> serde_json::Value {
 /// the caller's passport: it sees ids and commands only for its own
 /// workspace; other workspaces' jobs carry state and age only.
 fn job_entry(viewer: Option<(&str, &str)>, r: &store::JobRow, decision: &scheduler::Decision, now: i64) -> serde_json::Value {
-    let mut e = serde_json::json!({"state": if r.node_queued { "queued" } else { r.state.as_str() }, "ageSecs": (now - r.created_at).max(0)});
+    let mut e = serde_json::json!({"state": if r.node_queued { "queued" } else { r.state.as_str() }, "ageSecs": (now - r.created_at).max(0), "tier": r.tier().as_str()});
     if viewer.is_none_or(|(ws, _)| ws == r.workspace_id) {
         let mut argv = r.argv.join(" ");
         if argv.chars().count() > 80 {
@@ -2283,6 +2612,9 @@ fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Decision) -> O
     ahead.extend(before.iter().map(|(_, q)| entry(q)));
     let grant_parallel = grant.map(|g| g.max_parallel.max(1) as u32).unwrap_or(1);
     let parallel = offer.as_ref().map(|o| o.parallel_max.min(grant_parallel)).unwrap_or(grant_parallel);
+    // "behind 1 CI" (prd §4.1): the queued jobs ahead of it, by tier.
+    let ahead_ci = before.iter().filter(|(_, q)| q.tier() == Tier::Ci).count();
+    let ahead_p = before.iter().filter(|(_, q)| q.tier() == Tier::Priority).count();
     Some(serde_json::json!({
         "position": pos,
         "of": queued.len(),
@@ -2290,6 +2622,8 @@ fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Decision) -> O
         "message": why.message,
         "ahead": ahead,
         "parallel": parallel,
+        "tier": j.tier().as_str(),
+        "aheadTiers": {"ci": ahead_ci, "priority": ahead_p},
     }))
 }
 
@@ -2354,6 +2688,8 @@ fn queue(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
                     "pos": q.pos,
                     "mine": q.mine,
                     "class": q.class.as_str(),
+                    // A node older than 0.46.5 sends no tier: its class says.
+                    "tier": q.tier.unwrap_or_else(|| Tier::from_class(q.class)).as_str(),
                     "state": q.state.as_str(),
                     "cpuMillis": q.cpu_millis,
                     "memBytes": q.mem_bytes,
@@ -2381,7 +2717,8 @@ fn queue(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
             .iter()
             .map(|t| serde_json::json!({"slot": t.slot, "label": t.label, "running": t.running, "queued": t.queued, "cpuSecsToday": t.cpu_secs_today}))
             .collect();
-        return Ok(serde_json::json!({"node": n.name, "shared": n.shared, "from": "node", "at": view.at, "entries": entries, "totals": totals}));
+        let counts = queued_tier_counts(entries.iter().filter(|e| e["state"] == "queued").map(|e| e["tier"].as_str().unwrap_or("normal")));
+        return Ok(serde_json::json!({"node": n.name, "shared": n.shared, "from": "node", "at": view.at, "entries": entries, "totals": totals, "tiers": counts}));
     }
     // This server's own view of the node.
     let decision = compute_ws::decision_for(&n.id);
@@ -2392,14 +2729,14 @@ fn queue(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     };
     let mut entries = Vec::new();
     for r in &active {
-        let mut e = serde_json::json!({"mine": true, "class": r.class, "state": r.state, "elapsedSecs": r.started_at.or(r.assigned_at).map(|t| (now - t).max(0))});
+        let mut e = serde_json::json!({"mine": true, "class": r.class, "tier": r.tier().as_str(), "state": r.state, "elapsedSecs": r.started_at.or(r.assigned_at).map(|t| (now - t).max(0))});
         own_entry(r, &mut e);
         entries.push(e);
     }
     let mut waiting: Vec<(usize, &store::JobRow)> = queued.iter().map(|r| (decision.waiting.get(&r.id).map(|(p, _)| *p).unwrap_or(usize::MAX), r)).collect();
     waiting.sort_by_key(|(p, _)| *p);
     for (_, r) in waiting {
-        let mut e = serde_json::json!({"mine": true, "class": r.class, "state": "queued", "ageSecs": (now - r.created_at).max(0)});
+        let mut e = serde_json::json!({"mine": true, "class": r.class, "tier": r.tier().as_str(), "state": "queued", "ageSecs": (now - r.created_at).max(0)});
         if let Some((_, w)) = decision.waiting.get(&r.id) {
             e["blockedBy"] = w.code.clone().into();
         }
@@ -2409,7 +2746,17 @@ fn queue(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     for (i, e) in entries.iter_mut().enumerate() {
         e["pos"] = (i + 1).into();
     }
-    Ok(serde_json::json!({"node": n.name, "shared": false, "from": "server", "online": online, "entries": entries}))
+    let counts = queued_tier_counts(queued.iter().map(|r| r.tier().as_str()));
+    Ok(serde_json::json!({"node": n.name, "shared": false, "from": "server", "online": online, "entries": entries, "tiers": counts}))
+}
+
+/// `{ci, priority, normal}` counts of queued entries' tiers.
+fn queued_tier_counts<'a>(tiers_of: impl Iterator<Item = &'a str>) -> serde_json::Value {
+    let mut m: BTreeMap<String, i64> = BTreeMap::new();
+    for t in tiers_of {
+        *m.entry(t.to_string()).or_default() += 1;
+    }
+    tier_counts(&m)
 }
 
 fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
@@ -2430,10 +2777,14 @@ fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value
     let session = if mine { who.passport().map(|(_, s)| s.to_string()) } else { None };
     let limit = params.get("limit").and_then(|l| l.parse().ok()).unwrap_or(30);
     let state = params.get("state").map(String::as_str).filter(|s| JobState::parse(s).is_some());
+    let tier = match params.get("tier").map(String::as_str).filter(|t| !t.is_empty()) {
+        None => None,
+        Some(t) => Some(Tier::parse(t).ok_or_else(|| no(codes::BAD_REQUEST, 400, "--tier is ci, priority or normal"))?.as_str()),
+    };
     let rows = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::list_jobs(&conn, &store::JobFilter { node_id: node.as_deref(), workspace_id: ws.as_deref(), state, session_id: session.as_deref(), limit })
+        store::list_jobs(&conn, &store::JobFilter { node_id: node.as_deref(), workspace_id: ws.as_deref(), state, session_id: session.as_deref(), limit, tier })
     };
     // Queued rows carry the queue view (one scheduler pass per node).
     let mut decisions: HashMap<String, scheduler::Decision> = HashMap::new();
@@ -2617,6 +2968,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         artifacts: Vec::new(),
         stall_secs: None,
         secret_env: Vec::new(),
+        tier: None,
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());
     let parent = {
@@ -2640,6 +2992,9 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
     };
     let mut kids: Vec<store::JobRow> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
+    // Every shard gets the run's tier; notes print once (T11).
+    let mut notices: Vec<serde_json::Value> = Vec::new();
+    let mut replaced: Vec<String> = Vec::new();
     let stem: String = client_id.chars().take(56).collect();
     for i in 1..=count {
         let mut cv = v.clone();
@@ -2663,6 +3018,12 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
                         warnings.push(w);
                     }
                 }
+                for n in sub.notices {
+                    if !notices.iter().any(|x| x["code"] == n["code"]) {
+                        notices.push(n);
+                    }
+                }
+                replaced.extend(sub.replaced);
                 kids.extend(sub.job);
             }
             Err(e) => {
@@ -2714,7 +3075,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
             })
             .collect()
     };
-    Ok(serde_json::json!({ "job": job_summary(&parent), "existing": false, "warnings": warnings, "shards": list }))
+    Ok(serde_json::json!({ "job": job_summary(&parent), "existing": false, "warnings": warnings, "shards": list, "notices": notices, "replaced": replaced }))
 }
 
 /// Fetch failure codes as the stable `&'static str` refusals carry.

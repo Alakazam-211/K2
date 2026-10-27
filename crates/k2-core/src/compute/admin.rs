@@ -53,6 +53,9 @@ pub mod codes {
     pub const TOO_MANY_PENDING: &str = "too_many_pending";
     pub const VERB_NOT_ALLOWED: &str = "verb_not_allowed";
     pub const BAD_ARGS: &str = "bad_args";
+    /// A key still read but no longer set (`gate_reserved_slots` since
+    /// 0.46.5): a usage error, exit 2.
+    pub const DEPRECATED_KEY: &str = super::wire::code::DEPRECATED_KEY;
     pub const NODE_LACKS_ADMIN: &str = "node_lacks_admin";
     pub const REMOTE_ADMIN_OFF: &str = "remote_admin_off";
     pub const NO_UPDATE: &str = "no_update";
@@ -550,8 +553,17 @@ pub const POLICY_KEYS: &[&str] = &[
 ];
 /// Policy keys where a bigger number gives jobs more.
 pub const POLICY_BIGGER_IS_WIDER: &[&str] = &["cpu_cap_percent", "mem_cap_gb", "disk_budget_gb", "max_parallel"];
-/// Policy keys where a smaller number gives jobs more.
+/// Policy keys where a smaller number gives jobs more. (`gate_reserved_slots`
+/// stays until 0.47 so removing it from a 0.46.4 node is classified right;
+/// retirement ledger.)
 pub const POLICY_SMALLER_IS_WIDER: &[&str] = &["disk_floor_gb", "gate_reserved_slots"];
+/// Keys still read but no longer set (prd-compute-job-tiers-v1 §3.7):
+/// `policy.set` refuses a value (`deprecated_key`, exit 2) but may remove
+/// the key (`null`).
+pub const POLICY_DEPRECATED: &[&str] = &["gate_reserved_slots"];
+/// The refusal for setting a deprecated key.
+pub const GATE_RESERVED_DEPRECATED: &str =
+    "gate_reserved_slots is ignored since 0.46.5: no slot is reserved, CI takes the next free slot (k2 compute run --tier ci). Remove it with gate_reserved_slots=null";
 
 /// The controller's guess whether a `policy.set` narrows, against the
 /// policy the node last reported (`policy.show`). Conservative: only a
@@ -604,11 +616,17 @@ pub fn step_class(verb: &str) -> Option<Class> {
 pub fn classify_servers_limits(
     current: &super::proto::share::ShareLimits,
     current_expires_at: Option<i64>,
+    current_priority: Option<bool>,
     args: &super::proto::share::LimitsArgs,
     now: i64,
 ) -> Class {
     let next = args.set.apply(current);
-    let widens = !next.widens(current).is_empty();
+    // Its Priority starting to count is a widening, like `weight`
+    // (prd-compute-job-tiers-v1 T8); an unknown current value is not
+    // provably the same, so `true` then waits for the owner too.
+    let priority_wider = args.priority == Some(true) && current_priority != Some(true);
+    let priority_change = args.priority.is_some_and(|p| current_priority != Some(p));
+    let widens = !next.widens(current).is_empty() || priority_wider;
     let end_wider = match args.for_secs {
         None => false,
         // Clearing the end date gives more time.
@@ -618,7 +636,7 @@ pub fn classify_servers_limits(
     };
     if widens || end_wider {
         Class::Privileged
-    } else if next == *current && args.for_secs.is_none() {
+    } else if next == *current && args.for_secs.is_none() && !priority_change {
         Class::Read
     } else {
         Class::Operate
@@ -648,6 +666,9 @@ pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, S
                 return Err(bad("name at least one key=value".into()));
             }
             only_keys(a, POLICY_KEYS).map_err(bad)?;
+            if let Some(k) = POLICY_DEPRECATED.iter().find(|k| a.get(**k).is_some_and(|v| !v.is_null())) {
+                return Err((codes::DEPRECATED_KEY, format!("{verb}: {}", if *k == "gate_reserved_slots" { GATE_RESERVED_DEPRECATED } else { "this key is no longer set" })));
+            }
             // `network = "none"` passes here: a walled node (0.46.3+)
             // enforces it, and an older node's executor refuses it itself
             // (`network_none_not_enforced_yet`), so a mixed fleet stays honest.
@@ -1291,9 +1312,12 @@ mod tests {
         let cur = json!({"mem_cap_gb": 8, "max_parallel": 2, "disk_floor_gb": 30, "availability": "always", "gate_reserved_slots": 1});
         let cur = cur.as_object().unwrap();
         let ch = |v: Value| classify_policy_change(cur, v.as_object().unwrap());
-        // G4: more gate slots narrow normal work; fewer widen it.
-        assert_eq!(ch(json!({"gate_reserved_slots": 2})), Class::Operate);
+        // The 0.46.4 row stays until 0.47: removing reserved slots from an
+        // old node gives normal work more (held for the owner).
         assert_eq!(ch(json!({"gate_reserved_slots": 0})), Class::Privileged);
+        // Setting one is refused since 0.46.5 (prd-compute-job-tiers-v1 §3.7).
+        assert_eq!(validate_step("policy.set", &json!({"gate_reserved_slots": 1})).unwrap_err().0, codes::DEPRECATED_KEY);
+        assert!(validate_step("policy.set", &json!({"gate_reserved_slots": null})).is_ok(), "removing it is fine");
         assert_eq!(ch(json!({"mem_cap_gb": 6})), Class::Operate);
         assert_eq!(ch(json!({"mem_cap_gb": 10})), Class::Privileged);
         assert_eq!(ch(json!({"disk_floor_gb": 40})), Class::Operate);
@@ -1310,8 +1334,15 @@ mod tests {
     fn servers_limits_classification() {
         use crate::compute::proto::share::{LimitsArgs, ShareLimits, ShareOverrides, Trust};
         let cur = ShareLimits::new_server(Trust::Team, false);
-        let args = |set: ShareOverrides, for_secs: Option<i64>| LimitsArgs { server: "baden.k2.dev".into(), set, for_secs };
-        let c = |a: LimitsArgs, exp: Option<i64>| classify_servers_limits(&cur, exp, &a, 1000);
+        let args = |set: ShareOverrides, for_secs: Option<i64>| LimitsArgs { server: "baden.k2.dev".into(), set, for_secs, priority: None };
+        let c = |a: LimitsArgs, exp: Option<i64>| classify_servers_limits(&cur, exp, Some(false), &a, 1000);
+        // T8: a guest's Priority starting to count is a widening; stopping
+        // it narrows; the same word is no change; unknown + true waits.
+        let p = |on: bool| LimitsArgs { priority: Some(on), ..args(ShareOverrides::default(), None) };
+        assert_eq!(classify_servers_limits(&cur, None, Some(false), &p(true), 1000), Class::Privileged);
+        assert_eq!(classify_servers_limits(&cur, None, Some(true), &p(false), 1000), Class::Operate);
+        assert_eq!(classify_servers_limits(&cur, None, Some(true), &p(true), 1000), Class::Read);
+        assert_eq!(classify_servers_limits(&cur, None, None, &p(true), 1000), Class::Privileged);
         assert_eq!(c(args(ShareOverrides { max_queued: Some(5), ..Default::default() }, None), None), Class::Operate);
         assert_eq!(c(args(ShareOverrides { max_running: Some(2), ..Default::default() }, None), None), Class::Privileged);
         assert_eq!(c(args(ShareOverrides { max_queued: Some(5), cpu_hours_day: Some(12), ..Default::default() }, None), None), Class::Privileged, "one widening holds the whole change");

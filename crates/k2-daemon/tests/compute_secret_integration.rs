@@ -209,6 +209,7 @@ fn tenant_view() -> ShareView {
         expires_in_secs: None,
         skew_secs: None,
         quotes: vec![],
+        priority: None,
     }
 }
 

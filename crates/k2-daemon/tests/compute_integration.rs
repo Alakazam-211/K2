@@ -874,6 +874,7 @@ fn running_job(job: &str, node: &str, ws: &str) {
         artifacts: Vec::new(),
         stall_secs: None,
         secret_env: Vec::new(),
+        tier: None,
     };
     let client = format!("client-{job:0>16}");
     let db = k2_core::db::shared();
@@ -1553,5 +1554,150 @@ async fn limits_up_front_and_the_mem_cap_hint() {
     assert_eq!(v["hint"], "killed at the memory cap (--mem 7G): try a bigger --mem or CARGO_BUILD_JOBS=2", "{v}");
 
     stop_node(port, "dxa-limits", running).await;
+    drop(env);
+}
+
+/// Job tiers on a solo node (prd-compute-job-tiers-v1 S2, headless):
+/// - `--tier ci` and `--gate` from an agent without a grant that allows CI
+///   are refused `ci_not_allowed`, naming the owner's command; the agent
+///   can't turn CI on, nor can a compute manager; the owner can, and
+///   re-granting limits keeps it (T1, T12);
+/// - the server's queue for a solo node orders CI, then Priority, then
+///   Normal (positions follow), and `jobs?tier=` filters;
+/// - the Priority note fires only when a different submitter already holds
+///   Priority, and the job still submits (R4);
+/// - `--supersede` replaces a queued job (`cancelled/replaced`) and never
+///   touches a running one (R3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn job_tiers_on_a_solo_node() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "tiers");
+    let (agent, _) = passport(&ws);
+    let (agent2, _) = passport(&ws);
+    let (running, _) = online_node_for(&env, port, "tiers", &ws).await;
+    let body = |client: &str, argv: &[&str], tier: Option<&str>| {
+        let mut b = run_body("tiers", argv, client);
+        b["noSource"] = json!(true);
+        if let Some(t) = tier {
+            b["tier"] = json!(t);
+        }
+        b
+    };
+
+    // (1) CI needs a grant with allow_ci; --gate is the same ask.
+    let r = post(port, "/cli/compute/run", &agent, body("client-tiers-ci-0000001", &["true"], Some("ci"))).await;
+    assert_eq!((r.status, code(&r)), (403, "ci_not_allowed".to_string()), "{}", r.body);
+    let hint = j(&r)["error"]["hint"].as_str().expect("hint").to_string();
+    assert!(hint.contains("k2 compute grant tiers --workspace") && hint.contains("--ci"), "{hint}");
+    let mut gate = body("client-tiers-gate-000001", &["true"], None);
+    gate["gate"] = json!(true);
+    let r = post(port, "/cli/compute/run", &agent, gate).await;
+    assert_eq!((r.status, code(&r)), (403, "ci_not_allowed".to_string()), "{}", r.body);
+    let r = post(port, "/cli/compute/run", &agent, body("client-tiers-bad-0000001", &["true"], Some("batch"))).await;
+    assert_eq!(r.status, 400, "Batch is 0.46.6: {}", r.body);
+    // Priority with --exclusive would drain the node: it needs CI's grant (T18).
+    let mut ex = body("client-tiers-pex-0000001", &["true"], Some("priority"));
+    ex["exclusive"] = json!(true);
+    let r = post(port, "/cli/compute/run", &agent, ex).await;
+    assert_eq!((r.status, code(&r)), (403, "ci_not_allowed".to_string()), "{}", r.body);
+    // The agent can't turn CI on; nor can it as a compute manager.
+    let r = post(port, "/cli/compute/grants/set", &agent, json!({"node": "tiers", "workspace": ws.id, "allowCi": true})).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "compute_manage", "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/compute/grants/set", &agent, json!({"node": "tiers", "workspace": ws.id, "allowCi": true})).await;
+    assert_eq!((r.status, code(&r)), (403, "ci_not_allowed".to_string()), "a manager never sets CI: {}", r.body);
+    let r = post(port, "/cli/compute/grants/set", &agent, json!({"node": "tiers", "workspace": ws.id, "maxParallel": 2})).await;
+    assert_eq!(r.status, 200, "a manager still grants limits: {}", r.body);
+    assert_eq!(j(&r)["grant"]["allowCi"], json!(false));
+    // The owner turns it on; re-granting limits keeps it.
+    let r = post(port, "/cli/compute/grants/set", OWNER, json!({"node": "tiers", "workspace": ws.id, "allowCi": true, "maxParallel": 2})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["grant"]["allowCi"], json!(true));
+    let r = post(port, "/cli/compute/grants/set", OWNER, json!({"node": "tiers", "workspace": ws.id, "maxParallel": 2})).await;
+    assert_eq!(j(&r)["grant"]["allowCi"], json!(true), "an absent allowCi keeps it: {}", r.body);
+
+    // (2) While the server holds the node, the queue orders by tier.
+    node_pause(port, "tiers", "pause").await;
+    let r = post(port, "/cli/compute/run", &agent, body("client-tiers-n-00000001", &["true"], None)).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let n1 = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    assert_eq!(j(&r)["job"]["tier"], "normal");
+    let r = post(port, "/cli/compute/run", &agent, body("client-tiers-p-00000001", &["true"], Some("priority"))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    let p1 = v["job"]["id"].as_str().expect("id").to_string();
+    let mine = v["job"]["submitter"].as_str().expect("submitter").to_string();
+    assert_eq!(v["job"]["tier"], "priority");
+    assert_eq!(v["notices"], json!([]), "nobody else holds Priority: no note");
+    let r = post(port, "/cli/compute/run", &agent, body("client-tiers-c-00000001", &["true"], Some("ci"))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let c1 = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    // A different submitter asks for Priority: one note, and it still submits.
+    let r = post(port, "/cli/compute/run", &agent2, body("client-tiers-p-00000002", &["true"], Some("priority"))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    let p2 = v["job"]["id"].as_str().expect("id").to_string();
+    assert_eq!(v["job"]["tier"], "priority", "a courtesy, never a downgrade");
+    let notes = v["notices"].as_array().expect("notices");
+    assert_eq!(notes.len(), 1, "{v}");
+    assert_eq!((notes[0]["code"].as_str(), notes[0]["by"].as_str(), notes[0]["jobs"].as_i64()), (Some("critical_path_taken"), Some(mine.as_str()), Some(1)), "{v}");
+    let q = get(port, "/cli/compute/queue", OWNER, "node=tiers").await;
+    assert_eq!(q.status, 200, "{}", q.body);
+    let qv = j(&q);
+    let order: Vec<String> = qv["entries"].as_array().expect("entries").iter().map(|e| e["short"].as_str().expect("short").to_string()).collect();
+    let short = |id: &str| id[..8].to_string();
+    // CI, then both Priority jobs (by created_at: the same second may tie),
+    // then Normal, though Normal came first.
+    assert_eq!((order.len(), order[0].clone(), order[3].clone()), (4, short(&c1), short(&n1)), "{qv}");
+    let mut middle = vec![order[1].clone(), order[2].clone()];
+    middle.sort();
+    let mut ps = vec![short(&p1), short(&p2)];
+    ps.sort();
+    assert_eq!(middle, ps, "{qv}");
+    assert_eq!(qv["tiers"], json!({"ci": 1, "priority": 2, "normal": 1}));
+    let r = get(port, "/cli/compute/jobs", &agent, "tier=ci").await;
+    assert_eq!(j(&r)["jobs"].as_array().expect("jobs").iter().map(|x| x["id"].as_str().unwrap().to_string()).collect::<Vec<_>>(), vec![c1.clone()]);
+    let nodes = get(port, "/cli/compute/nodes", OWNER, "").await;
+    let nv = j(&nodes);
+    assert_eq!(nv["criticalPath"].as_array().expect("criticalPath").len(), 2, "{nv}");
+    let row = nv["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "tiers").cloned().expect("node");
+    assert_eq!(row["queueTiers"], json!({"ci": 1, "priority": 2, "normal": 1}));
+
+    // (3) --supersede: a newer job with the key replaces the queued one.
+    let mut s1 = body("client-tiers-s-00000001", &["true"], Some("ci"));
+    s1["supersede"] = json!("ci/main/rust");
+    let r = post(port, "/cli/compute/run", &agent, s1).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let old = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    let mut s2 = body("client-tiers-s-00000002", &["true"], Some("ci"));
+    s2["supersede"] = json!("ci/main/rust");
+    let r = post(port, "/cli/compute/run", &agent, s2).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert_eq!(v["replaced"], json!([old.clone()]), "{v}");
+    let gone = job_json(port, &agent, &old).await;
+    assert_eq!((gone["state"].as_str(), gone["reason"].as_str()), (Some("cancelled"), Some("replaced")), "{gone}");
+    node_pause(port, "tiers", "resume").await;
+    for id in [&c1, &p1, &p2, &n1] {
+        wait_state(port, &agent, id, "done").await;
+    }
+    // A running job is never replaced (R3).
+    let mut long = body("client-tiers-r-00000001", &["sh", "-c", "sleep 3"], None);
+    long["supersede"] = json!("long");
+    let r = post(port, "/cli/compute/run", &agent, long).await;
+    let live = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    wait_state(port, &agent, &live, "running").await;
+    let mut again = body("client-tiers-r-00000002", &["true"], None);
+    again["supersede"] = json!("long");
+    let r = post(port, "/cli/compute/run", &agent, again).await;
+    assert_eq!(j(&r)["replaced"], json!([]), "{}", r.body);
+    let (_, _, fin) = follow(port, &agent, &live).await;
+    assert_eq!(fin["state"], "done", "the running job ran to its end: {fin}");
+
+    stop_node(port, "tiers", running).await;
     drop(env);
 }

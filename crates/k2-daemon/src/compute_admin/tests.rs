@@ -817,6 +817,7 @@ fn servers_listed() -> Value {
         sas: None,
         refusal: None,
         online: true,
+        priority: None,
     };
     serde_json::to_value(pshare::ServersList {
         max_servers: pshare::DEFAULT_MAX_SERVERS,
@@ -1067,6 +1068,7 @@ fn share_view(role: pshare::Role) -> pshare::ShareView {
         expires_in_secs: None,
         skew_secs: None,
         quotes: vec![],
+        priority: None,
     }
 }
 

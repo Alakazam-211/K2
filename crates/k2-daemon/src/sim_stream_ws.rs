@@ -301,6 +301,29 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
         m.viewer_left(sim_id);
         return;
     }
+    // People's input runs in order on its own task, so a long swipe never
+    // stalls this viewer's frames; refusals come back on `err_rx`.
+    let (in_tx, mut in_rx) = tokio::sync::mpsc::channel::<ViewerMsg>(64);
+    let (err_tx, mut err_rx) = tokio::sync::mpsc::channel::<(String, String)>(16);
+    let input_task = {
+        let ws = ws.clone();
+        let who = who.clone();
+        let caller = viewer.caller.clone();
+        tokio::spawn(async move {
+            while let Some(vm) = in_rx.recv().await {
+                let (ws2, who2, caller2) = (ws.clone(), who.clone(), caller.clone());
+                let r = tokio::task::spawn_blocking(move || person_input(&ws2, &who2, &caller2, vm)).await;
+                let err = match r {
+                    Ok(Ok(())) => None,
+                    Ok(Err(e)) => Some((e.code.to_string(), e.message)),
+                    Err(e) => Some(("sim_io".to_string(), e.to_string())),
+                };
+                if let Some(e) = err {
+                    let _ = err_tx.send(e).await;
+                }
+            }
+        })
+    };
     let mut auth = tokio::time::interval(Duration::from_secs(5));
     auth.tick().await;
     let mut pending = true; // send the newest frame as soon as we may
@@ -356,6 +379,11 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
                     }
                 }
             }
+            Some((code, message)) = err_rx.recv() => {
+                if write.send(text(&ServerMsg::Error { code, message })).await.is_err() {
+                    break;
+                }
+            }
             msg = read.next() => {
                 let Some(Ok(msg)) = msg else { break };
                 let Message::Text(t) = msg else {
@@ -381,35 +409,40 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
                             let _ = write.send(text(&ServerMsg::Error { code: "sim_watch_only".into(), message: "You can watch this device but not use it.".into() })).await;
                             continue;
                         }
-                        let ws2 = ws.clone();
-                        let who2 = who.clone();
-                        let caller2 = viewer.caller.clone();
-                        let r = tokio::task::spawn_blocking(move || -> Result<(), manager::SimError> {
-                            let m = manager::manager();
-                            let actor = manager::Actor::Person { name: match &caller2 { Caller::Login { username } => format!("login:{username}"), _ => "owner".into() } };
-                            match other {
-                                ViewerMsg::TakeOver => m.hold(&ws2, &actor, k2_core::sim::api::HoldAction::TakeOver).map(|_| ()),
-                                ViewerMsg::HandBack => m.hold(&ws2, &actor, k2_core::sim::api::HoldAction::HandBack).map(|_| ()),
-                                o => match to_action(&o) {
-                                    Some(a) => m.person_action(&ws2, &who2, &a),
-                                    None => Err(manager::SimError::new(400, "sim_invalid", "bad input")),
-                                },
-                            }
-                        }).await;
-                        let err = match r { Ok(Ok(())) => None, Ok(Err(e)) => Some((e.code.to_string(), e.message)), Err(e) => Some(("sim_io".into(), e.to_string())) };
-                        if let Some((code, message)) = err {
-                            let _ = write.send(text(&ServerMsg::Error { code, message })).await;
+                        if in_tx.try_send(other).is_err() {
+                            let _ = write.send(text(&ServerMsg::Error { code: "sim_busy".into(), message: "Too much input at once; slow down.".into() })).await;
                         }
                     }
                 }
             }
         }
     }
+    drop(in_tx);
+    input_task.abort();
     if let Ok(mut w) = hub.want_fps.lock() {
         w.remove(&me);
     }
     drop(rx);
     m.viewer_left(sim_id);
+}
+
+/// One person input from the stream (blocking).
+fn person_input(ws: &Ws, who: &str, caller: &Caller, vm: ViewerMsg) -> Result<(), manager::SimError> {
+    let m = manager::manager();
+    let actor = manager::Actor::Person {
+        name: match caller {
+            Caller::Login { username } => format!("login:{username}"),
+            _ => "owner".into(),
+        },
+    };
+    match vm {
+        ViewerMsg::TakeOver => m.hold(ws, &actor, k2_core::sim::api::HoldAction::TakeOver).map(|_| ()),
+        ViewerMsg::HandBack => m.hold(ws, &actor, k2_core::sim::api::HoldAction::HandBack).map(|_| ()),
+        o => match to_action(&o) {
+            Some(a) => m.person_action(ws, who, &a),
+            None => Err(manager::SimError::new(400, "sim_invalid", "bad input")),
+        },
+    }
 }
 
 #[cfg(test)]

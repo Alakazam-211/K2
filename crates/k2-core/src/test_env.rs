@@ -320,14 +320,83 @@ impl Drop for TempHome {
 /// ("Text file busy"), which surfaced as a 3/200 flake. The bytes are
 /// written by a short-lived `/bin/sh` child instead, so the write fd only
 /// ever exists in that child, never in this process.
+///
+/// Windows has no `#!`: the script is written at `path` (LF line endings)
+/// and a copy of the `k2-test-sh-shim` program at `path.exe` (`x.sh` →
+/// `x.exe`), which runs it in Git Bash. An extensionless `path` handed to
+/// `Command` or to K2 resolves to that `.exe`.
 pub fn write_executable(path: &Path, contents: &str) {
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        std::fs::write(path, contents).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+        let exe = if path.extension().is_some_and(|e| e == "sh") {
+            path.with_extension("exe")
+        } else {
+            let mut s = path.as_os_str().to_os_string();
+            s.push(".exe");
+            PathBuf::from(s)
+        };
+        let shim = sh_shim_exe();
+        std::fs::copy(&shim, &exe).unwrap_or_else(|e| panic!("copy {} to {}: {e}", shim.display(), exe.display()));
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         std::fs::write(path, contents)
             .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
     }
     #[cfg(unix)]
     write_executable_unix(path, contents);
+}
+
+/// The built `k2-test-sh-shim.exe` (Windows): `K2_TEST_SH_SHIM`, else next
+/// to this test binary's target dir (`target/<profile>/`). Missing is a
+/// loud failure: build it first (`cargo build -p k2-test-sh-shim`), as the
+/// ptyd suites need `cargo build -p k2-ptyd --bins`.
+#[cfg(windows)]
+pub fn sh_shim_exe() -> PathBuf {
+    if let Some(p) = std::env::var_os("K2_TEST_SH_SHIM").filter(|v| !v.is_empty()) {
+        return PathBuf::from(p);
+    }
+    let exe = std::env::current_exe().expect("current_exe");
+    for dir in exe.ancestors().skip(1).take(3) {
+        let cand = dir.join("k2-test-sh-shim.exe");
+        if cand.is_file() {
+            return cand;
+        }
+    }
+    panic!(
+        "k2-test-sh-shim.exe not found near {} — build it first: cargo build -p k2-test-sh-shim \
+         (or set K2_TEST_SH_SHIM)",
+        exe.display()
+    );
+}
+
+/// A program that exits 0 at once, whatever its arguments (`/usr/bin/true`
+/// on macOS, `/bin/true` on Linux, a written `exit 0` script on Windows,
+/// kept in a per-process temp dir).
+pub fn true_bin() -> PathBuf {
+    #[cfg(unix)]
+    {
+        for cand in ["/usr/bin/true", "/bin/true"] {
+            let p = PathBuf::from(cand);
+            if p.exists() {
+                return p;
+            }
+        }
+        panic!("no `true` binary found at /usr/bin/true or /bin/true");
+    }
+    #[cfg(not(unix))]
+    {
+        static TRUE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        TRUE.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!("k2-true-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("true dir");
+            let p = dir.join("true");
+            write_executable(&p, "#!/bin/sh\nexit 0\n");
+            p
+        })
+        .clone()
+    }
 }
 
 #[cfg(unix)]

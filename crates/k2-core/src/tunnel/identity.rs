@@ -618,13 +618,7 @@ mod tests {
     use crate::tunnel::test_support::with_temp_home;
 
     fn true_bin() -> FrpcBinary {
-        for cand in ["/usr/bin/true", "/bin/true"] {
-            let p = std::path::PathBuf::from(cand);
-            if p.exists() {
-                return FrpcBinary::Explicit(p);
-            }
-        }
-        panic!("no `true` binary at /usr/bin/true or /bin/true");
+        FrpcBinary::Explicit(crate::test_env::true_bin())
     }
 
     /// A fake `frpc` that reports frps accepted `k2so-<sub>` and stays up

@@ -17,6 +17,9 @@ members = [
     # TEST ONLY: Google / Microsoft OAuth + Graph fakes for the headless
     # mail smokes (prd-app-mail-calendar-surfaces-v1 §8.2). Never shipped.
     "tests/fakes/oauth-providers",
+    # TEST ONLY (Windows): runs the sh-script fakes tests write as .exe files
+    # (k2_core::test_env::write_executable). Never shipped.
+    "tests/fakes/sh-shim",
     "crates/k2-ptyd",
 ]
 

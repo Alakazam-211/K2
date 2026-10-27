@@ -2966,13 +2966,7 @@ mod tests {
     /// test needs to get PAST frpc resolution (and possibly spawn a harmless
     /// child). `/usr/bin/true` on macOS; `/bin/true` on Linux.
     fn true_bin() -> PathBuf {
-        for cand in ["/usr/bin/true", "/bin/true"] {
-            let p = PathBuf::from(cand);
-            if p.exists() {
-                return p;
-            }
-        }
-        panic!("no `true` binary found at /usr/bin/true or /bin/true");
+        crate::test_env::true_bin()
     }
 
     #[test]
@@ -3274,7 +3268,7 @@ mod tests {
             // (3 in 30s) almost immediately.
             let dir = crate::test_env::unique_temp_path("fake-frpc");
             std::fs::create_dir_all(&dir).expect("mk fake-frpc dir");
-            let script = dir.join("frpc-stuck.sh");
+            let script = dir.join("frpc-stuck");
             crate::test_env::write_executable(&script, "#!/bin/sh\n\
                  echo '[I] [service.go:299] login to server success, get run id [test]'\n\
                  while true; do\n\
@@ -3577,7 +3571,7 @@ mod tests {
 
             let dir = crate::test_env::unique_temp_path("fake-frpc-dns-failback");
             std::fs::create_dir_all(&dir).expect("mk dir");
-            let script = dir.join("frpc-pick.sh");
+            let script = dir.join("frpc-pick");
             crate::test_env::write_executable(
                 &script,
                 &format!(
@@ -3633,7 +3627,7 @@ mod tests {
             let _reach = TestReachability::install(|_| false);
             let dir = crate::test_env::unique_temp_path("fake-frpc-offline");
             std::fs::create_dir_all(&dir).expect("mk dir");
-            let script = dir.join("frpc-offline.sh");
+            let script = dir.join("frpc-offline");
             // Every dial fails; each one is recorded (host per line).
             crate::test_env::write_executable(
                 &script,
@@ -3704,7 +3698,7 @@ mod tests {
     /// each launch in `<dir>/spawns`.
     fn long_lived_frpc(dir: &Path) -> PathBuf {
         std::fs::create_dir_all(dir).expect("mk fake-frpc dir");
-        let script = dir.join("frpc-up.sh");
+        let script = dir.join("frpc-up");
         crate::test_env::write_executable(
             &script,
             &format!(
@@ -3847,7 +3841,7 @@ mod tests {
         with_temp_home(|| {
             let dir = crate::test_env::unique_temp_path("fake-frpc-solo");
             std::fs::create_dir_all(&dir).expect("mk dir");
-            let script = dir.join("frpc-stuck.sh");
+            let script = dir.join("frpc-stuck");
             crate::test_env::write_executable(
                 &script,
                 &format!(
@@ -3938,7 +3932,7 @@ mod tests {
 
             let dir = crate::test_env::unique_temp_path("fake-frpc-failback");
             std::fs::create_dir_all(&dir).expect("mk dir");
-            let script = dir.join("frpc-pick.sh");
+            let script = dir.join("frpc-pick");
             // Dials to the primary fail fast until `allow` exists; dials
             // anywhere else stay up. Every dial is recorded.
             crate::test_env::write_executable(

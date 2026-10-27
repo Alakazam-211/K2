@@ -840,7 +840,7 @@ fn upgrade_execs_in_place_keeping_pid_children_rings_and_fds() {
     let pids_before: Vec<(String, i32)> = list(&mut c).into_iter().map(|s| (s.sid, s.pid)).collect();
     let burst_before = session(&list(&mut c), "burst").clone();
 
-    assert_eq!(c.request(upgrade_req(PTYD)).unwrap(), Reply::Ok);
+    assert_eq!(c.request(upgrade_req(&private_ptyd(&home))).unwrap(), Reply::Ok);
     assert_dropped(&mut c);
     let mut rest = Vec::new();
     s.read_to_end(&mut rest).unwrap(); // the stream closed too
@@ -925,6 +925,19 @@ fn upgrade_execs_in_place_keeping_pid_children_rings_and_fds() {
     assert_eq!(c.request(Request::Shutdown { end_sessions: true }).unwrap(), Reply::Ok);
     assert!(p.wait_exit(Duration::from_secs(10)).success());
     assert!(!alive(seq_pid));
+}
+
+/// A private (0700) copy of the built k2-ptyd, the way the daemon's
+/// versioned copy is: ptyd refuses a group/other-writable exe (F6), and
+/// cargo's output can be 0775 under umask 002.
+fn private_ptyd(home: &Home) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = home.root.join("upgrade-bin");
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("k2-ptyd");
+    std::fs::copy(PTYD, &p).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).unwrap();
+    p.to_string_lossy().into_owned()
 }
 
 /// An `upgrade` request carrying the file's sha256 (F6), or a hash that
@@ -1034,7 +1047,7 @@ fn a_failed_exec_keeps_the_old_image_serving() {
     let mut s = c.attach("seq", 0).unwrap();
     let mut seen = Vec::new();
     read_more(&mut s, &mut seen, 200, Duration::from_secs(10));
-    assert_eq!(c.request(upgrade_req(PTYD)).unwrap(), Reply::Ok);
+    assert_eq!(c.request(upgrade_req(&private_ptyd(&home))).unwrap(), Reply::Ok);
     assert_dropped(&mut c);
     let mut rest = Vec::new();
     s.read_to_end(&mut rest).unwrap();

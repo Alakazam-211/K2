@@ -18,6 +18,12 @@ members = [
     "tests/fakes/oauth-providers",
     "crates/k2-ptyd",
 ]
+# Vendored repos with their own [workspace] (git subtree; Markdown
+# multiplayer K1). Built as path dependencies of k2-daemon, never as members.
+exclude = [
+    "vendor/k2-multiplayer-base",
+    "vendor/k2-multiplayer-markdown",
+]
 
 # Dev profile: lightly optimized so PTY reads + LLM inference don't crawl.
 # Hot-path crates below escalate to opt-level=3 in dev too.

@@ -183,6 +183,53 @@ fn rel_string(root: &Path, abs: &Path) -> Result<String, Refusal> {
     Ok(parts.join("/"))
 }
 
+/// A workspace by handle, name, id or root: `(project id, root path)`.
+pub fn workspace_root(token: &str) -> Result<(String, String), Refusal> {
+    workspace_by_token(token)
+}
+
+/// The workspace-relative path a share names (MI25): `""` or `.` is the
+/// whole workspace (a folder share). With `must_exist`, the path must be an
+/// existing folder, or a file that could be a live doc (the deny list
+/// applies), jailed like any doc; a folder inside `.k2/vault` is refused.
+/// Without it (unshare), the path is only normalised. Returns
+/// `(rel, is_folder)`.
+pub fn share_rel(root: &str, raw: &str, must_exist: bool) -> Result<(String, bool), Refusal> {
+    let trimmed = raw.trim().trim_start_matches("./").trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "." {
+        return Ok((String::new(), true));
+    }
+    if Path::new(trimmed).is_absolute() || trimmed.split('/').any(|s| s == "..") || trimmed.contains('\0') {
+        return Err(Refusal::bad("bad_request", "path must be relative to the workspace, without '..'"));
+    }
+    if !must_exist {
+        let rel = trimmed.split('/').filter(|s| !s.is_empty() && *s != ".").collect::<Vec<_>>().join("/");
+        return Ok((rel, false));
+    }
+    let abs = crate::fs_routes::jail_rel_path(root, trimmed, false).map_err(|e| {
+        if e.starts_with("Invalid path") {
+            Refusal::not_found("file_not_found", format!("no file or folder {trimmed} in that workspace"))
+        } else {
+            Refusal::bad("path_escapes", e)
+        }
+    })?;
+    let root_canon = Path::new(root)
+        .canonicalize()
+        .map_err(|e| Refusal::not_found("workspace_not_found", format!("workspace root unavailable: {e}")))?;
+    if abs == root_canon {
+        return Ok((String::new(), true));
+    }
+    let rel = rel_string(&root_canon, &abs)?;
+    if abs.is_dir() {
+        if is_vault(&rel) {
+            return Err(Refusal::declined("protected", "the vault folder is never shared"));
+        }
+        return Ok((rel, true));
+    }
+    deny(&rel, &root_canon.join(trimmed), &abs)?;
+    Ok((rel, false))
+}
+
 /// Resolve `path` (relative to `workspace`, or absolute) to a jailed,
 /// allowed doc. `default_workspace` is the caller's own project id (agents),
 /// used when `workspace` is empty.

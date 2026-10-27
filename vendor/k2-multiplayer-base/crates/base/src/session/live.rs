@@ -21,7 +21,10 @@ use super::undo::{self, Batch, Region};
 use crate::doc::{ClientId, Doc, Edit, Neutral, MAX_CLIENT_ID};
 use crate::engine::{ENGINE_FORMAT, ENGINE_NAME};
 use crate::schema::{Kind, Schema};
-use crate::store::{DocId, DocKey, DocMeta, DocStore, LogEntry, Seq, Version, VersionReason};
+use crate::store::{
+    Approval, ApprovalState, DocId, DocKey, DocMeta, DocStore, LogEntry, Seq, Version,
+    VersionReason,
+};
 use crate::text::diff::{self, Hunk};
 use crate::text::merge::{self, Conflict, Merge};
 
@@ -103,6 +106,8 @@ pub struct ChangeEvent {
     /// The change, in the coordinates of the root's text before it.
     pub hunks: Vec<Hunk>,
     pub at_ms: u64,
+    /// The person an assistant agent made this change for (its approval starts `Pending`).
+    pub on_behalf_of: Option<String>,
 }
 
 /// Returned by [`Session::status`].
@@ -428,6 +433,7 @@ impl Session {
             at_ms: now,
             via: "disk".to_owned(),
             update: u,
+            on_behalf_of: None,
         });
         let version = Version {
             seq: 0,
@@ -535,6 +541,8 @@ impl Session {
             Some(Need::Read)
         } else if need == Need::Edit && !rights.edit {
             Some(Need::Edit)
+        } else if need == Need::History && !rights.history {
+            Some(Need::History)
         } else {
             None
         };
@@ -611,6 +619,13 @@ impl Session {
                 p.pid
             )));
         }
+        if let Some(o) = &p.on_behalf_of {
+            if o.is_empty() || o.starts_with(RESERVED_PID_PREFIX) || *o == p.pid {
+                return Err(SessionError::BadParticipant(format!(
+                    "on_behalf_of {o:?} is empty, reserved, or the participant itself"
+                )));
+            }
+        }
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -629,11 +644,12 @@ impl Session {
             m.rights = rights;
         }
         if shared {
-            if let Some(m) = st
-                .members
-                .iter_mut()
-                .find(|m| m.shared && m.p.pid == p.pid && m.p.via == p.via)
-            {
+            if let Some(m) = st.members.iter_mut().find(|m| {
+                m.shared
+                    && m.p.pid == p.pid
+                    && m.p.via == p.via
+                    && m.p.on_behalf_of == p.on_behalf_of
+            }) {
                 m.p = p;
                 m.last_active_ms = now;
                 if stay == Stay::Held {
@@ -1353,7 +1369,7 @@ impl Session {
             });
         }
         let m = &st.members[i];
-        let (client, via) = (m.client, m.p.via.clone());
+        let (client, via, obo) = (m.client, m.p.via.clone(), m.p.on_behalf_of.clone());
         let entries: Vec<LogEntry> = applied
             .iter_mut()
             .map(|a| LogEntry {
@@ -1362,6 +1378,7 @@ impl Session {
                 at_ms: now,
                 via: via.clone(),
                 update: std::mem::take(&mut a.update),
+                on_behalf_of: obo.clone(),
             })
             .collect();
         let appended = self
@@ -1395,6 +1412,7 @@ impl Session {
                     root: root.clone(),
                     hunks: hunks.clone(),
                     at_ms: now,
+                    on_behalf_of: obo.clone(),
                 };
                 st.subs.retain(|(_, tx)| match tx.try_send(ev.clone()) {
                     Ok(()) => true,
@@ -1605,6 +1623,95 @@ impl Session {
                 error: e.to_string(),
             }),
         }
+    }
+
+    // ----- approvals (on-behalf changes) -----
+
+    /// Settle the approval of change `seq`, made by an assistant agent on behalf of a person:
+    /// `Approved` or `Declined`, once. Only that person may do it: any other connection gets
+    /// [`SessionError::Forbidden`] with [`Need::Approver`] (and an [`AuditEvent::Refused`]).
+    /// Needs read. The change itself is never held or undone by this; a declined change is
+    /// reversed only by an explicit edit, a restore, or the agent's own undo.
+    ///
+    /// Errors: [`SessionError::NoApproval`] when `seq` wasn't made on anyone's behalf;
+    /// [`SessionError::BadApproval`] for `Pending`, or for a change already settled the other
+    /// way. Settling it again the same way returns the record unchanged.
+    pub fn set_approval(&self, conn: ConnId, seq: Seq, state: ApprovalState) -> Result<Approval> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let i = self.admit(&mut st, conn, Need::Read, Action::Approve, now)?;
+        let pid = st.members[i].p.pid.clone();
+        let store = self.store(&st)?.clone();
+        let Some(cur) = store.approval(self.doc_id, seq)? else {
+            return Err(SessionError::NoApproval { seq });
+        };
+        if cur.on_behalf_of != pid {
+            self.emit(AuditEvent::Refused {
+                key: st.key.clone(),
+                pid,
+                action: Action::Approve,
+                need: Need::Approver,
+            });
+            return Err(SessionError::Forbidden {
+                need: Need::Approver,
+            });
+        }
+        if state == ApprovalState::Pending {
+            return Err(SessionError::BadApproval(
+                "an approval can only be settled as approved or declined".into(),
+            ));
+        }
+        match cur.state {
+            ApprovalState::Pending => {}
+            s if s == state => return Ok(cur),
+            s => {
+                return Err(SessionError::BadApproval(format!(
+                    "change {seq} was already settled as {s:?}"
+                )))
+            }
+        }
+        let new = cur.settled(state, pid.clone(), now);
+        store.set_approval(self.doc_id, seq, &new)?;
+        self.emit(AuditEvent::Approval {
+            key: st.key.clone(),
+            seq,
+            pid,
+            state,
+        });
+        Ok(new)
+    }
+
+    /// The approval record of change `seq` (`None` when it wasn't made on anyone's behalf).
+    /// Needs read; and [`Rights::history`] unless the caller is the change's author or the
+    /// person it was made for.
+    pub fn approval(&self, conn: ConnId, seq: Seq) -> Result<Option<Approval>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let i = self.admit(&mut st, conn, Need::Read, Action::ReadApproval, now)?;
+        let pid = st.members[i].p.pid.clone();
+        let a = self.store(&st)?.approval(self.doc_id, seq)?;
+        if a.as_ref()
+            .is_some_and(|a| a.author == pid || a.on_behalf_of == pid)
+        {
+            return Ok(a);
+        }
+        self.admit(&mut st, conn, Need::History, Action::ReadApproval, now)?;
+        Ok(a)
+    }
+
+    /// Approval records of this doc, oldest change first (`log --pending`). With
+    /// [`Rights::history`], all of them; without, only those where the caller is the author
+    /// or the person the change was made for. Needs read.
+    pub fn approvals(&self, conn: ConnId) -> Result<Vec<(Seq, Approval)>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let i = self.admit(&mut st, conn, Need::Read, Action::ReadApproval, now)?;
+        let (pid, history) = (st.members[i].p.pid.clone(), st.members[i].rights.history);
+        let mut all = self.store(&st)?.approvals(self.doc_id)?;
+        if !history {
+            all.retain(|(_, a)| a.author == pid || a.on_behalf_of == pid);
+        }
+        Ok(all)
     }
 
     // ----- for the manager -----

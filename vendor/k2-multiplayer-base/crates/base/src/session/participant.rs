@@ -53,9 +53,17 @@ pub enum ParticipantKind {
     Import,
 }
 
+/// The participant that applies changes made to the file outside the kit (another program
+/// saving it). It has its own client ID per doc, and its changes are logged `via: "disk"`.
+pub const EXTERNAL_PID: &str = "kit:external";
+
 /// Someone (or something) in a doc. **Identity is stamped by the host** from its own
 /// authentication; the kit never takes it from a client.
+///
+/// `#[non_exhaustive]`: build it with [`Participant::new`] and the setters
+/// ([`Participant::home`], [`Participant::on_behalf_of`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Participant {
     /// The host's stable id for who this is. Must not be empty or start with `kit:`.
     pub pid: String,
@@ -68,6 +76,45 @@ pub struct Participant {
     pub via: String,
     /// Home server when the participant is remote.
     pub home: Option<String>,
+    /// The person (pid) an assistant agent is acting for. Set by the host, only for such
+    /// agents. The change stays the agent's own (its pid, client ID, undo stack, rights);
+    /// this is metadata on it, and each change made this way starts a `Pending` approval
+    /// that only that person can settle ([`super::Session::set_approval`]). Must not be
+    /// empty, reserved, or the participant's own pid.
+    pub on_behalf_of: Option<String>,
+}
+
+impl Participant {
+    /// A participant with no home server, acting for nobody else.
+    pub fn new(
+        pid: impl Into<String>,
+        name: impl Into<String>,
+        colour: impl Into<String>,
+        kind: ParticipantKind,
+        via: impl Into<String>,
+    ) -> Self {
+        Self {
+            pid: pid.into(),
+            name: name.into(),
+            colour: colour.into(),
+            kind,
+            via: via.into(),
+            home: None,
+            on_behalf_of: None,
+        }
+    }
+
+    /// Set the home server (a remote participant).
+    pub fn home(mut self, home: impl Into<String>) -> Self {
+        self.home = Some(home.into());
+        self
+    }
+
+    /// Mark this participant as an assistant agent acting for the person `pid`.
+    pub fn on_behalf_of(mut self, pid: impl Into<String>) -> Self {
+        self.on_behalf_of = Some(pid.into());
+        self
+    }
 }
 
 /// How long a connection stays without activity.

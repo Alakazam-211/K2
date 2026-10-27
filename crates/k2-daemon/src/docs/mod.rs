@@ -22,6 +22,7 @@
 pub mod caller;
 pub mod host;
 pub mod routes;
+pub mod shares;
 pub mod target;
 
 use std::collections::HashSet;
@@ -134,7 +135,11 @@ pub fn start() {
         Ok(store) => {
             let store = Arc::new(store);
             let rt = Runtime {
-                manager: SessionManager::new(store.clone(), Arc::new(host::K2Host), config()),
+                manager: SessionManager::new(
+                    store.clone(),
+                    Arc::new(host::K2Host::new(Arc::downgrade(&store))),
+                    config(),
+                ),
                 store: Mutex::new(Some(store)),
                 opened: Mutex::new(HashSet::new()),
             };
@@ -200,14 +205,39 @@ pub fn release(why: &str) -> bool {
 
 /// The 2 s upkeep thread (exits once released).
 fn spawn_upkeep() {
-    let _ = std::thread::Builder::new().name("k2-docs-upkeep".into()).spawn(|| loop {
-        std::thread::sleep(UPKEEP_EVERY);
-        match runtime() {
-            Ok(rt) => rt.upkeep(),
-            Err(Unavailable::Released) => return,
-            Err(_) => {}
+    let _ = std::thread::Builder::new().name("k2-docs-upkeep".into()).spawn(|| {
+        let mut tick: u64 = 0;
+        loop {
+            std::thread::sleep(UPKEEP_EVERY);
+            match runtime() {
+                Ok(rt) => {
+                    rt.upkeep();
+                    if tick % SWEEP_EVERY_TICKS == 0 {
+                        rt.sweep_orphan_shares();
+                    }
+                }
+                Err(Unavailable::Released) => return,
+                Err(_) => {}
+            }
+            tick += 1;
         }
     });
+}
+
+/// Upkeep ticks between orphan-share sweeps (about a minute; the first runs
+/// on the first tick after boot).
+const SWEEP_EVERY_TICKS: u64 = 30;
+
+/// Whether a project id is still a registered workspace. Only a definite
+/// "no such row" says no: a DB error keeps the share (never erase on doubt).
+fn workspace_exists(id: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    match conn.query_row("SELECT 1 FROM projects WHERE id = ?1", rusqlite::params![id], |_| Ok(())) {
+        Ok(()) => true,
+        Err(rusqlite::Error::QueryReturnedNoRows) => false,
+        Err(_) => true,
+    }
 }
 
 impl Runtime {
@@ -267,6 +297,20 @@ impl Runtime {
         }
         if let Err(e) = self.manager.unload_idle() {
             log_debug!("[docs] WARN: unload_idle: {e}");
+        }
+    }
+
+    /// Erase the shares of workspaces that are gone (as owner or sharee).
+    /// The kit never erases host rows; this is K2's purge path for them.
+    fn sweep_orphan_shares(&self) {
+        let Some(store) = self.store() else { return };
+        match shares::sweep_orphans(&store, workspace_exists) {
+            Ok(0) => {}
+            Ok(n) => {
+                log_debug!("[docs] erased {n} share(s) of removed workspaces");
+                host::audit("doc-share-erased", "k2", format!("count={n} reason=workspace_removed"));
+            }
+            Err(e) => log_debug!("[docs] WARN: share sweep: {e}"),
         }
     }
 

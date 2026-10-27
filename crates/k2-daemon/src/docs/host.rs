@@ -2,34 +2,39 @@
 //! and the audit sink (Markdown multiplayer v1, K2).
 //!
 //! **Rights come from the pid alone.** The kit asks [`Host::rights`] at join,
-//! on every call (read) and on every edit (edit), with the session locked.
-//! K2 stamps every participant itself ([`super::caller`]), so the pid names
-//! who it is, and this module re-derives that principal's rights from K2's
-//! current state on each call: a role change, a removed connection or a
-//! revoked share takes effect on the next call, and on the 2 s timer for
-//! open connections ([`super::maintain`]).
+//! on every call (read), on every edit (edit) and on history reads
+//! (history), with the session locked. K2 stamps every participant itself
+//! ([`super::caller`]), so the pid names who it is, and this module
+//! re-derives that principal's rights from K2's current state on each call:
+//! a removed login, a removed connection or a revoked share takes effect on
+//! the next call, and within the 2 s upkeep for open connections.
 //!
 //! | pid | Who | Rights |
 //! |---|---|---|
 //! | `person:owner` | the owner token, a shell tab (via `terminal`), a login the owner linked | all, any workspace |
-//! | `person:<login>` | a Connect login | Owner/Admin: all; Member: read + edit + history |
-//! | `agent:<project id>` | an agent's passport (Loopback / its cell socket) | its own workspace: all. Another workspace: needs a connection **and** a share (MI25), see [`agent_rights`] |
+//! | `person:<login>` | a Connect login (every role is Member or above) | all, any workspace |
+//! | `agent:<project id>` | an agent's passport (Loopback / its cell socket) | its own workspace: all. Another workspace: a connection **and** a share (MI25), see [`agent_rights`] |
 //!
-//! History (`log`, versions) is a third right K2 checks itself until the
-//! kit's `Rights` carries it (K2 Cores' amendment).
+//! Rights are `{read, edit, history}` (kit amendment 1). History is never
+//! implied by read or edit (K-PERM-9): people have it, an agent has it in
+//! its own workspace, and elsewhere only where a share grants it. Acting on
+//! someone's behalf never widens an agent's rights (K-PERM-10): the kit asks
+//! about the agent's own pid.
 //!
 //! **Called under a session lock**: never call into the kit from here, and
 //! take K2's DB lock only briefly (the DB lock is never held while calling
 //! the kit anywhere in `docs`, so the order is always session, then DB).
 //!
-//! Audit: refusals and kicks go to the Access Audit (`auth_audit`) as
-//! metadata only (doc key, pid, action); joins and leaves to the debug log.
+//! Audit: refusals, removals and approvals go to the Access Audit
+//! (`auth_audit`) as metadata only (doc key, pid, action); joins and leaves
+//! to the debug log.
 
+use std::sync::Weak;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use k2_core::log_debug;
 use k2_multiplayer_base::session::{AuditEvent, Host, LeaveReason, Participant, Rights};
-use k2_multiplayer_base::store::DocKey;
+use k2_multiplayer_base::store::{DocKey, DocStore};
 
 /// pid prefix for people.
 pub const PERSON_PREFIX: &str = "person:";
@@ -39,9 +44,10 @@ pub const AGENT_PREFIX: &str = "agent:";
 /// Access Audit event names (Settings → Access Audit).
 pub const AUDIT_REFUSED: &str = "doc-refused";
 pub const AUDIT_REMOVED: &str = "doc-removed";
+pub const AUDIT_APPROVAL: &str = "doc-approval";
 
-/// What one principal may do with one doc. `history` is K2's until the kit
-/// carries it.
+/// What one principal may do with one doc (K2's copy of the kit's `Rights`,
+/// with a wire shape).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DocRights {
     pub read: bool,
@@ -53,13 +59,14 @@ impl DocRights {
     pub const NONE: DocRights = DocRights { read: false, edit: false, history: false };
     pub const FULL: DocRights = DocRights { read: true, edit: true, history: true };
 
-    /// The kit's view (read, edit).
+    /// The kit's view. Nothing without read; edit and history only with it.
     pub fn kit(self) -> Rights {
-        match (self.read, self.edit) {
-            (true, true) => Rights::EDIT,
-            (true, false) => Rights::READ,
-            _ => Rights::NONE,
-        }
+        let base = match (self.read, self.edit) {
+            (true, true) => Rights::editor(),
+            (true, false) => Rights::read_only(),
+            _ => return Rights::none(),
+        };
+        base.with_history(self.history)
     }
 
     /// Wire shape: `{read, edit, history}`.
@@ -74,7 +81,7 @@ pub enum CrossRefusal {
     /// No comms connection between the two workspaces (taught as
     /// `k2 connections add`, `walls.rs`).
     NotConnected,
-    /// Connected, but the owner hasn't shared this file or folder (MI25).
+    /// Connected, but nobody shared this file or a folder above it (MI25).
     NotShared,
 }
 
@@ -106,58 +113,81 @@ impl Principal {
     }
 }
 
-/// A person's rights on any doc on this box. The owner (and the logins the
-/// owner linked, which resolve to `owner`) may do everything; a login by
-/// its current role. A login that no longer exists gets nothing.
+/// Whether `person_key` is a person on this box now: the owner, or a
+/// Connect login that still exists.
+pub fn person_exists(person_key: &str) -> bool {
+    person_key == k2_core::notify_prefs::OWNER || k2_core::connect_users::role_for_user(person_key).is_some()
+}
+
+/// A person's rights on any doc on this box: the owner (and the logins the
+/// owner linked, which resolve to `owner`) and every existing login may do
+/// everything (every role is Member or above, and Member writes files
+/// today: `/cli/fs/write-file` is a Member route). A login that no longer
+/// exists gets nothing.
 pub fn person_rights(person_key: &str) -> DocRights {
-    if person_key == k2_core::notify_prefs::OWNER {
-        return DocRights::FULL;
-    }
-    match k2_core::connect_users::role_for_user(person_key) {
-        // Every login role is Member or above (the Viewer role is gone):
-        // Member reads and edits files today (`/cli/fs/write-file` is a
-        // Member route), and editors get history (K-PERM-9).
-        Some(_) => DocRights::FULL,
-        None => DocRights::NONE,
+    if person_exists(person_key) {
+        DocRights::FULL
+    } else {
+        DocRights::NONE
     }
 }
 
 /// An agent's rights on a doc in workspace `space`. Its own workspace: all.
-/// Another workspace: a comms connection is required but not enough; the
-/// owner must have shared the file or a folder above it (MI25, K-PERM-4).
-/// Shares land with the kit's host table (K2 Cores' amendment); until then
-/// every cross-workspace doc is `NotShared`.
-pub fn agent_rights(agent_project: &str, space: &str, _rel: &str) -> Result<DocRights, CrossRefusal> {
+/// Another workspace: a comms connection is required but not enough; a
+/// person must have shared the file or a folder above it (MI25, K-PERM-4):
+/// read, plus write and history only where a share grants them. `store`
+/// holds the shares (`None` once released: nothing is shared then).
+pub fn agent_rights(agent_project: &str, space: &str, rel: &str, store: Option<&DocStore>) -> Result<DocRights, CrossRefusal> {
     if agent_project == space {
         return Ok(DocRights::FULL);
     }
     if !k2_core::connections::are_local_peers(agent_project, space) {
         return Err(CrossRefusal::NotConnected);
     }
-    Err(CrossRefusal::NotShared)
+    let granted = store.and_then(|st| match super::shares::grant(st, space, agent_project, rel) {
+        Ok(g) => g,
+        Err(e) => {
+            log_debug!("[docs] WARN: share lookup failed (refusing): {e}");
+            None
+        }
+    });
+    match granted {
+        Some((write, history)) => Ok(DocRights { read: true, edit: write, history }),
+        None => Err(CrossRefusal::NotShared),
+    }
 }
 
-/// Rights for `pid` on `key` (the whole rule, used by the kit and by K2's
-/// own history check).
-pub fn rights_for(pid: &str, key: &DocKey) -> DocRights {
+/// Rights for `pid` on `key`: the whole rule, used by the kit and by K2's
+/// own pre-checks.
+pub fn rights_for(pid: &str, key: &DocKey, store: Option<&DocStore>) -> DocRights {
     match Principal::parse(pid) {
         Some(Principal::Person(k)) => person_rights(&k),
-        Some(Principal::Agent(id)) => agent_rights(&id, &key.space, &key.path).unwrap_or(DocRights::NONE),
+        Some(Principal::Agent(id)) => agent_rights(&id, &key.space, &key.path, store).unwrap_or(DocRights::NONE),
         None => DocRights::NONE,
     }
 }
 
-/// The host. Stateless: everything is derived from the pid and K2's state.
+/// The host. Holds only a weak handle on the store (for shares), so it never
+/// keeps the file open past a release.
 #[derive(Debug, Default)]
-pub struct K2Host;
+pub struct K2Host {
+    store: Weak<DocStore>,
+}
+
+impl K2Host {
+    pub fn new(store: Weak<DocStore>) -> Self {
+        K2Host { store }
+    }
+}
 
 impl Host for K2Host {
     fn rights(&self, who: &Participant, key: &DocKey) -> Rights {
-        rights_for(&who.pid, key).kit()
+        let store = self.store.upgrade();
+        rights_for(&who.pid, key, store.as_deref()).kit()
     }
 
     fn now_ms(&self) -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+        now_ms()
     }
 
     fn on_event(&self, ev: &AuditEvent) {
@@ -166,6 +196,11 @@ impl Host for K2Host {
                 AUDIT_REFUSED,
                 pid,
                 format!("{} action={action:?} need={need:?}", key_label(key)),
+            ),
+            AuditEvent::Approval { key, seq, pid, state } => audit(
+                AUDIT_APPROVAL,
+                pid,
+                format!("{} change={seq} state={state:?}", key_label(key)),
             ),
             AuditEvent::Left { key, pid, conn, reason } => match reason {
                 LeaveReason::Kicked | LeaveReason::RightsLost => audit(
@@ -189,6 +224,11 @@ impl Host for K2Host {
             other => log_debug!("[docs] event {other:?}"),
         }
     }
+}
+
+/// Milliseconds since the epoch (the kit's clock and the share stamps).
+pub fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// `<space>:<path>`: metadata only.
@@ -218,21 +258,22 @@ mod tests {
     #[test]
     fn unknown_pids_get_nothing() {
         let key = DocKey { space: "ws".into(), path: "a.md".into() };
-        assert_eq!(rights_for("user:bob", &key), DocRights::NONE);
-        assert_eq!(rights_for("kit:import", &key), DocRights::NONE);
+        assert_eq!(rights_for("user:bob", &key, None), DocRights::NONE);
+        assert_eq!(rights_for("kit:import", &key, None), DocRights::NONE);
     }
 
     #[test]
     fn the_owner_has_every_right_and_an_agent_has_its_own_workspace() {
         let key = DocKey { space: "ws-a".into(), path: "a.md".into() };
-        assert_eq!(rights_for("person:owner", &key), DocRights::FULL);
-        assert_eq!(rights_for("agent:ws-a", &key), DocRights::FULL);
+        assert_eq!(rights_for("person:owner", &key, None), DocRights::FULL);
+        assert_eq!(rights_for("agent:ws-a", &key, None), DocRights::FULL);
     }
 
     #[test]
-    fn kit_rights_follow_read_and_edit() {
-        assert_eq!(DocRights::FULL.kit(), Rights::EDIT);
-        assert_eq!(DocRights { read: true, edit: false, history: true }.kit(), Rights::READ);
-        assert_eq!(DocRights { read: false, edit: true, history: false }.kit(), Rights::NONE);
+    fn kit_rights_follow_read_edit_and_history() {
+        assert_eq!(DocRights::FULL.kit(), Rights::full());
+        assert_eq!(DocRights { read: true, edit: false, history: true }.kit(), Rights::read_only().with_history(true));
+        assert_eq!(DocRights { read: true, edit: true, history: false }.kit(), Rights::editor());
+        assert_eq!(DocRights { read: false, edit: true, history: true }.kit(), Rights::none());
     }
 }

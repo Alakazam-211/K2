@@ -30,6 +30,7 @@ mod ratelimit;
 mod summary;
 mod undo;
 
+pub use crate::store::{Approval, ApprovalState};
 pub use config::Config;
 pub use error::{EditWithError, SessionError};
 pub use host::{Action, AuditEvent, Host, LeaveReason, Need, Rights};
@@ -40,8 +41,8 @@ pub use live::{
 pub use manager::{PoolStats, SessionManager};
 pub use pack::{Declined, Pack, PackContent, PackError, TextFilePack};
 pub use participant::{
-    ConnId, CursorAt, Participant, ParticipantKind, Role, RosterEntry, Stay, IMPORT_PID,
-    RESERVED_PID_PREFIX,
+    ConnId, CursorAt, Participant, ParticipantKind, Role, RosterEntry, Stay, EXTERNAL_PID,
+    IMPORT_PID, RESERVED_PID_PREFIX,
 };
 pub use position::{At, Cursor, LineCol, LineRange};
 

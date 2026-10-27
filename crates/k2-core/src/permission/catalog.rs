@@ -150,6 +150,10 @@ pub enum ParamKind {
     /// A compute node, by name: `compute.ci node=` (prd-compute-job-tiers-v1
     /// T13).
     Node,
+    /// A workspace-relative file or folder path in the workspace another
+    /// param names: `docs.share from= path=` (Markdown multiplayer v1,
+    /// MI25). Jailed and deny-listed by the action's check.
+    Path,
 }
 
 /// One value an action takes (`key=value` on the CLI).

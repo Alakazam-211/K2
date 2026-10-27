@@ -10,10 +10,12 @@
 //! same augmented PATH spawn uses. The wait is 180s. A timeout kills the
 //! child's process group. That is not the 5s login-shell PATH capture.
 
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::time::Duration;
 
 use super::login_path;
+#[cfg(unix)]
 use super::path_env;
 
 /// How long the installer may run before its process group is killed.
@@ -28,6 +30,7 @@ pub struct EnsureCliResult {
 
 /// Fixed installer for one basename. `None` for anything else — callers
 /// must not invent a command.
+#[cfg(not(windows))]
 pub fn fixed_install_command(program: &str) -> Option<&'static str> {
     match program {
         "claude" => Some("curl -fsSL https://claude.ai/install.sh | bash"),
@@ -40,11 +43,33 @@ pub fn fixed_install_command(program: &str) -> Option<&'static str> {
     }
 }
 
+/// Windows: the vendors' own Windows installs, run by PowerShell. Claude's
+/// native installer lands in `~\.local\bin`; npm globals in `%APPDATA%\npm`
+/// (both on the spawn PATH). Grok publishes no Windows installer K2 can
+/// run, so it is not in the table: asking for it says so.
+#[cfg(windows)]
+pub fn fixed_install_command(program: &str) -> Option<&'static str> {
+    match program {
+        "claude" => Some("irm https://claude.ai/install.ps1 | iex"),
+        "codex" => Some("npm install -g @openai/codex"),
+        "gemini" => Some("npm install -g @google/gemini-cli"),
+        _ => None,
+    }
+}
+
+/// Why there is nothing to run for `program`.
+fn no_installer(program: &str) -> String {
+    if cfg!(windows) && program == "grok" {
+        return "grok has no Windows installer K2 can run; install it from x.ai, then try again".to_string();
+    }
+    format!("unknown program: {program}")
+}
+
 /// Production ensure. Unknown programs return an error and start nothing.
 /// The shell command always comes from [`fixed_install_command`].
 pub fn ensure_cli(program: &str) -> Result<EnsureCliResult, String> {
     let Some(shell) = fixed_install_command(program) else {
-        return Err(format!("unknown program: {program}"));
+        return Err(no_installer(program));
     };
     ensure_cli_with_shell(program, shell, spawn_resolve_path)
 }
@@ -71,16 +96,92 @@ where
     F: FnMut() -> String,
 {
     if fixed_install_command(program).is_none() {
-        return Err(format!("unknown program: {program}"));
+        return Err(no_installer(program));
     }
     #[cfg(unix)]
     {
         unix_ensure(program, shell_command, &mut resolve_path)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows_ensure(program, shell_command, &mut resolve_path)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (shell_command, &mut resolve_path);
         Err("CLI install is unsupported on this platform".to_string())
+    }
+}
+
+/// Windows twin of `unix_ensure`: resolve with cmd.exe's PATHEXT rule,
+/// run the installer in PowerShell (no console window, stdin closed, the
+/// spawn PATH), then resolve again.
+#[cfg(windows)]
+fn windows_ensure<F>(
+    program: &str,
+    shell_command: &str,
+    resolve_path: &mut F,
+) -> Result<EnsureCliResult, String>
+where
+    F: FnMut() -> String,
+{
+    if super::win_cmd::which(program, &resolve_path()).is_some() {
+        return Ok(EnsureCliResult { installed: false });
+    }
+    run_installer_windows(shell_command, &spawn_resolve_path())?;
+    if super::win_cmd::which(program, &resolve_path()).is_some() {
+        Ok(EnsureCliResult { installed: true })
+    } else {
+        Err(format!("{program} installed but not on PATH"))
+    }
+}
+
+#[cfg(windows)]
+fn run_installer_windows(shell_command: &str, child_path: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::thread;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let child = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", shell_command])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("PATH", child_path)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|e| format!("installer failed to start: {e}"))?;
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = child.wait_with_output().map(|output| {
+            let code = output.status.code().unwrap_or(1);
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            (output.status.success(), code, stdout, stderr)
+        });
+        let _ = tx.send(outcome);
+    });
+    match rx.recv_timeout(INSTALL_TIMEOUT) {
+        Ok(Ok((true, _, _, _))) => Ok(()),
+        Ok(Ok((false, code, stdout, stderr))) => {
+            Err(format!("installer exited {code}: {}", output_tail(&stderr, &stdout)))
+        }
+        Ok(Err(e)) => Err(format!("installer failed: {e}")),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            // The whole tree: PowerShell, npm and node under it.
+            let _ = Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &pid.to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .status();
+            Err(format!("installer timed out after {}s", INSTALL_TIMEOUT.as_secs()))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err("installer failed: waiter dropped".to_string()),
     }
 }
 
@@ -185,7 +286,7 @@ fn run_installer(shell_command: &str, child_path: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn output_tail(stderr: &str, stdout: &str) -> String {
     let mut detail = String::new();
     let err = stderr.trim();
@@ -256,6 +357,44 @@ mod tests {
         format!("'{}'", s.replace('\'', "'\\''"))
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn cli_install_windows_runs_the_vendors_windows_installs() {
+        assert_eq!(fixed_install_command("claude"), Some("irm https://claude.ai/install.ps1 | iex"));
+        assert_eq!(fixed_install_command("codex"), Some("npm install -g @openai/codex"));
+        assert_eq!(fixed_install_command("gemini"), Some("npm install -g @google/gemini-cli"));
+        assert!(fixed_install_command("grok").is_none());
+        let err = ensure_cli("grok").unwrap_err();
+        assert!(err.contains("no Windows installer"), "{err}");
+        assert!(fixed_install_command("vim").is_none());
+    }
+
+    /// Windows: a CLI already on the PATH as an npm `.cmd` is found by
+    /// cmd.exe's rule and nothing runs; a missing one runs the PowerShell
+    /// installer and is found after it.
+    #[cfg(windows)]
+    #[test]
+    fn cli_install_windows_finds_a_cmd_shim_and_runs_the_installer() {
+        let _lock = lock_home();
+        let dir = temp_dir("win-ensure");
+        let bin = dir.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let path = bin.to_string_lossy().to_string();
+        fs::write(bin.join("codex.cmd"), "@echo off\r\n").unwrap();
+        let got = ensure_cli_with_shell("codex", "exit 9", || path.clone()).expect("present");
+        assert!(!got.installed, "already on PATH: nothing ran");
+
+        let made = bin.join("gemini.cmd");
+        let script = format!("Set-Content -LiteralPath '{}' -Value '@echo off'", made.display());
+        let got = ensure_cli_with_shell("gemini", &script, || path.clone()).expect("installed");
+        assert!(got.installed && made.is_file());
+
+        let err = ensure_cli_with_shell("claude", "exit 7", || path.clone()).unwrap_err();
+        assert!(err.contains("installer exited 7"), "{err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn cli_install_fixed_commands_are_one_cli_each() {
         assert_eq!(

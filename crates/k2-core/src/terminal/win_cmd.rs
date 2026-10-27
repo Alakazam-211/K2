@@ -24,6 +24,17 @@ pub fn resolve_spawn(program: &str, args: &[String], path: &str) -> (String, Vec
     }
 }
 
+/// Windows: where `program` (a bare name) is on `path`, by cmd.exe's
+/// rule (`PATHEXT`; an extensionless file is never a program).
+#[cfg(windows)]
+pub fn which(program: &str, path: &str) -> Option<PathBuf> {
+    if program.is_empty() || program.contains(['/', '\\']) {
+        return None;
+    }
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    find_on_path(program, &split_search_dirs(path), &pathext, &|p: &Path| p.is_file())
+}
+
 /// Testable core. `exists` is injected so macOS unit tests can fake a
 /// Windows npm layout.
 pub fn resolve_for_pty(

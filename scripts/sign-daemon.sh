@@ -348,9 +348,17 @@ import json, sys
 e = json.load(open(sys.argv[1]))["artifacts"][sys.argv[2]]
 sys.exit(0 if e.get("sha256") == sys.argv[3] and e.get("sig2") == sys.argv[4] else 1)
 PY
-    gh release download "$TAG" -R "$REPO" -p "$A" -p "$A.sig2" -D "$CHECK" --clobber
+    python3 -I - "$CHECK/daemon-latest.json" "linux-$ARCH" "https://github.com/$REPO/releases/download/$TAG/$A.sig" <<'PY' \
+        || die "published daemon-latest.json linux-$ARCH has no (or a wrong) sig: installs on 0.46.4 or older could not update"
+import json, sys
+e = json.load(open(sys.argv[1]))["artifacts"][sys.argv[2]]
+sys.exit(0 if e.get("sig") == sys.argv[3] else 1)
+PY
+    gh release download "$TAG" -R "$REPO" -p "$A" -p "$A.sig" -p "$A.sig2" -D "$CHECK" --clobber
     [ "$(sha256_of "$CHECK/$A")" = "$(sha256_of "$ASSETS/$A")" ] \
         || die "the published $A is not the binary that was signed (swapped after signing?) — delete its .sig/.sig2 from $TAG now"
     k2u_verify_u2 "$CHECK/$A" "$CHECK/$A.sig2" "$A" "$VERSION" || die "published $A.sig2 does not verify with UPDATER_KEYS"
+    # Fail closed on the bridge half too (installs on 0.46.4 or older).
+    k2u_verify_u1 "$CHECK/$A" "$CHECK/$A.sig" "$A" || die "published $A.sig (U1) does not verify: installs on 0.46.4 or older could not update"
 done
-log "done: $TAG Linux daemons signed (U1 + U2); daemon-latest.json lists them; the published binaries are the signed ones and their sig2 verify"
+log "done: $TAG Linux daemons signed (U1 + U2); daemon-latest.json lists them; the published binaries are the signed ones and both their signatures verify"

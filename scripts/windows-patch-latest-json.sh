@@ -70,7 +70,7 @@ curl -fsSL "https://github.com/${RELEASE_REPO}/releases/download/${TAG}/latest.j
     -o "$STAGE/latest.json" \
     || { echo "ERROR: ${TAG} has no latest.json to patch (release.sh Step 9 publishes it); not falling back to another release" >&2; exit 1; }
 
-python3 - "$STAGE/latest.json" "$SIG_CONTENT" "$SETUP_URL" "$VERSION" "$U2_KEY_ID" "$SIG2_B64" <<'PY'
+python3 -I - "$STAGE/latest.json" "$SIG_CONTENT" "$SETUP_URL" "$VERSION" "$U2_KEY_ID" "$SIG2_B64" <<'PY'
 import json, sys
 path, sig, url, ver, u2_id, sig2 = sys.argv[1:7]
 with open(path) as f:

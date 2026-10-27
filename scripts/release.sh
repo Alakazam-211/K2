@@ -227,6 +227,17 @@ require_mail_oauth_build_env
 # shellcheck source=scripts/lib/sign-updater.sh
 source "$PROJECT_DIR/scripts/lib/sign-updater.sh"
 k2u_env_guard
+# Test seams only. A release verifies every signature against THIS
+# checkout's public keys and takes the Linux release commit from THIS
+# checkout's tag; a leftover override (a test shell, .env) would move either
+# somewhere else without a word.
+for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR; do
+    if [ -n "${!_k2_seam:-}" ]; then
+        echo "ERROR: $_k2_seam is set (${!_k2_seam}). It is a test seam: a release checks signatures and the release tag against this checkout only. Unset it and run again." >&2
+        exit 1
+    fi
+done
+unset _k2_seam
 
 cd "$PROJECT_DIR"
 
@@ -840,11 +851,14 @@ k2_shadow_collect
 # ── Step 8: Generate latest.json ──
 echo ""
 echo "Step 8: Generating latest.json..."
-SIG_CONTENT=""
+# Dual-signing is fail closed both ways: without the U1 (bridge) signature
+# every install on 0.46.4 or older is stranded, so a missing or bad one is
+# fatal here, never an empty "signature" field.
 SIG_FILE="target/release/bundle/macos/K2.app.tar.gz.sig"
-if [ -f "$SIG_FILE" ]; then
-    SIG_CONTENT=$(cat "$SIG_FILE")
-fi
+[ -s "$SIG_FILE" ] || { echo "FATAL: $SIG_FILE missing or empty (Step 5 signs the bundle with U1)" >&2; exit 1; }
+k2u_verify_u1 "target/release/bundle/macos/K2.app.tar.gz" "$SIG_FILE" K2.app.tar.gz \
+    || { echo "FATAL: the bundle's U1 signature does not verify; installs on 0.46.4 or older could not update" >&2; exit 1; }
+SIG_CONTENT=$(cat "$SIG_FILE")
 
 # U2 (SS4/SS5): `k2_signatures` = {"<U2 key id>": "<base64 of the minisig>"},
 # the only signature 0.46.5+ apps read. Checked here the way they check it.
@@ -1243,7 +1257,7 @@ verify_manifest "daemon-latest.json" "${VERIFY_BASE}/daemon-latest.json"
 # release is live: fix by re-uploading). Linux daemons: sign-daemon.sh
 # checks its own at Step 10.5. Windows: windows-patch-latest-json.sh.
 echo ""
-echo "Step 10: U2 signatures in the published manifests (what 0.46.5+ installs read)..."
+echo "Step 10: U2 + U1 signatures in the published manifests (what 0.46.5+ and older installs read)..."
 U2_VERIFY_FAILED=""
 k2_verify_published_u2() {
     local tagbase="https://github.com/${RELEASE_REPO}/releases/download/${TAG}" d attempt
@@ -1276,8 +1290,22 @@ PY
         || { echo "  ✗ could not fetch ${MAC_ASSET}.sig2" >&2; return 1; }
     k2u_verify_u2 "$DIST_DIR/$MAC_ASSET" "$d/mac.sig2" "$MAC_ASSET" "$VERSION" \
         || { echo "  ✗ the published ${MAC_ASSET}.sig2 does not verify" >&2; return 1; }
+    # The bridge half (installs on 0.46.4 or older read only these).
+    python3 -I - "$d/latest.json" > "$d/app.sig" <<'PY' \
+        || { echo "  ✗ latest.json darwin-aarch64 has no U1 signature" >&2; return 1; }
+import json, sys
+s = json.load(open(sys.argv[1]))["platforms"]["darwin-aarch64"]["signature"]
+assert s.strip()
+sys.stdout.write(s)
+PY
+    k2u_verify_u1 "target/release/bundle/macos/K2.app.tar.gz" "$d/app.sig" K2.app.tar.gz \
+        || { echo "  ✗ the published app signature (U1) does not verify" >&2; return 1; }
+    curl -fsSL --max-time 30 "$tagbase/${MAC_ASSET}.sig" -o "$d/mac.sig" \
+        || { echo "  ✗ could not fetch ${MAC_ASSET}.sig" >&2; return 1; }
+    k2u_verify_u1 "$DIST_DIR/$MAC_ASSET" "$d/mac.sig" "$MAC_ASSET" \
+        || { echo "  ✗ the published ${MAC_ASSET}.sig (U1) does not verify" >&2; return 1; }
     rm -rf "$d"
-    echo "  ✓ latest.json k2_signatures and ${MAC_ASSET}.sig2 verify with UPDATER_KEYS"
+    echo "  ✓ latest.json k2_signatures and ${MAC_ASSET}.sig2 verify with UPDATER_KEYS; the U1 bridge signatures verify too"
 }
 k2_verify_published_u2 || U2_VERIFY_FAILED=1
 
@@ -1368,7 +1396,7 @@ echo "  Release ${TAG} complete!"
 echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "$VERIFY_FAILED" ] && echo "  ⚠  UPDATER MANIFEST CHECK FAILED — see Step 10 above (updater may 'Could not fetch a valid release JSON' until it clears)"
 [ -n "$WIN_PATCH_FAILED" ] && echo "  ⚠  WINDOWS latest.json NOT PATCHED — bash scripts/windows-patch-latest-json.sh ${VERSION} dist-windows/K2_${VERSION}_x64-setup.exe"
-[ -n "$U2_VERIFY_FAILED" ] && echo "  ⚠  U2 SIGNATURES MISSING OR BAD IN THE PUBLISHED MANIFESTS — 0.46.5+ installs can't update (Step 10)"
+[ -n "$U2_VERIFY_FAILED" ] && echo "  ⚠  U2 OR U1 SIGNATURES MISSING OR BAD IN THE PUBLISHED MANIFESTS — some installs can't update (Step 10)"
 [ -n "$DAEMON_SIGN_FAILED" ] && echo "  ⚠  LINUX DAEMONS NOT SIGNED — bash scripts/sign-daemon.sh ${VERSION}"
 [ -n "$ROOT_HELPER_SIGN_FAILED" ] && echo "  ⚠  ROOT HELPER NOT SIGNED — bash scripts/sign-root-helper.sh ${VERSION}"
 [ -n "$K2_NODE_SIGN_FAILED" ] && echo "  ⚠  K2-NODE NOT SIGNED — bash scripts/sign-k2-node.sh ${VERSION}"

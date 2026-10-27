@@ -153,15 +153,19 @@ fn get_script() -> String {
     )
 }
 
-/// `sh -c LS k2-data <root> <rel|""> <max>`: a header line, then
-/// `type\tsize\tmtime\tname\0` records (`more` last when cut).
+/// `sh -c LS k2-data <root> <rel|.> <max>`: a header line, then
+/// `type\tsize\tmtime\tname\0` records (`more` last when cut). The data
+/// folder itself rides as [`ROOT_ARG`] (`.`), never `""`: the App engine
+/// refuses an empty argv word (`exec_argv_ok`), so a root listing on a
+/// guarded App answered `data_failed: App engine: argv` in 0.46.4.
+/// `check_path` drops `.` parts, so `.` can't be a real relative path.
 fn ls_script() -> String {
     format!(
         "R=\"$1\"; {WALK} {SIZE} \
          e() {{ f=\"$1\"; s=; m=; if [ -L \"$f\" ]; then y=link; elif [ -d \"$f\" ]; then y=dir; elif [ -f \"$f\" ]; then y=file; else y=other; fi; \
          if [ \"$y\" = file ]; then k2s \"$f\"; else m=$(stat -c %Y -- \"$f\" 2>/dev/null) || m=; fi; \
          printf '%s\\t%s\\t%s\\t%s\\000' \"$y\" \"$s\" \"$m\" \"$2\"; }}; \
-         if [ -z \"$2\" ]; then t=\"$R\"; else k2w \"$2\"; fi; \
+         if [ \"$2\" = {ROOT_ARG} ] || [ -z \"$2\" ]; then t=\"$R\"; else k2w \"$2\"; fi; \
          if [ -L \"$t\" ]; then printf 'k2:ok link\\n'; e \"$t\" \"${{t##*/}}\"; exit 0; fi; \
          if [ ! -e \"$t\" ]; then echo k2:not_found; exit 3; fi; \
          if [ ! -d \"$t\" ]; then printf 'k2:ok file\\n'; e \"$t\" \"${{t##*/}}\"; exit 0; fi; \
@@ -222,7 +226,26 @@ fn symlink_refusal(rel: &str) -> Refusal {
     fail(SYMLINK, 403, format!("{} goes through a symlink: k2 app data never follows one (it could point outside the data folder)", shown(rel)))
 }
 
+/// The data folder itself on an ls script's argv (see [`ls_script`]).
+const ROOT_ARG: &str = ".";
+
+/// Every script's argv passes the App engine's own check first
+/// (`exec_argv_ok`: no empty word, no control characters, at most 64): a
+/// word the engine would refuse fails here, loudly and before any exec,
+/// never as the engine's bare "App engine: argv".
 fn run(exec: Exec<'_>, argv: Vec<String>) -> R<(i64, String)> {
+    if !k2_root_proto::engine::exec_argv_ok(&argv) {
+        let empty = argv.iter().skip(3).position(String::is_empty);
+        return Err(fail(
+            FAILED,
+            409,
+            match empty {
+                // skip(3): index i is the script's ${i} ($0 = k2-data).
+                Some(i) => format!("k2 app data built an empty argument (${i}) for the App's exec; nothing ran"),
+                None => "k2 app data built an argument the App's exec refuses; nothing ran".to_string(),
+            },
+        ));
+    }
     exec(&argv).map_err(|e| fail(FAILED, 409, e))
 }
 
@@ -377,7 +400,8 @@ fn entry(name: &str, ty: &str, size: Option<u64>, mtime: Option<i64>) -> J {
 }
 
 pub(crate) fn ls_wall(root: &str, rel: &str, exec: Exec<'_>) -> R<Listing> {
-    let (code, out) = run(exec, sv(&["sh", "-c", &ls_script(), "k2-data", root, rel, &MAX_LS.to_string()]))?;
+    let wire_rel = if rel.is_empty() { ROOT_ARG } else { rel };
+    let (code, out) = run(exec, sv(&["sh", "-c", &ls_script(), "k2-data", root, wire_rel, &MAX_LS.to_string()]))?;
     if code != 0 {
         return Err(script_refusal(code, &out, rel, ""));
     }
@@ -715,6 +739,8 @@ mod tests {
         for a in argv {
             assert!(k2_root_proto::engine::value_ok(a, 4096), "the engine would refuse this argument: {a:?}");
         }
+        // The guarded exec's own contract (0.46.5: a root ls sent "").
+        assert!(k2_root_proto::engine::exec_argv_ok(argv), "the engine would refuse this argv: {argv:?}");
         let o = std::process::Command::new(&argv[0]).args(&argv[1..]).output().map_err(|e| e.to_string())?;
         let mut out = o.stdout;
         out.extend_from_slice(&o.stderr);
@@ -959,6 +985,80 @@ mod tests {
             // A folder moves whole.
             assert!(!mv("var/files", "uploads", false).unwrap());
             assert_eq!(std::fs::read_to_string(root.join("uploads/sub/b.txt")).unwrap(), "b");
+        }
+    }
+
+    /// 0.46.5 (Agent NSI Vanilla): `k2 app data ls <app>` on a guarded App
+    /// answered `data_failed: App engine: argv`: the root rode as `""` and
+    /// the engine refuses an empty argv word. An exec that refuses exactly
+    /// like the engine now lists the root (and every path) fine.
+    #[cfg(unix)]
+    #[test]
+    fn root_ls_passes_the_engines_argv_check() {
+        let d = Scratch::new();
+        let (root, _) = tree(&d);
+        let r = root.to_string_lossy().to_string();
+        let seen = std::cell::RefCell::new(Vec::<Vec<String>>::new());
+        let engine = |argv: &[String]| -> Result<(i64, String), String> {
+            seen.borrow_mut().push(argv.to_vec());
+            if !k2_root_proto::engine::exec_argv_ok(argv) {
+                return Err("App engine: argv".into());
+            }
+            local(argv)
+        };
+        let w = ls_wall(&r, "", &engine).unwrap_or_else(|e| panic!("root ls refused: {} {}", e.code, e.hint));
+        assert_eq!(w.kind, "dir");
+        let names: Vec<_> = w.entries.iter().map(|e| e["name"].as_str().unwrap().to_string()).collect();
+        assert_eq!(names, vec![".hidden", "up", "var"], "{w:?}");
+        assert_eq!(seen.borrow()[0][5], ROOT_ARG, "the root rides as {ROOT_ARG}");
+        // What the route sends for `k2 app data ls <app>` and `ls /data`.
+        for raw in ["", "/data", ".", "/data/"] {
+            let parts = check_path(raw, "p", true).unwrap();
+            assert!(parts.is_empty(), "{raw:?}");
+            assert_eq!(ls_wall(&r, &parts.join("/"), &engine).unwrap().kind, "dir", "{raw:?}");
+        }
+        assert_eq!(ls_wall(&r, "var", &engine).unwrap().entries.len(), 3);
+    }
+
+    /// No data_files script ever hands the engine an empty argv word: each
+    /// wall function, for every path the routes can send it, builds an argv
+    /// that passes `exec_argv_ok`; and `run` itself refuses one that
+    /// wouldn't, before any exec.
+    #[test]
+    fn no_script_builds_an_empty_argv_word() {
+        let argvs = std::cell::RefCell::new(Vec::<Vec<String>>::new());
+        let record = |argv: &[String]| -> Result<(i64, String), String> {
+            argvs.borrow_mut().push(argv.to_vec());
+            Ok((3, "k2:not_found".into()))
+        };
+        for rel in ["", "a", "var/answers.json"] {
+            let _ = ls_wall("/data", rel, &record);
+        }
+        // get / rm / mv never take the folder itself (check_path root_ok=false).
+        for rel in ["a", "var/answers.json"] {
+            let _ = get_wall("/data", rel, 0, &record);
+            let _ = rm_wall("/data", rel, true, &record);
+            let _ = rm_wall("/data", rel, false, &record);
+            let _ = mv_wall("/data", rel, "b/c", false, &record);
+            let _ = mv_wall("/data", rel, "b", true, &record);
+        }
+        let argvs = argvs.into_inner();
+        assert_eq!(argvs.len(), 3 + 2 * 5, "every call reached the exec");
+        for a in &argvs {
+            assert!(k2_root_proto::engine::exec_argv_ok(a), "the engine would refuse: {a:?}");
+            assert!(a.iter().all(|w| !w.is_empty()), "{a:?}");
+        }
+        // A slip (an empty path into a script that has no root form) fails
+        // loudly in `run`, and the exec never sees it.
+        let never = |argv: &[String]| -> Result<(i64, String), String> { panic!("exec reached with {argv:?}") };
+        for e in [
+            get_wall("/data", "", 0, &never).unwrap_err(),
+            rm_wall("/data", "", true, &never).unwrap_err(),
+            mv_wall("/data", "", "b", false, &never).unwrap_err(),
+            mv_wall("/data", "a", "", false, &never).unwrap_err(),
+        ] {
+            assert_eq!(e.code, FAILED);
+            assert!(e.hint.contains("empty argument") && e.hint.contains("nothing ran"), "{}", e.hint);
         }
     }
 

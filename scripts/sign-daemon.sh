@@ -41,7 +41,7 @@
 #   3. sign twice (scripts/lib/sign-updater.sh, each verified against the
 #      source tree's keys): `.sig` with the retired key U1 (raw minisig,
 #      `timestamp:…\tfile:k2-daemon-linux-<arch>`, for installs older than
-#      0.46.4) and `.sig2` with U2 (`…\tversion:<v>`, the only one 0.46.4+
+#      0.46.5) and `.sig2` with U2 (`…\tversion:<v>`, the only one 0.46.5+
 #      accepts; SS4/SS5);
 # then merge both into daemon-latest.json with scripts/merge-daemon-manifest.py
 # (the same script CI's old merge job ran: same keys and fields, plus
@@ -49,7 +49,7 @@
 # manifest never lists a daemon whose signatures aren't up yet. Finally it
 # re-downloads the published manifest, each published daemon (its hash must
 # be the one it signed) and the .sig2 files, and checks them the way a
-# 0.46.4 install does.
+# 0.46.5 install does.
 #
 # Re-running daemon-binaries.yml by hand: delete the release's
 # k2-daemon-linux-<arch> and .sha256 first (no --clobber), then
@@ -336,14 +336,14 @@ gh release upload "$TAG" -R "$REPO" "${up[@]}" --clobber
 gh release upload "$TAG" -R "$REPO" "$ASSETS/daemon-latest.json" --clobber
 [ -z "$OUT" ] || cp "$ASSETS"/*.sig "$ASSETS"/*.sig2 "$ASSETS/daemon-latest.json" "$OUT/"
 
-# 6. What a 0.46.4 install sees: the published manifest's sig2 for each
+# 6. What a 0.46.5 install sees: the published manifest's sig2 for each
 # Linux daemon, downloaded, verified with the source tree's UPDATER_KEYS.
 CHECK="$WORK/published"; mkdir -p "$CHECK"
 gh release download "$TAG" -R "$REPO" -p daemon-latest.json -D "$CHECK" --clobber
 for ARCH in "${ARCHES[@]}"; do
     A="k2-daemon-linux-$ARCH"
     python3 -I - "$CHECK/daemon-latest.json" "linux-$ARCH" "$(sha256_of "$ASSETS/$A")" "https://github.com/$REPO/releases/download/$TAG/$A.sig2" <<'PY' \
-        || die "published daemon-latest.json linux-$ARCH is wrong (sha256 or sig2): no 0.46.4+ Linux install could update"
+        || die "published daemon-latest.json linux-$ARCH is wrong (sha256 or sig2): no 0.46.5+ Linux install could update"
 import json, sys
 e = json.load(open(sys.argv[1]))["artifacts"][sys.argv[2]]
 sys.exit(0 if e.get("sha256") == sys.argv[3] and e.get("sig2") == sys.argv[4] else 1)

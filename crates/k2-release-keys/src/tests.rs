@@ -205,7 +205,10 @@ fn helpers() {
     assert_eq!(key_id_of(LEGACY_UPDATER_KEY_B64).as_deref(), Some(LEGACY_UPDATER_KEY_ID));
     assert_eq!(url_asset_name("https://x/y/K2.app.tar.gz?a=1"), Some("K2.app.tar.gz"));
     assert!(version_older_than("0.46.3", FIRST_U2_SIGNED_VERSION));
-    assert!(!version_older_than("0.46.4", FIRST_U2_SIGNED_VERSION));
+    // v0.46.4 shipped signed with U1 only (`4ee5c5e61`): a 0.46.5+ verifier
+    // must call it a retired-key release, never point people at it.
+    assert!(version_older_than("0.46.4", FIRST_U2_SIGNED_VERSION));
+    assert!(!version_older_than("0.46.5", FIRST_U2_SIGNED_VERSION));
     assert!(!version_older_than("0.47.0", FIRST_U2_SIGNED_VERSION));
     assert!(version_older_than("v0.9.99", FIRST_U2_SIGNED_VERSION));
     assert!(version_older_than("junk", FIRST_U2_SIGNED_VERSION));
@@ -240,6 +243,10 @@ fn key_copies_are_equal_and_u1_is_in_no_verifier() {
     let inst = repo_file("scripts/install-daemon.sh");
     assert_eq!(shell_list(&cli, "_DAEMON_UPDATE_PUBKEYS"), ours, "cli/k2 _DAEMON_UPDATE_PUBKEYS");
     assert_eq!(shell_list(&inst, "K2_DAEMON_PUBKEYS"), ours, "scripts/install-daemon.sh K2_DAEMON_PUBKEYS");
+    // The first U2-signed version: one value in all three verifiers (the
+    // shell installers refuse older --version requests with it).
+    assert_eq!(shell_list(&cli, "_DAEMON_FIRST_U2_VERSION"), [FIRST_U2_SIGNED_VERSION], "cli/k2 _DAEMON_FIRST_U2_VERSION");
+    assert_eq!(shell_list(&inst, "K2_FIRST_U2_VERSION"), [FIRST_U2_SIGNED_VERSION], "scripts/install-daemon.sh K2_FIRST_U2_VERSION");
     let conf: serde_json::Value = serde_json::from_str(&repo_file("src-tauri/tauri.conf.json")).expect("tauri.conf.json");
     let pk = conf["plugins"]["updater"]["pubkey"].as_str().expect("plugins.updater.pubkey");
     let want = match UPDATER_KEYS.first() {

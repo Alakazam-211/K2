@@ -16,16 +16,16 @@
 #
 # Two keys, every release signed with both (prd-security-sweep-0464-v1
 # SS4/SS5, option C, the bridge):
-#   U1  the retired key E9111446F65EBB05, for installs older than 0.46.4:
+#   U1  the retired key E9111446F65EBB05, for installs older than 0.46.5:
 #       the old fields (`signature` in latest.json, `.sig` for daemons),
 #       Tauri-signer format, trusted comment "timestamp:…\tfile:<asset>".
-#   U2  the new key (scripts/updater-key-ceremony.sh), the only one 0.46.4+
+#   U2  the new key (scripts/updater-key-ceremony.sh), the only one 0.46.5+
 #       trusts (with the offline backup U3): `k2_signatures` in latest.json,
 #       `.sig2` for daemons, trusted comment
 #       "timestamp:…\tfile:<asset>\tversion:<x.y.z>".
 #
 # What this stops and what it doesn't (security review, accepted risk for
-# 0.46.4 pending Rosson's OK): the key never sits in the environment or argv
+# 0.46.5 pending Rosson's OK): the key never sits in the environment or argv
 # of anything release.sh starts, so builds and packages don't inherit it.
 # Any process running as this macOS user can still read the key file and
 # ask the unlocked login keychain for its password (no `-T ""`: that would
@@ -57,11 +57,11 @@
 # is for agent sessions only, a person caller must `reveal` with a per-use
 # Touch ID confirm (blocks an unattended release), env-file refuses
 # multi-line values, and macOS has no memory-backed folder for secret files.
-# Until a vault verb exists, the 0.46.4 fallback is the login keychain, the
+# Until a vault verb exists, the 0.46.5 fallback is the login keychain, the
 # same as the root-helper key. Swapping the source is k2u_password and
 # k2u_key_text only.
 #
-# ── One-time setup on z3mbpZ (Rosson, GUI terminal, before 0.46.4) ─────────
+# ── One-time setup on z3mbpZ (Rosson, GUI terminal, before 0.46.5) ─────────
 # U2: scripts/updater-key-ceremony.sh generate (docs/release/updater-key-ceremony.md).
 # U1 (today's key, for the bridge):
 #   mkdir -p ~/.k2-updater && chmod 700 ~/.k2-updater
@@ -254,7 +254,7 @@ k2u_sign() {
 }
 
 # k2u_verify_u2 <file> <minisig (raw or base64)> <asset> <version>: what a
-# 0.46.4+ install checks — a key from the source tree's UPDATER_KEYS, a
+# 0.46.5+ install checks — a key from the source tree's UPDATER_KEYS, a
 # prehashed signature, and a trusted comment with exactly one file:<asset>
 # and exactly one version:<version>.
 k2u_verify_u2() {

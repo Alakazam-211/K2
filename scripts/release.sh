@@ -19,7 +19,7 @@
 # Prerequisites:
 #   - The update-signing keys in ~/.k2-updater/ and their passwords in the
 #     login keychain: U1 (the retired key, bridge signatures for installs
-#     older than 0.46.4) and U2 (the new key; docs/release/updater-key-ceremony.md).
+#     older than 0.46.5) and U2 (the new key; docs/release/updater-key-ceremony.md).
 #     Every update file is signed with BOTH. The keys are read only inside
 #     scripts/lib/sign-updater.sh, at each signing step. That keeps them out
 #     of the environment and the argv of every build, test and package this
@@ -27,7 +27,7 @@
 #     It does NOT stop code running as this macOS user (a build script, an
 #     npm or cargo package, an agent) from reading ~/.k2-updater/*.key and
 #     asking the unlocked login keychain for the password itself. That is
-#     an accepted risk for 0.46.4, the same model as the root-helper key,
+#     an accepted risk for 0.46.5, the same model as the root-helper key,
 #     pending Rosson's OK; the real fix is SS2b (a separate `k2sign` macOS
 #     user that only signs, 0.46.5).
 #     TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) must NOT be set (refused).
@@ -755,7 +755,7 @@ k2_daemon_helper_verify_tarball_ptyd "target/release/bundle/macos/K2.app.tar.gz"
 # the signature base64-wrapped (b64), exactly as the tauri signer wrote it.
 k2u_sign u1 "target/release/bundle/macos/K2.app.tar.gz" K2.app.tar.gz "$VERSION" \
     "target/release/bundle/macos/K2.app.tar.gz.sig" b64
-# U2 (SS5): the only signature 0.46.4+ apps accept; goes into latest.json
+# U2 (SS5): the only signature 0.46.5+ apps accept; goes into latest.json
 # `k2_signatures` at Step 8.
 k2u_sign u2 "target/release/bundle/macos/K2.app.tar.gz" K2.app.tar.gz "$VERSION" \
     "target/release/bundle/macos/K2.app.tar.gz.sig2" raw
@@ -847,11 +847,11 @@ if [ -f "$SIG_FILE" ]; then
 fi
 
 # U2 (SS4/SS5): `k2_signatures` = {"<U2 key id>": "<base64 of the minisig>"},
-# the only signature 0.46.4+ apps read. Checked here the way they check it.
+# the only signature 0.46.5+ apps read. Checked here the way they check it.
 APP_SIG2_FILE="target/release/bundle/macos/K2.app.tar.gz.sig2"
 [ -f "$APP_SIG2_FILE" ] || { echo "FATAL: $APP_SIG2_FILE missing (Step 5 signs the bundle with U2)" >&2; exit 1; }
 k2u_verify_u2 "target/release/bundle/macos/K2.app.tar.gz" "$APP_SIG2_FILE" K2.app.tar.gz "$VERSION" \
-    || { echo "FATAL: the bundle's U2 signature does not verify; no 0.46.4+ app could update" >&2; exit 1; }
+    || { echo "FATAL: the bundle's U2 signature does not verify; no 0.46.5+ app could update" >&2; exit 1; }
 U2_KEY_ID="$(k2u_slot_key_id u2)"
 APP_SIG2_B64="$(k2u_b64 "$APP_SIG2_FILE")"
 
@@ -904,9 +904,9 @@ echo "  latest.json generated (darwin-aarch64; windows-x86_64 added after NSIS i
 #     "artifacts": {
 #       "<platform-key>": {
 #         "url":    "https://github.com/.../releases/download/v<ver>/<asset>",
-#         "sig":    "<URL to the .sig asset>",   (U1, for installs < 0.46.4)
+#         "sig":    "<URL to the .sig asset>",   (U1, for installs < 0.46.5)
 #         "sha256": "<hex>",
-#         "sig2":   "<URL to the .sig2 asset>"   (U2; 0.46.4+ read only this)
+#         "sig2":   "<URL to the .sig2 asset>"   (U2; 0.46.5+ read only this)
 #       }, ...
 #     },
 #     "notes": "<this version's WHATS_NEW.md section, markdown>"   (0.46.3)
@@ -930,7 +930,7 @@ k2_build_standalone_macos_daemon "$PROJECT_DIR/target/release/bundle/macos/K2.ap
 # read the RAW minisig text (Shape B e2e finding, 2026-07-06; the app
 # bundle's .sig stays base64-wrapped for the Tauri updater).
 k2u_sign u1 "$DIST_DIR/$MAC_ASSET" "$MAC_ASSET" "$VERSION" "$DIST_DIR/$MAC_ASSET.sig" raw
-# U2 (SS5): `.sig2`, the only signature 0.46.4+ daemons and installers accept.
+# U2 (SS5): `.sig2`, the only signature 0.46.5+ daemons and installers accept.
 k2u_sign u2 "$DIST_DIR/$MAC_ASSET" "$MAC_ASSET" "$VERSION" "$DIST_DIR/$MAC_ASSET.sig2" raw
 MAC_SHA256=$(shasum -a 256 "$DIST_DIR/$MAC_ASSET" | awk '{print $1}')
 echo "  macos-aarch64 daemon built, signed, hashed."
@@ -1238,12 +1238,12 @@ verify_manifest "app latest.json"    "${VERIFY_BASE}/latest.json"
 verify_manifest "daemon-latest.json" "${VERIFY_BASE}/daemon-latest.json"
 
 # SS4/SS5: the published manifests carry U2 signatures that verify with the
-# SOURCE tree's UPDATER_KEYS, checked the way a 0.46.4+ install checks them.
-# Without them no 0.46.4+ install can update, so this is fatal (the
+# SOURCE tree's UPDATER_KEYS, checked the way a 0.46.5+ install checks them.
+# Without them no 0.46.5+ install can update, so this is fatal (the
 # release is live: fix by re-uploading). Linux daemons: sign-daemon.sh
 # checks its own at Step 10.5. Windows: windows-patch-latest-json.sh.
 echo ""
-echo "Step 10: U2 signatures in the published manifests (what 0.46.4+ installs read)..."
+echo "Step 10: U2 signatures in the published manifests (what 0.46.5+ installs read)..."
 U2_VERIFY_FAILED=""
 k2_verify_published_u2() {
     local tagbase="https://github.com/${RELEASE_REPO}/releases/download/${TAG}" d attempt
@@ -1368,7 +1368,7 @@ echo "  Release ${TAG} complete!"
 echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "$VERIFY_FAILED" ] && echo "  ⚠  UPDATER MANIFEST CHECK FAILED — see Step 10 above (updater may 'Could not fetch a valid release JSON' until it clears)"
 [ -n "$WIN_PATCH_FAILED" ] && echo "  ⚠  WINDOWS latest.json NOT PATCHED — bash scripts/windows-patch-latest-json.sh ${VERSION} dist-windows/K2_${VERSION}_x64-setup.exe"
-[ -n "$U2_VERIFY_FAILED" ] && echo "  ⚠  U2 SIGNATURES MISSING OR BAD IN THE PUBLISHED MANIFESTS — 0.46.4+ installs can't update (Step 10)"
+[ -n "$U2_VERIFY_FAILED" ] && echo "  ⚠  U2 SIGNATURES MISSING OR BAD IN THE PUBLISHED MANIFESTS — 0.46.5+ installs can't update (Step 10)"
 [ -n "$DAEMON_SIGN_FAILED" ] && echo "  ⚠  LINUX DAEMONS NOT SIGNED — bash scripts/sign-daemon.sh ${VERSION}"
 [ -n "$ROOT_HELPER_SIGN_FAILED" ] && echo "  ⚠  ROOT HELPER NOT SIGNED — bash scripts/sign-root-helper.sh ${VERSION}"
 [ -n "$K2_NODE_SIGN_FAILED" ] && echo "  ⚠  K2-NODE NOT SIGNED — bash scripts/sign-k2-node.sh ${VERSION}"

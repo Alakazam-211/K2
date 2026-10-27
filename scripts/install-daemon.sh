@@ -30,7 +30,7 @@ set -eu
 # binary. Not overridable from the environment.
 K2_DAEMON_PUBKEYS=""
 # Releases before this carry no .sig2 (signed with the retired key only).
-K2_FIRST_U2_VERSION="0.46.4"
+K2_FIRST_U2_VERSION="0.46.5"
 
 # K2_* is canonical; K2SO_* still honored through the 0.x transition.
 K2_VERSION="${K2_VERSION:-${K2SO_VERSION:-}}"
@@ -53,13 +53,13 @@ Usage: install-daemon.sh [--version x.y.z] [--bin-dir DIR]
 
 Install the STANDALONE (headless, no-GUI) K2 daemon from a signed
 GitHub release, minisign-verified with the embedded K2 update keys
-(0.46.4 and newer).
+(0.46.5 and newer).
 
 Flags (or matching env vars K2_VERSION / K2_BIN_DIR /
 K2_MANIFEST_URL / K2_NO_SERVICE=1 / K2_DRY_RUN=1; legacy K2SO_*
 twins still honored):
   --version       install a specific release tag (default: latest);
-                  0.46.4 or newer. An OLDER release than the one installed
+                  0.46.5 or newer. An OLDER release than the one installed
                   is allowed here on purpose (a local, explicit action); the
                   daemon's own self-update refuses a downgrade unless the
                   owner asks for it.
@@ -211,7 +211,7 @@ if [ -z "$URL" ] || [ -z "$SHA256" ] || [ -z "$MVER" ]; then
     exit 1
 fi
 # Only the K2 update keys' signature (.sig2) counts; the old `sig` field is
-# for installs older than 0.46.4.
+# for installs older than 0.46.5.
 if [ -z "$SIG2" ] || version_lt "$MVER" "$K2_FIRST_U2_VERSION"; then
     retired_key_release
 fi

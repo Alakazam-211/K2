@@ -1,7 +1,7 @@
-# k2-multiplayer-markdown
+# k2-mpc-markdown
 
 The Markdown type pack for the K2 multiplayer kit
-([k2-multiplayer-base](https://github.com/Alakazam-211/k2-multiplayer-base)). People and agents
+([k2-mpc-base](https://github.com/Alakazam-211/k2-mpc-base)). People and agents
 edit the same `.md` file live, with presence and attribution, and the file on disk stays plain
 Markdown, byte for byte.
 
@@ -10,5 +10,5 @@ Markdown, byte for byte.
   run on a corpus.
 - **Agent parity:** `docs/PARITY.md` maps every person action to a command-line verb.
 
-Check this repo out next to `k2-multiplayer-base` (sibling directories).
+Check this repo out next to `k2-mpc-base` (sibling directories).
 Status: early. Licence: not yet chosen.

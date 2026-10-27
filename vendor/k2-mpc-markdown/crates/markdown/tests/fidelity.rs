@@ -7,8 +7,8 @@
 
 use std::path::Path;
 
-use k2_multiplayer_base::Doc;
-use k2_multiplayer_markdown::{codec, ROOT, SCHEMA};
+use k2_mpc_base::Doc;
+use k2_mpc_markdown::{codec, ROOT, SCHEMA};
 
 const IMPORT: u64 = 2;
 const AGENT: u64 = 77;

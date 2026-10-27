@@ -313,8 +313,8 @@ impl<L: EventListener> Loop<L> {
                     match self.events.recv_timeout(Duration::from_secs(2)) {
                         Ok(SessionEvent::Overrun { lost_bytes }) => {
                             crate::log_debug!("[ptyd] session={} overrun lost={} — reattaching", self.sid, lost_bytes);
-                            if !self.reattach(&mut sock) {
-                                return self.finish_exit(SessionEvent::OwnerLost);
+                            if let Err(ev) = self.reattach_after_overrun(&mut sock) {
+                                return self.finish_exit(ev);
                             }
                         }
                         Ok(ev) => return self.finish_exit(ev),
@@ -325,12 +325,58 @@ impl<L: EventListener> Loop<L> {
         }
     }
 
+    /// After an overrun: reattach, retrying while the agent keeps writing
+    /// faster than this loop drains. A fresh stream that starts far behind
+    /// the ring's head can overrun again before its `attached` reply is even
+    /// read (ptyd then closes it), so after a failed try the next attach
+    /// starts near the live end (the bytes before it were lost anyway).
+    /// `Err(event)` ends the session: the child exited meanwhile, or ptyd is
+    /// gone / the session no longer exists.
+    fn reattach_after_overrun(&mut self, sock: &mut UnixStream) -> Result<(), SessionEvent> {
+        const TRIES: u32 = 20;
+        const TAIL: u64 = 256 << 10;
+        for attempt in 0..TRIES {
+            let from = if attempt == 0 {
+                self.shadow.pos()
+            } else {
+                match self.owner.request(Request::List) {
+                    Ok(k2_ptyd::proto::Reply::Sessions { sessions }) => match sessions.iter().find(|s| s.sid == self.sid) {
+                        Some(info) if matches!(info.state, k2_ptyd::proto::SessionState::Running) => {
+                            info.ring_end.saturating_sub(TAIL).max(self.shadow.pos())
+                        }
+                        // Exited: its record and exit event are on the way.
+                        Some(_) => return Err(self.events.recv_timeout(Duration::from_secs(2)).unwrap_or(SessionEvent::OwnerLost)),
+                        None => return Err(SessionEvent::OwnerLost),
+                    },
+                    _ => return Err(SessionEvent::OwnerLost),
+                }
+            };
+            if self.reattach_from(sock, from) {
+                return Ok(());
+            }
+            // An exit that arrived meanwhile ends the session; a further
+            // overrun just means "try again".
+            while let Ok(ev) = self.events.try_recv() {
+                if !matches!(ev, SessionEvent::Overrun { .. }) {
+                    return Err(ev);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10 * u64::from(attempt + 1)));
+        }
+        crate::log_debug!("[ptyd] session={}: no stable reattach after {TRIES} tries", self.sid);
+        Err(SessionEvent::OwnerLost)
+    }
+
     /// Attach a new stream at the next unread offset and swap it in.
     /// `false` when ptyd refused (the session is gone). If the ring has
     /// already moved past that offset (an overrun), bytes were lost and the
     /// scanner restarts at the new start.
     fn reattach(&mut self, sock: &mut UnixStream) -> bool {
         let from = self.shadow.pos();
+        self.reattach_from(sock, from)
+    }
+
+    fn reattach_from(&mut self, sock: &mut UnixStream, from: u64) -> bool {
         let s = match self.owner.attach(&self.sid, from) {
             Ok(s) => s,
             Err(e) => {

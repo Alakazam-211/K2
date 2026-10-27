@@ -1304,7 +1304,12 @@ impl DaemonPtySession {
             cwd,
             cols: req.window_size.num_cols,
             rows: req.window_size.num_lines,
-            ring_bytes: None,
+            // Debug builds only (tests): a small ring makes overruns certain.
+            ring_bytes: if cfg!(debug_assertions) {
+                std::env::var("K2_PTYD_TEST_RING_BYTES").ok().and_then(|v| v.parse().ok())
+            } else {
+                None
+            },
             meta: meta.clone(),
         }) {
             Ok(Reply::Spawned { pid, .. }) => pid,

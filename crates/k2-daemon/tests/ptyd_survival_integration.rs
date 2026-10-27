@@ -915,6 +915,40 @@ fn a_checkpoint_never_recreates_a_saved_screen_after_the_session_ends() {
     assert!(!snap.exists(), "a checkpoint re-created the saved screen after the session ended");
 }
 
+/// An agent that writes faster than the daemon drains overruns ptyd's
+/// ring again and again (here a 256 KiB ring, debug-only knob, and 24 MiB
+/// of repaints). The session must ride every overrun: it stays registered,
+/// the agent never gets a hang-up, and the live tail reaches the screen.
+/// (Linux CI caught a single reattach overrunning again before its reply
+/// was read, which ended the session.)
+#[test]
+fn a_session_rides_repeated_overruns() {
+    let mut h = Harness::new("ov");
+    h.extra_env.push(("K2_PTYD_TEST_RING_BYTES".into(), (256 * 1024).to_string()));
+    let port = h.start();
+    let token = h.token();
+    let dir = h.home.join("flood");
+    let body = serde_json::json!({
+        "agent_name": "tab-flood",
+        "cwd": h.home.join("ws").to_string_lossy(),
+        "command": "k2-ptyd-test-agent",
+        "args": ["repaint", dir.to_string_lossy(), "24"],
+    })
+    .to_string();
+    let (s, resp) = http(port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &body);
+    assert_eq!(s, 200, "spawn: {resp}");
+    let sid = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["sessionId"].as_str().expect("sessionId").to_string();
+    let pid: i32 = wait_for("flood agent pid", Duration::from_secs(15), || std::fs::read_to_string(dir.join("pid")).ok()?.trim().parse().ok());
+    h.agent_pid = Some(pid);
+    wait_for("the flood's last line on screen", Duration::from_secs(120), || {
+        read_screen(port, &token, &sid).iter().any(|l| l.starts_with("repaint-done")).then_some(())
+    });
+    assert!(alive(pid), "the flooding agent died");
+    let ptyd_log = std::fs::read_to_string(h.k2.join("logs/ptyd.log")).unwrap_or_default();
+    assert!(ptyd_log.contains(&format!("overrun sid={sid}")), "no overrun happened; the test proves nothing");
+    assert!(!ptyd_log.contains(&format!("exited sid={sid}")), "the session ended during the flood");
+}
+
 fn enc(s: &str) -> String {
     s.bytes()
         .map(|b| match b {

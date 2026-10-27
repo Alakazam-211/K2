@@ -634,6 +634,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanup()
+  dropDeadStyleSheets()
   uninstall?.()
   uninstall = null
   __resetZenDataForTests()
@@ -641,6 +642,24 @@ afterEach(async () => {
   __setZenGeometryForTests(null)
   await homeRooms.closeAll()
 })
+
+/** jsdom drops a <style>'s sheet from document.styleSheets only when that
+ *  <style> itself is removed, not when an ancestor is. Zen draws its theme
+ *  <style>s inside its tree, so ~750 dead sheets piled up over this file and
+ *  every getComputedStyle walked them all (the Zen-token tests went from 1 s
+ *  alone to 16 s in the file on an M5, 50 s on Windows). Re-attaching and
+ *  removing each dead owner makes jsdom forget its sheet. */
+function dropDeadStyleSheets(): void {
+  for (const sheet of Array.from(document.styleSheets)) {
+    const node = sheet.ownerNode
+    if (node instanceof HTMLStyleElement && !node.isConnected) {
+      document.head.appendChild(node)
+      node.remove()
+    }
+  }
+  const dead = Array.from(document.styleSheets).filter((s) => !s.ownerNode?.isConnected).length
+  expect(dead).toBe(0)
+}
 
 function Shortcuts(): null {
   useWorkspaceIndexShortcuts()

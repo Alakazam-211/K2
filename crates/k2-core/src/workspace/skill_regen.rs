@@ -3083,7 +3083,7 @@ mod tests {
         assert_eq!(got.len(), 2, "{got:?}");
         assert_eq!((got[0].file.as_str(), got[0].problem.as_str()), (".k2so/AGENTS.md", "missing"));
         assert_eq!((got[1].file.as_str(), got[1].problem.as_str()), ("CLAUDE.md", "dangling"));
-        assert_eq!(got[1].target.as_deref(), Some(elsewhere.to_str().unwrap()));
+        assert_eq!(got[1].target.as_deref().map(std::path::Path::new), Some(elsewhere.as_path()));
 
         // Regen never replaces a foreign link (fan-out is off here anyway).
         write_workspace_skill_file(path);

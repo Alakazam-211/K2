@@ -169,7 +169,9 @@ fn text_for_ready_linux_and_broken() {
     );
     assert_eq!(render_text(&r, Some(InstallStart::AlreadyReady), &[]).lines().next(), Some("git already works here; nothing to install."));
     let l = status_from(&GitProbe::Missing, false, None, false, "ID=fedora\n", vec![]);
-    assert_eq!(render_text(&l, None, &[]), "git        : not installed (needs git)\ninstall    : run this yourself:\n  sudo dnf install git\n");
+    // The install line is this OS's own (os-release only matters on Linux).
+    let install = if cfg!(windows) { "Install Git for Windows from git-scm.com" } else { "sudo dnf install git" };
+    assert_eq!(render_text(&l, None, &[]), format!("git        : not installed (needs git)\ninstall    : run this yourself:\n  {install}\n"));
     let b = status_from(&broken(), true, None, false, "", vec![]);
     let t = render_text(&b, None, &[]);
     assert!(t.starts_with("git        : found but failing (/usr/bin/git): You have not agreed"), "{t}");

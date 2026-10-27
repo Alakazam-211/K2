@@ -1539,6 +1539,7 @@ mod tests {
         assert!(
             new_path
                 .to_string_lossy()
+                .replace('\\', "/")
                 .contains("/.pi/agent/sessions/--Users-a-b--/"),
             "{}",
             new_path.display()

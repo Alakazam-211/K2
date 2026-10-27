@@ -18,7 +18,7 @@
 #      until the result, exits 0 only on "done"; a refusal exits 3 with
 #      upgradeProgress.lastError (the reason) on stderr.
 #   9. S30: config lists approvals.by and `config set approvals.by` goes to
-#      the approvals policy (chat_cli.sh covers people/approvals/act-as).
+#      the approvals policy (chat_cli.sh covers people/approvals/on-behalf).
 #   8. Voice flags (--voice, --voice-url, --node-ip) outside enable, and
 #      --media-tarball outside enable/upgrade/rollback, exit 2 before any
 #      request (they used to be dropped silently).
@@ -69,7 +69,9 @@ assert_contains "help: manage sew" "$out" "chat_manage on"
 assert_contains "help: people" "$out" "k2 hostchat people list"
 assert_contains "help: approvals" "$out" "k2 hostchat approvals approve <out_…>"
 assert_contains "help: approvals.by" "$out" "config set approvals.by people|people+agents"
-assert_contains "help: act-as" "$out" "act-as allow <workspace>"
+assert_contains "help: on-behalf" "$out" "on-behalf approve <act_…|msg_…>"
+assert_contains "help: restart" "$out" "k2 hostchat restart [--json]"
+assert_contains "help: reconfigure" "$out" "k2 hostchat reconfigure [--json]"
 assert_contains "help: agents alias" "$out" "alias of k2 chat access"
 eval "$(sed -n '/^# BEGIN_CLI_TOOL_POLICY/,/^# END_CLI_TOOL_POLICY/p' "$K2_CLI")"
 assert_eq "catalog: hostchat tool id" "$(_cli_tool_id_for_verb hostchat)" "hostchat"
@@ -80,7 +82,7 @@ python3 -c '
 import json, sys
 names = {c["name"] for c in json.loads(sys.argv[1])["commands"]}
 for n in ("hostchat", "hostchat enable", "hostchat media", "hostchat users", "hostchat config",
-          "hostchat people", "hostchat approvals", "hostchat agents", "hostchat act-as", "hostchat log"):
+          "hostchat people", "hostchat approvals", "hostchat agents", "hostchat on-behalf", "hostchat log"):
     assert n in names, n
 ' "$schema" && ok "schema lists the hostchat verbs" || bad "schema lists the hostchat verbs"
 

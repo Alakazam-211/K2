@@ -58,6 +58,8 @@ export default defineConfig({
     alias: {
       '@': resolve(__dirname, 'src/renderer'),
       '@shared': resolve(__dirname, 'src/shared'),
+      // 0.46.5 activity SDK: @k2/activity's core (one copy of the turn words).
+      '@k2/activity': resolve(__dirname, 'sdk/activity/src/core.ts'),
       // Wiki 3D: three-render-objects statically imports the (unused)
       // WebGPU renderer; stub it out of the lazy chunk (prd-wiki-3d-view-v1 §6.5).
       'three/webgpu': resolve(__dirname, 'src/renderer/lib/three-webgpu-stub.ts'),

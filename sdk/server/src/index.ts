@@ -14,7 +14,11 @@ import { join } from 'node:path'
 import { K2App, type K2Config } from './client.ts'
 import { K2Error } from './errors.ts'
 
-export { K2App, type K2Actor, type K2Config, type RequestLike } from './client.ts'
+export { K2App, type K2Actor, type K2Config, type RequestLike, type SubscribeOptions } from './client.ts'
+// 0.46.5 activity SDK: thread.watchActivity's types, and @k2/activity's
+// words for drawing a turn the way K2 does.
+export type { ActivityState, Turn, WatchActivityOptions, WatchActivityTarget } from './activity.ts'
+export { coerceTurn, describe as describeTurn, reduceTurn } from '../../activity/src/core.ts'
 export type { AppKeyOk, AppKeyRoomsSet, AppKeyUser, AppKeyUserCreated, AppKeyUsers, AppKeyWhoami } from './client.ts'
 export { K2Error, fromResponse } from './errors.ts'
 export * from './generated/verbs.ts'

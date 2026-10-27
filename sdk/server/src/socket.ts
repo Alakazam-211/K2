@@ -3,7 +3,8 @@
 //
 // K2's App sockets send no hello and no replay. After any gap (a drop, or
 // the 4008 "lagged" close), onError gets a `resync` K2Error naming the verb
-// to refetch with, and the socket reconnects (backoff 0.5 s → 10 s). A
+// to refetch with, and the socket reconnects (backoff 0.5 s → 10 s); catch
+// up in `onOpen` (every open, 0.46.5), which comes after the gap. A
 // socket refused before it ever opened (no room, no cap, a dead pass)
 // ends with one `failed` error and no retry.
 
@@ -22,11 +23,24 @@ export interface SocketOpts {
   url: () => string
   onFrame: (frame: unknown) => void
   onError: (error: K2Error) => void
+  /** 0.46.5 (review D5): the socket is open, first time and after every
+   *  reconnect. Catch up HERE (read the snapshot after the socket is
+   *  open), not on the close-time `resync`, which comes before the gap. */
+  onOpen?: () => void
   WebSocket: WebSocketCtor
 }
 
+/** What to refetch with after a gap: the row's verb, plus `thread.activity`
+ *  for the Thread turn on a socket opened with the ear (`ear=1`). */
+export function refetchHint(row: AppVerbRow): string | null {
+  const verbs = [row.socket?.refetch, row.socket?.query?.ear === '1' ? 'thread.activity' : undefined].filter(
+    (v): v is string => typeof v === 'string' && v.length > 0,
+  )
+  return verbs.length ? verbs.join(' and ') : null
+}
+
 export function openSocket(o: SocketOpts): () => void {
-  const refetch = o.row.socket?.refetch ?? null
+  const refetch = refetchHint(o.row)
   let stopped = false
   let everOpened = false
   let attempt = 0
@@ -58,6 +72,14 @@ export function openSocket(o: SocketOpts): () => void {
     sock.addEventListener('open', () => {
       everOpened = true
       attempt = 0
+      if (stopped || !o.onOpen) return
+      try {
+        o.onOpen()
+      } catch (err) {
+        queueMicrotask(() => {
+          throw err
+        })
+      }
     })
     sock.addEventListener('message', (ev: MessageEvent) => {
       if (typeof ev.data !== 'string') return

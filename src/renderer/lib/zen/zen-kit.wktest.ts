@@ -19,7 +19,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { zenFramePrelude } from './zen-custom-prelude'
 
 const LIB = resolve(__dirname, '../../zen-lib')
-const THREAD = readFileSync(resolve(LIB, 'k2-thread@1.0.0/k2-thread.js'), 'utf8')
+const THREAD = readFileSync(resolve(LIB, 'k2-thread@1.1.0/k2-thread.js'), 'utf8')
 const HELP = readFileSync(resolve(LIB, 'k2-help@1.0.0/k2-help.js'), 'utf8')
 const shots = process.env.ZEN_SHOTS
 

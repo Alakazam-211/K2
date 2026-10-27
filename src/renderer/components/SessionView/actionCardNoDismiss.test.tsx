@@ -82,7 +82,7 @@ describe('no dismiss on an action card, on any Thread surface (C13)', () => {
   })
 
   it('the Garden kit (k2-thread@1) has no void or dismiss for any card', () => {
-    const kit = readFileSync(resolve(__dirname, '../../zen-lib/k2-thread@1.0.0/k2-thread.js'), 'utf8')
+    const kit = readFileSync(resolve(__dirname, '../../zen-lib/k2-thread@1.1.0/k2-thread.js'), 'utf8')
     expect(kit.includes('thread.void')).toBe(false)
     expect(/dismiss/i.test(kit)).toBe(false)
   })

@@ -148,6 +148,10 @@ const D3_GLUE = `/* K2 glue: d3.csvParse / d3.tsvParse without new Function (sea
 export const K2_MARKDOWN_NOTES =
   "K2's own: markdown, safe by default. K2Markdown.into(el, text, opts) fills el; K2Markdown.render(text, opts) returns a DocumentFragment (never a string, so no innerHTML). Raw HTML is escaped; links show as text with the URL visible, or with opts.links = 'open' and the links:open cap as buttons that call k2.open; images show as text, or with opts.images = 'data' as data: PNG, JPEG, GIF and WebP only. It loads marked and DOMPurify for you (its own DOMPurify instance: your settings never change its rules). Colours follow the Garden (--zen-*)."
 
+/** The notes `k2-activity`'s row carries (the k2-zen skill shows them). */
+export const K2_ACTIVITY_NOTES =
+  "K2's own: the activity bar K2's Conversation shows, for one agent. K2Activity.mount(el, {address: 'handle::host', look: 'chamfer', 'glass' or 'plain'}) then bar.setAddress(address), bar.setLook(look), bar.destroy(). It listens with k2.thread.onActivity (caps thread:read and activity:read): the turn an App guest gets, counts and step kinds, never text. Working pulses; monitoring, needs-you and a quiet turn never do (no typing dots); an end shows Done, Stopped or Failed briefly. K2Activity.describe(K2Activity.coerce(state.turn, Date.now()), Date.now()) gives {tone, headline, animate, counters, clock, aria, detail} for your own drawing. No turn means no bar: never guess from messages. Colours follow the Garden (--zen-*, or --k2a-*)."
+
 export const LIBS: LibSpec[] = [
   // ── 3D and physics ──────────────────────────────────────────────────
   {
@@ -588,8 +592,29 @@ export const LIBS: LibSpec[] = [
       "K2's own: the (i) help button. K2Help.tip(text, {label, key, title}) returns an (i) that shows a tooltip on hover or focus and pins it on click, tap, Enter or Space; text over 160 characters opens a popover with Close instead. Esc, a tap outside or the same (i) closes it; it stays inside the frame and follows the Garden's light/dark. Markup works too: class=\"k2h-btn\" with data-tip, or data-help=\"<id>\" for a popover. Put explanations behind an (i), not on the canvas.",
   },
   {
-    id: 'k2-thread',
+    // 0.46.5 activity SDK (review-thread-activity-surface-v1 §2.1): K2's
+    // activity bar, built from sdk/activity/src (core + bar + widget) by
+    // scripts/zen-lib/build-k2-activity.mjs; the built file is checked in.
+    // Before k2-thread, which needs it.
+    id: 'k2-activity',
     version: '1.0.0',
+    fingerprints: ['/*! k2-activity '],
+    title: 'K2 activity bar (widget kit)',
+    global: 'K2Activity',
+    license: 'FSL-1.1-Apache-2.0',
+    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    source: 'bundled',
+    own: true,
+    licenses: ['k2:LICENSE.md'],
+    files: [{ name: 'k2-activity.js', own: true }],
+    notes: K2_ACTIVITY_NOTES,
+  },
+  {
+    // 1.1.0 (0.46.5 activity SDK): the working tab is k2-activity@1's turn
+    // from k2.thread.onActivity, never row.working or send timing.
+    id: 'k2-thread',
+    version: '1.1.0',
+    needs: ['k2-activity@1'],
     fingerprints: ['/*! k2-thread '],
     title: 'K2 Thread panel (widget kit)',
     global: 'K2Thread',
@@ -600,7 +625,7 @@ export const LIBS: LibSpec[] = [
     licenses: ['k2:LICENSE.md'],
     files: [{ name: 'k2-thread.js', own: true }],
     notes:
-      "K2's own: a Thread panel to talk to one agent inside a widget. K2Thread.mount(el, {look: 'chamfer' or 'glass', address: 'handle::host'}) then panel.open(address, label), panel.post(text), panel.setLook(look), panel.destroy(). chamfer is K2's Thread with chamfered corners in the Garden theme's colours; glass is K2 Companion's round look and palette. Both: bubbles with author and time, choice cards, Enter sends (Shift+Enter a new line), the working tab with counters and clock, stick-to-bottom scrolling with a new-messages pill, a narrow layout, file chips and data: images for attachments. Needs thread:read and thread:post (agents:read for names and counters). Add marked and dompurify for markdown bodies.",
+      "K2's own: a Thread panel to talk to one agent inside a widget. K2Thread.mount(el, {look: 'chamfer' or 'glass', address: 'handle::host'}) then panel.open(address, label), panel.post(text), panel.setLook(look), panel.destroy(). chamfer is K2's Thread with chamfered corners in the Garden theme's colours; glass is K2 Companion's round look and palette. Both: bubbles with author and time, choice cards, Enter sends (Shift+Enter a new line), the working tab (the agent's Thread turn in k2-activity@1's words, never a guess), stick-to-bottom scrolling with a new-messages pill, a narrow layout, file chips and data: images for attachments. Needs thread:read and thread:post (agents:read for names, activity:read for the working tab; K2 loads k2-activity@1 for you). Add marked and dompurify for markdown bodies.",
   },
   {
     // 0.46.5 (prd-widget-size-and-shared-libs-v1 WL13, vs-live L12): from

@@ -653,9 +653,34 @@
       "notes": "K2's own: the (i) help button. K2Help.tip(text, {label, key, title}) returns an (i) that shows a tooltip on hover or focus and pins it on click, tap, Enter or Space; text over 160 characters opens a popover with Close instead. Esc, a tap outside or the same (i) closes it; it stays inside the frame and follows the Garden's light/dark. Markup works too: class=\"k2h-btn\" with data-tip, or data-help=\"<id>\" for a popover. Put explanations behind an (i), not on the canvas."
     },
     {
-      "id": "k2-thread",
+      "id": "k2-activity",
       "version": "1.0.0",
       "line": "1",
+      "fingerprints": [
+        "/*! k2-activity "
+      ],
+      "title": "K2 activity bar (widget kit)",
+      "global": "K2Activity",
+      "license": "FSL-1.1-Apache-2.0",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright 2025-2026 Alakazam Labs",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "k2-activity.js",
+          "bytes": 15773,
+          "sha256": "0ed47fa705c48929f2c2550aa1740ac50abf6ec9c927d7e9be86dba4e8c754e9"
+        }
+      ],
+      "notes": "K2's own: the activity bar K2's Conversation shows, for one agent. K2Activity.mount(el, {address: 'handle::host', look: 'chamfer', 'glass' or 'plain'}) then bar.setAddress(address), bar.setLook(look), bar.destroy(). It listens with k2.thread.onActivity (caps thread:read and activity:read): the turn an App guest gets, counts and step kinds, never text. Working pulses; monitoring, needs-you and a quiet turn never do (no typing dots); an end shows Done, Stopped or Failed briefly. K2Activity.describe(K2Activity.coerce(state.turn, Date.now()), Date.now()) gives {tone, headline, animate, counters, clock, aria, detail} for your own drawing. No turn means no bar: never guess from messages. Colours follow the Garden (--zen-*, or --k2a-*)."
+    },
+    {
+      "id": "k2-thread",
+      "version": "1.1.0",
+      "line": "1",
+      "needs": [
+        "k2-activity@1"
+      ],
       "fingerprints": [
         "/*! k2-thread "
       ],
@@ -668,11 +693,11 @@
       "files": [
         {
           "name": "k2-thread.js",
-          "bytes": 54399,
-          "sha256": "e459cf8a78f4828d473e89fc88aa0a08849bd0144f7951321e9456498ab1a382"
+          "bytes": 54525,
+          "sha256": "69685cde6f3448fd80af170e09f71af292baaa8b78b4ca9c3f365e61f4b9f236"
         }
       ],
-      "notes": "K2's own: a Thread panel to talk to one agent inside a widget. K2Thread.mount(el, {look: 'chamfer' or 'glass', address: 'handle::host'}) then panel.open(address, label), panel.post(text), panel.setLook(look), panel.destroy(). chamfer is K2's Thread with chamfered corners in the Garden theme's colours; glass is K2 Companion's round look and palette. Both: bubbles with author and time, choice cards, Enter sends (Shift+Enter a new line), the working tab with counters and clock, stick-to-bottom scrolling with a new-messages pill, a narrow layout, file chips and data: images for attachments. Needs thread:read and thread:post (agents:read for names and counters). Add marked and dompurify for markdown bodies."
+      "notes": "K2's own: a Thread panel to talk to one agent inside a widget. K2Thread.mount(el, {look: 'chamfer' or 'glass', address: 'handle::host'}) then panel.open(address, label), panel.post(text), panel.setLook(look), panel.destroy(). chamfer is K2's Thread with chamfered corners in the Garden theme's colours; glass is K2 Companion's round look and palette. Both: bubbles with author and time, choice cards, Enter sends (Shift+Enter a new line), the working tab (the agent's Thread turn in k2-activity@1's words, never a guess), stick-to-bottom scrolling with a new-messages pill, a narrow layout, file chips and data: images for attachments. Needs thread:read and thread:post (agents:read for names, activity:read for the working tab; K2 loads k2-activity@1 for you). Add marked and dompurify for markdown bodies."
     },
     {
       "id": "k2-markdown",

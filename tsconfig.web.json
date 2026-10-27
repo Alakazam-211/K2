@@ -17,10 +17,13 @@
     "declarationMap": true,
     "paths": {
       "@/*": ["./src/renderer/*"],
-      "@shared/*": ["./src/shared/*"]
+      "@shared/*": ["./src/shared/*"],
+      "@k2/activity": ["./sdk/activity/src/core.ts"]
     }
   },
   "include": [
+    "sdk/activity/src/**/*.ts",
+    "tests/fixtures/activity/*.json",
     "src/renderer/**/*.ts",
     "src/renderer/**/*.tsx",
     "src/shared/**/*.ts",

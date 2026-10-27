@@ -22,6 +22,7 @@ import { K2Error, fromResponse } from './errors.ts'
 import { APP_VERBS, type AppCallVerb, type AppSubscribeVerb, type AppSurfaces, type AppVerbRow, type AppVerbs, type AppGuestLogin } from './generated/verbs.ts'
 import { SecretFile } from './pass.ts'
 import { openSocket, type WebSocketCtor } from './socket.ts'
+import { watchThreadActivity, type ActivityActor, type ActivityState, type WatchActivityOptions, type WatchActivityTarget } from './activity.ts'
 import { buildRequest, project } from './wire.ts'
 
 export interface K2Config {
@@ -49,14 +50,32 @@ function isGuestPass(p: string): boolean {
   return /^k2skn_[A-Za-z0-9._-]+$/.test(p)
 }
 
+/** `subscribe`'s options (0.46.5). */
+export interface SubscribeOptions {
+  /** The socket is open (first time and after every reconnect): catch up
+   *  here, after the gap, never on the close-time `resync` error. */
+  onOpen?: () => void
+}
+
 /** The surfaces plus `call` / `subscribe` by name, bound to one actor. */
-export interface K2Actor extends AppSurfaces {
+export interface K2Actor extends Omit<AppSurfaces, 'thread'> {
+  /** Every Thread verb, plus `watchActivity` (0.46.5): the live Thread
+   *  turn of one agent (`{addr}`) or of rooms (`{rooms}`), kept right
+   *  (snapshot on every open, frames, resets, a 60 s self-check). */
+  readonly thread: AppSurfaces['thread'] & {
+    watchActivity(
+      target: WatchActivityTarget,
+      cb: (states: Map<string, ActivityState>) => void,
+      opts?: WatchActivityOptions,
+    ): () => void
+  }
   call<V extends AppCallVerb>(verb: V, args?: AppVerbs[V]['args']): Promise<AppVerbs[V]['value']>
   subscribe<V extends AppSubscribeVerb>(
     verb: V,
     args: AppVerbs[V]['args'],
     onFrame: (frame: AppVerbs[V]['value']) => void,
     onError?: (error: K2Error) => void,
+    opts?: SubscribeOptions,
   ): () => void
 }
 
@@ -98,7 +117,7 @@ export class K2App {
     this.WebSocketImpl = cfg.WebSocket ?? (globalThis as { WebSocket?: WebSocketCtor }).WebSocket ?? null
     this.defaultActor = this.actor({ kind: 'default' })
     this.appActor = this.actor({ kind: 'app' })
-    Object.assign(this, surfacesOf(this.defaultActor as unknown as ActorFns))
+    Object.assign(this, surfacesOf(this.defaultActor as unknown as ActorFns), { thread: this.defaultActor.thread })
   }
 
   // ── actors ─────────────────────────────────────────────────────────
@@ -214,10 +233,19 @@ export class K2App {
   private actor(cred: Cred): K2Actor {
     const a = {
       call: (verb: string, args?: unknown) => this.callAs(cred, verb, args as Record<string, unknown> | undefined),
-      subscribe: (verb: string, args: unknown, onFrame: (f: unknown) => void, onError?: (e: K2Error) => void) =>
-        this.subscribeAs(cred, verb, args as Record<string, unknown>, onFrame, onError),
+      subscribe: (verb: string, args: unknown, onFrame: (f: unknown) => void, onError?: (e: K2Error) => void, opts?: SubscribeOptions) =>
+        this.subscribeAs(cred, verb, args as Record<string, unknown>, onFrame, onError, opts),
     }
-    return Object.assign(a, surfacesOf(a)) as unknown as K2Actor
+    const out = Object.assign(a, surfacesOf(a)) as unknown as K2Actor
+    // 0.46.5 activity SDK: the Thread turn, live and right (activity.ts).
+    // A socket opened inside withGuest keeps that guest, like subscribe.
+    const thread = (out as unknown as { thread: Record<string, unknown> }).thread
+    thread.watchActivity = (target: WatchActivityTarget, cb: (states: Map<string, ActivityState>) => void, opts?: WatchActivityOptions) => {
+      const bound: Cred = cred.kind === 'default' ? { kind: 'guest', pass: this.passFor(cred, 'thread.stream') as string } : cred
+      const b = this.actor(bound) as unknown as ActivityActor
+      return watchThreadActivity(b, target, cb, opts)
+    }
+    return out
   }
 
   private row(verb: string): AppVerbRow {
@@ -280,6 +308,7 @@ export class K2App {
     args: Record<string, unknown>,
     onFrame: (f: unknown) => void,
     onError?: (e: K2Error) => void,
+    opts?: SubscribeOptions,
   ): () => void {
     const row = this.row(verb)
     const sock = row.socket
@@ -304,6 +333,7 @@ export class K2App {
         return `${this.gatewayUrl.replace(/^http/, 'ws')}${sock.path}?${q.toString()}`
       },
       onFrame,
+      onOpen: opts?.onOpen,
       onError:
         onError ??
         ((e) => {
@@ -376,4 +406,6 @@ export interface AppKeyWhoami {
 }
 
 // The surfaces are attached at runtime (one per App verb): declare them.
-export interface K2App extends AppSurfaces {}
+export interface K2App extends Omit<AppSurfaces, 'thread'> {
+  readonly thread: K2Actor['thread']
+}

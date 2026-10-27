@@ -931,8 +931,9 @@ k2.connected.then(() => {\n\
 })\n\
 ```\n\n\
 It has K2's Thread behaviour: bubbles with author and time, choice cards, Enter sends\n\
-(Shift+Enter is a new line; the text stays if K2 refuses), the working tab (state,\n\
-counters, clock, \"Sent\"), stick-to-bottom scrolling with a \"N new messages ↓\" pill,\n\
+(Shift+Enter is a new line; the text stays if K2 refuses), the working tab (the\n\
+agent's Thread turn in K2's words, with `activity:read`; no tab without it, never a\n\
+guess), stick-to-bottom scrolling with a \"N new messages ↓\" pill,\n\
 a narrow layout under 480px, and attachments (file chips, `data:` images; pass\n\
 `onOpenFile` or `renderAttachment`). Add `marked` and `dompurify` for markdown bodies.\n\
 `panel.post(text)`, `panel.setLook(look)`, `panel.close(note)`, `panel.destroy()`.\n\
@@ -943,7 +944,14 @@ Give its element a height (it fills it). Choose the look per placement with\n\
 an ⓘ: a tooltip on hover or focus, pinned by a click, tap, Enter or Space; text over 160\n\
 characters opens a popover with a title and Close (`{title}`); Esc or a tap outside\n\
 closes it. In markup: `<button class=\"k2h-btn\" data-tip=\"…\">ⓘ</button>`. Give rows\n\
-you redraw a `key` so an open tip follows its new ⓘ.\n\n",
+you redraw a `key` so an open tip follows its new ⓘ.\n\n\
+**The activity bar** (`\"k2-activity@1\"`, caps `thread:read`, `activity:read`): the bar\n\
+K2's Conversation shows, for one agent. `const bar = K2Activity.mount(el, {address:\n\
+row.address, look: 'chamfer'})`, then `bar.setAddress(a)`, `bar.destroy()`. Your own\n\
+drawing: `k2.thread.onActivity(address, ({turn}) => …)` gives the turn an App guest\n\
+gets (counts and step kinds, never text); `K2Activity.describe(K2Activity.coerce(turn,\n\
+Date.now()), Date.now())` gives K2's words. **No turn = no bar: never infer one** from\n\
+messages, timing or the agent's reply. Every live surface: `k2 study live`.\n\n",
     )
 }
 
@@ -1592,6 +1600,9 @@ mod tests {
             "\"k2-help@1\"",
             "K2Thread.mount(",
             "K2Help.tip(",
+            "K2Activity.mount(",
+            "k2.thread.onActivity(",
+            "k2 study live",
             "'chamfer'",
             "'glass'",
             "put explanations behind an ⓘ, not on the canvas",
@@ -1599,9 +1610,11 @@ mod tests {
             assert!(body.contains(want), "the k2-zen skill teaches the kit: {want:?}");
         }
         let m = stdlib::zen_lib_manifest();
-        for (id, global) in [("k2-thread", "K2Thread"), ("k2-help", "K2Help")] {
+        // 0.46.5 activity SDK: k2-thread 1.1.0 (its working tab is
+        // k2-activity@1's turn) replaces 1.0.0 in its line.
+        for (id, version, global) in [("k2-thread", "1.1.0", "K2Thread"), ("k2-help", "1.0.0", "K2Help"), ("k2-activity", "1.0.0", "K2Activity")] {
             let l = m.libs.iter().find(|l| l.id == id).unwrap_or_else(|| panic!("{id} is in zen-lib.json"));
-            assert_eq!((l.version.as_str(), l.global.as_str(), l.source), ("1.0.0", global, stdlib::LibSource::Bundled), "{id}");
+            assert_eq!((l.version.as_str(), l.global.as_str(), l.source), (version, global, stdlib::LibSource::Bundled), "{id}");
             assert_eq!(l.license, "FSL-1.1-Apache-2.0", "{id} is K2's own code");
         }
     }

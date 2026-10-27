@@ -260,7 +260,7 @@ describe('K2’s sheet outside the frame', () => {
 const { JSDOM } = createRequire(import.meta.url)('jsdom') as {
   JSDOM: new (html: string, opts: { runScripts: 'outside-only'; pretendToBeVisual: boolean }) => { window: unknown }
 }
-const THREAD = readFileSync(resolve(__dirname, '../../zen-lib/k2-thread@1.0.0/k2-thread.js'), 'utf8')
+const THREAD = readFileSync(resolve(__dirname, '../../zen-lib/k2-thread@1.1.0/k2-thread.js'), 'utf8')
 
 describe('the kit draws a permission card with one button that asks K2', () => {
   it('K2’s words, no Allow / Deny chips; the button sends thread.answer (the bridge opens the sheet)', () => {

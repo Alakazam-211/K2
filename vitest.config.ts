@@ -16,11 +16,14 @@ export default defineConfig({
     alias: {
       '@': resolve(__dirname, 'src/renderer'),
       '@shared': resolve(__dirname, 'src/shared'),
+      // 0.46.5 activity SDK: @k2/activity's core (one copy of the turn words).
+      '@k2/activity': resolve(__dirname, 'sdk/activity/src/core.ts'),
     },
   },
   test: {
     // sdk/server: the App server SDK's unit tests (runtime S23).
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'sdk/server/test/**/*.test.ts'],
+    // sdk/activity: @k2/activity, the activity SDK's core (0.46.5).
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'sdk/server/test/**/*.test.ts', 'sdk/activity/test/**/*.test.ts'],
     environment: 'node',
   },
 })

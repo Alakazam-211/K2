@@ -17,7 +17,7 @@ const { JSDOM } = createRequire(import.meta.url)('jsdom') as {
 }
 
 const LIB = resolve(__dirname, '../../zen-lib')
-const THREAD = readFileSync(resolve(LIB, 'k2-thread@1.0.0/k2-thread.js'), 'utf8')
+const THREAD = readFileSync(resolve(LIB, 'k2-thread@1.1.0/k2-thread.js'), 'utf8')
 const MARKED = readFileSync(resolve(LIB, 'marked@18.0.14/marked.umd.js'), 'utf8')
 const PURIFY = readFileSync(resolve(LIB, 'dompurify@3.4.17/purify.min.js'), 'utf8')
 
@@ -30,6 +30,7 @@ function fakeK2(opts: { caps?: string[]; postError?: string } = {}) {
   const posts: Array<[string, string]> = []
   const answers: Array<[string, string, string]> = []
   const threadSubs: Array<{ address: string; cb: (v: View) => void; live: boolean }> = []
+  const activitySubs: Array<{ address: string; h: { data(v: unknown): void }; live: boolean }> = []
   const agentSubs: Array<(rows: unknown[]) => void> = []
   let seq = 100
   const k2 = {
@@ -51,6 +52,14 @@ function fakeK2(opts: { caps?: string[]; postError?: string } = {}) {
           s.live = false
         }
       },
+      // 0.46.5: the App guest's turn (thread.onActivity, k2-thread 1.1.0).
+      onActivity: (address: string, h: { data(v: unknown): void }) => {
+        const s = { address, h, live: true }
+        activitySubs.push(s)
+        return () => {
+          s.live = false
+        }
+      },
       post: async (address: string, text: string) => {
         if (opts.postError) throw Object.assign(new Error(opts.postError), { code: opts.postError })
         posts.push([address, text])
@@ -63,8 +72,11 @@ function fakeK2(opts: { caps?: string[]; postError?: string } = {}) {
       },
     },
   }
-  return { k2, posts, answers, threadSubs, agentSubs }
+  return { k2, posts, answers, threadSubs, activitySubs, agentSubs }
 }
+
+/** k2-thread 1.1.0 needs k2-activity@1: K2 loads it first. */
+const ACTIVITY = readFileSync(resolve(LIB, 'k2-activity@1.0.0/k2-activity.js'), 'utf8')
 
 function boot(f: ReturnType<typeof fakeK2>, opts: { markdown?: boolean; scheme?: 'light' | 'dark' } = {}) {
   const dom = new JSDOM('<!doctype html><html><head></head><body><div id="t" style="height:300px"></div></body></html>', {
@@ -78,6 +90,7 @@ function boot(f: ReturnType<typeof fakeK2>, opts: { markdown?: boolean; scheme?:
     win.eval(MARKED)
     win.eval(PURIFY)
   }
+  win.eval(ACTIVITY)
   win.eval(THREAD)
   const doc = win.document
   const root = doc.getElementById('t') as HTMLElement
@@ -136,7 +149,7 @@ describe('k2-thread@1: mounting', () => {
   it('defines K2Thread once, with both looks, and injects its style once', () => {
     const f = fakeK2()
     const { win, doc } = boot(f)
-    expect(win.K2Thread.version).toBe('1.0.0')
+    expect(win.K2Thread.version).toBe('1.1.0')
     expect([...win.K2Thread.looks]).toEqual(['chamfer', 'glass'])
     win.eval(THREAD)
     expect(doc.querySelectorAll('style[data-k2-lib="k2-thread"]')).toHaveLength(1)
@@ -412,38 +425,70 @@ describe('k2-thread@1: stick-to-bottom and the new-messages pill', () => {
   })
 })
 
-describe('k2-thread@1: the working tab', () => {
-  it('shows the state, counters and clock while the agent works; "Sent" after a post', async () => {
-    const f = fakeK2()
+describe('k2-thread@1: the working tab (1.1.0: the turn from k2.thread.onActivity)', () => {
+  /** A guest turn as thread.onActivity pushes it (schema 2). */
+  const turn = (over: Record<string, unknown> = {}) => {
+    const now = Date.now()
+    return {
+      turnId: 'msg-1', rev: 3, state: 'working', phase: 'tool', phaseSince: now - 5_000, startedAt: now - 65_000, serverNow: now,
+      tally: { read: 1, search: 0, cmd: 2, edit: 0 }, subagents: 2, subagentsDone: 0, background: 0, messages: 1, waitingOn: null, end: null,
+      schema: 2, stepKind: 'cmd', childCounts: { subagent: 2, shell: 0, monitor: 0, task: 0 }, openBecause: 'lead', evidenceAt: null,
+      ...over,
+    }
+  }
+  const push = (f: ReturnType<typeof fakeK2>, t: unknown) =>
+    f.activitySubs.at(-1)!.h.data({ address: AGENT, turn: t, live: !!t, source: 'thread', fresh: 'live' })
+
+  it('shows the turn in K2’s words, counters and the clock from the turn', async () => {
+    const f = fakeK2({ caps: [...ALL, 'thread.onActivity'] })
     const { win, root, $, type, key } = boot(f)
     const p = win.K2Thread.mount(root, { address: AGENT })
     const ear = $('.k2t-ear')
     expect(ear.hidden).toBe(true)
-    type('go')
-    key('Enter')
+    expect(f.activitySubs.map((s) => s.address)).toEqual([AGENT])
+    push(f, turn())
     expect(ear.hidden).toBe(false)
-    expect(ear.getAttribute('data-tone')).toBe('pending')
-    expect(ear.textContent).toContain('Sent · waiting…')
-    await tick()
-    f.agentSubs[0]([{ address: AGENT, label: 'Ada', counts: { subagents: 2, tools: 1, commands: 0 } }])
-    f.threadSubs[0].cb(view([msg(1, 'on it')], { state: 'working', since: Date.now() - 65_000 }))
     expect(ear.getAttribute('data-tone')).toBe('working')
-    expect(ear.querySelector('.k2t-ear-label')?.textContent).toBe('Working')
+    expect(ear.querySelector('.k2t-ear-label')?.textContent).toBe('Running a command')
     expect([...ear.querySelectorAll('[data-count]')].map((t) => [t.getAttribute('data-count'), t.textContent])).toEqual([
       ['subagents', '2'],
       ['tools', '1'],
+      ['commands', '2'],
     ])
     expect(ear.querySelector('.k2t-ear-clock')?.textContent).toMatch(/^1:0[5-6]$/)
-    expect(ear.getAttribute('aria-label')).toContain('2 subagents')
+    expect(ear.getAttribute('aria-label')).toContain('Agent working')
     expect(p.state().tone).toBe('working')
-    f.threadSubs[0].cb(view([msg(1, 'on it')], { state: 'needs-you', since: Date.now() }))
+    push(f, turn({ state: 'needs-you', phase: 'waiting', waitingOn: 'owner', stepKind: null, openBecause: 'waiting' }))
     expect(ear.getAttribute('data-tone')).toBe('needs-you')
-    f.threadSubs[0].cb(view([msg(1, 'done')], null))
-    f.agentSubs[0]([{ address: AGENT, label: 'Ada' }])
+    expect(ear.querySelector('.k2t-ear-label')?.textContent).toBe('Waiting on the owner')
+    // Monitoring never pulses (no typing dots): the tab says what holds the turn.
+    push(f, turn({ rev: 9, state: 'monitoring', phase: 'children', stepKind: null, openBecause: 'children', subagents: 0, background: 1 }))
+    expect(ear.getAttribute('data-tone')).toBe('monitoring')
+    push(f, null)
+    expect(ear.hidden).toBe(true)
+    // A post never draws a guess ("Sent · waiting…" is gone).
+    type('go')
+    key('Enter')
+    await tick()
     expect(ear.hidden).toBe(true)
     p.destroy()
+    expect(f.activitySubs.every((s) => !s.live)).toBe(true)
     expect(f.threadSubs[0].live).toBe(false)
     expect(root.querySelector('.k2t')).toBeNull()
+  })
+
+  it('without activity:read there is no tab: never the workspace-wide row.working, never send timing', async () => {
+    const f = fakeK2()
+    const { win, root, $, type, key } = boot(f)
+    win.K2Thread.mount(root, { address: AGENT })
+    const ear = $('.k2t-ear')
+    type('go')
+    key('Enter')
+    await tick()
+    f.agentSubs[0]([{ address: AGENT, label: 'Ada', working: true, activity: 'working', counts: { subagents: 2, tools: 1, commands: 0 } }])
+    f.threadSubs[0].cb(view([msg(1, 'on it')], { state: 'working', since: Date.now() - 65_000 }))
+    expect(ear.hidden).toBe(true)
+    expect(f.activitySubs).toHaveLength(0)
   })
 })
 

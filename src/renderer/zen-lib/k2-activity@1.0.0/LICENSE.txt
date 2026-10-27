@@ -1,4 +1,4 @@
-K2 Thread panel (widget kit) 1.0.0 - licence texts. K2's own code (Alakazam Labs), under K2's licence.
+K2 activity bar (widget kit) 1.0.0 - licence texts. K2's own code (Alakazam Labs), under K2's licence.
 
 ==== LICENSE.md (K2) ====
 

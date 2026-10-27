@@ -1,4 +1,4 @@
-/*! k2-thread 1.0.0 (FSL-1.1-Apache-2.0), K2's widget kit: a Thread panel. Copyright 2025-2026 Alakazam Labs. */
+/*! k2-thread 1.1.0 (FSL-1.1-Apache-2.0), K2's widget kit: a Thread panel. Copyright 2025-2026 Alakazam Labs. */
 // K2Thread: talk to one of your agents inside a custom widget, in K2's
 // Thread look, with one call.
 //
@@ -871,26 +871,47 @@
       return out
     }
 
-    function toneNow() {
-      var turn = lastView && lastView.address === current.address ? lastView.turn : null
-      var row = current.address
-        ? rows.find(function (x) {
-            return x.address === current.address
-          })
-        : null
-      var tone = ''
-      var since = 0
-      if (turn && turn.state === 'needs-you') {
-        tone = 'needs-you'
-        since = turn.since
-      } else if (turn && (turn.state === 'working' || turn.state === 'monitoring')) {
-        tone = turn.state
-        since = turn.since
-      } else if (row && (row.needsYou || row.activity === 'needs-you')) tone = 'needs-you'
-      else if (row && (row.working || row.activity === 'working')) tone = 'working'
-      else if (row && row.activity === 'monitoring') tone = 'monitoring'
-      var counts = (turn && turn.counts) || (row && row.counts) || null
-      return { tone: tone, since: since, counts: counts }
+    // 1.1.0 (0.46.5 activity SDK): the tab is the agent's Thread turn from
+    // k2.thread.onActivity (caps thread:read + activity:read), in
+    // k2-activity@1's words, the ones K2's own Conversation says. It never
+    // guesses: not from the workspace-wide row.working, not from "you sent
+    // and no reply came yet". Without the cap (or the library) there is no
+    // tab at all.
+    var act = { address: null, turn: null, off: null }
+
+    function listenActivity() {
+      if (act.address === current.address) return
+      if (act.off) act.off()
+      act = { address: current.address, turn: null, off: null }
+      var A = window.K2Activity
+      if (!current.address || !A || !k2.can('thread.onActivity')) return
+      var addr = current.address
+      act.off = k2.thread.onActivity(addr, {
+        data: function (s) {
+          if (destroyed || act.address !== addr) return
+          act.turn = s && s.turn ? A.reduce(act.turn, A.coerce(s.turn, Date.now())) : null
+          paintStrip()
+        },
+        error: function () {
+          if (act.address !== addr) return
+          act.turn = null
+          paintStrip()
+        },
+      })
+    }
+
+    function toneNow(now) {
+      var A = window.K2Activity
+      if (!A || act.address !== current.address || !act.turn) return null
+      var said = A.describe(act.turn, now)
+      if (!said || said.ended) return null
+      var counts = { subagents: 0, tools: 0, commands: 0 }
+      said.counters.forEach(function (c) {
+        if (c.key === 'subagents') counts.subagents = c.count
+        else if (c.key === 'cmd') counts.commands += c.count
+        else if (c.key !== 'background') counts.tools += c.count
+      })
+      return { tone: said.tone, text: said.headline.replace(/`/g, ''), clock: said.clock, aria: said.aria, counts: counts }
     }
 
     function lastSeq() {
@@ -923,48 +944,27 @@
 
     function paintStrip() {
       if (destroyed) return
+      listenActivity()
       var now = Date.now()
-      var t = toneNow()
-      if (t.tone) {
-        sawWorking = true
-        pending = null
-      } else if (sawWorking) {
-        sawWorking = false
-        pending = null
-      }
-      if (pending && now - pending.since > PENDING_MAX_MS) pending = null
-      var tone = t.tone
-      var text = ''
-      var since = t.since
-      if (tone === 'needs-you') text = 'Needs you'
-      else if (tone === 'working') text = 'Working'
-      else if (tone === 'monitoring') text = 'Monitoring'
-      else if (pending) {
-        tone = 'pending'
-        text = 'Sent'
-        since = pending.since
-      }
+      var t = toneNow(now)
       var was = !earEl.hidden
-      if (!tone || !current.address) {
+      if (!t || !current.address) {
         earEl.hidden = true
         earEl.replaceChildren()
-        localSince = { tone: '', at: 0 }
         stopTick()
         if (was) footSize()
         return
       }
-      if (!since) {
-        if (localSince.tone !== tone) localSince = { tone: tone, at: now }
-        since = localSince.at
-      }
+      // A quiet turn (no update for a while) reads like a hollow dot.
+      var tone = t.tone === 'unverifiable' ? 'pending' : t.tone
       earEl.hidden = false
       earEl.setAttribute('data-tone', tone)
       earEl.replaceChildren()
       var dot = el('span', 'k2t-ear-dot')
       dot.setAttribute('aria-hidden', 'true')
       earEl.appendChild(dot)
-      earEl.appendChild(el('span', 'k2t-ear-label', tone === 'pending' ? text + ' · waiting…' : text))
-      var tags = tone === 'pending' ? [] : countTags(t.counts)
+      earEl.appendChild(el('span', 'k2t-ear-label', t.text))
+      var tags = countTags(t.counts)
       if (tags.length) {
         var box = el('span', 'k2t-ear-counts')
         tags.forEach(function (g) {
@@ -977,13 +977,10 @@
         })
         earEl.appendChild(box)
       }
-      var c = el('span', 'k2t-ear-clock', clock(now - since))
-      c.title = tone === 'pending' ? 'since you sent it' : 'since this turn started'
+      var c = el('span', 'k2t-ear-clock', t.clock)
+      c.title = 'since this turn started'
       earEl.appendChild(c)
-      earEl.setAttribute(
-        'aria-label',
-        text + ', ' + c.textContent + (tags.length ? ', ' + tags.map(function (g) { return g.words }).join(', ') : ''),
-      )
+      earEl.setAttribute('aria-label', t.aria)
       if (!tick) tick = setInterval(paintStrip, 1000)
       if (!was) footSize()
     }
@@ -1157,6 +1154,8 @@
         offAgents = null
       }
       destroyed = true
+      if (act.off) act.off()
+      act = { address: null, turn: null, off: null }
       stopTick()
       timers.forEach(clearInterval)
       clearTimeout(settleTimer)
@@ -1215,5 +1214,5 @@
     }
   }
 
-  window.K2Thread = Object.freeze({ version: '1.0.0', looks: LOOKS.slice(), mount: mount })
+  window.K2Thread = Object.freeze({ version: '1.1.0', looks: LOOKS.slice(), mount: mount })
 })()

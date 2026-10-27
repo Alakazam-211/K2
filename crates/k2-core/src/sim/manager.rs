@@ -152,7 +152,19 @@ struct Live {
     orientation: Option<Orientation>,
 }
 
+/// A lane's first-use install in progress (or its last result).
+#[derive(Debug, Clone, Default)]
+struct SetupState {
+    running: bool,
+    done: u64,
+    total: u64,
+    error: Option<String>,
+}
+
 pub struct Manager {
+    /// Last disk measurement and per-workspace-key device bytes.
+    disk: Mutex<Option<(SimDisk, HashMap<String, u64>)>>,
+    setup: Mutex<HashMap<LaneKind, SetupState>>,
     live: Mutex<HashMap<i64, Live>>,
     /// One operation at a time per workspace (boot / stop / erase / act).
     op_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
@@ -181,7 +193,7 @@ pub const WAIT_MAX: Duration = Duration::from_secs(120);
 
 impl Manager {
     pub fn new() -> Manager {
-        Manager { live: Mutex::new(HashMap::new()), op_locks: Mutex::new(HashMap::new()), probes: Mutex::new(HashMap::new()) }
+        Manager { disk: Mutex::new(None), setup: Mutex::new(HashMap::new()), live: Mutex::new(HashMap::new()), op_locks: Mutex::new(HashMap::new()), probes: Mutex::new(HashMap::new()) }
     }
 
     fn op_lock(&self, project_id: &str) -> Arc<Mutex<()>> {
@@ -275,7 +287,10 @@ impl Manager {
     }
 
     fn emit_state(&self, row: &SimRow, ws: &Ws) {
-        emit("sim_state", json!({ "workspace": ws.id, "workspaceHandle": ws.handle, "sim": row.wire_id(), "state": row.state, "reason": row.reason }));
+        emit(
+            "sim_state",
+            json!({ "workspace": ws.id, "workspaceHandle": ws.handle, "workspacePath": ws.path.display().to_string(), "sim": row.wire_id(), "state": row.state, "reason": row.reason }),
+        );
     }
 
     fn row(&self, ws: &Ws) -> R<Option<SimRow>> {
@@ -313,14 +328,27 @@ impl Manager {
     }
 
     pub fn status(&self, ws: &Ws, refresh: bool) -> R<StatusResp> {
-        let lanes = if refresh { self.refresh_probes() } else { self.probes() };
+        let lanes = self.probes_with_setup(refresh);
         let db = crate::db::shared();
         let conn = db.lock();
         let row = store::by_project(&conn, &ws.id)?;
         let running = store::count_occupying(&conn, None)?;
         let agents_allowed = store::agents_can_use_sim(&conn, &ws.id);
         drop(conn);
-        Ok(StatusResp { lanes, sim: row.as_ref().map(|r| self.view(r, ws)), running, limits: limits::current(), agents_allowed })
+        let disk = self.disk.lock().clone().map(|(mut d, per_key)| {
+            let key = super::workspace_key(&ws.id);
+            d.this_device = per_key.get(&key).copied().unwrap_or(0);
+            d
+        });
+        Ok(StatusResp {
+            lanes,
+            sim: row.as_ref().map(|r| self.view(r, ws)),
+            running,
+            limits: limits::current(),
+            agents_allowed,
+            can_control: false,
+            disk,
+        })
     }
 
     pub fn devices(&self, platform: Option<&str>) -> R<DevicesResp> {
@@ -415,7 +443,10 @@ impl Manager {
                 });
                 self.emit_state(&row, ws);
                 if !req.no_tab {
-                    emit("open_mobile", json!({ "workspace": ws.id, "workspaceHandle": ws.handle, "sim": row.wire_id() }));
+                    emit(
+                        "open_mobile",
+                        json!({ "workspace": ws.id, "workspaceHandle": ws.handle, "workspacePath": ws.path.display().to_string(), "sim": row.wire_id() }),
+                    );
                 }
                 Ok(self.view(&row, ws))
             }
@@ -885,10 +916,9 @@ impl Manager {
         }
         self.touch(&row);
         let v = self.view(&row, ws);
-        emit("sim_hold", json!({ "workspace": ws.id, "sim": row.wire_id(), "hold": v.hold }));
-        if changed && action == HoldAction::HandBack {
-            emit("sim_handback", json!({ "workspace": ws.id, "workspaceHandle": ws.handle, "sim": row.wire_id(), "message": "The person handed the device back. Run `k2 sim tree` before acting." }));
-        }
+        // After a hand-back the agent's next input is refused once with
+        // "run `k2 sim tree` first" (hold.rs), which is how it is told.
+        emit("sim_hold", json!({ "workspace": ws.id, "workspaceHandle": ws.handle, "sim": row.wire_id(), "hold": v.hold }));
         Ok(v)
     }
 
@@ -931,6 +961,156 @@ impl Manager {
 
     pub fn frames(&self, row: &SimRow, opts: FrameOpts) -> R<Box<dyn FrameSource>> {
         Ok(Self::lane_of(row)?.frames(&Self::dev(row), opts)?)
+    }
+
+    // ── owner setup: licence + first-use install ─────────────────────
+
+    pub fn licence(&self, lane: LaneKind, id: &str) -> R<LicenceText> {
+        let l = super::lane(lane).ok_or_else(|| SimError::new(404, "sim_unavailable", format!("no {lane} lane here")))?;
+        Ok(l.licence(id)?)
+    }
+
+    /// The box owner's setup (the card, Settings, or the owner token):
+    /// record the accepted licence (bound to its text's sha1), then run the
+    /// lane's first-use install in the background. `by` must already be
+    /// checked to be the owner (owner token or an Owner login); agents
+    /// never reach this (M-A23).
+    pub fn start_setup(&self, lane_kind: LaneKind, accept: Option<(&str, &str)>, by: &str) -> R<()> {
+        let lane = super::lane(lane_kind).ok_or_else(|| SimError::new(404, "sim_unavailable", format!("no {lane_kind} lane here")))?;
+        let probe = lane.probe();
+        if !probe.usable {
+            return Err(SimError::new(503, "sim_unavailable", probe.detail.unwrap_or_else(|| format!("the {lane_kind} lane can't run here"))));
+        }
+        for need in &probe.needs {
+            if let LaneNeed::Licence { id, .. } = need {
+                let text = lane.licence(id)?;
+                match accept {
+                    Some((aid, sha)) if aid == id && sha == text.sha1 => {
+                        super::licence::record(super::licence::Accepted {
+                            lane: lane_kind,
+                            id: id.clone(),
+                            sha1: text.sha1.clone(),
+                            by: by.to_string(),
+                            at: now(),
+                        })
+                        .map_err(|e| SimError::new(500, "sim_io", e))?;
+                        let db = crate::db::shared();
+                        let conn = db.lock();
+                        store::audit(&conn, now(), by, None, Some(lane_kind), "licence_accept", json!({ "licence": id, "sha1": text.sha1 }));
+                    }
+                    Some((aid, sha)) if aid == id => {
+                        return Err(SimError::new(
+                            409,
+                            "sim_licence_changed",
+                            format!("the {id} text changed since the card was shown (now {}, card {sha}). Read it again and accept the new text.", text.sha1),
+                        ));
+                    }
+                    _ => {
+                        let mut e = SimError::new(
+                            409,
+                            "sim_needs_setup",
+                            format!("the server's owner must accept \"{}\" first (licence {id}, sha1 {})", text.title, text.sha1),
+                        )
+                        .exit(3);
+                        e.needs = probe.needs.clone();
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        {
+            let mut s = self.setup.lock();
+            if s.get(&lane_kind).is_some_and(|x| x.running) {
+                return Ok(());
+            }
+            s.insert(lane_kind, SetupState { running: true, ..Default::default() });
+        }
+        let accepted = super::licence::accepted_ids(lane_kind);
+        let by = by.to_string();
+        std::thread::Builder::new()
+            .name(format!("k2-sim-setup-{lane_kind}"))
+            .spawn(move || {
+                let m = manager();
+                let progress = |done: u64, total: u64| {
+                    let mut s = m.setup.lock();
+                    if let Some(st) = s.get_mut(&lane_kind) {
+                        st.done = done;
+                        st.total = total;
+                    }
+                };
+                let t0 = Instant::now();
+                let res = lane.install(&accepted, &progress);
+                let err = res.as_ref().err().map(|e| crate::redaction::redact(e.message()));
+                {
+                    let mut s = m.setup.lock();
+                    if let Some(st) = s.get_mut(&lane_kind) {
+                        st.running = false;
+                        st.error = err.clone();
+                    }
+                }
+                let db = crate::db::shared();
+                let conn = db.lock();
+                store::audit(
+                    &conn,
+                    now(),
+                    &by,
+                    None,
+                    Some(lane_kind),
+                    if err.is_none() { "setup" } else { "setup_failed" },
+                    json!({ "secs": t0.elapsed().as_secs(), "error": err }),
+                );
+                drop(conn);
+                m.refresh_probes();
+                emit("sim_state", json!({ "lane": lane_kind, "state": if err.is_none() { "setup-done" } else { "setup-failed" } }));
+            })
+            .map_err(|e| SimError::new(500, "sim_io", format!("spawn setup: {e}")))?;
+        Ok(())
+    }
+
+    /// Probes with any running setup's progress folded into `detail`.
+    pub fn probes_with_setup(&self, refresh: bool) -> Vec<LaneProbe> {
+        let mut v = if refresh { self.refresh_probes() } else { self.probes() };
+        let s = self.setup.lock();
+        for p in &mut v {
+            if let Some(st) = s.get(&p.lane) {
+                if st.running {
+                    p.ready = false;
+                    p.detail = Some(if st.total > 0 {
+                        format!("installing: {}% of {:.1} GB", st.done * 100 / st.total.max(1), st.total as f64 / 1e9)
+                    } else {
+                        "installing…".to_string()
+                    });
+                } else if let Some(e) = &st.error {
+                    p.detail = Some(format!("the last setup failed: {e}"));
+                }
+            }
+        }
+        v
+    }
+
+    /// Measure `~/.k2/sim` (tools vs device data, per lane). Walks the
+    /// tree, so the daemon runs it on a slow timer (every 10 min) and after
+    /// setup / erase, never per request.
+    pub fn measure_disk(&self) -> SimDisk {
+        let mut d = SimDisk { measured_at: now(), ..Default::default() };
+        let mut per_key = HashMap::new();
+        for l in super::lanes() {
+            let root = super::sim_home().join(l.kind().as_str());
+            let devices = root.join("devices");
+            let total = dir_size(&root);
+            let mut dev_total = 0u64;
+            if let Ok(rd) = std::fs::read_dir(&devices) {
+                for e in rd.flatten() {
+                    let n = dir_size(&e.path());
+                    dev_total += n;
+                    per_key.insert(e.file_name().to_string_lossy().to_string(), n);
+                }
+            }
+            d.tools.push((l.kind(), total.saturating_sub(dev_total)));
+            d.devices.push((l.kind(), dev_total));
+        }
+        *self.disk.lock() = Some((d.clone(), per_key));
+        d
     }
 
     // ── background: adopt, reaper ────────────────────────────────────

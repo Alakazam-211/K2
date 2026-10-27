@@ -498,6 +498,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // Changes tab v1.1 (C5): app-level too; clients filter themselves.
         SessionEvent::GitNotesChanged { .. } => None,
         SessionEvent::OpenChanges { .. } => None,
+        // Mobile dev (0.46.6): app-level; clients match the workspace.
+        SessionEvent::SimState { .. } | SessionEvent::OpenMobile { .. } | SessionEvent::SimHold { .. } => None,
         // Room-scope R9/R16 (0.46.1) — APP-LEVEL refetch signals for owner
         // clients; Apps get them per room on the activity socket.
         SessionEvent::RoomMembersChanged { .. } => None,
@@ -907,6 +909,9 @@ mod tests {
             },
             SessionEvent::GitNotesChanged { workspace_path: "/x/foo".into() },
             SessionEvent::OpenChanges { workspace_path: "/x/foo".into() },
+            SessionEvent::SimState { payload: Default::default() },
+            SessionEvent::OpenMobile { payload: Default::default() },
+            SessionEvent::SimHold { payload: Default::default() },
             SessionEvent::RoomMembersChanged { room: None },
             SessionEvent::AppDeployed {
                 app_id: "jobs".into(),

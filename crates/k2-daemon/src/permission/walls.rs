@@ -102,7 +102,7 @@ const IN_SETTINGS: &str = "a person with the owner role does this, in Settings o
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 30] = [
+pub(crate) const V1_ACTIONS: [&str; 31] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -137,6 +137,8 @@ pub(crate) const V1_ACTIONS: [&str; 30] = [
     "zen.sign-off",
     // 0.46.5 (prd-compute-job-tiers-v1 T13): CI jobs on one node.
     "compute.ci",
+    // 0.46.6 (prd-mobile-dev-v1 M-A12): "Allow mobile devices".
+    "sim.use",
 ];
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
@@ -166,6 +168,8 @@ pub(crate) const ROWS: &[Row] = &[
     // ── agents, projects ───────────────────────────────────────────────
     row(ask("agents.manage", Floor::Admin), code(403, "gated"), "/cli/sidecar/", ANY),
     row(ask("projects.manage", Floor::Admin), code(403, "agent_permission_off"), "/cli/", ANY),
+    // ── mobile devices (0.46.6) ────────────────────────────────────────
+    row(ask("sim.use", Floor::Admin), code(403, "sim_switch_off"), "/cli/sim/", ANY),
     // ── Apps ───────────────────────────────────────────────────────────
     row(ask("apps.build", Floor::Owner), code(403, "apps_manage_off"), "/cli/", ANY),
     // App users (0225): the skin-manage door's refusal on a user route.
@@ -877,7 +881,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 30);
+        assert_eq!(V1_ACTIONS.len(), 31);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

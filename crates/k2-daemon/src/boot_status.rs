@@ -1025,6 +1025,13 @@ pub fn features() -> Vec<&'static str> {
     if k2_core::permission::gate::server_on() {
         out.push(k2_core::permission::FEATURE_KEY);
     }
+    // Mobile dev (prd-mobile-dev-v1 M-A13, 0.46.6): `mobile-sim-v1` only
+    // while at least one device lane can run here (probes cached at boot;
+    // `/cli/sim/status` lists the lanes). Clients hide + → Mobile and ⌘⇧M
+    // without it.
+    if let Some(k) = crate::sim_routes::boot_status_key() {
+        out.push(k);
+    }
     // Last on purpose: boot_status_views_integration pins it as the tail.
     out.push(FEATURE_BOOT_STATUS_VIEWS);
     out

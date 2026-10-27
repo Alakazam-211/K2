@@ -654,4 +654,24 @@ pub trait SimLane: Send + Sync + 'static {
     fn alive(&self, dev: &DeviceRef) -> bool {
         matches!(self.adopt(dev), Ok(Some(_)))
     }
+
+    /// The text of a licence named in a [`LaneNeed::Licence`], for the
+    /// owner's card. Default: this lane has none. (Added after the S1
+    /// stub; a default method, so existing lanes need no change.)
+    fn licence(&self, id: &str) -> Result<LicenceText, LaneError> {
+        Err(LaneError::unsupported(format!("the {} lane has no licence '{id}'", self.kind())))
+    }
+}
+
+/// A licence the box owner reads and accepts on a card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LicenceText {
+    pub id: String,
+    pub title: String,
+    pub text: String,
+    /// sha1 of `text` (trimmed): acceptance binds to this exact text.
+    pub sha1: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }

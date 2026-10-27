@@ -123,6 +123,31 @@ pub struct StatusResp {
     pub limits: Limits,
     /// The agent switch "Allow mobile devices" for this workspace.
     pub agents_allowed: bool,
+    /// May THIS caller send input / take over (B's ask, after the stub)?
+    /// The owner token, a shell tab and Owner/Admin logins: yes; Member
+    /// logins watch only (Rosson 2026-10-27); agents use `k2 sim` verbs,
+    /// not the tab, so false.
+    #[serde(default)]
+    pub can_control: bool,
+    /// Disk used by mobile dev on this server (measured by the reaper
+    /// sweep; `None` until the first sweep). Added after the S1 stub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk: Option<SimDisk>,
+}
+
+/// Bytes under `~/.k2/sim` (PRD §3.5: SDK + image ≈ 4.4 GB, a device
+/// ≈ 1.5 GB plus a ≈ 2 GB Quick Boot snapshot, S0).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimDisk {
+    /// Tools and system images, per lane (`android` → bytes).
+    pub tools: Vec<(LaneKind, u64)>,
+    /// Every workspace's device data, per lane.
+    pub devices: Vec<(LaneKind, u64)>,
+    /// This workspace's device data (`erase` frees it).
+    pub this_device: u64,
+    /// When it was measured (seconds since the epoch).
+    pub measured_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

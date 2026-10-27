@@ -24,6 +24,7 @@ pub mod encode;
 pub mod fake;
 pub mod hold;
 pub mod lane;
+pub mod licence;
 pub mod limits;
 pub mod manager;
 pub mod store;

@@ -27,8 +27,12 @@ pub enum HoldView {
     Free,
     /// A person is tapping; free again in `ms`.
     Person { by: String, ms: u64 },
-    /// Taken over until Hand back (or idle timeout in `idle_ms`).
-    Takeover { by: String, idle_ms: u64 },
+    /// Taken over until Hand back (or idle timeout in `idleMs`).
+    Takeover {
+        by: String,
+        #[serde(rename = "idleMs")]
+        idle_ms: u64,
+    },
 }
 
 /// Why the agent may not act right now.

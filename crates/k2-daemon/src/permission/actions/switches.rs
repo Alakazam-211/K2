@@ -267,7 +267,7 @@ const LEVEL: &[ParamSpec] =
 
 /// The Agent tab's switches, in Settings order. Index = the const generic
 /// of [`check_on`] / [`apply_on`] and their twins.
-pub(crate) static SWITCHES: [Switch; 16] = [
+pub(crate) static SWITCHES: [Switch; 17] = [
     Switch {
         on: on_spec(
             "compute.use",
@@ -627,6 +627,30 @@ pub(crate) static SWITCHES: [Switch; 16] = [
         ),
         writer: Writer::DbAccess,
     },
+    // 0.46.6 (prd-mobile-dev-v1 M-A12): "Allow mobile devices" (0233,
+    // off by default). The licence stays the box owner's (M-A23).
+    Switch {
+        on: on_spec(
+            "sim.use",
+            "sim.use-off",
+            Floor::Admin,
+            &[],
+            "Allow mobile devices",
+            "Let {ws} boot and drive an Android emulator or iOS Simulator on this server",
+            "It may run one device for its own workspace, within the server's device limits. People can watch and take over at any time.",
+            &[code_wall("sim_switch_off", "/cli/sim/")],
+            WallCoverage::Code,
+        ),
+        off: off_spec(
+            "sim.use-off",
+            Floor::Admin,
+            &[],
+            "Allow mobile devices",
+            "Stop {ws} using mobile devices",
+            "Its running device keeps running until it is stopped or idles out; new device commands are refused.",
+        ),
+        writer: Writer::Access("sim"),
+    },
 ];
 
 // ── state and apply, per writer ─────────────────────────────────────
@@ -660,6 +684,12 @@ fn is_on(sw: &Switch, ctx: &Ctx, want_on: bool) -> Result<bool, String> {
             Ok(crate::apps::access::level(ws) >= crate::apps::access::Level::Build)
         }
         Writer::Access("app_users") => path().map(|_| k2_core::workspace::settings::agents_can_manage_app_users(ws)),
+        Writer::Access("sim") => {
+            path()?;
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            Ok(k2_core::sim::store::agents_can_use_sim(&conn, ws))
+        }
         Writer::Access("apps_manage_full") => {
             path()?;
             let level = crate::apps::access::level(ws);
@@ -774,7 +804,7 @@ macro_rules! register {
 }
 
 pub(crate) fn actions() -> Vec<Registered> {
-    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
 }
 
 // ── not card-able (§5.4, §9) ────────────────────────────────────────

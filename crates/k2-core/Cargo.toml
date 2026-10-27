@@ -229,10 +229,13 @@ tungstenite = "0.24"
 # Android emulator's loopback controller (sim::android::grpc). Hand-written
 # prost messages over h2: no tonic, no protoc. All four are already in the
 # lockfile (reqwest/hyper pull h2, http and bytes; prost 0.13 is there).
-h2 = "0.4"
-http = "1"
-bytes = "1"
-prost = "0.13"
+h2 = "=0.4.19"     # MIT
+http = "=1.4.0"    # MIT OR Apache-2.0
+bytes = "=1.11.1"  # MIT
+prost = "=0.13.5"  # Apache-2.0
+# Android SDK repository archives publish sha1 only (S0), and sdkmanager's
+# licence-text hash is sha1. Already in the lockfile.
+sha1 = "=0.10.6"   # MIT OR Apache-2.0
 # The VALIDATE stage's JS/TS parser (decision-k2-runtime-v1 §5, stage 0):
 # oxc parses Garden widget and App code in-process and its semantic pass
 # reports the early errors a browser throws as SyntaxError. MIT. Pinned

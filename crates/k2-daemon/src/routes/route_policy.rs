@@ -1317,6 +1317,28 @@ pub const ROUTES: &[Route] = &[
     get("/cli/sidecar/list", Member),
     post("/cli/sidecar/new", Admin),
     post("/cli/sidecar/stop", Admin),
+    // Mobile dev (prd-mobile-dev-v1 §8, 0.46.6): Members drive devices for
+    // workspaces they can open (remote Members watch only applies to the
+    // stream's input, Rosson 2026-10-27); the owner's licence setup is
+    // Owner; the device limits are Admin to write.
+    post("/cli/sim/act", Member),
+    post("/cli/sim/boot", Member),
+    get("/cli/sim/devices", Member),
+    post("/cli/sim/erase", Member),
+    post("/cli/sim/hold", Member),
+    post("/cli/sim/install", Member),
+    post("/cli/sim/launch", Member),
+    get("/cli/sim/licence", Member),
+    get("/cli/sim/logs", Member),
+    post("/cli/sim/screenshot", Member),
+    split("/cli/sim/settings", Member, Admin),
+    post("/cli/sim/setup", Owner),
+    get("/cli/sim/status", Member),
+    post("/cli/sim/stop", Member),
+    get("/cli/sim/stream", Member),
+    post("/cli/sim/terminate", Member),
+    get("/cli/sim/tree", Member),
+    post("/cli/sim/wait", Member),
     post("/cli/skill-layers/create", Member),
     post("/cli/skill-layers/delete", Member),
     get("/cli/skill-layers/get-content", Member),

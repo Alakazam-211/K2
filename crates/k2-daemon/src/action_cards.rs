@@ -50,6 +50,8 @@ pub fn run(action: &CardAction, answer: &str, by: &str) -> Result<J, String> {
         crate::folder_trust::CARD_ACTION => crate::folder_trust::run_card(&action.params, answer, by),
         // agent-app-users §5.5: a tied person's access waits for a reset.
         crate::app_user_invites::CARD_ACTION => crate::app_user_invites::run_card(&action.params, answer, by),
+        // Mobile dev (M-A23): the box owner accepts a device lane's licence.
+        crate::sim_routes::CARD_ACTION => crate::sim_routes::run_card(&action.params, answer, by),
         other => Err(format!("K2 doesn't know the card action '{other}'")),
     }
 }

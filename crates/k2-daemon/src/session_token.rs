@@ -651,6 +651,23 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // Thread post plus the same wake + inject a person's post gets.
         "/cli/browser/notes",
         "/cli/browser/notes/redeliver",
+        // Mobile dev (prd-mobile-dev-v1 §4, 0.46.6): `k2 sim` on the
+        // agent's OWN workspace's device, gated in `sim_routes` by
+        // "Allow mobile devices" (0233, default off). Not here (people
+        // only): /cli/sim/hold, /setup, /settings, /licence, /stream.
+        "/cli/sim/status",
+        "/cli/sim/devices",
+        "/cli/sim/boot",
+        "/cli/sim/stop",
+        "/cli/sim/erase",
+        "/cli/sim/install",
+        "/cli/sim/launch",
+        "/cli/sim/terminate",
+        "/cli/sim/tree",
+        "/cli/sim/act",
+        "/cli/sim/screenshot",
+        "/cli/sim/logs",
+        "/cli/sim/wait",
         // C1 (0.40.45): workspace connections list/add/remove. Mutate is
         // further gated by agents_can_create_connections_for_path (owner
         // always bypasses; agents need the effective toggle ON). List is

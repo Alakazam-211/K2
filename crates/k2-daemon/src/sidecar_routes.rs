@@ -1385,11 +1385,12 @@ fn handle_access(
         && toggle != "db_upgrade"
         && toggle != "permission_cards"
         && toggle != "app_users"
+        && toggle != "sim"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'app_users', 'gardens_manage', 'permission_cards', 'projects_manage' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'app_users', 'gardens_manage', 'permission_cards', 'projects_manage', 'sim' or 'vault_manage'",
         ));
     }
     if toggle == "app_core" || toggle == "app_review" {
@@ -1423,6 +1424,30 @@ fn handle_access(
         _ => return Err(err("bad_request", 400, "value must be true or false")),
     };
     let ws = target_workspace(caller, str_field(&v, "workspace"))?;
+    if toggle == "sim" {
+        // Mobile dev (prd-mobile-dev-v1 §8, M-A11, 0233): "Allow mobile
+        // devices". Off by default (Rosson 2026-10-27); Owner/Admin flip
+        // it (route floor Admin); a passport never reaches here.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::sim::store::set_agents_can_use_sim(&conn, &ws.id, value).map_err(|e| err("workspace_not_found", 404, e))?;
+            k2_core::sim::store::audit(
+                &conn,
+                chrono::Utc::now().timestamp(),
+                &caller.audit_user(),
+                Some(&ws.id),
+                None,
+                if value { "agent_sim_on" } else { "agent_sim_off" },
+                serde_json::json!({}),
+            );
+        }
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"sim": "agent_access"}));
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "sim", "agentsCanUseSim": value }),
+            format!("ok {} sim={value}", ws.handle),
+        ));
+    }
     if toggle == "compute" {
         // K2 compute nodes (CN20; Rosson 2026-10-11): the Agent tab's
         // "Allow compute nodes" is the single control. Written only here

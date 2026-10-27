@@ -986,6 +986,15 @@ mod unix_impl {
                 let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
                 from_cli(crate::llm_accounts_routes::handle(p, caller, body, params, "cell"))
             }
+            // Mobile dev (0.46.6): `k2 sim` from an agent's own cell. The
+            // handler checks the workspace and the agent switch.
+            p if crate::sim_routes::is_route(p) => {
+                if body.len() > crate::sim_routes::MAX_BODY {
+                    return from_cli(crate::sim_routes::too_large());
+                }
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                from_cli(crate::sim_routes::handle(p, caller, is_post, body, params))
+            }
             // App users' wallets (0.46.3), the owner side, over the cell
             // socket: the same handler and gate as the main port. A passport
             // (agent or K2 shell tab) reaches `settings` only, for an App its

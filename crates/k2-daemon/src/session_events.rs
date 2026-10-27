@@ -879,6 +879,39 @@ pub enum SessionEvent {
         workspace_path: String,
     },
 
+    /// Mobile dev (prd-mobile-dev-v1, 0.46.6): a workspace's device changed
+    /// state (`installing` / `booting` / `running` / `stopping` /
+    /// `stopped` / `failed` / `erased`). APP-LEVEL; clients refetch
+    /// `GET /cli/sim/status` for that workspace.
+    ///
+    /// Wire: `{ "kind": "sim_state", "workspace", "workspaceHandle",
+    /// "workspacePath", "sim", "state", "reason" }`.
+    SimState {
+        #[serde(flatten)]
+        payload: serde_json::Map<String, serde_json::Value>,
+    },
+
+    /// Mobile dev (M-A10): `k2 sim boot` without `--no-tab` asks clients
+    /// showing that workspace to open (or focus) its Mobile tab. APP-LEVEL;
+    /// a window acts only when its room shows `workspacePath`.
+    ///
+    /// Wire: `{ "kind": "open_mobile", "workspace", "workspaceHandle",
+    /// "workspacePath", "sim" }`.
+    OpenMobile {
+        #[serde(flatten)]
+        payload: serde_json::Map<String, serde_json::Value>,
+    },
+
+    /// Mobile dev (§5): who holds a device changed (a person's tap, Take
+    /// over, Hand back, a take-over timing out). APP-LEVEL.
+    ///
+    /// Wire: `{ "kind": "sim_hold", "workspace", "sim", "hold": {kind,
+    /// by?, ms? | idleMs?} }`.
+    SimHold {
+        #[serde(flatten)]
+        payload: serde_json::Map<String, serde_json::Value>,
+    },
+
     /// Room-scope R9 (0.46.1): a room's access list may have changed (a
     /// grant, role or guest change, or the owner's hide-names switch).
     /// APP-LEVEL refetch signal for owner clients (Settings, Gardens); the
@@ -1103,6 +1136,9 @@ impl SessionEvent {
             SessionEvent::GitChanged { .. } => "git_changed",
             SessionEvent::GitNotesChanged { .. } => "git_notes_changed",
             SessionEvent::OpenChanges { .. } => "open_changes",
+            SessionEvent::SimState { .. } => "sim_state",
+            SessionEvent::OpenMobile { .. } => "open_mobile",
+            SessionEvent::SimHold { .. } => "sim_hold",
             SessionEvent::RoomMembersChanged { .. } => "room_members_changed",
             SessionEvent::AppDeployed { .. } => "app_deployed",
             SessionEvent::ThreadRead(_) => "thread_read",
@@ -1399,6 +1435,26 @@ pub fn emit_open_changes(workspace_path: &str) {
         return;
     }
     let _ = emit(SessionEvent::OpenChanges { workspace_path: workspace_path.to_string() });
+}
+
+/// Mobile dev: the sim manager's event hook (`k2_core::sim::manager`):
+/// `sim_state`, `open_mobile`, `sim_hold`. Unknown kinds are dropped
+/// loudly in the log (a new kind needs a variant and a registry row).
+pub fn emit_sim(kind: &str, payload: serde_json::Value) {
+    let serde_json::Value::Object(payload) = payload else {
+        k2_core::log_debug!("[sim] WARN event {kind} payload is not an object");
+        return;
+    };
+    let ev = match kind {
+        "sim_state" => SessionEvent::SimState { payload },
+        "open_mobile" => SessionEvent::OpenMobile { payload },
+        "sim_hold" => SessionEvent::SimHold { payload },
+        other => {
+            k2_core::log_debug!("[sim] WARN unknown sim event kind {other}");
+            return;
+        }
+    };
+    let _ = emit(ev);
 }
 
 /// Path-boundary match shared by list-for-workspace and the workspace

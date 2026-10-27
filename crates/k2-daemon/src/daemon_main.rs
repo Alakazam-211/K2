@@ -1697,6 +1697,9 @@ async fn async_main() {
     crate::garden_data::start();
     // Local Grok Bots (0.45.7): idle unless Show is on.
     crate::grokbots_watch::start();
+    // Mobile dev (prd-mobile-dev-v1, 0.46.6): device lanes, re-adopt
+    // recorded devices, and the idle / data reaper. Headless like the rest.
+    crate::sim_routes::start();
 
     // Heartbeat S3 wait pass (HB18/HB22): fills every row's stored
     // next_fire_at + wait_reason at boot, then runs the overdue

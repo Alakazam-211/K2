@@ -61,7 +61,7 @@ YOUR APP UNDER A RE-HOST (two copies run for a while)
   Schema changes: expand first, contract in a later deploy.
   0.46.4 manifest keys: host.sessions memory|sealed|none, host.overlap
   handover, host.health.readyPath (probed once, logged, never a gate).
-  K2 <K2_CLI_VERSION> and older refuse a Seed that uses them.
+  K2 0.46.3 and older refuse a Seed that uses them.
 
 AFTER A K2 UPDATE (the App's agent)
   1. k2 app rehost status <app>: done, or deferred/failed and why.

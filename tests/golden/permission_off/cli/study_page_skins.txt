@@ -450,7 +450,7 @@ AGENT WORKING (activity:read)
   Errors: 400 missing workspace | 403 skin_room (room not on the pass) |
   403 missing capability activity:read. Never the host-wide snapshot.
 
-THREAD EAR (thread:read + activity:read; K2 <K2_CLI_VERSION>+, thread-activity-ear-v1)
+THREAD EAR (thread:read + activity:read; K2 0.46.3+, thread-activity-ear-v1)
   activity:read gives both this ear and AGENT WORKING above; no new cap.
   The room's pinned-Chat Thread turn while the agent works on a Thread
   message (anyone's: a guest's or the owner's). Counts only. Never a turn
@@ -461,7 +461,7 @@ THREAD EAR (thread:read + activity:read; K2 <K2_CLI_VERSION>+, thread-activity-e
   OPT-IN: the sockets send ear frames only when opened with ear=1. The
   App SDK's thread.stream adds it; its thread.events never does (every
   frame there stays a Thread item with a doc). Without ear=1 a socket
-  gets exactly the frames it got before <K2_CLI_VERSION>. The GET needs no opt-in.
+  gets exactly the frames it got before 0.46.3. The GET needs no opt-in.
   Catch-up: {"ok":true,"addr":"<handle>","conversation_id":"<id>",
              "turn":{…}|null}
   Live state comes from the socket (thread.stream, ?ear=1); call the GET

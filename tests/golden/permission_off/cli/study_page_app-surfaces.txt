@@ -45,7 +45,7 @@ AN APP'S ROOMS AND GUESTS (0.46.4; the App's own pass, never a guest's)
   Login without the owner token: grant once, app.rooms + guests.list at
   boot, guests.login, guests.setRooms (k2 study app-move).
 
-PROJECT CHAT (<K2_CLI_VERSION>, App only; never on the Garden bridge)
+PROJECT CHAT (0.46.3, App only; never on the Garden bridge)
   A pass sees a project only when EVERY member agent is a room it holds
   with thread:read; one it can't reach and the project is skin_room, the
   same as one that doesn't exist. Posting also needs project:write in

@@ -52,7 +52,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   agent-hire          Apps hire agents/teams with a hire key; links; k2 msg who
   garden-data         A widget's data: k2 store --widget, grants, revs, export
   garden-access       Who may edit a Garden: the list, asking, signing, History
-  garden-changes      Gardens in <K2_CLI_VERSION>: what's retired, what to update before 0.47.0
+  garden-changes      Gardens in 0.46.3: what's retired, what to update before 0.47.0
   changes             Git changes (the Changes tab): your own workspace; discard = Trash
   design              Design notes from a page: the shape, k2 browser note, answer in Thread
   folder-trust        Folder trust: the card, asking vs deciding, re-scan, honest limits

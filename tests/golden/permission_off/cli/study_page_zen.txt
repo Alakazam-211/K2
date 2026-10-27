@@ -50,11 +50,11 @@ THE WIDGET DEV LOOP (keep your widget outside ~/.k2)
 THE WIDGET SDK
   Refusals are K2Errors with a code and retryable. Subscribe with a handler
   object ({data, error, state}) and K2 re-subscribes after a retryable
-  refusal; since <K2_CLI_VERSION> k2.sources.subscribe(addr, cb, onError) does too.
+  refusal; since 0.46.3 k2.sources.subscribe(addr, cb, onError) does too.
   Light/dark follow the Garden, never the OS (--zen-*, [data-zen-scheme];
   manifest "colorScheme": "own" opts out). Charts: requires.libs uplot@1 (k2 zen guide libs).
 
-THE WIDGET KIT (<K2_CLI_VERSION>): don't hand-build these, require them
+THE WIDGET KIT (0.46.3): don't hand-build these, require them
   "k2-thread@1"  K2Thread.mount(el, {look: 'chamfer' | 'glass', address})
                  a Thread panel: bubbles, Enter sends, the working tab, the
                  new-messages pill. chamfer = K2's Thread; glass = Companion.

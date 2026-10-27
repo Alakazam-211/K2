@@ -17,7 +17,15 @@
 # no ~/.k2, no keychain.
 #
 # Normalizer (documented; it never drops a line or a field):
-#   * the CLI version string (K2_CLI_VERSION, bumped by release.sh) → <K2_CLI_VERSION>
+#   * the CLI's OWN version (K2_CLI_VERSION, bumped by release.sh) → <K2_CLI_VERSION>,
+#     only where the CLI prints it as its version: `k2 --schema`'s top-level
+#     `"version": "…"` field and a `k2 <version>` line. Prose that names a
+#     release ("FILES (0.46.4, App only…)", "Gardens in 0.46.3") stays
+#     literal, so a release.sh bump never moves a golden (0.46.5: the old
+#     blanket replace turned whichever release matched the current version
+#     into the placeholder, and 32 pages broke on every bump).
+#     tests/cli/permission_off_golden_version_bump.sh proves it: the same
+#     goldens pass against a copy of the CLI with a fake version.
 #   * the stub's ephemeral port → <PORT>
 #   * the sandbox path → <SANDBOX>
 #   * percent-escapes → upper case (macOS and Linux encoders differ in case
@@ -40,7 +48,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+# PERMISSION_GOLDEN_CLI: run another copy of the CLI against the same
+# goldens (the version-bump test uses it). Default: this checkout's cli/k2.
+K2="${PERMISSION_GOLDEN_CLI:-$PROJECT_ROOT/cli/k2}"
 GOLDEN="$PROJECT_ROOT/tests/golden/permission_off/cli"
 BLESS="${PERMISSION_GOLDEN_BLESS:-0}"
 
@@ -140,7 +150,10 @@ t = "\n".join(lines)
 t = re.sub(r"%[0-9a-fA-F]{2}", lambda m: m.group(0).upper(), t)
 for form in (sandbox, quote(sandbox, safe="")):
     t = t.replace(form, "<SANDBOX>")
-t = t.replace(ver, "<K2_CLI_VERSION>")
+# The CLI own version, only where it is printed AS the version (see the
+# header): never in prose that names a release.
+t = re.sub(r"(?m)^(  \"version\": \")" + re.escape(ver) + r"(\",)$", r"\1<K2_CLI_VERSION>\2", t)
+t = re.sub(r"(?m)^k2 " + re.escape(ver) + r"$", "k2 <K2_CLI_VERSION>", t)
 t = re.sub(r"(?<![0-9])" + re.escape(port) + r"(?![0-9])", "<PORT>", t)
 t = re.sub(r"curl/[0-9][0-9.]*", "curl/<VERSION>", t)
 t = re.sub(r"Python-urllib/[0-9][0-9.]*", "Python-urllib/<VERSION>", t)

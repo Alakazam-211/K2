@@ -98,7 +98,7 @@ LIVE MOVES (0.46.4, the owner's for now)
   new DSN still pays its own boot time.
   Older boxes' 16 cluster isn't logical yet: the owner runs
   k2 db upgrade --prepare-live 16 once (every database on it pauses about
-  5-15 s). Boxes born on <K2_CLI_VERSION> or later never need it.
+  5-15 s). Boxes born on 0.46.3 or later never need it.
 
 EXITS
   0 done · 3 refused (nothing changed) · 1 failed (the owner gets an inbox

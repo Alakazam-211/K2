@@ -16,7 +16,7 @@
 // Output: src/shared/cli-catalog.generated.json
 
 import { execFile } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -46,10 +46,30 @@ async function nounHelp(home, noun) {
   }
 }
 
+/** The bash that runs cli/k2. On Windows that is Git Bash, found the way the
+ *  installed `k2.cmd` shim finds it (a bare `bash` there can be WSL's). */
+function bashFor(platform, env, exists) {
+  if (platform !== 'win32') return 'bash'
+  const roots = [env.ProgramFiles, env['ProgramFiles(x86)']].filter(Boolean)
+  const found = roots.map((r) => join(r, 'Git', 'bin', 'bash.exe')).find(exists)
+  if (!found) throw new Error('Git Bash not found under Program Files: cli/k2 runs in Git for Windows bash')
+  return found
+}
+
+/** The env cli/k2 runs under: a bare PATH, the temp HOME, UTF-8. Windows
+ *  also keeps SystemRoot (Git Bash's runtime needs it) and Git Bash puts
+ *  its own /usr/bin first. */
+function k2Env(platform, env, home) {
+  const base = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, LANG: 'C.UTF-8' }
+  if (platform !== 'win32') return base
+  return { ...base, PATH: env.PATH ?? env.Path ?? '', SystemRoot: env.SystemRoot }
+}
+
 async function k2(home, args) {
-  const { stdout, stderr } = await run('bash', [K2, ...args], {
+  const bash = bashFor(process.platform, process.env, existsSync)
+  const { stdout, stderr } = await run(bash, [K2, ...args], {
     cwd: ROOT,
-    env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, LANG: 'C.UTF-8' },
+    env: k2Env(process.platform, process.env, home),
     maxBuffer: 16 * 1024 * 1024,
   })
   if (stderr.trim()) throw new Error(`k2 ${args.join(' ')} wrote to stderr:\n${stderr}`)

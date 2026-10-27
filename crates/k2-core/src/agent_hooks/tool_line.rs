@@ -31,7 +31,28 @@ const SECRET_PREFIXES: &[&str] = &[
     "xoxb-",
     "xoxp-",
     "AKIA",
+    // 0.46.5 (review F4): Stripe secret / restricted keys (`sk_live_`,
+    // `rk_test_`), JWTs, Google API keys, GitLab tokens, Slack session.
+    "sk_",
+    "rk_",
+    "eyJ",
+    "AIza",
+    "glpat-",
+    "xoxs-",
+    "xoxr-",
 ];
+
+/// Words that make a `key=value` / `key: value` / `--key value` a secret
+/// (matched inside the lowercased key, 0.46.5): `api_key=`, `--auth-token`,
+/// `"password":`.
+const SECRET_KEY_WORDS: &[&str] = &["key", "token", "secret", "password", "passwd", "pwd", "auth", "credential"];
+
+/// A run of `[A-Za-z0-9_-]` this long with upper, lower and digits is
+/// treated as a secret (0.46.5, review F4: the generic high-entropy rule).
+const ENTROPY_MIN_CHARS: usize = 20;
+
+/// A lowercase-hex run this long (with digits) is treated as a secret.
+const HEX_MIN_CHARS: usize = 32;
 
 /// Flags whose following argument (or `=value`) is a secret. `-u` /
 /// `--user` carry curl's `user:password` (URL userinfo by another name).
@@ -163,8 +184,47 @@ pub fn redact(text: &str) -> String {
             i += 2;
             continue;
         }
-        // `--password x`, `--token=x`, `-p x`.
-        if let Some(flag) = SECRET_FLAGS.iter().find(|f| tok == **f) {
+        // `-H "X-Api-Key: v"` / `--header 'Name:v'`: the value is a secret
+        // (0.46.5); `Bearer` keeps its word.
+        if (tok == "-H" || tok == "--header") && i + 1 < tokens.len() {
+            let name = tokens[i + 1];
+            if let Some((k, v)) = name.split_once(':') {
+                out.push(tok.to_string());
+                if !v.trim_matches(['"', '\'']).is_empty() {
+                    out.push(format!("{k}:{REDACTED}{}", closing_quote(name)));
+                    i += 2;
+                    continue;
+                }
+                out.push(name.to_string());
+                match tokens.get(i + 2) {
+                    Some(v) if v.trim_start_matches(['"', '\'']).eq_ignore_ascii_case("bearer") && i + 3 < tokens.len() => {
+                        out.push(format!("{v} {REDACTED}"));
+                        i += 4;
+                    }
+                    Some(v) => {
+                        out.push(format!("{REDACTED}{}", closing_quote(v)));
+                        i += 3;
+                    }
+                    None => i += 2,
+                }
+                continue;
+            }
+        }
+        // `-pS3cret` (mysql's attached password, 0.46.5); `find`'s
+        // `-print` / `-perm` / `-path` / `-prune` are words, not secrets.
+        if tok.len() > 2
+            && tok.starts_with("-p")
+            && !tok.starts_with("--")
+            && !matches!(tok, "-print" | "-print0" | "-printf" | "-perm" | "-path" | "-prune")
+        {
+            out.push(format!("-p{REDACTED}"));
+            i += 1;
+            continue;
+        }
+        // `--password x`, `--token=x`, `-p x`, and any `--*key*` /
+        // `--*token*` / `--*secret*` flag (0.46.5).
+        let generic_flag = tok.starts_with("--") && !tok.contains('=') && secretish_key(tok);
+        if let Some(flag) = SECRET_FLAGS.iter().copied().find(|f| tok == *f).or(generic_flag.then_some(tok)) {
             match tokens.get(i + 1) {
                 Some(next) if !next.starts_with('-') => {
                     out.push(format!("{flag} {REDACTED}"));
@@ -186,6 +246,14 @@ pub fn redact(text: &str) -> String {
             i += 1;
             continue;
         }
+        // `--api-key=x` and other secret-ish `--flag=value` (0.46.5).
+        if let Some((flag, v)) = tok.split_once('=') {
+            if flag.starts_with("--") && !v.is_empty() && secretish_key(flag) {
+                out.push(format!("{flag}={REDACTED}"));
+                i += 1;
+                continue;
+            }
+        }
         out.push(redact_token(tok));
         i += 1;
     }
@@ -199,6 +267,17 @@ fn redact_token(tok: &str) -> String {
     if let Some((name, _)) = tok.split_once('=') {
         if is_env_name(name) {
             return format!("{name}={REDACTED}");
+        }
+    }
+    // `'token=abc'`, `{"api_key":"abc"}`, `password:abc` (0.46.5): a key
+    // naming a secret, then a value. A URL is left to the rules below.
+    if !tok.contains("://") {
+        for sep in ['=', ':'] {
+            if let Some((k, v)) = tok.split_once(sep) {
+                if secretish_key(k) && !v.trim_matches(['"', '\'', ',', '}', '{']).is_empty() {
+                    return format!("{k}{sep}{REDACTED}{}", closing_quote(tok));
+                }
+            }
         }
     }
     let mut t = tok.to_string();
@@ -216,7 +295,62 @@ fn redact_token(tok: &str) -> String {
         t = format!("{head}{rest}");
     }
     t = redact_prefixed_secrets(&t);
-    home_to_tilde(&t)
+    redact_high_entropy(&home_to_tilde(&t))
+}
+
+/// `"` or `'` when `s` ends with one (kept after a redacted value).
+fn closing_quote(s: &str) -> &'static str {
+    if s.ends_with('"') {
+        "\""
+    } else if s.ends_with('\'') {
+        "'"
+    } else {
+        ""
+    }
+}
+
+/// The key (lowercased, quotes, dashes and braces trimmed) names a secret.
+fn secretish_key(k: &str) -> bool {
+    let k = k.trim_matches(|c: char| matches!(c, '"' | '\'' | '-' | '{' | '}' | ' ')).to_ascii_lowercase();
+    !k.is_empty() && SECRET_KEY_WORDS.iter().any(|w| k.contains(w))
+}
+
+/// Replace each run of `[A-Za-z0-9_-]` that looks like a credential: at
+/// least [`ENTROPY_MIN_CHARS`] long with upper, lower and digits, or a
+/// lowercase-hex run of [`HEX_MIN_CHARS`] or more with digits.
+fn redact_high_entropy(t: &str) -> String {
+    let is_run = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    let mut out = String::with_capacity(t.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        if looks_random(run) {
+            out.push_str(REDACTED);
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for c in t.chars() {
+        if is_run(c) {
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
+fn looks_random(run: &str) -> bool {
+    let n = run.chars().count();
+    let upper = run.chars().any(|c| c.is_ascii_uppercase());
+    let lower = run.chars().any(|c| c.is_ascii_lowercase());
+    let digits = run.chars().filter(char::is_ascii_digit).count();
+    if n >= ENTROPY_MIN_CHARS && upper && lower && digits > 0 {
+        return true;
+    }
+    n >= HEX_MIN_CHARS && digits > 0 && run.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
 fn is_env_name(name: &str) -> bool {
@@ -330,6 +464,100 @@ mod tests {
             assert_eq!(got, want);
         }
         assert!(rows.len() >= 30, "TW8 table has {} rows", rows.len());
+    }
+
+    /// 0.46.5 (review F4): the forms the deny list used to miss.
+    #[test]
+    fn redaction_table_0465() {
+        let rows: Vec<(String, &str)> = vec![
+            (bash("stripe login --api-key sk_live_51Habc"), "Running `stripe login --api-key ***`"),
+            (bash("echo sk_live_51Habc"), "Running `echo ***`"),
+            (bash("echo rk_test_abc"), "Running `echo ***`"),
+            (bash("curl -H 'Authorization: Bearer eyJhbGciOi.eyJzdWIi.sig' x"), "Running `curl -H 'Authorization: Bearer *** x`"),
+            (bash("echo eyJhbGciOiJIUzI1NiJ9.e30.abc"), "Running `echo ***`"),
+            (bash("gcloud --key AIzaSyA1b2c3"), "Running `gcloud --key ***`"),
+            (bash("echo AIzaSyA1b2c3"), "Running `echo ***`"),
+            (bash("glab auth glpat-abc123"), "Running `glab auth ***`"),
+            (bash("slack xoxs-1-2"), "Running `slack ***`"),
+            (bash("mysql -u root -pS3cret db"), "Running `mysql -u *** -p*** db`"),
+            (bash("curl -H \"X-Api-Key: abc123\" https://h/x"), "Running `curl -H \"X-Api-Key: ***\" https://h/x`"),
+            (bash("curl -H 'X-Api-Key:abc123' https://h/x"), "Running `curl -H 'X-Api-Key:***' https://h/x`"),
+            (bash("curl --header 'X-Token: abc' https://h"), "Running `curl --header 'X-Token: ***' https://h`"),
+            (bash("tool --api-key=xyz run"), "Running `tool --api-key=*** run`"),
+            (bash("tool --auth-token xyz run"), "Running `tool --auth-token *** run`"),
+            (bash("curl -d 'token=abc' https://h"), "Running `curl -d 'token=***' https://h`"),
+            (bash("echo {\"api_key\":\"abc\"}"), "Running `echo {\"api_key\":***`"),
+            (bash("echo password:hunter2"), "Running `echo password:***`"),
+            (bash("deploy --with Zq3xW9pLm2Rt8vKs1Yb4"), "Running `deploy --with ***`"),
+            (bash("echo 0123456789abcdef0123456789abcdef"), "Running `echo ***`"),
+            // Not secrets: kept.
+            // (A bare `-p x` was already redacted before 0.46.5, `cargo
+            // -p` included; that rule is unchanged.)
+            (bash("cargo test --lib thread_activity"), "Running `cargo test --lib thread_activity`"),
+            (bash("cat prd-daemon-activity-and-thread-working-v1.md"), "Running `cat prd-daemon-activity-and-thread-working-v1.md`"),
+            (bash("find . -name x -print"), "Running `find . -name x -print`"),
+            (bash("git log --oneline -5"), "Running `git log --oneline -5`"),
+            (bash("echo keyboard monkey"), "Running `echo keyboard monkey`"),
+        ];
+        for (got, want) in &rows {
+            assert_eq!(got, want);
+        }
+    }
+
+    /// 0.46.5 (review F4 (d)): one corpus of secret forms, through both
+    /// `describe` (owner lines) and `short_label` (child labels): none of
+    /// the secret survives.
+    #[test]
+    fn secret_corpus_never_survives_a_line_or_a_label() {
+        let corpus = [
+            "k2skn_deadbeefcafe",
+            "k2sk_deadbeefcafe",
+            "k2rs_deadbeefcafe",
+            "sk-proj-abcdef123456",
+            "sk_live_51HabcDEF",
+            "sk_test_51HabcDEF",
+            "rk_live_51HabcDEF",
+            "ghp_abcdefghij123",
+            "gho_abcdefghij123",
+            "github_pat_11AAAAbbbb",
+            "xoxa-1-abcdef",
+            "xoxb-1-abcdef",
+            "xoxp-1-abcdef",
+            "xoxs-1-abcdef",
+            "xoxr-1-abcdef",
+            "AKIAABCDEFGHIJKLMNOP",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sigsig",
+            "AIzaSyA1b2c3d4e5f6",
+            "glpat-abcdef123456",
+            "Zq3xW9pLm2Rt8vKs1Yb4",
+            "0123456789abcdef0123456789abcdef",
+        ];
+        let wrapped = [
+            "echo {s}",
+            "curl -H 'Authorization: Bearer {s}' https://h",
+            "curl -H \"X-Api-Key: {s}\" https://h",
+            "tool --token {s}",
+            "tool --api-key={s}",
+            "API_KEY={s} run",
+            "curl https://u:{s}@h/x",
+            "curl https://h/x?key={s}",
+            "mysql -p{s}",
+            "echo '{{\"token\":\"{s}\"}}'",
+        ];
+        let mut checked = 0;
+        for secret in corpus {
+            for w in wrapped {
+                let cmd = w.replace("{s}", secret);
+                let line = bash(&cmd);
+                assert!(!line.contains(secret), "{cmd:?} leaked into {line:?}");
+                let label = short_label(&cmd).unwrap_or_default();
+                assert!(!label.contains(secret), "{cmd:?} leaked into the label {label:?}");
+                checked += 1;
+            }
+            let label = short_label(secret).unwrap_or_default();
+            assert!(!label.contains(secret), "{secret:?} leaked into the label {label:?}");
+        }
+        assert!(checked >= 200, "the corpus ran: {checked}");
     }
 
     #[test]

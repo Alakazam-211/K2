@@ -77,6 +77,13 @@ pub async fn serve_ops_stream_connection(
 
     let subscriber_id = NEXT_SUBSCRIBER_ID.fetch_add(1, Ordering::Relaxed);
 
+    // 0.46.6: person-scoped frames (read state, Homes, pair codes) reach
+    // only their own person here too, as on `/cli/sessions/events`; this
+    // route admits any Member login.
+    let person = crate::session_events_ws::socket_person(
+        crate::presence::resolve_identity(&token, &owner_token).as_ref(),
+    );
+
     // Fan-in: subscribe to BOTH existing in-memory planes. No new buses.
     let mut session_rx = session_events::subscribe();
     let mut awareness_rx = awareness::subscribe();
@@ -118,6 +125,9 @@ pub async fn serve_ops_stream_connection(
             recv = session_rx.recv() => {
                 match recv {
                     Ok(event) => {
+                        if !crate::session_events_ws::person_may_see(&event, person.as_deref()) {
+                            continue;
+                        }
                         if send_session_event(&mut write, &event).await.is_err() {
                             break;
                         }

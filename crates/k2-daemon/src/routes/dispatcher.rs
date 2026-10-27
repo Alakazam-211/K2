@@ -227,7 +227,12 @@ async fn device_pair_code(
     let r = tokio::task::spawn_blocking(move || dev::mint_response(&t, &a, host.as_deref()))
         .await
         .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
-    audit(&target, if r.status.starts_with("200") { "ok" } else { "refused" });
+    let minted = r.status.starts_with("200");
+    audit(&target, if minted { "ok" } else { "refused" });
+    if minted {
+        // 0.46.6: report the code `expired` when its ten minutes end unused.
+        dev::schedule_expiry_sweep();
+    }
     r
 }
 
@@ -250,6 +255,7 @@ async fn device_pair(
     check: bool,
 ) -> crate::cli_response::CliResponse {
     use crate::connect_device_routes as dev;
+    let started = std::time::Instant::now();
     if super::http::pair_request_is_browser_shaped(headers_blob) {
         return dev::pair_browser_refused();
     }
@@ -271,12 +277,12 @@ async fn device_pair(
     if anonymous && limiter.global_ceiling_reached(crate::login_throttle::Door::Connect, limiter.now()) {
         return dev::rate_limited();
     }
-    let host = if check { crate::boot_status::public_host() } else { None };
     let reply = tokio::task::spawn_blocking(move || {
+        let host = crate::boot_status::public_host();
         if check {
             dev::handle_pair_check(&body, host.as_deref())
         } else {
-            dev::handle_pair(&body)
+            dev::handle_pair(&body, host.as_deref())
         }
     })
         .await
@@ -285,6 +291,7 @@ async fn device_pair(
             user: String::new(),
             outcome: "error",
             paired: None,
+            redeem_ms: None,
         });
     if reply.response.status.starts_with("401") && anonymous {
         limiter.record_global_failure(crate::login_throttle::Door::Connect, limiter.now());
@@ -302,6 +309,13 @@ async fn device_pair(
         let user = reply.user.clone();
         let _ = tokio::task::spawn_blocking(move || dev::notify_paired(&user, &name, &minted_by)).await;
     }
+    // 0.46.6: one timing line per redeem (outcome + ms; never the code,
+    // token or device). total_ms runs to here: throttle, redeem, audit and
+    // the paired notice.
+    k2_core::log_debug!(
+        "{}",
+        dev::pair_timing_line(reply.outcome, reply.redeem_ms, started.elapsed().as_secs_f64() * 1000.0)
+    );
     reply.response
 }
 
@@ -5203,6 +5217,25 @@ async fn handle_one_request(
                     let mine = super::http::parse_params(&path, &query).get("mine").is_some_and(|v| v == "1" || v == "true");
                     tokio::task::spawn_blocking(move || {
                         crate::connect_device_routes::handle_devices(&caller, current.as_deref(), mine)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")))
+                }
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // GET /cli/auth/device/pair-code/status?id=<codeId> — one code's
+        // state for the actor that minted it (0.46.6 pair success; the
+        // fallback for the `pair_code_changed` frame). GET only: the
+        // top-level guard answers any other method 405.
+        p if p == crate::connect_device_routes::CODE_STATUS => {
+            let _ = stream.read(&mut buf).await;
+            let r = match device_caller(&query, state.token.as_str()) {
+                None => crate::connect_device_routes::login_required(),
+                Some(caller) => {
+                    let id = super::http::parse_params(&path, &query).get("id").cloned();
+                    tokio::task::spawn_blocking(move || {
+                        crate::connect_device_routes::handle_code_status(&caller, id.as_deref())
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")))

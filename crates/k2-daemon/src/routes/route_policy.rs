@@ -433,6 +433,9 @@ pub const ROUTES: &[Route] = &[
     // everyone's, a Member only its own; the handlers enforce that).
     post("/cli/auth/device/pair", Public),
     post("/cli/auth/device/pair-code", Member),
+    // 0.46.6 pair success: one code's state, for the actor that minted it
+    // (the handler scopes it; anyone else gets 404 no_such_code).
+    get("/cli/auth/device/pair-code/status", Member),
     post("/cli/auth/device/pair/check", Public),
     post("/cli/auth/device/revoke", Member),
     get("/cli/auth/devices", Member),
@@ -2058,6 +2061,7 @@ pub const GET_WRITE_PARAMS: &[(&str, &str, &[&str])] = &[
 #[cfg_attr(not(test), allow(dead_code))]
 pub const GET_READS_WITH_HOUSEKEEPING: &[(&str, &str)] = &[
     ("/cli/agents/running", "drops dead PTYs from the in-memory session map"),
+    ("/cli/auth/device/pair-code/status", "moves pairing codes whose ten minutes ran out to expired (and reports them on the events bus)"),
     ("/cli/auth/devices", "validating the caller's session may reap it or slide a paired phone's expiry"),
     ("/cli/auth/whoami", "validating a session may reap an expired one"),
     ("/cli/context/layers", "refreshes generated roster packs on disk when they changed"),

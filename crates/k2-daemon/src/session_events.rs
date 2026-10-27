@@ -955,6 +955,33 @@ pub enum SessionEvent {
         #[serde(rename = "deviceId")]
         device_id: String,
     },
+
+    /// 0.46.6 pair success: a Companion pairing code finished. PERSON-
+    /// SCOPED to whoever minted it (the owner token and every login the
+    /// owner linked are one person; a login that minted for itself is its
+    /// own person), so only the minter's clients see it. Pair a phone
+    /// switches from the QR to its success or expired state, and the
+    /// phones list adds the new phone without a refetch.
+    ///
+    /// Wire: `{ "kind": "pair_code_changed", "codeId": "pc_…", "state":
+    /// "paired" | "expired" | "void", "user": login, "deviceName": string |
+    /// null, "sessionId": string | null }`. `deviceName` / `sessionId` (the
+    /// paired phone's row id in `GET /cli/auth/devices`, what revoke takes)
+    /// are set on `paired` only. `void` = the code can't be used any more
+    /// for another reason (a newer code replaced it, or the login changed).
+    /// Never the code itself or a token.
+    PairCodeChanged {
+        #[serde(skip)]
+        person: String,
+        #[serde(rename = "codeId")]
+        code_id: String,
+        state: String,
+        user: String,
+        #[serde(rename = "deviceName")]
+        device_name: Option<String>,
+        #[serde(rename = "sessionId")]
+        session_id: Option<String>,
+    },
 }
 
 /// The body of a `thread_read` / `project_read` frame (thread-read-v1).
@@ -1009,9 +1036,9 @@ impl SessionEvent {
     pub fn person(&self) -> Option<&str> {
         match self {
             SessionEvent::ThreadRead(f) | SessionEvent::ProjectRead(f) => Some(f.person.as_str()),
-            SessionEvent::HomesChanged { person, .. } | SessionEvent::HomesDeviceRemoved { person, .. } => {
-                Some(person.as_str())
-            }
+            SessionEvent::HomesChanged { person, .. }
+            | SessionEvent::HomesDeviceRemoved { person, .. }
+            | SessionEvent::PairCodeChanged { person, .. } => Some(person.as_str()),
             _ => None,
         }
     }
@@ -1082,6 +1109,7 @@ impl SessionEvent {
             SessionEvent::ProjectRead(_) => "project_read",
             SessionEvent::HomesChanged { .. } => "homes_changed",
             SessionEvent::HomesDeviceRemoved { .. } => "homes_device_removed",
+            SessionEvent::PairCodeChanged { .. } => "pair_code_changed",
         }
     }
 }

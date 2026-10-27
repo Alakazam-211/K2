@@ -5,7 +5,25 @@
 // the password need, the code with its QR (from the daemon's link) for its
 // 10 minutes, the phones with Revoke, and the daemon's refusal hints.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { PairCodeChangedEvent } from '@/stores/session-events'
+
+// 0.46.6 pair success: the panel's `pair_code_changed` subscription,
+// captured so a test can deliver a frame.
+const pairHandlers = vi.hoisted(() => new Set<(e: PairCodeChangedEvent) => void>())
+vi.mock('@/stores/session-events', () => ({
+  onPairCodeChanged: (_scope: unknown, fn: (e: PairCodeChangedEvent) => void) => {
+    pairHandlers.add(fn)
+    return () => void pairHandlers.delete(fn)
+  },
+}))
+
+function frame(e: Omit<PairCodeChangedEvent, 'kind'>): void {
+  expect(pairHandlers.size, 'the panel subscribes to pair_code_changed').toBeGreaterThan(0)
+  act(() => {
+    for (const fn of pairHandlers) fn({ kind: 'pair_code_changed', ...e })
+  })
+}
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => {}), listen: vi.fn(async () => () => {}) }))
@@ -16,7 +34,7 @@ vi.mock('@/kessel/daemon-ws', () => ({
 }))
 
 import { PhonePairing } from './PhonePairing'
-import { parseDevices, parsePairCode, secondsLeft } from './phone-pairing-api'
+import { parseDevices, parsePairCode, parsePairCodeStatus, secondsLeft } from './phone-pairing-api'
 import type { ServerScope } from '@/kessel/server-scope'
 
 const SCOPE = { label: 'This computer', isRemote: false } as unknown as ServerScope
@@ -118,6 +136,10 @@ describe('PhonePairing in Settings → K2 Companion (mode="all")', () => {
     expect(document.querySelector('[data-pair-countdown]')?.textContent).toBe('Works once, for 10:00')
     now += 10 * 60 * 1000
     await waitFor(() => expect(document.querySelector('[data-pair-code]')).toBeNull(), { timeout: 3000 })
+    // 0.46.6: the countdown running out says so instead of just vanishing.
+    expect(document.querySelector('[data-pair-expired="expired"]')?.textContent).toContain('expired before a phone used it')
+    // An older server's code has no codeId: nothing polls a status route.
+    expect(calls.some((c) => c.url.includes('pair-code/status'))).toBe(false)
   })
 
   it('lets the owner token pick another login (sent as user)', async () => {
@@ -228,4 +250,154 @@ describe('PhonePairing in the profile modal (mode="mine")', () => {
     render(<PhonePairing scope={SCOPE} mode="mine" />)
     await waitFor(() => expect(document.querySelector('[data-pair-error]')?.textContent).toContain('connection refused'))
   })
+})
+
+// ── 0.46.6 pair success ────────────────────────────────────────────────
+
+const CODE_ID = 'pc_0123456789abcdef01234567'
+const LIVE_CODE = { ...CODE, codeId: CODE_ID }
+const PAIRS_AS = { user: 'rosson', source: 'owner-linked', needsPassword: false, choices: ['ada', 'rosson'] }
+const NEW_PHONE = { ...PHONE, id: 'sess-new', name: 'iPhone', deviceId: 'ios-new' }
+/** A clock inside CODE's ten minutes. */
+const NOW = (): number => Date.parse('2026-10-24T10:00:00Z')
+
+/** A server whose phones list gains `NEW_PHONE` once `paired()` is called. */
+function server(opts: { status?: () => unknown } = {}): { paired: () => void; mints: () => number } {
+  let isPaired = false
+  let mints = 0
+  handler = (url) => {
+    if (url.includes('/cli/auth/device/pair-code/status')) {
+      if (!opts.status) throw new Error('status polled without a stub')
+      return { status: 200, body: opts.status() }
+    }
+    if (url.includes('/cli/auth/devices')) {
+      return { status: 200, body: { ok: true, devices: isPaired ? [NEW_PHONE] : [], pairAs: PAIRS_AS } }
+    }
+    if (url.includes('/cli/auth/device/pair-code')) {
+      mints += 1
+      return { status: 200, body: { ...LIVE_CODE, codeId: `${CODE_ID.slice(0, -1)}${mints}` } }
+    }
+    throw new Error(`unexpected ${url}`)
+  }
+  return { paired: () => void (isPaired = true), mints: () => mints }
+}
+
+async function showCode(): Promise<string> {
+  fireEvent.click(await screen.findByRole('button', { name: 'Pair a phone' }))
+  await waitFor(() => expect(document.querySelector('[data-pair-code-text]')?.textContent).toBe(CODE.code))
+  return `${CODE_ID.slice(0, -1)}1`
+}
+
+describe('PhonePairing success state (0.46.6)', () => {
+  it('reads a code id and a status, tolerating junk', () => {
+    expect(parsePairCode(LIVE_CODE).codeId).toBe(CODE_ID)
+    expect(parsePairCode(CODE).codeId, 'an older server sends none').toBeNull()
+    expect(parsePairCodeStatus({ codeId: 'pc_1', state: 'paired', user: 'a', deviceName: 'iPad', sessionId: 's' })).toEqual({
+      codeId: 'pc_1',
+      state: 'paired',
+      user: 'a',
+      deviceName: 'iPad',
+      sessionId: 's',
+    })
+    expect(parsePairCodeStatus({ codeId: 'pc_1', state: 'exploded' })).toBeNull()
+    expect(parsePairCodeStatus(null)).toBeNull()
+  })
+
+  it('a redeem frame swaps the QR for "Paired <device> as <user>" and the phone appears highlighted', async () => {
+    const s = server()
+    render(<PhonePairing scope={SCOPE} mode="all" nowMs={NOW} />)
+    const id = await showCode()
+    s.paired()
+    frame({ codeId: id, state: 'paired', user: 'rosson', deviceName: 'iPhone', sessionId: 'sess-new' })
+    expect(document.querySelector('[data-pair-code]'), 'the QR is gone').toBeNull()
+    expect(document.querySelector('[data-pair-success-text]')?.textContent).toBe('Paired iPhone as rosson')
+    // At once, before any refetch answers: the row is there and highlighted.
+    const row = document.querySelector('[data-pair-device="sess-new"]')
+    expect(row?.hasAttribute('data-pair-new')).toBe(true)
+    expect(row?.textContent).toContain('iPhone')
+    expect(row?.textContent).toContain('just paired')
+    // The refetch keeps it (one row, not two).
+    await waitFor(() => expect(calls.filter((c) => c.url.includes('/cli/auth/devices')).length).toBe(2))
+    await waitFor(() => expect(document.querySelectorAll('[data-pair-device="sess-new"]').length).toBe(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(document.querySelector('[data-pair-success]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Pair a phone' })).toBeTruthy()
+  })
+
+  it('a frame for another code leaves this code up; a phone it paired still joins the list', async () => {
+    server()
+    render(<PhonePairing scope={SCOPE} mode="all" nowMs={NOW} />)
+    await showCode()
+    frame({ codeId: 'pc_other', state: 'expired', user: 'rosson', deviceName: null, sessionId: null })
+    expect(document.querySelector('[data-pair-code]'), 'still showing').toBeTruthy()
+    frame({ codeId: 'pc_other2', state: 'paired', user: 'ada', deviceName: 'iPad', sessionId: 'sess-ada' })
+    expect(document.querySelector('[data-pair-code]'), 'still showing').toBeTruthy()
+    expect(document.querySelector('[data-pair-success]')).toBeNull()
+    expect(document.querySelector('[data-pair-device="sess-ada"]')?.textContent).toContain('iPad')
+  })
+
+  it('an expiry frame says so and "Make a new code" mints another', async () => {
+    const s = server()
+    render(<PhonePairing scope={SCOPE} mode="all" nowMs={NOW} />)
+    const id = await showCode()
+    frame({ codeId: id, state: 'expired', user: 'rosson', deviceName: null, sessionId: null })
+    expect(document.querySelector('[data-pair-code]')).toBeNull()
+    expect(document.querySelector('[data-pair-expired="expired"]')?.textContent).toContain('expired before a phone used it')
+    fireEvent.click(screen.getByRole('button', { name: 'Make a new code' }))
+    await waitFor(() => expect(document.querySelector('[data-pair-code-text]')?.textContent).toBe(CODE.code))
+    expect(s.mints()).toBe(2)
+    expect(document.querySelector('[data-pair-expired]')).toBeNull()
+  })
+
+  it('a void frame (a newer code replaced it) offers a new code too', async () => {
+    server()
+    render(<PhonePairing scope={SCOPE} mode="all" nowMs={NOW} />)
+    const id = await showCode()
+    frame({ codeId: id, state: 'void', user: 'rosson', deviceName: null, sessionId: null })
+    expect(document.querySelector('[data-pair-expired="void"]')?.textContent).toContain('can no longer be used')
+  })
+
+  it('a login that must type its password goes back to the form for a new code', async () => {
+    handler = (url) => {
+      if (url.includes('/cli/auth/devices')) {
+        return { status: 200, body: { ok: true, devices: [], pairAs: { user: 'ada', source: 'self', needsPassword: true } } }
+      }
+      if (url.includes('/cli/auth/device/pair-code')) return { status: 200, body: { ...LIVE_CODE, user: 'ada' } }
+      throw new Error(`unexpected ${url}`)
+    }
+    render(<PhonePairing scope={SCOPE} mode="mine" nowMs={NOW} />)
+    fireEvent.change(await screen.findByLabelText('Your password'), { target: { value: 'hunter22' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Pair a phone' }))
+    await waitFor(() => expect(document.querySelector('[data-pair-code]')).toBeTruthy())
+    frame({ codeId: CODE_ID, state: 'expired', user: 'ada', deviceName: null, sessionId: null })
+    fireEvent.click(screen.getByRole('button', { name: 'Make a new code' }))
+    expect(screen.getByLabelText('Your password')).toBeTruthy()
+    expect(calls.filter((c) => c.url.includes('pair-code')).length, 'no mint without the password').toBe(1)
+  })
+
+  it('with no frame, the status fallback finds the redeem', async () => {
+    let state = 'pending'
+    const s = server({
+      status: () => ({
+        ok: true,
+        codeId: `${CODE_ID.slice(0, -1)}1`,
+        state,
+        user: 'rosson',
+        expiresAt: CODE.expiresAt,
+        deviceName: state === 'paired' ? 'Android phone' : null,
+        sessionId: state === 'paired' ? 'sess-new' : null,
+      }),
+    })
+    render(<PhonePairing scope={SCOPE} mode="all" nowMs={NOW} />)
+    const id = await showCode()
+    state = 'paired'
+    s.paired()
+    await waitFor(() => expect(document.querySelector('[data-pair-success-text]')?.textContent).toBe('Paired Android phone as rosson'), {
+      timeout: 6000,
+    })
+    const polled = calls.find((c) => c.url.includes('pair-code/status'))
+    expect(polled?.url).toContain(`id=${id}`)
+    expect(polled?.init?.method).toBe('GET')
+    expect(document.querySelector('[data-pair-device="sess-new"]')).toBeTruthy()
+  }, 10_000)
 })

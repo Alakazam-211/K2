@@ -326,7 +326,7 @@ pub(crate) fn person_may_see(event: &SessionEvent, socket_person: Option<&str>) 
 
 /// The person key of the identity that holds a socket (`None` when it
 /// could not be resolved).
-fn socket_person(identity: Option<&crate::presence::PresenceIdentity>) -> Option<String> {
+pub(crate) fn socket_person(identity: Option<&crate::presence::PresenceIdentity>) -> Option<String> {
     let login = match identity? {
         crate::presence::PresenceIdentity::Owner => "owner".to_string(),
         crate::presence::PresenceIdentity::ConnectUser { username, .. } => username.clone(),
@@ -507,6 +507,9 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // sockets get them.
         SessionEvent::ThreadRead(_) | SessionEvent::ProjectRead(_) => None,
         SessionEvent::HomesChanged { .. } | SessionEvent::HomesDeviceRemoved { .. } => None,
+        // 0.46.6 pair success: person-scoped to the code's minter like the
+        // Homes frames.
+        SessionEvent::PairCodeChanged { .. } => None,
 
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter routes them to the
@@ -917,7 +920,43 @@ mod tests {
             SessionEvent::ProjectRead(read_frame("owner")),
             SessionEvent::HomesChanged { person: "owner".into(), cursor: 3 },
             SessionEvent::HomesDeviceRemoved { person: "owner".into(), device_id: "d-1".into() },
+            pair_code_paired("owner"),
         ]
+    }
+
+    fn pair_code_paired(person: &str) -> SessionEvent {
+        SessionEvent::PairCodeChanged {
+            person: person.into(),
+            code_id: "pc_0123456789abcdef01234567".into(),
+            state: "paired".into(),
+            user: "rosson".into(),
+            device_name: Some("iPhone".into()),
+            session_id: Some("sess-1".into()),
+        }
+    }
+
+    /// 0.46.6 pair success: the frame's wire shape (the desktop and
+    /// Companion contract) and its routing: only the minter's person gets
+    /// it; the person key never rides the wire.
+    #[test]
+    fn pair_code_frames_are_person_scoped_and_keep_their_wire_shape() {
+        let ev = pair_code_paired("gina");
+        let json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&ev).expect("ser")).expect("json");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind": "pair_code_changed",
+                "codeId": "pc_0123456789abcdef01234567",
+                "state": "paired",
+                "user": "rosson",
+                "deviceName": "iPhone",
+                "sessionId": "sess-1",
+            })
+        );
+        assert!(person_may_see(&ev, Some("gina")));
+        assert!(!person_may_see(&ev, Some("owner")), "another person's socket");
+        assert!(!person_may_see(&ev, None), "an unresolved socket gets no person frames");
+        assert_eq!(event_scope_path(&ev), None, "app-level by path");
     }
 
     fn read_frame(person: &str) -> crate::session_events::ReadFrame {

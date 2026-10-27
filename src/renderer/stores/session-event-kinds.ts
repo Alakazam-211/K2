@@ -185,6 +185,11 @@ export const SESSION_EVENT_ROUTES = {
   // daemon, and the runner also polls.
   homes_changed: { class: 'app', app: true },
   homes_device_removed: { class: 'app', app: true },
+  // 0.46.6 pair success: person-scoped to the code's minter. Pair a phone
+  // switches to its success / expired state and the phones list adds the
+  // phone (`onPairCodeChanged`). Not carried: Settings and the profile modal
+  // talk to their own server.
+  pair_code_changed: { class: 'app', app: true },
 } as const satisfies { readonly [K in SessionEventMessage['kind']]: SessionEventRoute }
 
 type Routes = typeof SESSION_EVENT_ROUTES

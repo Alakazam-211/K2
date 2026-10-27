@@ -14,13 +14,23 @@
 // as, the choices, the password need, the link and every refusal hint. The
 // QR is drawn here from the daemon's `pairUrl` (uqr, as the Companion
 // section's store QRs). The code is valid for its 10 minutes; the panel
-// counts down to the daemon's `expiresAt` and drops it after. Device names
-// come from phones and are rendered as text only.
+// counts down to the daemon's `expiresAt`. Device names come from phones
+// and are rendered as text only.
+//
+// 0.46.6 pair success (Rosson): when the phone redeems the code the daemon
+// sends `pair_code_changed` to the minter's sockets; the panel swaps the QR
+// for a success state ("Paired iPhone as rosson", Done) and the phones list
+// adds the phone at once, highlighted. If the code runs out unused (the
+// frame, or the countdown) the panel says so and offers a new code. While
+// a code shows, `GET …/pair-code/status` is polled as the fallback for a
+// window whose events socket is down.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { renderSVG } from 'uqr'
 import type { ServerScope } from '@/kessel/server-scope'
+import { onPairCodeChanged } from '@/stores/session-events'
 import {
+  fetchPairCodeStatus,
   fetchPairedPhones,
   makePairCode,
   revokePairedPhone,
@@ -28,7 +38,28 @@ import {
   type DaemonError,
   type DevicesView,
   type PairCode,
+  type PairCodeStatus,
 } from './phone-pairing-api'
+
+/** How often the status fallback is read while a code shows. */
+export const PAIR_STATUS_POLL_MS = 3000
+/** How long a newly paired phone's row stays highlighted. */
+export const NEW_PHONE_HIGHLIGHT_MS = 10_000
+
+/** What the panel shows after a code finished. */
+type Outcome =
+  | { kind: 'paired'; deviceName: string; user: string }
+  | { kind: 'expired' }
+  | { kind: 'void' }
+
+function CheckMark(): React.JSX.Element {
+  return (
+    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true" className="text-[var(--color-status-success,#22c55e)]">
+      <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M7 12.5l3.2 3.2L17 9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
 
 /** The QR for the daemon's pairing link (dark on white, 4-module border). */
 export function PairQr({ url }: { url: string }): React.JSX.Element {
@@ -81,6 +112,8 @@ export function PhonePairing({
   const [busy, setBusy] = useState(false)
   const [revoking, setRevoking] = useState<string | null>(null)
   const [now, setNow] = useState(nowMs())
+  const [outcome, setOutcome] = useState<Outcome | null>(null)
+  const [highlight, setHighlight] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     const r = await fetchPairedPhones({ mine: mode === 'mine', scope })
@@ -96,6 +129,77 @@ export function PhonePairing({
     void reload()
   }, [reload])
 
+  // The code on screen, for the event handler (no resubscribe per code).
+  const codeRef = useRef<PairCode | null>(null)
+  codeRef.current = code
+
+  // A phone paired (this panel's code or another of this person's): add it
+  // to the list at once, highlighted, then refetch the real row.
+  const addPhone = useCallback(
+    (s: PairCodeStatus) => {
+      if (!s.sessionId) return
+      const id = s.sessionId
+      setView((v) => {
+        if (!v || v.devices.some((d) => d.id === id)) return v
+        if (mode === 'mine' && v.pairAs.user && v.pairAs.user !== s.user) return v
+        const row = {
+          id,
+          username: s.user,
+          deviceId: '',
+          name: s.deviceName ?? 'Phone',
+          createdAt: new Date(nowMs()).toISOString(),
+          expiresAt: '',
+          maxExpiresAt: '',
+          pairedBy: null,
+          current: false,
+        }
+        return { ...v, devices: [row, ...v.devices] }
+      })
+      setHighlight(id)
+      void reload()
+    },
+    [mode, nowMs, reload],
+  )
+
+  const settle = useCallback(
+    (s: PairCodeStatus) => {
+      if (s.state === 'paired') addPhone(s)
+      const shown = codeRef.current
+      if (!shown || !shown.codeId || shown.codeId !== s.codeId || s.state === 'pending') return
+      setCode(null)
+      if (s.state === 'paired') {
+        setOutcome({ kind: 'paired', deviceName: s.deviceName ?? 'Phone', user: s.user || shown.user })
+      } else {
+        setOutcome({ kind: s.state })
+      }
+    },
+    [addPhone],
+  )
+
+  useEffect(() => onPairCodeChanged(scope, (e) => settle(e)), [scope, settle])
+
+  // The fallback: read the code's status while it shows.
+  const codeId = code?.codeId ?? null
+  useEffect(() => {
+    if (!codeId) return
+    let stopped = false
+    const t = setInterval(() => {
+      void fetchPairCodeStatus(codeId, scope).then((r) => {
+        if (!stopped && r.ok) settle(r.value)
+      })
+    }, PAIR_STATUS_POLL_MS)
+    return () => {
+      stopped = true
+      clearInterval(t)
+    }
+  }, [codeId, scope, settle])
+
+  useEffect(() => {
+    if (!highlight) return
+    const t = setTimeout(() => setHighlight(null), NEW_PHONE_HIGHLIGHT_MS)
+    return () => clearTimeout(t)
+  }, [highlight])
+
   useEffect(() => {
     if (!code) return
     const t = setInterval(() => setNow(nowMs()), 1000)
@@ -103,7 +207,10 @@ export function PhonePairing({
   }, [code, nowMs])
   const left = code ? secondsLeft(code.expiresAt, now) : 0
   useEffect(() => {
-    if (code && left === 0) setCode(null)
+    if (code && left === 0) {
+      setCode(null)
+      setOutcome({ kind: 'expired' })
+    }
   }, [code, left])
 
   const pairAs = view?.pairAs ?? null
@@ -116,6 +223,7 @@ export function PhonePairing({
   const pair = async (): Promise<void> => {
     setBusy(true)
     setCodeError(null)
+    setOutcome(null)
     try {
       const sendUser = choices && target && target !== pairAs?.user ? target : undefined
       const r = await makePairCode({ password: needsPassword ? password : undefined, user: sendUser, scope })
@@ -152,7 +260,56 @@ export function PhonePairing({
         </p>
       )}
 
-      {pairAs && !code && (
+      {outcome?.kind === 'paired' && (
+        <div className="border border-[var(--color-border)] p-3 space-y-2" data-pair-success="" role="status">
+          <div className="flex items-center gap-2">
+            <CheckMark />
+            <p className="m-0 text-[12px] text-[var(--color-text-primary)]" data-pair-success-text="">
+              Paired {outcome.deviceName} as <span className="font-mono">{outcome.user}</span>
+            </p>
+          </div>
+          <button
+            type="button"
+            className="px-3 py-1.5 text-[11px] border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer"
+            onClick={() => setOutcome(null)}
+          >
+            Done
+          </button>
+        </div>
+      )}
+
+      {(outcome?.kind === 'expired' || outcome?.kind === 'void') && (
+        <div className="border border-[var(--color-border)] p-3 space-y-2" data-pair-expired={outcome.kind} role="status">
+          <p className="m-0 text-[11px] text-[var(--color-text-secondary)]">
+            {outcome.kind === 'expired'
+              ? 'This code expired before a phone used it.'
+              : 'This code can no longer be used: a newer code replaced it, or the login changed.'}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="px-3 py-1.5 text-[11px] border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer disabled:opacity-50"
+              disabled={busy}
+              onClick={() => {
+                // A login types its password again for every code.
+                if (needsPassword || target === '') setOutcome(null)
+                else void pair()
+              }}
+            >
+              {busy ? 'Making a code…' : 'Make a new code'}
+            </button>
+            <button
+              type="button"
+              className="underline text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+              onClick={() => setOutcome(null)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {pairAs && !code && !outcome && (
         <div className="space-y-2" data-pair-as="">
           {choices ? (
             <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
@@ -254,11 +411,19 @@ export function PhonePairing({
       {view && view.devices.length > 0 && (
         <ul className="m-0 p-0 list-none divide-y divide-[var(--color-border)] border border-[var(--color-border)]" data-pair-list="">
           {view.devices.map((d) => (
-            <li key={d.id} className="flex items-center gap-3 px-2.5 py-2" data-pair-device={d.id}>
+            <li
+              key={d.id}
+              className={`flex items-center gap-3 px-2.5 py-2 transition-colors ${
+                highlight === d.id ? 'bg-[var(--color-bg-hover)] ring-1 ring-inset ring-[var(--color-status-success,#22c55e)]' : ''
+              }`}
+              data-pair-device={d.id}
+              data-pair-new={highlight === d.id ? '' : undefined}
+            >
               <div className="flex-1 min-w-0">
                 <div className="text-[11px] text-[var(--color-text-primary)] truncate">
                   {d.name}
                   {d.current ? ' (this phone)' : ''}
+                  {highlight === d.id ? ' · just paired' : ''}
                 </div>
                 <div className="text-[10px] text-[var(--color-text-muted)] truncate">
                   {mode === 'all' ? `${d.username} · ` : ''}paired {fmtWhen(d.createdAt)} · ends if unused {fmtWhen(d.expiresAt)}

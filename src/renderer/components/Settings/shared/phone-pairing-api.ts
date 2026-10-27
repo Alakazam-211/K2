@@ -4,6 +4,8 @@
 //   GET  /cli/auth/devices[?mine=1] → {devices[], pairAs}
 //   POST /cli/auth/device/pair-code  → {code, user, expiresAt, pairUrl, …}
 //   POST /cli/auth/device/revoke     → {revoked, username}
+//   GET  /cli/auth/device/pair-code/status?id= → {codeId, state, user, deviceName, sessionId}
+//        (0.46.6; the fallback for the `pair_code_changed` frame)
 // The daemon decides who a code pairs as, which logins the owner may pick,
 // whether a password is needed, and every refusal; this only carries it.
 
@@ -45,6 +47,9 @@ export interface DevicesView {
 
 export interface PairCode {
   code: string
+  /** The code's watch handle (0.46.6; null from an older server, which
+   *  then has no success state). */
+  codeId: string | null
   user: string
   expiresAt: string
   expiresInSecs: number
@@ -108,6 +113,7 @@ export function parsePairCode(body: unknown): PairCode {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
   return {
     code: str(b.code),
+    codeId: typeof b.codeId === 'string' && b.codeId ? b.codeId : null,
     user: str(b.user),
     expiresAt: str(b.expiresAt),
     expiresInSecs: typeof b.expiresInSecs === 'number' ? b.expiresInSecs : 600,
@@ -195,6 +201,40 @@ export async function revokePairedPhone(id: string, scope: ServerScope): Promise
   })
   if (status !== 200) return { ok: false, error: parseError(body, status) }
   return { ok: true, value: id }
+}
+
+/** One code's state (0.46.6), from `GET /cli/auth/device/pair-code/status`
+ *  or a `pair_code_changed` frame. */
+export interface PairCodeStatus {
+  codeId: string
+  state: 'pending' | 'paired' | 'expired' | 'void'
+  user: string
+  deviceName: string | null
+  sessionId: string | null
+}
+
+const CODE_STATES = new Set(['pending', 'paired', 'expired', 'void'])
+
+export function parsePairCodeStatus(body: unknown): PairCodeStatus | null {
+  const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
+  if (typeof b.codeId !== 'string' || typeof b.state !== 'string' || !CODE_STATES.has(b.state)) return null
+  return {
+    codeId: b.codeId,
+    state: b.state as PairCodeStatus['state'],
+    user: str(b.user),
+    deviceName: typeof b.deviceName === 'string' ? b.deviceName : null,
+    sessionId: typeof b.sessionId === 'string' ? b.sessionId : null,
+  }
+}
+
+/** The fallback for the `pair_code_changed` frame: one code's state, for
+ *  the caller that minted it. */
+export async function fetchPairCodeStatus(codeId: string, scope: ServerScope): Promise<Result<PairCodeStatus>> {
+  const { status, body } = await call(scope, '/cli/auth/device/pair-code/status', { id: codeId }, { method: 'GET' })
+  if (status !== 200) return { ok: false, error: parseError(body, status) }
+  const parsed = parsePairCodeStatus(body)
+  if (!parsed) return { ok: false, error: { code: 'bad_answer', hint: 'the server sent an unreadable code status' } }
+  return { ok: true, value: parsed }
 }
 
 /** Seconds left until `expiresAt` at `nowMs` (never negative). */

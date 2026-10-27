@@ -658,3 +658,188 @@ async fn a_password_change_ends_paired_phones_and_voids_codes() {
     let r = http(port, "POST", "/cli/auth/device/pair", Some(&body), EDGE);
     assert_code(&r, 401, "pair_code_invalid", "a code made before the password change");
 }
+
+// ── 0.46.6 pair success: the pair_code_changed frame and the status read ──
+
+type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn events_socket(port: u16, token: &str) -> Ws {
+    let url = format!("ws://127.0.0.1:{port}/cli/sessions/events?token={token}");
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.expect("events WS opens");
+    assert!(next_kind(&mut ws, "hello", Duration::from_secs(5)).await.is_some(), "no hello");
+    ws
+}
+
+async fn next_kind(ws: &mut Ws, kind: &str, wait: Duration) -> Option<Value> {
+    use futures_util::StreamExt;
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        match tokio::time::timeout(left, ws.next()).await {
+            Err(_) => return None,
+            Ok(None) => panic!("events socket closed"),
+            Ok(Some(Err(e))) => panic!("events socket error: {e}"),
+            Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t)))) => {
+                let v: Value = serde_json::from_str(&t).expect("frame JSON");
+                if v["kind"] == kind {
+                    return Some(v);
+                }
+            }
+            Ok(Some(Ok(_))) => {}
+        }
+    }
+}
+
+/// The next `pair_code_changed` frame for `code_id` (frames for other
+/// tests' codes in this process are skipped).
+async fn next_code(ws: &mut Ws, code_id: &str, wait: Duration) -> Option<Value> {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let f = next_kind(ws, "pair_code_changed", left).await?;
+        if f["codeId"] == code_id {
+            return Some(f);
+        }
+    }
+}
+
+/// `http` off the async worker (a blocking socket).
+fn call(port: u16, method: &str, path_and_query: &str, body: Option<&str>, extra: &[&str]) -> Resp {
+    tokio::task::block_in_place(|| http(port, method, path_and_query, body, extra))
+}
+
+fn status_of(port: u16, token: &str, code_id: &str) -> Resp {
+    call(port, "GET", &format!("/cli/auth/device/pair-code/status?id={code_id}&token={token}"), None, &[])
+}
+
+/// The frame carries the code id, state, login, device name and session
+/// id; never the code (in any spelling) or the device token.
+fn assert_no_secrets(frame: &Value, code: &str, token: Option<&str>) {
+    let text = frame.to_string();
+    let body = code.trim_start_matches("K2P-").replace('-', "");
+    assert!(!text.contains(code) && !text.contains(&body), "the code rode the frame: {text}");
+    if let Some(t) = token {
+        assert!(!text.contains(t), "the device token rode the frame: {text}");
+    }
+    let keys: std::collections::BTreeSet<&str> =
+        frame.as_object().expect("frame object").keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        ["codeId", "deviceName", "kind", "sessionId", "state", "user"].into_iter().collect(),
+        "exactly the documented fields: {text}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_redeem_and_an_expiry_reach_only_the_minters_sockets_without_secrets() {
+    let _g = lock();
+    let _home = HomeEnv::set();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let port = d.port;
+    connect_users::add_user("ps_phone", PW).expect("add ps_phone");
+    // An Owner-role login the owner did NOT link: its own person.
+    let other = add_login("ps_other", Role::Owner);
+    let mut owner_ws = events_socket(port, OWNER_TOKEN).await;
+    let mut other_ws = events_socket(port, &other).await;
+
+    // Mint: the answer carries a code id that is not the code.
+    let r = call(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some(r#"{"user":"ps_phone"}"#), &[]);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let code = r.json()["code"].as_str().expect("code").to_string();
+    let code_id = r.json()["codeId"].as_str().expect("codeId").to_string();
+    assert!(code_id.starts_with("pc_") && code_id.len() == 27, "{code_id}");
+
+    // Status: pending for the minter; 404 for anyone else; GET only.
+    let s = status_of(port, OWNER_TOKEN, &code_id);
+    assert_eq!(s.status, 200, "{}", s.body);
+    assert_eq!((s.json()["state"].clone(), s.json()["user"].clone()), (Value::from("pending"), Value::from("ps_phone")), "{}", s.body);
+    assert!(!s.body.contains(&code), "the status never echoes the code: {}", s.body);
+    assert_code(&status_of(port, &other, &code_id), 404, "no_such_code", "another login reads the owner's code");
+    assert_code(&status_of(port, OWNER_TOKEN, "pc_000000000000000000000000"), 404, "no_such_code", "an unknown id");
+    let r = call(port, "GET", &format!("/cli/auth/device/pair-code/status?id={code_id}"), None, &[]);
+    assert_code(&r, 401, "login_required", "no token");
+    let r = call(port, "GET", &format!("/cli/auth/device/pair-code/status?token={OWNER_TOKEN}"), None, &[]);
+    assert_code(&r, 400, "usage", "no id");
+    let r = call(port, "POST", &format!("/cli/auth/device/pair-code/status?id={code_id}&token={OWNER_TOKEN}"), Some("{}"), &[]);
+    assert_eq!(r.status, 405, "POST is refused: {}", r.body);
+
+    // The phone redeems: the answer adds serverName (never deviceName).
+    let body = format!(r#"{{"code":"{code}","device":{{"id":"ios-ps","name":"iPhone"}}}}"#);
+    let r = call(port, "POST", "/cli/auth/device/pair", Some(&body), EDGE);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let paired = r.json();
+    assert!(paired["serverName"].as_str().is_some_and(|n| !n.trim().is_empty()), "{}", r.body);
+    assert_eq!(paired.get("deviceName"), None, "no top-level deviceName: {}", r.body);
+    let token = paired["token"].as_str().expect("token").to_string();
+    let session_id = paired["device"]["sessionId"].as_str().expect("sessionId").to_string();
+
+    let f = next_code(&mut owner_ws, &code_id, Duration::from_secs(5)).await.expect("the minter hears the redeem");
+    assert_eq!(
+        f,
+        serde_json::json!({
+            "kind": "pair_code_changed",
+            "codeId": code_id,
+            "state": "paired",
+            "user": "ps_phone",
+            "deviceName": "iPhone",
+            "sessionId": session_id,
+        })
+    );
+    assert_no_secrets(&f, &code, Some(&token));
+    assert!(
+        next_code(&mut other_ws, &code_id, Duration::from_millis(1200)).await.is_none(),
+        "another person's socket never hears it"
+    );
+    // The frame's sessionId is the new row in the phones list.
+    let r = call(port, "GET", &format!("/cli/auth/devices?token={OWNER_TOKEN}"), None, &[]);
+    assert!(r.json()["devices"].as_array().expect("devices").iter().any(|d| d["id"] == session_id.as_str()), "{}", r.body);
+    let s = status_of(port, OWNER_TOKEN, &code_id);
+    assert_eq!(
+        (s.json()["state"].clone(), s.json()["deviceName"].clone(), s.json()["sessionId"].clone()),
+        (Value::from("paired"), Value::from("iPhone"), Value::from(session_id.clone())),
+        "{}",
+        s.body
+    );
+
+    // Expiry: an unused code is reported expired once its time is up.
+    let r = call(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some(r#"{"user":"ps_phone"}"#), &[]);
+    let late_code = r.json()["code"].as_str().expect("code").to_string();
+    let late_id = r.json()["codeId"].as_str().expect("codeId").to_string();
+    assert!(k2_core::connect_device_pairing::expire_now_for_test(&late_id), "pending");
+    assert!(k2_core::connect_device_pairing::sweep_expired() >= 1, "the code ran out");
+    let f = next_code(&mut owner_ws, &late_id, Duration::from_secs(5)).await.expect("the minter hears the expiry");
+    assert_eq!(
+        f,
+        serde_json::json!({
+            "kind": "pair_code_changed",
+            "codeId": late_id,
+            "state": "expired",
+            "user": "ps_phone",
+            "deviceName": null,
+            "sessionId": null,
+        })
+    );
+    assert_no_secrets(&f, &late_code, None);
+    assert!(next_code(&mut other_ws, &late_id, Duration::from_millis(1200)).await.is_none());
+    assert_eq!(status_of(port, OWNER_TOKEN, &late_id).json()["state"], "expired");
+
+    // A login's own code reaches only that login's sockets.
+    let r = call(port, "POST", "/cli/auth/device/pair-code", Some(r#"{"password":"password123"}"#), &[&bearer(&other)]);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let own_code = r.json()["code"].as_str().expect("code").to_string();
+    let own_id = r.json()["codeId"].as_str().expect("codeId").to_string();
+    assert_code(&status_of(port, OWNER_TOKEN, &own_id), 404, "no_such_code", "the owner token did not mint it");
+    assert_eq!(status_of(port, &other, &own_id).json()["state"], "pending");
+    let body = format!(r#"{{"code":"{own_code}","device":{{"id":"and-ps","name":"Android phone"}}}}"#);
+    let r = call(port, "POST", "/cli/auth/device/pair", Some(&body), EDGE);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let f = next_code(&mut other_ws, &own_id, Duration::from_secs(5)).await.expect("the minting login hears it");
+    assert_eq!(
+        (f["codeId"].clone(), f["deviceName"].clone(), f["user"].clone()),
+        (Value::from(own_id.clone()), Value::from("Android phone"), Value::from("ps_other"))
+    );
+    assert!(next_code(&mut owner_ws, &own_id, Duration::from_millis(1200)).await.is_none(), "the owner's sockets don't");
+}

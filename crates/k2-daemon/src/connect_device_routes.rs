@@ -40,6 +40,18 @@
 //!   login a new code from this caller would pair as.
 //! - `POST /cli/auth/device/revoke {id}`: end one paired phone (the owner
 //!   token or an Owner login: anyone's; any other login: its own).
+//! - `GET /cli/auth/device/pair-code/status?id=<codeId>` (0.46.6): one
+//!   code's state (`pending` / `paired` / `expired` / `void`) for the actor
+//!   that minted it; anyone else, and an unknown id, get 404
+//!   `no_such_code`. The fallback for the `pair_code_changed` frame.
+//!
+//! 0.46.6 pair success: a mint answers `codeId` too. When a code is
+//! redeemed, expires, or stops being usable, the daemon puts a
+//! `pair_code_changed` frame on the session events bus, person-scoped to
+//! the minter ([`code_event`]), so Pair a phone shows its success state and
+//! the phones list grows live. The `/pair` answer adds `serverName` (the
+//! server's friendly name, else its host) for the phone's Paired screen.
+//! Every redeem logs one timing line (outcome and milliseconds only).
 //!
 //! A device session ends after 30 days unused or 180 days after pairing
 //! (F1), on revoke, on the phone's own `POST /cli/auth/logout`, on a
@@ -60,6 +72,114 @@ pub const PAIR: &str = "/cli/auth/device/pair";
 pub const PAIR_CHECK: &str = "/cli/auth/device/pair/check";
 pub const DEVICES: &str = "/cli/auth/devices";
 pub const REVOKE: &str = "/cli/auth/device/revoke";
+/// One code's state, for its minter (GET, `?id=<codeId>`).
+pub const CODE_STATUS: &str = "/cli/auth/device/pair-code/status";
+
+/// The session-events frame for a finished code (0.46.6): person-scoped to
+/// whoever minted it. Never the code or a token.
+pub fn code_event(s: &pairing::CodeStatus) -> crate::session_events::SessionEvent {
+    let (device_name, session_id) = match &s.state {
+        pairing::CodeState::Paired { device_name, session_id } => (Some(device_name.clone()), Some(session_id.clone())),
+        _ => (None, None),
+    };
+    crate::session_events::SessionEvent::PairCodeChanged {
+        person: person_for_actor(&s.minted_by),
+        code_id: s.code_id.clone(),
+        state: s.state.as_wire().to_string(),
+        user: s.username.clone(),
+        device_name,
+        session_id,
+    }
+}
+
+/// The person key an actor's sockets carry (`session_events_ws`): the
+/// owner token is `owner`; a login is the owner when the owner linked it,
+/// else itself.
+pub fn person_for_actor(actor: &str) -> String {
+    match actor.strip_prefix("user:") {
+        None => "owner".to_string(),
+        Some(login) => match k2_core::notify_prefs::People::load() {
+            Ok(people) => people.person_key(login),
+            Err(_) => login.to_ascii_lowercase(),
+        },
+    }
+}
+
+/// Put every finished code on the events bus (once per process; called
+/// before the first mint, which is the only way a code exists).
+pub fn install_event_listener() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        pairing::set_listener(|s| {
+            let _ = crate::session_events::emit(code_event(s));
+        });
+    });
+}
+
+/// After a code's ten minutes, report it expired if nobody used it (the
+/// sweep is a no-op for a code already finished).
+pub fn schedule_expiry_sweep() {
+    if let Ok(rt) = tokio::runtime::Handle::try_current() {
+        rt.spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(pairing::CODE_TTL_SECS as u64 + 1)).await;
+            let _ = tokio::task::spawn_blocking(pairing::sweep_expired).await;
+        });
+    }
+}
+
+/// The server's friendly name for the phone's Paired screen: the
+/// computer's name (macOS Sharing name; Linux `PRETTY_HOSTNAME`), else
+/// the public host, else the system host name. Read once per process.
+pub fn server_display_name(public_host: Option<&str>) -> String {
+    static FRIENDLY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let friendly = FRIENDLY.get_or_init(friendly_computer_name);
+    if let Some(n) = friendly {
+        return n.clone();
+    }
+    if let Some(h) = public_host.filter(|h| !h.is_empty()) {
+        return h.to_string();
+    }
+    system_host_name().unwrap_or_else(|| "K2".to_string())
+}
+
+fn clean_server_name(raw: &str) -> Option<String> {
+    let n = pairing::clean_name(raw, pairing::MAX_NAME_CHARS, "");
+    (!n.is_empty()).then_some(n)
+}
+
+#[cfg(target_os = "macos")]
+fn friendly_computer_name() -> Option<String> {
+    let out = std::process::Command::new("/usr/sbin/scutil").args(["--get", "ComputerName"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    clean_server_name(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn friendly_computer_name() -> Option<String> {
+    let text = std::fs::read_to_string("/etc/machine-info").ok()?;
+    let line = text.lines().find_map(|l| l.trim().strip_prefix("PRETTY_HOSTNAME="))?;
+    clean_server_name(line.trim().trim_matches('"').trim_matches('\''))
+}
+
+#[cfg(not(unix))]
+fn system_host_name() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok().and_then(|n| clean_server_name(&n))
+}
+
+#[cfg(unix)]
+fn system_host_name() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: buf is valid for buf.len() bytes; gethostname NUL-terminates
+    // on success (the last byte is kept 0 in any case).
+    let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len() - 1) };
+    if rc != 0 {
+        return None;
+    }
+    let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+    clean_server_name(&String::from_utf8_lossy(&buf[..end]))
+}
 
 /// Mint throttle: codes per target login per [`crate::login_throttle::WINDOW_SECS`] (F4).
 pub const MINT_LIMIT: usize = 10;
@@ -281,11 +401,13 @@ pub fn pair_url(host: &str, code: &str) -> String {
 
 /// Mint for `target` (all checks done) and answer.
 pub fn mint_response(target: &str, actor: &str, host: Option<&str>) -> CliResponse {
+    install_event_listener();
     match pairing::mint(target, actor) {
         Ok(code) => {
             let mut body = json!({
                 "ok": true,
                 "code": code.code,
+                "codeId": code.code_id,
                 "user": code.username,
                 "expiresAt": code.expires_at.to_rfc3339(),
                 "expiresInSecs": pairing::CODE_TTL_SECS,
@@ -314,6 +436,9 @@ pub struct PairReply {
     pub outcome: &'static str,
     /// Set on success: (device name, minted by, device session id).
     pub paired: Option<(String, String, String)>,
+    /// How long the redeem itself took (`None` when it never ran: a bad
+    /// body, or a check).
+    pub redeem_ms: Option<f64>,
 }
 
 fn pair_invalid() -> CliResponse {
@@ -325,12 +450,14 @@ fn pair_invalid() -> CliResponse {
 }
 
 /// `POST /cli/auth/device/pair {code, device: {id, name}}` (Public).
-pub fn handle_pair(body: &[u8]) -> PairReply {
+/// `public_host` feeds `serverName`'s fallback.
+pub fn handle_pair(body: &[u8], public_host: Option<&str>) -> PairReply {
     let reply = |response: CliResponse, user: &str, outcome: &'static str| PairReply {
         response,
         user: user.to_string(),
         outcome,
         paired: None,
+        redeem_ms: None,
     };
     let v = match json_body(body) {
         Ok(v) => v,
@@ -344,7 +471,14 @@ pub fn handle_pair(body: &[u8]) -> PairReply {
         Ok(None) => return reply(usage("send {code, device: {id, name}}: device is required"), "", "rejected"),
         Err(e) => return reply(usage(&e), "", "rejected"),
     };
-    match pairing::redeem(code, &device.id, &device.name) {
+    let started = std::time::Instant::now();
+    let redeemed = pairing::redeem(code, &device.id, &device.name);
+    let redeem_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+    let timed = |mut r: PairReply| {
+        r.redeem_ms = redeem_ms;
+        r
+    };
+    match redeemed {
         Ok(Ok(paired)) => {
             let role = connect_users::role_for_user(&paired.username).map(|r| r.as_wire()).unwrap_or("member");
             let expires_at = (chrono::Utc::now() + chrono::Duration::days(connect_users::DEVICE_SESSION_TTL_DAYS)).to_rfc3339();
@@ -363,18 +497,56 @@ pub fn handle_pair(body: &[u8]) -> PairReply {
                 // change its password can't get or redeem a code).
                 "mustChangePassword": false,
                 "device": { "sessionId": paired.session_id, "id": device.id, "name": paired.device_name },
+                // 0.46.6 (additive): the server's friendly name for the
+                // phone's Paired screen, else its host.
+                "serverName": server_display_name(public_host),
             });
             PairReply {
                 response: CliResponse::ok_json(body.to_string()),
                 user: paired.username.clone(),
                 outcome: "ok",
                 paired: Some((paired.device_name, paired.minted_by, paired.session_id)),
+                redeem_ms,
             }
         }
-        Ok(Err(pairing::Refused::PasswordChangeRequired)) => reply(password_change_required(), "", "password_change_required"),
-        Ok(Err(why)) => reply(pair_invalid(), "", why.as_str()),
-        Err(e) => reply(CliResponse::internal_error(e), "", "error"),
+        Ok(Err(pairing::Refused::PasswordChangeRequired)) => {
+            timed(reply(password_change_required(), "", "password_change_required"))
+        }
+        Ok(Err(why)) => timed(reply(pair_invalid(), "", why.as_str())),
+        Err(e) => timed(reply(CliResponse::internal_error(e), "", "error")),
     }
+}
+
+/// The one timing line for a `POST /cli/auth/device/pair` (0.46.6): the
+/// outcome and milliseconds only, never the code, token or device.
+pub fn pair_timing_line(outcome: &str, redeem_ms: Option<f64>, total_ms: f64) -> String {
+    let redeem = redeem_ms.map(|m| format!("{m:.3}")).unwrap_or_else(|| "-".to_string());
+    format!("[pairing] side=daemon PAIR_SUMMARY route=/cli/auth/device/pair outcome={outcome} redeem_ms={redeem} total_ms={total_ms:.3}")
+}
+
+/// `GET /cli/auth/device/pair-code/status?id=<codeId>`: one code's state
+/// for the actor that minted it (0.46.6). Never the code or a token.
+pub fn handle_code_status(caller: &Caller, code_id: Option<&str>) -> CliResponse {
+    let Some(id) = code_id.map(str::trim).filter(|s| !s.is_empty()) else {
+        return usage("send ?id=<codeId> (from POST /cli/auth/device/pair-code)");
+    };
+    let Some(s) = pairing::status(id, &caller.actor()) else {
+        return refusal("404 Not Found", "no_such_code", "no pairing code with that id is yours to watch");
+    };
+    let mut body = json!({
+        "ok": true,
+        "codeId": s.code_id,
+        "state": s.state.as_wire(),
+        "user": s.username,
+        "expiresAt": s.expires_at.to_rfc3339(),
+        "deviceName": Value::Null,
+        "sessionId": Value::Null,
+    });
+    if let pairing::CodeState::Paired { device_name, session_id } = &s.state {
+        body["deviceName"] = json!(device_name);
+        body["sessionId"] = json!(session_id);
+    }
+    CliResponse::ok_json(body.to_string())
 }
 
 /// `POST /cli/auth/device/pair/check {code}` (Public): what a still-valid
@@ -386,6 +558,7 @@ pub fn handle_pair_check(body: &[u8], host: Option<&str>) -> PairReply {
         user: user.to_string(),
         outcome,
         paired: None,
+        redeem_ms: None,
     };
     let v = match json_body(body) {
         Ok(v) => v,
@@ -528,6 +701,38 @@ pub fn handle_revoke(caller: &Caller, body: &[u8]) -> (CliResponse, Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_timing_line_holds_the_outcome_and_milliseconds_only() {
+        let line = pair_timing_line("ok", Some(0.4567), 3.21);
+        assert_eq!(
+            line,
+            "[pairing] side=daemon PAIR_SUMMARY route=/cli/auth/device/pair outcome=ok redeem_ms=0.457 total_ms=3.210"
+        );
+        assert!(pair_timing_line("rejected", None, 1.0).contains("redeem_ms=-"));
+    }
+
+    #[test]
+    fn a_finished_code_becomes_a_frame_for_its_minter() {
+        let at = chrono::Utc::now();
+        let paired = pairing::CodeStatus {
+            code_id: "pc_1".into(),
+            username: "ada".into(),
+            minted_by: "owner-token".into(),
+            expires_at: at,
+            state: pairing::CodeState::Paired { device_name: "iPad".into(), session_id: "s-1".into() },
+        };
+        let ev = code_event(&paired);
+        assert_eq!(ev.person(), Some("owner"), "the owner token's frames go to the owner person");
+        let v: Value = serde_json::to_value(&ev).expect("ser");
+        assert_eq!(
+            v,
+            json!({ "kind": "pair_code_changed", "codeId": "pc_1", "state": "paired", "user": "ada", "deviceName": "iPad", "sessionId": "s-1" })
+        );
+        let expired = pairing::CodeStatus { state: pairing::CodeState::Expired, ..paired };
+        let v: Value = serde_json::to_value(code_event(&expired)).expect("ser");
+        assert_eq!((v["state"].clone(), v["deviceName"].clone(), v["sessionId"].clone()), (json!("expired"), Value::Null, Value::Null));
+    }
 
     #[test]
     fn notice_names_are_escaped() {

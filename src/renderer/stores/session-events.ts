@@ -367,6 +367,20 @@ export interface HomesDeviceRemovedEvent {
   deviceId: string
 }
 
+/** APP-LEVEL, PERSON-SCOPED (0.46.6 pair success) — a Companion pairing
+ *  code this person minted finished: a phone `paired`, it `expired` unused,
+ *  or it went `void` (a newer code replaced it, or the login changed).
+ *  `deviceName` / `sessionId` (the phone's row id in `GET
+ *  /cli/auth/devices`) are set on `paired` only. Never the code or a token. */
+export interface PairCodeChangedEvent {
+  kind: 'pair_code_changed'
+  codeId: string
+  state: 'paired' | 'expired' | 'void'
+  user: string
+  deviceName: string | null
+  sessionId: string | null
+}
+
 /** APP-LEVEL — a remote drive attempt was refused (owner audit). Ignored:
  *  no client surface shows it yet. Fields are snake_case on the wire. */
 export interface RemoteSessionAccessDeniedEvent {
@@ -869,6 +883,7 @@ export type SessionEventMessage =
   | ProjectReadEvent
   | HomesChangedEvent
   | HomesDeviceRemovedEvent
+  | PairCodeChangedEvent
   | RemoteSessionAccessDeniedEvent
   | SewChangedEvent
   | RoomMembersChangedEvent
@@ -1361,6 +1376,8 @@ export type ReadStateChangedHandler = (e: ThreadReadEvent | ProjectReadEvent) =>
 // homes-sync-v1 — the Homes sync runner's pull signal and device removal.
 type HomesChangedHandler = (cursor: number) => void
 type HomesDeviceRemovedHandler = (deviceId: string) => void
+// 0.46.6 pair success — Pair a phone's success / expiry and the phones list.
+type PairCodeChangedHandler = (e: PairCodeChangedEvent) => void
 
 type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
 
@@ -1413,6 +1430,7 @@ interface AppBusHandlers {
   readStateChanged: Set<ReadStateChangedHandler>
   homesChanged: Set<HomesChangedHandler>
   homesDeviceRemoved: Set<HomesDeviceRemovedHandler>
+  pairCodeChanged: Set<PairCodeChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
   zenAgentsOrderChanged: Set<ZenAgentsOrderChangedHandler>
@@ -1468,6 +1486,7 @@ function createBusState(scopeId: string): BusState {
       readStateChanged: new Set(),
       homesChanged: new Set(),
       homesDeviceRemoved: new Set(),
+      pairCodeChanged: new Set(),
       activeChanged: new Set(),
       zenChanged: new Set(),
       zenAgentsOrderChanged: new Set(),
@@ -1821,6 +1840,13 @@ export function onHomesDeviceRemoved(scope: ServerScope, fn: HomesDeviceRemovedH
   return addHandler(busFor(scope).handlers.homesDeviceRemoved, fn)
 }
 
+/** 0.46.6 pair success — subscribe to `pair_code_changed` on `scope`'s
+ *  server (only the minting person's sockets get it). Pair a phone matches
+ *  `codeId` against the code it shows; the phones list adds the phone. */
+export function onPairCodeChanged(scope: ServerScope, fn: PairCodeChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.pairCodeChanged, fn)
+}
+
 /** Home M4: the server's whole Active set changed (`active_changed`).
  *  Fed by a pinned room's carrier socket; the window's own Active set
  *  stays on `subscribeToActiveState` → `useActiveStore`. */
@@ -2001,6 +2027,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   homes_device_removed: (h, m) => {
     for (const fn of h.homesDeviceRemoved) fn(m.deviceId)
+  },
+  pair_code_changed: (h, m) => {
+    for (const fn of h.pairCodeChanged) fn(m)
   },
   zen_changed: (h) => {
     for (const fn of h.zenChanged) fn()

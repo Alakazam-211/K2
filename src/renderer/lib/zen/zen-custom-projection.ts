@@ -374,10 +374,28 @@ export const ZEN_ACTIVITY_TURN_KEYS = [
   'messages',
   'waitingOn',
   'end',
+  // Frame schema 2 (0.46.5): closed words, counts and a coarse clock.
+  'schema',
+  'stepKind',
+  'childCounts',
+  'openBecause',
+  'evidenceAt',
 ] as const
+
+/** The daemon's `TURN_SCHEMA`: every guest turn says 2. */
+export const ZEN_ACTIVITY_TURN_SCHEMA = 2
+/** `GUEST_EVIDENCE_GRAIN_MS`: a guest's evidence clock is floored to 10 s. */
+export const ZEN_ACTIVITY_EVIDENCE_GRAIN_MS = 10_000
+const ZEN_STEP_KINDS = ['read', 'search', 'cmd', 'edit', 'web', 'subagent', 'tool'] as const
+const ZEN_OPEN_BECAUSE = ['lead', 'children', 'waiting', 'stale'] as const
 
 /** The catalog's AppThreadTurn. */
 export interface ZenWidgetActivityTurn {
+  schema: number
+  stepKind: (typeof ZEN_STEP_KINDS)[number] | null
+  childCounts: { subagent: number; shell: number; monitor: number; task: number }
+  openBecause: (typeof ZEN_OPEN_BECAUSE)[number] | null
+  evidenceAt: number | null
   turnId: string
   rev: number
   state: string
@@ -437,7 +455,22 @@ export function projectZenActivityTurn(t: ThreadTurn): ZenWidgetActivityTurn {
     // Rosson 2026-10-21: "waiting on the owner", never which prompt.
     waitingOn: t.waitingOn !== null ? 'owner' : null,
     end: t.end ? { reason: zenCoarseEndReason(t.end.reason) } : null,
+    schema: ZEN_ACTIVITY_TURN_SCHEMA,
+    stepKind: ZEN_STEP_KINDS.find((k) => k === t.stepKind) ?? null,
+    childCounts: {
+      subagent: whole(t.childCounts?.subagent),
+      shell: whole(t.childCounts?.shell),
+      monitor: whole(t.childCounts?.monitor),
+      task: whole(t.childCounts?.task),
+    },
+    openBecause: ZEN_OPEN_BECAUSE.find((k) => k === t.openBecause) ?? null,
+    evidenceAt: floorTo(msOrNull(t.evidenceAt ?? undefined), ZEN_ACTIVITY_EVIDENCE_GRAIN_MS),
   }
+}
+
+/** `t - t.rem_euclid(grain)` (floors negative times too). */
+function floorTo(t: number | null, grain: number): number | null {
+  return t === null ? null : t - (((t % grain) + grain) % grain)
 }
 
 /** The turn id a subscriber must not show as an end frame: the turn that

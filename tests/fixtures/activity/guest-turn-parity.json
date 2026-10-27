@@ -1,146 +1,692 @@
 {
-  "about": "0.46.5 activity SDK: owner Thread turn bodies (thread_activity.rs) and the turn an App guest gets for each (guest_turn_body). The daemon test (thread_activity.rs guest_turn_parity_fixture) and the Garden widget test (zen-activity-parity.test.ts, projectZenActivityTurn over coerceThreadTurn) both hold to it: a widget with thread:read + activity:read sees what an App guest with the same caps sees. `secrets` must never appear in a guest body.",
-  "secrets": ["cargo test", "sk-live-abc123", "npm run dev", "Explore", "agent replied", "/Users/rosson", "approve rm -rf"],
-  "cases": [
-    {
-      "name": "a tool step with labelled children",
-      "owner": {
-        "turnId": "msg-1", "rev": 4, "state": "working", "phase": "tool", "phaseSince": 1000071000,
-        "line": "Running `cargo test --token sk-live-abc123`", "startedAt": 1000060000, "since": 1000060000,
-        "serverNow": 1000072000, "messages": 1, "replied": false, "lastComposeAt": 1000060000,
-        "subagents": 2, "subagentsDone": 1, "background": 1,
-        "children": [
-          { "kind": "shell", "state": "running", "label": "Running `npm run dev`", "since": 1000061000 },
-          { "kind": "subagent", "state": "running", "label": "Explore", "since": 1000062000 }
-        ],
-        "tally": { "read": 3, "search": 1, "cmd": 2, "edit": 0 }, "waitingOn": null, "end": null
-      },
-      "guest": {
-        "turnId": "msg-1", "rev": 4, "state": "working", "phase": "tool", "phaseSince": 1000071000,
-        "startedAt": 1000060000, "serverNow": 1000072000,
-        "tally": { "read": 3, "search": 1, "cmd": 2, "edit": 0 },
-        "subagents": 2, "subagentsDone": 1, "background": 1, "messages": 1, "waitingOn": null, "end": null
-      }
+ "about": "0.46.5 activity SDK: owner Thread turn bodies (thread_activity.rs) and the turn an App guest gets for each (guest_turn_body, frame schema 2). The daemon test (thread_activity.rs guest_turn_parity_fixture) and the Garden widget test (zen-activity-parity.test.ts, projectZenActivityTurn over coerceThreadTurn) both hold to it: a widget with thread:read + activity:read sees what an App guest with the same caps sees. `secrets` must never appear in a guest body.",
+ "secrets": [
+  "cargo test",
+  "sk-live-abc123",
+  "npm run dev",
+  "Explore",
+  "agent replied",
+  "/Users/rosson",
+  "approve rm -rf"
+ ],
+ "cases": [
+  {
+   "name": "a tool step with labelled children",
+   "owner": {
+    "turnId": "msg-1",
+    "rev": 4,
+    "state": "working",
+    "phase": "tool",
+    "phaseSince": 1000071000,
+    "line": "Running `cargo test --token sk-live-abc123`",
+    "startedAt": 1000060000,
+    "since": 1000060000,
+    "serverNow": 1000072000,
+    "messages": 1,
+    "replied": false,
+    "lastComposeAt": 1000060000,
+    "subagents": 2,
+    "subagentsDone": 1,
+    "background": 1,
+    "children": [
+     {
+      "kind": "shell",
+      "state": "running",
+      "label": "Running `npm run dev`",
+      "since": 1000061000
+     },
+     {
+      "kind": "subagent",
+      "state": "running",
+      "label": "Explore",
+      "since": 1000062000
+     }
+    ],
+    "tally": {
+     "read": 3,
+     "search": 1,
+     "cmd": 2,
+     "edit": 0
     },
-    {
-      "name": "waiting on a permission prompt",
-      "owner": {
-        "turnId": "msg-2", "rev": 7, "state": "needs-you", "phase": "waiting", "phaseSince": 1000080000,
-        "line": null, "startedAt": 1000070000, "since": 1000070000, "serverNow": 1000081000,
-        "messages": 2, "replied": false, "lastComposeAt": 1000075000,
-        "subagents": 0, "subagentsDone": 0, "background": 0, "children": [],
-        "tally": { "read": 0, "search": 0, "cmd": 1, "edit": 0 }, "waitingOn": "permission", "end": null
-      },
-      "guest": {
-        "turnId": "msg-2", "rev": 7, "state": "needs-you", "phase": "waiting", "phaseSince": 1000080000,
-        "startedAt": 1000070000, "serverNow": 1000081000,
-        "tally": { "read": 0, "search": 0, "cmd": 1, "edit": 0 },
-        "subagents": 0, "subagentsDone": 0, "background": 0, "messages": 2, "waitingOn": "owner", "end": null
-      }
+    "waitingOn": null,
+    "end": null,
+    "schema": 2,
+    "stepKind": "cmd",
+    "childCounts": {
+     "subagent": 2,
+     "shell": 1,
+     "monitor": 0,
+     "task": 0
     },
-    {
-      "name": "waiting on a question",
-      "owner": {
-        "turnId": "msg-3", "rev": 2, "state": "needs-you", "phase": "waiting", "phaseSince": 1000090000,
-        "line": null, "startedAt": 1000089000, "since": 1000089000, "serverNow": 1000090500,
-        "messages": 1, "replied": false, "lastComposeAt": 1000089000,
-        "subagents": 0, "subagentsDone": 0, "background": 0, "children": [],
-        "tally": { "read": 0, "search": 0, "cmd": 0, "edit": 0 }, "waitingOn": "question", "end": null
-      },
-      "guest": {
-        "turnId": "msg-3", "rev": 2, "state": "needs-you", "phase": "waiting", "phaseSince": 1000090000,
-        "startedAt": 1000089000, "serverNow": 1000090500,
-        "tally": { "read": 0, "search": 0, "cmd": 0, "edit": 0 },
-        "subagents": 0, "subagentsDone": 0, "background": 0, "messages": 1, "waitingOn": "owner", "end": null
-      }
+    "openBecause": "lead",
+    "evidenceAt": 1000071234
+   },
+   "guest": {
+    "turnId": "msg-1",
+    "rev": 4,
+    "state": "working",
+    "phase": "tool",
+    "phaseSince": 1000071000,
+    "startedAt": 1000060000,
+    "serverNow": 1000072000,
+    "tally": {
+     "read": 3,
+     "search": 1,
+     "cmd": 2,
+     "edit": 0
     },
-    {
-      "name": "replied, a background task still running (monitoring)",
-      "owner": {
-        "turnId": "msg-4", "rev": 9, "state": "monitoring", "phase": "children", "phaseSince": 1000100000,
-        "line": null, "startedAt": 1000095000, "since": 1000095000, "serverNow": 1000101000,
-        "messages": 1, "replied": true, "lastComposeAt": 1000095000,
-        "subagents": 0, "subagentsDone": 2, "background": 1,
-        "children": [{ "kind": "shell", "state": "running", "label": "Running `npm run dev` in /Users/rosson/app", "since": 1000096000 }],
-        "tally": { "read": 5, "search": 2, "cmd": 4, "edit": 3 }, "waitingOn": null, "end": null
-      },
-      "guest": {
-        "turnId": "msg-4", "rev": 9, "state": "monitoring", "phase": "children", "phaseSince": 1000100000,
-        "startedAt": 1000095000, "serverNow": 1000101000,
-        "tally": { "read": 5, "search": 2, "cmd": 4, "edit": 3 },
-        "subagents": 0, "subagentsDone": 2, "background": 1, "messages": 1, "waitingOn": null, "end": null
-      }
+    "subagents": 2,
+    "subagentsDone": 1,
+    "background": 1,
+    "messages": 1,
+    "waitingOn": null,
+    "end": null,
+    "schema": 2,
+    "stepKind": "cmd",
+    "childCounts": {
+     "subagent": 2,
+     "shell": 1,
+     "monitor": 0,
+     "task": 0
     },
-    {
-      "name": "ended by a reply (done)",
-      "owner": {
-        "turnId": "msg-5", "rev": 12, "state": "idle", "phase": "working", "phaseSince": 1000110000,
-        "line": null, "startedAt": 1000105000, "since": 1000105000, "serverNow": 1000111000,
-        "messages": 1, "replied": true, "lastComposeAt": 1000105000,
-        "subagents": 0, "subagentsDone": 0, "background": 0, "children": [],
-        "tally": { "read": 1, "search": 0, "cmd": 0, "edit": 1 }, "waitingOn": null,
-        "end": { "reason": "reply", "detail": "agent replied", "at": 1000111000 }
-      },
-      "guest": {
-        "turnId": "msg-5", "rev": 12, "state": "idle", "phase": "working", "phaseSince": 1000110000,
-        "startedAt": 1000105000, "serverNow": 1000111000,
-        "tally": { "read": 1, "search": 0, "cmd": 0, "edit": 1 },
-        "subagents": 0, "subagentsDone": 0, "background": 0, "messages": 1, "waitingOn": null,
-        "end": { "reason": "done" }
-      }
+    "openBecause": "lead",
+    "evidenceAt": 1000070000
+   }
+  },
+  {
+   "name": "waiting on a permission prompt",
+   "owner": {
+    "turnId": "msg-2",
+    "rev": 7,
+    "state": "needs-you",
+    "phase": "waiting",
+    "phaseSince": 1000080000,
+    "line": null,
+    "startedAt": 1000070000,
+    "since": 1000070000,
+    "serverNow": 1000081000,
+    "messages": 2,
+    "replied": false,
+    "lastComposeAt": 1000075000,
+    "subagents": 0,
+    "subagentsDone": 0,
+    "background": 0,
+    "children": [],
+    "tally": {
+     "read": 0,
+     "search": 0,
+     "cmd": 1,
+     "edit": 0
     },
-    {
-      "name": "superseded (stopped)",
-      "owner": {
-        "turnId": "msg-6", "rev": 3, "state": "stopped", "phase": "thinking", "phaseSince": 1000120000,
-        "line": null, "startedAt": 1000119000, "since": 1000119000, "serverNow": 1000121000,
-        "messages": 1, "replied": false, "lastComposeAt": 1000119000,
-        "subagents": 0, "subagentsDone": 0, "background": 0, "children": [],
-        "tally": { "read": 0, "search": 0, "cmd": 0, "edit": 0 }, "waitingOn": null,
-        "end": { "reason": "superseded", "detail": "approve rm -rf", "at": 1000121000 }
-      },
-      "guest": {
-        "turnId": "msg-6", "rev": 3, "state": "stopped", "phase": "thinking", "phaseSince": 1000120000,
-        "startedAt": 1000119000, "serverNow": 1000121000,
-        "tally": { "read": 0, "search": 0, "cmd": 0, "edit": 0 },
-        "subagents": 0, "subagentsDone": 0, "background": 0, "messages": 1, "waitingOn": null,
-        "end": { "reason": "stopped" }
-      }
+    "waitingOn": "permission",
+    "end": null,
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
     },
-    {
-      "name": "the message never arrived (failed)",
-      "owner": {
-        "turnId": "msg-7", "rev": 1, "state": "stopped", "phase": "delivering", "phaseSince": 1000130000,
-        "line": null, "startedAt": 1000130000, "since": 1000130000, "serverNow": 1000130500,
-        "messages": 1, "replied": false, "lastComposeAt": 1000130000,
-        "subagents": 0, "subagentsDone": 0, "background": 0, "children": [],
-        "tally": { "read": 0, "search": 0, "cmd": 0, "edit": 0 }, "waitingOn": null,
-        "end": { "reason": "delivery_failed", "detail": "session gone", "at": 1000130500 }
-      },
-      "guest": {
-        "turnId": "msg-7", "rev": 1, "state": "stopped", "phase": "delivering", "phaseSince": 1000130000,
-        "startedAt": 1000130000, "serverNow": 1000130500,
-        "tally": { "read": 0, "search": 0, "cmd": 0, "edit": 0 },
-        "subagents": 0, "subagentsDone": 0, "background": 0, "messages": 1, "waitingOn": null,
-        "end": { "reason": "failed" }
-      }
+    "openBecause": "waiting",
+    "evidenceAt": 1000080999
+   },
+   "guest": {
+    "turnId": "msg-2",
+    "rev": 7,
+    "state": "needs-you",
+    "phase": "waiting",
+    "phaseSince": 1000080000,
+    "startedAt": 1000070000,
+    "serverNow": 1000081000,
+    "tally": {
+     "read": 0,
+     "search": 0,
+     "cmd": 1,
+     "edit": 0
     },
-    {
-      "name": "unverifiable after a long silence",
-      "owner": {
-        "turnId": "msg-8", "rev": 20, "state": "unverifiable", "phase": "stale", "phaseSince": 1002000000,
-        "line": null, "startedAt": 1000000000, "since": 1000000000, "serverNow": 1002000500,
-        "messages": 3, "replied": false, "lastComposeAt": 1000500000,
-        "subagents": 1, "subagentsDone": 0, "background": 0,
-        "children": [{ "kind": "subagent", "state": "running", "label": "Explore", "since": 1000001000 }],
-        "tally": { "read": 9, "search": 4, "cmd": 0, "edit": 0 }, "waitingOn": null, "end": null
-      },
-      "guest": {
-        "turnId": "msg-8", "rev": 20, "state": "unverifiable", "phase": "stale", "phaseSince": 1002000000,
-        "startedAt": 1000000000, "serverNow": 1002000500,
-        "tally": { "read": 9, "search": 4, "cmd": 0, "edit": 0 },
-        "subagents": 1, "subagentsDone": 0, "background": 0, "messages": 3, "waitingOn": null, "end": null
-      }
-    }
-  ]
+    "subagents": 0,
+    "subagentsDone": 0,
+    "background": 0,
+    "messages": 2,
+    "waitingOn": "owner",
+    "end": null,
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": "waiting",
+    "evidenceAt": 1000080000
+   }
+  },
+  {
+   "name": "waiting on a question",
+   "owner": {
+    "turnId": "msg-3",
+    "rev": 2,
+    "state": "needs-you",
+    "phase": "waiting",
+    "phaseSince": 1000090000,
+    "line": null,
+    "startedAt": 1000089000,
+    "since": 1000089000,
+    "serverNow": 1000090500,
+    "messages": 1,
+    "replied": false,
+    "lastComposeAt": 1000089000,
+    "subagents": 0,
+    "subagentsDone": 0,
+    "background": 0,
+    "children": [],
+    "tally": {
+     "read": 0,
+     "search": 0,
+     "cmd": 0,
+     "edit": 0
+    },
+    "waitingOn": "question",
+    "end": null,
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": "waiting",
+    "evidenceAt": null
+   },
+   "guest": {
+    "turnId": "msg-3",
+    "rev": 2,
+    "state": "needs-you",
+    "phase": "waiting",
+    "phaseSince": 1000090000,
+    "startedAt": 1000089000,
+    "serverNow": 1000090500,
+    "tally": {
+     "read": 0,
+     "search": 0,
+     "cmd": 0,
+     "edit": 0
+    },
+    "subagents": 0,
+    "subagentsDone": 0,
+    "background": 0,
+    "messages": 1,
+    "waitingOn": "owner",
+    "end": null,
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": "waiting",
+    "evidenceAt": null
+   }
+  },
+  {
+   "name": "replied, a background task still running (monitoring)",
+   "owner": {
+    "turnId": "msg-4",
+    "rev": 9,
+    "state": "monitoring",
+    "phase": "children",
+    "phaseSince": 1000100000,
+    "line": null,
+    "startedAt": 1000095000,
+    "since": 1000095000,
+    "serverNow": 1000101000,
+    "messages": 1,
+    "replied": true,
+    "lastComposeAt": 1000095000,
+    "subagents": 0,
+    "subagentsDone": 2,
+    "background": 1,
+    "children": [
+     {
+      "kind": "shell",
+      "state": "running",
+      "label": "Running `npm run dev` in /Users/rosson/app",
+      "since": 1000096000
+     }
+    ],
+    "tally": {
+     "read": 5,
+     "search": 2,
+     "cmd": 4,
+     "edit": 3
+    },
+    "waitingOn": null,
+    "end": null,
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 1,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": "children",
+    "evidenceAt": 1000100500
+   },
+   "guest": {
+    "turnId": "msg-4",
+    "rev": 9,
+    "state": "monitoring",
+    "phase": "children",
+    "phaseSince": 1000100000,
+    "startedAt": 1000095000,
+    "serverNow": 1000101000,
+    "tally": {
+     "read": 5,
+     "search": 2,
+     "cmd": 4,
+     "edit": 3
+    },
+    "subagents": 0,
+    "subagentsDone": 2,
+    "background": 1,
+    "messages": 1,
+    "waitingOn": null,
+    "end": null,
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 1,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": "children",
+    "evidenceAt": 1000100000
+   }
+  },
+  {
+   "name": "ended by a reply (done)",
+   "owner": {
+    "turnId": "msg-5",
+    "rev": 12,
+    "state": "idle",
+    "phase": "working",
+    "phaseSince": 1000110000,
+    "line": null,
+    "startedAt": 1000105000,
+    "since": 1000105000,
+    "serverNow": 1000111000,
+    "messages": 1,
+    "replied": true,
+    "lastComposeAt": 1000105000,
+    "subagents": 0,
+    "subagentsDone": 0,
+    "background": 0,
+    "children": [],
+    "tally": {
+     "read": 1,
+     "search": 0,
+     "cmd": 0,
+     "edit": 1
+    },
+    "waitingOn": null,
+    "end": {
+     "reason": "reply",
+     "detail": "agent replied",
+     "at": 1000111000
+    },
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": null,
+    "evidenceAt": 1000110000
+   },
+   "guest": {
+    "turnId": "msg-5",
+    "rev": 12,
+    "state": "idle",
+    "phase": "working",
+    "phaseSince": 1000110000,
+    "startedAt": 1000105000,
+    "serverNow": 1000111000,
+    "tally": {
+     "read": 1,
+     "search": 0,
+     "cmd": 0,
+     "edit": 1
+    },
+    "subagents": 0,
+    "subagentsDone": 0,
+    "background": 0,
+    "messages": 1,
+    "waitingOn": null,
+    "end": {
+     "reason": "done"
+    },
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": null,
+    "evidenceAt": 1000110000
+   }
+  },
+  {
+   "name": "superseded (stopped)",
+   "owner": {
+    "turnId": "msg-6",
+    "rev": 3,
+    "state": "stopped",
+    "phase": "thinking",
+    "phaseSince": 1000120000,
+    "line": null,
+    "startedAt": 1000119000,
+    "since": 1000119000,
+    "serverNow": 1000121000,
+    "messages": 1,
+    "replied": false,
+    "lastComposeAt": 1000119000,
+    "subagents": 0,
+    "subagentsDone": 0,
+    "background": 0,
+    "children": [],
+    "tally": {
+     "read": 0,
+     "search": 0,
+     "cmd": 0,
+     "edit": 0
+    },
+    "waitingOn": null,
+    "end": {
+     "reason": "superseded",
+     "detail": "approve rm -rf",
+     "at": 1000121000
+    },
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": null,
+    "evidenceAt": 1000120400
+   },
+   "guest": {
+    "turnId": "msg-6",
+    "rev": 3,
+    "state": "stopped",
+    "phase": "thinking",
+    "phaseSince": 1000120000,
+    "startedAt": 1000119000,
+    "serverNow": 1000121000,
+    "tally": {
+     "read": 0,
+     "search": 0,
+     "cmd": 0,
+     "edit": 0
+    },
+    "subagents": 0,
+    "subagentsDone": 0,
+    "background": 0,
+    "messages": 1,
+    "waitingOn": null,
+    "end": {
+     "reason": "stopped"
+    },
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": null,
+    "evidenceAt": 1000120000
+   }
+  },
+  {
+   "name": "the message never arrived (failed)",
+   "owner": {
+    "turnId": "msg-7",
+    "rev": 1,
+    "state": "stopped",
+    "phase": "delivering",
+    "phaseSince": 1000130000,
+    "line": null,
+    "startedAt": 1000130000,
+    "since": 1000130000,
+    "serverNow": 1000130500,
+    "messages": 1,
+    "replied": false,
+    "lastComposeAt": 1000130000,
+    "subagents": 0,
+    "subagentsDone": 0,
+    "background": 0,
+    "children": [],
+    "tally": {
+     "read": 0,
+     "search": 0,
+     "cmd": 0,
+     "edit": 0
+    },
+    "waitingOn": null,
+    "end": {
+     "reason": "delivery_failed",
+     "detail": "session gone",
+     "at": 1000130500
+    },
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": null,
+    "evidenceAt": null
+   },
+   "guest": {
+    "turnId": "msg-7",
+    "rev": 1,
+    "state": "stopped",
+    "phase": "delivering",
+    "phaseSince": 1000130000,
+    "startedAt": 1000130000,
+    "serverNow": 1000130500,
+    "tally": {
+     "read": 0,
+     "search": 0,
+     "cmd": 0,
+     "edit": 0
+    },
+    "subagents": 0,
+    "subagentsDone": 0,
+    "background": 0,
+    "messages": 1,
+    "waitingOn": null,
+    "end": {
+     "reason": "failed"
+    },
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": null,
+    "evidenceAt": null
+   }
+  },
+  {
+   "name": "unverifiable after a long silence",
+   "owner": {
+    "turnId": "msg-8",
+    "rev": 20,
+    "state": "unverifiable",
+    "phase": "stale",
+    "phaseSince": 1002000000,
+    "line": null,
+    "startedAt": 1000000000,
+    "since": 1000000000,
+    "serverNow": 1002000500,
+    "messages": 3,
+    "replied": false,
+    "lastComposeAt": 1000500000,
+    "subagents": 1,
+    "subagentsDone": 0,
+    "background": 0,
+    "children": [
+     {
+      "kind": "subagent",
+      "state": "running",
+      "label": "Explore",
+      "since": 1000001000
+     }
+    ],
+    "tally": {
+     "read": 9,
+     "search": 4,
+     "cmd": 0,
+     "edit": 0
+    },
+    "waitingOn": null,
+    "end": null,
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 1,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": "stale",
+    "evidenceAt": 1000003000
+   },
+   "guest": {
+    "turnId": "msg-8",
+    "rev": 20,
+    "state": "unverifiable",
+    "phase": "stale",
+    "phaseSince": 1002000000,
+    "startedAt": 1000000000,
+    "serverNow": 1002000500,
+    "tally": {
+     "read": 9,
+     "search": 4,
+     "cmd": 0,
+     "edit": 0
+    },
+    "subagents": 1,
+    "subagentsDone": 0,
+    "background": 0,
+    "messages": 3,
+    "waitingOn": null,
+    "end": null,
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 1,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": "stale",
+    "evidenceAt": 1000000000
+   }
+  },
+  {
+   "name": "an older owner body without the schema-2 fields",
+   "owner": {
+    "turnId": "msg-1",
+    "rev": 4,
+    "state": "working",
+    "phase": "tool",
+    "phaseSince": 1000071000,
+    "line": "Running `cargo test --token sk-live-abc123`",
+    "startedAt": 1000060000,
+    "since": 1000060000,
+    "serverNow": 1000072000,
+    "messages": 1,
+    "replied": false,
+    "lastComposeAt": 1000060000,
+    "subagents": 2,
+    "subagentsDone": 1,
+    "background": 1,
+    "children": [
+     {
+      "kind": "shell",
+      "state": "running",
+      "label": "Running `npm run dev`",
+      "since": 1000061000
+     },
+     {
+      "kind": "subagent",
+      "state": "running",
+      "label": "Explore",
+      "since": 1000062000
+     }
+    ],
+    "tally": {
+     "read": 3,
+     "search": 1,
+     "cmd": 2,
+     "edit": 0
+    },
+    "waitingOn": null,
+    "end": null
+   },
+   "guest": {
+    "turnId": "msg-1",
+    "rev": 4,
+    "state": "working",
+    "phase": "tool",
+    "phaseSince": 1000071000,
+    "startedAt": 1000060000,
+    "serverNow": 1000072000,
+    "tally": {
+     "read": 3,
+     "search": 1,
+     "cmd": 2,
+     "edit": 0
+    },
+    "subagents": 2,
+    "subagentsDone": 1,
+    "background": 1,
+    "messages": 1,
+    "waitingOn": null,
+    "end": null,
+    "schema": 2,
+    "stepKind": null,
+    "childCounts": {
+     "subagent": 0,
+     "shell": 0,
+     "monitor": 0,
+     "task": 0
+    },
+    "openBecause": null,
+    "evidenceAt": null
+   }
+  }
+ ]
 }

@@ -37194,7 +37194,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   changes             Git changes (the Changes tab): your own workspace; discard = Trash
   design              Design notes from a page: the shape, k2 browser note, answer in Thread
   folder-trust        Folder trust: the card, asking vs deciding, re-scan, honest limits
-  email-notifications Email from senders: K2's resets, an App's email.send, scope, limits
+  email-notifications  Email from senders: K2's resets, an App's email.send, scope, limits
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -37454,7 +37454,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 23.
+From K2's verb catalog, version 26.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -37533,6 +37533,10 @@ push:send (Send notifications to this App's users' phones)
   push.send                POST /cli/skin/push/send (server only)             Notify this App's own guests' phones (a guest, a list, or a room's guests); answers at once with a sendId.
   push.status              GET  /cli/skin/push/status (server only)           One send's counts (kept for an hour): sent, dead, failed; never who.
   push.devices             GET  /cli/skin/push/devices (server only)          Which of this App's guests have phones registered, and on which platforms (never a token).
+email:send (Send email from this App's sender)
+  email.send               POST /cli/skin/email/send (server only)            Email from this App's own sender (granted by the owner) to its own users, or anyone with the owner's any scope. Answers 202 with an id.
+  email.status             GET  /cli/skin/email/status (server only)          One email's state (kept 30 days): submitted means accepted for delivery; never the body.
+  email.log                GET  /cli/skin/email/log (server only)             This App's sent email, newest first (metadata only, 30 days): who, subject, tags, status.
 tickets:read (Read tickets and get live ticket updates)
   tickets.list             GET  /cli/feedback/list                            A room's tickets, newest first.
   tickets.show             GET  /cli/feedback/show                            One ticket with its comments (and brief).
@@ -65441,7 +65445,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 23.
+for at once (no review). From K2's verb catalog, version 26.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope

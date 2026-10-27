@@ -18,6 +18,6 @@ Topics:
   zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  db-upgrade  jobs
-  folder-trust
+  folder-trust  email-notifications
 --- stderr
 --- requests

@@ -14,6 +14,13 @@
 #   the App door refuses without a pass → GET on a mutation is 405.
 #
 #   scripts/email-notifications-headless.sh <path/to/debug/k2-daemon>
+#   scripts/email-notifications-headless.sh --service <path/to/debug/k2-daemon>
+#
+# The full run needs a PERSON's terminal (your own SSH login or a terminal
+# outside K2): the vault mints confirm tokens only for a person. --service
+# is for a run under K2's own service group (a K2 Compute job): it checks
+# everything up to the confirms and that the vault refuses to mint one
+# (person_required), then stops; it never skips silently.
 #
 # Linux or macOS. Every K2_* variable is unset first; the real ~/.k2, the
 # keychain and any running daemon are never touched. Fails loudly (exit 1)
@@ -21,8 +28,10 @@
 
 set -euo pipefail
 
+MODE=person
+if [ "${1:-}" = "--service" ]; then MODE=service; shift; fi
 BIN="${1:-}"
-[ -x "$BIN" ] || { echo "usage: $0 <path/to/debug/k2-daemon>" >&2; exit 2; }
+[ -x "$BIN" ] || { echo "usage: $0 [--service] <path/to/debug/k2-daemon>" >&2; exit 2; }
 case "$BIN" in
     */release/*) echo "refusing a release build: the sink only exists in debug builds" >&2; exit 2 ;;
 esac
@@ -104,8 +113,36 @@ vault() {
     STATUS="${out##*$'\n'}"
     BODY="${out%$'\n'*}"
 }
+call GET /cli/notifications/email
+expect 200 "status reads"
+[ "$(field boxSwitch)" = on ] || fail "the box switch reads on: $BODY"
+call GET /cli/notifications/email/sender/add
+expect 405 "GET on a mutation is 405"
+call POST /cli/notifications/email/settings '{"ownerEmail":"owner@headless.example","logRetentionDays":14}'
+expect 200 "settings: the owner's own address"
+
+RELAY_BODY='{"host":"smtp.relay.example","port":587,"tls":"starttls","username":"user","password":"HEADLESS-RELAY-SECRET","fromDomain":"headless.example"}'
+call POST /cli/notifications/email/relay/add "$RELAY_BODY"
+expect 403 "relay add without a confirm is refused"
+[ "$(field error.code)" = vault_confirm_required ] || fail "relay add refusal code: $BODY"
+case "$BODY" in *HEADLESS-RELAY-SECRET*) fail "the relay password was echoed in a refusal" ;; esac
+call POST /cli/notifications/email/sender/add '{"address":"noreply@headless.example"}'
+expect 403 "sender add without a confirm is refused"
+[ "$(field error.secretId)" = noreply@headless.example ] || fail "the confirm is bound to the address: $BODY"
+out="$(curl -s -X POST "$BASE/cli/skin/email/send" -H 'Content-Type: application/json' -d '{"to":"a@b.example","subject":"s","text":"t"}' -w $'\n%{http_code}')"
+[ "${out##*$'\n'}" = 401 ] || fail "the App door without a pass: $out"
+pass "the App door refuses without a pass"
+
 VPW="headless-$(date +%s)-pw"
 vault confirm-password/set "{\"password\":\"$VPW\"}"
+if [ "$MODE" = service ]; then
+    # Under K2's service group the vault never mints a confirm: the
+    # person-only half can't run here (and must not).
+    expect 403 "the vault refuses a non-person (service mode)"
+    [ "$(field error.code)" = person_required ] || fail "person_required: $BODY"
+    echo "ALL PASS (service mode: the confirm-gated half needs a person's terminal)"
+    exit 0
+fi
 expect 200 "vault confirm password set"
 # A fresh confirm token for (action, secretId).
 token_for() {
@@ -116,17 +153,6 @@ token_for() {
     printf '%s' "$BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
 }
 
-call GET /cli/notifications/email
-expect 200 "status reads"
-call GET /cli/notifications/email/sender/add
-expect 405 "GET on a mutation is 405"
-call POST /cli/notifications/email/settings '{"ownerEmail":"owner@headless.example","logRetentionDays":14}'
-expect 200 "settings: the owner's own address"
-
-RELAY_BODY='{"host":"smtp.relay.example","port":587,"tls":"starttls","username":"user","password":"HEADLESS-RELAY-SECRET","fromDomain":"headless.example"}'
-call POST /cli/notifications/email/relay/add "$RELAY_BODY"
-expect 403 "relay add without a confirm is refused"
-[ "$(field error.code)" = vault_confirm_required ] || fail "relay add refusal code: $BODY"
 T="$(token_for email-relay smtp.relay.example)"
 call POST /cli/notifications/email/relay/add "$(printf '%s' "$RELAY_BODY" | T="$T" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b["confirmToken"]=os.environ["T"]; print(json.dumps(b))')"
 expect 200 "relay add"

@@ -257,6 +257,33 @@ describe('the custom layer: Garden data verbs', () => {
     expect(new Set(seen)).toEqual(new Set([...ZEN_STORE_VERBS].filter((v) => v !== 'viewer.get')))
   })
 
+  it('0.46.5: store.batch and store.txAdd carry patch ops to the daemon as they are, and its op-naming conflict comes back', async () => {
+    const ops = [
+      { op: 'patch', key: 'obj/1', value: { x: 2, t: null }, ifRev: 4 },
+      { op: 'put', key: 'edge/1', value: { from: 'obj/1' } },
+      { op: 'delete', key: 'edge/0', ifRev: 3 },
+    ]
+    let stale = false
+    const f = fake((verb, args) => {
+      if (stale) throw envelope('conflict', "op 0 ('obj/1'): 'obj/1' changed since you read it", { key: 'obj/1', rev: 5, op: 0 })
+      if (verb === 'store.batch') return { rev: 5, ops: (args[0] as unknown[]).length }
+      if (verb === 'store.txAdd') return { ops: (args[1] as unknown[]).length, bytes: 1, expiresAt: 0 }
+      return null
+    })
+    const { layer } = layerWith(createZenCustomStore(f.deps), payload({ caps: ['store:read', 'store:write'], requested: ['store:read', 'store:write'] }))
+    expect(await ask(layer, 'store.batch', ops)).toMatchObject({ ok: true, value: { rev: 5, ops: 3 } })
+    expect(await ask(layer, 'store.txAdd', 'tx1', ops)).toMatchObject({ ok: true, value: { ops: 3 } })
+    expect(f.calls.filter((c) => c.verb !== 'viewer.get')).toEqual([
+      { verb: 'store.batch', args: [ops] },
+      { verb: 'store.txAdd', args: ['tx1', ops] },
+    ])
+    stale = true
+    expect(await ask(layer, 'store.batch', ops)).toMatchObject({
+      ok: false,
+      error: { code: 'conflict', message: "op 0 ('obj/1'): 'obj/1' changed since you read it (now rev 5)", last: { key: 'obj/1', rev: 5 } },
+    })
+  })
+
   it('caps: no store caps → cap_not_granted (saves still work); sources:read keeps store:write it asked for; no store → verb_unavailable', async () => {
     const f = fake(() => null)
     const none = layerWith(createZenCustomStore(f.deps), payload({ caps: [], requested: [] }))

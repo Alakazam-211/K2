@@ -256,7 +256,9 @@ pub enum DataError {
     BadKey(String),
     ValueTooLarge { bytes: usize },
     TooLarge(String),
-    Conflict { key: String, rev: i64 },
+    /// `op`: the failing op's index in a batch, transaction or import
+    /// (0.46.5); `None` for a single write.
+    Conflict { key: String, rev: i64, op: Option<usize> },
     NotGranted { key: Option<String> },
     AuthorUnknown,
     PersonOnly,
@@ -333,7 +335,12 @@ impl DataError {
             DataError::ValueTooLarge { bytes } => {
                 format!("a value is at most {} KiB of JSON; this one is {bytes} bytes", MAX_VALUE_BYTES / 1024)
             }
-            DataError::Conflict { key, .. } => format!("'{key}' changed since you read it; read it again and retry"),
+            DataError::Conflict { key, op: None, .. } => {
+                format!("'{key}' changed since you read it; read it again and retry")
+            }
+            DataError::Conflict { key, op: Some(i), .. } => {
+                format!("op {i} ('{key}'): '{key}' changed since you read it; nothing was written. Read it again and retry")
+            }
             DataError::NotGranted { .. } => {
                 "you have no grant for this key. Ask the person (k2 feedback or the Thread), or a grant admin".into()
             }
@@ -362,7 +369,8 @@ impl DataError {
         use serde_json::json;
         match self {
             DataError::ValueTooLarge { bytes } => json!({ "bytes": bytes }),
-            DataError::Conflict { key, rev } => json!({ "key": key, "rev": rev }),
+            DataError::Conflict { key, rev, op: None } => json!({ "key": key, "rev": rev }),
+            DataError::Conflict { key, rev, op: Some(i) } => json!({ "key": key, "rev": rev, "op": i }),
             DataError::NotGranted { key: Some(k) } => json!({ "key": k }),
             DataError::SpaceFull { what } => json!({ "what": what }),
             DataError::Resync { reaped_rev } => json!({ "reapedRev": reaped_rev }),
@@ -433,10 +441,16 @@ mod tests {
 
     #[test]
     fn error_envelope_carries_code_hint_and_extra() {
-        let e = DataError::Conflict { key: "obj/7".into(), rev: 41 }.envelope();
+        let e = DataError::Conflict { key: "obj/7".into(), rev: 41, op: None }.envelope();
         assert_eq!(e["error"]["code"], "conflict");
         assert_eq!(e["error"]["key"], "obj/7");
         assert_eq!(e["error"]["rev"], 41);
+        assert!(e["error"].get("op").is_none(), "a single write names no op: {e}");
+        // 0.46.5: in a batch or transaction the envelope names the op too.
+        let b = DataError::Conflict { key: "obj/7".into(), rev: 41, op: Some(2) }.envelope();
+        assert_eq!((b["error"]["op"].as_u64(), b["error"]["key"].as_str()), (Some(2), Some("obj/7")), "{b}");
+        let hint = b["error"]["hint"].as_str().expect("hint");
+        assert!(hint.starts_with("op 2 ('obj/7')"), "{hint}");
         assert_eq!(DataError::NotBuilt.status(), 501);
         assert!(Level::Write.covers(Level::Read) && !Level::Read.covers(Level::Write));
     }

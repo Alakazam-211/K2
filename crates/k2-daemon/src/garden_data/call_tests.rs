@@ -318,6 +318,70 @@ fn a_widget_transaction_is_invisible_until_commit_and_one_rev() {
     assert_eq!(d.call("store.get", json!(["z/1"])), Value::Null);
 }
 
+/// 0.46.5 (Board via Appa): a widget's `store.batch` and `tx` take
+/// `{op: "patch"}` beside put and delete: one rev, all or nothing, the
+/// same merge as `store.patch`, a refusal that names the op.
+#[test]
+fn a_widget_batch_and_transaction_take_patch_ops() {
+    let d = door(&["store:read", "store:write"]);
+    d.stamp(MadeBy::Owner);
+    let r1 = d.call("store.put", json!(["obj/1", {"t": "a", "x": 1, "col": "todo"}]))["rev"].as_i64().expect("rev");
+    let r2 = d.call("store.put", json!(["obj/2", {"t": "b"}]))["rev"].as_i64().expect("rev");
+
+    // A multi-select drag: two patches, a new connector, a deleted one.
+    let ops = json!([
+        {"op": "patch", "key": "obj/1", "value": {"x": 5, "t": null}, "ifRev": r1},
+        {"op": "patch", "key": "obj/2", "value": {"x": 6}, "ifRev": r2},
+        {"op": "put", "key": "edge/1", "value": {"from": "obj/1", "to": "obj/2"}},
+        {"op": "delete", "key": "edge/0"}
+    ]);
+    let r = d.call("store.batch", json!([ops]));
+    let r3 = r["rev"].as_i64().expect("rev");
+    assert_eq!((r3, r["ops"].as_i64()), (r2 + 1, Some(4)));
+    let one = d.call("store.get", json!(["obj/1"]));
+    assert_eq!((one["value"].clone(), one["rev"].as_i64()), (json!({"x": 5, "col": "todo"}), Some(r3)));
+    assert_eq!(d.call("store.get", json!(["obj/2"]))["value"], json!({"t": "b", "x": 6}));
+    let ch = d.call("store.changes", json!([{"since": r2}]));
+    let rows: Vec<(&str, i64)> = ch["items"].as_array().expect("items").iter()
+        .map(|c| (c["key"].as_str().expect("key"), c["rev"].as_i64().expect("rev")))
+        .collect();
+    assert_eq!(rows, vec![("edge/1", r3), ("obj/1", r3), ("obj/2", r3)], "one row per changed key; edge/0 never existed");
+
+    // Undo with a stale ifRev on the second patch: nothing moves.
+    let undo = json!([
+        {"op": "patch", "key": "obj/1", "value": {"x": 1}, "ifRev": r3},
+        {"op": "patch", "key": "obj/2", "value": {"x": null}, "ifRev": r2},
+        {"op": "delete", "key": "edge/1", "ifRev": r3}
+    ]);
+    let (code, v) = d.raw(&d.hash(), "store.batch", json!([undo]));
+    assert_eq!(code, 409, "{v}");
+    assert_eq!((v["error"]["code"].as_str(), v["error"]["op"].as_u64(), v["error"]["key"].as_str()), (Some("conflict"), Some(1), Some("obj/2")), "{v}");
+    assert_eq!(d.call("store.changes", json!([{"since": 0}]))["head"].as_i64(), Some(r3), "no new rev");
+    assert_eq!(d.call("store.get", json!(["obj/1"]))["value"], json!({"x": 5, "col": "todo"}));
+
+    // An invalid patch (the partial isn't an object) refuses the batch.
+    let (code, v) = d.raw(&d.hash(), "store.batch", json!([[{"op": "put", "key": "obj/3", "value": 3}, {"op": "patch", "key": "obj/1", "value": "x"}]]));
+    assert_eq!((code, v["error"]["code"].as_str()), (400, Some("bad_request")), "{v}");
+    assert!(v["error"]["hint"].as_str().expect("hint").starts_with("op 1 ('obj/1'): "), "{v}");
+    assert_eq!(d.call("store.get", json!(["obj/3"])), Value::Null);
+
+    // The same ops through a transaction: stale → nothing; fresh → one rev.
+    let tx = |ops: Value| -> (u16, Value) {
+        let id = d.call("store.txBegin", json!([]))["txId"].as_str().expect("txId").to_string();
+        d.call("store.txAdd", json!([id, [{"op": "put", "key": "obj/9", "value": 9}]]));
+        d.call("store.txAdd", json!([id, ops]));
+        d.raw(&d.hash(), "store.txCommit", json!([id]))
+    };
+    let (code, v) = tx(json!([{"op": "patch", "key": "obj/1", "value": {"x": 7}, "ifRev": r1}]));
+    assert_eq!((code, v["error"]["op"].as_u64(), v["error"]["key"].as_str()), (409, Some(1), Some("obj/1")), "{v}");
+    assert_eq!(d.call("store.get", json!(["obj/9"])), Value::Null, "the commit wrote nothing");
+    let (code, v) = tx(json!([{"op": "patch", "key": "obj/1", "value": {"x": 7}, "ifRev": r3}]));
+    assert_eq!((code, v["result"]["rev"].as_i64(), v["result"]["ops"].as_i64()), (200, Some(r3 + 1), Some(2)), "{v}");
+    assert_eq!(d.call("store.get", json!(["obj/1"]))["value"], json!({"x": 7, "col": "todo"}));
+    // An unknown op still refuses the whole call, before anything runs.
+    assert_eq!(d.refuse("store.batch", json!([[{"op": "merge", "key": "obj/1", "value": {}}]])), "bad_request");
+}
+
 #[test]
 fn a_revoke_between_add_and_commit_fails_the_commit_and_writes_nothing() {
     let _e = env();

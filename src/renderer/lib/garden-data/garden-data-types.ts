@@ -24,6 +24,10 @@ export interface GardenEntry {
 export type GardenOp =
   | { op: 'put'; key: string; value: GardenJson; ifRev?: number }
   | { op: 'delete'; key: string; ifRev?: number }
+  /** 0.46.5: `value` is only the fields to change, merged like
+   *  `store.patch` (null removes a field) inside the one all-or-nothing
+   *  write. Batches and transactions only; an import never plans one. */
+  | { op: 'patch'; key: string; value: Record<string, GardenJson>; ifRev?: number }
 
 export interface GardenGetResponse {
   entry: GardenEntry | null

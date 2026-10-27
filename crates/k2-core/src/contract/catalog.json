@@ -4379,7 +4379,7 @@
         {
           "title": "ops",
           "type": "array",
-          "description": "At most 64 ops, 60 KiB of values: {op: 'put', key, value, ifRev?} or {op: 'delete', key, ifRev?}.",
+          "description": "At most 64 ops, 60 KiB of values: {op: 'put', key, value, ifRev?}, {op: 'patch', key, value, ifRev?} (value = only the fields to change, merged like store.patch) or {op: 'delete', key, ifRev?}. A conflict or a bad patch refuses them all and names the op's index and key.",
           "items": {
             "title": "StoreOp",
             "type": "object",
@@ -4387,7 +4387,8 @@
               "op": {
                 "enum": [
                   "put",
-                  "delete"
+                  "delete",
+                  "patch"
                 ]
               },
               "key": {
@@ -4444,8 +4445,8 @@
         "store_full",
         "paused"
       ],
-      "doc": "Up to 64 writes, all or nothing, as one rev.",
-      "example": "await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'delete', key: 'obj/2'}])"
+      "doc": "Up to 64 writes (put, patch, delete), all or nothing, as one rev.",
+      "example": "await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'patch', key: 'obj/3', value: {x: 4}}, {op: 'delete', key: 'obj/2'}])"
     },
     {
       "verb": "store.txBegin",
@@ -4520,7 +4521,7 @@
         {
           "title": "ops",
           "type": "array",
-          "description": "At most 64 ops, 60 KiB of values: {op: 'put', key, value, ifRev?} or {op: 'delete', key, ifRev?}.",
+          "description": "At most 64 ops, 60 KiB of values: {op: 'put', key, value, ifRev?}, {op: 'patch', key, value, ifRev?} (value = only the fields to change, merged like store.patch) or {op: 'delete', key, ifRev?}. A conflict or a bad patch refuses them all and names the op's index and key.",
           "items": {
             "title": "StoreOp",
             "type": "object",
@@ -4528,7 +4529,8 @@
               "op": {
                 "enum": [
                   "put",
-                  "delete"
+                  "delete",
+                  "patch"
                 ]
               },
               "key": {
@@ -4642,6 +4644,7 @@
         "bad_tx",
         "tx_expired",
         "conflict",
+        "value_too_large",
         "space_full",
         "store_full",
         "paused"

@@ -37,19 +37,37 @@ pub enum Op {
         #[serde(default, rename = "ifRev", skip_serializing_if = "Option::is_none")]
         if_rev: Option<i64>,
     },
+    /// A field-level merge (0.46.5, Board via Appa): `value` is the
+    /// partial, merged exactly like `store.patch` (`patch::merged`, RFC
+    /// 7396; null removes a field) inside the same all-or-nothing write.
+    Patch {
+        key: String,
+        value: Json,
+        #[serde(default, rename = "ifRev", skip_serializing_if = "Option::is_none")]
+        if_rev: Option<i64>,
+    },
 }
 
 impl Op {
     pub fn key(&self) -> &str {
         match self {
-            Op::Put { key, .. } | Op::Delete { key, .. } => key,
+            Op::Put { key, .. } | Op::Delete { key, .. } | Op::Patch { key, .. } => key,
         }
     }
 
-    /// Canonical JSON bytes of the value (0 for a delete).
+    pub fn if_rev(&self) -> Option<i64> {
+        match self {
+            Op::Put { if_rev, .. } | Op::Delete { if_rev, .. } | Op::Patch { if_rev, .. } => *if_rev,
+        }
+    }
+
+    /// Canonical JSON bytes of the value the op carries (0 for a delete; a
+    /// patch's partial, not the merged document).
     pub fn value_bytes(&self) -> usize {
         match self {
-            Op::Put { value, .. } => serde_json::to_string(value).map(|s| s.len()).unwrap_or(usize::MAX),
+            Op::Put { value, .. } | Op::Patch { value, .. } => {
+                serde_json::to_string(value).map(|s| s.len()).unwrap_or(usize::MAX)
+            }
             Op::Delete { .. } => 0,
         }
     }
@@ -132,7 +150,8 @@ pub trait StoreBackend: Send + Sync {
     fn put(&self, space: &Space, key: &str, value: &Json, if_rev: Option<i64>, by: &Actor) -> Result<i64, DataError>;
     /// `Some(new rev)`, or `None` when the key didn't exist (no rev bump).
     fn delete(&self, space: &Space, key: &str, if_rev: Option<i64>, by: &Actor) -> Result<Option<i64>, DataError>;
-    /// All-or-nothing, one new rev for the whole set (batch, tx commit, import).
+    /// All-or-nothing, one new rev for the whole set (batch, tx commit,
+    /// import). A conflict or a refused patch op names the op's index.
     fn apply(&self, space: &Space, ops: &[Op], by: &Actor) -> Result<i64, DataError>;
     fn list(
         &self,
@@ -167,5 +186,22 @@ mod tests {
         assert_eq!(ops[1].key(), "obj/2");
         assert_eq!(ops[1].value_bytes(), 0);
         assert!(serde_json::from_str::<Op>(r#"{"op":"put","key":"k","value":1,"extra":1}"#).is_err());
+    }
+
+    #[test]
+    fn a_patch_op_parses_and_round_trips() {
+        let op: Op = serde_json::from_str(r#"{"op":"patch","key":"obj/1","value":{"x":2,"gone":null},"ifRev":4}"#)
+            .expect("a patch op parses");
+        assert_eq!(
+            op,
+            Op::Patch { key: "obj/1".into(), value: serde_json::json!({"x": 2, "gone": null}), if_rev: Some(4) }
+        );
+        assert_eq!((op.key(), op.if_rev()), ("obj/1", Some(4)));
+        assert_eq!(op.value_bytes(), r#"{"x":2,"gone":null}"#.len(), "a patch counts its partial");
+        let wire = serde_json::to_value(&op).expect("serialize");
+        assert_eq!(wire, serde_json::json!({"op": "patch", "key": "obj/1", "value": {"x": 2, "gone": null}, "ifRev": 4}));
+        assert!(serde_json::from_str::<Op>(r#"{"op":"patch","key":"k"}"#).is_err(), "a patch needs a value");
+        assert!(serde_json::from_str::<Op>(r#"{"op":"patch","key":"k","value":{},"extra":1}"#).is_err());
+        assert!(serde_json::from_str::<Op>(r#"{"op":"merge","key":"k","value":{}}"#).is_err());
     }
 }

@@ -364,6 +364,53 @@ mod tests {
         assert_eq!(ops_bytes(&two), 2 * (40 * 1024 + 2));
     }
 
+    /// 0.46.5: patch ops stage like puts (the partial counts toward the
+    /// part's bytes) and commit with the rest, one rev or nothing.
+    #[test]
+    fn patch_ops_stage_and_commit_all_or_nothing() {
+        use crate::garden_data::backend::StoreBackend;
+        use crate::garden_data::sqlite::SqliteStore;
+        use crate::garden_data::{Actor, Cursor};
+        let dir = crate::test_env::unique_temp_path("gd-tx-patch").join("stores");
+        let store = SqliteStore::with_clock(&dir, std::sync::Arc::new(|| 1_760_000_000));
+        let s = space();
+        let r1 = store.put(&s, "obj/1", &json!({"t": "a", "x": 1}), None, &Actor::Owner).expect("put");
+        let patch = |k: &str, v: serde_json::Value, if_rev: Option<i64>| Op::Patch { key: k.into(), value: v, if_rev };
+        assert!(check_part(&[patch("obj/1", json!({"x": 2}), Some(r1))], &Access::Full).is_ok());
+        let big = vec![patch("k", json!({"v": "x".repeat(MAX_VALUE_BYTES)}), None)];
+        assert_eq!(check_part(&big, &Access::Full).unwrap_err().code(), "value_too_large", "a partial obeys the value cap");
+        assert_eq!(ops_bytes(&[patch("k", json!({"a": 1}), None)]), r#"{"a":1}"#.len());
+
+        // Stage across two parts, then commit: one rev for every key.
+        let mut t = table();
+        let (id, _) = t.begin(agent("w-1"), s.clone(), 0).expect("begin");
+        t.add(&id, &agent("w-1"), puts(10, 3), 1).expect("part 1");
+        t.add(&id, &agent("w-1"), vec![patch("obj/1", json!({"x": 2, "t": null}), Some(r1))], 2).expect("part 2");
+        let (_, ops) = t.take(&id, &agent("w-1"), 3).expect("take");
+        let rev = store.apply(&s, &ops, &Actor::Agent { project_id: "w-1".into() }).expect("commit");
+        assert_eq!(rev, r1 + 1);
+        let e = store.get(&s, "obj/1").expect("get").expect("entry");
+        assert_eq!((e.rev, e.value), (rev, json!({"x": 2})));
+        let feed = store.changes(&s, &Cursor { since: r1, after: None }, "", None).expect("changes");
+        assert_eq!(feed.items.len(), 4, "one change-log row per key");
+        assert!(feed.items.iter().all(|c| c.rev == rev && c.by == "agent:w-1"));
+
+        // A stale patch in the last part: the commit writes nothing at all.
+        let (id, _) = t.begin(agent("w-1"), s.clone(), 4).expect("begin");
+        t.add(&id, &agent("w-1"), puts(20, 2), 5).expect("part 1");
+        t.add(&id, &agent("w-1"), vec![patch("obj/1", json!({"x": 3}), Some(r1))], 6).expect("part 2");
+        let (_, ops) = t.take(&id, &agent("w-1"), 7).expect("take");
+        assert_eq!(
+            store.apply(&s, &ops, &Actor::Owner),
+            Err(DataError::Conflict { key: "obj/1".into(), rev, op: Some(2) })
+        );
+        assert_eq!(store.info(&s).expect("info").expect("space").rev, rev, "no new rev");
+        assert_eq!(store.get(&s, "obj/20").expect("get"), None, "the first part rolled back too");
+        if let Some(root) = dir.parent() {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
     fn agent(p: &str) -> TxOwner {
         TxOwner::Agent { project_id: p.into() }
     }

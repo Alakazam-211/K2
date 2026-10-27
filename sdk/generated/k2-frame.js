@@ -430,7 +430,7 @@ var out = []
 var cur = []
 var bytes = 0
 for (var i = 0; i < ops.length; i++) {
-var b = ops[i] && ops[i].op === 'put' ? jsonBytes(ops[i].value) : 0
+var b = ops[i] && (ops[i].op === 'put' || ops[i].op === 'patch') ? jsonBytes(ops[i].value) : 0
 if (cur.length && (cur.length >= PART_OPS || bytes + b > PART_BYTES)) {
 out.push(cur)
 cur = []

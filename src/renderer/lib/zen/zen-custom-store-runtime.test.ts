@@ -56,7 +56,8 @@ class FakeData {
       case 'store.txAdd': {
         const ops = args[1] as Array<Record<string, any>>
         if (ops.length > 64) throw new Error('part over 64 ops')
-        const bytes = ops.reduce((n, o) => n + (o.op === 'put' ? Buffer.byteLength(JSON.stringify(o.value)) : 0), 0)
+        // The daemon counts a patch's partial like a put's value (0.46.5).
+        const bytes = ops.reduce((n, o) => n + (o.op === 'put' || o.op === 'patch' ? Buffer.byteLength(JSON.stringify(o.value)) : 0), 0)
         if (bytes > 60 * 1024) throw new Error(`part over 60 KiB: ${bytes}`)
         this.parts.push(ops)
         this.staged.get(args[0])!.push(...ops)
@@ -70,6 +71,11 @@ class FakeData {
       }
       case 'store.txAbort':
         return { aborted: this.staged.delete(args[0]) }
+      case 'store.batch': {
+        const ops = args[0] as Array<Record<string, any>>
+        this.apply(ops)
+        return { rev: this.rev, ops: ops.length }
+      }
       default:
         throw new Error(`fake host: ${verb}`)
     }
@@ -79,7 +85,15 @@ class FakeData {
     this.rev += 1
     for (const o of ops) {
       if (o.op === 'delete') this.entries.delete(o.key)
-      else this.entries.set(o.key, { key: o.key, rev: this.rev, value: o.value, updatedAt: 1, by: 'you via board' })
+      else if (o.op === 'patch') {
+        // Top-level fields only: the merge itself is Rust's (patch::merged).
+        const merged: Record<string, unknown> = { ...((this.entries.get(o.key)?.value as Record<string, unknown>) ?? {}) }
+        for (const [k, v] of Object.entries(o.value as Record<string, unknown>)) {
+          if (v === null) delete merged[k]
+          else merged[k] = v
+        }
+        this.entries.set(o.key, { key: o.key, rev: this.rev, value: merged, updatedAt: 1, by: 'you via board' })
+      } else this.entries.set(o.key, { key: o.key, rev: this.rev, value: o.value, updatedAt: 1, by: 'you via board' })
     }
   }
 }
@@ -186,6 +200,27 @@ describe('Garden data SDK helpers', () => {
     expect(r).toEqual({ rev: 1, ops: 130 })
     expect(data.entries.size).toBe(130)
     await expect(k2.store.tx().abort()).resolves.toEqual({ aborted: false })
+  })
+
+  it('0.46.5: batch and tx() carry patch ops as they are; a patch partial counts toward a part’s 60 KiB', async () => {
+    const { k2, data } = frame()
+    await k2.store.put('obj/1', { t: 'a', x: 1, col: 'todo' })
+    const ops = [
+      { op: 'patch', key: 'obj/1', value: { x: 2, t: null }, ifRev: 1 },
+      { op: 'put', key: 'edge/1', value: { from: 'obj/1' } },
+      { op: 'delete', key: 'edge/0' },
+    ]
+    await expect(k2.store.batch(ops)).resolves.toEqual({ rev: 2, ops: 3 })
+    expect(data.heard.find((h) => h.verb === 'store.batch')?.args).toEqual([ops])
+    expect(data.entries.get('obj/1')?.value).toEqual({ x: 2, col: 'todo' })
+    // Three ~25 KiB partials: two fit in one part, the third starts another.
+    const big = 'y'.repeat(25 * 1024)
+    const tx = k2.store.tx()
+    await tx.add([0, 1, 2].map((i) => ({ op: 'patch', key: `obj/${i + 10}`, value: { note: big } })))
+    expect(data.parts.slice(-2).map((p) => p.length)).toEqual([2, 1])
+    expect(data.parts.slice(-2).flat().every((o) => o.op === 'patch')).toBe(true)
+    await expect(tx.commit()).resolves.toEqual({ rev: 3, ops: 3 })
+    expect(data.entries.get('obj/12')?.value).toEqual({ note: big })
   })
 
   it('k2.viewer() and k2.viewer.get() name the person; subscribe rides store.changes', async () => {

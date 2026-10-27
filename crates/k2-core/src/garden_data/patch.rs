@@ -19,6 +19,11 @@
 //!   key's current rev.
 //! - The merged document obeys the usual limits (`value_too_large` past
 //!   60 KiB, `space_full`, `store_full`).
+//! - **In a batch or transaction** (0.46.5, Board via Appa): an
+//!   `{op: "patch", key, value, ifRev?}` op runs [`check_partial`] and
+//!   [`merged`] inside the store's one write (`SqliteStore::write`), so it
+//!   lands at the batch's rev with the other ops or not at all. A conflict
+//!   or a refused partial names the op's index and key.
 
 use super::backend::{Json, StoreBackend};
 use super::{Actor, DataError, Space};
@@ -59,6 +64,42 @@ pub fn merge_patch(target: &mut Json, patch: &Json) {
     }
 }
 
+/// The partial's own checks, before anything is read: it is an object, and
+/// `ifRev` (when given) is 0 or more. Shared with the `patch` op of
+/// `store.batch` and transactions (0.46.5), which run it per op.
+pub fn check_partial(partial: &Json, if_rev: Option<i64>) -> Result<(), DataError> {
+    if !partial.is_object() {
+        return Err(DataError::BadRequest(
+            "store.patch takes an object of fields (null removes a field); use store.put to replace a whole value".into(),
+        ));
+    }
+    if if_rev.is_some_and(|r| r < 0) {
+        return Err(DataError::BadRequest("store.patch: ifRev is 0 or more".into()));
+    }
+    Ok(())
+}
+
+/// The document after merging `partial` into `current` (the key's live
+/// value; `None` when the key doesn't exist, which starts from `{}`).
+/// Answers `None` when the merge changes nothing (no write, no new rev).
+/// A live value that isn't an object is `bad_request`. Shared with the
+/// `patch` op of `store.batch` and transactions (0.46.5), which merge
+/// inside their one write.
+pub fn merged(key: &str, current: Option<&Json>, partial: &Json) -> Result<Option<Json>, DataError> {
+    let base = match current {
+        Some(v) if v.is_object() => Some(v),
+        Some(_) => {
+            return Err(DataError::BadRequest(format!(
+                "the value at '{key}' isn't an object, so it has no fields to patch; use store.put"
+            )))
+        }
+        None => None,
+    };
+    let mut out = base.cloned().unwrap_or_else(|| Json::Object(serde_json::Map::new()));
+    merge_patch(&mut out, partial);
+    Ok(if base == Some(&out) { None } else { Some(out) })
+}
+
 /// Merge `partial` into the document at `key` (see the module doc).
 pub fn patch(
     store: &dyn StoreBackend,
@@ -68,37 +109,20 @@ pub fn patch(
     if_rev: Option<i64>,
     by: &Actor,
 ) -> Result<Patched, DataError> {
-    if !partial.is_object() {
-        return Err(DataError::BadRequest(
-            "store.patch takes an object of fields (null removes a field); use store.put to replace a whole value".into(),
-        ));
-    }
-    if if_rev.is_some_and(|r| r < 0) {
-        return Err(DataError::BadRequest("store.patch: ifRev is 0 or more".into()));
-    }
-    let mut last = DataError::Conflict { key: key.to_string(), rev: 0 };
+    check_partial(partial, if_rev)?;
+    let mut last = DataError::Conflict { key: key.to_string(), rev: 0, op: None };
     for _ in 0..MAX_ATTEMPTS {
         let cur = store.get(space, key)?;
         let live = cur.as_ref().map_or(0, |e| e.rev);
         if let Some(want) = if_rev {
             if want != live {
-                return Err(DataError::Conflict { key: key.to_string(), rev: live });
+                return Err(DataError::Conflict { key: key.to_string(), rev: live, op: None });
             }
         }
-        let base = match cur {
-            Some(e) if e.value.is_object() => Some(e.value),
-            Some(_) => {
-                return Err(DataError::BadRequest(format!(
-                    "the value at '{key}' isn't an object, so it has no fields to patch; use store.put"
-                )))
-            }
-            None => None,
+        let Some(merged) = merged(key, cur.as_ref().map(|e| &e.value), partial)? else {
+            let value = cur.map_or_else(|| Json::Object(serde_json::Map::new()), |e| e.value);
+            return Ok(Patched { rev: live, value, changed: false });
         };
-        let mut merged = base.clone().unwrap_or_else(|| Json::Object(serde_json::Map::new()));
-        merge_patch(&mut merged, partial);
-        if base.as_ref() == Some(&merged) {
-            return Ok(Patched { rev: live, value: merged, changed: false });
-        }
         match store.put(space, key, &merged, Some(live), by) {
             Ok(rev) => return Ok(Patched { rev, value: merged, changed: true }),
             // Someone wrote between our read and our write. With the
@@ -177,7 +201,7 @@ mod tests {
         let f = fx();
         let rev = f.store.put(&board(), "obj/1", &json!({"t": 1}), None, &Actor::Owner).expect("put");
         match patch(&f.store, &board(), "obj/1", &json!({"t": 2}), Some(rev + 7), &Actor::Owner) {
-            Err(DataError::Conflict { key, rev: live }) => assert_eq!((key.as_str(), live), ("obj/1", rev)),
+            Err(DataError::Conflict { key, rev: live, op: None }) => assert_eq!((key.as_str(), live), ("obj/1", rev)),
             other => panic!("want conflict, got {other:?}"),
         }
         match patch(&f.store, &board(), "obj/1", &json!({"t": 2}), Some(0), &Actor::Owner) {

@@ -290,6 +290,7 @@ mod tests {
                             rusqlite::params![space.as_str(), key, rev, by.stored()],
                         )?;
                     }
+                    Op::Patch { .. } => unreachable!("an import plans puts and deletes only"),
                 }
             }
             tx.execute("UPDATE spaces SET rev = ?2, updated_at = ?2 WHERE space = ?1", rusqlite::params![space.as_str(), rev])?;

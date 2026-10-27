@@ -1019,7 +1019,7 @@ export interface StoreDeleted {
 export interface StoreOp {
   readonly ifRev?: number
   readonly key: string
-  readonly op: 'put' | 'delete'
+  readonly op: 'put' | 'delete' | 'patch'
   readonly value?: unknown
 }
 
@@ -1572,7 +1572,7 @@ export interface K2 {
     patch(key: string, partial: unknown, opts?: { ifRev?: number }): Promise<StorePatched>
     /** Delete one key (a missing key is not an error). This computer only. cap store:write · local · garden-data-v1. e.g. `await k2.store.delete('obj/7')` */
     delete(key: string, opts?: { ifRev?: number }): Promise<StoreDeleted>
-    /** Up to 64 writes, all or nothing, as one rev. This computer only. cap store:write · local · garden-data-v1. e.g. `await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'delete', key: 'obj/2'}])` */
+    /** Up to 64 writes (put, patch, delete), all or nothing, as one rev. This computer only. cap store:write · local · garden-data-v1. e.g. `await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'patch', key: 'obj/3', value: {x: 4}}, {op: 'delete', key: 'obj/2'}])` */
     batch(ops: StoreOp[]): Promise<StoreCommit>
     /** Open a transaction (k2.store.tx() wraps begin, add and commit). This computer only. cap store:write · local · garden-data-v1. e.g. `const tx = k2.store.tx()` */
     txBegin(): Promise<StoreTx>

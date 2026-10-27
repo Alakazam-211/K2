@@ -490,7 +490,9 @@ fn if_rev(o: Option<&serde_json::Map<String, J>>, verb: &str) -> Result<Option<i
 
 fn ops_arg(args: &[J], i: usize, verb: &str) -> Result<Vec<Op>, DataError> {
     let v = args.get(i).cloned().ok_or_else(|| DataError::BadRequest(format!("{verb} needs ops")))?;
-    serde_json::from_value(v).map_err(|e| DataError::BadRequest(format!("{verb}: ops are [{{op, key, value?, ifRev?}}]: {e}")))
+    serde_json::from_value(v).map_err(|e| {
+        DataError::BadRequest(format!("{verb}: ops are [{{op: put|patch|delete, key, value?, ifRev?}}]: {e}"))
+    })
 }
 
 // ── store.* ──────────────────────────────────────────────────────────
@@ -517,8 +519,9 @@ fn write_check(acc: &Access, key: &str) -> Result<(), DataError> {
 /// pauses the placement (`PauseReason::Writes`).
 fn runaway_check(w: &Placed, ops: &[Op]) -> Result<(), DataError> {
     for op in ops {
+        // A patch op hashes its partial, as a single store.patch does.
         let value = match op {
-            Op::Put { value, .. } => serde_json::to_string(value).unwrap_or_default(),
+            Op::Put { value, .. } | Op::Patch { value, .. } => serde_json::to_string(value).unwrap_or_default(),
             Op::Delete { .. } => String::new(),
         };
         let hash = k2_core::zen::bundle::sha256_hex(value.as_bytes());

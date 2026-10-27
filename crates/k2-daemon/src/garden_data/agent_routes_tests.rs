@@ -126,6 +126,90 @@ fn patch_merges_fields_keeps_the_rest_and_checks_if_rev() {
     assert!(crate::zen_data_routes::is_post_route("/cli/zen/data/patch"), "POST only (the transport answers 405)");
 }
 
+/// 0.46.5 (Board via Appa): `{op: "patch"}` in a batch and in a
+/// transaction, through the agent door: one rev, all or nothing, grants on
+/// each patched key, and a refusal that names the op.
+#[test]
+fn batch_and_tx_take_patch_ops_all_or_nothing() {
+    let _e = env();
+    let o = DataWho::Owner;
+    let seed = ok(&o, "POST", "/cli/zen/data/batch", json!({"widget": "board", "ops": [
+        {"op": "put", "key": "project/7/obj/1", "value": {"t": "a", "x": 1, "boardOnly": [1]}},
+        {"op": "put", "key": "project/7/obj/2", "value": {"t": "b"}},
+        {"op": "put", "key": "project/8/obj/1", "value": {"t": "c"}}
+    ]}), &[]);
+    let r1 = seed["rev"].as_i64().expect("rev");
+    let keeper = agent("w-keeper");
+    person_grant("board", "w-keeper", "write", "project/7/");
+    let get = |k: &str| ok(&o, "GET", "/cli/zen/data/get", json!({}), &[("widget", "board"), ("key", k)])["entry"].clone();
+
+    // A patch outside the grant refuses the whole batch.
+    let (code, c) = err(&keeper, "POST", "/cli/zen/data/batch", json!({"widget": "board", "ops": [
+        {"op": "put", "key": "project/7/obj/3", "value": 3},
+        {"op": "patch", "key": "project/8/obj/1", "value": {"t": "x"}}
+    ]}), &[]);
+    assert_eq!((code, c.as_str()), (403, "not_granted"));
+    assert_eq!(get("project/7/obj/3"), Value::Null, "nothing written");
+
+    // A stale ifRev on one patch: 409 naming the op and key, nothing written.
+    let (code, v) = call(&keeper, "POST", "/cli/zen/data/batch", json!({"widget": "board", "ops": [
+        {"op": "put", "key": "project/7/obj/3", "value": 3},
+        {"op": "patch", "key": "project/7/obj/1", "value": {"x": 2}, "ifRev": r1 + 9}
+    ]}), &[]);
+    assert_eq!(code, 409, "{v}");
+    assert_eq!((v["error"]["code"].as_str(), v["error"]["op"].as_u64(), v["error"]["key"].as_str()), (Some("conflict"), Some(1), Some("project/7/obj/1")), "{v}");
+    assert_eq!(v["error"]["rev"].as_i64(), Some(r1), "{v}");
+    assert_eq!(get("project/7/obj/3"), Value::Null, "the put rolled back too");
+
+    // An invalid patch: 400 naming the op and key.
+    let (code, v) = call(&keeper, "POST", "/cli/zen/data/batch", json!({"widget": "board", "ops": [
+        {"op": "delete", "key": "project/7/obj/2"},
+        {"op": "patch", "key": "project/7/obj/1", "value": [1]}
+    ]}), &[]);
+    assert_eq!((code, v["error"]["code"].as_str()), (400, Some("bad_request")), "{v}");
+    assert!(v["error"]["hint"].as_str().expect("hint").starts_with("op 1 ('project/7/obj/1'): "), "{v}");
+    assert_ne!(get("project/7/obj/2"), Value::Null, "the delete rolled back");
+
+    // put + patch + delete: one rev, the patch keeps the fields it doesn't name.
+    let v = ok(&keeper, "POST", "/cli/zen/data/batch", json!({"widget": "board", "ops": [
+        {"op": "put", "key": "project/7/obj/3", "value": {"n": 3}},
+        {"op": "patch", "key": "project/7/obj/1", "value": {"x": 2, "t": null}, "ifRev": r1},
+        {"op": "delete", "key": "project/7/obj/2", "ifRev": r1}
+    ]}), &[]);
+    let r2 = v["rev"].as_i64().expect("rev");
+    assert_eq!((r2, v["ops"].as_i64()), (r1 + 1, Some(3)));
+    let e = get("project/7/obj/1");
+    assert_eq!((e["value"].clone(), e["rev"].as_i64(), e["by"].as_str()), (json!({"x": 2, "boardOnly": [1]}), Some(r2), Some("agent:board-keeper")));
+    let feed = ok(&keeper, "GET", "/cli/zen/data/changes", json!({}), &[("widget", "board"), ("since", &r1.to_string())]);
+    let rows: Vec<(String, i64, bool)> = feed["items"].as_array().expect("items").iter()
+        .map(|c| (c["key"].as_str().expect("key").to_string(), c["rev"].as_i64().expect("rev"), c["deleted"].as_bool().expect("deleted")))
+        .collect();
+    assert_eq!(rows, vec![
+        ("project/7/obj/1".to_string(), r2, false),
+        ("project/7/obj/2".to_string(), r2, true),
+        ("project/7/obj/3".to_string(), r2, false),
+    ], "one change-log row per key at the batch's rev");
+
+    // A transaction: patch in part 2, stale → nothing; fresh → one rev.
+    let tx = |ops: Value| -> (u16, Value) {
+        let id = ok(&keeper, "POST", "/cli/zen/data/tx/begin", json!({"widget": "board"}), &[])["txId"].as_str().expect("txId").to_string();
+        ok(&keeper, "POST", "/cli/zen/data/tx/add", json!({"txId": id, "ops": [{"op": "put", "key": "project/7/obj/9", "value": 9}]}), &[]);
+        ok(&keeper, "POST", "/cli/zen/data/tx/add", json!({"txId": id, "ops": ops}), &[]);
+        call(&keeper, "POST", "/cli/zen/data/tx/commit", json!({"txId": id}), &[])
+    };
+    let (code, v) = tx(json!([{"op": "patch", "key": "project/7/obj/1", "value": {"x": 3}, "ifRev": r1}]));
+    assert_eq!((code, v["error"]["op"].as_u64(), v["error"]["key"].as_str()), (409, Some(1), Some("project/7/obj/1")), "{v}");
+    assert_eq!(get("project/7/obj/9"), Value::Null, "the commit wrote nothing");
+    let (code, v) = tx(json!([{"op": "patch", "key": "project/7/obj/1", "value": {"x": 3}, "ifRev": r2}]));
+    assert_eq!((code, v["rev"].as_i64(), v["ops"].as_i64()), (200, Some(r2 + 1), Some(2)), "{v}");
+    assert_eq!(get("project/7/obj/1")["value"], json!({"x": 3, "boardOnly": [1]}));
+    assert_eq!(get("project/7/obj/9")["rev"].as_i64(), Some(r2 + 1));
+    // A patch op outside the grant drops the transaction at tx/add.
+    let id = ok(&keeper, "POST", "/cli/zen/data/tx/begin", json!({"widget": "board"}), &[])["txId"].as_str().expect("txId").to_string();
+    let (code, c) = err(&keeper, "POST", "/cli/zen/data/tx/add", json!({"txId": id, "ops": [{"op": "patch", "key": "project/8/obj/1", "value": {"a": 1}}]}), &[]);
+    assert_eq!((code, c.as_str()), (403, "not_granted"));
+}
+
 #[test]
 fn agents_see_and_change_only_granted_prefixes() {
     let _e = env();

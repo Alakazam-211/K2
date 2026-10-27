@@ -93,6 +93,18 @@ struct Open {
     last_used: Instant,
 }
 
+/// What one op of a write does to its key, once planned.
+enum Act {
+    /// Store this canonical JSON text.
+    Write(String),
+    /// Tombstone the key (nothing when it's already gone).
+    Delete,
+    /// A patch op before its merge, which runs inside the write.
+    Patch,
+    /// A patch that changes nothing: no row, no change-log entry.
+    Skip,
+}
+
 /// The Garden data store over one SQLite file.
 pub struct SqliteStore {
     path: PathBuf,
@@ -243,26 +255,42 @@ impl SqliteStore {
     }
 
     /// The core write: answers `(rev, changed)`. `changed = false` when every
-    /// op was a delete of a missing key (no rev bump).
-    fn write(&self, space: &Space, ops: &[Op], by: &Actor) -> Result<(i64, bool), DataError> {
-        // Shape first: keys, values, duplicates. Nothing is opened for a bad request.
+    /// op was a delete of a missing key or a patch that changed nothing (no
+    /// rev bump). `indexed` (a batch, transaction or import) names the
+    /// failing op's index in a conflict or a refused patch.
+    fn write(&self, space: &Space, ops: &[Op], by: &Actor, indexed: bool) -> Result<(i64, bool), DataError> {
+        let at = |i: usize, op: &Op, e: DataError| -> DataError {
+            if !indexed {
+                return e;
+            }
+            match e {
+                DataError::BadRequest(m) => DataError::BadRequest(format!("op {i} ('{}'): {m}", op.key())),
+                other => other,
+            }
+        };
+        // Shape first: keys, values, duplicates, patch partials. Nothing is
+        // opened for a bad request.
         let mut seen = HashSet::new();
-        let mut texts: Vec<Option<String>> = Vec::with_capacity(ops.len());
-        for op in ops {
+        let mut texts: Vec<Act> = Vec::with_capacity(ops.len());
+        for (i, op) in ops.iter().enumerate() {
             keys::validate_key(op.key())?;
             if !seen.insert(op.key().to_string()) {
                 return Err(DataError::BadRequest(format!("'{}' appears twice in one write", op.key())));
             }
             texts.push(match op {
-                Op::Put { value, .. } => Some(canonical(value)?),
-                Op::Delete { .. } => None,
+                Op::Put { value, .. } => Act::Write(canonical(value)?),
+                Op::Delete { .. } => Act::Delete,
+                Op::Patch { value, if_rev, .. } => {
+                    super::patch::check_partial(value, *if_rev).map_err(|e| at(i, op, e))?;
+                    Act::Patch
+                }
             });
         }
         let now = self.now();
         let who = by.stored();
         let max_file = self.max_file_bytes;
         self.with(|conn| {
-            if texts.iter().any(Option::is_some) && Self::file_bytes(conn)? > max_file {
+            if texts.iter().any(|a| !matches!(a, Act::Delete)) && Self::file_bytes(conn)? > max_file {
                 return Err(DataError::StoreFull);
             }
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -272,10 +300,14 @@ impl SqliteStore {
                 })
                 .optional()?;
             let (rev, mut bytes, mut nkeys) = head.unwrap_or((0, 0, 0));
-            // Current state of each key: (live rev or 0, live size).
+            // Current state of each key: (live rev or 0, live size). A patch
+            // reads the live value and merges it here, inside this write, so
+            // the whole set still lands at one rev or not at all.
             let mut plan: Vec<(usize, i64, i64)> = Vec::with_capacity(ops.len());
             {
                 let mut q = tx.prepare_cached("SELECT rev, deleted, size FROM entries WHERE space = ?1 AND key = ?2")?;
+                let mut qv =
+                    tx.prepare_cached("SELECT value FROM entries WHERE space = ?1 AND key = ?2 AND deleted = 0")?;
                 for (i, op) in ops.iter().enumerate() {
                     let cur: Option<(i64, bool, i64)> = q
                         .query_row(params![space.as_str(), op.key()], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1, r.get(2)?)))
@@ -284,13 +316,25 @@ impl SqliteStore {
                         Some((r, false, s)) => (r, s),
                         _ => (0, 0),
                     };
-                    let want = match op {
-                        Op::Put { if_rev, .. } | Op::Delete { if_rev, .. } => *if_rev,
-                    };
-                    if let Some(want) = want {
+                    if let Some(want) = op.if_rev() {
                         if want != live_rev {
-                            return Err(DataError::Conflict { key: op.key().to_string(), rev: live_rev });
+                            return Err(DataError::Conflict {
+                                key: op.key().to_string(),
+                                rev: live_rev,
+                                op: indexed.then_some(i),
+                            });
                         }
+                    }
+                    if let Op::Patch { value: partial, .. } = op {
+                        let live = if live_rev == 0 {
+                            None
+                        } else {
+                            Some(parse_value(qv.query_row(params![space.as_str(), op.key()], |r| r.get(0)).optional()?)?)
+                        };
+                        texts[i] = match super::patch::merged(op.key(), live.as_ref(), partial).map_err(|e| at(i, op, e))? {
+                            Some(doc) => Act::Write(canonical(&doc)?),
+                            None => Act::Skip,
+                        };
                     }
                     plan.push((i, live_rev, live_size));
                 }
@@ -298,19 +342,19 @@ impl SqliteStore {
             let mut effective = 0usize;
             for &(i, live_rev, live_size) in &plan {
                 match &texts[i] {
-                    Some(t) => {
+                    Act::Write(t) => {
                         bytes += t.len() as i64 - live_size;
                         if live_rev == 0 {
                             nkeys += 1;
                         }
                         effective += 1;
                     }
-                    None if live_rev != 0 => {
+                    Act::Delete if live_rev != 0 => {
                         bytes -= live_size;
                         nkeys -= 1;
                         effective += 1;
                     }
-                    None => {}
+                    Act::Delete | Act::Skip | Act::Patch => {}
                 }
             }
             if effective == 0 {
@@ -338,15 +382,15 @@ impl SqliteStore {
                 for &(i, live_rev, _) in &plan {
                     let key = ops[i].key();
                     match &texts[i] {
-                        Some(t) => {
+                        Act::Write(t) => {
                             up.execute(params![space.as_str(), key, new_rev, 0, t, t.len() as i64, now, who])?;
                             log.execute(params![space.as_str(), new_rev, key, 0, who, now])?;
                         }
-                        None if live_rev != 0 => {
+                        Act::Delete if live_rev != 0 => {
                             up.execute(params![space.as_str(), key, new_rev, 1, Option::<String>::None, 0, now, who])?;
                             log.execute(params![space.as_str(), new_rev, key, 1, who, now])?;
                         }
-                        None => {}
+                        Act::Delete | Act::Skip | Act::Patch => {}
                     }
                 }
             }
@@ -382,19 +426,19 @@ impl StoreBackend for SqliteStore {
 
     fn put(&self, space: &Space, key: &str, value: &Json, if_rev: Option<i64>, by: &Actor) -> Result<i64, DataError> {
         let op = Op::Put { key: key.to_string(), value: value.clone(), if_rev };
-        self.write(space, std::slice::from_ref(&op), by).map(|(rev, _)| rev)
+        self.write(space, std::slice::from_ref(&op), by, false).map(|(rev, _)| rev)
     }
 
     fn delete(&self, space: &Space, key: &str, if_rev: Option<i64>, by: &Actor) -> Result<Option<i64>, DataError> {
         let op = Op::Delete { key: key.to_string(), if_rev };
-        self.write(space, std::slice::from_ref(&op), by).map(|(rev, changed)| changed.then_some(rev))
+        self.write(space, std::slice::from_ref(&op), by, false).map(|(rev, changed)| changed.then_some(rev))
     }
 
     fn apply(&self, space: &Space, ops: &[Op], by: &Actor) -> Result<i64, DataError> {
         if ops.is_empty() {
             return Err(DataError::BadRequest("a write needs at least one op".into()));
         }
-        self.write(space, ops, by).map(|(rev, _)| rev)
+        self.write(space, ops, by, true).map(|(rev, _)| rev)
     }
 
     fn list(

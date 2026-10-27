@@ -43,6 +43,8 @@ WIDGETS YOU MAKE
 BIG WRITES
   k2 store batch --widget <w> < ops.json   ≤ 64 ops in one call, or up to
   1,000 ops / 1 MiB as one transaction: all or nothing, one rev, one push.
+  Ops: put, patch (value = only the fields to change) or delete, each with
+  an optional ifRev; a conflict or bad patch writes nothing, naming its op.
   Write through the widget's own script when it has one (Board: bin/board
   checks the shape; a raw put skips it). Widgets must tolerate bad values.
 

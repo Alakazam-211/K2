@@ -415,6 +415,7 @@
     return utf8Len(s === undefined ? 'null' : s)
   }
 
+  // A patch op counts its partial toward the part's bytes, as the daemon does.
   /** Ops in parts of ≤ 64 ops and ≤ 60 KiB of values. @param {any[]} ops */
   function parts(ops) {
     /** @type {any[][]} */
@@ -422,7 +423,7 @@
     var cur = []
     var bytes = 0
     for (var i = 0; i < ops.length; i++) {
-      var b = ops[i] && ops[i].op === 'put' ? jsonBytes(ops[i].value) : 0
+      var b = ops[i] && (ops[i].op === 'put' || ops[i].op === 'patch') ? jsonBytes(ops[i].value) : 0
       if (cur.length && (cur.length >= PART_OPS || bytes + b > PART_BYTES)) {
         out.push(cur)
         cur = []

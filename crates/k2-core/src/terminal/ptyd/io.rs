@@ -209,6 +209,7 @@ where
             replay,
             ckpt_at: Instant::now(),
             ckpt_pos: stream.start,
+            ckpt_writer: None,
         };
         l.run(stream)
     })?;
@@ -234,11 +235,34 @@ struct Loop<L: EventListener> {
     /// S4: the last screen checkpoint (time, stream offset).
     ckpt_at: Instant,
     ckpt_pos: u64,
+    /// The checkpoint writer in flight (security review F2: joined before
+    /// the session's exit cleanup removes the file, so a write can never
+    /// land after it).
+    ckpt_writer: Option<JoinHandle<()>>,
 }
 
 /// S4: while output keeps changing, save the screen this often, so a
 /// daemon crash (no detach) still restores it.
 pub const CHECKPOINT_EVERY: Duration = Duration::from_secs(30);
+
+/// [`CHECKPOINT_EVERY`], or (debug builds only, tests) `K2_PTYD_TEST_CKPT_MS`.
+fn checkpoint_every() -> Duration {
+    if cfg!(debug_assertions) {
+        if let Some(ms) = std::env::var("K2_PTYD_TEST_CKPT_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
+            return Duration::from_millis(ms);
+        }
+    }
+    CHECKPOINT_EVERY
+}
+
+/// Debug builds only (tests): stretch the checkpoint writer, to widen the
+/// window in which a session can end while a write is in flight.
+fn test_writer_delay() -> Option<Duration> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var("K2_PTYD_TEST_CKPT_DELAY_MS").ok().and_then(|v| v.parse::<u64>().ok()).map(Duration::from_millis)
+}
 
 enum Step {
     Continue,
@@ -339,7 +363,7 @@ impl<L: EventListener> Loop<L> {
         };
         // Wake for a due checkpoint when output changed since the last one.
         if self.shadow.pos() != self.ckpt_pos {
-            let due = (self.ckpt_at + CHECKPOINT_EVERY).saturating_duration_since(Instant::now()).as_millis().min(i32::MAX as u128) as i32;
+            let due = (self.ckpt_at + checkpoint_every()).saturating_duration_since(Instant::now()).as_millis().min(i32::MAX as u128) as i32;
             timeout_ms = if timeout_ms < 0 { due } else { timeout_ms.min(due) };
         }
         let mut fds = [
@@ -470,8 +494,10 @@ impl<L: EventListener> Loop<L> {
     fn maybe_checkpoint(&mut self) {
         if self.replay.is_some()
             || self.shadow.pos() == self.ckpt_pos
-            || self.ckpt_at.elapsed() < CHECKPOINT_EVERY
+            || self.ckpt_at.elapsed() < checkpoint_every()
             || self.parser.sync_timeout().sync_timeout().is_some()
+            // One writer at a time: never a newer save racing an older one.
+            || self.ckpt_writer.as_ref().is_some_and(|h| !h.is_finished())
         {
             return;
         }
@@ -480,11 +506,25 @@ impl<L: EventListener> Loop<L> {
         self.ckpt_at = Instant::now();
         self.ckpt_pos = self.shadow.pos();
         let sid = self.sid.clone();
-        let _ = std::thread::Builder::new().name("ptyd-ckpt".into()).spawn(move || {
-            if let Err(e) = super::snapshot::write(&sid, &snap) {
-                crate::log_debug!("[ptyd] session={sid}: screen checkpoint not saved: {e}");
-            }
-        });
+        let delay = test_writer_delay();
+        self.ckpt_writer = std::thread::Builder::new()
+            .name("ptyd-ckpt".into())
+            .spawn(move || {
+                if let Some(d) = delay {
+                    std::thread::sleep(d);
+                }
+                if let Err(e) = super::snapshot::write(&sid, &snap) {
+                    crate::log_debug!("[ptyd] session={sid}: screen checkpoint not saved: {e}");
+                }
+            })
+            .ok();
+    }
+
+    /// Wait for the checkpoint writer in flight, if any (F2).
+    fn join_checkpoint(&mut self) {
+        if let Some(h) = self.ckpt_writer.take() {
+            let _ = h.join();
+        }
     }
 
     fn go_live(&mut self) {
@@ -507,6 +547,9 @@ impl<L: EventListener> Loop<L> {
     }
 
     fn finish_stop(&mut self) -> IoEnd {
+        // detach() saves the screen next; an older checkpoint must not land
+        // after it.
+        self.join_checkpoint();
         self.go_live();
         let mut t = self.term.lock();
         self.parser.stop_sync(&mut *t);
@@ -539,7 +582,9 @@ impl<L: EventListener> Loop<L> {
         self.owner.release_fd(&super::cell_listener_name(&self.sid));
         self.owner.unwatch(&self.sid);
         super::adopt::release_conversations_of(&self.sid);
-        // S-5: the session ended; its saved screen goes.
+        // S-5: the session ended; its saved screen goes — after any
+        // checkpoint write in flight, so none can re-create it (F2).
+        self.join_checkpoint();
         super::snapshot::remove(&self.sid);
         IoEnd { reader_pos: self.shadow.pos(), safe_offset: self.shadow.partial_start(), exited: true }
     }

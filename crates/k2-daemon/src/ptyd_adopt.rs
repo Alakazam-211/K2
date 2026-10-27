@@ -225,6 +225,20 @@ pub fn b1() {
         use k2_core::terminal::ptyd::adopt;
         let running = adopt::running();
         let exited = adopt::exited();
+        // Security review F2: the sweeps run on EVERY boot, ptyd or not.
+        // With no ptyd (after a reboot, logout or a ptyd crash) nothing is
+        // running, so every saved screen and carried row goes: they hold
+        // screen contents and must never outlive their sessions (S-5).
+        let keep = adopt::running_sids();
+        let swept = crate::activity_store::sweep_carried_rows(&keep);
+        if swept > 0 {
+            log_debug!("[ptyd] B1: dropped {swept} carried activity row(s) of ended sessions");
+        }
+        let swept = k2_core::terminal::ptyd::snapshot::sweep(&keep);
+        if swept > 0 {
+            log_debug!("[ptyd] B1: dropped {swept} saved screen(s) of ended sessions");
+        }
+        k2_core::terminal::ptyd::snapshot::keep_out_of_backups(&k2_core::paths::k2_home().join("run"));
         let Some(owner) = k2_core::terminal::ptyd::client::global().current_owner() else {
             if !running.is_empty() {
                 log_debug!("[ptyd] B1: the owner connection from B0 is gone; nothing adopted");
@@ -232,16 +246,6 @@ pub fn b1() {
             return;
         };
         cleanup_exited_while_down(&owner, &exited);
-        // P37: carried activity rows of sessions that are no longer running.
-        let swept = crate::activity_store::sweep_carried_rows(&adopt::running_sids());
-        if swept > 0 {
-            log_debug!("[ptyd] B1: dropped {swept} carried activity row(s) of ended sessions");
-        }
-        // S4: saved screens of sessions that no longer run (S-5).
-        let swept = k2_core::terminal::ptyd::snapshot::sweep(&adopt::running_sids());
-        if swept > 0 {
-            log_debug!("[ptyd] B1: dropped {swept} saved screen(s) of ended sessions");
-        }
         if running.is_empty() {
             // Nothing survived. With the switch off this ptyd has no more
             // use: let it exit (it holds no session).

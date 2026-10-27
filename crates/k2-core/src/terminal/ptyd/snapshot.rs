@@ -273,6 +273,53 @@ pub fn remove(sid: &str) {
     }
 }
 
+/// The standard cache-directory tag (bford.info/cachedir): borg, restic
+/// (`--exclude-caches`), GNU tar (`--exclude-caches`) and others skip a
+/// directory holding it.
+pub const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
+# This file is a cache directory tag created by K2: runtime state (saved agent\n\
+# screens, sockets, keys) that must not be backed up.\n";
+
+/// Security review F2: keep `<K2 home>/run` — saved screens, carried
+/// activity rows, sockets, ptyd's key — out of backups.
+/// - macOS: Time Machine's sticky exclusion (`tmutil addexclusion`, an
+///   xattr on the directory; no root), set when not already excluded.
+/// - Everywhere: a `CACHEDIR.TAG`, which the common Linux backup tools
+///   honour (there is no OS-wide exclusion on Linux).
+///
+/// Best effort (logged); once per process.
+pub fn keep_out_of_backups(run: &Path) {
+    static DONE: std::sync::Once = std::sync::Once::new();
+    DONE.call_once(|| {
+        if let Err(e) = std::fs::create_dir_all(run) {
+            crate::log_debug!("[ptyd] backups: {}: {e}", run.display());
+            return;
+        }
+        let tag = run.join("CACHEDIR.TAG");
+        if !tag.exists() {
+            if let Err(e) = std::fs::write(&tag, CACHEDIR_TAG) {
+                crate::log_debug!("[ptyd] backups: CACHEDIR.TAG: {e}");
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let excluded = std::process::Command::new("/usr/bin/tmutil")
+                .arg("isexcluded")
+                .arg(run)
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains("[Excluded]"))
+                .unwrap_or(false);
+            if !excluded {
+                match std::process::Command::new("/usr/bin/tmutil").arg("addexclusion").arg(run).status() {
+                    Ok(s) if s.success() => crate::log_debug!("[ptyd] backups: Time Machine excludes {}", run.display()),
+                    Ok(s) => crate::log_debug!("[ptyd] backups: tmutil addexclusion {}: {s}", run.display()),
+                    Err(e) => crate::log_debug!("[ptyd] backups: tmutil: {e}"),
+                }
+            }
+        }
+    });
+}
+
 /// Boot (B1): drop snapshots of sessions no longer running in ptyd.
 pub fn sweep(keep: &std::collections::HashSet<String>) -> usize {
     let Ok(rd) = std::fs::read_dir(dir()) else { return 0 };

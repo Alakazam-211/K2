@@ -80,6 +80,16 @@ fn run() {
         ),
         "vault-probe-child" => vault_probe_child(&args[1], &args[2]),
         "repaint" => repaint(&args[1], args[2].parse().unwrap()),
+        // `lines <n> <ms>`: print `line <i>` n times, ms apart, then exit 0.
+        "lines" => {
+            let n: u64 = args[1].parse().unwrap();
+            let ms: u64 = args[2].parse().unwrap();
+            for i in 0..n {
+                println!("line {i}");
+                out.flush().unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+            }
+        }
         "sleep" => {
             println!("READY");
             out.flush().unwrap();

@@ -828,6 +828,93 @@ fn remote_session_grant_shells_do_not_survive_a_restart() {
     // Drop ends this test's daemon and ptyd.
 }
 
+fn files_in(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default()
+}
+
+/// Security review F2 (a): a "reboot" — the daemon stops keeping its
+/// agents (saved screen + carried row written), then everything dies with
+/// the OS (ptyd and the agent killed) — leaves nothing behind: the next
+/// boot finds no ptyd and still sweeps every saved screen and carried row.
+/// `run/` is marked to be left out of backups.
+#[test]
+fn a_reboot_leaves_no_saved_screens_or_rows_behind() {
+    let mut h = Harness::new("rb");
+    let port = h.start();
+    let token = h.token();
+    let dir = h.home.join("agent");
+    let body = serde_json::json!({"agent_name": "tab-rb", "cwd": h.home.join("ws").to_string_lossy(), "command": "k2-ptyd-test-agent", "args": ["survive", dir.to_string_lossy(), "50"]}).to_string();
+    let (s, resp) = http(port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &body);
+    assert_eq!(s, 200, "spawn: {resp}");
+    let sid = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["sessionId"].as_str().expect("sessionId").to_string();
+    let pid: i32 = wait_for("agent pid", Duration::from_secs(15), || std::fs::read_to_string(dir.join("pid")).ok()?.trim().parse().ok());
+    h.agent_pid = Some(pid);
+    let ptyd = h.ptyd_pid.expect("ptyd");
+    // The daemon goes first (SIGTERM, no stop intent: it keeps the agent and
+    // saves its screen and row) ...
+    // SAFETY: the daemon, ptyd and agent this test started.
+    unsafe { libc::kill(h.daemon_pid(), libc::SIGTERM) };
+    h.wait_daemon_exit(Duration::from_secs(20));
+    let (term, act) = (h.k2.join("run/term"), h.k2.join("run/activity"));
+    assert!(term.join(format!("{sid}.snap")).is_file(), "detach saved no screen");
+    assert!(act.join(format!("{sid}.json")).is_file(), "detach carried no row");
+    // ... then the OS ends everything else.
+    unsafe {
+        libc::kill(ptyd, libc::SIGKILL);
+        libc::kill(pid, libc::SIGKILL);
+    }
+    wait_for("ptyd and the agent to die", Duration::from_secs(10), || (!alive(ptyd) && !alive(pid)).then_some(()));
+    let _ = std::fs::remove_file(h.k2.join("run/ptyd/lock"));
+    h.ptyd_pid = None;
+    h.agent_pid = None;
+    h.start();
+    let log = std::fs::read_to_string(h.home.join(format!("daemon-{}.log", h.boots))).unwrap_or_default();
+    assert!(!log.contains("adopted session="), "nothing to adopt after a reboot");
+    assert!(files_in(&term).is_empty(), "saved screens outlived their sessions: {:?}", files_in(&term));
+    assert!(files_in(&act).is_empty(), "carried rows outlived their sessions: {:?}", files_in(&act));
+    // Backups: the cache-dir tag, and Time Machine's exclusion on macOS.
+    let tag = std::fs::read_to_string(h.k2.join("run/CACHEDIR.TAG")).expect("run/CACHEDIR.TAG");
+    assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55"));
+    if cfg!(target_os = "macos") {
+        let out = Command::new("/usr/bin/tmutil").arg("isexcluded").arg(h.k2.join("run")).output().expect("tmutil isexcluded");
+        assert!(String::from_utf8_lossy(&out.stdout).contains("[Excluded]"), "run/ not excluded from Time Machine: {out:?}");
+    }
+}
+
+/// Security review F2 (b): a checkpoint writer in flight when the session
+/// ends can't re-create its saved screen. Checkpoints every 200 ms and a
+/// writer stretched to 1.5 s (debug-only knobs) make the race certain; the
+/// session's exit cleanup waits for the writer, then removes the file.
+#[test]
+fn a_checkpoint_never_recreates_a_saved_screen_after_the_session_ends() {
+    let mut h = Harness::new("ck");
+    h.extra_env.push(("K2_PTYD_TEST_CKPT_MS".into(), "200".into()));
+    h.extra_env.push(("K2_PTYD_TEST_CKPT_DELAY_MS".into(), "1500".into()));
+    let port = h.start();
+    let token = h.token();
+    // Two seconds of output, then exit.
+    let body = serde_json::json!({
+        "agent_name": "tab-ck",
+        "cwd": h.home.join("ws").to_string_lossy(),
+        "command": "k2-ptyd-test-agent",
+        "args": ["lines", "20", "100"],
+    })
+    .to_string();
+    let (s, resp) = http(port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &body);
+    assert_eq!(s, 200, "spawn: {resp}");
+    let sid = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["sessionId"].as_str().expect("sessionId").to_string();
+    let snap = h.k2.join(format!("run/term/{sid}.snap"));
+    wait_for("a checkpoint while the session runs", Duration::from_secs(10), || snap.is_file().then_some(()));
+    let ptyd_log = h.k2.join("logs/ptyd.log");
+    wait_for("the session to exit", Duration::from_secs(20), || {
+        std::fs::read_to_string(&ptyd_log).ok().filter(|l| l.contains(&format!("exit sid={sid}")) || l.contains(&format!("exited sid={sid}"))).map(|_| ())
+            .or_else(|| (http(port, "GET", &format!("/cli/terminal/read?token={token}&id={sid}&lines=5"), "").0 == 404).then_some(()))
+    });
+    // Longer than the stretched writer: anything in flight has landed.
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(!snap.exists(), "a checkpoint re-created the saved screen after the session ended");
+}
+
 fn enc(s: &str) -> String {
     s.bytes()
         .map(|b| match b {

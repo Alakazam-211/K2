@@ -265,19 +265,59 @@ pub fn write(sid: &str, snap: &Snapshot) -> io::Result<()> {
 }
 
 pub fn write_to(path: &Path, snap: &Snapshot) -> io::Result<()> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let bytes = snap.encode()?;
+    write_private_atomic(path, &snap.encode()?)
+}
+
+/// Security review F8: make `dir` a private directory WITHOUT following a
+/// planted symlink: create it 0700 if missing, then `lstat` it — it must be
+/// a real directory owned by our euid — and only then tighten its mode.
+pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    match std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let md = std::fs::symlink_metadata(dir)?;
+    // SAFETY: geteuid has no preconditions.
+    let me = unsafe { libc::geteuid() };
+    if md.file_type().is_symlink() || !md.is_dir() || md.uid() != me {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("{} is not a private directory of ours", dir.display())));
+    }
+    if md.mode() & 0o777 != 0o700 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// Security review F8: write `bytes` to `path` atomically and privately —
+/// a private parent dir ([`ensure_private_dir`]), a temp file with an
+/// unpredictable name opened `create_new` + `O_NOFOLLOW` at 0600 (a
+/// planted file or symlink makes it fail rather than be followed or
+/// truncated), fsync, rename. The temp file is removed on any failure.
+pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
     if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d)?;
-        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
+        ensure_private_dir(d)?;
     }
-    let tmp = path.with_extension(format!("tmp.{}.{:?}", std::process::id(), std::thread::current().id()).replace(['(', ')'], ""));
-    {
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
-        f.write_all(&bytes)?;
+    let rand = k2_ptyd::auth::hex(&k2_ptyd::auth::random_bytes::<8>()?);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{rand}.tmp"));
+    let res = (|| {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
         f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
-    std::fs::rename(&tmp, path)
+    res
 }
 
 /// Read `sid`'s snapshot (`None` when absent or unusable). Security review
@@ -581,6 +621,43 @@ mod tests {
         std::os::unix::fs::symlink(&good, &link).unwrap();
         assert!(read_path(&link, 20, 5).is_none());
         assert!(good.exists(), "the symlink's target is untouched");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// F8: writes never follow a planted symlink: a symlinked directory is
+    /// refused (its target's mode untouched), and a symlink at the final
+    /// path is replaced by the new file while its target stays intact.
+    #[test]
+    fn private_writes_do_not_follow_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = scratch("f8");
+        // A symlinked directory.
+        let elsewhere = d.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let term_dir = d.join("term");
+        std::os::unix::fs::symlink(&elsewhere, &term_dir).unwrap();
+        let err = write_private_atomic(&term_dir.join("x.snap"), b"data").expect_err("a symlinked dir must be refused");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+        let mode = std::fs::metadata(&elsewhere).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "the symlink's target was chmodded");
+        assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none(), "nothing was written through the symlink");
+        // A symlink planted at the final path.
+        let real = d.join("real");
+        let victim = d.join("victim.txt");
+        std::fs::write(&victim, b"victim").unwrap();
+        let target = real.join("s.snap");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&victim, &target).unwrap();
+        write_private_atomic(&target, b"new").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"victim", "the victim file was overwritten");
+        assert!(std::fs::symlink_metadata(&target).unwrap().is_file(), "the symlink was replaced by a real file");
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o700);
+        // No temp files are left behind.
+        let names: Vec<String> = std::fs::read_dir(&real).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, vec!["s.snap".to_string()], "{names:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

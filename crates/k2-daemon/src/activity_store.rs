@@ -455,25 +455,15 @@ pub fn save_for_restart(session_id: &str) -> std::io::Result<bool> {
         return Ok(false);
     };
     let body = serde_json::to_vec(&CarriedRow { v: 1, saved_at: now_ms(), row }).map_err(std::io::Error::other)?;
-    let dir = carried_rows_dir();
-    std::fs::create_dir_all(&dir)?;
+    // Security review F8: a private dir checked without following a
+    // symlink, an unpredictable temp name, create_new + O_NOFOLLOW, rename.
     #[cfg(unix)]
+    k2_core::terminal::ptyd::snapshot::write_private_atomic(&path, &body)?;
+    #[cfg(not(unix))]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        std::fs::create_dir_all(carried_rows_dir())?;
+        std::fs::write(&path, &body)?;
     }
-    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-    {
-        use std::io::Write;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-        let mut f = opts.open(&tmp)?;
-        f.write_all(&body)?;
-        f.sync_all()?;
-    }
-    std::fs::rename(&tmp, &path)?;
     Ok(true)
 }
 

@@ -37,6 +37,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A job's own checkout counts as a safe git folder** inside that job, without touching the node's global git settings.
 
 ### Fixes
+- **Pair a phone now shows when the phone is paired.** The QR is replaced by the phone's name and who it signed in as, and the phone appears in your phones list right away. If a code runs out or is replaced, the panel says so and offers a new one.
+- **Live server updates about one person reach only that person.** Before, any Member watching the server's live updates could also receive updates meant for someone else.
 - **The file viewer never overwrites a file it couldn't show as text.** Such files open read-only. Unsaved edits are kept if the file can't be re-read for a moment, and a deleted file isn't brought back unless you save.
 - **A file secret granted while an agent is running reaches that session** without a restart.
 - **One restart per server after a root helper update.** K2 now installs its service settings right after the helper updates, instead of needing extra restarts.

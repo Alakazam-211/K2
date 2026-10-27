@@ -240,7 +240,10 @@ old_build() {
   fi
   say "building v0.46.2 k2-daemon and k2-node into $OLD_DIR (once)"
   mkdir -p "$OLD_DIR/src"
-  (cd "$REPO" && git archive --format=tar v0.46.2) | tar -x -C "$OLD_DIR/src"
+  # Archive to a file first: a git failure must stop here, not feed tar
+  # an empty stream.
+  (cd "$REPO" && git archive --format=tar -o "$OLD_DIR/v0.46.2.tar" v0.46.2) || die "git archive v0.46.2 failed (is the tag fetched, the checkout trusted?)"
+  tar -x -C "$OLD_DIR/src" -f "$OLD_DIR/v0.46.2.tar" || die "unpack v0.46.2"
   (cd "$OLD_DIR/src" && build_env "$HOME" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
     ${RUSTUP_TOOLCHAIN:+RUSTUP_TOOLCHAIN="$RUSTUP_TOOLCHAIN"} ${CARGO_BUILD_JOBS:+CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS"} CARGO_TARGET_DIR="$OLD_DIR/target" cargo build -q -p k2-daemon -p k2-node) || die "v0.46.2 build"
 }

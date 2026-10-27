@@ -278,7 +278,7 @@ exit 0
 
 /// The `statusLine.command` K2 registers.
 pub fn statusline_command(script: &Path) -> String {
-    let p = shell_escape(&script.to_string_lossy());
+    let p = shell_escape(&shell_path(script));
     format!("[ -x {p} ] && {p} || true")
 }
 
@@ -305,7 +305,7 @@ fn apply_statusline(root: &mut Map<String, Value>, command: &str, remove: bool) 
     let ours = current
         .and_then(|v| v.get("command"))
         .and_then(Value::as_str)
-        .is_some_and(|c| c.contains(STATUSLINE_FRAGMENT));
+        .is_some_and(|c| fold_separators(c).contains(STATUSLINE_FRAGMENT));
     if remove {
         if ours {
             root.remove("statusLine");
@@ -335,7 +335,7 @@ pub fn script_stamp(body: &str) -> Option<String> {
 /// The registered command for one CLI (A3): the `[ -x ]` guard is kept,
 /// `$PPID` (expanded by the `sh -c` the CLI starts) is the CLI's own pid.
 pub fn hook_command(script: &Path, source: HookSource, cursor_arg: Option<&str>) -> String {
-    let p = shell_escape(&script.to_string_lossy());
+    let p = shell_escape(&shell_path(script));
     let args = match cursor_arg {
         Some(a) => a.to_string(),
         None => "\"$@\"".to_string(),
@@ -344,6 +344,28 @@ pub fn hook_command(script: &Path, source: HookSource, cursor_arg: Option<&str>)
         "[ -x {p} ] && K2_HOOK_AGENT_PID=$PPID K2_HOOK_SOURCE={} {p} {args} || true",
         source.as_str()
     )
+}
+
+/// The script path as the CLI's shell sees it. Windows CLIs run hooks in
+/// Git Bash, which takes `D:/x/.k2/hooks/notify.sh`; writing '/' there also
+/// keeps the [`NOTIFY_FRAGMENT`] / [`STATUSLINE_FRAGMENT`] match working.
+fn shell_path(script: &Path) -> String {
+    let s = script.to_string_lossy();
+    if cfg!(windows) {
+        s.replace('\\', "/")
+    } else {
+        s.into_owned()
+    }
+}
+
+/// `cmd` with Windows separators folded to '/' (an entry an older Windows
+/// build wrote with backslashes), unchanged elsewhere.
+fn fold_separators(cmd: &str) -> std::borrow::Cow<'_, str> {
+    if cfg!(windows) {
+        std::borrow::Cow::Owned(cmd.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(cmd)
+    }
 }
 
 fn shell_escape(s: &str) -> String {
@@ -806,6 +828,7 @@ fn claude_group(command: &str, async_: bool) -> Value {
 }
 
 fn is_k2_command(cmd: &str) -> bool {
+    let cmd = fold_separators(cmd);
     cmd.contains(NOTIFY_FRAGMENT) || cmd.contains(LEGACY_NOTIFY_FRAGMENT)
 }
 

@@ -3,10 +3,48 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.5
+## 0.46.5 — Agents stay up
+
+### When you update
+- **Agents now keep running through updates and restarts, by default.** On macOS and Linux, agent terminals live in a small helper while K2 restarts or updates, then reconnect to the new version with their screen as it was. In 0.46.4 this was a Beta you turned on; now it's on unless you turn it off (Settings → General → Server, or `k2 daemon survive off`). Windows keeps the old behaviour for now. `k2 daemon survive status` shows how many agents came back after the last restart.
+- **Workspace settings moved to Settings → Workspaces / Agents.** They're now the first entry in that list, above Focus Groups, and General no longer has a Workspaces tab. The settings themselves haven't changed, and search still finds each one.
+- **The Chat view is gone.** A pane or a "New agents open in" choice saved as Chat now opens the agent's Thread.
+- **A widget's manifest is now part of its signed version.** Changing what a widget asks for (caps, data it reads, sources, libraries) needs a new sign, just like changing its code. When an agent can't sign the new version itself, K2 puts a card on its Thread with you. Widget code can be up to 1 MB (K2 warns above 512 KB), and a whole Garden page up to 3.5 MB.
+
+### Threads and agents
+- **The Thread shows what the agent is actually doing, not typing dots.** A line under the conversation says what's holding the turn (a tool, a subagent, a long step). A subagent that has stopped can no longer keep the turn open, which was what left the typing bubble stuck.
+- **Mark all as read.** Right-click an agent and choose **Mark all as read**, or run `k2 thread read-all <agent>`. Cards still waiting for an answer stay waiting.
+- **Tool lines hide more secrets:** Stripe, JWT, Google and GitLab keys, passwords passed as `-p…`, header values, `key=value` pairs and long random-looking strings.
 
 ### Apps
 - **Pair your App's own phone app by QR.** People signed in to your App on the web can sign your phone app in with one scan, no password on the phone. You name your iOS and Android apps once (`k2 app pairing setup`), K2 serves their link files on your App's own k2.dev address, and the phone gets the same "Stay signed in" sign-in as a device login, with notifications in the same step. `k2 study app-pairing` has the guide.
+- **People manage their own account inside your App.** They can change their name and picture, see where they're signed in and sign out other devices, and change their password while staying signed in. You choose per App what they may change (`k2 app profile settings`). Password resets and the sign-in lock are stricter too: a used reset link ends the person's other links and clears their lock. See `k2 study app-profile`.
+- **Email from your Apps.** Give an App a sender (`k2 app email on <app> --sender <address>`) and it can email its own users with `email.send`: receipts, sign-up mail, codes. K2's own mail (password resets, invites) leaves from a system sender no agent can read. Senders can be a hosted domain or an SMTP relay, so a Mac or a domain hosted elsewhere works. Each App has a send log and limits. See `k2 study email-notifications`.
+- **Hand an App to another agent.** `k2 app handover <app> --to <agent>`, **Hand over…** in Settings, or `k2 agent hire --take-app` when you hire. Its labels, link, rooms, guests, secrets and database move, behind a card you confirm in person, and you have 72 hours to undo it. `k2 study app-handover`.
+- **Live activity for Apps and widgets.** Apps get `thread.watchActivity`, a ready-made `<k2-activity-bar>`, and `thread.activityRooms` to catch up on many rooms in one call. `k2 study live` lists every live surface, the caps it needs, and what never to infer from messages.
+- **Re-role an App login in place:** `k2 app grant role <id> --role <role>` keeps the person signed in. The user list now shows each person's App role and rooms, and a held test guest says how its password gets set.
+- **App Approvals lists every server you own,** and each request is approved on its own server.
+
+### Gardens
+- **Shared libraries for widgets.** A widget asks for a library line such as `uplot@1` and gets K2's current copy, so it never ships its own. New: `k2-markdown@1` (K2's safe markdown) and `k2-activity@1` (K2's activity bar). `k2 zen guide libs` lists them.
+- **Widgets can follow an agent's turn** with `k2.thread.onActivity`: the same counts and step kinds an App's guest sees, never the text.
+- **Files in widgets.** A widget can keep files (`k2.blobs`) and save a file to your Downloads (`k2.download`). The first download asks you, and each widget gets an hourly budget, kept by K2 so every window shares it.
+- **`store.batch` and transactions take patch operations,** so a mix of puts, patches and deletes lands together or not at all. A conflict names the operation that failed.
+- **`k2 zen widget delete <name>`** moves a widget that isn't placed on any Garden into history, with an undo.
+
+### Compute
+- **Job tiers: CI, Priority and Normal.** `k2 compute run --tier priority` is for the one job others are waiting on, and `--tier ci` needs a grant from the owner. Running jobs are never stopped. Choose who may run CI jobs in Settings → Compute.
+- **A job's own checkout counts as a safe git folder** inside that job, without touching the node's global git settings.
+
+### Fixes
+- **The file viewer never overwrites a file it couldn't show as text.** Such files open read-only. Unsaved edits are kept if the file can't be re-read for a moment, and a deleted file isn't brought back unless you save.
+- **A file secret granted while an agent is running reaches that session** without a restart.
+- **One restart per server after a root helper update.** K2 now installs its service settings right after the helper updates, instead of needing extra restarts.
+- **App guests never see a path on the host,** neither in system messages nor for the room's folder.
+- **Posting to a Thread with a field of the wrong type is refused with a clear 400,** and attachments can be sent as a JSON list.
+- **A Garden widget's `layout.subscribe` no longer hits the rate limit after a reload,** and `k2 zen validate` says how long ago a runtime error was logged.
+- **First run on a Mac:** a git that disappears is checked for again, agents can run `k2 git-tools`, and a mistyped workspace path is refused instead of creating folders.
+- **`k2 app data ls` at the top of the folder works on guarded Apps.**
 
 ## 0.46.4 — App users in safe hands
 

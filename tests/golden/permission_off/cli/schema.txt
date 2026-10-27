@@ -624,7 +624,7 @@ exit: 0
     },
     {
       "name": "feedback ask",
-      "usage": "k2 tickets ask <title> [--html <f|->] [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--assign <users>] [--wait [--timeout <s>]] [--json]",
+      "usage": "k2 tickets ask <title> [--html <f|->] [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--assign <users>] [--file <path[:line]>]... [--wait [--timeout <s>]] [--json]",
       "description": "Ask a human for input as a DURABLE item on this server's Feedback page (not a dead terminal prompt). Workspace + session auto-detected. Assign every ticket with --assign <user> (a user on this server); without one this server warns (assignee_required) or refuses, per the owner's setting (k2 tickets settings). --wait blocks and prints the BARE answer (exit 0); errors are always JSON on stderr. Exit codes: 0 ok, 1 error, 2 bad usage, 4 not found.",
       "args": [{"name": "title", "required": true}],
       "flags": [
@@ -637,7 +637,8 @@ exit: 0
         {"name": "--assign", "arg": "users", "description": "Comma-separated users on this server to assign at create (owner and/or Connect users: k2 connections list --users). Alias: --to. Assign every ticket: without one this server warns (assignee_required) or refuses, per the owner's setting (k2 tickets settings); a name that is not a user here is assignee_unknown. fyi is exempt."},
         {"name": "--wait", "arg": null, "description": "Block until answered; print the BARE answer to stdout (safe for $(...) capture). Closed without an answer -> exit 1 + {\"error\":{\"code\":\"closed_unanswered\"}} on stderr."},
         {"name": "--timeout", "arg": "seconds", "description": "With --wait: give up after N seconds (exit 1, {\"error\":{\"code\":\"timeout\"}} on stderr; the item stays waiting)."},
-        {"name": "--json", "arg": null, "description": "JSON output."}
+        {"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a workspace file to the ask (repeatable, at most 10). A pointer, not a copy; secrets refused. With --wait, files on the answer print one stderr line; stdout stays the bare answer."},
+        {"name": "--json", "arg": null, "description": "JSON output (with --wait: {answer, attachments} with absolute paths)."}
       ]
     },
     {
@@ -658,7 +659,7 @@ exit: 0
       "args": [{"name": "id", "required": true}],
       "flags": [
         {"name": "--html", "arg": null, "description": "Print ONLY the cleaned HTML brief to stdout. No brief: exit 1 with code no_brief and empty stdout."},
-        {"name": "--json", "arg": null, "description": "JSON output (includes the comments array; the brief HTML only with --html)."}
+        {"name": "--json", "arg": null, "description": "JSON output (includes the comments array, each with its id and attachments; the brief HTML only with --html)."}
       ]
     },
     {
@@ -670,10 +671,10 @@ exit: 0
     },
     {
       "name": "feedback comment",
-      "usage": "k2 tickets comment <id> \"<text>\" [--json]",
-      "description": "Add a message to a feedback item's discussion thread. Bumps the message count only; does not change status (only NEW items fire notifications).",
-      "args": [{"name": "id", "required": true}, {"name": "text", "required": true}],
-      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+      "usage": "k2 tickets comment <id> [\"<text>\"] [--file <path[:line]>]... [--json]",
+      "description": "Add a message to a feedback item's discussion thread. Bumps the message count only; does not change status (only NEW items fire notifications). The text is optional with --file.",
+      "args": [{"name": "id", "required": true}, {"name": "text", "required": false}],
+      "flags": [{"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a file from the ticket's workspace (repeatable, at most 10; relative paths resolve against the ticket's workspace). Secrets refused."}, {"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "feedback assign",
@@ -688,10 +689,10 @@ exit: 0
     },
     {
       "name": "feedback resolve",
-      "usage": "k2 tickets resolve <id> [--answered <outcome>] [--json]",
+      "usage": "k2 tickets resolve <id> [--answered <outcome> [--file <path[:line]>]...] [--json]",
       "description": "Mark a feedback item resolved (you got what you needed). Drops out of the default list view; still visible with --all. With --answered, settle a discussion instead: a person's free-text message put the ticket in needs_discussion; once you replied and agreed, mark it answered with the outcome.",
       "args": [{"name": "id", "required": true}],
-      "flags": [{"name": "--answered", "arg": "outcome", "description": "Mark it answered with the agreed outcome (not resolved)."}, {"name": "--json", "arg": null, "description": "JSON output."}]
+      "flags": [{"name": "--answered", "arg": "outcome", "description": "Mark it answered with the agreed outcome (not resolved)."}, {"name": "--file", "arg": "path[:line[-end]]", "description": "With --answered: attach files to the outcome (repeatable, at most 10). Without --answered: a usage error (files ride a message)."}, {"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "feedback settings",

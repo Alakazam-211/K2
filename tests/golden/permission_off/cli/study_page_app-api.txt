@@ -13,7 +13,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 30.
+From K2's verb catalog, version 31.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -112,6 +112,7 @@ email:send (Send email from this App's sender)
 tickets:read (Read tickets and get live ticket updates)
   tickets.list             GET  /cli/feedback/list                            A room's tickets, newest first.
   tickets.show             GET  /cli/feedback/show                            One ticket with its comments (and brief).
+  tickets.attachment       GET  /cli/feedback/attachment                      One file of a ticket message: meta, preview, thumbnail or a byte range, only when your own file rights cover it; mode=download also needs files:download in the room; a file your files:read scope doesn't cover is hidden.
 tickets:post (Open, answer, assign and set status on tickets)
   tickets.create           POST /cli/feedback/create                          Open a ticket in a room for its agent.
   tickets.comment          POST /cli/feedback/comment                         Comment on a ticket as the guest (free text moves it to needs_discussion).

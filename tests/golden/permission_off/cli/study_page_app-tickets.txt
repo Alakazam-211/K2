@@ -14,11 +14,15 @@ ROUTES (project= is the room handle or uuid; never a path)
                 GET  /cli/feedback/show?id=<id>
                 GET  /cli/feedback/show?id=<id>&brief=1   adds brief {html,text,bytes,sha256,…}
   tickets:post  POST /cli/feedback/create   {"project":"<handle>","title":"…",
-                                             "body"?,"options"?,"briefHtml"?,"assignees"?}
-                POST /cli/feedback/comment  {"id":"<id>","body":"…","optionPick":true|false}
-                POST /cli/feedback/answer   {"id":"<id>","answer":"…"}
+                                             "body"?,"options"?,"briefHtml"?,"assignees"?,
+                                             "attachments"?}
+                POST /cli/feedback/comment  {"id":"<id>","body":"…","optionPick":true|false,
+                                             "attachments"?}
+                POST /cli/feedback/answer   {"id":"<id>","answer":"…","attachments"?}
                 POST /cli/feedback/resolve  {"id":"<id>","status":"<status>"}
                 POST /cli/feedback/assign   {"id":"<id>","usernames":["owner","ana"]}
+  tickets:read  GET  /cli/feedback/attachment?id=<id>&commentId=<comment id>&n=<i>
+                     &mode=meta|preview|thumb|range|download[&px=256|512][&offset=&len=]
   tickets:read  WS   /cli/activity/events?workspace=<handle>
                 ← {"kind":"ticket_changed","workspace":"<handle>","id":"<id>",
                    "change":"<change>","status":"<status after>",
@@ -37,6 +41,28 @@ ANSWERING (what a person's reply does)
                      agent replies and settles it later.
   Both wake the asking agent. Your username is the author, never "owner"
   (a body "author" is ignored for apps).
+
+FILES (0.46.6, feature ticket-attachments-v1 on /boot-status)
+  Each message in show carries its "id" and, when it has files,
+  "attachments": [{kind, state, name, size, mime, modifiedAt, line?,
+  lineEnd?, canDownload}]. A file your own file rights don't cover is
+  {"kind":"file","state":"hidden"} (no name, type or size). state is ok,
+  changed (since it was sent), gone or hidden.
+  Read one: GET /cli/feedback/attachment with the ticket id, the message's
+  id and the file's index. meta, preview (text 512 KB; images and PDFs up
+  to 20 MB), thumb (256 or 512 px; SVG comes back sanitized), range (16 MB
+  chunks), download (range plus name and mime). Show a thumb only as an
+  <img>.
+  Rights: tickets:read to see the ticket; files:read with a folder scope
+  covering the path to see the file; files:download to save it.
+  Attach: "attachments":[{"relPath":"docs/a.png","line"?,"lineEnd"?}], at
+  most 10, room-relative, inside your own files:read scope (else the
+  uniform 403 cap_not_granted files:read). A new photo: upload it first
+  (files.uploadBinary / files:upload), then attach that path. A comment's
+  body may be empty when files ride it (not an option pick). Secrets are
+  refused (attachment_secret). A file is a pointer, never a copy or a
+  grant. Every write echoes "attachments"; no key means an older server
+  that dropped them.
 
 STATUS (resolve "status")
   resolved | dismissed | planned | needs_discussion | waiting (reopen).
@@ -85,8 +111,10 @@ LIMITS
   Over the cap: 400 brief_too_large (413 when the body itself is too big).
 
 ERRORS
-  400 usage (bad JSON, empty body, bad status, answered from an app) |
-      brief_too_large | brief_empty | brief_invalid
+  400 usage (bad JSON, empty body, bad status, answered from an app,
+      attachments not an array, more than 10 files) |
+      brief_too_large | brief_empty | brief_invalid |
+      attachment_outside_workspace | attachment_not_a_file | attachment_secret
   403 skin_room (room not on the pass; also any id you cannot see, so there
       is no 404 oracle) | missing capability tickets:read | tickets:post
   404 a path that is not an app door (waiting-count, list-all, GET assign)

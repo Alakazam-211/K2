@@ -68,9 +68,15 @@ LINKS
   under the brief with the full URL, opened in their system browser.
   Write the URL so it reads well in that list.
 
+FILES BESIDE THE BRIEF
+  The brief keeps its own inline data: images. To share a workspace file
+  (a screenshot, a report, a log), attach it: --file out/shot.png on ask
+  or comment. It shows under the opening message, right beside the brief,
+  and stays a pointer to the file (edits show as changed).
+
 AFTER FILING
   The brief can't be edited. Correct it in a comment, or file a new
-  ticket. Comments stay plain text.
+  ticket. Comments stay plain text (files ride them with --file).
   k2 tickets show <id>            body + brief text extract
   k2 tickets show <id> --html     the cleaned HTML only
 

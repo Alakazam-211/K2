@@ -24,10 +24,17 @@ ASK
 
 FOLLOW
   k2 feedback list
-  k2 feedback show <id>
-  k2 feedback comment <id> "…"
+  k2 feedback show <id>                 each message's files print under it
+  k2 feedback comment <id> "…" [--file path]   text optional with --file
   k2 feedback resolve <id>     you got what you needed
-  k2 feedback resolve <id> --answered "<outcome>"   settled a discussion
+  k2 feedback resolve <id> --answered "<outcome>" [--file path]   settled a discussion
+
+FILES
+  --file path[:line[-end]] on ask, comment and resolve --answered (up to
+  10). A pointer to a file in the TICKET's workspace, never a copy: the
+  person sees it under your message (images as pictures). Secrets are
+  refused; use k2 vault. A person's files reach you as
+  "Attached: <abs path>" lines; read them from disk.
 
 HOW THE PERSON ANSWERS
   Picking one of your options answers the ticket (status answered).

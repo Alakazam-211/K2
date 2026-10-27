@@ -735,34 +735,31 @@ fn seed_sidecar(ws: &Ws, conv: &str, slug: &str) {
     .expect("tab");
 }
 
-/// A live PTY standing in for the sidecar's agent: a `claude` that is
-/// `cat`, registered under the tab's agent name. Its daemon session id is
-/// what the sidecar's passport carries.
+/// A live PTY standing in for the sidecar's agent: `claude` resolved to
+/// the test shim (`exec cat`; test builds never spawn a real agent),
+/// registered under the tab's agent name. Its daemon session id is what
+/// the sidecar's passport carries.
 #[cfg(unix)]
 struct LiveCell {
     agent_name: String,
     session: std::sync::Arc<k2_core::terminal::DaemonPtySession>,
     _rt: tokio::runtime::Runtime,
+    _shim: k2_core::test_env::AgentShim,
 }
 
 #[cfg(unix)]
 impl LiveCell {
     fn spawn(conv: &str) -> LiveCell {
         use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession, LabelSource};
-        use std::os::unix::fs::PermissionsExt;
+        let shim = k2_core::test_env::AgentShim::install();
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
         let _enter = rt.enter();
-        let dir = std::env::temp_dir().join(format!("k2-pc-sidecar-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).expect("bin dir");
-        let bin = dir.join("claude");
-        std::fs::write(&bin, "#!/bin/sh\nexec cat\n").expect("fake claude");
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let session = DaemonPtySession::spawn(DaemonPtyConfig {
             session_id: k2_core::session::SessionId::new(),
             cols: 80,
             rows: 24,
             cwd: Some(std::path::PathBuf::from("/tmp")),
-            program: Some(bin.display().to_string()),
+            program: Some("claude".to_string()),
             args: vec![],
             durable_args: None,
             env: Default::default(),
@@ -779,7 +776,7 @@ impl LiveCell {
         let agent_name = format!("tab-pane-{conv}");
         crate::v2_session_map::register(agent_name.clone(), session.clone());
         drop(_enter);
-        LiveCell { agent_name, session, _rt: rt }
+        LiveCell { agent_name, session, _rt: rt, _shim: shim }
     }
 
     fn passport(&self, ws: &Ws) -> Who {

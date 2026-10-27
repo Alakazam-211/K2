@@ -24,7 +24,6 @@
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
 
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use app_fixture::*;
@@ -61,22 +60,17 @@ fn sidecar(ws: &Ws, conv: &str, slug: &str) {
     .expect("tab");
 }
 
-/// The sidecar's live PTY (a `claude` that is `cat`) under its tab's
-/// agent name, and a passport bound to that PTY's daemon session id (what
-/// a real sidecar's `k2` carries).
-fn live_sidecar(env: &Env, ws: &Ws, conv: &str) -> (String, Arc<DaemonPtySession>, String) {
-    let bin = env.path().join(format!("bin-{}", &conv[..8]));
-    std::fs::create_dir_all(&bin).expect("bin dir");
-    let claude = bin.join("claude");
-    std::fs::write(&claude, "#!/bin/sh\nexec cat\n").expect("fake claude");
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+/// The sidecar's live PTY (`claude`, resolved to the `exec cat` test shim
+/// the caller installed) under its tab's agent name, and a passport bound
+/// to that PTY's daemon session id (what a real sidecar's `k2` carries).
+fn live_sidecar(ws: &Ws, conv: &str) -> (String, Arc<DaemonPtySession>, String) {
     let sid = SessionId::new();
     let session = DaemonPtySession::spawn(DaemonPtyConfig {
         session_id: sid,
         cols: 80,
         rows: 24,
         cwd: Some(ws.path.clone()),
-        program: Some(claude.display().to_string()),
+        program: Some("claude".to_string()),
         args: vec![],
         durable_args: None,
         env: Default::default(),
@@ -140,7 +134,12 @@ async fn a_sidecars_held_publish_run_gets_its_card_on_the_sidecar_and_allow_runs
     let conv = uuid::Uuid::new_v4().to_string();
     sidecar(&ws, &conv, "sales");
     let side = format!("{}/sales", ws.handle);
-    let (agent_name, session, agent) = live_sidecar(&env, &ws, &conv);
+    // The shim only for the sidecar's own spawn (the App's python3 later is
+    // no agent CLI).
+    let (agent_name, session, agent) = {
+        let _agents = k2_core::test_env::AgentShim::install();
+        live_sidecar(&ws, &conv)
+    };
     k2_core::permission::gate::set_server_switch(true);
     cards_on(&ws);
 

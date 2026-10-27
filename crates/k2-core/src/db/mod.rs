@@ -3429,7 +3429,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0233 (the sim switch, 0.46.6) is the newest: its record goes
+            // 0232 (ticket attachments, 0.46.6) is the newest: its record
+            // goes (its column stays; re-adding is skipped as a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0232_ticket_attachments'", []).unwrap();
+            // 0233 (the sim switch, 0.46.6) came before it: its record goes
             // (its column re-add is skipped as a duplicate; its tables and
             // indexes are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0233_sim_switch'", []).unwrap();

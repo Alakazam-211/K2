@@ -476,8 +476,8 @@ mod tests {
         let local = c.verbs_exposed_to(Exposure::GardenLocal);
         assert_eq!(
             local.len(),
-            39,
-            "store.* ×11 (store.patch since catalog v21, 0.46.4), save.* ×4, viewer.get, guests.rooms, guests.setRooms, app.rooms, guests.list (catalog v22, 0.46.4), room.members, app.self, app.usage, widget.self, the 12 person rows, box usage's app.resources (0.46.4), and blobs.info / blobs.list (0.46.5)"
+            40,
+            "store.* ×11 (store.patch since catalog v21, 0.46.4), save.* ×4, viewer.get, guests.rooms, guests.setRooms, app.rooms, guests.list (catalog v22, 0.46.4), room.members, app.self, app.usage, widget.self, the 12 person rows, box usage's app.resources (0.46.4), blobs.info / blobs.list (0.46.5), and tickets.attachment (catalog v31, 0.46.6)"
         );
         let both: Vec<&str> = local.iter().filter(|v| v.exposed_to(Exposure::App)).map(|v| v.verb.as_str()).collect();
         assert_eq!(

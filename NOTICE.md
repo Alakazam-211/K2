@@ -222,7 +222,6 @@ Their Rust dependencies, now in K2's `Cargo.lock`:
 | Crate | Version | Licence | Used for |
 |---|---|---|---|
 | [yrs](https://github.com/y-crdt/y-crdt) | 0.28.0 | MIT | The CRDT engine (Yjs-compatible), private to the kit |
-| [similar](https://github.com/mitsuhiko/similar) | 2.7.0 | Apache-2.0 | Text diffs |
 | thiserror | 2 | MIT OR Apache-2.0 | Error types |
 | redb | 2 | MIT OR Apache-2.0 | The docs store (`~/.k2/docs.redb`); the copy k2-core already links |
 | dashmap (via yrs) | 6.2.1 | MIT | |

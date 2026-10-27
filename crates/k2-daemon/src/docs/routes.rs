@@ -5,7 +5,8 @@
 //!
 //! | Route | Method | Right | Kit call | Parity |
 //! |---|---|---|---|---|
-//! | `/cli/docs/status` | GET | read (no path: pool stats) | `status` | P17, P25 |
+//! | `/cli/docs/status` | GET | read (no path: pool stats) | `status` (with `disk`) | P17, P25 |
+//! | `/cli/docs/flush` | POST | read | `flush` (write back now) | P17 |
 //! | `/cli/docs/read` | GET | read | `join_shared` + `read` (+ `set_view` with `lines`) | P3, P4, P24 |
 //! | `/cli/docs/who` | GET | read | `roster` | P6, P7 |
 //! | `/cli/docs/log` | GET | **history** | store versions (metadata) | P19 |
@@ -30,9 +31,9 @@
 //! Refusals use the comms shape `{"ok":false,"error":{"code","hint"}}` so
 //! the permission-card wrapper can teach them (`not_connected` →
 //! `k2 connections add`). Status codes, for the CLI's exit codes: 400 bad
-//! input (exit 2), 403 refused (3), 404 no such file or doc (4), 409 stale,
-//! conflicts or disk sync pending (1), 422 declined (4), 429 rate-limited
-//! (2), 503 docs unavailable.
+//! input or path (exit 2), 403 refused (3), 404 no such file or doc (4),
+//! 409 stale or conflicts (1), 422 declined (4), 429 rate-limited (2),
+//! 500 disk error (1), 503 docs unavailable.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -41,7 +42,7 @@ use serde_json::{json, Value};
 
 use k2_multiplayer_base::session::position::{self, At, LineCol, LineRange};
 use k2_multiplayer_base::session::{
-    Approval, ApprovalState, EditResult, EditWithError, Need, RosterEntry, Role, Session, SessionError, Stay,
+    Approval, ApprovalState, DiskState, EditResult, EditWithError, Need, RosterEntry, Role, Session, SessionError, Stay,
     TextFilePack, UndoOutcome, WriteOutcome,
 };
 use k2_multiplayer_base::store::DocStore;
@@ -72,6 +73,7 @@ pub const APPROVALS: &str = "/cli/docs/approvals";
 pub const SHARES: &str = "/cli/docs/shares";
 pub const SHARE: &str = "/cli/docs/share";
 pub const UNSHARE: &str = "/cli/docs/unshare";
+pub const FLUSH: &str = "/cli/docs/flush";
 
 /// The family's prefix (passport allowlist, cell arm, dispatcher arm).
 pub const PREFIX: &str = "/cli/docs/";
@@ -87,7 +89,7 @@ const ROOT: &str = TextFilePack::ROOT;
 /// Every route, for the dispatcher arm and the tests.
 pub const ROUTES: &[&str] = &[
     STATUS, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
-    UNSHARE,
+    UNSHARE, FLUSH,
 ];
 
 fn is_post_route(path: &str) -> bool {
@@ -100,6 +102,7 @@ fn is_post_route(path: &str) -> bool {
             | "/cli/docs/approve"
             | "/cli/docs/share"
             | "/cli/docs/unshare"
+            | "/cli/docs/flush"
     ) || is_edit_route(path)
 }
 
@@ -186,13 +189,6 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         Ok(p) => p,
         Err(r) => return r,
     };
-    if is_edit_route(path) && !super::edits_allowed() {
-        return refusal(
-            "409 Conflict",
-            "disk_sync_pending",
-            "live editing waits for disk sync (the kit's next slice); nothing was changed. Edit the file directly for now",
-        );
-    }
     let rt = match super::runtime() {
         Ok(rt) => rt,
         Err(u) => return refusal("503 Service Unavailable", "docs_unavailable", u.message()),
@@ -284,23 +280,16 @@ fn rights_or_refusal(
     Ok(rights)
 }
 
-/// Load or import the doc. The file is read only when no session is loaded
-/// (a stored doc ignores it; reconciling with disk is the kit's C4).
+/// Load the doc synced with its file (`open_file`): import a new one,
+/// reconcile a stored one with edits made while it was closed. A loaded
+/// session is returned as is (its file is kept true by the watcher and the
+/// kit's stat backup, which also checks on every join).
 fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>, CliResponse> {
     let key = t.key();
     if let Some(s) = rt.get(&key) {
         return Ok(s);
     }
-    let len = std::fs::metadata(&t.abs).map(|m| m.len()).unwrap_or(0);
-    if len > k2_multiplayer_markdown::MAX_FILE_BYTES as u64 {
-        return Err(refusal(
-            "422 Unprocessable Entity",
-            "too_large",
-            format!("{} is {} bytes; live docs are at most {} bytes", t.rel, len, k2_multiplayer_markdown::MAX_FILE_BYTES),
-        ));
-    }
-    let bytes = std::fs::read(&t.abs).map_err(|e| refusal("404 Not Found", "file_not_found", format!("can't read {}: {e}", t.rel)))?;
-    rt.open(&key, Some(&bytes)).map_err(|e| VerbError::Session(e).into_response())
+    rt.open(&key, &t.abs, &t.root).map_err(|e| VerbError::Session(e).into_response())
 }
 
 enum VerbError {
@@ -358,6 +347,8 @@ pub fn session_error(e: &SessionError) -> CliResponse {
             refusal("404 Not Found", "no_approval", format!("change {seq} wasn't made on anyone's behalf"))
         }
         SessionError::BadApproval(m) => refusal("409 Conflict", "bad_approval", m.clone()),
+        SessionError::BadPath(m) => refusal("400 Bad Request", "bad_path", m.clone()),
+        SessionError::Disk(m) => refusal("500 Internal Server Error", "disk_error", format!("the file couldn't be read or written: {m}")),
         SessionError::PackMismatch { stored, pack } => {
             refusal("409 Conflict", "pack_mismatch", format!("this doc was stored as {stored}, not {pack}"))
         }
@@ -390,8 +381,18 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
                 "logEntries": st.log_entries,
                 "estimatedBytes": st.estimated_bytes,
                 "declined": st.declined,
-                "diskSync": super::KIT_DISK_SYNC,
+                "disk": disk_json(st.disk.as_ref()),
                 "rights": rights.json(),
+            })))
+        }
+        FLUSH => {
+            let j = join(s, c, Stay::UntilIdle)?;
+            let f = s.flush(j.conn)?;
+            Ok(ok(json!({
+                "doc": doc_json(t),
+                "written": f.written,
+                "hash": f.hash,
+                "disk": disk_json(f.disk.as_ref()),
             })))
         }
         READ => {
@@ -569,6 +570,19 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
             "base_expired",
             format!("version {base} is no longer kept as a base; read the doc again and retry"),
         )),
+    }
+}
+
+/// `{state: clean|dirty|missing|declined, sinceMs?, reason?}`, or null for
+/// a session without a file.
+fn disk_json(d: Option<&DiskState>) -> Value {
+    match d {
+        None => Value::Null,
+        Some(DiskState::Clean) => json!({ "state": "clean" }),
+        Some(DiskState::Dirty { since_ms }) => json!({ "state": "dirty", "sinceMs": since_ms }),
+        Some(DiskState::Missing) => json!({ "state": "missing" }),
+        Some(DiskState::Declined(reason)) => json!({ "state": "declined", "reason": reason }),
+        Some(other) => json!({ "state": format!("{other:?}").to_ascii_lowercase() }),
     }
 }
 

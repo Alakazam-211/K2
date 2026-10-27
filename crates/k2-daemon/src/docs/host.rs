@@ -45,6 +45,11 @@ pub const AGENT_PREFIX: &str = "agent:";
 pub const AUDIT_REFUSED: &str = "doc-refused";
 pub const AUDIT_REMOVED: &str = "doc-removed";
 pub const AUDIT_APPROVAL: &str = "doc-approval";
+/// The file under a live doc changed outside K2, went missing, stopped
+/// decoding, came back, or failed to read/write.
+pub const AUDIT_FILE: &str = "doc-file";
+/// The audit `user` for file events (the kit's outside-edit participant).
+const EXTERNAL: &str = k2_multiplayer_base::session::EXTERNAL_PID;
 
 /// What one principal may do with one doc (K2's copy of the kit's `Rights`,
 /// with a wire shape).
@@ -202,6 +207,21 @@ impl Host for K2Host {
                 pid,
                 format!("{} change={seq} state={state:?}", key_label(key)),
             ),
+            // Disk sync (kit C4): what happened to the file, metadata only.
+            AuditEvent::ExternalEdit { key, seq } => {
+                audit(AUDIT_FILE, EXTERNAL, format!("{} external_edit change={seq}", key_label(key)))
+            }
+            AuditEvent::FileMissing { key, unflushed } => {
+                audit(AUDIT_FILE, EXTERNAL, format!("{} missing unflushed={unflushed}", key_label(key)))
+            }
+            AuditEvent::FileDeclined { key, code } => {
+                audit(AUDIT_FILE, EXTERNAL, format!("{} declined code={code}", key_label(key)))
+            }
+            AuditEvent::FileRestored { key } => audit(AUDIT_FILE, EXTERNAL, format!("{} restored", key_label(key))),
+            AuditEvent::DiskError { key, error } => {
+                log_debug!("[docs] WARN: disk error on {}: {error}", key_label(key));
+                audit(AUDIT_FILE, EXTERNAL, format!("{} disk_error", key_label(key)))
+            }
             AuditEvent::Left { key, pid, conn, reason } => match reason {
                 LeaveReason::Kicked | LeaveReason::RightsLost => audit(
                     AUDIT_REMOVED,

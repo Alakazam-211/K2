@@ -2082,7 +2082,7 @@ fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
         let Some(job) = store::job_by_id(&conn, &id) else { continue };
         let Some(plan) = job.plan() else { continue };
         // The tier only to a node offering `tiers` right now (T11).
-        let Some((job, plan)) = fit_tier_to(&conn, job, plan, &offer.features) else { continue };
+        let Some((job, plan)) = fit_plan_to(&conn, job, plan, &offer.features) else { continue };
         let fence = Fence { job_id: job.id.clone(), attempt: job.attempt as u32, generation: job.generation as u32, plan_digest: job.plan_digest.clone() };
         if store::assign_if_queued(&conn, &job.id, now) != Ok(true) {
             continue;
@@ -2174,7 +2174,7 @@ pub fn kick(node_id: &str) {
         return;
     }
     let features = offer.as_ref().map(|o| o.features.clone()).unwrap_or_default();
-    let Some((job, plan)) = fit_tier_to(&conn, job, plan, &features) else { return };
+    let Some((job, plan)) = fit_plan_to(&conn, job, plan, &features) else { return };
     let fence = Fence { job_id: job.id.clone(), attempt: job.attempt as u32, generation: job.generation as u32, plan_digest: job.plan_digest.clone() };
     // Compare-and-set: the decision was read under a different DB lock,
     // and a cancel may have ended the job since. Never assign over it.
@@ -2191,13 +2191,14 @@ pub fn kick(node_id: &str) {
     notify_change();
 }
 
-/// The stored plan fitted to the node's features before it is sent (T11):
-/// a tier only for a node offering `tiers` (one rolled back to 0.46.4
-/// would refuse a tiered plan's digest; one updated to 0.46.5 gets it).
+/// The stored plan fitted to the node's features before it is sent (T11,
+/// [`crate::compute_place::fit_plan`]): no field the node doesn't know (a
+/// node rolled back to an older k2-node would refuse the digest), the tier
+/// for one that takes it.
 /// A changed plan is written back (JSON and digest) while the row is still
 /// queued; `None` when it no longer is (a cancel won): don't send.
-fn fit_tier_to(conn: &rusqlite::Connection, job: store::JobRow, plan: frames::Plan, features: &[String]) -> Option<(store::JobRow, frames::Plan)> {
-    match crate::compute_place::fit_tier(&plan, &job, features) {
+fn fit_plan_to(conn: &rusqlite::Connection, job: store::JobRow, plan: frames::Plan, features: &[String]) -> Option<(store::JobRow, frames::Plan)> {
+    match crate::compute_place::fit_plan(&plan, &job, features) {
         None => Some((job, plan)),
         Some(p) => {
             if store::rewrite_queued_plan(conn, &job.id, &p, &job.ctl) != Ok(true) {

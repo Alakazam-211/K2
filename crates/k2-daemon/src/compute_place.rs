@@ -385,17 +385,25 @@ pub fn offers_tiers(features: &[String]) -> bool {
     features.iter().any(|f| f == FEATURE_TIERS)
 }
 
-/// The stored plan fitted to what the node understands right now (T11): a
-/// tier only for a node offering `tiers` (a node rolled back to 0.46.4
-/// would refuse a tiered plan's digest; one updated to 0.46.5 gets it).
-/// `Some(plan)` when it changed; the caller rewrites the queued row.
-pub fn fit_tier(plan: &Plan, j: &JobRow, features: &[String]) -> Option<Plan> {
-    let want = offers_tiers(features).then(|| j.tier());
-    (plan.tier != want).then(|| {
-        let mut p = plan.clone();
-        p.tier = want;
-        p
-    })
+/// The stored plan fitted to what the node understands right now (T11):
+/// a tier only for a node offering `tiers`, the protocol-3 queue fields
+/// only for one offering `queue`, a stall timeout only for one offering
+/// `stall`. A plan stored for a newer node and sent to one rolled back to
+/// an older k2-node would otherwise carry fields that node drops, so its
+/// digest wouldn't match and it would fail `plan_mismatch`; a node updated
+/// since gets the tier. `Some(plan)` when it changed; the caller rewrites
+/// the queued row (JSON and digest) before sending.
+pub fn fit_plan(plan: &Plan, j: &JobRow, features: &[String]) -> Option<Plan> {
+    let has = |f: &str| features.iter().any(|x| x == f);
+    let mut p = plan.clone();
+    p.tier = offers_tiers(features).then(|| j.tier());
+    if !has(pshare::FEATURE_QUEUE) {
+        strip_queue_fields(&mut p);
+    }
+    if !has(FEATURE_STALL) {
+        p.stall_secs = None;
+    }
+    (p != *plan).then_some(p)
 }
 
 /// The protocol 3 plan fields a node keeps its queue by (§10.2), for a
@@ -915,13 +923,25 @@ mod tests {
         let job = JobRow { id: "j1".into(), tier: "priority".into(), ..Default::default() };
         let new_node = vec![FEATURE_TIERS.to_string(), pshare::FEATURE_QUEUE.to_string()];
         let old_node = vec![pshare::FEATURE_QUEUE.to_string()];
-        assert_eq!(fit_tier(&plan, &job, &old_node), None, "no tier, an old node: as it is");
-        let tiered = fit_tier(&plan, &job, &new_node).expect("a node with tiers gets the tier");
+        assert_eq!(fit_plan(&plan, &job, &old_node), None, "no tier, an old node: as it is");
+        let tiered = fit_plan(&plan, &job, &new_node).expect("a node with tiers gets the tier");
         assert_eq!(tiered.tier, Some(JobTier::Priority));
         assert_ne!(tiered.digest().unwrap(), plan.digest().unwrap());
-        assert_eq!(fit_tier(&tiered, &job, &new_node), None, "already fits");
-        let back = fit_tier(&tiered, &job, &old_node).expect("a rolled-back node loses the tier");
+        assert_eq!(fit_plan(&tiered, &job, &new_node), None, "already fits");
+        let back = fit_plan(&tiered, &job, &old_node).expect("a rolled-back node loses the tier");
         assert_eq!((back.tier, back.digest().unwrap()), (None, plan.digest().unwrap()), "the untiered digest, byte for byte");
         assert!(offers_tiers(&new_node) && !offers_tiers(&old_node));
+        // A v0.46.2 node (no `queue`, no `stall`): every field it doesn't
+        // know goes, so its digest is the one it computes (the tiers
+        // rollback drill: `plan_mismatch` before this).
+        let mut full = tiered.clone();
+        full.ws_max_running = Some(2);
+        full.stall_secs = Some(600);
+        let bare = fit_plan(&full, &job, &[]).expect("fitted");
+        assert_eq!((bare.tier, bare.class, bare.ws_max_running, bare.stall_secs), (None, None, None, None));
+        let mut want = plan.clone();
+        want.class = None;
+        assert_eq!(bare.digest().unwrap(), want.digest().unwrap(), "what a v0.46.2 node computes");
+        assert_eq!(fit_plan(&bare, &job, &[]), None);
     }
 }

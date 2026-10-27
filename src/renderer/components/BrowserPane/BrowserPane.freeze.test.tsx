@@ -90,6 +90,10 @@ async function mountLive(): Promise<ReturnType<typeof renderInPrimaryRoom>> {
   )
   await flush()
   expect(calls().map((c) => c[0])).toContain('browser_create')
+  // Mount's own bounds push (rAF → rAF) lands before a test counts calls;
+  // on a slow machine it otherwise arrived inside the measured window.
+  await frames(2)
+  expect(calls().map((c) => c[0])).toContain('browser_set_bounds')
   return view
 }
 

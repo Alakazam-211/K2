@@ -53,11 +53,12 @@ trap cleanup EXIT
 
 cp "$SETUP" "$STAGE/setup.exe"
 echo "Signing $(basename "$SETUP") for updater..."
+# The signer reads the key and its password from these env vars; never
+# pass them as arguments (argv is visible to every process on the Mac).
+export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 (
     cd "$STAGE"
-    bunx @tauri-apps/cli@2 signer sign setup.exe \
-        --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
-        --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+    bunx @tauri-apps/cli@2 signer sign setup.exe
 )
 # tauri signer writes setup.exe.sig as base64 of the minisig (same as Mac bundle)
 if [ ! -f "$STAGE/setup.exe.sig" ]; then

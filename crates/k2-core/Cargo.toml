@@ -225,6 +225,14 @@ p256 = { version = "0.13", default-features = false, features = ["ecdh", "arithm
 ammonia = "=4.2.1"
 html5ever = "0.40"
 tungstenite = "0.24"
+# Mobile dev (prd-mobile-dev-v1, 0.46.6): a minimal gRPC client for the
+# Android emulator's loopback controller (sim::android::grpc). Hand-written
+# prost messages over h2: no tonic, no protoc. All four are already in the
+# lockfile (reqwest/hyper pull h2, http and bytes; prost 0.13 is there).
+h2 = "0.4"
+http = "1"
+bytes = "1"
+prost = "0.13"
 # The VALIDATE stage's JS/TS parser (decision-k2-runtime-v1 §5, stage 0):
 # oxc parses Garden widget and App code in-process and its semantic pass
 # reports the early errors a browser throws as SyntaxError. MIT. Pinned

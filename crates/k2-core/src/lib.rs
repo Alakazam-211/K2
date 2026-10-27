@@ -162,6 +162,9 @@ pub mod handoff_state;
 pub mod deploy;
 /// The disk guard's shared contract (prd-app-resources-disk-guard-v1, 0.46.3).
 pub mod disk_guard;
+/// Mobile dev: sim sessions, the `SimLane` trait, tree format, control
+/// hold, stream wire format (prd-mobile-dev-v1, 0.46.6).
+pub mod sim;
 // 0.46.4 box usage trends (disk guard Slice B, migration 0217).
 pub mod resource_samples;
 pub use k2_client::migration_home;

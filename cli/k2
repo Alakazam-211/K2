@@ -522,9 +522,26 @@ _k2_curl() {
         sleep 1
         _k2_follow_port_move
         if [ -n "$_K2_PORT_FROM" ]; then
-            cfg="${cfg//:${_K2_PORT_FROM}\//:${PORT}/}"
+            # Only the request URL moves: the config's `url = "…"` line or a
+            # URL argument, by exact prefix. Bodies, data and headers that
+            # happen to contain `:<port>/` are left alone.
+            local from_url="http://${HOST:-127.0.0.1}:${_K2_PORT_FROM}/" to_url="http://${HOST:-127.0.0.1}:${PORT}/" l new_cfg=""
+            if [ -n "$cfg" ]; then
+                while IFS= read -r l; do
+                    case "$l" in
+                        "url = \"${from_url}"*) l="url = \"${to_url}${l#"url = \"${from_url}"}" ;;
+                    esac
+                    new_cfg="${new_cfg}${l}"$'\n'
+                done <<< "${cfg%$'\n'}"
+                cfg="$new_cfg"
+            fi
             local -a _k2_args=()
-            for a in "$@"; do _k2_args+=("${a//:${_K2_PORT_FROM}\//:${PORT}/}"); done
+            for a in "$@"; do
+                case "$a" in
+                    "${from_url}"*) a="${to_url}${a#"$from_url"}" ;;
+                esac
+                _k2_args+=("$a")
+            done
             set -- "${_k2_args[@]}"
         fi
     done

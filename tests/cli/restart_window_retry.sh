@@ -55,12 +55,11 @@ lock = threading.Lock()
 class H(BaseHTTPRequestHandler):
     def _go(self, method):
         length = int(self.headers.get("Content-Length", 0) or 0)
-        if length:
-            self.rfile.read(length)
+        body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
         path = urllib.parse.urlparse(self.path).path
         with lock:
             with open(os.path.join(work, "requests.log"), "a") as f:
-                f.write(json.dumps({"method": method, "path": path}) + "\n")
+                f.write(json.dumps({"method": method, "path": path, "body": body}) + "\n")
             try:
                 plan = json.load(open(os.path.join(work, "plan.json")))
             except Exception:
@@ -161,6 +160,18 @@ rc=0; out="$(k2_on "$DEAD" heartbeat list --json 2>&1)" || rc=$?
 if [ "$rc" -eq 0 ]; then ok "a refused K2_PORT falls back to ~/.k2/daemon.port (exit 0)"; else bad "port fallback: exit $rc: $out"; fi
 n="$(arrivals /cli/heartbeat/list)"
 if [ "$n" = 1 ]; then ok "the request arrived once, on the published port"; else bad "port fallback: $n arrivals"; fi
+
+# ── 4b. only the URL follows the port, never a body ───────────────────
+echo "== port follow leaves request bodies alone =="
+plan '{}'
+printf 'pw-http://h:%s/x\n' "$DEAD" | k2_on "$DEAD" users add bob --password-stdin >/dev/null 2>&1 || true
+n="$(arrivals /cli/users/add)"
+if [ "$n" = 1 ]; then ok "the POST followed the port (one arrival)"; else bad "users/add arrived $n times"; fi
+if grep '"path": "/cli/users/add"' "$WORK/requests.log" | grep -q "pw-http://h:${DEAD}/x"; then
+    ok "the body still says :${DEAD}/ (only the URL was rewritten)"
+else
+    bad "the port follow rewrote the body: $(grep users/add "$WORK/requests.log")"
+fi
 
 # ── 5. nothing comes back: bounded ────────────────────────────────────
 echo "== the daemon never comes back =="

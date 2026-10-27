@@ -342,7 +342,17 @@ fn redact_high_entropy(t: &str) -> String {
     out
 }
 
+/// A credential-looking run. Word structure means a name, not a key: a
+/// run with `_` or `-` in it (`thread_activity_integration`) is never
+/// "random", and `.` / `/` already split runs (paths, file names). Letters
+/// only (`PermissionCardsOffIsTodayByteForByte`) is never random either:
+/// the mixed rule needs a digit AND both cases. A lowercase-hex run of
+/// [`HEX_MIN_CHARS`]+ with digits stays a secret, full git SHAs included
+/// (classic GitHub tokens were 40 hex).
 fn looks_random(run: &str) -> bool {
+    if run.contains(['_', '-']) {
+        return false;
+    }
     let n = run.chars().count();
     let upper = run.chars().any(|c| c.is_ascii_uppercase());
     let lower = run.chars().any(|c| c.is_ascii_lowercase());
@@ -498,6 +508,20 @@ mod tests {
             (bash("find . -name x -print"), "Running `find . -name x -print`"),
             (bash("git log --oneline -5"), "Running `git log --oneline -5`"),
             (bash("echo keyboard monkey"), "Running `echo keyboard monkey`"),
+            // Real-looking names are not secrets (0.46.5 review): type and
+            // test names, snake_case, paths, a short SHA.
+            (bash("rg ZenConversationWidget src"), "Running `rg ZenConversationWidget src`"),
+            (bash("cargo test --test thread_activity_integration"), "Running `cargo test --test thread_activity_integration`"),
+            (bash("cargo test PermissionCardsOffIsTodayByteForByte"), "Running `cargo test PermissionCardsOffIsTodayByteForByte`"),
+            (
+                bash("cat src/renderer/components/Zen/widgets/ZenGardenOne.test.tsx"),
+                "Running `cat src/renderer/components/Zen/widgets/ZenGardenOne.test.tsx`",
+            ),
+            (bash("git show 4ee5c5e"), "Running `git show 4ee5c5e`"),
+            (bash("rg Base64_Encoder_2024_Version_Number"), "Running `rg Base64_Encoder_2024_Version_Number`"),
+            (bash("cat k2-daemon-v0-46-5-Release2026Notes.md"), "Running `cat k2-daemon-v0-46-5-Release2026Notes.md`"),
+            // A full SHA stays redacted (classic GitHub tokens were 40 hex).
+            (bash("git show 4ee5c5e61d0a8b2f7c3e9a1b5d6f8e0c2a4b6d8f"), "Running `git show ***`"),
         ];
         for (got, want) in &rows {
             assert_eq!(got, want);

@@ -108,8 +108,8 @@ lib k2u_preflight 9.9.9 2>"$tmp/err" && pass "k2u_preflight (U1 Tauri-format key
 
 echo "== sign with both keys =="
 DA="k2-daemon-linux-x86_64"
-head -c 200000 /dev/urandom > "$tmp/$DA"
-head -c 300000 /dev/urandom > "$tmp/K2.app.tar.gz"
+head -c 3000 /dev/urandom > "$tmp/$DA"
+head -c 5000 /dev/urandom > "$tmp/K2.app.tar.gz"
 lib k2u_sign u1 "$tmp/$DA" "$DA" 9.9.9 "$tmp/$DA.sig" raw 2>"$tmp/err" && pass "U1 raw (daemon .sig)" || fail "u1 raw" "$(cat "$tmp/err")"
 lib k2u_sign u2 "$tmp/$DA" "$DA" 9.9.9 "$tmp/$DA.sig2" raw 2>"$tmp/err" && pass "U2 raw (daemon .sig2)" || fail "u2 raw" "$(cat "$tmp/err")"
 lib k2u_sign u1 "$tmp/K2.app.tar.gz" K2.app.tar.gz 9.9.9 "$tmp/K2.app.tar.gz.sig" b64 2>"$tmp/err" && pass "U1 b64 (latest.json signature)" || fail "u1 b64" "$(cat "$tmp/err")"

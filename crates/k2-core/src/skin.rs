@@ -218,10 +218,16 @@ pub const CAP_FILES_UPLOAD: &str = "files:upload";
 /// (`app_core_of_cap` answers `None`), so a deploy that adds it is held for
 /// the owner's one-time approval, as App mail sends are (N4).
 pub const CAP_PUSH_SEND: &str = "push:send";
+/// Send email from this App's own sender (prd-email-notifications-core-v1
+/// §3.5, E24, 0.46.5): the App's own cap, never a guest's. In no App core
+/// (`app_core_of_cap` answers `None`; the Mail tick doesn't pre-approve it,
+/// Q13), so a deploy that adds it is held for the owner once. Approving it
+/// grants no sender: the owner does that with `k2 app email on`.
+pub const CAP_EMAIL_SEND: &str = "email:send";
 /// Caps an App's own pass may carry that no guest role ever holds (they
 /// aren't in the accepted role caps): the link's ceiling adds them
 /// ([`link::link_caps`]).
-pub const APP_ONLY_CAPS: &[&str] = &[CAP_PUSH_SEND];
+pub const APP_ONLY_CAPS: &[&str] = &[CAP_PUSH_SEND, CAP_EMAIL_SEND];
 /// Caps only a person may grant ([`person_only_cap_in`]).
 pub const PERSON_ONLY_CAPS: &[&str] = &[CAP_FILES_AGENT_CONFIG, CAP_FILES_DOWNLOAD];
 
@@ -2277,18 +2283,23 @@ pub fn remove_principal_as(username: &str, actor: &str) -> Result<bool, String> 
         ..Default::default()
     };
     let now = now_secs();
+    let mut removed_email: Option<String> = None;
     let (r, enqueued) = with_conn(|conn| {
-        let id: Option<String> = conn
+        let row: Option<(String, Option<String>)> = conn
             .query_row(
-                "SELECT id FROM principals WHERE username = ?1",
+                "SELECT id, email FROM principals WHERE username = ?1",
                 params![username],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()
             .map_err(|e| format!("skin principal lookup: {e}"))?;
-        let Some(id) = id else {
+        let Some((id, email)) = row else {
             return Ok((false, 0));
         };
+        removed_email = email;
+        // Email Notifications E16: their proven addresses go with them.
+        conn.execute("DELETE FROM principal_email_proven WHERE principal_id = ?1", params![id])
+            .map_err(|e| format!("skin principal proven delete: {e}"))?;
         // S28 §12: the person's Sew sessions end with them. Check the chat
         // grant before the grants go, in the same Immediate transaction as
         // the deletes and the S27 outbox rows.
@@ -2351,6 +2362,15 @@ pub fn remove_principal_as(username: &str, actor: &str) -> Result<bool, String> 
         crate::workspace::context_layers::refresh_skin_roster_after_people_change();
         // App user change (rev 147 / K31 seam).
         crate::tool_hook::kick_reconcile();
+        // Email Notifications E22: the removed person's rows leave the send
+        // log (k2.db; metadata only, but it names them).
+        if let Some(email) = removed_email.as_deref().filter(|e| !e.trim().is_empty()) {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            if let Err(e) = crate::email_notify::purge_recipient(&conn, email) {
+                crate::log_debug!("[skin] WARN email log purge for a removed person: {e}");
+            }
+        }
     }
     if enqueued > 0 {
         crate::tool_hook::kick();

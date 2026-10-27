@@ -148,6 +148,10 @@ pub struct Sender {
     pub from_name: String,
     /// The governance this send runs under.
     pub gate: Gate,
+    /// Email Notifications (E27): the notification sender this mail leaves
+    /// from (the App's granted sender, or the system sender for an owner
+    /// reset). `None`: a hosted mailbox, today's path.
+    pub notify_sender: Option<String>,
 }
 
 fn project_path(project_id: &str) -> Option<String> {
@@ -167,7 +171,13 @@ fn project_path(project_id: &str) -> Option<String> {
 ///   that workspace's address, sent as the owner's own (`Gate::On`).
 ///
 /// `Ok(None)`: no address to send from. `Err`: a refusal to show.
-pub fn invite_sender(app_ws: Option<&str>, by: &By, from: Option<&str>) -> Result<Option<Sender>, CliResponse> {
+///
+/// Email Notifications (0.46.5, E27): with no `from`, an App whose email is
+/// on sends its invites and resets from **its own granted sender** (a
+/// notification sender no agent can read), under the same governance.
+/// App-written text (the App's templates) never rides the system sender
+/// (E14): only the App's own sender, else today's workspace address.
+pub fn invite_sender(app: &str, app_ws: Option<&str>, by: &By, from: Option<&str>) -> Result<Option<Sender>, CliResponse> {
     if from.is_some() && !by.is_owner() {
         return Err(usage("an agent's invites come from its workspace's own address; only the owner picks another (from)"));
     }
@@ -175,6 +185,23 @@ pub fn invite_sender(app_ws: Option<&str>, by: &By, from: Option<&str>) -> Resul
         return Ok(None);
     };
     let Some(path) = project_path(ws) else { return Ok(None) };
+    if from.is_none() {
+        if let Some(s) = crate::email_notify::send::app_sender_if_on(app) {
+            let gate = match by {
+                By::Owner { .. } => Gate::On,
+                _ => send::gate_for_path(&path).map_err(send_error)?,
+            };
+            return Ok(Some(Sender {
+                project_id: ws.to_string(),
+                project_path: path,
+                address: s.address.clone(),
+                account_id: String::new(),
+                from_name: s.from_name.clone(),
+                gate,
+                notify_sender: Some(s.id),
+            }));
+        }
+    }
     let address = match from {
         Some(addr) => match crate::mail::access::can_send(ws, addr) {
             Ok(inbox) if inbox.source == crate::mail::access::Source::Hosted => inbox,
@@ -210,7 +237,7 @@ pub fn invite_sender(app_ws: Option<&str>, by: &By, from: Option<&str>) -> Resul
         By::Owner { .. } => box_label(),
         _ => k2_core::workspace::display::agent_display_name(&path),
     };
-    Ok(Some(Sender { project_id: ws.to_string(), project_path: path, address: address.address, account_id, from_name, gate }))
+    Ok(Some(Sender { project_id: ws.to_string(), project_path: path, address: address.address, account_id, from_name, gate, notify_sender: None }))
 }
 
 /// K2's own set-password page on this box's front door
@@ -295,10 +322,27 @@ fn agent_readable(address: &str) -> bool {
 /// hosted address of this box's mail that no workspace's agent can read
 /// (a box/system mailbox), never a workspace mailbox; the mail's stored
 /// copy is destroyed once the server takes it. `from`: the owner's pick;
-/// none given → `Ok(None)` (K2 has no box sender of its own yet: the
-/// caller asks for `from` or `code`).
-pub fn owner_reset_sender(from: Option<&str>) -> Result<Option<Sender>, CliResponse> {
-    let Some(raw) = from.map(str::trim).filter(|s| !s.is_empty()) else { return Ok(None) };
+/// none given → Email Notifications' sender for this App (its granted
+/// sender when its email is on, else the box's system sender, E27, Q2:
+/// both are senders no agent can read; an owner reset is K2's fixed text,
+/// so it may ride the system sender). Neither → `Ok(None)` (the caller
+/// asks for `from` or `code`).
+pub fn owner_reset_sender(app: &str, from: Option<&str>) -> Result<Option<Sender>, CliResponse> {
+    let Some(raw) = from.map(str::trim).filter(|s| !s.is_empty()) else {
+        return match crate::email_notify::send::sender_for(Some(app)) {
+            Ok(Some(s)) => Ok(Some(Sender {
+                project_id: "box".to_string(),
+                project_path: String::new(),
+                address: s.address.clone(),
+                account_id: String::new(),
+                from_name: s.from_name.clone(),
+                gate: Gate::On,
+                notify_sender: Some(s.id),
+            })),
+            Ok(None) => Ok(None),
+            Err(f) => Err(crate::email_notify::fail_response(&f)),
+        };
+    };
     let address = raw.to_ascii_lowercase();
     let row: Option<(Option<String>, Option<String>)> = {
         let db = k2_core::db::shared();
@@ -327,6 +371,7 @@ pub fn owner_reset_sender(from: Option<&str>) -> Result<Option<Sender>, CliRespo
         account_id,
         from_name: box_label(),
         gate: Gate::On,
+        notify_sender: None,
     }))
 }
 
@@ -428,6 +473,12 @@ fn dispatch(m: &Mail<'_>, minted: &invites::Minted) -> Result<Delivered, CliResp
         Ok(t) => t,
         Err(e) => return Err(fail(send_error(e))),
     };
+    // Email Notifications (E27): the App's granted sender, or for an owner
+    // reset the system sender. One-time-link mails keep no copy anywhere
+    // (the stored copy is destroyed, the log is metadata only).
+    if let Some(sid) = m.sender.notify_sender.as_deref() {
+        return dispatch_notify(m, minted, sid, &to[0], composed.subject, composed.body).map_err(fail);
+    }
     let msg = OutboundMessage {
         from_name: Some(m.sender.from_name.clone()),
         from: m.sender.address.clone(),
@@ -443,6 +494,7 @@ fn dispatch(m: &Mail<'_>, minted: &invites::Minted) -> Result<Delivered, CliResp
         attachments: Vec::new(),
         // One-time link: no stored copy stays in the sending mailbox.
         ephemeral: true,
+        notify: None,
     };
     if let Err(e) = send::check_domain_send_mode(&crate::mail::secrets::FileSecretStore::default(), &m.sender.address) {
         return Err(fail(send_error(e)));
@@ -480,6 +532,42 @@ fn dispatch(m: &Mail<'_>, minted: &invites::Minted) -> Result<Delivered, CliResp
         Ok(SendOutcome::Scheduled { .. }) => Err(fail(CliResponse::internal_error("an invite is never scheduled"))),
         Ok(SendOutcome::SubmitFailed { error, .. }) => Err(fail(refusal("502 Bad Gateway", "engine", &format!("the mail server didn't take the mail: {error}")))),
         Err(e) => Err(fail(send_error(e))),
+    }
+}
+
+/// [`dispatch`] through Email Notifications (E27): an owner reset from the
+/// system sender (K2's fixed text, the system budget), anything else from
+/// the App's own sender under the sender's governance (approval holds it
+/// in the approvals queue; the link's clock starts when it leaves).
+fn dispatch_notify(m: &Mail<'_>, minted: &invites::Minted, sender_id: &str, to: &str, subject: String, body: String) -> Result<Delivered, CliResponse> {
+    use crate::email_notify::{self as en, send as ens};
+    let s = en::senders::find_live(sender_id).map_err(|f| en::fail_response(&f))?;
+    let c = ens::Composed { subject, text: body, html: None };
+    let app = (m.app != skin::HOST_APP_ID).then_some(m.app);
+    let owner_reset = m.purpose == invites::PURPOSE_OWNER_RESET;
+    let sent = if owner_reset || s.is_system() {
+        // E14: only K2's fixed text rides the system sender.
+        if s.is_system() && m.purpose != invites::PURPOSE_OWNER_RESET {
+            return Err(refusal("409 Conflict", "system_sender", "an App's own invite text never leaves from the system sender"));
+        }
+        ens::system_send_from(&s, m.purpose, app, to, &c).map(Ok)
+    } else {
+        let actor = match m.by {
+            By::Owner { actor } | By::Agent { actor, .. } | By::App { actor, .. } => actor.clone(),
+        };
+        ens::app_link_mail(&s, m.app, m.purpose, to, &c, m.sender.gate, &m.sender.project_id, &actor)
+    };
+    match sent {
+        Ok(Ok(log_id)) => match invites::activate(&minted.id) {
+            Ok(Some(exp)) => Ok(Delivered::Sent { outbound_id: log_id, expires_at: exp }),
+            Ok(None) => Err(CliResponse::internal_error("the link vanished while its mail was sent")),
+            Err(e) => Err(CliResponse::internal_error(e)),
+        },
+        Ok(Err(outbound_id)) => match invites::hold_for(&minted.id, &outbound_id) {
+            Ok(()) => Ok(Delivered::Held { outbound_id }),
+            Err(e) => Err(CliResponse::internal_error(e)),
+        },
+        Err(f) => Err(en::fail_response(&f)),
     }
 }
 
@@ -600,7 +688,7 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
     let Some(page) = set_password_page(&settings) else {
         return refusal("409 Conflict", "no_set_password_page", &no_page_hint(raw_app));
     };
-    let sender = match invite_sender(app_ws.as_deref(), &by, text(&v, &["from"])) {
+    let sender = match invite_sender(&app, app_ws.as_deref(), &by, text(&v, &["from"])) {
         Ok(s) => s,
         Err(r) => return r,
     };
@@ -842,7 +930,7 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
     let sender = if code {
         None
     } else {
-        match owner_reset_sender(text(&v, &["from"])) {
+        match owner_reset_sender(&app, text(&v, &["from"])) {
             Ok(Some(s)) => Some(s),
             Ok(None) => {
                 return refusal(
@@ -927,7 +1015,7 @@ pub fn app_key_reset(app: &str, username: &str, actor: &str) -> Result<Value, (u
         return Err((409, "no_set_password_page", no_page_hint(app)));
     };
     let by = By::App { ws: ws.clone(), actor: actor.to_string() };
-    let sender = match invite_sender(Some(&ws), &by, None) {
+    let sender = match invite_sender(app, Some(&ws), &by, None) {
         Ok(Some(s)) if s.gate != Gate::Off => s,
         Ok(Some(_)) => return Err((403, "gated", gated_hint())),
         Ok(None) => return Err((409, "no_mail", "the App's workspace has no address it can send from (k2 hostmail create); the key never gets the link".to_string())),
@@ -987,7 +1075,7 @@ pub fn forgot_by_pass_now(pass: &skin::SkinPass, ws: &str, username: &str) {
     };
     let Some(page) = set_password_page(&settings) else { return skip("no set-password page") };
     let by = By::App { ws: ws.to_string(), actor: format!("pass:{}", pass.id) };
-    let sender = match invite_sender(Some(ws), &by, None) {
+    let sender = match invite_sender(&app, Some(ws), &by, None) {
         Ok(Some(s)) if s.gate != Gate::Off => s,
         Ok(Some(_)) => return skip("outbound mail is off for the workspace"),
         Ok(None) => return skip("no address to send from"),

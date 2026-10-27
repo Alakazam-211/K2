@@ -870,6 +870,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         reply_source: None,
         attachments: Vec::new(),
         ephemeral: false,
+        notify: None,
     };
     send::apply_policy_bcc(&mut msg, policy_bcc);
     if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1204,6 +1205,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 reply_source: Some(email_id.clone()),
                 attachments: Vec::new(),
                 ephemeral: false,
+                notify: None,
             };
             send::apply_policy_bcc(&mut msg, policy_bcc);
             if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1289,6 +1291,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 reply_source: None,
                 attachments: Vec::new(),
                 ephemeral: false,
+                notify: None,
             };
             send::apply_policy_bcc(&mut msg, policy_bcc);
             if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1509,6 +1512,11 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
     {
         return resp;
     }
+    // Email Notifications (E15, E4): a held App email leaves from a
+    // notification sender; deciding it is the owner's or an Admin's.
+    if caller.is_agent() && outbound_from(id).is_some_and(|f| crate::email_notify::send::is_sender_address(&f)) {
+        return crate::email_notify::fence::owner_only("approve an App's held email");
+    }
     let note = v["note"].as_str().map(str::trim).filter(|s| !s.is_empty());
     let decided_by = v["decidedBy"].as_str().map(str::trim).filter(|s| !s.is_empty());
     let now = now_secs();
@@ -1526,6 +1534,11 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
     // to it instead of the local Stalwart.
     let override_backend = crate::app_user_invites::backend_override();
     let mut resolve = |msg: &OutboundMessage| -> Result<Box<dyn crate::mail::submit::MailSubmit + '_>, String> {
+        // Email Notifications (E15): a held App email leaves through its
+        // sender's path, never a mailbox's.
+        if let Some(s) = crate::email_notify::send::held_submitter(msg) {
+            return Ok(s);
+        }
         if let Some(inbox) = external::inbox_for_address(&msg.from) {
             return crate::mail::submit::submit_for_linked(&inbox);
         }
@@ -1631,6 +1644,14 @@ fn outbound_sender(id: &str) -> Option<String> {
         |r| r.get::<_, String>(0),
     )
     .ok()
+}
+
+/// The From address of a queued message (Email Notifications E15: a held
+/// App email's From is a notification sender).
+fn outbound_from(id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT from_address FROM mail_outbound WHERE id = ?1", rusqlite::params![id], |r| r.get::<_, String>(0)).ok()
 }
 
 /// S5: owner-or-admin deny with a REQUIRED note that flows back to the
@@ -2162,6 +2183,7 @@ mod tests {
             reply_source: None,
             attachments: Vec::new(),
             ephemeral: false,
+            notify: None,
         };
         let id = send::record_linked_submitted(&store, &project_id, "Agent", &msg, &[], now_secs())
             .expect("record linked send");
@@ -2216,6 +2238,7 @@ mod tests {
             reply_source: None,
             attachments: Vec::new(),
             ephemeral: false,
+            notify: None,
         };
         let names = vec!["invoice.pdf".to_string(), "photo.jpg".to_string()];
         let id = send::record_linked_submitted(
@@ -2652,6 +2675,7 @@ mod tests {
             reply_source: None,
             attachments: Vec::new(),
             ephemeral: false,
+            notify: None,
         };
         let now = now_secs();
         for _ in 0..send::RATE_LIMIT_HOURLY {
@@ -2808,6 +2832,7 @@ mod tests {
             reply_source: None,
             attachments: Vec::new(),
             ephemeral: false,
+            notify: None,
         };
         let foreign_id = store
             .insert(&NewOutbound {
@@ -3453,6 +3478,7 @@ mod tests {
             reply_source: None,
             attachments: Vec::new(),
             ephemeral: false,
+            notify: None,
         }
     }
 

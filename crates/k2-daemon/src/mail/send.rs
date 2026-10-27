@@ -222,6 +222,29 @@ pub struct OutboundMessage {
     /// the link.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
+    /// Email Notifications (E15): a notification held for the owner's
+    /// approval (`k2 app email send` under `approval`) carries what the
+    /// plain message has no field for. Its From is a notification sender;
+    /// the approvals resolver hands it to `email_notify`, never to the
+    /// mailbox path. `None` for every other message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify: Option<NotifyHeld>,
+}
+
+/// The parts of a held notification beyond [`OutboundMessage`] (E15).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotifyHeld {
+    /// The `email_notify_log` row it belongs to.
+    pub log_id: String,
+    /// The App it is sent for.
+    pub app: String,
+    #[serde(default)]
+    pub html: Option<String>,
+    #[serde(default)]
+    pub reply_to: Vec<String>,
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
 }
 
 /// The copy of `msg` kept at rest (`~/.k2/mail-outbound/out_*.json`): a
@@ -1683,6 +1706,7 @@ mod tests {
             reply_source: None,
             attachments: Vec::new(),
             ephemeral: false,
+            notify: None,
         }
     }
 

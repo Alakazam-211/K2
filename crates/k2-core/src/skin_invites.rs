@@ -70,6 +70,52 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
                 .map_err(|e| format!("skin.db app_login_settings.{name}: {e}"))?;
         }
     }
+    // Email Notifications E16 (0.46.5): an address a person proved they
+    // read (they used a link mailed to it). An App's `users` recipient
+    // scope counts only these. Additive, made at open (no number).
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS principal_email_proven (
+           principal_id TEXT NOT NULL,
+           email        TEXT NOT NULL,
+           proven_at    INTEGER NOT NULL,
+           PRIMARY KEY (principal_id, email)
+         );",
+    )
+    .map_err(|e| format!("skin.db principal_email_proven: {e}"))?;
+    Ok(())
+}
+
+/// E16: did the person prove they read `email` (a link mailed there was
+/// used)? Compared case-insensitively.
+pub fn email_proven(principal_id: &str, email: &str) -> Result<bool, String> {
+    let e = email.trim().to_ascii_lowercase();
+    with_conn(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM principal_email_proven WHERE principal_id = ?1 AND email = ?2",
+            params![principal_id, e],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .map_err(|e| format!("proven read: {e}"))
+    })
+}
+
+/// E16: record that `principal_id` proved `email` (tests and the use of a
+/// mailed link).
+pub fn mark_email_proven(principal_id: &str, email: &str) -> Result<(), String> {
+    with_conn(|conn| mark_proven_conn(conn, principal_id, email))
+}
+
+fn mark_proven_conn(conn: &Connection, principal_id: &str, email: &str) -> Result<(), String> {
+    let e = email.trim().to_ascii_lowercase();
+    if e.is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT OR REPLACE INTO principal_email_proven (principal_id, email, proven_at) VALUES (?1, ?2, ?3)",
+        params![principal_id, e, now_secs()],
+    )
+    .map_err(|e| format!("proven write: {e}"))?;
     Ok(())
 }
 
@@ -669,6 +715,11 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
         tx.execute("UPDATE principals SET password_hash = ?1 WHERE id = ?2", params![pw_hash, principal_id])
             .map_err(|e| format!("invite password: {e}"))?;
         revoke_sessions_for_principal(&tx, &principal_id)?;
+        // Email Notifications E16: whoever used a link mailed to an
+        // address reads that address.
+        if let Some(addr) = sent_to.as_deref() {
+            mark_proven_conn(&tx, &principal_id, addr)?;
+        }
         // A link an App page, App key or workspace mailbox could see ties
         // the person to that workspace as it is used (never dropped by it).
         if let Some(ws) = tie_ws.as_deref().filter(|w| !w.is_empty()) {

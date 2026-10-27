@@ -19,6 +19,8 @@ features:
   thread-address-stable
   sources-v1
   garden-data-v1
+  garden-blobs-v1
+  zen-files-v1
   grokbots-v1
   app-api-v1
   guests-rooms-v1

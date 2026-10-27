@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
-skill_version: 35
-skill_checksum: d628733e1c0348bc
+skill_version: 36
+skill_checksum: e63dc6946c39993d
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat
 ---
@@ -271,6 +271,19 @@ New `schedule add` lands in the **pinned** chat. For a trained flow, prefer
 a sidecar: `k2 heartbeat session <name> --set sales/reviewer`.
 Run `k2 heartbeat --help` for the full surface.
 
+## Compute nodes
+Builds and tests on your owner's other machines. Read `k2 study compute` first.
+```
+k2 compute nodes                                       # what you may use, and who is on the critical path
+k2 compute run <node> --sha $(git rev-parse HEAD) -- cargo nextest run -p <crate>
+k2 compute run --any --detach -- <command>             # any granted node; prints a job id
+k2 compute run <node> --tier priority -- <command>     # only when you are the critical path
+k2 compute wait <job> | logs <job> --failures | get <job>
+```
+**Priority = the critical path.** Use `--tier priority` only when one result is blocking others (the next builder, an integration pass, a release). One submitter on this server at a time: if `k2 compute nodes` shows someone else on the critical path, use Normal unless the coordinator named you. Priority is optional: if work is independent, leave everything Normal. It all still runs, in parallel, just more slowly.
+
+Tiers never stop a running job. `--tier ci` needs a grant with `--ci` from your owner (ask: `k2 permission request compute.ci --why "…"`).
+
 ## Agent presets (which agent program a workspace launches)
 ```
 k2 preset list                   # the server's launchable agent roster
@@ -303,10 +316,12 @@ not a crawl of wiki or PRDs. `k2 study <topic>` prints one page. Daemon-optional
 Topics: what, source, map, identity, send, human, people, auth, errors, context,
 db, mail, connect-boundary, apps, app-deploys, app-move, app-api, live,
 app-heartbeats, app-tickets, app-identity, app-surfaces, app-resources,
-app-runtime, app-push, skins, feedback-loop, ticket-brief, zen, sidecars,
-llm-tokens, llm-accounts, publish-framing, compute, compute-shared, vault,
+app-runtime, app-handover, app-push, app-pairing, app-profile, skins,
+feedback-loop, ticket-brief, zen, sidecars, llm-tokens, llm-accounts,
+publish-framing, compute, compute-shared, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
-garden-access, garden-changes, changes, design, db-upgrade, jobs, folder-trust.
+garden-access, garden-changes, changes, design, db-upgrade, jobs, folder-trust,
+email-notifications.
 Building an App or widget that shows live state (an agent working, counts,
 unread) → `k2 study live`: every surface, its caps, read + live verbs, and
 what never to infer.

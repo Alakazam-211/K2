@@ -202,8 +202,31 @@ pub(crate) struct NewChange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Carry {
     pub carried_to: Seq,
-    /// `(root, start, end, tainted)` per region, in record order.
-    pub regions: Vec<(String, u64, u64, bool)>,
+    /// `(root, start, end, start tainted, end tainted)` per region, in record order: each
+    /// edge's taint on its own (undo spec U22a), so a rebuilt index equals the live one.
+    pub regions: Vec<(String, u64, u64, bool, bool)>,
+}
+
+/// A carried region's taint byte. Written by v0.8.1 and earlier: `0` (clean) or
+/// [`TAINT_LEGACY`] (one flag for the region, read as both edges tainted: the conservative
+/// reading those versions also made). Written since: [`TAINT_START`] | [`TAINT_END`], each
+/// edge apart. Same carry record version (1) and store format: an older build reads any
+/// non-zero byte as "tainted", its own conservative reading.
+const TAINT_LEGACY: u8 = 1;
+const TAINT_START: u8 = 2;
+const TAINT_END: u8 = 4;
+
+fn enc_taint(start: bool, end: bool) -> u8 {
+    (if start { TAINT_START } else { 0 }) | (if end { TAINT_END } else { 0 })
+}
+
+fn dec_taint(b: u8) -> Result<(bool, bool), StoreError> {
+    match b {
+        0 => Ok((false, false)),
+        TAINT_LEGACY => Ok((true, true)),
+        b if b & !(TAINT_START | TAINT_END) == 0 => Ok((b & TAINT_START != 0, b & TAINT_END != 0)),
+        _ => Err(StoreError::Corrupt("revert carry taint")),
+    }
 }
 
 /// Per-doc revert record totals.
@@ -416,8 +439,8 @@ pub(super) fn dec_pair(b: &[u8]) -> Result<(u64, u64), StoreError> {
 fn enc_carry(c: &Carry) -> Vec<u8> {
     let mut w = W::default();
     w.u8(1).u64(c.carried_to).u32(c.regions.len() as u32);
-    for (root, s, e, t) in &c.regions {
-        w.str(root).u64(*s).u64(*e).u8(u8::from(*t));
+    for (root, s, e, ts, te) in &c.regions {
+        w.str(root).u64(*s).u64(*e).u8(enc_taint(*ts, *te));
     }
     w.0
 }
@@ -434,7 +457,9 @@ fn dec_carry(b: &[u8]) -> Result<Carry, StoreError> {
     }
     let mut regions = Vec::with_capacity(n);
     for _ in 0..n {
-        regions.push((r.str()?, r.u64()?, r.u64()?, r.u8()? != 0));
+        let (root, s, e) = (r.str()?, r.u64()?, r.u64()?);
+        let (ts, te) = dec_taint(r.u8()?)?;
+        regions.push((root, s, e, ts, te));
     }
     r.end()?;
     Ok(Carry {
@@ -933,6 +958,40 @@ impl DocStore {
 mod tests {
     use super::*;
 
+    /// A carry written by v0.8.1 or earlier holds one taint byte per region, `0` or `1`;
+    /// `1` reads as both edges tainted (their own conservative reading). New writes keep
+    /// each edge apart, in the same record version; any other byte is corrupt.
+    #[test]
+    fn carry_taint_per_edge_reads_old_single_flags() {
+        let old = |t: u8| {
+            let mut w = W::default();
+            w.u8(1).u64(7).u32(1).str("source").u64(3).u64(5).u8(t);
+            w.0
+        };
+        let regions = |b: &[u8]| dec_carry(b).map(|c| c.regions);
+        assert_eq!(
+            regions(&old(0)).unwrap(),
+            vec![("source".into(), 3, 5, false, false)]
+        );
+        assert_eq!(
+            regions(&old(1)).unwrap(),
+            vec![("source".into(), 3, 5, true, true)]
+        );
+        for (ts, te) in [(false, false), (true, false), (false, true), (true, true)] {
+            let c = Carry {
+                carried_to: 7,
+                regions: vec![("source".into(), 3, 5, ts, te)],
+            };
+            assert_eq!(dec_carry(&enc_carry(&c)).unwrap(), c);
+        }
+        for bad in [3u8, 8, 0xff] {
+            assert!(matches!(
+                regions(&old(bad)),
+                Err(StoreError::Corrupt("revert carry taint"))
+            ));
+        }
+    }
+
     fn head(id: VersionId, at_ms: u64, named: bool) -> VersionInfo {
         VersionInfo {
             id,
@@ -1125,7 +1184,11 @@ mod tests {
         // pruning drops the record (not its summary) and persists carries
         let carry = Carry {
             carried_to: 2,
-            regions: vec![("source".into(), 0, 8, false)],
+            regions: vec![
+                ("source".into(), 0, 8, false, false),
+                ("source".into(), 9, 9, true, false),
+                ("source".into(), 10, 12, false, true),
+            ],
         };
         assert_eq!(
             store

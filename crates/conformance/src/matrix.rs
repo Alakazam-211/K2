@@ -106,7 +106,8 @@ impl Cap {
             Cap::BranchAt => Some(crate::branches::AT_RULES),
             Cap::Purge => Some(crate::purge::RULES),
             Cap::BlameAt => Some(crate::blame::AT_RULES),
-            Cap::Wire | Cap::SpanIds => None,
+            Cap::SpanIds => Some(crate::span::RULES),
+            Cap::Wire => None,
         }
     }
 }
@@ -233,7 +234,7 @@ pub const KIT: Engine = Engine {
     deviations: YrsText::KNOWN_DEVIATIONS,
 };
 
-/// The reference model mpce-model (v0.3.0).
+/// The reference model mpce-model (v0.4.1).
 pub const MODEL: Engine = Engine {
     name: ModelText::ENGINE,
     caps: &[
@@ -247,6 +248,7 @@ pub const MODEL: Engine = Engine {
         BranchAt,
         Purge,
         BlameAt,
+        SpanIds,
     ],
     deviations: ModelText::KNOWN_DEVIATIONS,
 };
@@ -299,22 +301,11 @@ const WIRE: &str = "decoding untrusted update bytes is the native decoder's; thi
                     engines only bytes they made";
 const WIRE_NEVER: &str = "the reference model has no wire format (native decoder / client \
                           protocol)";
-/// `erase.span_includes_tombstones`, defined.
-const SPAN_IDS: &str = "a span purge covers the elements from the span's first visible \
-                        character through its last, plus every tombstone strictly between; \
-                        tombstones just outside the span are excluded. The model's span purge \
-                        needs the IDs a span covers, tombstones included";
 const UNDO_NEVER: &str = "undo is the kit's, over a session (undo spec); the model has no sessions";
 /// Every (rule, engine) that doesn't run yet.
 pub const AWAITING: &[Awaiting] = &[
     aw("sec.duplicate_ranges", K, WIRE, "native decoder, G2"),
     aw("sec.base_too_old", K, WIRE, "native decoder, G2"),
-    aw(
-        "erase.span_includes_tombstones",
-        M,
-        SPAN_IDS,
-        "mpce-model v0.4.1 (`Doc::span_ids`)",
-    ),
 ];
 
 /// Every (rule, engine) that will never run.

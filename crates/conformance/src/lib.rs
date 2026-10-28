@@ -7,7 +7,7 @@
 //! - [`model::ModelText`]: the reference model `mpce-model` (FugueMax), the oracle of record.
 //!
 //! **Capabilities** ([`caps`]): rules that need more than [`TextReplica`] (events, blame,
-//! anchors, branches, purge; and at doc level undo, versions, history purge, erasure) are
+//! anchors, branches, purge, span purge; and at doc level undo, versions, history purge, erasure) are
 //! written against an optional trait and run on every engine that implements it. The **coverage matrix** ([`matrix`]) lists every rule, the capability it
 //! needs and its status on each engine (pass, pinned deviation, awaiting, never); a test
 //! fails when a rule runs on no engine and isn't listed as awaiting, with a reason and a
@@ -37,6 +37,7 @@ pub mod kit_undo;
 pub mod matrix;
 pub mod model;
 pub mod purge;
+pub mod span;
 pub mod text;
 pub mod undo;
 pub mod versions;

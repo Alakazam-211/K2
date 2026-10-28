@@ -1,5 +1,5 @@
 //! [`TextReplica`] on the reference model `mpce-model` (FugueMax, the oracle of record),
-//! through its native API (v0.3.0), with no semantics of the adapter's own:
+//! through its native API (v0.4.1), with no semantics of the adapter's own:
 //!
 //! - edits: `edit_as(agent, hunks)` (UTF-8 byte offsets, one atomic batch; it refuses
 //!   offsets off a scalar boundary, out of range, out of order or overlapping);
@@ -15,6 +15,8 @@
 //! - [`Purge`]: `purge_as(agent, ids)` of the span's characters (one event); the byte scan is
 //!   the model's `find_content`, for the needle and each of its 8-byte windows (every
 //!   content-bearing element it holds, tombstones and past states included).
+//! - [`SpanIds`]: `purge_as(agent, &span_ids(start, end)?)` (one event); `span_ids` gives
+//!   the span's first visible element through its last, every tombstone between included.
 //! - [`BlameAt`]: the model's `blame_at(version)`.
 //! - [`ModelHistory`], the doc-level capabilities ([`Versions`], [`HistoryPurge`]): one
 //!   replica that every agent edits with `edit_as`; a version is its frontier, shown with
@@ -37,7 +39,7 @@ use mpce_model::tree::{Origin, Parent, Side as TreeSide};
 
 use crate::caps::{
     Anchors, Blame, BlameAt, Blamed, BranchAt, Branches, Change, EventRefusal, Events,
-    HistoryPurge, Purge, Side, Versions,
+    HistoryPurge, Purge, Side, SpanIds, Versions,
 };
 use crate::{Deviation, Hunk, Refused, TextReplica, SEED_AGENT};
 use k2_mpc_base::text::{diff, lines::align_insertions};
@@ -75,6 +77,56 @@ pub fn with_keep_content_mutant<R>(f: impl FnOnce() -> R) -> R {
     KEEP_CONTENT.with(|k| k.set(true));
     let _reset = Reset;
     f()
+}
+
+/// A wrong span purge, for the planted negatives of `erase.span_includes_tombstones`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpanMutant {
+    /// Only the span's visible elements: tombstones inside it keep their content.
+    VisibleOnly,
+    /// The span's elements and the runs of tombstones directly against either end.
+    WithNeighbours,
+}
+
+thread_local! {
+    static SPAN_MUTANT: Cell<Option<SpanMutant>> = const { Cell::new(None) };
+}
+
+/// Run `f` with every model span purge ([`SpanIds::purge_span`]) computing its IDs the
+/// mutant's way: `erase.span_includes_tombstones` run inside must fail. Test-only; this
+/// thread only.
+pub fn with_span_mutant<R>(m: SpanMutant, f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SPAN_MUTANT.with(|k| k.set(None));
+        }
+    }
+    SPAN_MUTANT.with(|k| k.set(Some(m)));
+    let _reset = Reset;
+    f()
+}
+
+/// `ids` (a span's, in list order) as `m` gets them wrong.
+fn span_mutant(doc: &Doc, mut ids: Vec<Id>, m: SpanMutant) -> Vec<Id> {
+    match m {
+        SpanMutant::VisibleOnly => {
+            ids.retain(|x| !doc.is_deleted(*x));
+            ids
+        }
+        SpanMutant::WithNeighbours => {
+            let l = doc.list_with_tombstones();
+            let pos = |x: &Id| l.iter().position(|y| y == x).expect("in the list");
+            let (mut i, mut j) = (pos(&ids[0]), pos(&ids[ids.len() - 1]));
+            while i > 0 && doc.is_deleted(l[i - 1]) {
+                i -= 1;
+            }
+            while j + 1 < l.len() && doc.is_deleted(l[j + 1]) {
+                j += 1;
+            }
+            l[i..=j].to_vec()
+        }
+    }
 }
 
 /// A replica holding `seed`, typed by SEED_AGENT the same way on every replica (the same
@@ -305,6 +357,23 @@ impl Purge for ModelText {
 
     fn holds(&self, needle: &str) -> bool {
         doc_holds(&self.doc, needle)
+    }
+}
+
+impl SpanIds for ModelText {
+    fn purge_span(&mut self, start: usize, end: usize) -> Result<Vec<Event>, Refused> {
+        let mut ids = self
+            .doc
+            .span_ids(start, end)
+            .map_err(|e| Refused(format!("model span_ids: {e:?}")))?;
+        if let Some(m) = SPAN_MUTANT.with(Cell::get) {
+            ids = span_mutant(&self.doc, ids, m);
+        }
+        let e = self
+            .doc
+            .purge_as(self.agent, &ids)
+            .map_err(|e| Refused(format!("model purge_as: {e:?}")))?;
+        Ok(vec![e])
     }
 }
 

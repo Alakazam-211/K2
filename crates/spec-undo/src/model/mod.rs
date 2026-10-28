@@ -1,4 +1,4 @@
-//! `spec_undo::model`: the oracle of record for the undo spec (`docs/SPEC-UNDO.md`, v1.5),
+//! `spec_undo::model`: the oracle of record for the undo spec (`docs/SPEC-UNDO.md`, v1.6),
 //! over plain strings and hunks. No engine, no store, no clock.
 //!
 //! **What it calls from the kit:** only the diff pipeline, D1–D2: `diff::hunks` (inside
@@ -40,14 +40,15 @@
 //!   batch (then plain "nothing to undo"); "history lost" is said on an undo that finds an
 //!   empty stack, by a pid that made a change before the last restart.
 //! - **R7** (U13): `--steps N` with fewer than N batches undoes what there is.
-//! - **U22a** (v1.5), exactly: a record's region edges are carried each on its own (no
+//! - **U22a** (v1.5, v1.6), exactly: a record's region edges are carried each on its own (no
 //!   shared-edge clamp while carrying), each with its own taint; at revert time a region
 //!   whose carried start is at or before the previous region's carried end (same root)
 //!   inherits that end's taint, then the shared-edge clamp applies. [`Record::regions`]
 //!   also keeps undo's carry of the same change, so every revert checks U22a's property:
 //!   revert's conflicts ⊇ undo's on the same state, and the regions both apply give the
-//!   same text ([`Hits::revert_superset_ok`]). A carry persisted when the window moves
-//!   keeps one taint flag per region; after a restart it taints both edges.
+//!   same text ([`Hits::revert_superset_ok`]). v1.6: a carry persisted when the window
+//!   moves keeps each edge's taint, so a restart touches no record ([`Model::restart`]):
+//!   revert is restart-transparent.
 //! - **R8** (U22): a revert is planned as one step of undo (U13/U14 with N = 1); a fully
 //!   conflicting `revert --partial` is reported like a blocked step and applies nothing;
 //!   an erased region conflicts before a tainted one (`erased` wins).
@@ -60,6 +61,7 @@
 
 pub mod hunk;
 pub mod merge;
+pub mod mutant;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -68,6 +70,7 @@ use k2_mpc_base::text::{diff, lines};
 pub use hunk::Edit;
 use hunk::Side;
 use merge::Merged;
+use mutant::Mutant;
 
 /// A participant id (U2: stacks are per pid, not per connection).
 pub type Pid = String;
@@ -143,12 +146,9 @@ pub struct Record {
     /// Its regions as undo carries them (U8, U9: shared-edge clamp after every change,
     /// one taint per region): what undo of the same change would see.
     pub regions: Vec<Region>,
-    /// The same regions' edges as revert carries them (U22a): each edge on its own.
+    /// The same regions' edges as revert carries them (U22a): each edge on its own, its
+    /// taint included, across restarts (v1.6).
     pub edges: Vec<Edges>,
-    /// U22a's persisted carry: when the window moved past older changes while this record
-    /// was kept (pending on-behalf), its carry was persisted with **one taint flag per
-    /// region**; a restart reloads it, tainting both edges of a region tainted then.
-    pub persisted: Option<Vec<bool>>,
 }
 
 /// A record region's edges as revert carries them (U22a).
@@ -250,8 +250,44 @@ pub enum Outcome {
     TooOld,
 }
 
+/// One region merged against the live text (U10), as the operation saw it: what the model
+/// check's transition invariants read ([`crate::bounded`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionNote {
+    pub root: usize,
+    pub start: usize,
+    pub end: usize,
+    /// The live text of its root (the merge's theirs is `live[start..end]`).
+    pub live: String,
+    pub before: String,
+    pub after: String,
+    pub tainted: bool,
+    pub erased: bool,
+    pub base_doc_nonempty: bool,
+    /// Merged cleanly (and so applied, unless all or nothing refused the step).
+    pub clean: bool,
+    /// The `at_end` it was merged with (U10).
+    pub at_end: bool,
+    /// O5 landed in it.
+    pub o5_landed: bool,
+    /// Two different insertions at its end conflicted because `at_end` was false.
+    pub same_point_end: bool,
+}
+
+/// One planned undo or redo step (U13–U17): what it applied, what it reported, and how
+/// many regions it pushed on the opposite stack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepNote {
+    /// Indices (in the batch) of the regions applied.
+    pub applied: Vec<usize>,
+    /// The conflicting regions as reported (U11; skipped, blocked, or all or nothing's).
+    pub reports: Vec<Report>,
+    /// Regions pushed on the opposite stack (none when nothing was applied).
+    pub pushed: usize,
+}
+
 /// The case classes an operation hit (§8 Volume; the trace runner counts them).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Hits {
     /// O5 landed in an undo, redo or revert region.
     pub eof_append_undo: bool,
@@ -301,6 +337,10 @@ pub struct Hits {
     /// A revert: its regions, and how many conflict where undo would apply (U22a's cost).
     pub revert_regions: usize,
     pub revert_extra_conflicts: usize,
+    /// Every region merged (U10), in order.
+    pub notes: Vec<RegionNote>,
+    /// Every undo or redo step planned, in order.
+    pub steps: Vec<StepNote>,
 }
 
 /// The oracle's state.
@@ -507,7 +547,6 @@ impl Model {
                     })
                     .collect(),
                 regions: regions.clone(),
-                persisted: None,
             },
         );
         Some((self.head, regions))
@@ -614,9 +653,26 @@ impl Model {
                 hits.touching_regions = true;
             }
             let (clean, conflicts) = work.merge_regions(&batch.regions, &mut hits);
+            let applied: Vec<usize> = clean.iter().map(|c| c.0).collect();
+            // mutant (iii): --partial reports a different set (it leaves taints out)
+            let reported: Vec<Report> =
+                if req.mode == Mode::Partial && mutant::active() == Mutant::PartialHidesTaint {
+                    conflicts
+                        .iter()
+                        .filter(|c| c.kind != Kind::Taint)
+                        .cloned()
+                        .collect()
+                } else {
+                    conflicts.clone()
+                };
             if !conflicts.is_empty() {
                 match req.mode {
                     Mode::All => {
+                        hits.steps.push(StepNote {
+                            applied: Vec::new(),
+                            reports: sorted(reported.clone()),
+                            pushed: 0,
+                        });
                         return (
                             Outcome::Conflicts {
                                 step: k + 1,
@@ -627,7 +683,12 @@ impl Model {
                     }
                     _ if clean.is_empty() => {
                         hits.stays_on_top = true;
-                        blocked = Some(sorted(conflicts));
+                        hits.steps.push(StepNote {
+                            applied: Vec::new(),
+                            reports: sorted(reported.clone()),
+                            pushed: 0,
+                        });
+                        blocked = Some(sorted(reported));
                         break;
                     }
                     _ => {
@@ -638,8 +699,36 @@ impl Model {
                 }
             }
             let partial = !conflicts.is_empty();
-            skipped.extend(conflicts);
-            let inverse = work.apply_step(pid, obo, &batch.regions, &clean);
+            let skipped_idx: Vec<usize> = (0..batch.regions.len())
+                .filter(|i| !applied.contains(i))
+                .collect();
+            skipped.extend(reported.iter().cloned());
+            let edits = step_edits(&work.texts, &batch.regions, &clean);
+            let mut inverse = work.apply_step(pid, obo, &batch.regions, &clean);
+            // mutant (iv): the redo entry also carries the skipped regions (redo retries them)
+            if !redo && mutant::active() == Mutant::RedoRetriesSkipped {
+                for &i in &skipped_idx {
+                    let r = &batch.regions[i];
+                    let es: &[Edit] = edits
+                        .iter()
+                        .find(|(root, _)| *root == r.root)
+                        .map_or(&[], |(_, es)| es);
+                    let start = hunk::carry(r.start, es, Side::Start);
+                    let end = hunk::carry(r.end, es, Side::End).max(start);
+                    inverse.push(Region {
+                        start,
+                        end,
+                        before: r.after.clone(),
+                        after: r.before.clone(),
+                        ..r.clone()
+                    });
+                }
+            }
+            hits.steps.push(StepNote {
+                applied,
+                reports: sorted(reported),
+                pushed: inverse.len(),
+            });
             let st = work.stacks.get_mut(pid).expect("entry made above");
             // a new batch on the pid's stacks withdraws the purge notice (U19)
             st.cleared = false;
@@ -755,20 +844,49 @@ impl Model {
         for (i, r) in regions.iter().enumerate() {
             let live = &self.texts[r.root];
             let report = |kind| report(live, r, kind);
+            let mut note = RegionNote {
+                root: r.root,
+                start: r.start,
+                end: r.end,
+                live: live.clone(),
+                before: r.before.clone(),
+                after: r.after.clone(),
+                tainted: r.tainted,
+                erased: r.erased,
+                base_doc_nonempty: r.base_doc_nonempty,
+                clean: false,
+                at_end: false,
+                o5_landed: false,
+                same_point_end: false,
+            };
             if r.erased {
                 hits.erased = true;
                 conflicts.push(report(Kind::Erased));
+                hits.notes.push(note);
                 continue;
             }
-            if r.tainted {
+            // mutant (i): no taint rule
+            if r.tainted && mutant::active() != Mutant::NoTaint {
                 hits.taint = true;
                 conflicts.push(report(Kind::Taint));
+                hits.notes.push(note);
                 continue;
             }
             let theirs = &live[r.start..r.end];
             // U10: the live doc's end, and the whole doc non-empty in the base
-            let at_end = r.end == live.len() && r.base_doc_nonempty;
+            let at_end = match mutant::active() {
+                // mutant (vi): O5 at every window end
+                Mutant::O5EveryWindowEnd => true,
+                // mutant (vii): O5 conditioned on the region's base, not the whole doc's
+                Mutant::O5RegionBase => r.end == live.len() && !r.after.is_empty(),
+                _ => r.end == live.len() && r.base_doc_nonempty,
+            };
             let (m, rules) = merge::merge3_window(&r.after, &r.before, theirs, at_end);
+            note.at_end = at_end;
+            note.o5_landed = rules.o5_landed;
+            note.same_point_end = rules.same_point_at_window_end;
+            note.clean = matches!(m, Merged::Clean { .. });
+            hits.notes.push(note);
             hits.insert_inside |= rules.o2;
             hits.overlap |= rules.o1;
             if rules.o5_landed {
@@ -856,12 +974,15 @@ impl Model {
             })
             .collect();
         let out = self.new_batch(owner, obo, edits);
-        for st in self.stacks.values_mut() {
-            if !st.undo.is_empty() || !st.redo.is_empty() {
-                st.cleared = true;
+        // mutant skip-U19: the stacks are not cleared
+        if mutant::active() != Mutant::SkipU19 {
+            for st in self.stacks.values_mut() {
+                if !st.undo.is_empty() || !st.redo.is_empty() {
+                    st.cleared = true;
+                }
+                st.undo.clear();
+                st.redo.clear();
             }
-            st.undo.clear();
-            st.redo.clear();
         }
         let windows: Vec<&[u8]> = secret.as_bytes().windows(8).collect();
         let holds = |t: &str| {
@@ -879,19 +1000,11 @@ impl Model {
         out
     }
 
-    /// A host restart (U6, U18): every stack is lost; records stay (U22).
+    /// A host restart (U6, U18): every stack is lost; records stay (U22), each edge's
+    /// carried taint included (U22a, v1.6: restart transparency).
     pub fn restart(&mut self) {
         self.stacks.clear();
         self.authors_before_restart = self.authors.clone();
-        // U22a: persisted carries come back with one taint flag per region
-        for rec in self.records.values_mut() {
-            if let Some(flags) = &rec.persisted {
-                for (ed, t) in rec.edges.iter_mut().zip(flags) {
-                    ed.start_taint |= *t;
-                    ed.end_taint |= *t;
-                }
-            }
-        }
     }
 
     /// The revert window moves (R10): records older than the last `keep_changes` changes go,
@@ -905,20 +1018,8 @@ impl Model {
             .filter(|(id, rec)| **id <= cut && rec.on_behalf_of.is_none())
             .map(|(id, _)| *id)
             .collect();
-        let Some(&last) = dropped.last() else {
-            return;
-        };
         for id in dropped {
             self.records.remove(&id);
-        }
-        // U22a: the kept (pending) records older than the move have their carry persisted
-        for (_, rec) in self.records.range_mut(..last) {
-            rec.persisted = Some(
-                rec.edges
-                    .iter()
-                    .map(|e| e.start_taint || e.end_taint)
-                    .collect(),
-            );
         }
     }
 }

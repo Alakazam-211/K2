@@ -10,7 +10,17 @@ use std::collections::BTreeMap;
 const THREADS: u64 = 4;
 
 fn run_many(seeds: std::ops::Range<u64>, min_per_class: u64) {
+    run_many_with(seeds, trace::CLASSES, min_per_class, trace::run);
+}
+
+fn run_many_with(
+    seeds: std::ops::Range<u64>,
+    want: &[&'static str],
+    min_per_class: u64,
+    run: fn(u64) -> trace::TraceResult,
+) {
     let mut classes: BTreeMap<&'static str, u64> = trace::CLASSES.iter().map(|c| (*c, 0)).collect();
+    let want: Vec<&'static str> = want.to_vec();
     let mut mismatches = Vec::new();
     let (mut rr, mut rx, mut tr, mut tx, mut reverts) = (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut hunk_diffs = Vec::new();
@@ -22,7 +32,7 @@ fn run_many(seeds: std::ops::Range<u64>, min_per_class: u64) {
                 sc.spawn(move || {
                     seeds
                         .filter(|s| s % THREADS == k)
-                        .map(trace::run)
+                        .map(run)
                         .collect::<Vec<_>>()
                 })
             })
@@ -92,7 +102,7 @@ fn run_many(seeds: std::ops::Range<u64>, min_per_class: u64) {
     }
     let missing: Vec<_> = classes
         .iter()
-        .filter(|(_, n)| **n < min_per_class)
+        .filter(|(c, n)| want.contains(c) && **n < min_per_class)
         .map(|(c, _)| *c)
         .collect();
     assert!(
@@ -142,6 +152,25 @@ fn u22a_revert_inherits_a_tainted_neighbour() {
     if let Some(m) = script(["abcdefghij\n", ""], 2, steps) {
         panic!("{m}");
     }
+}
+
+/// Undo spec U22a (v1.6), restart transparency: stack-free traces, each also run on a kit
+/// that never restarts; a restart at any point changes no outcome (reverts included) and
+/// no text. 64 traces; the class `revert_restart_transparent` (a revert whose carry was
+/// persisted, with restarts between the change and the revert and between later changes
+/// on its root) must be hit.
+#[test]
+fn restart_transparency() {
+    run_many_with(
+        0..64,
+        &[
+            "revert_restart_transparent",
+            "revert_after_restart",
+            "taint",
+        ],
+        4,
+        trace::run_twin,
+    );
 }
 
 /// 256 traces, every case class hit at least once.

@@ -326,8 +326,10 @@ position, the stable change id) days later and after restarts, independent of un
   the previous region's end takes that end's taint (`undo::revert_regions`). It can be
   stricter than undo (a deletion across the left region's end from before they touched also
   counts); it is never laxer (a property test over random histories holds it). This is
-  the spec's rule **U22a** (v1.5), exactly, including a persisted carry's one taint flag per
-  region after a restart; the oracle implements it and the trace test compares it.
+  the spec's rule **U22a** (v1.6), exactly; the oracle implements it and the trace test
+  compares it. A persisted carry keeps **each edge's** taint (v0.8.2; a carry written by
+  v0.8.1 or earlier reads as both edges tainted, its conservative reading), so a restart
+  changes no revert's outcome (the trace test's restart twin checks it).
 - **Rights:** edit, and the caller is the change's author, its `on_behalf_of` person, or an
   owner. Otherwise `Forbidden { need: AuthorOrOwner }` (and `AuditEvent::Refused` with it).
 - **The window** (K-HIST-23, a `tick` duty): records of changes newer than `revert_keep_ms` (30

@@ -102,7 +102,8 @@ pub enum DocError {
     Conflict,
     /// a byte offset that is not a UTF-8 scalar boundary of the visible text (E-TEXT-9)
     NotCharBoundary { offset: usize },
-    /// hunks not sorted by start, or overlapping
+    /// hunks not sorted by start, or overlapping, or a hunk with `start > end`; also an empty
+    /// or reversed span for `span_ids` (`start >= end`)
     BadHunks,
     /// `insert`/`delete` on a replica created with `Doc::replica()` (use `edit_as`)
     NoAgent,
@@ -504,6 +505,10 @@ impl Doc {
         self.deliver_all(&diff)
     }
 
+    /// **Model-internal, not the `hist.restore_*` contract.** Restore is a kit operation for
+    /// every engine, `edit_as(agent, diff::hunks(text(), text_at(V)))`, so `hist.restore_minimal`
+    /// holds by construction; this method is the model's own restore, kept for its tests.
+    ///
     /// Restore forward to version `v` (E-HIST-2): new events by `agent` (history is never
     /// rewritten) after which, with no concurrent events, `text() == text_at(v)`. Visible
     /// characters not visible at `v` are deleted; characters visible at `v` but deleted now
@@ -554,6 +559,39 @@ impl Doc {
         let e = Event { id: self.fresh_id(agent), parents: self.frontier.clone(), op: Op::Purge { targets: ids.iter().copied().collect() } };
         self.deliver(&e)?;
         Ok(e)
+    }
+
+    /// The elements of a span purge (the kit's `erase.span_includes_tombstones`), for
+    /// `purge_as(agent, &span_ids(start, end)?)`. `start..end` are UTF-8 byte offsets into the
+    /// current visible text, `start < end`. The result, in list order (tombstones included), is
+    /// the element of the span's first visible character through the element of its last, both
+    /// inclusive: those visible characters and every element strictly between them, which are
+    /// tombstones. Tombstones just outside either end are excluded (purge by text,
+    /// `find_content`, reaches those). Elements in that range whose content is already purged
+    /// (or a content-less insert not yet deleted) are included; `purge_as` accepts them.
+    /// Errors: `OutOfRange` (an offset beyond the text), `NotCharBoundary { offset }`, and
+    /// `BadHunks` for an empty or reversed span (`start >= end`). Reads only.
+    pub fn span_ids(&self, start: usize, end: usize) -> Result<Vec<Id>, DocError> {
+        let text = self.text();
+        for off in [start, end] {
+            if off > text.len() {
+                return Err(DocError::OutOfRange);
+            }
+            if !text.is_char_boundary(off) {
+                return Err(DocError::NotCharBoundary { offset: off });
+            }
+        }
+        if start >= end {
+            return Err(DocError::BadHunks);
+        }
+        let first = text[..start].chars().count(); // visible index of the first char
+        let last = first + text[start..end].chars().count() - 1;
+        let order = self.tree.order();
+        let vis = self.visible();
+        let (a, b) = (vis[first], vis[last]);
+        let i = order.iter().position(|&x| x == a).expect("visible element in order");
+        let j = order.iter().position(|&x| x == b).expect("visible element in order");
+        Ok(order[i..=j].to_vec())
     }
 
     /// Every occurrence of `needle` in all content this replica holds, tombstones included (for

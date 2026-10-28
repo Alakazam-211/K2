@@ -1,14 +1,15 @@
 //! The capability rules on every engine that has the capability, one test per rule and
 //! engine. Each engine's capabilities here must equal the coverage matrix's
 //! (`caps_match_the_matrix`); the text rules are `tests/text.rs`. Last, the planted
-//! negatives of the purge rules' byte scans (`planted_negatives`).
+//! negatives of the purge rules' byte scans (`planted_negatives`) and of the span purge's
+//! extent (`span_mutants`).
 
 use k2_mpc_conformance::kit_history::KitHistory;
 use k2_mpc_conformance::kit_undo::KitUndo;
 use k2_mpc_conformance::matrix::{self, Cap};
 use k2_mpc_conformance::model::{ModelHistory, ModelText};
 use k2_mpc_conformance::yrs::YrsText;
-use k2_mpc_conformance::{anchors, blame, branches, erasure, events, purge, undo, versions};
+use k2_mpc_conformance::{anchors, blame, branches, erasure, events, purge, span, undo, versions};
 
 /// One test per rule of a capability (run by `$module::$run`), and a check that they are
 /// all of its rules (`$module::$all`).
@@ -64,6 +65,7 @@ macro_rules! engine_suite {
     (@cap branch_at) => { Cap::BranchAt };
     (@cap purge) => { Cap::Purge };
     (@cap blame_at) => { Cap::BlameAt };
+    (@cap span_ids) => { Cap::SpanIds };
     (@suite events $ty:ty) => {
         mod events_rules {
             use super::*;
@@ -149,6 +151,14 @@ macro_rules! engine_suite {
             );
         }
     };
+    (@suite span_ids $ty:ty) => {
+        mod span_ids_rules {
+            use super::*;
+            rules!(span::run, RULES, $ty;
+                erase_span_includes_tombstones = "erase.span_includes_tombstones",
+            );
+        }
+    };
     (@suite blame_at $ty:ty) => {
         mod blame_at_rules {
             use super::*;
@@ -186,6 +196,7 @@ mod model {
         branch_at: ModelText,
         purge: ModelText,
         blame_at: ModelText,
+        span_ids: ModelText,
     );
 }
 
@@ -221,10 +232,42 @@ mod planted_negatives {
     }
 
     #[test]
+    fn erase_span_includes_tombstones() {
+        caught("erase.span_includes_tombstones", || {
+            span::run::<ModelText>("erase.span_includes_tombstones")
+        });
+    }
+
+    #[test]
     fn hist_blame_grain() {
         // blame_at hides purged characters by their erased content: the mutant keeps it
         caught("hist.blame_grain", || {
             blame::run_at::<ModelText>("hist.blame_grain")
         });
+    }
+}
+
+/// `erase.span_includes_tombstones` catches a span purge with the wrong extent: on the
+/// model, with its span mutants (visible elements only: the fixed typo keeps its content;
+/// the tombstones against either end too: the deleted copies are erased), the rule fails.
+mod span_mutants {
+    use super::*;
+    use k2_mpc_conformance::model::{with_span_mutant, SpanMutant};
+
+    fn caught(m: SpanMutant) {
+        let r = with_span_mutant(m, || {
+            std::panic::catch_unwind(|| span::run::<ModelText>("erase.span_includes_tombstones"))
+        });
+        assert!(r.is_err(), "a span purge with {m:?} passed");
+    }
+
+    #[test]
+    fn visible_only() {
+        caught(SpanMutant::VisibleOnly);
+    }
+
+    #[test]
+    fn with_neighbours() {
+        caught(SpanMutant::WithNeighbours);
     }
 }

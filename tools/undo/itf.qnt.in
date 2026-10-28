@@ -1,0 +1,20 @@
+// -*- mode: Bluespec; -*-
+//
+// ITF export wrapper (tools/undo-bundle.sh `itfinst` writes it next to undo.qnt): an
+// instance of `undo` plus the action each step took (`act`) and its outcome (`out`), which
+// are not state in `undo`, so that `undo_itf_replay` can replay a simulator trace into
+// spec_undo::model and compare every step. Run with --init=winit --step=wstep.
+module __NAME__ {
+  import undo(__PARAMS__).* from "./undo"
+
+  var act: Act
+  var out: Outcome
+
+  action winit = all { init, act' = ACT0, out' = OUT0 }
+
+  action wstep = {
+    nondet a = acts(st).oneOf()
+    val r = nextOf(st, a)
+    all { r.ok, st' = r.st, act' = a, out' = r.out }
+  }
+}

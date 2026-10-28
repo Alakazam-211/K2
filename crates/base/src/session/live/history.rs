@@ -444,7 +444,8 @@ impl Session {
     }
 
     /// Move the revert window: drop the records outside it, persisting the carried bounds
-    /// of the pending records older than the cut (so a rebuild never replays past it).
+    /// of the pending records older than the cut, each edge's taint apart (so a rebuild
+    /// never replays past it, and equals the live index).
     fn prune_reverts(&self, st: &mut State, now: u64) -> Result<u64> {
         let c = &self.config;
         let store = self.store(st)?.clone();
@@ -475,10 +476,12 @@ impl Session {
             .iter()
             .filter(|(s, ..)| *s < cut && pending.contains(s))
         {
-            if let Some(b) = ix.bounds(seq) {
+            // each edge's taint apart (U22a): a rebuild from it equals the live index, so
+            // a restart changes no revert's outcome
+            if let Some(b) = ix.edges(seq) {
                 let regions = b
                     .into_iter()
-                    .map(|(r, s, e, t)| (r, s as u64, e as u64, t))
+                    .map(|(r, s, e, ts, te)| (r, s as u64, e as u64, ts, te))
                     .collect();
                 carries.push((
                     seq,

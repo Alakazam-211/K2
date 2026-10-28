@@ -305,3 +305,58 @@ fn u22a_revert_conflicts_are_a_superset_of_undos() {
         "the inheritance never fired: the test reaches nothing"
     );
 }
+
+/// U22a (v1.6), restart transparency: a pending on-behalf change's two regions; a deletion
+/// crosses the left one's **start**; the window moves; the regions are made to touch. The
+/// right region inherits the left's (clean) end, so revert conflicts on the left region
+/// only, with a restart at any point or none (v1.5 tainted both after a restart).
+#[test]
+fn u22a_revert_is_restart_transparent() {
+    let run = |restart_at: Option<usize>| {
+        let mut m = one("abcdefghij\n");
+        m.bounds.keep_changes = 2;
+        for k in 0..8 {
+            let n = m.texts[0].len();
+            match k {
+                0 => m.edit(
+                    "bot",
+                    Some("p"),
+                    vec![(0, vec![e(1, 3, "BC"), e(7, 8, "H")])],
+                ),
+                1 => m.edit("b", None, vec![(0, vec![e(0, 2, "")])]), // across the left start
+                2..=4 => m.edit("b", None, vec![(0, vec![e(n, n, &format!("{k}\n"))])]),
+                5 => {
+                    m.tick();
+                    Outcome::Changed(None)
+                }
+                _ => m.edit("b", None, vec![(0, vec![e(1, 3, "")])]), // at 7: they touch
+            };
+            if restart_at == Some(k) {
+                m.restart();
+            }
+        }
+        assert!(m.records.contains_key(&2) && !m.records.contains_key(&3));
+        (
+            m.clone().revert("b", None, 2, false).0,
+            m.revert("b", None, 2, true).0,
+        )
+    };
+    let want = run(None);
+    assert_eq!(
+        want.0,
+        Outcome::Conflicts {
+            step: 1,
+            regions: vec![Report {
+                root: 0,
+                start: 0,
+                end: 1,
+                lines: (1, 1),
+                kind: Kind::Taint
+            }]
+        }
+    );
+    assert!(matches!(&want.1, Outcome::Applied { skipped, .. } if skipped.len() == 1));
+    for k in 0..8 {
+        assert_eq!(run(Some(k)), want, "a restart after step {k}");
+    }
+}

@@ -30,11 +30,11 @@ fn every_new_rule_is_declared() {
 }
 
 /// G1: every rule runs on some engine; what still awaits an engine is the native decoder's
-/// (`sec.*`, G2) and `erase.span_includes_tombstones` (the model's `Doc::span_ids`, agreed
-/// with the engine owner for mpce-model v0.4.1).
+/// (`sec.*`, G2). (`erase.span_includes_tombstones` runs on the model since mpce-model
+/// v0.4.1, `Doc::span_ids`.)
 #[test]
 fn only_the_listed_rules_await() {
-    const LATER: &[&str] = &["erase.span_includes_tombstones"];
+    const LATER: &[&str] = &[];
     let waiting = |r: &str| r.starts_with("sec.") || LATER.contains(&r);
     let others: Vec<&str> = matrix::AWAITING
         .iter()

@@ -10,14 +10,16 @@ don't run on it; format the kit with `cargo fmt -p k2-mpc-base -p k2-mpc-conform
 
 The reference model for the engine's primitives (text today: a Fugue tree with FugueMax's
 right-sibling rule; byte-offset `edit_as`, `diff_events` / `deliver_all`, blame and anchors;
-versions, restore, branches and purge; Def. 4 and strong-list-spec checkers). Std only, no dependencies. It is
+versions, restore, branches, purge and span IDs; Def. 4 and strong-list-spec checkers). Std only, no dependencies. It is
 the oracle the conformance suite (`crates/conformance`) runs every rule on, with an empty
 deviation list. The only crate that depends on it is `k2-mpc-conformance`.
 
 - From: the engine repo (`k2-mpc-engine`), prefix `crates/mpce-model`.
-- Tag: **`mpce-model-v0.3.0`** (commit `d8a7974`); subtree split `a9b2d21`.
-  Earlier: v0.2.1 (`4528429`, split `3fa204a`), v0.2.0 (`15d19da`, split `d5865c4`), v0.1.1
-  (`80789b6`, split `7a2bc23`). v0.2.2 (`40ba770`, tests only) was skipped.
+- Tag: **`mpce-model-v0.4.1`** (commit `da10b8e`); subtree split `5c897f4`.
+  Earlier: v0.3.0 (`d8a7974`, split `a9b2d21`), v0.2.1 (`4528429`, split `3fa204a`),
+  v0.2.0 (`15d19da`, split `d5865c4`), v0.1.1 (`80789b6`, split `7a2bc23`). v0.2.2
+  (`40ba770`, tests only) and v0.4.0 (the tree model, not used by the kit yet) were
+  skipped.
 - Its `CHANGELOG.md` is the upstream one.
 
 Bump to a new tag (do not edit files here by hand):

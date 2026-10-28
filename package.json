@@ -108,7 +108,7 @@
     "pngjs": "^7.0.0",
     "postcss": "^8.4.0",
     "tailwindcss": "^4.0.0",
-    "tsc-rs": "0.2.0",
+    "tsc-rs": "0.8.0",
     "typescript": "^5.7.0",
     "vite": "^8.0.1",
     "vitest": "^2.1.9"

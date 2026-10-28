@@ -81,7 +81,7 @@
         "pngjs": "^7.0.0",
         "postcss": "^8.4.0",
         "tailwindcss": "^4.0.0",
-        "tsc-rs": "0.2.0",
+        "tsc-rs": "0.8.0",
         "typescript": "^5.7.0",
         "vite": "^8.0.1",
         "vitest": "^2.1.9",
@@ -499,7 +499,6 @@
 
     "@tauri-apps/plugin-clipboard-manager": ["@tauri-apps/plugin-clipboard-manager@2.4.0", "", { "dependencies": { "@tauri-apps/api": "^2.12.0" } }, "sha512-yAuTffXc/sm+4oYnrwxbUkaJXQMTesPJ9dim0ADcA31rpboyhAN2TGQqs9VCcPIpb60LFOeePkvhpP2I3xhejg=="],
 
-
     "@tauri-apps/plugin-notification": ["@tauri-apps/plugin-notification@2.5.0", "", { "dependencies": { "@tauri-apps/api": "^2.12.0" } }, "sha512-S19zXtRLX1YryUh532YcGnjI3fzrBGj4oUcW87ojytmOAOCVMZ2bTTHOhI0enYZPH5uDmdQw+dEGCn5wfCm3zw=="],
 
     "@tauri-apps/plugin-opener": ["@tauri-apps/plugin-opener@2.6.0", "", { "dependencies": { "@tauri-apps/api": "^2.12.0" } }, "sha512-KIl9qkBGyAUrbzfCtdk+NRPTXUOwpMyUKsKN57H6/qA0q8auVywXpfUyWClqX6I/iH8PHmqAUa/KK9YZPWVQew=="],
@@ -512,11 +511,17 @@
 
     "@testing-library/react": ["@testing-library/react@16.3.2", "", { "dependencies": { "@babel/runtime": "^7.12.5" }, "peerDependencies": { "@testing-library/dom": "^10.0.0", "@types/react": "^18.0.0 || ^19.0.0", "@types/react-dom": "^18.0.0 || ^19.0.0", "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" }, "optionalPeers": ["@types/react", "@types/react-dom"] }, "sha512-XU5/SytQM+ykqMnAnvB2umaJNIOsLF3PVv//1Ew4CTcpz0/BRyy/af40qqrt7SjKpDdT1saBMc42CUok5gaw+g=="],
 
-    "@tsc-rs/darwin-arm64": ["@tsc-rs/darwin-arm64@0.2.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-sf8+KeIFuENwGM/rf09g0Yp6ttMxvJXUsM1rvc/h6RhsvFhzmwUwj3fe/YtHm80EoJCQ/TtFUT2CjHJu6Pl1EQ=="],
+    "@tsc-rs/darwin-arm64": ["@tsc-rs/darwin-arm64@0.8.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-1aGCULRzd7KXIFh72Ja1K+35bQ1AeW9P3F3S36MXXhp5EQCezqxeXKkL3kQ3kH+ebfI/wA2gxyus34rllF1keQ=="],
 
-    "@tsc-rs/linux-arm64": ["@tsc-rs/linux-arm64@0.2.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-3j4Res9jkcwt5H5M6MLoNZEvWbx49Pg2rjJcylpRk767wW3Rm4TboQkTJmhWTnjewT9CeTIjKaXn/DU3QRCxPQ=="],
+    "@tsc-rs/darwin-x64": ["@tsc-rs/darwin-x64@0.8.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-FFFoxnJwszgsM/u4XLH2FB0mzqg+TCCvy+NPCL6fYZv3sbJjoekB4w5gw8Esg9/IPjHbV1rBqNlXYnyCiKYkkQ=="],
 
-    "@tsc-rs/linux-x64": ["@tsc-rs/linux-x64@0.2.0", "", { "os": "linux", "cpu": "x64" }, "sha512-gdzYIwgtFANiAdGi8xzDRk9o5gUXGeCEHYLggXmthclYlOJnZv82dAeOLIcrL//p6+K4SAogTKy2fFm8sARGtw=="],
+    "@tsc-rs/linux-arm64": ["@tsc-rs/linux-arm64@0.8.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-mo8qBCCgvMv7jYJrYSbHjc5CBVkzMQiJFOVF6oL4nP7sp/QjywskFZwUduw8Yn1MX83fR1zbJbhAkKtlwRZ3hg=="],
+
+    "@tsc-rs/linux-x64": ["@tsc-rs/linux-x64@0.8.0", "", { "os": "linux", "cpu": "x64" }, "sha512-c1DPPfJ6F8HkScESepl42p4Cph8BcKcd3dBakYLBPyWiKZD8q3bw/kDNoAQoTnO3k8Zkv5FFbI85ot4y6gNQuA=="],
+
+    "@tsc-rs/win32-arm64": ["@tsc-rs/win32-arm64@0.8.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-JNycrZs0LcZ8Rx1+Ik3z9R7YkNIKE2ZQjWKmI6os3EpGrMpfSztFYhbuI0whiZpFfL0AqaVu4o0F1+oR0Z8YDQ=="],
+
+    "@tsc-rs/win32-x64": ["@tsc-rs/win32-x64@0.8.0", "", { "os": "win32", "cpu": "x64" }, "sha512-oWSjfTaOhdZjC8C0gJoa/LdF4TiH729UHKUYm7t2mvdBtPoC85NxvhTIC8ZFjaKs+bvzZ6uMOi8N2EWK2LCV3Q=="],
 
     "@tweenjs/tween.js": ["@tweenjs/tween.js@23.1.3", "", {}, "sha512-vJmvvwFxYuGnF2axRtPYocag6Clbb5YS7kLL+SO/TeVFzHqDIWrNKYtcsPMibjDx9O+bu+psAy9NKfWklassUA=="],
 
@@ -1304,7 +1309,7 @@
 
     "ts-dedent": ["ts-dedent@2.3.0", "", {}, "sha512-JfJeIHke7y2egdGGgRAvpCwYFUsHlM2gPcrVOxFkznt/4uzQ7HFmvE63iFHVLBJNDuyDOQgijDK/tXH/f6Msjg=="],
 
-    "tsc-rs": ["tsc-rs@0.2.0", "", { "optionalDependencies": { "@tsc-rs/darwin-arm64": "0.2.0", "@tsc-rs/linux-arm64": "0.2.0", "@tsc-rs/linux-x64": "0.2.0" }, "bin": { "tsc-rs": "bin/tsc-rs" } }, "sha512-cALwflE/WoaqyD22552kPPVhDe3v4yMZ1X0LsLJFoBz2VrL6RrGE6Uuss7kfNpFpDICtSXYgE+muz5zV25qtVA=="],
+    "tsc-rs": ["tsc-rs@0.8.0", "", { "optionalDependencies": { "@tsc-rs/darwin-arm64": "0.8.0", "@tsc-rs/darwin-x64": "0.8.0", "@tsc-rs/linux-arm64": "0.8.0", "@tsc-rs/linux-x64": "0.8.0", "@tsc-rs/win32-arm64": "0.8.0", "@tsc-rs/win32-x64": "0.8.0" }, "bin": { "tsc-rs": "bin/tsc-rs" } }, "sha512-W8S1FKujMD7PDEWFdC/SmoT8uUgY7VEdUi0rcSbUNux5beVSVMFm0EaW4BkFJklZFgFEbDyNALcQpUEldDCvLQ=="],
 
     "tslib": ["tslib@2.8.1", "", {}, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
 

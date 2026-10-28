@@ -60,7 +60,7 @@ pub fn check_widget(label: &str, files: &BTreeMap<String, Vec<u8>>, checker: Opt
     let mut r = TypeReport::default();
     let Some((name, bin)) = checker else {
         r.note = Some(
-            "no type checker installed: set K2_TSC_RS to a tsc-rs binary (npm tsc-rs@0.2.0, or its GitHub release), or put tsc-rs on PATH; parse and lint checks still ran"
+            "no type checker installed: set K2_TSC_RS to a tsc-rs binary (npm tsc-rs@0.8.0, or its GitHub release), or put tsc-rs on PATH; parse and lint checks still ran"
                 .into(),
         );
         return r;

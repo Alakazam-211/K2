@@ -7,11 +7,13 @@ version in `package.json`. CI (`checks.yml`, `styles-ci.yml`) and the
 `release.sh` pre-flight gate run the same script.
 
 - **TypeScript 7 rules.** tsc-rs matches Microsoft's TS 7 (`tsc` 7.1-dev) output,
-  not TS 5.x. Newer `lib.dom` types can flag code TS 5.9 accepted.
+  not TS 5.x. Newer `lib.dom` types can flag code TS 5.9 accepted. The pin is
+  0.8.0, which ports TypeScript at 2026-10-08 (`typescript@7.1.0-dev.20261008.1`,
+  the version to compare against).
 - **Fallback:** `bun run typecheck:web:tsc` runs the old TS 5.9 `tsc` (the
-  `typescript` package stays installed; editors use it). Use it to compare, or on
-  a platform tsc-rs has no binary for (0.2.0 ships macOS arm64, Linux x64/arm64
-  only; not Intel Mac or Windows).
+  `typescript` package stays installed; editors use it). Use it to compare.
+  0.8.0 ships binaries for macOS arm64 and x64, Linux x64 and arm64, and
+  Windows x64 and arm64.
 - **Mismatches:** if tsc-rs and TS 7 disagree (or tsc-rs crashes), report it
   upstream at https://github.com/pingdotgg/ts-rust/issues with a small repro.
   If it blocks a release, switch `typecheck:web` back to `tsc` in one line.

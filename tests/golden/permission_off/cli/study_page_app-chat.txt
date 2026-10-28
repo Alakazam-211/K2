@@ -71,6 +71,28 @@ Proxy /sew/* (sews_ bearer), the gateway WS (sewtk_ ticket) and, for
 calls, wss://<your origin>/rtc/v1 → K2_BOX_SEW_SIGNAL. Exact Origin + Host
 on every POST and upgrade; __Host- cookie; CSP connect-src 'self'.
 
+CHANNELS (needs Sew 0.5.0+; else 409 sew_feature_missing). Your server
+makes a text channel in your App's own bound Space and puts your users in:
+  const ch = await k2.asApp().chat.createChannel({slug: 'site-7',
+      name: 'Site 7', private: false, members: ['ana', 'ben']})
+  → {spaceId, channelId, slug, name, private, created, added: [username],
+     notAdded: [{username, reason}], skipped: [username]}
+POST /cli/sew/app/channels. slug: 1-80 of a-z 0-9 -, the channel's key in
+your Space. name: 1-100 characters. private: true = only its members see
+it (default false). members: up to 100 of your usernames (not principal
+ids), each with chat as a member (step 4); K2 adds them to the Space
+first. space: a Space id, needed only when your App has several (else 400
+usage). The same slug again is the same channel: created: false, and
+name/private in the answer are its CURRENT values (a repeat never changes
+them). added = listed users in the channel now (new or already).
+notAdded reasons: no_chat or guest (give chat as a member),
+not_provisioned (repeat the same call in a few seconds), not_found (not
+your user). skipped = banned in the Space. Add the cap chat:channels to
+the manifest: the owner approves it once (k2 app approvals; the Sew core
+doesn't cover it; until then 403 cap_not_granted). No requires change: K2
+checks Sew's app_channel_create flag itself. A bad slug or name is 400
+usage. Chat the owner gave counts; no guests-chat grant is needed.
+
 NEVER Sew's mgmt socket, Postgres, keys, TURN secret, /etc/sew or
 Sew-On-Behalf-Of. Agents never join calls (k2 chat for them).
 
@@ -80,7 +102,8 @@ not_provisioned (retry a few seconds after step 4) · grant_required
 no_chat_member · no_chat_grant · no_chat_caps · not_app_granted ·
 chat_off_for_person · shared_person · has_assistants · chat_limit ·
 username_unusable (2–64 a-z 0-9 _ -, not here/channel/everyone/all) ·
-chat_unavailable · rate_limited (60/min per App).
+chat_unavailable · rate_limited (60/min per App) · sew_feature_missing ·
+space_unbound (no Space bound: step 2) · app_mismatch (not your Space).
 
 HOME. The owner's home client (k2 hostchat home client <app>, usually
 Hearth) sees every Space a person is in; k2 hostchat home app <app>

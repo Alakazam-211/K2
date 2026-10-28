@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 34,
+  "catalogVersion": 35,
   "caps": [
     {
       "name": "agents:read",
@@ -164,6 +164,11 @@
       "name": "guests:chat",
       "exposure": ["app"],
       "label": "Give its own guests chat (an owner grant per App, never a guest's)"
+    },
+    {
+      "name": "chat:channels",
+      "exposure": ["app"],
+      "label": "Make chat channels in its own Space and add its users to them"
     }
   ],
   "errors": [
@@ -242,6 +247,9 @@
     {"code": "username_unusable", "doc": "Guest chat: the username is not a chat handle (2-64 of a-z 0-9 _ -, not here, channel, everyone or all)."},
     {"code": "chat_not_app_scoped", "doc": "Guest chat: this server's Sew doesn't keep an App's sessions to its own Spaces yet (app_scoped_sessions), so an App can't give chat; the owner can (k2 app user chat <user> member --app <app>)."},
     {"code": "no_chat_member", "doc": "Chat: this App user has no Sew member yet (give them chat with guests.setChat; it appears within seconds)."},
+    {"code": "sew_feature_missing", "doc": "Chat: this server's Sew doesn't have the feature yet (making channels needs Sew 0.5.0+, flag app_channel_create); the owner upgrades Sew."},
+    {"code": "space_unbound", "doc": "Chat: the Space isn't bound to this App (or the App has none yet); the owner binds it with k2 hostchat app-space bind <app> <space-id>."},
+    {"code": "app_mismatch", "doc": "Chat: the Space belongs to another App; an App makes channels in its own Space only."},
     {"code": "chat_unavailable", "doc": "Sew is not enabled or not reachable on this server, or its chat-pass keys are unavailable."},
     {"code": "app_pass_required", "doc": "Guest rooms: only this App's own pass (its link pass or remote pass) calls this; never a guest's pass, the owner token or a login."},
     {"code": "grant_required", "doc": "Guest rooms: the owner hasn't granted this App guests:rooms (k2 app grant <app> --kind guests-rooms)."},
@@ -23289,6 +23297,166 @@
       ],
       "doc": "Sew member ids → which of this App's users each is; everyone else shows only memberId, kind and isThisAppUser: false.",
       "example": "const {members} = await k2.asApp().chat.whois({memberIds: ['48831765147549712']})"
+    },
+    {
+      "verb": "chat.createChannel",
+      "cap": "chat:channels",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-chat-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/sew/app/channels",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "space": {
+              "type": "string",
+              "description": "The Sew Space id. Absent: the App's own bound Space (name one when it has several).",
+              "default": ""
+            },
+            "slug": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "description": "The channel's slug: a-z 0-9 and -, starting with a letter or digit (e.g. job-1042). The same slug again is the same channel."
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "description": "The channel's name, shown in chat. Used only when the channel is made."
+            },
+            "private": {
+              "type": "boolean",
+              "description": "A private channel: only its members see it. Used only when the channel is made.",
+              "default": false
+            },
+            "members": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Up to 100 of this App's usernames to put in the channel (each needs chat as a member: guests.setChat). K2 adds them to the Space first."
+            }
+          },
+          "required": [
+            "slug",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppChatChannel",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string"
+          },
+          "spaceId": {
+            "type": "string"
+          },
+          "channelId": {
+            "type": "string",
+            "description": "Sew's channel id."
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The channel's current name (a repeat never renames it)."
+          },
+          "private": {
+            "type": "boolean",
+            "description": "Whether it is private (current; a repeat never changes it)."
+          },
+          "created": {
+            "type": "boolean",
+            "description": "false: the channel was there already (same Space and slug)."
+          },
+          "added": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Listed usernames in the channel now (added by this call or already in)."
+          },
+          "notAdded": {
+            "type": "array",
+            "items": {
+              "title": "AppChatChannelNotAdded",
+              "type": "object",
+              "properties": {
+                "username": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "not_found (not this App's user), no_chat or guest (give chat as a member first), not_provisioned (retry in a few seconds), deactivated, not_space_member."
+                }
+              },
+              "required": [
+                "username",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Listed usernames banned in the Space: K2 never adds them again."
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "spaceId",
+          "channelId",
+          "slug",
+          "name",
+          "private",
+          "created",
+          "added",
+          "notAdded",
+          "skipped"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "cap_not_granted",
+        "usage",
+        "sew_feature_missing",
+        "space_unbound",
+        "app_mismatch",
+        "not_found",
+        "chat_unavailable",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Make a text channel in this App's own Sew Space (or find it: the same slug answers created: false) and put listed App users in it, adding them to the Space first. Needs Sew 0.5.0+.",
+      "example": "const ch = await k2.asApp().chat.createChannel({slug: 'job-1042', name: 'Job 1042', private: true, members: ['dana', 'eli']})"
     },
     {
       "verb": "project.list",

@@ -72,6 +72,7 @@ fn status_line(code: u16) -> &'static str {
         405 => "405 Method Not Allowed",
         409 => "409 Conflict",
         429 => "429 Too Many Requests",
+        503 => "503 Service Unavailable",
         _ => "500 Internal Server Error",
     }
 }

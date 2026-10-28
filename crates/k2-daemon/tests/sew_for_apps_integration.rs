@@ -340,3 +340,171 @@ async fn app_granted_chat_waits_for_app_scoped_sessions() {
     assert!(env.sew.member(&pext(&ok.principal_id)).is_some());
     env.sew.assert_clean();
 }
+
+// ── A9: chat.createChannel (Sew 0.5.0, flag app_channel_create) ─────
+
+const SPACE: &str = "48831765147549697";
+
+/// The App (a fresh service id) and its remote pass. The process-wide test
+/// DB, not a scoped one: the handler's blocking steps (the audit row) run
+/// on other threads.
+struct ChannelFx {
+    svc: String,
+    pass: String,
+}
+
+fn channel_fx() -> ChannelFx {
+    let svc = uuid::Uuid::new_v4().to_string();
+    let room = uuid::Uuid::new_v4().to_string();
+    let pass = skin::link::mint_remote_pass(&svc, "jobs", &["chat:channels".to_string()], &[room], 3600).unwrap().raw;
+    ChannelFx { svc, pass }
+}
+
+async fn create_channel(raw: &str, body: serde_json::Value) -> (u16, serde_json::Value) {
+    let pass = k2_daemon::apps::gateway::resolve_pass(raw);
+    let r = k2_daemon::chat_channel_routes::handle(pass, None, true, body.to_string().into_bytes()).await;
+    let n: u16 = r.status.split_whitespace().next().unwrap().parse().unwrap();
+    (n, serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("not JSON ({e}): {}", r.body)))
+}
+
+fn err_code(v: &serde_json::Value) -> String {
+    v["error"]["code"].as_str().unwrap_or_else(|| panic!("no error.code: {v}")).to_string()
+}
+
+fn channel_posts(env: &Env) -> Vec<String> {
+    env.sew
+        .posts()
+        .into_iter()
+        .filter(|c| c.path == "/mgmt/v1/channels/create" || (c.path == "/mgmt/v1/spaces/members/add" && c.actor.as_deref().is_some_and(|a| a.starts_with("app"))))
+        .map(|c| c.path)
+        .collect()
+}
+
+/// A9: refused until Sew reports `app_channel_create`; then the listed
+/// users not yet in the App's Space are added to it FIRST, the channel is
+/// made with the users now in it, and Sew's `not_added` and `skipped`
+/// come back as usernames. A repeat answers `created: false` with the
+/// channel's current name and visibility.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_app_makes_a_channel_in_its_own_space() {
+    use serde_json::json;
+    let env = setup().await;
+    let f = channel_fx();
+    let mut ids = std::collections::HashMap::new();
+    for u in ["dana", "eli", "fay", "gus"] {
+        ids.insert(u, skin::add_principal_for_app(u, None, &f.svc, None, "test").unwrap().id);
+    }
+    // dana, eli and gus have chat (provisioned); fay doesn't.
+    for u in ["dana", "eli", "gus"] {
+        chat(&ids[u]);
+    }
+    drain(&env).await;
+    env.sew.add_app_space(SPACE, &f.svc);
+    env.sew.ban_in_space(SPACE, &pext(&ids["gus"]));
+    hook::app_space_bind(&f.svc, SPACE, "owner-token").unwrap();
+    // hal gets chat now: his provision is still queued when the App calls.
+    ids.insert("hal", skin::add_principal_for_app("hal", None, &f.svc, None, "test").unwrap().id);
+    chat(&ids["hal"]);
+    let ask = json!({"slug": "job-1042", "name": "Job 1042", "private": true, "members": ["dana", "eli", "fay", "gus", "hal", "nobody"]});
+
+    // An older Sew (no flag): refused, and Sew is never asked.
+    worker::reconcile_once().await.expect("sweep without the flag");
+    let (st, v) = create_channel(&f.pass, ask.clone()).await;
+    assert_eq!((st, err_code(&v).as_str()), (409, "sew_feature_missing"), "{v}");
+    assert!(channel_posts(&env).is_empty(), "{}", env.sew.log());
+
+    env.sew.set_features(&["app_channel_create"]);
+    worker::reconcile_once().await.expect("sweep with the flag");
+    let (st, v) = create_channel(&f.pass, ask.clone()).await;
+    assert_eq!(st, 200, "{v}\n{}", env.sew.log());
+    assert_eq!((v["ok"].clone(), v["app"].clone(), v["spaceId"].clone()), (json!(true), json!(f.svc), json!(SPACE)));
+    assert_eq!(
+        (v["slug"].clone(), v["name"].clone(), v["private"].clone(), v["created"].clone()),
+        (json!("job-1042"), json!("Job 1042"), json!(true), json!(true))
+    );
+    assert!(v["channelId"].as_str().is_some_and(|c| !c.is_empty()), "{v}");
+    assert_eq!(v["added"], json!(["dana", "eli"]), "{v}");
+    assert_eq!(v["skipped"], json!(["gus"]), "banned in the Space: {v}");
+    assert_eq!(
+        v["notAdded"],
+        json!([{"username": "fay", "reason": "no_chat"}, {"username": "nobody", "reason": "not_found"}, {"username": "hal", "reason": "not_provisioned"}]),
+        "{v}"
+    );
+    // The Space add came first, then the create with the users in the Space.
+    assert_eq!(channel_posts(&env), ["/mgmt/v1/spaces/members/add", "/mgmt/v1/channels/create"], "{}", env.sew.log());
+    let calls = env.sew.posts();
+    let add = calls.iter().find(|c| c.path == "/mgmt/v1/spaces/members/add" && c.actor.as_deref().is_some_and(|a| a.starts_with("app"))).unwrap();
+    assert_eq!(add.body["app_id"], json!(f.svc));
+    assert_eq!(add.body["external_ids"], json!([pext(&ids["dana"]), pext(&ids["eli"]), pext(&ids["gus"]), pext(&ids["hal"])]));
+    assert_eq!(add.actor.as_deref(), Some(format!("app-remote:{}", f.svc).as_str()), "Sew-Actor = the App");
+    let create = calls.iter().find(|c| c.path == "/mgmt/v1/channels/create").unwrap();
+    assert_eq!(create.body["members"], json!([pext(&ids["dana"]), pext(&ids["eli"])]), "only the users in the Space");
+    let ch = env.sew.channel(SPACE, "job-1042").expect("made");
+    assert!(ch.private);
+    assert_eq!(ch.members.len(), 2);
+    assert_eq!(skin::app_channels::audit_rows(&f.svc, 5).unwrap().len(), 1, "audited");
+
+    // A repeat (another name and visibility): created false, the current
+    // name and visibility; nobody is sent to the Space again; a member a
+    // moderator removed by hand comes back not_space_member.
+    env.sew.remove_from_space(SPACE, &pext(&ids["eli"]));
+    let before = channel_posts(&env).len();
+    let (st, v) = create_channel(&f.pass, json!({"slug": "job-1042", "name": "Renamed", "private": false, "members": ["dana", "eli", "gus"]})).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!((v["created"].clone(), v["name"].clone(), v["private"].clone()), (json!(false), json!("Job 1042"), json!(true)), "{v}");
+    assert_eq!(v["added"], json!(["dana"]), "already in: {v}");
+    assert_eq!(v["skipped"], json!(["gus"]), "never sent again: {v}");
+    assert_eq!(v["notAdded"], json!([{"username": "eli", "reason": "not_space_member"}]), "{v}");
+    assert_eq!(channel_posts(&env)[before..], ["/mgmt/v1/channels/create"], "no Space add: everyone listed is in, out or banned");
+    assert_eq!(env.sew.channel(SPACE, "job-1042").unwrap().name, "Job 1042");
+    env.sew.assert_clean();
+}
+
+/// A9: Sew's 409s map to K2 codes; another App's Space (K2's binding) and
+/// a guest's pass never reach Sew.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn channel_create_refusals() {
+    use serde_json::json;
+    let env = setup().await;
+    let f = channel_fx();
+    env.sew.set_features(&["app_channel_create"]);
+    worker::reconcile_once().await.expect("sweep");
+    let (unbound, theirs, mine_k2_theirs_sew) = ("48831765147549701", "48831765147549702", "48831765147549703");
+    let other = uuid::Uuid::new_v4().to_string();
+    // K2 binds two to this App; Sew has one unbound and one on another App.
+    env.sew.add_space(unbound);
+    env.sew.add_app_space(mine_k2_theirs_sew, "other-app");
+    env.sew.add_app_space(theirs, &other);
+    hook::app_space_bind(&f.svc, unbound, "owner-token").unwrap();
+    hook::app_space_bind(&f.svc, mine_k2_theirs_sew, "owner-token").unwrap();
+    hook::app_space_bind(&other, theirs, "owner-token").unwrap();
+
+    let ask = |space: &str| json!({"space": space, "slug": "crew", "name": "Crew"});
+    let (st, v) = create_channel(&f.pass, ask(unbound)).await;
+    assert_eq!((st, err_code(&v).as_str()), (409, "space_unbound"), "{v}");
+    let (st, v) = create_channel(&f.pass, ask(mine_k2_theirs_sew)).await;
+    assert_eq!((st, err_code(&v).as_str()), (409, "app_mismatch"), "{v}");
+    let n = channel_posts(&env).len();
+    assert_eq!(n, 2, "both asked Sew: {}", env.sew.log());
+
+    // Another App's Space (K2 knows): refused before Sew.
+    let (st, v) = create_channel(&f.pass, ask(theirs)).await;
+    assert_eq!((st, err_code(&v).as_str()), (409, "app_mismatch"), "{v}");
+    assert!(!v.to_string().contains(&other), "never names the other App: {v}");
+    // Two Spaces of its own: name one.
+    let (st, v) = create_channel(&f.pass, json!({"slug": "crew", "name": "Crew"})).await;
+    assert_eq!((st, err_code(&v).as_str()), (400, "usage"), "{v}");
+    // A guest's own pass, even of this App.
+    skin::add_principal_for_app("ivy", None, &f.svc, None, "test").unwrap();
+    skin::set_principal_password("ivy", Some("s3cret-horse-battery")).unwrap();
+    let guest = skin::create_app_session_token("ivy", &f.svc).unwrap().raw;
+    let (st, v) = create_channel(&guest, ask(unbound)).await;
+    assert_eq!((st, err_code(&v).as_str()), (403, "app_pass_required"), "{v}");
+    // Another App's own pass, on this App's Space.
+    let theirs_pass =
+        skin::link::mint_remote_pass(&other, "other", &["chat:channels".to_string()], &[uuid::Uuid::new_v4().to_string()], 3600).unwrap().raw;
+    let (st, v) = create_channel(&theirs_pass, ask(unbound)).await;
+    assert_eq!((st, err_code(&v).as_str()), (409, "app_mismatch"), "{v}");
+    assert_eq!(channel_posts(&env).len(), n, "none of these reached Sew: {}", env.sew.log());
+    env.sew.assert_clean();
+}

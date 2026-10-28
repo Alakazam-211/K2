@@ -120,6 +120,7 @@ export const K2_CAPS = {
   'voice:join': { label: 'Join voice channels and calls', exposure: ['app'] },
   'voice:video': { label: 'Turn on camera and share the screen in a call (with voice:join)', exposure: ['app'] },
   'guests:chat': { label: "Give its own guests chat (an owner grant per App, never a guest's)", exposure: ['app'] },
+  'chat:channels': { label: 'Make chat channels in its own Space and add its users to them', exposure: ['app'] },
 } as const satisfies Record<string, K2CapInfo>
 
 export type K2Cap = keyof typeof K2_CAPS

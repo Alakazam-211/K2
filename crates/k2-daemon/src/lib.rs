@@ -373,6 +373,7 @@ pub mod app_pairing;
 pub mod email_notify;
 // agent-app-users (0.46.4): invites, owner reset links, App invite settings.
 pub mod app_user_invites;
+pub mod chat_channel_routes;
 pub mod chat_map_routes;
 pub mod guest_chat_routes;
 pub mod guest_rooms_routes;

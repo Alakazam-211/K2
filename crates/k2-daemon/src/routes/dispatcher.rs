@@ -11006,6 +11006,25 @@ async fn handle_one_request(
                         crate::chat_map_routes::app_pass_required()
                     }
                 }
+                // Sew for Apps A9 (0.46.6): chat.createChannel, an App's own
+                // pass with chat:channels, its own Space only (floor NoLogin;
+                // the handler refuses the rest). Two mgmt calls: async.
+                crate::chat_channel_routes::ROUTE => {
+                    let body = if is_post {
+                        super::http::read_post_body(&mut *stream, &mut buf).await
+                    } else {
+                        let _ = stream.read(&mut buf).await;
+                        Vec::new()
+                    };
+                    let presented = super::http::extract_token(&query);
+                    if presented.is_some_and(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t)) {
+                        let pass = presented.and_then(crate::apps::gateway::resolve_pass);
+                        let link = crate::guest_rooms_routes::OnLink::current();
+                        crate::chat_channel_routes::handle(pass, link, is_post, body).await
+                    } else {
+                        crate::chat_channel_routes::app_pass_required()
+                    }
+                }
                 crate::guest_chat_routes::ROUTE => {
                     let body = if is_post {
                         super::http::read_post_body(&mut *stream, &mut buf).await

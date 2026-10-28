@@ -1360,6 +1360,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/app-spaces/unbind", Admin),
     // Sew for Apps A6 (0.46.6): chat.member / chat.whois, an App's own
     // pass with chat:read (the handler refuses the rest).
+    // Sew for Apps A9 (0.46.6): chat.createChannel, an App's own pass
+    // with chat:channels in its own Space (the handler refuses the rest).
+    post("/cli/sew/app/channels", NoLogin),
     get("/cli/sew/app/member", NoLogin),
     post("/cli/sew/app/whois", NoLogin),
     get("/cli/sew/approvals", Admin),

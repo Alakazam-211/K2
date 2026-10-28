@@ -92,6 +92,11 @@ pub mod guest_rooms;
 /// chat under the owner's grant.
 #[path = "skin_app_chat.rs"]
 pub mod app_chat;
+/// Sew for Apps A9 (0.46.6): `chat.createChannel`, an App makes a text
+/// channel in its own bound Sew Space (Sew 0.5.0, flag
+/// `app_channel_create`).
+#[path = "skin_app_channels.rs"]
+pub mod app_channels;
 #[path = "skin_members.rs"]
 pub mod members;
 /// Person wallets (0.46.3): an App user's live access, read-only.
@@ -274,10 +279,20 @@ pub fn is_chat_cap(cap: &str) -> bool {
     CHAT_CAPS.contains(&cap.trim())
 }
 
+/// Sew for Apps A9 (0.46.6): make text channels in the App's own bound
+/// Sew Space and add its users to them (`chat.createChannel`). The App's
+/// own cap, never a guest's (no role holds it; it is not one of
+/// [`CHAT_CAPS`], so no person's chat pass ever carries it). In no App
+/// core (`app_core_of_cap` answers `None`; the Sew core pre-approves only
+/// the chat caps), so a deploy that adds it is held for the owner once:
+/// a channel can be private and pulls people into it, which `chat:post`
+/// never could.
+pub const CAP_CHAT_CHANNELS: &str = "chat:channels";
+
 /// Caps an App's own pass may carry that no guest role ever holds (they
 /// aren't in the accepted role caps): the link's ceiling adds them
 /// ([`link::link_caps`]).
-pub const APP_ONLY_CAPS: &[&str] = &[CAP_PUSH_SEND, CAP_EMAIL_SEND];
+pub const APP_ONLY_CAPS: &[&str] = &[CAP_PUSH_SEND, CAP_EMAIL_SEND, CAP_CHAT_CHANNELS];
 /// Caps only a person may grant ([`person_only_cap_in`]).
 pub const PERSON_ONLY_CAPS: &[&str] = &[CAP_FILES_AGENT_CONFIG, CAP_FILES_DOWNLOAD];
 

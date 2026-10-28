@@ -634,6 +634,40 @@ pub fn after_held(conn: &Connection, id: &str, why: &str, now: i64) -> Result<()
     settle_add(conn, &space, &ext, HELD, row.grant_rev.as_deref(), Some(why), now)
 }
 
+// ── direct adds (Sew A9: `chat.createChannel`) ───────────────────────
+
+/// The App `space_id` is bound to here (`None`: not bound).
+pub fn bound_app(conn: &Connection, space_id: &str) -> Result<Option<String>, String> {
+    conn.query_row("SELECT app_id FROM tool_app_spaces WHERE space_id = ?1", params![space_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| format!("app spaces read: {e}"))
+}
+
+/// What the ledger holds for one person in one Space: `(state, banned)`.
+pub fn ledger_state(conn: &Connection, space_id: &str, ext: &str) -> Result<Option<(String, bool)>, String> {
+    conn.query_row(
+        "SELECT state, why FROM tool_app_space_members WHERE space_id = ?1 AND external_id = ?2",
+        params![space_id, ext],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+    )
+    .optional()
+    .map(|o| o.map(|(state, why)| { let banned = state == HELD && is_banned(why.as_deref()); (state, banned) }))
+    .map_err(|e| format!("app space ledger: {e}"))
+}
+
+/// A wanted person K2 added to their App's Space directly (a channel
+/// create adds its members to the Space first, outside the outbox). Sew
+/// answered them `added`/`already` (`in_space`) or `skipped` (banned: held
+/// for good, as the worker would). A queued outbox add for them later
+/// answers `already` (or `skipped`) and leaves this row as it is.
+pub fn note_direct_add(conn: &Connection, w: &Wanted, in_space: bool, now: i64) -> Result<(), String> {
+    if in_space {
+        set_ledger(conn, &w.space_id, &w.ext.to_string(), &w.app_id, ADDED, Some(&w.rev), None, now)
+    } else {
+        set_ledger(conn, &w.space_id, &w.ext.to_string(), &w.app_id, HELD, Some(&w.rev), Some(BANNED_WHY), now)
+    }
+}
+
 #[cfg(test)]
 #[path = "app_space_tests.rs"]
 mod tests;

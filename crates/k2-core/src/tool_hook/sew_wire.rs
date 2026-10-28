@@ -652,6 +652,68 @@ pub struct SpaceMemberRemoveResponse {
     pub removed: bool,
 }
 
+// ── channels over mgmt (`sew_proto::mgmt::channels`, Sew A9, 0.5.0) ──
+
+/// `POST`: a text channel in an App-bound Space, made as the Space's owner.
+/// Idempotent on `(space_id, slug)`. Gated on the feature flag
+/// [`super::features::APP_CHANNEL_CREATE`].
+pub const MGMT_CHANNELS_CREATE: &str = "/mgmt/v1/channels/create";
+/// Most members one channel create adds.
+pub const CHANNEL_MEMBERS_MAX: usize = 100;
+/// `MgmtChannelNotAddedReason::NotSpaceMember`: add them to the Space first.
+pub const CHANNEL_NOT_SPACE_MEMBER: &str = "not_space_member";
+
+/// `MgmtChannelCreateRequest`. `members` are member ids or external ids
+/// (K2 sends external ids), each already in the Space.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelCreateRequest {
+    pub space_id: String,
+    pub app_id: String,
+    pub slug: String,
+    pub name: String,
+    pub private: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<String>,
+}
+
+/// `MgmtChannelNotAdded` (`member` as the request named it; `reason` read
+/// as a string so a newer reason still parses).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelNotAdded {
+    pub member: String,
+    pub reason: String,
+}
+
+/// `MgmtChannelCreateResponse`, read leniently (every list defaults to
+/// empty). `name` and `private` are the channel's CURRENT values (a repeat
+/// never changes them); `skipped` = banned member ids (HC2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelCreateResponse {
+    pub channel_id: String,
+    pub space_id: String,
+    pub slug: String,
+    pub name: String,
+    pub private: bool,
+    pub created: bool,
+    #[serde(default)]
+    pub added: Vec<SpaceMemberRef>,
+    #[serde(default)]
+    pub already: Vec<SpaceMemberRef>,
+    #[serde(default)]
+    pub skipped: Vec<String>,
+    #[serde(default)]
+    pub not_added: Vec<ChannelNotAdded>,
+}
+
+/// A Sew channel slug: `[a-z0-9][a-z0-9-]{0,79}` (`sew_proto::addr::Slug`).
+pub fn is_channel_slug(s: &str) -> bool {
+    let b = s.as_bytes();
+    (1..=80).contains(&b.len())
+        && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
+        && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+}
+
 // ── errors (`sew_proto::error`) ──────────────────────────────────────
 
 /// `{"ok": false, "error": {code, hint, details}}`.

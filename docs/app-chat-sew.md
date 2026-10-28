@@ -105,6 +105,16 @@ the name and picture hash K2 gave Sew). Anyone else comes back as only
 `{memberId, kind, isThisAppUser: false}`; a deleted person is `deleted: true`.
 Sew's Space objects carry `app_id` and `app_display_name`.
 
+**Make a channel.** `chat.createChannel({slug, name, private?, members?, space?})`
+(needs Sew 0.5.0+, flag `app_channel_create`; your manifest asks for the App-only cap
+`chat:channels`, which the owner approves once) makes a text channel in your App's
+own bound Space (`space` only when it has several). `members` are your usernames,
+each with chat as a member; K2 adds them to the Space first, then makes the channel.
+The same slug again is the same channel: `created: false`, and its name and
+visibility stay what they were. The answer lists `added`, `notAdded` (`not_found`,
+`no_chat`, `guest`, Sew's `not_provisioned`, `deactivated`, `not_space_member`) and
+`skipped` (banned in the Space; K2 never adds them again).
+
 **Take chat away.** `guests.setChat({username, scope: 'none'})` (a grant your App
 gave), or the owner's `k2 app user chat <username> none`. The Sew member is
 deactivated (history stays); giving chat again brings back the same member id.
@@ -137,7 +147,7 @@ deactivated (history stays); giving chat again brings back the same member id.
 | `chat_not_app_scoped` (409) | Sew doesn't have `app_scoped_sessions` yet | the owner gives chat (step 4) |
 | `grant_required` (403) | no `k2 app grant <app> --kind guests-chat` | ask the owner |
 | `app_pass_required` (403) | not your App's own pass | use `k2.asApp()` |
-| `cap_not_granted` (403) | your pass lacks `chat:read` (identity map) | add it to the manifest; the owner approves |
+| `cap_not_granted` (403) | your pass lacks `chat:read` (identity map) or `chat:channels` | add it to the manifest; the owner approves |
 | `not_found` (404) | not your App's user (or nobody) | — |
 | `no_chat_member` (404) | your user has no Sew member yet | give chat, then retry |
 | `no_chat_grant` (403) | the person has no chat | step 4 |
@@ -147,6 +157,9 @@ deactivated (history stays); giving chat again brings back the same member id.
 | `shared_person` / `has_assistants` (409) | removing would strand the person | the owner decides |
 | `chat_limit` (409) | your ceiling is full (`maxMembers`) | the owner raises `--max` |
 | `username_unusable` (422) | the username can't be a chat handle | rename the user |
+| `sew_feature_missing` (409) | this Sew can't make channels (needs 0.5.0+) | the owner upgrades Sew |
+| `space_unbound` (409) | the Space isn't bound to your App (or you have none) | step 2 |
+| `app_mismatch` (409) | the Space belongs to another App | use your own Space |
 | `chat_unavailable` (409/503) | Sew is off or not reachable | `k2 hostchat status` |
 | `rate_limited` (429) | 60 calls a minute per App | wait `retryAfterMs` |
 

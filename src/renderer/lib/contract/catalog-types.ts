@@ -160,6 +160,10 @@ export const CATALOG_ERROR_CODES = [
   'username_unusable',
   'chat_not_app_scoped',
   'no_chat_member',
+  // Sew for Apps A9 (0.46.6): chat.createChannel.
+  'sew_feature_missing',
+  'space_unbound',
+  'app_mismatch',
   'chat_unavailable',
   // RS-A15 guest rooms (App route + Garden door).
   'app_pass_required',

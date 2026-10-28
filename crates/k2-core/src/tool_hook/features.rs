@@ -10,6 +10,7 @@
 //! | [`HOME_CLIENT`] | the install's home client and an App's `hidden_from_home` ("App-only") are sent |
 //! | [`APP_ORIGIN`] | an App's `wss://` signalling origin is sent (voice for custom Apps needs it) |
 //! | [`K2_MANAGED_AVATAR`] | K2's picture is pushed with `force` (it replaces one the member set) |
+//! | [`APP_CHANNEL_CREATE`] | `POST /mgmt/v1/channels/create` (Sew 0.5.0, A9): an App makes text channels in its own Space (`chat.createChannel`); without it the verb is refused `sew_feature_missing` |
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -17,6 +18,7 @@ pub const APP_SCOPED_SESSIONS: &str = "app_scoped_sessions";
 pub const HOME_CLIENT: &str = "home_client";
 pub const APP_ORIGIN: &str = "app_origin";
 pub const K2_MANAGED_AVATAR: &str = "k2_managed_avatar";
+pub const APP_CHANNEL_CREATE: &str = "app_channel_create";
 
 /// Idempotent DDL, called from `skin::open_db` beside `tool_outbox`.
 pub fn ensure_schema(conn: &Connection) -> Result<(), String> {

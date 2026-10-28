@@ -35,6 +35,14 @@
 //!   `not_added: not_provisioned`, guests → `guest`, deactivated →
 //!   `deactivated`, banned → `skipped` member ids), `spaces/members/remove`.
 //!   Spaces exist only after [`FakeSew::add_space`]; unknown → 404.
+//! - A9 (Sew 0.5.0, flag `app_channel_create`): `channels/create`
+//!   (`app_id` must name the Space's App, else 409 `conflict` reason
+//!   `app_mismatch`; an unbound Space → 409 `conflict` reason
+//!   `space_unbound`; unknown → 404). Idempotent on (space, slug): a repeat
+//!   answers `created: false` with the CURRENT name and visibility and adds
+//!   listed members it lacks. Members: unknown → `not_provisioned`,
+//!   deactivated, guest, outside the Space → `not_space_member`, banned →
+//!   `skipped` member ids; the Space's owner is never in `added`.
 //! - Unknown paths → 404 and recorded in `bad_paths`.
 //!
 //! S30 K15 (`k2 chat`'s real backend, Sew 0.3.0 act-as): a small `/api/v1`
@@ -61,8 +69,8 @@ use tokio::task::JoinHandle;
 
 use k2_core::tool_hook::sew_wire::{
     self, AgentKind, DeprovisionRequest, ExternalId, MemberKind, OwnerSetRequest, Patch,
-    ProvisionRequest, RevokeSessionsRequest, SpaceBindRequest, SpaceMemberRemoveRequest,
-    SpaceMembersAddRequest, UpdatePrincipalRequest,
+    ChannelCreateRequest, ProvisionRequest, RevokeSessionsRequest, SpaceBindRequest,
+    SpaceMemberRemoveRequest, SpaceMembersAddRequest, UpdatePrincipalRequest,
 };
 
 /// A Space (SW13 view).
@@ -71,6 +79,18 @@ pub struct Space {
     pub app_id: Option<String>,
     pub members: std::collections::BTreeSet<String>,
     pub banned: std::collections::BTreeSet<String>,
+    /// A9: channels by slug.
+    pub channels: BTreeMap<String, Channel>,
+}
+
+/// A9: a text channel made over mgmt.
+#[derive(Debug, Clone, Default)]
+pub struct Channel {
+    pub id: u64,
+    pub name: String,
+    pub private: bool,
+    /// External ids.
+    pub members: std::collections::BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -337,6 +357,21 @@ impl FakeSew {
 
     pub fn space(&self, space_id: &str) -> Option<Space> {
         self.with(|s| s.spaces.get(space_id).cloned())
+    }
+
+    /// A moderator removed `ext` from a Space by hand (K2's ledger still
+    /// says it is in).
+    pub fn remove_from_space(&self, space_id: &str, ext: &str) {
+        self.with(|s| {
+            if let Some(sp) = s.spaces.get_mut(space_id) {
+                sp.members.remove(ext);
+            }
+        });
+    }
+
+    /// A9: a channel made in a Space.
+    pub fn channel(&self, space_id: &str, slug: &str) -> Option<Channel> {
+        self.with(|s| s.spaces.get(space_id).and_then(|sp| sp.channels.get(slug).cloned()))
     }
 
     /// A3: the picture Sew holds for `ext` (sha256 hex, length).
@@ -669,6 +704,7 @@ fn handle(
         sew_wire::MGMT_SPACES_BIND => space_bind(s, body),
         sew_wire::MGMT_SPACE_MEMBERS_ADD => space_members_add(s, body),
         sew_wire::MGMT_SPACE_MEMBERS_REMOVE => space_member_remove(s, body),
+        sew_wire::MGMT_CHANNELS_CREATE => channel_create(s, body),
         "/mgmt/v1/principals/avatar" => avatar_set(s, query, raw),
         "/mgmt/v1/principals/avatar/clear" => avatar_clear(s, body),
         "/mgmt/v1/home-client" => home_client(s, body),
@@ -1118,6 +1154,77 @@ fn space_members_add(s: &mut State, body: &str) -> (u16, String) {
         }
     }
     (200, json!({"added": added, "already": already, "skipped": skipped, "not_added": not_added}).to_string())
+}
+
+fn channel_create(s: &mut State, body: &str) -> (u16, String) {
+    let req: ChannelCreateRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "channels/create", e, body),
+    };
+    if !s.features.iter().any(|f| f == "app_channel_create") {
+        // A Sew without A9 doesn't have the route at all.
+        s.bad_paths.push("POST /mgmt/v1/channels/create (no app_channel_create flag)".into());
+        return err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}));
+    }
+    if !sew_wire::is_app_id(&req.app_id) || !sew_wire::is_channel_slug(&req.slug) || req.name.is_empty() || req.members.len() > 100 {
+        return bad_body(s, "channels/create", "app_id, slug, name or members", body);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    if !req.members.iter().all(|m| seen.insert(m.clone())) {
+        return bad_body(s, "channels/create", "a member listed twice", body);
+    }
+    let members = s.members.clone();
+    s.next_id += 1;
+    let fresh_id = 900_000 + s.next_id;
+    let Some(sp) = s.spaces.get_mut(&req.space_id) else {
+        return err(404, "not_found", "no such space", json!({}));
+    };
+    match &sp.app_id {
+        None => return err(409, "conflict", "the Space is bound to no App", json!({"reason": "space_unbound", "field": "space_id"})),
+        Some(a) if *a != req.app_id => {
+            return err(409, "conflict", "app_id does not name the Space's App", json!({"reason": "app_mismatch", "field": "app_id"}))
+        }
+        _ => {}
+    }
+    let created = !sp.channels.contains_key(&req.slug);
+    let space_members = sp.members.clone();
+    let banned = sp.banned.clone();
+    let ch = sp.channels.entry(req.slug.clone()).or_insert_with(|| Channel {
+        id: fresh_id,
+        name: req.name.clone(),
+        private: req.private,
+        members: Default::default(),
+    });
+    let (mut added, mut already, mut skipped, mut not_added) = (vec![], vec![], vec![], vec![]);
+    for ext in &req.members {
+        let Some(m) = members.get(ext) else {
+            not_added.push(json!({"member": ext, "reason": "not_provisioned"}));
+            continue;
+        };
+        let r = json!({"external_id": ext, "member_id": m.member_id.to_string()});
+        if m.deactivated {
+            not_added.push(json!({"member": ext, "reason": "deactivated"}));
+        } else if banned.contains(ext) {
+            skipped.push(m.member_id.to_string());
+        } else if m.guest {
+            not_added.push(json!({"member": ext, "reason": "guest"}));
+        } else if !space_members.contains(ext) {
+            not_added.push(json!({"member": ext, "reason": "not_space_member"}));
+        } else if ch.members.insert(ext.clone()) {
+            added.push(r);
+        } else {
+            already.push(r);
+        }
+    }
+    (
+        200,
+        json!({
+            "channel_id": ch.id.to_string(), "space_id": req.space_id, "slug": req.slug, "name": ch.name,
+            "private": ch.private, "created": created, "added": added, "already": already,
+            "skipped": skipped, "not_added": not_added,
+        })
+        .to_string(),
+    )
 }
 
 fn space_member_remove(s: &mut State, body: &str) -> (u16, String) {

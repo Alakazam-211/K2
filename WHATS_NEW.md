@@ -73,6 +73,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Apps
 - **`k2 app sdk add <app-folder>` puts K2's server SDK in your App, so `import { fromEnv } from '@k2/server'` works after `npm install`; add `--sew` for Sew's chat, voice and video packages (Sew 0.5.0 or later).**
+- **Apps can make chat channels in their own Space.** An App's server can now make a text channel, public or private, in the App's own chat Space and put its users in it (`chat.createChannel`, for example one channel per job). Asking again for the same channel finds the one already there. The App can't touch another App's Space, its guests can't do this, and the App asks for it once in its manifest for you to approve. Needs Sew 0.5.0 or newer on the server.
 
 ### Fixes
 - **A stuck window recovers on macOS and Linux.** When a K2 window stopped responding, K2's recovery reloaded it at the Windows address, which goes nowhere on a Mac or Linux, so the window stayed blank. It now reloads the address each system really uses.

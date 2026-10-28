@@ -367,6 +367,8 @@ describe('TUWA10: one cap table', () => {
       'voice:video': 'Turn on camera and share the screen in a call (with voice:join)',
       // An owner grant to the App itself, never a role's or a pass's cap.
       'guests:chat': "Give its own guests chat (an owner grant per App, never a guest's)",
+      // 0.46.6 Sew for Apps A9 (catalog v35): the App's own cap, held for the owner once.
+      'chat:channels': 'Make chat channels in its own Space and add its users to them',
     })
   })
 

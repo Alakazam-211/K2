@@ -1,6 +1,6 @@
 {
   "generatedBy": "contract-gen",
-  "catalogVersion": 34,
+  "catalogVersion": 35,
   "verbs": [
     {"cap":"activity:read","feature":"app-api-v1","phone":"door","verb":"activity.snapshot"},
     {"cap":"agents:read","feature":"zen-v1","phone":"later","verb":"agents.list"},

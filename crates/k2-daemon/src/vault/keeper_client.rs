@@ -38,6 +38,17 @@ impl SudoHelper {
 
 impl KeeperTransport for SudoHelper {
     fn call(&self, args: &[&str]) -> Result<Vec<u8>, VaultError> {
+        // The installed helper holds the box's real key. A test daemon
+        // never gets here (`vault::select_key_store` gives a test build
+        // the file key); if one ever does, stop it at once, by name,
+        // instead of a `keeper_error` deep inside a vault route.
+        assert!(
+            !k2_core::TEST_BUILD,
+            "test daemon reached the installed root helper ({} {}): a test build keeps the vault key in a file \
+             under its own home (vault::select_key_store)",
+            self.path.display(),
+            args.join(" ")
+        );
         let out = Command::new(SUDO)
             .arg("-n")
             .arg(&self.path)
@@ -57,5 +68,20 @@ impl KeeperTransport for SudoHelper {
             ));
         }
         Ok(out.stdout)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The belt behind `select_key_store`: whatever path leads a test
+    /// build to the installed helper, the first call fails by name (and
+    /// before `sudo` runs).
+    #[test]
+    #[should_panic(expected = "test daemon reached the installed root helper")]
+    fn a_test_build_never_calls_the_installed_helper() {
+        let h = SudoHelper { path: PathBuf::from(HELPER_PATHS[0]) };
+        let _ = h.call(&["keep", "status"]);
     }
 }

@@ -566,6 +566,14 @@ mod path_enrichment_tests {
     }
 }
 
+/// True in a test build: `cfg(test)` or k2-core's `test-util` feature,
+/// which only dev-dependencies enable (so `cargo test` turns it on for
+/// every target it builds, the test `k2-daemon` binary included) and a
+/// release build never does. Code that must never reach a box-wide
+/// resource from a test (the vault's root-helper key, the OS Trash) keys on
+/// this, not on an env var a release build could be handed.
+pub const TEST_BUILD: bool = cfg!(any(test, feature = "test-util"));
+
 // K2 test rules (2026-10-06): tests panic when they can reach the
 // production daemon (inherited session env, or the real home's port/token).
 #[cfg(any(test, feature = "test-util"))]

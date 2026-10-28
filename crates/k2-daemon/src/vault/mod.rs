@@ -8,7 +8,8 @@
 //!   keeper when it answers protocol ≥ 4, else systemd encrypted
 //!   credentials when the unit provides them (Q24), else the file key.
 //!   A better store showing up later is adopted in place (re-wrap, then
-//!   the file key is removed).
+//!   the file key is removed). A test build (`k2_core::TEST_BUILD`) on
+//!   Linux always takes the file key under its own home.
 
 pub mod actor;
 pub mod adopt;
@@ -110,6 +111,16 @@ pub fn select_key_store(home: &Path) -> Arc<dyn KeyStore> {
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
+        // The root helper and the unit's systemd credential hold the BOX's
+        // key: a test daemon (temp HOME) that took them failed `keep kek
+        // init` on every vault test of the 2026-10-27 soak (k2-linux, K2
+        // installed), or worse, would read the box's real key. A test build
+        // keeps its key in a file under its own home, like a temp home on
+        // macOS and Windows; the helper transport also refuses any call
+        // from a test build (`keeper_client`).
+        if k2_core::TEST_BUILD {
+            return Arc::new(FileKeyStore::new(file_key_dir(home)));
+        }
         let t = keeper_client::SudoHelper::detect();
         if let Some(t) = t {
             if k2_vault::keystore::keeper::probe(&t).is_some() {
@@ -947,5 +958,26 @@ mod tests {
             }
         }
         assert!(offenders.is_empty(), "only vault/mod.rs may open the key store: {offenders:?}");
+    }
+
+    /// Soak 2026-10-27 (k2-linux, a box with K2 installed): every test
+    /// daemon that opened the vault took the BOX's key home (the installed
+    /// `k2-root-helper`) and failed `keep kek init`. A test build keeps the
+    /// key in a file under the test's own home, whatever the box offers:
+    /// here a systemd credential the box's unit handed down
+    /// (`$CREDENTIALS_DIRECTORY/k2-vault-kek`). The root helper half can't
+    /// be staged without root (its paths are fixed under /usr); the same
+    /// rule covers it, and the transport refuses any call from a test build
+    /// (`keeper_client::tests`).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_test_build_never_takes_the_boxs_key_home() {
+        let home = k2_core::test_env::TempHome::new();
+        let creds = home.path().join("creds");
+        std::fs::create_dir_all(&creds).expect("mkdir creds");
+        std::fs::write(creds.join(super::systemd_creds::CREDENTIAL_NAME), [7u8; 32]).expect("write credential");
+        let _c = k2_core::test_env::EnvVar::set("CREDENTIALS_DIRECTORY", &creds);
+        let ks = super::select_key_store(&home.path().join(".k2"));
+        assert_eq!(ks.kind(), k2_vault::KeyHome::File, "a test daemon took the box's key home");
     }
 }

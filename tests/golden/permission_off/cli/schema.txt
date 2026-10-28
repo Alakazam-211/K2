@@ -455,9 +455,9 @@ exit: 0
     {
       "name": "agent list",
       "usage": "k2 agent list [--json]",
-      "description": "Fleet view: every agent on this server with name, mode, enabled, live status, path.",
+      "description": "Fleet view: every agent on this server with name, mode, enabled, live status, path. Scripts use --json, never the table (names and paths can contain spaces).",
       "args": [],
-      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable {ok,agents:[...]}."}]
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable {ok,agents:[{name,id,handle,mode,enabled,live,sessionId,backend,ptydAdopted,path}]}."}]
     },
     {
       "name": "agent retire",
@@ -492,6 +492,21 @@ exit: 0
       "flags": [
         {"name": "--dry-run", "arg": null, "description": "Show which session would restart; change nothing."},
         {"name": "--json", "arg": null, "description": "JSON output (ok, oldSessionId, sessionId, conversationId)."}
+      ]
+    },
+    {
+      "name": "agent harness",
+      "usage": "k2 agent harness <workspace> <harness> [--full] [--notes-file <path>] [--dry-run] [--json]",
+      "description": "Move a workspace's pinned chat (the one heartbeats, Threads and k2 msg go to) to another harness: claude, codex, grok, gemini, cursor, pi or hermes. Changing the workspace's default agent only changes NEW chats; this moves the existing pinned chat. K2 ends the current pinned chat, starts a new one on <harness> with a summary of the recent conversation, and points heartbeats, Threads and messages at it. The old chat stays in Chat history. Already on <harness>: nothing changes. A person runs it (owner, Admin, or a person in a K2 shell tab); an agent can't move its own pinned chat (exit 3: ask your person, or with permission cards on, k2 permission request agent.harness-switch harness=<harness>). Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "args": [
+        {"name": "workspace", "required": true, "description": "Workspace handle, name or path."},
+        {"name": "harness", "required": true, "description": "claude, codex, grok, gemini, cursor, pi or hermes."}
+      ],
+      "flags": [
+        {"name": "--full", "arg": null, "description": "Seed the new chat with the whole old conversation (default: the recent part)."},
+        {"name": "--notes-file", "arg": "path", "description": "Extra handover notes for the new chat."},
+        {"name": "--dry-run", "arg": null, "description": "Show what would move; change nothing."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (switched, alreadyOn, fromHarness, harness, sessionId, oldChatInHistory, ownSessionHeartbeats)."}
       ]
     },
     {
@@ -2026,10 +2041,13 @@ exit: 0
     },
     {
       "name": "heartbeat show",
-      "usage": "k2 heartbeat show <name> [--json]",
+      "usage": "k2 heartbeat show <name> [--workspace <ws>] [--json]",
       "description": "One heartbeat's full details (schedule, enabled, last fire, saved session).",
       "args": [{"name": "name", "required": true}],
-      "flags": [{"name": "--json", "arg": null, "description": "Raw row for scripting."}]
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Another workspace's heartbeat (handle, name or path; people only, an agent reads its own)."},
+        {"name": "--json", "arg": null, "description": "Raw row for scripting."}
+      ]
     },
     {
       "name": "heartbeat status",

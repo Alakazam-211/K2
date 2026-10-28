@@ -88,7 +88,8 @@ pub(crate) fn needs_person(project_id: &str, harness: &str) -> CliResponse {
     let hint = format!(
         "Moving the pinned chat restarts your own session, so a person does it. Ask your person to run \
          `k2 agent harness {ws} {harness}` from a terminal outside K2, or to pick \
-         \"Move pinned chat to {harness}\" in the pinned chat's menu."
+         \"Move pinned chat to {harness}\" in the pinned chat's menu. After the move you continue in a \
+         new {harness} chat that starts with a summary of this one; this chat stays in Chat history."
     );
     CliResponse {
         status: "403 Forbidden",

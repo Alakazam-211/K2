@@ -477,6 +477,9 @@ struct PtydSession {
     /// quiesce): the IO loop is stopped and the agent belongs to the next
     /// daemon. `kill()` and `Drop` must never end it from here.
     detached: std::sync::atomic::AtomicBool,
+    /// This daemon adopted the session from ptyd after a restart (it was
+    /// spawned by an earlier daemon), rather than spawning it.
+    adopted: bool,
 }
 
 /// Trailing-debounce window for [`DaemonPtySession::request_resize`].
@@ -1419,6 +1422,8 @@ impl DaemonPtySession {
         };
         let term = Arc::new(FairMutex::new(term));
 
+        // Only adoption replays the ring (a fresh spawn has none).
+        let adopted = replay;
         let replay = if replay {
             listener.set_replies_muted(true);
             let l = listener.clone();
@@ -1464,6 +1469,7 @@ impl DaemonPtySession {
                 owner,
                 meta: Mutex::new(parts.meta),
                 detached: std::sync::atomic::AtomicBool::new(false),
+                adopted,
             }),
             events_tx,
             child_exited: std::sync::atomic::AtomicBool::new(false),
@@ -1632,6 +1638,17 @@ impl DaemonPtySession {
         #[cfg(unix)]
         if let PtyIo::Ptyd(p) = &self.pty_io {
             return p.detached.load(std::sync::atomic::Ordering::Acquire);
+        }
+        false
+    }
+
+    /// True when this daemon adopted the session from k2-ptyd after a
+    /// restart (it survived the previous daemon); false for a session this
+    /// daemon spawned, and always false in-process.
+    pub fn is_ptyd_adopted(&self) -> bool {
+        #[cfg(unix)]
+        if let PtyIo::Ptyd(p) = &self.pty_io {
+            return p.adopted;
         }
         false
     }

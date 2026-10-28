@@ -19,7 +19,7 @@ HEARTBEATS (workspace-scoped scheduled wakes)
   heartbeat signal wakeup <n>                   Open the WAKEUP.md
   heartbeat signal wake                         Auto-wake (no name needed)
 
-  heartbeat show <n> [--json]                   Single heartbeat details
+  heartbeat show <n> [--workspace <ws>] [--json]  Single heartbeat details
   heartbeat status <n> [-n N]                   Recent fire history
   heartbeat log [-n N]                          Scheduler decisions
 

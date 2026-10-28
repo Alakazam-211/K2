@@ -95,7 +95,8 @@ PROJECTS
 
 WORKSPACE
   workspace list                        Yellow pages: every workspace + status
-  workspace list --running              Filter to live agents
+  workspace list --running              Only agent-enabled workspaces (live or not; see "live" in --json)
+  workspace list --json                 For scripts: name, id, handle, path, live, sessionId, backend, ptydAdopted
   workspace launch [<path>]             Smart cascade: attach|wake|spawn
   workspace profile [<path>]            Read workspace agent's AGENT.md
   workspace update --field <f> --value <v>

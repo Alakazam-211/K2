@@ -381,7 +381,7 @@
    {
     "name": "agent list",
     "usage": "k2 agent list [--json]",
-    "description": "Fleet view: every agent on this server with name, mode, enabled, live status, path."
+    "description": "Fleet view: every agent on this server with name, mode, enabled, live status, path. Scripts use --json, never the table (names and paths can contain spaces)."
    },
    {
     "name": "agent retire",

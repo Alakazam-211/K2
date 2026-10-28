@@ -36365,9 +36365,9 @@ cmd_schema() {
     {
       "name": "agent list",
       "usage": "k2 agent list [--json]",
-      "description": "Fleet view: every agent on this server with name, mode, enabled, live status, path.",
+      "description": "Fleet view: every agent on this server with name, mode, enabled, live status, path. Scripts use --json, never the table (names and paths can contain spaces).",
       "args": [],
-      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable {ok,agents:[...]}."}]
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable {ok,agents:[{name,id,handle,mode,enabled,live,sessionId,backend,ptydAdopted,path}]}."}]
     },
     {
       "name": "agent retire",
@@ -45015,7 +45015,9 @@ COMMANDS
 ADDRESSING
   <name> accepts an agent name or a path. Anything containing "/" is treated as a path.
   Names match case-insensitively; quote names containing spaces ("QA Bot").
-  Unknown names fail with exit 4 and a did-you-mean list. Commands that default to
+  Unknown or ambiguous names fail with exit 4; the error says why (a near-miss name,
+  several matches, or a retired handle) and names the workspace's handle and path
+  to use instead. A full path always works. Commands that default to
   the current directory (conf) fail with exit 4 when it isn't a registered agent.
 
 GLOBAL FLAGS
@@ -45163,7 +45165,7 @@ if err is not None:
     if isinstance(err, str):
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
-    sys.exit(4 if err.get("code") == "not_found" else 1)
+    sys.exit(4 if err.get("code") in ("not_found", "ambiguous") else 1)
 if not d.get("ok"):
     sys.stderr.write(json.dumps({"error": {"code": "error",
         "hint": "unexpected daemon response: %r" % raw[:200]}}) + "\n")
@@ -45880,9 +45882,16 @@ has no live session, restart starts one.
 USAGE
   k2 agent restart <name> [flags]
 
+  <name> is the agent's handle, its name, or its full workspace path
+  (/home/k2/hatlab/hatlab-manager; a trailing slash or a symlink to the
+  folder works too). When a name matches more than one workspace, or an
+  old handle that was retired, it exits 4 and the error names each
+  workspace's handle and path: use one of those.
+
 FLAGS
   --dry-run               Show which session would restart; change nothing
-  --json                  JSON output (old + new session ids)
+  --json                  JSON output: {ok, changed, name, path, oldSessionId,
+                          sessionId, conversationId, resumedExisting, provider}
 EOF
 }
 
@@ -46077,7 +46086,14 @@ USAGE
   k2 agent list [--json]
 
 FLAGS
-  --json                  Machine-readable output ({"ok":true,"agents":[...]})
+  --json                  Machine-readable output, for scripts (names and paths can
+                          contain spaces; never parse the table):
+                          {"ok":true,"agents":[{"name","id","handle","mode","enabled",
+                           "live","sessionId","backend","ptydAdopted","path"}]}
+                          path: absolute; live: true/false; sessionId and backend
+                          ("ptyd" or "in-process") are null when not live;
+                          ptydAdopted: true when the session survived a daemon
+                          restart (false when not live). Check "ok" first.
 EOF
 }
 
@@ -47659,7 +47675,7 @@ if err:
     if isinstance(err, str):
         err = {"code": "daemon_error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
-    sys.exit(4 if err.get("code") == "not_found" else 1)
+    sys.exit(4 if err.get("code") in ("not_found", "ambiguous") else 1)
 if not d.get("ok"):
     sys.stderr.write(json.dumps({"error": {"code": "daemon_error",
         "hint": "unexpected response: %s" % json.dumps(d)[:300]}}) + "\n")
@@ -49138,13 +49154,43 @@ cmd_workspace_list() {
     # python renderer crashed iterating a dict, stderr was swallowed by
     # 2>/dev/null, and the command exited 1 with no output. "Workspace"
     # at the CLI surface means a registered project: list those.
-    local running="false"
+    local running="false" as_json="false"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --running) running="true"; shift ;;
+            # 0.46.6: scripts read JSON, never the table (a path with a
+            # space used to split the columns). The same rows as
+            # `k2 agent list --json` (workspace == agent).
+            --json) as_json="true"; shift ;;
+            -h|--help)
+                echo "Usage: k2 workspace list [--running] [--json]"
+                echo "  --json   {ok, workspaces:[{name, id, handle, path, mode, enabled, live, sessionId, backend, ptydAdopted}]}"
+                exit 0 ;;
             *) shift ;;
         esac
     done
+    if [ "$as_json" = "true" ]; then
+        cli_request "/cli/agent/list" | RUNNING_ONLY="$running" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print(json.dumps({"error": {"code": "bad_response", "hint": "daemon returned an unparseable response: %r" % raw[:200]}}), file=sys.stderr)
+    sys.exit(1)
+if not isinstance(d, dict) or d.get("error") or not d.get("ok"):
+    err = d.get("error") if isinstance(d, dict) else None
+    if not isinstance(err, dict):
+        err = {"code": "error", "hint": str(err or raw[:200])}
+    print(json.dumps({"error": err}), file=sys.stderr)
+    sys.exit(1)
+rows = d.get("agents") or []
+if os.environ.get("RUNNING_ONLY") == "true":
+    rows = [r for r in rows if r.get("enabled")]
+print(json.dumps({"ok": True, "workspaces": rows}))
+'
+        return
+    fi
     cli_request "/cli/projects/list" | RUNNING_ONLY="$running" python3 -c "
 import json, os, sys
 raw = sys.stdin.read()
@@ -49289,7 +49335,8 @@ PROJECTS
 
 WORKSPACE
   workspace list                        Yellow pages: every workspace + status
-  workspace list --running              Filter to live agents
+  workspace list --running              Only agent-enabled workspaces (live or not; see "live" in --json)
+  workspace list --json                 For scripts: name, id, handle, path, live, sessionId, backend, ptydAdopted
   workspace launch [<path>]             Smart cascade: attach|wake|spawn
   workspace profile [<path>]            Read workspace agent's AGENT.md
   workspace update --field <f> --value <v>

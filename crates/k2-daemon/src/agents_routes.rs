@@ -1034,7 +1034,8 @@ pub fn handle_agent_conf(q: &str) -> CliResponse {
 ///
 /// The fleet view backing `k2 agent list`: one entry per registered
 /// workspace (workspace == agent), shaped
-/// `{ok, agents: [{name, mode, enabled, live, path}]}` and sorted by
+/// `{ok, agents: [{name, id, handle, mode, enabled, live, sessionId,
+/// backend, ptydAdopted, path}]}` and sorted by
 /// name (case-insensitive) for stable rendering. `mode` is
 /// display-normalized (stored `k2so`/`agent` → `k2`) and `live` uses
 /// the SAME canonical-session source as `handle_agent_conf`'s `live`
@@ -1043,11 +1044,11 @@ pub fn handle_agent_list() -> CliResponse {
     // Snapshot the projects table, then do the per-row display-name
     // (AGENT.md read) + live lookups WITHOUT holding the DB lock —
     // `agent_display_name` takes its own locks.
-    let rows: Vec<(String, String, String, bool)> = {
+    let rows: Vec<(String, String, String, bool, String)> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let mut stmt = match conn.prepare(
-            "SELECT id, path, COALESCE(agent_mode, 'off'), COALESCE(agent_enabled, 0) \
+            "SELECT id, path, COALESCE(agent_mode, 'off'), COALESCE(agent_enabled, 0), COALESCE(handle, '') \
              FROM projects",
         ) {
             Ok(s) => s,
@@ -1059,6 +1060,7 @@ pub fn handle_agent_list() -> CliResponse {
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, i64>(3)? == 1,
+                r.get::<_, String>(4)?,
             ))
         });
         match mapped {
@@ -1072,19 +1074,26 @@ pub fn handle_agent_list() -> CliResponse {
         // The audit sentinels (`_orphan`, `_broadcast`) are internal
         // activity-feed FK rows, not agents — same filter as
         // `projects_list()`.
-        .filter(|(id, _, _, _)| !k2_core::db::AUDIT_SENTINEL_IDS.contains(&id.as_str()))
-        .map(|(id, path, mode_raw, enabled)| {
+        .filter(|(id, _, _, _, _)| !k2_core::db::AUDIT_SENTINEL_IDS.contains(&id.as_str()))
+        .map(|(id, path, mode_raw, enabled, handle)| {
             let name = k2_core::workspace::display::agent_display_name(&path);
-            let live = crate::session_lookup::lookup_any(
+            let session = crate::session_lookup::lookup_any(
                 &crate::canonical_session::canonical_key_for(&id),
             )
-            .filter(|s| s.is_child_alive())
-            .is_some();
+            .filter(|s| s.is_child_alive());
+            // 0.46.6: scripts read this (never the table): the workspace
+            // id, handle, and the pinned chat's session, backend and
+            // whether this daemon adopted it from ptyd after a restart.
             serde_json::json!({
                 "name": name,
+                "id": id,
+                "handle": if handle.is_empty() { serde_json::Value::Null } else { serde_json::json!(handle) },
                 "mode": k2_core::workspace::settings::display_agent_mode(&mode_raw),
                 "enabled": enabled,
-                "live": live,
+                "live": session.is_some(),
+                "sessionId": session.as_ref().map(|s| s.session_id().to_string()),
+                "backend": session.as_ref().map(|s| s.0.backend_name()),
+                "ptydAdopted": session.as_ref().map(|s| s.0.is_ptyd_adopted()).unwrap_or(false),
                 "path": path,
             })
         })
@@ -1796,5 +1805,135 @@ mod gap_route_tests {
             .expect("/cli/relations/list-incoming must be handled by agents dispatch");
         assert_eq!(inc.status, "200 OK", "body={}", inc.body);
         assert_eq!(inc.body, "[]", "body={}", inc.body);
+    }
+}
+
+/// 0.46.6 fleet-roll papercuts: `k2 agent restart hatlab-manager` said
+/// "no agent/workspace named 'hatlab-manager' — did you mean
+/// 'hatlab-manager'?", and scripts parsed the `k2 agent list` table (a
+/// path with a space split it). The resolver's miss is explained, never
+/// answered with the same name; paths resolve however they're spelled;
+/// `/cli/agent/list` carries what scripts need.
+#[cfg(test)]
+mod agent_resolve_tests {
+    use super::{handle_agent_conf, handle_agent_list};
+    use serde_json::Value;
+
+    fn add(id: &str, name: &str, handle: Option<&str>, path: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, name, path, handle],
+        )
+        .expect("insert project");
+    }
+
+    fn body(r: &crate::cli_response::CliResponse) -> Value {
+        serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{e}: {}", r.body))
+    }
+
+    #[test]
+    fn a_retired_handle_never_suggests_the_name_it_failed_to_match() {
+        let home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let tag = &uuid::Uuid::new_v4().simple().to_string()[..6];
+        let name = format!("hatlab-manager-{tag}");
+        // The fleet roll: the workspace was removed (its handle retired for
+        // good) and registered again at a new path, with the same name.
+        let old_id = uuid::Uuid::new_v4().to_string();
+        add(&old_id, &name, Some(&name), &home.path().join("old").join(&name).to_string_lossy());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![old_id]).expect("delete");
+        }
+        let new_dir = home.path().join("hatlab").join(&name);
+        std::fs::create_dir_all(&new_dir).unwrap();
+        let new_path = new_dir.to_string_lossy().to_string();
+        let new_handle = format!("{name}-2");
+        add(&uuid::Uuid::new_v4().to_string(), &name, Some(&new_handle), &new_path);
+
+        let r = handle_agent_conf(&name);
+        assert_eq!(r.status, "404 Not Found", "{}", r.body);
+        let v = body(&r);
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(!hint.contains(&format!("did you mean '{name}'")), "suggested the name it failed to match: {hint}");
+        assert!(hint.contains("retired handle"), "{hint}");
+        assert!(hint.contains(&new_handle) && hint.contains(&new_path), "names the current workspace: {hint}");
+        // Its handle and its full path both resolve.
+        for q in [new_handle.as_str(), new_path.as_str()] {
+            let r = handle_agent_conf(q);
+            assert_eq!(r.status, "200 OK", "{q}: {}", r.body);
+            assert_eq!(body(&r)["path"], new_path.as_str());
+        }
+    }
+
+    #[test]
+    fn two_workspaces_with_one_name_are_ambiguous_not_missing() {
+        let home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let name = format!("Skin QA {}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
+        let a = home.path().join("AI Projects").join("skin-qa-a").to_string_lossy().to_string();
+        let b = home.path().join("AI Projects").join("skin-qa-b").to_string_lossy().to_string();
+        add(&uuid::Uuid::new_v4().to_string(), &name, None, &a);
+        add(&uuid::Uuid::new_v4().to_string(), &name, None, &b);
+        let r = handle_agent_conf(&name);
+        assert_eq!(r.status, "409 Conflict", "{}", r.body);
+        let v = body(&r);
+        assert_eq!(v["error"]["code"], "ambiguous", "{v}");
+        let hint = v["error"]["hint"].as_str().unwrap();
+        assert!(hint.contains(&a) && hint.contains(&b), "names both: {hint}");
+        assert!(!hint.contains("did you mean"), "{hint}");
+    }
+
+    #[test]
+    fn a_path_resolves_with_a_trailing_slash_and_through_a_symlink() {
+        let home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let dir = home.path().join("AI Projects").join(format!("Apop {}", &uuid::Uuid::new_v4().simple().to_string()[..6]));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        add(&uuid::Uuid::new_v4().to_string(), "Apop", None, &path);
+        let r = handle_agent_conf(&format!("{path}/"));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(body(&r)["path"], path.as_str());
+        #[cfg(unix)]
+        {
+            let link = home.path().join("apop-link");
+            std::os::unix::fs::symlink(&dir, &link).unwrap();
+            let r = handle_agent_conf(&link.to_string_lossy());
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert_eq!(body(&r)["path"], path.as_str());
+        }
+    }
+
+    #[test]
+    fn agent_list_carries_ids_handles_and_session_fields_for_spaced_names_and_paths() {
+        let home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let id = uuid::Uuid::new_v4().to_string();
+        let tag = &uuid::Uuid::new_v4().simple().to_string()[..6];
+        let path = home.path().join("AI Projects").join(format!("Apop {tag}")).to_string_lossy().to_string();
+        let handle = format!("skin-qa-{tag}");
+        add(&id, &format!("Skin QA {tag}"), Some(&handle), &path);
+        let r = handle_agent_list();
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = body(&r);
+        let row = v["agents"]
+            .as_array()
+            .expect("agents")
+            .iter()
+            .find(|a| a["id"] == id.as_str())
+            .unwrap_or_else(|| panic!("no row for {id}: {v}"))
+            .clone();
+        assert_eq!(row["path"], path.as_str(), "the path keeps its spaces: {row}");
+        assert_eq!(row["handle"], handle.as_str(), "{row}");
+        assert_eq!(row["live"], false, "{row}");
+        assert!(row["sessionId"].is_null() && row["backend"].is_null(), "{row}");
+        assert_eq!(row["ptydAdopted"], false, "{row}");
+        for key in ["name", "id", "handle", "mode", "enabled", "live", "sessionId", "backend", "ptydAdopted", "path"] {
+            assert!(row.get(key).is_some(), "{key} missing: {row}");
+        }
     }
 }

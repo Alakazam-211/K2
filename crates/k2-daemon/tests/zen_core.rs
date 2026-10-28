@@ -1882,13 +1882,13 @@ fn guide(args: &[&str]) -> String {
     let cli = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
     let home = std::env::temp_dir().join(format!("k2-zen-guide-home-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&home).expect("empty HOME");
-    let out = std::process::Command::new("bash")
+    let out = std::process::Command::new(k2_core::test_env::bash_program())
         .arg(&cli)
         .args(["zen", "guide"])
         .args(args)
-        .env_clear()
+        .env_clear().envs(k2_core::test_env::cli_base_env())
         .env("HOME", &home)
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("PATH", k2_core::test_env::cli_path("/usr/bin:/bin:/usr/sbin:/sbin"))
         .output()
         .expect("run cli/k2 zen guide");
     std::fs::remove_dir_all(&home).expect("cleanup");

@@ -132,7 +132,7 @@ async fn the_curl_smoke_pairs_a_phone_headless() {
     let out = tokio::task::spawn_blocking({
         let (svc, pass, host) = (svc.clone(), pass.clone(), format!("{app_id}.box.k2.dev"));
         move || {
-            std::process::Command::new("bash")
+            std::process::Command::new(k2_core::test_env::bash_program())
                 .arg(&script)
                 .env("K2_URL", format!("http://127.0.0.1:{}", d.port))
                 .env("K2_APP", &svc)

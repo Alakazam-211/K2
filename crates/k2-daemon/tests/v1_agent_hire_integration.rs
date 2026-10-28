@@ -522,13 +522,13 @@ async fn owner_changes_a_hire_keys_app_access_limit() {
     let cli_home = env.tmp.join("cli-home");
     std::fs::create_dir_all(cli_home.join(".k2")).expect("cli home");
     std::fs::write(cli_home.join(".k2/heartbeat.token"), OWNER_TOKEN).expect("token file");
-    let out = std::process::Command::new("bash")
+    let out = std::process::Command::new(k2_core::test_env::bash_program())
         .arg(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2"))
         .args(["api-key", "hire-ceiling", &cli_key, "--app-login"])
         .arg(format!("{}/jobs:self,{}:lookers", handle_of(&portal), handle_of(&job_a)))
-        .env_clear()
+        .env_clear().envs(k2_core::test_env::cli_base_env())
         .env("HOME", &cli_home)
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("PATH", k2_core::test_env::cli_path("/usr/bin:/bin:/usr/sbin:/sbin"))
         .env("K2_PORT", port.to_string())
         .current_dir(&cli_home)
         .output()

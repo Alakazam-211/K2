@@ -60,12 +60,12 @@ fn urlencode(s: &str) -> String {
 
 fn k2_cli(home: &Path, workspace: &str, args: &[&str]) -> String {
     let cli = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
-    let out = Command::new("bash")
+    let out = Command::new(k2_core::test_env::bash_program())
         .arg(&cli)
         .args(args)
         // A clean env: the outer shell may be a K2 agent cell whose
         // K2_*/K2SO_* hook vars would point the CLI at the real daemon.
-        .env_clear()
+        .env_clear().envs(k2_core::test_env::cli_base_env())
         .env("PATH", std::env::var("PATH").expect("PATH"))
         .env("HOME", home)
         .env("K2_PROJECT_PATH", workspace)

@@ -812,12 +812,12 @@ fn the_cli_template_cleans_without_warnings() {
     let cli = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
     let empty_home = std::env::temp_dir().join(format!("tb-tpl-home-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&empty_home).expect("empty HOME");
-    let out = std::process::Command::new("bash")
+    let out = std::process::Command::new(k2_core::test_env::bash_program())
         .arg(&cli)
         .args(["tickets", "template"])
-        .env_clear()
+        .env_clear().envs(k2_core::test_env::cli_base_env())
         .env("HOME", &empty_home)
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("PATH", k2_core::test_env::cli_path("/usr/bin:/bin:/usr/sbin:/sbin"))
         .output()
         .expect("run cli/k2 tickets template");
     std::fs::remove_dir_all(&empty_home).expect("cleanup");

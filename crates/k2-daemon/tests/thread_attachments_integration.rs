@@ -399,10 +399,10 @@ async fn thread_attachments_send_view_open_and_scope() {
     let cli_dir = ws.path.clone();
     let run = move |args: Vec<String>| {
         let cli = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
-        std::process::Command::new("bash")
+        std::process::Command::new(k2_core::test_env::bash_program())
             .arg(&cli)
             .args(&args)
-            .env_clear()
+            .env_clear().envs(k2_core::test_env::cli_base_env())
             .env("PATH", std::env::var("PATH").expect("PATH"))
             .env("HOME", &home)
             .current_dir(&cli_dir)

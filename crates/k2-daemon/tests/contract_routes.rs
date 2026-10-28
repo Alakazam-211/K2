@@ -415,13 +415,13 @@ async fn get_on_every_write_binding_is_405() {
 fn guide_api(args: &[&str]) -> String {
     let home = std::env::temp_dir().join(format!("k2-guide-api-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&home).expect("empty HOME");
-    let out = std::process::Command::new("bash")
+    let out = std::process::Command::new(k2_core::test_env::bash_program())
         .arg(root().join("cli/k2"))
         .args(["zen", "guide", "api"])
         .args(args)
-        .env_clear()
+        .env_clear().envs(k2_core::test_env::cli_base_env())
         .env("HOME", &home)
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("PATH", k2_core::test_env::cli_path("/usr/bin:/bin:/usr/sbin:/sbin"))
         .output()
         .expect("run cli/k2 zen guide api");
     std::fs::remove_dir_all(&home).expect("cleanup");
@@ -457,12 +457,12 @@ fn guide_api_works_without_a_daemon() {
     assert_eq!(json["id"], "api");
     assert_eq!(json["title"], "The k2 object in a custom widget");
     assert!(json["body"].as_str().is_some_and(|b| b.starts_with("k2 zen guide api —")));
-    let index = std::process::Command::new("bash")
+    let index = std::process::Command::new(k2_core::test_env::bash_program())
         .arg(root().join("cli/k2"))
         .args(["zen", "guide"])
-        .env_clear()
+        .env_clear().envs(k2_core::test_env::cli_base_env())
         .env("HOME", std::env::temp_dir())
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", k2_core::test_env::cli_path("/usr/bin:/bin"))
         .output()
         .expect("index");
     assert!(String::from_utf8_lossy(&index.stdout).contains("  api "), "the index lists api");

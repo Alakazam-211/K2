@@ -243,6 +243,69 @@ pub fn unique_temp_path(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("k2-{tag}-{}", uuid::Uuid::new_v4().simple()))
 }
 
+/// The bash a test runs `cli/k2` with: `bash` on Unix; on Windows, Git for
+/// Windows' bash (Windows looks a program up through the child's PATH, which
+/// these tests set, so a bare name isn't enough). `K2_TEST_BASH` overrides.
+/// No Git Bash on Windows is a loud failure.
+pub fn bash_program() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(b) = std::env::var_os("K2_TEST_BASH").filter(|v| !v.is_empty()) {
+            return PathBuf::from(b);
+        }
+        ["ProgramFiles", "ProgramFiles(x86)"]
+            .iter()
+            .filter_map(std::env::var_os)
+            .map(|r| PathBuf::from(r).join("Git").join("bin").join("bash.exe"))
+            .find(|p| p.is_file())
+            .expect("the CLI tests need Git for Windows (Git Bash), or K2_TEST_BASH")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("bash")
+    }
+}
+
+/// The PATH a test gives `cli/k2` under a cleared environment: `unix` on
+/// Unix; on Windows, System32 and the folder of the real Python on this
+/// process's PATH (the CLI's `python3`). Git Bash adds its own tools.
+pub fn cli_path(unix: &str) -> String {
+    #[cfg(windows)]
+    {
+        let _ = unix;
+        let sys = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let mut parts = vec![format!(r"{sys}\System32"), sys];
+        let python = std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+            .find(|d| d.join("python.exe").is_file() && !d.to_string_lossy().contains("WindowsApps"));
+        if let Some(d) = python {
+            parts.insert(0, d.display().to_string());
+        }
+        parts.join(";")
+    }
+    #[cfg(not(windows))]
+    {
+        unix.to_string()
+    }
+}
+
+/// The variables a cleared environment must keep for a Windows program
+/// (Python can't start without SystemRoot); empty on Unix.
+pub fn cli_base_env() -> Vec<(String, String)> {
+    #[cfg(windows)]
+    {
+        ["SystemRoot", "windir", "ComSpec", "PATHEXT", "TEMP", "TMP"]
+            .iter()
+            .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
 /// Remove a test's temp dir, or panic naming what couldn't go. Windows
 /// refuses to delete a file something still holds open (Unix doesn't
 /// mind), so a bare `remove_dir_all` failure says only "in use"; this

@@ -487,10 +487,10 @@ fn writes(cp: &FakeCp) -> Vec<String> {
 /// and a HOME with no owner token. Nothing else from this process's env.
 fn agent_cli(port: u16, home: &std::path::Path, ws: &str, passport: &str, args: &[&str]) -> (i32, String) {
     let cli = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
-    let out = std::process::Command::new("bash")
+    let out = std::process::Command::new(k2_core::test_env::bash_program())
         .arg(&cli)
         .args(args)
-        .env_clear()
+        .env_clear().envs(k2_core::test_env::cli_base_env())
         .env("PATH", std::env::var_os("PATH").expect("PATH"))
         .env("HOME", home)
         .env("TMPDIR", std::env::temp_dir())

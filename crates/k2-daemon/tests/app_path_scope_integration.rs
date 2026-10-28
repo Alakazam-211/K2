@@ -468,12 +468,12 @@ async fn fs_events_carry_only_the_logins_folders() {
 
 fn k2_cli(home: &Path, args: &[&str]) -> std::process::Output {
     let cli = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
-    std::process::Command::new("bash")
+    std::process::Command::new(k2_core::test_env::bash_program())
         .arg(&cli)
         .args(args)
         // A clean env: the outer shell may be a K2 agent cell whose
         // K2_*/K2SO_* hook vars would point the CLI at the real daemon.
-        .env_clear()
+        .env_clear().envs(k2_core::test_env::cli_base_env())
         .env("PATH", std::env::var("PATH").expect("PATH"))
         .env("HOME", home)
         .current_dir(home)

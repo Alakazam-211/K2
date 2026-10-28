@@ -338,10 +338,10 @@ fn k2(env: &Env, port: u16, cwd: &Path, args: &[&str]) -> (i32, String, String) 
     std::fs::write(k2_dir.join("heartbeat.port"), port.to_string()).unwrap();
     std::fs::write(k2_dir.join("heartbeat.token"), OWNER).unwrap();
     let cli = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
-    let out = Command::new("bash")
+    let out = Command::new(k2_core::test_env::bash_program())
         .arg(&cli)
         .args(args)
-        .env_clear()
+        .env_clear().envs(k2_core::test_env::cli_base_env())
         .env("PATH", std::env::var("PATH").expect("PATH"))
         .env("HOME", &env.home)
         .env("TMPDIR", env.home.join("cli-tmp"))
@@ -565,10 +565,10 @@ async fn never_stuck_timeouts_moves_lost_nodes_retries_and_set_aside() {
     std::fs::write(k2_dir.join("heartbeat.port"), port.to_string()).unwrap();
     std::fs::write(k2_dir.join("heartbeat.token"), OWNER).unwrap();
     let cli = tokio::task::spawn_blocking(move || {
-        let out = Command::new("bash")
+        let out = Command::new(k2_core::test_env::bash_program())
             .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2"))
             .args(["compute", "run", "--any", "--no-source", "--retries", "1", "--", "sh", "-c", "echo start; sleep 8; echo end"])
-            .env_clear()
+            .env_clear().envs(k2_core::test_env::cli_base_env())
             .env("PATH", std::env::var("PATH").unwrap())
             .env("HOME", &cli_env_home)
             .env("TMPDIR", cli_env_home.join("cli-tmp"))

@@ -230,7 +230,7 @@ fn names(s: &serde_json::Value) -> Vec<String> {
 
 fn cli(d: &Daemon, args: &[&str]) -> (i32, String, String) {
     let k2 = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
-    let mut cmd = Command::new("bash");
+    let mut cmd = Command::new(k2_core::test_env::bash_program());
     for (k, _) in std::env::vars() {
         if k.starts_with("K2_") || k.starts_with("K2SO_") {
             cmd.env_remove(k);

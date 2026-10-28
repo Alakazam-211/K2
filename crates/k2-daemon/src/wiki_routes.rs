@@ -2617,12 +2617,12 @@ mod tests {
             vec!["wiki", "chat", "enable"],
             vec!["wiki", "chat", "on", "--json"],
         ] {
-            let out = std::process::Command::new("bash")
+            let out = std::process::Command::new(k2_core::test_env::bash_program())
                 .arg(&cli)
                 .args(&args)
-                .env_clear()
+                .env_clear().envs(k2_core::test_env::cli_base_env())
                 .env("HOME", &home)
-                .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+                .env("PATH", k2_core::test_env::cli_path("/usr/bin:/bin:/usr/sbin:/sbin"))
                 .output()
                 .expect("run cli/k2");
             let stderr = String::from_utf8_lossy(&out.stderr);

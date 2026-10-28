@@ -51,6 +51,13 @@ B="$TARGET_DIR/release/bundle"
 rm -rf "$B/deb" "$B/rpm" "$B/appimage"
 
 bun install --frozen-lockfile
+# The same path mappings as every Linux builder (GitHub's app-linux.yml too).
+# shellcheck source=scripts/ci/repro-build-env.sh
+source "$ROOT/scripts/ci/repro-build-env.sh"
+k2_repro_build_env "$ROOT"
+# k2-node sets CI=1 for every job; `tauri build` accepts only true/false
+# for CI and fails at once on 1 (0.46.5 shadow: L3 failed in 3 s).
+export CI=true
 # linuxdeploy without FUSE (job users have no /dev/fuse).
 APPIMAGE_EXTRACT_AND_RUN=1 bunx tauri build --bundles deb,rpm,appimage
 
@@ -92,6 +99,7 @@ info = {
     "tree": os.environ["K2_BI_TREE"],
     "rustc": os.environ["K2_BI_RUSTC"],
     "bun": os.environ["K2_BI_BUN"],
+    "remap": "/k2 /cargo /target",
     "files": files,
 }
 json.dump(info, open(os.path.join(out, "build-info.json"), "w"), indent=2, sort_keys=True)

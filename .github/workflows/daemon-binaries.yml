@@ -188,6 +188,11 @@ jobs:
           # shellcheck source=scripts/require-mail-oauth-build-env.sh
           source scripts/require-mail-oauth-build-env.sh
           require_mail_oauth_build_env
+          # The path mappings every Linux builder uses (K2 Compute's
+          # build-linux-bins.sh too), so the two can build the same bytes.
+          # shellcheck source=scripts/ci/repro-build-env.sh
+          source scripts/ci/repro-build-env.sh
+          k2_repro_build_env "$PWD"
           # k2-ptyd P84: the daemon embeds the PTY host (install-daemon.sh
           # and the self-updater fetch only k2-daemon). Built first for the
           # same target; K2_REQUIRE_PTYD_EMBED=1 fails the daemon build

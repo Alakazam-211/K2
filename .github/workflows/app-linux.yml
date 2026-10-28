@@ -115,7 +115,12 @@ jobs:
       - name: Build Linux bundles (deb, rpm, AppImage)
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1" # linuxdeploy without FUSE
-        run: bunx tauri build --bundles deb,rpm,appimage
+        # The path mappings every Linux builder uses (K2 Compute's
+        # build-linux-app.sh too), so the two can build the same bytes.
+        run: |
+          source scripts/ci/repro-build-env.sh
+          k2_repro_build_env "$PWD"
+          bunx tauri build --bundles deb,rpm,appimage
 
       - name: Collect + checksum artifacts
         id: collect

@@ -91,7 +91,7 @@ case "$verb" in
             if [ "$seen_dd" = 1 ]; then argv+=("$1"); shift; continue; fi
             case "$1" in
                 --) seen_dd=1; shift ;;
-                --sha|--artifact|--needs|--mem|--queue-timeout|--retries|--env|--workspace) shift 2 ;;
+                --sha|--artifact|--needs|--mem|--queue-timeout|--retries|--env|--secret|--workspace) shift 2 ;;
                 *) shift ;;
             esac
         done
@@ -236,6 +236,31 @@ grep -q 'k2 compute fetch .* --over-relay --json' "$tmp/calls-ok" && pass "fetch
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["ok"] and v["oauth"]=="placeholder" and v["node"]=="k2n4-vin", v' "$tmp/ok/L1.verdict.json" \
     && pass "L1 verdict: ok, node, oauth mode recorded" || fail "L1 verdict" "$(cat "$tmp/ok/L1.verdict.json")"
 
+echo "one OAuth mode and path remap for every Linux builder (0.46.6):"
+export K2_COMPUTE_VERIFY_NODE=k2n6-hil
+rc="$(run_case remap)"
+! grep -q 'BUILD_REMAP' "$tmp/calls-remap" && pass "no per-job BUILD_REMAP (the build script always remaps)" \
+    || fail "BUILD_REMAP still passed" "$(grep BUILD_REMAP "$tmp/calls-remap")"
+[ "$(grep -c -- '--env BUILD_OAUTH=placeholder' "$tmp/calls-remap")" = 2 ] && pass "L1 and V1 share the OAuth mode" \
+    || fail "oauth per job" "$(cat "$tmp/calls-remap")"
+export K2_COMPUTE_OAUTH=secret K2_COMPUTE_OAUTH_SECRETS="gmail-id,gmail-secret"
+rc="$(run_case secret)"
+l1="$(grep -m1 'k2 compute run k2n4-vin' "$tmp/calls-secret" || true)"
+for want in "--secret gmail-id=BUILD_GMAIL_CLIENT_ID" "--secret gmail-secret=BUILD_GMAIL_CLIENT_SECRET"; do
+    [[ "$l1" == *"$want"* ]] && pass "secret mode: L1 has $want" || fail "secret mode lacks $want" "$l1"
+done
+[[ "$l1" != *BUILD_OAUTH=placeholder* ]] && pass "secret mode: no placeholder" || fail "secret mode placeholder" "$l1"
+[ "$(grep -c -- '--secret gmail-id=BUILD_GMAIL_CLIENT_ID' "$tmp/calls-secret")" = 2 ] && pass "secret mode: V1 too" \
+    || fail "secret mode V1" "$(cat "$tmp/calls-secret")"
+! grep -q 'build-linux-app.sh.*--secret\|--secret.*build-linux-app' "$tmp/calls-secret" \
+    && ! grep 'k2n5-vin' "$tmp/calls-secret" | grep -q -- '--secret' && pass "secret mode: the app job gets no OAuth" \
+    || fail "app job secrets" "$(grep k2n5-vin "$tmp/calls-secret")"
+export K2_COMPUTE_OAUTH=bogus
+rc="$(run_case badmode)"
+grep -q 'K2_COMPUTE_OAUTH must be placeholder, env or secret' "$tmp/badmode.submit" && pass "an unknown OAuth mode is refused" \
+    || fail "bad mode" "$(cat "$tmp/badmode.submit")"
+unset K2_COMPUTE_OAUTH K2_COMPUTE_OAUTH_SECRETS K2_COMPUTE_VERIFY_NODE
+
 echo "tampering is caught:"
 check_tamper() {
     local name="$1" what="$2" needle="$3" label="${4:-L1}"
@@ -323,9 +348,41 @@ rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"; : > "$STUB_CALLS"
 [ "$(grep -c 'k2 compute cancel .* --force' "$tmp/calls-abort")" = 2 ] && pass "uncollected jobs are cancelled" || fail "cancel" "$(cat "$tmp/calls-abort")"
 
 echo "build scripts:"
-for s in scripts/ci/build-linux-bins.sh scripts/ci/build-linux-app.sh scripts/ci/shadow-linux-builds.sh scripts/lib/compute-release.sh scripts/release.sh; do
+for s in scripts/ci/build-linux-bins.sh scripts/ci/build-linux-app.sh scripts/ci/shadow-linux-builds.sh scripts/ci/repro-build-env.sh scripts/lib/compute-release.sh scripts/release.sh; do
     bash -n "$ROOT/$s" && pass "bash -n $s" || fail "bash -n $s" "syntax"
 done
+# repro-build-env.sh: the same mappings, most specific last, for rustc and C.
+fake="$tmp/repro"; mkdir -p "$fake/src/target" "$fake/cargo"
+rf="$(cd "$fake/src" && env -u RUSTFLAGS -u CFLAGS -u CXXFLAGS -u CARGO_TARGET_DIR CARGO_HOME="$fake/cargo" \
+    bash -c 'source "$1"; k2_repro_build_env "$PWD" >/dev/null; printf "%s\n%s\n%s" "$RUSTFLAGS" "$CFLAGS" "$CXXFLAGS"' _ "$ROOT/scripts/ci/repro-build-env.sh")"
+src_p="$(cd "$fake/src" && pwd -P)"
+python3 - "$rf" "$src_p" "$fake/cargo" <<'PY' && pass "repro env: checkout, cargo home, target remapped (target last) for rustc + C/C++" || fail "repro env" "$rf"
+import sys
+rust, c, cxx = sys.argv[1].split("\n")
+src, cargo = sys.argv[2], sys.argv[3]
+r = rust.split()
+assert f"--remap-path-prefix={src}=/k2" in r, r
+assert f"--remap-path-prefix={cargo}=/cargo" in r, r
+assert f"--remap-path-prefix={src}/target=/target" in r, r
+assert r.index(f"--remap-path-prefix={src}/target=/target") > r.index(f"--remap-path-prefix={src}=/k2"), r
+assert c == cxx and f"-ffile-prefix-map={src}=/k2" in c.split() and f"-ffile-prefix-map={src}/target=/target" in c.split(), c
+PY
+rf2="$(env RUSTFLAGS="-C keep" CARGO_HOME="$fake/cargo" bash -c 'source "$1"; k2_repro_build_env "$2" >/dev/null; printf "%s" "$RUSTFLAGS"' _ "$ROOT/scripts/ci/repro-build-env.sh" "$fake/src")"
+[[ "$rf2" == "-C keep --remap-path-prefix="* ]] && pass "repro env keeps the caller's RUSTFLAGS first" || fail "repro env append" "$rf2"
+mkdir -p "$fake/with space"
+if (env CARGO_HOME="$fake/cargo" bash -c 'source "$1"; k2_repro_build_env "$2"' _ "$ROOT/scripts/ci/repro-build-env.sh" "$fake/with space" >/dev/null 2>&1); then
+    fail "repro env whitespace" "a path with a space was accepted"
+else
+    pass "repro env refuses a path with whitespace"
+fi
+for f in scripts/ci/build-linux-bins.sh scripts/ci/build-linux-app.sh .github/workflows/daemon-binaries.yml .github/workflows/app-linux.yml; do
+    grep -q 'k2_repro_build_env' "$ROOT/$f" && pass "$f uses the shared path remap" || fail "$f remap" "no k2_repro_build_env"
+done
+python3 - "$ROOT/scripts/ci/build-linux-app.sh" <<'PY' && pass "build-linux-app sets CI=true before tauri build (k2-node sets CI=1)" || fail "CI=true" "missing or after tauri build"
+import sys
+s = open(sys.argv[1]).read()
+assert "\nexport CI=true\n" in s and s.index("\nexport CI=true\n") < s.index("bunx tauri build"), "CI=true"
+PY
 out="$(bash "$ROOT/scripts/ci/build-linux-bins.sh" sparc 2>&1 || true)"
 [[ "$out" == *usage* ]] && pass "build-linux-bins refuses an unknown arch" || fail "arch usage" "$out"
 if [ "$(uname -s)" != "Linux" ]; then

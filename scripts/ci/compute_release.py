@@ -239,6 +239,13 @@ def markers_of(path):
 def compare(a):
     rows = []
     for dirpath, _, names in os.walk(a.compute):
+        oauth = None
+        bi = os.path.join(dirpath, "build-info.json")
+        if os.path.isfile(bi):
+            try:
+                oauth = json.load(open(bi)).get("oauth")
+            except ValueError:
+                oauth = None
         for n in sorted(names):
             if n == "build-info.json" or n.endswith(".sha256") or n == "app-linux.sums":
                 continue
@@ -253,7 +260,10 @@ def compare(a):
                 if not row["match"]:
                     cm, gm = markers_of(p), markers_of(g)
                     row["markers_equal"] = cm == gm
-                    row["note"] = "bytes differ (expected until G12: pinned rustc + path remap; and with a placeholder-OAuth daemon)"
+                    if n.startswith("k2-daemon-") and oauth == "placeholder":
+                        row["note"] = "bytes differ: expected, this daemon was built with the OAuth placeholder and GitHub bakes the real client (K2_COMPUTE_OAUTH=secret builds it the same way)"
+                    else:
+                        row["note"] = "bytes differ (same rustc, path remap and OAuth mode are needed; see build-info.json)"
             rows.append(row)
     if not rows:
         sys.stderr.write("compare: no compute-built files under %s\n" % a.compute)

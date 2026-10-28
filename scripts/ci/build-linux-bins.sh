@@ -34,13 +34,15 @@
 #     "oauth": "placeholder" in build-info.json. Shadow builds only: such a
 #     daemon must never ship (release.sh refuses it), and its hash can't
 #     match the GitHub-built one. Whether the values may travel to nodes
-#     as plain --env is Rosson's call (plan §9 Q4).
+#     as plain --env is Rosson's call (plan §9 Q4); K2_COMPUTE_OAUTH=secret
+#     (compute-release.sh) sends them as vault secrets instead.
 #   Neither → refused (the same FATAL as every release build).
 #
-# Optional:
-#   BUILD_REMAP=1   --remap-path-prefix for the checkout and cargo home, so
-#                   two nodes (different job dirs) can build the same bytes
-#                   (G12; needs the same pinned rustc on both).
+# Paths: always remapped, the same way on every Linux builder
+# (scripts/ci/repro-build-env.sh: checkout → /k2, cargo home → /cargo,
+# target dir → /target, for rustc and the C/C++ deps), so two nodes and
+# GitHub can build the same bytes (G12; needs the same rustc too). Before
+# 0.46.6 only the V1 job remapped (BUILD_REMAP=1, now ignored).
 #
 # Never reads ~/.k2, never talks to a daemon, never signs.
 set -euo pipefail
@@ -89,6 +91,8 @@ TRIPLE="${ARCH}-unknown-linux-gnu"
 source "$ROOT/scripts/require-mail-oauth-build-env.sh"
 # shellcheck source=scripts/linux-ptyd-embed.sh
 source "$ROOT/scripts/linux-ptyd-embed.sh"
+# shellcheck source=scripts/ci/repro-build-env.sh
+source "$ROOT/scripts/ci/repro-build-env.sh"
 
 # From a compute job: BUILD_* → the K2_* names option_env! reads.
 for v in GMAIL_CLIENT_ID GMAIL_CLIENT_SECRET MICROSOFT_CLIENT_ID; do
@@ -109,11 +113,7 @@ else
     require_mail_oauth_build_env
 fi
 
-if [ "${BUILD_REMAP:-0}" = "1" ]; then
-    CARGO_HOME_DIR="${CARGO_HOME:-$HOME/.cargo}"
-    export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$ROOT=/k2 --remap-path-prefix=$CARGO_HOME_DIR=/cargo"
-    echo "  path remap on: $ROOT → /k2, $CARGO_HOME_DIR → /cargo"
-fi
+k2_repro_build_env "$ROOT"
 
 TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 REL="$TARGET_DIR/$TRIPLE/release"
@@ -170,7 +170,7 @@ K2_BI_COMMIT="$(k2_ci_rev HEAD "${BUILD_COMMIT:-unknown}")" \
 K2_BI_TREE="$(k2_ci_rev 'HEAD^{tree}' "${BUILD_TREE:-unknown}")" \
 K2_BI_RUSTC="$(rustc -vV)" K2_BI_CARGO="$(cargo -V)" \
 K2_BI_GLIBC="$(ldd --version 2>/dev/null | head -1 || echo unknown)" \
-K2_BI_REMAP="${BUILD_REMAP:-0}" K2_BI_PTYD="$PTYD_SHA" \
+K2_BI_PTYD="$PTYD_SHA" \
 K2_BI_FILES="$DAEMON $NODE $HELPER $ENGINE" \
 python3 - <<'PY'
 import hashlib, json, os
@@ -186,7 +186,7 @@ info = {
     "commit": os.environ["K2_BI_COMMIT"],
     "tree": os.environ["K2_BI_TREE"],
     "oauth": os.environ["K2_BI_OAUTH"],
-    "remap": os.environ["K2_BI_REMAP"] == "1",
+    "remap": "/k2 /cargo /target",
     "ptyd_sha256": os.environ["K2_BI_PTYD"],
     "rustc": os.environ["K2_BI_RUSTC"],
     "cargo": os.environ["K2_BI_CARGO"],

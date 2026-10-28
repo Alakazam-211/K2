@@ -35,7 +35,20 @@
 #   K2_COMPUTE_WORKSPACE     (unset)     --workspace for k2 compute run
 #   K2_COMPUTE_OAUTH         placeholder placeholder | env: pass this Mac's
 #                                        Gmail/MS OAuth values with --env
-#                                        (stored in the job plan; Q4)
+#                                        (stored in the job plan; Q4) |
+#                                        secret: vault secrets via --secret
+#                                        (sealed to the node, names only in
+#                                        the plan). Only env/secret bake the
+#                                        daemon the way GitHub does, so only
+#                                        they can match its bytes. Every
+#                                        linux-bins job (L1, V1, L2) gets the
+#                                        same mode.
+#   K2_COMPUTE_OAUTH_SECRETS "K2_GMAIL_CLIENT_ID,K2_GMAIL_CLIENT_SECRET"
+#                                        vault names for secret mode: Gmail id,
+#                                        Gmail secret[, Microsoft id] (the MS
+#                                        one only if GitHub bakes it too). A
+#                                        person grants each: k2 vault grant
+#                                        NAME --to compute:<ws>/<node> --as env
 #   K2_BIN                   k2          the CLI (tests stub it)
 
 K2CR_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -86,10 +99,22 @@ k2cr_submit() {
             # K2_* names are refused in --env; the build script maps BUILD_*.
             args+=(--env "BUILD_GMAIL_CLIENT_ID=$K2_GMAIL_CLIENT_ID" --env "BUILD_GMAIL_CLIENT_SECRET=$K2_GMAIL_CLIENT_SECRET")
             [ -n "${K2_MICROSOFT_CLIENT_ID:-}" ] && args+=(--env "BUILD_MICROSOFT_CLIENT_ID=$K2_MICROSOFT_CLIENT_ID")
-        else
+        elif [ "${K2_COMPUTE_OAUTH:-placeholder}" = "secret" ]; then
+            # Values never in the plan or argv: the node fetches them sealed
+            # at spawn, as the BUILD_* names the build script maps.
+            local -a names
+            IFS=, read -r -a names <<< "${K2_COMPUTE_OAUTH_SECRETS:-K2_GMAIL_CLIENT_ID,K2_GMAIL_CLIENT_SECRET}"
+            [ "${#names[@]}" -ge 2 ] && [ -n "${names[0]}" ] && [ -n "${names[1]}" ] \
+                || { echo "  ✗ $label: K2_COMPUTE_OAUTH_SECRETS needs the Gmail id and secret names" >&2; return 1; }
+            args+=(--secret "${names[0]}=BUILD_GMAIL_CLIENT_ID" --secret "${names[1]}=BUILD_GMAIL_CLIENT_SECRET")
+            [ -n "${names[2]:-}" ] && args+=(--secret "${names[2]}=BUILD_MICROSOFT_CLIENT_ID")
+        elif [ "${K2_COMPUTE_OAUTH:-placeholder}" = "placeholder" ]; then
             args+=(--env BUILD_OAUTH=placeholder)
+        else
+            echo "  ✗ $label: K2_COMPUTE_OAUTH must be placeholder, env or secret (got $K2_COMPUTE_OAUTH)" >&2
+            return 1
         fi
-        [ "$label" = "V1" ] && args+=(--env BUILD_REMAP=1)
+        # Path remap is always on in build-linux-bins.sh (repro-build-env.sh).
     fi
     local out job argv_json
     out="$(k2cr_k2 "${args[@]}" -- "$@")" || { echo "  ✗ $label: submit to $node failed" >&2; return 1; }

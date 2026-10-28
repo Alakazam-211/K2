@@ -46,6 +46,20 @@ HISTORY (needs the history right)
   k2 doc restore --version V notes.md a NEW change by you; undo reverses it
   k2 doc undo --partial               undo what still can be, report the rest (exit 1)
 
+ANY OTHER FILE (tier 0: images, PDFs, office files, code, plain text)
+  Not Markdown: presence, a lease, versions and restore, no live merging.
+  k2 doc status photo.png          version V, who set it, the lease, conflict copies
+  k2 doc lease photo.png           take the lease (default 5 min, --ttl 1h at most);
+                                   others' writes then exit 5 until you release it
+  k2 doc write --base V --file new.png photo.png   replace it; a stale V = exit 1
+  k2 doc lease --release photo.png
+  k2 doc versions · log · blame · show --version V --out old.png · restore --version V
+  Text verbs (cat, grep, sed -i, undo …) exit 2 here (not_a_text_doc).
+  A program that saves the file while someone holds the lease keeps both:
+  its save is current; the old content stays a version and a copy beside
+  the file, "photo (conflict 2026-10-27 093000 from Sam).png". Leases end
+  when a daemon restarts (renew: exit 2, take it again).
+
 RIGHTS
   Your own workspace: read, edit and history. Another workspace: it must
   be connected to yours (k2 connections) AND a person must share the file
@@ -53,8 +67,9 @@ RIGHTS
   history (k2 doc log) is its own grant. Refused: not_connected,
   doc_not_shared (ask with the permission card the error names),
   doc_forbidden (read-only), history_forbidden.
-  Secrets, the vault folder and files K2 writes itself (AGENTS.md, K2's
-  skills) are never live docs (exit 4, declined).
+  Secrets, the vault folder, git's own folder, files K2 writes itself
+  (AGENTS.md, K2's skills) and K2's other .k2/ configuration are never live
+  docs (exit 4, declined); nor is any file over 32 MiB.
 
 ON BEHALF OF A PERSON
   k2 doc insert --on-behalf-of sam --after 3 plan.md < text

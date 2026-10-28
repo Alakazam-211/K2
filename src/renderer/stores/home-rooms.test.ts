@@ -73,6 +73,8 @@ function harness() {
   const identityChanged = new Map<string, Set<(e: AgentIdentityChangedEvent) => void>>()
   /** Home row repairs asked for (host key, project names). */
   const repairs: Array<[string, string[]]> = []
+  /** Avatar refetches asked for (host key, handle). */
+  const avatarChanges: Array<[string, string]> = []
   const scopes = new Map<string, ServerScope>()
   /** Rows promoted to the primary room (Z7). */
   const promoted: HomeRow[] = []
@@ -152,6 +154,9 @@ function harness() {
     repairRows: (hostKey, projects) => {
       repairs.push([hostKey, projects.map((p) => p.name)])
     },
+    avatarChanged: (hostKey, handle) => {
+      avatarChanges.push([hostKey, handle])
+    },
     promote: (r) => {
       promoted.push(r)
     },
@@ -197,6 +202,7 @@ function harness() {
     projectsChanged,
     identityChanged,
     repairs,
+    avatarChanges,
     promoted,
     floors,
     belowFloor,
@@ -435,6 +441,8 @@ describe('Home rooms (M4, M5)', () => {
     for (const fn of handlers) fn({ ...ev, projectId: 'someone-else', name: 'Nope' })
     expect(fake.input.projects.getState().projects).toBe(before)
     expect(h.repairs.length).toBe(1)
+    // A rename is no picture change: the avatar cache is left alone.
+    expect(h.avatarChanges).toEqual([])
     await h.homeRooms.close('anna::b.test')
     expect(handlers.size).toBe(0)
   })
@@ -463,6 +471,8 @@ describe('Home rooms (M4, M5)', () => {
     expect((fake.input.projects.getState().projects[0] as unknown as { iconUrl: string }).iconUrl).toBe(
       'data:image/png;base64,AAAA',
     )
+    // …and asks the Home avatar cache to refetch that row's picture.
+    expect(h.avatarChanges).toEqual([['b.test', 'anna']])
   })
 
   it('a row whose agent is gone on that server is not-found', async () => {

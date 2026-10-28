@@ -12,11 +12,22 @@
 //     owner token, `~/.k2/cache/agent-avatars/`), shared by every window.
 //   - Rows paint from the cache as a DATA URL: the app CSP's `img-src`
 //     blocks a local `http://127.0.0.1` image (P14).
-//   - Fetch on add and on first row load; refresh at most once per 24 h per
-//     row, keyed on the cache's `fetchedAt`, so two windows don't both
-//     refetch (P12). An offline server, or one that needs a sign-in, keeps
-//     its cached image and is tried again when the pool finds it live.
-//   - No image → `missing` (the row paints its letter) (P16).
+//   - Fetch on add and on first row load; refresh an image at most once per
+//     24 h per row, keyed on the cache's `fetchedAt`, so two windows don't
+//     both refetch (P12). An offline server, or one that needs a sign-in,
+//     keeps its cached image and is tried again when the pool finds it live.
+//   - No image → `missing` (the row paints its letter) (P16). A miss lives
+//     short: re-checked after 10 min, then 30 min, then hourly while it
+//     stays missing (`AVATAR_MISSING_RECHECK_MS`; the miss count is this
+//     window's, so a relaunch starts at 10 min again). Before this a miss
+//     kept the 24 h rule, and a peer that set its picture after the first
+//     look stayed a letter all day (Appa, 10-28).
+//   - An explicit ask re-checks a missing row at once (opening the row, the
+//     Add Agent picker opening), and a peer's `agent_identity_changed` with
+//     `image` (seen by an open Home room on that server) refetches the row
+//     whatever its age. Neither runs twice inside `AVATAR_RECHECK_FLOOR_MS`.
+//   - While Home (or a Garden) is on screen, due misses are looked for
+//     every `AVATAR_RECHECK_TICK_MS`, so a re-check doesn't wait for focus.
 //   - Cleanup: 2 s after any Home row change, and once when Home mounts, the
 //     union of every Home's addresses goes to `/cli/home/avatars/prune`, but
 //     only when the Homes store was read from storage (P17, P28).
@@ -40,6 +51,16 @@ import { hostPool } from '@/lib/host-pool-instance'
 
 /** A row's image is refreshed at most this often (P12c). */
 export const AVATAR_REFRESH_MS = 24 * 60 * 60 * 1000
+/** A `missing` row is re-checked after these delays: the first entry for a
+ *  miss this window has not re-checked yet, the next after one more miss,
+ *  and the last repeats (10 min, 30 min, then hourly). */
+export const AVATAR_MISSING_RECHECK_MS: readonly number[] = [10 * 60_000, 30 * 60_000, 60 * 60_000]
+/** A forced re-check (user ask, identity event) never refetches a row
+ *  fetched less than this long ago, so repeated clicks can't loop. */
+export const AVATAR_RECHECK_FLOOR_MS = 5_000
+/** While a Home or Garden is on screen, due misses are looked for this
+ *  often (a local check; the network is asked only for a due row). */
+export const AVATAR_RECHECK_TICK_MS = 2 * 60_000
 /** Prune runs this long after the last row change (P17). */
 export const AVATAR_PRUNE_DELAY_MS = 2_000
 /** One cache GET asks for at most this many addresses (P14). */
@@ -76,6 +97,28 @@ interface HomeAvatarState {
 }
 
 export const useHomeAvatarStore = create<HomeAvatarState>(() => ({ cached: {}, local: {} }))
+
+/** How long a `missing` entry lives, after `misses` misses in a row this
+ *  window has recorded for it (0: read from the cache, not re-checked yet). */
+export function missingRecheckMs(misses: number): number {
+  const i = Math.min(Math.max(misses - 1, 0), AVATAR_MISSING_RECHECK_MS.length - 1)
+  return AVATAR_MISSING_RECHECK_MS[i]
+}
+
+/** Is a cache entry due for a refetch at `now`? An image follows the 24 h
+ *  rule (P12); a miss follows `missingRecheckMs(misses)`; a forced entry
+ *  is due once it is `AVATAR_RECHECK_FLOOR_MS` old. No entry is due. */
+export function avatarEntryStale(
+  e: Pick<CachedAvatar, 'missing' | 'fetchedAt'> | undefined,
+  now: number,
+  misses: number,
+  forced: boolean,
+): boolean {
+  if (!e) return true
+  const age = now - e.fetchedAt
+  if (forced && age >= AVATAR_RECHECK_FLOOR_MS) return true
+  return age > (e.missing ? missingRecheckMs(misses) : AVATAR_REFRESH_MS)
+}
 
 /** Only `data:image/…` values are images here; an `https://` icon (a remote
  *  `set-icon` stores any string) is treated as no image (P8, P15). */
@@ -150,6 +193,15 @@ export interface HomeAvatarSync {
   schedulePrune: (keep: () => string[] | null) => void
   /** Run a pending prune now (tests). */
   flushPrune: () => Promise<void>
+  /** Refetch these rows now (within the last `refresh` input's rows):
+   *  `'user'` (an explicit ask) only those whose cache says `missing`,
+   *  `'changed'` (the peer says its picture changed) any. Both respect
+   *  `AVATAR_RECHECK_FLOOR_MS` and the server/pool rules of `refresh`. */
+  recheck: (addresses: readonly string[], why: 'user' | 'changed') => Promise<void>
+  /** The tick: re-read the cache for misses that are due (another window
+   *  may have re-checked them), then refresh what is still due. Asks no
+   *  one when nothing is due. */
+  recheckDue: (input: AvatarSyncInput) => Promise<void>
 }
 
 export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
@@ -159,6 +211,14 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
   const inflightHosts = new Map<string, Promise<void>>()
   const failedAt = new Map<string, number>()
   const logged = new Set<string>()
+  /** Misses in a row this window recorded, by address. */
+  const misses = new Map<string, number>()
+  /** Rows a user ask or an identity event wants refetched. */
+  const forced = new Set<string>()
+  /** The last `refresh` input, and every row any caller (Home, a Garden)
+   *  has refreshed, so a recheck can find a row wherever it is shown. */
+  let lastInput: AvatarSyncInput | null = null
+  const knownRows = new Map<string, HomeRow>()
   let localInflight: Promise<void> | null = null
   let pruneTimer: ReturnType<typeof setTimeout> | null = null
   let pruneKeep: (() => string[] | null) | null = null
@@ -194,25 +254,33 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
     }
   }
 
-  const put = async (address: string, dataUrl: string | null): Promise<boolean> => {
+  /** Store `dataUrl` (or a miss) and say what the cache now holds:
+   *  `'image'`, `'missing'`, or null when nothing was stored. A miss grows
+   *  the row's backoff; an image resets it. */
+  const put = async (address: string, dataUrl: string | null): Promise<'image' | 'missing' | null> => {
+    const recorded = (kind: 'image' | 'missing'): 'image' | 'missing' => {
+      if (kind === 'missing') misses.set(address, (misses.get(address) ?? 0) + 1)
+      else misses.delete(address)
+      return kind
+    }
     try {
       await deps.cachePut(address, dataUrl)
-      return true
+      return recorded(dataUrl === null ? 'missing' : 'image')
     } catch (err) {
       if (dataUrl !== null && isImageRefusal(err)) {
         // The cache won't take this image (too big, odd type): the row
-        // paints its letter and is tried again in a day.
+        // paints its letter and is re-checked on the miss backoff.
         try {
           await deps.cachePut(address, null)
-          return true
+          return recorded('missing')
         } catch (err2) {
           logOnce(`put:${address}`, `could not record ${address} as having no image:`, err2)
-          return false
+          return null
         }
       }
       logOnce(`put:${address}`, `could not cache the image for ${address}:`, err)
       failedAt.set(LOCAL_HOME_HOST, deps.now())
-      return false
+      return null
     }
   }
 
@@ -229,10 +297,8 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
     return r && r.found === true && isImageDataUrl(r.dataUrl) ? r.dataUrl : null
   }
 
-  const stale = (address: string, now: number): boolean => {
-    const e = store.getState().cached[address]
-    return !e || now - e.fetchedAt > AVATAR_REFRESH_MS
-  }
+  const stale = (address: string, now: number): boolean =>
+    avatarEntryStale(store.getState().cached[address], now, misses.get(address) ?? 0, forced.has(address))
 
   const refreshHost = async (
     hostKey: string,
@@ -250,6 +316,8 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
     }
     const done: string[] = []
     for (const row of rows) {
+      // The server answered: a forced ask is spent, whatever comes of it.
+      forced.delete(row.address)
       const ws = findWorkspaceForRow([...list], row)
       if (!ws) continue
       let image: string | null | undefined
@@ -274,6 +342,8 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
 
   const refresh = async (input: AvatarSyncInput): Promise<void> => {
     if (deps.isWeb()) return
+    lastInput = input
+    for (const r of input.rows) knownRows.set(r.address, r)
     const rows = input.rows.filter((r) => {
       const p = parseHomeAddress(r.address)
       return p !== null && p.host !== LOCAL_HOME_HOST
@@ -291,7 +361,9 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
     // listing refreshes every row on it (T4.1).
     const staleHosts = new Set<string>()
     for (const r of rows) {
-      if (!pending.has(r.address) && stale(r.address, now)) staleHosts.add(parseHomeAddress(r.address)!.host)
+      if (pending.has(r.address)) continue
+      const host = parseHomeAddress(r.address)!.host
+      if (stale(r.address, now) || connectedHasNewImage(r, host, input)) staleHosts.add(host)
     }
     const byHost = new Map<string, HomeRow[]>()
     for (const r of rows) {
@@ -326,6 +398,44 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
       jobs.push(job)
     }
     await Promise.all(jobs)
+  }
+
+  /** The connected server's store has an image for a row the cache still
+   *  calls missing: no network needed to fix that, so don't wait (P12a). */
+  const connectedHasNewImage = (row: HomeRow, host: string, input: AvatarSyncInput): boolean => {
+    if (host !== input.connectedKey || !input.connectedProjects) return false
+    if (store.getState().cached[row.address]?.missing !== true) return false
+    const ws = findWorkspaceForRow([...input.connectedProjects], row)
+    return !!ws && isImageDataUrl(ws.iconUrl)
+  }
+
+  const recheck = async (addresses: readonly string[], why: 'user' | 'changed'): Promise<void> => {
+    if (deps.isWeb()) return
+    const cached = store.getState().cached
+    const rows: HomeRow[] = []
+    for (const a of addresses) {
+      const p = parseHomeAddress(a)
+      if (!p || p.host === LOCAL_HOME_HOST) continue
+      if (why === 'user' && cached[a]?.missing !== true) continue
+      forced.add(a)
+      const row = knownRows.get(a)
+      if (row) rows.push(row)
+    }
+    // Only the asked rows' servers are listed. No input yet (or a row no
+    // caller has shown): the next refresh picks the forced rows up.
+    if (rows.length > 0 && lastInput) await refresh({ ...lastInput, rows })
+  }
+
+  const recheckDue = async (input: AvatarSyncInput): Promise<void> => {
+    if (deps.isWeb()) return
+    const now = deps.now()
+    const cached = store.getState().cached
+    const due = input.rows
+      .map((r) => r.address)
+      .filter((a) => read.has(a) && cached[a]?.missing === true && !pending.has(a) && stale(a, now))
+    if (due.length === 0) return
+    await readCache(due)
+    await refresh(input)
   }
 
   const readLocalRows = async (rows: readonly HomeRow[], connectedKey: string): Promise<void> => {
@@ -397,7 +507,7 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
     await runPrune()
   }
 
-  return { readCache, refresh, readLocalRows, putFromListing, schedulePrune, flushPrune }
+  return { readCache, refresh, readLocalRows, putFromListing, schedulePrune, flushPrune, recheck, recheckDue }
 }
 
 // ── The app's instance ───────────────────────────────────────────────────
@@ -527,7 +637,18 @@ export function useHomeAvatarRowSync(rows: readonly HomeRow[], sync: HomeAvatarS
     }
     again()
     window.addEventListener('focus', again)
-    return () => window.removeEventListener('focus', again)
+    // A miss lives 10 min (then longer): look for due ones while on screen,
+    // so a focused window doesn't wait for the next focus to see a picture
+    // a peer set. Fetching is the app's job by design (P10); a headless
+    // daemon has no screen that needs these pictures.
+    const tick = setInterval(() => {
+      const input = inputRef.current
+      if (input) void sync.recheckDue(input)
+    }, AVATAR_RECHECK_TICK_MS)
+    return () => {
+      window.removeEventListener('focus', again)
+      clearInterval(tick)
+    }
   }, [sync])
 
   // A row added or moved, a server coming back, a login landing, the

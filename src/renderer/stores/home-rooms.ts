@@ -42,7 +42,8 @@ import { roomTiers, type RoomTierChange, type RoomTierManager } from '@/lib/room
 import { createRoomKeepAlive, type RoomKeepAlive } from '@/lib/room-keep-alive'
 import { hostPool } from '@/lib/host-pool-instance'
 import { fetchServerProjects, primaryWorkspaceOf } from '@/lib/server-projects'
-import { activeHomeHostKey, findWorkspaceForRow } from '@/lib/home-address'
+import { activeHomeHostKey, findWorkspaceForRow, homeAddress } from '@/lib/home-address'
+import { homeAvatarSync } from '@/lib/home-avatars'
 import { requestHostSelect } from '@/lib/home-pending-select'
 import { homeRoomVerdict } from '@/lib/home-room-floor'
 import { switchWindowToRow, toastOldServerOnce } from '@/lib/home-switch'
@@ -119,6 +120,10 @@ export interface HomeRoomsDeps {
    *  the room's list (and its Home row label) follows a rename made by
    *  anyone. Optional: absent, the room still follows `projects_changed`. */
   onAgentIdentityChanged?(scope: ServerScope, fn: (e: AgentIdentityChangedEvent) => void): () => void
+  /** The agent `handle` on `hostKey` has a new picture (an
+   *  `agent_identity_changed` naming `image`, or a field this client can't
+   *  patch): refetch that Home row's cached avatar. Optional. */
+  avatarChanged?(hostKey: string, handle: string): void
   /** Rename repair of the Home rows on `hostKey` from that server's fresh
    *  list (labels follow names). Optional. */
   repairRows?(hostKey: string, projects: ProjectWithWorkspaces[]): void
@@ -281,7 +286,10 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
           projectsStore.setState({ projects: next })
           deps.repairRows?.(entry.hostKey, next)
         }
-        if (agentIdentityNeedsRefetch(e)) refreshProjects()
+        if (agentIdentityNeedsRefetch(e)) {
+          refreshProjects()
+          if (e.handle) deps.avatarChanged?.(entry.hostKey, e.handle)
+        }
       }) ?? null
     projectSubs.set(address, () => {
       offProjects()
@@ -461,6 +469,7 @@ export const homeRooms: HomeRooms = createHomeRooms({
   onProjectsChanged: (scope, fn) => onProjectsChanged(scope, () => fn()),
   onAgentIdentityChanged: (scope, fn) => onAgentIdentityChanged(scope, fn),
   repairRows: (hostKey, projects) => repairHomeRowsFromList(useHomesStore, hostKey, projects),
+  avatarChanged: (hostKey, handle) => void homeAvatarSync.recheck([homeAddress(handle, hostKey)], 'changed'),
   promote: promoteToPrimary,
   now: () => Date.now(),
   setInterval: (fn, ms) => setInterval(fn, ms),

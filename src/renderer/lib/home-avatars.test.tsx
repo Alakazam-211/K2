@@ -20,8 +20,13 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import {
+  AVATAR_MISSING_RECHECK_MS,
   AVATAR_PRUNE_DELAY_MS,
+  AVATAR_RECHECK_FLOOR_MS,
+  AVATAR_RECHECK_TICK_MS,
   AVATAR_REFRESH_MS,
+  avatarEntryStale,
+  missingRecheckMs,
   avatarQueryBatches,
   createHomeAvatarSync,
   pruneKeepFrom,
@@ -304,6 +309,239 @@ describe('the sync engine', () => {
   })
 })
 
+// ── A miss lives short (Appa 10-28) ─────────────────────────────────────
+//
+// A peer with no picture yet was cached `missing` under the 24 h image rule,
+// so a picture it set an hour later stayed a letter all day. A miss is now
+// re-checked after 10 min, then 30 min, then hourly; an explicit ask or the
+// peer's identity event re-checks it at once (never twice inside 5 s).
+
+const MIN = 60_000
+
+describe('missing rows', () => {
+  /** B lists Bee with no picture until `pic.on`, then with PNG_B1; get-icon
+   *  agrees. */
+  function peerB(): ReturnType<typeof fakeDeps> & { pic: { on: boolean }; sync: HomeAvatarSync } {
+    const pic = { on: false }
+    const f = fakeDeps((host, route) => {
+      if (host === B && route === 'projects/list') return [{ ...listB[0], iconUrl: pic.on ? PNG_B1 : null }]
+      if (host === B && route === 'projects/get-icon') {
+        return pic.on ? { found: true, dataUrl: PNG_B1 } : { found: false, dataUrl: null }
+      }
+      throw new Error(`unexpected ${host} ${route}`)
+    })
+    return { ...f, pic, sync: createHomeAvatarSync(f.deps) }
+  }
+  const input = { rows: [bee], connectedKey: 'local', connectedProjects: [], reachable: (k: string) => k === B }
+  const lists = (calls: Calls): number => calls.hostGet.filter((c) => c.route === 'projects/list').length
+
+  it('the backoff is 10 min, 30 min, then hourly; a miss not yet re-checked starts at 10 min', () => {
+    expect(AVATAR_MISSING_RECHECK_MS).toEqual([10 * MIN, 30 * MIN, 60 * MIN])
+    expect([0, 1, 2, 3, 4, 50].map(missingRecheckMs)).toEqual([
+      10 * MIN,
+      10 * MIN,
+      30 * MIN,
+      60 * MIN,
+      60 * MIN,
+      60 * MIN,
+    ])
+  })
+
+  it('avatarEntryStale: a miss past its life is due, a fresh one is not; an image keeps the 24 h rule', () => {
+    const miss = (age: number) => ({ missing: true, fetchedAt: T0 - age })
+    const img = (age: number) => ({ missing: false, fetchedAt: T0 - age })
+    expect(avatarEntryStale(miss(10 * MIN + 1), T0, 0, false)).toBe(true)
+    expect(avatarEntryStale(miss(10 * MIN - 1), T0, 0, false)).toBe(false)
+    expect(avatarEntryStale(miss(10 * MIN + 1), T0, 2, false)).toBe(false) // second miss: 30 min
+    expect(avatarEntryStale(miss(30 * MIN + 1), T0, 2, false)).toBe(true)
+    expect(avatarEntryStale(miss(30 * MIN + 1), T0, 3, false)).toBe(false) // third+: hourly
+    expect(avatarEntryStale(miss(60 * MIN + 1), T0, 9, false)).toBe(true)
+    expect(avatarEntryStale(img(10 * MIN + 1), T0, 0, false)).toBe(false)
+    expect(avatarEntryStale(img(23 * 60 * MIN), T0, 0, false)).toBe(false)
+    expect(avatarEntryStale(img(DAY + 1), T0, 0, false)).toBe(true)
+    // Forced: due once past the floor, never inside it.
+    expect(avatarEntryStale(miss(AVATAR_RECHECK_FLOOR_MS - 1), T0, 0, true)).toBe(false)
+    expect(avatarEntryStale(miss(AVATAR_RECHECK_FLOOR_MS), T0, 0, true)).toBe(true)
+    expect(avatarEntryStale(undefined, T0, 0, false)).toBe(true)
+  })
+
+  it('a missing marker older than 10 min is refetched, and the picture the peer set since lands', async () => {
+    const { calls, disk, sync, pic } = peerB()
+    disk.set(bee.address, { dataUrl: null, missing: true, fetchedAt: T0 - 10 * MIN - 1, sha256: null })
+    pic.on = true
+    await sync.refresh(input)
+    expect(lists(calls)).toBe(1)
+    expect(calls.puts).toEqual([{ address: bee.address, dataUrl: PNG_B1 }])
+    expect(useHomeAvatarStore.getState().cached[bee.address]?.dataUrl).toBe(PNG_B1)
+  })
+
+  it('a missing marker younger than 10 min is not refetched', async () => {
+    const { calls, disk, sync, pic } = peerB()
+    disk.set(bee.address, { dataUrl: null, missing: true, fetchedAt: T0 - 10 * MIN + 1, sha256: null })
+    pic.on = true
+    await sync.refresh(input)
+    expect(calls.hostGet).toEqual([])
+    expect(calls.puts).toEqual([])
+    expect(useHomeAvatarStore.getState().cached[bee.address]?.missing).toBe(true)
+  })
+
+  it('repeated misses back off: 10 min, 30 min, then hourly, never sooner', async () => {
+    const { calls, clock, sync } = peerB()
+    await sync.refresh(input) // first look: no picture (miss 1)
+    expect(lists(calls)).toBe(1)
+    expect(calls.puts).toEqual([{ address: bee.address, dataUrl: null }])
+    let last = clock.now
+    /** Refresh `ms` after the last fetch; was B listed? */
+    const at = async (ms: number): Promise<boolean> => {
+      const before = lists(calls)
+      clock.now = last + ms
+      await sync.refresh(input)
+      const asked = lists(calls) > before
+      if (asked) last = clock.now
+      return asked
+    }
+    expect(await at(10 * MIN - 1)).toBe(false)
+    expect(await at(10 * MIN + 1)).toBe(true) // miss 2 → 30 min
+    expect(await at(10 * MIN + 1)).toBe(false)
+    expect(await at(30 * MIN - 1)).toBe(false)
+    expect(await at(30 * MIN + 1)).toBe(true) // miss 3 → hourly
+    expect(await at(30 * MIN + 1)).toBe(false)
+    expect(await at(60 * MIN + 1)).toBe(true)
+    expect(await at(30 * MIN + 1)).toBe(false)
+    expect(await at(60 * MIN + 1)).toBe(true) // stays hourly
+    expect(calls.puts.map((p) => p.dataUrl)).toEqual([null, null, null, null, null])
+  })
+
+  it('an image resets the backoff, keeps the 24 h rule, and a later miss starts at 10 min again', async () => {
+    const { calls, clock, sync, pic } = peerB()
+    await sync.refresh(input) // miss 1
+    clock.now += 10 * MIN + 1
+    await sync.refresh(input) // miss 2 → 30 min
+    pic.on = true
+    clock.now += 30 * MIN + 1
+    await sync.refresh(input) // image
+    expect(calls.puts.at(-1)).toEqual({ address: bee.address, dataUrl: PNG_B1 })
+    const listed = lists(calls)
+    expect(listed).toBe(3)
+    clock.now += 23 * 60 * MIN
+    await sync.refresh(input)
+    expect(lists(calls)).toBe(listed)
+    pic.on = false
+    clock.now += 60 * MIN + 1 // past 24 h since the image
+    await sync.refresh(input) // miss 1 again
+    expect(calls.puts.at(-1)).toEqual({ address: bee.address, dataUrl: null })
+    clock.now += 10 * MIN + 1
+    await sync.refresh(input)
+    expect(lists(calls)).toBe(listed + 2)
+  })
+
+  it('an image the cache refuses counts as a miss, so it backs off instead of retrying every 10 min', async () => {
+    const { deps, calls, clock } = fakeDeps((_h, route) => (route === 'projects/list' ? listB.slice(0, 1) : null))
+    const realPut = deps.cachePut
+    deps.cachePut = async (address, dataUrl) => {
+      if (dataUrl !== null) {
+        calls.puts.push({ address, dataUrl })
+        throw new Error('too_large')
+      }
+      await realPut(address, dataUrl)
+    }
+    const sync = createHomeAvatarSync(deps)
+    await sync.refresh(input) // miss 1
+    clock.now += 10 * MIN + 1
+    await sync.refresh(input) // miss 2 → 30 min
+    expect(lists(calls)).toBe(2)
+    clock.now += 10 * MIN + 1
+    await sync.refresh(input)
+    expect(lists(calls)).toBe(2)
+  })
+
+  it('an image entry follows the 24 h rule: never refetched inside a day, refetched after', async () => {
+    const { calls, disk, clock, sync, pic } = peerB()
+    pic.on = true
+    disk.set(bee.address, { dataUrl: PNG_B2, missing: false, fetchedAt: T0, sha256: 'h' })
+    for (const ms of [10 * MIN + 1, 60 * MIN + 1, DAY - 1]) {
+      clock.now = T0 + ms
+      await sync.refresh(input)
+      expect(calls.hostGet).toEqual([])
+    }
+    clock.now = T0 + DAY + 1
+    await sync.refresh(input)
+    expect(lists(calls)).toBe(1)
+    expect(useHomeAvatarStore.getState().cached[bee.address]?.dataUrl).toBe(PNG_B1)
+  })
+
+  it('a user ask re-checks a fresh miss at once (past the 5 s floor), never an image, and repeated asks do not loop', async () => {
+    const { calls, clock, sync, pic, disk } = peerB()
+    await sync.refresh(input) // miss, fetched at T0
+    expect(lists(calls)).toBe(1)
+    pic.on = true
+    clock.now = T0 + AVATAR_RECHECK_FLOOR_MS - 1
+    await sync.recheck([bee.address], 'user')
+    expect(lists(calls)).toBe(1) // inside the floor: the ask is kept for later
+    clock.now = T0 + AVATAR_RECHECK_FLOOR_MS
+    await sync.refresh(input)
+    expect(lists(calls)).toBe(2) // the kept ask runs on the next refresh
+    expect(useHomeAvatarStore.getState().cached[bee.address]?.dataUrl).toBe(PNG_B1)
+    // An image is not re-checked by a user ask.
+    clock.now += 60 * MIN
+    await sync.recheck([bee.address], 'user')
+    expect(lists(calls)).toBe(2)
+    // Back to a miss: one ask runs, a burst of clicks after it asks nobody.
+    disk.set(bee.address, { dataUrl: null, missing: true, fetchedAt: clock.now, sha256: null })
+    await sync.readCache([bee.address])
+    pic.on = false
+    clock.now += AVATAR_RECHECK_FLOOR_MS
+    await sync.recheck([bee.address], 'user')
+    expect(lists(calls)).toBe(3)
+    for (let i = 0; i < 10; i++) {
+      clock.now += 100
+      await sync.recheck([bee.address], 'user')
+    }
+    expect(lists(calls)).toBe(3)
+  })
+
+  it('a peer identity change (image) refetches an image row at once', async () => {
+    const { calls, disk, clock, sync, pic } = peerB()
+    disk.set(bee.address, { dataUrl: PNG_B2, missing: false, fetchedAt: T0, sha256: 'h' })
+    await sync.refresh(input) // a fresh image: nothing asked; the input is recorded
+    expect(calls.hostGet).toEqual([])
+    pic.on = true
+    clock.now = T0 + AVATAR_RECHECK_FLOOR_MS
+    await sync.recheck([bee.address], 'changed')
+    expect(lists(calls)).toBe(1)
+    expect(useHomeAvatarStore.getState().cached[bee.address]?.dataUrl).toBe(PNG_B1)
+  })
+
+  it('recheckDue reads nothing when nothing is due, and re-reads the cache before asking a peer', async () => {
+    const { calls, disk, clock, sync } = peerB()
+    disk.set(bee.address, { dataUrl: null, missing: true, fetchedAt: T0, sha256: null })
+    await sync.refresh(input)
+    const reads = calls.cacheGet.length
+    await sync.recheckDue(input)
+    expect(calls.cacheGet.length).toBe(reads)
+    // Due, but another window re-checked a moment ago: read, not asked.
+    clock.now = T0 + 10 * MIN + 1
+    disk.set(bee.address, { dataUrl: null, missing: true, fetchedAt: clock.now - 1000, sha256: null })
+    await sync.recheckDue(input)
+    expect(calls.cacheGet.length).toBe(reads + 1)
+    expect(calls.hostGet).toEqual([])
+    // Due again: read, asked, and read back after the put.
+    clock.now += 10 * MIN + 1
+    await sync.recheckDue(input)
+    expect(calls.cacheGet.slice(reads + 1)).toEqual([[bee.address], [bee.address]])
+    expect(lists(calls)).toBe(1)
+  })
+
+  it('the connected server: a row the cache calls missing takes the store’s new picture with no wait and no network', async () => {
+    const { deps, calls, disk } = fakeDeps((h, r) => new Error(`no network expected: ${h} ${r}`))
+    disk.set(bee.address, { dataUrl: null, missing: true, fetchedAt: T0 - 1000, sha256: null })
+    const sync = createHomeAvatarSync(deps)
+    await sync.refresh({ rows: [bee], connectedKey: B, connectedProjects: [listB[0]], reachable: () => false })
+    expect(calls.hostGet).toEqual([])
+    expect(calls.puts).toEqual([{ address: bee.address, dataUrl: PNG_B1 }])
+  })
+})
+
 // ── The hooks ───────────────────────────────────────────────────────────
 
 function Row({ address }: { address: string }): React.JSX.Element {
@@ -490,6 +728,49 @@ describe('the hooks', () => {
       await vi.advanceTimersByTimeAsync(AVATAR_PRUNE_DELAY_MS + 500)
     })
     expect(calls.prunes).toHaveLength(2)
+  })
+
+  it('on screen with no focus change, a missing row is re-checked by the tick once 10 min have passed (Appa 10-28)', async () => {
+    vi.useFakeTimers()
+    useConnectHostStore.setState({ hosts: [boxB], connectionStatus: 'connected' })
+    hostPool.store.setState({ entries: { [B]: liveEntry(B, 'live') } })
+    const { deps, calls, disk, clock } = fakeDeps((host, route) => {
+      if (host === B && route === 'projects/list') return listB.slice(0, 1)
+      throw new Error(`unexpected ${host} ${route}`)
+    })
+    disk.set(bee.address, { dataUrl: null, missing: true, fetchedAt: T0, sha256: null })
+    setHome([bee])
+    const sync = createHomeAvatarSync(deps)
+    const view = render(
+      <>
+        <Effects sync={sync} />
+        <Row address={bee.address} />
+      </>,
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(calls.hostGet).toEqual([])
+    expect(view.container.querySelector('img')).toBeNull()
+    // A tick before the miss is due asks nobody.
+    clock.now = T0 + AVATAR_RECHECK_TICK_MS
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AVATAR_RECHECK_TICK_MS)
+    })
+    expect(calls.hostGet).toEqual([])
+    // The first tick past 10 min lists B once and the picture paints.
+    clock.now = T0 + 10 * MIN + 1
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AVATAR_RECHECK_TICK_MS)
+    })
+    expect(calls.hostGet).toEqual([{ host: B, route: 'projects/list' }])
+    expect(view.container.querySelector('img')?.getAttribute('src')).toBe(PNG_B1)
+    // Later ticks on an image ask nobody.
+    clock.now += 60 * MIN
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AVATAR_RECHECK_TICK_MS * 3)
+    })
+    expect(calls.hostGet).toHaveLength(1)
   })
 
   it('P28: a Homes store that fell back to its in-memory seed never prunes', async () => {

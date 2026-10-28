@@ -43,7 +43,7 @@ import { nextCheckDelayMs, sameServerPairs } from '@/lib/host-pool'
 import { hostPool } from '@/lib/host-pool-instance'
 import { useHomeRoomsStore } from '@/stores/home-rooms'
 import { useZenShown } from '@/lib/zen/zen-view'
-import { useHomeAvatarSync } from '@/lib/home-avatars'
+import { homeAvatarSync, useHomeAvatarSync } from '@/lib/home-avatars'
 import { grokBotIdFromAddress, grokRowStatus } from '@/lib/grokbots'
 import { useGrokBotsStore, type GrokHostState } from '@/stores/grokbots'
 import { useSelectTopHomeRowOnEnter } from './home-auto-select'
@@ -355,6 +355,14 @@ export function HomeShellEffects(): null {
   // Entering Home with nothing selected opens the top row, as a click would.
   useSelectTopHomeRowOnEnter()
   useEffect(() => () => useHomeAddPickerStore.getState().setOpen(false), [])
+  // Opening the Add Agent picker is an explicit ask: re-check now the
+  // selected Home's rows whose picture the cache calls missing.
+  const pickerOpen = useHomeAddPickerStore((s) => s.open)
+  useEffect(() => {
+    if (!pickerOpen) return
+    const rows = selectedHome(useHomesStore.getState()).rows
+    void homeAvatarSync.recheck(rows.map((r) => r.address), 'user')
+  }, [pickerOpen])
   // vs-live P31, prd-zen-gardens-v1 G6: Zen shown (the top-bar toggle,
   // the chord, the app menu) closes Home's Add Agent picker, so it never
   // waits under Zen and comes back when Zen exits.

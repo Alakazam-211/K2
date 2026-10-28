@@ -39,6 +39,7 @@ import type { HomeRow } from '@/stores/homes'
 import { grokBotIdFromAddress } from '@/lib/grokbots'
 import { closeGrokChat, useGrokBotsStore } from '@/stores/grokbots'
 import { applyWorkspaceSwitchFocus } from '@/lib/workspace-switch-focus'
+import { homeAvatarSync } from '@/lib/home-avatars'
 
 export { switchTargetForHost } from '@/lib/home-switch'
 
@@ -62,6 +63,9 @@ export function openHomeRow(row: HomeRow): OpenResult {
     return 'selected'
   }
   closeGrokChat()
+  // Opening a row is an explicit ask: a row whose picture the cache calls
+  // missing is re-checked now, not on the miss backoff (no-op otherwise).
+  void homeAvatarSync.recheck([row.address], 'user')
   const hostState = useConnectHostStore.getState()
   const connectedKey = activeHomeHostKey(hostState.activeHost)
 

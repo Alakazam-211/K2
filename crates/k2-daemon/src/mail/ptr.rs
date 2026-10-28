@@ -2,7 +2,15 @@
 //!
 //! Show: origin IPv4 (what-is-my-ip), live rDNS, HELO from
 //! `mail_server.hostname`, A of that hostname, and alignment flags.
-//! No OVH on the box. Never Connect VIP.
+//! No OVH on the box. Never a K2 relay.
+//!
+//! Relay guard (0.46.6): both verbs refuse an origin that is ANY relay
+//! this box knows about — `relay_list::guard_hosts` (what the tunnel
+//! dials, what `tunnel.json` stores, what k2.dev served and marked
+//! active, `relay.k2.dev`, the old baked relays), each name resolved
+//! here. `set` also refuses while a relay name won't resolve
+//! (`relay_check`, retry), because pointing a relay's reverse DNS at a
+//! customer is not cheap to undo; `show` only notes it (`relayCheck`).
 //!
 //! Set: normalize hostname (same as enable), refuse unless public A
 //! includes origin, Stalwart `set_server_hostname` + UPDATE
@@ -14,7 +22,7 @@
 //! Extra-gate is the quota pattern (`is_mail_manage_surface` +
 //! `post_allowed`). GET `/cli/mail/ptr/set` → 405.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv4Addr};
 
 use crate::cli_response::CliResponse;
@@ -22,8 +30,74 @@ use crate::dns::proxy::{self, DnsHttpResponse};
 use crate::mail::dns_verify::{DnsError, DnsResolver, SystemResolver};
 use crate::mail::preflight::{PreflightEnv, RealPreflightEnv};
 
-/// Connect edge VIP — never treat as origin for PTR/HELO.
-const CONNECT_VIP: Ipv4Addr = Ipv4Addr::new(178, 156, 232, 105);
+/// The relays this box knows about, resolved: never treated as the origin
+/// for PTR/HELO (0.46.6, PRD relay-default-and-ptr-guard D11–D14).
+#[derive(Debug, Default)]
+pub(crate) struct RelaySet {
+    /// Relay IPv4 → the relay host it came from (an IP literal or a name).
+    ips: BTreeMap<Ipv4Addr, String>,
+    /// Relay names that did not resolve right now.
+    unresolved: Vec<String>,
+}
+
+impl RelaySet {
+    /// Resolve `hosts` with the PTR verbs' own resolver. IPv4 literals
+    /// count as they are; IPv6 literals are skipped (the origin is IPv4).
+    pub(crate) fn resolve(hosts: &[String], resolver: &dyn DnsResolver) -> Self {
+        let mut set = RelaySet::default();
+        for host in hosts {
+            let host = host.trim();
+            if host.is_empty() {
+                continue;
+            }
+            match host.parse::<IpAddr>() {
+                Ok(IpAddr::V4(ip)) => {
+                    set.ips.entry(ip).or_insert_with(|| host.to_string());
+                }
+                Ok(IpAddr::V6(_)) => {}
+                Err(_) => match resolver.a(host) {
+                    Ok(ips) if !ips.is_empty() => {
+                        for ip in ips {
+                            set.ips.entry(ip).or_insert_with(|| host.to_string());
+                        }
+                    }
+                    _ => {
+                        if !set.unresolved.iter().any(|u| u.eq_ignore_ascii_case(host)) {
+                            set.unresolved.push(host.to_string());
+                        }
+                    }
+                },
+            }
+        }
+        set
+    }
+
+    /// The relay host `ip` belongs to, if it is a relay.
+    fn relay_of(&self, ip: &Ipv4Addr) -> Option<&str> {
+        self.ips.get(ip).map(String::as_str)
+    }
+}
+
+/// Every relay host this box knows about (D11), read WITHOUT the vault
+/// token (D12: never the keychain). A missing `tunnel.json` is the
+/// default config (the default name and the old relays still count); an
+/// unreadable one still yields the in-memory and built-in relays.
+fn relay_hosts() -> Vec<String> {
+    use k2_core::tunnel::{config, relay_list};
+    let cfg = match config::load_without_token() {
+        Ok(c) => c,
+        Err(e) => {
+            k2_core::log_debug!(
+                "[mail/ptr] relay guard: tunnel.json unreadable ({e}); guarding the built-in and in-memory relays"
+            );
+            config::TunnelConfig::default()
+        }
+    };
+    relay_list::guard_hosts(&cfg)
+        .into_iter()
+        .map(|r| r.host)
+        .collect()
+}
 
 fn err_json(status: &'static str, code: &str, hint: String) -> CliResponse {
     CliResponse {
@@ -218,7 +292,7 @@ fn persist_hostname(hostname: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn origin_ipv4(env: &dyn PreflightEnv) -> Result<Ipv4Addr, CliResponse> {
+fn origin_ipv4(env: &dyn PreflightEnv, relays: &RelaySet) -> Result<Ipv4Addr, CliResponse> {
     let raw = env.public_ip().ok_or_else(|| {
         err_json(
             "502 Bad Gateway",
@@ -233,16 +307,34 @@ fn origin_ipv4(env: &dyn PreflightEnv) -> Result<Ipv4Addr, CliResponse> {
             format!("public IP probe returned non-IPv4: {raw}"),
         )
     })?;
-    if ip == CONNECT_VIP {
+    if let Some(relay) = relays.relay_of(&ip) {
         return Err(err_json(
             "502 Bad Gateway",
             "origin_ip",
-            "origin IPv4 resolved to Connect VIP 178.156.232.105 — refuse \
-             (PTR must be the box public address, never the edge VIP)"
-                .into(),
+            format!(
+                "origin IPv4 {ip} is a K2 relay ({relay}) — refuse (PTR must be this box's \
+                 own public address, never a relay)"
+            ),
         ));
     }
     Ok(ip)
+}
+
+/// `set` only: a relay name that won't resolve right now means the guard
+/// can't be sure the origin is not that relay — refuse, retryable.
+fn require_relays_resolved(relays: &RelaySet) -> Result<(), CliResponse> {
+    if relays.unresolved.is_empty() {
+        return Ok(());
+    }
+    Err(err_json(
+        "502 Bad Gateway",
+        "relay_check",
+        format!(
+            "could not resolve relay name {}; retry (nothing was changed: Stalwart and \
+             k2.dev were not called)",
+            relays.unresolved.join(", ")
+        ),
+    ))
 }
 
 fn normalize_hostname(raw: &str) -> Result<String, CliResponse> {
@@ -317,19 +409,24 @@ pub fn handle_ptr_show(_params: &HashMap<String, String>) -> CliResponse {
             )
         }
     };
-    handle_ptr_show_with(&env, &resolver)
+    handle_ptr_show_with(&env, &resolver, &relay_hosts())
 }
 
 pub(crate) fn handle_ptr_show_with(
     env: &dyn PreflightEnv,
     resolver: &dyn DnsResolver,
+    relay_hosts: &[String],
 ) -> CliResponse {
-    let origin = match origin_ipv4(env) {
+    let relays = RelaySet::resolve(relay_hosts, resolver);
+    let origin = match origin_ipv4(env, &relays) {
         Ok(ip) => ip,
         Err(r) => return r,
     };
     let helo = mail_hostname();
-    let body = ptr_show_json(origin, helo.as_deref(), resolver);
+    let mut body = ptr_show_json(origin, helo.as_deref(), resolver);
+    if !relays.unresolved.is_empty() {
+        body["relayCheck"] = serde_json::json!({ "unresolved": relays.unresolved });
+    }
     CliResponse::ok_json(body.to_string())
 }
 
@@ -444,13 +541,14 @@ pub fn handle_ptr_set(body: &[u8]) -> CliResponse {
         }
     };
     let mut deps = LivePtrSetDeps;
-    handle_ptr_set_with(body, &env, &resolver, &mut deps)
+    handle_ptr_set_with(body, &env, &resolver, &relay_hosts(), &mut deps)
 }
 
 pub(crate) fn handle_ptr_set_with(
     body: &[u8],
     env: &dyn PreflightEnv,
     resolver: &dyn DnsResolver,
+    relay_hosts: &[String],
     deps: &mut dyn PtrSetDeps,
 ) -> CliResponse {
     let parsed: serde_json::Value = match serde_json::from_slice(body) {
@@ -476,10 +574,14 @@ pub(crate) fn handle_ptr_set_with(
         Err(r) => return r,
     };
 
-    let origin = match origin_ipv4(env) {
+    let relays = RelaySet::resolve(relay_hosts, resolver);
+    let origin = match origin_ipv4(env, &relays) {
         Ok(ip) => ip,
         Err(r) => return r,
     };
+    if let Err(r) = require_relays_resolved(&relays) {
+        return r;
+    }
 
     let a_records = match resolver.a(&hostname) {
         Ok(v) => v,
@@ -662,6 +764,26 @@ mod tests {
         }
     }
 
+    /// The relay guard as a box would build it: `relay.k2.dev` plus the
+    /// old baked relays (D11 with no list stored or served).
+    fn relays() -> Vec<String> {
+        k2_core::tunnel::relay_list::guard_hosts(&k2_core::tunnel::config::TunnelConfig {
+            server_addr: "relay.k2.dev".to_string(),
+            ..Default::default()
+        })
+        .into_iter()
+        .map(|r| r.host)
+        .collect()
+    }
+
+    /// A resolver that answers `relay.k2.dev` (the current primary).
+    fn dns_with_relay() -> FakeDns {
+        let mut dns = FakeDns::default();
+        dns.a
+            .insert("relay.k2.dev".into(), vec!["147.135.65.8".parse().unwrap()]);
+        dns
+    }
+
     fn deps_ok() -> RecordingDeps {
         RecordingDeps {
             helo_calls: Arc::new(AtomicUsize::new(0)),
@@ -737,7 +859,7 @@ mod tests {
         let env = FakeEnv {
             ip: Some("203.0.113.7".into()),
         };
-        let mut dns = FakeDns::default();
+        let mut dns = dns_with_relay();
         dns.a.insert(
             "mail.acme.dev".into(),
             vec!["198.51.100.9".parse().unwrap()],
@@ -749,6 +871,7 @@ mod tests {
             br#"{"hostname":"mail.acme.dev"}"#,
             &env,
             &dns,
+            &relays(),
             &mut deps,
         );
         assert_eq!(r.status, "400 Bad Request", "{}", r.body);
@@ -762,7 +885,7 @@ mod tests {
         let env = FakeEnv {
             ip: Some("203.0.113.7".into()),
         };
-        let mut dns = FakeDns::default();
+        let mut dns = dns_with_relay();
         dns.a.insert(
             "mail.acme.dev".into(),
             vec!["203.0.113.7".parse().unwrap()],
@@ -774,6 +897,7 @@ mod tests {
             br#"{"hostname":"mail.acme.dev"}"#,
             &env,
             &dns,
+            &relays(),
             &mut deps,
         );
         assert_eq!(r.status, "502 Bad Gateway", "{}", r.body);
@@ -787,7 +911,7 @@ mod tests {
         let env = FakeEnv {
             ip: Some("203.0.113.7".into()),
         };
-        let mut dns = FakeDns::default();
+        let mut dns = dns_with_relay();
         dns.a.insert(
             "mail.acme.dev".into(),
             vec!["203.0.113.7".parse().unwrap()],
@@ -798,6 +922,7 @@ mod tests {
             br#"{"hostname":"mail.acme.dev"}"#,
             &env,
             &dns,
+            &relays(),
             &mut deps,
         );
         assert_eq!(r.status, "401 Unauthorized", "{}", r.body);
@@ -809,7 +934,7 @@ mod tests {
         let env = FakeEnv {
             ip: Some("203.0.113.7".into()),
         };
-        let mut dns = FakeDns::default();
+        let mut dns = dns_with_relay();
         let origin: Ipv4Addr = "203.0.113.7".parse().unwrap();
         dns.a
             .insert("mail.acme.dev".into(), vec![origin]);
@@ -823,6 +948,7 @@ mod tests {
             br#"{"hostname":"Mail.Acme.Dev."}"#,
             &env,
             &dns,
+            &relays(),
             &mut deps,
         );
         assert_eq!(r.status, "200 OK", "{}", r.body);
@@ -837,7 +963,7 @@ mod tests {
         let env = FakeEnv {
             ip: Some("203.0.113.7".into()),
         };
-        let mut dns = FakeDns::default();
+        let mut dns = dns_with_relay();
         let origin: Ipv4Addr = "203.0.113.7".parse().unwrap();
         dns.a.insert("mail.acme.dev".into(), vec![origin]);
         if let Some(p) = local_ptr {
@@ -848,7 +974,13 @@ mod tests {
             status: 200,
             body: cp_body.into(),
         });
-        let r = handle_ptr_set_with(br#"{"hostname":"mail.acme.dev"}"#, &env, &dns, &mut deps);
+        let r = handle_ptr_set_with(
+            br#"{"hostname":"mail.acme.dev"}"#,
+            &env,
+            &dns,
+            &relays(),
+            &mut deps,
+        );
         assert_eq!(r.status, "200 OK", "{}", r.body);
         serde_json::from_str(&r.body).expect("set body is JSON")
     }
@@ -957,21 +1089,156 @@ mod tests {
         };
         let dns = FakeDns::default();
         let mut deps = deps_ok();
-        let r = handle_ptr_set_with(br#"{}"#, &env, &dns, &mut deps);
+        let r = handle_ptr_set_with(br#"{}"#, &env, &dns, &relays(), &mut deps);
         assert_eq!(r.status, "400 Bad Request", "{}", r.body);
         assert!(r.body.contains("hostname"), "{}", r.body);
     }
 
-    #[test]
-    fn refuse_connect_vip_as_origin() {
+    /// One set + one show for `origin` against `hosts`: (set response,
+    /// show response, Stalwart calls, k2.dev calls).
+    fn set_and_show(
+        origin: &str,
+        dns: &FakeDns,
+        hosts: &[String],
+    ) -> (CliResponse, CliResponse, usize, usize) {
+        // A show that gets past the guard reads the singleton mail_server row.
+        let _mail = crate::mail::mail_server_test_lock();
         let env = FakeEnv {
-            ip: Some("178.156.232.105".into()),
+            ip: Some(origin.into()),
         };
-        let dns = FakeDns::default();
-        let r = handle_ptr_show_with(&env, &dns);
-        assert_eq!(r.status, "502 Bad Gateway", "{}", r.body);
-        assert!(r.body.contains("178.156.232.105"), "{}", r.body);
-        assert!(r.body.contains("VIP") || r.body.contains("origin"), "{}", r.body);
+        let mut deps = deps_ok();
+        let helo_n = Arc::clone(&deps.helo_calls);
+        let cp_n = Arc::clone(&deps.cp_calls);
+        let set = handle_ptr_set_with(br#"{"hostname":"mail.acme.dev"}"#, &env, dns, hosts, &mut deps);
+        let show = handle_ptr_show_with(&env, dns, hosts);
+        (set, show, helo_n.load(Ordering::SeqCst), cp_n.load(Ordering::SeqCst))
+    }
+
+    fn assert_refused_as_relay(origin: &str, relay: &str, dns: &FakeDns, hosts: &[String]) {
+        let (set, show, helo, cp) = set_and_show(origin, dns, hosts);
+        for r in [&set, &show] {
+            assert_eq!(r.status, "502 Bad Gateway", "{}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["error"]["code"], "origin_ip", "{}", r.body);
+            let hint = v["error"]["hint"].as_str().expect("hint");
+            assert!(hint.contains(origin), "{hint}");
+            assert!(hint.contains(&format!("is a K2 relay ({relay})")), "{hint}");
+            assert!(hint.contains("never a relay"), "{hint}");
+        }
+        assert_eq!(helo, 0, "Stalwart must not be called");
+        assert_eq!(cp, 0, "k2.dev must not be called");
+    }
+
+    /// PRD test 21 (was `refuse_connect_vip_as_origin`): the old baked
+    /// relay is refused through the injected host set, not a constant.
+    #[test]
+    fn refuse_an_old_baked_relay_as_origin() {
+        let mut dns = dns_with_relay();
+        dns.a.insert("mail.acme.dev".into(), vec!["178.156.232.105".parse().unwrap()]);
+        assert_refused_as_relay("178.156.232.105", "178.156.232.105", &dns, &relays());
+        assert_refused_as_relay("40.160.53.25", "40.160.53.25", &dns, &relays());
+    }
+
+    /// PRD test 16: the origin is an IP literal in the stored list (a
+    /// provisioned or hand-written relay) → refused, nothing called.
+    #[test]
+    fn refuse_a_stored_relay_ip_as_origin() {
+        let hosts: Vec<String> =
+            k2_core::tunnel::relay_list::guard_hosts(&k2_core::tunnel::config::TunnelConfig {
+                server_addr: "203.0.113.50".to_string(),
+                relays: vec![
+                    k2_core::tunnel::RelayEndpoint { host: "203.0.113.50".into(), port: 7000 },
+                    k2_core::tunnel::RelayEndpoint { host: "198.51.100.60".into(), port: 7000 },
+                ],
+                ..Default::default()
+            })
+            .into_iter()
+            .map(|r| r.host)
+            .collect();
+        let mut dns = dns_with_relay();
+        dns.a.insert("mail.acme.dev".into(), vec!["198.51.100.60".parse().unwrap()]);
+        assert_refused_as_relay("198.51.100.60", "198.51.100.60", &dns, &hosts);
+    }
+
+    /// PRD test 17: the origin is what `relay.k2.dev` resolves to, while
+    /// the stored list names something else → refused.
+    #[test]
+    fn refuse_the_relay_names_address_as_origin() {
+        let hosts: Vec<String> = vec!["203.0.113.50".into(), "relay.k2.dev".into()];
+        let mut dns = dns_with_relay();
+        dns.a.insert("mail.acme.dev".into(), vec!["147.135.65.8".parse().unwrap()]);
+        assert_refused_as_relay("147.135.65.8", "relay.k2.dev", &dns, &hosts);
+    }
+
+    /// PRD test 18: the relay k2.dev served as `active` (any served relay
+    /// lands in the guard set; `guard_hosts` itself is tested in k2-core)
+    /// → refused, by name too.
+    #[test]
+    fn refuse_the_served_active_relay_as_origin() {
+        let hosts: Vec<String> = vec![
+            "relay.k2.dev".into(),
+            "pool-14.relays.example".into(),
+        ];
+        let mut dns = dns_with_relay();
+        dns.a
+            .insert("pool-14.relays.example".into(), vec!["192.0.2.14".parse().unwrap()]);
+        dns.a.insert("mail.acme.dev".into(), vec!["192.0.2.14".parse().unwrap()]);
+        assert_refused_as_relay("192.0.2.14", "pool-14.relays.example", &dns, &hosts);
+    }
+
+    /// PRD test 19: an unrelated origin proceeds exactly as before (the
+    /// success tests above run with the full guard too).
+    #[test]
+    fn an_unrelated_origin_passes_the_relay_guard() {
+        let mut dns = dns_with_relay();
+        dns.a.insert("mail.acme.dev".into(), vec!["203.0.113.7".parse().unwrap()]);
+        let (set, show, helo, cp) = set_and_show("203.0.113.7", &dns, &relays());
+        assert_eq!(set.status, "200 OK", "{}", set.body);
+        assert_eq!(show.status, "200 OK", "{}", show.body);
+        let v: serde_json::Value = serde_json::from_str(&show.body).expect("json");
+        assert!(v.get("relayCheck").is_none(), "{v}");
+        assert_eq!((helo, cp), (1, 1));
+    }
+
+    /// PRD test 20 (D14): `relay.k2.dev` won't resolve → `set` refuses
+    /// with `relay_check` and calls nothing; `show` answers and notes it.
+    #[test]
+    fn an_unresolvable_relay_name_blocks_set_and_is_noted_by_show() {
+        for dns in [
+            {
+                let mut d = FakeDns::default();
+                d.a.insert("mail.acme.dev".into(), vec!["203.0.113.7".parse().unwrap()]);
+                d
+            },
+            {
+                let mut d = FakeDns::default();
+                d.a.insert("mail.acme.dev".into(), vec!["203.0.113.7".parse().unwrap()]);
+                d.a_err.insert("relay.k2.dev".into(), DnsError::Other("timeout".into()));
+                d
+            },
+        ] {
+            let (set, show, helo, cp) = set_and_show("203.0.113.7", &dns, &relays());
+            assert_eq!(set.status, "502 Bad Gateway", "{}", set.body);
+            let v: serde_json::Value = serde_json::from_str(&set.body).expect("json");
+            assert_eq!(v["error"]["code"], "relay_check", "{}", set.body);
+            let hint = v["error"]["hint"].as_str().expect("hint");
+            assert!(hint.contains("could not resolve relay name relay.k2.dev; retry"), "{hint}");
+            assert_eq!((helo, cp), (0, 0), "Stalwart and k2.dev must not be called");
+            assert_eq!(show.status, "200 OK", "{}", show.body);
+            let v: serde_json::Value = serde_json::from_str(&show.body).expect("json");
+            assert_eq!(v["relayCheck"]["unresolved"], serde_json::json!(["relay.k2.dev"]), "{v}");
+        }
+    }
+
+    /// PRD test 21: no relay address is baked into the guard's code.
+    #[test]
+    fn ratchet_no_relay_ip_in_the_ptr_guard_code() {
+        let src = include_str!("ptr.rs");
+        let code = src.split("\n#[cfg(test)]\nmod tests").next().expect("code part");
+        for ip in ["178.156.232.105", "40.160.53.25", "147.135.65.8"] {
+            assert!(!code.contains(ip), "ptr.rs code must not bake relay IP {ip}");
+        }
+        assert!(!code.contains("Ipv4Addr::new("), "no IPv4 literal constants in the guard");
     }
 
     #[test]

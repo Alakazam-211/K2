@@ -617,6 +617,47 @@ fn effective_with(cfg: &TunnelConfig, st: &RefreshState) -> EffectiveRelays {
     as_stored(stored)
 }
 
+/// 0.46.6 (D11): every relay this box knows about, for guards that must
+/// never treat a relay as this box (the mail PTR guard). The union,
+/// without duplicates, of
+/// 1. what the tunnel dials ([`effective`]),
+/// 2. what `tunnel.json` stores (including a `replaced` old list),
+/// 3. the list k2.dev served in this process, and its `active` relay,
+/// 4. [`config::DEFAULT_SERVER_HOST`], and
+/// 5. the old baked relays ([`config::LEGACY_RELAY_HOSTS`]; one retired,
+///    one reimaged, both still K2's).
+///
+/// It reads the same state the tunnel dials from, so a relay K2 Web adds
+/// later is covered from its first fetch, with no K2 release. Memory
+/// only, never I/O: names are resolved by the caller.
+pub fn guard_hosts(cfg: &TunnelConfig) -> Vec<RelayEndpoint> {
+    let st = lock_state().clone();
+    let mut out: Vec<RelayEndpoint> = Vec::new();
+    let mut add = |r: RelayEndpoint| {
+        if !out
+            .iter()
+            .any(|o| o.port == r.port && o.host.eq_ignore_ascii_case(&r.host))
+        {
+            out.push(r);
+        }
+    };
+    effective_with(cfg, &st).relays.into_iter().for_each(&mut add);
+    cfg.relay_list().into_iter().for_each(&mut add);
+    if let Some(served) = &st.checked_list {
+        served.iter().cloned().for_each(&mut add);
+    }
+    if let Some((_, Some(active), _)) = &st.dns {
+        add(active.clone());
+    }
+    let at_7000 = |host: &str| RelayEndpoint {
+        host: host.to_string(),
+        port: config::DEFAULT_SERVER_PORT,
+    };
+    add(at_7000(config::DEFAULT_SERVER_HOST));
+    config::LEGACY_RELAY_HOSTS.iter().map(|h| at_7000(h)).for_each(&mut add);
+    out
+}
+
 /// One lookup of the default relay name (all answers, v4 and v6).
 #[cfg(not(test))]
 fn lookup_default_name() -> Result<Vec<IpAddr>, String> {
@@ -2228,6 +2269,60 @@ mod tests {
             "read the dial list through relay_list::effective(), not TunnelConfig::relay_list():\n{}",
             offenders.join("\n")
         );
+    }
+
+    /// PRD test 10 (+18): the guard set is the union of what the tunnel
+    /// dials, what is stored, what k2.dev served and marked active, the
+    /// default name and the old baked relays, with no duplicates.
+    #[test]
+    fn guard_hosts_is_the_union_without_duplicates() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            // Unpaired box, no tunnel.json: still the name and the old relays.
+            let bare = config::load_without_token().expect("a missing file is the default");
+            assert_eq!(
+                guard_hosts(&bare),
+                vec![ep("relay.k2.dev", 7000), ep(OLD, 7000), ep(OLD2, 7000)]
+            );
+            // k2.dev serves a list naming its active relay; then the file
+            // is edited by hand to another relay.
+            config::save(&cfg_with("203.0.113.9", vec![])).expect("seed");
+            let body = r#"{"v":1,"relays":[{"host":"198.51.100.7","port":7000,"active":true},{"host":"203.0.113.9","port":7000,"active":false}],"refresh_s":21600,"active_checked_at":1792606947}"#;
+            let srv = FakeServer::start(200, body);
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            assert!(matches!(refresh_once(), RefreshOutcome::Updated(_)));
+            srv.next_request();
+            config::update(|c| {
+                c.relays = vec![ep("192.0.2.1", 7000), ep("RELAY.K2.DEV", 7000)];
+            })
+            .expect("hand edit");
+            let cfg = config::load_without_token().expect("load");
+            let g = guard_hosts(&cfg);
+            assert_eq!(
+                g,
+                vec![
+                    ep("192.0.2.1", 7000),
+                    ep("RELAY.K2.DEV", 7000),
+                    ep("198.51.100.7", 7000),
+                    ep("203.0.113.9", 7000),
+                    ep(OLD, 7000),
+                    ep(OLD2, 7000),
+                ],
+                "stored/effective, served, active, the default name once, the old relays"
+            );
+            // A legacy list dialed as the name: both the name and the old
+            // addresses stay refused.
+            name_ok();
+            let legacy = cfg_with(OLD, vec![]);
+            let g = guard_hosts(&legacy);
+            assert!(g.contains(&ep("relay.k2.dev", 7000)) && g.contains(&ep(OLD, 7000)), "{g:?}");
+            assert!(g.contains(&ep("198.51.100.7", 7000)), "the served active relay: {g:?}");
+            let mut seen = std::collections::HashSet::new();
+            assert!(
+                g.iter().all(|r| seen.insert((r.host.to_ascii_lowercase(), r.port))),
+                "no duplicates: {g:?}"
+            );
+        });
     }
 
     #[test]

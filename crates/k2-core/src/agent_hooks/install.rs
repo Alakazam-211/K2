@@ -129,6 +129,7 @@ fn gemini_settings_path(home: &Path) -> PathBuf {
 /// token), prints nothing, and always exits 0. The payload is held in
 /// memory only, never in a file.
 pub fn generate_hook_script(daemon_version: &str) -> String {
+    let send = if cfg!(windows) { &HOOK_SEND_WINDOWS } else { &HOOK_SEND_UNIX };
     format!(
         r#"#!/bin/bash
 # K2 agent lifecycle hook. DO NOT EDIT: managed by the K2 daemon.
@@ -185,9 +186,7 @@ HDR=(-H "Content-Type: application/json"
 [ -n "$HINT" ] && HDR+=(-H "X-K2-Hook-Event: $HINT")
 [ -n "$TRUNCATED" ] && HDR+=(-H "X-K2-Hook-Truncated: 1")
 
-# Tokens never ride curl's argv (any OS user can read argv with `ps`):
-# the Authorization header goes in a curl config on fd 3 (a here-string;
-# stdin carries the payload). Tokens hold no `"` or `\`, so no escaping.
+{how}
 
 # Only the session passport authenticates a hook; without one, nothing
 # is sent.
@@ -195,10 +194,7 @@ HDR=(-H "Content-Type: application/json"
 
 # Per-cell socket first, with the scoped token as a Bearer header.
 if [ -n "$SOCK" ] && [ -S "$SOCK" ]; then
-    if printf '%s' "$BODY" | curl -sf -K /dev/fd/3 -X POST --unix-socket "$SOCK" \
-        --connect-timeout 1 --max-time 2 "${{HDR[@]}}" \
-        --data-binary @- "http://localhost/hook/event" >/dev/null 2>&1 \
-        3<<<"header = \"Authorization: Bearer $SCOPED\""; then
+    if {sock_send}; then
         exit 0
     fi
 fi
@@ -208,16 +204,64 @@ fi
 # daemon accepts the passport there only for this session's own pane.
 PORT="$(cat "$HOME/.k2/heartbeat.port" 2>/dev/null)"
 [ -z "$PORT" ] && exit 0
-printf '%s' "$BODY" | curl -s -K /dev/fd/3 -X POST --connect-timeout 1 --max-time 2 \
-    "${{HDR[@]}}" \
-    --data-binary @- "http://127.0.0.1:$PORT/hook/event" >/dev/null 2>&1 \
-    3<<<"header = \"Authorization: Bearer $SCOPED\""
+{tcp_send}
 exit 0
 "#,
         max_body = super::envelope::MAX_BODY_BYTES,
         protocol = HOOK_PROTOCOL,
+        how = send.how,
+        sock_send = send.sock,
+        tcp_send = send.tcp,
     )
 }
+
+/// How `notify.sh` hands curl the token and the payload.
+struct HookSend {
+    how: &'static str,
+    sock: &'static str,
+    tcp: &'static str,
+}
+
+/// Unix: the Authorization header as a curl config on fd 3, the payload on
+/// stdin.
+const HOOK_SEND_UNIX: HookSend = HookSend {
+    how: r#"# Tokens never ride curl's argv (any OS user can read argv with `ps`):
+# the Authorization header goes in a curl config on fd 3 (a here-string;
+# stdin carries the payload). Tokens hold no `"` or `\`, so no escaping."#,
+    sock: r#"printf '%s' "$BODY" | curl -sf -K /dev/fd/3 -X POST --unix-socket "$SOCK" \
+        --connect-timeout 1 --max-time 2 "${HDR[@]}" \
+        --data-binary @- "http://localhost/hook/event" >/dev/null 2>&1 \
+        3<<<"header = \"Authorization: Bearer $SCOPED\"""#,
+    tcp: r#"printf '%s' "$BODY" | curl -s -K /dev/fd/3 -X POST --connect-timeout 1 --max-time 2 \
+    "${HDR[@]}" \
+    --data-binary @- "http://127.0.0.1:$PORT/hook/event" >/dev/null 2>&1 \
+    3<<<"header = \"Authorization: Bearer $SCOPED\"""#,
+};
+
+/// Windows (the CLIs run hooks in Git Bash): Git for Windows' curl is a
+/// native program and can't open bash's `/dev/fd/3` (curl exit 26, so no
+/// hook reached the daemon). The header and the payload both go to curl as
+/// config on its stdin: still off argv, and the payload never in a file.
+const HOOK_SEND_WINDOWS: HookSend = HookSend {
+    how: r#"# Tokens never ride curl's argv (any OS user can read argv with `ps`).
+# Windows: Git for Windows' curl can't open bash's /dev/fd/3, so the
+# Authorization header and the payload both go to curl as config on its
+# stdin, the payload escaped for curl's config parser (\ " CR LF).
+k2_cfg() {
+    local b="$BODY" bs='\' q='"'
+    b="${b//"$bs"/"$bs$bs"}"
+    b="${b//"$q"/"$bs$q"}"
+    b="${b//$'\r'/"${bs}r"}"
+    b="${b//$'\n'/"${bs}n"}"
+    printf 'header = "Authorization: Bearer %s"\ndata-raw = "%s"\n' "$SCOPED" "$b"
+}"#,
+    sock: r#"k2_cfg | curl -sf -K - -X POST --unix-socket "$SOCK" \
+        --connect-timeout 1 --max-time 2 "${HDR[@]}" \
+        "http://localhost/hook/event" >/dev/null 2>&1"#,
+    tcp: r#"k2_cfg | curl -s -K - -X POST --connect-timeout 1 --max-time 2 \
+    "${HDR[@]}" \
+    "http://127.0.0.1:$PORT/hook/event" >/dev/null 2>&1"#,
+};
 
 /// The Claude `statusLine` script (Usage v2, Q5). Claude Code (≥ 2.1.80)
 /// pipes a JSON status payload to the statusLine command on every turn;
@@ -1562,6 +1606,71 @@ mod tests {
         assert!(head.contains("x-k2-hook-truncated: 1"));
         assert!(head.contains("x-k2-hook-event: posttooluse"), "{head}");
         assert!(body.is_empty(), "a truncated post carries no body");
+    }
+
+    /// Windows: the CLIs run notify.sh in Git Bash, whose curl is a native
+    /// program that can't open `/dev/fd/3`. The script still posts over
+    /// loopback TCP with the session passport and the payload byte-identical
+    /// (backslashes, quotes, tab, CR, LF, UTF-8), and prints nothing.
+    #[cfg(windows)]
+    #[test]
+    fn windows_script_posts_the_raw_payload_with_the_passport() {
+        use std::io::{Read, Write};
+        let home = TempHome::new("win");
+        std::fs::create_dir_all(home.path().join(".k2")).expect(".k2");
+        write_script(&script_path(home.path()), "0.46.5", generate_hook_script("0.46.5")).expect("script");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).expect("port file");
+        std::fs::write(home.path().join(".k2/heartbeat.token"), "owner-tok").expect("token file");
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().expect("accept");
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 65536];
+            loop {
+                if let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&raw[..end]).to_ascii_lowercase();
+                    let len = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().expect("len")))
+                        .unwrap_or(0);
+                    if raw.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+                let n = conn.read(&mut chunk).expect("read");
+                assert!(n > 0, "the connection closed before the whole request");
+                raw.extend_from_slice(&chunk[..n]);
+            }
+            conn.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n").expect("answer");
+            raw
+        });
+        let payload = "{\"hook_event_name\":\"Stop\",\"m\":\"back\\\\slash \\\"q\\\" tab\there cr\rlf\nh\u{e9}\"}\n\n";
+        let mut child = Command::new(crate::test_env::bash_program())
+            .arg(script_path(home.path()))
+            .env("HOME", home.path())
+            .env("K2_PANE_ID", "pane-win")
+            .env("K2_HOOK_TOKEN", "sid.scoped-win")
+            .env("K2_HOOK_AGENT_PID", "4242")
+            .env_remove("K2_HOOK_SOCK")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn Git Bash");
+        child.stdin.take().expect("stdin").write_all(payload.as_bytes()).expect("write stdin");
+        let out = child.wait_with_output().expect("wait");
+        let raw = server.join().expect("server");
+        assert_eq!(out.status.code(), Some(0));
+        assert!(out.stdout.is_empty(), "stdout: {:?}", String::from_utf8_lossy(&out.stdout));
+        let end = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("request head");
+        let head = String::from_utf8_lossy(&raw[..end]).to_ascii_lowercase();
+        assert!(head.starts_with("post /hook/event http/1.1"), "{head}");
+        for h in ["authorization: bearer sid.scoped-win", "x-k2-pane: pane-win", "x-k2-agent-pid: 4242"] {
+            assert!(head.contains(h), "missing {h} in {head}");
+        }
+        assert!(!head.contains("owner-tok"), "owner token must never be sent: {head}");
+        assert_eq!(&raw[end + 4..], payload.as_bytes(), "body must be byte-identical");
     }
 
     /// No session passport: the script sends nothing at all (it never

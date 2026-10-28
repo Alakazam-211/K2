@@ -113,6 +113,67 @@ pub fn user_agent() -> String {
     format!("k2-daemon/{} (relay-list)", env!("CARGO_PKG_VERSION"))
 }
 
+/// 0.46.6 (D10): readiness header — the list this box dials ([`effective`]),
+/// `host:port` comma-separated (IPv6 as `[addr]:port`). Sent on EVERY
+/// relay-list fetch, a 401 included, so K2 Web sees which boxes still dial
+/// a relay before it retires it. Relay hosts are not secret.
+pub const HEADER_RELAYS: &str = "X-K2-Relays";
+/// 0.46.6 (D10): where that list came from: `fetched` | `provisioned` |
+/// `default` (the status `source`).
+pub const HEADER_RELAY_SOURCE: &str = "X-K2-Relay-Source";
+/// K2 Web keeps at most this many characters of [`HEADER_RELAYS`].
+const RELAYS_HEADER_MAX: usize = 512;
+
+/// The readiness headers' values for one fetch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Readiness {
+    /// [`HEADER_RELAYS`].
+    pub relays: String,
+    /// [`HEADER_RELAY_SOURCE`].
+    pub source: &'static str,
+}
+
+/// [`HEADER_RELAYS`] for `list`: `host:port,host:port`, only K2 Web's
+/// accepted characters (`A-Z a-z 0-9 . : [ ] -`; anything else in a
+/// hand-written host is dropped, so the header is always valid), whole
+/// entries only, at most [`RELAYS_HEADER_MAX`] characters.
+pub fn relays_header_value(list: &[RelayEndpoint]) -> String {
+    let mut out = String::new();
+    for r in list {
+        let host: String = r
+            .host
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '[' | ']' | '-'))
+            .collect();
+        if host.is_empty() {
+            continue;
+        }
+        let item = if host.parse::<std::net::Ipv6Addr>().is_ok() {
+            format!("[{host}]:{}", r.port)
+        } else {
+            format!("{host}:{}", r.port)
+        };
+        let sep = usize::from(!out.is_empty());
+        if out.len() + sep + item.len() > RELAYS_HEADER_MAX {
+            break;
+        }
+        if sep == 1 {
+            out.push(',');
+        }
+        out.push_str(&item);
+    }
+    out
+}
+
+/// The readiness headers for `cfg` right now (memory only).
+pub fn readiness_for(cfg: &TunnelConfig) -> Readiness {
+    let st = lock_state().clone();
+    Readiness {
+        relays: relays_header_value(&effective_with(cfg, &st).relays),
+        source: source_with(cfg, &st),
+    }
+}
+
 // ── Wire shape + validation ───────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -300,8 +361,8 @@ impl std::fmt::Display for FetchError {
 
 /// One `GET <url>` with the bearer token, validated. Never logs the token.
 /// Redirects are not followed (the bearer must not travel elsewhere; a
-/// 3xx is just a non-200).
-pub fn fetch(url: &str, token: &str) -> Result<ValidRelayList, FetchError> {
+/// 3xx is just a non-200). Carries the readiness headers (0.46.6, D10).
+pub fn fetch(url: &str, token: &str, readiness: &Readiness) -> Result<ValidRelayList, FetchError> {
     let token = token.trim();
     let client = reqwest::blocking::Client::builder()
         .timeout(HTTP_TIMEOUT)
@@ -314,6 +375,8 @@ pub fn fetch(url: &str, token: &str) -> Result<ValidRelayList, FetchError> {
         .get(url)
         .header("Authorization", format!("Bearer {token}"))
         .header("Accept", "application/json")
+        .header(HEADER_RELAYS, readiness.relays.as_str())
+        .header(HEADER_RELAY_SOURCE, readiness.source)
         .send()
         .map_err(|e| FetchError::Network(e.to_string()))?;
     let status = resp.status().as_u16();
@@ -491,8 +554,9 @@ pub fn refresh_once() -> RefreshOutcome {
     let result = match cfg.token_read_error {
         Some(e) => Err(FetchError::TokenUnreadable(e)),
         None => {
+            let readiness = readiness_for(&cfg);
             lock_state().attempts += 1;
-            fetch(&url, &token).and_then(|list| {
+            fetch(&url, &token, &readiness).and_then(|list| {
                 // 0.46.3: the DNS hint counts even if saving the list fails.
                 lock_state().dns = Some((
                     std::time::Instant::now(),
@@ -802,11 +866,20 @@ pub struct RelayListStatus {
     /// only; `tunnel.json` still holds it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replaced: Option<Vec<String>>,
-    /// 0.46.6: `"legacy"` when the `relay_default` switch restores the
-    /// 0.46.5 behaviour (tunnel.json `relay_default` or
-    /// `K2_RELAY_DEFAULT`). Absent for the default (`name`).
+    /// 0.46.6: the `relay_default` switch in force (`"legacy"` restores the
+    /// 0.46.5 behaviour, `"name"` is the default), present whenever
+    /// something sets it (tunnel.json `relay_default` or `K2_RELAY_DEFAULT`).
+    /// Absent when neither does (the default, `name`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relay_default: Option<String>,
+    /// 0.46.6: with `relay_default`, what set it: `"env"` (the daemon's
+    /// `K2_RELAY_DEFAULT`, which wins: the file's key is then ignored) or
+    /// `"tunnel.json"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_default_set_by: Option<String>,
+    /// 0.46.6: the `tunnel.json` this daemon reads (where `relay_default`
+    /// goes; it may not exist yet).
+    pub config_file: String,
     /// Unix seconds of the last successful fetch by this daemon process.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checked_at: Option<u64>,
@@ -886,14 +959,16 @@ pub fn status_for(cfg: &TunnelConfig) -> RelayListStatus {
     let st = lock_state().clone();
     let effective = effective_with(cfg, &st);
     let source = source_with(cfg, &st);
-    let legacy = config::relay_default_mode(cfg) == config::RelayDefault::Legacy;
+    let set_by = config::relay_default_set_by(cfg);
     RelayListStatus {
         source: source.to_string(),
         relays: effective.relays.iter().map(|r| r.to_string()).collect(),
         replaced: effective
             .replaced
             .map(|l| l.iter().map(|r| r.to_string()).collect()),
-        relay_default: legacy.then(|| config::RelayDefault::Legacy.as_str().to_string()),
+        relay_default: set_by.map(|_| config::relay_default_mode(cfg).as_str().to_string()),
+        relay_default_set_by: set_by.map(str::to_string),
+        config_file: config::config_path().display().to_string(),
         checked_at: st.checked_at,
         changed_at: cfg.relays_fetched_at,
         last_error: st.last_error,
@@ -2174,9 +2249,17 @@ mod tests {
             assert_eq!(fresh_legacy.server_addr, "relay.k2.dev", "the serde default can't see the field");
             assert_eq!(effective(&fresh_legacy).relays, vec![ep(OLD, 7000)], "…so effective maps it");
             assert_eq!(status_for(&legacy_file).relay_default.as_deref(), Some("legacy"));
+            assert_eq!(status_for(&legacy_file).relay_default_set_by.as_deref(), Some("tunnel.json"));
+            assert_eq!(status_for(&cfg_with(OLD, vec![])).relay_default_set_by, None);
+            assert!(
+                status_for(&legacy_file).config_file.ends_with(".k2/tunnel.json"),
+                "{}",
+                status_for(&legacy_file).config_file
+            );
             // The env switch wins over the file and changes the default itself.
             {
                 let _v = crate::test_env::EnvVar::set(config::RELAY_DEFAULT_ENV, "legacy");
+                assert_eq!(status_for(&legacy_file).relay_default_set_by.as_deref(), Some("env"));
                 assert_eq!(TunnelConfig::default().server_addr, OLD);
                 let parsed: TunnelConfig = serde_json::from_str(r#"{"token":"t"}"#).expect("de");
                 assert_eq!(parsed.server_addr, OLD);
@@ -2190,6 +2273,12 @@ mod tests {
             {
                 let _v = crate::test_env::EnvVar::set(config::RELAY_DEFAULT_ENV, "name");
                 assert_eq!(effective(&legacy_file).relays, name_list(), "env wins both ways");
+                let st = status_for(&legacy_file);
+                assert_eq!(
+                    (st.relay_default.as_deref(), st.relay_default_set_by.as_deref()),
+                    (Some("name"), Some("env")),
+                    "status says the env var overrides the file's legacy key"
+                );
             }
             // Unknown: the default (name), and the file still parses.
             let odd: TunnelConfig =
@@ -2223,6 +2312,50 @@ mod tests {
             let _ = super::super::connector::status();
             assert_eq!(std::fs::read(config::config_path()).expect("read"), before);
             assert_eq!(mtime(), m0);
+        });
+    }
+
+    /// PRD §4.3 / §6, every box class at once, through the refresher (the
+    /// name resolves; k2.dev answers as that class sees it):
+    /// A 200 → k2.dev's list; B provisioned old list + 401 → the name;
+    /// C old single IP + 401 → the name; D fresh → the name; E a
+    /// person's own relay or port → untouched.
+    #[test]
+    fn box_classes_a_to_e_dial_what_the_prd_says() {
+        let served = r#"{"v":1,"relays":[{"host":"147.135.65.8","port":7000,"active":true},{"host":"178.156.232.105","port":7000,"active":false}],"refresh_s":21600,"active_checked_at":1792606947}"#;
+        let refused = r#"{"code":"tunnel_only"}"#;
+        let cases: Vec<(&str, TunnelConfig, u16, &str, Vec<RelayEndpoint>)> = vec![
+            ("A", cfg_with(OLD, vec![]), 200, served, vec![ep("147.135.65.8", 7000), ep(OLD, 7000)]),
+            ("B", cfg_with(OLD, vec![ep(OLD, 7000), ep(OLD2, 7000)]), 401, refused, name_list()),
+            ("C", cfg_with(OLD, vec![]), 401, refused, name_list()),
+            ("E-host", cfg_with("203.0.113.9", vec![]), 401, refused, vec![ep("203.0.113.9", 7000)]),
+            (
+                "E-port",
+                TunnelConfig { server_port: 7001, ..cfg_with(OLD, vec![]) },
+                401,
+                refused,
+                vec![ep(OLD, 7001)],
+            ),
+        ];
+        for (class, cfg, status, body, want) in cases {
+            with_temp_home(|| {
+                let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+                let _n = TestNameLookup::install(Ok(vec!["147.135.65.8".parse().expect("ip")]));
+                config::save(&cfg).expect("seed");
+                let srv = FakeServer::start(status, body);
+                let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+                refresh_once();
+                srv.next_request();
+                let now = config::load().expect("load");
+                assert_eq!(effective(&now).relays, want, "class {class}");
+            });
+        }
+        // D: a fresh box (no tunnel.json, never paired) dials the name.
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            let fresh = config::load_without_token().expect("default");
+            assert_eq!(effective(&fresh).relays, name_list(), "class D");
+            assert_eq!(effective(&fresh).replaced, None, "nothing replaced: it is the default");
         });
     }
 
@@ -2325,6 +2458,68 @@ mod tests {
                 "no duplicates: {g:?}"
             );
         });
+    }
+
+    /// PRD test 11 (D10, the contract with K2 Web): every fetch carries
+    /// `X-K2-Relays` (the dial list) and `X-K2-Relay-Source`, on a 200 and
+    /// on a 401, beside the `User-Agent`.
+    #[test]
+    fn every_fetch_carries_the_readiness_headers_on_200_and_401() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            // 200: the old provisioner list, the name not (yet) resolved.
+            config::save(&cfg_with(OLD, both())).expect("seed provisioned");
+            {
+                let srv = FakeServer::start(200, GOOD);
+                let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+                assert_eq!(refresh_once(), RefreshOutcome::Unchanged);
+                let req = srv.next_request().to_ascii_lowercase();
+                assert!(req.contains("\r\nx-k2-relays: 178.156.232.105:7000,40.160.53.25:7000\r\n"), "{req}");
+                assert!(req.contains("\r\nx-k2-relay-source: provisioned\r\n"), "{req}");
+                assert!(req.contains("\r\nuser-agent: k2-daemon/"), "{req}");
+            }
+            // 401: a 0.46.5 single IP, now dialed as the name.
+            reset_state_for_test();
+            config::save(&cfg_with(OLD, vec![])).expect("seed default");
+            let _n = TestNameLookup::install(Ok(vec!["147.135.65.8".parse().expect("ip")]));
+            let srv = FakeServer::start(401, r#"{"code":"tunnel_only"}"#);
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            assert_eq!(refresh_once(), RefreshOutcome::Failed(FetchError::Unauthorized));
+            let req = srv.next_request().to_ascii_lowercase();
+            assert!(req.contains("\r\nx-k2-relays: relay.k2.dev:7000\r\n"), "{req}");
+            assert!(req.contains("\r\nx-k2-relay-source: default\r\n"), "{req}");
+            assert!(req.contains("\r\nuser-agent: k2-daemon/"), "{req}");
+            assert!(req.contains("authorization: bearer k2c_good"), "{req}");
+            // A list k2.dev served: fetched.
+            reset_state_for_test();
+            config::save(&cfg_with("198.51.100.7", vec![])).expect("seed");
+            let body = r#"{"v":1,"relays":[{"host":"198.51.100.7","port":7000},{"host":"2001:db8::7","port":7000}]}"#;
+            let srv2 = FakeServer::start(200, body);
+            let _u2 = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv2.url);
+            assert!(matches!(refresh_once(), RefreshOutcome::Updated(_)));
+            srv2.next_request();
+            assert!(matches!(refresh_once(), RefreshOutcome::Unchanged));
+            let req = srv2.next_request().to_ascii_lowercase();
+            assert!(req.contains("\r\nx-k2-relays: 198.51.100.7:7000,[2001:db8::7]:7000\r\n"), "{req}");
+            assert!(req.contains("\r\nx-k2-relay-source: fetched\r\n"), "{req}");
+        });
+    }
+
+    #[test]
+    fn the_relays_header_keeps_k2_webs_characters_and_512_chars() {
+        assert_eq!(
+            relays_header_value(&[ep("relay.k2.dev", 7000), ep("2001:db8::1", 7001), ep("1.2.3.4", 7000)]),
+            "relay.k2.dev:7000,[2001:db8::1]:7001,1.2.3.4:7000"
+        );
+        assert_eq!(relays_header_value(&[ep("bad host;\r\nx", 7000)]), "badhostx:7000");
+        assert_eq!(relays_header_value(&[ep(" ;", 7000), ep("ok", 1)]), "ok:1");
+        let long: Vec<RelayEndpoint> = (0..8)
+            .map(|i| ep(&format!("{}{i}.example", "a".repeat(60)), 7000))
+            .collect();
+        let v = relays_header_value(&long);
+        assert!(v.len() <= 512, "{}", v.len());
+        assert!(v.split(',').all(|e| e.ends_with(":7000")), "whole entries only: {v}");
+        assert_eq!(v.split(',').count(), 6);
     }
 
     #[test]

@@ -30602,8 +30602,12 @@ if isinstance(rl, dict):
     if rl.get("replaced"):
         src += "; replaces the old built-in " + ", ".join(rl["replaced"])
     print(f"  Relays:     {relays} [{src}]")
-    if rl.get("relay_default") == "legacy":
-        print("  Relay default: legacy (0.46.5 behaviour, the old built-in IP; set by tunnel.json relay_default or K2_RELAY_DEFAULT)")
+    if rl.get("relay_default"):
+        by = {"env": "K2_RELAY_DEFAULT in the daemon environment, which wins over tunnel.json", "tunnel.json": "relay_default in " + (rl.get("config_file") or "tunnel.json")}.get(rl.get("relay_default_set_by"), "tunnel.json relay_default or K2_RELAY_DEFAULT")
+        what = "legacy (pre-0.46.6, the old built-in IP" if rl["relay_default"] == "legacy" else rl["relay_default"] + " (relay.k2.dev, the 0.46.6 default"
+        print("  Relay default: " + what + "; set by " + by + ")")
+    if rl.get("config_file"):
+        print("  Tunnel config: " + rl["config_file"])
     if rl.get("checked_at"):
         ts = datetime.datetime.fromtimestamp(rl["checked_at"]).strftime("%Y-%m-%d %H:%M")
         print(f"  Relay list: checked with k2.dev {ts}")
@@ -30713,6 +30717,91 @@ USAGE
   k2 tunnel status [--json]
   k2 tunnel subdomains [--json]
   k2 tunnel boot-status [ghost|compat]   what strangers see on /boot-status (Owner/Admin to set)
+
+RELAYS (which relay this box dials)
+  The built-in relay is relay.k2.dev (since 0.46.6; before, a fixed IP,
+  178.156.232.105). k2.dev may hand out a list of relays instead; it is
+  refreshed at daemon start and every few hours.
+  k2 tunnel status shows it:
+    Server:   the relay frpc dials right now (also while it is still
+              connecting or retrying), e.g.
+                Server:     relay.k2.dev:7000 (primary relay)
+                Server:     203.0.113.10:7000 (fallback relay; returns to the primary once it answers again)
+              Whenever Server: is printed, --json has server_addr and
+              server_port; stopped, there is no Server: line and --json
+              has neither.
+    Relays:   always printed: the list the tunnel dials, primary first,
+              then [source]:
+              fetched (a list from k2.dev), provisioned (a relay list
+              written into tunnel.json by hand or a setup script) or
+              default (no relay list stored, only tunnel.json's single
+              server_addr: the built-in relay, which a box paired before
+              0.46.6 has saved as 178.156.232.105). Stopped, the first entry
+              is what k2 tunnel start dials. Examples:
+                Relays:     relay.k2.dev:7000 [default]
+                Relays:     relay.k2.dev:7000 [default; replaces the old built-in 178.156.232.105:7000]
+                Relays:     relay.k2.dev:7000 [provisioned; replaces the old built-in 178.156.232.105:7000, 40.160.53.25:7000]
+              "replaces the old built-in …" means tunnel.json still holds
+              the old relay IPs and the tunnel dials relay.k2.dev instead
+              (in memory; the file is not rewritten). With the legacy switch
+              below on, the boxes of all three examples show (and dial) the
+              old IPs instead, and a running one shows
+              e.g. Server:     178.156.232.105:7000 (primary relay):
+                Relays:     178.156.232.105:7000 [default]
+                Relays:     178.156.232.105:7000, 40.160.53.25:7000 [provisioned]
+    Relay default:  only while something sets the switch below, e.g.
+                Relay default: legacy (pre-0.46.6, the old built-in IP; set by relay_default in /home/k2/.k2/tunnel.json)
+                Relay default: name (relay.k2.dev, the 0.46.6 default; set by relay_default in /home/k2/.k2/tunnel.json)
+                Relay default: name (relay.k2.dev, the 0.46.6 default; set by K2_RELAY_DEFAULT in the daemon environment, which wins over tunnel.json)
+              Values are "legacy" or "name", any case. Anything else is
+              ignored as if unset (no Relay default: line).
+    Tunnel config:  the tunnel.json this daemon reads (the file to edit),
+              printed even when the file does not exist yet.
+  k2 tunnel status --json (relay_list is always there, running or not):
+  server_addr + server_port = the relay in use (whenever Server: is
+  printed); relay_list.relays = the list dialed, a JSON array of
+  "host:port" strings; relay_list.source = "fetched"|"provisioned"|"default";
+  relay_list.replaced = the old list it stands in for, an array of
+  "host:port" strings (the key is absent otherwise); relay_list.relay_default
+  = "legacy"|"name" and relay_list.relay_default_set_by = "env"|"tunnel.json"
+  whenever the switch is set (else both absent); relay_list.config_file =
+  the path of that tunnel.json.
+  Timing: Relays: shows any change (a new list, the switch) at once. Every
+  minute the running tunnel compares that list with the one it uses: if
+  its relay is still listed it takes the new list with no reconnect; if
+  not, it reconnects once, to the new first entry, after a random 0-60 s.
+  So Server: follows within about two minutes.
+  Go back to the pre-0.46.6 default: the built-in relay is 178.156.232.105
+  again (a box showing relay.k2.dev:7000 [default] then dials
+  178.156.232.105, whether or not tunnel.json names relay.k2.dev), and
+  saved old IPs are dialed as saved, never replaced. It changes only boxes
+  whose Relays: says "replaces the old built-in" or shows relay.k2.dev as
+  [default]; any other fetched or provisioned list is dialed as it is
+  either way, as before 0.46.6:
+    put "relay_default": "legacy" at the top level of the file that
+    k2 tunnel status prints as Tunnel config: (if it is missing the box is
+    not paired yet; create it as {"relay_default": "legacy"}, and pairing
+    adds the rest). No restart: a running tunnel follows within about two
+    minutes, a stopped one at the next k2 tunnel start. K2's own writes to
+    the file (enable, switch, pairing) keep the key.
+  Undo: delete the key, or set "relay_default": "name" (the 0.46.6
+  default: relay.k2.dev, replacing the old IPs); same timing.
+  Or, on Linux only (on a Mac use the file), set K2_RELAY_DEFAULT=legacy in
+  the daemon's own environment: k2 daemon status prints "Unit: <name>
+  (user)" or "(system)"; run systemctl edit <name> (systemctl --user edit
+  <name> for a user unit), add the two lines
+      [Service]
+      Environment=K2_RELAY_DEFAULT=legacy
+  save, and run k2 daemon restart (systemctl edit reloads systemd itself).
+  While the variable is set (legacy or name) the file's key is ignored;
+  Relay default: says so. Undo: run systemctl edit <name> again (--user
+  for a user unit), delete those two lines, save, then k2 daemon restart.
+  On a Mac the variable is only there if someone added it to the daemon's
+  launchd plist; remove it there, then k2 daemon restart. The k2 CLI
+  itself never needs it. Editing the file needs no K2 role, only
+  access to that file (the box owner). The switch is temporary: a release
+  after the old relay is retired drops it, and "legacy" then reads as
+  "name".
 
 OUTPUT CONTRACT
   status / subdomains: human by default; --json → single JSON object on stdout
@@ -34306,6 +34395,8 @@ FLAGS (login)
   --help, -h          This help
 
 Nested Pro subdomains / plan status live under `k2 publish` (not here).
+Which relay the tunnel dials (relay.k2.dev by default) and how to restore
+the old built-in relay: k2 tunnel --help (RELAYS) and k2 tunnel status.
 
 EXIT CODES
   0 ok · 1 error · 2 bad usage
@@ -57069,6 +57160,10 @@ elif verb == "ptr_show":
         print("A      : %s" % (", ".join(a) if a else "(none)"))
         print("match  : ptr==helo=%s  A==origin=%s  aligned=%s" % (
             d.get("ptrMatchesHelo"), d.get("aMatchesOrigin"), d.get("aligned")))
+        # 0.46.6: a K2 relay name that did not resolve; ptr set waits for it.
+        unresolved = (d.get("relayCheck") or {}).get("unresolved") or []
+        if unresolved:
+            print("relays : could not resolve %s (ptr set refuses until it does; retry)" % ", ".join(unresolved))
 
 elif verb == "ptr_set":
     d = call("POST", "/cli/mail/ptr/set", body={"hostname": env("M_HOSTNAME")})

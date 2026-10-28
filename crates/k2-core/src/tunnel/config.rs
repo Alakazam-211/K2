@@ -383,6 +383,19 @@ fn env_relay_default() -> Option<RelayDefault> {
         .and_then(|raw| RelayDefault::parse(&raw))
 }
 
+/// 0.46.6: what set the relay default in force: `"env"` (a recognised
+/// [`RELAY_DEFAULT_ENV`]), `"tunnel.json"` (a recognised `relay_default`),
+/// or `None` (neither: the built-in default).
+pub fn relay_default_set_by(cfg: &TunnelConfig) -> Option<&'static str> {
+    if env_relay_default().is_some() {
+        Some("env")
+    } else if cfg.relay_default.as_deref().and_then(RelayDefault::parse).is_some() {
+        Some("tunnel.json")
+    } else {
+        None
+    }
+}
+
 /// 0.46.6: the relay default in force. Precedence like [`failover_mode`]:
 /// a recognised [`RELAY_DEFAULT_ENV`] wins, then a recognised
 /// `tunnel.json` `relay_default`, else [`RelayDefault::Name`]. Unknown

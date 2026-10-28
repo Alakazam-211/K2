@@ -63,6 +63,8 @@ getent group "$NODE_USER" >/dev/null && groupdel "$NODE_USER" 2>/dev/null || tru
 safe_rm "$HOME_DIR"
 safe_rm "$BIN"
 rm -f "$BIN.prev" "$BIN.bad" "$BIN.new"
+# The PATH link the installer made, only while it still points at $BIN.
+[ "$(readlink /usr/local/bin/k2-node 2>/dev/null)" = "$BIN" ] && rm -f /usr/local/bin/k2-node
 if [ "$KEEP_CONFIG" = "0" ]; then
     safe_rm "$CONFIG_DIR"
     rm -f /etc/k2-node-packages.toml

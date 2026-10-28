@@ -178,6 +178,16 @@ if [ "$(readlink -f "$BINARY")" != "$LIBEXEC/k2-node" ]; then
     mv -f "$LIBEXEC/k2-node.new" "$LIBEXEC/k2-node"
 fi
 BIN="$LIBEXEC/k2-node"
+# On PATH (0.46.6): `sudo k2-node …` failed with the binary only in
+# libexec. A link, so it always runs what a node update swapped into
+# libexec. A file there that isn't a link (a package's) is left alone.
+PATH_LINK="/usr/local/bin/k2-node"
+install -d -m 0755 /usr/local/bin
+if [ -L "$PATH_LINK" ] || [ ! -e "$PATH_LINK" ]; then
+    ln -sfn "$BIN" "$PATH_LINK"
+else
+    echo "  note: $PATH_LINK exists and is not a link; left alone (use $BIN)" >&2
+fi
 # A hand install starts the update history over: no stale `.prev` a
 # remote rollback could go back to, no refused versions, no gate in
 # flight from before (security reviews A-M2 / B-L4).

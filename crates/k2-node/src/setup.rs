@@ -103,6 +103,28 @@ mod tests {
         assert!(script(Kind::Install, "windows").is_err());
     }
 
+    /// `sudo k2-node …` works on Linux (0.46.6): the installer links
+    /// /usr/local/bin/k2-node to the libexec binary (never over a file that
+    /// isn't a link), and the uninstaller removes only its own link.
+    #[test]
+    fn linux_installer_puts_k2_node_on_path() {
+        let inst = script(Kind::Install, "linux").unwrap();
+        assert!(inst.contains("\nPATH_LINK=\"/usr/local/bin/k2-node\"\n"), "installer must name the PATH link");
+        assert!(inst.contains("ln -sfn \"$BIN\" \"$PATH_LINK\""), "installer must link the libexec binary");
+        assert!(
+            inst.contains("if [ -L \"$PATH_LINK\" ] || [ ! -e \"$PATH_LINK\" ]; then"),
+            "installer must not replace a real file at the link path"
+        );
+        let link = inst.find("ln -sfn \"$BIN\"").unwrap();
+        let bin = inst.find("\nBIN=\"$LIBEXEC/k2-node\"\n").expect("BIN set");
+        assert!(bin < link, "the link is made after BIN is set");
+        let un = script(Kind::Uninstall, "linux").unwrap();
+        assert!(
+            un.contains("[ \"$(readlink /usr/local/bin/k2-node 2>/dev/null)\" = \"$BIN\" ] && rm -f /usr/local/bin/k2-node"),
+            "uninstaller removes only its own link"
+        );
+    }
+
     #[test]
     fn binary_is_added_unless_given() {
         let a = installer_args(Kind::Install, "/usr/bin/k2-node", &["--no-private-home".into()]);

@@ -120,12 +120,15 @@ def smtp_rcpt(port, rcpt):
             if len(line) < 4 or line[3] == " ":
                 return " / ".join(lines)
 
-    reply()
-    for cmd in ("EHLO outsider.origin.test", "MAIL FROM:<someone@origin.test>"):
+    trail = [reply()]
+    # A null reverse-path: no sender domain to resolve in the sandbox.
+    for cmd in ("EHLO outsider.origin.test", "MAIL FROM:<>"):
         s.sendall((cmd + "\r\n").encode())
-        reply()
+        trail.append(reply())
     s.sendall(f"RCPT TO:<{rcpt}>\r\n".encode())
     out = reply()
+    if not out.startswith(("250", "5")):
+        out = out + "  (after: " + " | ".join(t[:80] for t in trail) + ")"
     try:
         s.sendall(b"QUIT\r\n")
     except OSError:
@@ -248,7 +251,7 @@ def main():
         check("c an SMTP listener to test", False, json.dumps(ls)[:300])
     else:
         out = smtp_rcpt(smtp, f"anything@{APEX}")
-        check("c an outsider to anything@brand.test is refused (no open relay)", out.startswith("5"), out)
+        check("c an outsider to anything@brand.test is refused (no open relay)", out.startswith("5") and not out.startswith("503"), out)
         out = smtp_rcpt(smtp, f"nobody{tag}@{BOUNCE}")
         info("c an outsider to an unknown address on the bounce subdomain", out)
         out = smtp_rcpt(smtp, alice_addr)

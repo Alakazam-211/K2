@@ -29,6 +29,8 @@ const daemon = vi.hoisted(() => ({
   whoami: { owner: false, role: 'member' } as unknown,
   posts: [] as Array<{ route: string; body: unknown }>,
   gets: [] as string[],
+  devicesAsked: [] as unknown[],
+  devicesByPlatform: null as Record<string, unknown> | null,
 }))
 const simEvents = vi.hoisted(() => ({ fns: new Set<(e: { kind: string; workspace: string; sim: string }) => void>() }))
 vi.mock('@/stores/session-events', async () => {
@@ -51,7 +53,11 @@ vi.mock('@/lib/daemon-cli', async () => {
         if (params?.workspace !== '/w/docs') throw new Error(`sim/status for ${String(params?.workspace)}`)
         return daemon.status
       }
-      if (route === 'sim/devices') return daemon.devices
+      if (route === 'sim/devices') {
+        daemon.devicesAsked.push(params?.platform ?? null)
+        const p = params?.platform
+        return (typeof p === 'string' && daemon.devicesByPlatform?.[p]) || daemon.devices
+      }
       if (route === 'auth/whoami') return daemon.whoami
       throw new Error(`unexpected GET ${route}`)
     }),
@@ -161,6 +167,8 @@ beforeEach(() => {
   daemon.whoami = { owner: false, role: 'member' }
   daemon.posts = []
   daemon.gets = []
+  daemon.devicesAsked = []
+  daemon.devicesByPlatform = null
   simEvents.fns.clear()
   painted.length = 0
   globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver
@@ -257,6 +265,54 @@ describe('no device running', () => {
     expect(document.querySelector('[data-mobile-blocked]')?.textContent).toBe(
       "This server can't run a device yet. /dev/kvm: permission denied for user k2.",
     )
+  })
+
+  it('a server with no iOS lane (Linux) offers Android only and says what an iPhone needs', async () => {
+    daemon.whoami = { owner: true, role: 'owner' }
+    daemon.status = status({ sim: STOPPED })
+    renderMobile(createStubSimStream())
+    await flush()
+    expect(document.querySelector('[data-mobile-platform]')).toBeNull()
+    expect(document.querySelector('[data-mobile-iphone-note]')?.textContent).toBe('iPhone needs a Mac (this computer or a Mac compute node)')
+    expect(daemon.devicesAsked).toEqual(['android'])
+    await act(async () => {
+      fireEvent.click(tool('boot'))
+    })
+    await flush()
+    expect(daemon.posts.map((p) => (p.body as { platform?: string }).platform)).toEqual(['android'])
+  })
+
+  it('the platform picker lists only usable lanes; an iPhone boots as platform ios, never the lane name', async () => {
+    const IPHONE = { id: 'iphone_16', name: 'iPhone 16', widthPt: 393, heightPt: 852, scale: 3, os: 'ios-18', default: true }
+    daemon.whoami = { owner: true, role: 'owner' }
+    daemon.status = status({
+      sim: null,
+      lanes: [
+        { lane: 'android', usable: true, ready: true },
+        { lane: 'ios', usable: false, ready: false, detail: 'Xcode is not installed.' },
+        { lane: 'ios-node', usable: true, ready: true },
+      ],
+    })
+    daemon.devicesByPlatform = { ios: { lane: 'ios-node', devices: [IPHONE] } }
+    renderMobile(createStubSimStream())
+    await flush()
+    expect(document.querySelector('[data-mobile-iphone-note]')).toBeNull()
+    const picker = document.querySelector('[data-mobile-platform]') as HTMLSelectElement
+    expect(Array.from(picker.options).map((o) => [o.value, o.textContent])).toEqual([
+      ['android', 'Android'],
+      ['ios', 'iPhone'],
+    ])
+    await act(async () => {
+      fireEvent.change(picker, { target: { value: 'ios' } })
+    })
+    await flush()
+    expect(daemon.devicesAsked).toEqual(['android', 'ios'])
+    expect(Array.from((document.querySelector('[data-mobile-device]') as HTMLSelectElement).options).map((o) => o.textContent)).toEqual(['iPhone 16'])
+    await act(async () => {
+      fireEvent.click(tool('boot'))
+    })
+    await flush()
+    expect(daemon.posts).toEqual([{ route: 'sim/boot', body: { workspace: '/w/docs', device: 'iphone_16', platform: 'ios', noTab: true } }])
   })
 
   it('a watch-only login has no Start (the daemon says canControl false)', async () => {

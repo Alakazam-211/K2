@@ -16,13 +16,20 @@ import {
   PowerIcon,
   RotateIcon,
 } from '@/components/icons/K2Icons'
-import type { SimDeviceProfile, SimLaneId, SimView } from './simApi'
+import type { SimDeviceProfile, SimLaneId, SimPlatform, SimView } from './simApi'
+
+const PLATFORM_NAME: Record<SimPlatform, string> = { android: 'Android', ios: 'iPhone' }
 import { REMOTE_FPS_CHOICES } from './sim-stream'
 
 export interface MobileToolbarProps {
   session: SimView | null
   /** The lane the chooser's devices boot on (before any device runs). */
   lane: SimLaneId | null
+  /** The platforms this server can run (from the daemon's usable lanes);
+   *  a chooser shows only when there are two. */
+  platforms?: readonly SimPlatform[]
+  platform?: SimPlatform | null
+  onPlatform?(platform: SimPlatform): void
   devices: SimDeviceProfile[]
   /** The chooser's value (the running device, else this tab's last pick). */
   device: string
@@ -102,6 +109,22 @@ export function MobileToolbar(props: MobileToolbarProps): React.JSX.Element {
       className="flex h-9 flex-shrink-0 items-center gap-1 border-b border-[var(--color-border)] px-2 text-xs"
       data-testid="mobile-toolbar"
     >
+      {props.platforms && props.platforms.length > 1 ? (
+        <select
+          aria-label="Platform"
+          className="h-6 cursor-pointer rounded-none border border-[var(--color-border)] bg-[var(--color-bg)] px-1 text-xs text-[var(--color-text)] disabled:cursor-default disabled:opacity-60"
+          value={props.platform ?? props.platforms[0]}
+          disabled={!canControl || busy || on}
+          onChange={(e) => props.onPlatform?.(e.target.value as SimPlatform)}
+          data-mobile-platform=""
+        >
+          {props.platforms.map((p) => (
+            <option key={p} value={p}>
+              {PLATFORM_NAME[p]}
+            </option>
+          ))}
+        </select>
+      ) : null}
       <select
         aria-label="Device"
         className="h-6 min-w-0 max-w-[12rem] cursor-pointer rounded-none border border-[var(--color-border)] bg-[var(--color-bg)] px-1 text-xs text-[var(--color-text)] disabled:cursor-default disabled:opacity-60"

@@ -268,6 +268,28 @@ export function firstUsableLane(lanes: readonly SimLaneStatus[]): SimLaneStatus 
   return lanes.find((l) => l.usable) ?? null
 }
 
+/** What a person picks (`--platform`): `ios-node` is still an iPhone, and
+ *  the daemon picks between `ios` and `ios-node` itself. */
+export type SimPlatform = 'android' | 'ios'
+
+export function lanePlatform(lane: SimLaneId): SimPlatform {
+  return lane === 'android' ? 'android' : 'ios'
+}
+
+/** The tab's line when no iOS lane can run here (the daemon's 409 says the same). */
+export const IPHONE_NEEDS_A_MAC = 'iPhone needs a Mac (this computer or a Mac compute node)'
+
+/** The platforms the tab offers: only lanes the daemon reports as usable,
+ *  in its order, each once. A lane the server doesn't have is never offered. */
+export function offeredPlatforms(lanes: readonly SimLaneStatus[]): SimPlatform[] {
+  const out: SimPlatform[] = []
+  for (const l of lanes) {
+    const p = lanePlatform(l.lane)
+    if (l.usable && !out.includes(p)) out.push(p)
+  }
+  return out
+}
+
 /** A device that occupies the screen area (not stopped / failed / none). */
 export function simIsUp(view: SimView | null): boolean {
   return !!view && (view.state === 'installing' || view.state === 'booting' || view.state === 'running' || view.state === 'stopping')

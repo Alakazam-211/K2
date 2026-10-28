@@ -34,12 +34,16 @@ import {
   bootSim,
   fetchSimDevices,
   firstUsableLane,
+  IPHONE_NEEDS_A_MAC,
+  lanePlatform,
+  offeredPlatforms,
   screenshotSim,
   simIsUp,
   stopSim,
   type SimDeviceProfile,
   type SimHold,
   type SimLaneId,
+  type SimPlatform,
   type SimStatus,
 } from './simApi'
 import { type BoxRect, gestureFor, keyToSimInput, nextOrientation, type PointerSample, type ScreenPt } from './sim-input'
@@ -235,11 +239,26 @@ function MobileDevice({
   // ── Device profiles (the chooser) ─────────────────────────────────────
   const [devices, setDevices] = useState<SimDeviceProfile[]>([])
   const [devicesLane, setDevicesLane] = useState<SimLaneId | null>(null)
-  const anyLane = !!status && firstUsableLane(status.lanes) !== null
+  // The platform picker lists only the lanes the daemon reports as usable
+  // here (a Linux box: Android only), so a lane it lacks is never sent.
+  const platforms = useMemo(() => (status ? offeredPlatforms(status.lanes) : []), [status])
+  const [pickedPlatform, setPickedPlatform] = useState<SimPlatform | null>(null)
+  const firstLane = status ? firstUsableLane(status.lanes) : null
+  const platform: SimPlatform | null =
+    session && simIsUp(session)
+      ? lanePlatform(session.lane)
+      : pickedPlatform && platforms.includes(pickedPlatform)
+        ? pickedPlatform
+        : firstLane
+          ? lanePlatform(firstLane.lane)
+          : null
+  // No iOS lane at all on this server (a Mac's own lane that isn't usable
+  // yet explains itself in the lane's detail instead).
+  const iphoneNote = status && !status.lanes.some((l) => lanePlatform(l.lane) === 'ios') ? IPHONE_NEEDS_A_MAC : null
   useEffect(() => {
-    if (!workspaceRef || !visible || !canControl || !anyLane) return
+    if (!workspaceRef || !visible || !canControl || !platform) return
     let cancelled = false
-    fetchSimDevices(scope, workspaceRef)
+    fetchSimDevices(scope, workspaceRef, platform)
       .then((r) => {
         if (cancelled) return
         setDevices(r.devices)
@@ -249,10 +268,11 @@ function MobileDevice({
     return () => {
       cancelled = true
     }
-  }, [scope, workspaceRef, visible, canControl, anyLane])
+  }, [scope, workspaceRef, visible, canControl, platform])
   const [picked, setPicked] = useState<string>(data.deviceType ?? '')
   const fallbackDevice = devices.find((d) => d.default)?.id ?? devices[0]?.id ?? ''
-  const device = session && simIsUp(session) && session.profile ? session.profile.id : picked || fallbackDevice
+  const pickedHere = devices.some((d) => d.id === picked) ? picked : ''
+  const device = session && simIsUp(session) && session.profile ? session.profile.id : pickedHere || fallbackDevice
 
   // ── Gestures to the daemon ────────────────────────────────────────────
   const [busy, setBusy] = useState(false)
@@ -285,10 +305,12 @@ function MobileDevice({
       if (!workspaceRef) return
       remember(which)
       void act('boot', async () => {
-        await bootSim(scope, workspaceRef, { device: which, ...(devicesLane ? { platform: devicesLane } : {}) })
+        // The platform (android | ios), never a lane name: the daemon picks
+        // the lane, and the tab only offers platforms it reported.
+        await bootSim(scope, workspaceRef, { device: which, ...(platform ? { platform } : {}) })
       })
     },
-    [act, devicesLane, remember, scope, workspaceRef],
+    [act, platform, remember, scope, workspaceRef],
   )
   const onDevice = useCallback(
     (which: string) => {
@@ -403,6 +425,9 @@ function MobileDevice({
       <MobileToolbar
         session={session}
         lane={devicesLane}
+        platforms={platforms}
+        platform={platform}
+        onPlatform={setPickedPlatform}
         devices={devices}
         device={device}
         canControl={canControl}
@@ -429,6 +454,11 @@ function MobileDevice({
         onFps={onFps}
         extra={toolbarExtra}
       />
+      {iphoneNote && canControl ? (
+        <div className="flex-shrink-0 border-b border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text-muted)]" data-mobile-iphone-note="">
+          {iphoneNote}
+        </div>
+      ) : null}
       {shownNotice ? (
         <div className="flex-shrink-0 border-b border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text-secondary)]" data-mobile-notice="">
           {shownNotice}

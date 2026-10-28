@@ -205,3 +205,45 @@ fn sim_routes_end_to_end_on_a_fake_lane() {
     k2_core::sim::clear_lanes();
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// An unknown platform and an iPhone on a server with no iOS lane each get
+/// their own code and a plain message, never a bare 400 (the Mobile tab
+/// only offers the lanes `status` reports; this is the server's half).
+#[test]
+fn an_unknown_or_missing_lane_is_named_not_a_bare_400() {
+    let _serial = sim_test_lock();
+    let tmp = std::env::temp_dir().join(format!("k2-sim-lanes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("ws")).expect("ws");
+    k2_core::sim::set_base_for_tests(tmp.join("home"));
+    k2_core::sim::clear_lanes();
+    k2_core::sim::register_lane(Arc::new(k2_core::sim::fake::FakeLane::new(LaneKind::Android)));
+    manager::manager().refresh_probes();
+    let ws = insert_project("sim-lanes", &tmp.join("ws"));
+
+    // A Linux box: Android only. The status lists no iOS lane...
+    let st = body(&get(STATUS, Caller::Owner, &[("workspace", &ws)]));
+    let lanes: Vec<&str> = st["lanes"].as_array().expect("lanes").iter().map(|l| l["lane"].as_str().expect("lane")).collect();
+    assert_eq!(lanes, vec!["android"], "{st}");
+    // ...and asking for an iPhone (by platform or by lane) says what it needs.
+    for platform in ["ios", "ios-node"] {
+        let r = get(DEVICES, Caller::Owner, &[("workspace", &ws), ("platform", platform)]);
+        assert_eq!(r.status, "409 Conflict", "{platform}: {}", r.body);
+        assert_eq!(code(&r), "sim_lane_unavailable", "{platform}");
+        assert_eq!(body(&r)["message"], json!("iPhone needs a Mac (this computer or a Mac compute node)"), "{platform}");
+        let r = post(BOOT, Caller::Owner, json!({ "workspace": ws, "platform": platform }));
+        assert_eq!((r.status, code(&r).as_str()), ("409 Conflict", "sim_lane_unavailable"), "{platform}: {}", r.body);
+    }
+    // A name that is no lane at all: its own code, naming the choices.
+    let r = get(DEVICES, Caller::Owner, &[("workspace", &ws), ("platform", "windows-phone")]);
+    assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+    assert_eq!(code(&r), "sim_lane_unknown");
+    assert!(body(&r)["message"].as_str().expect("message").contains("use android or ios"), "{}", r.body);
+    // Android still answers.
+    let r = get(DEVICES, Caller::Owner, &[("workspace", &ws), ("platform", "android")]);
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(body(&r)["lane"], json!("android"));
+
+    k2_core::sim::clear_lanes();
+    let _ = std::fs::remove_dir_all(&tmp);
+}

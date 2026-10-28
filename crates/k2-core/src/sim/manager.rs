@@ -182,6 +182,14 @@ fn now() -> i64 {
 }
 
 /// Settle time after an action before the diff read.
+/// A `platform` that is no lane K2 knows (400).
+pub const SIM_LANE_UNKNOWN: &str = "sim_lane_unknown";
+/// A known lane this server doesn't have (409): an iPhone on a box with no
+/// Mac. The Mobile tab never offers one (it lists the lanes `status` reports).
+pub const SIM_LANE_UNAVAILABLE: &str = "sim_lane_unavailable";
+/// What an iPhone needs; the Mobile tab shows the same line.
+pub const IPHONE_NEEDS_A_MAC: &str = "iPhone needs a Mac (this computer or a Mac compute node)";
+
 const SETTLE: Duration = Duration::from_millis(350);
 const DIFF_MAX: usize = 8;
 pub const BOOT_TIMEOUT: Duration = Duration::from_secs(240);
@@ -243,16 +251,28 @@ impl Manager {
         let order: Vec<LaneKind> = match platform.map(|p| p.trim().to_ascii_lowercase()) {
             Some(p) if p == "android" => vec![LaneKind::Android],
             Some(p) if p == "ios" => vec![LaneKind::Ios, LaneKind::IosNode],
+            // A lane's own name (the devices answer names it): that lane.
+            Some(p) if p == "ios-node" => vec![LaneKind::IosNode],
             Some(p) if p.is_empty() => default_order(),
             None => default_order(),
             Some(other) => {
-                return Err(SimError::new(400, "sim_invalid", format!("unknown platform '{other}' (android or ios)")));
+                return Err(SimError::new(
+                    400,
+                    SIM_LANE_UNKNOWN,
+                    format!("unknown platform '{other}': use android or ios (k2 sim status lists the lanes this server has)"),
+                ));
             }
         };
         for k in &order {
             if usable(*k) {
                 return super::lane(*k).ok_or_else(|| SimError::new(503, "sim_unavailable", "lane vanished"));
             }
+        }
+        // An iPhone asked for on a server with no iOS lane at all (a Linux
+        // box, no Mac compute node): say what it needs, never a bare 400.
+        let ios_only = order.iter().all(|k| k.platform() == "ios");
+        if ios_only && order.iter().all(|k| super::lane(*k).is_none()) {
+            return Err(SimError::new(409, SIM_LANE_UNAVAILABLE, IPHONE_NEEDS_A_MAC));
         }
         let why: Vec<String> = order
             .iter()

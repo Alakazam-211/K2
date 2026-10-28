@@ -48,8 +48,37 @@ pub fn installer_args(kind: Kind, self_path: &str, user_args: &[String]) -> Vec<
     out
 }
 
+/// `setup --sim` (iPhone on a Mac node, prd-ios-on-mac-node-0467-v1 §3.3):
+/// the checks before anything is installed. Simulator apps run outside the
+/// job wall (CoreSimulator starts them, not a job), so they can read any
+/// folder other users can read: a person's home that is open to others is
+/// refused (review IR-4) unless the owner passes `--private-home`, which
+/// makes it private.
+pub fn sim_preflight(macos: bool, open_homes: &[(PathBuf, u32)], private_home: bool) -> Result<(), String> {
+    if !macos {
+        return Err("--sim is for a Mac node: the iOS Simulator needs macOS and Xcode.".into());
+    }
+    if !open_homes.is_empty() && !private_home {
+        let list: Vec<String> = open_homes.iter().map(|(p, m)| format!("{} ({m:o})", p.display())).collect();
+        let paths: Vec<String> = open_homes.iter().map(|(p, _)| p.display().to_string()).collect();
+        return Err(format!(
+            "These home folders are open to other users: {}. iPhone apps on this Mac run outside the job wall and could read them. Make them private first (sudo chmod 700 {}), or run setup again with --private-home.",
+            list.join(", "),
+            paths.join(" ")
+        ));
+    }
+    Ok(())
+}
+
 /// Run the embedded installer as root. Returns its exit code.
 pub fn run(kind: Kind, user_args: &[String]) -> Result<i32, String> {
+    if kind == Kind::Install && user_args.iter().any(|a| a == "--sim") {
+        let private = user_args.iter().any(|a| a == "--private-home");
+        sim_preflight(cfg!(target_os = "macos"), &crate::wall::open_homes_in(crate::wall::homes_root()), private)?;
+        // The Simulator user and service come after the S0 spike proves a
+        // hidden user can run the Simulator; until then, change nothing.
+        return Err("--sim: this k2-node build checks the Mac but can't set up the Simulator user yet. Nothing was changed.".into());
+    }
     if unsafe { libc::geteuid() } != 0 {
         let verb = if kind == Kind::Install { "setup" } else { "uninstall" };
         return Err(format!(
@@ -92,6 +121,33 @@ fn self_exe_display() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// IR-4: Simulator apps run outside Seatbelt, so `setup --sim` refuses
+    /// while a person's home is open to others (k2n1-m4's
+    /// `/Users/scoutwilliams` was installed with `--no-private-home`).
+    #[test]
+    fn setup_sim_refuses_while_a_home_is_readable_by_others() {
+        let open = vec![(PathBuf::from("/Users/scoutwilliams"), 0o755)];
+        let e = sim_preflight(true, &open, false).unwrap_err();
+        assert!(e.contains("/Users/scoutwilliams (755)") && e.contains("sudo chmod 700 /Users/scoutwilliams") && e.contains("--private-home"), "{e}");
+        assert!(sim_preflight(true, &open, true).is_ok(), "--private-home makes them private");
+        assert!(sim_preflight(true, &[], false).is_ok());
+        assert!(sim_preflight(false, &[], false).unwrap_err().contains("Mac node"));
+    }
+
+    #[test]
+    fn open_homes_are_found_by_their_other_bits() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("k2-homes-{}-{}", std::process::id(), k2_node_proto::crypto::random_id().unwrap()));
+        for (n, mode) in [("scout", 0o755), ("private", 0o700), ("Shared", 0o777)] {
+            std::fs::create_dir_all(root.join(n)).unwrap();
+            std::fs::set_permissions(root.join(n), std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let open = crate::wall::open_homes_in(&root);
+        assert_eq!(open, vec![(root.join("scout"), 0o755)]);
+        assert!(sim_preflight(true, &open, false).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn scripts_are_embedded_and_start_from_root_dir() {

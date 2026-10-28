@@ -146,6 +146,7 @@ const SWITCHES: &[&str] = &[
     "--help",
     "--private-home",
     "--no-private-home",
+    "--sim",
     "--no-job-wall",
     "--no-package-installs",
     "--reenroll",

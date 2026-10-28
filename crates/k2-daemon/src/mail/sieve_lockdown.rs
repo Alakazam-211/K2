@@ -64,14 +64,27 @@ use crate::mail::dav::{merge_permissions, protected_reason};
 use crate::mail::jmap::{SieveScriptInfo, StalwartClient};
 use crate::mail::sieve_user;
 
-/// The JMAP Sieve write permissions a mailbox login loses. Exact
-/// Stalwart 0.16.25 `Permission` names (live probe 2026-10-27): one
-/// unknown name fails a whole `x:Account/set`, so never add a name
-/// without a live check. Read (`SieveScript/get`, `/validate`) stays.
+/// The Sieve write permissions a mailbox login loses: JMAP
+/// (`SieveScript/set`) and ManageSieve (PUTSCRIPT, SETACTIVE, DELETESCRIPT,
+/// RENAMESCRIPT). Exact Stalwart `Permission` names: one unknown name
+/// fails a whole `x:Account/set`, so never add a name without a live
+/// check. The JMAP three were probed 2026-10-27; the ManageSieve four
+/// 2026-10-28 on 0.16.10 and 0.16.25 (`tests/mail/stalwart-forward-gap-probe.py`
+/// G6: with only the JMAP lock, a mailbox password still PUTSCRIPTs and
+/// activates a redirect over ManageSieve wherever a :4190 listener exists;
+/// with these four, PUTSCRIPT answers `NO`). K2's enable flow destroys the
+/// `sieve` listener, so this closes the door on boxes where one was
+/// re-added. Read (`SieveScript/get`, `/validate`, GETSCRIPT, LISTSCRIPTS)
+/// stays. An account locked with the JMAP three only is re-patched by the
+/// boot reconcile ([`is_locked`] wants every name).
 pub const SIEVE_WRITE_PERMISSIONS: &[&str] = &[
     "jmapSieveScriptCreate",
     "jmapSieveScriptUpdate",
     "jmapSieveScriptDestroy",
+    "sievePutScript",
+    "sieveSetActive",
+    "sieveDeleteScript",
+    "sieveRenameScript",
 ];
 
 /// User-interpreter Sieve capabilities K2 turns off server-wide.
@@ -1313,6 +1326,21 @@ mod tests {
         assert_eq!(mint_permissions(Some(both.clone())).expect("same"), both);
         assert!(!is_locked(None));
         assert!(!is_locked(Some(&serde_json::json!({"@type": "Inherit"}))));
+        // An account locked before the ManageSieve names (JMAP three only)
+        // is not locked: the reconcile adds the rest and keeps the three.
+        let jmap_only = serde_json::json!({
+            "@type": "Merge",
+            "enabledPermissions": {},
+            "disabledPermissions": {
+                "jmapSieveScriptCreate": true, "jmapSieveScriptUpdate": true, "jmapSieveScriptDestroy": true,
+            },
+        });
+        assert!(!is_locked(Some(&jmap_only)));
+        let up = lock_permissions(Some(&jmap_only)).expect("merge").expect("changed");
+        for p in ["jmapSieveScriptCreate", "sievePutScript", "sieveSetActive", "sieveDeleteScript", "sieveRenameScript"] {
+            assert_eq!(up["disabledPermissions"][p], true, "{p}: {up}");
+        }
+        assert!(is_locked(Some(&up)));
         // An operator's Replace list: the Sieve writes leave `enabled`.
         let rep = serde_json::json!({
             "@type": "Replace",

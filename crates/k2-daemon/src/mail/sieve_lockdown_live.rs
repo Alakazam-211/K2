@@ -800,41 +800,36 @@ fn live_forward_gap_probe() {
             retry("service key ping after listener", 90, || c.ping());
             let up = wait_for(30, || sh("ss -ltnH 'sport = :4190'").is_ok_and(|o| !o.trim().is_empty()));
             rep.info("G6 probe listener on 127.0.0.1:4190", format!("listening={up}"));
-            // (a) a mailbox with today's lock (JMAP writes only).
+            // (a) a mailbox with K2's lock (JMAP + ManageSieve writes denied).
             let out = managesieve(4190, &gina_addr, &gina_pw, redirect);
-            rep.info("G6a ManageSieve as gina (JMAP-only lock)", out.replace('\n', " / "));
+            rep.info("G6a ManageSieve as gina (K2's lock)", out.replace('\n', " / "));
             rep.check(
-                "G6a ManageSieve PUTSCRIPT refused with today's lock",
+                "G6a ManageSieve PUTSCRIPT refused with K2's lock",
                 !step_ok(&out, "PUTSCRIPT") && !step_ok(&out, "SETACTIVE"),
                 "see G6a info",
             );
-            if step_ok(&out, "SETACTIVE") {
-                let m6 = format!("g6-{tag}@origin.test");
-                smtp_send(&gina_addr, &m6, "probe g6").expect("send g6");
-                let left = wait_for(45, || mailpit_has(&m6, "exfil@outside.test"));
-                rep.info("G6a the ManageSieve redirect really forwards", format!("sink copy={left}"));
-            }
-            // (b) the hardened lock: the ManageSieve write names too.
-            let hard = crate::mail::dav::merge_permissions(
-                Some(&lock),
-                &["sievePutScript", "sieveSetActive", "sieveDeleteScript", "sieveRenameScript"],
+            // (b) the lock K2 shipped before 2026-10-28 (JMAP only), for the record.
+            let old = crate::mail::dav::merge_permissions(
+                None,
+                &["jmapSieveScriptCreate", "jmapSieveScriptUpdate", "jmapSieveScriptDestroy"],
                 &[],
             )
             .expect("merge")
             .expect("some");
             let pw = super::secrets::generate_secret().expect("secret");
-            match c.account_create("ivan", &did, &pw, 1_073_741_824, 10_000, Some(&hard)) {
+            match c.account_create("ivan", &did, &pw, 1_073_741_824, 10_000, Some(&old)) {
                 Ok(_) => {
-                    rep.info("G6b x:Account/set accepts the ManageSieve names", "yes");
-                    let out = managesieve(4190, &format!("ivan@{DOMAIN}"), &pw, redirect);
-                    rep.info("G6b ManageSieve as ivan (hardened lock)", out.replace('\n', " / "));
-                    rep.check(
-                        "G6b hardened lock refuses ManageSieve writes",
-                        !step_ok(&out, "PUTSCRIPT") && !step_ok(&out, "SETACTIVE"),
-                        "see G6b info",
-                    );
+                    let ivan = format!("ivan@{DOMAIN}");
+                    let out = managesieve(4190, &ivan, &pw, redirect);
+                    rep.info("G6b ManageSieve as ivan (old JMAP-only lock)", out.replace('\n', " / "));
+                    if step_ok(&out, "SETACTIVE") {
+                        let m6 = format!("g6-{tag}@origin.test");
+                        smtp_send(&ivan, &m6, "probe g6").expect("send g6");
+                        let left = wait_for(45, || mailpit_has(&m6, "exfil@outside.test"));
+                        rep.info("G6b the ManageSieve redirect really forwards", format!("sink copy={left}"));
+                    }
                 }
-                Err(e) => rep.check("G6b x:Account/set accepts the ManageSieve names", false, e),
+                Err(e) => rep.info("G6b old-lock account", e),
             }
             let gone = registry(&c, "x:NetworkListener/set", json!({ "destroy": [ms_id] }));
             rep.info("G6 probe listener removed", format!("{gone:?}"));

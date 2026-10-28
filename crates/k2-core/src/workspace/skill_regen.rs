@@ -716,7 +716,7 @@ not a crawl of wiki or PRDs. `k2 study <topic>` prints one page. Daemon-optional
 Topics: what, source, map, identity, send, human, people, auth, errors, context,
 db, mail, connect-boundary, apps, app-deploys, app-move, app-api, live,
 app-heartbeats, app-tickets, app-identity, app-surfaces, app-resources,
-app-runtime, app-handover, app-push, app-pairing, app-profile, skins,
+app-runtime, app-handover, app-push, app-pairing, app-profile, app-chat, skins,
 feedback-loop, ticket-brief, zen, sidecars, llm-tokens, llm-accounts,
 publish-framing, compute, compute-shared, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,

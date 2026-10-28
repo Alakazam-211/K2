@@ -567,6 +567,21 @@ fn case_rename(from: &std::path::Path, to: &std::path::Path) {
                     return;
                 }
             }
+            // Windows: one file under two case spellings has one file
+            // index (NTFS is case-insensitive, like APFS).
+            #[cfg(windows)]
+            {
+                let _ = (a, b);
+                let index = |p: &Path| crate::win_fs::change_stamp(p).map(|s| s.file_index);
+                if index(from) != index(to) {
+                    log_debug!(
+                        "[filename-migrate] both {} and {} exist with different inodes — skipping",
+                        from.display(),
+                        to.display()
+                    );
+                    return;
+                }
+            }
         }
     }
     let tmp = from.with_extension(format!("md.tmp-case-rename-{}", uuid::Uuid::new_v4()));

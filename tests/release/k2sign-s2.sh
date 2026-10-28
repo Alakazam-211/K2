@@ -258,6 +258,17 @@ K2_SIGN_APPROVE_CMD="$tmp/sleep.sh" K2_SIGN_APPROVE_TIMEOUT_MIN=1 expect 1 \
 t1="$(date +%s)"
 [ "$rc" = 0 ] && [ $((t1 - t0)) -le 90 ] && pass "S2-5 exit 1 within 90 s ($((t1 - t0)) s) with the re-run line" || fail "S2-5 watchdog" "$(cat "$tmp/r") ($((t1 - t0)) s)"
 pgrep -f "$tmp/sleep.sh" >/dev/null && fail "the helper still runs after the watchdog" || pass "the watchdog killed the helper"
+# An approval app built before --timeout never reaches a release: Step 0.46 refuses it before opening it.
+old="$tmp/Old Approve.app/Contents/MacOS"; mkdir -p "$old"
+printf '#!/bin/sh\necho "K2 Release Approve: usage: --enrol | --challenge <file> --out <file>" >&2\nexit 1\n' > "$old/K2 Release Approve"; chmod +x "$old/K2 Release Approve"
+env -u K2_SIGN_APPROVE_CMD K2_SIGN_APPROVE_APP="$tmp/Old Approve.app" bash -c 'source "$1"; source "$2"; shift 2; "$@"' _ \
+    "$TREE/scripts/lib/sign-updater.sh" "$TREE/scripts/lib/sign-approve.sh" k2sa_open_session 0.46.17 "$B1" "${ASSETS[@]}" > "$tmp/r" 2>&1 && rc=0 || rc=$?
+[ "$rc" = 1 ] && grep -q "is too old (no --timeout)" "$tmp/r" && grep -q "bash scripts/k2sign/approve/build.sh" "$tmp/r" \
+    && pass "Step 0.46 refuses an approval app without --timeout (and says how to rebuild)" || fail "old app" "rc=$rc $(cat "$tmp/r")"
+printf '#!/bin/sh\n[ "$1" = --capabilities ] && echo "k2-release-approve 2 timeout replace key-dir" && exit 0\nexit 7\n' > "$old/K2 Release Approve"
+env -u K2_SIGN_APPROVE_CMD bash -c 'source "$1"; source "$2"; shift 2; k2sa_app_current "$@"' _ \
+    "$TREE/scripts/lib/sign-updater.sh" "$TREE/scripts/lib/sign-approve.sh" "$tmp/Old Approve.app" \
+    && pass "a build that lists timeout passes the check" || fail "current app check"
 # release.sh: Step 0.46 sits after the preflight (0.45) and before every build
 # step, and a failed approval exits.
 python3 -I - "$REPO/scripts/release.sh" <<'PY' && pass "release.sh: Step 0.46 runs after 0.45, before 0.5 and any build; its failure exits 1" || fail "release.sh order"

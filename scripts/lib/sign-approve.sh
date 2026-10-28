@@ -51,6 +51,18 @@ else:
     print(d)' "$1"
 }
 
+# The approval app must be a build that closes its own sheet (--timeout):
+# an older one would leave a sheet up after the watchdog gave up.
+k2sa_app_current() {
+    local app="$1" caps
+    caps="$("$app/Contents/MacOS/K2 Release Approve" --capabilities 2>/dev/null)" || caps=""
+    case " $caps " in
+        *" timeout "*) return 0 ;;
+    esac
+    k2sa_fail "K2 Release Approve at $app is too old (no --timeout). Rebuild it (your approver key is kept): bash scripts/k2sign/approve/build.sh — nothing was built. Re-run: ./scripts/release.sh ${VERSION:-<version>}"
+    return 1
+}
+
 # Run the approval helper with a watchdog. Returns 0 when <out> holds a signature.
 k2sa_run_helper() {
     local cf="$1" of="$2" version="$3" timeout_min pid waited=0 limit
@@ -62,6 +74,7 @@ k2sa_run_helper() {
     else
         local app="${K2_SIGN_APPROVE_APP:-$HOME/Applications/K2 Release Approve.app}"
         [ -d "$app" ] || { k2sa_fail "no approval app at $app (scripts/k2sign/approve/build.sh, then Enrol)"; return 1; }
+        k2sa_app_current "$app" || return 1
         # --timeout: the app cancels its own sheet when the watchdog would.
         /usr/bin/open -W -n -a "$app" --args --challenge "$cf" --out "$of" --timeout "$limit" &
     fi

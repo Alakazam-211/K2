@@ -169,6 +169,16 @@ for n in "0" "1 --key U2" "2 --key U2" "2 --key U2b" "3 --key U2b" "reenrol --ke
     else fail "sitting.sh $n dry run" "$(tail -3 "$tmp/sit.out")"; fi
 done
 [ -z "$(find "$tmp/home" -mindepth 1 -print -quit 2>/dev/null)" ] && pass "the dry runs wrote nothing in HOME" || fail "dry runs wrote" "$(find "$tmp/home" | head -3)"
+for n in "2 --key U2" "2 --key U2b"; do
+    # shellcheck disable=SC2086
+    HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" $n --commit 0123456 > "$tmp/sit.out" 2>&1
+    awk '/Rebuild K2 Release Approve/{r=NR} /supports --timeout/{c=NR} /inside _k2sign/{g=NR} END{exit !(r && c && g && r<c && c<g)}' "$tmp/sit.out" \
+        && pass "sitting $n rebuilds the approval app and checks --timeout before making any key" || fail "sitting $n app rebuild" "$(head -20 "$tmp/sit.out")"
+done
+HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 3 --key U2 --commit 0123456 > "$tmp/sit.out" 2>&1
+grep -q "supports --timeout" "$tmp/sit.out" && pass "sitting 3 checks the approval app supports --timeout" || fail "sitting 3 app check"
+HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 0 --key U2b > "$tmp/sit.out" 2>&1
+grep -q "ssh z3thon@z3mbp " "$tmp/sit.out" && pass "sitting 0 --key U2b prints the SSH line for z3mbp" || fail "sitting 0 host" "$(grep ssh "$tmp/sit.out")"
 HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 2 --key U2b --commit 0123456 > "$tmp/sit.out" 2>&1
 grep -q "U3 is not made here" "$tmp/sit.out" && grep -q "generate --signer k2sign --key-name U2b --skip-u3" "$tmp/sit.out" \
     && ! grep -q "NEW password for U3" "$tmp/sit.out" && pass "sitting 2 on z3mbp (U2b) makes no U3" || fail "U2b sitting 2" "$(head -5 "$tmp/sit.out")"

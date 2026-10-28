@@ -84,6 +84,17 @@ must_say() {
     fi
 }
 agents_running() { /usr/bin/pgrep -u "$(id -un)" -f 'claude|grok|codex|k2-ptyd' 2>/dev/null | wc -l | tr -d ' '; }
+# The approval app must close its own sheet (--timeout): Step 0.46 refuses an
+# older build, so the sittings rebuild it and check before going on.
+app_check() {
+    printf '\n\033[1m▶ check: K2 Release Approve supports --timeout\033[0m\n    %s --capabilities   (must list timeout)\n' "$(show "$APPBIN")"
+    if [ "$RUN" = 1 ] && ask; then
+        case " $("$APPBIN" --capabilities 2>/dev/null || true) " in
+            *" timeout "*) ok "this build closes its own sheet (--timeout)" ;;
+            *) printf '  \033[1;31mToo old (no --timeout): run the rebuild step (s to skip is not allowed here). Stop.\033[0m\n'; exit 1 ;;
+        esac
+    fi
+}
 need_host() {
     local h
     h="$(scutil --get LocalHostName 2>/dev/null || true)"
@@ -159,7 +170,7 @@ check) check ;;
     step "(a) Approve with the Developer ID build: TOUCH the sensor" \
         /usr/bin/open -W -n -a "$S0/devid/K2 Release Approve.app" --args --key-dir "$S0/key" --challenge "$S0/c.json" --out "$S0/c2.der"
     step "(c) 'Verified OK' = pass" /usr/bin/openssl dgst -sha256 -verify "$S0/key/approver.pem" -signature "$S0/c2.der" "$S0/c.json"
-    printf '\n\033[1m▶ (b) over SSH, BEFORE the next step: from another Mac run this one line, then TOUCH the sensor on z3mbpZ:\033[0m\n    ssh z3thon@z3mbpZ %q\n' \
+    printf '\n\033[1m▶ (b) over SSH, BEFORE the next step: from another Mac run this one line, then TOUCH the sensor on %s:\033[0m\n    ssh z3thon@%s %q\n' "$HOST" "$HOST" \
         "$(show /usr/bin/open -W -n -a "$S0/adhoc/K2 Release Approve.app" --args --key-dir "$S0/key" --challenge "$S0/c.json" --out "$S0/c3.der")"
     step "(b) Check the SSH approval: 'Verified OK' = pass" /usr/bin/openssl dgst -sha256 -verify "$S0/key/approver.pem" -signature "$S0/c3.der" "$S0/c.json"
     step "Remove everything the spike made" /bin/rm -rf "$S0"
@@ -223,6 +234,8 @@ check) check ;;
             || { echo "  $U1_KEY.pub is not U1 (E9111446F65EBB05): tell K2."; exit 1; }
         ok "agents stopped; U1's key file is $U1_KEY (id E9111446F65EBB05)"
     fi
+    step "Rebuild K2 Release Approve from this commit (keeps your approver key; adds --timeout)" bash "$HERE/approve/build.sh"
+    app_check
     step "$KEY inside _k2sign (random password, never shown); prints its PUBLIC line (Password: = Mac admin password)" sudo "$LIBEXEC/k2sign-admin" generate-u2
     if [ "$KEY" = U2 ]; then
         step "U3: type U3's new password twice at minisign's prompts; attach the key file to a password-manager entry; type 'saved'" \
@@ -259,6 +272,7 @@ check) check ;;
     need_commit
     step "Re-install from this commit: pins U2/U3; refuses if the tree's U2 isn't the one generate-u2 made (Password: = Mac admin password)" sudo bash "$HERE/install.sh"
     note "Send K2 the 'Hashes' lines again and wait for 'they match'."
+    app_check
     step "The signer's GitHub side (must end 'gh-selfcheck ok')" sudo -n -u _k2sign "$LIBEXEC/k2sign" gh-selfcheck
     step "Preflight as the release does it (must end 'preflight ok')" bash "$TREE/scripts/sign-daemon.sh" --preflight 0.46.6
     # Version 0.0.1 never uses up a real release's one session (versions only

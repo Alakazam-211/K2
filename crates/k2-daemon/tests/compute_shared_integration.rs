@@ -269,6 +269,11 @@ async fn run(port: u16, token: &str, body: Value) -> Resp {
     b["argv"] = json!(["true"]);
     b["noSource"] = json!(true);
     b["clientJobId"] = json!(uuid::Uuid::new_v4().simple().to_string());
+    // 0.46.6: jobs say their --mem (else a mem_defaulted note joins the
+    // notices these tests count).
+    if b.get("memBytes").is_none() {
+        b["memBytes"] = json!(1u64 << 30);
+    }
     post(port, "/cli/compute/run", token, b).await
 }
 

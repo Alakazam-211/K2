@@ -357,15 +357,26 @@ set +e
 k2 compute wait nosuchjob >/dev/null 2>"$SANDBOX/err"; rc=$?
 set -e
 expect_eq "wait on a missing job exits 4" "$rc" "4"
+# 0.46.6 (compute tiers v2, L8): run --wait prints the job id first on
+# stdout (so a timed-out shell can resume with `k2 compute wait <id>
+# --follow`), then streams the job's output, and exits with its code.
 set +e
-rout="$(k2 compute run mini --wait -- sh -c 'echo never-streamed; exit 5' 2>"$SANDBOX/err")"; rc=$?
+rout="$(k2 compute run mini --wait -- sh -c 'echo streamed-line; exit 5' 2>"$SANDBOX/err")"; rc=$?
 set -e
 expect_eq "run --wait exits with the job's code" "$rc" "5"
 RW="$(printf '%s\n' "$rout" | head -1)"
-expect_eq "run --wait prints only the job id on stdout" "$rout" "$RW"
+case "$RW" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ok "run --wait prints the job id first on stdout" ;; *) bad "run --wait prints the job id first on stdout (got '$RW')" ;; esac
 expect_has "the id is the job's" "$(k2 compute get "$RW")" "job $RW on mini: done"
-case "$rout$(cat "$SANDBOX/err")" in *never-streamed*) bad "run --wait streams no log text" ;; *) ok "run --wait streams no log text" ;; esac
+case "$rout" in *streamed-line*) ok "run --wait streams the job's output" ;; *) bad "run --wait streams the job's output (stdout: $rout)" ;; esac
 expect_has "run --wait posted detach:false" "$(job_row "$RW")" '"detach":false'
+# --wait --quiet keeps the old exit-only wait: the id alone, no log text.
+set +e
+qout="$(k2 compute run mini --wait --quiet -- sh -c 'echo never-streamed; exit 5' 2>"$SANDBOX/err")"; rc=$?
+set -e
+expect_eq "run --wait --quiet exits with the job's code" "$rc" "5"
+QW="$(printf '%s\n' "$qout" | head -1)"
+expect_eq "run --wait --quiet prints only the job id on stdout" "$qout" "$QW"
+case "$qout$(cat "$SANDBOX/err")" in *never-streamed*) bad "run --wait --quiet streams no log text" ;; *) ok "run --wait --quiet streams no log text" ;; esac
 set +e
 k2 compute run mini --wait --detach -- true >/dev/null 2>&1; rc=$?
 set -e

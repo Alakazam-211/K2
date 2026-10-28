@@ -20614,9 +20614,11 @@ closed.
                                     Give every name on one port the same choice.
   k2 front passthrough rm <host>|'*'
 
-Who: the owner (the box's daemon user, e.g. over SSH), an Admin login,
-or a person in a K2 shell tab (as for k2 firewall). An agent is refused
-(exit 3, owner_only, with the owner's command): ask the owner to run it.
+Who (every verb above): the owner (a terminal outside K2, e.g. over
+SSH), an Admin login, or a person typing in a K2 shell tab. An agent may
+only list the passthrough names (k2 front passthrough); anything else is
+refused (exit 3, owner_only; the error names the command, e.g. "The
+owner runs: k2 front enable [--mail]"): ask the owner to run it.
 
 KEEP A WEB SERVER THAT ISN'T K2'S (a system nginx or Caddy on :443)
 status names it, and enable refuses while it holds :443: K2 never takes
@@ -21605,10 +21607,12 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    owner or an Admin login only; absent keeps what it was)
   k2 compute revoke <node> --workspace WS
   k2 compute grants [--node N] [--workspace WS] [--json]
-                   the owner, an Admin or a person in a K2 shell tab: any
-                   workspace's grants (none named: every workspace's; in a
-                   shell tab, that tab's). An agent: its own workspace's
-                   only; naming another is refused (forbidden, exit 3)
+                   --workspace WS: that workspace's grants. The owner, an
+                   Admin or a person in a K2 shell tab may name any
+                   workspace; without it, the owner and an Admin see every
+                   workspace's, a shell tab sees its own workspace's. An
+                   agent sees only its own workspace's grants; naming
+                   another is refused (forbidden, exit 3)
   k2 compute access on|off --workspace WS
                    the Agent tab's "Allow compute nodes" (Settings → Workspaces →
                    <agent> → Agent): on = a grant on every machine switched on,

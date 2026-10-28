@@ -1650,6 +1650,13 @@ exit: 0
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
+      "name": "hostmail audit-sieve",
+      "usage": "k2 hostmail audit-sieve [--json]",
+      "description": "Read-only audit of server-side filter (Sieve) scripts on every user account: scripts other than K2's own k2/k2-forward (and K2-named scripts with content K2 did not write), their redirect/notify targets as domains only (external = not hosted here), K2 mailboxes still without the Sieve lock, and whether enotify is off. Changes nothing. GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
       "name": "hostmail calendar status",
       "usage": "k2 hostmail calendar status [--json]",
       "description": "DAV policy for every hosted address (calendars = CalDAV+CardDAV on/off, files = WebDAV file storage on/off, policy default|applied) plus reach: reachable (tls-alpn plan or K2's Caddy mail Host site), url (https://<mail host>/.well-known/caldav, never *.k2.dev), reason (the paths a foreign :443 proxy must forward). GET /cli/mail/dav. Owner/admin only, not mail_manage.",

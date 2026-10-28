@@ -9,6 +9,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **The Mobile tab: a phone beside your agent.** Open it from **+ → Mobile** or with **⌘⇧M**. The agent's Thread is on the left, like the Design tab, and a live Android emulator (or the iOS Simulator on a Mac) is on the right. Tap, swipe and type straight on it, rotate it, press Home or Back, and save a screenshot. **Take over** holds the device until you hand it back, and the agent waits. It also works in the web client. People signed in as a Member on another server can watch but not tap. The tab and ⌘⇧M show only on servers that can run a device.
 - **`k2 sim` gives agents hands and eyes on the device.** An agent reads the screen as a short list of elements with ids (`k2 sim tree`), acts on one (`k2 sim tap e5`) and gets back one line saying what changed. It installs the app it built, reads bounded logs, and types vault secrets it never sees. Booting a device opens the Mobile tab for you. Agents need the workspace's **Allow mobile devices** switch, which is off by default, and the server's owner accepts the Android SDK licence once. `k2 study sim` has the guide.
 
+### Hosted mail
+- **Hosted mail: mailbox users can no longer create their own server-side filter scripts; K2-managed forwarding is unaffected.** Forwarding and out-of-office you set with `k2 hostmail forward` / `ooo` keep working. Filter scripts that mailbox users had already added are recorded in the auth audit log and removed when K2 starts, and you get one notice listing them. `k2 hostmail audit-sieve` shows the filter scripts on every mailbox without changing anything.
+
 ## 0.46.5 — Agents stay up
 
 ### When you update

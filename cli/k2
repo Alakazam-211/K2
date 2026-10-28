@@ -36304,6 +36304,13 @@ cmd_schema() {
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
+      "name": "hostmail audit-sieve",
+      "usage": "k2 hostmail audit-sieve [--json]",
+      "description": "Read-only audit of server-side filter (Sieve) scripts on every user account: scripts other than K2's own k2/k2-forward (and K2-named scripts with content K2 did not write), their redirect/notify targets as domains only (external = not hosted here), K2 mailboxes still without the Sieve lock, and whether enotify is off. Changes nothing. GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
       "name": "hostmail calendar status",
       "usage": "k2 hostmail calendar status [--json]",
       "description": "DAV policy for every hosted address (calendars = CalDAV+CardDAV on/off, files = WebDAV file storage on/off, policy default|applied) plus reach: reachable (tls-alpn plan or K2's Caddy mail Host site), url (https://<mail host>/.well-known/caldav, never *.k2.dev), reason (the paths a foreign :443 proxy must forward). GET /cli/mail/dav. Owner/admin only, not mail_manage.",
@@ -54225,6 +54232,40 @@ elif verb == "autoconfig_apply":
             for rec in d.get("records") or []:
                 print("%s  %s  %s" % (rec.get("type") or "?", rec.get("name") or "?", rec.get("value") or rec.get("display") or ""))
 
+elif verb == "audit_sieve":
+    # 0.46.6: read-only. Every user account's non-K2 Sieve scripts with
+    # their redirect/notify targets (domain only), which K2 mailboxes still
+    # lack the Sieve lock, and whether enotify is off. Changes nothing.
+    d = call("GET", "/cli/mail/sieve-audit", timeout=300)
+    if as_json:
+        print(dumps(d))
+    elif not d.get("installed"):
+        print("hosted mail is not installed here — nothing to audit")
+    else:
+        s = d.get("summary") or {}
+        en = d.get("enotify") or {}
+        enotify = "off" if en.get("disabled") is True else ("ON" if en.get("disabled") is False else "unknown (%s)" % (en.get("error") or "?"))
+        print("accounts scanned : %s (%s skipped: admin/service/group)" % (s.get("accountsScanned", "?"), s.get("accountsSkipped", "?")))
+        print("k2 mailboxes     : %s (%s locked, %s NOT locked)" % (s.get("k2Mailboxes", "?"), s.get("lockedMailboxes", "?"), s.get("unlockedMailboxes", "?")))
+        print("user scripts     : %s (%s reach outside this box)" % (s.get("userScripts", "?"), s.get("scriptsWithOutsideTargets", "?")))
+        print("k2-named, other  : %s" % s.get("unrecognisedK2Scripts", "?"))
+        print("enotify          : %s" % enotify)
+        if s.get("errors"):
+            print("errors           : %s" % s["errors"])
+        for a in d.get("accounts") or []:
+            who = a.get("address") or ("%s (not a K2 mailbox)" % (a.get("name") or a.get("accountId")))
+            print("")
+            print("%s%s" % (who, "" if a.get("sieveLocked") or not a.get("k2Minted") else "  [Sieve NOT locked]"))
+            if a.get("error"):
+                print("  error: %s" % a["error"])
+            for sc in a.get("scripts") or []:
+                tg = ", ".join("%s → %s%s" % (t.get("action"), t.get("domain"), " (outside)" if t.get("external") else "")
+                               for t in sc.get("targets") or []) or "no forward or notify"
+                print("  %-24s %-8s %-24s %s" % ('"%s"' % sc.get("name"), "active" if sc.get("active") else "inactive", sc.get("owner"), tg))
+        if not d.get("accounts"):
+            print("")
+            print("nothing found: no user Sieve scripts and every K2 mailbox is locked")
+
 elif verb == "dav":
     # Calendars S2: owner DAV policy. status = GET; enable/disable = POST
     # (per-account Stalwart permissions; never hostmail disable/enable).
@@ -56480,9 +56521,10 @@ cmd_hostmail() {
         calendar) cmd_hostmail_calendar "$@" ;;
         group)   cmd_hostmail_group "$@" ;;
         profile) cmd_hostmail_profile "$@" ;;
+        audit-sieve) cmd_hostmail_audit_sieve "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|person|domain|create|delete|doctor|backup|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|outbound|bans|allowlist|calendar|group|profile>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|person|domain|create|delete|doctor|backup|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|outbound|bans|allowlist|calendar|group|profile|audit-sieve>"
             exit 2 ;;
     esac
 }
@@ -57580,6 +57622,21 @@ cmd_hostmail_ooo_show() {
     done
     [ -n "$address" ] || { _mail_err "usage" "k2 hostmail ooo show <addr>"; exit 2; }
     local M_VERB="ooo_get" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+
+# 0.46.6: read-only audit of every mailbox's Sieve scripts (owner/admin).
+cmd_hostmail_audit_sieve() {
+    if _wants_help "$@"; then cmd_help_hostmail_audit_sieve; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            *) _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail audit-sieve [--json]"; exit 2 ;;
+        esac
+    done
+    local M_VERB="audit_sieve" M_JSON="$as_json"
     _mail_py
 }
 
@@ -60427,6 +60484,9 @@ COMMANDS
                               mailbox. mail_manage. --text literal|@path|-.
   footer set|unset|show       Host-wide outbound company footer (plain text).
                               mail_manage. --domain is 400 this cut.
+  audit-sieve [--json]        Read-only: user Sieve scripts on every mailbox
+                              (targets as domains), mailboxes without the
+                              Sieve lock, enotify state. Owner/admin.
   cert renew                  Retry ACME for the mail hostname (enable is
                               not the retry path; disable is not a retry).
                               If DNS is not ns1/ns2.k2.dev, add mail.<apex>
@@ -61745,6 +61805,23 @@ USAGE
   k2 hostmail profile <addr> --apple --out <file>     write it (mode 0600)
   k2 hostmail profile <addr> --apple --out <file> --force   overwrite
   k2 hostmail profile <addr> --apple --json           JSON (profile = XML)
+EOF
+}
+
+cmd_help_hostmail_audit_sieve() {
+    cat <<'EOF'
+Read-only audit of server-side filter (Sieve) scripts. Lists, for every
+user account on the mail server: scripts that are not K2's own `k2` /
+`k2-forward` (owner `user`), K2-named scripts whose content K2 did not
+write (owner `k2-unrecognised-content`), each one's redirect/notify
+targets as DOMAINS only (external = not hosted on this box), and which
+K2 mailboxes still lack the Sieve lock; plus whether enotify is off.
+Changes nothing. K2 itself removes user scripts at daemon start (each
+recorded first in ~/.k2/auth-audit.jsonl, event mail-sieve-removed).
+GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage.
+
+USAGE
+  k2 hostmail audit-sieve [--json]
 EOF
 }
 
@@ -72899,7 +72976,7 @@ case "${1:-help}" in
             # Owner/hosting verbs moved to `k2 hostmail` — redirect.
             # (`delete` is now the message move-to-Trash verb above; the
             # address-retire verb is `k2 hostmail delete`.)
-            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password|person|dkim|dmarc|ptr|bans|allowlist)
+            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password|person|dkim|dmarc|ptr|bans|allowlist|audit-sieve)
                 _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
                 exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;

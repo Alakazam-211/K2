@@ -24,6 +24,9 @@ EDIT
   k2 doc sed -i 's/old/new/g' notes.md         find and replace (e w r R W refused)
   k2 doc insert --after 12 notes.md < text      or --line N, --at L:C, --text "..."
   k2 doc replace --lines 3,5 notes.md < text    delete --lines a,b · append
+  k2 doc replace --old "teh" --new "the" notes.md   exact text, no regex; exit 1 if it
+                                                isn't there or is there more than once
+                                                (--all for every one; --old-file F)
   k2 doc patch notes.md < change.diff           all or nothing; exit 1 shows the rejects
   k2 doc write --base 42 notes.md < whole.md    you rewrote from v42: only YOUR changes
                                                 since v42 apply; overlaps are conflicts
@@ -31,12 +34,30 @@ EDIT
                                                 overwrites others' edits: avoid it.
   k2 doc undo notes.md                          reverts YOUR last edit only, never others'
   Each verb is one change. Others' edits made meanwhile are kept.
+  Your edits are checked against the version you last read (cat, grep, a
+  read verb, or your own last edit). If anyone changed the doc since, the
+  edit is refused, exit 1: "doc changed since 42 (now 45)". Read it again
+  and redo the edit from what you see. --if-version V sets it yourself.
 
 PRESENCE
   k2 doc who notes.md          who is here: editors, viewers, carets, viewing ranges
   k2 doc follow Sam notes.md   where Sam is
   k2 doc watch notes.md        each change as it lands, with who made it (Ctrl-C)
   k2 doc open / leave          stay present between verbs / go now
+  Lines starting "note:" on stderr say who else is on the lines you read or
+  changed (claimed, editing, a person's caret). stdout never changes.
+
+CLAIMS (agents taking turns on lines)
+  k2 doc claim --lines 40,60 --note "rewriting intro" notes.md
+                               yours for 30 s (--ttl, at most 10m); your next
+                               edit there ends it (--hold keeps it)
+  k2 doc cat --for-edit notes.md   read and claim what you read, in one step
+  k2 doc claim --renew · claim --release · activity (who read/edited what)
+  Another agent's edit into your claim is bounced: exit 5, nothing applied,
+  and it is put in line. People are never held back by a claim.
+  Bounced yourself? The error names who and for how long. Don't retry in a
+  loop: when the lines are free, K2 messages you ("lines 40-60 of notes.md
+  are free now ... the doc is at v812"). Then read again and edit.
 
 HISTORY (needs the history right)
   k2 doc log notes.md                 changes (who, how, +/-) and versions, newest first
@@ -54,10 +75,13 @@ ANY OTHER FILE (tier 0: images, PDFs, office files, code, plain text)
   k2 doc write --base V --file new.png photo.png   replace it; a stale V = exit 1
   k2 doc lease --release photo.png
   k2 doc versions · log · blame · show --version V --out old.png · restore --version V
-  Text verbs (cat, grep, sed -i, undo …) exit 2 here (not_a_text_doc).
+  k2 doc cat photo.png > copy.png  its bytes (never onto a terminal)
+  Text verbs (grep, sed -i, undo, claim …) exit 2 here (not_a_text_doc).
+  Written --on-behalf-of a person: it applies at once and waits for them
+  (k2 doc log --pending; they run approve or decline <version>).
   A program that saves the file while someone holds the lease keeps both:
-  its save is current; the old content stays a version and a copy beside
-  the file, "photo (conflict 2026-10-27 093000 from Sam).png". Leases end
+  its save is current; the old content stays a version and a copy under
+  .k2/conflicts/, "photo (conflict Sam 2026-10-27 093000).png". Leases end
   when a daemon restarts (renew: exit 2, take it again).
 
 RIGHTS
@@ -81,7 +105,8 @@ EXITS
   0 ok · 1 the tool's "no" (grep found nothing, diff differs, a patch or
   write conflicted, the doc moved: read again) or daemon unreachable ·
   2 bad usage / unsupported flag / too many edits (retry) · 3 refused ·
-  4 no such file or change, or it can't be a live doc · 5 leased ·
+  4 no such file or change, or it can't be a live doc · 5 someone else
+  holds it for now (a lease, or a claim on those lines) ·
   6 the docs store failed · 8 too old. Errors end with a JSON line
   {"error":{"code","hint","status"}} on stderr.
 --- stderr

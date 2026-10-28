@@ -155,6 +155,17 @@ check_in "approve" "$tmp/ch.der" 0 "" "$K" approve "$(nonce_of "$tmp/ch.json")"
 check_in "a session alone never signs: the file needs its own evidence" "$tmp/f" 3 "no tag v0.46.6 on GitHub yet" "$K" sign u2 k2-daemon-linux-x86_64 0.46.6 raw
 grep -q $'\tSIGNED\t.*k2-daemon-linux-x86_64' "$AUDIT/0.46.6/signatures.tsv" && fail "a refused asset was logged as signed" || pass "nothing was signed or logged as signed"
 
+echo "== the sittings' dry runs print and change nothing =="
+for n in 0 1 2 3; do
+    if HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" "$n" --commit 0123456 > "$tmp/sit.out" 2>&1 \
+        && grep -q -- "--run)" "$tmp/sit.out" && ! grep -q "Enter = run it" "$tmp/sit.out"; then
+        pass "sitting.sh $n (dry run) prints its steps and how to run them"
+    else fail "sitting.sh $n dry run" "$(tail -3 "$tmp/sit.out")"; fi
+done
+[ -z "$(find "$tmp/home" -mindepth 1 -print -quit 2>/dev/null)" ] && pass "the dry runs wrote nothing in HOME" || fail "dry runs wrote" "$(find "$tmp/home" | head -3)"
+if HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 1 --run < /dev/null > "$tmp/sit.out" 2>&1; then fail "sitting 1 --run without --commit" "ran"; else
+    grep -q "Add --commit <sha>" "$tmp/sit.out" && pass "sitting 1 --run refuses without --commit" || fail "commit gate" "$(cat "$tmp/sit.out")"; fi
+
 echo "== S1 7: every signature verifies with the pinned U2 and is in the audit log =="
 printf 'some daemon\n' > "$tmp/d1"
 K2SIGN_TEST_EVIDENCE=accept "$K" sign u2 k2-daemon-linux-x86_64 0.46.6 raw < "$tmp/d1" > "$tmp/d1.sig" 2>"$tmp/e" || fail "sign (evidence stubbed)" "$(cat "$tmp/e")"

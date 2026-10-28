@@ -3,7 +3,8 @@
 Runbook for the planned rotation of K2's update-signing key
 (prd-security-sweep-0464-v1, SS4/SS5, option C "dual-sign bridge").
 Rosson runs it **once**, on **z3mbpZ**, in a **GUI terminal** (iTerm or
-Terminal, not SSH). It takes about 15 minutes, and it must be done before
+Terminal, not SSH). With the signing user it is four short sittings (about
+80 minutes in all, below), and it must be done before
 0.46.6 can be released: `release.sh` refuses to start while the new key is
 missing.
 
@@ -33,22 +34,40 @@ commit and the asset list, for 12 hours. Every signature is in
 `/var/k2sign/audit/<version>/signatures.tsv` (`~/k2-release-audit` gets a
 marked copy).
 
-**Sittings** (all in `scripts/k2sign/sitting.sh`; each prints its exact
-commands and changes nothing unless you add `--run`):
+**Sittings** (all in `scripts/k2sign/sitting.sh`). Each prints its exact
+commands and changes nothing until you add `--run`; then it stops before
+every step (Enter runs it, `s` skips a step already done on an earlier try).
+Sittings 1–3 take `--commit <sha>`, the commit K2 names, and refuse another.
+
+**Before the first sitting**
+- The release checkout on z3mbpZ is on that commit. K2 tells you the branch
+  and the commit; then, in iTerm:
+  `cd ~/DevProjects/Alakazam\ Labs/K2 && git fetch origin && git checkout --detach <sha>`.
+  (Back to main afterwards: `git checkout main`.)
+- Add any extra fingerprint now. Adding or removing a fingerprint later
+  kills the approver key (fix: enrol again, then `k2sign-admin set-approver`).
+- At least 60 GiB free; the Command Line Tools installed (`xcode-select --install`).
+- `bash scripts/k2sign/sitting.sh check` says `ready.`
 
 | Sitting | When | Time | You type | You tap |
 |---|---|---|---|---|
 | `check` | any time | 1 min | nothing | nothing |
-| `0` (S0 spike) | before sitting 1 | ~10 min | nothing (Developer ID build may prompt for the login keychain) | Touch ID ×2 |
-| `1` | after the lane is reviewed | ~25 min | admin password ×2–3, the new GitHub token (pasted at a hidden prompt) | Touch ID ×1 (enrol) |
-| `2` (agents paused) | after sitting 1 | ~30 min | admin password ×2, U3's new password ×2, U1's password ×1, `saved` | nothing |
-| `3` | after K2 lands the public keys | ~10 min | admin password ×1 | Touch ID ×1 |
+| `0` (S0 spike) | first; wait for K2's go after it | ~10 min | nothing (the Developer ID build may ask for the login keychain password); one `ssh` line from another Mac | Touch ID ×4 |
+| `1` | after K2's go on sitting 0 | ~25 min | Mac admin password ×2–3, the new GitHub token (pasted at a hidden prompt); send K2 the hashes | Touch ID ×1 (enrol) |
+| `2` (agents stopped) | after K2 says sitting 1's hashes match | ~30 min | Mac admin password ×1–2, U3's new password ×2, `saved`, U1's password ×1; send K2 `~/k2-update-pubkeys.txt` | nothing |
+| `3` | after K2 lands the public keys | ~15 min | Mac admin password ×1; send K2 the hashes again | Touch ID ×1 |
+
+U1's password must be in your password manager before sitting 2 (today it
+is the `TAURI_SIGNING_PRIVATE_KEY_PASSWORD=` value in the K2 checkout's
+`.env`: open the file in an editor, don't `cat` it). After pasting any
+password or the token, copy other text so it isn't left on the clipboard.
 
 **Order against landing.** The lane (this code) stays held until the
 public keys exist, because it changes what installs trust and `release.sh`
 refuses to start without them:
 1. Sittings `check`, `0`, `1` and `2` run from the **lane's commit** (not
-   main). Sitting 2 prints the U2 and U3 public lines.
+   main; K2 pushes it as a branch and names the commit). Sitting 2 saves
+   the U2 and U3 public lines to `~/k2-update-pubkeys.txt`.
 2. K2 runs `bash scripts/updater-key-ceremony.sh pubkeys <U2> <U3>` on the
    lane, runs the gates, and lands lane + pubkeys **together** on main.
 3. Sitting `3` from that main commit: re-pin, preflight, the S2-6 proof.

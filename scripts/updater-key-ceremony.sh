@@ -270,6 +270,8 @@ generate_k2sign() {
     say "── 2/2  Send K2 these two PUBLIC key lines (safe to share) ──"
     say "U2 (primary, inside _k2sign): $u2"
     say "U3 (backup):                  $u3"
+    printf 'U2 %s\nU3 %s\n' "$u2" "$u3" > "$HOME/k2-update-pubkeys.txt"
+    say "(Saved to ~/k2-update-pubkeys.txt: public keys only, safe to send.)"
     say ""
     say "K2 runs: bash scripts/updater-key-ceremony.sh pubkeys <U2 line> <U3 line>, lands it with the"
     say "signing lane, and you re-run 'sudo bash scripts/k2sign/install.sh' from that commit (it pins them)."

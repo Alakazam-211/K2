@@ -32,7 +32,10 @@ fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
 expect_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got $(printf %q "$2") want $(printf %q "$3"))"; fi; }
-expect_has() { if printf '%s' "$2" | grep -Fq -- "$3"; then ok "$1"; else bad "$1 (missing $(printf %q "$3") in $(printf %q "$2"))"; fi; }
+# A here-string, not printf | grep -q: under pipefail, grep -q quitting at
+# the first match can SIGPIPE printf on a long page (k2 study compute) and
+# fail a check whose text is there.
+expect_has() { if grep -Fq -- "$3" <<<"$2"; then ok "$1"; else bad "$1 (missing $(printf %q "$3") in $(printf %q "$2"))"; fi; }
 
 SANDBOX="$(mktemp -d /tmp/k2cs-XXXXXX)"
 DAEMON_PID=""

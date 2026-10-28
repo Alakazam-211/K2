@@ -228,7 +228,7 @@ describe('routeBrowserFileDrop image surface', () => {
       expect.any(Function),
     )
     expect(bar._events).toHaveLength(1)
-    expect(bar._events[0].type).toBe('k2so:compose-insert')
+    expect(bar._events[0].type).toBe('k2:compose-insert')
     expect((bar._events[0] as CustomEvent).detail).toEqual({ data: '/host/shot.png ' })
     expect(surface.dataset.composeDropSurface).toBe('thread')
   })

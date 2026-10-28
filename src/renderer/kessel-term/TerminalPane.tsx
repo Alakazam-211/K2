@@ -4708,7 +4708,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // External OS drops (Finder → window) are owned by the single App-
   // mounted `external-drop-router` (`tauri://drag-drop`). After upload
   // (remote) or path formatting (local) the router injects into this
-  // pane via `k2so:terminal-write` on the container (see data attrs
+  // pane via `k2:terminal-write` on the container (see data attrs
   // below: data-terminal-id / data-terminal-kind / data-workspace-path).
   //
   // Two pane-local entry points remain:
@@ -4716,7 +4716,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   //      and the primary path for hosted-web HTML5 File drops (this
   //      handler stopPropagates, so the window router never sees them).
   //      Uploads to `<cwd>/.k2/downloads/` then injects the remote path.
-  //   2. `k2so:terminal-write` — internal FileTree drags (file-drag.ts)
+  //   2. `k2:terminal-write` — internal FileTree drags (file-drag.ts)
   //      + the external-drop-router inject path (desktop Tauri).
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -4794,8 +4794,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const detail = (e as CustomEvent<{ data: string }>).detail
       if (detail?.data) sendInputRef.current(detail.data)
     }
-    el.addEventListener('k2so:terminal-write', onWrite)
-    return () => el.removeEventListener('k2so:terminal-write', onWrite)
+    el.addEventListener('k2:terminal-write', onWrite)
+    return () => el.removeEventListener('k2:terminal-write', onWrite)
   }, [])
 
   // ── ResizeObserver → send resize ──────────────────────────────
@@ -5510,7 +5510,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       data-session-id={debugSessionId}
       // Counter app chrome zoom (Cmd+=/-) for the GRID only — compose
       // bar stays under app zoom so its width tracks the layout. See
-      // globals.css [data-k2-exclude-app-zoom] + applyK2SOZoom.
+      // globals.css [data-k2-exclude-app-zoom] + applyK2Zoom.
       data-k2-exclude-app-zoom=""
       // App.tsx's global click + refocus-poll use these two data
       // attributes to find the active terminal and keep it focused
@@ -5522,7 +5522,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // hit-test these on drop. `data-terminal-id` matches the
       // contract legacy AlacrittyTerminalView established;
       // `data-terminal-kind="v2"` tells injectors to dispatch
-      // `k2so:terminal-write` (this pane's effect → sendInput over WS)
+      // `k2:terminal-write` (this pane's effect → sendInput over WS)
       // instead of legacy terminalWrite. `data-workspace-path` anchors
       // remote terminal drops to `.k2/downloads` under this cwd.
       data-terminal-id={debugSessionId ?? undefined}

@@ -684,8 +684,8 @@ export function TerminalComposeBar({
       const data = detail?.data
       if (data) insertPathsText(data)
     }
-    el.addEventListener('k2so:compose-insert', onInsert)
-    return () => el.removeEventListener('k2so:compose-insert', onInsert)
+    el.addEventListener('k2:compose-insert', onInsert)
+    return () => el.removeEventListener('k2:compose-insert', onInsert)
   }, [insertPathsText, addThreadFiles, threadFilesOn])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {

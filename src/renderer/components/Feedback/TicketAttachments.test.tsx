@@ -437,13 +437,13 @@ describe('the message box takes files', () => {
     expect(c.querySelector('[data-testid="ticket-compose"]')!.hasAttribute('data-compose-bar')).toBe(false)
   })
 
-  it('a file from the drop router (k2so:compose-insert) attaches', async () => {
+  it('a file from the drop router (k2:compose-insert) attaches', async () => {
     const c = rail()
     const box = c.querySelector('[data-testid="ticket-compose"]') as HTMLElement
     expect(box.getAttribute('data-compose-bar')).toBe('')
     expect(box.getAttribute('data-workspace-path')).toBe('/ws')
     await act(async () => {
-      box.dispatchEvent(new CustomEvent('k2so:compose-insert', { detail: { data: 'x', paths: ['/ws/.k2/downloads/up.png'], uploaded: true } }))
+      box.dispatchEvent(new CustomEvent('k2:compose-insert', { detail: { data: 'x', paths: ['/ws/.k2/downloads/up.png'], uploaded: true } }))
     })
     await waitFor(() => expect(c.querySelector('[data-zen-attachment="up.png"]')).not.toBeNull())
   })

@@ -148,7 +148,7 @@ afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
-  delete window.__k2soZoom
+  delete window.__k2Zoom
 })
 
 describe('ImageViewer fit', () => {
@@ -200,7 +200,7 @@ describe('ImageViewer pinch', () => {
   })
 
   it('ctrl+wheel anchors correctly under app zoom', async () => {
-    window.__k2soZoom = 1.5
+    window.__k2Zoom = 1.5
     const { viewport } = await open()
     const before = current()
 

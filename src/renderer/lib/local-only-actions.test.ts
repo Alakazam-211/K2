@@ -188,6 +188,6 @@ describe('who may run them', () => {
   it('roomMayRun refuses an unlisted name loudly', () => {
     expect(roomMayRun({ localCommands: true, scope: local }, 'projects_open_in_finder')).toBe(true)
     expect(roomMayRun({ localCommands: false, scope: remote }, 'format_file')).toBe(false)
-    expect(() => roomMayRun({ localCommands: true, scope: local }, 'k2so_made_up')).toThrow(/not in LOCAL_ONLY_ACTIONS/)
+    expect(() => roomMayRun({ localCommands: true, scope: local }, 'k2_made_up')).toThrow(/not in LOCAL_ONLY_ACTIONS/)
   })
 })

@@ -12,7 +12,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
 
-type ZoomWindow = Window & { __k2soZoom?: number }
+type ZoomWindow = Window & { __k2Zoom?: number }
 
 function setPlatform(platform: string): void {
   Object.defineProperty(window.navigator, 'platform', { value: platform, configurable: true })
@@ -32,7 +32,7 @@ beforeEach(() => {
   vi.resetModules()
   invoke.mockClear()
   document.documentElement.style.removeProperty('--k2-stoplight-spacer')
-  delete (window as ZoomWindow).__k2soZoom
+  delete (window as ZoomWindow).__k2Zoom
 })
 
 afterEach(() => {
@@ -55,7 +55,7 @@ describe('onAppZoomChange', () => {
       [1.5, 69 / 1.5 - 12],
     ]
     for (const [zoom, spacer] of cases) {
-      ;(window as ZoomWindow).__k2soZoom = zoom
+      ;(window as ZoomWindow).__k2Zoom = zoom
       onAppZoomChange()
       const last = insetCalls().at(-1)
       expect(last, `zoom ${zoom}`).toBeDefined()
@@ -75,7 +75,7 @@ describe('onAppZoomChange', () => {
       setPlatform(platform)
       const { onAppZoomChange } = await import('./style')
       await Promise.resolve()
-      ;(window as ZoomWindow).__k2soZoom = 1.5
+      ;(window as ZoomWindow).__k2Zoom = 1.5
       onAppZoomChange()
       expect(insetCalls(), platform).toEqual([])
       expect(spacerVar(), platform).toBe('')

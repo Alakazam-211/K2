@@ -227,7 +227,7 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             if let Some(win) = main_webview(app) {
                 let scale = next as f64 / 100.0;
                 let js = format!(
-                    "window.__k2soZoom={scale};if(typeof window.__k2ApplyPageTitle==='function')window.__k2ApplyPageTitle();"
+                    "window.__k2Zoom={scale};if(typeof window.__k2ApplyPageTitle==='function')window.__k2ApplyPageTitle();"
                 );
                 let _ = win.eval(&js);
             }

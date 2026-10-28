@@ -46,7 +46,7 @@ function* walkTs(dir: string): Generator<string> {
 
 describe('Focus window overlay hygiene', () => {
   it('F2: FocusModeContent does not remount overlays; FocusLayout still renders', () => {
-    const focusMode = sliceFn(appSrc, 'FocusModeContent', 'function applyK2SOZoom')
+    const focusMode = sliceFn(appSrc, 'FocusModeContent', 'function applyK2Zoom')
     expect(focusMode).toContain('<FocusErrorBoundary>')
     expect(focusMode).toContain('<FocusLayout')
     expect(focusMode).toContain('<TerminalArea')

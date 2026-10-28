@@ -291,7 +291,7 @@ const trafficLights = createTrafficLightController({
       inset: Number.parseFloat(raw) || 0,
       barHeight: Number.parseFloat(cs.getPropertyValue('--k2-topbar-height')) || undefined,
       // App.tsx sets this with documentElement.style.zoom (Cmd+= / Cmd+-).
-      zoom: (window as { __k2soZoom?: number }).__k2soZoom,
+      zoom: (window as { __k2Zoom?: number }).__k2Zoom,
       zen: zenTrafficLights(),
     }
   },

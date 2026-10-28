@@ -7,7 +7,7 @@
 # Why this matters: the workspace settings Skills section uses the
 # Tauri verb (in-process, returns `SkillSummary[]`), while the CLI and
 # the CLI-driven tests use the daemon HTTP surface (returns
-# `K2soAgentInfo[]`). If one starts reading from a different folder
+# `K2AgentInfo[]`). If one starts reading from a different folder
 # than the other, the UI and CLI would silently disagree about which
 # skills exist in a workspace. This test pins both to the same
 # `.k2so/skills/<name>/` reality.

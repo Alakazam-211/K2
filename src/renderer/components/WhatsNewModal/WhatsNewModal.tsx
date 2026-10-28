@@ -33,7 +33,7 @@ interface WhatsNewModalProps {
    *   K2 update.
    * - `button-only`: skips the mount-time check. Stays dormant until
    *   the Settings "Read what's new" button dispatches
-   *   `k2so:show-whats-new`. Used in the Settings layout so opening
+   *   `k2:show-whats-new`. Used in the Settings layout so opening
    *   Settings never auto-fires the popup.
    */
   mode?: 'auto' | 'button-only'
@@ -68,7 +68,7 @@ export default function WhatsNewModal({
   // running version).
 
   // Shared check function — used by initial mount AND by the
-  // `k2so:show-whats-new` event from Settings → Release notes button.
+  // `k2:show-whats-new` event from Settings → Release notes button.
   // The event-driven path force-opens regardless of `has_new` (the
   // Settings button just reset state, so has_new should be true; but
   // even if a race leaves it false, we want to surface SOMETHING when
@@ -105,7 +105,7 @@ export default function WhatsNewModal({
 
   // Initial check on mount — `auto` mode only. The Settings instance
   // (mode='button-only') stays dormant until the Read-what's-new
-  // button dispatches `k2so:show-whats-new`.
+  // button dispatches `k2:show-whats-new`.
   //
   // 0.38.13: deferred by 2s so the popup check doesn't compete with
   // workspace hydration, daemon version-check, and other boot-time
@@ -127,8 +127,8 @@ export default function WhatsNewModal({
     const handler = (): void => {
       void runCheck(true)
     }
-    window.addEventListener('k2so:show-whats-new', handler)
-    return () => window.removeEventListener('k2so:show-whats-new', handler)
+    window.addEventListener('k2:show-whats-new', handler)
+    return () => window.removeEventListener('k2:show-whats-new', handler)
   }, [runCheck])
 
   // Split the joined markdown into one entry per version. The daemon

@@ -610,7 +610,7 @@ describe('routeExternalDrop — thread surface images', () => {
     await routeExternalDrop(primaryScope(), ['/tmp/Screen Shot.png'], { x: 3, y: 3 }, surfaceDoc(row))
     expect(bar._events).toHaveLength(1)
     const ev = bar._events[0] as CustomEvent<{ data: string; paths?: string[]; uploaded?: boolean }>
-    expect(ev.type).toBe('k2so:compose-insert')
+    expect(ev.type).toBe('k2:compose-insert')
     expect(ev.detail.data).toBe("'/tmp/Screen Shot.png' ")
     expect(ev.detail.data.startsWith('\u001b')).toBe(false)
     // S4: the paths themselves ride along (this computer's, not uploaded),
@@ -635,7 +635,7 @@ describe('routeExternalDrop — thread surface images', () => {
     )
     await routeExternalDrop(primaryScope(), ['/tmp/shot.png'], { x: 3, y: 3 }, surfaceDoc(grid))
     expect(term._events).toHaveLength(1)
-    expect(term._events[0].type).toBe('k2so:terminal-write')
+    expect(term._events[0].type).toBe('k2:terminal-write')
     expect((term._events[0] as CustomEvent<{ data: string }>).detail.data).toContain('/tmp/shot.png')
   })
 })
@@ -674,7 +674,7 @@ describe('routeExternalDrop — the text a terminal or draft gets', () => {
     await routeExternalDrop(primaryScope(), ['/tmp/a\rb.txt'], { x: 3, y: 3 }, surfaceDoc(bar))
     expect(bar._events).toHaveLength(1)
     const ev = bar._events[0] as CustomEvent<ComposeInsertDetail>
-    expect(ev.type).toBe('k2so:compose-insert')
+    expect(ev.type).toBe('k2:compose-insert')
     // A Thread box attaches the file; a text box shows the refusal (the
     // bar's own tests cover both). The router itself says nothing.
     expect(ev.detail).toEqual({ data: '', paths: ['/tmp/a\rb.txt'], uploaded: false, refusal: CONTROL_CHAR_REFUSAL })

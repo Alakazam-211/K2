@@ -3479,7 +3479,7 @@ export function AgentsCreateConnectionsToggle({
 
 // ── K2 Agents Panel ───────────────────────────────────────────────
 
-interface K2soAgentInfo {
+interface K2AgentInfo {
   name: string
   role: string
   inboxCount: number
@@ -4170,7 +4170,7 @@ function CustomAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { 
 
   useEffect(() => {
     let cancelled = false
-    invoke<(K2soAgentInfo & { agentType?: string })[]>('k2so_agents_list', { projectPath })
+    invoke<(K2AgentInfo & { agentType?: string })[]>('k2so_agents_list', { projectPath })
       .then((agents) => {
         if (cancelled) return
         // Post-0.37.0 there's at most one agent per workspace. Pick
@@ -4196,7 +4196,7 @@ function CustomAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { 
     let unlisten: (() => void) | null = null
     let cancelled = false
     listen('sync:projects', () => {
-      invoke<(K2soAgentInfo & { agentType?: string })[]>('k2so_agents_list', { projectPath })
+      invoke<(K2AgentInfo & { agentType?: string })[]>('k2so_agents_list', { projectPath })
         .then((agents) => { if (agents[0]?.name) setTechName(agents[0].name) })
         .catch(() => {})
     }).then((u) => { if (cancelled) u(); else unlisten = u })
@@ -4240,7 +4240,7 @@ function CustomAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { 
   )
 }
 
-function K2SOAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { projectPath: string; projectName: string; onOpenEditor: (agentName: string) => void }): React.JSX.Element {
+function K2AgentPersonaButton({ projectPath, projectName, onOpenEditor }: { projectPath: string; projectName: string; onOpenEditor: (agentName: string) => void }): React.JSX.Element {
   const [ready, setReady] = useState(false)
   const [agentName, setAgentName] = useState('k2so-agent')
 
@@ -4248,7 +4248,7 @@ function K2SOAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { pr
   useEffect(() => {
     const ensure = async () => {
       try {
-        const agents = asArray<K2soAgentInfo & { agentType?: string }>(await invoke('k2so_agents_list', { projectPath }))
+        const agents = asArray<K2AgentInfo & { agentType?: string }>(await invoke('k2so_agents_list', { projectPath }))
         // Stage A dual-read: `k2` and legacy `k2so` are the same builtin type.
         const existing = agents.find((a: any) => isBuiltinAgentType(a.agentType))
         if (existing) {
@@ -4597,13 +4597,13 @@ function ProjectAgentsPanel({ projectPath, onOpenEditor }: { projectPath: string
   // (0.39.0h): the Skills list got promoted out of this panel into its
   // own top-level `ProjectSkillsPanel` SettingsGroup, so this component
   // is now just Manager + Project Context.
-  const [agents, setAgents] = useState<K2soAgentInfo[]>([])
+  const [agents, setAgents] = useState<K2AgentInfo[]>([])
   const [wsInboxCount, setWsInboxCount] = useState(0)
 
   const fetchAgents = useCallback(async () => {
     try {
-      const result = await invoke<K2soAgentInfo[]>('k2so_agents_list', { projectPath })
-      setAgents(asArray<K2soAgentInfo>(result))
+      const result = await invoke<K2AgentInfo[]>('k2so_agents_list', { projectPath })
+      setAgents(asArray<K2AgentInfo>(result))
     } catch {
       setAgents([])
     }
@@ -4711,7 +4711,7 @@ function ProjectAgentsPanel({ projectPath, onOpenEditor }: { projectPath: string
 
 function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string; onOpenEditor: (agentName: string) => void }): React.JSX.Element {
   const [skills, setSkills] = useState<SkillSummary[]>([])
-  const [agents, setAgents] = useState<K2soAgentInfo[]>([])
+  const [agents, setAgents] = useState<K2AgentInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
@@ -4740,8 +4740,8 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
 
   const fetchAgents = useCallback(async () => {
     try {
-      const result = await invoke<K2soAgentInfo[]>('k2so_agents_list', { projectPath })
-      setAgents(asArray<K2soAgentInfo>(result))
+      const result = await invoke<K2AgentInfo[]>('k2so_agents_list', { projectPath })
+      setAgents(asArray<K2AgentInfo>(result))
     } catch {
       setAgents([])
     }

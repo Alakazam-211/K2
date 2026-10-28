@@ -9,13 +9,13 @@ import { applyAppZoomToDocument } from '@/lib/app-zoom'
 /** Zoom the page the way App.tsx does (Cmd+= / Settings): the zoom the
  *  placement code reads, plus <html> zoom and `--k2-app-zoom`. */
 export function applyAppZoomForTest(z: number): void {
-  window.__k2soZoom = z
+  window.__k2Zoom = z
   applyAppZoomToDocument(z)
 }
 
 /** Back to 100 %. */
 export function resetAppZoomForTest(): void {
-  delete window.__k2soZoom
+  delete window.__k2Zoom
   applyAppZoomToDocument(1)
 }
 

@@ -884,7 +884,7 @@ function DevToolsRow(): React.JSX.Element {
 // still stamps the current version.
 function WhatsNewRow(): React.JSX.Element {
   const handleClick = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('k2so:show-whats-new'))
+    window.dispatchEvent(new CustomEvent('k2:show-whats-new'))
   }, [])
 
   return (

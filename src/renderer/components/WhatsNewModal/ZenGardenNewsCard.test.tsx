@@ -189,7 +189,7 @@ describe('the Garden news card (GS40–GS43)', () => {
   // The 1000 px floor is CSS px (the card and the dialog beside it): at
   // 150 % a 1280 px window holds only 853 of them, too narrow for both.
   it('at 150 % app zoom a 1280 px window is under the floor: no card', async () => {
-    window.__k2soZoom = 1.5
+    window.__k2Zoom = 1.5
     try {
       const shown: string[][] = []
       render(<ZenGardenNewsCard dialogVisible onShown={(ids) => shown.push(ids)} onAction={() => undefined} />)
@@ -197,7 +197,7 @@ describe('the Garden news card (GS40–GS43)', () => {
       expect(document.querySelector('[data-zen-news-card]')).toBeNull()
       expect(shown.every((ids) => ids.length === 0)).toBe(true)
     } finally {
-      delete window.__k2soZoom
+      delete window.__k2Zoom
     }
   })
 
@@ -227,7 +227,7 @@ describe('What’s new dismissal marks the card’s news seen (GS43)', () => {
   it('Got it posts zen/news/seen with exactly the shown ids', async () => {
     h.news = { ok: true, items: [UPDATE, DIARY], copiesWithNewerDefault: 0 }
     render(<WhatsNewModal mode="button-only" />)
-    await act(async () => void window.dispatchEvent(new Event('k2so:show-whats-new')))
+    await act(async () => void window.dispatchEvent(new Event('k2:show-whats-new')))
     await waitFor(() => el('[data-zen-news-card]'))
     await act(async () => void fireEvent.click(Array.from(document.querySelectorAll('button')).find((b) => b.textContent === 'Got it') as HTMLElement))
     await waitFor(() => expect(posts('zen/news/seen')).toEqual([{ ids: [UPDATE.id] }]))
@@ -238,7 +238,7 @@ describe('What’s new dismissal marks the card’s news seen (GS43)', () => {
   it('a narrow window shows no card and closing marks nothing', async () => {
     setWidth(900)
     render(<WhatsNewModal mode="button-only" />)
-    await act(async () => void window.dispatchEvent(new Event('k2so:show-whats-new')))
+    await act(async () => void window.dispatchEvent(new Event('k2:show-whats-new')))
     await waitFor(() => expect(h.calls.some((c) => c.route === 'zen/news')).toBe(true))
     await act(async () => void fireEvent.click(Array.from(document.querySelectorAll('button')).find((b) => b.textContent === 'Got it') as HTMLElement))
     await waitFor(() => expect(h.calls.some((c) => c.route === 'whats_new/mark_seen')).toBe(true))

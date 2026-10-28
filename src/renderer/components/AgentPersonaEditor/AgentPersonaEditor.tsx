@@ -140,11 +140,11 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
     if (!context) return ''
     const isCustom = context.agentType === 'custom'
     // Stage A dual-read: `k2` and legacy `k2so` are the same builtin type.
-    const isK2SO = isBuiltinAgentType(context.agentType)
+    const isK2Agent = isBuiltinAgentType(context.agentType)
 
-    const typeLabel = isK2SO ? 'K2 Agent' : isCustom ? 'Custom Agent' : context.isCoordinator ? 'Workspace Manager' : 'Agent Template'
+    const typeLabel = isK2Agent ? 'K2 Agent' : isCustom ? 'Custom Agent' : context.isCoordinator ? 'Workspace Manager' : 'Agent Template'
 
-    const typeGuidance = isK2SO
+    const typeGuidance = isK2Agent
       ? [
           `This is the K2 Agent — the top-level planner and orchestrator for this workspace.`,
           ``,

@@ -16,7 +16,7 @@
 
 /** The app zoom (1 = 100 %), 1 when unset or not a positive number. */
 export function appZoom(): number {
-  const z = typeof window !== 'undefined' ? window.__k2soZoom : undefined
+  const z = typeof window !== 'undefined' ? window.__k2Zoom : undefined
   return typeof z === 'number' && Number.isFinite(z) && z > 0 ? z : 1
 }
 
@@ -55,7 +55,7 @@ export function cssViewport(): { width: number; height: number } {
 
 /** Puts zoom `z` on the page: <html> zoom, `--k2-app-zoom` (which also
  *  drives `--k2-vw` / `--k2-vh` and the terminals' inverse zoom) and the
- *  `k2-app-zoomed` class. `window.__k2soZoom` is the caller's. */
+ *  `k2-app-zoomed` class. `window.__k2Zoom` is the caller's. */
 export function applyAppZoomToDocument(z: number): void {
   const root = document.documentElement
   root.style.setProperty('--k2-app-zoom', String(z))

@@ -377,7 +377,7 @@ describe('stoplight spacer under app zoom', () => {
 
   it('App zoom calls the reposition hook, which writes the spacer variable', () => {
     const app = readFileSync(resolve(root, 'src/renderer/App.tsx'), 'utf8')
-    const start = app.indexOf('function applyK2SOZoom(): void {')
+    const start = app.indexOf('function applyK2Zoom(): void {')
     expect(start).toBeGreaterThan(-1)
     const end = app.indexOf('\n}\n', start)
     expect(end).toBeGreaterThan(start)
@@ -388,7 +388,7 @@ describe('stoplight spacer under app zoom', () => {
       body.indexOf('document.documentElement.style.zoom = String(z)'),
     )
     // Startup: the mount effect runs it.
-    expect(app).toMatch(/useEffect\(\(\) => \{\s*applyK2SOZoom\(\)/)
+    expect(app).toMatch(/useEffect\(\(\) => \{\s*applyK2Zoom\(\)/)
 
     const style = readFileSync(resolve(root, 'src/renderer/stores/style.ts'), 'utf8')
     expect(style).toContain('export function onAppZoomChange(): void')

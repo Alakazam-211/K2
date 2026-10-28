@@ -28,7 +28,7 @@
 //   3. Remote miss → "Save to…" picker
 //
 // Terminal inject reuses existing seams:
-//   - v2 (`data-terminal-kind="v2"`): `k2so:terminal-write` CustomEvent on the
+//   - v2 (`data-terminal-kind="v2"`): `k2:terminal-write` CustomEvent on the
 //     container (TerminalPane already listens)
 //   - v1: `terminalWrite(id, payload)`
 //
@@ -63,7 +63,7 @@ import { markZenDropOver, zenDropTargetAt, zenFramePoint, type ZenDropHandler } 
 // ── Public event names ────────────────────────────────────────────────
 
 /** Dispatched on `[data-file-tree-panel]` after a successful external folder drop. */
-export const FILE_TREE_EXTERNAL_DROP_EVENT = 'k2so:file-tree-external-drop'
+export const FILE_TREE_EXTERNAL_DROP_EVENT = 'k2:file-tree-external-drop'
 
 // ── Pure hit-test / classify helpers (unit-tested) ────────────────────
 
@@ -334,7 +334,7 @@ function injectIntoTerminal(
   // v2 sessions own their WS; file-drag / TerminalPane use this event.
   if (target.terminalKind === 'v2') {
     target.element.dispatchEvent(
-      new CustomEvent('k2so:terminal-write', { detail: { data: payload } }),
+      new CustomEvent('k2:terminal-write', { detail: { data: payload } }),
     )
     return
   }
@@ -348,11 +348,11 @@ function injectIntoTerminal(
   // Last resort: still try the CustomEvent in case a v2 pane hasn't set
   // data-terminal-kind yet but has the write listener.
   target.element.dispatchEvent(
-    new CustomEvent('k2so:terminal-write', { detail: { data: payload } }),
+    new CustomEvent('k2:terminal-write', { detail: { data: payload } }),
   )
 }
 
-/** What `k2so:compose-insert` carries: the path text for the draft, and
+/** What `k2:compose-insert` carries: the path text for the draft, and
  *  (when known) the dropped paths themselves, so a Thread's message box on
  *  a `thread-attachments-v1` server can attach them instead (S4).
  *  `uploaded`: the paths are already on the agent's server (uploaded into
@@ -381,7 +381,7 @@ function injectIntoCompose(
     detail.uploaded = uploaded === true
   }
   if (refusal) detail.refusal = refusal
-  target.element.dispatchEvent(new CustomEvent('k2so:compose-insert', { detail }))
+  target.element.dispatchEvent(new CustomEvent('k2:compose-insert', { detail }))
 }
 
 /** A compose payload builder that also keeps the server paths it built

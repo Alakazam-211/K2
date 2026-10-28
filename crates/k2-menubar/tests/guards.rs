@@ -155,7 +155,7 @@ fn macos_setup_does_not_call_tray_install() {
         "tray::install call must be non-mac only, header:\n{header}"
     );
     let tray = read_repo("src-tauri/src/tray.rs");
-    assert!(tray.contains("k2so-main"));
+    assert!(tray.contains("k2-main"));
     assert!(tray.contains("fn install"));
     let manifest = read_repo("src-tauri/Cargo.toml");
     assert!(manifest.contains("tray-icon"));

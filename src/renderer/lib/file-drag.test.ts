@@ -64,7 +64,7 @@ describe('in-app drag from the file tree onto a terminal', () => {
   it('v2 terminal: an image goes as a bracketed paste of the quoted path', () => {
     target = mountTerminal('v2')
     const seen: string[] = []
-    target.parentElement!.addEventListener('k2so:terminal-write', (e) => {
+    target.parentElement!.addEventListener('k2:terminal-write', (e) => {
       seen.push((e as CustomEvent<{ data: string }>).detail.data)
     })
     drop(['/Users/a/Screen Shot.png', '/Users/a/notes.txt'])
@@ -75,7 +75,7 @@ describe('in-app drag from the file tree onto a terminal', () => {
   it('v2 terminal: no image, no bracketed paste', () => {
     target = mountTerminal('v2')
     const seen: string[] = []
-    target.parentElement!.addEventListener('k2so:terminal-write', (e) => {
+    target.parentElement!.addEventListener('k2:terminal-write', (e) => {
       seen.push((e as CustomEvent<{ data: string }>).detail.data)
     })
     drop(['/Users/a/my notes.txt', '/Users/a/b.md'])
@@ -94,7 +94,7 @@ describe('in-app drag from the file tree onto a terminal', () => {
       useToastStore.setState({ toasts: [] })
       target = mountTerminal(kind)
       const seen: string[] = []
-      target.parentElement!.addEventListener('k2so:terminal-write', (e) => {
+      target.parentElement!.addEventListener('k2:terminal-write', (e) => {
         seen.push((e as CustomEvent<{ data: string }>).detail.data)
       })
       drop(['/tmp/notes\nrm -rf ~'])
@@ -110,7 +110,7 @@ describe('in-app drag from the file tree onto a terminal', () => {
   it('Windows paths: PowerShell quoting for v2, cmd quoting for v1', () => {
     target = mountTerminal('v2')
     const seen: string[] = []
-    target.parentElement!.addEventListener('k2so:terminal-write', (e) => {
+    target.parentElement!.addEventListener('k2:terminal-write', (e) => {
       seen.push((e as CustomEvent<{ data: string }>).detail.data)
     })
     drop(['C:\\Users\\a\\my notes.txt'])
@@ -142,7 +142,7 @@ describe('in-app drag from the file tree onto a compose bar', () => {
     bar = holder.firstElementChild as HTMLElement
     expect(bar.matches(COMPOSE_BAR_SELECTOR)).toBe(true)
     seen = []
-    bar.addEventListener('k2so:compose-insert', (e) => {
+    bar.addEventListener('k2:compose-insert', (e) => {
       seen.push((e as CustomEvent<{ data: string }>).detail.data)
     })
     const inner = bar.querySelector('textarea') as HTMLElement

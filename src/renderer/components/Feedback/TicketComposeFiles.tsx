@@ -10,7 +10,7 @@
 // inside it on this computer is attached where it is; anything else is
 // uploaded into `<workspace>/.k2/downloads/` first. A file dragged from the
 // Files drawer, or dropped by the window's drop router, arrives as
-// `k2so:compose-insert` on the box (`data-compose-bar`), as on the Thread.
+// `k2:compose-insert` on the box (`data-compose-bar`), as on the Thread.
 //
 // The chips persist beside the text draft (`composer-drafts`, per ticket)
 // and ride the next message (`comment {…, attachments:[{path}]}`), an
@@ -89,7 +89,7 @@ export interface TicketComposeFilesApi {
   pick: () => void
   onPaste: (e: ClipboardEvent<HTMLTextAreaElement>) => void
   onDropFiles: (e: DragEvent<HTMLDivElement>) => void
-  /** The box's root: `k2so:compose-insert` arrives here. */
+  /** The box's root: `k2:compose-insert` arrives here. */
   rootRef: (el: HTMLDivElement | null) => void
   /** The web client's file input (render it once, hidden). */
   fileInput: JSX.Element
@@ -205,7 +205,7 @@ export function useTicketComposeFiles({
   )
 
   // The drop router and the Files drawer's drag hand files to the box as
-  // `k2so:compose-insert` (paths, `uploaded` when already on the server).
+  // `k2:compose-insert` (paths, `uploaded` when already on the server).
   const [root, setRoot] = useState<HTMLDivElement | null>(null)
   useEffect(() => {
     if (!root || !on) return
@@ -213,8 +213,8 @@ export function useTicketComposeFiles({
       const detail = (e as CustomEvent<ComposeInsertDetail>).detail
       if (detail?.paths && detail.paths.length > 0) void add({ paths: detail.paths, onServer: detail.uploaded === true })
     }
-    root.addEventListener('k2so:compose-insert', onInsert)
-    return () => root.removeEventListener('k2so:compose-insert', onInsert)
+    root.addEventListener('k2:compose-insert', onInsert)
+    return () => root.removeEventListener('k2:compose-insert', onInsert)
   }, [root, on, add])
 
   const fileInput = (

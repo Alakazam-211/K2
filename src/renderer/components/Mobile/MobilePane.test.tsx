@@ -945,7 +945,7 @@ describe('the running device', () => {
     // Attach to Thread: the Thread's message box beside the device gets the
     // shot the way a file drop gives it one.
     const got: unknown[] = []
-    document.querySelector('[data-mobile-chat] [data-compose-bar]')?.addEventListener('k2so:compose-insert', (e) => {
+    document.querySelector('[data-mobile-chat] [data-compose-bar]')?.addEventListener('k2:compose-insert', (e) => {
       got.push((e as CustomEvent).detail)
     })
     fireEvent.click(document.querySelector('[data-mobile-notice-action="attach"]') as HTMLButtonElement)

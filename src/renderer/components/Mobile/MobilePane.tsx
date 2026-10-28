@@ -572,7 +572,7 @@ function MobileDevice({
       return
     }
     const detail: ComposeInsertDetail = { data: path, paths: [path], uploaded: true }
-    bar.dispatchEvent(new CustomEvent('k2so:compose-insert', { detail }))
+    bar.dispatchEvent(new CustomEvent('k2:compose-insert', { detail }))
     setNotice({ text: 'Attached to your Thread message.', tone: 'success' })
   }, [])
   const onCopyShot = useCallback((path: string) => {

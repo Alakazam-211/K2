@@ -15,7 +15,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
 
-type ZoomWindow = Window & { __k2soZoom?: number }
+type ZoomWindow = Window & { __k2Zoom?: number }
 type InsetCall = { x: number; y: number; square: boolean; zoom: number }
 
 function setPlatform(platform: string): void {
@@ -77,7 +77,7 @@ function applyStyle(stamp: () => void): void {
 beforeEach(async () => {
   setPlatform('MacIntel')
   style.setChromeSource('style')
-  delete (window as ZoomWindow).__k2soZoom
+  delete (window as ZoomWindow).__k2Zoom
   document.documentElement.removeAttribute('data-style')
   document.documentElement.style.removeProperty('--inset-window')
   document.documentElement.style.removeProperty('--k2-stoplight-spacer')
@@ -134,7 +134,7 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
 
     // App zoom (⌘= / ⌘-): Zen values with the zoom; no Style spacer write.
     invoke.mockClear()
-    ;(window as ZoomWindow).__k2soZoom = 1.25
+    ;(window as ZoomWindow).__k2Zoom = 1.25
     style.onAppZoomChange()
     expect(lastInset()).toEqual({ x: 12, y: 13, square: true, zoom: 1.25, hidden: false })
     expect(spacer()).toBe(glassSpacer)
@@ -197,7 +197,7 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
     // renderer must never send both: while Zen holds the window every apply
     // is round (Rust then drops the square bitmap, traffic_lights.rs
     // `clear_square_bitmap`), and leaving sends Terminal's exact command.
-    ;(window as ZoomWindow).__k2soZoom = 1.25
+    ;(window as ZoomWindow).__k2Zoom = 1.25
     applyStyle(() => document.documentElement.setAttribute('data-style', 'terminal'))
     const squareCmd = lastInset()
     expect(squareCmd).toEqual({ x: 0, y: 3, square: true, zoom: 1.25, hidden: false })
@@ -221,11 +221,11 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
         await nextFrame()
       }],
       ['zoom 150%', () => {
-        ;(window as ZoomWindow).__k2soZoom = 1.5
+        ;(window as ZoomWindow).__k2Zoom = 1.5
         style.onAppZoomChange()
       }],
       ['zoom back 125%', () => {
-        ;(window as ZoomWindow).__k2soZoom = 1.25
+        ;(window as ZoomWindow).__k2Zoom = 1.25
         style.onAppZoomChange()
       }],
       ['title change', () => style.reapplyTrafficLights()],
@@ -278,7 +278,7 @@ describe('Windows and Linux are untouched', () => {
       window.dispatchEvent(new Event('resize'))
       document.dispatchEvent(new Event('fullscreenchange'))
       await nextFrame()
-      ;(window as ZoomWindow).__k2soZoom = 1.5
+      ;(window as ZoomWindow).__k2Zoom = 1.5
       style.onAppZoomChange()
       style.reapplyTrafficLights()
       style.reapplyWindowCorners()

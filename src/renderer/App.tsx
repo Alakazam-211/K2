@@ -219,7 +219,7 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
 // cell size stays under Cmd+Shift+=/- only — not Cmd+=/-.
 declare global {
   interface Window {
-    __k2soZoom?: number
+    __k2Zoom?: number
     __k2ApplyPageTitle?: () => void
   }
 }
@@ -234,10 +234,10 @@ function missionControlServerLabel(): string {
 
 let lastWindowTitle = ''
 
-function applyK2SOZoom(): void {
+function applyK2Zoom(): void {
   // Hosted web: `z3thon | K2`. Desktop Mission Control: `K2 | <server>`.
   // Zoom suffix shared: `… — 125%`.
-  const z = window.__k2soZoom ?? 1
+  const z = window.__k2Zoom ?? 1
   applyAppZoomToDocument(z)
   // macOS: re-center the stoplights on the zoomed top bar and size the
   // spacer to their unscaled width. Runs at startup too (mount effect).
@@ -257,7 +257,7 @@ function applyK2SOZoom(): void {
 }
 
 if (typeof window !== 'undefined') {
-  window.__k2ApplyPageTitle = applyK2SOZoom
+  window.__k2ApplyPageTitle = applyK2Zoom
 }
 
 function BootSplash(): React.JSX.Element {
@@ -402,8 +402,8 @@ function AppRoot(): React.JSX.Element {
   // Mission Control reads the native window title. Restamp it when this
   // window's server changes, including a nickname edit on the active host.
   useEffect(() => {
-    applyK2SOZoom()
-    return useConnectHostStore.subscribe(() => applyK2SOZoom())
+    applyK2Zoom()
+    return useConnectHostStore.subscribe(() => applyK2Zoom())
   }, [])
 
   // Focus has no PageTabs until an overlay opens, so wire the feedback
@@ -563,20 +563,20 @@ function AppRoot(): React.JSX.Element {
       // counter-scale via CSS so they stay under the Shift shortcuts above.
       if (e.metaKey && !e.shiftKey && (e.key === '=' || e.key === '+' || e.code === 'Equal')) {
         e.preventDefault()
-        window.__k2soZoom = Math.min(Math.round(((window.__k2soZoom ?? 1) + 0.1) * 10) / 10, 2.0)
-        applyK2SOZoom()
+        window.__k2Zoom = Math.min(Math.round(((window.__k2Zoom ?? 1) + 0.1) * 10) / 10, 2.0)
+        applyK2Zoom()
         return
       }
       if (e.metaKey && !e.shiftKey && (e.key === '-' || e.code === 'Minus')) {
         e.preventDefault()
-        window.__k2soZoom = Math.max(Math.round(((window.__k2soZoom ?? 1) - 0.1) * 10) / 10, 0.5)
-        applyK2SOZoom()
+        window.__k2Zoom = Math.max(Math.round(((window.__k2Zoom ?? 1) - 0.1) * 10) / 10, 0.5)
+        applyK2Zoom()
         return
       }
       if (e.metaKey && !e.shiftKey && e.key === '0') {
         e.preventDefault()
-        window.__k2soZoom = 1
-        applyK2SOZoom()
+        window.__k2Zoom = 1
+        applyK2Zoom()
         return
       }
     }
@@ -865,16 +865,16 @@ function AppRoot(): React.JSX.Element {
       // which would also scale terminal cells and fight the terminal-font
       // shortcuts).
       listen('app:zoom-in', () => {
-        window.__k2soZoom = Math.min(Math.round(((window.__k2soZoom ?? 1) + 0.1) * 10) / 10, 2.0)
-        applyK2SOZoom()
+        window.__k2Zoom = Math.min(Math.round(((window.__k2Zoom ?? 1) + 0.1) * 10) / 10, 2.0)
+        applyK2Zoom()
       }).then(track)
       listen('app:zoom-out', () => {
-        window.__k2soZoom = Math.max(Math.round(((window.__k2soZoom ?? 1) - 0.1) * 10) / 10, 0.5)
-        applyK2SOZoom()
+        window.__k2Zoom = Math.max(Math.round(((window.__k2Zoom ?? 1) - 0.1) * 10) / 10, 0.5)
+        applyK2Zoom()
       }).then(track)
       listen('app:zoom-reset', () => {
-        window.__k2soZoom = 1
-        applyK2SOZoom()
+        window.__k2Zoom = 1
+        applyK2Zoom()
       }).then(track)
     })
     return () => {

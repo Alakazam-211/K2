@@ -127,7 +127,7 @@ export function clusterArea(rect: ZenRect | null, side: 'left' | 'right', viewpo
 
 /** macOS: the stoplight area right now for Zen chrome `chrome`. */
 export function currentMacStoplightArea(chrome: ZenChromeSource): ZenStoplightArea {
-  const zoom = typeof window === 'undefined' ? 1 : (window as { __k2soZoom?: number }).__k2soZoom
+  const zoom = typeof window === 'undefined' ? 1 : (window as { __k2Zoom?: number }).__k2Zoom
   return macStoplightArea(chrome.offset, zoom)
 }
 

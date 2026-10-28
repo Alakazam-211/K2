@@ -7,7 +7,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { primaryScope } from '@/kessel/server-scope'
 
-interface K2soAgentInfo {
+interface K2AgentInfo {
   name: string
   role: string
   inboxCount: number
@@ -18,7 +18,7 @@ interface K2soAgentInfo {
 }
 
 export default function AgentsPanel(): React.JSX.Element {
-  const [agents, setAgents] = useState<K2soAgentInfo[]>([])
+  const [agents, setAgents] = useState<K2AgentInfo[]>([])
   const [wsInboxCount, setWsInboxCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -40,7 +40,7 @@ export default function AgentsPanel(): React.JSX.Element {
       return
     }
     try {
-      const result = await invoke<K2soAgentInfo[]>('k2so_agents_list', {
+      const result = await invoke<K2AgentInfo[]>('k2so_agents_list', {
         projectPath: activeProject.path,
       })
       // Web shim may soft-resolve null; never store a non-array (renders crash on .length).
@@ -140,7 +140,7 @@ export default function AgentsPanel(): React.JSX.Element {
   }, [activeProject, fetchAgents])
 
   // Status dot color based on work state
-  const statusColor = (agent: K2soAgentInfo): string => {
+  const statusColor = (agent: K2AgentInfo): string => {
     if (agent.activeCount > 0) return 'var(--color-status-warn-soft)' // yellow — working
     if (agent.doneCount > 0) return 'var(--color-status-ok)'   // green — has completed work
     if (agent.inboxCount > 0) return 'var(--color-accent)'  // blue — has pending work
@@ -162,7 +162,7 @@ export default function AgentsPanel(): React.JSX.Element {
     useTabsStore.getState().openAgentPane(name, activeProject.path)
   }
 
-  const AgentRow = ({ agent }: { agent: K2soAgentInfo }) => (
+  const AgentRow = ({ agent }: { agent: K2AgentInfo }) => (
     <div
       className="px-3 py-2 border-b border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer"
       onClick={() => openAgentPane(agent.name)}

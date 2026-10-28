@@ -21,16 +21,16 @@ function setWindow(w: number, h: number): void {
 }
 
 afterEach(() => {
-  delete window.__k2soZoom
+  delete window.__k2Zoom
 })
 
 describe('appZoom', () => {
   it('reads the zoom App.tsx applies, 1 when unset or not a positive number', () => {
     expect(appZoom()).toBe(1)
-    window.__k2soZoom = 1.25
+    window.__k2Zoom = 1.25
     expect(appZoom()).toBe(1.25)
     for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-      window.__k2soZoom = bad
+      window.__k2Zoom = bad
       expect(appZoom()).toBe(1)
     }
   })
@@ -38,7 +38,7 @@ describe('appZoom', () => {
 
 describe('window px to CSS px', () => {
   it('divides a point and a rect by the zoom', () => {
-    window.__k2soZoom = 1.5
+    window.__k2Zoom = 1.5
     expect(clientToCssPx(300)).toBe(200)
     expect(clientRectToCss({ top: 15, bottom: 45, left: 900, right: 930, width: 30, height: 30 })).toEqual({
       top: 10,
@@ -53,9 +53,9 @@ describe('window px to CSS px', () => {
   it('the visible window in CSS px is innerWidth/innerHeight over the zoom', () => {
     setWindow(W, H)
     expect(cssViewport()).toEqual({ width: W, height: H })
-    window.__k2soZoom = 1.25
+    window.__k2Zoom = 1.25
     expect(cssViewport()).toEqual({ width: W / 1.25, height: H / 1.25 })
-    window.__k2soZoom = 1.5
+    window.__k2Zoom = 1.5
     expect(cssViewport()).toEqual({ width: W / 1.5, height: H / 1.5 })
   })
 })

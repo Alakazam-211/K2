@@ -216,7 +216,7 @@ export function beginFileDrag(
       if (composeBar) {
         const data = dropTextOrToast(buildComposeDropPayload(dragPaths))
         if (data !== null) {
-          composeBar.dispatchEvent(new CustomEvent('k2so:compose-insert', { detail: { data } }))
+          composeBar.dispatchEvent(new CustomEvent('k2:compose-insert', { detail: { data } }))
         }
         dragPaths = []
         return
@@ -238,7 +238,7 @@ export function beginFileDrag(
           // CustomEvent on the container; TerminalPane has an
           // effect that listens and forwards to its own sendInput.
           termContainer.dispatchEvent(
-            new CustomEvent('k2so:terminal-write', { detail: { data } }),
+            new CustomEvent('k2:terminal-write', { detail: { data } }),
           )
         } else if (data !== null) {
           const tid = termContainer.dataset.terminalId

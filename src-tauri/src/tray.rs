@@ -120,7 +120,7 @@ pub fn install(app: &AppHandle<Wry>) -> Result<(), String> {
     // Windows: a left click on a tray icon opens the app and the right
     // click shows the menu (the Windows convention). Linux keeps the
     // menu on any click.
-    let _tray = TrayIconBuilder::with_id("k2so-main")
+    let _tray = TrayIconBuilder::with_id("k2-main")
         .icon(icon)
         .icon_as_template(true)
         .tooltip("K2")
@@ -175,7 +175,7 @@ fn refresh_in_place(app: &AppHandle<Wry>) {
 /// restart) so the user doesn't have to wait for the next 10s tick.
 pub fn refresh(app: &AppHandle<Wry>) {
     if let Ok(menu) = build_menu(app) {
-        if let Some(tray) = app.tray_by_id("k2so-main") {
+        if let Some(tray) = app.tray_by_id("k2-main") {
             let _ = tray.set_menu(Some(menu));
         }
     }

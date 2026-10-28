@@ -8,7 +8,7 @@
 //      no path text (files alone are a message); the chips clear.
 //   2. Without the feature: today's path text in the draft.
 //   3. Another server: the file is uploaded to that server and attached.
-//   4. A drop the window routed (`k2so:compose-insert` with paths) becomes
+//   4. A drop the window routed (`k2:compose-insert` with paths) becomes
 //      chips too.
 //   5. A refused file keeps the draft and the chips and shows why.
 //   6. The PTY bar is untouched.
@@ -221,7 +221,7 @@ describe('S4: Thread compose files become attachments', () => {
     const bar = document.querySelector('[data-compose-bar]') as HTMLElement
     await act(async () => {
       bar.dispatchEvent(
-        new CustomEvent('k2so:compose-insert', {
+        new CustomEvent('k2:compose-insert', {
           detail: { data: `'${WS}/.k2/downloads/a.png' `, paths: [`${WS}/.k2/downloads/a.png`], uploaded: true },
         }),
       )
@@ -314,7 +314,7 @@ describe('a name with a line break: attached as a file, never inserted as text',
     const bar = document.querySelector('[data-compose-bar]') as HTMLElement
     return act(async () => {
       bar.dispatchEvent(
-        new CustomEvent('k2so:compose-insert', {
+        new CustomEvent('k2:compose-insert', {
           detail: { data: '', paths: [ODD], uploaded: true, refusal: CONTROL_CHAR_REFUSAL },
         }),
       )

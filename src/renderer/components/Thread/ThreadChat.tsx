@@ -277,7 +277,7 @@ export interface ThreadChatComposerProps {
   onDropFiles?: (e: DragEvent<HTMLDivElement>) => void
   /** Extra attributes on the box's root (the drop router's marks). */
   rootData?: Record<string, string | undefined>
-  /** The root element (a `k2so:compose-insert` listener). */
+  /** The root element (a `k2:compose-insert` listener). */
   rootRef?: Ref<HTMLDivElement>
   /** The stash button, left of Send, shown only while the box is empty (no
    *  text, no files waiting): it opens the chat's stash drawer. */

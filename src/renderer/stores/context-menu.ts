@@ -43,7 +43,7 @@ export function isSelectableItem(item: ContextMenuItemDef): boolean {
 }
 
 /**
- * CSS `zoom` on <html> (applyK2SOZoom): clientX/Y and getBoundingClientRect
+ * CSS `zoom` on <html> (applyK2Zoom): clientX/Y and getBoundingClientRect
  * are window px; position:fixed left/top are CSS px. Divide by zoom
  * (`lib/app-zoom`, where the window size in CSS px lives too).
  */

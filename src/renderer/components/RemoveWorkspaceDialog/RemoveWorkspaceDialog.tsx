@@ -35,7 +35,7 @@ const MODE_OPTIONS: ModeOption[] = [
     id: 'restore_original',
     title: 'Restore pre-K2 state',
     description:
-      'Replace each file K2 took over with its archive from .k2so/migration/. Files K2 created fresh are removed. Your PROJECT.md / AGENT.md / archives in .k2so/ stay — reconnect later and K2 picks up where it left off.',
+      'Replace each file K2 took over with its archive from .k2/migration/. Files K2 created fresh are removed. Your PROJECT.md / AGENT.md / archives in .k2/ stay — reconnect later and K2 picks up where it left off.',
   },
 ]
 
@@ -211,7 +211,7 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
             </div>
             <div className="mt-3 text-[10px] text-[var(--color-text-muted)] leading-snug">
               <span className="text-[var(--color-text-secondary)]">Nothing is destroyed.</span>{' '}
-              <span className="font-mono">.k2so/</span> (including archives) is always preserved, so you can
+              <span className="font-mono">.k2/</span> (including archives) is always preserved, so you can
               reconnect later and resume where you left off.
             </div>
           </div>

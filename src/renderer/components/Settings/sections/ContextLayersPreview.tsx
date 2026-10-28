@@ -61,13 +61,13 @@ const LOCKED_LAYER_DESCRIPTIONS: Record<string, string> = {
   'Identity': '**Auto-generated per workspace/agent.** Workspace or agent name and role.',
   'Connected Workspaces': '**Auto-generated.** Workspaces connected via workspace relations — outgoing and incoming.',
   'Team Roster': '**Auto-generated.** All agent templates in this workspace with their roles. Used to decide delegation targets.',
-  'Standing Orders': '**Auto-generated.** 9-step wake checklist: `k2so checkin` → triage messages → triage work by priority → handle simple / delegate complex → check active agents → review completed work → update status → mark done.',
+  'Standing Orders': '**Auto-generated.** 9-step wake checklist: `k2 checkin` → triage messages → triage work by priority → handle simple / delegate complex → check active agents → review completed work → update status → mark done.',
   'Decision Framework': '**Auto-generated.** Complexity (Simple vs Complex) guides whether to work in main or hand off to a harness sub-agent/worktree.',
-  'Delegation + Review': '**Auto-generated.** Delegation: choose agent → create work item → harness worktree/spawn. Review: `k2so review approve/reject/feedback`.',
-  'Communication Commands': '**Auto-generated.** `k2so checkin`, `status`, `done`, `msg`, `reserve`, `release`.',
-  'Check In + Status + Done': '**Auto-generated.** `k2so checkin` (wake briefing), `k2so status "msg"` (report), `k2so done` / `k2so done --blocked "reason"`.',
-  'File Reservations': '**Auto-generated.** `k2so reserve <paths>` (claim), `k2so release`.',
-  'Cross-Workspace Messaging': '**Auto-generated.** `k2so msg <workspace>:inbox "text"`, `k2so msg --wake` for urgent delivery.',
+  'Delegation + Review': '**Auto-generated.** Delegation: choose agent → create work item → harness worktree/spawn. Review: `k2 review approve/reject/feedback`.',
+  'Communication Commands': '**Auto-generated.** `k2 checkin`, `status`, `done`, `msg`, `reserve`, `release`.',
+  'Check In + Status + Done': '**Auto-generated.** `k2 checkin` (wake briefing), `k2 status "msg"` (report), `k2 done` / `k2 done --blocked "reason"`.',
+  'File Reservations': '**Auto-generated.** `k2 reserve <paths>` (claim), `k2 release`.',
+  'Cross-Workspace Messaging': '**Auto-generated.** `k2 msg <workspace>:inbox "text"`, `k2 msg --wake` for urgent delivery.',
 }
 
 type LayerKind = 'auto' | 'global' | 'ws' | 'heartbeat'

@@ -2,7 +2,7 @@
 // `k2 <noun>` sits in, a one-line human blurb, and one example. The verbs
 // themselves (usage + description) come from the CLI via
 // `@shared/cli-catalog.generated.json` (`k2 --schema`), never from here. The
-// daemon glossary is agent-facing and still says k2so in places, so the
+// daemon glossary is agent-facing (CLI wording, not a human blurb), so the
 // blurbs stay here.
 //
 // Every top-level noun `k2 --schema` lists must appear below (as `noun`,

@@ -204,7 +204,7 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
       `  injected into every agent's SKILL. Edited from Settings → Workspace Knowledge.`,
       `  If the user mentions project-wide info, suggest PROJECT.md instead of stuffing it`,
       `  into this one agent's AGENT.md.`,
-      `  Path: \`${projectPath}/.k2so/PROJECT.md\``,
+      `  Path: \`${projectPath}/.k2/PROJECT.md\``,
       ``,
       `## Key sections to help the user configure in AGENT.md`,
       ``,

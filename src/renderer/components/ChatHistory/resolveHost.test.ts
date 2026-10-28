@@ -9,11 +9,11 @@ import {
 // component resolved from the GLOBAL active pointers (which pointed at
 // K2) instead of the host workspace the panel was mounted inside.
 const K2: ResolvableProject = {
-  id: 'proj-k2so',
-  path: '/repos/k2so',
+  id: 'proj-k2',
+  path: '/repos/k2',
   workspaces: [
-    { id: 'ws-k2so-main', branch: 'main', worktreePath: null },
-    { id: 'ws-k2so-feat', branch: 'feat/x', worktreePath: '/repos/k2so-feat' },
+    { id: 'ws-k2-main', branch: 'main', worktreePath: null },
+    { id: 'ws-k2-feat', branch: 'feat/x', worktreePath: '/repos/k2-feat' },
   ],
 }
 const HK47: ResolvableProject = {
@@ -26,31 +26,31 @@ const PROJECTS = [K2, HK47]
 describe('resolveChatHistoryHost', () => {
   it('binds to the HOST project by path even when another project is globally active (#7)', () => {
     // Global pointers say K2 is active, but the panel is mounted in HK47.
-    const r = resolveChatHistoryHost(PROJECTS, '/repos/hk47', 'proj-k2so', 'ws-k2so-main')
+    const r = resolveChatHistoryHost(PROJECTS, '/repos/hk47', 'proj-k2', 'ws-k2-main')
     expect(r.project?.id).toBe('proj-hk47')
     expect(r.projectPath).toBe('/repos/hk47')
     // Crucially NOT K2.
-    expect(r.project?.id).not.toBe('proj-k2so')
+    expect(r.project?.id).not.toBe('proj-k2')
   })
 
   it('resolves a worktree workspace by matching worktreePath', () => {
-    const r = resolveChatHistoryHost(PROJECTS, '/repos/k2so-feat', 'proj-hk47', 'ws-hk47-main')
-    expect(r.project?.id).toBe('proj-k2so')
-    expect(r.workspace?.id).toBe('ws-k2so-feat')
+    const r = resolveChatHistoryHost(PROJECTS, '/repos/k2-feat', 'proj-hk47', 'ws-hk47-main')
+    expect(r.project?.id).toBe('proj-k2')
+    expect(r.workspace?.id).toBe('ws-k2-feat')
     expect(r.workspace?.branch).toBe('feat/x')
-    expect(r.projectPath).toBe('/repos/k2so-feat')
+    expect(r.projectPath).toBe('/repos/k2-feat')
   })
 
   it('resolves the main (non-worktree) workspace when host path equals project path', () => {
-    const r = resolveChatHistoryHost(PROJECTS, '/repos/k2so', null, null)
-    expect(r.project?.id).toBe('proj-k2so')
+    const r = resolveChatHistoryHost(PROJECTS, '/repos/k2', null, null)
+    expect(r.project?.id).toBe('proj-k2')
     // Main workspace has worktreePath === null.
-    expect(r.workspace?.id).toBe('ws-k2so-main')
+    expect(r.workspace?.id).toBe('ws-k2-main')
     expect(r.workspace?.worktreePath).toBeNull()
   })
 
   it('still scopes the daemon call to the host path when no project row is loaded yet', () => {
-    const r = resolveChatHistoryHost([], '/repos/not-loaded', 'proj-k2so', 'ws-k2so-main')
+    const r = resolveChatHistoryHost([], '/repos/not-loaded', 'proj-k2', 'ws-k2-main')
     expect(r.project).toBeNull()
     expect(r.workspace).toBeNull()
     // The daemon call must still target the host path (daemon filtering is
@@ -59,10 +59,10 @@ describe('resolveChatHistoryHost', () => {
   })
 
   it('falls back to global pointers when no host path is supplied (legacy behavior)', () => {
-    const r = resolveChatHistoryHost(PROJECTS, undefined, 'proj-k2so', 'ws-k2so-feat')
-    expect(r.project?.id).toBe('proj-k2so')
-    expect(r.workspace?.id).toBe('ws-k2so-feat')
-    expect(r.projectPath).toBe('/repos/k2so-feat')
+    const r = resolveChatHistoryHost(PROJECTS, undefined, 'proj-k2', 'ws-k2-feat')
+    expect(r.project?.id).toBe('proj-k2')
+    expect(r.workspace?.id).toBe('ws-k2-feat')
+    expect(r.projectPath).toBe('/repos/k2-feat')
   })
 
   it('fallback prefers worktreePath, then project path, then undefined', () => {

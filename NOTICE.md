@@ -206,31 +206,44 @@ viewer above).
 | **License** | **MIT** (Copyright (c) 2017-2024 Vasco Asturiano; Brian Hough and Maximilian Stoiber; Sebastian McKenzie and other contributors; Tween.js authors; Andrei Kashcha for ngraph.merge) and **BSD-3-Clause** for ngraph.forcelayout, ngraph.graph, ngraph.events and ngraph.random (Copyright (c) Andrei Kashcha) — full texts in `src/renderer/components/Wiki/THIRD_PARTY_NOTICES.txt` |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. These packages do **not** relicense the product. |
 
-## Multiplayer kit and Markdown pack (vendored)
+## Multiplayer kit: k2-mpc-base v0.1.0 (vendored)
 
-Live Markdown editing (Markdown multiplayer v1) uses Alakazam Labs' own
-multiplayer kit and its Markdown type pack, vendored with `git subtree`.
+Live docs (Markdown multiplayer v1) run on Alakazam Labs' multiplayer kit,
+vendored with `git subtree`.
 
 | | |
 |--|--|
-| **What** | `vendor/k2-mpc-base` (the kit) and `vendor/k2-mpc-markdown` (the Markdown pack), each with its own `NOTICE.md` |
-| **Upstream** | Alakazam Labs (K2 Cores); pinned shas in the `git-subtree-split:` lines of their vendor commits |
-| **License** | Alakazam Labs code, under K2's licence while vendored here (the repos' own licence is not chosen yet) |
+| **What** | `vendor/k2-mpc-base` (sessions, presence, store, disk sync, history, text tools, parity), with its own `NOTICE.md` and `CHANGELOG.md` |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, tag `v0.1.0` (`d718c06`) |
+| **License** | Alakazam Labs code, under K2's licence while vendored here (the repo's own licence is not chosen yet) |
 
-Their Rust dependencies, now in K2's `Cargo.lock`:
+Its Rust dependencies, in K2's `Cargo.lock`:
 
 | Crate | Version | Licence | Used for |
 |---|---|---|---|
 | [yrs](https://github.com/y-crdt/y-crdt) | 0.28.0 | MIT | The CRDT engine (Yjs-compatible), private to the kit |
+| [regex-automata](https://github.com/rust-lang/regex) | 0.4 | MIT OR Apache-2.0 | Linear-time regexes for the text tools (`grep`, `sed`); already in the tree |
+| [redb](https://github.com/cberner/redb) | 2 | MIT OR Apache-2.0 | The docs store (`~/.k2/docs.redb`); the copy k2-core already links |
 | thiserror | 2 | MIT OR Apache-2.0 | Error types |
-| regex-automata | 0.4 | MIT OR Apache-2.0 | Linear-time regexes for the text tools (grep, sed); already in the tree |
-| redb | 2 | MIT OR Apache-2.0 | The docs store (`~/.k2/docs.redb`); the copy k2-core already links |
 | dashmap (via yrs) | 6.2.1 | MIT | |
 | smallstr (via yrs) | 0.3.1 | MIT OR Apache-2.0 | |
 
 `unicode-ident` is `(MIT OR Apache-2.0) AND Unicode-3.0`, used only at build
 time by procedural macros; Unicode-3.0 is OSI-approved and permissive.
-Update this section on every kit bump.
+
+## Multiplayer kit: k2-mpc-markdown v0.1.0 (vendored)
+
+The Markdown type pack for the kit (schema, file codec, its own verbs such as
+`replace-section`, the parity list), vendored beside it.
+
+| | |
+|--|--|
+| **What** | `vendor/k2-mpc-markdown` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-markdown`, tag `v0.1.0` (`098c6d4`) |
+| **License** | Alakazam Labs code, under K2's licence while vendored here (the repo's own licence is not chosen yet) |
+| **Dependencies** | k2-mpc-base only (above) |
+
+Update both sections on every kit bump.
 
 ## Third-party: Stalwart mail server (AGPL-3.0-only)
 

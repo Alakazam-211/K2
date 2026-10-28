@@ -376,9 +376,12 @@ eval "$(sed -n '/^# BEGIN_CLI_TOOL_POLICY/,/^# END_CLI_TOOL_POLICY/p' "$K2_CLI")
 _cli_tool_is_locked docs || fail "docs locked"
 ok "doc is an id + locked tool (the passport inside K2, never the owner token)"
 
+cli owner "$WORK" doc flush -w "$A" notes/plan.md
+want_rc 0 "owner flush"
+has "$OUT" "disk clean" "flush leaves the disk clean"
 cli owner "$WORK" doc cat -w "$A" notes/plan.md
 want_rc 0 "owner cat"
-[ "$OUT" = "$(cat "$A/notes/plan.md")" ] || fail "owner cat: '$OUT' is not the file"
+[ "$OUT" = "$(cat "$A/notes/plan.md")" ] || fail "owner cat: '$OUT' is not the file: '$(cat "$A/notes/plan.md")'"
 ok "owner: k2 doc cat -w <ws> <rel> prints the doc"
 cli owner "$A/notes" doc grep -n ONE plan.md
 want_rc 0 "owner grep (relative to cwd)"
@@ -419,6 +422,43 @@ cli agent "$B" doc who home.md
 want_rc 0 "who"
 has "$OUT" "(agent)" "who lists the agent"
 ok "undo, who"
+echo "== k2 doc history (kit C7a) =="
+cli agent "$B" doc append --json --text $'revert me\n' home.md
+want_rc 0 "append to revert"
+CH="$(jq_ "$OUT" 'j["version"]')"
+cli agent "$B" doc revert "$CH" home.md
+want_rc 0 "revert"
+cli agent "$B" doc grep -c "revert me" home.md
+want_rc 1 "reverted text is gone"
+ok "revert <change> reverses one change from the log"
+cli agent "$B" doc log home.md
+want_rc 0 "log"
+has "$OUT" "revert" "log lists the revert"
+ok "log lists changes with their kind"
+cli agent "$B" doc versions --json home.md
+want_rc 0 "versions"
+V0="$(jq_ "$OUT" 'j["versions"][0]["id"]')"
+cli agent "$B" doc show --version "$V0" home.md
+want_rc 0 "show"
+[ "$OUT" = "# B home" ] || fail "show --version $V0: '$OUT'"
+ok "show --version: the imported text"
+cli agent "$B" doc diff --version "$V0" home.md
+want_rc 1 "diff --version differs"
+has "$OUT" "+" "diff text"
+ok "diff --version: unified diff, exit 1 when different"
+cli agent "$B" doc restore --version "$V0" home.md
+want_rc 0 "restore"
+cli agent "$B" doc cat home.md
+[ "$OUT" = "# B home" ] || fail "after restore: '$OUT'"
+cli agent "$B" doc undo home.md
+want_rc 0 "undo the restore"
+cli agent "$B" doc cat home.md
+[ "$OUT" != "# B home" ] || fail "undo of the restore changed nothing"
+ok "restore is a new change, and undo reverses it"
+cli agent "$B" doc revert 999999 home.md
+want_rc 4 "no such change"
+ok "revert of an unknown change: exit 4"
+
 cli agent "$B" doc cat -w "$A" notes/plan.md
 want_rc 3 "cross-workspace refused"
 has "$ERR" "doc_not_shared" "cross-workspace refused"

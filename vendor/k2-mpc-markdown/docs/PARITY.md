@@ -42,7 +42,7 @@ Rights: **R** read · **E** edit · **H** history · **C** comment · **O** owne
 | P19 | History, diff, show a version | `log`, `diff --version V`, `show --version V`; `diff` (my copy on stdin) | H (`diff`: R) | `log`, `diff_version`, `show`, `versions` | live |
 | P20 | Restore / name a version | `restore --version V`, `version --name N` | E (+H to restore) | `restore`, `name_version` | live |
 | P21 | Rename / move | `mv <new>` (a raw rename is also picked up) | E | `SessionManager::rekey` + `file_moved` | live |
-| P22 | Blame | `blame [-L a,b]` | H | later (C7b, with the blame UI; the client→pid mapping is recorded now) | later |
+| P22 | Blame: who last wrote each line, by which change, when (the blame gutter) | `blame [-L a,b]` (a `git blame`-like listing) | H | `blame(conn, root, lines)` | live |
 | P23 | Comment, reply, resolve; suggest; accept / reject per hunk | `comment`, `reply`, `resolve`, `suggest`, `accept`, `reject`, `comments` | C / R (suggest) / E (accept, reject) | later (M5, the kit's annotation layer) | later |
 | P24 | Export | N/A: the file is the export; `cat` gives its exact bytes | R | `read` | N/A |
 | P25 | See why live editing is off | `status`; verbs exit 4 with the reason | R | `status` (`declined`, `disk`) | live |

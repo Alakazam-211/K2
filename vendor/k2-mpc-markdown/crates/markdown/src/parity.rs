@@ -33,12 +33,8 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
         P::History => ParityRow::live(a, &["log", "diff --version", "show --version", "diff"]),
         P::Restore => ParityRow::live(a, &["restore", "version --name"]),
         P::Rename => ParityRow::live(a, &["mv"]),
-        P::Blame => ParityRow::deferred(
-            a,
-            &["blame"],
-            "C7b (the release after MD-v1)",
-            "blame lands with its UI; the client-to-pid mapping is recorded now",
-        ),
+        // the tab's blame gutter and `blame -L a,b` both call `Session::blame`
+        P::Blame => ParityRow::live(a, &["blame"]),
         P::Annotate => ParityRow::deferred(
             a,
             &[

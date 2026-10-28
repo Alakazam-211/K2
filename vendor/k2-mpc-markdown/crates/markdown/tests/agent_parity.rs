@@ -206,7 +206,7 @@ fn agent_parity() {
         .unwrap_or_else(|f| panic!("{}", parity::render(&f)));
     let rows = parity();
     let live = rows.iter().filter(|r| r.status == RowStatus::Live).count();
-    assert_eq!(live, 26);
+    assert_eq!(live, 27);
     assert_eq!(
         report.not_applicable,
         vec![(
@@ -218,7 +218,6 @@ fn agent_parity() {
     assert_eq!(
         deferred,
         [
-            PersonAction::Blame,
             PersonAction::Annotate,
             PersonAction::Mention,
             PersonAction::Purge
@@ -235,6 +234,15 @@ fn agent_parity() {
         }
     }
     assert_eq!(report.matched.iter().filter(|m| m.1 == VERB).count(), 6);
+    // P22 (live since base v0.3.0): the gutter and the verb, -L, and the history right
+    assert_eq!(
+        report
+            .matched
+            .iter()
+            .filter(|m| m.0 == PersonAction::Blame)
+            .count(),
+        3
+    );
     eprintln!(
         "agent parity (markdown): {} cases matched, {live} live rows, 1 N/A, {} deferred, in {:?}",
         report.matched.len(),
@@ -291,6 +299,46 @@ fn unmapping_replace_section_fails() {
         vec![Failure::NoCase {
             action: P13,
             verb: VERB.into()
+        }],
+        "{}",
+        parity::render(&f)
+    );
+}
+
+/// Negative control: v0.1.0's P22 row (deferred, `blame` absent) fails now that the base
+/// registers `blame` and has cases for it; and with `blame` out of the registry the live row
+/// is reported missing.
+#[test]
+fn the_deferred_blame_row_now_fails() {
+    let registry = Registry::for_pack(&PACK).unwrap();
+    let mut rows = parity();
+    let i = rows
+        .iter()
+        .position(|r| r.action == PersonAction::Blame)
+        .unwrap();
+    rows[i] = ParityRow::deferred(
+        PersonAction::Blame,
+        &["blame"],
+        "C7b (the release after MD-v1)",
+        "blame lands with its UI",
+    );
+    let f = parity::check_list(&rows, &registry, &cases());
+    let s = parity::render(&f);
+    assert!(
+        f.iter().any(|x| matches!(x, Failure::UnexpectedVerb { action: PersonAction::Blame, verb, .. } if verb == "blame")),
+        "{s}"
+    );
+    assert!(
+        f.contains(&Failure::StaleDeferral(PersonAction::Blame)),
+        "{s}"
+    );
+    let f = parity::check_list(&parity(), &registry.without("blame"), &cases());
+    assert_eq!(
+        f,
+        vec![Failure::MissingVerb {
+            action: PersonAction::Blame,
+            verb: "blame".into(),
+            at: "parity list",
         }],
         "{}",
         parity::render(&f)

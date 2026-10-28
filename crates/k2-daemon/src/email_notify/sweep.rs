@@ -15,7 +15,8 @@
 //!   - E19: idempotency keys past 24 h;
 //!   - E26: retired senders whose 30-day reservation ended;
 //!   - E15: held rows whose approval was denied, expired or failed become `refused`;
-//!   - V: confirm links past 24 h expire; dead verified-address rows go after 90 days.
+//!   - V: confirm links past 24 h expire; dead verified-address rows go after 90 days;
+//!   - EN-A27: the delivery webhook's queue links past 7 days.
 
 use k2_core::email_notify as store;
 
@@ -102,6 +103,10 @@ pub fn hourly(now: i64) -> (u64, usize) {
         let conn = db.lock();
         if let Err(e) = k2_core::email_outcomes::purge_orphans(&conn) {
             k2_core::log_debug!("[email-notify] WARN outcome purge: {e}");
+        }
+        // EN-A27: the delivery webhook's queue links are kept 7 days.
+        if let Err(e) = k2_core::email_outcomes::purge_queue_links(&conn, now) {
+            k2_core::log_debug!("[email-notify] WARN queue link purge: {e}");
         }
     }
     if destroyed > 0 || purged > 0 {

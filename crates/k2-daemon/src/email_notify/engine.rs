@@ -47,6 +47,9 @@ pub trait MailEngine: Send + Sync {
     fn fetch_reports(&self, account_id: &str, limit: usize) -> Result<Vec<RawReport>, String>;
     /// N6: destroy the reports the pass recorded.
     fn destroy_emails(&self, account_id: &str, ids: &[String]) -> Result<(), String>;
+    /// EN-A27: the envelope id (K2's log id) of a message still in the
+    /// mail server's queue, by its registry id. `None`: it already left.
+    fn queued_env_id(&self, registry_id: &str) -> Result<Option<String>, String>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +145,10 @@ impl MailEngine for StalwartClient {
 
     fn destroy_emails(&self, account_id: &str, ids: &[String]) -> Result<(), String> {
         self.email_destroy(account_id, ids).map(|_| ())
+    }
+
+    fn queued_env_id(&self, registry_id: &str) -> Result<Option<String>, String> {
+        self.queued_message_env_id(registry_id)
     }
 }
 

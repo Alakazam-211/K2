@@ -4957,6 +4957,36 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // POST /cli/email/events — the local mail server's delivery webhook
+        // (Email Notifications part 2, N6; EN-A25/EN-A27). NO token: the
+        // loopback listener (never proxied, tunnelled or LAN) plus a valid
+        // HMAC `X-Signature` over the body are the credential. See
+        // `email_notify::webhook`.
+        crate::email_notify::webhook::EVENTS_PATH => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::email_notify::webhook::MAX_BODY).await {
+                Ok(b) => b,
+                Err(refused) => {
+                    super::http::refuse_body_too_large(
+                        &mut *stream,
+                        &refused,
+                        "413 Payload Too Large",
+                        "application/json",
+                        r#"{"ok":false,"error":{"code":"too_large","hint":"a webhook batch is at most 2 MiB"}}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let loopback = ingress == Ingress::Loopback;
+            let head = headers_blob.clone();
+            let r = tokio::task::spawn_blocking(move || crate::email_notify::webhook::handle(loopback, &head, &body))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // /cli/email/verify and /cli/email/stop — PUBLIC: Email
         // Notifications' confirm and stop pages (part 2, slice V). The token
         // is the credential. A GET only renders (link scanners follow GETs);

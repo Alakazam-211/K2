@@ -1424,6 +1424,11 @@ async fn async_main() {
     // record then remove leftover user Sieve scripts (kept: exactly `k2`
     // and `k2-forward`). Linux-only detached thread; idempotent.
     mail::sieve_lockdown::spawn_startup_reconcile();
+    // 0.46.6: Email Notifications' delivery webhook on the local mail
+    // server (one K2 x:WebHook, rewritten only when the daemon port, the
+    // events or the key moved; removed with the box switch off).
+    // Linux-only detached thread; idempotent.
+    crate::email_notify::webhook::spawn_startup_reconcile();
     // K2-issuer boxes (mail host attached + a K2-planted mail cert): make
     // sure Stalwart's own ACME is Manual for the mail host's Domain. One
     // registry write, no restart; never flips back. Linux-only thread.

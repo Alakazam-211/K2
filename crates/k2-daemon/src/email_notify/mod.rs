@@ -28,6 +28,8 @@
 //!   the scheduled flusher.
 //! - [`relay`]: SMTP relays, their vault credentials (E12).
 //! - [`sweep`]: the hourly sweeps (E5, E22, E26, idempotency).
+//! - [`webhook`]: the local mail server's delivery webhook (`delivered`,
+//!   `delayed`; N6, EN-A25/EN-A27) and its configuration.
 //! - [`owner_routes`] (`/cli/notifications/email/*`), [`app_routes`]
 //!   (`/cli/app/email/*`), [`link_routes`] (`/cli/skin/email/*` and
 //!   `/v1/apps/<id>/email/*`).
@@ -54,6 +56,7 @@ pub mod send;
 pub mod senders;
 pub mod sweep;
 pub mod verify;
+pub mod webhook;
 
 #[cfg(test)]
 mod tests;

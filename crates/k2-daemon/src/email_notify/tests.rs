@@ -41,6 +41,10 @@ pub(crate) struct FakeEngine {
     /// N6: reports waiting per account; destroyed ids.
     pub reports: Mutex<HashMap<String, Vec<engine::RawReport>>>,
     pub destroyed: Mutex<Vec<String>>,
+    /// EN-A27: messages still queued (registry id → envelope id) and the
+    /// lookups made.
+    pub queued: Mutex<HashMap<String, String>>,
+    pub queue_lookups: Mutex<Vec<String>>,
 }
 
 impl MailEngine for FakeEngine {
@@ -84,6 +88,10 @@ impl MailEngine for FakeEngine {
         }
         self.destroyed.lock().unwrap().extend(ids.iter().cloned());
         Ok(())
+    }
+    fn queued_env_id(&self, registry_id: &str) -> Result<Option<String>, String> {
+        self.queue_lookups.lock().unwrap().push(registry_id.to_string());
+        Ok(self.queued.lock().unwrap().get(registry_id).cloned())
     }
 }
 
@@ -2140,4 +2148,121 @@ fn n10_a_person_mutes_a_workspace_and_the_agent_can_turn_its_own_notices_off() {
     for p in [verify::ADDRESS_SET_PATH, verify::ADDRESS_PATH, agent_notices::MUTE, owner_routes::AGENT_ON] {
         assert!(!crate::session_token::is_agent_verb(p), "{p}");
     }
+}
+
+// ── part 2, N6: the mail server's delivery webhook (EN-A25, EN-A27) ──
+
+fn hook_body(events: J) -> Vec<u8> {
+    json!({ "events": events }).to_string().into_bytes()
+}
+
+fn hook_head(sig: Option<&str>) -> String {
+    match sig {
+        Some(s) => format!("POST /cli/email/events HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Signature: {s}\r\nContent-Type: application/json\r\n\r\n"),
+        None => "POST /cli/email/events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_string(),
+    }
+}
+
+fn hook_post(key: &str, events: J) -> (u16, J) {
+    let body = hook_body(events);
+    let r = webhook::handle(true, &hook_head(Some(&webhook::sign(key, &body))), &body);
+    (status_of(&r), body_of(&r))
+}
+
+struct HookKeyReset;
+impl Drop for HookKeyReset {
+    fn drop(&mut self) {
+        webhook::set_test_key(None);
+        set_test_switch(None);
+    }
+}
+
+#[test]
+fn n6_the_webhook_links_a_queued_send_once_and_records_delivered_and_delayed() {
+    let f = fx("n6hook");
+    let _reset = HookKeyReset;
+    webhook::set_test_key(Some(Some("hook-key".into())));
+    let s = on_app(&f, store::SCOPE_ANY);
+    let out = send::send(&app_caller(&f.app), &json!({"to": ["a@x.test", "b@y.test"], "subject": "Hi", "text": "t"}), now()).expect("sent");
+    let id = out["id"].as_str().expect("id").to_string();
+    let qid: u64 = 337364143281548288;
+    f.engine.queued.lock().unwrap().insert(webhook::registry_id(qid), id.clone());
+    let batch = json!([
+        {"id": "1", "type": webhook::QUEUED, "data": {"queueId": qid, "from": s.envelope(), "to": ["a@x.test", "b@y.test"]}},
+        {"id": "2", "type": "delivery.delivered", "data": {"queueId": qid, "to": "A@x.test", "code": 250}},
+        {"id": "3", "type": "delivery.rcpt-to-rejected", "data": {"queueId": qid, "to": "b@y.test", "code": 451}},
+        // A recipient the send never had changes nothing.
+        {"id": "4", "type": "delivery.delivered", "data": {"queueId": qid, "to": "stranger@z.test", "code": 250}},
+    ]);
+    let (st, v) = hook_post("hook-key", batch.clone());
+    assert_eq!(st, 200, "{v}");
+    assert_eq!((v["linked"].clone(), v["recorded"].clone()), (json!(1), json!(2)));
+    assert_eq!(*f.engine.queue_lookups.lock().unwrap(), vec!["jluo27qealaa".to_string()], "one lookup, by the registry id");
+    let status = send::status(&f.app, &id).expect("status");
+    assert_eq!(status["status"], "submitted", "the top-level status keeps its meaning");
+    assert_eq!(status["recipientStatus"], json!([{"to": "a@x.test", "status": "delivered"}, {"to": "b@y.test", "status": "delayed"}]));
+    // The same batch again (the mail server retries): no new lookup, nothing new.
+    let (_, v) = hook_post("hook-key", batch);
+    assert_eq!((v["linked"].clone(), v["recorded"].clone()), (json!(0), json!(0)));
+    assert_eq!(f.engine.queue_lookups.lock().unwrap().len(), 1);
+    // A 5xx rejection is the delivery report's to tell, never a bounce from here.
+    let (_, v) = hook_post("hook-key", json!([{"type": "delivery.rcpt-to-rejected", "data": {"queueId": qid, "to": "b@y.test", "code": 550}}]));
+    assert_eq!(v["recorded"], 0);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert_eq!(k2_core::email_outcomes::suppressed_for(&conn, "b@y.test", &s.id, None), None, "the webhook never suppresses");
+    }
+    // Mail K2 didn't send (another return path) is never looked up.
+    let (_, v) = hook_post("hook-key", json!([{"type": webhook::QUEUED, "data": {"queueId": 5, "from": "person@notify.brand.test", "to": ["c@x.test"]}}]));
+    assert_eq!(v["linked"], 0);
+    assert_eq!(f.engine.queue_lookups.lock().unwrap().len(), 1, "no lookup for mail that isn't K2's");
+    // A K2 send that already left the queue stays submitted: no guess.
+    let out = send::send(&app_caller(&f.app), &json!({"to": "d@x.test", "subject": "Fast", "text": "t"}), now()).expect("sent");
+    let fast = out["id"].as_str().expect("id").to_string();
+    let (_, v) = hook_post(
+        "hook-key",
+        json!([
+            {"type": webhook::QUEUED, "data": {"queueId": 6, "from": s.envelope(), "to": ["d@x.test"]}},
+            {"type": "delivery.delivered", "data": {"queueId": 6, "to": "d@x.test", "code": 250}},
+        ]),
+    );
+    assert_eq!((v["linked"].clone(), v["recorded"].clone()), (json!(0), json!(0)));
+    assert_eq!(send::status(&f.app, &fast).expect("status")["recipientStatus"], json!([{"to": "d@x.test", "status": "submitted"}]));
+    // An envelope id that is another sender's send is never kept for this one.
+    let sys = system_sender_on();
+    let c = send::Composed { subject: "Code".into(), text: "123".into(), html: None };
+    let sys_log = send::system_send_from(&sys, "email_code", None, "e@x.test", &c).expect("sent");
+    f.engine.queued.lock().unwrap().insert(webhook::registry_id(7), sys_log);
+    let (_, v) = hook_post("hook-key", json!([{"type": webhook::QUEUED, "data": {"queueId": 7, "from": s.envelope(), "to": ["e@x.test"]}}]));
+    assert_eq!(v["linked"], 0, "the envelope id must be this sender's own send");
+}
+
+#[test]
+fn n6_the_webhook_answers_only_on_loopback_with_a_valid_signature_and_the_switch_on() {
+    let _f = fx("n6hookauth");
+    let _reset = HookKeyReset;
+    webhook::set_test_key(Some(Some("hook-key".into())));
+    let body = hook_body(json!([]));
+    let good = webhook::sign("hook-key", &body);
+    let ok = webhook::handle(true, &hook_head(Some(&good)), &body);
+    assert_eq!(status_of(&ok), 200);
+    let r = webhook::handle(false, &hook_head(Some(&good)), &body);
+    assert_eq!((status_of(&r), body_of(&r)["error"]["code"].clone()), (403, json!("forbidden")), "never off this machine");
+    let r = webhook::handle(true, &hook_head(None), &body);
+    assert_eq!((status_of(&r), body_of(&r)["error"]["code"].clone()), (401, json!("bad_signature")));
+    let r = webhook::handle(true, &hook_head(Some(&webhook::sign("another-key", &body))), &body);
+    assert_eq!(status_of(&r), 401, "another key");
+    let r = webhook::handle(true, &hook_head(Some(&good)), br#"{"events":[{"type":"delivery.delivered"}]}"#);
+    assert_eq!(status_of(&r), 401, "the signature covers the body");
+    let junk = b"not json".to_vec();
+    let r = webhook::handle(true, &hook_head(Some(&webhook::sign("hook-key", &junk))), &junk);
+    assert_eq!(status_of(&r), 400);
+    webhook::set_test_key(Some(None));
+    let r = webhook::handle(true, &hook_head(Some(&good)), &body);
+    assert_eq!((status_of(&r), body_of(&r)["error"]["code"].clone()), (503, json!("not_ready")), "no key yet");
+    webhook::set_test_key(Some(Some("hook-key".into())));
+    set_test_switch(Some(false));
+    let r = webhook::handle(true, &hook_head(Some(&good)), &body);
+    assert_eq!(status_of(&r), 404, "with the box switch off it is an unknown route");
 }

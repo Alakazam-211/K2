@@ -1914,6 +1914,46 @@ impl StalwartClient {
         Ok(parse_queued_message_get(&resp))
     }
 
+    /// Email Notifications (EN-A27): the envelope id (`ENVID`, which K2
+    /// sets to its log id) of one queued message, by its registry id.
+    /// `Ok(None)`: the message already left the queue, or it has no
+    /// envelope id.
+    pub fn queued_message_env_id(&self, id: &str) -> Result<Option<String>, String> {
+        let resp = self.registry_call(
+            "x:QueuedMessage/get",
+            serde_json::json!({ "ids": [id], "properties": ["id", "envId"] }),
+        )?;
+        Ok(parse_queued_env_id(id, &resp))
+    }
+
+    /// Email Notifications (EN-A25): every `x:WebHook` (the full objects;
+    /// the signature key comes back masked or not at all).
+    pub fn webhook_list(&self) -> Result<Vec<serde_json::Value>, String> {
+        let resp = self.registry_call("x:WebHook/get", serde_json::json!({}))?;
+        parse_get_list("x:WebHook/get", &resp)
+    }
+
+    /// Create (`id: None`) or update one `x:WebHook`. Returns its id.
+    pub fn webhook_put(&self, id: Option<&str>, body: serde_json::Value) -> Result<String, String> {
+        match id {
+            Some(id) => {
+                let resp = self.registry_call("x:WebHook/set", serde_json::json!({ "update": { id: body } }))?;
+                expect_set_clean("x:WebHook/set", &resp)?;
+                parse_set_updated("x:WebHook/set", id, &resp)?;
+                Ok(id.to_string())
+            }
+            None => {
+                let resp = self.registry_call("x:WebHook/set", serde_json::json!({ "create": { CREATE_TAG: body } }))?;
+                parse_set_created_id("x:WebHook/set", &resp)
+            }
+        }
+    }
+
+    pub fn webhook_destroy(&self, id: &str) -> Result<(), String> {
+        let resp = self.registry_call("x:WebHook/set", serde_json::json!({ "destroy": [id] }))?;
+        parse_set_destroyed("x:WebHook/set", id, &resp)
+    }
+
     pub fn queued_message_retry(&self, id: &str, next_retry: &str) -> Result<(), String> {
         let resp = self.registry_call(
             "x:QueuedMessage/set",
@@ -4602,6 +4642,20 @@ fn parse_mailing_list_get(args: &serde_json::Value) -> Vec<MailingListInfo> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// `x:QueuedMessage/get` reply → the `envId` of `id` (absent, `null`,
+/// empty or `notFound`: `None`).
+fn parse_queued_env_id(id: &str, args: &serde_json::Value) -> Option<String> {
+    args.get("list")?
+        .as_array()?
+        .iter()
+        .find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id))?
+        .get("envId")?
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn parse_queued_message_get(args: &serde_json::Value) -> Vec<QueuedMessageInfo> {

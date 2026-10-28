@@ -1519,6 +1519,7 @@ pub fn start_live(req: UpgradeRequest) -> UpgradeStart {
                     if v["state"] == "succeeded" {
                         super::defaults::spawn_after("upgrade");
                         super::sieve_lockdown::spawn_after("upgrade");
+                        crate::email_notify::webhook::spawn_after("upgrade");
                     }
                 }
                 // The record stays `running` → reported `interrupted`, and
@@ -1596,6 +1597,7 @@ pub fn spawn_boot_recovery() {
                     if v["state"] == "succeeded" {
                         super::defaults::spawn_after("upgrade");
                         super::sieve_lockdown::spawn_after("upgrade");
+                        crate::email_notify::webhook::spawn_after("upgrade");
                     }
                 }
                 Ok(None) => {}

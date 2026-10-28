@@ -453,6 +453,8 @@ pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> 
                 crate::mail::defaults::spawn_after("enable");
                 // 0.46.6: Sieve lockdown (enotify off on a new server).
                 crate::mail::sieve_lockdown::spawn_after("enable");
+                // 0.46.6: the delivery webhook (Email Notifications part 2, N6).
+                crate::email_notify::webhook::spawn_after("enable");
             }
             Err(e) => {
                 k2_core::log_debug!("[mail/supervisor] enable failed: {e}");

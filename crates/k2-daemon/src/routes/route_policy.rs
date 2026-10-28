@@ -684,6 +684,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/done", Member),
     // Email Notifications part 2, slice V: the confirm and stop links
     // (the token is the credential; a GET only renders, a POST acts).
+    // The local mail server's delivery webhook (part 2, N6): loopback
+    // only; the HMAC signature is the credential.
+    post("/cli/email/events", Public),
     both("/cli/email/stop", Public),
     both("/cli/email/verify", Public),
     post("/cli/events", Member),

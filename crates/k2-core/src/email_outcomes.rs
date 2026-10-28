@@ -297,6 +297,36 @@ pub fn forget_recipient(conn: &Connection, address: &str) -> Result<usize, Strin
         .map_err(err("forget"))
 }
 
+// ── the webhook's queue link (k2.db 0248, vs-live EN-A27) ───────────
+
+/// How long a queue id → log id pair is kept.
+pub const QUEUE_LINK_SECS: i64 = 7 * 24 * 3600;
+
+/// Keep the mail server's queue id for a K2 send. `Ok(false)`: already
+/// kept (the first pair wins).
+pub fn link_queue(conn: &Connection, queue_id: &str, log_id: &str, at: i64) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "INSERT OR IGNORE INTO email_notify_queue (queue_id, log_id, at) VALUES (?1, ?2, ?3)",
+            params![queue_id, log_id, at],
+        )
+        .map_err(err("queue link"))?;
+    Ok(n == 1)
+}
+
+/// The K2 send a queue id carries, if K2 learned it.
+pub fn log_for_queue(conn: &Connection, queue_id: &str) -> Result<Option<String>, String> {
+    conn.query_row("SELECT log_id FROM email_notify_queue WHERE queue_id = ?1", params![queue_id], |r| r.get(0))
+        .optional()
+        .map_err(err("queue link"))
+}
+
+/// Drop queue links older than [`QUEUE_LINK_SECS`] (the hourly sweep).
+pub fn purge_queue_links(conn: &Connection, now: i64) -> Result<usize, String> {
+    conn.execute("DELETE FROM email_notify_queue WHERE at < ?1", params![now - QUEUE_LINK_SECS])
+        .map_err(err("queue purge"))
+}
+
 /// Outcome rows whose log row is gone (retention).
 pub fn purge_orphans(conn: &Connection) -> Result<usize, String> {
     conn.execute("DELETE FROM email_notify_outcomes WHERE log_id NOT IN (SELECT id FROM email_notify_log)", [])
@@ -312,6 +342,7 @@ mod tests {
         for f in [
             include_str!("../drizzle_sql/0227_email_notifications.sql"),
             include_str!("../drizzle_sql/0245_email_notify_outcomes.sql"),
+            include_str!("../drizzle_sql/0248_email_notify_queue.sql"),
         ] {
             for stmt in f.split("--> statement-breakpoint") {
                 c.execute_batch(stmt).expect("schema");
@@ -334,6 +365,20 @@ mod tests {
         let dom: String = c.query_row("SELECT rcpt_domain FROM email_notify_outcomes WHERE kind = 'bounced_hard'", [], |r| r.get(0)).unwrap();
         assert_eq!(dom, "x.test");
         assert_eq!(forget_recipient(&c, "a@x.test").unwrap(), 1);
+    }
+
+    #[test]
+    fn a_queue_link_is_kept_once_and_swept_after_seven_days() {
+        let c = conn();
+        // Queue ids are u64 (the probe's pair below); kept as decimal text.
+        assert!(link_queue(&c, "337364143281548288", "enl_1", 100).unwrap());
+        assert!(!link_queue(&c, "337364143281548288", "enl_2", 101).unwrap(), "the first pair wins");
+        assert!(link_queue(&c, "18446744073709551615", "enl_3", 100 + QUEUE_LINK_SECS).unwrap(), "a full u64 fits");
+        assert_eq!(log_for_queue(&c, "337364143281548288").unwrap().as_deref(), Some("enl_1"));
+        assert_eq!(log_for_queue(&c, "1").unwrap(), None);
+        assert_eq!(purge_queue_links(&c, 101 + QUEUE_LINK_SECS).unwrap(), 1, "only the old pair goes");
+        assert_eq!(log_for_queue(&c, "337364143281548288").unwrap(), None);
+        assert_eq!(log_for_queue(&c, "18446744073709551615").unwrap().as_deref(), Some("enl_3"));
     }
 
     #[test]

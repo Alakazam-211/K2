@@ -615,7 +615,9 @@ async fn with_repos_are_laid_out_beside_the_main_one() {
     let fr = c.until(|f| matches!(f, Frame::Offer(_))).await;
     let Some(Frame::Offer(o)) = fr.last() else { unreachable!() };
     assert!(o.features.iter().any(|f| f == frames::FEATURE_MULTI_REPO), "{:?}", o.features);
-    let mut p = plan("w1", &["/bin/sh", "-c", "cat a.txt ../k2-multiplayer-base/b.txt; pwd; git -C ../k2-multiplayer-base rev-parse HEAD"]);
+    // The sibling is the node's checkout too: git reads it as the job user
+    // (the knob: another owner) like the main one.
+    let mut p = plan("w1", &["/bin/sh", "-c", "export GIT_TEST_ASSUME_DIFFERENT_OWNER=1; cat a.txt ../k2-multiplayer-base/b.txt; pwd; git -C ../k2-multiplayer-base rev-parse HEAD; git log -1 --format=%s"]);
     p.src = Some(Src { project_key: "pk-md".into(), remote_url: None, commit: md_head.clone(), dirty: None, slots: 1 });
     p.src_path = Some("k2-multiplayer-markdown".into());
     p.with = vec![frames::SrcWith { path: "k2-multiplayer-base".into(), project_key: "pk-base".into(), remote_url: None, commit: base_head.clone() }];
@@ -634,6 +636,7 @@ async fn with_repos_are_laid_out_beside_the_main_one() {
     assert_eq!(&lines[..2], &["two", "base"]);
     assert_eq!(lines[2], n.layout.job_dir("w1", 1).join("src/k2-multiplayer-markdown").display().to_string());
     assert_eq!(lines[3], base_head);
+    assert_eq!(lines[4], "two", "and the main checkout, laid out under src/: {out}");
     assert!(n.layout.mirror("pk-base").exists() && n.layout.mirror("pk-md").exists(), "each repo has its own mirror");
     // Overlapping or escaping layouts fail before anything syncs.
     let mut bad = plan("w2", &["/bin/true"]);
@@ -735,8 +738,16 @@ async fn git_works_in_the_jobs_own_checkout_it_does_not_own() {
     let (repo, _first, second) = temp_repo();
     let mut c = fake.next_conn().await;
     ready(&mut c).await;
+    // The read commands a job runs on its own code (k2n9 on 0.46.4, before
+    // the fix: `git diff` said "Not a git repository", its wording for a
+    // repo refused as dubious ownership) all work; the knob stands in for
+    // the job user not owning the node's checkout.
     let script = "export GIT_TEST_ASSUME_DIFFERENT_OWNER=1; \
                   git -C \"$PWD\" rev-parse HEAD; \
+                  echo changed > a.txt; \
+                  git status --short; \
+                  git diff --stat | tail -1; \
+                  git log -1 --format=%s; \
                   env -u GIT_CONFIG_COUNT git -C \"$PWD\" rev-parse HEAD 2>&1 || echo REFUSED";
     let mut p = plan("g1", &["/bin/sh", "-c", script]);
     p.src = Some(Src { project_key: "pk-git".into(), remote_url: None, commit: second.clone(), dirty: None, slots: 1 });
@@ -748,6 +759,7 @@ async fn git_works_in_the_jobs_own_checkout_it_does_not_own() {
     let out = text(&logs_of(&fr, "g1"), LogStream::Out);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.first().copied(), Some(second.as_str()), "git reads the job's checkout: {out}");
+    assert_eq!(&lines[1..4], &[" M a.txt", " 1 file changed, 1 insertion(+), 1 deletion(-)", "two"], "status, diff and log work there: {out}");
     assert!(out.contains("dubious ownership") && out.trim_end().ends_with("REFUSED"), "without the node's entries git refuses it (the test knob works): {out}");
     let (state, exit, _) = job_done_exit(&fr, "g1");
     assert_eq!((state, exit), (JobState::Done, Some(0)));

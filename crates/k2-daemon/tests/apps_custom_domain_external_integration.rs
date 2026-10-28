@@ -27,6 +27,7 @@ use k2_daemon::apps::gateway::{self, LinkSpec};
 use serde_json::{json, Value};
 
 const HOST: &str = "shop2.example.com";
+const HOST3: &str = "shop3.example.com";
 
 fn parse(text: &str) -> (u16, String) {
     let status = text
@@ -225,37 +226,37 @@ async fn an_external_name_reaches_k2_app_origins_at_the_next_start() {
     require_python3();
     let env = setup(&[("K2_AIRGAP", "1")]);
     let d = k2_daemon::test_harness::start(OWNER).await;
-    let ws = seed_ws(&env, "shopws");
-    let r = post(d.port, "/cli/app/install", OWNER, json!({"app": "shop", "workspace": ws.id, "engine": "process"})).await;
+    let ws = seed_ws(&env, "originws");
+    let r = post(d.port, "/cli/app/install", OWNER, json!({"app": "shopnext", "workspace": ws.id, "engine": "process"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let front = r.json()["frontPort"].as_u64().expect("frontPort") as u16;
-    let v1 = app_folder(&env.path().join("v1"), "shop", "1.0.0", "v1");
-    let r = post(d.port, "/cli/app/deploy", OWNER, json!({"app": "shop", "folder": v1, "wait": 60})).await;
+    let v1 = app_folder(&env.path().join("v1"), "shopnext", "1.0.0", "v1");
+    let r = post(d.port, "/cli/app/deploy", OWNER, json!({"app": "shopnext", "folder": v1, "wait": 60})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["deployment"]["result"], "live", "{}", r.body);
     assert_eq!(env_val(front, "K2_APP_ORIGINS"), None, "local-only, no domain: no origin");
     attach_example_com();
 
     // Without --external: bound, not served, still no origin after a start.
-    let r = post(d.port, "/cli/app/domain/add", OWNER, json!({ "app": "shop", "label": HOST })).await;
+    let r = post(d.port, "/cli/app/domain/add", OWNER, json!({ "app": "shopnext", "label": HOST3 })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    restart(d.port, "shop").await;
+    restart(d.port, "shopnext").await;
     assert_eq!(env_val(front, "K2_APP_ORIGINS"), None, "a waiting name is no origin (CD-A4)");
 
     // --external: in K2_APP_ORIGINS from the next start.
-    let r = post(d.port, "/cli/app/domain/add", OWNER, json!({ "app": "shop", "label": HOST, "external": true })).await;
+    let r = post(d.port, "/cli/app/domain/add", OWNER, json!({ "app": "shopnext", "label": HOST3, "external": true })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(env_val(front, "K2_APP_ORIGINS"), None, "a running process keeps its start values");
-    restart(d.port, "shop").await;
+    restart(d.port, "shopnext").await;
     let origins = env_val(front, "K2_APP_ORIGINS").expect("K2_APP_ORIGINS is set");
-    assert!(origins.split(',').any(|o| o == format!("https://{HOST}")), "{origins}");
+    assert!(origins.split(',').any(|o| o == format!("https://{HOST3}")), "{origins}");
 
     // Off: gone again at the next start.
-    let r = post(d.port, "/cli/app/domain/external", OWNER, json!({ "app": "shop", "host": HOST, "external": false })).await;
+    let r = post(d.port, "/cli/app/domain/external", OWNER, json!({ "app": "shopnext", "host": HOST3, "external": false })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    restart(d.port, "shop").await;
+    restart(d.port, "shopnext").await;
     assert_eq!(env_val(front, "K2_APP_ORIGINS"), None, "handed back to K2's flow: no origin until live");
 
-    let r = post(d.port, "/cli/app/stop", OWNER, json!({"app": "shop"})).await;
+    let r = post(d.port, "/cli/app/stop", OWNER, json!({"app": "shopnext"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
 }

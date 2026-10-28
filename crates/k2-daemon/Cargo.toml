@@ -96,6 +96,7 @@ k2-vault = { path = "../k2-vault" }
 # MIT/Apache-2.0; redb is the copy k2-core already links).
 k2-mpc-base = { path = "../../vendor/k2-mpc-base/crates/base" }
 k2-mpc-markdown = { path = "../../vendor/k2-mpc-markdown/crates/markdown" }
+k2-mpc-text = { path = "../../vendor/k2-mpc-text/crates/text" }
 # URL hosts for the egress gate; the same `url` 2 k2-vault and reqwest use.
 url = "2"
 

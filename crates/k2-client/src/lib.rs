@@ -56,3 +56,5 @@ pub mod release_sums;
 pub mod wake;
 #[cfg(windows)]
 pub mod win_autostart;
+#[cfg(windows)]
+pub mod win_cli;

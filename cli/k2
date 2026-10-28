@@ -29,6 +29,13 @@ case "$(uname -s 2>/dev/null)" in
         done
         if [ -n "$_k2_py" ]; then
             eval "python3() { $_k2_py \"\$@\" | tr -d '\\r'; }"
+        else
+            # No real Python 3: say so where a command needs it, instead of
+            # the Store stub's "Python was not found".
+            python3() {
+                echo "K2's command-line tools need Python 3 on Windows. Install it from https://www.python.org/downloads/windows/ (tick \"Add python.exe to PATH\"), then open a new terminal." >&2
+                return 127
+            }
         fi
         unset _k2_c
         ;;

@@ -206,25 +206,7 @@ fn windows_cli_cmd_path() -> Result<PathBuf, String> {
 #[cfg(windows)]
 fn write_windows_cli_cmd(cmd_path: &Path, script_path: &Path) -> Result<(), String> {
     let script = script_path.display().to_string().replace('/', "\\");
-    let body = format!(
-        "@echo off\r\n\
-         setlocal\r\n\
-         set \"K2_SCRIPT={script}\"\r\n\
-         if exist \"%ProgramFiles%\\Git\\bin\\bash.exe\" (\r\n\
-           \"%ProgramFiles%\\Git\\bin\\bash.exe\" \"%K2_SCRIPT%\" %*\r\n\
-           exit /b %ERRORLEVEL%\r\n\
-         )\r\n\
-         if exist \"%ProgramFiles(x86)%\\Git\\bin\\bash.exe\" (\r\n\
-           \"%ProgramFiles(x86)%\\Git\\bin\\bash.exe\" \"%K2_SCRIPT%\" %*\r\n\
-           exit /b %ERRORLEVEL%\r\n\
-         )\r\n\
-         where bash >nul 2>&1 && (\r\n\
-           bash \"%K2_SCRIPT%\" %*\r\n\
-           exit /b %ERRORLEVEL%\r\n\
-         )\r\n\
-         echo K2 CLI needs Git for Windows (bash) on PATH. Install Git, then retry Settings → Install CLI. 1>&2\r\n\
-         exit /b 1\r\n"
-    );
+    let body = k2_client::win_cli::cmd_body(&script);
     if let Some(parent) = cmd_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }

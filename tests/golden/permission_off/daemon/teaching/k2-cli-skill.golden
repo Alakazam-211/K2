@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
 skill_version: 39
-skill_checksum: REBLESS-5ffe1a26482638e9
+skill_checksum: 2e6b92e33455b056
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat
 ---

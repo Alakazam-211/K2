@@ -239,6 +239,14 @@ printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "workspac
 run agent settings set computePreview true
 [ "$(last_err_line)" = "It can't be requested." ] && ok || bad "settings set: last stderr line is '$(last_err_line)'"
 
+# The mail family (its own Python transport) ends the same way: an agent
+# widening its own inbox access (M0) is the owner's, exit 3, line once.
+run agent mail access grant ops@brand.test "$SANDBOX/ws" --level send
+[ "$RC" = 3 ] && ok || bad "mail access grant: exit $RC, want 3 ($ERR)"
+[ "$(last_err_line)" = "It can't be requested." ] && ok || bad "mail access grant: last stderr line is '$(last_err_line)'"
+[ "$(printf '%s\n' "$ERR" | grep -c "It can't be requested.")" = 1 ] && ok || bad "mail access grant: the closing line must print once"
+grep -q '^POST /cli/mail/access/grant ' "$LOG" && ok || bad "mail access grant: never reached the stub: $(cat "$LOG")"
+
 # `k2 permission request` reaches the daemon and prints the ask.
 run agent permission request compute.use --why "Run the test suite on k2n2-m1"
 [ "$RC" = 0 ] && ok || bad "permission request: exit $RC ($ERR)"
@@ -272,6 +280,9 @@ run agent study permissions
 [ "$RC" = 2 ] && ok || bad "study permissions (off): exit $RC, want 2"
 run agent connections add billing
 printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "connections add (off): a closing line" || ok
+run agent mail access grant ops@brand.test "$SANDBOX/ws" --level send
+printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "mail access grant (off): a closing line" || ok
+[ "$RC" = 3 ] && ok || bad "mail access grant (off): exit $RC, want 3 (owner_only)"
 
 echo "permission_teach: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

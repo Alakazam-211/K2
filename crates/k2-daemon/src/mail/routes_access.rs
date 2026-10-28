@@ -10,9 +10,12 @@
 //!   clause (dual-auth: `token_or_scoped_hook_auth` + stamp). SQLite-only —
 //!   no engine dial.
 //! - `POST /cli/mail/access/grant|revoke|set-primary|set-level|set-manage` —
-//!   PRIMARY/owner MANAGEMENT surface (owner-or-admin-gated via
-//!   `is_owner_level_mutation`'s `/cli/mail/access/` prefix; also on
-//!   `is_agent_verb` DENY_PREFIXES so scoped agents cannot self-grant).
+//!   PRIMARY/owner MANAGEMENT surface: the owner token, Owner/Admin
+//!   logins, and an agent whose workspace has mail-manage on (C5b: the
+//!   dispatcher's extra gate refuses every other passport). Such an agent
+//!   manages OTHER workspaces' access but never widens its own: grant,
+//!   set-level, set-manage and set-primary naming its own workspace answer
+//!   403 `owner_only` (M0, vs-live W24; [`refuse_own_workspace`]).
 //!   These act BY ADDRESS across hosted + linked; the ops layer resolves
 //!   which provisioning row the address names, accepts 'send' on either
 //!   source (§17.5 — linked send is the SMTP opt-in), and never touches
@@ -49,6 +52,27 @@ fn access_error_response(err: AccessError) -> CliResponse {
 
 fn ok_json(v: serde_json::Value) -> CliResponse {
     CliResponse::ok_json(v.to_string())
+}
+
+/// M0 (prd-routines-reminders-and-agent-mail-v1 §8; vs-live W24): an agent
+/// never widens its OWN mail access. A passport whose workspace is
+/// `target_id` (the resolved grantee: by path, name or id) is refused on
+/// grant, set-level, set-manage and set-primary (taking an inbox over) with
+/// 403 `owner_only`; an IT agent (mail-manage on) still manages other
+/// workspaces' access, and a plain agent can't change access at all (the
+/// dispatcher's extra gate refuses it first; this keeps the handler safe
+/// on its own). The owner token and Owner/Admin logins carry no passport
+/// and are never refused here.
+fn refuse_own_workspace(target_id: &str, what: &str) -> Option<CliResponse> {
+    use crate::mail::agent_creds::{self, MailCaller};
+    match agent_creds::mail_caller() {
+        MailCaller::Owner => None,
+        MailCaller::ItAgent { workspace_uuid } | MailCaller::Agent { workspace_uuid } if workspace_uuid == target_id => {
+            Some(agent_creds::refuse_self_widening(&format!("{what} for this agent's own workspace")))
+        }
+        MailCaller::Agent { .. } => Some(agent_creds::refuse_needs_mail_manage("change who can use an inbox")),
+        MailCaller::ItAgent { .. } => None,
+    }
 }
 
 /// Resolve a workspace spec (name | path | UUID) to `project_id`.
@@ -182,6 +206,9 @@ pub fn handle_grant(body: &[u8]) -> CliResponse {
         Ok(id) => id,
         Err(resp) => return resp,
     };
+    if let Some(refused) = refuse_own_workspace(&grantee_id, "granting inbox access") {
+        return refused;
+    }
     match access::grant_access(&b.address, &grantee_id, &b.level) {
         Ok((address, source)) => ok_json(serde_json::json!({
             "ok": true,
@@ -264,6 +291,9 @@ pub fn handle_set_primary(body: &[u8]) -> CliResponse {
         Ok(id) => id,
         Err(resp) => return resp,
     };
+    if let Some(refused) = refuse_own_workspace(&new_id, "making an inbox's primary") {
+        return refused;
+    }
     match access::set_primary(&b.address, &new_id) {
         Ok((address, source)) => ok_json(serde_json::json!({
             "ok": true,
@@ -308,6 +338,9 @@ pub fn handle_set_level(body: &[u8]) -> CliResponse {
         Ok(id) => id,
         Err(resp) => return resp,
     };
+    if let Some(refused) = refuse_own_workspace(&project_id, "setting an inbox's access level") {
+        return refused;
+    }
     match access::set_level(&b.address, &project_id, &b.level) {
         Ok((address, source, is_primary)) => ok_json(serde_json::json!({
             "ok": true,
@@ -353,6 +386,9 @@ pub fn handle_set_manage(body: &[u8]) -> CliResponse {
         Ok(id) => id,
         Err(resp) => return resp,
     };
+    if let Some(refused) = refuse_own_workspace(&project_id, "setting who manages an inbox") {
+        return refused;
+    }
     match access::set_manage(&b.address, &project_id, b.can_manage, b.can_delete) {
         Ok((address, source, is_primary)) => ok_json(serde_json::json!({
             "ok": true,
@@ -418,6 +454,95 @@ mod tests {
         let _ = conn.execute("DELETE FROM mail_inbox_grants WHERE project_id = ?1", rusqlite::params![project_id]);
         let _ = conn.execute("DELETE FROM mail_addresses WHERE owner_project_id = ?1", rusqlite::params![project_id]);
         let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![project_id]);
+    }
+
+    /// A workspace with mail-manage on (an "IT agent").
+    fn insert_mail_manager(name: &str, path: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, mail_manage_enabled) VALUES (?1, ?2, ?3, 1)",
+            rusqlite::params![id, name, path],
+        )
+        .expect("insert mail-manage project row");
+        id
+    }
+
+    fn own_grants(project_id: &str) -> i64 {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT COUNT(*) FROM mail_inbox_grants WHERE project_id = ?1", rusqlite::params![project_id], |r| r.get(0))
+            .expect("count grants")
+    }
+
+    fn primary_of(address: &str) -> String {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT owner_project_id FROM mail_addresses WHERE address = ?1", rusqlite::params![address], |r| r.get(0))
+            .expect("primary")
+    }
+
+    /// M0 (prd-routines-reminders-and-agent-mail-v1 §8, vs-live W24): an
+    /// agent with mail-manage on can manage other workspaces' access, but
+    /// never widen its OWN: grant, set-level, set-manage and set-primary
+    /// (taking an inbox over) naming its own workspace (by path or
+    /// id) are the owner's. To another workspace stays allowed, and the
+    /// owner token (an Admin login is the same caller here: no passport)
+    /// may do all four.
+    #[test]
+    fn an_agent_never_widens_its_own_mail_access_m0() {
+        let (oname, opath) = unique("m0own");
+        let owner_id = insert_project(&oname, &opath);
+        let (iname, ipath) = unique("m0it");
+        let it_id = insert_mail_manager(&iname, &ipath);
+        let (gname, gpath) = unique("m0oth");
+        let other_id = insert_project(&gname, &gpath);
+        let addr = format!("ops-{}@acc.example", &owner_id[..8]);
+        seed_hosted(&owner_id, &addr);
+        let it = crate::session_token::HookPrincipal { workspace_uuid: it_id.clone(), agent_address: "agent".to_string() };
+        let as_it = |f: &dyn Fn() -> CliResponse| crate::caller_workspace::with_request_principal(Some(it.clone()), f);
+        let b = |v: serde_json::Value| v.to_string().into_bytes();
+
+        for spec in [ipath.as_str(), it_id.as_str()] {
+            let tries: [(&str, CliResponse); 4] = [
+                ("grant", as_it(&|| handle_grant(&b(serde_json::json!({"address": addr, "project": spec, "level": "send"}))))),
+                ("set-level", as_it(&|| handle_set_level(&b(serde_json::json!({"address": addr, "project": spec, "level": "send"}))))),
+                (
+                    "set-manage",
+                    as_it(&|| handle_set_manage(&b(serde_json::json!({"address": addr, "project": spec, "canManage": true, "canDelete": true})))),
+                ),
+                ("set-primary", as_it(&|| handle_set_primary(&b(serde_json::json!({"address": addr, "project": spec}))))),
+            ];
+            for (verb, resp) in tries {
+                assert_eq!(resp.status, "403 Forbidden", "{verb} to itself ({spec}): {}", resp.body);
+                assert_eq!(body_json(&resp)["error"]["code"], "owner_only", "{verb}: {}", resp.body);
+                assert!(
+                    body_json(&resp)["error"]["hint"].as_str().expect("hint").contains("can't widen its own access"),
+                    "{verb}: {}",
+                    resp.body
+                );
+            }
+        }
+        assert_eq!(own_grants(&it_id), 0, "no grant landed for the agent's own workspace");
+        assert_eq!(primary_of(&addr), owner_id, "the inbox wasn't taken over");
+
+        // Another workspace: today's behaviour (an IT agent manages others' access).
+        let resp = as_it(&|| handle_grant(&b(serde_json::json!({"address": addr, "project": gpath, "level": "read"}))));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let resp = as_it(&|| handle_set_level(&b(serde_json::json!({"address": addr, "project": gpath, "level": "draft"}))));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+
+        // The owner token (and an Admin login: no passport) may widen any workspace.
+        let resp = handle_grant(&b(serde_json::json!({"address": addr, "project": ipath, "level": "read"})));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let resp = handle_set_primary(&b(serde_json::json!({"address": addr, "project": ipath})));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(primary_of(&addr), it_id);
+
+        cleanup(&owner_id);
+        cleanup(&it_id);
+        cleanup(&other_id);
     }
 
     #[test]

@@ -55044,7 +55044,7 @@ ws_path = os.environ.get("M_WS_PATH", "")
 def dumps(obj):
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
-def die(err, exit_code=None):
+def die(err, exit_code=None, permission=None):
     # Errors are ALWAYS JSON on stderr, regardless of --json.
     if isinstance(err, str):
         err = {"code": "error", "hint": err}
@@ -55061,6 +55061,17 @@ def die(err, exit_code=None):
         if err.get(k):
             out[k] = err[k]
     sys.stderr.write(dumps({"error": out}) + "\n")
+    # Permission cards (vs-live C4): a refusal sent to an agent while its
+    # switches are on carries `permission`; it ends with the one closing
+    # line the other families print ("Ask with: …" / "It can't be requested.").
+    if isinstance(permission, dict):
+        cmd = permission.get("command")
+        if isinstance(cmd, str) and cmd:
+            sys.stderr.write("Ask with: " + cmd + "\n")
+        elif permission.get("requestable") is False:
+            if isinstance(permission.get("hint"), str) and permission["hint"]:
+                sys.stderr.write(permission["hint"] + "\n")
+            sys.stderr.write("It can't be requested.\n")
     if exit_code is None:
         # PRD §11 exit contract: 3 = gated-off / owner-only · 2 = bad
         # usage (timeouts also exit 2, via explicit die(..., 2) at the
@@ -55161,7 +55172,7 @@ def call(method, route, params=None, body=None, timeout=30, timeout_hint=None):
     if timeout_hint and (d.get("error") or {}).get("code") == "timeout":
         die({"code": "timeout", "hint": timeout_hint(d["error"].get("hint", ""))})
     if d.get("error"):
-        die(d["error"])
+        die(d["error"], permission=d.get("permission"))
     if not d.get("ok"):
         die({"code": "error", "hint": "unexpected daemon response: %s" % dumps(d)[:200]})
     return d

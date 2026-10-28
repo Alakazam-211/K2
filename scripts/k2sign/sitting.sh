@@ -98,6 +98,7 @@ check) check ;;
     step "Build K2 Release Approve into ~/Applications" bash "$HERE/approve/build.sh"
     step "Enrol the approver: TOUCH the sensor" "$APP/Contents/MacOS/K2 Release Approve" --enrol
     step "Install the approver's public key (ADMIN PASSWORD)" sudo "$LIBEXEC/k2sign-admin" set-approver "$HOME/.k2-release-approve/approver.pem"
+    step "Forget the cached admin password (sudo keeps it ~5 min for this terminal)" sudo -k
     echo; echo "Sitting 1 done. Next: sitting 2 (the keys), with agents paused."
     ;;
 2)
@@ -118,6 +119,7 @@ check) check ;;
     echo "    # 3. chmod 600 ~/.tauri/k2so-updater.key   (delete ~/.tauri after the first green k2sign release)"
     echo "    # 4. ASC keys: keep one AuthKey_*.p8 in one 0700 folder, chmod 600, point .env there"
     echo "    # 1. on z3mbp (not here): confirm both entries are in the password manager, then rm -P ~/k2-root-helper-keys-SAVE-THEN-DELETE.txt"
+    step "Forget the cached admin password before un-pausing anything" sudo -k
     echo; echo "Then un-pause the agents."
     ;;
 3)
@@ -131,6 +133,7 @@ check) check ;;
     step "S2-6: one Touch ID opens a session (throwaway version 0.0.1): TOUCH the sensor" /bin/bash -c "source '$TREE/scripts/lib/sign-updater.sh'; source '$TREE/scripts/lib/sign-approve.sh'; k2sa_open_session 0.0.1 \$(git -C '$TREE' rev-parse HEAD) K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64"
     step "Status shows the session, its assets and its 12 h expiry" sudo -n -u _k2sign "$LIBEXEC/k2sign" status 0.0.1
     expect_fail "a real file is still refused (the S3 checks aren't built yet)" /bin/sh -c "echo x | sudo -n -u _k2sign $LIBEXEC/k2sign sign u2 K2.app.tar.gz 0.0.1 raw"
+    step "Forget the cached admin password" sudo -k
     note "Done. The first real release asks for its own Touch ID at Step 0.46 (once S3 has landed)."
     ;;
 *) sed -n '2,17p' "$0"; exit 2 ;;

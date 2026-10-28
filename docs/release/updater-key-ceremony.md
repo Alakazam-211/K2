@@ -7,6 +7,80 @@ Terminal, not SSH). It takes about 15 minutes, and it must be done before
 0.46.6 can be released: `release.sh` refuses to start while the new key is
 missing.
 
+> **Rosson chose the signing user (2026-10-28):** U2 is born inside the
+> `_k2sign` macOS user and never sits in `~/.k2-updater` or the keychain.
+> Follow **"The signing user"** right below. The keychain steps further down
+> (sections 1–2, "the stopgap") stay only as the rollback path
+> (`K2_SIGNER=keychain`) until two releases have signed green through
+> `_k2sign`.
+
+## The signing user (prd-signing-user-v1; the default backend)
+
+**What it is.** A hidden macOS role user `_k2sign` on z3mbpZ (own group,
+UID/GID 400–499, shell `/usr/bin/false`, no password, home `/var/k2sign`
+0700) holds U1 and U2 and their passwords (U2's is 32 random bytes nobody has
+seen). Rosson's user can run exactly one thing as it, with no password:
+
+    sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign <verb>
+
+File bytes go in on stdin and the signature comes out on stdout. The signer
+runs only root-owned tools by absolute path (a pinned minisign 0.12,
+`/usr/bin/openssl`, the Command Line Tools python3; never `/opt/homebrew`,
+and never Xcode.app's python, because `/Applications` is admin-writable). It
+signs only inside a **session** that Rosson opened with **one Touch ID** at
+`release.sh` Step 0.46 (before any build), bound to the version, the base
+commit and the asset list, for 12 hours. Every signature is in
+`/var/k2sign/audit/<version>/signatures.tsv` (`~/k2-release-audit` gets a
+marked copy).
+
+**Sittings** (all in `scripts/k2sign/sitting.sh`; each prints its exact
+commands and changes nothing unless you add `--run`):
+
+| Sitting | When | Time | You type | You tap |
+|---|---|---|---|---|
+| `check` | any time | 1 min | nothing | nothing |
+| `0` (S0 spike) | before sitting 1 | ~10 min | nothing (Developer ID build may prompt for the login keychain) | Touch ID ×2 |
+| `1` | after the lane is reviewed | ~20 min | admin password ×2 | Touch ID ×1 (enrol) |
+| `2` (agents paused) | after sitting 1 | ~30 min | admin password ×2, U3's new password ×2, U1's password ×1, `saved` | nothing |
+| `3` | after K2 lands the public keys | ~10 min | admin password ×1 | Touch ID ×1 |
+
+**Order against landing.** The lane (this code) stays held until the
+public keys exist, because it changes what installs trust and `release.sh`
+refuses to start without them:
+1. Sittings `check`, `0`, `1` and `2` run from the **lane's commit** (not
+   main). Sitting 2 prints the U2 and U3 public lines.
+2. K2 runs `bash scripts/updater-key-ceremony.sh pubkeys <U2> <U3>` on the
+   lane, runs the gates, and lands lane + pubkeys **together** on main.
+3. Sitting `3` from that main commit: re-pin, preflight, the S2-6 proof.
+4. Release: one Touch ID at Step 0.46. **Not before the S3 per-file checks
+   land**: until then the signer refuses every real update file (it signs
+   only its preflight self-test), by design.
+
+**Rollback.**
+- Soft: root sets `approval = off` in `/usr/local/etc/k2sign/policy` and
+  runs `sudo /usr/local/libexec/k2sign/k2sign-admin repin`: no Touch ID
+  session; every other check still runs. Re-running `install.sh` restores
+  the reviewed policy.
+- Break-glass approval when Rosson can't touch z3mbpZ:
+  `sudo /usr/local/libexec/k2sign/k2sign-admin approve <version> <base> <asset>…`
+  (admin password; logged `APPROVED-BY-ADMIN`).
+- Full: `K2_SIGNER=keychain` after the keys are exported back to
+  `~/.k2-updater` (that export verb, `export-to-keychain`, is slice S4, not
+  built yet; until then the keys can only be copied out by root by hand).
+
+**S0 spike results** (the PRD's acceptance needs a written result for each):
+
+| | What | Result |
+|---|---|---|
+| (a) | CryptoKit SE key, `.biometryCurrentSet`, no keychain entitlement, ad hoc **and** Developer ID | **open:** needs z3mbpZ + Touch ID (`sitting.sh 0`) |
+| (b) | `open -W -n -a` shows the Touch ID sheet from iTerm and from SSH | **open:** `sitting.sh 0` |
+| (c) | LibreSSL 3.3.6 `openssl dgst -sha256 -verify` accepts CryptoKit's DER ECDSA | **pass** (2026-10-28, z3mbp, LibreSSL 3.3.6): a CryptoKit P-256 signature (software key: the SE key's DER and PEM formats are the same) verifies, a one-byte change is refused; the test suite then uses openssl-made P-256 signatures in the same format |
+| (d) | `gh attestation verify --bundle` with a read-only token in a scratch HOME | **open:** an S3 question (the signer's GitHub evidence); not needed by S1/S2 |
+| (e) | a 300 MB stdin stream through `sudo -n -u` | **open:** needs sudo in a VM (the Tart `k2-newuser-base` VM), never on z3mbpZ itself |
+
+A failure in (a) or (b) switches the approval to the passphrase fallback
+(prd §11 Q1) before release use.
+
 ## What changes
 
 | Key | What it is | Where it lives | Who trusts it |
@@ -225,13 +299,19 @@ SS1 threat notes.
   GitHub never lists two assets with one name, so they prove little.
 - **A poisoned build on the self-hosted runner:** NOT stopped. Next step:
   two independent builds (above), after 0.46.6.
-- **Same-user read on z3mbpZ:** NOT stopped, accepted for 0.46.6 pending
-  Rosson's OK. Any process running as Rosson's macOS user (a build script, a
-  package, an agent) can read `~/.k2-updater/*.key` and ask the unlocked
-  login keychain for the passwords, exactly like the root-helper key today.
-  The release run itself never puts the keys in an environment or on argv.
-  Real fix: SS2b, a separate `k2sign` macOS user that holds the keys and
-  only signs (prd-signing-user-v1; not on this branch).
+- **Same-user read on z3mbpZ:** stopped by the signing user (above): no
+  process running as Rosson's user can read U1/U2 or their passwords (only
+  root can), and it can't use the signer as an oracle outside an approved
+  session (one Touch ID per release, bound to version, base commit and
+  assets; one sha256 per asset per version). Still open until slice S3: the
+  signer doesn't yet check each file's origin itself, which is why it
+  refuses every real file for now. Under the `K2_SIGNER=keychain` rollback,
+  the old exposure is back (any same-user process can read
+  `~/.k2-updater/*.key` and ask the login keychain for the passwords).
+  Accepted and written down (prd §8): root (an admin password typed where a
+  same-user process sees it), a poisoned Mac build (Developer ID and ASC
+  keys stay in Rosson's user), a misleading approval prompt (limited by one
+  session per version, monotonic versions and the per-file checks).
 - **A stolen U1:** can't make 0.46.6+ installs accept anything (they trust
   only U2/U3). It still works on installs that never updated past 0.46.6,
   until the bridge ends (SS6).

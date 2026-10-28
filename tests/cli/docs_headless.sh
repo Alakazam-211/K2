@@ -756,6 +756,22 @@ cli agent "$B" doc claim --release shared.md; want_rc 1 "release with no claim"
 cli agent "$B" doc activity shared.md; want_rc 0 "activity"; has "$OUT" "claim" "activity lists claims"
 ok "claims: take, release (exit 1 with none), activity; people are never bounced"
 
+echo "== undo provenance (kit v0.9.0) =="
+cli agent "$B" doc cat shared.md; want_rc 0 "read before the append"
+CLI_IN=$'restored line\n'
+cli agent "$B" doc append shared.md; want_rc 0 "append"
+cli agent "$B" doc undo shared.md; want_rc 0 "undo"
+cli agent "$B" doc redo shared.md; want_rc 0 "redo"
+cli agent "$B" doc blame --json shared.md; want_rc 0 "blame --json"
+jok "$OUT" 'any(l["text"] == "restored line" and l["author"].startswith("agent:") and l["restoredBy"] and l["restoredIn"] for l in j["lines"])' "redo keeps the original author; blame names who restored it and in which change"
+cli agent "$B" doc blame shared.md; has "$OUT" "restored by" "blame shows restored by"
+cli agent "$B" doc blame --porcelain shared.md; has "$OUT" "restored-by" "porcelain has restored-by"
+agent POST /cli/docs/edit '{"path":"shared.md","edits":[{"after":0,"text":"x"}],"restores":"person:owner"}'
+want 400 "a provenance field"; code_is provenance_is_kit_only "a provenance field"
+agent POST /cli/docs/tool '{"path":"shared.md","argv":["undo"],"provenance":{"root":"1:1"}}'
+want 400 "a nested provenance field"; code_is provenance_is_kit_only "a nested provenance field"
+ok "provenance is the kit's: a request naming it is refused"
+
 mk "$A/notes/diagram.bin" 7 512
 cli agent "$B" doc status -w "$A" notes/diagram.bin; want_rc 3 "unshared tier-0"; has "$ERR" "doc_not_shared" "unshared tier-0"
 owner POST /cli/docs/share "$(json workspace "$A" path notes/diagram.bin with "$B")"; want 200 "share a tier-0 file"

@@ -66,6 +66,8 @@ export const ZEN_STORE_VERBS: ReadonlySet<string> = new Set([
   'tickets.create',
   'tickets.comment',
   'tickets.resolve',
+  // 0.46.6 (catalog v31, ticket attachments): a file on a ticket message.
+  'tickets.attachment',
   'activity.snapshot',
   // 0.46.5 (prd-garden-board-needs-v1 GB13): a file's details and the list.
   'blobs.info',

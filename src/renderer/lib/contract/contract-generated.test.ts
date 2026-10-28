@@ -253,6 +253,8 @@ describe('TUWA5: the generated tables', () => {
       'tickets.create': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
       'tickets.comment': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
       'tickets.resolve': { cap: 'tickets:post', reach: 'portable', kind: 'call' },
+      // Catalog v31 (0.46.6): a file on a ticket message.
+      'tickets.attachment': { cap: 'tickets:read', reach: 'portable', kind: 'call' },
       'activity.snapshot': { cap: 'activity:read', reach: 'portable', kind: 'call' },
     })
     for (const v of ['projects.list', 'projects.messages', 'projects.post']) {

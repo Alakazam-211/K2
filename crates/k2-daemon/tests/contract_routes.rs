@@ -158,7 +158,9 @@ fn exposure_counts_are_pinned() {
     // Catalog v30 (0.46.5, Garden blobs, prd-garden-board-needs-v1 slice 1):
     // + blobs.put/get and downloads.begin/save (widget), blobs.info/list
     // (garden-local).
-    assert_eq!((widget, app, garden_local), (42, 123, 39), "per-exposure verb counts (widget, app, garden-local)");
+    // Catalog v31 (0.46.6, ticket attachments): + tickets.attachment (app,
+    // garden-local).
+    assert_eq!((widget, app, garden_local), (42, 124, 40), "per-exposure verb counts (widget, app, garden-local)");
     let both: Vec<&str> = c
         .verbs
         .iter()

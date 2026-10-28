@@ -1912,8 +1912,15 @@ mod tests {
         assert_eq!(count, 1, "the relation must actually be created");
     }
 
+    // The did-you-mean tests below rank EVERY project name, so each runs on
+    // its own DB (`db::scoped_for_test`): on the shared test DB they saw
+    // other tests' projects, e.g. `sim::manager_tests` leaves one named
+    // "a", which is contained in "…unrelated…" (soak 2026-10-27, shuffled
+    // seeds 2 and 6).
+
     #[test]
     fn add_unknown_target_errors_with_did_you_mean() {
+        let _db = crate::db::scoped_for_test();
         let (src_path, _src_id) = make_project("DymSrc");
         let (_p, _id) = make_project("Zephyr-Unique-Ws");
 
@@ -1927,6 +1934,7 @@ mod tests {
 
     #[test]
     fn suggest_prefers_near_miss_over_loose_containment() {
+        let _db = crate::db::scoped_for_test();
         let _ = make_project("Zq-Host");
         let _ = make_project("zq-host-smoke-ws");
         let db = crate::db::shared();
@@ -1942,6 +1950,10 @@ mod tests {
 
     #[test]
     fn suggest_returns_none_when_nothing_is_close() {
+        let _db = crate::db::scoped_for_test();
+        // Real-looking names, none within reach of the token.
+        let _ = make_project("Billing Desk");
+        let _ = make_project("zq-host-smoke-ws");
         let db = crate::db::shared();
         let conn = db.lock();
         assert_eq!(

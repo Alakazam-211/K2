@@ -6,8 +6,12 @@
 //! ```text
 //! GET  /cli/zen/downloads[?garden=<id>]          → {ok, gardens: {<id>: [widgets]}}
 //!                                                   (with garden: {ok, garden, widgets})
-//! POST /cli/zen/downloads/allow  {garden, widget} → {ok, garden, widget, added}
+//! POST /cli/zen/downloads/allow  {garden, widget, migrated?} → {ok, garden, widget, added}
 //! POST /cli/zen/downloads/forget {garden, widget} → {ok, garden, widget, removed}
+//!
+//! `allow` and `forget` are audited (`zen.download.allow|forget`);
+//! `migrated: true` marks the renderer's one-time carry-over of an answer
+//! an older app kept in its own storage (`k2.zen.downloadsAllowed`).
 //! POST /cli/zen/downloads/spend {garden, widget, bytes}
 //!                                                 → {ok, allowed, reason?}
 //! ```
@@ -47,6 +51,18 @@ pub fn is_route(path: &str) -> bool {
 struct WidgetBody {
     garden: String,
     widget: String,
+    /// `allow` only: the renderer's one-time carry-over of an "Always" this
+    /// computer's app kept in its own storage before 0.46.6 (audited as such).
+    #[serde(default)]
+    migrated: bool,
+}
+
+/// Every change to the list is the person's, and audited
+/// (`auth-audit.jsonl`): `zen.download.allow` / `zen.download.forget`.
+fn audit(event: &str, detail: &str) {
+    k2_core::auth_audit::record(
+        &k2_core::auth_audit::AuditEvent::new(event, "owner", detail, "local", "-", "cli").with_actor("owner-token"),
+    );
 }
 
 #[derive(Deserialize)]
@@ -120,12 +136,21 @@ pub fn run(zen_dir: &Path, path: &str, owner: bool, caller: &Caller, params: &Ha
             let (g, w) = (b.garden.trim(), b.widget.trim());
             if path.ends_with("/allow") {
                 match downloads::allow(zen_dir, g, w) {
-                    Ok(added) => resp("200 OK", json!({ "ok": true, "garden": g, "widget": w, "added": added })),
+                    Ok(added) => {
+                        let how = if b.migrated { " migrated=app-storage" } else { "" };
+                        audit("zen.download.allow", &format!("{g}/{w} added={added}{how}"));
+                        resp("200 OK", json!({ "ok": true, "garden": g, "widget": w, "added": added }))
+                    }
                     Err(e) => zen_err(e),
                 }
+            } else if b.migrated {
+                refuse("400 Bad Request", "bad_request", "migrated is for allow only")
             } else {
                 match downloads::forget(zen_dir, g, w) {
-                    Ok(removed) => resp("200 OK", json!({ "ok": true, "garden": g, "widget": w, "removed": removed })),
+                    Ok(removed) => {
+                        audit("zen.download.forget", &format!("{g}/{w} removed={removed}"));
+                        resp("200 OK", json!({ "ok": true, "garden": g, "widget": w, "removed": removed }))
+                    }
                     Err(e) => zen_err(e),
                 }
             }
@@ -145,8 +170,50 @@ mod tests {
         (r.status.to_string(), serde_json::from_str(&r.body).expect("json"))
     }
 
+    fn audited(event: &str) -> Vec<J> {
+        k2_core::auth_audit::tail(1000).expect("audit tail").into_iter().filter(|e| e["event"] == event).collect()
+    }
+
+    /// Every change to the list is audited, the one-time carry-over of an
+    /// older app's stored answer too (marked as such); a refused caller and
+    /// a read leave no record.
+    #[test]
+    fn allow_and_forget_are_audited_and_a_migrated_allow_says_so() {
+        let home = crate::test_support::TempHome::new();
+        let d = home.path().join(".k2/zen");
+        std::fs::create_dir_all(&d).expect("mkdir");
+        let (s, v) = call(&d, "/cli/zen/downloads/allow", true, &Caller::Owner, &[], json!({"garden": "g-1", "widget": "board", "migrated": true}));
+        assert_eq!((s.as_str(), v["added"].as_bool()), ("200 OK", Some(true)), "{v}");
+        let (s, _) = call(&d, "/cli/zen/downloads/allow", true, &Caller::Owner, &[], json!({"garden": "g-1", "widget": "notes"}));
+        assert_eq!(s, "200 OK");
+        let allows = audited("zen.download.allow");
+        assert_eq!(allows.len(), 2, "{allows:?}");
+        assert_eq!(allows[0]["outcome"], "g-1/board added=true migrated=app-storage", "{allows:?}");
+        assert_eq!(allows[1]["outcome"], "g-1/notes added=true", "{allows:?}");
+        assert_eq!(allows[0]["actor"], "owner-token", "{allows:?}");
+
+        let (s, v) = call(&d, "/cli/zen/downloads/forget", true, &Caller::Owner, &[], json!({"garden": "g-1", "widget": "board"}));
+        assert_eq!((s.as_str(), v["removed"].as_bool()), ("200 OK", Some(true)), "{v}");
+        let forgets = audited("zen.download.forget");
+        assert_eq!(forgets.len(), 1, "{forgets:?}");
+        assert_eq!(forgets[0]["outcome"], "g-1/board removed=true");
+        // `migrated` is allow's alone.
+        let (s, _) = call(&d, "/cli/zen/downloads/forget", true, &Caller::Owner, &[], json!({"garden": "g-1", "widget": "notes", "migrated": true}));
+        assert_eq!(s, "400 Bad Request");
+
+        // A refused agent and a read write nothing.
+        let agent = Caller::Agent(AgentCaller { project_id: "w-1".into(), map_key: None, args: vec![], sandboxed: false });
+        let (s, _) = call(&d, "/cli/zen/downloads/allow", false, &agent, &[], json!({"garden": "g-1", "widget": "x"}));
+        assert_eq!(s, "403 Forbidden");
+        let _ = call(&d, "/cli/zen/downloads", true, &Caller::Owner, &[("garden", "g-1")], J::Null);
+        assert_eq!(audited("zen.download.allow").len(), 2);
+        assert_eq!(audited("zen.download.forget").len(), 1);
+    }
+
     #[test]
     fn one_answer_for_every_client_owner_only_and_revocable() {
+        // The routes audit into ~/.k2: a temp HOME, never the runner's own.
+        let _home = crate::test_support::TempHome::new();
         let d = std::env::temp_dir().join(format!("k2-zen-downloads-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos()));
         std::fs::create_dir_all(&d).expect("mkdir");
         let w = json!({"garden": "g-1", "widget": "board"});

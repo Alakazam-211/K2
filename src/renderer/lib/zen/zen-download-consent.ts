@@ -6,7 +6,10 @@
 // (`GET/POST /cli/zen/downloads*`, `~/.k2/zen/downloads.json`), so every
 // client (each window, the web client) honours the same answer, clearing a
 // browser's storage never skips the card, and revoking it brings the card
-// back everywhere. Only the owner token reads or changes that list.
+// back everywhere. Only the owner token reads or changes that list, and
+// the daemon audits every change. An "Always" an older app kept in this
+// browser's localStorage is carried to the daemon once, before the first
+// read of the list in an app load (`migrateLegacyZenDownloadConsent`).
 // "Save once" is this one save: nothing is kept.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -41,9 +44,80 @@ export async function fetchZenDownloadWidgets(gardenId: string): Promise<readonl
   return r.widgets as string[]
 }
 
-/** `POST /cli/zen/downloads/allow` (the owner token: only the person's app). */
-export async function allowZenDownloadWidget(gardenId: string, widget: string): Promise<void> {
-  await daemonCliPost(zenLocalScope(), 'zen/downloads/allow', { garden: gardenId, widget })
+/** `POST /cli/zen/downloads/allow` (the owner token: only the person's app;
+ *  the daemon audits it). `migrated`: the one-time carry-over below. */
+export async function allowZenDownloadWidget(gardenId: string, widget: string, migrated = false): Promise<void> {
+  await daemonCliPost(zenLocalScope(), 'zen/downloads/allow', migrated ? { garden: gardenId, widget, migrated: true } : { garden: gardenId, widget })
+}
+
+/** Where an app before the daemon kept the list kept "Always": this
+ *  browser's localStorage, a JSON array of `<gardenId>/<widget>`. */
+export const LEGACY_DOWNLOAD_CONSENT_KEY = 'k2.zen.downloadsAllowed'
+
+/** The bit of `Storage` the carry-over uses (injectable for tests). */
+export type LegacyConsentStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
+
+function legacyStorage(): LegacyConsentStorage | null {
+  try {
+    return globalThis.localStorage ?? null
+  } catch {
+    // A sandboxed or storage-blocked page has nothing to carry over.
+    return null
+  }
+}
+
+/** One-time carry-over of an "Always" this app kept in its own storage
+ *  into the daemon's list: each `<garden>/<widget>` is allowed there
+ *  (`migrated: true`, audited), and the key is removed once all of them
+ *  landed. An entry the daemon refused stays for the next try; one that
+ *  isn't `<garden>/<widget>` is dropped. Answers how many were carried. */
+export async function migrateLegacyZenDownloadConsent(
+  allow: (gardenId: string, widget: string) => Promise<void>,
+  storage: LegacyConsentStorage | null = legacyStorage(),
+): Promise<number> {
+  const raw = storage?.getItem(LEGACY_DOWNLOAD_CONSENT_KEY)
+  if (!storage || raw == null) return 0
+  let entries: unknown
+  try {
+    entries = JSON.parse(raw)
+  } catch {
+    entries = []
+  }
+  const pairs = (Array.isArray(entries) ? entries : [])
+    .filter((e): e is string => typeof e === 'string' && e.indexOf('/') > 0)
+    .map((e) => [e.slice(0, e.indexOf('/')), e.slice(e.indexOf('/') + 1)] as const)
+    .filter(([, w]) => w.length > 0 && !w.includes('/'))
+  const left: string[] = []
+  let carried = 0
+  for (const [g, w] of pairs) {
+    try {
+      await allow(g, w)
+      carried += 1
+    } catch (err) {
+      console.warn('[zen] k2.download: carrying an older Always answer to the daemon failed:', err)
+      left.push(`${g}/${w}`)
+    }
+  }
+  if (left.length > 0) storage.setItem(LEGACY_DOWNLOAD_CONSENT_KEY, JSON.stringify(left))
+  else storage.removeItem(LEGACY_DOWNLOAD_CONSENT_KEY)
+  return carried
+}
+
+let legacyCarry: Promise<number> | null = null
+
+/** [`migrateLegacyZenDownloadConsent`] once per app load, before the first
+ *  read of the daemon's list. */
+function carryLegacyOnce(): Promise<number> {
+  legacyCarry ??= migrateLegacyZenDownloadConsent((g, w) => allowZenDownloadWidget(g, w, true)).catch((err) => {
+    console.warn('[zen] k2.download: carrying older Always answers failed:', err)
+    return 0
+  })
+  return legacyCarry
+}
+
+/** Tests only. */
+export function __resetZenDownloadCarryForTests(): void {
+  legacyCarry = null
 }
 
 /** `POST /cli/zen/downloads/spend`: the daemon's hourly budget for this
@@ -61,8 +135,11 @@ export async function spendZenDownload(gardenId: string, widget: string, bytes: 
 }
 
 export const daemonZenDownloadConsent: ZenDownloadConsentStore = {
-  widgets: fetchZenDownloadWidgets,
-  allow: allowZenDownloadWidget,
+  widgets: async (gardenId) => {
+    await carryLegacyOnce()
+    return fetchZenDownloadWidgets(gardenId)
+  },
+  allow: (gardenId, widget) => allowZenDownloadWidget(gardenId, widget),
 }
 
 /** Ask (or not) and answer whether to go on. */

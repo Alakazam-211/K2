@@ -845,12 +845,18 @@ fn probe_relay(relay: &RelayEndpoint) -> bool {
         .any(|a| TcpStream::connect_timeout(a, PRIMARY_PROBE_TIMEOUT).is_ok())
 }
 
-/// The on-disk relay list differs from the one the supervisor runs.
+/// The list the tunnel should dial now ([`super::relay_list::effective`]
+/// over `tunnel.json`), read without the vault token. `None` when the
+/// file can't be read (the running list is kept).
+fn disk_effective_relays() -> Option<Vec<RelayEndpoint>> {
+    config::load_without_token()
+        .ok()
+        .map(|c| super::relay_list::effective(&c).relays)
+}
+
+/// The list the tunnel should dial differs from the one the supervisor runs.
 fn disk_relays_differ(selector: &RelaySelector) -> bool {
-    match config::load() {
-        Ok(c) => c.relay_list() != selector.relays(),
-        Err(_) => false,
-    }
+    disk_effective_relays().is_some_and(|l| l != selector.relays())
 }
 
 /// Reported status of the connector.
@@ -1181,7 +1187,18 @@ pub fn start(
     // for a legacy single-endpoint config that IS `server_addr`/`server_port`,
     // so the rendered TOML is byte-identical to the pre-failover path.
     let frpc = resolve_frpc(bin)?;
-    let rendered = render_frpc_toml_for_relay(&cfg, &cfg.relay_list()[0], resolved_local_port, e2e);
+    // 0.46.6: what to dial comes from ONE place (an old baked list is
+    // dialed as relay.k2.dev while that name resolves; nothing on disk
+    // changes).
+    let dial = super::relay_list::effective(&cfg);
+    if let Some(old) = &dial.replaced {
+        crate::log_debug!(
+            "[tunnel] dialing {} in place of the old built-in relay list ({}; tunnel.json unchanged)",
+            dial.relays[0],
+            old.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ")
+        );
+    }
+    let rendered = render_frpc_toml_for_relay(&cfg, &dial.relays[0], resolved_local_port, e2e);
 
     // Runtime stage H (AR3/K37): adopt the frpc the previous daemon left
     // running (hand-off, crash, `KillMode=process` restart) when it still
@@ -1253,7 +1270,7 @@ pub fn start(
     // The live-relay slot starts at the preferred relay (index 0 — what
     // was just rendered above); the supervise loop republishes it on every
     // rotation so status() always names the relay actually being dialed.
-    let current_relay = Arc::new(Mutex::new(cfg.relay_list()[0].clone()));
+    let current_relay = Arc::new(Mutex::new(dial.relays[0].clone()));
     let relay_primary = Arc::new(AtomicBool::new(true));
     let proxy = Arc::new(ProxyRegistration::new(&cfg));
     let health = Arc::new(FrpcHealth::new());
@@ -1268,14 +1285,15 @@ pub fn start(
             );
         }
     }
-    if cfg.relay_list().len() > 1 {
+    if dial.relays.len() > 1 {
         crate::log_debug!("[tunnel] relay failover rules: {}", failover_mode.as_str());
     }
     let failover = Arc::new(Mutex::new(
-        new_selector(cfg.relay_list(), failover_mode).failover_status(),
+        new_selector(dial.relays.clone(), failover_mode).failover_status(),
     ));
     spawn_supervised(
         frpc,
+        dial.relays,
         child.clone(),
         running.clone(),
         current_relay.clone(),
@@ -2124,7 +2142,7 @@ fn ensure_live_local_port_before_respawn(
 /// Spawn the frpc child once and start the supervisor thread that
 /// captures output and restarts on unexpected exit with backoff.
 ///
-/// **Multi-relay failover** (`cfg.relay_list().len() > 1`): the supervisor
+/// **Multi-relay failover** (2+ relays in the dial list): the supervisor
 /// classifies each child death by uptime — under [`HEALTHY_UPTIME`] counts
 /// as a relay failure, over it as a success — and feeds a [`RelaySelector`].
 /// When the selector rotates (3 consecutive failures → next relay,
@@ -2153,6 +2171,7 @@ fn ensure_live_local_port_before_respawn(
 /// the **live** E2E port (never a freshly-picked free port).
 fn spawn_supervised(
     frpc: PathBuf,
+    initial_relays: Vec<RelayEndpoint>,
     child_slot: Arc<Mutex<Option<FrpcProc>>>,
     running: Arc<AtomicBool>,
     current_relay: Arc<Mutex<RelayEndpoint>>,
@@ -2185,7 +2204,7 @@ fn spawn_supervised(
         None => render_and_spawn(
             &frpc,
             cfg,
-            &cfg.relay_list()[0],
+            &initial_relays[0],
             resolved_local_port.load(Ordering::SeqCst),
             e2e,
             watch.clone(),
@@ -2204,7 +2223,7 @@ fn spawn_supervised(
             let initial_backoff = Duration::from_millis(500);
             let max_backoff = Duration::from_secs(30);
             let mut backoff = initial_backoff;
-            let mut selector = new_selector(cfg_thread.relay_list(), failover_mode);
+            let mut selector = new_selector(initial_relays, failover_mode);
             let mut hints = HintSource::new(failover_mode);
             // Republish the selector's current relay into the shared slot
             // status() reads — called after every rotation decision so the
@@ -2221,7 +2240,7 @@ fn spawn_supervised(
             // never as a live restart. The relay in use stays in use when
             // the new list still has it.
             let adopt_disk_list = |sel: &mut RelaySelector, disk: &TunnelConfig| {
-                let list = disk.relay_list();
+                let list = super::relay_list::effective(disk).relays;
                 if list.as_slice() == sel.relays() {
                     return;
                 }
@@ -3383,6 +3402,55 @@ mod tests {
                 "single-relay status must report the configured endpoint"
             );
             let _ = stop("test teardown");
+        });
+    }
+
+    /// 0.46.6 (PRD test 12): a 0.46.5 `tunnel.json` (the old built-in IP,
+    /// or the old provisioner list) renders and dials `relay.k2.dev` once
+    /// that name resolved; status names it and the replaced list.
+    #[test]
+    fn a_legacy_tunnel_json_dials_the_relay_name() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            super::super::relay_list::set_name_ok_for_test(Some(vec![
+                "147.135.65.8".parse().expect("ip"),
+            ]));
+            for relays in [
+                vec![],
+                vec![
+                    RelayEndpoint { host: "178.156.232.105".to_string(), port: 7000 },
+                    RelayEndpoint { host: "40.160.53.25".to_string(), port: 7000 },
+                ],
+            ] {
+                config::save(&TunnelConfig {
+                    server_addr: "178.156.232.105".to_string(),
+                    relays: relays.clone(),
+                    token: "tok".to_string(),
+                    subdomain: "rosson".to_string(),
+                    e2e: false,
+                    ..Default::default()
+                })
+                .expect("seed a 0.46.5 tunnel.json");
+                let before = std::fs::read(config::config_path()).expect("read");
+                let dir = crate::test_env::unique_temp_path("fake-frpc-name");
+                let st = start(None, 57839, &FrpcBinary::Explicit(long_lived_frpc(&dir)))
+                    .expect("start");
+                let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
+                assert!(toml.contains("serverAddr = \"relay.k2.dev\""), "{relays:?}\n{toml}");
+                assert!(toml.contains("serverPort = 7000"), "{toml}");
+                assert_eq!(st.server_addr.as_deref(), Some("relay.k2.dev"));
+                assert_eq!(st.relay_primary, Some(true));
+                assert_eq!(st.failover, None, "one name: nothing to fail over to");
+                assert_eq!(st.relay_list.relays, vec!["relay.k2.dev:7000"]);
+                assert!(st.relay_list.replaced.as_ref().is_some_and(|r| r[0] == "178.156.232.105:7000"));
+                stop("test").expect("stop");
+                assert_eq!(
+                    std::fs::read(config::config_path()).expect("read"),
+                    before,
+                    "nothing is rewritten on disk"
+                );
+                let _ = std::fs::remove_dir_all(&dir);
+            }
         });
     }
 

@@ -49,6 +49,16 @@
 //! IP or hostname, port 1–65535, no duplicates; `refresh_s` clamped to
 //! [`MIN_REFRESH`]..=[`MAX_REFRESH`]. Anything else keeps the old list and
 //! logs once (the same error is not logged again until it changes).
+//!
+//! **What the tunnel dials (0.46.6)** — [`effective`] is the ONE place that
+//! decides the dial list; every dial, adopt, status and render site reads
+//! it, never [`TunnelConfig::relay_list`] directly (a ratchet test holds
+//! that). It is the stored list, except that a list made only of the
+//! relay IPs older builds baked in ([`config::LEGACY_RELAY_HOSTS`]) is
+//! dialed as [`config::DEFAULT_SERVER_HOST`] (`relay.k2.dev`) once that
+//! name has resolved on the refresher thread — and not when k2.dev served
+//! that very list in this process, nor under the `relay_default: legacy`
+//! switch. Nothing is rewritten on disk; status shows the replaced list.
 
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -403,6 +413,21 @@ struct RefreshState {
     /// active relay or `None` for unknown; k2.dev's `active_checked_at`).
     /// A failed fetch leaves it to age out ([`dns_hint`]).
     dns: Option<(std::time::Instant, Option<RelayEndpoint>, Option<u64>)>,
+    /// 0.46.6: the default relay name's lookups on the refresher thread.
+    name: NameState,
+}
+
+/// 0.46.6: what the refresher learned about [`config::DEFAULT_SERVER_HOST`].
+#[derive(Debug, Clone, Default)]
+struct NameState {
+    /// The name resolved at least once in this process. Sticky: a later
+    /// failed lookup never moves a running tunnel back onto the old IPs
+    /// (the same stability rule as `checked_list`).
+    ok: bool,
+    /// The answers of the last successful lookup.
+    addrs: Vec<IpAddr>,
+    /// The last lookup's error, cleared by a success.
+    last_error: Option<String>,
 }
 
 fn state() -> &'static Mutex<RefreshState> {
@@ -438,6 +463,10 @@ fn skip_reason(cfg: &TunnelConfig) -> Option<String> {
 /// Fetch, validate and (when changed) persist the relay list once. Uses
 /// the token the connector uses ([`config::load`] resolves the vault).
 /// Every failure keeps the old list.
+///
+/// 0.46.6: first, when the stored list is the old baked default, it looks
+/// up [`config::DEFAULT_SERVER_HOST`] ([`check_default_name`]) so
+/// [`effective`] knows whether that list may be dialed as the name.
 pub fn refresh_once() -> RefreshOutcome {
     let _g = refresh_lock().lock().unwrap_or_else(|p| p.into_inner());
     if crate::airgap::enabled() {
@@ -447,6 +476,7 @@ pub fn refresh_once() -> RefreshOutcome {
         Ok(c) => c,
         Err(e) => return RefreshOutcome::Skipped(format!("tunnel.json unreadable: {e}")),
     };
+    check_default_name(&cfg);
     if let Some(why) = skip_reason(&cfg) {
         return RefreshOutcome::Skipped(why);
     }
@@ -513,6 +543,197 @@ pub fn refresh_once() -> RefreshOutcome {
     }
 }
 
+// ── The dial list (0.46.6) ────────────────────────────────────────────
+
+/// How long one lookup of the default relay name may take (it runs on the
+/// refresher thread, never on the dial path).
+#[cfg(not(test))]
+const NAME_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// True when every entry of `list` is a relay IP older builds baked in
+/// ([`config::LEGACY_RELAY_HOSTS`]) on port 7000, in any order or subset:
+/// the old built-in default or the old provisioner default, never a
+/// person's choice. Empty is not legacy.
+pub fn is_legacy_list(list: &[RelayEndpoint]) -> bool {
+    !list.is_empty()
+        && list.iter().all(|r| {
+            r.port == config::DEFAULT_SERVER_PORT
+                && config::LEGACY_RELAY_HOSTS.contains(&r.host.as_str())
+        })
+}
+
+/// The list the tunnel dials ([`effective`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveRelays {
+    /// Ordered, index 0 = primary. Never empty.
+    pub relays: Vec<RelayEndpoint>,
+    /// Set when the stored list was the old baked default and is dialed as
+    /// [`config::DEFAULT_SERVER_HOST`] instead: the stored list.
+    pub replaced: Option<Vec<RelayEndpoint>>,
+}
+
+/// 0.46.6: the ONE function that decides what the tunnel dials. Memory
+/// only, never I/O (like [`dns_hint`]):
+///
+/// 1. `relay_default: legacy` (or `K2_RELAY_DEFAULT=legacy`) → the stored
+///    list, with the old IP for a config that names no relay (0.46.5).
+/// 2. k2.dev served exactly the stored list in this process → as stored.
+/// 3. The stored list is the old baked default ([`is_legacy_list`]) and
+///    the default name has resolved here → `[relay.k2.dev:7000]`, with
+///    `replaced` = the stored list. Nothing is written to `tunnel.json`.
+/// 4. Otherwise → as stored.
+pub fn effective(cfg: &TunnelConfig) -> EffectiveRelays {
+    let st = lock_state();
+    effective_with(cfg, &st)
+}
+
+fn effective_with(cfg: &TunnelConfig, st: &RefreshState) -> EffectiveRelays {
+    let stored = cfg.relay_list();
+    let as_stored = |relays: Vec<RelayEndpoint>| EffectiveRelays {
+        relays,
+        replaced: None,
+    };
+    if config::relay_default_mode(cfg) == config::RelayDefault::Legacy {
+        if cfg.relays.is_empty() && cfg.server_addr == config::DEFAULT_SERVER_HOST {
+            return as_stored(vec![RelayEndpoint {
+                host: config::LEGACY_DEFAULT_SERVER_HOST.to_string(),
+                port: cfg.server_port,
+            }]);
+        }
+        return as_stored(stored);
+    }
+    if st.checked_list.as_deref() == Some(stored.as_slice()) {
+        return as_stored(stored);
+    }
+    if st.name.ok && is_legacy_list(&stored) {
+        return EffectiveRelays {
+            relays: vec![RelayEndpoint {
+                host: config::DEFAULT_SERVER_HOST.to_string(),
+                port: config::DEFAULT_SERVER_PORT,
+            }],
+            replaced: Some(stored),
+        };
+    }
+    as_stored(stored)
+}
+
+/// One lookup of the default relay name (all answers, v4 and v6).
+#[cfg(not(test))]
+fn lookup_default_name() -> Result<Vec<IpAddr>, String> {
+    use std::net::ToSocketAddrs;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("k2-relay-name".to_string())
+        .spawn(move || {
+            let r = (config::DEFAULT_SERVER_HOST, config::DEFAULT_SERVER_PORT)
+                .to_socket_addrs()
+                .map(|a| a.map(|s| s.ip()).collect::<Vec<_>>())
+                .map_err(|e| e.to_string());
+            let _ = tx.send(r);
+        })
+        .map_err(|e| format!("spawn lookup: {e}"))?;
+    match rx.recv_timeout(NAME_LOOKUP_TIMEOUT) {
+        Ok(Ok(v)) if !v.is_empty() => Ok(v),
+        Ok(Ok(_)) => Err("no addresses".to_string()),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(format!(
+            "lookup took longer than {} s",
+            NAME_LOOKUP_TIMEOUT.as_secs()
+        )),
+    }
+}
+
+/// Unit tests never reach real DNS: the answer is planted with
+/// [`TestNameLookup`], and without one the lookup fails.
+#[cfg(test)]
+fn lookup_default_name() -> Result<Vec<IpAddr>, String> {
+    TEST_NAME_LOOKUP
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .unwrap_or_else(|| Err("no DNS in k2-core unit tests".to_string()))
+}
+
+#[cfg(test)]
+static TEST_NAME_LOOKUP: Mutex<Option<Result<Vec<IpAddr>, String>>> = Mutex::new(None);
+
+/// Plants the answer of the default-name lookup for one test; removed on
+/// drop. Hold it inside a `TempHome` (the env lock).
+#[cfg(test)]
+pub(crate) struct TestNameLookup;
+
+#[cfg(test)]
+impl TestNameLookup {
+    pub(crate) fn install(answer: Result<Vec<IpAddr>, String>) -> Self {
+        *TEST_NAME_LOOKUP.lock().unwrap_or_else(|p| p.into_inner()) = Some(answer);
+        TestNameLookup
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestNameLookup {
+    fn drop(&mut self) {
+        *TEST_NAME_LOOKUP.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+}
+
+/// Mark the default name as resolved (or not) as if the refresher had
+/// just looked it up (tests).
+#[cfg(test)]
+pub(crate) fn set_name_ok_for_test(addrs: Option<Vec<IpAddr>>) {
+    let mut st = lock_state();
+    match addrs {
+        Some(a) => {
+            st.name.ok = true;
+            st.name.addrs = a;
+            st.name.last_error = None;
+        }
+        None => st.name = NameState::default(),
+    }
+}
+
+/// D4: look up [`config::DEFAULT_SERVER_HOST`] when it matters — the
+/// stored list is the old baked default and the switch is not `legacy`.
+/// Runs on the refresher thread (boot, timer, switches, failover checks);
+/// [`effective`] only reads the stored flag.
+fn check_default_name(cfg: &TunnelConfig) {
+    if config::relay_default_mode(cfg) == config::RelayDefault::Legacy
+        || !is_legacy_list(&cfg.relay_list())
+    {
+        return;
+    }
+    let result = lookup_default_name();
+    let mut st = lock_state();
+    match result {
+        Ok(addrs) => {
+            if !st.name.ok {
+                crate::log_debug!(
+                    "[tunnel/relays] {} resolves ({}); the old built-in relay list is dialed as that name",
+                    config::DEFAULT_SERVER_HOST,
+                    addrs.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ")
+                );
+            }
+            st.name.ok = true;
+            st.name.addrs = addrs;
+            st.name.last_error = None;
+        }
+        Err(e) => {
+            if st.name.last_error.as_deref() != Some(e.as_str()) {
+                crate::log_debug!(
+                    "[tunnel/relays] could not resolve {} ({e}){}",
+                    config::DEFAULT_SERVER_HOST,
+                    if st.name.ok {
+                        "; it resolved earlier, so the tunnel keeps dialing it"
+                    } else {
+                        "; the stored relay list stays in use"
+                    }
+                );
+            }
+            st.name.last_error = Some(e);
+        }
+    }
+}
+
 // ── Status ────────────────────────────────────────────────────────────
 
 /// [`RelayListStatus::notice`] text after a 401 from k2.dev.
@@ -530,8 +751,19 @@ pub struct RelayListStatus {
     /// `fetched` (from k2.dev), `provisioned` (written by hand / the
     /// provisioner) or `default` (no list: the single `server_addr`).
     pub source: String,
-    /// The effective ordered list (`host:port`, index 0 = primary).
+    /// The effective ordered list (`host:port`, index 0 = primary): what
+    /// the tunnel dials ([`effective`]).
     pub relays: Vec<String>,
+    /// 0.46.6: the stored list, when it was the old built-in relay list
+    /// and is dialed as [`config::DEFAULT_SERVER_HOST`] instead (in memory
+    /// only; `tunnel.json` still holds it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<Vec<String>>,
+    /// 0.46.6: `"legacy"` when the `relay_default` switch restores the
+    /// 0.46.5 behaviour (tunnel.json `relay_default` or
+    /// `K2_RELAY_DEFAULT`). Absent for the default (`name`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_default: Option<String>,
     /// Unix seconds of the last successful fetch by this daemon process.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checked_at: Option<u64>,
@@ -593,11 +825,9 @@ pub(crate) fn set_dns_for_test(active: Option<RelayEndpoint>, age: Duration) {
     lock_state().dns = Some((at, active, None));
 }
 
-/// Build the status block for `cfg` (no I/O beyond the in-memory state).
-pub fn status_for(cfg: &TunnelConfig) -> RelayListStatus {
-    let st = lock_state().clone();
-    let effective = cfg.relay_list();
-    let source = if cfg.relays.is_empty() {
+/// Where the stored list came from (`fetched` / `provisioned` / `default`).
+fn source_with(cfg: &TunnelConfig, st: &RefreshState) -> &'static str {
+    if cfg.relays.is_empty() {
         SOURCE_DEFAULT
     } else if cfg.relays_fetched_at.is_some()
         || st.checked_list.as_deref() == Some(cfg.relays.as_slice())
@@ -605,10 +835,22 @@ pub fn status_for(cfg: &TunnelConfig) -> RelayListStatus {
         SOURCE_FETCHED
     } else {
         SOURCE_PROVISIONED
-    };
+    }
+}
+
+/// Build the status block for `cfg` (no I/O beyond the in-memory state).
+pub fn status_for(cfg: &TunnelConfig) -> RelayListStatus {
+    let st = lock_state().clone();
+    let effective = effective_with(cfg, &st);
+    let source = source_with(cfg, &st);
+    let legacy = config::relay_default_mode(cfg) == config::RelayDefault::Legacy;
     RelayListStatus {
         source: source.to_string(),
-        relays: effective.iter().map(|r| r.to_string()).collect(),
+        relays: effective.relays.iter().map(|r| r.to_string()).collect(),
+        replaced: effective
+            .replaced
+            .map(|l| l.iter().map(|r| r.to_string()).collect()),
+        relay_default: legacy.then(|| config::RelayDefault::Legacy.as_str().to_string()),
         checked_at: st.checked_at,
         changed_at: cfg.relays_fetched_at,
         last_error: st.last_error,
@@ -652,9 +894,21 @@ fn jittered(base: Duration, frac: f64) -> Duration {
     (base + Duration::from_millis(off)).saturating_sub(Duration::from_millis(span))
 }
 
-/// How long to wait after `outcome` before the next timed refresh.
+/// How long to wait after `outcome` before the next timed refresh. A
+/// failed lookup of the default relay name that never resolved here (an
+/// old baked list waiting to be dialed as the name) retries on the error
+/// interval too.
 pub fn next_wait(outcome: &RefreshOutcome) -> Duration {
-    let refresh = lock_state().refresh.unwrap_or(DEFAULT_REFRESH);
+    let (refresh, name_waiting) = {
+        let st = lock_state();
+        (
+            st.refresh.unwrap_or(DEFAULT_REFRESH),
+            !st.name.ok && st.name.last_error.is_some(),
+        )
+    };
+    if name_waiting {
+        return jittered(RETRY_AFTER_ERROR, 0.1);
+    }
     match outcome {
         RefreshOutcome::Failed(FetchError::Network(_))
         | RefreshOutcome::Failed(FetchError::Http(_))
@@ -1678,6 +1932,302 @@ mod tests {
             srv.no_request();
             drop(loop_);
         });
+    }
+
+    // ── 0.46.6: the default relay name and effective() ──
+
+    const OLD: &str = "178.156.232.105";
+    const OLD2: &str = "40.160.53.25";
+
+    fn name_ok() {
+        set_name_ok_for_test(Some(vec!["147.135.65.8".parse().expect("ip")]));
+    }
+
+    fn name_list() -> Vec<RelayEndpoint> {
+        vec![ep("relay.k2.dev", 7000)]
+    }
+
+    fn cfg_with(server_addr: &str, relays: Vec<RelayEndpoint>) -> TunnelConfig {
+        TunnelConfig {
+            server_addr: server_addr.to_string(),
+            relays,
+            token: "k2c_good".to_string(),
+            e2e: false,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn legacy_lists_are_only_the_old_baked_ips_on_7000() {
+        assert!(is_legacy_list(&[ep(OLD, 7000)]));
+        assert!(is_legacy_list(&[ep(OLD2, 7000), ep(OLD, 7000)]), "any order");
+        assert!(is_legacy_list(&[ep(OLD2, 7000)]), "any subset");
+        assert!(!is_legacy_list(&[]), "empty is not legacy");
+        assert!(!is_legacy_list(&[ep(OLD, 7001)]), "another port is a choice");
+        assert!(!is_legacy_list(&[ep(OLD, 7000), ep("147.135.65.8", 7000)]));
+        assert!(!is_legacy_list(&[ep("relay.k2.dev", 7000)]));
+    }
+
+    /// PRD test 2 (class C): a legacy single IP, nothing served, the name
+    /// resolved → the name, with the stored IP as `replaced`.
+    #[test]
+    fn a_legacy_single_ip_is_dialed_as_the_name_once_it_resolves() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            let cfg = cfg_with(OLD, vec![]);
+            assert_eq!(
+                effective(&cfg),
+                EffectiveRelays { relays: vec![ep(OLD, 7000)], replaced: None },
+                "before the name resolved the stored IP stays"
+            );
+            name_ok();
+            assert_eq!(
+                effective(&cfg),
+                EffectiveRelays { relays: name_list(), replaced: Some(vec![ep(OLD, 7000)]) }
+            );
+            let st = status_for(&cfg);
+            assert_eq!(st.relays, vec!["relay.k2.dev:7000"]);
+            assert_eq!(st.replaced, Some(vec!["178.156.232.105:7000".to_string()]));
+            assert_eq!(st.source, SOURCE_DEFAULT, "the source stays what it was");
+            assert_eq!(st.relay_default, None);
+        });
+    }
+
+    /// PRD test 3 (class B): the provisioner's old list, reversed.
+    #[test]
+    fn the_old_provisioner_list_in_any_order_is_dialed_as_the_name() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            name_ok();
+            let cfg = cfg_with(OLD2, vec![ep(OLD2, 7000), ep(OLD, 7000)]);
+            let eff = effective(&cfg);
+            assert_eq!(eff.relays, name_list());
+            assert_eq!(eff.replaced, Some(vec![ep(OLD2, 7000), ep(OLD, 7000)]));
+            assert_eq!(status_for(&cfg).source, SOURCE_PROVISIONED);
+        });
+    }
+
+    /// PRD test 4: the same legacy list SERVED by k2.dev in this process
+    /// stays as stored (k2.dev's word beats the built-in rule).
+    #[test]
+    fn a_legacy_list_k2dev_served_here_stays_as_stored() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            config::save(&cfg_with(OLD, both())).expect("seed the provisioned old list");
+            let _n = TestNameLookup::install(Ok(vec!["147.135.65.8".parse().expect("ip")]));
+            let srv = FakeServer::start(200, GOOD);
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            assert_eq!(refresh_once(), RefreshOutcome::Unchanged);
+            srv.next_request();
+            let cfg = config::load().expect("load");
+            assert_eq!(
+                effective(&cfg),
+                EffectiveRelays { relays: both(), replaced: None },
+                "k2.dev served this exact list here"
+            );
+            assert_eq!(status_for(&cfg).replaced, None);
+        });
+    }
+
+    /// PRD test 5 (class E): a list with any other host, or another port,
+    /// is a person's choice and is never touched.
+    #[test]
+    fn a_list_with_any_other_host_or_port_is_never_replaced() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            name_ok();
+            let mixed = cfg_with(OLD, vec![ep(OLD, 7000), ep("203.0.113.9", 7000)]);
+            assert_eq!(effective(&mixed).relays, mixed.relay_list());
+            assert_eq!(effective(&mixed).replaced, None);
+            let port = cfg_with(OLD, vec![ep(OLD, 7001)]);
+            assert_eq!(effective(&port).relays, vec![ep(OLD, 7001)]);
+            let solo_port = TunnelConfig { server_port: 7001, ..cfg_with(OLD, vec![]) };
+            assert_eq!(effective(&solo_port).relays, vec![ep(OLD, 7001)]);
+            let own = cfg_with("relay.example.net", vec![]);
+            assert_eq!(effective(&own).relays, vec![ep("relay.example.net", 7000)]);
+        });
+    }
+
+    /// PRD test 6 + D4: the lookup runs on the refresher (here a 401 box,
+    /// class B/C), and only a successful one turns the rule on. A later
+    /// failed lookup does not turn it off again.
+    #[test]
+    fn the_name_lookup_decides_and_a_later_failure_keeps_the_name() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            config::save(&cfg_with(OLD, vec![])).expect("seed a 0.46.5 tunnel.json");
+            let srv = FakeServer::start(401, r#"{"code":"tunnel_only"}"#);
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            {
+                let _n = TestNameLookup::install(Err("NXDOMAIN".to_string()));
+                assert_eq!(refresh_once(), RefreshOutcome::Failed(FetchError::Unauthorized));
+                srv.next_request();
+                let cfg = config::load().expect("load");
+                assert_eq!(effective(&cfg).relays, vec![ep(OLD, 7000)], "unresolved → as stored");
+                let w = next_wait(&RefreshOutcome::Failed(FetchError::Unauthorized));
+                assert!(
+                    w <= RETRY_AFTER_ERROR.mul_f64(1.1),
+                    "an unresolved name retries on the error interval, got {w:?}"
+                );
+            }
+            {
+                let _n = TestNameLookup::install(Ok(vec!["147.135.65.8".parse().expect("ip")]));
+                refresh_once();
+                srv.next_request();
+                let cfg = config::load().expect("load");
+                assert_eq!(effective(&cfg).relays, name_list());
+            }
+            {
+                let _n = TestNameLookup::install(Err("SERVFAIL".to_string()));
+                refresh_once();
+                srv.next_request();
+                let cfg = config::load().expect("load");
+                assert_eq!(effective(&cfg).relays, name_list(), "sticky within the process");
+            }
+        });
+    }
+
+    /// The lookup only runs when it matters: never for a list that is not
+    /// the old default, never under the legacy switch.
+    #[test]
+    fn the_name_is_not_looked_up_for_other_lists_or_under_legacy() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            let _u = crate::test_env::EnvVar::remove(RELAY_LIST_URL_ENV);
+            let _n = TestNameLookup::install(Ok(vec!["147.135.65.8".parse().expect("ip")]));
+            config::save(&cfg_with("203.0.113.9", vec![])).expect("seed a custom relay");
+            assert!(matches!(refresh_once(), RefreshOutcome::Skipped(_)), "no URL in unit tests");
+            assert!(!lock_state().name.ok, "a custom list never triggers the lookup");
+            assert_eq!(lock_state().name.last_error, None);
+            config::save(&TunnelConfig {
+                relay_default: Some("legacy".to_string()),
+                ..cfg_with(OLD, vec![])
+            })
+            .expect("seed legacy switch");
+            refresh_once();
+            assert!(!lock_state().name.ok, "the legacy switch never looks the name up");
+        });
+    }
+
+    /// PRD test 7: `relay_default: legacy` / `K2_RELAY_DEFAULT=legacy`
+    /// restore 0.46.5: the old IP is the default and nothing is replaced.
+    /// An unknown value is `name` and the file still loads.
+    #[test]
+    fn the_legacy_switch_restores_the_old_default_exactly() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            name_ok();
+            // The file switch: a legacy list stays, the bare default dials the old IP.
+            let legacy_file = TunnelConfig {
+                relay_default: Some("legacy".to_string()),
+                ..cfg_with(OLD, vec![])
+            };
+            assert_eq!(effective(&legacy_file).relays, vec![ep(OLD, 7000)]);
+            assert_eq!(effective(&legacy_file).replaced, None);
+            let fresh_legacy = TunnelConfig {
+                relay_default: Some("legacy".to_string()),
+                ..TunnelConfig::default()
+            };
+            assert_eq!(fresh_legacy.server_addr, "relay.k2.dev", "the serde default can't see the field");
+            assert_eq!(effective(&fresh_legacy).relays, vec![ep(OLD, 7000)], "…so effective maps it");
+            assert_eq!(status_for(&legacy_file).relay_default.as_deref(), Some("legacy"));
+            // The env switch wins over the file and changes the default itself.
+            {
+                let _v = crate::test_env::EnvVar::set(config::RELAY_DEFAULT_ENV, "legacy");
+                assert_eq!(TunnelConfig::default().server_addr, OLD);
+                let parsed: TunnelConfig = serde_json::from_str(r#"{"token":"t"}"#).expect("de");
+                assert_eq!(parsed.server_addr, OLD);
+                assert_eq!(effective(&cfg_with(OLD, vec![])).relays, vec![ep(OLD, 7000)]);
+                let file_says_name = TunnelConfig {
+                    relay_default: Some("name".to_string()),
+                    ..cfg_with(OLD, vec![])
+                };
+                assert_eq!(effective(&file_says_name).relays, vec![ep(OLD, 7000)], "env wins");
+            }
+            {
+                let _v = crate::test_env::EnvVar::set(config::RELAY_DEFAULT_ENV, "name");
+                assert_eq!(effective(&legacy_file).relays, name_list(), "env wins both ways");
+            }
+            // Unknown: the default (name), and the file still parses.
+            let odd: TunnelConfig =
+                serde_json::from_str(r#"{"token":"t","server_addr":"178.156.232.105","relay_default":"???"}"#)
+                    .expect("an unknown switch value never breaks tunnel.json");
+            assert_eq!(config::relay_default_mode(&odd), config::RelayDefault::Name);
+            assert_eq!(effective(&odd).relays, name_list());
+            // Absent stays absent on disk.
+            let json = serde_json::to_string(&TunnelConfig::default()).expect("ser");
+            assert!(!json.contains("relay_default"), "{json}");
+        });
+    }
+
+    /// PRD test 8 (D5): reading status and a refresh that served nothing
+    /// never rewrite `tunnel.json`.
+    #[test]
+    fn the_replacement_never_touches_tunnel_json() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            config::save(&cfg_with(OLD, vec![])).expect("seed");
+            let before = std::fs::read(config::config_path()).expect("read");
+            let m0 = mtime();
+            let _n = TestNameLookup::install(Ok(vec!["147.135.65.8".parse().expect("ip")]));
+            let srv = FakeServer::start(401, r#"{"code":"tunnel_only"}"#);
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            std::thread::sleep(Duration::from_millis(1100));
+            assert_eq!(refresh_once(), RefreshOutcome::Failed(FetchError::Unauthorized));
+            srv.next_request();
+            let st = status_for(&config::load().expect("load"));
+            assert_eq!(st.relays, vec!["relay.k2.dev:7000"]);
+            let _ = super::super::connector::status();
+            assert_eq!(std::fs::read(config::config_path()).expect("read"), before);
+            assert_eq!(mtime(), m0);
+        });
+    }
+
+    /// PRD test 9 (RD-A4): every dial, adopt, status and render site reads
+    /// `effective()`. `.relay_list()` outside `config.rs`, `relay_list.rs`
+    /// and test code would let two sites compare different lists (and the
+    /// supervisor reconnect forever).
+    #[test]
+    fn ratchet_relay_list_is_read_only_through_effective() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read src dir") {
+                let p = entry.expect("dir entry").path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        walk(&root.join("src"), &mut files);
+        walk(&root.join("../k2-daemon/src"), &mut files);
+        assert!(files.len() > 50, "the walk must see the sources ({})", files.len());
+        let mut offenders = Vec::new();
+        for f in files {
+            let name = f.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+            if f.ends_with("tunnel/config.rs") || f.ends_with("tunnel/relay_list.rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&f).expect("read source");
+            // Code before the file's unit-test module.
+            let code = src.split("\n#[cfg(test)]\nmod tests").next().unwrap_or_default();
+            for (i, line) in code.lines().enumerate() {
+                let t = line.trim_start();
+                if t.starts_with("//") {
+                    continue;
+                }
+                if t.contains(".relay_list()") {
+                    offenders.push(format!("{name}:{}: {t}", i + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "read the dial list through relay_list::effective(), not TunnelConfig::relay_list():\n{}",
+            offenders.join("\n")
+        );
     }
 
     #[test]

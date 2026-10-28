@@ -30597,7 +30597,13 @@ if isinstance(rl, dict):
     import datetime
     relays = ", ".join(rl.get("relays") or []) or "(none)"
     src = rl.get("source") or "?"
+    # 0.46.6: an old built-in relay list is dialed as relay.k2.dev (in
+    # memory; tunnel.json keeps the old addresses). Older daemons omit it.
+    if rl.get("replaced"):
+        src += "; replaces the old built-in " + ", ".join(rl["replaced"])
     print(f"  Relays:     {relays} [{src}]")
+    if rl.get("relay_default") == "legacy":
+        print("  Relay default: legacy (0.46.5 behaviour, the old built-in IP; set by tunnel.json relay_default or K2_RELAY_DEFAULT)")
     if rl.get("checked_at"):
         ts = datetime.datetime.fromtimestamp(rl["checked_at"]).strftime("%Y-%m-%d %H:%M")
         print(f"  Relay list: checked with k2.dev {ts}")

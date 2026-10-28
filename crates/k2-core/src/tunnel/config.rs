@@ -10,7 +10,7 @@
 //! The on-disk shape is intentionally small and stable:
 //! ```json
 //! {
-//!   "server_addr": "178.156.232.105",
+//!   "server_addr": "relay.k2.dev",
 //!   "server_port": 7000,
 //!   "token": "<k2so-bearer>",
 //!   "subdomain": "rosson",
@@ -35,10 +35,25 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Default frps control-plane address (the deployed Hetzner box). Host
-/// only — the port is carried separately so the renderer can emit the
-/// two fields frp's TOML schema expects.
-pub const DEFAULT_SERVER_HOST: &str = "178.156.232.105";
+/// Default frps relay (0.46.6): a DNS name K2 Web keeps pointed at the
+/// current primary relay, flipped together with `*.k2.dev`. Host only —
+/// the port is carried separately so the renderer can emit the two fields
+/// frp's TOML schema expects. Before 0.46.6 this was relay k2e-01's IP
+/// ([`LEGACY_DEFAULT_SERVER_HOST`]), which every saved `tunnel.json` still
+/// carries; [`super::relay_list::effective`] replaces such a list in memory.
+pub const DEFAULT_SERVER_HOST: &str = "relay.k2.dev";
+
+/// The built-in default before 0.46.6 (relay k2e-01). Dialed only when the
+/// `relay_default` switch says `legacy` ([`relay_default_mode`]). Remove
+/// with the switch, in the first release after k2e-01 is retired.
+pub const LEGACY_DEFAULT_SERVER_HOST: &str = "178.156.232.105";
+
+/// Relay addresses older K2 builds baked in (the built-in default and the
+/// provisioner's default list). A stored list made only of these hosts, on
+/// port 7000, is "the old default", not a person's choice: 0.46.6 dials
+/// [`DEFAULT_SERVER_HOST`] instead while that name resolves. Stays as a
+/// migration table until no supported version can have written it.
+pub const LEGACY_RELAY_HOSTS: &[&str] = &["178.156.232.105", "40.160.53.25"];
 
 /// Default frps `bindPort` (frpc dial-in). Matches `infra/frps.toml`.
 pub const DEFAULT_SERVER_PORT: u16 = 7000;
@@ -192,6 +207,17 @@ pub struct TunnelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failover: Option<String>,
 
+    /// 0.46.6: what the built-in relay default is (see [`RelayDefault`] and
+    /// [`relay_default_mode`]). Absent = `"name"`: the default relay is
+    /// [`DEFAULT_SERVER_HOST`] and a stored list of only the old baked IPs
+    /// is dialed as that name. `"legacy"` restores 0.46.5 exactly (the old
+    /// IP, no replacement). A loose string like `failover`: an unknown
+    /// value never makes `tunnel.json` unreadable. The env var
+    /// `K2_RELAY_DEFAULT` overrides it. Removed with the legacy value in
+    /// the first release after relay k2e-01 is retired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_default: Option<String>,
+
     /// 0.45.7: set by [`load`] when the token lives in the K2 vault and
     /// the vault could NOT be read (locked, unavailable, a transient
     /// keychain error). `token` is then empty, but that empty means
@@ -276,8 +302,15 @@ fn is_true(b: &bool) -> bool {
     *b
 }
 
-fn default_server_host() -> String {
-    DEFAULT_SERVER_HOST.to_string()
+/// The built-in relay host for a config that names none: the default name,
+/// or the old IP when `K2_RELAY_DEFAULT=legacy` (the serde default can't
+/// see the file's own `relay_default`; [`super::relay_list::effective`]
+/// maps the name back to the old IP for that case).
+pub fn default_server_host() -> String {
+    match env_relay_default() {
+        Some(RelayDefault::Legacy) => LEGACY_DEFAULT_SERVER_HOST.to_string(),
+        _ => DEFAULT_SERVER_HOST.to_string(),
+    }
 }
 
 fn default_server_port() -> u16 {
@@ -303,10 +336,65 @@ impl Default for TunnelConfig {
             enabled: default_enabled(),
             relays_fetched_at: None,
             failover: None,
+            relay_default: None,
             token_home: None,
             token_read_error: None,
         }
     }
+}
+
+/// Env var overriding `tunnel.json` `relay_default` (`name` | `legacy`).
+pub const RELAY_DEFAULT_ENV: &str = "K2_RELAY_DEFAULT";
+
+/// 0.46.6: which built-in relay default this daemon uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RelayDefault {
+    /// [`DEFAULT_SERVER_HOST`]; a stored list of only the old baked IPs is
+    /// dialed as that name while it resolves (the default).
+    #[default]
+    Name,
+    /// 0.46.5 exactly: the old IP is the default and nothing is replaced.
+    Legacy,
+}
+
+impl RelayDefault {
+    /// Lenient parse of the `tunnel.json` value / the env var. `None` =
+    /// not recognised.
+    pub fn parse(raw: &str) -> Option<RelayDefault> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "name" | "default" | "new" => Some(RelayDefault::Name),
+            "legacy" | "old" | "0.46.5" => Some(RelayDefault::Legacy),
+            _ => None,
+        }
+    }
+
+    /// Wire / status name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RelayDefault::Name => "name",
+            RelayDefault::Legacy => "legacy",
+        }
+    }
+}
+
+fn env_relay_default() -> Option<RelayDefault> {
+    std::env::var(RELAY_DEFAULT_ENV)
+        .ok()
+        .and_then(|raw| RelayDefault::parse(&raw))
+}
+
+/// 0.46.6: the relay default in force. Precedence like [`failover_mode`]:
+/// a recognised [`RELAY_DEFAULT_ENV`] wins, then a recognised
+/// `tunnel.json` `relay_default`, else [`RelayDefault::Name`]. Unknown
+/// values are ignored, never fatal.
+pub fn relay_default_mode(cfg: &TunnelConfig) -> RelayDefault {
+    if let Some(m) = env_relay_default() {
+        return m;
+    }
+    cfg.relay_default
+        .as_deref()
+        .and_then(RelayDefault::parse)
+        .unwrap_or_default()
 }
 
 /// Env var overriding `tunnel.json` `failover` (`legacy` | `dns`).
@@ -615,6 +703,15 @@ fn note_vault_read(err: Option<&str>) {
     }
 }
 
+/// 0.46.6: the config as it sits in `tunnel.json`, WITHOUT resolving the
+/// token from the K2 vault (so it never touches the keychain). For readers
+/// that only need hosts, ports and switches: the mail PTR guard and the
+/// tunnel's live relay-list check. A missing file is the default config.
+/// `token` is whatever the file holds (empty when the vault has it).
+pub fn load_without_token() -> Result<TunnelConfig, String> {
+    load_file()
+}
+
 fn load_file() -> Result<TunnelConfig, String> {
     let file = config_path();
     if !file.exists() {
@@ -725,10 +822,19 @@ mod tests {
     use crate::tunnel::test_support::with_temp_home;
 
     #[test]
-    fn defaults_point_at_deployed_box() {
+    fn defaults_point_at_the_relay_name() {
+        let _g = crate::test_env::lock();
+        let _e = crate::test_env::EnvVar::remove(RELAY_DEFAULT_ENV);
         let cfg = TunnelConfig::default();
-        assert_eq!(cfg.server_addr, "178.156.232.105");
+        assert_eq!(cfg.server_addr, "relay.k2.dev");
+        assert!(
+            super::super::relay_list::valid_host(&cfg.server_addr),
+            "the default must pass the relay-list host check"
+        );
         assert_eq!(cfg.server_port, 7000);
+        let parsed: TunnelConfig =
+            serde_json::from_str(r#"{"token":"t"}"#).expect("a file without server_addr");
+        assert_eq!(parsed.server_addr, "relay.k2.dev", "the serde default is the name too");
         assert!(cfg.token.is_empty());
         assert!(cfg.local_port.is_none());
         assert!(!cfg.auto_start, "auto_start must default off");
@@ -789,6 +895,7 @@ mod tests {
                 enabled: true,
                 relays_fetched_at: Some(1_792_060_000),
                 failover: Some("legacy".to_string()),
+                relay_default: Some("legacy".to_string()),
                 token_home: None,
                 token_read_error: None,
             };
@@ -994,7 +1101,10 @@ mod tests {
     }
 
     #[test]
-    fn default_config_relay_list_is_the_deployed_box() {
+    fn default_config_relay_list_is_the_relay_name() {
+        let _g = crate::test_env::lock();
+        let _e = crate::test_env::EnvVar::remove(RELAY_DEFAULT_ENV);
+        assert_eq!(DEFAULT_SERVER_HOST, "relay.k2.dev");
         assert_eq!(
             TunnelConfig::default().relay_list(),
             vec![RelayEndpoint {

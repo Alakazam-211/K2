@@ -326,9 +326,9 @@ pub fn tunnel_status() -> TunnelStatus {
 pub fn render_config(local_port: u16) -> Result<String, String> {
     let cfg = config::load()?;
     let e2e = config::e2e_enabled(&cfg);
-    // Dial the preferred relay (index 0), exactly as `start_tunnel` does —
-    // for a legacy single-endpoint config this IS server_addr/server_port.
-    let relays = cfg.relay_list();
+    // Dial the preferred relay (index 0) of the SAME list `start_tunnel`
+    // dials (0.46.6: an old baked list is dialed as relay.k2.dev).
+    let relays = relay_list::effective(&cfg).relays;
     Ok(render::render_frpc_toml_for_relay(&cfg, &relays[0], local_port, e2e))
 }
 
@@ -342,6 +342,31 @@ mod tests {
             host: host.to_string(),
             port,
         }
+    }
+
+    /// 0.46.6 (PRD test 12, dry run): `render_config` dials the same list
+    /// as `start` — a legacy single-IP `tunnel.json` renders the name once
+    /// it resolves, and the file is left as it was.
+    #[test]
+    fn render_config_dials_the_name_for_an_old_baked_endpoint() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                server_addr: "178.156.232.105".to_string(),
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed a 0.46.5 tunnel.json");
+            let before = std::fs::read(config::config_path()).expect("read");
+            let toml = render_config(4242).expect("render");
+            assert!(toml.contains("serverAddr = \"178.156.232.105\""), "name not resolved yet\n{toml}");
+            relay_list::set_name_ok_for_test(Some(vec!["147.135.65.8".parse().expect("ip")]));
+            let toml = render_config(4242).expect("render");
+            assert!(toml.contains("serverAddr = \"relay.k2.dev\""), "{toml}");
+            assert!(toml.contains("serverPort = 7000"), "{toml}");
+            assert_eq!(std::fs::read(config::config_path()).expect("read"), before);
+        });
     }
 
     #[test]
@@ -515,10 +540,15 @@ pub(crate) mod test_support {
 
         // Ensure a clean connector singleton for this test.
         let _ = super::connector::stop("test teardown");
+        // 0.46.6: the relay-list refresh state (served list, default-name
+        // lookups) is a process global that decides what the tunnel dials;
+        // no test may inherit another's.
+        super::relay_list::reset_state_for_test();
 
         f();
 
         // Best-effort connector teardown.
         let _ = super::connector::stop("test teardown");
+        super::relay_list::reset_state_for_test();
     }
 }

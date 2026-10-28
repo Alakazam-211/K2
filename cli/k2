@@ -45739,12 +45739,12 @@ UNDO, REDO AND REVERT
   yours. Text put back by an undo or redo keeps its original author: blame
   shows who wrote it and who restored it, and later undos and reverts treat it
   as the original author's. If someone else has since changed the same lines,
-  the undo applies what it cleanly can and reports the rest as a conflict; it
-  never overwrites their change. Nothing is lost: undone text stays in history
-  and can be restored. This holds across restarts.
-  In k2 doc: an undo, redo or revert that conflicts applies nothing and exits 1
-  (it lists the conflicts); --partial applies the clean parts and reports the
-  rest (exit 1). They aren't checked against your last read.
+  a plain undo applies nothing and reports the conflict; with --partial it
+  applies the parts it cleanly can and reports the rest. It never overwrites
+  their change. Nothing is lost: undone text stays in history and can be
+  restored. This holds across restarts.
+  Conflicts exit 1 (the error lists them). Undo, redo and revert aren't checked
+  against your last read.
   k2 doc blame --json: restoredBy / restoredIn on each line; --porcelain: the
   restored-by / restored-in lines.
 
@@ -83770,13 +83770,14 @@ names the version yourself.
   yours. Text put back by an undo or redo keeps its original author: blame
   shows who wrote it and who restored it, and later undos and reverts treat it
   as the original author's. If someone else has since changed the same lines,
-  the undo applies what it cleanly can and reports the rest as a conflict; it
-  never overwrites their change. Nothing is lost: undone text stays in history
-  and can be restored. This holds across restarts.
-  In k2 doc: an undo, redo or revert that conflicts applies nothing and exits 1
-  (it lists the conflicts); --partial applies the clean parts and reports the
-  rest (exit 1). They aren't checked against your last read. --drop removes
-  your top step without applying it; --for <person> undoes what you did for them.
+  a plain undo applies nothing and reports the conflict; with --partial it
+  applies the parts it cleanly can and reports the rest. It never overwrites
+  their change. Nothing is lost: undone text stays in history and can be
+  restored. This holds across restarts.
+  Conflicts exit 1 (the error lists them). Undo, redo and revert aren't checked
+  against your last read.
+  undo --drop removes your top step without applying it; --for <person> undoes
+  what you did for them.
 Presence:
   k2 doc who <f> · follow <name> <f> · cursor --at L:C [--to L:C] <f>
   k2 doc claim --lines a,b [--ttl 2m] [--note "why"] [--hold] <f>   "I'm working

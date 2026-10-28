@@ -1979,7 +1979,7 @@ mod tests {
     /// docs` word for word (line breaks aside).
     #[test]
     fn the_undo_promise_is_in_the_help_and_the_study_page_verbatim() {
-        const PROMISE: &str = "Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never removes text someone else wrote, even if it is identical to yours, and someone else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the original author's. If someone else has since changed the same lines, the undo applies what it cleanly can and reports the rest as a conflict; it never overwrites their change. Nothing is lost: undone text stays in history and can be restored. This holds across restarts.";
+        const PROMISE: &str = "Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never removes text someone else wrote, even if it is identical to yours, and someone else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the original author's. If someone else has since changed the same lines, a plain undo applies nothing and reports the conflict; with --partial it applies the parts it cleanly can and reports the rest. It never overwrites their change. Nothing is lost: undone text stays in history and can be restored. This holds across restarts.";
         let cli = include_str!("../../../../cli/k2");
         let page = |start: &str| {
             let s = cli.find(start).unwrap_or_else(|| panic!("{start} in cli/k2"));

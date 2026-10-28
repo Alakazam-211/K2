@@ -919,14 +919,14 @@ def admin_import(ctx, args):
     args = [a for a in args if a != "--password-stdin"]
     if len(args) != 2 or args[0] != "u1":
         raise Usage("import u1 <key file> [--password-stdin]")
+    if not os.path.isabs(args[1]):
+        raise Usage("import needs an absolute path (the wrapper runs from /)")
     check_pins(ctx)
     pub = pinned_pubkey(ctx, "u1")
     mkdirs(ctx, ctx.keys)
     key, pw = keyfiles(ctx, "u1")
     if os.path.exists(key) or os.path.exists(pw):
         raise Refused("U1 is already imported in %s" % ctx.keys)
-    if not os.path.isabs(args[1]):
-        raise Usage("import needs an absolute path (the wrapper runs from /)")
     raw = decode_secret_key(open(args[1], "rb").read())
     if stdin_pw:
         password = sys.stdin.readline().rstrip("\n")

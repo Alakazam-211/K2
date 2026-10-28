@@ -599,3 +599,118 @@ fn owned_names_cover_underscore_spellings() {
         assert!(chunk_size(bad).is_err(), "{:?}", String::from_utf8_lossy(bad));
     }
 }
+
+// ── G2: the per-visitor write limit (0.46.6) ─────────────────────────
+
+/// An App that counts the request heads it gets and answers each with an
+/// empty 200 (keep-alive).
+async fn counting_app() -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let n = std::sync::Arc::new(AtomicUsize::new(0));
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    let seen = n.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = l.accept().await else { return };
+            let seen = seen.clone();
+            tokio::spawn(async move {
+                let mut buf: Vec<u8> = Vec::new();
+                loop {
+                    while let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        buf.drain(..i + 4);
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        if s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await.is_err() {
+                            return;
+                        }
+                    }
+                    let mut b = [0u8; 4096];
+                    match s.read(&mut b).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(k) => buf.extend_from_slice(&b[..k]),
+                    }
+                }
+            });
+        }
+    });
+    (port, n)
+}
+
+/// A client forwarded with G2's gate over a test limiter.
+async fn guarded(app: u16, mode: Mode, gate: WriteGate) -> Client {
+    let (client, server_side, _) = pair().await;
+    tokio::spawn(async move {
+        let mut up = TcpStream::connect(("127.0.0.1", app)).await.unwrap();
+        let mut down = server_side;
+        forward_guarded(&mut down, &mut up, mode, None, Some(gate)).await
+    });
+    Client { s: client, buf: Vec::new() }
+}
+
+fn test_gate(l: &std::sync::Arc<crate::apps::guard::Limiter>, limit: Option<u32>) -> WriteGate {
+    // A frozen clock: no refill however slow the run (no timing flake).
+    let l = l.clone();
+    let t0 = std::time::Instant::now();
+    std::sync::Arc::new(move |ip: IpAddr| l.check_write("shop", ip, limit, t0).err())
+}
+
+/// Test 8 (PRD §11.1): the 121st POST in a minute from one visitor gets
+/// K2's 429 with Retry-After and never reaches the App; GETs are never
+/// limited; another visitor is unaffected; guard off is no limit.
+#[tokio::test]
+async fn g2_the_121st_write_is_k2s_429_and_never_reaches_the_app() {
+    use std::sync::atomic::Ordering;
+    let (app, seen) = counting_app().await;
+    let l = crate::apps::guard::Limiter::new(1000);
+    let mut c = guarded(app, Mode::Tunnel(Some(ip(CLIENT))), test_gate(&l, Some(120))).await;
+    for _ in 0..120 {
+        c.send(b"POST /login HTTP/1.1\r\nHost: shop.example.com\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+        let (head, _) = c.response().await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    }
+    for _ in 0..5 {
+        c.send(b"GET / HTTP/1.1\r\nHost: shop.example.com\r\n\r\n").await.unwrap();
+        let (head, _) = c.response().await;
+        assert!(head.starts_with("HTTP/1.1 200"), "GETs are never limited: {head}");
+    }
+    assert_eq!(seen.load(Ordering::SeqCst), 125);
+    c.send(b"POST /login HTTP/1.1\r\nHost: shop.example.com\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+    let rest = c.rest().await;
+    assert!(rest.starts_with("HTTP/1.1 429 Too Many Requests\r\n"), "{rest}");
+    assert!(values(&rest, "retry-after").first().is_some_and(|v| v.parse::<u64>().is_ok_and(|n| n >= 1)), "{rest}");
+    assert_eq!(seen.load(Ordering::SeqCst), 125, "the App never saw the 121st write");
+
+    // Another visitor, same App: unaffected.
+    let mut other = guarded(app, Mode::Tunnel(Some(ip("198.51.100.1"))), test_gate(&l, Some(120))).await;
+    other.send(b"DELETE /x HTTP/1.1\r\nHost: shop.example.com\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+    assert!(other.response().await.0.starts_with("HTTP/1.1 200"));
+
+    // Guard off: the first visitor writes again.
+    let mut off = guarded(app, Mode::Tunnel(Some(ip(CLIENT))), test_gate(&l, None)).await;
+    off.send(b"PUT /x HTTP/1.1\r\nHost: shop.example.com\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+    assert!(off.response().await.0.starts_with("HTTP/1.1 200"));
+}
+
+/// Test 9 (PRD §11.1): the guard keys on the address K2 vouches for (the
+/// PROXY header's), never on a client-sent X-Forwarded-For; with no
+/// visitor address nothing is counted.
+#[tokio::test]
+async fn g2_keys_on_the_proxy_address_never_on_a_client_header() {
+    let (app, _seen) = counting_app().await;
+    let l = crate::apps::guard::Limiter::new(1000);
+    let mut c = guarded(app, Mode::Tunnel(Some(ip(CLIENT))), test_gate(&l, Some(2))).await;
+    for spoof in ["1.1.1.1", "2.2.2.2"] {
+        c.send(format!("POST / HTTP/1.1\r\nHost: s\r\nX-Forwarded-For: {spoof}\r\nContent-Length: 0\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        assert!(c.response().await.0.starts_with("HTTP/1.1 200"));
+    }
+    c.send(b"POST / HTTP/1.1\r\nHost: s\r\nX-Forwarded-For: 3.3.3.3\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+    assert!(c.rest().await.starts_with("HTTP/1.1 429"), "a new XFF is not a new visitor");
+    // No visitor address: never limited.
+    let mut local = guarded(app, Mode::Tunnel(None), test_gate(&l, Some(1))).await;
+    for _ in 0..5 {
+        local.send(b"POST / HTTP/1.1\r\nHost: s\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+        assert!(local.response().await.0.starts_with("HTTP/1.1 200"));
+    }
+}

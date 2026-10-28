@@ -450,3 +450,166 @@ async fn front443_routes_a_custom_name_through_the_door() {
     task.abort();
     crate::apps::router::clear("jobs");
 }
+
+// ── what a custom name promises the App (0.46.6, the first customer's review) ──
+
+/// An App that answers every request with its whole request head as the
+/// body; on a WebSocket upgrade it answers 101, sends the head it got
+/// followed by `\n--end--\n`, then echoes raw bytes.
+async fn head_echo_backend() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((s, _)) = l.accept().await else { return };
+            tokio::spawn(async move {
+                let mut r = BufReader::new(s);
+                loop {
+                    let mut head = String::new();
+                    loop {
+                        let mut line = String::new();
+                        if r.read_line(&mut line).await.unwrap_or(0) == 0 {
+                            return;
+                        }
+                        head.push_str(&line);
+                        if line == "\r\n" {
+                            break;
+                        }
+                    }
+                    if head.to_ascii_lowercase().contains("\r\nupgrade: websocket\r\n") {
+                        let w = r.get_mut();
+                        w.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n").await.unwrap();
+                        w.write_all(head.as_bytes()).await.unwrap();
+                        w.write_all(b"\n--end--\n").await.unwrap();
+                        let mut buf = vec![0u8; 4096];
+                        loop {
+                            let n = match r.read(&mut buf).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => n,
+                            };
+                            if r.get_mut().write_all(&buf[..n]).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    let resp = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{head}", head.len());
+                    if r.get_mut().write_all(resp.as_bytes()).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+fn header_values(head: &str, name: &str) -> Vec<String> {
+    head.lines()
+        .filter_map(|l| {
+            let (n, v) = l.split_once(':')?;
+            n.trim().eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+        })
+        .collect()
+}
+
+/// Requirements 1–3: `Host` passes through unchanged (the App's same-host
+/// Origin check and canonical-host 308 use it); exactly one
+/// `X-Forwarded-Proto: https` on every request (the App's Secure cookie);
+/// the door answers with the App's own response, never a redirect of K2's
+/// (the App does its own 308s). The App here has the client-IP rewrite OFF
+/// in its manifest (a raw App): the door rewrites anyway.
+#[tokio::test]
+async fn the_door_keeps_host_says_https_and_never_redirects() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    rig_app("canon", "ws-a");
+    let host = "canon.example.com";
+    let pem = self_signed(host);
+    bind("canon", host, domains::STATE_LIVE, Some(&pem));
+    let port = head_echo_backend().await;
+    crate::apps::router::switch_with("canon", port, false);
+    reload();
+    let addr = door().await;
+    let c = client(&[&pem.der], &[b"http/1.1"]);
+    let tls = connect(addr, Some("203.0.113.7:51000".parse().unwrap()), host, &c).await.unwrap();
+    let mut s = BufReader::new(tls);
+    for path in ["/", "/login?next=%2Fhome"] {
+        write_all(
+            s.get_mut(),
+            format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nX-Forwarded-Proto: http\r\nX-K2-Client-IP: 6.6.6.6\r\n\r\n").as_bytes(),
+        )
+        .await;
+        let (status, seen) = response(&mut s).await;
+        assert_eq!(status, "HTTP/1.1 200 OK", "the App's own answer, no K2 redirect");
+        assert!(seen.starts_with(&format!("GET {path} HTTP/1.1\r\n")), "path untouched: {seen}");
+        assert_eq!(header_values(&seen, "host"), vec![host.to_string()], "Host unchanged: {seen}");
+        assert_eq!(header_values(&seen, "x-forwarded-proto"), vec!["https".to_string()], "{seen}");
+        assert_eq!(header_values(&seen, "x-k2-client-ip"), vec!["203.0.113.7".to_string()], "{seen}");
+        assert!(!seen.contains("6.6.6.6"), "{seen}");
+    }
+    crate::apps::router::clear("canon");
+}
+
+/// Requirements 4–5: a WebSocket upgrade on the same host (the App's
+/// stream and activity paths) carries the cookie, the Bearer and
+/// `?session=` untouched, plus K2's `X-K2-Client-IP` and `X-Forwarded-Proto:
+/// https` on the upgrade request itself (forged copies dropped); then the
+/// socket stays open across an idle gap (no idle timeout).
+#[tokio::test]
+async fn a_websocket_upgrade_carries_k2s_client_ip_and_the_apps_credentials() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    rig_app("live", "ws-a");
+    let host = "live.example.com";
+    let pem = self_signed(host);
+    bind("live", host, domains::STATE_LIVE, Some(&pem));
+    let port = head_echo_backend().await;
+    crate::apps::router::switch_with("live", port, true);
+    reload();
+    let addr = door().await;
+    let c = client(&[&pem.der], &[b"http/1.1"]);
+    for path in ["/api/stream", "/api/activity/events?session=s-123", "/overlay/ws"] {
+        let tls = connect(addr, Some("198.51.100.9:40001".parse().unwrap()), host, &c).await.unwrap();
+        let mut s = BufReader::new(tls);
+        write_all(
+            s.get_mut(),
+            format!(
+                "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+                 Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
+                 Cookie: sid=abc\r\nAuthorization: Bearer tok-1\r\nX-Forwarded-For: 6.6.6.6\r\nX-K2-Client-IP: 6.6.6.6\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await;
+        let mut status = String::new();
+        s.read_line(&mut status).await.unwrap();
+        assert!(status.starts_with("HTTP/1.1 101"), "{status}");
+        loop {
+            let mut h = String::new();
+            s.read_line(&mut h).await.unwrap();
+            if h.trim_end().is_empty() {
+                break;
+            }
+        }
+        let mut seen = String::new();
+        while !seen.ends_with("\n--end--\n") {
+            let mut line = String::new();
+            assert!(s.read_line(&mut line).await.unwrap() > 0, "closed early: {seen}");
+            seen.push_str(&line);
+        }
+        assert!(seen.starts_with(&format!("GET {path} HTTP/1.1\r\n")), "path and ?session= untouched: {seen}");
+        assert_eq!(header_values(&seen, "host"), vec![host.to_string()]);
+        assert_eq!(header_values(&seen, "cookie"), vec!["sid=abc".to_string()]);
+        assert_eq!(header_values(&seen, "authorization"), vec!["Bearer tok-1".to_string()]);
+        assert_eq!(header_values(&seen, "x-k2-client-ip"), vec!["198.51.100.9".to_string()], "on the upgrade request: {seen}");
+        assert_eq!(header_values(&seen, "x-forwarded-for"), vec!["198.51.100.9".to_string()]);
+        assert_eq!(header_values(&seen, "x-forwarded-proto"), vec!["https".to_string()]);
+        assert!(!seen.contains("6.6.6.6"), "{seen}");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        write_all(s.get_mut(), b"frame-after-idle").await;
+        let mut back = [0u8; 16];
+        tokio::time::timeout(Duration::from_secs(10), s.read_exact(&mut back)).await.expect("echo in time").expect("still open");
+        assert_eq!(&back, b"frame-after-idle");
+    }
+    crate::apps::router::clear("live");
+}

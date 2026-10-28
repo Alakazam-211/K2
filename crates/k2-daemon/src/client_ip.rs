@@ -225,6 +225,11 @@ pub enum Mode {
     /// treated as `Tunnel(Some(ip))`; anyone else only loses
     /// `X-K2-Client-IP`.
     Local { peer: Option<SocketAddr> },
+    /// The App TLS door (0.46.6, custom App names): as `Tunnel`, and K2
+    /// also owns `X-Forwarded-Proto`: every request carries exactly
+    /// `X-Forwarded-Proto: https` (TLS ended at the door), so an App marks
+    /// its session cookie Secure. `Host` passes through unchanged.
+    Door(Option<IpAddr>),
 }
 
 /// What the rewrite does, resolved once per connection.
@@ -232,6 +237,9 @@ pub enum Mode {
 enum Rule {
     /// Drop every [`OWNED`] header; add K2's when `Some`.
     Set(Option<IpAddr>),
+    /// [`Rule::Set`] plus `X-Forwarded-Proto`: dropped from the client,
+    /// `https` added by K2 (the App TLS door).
+    Https(Option<IpAddr>),
     /// Drop `X-K2-Client-IP` only.
     StripK2,
 }
@@ -240,7 +248,16 @@ impl Rule {
     fn drops(self, norm: &str) -> bool {
         match self {
             Rule::Set(_) => is_owned(norm),
+            Rule::Https(_) => is_owned(norm) || norm == "x-forwarded-proto",
             Rule::StripK2 => norm == "x-k2-client-ip",
+        }
+    }
+
+    /// The visitor K2 vouches for on this connection, if any.
+    fn visitor(self) -> Option<IpAddr> {
+        match self {
+            Rule::Set(ip) | Rule::Https(ip) => ip,
+            Rule::StripK2 => None,
         }
     }
 }
@@ -248,6 +265,7 @@ impl Rule {
 fn resolve(mode: Mode) -> Rule {
     match mode {
         Mode::Tunnel(ip) => Rule::Set(ip),
+        Mode::Door(ip) => Rule::Https(ip),
         Mode::Local { peer } => match peer.and_then(hop_client_ip) {
             Some(ip) => Rule::Set(Some(ip)),
             None => Rule::StripK2,
@@ -445,6 +463,27 @@ enum ReadRequest {
     Refuse(&'static str),
 }
 
+/// G2's gate for one App (0.46.6, `apps::guard`): called for every write
+/// (`POST`/`PUT`/`PATCH`/`DELETE`) on a connection that carries a visitor
+/// address; `Some(seconds)` = over the limit, K2 answers 429 itself.
+pub type WriteGate = std::sync::Arc<dyn Fn(IpAddr) -> Option<u64> + Send + Sync>;
+
+/// The methods G2 counts.
+pub fn is_write(method: &str) -> bool {
+    ["POST", "PUT", "PATCH", "DELETE"].iter().any(|m| method.eq_ignore_ascii_case(m))
+}
+
+/// K2's `429` for a visitor over G2 (the App never sees the request).
+pub fn too_many(retry_after: u64) -> Vec<u8> {
+    let body = format!("Too many requests from your address. Try again in {retry_after} seconds.\r\n");
+    format!(
+        "HTTP/1.1 429 Too Many Requests\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nRetry-After: {retry_after}\r\nX-K2-Guard: writes\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{body}",
+        body.len(),
+        k2_core::frame_policy::CONNECT_HEADER_LINES,
+    )
+    .into_bytes()
+}
+
 /// K2's own answer to a request it won't forward.
 fn refusal(status: &str) -> Vec<u8> {
     let body = "K2 could not forward this request.\r\n";
@@ -531,8 +570,11 @@ fn rewrite_request(req: &httparse::Request, rule: Rule) -> Result<RequestHead, &
     if !connection.is_empty() {
         out.extend_from_slice(format!("Connection: {}\r\n", connection.join(", ")).as_bytes());
     }
-    if let Rule::Set(Some(ip)) = rule {
+    if let Some(ip) = rule.visitor() {
         out.extend_from_slice(format!("{HEADER}: {ip}\r\nX-Forwarded-For: {ip}\r\nX-Real-IP: {ip}\r\n").as_bytes());
+    }
+    if let Rule::Https(_) = rule {
+        out.extend_from_slice(b"X-Forwarded-Proto: https\r\n");
     }
     out.extend_from_slice(b"\r\n");
     Ok(RequestHead {
@@ -623,6 +665,7 @@ async fn requests<R, W>(
     shared: &Shared,
     mut decided: watch::Receiver<Decision>,
     local: Option<&LocalAnswer>,
+    gate: Option<&WriteGate>,
 ) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
@@ -649,6 +692,17 @@ where
             }
             ReadRequest::Head(h) => h,
         };
+        // G2 (0.46.6): a write over the visitor's limit is answered by K2
+        // (429 + Retry-After) and never reaches the App. Only where K2
+        // knows the visitor (`Rule::Set(Some(ip))`), never from a header.
+        if let (Some(gate), Some(ip)) = (gate, r.visitor()) {
+            if is_write(&head.method) {
+                if let Some(retry) = gate(ip) {
+                    shared.push(Expect::Own(too_many(retry)));
+                    return Ok(());
+                }
+            }
+        }
         // A body-less GET/HEAD K2 answers itself never reaches the App (a
         // request with a body passes on unchanged).
         if let Some(answer) = local {
@@ -849,11 +903,26 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
+    forward_guarded(client, upstream, mode, local, None).await
+}
+
+/// [`forward_with`] plus G2's write gate (`apps::guard::write_gate`).
+pub async fn forward_guarded<C, U>(
+    client: C,
+    upstream: U,
+    mode: Mode,
+    local: Option<LocalAnswer>,
+    gate: Option<WriteGate>,
+) -> io::Result<()>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
     let (cr, cw) = tokio::io::split(client);
     let (ur, uw) = tokio::io::split(upstream);
     let shared = Shared { queue: Mutex::new(VecDeque::new()), pushed: Notify::new() };
     let (decide, decided) = watch::channel::<Decision>((0, false));
-    let req = requests(Reader::new(cr), uw, mode, &shared, decided, local.as_ref());
+    let req = requests(Reader::new(cr), uw, mode, &shared, decided, local.as_ref(), gate.as_ref());
     let resp = responses(Reader::new(ur), cw, &shared, decide);
     tokio::pin!(req, resp);
     tokio::select! {

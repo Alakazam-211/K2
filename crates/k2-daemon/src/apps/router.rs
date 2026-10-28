@@ -190,8 +190,11 @@ where
         return Ok(());
     }
     if let Some(mode) = mode {
+        // G2 (0.46.6): per-visitor writes for this App, wherever the
+        // connection carries the visitor (`apps::guard`).
+        let gate = Some(crate::apps::guard::write_gate(&be.app_id));
         tokio::select! {
-            _ = crate::client_ip::forward_with(&mut *client, &mut upstream, mode, local) => {}
+            _ = crate::client_ip::forward_guarded(&mut *client, &mut upstream, mode, local, gate) => {}
             _ = cut.changed() => {}
         }
     } else {
@@ -208,7 +211,16 @@ where
 /// The rewrite for `be` reached as `label`: on when the App's manifest
 /// allows it (`host.clientIp`, default on), or when the label opted in with
 /// `k2 publish client-ip <label> on` (a `--cmd` App starts raw).
+///
+/// The App TLS door (`Mode::Door`, custom App names, 0.46.6) always
+/// rewrites, whatever the manifest says: the visitor address, the
+/// `X-Forwarded-Proto: https` and the guard's write limit are part of what a
+/// custom name promises (the door speaks HTTP/1.1 only, so nothing raw can
+/// arrive there anyway).
 pub fn rewrite_mode(be: &Backend, label: &str, mode: crate::client_ip::Mode) -> Option<crate::client_ip::Mode> {
+    if matches!(mode, crate::client_ip::Mode::Door(_)) {
+        return Some(mode);
+    }
     (be.client_ip || k2_core::tunnel::client_ip_labels::enabled(label)).then_some(mode)
 }
 

@@ -127,6 +127,10 @@ pub mod skin_door;
 // front443 (0.46.1): the owner's choice to put the box's :443 behind the
 // daemon's SNI router (the router lives in k2-daemon).
 pub mod front443;
+// 0.46.6 (prd-custom-domains-path-a-0466-v1 §4): the owner's firewall
+// choices (`~/.k2/firewall.json`), the public-ports view's types, its hash
+// and the `k2 firewall rules` text. The view itself is computed daemon-side.
+pub mod firewall;
 // Sew S27 generic grant hook: `chat` grant kind, durable `tool_outbox` in
 // skin.db, reconcile diff. Decisions here; Sew IO in the daemon worker.
 pub mod tool_hook;

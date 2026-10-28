@@ -238,6 +238,12 @@ pub async fn serve_conn(mut tcp: TcpStream, cfg: Arc<ServerConfig>) -> Result<()
     // front443 writes PROXY v2 (Kind::App); only a loopback peer's header
     // is read (CD-A9: the same trust as the E2E listener).
     let client_ip = crate::client_ip::read_tunnel_preamble(&mut tcp, peer, deadline).await?;
+    // G1 (0.46.6, PA-A3): the visitor's open connections, before the
+    // handshake; no visitor (a local caller) is not counted. Released when
+    // the connection ends.
+    let Some(_visitor_slot) = crate::apps::guard::door_conn(client_ip) else {
+        return Err(format!("{} is over the per-visitor connection cap (k2 firewall guard)", client_ip.map(|i| i.to_string()).unwrap_or_default()));
+    };
     let mut tls = match tokio::time::timeout_at(deadline, TlsAcceptor::from(cfg).accept(tcp)).await {
         Ok(Ok(t)) => t,
         Ok(Err(e)) => return Err(format!("TLS handshake failed: {e}")),
@@ -256,7 +262,9 @@ pub async fn serve_conn(mut tcp: TcpStream, cfg: Arc<ServerConfig>) -> Result<()
         let _ = tls.shutdown().await;
         return Err(format!("no live App name {sni:?}"));
     };
-    crate::apps::router::serve_app_conn_with(&mut tls, &app, crate::client_ip::Mode::Tunnel(client_ip)).await;
+    // Mode::Door: always rewritten (visitor headers, `X-Forwarded-Proto:
+    // https`, G2), `Host` untouched, no redirect of K2's own.
+    crate::apps::router::serve_app_conn_with(&mut tls, &app, crate::client_ip::Mode::Door(client_ip)).await;
     Ok(())
 }
 

@@ -300,8 +300,10 @@ pub fn apply(events: &[HookEvent], now: i64) -> Applied {
             let Some(eng) = engine.as_ref() else { continue };
             let env = match lookup_queued(eng.as_ref(), &registry_id(n)) {
                 Ok(v) => v,
-                Err(err) => {
-                    k2_core::log_debug!("[email-notify] WARN webhook: queue lookup for {qid} failed: {}", super::send::mask_addresses(&err));
+                Err(_) => {
+                    // E22: the queue id only, never the mail server's words
+                    // (they can name a recipient).
+                    k2_core::log_debug!("[email-notify] WARN webhook: queue lookup for {qid} failed");
                     continue;
                 }
             };
@@ -332,7 +334,8 @@ pub fn apply(events: &[HookEvent], now: i64) -> Applied {
             match oc::record(&conn, &row.id, &row.sender_id, to, kind, code.as_deref(), oc::SRC_WEBHOOK, now) {
                 Ok(true) => out.recorded += 1,
                 Ok(false) => {}
-                Err(err) => k2_core::log_debug!("[email-notify] WARN webhook outcome for log {}: {err}", row.id),
+                // E22: ids only.
+                Err(_) => k2_core::log_debug!("[email-notify] WARN webhook: an outcome for log {} wasn't stored", row.id),
             }
         }
     }

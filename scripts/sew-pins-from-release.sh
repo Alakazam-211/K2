@@ -234,7 +234,7 @@ def artslice(lst, ind):
         return "&[" + body.replace("\n" + ind + "    ", "\n" + ind) + "]"
     return "&[\n" + ",\n".join(a) + ",\n" + ind + "]"
 
-commit = rel.get("commit") or rel.get("tag_commit")
+commit = rel.get("git_sha") or rel.get("commit")
 prov = [f"sew-releases tag v{version}"]
 if prerelease:
     prov.append("published as a pre-release")

@@ -19,6 +19,14 @@
 //!   from a page on the same domain stays in Safari, so the button must
 //!   use the scheme). Strict CSP with a per-response nonce: no external
 //!   loads, no network calls, no referrer.
+//!   For someone without the Companion (or on Android, which doesn't claim
+//!   the link yet) it also says the QR can be scanned from inside the app
+//!   and links to the App Store and Google Play: plain `<a href>` top-level
+//!   navigations (CSP has no directive that blocks those), fixed URLs with
+//!   nothing about this server or the code in them, `rel="noopener
+//!   noreferrer"`. `<meta name="apple-itunes-app">` gives Safari its smart
+//!   banner (Open when installed, Get when not); it carries no
+//!   `app-argument`, so the code never leaves `location.hash`.
 //!
 //! Neither is under `/cli/`, so the web-access wall never applies, and
 //! neither reads a credential. Nothing else in the daemon answers under
@@ -33,6 +41,16 @@ pub const AASA: &str = "/.well-known/apple-app-site-association";
 
 /// The Companion's App ID (Team ID + bundle id).
 pub const COMPANION_APP_ID: &str = "36B8R93HXV.com.alakazamlabs.k2so.companion";
+
+/// The Companion's numeric App Store id (smart banner + store link).
+pub const COMPANION_APP_STORE_ID: &str = "6762076766";
+
+/// The Companion on the App Store. Id only, so it works in every country.
+pub const COMPANION_APP_STORE_URL: &str = "https://apps.apple.com/app/id6762076766";
+
+/// The Companion on Google Play.
+pub const COMPANION_PLAY_STORE_URL: &str =
+    "https://play.google.com/store/apps/details?id=com.alakazamlabs.k2so.companion";
 
 /// The AASA body: the classic `appID` + `paths` form and the iOS 13+
 /// `appIDs` + `components` form, both for `/pair` only.
@@ -78,6 +96,9 @@ pub fn pair_csp(nonce: &str) -> String {
 
 /// The page HTML for `nonce`.
 pub fn pair_html(nonce: &str) -> String {
+    let app_store_id = COMPANION_APP_STORE_ID;
+    let app_store = COMPANION_APP_STORE_URL;
+    let play_store = COMPANION_PLAY_STORE_URL;
     format!(
         r##"<!doctype html>
 <html lang="en">
@@ -85,6 +106,7 @@ pub fn pair_html(nonce: &str) -> String {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
+<meta name="apple-itunes-app" content="app-id={app_store_id}">
 <title>Pair a phone with K2</title>
 <style nonce="{nonce}">
 :root {{ color-scheme: light dark; --bg:#f6f6f4; --fg:#1d1d1b; --muted:#6b6b66; --card:#ffffff; --line:#dcdcd6; --accent:#2f5bd3; }}
@@ -100,7 +122,9 @@ code {{ display:block; font: 600 18px/1.4 ui-monospace, SFMono-Regular, Menlo, m
 a.button, button {{ display:block; width:100%; text-align:center; font:600 16px/1 inherit; padding:14px; border-radius:10px;
   border:1px solid var(--accent); text-decoration:none; cursor:pointer; margin:0 0 10px; }}
 a.button {{ background:var(--accent); color:#fff; }}
-button {{ background:transparent; color:var(--accent); }}
+button, a.store {{ background:transparent; color:var(--accent); }}
+#get {{ border-top:1px solid var(--line); padding-top:16px; margin-top:8px; }}
+#get h2 {{ font-size:16px; margin:0 0 10px; }}
 [hidden] {{ display:none !important; }}
 #status {{ min-height:1.5em; font-size:14px; }}
 </style>
@@ -109,10 +133,16 @@ button {{ background:transparent; color:var(--accent); }}
 <main>
   <h1>Open this in the K2 app</h1>
   <p id="lead">This link pairs your phone with a K2 server. Open it in the K2 Companion app, or copy the code and paste it on the app's Pair screen.</p>
+  <p id="scan">You can also scan the QR code from inside the K2 Companion app. If you don't have it yet, get it below.</p>
   <code id="code">…</code>
   <a class="button" id="open" href="#" hidden>Open in K2</a>
   <button type="button" id="copy" hidden>Copy code</button>
   <p id="status" role="status"></p>
+  <section id="get">
+    <h2>Get K2 Companion</h2>
+    <a class="button store" id="appstore" href="{app_store}" rel="noopener noreferrer">App Store (iPhone)</a>
+    <a class="button store" id="playstore" href="{play_store}" rel="noopener noreferrer">Google Play (Android)</a>
+  </section>
 </main>
 <script nonce="{nonce}">
 (function () {{
@@ -191,12 +221,77 @@ mod tests {
         assert!(html.contains("<style nonce=\"abc123\">"));
         assert!(html.contains("k2companion://pair?server="));
         assert!(html.contains("location.hash"));
-        for banned in ["src=\"http", "href=\"http", "fetch(", "XMLHttpRequest", "sendBeacon", "<img", "<link"] {
+        for banned in ["src=", "fetch(", "XMLHttpRequest", "sendBeacon", "WebSocket", "<img", "<link", "<iframe", "@import", "url("] {
             assert!(!html.contains(banned), "{banned}");
         }
         let csp = pair_csp("abc123");
         assert!(csp.starts_with("default-src 'none';"));
         assert!(csp.contains("connect-src 'none'"));
         assert!(csp.contains("frame-ancestors 'none'"));
+    }
+
+    /// Every `href="…"` value in `html`, in order.
+    fn hrefs(html: &str) -> Vec<&str> {
+        html.split("href=\"").skip(1).map(|rest| rest.split('"').next().expect("closing quote")).collect()
+    }
+
+    #[test]
+    fn the_page_links_both_stores_and_nothing_else_off_page() {
+        assert_eq!(COMPANION_APP_STORE_URL, "https://apps.apple.com/app/id6762076766");
+        assert_eq!(
+            COMPANION_PLAY_STORE_URL,
+            "https://play.google.com/store/apps/details?id=com.alakazamlabs.k2so.companion"
+        );
+        let html = pair_html("abc123");
+        // The only hrefs: the Open in K2 placeholder (filled from the hash
+        // by the script) and the two fixed store URLs, nothing about this
+        // server or the code in them.
+        assert_eq!(hrefs(&html), vec!["#", COMPANION_APP_STORE_URL, COMPANION_PLAY_STORE_URL]);
+        for url in [COMPANION_APP_STORE_URL, COMPANION_PLAY_STORE_URL] {
+            let tag = format!("href=\"{url}\" rel=\"noopener noreferrer\">");
+            assert_eq!(html.matches(&tag).count(), 1, "{tag}");
+        }
+        assert!(html.contains("<a class=\"button store\" id=\"appstore\""));
+        assert!(html.contains("<a class=\"button store\" id=\"playstore\""));
+        assert!(html.contains(
+            "You can also scan the QR code from inside the K2 Companion app. If you don't have it yet, get it below."
+        ));
+        // Open in K2 and the code to copy are still there.
+        assert!(html.contains("<a class=\"button\" id=\"open\" href=\"#\" hidden>Open in K2</a>"));
+        assert!(html.contains("<button type=\"button\" id=\"copy\" hidden>Copy code</button>"));
+        assert!(html.contains("<code id=\"code\">"));
+    }
+
+    #[test]
+    fn the_page_has_the_smart_banner_without_an_app_argument() {
+        let html = pair_html("abc123");
+        assert_eq!(COMPANION_APP_STORE_ID, "6762076766");
+        assert_eq!(html.matches("<meta name=\"apple-itunes-app\" content=\"app-id=6762076766\">").count(), 1);
+        assert!(!html.contains("app-argument"));
+        assert!(html.contains("<meta name=\"referrer\" content=\"no-referrer\">"));
+    }
+
+    #[test]
+    fn the_csp_allows_store_navigation_and_nothing_loaded() {
+        let csp = pair_csp("n0nce");
+        let directives: Vec<&str> = csp.split(';').map(str::trim).collect();
+        assert_eq!(
+            directives,
+            vec![
+                "default-src 'none'",
+                "script-src 'nonce-n0nce'",
+                "style-src 'nonce-n0nce'",
+                "img-src 'none'",
+                "connect-src 'none'",
+                "font-src 'none'",
+                "base-uri 'none'",
+                "form-action 'none'",
+                "frame-ancestors 'none'",
+            ]
+        );
+        // A top-level <a href> to the stores is a navigation, which none
+        // of these directives govern; nothing like navigate-to may creep in.
+        assert!(!csp.contains("navigate-to"));
+        assert!(!csp.contains("http"));
     }
 }

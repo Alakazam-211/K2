@@ -10,6 +10,7 @@
 //   --enrol                      make the SE key; write ~/.k2-release-approve/{key.blob,approver.pem}
 //   --challenge <f> --out <f>    show the challenge in the Touch ID sheet, sign its exact bytes,
 //                                write the DER signature to <out> (or the reason to <out>.err)
+//   --key-dir <dir>              (with the above) use <dir> instead of ~/.k2-release-approve
 //   --soft-selftest <dir>        S0 (c): a SOFTWARE P-256 key (no Secure Enclave, no Touch ID)
 //                                signs <dir>/data; writes <dir>/pub.pem and <dir>/sig.der so
 //                                LibreSSL can be checked against CryptoKit's DER format
@@ -23,7 +24,12 @@ import Foundation
 import LocalAuthentication
 
 let home = FileManager.default.homeDirectoryForCurrentUser
-let keyDir = home.appendingPathComponent(".k2-release-approve")
+// --key-dir: the S0 spike enrols a throwaway key elsewhere (never the real one).
+let keyDir: URL = {
+    let a = CommandLine.arguments
+    if let i = a.firstIndex(of: "--key-dir"), i + 1 < a.count { return URL(fileURLWithPath: a[i + 1]) }
+    return home.appendingPathComponent(".k2-release-approve")
+}()
 let blobURL = keyDir.appendingPathComponent("key.blob")
 let pemURL = keyDir.appendingPathComponent("approver.pem")
 

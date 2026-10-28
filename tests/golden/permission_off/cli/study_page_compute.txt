@@ -38,8 +38,10 @@ RUN
   --max-wait 9m stops waiting first (exit 3, still_running, with the
   wait line to run next), so a shell tool capped at 10 minutes can loop.
   --failures prints the failure lines of a job that ended non-zero.
-  run --wait sends no [compute] message while it waits (only if the
-  waiting CLI dies); a --detach job always gets its message.
+  run --wait sends no [compute] message while it waits; once your CLI
+  stops waiting (--max-wait passed, Ctrl-C, a killed shell) the job keeps
+  going and you get the message when it ends. A --detach job always gets
+  its message.
   Code: the node checks out a commit (HEAD, or --sha REV) in a fresh
   worktree. Uncommitted work is NOT sent unless --dirty (the diff and
   untracked files on top of HEAD; never .k2/). A warm target dir per repo
@@ -96,14 +98,17 @@ TIERS (queue lines, like an airport; 0.46.6)
                    queued or running per workspace; more run Standard
                    (priority_cap_reached note). --exclusive needs --ci.
   --tier batch     idle-time work (soaks, overnight sweeps): no clock window;
-                   it starts only when the node is idle (nothing running,
-                   nothing else ready), at any hour, one at a time. While it
+                   it starts only when the node is idle (no K2 job running
+                   from any server, nothing else ready; load outside K2
+                   isn't counted), at any hour, one at a time. While it
                    waits it holds nobody up; once started it runs to its end
-                   (it then uses its slot like any job). Always detached (no
-                   --wait); 48 h queue timeout. --timeout is still capped by
-                   the grant's max per job (k2 compute nodes shows it; ask
-                   the owner for --max-time). For a job that goes quiet, add
-                   --stall-timeout off.
+                   (it then uses its slot like any job). --detach is implied
+                   (passing it is fine); --wait is refused (exit 2). 48 h
+                   queue timeout. --timeout is still capped by the grant's
+                   max per job (k2 compute nodes shows it): for a longer
+                   job, ask your owner to run k2 compute grant <node>
+                   --workspace <ws> --max-time 8h. For a job that goes
+                   quiet, add --stall-timeout off.
   --tier ci        highest: the next free slot, ahead of everything queued.
                    Needs a grant with --ci, which only the owner or an Admin
                    sets (k2 compute grant <node> --workspace <ws> --ci).
@@ -148,10 +153,13 @@ TIERS (queue lines, like an airport; 0.46.6)
   k2 compute jobs shows a TIER column (CI, P, B); --tier T filters.
 
 MEMORY (--mem, required; 0.46.6)
-  Always pass --mem with what the job needs. Rough guide: a cargo build,
-  check or test of a big workspace like K2: 24G (with CARGO_BUILD_JOBS=8);
-  one smaller crate: 8G; a shell or Python script: 1-2G; anything else:
-  what it uses at its peak, plus a margin. Without --mem the job reserves
+  Always pass --mem with what the job needs. Rough guide: any cargo
+  build, check or test inside a big workspace like K2 (even -p one crate,
+  which still builds its dependencies): 24G with --env CARGO_BUILD_JOBS=8;
+  a small standalone crate: 8G; a shell or Python script: 1-2G; anything
+  else: what it uses at its peak, plus a margin. A K2 cargo job, whole:
+    k2 compute run <node> --dirty --needs rust@stable,cmake@3,sys:pkg-config \
+        --mem 24G --env CARGO_BUILD_JOBS=8 -- cargo nextest run -p k2-core Without --mem the job reserves
   4 GB (a note says so) and is stopped above it: failed/mem_cap, "stopped:
   the job used more than its memory limit of 4.0 GB". The node starts a
   job only when its --mem fits beside what runs; an ask bigger than the

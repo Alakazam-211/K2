@@ -18,13 +18,24 @@
 #     release.json; licence members beside it (`LICENSE`, `NOTICE`,
 #     `THIRD_PARTY_NOTICES.md`, from 0.2.0) must be regular files;
 #   - sidecar tarballs and binaries listed in SHA256SUMS (either form), or
-#     in a `<tarball>.sha256` file, must match release.json.
+#     in a `<tarball>.sha256` file, must match release.json;
+#   - Sew 0.5.0 on, the App kit (`app_kit: {file, sha256}`,
+#     sew-app-kit-<v>.tar.gz): listed in SHA256SUMS with the same sha256;
+#     when the tarball is here, its bytes hash to it and it holds exactly
+#     one regular kit.json (of this version, if kit.json names one).
 # Any mismatch exits 1 and prints nothing on stdout. The `media`,
 # `transcriber` and `recorder` sidecars are pinned; any other is refused
-# (K2's table has no slot for it).
+# (K2's table has no slot for it). A pre-release (Sew's canary) pins like
+# any release: K2 records the tag and the hashes exactly as published.
+#
+# Before the entry, a `// provenance:` line names the tag (v<version>),
+# whether release.json marks it a pre-release, its commit when release.json
+# carries one, and the sha256 of SHA256SUMS and of release.json, for the
+# pin's doc comment (as 0.3.1's names them).
 #
 # Default output is a `SewRelease { … }` expression for SEW_RELEASES;
 # `--const NAME` wraps it as `const NAME: SewRelease = …;` (the test tables).
+# With an `app_kit`, a `SewAppKit { … },` row for SEW_APP_KITS follows.
 set -euo pipefail
 
 usage() { echo "usage: $0 <release-dir> [--const NAME]" >&2; exit 2; }
@@ -154,6 +165,49 @@ for s in rel.get("sidecars") or []:
         check_file(a, member)
     side_rel[name] = s
 
+# Sew 0.5.0 on: the App kit (`app_kit`: sew-app-kit-<v>.tar.gz). Its sha256
+# must be in SHA256SUMS and equal release.json's; when the tarball is here,
+# its bytes are hashed too and it must hold exactly one regular kit.json
+# (whose version, if it names one, is the release's).
+kit = rel.get("app_kit")
+if kit is not None:
+    if not isinstance(kit, dict) or not isinstance(kit.get("file"), str) or not isinstance(kit.get("sha256"), str):
+        errors.append("app_kit: expected {file, sha256}")
+        kit = None
+    elif not HEX.fullmatch(kit["sha256"]):
+        errors.append("app_kit: sha256 is not 64 lowercase hex")
+        kit = None
+    else:
+        if kit.get("version") not in (None, version):
+            errors.append(f"app_kit: version {kit.get('version')!r} is not the release's {version}")
+        if kit["file"] != f"sew-app-kit-{version}.tar.gz":
+            errors.append(f"app_kit: file {kit['file']!r} is not sew-app-kit-{version}.tar.gz")
+        if sums.get(kit["file"]) != kit["sha256"]:
+            errors.append(f"{kit['file']}: SHA256SUMS has {sums.get(kit['file'])}, release.json {kit['sha256']}")
+        p = os.path.join(d, kit["file"])
+        if os.path.isfile(p):
+            data = open(p, "rb").read()
+            if sha(data) != kit["sha256"]:
+                errors.append(f"{kit['file']}: sha256 {sha(data)} != release.json {kit['sha256']}")
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as t:
+                kj = [m for m in t.getmembers() if os.path.basename(m.name.rstrip("/")) == "kit.json"]
+                if len(kj) != 1 or not kj[0].isfile():
+                    errors.append(f"{kit['file']}: no single regular kit.json")
+                else:
+                    try:
+                        kv = json.load(t.extractfile(kj[0])).get("version")
+                    except Exception as e:
+                        errors.append(f"{kit['file']}: kit.json unreadable ({e})")
+                        kv = None
+                    if kv not in (None, version):
+                        errors.append(f"{kit['file']}: kit.json version {kv!r} is not {version}")
+        else:
+            print(f"sew-pins-from-release: note: {kit['file']} is not in {d}; its sha256 is checked against SHA256SUMS only", file=sys.stderr)
+
+# A pre-release (Sew's canary) pins like any release (Rosson 2026-10-28:
+# K2 0.46.6 ships with Sew 0.5.0 once Sew's cut passes its smoke run).
+prerelease = rel.get("prerelease") is True or rel.get("channel") not in (None, "stable")
+
 if errors:
     for e in errors:
         print("sew-pins-from-release: " + e, file=sys.stderr)
@@ -180,6 +234,16 @@ def artslice(lst, ind):
         return "&[" + body.replace("\n" + ind + "    ", "\n" + ind) + "]"
     return "&[\n" + ",\n".join(a) + ",\n" + ind + "]"
 
+commit = rel.get("commit") or rel.get("tag_commit")
+prov = [f"sew-releases tag v{version}"]
+if prerelease:
+    prov.append("published as a pre-release")
+if isinstance(commit, str) and commit:
+    prov.append(f"commit {commit}")
+prov.append(f"SHA256SUMS sha256 {sha(open(sums_path, 'rb').read())}")
+prov.append(f"{os.path.basename(rel_files[0])} sha256 {sha(open(rel_files[0], 'rb').read())}")
+print("// provenance: " + ", ".join(prov))
+
 ind = ""
 lines = ["SewRelease {", f"    version: \"{version}\",", f"    artifacts: {artslice(core, '    ')},"]
 for name in SIDECARS:
@@ -199,4 +263,7 @@ if const:
     print(f"const {const}: SewRelease = {expr};")
 else:
     print(expr + ",")
+if kit is not None:
+    # The SEW_APP_KITS row (same change as the release entry).
+    print(f"// SEW_APP_KITS:\nSewAppKit {{ version: \"{version}\", sha256: \"{kit['sha256']}\" }},")
 PY

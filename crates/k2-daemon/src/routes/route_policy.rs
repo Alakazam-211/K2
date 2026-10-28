@@ -1675,6 +1675,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/kek/rotate", Owner),
     get("/cli/vault/list", Member),
     // prd-vault-gaps-v1 item 4: manual placement records.
+    // Open a vault that failed to open at boot (may prompt once).
+    post("/cli/vault/open", Admin),
     post("/cli/vault/placement/add", Member),
     post("/cli/vault/placement/done", Member),
     post("/cli/vault/placement/remove", Member),
@@ -1699,8 +1701,6 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/set", Member),
     get("/cli/vault/show", Member),
     get("/cli/vault/status", Member),
-    // Open a vault that failed to open at boot (may prompt once).
-    post("/cli/vault/open", Admin),
     post("/cli/vault/sync", Member),
     // prd-vault-gaps-v1 item 4: a root unit's credential is Owner/Admin +
     // a vault confirm (passports refused in the handler, KV14 DENY);

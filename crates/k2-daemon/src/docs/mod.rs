@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use k2_core::log_debug;
-use k2_mpc_base::session::{Config, PoolStats, Session, SessionError, SessionManager, TextFilePack};
+use k2_mpc_base::session::{Config, PoolStats, Session, SessionError, SessionManager};
 use k2_mpc_base::store::{DocKey, DocStore};
 
 /// The vendored kit writes docs back to their files (its C4, base
@@ -57,8 +57,6 @@ const RECHECK_EVERY_TICKS: u64 = 8;
 /// Orphan-share sweep (about a minute; the first runs on the first tick).
 const SWEEP_EVERY_TICKS: u64 = 240;
 
-/// The Markdown pack: one text root over the file's source, 4 MiB.
-pub static MARKDOWN: TextFilePack = TextFilePack::new("markdown", k2_mpc_markdown::MAX_FILE_BYTES);
 
 /// The loaded runtime.
 pub struct Runtime {
@@ -252,7 +250,7 @@ impl Runtime {
     /// The session for `key`, syncing with the file at `abs` inside `root`
     /// (`open_file`: import, or reconcile a stored doc with the file).
     pub fn open(&self, key: &DocKey, abs: &Path, root: &Path) -> Result<Arc<Session>, SessionError> {
-        let s = self.manager.open_file(Arc::new(MARKDOWN), key, abs, root)?;
+        let s = self.manager.open_file(Arc::new(k2_mpc_markdown::PACK), key, abs, root)?;
         let rel_in_k2 = key.path.starts_with(".k2/");
         let fresh = self.opened.lock().expect("docs opened set").insert(key.clone(), abs.to_path_buf()).is_none();
         if fresh {

@@ -44,7 +44,7 @@ use serde_json::{json, Value};
 use k2_mpc_base::session::position::{self, At, LineCol, LineRange};
 use k2_mpc_base::session::{
     Approval, ApprovalState, ConflictRegion, DiskState, EditResult, EditWithError, LogItem, LogQuery, Need, RosterEntry,
-    Role, Session, SessionError, Stay, TextFilePack, UndoMode, UndoOutcome, UndoRequest, VersionInfo, WriteOutcome,
+    Role, Session, SessionError, Stay, UndoMode, UndoOutcome, UndoRequest, VersionInfo, WriteOutcome,
 };
 use k2_mpc_base::store::DocStore;
 use k2_mpc_base::text::merge::Conflict;
@@ -86,7 +86,7 @@ pub const MAX_BODY: usize = 12 << 20;
 /// Most undo/redo steps one call may ask for.
 const MAX_STEPS: usize = 100;
 
-const ROOT: &str = TextFilePack::ROOT;
+const ROOT: &str = k2_mpc_markdown::ROOT;
 
 /// Every route, for the dispatcher arm and the tests.
 pub const ROUTES: &[&str] = &[
@@ -474,6 +474,9 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
     let (t, input, rights) = (c.target, c.input, c.rights);
     match path {
         STATUS => {
+            // Any verb joins (as the kit's reference binding does): status
+            // makes the caller present too.
+            join(s, c, Stay::UntilIdle)?;
             let st = s.status()?;
             Ok(ok(json!({
                 "doc": doc_json(t),

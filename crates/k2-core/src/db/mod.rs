@@ -2821,12 +2821,11 @@ mod tests {
                 "0241_compute_submitter_cap",
                 "0242_app_custom_domains",
                 "0244_email_verified_addresses",
-                "0244_email_verified_addresses",
                 "0245_email_notify_outcomes",
                 "0246_email_sender_envelope",
                 "0247_email_agent_notices"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244 then 0245)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246 then 0247)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");

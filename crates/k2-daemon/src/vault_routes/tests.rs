@@ -1293,3 +1293,71 @@ fn vault_backup_needs_a_person_or_a_confirm() {
     let (s, v) = call(&t, BACKUP, &owner_tty(), json!({ "destDir": out2.path().display().to_string() }));
     assert_eq!(s, 200, "{v}");
 }
+
+/// VC-B2: the owner token alone can't hand out a value someone can read
+/// (`file`, `env`, `api`): it needs a person's confirm, the same as reveal,
+/// bound to that secret and used once. A grant that never shows the value
+/// (fetch: K2 adds it to the request) still needs none, and a Connect
+/// Admin (a person signed in with a password) is unchanged.
+#[test]
+fn a_readable_grant_from_the_owner_token_needs_a_confirm() {
+    let t = vault();
+    set_server(&t, "A", SENTINEL);
+    set_server(&t, "B", "other-value-123");
+    let g = |name: &str, d: &str| json!({ "name": name, "scope": "server", "to": "ws:*", "as": d });
+    for d in ["env", "file"] {
+        let (s, v) = call(&t, GRANT, &owner(), g("A", d));
+        assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{d}: {v}");
+        let (s, v) = call(&t, GRANT, &owner_tty(), g("A", d));
+        assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "the vault socket confirms too ({d}): {v}");
+    }
+    assert!(
+        t.v.grants(&k2_vault::Selector::user(k2_vault::Scope::server(), "A"), &Actor::Owner).expect("grants").is_empty(),
+        "nothing was granted"
+    );
+    // Use, never see: no confirm.
+    let (s, v) = call(&t, GRANT, &owner(), g("A", "fetch"));
+    assert_eq!(s, 200, "a fetch grant: {v}");
+    assert_eq!(v["grant"]["delivery"], "fetch");
+    // A person with a confirm bound to A.
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    let id = |n: &str| t.v.meta(&k2_vault::Selector::user(k2_vault::Scope::server(), n), &Actor::Owner).expect("meta").id;
+    let confirm = |action: &str, sid: &str| {
+        let (s, v) = call(
+            &t,
+            CONFIRM_FINISH,
+            &owner(),
+            json!({ "action": action, "secretId": sid, "method": "vault-password", "password": "correct horse battery" }),
+        );
+        assert_eq!(s, 200, "{v}");
+        v["token"].as_str().expect("token").to_string()
+    };
+    let with = |name: &str, d: &str, tok: &str| {
+        let mut b = g(name, d);
+        b["confirmToken"] = json!(tok);
+        b
+    };
+    // Bound to A: B is refused (and the token burns).
+    let tok = confirm(GRANT_READ_CONFIRM_ACTION, &id("A"));
+    let (s, v) = call(&t, GRANT, &owner(), with("B", "env", &tok));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    let (s, v) = call(&t, GRANT, &owner(), with("A", "env", &tok));
+    assert_eq!(s, 403, "single use: {v}");
+    // A reveal confirm isn't a grant confirm.
+    let tok = confirm("reveal", &id("A"));
+    let (s, v) = call(&t, GRANT, &owner(), with("A", "env", &tok));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    let tok = confirm(GRANT_READ_CONFIRM_ACTION, &id("A"));
+    let (s, v) = call(&t, GRANT, &owner(), with("A", "env", &tok));
+    assert_eq!(s, 200, "a person confirmed: {v}");
+    assert_eq!(v["grant"]["delivery"], "env", "{v}");
+    // A Connect Admin shares without one (the login is the person check).
+    let (s, v) = call(&t, GRANT, &login(Role::Admin), g("B", "env"));
+    assert_eq!(s, 200, "{v}");
+    assert!(!grant_needs_confirm(&Actor::Owner, k2_vault::Namespace::User, k2_vault::Delivery::Agent), "ssh-agent signs, never shows");
+    assert!(!grant_needs_confirm(&Actor::Owner, k2_vault::Namespace::User, k2_vault::Delivery::Proxy));
+    assert!(grant_needs_confirm(&Actor::Owner, k2_vault::Namespace::User, k2_vault::Delivery::Api));
+    assert!(!grant_needs_confirm(&Actor::Owner, k2_vault::Namespace::System, k2_vault::Delivery::Env), "K2's own: never granted by people");
+    assert!(!grant_needs_confirm(&Actor::System("adopt".into()), k2_vault::Namespace::User, k2_vault::Delivery::Env));
+}

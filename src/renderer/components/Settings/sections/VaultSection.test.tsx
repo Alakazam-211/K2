@@ -368,6 +368,11 @@ describe('VaultSection', () => {
 
   it('the Share panel shows the delivery it will send, even one outside the usual choices', async () => {
     userRows = [secret({ name: 'API_KEY_X', defaultDelivery: 'api', deliveryCeiling: 'api' }), ...userRows]
+    postHandler = (route) => {
+      if (route === 'vault/confirm/start') return { methods: ['vault-password'], expiresIn: 60 }
+      if (route === 'vault/confirm/finish') return { token: 'tok-g', expiresIn: 60 }
+      return { ok: true }
+    }
     await renderPage()
     fireEvent.click(within(row('API_KEY_X')).getByRole('button', { name: 'Share' }))
     const panel = within(row('API_KEY_X')).getByTestId('vault-share-panel')
@@ -376,8 +381,28 @@ describe('VaultSection', () => {
     expect(as.options[as.selectedIndex].textContent).toBe('the agent can print it')
     expect(panel.textContent).toContain('They can see this value')
     fireEvent.click(within(panel).getByRole('button', { name: 'Share' }))
+    // VC-B2: a share they can read asks for a confirm first, like reveal.
+    const pw = (await within(panel).findByTestId('vault-share-password')) as HTMLInputElement
+    expect(posts.some((p) => p.route === 'vault/grant')).toBe(false)
+    fireEvent.change(pw, { target: { value: 'correct horse' } })
+    fireEvent.click(within(panel).getByRole('button', { name: 'Confirm and share' }))
     await waitFor(() => expect(posts.some((p) => p.route === 'vault/grant')).toBe(true))
-    expect(posts.find((p) => p.route === 'vault/grant')!.body).toMatchObject({ id: 'id-API_KEY_X', as: 'api' })
+    expect(posts.map((p) => p.route)).toEqual(['vault/confirm/start', 'vault/confirm/finish', 'vault/grant'])
+    expect(posts[0].body).toEqual({ action: 'grant-read', secretId: 'id-API_KEY_X' })
+    expect(posts[1].body).toMatchObject({ action: 'grant-read', secretId: 'id-API_KEY_X', method: 'vault-password', password: 'correct horse' })
+    expect(posts[2].body).toEqual({ id: 'id-API_KEY_X', to: 'ws:*', as: 'api', confirmToken: 'tok-g' })
+  })
+
+  it('a share that never shows the value needs no confirm', async () => {
+    await renderPage()
+    fireEvent.click(within(row('STRIPE_KEY')).getByRole('button', { name: 'Share' }))
+    const panel = within(row('STRIPE_KEY')).getByTestId('vault-share-panel')
+    expect((within(panel).getByTestId('vault-share-as') as HTMLSelectElement).value).toBe('fetch')
+    expect(panel.textContent).not.toContain('They can see this value')
+    fireEvent.click(within(panel).getByRole('button', { name: 'Share' }))
+    await waitFor(() => expect(posts.some((p) => p.route === 'vault/grant')).toBe(true))
+    expect(posts.map((p) => p.route)).toEqual(['vault/grant'])
+    expect(posts[0].body).toEqual({ id: 'id-STRIPE_KEY', to: 'ws:*', as: 'fetch' })
   })
 
   it('an SSH key keeps its line breaks: add and rotate use a multi-line field', async () => {

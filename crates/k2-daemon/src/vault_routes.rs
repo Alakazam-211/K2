@@ -1355,6 +1355,23 @@ struct GrantBody {
     hosts: Option<Vec<String>>,
     expires_at: Option<String>,
     version: Option<u32>,
+    /// VC-B2: a `grant-read` confirm, for a readable grant from the owner
+    /// token.
+    confirm_token: Option<String>,
+}
+
+/// VC-B2: the confirm action for a grant that lets the grantee read the
+/// value (`file`, `env`, `api`), bound to the secret's id.
+pub const GRANT_READ_CONFIRM_ACTION: &str = "grant-read";
+
+/// VC-B2: does this grant need a person's confirm? The owner token alone
+/// (the desktop app, a script, anything that read the token) may not hand
+/// out a value someone can read without one, the same as reveal. Grants
+/// that never show the value (`fetch`, `proxy`, `agent`) don't; nor do
+/// Connect logins (a person signed in with a password) or K2's own
+/// subsystems, which never come through this route.
+pub fn grant_needs_confirm(actor: &Actor, namespace: Namespace, delivery: Delivery) -> bool {
+    matches!(actor, Actor::Owner) && namespace == Namespace::User && delivery.readable()
 }
 
 pub fn consumer_for(c: &VaultCaller, to: &str) -> Result<Consumer, VaultError> {
@@ -1406,6 +1423,30 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
     if consumer.kind == ConsumerKind::Session && c.actor.agent().is_some_and(|a| a.vault_manage) {
         let scope = vault.meta(&sel, &c.actor)?.scope.kind;
         session_self_grant(&c.actor, scope, session_workspace(&consumer.id))?;
+    }
+    if matches!(c.actor, Actor::Owner) && delivery.readable() {
+        let m = vault.meta(&sel, &c.actor)?;
+        if grant_needs_confirm(&c.actor, m.namespace, delivery) {
+            let stamp = c.actor.stamp();
+            let proof = match b.confirm_token.as_deref() {
+                None => Err(err(
+                    "vault_confirm_required",
+                    403,
+                    format!(
+                        "sharing {} with {} as {} lets them read the value, so a person confirms it first (Touch ID or the vault password), as for k2 vault reveal. Share it in Settings → Vault, or run k2 vault grant from your own terminal outside K2 (a K2 terminal can't confirm). Agents: don't retry; tell your owner.",
+                        m.name,
+                        consumer_label(c, &consumer),
+                        delivery.as_str()
+                    ),
+                )),
+                Some(t) => take_proof(vault, c, GRANT_READ_CONFIRM_ACTION, Some(&m.id), Some(t)).map(|_| ()),
+            };
+            if let Err(e) = proof {
+                crate::vault::auth_audit("vault-grant-read", &stamp, &format!("deny {}: {}", m.name, e.code), "-");
+                return Err(e);
+            }
+            crate::vault::auth_audit("vault-grant-read", &stamp, &format!("ok {} as {}", m.name, delivery.as_str()), "-");
+        }
     }
     let g = vault.grant(
         GrantRequest {
@@ -1649,6 +1690,9 @@ pub const HANDOFF_CONFIRM_ACTION: &str = "handoff-send";
 const CONFIRM_ACTIONS: &[&str] = &[
     HANDOFF_CONFIRM_ACTION,
     "reveal",
+    // VC-B2: a grant that lets the grantee read the value, from the owner
+    // token (`secretId` = the secret's id).
+    GRANT_READ_CONFIRM_ACTION,
     "kek-rotate",
     "rekey",
     "rollback",

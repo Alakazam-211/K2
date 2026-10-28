@@ -204,7 +204,10 @@ export const vaultApi = {
     delivery?: string
     ceiling?: string
   }) => daemonCliPost<{ ok: boolean; secret: VaultSecret }>(scope(), 'vault/policy', body),
-  grant: (body: { id: string; to: string; as?: string }) => daemonCliPost<{ ok: boolean }>(scope(), 'vault/grant', body),
+  /** A share they can read (`file`, `env`, `api`) from the owner token needs a
+   *  `grant-read` confirm bound to the secret (VC-B2), like reveal. */
+  grant: (body: { id: string; to: string; as?: string; confirmToken?: string }) =>
+    daemonCliPost<{ ok: boolean }>(scope(), 'vault/grant', body),
   rotate: (body: { id: string; valueB64: string }) =>
     daemonCliPost<{ ok: boolean; version: number; trimmed?: boolean }>(scope(), 'vault/rotate', body),
   disable: (id: string) => daemonCliPost<{ ok: boolean }>(scope(), 'vault/disable', { id }),

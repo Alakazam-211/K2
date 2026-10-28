@@ -26107,6 +26107,10 @@ $K2_SECRETS_DIR at once (or within a minute; k2 vault sync in a session
 does it now). Env and ssh-key grants reach new sessions only: restart
 your session to receive it.
 
+A share they can read (file, env or api) asks you to confirm first, like
+reveal (Touch ID or your vault password), when you run it from your own
+terminal. A K2 terminal can't: share it in Settings → Vault instead.
+
 Example, a CLI tool that reads its token from the environment:
   k2 vault grant GITHUB_CLI --to ws:<you> --env-name GH_TOKEN
   (restart the session; gh now reads $GH_TOKEN)
@@ -27242,7 +27246,24 @@ print(json.dumps(o))' "${pos[1]}" "$ceiling")"
 for k,v in (("as",sys.argv[2]),("envName",sys.argv[3]),("fileName",sys.argv[4])):
     if v: o[k]=v
 print(json.dumps(o))' "$to" "$as_d" "$env_name" "$file_name")"
-            _vault_call POST grant "$(_vault_merge "$sj" "$nj" "$gj")"
+            _sidecar_split "$(_sidecar_send POST /cli/vault/grant "$(_vault_merge "$sj" "$nj" "$gj")")"
+            # VC-B2: a grant they can read (file, env, api) from the owner
+            # token needs a person's confirm, like reveal. From your own
+            # terminal: confirm here (Touch ID or the vault password) and
+            # grant over the vault socket. A K2 terminal can't.
+            if [ "$_SC_STATUS" = "403" ] && printf '%s' "$_SC_BODY" | grep -q '"vault_confirm_required"' \
+                && [ -z "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] && [ -S "$(_vault_sock)" ]; then
+                _vault_sock_call GET "show?$(python3 -c '
+import json, sys, urllib.parse
+o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.parse.urlencode(o))' "$sj" "$nj")"
+                [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+                local gsid gtok
+                gsid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret"]["id"])')"
+                echo "Sharing ${name} this way lets ${to} read the value: confirm to go ahead (nothing is shared if you cancel)." >&2
+                gtok="$(_vault_confirm_token grant-read "$gsid" "share $name with $to")" || exit 3
+                _vault_sock_call POST grant "$(_vault_merge "$sj" "$nj" "$gj" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$gtok")")"
+            fi
+            [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             echo "shared ${name} with ${to}"
             # A compute: grant to a node another K2 server owns.

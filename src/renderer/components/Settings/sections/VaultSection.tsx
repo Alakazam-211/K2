@@ -814,12 +814,60 @@ function SharePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => voi
   const [as, setAs] = useState(secret.defaultDelivery === 'proxy' ? 'fetch' : secret.defaultDelivery)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // VC-B2: a share they can read needs a confirm first, like reveal.
+  const [pwMethod, setPwMethod] = useState<string | null>(null)
+  const [hasPw, setHasPw] = useState(false)
+  const pwRef = useRef<HTMLInputElement>(null)
+  const grantWith = async (confirmToken?: string): Promise<void> => {
+    await vaultApi.grant({ id: secret.id, to, as, ...(confirmToken ? { confirmToken } : {}) })
+    onDone()
+  }
+  const confirmAndGrant = async (method: string, password?: string): Promise<void> => {
+    const { token } = await vaultApi.confirmFinish({
+      action: 'grant-read',
+      secretId: secret.id,
+      method,
+      label: secret.name,
+      ...(password !== undefined ? { password } : {}),
+    })
+    await grantWith(token)
+  }
   const share = async () => {
     setBusy(true)
     setError(null)
     try {
-      await vaultApi.grant({ id: secret.id, to, as })
-      onDone()
+      if (!deliveryReadable(as)) {
+        await grantWith()
+        return
+      }
+      const { methods } = await vaultApi.confirmStart('grant-read', secret.id)
+      if (methods.includes('local-auth')) {
+        await confirmAndGrant('local-auth')
+        return
+      }
+      const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
+      if (pw) {
+        setPwMethod(pw)
+        return
+      }
+      setError('No way to confirm here yet. Set a vault password from a terminal outside K2: k2 vault confirm-password set.')
+    } catch (e) {
+      setError(daemonErrorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const submitPassword = async (method: string): Promise<void> => {
+    const el = pwRef.current
+    if (!el) return
+    const pw = el.value
+    el.value = ''
+    setHasPw(false)
+    setError(null)
+    setBusy(true)
+    try {
+      await confirmAndGrant(method, pw)
+      setPwMethod(null)
     } catch (e) {
       setError(daemonErrorText(e))
     } finally {
@@ -849,10 +897,40 @@ function SharePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => voi
           ))}
         </select>
       </label>
-      {deliveryReadable(as) && <p className={`text-[11px] ${muted}`}>They can see this value.</p>}
-      <button type="button" className={btn} disabled={busy} onClick={() => void share()}>
-        Share
-      </button>
+      {deliveryReadable(as) && <p className={`text-[11px] ${muted}`}>They can see this value, so you confirm first.</p>}
+      {pwMethod === null ? (
+        <button type="button" className={btn} disabled={busy} onClick={() => void share()}>
+          Share
+        </button>
+      ) : (
+        <form
+          className="flex flex-col gap-1.5 max-w-sm"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void submitPassword(pwMethod)
+          }}
+        >
+          <label className={`text-[11px] ${muted}`}>
+            {pwMethod === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
+            <input
+              ref={pwRef}
+              type="password"
+              autoComplete="current-password"
+              data-testid="vault-share-password"
+              onChange={(e) => setHasPw(e.currentTarget.value !== '')}
+              className={`${input} mt-1`}
+            />
+          </label>
+          <div className="flex gap-1.5">
+            <button type="submit" className={btn} disabled={!hasPw || busy}>
+              Confirm and share
+            </button>
+            <button type="button" className={btn} onClick={() => setPwMethod(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
       <ErrorLine text={error} />
     </div>
   )

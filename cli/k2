@@ -64945,8 +64945,9 @@ K2 mailboxes still lack the Sieve lock; plus whether enotify is off.
 It also covers mail server API keys: which K2 mailboxes can still create
 their own API keys (marked [API keys NOT locked]) and how many API keys
 any account holds (counts only, never the keys). K2 never creates keys
-on a mailbox. To revoke a mailbox's keys, set a new password with
-`k2 hostmail password rotate <address>`.
+on a mailbox, so a key there was made with the mailbox's password before
+K2 0.46.6 turned key creation off. To revoke all of a mailbox's keys, set
+a new password with `k2 hostmail password rotate <address>`.
 
 Changes nothing. K2 itself removes user scripts and turns off API key
 creation on every K2 mailbox when the daemon starts (each recorded in

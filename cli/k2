@@ -45685,6 +45685,9 @@ EDIT
   k2 doc sed -i 's/old/new/g' notes.md         find and replace (e w r R W refused)
   k2 doc insert --after 12 notes.md < text      or --line N, --at L:C, --text "..."
   k2 doc replace --lines 3,5 notes.md < text    delete --lines a,b · append
+  k2 doc replace --old "teh" --new "the" notes.md   exact text, no regex; exit 1 if it
+                                                isn't there or is there more than once
+                                                (--all for every one; --old-file F)
   k2 doc patch notes.md < change.diff           all or nothing; exit 1 shows the rejects
   k2 doc write --base 42 notes.md < whole.md    you rewrote from v42: only YOUR changes
                                                 since v42 apply; overlaps are conflicts
@@ -45692,12 +45695,30 @@ EDIT
                                                 overwrites others' edits: avoid it.
   k2 doc undo notes.md                          reverts YOUR last edit only, never others'
   Each verb is one change. Others' edits made meanwhile are kept.
+  Your edits are checked against the version you last read (cat, grep, a
+  read verb, or your own last edit). If anyone changed the doc since, the
+  edit is refused, exit 1: "doc changed since 42 (now 45)". Read it again
+  and redo the edit from what you see. --if-version V sets it yourself.
 
 PRESENCE
   k2 doc who notes.md          who is here: editors, viewers, carets, viewing ranges
   k2 doc follow Sam notes.md   where Sam is
   k2 doc watch notes.md        each change as it lands, with who made it (Ctrl-C)
   k2 doc open / leave          stay present between verbs / go now
+  Lines starting "note:" on stderr say who else is on the lines you read or
+  changed (claimed, editing, a person's caret). stdout never changes.
+
+CLAIMS (agents taking turns on lines)
+  k2 doc claim --lines 40,60 --note "rewriting intro" notes.md
+                               yours for 30 s (--ttl, at most 10m); your next
+                               edit there ends it (--hold keeps it)
+  k2 doc cat --for-edit notes.md   read and claim what you read, in one step
+  k2 doc claim --renew · claim --release · activity (who read/edited what)
+  Another agent's edit into your claim is bounced: exit 5, nothing applied,
+  and it is put in line. People are never held back by a claim.
+  Bounced yourself? The error names who and for how long. Don't retry in a
+  loop: when the lines are free, K2 messages you ("lines 40-60 of notes.md
+  are free now ... the doc is at v812"). Then read again and edit.
 
 HISTORY (needs the history right)
   k2 doc log notes.md                 changes (who, how, +/-) and versions, newest first
@@ -45715,10 +45736,13 @@ ANY OTHER FILE (tier 0: images, PDFs, office files, code, plain text)
   k2 doc write --base V --file new.png photo.png   replace it; a stale V = exit 1
   k2 doc lease --release photo.png
   k2 doc versions · log · blame · show --version V --out old.png · restore --version V
-  Text verbs (cat, grep, sed -i, undo …) exit 2 here (not_a_text_doc).
+  k2 doc cat photo.png > copy.png  its bytes (never onto a terminal)
+  Text verbs (grep, sed -i, undo, claim …) exit 2 here (not_a_text_doc).
+  Written --on-behalf-of a person: it applies at once and waits for them
+  (k2 doc log --pending; they run approve or decline <version>).
   A program that saves the file while someone holds the lease keeps both:
-  its save is current; the old content stays a version and a copy beside
-  the file, "photo (conflict 2026-10-27 093000 from Sam).png". Leases end
+  its save is current; the old content stays a version and a copy under
+  .k2/conflicts/, "photo (conflict Sam 2026-10-27 093000).png". Leases end
   when a daemon restarts (renew: exit 2, take it again).
 
 RIGHTS
@@ -45742,7 +45766,8 @@ EXITS
   0 ok · 1 the tool's "no" (grep found nothing, diff differs, a patch or
   write conflicted, the doc moved: read again) or daemon unreachable ·
   2 bad usage / unsupported flag / too many edits (retry) · 3 refused ·
-  4 no such file or change, or it can't be a live doc · 5 leased ·
+  4 no such file or change, or it can't be a live doc · 5 someone else
+  holds it for now (a lease, or a claim on those lines) ·
   6 the docs store failed · 8 too old. Errors end with a JSON line
   {"error":{"code","hint","status"}} on stderr.
 EOF
@@ -83688,20 +83713,28 @@ Usage: k2 doc <verb> [flags] <file.md>
 Live Markdown docs: you, your human and other agents edit the same file at
 once. The daemon keeps the file on disk true (writes back within ~1 s and
 merges edits other programs make). Every verb shows you in `k2 doc who`.
+Lines starting "note:" on stderr say who else is on the lines you touched.
 
 Read (the doc's path is the LAST argument; GNU flags, a subset):
   k2 doc cat [-n] <f>                 the doc now (exact bytes)
+  --for-edit [--ttl 30s] on cat/head/tail/grep/sed/view: also claim the lines shown
   k2 doc head [-n N] <f> · tail [-n N] <f> · wc [-l] <f>
   k2 doc grep [-n -i -E -C N …] <pattern> <f>
   k2 doc sed -n 'a,bp' <f>            print lines (sets your viewing range)
   k2 doc view --lines a,b <f>
   k2 doc diff [-u] <f> < old.md       what changed vs your copy (exit 1 = differs)
-Edit (each is one change; your own `undo` reverts it):
+Edit (each is one change; your own `undo` reverts it). Agents: an edit is
+checked against the version you last read; if the doc changed since, it is
+refused (exit 1, "doc changed since V (now W)"): read again, then redo it.
+--if-version V sets the version yourself.
   k2 doc sed -i 's/old/new/g' <f>     (e w r R W and backup suffixes refused)
   k2 doc patch [-p N] <f> < change.diff   all or nothing (--partial to apply what fits)
   k2 doc append <f> < text            or --text "..."
   k2 doc insert --line N|--after N|--at L:C <f> < text   (or --text "...")
   k2 doc replace --lines a,b|--range L:C-L:C <f> < text  (or --text "...")
+  k2 doc replace --old TEXT --new TEXT [--all] <f>   exact text, no regex (exit 1:
+                                      no match, or more than one without --all);
+                                      --old-file F / --new-file F, or - for stdin
   k2 doc delete --lines a,b|--range L:C-L:C <f>
   k2 doc replace-section --heading "## X" [--include-heading] [--nth K] <f> < text
   k2 doc mv <f> <new-name.md>         rename; the doc keeps its history and presence
@@ -83710,6 +83743,12 @@ Edit (each is one change; your own `undo` reverts it):
   k2 doc revert <change> [--partial] <f>   reverse one change from the log, days later
 Presence:
   k2 doc who <f> · follow <name> <f> · cursor --at L:C [--to L:C] <f>
+  k2 doc claim --lines a,b [--ttl 2m] [--note "why"] [--hold] <f>   "I'm working
+                                      on these lines" (your next edit there ends it)
+  k2 doc claim --renew|--release [--id claim-N] <f> · activity [-n N] <f>
+  Another agent's edit into your claim bounces (exit 5) and waits in line;
+  when your claim ends K2 messages the next one that the lines are free.
+  If yours bounces: wait for that message, re-read, then edit.
   k2 doc open <f> · leave <f>         stay present / leave now
   k2 doc watch <f>                    print each change as it lands (also: tail -f)
 State and history:
@@ -83723,14 +83762,16 @@ History (needs the history right):
   k2 doc approvals [--pending] [--mine] <f> · approve|decline <change> <f>
 Any other file (tier 0: images, PDFs, office files, code, text …): presence,
 a lease, versions and restore. The text verbs above need a Markdown doc.
-  k2 doc who|open|leave|status|flush|watch <f> · view --region "page 3" <f>
+  k2 doc cat <f> (its bytes; pipe them) · who|open|leave|status|flush|watch <f>
+  k2 doc view --region "page 3" <f>   say what you're looking at
   k2 doc lease [--ttl 5m] <f>         take the lease (exit 5 while someone else has it)
   k2 doc lease --renew|--release <f> · lock <f> · unlock <f>   (--break: owner only)
   k2 doc write --base V --file new.png <f>   replace it (V from status; no --base live)
   k2 doc versions|log|blame <f> · show --version V --out FILE <f> · restore --version V <f>
+  k2 doc approve|decline <version> <f>   an agent's write for you (--on-behalf-of)
   A program that saves the file while someone holds the lease keeps both:
   its save is current, the old content a version and a "(conflict …)" copy
-  beside the file (status lists them). Files over 32 MiB are declined.
+  under .k2/conflicts/ (status lists them). Files over 32 MiB are declined.
 Sharing with another workspace (people only):
   k2 doc share <file-or-folder> --with <ws> [--write] [--history] -w <ws>
   k2 doc unshare <file-or-folder> --with <ws> -w <ws> · shares [-w <ws>]
@@ -83747,8 +83788,9 @@ usage, unsupported flag, rate limited, a text verb on an any-file doc
 (not_a_text_doc), no lease to renew · 3 refused (not_connected,
 doc_not_shared, doc_forbidden, history_forbidden …; the last line says how
 to ask) · 4 no such file or change, or it can't be a live doc (declined:
-a secret, the vault, too large) · 5 leased by someone else (until it
-expires: the error names who and when) · 6 the docs store failed ·
+a secret, the vault, too large) · 5 someone else holds it for now: a lease,
+or (agents) a claim on those lines; the error names who and for how long ·
+6 the docs store failed ·
 8 too old (a revert past the window: restore a version instead; a write
 base no longer kept: read again). See `k2 study docs`.
 EOF
@@ -83966,21 +84008,29 @@ _doc_fence_on() {
 
 # _doc_print_tool: a tool answer → stdout bytes, fence + summary on stderr,
 # exit with the tool's code.
+# The answer is in $_DOC_OUT (a file: `cat` of a whole any-file doc can be
+# big). Heads-up notes (who else is on those lines) go to stderr; binary
+# bytes never go onto a terminal.
 _doc_print_tool() {
     if [ "${_DOC_JSON:-0}" = "1" ]; then
-        printf '%s\n' "$_DOC_BODY"
-        python3 -c 'import json,sys; sys.exit(int(json.loads(sys.stdin.read()).get("exit", 1)))' <<<"$_DOC_BODY"
+        cat "$_DOC_OUT"; echo
+        python3 -c 'import json,sys; sys.exit(int(json.load(open(sys.argv[1])).get("exit", 1)))' "$_DOC_OUT"
         exit $?
     fi
     local fence=0
     _doc_fence_on && fence=1
-    printf '%s' "$_DOC_BODY" | python3 -c '
+    python3 -c '
 import base64, json, sys
-v = json.loads(sys.stdin.read())
-fence = sys.argv[1] == "1"
+v = json.load(open(sys.argv[1], encoding="utf-8"))
+fence, tty = sys.argv[2] == "1", sys.argv[3] == "1"
 f = v.get("fence") if fence else None
 out = v.get("stdout")
 data = out.encode("utf-8") if isinstance(out, str) else base64.b64decode(v.get("stdoutB64") or "")
+if tty and (not isinstance(out, str) or b"\0" in data):
+    hint = "%s is binary (%d bytes); pipe it, or write it to a file: k2 doc show --version V --out FILE" % (v["doc"]["path"], len(data))
+    print("Error: " + hint, file=sys.stderr)
+    print(json.dumps({"error": {"code": "binary_output", "hint": hint}}), file=sys.stderr)
+    sys.exit(2)
 if f:
     sys.stderr.write(f.get("begin", ""))
     sys.stderr.flush()
@@ -83993,13 +84043,78 @@ if f:
 err = v.get("stderr")
 if err:
     sys.stderr.write(err.rstrip("\n") + "\n")
+for k in ("forEdit", "notes"):
+    if v.get(k):
+        sys.stderr.write(v[k].rstrip("\n") + "\n")
+if v.get("ifVersion") is not None and v.get("changed"):
+    sys.stderr.write("(checked against v%s, the version you last read)\n" % v["ifVersion"])
 a = v.get("approval")
 if isinstance(a, dict):
     sys.stderr.write("on behalf of %s: %s\n" % (a.get("onBehalfOf"), a.get("state")))
 sys.exit(int(v.get("exit", 1)))
-' "$fence"
+' "$_DOC_OUT" "$fence" "$([ -t 1 ] && echo 1 || echo 0)"
     exit $?
 }
+
+# A tool call's body, built in one place (argv, the doc, stdin when the
+# verb reads it): `--old-file P` / `--new-file P` become `--old` / `--new`
+# with the file's text (the kit does no I/O). Written to stdout as JSON.
+_DOC_TOOL_PY='import json, sys
+ws, ob, text_set, text, path, argv = sys.argv[1], sys.argv[2], sys.argv[3] == "1", sys.argv[4], sys.argv[5], sys.argv[6:]
+def die(msg, rc=2):
+    print("Error: " + msg, file=sys.stderr)
+    print(json.dumps({"error": {"code": "usage", "hint": msg}}), file=sys.stderr)
+    sys.exit(rc)
+out, i = [], 0
+while i < len(argv):
+    a = argv[i]
+    if a == "--":
+        out += argv[i:]
+        break
+    flag = fp = None
+    if a in ("--old-file", "--new-file"):
+        if i + 1 >= len(argv):
+            die(a + " needs a file")
+        flag, fp, i = a[:-5], argv[i + 1], i + 2
+    elif a.startswith("--old-file=") or a.startswith("--new-file="):
+        k, fp = a.split("=", 1)
+        flag, i = k[:-5], i + 1
+    if flag:
+        try:
+            with open(fp, "rb") as f:
+                raw = f.read()
+        except OSError as e:
+            die("%s-file %s: %s" % (flag, fp, e.strerror), 4)
+        try:
+            out += [flag, raw.decode("utf-8")]
+        except UnicodeDecodeError:
+            die("%s-file %s is not UTF-8 text" % (flag, fp))
+        continue
+    out.append(a)
+    i += 1
+verb, rest = out[0], out[1:]
+opts = rest[: rest.index("--")] if "--" in rest else rest
+exact = any(a in ("--old", "--new") or a.startswith("--old=") or a.startswith("--new=") for a in opts)
+reads = verb in ("diff", "patch", "apply", "append", "insert", "replace-section") or (verb == "replace" and not exact) or "-" in opts
+d = {"argv": out}
+if ws:
+    d["workspace"] = ws
+if path:
+    d["path"] = path
+if ob:
+    d["onBehalfOf"] = ob
+if reads:
+    if text_set:
+        d["stdin"] = text
+    elif sys.stdin.isatty():
+        die("k2 doc %s reads its text from stdin (pipe it in) or --text \"...\"" % verb)
+    else:
+        try:
+            d["stdin"] = sys.stdin.buffer.read().decode("utf-8")
+        except UnicodeDecodeError:
+            die("k2 doc %s: stdin is not UTF-8 text" % verb)
+print(json.dumps(d))'
+
 
 # Parse the common flags out of "$@" into _DOC_* and _DOC_ARGS (the rest).
 _doc_parse() {
@@ -84039,23 +84154,10 @@ _doc_tool() {
     local -a argv=("$verb")
     local i
     for ((i = 0; i < n - 1; i++)); do argv+=("${_DOC_ARGS[$i]}"); done
-    local argv_json
-    argv_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${argv[@]}")"
     path="$(_doc_path "$path")"
-    local needs_stdin=0
-    case "$verb" in
-        diff|patch|apply|append|insert|replace|replace-section) needs_stdin=1 ;;
-    esac
-    local body
-    if [ "$needs_stdin" = 1 ]; then
-        if [ "$_DOC_TEXT_SET" != 1 ] && [ -t 0 ]; then
-            _doc_die usage "k2 doc $verb reads its text from stdin (pipe it in) or --text \"...\""
-        fi
-        body="$(_doc_body "$path" argv "$argv_json" stdin @text)"
-    else
-        body="$(_doc_body "$path" argv "$argv_json")"
-    fi
-    _doc_call POST /cli/docs/tool "$body"
+    _doc_tmp
+    python3 -c "$_DOC_TOOL_PY" "$_DOC_WS" "$_DOC_OB" "$_DOC_TEXT_SET" "$_DOC_TEXT" "$path" "${argv[@]}" >"$_DOC_TMPD/tool.json" || exit $?
+    _doc_call_file POST /cli/docs/tool "" "$_DOC_TMPD/tool.json"
     _doc_print_tool
 }
 
@@ -84117,6 +84219,11 @@ for r in rows:
         extra.append("viewing %s-%s" % (vw["first"], vw["last"]))
     if r.get("region"):
         extra.append("viewing %s" % r["region"])
+    for cl in r.get("claims") or []:
+        extra.append("claimed %s-%s%s (%ds left)" % (cl["lines"][0], cl["lines"][1],
+                     (" \"%s\"" % cl["note"]) if cl.get("note") else "", int(cl["remainingMs"] / 1000)))
+    if r.get("lastEdit"):
+        extra.append("last edit at lines %s-%s" % tuple(r["lastEdit"]))
     if r.get("holdsLease"):
         extra.append("holds the lease")
     if r.get("away"):
@@ -84463,6 +84570,87 @@ elif a == "release":
 else:
     b = v.get("broken")
     print(("broke %s'"'"'s lease on %s" % (b.get("label"), p)) if b else ("nobody held a lease on %s" % p))
+sys.exit(int(v.get("exit", 0)))
+'
+            exit $? ;;
+        claim)
+            # Agent presence: "I'm working on lines a-b" (expires; your own
+            # edit there ends it unless --hold). Others' agents' edits into
+            # it bounce (exit 5) and wait in line; people are never held.
+            local action="take" lines="" ttl="" note="" hold="" id=""
+            local -a rest=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --lines) lines="${2:-}"; shift 2 ;;
+                    --lines=*) lines="${1#*=}"; shift ;;
+                    --ttl) ttl="${2:-}"; shift 2 ;;
+                    --ttl=*) ttl="${1#*=}"; shift ;;
+                    --note) note="${2:-}"; shift 2 ;;
+                    --note=*) note="${1#*=}"; shift ;;
+                    --hold) hold=@true; shift ;;
+                    --no-hold) hold=@false; shift ;;
+                    --id) id="${2:-}"; shift 2 ;;
+                    --id=*) id="${1#*=}"; shift ;;
+                    --renew) action="renew"; shift ;;
+                    --release) action="release"; shift ;;
+                    *) rest+=("$1"); shift ;;
+                esac
+            done
+            local ms=""
+            if [ -n "$ttl" ]; then
+                ms="$(python3 -c '
+import re, sys
+m = re.fullmatch(r"(\d+)(ms|s|m)?", sys.argv[1].strip())
+if not m or int(m.group(1)) == 0:
+    sys.exit(1)
+print(int(m.group(1)) * {None: 1, "ms": 1, "s": 1000, "m": 60000}[m.group(2)])
+' "$ttl")" || _doc_die usage "--ttl takes a duration: 30s, 5m, or milliseconds (at most 10m)"
+            fi
+            _doc_parse "${rest[@]}"
+            _doc_one_path claim; local path="$_DOC_PATH"
+            if [ "$action" = take ] && [ -z "$lines" ]; then
+                _doc_die usage "k2 doc claim --lines a,b [--ttl 2m] [--note \"what for\"] [--hold] <file.md>"
+            fi
+            local -a kv=(action "$action")
+            [ -n "$lines" ] && kv+=(lines "$lines")
+            [ -n "$ms" ] && kv+=(ttlMs "@int:$ms")
+            [ -n "$note" ] && kv+=(note "$note")
+            [ -n "$hold" ] && kv+=(hold "$hold")
+            [ -n "$id" ] && kv+=(id "$id")
+            _doc_call POST /cli/docs/claim "$(_doc_body "$path" "${kv[@]}")"
+            _doc_print_json_or '
+import json, sys, time
+v = json.load(sys.stdin)
+a, p = v.get("action"), v["doc"]["path"]
+if a == "release":
+    r = v.get("released") or []
+    print(("released %s on %s" % (", ".join(r), p)) if r else ("you held no claim on %s" % p))
+    sys.exit(int(v.get("exit", 0)))
+c = v["claim"]
+left = max(0, int(c["remainingMs"] / 1000))
+print("%s lines %s-%s of %s as %s for %ds%s%s" % ("claimed" if a == "take" else "renewed", c["lines"][0], c["lines"][1], p, c["id"],
+      left, " (held through your edits)" if c.get("hold") else " (your next edit there ends it)",
+      (" · %d waiting" % len(c["waiters"])) if c.get("waiters") else ""))
+'
+            exit $? ;;
+        activity)
+            local n=""
+            local -a rest=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    -n) n="${2:-}"; shift 2 ;;
+                    *) rest+=("$1"); shift ;;
+                esac
+            done
+            case "$n" in *[!0-9]*) _doc_die usage "-n needs a number" ;; esac
+            _doc_parse "${rest[@]}"
+            _doc_one_path activity; local path="$_DOC_PATH"
+            _doc_call GET /cli/docs/activity "$(_doc_query "$path" n "$n")"
+            if [ "${_DOC_JSON:-0}" = "1" ]; then printf '%s\n' "$_DOC_BODY"; return 0; fi
+            printf '%s' "$_DOC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+sys.stdout.write(v.get("rendered") or "No activity.\n")
 ' ;;
         versions|show|restore|version|revert)
             _doc_history "$verb" "$@" ;;
@@ -84542,6 +84730,8 @@ if v.get("tier") == 0:
 print("wrote %s (+%s -%s) · v%s" % (v["doc"]["path"], r.get("linesAdded", 0), r.get("linesRemoved", 0), r.get("version")), file=sys.stderr)
 if v.get("warning"):
     print("Warning: " + v["warning"], file=sys.stderr)
+if v.get("notes"):
+    print(v["notes"].rstrip("\n"), file=sys.stderr)
 a = v.get("approval")
 if a:
     print("on behalf of %s: %s" % (a.get("onBehalfOf"), a.get("state")), file=sys.stderr)
@@ -84605,6 +84795,8 @@ for x in rows:
     if x.get("type") == "version":
         name = (" \"%s\"" % x["name"]) if x.get("name") else ""
         by = (" by %s via %s, %s bytes" % (x["authorLabel"], x.get("via"), x.get("size"))) if x.get("authorLabel") else ""
+        if x.get("onBehalfOf"):
+            by += " for %s (%s)" % (x["onBehalfOf"], x.get("approval") or "pending")
         print("  version %-5s %s  %s%s%s" % (x.get("id"), t, x.get("reason"), name, by))
     else:
         who = x.get("author") or "?"
@@ -84661,7 +84853,7 @@ if v.get("tier") == 0:
     else:
         print("lease: free")
     for cp in v.get("conflictCopies") or []:
-        print("conflict copy: %s" % cp)
+        print("conflict copy: %s (version %s, kept for 30 days)" % (cp.get("path"), cp.get("kept")))
 print("your rights: " + ", ".join(k for k in ("read", "edit", "history") if r.get(k)))
 if v.get("declined"):
     print("live editing is off: %s" % v["declined"])
@@ -84712,7 +84904,13 @@ for r in rows:
             local path; path="$(_doc_path "${_DOC_ARGS[1]}")"
             local state="approved"; [ "$verb" = decline ] && state="declined"
             _doc_call POST /cli/docs/approve "$(_doc_body "$path" change "@int:$change" state "$state")"
-            _doc_print_json_or 'import json,sys; v=json.load(sys.stdin); print("change %s %s" % (v.get("change"), v["approval"]["state"]))' ;;
+            _doc_print_json_or '
+import json, sys
+v = json.load(sys.stdin)
+print("%s %s %s" % ("version" if v.get("tier") == 0 else "change", v.get("change"), v["approval"]["state"]))
+if v.get("hint"):
+    print(v["hint"], file=sys.stderr)
+' ;;
         share|unshare)
             local with="" write=@false history=@false
             local -a rest=()

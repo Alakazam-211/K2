@@ -11,8 +11,10 @@
 //
 //   --enrol [--replace]          make the SE key; write ~/.k2-release-approve/{key.blob,approver.pem}
 //                                (--replace first renames an existing key.blob/approver.pem to *.old-<time>)
-//   --challenge <f> --out <f>    show the challenge in the Touch ID sheet, sign its exact bytes,
-//                                write the DER signature to <out> (or the reason to <out>.err)
+//   --challenge <f> --out <f> [--timeout <s>]
+//                                show the challenge in the approval sheet, sign its exact bytes,
+//                                write the DER signature to <out> (or the reason to <out>.err);
+//                                --timeout cancels the sheet after <s> seconds with no answer
 //   --key-dir <dir>              (with the above) use <dir> instead of ~/.k2-release-approve
 //   --soft-selftest <dir>        S0 (c): a SOFTWARE P-256 key (no Secure Enclave, no Touch ID)
 //                                signs <dir>/data; writes <dir>/pub.pem and <dir>/sig.der so
@@ -72,8 +74,11 @@ func accessControl() -> SecAccessControl {
 
 // A fresh context for every run: nothing is pre-evaluated or reused, so the
 // key operation itself puts up the system sheet (Touch ID, or "Use Password…").
-// The sheet needs the logged-in console session; a process in a bare SSH
-// session can't show it and gets no signature.
+// The sheet appears on the Mac's screen even when this process was started
+// over SSH (that is how release.sh's `open -W` works from SSH too): the
+// boundary is the person answering that sheet, never how the helper was
+// launched. A same-user process can run its own copy of this helper anyway,
+// so a launch-path check would prove nothing.
 func approvalContext(reason: String) -> LAContext {
     let ctx = LAContext()
     ctx.localizedReason = reason
@@ -81,7 +86,7 @@ func approvalContext(reason: String) -> LAContext {
     ctx.interactionNotAllowed = false
     var err: NSError?
     guard ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &err) else {
-        fail("this session can't show the approval sheet (\(err?.localizedDescription ?? "unknown")); approve at z3mbpZ's screen")
+        fail("this Mac can't show the approval sheet (\(err?.localizedDescription ?? "unknown")); approve at the Mac's screen")
     }
     return ctx
 }
@@ -117,6 +122,13 @@ func enrol() {
     }
 }
 
+final class Flag {
+    private let lock = NSLock()
+    private var value = false
+    func set() { lock.lock(); value = true; lock.unlock() }
+    var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
+}
+
 func approve(challengePath: String, outPath: String) {
     let out = URL(fileURLWithPath: outPath)
     let errFile = URL(fileURLWithPath: outPath + ".err")
@@ -139,14 +151,28 @@ func approve(challengePath: String, outPath: String) {
     guard let blob = FileManager.default.contents(atPath: blobURL.path) else {
         fail("not enrolled (no \(blobURL.path)); open K2 Release Approve with --enrol first", errFile: errFile)
     }
+    let timeout = Double(arg("--timeout") ?? "0") ?? 0
+    let ctx = approvalContext(reason: reason)
+    let timedOut = Flag()
+    if timeout > 0 {
+        // No answer in time: cancel the sheet; the signature call then fails.
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+            timedOut.set()
+            ctx.invalidate()
+        }
+    }
+    let t0 = Date()
     do {
-        let ctx = approvalContext(reason: reason)
         let key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: blob, authenticationContext: ctx)
         // Signs SHA-256(challenge bytes): what `openssl dgst -sha256 -verify` checks.
         let sig = try key.signature(for: data)
+        ctx.invalidate()
+        if timedOut.isSet { fail("no approval (timed out after \(Int(timeout)) s)", errFile: errFile) }
         try writePrivate(sig.derRepresentation, to: out)
-        print("Approved: \(reason)")
+        print("Approved after \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(reason)")
     } catch {
+        ctx.invalidate()
+        if timedOut.isSet { fail("no approval (timed out after \(Int(timeout)) s)", errFile: errFile) }
         fail("no approval: \(error.localizedDescription)", errFile: errFile)
     }
 }

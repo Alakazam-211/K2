@@ -67,9 +67,12 @@ own `_k2sign`; no key is ever copied between them:
 approver key is a Secure Enclave key whose access control is
 `[.privateKeyUsage, .biometryAny, .or, .devicePasscode]`: the system sheet on
 that Mac's screen asks for a fingerprint, or "Use Password…" takes the login
-password. A fresh sheet every time (nothing is cached or pre-evaluated). A
-process in a bare SSH session can't show the sheet, so it gets no approval
-(`sitting.sh reenrol` proves this). Adding or removing a fingerprint no longer
+password. A fresh sheet every time (nothing is cached or pre-evaluated). The
+sheet appears on that Mac's screen even when the app was started over SSH
+(that is how `release.sh` works from SSH): the boundary is the person
+answering the sheet, never how the app was launched. With nobody at the
+screen nothing is approved; the sheet closes itself after `--timeout`
+(`sitting.sh reenrol` proof 3 shows this hands-off). Adding or removing a fingerprint no longer
 kills the key (`.biometryAny`). What the password adds, written down: anyone
 who has the login password and the screen (in person, or Screen Sharing /
 RemotePC) can approve. The login password is also the admin password, which
@@ -139,7 +142,7 @@ password policy): `bash scripts/k2sign/sitting.sh reenrol --key U2 --commit <sha
 rebuilds K2 Release Approve, runs `--enrol --replace` (the old key files are
 renamed `*.old-<time>`), installs the new public key with
 `sudo /usr/local/libexec/k2sign/k2sign-admin set-approver ~/.k2-release-approve/approver.pem`,
-then proves Touch ID, the password, and that a bare SSH session can't approve.
+then proves Touch ID, the password, and (hands off) that an SSH-started request with nobody answering the sheet makes no approval.
 
 **Rollback.**
 - Soft: root sets `approval = off` in `/usr/local/etc/k2sign/policy` and
@@ -159,7 +162,7 @@ then proves Touch ID, the password, and that a bare SSH session can't approve.
 | | What | Result |
 |---|---|---|
 | (a) | CryptoKit SE key, access control `[.privateKeyUsage, .biometryAny, .or, .devicePasscode]` (Touch ID or the login password; was `.biometryCurrentSet` until 2026-10-28), no keychain entitlement, ad hoc **and** Developer ID | **open:** needs the Mac + a person (`sitting.sh 0`); the password path is proven by `sitting.sh reenrol` (proof 2) |
-| (b) | `open -W -n -a` shows the approval sheet from iTerm and from SSH; a bare SSH run of the helper can't approve | **open:** `sitting.sh 0`, `sitting.sh reenrol` (proof 3) |
+| (b) | `open -W -n -a` shows the approval sheet from iTerm and from SSH; with nobody answering, an SSH-started request makes no approval | **z3mbpZ 2026-10-28:** an SSH-started helper's sheet appears on the console and approves only when answered there (reenrol runs 1–3, each with a touch); the hands-off rerun of proof 3 is open |
 | (c) | LibreSSL 3.3.6 `openssl dgst -sha256 -verify` accepts CryptoKit's DER ECDSA | **pass** (2026-10-28, z3mbp, LibreSSL 3.3.6): a CryptoKit P-256 signature (software key: the SE key's DER and PEM formats are the same) verifies, a one-byte change is refused; the test suite then uses openssl-made P-256 signatures in the same format |
 | (d) | gh attestation verify with only a read-only token in a scratch HOME | **pass on z3mbpZ (sitting 1, 2026-10-28):** `k2sign gh-selfcheck` ok as `_k2sign` with its own token. gh needs a token even for a public repo's attestations, and GitHub serves cli/cli's bundle by URL, so the signer lets the pinned gh fetch it. The token needs Contents + Attestations read-only on K2 |
 | (e) | a 300 MB stdin stream through `sudo -n -u` | **open:** needs sudo in a VM (the Tart `k2-newuser-base` VM), never on a signing Mac |

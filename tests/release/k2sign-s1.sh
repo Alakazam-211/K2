@@ -187,6 +187,10 @@ grep -qF '[.privateKeyUsage, .biometryAny, .or, .devicePasscode]' <<<"$code" && 
 grep -qF 'touchIDAuthenticationAllowableReuseDuration = 0' <<<"$code" && ! grep -q 'evaluatePolicy(' <<<"$code" \
     && pass "nothing is pre-evaluated or reused: the key operation asks every time" || fail "reuse / pre-evaluation"
 grep -q 'interactionNotAllowed = false' <<<"$code" && grep -q -- '--replace' <<<"$code" && pass "the sheet is required; --enrol --replace renames the old key" || fail "sheet / replace"
+grep -q 'arg("--timeout")' <<<"$code" && grep -q 'ctx.invalidate()' <<<"$code" && grep -q 'no approval (timed out after' <<<"$code" \
+    && pass "--timeout cancels an unanswered sheet (invalidate) and reports 'no approval (timed out …)'" || fail "helper timeout"
+! grep -qiE "SSH session can.t (show|approve)" "$REPO/docs/release/updater-key-ceremony.md" "$REPO/scripts/k2sign/sitting.sh" "$SW" \
+    && pass "no doc claims an SSH-started helper can't show the sheet (it can; the person answering is the boundary)" || fail "stale SSH claim"
 
 echo "== S1 7: every signature verifies with the pinned U2 and is in the audit log =="
 printf 'some daemon\n' > "$tmp/d1"

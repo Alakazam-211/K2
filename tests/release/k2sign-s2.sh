@@ -220,6 +220,9 @@ SH
 chmod +x "$helper"
 export K2_SIGN_APPROVE_CMD="$helper"
 check "a new release: one approval" 0 "signing session" sa k2sa_open_session 0.46.13 "$B1" "${ASSETS[@]}"
+grep -q 'open -W -n -a "$app" --args --challenge "$cf" --out "$of" --timeout "$limit"' "$TREE/scripts/lib/sign-approve.sh" \
+    && grep -q '"$K2_SIGN_APPROVE_CMD" --challenge "$cf" --out "$of" --timeout "$limit"' "$TREE/scripts/lib/sign-approve.sh" \
+    && pass "Step 0.46 gives the app the watchdog's limit as --timeout (the sheet closes when the watchdog fires)" || fail "helper --timeout wiring"
 [ "$(wc -l < "$tmp/helper.calls" | tr -d ' ')" = 1 ] && pass "the helper ran once" || fail "helper calls"
 check "a resumed run reuses the valid session (no prompt)" 0 "using 0.46.13's approved signing session" sa k2sa_open_session 0.46.13 "$B1" "${ASSETS[@]}"
 [ "$(wc -l < "$tmp/helper.calls" | tr -d ' ')" = 1 ] && pass "no second prompt" || fail "helper called again"

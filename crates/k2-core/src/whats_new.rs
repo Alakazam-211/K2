@@ -326,14 +326,14 @@ pub fn check_for_user(current_version: &str) -> WhatsNewCheck {
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = r#"# K2SO — What's New
+    const SAMPLE: &str = r#"# K2 — What's New
 
 Intro prose here — should be ignored by the parser since the `#`
 header isn't a version.
 
-## 0.38.7 — Update notes when K2SO updates
+## 0.38.7 — Update notes when K2 updates
 
-You see this popup when K2SO updates.
+You see this popup when K2 updates.
 
 - bullet a
 - bullet b
@@ -368,7 +368,7 @@ Daemon owns sessions.
     #[test]
     fn parser_extracts_titles() {
         let sections = parse_changelog(SAMPLE);
-        assert_eq!(sections[0].title, "Update notes when K2SO updates");
+        assert_eq!(sections[0].title, "Update notes when K2 updates");
         assert_eq!(sections[1].title, "Inter-agent messages just work");
         assert_eq!(sections[3].title, "Daemon-authoritative tabs");
     }
@@ -493,7 +493,7 @@ Daemon owns sessions.
 
     // ── Minor-track slice ────────────────────────────────────────────
 
-    const MULTI_MINOR_SAMPLE: &str = r#"# K2SO — What's New
+    const MULTI_MINOR_SAMPLE: &str = r#"# K2 — What's New
 
 ## 0.39.3 — patch three
 

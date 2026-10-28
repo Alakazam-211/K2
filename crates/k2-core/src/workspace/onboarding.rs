@@ -908,7 +908,7 @@ mod tests {
         let path = p.to_string_lossy().to_string();
         fs::create_dir_all(p.join(".k2so")).unwrap();
         let claude = p.join("CLAUDE.md");
-        fs::write(&claude, "# K2SO\n\nUses Rust and Tauri.\n").unwrap();
+        fs::write(&claude, "# K2\n\nUses Rust and Tauri.\n").unwrap();
 
         let outcome = adopt_harness_as_project_md(&path, &claude).unwrap();
         // PROJECT.md got written
@@ -937,7 +937,7 @@ mod tests {
         )
         .unwrap();
         let claude = p.join("CLAUDE.md");
-        fs::write(&claude, "# K2SO\n\nNew content from CLAUDE.md\n").unwrap();
+        fs::write(&claude, "# K2\n\nNew content from CLAUDE.md\n").unwrap();
         adopt_harness_as_project_md(&path, &claude).unwrap();
         let body = fs::read_to_string(p.join(".k2so/PROJECT.md")).unwrap();
         assert!(body.contains("Existing content the user wrote"));

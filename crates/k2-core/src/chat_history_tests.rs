@@ -53,8 +53,8 @@ fn claude_project_hash_handles_spaces() {
     // fixtures → literal fallback → ` `→`-` char-map. This golden is
     // unchanged by the 0.39.44 encoder rewrite.)
     assert_eq!(
-        claude_project_hash("/Users/z/DevProjects/Alakazam Labs/K2SO"),
-        "-Users-z-DevProjects-Alakazam-Labs-K2SO"
+        claude_project_hash("/Users/z/DevProjects/Alakazam Labs/K2"),
+        "-Users-z-DevProjects-Alakazam-Labs-K2"
     );
     assert_eq!(
         claude_project_hash("/Users/z/Some Folder With Spaces/proj"),
@@ -141,8 +141,8 @@ fn claude_project_hash_canonicalizes_symlinks() {
 #[test]
 fn cursor_project_hash_strips_leading_slash() {
     assert_eq!(
-        cursor_project_hash("/Users/z/DevProjects/K2SO"),
-        "Users-z-DevProjects-K2SO"
+        cursor_project_hash("/Users/z/DevProjects/K2"),
+        "Users-z-DevProjects-K2"
     );
 }
 

@@ -2341,20 +2341,20 @@ mod tests {
         let matches = |cwd: &str, workspace_path: &str| {
             cwd_matches_workspace(cwd, workspace_path, &none)
         };
-        assert!(matches("/x/K2SO", "/x/K2SO"));
-        assert!(matches("/x/K2SO/sub", "/x/K2SO"));
-        assert!(matches("/x/K2SO/sub/deeper", "/x/K2SO"));
+        assert!(matches("/x/K2", "/x/K2"));
+        assert!(matches("/x/K2/sub", "/x/K2"));
+        assert!(matches("/x/K2/sub/deeper", "/x/K2"));
         // Sibling — must NOT match (the exact bug `list-for-workspace`
         // got bitten by before).
-        assert!(!matches("/x/K2SO-website", "/x/K2SO"));
-        assert!(!matches("/x/other", "/x/K2SO"));
+        assert!(!matches("/x/K2-website", "/x/K2"));
+        assert!(!matches("/x/other", "/x/K2"));
         // Trailing-slash tolerance.
-        assert!(matches("/x/K2SO/", "/x/K2SO"));
-        assert!(matches("/x/K2SO", "/x/K2SO/"));
+        assert!(matches("/x/K2/", "/x/K2"));
+        assert!(matches("/x/K2", "/x/K2/"));
 
         // A nested registered project is not the parent's session.
-        let parent = "/x/K2SO".to_string();
-        let nested = "/x/K2SO/ProposalWriter".to_string();
+        let parent = "/x/K2".to_string();
+        let nested = "/x/K2/ProposalWriter".to_string();
         let projects = vec![parent.clone(), nested.clone()];
         let nested_matches = |cwd: &str, workspace_path: &str| {
             cwd_matches_workspace(cwd, workspace_path, &projects)

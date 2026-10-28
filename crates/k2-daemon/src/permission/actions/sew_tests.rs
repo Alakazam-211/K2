@@ -27,6 +27,11 @@ impl Drop for Sew {
     }
 }
 
+/// An answer as the dispatcher tags it (`loopback` | `lan` | `tunnel`).
+fn local<T>(ingress: &str, f: impl FnOnce() -> T) -> T {
+    crate::permission::answer::with_ingress(ingress, f)
+}
+
 fn confirm(token: &str, request: &str, stamp: &str) {
     CONFIRM.with(|c| *c.borrow_mut() = Some((token.into(), request.into(), stamp.into())));
 }
@@ -92,13 +97,21 @@ fn the_owner_allows_and_the_link_goes_to_them_never_to_the_agent() {
     let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow" }));
     assert_eq!((s.as_str(), &a["error"]["code"]), ("403 Forbidden", &json!("vault_confirm_required")), "{a}");
     confirm("k2vc_owner", "perm_someone_else", "owner");
-    let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow", "confirmToken": "k2vc_owner" }));
+    let (s, a) = local("loopback", || answer_as("owner", &ws, &card, json!({ "answer": "Allow", "confirmToken": "k2vc_owner" })));
     assert_eq!((s.as_str(), &a["error"]["code"]), ("403 Forbidden", &json!("vault_confirm_required")), "a confirm for another request: {a}");
     assert!(row(&id).is_answerable(), "nothing decided; the owner can confirm again");
 
-    // Confirmed by the owner for this request: the link is theirs.
+    // Through the tunnel (Connect, a phone): refused, nothing minted, still open.
+    confirm("k2vc_tunnel", &id, "owner");
+    let (s, a) = local("tunnel", || answer_as("owner", &ws, &card, json!({ "answer": "Allow", "confirmToken": "k2vc_tunnel" })));
+    assert_eq!((s.as_str(), &a["error"]["code"]), ("403 Forbidden", &json!("loopback_only")), "{a}");
+    assert!(a["error"]["hint"].as_str().unwrap().starts_with("Open this from K2 on the box's own computer"), "{a}");
+    assert!(a.get("forYou").is_none(), "{a}");
+    assert!(row(&id).is_answerable(), "the request stays open");
+
+    // Confirmed by the owner for this request, on the box: the link is theirs.
     confirm("k2vc_owner2", &id, "owner");
-    let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow", "confirmToken": "k2vc_owner2" }));
+    let (s, a) = local("loopback", || answer_as("owner", &ws, &card, json!({ "answer": "Allow", "confirmToken": "k2vc_owner2" })));
     assert_eq!(s, "200 OK", "{a}");
     assert_eq!(row(&id).state, RequestState::Approved);
     let open = a["forYou"]["openUrl"].as_str().unwrap_or_else(|| panic!("no link for the owner: {a}")).to_string();

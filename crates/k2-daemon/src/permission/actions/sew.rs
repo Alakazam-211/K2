@@ -10,6 +10,9 @@
 //! - **Who answers:** the Owner only (the floor), with the same confirm the
 //!   Settings path takes (`chat-owner-handoff`: Touch ID, the vault
 //!   password or the Connect password), bound to this request.
+//! - **Only from the box or its LAN** (parity with Settings): an answer
+//!   through the tunnel (Connect, a phone) is refused with [`LOCAL_ONLY`]
+//!   and the request stays open; the dispatcher tags each answer's ingress.
 //! - **On Allow:** K2 mints the one-time owner handoff (60 s, single use,
 //!   audited `chat-handoff`) **for the person who allowed it**: the link
 //!   goes back in that person's own answer (`forYou.openUrl`), which their
@@ -32,6 +35,9 @@ use crate::vault::actor::{Channel, VaultCaller};
 
 /// The card's route wall: an agent's own call to the owner handoff.
 pub(crate) const HANDOFF_ROUTE: &str = crate::chat_pass::mint::OWNER_HANDOFF;
+/// Why a tunnel answer (Connect, a phone) doesn't open Sew.
+pub(crate) const LOCAL_ONLY: &str = "Open this from K2 on the box's own computer (or Settings → Chat Hosting there): Sew opens as its owner only from the box or its LAN, never through the tunnel";
+
 /// The one-time link lives this long (the handoff code's TTL).
 pub(crate) const LINK_TTL_SECS: i64 = crate::chat_pass::handoff::TTL_SECS;
 
@@ -145,6 +151,13 @@ fn take(token: &str, secret: &str, stamp: &str) -> Result<String, k2_vault::Vaul
 /// Mint the owner handoff through the Settings route's own entry, as the
 /// answerer, with the confirm they took; the link goes to them only.
 fn apply(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
+    // Parity with Settings (`POST /cli/sew/owner-handoff` refuses the
+    // tunnel): only an answer from the box itself or its LAN mints. A
+    // phone or a Connect session through the tunnel is refused and the
+    // request stays open.
+    if !matches!(super::super::answer::answer_ingress().as_deref(), Some("loopback" | "lan")) {
+        return Applied::Refused { code: super::super::answer::LOOPBACK_ONLY.into(), message: LOCAL_ONLY.into() };
+    }
     let Some(url) = app_url() else {
         return Applied::Refused { code: "no_app_url".into(), message: "Sew has no web app URL to open (k2 hostchat app-url set https://HOST)".into() };
     };

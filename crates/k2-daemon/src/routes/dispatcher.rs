@@ -8788,8 +8788,11 @@ async fn handle_one_request(
                     .map(|t| format!("tok:{t}"));
                 (who, key, caller)
             });
+            // Permission cards: the answer's ingress, for the actions that
+            // keep Settings' loopback/LAN-only rule (sew.owner-handoff).
+            let answer_ingress = ingress.as_str();
             let resp = tokio::task::spawn_blocking(move || {
-                crate::overlay_routes::with_request_skin(bound_skin, || {
+                crate::permission::answer::with_ingress(answer_ingress, || crate::overlay_routes::with_request_skin(bound_skin, || {
                     crate::caller_workspace::with_request_principal(scoped_principal, || match catchup_ctx {
                         Some((who, key, caller)) => crate::overlay_routes::catchup::handle(
                             &params,
@@ -8805,7 +8808,7 @@ async fn handle_one_request(
                             &session_author,
                         ),
                     })
-                })
+                }))
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

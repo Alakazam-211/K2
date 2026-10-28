@@ -40,7 +40,29 @@ thread_local! {
     /// answer's `forYou`): never the card, the stored result or the agent's
     /// turn (`sew.owner-handoff`'s one-time link).
     static FOR_ANSWERER: std::cell::RefCell<Option<serde_json::Value>> = const { std::cell::RefCell::new(None) };
+    /// Where the answering request came in (`loopback` | `lan` | `tunnel`
+    /// | `app-link`), tagged by the dispatcher on `/cli/thread/*`. `None`
+    /// off the dispatcher: an action that cares refuses.
+    static ANSWER_INGRESS: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
+
+/// Run `f` with the answering request's ingress tagged (the dispatcher
+/// knows it per request, as the Settings routes do).
+pub(crate) fn with_ingress<T>(ingress: &str, f: impl FnOnce() -> T) -> T {
+    let before = ANSWER_INGRESS.with(|c| c.replace(Some(ingress.to_string())));
+    let out = f();
+    ANSWER_INGRESS.with(|c| *c.borrow_mut() = before);
+    out
+}
+
+/// The answering request's ingress, if the dispatcher tagged one.
+pub(crate) fn answer_ingress() -> Option<String> {
+    ANSWER_INGRESS.with(|c| c.borrow().clone())
+}
+
+/// A refusal that decides nothing: the request goes back to its open state
+/// and the person can answer again (from the right place, or confirmed).
+pub(crate) const LOOPBACK_ONLY: &str = "loopback_only";
 
 /// The display id of the request being applied on this thread.
 pub(crate) fn current_request() -> Option<String> {
@@ -399,7 +421,7 @@ fn decide_one(
             }
             record(RequestState::Approved, Some(&msg), None)
         }
-        Applied::Refused { code: c, message } if c == code::VAULT_CONFIRM_REQUIRED || c == "rate_limited" => {
+        Applied::Refused { code: c, message } if c == code::VAULT_CONFIRM_REQUIRED || c == "rate_limited" || c == LOOPBACK_ONLY => {
             store::revert_applying(req.id.as_str(), prior).map_err(|e| err(500, "db", e))?;
             let status = if c == "rate_limited" { 429 } else { 403 };
             Err(err(status, &c, message))

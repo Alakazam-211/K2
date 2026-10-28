@@ -57558,8 +57558,10 @@ Person only (outside K2, with Touch ID / your login / the vault password):
          An agent with Manage Sew (chat_manage) asks the owner on a card instead:
            k2 permission request sew.owner-handoff --why "<why>"
          The owner presses Allow and confirms (Touch ID, the vault password or
-         their Connect password); K2 then opens Sew as its owner right there,
-         on the device they answered from (a one-time link, 60 s from Allow).
+         their Connect password) in K2 on the box's own computer or its LAN
+         (never through the tunnel: Connect or a phone is refused and the card
+         stays open); K2 then opens Sew as its owner right there (a one-time
+         link, 60 s from Allow).
          The agent never sees the link and has nothing to run afterwards.
          Needs k2 hostchat app-url set first. Promoting someone to install
          owner or admin in Sew lifts their Sew bans.

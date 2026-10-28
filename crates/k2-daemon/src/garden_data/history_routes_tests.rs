@@ -20,8 +20,9 @@ fn put(who: &DataWho, key: &str, value: Value) -> i64 {
         .expect("a rev")
 }
 
+/// The live entry (`{entry: {key, rev, value, …}}` on the agent door).
 fn get(key: &str) -> Value {
-    ok(&owner(), "GET", "/cli/zen/data/get", json!({}), &[("widget", "board"), ("key", key)])
+    ok(&owner(), "GET", "/cli/zen/data/get", json!({}), &[("widget", "board"), ("key", key)])["entry"].clone()
 }
 
 #[test]

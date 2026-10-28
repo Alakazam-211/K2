@@ -1055,6 +1055,7 @@ pub fn check_hook_injections(home: &Path) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::terminal::agent_spawn_guard::GuardEnv;
 
     struct TempHome(PathBuf);
@@ -1476,6 +1477,7 @@ mod tests {
     }
 
     /// Split a raw request into (lower-cased head, body).
+    #[cfg(unix)]
     fn split_request(raw: &[u8]) -> (String, Vec<u8>) {
         let end = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("request head");
         (String::from_utf8_lossy(&raw[..end]).to_ascii_lowercase(), raw[end + 4..].to_vec())

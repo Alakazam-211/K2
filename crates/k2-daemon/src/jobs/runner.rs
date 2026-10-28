@@ -433,6 +433,7 @@ pub fn stop_leftover_group(pid: i64, run_id: &str) {
     if pid <= 1 {
         return;
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let want = format!("K2_JOB_RUN={run_id}");
     #[cfg(target_os = "linux")]
     let ours = std::fs::read(format!("/proc/{pid}/environ"))

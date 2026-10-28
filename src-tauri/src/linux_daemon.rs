@@ -31,7 +31,9 @@
 
 use serde::Serialize;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 pub const DAEMON_UNIT: &str = "k2-daemon.service";
 /// What the Arch package (and the k2-daemon deb) install and the unit runs.

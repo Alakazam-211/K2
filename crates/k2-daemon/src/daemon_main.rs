@@ -7,6 +7,7 @@
 //! calls [`run`]; there is one module graph and one copy of every static.
 
 use std::fs;
+#[cfg(unix)]
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -181,6 +182,7 @@ fn keep_singleton_lock(file: std::fs::File) {
 /// same open file description). Close OUR copy, or a successor that dies
 /// later would leave the lock held by this draining process and block the
 /// supervisor's fresh daemon for the whole drain.
+#[cfg(unix)]
 pub(crate) fn release_singleton_lock() {
     drop(
         DAEMON_SINGLETON_LOCK

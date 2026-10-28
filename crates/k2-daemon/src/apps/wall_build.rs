@@ -16,13 +16,17 @@
 //! keeps stage 1's behaviour (the folder as the agent built it) and says
 //! so. `k2 app build` with no App builds in the reserved `build` slot.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Read;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use k2_core::deploy::manifest::Manifest;
 use k2_core::deploy::{self, codes};
-use k2_root_proto::engine::{self as wire, Answer, BuildSpec, Request};
+use k2_root_proto::engine::{self as wire, BuildSpec, Request};
+#[cfg(unix)]
+use k2_root_proto::engine::Answer;
 use serde_json::{json, Value as J};
 
 /// The engine slot a build without an App runs in: `build` is a reserved
@@ -74,6 +78,7 @@ pub mod fail_codes {
     pub const LOCKFILE_REQUIRED: &str = "lockfile_required";
 }
 
+#[cfg(unix)]
 fn tmp_dir() -> PathBuf {
     k2_core::paths::k2_home().join("apps").join("tmp")
 }
@@ -213,6 +218,7 @@ pub fn unpack(r: &mut dyn Read, dst: &Path) -> Result<usize, String> {
         if !(kind.is_file() || kind.is_dir() || kind.is_symlink()) {
             continue;
         }
+        #[cfg(unix)]
         let exec = kind.is_file() && e.header().mode().is_ok_and(|m| m & 0o111 != 0);
         let path = e.path().map_err(|e| e.to_string())?.to_path_buf();
         if !e.unpack_in(dst).map_err(|er| format!("{}: {er}", path.display()))? {

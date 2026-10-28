@@ -32,9 +32,12 @@ use std::time::{Duration, Instant};
 
 use k2_core::deploy::store;
 use k2_core::disk_guard::{self as dg, Consumer, Owner, ScanTimes, Snapshot, WillClear};
-use k2_root_proto::engine::{self as wire, DiskUsage, Request};
+use k2_root_proto::engine::DiskUsage;
+#[cfg(unix)]
+use k2_root_proto::engine::{self as wire, Request};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use serde_json::Value as J;
 
 /// `~/.k2/resources-cache.json`.

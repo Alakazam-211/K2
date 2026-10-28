@@ -22,6 +22,7 @@ use std::sync::{Mutex, OnceLock};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+#[cfg_attr(not(unix), allow(unused_imports))]
 use k2_root_proto::cli::{CLI_HEAD_BYTES, CLI_MAX_BYTES};
 use k2_root_proto::paths::CLI_PATH;
 use k2_root_proto::version::{Semver, CLI_REFRESH_MIN_PROTOCOL};
@@ -597,13 +598,16 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     struct Rm(std::path::PathBuf);
+    #[cfg(unix)]
     impl Drop for Rm {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
+    #[cfg(unix)]
     fn tmp() -> Rm {
         let base = std::env::temp_dir().join(format!("k2-cli-refresh-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(base.join("bin")).unwrap();

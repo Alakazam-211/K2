@@ -58,6 +58,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Command;
 
 use crate::cli_response::CliResponse;

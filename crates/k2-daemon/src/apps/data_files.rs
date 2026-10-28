@@ -731,10 +731,12 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &std::collectio
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::test_support::Scratch;
 
     /// Run each command on this machine: the scripts are exactly what runs
     /// inside the App's wall, against a scratch "data" folder.
+    #[cfg(unix)]
     fn local(argv: &[String]) -> Result<(i64, String), String> {
         for a in argv {
             assert!(k2_root_proto::engine::value_ok(a, 4096), "the engine would refuse this argument: {a:?}");

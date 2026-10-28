@@ -507,6 +507,7 @@ pub fn parse_meminfo(text: &str) -> Option<u64> {
 
 /// One HTTP/1.1 request on Sew's mgmt socket (`Connection: close`).
 pub fn mgmt_call(sock: &Path, method: &str, path: &str, token: &str, body: Option<&Value>) -> Result<Value, MgmtError> {
+    #[cfg(unix)]
     use std::io::{Read, Write};
     #[cfg(unix)]
     {
@@ -534,6 +535,7 @@ pub fn mgmt_call(sock: &Path, method: &str, path: &str, token: &str, body: Optio
     }
 }
 
+#[cfg(unix)]
 fn idem() -> String {
     let mut b = [0u8; 12];
     let _ = getrandom::getrandom(&mut b);

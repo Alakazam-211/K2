@@ -4,8 +4,11 @@
 //! allowed argv, `/proc` memory, and the rows with their owners.
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use k2_core::deploy::store;

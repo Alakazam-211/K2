@@ -337,10 +337,12 @@ mod tests {
 
     /// Points `$HOME` at `home` until dropped (holds the env lock;
     /// restores the previous HOME on drop, even on panic).
+    #[cfg(unix)]
     struct HomeGuard {
         _home: crate::test_env::EnvVar,
     }
 
+    #[cfg(unix)]
     impl HomeGuard {
         fn set(home: &std::path::Path) -> Self {
             Self { _home: crate::test_env::EnvVar::set("HOME", home) }

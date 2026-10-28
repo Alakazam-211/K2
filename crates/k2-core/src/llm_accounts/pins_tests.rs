@@ -230,6 +230,7 @@ fn api_key_logins_inject_env_and_never_leave_the_slot() {
     let k = add_api_key(&conn, Tool::Claude, "Metered", API_KEY).unwrap();
     assert_eq!(k.kind, kind::API_KEY);
     assert_eq!(k.state, state::SIGNED_IN);
+    #[cfg(unix)]
     let path = store::api_key_path(Tool::Claude, &k.id);
     #[cfg(unix)]
     {

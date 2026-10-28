@@ -30,6 +30,7 @@ use k2_core::tunnel::config as tunnel_config;
 use k2_core::tunnel::subdomains;
 
 const LOG_CAP: u64 = 2 * 1024 * 1024;
+#[cfg(unix)]
 const KILL_GRACE: Duration = Duration::from_millis(400);
 const DEFAULT_PROBE: Duration = Duration::from_millis(ps::PROBE_TIMEOUT_DEFAULT_MS);
 

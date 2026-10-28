@@ -198,7 +198,9 @@ mod tests {
         let outside = tempfile::tempdir().expect("outside tempdir");
         fs::write(outside.path().join("secret.txt"), "leaked\n").expect("write secret");
 
+        #[cfg(unix)]
         let wt = temp_worktree();
+        #[cfg(unix)]
         let link_path = wt.path().join("escape");
         #[cfg(unix)]
         std::os::unix::fs::symlink(outside.path(), &link_path).expect("symlink");

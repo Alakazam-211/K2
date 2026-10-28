@@ -14,9 +14,11 @@
 
 use std::sync::{Mutex, OnceLock};
 
+#[cfg(unix)]
 use k2_root_proto::paths::FRONT_FD_NAME;
 
 /// First passed fd (`SD_LISTEN_FDS_START`).
+#[cfg(unix)]
 const FDS_START: i32 = 3;
 /// Never trust more than this many passed fds.
 const MAX_FDS: usize = 32;

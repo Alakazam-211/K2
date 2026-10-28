@@ -51,6 +51,7 @@ pub const SECRET_DIRS: &[&str] = &[
 /// Subtrees the DB sweep never walks. The sandbox roots hold dirs chowned
 /// to per-session cell uids (not ours to chmod); `clone-tmp` holds
 /// workspace bundles being unpacked, whose modes must survive the copy.
+#[cfg(unix)]
 const SKIP_WALK: &[&str] = &[
     "sandbox-sessions",
     "sandbox-overlays",
@@ -59,6 +60,7 @@ const SKIP_WALK: &[&str] = &[
 ];
 
 /// How deep the DB sweep walks below the home dir (`~/.k2/a/b/file.db`).
+#[cfg(unix)]
 const MAX_DEPTH: usize = 3;
 
 /// What the boot sweep changed.
@@ -135,6 +137,7 @@ pub fn tighten_home() -> TightenReport {
 
 /// Testable core of [`tighten_home`]: operates on an explicit `$HOME`.
 pub fn tighten_home_at(home: &Path) -> TightenReport {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut report = TightenReport::default();
     #[cfg(unix)]
     {

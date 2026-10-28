@@ -547,6 +547,8 @@ pub fn handed_off() -> bool {
 
 // ── Wire protocol ───────────────────────────────────────────────────────
 
+// Windows has no hand-off yet; the message shape is still tested there.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "camelCase")]
 enum Msg {
@@ -627,7 +629,9 @@ fn receive_app_listeners(sock: &std::os::unix::net::UnixStream) -> Result<usize,
 /// How long the predecessor waits for the successor's HELLO (it boots to
 /// just before the singleton lock first: login-shell PATH capture,
 /// migrations of the home dir).
+#[cfg(unix)]
 const HELLO_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(unix)]
 const ACK_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ── Successor: receive ──────────────────────────────────────────────────
@@ -957,6 +961,7 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
 
 /// Stop accepting, stop starting things, release what the successor
 /// takes over. Idempotent.
+#[cfg(unix)]
 fn quiesce() {
     let _ = quiesce_tx().send(true);
     k2_core::handoff_state::set_draining();

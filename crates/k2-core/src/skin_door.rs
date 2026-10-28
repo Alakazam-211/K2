@@ -694,6 +694,7 @@ fn kill_pid(pid: u32) {
     }
 }
 
+#[cfg(unix)]
 fn stray_caddy_pattern(cfg: &Path) -> String {
     format!("caddy run --config {}", cfg.display())
 }

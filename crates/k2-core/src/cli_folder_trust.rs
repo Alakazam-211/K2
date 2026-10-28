@@ -685,6 +685,8 @@ fn grant_grok_inner(path: &Path, keys: &[String]) -> Result<Vec<String>, String>
     Ok(changed)
 }
 
+// Windows holds the file only for its lock (released on close).
+#[cfg_attr(not(unix), allow(dead_code))]
 struct GrokLock(Option<File>);
 
 fn grok_try_lock(store: &Path) -> Result<GrokLock, String> {

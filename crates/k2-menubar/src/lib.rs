@@ -7,6 +7,7 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::Command;
 use std::time::Duration;
 

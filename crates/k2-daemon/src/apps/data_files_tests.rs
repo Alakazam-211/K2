@@ -25,6 +25,7 @@ struct Fx {
     ws_a_path: PathBuf,
     ws_b: String,
     data: PathBuf,
+    #[cfg_attr(not(unix), allow(dead_code))]
     outside: PathBuf,
     _db: k2_core::db::TestDbGuard,
     _home: crate::test_support::TempHome,

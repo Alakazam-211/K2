@@ -187,6 +187,7 @@ impl PassFile {
         getrandom::getrandom(&mut rnd).map_err(|e| format!("random: {e}"))?;
         let name: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
         let dir = std::env::temp_dir().join(format!("k2-pgpass-{name}"));
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut b = std::fs::DirBuilder::new();
         #[cfg(unix)]
         b.mode(0o700);

@@ -17,6 +17,7 @@
 //! macOS to open a new terminal window) gets past this. It stops a helpful
 //! or tricked agent from running these steps from its own terminal.
 
+#[cfg(unix)]
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -27,10 +28,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(unix)]
 use tokio::net::UnixStream;
 
+#[cfg(unix)]
 use super::actor::{Channel, VaultCaller};
 
 pub const SOCKET_NAME: &str = "vault.sock";
+#[cfg(unix)]
 const MAX_HEAD: usize = 16 * 1024;
+#[cfg(unix)]
 const MAX_BODY: usize = 256 * 1024;
 
 /// Env names that mark a K2 session (passport sockets and tokens).
@@ -175,7 +179,7 @@ mod os {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 mod os {
     pub fn peer(_fd: i32) -> Option<(u32, u32)> {
         None

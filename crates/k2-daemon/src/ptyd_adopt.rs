@@ -26,8 +26,10 @@
 //! with the switch off (P68: the switch affects only new spawns).
 
 use std::sync::Mutex;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 use k2_core::log_debug;
 use serde_json::{Map, Value};
 
@@ -77,6 +79,7 @@ pub fn report() -> Option<Report> {
     REPORT.lock().ok().and_then(|g| g.clone())
 }
 
+#[cfg(unix)]
 fn update_report(f: impl FnOnce(&mut Report)) {
     if let Ok(mut g) = REPORT.lock() {
         f(g.get_or_insert_with(Report::default));
@@ -204,8 +207,10 @@ pub fn running_sids() -> std::collections::HashSet<String> {
 }
 
 /// B1 time bound (P29).
+#[cfg(unix)]
 const B1_BOUND: Duration = Duration::from_secs(10);
 /// Per-session replay wait inside B1.
+#[cfg(unix)]
 const REPLAY_WAIT: Duration = Duration::from_secs(2);
 
 /// Cell listeners taken back from ptyd, served once the daemon is ready.

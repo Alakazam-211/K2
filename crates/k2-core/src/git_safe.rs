@@ -356,6 +356,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    #[cfg(unix)]
     fn temp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("k2-git-safe-{tag}-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).expect("mkdir temp");
@@ -364,6 +365,7 @@ mod tests {
 
     /// Plain git for building fixtures (not K2's own path): isolated from
     /// the machine's config so the fixture is the only config in play.
+    #[cfg(unix)]
     fn fixture_git(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git") // git_safe: allow (test fixture)
             .arg("-C")

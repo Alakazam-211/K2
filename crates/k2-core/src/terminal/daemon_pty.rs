@@ -1065,7 +1065,9 @@ impl DaemonPtySession {
         // ptyd is never contacted — and the code below is the unchanged
         // in-process path.
         {
-            use crate::terminal::ptyd::{select_backend, Backend, Switch};
+            use crate::terminal::ptyd::{select_backend, Switch};
+            #[cfg(unix)]
+            use crate::terminal::ptyd::Backend;
             let choice = select_backend(
                 cfg.survive,
                 // Non-survive spawns never read the switch (it may read

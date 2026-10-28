@@ -260,12 +260,6 @@ fn chown_path_to_uid(path: &std::path::Path, uid: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Windows has no cell-uid sandbox chown model — no-op.
-#[cfg(windows)]
-fn chown_path_to_uid(_path: &std::path::Path, _uid: u32) -> std::io::Result<()> {
-    Ok(())
-}
-
 /// SLICE 4 (resume/fork): a RECURSIVE `chown` of an EXISTING per-session layer to
 /// the new cell uid, so files written under a PRIOR session's uid (the restored
 /// `<id>.jsonl`, memory, /work) become readable+writable by this respawn's cell.
@@ -274,6 +268,7 @@ fn chown_path_to_uid(_path: &std::path::Path, _uid: u32) -> std::io::Result<()> 
 /// Pass 1: reclaim a (possibly foreign-owned 0700) tree to the DAEMON, TOP-DOWN.
 /// The daemon has CAP_CHOWN (chown needs no read) but NOT DAC_READ, so it must
 /// chown the dir to itself FIRST, THEN it can read_dir + recurse.
+#[cfg(unix)]
 fn chown_tree_reclaim_to_self(path: &std::path::Path) {
     #[cfg(unix)]
     unsafe {
@@ -293,6 +288,7 @@ fn chown_tree_reclaim_to_self(path: &std::path::Path) {
 
 /// Pass 2: assign a now-daemon-owned tree to the cell uid, BOTTOM-UP (recurse
 /// while we still own+read the dir, chown the dir itself last).
+#[cfg(unix)]
 fn chown_tree_assign(path: &std::path::Path, uid: u32) -> std::io::Result<()> {
     if path.is_dir() && !path.is_symlink() {
         for entry in std::fs::read_dir(path)? {
@@ -307,6 +303,7 @@ fn chown_tree_assign(path: &std::path::Path, uid: u32) -> std::io::Result<()> {
 /// foreign-owned 0700 tree: (1) reclaim to the daemon (top-down) so it becomes
 /// readable, (2) assign to the cell uid (bottom-up). Fresh daemon-owned dirs
 /// pass through cheaply.
+#[cfg(unix)]
 fn chown_tree_to_uid(path: &std::path::Path, uid: u32) -> std::io::Result<()> {
     chown_tree_reclaim_to_self(path);
     chown_tree_assign(path, uid)
@@ -1423,6 +1420,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     // single carrier; `None` ⇒ no allocation happened (every non-microVM spawn) →
     // default-OFF parity. On Mac / feature-off builds `cfg.sandbox` is never
     // `Microvm`, so this whole block is dead there.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut per_session_uid: Option<u32> = None;
     #[cfg(unix)]
     if matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Microvm) {

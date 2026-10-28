@@ -307,7 +307,7 @@ fn run_nft(ruleset: &str) -> std::io::Result<()> {
 }
 
 // ── Non-Linux: no-ops (nft is Linux-only; the microVM branch is dead here) ───
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
 pub(crate) fn ensure_egress_policy(_cell_uid: u32) -> std::io::Result<()> {
     Ok(())
 }

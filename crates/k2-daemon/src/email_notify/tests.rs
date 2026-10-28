@@ -1562,8 +1562,12 @@ fn l12_the_scheduled_body_is_0600_and_checked_before_it_is_read() {
     on_app(&f, store::SCOPE_ANY);
     let now = now();
     let later = json!({"to": "a@x.test", "subject": "s", "text": "later", "sendAt": now + 600});
+    // The widened-mode check is Unix's (Windows files are owner-only DACLs).
+    #[cfg(unix)]
     let out = send::send(&app_caller(&f.app), &later, now).expect("scheduled");
+    #[cfg(unix)]
     let id = out["id"].as_str().expect("id").to_string();
+    #[cfg(unix)]
     let file = send::scheduled_path(&id).expect("path");
     #[cfg(unix)]
     {

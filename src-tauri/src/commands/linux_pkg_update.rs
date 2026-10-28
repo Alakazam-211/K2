@@ -31,9 +31,12 @@
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
+#[cfg(unix)]
 use k2_client::release_sums::{self, LINUX_SUMS_ASSET};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::time::Duration;
 
 const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/Alakazam-211/K2/releases/download";

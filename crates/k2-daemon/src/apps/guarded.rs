@@ -25,7 +25,9 @@
 //! gateway rotates it through the engine's `pass-write`.
 
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
+#[cfg(unix)]
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -36,7 +38,9 @@ use k2_core::deploy::engine::{
 };
 use k2_core::deploy::codes;
 use k2_root_proto::apps::AppId;
-use k2_root_proto::engine::{self as wire, Answer, Request, SecretItem, StartSpec, Wall};
+use k2_root_proto::engine::{self as wire, Request, SecretItem, StartSpec, Wall};
+#[cfg(unix)]
+use k2_root_proto::engine::Answer;
 use serde_json::{json, Value};
 
 /// `engine_ref` prefix that marks a handle as the guarded engine's.
@@ -97,6 +101,7 @@ fn eng_err(code: &'static str, m: impl Into<String>) -> EngineError {
 }
 
 /// Engine answer codes → the daemon's stable codes.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn code_of(engine_code: Option<&str>) -> &'static str {
     match engine_code {
         Some(wire::codes::BAD_REQUEST) => codes::BAD_REQUEST,

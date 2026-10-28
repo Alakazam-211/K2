@@ -15,11 +15,13 @@ use std::path::{Component, Path, PathBuf};
 
 use super::supervisor::{
     artifact_for_arch, hardening_dropin, previous_artifact_for_arch, systemd_unit,
-    upgrade_from_artifact, STALWART_BIN, STALWART_BIN_STAGING, STALWART_CONFIG_DIR,
+    upgrade_from_artifact, STALWART_BIN, STALWART_CONFIG_DIR,
     STALWART_DATA_DIR, STALWART_DROPIN_DIR, STALWART_DROPIN_PATH, STALWART_LOG_DIR,
     STALWART_PINNED_VERSION, STALWART_PREVIOUS_VERSION, STALWART_SNAPSHOT_DIR, STALWART_UNIT,
     STALWART_UNIT_PATH, STALWART_UPGRADE_FROM, STALWART_USER,
 };
+#[cfg(unix)]
+use super::supervisor::STALWART_BIN_STAGING;
 
 pub const HELPER_PATH: &str = "/usr/local/libexec/k2-mail-helper";
 pub const SUDO_PATH: &str = "/usr/bin/sudo";

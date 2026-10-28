@@ -25,8 +25,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 use k2_core::session::SessionId;
+#[cfg(unix)]
 use k2_daemon::session_token::{CredMode, HookPrincipal, Provider};
+#[cfg(unix)]
 use k2_daemon::spawn::{spawn_agent_session_v2_blocking, SpawnWorkspaceSessionRequest};
 use k2_daemon::test_harness;
 use rusqlite::params;
@@ -456,6 +459,8 @@ fn audit_lines(env: &TestEnv) -> Vec<Value> {
         .collect()
 }
 
+// The passport helpers serve the per-cell Unix socket tests.
+#[cfg(unix)]
 fn mint(session_id: &SessionId, workspace: &str, address: &str) -> String {
     k2_daemon::session_token::mint_session_token(
         session_id,
@@ -471,10 +476,12 @@ fn mint(session_id: &SessionId, workspace: &str, address: &str) -> String {
 
 /// Spawn a live session under `key` (the canonical slot when `key` is the
 /// project id) and return a passport bound to it.
+#[cfg(unix)]
 fn live_session_passport(ws: &Ws, key: &str, command: &str, args: &[&str]) -> String {
     live_session_passport_and_id(ws, key, command, args).0
 }
 
+#[cfg(unix)]
 fn live_session_passport_and_id(
     ws: &Ws,
     key: &str,
@@ -525,6 +532,7 @@ fn uds(sock: &Path, raw: &str) -> Resp {
     Resp { status, body }
 }
 
+#[cfg(unix)]
 fn uds_json(method: &str, path: &str, bearer: &str, body: &str) -> String {
     format!(
         "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {bearer}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",

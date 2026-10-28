@@ -24,6 +24,7 @@
 //! and the streaming filter.
 
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use k2_core::connect_users::Role;
@@ -31,7 +32,9 @@ use k2_core::deploy::{self, codes, store::AppRow};
 use k2_root_proto::engine::{self as wire, EXEC_TIMEOUT_BOUNDS, EXEC_TIMEOUT_DEFAULT};
 use serde_json::{json, Value as J};
 
-use super::routes::{actor, app_for, json_body, need_build, no, s, Refusal, R};
+use super::routes::{actor, app_for, json_body, need_build, no, s, R};
+#[cfg(unix)]
+use super::routes::Refusal;
 use crate::compute_routes::Who;
 
 pub const SHELL_PATH: &str = "/cli/app/shell";
@@ -168,6 +171,7 @@ pub(crate) fn exec_route(who: &Who, body: &[u8]) -> R<J> {
 
 /// The gate for a shell, before the WebSocket upgrade: `(app, deployment,
 /// argv, cols, rows)`.
+#[cfg(unix)]
 pub(crate) fn shell_gate(who: &Who, params: &HashMap<String, String>) -> R<(AppRow, String, Vec<String>, u16, u16)> {
     may_exec(who)?;
     let app = app_for(who, params.get("app").map(String::as_str))?;
@@ -190,6 +194,7 @@ pub(crate) fn shell_gate(who: &Who, params: &HashMap<String, String>) -> R<(AppR
     Ok((app, dep, argv, cols, rows))
 }
 
+#[cfg(unix)]
 fn refusal_body(r: &Refusal) -> (String, String) {
     let status = match r.status {
         400 => "400 Bad Request",

@@ -370,7 +370,7 @@ pub(crate) fn cli_symlink_needs_heal() -> bool {
 /// `/System/Volumes/Data/Applications`) don't compare unequal and loop a false
 /// heal every launch (#56). A target that fails to canonicalize is broken
 /// (its file is gone) → heal.
-#[cfg(any(not(target_os = "linux"), test))]
+#[cfg(any(all(unix, not(target_os = "linux")), all(test, unix)))]
 fn symlink_target_needs_heal(target: &Path, bundled: &Path) -> bool {
     match (dunce::canonicalize(&target), dunce::canonicalize(&bundled)) {
         (Ok(t), Ok(b)) => t != b,
@@ -502,6 +502,9 @@ pub fn cli_install_status() -> Result<serde_json::Value, String> {
 
 /// Make the bundled CLI scripts executable (best-effort).
 fn ensure_cli_executable(cli_script: &Path, legacy_shim: &Option<PathBuf>) {
+    // Windows has no exec bit: a script runs by its interpreter.
+    #[cfg(not(unix))]
+    let _ = (cli_script, legacy_shim);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -863,8 +866,10 @@ pub fn set_document_edited(app: AppHandle, edited: bool) -> Result<(), String> {
 mod cli_heal_tests {
     use super::{
         cli_is_distro_package, copy_cli_script, first_existing_cli, linux_cli_search_paths,
-        read_cli_version, symlink_target_needs_heal, version_is_newer,
+        read_cli_version, version_is_newer,
     };
+    #[cfg(unix)]
+    use super::symlink_target_needs_heal;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -880,6 +885,8 @@ mod cli_heal_tests {
         dir
     }
 
+    // The heal is the macOS /usr/local/bin symlink; Windows copies the CLI.
+    #[cfg(unix)]
     #[test]
     fn no_heal_when_target_equals_bundled() {
         let d = scratch();
@@ -890,6 +897,8 @@ mod cli_heal_tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    // The heal is the macOS /usr/local/bin symlink; Windows copies the CLI.
+    #[cfg(unix)]
     #[test]
     fn no_heal_when_paths_are_symlink_equivalent() {
         // The macOS firmlink case: target reaches the SAME real file by a
@@ -908,6 +917,8 @@ mod cli_heal_tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    // The heal is the macOS /usr/local/bin symlink; Windows copies the CLI.
+    #[cfg(unix)]
     #[test]
     fn heal_when_target_is_broken() {
         let d = scratch();
@@ -918,6 +929,8 @@ mod cli_heal_tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    // The heal is the macOS /usr/local/bin symlink; Windows copies the CLI.
+    #[cfg(unix)]
     #[test]
     fn heal_when_target_points_at_different_file() {
         let d = scratch();

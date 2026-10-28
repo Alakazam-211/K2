@@ -2,7 +2,10 @@
 //! (HMAC challenge). The key is 32 CSPRNG bytes in `<run>/ptyd/key`, 0600,
 //! created `O_EXCL` by each fresh ptyd instance; never logged.
 
-use std::io::{self, Read, Write};
+use std::io;
+#[cfg(unix)]
+use std::io::{Read, Write};
+#[cfg(unix)]
 use std::path::Path;
 
 use hmac::{Hmac, Mac};

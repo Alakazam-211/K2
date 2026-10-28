@@ -46,8 +46,10 @@ use sha2::{Digest, Sha256};
 
 use super::simctl::{Runner, SimError, SimResult};
 
-/// The helper's Swift source, compiled on first use.
-pub const SOURCE: &str = include_str!("helper/k2-simhelper.swift");
+/// The helper's Swift source, compiled on first use. It lives in
+/// `k2-node-proto` so a Mac compute node (which never links k2-core) builds
+/// the same file (IN-A10).
+pub const SOURCE: &str = k2_node_proto::sim::HELPER_SOURCE;
 /// The newest wire protocol the daemon speaks; the helper reports its own
 /// in `ready`/`hello` (`version`, and `accepts` from 4).
 /// 2: frames carry the helper's capture and emit times (M0).
@@ -1125,6 +1127,14 @@ mod tests {
         *ib.ready.lock().unwrap() = Some(tx);
         ib.dispatch(Message::Json(ready));
         (rx.recv().unwrap(), ib)
+    }
+
+    /// One helper source for the local lane and a Mac node: the node's
+    /// helper protocol is the daemon's newest.
+    #[test]
+    fn the_node_and_the_daemon_build_the_same_helper() {
+        assert_eq!(u64::from(PROTOCOL_VERSION), k2_node_proto::sim::HELPER_PROTOCOL);
+        assert!(SOURCE.contains(&format!("let HELPER_VERSION = {PROTOCOL_VERSION}")));
     }
 
     #[test]

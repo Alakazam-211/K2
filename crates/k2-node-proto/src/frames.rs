@@ -108,7 +108,18 @@ use crate::crypto::{self, SigningKey};
 /// new frames only (`box_up`, `box_run`, `box_down`, `box_state`,
 /// `lineage_status`); the new plan and result fields need their feature,
 /// not the bump.
-pub const PROTOCOL: u32 = PROTOCOL_GENS;
+///
+/// 11 = sim sessions (prd-ios-on-mac-node-0467-v1; [`crate::sim`]):
+/// `Offer.sim`, `sim_open` / `sim_close` / `sim_erase` / `sim_sync` /
+/// `sim_state`, and the separate encrypted stream socket. Defined as
+/// [`PROTOCOL_SIM`]. Additive: a node offers `sim-ios` (and `Offer.sim`)
+/// only to a server that said protocol ≥ 11 and whose slot turned sim on,
+/// and a server sends sim frames only to a node offering it. A protocol-10
+/// peer sees exactly its own release's frames.
+pub const PROTOCOL: u32 = PROTOCOL_SIM;
+
+/// The first server protocol that gets sim sessions.
+pub const PROTOCOL_SIM: u32 = crate::sim::PROTOCOL_SIM;
 
 /// The first protocol with the box and lineage-status frames. Additive: a
 /// node offers a [`crate::gens::FEATURES`] entry only to a server that said
@@ -465,6 +476,12 @@ pub enum Frame {
     BoxUp(crate::boxes::BoxUp),
     BoxRun(crate::boxes::BoxRun),
     BoxDown(crate::boxes::BoxDown),
+    /// Protocol 11: lease, end, erase and reconcile sim sessions (only to
+    /// nodes offering `sim-ios`).
+    SimOpen(crate::sim::SimOpen),
+    SimClose(crate::sim::SimClose),
+    SimErase(crate::sim::SimErase),
+    SimSync(crate::sim::SimSync),
     // node → controller
     Offer(Offer),
     JobsSnapshot(JobsSnapshot),
@@ -510,6 +527,9 @@ pub enum Frame {
     /// session start and whenever a head moves. Only to a server that said
     /// protocol ≥ 10.
     LineageStatus(crate::gens::LineageStatus),
+    /// Protocol 11: a sim session changed state (only to a server that
+    /// said protocol ≥ 11).
+    SimState(crate::sim::SimStateFrame),
 }
 
 impl Frame {
@@ -541,6 +561,10 @@ impl Frame {
             | Frame::BoxUp(_)
             | Frame::BoxRun(_)
             | Frame::BoxDown(_) => Direction::ControllerToNode,
+            | Frame::SimOpen(_)
+            | Frame::SimClose(_)
+            | Frame::SimErase(_)
+            | Frame::SimSync(_) => Direction::ControllerToNode,
             Frame::Offer(_)
             | Frame::JobsSnapshot(_)
             | Frame::Need(_)
@@ -563,6 +587,7 @@ impl Frame {
             | Frame::NodeRoster(_)
             | Frame::BoxState(_)
             | Frame::LineageStatus(_) => Direction::NodeToController,
+            | Frame::SimState(_) => Direction::NodeToController,
         }
     }
 
@@ -616,6 +641,11 @@ impl Frame {
             Frame::BoxDown(_) => "box_down",
             Frame::BoxState(_) => "box_state",
             Frame::LineageStatus(_) => "lineage_status",
+            Frame::SimOpen(_) => "sim_open",
+            Frame::SimClose(_) => "sim_close",
+            Frame::SimErase(_) => "sim_erase",
+            Frame::SimSync(_) => "sim_sync",
+            Frame::SimState(_) => "sim_state",
         }
     }
 }
@@ -1312,6 +1342,10 @@ pub struct Offer {
     /// installer only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pkg: Option<crate::pkgpolicy::PkgStatus>,
+    /// Protocol 11: what this Mac offers for iPhones, only to a server that
+    /// said protocol ≥ 11 and whose slot turned sim on ([`crate::sim`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sim: Option<crate::sim::SimFacts>,
 }
 
 /// Job states shared by the controller registry and the node ledger.
@@ -2357,6 +2391,28 @@ mod tests {
         assert!(PROTOCOL >= PROTOCOL_CACHE && PROTOCOL_CACHE > PROTOCOL_TIERS);
     }
 
+    /// Protocol 11: sim frames seal and open on the attach socket in their
+    /// own direction only.
+    #[test]
+    fn sim_frames_travel_one_way() {
+        use crate::sim::*;
+        let c = SigningKey::generate().unwrap();
+        let n = SigningKey::generate().unwrap();
+        let open_f = Frame::SimOpen(SimOpen { session: "a".repeat(32), workspace_key: "b".repeat(24), mem_bytes: RESERVE_MEM_BYTES, lease_secs: LEASE_MAX_SECS });
+        let text = seal(&c, Direction::ControllerToNode, "s", 0, &open_f).unwrap();
+        assert!(text.contains(r#""t":"sim_open""#));
+        assert_eq!(open(c.spki_der(), Direction::ControllerToNode, "s", 0, &text).unwrap(), open_f);
+        assert!(seal(&c, Direction::NodeToController, "s", 0, &open_f).is_err(), "a sim_open never travels node → server");
+        let st = Frame::SimState(SimStateFrame { session: "a".repeat(32), state: SessionState::Refused, code: Some(codes::NODE_BUSY.into()), message: None });
+        let text = seal(&n, Direction::NodeToController, "s", 0, &st).unwrap();
+        assert_eq!(open(n.spki_der(), Direction::NodeToController, "s", 0, &text).unwrap(), st);
+        for f in [Frame::SimClose(SimClose { session: "a".repeat(32), reason: "idle".into() }), Frame::SimErase(SimErase { workspace_key: "b".repeat(24) }), Frame::SimSync(SimSync { sessions: vec![] })] {
+            assert_eq!(f.direction(), Direction::ControllerToNode, "{}", f.kind());
+            assert!(f.kind().starts_with("sim_"));
+        }
+        assert!(PROTOCOL == PROTOCOL_SIM && PROTOCOL_SIM == PROTOCOL_GENS + 1);
+    }
+
     /// `--with`: absent when unused (the 0.46.5 digest), bound when used.
     #[test]
     fn with_is_absent_when_unset_and_bound_by_the_digest() {
@@ -2636,7 +2692,7 @@ mod tests {
         let back: Plan = serde_json::from_str(&serde_json::to_string(&q).unwrap()).unwrap();
         assert_eq!(back, q);
         // Protocol 10 is in force (R2 offers `cpu-burst`): one bump past 9.
-        const { assert!(PROTOCOL == PROTOCOL_GENS && PROTOCOL_GENS == PROTOCOL_CI + 1) };
+        const { assert!(PROTOCOL >= PROTOCOL_GENS && PROTOCOL_GENS == PROTOCOL_CI + 1) };
     }
 
     /// The drain on `update_state` (0.46.13) is optional both ways: an older

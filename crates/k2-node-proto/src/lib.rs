@@ -51,6 +51,9 @@
 //! - [`boxes`]: warm boxes for agents (protocol 10 frames).
 //! - [`provenance`]: the node-signed build statement (in-toto Statement
 //!   v1, SLSA Provenance v1, DSSE; protocol-10 feature `provenance-v1`).
+//! - [`sim`]: iPhone on a Mac node (protocol 7): sim session frames, the
+//!   encrypted stream, the node's run policy, upload rules, leases, and
+//!   the Simulator helper's source.
 
 pub mod admin;
 pub mod boxes;
@@ -82,6 +85,7 @@ pub mod secret;
 pub mod share;
 pub mod signer_policy;
 pub mod statement;
+pub mod sim;
 pub mod ticket;
 pub mod tiers;
 

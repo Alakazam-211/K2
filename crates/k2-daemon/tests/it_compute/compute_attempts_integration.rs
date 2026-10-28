@@ -178,6 +178,7 @@ fn offer(share: Option<ShareView>) -> Offer {
         features: ["artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS].iter().map(|f| f.to_string()).collect(),
         host: None,
         pkg: None,
+        sim: None,
     }
 }
 

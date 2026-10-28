@@ -771,6 +771,7 @@ fn seat_offer(protocol: u32, lane: bool) -> pframes::Offer {
         features,
         host: None,
         pkg: None,
+        sim: None,
     }
 }
 

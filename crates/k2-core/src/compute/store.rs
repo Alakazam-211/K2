@@ -2104,7 +2104,7 @@ mod tests {
             boot_id: "b".into(),
             ledger_id: "l".into(),
             node_version: "0.46.4".into(),
-            features: features.iter().map(|f| f.to_string()).collect(), host: None, pkg: None,
+            features: features.iter().map(|f| f.to_string()).collect(), host: None, pkg: None, sim: None,
         };
         let owner_feats = ["queue", "servers", "admin", "health", "self-update"];
         assert!(!node_by_id(&c, "n1").unwrap().owner_claim(), "no offer yet: no claim");

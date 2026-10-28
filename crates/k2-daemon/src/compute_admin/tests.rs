@@ -1057,7 +1057,7 @@ fn offer_with(share: Option<pshare::ShareView>, features: &[&str]) -> Offer {
         boot_id: "b".into(),
         ledger_id: "l".into(),
         node_version: "0.46.4".into(),
-        features: features.iter().map(|f| f.to_string()).collect(), host: None, pkg: None,
+        features: features.iter().map(|f| f.to_string()).collect(), host: None, pkg: None, sim: None,
     }
 }
 
@@ -1442,6 +1442,7 @@ fn busy_offer(running: u32) -> frames::Offer {
         features: vec![],
         host: None,
         pkg: None,
+        sim: None,
     }
 }
 

@@ -161,6 +161,7 @@ fn offer() -> Offer {
         features: ["artifacts", "stall", k2_core::compute::proto::gens::FEATURE_JOB_STATS].iter().map(|s| s.to_string()).collect(),
         host: None,
         pkg: None,
+        sim: None,
     }
 }
 

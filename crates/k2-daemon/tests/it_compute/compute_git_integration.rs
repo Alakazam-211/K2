@@ -278,6 +278,7 @@ fn offer(features: &[&str], share: Option<ShareView>) -> Offer {
         features: features.iter().map(|f| f.to_string()).collect(),
         host: None,
         pkg: None,
+        sim: None,
     }
 }
 

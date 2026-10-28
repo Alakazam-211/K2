@@ -113,6 +113,9 @@ impl Node {
             features: self.session_features(t),
             host,
             pkg: if t.speaks_host() { self.pkg_status(t) } else { None },
+            // Sim sessions (protocol 11): the Simulator service's facts
+            // (S2, after the spike).
+            sim: None,
         };
         let mut last = t.last_offer.lock().unwrap();
         let same = last.as_ref().is_some_and(|p| {

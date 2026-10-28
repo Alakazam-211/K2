@@ -220,6 +220,7 @@ fn offer() -> Offer {
         features: vec!["artifacts".into(), "stall".into(), ci::FEATURE_NODE_STATEMENT.into(), ci::FEATURE_RECEIPT_V2.into(), prov::FEATURE_PROVENANCE_V1.into()],
         host: None,
         pkg: None,
+        sim: None,
     }
 }
 

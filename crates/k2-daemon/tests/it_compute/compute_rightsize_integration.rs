@@ -162,6 +162,7 @@ fn offer() -> Offer {
         features: vec!["artifacts".into(), "stall".into()],
         host: None,
         pkg: None,
+        sim: None,
     }
 }
 

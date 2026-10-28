@@ -346,6 +346,7 @@ mod tests {
     fn offer_refusal_passes_node_codes_through() {
         let o = Offer {
             share: None,
+            sim: None,
             revision: 1,
             control: Control::Active,
             control_by: None,

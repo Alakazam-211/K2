@@ -637,7 +637,7 @@ mod tests {
             boot_id: "b".into(),
             ledger_id: "l".into(),
             node_version: "0.46.4".into(),
-            features: vec![share::FEATURE_SERVERS.into()], host: None, pkg: None,
+            features: vec![share::FEATURE_SERVERS.into()], host: None, pkg: None, sim: None,
         };
         assert_eq!(offer_role(&o), None, "nothing to go on: keep the stored role");
         o.features.push(crate::compute::proto::admin::FEATURE_ADMIN.into());
@@ -797,7 +797,7 @@ mod tests {
             boot_id: "b".into(),
             ledger_id: "l".into(),
             node_version: "0.46.5".into(),
-            features: vec![], host: None, pkg: None,
+            features: vec![], host: None, pkg: None, sim: None,
         };
         assert!(!tiers_on(&o));
         assert!(share_allows_ci(Some(&o)) && share_allows_ci(None), "a solo node (or none yet): the owner may send CI");

@@ -20,3 +20,6 @@ base64 = "0.22"
 quick-xml = "0.38"
 # The package policy file (pkgpolicy).
 toml = "0.8"
+# Simulator .app uploads (sim::pack): the server packs without following
+# links, the node unpacks with the same rules (review IR-3).
+tar = "0.4"

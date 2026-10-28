@@ -205,6 +205,7 @@ fn offer(features: &[&str], share: Option<ShareView>, protocol: u32, os: &str) -
         features: features.iter().map(|f| f.to_string()).collect(),
         host: None,
         pkg: None,
+        sim: None,
     }
 }
 

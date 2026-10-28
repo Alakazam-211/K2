@@ -485,6 +485,7 @@ mod tests {
             features: features.iter().map(|f| f.to_string()).collect(),
             host: None,
             pkg: None,
+            sim: None,
         }
     }
 

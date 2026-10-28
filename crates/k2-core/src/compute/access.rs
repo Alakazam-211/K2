@@ -291,7 +291,7 @@ mod tests {
             boot_id: "b".into(),
             ledger_id: "l".into(),
             node_version: "0".into(),
-            features: vec![], host: None, pkg: None,
+            features: vec![], host: None, pkg: None, sim: None,
         }
     }
 

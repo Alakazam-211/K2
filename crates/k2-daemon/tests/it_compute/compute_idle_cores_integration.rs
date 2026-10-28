@@ -144,6 +144,7 @@ fn offer(protocol: u32, features: &[&str]) -> Offer {
         features: features.iter().map(|s| s.to_string()).collect(),
         host: None,
         pkg: None,
+        sim: None,
     }
 }
 

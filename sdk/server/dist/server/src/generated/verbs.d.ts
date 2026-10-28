@@ -1,6 +1,6 @@
 import type { K2Error } from '../errors.ts';
 /** The catalog version this table was generated from. */
-export declare const CATALOG_VERSION = 35;
+export declare const CATALOG_VERSION = 36;
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = {
     readonly [key: string]: unknown;
@@ -2624,6 +2624,21 @@ export declare const APP_VERBS: {
                 readonly ok: {
                     readonly type: "boolean";
                 };
+                readonly recipientStatus: {
+                    readonly items: {
+                        readonly additionalProperties: false;
+                        readonly properties: {
+                            readonly status: {
+                                readonly enum: readonly ["queued", "scheduled", "held", "submitted", "failed", "refused", "cancelled", "delivered", "delayed", "bounced", "complained", "suppressed"];
+                            };
+                            readonly to: {
+                                readonly type: "string";
+                            };
+                        };
+                        readonly type: "object";
+                    };
+                    readonly type: "array";
+                };
                 readonly recipients: {
                     readonly type: "integer";
                 };
@@ -2661,6 +2676,12 @@ export declare const APP_VERBS: {
                     readonly items: {
                         readonly additionalProperties: false;
                         readonly properties: {
+                            readonly bounced: {
+                                readonly type: "integer";
+                            };
+                            readonly complained: {
+                                readonly type: "integer";
+                            };
                             readonly createdAt: {
                                 readonly type: "integer";
                             };
@@ -9412,6 +9433,10 @@ export interface AppEmailAccepted {
     /** submitted = accepted for delivery (delivery events arrive later). */
     readonly status: 'submitted' | 'scheduled' | 'held';
 }
+export interface AppEmailRecipientStatus {
+    readonly status: 'queued' | 'scheduled' | 'held' | 'submitted' | 'failed' | 'refused' | 'cancelled' | 'delivered' | 'delayed' | 'bounced' | 'complained' | 'suppressed';
+    readonly to: string;
+}
 export interface AppEmailStatus {
     /** Seconds since the epoch. */
     readonly createdAt: number;
@@ -9419,6 +9444,8 @@ export interface AppEmailStatus {
     readonly error?: string;
     readonly id: string;
     readonly ok: boolean;
+    /** What happened to each recipient: submitted until a delivery or complaint report says more (bounces and complaints come from reports the mail server receives; a relay sender's stay submitted). */
+    readonly recipientStatus?: AppEmailRecipientStatus[];
     readonly recipients: number;
     /** When a scheduled email goes, seconds since the epoch. */
     readonly sendAt?: number;
@@ -9427,6 +9454,10 @@ export interface AppEmailStatus {
     readonly updatedAt: number;
 }
 export interface AppEmailLogItem {
+    /** Recipients a delivery report says bounced. */
+    readonly bounced?: number;
+    /** Recipients who reported it as spam. */
+    readonly complained?: number;
     /** Seconds since the epoch. */
     readonly createdAt: number;
     readonly error?: string;
@@ -10662,7 +10693,7 @@ export interface AppProjectFrame {
     readonly waiting?: number;
 }
 /** The shared error codes (catalog `errors`). */
-export declare const APP_ERROR_CODES: readonly ["cap_not_granted", "not_bound", "rate_limited", "too_large", "unknown_verb", "verb_unavailable", "verb_local", "not_exposed", "sending_off", "server_not_saved", "unreachable", "removed", "no_history", "failed", "conflict", "space_full", "value_too_large", "bad_key", "not_granted", "resync", "author_unknown", "stale_widget", "store_full", "bad_tx", "tx_expired", "busy", "paused", "blob_missing", "bad_args", "bad_shape", "pass_required", "pass_invalid", "pass_wrong_link", "not_on_link", "json_required", "skin_room", "usage", "not_found", "bad_login", "locked", "card_not_pending", "guest_required", "no_app_pass", "no_app_key", "no_chat_grant", "no_chat_caps", "app_claim_invalid", "not_app_granted", "chat_off_for_person", "shared_person", "has_assistants", "chat_limit", "username_unusable", "chat_not_app_scoped", "no_chat_member", "sew_feature_missing", "space_unbound", "app_mismatch", "chat_unavailable", "app_pass_required", "grant_required", "outside_app_rooms", "above_role", "has_role", "confirm_required", "declined", "refresh_invalid", "refresh_reused", "person_pass_required", "wallet_off", "push_off", "not_for_host", "channel_unavailable", "push_devices_full", "push_not_configured", "too_many_recipients", "push_queue_full", "airgap", "vault_closed", "token_in_use", "pairing_off", "pairing_from_device", "reauth_required", "device_signin_off", "host_not_paired", "no_public_host", "pairing_not_served", "pair_code_invalid", "pairing_not_from_browser", "duplicate_label", "needs_editor", "retired", "card_person_only", "edit_off", "type_refused", "type_mismatch", "bad_image", "agent_login", "email_off", "no_sender", "sender_not_granted", "system_sender", "recipient_out_of_scope", "header_not_allowed", "message_too_large", "domain_not_ready", "dmarc_missing", "relay_not_ready", "idempotency_conflict", "no_mail_path"];
+export declare const APP_ERROR_CODES: readonly ["cap_not_granted", "not_bound", "rate_limited", "too_large", "unknown_verb", "verb_unavailable", "verb_local", "not_exposed", "sending_off", "server_not_saved", "unreachable", "removed", "no_history", "failed", "conflict", "space_full", "value_too_large", "bad_key", "not_granted", "resync", "author_unknown", "stale_widget", "store_full", "bad_tx", "tx_expired", "busy", "paused", "blob_missing", "bad_args", "bad_shape", "pass_required", "pass_invalid", "pass_wrong_link", "not_on_link", "json_required", "skin_room", "usage", "not_found", "bad_login", "locked", "card_not_pending", "guest_required", "no_app_pass", "no_app_key", "no_chat_grant", "no_chat_caps", "app_claim_invalid", "not_app_granted", "chat_off_for_person", "shared_person", "has_assistants", "chat_limit", "username_unusable", "chat_not_app_scoped", "no_chat_member", "sew_feature_missing", "space_unbound", "app_mismatch", "chat_unavailable", "app_pass_required", "grant_required", "outside_app_rooms", "above_role", "has_role", "confirm_required", "declined", "refresh_invalid", "refresh_reused", "person_pass_required", "wallet_off", "push_off", "not_for_host", "channel_unavailable", "push_devices_full", "push_not_configured", "too_many_recipients", "push_queue_full", "airgap", "vault_closed", "token_in_use", "pairing_off", "pairing_from_device", "reauth_required", "device_signin_off", "host_not_paired", "no_public_host", "pairing_not_served", "pair_code_invalid", "pairing_not_from_browser", "duplicate_label", "needs_editor", "retired", "card_person_only", "edit_off", "type_refused", "type_mismatch", "bad_image", "agent_login", "email_off", "no_sender", "sender_not_granted", "system_sender", "recipient_out_of_scope", "header_not_allowed", "message_too_large", "domain_not_ready", "dmarc_missing", "relay_not_ready", "idempotency_conflict", "no_mail_path", "email_paused", "all_suppressed"];
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number];
 /** Every App verb: its arguments and its answer (or frame). */
 export interface AppVerbs {

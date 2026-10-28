@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 35;
+pub const CATALOG_VERSION: u32 = 36;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens

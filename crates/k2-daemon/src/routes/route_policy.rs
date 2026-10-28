@@ -620,6 +620,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/daemon/update/latest", Member),
     post("/cli/daemon/update/start", Admin),
     get("/cli/daemon/update/status", Admin),
+    // prd-k2-db-rename-v1: the home database switch (DB-A4/A6).
+    get("/cli/db-home", Admin),
+    post("/cli/db-home/keep", Owner),
     post("/cli/db/bind", Admin),
     post("/cli/db/create", Member),
     both("/cli/db/doctor", Admin),

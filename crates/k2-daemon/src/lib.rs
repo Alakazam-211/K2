@@ -63,6 +63,9 @@ pub mod fs_routes;
 pub mod fs_download;
 pub mod fs_live;
 pub mod charter_compose_watch;
+/// The home database switch, daemon side (prd-k2-db-rename-v1): the
+/// refusal card, `GET /cli/db-home`, `POST /cli/db-home/keep`.
+pub mod db_home_routes;
 /// Folder-trust gate, daemon side (security sweep SS9–SS11): the card,
 /// the spawn gate, the 409, `/cli/folder-trust/*`, boot.
 pub mod folder_trust;

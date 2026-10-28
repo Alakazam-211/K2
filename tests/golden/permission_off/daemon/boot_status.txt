@@ -1,6 +1,6 @@
 HTTP/1.1 200 OK
 content-type: application/json
-keys: adopted, airgap, api, connectLogin, detail, features, installKind, instanceId, listen, ops, phase, protocol, protocolMin, ptyd, publicHost, scopedHooks, serverId, version, view, webClient
+keys: adopted, airgap, api, connectLogin, detail, features, homeDb, installKind, instanceId, listen, ops, phase, protocol, protocolMin, ptyd, publicHost, scopedHooks, serverId, version, view, webClient
 features:
   spawn-attach-only
   tickets-list-all

@@ -52,6 +52,8 @@ pub fn run(action: &CardAction, answer: &str, by: &str) -> Result<J, String> {
         crate::app_user_invites::CARD_ACTION => crate::app_user_invites::run_card(&action.params, answer, by),
         // Mobile dev (M-A23): the box owner accepts a device lane's licence.
         crate::sim_routes::CARD_ACTION => crate::sim_routes::run_card(&action.params, answer, by),
+        // prd-k2-db-rename-v1 DB-A6: which database to keep (owner only).
+        crate::db_home_routes::CARD_ACTION => crate::db_home_routes::run_card(&action.params, answer, by),
         other => Err(format!("K2 doesn't know the card action '{other}'")),
     }
 }

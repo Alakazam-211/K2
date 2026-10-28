@@ -268,6 +268,9 @@ fn full_body(settings: &k2_core::app_settings::AppSettings) -> serde_json::Value
         "connectLogin": {
             "ingress": settings.connect_login_ingress().as_wire(),
         },
+        // prd-k2-db-rename-v1 DB-A4: what this boot's home database switch
+        // did, `{file, outcome, reason, markerAt}` (null before the DB opens).
+        "homeDb": k2_core::db::home_switch::status_json(),
     })
 }
 
@@ -1246,7 +1249,7 @@ mod tests {
         assert_eq!(full["protocolMin"], PROTOCOL_MIN);
         for k in [
             "version", "protocol", "phase", "detail", "instanceId", "serverId", "publicHost", "features",
-            "installKind", "webClient", "scopedHooks", "ops", "api", "airgap", "listen", "connectLogin",
+            "installKind", "webClient", "scopedHooks", "ops", "api", "airgap", "listen", "connectLogin", "homeDb",
         ] {
             assert!(full.get(k).is_some(), "full keeps {k}");
         }

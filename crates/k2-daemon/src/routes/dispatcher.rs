@@ -7001,6 +7001,25 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // prd-k2-db-rename-v1: K2's own database (`k2 db home`). GET is the
+        // owner or an Admin; POST keep is the owner only (DB-A6). The
+        // handler classifies the caller.
+        p if crate::db_home_routes::is_route(p) => {
+            if p == "/cli/db-home/keep" && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if is_post {
+                // The choice rides the query; drain any body.
+                let _ = super::http::read_post_body_capped(&mut *stream, &mut buf, 4096).await;
+            }
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || crate::db_home_routes::handle(&p_owned, is_post, &who, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // Agent clone proposals (prd-clone-carries-threads-and-vault-v1
         // §4.4, CL21): outside `/cli/clone/` so a passport can propose,
         // list and withdraw its own; approve/deny/finish are people only

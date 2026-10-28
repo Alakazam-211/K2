@@ -223,7 +223,7 @@ async fn compat_is_the_default_and_keeps_every_field_old_clients_read() {
             assert_eq!(c[*f], full_v[*f], "compat keeps {f} exactly as the full body has it");
         }
         assert_eq!(c["airgap"]["enabled"], full_v["airgap"]["enabled"]);
-        for hidden in ["detail", "installKind", "webClient", "scopedHooks", "ops", "api", "listen", "connectLogin"] {
+        for hidden in ["detail", "installKind", "webClient", "scopedHooks", "ops", "api", "listen", "connectLogin", "homeDb"] {
             assert!(c.get(hidden).is_none(), "compat hides {hidden}: {}", compat.body);
         }
         assert!(c["airgap"].get("baked").is_none(), "compat hides airgap.baked");

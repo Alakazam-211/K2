@@ -563,26 +563,13 @@ async fn async_main() {
     };
     match k2_core::db::init_home_database(&switch_opts) {
         Ok((_, Some(report))) => {
-            if let k2_core::db::home_switch::Outcome::Blocked { k2_projects, k2so_projects } =
-                report.outcome
-            {
-                if k2_core::db::home_switch::blocked_notice_due(&k2so_dir) {
-                    let body = k2_core::db::home_switch::blocked_message(
-                        &k2so_dir,
-                        &report.path,
-                        k2_projects,
-                        k2so_projects,
-                    );
-                    match crate::feedback_routes::file_owner_notice(
-                        k2_core::db::AUDIT_SENTINEL_IDS[0],
-                        "K2",
-                        "K2 did not rename its database: two copies hold workspaces",
-                        &body,
-                    ) {
-                        Ok(_) => k2_core::db::home_switch::mark_blocked_notice_filed(&k2so_dir),
-                        Err(e) => log_debug!("[db] owner notice for the blocked rename: {e}"),
-                    }
-                }
+            // Both files hold workspaces (refused): ask the owner once, on
+            // a Thread card or a ticket, once the rest of boot is up.
+            if matches!(report.outcome, k2_core::db::home_switch::Outcome::Blocked { .. }) {
+                let _ = std::thread::Builder::new().name("db-home-card".into()).spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(20));
+                    crate::db_home_routes::after_boot(&report);
+                });
             }
         }
         Ok((_, None)) => {}
